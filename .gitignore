@@ -4,4 +4,6 @@ uploads/
 .env
 *.sqlite
 *.db
+*.bak
+*.bak.*
 .claude/settings.local.json
