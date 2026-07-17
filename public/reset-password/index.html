@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Restablecer contraseña — Fusion Bikes</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{--bg:#0C0F16;--surface:#141A25;--border:#24304A;--accent:#2DB8E8;--accent-glow:rgba(45,184,232,.20);--text:#E4EAF4;--muted:#6B7A9B;--err-bg:rgba(239,68,68,.1);--err-border:rgba(239,68,68,.25);--err-text:#FCA5A5;--ok-bg:rgba(52,211,153,.08);--ok-border:rgba(52,211,153,.25);--ok-text:#6EE7B7}
+  html,body{height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+  body{display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px 28px;width:100%;max-width:380px}
+  .eyebrow{font-size:.68rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+  h1{font-size:1.5rem;font-weight:800;letter-spacing:-.03em;margin-bottom:6px}
+  .sub{font-size:.83rem;color:var(--muted);margin-bottom:20px;line-height:1.5}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:7px}
+  .field input{width:100%;padding:11px 13px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:.95rem;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s;font-family:inherit}
+  .field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+  .field input::placeholder{color:var(--muted);opacity:.5}
+  .btn{width:100%;padding:12px;background:var(--accent);color:#0C0F16;border:none;border-radius:8px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;transition:filter .15s;margin-top:4px}
+  .btn:hover{filter:brightness(1.08)}
+  .btn:disabled{opacity:.55;cursor:not-allowed;filter:none}
+  .msg{padding:10px 13px;border-radius:8px;font-size:.83rem;margin-bottom:14px;display:none}
+  .msg.err{display:block;background:var(--err-bg);border:1px solid var(--err-border);color:var(--err-text)}
+  .msg.ok{display:block;background:var(--ok-bg);border:1px solid var(--ok-border);color:var(--ok-text)}
+  a.back{display:inline-block;margin-top:16px;font-size:.82rem;color:var(--muted);text-decoration:none}
+  a.back:hover{color:var(--text)}
+</style>
+</head>
+<body>
+<div class="card" id="panel-forgot" style="display:none">
+  <div class="eyebrow">Fusion Bikes · Herramientas</div>
+  <h1>¿Olvidaste tu contraseña?</h1>
+  <p class="sub">Ingresá tu usuario y, si tiene un email registrado, te mandamos un link para restablecerla.</p>
+  <div class="msg" id="msg-forgot"></div>
+  <div class="field"><label>Usuario</label><input type="text" id="f-user" autofocus autocomplete="username"></div>
+  <button class="btn" id="btn-forgot" onclick="enviarReset()">Enviar link</button>
+  <a class="back" href="/herramientas/login/">← Volver al login</a>
+</div>
+
+<div class="card" id="panel-reset" style="display:none">
+  <div class="eyebrow">Fusion Bikes · Herramientas</div>
+  <h1>Nueva contraseña</h1>
+  <p class="sub" id="reset-sub">Elegí una contraseña nueva para tu cuenta.</p>
+  <div class="msg" id="msg-reset"></div>
+  <div class="field"><label>Nueva contraseña</label><input type="password" id="f-pass1" autocomplete="new-password" placeholder="mínimo 6 caracteres"></div>
+  <div class="field"><label>Repetir contraseña</label><input type="password" id="f-pass2" autocomplete="new-password" placeholder="igual que la anterior"></div>
+  <button class="btn" id="btn-reset" onclick="confirmarReset()">Cambiar contraseña</button>
+  <a class="back" href="/herramientas/login/">← Volver al login</a>
+</div>
+
+<div class="card" id="panel-invalid" style="display:none">
+  <div class="eyebrow">Fusion Bikes · Herramientas</div>
+  <h1>Link inválido</h1>
+  <p class="sub">Este link de recuperación expiró o ya fue usado. Pedí uno nuevo desde la pantalla de login.</p>
+  <a class="back" href="/herramientas/login/">← Volver al login</a>
+</div>
+
+<script>
+var TOKEN = new URLSearchParams(location.search).get('token');
+
+async function init() {
+  if (TOKEN) {
+    // Verificar token
+    var r = await fetch('/api/auth/reset/check?token=' + encodeURIComponent(TOKEN));
+    var d = await r.json().catch(function(){return{};});
+    if (d.ok) {
+      document.getElementById('reset-sub').textContent = 'Elegí una nueva contraseña para ' + d.username + '.';
+      show('panel-reset');
+    } else {
+      show('panel-invalid');
+    }
+  } else {
+    show('panel-forgot');
+  }
+}
+
+function show(id) { ['panel-forgot','panel-reset','panel-invalid'].forEach(function(p){ document.getElementById(p).style.display = p===id?'block':'none'; }); }
+function showMsg(id, txt, ok) { var m = document.getElementById(id); m.textContent = txt; m.className = 'msg ' + (ok?'ok':'err'); }
+
+async function enviarReset() {
+  var user = document.getElementById('f-user').value.trim();
+  if (!user) return;
+  var btn = document.getElementById('btn-forgot');
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  try {
+    await fetch('/api/auth/forgot', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username:user}) });
+    showMsg('msg-forgot', 'Si el usuario existe y tiene email registrado, en unos segundos va a llegarte el link. Revisá también el spam.', true);
+  } catch(e) {
+    showMsg('msg-forgot', 'Error de conexión. Intentá de nuevo.', false);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Enviar link';
+  }
+}
+
+async function confirmarReset() {
+  var p1 = document.getElementById('f-pass1').value;
+  var p2 = document.getElementById('f-pass2').value;
+  if (!p1) return;
+  if (p1 !== p2) { showMsg('msg-reset','Las contraseñas no coinciden.',false); return; }
+  if (p1.length < 6) { showMsg('msg-reset','La contraseña debe tener al menos 6 caracteres.',false); return; }
+  var btn = document.getElementById('btn-reset');
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  try {
+    var r = await fetch('/api/auth/reset', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token:TOKEN, password:p1}) });
+    var d = await r.json().catch(function(){return{};});
+    if (d.ok) {
+      showMsg('msg-reset','¡Contraseña cambiada! Redirigiendo al login…', true);
+      document.getElementById('f-pass1').value=''; document.getElementById('f-pass2').value='';
+      btn.style.display='none';
+      setTimeout(function(){ location.href='/herramientas/login/'; }, 2000);
+    } else {
+      showMsg('msg-reset', d.error || 'Error al cambiar la contraseña.', false);
+      btn.disabled = false; btn.textContent = 'Cambiar contraseña';
+    }
+  } catch(e) {
+    showMsg('msg-reset','Error de conexión.',false);
+    btn.disabled = false; btn.textContent = 'Cambiar contraseña';
+  }
+}
+
+document.addEventListener('keydown', function(e){
+  if (e.key==='Enter') {
+    if (document.getElementById('panel-forgot').style.display!=='none') enviarReset();
+    else if (document.getElementById('panel-reset').style.display!=='none') confirmarReset();
+  }
+});
+
+init();
+</script>
+</body>
+</html>

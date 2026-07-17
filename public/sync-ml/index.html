@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sincronización ML — Fusion Bikes</title>
+<style>
+  :root{
+    --azul:#2DB8E8;--azul-dk:#1C93BD;--oscuro:#0C0F16;
+    --surface:#141A25;--surface2:#1B2235;--border:#24304A;--border2:#2E3B57;
+    --text:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
+    --green:#34D399;--amber:#F5B942;--red:#F87171;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;margin:0;background:var(--oscuro);color:var(--text);}
+  .wrap{max-width:1000px;margin:0 auto;padding:20px 22px 60px;}
+  a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;margin-bottom:12px;}
+  a.back:hover{color:var(--azul);}
+  .brand-badge{display:inline-flex;flex-direction:column;transform:skewX(-8deg);border-radius:5px 3px 3px 5px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.4);vertical-align:middle;}
+  .brand-badge b{display:block;font-style:italic;font-weight:800;text-transform:uppercase;font-size:9px;line-height:1.25;letter-spacing:-.02em;padding:1px 7px;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;}
+  .brand-badge .bb-t{background:#08090B;color:#fff;}
+  .brand-badge .bb-b{background:var(--azul);color:#08090B;}
+  .head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:20px;}
+  h1{font-size:1.6rem;font-weight:800;letter-spacing:-.03em;margin:6px 0 4px;}
+  h1 em{font-style:normal;color:var(--azul);}
+  .sub{font-size:12.5px;color:var(--muted);margin:0;}
+  .btn{background:var(--azul);color:#06131C;border:0;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s;}
+  .btn:hover{background:var(--azul-dk);}
+  .btn.sec{background:var(--surface2);color:var(--text);font-weight:600;}
+  .btn.sec:hover{background:var(--border2);}
+  .btn:disabled{opacity:.5;cursor:default;}
+
+  .pills{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:22px;}
+  .pill{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:13px 15px;display:flex;align-items:center;gap:11px;}
+  .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+  .dot.ok{background:var(--green);box-shadow:0 0 0 3px rgba(52,211,153,.15);}
+  .dot.bad{background:var(--red);box-shadow:0 0 0 3px rgba(248,113,113,.15);}
+  .pill .pl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px;}
+  .pill .pv{font-size:13.5px;font-weight:700;}
+
+  .sec-title{font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--azul);margin:26px 0 11px;}
+  .cards{display:grid;gap:12px;}
+  .cards.c2{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));}
+  .cards.c4{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 17px;}
+  .card .n{font-size:2rem;font-weight:800;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums;}
+  .card .lbl{font-size:12.5px;color:var(--muted);margin-top:5px;}
+  .card .hint{font-size:11.5px;color:var(--muted2);margin-top:7px;line-height:1.45;}
+  .card.good .n{color:var(--green);}
+  .card.warn .n{color:var(--amber);}
+  .card.crit .n{color:var(--red);}
+  .card.link{cursor:pointer;transition:border-color .15s;text-decoration:none;display:block;color:inherit;}
+  .card.link:hover{border-color:var(--azul);}
+  .card .go{font-size:11.5px;color:var(--azul);margin-top:8px;font-weight:600;}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted2);font-weight:600;padding:10px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:10px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  tr:last-child td{border-bottom:0;}
+  td.mono{font-family:'Courier New',monospace;color:var(--azul);}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;}
+  .tag.ok{background:rgba(52,211,153,.13);color:var(--green);}
+  .tag.canc{background:rgba(248,113,113,.13);color:var(--red);}
+
+  .acciones{display:flex;gap:10px;flex-wrap:wrap;margin-top:11px;}
+  .msg{font-size:12.5px;color:var(--muted);margin-top:12px;min-height:16px;}
+  .loading{color:var(--muted2);font-size:13px;padding:30px 0;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/herramientas/home/">&larr; Inicio</a>
+  <div class="head">
+    <div>
+      <div style="font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--azul);margin-bottom:5px">
+        <span class="brand-badge"><b class="bb-t">Fusion</b><b class="bb-b">Bikes</b></span>
+        &ensp;Integración MercadoLibre
+      </div>
+      <h1>Sincronización <em>ML ↔ WooCommerce</em></h1>
+      <p class="sub">Estado en vivo del stock, los pedidos y lo que necesita tu atención.</p>
+    </div>
+    <button class="btn sec" id="btn-refresh" onclick="cargar()">↻ Actualizar</button>
+  </div>
+
+  <div id="cuerpo"><div class="loading">Cargando estado…</div></div>
+</div>
+
+<script>
+(function(){
+  var token='cookie-session';
+  if(!token){window.location.href='/herramientas/login/?next='+encodeURIComponent(window.location.pathname);throw new Error('redirect');}
+  var _f=window.fetch;
+  window.fetch=function(u,o){o=o||{};o.headers=Object.assign({'Authorization':'Basic '+token},o.headers||{});return _f(u,o);};
+})();
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function fecha(s){if(!s)return '—';try{return new Date(s).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return s;}}
+function nick(json){try{var o=JSON.parse(json);return o&&o.nickname?o.nickname:(o&&o.id?'ID '+o.id:'—');}catch(e){return '—';}}
+function n(x){return (x||0).toLocaleString('es-AR');}
+
+async function cargar(){
+  var cont=document.getElementById('cuerpo');
+  var btn=document.getElementById('btn-refresh');btn.disabled=true;
+  try{
+    var r=await fetch('/api/sync/dashboard');
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    cont.innerHTML=render(d);
+    cargarReactivables();
+  }catch(err){
+    cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
+  }finally{btn.disabled=false;}
+}
+
+async function cargarReactivables(){
+  var box=document.getElementById('reactivar-box');
+  if(!box)return;
+  try{
+    var r=await fetch('/api/sync/reactivables');
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    box.innerHTML=renderReactivables(d);
+  }catch(err){
+    box.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
+  }
+}
+
+function renderReactivables(d){
+  var pubs=d.data||[];
+  if(!pubs.length){
+    return '<div class="card"><div class="lbl">Nada para reactivar por ahora.</div><div class="hint">No hay publicaciones pausadas por falta de stock con stock disponible en la web. Si esperabas ver algunas, refrescá las publicaciones de ML desde el Matcher para actualizar su estado.</div></div>';
+  }
+  var h='';
+  h+='<p class="sub" style="margin-bottom:10px">'+n(d.totalPublicaciones)+' publicaciones ('+n(d.totalVariaciones)+' variaciones) que ML pausó por quedarse sin stock y ya tienen stock en la web. Reactivarlas les empuja el stock actual y las vuelve a poner activas en ML.</p>';
+  h+='<div class="tbl-wrap"><table><thead><tr>';
+  h+='<th><input type="checkbox" id="chk-all" checked onclick="toggleAll(this)"></th>';
+  h+='<th>Publicación</th><th>SKU(s)</th><th>Stock web</th></tr></thead><tbody>';
+  pubs.forEach(function(p){
+    var skus=[...new Set(p.variaciones.map(function(v){return v.sku;}).filter(Boolean))];
+    var stockTotal=p.variaciones.reduce(function(a,v){return a+(v.stock_disponible_ml||0);},0);
+    h+='<tr>';
+    h+='<td><input type="checkbox" class="chk-item" value="'+esc(p.item_id)+'" checked></td>';
+    h+='<td>'+esc(p.titulo||p.item_id)+'<div class="hint">'+esc(p.item_id)+' · '+p.variaciones.length+' var.</div></td>';
+    h+='<td class="mono">'+esc(skus.slice(0,3).join(', '))+(skus.length>3?(' +'+(skus.length-3)):'')+'</td>';
+    h+='<td>'+n(stockTotal)+'</td>';
+    h+='</tr>';
+  });
+  h+='</tbody></table></div>';
+  h+='<div class="acciones"><button class="btn" id="btn-react" onclick="reactivarSel()">Reactivar seleccionadas</button></div>';
+  h+='<div class="msg" id="react-msg"></div>';
+  return h;
+}
+
+function toggleAll(cb){document.querySelectorAll('.chk-item').forEach(function(x){x.checked=cb.checked;});}
+
+async function reactivarSel(){
+  var sel=[...document.querySelectorAll('.chk-item:checked')].map(function(x){return x.value;});
+  var msg=document.getElementById('react-msg');
+  if(!sel.length){msg.style.color='var(--amber)';msg.textContent='No seleccionaste ninguna publicación.';return;}
+  if(!confirm('Vas a reactivar '+sel.length+' publicación(es) en MercadoLibre.\n\nSe les empuja el stock actual de la web y pasan a estado activo. ¿Confirmás?'))return;
+  var btn=document.getElementById('btn-react');btn.disabled=true;
+  var CHUNK=10,okTotal=0,errTotal=0,fallos=[];
+  msg.style.color='var(--muted)';
+  try{
+    for(var i=0;i<sel.length;i+=CHUNK){
+      msg.textContent='Reactivando… '+Math.min(i+CHUNK,sel.length)+'/'+sel.length+' (puede tardar, no cierres la pestaña)';
+      var r=await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:sel.slice(i,i+CHUNK)})});
+      var d=await r.json();
+      if(!d.ok)throw new Error(d.error||'error');
+      (d.resultados||[]).forEach(function(x){if(x.ok)okTotal++;else{errTotal++;if(fallos.length<8)fallos.push(x.item_id+': '+x.error);}});
+    }
+    msg.style.color=errTotal?'var(--amber)':'var(--green)';
+    msg.textContent='✓ Reactivadas '+okTotal+(errTotal?(' · '+errTotal+' con error: '+fallos.join(' | ')):'')+'. Actualizando estado…';
+    await cargar();
+  }catch(err){
+    msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
+  }finally{btn.disabled=false;}
+}
+
+function render(d){
+  var tokOk=d.token&&d.token.vigente;
+  var ml=(d.ultimasSyncsOk||[]).find(function(x){return x.direccion==='ml_wc';});
+  var wc=(d.ultimasSyncsOk||[]).find(function(x){return x.direccion==='wc_ml';});
+  var st=d.stock||{}, pe=d.pedidos||{}, at=d.atencion||{};
+
+  var h='';
+  // Pills de estado
+  h+='<div class="pills">';
+  h+=pill(tokOk?'ok':'bad','Token MercadoLibre',tokOk?('Vigente · vence '+fecha(d.token.vence)):'No configurado / vencido');
+  h+=pill(ml?'ok':'bad','Última venta ML → WC',ml?fecha(ml.ultima):'nunca');
+  h+=pill(wc?'ok':'bad','Último stock WC → ML',wc?fecha(wc.ultima):'nunca');
+  h+='</div>';
+
+  // Stock
+  h+='<div class="sec-title">Stock WC → ML</div><div class="cards c2">';
+  h+='<div class="card good"><div class="n">'+n(st.sincronizadas)+'</div><div class="lbl">Publicaciones activas sincronizadas</div></div>';
+  var notaPend=st.pendientesPausadas>0?('De estas, <b>'+n(st.pendientesPausadas)+'</b> son publicaciones pausadas en ML — reactivalas desde la sección de abajo.'):'Se sincronizan en el próximo ciclo del cron.';
+  h+='<div class="card"><div class="n" style="color:var(--muted)">'+n(st.pendientes)+'</div><div class="lbl">Pendientes de sincronizar</div><div class="hint">'+notaPend+'</div></div>';
+  h+='</div>';
+
+  // Reactivar pausadas por falta de stock (se llena aparte, async)
+  h+='<div class="sec-title">Reactivar publicaciones pausadas por falta de stock</div>';
+  h+='<div id="reactivar-box"><div class="loading">Buscando publicaciones…</div></div>';
+
+  // Pedidos
+  h+='<div class="sec-title">Pedidos de MercadoLibre en WooCommerce</div><div class="cards c2">';
+  h+='<div class="card good"><div class="n">'+n(pe.total)+'</div><div class="lbl">Pedidos creados desde ventas de ML</div></div>';
+  h+='<div class="card"><div class="n" style="color:var(--amber)">'+n(pe.cancelados)+'</div><div class="lbl">Cancelados (stock devuelto)</div></div>';
+  h+='</div>';
+  if(pe.ultimos&&pe.ultimos.length){
+    h+='<div class="tbl-wrap" style="margin-top:12px"><table><thead><tr><th>Pedido WC</th><th>Comprador ML</th><th>Fecha</th><th>Estado</th></tr></thead><tbody>';
+    pe.ultimos.forEach(function(o){
+      var canc=!!o.cancelado_en;
+      h+='<tr><td class="mono">#'+esc(o.wc_order_id)+'</td><td>'+esc(nick(o.comprador_json))+'</td><td>'+fecha(o.creado_en)+'</td><td>'+(canc?'<span class="tag canc">Cancelado</span>':'<span class="tag ok">Activo</span>')+'</td></tr>';
+    });
+    h+='</tbody></table></div>';
+  }
+
+  // Necesita atención
+  h+='<div class="sec-title">Necesita tu atención</div><div class="cards c4">';
+  h+=cardAtencion(at.sin_mapeo,'Ventas sin SKU mapeado','Publicaciones que se vendieron pero no están vinculadas a un SKU. Asignalas acá.','warn','/herramientas/sync-detalle/?cat=sin_mapeo','Ver y resolver →');
+  h+=cardAtencion(at.remapeo_requerido,'Variaciones a re-mapear','Cambiaron en ML (se editó la publicación). Volvé a asignarles el SKU.','warn','/herramientas/sync-detalle/?cat=remapeo_requerido','Ver y resolver →');
+  h+=cardAtencion(at.requiere_atencion_ml,'Exceso de fotos en ML','ML no deja actualizar estas publicaciones hasta bajar la cantidad de fotos en tu cuenta de ML.','crit','/herramientas/sync-detalle/?cat=requiere_atencion_ml','Ver detalle →');
+  h+=cardAtencion(at.errores_reales,'Errores de sincronización','Fallos que no se resolvieron solos. Revisá y reintentá.','crit','/herramientas/sync-detalle/?cat=errores','Ver y reintentar →');
+  h+='</div>';
+
+  // Acciones
+  h+='<div class="sec-title">Acciones manuales</div>';
+  h+='<div class="acciones">';
+  h+='<button class="btn" onclick="disparar(this,\'/api/sync/ml-wc\',\'Trayendo ventas de ML…\')">Traer ventas de ML ahora</button>';
+  h+='<button class="btn sec" onclick="disparar(this,\'/api/sync/wc-ml\',\'Empujando stock a ML…\')">Sincronizar stock ahora</button>';
+  h+='<button class="btn sec" onclick="disparar(this,\'/api/sync/ml-cancelaciones\',\'Procesando cancelaciones…\')">Procesar cancelaciones</button>';
+  h+='</div><div class="msg" id="accion-msg"></div>';
+
+  return h;
+}
+
+function pill(estado,label,valor){
+  return '<div class="pill"><span class="dot '+estado+'"></span><div><div class="pl">'+esc(label)+'</div><div class="pv">'+esc(valor)+'</div></div></div>';
+}
+function cardAtencion(num,titulo,hint,clase,href,go){
+  num=num||0;
+  var cls=num>0?clase:'';
+  var inner='<div class="n"'+(num===0?' style="color:var(--green)"':'')+'>'+n(num)+'</div><div class="lbl">'+esc(titulo)+'</div><div class="hint">'+esc(hint)+'</div>'+(href&&num>0?'<div class="go">'+esc(go)+'</div>':'');
+  if(href&&num>0)return '<a class="card link '+cls+'" href="'+href+'">'+inner+'</a>';
+  return '<div class="card '+cls+'">'+inner+'</div>';
+}
+
+async function disparar(btn,url,txt){
+  var msg=document.getElementById('accion-msg');
+  btn.disabled=true;msg.style.color='var(--muted)';msg.textContent=txt+' (puede tardar unos minutos, no cierres la pestaña)';
+  try{
+    var r=await fetch(url,{method:'POST'});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    msg.style.color='var(--green)';msg.textContent='✓ Listo. Actualizando estado…';
+    await cargar();
+  }catch(err){
+    msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
+  }finally{btn.disabled=false;}
+}
+
+cargar();
+</script>
+
+<script>
+(function(){
+  var seg = (location.pathname.match(/\/herramientas\/([a-z0-9-]+)\//)||[])[1] || '';
+  var tool = seg === 'sync-detalle' ? 'sync-ml' : seg;
+  fetch('/api/auth/me').then(function(r){
+    if (r.status === 401) { location.href = '/herramientas/login/?next=' + encodeURIComponent(location.pathname + location.search); throw ''; }
+    return r.json();
+  }).then(function(d){
+    if (!d || !d.ok) return;
+    var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+    if (isAdmin || !tool) return;
+    var ok = (d.permisos||[]).some(function(p){ return p.herramienta === tool; });
+    if (!ok) location.href = '/herramientas/home/';
+  }).catch(function(){});
+})();
+</script>
+</body>
+</html>

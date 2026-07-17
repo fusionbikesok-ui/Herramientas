@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cobertura de Catálogo — Fusion Bikes</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0C0F16;
+  --surface:  #141A25;
+  --surface2: #1B2235;
+  --border:   #24304A;
+  --accent:   #2DB8E8;
+  --accent-dim: rgba(45,184,232,.12);
+  --text:     #E4EAF4;
+  --muted:    #8493B0;
+  --green:    #34D399;
+  --green-dim:rgba(52,211,153,.12);
+  --red:      #F87171;
+  --red-dim:  rgba(248,113,113,.12);
+  --amber:    #FBBF24;
+  --amber-dim:rgba(251,191,36,.12);
+  --purple:   #A78BFA;
+  --purple-dim:rgba(167,139,250,.12);
+}
+
+body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; }
+
+.topbar { position:sticky; top:0; z-index:10; background:rgba(12,15,22,.92); backdrop-filter:blur(14px); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 2rem; height:54px; }
+.brand-badge { display:inline-flex; flex-direction:column; transform:skewX(-8deg); border-radius:6px 3px 3px 6px; overflow:hidden; }
+.brand-badge b { display:block; font-style:italic; font-weight:800; text-transform:uppercase; font-size:10px; line-height:1.25; letter-spacing:-.02em; padding:1.5px 8px; font-family:Arial,sans-serif; }
+.brand-badge .bt { background:#08090B; color:#fff; }
+.brand-badge .bb { background:var(--accent); color:#08090B; }
+.topbar-right { display:flex; align-items:center; gap:10px; }
+.hbtn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:5px 12px; font-size:.75rem; cursor:pointer; font-family:inherit; text-decoration:none; transition:border-color .15s,color .15s; }
+.hbtn:hover { border-color:var(--accent); color:var(--accent); }
+
+.main { max-width:1100px; margin:0 auto; padding:2.5rem 2rem 5rem; }
+.page-eyebrow { font-size:.68rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin-bottom:6px; }
+.page-title { font-size:1.75rem; font-weight:800; letter-spacing:-.05em; line-height:1.1; margin-bottom:6px; }
+.page-title em { font-style:normal; color:var(--accent); }
+.page-desc { font-size:.83rem; color:var(--muted); margin-bottom:2rem; }
+
+.source-badge { display:inline-flex; align-items:center; gap:6px; background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:4px 12px; font-size:.72rem; color:var(--muted); margin-bottom:1.5rem; }
+.source-badge .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.dot-xl { background:var(--amber); }
+
+.upload-zone { background:var(--surface); border:2px dashed var(--border); border-radius:12px; padding:2.5rem; text-align:center; cursor:pointer; transition:border-color .2s,background .2s; margin-bottom:2rem; }
+.upload-zone:hover, .upload-zone.drag { border-color:var(--purple); background:var(--purple-dim); }
+.upload-zone.loaded { border-color:var(--green); background:var(--green-dim); border-style:solid; }
+.upload-zone input { display:none; }
+.upload-icon { font-size:2rem; margin-bottom:.75rem; }
+.upload-title { font-size:.95rem; font-weight:700; margin-bottom:4px; }
+.upload-hint { font-size:.75rem; color:var(--muted); }
+.upload-file-name { font-size:.8rem; color:var(--green); font-weight:600; margin-top:8px; }
+.btn-cambiar { background:none; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:4px 10px; font-size:.72rem; cursor:pointer; font-family:inherit; margin-top:10px; }
+.btn-cambiar:hover { border-color:var(--accent); color:var(--accent); }
+
+.stat-row { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:2rem; }
+.stat-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; display:flex; align-items:center; gap:14px; }
+.stat-icon { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:12px; font-weight:800; }
+.stat-icon.both { background:var(--green-dim); color:var(--green); }
+.stat-icon.wc   { background:var(--accent-dim); color:var(--accent); }
+.stat-icon.ml   { background:var(--purple-dim); color:var(--purple); }
+.stat-num { font-size:1.6rem; font-weight:800; letter-spacing:-.04em; line-height:1; }
+.stat-num.both { color:var(--green); }
+.stat-num.wc   { color:var(--accent); }
+.stat-num.ml   { color:var(--purple); }
+.stat-label { font-size:.72rem; color:var(--muted); margin-top:2px; }
+
+.controls { display:flex; align-items:center; gap:10px; margin-bottom:1.25rem; flex-wrap:wrap; }
+.pill-tabs { display:flex; gap:4px; flex-wrap:wrap; }
+.pill-tab { padding:6px 14px; border-radius:6px; font-size:.78rem; font-weight:600; cursor:pointer; border:1px solid var(--border); color:var(--muted); background:var(--surface); transition:all .15s; white-space:nowrap; }
+.pill-tab.active { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); }
+.search-box { flex:1; min-width:180px; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:7px 12px; color:var(--text); font-size:.82rem; font-family:inherit; outline:none; }
+.search-box:focus { border-color:var(--accent); }
+
+.list-wrap { display:flex; flex-direction:column; gap:6px; }
+.item-row { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.75rem 1rem; display:grid; grid-template-columns:28px 1fr auto; align-items:center; gap:12px; }
+.item-row.ok     { border-left:3px solid var(--green); }
+.item-row.ok-warn{ border-left:3px solid var(--amber); }
+.item-row.warn   { border-left:3px solid var(--amber); }
+.item-row.onlywc { border-left:3px solid var(--accent); }
+.item-row.onlyml { border-left:3px solid var(--purple); }
+.item-icon { width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0; }
+.item-icon.ok     { background:var(--green-dim); color:var(--green); }
+.item-icon.ok-warn{ background:var(--amber-dim); color:var(--amber); }
+.item-icon.warn   { background:var(--amber-dim); color:var(--amber); }
+.item-icon.onlywc { background:var(--accent-dim); color:var(--accent); }
+.item-icon.onlyml { background:var(--purple-dim); color:var(--purple); }
+.item-body { min-width:0; }
+.item-name { font-size:.88rem; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.item-meta { display:flex; align-items:center; gap:8px; margin-top:3px; flex-wrap:wrap; }
+.meta-pill { font-size:.7rem; padding:1px 7px; border-radius:10px; font-weight:600; border:1px solid; }
+.pill-wc  { background:var(--accent-dim); color:var(--accent); border-color:rgba(45,184,232,.3); }
+.pill-ml  { background:var(--purple-dim); color:var(--purple); border-color:rgba(167,139,250,.3); }
+.pill-sku { font-family:monospace; font-size:.69rem; padding:1px 7px; border-radius:4px; background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
+.pill-sku.match   { background:var(--green-dim); color:var(--green); border-color:rgba(52,211,153,.3); }
+.pill-sku.mismatch{ background:var(--amber-dim); color:var(--amber); border-color:rgba(251,191,36,.3); }
+.pill-sku.nosku   { background:var(--red-dim); color:var(--red); border-color:rgba(248,113,113,.3); }
+.pill-stock { font-size:.7rem; color:var(--muted); }
+.item-meta-id { font-size:.68rem; color:var(--muted); }
+.pill-variante { font-size:.69rem; padding:1px 7px; border-radius:4px; background:rgba(167,139,250,.1); color:var(--purple); border:1px solid rgba(167,139,250,.25); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle; }
+.item-badges { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0; }
+.badge { font-size:.67rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:2px 8px; border-radius:10px; border:1px solid; white-space:nowrap; }
+.badge-ok  { background:var(--green-dim); color:var(--green); border-color:rgba(52,211,153,.3); }
+.badge-warn{ background:var(--amber-dim); color:var(--amber); border-color:rgba(251,191,36,.3); }
+.badge-wc  { background:var(--accent-dim); color:var(--accent); border-color:rgba(45,184,232,.3); }
+.badge-ml  { background:var(--purple-dim); color:var(--purple); border-color:rgba(167,139,250,.3); }
+.badge-red { background:var(--red-dim); color:var(--red); border-color:rgba(248,113,113,.3); }
+
+.section-label { font-size:.65rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:1.5rem 0 .6rem; }
+.empty { text-align:center; padding:3rem 1rem; color:var(--muted); font-size:.85rem; }
+.spinner { display:inline-block; width:18px; height:18px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-right:6px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.hidden { display:none !important; }
+
+@media(max-width:600px){
+  .stat-row { grid-template-columns:1fr; }
+  .topbar { padding:0 1rem; }
+  .main { padding:1.5rem 1rem 4rem; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand-badge"><b class="bt">Fusion</b><b class="bb">Bikes</b></div>
+  <div class="topbar-right">
+    <a href="/herramientas/home/" class="hbtn">← Inicio</a>
+  </div>
+</header>
+
+<main class="main">
+  <div class="page-eyebrow">Catálogo</div>
+  <h1 class="page-title">Cobertura <em>WC · ML</em></h1>
+  <p class="page-desc">Subí el Excel de MercadoLibre para cruzarlo con el catálogo de WooCommerce y ver qué productos están en cada lado y si los SKUs coinciden.</p>
+
+  <!-- Fuente API (recomendada) -->
+  <div style="border:1px solid var(--accent,#2DB8E8);border-radius:14px;padding:16px 18px;margin-bottom:14px;background:rgba(45,184,232,.06)">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent,#2DB8E8);margin-bottom:5px">Recomendado</div>
+    <div style="font-size:14.5px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px">Usar las publicaciones traídas de la API de ML</div>
+    <div style="font-size:12px;color:var(--muted,#8493B0);line-height:1.5;margin-bottom:11px">Cruza el catálogo completo y real de ML (activas + pausadas, con SKU y status reales) contra WooCommerce. Si todavía no las trajiste, hacelo desde el Matcher.</div>
+    <button class="btn-cambiar" id="btn-api-cob" style="background:var(--accent,#2DB8E8);color:#06131C;font-weight:700" onclick="cargarDesdeApiCobertura()">Cruzar con publicaciones de ML →</button>
+    <div id="api-cob-status" style="font-size:12px;color:var(--muted,#8493B0);margin-top:9px;min-height:15px"></div>
+  </div>
+  <div style="text-align:center;font-size:11px;color:var(--muted2,#5B6B8C);text-transform:uppercase;letter-spacing:.1em;margin:2px 0 10px">— o subí el Excel (respaldo) —</div>
+
+  <!-- Upload zone -->
+  <div class="upload-zone" id="upload-zone"
+       onclick="if(!cargado)document.getElementById('inp-xl').click()"
+       ondragover="event.preventDefault();this.classList.add('drag')"
+       ondragleave="this.classList.remove('drag')"
+       ondrop="soltar(event)">
+    <input type="file" id="inp-xl" accept=".xlsx,.xls" onchange="cargarExcel(this.files[0])">
+    <div id="upload-idle">
+      <div class="upload-icon">📊</div>
+      <div class="upload-title">Excel de publicaciones de MercadoLibre</div>
+      <div class="upload-hint">El .xlsx tal cual lo exportás desde ML, sin modificar · También podés arrastrarlo acá</div>
+    </div>
+    <div id="upload-done" class="hidden">
+      <div class="upload-icon">✅</div>
+      <div class="upload-file-name" id="upload-file-name"></div>
+      <button class="btn-cambiar" onclick="event.stopPropagation();resetUpload()">Cambiar archivo</button>
+    </div>
+  </div>
+
+  <!-- Source badge -->
+  <div class="source-badge hidden" id="source-badge">
+    <span class="dot dot-xl"></span>
+    <span id="source-text"></span>
+  </div>
+
+  <!-- Stats -->
+  <div class="stat-row hidden" id="stat-row">
+    <div class="stat-card">
+      <div class="stat-icon both">✓</div>
+      <div>
+        <div class="stat-num both" id="num-ambos">—</div>
+        <div class="stat-label">En ambos lados</div>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon wc">WC</div>
+      <div>
+        <div class="stat-num wc" id="num-wc">—</div>
+        <div class="stat-label">Solo en WooCommerce</div>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon ml">ML</div>
+      <div>
+        <div class="stat-num ml" id="num-ml">—</div>
+        <div class="stat-label">Solo en MercadoLibre</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls hidden" id="controls">
+    <div class="pill-tabs">
+      <div class="pill-tab active" data-tab="ambos" onclick="setTab(this)">Ambos lados</div>
+      <div class="pill-tab" data-tab="problemas" onclick="setTab(this)">⚠ Problemas</div>
+      <div class="pill-tab" data-tab="solo_wc" onclick="setTab(this)">Solo WC</div>
+      <div class="pill-tab" data-tab="solo_ml" onclick="setTab(this)">Solo ML</div>
+    </div>
+    <input class="search-box" type="text" placeholder="Buscar producto, SKU o ID de publicación…" oninput="setBusqueda(this.value)">
+  </div>
+
+  <div id="lista" class="list-wrap"></div>
+</main>
+
+<script>
+/* ── AUTH ── */
+(function(){
+  var token = 'cookie-session';
+  if (!token) { window.location.href = '/herramientas/login/?next=/herramientas/cobertura/'; throw ''; }
+  var _f = window.fetch;
+  window.fetch = function(u, o){ o=o||{}; o.headers=Object.assign({'Authorization':'Basic '+token}, o.headers||{}); return _f(u,o); };
+})();
+
+/* ── ESTADO ── */
+var datos = null;
+var tabActual = 'ambos';
+var busqueda = '';
+var cargado = false;
+
+/* ── UTILS ── */
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* ── XLSX: cargar dinámicamente si no está disponible ── */
+function asegurarXlsx(cb){
+  if(typeof XLSX !== 'undefined'){ cb(); return; }
+  var s = document.createElement('script');
+  s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+  s.onload = cb;
+  s.onerror = function(){ alert('No se pudo cargar la librería para leer Excel. Verificá la conexión a internet.'); };
+  document.head.appendChild(s);
+}
+
+/* ── DROPZONE ── */
+function soltar(ev){
+  ev.preventDefault();
+  document.getElementById('upload-zone').classList.remove('drag');
+  var f = ev.dataTransfer && ev.dataTransfer.files[0];
+  if(f) cargarExcel(f);
+}
+function resetUpload(){
+  cargado = false;
+  datos = null;
+  document.getElementById('upload-zone').classList.remove('loaded');
+  document.getElementById('upload-idle').classList.remove('hidden');
+  document.getElementById('upload-done').classList.add('hidden');
+  document.getElementById('source-badge').classList.add('hidden');
+  document.getElementById('stat-row').classList.add('hidden');
+  document.getElementById('controls').classList.add('hidden');
+  document.getElementById('lista').innerHTML = '';
+  document.getElementById('inp-xl').value = '';
+}
+
+/* ── LECTURA EXCEL ── */
+function cargarExcel(file){
+  if(!file) return;
+  asegurarXlsx(function(){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      try{
+        var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+        var ws = wb.Sheets['Publicaciones'] || wb.Sheets[wb.SheetNames[0]];
+        if(!ws) throw new Error('No se encontró la hoja "Publicaciones" en el Excel.');
+        var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+        parsearYCruzar(rows, file.name);
+      }catch(err){
+        alert('Error leyendo el Excel: ' + err.message);
+      }
+    };
+    reader.onerror = function(){ alert('Error al leer el archivo.'); };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function parsearYCruzar(rows, fileName){
+  /* Parseo idéntico al matcher */
+  var headers = rows[0] || [];
+  var idx = {};
+  headers.forEach(function(h,i){ if(h!==null) idx[String(h)] = i; });
+  var dataRows = rows.slice(5).filter(function(r){ return r && r.some(function(c){ return c!==null; }); });
+
+  var mlItems = [];
+  var tit = '';
+  for(var i=0; i<dataRows.length; i++){
+    var r = dataRows[i];
+    var itemId   = r[idx['ITEM_ID']];
+    var varId    = r[idx['VARIATION_ID']];
+    var sku      = r[idx['SKU']];
+    var title    = r[idx['TITLE']];
+    var status   = r[idx['STATUS']];
+    var variations = r[idx['VARIATIONS']];
+    if(itemId===null||itemId===undefined) continue;
+    if(title!==null && String(title).trim() && String(title).trim()!=='nan') tit = String(title).trim();
+    var esVar    = varId!==null && varId!==undefined && String(varId).trim()!=='';
+    var varStr   = variations!==null ? String(variations) : '';
+    var esSimple = !esVar && varStr.trim()!=='-';
+    if(!esSimple && !esVar) continue; // fila de encabezado variable padre, skip
+    var skuStr   = (sku!==null && String(sku).trim() && String(sku)!=='nan') ? String(sku).trim() : '';
+    var varAttr  = (varStr && varStr !== '-' && varStr !== 'nan') ? varStr.trim() : '';
+    mlItems.push({
+      ml_item_id:     String(itemId),
+      ml_variation_id: esVar ? String(varId).replace(/\.0$/,'') : '',
+      ml_title:       tit || '(sin título)',
+      ml_sku:         skuStr,
+      ml_status:      status ? String(status) : '',
+      ml_variante:    varAttr   // atributos de la variante: "Color: Negro | Talle: L"
+    });
+  }
+
+  cruzarConWC(mlItems, fileName + ' — ' + mlItems.length + ' publicaciones ML leídas');
+}
+
+/* ── FUENTE: API de MercadoLibre (ml_publicaciones_cache) ── */
+function cargarDesdeApiCobertura(){
+  var btn = document.getElementById('btn-api-cob');
+  var info = document.getElementById('api-cob-status');
+  if(btn) btn.disabled = true;
+  if(info){ info.textContent = 'Leyendo publicaciones traídas de ML…'; info.style.color = 'var(--muted)'; }
+  fetch('/api/matcher/publicaciones')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d.ok || !Array.isArray(d.data)) throw new Error('No se pudieron leer las publicaciones');
+      if(d.data.length === 0) throw new Error('No hay publicaciones en el cache. Andá al Matcher y usá "Traer desde API de ML" primero.');
+      var mlItems = d.data.map(function(p){
+        return {
+          ml_item_id:      String(p.item_id),
+          ml_variation_id: p.variation_id ? String(p.variation_id) : '',
+          ml_title:        p.titulo || '(sin título)',
+          ml_sku:          (p.seller_sku||'').trim(),
+          ml_status:       p.status || '',
+          ml_variante:     p.variations_texto || ''
+        };
+      });
+      cruzarConWC(mlItems, mlItems.length + ' publicaciones de ML (API)');
+    })
+    .catch(function(err){
+      if(info){ info.textContent = '✗ ' + err.message; info.style.color = 'var(--red)'; }
+      if(btn) btn.disabled = false;
+    });
+}
+
+/* Tail compartido: marca la zona cargada, trae el catálogo WC y cruza */
+function cruzarConWC(mlItems, etiquetaFuente){
+  cargado = true;
+  document.getElementById('upload-zone').classList.add('loaded');
+  document.getElementById('upload-idle').classList.add('hidden');
+  document.getElementById('upload-done').classList.remove('hidden');
+  document.getElementById('upload-file-name').textContent = '✓ ' + etiquetaFuente;
+  document.getElementById('lista').innerHTML = '<div class="empty"><span class="spinner"></span>Cargando catálogo WooCommerce…</div>';
+
+  fetch('/api/woo/catalogo')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d.ok) throw new Error(d.error || 'Error cargando catálogo WC');
+      var wcProductos = d.productos || d.items || d.data || [];
+      cruzar(mlItems, wcProductos, etiquetaFuente);
+    })
+    .catch(function(err){
+      document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--red)">Error al cargar catálogo WC: ' + esc(err.message) + '</div>';
+    });
+}
+
+function cruzar(mlItems, wcProductos, fileName){
+  /* Índice WC por SKU */
+  var wcPorSku = {};
+  wcProductos.forEach(function(p){
+    var s = String(p.sku||'').trim();
+    if(s) wcPorSku[s] = p;
+  });
+
+  /* Índice ML: set de SKUs presentes */
+  var skusEnML = new Set();
+  mlItems.forEach(function(m){ if(m.ml_sku) skusEnML.add(m.ml_sku); });
+
+  /* EN AMBOS */
+  var enAmbos = [];
+  mlItems.forEach(function(m){
+    if(!m.ml_sku) return;
+    var wc = wcPorSku[m.ml_sku];
+    if(wc){
+      enAmbos.push({
+        nombre:     wc.nombre,
+        sku:        wc.sku,
+        stock_wc:   wc.stock,
+        ml_title:   m.ml_title,
+        ml_item_id: m.ml_item_id,
+        ml_var_id:  m.ml_variation_id,
+        ml_status:  m.ml_status,
+        ml_variante: m.ml_variante
+      });
+    }
+  });
+
+  /* SOLO WC */
+  var soloWc = wcProductos.filter(function(p){
+    var s = String(p.sku||'').trim();
+    return s && !skusEnML.has(s) && p.tipo !== 'variable';
+  });
+
+  /* SOLO ML: sin SKU o SKU no existe en WC */
+  var soloMl = mlItems.filter(function(m){
+    return !m.ml_sku || !wcPorSku[m.ml_sku];
+  });
+
+  /* Publicaciones pausadas/inactivas (están en ambos pero con problema) */
+  var pausadas = enAmbos.filter(function(r){
+    var st = (r.ml_status||'').toLowerCase();
+    return st && st !== 'active' && st !== 'activa';
+  });
+
+  datos = {
+    en_ambos: enAmbos,
+    solo_wc:  soloWc,
+    solo_ml:  soloMl,
+    pausadas: pausadas
+  };
+
+  /* Actualizar stats */
+  document.getElementById('num-ambos').textContent = enAmbos.length;
+  document.getElementById('num-wc').textContent    = soloWc.length;
+  document.getElementById('num-ml').textContent    = soloMl.length;
+  document.getElementById('stat-row').classList.remove('hidden');
+
+  /* Source badge */
+  document.getElementById('source-text').textContent = 'Excel ML: ' + fileName + ' · ' + mlItems.length + ' publicaciones · ' + wcProductos.length + ' productos WC';
+  document.getElementById('source-badge').classList.remove('hidden');
+
+  /* Controls */
+  /* Actualizar label del tab de problemas */
+  var nProb = soloMl.length + pausadas.length;
+  document.querySelectorAll('.pill-tab').forEach(function(b){
+    if(b.dataset.tab === 'problemas') b.textContent = '⚠ Problemas' + (nProb ? ' ('+nProb+')' : '');
+  });
+  document.getElementById('controls').classList.remove('hidden');
+  render();
+}
+
+/* ── TABS / BÚSQUEDA ── */
+function setTab(el){
+  document.querySelectorAll('.pill-tab').forEach(function(b){ b.classList.remove('active'); });
+  el.classList.add('active');
+  tabActual = el.dataset.tab;
+  render();
+}
+function setBusqueda(v){
+  busqueda = v.toLowerCase();
+  render();
+}
+function filtrar(a, b, c){
+  if(!busqueda) return true;
+  return (a||'').toLowerCase().includes(busqueda)
+      || (b||'').toLowerCase().includes(busqueda)
+      || (c||'').toLowerCase().includes(busqueda);
+}
+
+/* ── HELPERS ── */
+function variantePill(v){
+  return v ? '<span class="pill-variante" title="'+esc(v)+'">'+esc(v)+'</span>' : '';
+}
+
+/* ── RENDER ── */
+function render(){
+  if(!datos) return;
+  var html = '', lista;
+
+  if(tabActual === 'ambos'){
+    lista = datos.en_ambos.filter(function(r){ return filtrar(r.nombre, r.sku, r.ml_item_id); });
+    if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty">Sin resultados.</div>'; return; }
+    html += '<div class="section-label">' + lista.length + ' productos presentes en WooCommerce y MercadoLibre</div>';
+    html += lista.map(function(r){
+      var st = (r.ml_status||'').toLowerCase();
+      var activo = !st || st === 'active' || st === 'activa';
+      var badge = activo
+        ? '<span class="badge badge-ok">SKU ✓</span>'
+        : '<span class="badge badge-warn">' + esc(r.ml_status) + '</span>';
+      return '<div class="item-row ok">'
+        + '<div class="item-icon ok">✓</div>'
+        + '<div class="item-body">'
+        + '<div class="item-name">' + esc(r.nombre) + '</div>'
+        + '<div class="item-meta">'
+        + '<span class="meta-pill pill-wc">WooCommerce</span>'
+        + '<span class="meta-pill pill-ml">MercadoLibre</span>'
+        + '<span class="pill-sku match">SKU: ' + esc(r.sku) + '</span>'
+        + variantePill(r.ml_variante)
+        + (r.stock_wc!=null ? '<span class="pill-stock">Stock WC: '+r.stock_wc+'</span>' : '')
+        + '<span class="item-meta-id">' + esc(r.ml_item_id) + (r.ml_var_id?'|'+r.ml_var_id:'') + '</span>'
+        + '</div></div>'
+        + '<div class="item-badges">' + badge + '</div>'
+        + '</div>';
+    }).join('');
+
+  } else if(tabActual === 'problemas'){
+    var sinWc = datos.solo_ml.filter(function(r){ return filtrar(r.ml_title, r.ml_sku, r.ml_item_id); });
+    var pausadas = datos.pausadas.filter(function(r){ return filtrar(r.nombre, r.sku, r.ml_item_id); });
+    if(!sinWc.length && !pausadas.length){
+      document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--green)">✓ Sin problemas detectados.</div>';
+      return;
+    }
+    if(sinWc.length){
+      html += '<div class="section-label">⚠ ' + sinWc.length + ' publicaciones ML sin producto WooCommerce activo</div>';
+      html += sinWc.map(function(r){
+        var skuPill = r.ml_sku
+          ? '<span class="pill-sku mismatch">SKU ML: ' + esc(r.ml_sku) + ' — no existe en WC</span>'
+          : '<span class="pill-sku nosku">Sin SKU</span>';
+        return '<div class="item-row warn">'
+          + '<div class="item-icon warn">⚠</div>'
+          + '<div class="item-body">'
+          + '<div class="item-name">' + esc(r.ml_title||'(sin título)') + '</div>'
+          + '<div class="item-meta">'
+          + '<span class="meta-pill pill-ml">MercadoLibre</span>'
+          + skuPill
+          + variantePill(r.ml_variante)
+          + '<span class="item-meta-id">' + esc(r.ml_item_id) + '</span>'
+          + '</div></div>'
+          + '<div class="item-badges"><span class="badge badge-warn">Sin WC</span></div>'
+          + '</div>';
+      }).join('');
+    }
+    if(pausadas.length){
+      html += '<div class="section-label">⏸ ' + pausadas.length + ' publicaciones pausadas o inactivas</div>';
+      html += pausadas.map(function(r){
+        return '<div class="item-row ok-warn">'
+          + '<div class="item-icon ok-warn">⏸</div>'
+          + '<div class="item-body">'
+          + '<div class="item-name">' + esc(r.nombre) + '</div>'
+          + '<div class="item-meta">'
+          + '<span class="meta-pill pill-wc">WooCommerce</span>'
+          + '<span class="meta-pill pill-ml">MercadoLibre</span>'
+          + '<span class="pill-sku">' + esc(r.sku) + '</span>'
+          + '<span class="pill-sku mismatch">Estado: ' + esc(r.ml_status) + '</span>'
+          + '</div></div>'
+          + '<div class="item-badges"><span class="badge badge-warn">' + esc(r.ml_status) + '</span></div>'
+          + '</div>';
+      }).join('');
+    }
+
+  } else if(tabActual === 'solo_wc'){
+    lista = datos.solo_wc.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
+    if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty">Sin resultados.</div>'; return; }
+    html += '<div class="section-label">' + lista.length + ' productos en WooCommerce sin publicación en MercadoLibre</div>';
+    html += lista.map(function(r){
+      var skuPill = r.sku ? '<span class="pill-sku">SKU: '+esc(r.sku)+'</span>' : '<span class="pill-sku nosku">Sin SKU</span>';
+      return '<div class="item-row onlywc">'
+        + '<div class="item-icon onlywc">WC</div>'
+        + '<div class="item-body">'
+        + '<div class="item-name">' + esc(r.nombre) + '</div>'
+        + '<div class="item-meta">'
+        + '<span class="meta-pill pill-wc">WooCommerce</span>'
+        + skuPill
+        + (r.stock!=null ? '<span class="pill-stock">Stock: '+r.stock+'</span>' : '')
+        + '</div></div>'
+        + '<div class="item-badges"><span class="badge badge-wc">Solo WC</span></div>'
+        + '</div>';
+    }).join('');
+
+  } else if(tabActual === 'solo_ml'){
+    lista = datos.solo_ml.filter(function(r){ return filtrar(r.ml_title, r.ml_sku, r.ml_item_id); });
+    if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty">Sin resultados.</div>'; return; }
+    html += '<div class="section-label">' + lista.length + ' publicaciones en ML sin producto en WooCommerce</div>';
+    html += lista.map(function(r){
+      var skuPill = r.ml_sku
+        ? '<span class="pill-sku mismatch">SKU: '+esc(r.ml_sku)+' — no en WC</span>'
+        : '<span class="pill-sku nosku">Sin SKU</span>';
+      return '<div class="item-row onlyml">'
+        + '<div class="item-icon onlyml">ML</div>'
+        + '<div class="item-body">'
+        + '<div class="item-name">' + esc(r.ml_title||'(sin título)') + '</div>'
+        + '<div class="item-meta">'
+        + '<span class="meta-pill pill-ml">MercadoLibre</span>'
+        + skuPill
+        + variantePill(r.ml_variante)
+        + '<span class="item-meta-id">' + esc(r.ml_item_id) + '</span>'
+        + '</div></div>'
+        + '<div class="item-badges"><span class="badge badge-ml">Solo ML</span></div>'
+        + '</div>';
+    }).join('');
+  }
+
+  document.getElementById('lista').innerHTML = html || '<div class="empty">Sin resultados.</div>';
+}
+</script>
+
+<script>
+(function(){
+  var seg = (location.pathname.match(/\/herramientas\/([a-z0-9-]+)\//)||[])[1] || '';
+  var tool = seg === 'sync-detalle' ? 'sync-ml' : seg;
+  fetch('/api/auth/me').then(function(r){
+    if (r.status === 401) { location.href = '/herramientas/login/?next=' + encodeURIComponent(location.pathname + location.search); throw ''; }
+    return r.json();
+  }).then(function(d){
+    if (!d || !d.ok) return;
+    var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+    if (isAdmin || !tool) return;
+    var ok = (d.permisos||[]).some(function(p){ return p.herramienta === tool; });
+    if (!ok) location.href = '/herramientas/home/';
+  }).catch(function(){});
+})();
+</script>
+</body>
+</html>

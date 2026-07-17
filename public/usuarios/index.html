@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Usuarios y Permisos — Fusion Bikes</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0C0F16;--surface:#141A25;--surface2:#1B2235;--border:#24304A;
+    --accent:#2DB8E8;--accent-dim:rgba(45,184,232,.10);--text:#E4EAF4;--muted:#6B7A9B;
+    --green:#34D399;--red:#F87171;--amber:#F5B942;
+  }
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;padding:28px 22px}
+  .wrap{max-width:1080px;margin:0 auto}
+  header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:6px;flex-wrap:wrap}
+  .eyebrow{font-size:.68rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+  h1{font-size:1.7rem;font-weight:800;letter-spacing:-.03em}
+  .sub{color:var(--muted);font-size:.85rem;margin:6px 0 24px}
+  .toolbar{display:flex;gap:10px;align-items:center}
+  a.back{color:var(--muted);text-decoration:none;font-size:.85rem;border:1px solid var(--border);border-radius:8px;padding:8px 12px}
+  a.back:hover{color:var(--text);border-color:var(--muted)}
+  .btn{background:var(--accent);color:#0C0F16;border:none;border-radius:8px;padding:10px 16px;font-weight:700;font-size:.85rem;cursor:pointer;font-family:inherit}
+  .btn:hover{filter:brightness(1.08)}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--border)}
+  .btn.ghost:hover{border-color:var(--muted)}
+  .btn.danger{background:transparent;color:var(--red);border:1px solid var(--border)}
+  .btn.danger:hover{border-color:var(--red)}
+  .btn.sm{padding:6px 11px;font-size:.78rem}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 18px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:11px 10px;border-bottom:1px solid var(--border);font-size:.86rem;vertical-align:middle}
+  th{color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.08em}
+  .badge{display:inline-block;border-radius:99px;padding:3px 9px;font-size:.7rem;font-weight:600;border:1px solid var(--border)}
+  .badge.admin{color:var(--accent);border-color:var(--accent);background:var(--accent-dim)}
+  .badge.off{color:var(--red);border-color:var(--red)}
+  .badge.tool{color:var(--muted);margin:2px 3px 2px 0}
+  .badge.tool.w{color:var(--green);border-color:rgba(52,211,153,.4)}
+  .row-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  input[type=text],input[type=password]{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9rem;font-family:inherit;outline:none}
+  input:focus{border-color:var(--accent)}
+  label.fld{display:block;font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .perm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:6px}
+  .perm{display:flex;align-items:center;gap:9px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 11px}
+  .perm .name{flex:1;font-size:.85rem}
+  .perm select{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;font-size:.78rem;font-family:inherit}
+  .perm select:disabled{opacity:.35}
+  .chk{width:16px;height:16px;accent-color:var(--accent)}
+  .msg{padding:10px 13px;border-radius:8px;font-size:.83rem;margin-bottom:12px;display:none}
+  .msg.err{display:block;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:var(--red)}
+  .msg.ok{display:block;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);color:var(--green)}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:20px;z-index:10}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:22px;max-width:640px;width:100%;max-height:90vh;overflow:auto}
+  .modal h3{font-size:1.15rem;margin-bottom:14px}
+  .modal .fld-wrap{margin-bottom:14px}
+  .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+  .muted{color:var(--muted);font-size:.82rem}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">Administración</div>
+      <h1>Usuarios y Permisos</h1>
+    </div>
+    <div class="toolbar">
+      <a class="back" href="/herramientas/home/">← Volver</a>
+      <button class="btn ghost" onclick="logout()">Salir</button>
+      <button class="btn" onclick="abrirCrear()">+ Nuevo usuario</button>
+    </div>
+  </header>
+  <p class="sub">Definí quién puede entrar y qué herramientas puede usar cada persona.</p>
+
+  <div class="msg" id="msg"></div>
+
+  <div class="card">
+    <table>
+      <thead><tr><th>Usuario</th><th>Email</th><th>Rol</th><th>Herramientas</th><th></th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="5" class="muted">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-bg" id="modal-bg">
+  <div class="modal">
+    <h3 id="modal-title">Nuevo usuario</h3>
+    <div class="fld-wrap">
+      <label class="fld">Usuario</label>
+      <input type="text" id="f-username" autocomplete="off">
+    </div>
+    <div class="fld-wrap" id="f-email-wrap">
+      <label class="fld">Email (para recuperación de contraseña)</label>
+      <input type="email" id="f-email" autocomplete="email" placeholder="usuario@ejemplo.com">
+    </div>
+    <div class="grid2">
+      <div class="fld-wrap">
+        <label class="fld" id="f-pass-label">Contraseña</label>
+        <input type="password" id="f-password" autocomplete="new-password" placeholder="mínimo 6 caracteres">
+      </div>
+      <div class="fld-wrap">
+        <label class="fld">Rol</label>
+        <label class="perm" style="margin-top:0"><input type="checkbox" class="chk" id="f-admin" onchange="onAdminToggle()"> <span class="name">Administrador (acceso total + gestión)</span></label>
+      </div>
+    </div>
+    <div id="perm-section">
+      <label class="fld">Herramientas permitidas</label>
+      <div class="perm-grid" id="perm-grid"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" id="modal-save" onclick="guardar()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var HERRAMIENTAS = [];
+var editId = null; // null = alta
+
+function showMsg(txt, ok){ var m=document.getElementById('msg'); m.textContent=txt; m.className='msg '+(ok?'ok':'err'); setTimeout(function(){m.className='msg';},4000); }
+function logout(){ fetch('/api/auth/logout',{method:'POST'}).finally(function(){location.href='/herramientas/login/';}); }
+
+async function api(url, opts){
+  var r = await fetch(url, opts);
+  var d = await r.json().catch(function(){return{};});
+  if (r.status === 401) { location.href='/herramientas/login/'; throw ''; }
+  if (r.status === 403) { location.href='/herramientas/home/'; throw ''; }
+  if (!r.ok || !d.ok) throw new Error(d.error || ('Error '+r.status));
+  return d;
+}
+
+async function cargar(){
+  var h = await api('/api/usuarios/herramientas');
+  HERRAMIENTAS = h.herramientas;
+  var d = await api('/api/usuarios');
+  renderTabla(d.usuarios);
+}
+
+function renderTabla(usuarios){
+  var tb = document.getElementById('tbody');
+  if (!usuarios.length){ tb.innerHTML='<tr><td colspan="5" class="muted">Sin usuarios.</td></tr>'; return; }
+  tb.innerHTML = usuarios.map(function(u){
+    var rol = u.is_admin ? '<span class="badge admin">Admin</span>' : '<span class="badge">Usuario</span>';
+    if (!u.activo) rol += ' <span class="badge off">Inactivo</span>';
+    var tools = u.is_admin ? '<span class="muted">Todas</span>'
+      : (u.permisos.length ? u.permisos.map(function(p){
+          var lbl=(HERRAMIENTAS.find(function(h){return h.id===p.herramienta;})||{}).label||p.herramienta;
+          return '<span class="badge tool '+(p.nivel==='write'?'w':'')+'">'+lbl+(p.nivel==='write'?' ✎':'')+'</span>';
+        }).join('') : '<span class="muted">— sin acceso —</span>');
+    var emailCell = '<span class="muted" id="email-val-'+u.id+'" onclick="editarEmail('+u.id+')" style="cursor:pointer;font-size:.82rem" title="Clic para editar">'+(u.email||'<em>sin email</em>')+'</span>';
+    var acts = '<div class="row-actions">'
+      + '<button class="btn ghost sm" onclick="abrirEditar('+u.id+')">Editar</button>'
+      + '<button class="btn ghost sm" onclick="resetPass('+u.id+",'"+u.username.replace(/'/g,"")+"'"+')">Clave</button>'
+      + '<button class="btn ghost sm" onclick="toggleActivo('+u.id+','+(u.activo?0:1)+')">'+(u.activo?'Desactivar':'Activar')+'</button>'
+      + '<button class="btn danger sm" onclick="eliminar('+u.id+",'"+u.username.replace(/'/g,"")+"'"+')">Eliminar</button>'
+      + '</div>';
+    return '<tr><td><strong>'+u.username+'</strong></td><td>'+emailCell+'</td><td>'+rol+'</td><td>'+tools+'</td><td>'+acts+'</td></tr>';
+  }).join('');
+}
+
+async function editarEmail(id) {
+  var d = await api('/api/usuarios');
+  var u = d.usuarios.find(function(x){return x.id===id;});
+  var email = prompt('Email de recuperación para "'+u.username+'":\n(dejá vacío para quitar)', u.email||'');
+  if (email === null) return;
+  try {
+    await api('/api/usuarios/'+id+'/email', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email: email.trim()||null }) });
+    showMsg('Email actualizado.', true); cargar();
+  } catch(e){ showMsg(e.message, false); }
+}
+
+function renderPermGrid(permisos){
+  permisos = permisos || [];
+  var byId = {}; permisos.forEach(function(p){ byId[p.herramienta]=p.nivel; });
+  document.getElementById('perm-grid').innerHTML = HERRAMIENTAS.map(function(h){
+    var checked = byId[h.id] ? 'checked' : '';
+    var nivel = byId[h.id] || 'read';
+    var sel = h.niveles
+      ? '<select data-tool="'+h.id+'" '+(checked?'':'disabled')+'>'
+         +'<option value="read"'+(nivel==='read'?' selected':'')+'>Ver</option>'
+         +'<option value="write"'+(nivel==='write'?' selected':'')+'>Editar</option></select>'
+      : '<span class="muted" style="font-size:.72rem">acceso</span>';
+    return '<label class="perm"><input type="checkbox" class="chk" data-tool="'+h.id+'" '+checked+' onchange="onToolToggle(this)">'
+      +'<span class="name">'+h.label+'</span>'+sel+'</label>';
+  }).join('');
+}
+
+function onToolToggle(chk){
+  var sel = document.querySelector('#perm-grid select[data-tool="'+chk.getAttribute('data-tool')+'"]');
+  if (sel) sel.disabled = !chk.checked;
+}
+function onAdminToggle(){
+  var isAdmin = document.getElementById('f-admin').checked;
+  document.getElementById('perm-section').style.display = isAdmin ? 'none' : 'block';
+}
+
+function recogerPermisos(){
+  var out = [];
+  document.querySelectorAll('#perm-grid input.chk:checked').forEach(function(chk){
+    var tool = chk.getAttribute('data-tool');
+    var sel = document.querySelector('#perm-grid select[data-tool="'+tool+'"]');
+    out.push({ herramienta: tool, nivel: sel && sel.value === 'write' ? 'write' : 'read' });
+  });
+  return out;
+}
+
+function abrirCrear(){
+  editId = null;
+  document.getElementById('modal-title').textContent = 'Nuevo usuario';
+  document.getElementById('f-username').value = '';
+  document.getElementById('f-username').disabled = false;
+  document.getElementById('f-password').value = '';
+  document.getElementById('f-password').parentElement.style.display = 'block';
+  document.getElementById('f-email').value = '';
+  document.getElementById('f-email-wrap').style.display = 'block';
+  document.getElementById('f-admin').checked = false;
+  renderPermGrid([]);
+  onAdminToggle();
+  document.getElementById('modal-bg').classList.add('show');
+}
+
+async function abrirEditar(id){
+  var d = await api('/api/usuarios');
+  var u = d.usuarios.find(function(x){return x.id===id;});
+  if (!u) return;
+  editId = id;
+  document.getElementById('modal-title').textContent = 'Editar: '+u.username;
+  document.getElementById('f-username').value = u.username;
+  document.getElementById('f-username').disabled = true;
+  document.getElementById('f-password').parentElement.style.display = 'none';
+  document.getElementById('f-admin').checked = u.is_admin;
+  renderPermGrid(u.permisos);
+  onAdminToggle();
+  document.getElementById('modal-bg').classList.add('show');
+}
+
+function cerrarModal(){ document.getElementById('modal-bg').classList.remove('show'); }
+
+async function guardar(){
+  var isAdmin = document.getElementById('f-admin').checked;
+  var permisos = recogerPermisos();
+  try {
+    if (editId === null) {
+      var username = document.getElementById('f-username').value.trim();
+      var password = document.getElementById('f-password').value;
+      var email = document.getElementById('f-email').value.trim() || null;
+      await api('/api/usuarios', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ username, password, is_admin:isAdmin, permisos, email }) });
+      showMsg('Usuario creado.', true);
+    } else {
+      await api('/api/usuarios/'+editId, { method:'PATCH', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ is_admin:isAdmin }) });
+      if (!isAdmin) {
+        await api('/api/usuarios/'+editId+'/permisos', { method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ permisos }) });
+      }
+      showMsg('Cambios guardados.', true);
+    }
+    cerrarModal();
+    cargar();
+  } catch(e){ showMsg(e.message || 'Error al guardar', false); }
+}
+
+async function resetPass(id, username){
+  var pass = prompt('Nueva contraseña para "'+username+'" (mínimo 6 caracteres):');
+  if (!pass) return;
+  try { await api('/api/usuarios/'+id+'/password', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: pass }) });
+    showMsg('Contraseña actualizada.', true); } catch(e){ showMsg(e.message,false); }
+}
+
+async function toggleActivo(id, activo){
+  try { await api('/api/usuarios/'+id, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ activo: !!activo }) });
+    cargar(); } catch(e){ showMsg(e.message,false); }
+}
+
+async function eliminar(id, username){
+  if (!confirm('¿Eliminar al usuario "'+username+'"? Esta acción no se puede deshacer.')) return;
+  try { await api('/api/usuarios/'+id, { method:'DELETE' }); showMsg('Usuario eliminado.', true); cargar(); }
+  catch(e){ showMsg(e.message,false); }
+}
+
+document.getElementById('modal-bg').addEventListener('click', function(e){ if(e.target===this) cerrarModal(); });
+cargar().catch(function(e){ showMsg(e.message || 'Error de carga', false); });
+</script>
+</body>
+</html>

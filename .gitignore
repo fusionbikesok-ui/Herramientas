@@ -1,0 +1,7 @@
+node_modules/
+data/
+uploads/
+.env
+*.sqlite
+*.db
+.claude/settings.local.json

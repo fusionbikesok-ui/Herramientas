@@ -1,0 +1,727 @@
+﻿<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fusion Bikes — Herramientas</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:         #0C0F16;
+  --surface:    #141A25;
+  --surface2:   #1B2235;
+  --border:     #24304A;
+  --accent:     #2DB8E8;
+  --accent-dim: rgba(45,184,232,.10);
+  --text:       #E4EAF4;
+  --muted:      #6B7A9B;
+  --green:      #34D399;
+  --green-dim:  rgba(52,211,153,.10);
+  --blue:       #60A5FA;
+  --blue-dim:   rgba(96,165,250,.10);
+  --purple:     #A78BFA;
+  --purple-dim: rgba(167,139,250,.10);
+}
+
+html { font-size: 16px; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+/* ── Topbar ── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(12,15,22,.9);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2rem;
+  height: 54px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-badge { display: inline-flex; flex-direction: column; transform: skewX(-8deg); border-radius: 6px 3px 3px 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+.brand-badge b { display: block; font-style: italic; font-weight: 800; text-transform: uppercase; font-size: 10px; line-height: 1.25; letter-spacing: -.02em; padding: 1.5px 8px; font-family: Arial, Helvetica, sans-serif; white-space: nowrap; }
+.brand-badge .bb-t { background: #08090B; color: #fff; }
+.brand-badge .bb-b { background: var(--accent); color: #08090B; }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .73rem;
+  color: var(--muted);
+  letter-spacing: .01em;
+}
+
+.sync-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+/* User avatar chip */
+.user-chip {
+  display: none;
+  align-items: center;
+  gap: 7px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 3px 10px 3px 4px;
+}
+
+.user-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #0C0F16;
+  font-size: .65rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: -.01em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.user-name {
+  font-size: .73rem;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+.btn-logout {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 5px 11px;
+  font-size: .75rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color .15s, color .15s;
+  letter-spacing: .01em;
+}
+
+.btn-logout:hover { border-color: var(--muted); color: var(--text); }
+
+/* ── Main ── */
+.main {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 2.75rem 2rem 5rem;
+}
+
+/* ── Page header ── */
+.page-header {
+  margin-bottom: 2.75rem;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.page-header-left {}
+
+.page-eyebrow {
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.page-title {
+  font-size: 1.85rem;
+  font-weight: 800;
+  letter-spacing: -.05em;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.page-title em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.page-desc {
+  margin-top: 6px;
+  font-size: .83rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* ── Category section ── */
+.category { margin-bottom: 2.25rem; }
+
+.category-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.category-label {
+  font-size: .65rem;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.label-ingreso { background: var(--accent-dim); color: var(--accent); }
+.label-control  { background: var(--blue-dim);   color: var(--blue); }
+.label-sync     { background: var(--purple-dim); color: var(--purple); }
+
+.category-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Cards grid ── */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  gap: 12px;
+}
+
+/* Card: left color border via box-shadow inset */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.15rem 1.15rem .9rem;
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color .18s, background .18s, transform .12s, box-shadow .18s;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Category accent stripe — left edge */
+.card.card-ingreso::before,
+.card.card-control::before,
+.card.card-sync::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 16px;
+  bottom: 16px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  transition: opacity .18s;
+}
+
+.card.card-ingreso::before { background: var(--accent); }
+.card.card-control::before  { background: var(--blue); }
+.card.card-sync::before     { background: var(--purple); }
+
+/* Hover by category */
+.card-ingreso:not(.card--soon):hover {
+  border-color: rgba(45,184,232,.4);
+  background: var(--surface2);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(45,184,232,.06);
+}
+
+.card-control:not(.card--soon):hover {
+  border-color: rgba(96,165,250,.4);
+  background: var(--surface2);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(96,165,250,.06);
+}
+
+.card-sync:not(.card--soon):hover {
+  border-color: rgba(167,139,250,.4);
+  background: var(--surface2);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(167,139,250,.06);
+}
+
+.card--soon {
+  opacity: .5;
+  cursor: default;
+}
+
+.card--soon::before { opacity: .4; }
+
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.icon-ingreso { background: var(--accent-dim); color: var(--accent); }
+.icon-control  { background: var(--blue-dim);   color: var(--blue); }
+.icon-sync     { background: var(--purple-dim); color: var(--purple); }
+
+.card-icon svg { width: 17px; height: 17px; }
+
+.card-badge {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--surface2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.card-title {
+  font-size: .93rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.card-desc {
+  font-size: .8rem;
+  color: var(--muted);
+  line-height: 1.55;
+  flex: 1;
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+
+.card-tag {
+  font-size: .67rem;
+  color: var(--muted);
+  letter-spacing: .03em;
+}
+
+.card-arrow {
+  color: var(--border);
+  transition: color .15s, transform .15s;
+  flex-shrink: 0;
+}
+
+.card-ingreso:not(.card--soon):hover .card-arrow { color: var(--accent); transform: translateX(3px); }
+.card-control:not(.card--soon):hover .card-arrow  { color: var(--blue);   transform: translateX(3px); }
+.card-sync:not(.card--soon):hover .card-arrow     { color: var(--purple); transform: translateX(3px); }
+
+/* ── Responsive ── */
+@media (max-width: 560px) {
+  .topbar { padding: 0 1rem; }
+  .main { padding: 2rem 1rem 4rem; }
+  .sync-status { display: none; }
+  .cards { grid-template-columns: 1fr; }
+  .page-title { font-size: 1.5rem; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-badge"><b class="bb-t">Fusion</b><b class="bb-b">Bikes</b></span>
+  </div>
+
+  <div class="topbar-right">
+    <div class="sync-status" id="sync-status">
+      <div class="sync-dot"></div>
+      <span id="sync-label">Conectando…</span>
+    </div>
+    <div class="user-chip" id="user-chip">
+      <div class="user-avatar" id="user-avatar"></div>
+      <span class="user-name" id="user-name"></span>
+    </div>
+    <button class="btn-logout" onclick="logout()">Salir</button>
+  </div>
+</header>
+
+<main class="main">
+  <div class="page-header">
+    <div class="page-header-left">
+      <div class="page-eyebrow" id="page-eyebrow">Fusion Bikes</div>
+      <h1 class="page-title" id="page-title">Panel de <em>herramientas</em></h1>
+      <p class="page-desc">Operaciones internas — Stock, catálogo y sincronización.</p>
+    </div>
+  </div>
+
+  <!-- PANEL DE ESTADO (barras de progreso + atención) -->
+  <section id="panel-estado" style="display:none;margin-bottom:26px">
+    <div id="pe-barras" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:14px"></div>
+    <div id="pe-atencion" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+  </section>
+
+  <!-- INGRESO -->
+  <section class="category" data-admin-only>
+    <div class="category-header">
+      <span class="category-label label-ingreso">Ingreso</span>
+      <div class="category-line"></div>
+    </div>
+    <div class="cards">
+      <a class="card card-ingreso" href="/herramientas/stock/">
+        <div class="card-top">
+          <div class="card-icon icon-ingreso">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/>
+              <path d="M16 3l-4 4-4-4"/>
+              <path d="M12 7v7"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Ingreso de Stock</div>
+        <div class="card-desc">Subí archivos del proveedor (CSV, PDF, XLSX, imagen), mapeá al catálogo WooCommerce y generá el CSV de importación.</div>
+        <div class="card-footer">
+          <span class="card-tag">Catálogo · Mapeo · CSV</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+      <a class="card card-ingreso" href="/herramientas/recepcion/" data-admin-only>
+        <div class="card-top">
+          <div class="card-icon icon-ingreso">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 3h15v13H1z"/>
+              <path d="M16 8h4l3 3v5h-7V8z"/>
+              <circle cx="5.5" cy="18.5" r="2.5"/>
+              <circle cx="18.5" cy="18.5" r="2.5"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Recepción de Mercadería</div>
+        <div class="card-desc">Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic.</div>
+        <div class="card-footer">
+          <span class="card-tag">Facturas · Remitos · Stock</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+      <a class="card card-ingreso" href="/herramientas/pedidos/" data-admin-only>
+        <div class="card-top">
+          <div class="card-icon icon-ingreso">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="18" rx="2"/>
+              <path d="M8 7h8M8 11h8M8 15h5"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Pedidos de Compra</div>
+        <div class="card-desc">Seguí el estado de cada pedido: documentos recibidos, recepciones confirmadas y mercadería pendiente de llegada.</div>
+        <div class="card-footer">
+          <span class="card-tag">Pedidos · OC · Importadores</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+    </div>
+  </section>
+
+      <a class="card card-control" href="/herramientas/cobertura/" data-admin-only>
+        <div class="card-top">
+          <div class="card-icon icon-control">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M8 12h8M12 8v8"/>
+              <path d="M4.93 4.93l4.24 4.24M14.83 14.83l4.24 4.24"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Cobertura de Catálogo</div>
+        <div class="card-desc">Verificá qué productos están en WooCommerce, en MercadoLibre o en ambos, y si los SKUs coinciden.</div>
+        <div class="card-footer">
+          <span class="card-tag">WC · ML · SKU</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <!-- CONTROL -->
+  <section class="category">
+    <div class="category-header">
+      <span class="category-label label-control">Control</span>
+      <div class="category-line"></div>
+    </div>
+    <div class="cards">
+      <a class="card card-control" data-admin-only href="/herramientas/inventario/">
+        <div class="card-top">
+          <div class="card-icon icon-control">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 11l3 3L22 4"/>
+              <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Contador de Inventario</div>
+        <div class="card-desc">Conteo físico de stock uno por uno. Registrá cantidades para conciliar el inventario real contra WooCommerce.</div>
+        <div class="card-footer">
+          <span class="card-tag">Conteo · Auditoría</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+      <a class="card card-control" href="/herramientas/etiquetas/">
+        <div class="card-top">
+          <div class="card-icon icon-control">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/>
+              <line x1="7" y1="7" x2="7.01" y2="7"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Etiquetas de Productos</div>
+        <div class="card-desc">Generá e imprimí etiquetas de precio. Catálogo completo, búsqueda por SKU, y filtro por categoría con stock.</div>
+        <div class="card-footer">
+          <span class="card-tag">Impresión · Etiquetas</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <!-- SINCRONIZACIÓN -->
+  <section class="category">
+    <div class="category-header">
+      <span class="category-label label-sync">Sincronización</span>
+      <div class="category-line"></div>
+    </div>
+    <div class="cards">
+      <a class="card card-sync" href="/herramientas/matcher/">
+        <div class="card-top">
+          <div class="card-icon icon-sync">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">SKU Matcher ML ↔ WooCommerce</div>
+        <div class="card-desc">Vinculá publicaciones de MercadoLibre con productos WooCommerce por score de similitud. Confirmás SKUs y exportás el CSV.</div>
+        <div class="card-footer">
+          <span class="card-tag">Mapeo · SKU · ML</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+      <a class="card card-sync" href="/herramientas/config-ml/" data-admin-only>
+        <div class="card-top">
+          <div class="card-icon icon-sync">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="M9 12l2 2 4-4"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Config ML — Reservas Locales</div>
+        <div class="card-desc">Marcá SKUs individuales como "solo local" o reservá N unidades para el local. El resto del stock se sincroniza normalmente a MercadoLibre.</div>
+        <div class="card-footer">
+          <span class="card-tag">SKU · Reserva · Stock</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+      <a class="card card-sync" href="/herramientas/sync-ml/" data-admin-only>
+        <div class="card-top">
+          <div class="card-icon icon-sync">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"/>
+              <polyline points="23 20 23 14 17 14"/>
+              <path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Sincronización ML — Estado</div>
+        <div class="card-desc">Estado en vivo de la integración con MercadoLibre: stock sincronizado, pedidos de ML en WooCommerce, cancelaciones y qué necesita tu atención.</div>
+        <div class="card-footer">
+          <span class="card-tag">Stock · Pedidos · Alertas</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+    </div>
+  </section>
+</main>
+
+<script>
+function logout() {
+  fetch('/api/auth/logout', { method: 'POST' }).finally(function() {
+    window.location.href = '/herramientas/login/';
+  });
+}
+
+// Deriva el id de herramienta desde el href de una tarjeta (/herramientas/<tool>/).
+function toolDeHref(href) {
+  var m = (href || '').match(/\/herramientas\/([a-z0-9-]+)\//);
+  return m ? m[1] : null;
+}
+
+fetch('/api/auth/me').then(function(r) {
+  if (r.status === 401) { window.location.href = '/herramientas/login/'; throw new Error('redirect'); }
+  return r.json();
+}).then(function(d) {
+  if (!d.ok) return;
+
+  var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+  // Set de herramientas permitidas (para admin: todas)
+  var permitidas = {};
+  (d.permisos || []).forEach(function(p) { permitidas[p.herramienta] = true; });
+  (d.scopes || []).forEach(function(s) { if (s !== 'all') permitidas[s] = true; });
+
+  function tienePermiso(tool) { return isAdmin || !!permitidas[tool]; }
+
+  // Chip de usuario + saludo (para todos)
+  var chip = document.getElementById('user-chip');
+  if (chip) {
+    document.getElementById('user-avatar').textContent = (d.user || '?').charAt(0).toUpperCase();
+    document.getElementById('user-name').textContent = d.user;
+    chip.style.display = 'flex';
+  }
+  document.getElementById('page-eyebrow').textContent = 'Hola, ' + d.user;
+  document.getElementById('page-title').innerHTML = isAdmin ? 'Panel de <em>herramientas</em>' : 'Tus <em>herramientas</em>';
+
+  // Tarjeta de gestión de usuarios: solo admins
+  if (isAdmin) {
+    var host = document.querySelector('.category .cards') || document.querySelector('.cards');
+    if (host) {
+      var a = document.createElement('a');
+      a.className = 'card card-control';
+      a.href = '/herramientas/usuarios/';
+      a.innerHTML = '<div class="card-top"><div class="card-icon icon-control">'
+        + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+        + '</div></div><div class="card-title">Usuarios y Permisos</div>'
+        + '<div class="card-desc">Gestioná las cuentas del equipo y qué herramientas puede usar cada una. Solo administradores.</div>'
+        + '<div class="card-footer"><span class="card-tag">Cuentas · Permisos · Admin</span>'
+        + '<svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></div>';
+      host.appendChild(a);
+    }
+  }
+
+  // Mostrar/ocultar cada tarjeta según permiso; luego ocultar secciones vacías.
+  document.querySelectorAll('.card[href^="/herramientas/"]').forEach(function(card) {
+    var tool = toolDeHref(card.getAttribute('href'));
+    if (!tool || tool === 'usuarios' || tool === 'home') return;
+    if (!tienePermiso(tool)) card.style.display = 'none';
+  });
+  document.querySelectorAll('section.category').forEach(function(sec) {
+    var visibles = Array.prototype.filter.call(sec.querySelectorAll('.card'), function(c) {
+      return c.style.display !== 'none';
+    });
+    if (visibles.length === 0) sec.style.display = 'none';
+  });
+
+  // ── Panel de estado: barras de progreso + atención ──
+  function peBarra(label, valor, total, color, sub) {
+    var pct = total > 0 ? Math.round(valor / total * 100) : 0;
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:15px 16px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px">'
+      + '<span style="font-size:13px;color:var(--muted)">' + label + '</span>'
+      + '<span style="font-size:20px;font-weight:800;color:' + color + ';font-variant-numeric:tabular-nums">' + pct + '%</span></div>'
+      + '<div style="height:9px;border-radius:6px;background:var(--surface2);overflow:hidden">'
+      + '<div style="height:100%;width:' + pct + '%;background:' + color + ';border-radius:6px;transition:width .8s cubic-bezier(.16,1,.3,1)"></div></div>'
+      + '<div style="font-size:11.5px;color:var(--muted);margin-top:8px">' + sub + '</div></div>';
+  }
+  function peChip(num, label, color, href) {
+    if (!num) return '';
+    var inner = '<span style="font-size:18px;font-weight:800;color:' + color + ';font-variant-numeric:tabular-nums">' + num.toLocaleString('es-AR') + '</span>'
+      + ' <span style="font-size:12.5px;color:var(--text)">' + label + '</span>';
+    var st = 'background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:8px 14px;display:inline-flex;align-items:center;gap:6px';
+    return href ? '<a href="' + href + '" style="text-decoration:none;' + st + '">' + inner + '</a>'
+      : '<span style="' + st + '">' + inner + '</span>';
+  }
+  function peMostrar() { document.getElementById('panel-estado').style.display = 'block'; }
+
+  if (!tienePermiso('sync-ml') && tienePermiso('matcher')) {
+    // Sin acceso a Sync pero sí al Matcher → muestra solo lo suyo
+    fetch('/api/matcher/push-skus-pendientes/count').then(function(r){return r.json();}).then(function(d){
+      if (!d.ok) return;
+      var chips = [peChip(d.pendientes, 'SKUs por escribir en ML', '#F5B942', '/herramientas/matcher/')].filter(Boolean);
+      if (chips.length) { document.getElementById('pe-atencion').innerHTML = chips.join(''); peMostrar(); }
+    }).catch(function(){});
+  } else if (tienePermiso('sync-ml')) {
+    fetch('/api/sync/dashboard').then(function(r){return r.json();}).then(function(d){
+      if (!d.ok) return;
+      var st = d.stock || {}, at = d.atencion || {}, sk = d.skus || { escritos: 0, pendientes: 0 };
+      var activPend = Math.max(0, (st.pendientes || 0) - (st.pendientesPausadas || 0));
+      var totalActiv = (st.sincronizadas || 0) + activPend;
+      document.getElementById('pe-barras').innerHTML = [
+        peBarra('Stock sincronizado a ML', st.sincronizadas || 0, totalActiv, 'var(--green)',
+          (st.sincronizadas || 0).toLocaleString('es-AR') + ' publicaciones · ' + (st.pendientesPausadas || 0).toLocaleString('es-AR') + ' pausadas no sincronizan'),
+        peBarra('SKUs cargados en ML', sk.escritos, sk.escritos + sk.pendientes, 'var(--blue)',
+          sk.pendientes.toLocaleString('es-AR') + ' pendientes de escribir en ML')
+      ].join('');
+      var chips = [
+        peChip(sk.pendientes, 'SKUs por escribir en ML', '#F5B942', '/herramientas/matcher/'),
+        peChip(at.sin_mapeo, 'ventas sin mapear', '#F5B942', '/herramientas/matcher/'),
+        peChip(at.remapeo_requerido, 'a re-mapear', '#F5B942', '/herramientas/matcher/'),
+        peChip(at.requiere_atencion_ml, 'con exceso de fotos', '#F87171', '/herramientas/sync-ml/'),
+        peChip(at.errores_reales, 'errores de sync', '#F87171', '/herramientas/sync-ml/')
+      ].filter(Boolean);
+      document.getElementById('pe-atencion').innerHTML = chips.length ? chips.join('')
+        : '<span style="font-size:12.5px;color:var(--green)">✓ Todo al día — nada requiere tu atención.</span>';
+      peMostrar();
+    }).catch(function(){});
+  }
+
+  fetch('/api/woo/catalogo').then(function(r) { return r.json(); }).then(function(cat) {
+    if (cat.ok && cat.data) {
+      document.getElementById('sync-label').textContent =
+        cat.data.length.toLocaleString('es-AR') + ' productos';
+    }
+  }).catch(function() {
+    document.getElementById('sync-label').textContent = 'WooCommerce';
+  });
+}).catch(function() {});
+</script>
+</body>
+</html>
+

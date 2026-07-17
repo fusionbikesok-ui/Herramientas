@@ -1,0 +1,10 @@
+﻿{
+  "apps": [{
+    "name": "herramientas",
+    "script": "server.js",
+    "cwd": "/opt/fusionbikes/herramientas",
+    "env_file": "/opt/fusionbikes/herramientas/.env",
+    "restart_delay": 3000,
+    "max_restarts": 10
+  }]
+}

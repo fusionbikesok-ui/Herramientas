@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Config ML — Reservas Locales</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:         #0C0F16;
+  --surface:    #141A25;
+  --surface2:   #1B2235;
+  --border:     #24304A;
+  --accent:     #2DB8E8;
+  --accent-dim: rgba(45,184,232,.10);
+  --text:       #E4EAF4;
+  --muted:      #6B7A9B;
+  --green:      #34D399;
+  --green-dim:  rgba(52,211,153,.12);
+  --amber:      #F59E0B;
+  --amber-dim:  rgba(245,158,11,.12);
+  --blue:       #60A5FA;
+  --blue-dim:   rgba(96,165,250,.12);
+  --purple:     #A78BFA;
+  --red:        #F87171;
+  --red-dim:    rgba(248,113,113,.12);
+}
+
+html { font-size: 16px; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+/* ── Topbar ── */
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(12,15,22,.9);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 2rem; height: 54px;
+}
+.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.brand-badge { display: inline-flex; flex-direction: column; transform: skewX(-8deg); border-radius: 6px 3px 3px 6px; overflow: hidden; }
+.brand-badge b { display: block; font-style: italic; font-weight: 800; text-transform: uppercase; font-size: 10px; line-height: 1.25; letter-spacing: -.02em; padding: 1.5px 8px; font-family: Arial, Helvetica, sans-serif; white-space: nowrap; }
+.brand-badge .bb-t { background: #08090B; color: #fff; }
+.brand-badge .bb-b { background: var(--accent); color: #08090B; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.btn-secondary {
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 6px; padding: 5px 11px; font-size: .75rem; cursor: pointer;
+  font-family: inherit; transition: border-color .15s, color .15s; letter-spacing: .01em;
+  text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-secondary:hover { border-color: var(--muted); color: var(--text); }
+
+/* ── Main ── */
+.main { max-width: 900px; margin: 0 auto; padding: 2.5rem 2rem 5rem; }
+
+.page-eyebrow { font-size: .68rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--purple); margin-bottom: 6px; }
+.page-title { font-size: 1.65rem; font-weight: 800; letter-spacing: -.05em; line-height: 1.1; }
+.page-title em { font-style: normal; color: var(--purple); }
+.page-desc { margin-top: 6px; font-size: .83rem; color: var(--muted); }
+
+/* ── Add form card ── */
+.add-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 1.5rem; margin: 2rem 0 1.5rem;
+}
+.add-card-title { font-size: .8rem; font-weight: 700; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 1rem; }
+
+.search-wrap { position: relative; }
+.search-input {
+  width: 100%; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; padding: .6rem 1rem;
+  font-size: .88rem; font-family: inherit; outline: none;
+  transition: border-color .15s;
+}
+.search-input:focus { border-color: var(--accent); }
+.search-input::placeholder { color: var(--muted); }
+
+.dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden; z-index: 20;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  display: none;
+}
+.dropdown.open { display: block; }
+.dropdown-item {
+  padding: .6rem 1rem; cursor: pointer; font-size: .85rem;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; transition: background .12s;
+  border-bottom: 1px solid var(--border);
+}
+.dropdown-item:last-child { border-bottom: none; }
+.dropdown-item:hover { background: var(--surface); }
+.dropdown-sku { font-family: monospace; font-size: .8rem; color: var(--accent); }
+.dropdown-stock { font-size: .78rem; color: var(--muted); }
+.dropdown-empty { padding: .75rem 1rem; color: var(--muted); font-size: .85rem; }
+
+/* ── Config form (shown after SKU selection) ── */
+.config-form { display: none; margin-top: 1.25rem; }
+.config-form.visible { display: block; }
+.selected-sku-info {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: .6rem 1rem; margin-bottom: 1rem;
+  display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+}
+.selected-sku-name { font-size: .88rem; font-weight: 600; }
+.selected-sku-code { font-family: monospace; font-size: .8rem; color: var(--accent); }
+.selected-sku-stock { font-size: .78rem; color: var(--muted); }
+
+.radio-group { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 1rem; }
+.radio-opt {
+  flex: 1; min-width: 180px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: .75rem 1rem; cursor: pointer;
+  transition: border-color .15s, background .15s;
+  display: flex; align-items: flex-start; gap: .6rem;
+}
+.radio-opt.selected { border-color: var(--purple); background: rgba(167,139,250,.08); }
+.radio-dot {
+  width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border);
+  flex-shrink: 0; margin-top: 2px; transition: border-color .15s; position: relative;
+}
+.radio-opt.selected .radio-dot { border-color: var(--purple); }
+.radio-opt.selected .radio-dot::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 6px; height: 6px; border-radius: 50%; background: var(--purple);
+}
+.radio-label { font-size: .85rem; font-weight: 600; }
+.radio-sub { font-size: .75rem; color: var(--muted); margin-top: 2px; }
+
+.reserva-row { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; }
+.reserva-row label { font-size: .83rem; color: var(--muted); white-space: nowrap; }
+.reserva-input {
+  width: 90px; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; padding: .5rem .75rem;
+  font-size: .88rem; font-family: inherit; outline: none;
+  transition: border-color .15s; text-align: center;
+}
+.reserva-input:focus { border-color: var(--purple); }
+.reserva-preview { font-size: .8rem; color: var(--muted); }
+.reserva-preview strong { color: var(--green); }
+
+.btn-save {
+  background: var(--purple); color: #fff; border: none;
+  border-radius: 8px; padding: .6rem 1.5rem;
+  font-size: .88rem; font-weight: 700; font-family: inherit;
+  cursor: pointer; transition: opacity .15s;
+}
+.btn-save:hover { opacity: .85; }
+.btn-save:disabled { opacity: .4; cursor: default; }
+
+/* ── Table ── */
+.section-title {
+  font-size: .68rem; font-weight: 700; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: .75rem;
+  display: flex; align-items: center; gap: .5rem;
+}
+.count-badge {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 99px; padding: 1px 8px; font-size: .7rem;
+  color: var(--muted); font-weight: 600;
+}
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead tr { border-bottom: 1px solid var(--border); }
+th {
+  text-align: left; font-size: .7rem; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); padding: .5rem .75rem;
+}
+td { padding: .65rem .75rem; font-size: .85rem; border-bottom: 1px solid rgba(36,48,74,.6); }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(27,34,53,.5); }
+
+.sku-mono { font-family: monospace; font-size: .8rem; color: var(--accent); }
+.mode-badge {
+  font-size: .65rem; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 4px;
+  white-space: nowrap;
+}
+.mode-solo_local { background: var(--amber-dim); color: var(--amber); }
+.mode-reserva    { background: var(--blue-dim);  color: var(--blue); }
+
+.stock-ml { font-weight: 600; }
+.stock-ml.zero { color: var(--red); }
+.stock-ml.positive { color: var(--green); }
+
+.actions { display: flex; gap: 6px; }
+.btn-edit, .btn-del {
+  background: transparent; border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 10px; font-size: .75rem;
+  cursor: pointer; font-family: inherit; transition: border-color .15s, color .15s;
+}
+.btn-edit { color: var(--muted); }
+.btn-edit:hover { border-color: var(--purple); color: var(--purple); }
+.btn-del  { color: var(--muted); }
+.btn-del:hover  { border-color: var(--red); color: var(--red); }
+
+.empty-state {
+  text-align: center; padding: 3rem 1rem;
+  color: var(--muted); font-size: .88rem;
+}
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: 1.5rem; right: 1.5rem;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 10px; padding: .75rem 1.25rem;
+  font-size: .85rem; display: flex; align-items: center; gap: .5rem;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 100;
+  animation: slideIn .2s ease; pointer-events: none;
+}
+.toast.hide { animation: slideOut .2s ease forwards; }
+@keyframes slideIn { from { opacity:0; transform: translateY(10px); } to { opacity:1; transform: translateY(0); } }
+@keyframes slideOut { to { opacity:0; transform: translateY(10px); } }
+
+@media (max-width: 560px) {
+  .topbar { padding: 0 1rem; }
+  .main { padding: 1.5rem 1rem 4rem; }
+  .radio-group { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="/herramientas/home/">
+    <span class="brand-badge"><b class="bb-t">Fusion</b><b class="bb-b">Bikes</b></span>
+  </a>
+  <div class="topbar-right">
+    <a class="btn-secondary" href="/herramientas/home/">← Inicio</a>
+    <button class="btn-secondary" onclick="logout()">Salir</button>
+  </div>
+</header>
+
+<main class="main">
+  <div class="page-eyebrow">Sincronización · MercadoLibre</div>
+  <h1 class="page-title">Config ML — <em>Reservas Locales</em></h1>
+  <p class="page-desc">Marcá SKUs para que no se sincronicen a ML, o reservá N unidades para el local. El resto del stock sigue sincronizando normalmente.</p>
+
+  <!-- Add form -->
+  <div class="add-card">
+    <div class="add-card-title">Agregar o editar configuración</div>
+    <div class="search-wrap">
+      <input class="search-input" id="search" type="text" placeholder="Buscar SKU o nombre de producto…" autocomplete="off">
+      <div class="dropdown" id="dropdown"></div>
+    </div>
+
+    <div class="config-form" id="config-form">
+      <div class="selected-sku-info" id="selected-info"></div>
+
+      <div class="radio-group">
+        <div class="radio-opt" id="opt-solo" onclick="setModo('solo_local')">
+          <div class="radio-dot"></div>
+          <div>
+            <div class="radio-label">🔒 Solo local</div>
+            <div class="radio-sub">0 unidades disponibles en ML, sin importar el stock</div>
+          </div>
+        </div>
+        <div class="radio-opt" id="opt-reserva" onclick="setModo('reserva')">
+          <div class="radio-dot"></div>
+          <div>
+            <div class="radio-label">📦 Reservar unidades</div>
+            <div class="radio-sub">N unidades para el local, el resto va a ML</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="reserva-row" id="reserva-row" style="display:none">
+        <label>Unidades reservadas para el local:</label>
+        <input class="reserva-input" id="reserva-input" type="number" min="0" value="1" oninput="actualizarPreview()">
+        <span class="reserva-preview" id="reserva-preview"></span>
+      </div>
+
+      <button class="btn-save" id="btn-save" onclick="guardar()">Guardar</button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="section-title">
+    SKUs configurados
+    <span class="count-badge" id="count-badge">0</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Producto</th>
+          <th>SKU</th>
+          <th>Stock WC</th>
+          <th>Modo</th>
+          <th>Reserva</th>
+          <th>Disponible ML</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="empty-state" id="empty" style="display:none">
+      No hay SKUs configurados. Usá el buscador de arriba para agregar el primero.
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast" style="display:none"></div>
+
+<script>
+(function() {
+  var token = 'cookie-session';
+  if (!token) { window.location.href = '/herramientas/login/?next=/herramientas/config-ml/'; throw new Error('redirect'); }
+  var _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ 'Authorization': 'Basic ' + token }, opts.headers || {});
+    return _fetch(url, opts);
+  };
+})();
+
+function logout() { fetch('/api/auth/logout',{method:'POST'}); window.location.href = '/herramientas/login/'; }
+
+// ── State ──────────────────────────────────────────────────────────────────
+var selectedSku = null;
+var selectedNombre = null;
+var selectedStock = 0;
+var currentModo = null;
+
+// ── Autocomplete ──────────────────────────────────────────────────────────
+var searchEl = document.getElementById('search');
+var dropdown = document.getElementById('dropdown');
+var searchTimer;
+
+searchEl.addEventListener('input', function() {
+  clearTimeout(searchTimer);
+  var q = this.value.trim();
+  if (!q) { dropdown.classList.remove('open'); return; }
+  searchTimer = setTimeout(function() { buscarSku(q); }, 250);
+});
+
+searchEl.addEventListener('blur', function() {
+  setTimeout(function() { dropdown.classList.remove('open'); }, 150);
+});
+
+function buscarSku(q) {
+  fetch('/api/sync/buscar-sku?q=' + encodeURIComponent(q))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (!d.ok || !d.data.length) {
+        dropdown.innerHTML = '<div class="dropdown-empty">Sin resultados</div>';
+        dropdown.classList.add('open');
+        return;
+      }
+      dropdown.innerHTML = d.data.map(function(item) {
+        return '<div class="dropdown-item" onclick="seleccionarSku(' +
+          JSON.stringify(item.sku) + ',' + JSON.stringify(item.nombre) + ',' + item.stock + ')">' +
+          '<span>' + escHtml(item.nombre) + '</span>' +
+          '<span><span class="dropdown-sku">' + escHtml(item.sku) + '</span>' +
+          '<span class="dropdown-stock"> · stock ' + item.stock + '</span></span>' +
+          '</div>';
+      }).join('');
+      dropdown.classList.add('open');
+    }).catch(function() {});
+}
+
+function seleccionarSku(sku, nombre, stock) {
+  selectedSku = sku;
+  selectedNombre = nombre;
+  selectedStock = stock;
+  searchEl.value = nombre + ' (' + sku + ')';
+  dropdown.classList.remove('open');
+
+  var info = document.getElementById('selected-info');
+  info.innerHTML = '<span class="selected-sku-name">' + escHtml(nombre) + '</span>' +
+    '<span class="selected-sku-code">' + escHtml(sku) + '</span>' +
+    '<span class="selected-sku-stock">Stock WC: ' + stock + '</span>';
+
+  document.getElementById('config-form').classList.add('visible');
+  setModo('solo_local');
+}
+
+// ── Modo radio ────────────────────────────────────────────────────────────
+function setModo(modo) {
+  currentModo = modo;
+  document.getElementById('opt-solo').classList.toggle('selected', modo === 'solo_local');
+  document.getElementById('opt-reserva').classList.toggle('selected', modo === 'reserva');
+  var reservaRow = document.getElementById('reserva-row');
+  reservaRow.style.display = modo === 'reserva' ? 'flex' : 'none';
+  if (modo === 'reserva') actualizarPreview();
+}
+
+function actualizarPreview() {
+  var reserva = parseInt(document.getElementById('reserva-input').value) || 0;
+  var disponible = Math.max(0, selectedStock - reserva);
+  document.getElementById('reserva-preview').innerHTML =
+    'Stock WC ' + selectedStock + ' − reserva ' + reserva + ' = <strong>' + disponible + ' para ML</strong>';
+}
+
+// ── Guardar ───────────────────────────────────────────────────────────────
+function guardar() {
+  if (!selectedSku || !currentModo) return;
+  var reserva = currentModo === 'reserva' ? (parseInt(document.getElementById('reserva-input').value) || 0) : 0;
+  var btn = document.getElementById('btn-save');
+  btn.disabled = true;
+  fetch('/api/sync/config-ml', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sku: selectedSku, nombre: selectedNombre, modo: currentModo, reserva: reserva })
+  }).then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false;
+      if (d.ok) {
+        toast('✓ Guardado');
+        resetForm();
+        cargarTabla();
+      } else {
+        toast('Error: ' + d.error, true);
+      }
+    }).catch(function(e) { btn.disabled = false; toast('Error de red', true); });
+}
+
+function resetForm() {
+  selectedSku = null; selectedNombre = null; selectedStock = 0; currentModo = null;
+  searchEl.value = '';
+  document.getElementById('config-form').classList.remove('visible');
+}
+
+// ── Tabla ─────────────────────────────────────────────────────────────────
+function cargarTabla() {
+  fetch('/api/sync/config-ml')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var tbody = document.getElementById('tbody');
+      var empty = document.getElementById('empty');
+      var badge = document.getElementById('count-badge');
+      if (!d.ok || !d.data.length) {
+        tbody.innerHTML = '';
+        empty.style.display = '';
+        badge.textContent = '0';
+        return;
+      }
+      empty.style.display = 'none';
+      badge.textContent = d.data.length;
+      tbody.innerHTML = d.data.map(function(r) {
+        var modeLabel = r.modo === 'solo_local' ? 'Solo local' : 'Reserva';
+        var reservaCol = r.modo === 'reserva' ? r.reserva + ' ud.' : '—';
+        var mlClass = r.stock_disponible_ml === 0 ? 'zero' : 'positive';
+        return '<tr>' +
+          '<td>' + escHtml(r.nombre || r.sku) + '</td>' +
+          '<td class="sku-mono">' + escHtml(r.sku) + '</td>' +
+          '<td>' + r.stock_wc + '</td>' +
+          '<td><span class="mode-badge mode-' + r.modo + '">' + modeLabel + '</span></td>' +
+          '<td>' + reservaCol + '</td>' +
+          '<td class="stock-ml ' + mlClass + '">' + r.stock_disponible_ml + '</td>' +
+          '<td><div class="actions">' +
+            '<button class="btn-edit" onclick="editarSku(' + JSON.stringify(r) + ')">✏️ Editar</button>' +
+            '<button class="btn-del"  onclick="eliminarSku(' + JSON.stringify(r.sku) + ')">✕ Quitar</button>' +
+          '</div></td>' +
+          '</tr>';
+      }).join('');
+    }).catch(function() {});
+}
+
+function editarSku(row) {
+  seleccionarSku(row.sku, row.nombre || row.sku, row.stock_wc);
+  setModo(row.modo);
+  if (row.modo === 'reserva') {
+    document.getElementById('reserva-input').value = row.reserva;
+    actualizarPreview();
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function eliminarSku(sku) {
+  if (!confirm('¿Quitar la configuración de "' + sku + '"? Volverá a sincronizar con el stock completo.')) return;
+  fetch('/api/sync/config-ml/' + encodeURIComponent(sku), { method: 'DELETE' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) { toast('✓ Configuración eliminada'); cargarTabla(); }
+      else toast('Error: ' + d.error, true);
+    }).catch(function() { toast('Error de red', true); });
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+var toastTimer;
+function toast(msg, isErr) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.borderColor = isErr ? 'rgba(248,113,113,.4)' : 'var(--border)';
+  el.style.display = 'flex';
+  el.classList.remove('hide');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() {
+    el.classList.add('hide');
+    setTimeout(function() { el.style.display = 'none'; }, 200);
+  }, 2500);
+}
+
+function escHtml(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Init
+cargarTabla();
+</script>
+
+<script>
+(function(){
+  var seg = (location.pathname.match(/\/herramientas\/([a-z0-9-]+)\//)||[])[1] || '';
+  var tool = seg === 'sync-detalle' ? 'sync-ml' : seg;
+  fetch('/api/auth/me').then(function(r){
+    if (r.status === 401) { location.href = '/herramientas/login/?next=' + encodeURIComponent(location.pathname + location.search); throw ''; }
+    return r.json();
+  }).then(function(d){
+    if (!d || !d.ok) return;
+    var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+    if (isAdmin || !tool) return;
+    var ok = (d.permisos||[]).some(function(p){ return p.herramienta === tool; });
+    if (!ok) location.href = '/herramientas/home/';
+  }).catch(function(){});
+})();
+</script>
+</body>
+</html>
