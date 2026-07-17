@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { mlFetch } from '../lib/mlClient.js';
+import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -105,16 +106,7 @@ export async function refrescarPublicacionesMl(db, cfg) {
   }
 
   // 3) Reemplazar el cache de forma atómica
-  const upsert = db.prepare(`
-    INSERT INTO ml_publicaciones_cache
-      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en)
-    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @actualizado_en)
-    ON CONFLICT(clave) DO UPDATE SET
-      item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
-      status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
-      talle=excluded.talle, seller_sku=excluded.seller_sku, variations_texto=excluded.variations_texto,
-      actualizado_en=excluded.actualizado_en
-  `);
+  const upsert = prepararUpsertCache(db);
   const ts = now();
   const tx = db.transaction((rows) => {
     // Limpiar publicaciones que ya no están activas/pausadas
@@ -125,6 +117,59 @@ export async function refrescarPublicacionesMl(db, cfg) {
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
   return { total: filas.length, items: allIds.length, variaciones };
+}
+
+/** Statement de upsert al cache de publicaciones (compartido entre refresco total y acotado). */
+function prepararUpsertCache(db) {
+  return db.prepare(`
+    INSERT INTO ml_publicaciones_cache
+      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en)
+    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @actualizado_en)
+    ON CONFLICT(clave) DO UPDATE SET
+      item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
+      status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
+      talle=excluded.talle, seller_sku=excluded.seller_sku, variations_texto=excluded.variations_texto,
+      actualizado_en=excluded.actualizado_en
+  `);
+}
+
+/**
+ * Refresco ACOTADO: trae de ML solo los item_ids indicados (multiget directo, sin el
+ * scan del catálogo completo) y hace upsert. A diferencia del refresco total, NUNCA
+ * borra el resto del cache — un subconjunto no puede saber si las demás publicaciones
+ * siguen vigentes. Devuelve { total, items, variaciones }.
+ */
+export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds) {
+  if (!mlCfgOk(cfg)) throw new Error('Configuración de MercadoLibre incompleta');
+  const ids = [...new Set((itemIds || []).map(String).filter(Boolean))];
+  if (ids.length === 0) return { total: 0, items: 0, variaciones: 0 };
+
+  const filas = [];
+  for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
+    const chunk = ids.slice(i, i + MULTIGET_CHUNK);
+    const resp = await mlFetch(
+      db, cfg, 'get',
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations`
+    );
+    if (resp.status !== 200 || !Array.isArray(resp.data)) {
+      throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+    }
+    for (const entry of resp.data) {
+      if (entry.code !== 200 || !entry.body) continue;
+      filas.push(...aplanarItem(entry.body));
+    }
+    await sleep(CALL_DELAY_MS);
+  }
+
+  const upsert = prepararUpsertCache(db);
+  const ts = now();
+  const tx = db.transaction((rows) => {
+    for (const f of rows) upsert.run({ ...f, actualizado_en: ts });
+  });
+  tx(filas);
+
+  const variaciones = filas.filter(f => f.es_variante === 1).length;
+  return { total: filas.length, items: ids.length, variaciones };
 }
 
 /**
@@ -238,10 +283,18 @@ export function matcherRouter(db, cfg) {
     res.json({ ok: true });
   });
 
-  // Trae las publicaciones desde la API de ML y las cachea
+  // Trae las publicaciones desde la API de ML y las cachea.
+  // body { scope:'atencion' } → refresco acotado a las publicaciones sin mapeo /
+  // a re-mapear (rápido); sin scope → refresco total del catálogo.
   router.post('/refrescar-ml', async (req, res) => {
     try {
-      const r = await refrescarPublicacionesMl(db, mlCfg);
+      let r;
+      if (req.body?.scope === 'atencion') {
+        const itemIds = [...new Set(clavesNecesitanAtencion(db).map(c => String(c).split('|')[0]))];
+        r = await refrescarPublicacionesMlAcotado(db, mlCfg, itemIds);
+      } else {
+        r = await refrescarPublicacionesMl(db, mlCfg);
+      }
       res.json({ ok: true, ...r });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
@@ -303,12 +356,23 @@ export function matcherRouter(db, cfg) {
     res.json({ ok: true, pendientes: r.n });
   });
 
-  // Lee las publicaciones cacheadas
+  // Lee las publicaciones cacheadas.
+  // ?scope=atencion → solo las que necesitan atención (sin mapeo / a re-mapear).
+  const SELECT_PUBS = `
+    SELECT clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en
+    FROM ml_publicaciones_cache`;
   router.get('/publicaciones', (req, res) => {
-    const rows = db.prepare(`
-      SELECT clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en
-      FROM ml_publicaciones_cache ORDER BY titulo
-    `).all();
+    let rows;
+    if (req.query.scope === 'atencion') {
+      const claves = clavesNecesitanAtencion(db);
+      if (claves.length === 0) {
+        return res.json({ ok: true, data: [], actualizado: null, total: 0 });
+      }
+      const placeholders = claves.map(() => '?').join(',');
+      rows = db.prepare(`${SELECT_PUBS} WHERE clave IN (${placeholders}) ORDER BY titulo`).all(...claves);
+    } else {
+      rows = db.prepare(`${SELECT_PUBS} ORDER BY titulo`).all();
+    }
     const actualizado = rows[0]?.actualizado_en ?? null;
     res.json({ ok: true, data: rows, actualizado, total: rows.length });
   });
