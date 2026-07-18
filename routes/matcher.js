@@ -89,7 +89,7 @@ export async function refrescarPublicacionesMl(db, cfg) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations`
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail`
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
     // borraría publicaciones válidas sin aviso.
@@ -123,13 +123,13 @@ export async function refrescarPublicacionesMl(db, cfg) {
 function prepararUpsertCache(db) {
   return db.prepare(`
     INSERT INTO ml_publicaciones_cache
-      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en)
-    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @actualizado_en)
+      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, actualizado_en)
+    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
       item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
       status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
       talle=excluded.talle, seller_sku=excluded.seller_sku, variations_texto=excluded.variations_texto,
-      actualizado_en=excluded.actualizado_en
+      thumbnail=excluded.thumbnail, actualizado_en=excluded.actualizado_en
   `);
 }
 
@@ -149,7 +149,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations`
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
@@ -179,6 +179,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds) {
 function aplanarItem(body) {
   const itemId = String(body.id);
   const titulo = body.title || '';
+  const thumbnail = body.secure_thumbnail || body.thumbnail || '';
   const status = body.status || '';
   // sub_status es a nivel item (array, ej. ["out_of_stock"]); se denormaliza en cada fila.
   const subStatus = Array.isArray(body.sub_status) ? body.sub_status.join(',') : (body.sub_status || '');
@@ -199,6 +200,7 @@ function aplanarItem(body) {
       talle: '',
       seller_sku: sku,
       variations_texto: '',
+      thumbnail,
     }];
   }
 
@@ -221,6 +223,7 @@ function aplanarItem(body) {
       talle,
       seller_sku: sku,
       variations_texto: combo,
+      thumbnail,
     };
   });
 }

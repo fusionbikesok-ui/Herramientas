@@ -43,6 +43,7 @@ export function openDb(dbPath) {
     actualizado_en TEXT NOT NULL
   )`); } catch (_) {}
   try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN sub_status TEXT'); } catch (_) {}
+  try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN thumbnail TEXT'); } catch (_) {}
 
   // Cobertura ── productos WC marcados a mano como "solo local" (no deben publicarse en ML)
   try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_exclusiones (

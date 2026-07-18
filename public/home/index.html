@@ -700,6 +700,7 @@ fetch('/api/auth/me').then(function(r) {
           sk.pendientes.toLocaleString('es-AR') + ' pendientes de escribir en ML')
       ].join('');
       var chips = [
+        peChip(d.reactivables, 'publicaciones pausadas · reactivar', '#F5B942', '/herramientas/sync-ml/#reactivar'),
         peChip(sk.pendientes, 'SKUs por escribir en ML', '#F5B942', '/herramientas/matcher/'),
         peChip(at.sin_mapeo, 'ventas sin mapear', '#F5B942', '/herramientas/sync-detalle/?cat=sin_mapeo'),
         peChip(at.remapeo_requerido, 'a re-mapear', '#F5B942', '/herramientas/sync-detalle/?cat=remapeo_requerido'),

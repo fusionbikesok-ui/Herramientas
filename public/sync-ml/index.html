@@ -113,6 +113,7 @@ async function cargar(){
   }finally{btn.disabled=false;}
 }
 
+var yaScrolleReactivar=false;
 async function cargarReactivables(){
   var box=document.getElementById('reactivar-box');
   if(!box)return;
@@ -123,6 +124,12 @@ async function cargarReactivables(){
     box.innerHTML=renderReactivables(d);
   }catch(err){
     box.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
+  }
+  // Deep-link desde el home (/sync-ml/#reactivar): scrollear a la sección una sola vez,
+  // recién cuando la lista ya cargó. El flag evita re-scrollear tras cada reactivarSel/disparar.
+  if(location.hash==='#reactivar' && !yaScrolleReactivar){
+    yaScrolleReactivar=true;
+    document.getElementById('reactivar')?.scrollIntoView({behavior:'smooth',block:'start'});
   }
 }
 
@@ -200,7 +207,7 @@ function render(d){
   h+='</div>';
 
   // Reactivar pausadas por falta de stock (se llena aparte, async)
-  h+='<div class="sec-title">Reactivar publicaciones pausadas por falta de stock</div>';
+  h+='<div class="sec-title" id="reactivar">Reactivar publicaciones pausadas por falta de stock</div>';
   h+='<div id="reactivar-box"><div class="loading">Buscando publicaciones…</div></div>';
 
   // Pedidos

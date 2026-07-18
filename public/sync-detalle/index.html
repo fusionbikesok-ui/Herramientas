@@ -31,8 +31,12 @@
   th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted2);font-weight:600;padding:10px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
   td{padding:10px 13px;border-bottom:1px solid var(--border);vertical-align:top;}
   tr:last-child td{border-bottom:0;}
+  .pub-cell{display:flex;gap:10px;align-items:flex-start;}
+  .pub-thumb{width:40px;height:40px;border-radius:6px;object-fit:cover;background:var(--surface2);border:1px solid var(--border);flex-shrink:0;}
+  .pub-txt{min-width:0;}
   .pub-tit{font-weight:600;}
   .pub-meta{font-size:11px;color:var(--muted2);font-family:'Courier New',monospace;margin-top:3px;}
+  .acc-btns{display:flex;gap:6px;flex-wrap:wrap;}
   .err-txt{font-size:12px;color:var(--amber);max-width:340px;white-space:normal;line-height:1.4;}
   .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;}
   .tag.ok{background:rgba(52,211,153,.13);color:var(--green);}
@@ -118,7 +122,10 @@ function itemIdOf(row){return row.item_id||String(row.clave||'').split('|')[0];}
 function pubCell(row){
   var tit=row.titulo||itemIdOf(row)||row.clave;
   var meta=esc(itemIdOf(row)||row.clave)+(row.variations_texto?(' · '+esc(row.variations_texto)):'');
-  return '<div class="pub-tit">'+esc(tit)+'</div><div class="pub-meta">'+meta+'</div>';
+  var thumb=row.thumbnail
+    ? '<img class="pub-thumb" src="'+esc(row.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">'
+    : '<div class="pub-thumb"></div>';
+  return '<div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(tit)+'</div><div class="pub-meta">'+meta+'</div></div></div>';
 }
 
 function render(rows){
@@ -139,7 +146,9 @@ function render(rows){
       h+='<td class="estado-cell"></td>';
     }else if(CFG.modo==='reintentar'){
       h+='<td class="err-txt">'+esc(row.error||'—')+'</td>';
-      h+='<td><button class="btn mini" onclick="reintentar(this,\''+esc(row.clave)+'\')">Reintentar</button><span class="st"></span></td>';
+      h+='<td><div class="acc-btns"><button class="btn mini" onclick="reintentar(this,\''+esc(row.clave)+'\')">Reintentar</button>'
+        +'<button class="btn mini sec" onclick="mostrarRemap(this)">Re-mapear</button></div>'
+        +'<span class="st"></span><div class="remap-box"></div></td>';
     }else{
       h+='<td class="err-txt">'+esc(row.error||'ML rechaza la actualización.')+'</td>';
       h+='<td><a class="ml-link" href="'+mlUrl(itemIdOf(row))+'" target="_blank" rel="noopener">Abrir en ML ↗</a></td>';
@@ -150,34 +159,54 @@ function render(rows){
   return h;
 }
 
-// ── Modo mapeo: búsqueda acotada de SKU + asignar ────────────────────────────
+// ── Búsqueda acotada de SKU + asignar (modo mapeo y re-mapeo desde errores) ───
 function wireMapeo(){
-  document.querySelectorAll('tr[data-clave]').forEach(function(tr){
-    var input=tr.querySelector('.sku-q');
-    var results=tr.querySelector('.sku-results');
-    if(!input)return;
-    input.addEventListener('input',debounce(async function(){
-      var q=input.value.trim();
-      if(q.length<2){results.innerHTML='';return;}
-      try{
-        var r=await fetch('/api/sync/buscar-sku?tipo=all&q='+encodeURIComponent(q));
-        var d=await r.json();
-        results.innerHTML=(d.data||[]).map(function(o){
-          return '<button class="sku-opt" data-sku="'+esc(o.sku)+'" data-nombre="'+esc(o.nombre||'')+'"><b>'+esc(o.sku)+'</b> — '+esc(o.nombre||'')+' <span style="color:var(--muted2)">(stock '+n(o.stock)+')</span></button>';
-        }).join('');
-        results.querySelectorAll('.sku-opt').forEach(function(btn){
-          btn.addEventListener('click',function(){
-            asignar(tr,tr.getAttribute('data-clave'),btn.getAttribute('data-sku'),btn.getAttribute('data-nombre'));
-          });
+  document.querySelectorAll('tr[data-clave]').forEach(wireSkuBox);
+}
+function wireSkuBox(tr){
+  var input=tr.querySelector('.sku-q');
+  var results=tr.querySelector('.sku-results');
+  if(!input||input.dataset.wired)return;
+  input.dataset.wired='1';
+  input.addEventListener('input',debounce(async function(){
+    var q=input.value.trim();
+    if(q.length<2){results.innerHTML='';return;}
+    try{
+      var r=await fetch('/api/sync/buscar-sku?tipo=all&q='+encodeURIComponent(q));
+      var d=await r.json();
+      results.innerHTML=(d.data||[]).map(function(o){
+        return '<button class="sku-opt" data-sku="'+esc(o.sku)+'" data-nombre="'+esc(o.nombre||'')+'"><b>'+esc(o.sku)+'</b> — '+esc(o.nombre||'')+' <span style="color:var(--muted2)">(stock '+n(o.stock)+')</span></button>';
+      }).join('');
+      results.querySelectorAll('.sku-opt').forEach(function(btn){
+        btn.addEventListener('click',function(){
+          asignar(tr,tr.getAttribute('data-clave'),btn.getAttribute('data-sku'),btn.getAttribute('data-nombre'));
         });
-      }catch(e){results.innerHTML='<div class="err-txt">'+esc(e.message)+'</div>';}
-    },300));
-  });
+      });
+    }catch(e){results.innerHTML='<div class="err-txt">'+esc(e.message)+'</div>';}
+  },300));
+}
+
+// Despliega el buscador de SKU para re-mapear una fila de la vista de errores.
+function mostrarRemap(btn){
+  var tr=btn.closest('tr');
+  var box=tr.querySelector('.remap-box');
+  if(!box)return;
+  if(box.dataset.open){box.innerHTML='';box.dataset.open='';return;} // toggle
+  box.dataset.open='1';
+  box.innerHTML='<div class="sku-box" style="margin-top:8px"><input class="sku-q" placeholder="Buscar SKU o nombre…"><div class="sku-results"></div></div>';
+  wireSkuBox(tr);
+  var inp=box.querySelector('.sku-q');if(inp)inp.focus();
 }
 
 async function asignar(tr,clave,sku,nombre){
+  // Modo mapeo tiene .estado-cell; en errores usamos el .st de la celda de Acción.
   var cell=tr.querySelector('.estado-cell');
-  cell.innerHTML='<span class="st">Asignando…</span>';
+  var st=tr.querySelector('.st');
+  function marcar(txt,cls){
+    if(cell){cell.innerHTML='<span class="st '+(cls||'')+'">'+txt+'</span>';}
+    else if(st){st.className='st '+(cls||'');st.innerHTML=txt;}
+  }
+  marcar('Asignando…','');
   try{
     var body={decisiones:{}};
     body.decisiones[clave]={sku:sku,wc_nombre:nombre||null,accion:'asignar'};
@@ -185,16 +214,17 @@ async function asignar(tr,clave,sku,nombre){
     var d=await r.json();
     if(!d.ok)throw new Error(d.error||'error');
     tr.classList.add('row-done');
-    tr.querySelector('.sku-box').innerHTML='<span class="tag ok">✓ '+esc(sku)+'</span>';
-    cell.innerHTML='<span class="st ok">Asignado</span>';
+    var box=tr.querySelector('.sku-box');
+    if(box)box.innerHTML='<span class="tag ok">✓ '+esc(sku)+'</span>';
+    marcar('✓ Asignado','ok');
   }catch(err){
-    cell.innerHTML='<span class="st bad">✗ '+esc(err.message)+'</span>';
+    marcar('✗ '+esc(err.message),'bad');
   }
 }
 
 // ── Modo reintentar: re-push de stock de un ítem ─────────────────────────────
 async function reintentar(btn,clave){
-  var st=btn.parentNode.querySelector('.st');
+  var st=btn.closest('td').querySelector('.st');
   btn.disabled=true;st.className='st';st.textContent='Reintentando…';
   try{
     var r=await fetch('/api/sync/reintentar-item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave})});
