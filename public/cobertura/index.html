@@ -101,6 +101,15 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .pill-sku.mismatch{ background:var(--amber-dim); color:var(--amber); border-color:rgba(251,191,36,.3); }
 .pill-sku.nosku   { background:var(--red-dim); color:var(--red); border-color:rgba(248,113,113,.3); }
 .pill-stock { font-size:.7rem; color:var(--muted); }
+.pill-cat { font-size:.7rem; padding:1px 7px; border-radius:10px; background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
+
+.faltantes-bar { display:flex; justify-content:flex-end; margin-bottom:.6rem; }
+.btn-toggle-excl { background:var(--surface); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:5px 12px; font-size:.75rem; cursor:pointer; font-family:inherit; transition:border-color .15s,color .15s; }
+.btn-toggle-excl:hover, .btn-toggle-excl.on { border-color:var(--accent); color:var(--accent); }
+.btn-accion { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:4px 10px; font-size:.72rem; font-weight:600; cursor:pointer; font-family:inherit; text-decoration:none; white-space:nowrap; transition:border-color .15s,color .15s; }
+.btn-accion:hover { border-color:var(--accent); color:var(--accent); }
+.btn-accion.accent { border-color:rgba(45,184,232,.3); color:var(--accent); background:var(--accent-dim); }
+.btn-accion.accent:hover { border-color:var(--accent); }
 .item-meta-id { font-size:.68rem; color:var(--muted); }
 .pill-variante { font-size:.69rem; padding:1px 7px; border-radius:4px; background:rgba(167,139,250,.1); color:var(--purple); border:1px solid rgba(167,139,250,.25); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle; }
 .item-badges { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0; }
@@ -186,7 +195,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
       <div class="stat-icon wc">WC</div>
       <div>
         <div class="stat-num wc" id="num-wc">—</div>
-        <div class="stat-label">Solo en WooCommerce</div>
+        <div class="stat-label">Faltantes en ML (stock&gt;0)</div>
       </div>
     </div>
     <div class="stat-card">
@@ -203,7 +212,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
     <div class="pill-tabs">
       <div class="pill-tab active" data-tab="ambos" onclick="setTab(this)">Ambos lados</div>
       <div class="pill-tab" data-tab="problemas" onclick="setTab(this)">⚠ Problemas</div>
-      <div class="pill-tab" data-tab="solo_wc" onclick="setTab(this)">Solo WC</div>
+      <div class="pill-tab" data-tab="faltantes" onclick="setTab(this)">🎯 Faltantes ML</div>
       <div class="pill-tab" data-tab="solo_ml" onclick="setTab(this)">Solo ML</div>
     </div>
     <input class="search-box" type="text" placeholder="Buscar producto, SKU o ID de publicación…" oninput="setBusqueda(this.value)">
@@ -226,6 +235,34 @@ var datos = null;
 var tabActual = 'ambos';
 var busqueda = '';
 var cargado = false;
+var excluidosSet = new Set();     // id_woo marcados "solo local"
+var verExcluidos = false;         // en la pestaña Faltantes, mostrar los excluidos
+var wcCache = [];                 // catálogo WC crudo (para recomputar al marcar/desmarcar)
+var skusEnMLCache = new Set();    // SKUs presentes en publicaciones ML en vivo
+
+/* Categorías WC que no son productos vendibles por ML (mismo criterio que lib/cobertura.js) */
+var CATEGORIAS_NO_VENDIBLES = ['SERVICES', 'QR PAGOS'];
+function parseCats(cj){
+  if(Array.isArray(cj)) return cj;
+  if(typeof cj === 'string' && cj.trim()){ try{ var a=JSON.parse(cj); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+  return [];
+}
+function esNoVendible(p){
+  return parseCats(p.categorias_json).some(function(c){
+    return CATEGORIAS_NO_VENDIBLES.indexOf(String(c).trim().toUpperCase()) !== -1;
+  });
+}
+/* Regla de faltante: espejo de esFaltante() en lib/cobertura.js */
+function esFaltante(p){
+  if(!(Number(p.stock) > 0)) return false;
+  if(p.tipo === 'variable') return false;
+  var sku = String(p.sku||'').trim();
+  if(!sku) return false;
+  if(skusEnMLCache.has(sku)) return false;
+  if(excluidosSet.has(p.id_woo)) return false;
+  if(esNoVendible(p)) return false;
+  return true;
+}
 
 /* ── UTILS ── */
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -357,16 +394,18 @@ function cruzarConWC(mlItems, etiquetaFuente){
   document.getElementById('upload-file-name').textContent = '✓ ' + etiquetaFuente;
   document.getElementById('lista').innerHTML = '<div class="empty"><span class="spinner"></span>Cargando catálogo WooCommerce…</div>';
 
-  fetch('/api/woo/catalogo')
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if(!d.ok) throw new Error(d.error || 'Error cargando catálogo WC');
-      var wcProductos = d.productos || d.items || d.data || [];
-      cruzar(mlItems, wcProductos, etiquetaFuente);
-    })
-    .catch(function(err){
-      document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--red)">Error al cargar catálogo WC: ' + esc(err.message) + '</div>';
-    });
+  Promise.all([
+    fetch('/api/woo/catalogo').then(function(r){ return r.json(); }),
+    fetch('/api/cobertura/exclusiones').then(function(r){ return r.json(); }).catch(function(){ return {ok:false}; })
+  ]).then(function(res){
+    var d = res[0], ex = res[1];
+    if(!d.ok) throw new Error(d.error || 'Error cargando catálogo WC');
+    var wcProductos = d.productos || d.items || d.data || [];
+    excluidosSet = new Set((ex && ex.ok && Array.isArray(ex.data) ? ex.data : []).map(function(e){ return e.id_woo; }));
+    cruzar(mlItems, wcProductos, etiquetaFuente);
+  }).catch(function(err){
+    document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--red)">Error al cargar catálogo WC: ' + esc(err.message) + '</div>';
+  });
 }
 
 function cruzar(mlItems, wcProductos, fileName){
@@ -400,12 +439,6 @@ function cruzar(mlItems, wcProductos, fileName){
     }
   });
 
-  /* SOLO WC */
-  var soloWc = wcProductos.filter(function(p){
-    var s = String(p.sku||'').trim();
-    return s && !skusEnML.has(s) && p.tipo !== 'variable';
-  });
-
   /* SOLO ML: sin SKU o SKU no existe en WC */
   var soloMl = mlItems.filter(function(m){
     return !m.ml_sku || !wcPorSku[m.ml_sku];
@@ -417,16 +450,22 @@ function cruzar(mlItems, wcProductos, fileName){
     return st && st !== 'active' && st !== 'activa';
   });
 
+  /* Caches para recomputar faltantes al marcar/desmarcar "solo local" */
+  wcCache = wcProductos;
+  skusEnMLCache = skusEnML;
+
   datos = {
     en_ambos: enAmbos,
-    solo_wc:  soloWc,
     solo_ml:  soloMl,
-    pausadas: pausadas
+    pausadas: pausadas,
+    faltantes: [],
+    excluidos: []
   };
+  recomputarFaltantes();
 
   /* Actualizar stats */
   document.getElementById('num-ambos').textContent = enAmbos.length;
-  document.getElementById('num-wc').textContent    = soloWc.length;
+  document.getElementById('num-wc').textContent    = datos.faltantes.length;
   document.getElementById('num-ml').textContent    = soloMl.length;
   document.getElementById('stat-row').classList.remove('hidden');
 
@@ -443,6 +482,47 @@ function cruzar(mlItems, wcProductos, fileName){
   document.getElementById('controls').classList.remove('hidden');
   render();
 }
+
+/* Recalcula faltantes (y la lista de excluidos) desde los caches y el estado actual */
+function recomputarFaltantes(){
+  if(!datos) return;
+  datos.faltantes = wcCache.filter(esFaltante);
+  datos.excluidos = wcCache.filter(function(p){ return excluidosSet.has(p.id_woo); });
+  var el = document.getElementById('num-wc');
+  if(el) el.textContent = datos.faltantes.length;
+  document.querySelectorAll('.pill-tab').forEach(function(b){
+    if(b.dataset.tab === 'faltantes') b.textContent = '🎯 Faltantes ML' + (datos.faltantes.length ? ' ('+datos.faltantes.length+')' : '');
+  });
+}
+
+/* Marca un producto como "solo local": no debe publicarse en ML → sale de faltantes */
+function marcarSoloLocal(idWoo){
+  var p = null;
+  for(var i=0;i<wcCache.length;i++){ if(wcCache[i].id_woo === idWoo){ p = wcCache[i]; break; } }
+  fetch('/api/cobertura/exclusiones', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id_woo: idWoo, sku: p ? p.sku : null, nombre: p ? p.nombre : null })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if(!d.ok) throw new Error(d.error || 'No se pudo guardar');
+    excluidosSet.add(idWoo);
+    recomputarFaltantes();
+    render();
+  }).catch(function(err){ alert('Error: ' + err.message); });
+}
+
+/* Reactiva un producto excluido: vuelve a contar como faltante si corresponde */
+function reactivar(idWoo){
+  fetch('/api/cobertura/exclusiones/' + idWoo, { method: 'DELETE' })
+    .then(function(r){ return r.json(); }).then(function(d){
+      if(!d.ok) throw new Error(d.error || 'No se pudo reactivar');
+      excluidosSet.delete(idWoo);
+      recomputarFaltantes();
+      render();
+    }).catch(function(err){ alert('Error: ' + err.message); });
+}
+
+function toggleExcluidos(){ verExcluidos = !verExcluidos; render(); }
 
 /* ── TABS / BÚSQUEDA ── */
 function setTab(el){
@@ -543,22 +623,54 @@ function render(){
       }).join('');
     }
 
-  } else if(tabActual === 'solo_wc'){
-    lista = datos.solo_wc.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
-    if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty">Sin resultados.</div>'; return; }
-    html += '<div class="section-label">' + lista.length + ' productos en WooCommerce sin publicación en MercadoLibre</div>';
+  } else if(tabActual === 'faltantes'){
+    /* Barra: alternar entre faltantes y excluidos "solo local" */
+    var nExcl = datos.excluidos.length;
+    html += '<div class="faltantes-bar">'
+      + '<button class="btn-toggle-excl' + (verExcluidos ? ' on' : '') + '" onclick="toggleExcluidos()">'
+      + (verExcluidos ? '← Volver a faltantes' : ('Ver excluidos (solo local)' + (nExcl ? ' · ' + nExcl : ''))) + '</button>'
+      + '</div>';
+
+    if(verExcluidos){
+      var lex = datos.excluidos.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
+      if(!lex.length){ document.getElementById('lista').innerHTML = html + '<div class="empty">No hay productos marcados como solo local.</div>'; return; }
+      html += '<div class="section-label">' + lex.length + ' productos marcados como "solo local" (excluidos de cobertura)</div>';
+      html += lex.map(function(r){
+        return '<div class="item-row">'
+          + '<div class="item-icon" style="background:var(--surface2);color:var(--muted)">🏠</div>'
+          + '<div class="item-body">'
+          + '<div class="item-name">' + esc(r.nombre) + '</div>'
+          + '<div class="item-meta">'
+          + (r.sku ? '<span class="pill-sku">SKU: '+esc(r.sku)+'</span>' : '<span class="pill-sku nosku">Sin SKU</span>')
+          + (r.stock!=null ? '<span class="pill-stock">Stock: '+r.stock+'</span>' : '')
+          + '</div></div>'
+          + '<div class="item-badges"><button class="btn-accion" onclick="reactivar('+r.id_woo+')">↺ Reactivar</button></div>'
+          + '</div>';
+      }).join('');
+      document.getElementById('lista').innerHTML = html;
+      return;
+    }
+
+    lista = datos.faltantes.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
+    if(!lista.length){ document.getElementById('lista').innerHTML = html + '<div class="empty" style="color:var(--green)">✓ No hay faltantes: todos los productos vendibles están en ML.</div>'; return; }
+    html += '<div class="section-label">' + lista.length + ' productos vendibles (stock&gt;0) sin publicación en MercadoLibre</div>';
     html += lista.map(function(r){
-      var skuPill = r.sku ? '<span class="pill-sku">SKU: '+esc(r.sku)+'</span>' : '<span class="pill-sku nosku">Sin SKU</span>';
+      var cats = parseCats(r.categorias_json);
+      var catPill = cats.length ? '<span class="pill-cat">'+esc(cats[0])+'</span>' : '';
+      var matcherUrl = '/herramientas/matcher/?buscar=' + encodeURIComponent(r.nombre||'');
       return '<div class="item-row onlywc">'
         + '<div class="item-icon onlywc">WC</div>'
         + '<div class="item-body">'
         + '<div class="item-name">' + esc(r.nombre) + '</div>'
         + '<div class="item-meta">'
-        + '<span class="meta-pill pill-wc">WooCommerce</span>'
-        + skuPill
+        + '<span class="pill-sku">SKU: '+esc(r.sku)+'</span>'
         + (r.stock!=null ? '<span class="pill-stock">Stock: '+r.stock+'</span>' : '')
+        + catPill
         + '</div></div>'
-        + '<div class="item-badges"><span class="badge badge-wc">Solo WC</span></div>'
+        + '<div class="item-badges">'
+        + '<a class="btn-accion accent" href="'+esc(matcherUrl)+'" target="_blank" rel="noopener">Buscar en Matcher →</a>'
+        + '<button class="btn-accion" onclick="marcarSoloLocal('+r.id_woo+')">Solo local</button>'
+        + '</div>'
         + '</div>';
     }).join('');
 

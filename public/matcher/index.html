@@ -1126,6 +1126,11 @@ function iniciarApp(){
     +`<option value="activa">Solo activas</option>`
     +`<option value="pausada">Solo pausadas</option></select>`
     +`<input type="text" class="search-input" placeholder="Buscar título ML..." oninput="setSearch(this.value)">`;
+  // Deep-link desde Cobertura: /herramientas/matcher/?buscar=<nombre> precarga el buscador
+  try {
+    const qBuscar = new URLSearchParams(location.search).get('buscar');
+    if(qBuscar){ busqueda = qBuscar; const si = document.querySelector('.search-input'); if(si) si.value = qBuscar; }
+  } catch(_){}
   updateStats();renderList();
   const pend=TODOS.filter(d=>!(claveDe(d) in decisiones));
   if(pend.length>0)seleccionar(pend[0].idx);
