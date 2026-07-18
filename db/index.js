@@ -44,6 +44,15 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN sub_status TEXT'); } catch (_) {}
 
+  // Cobertura ── productos WC marcados a mano como "solo local" (no deben publicarse en ML)
+  try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_exclusiones (
+    id_woo INTEGER PRIMARY KEY,
+    sku TEXT,
+    nombre TEXT,
+    motivo TEXT NOT NULL DEFAULT 'solo_local',
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+
   // Gestor de usuarios ── cuentas + permisos por herramienta
   try { db.exec(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

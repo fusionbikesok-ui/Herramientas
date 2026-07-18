@@ -58,5 +58,41 @@ export function coberturaRouter(db) {
     });
   });
 
+  // ── Exclusiones manuales "solo local" ──────────────────────────────────────
+  // Productos WC que no deben publicarse en ML (venta solo en el local físico) y
+  // por lo tanto no cuentan como faltantes de cobertura.
+
+  router.get('/exclusiones', (req, res) => {
+    const data = db.prepare(
+      'SELECT id_woo, sku, nombre, motivo, creado_en FROM cobertura_exclusiones ORDER BY nombre'
+    ).all();
+    res.json({ ok: true, data });
+  });
+
+  router.post('/exclusiones', (req, res) => {
+    const { id_woo, sku, nombre } = req.body || {};
+    if (id_woo == null || id_woo === '') {
+      return res.status(400).json({ ok: false, error: 'id_woo requerido' });
+    }
+    db.prepare(`
+      INSERT INTO cobertura_exclusiones (id_woo, sku, nombre, motivo, creado_en)
+      VALUES (@id_woo, @sku, @nombre, 'solo_local', @creado_en)
+      ON CONFLICT(id_woo) DO UPDATE SET
+        sku = excluded.sku, nombre = excluded.nombre
+    `).run({
+      id_woo: Number(id_woo),
+      sku: sku || null,
+      nombre: nombre || null,
+      creado_en: new Date().toISOString(),
+    });
+    res.json({ ok: true });
+  });
+
+  router.delete('/exclusiones/:id_woo', (req, res) => {
+    const info = db.prepare('DELETE FROM cobertura_exclusiones WHERE id_woo = ?')
+      .run(Number(req.params.id_woo));
+    res.json({ ok: true, borrado: info.changes });
+  });
+
   return router;
 }

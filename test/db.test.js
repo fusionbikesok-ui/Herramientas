@@ -17,12 +17,14 @@ describe('db schema', () => {
     expect(tables).toEqual([
       '_schema_migrations',
       'catalogo_cache',
+      'cobertura_exclusiones',
       'mapeo_fusion',
       'ml_oauth_token',
       'ml_publicaciones_cache',
       'ml_stock_estado',
       'ordenes_ml_procesadas',
       'ordenes_ml_wc_pedidos',
+      'password_reset_tokens',
       'pedidos',
       'pendientes_mapeo',
       'recepcion_documentos',
@@ -32,6 +34,8 @@ describe('db schema', () => {
       'skus_config_ml',
       'sync_estado',
       'sync_log',
+      'user_permisos',
+      'users',
     ]);
     db.close();
   });
