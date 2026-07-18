@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Precios ML — Auditoría — Fusion Bikes</title>
+<style>
+  :root{
+    --azul:#2DB8E8;--azul-dk:#1C93BD;--oscuro:#0C0F16;
+    --surface:#141A25;--surface2:#1B2235;--border:#24304A;--border2:#2E3B57;
+    --text:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
+    --green:#34D399;--amber:#F5B942;--red:#F87171;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;margin:0;background:var(--oscuro);color:var(--text);}
+  .wrap{max-width:1100px;margin:0 auto;padding:20px 22px 60px;}
+  a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;margin-bottom:12px;}
+  a.back:hover{color:var(--azul);}
+  h1{font-size:1.5rem;font-weight:800;letter-spacing:-.03em;margin:6px 0 4px;}
+  h1 em{font-style:normal;color:var(--azul);}
+  .sub{font-size:12.5px;color:var(--muted);margin:0 0 18px;max-width:80ch;line-height:1.5;}
+  .btn{background:var(--azul);color:#06131C;border:0;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer;transition:background .15s;}
+  .btn:hover{background:var(--azul-dk);}
+  .btn:disabled{opacity:.5;cursor:default;}
+  .btn.sec{background:var(--surface2);color:var(--text);font-weight:600;}
+  .btn.sec:hover{background:var(--border2);}
+
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;}
+  .prog{font-size:12.5px;color:var(--muted);}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;}
+  .tab{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;}
+  .tab.on{background:var(--azul);border-color:var(--azul);color:#06131C;font-weight:700;}
+  .tab b{font-variant-numeric:tabular-nums;}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;}
+  .kpi{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;}
+  .kpi .n{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;}
+  .kpi .l{font-size:11.5px;color:var(--muted);margin-top:2px;}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted2);font-weight:600;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  tr:last-child td{border-bottom:0;}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .pub-cell{display:flex;gap:10px;align-items:center;}
+  .pub-thumb{width:40px;height:40px;border-radius:6px;object-fit:cover;background:var(--surface2);border:1px solid var(--border);flex-shrink:0;}
+  .pub-txt{min-width:0;}
+  .pub-tit{font-weight:600;line-height:1.25;}
+  .pub-meta{font-size:11px;color:var(--muted2);font-family:'Courier New',monospace;margin-top:2px;}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;}
+  .b-bajo{background:rgba(248,113,113,.14);color:var(--red);}
+  .b-alto{background:rgba(245,185,66,.14);color:var(--amber);}
+  .b-sin_precio{background:rgba(132,147,176,.14);color:var(--muted);}
+  .b-ok{background:rgba(52,211,153,.14);color:var(--green);}
+  a.ml-link{color:var(--azul);font-weight:600;text-decoration:none;font-size:12.5px;}
+  a.ml-link:hover{text-decoration:underline;}
+  .loading{color:var(--muted2);font-size:13px;padding:34px 0;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
+  <h1>Precios ML — <em>Auditoría</em></h1>
+  <p class="sub">Compara el <b>neto que recibís</b> en MercadoLibre (precio − comisión − envío a tu cargo)
+    contra el <b>precio web</b> de cada publicación activa. Detecta dónde estás perdiendo margen
+    (neto &gt;5% por debajo del web), posibles sobreprecios y publicaciones sin precio comparable.</p>
+
+  <div class="toolbar">
+    <button class="btn" id="btn-recalc" onclick="recalcular()">Recalcular</button>
+    <span class="prog" id="prog"></span>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <div class="cards" id="kpis"></div>
+  <div id="cuerpo"><div class="loading">Cargando…</div></div>
+</div>
+
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function money(x){return x==null?'—':Number(x).toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0});}
+function pct(x){return x==null?'—':(x>0?'−':'+')+Math.abs(x*100).toFixed(1)+'%';}
+function mlUrl(itemId){return 'https://articulo.mercadolibre.com.ar/'+String(itemId||'').replace(/^(ML[A-Z])/,'$1-');}
+
+var FILTRO='problemas';
+var LABELS={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:'OK'};
+
+async function cargar(){
+  var cont=document.getElementById('cuerpo');
+  cont.innerHTML='<div class="loading">Cargando…</div>';
+  try{
+    var r=await fetch('/api/precios?estado='+encodeURIComponent(FILTRO));
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    cont.innerHTML=render(d.data||[]);
+  }catch(err){
+    cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
+  }
+}
+
+function render(rows){
+  if(!rows.length) return '<div class="tbl-wrap"><div class="loading" style="color:var(--green)">✓ Nada en esta vista. Si nunca recalculaste, tocá "Recalcular".</div></div>';
+  var h='<div class="tbl-wrap"><table><thead><tr>';
+  h+='<th>Publicación</th><th class="num">Precio ML</th><th class="num">Comisión</th><th class="num">Envío</th>'
+   +'<th class="num">Neto</th><th class="num">Precio web</th><th>Estado</th><th></th></tr></thead><tbody>';
+  rows.forEach(function(o){
+    var thumb=o.thumbnail?'<img class="pub-thumb" src="'+esc(o.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
+    h+='<tr>';
+    h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(o.titulo||o.item_id)+'</div>'
+      +'<div class="pub-meta">'+esc(o.sku||'')+' · '+esc(o.item_id)+'</div></div></div></td>';
+    h+='<td class="num">'+money(o.precio_ml)+'</td>';
+    h+='<td class="num">'+money(o.sale_fee)+'</td>';
+    h+='<td class="num">'+money(o.envio)+'</td>';
+    h+='<td class="num"><b>'+money(o.neto)+'</b></td>';
+    h+='<td class="num">'+money(o.precio_web)+'</td>';
+    h+='<td><span class="badge b-'+esc(o.estado)+'">'+esc(LABELS[o.estado]||o.estado)+'</span> '
+      +(o.estado==='bajo'||o.estado==='alto'?('<span class="pub-meta" style="display:inline">'+pct(o.deficit_pct)+'</span>'):'')+'</td>';
+    h+='<td><a class="ml-link" href="'+mlUrl(o.item_id)+'" target="_blank" rel="noopener">Abrir en ML ↗</a></td>';
+    h+='</tr>';
+  });
+  h+='</tbody></table></div>';
+  return h;
+}
+
+function renderTabs(resumen){
+  var probs=(resumen.bajo||0)+(resumen.alto||0)+(resumen.sin_precio||0);
+  var defs=[['problemas','Problemas',probs],['bajo',LABELS.bajo,resumen.bajo||0],['alto',LABELS.alto,resumen.alto||0],['sin_precio',LABELS.sin_precio,resumen.sin_precio||0],['all','Todas',null]];
+  document.getElementById('tabs').innerHTML=defs.map(function(t){
+    return '<button class="tab'+(FILTRO===t[0]?' on':'')+'" onclick="setFiltro(\''+t[0]+'\')">'+esc(t[1])+(t[2]!=null?(' <b>'+t[2].toLocaleString('es-AR')+'</b>'):'')+'</button>';
+  }).join('');
+  document.getElementById('kpis').innerHTML=[
+    ['Perdiendo margen',resumen.bajo||0,'var(--red)'],
+    ['Posible sobreprecio',resumen.alto||0,'var(--amber)'],
+    ['Sin precio comparable',resumen.sin_precio||0,'var(--muted)'],
+    ['OK',resumen.ok||0,'var(--green)'],
+  ].map(function(k){return '<div class="kpi"><div class="n" style="color:'+k[2]+'">'+k[1].toLocaleString('es-AR')+'</div><div class="l">'+k[0]+'</div></div>';}).join('');
+}
+
+function setFiltro(f){FILTRO=f;cargar();estado();}
+
+async function estado(){
+  try{
+    var r=await fetch('/api/precios/estado');var d=await r.json();
+    if(!d.ok)return;
+    renderTabs(d.resumen||{});
+    var p=document.getElementById('prog');var btn=document.getElementById('btn-recalc');
+    if(d.enCurso){
+      btn.disabled=true;
+      p.textContent='Recalculando… '+(d.hechos||0)+'/'+(d.total||0);
+      setTimeout(estado,2500);
+    }else{
+      btn.disabled=false;
+      p.textContent=d.ultimo?('Último cálculo: '+new Date(d.ultimo).toLocaleString('es-AR')):'Nunca calculado — tocá "Recalcular".';
+      if(_recalcActivo){_recalcActivo=false;cargar();}
+    }
+  }catch(e){}
+}
+
+var _recalcActivo=false;
+async function recalcular(){
+  var btn=document.getElementById('btn-recalc');btn.disabled=true;
+  try{
+    var r=await fetch('/api/precios/recalcular',{method:'POST'});var d=await r.json();
+    if(!d.ok){document.getElementById('prog').textContent='✗ '+(d.error||'error');btn.disabled=false;return;}
+    _recalcActivo=true;estado();
+  }catch(e){document.getElementById('prog').textContent='✗ '+e.message;btn.disabled=false;}
+}
+
+cargar();estado();
+</script>
+
+<script>
+(function(){
+  var seg=(location.pathname.match(/\/herramientas\/([a-z0-9-]+)\//)||[])[1]||'';
+  fetch('/api/auth/me').then(function(r){
+    if(r.status===401){location.href='/herramientas/login/?next='+encodeURIComponent(location.pathname+location.search);throw '';}
+    return r.json();
+  }).then(function(d){
+    if(!d||!d.ok)return;
+    var isAdmin=!!d.is_admin||(d.scopes&&d.scopes.indexOf('all')!==-1);
+    if(isAdmin||!seg)return;
+    var ok=(d.permisos||[]).some(function(p){return p.herramienta===seg;});
+    if(!ok)location.href='/herramientas/home/';
+  }).catch(function(){});
+})();
+</script>
+</body>
+</html>

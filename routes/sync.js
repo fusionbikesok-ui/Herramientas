@@ -12,6 +12,7 @@ import { mlFetch, bootstrapToken } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc } from '../lib/mlMapeo.js';
 import { buscarEnCache, buildWooPath } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
+import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -481,6 +482,41 @@ export function getReactivablesRows(db, itemIds = null) {
 }
 
 /**
+ * Verifica el neto del vendedor antes de reactivar. Trae precio/categoría/listing/envío del item
+ * (un GET) y, por cada variación mapeada, compara el neto contra el precio web. Si alguna queda
+ * >5% por debajo (veredicto 'bajo') devuelve el detalle del bloqueo; si no, null (se puede reactivar).
+ */
+async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
+  const resp = await mlFetch(db, mlCfg, 'get',
+    `/items/${itemId}?attributes=id,price,category_id,listing_type_id,shipping,variations`);
+  await sleep(ML_CALL_DELAY_MS);
+  if (resp.status !== 200 || !resp.data) return null; // sin datos → no bloquear
+  const item = resp.data;
+  const freeShipping = !!item.shipping?.free_shipping;
+  const caches = { fee: new Map(), envio: new Map() };
+
+  for (const v of variaciones) {
+    const precioWeb = precioWebClave(db, v.clave);
+    if (!(precioWeb > 0)) continue; // sin precio web → no se puede comparar, no bloquea
+    let precio = item.price ?? null;
+    if (v.variation_id) {
+      const vv = (item.variations || []).find(x => String(x.id) === String(v.variation_id));
+      if (vv && vv.price != null) precio = vv.price;
+    }
+    const { neto } = await netoMl(db, mlCfg, {
+      itemId, price: precio, categoryId: item.category_id,
+      listingTypeId: item.listing_type_id, freeShipping,
+    }, caches);
+    await sleep(ML_CALL_DELAY_MS);
+    const { estado, deficitPct } = veredictoNeto(neto, precioWeb);
+    if (estado === 'bajo') {
+      return { error: 'El neto de ML queda por debajo del precio web', clave: v.clave, neto, precio_web: precioWeb, deficitPct };
+    }
+  }
+  return null;
+}
+
+/**
  * Reactiva en ML las publicaciones indicadas: empuja el stock de cada variación
  * mapeada y luego pasa la publicación a 'active'. Revalida en el servidor que
  * sigan pausadas por out_of_stock (no confía en el cliente). Procesa un lote
@@ -502,6 +538,14 @@ export async function reactivarItems(db, mlCfg, itemIds) {
   for (const [itemId, variaciones] of porItem) {
     let error = null;
     try {
+      // 0) Bloqueo por neto: no reactivar si el neto (precio − comisión − envío) queda >5%
+      //    por debajo del precio web de alguna variación mapeada. Server-side (no confía en el cliente).
+      const bloqueo = await chequearNetoReactivar(db, mlCfg, itemId, variaciones);
+      if (bloqueo) {
+        resultados.push({ item_id: itemId, ok: false, bloqueado: true, ...bloqueo });
+        continue;
+      }
+
       // 1) Empujar stock de cada variación con stock web disponible
       for (const v of variaciones) {
         const cantidad = Math.max(0, Math.round(v.stock_disponible_ml));

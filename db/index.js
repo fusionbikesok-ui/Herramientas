@@ -14,6 +14,7 @@ export function openDb(dbPath) {
   // Incremental migrations — safe to run every startup
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
+  try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
   try { db.exec('ALTER TABLE recepciones ADD COLUMN confirmado_en TEXT'); } catch (_) {}
   try { db.exec(`CREATE TABLE IF NOT EXISTS skus_config_ml (
     sku TEXT PRIMARY KEY,
@@ -44,6 +45,22 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN sub_status TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN thumbnail TEXT'); } catch (_) {}
+
+  // Auditoría de precios ML: neto (precio − comisión − envío) vs precio web por publicación.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS ml_precio_auditoria (
+    clave TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    titulo TEXT,
+    sku TEXT,
+    precio_ml REAL,
+    sale_fee REAL,
+    envio REAL,
+    neto REAL,
+    precio_web REAL,
+    deficit_pct REAL,
+    estado TEXT,
+    actualizado_en TEXT NOT NULL
+  )`); } catch (_) {}
 
   // Cobertura ── productos WC marcados a mano como "solo local" (no deben publicarse en ML)
   try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_exclusiones (

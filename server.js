@@ -20,6 +20,7 @@ import { syncRouter, syncMlToWc, syncWcToMl, procesarReintentos, procesarCancela
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
+import { preciosRouter } from './routes/precios.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -89,6 +90,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
   app.use('/api/cobertura', coberturaRouter(db));
   app.use('/cobertura', express.static(path.join(__dirname, 'public/cobertura')));
+  app.use('/api/precios', preciosRouter(db, syncCfg));
+  app.use('/precios', express.static(path.join(__dirname, 'public/precios')));
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
   app.use('/sync-ml', express.static(path.join(__dirname, 'public/sync-ml')));
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
