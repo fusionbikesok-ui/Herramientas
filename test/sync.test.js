@@ -299,6 +299,30 @@ describe('reactivación de pausadas por falta de stock', () => {
     const pub = db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA10|v10');
     expect(pub.status).toBe('paused'); // sigue pausada
   });
+
+  it('reactivarItems: bloquea si el neto ML queda >5% por debajo del precio web', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-11', 6);
+    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-11'").run();
+    seedDecision(db, 'MLA11|v11', 'FB-11');
+    seedPublicacion(db, { clave: 'MLA11|v11', itemId: 'MLA11', varId: 'v11', status: 'paused', subStatus: 'out_of_stock' });
+    // GET item (precio 1000) + comisión 100 + envío 50 → neto 850 vs web 1000 (15% debajo → bloqueado)
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+      if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
+      if (/\/items\/MLA11/.test(url)) return { status: 200, data: { id: 'MLA11', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, variations: [] }, headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLA11']);
+    expect(r.resultados[0].bloqueado).toBe(true);
+    expect(r.resultados[0].neto).toBe(850);
+    // No se reactivó: sigue pausada, sin estado de stock ni log de reactivada
+    expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA11|v11').status).toBe('paused');
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_stock_estado WHERE clave='MLA11|v11'").get().n).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM sync_log WHERE estado='reactivada' AND clave='MLA11|v11'").get().n).toBe(0);
+  });
 });
 
 // ─── vista de detalle: atencion/:cat y reintentar-item ──────────────────────────

@@ -56,12 +56,12 @@ export async function refrescarCatalogo(db, cfg) {
 
   const now = new Date().toISOString();
   const upsert = db.prepare(`
-    INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, actualizado_en)
-    VALUES (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @actualizado_en)
+    INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, actualizado_en)
+    VALUES (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @actualizado_en)
     ON CONFLICT(id_woo) DO UPDATE SET
       nombre = excluded.nombre, sku = excluded.sku, tipo = excluded.tipo,
       id_padre = excluded.id_padre, stock = excluded.stock,
-      categorias_json = excluded.categorias_json, img = excluded.img, actualizado_en = excluded.actualizado_en
+      categorias_json = excluded.categorias_json, img = excluded.img, precio = excluded.precio, actualizado_en = excluded.actualizado_en
   `);
   const tx = db.transaction((rows) => {
     for (const p of rows) {
@@ -70,6 +70,9 @@ export async function refrescarCatalogo(db, cfg) {
         : null;
       // products use images[] array; variations use image singular
       const img = p.image?.src || (Array.isArray(p.images) && p.images[0]?.src) || null;
+      // Woo devuelve price/regular_price como string; se persiste para comparar contra el neto ML.
+      const precio = p.price != null && p.price !== '' ? parseFloat(p.price)
+        : (p.regular_price ? parseFloat(p.regular_price) : null);
       upsert.run({
         id_woo: p.id,
         nombre: p.name,
@@ -79,6 +82,7 @@ export async function refrescarCatalogo(db, cfg) {
         stock: p.stock_quantity ?? 0,
         categorias_json: cats,
         img,
+        precio: Number.isFinite(precio) ? precio : null,
         actualizado_en: now
       });
     }
