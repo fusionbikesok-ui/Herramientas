@@ -622,6 +622,8 @@ function construirMLdesdeApi(pubs,wcItems){
       ml_status:p.status||'',
       ml_sub_status:p.sub_status||'',
       ml_es_variante:esVar,
+      ml_permalink:p.permalink||'',
+      ml_catalogo:p.catalogo===1||p.catalogo===true,
       _ct:ctDesdeApi(p.color||'',p.talle||''),
       _desde_api:true,
     };
@@ -873,10 +875,14 @@ function badgeEstado(item){
   const sub=(item.ml_sub_status||'').toLowerCase();
   const stl='display:inline-block;padding:1px 7px;border-radius:20px;font-size:10px;font-weight:600;vertical-align:middle;margin-left:6px';
   const b=(hex,txt)=>`<span style="${stl};background:${hex}22;color:${hex};border:1px solid ${hex}44">${txt}</span>`;
-  if(st==='active')return b('#34D399','● Activa');
-  if(st==='paused'&&sub.includes('out_of_stock'))return b('#FBBF24','■ Pausada · sin stock');
-  if(st==='paused')return b('#8493B0','■ Pausada');
-  return b('#8493B0',esc(st));
+  let estado;
+  if(st==='active')estado=b('#34D399','● Activa');
+  else if(st==='paused'&&sub.includes('out_of_stock'))estado=b('#FBBF24','■ Pausada · sin stock');
+  else if(st==='paused')estado=b('#8493B0','■ Pausada');
+  else estado=b('#8493B0',esc(st));
+  // Badge extra de catálogo: son las que "no aparecen" al buscar por código en el panel de ML.
+  const cat=item.ml_catalogo?b('#A78BFA','📖 Catálogo'):'';
+  return estado+cat;
 }
 function setFilterEstado(v){filtroEstadoPub=v;renderList();if(activo!==null&&!getFiltered().find(i=>i.idx===activo)){activo=null;document.getElementById('detail-panel').innerHTML=emptyState();}}
 
@@ -948,6 +954,7 @@ function renderDetail(){
       <div class="section-label">Publicación MercadoLibre</div>
       <div class="ml-card">
         <div class="ml-id">${esc(item.ml_item_id)}${item.ml_variation_id?' / VAR '+esc(item.ml_variation_id):''}${badgeEstado(item)}</div>
+        ${item.ml_permalink?`<a href="${esc(item.ml_permalink)}" target="_blank" rel="noopener" style="display:inline-block;margin:4px 0;font-size:12px;font-weight:600;color:#4C7DF0;text-decoration:none">Abrir en ML ↗</a>`:''}
         <div class="ml-name">${esc(item.ml_title)}</div>
         ${item.ml_variations?`<div class="ml-vars">🔀 ${esc(item.ml_variations)}</div>`:''}
         <div class="ml-type">${item.ml_es_variante?'Variante':'Producto simple'}</div>

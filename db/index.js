@@ -45,6 +45,8 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN sub_status TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN thumbnail TEXT'); } catch (_) {}
+  try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN permalink TEXT'); } catch (_) {}
+  try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN catalogo INTEGER'); } catch (_) {}
 
   // Auditoría de precios ML: neto (precio − comisión − envío) vs precio web por publicación.
   try { db.exec(`CREATE TABLE IF NOT EXISTS ml_precio_auditoria (

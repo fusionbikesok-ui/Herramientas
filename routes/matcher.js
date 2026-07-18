@@ -89,7 +89,7 @@ export async function refrescarPublicacionesMl(db, cfg) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail`
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing`
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
     // borraría publicaciones válidas sin aviso.
@@ -123,13 +123,13 @@ export async function refrescarPublicacionesMl(db, cfg) {
 function prepararUpsertCache(db) {
   return db.prepare(`
     INSERT INTO ml_publicaciones_cache
-      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, actualizado_en)
-    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @actualizado_en)
+      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, permalink, catalogo, actualizado_en)
+    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @permalink, @catalogo, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
       item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
       status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
       talle=excluded.talle, seller_sku=excluded.seller_sku, variations_texto=excluded.variations_texto,
-      thumbnail=excluded.thumbnail, actualizado_en=excluded.actualizado_en
+      thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo, actualizado_en=excluded.actualizado_en
   `);
 }
 
@@ -149,7 +149,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail`
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
@@ -183,6 +183,9 @@ function aplanarItem(body) {
   const status = body.status || '';
   // sub_status es a nivel item (array, ej. ["out_of_stock"]); se denormaliza en cada fila.
   const subStatus = Array.isArray(body.sub_status) ? body.sub_status.join(',') : (body.sub_status || '');
+  // permalink y catalog_listing son a nivel item; se denormalizan en cada variación.
+  const permalink = body.permalink || '';
+  const catalogo = body.catalog_listing ? 1 : 0;
   const vars = Array.isArray(body.variations) ? body.variations : [];
 
   if (vars.length === 0) {
@@ -201,6 +204,8 @@ function aplanarItem(body) {
       seller_sku: sku,
       variations_texto: '',
       thumbnail,
+      permalink,
+      catalogo,
     }];
   }
 
@@ -224,6 +229,8 @@ function aplanarItem(body) {
       seller_sku: sku,
       variations_texto: combo,
       thumbnail,
+      permalink,
+      catalogo,
     };
   });
 }
@@ -362,7 +369,7 @@ export function matcherRouter(db, cfg) {
   // Lee las publicaciones cacheadas.
   // ?scope=atencion → solo las que necesitan atención (sin mapeo / a re-mapear).
   const SELECT_PUBS = `
-    SELECT clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en
+    SELECT clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, permalink, catalogo, actualizado_en
     FROM ml_publicaciones_cache`;
   router.get('/publicaciones', (req, res) => {
     let rows;
