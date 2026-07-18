@@ -545,6 +545,61 @@ export async function reactivarItems(db, mlCfg, itemIds) {
   return { procesados: porItem.size, resultados };
 }
 
+// ─── enriquecimiento de filas con datos de ML (título + miniatura) ──────────────
+
+const MULTIGET_CHUNK = 20;      // ML permite hasta 20 ids por multiget
+const ENRICH_MAX_ITEMS = 60;    // cota de llamadas a ML por carga de la vista de detalle
+
+/**
+ * Completa in-place `titulo` y `thumbnail` de las filas que no los tengan en cache,
+ * trayéndolos de ML por multiget. Además persiste lo traído en ml_publicaciones_cache
+ * (solo publicaciones ya existentes, sin crear filas nuevas). No lanza: el llamador la
+ * envuelve en catch; ante fallo de ML o falta de token, las filas quedan como estaban.
+ */
+async function enriquecerConMl(db, mlCfg, rows) {
+  if (!mlCfg?.clientId || !rows.length) return;
+
+  const faltan = new Set();
+  for (const r of rows) {
+    const itemId = r.item_id || String(r.clave || '').split('|')[0];
+    if (itemId && (!r.titulo || !r.thumbnail)) faltan.add(itemId);
+  }
+  if (!faltan.size) return;
+  const ids = [...faltan].slice(0, ENRICH_MAX_ITEMS);
+
+  const info = new Map(); // itemId -> { title, thumbnail }
+  for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
+    const chunk = ids.slice(i, i + MULTIGET_CHUNK);
+    const resp = await mlFetch(db, mlCfg, 'get',
+      `/items?ids=${chunk.join(',')}&attributes=id,title,secure_thumbnail,thumbnail`);
+    if (resp.status !== 200 || !Array.isArray(resp.data)) continue;
+    for (const entry of resp.data) {
+      if (entry.code !== 200 || !entry.body) continue;
+      const b = entry.body;
+      info.set(String(b.id), { title: b.title || '', thumbnail: b.secure_thumbnail || b.thumbnail || '' });
+    }
+  }
+  if (!info.size) return;
+
+  // Persistir en cache lo traído, sin pisar valores no vacíos ya existentes.
+  const upd = db.prepare(
+    "UPDATE ml_publicaciones_cache SET titulo = COALESCE(NULLIF(titulo,''), ?), thumbnail = COALESCE(NULLIF(thumbnail,''), ?) WHERE item_id = ?"
+  );
+  db.transaction((entries) => {
+    for (const [itemId, v] of entries) upd.run(v.title || null, v.thumbnail || null, itemId);
+  })([...info.entries()]);
+
+  // Mergear en las filas devueltas al cliente.
+  for (const r of rows) {
+    const itemId = r.item_id || String(r.clave || '').split('|')[0];
+    const v = info.get(itemId);
+    if (!v) continue;
+    if (!r.titulo) r.titulo = v.title;
+    if (!r.thumbnail) r.thumbnail = v.thumbnail;
+    if (!r.item_id) r.item_id = itemId;
+  }
+}
+
 // ─── syncRouter ───────────────────────────────────────────────────────────────
 
 export function syncRouter(db, cfg) {
@@ -634,6 +689,13 @@ export function syncRouter(db, cfg) {
       ).get().n;
     } catch (_) { /* cache puede no existir todavía */ }
 
+    // Publicaciones reactivables (pausadas por out_of_stock con stock web y mapeadas).
+    // Reutiliza getReactivablesRows para que el conteo coincida exacto con /reactivables.
+    let reactivables = 0;
+    try {
+      reactivables = new Set(getReactivablesRows(db).map(r => r.item_id)).size;
+    } catch (_) { /* cache puede no existir todavía */ }
+
     const pedidos = db.prepare(
       "SELECT COUNT(*) total, SUM(CASE WHEN cancelado_en IS NOT NULL THEN 1 ELSE 0 END) cancelados FROM ordenes_ml_wc_pedidos"
     ).get();
@@ -688,6 +750,7 @@ export function syncRouter(db, cfg) {
         : { configurado: false },
       ultimasSyncsOk: ultimasOk,
       stock: { sincronizadas, pendientes, pendientesPausadas },
+      reactivables,
       pedidos: {
         total: pedidos.total ?? 0,
         cancelados: pedidos.cancelados ?? 0,
@@ -769,13 +832,13 @@ export function syncRouter(db, cfg) {
     },
   };
 
-  router.get('/atencion/:cat', (req, res) => {
+  router.get('/atencion/:cat', async (req, res) => {
     const def = ATENCION_DEFS[req.params.cat];
     if (!def) return res.status(400).json({ ok: false, error: 'categoría inválida' });
     // GROUP BY clave con MAX(creado_en): SQLite toma sku/error de la fila más reciente.
     const rows = db.prepare(`
       SELECT s.clave, s.sku, s.error, s.estado, MAX(s.creado_en) AS creado_en,
-             p.item_id, p.variation_id, p.titulo, p.variations_texto, p.status AS ml_status
+             p.item_id, p.variation_id, p.titulo, p.variations_texto, p.status AS ml_status, p.thumbnail
       FROM sync_log s
       LEFT JOIN ml_publicaciones_cache p ON p.clave = s.clave
       WHERE s.estado IN (${def.estados})
@@ -785,6 +848,12 @@ export function syncRouter(db, cfg) {
       ORDER BY creado_en DESC
       LIMIT 500
     `).all();
+
+    // Enriquecer on-demand con título + miniatura desde ML las filas que no los tengan
+    // en cache (publicaciones que erraron y no fueron traídas por el Matcher). Degrada
+    // elegante: si ML falla o no hay token, se devuelven las filas tal cual.
+    await enriquecerConMl(db, mlCfg, rows).catch(() => {});
+
     res.json({ ok: true, cat: req.params.cat, total: rows.length, data: rows });
   });
 

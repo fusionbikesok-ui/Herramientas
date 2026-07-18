@@ -375,4 +375,42 @@ describe('vista de detalle', () => {
     const res = await request(app).post('/api/sync/reintentar-item').send({});
     expect(res.status).toBe(400);
   });
+
+  it('atencion: enriquece título + miniatura desde ML cuando faltan en cache', async () => {
+    seedToken(db);
+    seedLog(db, { clave: 'MLA50|v50', estado: 'error', error: 'HTTP 500' });
+    // Publicación en cache pero sin miniatura (columna thumbnail NULL) → dispara enriquecimiento.
+    seedPublicacion(db, { clave: 'MLA50|v50', itemId: 'MLA50', varId: 'v50', status: 'active', titulo: 'Pub 50' });
+    axios.request.mockResolvedValue({
+      status: 200,
+      data: [{ code: 200, body: { id: 'MLA50', title: 'Título desde ML', secure_thumbnail: 'https://http2.mlstatic.com/x.jpg' } }],
+      headers: {},
+    });
+
+    const res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].thumbnail).toBe('https://http2.mlstatic.com/x.jpg');
+    // Persistió en cache
+    const pub = db.prepare('SELECT thumbnail FROM ml_publicaciones_cache WHERE item_id=?').get('MLA50');
+    expect(pub.thumbnail).toBe('https://http2.mlstatic.com/x.jpg');
+  });
+
+  it('dashboard: cuenta publicaciones reactivables (excluye activas y paused_by_seller)', async () => {
+    // Reactivable: pausada out_of_stock, mapeada, con stock web
+    seedCatalogo(db, 'FB-30', 5, { idWoo: 30 });
+    seedDecision(db, 'MLA30|v30', 'FB-30');
+    seedPublicacion(db, { clave: 'MLA30|v30', itemId: 'MLA30', varId: 'v30', status: 'paused', subStatus: 'out_of_stock' });
+    // No reactivable: pausa manual (paused_by_seller)
+    seedCatalogo(db, 'FB-31', 5, { idWoo: 31 });
+    seedDecision(db, 'MLA31|v31', 'FB-31');
+    seedPublicacion(db, { clave: 'MLA31|v31', itemId: 'MLA31', varId: 'v31', status: 'paused', subStatus: 'out_of_stock,paused_by_seller' });
+    // No reactivable: activa
+    seedCatalogo(db, 'FB-32', 5, { idWoo: 32 });
+    seedDecision(db, 'MLA32|v32', 'FB-32');
+    seedPublicacion(db, { clave: 'MLA32|v32', itemId: 'MLA32', varId: 'v32', status: 'active' });
+
+    const res = await request(app).get('/api/sync/dashboard');
+    expect(res.status).toBe(200);
+    expect(res.body.reactivables).toBe(1);
+  });
 });
