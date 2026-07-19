@@ -242,6 +242,7 @@
       <button class="hbtn" id="btn-api-usar" onclick="procesarDesdeApi()" title="Usar las publicaciones ya traídas sin volver a descargar">Usar las ya traídas →</button>
     </div>
     <div id="api-status" style="font-size:12.5px;color:var(--muted);margin-top:10px;min-height:16px"></div>
+    <div id="huerfanos-aviso" class="hidden" style="font-size:12px;color:var(--muted);margin-top:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(251,191,36,.06)"></div>
   </div>
 
   <div style="text-align:center;font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:.1em;margin:4px 0 10px">— o subí el Excel (respaldo) —</div>
@@ -415,12 +416,28 @@ function leerML(file){
   }));
 }
 
+/* ── FETCH JSON ROBUSTO ──
+   Valida r.ok y que la respuesta sea JSON antes de parsear. Evita el clásico
+   "Unexpected token '<'" cuando nginx corta con una página HTML de error (504/502).
+   Devuelve {r,d}; el llamador decide según r.ok / r.status / d.ok. */
+async function fetchJson(url,opts){
+  let r;
+  try{ r=await fetch(url,opts); }
+  catch(e){ throw new Error('No se pudo contactar al servidor ('+((e&&e.message)||'red')+')'); }
+  const ct=r.headers.get('content-type')||'';
+  if(!ct.includes('application/json')){
+    if(r.status===504||r.status===502||r.status===0)
+      throw new Error('El servidor tardó demasiado en responder. La operación puede seguir en curso — esperá un momento y reintentá.');
+    throw new Error('Respuesta inesperada del servidor (HTTP '+r.status+')');
+  }
+  const d=await r.json().catch(()=>null);
+  return {r,d:d||{}};
+}
+
 /* ── WC API ── */
 async function cargarWC(){
-  const r=await fetch('/herramientas/api/woo/catalogo');
-  if(!r.ok)throw new Error('Error HTTP '+r.status+' cargando catálogo WooCommerce');
-  const d=await r.json();
-  if(!d.ok||!d.data)throw new Error('Respuesta inválida del catálogo WooCommerce');
+  const {r,d}=await fetchJson('/herramientas/api/woo/catalogo');
+  if(!r.ok||!d.ok||!d.data)throw new Error('No se pudo cargar el catálogo WooCommerce (HTTP '+r.status+')');
   wcCatalogo=d.data;
   document.getElementById('wc-status-title').textContent='✓ '+d.data.length.toLocaleString('es-AR')+' productos cargados';
   document.getElementById('wc-status-hint').textContent='Catálogo WooCommerce · se actualiza automáticamente cada 15 min';
@@ -428,11 +445,22 @@ async function cargarWC(){
 }
 async function cargarProgresoApi(){
   try{
-    const r=await fetch('/herramientas/api/matcher/decisiones');
-    if(!r.ok)return;
-    const d=await r.json();
-    if(d.ok&&d.data){for(const k in d.data){if(!progresoImportado[k])progresoImportado[k]=d.data[k];}}
+    const {r,d}=await fetchJson('/herramientas/api/matcher/decisiones');
+    if(r.ok&&d.ok&&d.data){for(const k in d.data){if(!progresoImportado[k])progresoImportado[k]=d.data[k];}}
   }catch(e){}
+}
+// H-03: avisa cuántas decisiones activas apuntan a publicaciones que ya no están en el
+// cache de ML (cerradas/borradas). No las borra — solo las hace visibles para revisión.
+async function chequearHuerfanos(){
+  const el=document.getElementById('huerfanos-aviso');
+  if(!el)return;
+  try{
+    const {r,d}=await fetchJson('/herramientas/api/matcher/huerfanos');
+    if(r.ok&&d.ok&&d.total>0){
+      el.textContent='⚠ '+d.total.toLocaleString('es-AR')+' mapeo(s) apuntan a publicaciones que ya no están activas/pausadas en ML (cerradas o borradas). No afectan el matcheo actual; revisalos si el sync marca errores.';
+      el.classList.remove('hidden');
+    }else{ el.classList.add('hidden'); }
+  }catch(e){/* silencioso: no es crítico */}
 }
 
 /* ── PROCESAR ── */
@@ -498,18 +526,40 @@ async function refrescarMLapi(){
   if(btn)btn.disabled=true;
   if(info){info.textContent=scope==='atencion'?'Trayendo las publicaciones que necesitan atención…':'Trayendo todas las publicaciones desde MercadoLibre… (puede tardar 1-3 min)';info.style.color='var(--muted)';}
   try{
-    const r=await fetch('/herramientas/api/matcher/refrescar-ml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope})});
-    const d=await r.json();
-    if(!d.ok)throw new Error(d.error||'error del servidor');
-    if(scope==='atencion'&&d.total===0){
+    // El refresco es asíncrono: el POST devuelve 202 al toque (o 409 si ya hay uno en curso)
+    // y sondeamos el estado. Así el scan largo ya no choca el timeout de nginx (120s).
+    const {r,d}=await fetchJson('/herramientas/api/matcher/refrescar-ml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope})});
+    if(!(r.status===202||r.status===409||d.ok))throw new Error(d.error||'error del servidor');
+    const est=await sondearRefresco(info);
+    if(est.error)throw new Error(est.error);
+    const total=est.resultado?est.resultado.total:0;
+    if(scope==='atencion'&&total===0){
       if(info){info.textContent='✓ No hay publicaciones pendientes de atención (sin mapeo / a re-mapear). ¡Todo al día!';info.style.color='var(--green)';}
       if(btn)btn.disabled=false;return;
     }
-    if(info){info.textContent='✓ '+d.total.toLocaleString('es-AR')+' publicaciones ('+d.variaciones.toLocaleString('es-AR')+' variaciones) traídas. Procesando…';info.style.color='var(--green)';}
+    if(info){info.textContent='✓ '+total.toLocaleString('es-AR')+' publicaciones traídas. Procesando…';info.style.color='var(--green)';}
     await procesarDesdeApi();
   }catch(err){
     if(info){info.textContent='✗ '+err.message;info.style.color='var(--red)';}
     if(btn)btn.disabled=false;
+  }
+}
+// Sondea GET /refrescar-ml/estado hasta que running=false, mostrando progreso real.
+// Los errores transitorios de red no cortan el sondeo (el refresco sigue en el server).
+async function sondearRefresco(info){
+  for(;;){
+    await new Promise(res=>setTimeout(res,1500));
+    let est;
+    try{ const {d}=await fetchJson('/herramientas/api/matcher/refrescar-ml/estado'); est=d; }
+    catch(e){ continue; }
+    if(!est.ok){ continue; }
+    if(info&&est.running){
+      info.textContent=est.phase==='listando'
+        ?'Listando publicaciones en ML…'
+        :(est.total?('Trayendo '+est.done.toLocaleString('es-AR')+'/'+est.total.toLocaleString('es-AR')+' publicaciones…'):'Trayendo publicaciones…');
+      info.style.color='var(--muted)';
+    }
+    if(!est.running)return est;
   }
 }
 async function procesarDesdeApi(){
@@ -519,9 +569,8 @@ async function procesarDesdeApi(){
   try{
     if(!wcCatalogo){setP('Cargando catálogo WooCommerce...',5);await cargarWC();}
     setP('Leyendo publicaciones de ML...',15);
-    const r=await fetch('/herramientas/api/matcher/publicaciones?scope='+encodeURIComponent(scope));
-    const d=await r.json();
-    if(!d.ok||!Array.isArray(d.data))throw new Error('No se pudieron leer las publicaciones cacheadas');
+    const {r,d}=await fetchJson('/herramientas/api/matcher/publicaciones?scope='+encodeURIComponent(scope));
+    if(!r.ok||!d.ok||!Array.isArray(d.data))throw new Error('No se pudieron leer las publicaciones cacheadas');
     if(d.data.length===0){
       if(scope==='atencion'){
         const info=document.getElementById('api-status');
@@ -737,17 +786,41 @@ function cargarProgreso(){
   }
 }
 let _guardarServidorTimer=null;
+let _saveReintentos=0;
+let _saveReintentoTimer=null;
+// Indicador de estado de guardado al servidor: 'guardado' | 'pendiente' | 'error'.
+function setSaveInd(estado){
+  const ind=document.getElementById('autosave-ind');
+  if(!ind)return;
+  ind.classList.remove('hidden');
+  if(estado==='guardado'){ind.textContent='✓ guardado';ind.style.color='var(--green)';setTimeout(()=>ind.classList.add('hidden'),2000);}
+  else if(estado==='pendiente'){ind.textContent='⟳ guardando…';ind.style.color='var(--muted)';}
+  else if(estado==='error'){ind.textContent='✗ sin guardar (reintentando)';ind.style.color='var(--red)';}
+}
 function guardarLS(){
   // localStorage es instantáneo (seguridad ante recarga). El POST al servidor con
   // TODAS las decisiones es lo pesado, así que se DEBOUNCEA: se manda 1,2s después
   // de la última decisión, no en cada clic. Antes esto ralentizaba el matcher.
   try{localStorage.setItem(LS_KEY,JSON.stringify(decisiones));}catch(e){}
-  const ind=document.getElementById('autosave-ind');
-  if(ind){ind.classList.remove('hidden');setTimeout(()=>ind.classList.add('hidden'),2000);}
+  setSaveInd('pendiente');
   if(_guardarServidorTimer)clearTimeout(_guardarServidorTimer);
-  _guardarServidorTimer=setTimeout(function(){
-    fetch('/herramientas/api/matcher/decisiones',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decisiones})}).catch(function(){});
-  },1200);
+  _guardarServidorTimer=setTimeout(guardarEnServidor,1200);
+}
+// Persiste TODAS las decisiones en el servidor. Si falla, reintenta con backoff: el dato
+// ya está en localStorage, así que nunca se pierde entre reintentos (arregla el
+// fire-and-forget que perdía mapeos en silencio al fallar el POST).
+async function guardarEnServidor(){
+  if(_saveReintentoTimer){clearTimeout(_saveReintentoTimer);_saveReintentoTimer=null;}
+  try{
+    const {r,d}=await fetchJson('/herramientas/api/matcher/decisiones',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decisiones})});
+    if(!r.ok||!d.ok)throw new Error('server');
+    _saveReintentos=0;setSaveInd('guardado');
+  }catch(e){
+    _saveReintentos=Math.min(_saveReintentos+1,6);
+    setSaveInd('error');
+    const espera=Math.min(1500*Math.pow(2,_saveReintentos-1),60000);
+    _saveReintentoTimer=setTimeout(guardarEnServidor,espera);
+  }
 }
 function exportarProgreso(){
   const blob=new Blob([JSON.stringify(decisiones,null,2)],{type:'application/json'});
@@ -1186,8 +1259,7 @@ setupDropzone('dz-ml','inp-ml','dz-ml-file','ml');
   // usuario toque un botón. Así abrir el matcher nunca se traba.
   const info=document.getElementById('api-status');
   try{
-    const r=await fetch('/herramientas/api/matcher/publicaciones');
-    const d=await r.json();
+    const {d}=await fetchJson('/herramientas/api/matcher/publicaciones');
     if(d&&d.ok&&d.total>0){
       const firma=calcFirmaMatcher(d);
       const cache=await idbGet('todos');
@@ -1203,6 +1275,7 @@ setupDropzone('dz-ml','inp-ml','dz-ml-file','ml');
       }
     }
   }catch(e){/* si falla, queda la pantalla de carga manual */}
+  chequearHuerfanos();
 })();
 </script>
 </body>
