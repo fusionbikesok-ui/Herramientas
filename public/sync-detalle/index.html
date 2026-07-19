@@ -41,6 +41,11 @@
   .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;}
   .tag.ok{background:rgba(52,211,153,.13);color:var(--green);}
   .tag.paused{background:rgba(245,185,66,.13);color:var(--amber);}
+  .diag{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;white-space:nowrap;}
+  .diag.ok{background:rgba(52,211,153,.14);color:var(--green);}
+  .diag.warn{background:rgba(245,185,66,.14);color:var(--amber);}
+  .diag.muted{background:rgba(132,147,176,.14);color:var(--muted);}
+  .diag-txt{font-size:11.5px;color:var(--muted);margin-top:5px;white-space:normal;line-height:1.4;max-width:320px;}
   .loading{color:var(--muted2);font-size:13px;padding:34px 0;text-align:center;}
   .msg{font-size:12.5px;margin-top:14px;min-height:16px;}
 
@@ -86,7 +91,18 @@ var CATS={
   sin_mapeo:{modo:'mapeo',titulo:'Ventas sin SKU mapeado',desc:'Publicaciones que se vendieron en MercadoLibre pero no están vinculadas a un SKU de WooCommerce. Buscá el producto por SKU o nombre y asignáselo. El stock se sincroniza solo en el próximo ciclo.'},
   remapeo_requerido:{modo:'mapeo',titulo:'Variaciones a re-mapear',desc:'La variación mapeada ya no existe en ML (se editó o recreó la publicación). Volvé a asignarle el SKU correcto. El stock se sincroniza solo después.'},
   requiere_atencion_ml:{modo:'info',titulo:'Exceso de fotos en ML',desc:'ML no permite actualizar estas publicaciones hasta que bajes la cantidad de fotos en tu cuenta de MercadoLibre. Abrí cada una, quitá fotos y el sync se reanuda solo.'},
-  errores:{modo:'reintentar',titulo:'Errores de sincronización',desc:'Fallos de sincronización de stock que no se resolvieron solos. Revisá el motivo y reintentá el ítem puntual.'}
+  errores:{modo:'diagnostico',titulo:'Errores de sincronización',desc:'Cada fallo se diagnostica en vivo contra MercadoLibre y se ofrece la acción que lo resuelve: reactivar (pausada con stock web), desvincular (la variación ya no existe), descartar (sin stock real / pausada a mano) o reintentar.'}
+};
+
+// Metadatos por diagnóstico: etiqueta, color del badge y explicación.
+var DIAG={
+  reactivable:{lbl:'Reactivable',cls:'ok',txt:'Pausada por falta de stock pero hay stock web. Se puede reactivar (si el neto cubre el precio web).'},
+  sin_stock:{lbl:'Sin stock',cls:'muted',txt:'Pausada por falta de stock y tampoco hay stock web. No es un error real.'},
+  pausada_manual:{lbl:'Pausada por vos',cls:'muted',txt:'La pausaste manualmente en ML.'},
+  pausada_otro:{lbl:'Pausada',cls:'muted',txt:'Pausada en ML por otro motivo.'},
+  estructura_cambiada:{lbl:'Variación inexistente',cls:'warn',txt:'La variación mapeada ya no existe en ML. Desvinculá para re-linkearla desde el Matcher.'},
+  reintentable:{lbl:'Reintentable',cls:'warn',txt:'La publicación está activa y debería sincronizar. Reintentá el envío de stock.'},
+  no_activa:{lbl:'No activa',cls:'muted',txt:'Cerrada o inaccesible en ML.'}
 };
 
 var CAT=qs('cat');
@@ -135,7 +151,7 @@ function render(rows){
   var h='<p class="sub" style="margin-bottom:10px">'+n(rows.length)+' ítem(s) pendientes.</p>';
   h+='<div class="tbl-wrap"><table><thead><tr>';
   if(CFG.modo==='mapeo')      h+='<th>Publicación</th><th>Asignar SKU de WooCommerce</th><th>Estado</th>';
-  else if(CFG.modo==='reintentar') h+='<th>Publicación</th><th>Motivo del error</th><th>Acción</th>';
+  else if(CFG.modo==='diagnostico') h+='<th>Publicación</th><th>Diagnóstico</th><th>Acción</th>';
   else                        h+='<th>Publicación</th><th>Motivo</th><th>Acción</th>';
   h+='</tr></thead><tbody>';
   rows.forEach(function(row){
@@ -144,11 +160,9 @@ function render(rows){
     if(CFG.modo==='mapeo'){
       h+='<td><div class="sku-box"><input class="sku-q" placeholder="Buscar SKU o nombre…"><div class="sku-results"></div></div></td>';
       h+='<td class="estado-cell"></td>';
-    }else if(CFG.modo==='reintentar'){
-      h+='<td class="err-txt">'+esc(row.error||'—')+'</td>';
-      h+='<td><div class="acc-btns"><button class="btn mini" onclick="reintentar(this,\''+esc(row.clave)+'\')">Reintentar</button>'
-        +'<button class="btn mini sec" onclick="mostrarRemap(this)">Re-mapear</button></div>'
-        +'<span class="st"></span><div class="remap-box"></div></td>';
+    }else if(CFG.modo==='diagnostico'){
+      h+='<td>'+diagCell(row)+'</td>';
+      h+='<td>'+accionCell(row)+'</td>';
     }else{
       h+='<td class="err-txt">'+esc(row.error||'ML rechaza la actualización.')+'</td>';
       h+='<td><a class="ml-link" href="'+mlUrl(itemIdOf(row))+'" target="_blank" rel="noopener">Abrir en ML ↗</a></td>';
@@ -186,16 +200,61 @@ function wireSkuBox(tr){
   },300));
 }
 
-// Despliega el buscador de SKU para re-mapear una fila de la vista de errores.
-function mostrarRemap(btn){
-  var tr=btn.closest('tr');
-  var box=tr.querySelector('.remap-box');
-  if(!box)return;
-  if(box.dataset.open){box.innerHTML='';box.dataset.open='';return;} // toggle
-  box.dataset.open='1';
-  box.innerHTML='<div class="sku-box" style="margin-top:8px"><input class="sku-q" placeholder="Buscar SKU o nombre…"><div class="sku-results"></div></div>';
-  wireSkuBox(tr);
-  var inp=box.querySelector('.sku-q');if(inp)inp.focus();
+// ── Modo diagnóstico (vista de errores): celda de diagnóstico + acción por fila ──
+function diagCell(row){
+  if(!row.diagnostico){
+    return '<div class="err-txt">'+esc(row.error||'—')+'</div><div class="diag-txt">No se pudo diagnosticar (ML no respondió). Podés reintentar o descartar.</div>';
+  }
+  var d=DIAG[row.diagnostico]||{lbl:row.diagnostico,cls:'muted',txt:''};
+  var extra='';
+  if(row.diagnostico==='reactivable'||row.diagnostico==='sin_stock') extra=' Stock web: '+n(row.stock_web)+'.';
+  return '<span class="diag '+d.cls+'">'+esc(d.lbl)+'</span><div class="diag-txt">'+esc(d.txt)+esc(extra)+'</div>';
+}
+
+function accionCell(row){
+  var clave=esc(row.clave), itemId=esc(itemIdOf(row)), btn;
+  if(row.accion==='reactivar')        btn='<button class="btn mini" onclick="reactivarUno(this,\''+clave+'\',\''+itemId+'\')">Reactivar</button>';
+  else if(row.accion==='desvincular') btn='<button class="btn mini sec" onclick="desvincularClave(this,\''+clave+'\')">Desvincular</button>';
+  else if(row.accion==='descartar')   btn='<button class="btn mini sec" onclick="descartar(this,\''+clave+'\')">Descartar</button>';
+  else if(row.accion==='reintentar')  btn='<button class="btn mini" onclick="reintentar(this,\''+clave+'\')">Reintentar</button>';
+  else btn='<button class="btn mini" onclick="reintentar(this,\''+clave+'\')">Reintentar</button> <button class="btn mini sec" onclick="descartar(this,\''+clave+'\')">Descartar</button>';
+  return '<div class="acc-btns">'+btn+'</div><span class="st"></span>';
+}
+
+function stDe(btn){return btn.closest('td').querySelector('.st');}
+
+async function reactivarUno(btn,clave,itemId){
+  var st=stDe(btn);btn.disabled=true;st.className='st';st.textContent='Reactivando…';
+  try{
+    var r=await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:[itemId]})});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    var res=(d.resultados||[])[0]||{};
+    if(res.ok){st.className='st ok';st.textContent='✓ Reactivada';btn.closest('tr').classList.add('row-done');}
+    else if(res.bloqueado){st.className='st bad';st.textContent='✗ Bloqueada: neto $'+n(Math.round(res.neto))+' vs web $'+n(res.precio_web)+' ('+Math.round(res.deficitPct*100)+'% abajo). Corregí el precio en ML.';btn.disabled=false;}
+    else{st.className='st bad';st.textContent='✗ '+(res.error||'no se pudo reactivar');btn.disabled=false;}
+  }catch(e){st.className='st bad';st.textContent='✗ '+e.message;btn.disabled=false;}
+}
+
+async function desvincularClave(btn,clave){
+  if(!confirm('Se va a borrar el mapeo de esta publicación para que la vuelvas a linkear desde el Matcher. ¿Confirmás?'))return;
+  var st=stDe(btn);btn.disabled=true;st.className='st';st.textContent='Desvinculando…';
+  try{
+    var r=await fetch('/api/sync/desvincular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave})});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    st.className='st ok';st.textContent='✓ Desvinculada — re-mapeala en el Matcher';btn.closest('tr').classList.add('row-done');
+  }catch(e){st.className='st bad';st.textContent='✗ '+e.message;btn.disabled=false;}
+}
+
+async function descartar(btn,clave){
+  var st=stDe(btn);btn.disabled=true;st.className='st';st.textContent='Descartando…';
+  try{
+    var r=await fetch('/api/sync/descartar-error',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({claves:[clave]})});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    st.className='st ok';st.textContent='✓ Descartada';btn.closest('tr').classList.add('row-done');
+  }catch(e){st.className='st bad';st.textContent='✗ '+e.message;btn.disabled=false;}
 }
 
 async function asignar(tr,clave,sku,nombre){
