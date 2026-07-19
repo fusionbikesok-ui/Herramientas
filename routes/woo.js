@@ -45,6 +45,11 @@ export async function refrescarCatalogo(db, cfg) {
         // Build name from parent name + variation attributes
         const attrs = (v.attributes || []).map(a => a.option).filter(Boolean).join(' / ');
         v.name = attrs ? `${vp.name} — ${attrs}` : vp.name;
+        // Atributos estructurados {name, option} para color/talle confiables en el matcher
+        // (mejor que re-parsear el nombre). Se persisten en atributos_json más abajo.
+        v._atributos = (v.attributes || [])
+          .map(a => ({ name: a.name || '', option: a.option || '' }))
+          .filter(a => a.option);
         v.parent_id = vp.id;
         v.categories = vp.categories; // inherit parent categories
         productos.push(v);
@@ -56,12 +61,13 @@ export async function refrescarCatalogo(db, cfg) {
 
   const now = new Date().toISOString();
   const upsert = db.prepare(`
-    INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, actualizado_en)
-    VALUES (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @actualizado_en)
+    INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, atributos_json, actualizado_en)
+    VALUES (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @atributos_json, @actualizado_en)
     ON CONFLICT(id_woo) DO UPDATE SET
       nombre = excluded.nombre, sku = excluded.sku, tipo = excluded.tipo,
       id_padre = excluded.id_padre, stock = excluded.stock,
-      categorias_json = excluded.categorias_json, img = excluded.img, precio = excluded.precio, actualizado_en = excluded.actualizado_en
+      categorias_json = excluded.categorias_json, img = excluded.img, precio = excluded.precio,
+      atributos_json = excluded.atributos_json, actualizado_en = excluded.actualizado_en
   `);
   const tx = db.transaction((rows) => {
     for (const p of rows) {
@@ -83,6 +89,7 @@ export async function refrescarCatalogo(db, cfg) {
         categorias_json: cats,
         img,
         precio: Number.isFinite(precio) ? precio : null,
+        atributos_json: (Array.isArray(p._atributos) && p._atributos.length) ? JSON.stringify(p._atributos) : null,
         actualizado_en: now
       });
     }

@@ -39,4 +39,25 @@ describe('woo route', () => {
     expect(rows[0].nombre).toBe('Casco Bell L');
     db.close();
   });
+
+  it('refrescarCatalogo persiste atributos estructurados de variaciones (H-06)', async () => {
+    axios.request
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: [
+        { id: 20, name: 'Casco X', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 },
+      ] })
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: [
+        { id: 21, sku: 'FB-21', stock_quantity: 3, attributes: [
+          { name: 'Color', option: 'Rojo' }, { name: 'Talle', option: 'M' },
+        ] },
+      ] })
+      .mockResolvedValue({ status: 200, headers: {}, data: [] });
+    const db = openDb(TEST_DB);
+    await refrescarCatalogo(db, { url: 'https://fusionbikes.com.ar', ck: 'x', cs: 'y' });
+    const v = getCatalogo(db).find(r => r.sku === 'FB-21');
+    expect(v).toBeTruthy();
+    expect(JSON.parse(v.atributos_json)).toEqual([
+      { name: 'Color', option: 'Rojo' }, { name: 'Talle', option: 'M' },
+    ]);
+    db.close();
+  });
 });

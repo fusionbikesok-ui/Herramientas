@@ -439,6 +439,7 @@ async function cargarWC(){
   const {r,d}=await fetchJson('/herramientas/api/woo/catalogo');
   if(!r.ok||!d.ok||!d.data)throw new Error('No se pudo cargar el catálogo WooCommerce (HTTP '+r.status+')');
   wcCatalogo=d.data;
+  _wcSkusSet=null; // invalida el cache de validación de SKUs
   document.getElementById('wc-status-title').textContent='✓ '+d.data.length.toLocaleString('es-AR')+' productos cargados';
   document.getElementById('wc-status-hint').textContent='Catálogo WooCommerce · se actualiza automáticamente cada 15 min';
   document.getElementById('btn-procesar').disabled=!archivoML;
@@ -1044,6 +1045,7 @@ function renderDetail(){
         onkeydown="if(event.key==='Enter'){event.preventDefault();accionManual();}">
       <button class="btn-use" onclick="accionManual()">Usar este SKU</button>
     </div>
+    <div id="manual-err" class="hidden" style="color:var(--red);font-size:12px;margin-top:4px"></div>
     <div class="actions">
       <button class="btn btn-nav" onclick="irAnterior()">← Ant</button>
       <button class="btn btn-skip" onclick="omitir()">Omitir</button>
@@ -1083,12 +1085,34 @@ function pushSkuAml(clave,sku){
   if(!sku||!/^FB-\d+$/.test(sku))return;
   fetch('/herramientas/api/matcher/push-sku',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave,sku})}).catch(function(){});
 }
+// Validación de SKU manual (H-05): formato FB-<n> + existencia en el catálogo WC.
+// Los candidatos ya son válidos; solo se valida lo que el usuario escribe a mano.
+let _wcSkusSet=null;
+function wcSkuExiste(sku){
+  if(!_wcSkusSet&&Array.isArray(wcCatalogo)){
+    _wcSkusSet=new Set(wcCatalogo.map(w=>String(w.sku||'').trim()).filter(Boolean));
+  }
+  return _wcSkusSet?_wcSkusSet.has(sku):true; // sin catálogo cargado no bloquea
+}
+function validarSkuManual(sku){
+  if(!/^FB-\d+$/.test(sku))return{ok:false,error:'El SKU debe tener el formato FB-#### (ej. FB-12345).'};
+  if(!wcSkuExiste(sku))return{ok:false,error:'El SKU '+sku+' no existe en el catálogo de WooCommerce.'};
+  return{ok:true};
+}
+function mostrarErrorManual(msg){
+  const el=document.getElementById('manual-err');
+  if(!el)return;
+  if(msg){el.textContent='✗ '+msg;el.classList.remove('hidden');}
+  else{el.classList.add('hidden');}
+}
 function aprobar(){
   const item=TODOSmap.get(activo);if(!item)return;
   const manualVal=document.getElementById('manual-inp')?.value.trim()||'';
   const ci=selCand[activo]||0;
   const skuCand=item.candidatos[ci]?.wc_sku||'';
   const sku=manualVal||skuCand;if(!sku)return;
+  if(manualVal&&manualVal!==skuCand){const v=validarSkuManual(manualVal);if(!v.ok){mostrarErrorManual(v.error);return;}}
+  mostrarErrorManual('');
   const wc_nombre=item.candidatos[ci]&&item.candidatos[ci].wc_sku===sku?item.candidatos[ci].wc_nombre:'(manual)';
   decisiones[claveDe(item)]={sku,wc_nombre,accion:'asignar'};
   decisionesEstaSesion.add(claveDe(item));
@@ -1101,6 +1125,8 @@ function confirmar(){
   const ci=selCand[activo]||0;
   const skuCand=item.candidatos[ci]?.wc_sku||'';
   const sku=manualVal||skuCand;if(!sku)return;
+  if(manualVal&&manualVal!==skuCand){const v=validarSkuManual(manualVal);if(!v.ok){mostrarErrorManual(v.error);return;}}
+  mostrarErrorManual('');
   const wc_nombre=item.candidatos[ci]&&item.candidatos[ci].wc_sku===sku?item.candidatos[ci].wc_nombre:'(manual)';
   decisiones[claveDe(item)]={sku,wc_nombre,accion:'confirmar'};
   decisionesEstaSesion.add(claveDe(item));
@@ -1110,6 +1136,8 @@ function confirmar(){
 function accionManual(){
   const v=document.getElementById('manual-inp')?.value.trim();if(!v)return;
   const item=TODOSmap.get(activo);if(!item)return;
+  const val=validarSkuManual(v);if(!val.ok){mostrarErrorManual(val.error);return;}
+  mostrarErrorManual('');
   const accion=item.modo==='verificar'?'confirmar':'asignar';
   decisiones[claveDe(item)]={sku:v,wc_nombre:'(manual)',accion};
   decisionesEstaSesion.add(claveDe(item));
