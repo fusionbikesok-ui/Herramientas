@@ -437,4 +437,61 @@ describe('vista de detalle', () => {
     expect(res.status).toBe(200);
     expect(res.body.reactivables).toBe(1);
   });
+
+  // ─── Fase 2: triage de errores por diagnóstico ───
+  function mockItem(body) {
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (url.includes('/items?ids=')) return { status: 200, data: [{ code: 200, body }], headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
+  }
+
+  it('atencion/errores: diagnostica reactivable (pausada out_of_stock con stock web)', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-D1', 5, { idWoo: 401 });
+    seedDecision(db, 'MLD1|v1', 'FB-D1');
+    seedLog(db, { clave: 'MLD1|v1', estado: 'error', error: 'HTTP 400' });
+    mockItem({ id: 'MLD1', title: 'Pub D1', status: 'paused', sub_status: ['out_of_stock'], variations: [{ id: 'v1' }] });
+    const res = await request(app).get('/api/sync/atencion/errores');
+    const row = res.body.data.find(r => r.clave === 'MLD1|v1');
+    expect(row.diagnostico).toBe('reactivable');
+    expect(row.accion).toBe('reactivar');
+  });
+
+  it('atencion/errores: diagnostica estructura_cambiada (activa, la variación no existe)', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-D2', 5, { idWoo: 402 });
+    seedDecision(db, 'MLD2|v2', 'FB-D2');
+    seedLog(db, { clave: 'MLD2|v2', estado: 'error', error: 'HTTP 400' });
+    mockItem({ id: 'MLD2', title: 'Pub D2', status: 'active', sub_status: [], variations: [{ id: 'otra' }] });
+    const res = await request(app).get('/api/sync/atencion/errores');
+    const row = res.body.data.find(r => r.clave === 'MLD2|v2');
+    expect(row.diagnostico).toBe('estructura_cambiada');
+    expect(row.accion).toBe('desvincular');
+  });
+
+  it('descartar-error: la clave desaparece de errores y del contador del dashboard', async () => {
+    seedLog(db, { clave: 'MLD3|v3', estado: 'error', error: 'HTTP 400' });
+    // antes: cuenta como error
+    let dash = await request(app).get('/api/sync/dashboard');
+    expect(dash.body.atencion.errores_reales).toBe(1);
+    // descartar
+    const desc = await request(app).post('/api/sync/descartar-error').send({ claves: ['MLD3|v3'] });
+    expect(desc.body.ok).toBe(true);
+    // después: no está en la vista ni en el contador
+    const list = await request(app).get('/api/sync/atencion/errores');
+    expect(list.body.data.find(r => r.clave === 'MLD3|v3')).toBeUndefined();
+    dash = await request(app).get('/api/sync/dashboard');
+    expect(dash.body.atencion.errores_reales).toBe(0);
+  });
+
+  it('desvincular: borra el mapeo de la clave', async () => {
+    seedDecision(db, 'MLD4|v4', 'FB-D4');
+    const res = await request(app).post('/api/sync/desvincular').send({ clave: 'MLD4|v4' });
+    expect(res.body.ok).toBe(true);
+    expect(res.body.borradas).toBe(1);
+    const dec = db.prepare('SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE clave=?').get('MLD4|v4');
+    expect(dec.n).toBe(0);
+  });
 });

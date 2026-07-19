@@ -64,6 +64,13 @@ export function openDb(dbPath) {
     actualizado_en TEXT NOT NULL
   )`); } catch (_) {}
 
+  // Errores de sync descartados a mano (no accionables: sin stock real, pausa manual, etc.)
+  try { db.exec(`CREATE TABLE IF NOT EXISTS errores_descartados (
+    clave TEXT PRIMARY KEY,
+    motivo TEXT,
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+
   // Cobertura ── productos WC marcados a mano como "solo local" (no deben publicarse en ML)
   try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_exclusiones (
     id_woo INTEGER PRIMARY KEY,

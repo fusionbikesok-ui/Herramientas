@@ -644,6 +644,81 @@ async function enriquecerConMl(db, mlCfg, rows) {
   }
 }
 
+/**
+ * Diagnóstico en vivo de la vista de errores: re-consulta el estado real de cada publicación
+ * en ML y clasifica cada fila con su causa y la acción que la resuelve. No lanza (el llamador
+ * la envuelve en catch); si ML falla, las filas quedan sin diagnóstico (fallback en el front).
+ *
+ * diagnostico → accion:
+ *   reactivable (pausada out_of_stock con stock web)      → reactivar
+ *   sin_stock   (pausada out_of_stock sin stock web)      → descartar
+ *   pausada_manual (paused_by_seller) / pausada_otro      → descartar
+ *   estructura_cambiada (variación mapeada ya no existe)  → desvincular
+ *   reintentable (activa, debería sincronizar)            → reintentar
+ *   no_activa (cerrada / inaccesible)                     → descartar
+ */
+async function diagnosticarErrores(db, mlCfg, rows) {
+  if (!mlCfg?.clientId || !rows.length) return;
+
+  // Stock web disponible por clave (distingue reactivable vs sin_stock real).
+  const stockMap = new Map();
+  try {
+    for (const r of db.prepare(`${COMPUTED_STOCK_CTE} SELECT clave, stock_disponible_ml FROM computed`).all()) {
+      stockMap.set(r.clave, r.stock_disponible_ml);
+    }
+  } catch (_) { /* sin catálogo/mapeo todavía */ }
+
+  const itemIds = [...new Set(rows.map(r => r.item_id || String(r.clave || '').split('|')[0]).filter(Boolean))].slice(0, ENRICH_MAX_ITEMS);
+  const info = new Map();
+  for (let i = 0; i < itemIds.length; i += MULTIGET_CHUNK) {
+    const chunk = itemIds.slice(i, i + MULTIGET_CHUNK);
+    const resp = await mlFetch(db, mlCfg, 'get',
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,variations,secure_thumbnail,thumbnail`);
+    if (resp.status !== 200 || !Array.isArray(resp.data)) continue;
+    for (const entry of resp.data) {
+      if (entry.code === 200 && entry.body) info.set(String(entry.body.id), entry.body);
+    }
+  }
+
+  // Persistir título/miniatura traídos en el cache (best-effort), como enriquecerConMl.
+  try {
+    const upd = db.prepare("UPDATE ml_publicaciones_cache SET titulo=COALESCE(NULLIF(titulo,''),?), thumbnail=COALESCE(NULLIF(thumbnail,''),?) WHERE item_id=?");
+    db.transaction((entries) => {
+      for (const [id, b] of entries) upd.run(b.title || null, b.secure_thumbnail || b.thumbnail || null, id);
+    })([...info.entries()]);
+  } catch (_) { /* no crítico */ }
+
+  for (const r of rows) {
+    const itemId = r.item_id || String(r.clave || '').split('|')[0];
+    const varId = r.variation_id || String(r.clave || '').split('|')[1] || '';
+    if (!r.item_id) r.item_id = itemId;
+    r.stock_web = stockMap.has(r.clave) ? stockMap.get(r.clave) : null;
+
+    const it = info.get(itemId);
+    if (!it) { r.diagnostico = 'no_activa'; r.accion = 'descartar'; continue; }
+    if (!r.titulo) r.titulo = it.title || '';
+    if (!r.thumbnail) r.thumbnail = it.secure_thumbnail || it.thumbnail || '';
+    const status = it.status;
+    const sub = Array.isArray(it.sub_status) ? it.sub_status.join(',') : (it.sub_status || '');
+    r.ml_status = status; r.ml_sub_status = sub;
+    const vars = Array.isArray(it.variations) ? it.variations : [];
+
+    if (status === 'paused') {
+      if (/paused_by_seller/.test(sub)) { r.diagnostico = 'pausada_manual'; r.accion = 'descartar'; }
+      else if (/out_of_stock/.test(sub)) {
+        if (r.stock_web > 0) { r.diagnostico = 'reactivable'; r.accion = 'reactivar'; }
+        else { r.diagnostico = 'sin_stock'; r.accion = 'descartar'; }
+      } else { r.diagnostico = 'pausada_otro'; r.accion = 'descartar'; }
+    } else if (status === 'active') {
+      const existeVar = varId ? vars.some(x => String(x.id) === String(varId)) : vars.length === 0;
+      if (existeVar) { r.diagnostico = 'reintentable'; r.accion = 'reintentar'; }
+      else { r.diagnostico = 'estructura_cambiada'; r.accion = 'desvincular'; }
+    } else {
+      r.diagnostico = 'no_activa'; r.accion = 'descartar';
+    }
+  }
+}
+
 // ─── syncRouter ───────────────────────────────────────────────────────────────
 
 export function syncRouter(db, cfg) {
@@ -769,7 +844,8 @@ export function syncRouter(db, cfg) {
     const erroresReales = db.prepare(
       `SELECT COUNT(DISTINCT clave) n FROM sync_log
        WHERE estado IN ('error','agotado') AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM ml_stock_estado)`
+         AND clave NOT IN (SELECT clave FROM ml_stock_estado)
+         AND clave NOT IN (SELECT clave FROM errores_descartados)`
     ).get().n;
     const catMap = { sin_mapeo: sinMapeo, remapeo_requerido: remapeoReq, requiere_atencion_ml: requiereAtencion };
 
@@ -872,7 +948,7 @@ export function syncRouter(db, cfg) {
     },
     errores: {
       estados: "'error','agotado'",
-      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado)",
+      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado) AND s.clave NOT IN (SELECT clave FROM errores_descartados)",
     },
   };
 
@@ -893,12 +969,38 @@ export function syncRouter(db, cfg) {
       LIMIT 500
     `).all();
 
-    // Enriquecer on-demand con título + miniatura desde ML las filas que no los tengan
-    // en cache (publicaciones que erraron y no fueron traídas por el Matcher). Degrada
-    // elegante: si ML falla o no hay token, se devuelven las filas tal cual.
-    await enriquecerConMl(db, mlCfg, rows).catch(() => {});
+    // Categoría "errores": diagnóstico en vivo (clasifica cada fila con su causa real y su
+    // acción). El resto: enriquecimiento de título/miniatura. Ambos degradan elegante si ML falla.
+    if (req.params.cat === 'errores') {
+      await diagnosticarErrores(db, mlCfg, rows).catch(() => {});
+    } else {
+      await enriquecerConMl(db, mlCfg, rows).catch(() => {});
+    }
 
     res.json({ ok: true, cat: req.params.cat, total: rows.length, data: rows });
+  });
+
+  // Descarta errores no accionables (sin stock real, pausa manual, publicación cerrada): dejan
+  // de contar como error y desaparecen de la vista. Reaparecen si vuelven a errar más adelante.
+  router.post('/descartar-error', (req, res) => {
+    const { claves, motivo } = req.body || {};
+    const arr = Array.isArray(claves) ? claves.filter(c => typeof c === 'string' && c) : [];
+    if (!arr.length) return res.status(400).json({ ok: false, error: 'claves requerido' });
+    const ins = db.prepare(`INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES (?, ?, ?)
+      ON CONFLICT(clave) DO UPDATE SET motivo=excluded.motivo, creado_en=excluded.creado_en`);
+    const m = typeof motivo === 'string' ? motivo.slice(0, 200) : null;
+    db.transaction((list) => { for (const c of list) ins.run(c, m, now()); })(arr);
+    res.json({ ok: true, descartados: arr.length });
+  });
+
+  // Desvincula una clave (borra su mapeo) para que el Matcher la vuelva a linkear a la
+  // variación/publicación correcta. Para el caso "la variación mapeada ya no existe".
+  router.post('/desvincular', (req, res) => {
+    const { clave } = req.body || {};
+    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
+    const info = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
+    logSync(db, { direccion: 'wc_ml', clave, estado: 'remapeo_requerido', error: 'desvinculada manualmente para re-mapear' });
+    res.json({ ok: true, borradas: info.changes });
   });
 
   // Reintenta la sincronización de stock de UN solo ítem (para resolver un error puntual).
