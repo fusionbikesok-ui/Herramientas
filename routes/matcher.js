@@ -8,6 +8,15 @@ const MULTIGET_CHUNK = 20;   // ML permite hasta 20 ids por multiget
 const SEARCH_LIMIT = 100;    // máximo por página de items/search
 const CALL_DELAY_MS = 350;   // respeta rate limit (mlFetch ya tiene timeout)
 
+// Estado del refresco de publicaciones (async, no bloqueante). El scan completo tarda
+// 1-3 min y superaba el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de
+// error que el frontend no podía parsear. Ahora el POST arranca el trabajo y devuelve 202
+// al toque; el frontend sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+let _refresco = {
+  running: false, scope: null, phase: null, done: 0, total: 0,
+  error: null, resultado: null, actualizado_en: null, iniciado_en: null,
+};
+
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
@@ -71,10 +80,11 @@ async function listarItemIds(db, cfg, status) {
  * extrae atributos estructurados (COLOR, SIZE) y SELLER_SKU, y las cachea.
  * Devuelve { total, items, variaciones }.
  */
-export async function refrescarPublicacionesMl(db, cfg) {
+export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   if (!mlCfgOk(cfg)) throw new Error('Configuración de MercadoLibre incompleta');
 
   // 1) Reunir todos los item_id (activos + pausados), sin duplicados
+  onProgress?.({ phase: 'listando', done: 0, total: 0 });
   const idSet = new Set();
   for (const st of STATUSES_A_TRAER) {
     const ids = await listarItemIds(db, cfg, st);
@@ -102,6 +112,7 @@ export async function refrescarPublicacionesMl(db, cfg) {
       if (entry.code !== 200 || !entry.body) continue;
       filas.push(...aplanarItem(entry.body));
     }
+    onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, allIds.length), total: allIds.length });
     await sleep(CALL_DELAY_MS);
   }
 
@@ -139,7 +150,7 @@ function prepararUpsertCache(db) {
  * borra el resto del cache — un subconjunto no puede saber si las demás publicaciones
  * siguen vigentes. Devuelve { total, items, variaciones }.
  */
-export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds) {
+export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress) {
   if (!mlCfgOk(cfg)) throw new Error('Configuración de MercadoLibre incompleta');
   const ids = [...new Set((itemIds || []).map(String).filter(Boolean))];
   if (ids.length === 0) return { total: 0, items: 0, variaciones: 0 };
@@ -158,6 +169,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds) {
       if (entry.code !== 200 || !entry.body) continue;
       filas.push(...aplanarItem(entry.body));
     }
+    onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, ids.length), total: ids.length });
     await sleep(CALL_DELAY_MS);
   }
 
@@ -293,22 +305,59 @@ export function matcherRouter(db, cfg) {
     res.json({ ok: true });
   });
 
-  // Trae las publicaciones desde la API de ML y las cachea.
-  // body { scope:'atencion' } → refresco acotado a las publicaciones sin mapeo /
-  // a re-mapear (rápido); sin scope → refresco total del catálogo.
-  router.post('/refrescar-ml', async (req, res) => {
-    try {
-      let r;
-      if (req.body?.scope === 'atencion') {
-        const itemIds = [...new Set(clavesNecesitanAtencion(db).map(c => String(c).split('|')[0]))];
-        r = await refrescarPublicacionesMlAcotado(db, mlCfg, itemIds);
-      } else {
-        r = await refrescarPublicacionesMl(db, mlCfg);
-      }
-      res.json({ ok: true, ...r });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
+  // Arranca el refresco de publicaciones y devuelve 202 sin bloquear (evita el timeout de
+  // nginx). body { scope:'atencion' } → refresco acotado (rápido); sin scope → refresco total.
+  // El progreso se consulta en GET /refrescar-ml/estado.
+  router.post('/refrescar-ml', (req, res) => {
+    if (_refresco.running) {
+      return res.status(409).json({ ok: false, running: true, error: 'Ya hay un refresco en curso' });
     }
+    const scope = req.body?.scope === 'atencion' ? 'atencion' : 'all';
+    _refresco = {
+      running: true, scope, phase: 'iniciando', done: 0, total: 0,
+      error: null, resultado: null, actualizado_en: null, iniciado_en: now(),
+    };
+    const onProgress = (p) => { _refresco.phase = p.phase; _refresco.done = p.done || 0; _refresco.total = p.total || 0; };
+
+    // Corre en background; el handler ya respondió. Si ML falla, queda registrado en _refresco.error.
+    (async () => {
+      try {
+        let r;
+        if (scope === 'atencion') {
+          const itemIds = [...new Set(clavesNecesitanAtencion(db).map(c => String(c).split('|')[0]))];
+          r = await refrescarPublicacionesMlAcotado(db, mlCfg, itemIds, onProgress);
+        } else {
+          r = await refrescarPublicacionesMl(db, mlCfg, onProgress);
+        }
+        _refresco.resultado = r;
+        _refresco.actualizado_en = now();
+      } catch (e) {
+        _refresco.error = e.message;
+      } finally {
+        _refresco.running = false;
+        _refresco.phase = _refresco.error ? 'error' : 'listo';
+      }
+    })();
+
+    res.status(202).json({ ok: true, running: true, scope });
+  });
+
+  // Estado del refresco (para sondeo del frontend). Devuelve progreso y último resultado.
+  router.get('/refrescar-ml/estado', (req, res) => {
+    const { running, scope, phase, done, total, error, resultado, actualizado_en } = _refresco;
+    res.json({ ok: true, running, scope, phase, done, total, error, resultado, actualizado_en });
+  });
+
+  // Mapeos huérfanos: decisiones activas cuya publicación ya no está en el cache (cerrada/
+  // borrada o fuera del scan active+paused). No se borran — se listan para revisión manual.
+  router.get('/huerfanos', (req, res) => {
+    const filtro = `d.accion IN ('asignar','confirmar')
+      AND d.clave NOT IN (SELECT clave FROM ml_publicaciones_cache)`;
+    const total = db.prepare(`SELECT COUNT(*) n FROM sku_matcher_decisiones d WHERE ${filtro}`).get().n;
+    const data = db.prepare(
+      `SELECT d.clave, d.sku, d.wc_nombre FROM sku_matcher_decisiones d WHERE ${filtro} ORDER BY d.clave LIMIT 500`
+    ).all();
+    res.json({ ok: true, total, data });
   });
 
   // Escribe el SKU de UNA decisión en la publicación de ML (usado al confirmar)

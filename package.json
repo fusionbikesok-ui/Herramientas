@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "audit": "node scripts/audit-matcher.mjs"
   },
   "keywords": [],
   "author": "",
