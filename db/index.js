@@ -15,6 +15,8 @@ export function openDb(dbPath) {
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
+  // Atributos estructurados de la variación WC (color/talle) — evita re-parsear el nombre en el matcher.
+  try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN atributos_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE recepciones ADD COLUMN confirmado_en TEXT'); } catch (_) {}
   try { db.exec(`CREATE TABLE IF NOT EXISTS skus_config_ml (
     sku TEXT PRIMARY KEY,
