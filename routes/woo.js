@@ -95,6 +95,16 @@ export async function refrescarCatalogo(db, cfg) {
     }
   });
   tx(productos);
+
+  // H-08: chequeo de calidad de datos WC — avisa (no bloquea) problemas upstream que
+  // ensucian el sync/matcher. Los productos 'variable' (padres) no tienen SKU a propósito,
+  // se excluyen del conteo de SKU vacío.
+  const negs = db.prepare('SELECT COUNT(*) n FROM catalogo_cache WHERE stock<0').get().n;
+  const sinSku = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE tipo<>'variable' AND COALESCE(sku,'')=''").get().n;
+  if (negs || sinSku) {
+    console.warn(`[woo] calidad catálogo: ${negs} con stock negativo, ${sinSku} sin SKU (no-variable). Revisar en WooCommerce.`);
+  }
+
   return productos.length;
 }
 

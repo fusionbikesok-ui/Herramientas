@@ -343,6 +343,7 @@ let wcCatalogo=null,archivoML=null;
 let TODOS=[],TODOSmap=new Map();
 let decisiones={};   // clave -> {sku,wc_nombre,accion:'asignar'|'confirmar'|'omitir'}
 let decisionesEstaSesion=new Set(); // claves modificadas en esta sesión (para exportar solo cambios)
+let autoConfirmadas=new Set(); // claves confirmadas automáticamente por seller_sku (para revisar, H-09)
 let progresoImportado={};
 let filtro='all',busqueda='',activo=null,selCand={};
 let filtroEstadoPub='todas'; // todas | activa | pausada — filtro por estado de la publicación en ML
@@ -621,6 +622,7 @@ function autoConfirmarSellerSku(){
     if(item._desde_api&&item.modo==='verificar'&&item.sku_actual&&!decisiones[clave]){
       const c0=item.candidatos&&item.candidatos[0];
       decisiones[clave]={sku:item.sku_actual,wc_nombre:(c0&&c0.wc_nombre)||item.sku_actual,accion:'confirmar'};
+      autoConfirmadas.add(clave);
       n++;
     }
   }
@@ -879,6 +881,7 @@ const FDEFS=[
   {f:'perfecto',  label:()=>`Color+Talle ✓ (${TODOS.filter(esPerfecto).length})`,cls:''},
   {f:'pending',   label:()=>`Pendientes sin decisión (${TODOS.filter(d=>!(claveDe(d) in decisiones)).length})`},
   {f:'sin_candidato', label:()=>`Sin candidato (${TODOS.filter(d=>!d.candidatos.length).length})`,cls:''},
+  {f:'autoconf',  label:()=>`Auto-confirmadas (${autoConfirmadas.size})`,cls:'mode-verificar',soloSi:()=>autoConfirmadas.size>0},
 ];
 function esPerfecto(d){const c=d.candidatos[0];return d.ml_es_variante&&c&&c.color_ok&&c.talle_ok;}
 function getFiltered(){
@@ -889,6 +892,7 @@ function getFiltered(){
       filtro==='revisar'?d.modo==='verificar'&&(d.score_confianza||0)<0.7:
       filtro==='perfecto'?esPerfecto(d):
       filtro==='pending'?!(claveDe(d) in decisiones):
+      filtro==='autoconf'?autoConfirmadas.has(claveDe(d)):
       filtro==='sin_candidato'?!d.candidatos.length:true;
     // Filtro por estado de la publicación en ML (se combina en AND con el filtro de modo)
     if(ok&&filtroEstadoPub!=='todas'){const st=(d.ml_status||'').toLowerCase();ok=filtroEstadoPub==='activa'?st==='active':st==='paused';}
@@ -1028,7 +1032,7 @@ function renderDetail(){
       <div class="section-label">Publicación MercadoLibre</div>
       <div class="ml-card">
         <div class="ml-id">${esc(item.ml_item_id)}${item.ml_variation_id?' / VAR '+esc(item.ml_variation_id):''}${badgeEstado(item)}</div>
-        ${item.ml_permalink?`<a href="${esc(item.ml_permalink)}" target="_blank" rel="noopener" style="display:inline-block;margin:4px 0;font-size:12px;font-weight:600;color:#4C7DF0;text-decoration:none">Abrir en ML ↗</a>`:''}
+        ${item.ml_permalink?`<a href="${esc(item.ml_permalink)}" target="_blank" rel="noopener" title="${item.ml_catalogo?'Abre la ficha de catálogo en ML':'Abre la publicación en ML'}" style="display:inline-block;margin:4px 0;font-size:12px;font-weight:600;color:#4C7DF0;text-decoration:none">Abrir en ML ↗${item.ml_catalogo?' <span style="color:var(--muted);font-weight:400">(catálogo)</span>':''}</a>`:''}
         <div class="ml-name">${esc(item.ml_title)}</div>
         ${item.ml_variations?`<div class="ml-vars">🔀 ${esc(item.ml_variations)}</div>`:''}
         <div class="ml-type">${item.ml_es_variante?'Variante':'Producto simple'}</div>
@@ -1228,7 +1232,7 @@ function iniciarApp(){
   document.getElementById('loader-screen').classList.add('hidden');
   document.getElementById('app-screen').classList.remove('hidden');
   document.getElementById('filters-bar').innerHTML=
-    FDEFS.map((ff,i)=>`<button class="filter-btn ${i===0?'active':''} ${ff.cls||''}" data-f="${ff.f}" onclick="setFilter(this)">${ff.label()}</button>`).join('')
+    FDEFS.filter(ff=>!ff.soloSi||ff.soloSi()).map((ff,i)=>`<button class="filter-btn ${i===0?'active':''} ${ff.cls||''}" data-f="${ff.f}" onclick="setFilter(this)">${ff.label()}</button>`).join('')
     +`<select class="filter-btn" title="Estado de la publicación en ML" onchange="setFilterEstado(this.value)">`
     +`<option value="todas">Estado: todas</option>`
     +`<option value="activa">Solo activas</option>`
