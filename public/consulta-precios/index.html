@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Consulta de Precios — Fusion Bikes</title>
+<style>
+  :root{
+    --azul:#2DB8E8;--azul-dk:#1C93BD;--bg:#0C0F16;
+    --panel:#141A25;--panel2:#1B2235;--border:#24304A;--border2:#2E3B57;
+    --txt:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
+    --green:#34D399;--amber:#FBBF24;--red:#F87171;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;}
+  .wrap{max-width:640px;margin:0 auto;padding:16px 16px 60px;}
+  a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;margin-bottom:12px;}
+  a.back:hover{color:var(--azul);}
+  h1{font-size:1.4rem;font-weight:800;letter-spacing:-.03em;margin:4px 0 12px;}
+  h1 em{font-style:normal;color:var(--azul);}
+  .scanrow{display:flex;gap:8px;}
+  #q{flex:1;font-size:20px;padding:14px 12px;border-radius:10px;border:2px solid var(--azul);background:var(--bg);color:var(--txt);font-weight:700;outline:none;box-shadow:0 0 0 3px rgba(45,184,232,.12);}
+  #q::placeholder{color:var(--muted);font-weight:400;}
+  .btn{background:var(--azul);color:#06131C;border:0;border-radius:10px;padding:0 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;}
+  .btn:hover{background:var(--azul-dk);}
+  .btn.sec{background:var(--panel2);color:var(--txt);}
+  .btn.sec:hover{background:var(--border2);}
+  .hint{font-size:12px;color:var(--muted);margin:8px 2px 0;}
+  .result{margin-top:16px;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:16px;display:flex;gap:14px;}
+  .card img{width:96px;height:96px;border-radius:10px;object-fit:cover;background:var(--panel2);border:1px solid var(--border);flex-shrink:0;}
+  .card .noimg{width:96px;height:96px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted2);font-size:11px;}
+  .card .info{min-width:0;flex:1;}
+  .card .marca{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--azul);}
+  .card .tit{font-size:15px;font-weight:700;line-height:1.25;margin:2px 0 4px;}
+  .card .cat{font-size:12px;color:var(--muted);}
+  .card .precio{font-size:30px;font-weight:800;color:var(--green);margin-top:8px;font-variant-numeric:tabular-nums;}
+  .card .meta{font-size:11.5px;color:var(--muted2);font-family:ui-monospace,Menlo,monospace;margin-top:6px;}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;margin-left:6px;}
+  .b-sku{background:rgba(45,184,232,.14);color:var(--azul);}
+  .b-ean{background:rgba(52,211,153,.14);color:var(--green);}
+  .msg{margin-top:16px;padding:16px;border-radius:12px;border:1px solid var(--border);background:var(--panel);font-size:14px;}
+  .msg.warn{border-color:rgba(251,191,36,.4);}
+  .msg.err{border-color:rgba(248,113,113,.4);color:var(--red);}
+  .learn{margin-top:10px;}
+  .learn input{width:100%;font-size:15px;padding:10px 12px;border-radius:9px;border:1px solid var(--border2);background:var(--bg);color:var(--txt);outline:none;}
+  .learn input:focus{border-color:var(--azul);}
+  .sugs{border:1px solid var(--border);border-radius:9px;margin-top:6px;overflow:hidden;background:var(--panel2);}
+  .sug{padding:9px 11px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--border);}
+  .sug:last-child{border-bottom:0;}
+  .sug:hover{background:var(--border2);}
+  .sug b{color:var(--azul);font-family:ui-monospace,monospace;}
+  .hist{margin-top:22px;}
+  .hist-h{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted2);margin-bottom:8px;}
+  .hist-row{display:flex;justify-content:space-between;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:9px;margin-bottom:6px;font-size:13px;cursor:pointer;background:var(--panel);}
+  .hist-row:hover{border-color:var(--border2);}
+  .hist-row .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt);}
+  .hist-row .p{color:var(--green);font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  .tools{margin-top:26px;border-top:1px solid var(--border);padding-top:14px;}
+  .tools summary{font-size:12px;color:var(--muted);cursor:pointer;}
+  .tools .btn{margin-top:10px;}
+  .tools .out{font-size:12px;color:var(--muted);margin-top:8px;}
+  /* Modal cámara */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
+  .modal.open{display:flex;}
+  .modal-box{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;max-width:460px;width:100%;}
+  .modal-box video{width:100%;border-radius:10px;background:#000;display:block;}
+  .modal-box .sub{color:var(--muted);font-size:13px;margin:10px 0;text-align:center;}
+  .modal-box .cerrar{width:100%;font-size:14px;font-weight:700;padding:10px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--txt);cursor:pointer;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
+  <h1>Consulta de <em>Precios</em></h1>
+
+  <div class="scanrow">
+    <input id="q" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+           placeholder="Escaneá o tipeá SKU / EAN…">
+    <button class="btn" id="btn-buscar">Buscar</button>
+    <button class="btn sec" id="btn-cam">📷</button>
+  </div>
+  <div class="hint">Escaneá con el lector, tipeá con el teclado o usá la cámara 📷. Después de cada consulta la caja se vacía para el próximo código.</div>
+
+  <div id="result" class="result"></div>
+
+  <div class="hist" id="hist" style="display:none">
+    <div class="hist-h">Consultas recientes</div>
+    <div id="hist-list"></div>
+  </div>
+
+  <details class="tools">
+    <summary>Herramientas</summary>
+    <button class="btn sec" id="btn-import">Importar EANs del Contador de inventario</button>
+    <div class="out" id="import-out"></div>
+  </details>
+</div>
+
+<div class="modal" id="cam-modal">
+  <div class="modal-box">
+    <video id="cam-video" playsinline muted></video>
+    <div class="sub" id="cam-sub">Apuntá al código de barras…</div>
+    <button class="cerrar" id="cam-cerrar">Cerrar cámara</button>
+  </div>
+</div>
+
+<script type="module" src="/lib/scanner.js"></script>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function fmtPrecio(n){
+  if(n==null) return 'sin precio';
+  return '$ ' + Number(n).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:2});
+}
+
+var qEl = document.getElementById('q');
+var resultEl = document.getElementById('result');
+var historial = [];
+
+function focusInput(){ try{ qEl.focus(); qEl.select(); }catch(e){} }
+
+function cardHtml(p, tipo){
+  var img = p.img ? '<img src="'+esc(p.img)+'" alt="">' : '<div class="noimg">sin foto</div>';
+  var cat = (p.categorias && p.categorias.length) ? esc(p.categorias.join(' · ')) : '';
+  var badge = tipo === 'ean' ? '<span class="badge b-ean">por EAN</span>' : '<span class="badge b-sku">por SKU</span>';
+  return '<div class="card">' + img +
+    '<div class="info">' +
+      (p.marca ? '<div class="marca">'+esc(p.marca)+'</div>' : '') +
+      '<div class="tit">'+esc(p.nombre)+badge+'</div>' +
+      (cat ? '<div class="cat">'+cat+'</div>' : '') +
+      '<div class="precio">'+fmtPrecio(p.precio)+'</div>' +
+      '<div class="meta">'+esc(p.sku)+' · stock '+(p.stock==null?'?':p.stock)+'</div>' +
+    '</div></div>';
+}
+
+function pushHistorial(p, tipo){
+  historial.unshift({ p:p, tipo:tipo });
+  if(historial.length > 12) historial.pop();
+  var host = document.getElementById('hist');
+  var list = document.getElementById('hist-list');
+  list.innerHTML = historial.map(function(h, i){
+    return '<div class="hist-row" data-i="'+i+'"><span class="t">'+esc(h.p.nombre)+'</span>' +
+      '<span class="p">'+fmtPrecio(h.p.precio)+'</span></div>';
+  }).join('');
+  host.style.display = 'block';
+  Array.prototype.forEach.call(list.querySelectorAll('.hist-row'), function(row){
+    row.onclick = function(){ var h = historial[+row.dataset.i]; resultEl.innerHTML = cardHtml(h.p, h.tipo); };
+  });
+}
+
+function mostrarEncontrado(p, tipo){
+  resultEl.innerHTML = cardHtml(p, tipo);
+  pushHistorial(p, tipo);
+}
+
+// ---- Flujo EAN nuevo / huérfano: pedir el SKU ----
+function mostrarAprender(ean, textoTitulo){
+  resultEl.innerHTML =
+    '<div class="msg warn">' +
+      '<div>'+esc(textoTitulo)+'</div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-top:4px">EAN: '+esc(ean)+'</div>' +
+      '<div class="learn">' +
+        '<input id="sku-input" placeholder="Buscá el SKU o nombre del producto…" autocomplete="off">' +
+        '<div class="sugs" id="sugs" style="display:none"></div>' +
+      '</div>' +
+    '</div>';
+  var input = document.getElementById('sku-input');
+  var sugs = document.getElementById('sugs');
+  var t = null;
+  input.oninput = function(){
+    clearTimeout(t);
+    var q = input.value.trim();
+    if(!q){ sugs.style.display='none'; return; }
+    t = setTimeout(async function(){
+      var r = await fetch('/api/consulta-precios/buscar-sku?q='+encodeURIComponent(q));
+      var d = await r.json();
+      if(!d.ok || !d.data.length){ sugs.style.display='none'; return; }
+      sugs.innerHTML = d.data.map(function(row){
+        return '<div class="sug" data-sku="'+esc(row.sku)+'"><b>'+esc(row.sku)+'</b> — '+esc(row.nombre)+'</div>';
+      }).join('');
+      sugs.style.display='block';
+      Array.prototype.forEach.call(sugs.querySelectorAll('.sug'), function(el){
+        el.onclick = function(){ ensenarEan(ean, el.dataset.sku); };
+      });
+    }, 220);
+  };
+  input.focus();
+}
+
+async function ensenarEan(ean, sku){
+  var r = await fetch('/api/consulta-precios/ean', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ ean: ean, sku: sku }),
+  });
+  var d = await r.json();
+  if(!d.ok){ resultEl.innerHTML = '<div class="msg err">'+esc(d.error||'No se pudo guardar')+'</div>'; return; }
+  mostrarEncontrado(d.producto, 'ean');
+  focusInput();
+}
+
+// ---- Búsqueda ----
+async function buscar(codigo){
+  var q = String(codigo == null ? qEl.value : codigo).trim();
+  if(!q) return;
+  var r = await fetch('/api/consulta-precios/buscar?q='+encodeURIComponent(q));
+  var d = await r.json();
+  qEl.value = '';
+  if(d.found){ mostrarEncontrado(d.producto, d.tipo); focusInput(); return; }
+  if(d.needsSku){ mostrarAprender(d.ean, 'EAN nuevo — ¿a qué producto pertenece?'); return; }
+  if(d.skuHuerfano){ mostrarAprender(d.ean, 'Este EAN apuntaba a un SKU que ya no está ('+d.skuHuerfano+'). Re-asignalo:'); return; }
+  resultEl.innerHTML = '<div class="msg">No se encontró nada para <b>'+esc(q)+'</b>. Revisá el código.</div>';
+  focusInput();
+}
+
+document.getElementById('btn-buscar').onclick = function(){ buscar(); };
+qEl.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); buscar(); } });
+
+// ---- Cámara (escaneo continuo) ----
+var modal = document.getElementById('cam-modal');
+document.getElementById('btn-cam').onclick = function(){
+  modal.classList.add('open');
+  window.Scanner.open({
+    video: document.getElementById('cam-video'),
+    mode: 'continuous',
+    onCode: function(code){
+      document.getElementById('cam-sub').textContent = '✓ ' + code;
+      buscar(code);
+    },
+    onError: function(msg){ document.getElementById('cam-sub').textContent = msg; },
+  });
+};
+function cerrarCam(){ window.Scanner.close(); modal.classList.remove('open'); focusInput(); }
+document.getElementById('cam-cerrar').onclick = cerrarCam;
+
+// ---- Importar EANs del Contador de inventario ----
+function pareceEanCliente(code){ return /^\d+$/.test(code) && [8,12,13,14].includes(code.length); }
+document.getElementById('btn-import').onclick = async function(){
+  var out = document.getElementById('import-out');
+  var raw;
+  try{ raw = JSON.parse(localStorage.getItem('fb_inv_descmap_v1') || '{}'); }catch(e){ raw = {}; }
+  var pares = [];
+  for(var code in raw){
+    if(!Object.prototype.hasOwnProperty.call(raw, code)) continue;
+    var e = raw[code] || {};
+    var other = String(e.other || '').trim();
+    if(!other) continue;
+    if(pareceEanCliente(code)) pares.push({ ean: code, sku: other });
+    else pares.push({ ean: other, sku: code });
+  }
+  pares = pares.filter(function(p){ return p.ean && p.sku; });
+  if(!pares.length){ out.textContent = 'No se encontró ningún mapa EAN↔SKU en este navegador.'; return; }
+  var r = await fetch('/api/consulta-precios/importar', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ pares: pares }),
+  });
+  var d = await r.json();
+  out.textContent = d.ok ? ('Importados '+d.importados+' de '+d.recibidos+' pares.') : ('Error: '+(d.error||''));
+};
+
+// Auth gate + foco inicial
+fetch('/api/auth/me').then(function(r){
+  if(r.status === 401){ window.location.href = '/herramientas/login/'; return; }
+  focusInput();
+});
+</script>
+</body>
+</html>
