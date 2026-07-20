@@ -1,4 +1,5 @@
 import express from 'express';
+import { esNoVendible } from '../lib/cobertura.js';
 
 export function coberturaRouter(db) {
   const router = express.Router();
@@ -19,7 +20,7 @@ export function coberturaRouter(db) {
 
     // Solo en WC: productos sin ningún match en ML (activo)
     const soloWc = db.prepare(`
-      SELECT c.id_woo, c.nombre, c.sku, c.stock, c.tipo
+      SELECT c.id_woo, c.nombre, c.sku, c.stock, c.tipo, c.categorias_json
       FROM catalogo_cache c
       WHERE (c.sku IS NULL OR c.sku = ''
         OR NOT EXISTS (
@@ -29,7 +30,10 @@ export function coberturaRouter(db) {
       )
       AND c.tipo != 'variable'
       ORDER BY c.nombre
-    `).all();
+    `).all().map(({ categorias_json, ...row }) => ({
+      ...row,
+      no_vendible: esNoVendible({ categorias_json }) ? 1 : 0,
+    }));
 
     // Solo en ML: matches que apuntan a un SKU que ya no existe en WC
     const soloMl = db.prepare(`
