@@ -7,6 +7,8 @@ import { guardarArchivo } from '../utils/storage.js';
 import {
   normalizarEnvio, resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
+import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
+import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -472,31 +474,30 @@ export function preparacionRouter(db, cfg) {
 
 // Un pedido WC → entrada de la cola de pendientes con ítems enriquecidos.
 function armarPendienteWeb(db, order) {
-  const esMl = (order.meta_data || []).some(m => m.key === '_ml_order_id');
-  const items = (order.line_items || []).map(li => {
-    const idWoo = li.variation_id || li.product_id;
-    const cache = db.prepare('SELECT sku, categorias_json FROM catalogo_cache WHERE id_woo=?').get(idWoo) || {};
-    let categoria = '';
-    try { categoria = (JSON.parse(cache.categorias_json || '[]') || []).join(' | '); } catch (_) {}
+  const ov = normalizarPedidoWc(order);
+  const items = ov.items.map(it => {
+    const idWoo = it.variation_id_wc || it.product_id;
+    const fila = db.prepare('SELECT sku, categorias_json FROM catalogo_cache WHERE id_woo=?').get(idWoo) || {};
+    const producto = productoDesdeFilaCatalogo(fila);
     return {
-      line_item_id: li.id,
-      product_id: li.product_id,
-      variation_id: li.variation_id || null,
-      sku: li.sku || cache.sku || '',
-      nombre: li.name,
-      categoria,
-      cantidad: li.quantity,
+      line_item_id: it.line_item_id,
+      product_id: it.product_id,
+      variation_id: it.variation_id_wc,
+      sku: it.sku || producto.sku || '',
+      nombre: it.nombre,
+      categoria: producto.categorias.join(' | '),
+      cantidad: it.cantidad,
     };
   });
   const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(`web:${order.id}`);
   return {
     canal: 'web',
-    espejo_ml: esMl,
+    espejo_ml: ov.espejo_ml,
     wc_order_id: order.id,
-    numero_pedido: String(order.number || order.id),
-    comprador: `${order.billing?.first_name || ''} ${order.billing?.last_name || ''}`.trim(),
-    fecha: order.date_created,
-    estado_wc: order.status,
+    numero_pedido: ov.numero,
+    comprador: `${ov.comprador.nombre} ${ov.comprador.apellido}`.trim(),
+    fecha: ov.fecha,
+    estado_wc: ov.estado,
     items,
     preparacion_id: prep?.id || null,
     estado_preparacion: prep?.estado || null,
@@ -506,17 +507,16 @@ function armarPendienteWeb(db, order) {
 
 // Ítems de una orden ML mapeados a SKU/categoría de WC (best effort).
 function itemsDesdeOrdenMl(db, orden) {
-  return (orden.order_items || []).map(oi => {
-    const itemId = String(oi.item?.id || '');
-    const varId = oi.item?.variation_id || '';
-    const sku = skuDesdeMl(db, itemId, varId) || oi.item?.seller_sku || '';
+  const ov = normalizarOrdenMl(orden);
+  return ov.items.map(it => {
+    const sku = skuDesdeMl(db, it.item_id_ml, it.variation_id_ml) || it.seller_sku || '';
     let categoria = '';
     let productId = null;
     if (sku) {
-      const cache = db.prepare('SELECT id_woo, categorias_json FROM catalogo_cache WHERE sku=?').get(sku);
-      if (cache) {
-        productId = cache.id_woo;
-        try { categoria = (JSON.parse(cache.categorias_json || '[]') || []).join(' | '); } catch (_) {}
+      const fila = db.prepare('SELECT id_woo, categorias_json FROM catalogo_cache WHERE sku=?').get(sku);
+      if (fila) {
+        productId = fila.id_woo;
+        categoria = productoDesdeFilaCatalogo(fila).categorias.join(' | ');
       }
     }
     return {
@@ -524,9 +524,9 @@ function itemsDesdeOrdenMl(db, orden) {
       product_id: productId,
       variation_id: null,
       sku,
-      nombre: oi.item?.title || '',
+      nombre: it.nombre,
       categoria,
-      cantidad: oi.quantity || 1,
+      cantidad: it.cantidad,
     };
   });
 }
@@ -554,14 +554,15 @@ async function pendientesMl(db, mlCfg) {
     if (envio.status !== 'ready_to_ship') continue;
     if (!esEnvioLocal(envio.logistic_type)) continue;
 
-    const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(String(orden.id));
+    const ov = normalizarOrdenMl(orden);
+    const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
     out.push({
       canal: 'ml',
-      ml_order_id: String(orden.id),
+      ml_order_id: ov.ml_order_id,
       wc_order_id: vinculo?.wc_order_id || null,
-      numero_pedido: String(orden.id),
-      comprador: orden.buyer?.nickname || 'Comprador ML',
-      fecha: orden.date_created,
+      numero_pedido: ov.numero,
+      comprador: ov.comprador.nickname || 'Comprador ML',
+      fecha: ov.fecha,
       logistic_type: envio.logistic_type,
       substatus: envio.substatus || null,
       items: itemsDesdeOrdenMl(db, orden),
