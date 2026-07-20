@@ -13,6 +13,7 @@ import { skuDesdeMl, publicacionesDesdeWc } from '../lib/mlMapeo.js';
 import { buscarEnCache, buildWooPath } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
+import { armarClaveMl, partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -183,7 +184,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     const itemId = String(item.item?.id ?? '');
     const varId = item.item?.variation_id ?? '';
     const qty = item.quantity ?? 1;
-    const clave = `${itemId}|${varId}`;
+    const clave = armarClaveMl(itemId, varId);
 
     const sku = skuDesdeMl(db, itemId, varId);
     if (!sku) {
@@ -368,7 +369,7 @@ async function _syncWcToMl(db, cfg) {
 
   for (const diff of diffs) {
     const { clave, sku, stock_disponible_ml } = diff;
-    const [itemId, variationId] = clave.split('|');
+    const { itemId, variationId } = partirClaveMl(clave);
     const cantidad = Math.max(0, Math.round(stock_disponible_ml));
 
     try {
@@ -395,9 +396,7 @@ async function _syncWcToMl(db, cfg) {
         upsertMlStockEstado(db, clave, sku, cantidad);
         logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: diff.cantidad_ml, cantNueva: cantidad, estado: 'ok' });
       } else {
-        const causa = Array.isArray(resp.data?.cause) && resp.data.cause.length
-          ? resp.data.cause.map(c => c.message || c.code).join(' | ')
-          : (resp.data?.message || resp.data?.error || JSON.stringify(resp.data ?? {}));
+        const causa = extraerErrorMl(resp, resp.data?.error || JSON.stringify(resp.data ?? {}));
 
         if (/doesn'?t have a variation/i.test(causa)) {
           // La variación mapeada ya no existe en ML (publicación editada/recreada).
@@ -552,10 +551,7 @@ export async function reactivarItems(db, mlCfg, itemIds) {
         const { path, body } = buildMlStockUpdate(itemId, v.variation_id || '', cantidad);
         const resp = await mlFetch(db, mlCfg, 'put', path, body);
         if (resp.status !== 200) {
-          const causa = Array.isArray(resp.data?.cause) && resp.data.cause.length
-            ? resp.data.cause.map(c => c.message || c.code).join(' | ')
-            : (resp.data?.message || `HTTP ${resp.status}`);
-          throw new Error(`stock ${v.clave}: ${causa}`);
+          throw new Error(`stock ${v.clave}: ${extraerErrorMl(resp)}`);
         }
         await sleep(ML_CALL_DELAY_MS);
       }
@@ -564,10 +560,7 @@ export async function reactivarItems(db, mlCfg, itemIds) {
       const act = await mlFetch(db, mlCfg, 'put', `/items/${itemId}`, { status: 'active' });
       await sleep(ML_CALL_DELAY_MS);
       if (act.status !== 200) {
-        const causa = Array.isArray(act.data?.cause) && act.data.cause.length
-          ? act.data.cause.map(c => c.message || c.code).join(' | ')
-          : (act.data?.message || `HTTP ${act.status}`);
-        throw new Error(`activar: ${causa}`);
+        throw new Error(`activar: ${extraerErrorMl(act)}`);
       }
 
       // 3) Persistir: cache activo + estado de stock + log por variación
@@ -605,7 +598,7 @@ async function enriquecerConMl(db, mlCfg, rows) {
 
   const faltan = new Set();
   for (const r of rows) {
-    const itemId = r.item_id || String(r.clave || '').split('|')[0];
+    const itemId = r.item_id || partirClaveMl(r.clave).itemId;
     if (itemId && (!r.titulo || !r.thumbnail)) faltan.add(itemId);
   }
   if (!faltan.size) return;
@@ -635,7 +628,7 @@ async function enriquecerConMl(db, mlCfg, rows) {
 
   // Mergear en las filas devueltas al cliente.
   for (const r of rows) {
-    const itemId = r.item_id || String(r.clave || '').split('|')[0];
+    const itemId = r.item_id || partirClaveMl(r.clave).itemId;
     const v = info.get(itemId);
     if (!v) continue;
     if (!r.titulo) r.titulo = v.title;
@@ -668,7 +661,7 @@ async function diagnosticarErrores(db, mlCfg, rows) {
     }
   } catch (_) { /* sin catálogo/mapeo todavía */ }
 
-  const itemIds = [...new Set(rows.map(r => r.item_id || String(r.clave || '').split('|')[0]).filter(Boolean))].slice(0, ENRICH_MAX_ITEMS);
+  const itemIds = [...new Set(rows.map(r => r.item_id || partirClaveMl(r.clave).itemId).filter(Boolean))].slice(0, ENRICH_MAX_ITEMS);
   const info = new Map();
   for (let i = 0; i < itemIds.length; i += MULTIGET_CHUNK) {
     const chunk = itemIds.slice(i, i + MULTIGET_CHUNK);
@@ -689,8 +682,9 @@ async function diagnosticarErrores(db, mlCfg, rows) {
   } catch (_) { /* no crítico */ }
 
   for (const r of rows) {
-    const itemId = r.item_id || String(r.clave || '').split('|')[0];
-    const varId = r.variation_id || String(r.clave || '').split('|')[1] || '';
+    const claveParteada = partirClaveMl(r.clave);
+    const itemId = r.item_id || claveParteada.itemId;
+    const varId = r.variation_id || claveParteada.variationId;
     if (!r.item_id) r.item_id = itemId;
     r.stock_web = stockMap.has(r.clave) ? stockMap.get(r.clave) : null;
 
@@ -1017,7 +1011,7 @@ export function syncRouter(db, cfg) {
       return res.json({ ok: false, error: `La publicación está ${pub.status} — reactivala desde el panel.` });
     }
 
-    const [itemId, variationId] = clave.split('|');
+    const { itemId, variationId } = partirClaveMl(clave);
     const cantidad = Math.max(0, Math.round(row.stock_disponible_ml));
     try {
       const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
@@ -1027,9 +1021,7 @@ export function syncRouter(db, cfg) {
         logSync(db, { direccion: 'wc_ml', clave, sku: row.sku, cantNueva: cantidad, estado: 'ok' });
         return res.json({ ok: true, cantidad });
       }
-      const causa = Array.isArray(resp.data?.cause) && resp.data.cause.length
-        ? resp.data.cause.map(c => c.message || c.code).join(' | ')
-        : (resp.data?.message || `HTTP ${resp.status}`);
+      const causa = extraerErrorMl(resp);
       logSync(db, { direccion: 'wc_ml', clave, sku: row.sku, estado: 'error', error: causa.slice(0, 500) });
       return res.json({ ok: false, error: causa });
     } catch (e) {

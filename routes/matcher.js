@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { mlFetch } from '../lib/mlClient.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
+import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -253,7 +254,7 @@ function aplanarItem(body) {
  * revalidación del item completo, ej. límite de fotos). Devuelve { ok, status, saltado }.
  */
 async function escribirSkuEnMl(db, cfg, clave, sku) {
-  const [itemId, variationId] = String(clave).split('|');
+  const { itemId, variationId } = partirClaveMl(clave);
   if (!itemId || !sku) return { ok: false, status: 0, error: 'clave o sku inválido' };
 
   // Idempotencia: si ML ya tiene ese SKU, no reescribir
@@ -270,10 +271,7 @@ async function escribirSkuEnMl(db, cfg, clave, sku) {
     db.prepare('UPDATE ml_publicaciones_cache SET seller_sku = ? WHERE clave = ?').run(sku, clave);
     return { ok: true, status: 200 };
   }
-  const causa = Array.isArray(resp.data?.cause) && resp.data.cause.length
-    ? resp.data.cause.map(c => c.message || c.code).join(' | ')
-    : (resp.data?.message || `HTTP ${resp.status}`);
-  return { ok: false, status: resp.status, error: causa };
+  return { ok: false, status: resp.status, error: extraerErrorMl(resp) };
 }
 
 export function matcherRouter(db, cfg) {
