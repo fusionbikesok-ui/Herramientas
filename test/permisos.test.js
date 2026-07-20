@@ -20,4 +20,14 @@ describe('permiso consulta-precios', () => {
     expect(permiteAcceso([{ herramienta: 'consulta-precios', nivel: 'read' }], req)).toBe(false);
     expect(permiteAcceso([{ herramienta: 'consulta-precios', nivel: 'write' }], req)).toBe(true);
   });
+
+  it('POST /consulta-precios/importar requiere write', () => {
+    const req = resolvePermiso('POST', '/consulta-precios/importar');
+    expect(req).toEqual({ anyOf: ['consulta-precios'], nivel: 'write' });
+  });
+
+  it('GET /consulta-precios/buscar-sku requiere read', () => {
+    const req = resolvePermiso('GET', '/consulta-precios/buscar-sku');
+    expect(req).toEqual({ anyOf: ['consulta-precios'], nivel: 'read' });
+  });
 });
