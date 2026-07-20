@@ -116,7 +116,9 @@ var qEl = document.getElementById('q');
 var resultEl = document.getElementById('result');
 var historial = [];
 
-function focusInput(){ try{ qEl.focus(); qEl.select(); }catch(e){} }
+// No re-enfocar la caja mientras la cámara está abierta: en móvil levantaría el
+// teclado virtual sobre el video y rompería el escaneo continuo. cerrarCam() reenfoca.
+function focusInput(){ if(document.getElementById('cam-modal').classList.contains('open')) return; try{ qEl.focus(); qEl.select(); }catch(e){} }
 
 function cardHtml(p, tipo){
   var img = p.img ? '<img src="'+esc(p.img)+'" alt="">' : '<div class="noimg">sin foto</div>';
