@@ -17,6 +17,13 @@ export function openDb(dbPath) {
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
   // Atributos estructurados de la variación WC (color/talle) — evita re-parsear el nombre en el matcher.
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN atributos_json TEXT'); } catch (_) {}
+  try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN marca TEXT'); } catch (_) {}
+  // Consulta de Precios ── puente EAN→SKU (el EAN no vive en Woo); aprende de a uno.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS ean_sku (
+    ean TEXT PRIMARY KEY,
+    sku TEXT NOT NULL,
+    actualizado_en TEXT NOT NULL
+  )`); } catch (_) {}
   try { db.exec('ALTER TABLE recepciones ADD COLUMN confirmado_en TEXT'); } catch (_) {}
   try { db.exec(`CREATE TABLE IF NOT EXISTS skus_config_ml (
     sku TEXT PRIMARY KEY,
