@@ -1,5 +1,6 @@
 import axios from 'axios';
 import express from 'express';
+import { normalizarProductoWc, normalizarVariacionWc, filaCatalogo } from '../lib/modelos/producto.js';
 
 const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refresco
 
@@ -23,36 +24,29 @@ export async function wooFetch(cfg, path, method = 'get', body = null) {
 }
 
 export async function refrescarCatalogo(db, cfg) {
-  const productos = [];
+  const crudos = [];
   let page = 1;
   while (page <= MAX_PAGES) {
     const resp = await wooFetch(cfg, `/products?per_page=100&page=${page}&status=any`);
     if (!resp.data.length) break;
-    productos.push(...resp.data);
+    crudos.push(...resp.data);
     if (resp.data.length < 100) break;
     page++;
   }
 
+  const productos = crudos.map(normalizarProductoWc);
+
   // Fetch variations for variable products (they have their own SKUs and aren't returned by /products)
-  const variableProds = productos.filter(p => p.type === 'variable');
+  const variableProds = crudos.filter(p => p.type === 'variable');
   for (const vp of variableProds) {
+    const padre = normalizarProductoWc(vp);
     let vpage = 1;
     while (vpage <= 20) {
       const vresp = await wooFetch(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`);
       if (!vresp.data.length) break;
       for (const v of vresp.data) {
         if (!v.sku) continue;
-        // Build name from parent name + variation attributes
-        const attrs = (v.attributes || []).map(a => a.option).filter(Boolean).join(' / ');
-        v.name = attrs ? `${vp.name} — ${attrs}` : vp.name;
-        // Atributos estructurados {name, option} para color/talle confiables en el matcher
-        // (mejor que re-parsear el nombre). Se persisten en atributos_json más abajo.
-        v._atributos = (v.attributes || [])
-          .map(a => ({ name: a.name || '', option: a.option || '' }))
-          .filter(a => a.option);
-        v.parent_id = vp.id;
-        v.categories = vp.categories; // inherit parent categories
-        productos.push(v);
+        productos.push(normalizarVariacionWc(v, padre));
       }
       if (vresp.data.length < 100) break;
       vpage++;
@@ -71,27 +65,7 @@ export async function refrescarCatalogo(db, cfg) {
   `);
   const tx = db.transaction((rows) => {
     for (const p of rows) {
-      const cats = Array.isArray(p.categories) && p.categories.length
-        ? JSON.stringify(p.categories.map(c => c.name))
-        : null;
-      // products use images[] array; variations use image singular
-      const img = p.image?.src || (Array.isArray(p.images) && p.images[0]?.src) || null;
-      // Woo devuelve price/regular_price como string; se persiste para comparar contra el neto ML.
-      const precio = p.price != null && p.price !== '' ? parseFloat(p.price)
-        : (p.regular_price ? parseFloat(p.regular_price) : null);
-      upsert.run({
-        id_woo: p.id,
-        nombre: p.name,
-        sku: p.sku || '',
-        tipo: p.type,
-        id_padre: p.parent_id || null,
-        stock: p.stock_quantity ?? 0,
-        categorias_json: cats,
-        img,
-        precio: Number.isFinite(precio) ? precio : null,
-        atributos_json: (Array.isArray(p._atributos) && p._atributos.length) ? JSON.stringify(p._atributos) : null,
-        actualizado_en: now
-      });
+      upsert.run(filaCatalogo(p, now));
     }
   });
   tx(productos);
