@@ -17,16 +17,29 @@ hace falta construir una tabla EAN↔SKU del lado del servidor.
 
 ## Alcance
 
-- Buscar por SKU o EAN y mostrar el **precio web** (de `catalogo_cache.precio`),
-  nombre, SKU, stock e imagen. Lectura local, respuesta instantánea. **No** se consulta
-  MercadoLibre ni se calcula neto (eso ya lo hace la herramienta separada "Precios ML").
+- Buscar por SKU o EAN y mostrar, en una card de resultado: **precio web**, **título**,
+  **marca**, **categoría** y **foto** del producto. Lectura local, respuesta instantánea.
+  **No** se consulta MercadoLibre ni se calcula neto (eso ya lo hace la herramienta
+  separada "Precios ML").
 - La tabla EAN↔SKU **aprende de a uno**: cuando aparece un EAN desconocido, la
   herramienta pide el SKU una vez y lo recuerda para siempre, para todos los dispositivos.
 - **Sembrado inicial opcional:** botón que importa el mapa EAN↔SKU del `localStorage`
   del Contador de inventario (cuando se abre esta herramienta en el mismo navegador donde
   se armó ese mapa) y lo sube al servidor de una.
-- Ingreso por **caja de texto** (tipeo o lector físico USB que "teclea + Enter") **y**
-  **cámara** (módulo `Scanner` compartido, ya usado en inventario/preparación).
+- **Tres formas de ingresar el código:** (1) caja de texto que acepta el **teclado del
+  teléfono** (soft keyboard), (2) **lector físico USB** que "teclea + Enter" en esa misma
+  caja, (3) **cámara** (módulo `Scanner` compartido, ya usado en inventario/preparación).
+- **Escaneo continuo:** interfaz pensada para seguir escaneando uno tras otro — el último
+  resultado se muestra grande y arriba se acumula un historial de las consultas recientes;
+  la caja se re-enfoca sola para el siguiente código.
+
+### Dato nuevo requerido: marca
+
+`catalogo_cache` hoy **no** guarda la marca. La marca está disponible en WooCommerce en la
+taxonomía `brands` de cada producto (`producto.brands[0].name`, ej. "SUPACAZ", "POLYGON").
+Se agrega una columna `marca` a `catalogo_cache`, poblada en `refrescarCatalogo` y
+**heredada por las variaciones desde el producto padre** (igual que las categorías, ya que
+`/products/{id}/variations` no trae la taxonomía de marca).
 
 ### Fuera de alcance (YAGNI)
 
@@ -36,18 +49,24 @@ hace falta construir una tabla EAN↔SKU del lado del servidor.
 
 ## Modelo de datos
 
-Una tabla nueva. El precio, nombre, stock e imagen ya viven en `catalogo_cache`; no se
-duplican. `ean_sku` solo guarda el puente que hoy no existe.
+Una tabla nueva más una columna nueva. El precio, nombre, stock, imagen y categorías ya
+viven en `catalogo_cache`; no se duplican. `ean_sku` solo guarda el puente que hoy no
+existe, y `catalogo_cache.marca` agrega el único dato que falta.
 
-```sql
-CREATE TABLE IF NOT EXISTS ean_sku (
+Las migraciones van en `db/index.js`, en el bloque incremental idempotente que ya usa la
+app (`ALTER TABLE ... ADD COLUMN` y `CREATE TABLE IF NOT EXISTS` envueltos en try/catch),
+**no** en `db/schema.sql` — ese es el patrón real del repo para tablas/columnas nuevas
+(ej. `ml_precio_auditoria`, `cobertura_exclusiones` viven solo en `db/index.js`).
+
+```js
+// db/index.js, junto a las otras migraciones incrementales
+try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN marca TEXT'); } catch (_) {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS ean_sku (
   ean TEXT PRIMARY KEY,
   sku TEXT NOT NULL,
   actualizado_en TEXT NOT NULL
-);
+)`); } catch (_) {}
 ```
-
-Se agrega a `db/schema.sql` (que se aplica idempotente al abrir la DB).
 
 Notas:
 - `ean` es la clave: reescanear el mismo EAN con otro SKU sobreescribe (upsert). Es
@@ -76,7 +95,9 @@ Lookup unificado y robusto (no depende sólo de adivinar el formato del código)
    `{ ok:true, found:false, needsSku:true, ean:q }` para disparar el flujo de "enseñar".
 4. **Nada** → `{ ok:true, found:false }`.
 
-`producto` = `{ sku, nombre, precio, stock, tipo, img }` de `catalogo_cache`.
+`producto` = `{ sku, nombre, marca, categorias, precio, stock, tipo, img }` de
+`catalogo_cache`. `categorias` se devuelve parseando `categorias_json`
+(`productoDesdeFilaCatalogo` ya lo hace); el frontend muestra la primera / las une.
 
 La detección "parece EAN" del punto 3 usa: string de sólo dígitos con largo 8, 12, 13 o
 14 (EAN-8, UPC-A, EAN-13, GTIN-14). No se exige dígito de control válido para no rechazar
@@ -112,15 +133,41 @@ WHERE (sku LIKE ? OR nombre LIKE ?) AND sku <> ''
 ORDER BY nombre ASC LIMIT 20
 ```
 
+## Cambios en el catálogo (marca)
+
+Para poblar `catalogo_cache.marca`:
+
+- **`lib/modelos/producto.js`:**
+  - `normalizarProductoWc(raw)`: agregar `marca = raw.brands?.[0]?.name || ''`.
+  - `normalizarVariacionWc(rawVar, padre)`: `marca: padre.marca` (heredada, igual que
+    `categorias`).
+  - `filaCatalogo(producto, ...)`: incluir `marca: producto.marca || null`.
+  - `productoDesdeFilaCatalogo(row)`: incluir `marca: row.marca ?? null`.
+  - Actualizar el typedef `Producto` con `marca`.
+- **`routes/woo.js` `refrescarCatalogo`:** el `INSERT ... ON CONFLICT` de `catalogo_cache`
+  suma la columna `marca` (en la lista de columnas, los `VALUES` y el `DO UPDATE SET`).
+
+Sin re-fetch extra: `/products` ya devuelve `brands` en la misma respuesta que se recorre.
+Las filas existentes quedan con `marca` nula hasta el próximo refresco del catálogo (cron
+cada 15 min, o "Recargar catálogo").
+
 ## Frontend — `public/consulta-precios/index.html`
 
 Página estática, misma estética oscura que el resto (paleta `--azul #2DB8E8`, etc.).
+Pensada para uso en el teléfono y escaneo continuo.
 
-- **Caja de búsqueda** grande con auto-focus. Un lector USB físico tipea el código y da
-  Enter → dispara `GET /buscar`. Botón **Escanear con cámara** que abre el módulo
-  `Scanner` (modo `single`) y al leer un código lo mete en la caja y busca.
-- **Resultado encontrado:** card grande con el **precio web** destacado (formateado en
-  pesos), nombre, SKU, badge de stock y miniatura. Indica si se llegó por SKU o por EAN.
+- **Caja de búsqueda** grande con auto-focus. Acepta el **teclado del teléfono** (input de
+  texto normal, **sin** `inputmode="none"`) y también sirve para el **lector USB físico**
+  que teclea el código y da Enter → dispara `GET /buscar`. Botón **Escanear con cámara**
+  que abre el módulo `Scanner` y busca cada código leído.
+- **Escaneo continuo:** después de cada consulta la caja se vacía y se re-enfoca sola para
+  el siguiente código. El resultado más reciente se muestra grande; encima se acumula un
+  **historial** compacto de las últimas consultas (título + precio), clickeable para volver
+  a mostrar esa card. Para la cámara se usa el modo `continuous` del `Scanner` (con su gate
+  anti-repetición), de modo de poder escanear varios ítems sin cerrar la cámara.
+- **Resultado encontrado:** card grande con **foto** del producto, **título**, **marca**,
+  **categoría**, **precio web** destacado (formateado en pesos), SKU y badge de stock.
+  Indica si se llegó por SKU o por EAN.
 - **EAN desconocido (`needsSku`):** card "EAN nuevo — ¿a qué producto pertenece?" con el
   código mostrado y un input de autocomplete (`GET /buscar-sku`). Al elegir el SKU y
   confirmar → `POST /ean` → muestra el precio. La próxima vez ese EAN sale directo, en
@@ -128,11 +175,10 @@ Página estática, misma estética oscura que el resto (paleta `--azul #2DB8E8`,
 - **EAN huérfano (`skuHuerfano`):** aviso de que el EAN apunta a un SKU que ya no está en
   el catálogo, con opción de re-enseñar (mismo flujo que EAN desconocido).
 - **No encontrado:** mensaje claro; si parecía SKU, sugerir revisar el código.
-- **Importar EANs del inventario:** botón (quizás en un panel plegable "Herramientas")
-  que lee `localStorage` con la misma clave que usa el Contador de inventario, reconstruye
-  los pares `{ean, sku}` (respetando el formato `{other, desc}` migrado de ese tool) y los
-  manda a `POST /importar`. Muestra cuántos se importaron. Si no hay mapa en ese navegador,
-  avisa que no encontró nada.
+- **Importar EANs del inventario:** botón (en un panel plegable "Herramientas") que lee
+  `localStorage['fb_inv_descmap_v1']`, reconstruye los pares `{ean, sku}` (respetando el
+  formato `{other, desc}` migrado de ese tool) y los manda a `POST /importar`. Muestra
+  cuántos se importaron. Si no hay mapa en ese navegador, avisa que no encontró nada.
 
 ### Detalle de la clave de localStorage
 
@@ -153,7 +199,8 @@ código complementario se descartan).
    `app.use('/api/consulta-precios', consultaPreciosRouter(db))` y el estático
    `app.use('/consulta-precios', express.static(path.join(__dirname,
    'public/consulta-precios')))`.
-3. **`db/schema.sql`:** agregar la tabla `ean_sku`.
+3. **`db/index.js`:** agregar las migraciones incrementales (columna `marca` + tabla
+   `ean_sku`) en el bloque idempotente existente.
 4. **`public/home/index.html`:** card nueva con
    `href="/herramientas/consulta-precios/"`. La home la gatea sola por el permiso
    `consulta-precios` (derivado del href); la UI de usuarios/permisos también se arma sola
@@ -171,7 +218,13 @@ Tests unitarios (vitest, sin red) para `routes/consultaPrecios.js` sobre una DB 
 - `GET /buscar` con basura → `found:false`.
 - `POST /ean` con SKU inexistente → `400`; con SKU válido → upsert + `producto`.
 - `POST /importar` → cuenta importados vs recibidos, ignora pares incompletos.
+- `GET /buscar` devuelve `marca` y `categorias` cuando existen en el catálogo.
 - Detección "parece EAN": 8/12/13/14 dígitos sí; con letras/guiones no.
+
+Para el modelo (`lib/modelos/producto.js`, ya tiene tests):
+- `normalizarProductoWc` extrae `marca` de `brands[0].name` (y `''` si no hay `brands`).
+- `normalizarVariacionWc` hereda `marca` del padre.
+- Round-trip `filaCatalogo` → `productoDesdeFilaCatalogo` preserva `marca`.
 
 Si la lógica de detección de EAN o de reconstrucción de pares se extrae a funciones puras,
 se testean directo (preferido).
