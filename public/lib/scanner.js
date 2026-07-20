@@ -10,7 +10,9 @@ function loadZXing() {
   if (zxingLoadPromise) return zxingLoadPromise;
   zxingLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = '/vendor/zxing.min.js';
+    // Resuelto relativo a este módulo para funcionar tanto en localhost (/vendor/…)
+    // como detrás del prefijo /herramientas de Nginx (/herramientas/vendor/…).
+    script.src = new URL('../vendor/zxing.min.js', import.meta.url).href;
     script.onload = () => resolve();
     script.onerror = () => reject(new Error('No se pudo cargar el lector de códigos.'));
     document.head.appendChild(script);
