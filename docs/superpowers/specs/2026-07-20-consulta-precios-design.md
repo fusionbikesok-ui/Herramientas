@@ -229,6 +229,22 @@ Para el modelo (`lib/modelos/producto.js`, ya tiene tests):
 Si la lógica de detección de EAN o de reconstrucción de pares se extrae a funciones puras,
 se testean directo (preferido).
 
+## Dirección futura (no en este alcance)
+
+Esta herramienta puede ser la base de un **carrito rápido para anotar ventas del local**
+(sumar ítems escaneados, cantidades, total, registro de la venta con datos genéricos). No
+se construye ahora, pero el diseño lo deja abierto:
+
+- El lookup devuelve un objeto `producto` limpio y completo (precio, título, marca,
+  categoría, foto) — una "línea de carrito" ya tiene todo lo que necesita.
+- La lista de **escaneo continuo** (historial) es el germen natural de las líneas del
+  carrito: sumar cantidad, quitar, totalizar.
+- La tabla `ean_sku` hace que escanear el EAN de un producto ya resuelva a su
+  precio/título directamente, que es exactamente lo que un carrito de mostrador necesita.
+
+Mantener estos límites limpios (lookup puro vs. UI) evita reescrituras cuando se sume el
+carrito.
+
 ## Riesgos / notas
 
 - **EAN duplicado entre productos distintos:** un mismo EAN sólo puede apuntar a un SKU
