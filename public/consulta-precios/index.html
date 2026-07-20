@@ -19,9 +19,9 @@
   h1{font-size:1.4rem;font-weight:800;letter-spacing:-.03em;margin:4px 0 12px;}
   h1 em{font-style:normal;color:var(--azul);}
   .scanrow{display:flex;gap:8px;}
-  #q{flex:1;font-size:20px;padding:14px 12px;border-radius:10px;border:2px solid var(--azul);background:var(--bg);color:var(--txt);font-weight:700;outline:none;box-shadow:0 0 0 3px rgba(45,184,232,.12);}
+  #q{flex:1;min-width:0;font-size:20px;padding:14px 12px;border-radius:10px;border:2px solid var(--azul);background:var(--bg);color:var(--txt);font-weight:700;outline:none;box-shadow:0 0 0 3px rgba(45,184,232,.12);}
   #q::placeholder{color:var(--muted);font-weight:400;}
-  .btn{background:var(--azul);color:#06131C;border:0;border-radius:10px;padding:0 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;}
+  .btn{background:var(--azul);color:#06131C;border:0;border-radius:10px;padding:0 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0;}
   .btn:hover{background:var(--azul-dk);}
   .btn.sec{background:var(--panel2);color:var(--txt);}
   .btn.sec:hover{background:var(--border2);}
@@ -104,7 +104,7 @@
   </div>
 </div>
 
-<script type="module" src="/lib/scanner.js"></script>
+<script type="module" src="../lib/scanner.js"></script>
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function fmtPrecio(n){
