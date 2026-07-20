@@ -13,7 +13,8 @@ import { skuDesdeMl, publicacionesDesdeWc } from '../lib/mlMapeo.js';
 import { buscarEnCache, buildWooPath } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
-import { armarClaveMl, partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
+import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
+import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -149,21 +150,6 @@ export async function syncMlToWc(db, cfg) {
   }
 }
 
-/**
- * Arma el objeto `billing` para la orden de WC con lo que ML deje visible del comprador.
- * ML restringe PII por política de privacidad — normalmente solo vienen nickname/id;
- * nombre, apellido, email o teléfono reales rara vez están disponibles vía API.
- */
-function buildBillingDesdeMl(orden) {
-  const buyer = orden.buyer ?? {};
-  const first = buyer.first_name || buyer.nickname || 'Comprador';
-  const last = buyer.last_name || 'MercadoLibre';
-  const billing = { first_name: first, last_name: last };
-  if (buyer.email) billing.email = buyer.email;
-  if (buyer.phone?.number) billing.phone = buyer.phone.number;
-  return billing;
-}
-
 async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const orderId = String(orden.id);
   const items = orden.order_items ?? [];
@@ -179,12 +165,13 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     return;
   }
 
+  const ov = normalizarOrdenMl(orden);
   const lineItems = [];
-  for (const item of items) {
-    const itemId = String(item.item?.id ?? '');
-    const varId = item.item?.variation_id ?? '';
-    const qty = item.quantity ?? 1;
-    const clave = armarClaveMl(itemId, varId);
+  for (const item of ov.items) {
+    const itemId = item.item_id_ml;
+    const varId = item.variation_id_ml;
+    const qty = item.cantidad;
+    const clave = item.clave;
 
     const sku = skuDesdeMl(db, itemId, varId);
     if (!sku) {
@@ -228,7 +215,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     return;
   }
 
-  const billing = buildBillingDesdeMl(orden);
+  const billing = billingWcDesdeOrdenMl(orden);
 
   try {
     const resp = await wooFetch(wooCfg, '/orders', 'post', {
