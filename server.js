@@ -22,6 +22,7 @@ import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter } from './routes/preparacion.js';
+import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -100,6 +101,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
     andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
   }));
   app.use('/preparacion', express.static(path.join(__dirname, 'public/preparacion')));
+  app.use('/api/consulta-precios', consultaPreciosRouter(db));
+  app.use('/consulta-precios', express.static(path.join(__dirname, 'public/consulta-precios')));
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
   app.use('/sync-ml', express.static(path.join(__dirname, 'public/sync-ml')));
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
