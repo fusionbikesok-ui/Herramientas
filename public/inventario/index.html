@@ -80,6 +80,14 @@
   .catbadge{display:inline-block;margin-left:6px;font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;vertical-align:middle}
   .catbadge.found{background:rgba(61,220,132,.18);color:var(--ok)}
   .catbadge.miss{background:rgba(255,91,91,.18);color:var(--warn)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
+  .modal.open{display:flex;}
+  .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;max-width:480px;width:100%;position:relative;}
+  .modal-box video{width:100%;border-radius:10px;background:#000;display:block;}
+  .modal-box .sub{color:var(--muted);font-size:13px;margin:10px 0;text-align:center;}
+  .modal-box .cerrarcam{margin-top:6px;width:100%;font-size:14px;font-weight:700;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer;}
+  .cam-toast{position:absolute;left:16px;right:16px;top:26px;background:rgba(52,211,153,.94);color:#06231A;font-weight:800;font-size:15px;text-align:center;padding:8px 10px;border-radius:9px;pointer-events:none;opacity:0;transition:opacity .2s;}
+  .cam-toast.show{opacity:1;}
   @media (max-width:640px){ .counter .n{font-size:22px} .toolbar button{min-width:calc(50% - 6px)} }
 </style>
 </head>
@@ -113,6 +121,7 @@
     <button id="bExportCsv">⬇ Exportar CSV (todo el mapa)</button>
     <button id="bExportCsvSession">⬇ Exportar conteo (solo contados)</button>
     <button id="bImport">⬆ Importar mapa (JSON)</button>
+    <button id="bCam">📷 Cámara</button>
     <button id="bMute" class="mute">🔊 Sonido</button>
     <input type="file" id="fileImport" aria-label="Archivo JSON de mapa a importar" accept=".json,application/json">
   </div>
@@ -134,6 +143,14 @@
   </div>
   <div class="empty" id="empty">Sin escaneos en esta sesión.</div>
 </main>
+<div class="modal" id="cam-modal">
+  <div class="modal-box">
+    <video id="cam-video" autoplay playsinline muted></video>
+    <div class="cam-toast" id="cam-toast"></div>
+    <p class="sub" id="cam-msg">Apuntá al código de barras…</p>
+    <button class="cerrarcam" id="bCamCerrar">Cerrar</button>
+  </div>
+</div>
 <script>
   (function() {
     var token = 'cookie-session';
@@ -212,6 +229,33 @@
       g.gain.setValueAtTime(0.05, audioCtx.currentTime);
       o.start(); o.stop(audioCtx.currentTime+0.06);
     }catch(e){}
+  }
+
+  // ----- Cámara (módulo Scanner compartido: BarcodeDetector nativo o ZXing) -----
+  var camToastTimer = null;
+  function mostrarToastCam(codigo){
+    var t = document.getElementById('cam-toast');
+    if(!t) return;
+    t.textContent = '✓ ' + codigo + ' leído';
+    t.classList.add('show');
+    clearTimeout(camToastTimer);
+    camToastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2200);
+  }
+  function abrirCamara(){
+    var modal = document.getElementById('cam-modal'), video = document.getElementById('cam-video');
+    modal.classList.add('open');
+    document.getElementById('cam-msg').textContent = 'Apuntá al código de barras…';
+    window.Scanner.open({
+      video: video,
+      mode: 'continuous',
+      onCode: function(codigo){ processScan(codigo); mostrarToastCam(codigo); },
+      onError: function(msg){ document.getElementById('cam-msg').textContent = msg; }
+    });
+  }
+  function cerrarCamara(){
+    window.Scanner.close();
+    document.getElementById('cam-modal').classList.remove('open');
+    scan.focus();
   }
 
   // ----- Catálogo WooCommerce (auto-completar descripción por SKU; tolera fallo/offline) -----
@@ -479,6 +523,8 @@
   scan.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); var code=normalize(scan.value); scan.value=''; if(code) processScan(code); } });
 
   // ----- Botones -----
+  document.getElementById('bCam').addEventListener('click', abrirCamara);
+  document.getElementById('bCamCerrar').addEventListener('click', cerrarCamara);
   document.getElementById('bUndo').addEventListener('click', function(){ undo(); scan.focus(); });
   document.getElementById('bNew').addEventListener('click', function(){ newSession(); });
   document.getElementById('bExport').addEventListener('click', exportMap);
@@ -498,6 +544,7 @@
   loadCatalog();
 })();
 </script>
+<script type="module" src="/lib/scanner.js"></script>
 
 <script>
 (function(){
