@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { veredictoNeto, netoMl, precioWebClave } from '../lib/mlPrecios.js';
+import { veredictoNeto, netoMl, precioWebClave, precioSugerido } from '../lib/mlPrecios.js';
 import { auditarPrecios, preciosRouter } from '../routes/precios.js';
 
 vi.mock('axios', async () => {
@@ -69,6 +69,19 @@ describe('mlPrecios — veredictoNeto', () => {
   });
 });
 
+describe('mlPrecios — precioSugerido', () => {
+  it('sugiere el precio que iguala el neto al precio web, dado el % de comisión implícito', () => {
+    // a precio_ml=1000 la comisión fue 130 (13%): sugerido = (precio_web + envío) / (1 - 0.13)
+    const sugerido = precioSugerido(1000, 130, 50, 900);
+    expect(sugerido).toBe(Math.ceil((900 + 50) / (1 - 0.13)));
+  });
+  it('null si falta algún dato necesario', () => {
+    expect(precioSugerido(0, 130, 50, 900)).toBeNull();
+    expect(precioSugerido(1000, null, 50, 900)).toBeNull();
+    expect(precioSugerido(1000, 130, 50, 0)).toBeNull();
+  });
+});
+
 describe('mlPrecios — netoMl + precioWebClave', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); seedToken(db); });
@@ -131,5 +144,67 @@ describe('auditarPrecios + router', () => {
     expect(res.body.data.map(r => r.clave)).toEqual(['MLB|v1']);
     const vacio = await request(app).get('/api/precios?estado=alto');
     expect(vacio.body.data).toHaveLength(0);
+  });
+
+  it('GET /api/precios incluye precio_sugerido solo para filas "bajo"', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 870 });
+    seedDecision(db, 'MLO|v1', 'FB-O'); seedPub(db, { clave: 'MLO|v1', itemId: 'MLO', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+    await auditarPrecios(db, ML_CFG);
+
+    const res = await request(app).get('/api/precios?estado=all');
+    const bajo = res.body.data.find(r => r.clave === 'MLB|v1');
+    const ok = res.body.data.find(r => r.clave === 'MLO|v1');
+    expect(bajo.precio_sugerido).toBeGreaterThan(bajo.precio_ml);
+    expect(ok.precio_sugerido).toBeNull();
+  });
+
+  it('POST /api/precios/actualizar-precio corrige el precio en ML y refresca la fila', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+    await auditarPrecios(db, ML_CFG);
+    expect(db.prepare("SELECT estado FROM ml_precio_auditoria WHERE clave='MLB|v1'").get().estado).toBe('bajo');
+
+    // Tras la corrección, el item queda a precio 1200 (neto 1050 ≥ web 1000 → ok)
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'put' && /\/items\/MLB\/variations\/v1$/.test(url)) return { status: 200, data: {}, headers: {} };
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+      if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
+      if (/\/items\/MLB\?/.test(url)) return { status: 200, data: { id: 'MLB', price: 1200, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, status: 'active', variations: [] }, headers: {} };
+      return { status: 404, data: {}, headers: {} };
+    });
+
+    const res = await request(app).post('/api/precios/actualizar-precio').send({ clave: 'MLB|v1', precio: 1200 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.estado).toBe('ok');
+    expect(res.body.data.precio_ml).toBe(1200);
+    expect(res.body.data.neto).toBe(1050);
+
+    const fila = db.prepare("SELECT estado, precio_ml FROM ml_precio_auditoria WHERE clave='MLB|v1'").get();
+    expect(fila.estado).toBe('ok');
+    expect(fila.precio_ml).toBe(1200);
+  });
+
+  it('POST /api/precios/actualizar-precio devuelve error si ML rechaza el precio', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    axios.request.mockResolvedValue({ status: 400, data: { message: 'precio inválido' }, headers: {} });
+
+    const res = await request(app).post('/api/precios/actualizar-precio').send({ clave: 'MLB|v1', precio: 1200 });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toMatch(/inválido/);
+  });
+
+  it('POST /api/precios/actualizar-precio valida clave/precio', async () => {
+    const res = await request(app).post('/api/precios/actualizar-precio').send({ clave: '', precio: 0 });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
   });
 });
