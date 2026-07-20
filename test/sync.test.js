@@ -121,7 +121,7 @@ describe('mlClient', () => {
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   afterEach(() => {
@@ -210,7 +210,7 @@ function seedPublicacion(db, { clave, itemId, varId = '', status, subStatus = ''
 
 describe('reactivación de pausadas por falta de stock', () => {
   let db;
-  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  beforeEach(() => { db = openDb(TEST_DB); vi.resetAllMocks(); });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
   it('getReactivablesRows: incluye pausada out_of_stock con stock web', () => {
@@ -264,10 +264,17 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: empuja stock, activa en ML y persiste estado', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-9', 7);
+    db.prepare("UPDATE catalogo_cache SET precio=900 WHERE sku='FB-9'").run();
     seedDecision(db, 'MLA9|v9', 'FB-9');
     seedPublicacion(db, { clave: 'MLA9|v9', itemId: 'MLA9', varId: 'v9', status: 'paused', subStatus: 'out_of_stock' });
-    // PUT stock -> 200, PUT status active -> 200
-    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+    // GET item (precio 1000, sin envío gratis) + comisión 50 → neto 950 vs web 900 (dentro de tolerancia,
+    // no bloquea) + PUT stock -> 200 + PUT status active -> 200
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
+      if (/\/items\/MLA9\?/.test(url)) return { status: 200, data: { id: 'MLA9', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
 
     const r = await reactivarItems(db, ML_CFG, ['MLA9']);
     expect(r.procesados).toBe(1);
@@ -323,6 +330,41 @@ describe('reactivación de pausadas por falta de stock', () => {
     expect(db.prepare("SELECT COUNT(*) n FROM ml_stock_estado WHERE clave='MLA11|v11'").get().n).toBe(0);
     expect(db.prepare("SELECT COUNT(*) n FROM sync_log WHERE estado='reactivada' AND clave='MLA11|v11'").get().n).toBe(0);
   });
+
+  it('reactivarItems: bloquea (fail-closed) si no hay precio web mapeado para comparar', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-12', 5); // sin precio seteado en catalogo_cache
+    seedDecision(db, 'MLA12|v12', 'FB-12');
+    seedPublicacion(db, { clave: 'MLA12|v12', itemId: 'MLA12', varId: 'v12', status: 'paused', subStatus: 'out_of_stock' });
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (/\/items\/MLA12/.test(url)) return { status: 200, data: { id: 'MLA12', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLA12']);
+    expect(r.resultados[0].ok).toBe(false);
+    expect(r.resultados[0].bloqueado).toBe(true);
+    expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA12|v12').status).toBe('paused');
+  });
+
+  it('reactivarItems: bloquea (fail-closed) si falla la consulta del item en ML', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-13', 5);
+    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-13'").run();
+    seedDecision(db, 'MLA13|v13', 'FB-13');
+    seedPublicacion(db, { clave: 'MLA13|v13', itemId: 'MLA13', varId: 'v13', status: 'paused', subStatus: 'out_of_stock' });
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (/\/items\/MLA13/.test(url)) return { status: 500, data: null, headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLA13']);
+    expect(r.resultados[0].ok).toBe(false);
+    expect(r.resultados[0].bloqueado).toBe(true);
+    expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA13|v13').status).toBe('paused');
+  });
 });
 
 // ─── vista de detalle: atencion/:cat y reintentar-item ──────────────────────────
@@ -345,7 +387,7 @@ describe('vista de detalle', () => {
   let db, app;
   beforeEach(() => {
     db = openDb(TEST_DB);
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     app = buildSyncApp(db, { ml: ML_CFG, woo: { url: 'https://x', ck: 'a', cs: 'b' } });
   });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });

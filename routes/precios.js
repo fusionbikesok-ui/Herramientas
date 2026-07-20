@@ -8,7 +8,8 @@
 
 import { Router } from 'express';
 import { mlFetch } from '../lib/mlClient.js';
-import { netoMl, veredictoNeto } from '../lib/mlPrecios.js';
+import { netoMl, veredictoNeto, precioSugerido, upsertAuditoria } from '../lib/mlPrecios.js';
+import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 
 const MULTIGET_CHUNK = 20;
 const ML_CALL_DELAY_MS = 500;
@@ -58,15 +59,6 @@ export async function auditarPrecios(db, mlCfg) {
   }
   const itemIds = [...porItem.keys()];
 
-  const upsert = db.prepare(`
-    INSERT INTO ml_precio_auditoria
-      (clave, item_id, titulo, sku, precio_ml, sale_fee, envio, neto, precio_web, deficit_pct, estado, actualizado_en)
-    VALUES (@clave, @item_id, @titulo, @sku, @precio_ml, @sale_fee, @envio, @neto, @precio_web, @deficit_pct, @estado, @actualizado_en)
-    ON CONFLICT(clave) DO UPDATE SET
-      item_id=excluded.item_id, titulo=excluded.titulo, sku=excluded.sku, precio_ml=excluded.precio_ml,
-      sale_fee=excluded.sale_fee, envio=excluded.envio, neto=excluded.neto, precio_web=excluded.precio_web,
-      deficit_pct=excluded.deficit_pct, estado=excluded.estado, actualizado_en=excluded.actualizado_en
-  `);
   const caches = { fee: new Map(), envio: new Map() };
 
   try {
@@ -100,7 +92,7 @@ export async function auditarPrecios(db, mlCfg) {
             estado = v.estado; deficit_pct = v.deficitPct;
             await sleep(ML_CALL_DELAY_MS);
           }
-          upsert.run({
+          upsertAuditoria(db, {
             clave: fila.clave, item_id: itemId, titulo: fila.titulo, sku: fila.sku,
             precio_ml, sale_fee, envio, neto, precio_web: fila.precio_web,
             deficit_pct, estado, actualizado_en: now(),
@@ -118,6 +110,60 @@ export async function auditarPrecios(db, mlCfg) {
     _auditProgreso.enCurso = false;
     _auditEnCurso = false;
   }
+}
+
+/** Path + body para actualizar el precio de una publicación/variación en ML. */
+function buildMlPriceUpdate(itemId, variationId, precio) {
+  if (variationId) return { path: `/items/${itemId}/variations/${variationId}`, body: { price: precio } };
+  return { path: `/items/${itemId}`, body: { price: precio } };
+}
+
+/**
+ * Recalcula el neto/veredicto de una sola clave (tras corregir su precio en ML) y lo
+ * persiste en ml_precio_auditoria. Devuelve la fila actualizada (con thumbnail) o null
+ * si la clave ya no está mapeada o la publicación no se pudo consultar.
+ */
+async function refrescarFila(db, mlCfg, clave) {
+  const fila = db.prepare(`
+    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_web
+    FROM ml_publicaciones_cache p
+    JOIN sku_matcher_decisiones d ON d.clave = p.clave AND d.accion IN ('asignar','confirmar') AND d.sku <> ''
+    LEFT JOIN catalogo_cache c ON c.sku = d.sku AND c.sku <> ''
+    WHERE p.clave = ?
+  `).get(clave);
+  if (!fila) return null;
+
+  const resp = await mlFetch(db, mlCfg, 'get',
+    `/items/${fila.item_id}?attributes=id,price,category_id,listing_type_id,shipping,variations,status`);
+  if (resp.status !== 200 || !resp.data) return null;
+  const item = resp.data;
+
+  let precio_ml = null, sale_fee = null, envio = null, neto = null, estado = 'sin_precio', deficit_pct = null;
+  if (item.status === 'active') {
+    precio_ml = precioEfectivo(item, fila.variation_id);
+    const freeShipping = !!item.shipping?.free_shipping;
+    const r = await netoMl(db, mlCfg, {
+      itemId: fila.item_id, price: precio_ml, categoryId: item.category_id,
+      listingTypeId: item.listing_type_id, freeShipping,
+    });
+    sale_fee = r.sale_fee; envio = r.envio; neto = r.neto;
+    const v = veredictoNeto(neto, fila.precio_web);
+    estado = v.estado; deficit_pct = v.deficitPct;
+  }
+
+  upsertAuditoria(db, {
+    clave: fila.clave, item_id: fila.item_id, titulo: fila.titulo, sku: fila.sku,
+    precio_ml, sale_fee, envio, neto, precio_web: fila.precio_web,
+    deficit_pct, estado, actualizado_en: now(),
+  });
+
+  return db.prepare(`
+    SELECT a.clave, a.item_id, a.titulo, a.sku, a.precio_ml, a.sale_fee, a.envio, a.neto,
+           a.precio_web, a.deficit_pct, a.estado, a.actualizado_en, p.thumbnail
+    FROM ml_precio_auditoria a
+    LEFT JOIN ml_publicaciones_cache p ON p.clave = a.clave
+    WHERE a.clave = ?
+  `).get(clave);
 }
 
 export function preciosRouter(db, cfg) {
@@ -158,7 +204,30 @@ export function preciosRouter(db, cfg) {
                a.deficit_pct DESC
       LIMIT 1000
     `).all();
-    res.json({ ok: true, total: rows.length, data: rows });
+    const data = rows.map(r => ({
+      ...r,
+      precio_sugerido: r.estado === 'bajo' ? precioSugerido(r.precio_ml, r.sale_fee, r.envio, r.precio_web) : null,
+    }));
+    res.json({ ok: true, total: data.length, data });
+  });
+
+  // Corrige el precio de una publicación/variación en ML y refresca su fila auditada.
+  router.post('/actualizar-precio', async (req, res) => {
+    if (!mlCfgOk(mlCfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+    const { clave } = req.body || {};
+    const precio = Number(req.body?.precio);
+    if (!clave || !(precio > 0)) return res.status(400).json({ ok: false, error: 'Faltan clave o precio válido' });
+    const { itemId, variationId } = partirClaveMl(clave);
+    if (!itemId) return res.status(400).json({ ok: false, error: 'Clave inválida' });
+    try {
+      const { path, body } = buildMlPriceUpdate(itemId, variationId, precio);
+      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+      if (resp.status !== 200) return res.status(400).json({ ok: false, error: extraerErrorMl(resp) });
+      const fila = await refrescarFila(db, mlCfg, clave);
+      res.json({ ok: true, data: fila });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   return router;
