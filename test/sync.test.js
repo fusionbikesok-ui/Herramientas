@@ -294,15 +294,24 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: si ML rechaza la activación, registra error y no marca activo', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-10', 4);
+    db.prepare("UPDATE catalogo_cache SET precio=900 WHERE sku='FB-10'").run();
     seedDecision(db, 'MLA10|v10', 'FB-10');
     seedPublicacion(db, { clave: 'MLA10|v10', itemId: 'MLA10', varId: 'v10', status: 'paused', subStatus: 'out_of_stock' });
-    // primer PUT (stock) OK, segundo PUT (activar) falla
-    axios.request
-      .mockResolvedValueOnce({ status: 200, data: {}, headers: {} })
-      .mockResolvedValueOnce({ status: 400, data: { message: 'no se puede activar' }, headers: {} });
+    // chequeo de neto OK (precio 1000, comisión 50, sin envío gratis → neto 950 vs web 900, no bloquea)
+    // + PUT stock OK + PUT activar falla
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
+      if (/\/items\/MLA10\?/.test(url)) return { status: 200, data: { id: 'MLA10', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (method === 'put' && /\/items\/MLA10\/variations\/v10$/.test(url)) return { status: 200, data: {}, headers: {} };
+      if (method === 'put' && /\/items\/MLA10$/.test(url)) return { status: 400, data: { message: 'no se puede activar' }, headers: {} };
+      return { status: 404, data: {}, headers: {} };
+    });
 
     const r = await reactivarItems(db, ML_CFG, ['MLA10']);
     expect(r.resultados[0].ok).toBe(false);
+    expect(r.resultados[0].bloqueado).toBeUndefined(); // no es un bloqueo por neto: ML rechazó la activación
     const pub = db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA10|v10');
     expect(pub.status).toBe('paused'); // sigue pausada
   });
@@ -346,6 +355,27 @@ describe('reactivación de pausadas por falta de stock', () => {
     expect(r.resultados[0].ok).toBe(false);
     expect(r.resultados[0].bloqueado).toBe(true);
     expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA12|v12').status).toBe('paused');
+  });
+
+  it('reactivarItems: bloquea (fail-closed) si no se pudo calcular la comisión en ML', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-14', 5);
+    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-14'").run();
+    seedDecision(db, 'MLA14|v14', 'FB-14');
+    seedPublicacion(db, { clave: 'MLA14|v14', itemId: 'MLA14', varId: 'v14', status: 'paused', subStatus: 'out_of_stock' });
+    // item OK y precio web mapeado, pero ML no devuelve la comisión (antes de este fix: 'sin_precio', no bloqueaba)
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (url.includes('/listing_prices')) return { status: 404, data: {}, headers: {} };
+      if (/\/items\/MLA14/.test(url)) return { status: 200, data: { id: 'MLA14', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLA14']);
+    expect(r.resultados[0].ok).toBe(false);
+    expect(r.resultados[0].bloqueado).toBe(true);
+    expect(r.resultados[0].neto).toBeNull();
+    expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA14|v14').status).toBe('paused');
   });
 
   it('reactivarItems: bloquea (fail-closed) si falla la consulta del item en ML', async () => {
