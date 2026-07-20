@@ -39,11 +39,13 @@ describe('server', () => {
     const inventario = await request(app).get('/inventario/');
     const login = await request(app).get('/login/');
     const matcher = await request(app).get('/matcher/');
+    const vendorZxing = await request(app).get('/vendor/zxing.min.js');
     expect(stock.status).toBe(200);
     expect(etiquetas.status).toBe(200);
     expect(inventario.status).toBe(200);
     expect(login.status).toBe(200);
     expect(matcher.status).toBe(200);
+    expect(vendorZxing.status).toBe(200);
   });
 
   it('rejects API requests without sesión', async () => {

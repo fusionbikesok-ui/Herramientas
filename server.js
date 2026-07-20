@@ -59,6 +59,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/matcher', express.static(path.join(__dirname, 'public/matcher')));
   app.use('/usuarios', express.static(path.join(__dirname, 'public/usuarios')));
   app.use('/reset-password', express.static(path.join(__dirname, 'public/reset-password')));
+  app.use('/vendor', express.static(path.join(__dirname, 'public/vendor')));
 
   // Auth: público (login) + endpoints de sesión. NO pasa por requireAuth.
   app.use('/api/auth', authRouter(db));
