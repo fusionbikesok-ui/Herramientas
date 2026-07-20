@@ -154,6 +154,8 @@ export function preparacionRouter(db, cfg) {
   ensureTables(db);
   const router = express.Router();
   const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
+  const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
+  const TRACKING_META_KEY = '_andreani_tracking';
 
   // ── Pendientes: unión web (WC en lpaandreani) + ML (ready_to_ship local) ──
   router.get('/pendientes', async (req, res) => {
@@ -225,6 +227,57 @@ export function preparacionRouter(db, cfg) {
       ON CONFLICT(clave) DO UPDATE SET etiqueta_lista=excluded.etiqueta_lista`)
       .run(clave, wcOrderId, numero_pedido || String(wcOrderId), comprador || null, lista ? 1 : 0, now());
     res.json({ ok: true, etiqueta_lista: lista ? 1 : 0 });
+  });
+
+  // ── Seguimientos: pedidos web con etiqueta ya lista, esperando tracking ──
+  router.get('/seguimientos', async (req, res) => {
+    try {
+      const resp = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
+      const filas = (resp.data || [])
+        .map(order => {
+          const prep = db.prepare('SELECT id, etiqueta_lista, estado FROM preparaciones WHERE clave=?').get(`web:${order.id}`);
+          return prep && prep.etiqueta_lista
+            ? { wc_order_id: order.id, envio: normalizarEnvio(order), preparacion_id: prep.id, estado_preparacion: prep.estado }
+            : null;
+        })
+        .filter(Boolean);
+      res.json({ ok: true, data: filas });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Cargar tracking: guarda meta + avanza status lpaandreani → completed → enviadoandreani ──
+  router.post('/seguimientos/:wcOrderId', async (req, res) => {
+    const wcOrderId = parseInt(req.params.wcOrderId);
+    if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
+    const tracking = String(req.body?.tracking || '').trim();
+    if (!tracking) return res.status(400).json({ ok: false, error: 'tracking requerido' });
+
+    try {
+      const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
+      const metaExistente = (actual.data.meta_data || []).find(m => m.key === TRACKING_META_KEY);
+      const metaEntry = metaExistente
+        ? { id: metaExistente.id, key: TRACKING_META_KEY, value: tracking }
+        : { key: TRACKING_META_KEY, value: tracking };
+
+      // Paso 1: guarda el tracking y pasa a 'completed' (dispara el mail nativo de WooCommerce)
+      await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
+        status: 'completed',
+        meta_data: [metaEntry],
+      });
+      // Paso 2: estado final custom, en una segunda escritura separada
+      await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', { status: enviadoAndreaniStatus });
+
+      db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, completado_en)
+        VALUES ('web', ?, ?, 1, 'completada', ?, ?)
+        ON CONFLICT(clave) DO UPDATE SET estado='completada', completado_en=excluded.completado_en`)
+        .run(`web:${wcOrderId}`, wcOrderId, now(), now());
+
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   // ── Iniciar preparación (snapshot de ítems desde WC o ML) ──

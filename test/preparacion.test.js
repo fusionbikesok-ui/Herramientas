@@ -349,6 +349,13 @@ describe('preparacion flujo', () => {
     expect(prep.etiqueta_lista).toBe(1);
   });
 
+  it('POST /seguimientos/:wcOrderId valida wcOrderId y tracking', async () => {
+    let r = await request(app).post('/api/preparacion/seguimientos/abc').send({ tracking: '123' });
+    expect(r.status).toBe(400);
+    r = await request(app).post('/api/preparacion/seguimientos/900').send({});
+    expect(r.status).toBe(400);
+  });
+
   it('GET /:id devuelve detalle con items, fotos y requisitos', async () => {
     const id = nuevaPrep();
     const r = await request(app).get(`/api/preparacion/${id}`);

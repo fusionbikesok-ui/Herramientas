@@ -139,3 +139,86 @@ describe('contrato GET /pendientes', () => {
     expect(ml.items[0]).toMatchObject({ sku: 'CASCO-9', categoria: 'Cascos', cantidad: 1 });
   });
 });
+
+describe('GET /seguimientos', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('solo devuelve pedidos web con etiqueta_lista=1', async () => {
+    const orderA = { id: 900, number: '900', shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'Córdoba', postcode: '5000' }, billing: {}, meta_data: [] };
+    const orderB = { id: 901, number: '901', shipping: { first_name: 'Beto', last_name: 'Diaz', address_1: 'San Martin 1', city: 'CABA', state: 'CABA', postcode: '1000' }, billing: {}, meta_data: [] };
+    wooFetch.mockResolvedValueOnce({ data: [orderA, orderB] });
+
+    const app = buildTestApp(db); // ensureTables corre acá; hace falta antes de sembrar preparaciones
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:900',900,1,'en_preparacion',?)`).run(now);
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:901',901,0,'en_preparacion',?)`).run(now);
+
+    const res = await request(app).get('/api/preparacion/seguimientos');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].wc_order_id).toBe(900);
+    expect(res.body.data[0].envio.pedido).toBe('900');
+  });
+});
+
+describe('POST /seguimientos/:wcOrderId', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('preserva el id del meta existente y encadena completed → enviadoandreani', async () => {
+    wooFetch
+      .mockResolvedValueOnce({ data: { id: 900, meta_data: [{ id: 55, key: '_andreani_tracking', value: '' }] } }) // GET actual
+      .mockResolvedValueOnce({ data: { id: 900, status: 'completed' } }) // PUT paso 1
+      .mockResolvedValueOnce({ data: { id: 900, status: 'enviadoandreani' } }); // PUT paso 2
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/900').send({ tracking: 'AND123' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    expect(wooFetch).toHaveBeenCalledTimes(3);
+    expect(wooFetch.mock.calls[1][2]).toBe('put');
+    expect(wooFetch.mock.calls[1][3]).toEqual({
+      status: 'completed',
+      meta_data: [{ id: 55, key: '_andreani_tracking', value: 'AND123' }],
+    });
+    expect(wooFetch.mock.calls[2][2]).toBe('put');
+    expect(wooFetch.mock.calls[2][3]).toEqual({ status: 'enviadoandreani' });
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:900'").get();
+    expect(prep.estado).toBe('completada');
+    expect(prep.etiqueta_lista).toBe(1);
+  });
+
+  it('crea el meta sin id cuando el pedido no tenía tracking previo', async () => {
+    wooFetch
+      .mockResolvedValueOnce({ data: { id: 901, meta_data: [] } })
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: {} });
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/901').send({ tracking: 'XYZ' });
+    expect(res.status).toBe(200);
+    expect(wooFetch.mock.calls[1][3]).toEqual({
+      status: 'completed',
+      meta_data: [{ key: '_andreani_tracking', value: 'XYZ' }],
+    });
+  });
+});
