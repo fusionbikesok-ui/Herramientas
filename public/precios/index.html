@@ -24,6 +24,8 @@
   .btn:disabled{opacity:.5;cursor:default;}
   .btn.sec{background:var(--surface2);color:var(--text);font-weight:600;}
   .btn.sec:hover{background:var(--border2);}
+  .btn.mini{padding:5px 10px;font-size:12px;}
+  .acc-cell{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 
   .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;}
   .prog{font-size:12.5px;color:var(--muted);}
@@ -98,14 +100,18 @@ async function cargar(){
   }
 }
 
+var _rowsPorClave={};
+
 function render(rows){
+  _rowsPorClave={};
+  rows.forEach(function(o){_rowsPorClave[o.clave]=o;});
   if(!rows.length) return '<div class="tbl-wrap"><div class="loading" style="color:var(--green)">✓ Nada en esta vista. Si nunca recalculaste, tocá "Recalcular".</div></div>';
   var h='<div class="tbl-wrap"><table><thead><tr>';
   h+='<th>Publicación</th><th class="num">Precio ML</th><th class="num">Comisión</th><th class="num">Envío</th>'
-   +'<th class="num">Neto</th><th class="num">Precio web</th><th>Estado</th><th></th></tr></thead><tbody>';
+   +'<th class="num">Neto</th><th class="num">Precio web</th><th class="num">Sugerido</th><th>Estado</th><th></th></tr></thead><tbody>';
   rows.forEach(function(o){
     var thumb=o.thumbnail?'<img class="pub-thumb" src="'+esc(o.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
-    h+='<tr>';
+    h+='<tr data-clave="'+esc(o.clave)+'">';
     h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(o.titulo||o.item_id)+'</div>'
       +'<div class="pub-meta">'+esc(o.sku||'')+' · '+esc(o.item_id)+'</div></div></div></td>';
     h+='<td class="num">'+money(o.precio_ml)+'</td>';
@@ -113,13 +119,37 @@ function render(rows){
     h+='<td class="num">'+money(o.envio)+'</td>';
     h+='<td class="num"><b>'+money(o.neto)+'</b></td>';
     h+='<td class="num">'+money(o.precio_web)+'</td>';
+    h+='<td class="num">'+(o.precio_sugerido!=null?money(o.precio_sugerido):'—')+'</td>';
     h+='<td><span class="badge b-'+esc(o.estado)+'">'+esc(LABELS[o.estado]||o.estado)+'</span> '
       +(o.estado==='bajo'||o.estado==='alto'?('<span class="pub-meta" style="display:inline">'+pct(o.deficit_pct)+'</span>'):'')+'</td>';
-    h+='<td><a class="ml-link" href="'+mlUrl(o.item_id)+'" target="_blank" rel="noopener">Abrir en ML ↗</a></td>';
+    h+='<td><div class="acc-cell"><a class="ml-link" href="'+mlUrl(o.item_id)+'" target="_blank" rel="noopener">Abrir en ML ↗</a>'
+      +(o.estado==='bajo'&&o.precio_sugerido!=null?'<button class="btn mini sec" onclick="corregirPrecio(this)">Corregir precio</button>':'')
+      +'</div></td>';
     h+='</tr>';
   });
   h+='</tbody></table></div>';
   return h;
+}
+
+async function corregirPrecio(btn){
+  var tr=btn.closest('tr');
+  var clave=tr.getAttribute('data-clave');
+  var o=_rowsPorClave[clave];
+  if(!o)return;
+  var precio=prompt('Nuevo precio en ML para "'+(o.titulo||o.item_id)+'"\n\nSugerido para igualar el neto al precio web ('+money(o.precio_web)+'):', Math.round(o.precio_sugerido));
+  if(precio==null)return;
+  precio=Number(precio);
+  if(!(precio>0)){alert('Precio inválido.');return;}
+  btn.disabled=true;btn.textContent='Actualizando…';
+  try{
+    var r=await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave,precio:precio})});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    await cargar();estado();
+  }catch(err){
+    alert('No se pudo actualizar: '+err.message);
+    btn.disabled=false;btn.textContent='Corregir precio';
+  }
 }
 
 function renderTabs(resumen){
