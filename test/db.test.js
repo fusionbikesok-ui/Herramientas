@@ -18,6 +18,7 @@ describe('db schema', () => {
       '_schema_migrations',
       'catalogo_cache',
       'cobertura_exclusiones',
+      'ean_sku',
       'errores_descartados',
       'mapeo_fusion',
       'ml_oauth_token',
