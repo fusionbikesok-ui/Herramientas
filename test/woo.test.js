@@ -60,4 +60,24 @@ describe('woo route', () => {
     ]);
     db.close();
   });
+
+  it('refrescarCatalogo persiste la marca desde brands', async () => {
+    axios.request.mockResolvedValue({
+      status: 200, headers: {},
+      data: [{ id: 40, name: 'Cinta SUPACAZ', sku: 'FB-40', type: 'simple', parent_id: 0,
+        stock_quantity: 2, brands: [{ id: 9, name: 'SUPACAZ', slug: 'supacaz' }] }],
+    });
+    const db = openDb(TEST_DB);
+    await refrescarCatalogo(db, { url: 'https://fusionbikes.com.ar', ck: 'x', cs: 'y' });
+    const row = getCatalogo(db).find(r => r.sku === 'FB-40');
+    expect(row.marca).toBe('SUPACAZ');
+    db.close();
+  });
+
+  it('openDb crea la tabla ean_sku', () => {
+    const db = openDb(TEST_DB);
+    const t = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ean_sku'").get();
+    expect(t).toBeTruthy();
+    db.close();
+  });
 });
