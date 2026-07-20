@@ -533,20 +533,28 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
 /**
  * Verifica el neto del vendedor antes de reactivar. Trae precio/categoría/listing/envío del item
  * (un GET) y, por cada variación mapeada, compara el neto contra el precio web. Si alguna queda
- * >5% por debajo (veredicto 'bajo') devuelve el detalle del bloqueo; si no, null (se puede reactivar).
+ * >5% por debajo (veredicto 'bajo') devuelve el detalle del bloqueo.
+ *
+ * Bloquea también (fail-closed) si no se pudo consultar el item en ML, si falta el precio web
+ * mapeado o si no se pudo calcular la comisión: sin esos datos no hay forma de verificar el
+ * margen, y dejar pasar la reactivación en ese caso anularía la protección en silencio.
  */
 async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
   const resp = await mlFetch(db, mlCfg, 'get',
     `/items/${itemId}?attributes=id,price,category_id,listing_type_id,shipping,variations`);
   await sleep(ML_CALL_DELAY_MS);
-  if (resp.status !== 200 || !resp.data) return null; // sin datos → no bloquear
+  if (resp.status !== 200 || !resp.data) {
+    return { error: 'No se pudo consultar el precio en ML — reintentá', clave: null, neto: null, precio_web: null, deficitPct: null };
+  }
   const item = resp.data;
   const freeShipping = !!item.shipping?.free_shipping;
   const caches = { fee: new Map(), envio: new Map() };
 
   for (const v of variaciones) {
     const precioWeb = precioWebClave(db, v.clave);
-    if (!(precioWeb > 0)) continue; // sin precio web → no se puede comparar, no bloquea
+    if (!(precioWeb > 0)) {
+      return { error: 'Sin precio web mapeado para esta variación — no se puede verificar el margen', clave: v.clave, neto: null, precio_web: null, deficitPct: null };
+    }
     let precio = item.price ?? null;
     if (v.variation_id) {
       const vv = (item.variations || []).find(x => String(x.id) === String(v.variation_id));
@@ -557,6 +565,9 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
       listingTypeId: item.listing_type_id, freeShipping,
     }, caches);
     await sleep(ML_CALL_DELAY_MS);
+    if (neto == null) {
+      return { error: 'No se pudo calcular la comisión en ML — reintentá', clave: v.clave, neto: null, precio_web: precioWeb, deficitPct: null };
+    }
     const { estado, deficitPct } = veredictoNeto(neto, precioWeb);
     if (estado === 'bajo') {
       return { error: 'El neto de ML queda por debajo del precio web', clave: v.clave, neto, precio_web: precioWeb, deficitPct };
