@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { mlFetch } from '../lib/mlClient.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
+import { aplanarItemMl } from '../lib/modelos/publicacionMl.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -28,19 +29,6 @@ function now() {
 
 function mlCfgOk(cfg) {
   return cfg?.clientId && cfg?.clientSecret && cfg?.userId;
-}
-
-/**
- * Extrae de un array de attribute_combinations (o attributes) el value_name del
- * primer atributo cuyo id esté en la lista `ids`.
- */
-function attrValor(attrs, ids) {
-  if (!Array.isArray(attrs)) return '';
-  for (const id of ids) {
-    const a = attrs.find(x => x.id === id);
-    if (a && a.value_name) return String(a.value_name).trim();
-  }
-  return '';
 }
 
 /**
@@ -111,7 +99,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
       // entry.code !== 200 por-ítem: ítem borrado/no accesible en ML — se excluye
       // legítimamente (no es un fallo de fetch del chunk completo).
       if (entry.code !== 200 || !entry.body) continue;
-      filas.push(...aplanarItem(entry.body));
+      filas.push(...aplanarItemMl(entry.body));
     }
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, allIds.length), total: allIds.length });
     await sleep(CALL_DELAY_MS);
@@ -168,7 +156,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     }
     for (const entry of resp.data) {
       if (entry.code !== 200 || !entry.body) continue;
-      filas.push(...aplanarItem(entry.body));
+      filas.push(...aplanarItemMl(entry.body));
     }
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, ids.length), total: ids.length });
     await sleep(CALL_DELAY_MS);
@@ -183,69 +171,6 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
   return { total: filas.length, items: ids.length, variaciones };
-}
-
-/**
- * Convierte un item de ML (con o sin variaciones) en filas del cache.
- * Una fila por variación; para simples, una sola fila con variation_id = ''.
- */
-function aplanarItem(body) {
-  const itemId = String(body.id);
-  const titulo = body.title || '';
-  const thumbnail = body.secure_thumbnail || body.thumbnail || '';
-  const status = body.status || '';
-  // sub_status es a nivel item (array, ej. ["out_of_stock"]); se denormaliza en cada fila.
-  const subStatus = Array.isArray(body.sub_status) ? body.sub_status.join(',') : (body.sub_status || '');
-  // permalink y catalog_listing son a nivel item; se denormalizan en cada variación.
-  const permalink = body.permalink || '';
-  const catalogo = body.catalog_listing ? 1 : 0;
-  const vars = Array.isArray(body.variations) ? body.variations : [];
-
-  if (vars.length === 0) {
-    // Producto simple — SKU en attributes (SELLER_SKU) o seller_custom_field
-    const sku = attrValor(body.attributes, ['SELLER_SKU']) || (body.seller_custom_field ? String(body.seller_custom_field).trim() : '');
-    return [{
-      clave: `${itemId}|`,
-      item_id: itemId,
-      variation_id: '',
-      titulo,
-      status,
-      sub_status: subStatus,
-      es_variante: 0,
-      color: '',
-      talle: '',
-      seller_sku: sku,
-      variations_texto: '',
-      thumbnail,
-      permalink,
-      catalogo,
-    }];
-  }
-
-  return vars.map(v => {
-    const varId = String(v.id);
-    const color = attrValor(v.attribute_combinations, ['COLOR', 'MAIN_COLOR']);
-    const talle = attrValor(v.attribute_combinations, ['SIZE', 'FRAME_SIZE', 'FILTRABLE_SIZE']);
-    const sku = attrValor(v.attributes, ['SELLER_SKU']) || (v.seller_custom_field ? String(v.seller_custom_field).trim() : '');
-    const combo = (v.attribute_combinations || [])
-      .map(a => a.value_name).filter(Boolean).join(' / ');
-    return {
-      clave: `${itemId}|${varId}`,
-      item_id: itemId,
-      variation_id: varId,
-      titulo,
-      status,
-      sub_status: subStatus,
-      es_variante: 1,
-      color,
-      talle,
-      seller_sku: sku,
-      variations_texto: combo,
-      thumbnail,
-      permalink,
-      catalogo,
-    };
-  });
 }
 
 /**
