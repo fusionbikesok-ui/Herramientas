@@ -27,10 +27,12 @@ describe('normalizarProductoWc', () => {
       id: 10, name: 'Casco Bell L', sku: 'CBL', type: 'simple', parent_id: 0,
       stock_quantity: 4, categories: [{ id: 1, name: 'Cascos' }],
       images: [{ src: 'https://x/img.jpg' }], price: '15000.50',
+      brands: [{ id: 5, name: 'Bell', slug: 'bell' }],
     };
     expect(normalizarProductoWc(raw)).toEqual({
       id_woo: 10, nombre: 'Casco Bell L', sku: 'CBL', tipo: 'simple', id_padre: null,
       stock: 4, categorias: ['Cascos'], atributos: [], img: 'https://x/img.jpg', precio: 15000.5,
+      marca: 'Bell',
     });
   });
 
@@ -43,6 +45,7 @@ describe('normalizarProductoWc', () => {
     expect(p.precio).toBeNull();
     expect(p.stock).toBe(0);
     expect(p.id_padre).toBeNull();
+    expect(p.marca).toBe('');
   });
 
   it('precio cae a regular_price cuando no hay price', () => {
@@ -59,6 +62,7 @@ describe('normalizarProductoWc', () => {
 describe('normalizarVariacionWc', () => {
   const padre = normalizarProductoWc({
     id: 20, name: 'Casco X', type: 'variable', categories: [{ name: 'Cascos' }],
+    brands: [{ name: 'Giro' }],
   });
 
   it('compone nombre "Padre — attrs" y hereda categorías del padre', () => {
@@ -69,6 +73,7 @@ describe('normalizarVariacionWc', () => {
     const v = normalizarVariacionWc(rawVar, padre);
     expect(v.nombre).toBe('Casco X — Rojo / M');
     expect(v.categorias).toEqual(['Cascos']);
+    expect(v.marca).toBe('Giro');
     expect(v.id_padre).toBe(20);
     expect(v.atributos).toEqual([{ name: 'Color', option: 'Rojo' }, { name: 'Talle', option: 'M' }]);
   });
@@ -96,6 +101,7 @@ describe('filaCatalogo / productoDesdeFilaCatalogo (round-trip)', () => {
       id_woo: 30, nombre: 'Producto Full', sku: 'PF-1', tipo: 'simple', id_padre: null,
       stock: 7, categorias: ['Bicicletas', 'Rodado 29'],
       atributos: [{ name: 'Color', option: 'Negro' }], img: 'https://x/full.jpg', precio: 99999.99,
+      marca: 'Shimano',
     };
     const fila = filaCatalogo(producto, '2026-07-20T00:00:00.000Z');
     expect(fila.categorias_json).toBe(JSON.stringify(producto.categorias));
@@ -110,6 +116,7 @@ describe('filaCatalogo / productoDesdeFilaCatalogo (round-trip)', () => {
     const producto = {
       id_woo: 31, nombre: 'Sin extras', sku: '', tipo: 'variable', id_padre: null,
       stock: 0, categorias: [], atributos: [], img: null, precio: null,
+      marca: '',
     };
     const fila = filaCatalogo(producto, 'now');
     expect(fila.categorias_json).toBeNull();
