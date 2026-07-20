@@ -98,6 +98,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/preparacion', preparacionRouter(db, {
     woo: wooCfg, ml: mlCfg,
     andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
+    enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
   }));
   app.use('/preparacion', express.static(path.join(__dirname, 'public/preparacion')));
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
