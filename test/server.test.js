@@ -2,9 +2,23 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import request from 'supertest';
 import { buildApp } from '../server.js';
+import { hashPassword } from '../lib/auth.js';
 
 const TEST_DB = './test/tmp-server.sqlite';
 let currentApp;
+
+// La app usa sesión (cookie, /api/auth/login) — no HTTP Basic Auth. Sembrar un
+// admin y devolver un agente supertest con la sesión ya iniciada (conserva cookies).
+async function loginComoAdmin(app, { username = 'tester', password = 'test1234' } = {}) {
+  const now = new Date().toISOString();
+  app._db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+              VALUES (?, ?, 1, 1, ?, ?)`)
+    .run(username, hashPassword(password), now, now);
+  const agent = request.agent(app);
+  const login = await agent.post('/api/auth/login').send({ username, password });
+  if (login.status !== 200) throw new Error(`login de prueba falló: ${login.status} ${JSON.stringify(login.body)}`);
+  return agent;
+}
 
 describe('server', () => {
   afterEach(() => {
@@ -18,7 +32,7 @@ describe('server', () => {
   });
 
   it('serves static pages without credentials (auth is on /api only)', async () => {
-    const app = buildApp({ dbPath: TEST_DB, basicAuthUser: 'u', basicAuthPass: 'p', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const stock = await request(app).get('/stock/');
     const etiquetas = await request(app).get('/etiquetas/');
@@ -32,21 +46,23 @@ describe('server', () => {
     expect(matcher.status).toBe(200);
   });
 
-  it('rejects API requests without credentials', async () => {
-    const app = buildApp({ dbPath: TEST_DB, basicAuthUser: 'u', basicAuthPass: 'p', wooCfg: {}, geminiKey: 'k' });
+  it('rejects API requests without sesión', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const res = await request(app).get('/api/woo/catalogo');
     expect(res.status).toBe(401);
   });
 
   it('mounts the woo, gemini, nuevos-productos, mapeo, csv, matcher and sync API routers', async () => {
-    const app = buildApp({ dbPath: TEST_DB, basicAuthUser: 'u', basicAuthPass: 'p', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
-    const catalogo = await request(app).get('/api/woo/catalogo').auth('u', 'p');
-    const categorias = await request(app).get('/api/nuevos-productos/categorias').auth('u', 'p');
-    const mapeo = await request(app).get('/api/mapeo/conocido').auth('u', 'p');
-    const decisiones = await request(app).get('/api/matcher/decisiones').auth('u', 'p');
-    const syncEstado = await request(app).get('/api/sync/estado').auth('u', 'p');
+    const agent = await loginComoAdmin(app);
+
+    const catalogo = await agent.get('/api/woo/catalogo');
+    const categorias = await agent.get('/api/nuevos-productos/categorias');
+    const mapeo = await agent.get('/api/mapeo/conocido');
+    const decisiones = await agent.get('/api/matcher/decisiones');
+    const syncEstado = await agent.get('/api/sync/estado');
     expect(catalogo.status).toBe(200);
     expect(categorias.status).toBe(200);
     expect(mapeo.status).toBe(200);
