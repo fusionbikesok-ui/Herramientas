@@ -451,7 +451,7 @@ export function getReactivablesRows(db, itemIds = null) {
   let sql = `
     ${COMPUTED_STOCK_CTE}
     SELECT cm.clave, cm.sku, cm.stock_disponible_ml,
-           p.item_id, p.variation_id, p.titulo, p.variations_texto
+           p.item_id, p.variation_id, p.titulo, p.variations_texto, p.thumbnail
     FROM computed cm
     JOIN ml_publicaciones_cache p ON p.clave = cm.clave
     WHERE p.status = 'paused'
@@ -465,6 +465,69 @@ export function getReactivablesRows(db, itemIds = null) {
   }
   sql += ' ORDER BY p.titulo, cm.clave';
   return db.prepare(sql).all(...params);
+}
+
+// Prioridad de bloqueo para elegir el "peor caso" entre variaciones de una misma publicación.
+const PRECIO_ESTADO_PRIORIDAD = { bajo: 0, alto: 1, sin_precio: 2, ok: 3 };
+
+/**
+ * Precio ML vivo + neto para las publicaciones reactivables, para mostrar en la tabla antes
+ * de que el usuario decida reactivar (mismo cálculo que chequearNetoReactivar, pero informativo
+ * y para todas las publicaciones a la vez). Multiget de a MULTIGET_CHUNK items + 1 GET de
+ * comisión y, si aplica, 1 de envío gratis por variación (cacheados por combinación / item para
+ * no repetir llamadas). Devuelve Map(item_id -> {precio_ml, sale_fee, envio, neto, precio_web,
+ * estado, deficit_pct}) con el peor caso (más prioridad de bloqueo) entre sus variaciones.
+ */
+async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
+  const MULTIGET_CHUNK = 20;
+  const itemIds = [...filasPorItem.keys()];
+  const resultado = new Map();
+  const caches = { fee: new Map(), envio: new Map() };
+
+  for (let i = 0; i < itemIds.length; i += MULTIGET_CHUNK) {
+    const chunk = itemIds.slice(i, i + MULTIGET_CHUNK);
+    const resp = await mlFetch(
+      db, mlCfg, 'get',
+      `/items?ids=${chunk.join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations`
+    );
+    await sleep(ML_CALL_DELAY_MS);
+
+    const items = new Map();
+    if (resp.status === 200 && Array.isArray(resp.data)) {
+      for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+    }
+
+    for (const itemId of chunk) {
+      const item = items.get(itemId);
+      const filas = filasPorItem.get(itemId) || [];
+      let peor = null;
+      for (const fila of filas) {
+        const precioWeb = precioWebClave(db, fila.clave);
+        let precio_ml = null, sale_fee = null, envio = null, neto = null;
+        let estado = 'sin_precio', deficit_pct = null;
+        if (item) {
+          precio_ml = item.price ?? null;
+          if (fila.variation_id) {
+            const vv = (item.variations || []).find(x => String(x.id) === String(fila.variation_id));
+            if (vv && vv.price != null) precio_ml = vv.price;
+          }
+          const freeShipping = !!item.shipping?.free_shipping;
+          const r = await netoMl(db, mlCfg, {
+            itemId, price: precio_ml, categoryId: item.category_id,
+            listingTypeId: item.listing_type_id, freeShipping,
+          }, caches);
+          sale_fee = r.sale_fee; envio = r.envio; neto = r.neto;
+          await sleep(ML_CALL_DELAY_MS);
+          const v = veredictoNeto(neto, precioWeb);
+          estado = v.estado; deficit_pct = v.deficitPct;
+        }
+        const evalFila = { precio_ml, sale_fee, envio, neto, precio_web: precioWeb, estado, deficit_pct };
+        if (!peor || PRECIO_ESTADO_PRIORIDAD[estado] < PRECIO_ESTADO_PRIORIDAD[peor.estado]) peor = evalFila;
+      }
+      if (peor) resultado.set(itemId, peor);
+    }
+  }
+  return resultado;
 }
 
 /**
@@ -872,21 +935,35 @@ export function syncRouter(db, cfg) {
   });
 
   // Publicaciones pausadas por out_of_stock con stock web disponible, agrupadas por publicación.
-  router.get('/reactivables', (req, res) => {
+  // Incluye precio ML/neto vivo (si ML está configurado) para que el usuario vea de entrada
+  // si el precio quedó mal puesto, sin tener que intentar reactivar primero.
+  router.get('/reactivables', async (req, res) => {
     try {
       const rows = getReactivablesRows(db);
       const porItem = new Map();
+      const filasPorItem = new Map();
       for (const r of rows) {
         if (!porItem.has(r.item_id)) {
-          porItem.set(r.item_id, { item_id: r.item_id, titulo: r.titulo, variaciones: [] });
+          porItem.set(r.item_id, { item_id: r.item_id, titulo: r.titulo, thumbnail: r.thumbnail, variaciones: [] });
+          filasPorItem.set(r.item_id, []);
         }
         porItem.get(r.item_id).variaciones.push({
           clave: r.clave, sku: r.sku,
           variations_texto: r.variations_texto,
           stock_disponible_ml: r.stock_disponible_ml,
         });
+        filasPorItem.get(r.item_id).push({ clave: r.clave, variation_id: r.variation_id });
       }
       const data = [...porItem.values()];
+
+      if (mlCfgOk(cfg) && data.length) {
+        const precios = await evaluarPreciosReactivables(db, mlCfg, filasPorItem);
+        for (const pub of data) {
+          const p = precios.get(pub.item_id);
+          if (p) Object.assign(pub, p);
+        }
+      }
+
       res.json({ ok: true, data, totalPublicaciones: data.length, totalVariaciones: rows.length });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });

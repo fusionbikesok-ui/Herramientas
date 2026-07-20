@@ -56,12 +56,23 @@
   table{width:100%;border-collapse:collapse;font-size:13px;}
   .tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);}
   th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted2);font-weight:600;padding:10px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
-  td{padding:10px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:10px 13px;border-bottom:1px solid var(--border);vertical-align:middle;}
   tr:last-child td{border-bottom:0;}
   td.mono{font-family:'Courier New',monospace;color:var(--azul);}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .pub-cell{display:flex;gap:10px;align-items:center;}
+  .pub-thumb{width:40px;height:40px;border-radius:6px;object-fit:cover;background:var(--surface2);border:1px solid var(--border);flex-shrink:0;}
+  .pub-txt{min-width:0;}
+  .pub-tit{font-weight:600;line-height:1.25;}
+  .pub-meta{font-size:11px;color:var(--muted2);font-family:'Courier New',monospace;margin-top:2px;}
   .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;}
   .tag.ok{background:rgba(52,211,153,.13);color:var(--green);}
   .tag.canc{background:rgba(248,113,113,.13);color:var(--red);}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;}
+  .b-bajo{background:rgba(248,113,113,.14);color:var(--red);}
+  .b-alto{background:rgba(245,185,66,.14);color:var(--amber);}
+  .b-sin_precio{background:rgba(132,147,176,.14);color:var(--muted);}
+  .b-ok{background:rgba(52,211,153,.14);color:var(--green);}
 
   .acciones{display:flex;gap:10px;flex-wrap:wrap;margin-top:11px;}
   .msg{font-size:12.5px;color:var(--muted);margin-top:12px;min-height:16px;}
@@ -98,6 +109,7 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return
 function fecha(s){if(!s)return '—';try{return new Date(s).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return s;}}
 function nick(json){try{var o=JSON.parse(json);return o&&o.nickname?o.nickname:(o&&o.id?'ID '+o.id:'—');}catch(e){return '—';}}
 function n(x){return (x||0).toLocaleString('es-AR');}
+function money(x){return x==null?'—':Number(x).toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0});}
 
 async function cargar(){
   var cont=document.getElementById('cuerpo');
@@ -133,6 +145,8 @@ async function cargarReactivables(){
   }
 }
 
+var LABELS_PRECIO={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:'OK'};
+
 function renderReactivables(d){
   var pubs=d.data||[];
   if(!pubs.length){
@@ -142,15 +156,23 @@ function renderReactivables(d){
   h+='<p class="sub" style="margin-bottom:10px">'+n(d.totalPublicaciones)+' publicaciones ('+n(d.totalVariaciones)+' variaciones) que ML pausó por quedarse sin stock y ya tienen stock en la web. Reactivarlas les empuja el stock actual y las vuelve a poner activas en ML.</p>';
   h+='<div class="tbl-wrap"><table><thead><tr>';
   h+='<th><input type="checkbox" id="chk-all" checked onclick="toggleAll(this)"></th>';
-  h+='<th>Publicación</th><th>SKU(s)</th><th>Stock web</th></tr></thead><tbody>';
+  h+='<th>Publicación</th><th>SKU(s)</th><th class="num">Stock web</th>'
+   +'<th class="num">Precio ML</th><th class="num">Neto</th><th class="num">Precio web</th><th>Estado</th></tr></thead><tbody>';
   pubs.forEach(function(p){
     var skus=[...new Set(p.variaciones.map(function(v){return v.sku;}).filter(Boolean))];
     var stockTotal=p.variaciones.reduce(function(a,v){return a+(v.stock_disponible_ml||0);},0);
+    var thumb=p.thumbnail?'<img class="pub-thumb" src="'+esc(p.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
+    var estado=p.estado||'sin_precio';
     h+='<tr>';
     h+='<td><input type="checkbox" class="chk-item" value="'+esc(p.item_id)+'" checked></td>';
-    h+='<td>'+esc(p.titulo||p.item_id)+'<div class="hint">'+esc(p.item_id)+' · '+p.variaciones.length+' var.</div></td>';
+    h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(p.titulo||p.item_id)+'</div>'
+      +'<div class="pub-meta">'+esc(p.item_id)+' · '+p.variaciones.length+' var.</div></div></div></td>';
     h+='<td class="mono">'+esc(skus.slice(0,3).join(', '))+(skus.length>3?(' +'+(skus.length-3)):'')+'</td>';
-    h+='<td>'+n(stockTotal)+'</td>';
+    h+='<td class="num">'+n(stockTotal)+'</td>';
+    h+='<td class="num">'+money(p.precio_ml)+'</td>';
+    h+='<td class="num"><b>'+money(p.neto)+'</b></td>';
+    h+='<td class="num">'+money(p.precio_web)+'</td>';
+    h+='<td><span class="badge b-'+esc(estado)+'">'+esc(LABELS_PRECIO[estado]||estado)+'</span></td>';
     h+='</tr>';
   });
   h+='</tbody></table></div>';
@@ -208,7 +230,7 @@ function render(d){
 
   // Reactivar pausadas por falta de stock (se llena aparte, async)
   h+='<div class="sec-title" id="reactivar">Reactivar publicaciones pausadas por falta de stock</div>';
-  h+='<div id="reactivar-box"><div class="loading">Buscando publicaciones…</div></div>';
+  h+='<div id="reactivar-box"><div class="loading">Buscando publicaciones y verificando precios en ML (puede tardar unos segundos)…</div></div>';
 
   // Pedidos
   h+='<div class="sec-title">Pedidos de MercadoLibre en WooCommerce</div><div class="cards c2">';
