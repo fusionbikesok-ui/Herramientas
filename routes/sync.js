@@ -807,15 +807,19 @@ export function syncRouter(db, cfg) {
     // El sync_log es append-only, así que se filtra lo ya resuelto:
     //  - error/agotado ya sincronizado después → está en ml_stock_estado
     //  - remapeo/sin_mapeo ya re-mapeado → volvió a sku_matcher_decisiones
+    //  - o descartado a mano (ej. la variación vieja ya no existe en ML y nunca
+    //    va a poder re-mapearse con esa clave exacta) → errores_descartados
     const sinMapeo = db.prepare(
       `SELECT COUNT(DISTINCT clave) n FROM sync_log
        WHERE estado='sin_mapeo' AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM sku_matcher_decisiones WHERE accion IN ('asignar','confirmar'))`
+         AND clave NOT IN (SELECT clave FROM sku_matcher_decisiones WHERE accion IN ('asignar','confirmar'))
+         AND clave NOT IN (SELECT clave FROM errores_descartados)`
     ).get().n;
     const remapeoReq = db.prepare(
       `SELECT COUNT(DISTINCT clave) n FROM sync_log
        WHERE estado='remapeo_requerido' AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM sku_matcher_decisiones)`
+         AND clave NOT IN (SELECT clave FROM sku_matcher_decisiones)
+         AND clave NOT IN (SELECT clave FROM errores_descartados)`
     ).get().n;
     const requiereAtencion = db.prepare(
       `SELECT COUNT(DISTINCT clave) n FROM sync_log
@@ -917,11 +921,11 @@ export function syncRouter(db, cfg) {
   const ATENCION_DEFS = {
     sin_mapeo: {
       estados: "'sin_mapeo'",
-      exclude: "s.clave NOT IN (SELECT clave FROM sku_matcher_decisiones WHERE accion IN ('asignar','confirmar'))",
+      exclude: "s.clave NOT IN (SELECT clave FROM sku_matcher_decisiones WHERE accion IN ('asignar','confirmar')) AND s.clave NOT IN (SELECT clave FROM errores_descartados)",
     },
     remapeo_requerido: {
       estados: "'remapeo_requerido'",
-      exclude: "s.clave NOT IN (SELECT clave FROM sku_matcher_decisiones)",
+      exclude: "s.clave NOT IN (SELECT clave FROM sku_matcher_decisiones) AND s.clave NOT IN (SELECT clave FROM errores_descartados)",
     },
     requiere_atencion_ml: {
       estados: "'requiere_atencion_ml'",
@@ -961,8 +965,10 @@ export function syncRouter(db, cfg) {
     res.json({ ok: true, cat: req.params.cat, total: rows.length, data: rows });
   });
 
-  // Descarta errores no accionables (sin stock real, pausa manual, publicación cerrada): dejan
-  // de contar como error y desaparecen de la vista. Reaparecen si vuelven a errar más adelante.
+  // Descarta claves no accionables (sin stock real, pausa manual, publicación cerrada,
+  // o una variación vieja que ya no existe en ML y nunca va a poder re-mapearse con esa
+  // clave exacta): dejan de contar en cualquier categoría de atención (errores, sin_mapeo,
+  // remapeo_requerido) y desaparecen de la vista. Reaparecen si vuelven a errar más adelante.
   router.post('/descartar-error', (req, res) => {
     const { claves, motivo } = req.body || {};
     const arr = Array.isArray(claves) ? claves.filter(c => typeof c === 'string' && c) : [];
