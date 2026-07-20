@@ -359,6 +359,41 @@ describe('vista de detalle', () => {
     expect(res.body.data.map(r => r.clave)).toEqual(['MLA1|']);
   });
 
+  it('atencion/sin_mapeo: excluye lo descartado a mano', async () => {
+    seedLog(db, { clave: 'MLA1|', estado: 'sin_mapeo' });
+    db.prepare("INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES ('MLA1|', null, ?)").run(ahora());
+    const res = await request(app).get('/api/sync/atencion/sin_mapeo');
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('atencion/remapeo_requerido: una variación vieja que ya no existe en ML queda pendiente para siempre hasta que se descarta', async () => {
+    // La variación vieja MLA6|v6-vieja fue reemplazada por v6-nueva; el usuario
+    // ya mapeó la variación actual, pero la clave vieja del log nunca va a
+    // aparecer en sku_matcher_decisiones con esa clave exacta.
+    seedLog(db, { clave: 'MLA6|v6-vieja', estado: 'remapeo_requerido' });
+    seedDecision(db, 'MLA6|v6-nueva', 'FB-6', 'asignar');
+
+    let res = await request(app).get('/api/sync/atencion/remapeo_requerido');
+    expect(res.body.data.map(r => r.clave)).toEqual(['MLA6|v6-vieja']);
+
+    const desc = await request(app).post('/api/sync/descartar-error').send({ claves: ['MLA6|v6-vieja'] });
+    expect(desc.body.ok).toBe(true);
+
+    res = await request(app).get('/api/sync/atencion/remapeo_requerido');
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('dashboard: sin_mapeo y remapeo_requerido no cuentan lo descartado', async () => {
+    seedLog(db, { clave: 'MLA7|', estado: 'sin_mapeo' });
+    seedLog(db, { clave: 'MLA8|v8', estado: 'remapeo_requerido' });
+    db.prepare("INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES ('MLA7|', null, ?)").run(ahora());
+    db.prepare("INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES ('MLA8|v8', null, ?)").run(ahora());
+
+    const res = await request(app).get('/api/sync/dashboard');
+    expect(res.body.atencion.sin_mapeo).toBe(0);
+    expect(res.body.atencion.remapeo_requerido).toBe(0);
+  });
+
   it('atencion/errores: excluye los que ya están en ml_stock_estado', async () => {
     seedLog(db, { clave: 'MLA3|v3', estado: 'error', error: 'HTTP 400' });
     seedLog(db, { clave: 'MLA4|', estado: 'error', error: 'HTTP 500' });
