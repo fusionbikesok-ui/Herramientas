@@ -429,30 +429,21 @@ window.addEventListener('keydown',function(e){
   if(e.key.length===1){_buf+=e.key;clearTimeout(_bufT);_bufT=setTimeout(function(){_buf='';},300);}
 });
 
-// ─── Cámara (BarcodeDetector nativo) ─────────────────────────────────────────
+// ─── Cámara (módulo Scanner compartido: BarcodeDetector nativo o ZXing) ──────
 
-var _camStream=null,_camTimer=null;
-async function abrirCamara(){
-  if(!('BarcodeDetector' in window)){alert('Este navegador no soporta escaneo por cámara. Usá el lector físico o tipeá el código.');return;}
+function abrirCamara(){
   var modal=document.getElementById('cam-modal'),video=document.getElementById('cam-video');
   modal.classList.add('open');
-  try{
-    _camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-    video.srcObject=_camStream;
-    var det=new BarcodeDetector();
-    _camTimer=setInterval(async function(){
-      try{
-        var codes=await det.detect(video);
-        if(codes.length){var v=codes[0].rawValue;cerrarCamara();escanear(v);}
-      }catch(_){}
-    },350);
-  }catch(e){
-    document.getElementById('cam-msg').textContent='No se pudo abrir la cámara: '+e.message;
-  }
+  document.getElementById('cam-msg').textContent='Apuntá al código de barras…';
+  window.Scanner.open({
+    video:video,
+    mode:'single',
+    onCode:function(v){cerrarCamara();escanear(v);},
+    onError:function(msg){document.getElementById('cam-msg').textContent=msg;}
+  });
 }
 function cerrarCamara(){
-  clearInterval(_camTimer);
-  if(_camStream){_camStream.getTracks().forEach(function(t){t.stop();});_camStream=null;}
+  window.Scanner.close();
   document.getElementById('cam-modal').classList.remove('open');
 }
 
@@ -603,5 +594,6 @@ async function agregarPerfil(){
 
 cargarPendientes();
 </script>
+<script type="module" src="/lib/scanner.js"></script>
 </body>
 </html>
