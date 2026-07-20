@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Preparación de pedidos — Fusion Bikes</title>
+<style>
+  :root{
+    --azul:#2DB8E8;--azul-dk:#1C93BD;--oscuro:#0C0F16;
+    --surface:#141A25;--surface2:#1B2235;--border:#24304A;--border2:#2E3B57;
+    --text:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
+    --green:#34D399;--amber:#F5B942;--red:#F87171;--violet:#A78BFA;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;margin:0;background:var(--oscuro);color:var(--text);}
+  .wrap{max-width:1150px;margin:0 auto;padding:20px 22px 80px;}
+  a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;margin-bottom:12px;}
+  a.back:hover{color:var(--azul);}
+  h1{font-size:1.5rem;font-weight:800;letter-spacing:-.03em;margin:6px 0 4px;}
+  h1 em{font-style:normal;color:var(--azul);}
+  .sub{font-size:12.5px;color:var(--muted);margin:0 0 18px;max-width:85ch;line-height:1.5;}
+  .btn{background:var(--azul);color:#06131C;border:0;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer;transition:background .15s;}
+  .btn:hover{background:var(--azul-dk);}
+  .btn:disabled{opacity:.45;cursor:default;}
+  .btn.sec{background:var(--surface2);color:var(--text);font-weight:600;border:1px solid var(--border);}
+  .btn.sec:hover{background:var(--border2);}
+  .btn.danger{background:rgba(248,113,113,.15);color:var(--red);border:1px solid rgba(248,113,113,.3);}
+  .btn.mini{padding:4px 9px;font-size:11px;border-radius:6px;}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;}
+  .tab{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:20px;padding:6px 14px;font-size:12.5px;cursor:pointer;}
+  .tab.on{background:var(--azul);border-color:var(--azul);color:#06131C;font-weight:700;}
+  .loading{color:var(--muted2);font-size:13px;padding:34px 0;text-align:center;}
+  .err{color:var(--red);}
+
+  .badge{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;vertical-align:middle;}
+  .b-web{background:rgba(45,184,232,.14);color:var(--azul);}
+  .b-ml{background:rgba(245,185,66,.14);color:var(--amber);}
+  .b-ok{background:rgba(52,211,153,.14);color:var(--green);}
+  .b-warn{background:rgba(245,185,66,.14);color:var(--amber);}
+  .b-red{background:rgba(248,113,113,.14);color:var(--red);}
+  .b-dep{background:rgba(167,139,250,.14);color:var(--violet);}
+  .b-mut{background:rgba(132,147,176,.14);color:var(--muted);}
+
+  /* cards de la cola */
+  .ped-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
+  .ped{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;cursor:pointer;transition:border-color .15s;}
+  .ped:hover{border-color:var(--azul);}
+  .ped-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
+  .ped-num{font-weight:800;font-size:15px;}
+  .ped-cli{font-size:12.5px;color:var(--muted);}
+  .ped-items{font-size:11.5px;color:var(--muted2);margin-top:8px;line-height:1.5;}
+  .ped-foot{display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;}
+
+  /* detalle */
+  .stepper{display:flex;gap:8px;align-items:center;margin:14px 0;flex-wrap:wrap;}
+  .step{display:flex;gap:7px;align-items:center;font-size:12.5px;font-weight:700;padding:7px 13px;border-radius:20px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);}
+  .step.on{border-color:var(--azul);color:var(--azul);}
+  .step.done{border-color:var(--green);color:var(--green);}
+  .step .n{width:18px;height:18px;border-radius:50%;background:var(--border2);display:inline-flex;align-items:center;justify-content:center;font-size:10.5px;color:var(--text);}
+  .step.done .n{background:var(--green);color:#06131C;}
+  .step.on .n{background:var(--azul);color:#06131C;}
+
+  .scanbar{display:flex;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:6px;flex-wrap:wrap;}
+  .scanbar input{flex:1;min-width:160px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:9px 12px;font-size:14px;font-family:'Courier New',monospace;}
+  .scanbar input:focus{outline:none;border-color:var(--azul);}
+  .flash{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;}
+  .flash.ok{display:block;background:rgba(52,211,153,.15);color:var(--green);}
+  .flash.bad{display:block;background:rgba(248,113,113,.15);color:var(--red);}
+  .flash.warn{display:block;background:rgba(245,185,66,.15);color:var(--amber);}
+
+  .item{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:13px 15px;margin-bottom:10px;}
+  .item.verif{border-color:rgba(52,211,153,.4);}
+  .item.exento{opacity:.65;border-style:dashed;}
+  .item-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;}
+  .item-nom{font-weight:700;font-size:13.5px;line-height:1.3;}
+  .item-sku{font-family:'Courier New',monospace;font-size:11.5px;color:var(--muted2);margin-top:2px;}
+  .item-cant{font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .item-cant.done{color:var(--green);}
+  .item-ctrl{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center;}
+  .item-ctrl select{background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:7px;padding:5px 8px;font-size:12px;}
+
+  .fotos{margin-top:10px;border-top:1px dashed var(--border);padding-top:10px;}
+  .slot{margin-bottom:8px;}
+  .slot-l{font-size:11.5px;color:var(--muted);margin-bottom:5px;}
+  .slot-l.falta{color:var(--amber);}
+  .slot-l.okk{color:var(--green);}
+  .thumbs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  .thumb{position:relative;width:64px;height:64px;border-radius:8px;overflow:hidden;border:1px solid var(--border2);}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .thumb .del{position:absolute;top:1px;right:1px;background:rgba(0,0,0,.65);color:var(--red);border:0;width:19px;height:19px;border-radius:5px;font-size:11px;cursor:pointer;line-height:1;}
+  .addfoto{width:64px;height:64px;border-radius:8px;border:1px dashed var(--border2);background:var(--surface2);color:var(--muted);font-size:22px;cursor:pointer;}
+  .addfoto:hover{border-color:var(--azul);color:var(--azul);}
+
+  .finbar{position:sticky;bottom:0;background:var(--oscuro);padding:12px 0;border-top:1px solid var(--border);margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+
+  /* etiquetas */
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted2);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  th .cpcol{margin-left:5px;cursor:pointer;color:var(--muted2);}
+  th .cpcol:hover{color:var(--azul);}
+  td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap;}
+  tr:last-child td{border-bottom:0;}
+  td[contenteditable]{min-width:70px;cursor:text;position:relative;}
+  td[contenteditable]:focus{outline:1px solid var(--azul);background:var(--surface2);border-radius:4px;}
+  td[contenteditable]:hover{background:var(--surface2);}
+  .copied{outline:1px solid var(--green) !important;}
+
+  /* modal camara */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
+  .modal.open{display:flex;}
+  .modal-box{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;max-width:520px;width:100%;}
+  .modal-box video{width:100%;border-radius:10px;background:#000;}
+
+  /* perfiles */
+  .perf-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;}
+  .perf-row input,.perf-row select{background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;}
+  @media (max-width:640px){ .wrap{padding:14px 12px 90px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
+  <h1>Preparación de <em>pedidos</em></h1>
+  <p class="sub">Cola de despacho <b>web (Andreani)</b> + <b>MercadoLibre</b> (Flex/colecta listos para despachar).
+    Escaneá cada producto para confirmar el contenido, sacá las fotos según el tipo de producto y
+    armá las etiquetas de Andreani en lote.</p>
+
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-v="pendientes" onclick="ir('pendientes')">A preparar</button>
+    <button class="tab" data-v="etiquetas" onclick="ir('etiquetas')">Etiquetas Andreani</button>
+    <button class="tab" data-v="historial" onclick="ir('historial')">Historial</button>
+    <button class="tab" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
+  </div>
+
+  <div id="cuerpo"><div class="loading">Cargando…</div></div>
+</div>
+
+<div class="modal" id="cam-modal">
+  <div class="modal-box">
+    <video id="cam-video" autoplay playsinline muted></video>
+    <p class="sub" id="cam-msg" style="margin:10px 0;">Apuntá al código de barras…</p>
+    <button class="btn sec" onclick="cerrarCamara()">Cancelar</button>
+  </div>
+</div>
+
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function fecha(s){return s?new Date(s).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';}
+
+var VISTA='pendientes', PREP=null, PEND_CACHE=[];
+
+function ir(v){
+  VISTA=v; PREP=null;
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
+  if(v==='pendientes')cargarPendientes();
+  else if(v==='etiquetas')cargarEtiquetas();
+  else if(v==='historial')cargarHistorial();
+  else if(v==='perfiles')cargarPerfiles();
+}
+
+async function api(path,opts){
+  var r=await fetch('/api/preparacion'+path,opts);
+  var d=await r.json().catch(function(){return{ok:false,error:'HTTP '+r.status};});
+  if(r.status===401){location.href='/herramientas/login/';throw new Error('sesión vencida');}
+  return {status:r.status,body:d};
+}
+
+// ─── Cola de pendientes ───────────────────────────────────────────────────────
+
+async function cargarPendientes(){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Consultando WooCommerce y MercadoLibre…</div>';
+  try{
+    var r=await api('/pendientes');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    PEND_CACHE=r.body.data||[];
+    var html='';
+    if(r.body.error_ml)html+='<div class="flash warn" style="display:block">MercadoLibre no respondió: '+esc(r.body.error_ml)+' — se muestran solo los pedidos web.</div>';
+    if(!PEND_CACHE.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
+    else html+='<div class="ped-grid">'+PEND_CACHE.map(cardPendiente).join('')+'</div>';
+    c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
+}
+
+function cardPendiente(p,ix){
+  var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">ML · '+esc(p.logistic_type==='self_service'?'Flex':'Colecta')+'</span>';
+  var estado='';
+  if(p.estado_preparacion==='pendiente_deposito')estado='<span class="badge b-dep">pendiente depósito</span>';
+  else if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
+  if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
+  var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
+  return '<div class="ped" onclick="preparar('+ix+')">'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
+    +'<div class="ped-items">'+items+'</div>'
+    +'<div class="ped-foot">'+estado+'<button class="btn mini" style="margin-left:auto">Preparar →</button></div>'
+    +'</div>';
+}
+
+async function preparar(ix){
+  var p=PEND_CACHE[ix];
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Iniciando preparación…</div>';
+  try{
+    var r=await api('/iniciar',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({canal:p.canal,id:p.canal==='web'?p.wc_order_id:p.ml_order_id})});
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    abrirDetalle(r.body.id);
+  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+// ─── Detalle / preparación ────────────────────────────────────────────────────
+
+async function abrirDetalle(id){
+  var r=await api('/'+id);
+  if(!r.body.ok){document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>';return;}
+  PREP=r.body.data;
+  renderDetalle();
+}
+
+function itemListo(it){return it.estado_item==='verificado'||it.estado_item==='exento';}
+function fotosFaltanItem(it){
+  if(it.estado_item==='exento')return [];
+  var porTipo={};(it.fotos||[]).forEach(function(f){porTipo[f.tipo]=(porTipo[f.tipo]||0)+1;});
+  return (it.requisitos_foto||[]).filter(function(s){
+    var n=s.tipos.reduce(function(a,t){return a+(porTipo[t]||0);},0);
+    return n<(s.min||1);
+  });
+}
+
+function renderDetalle(){
+  var p=PREP;
+  var paso1=p.items.every(function(it){return itemListo(it)||it.despacho==='deposito_delegado';});
+  var paso2=paso1&&p.items.every(function(it){return it.estado_item!=='verificado'||fotosFaltanItem(it).length===0;});
+  var completada=p.estado==='completada';
+
+  var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">MercadoLibre</span>';
+  var etq=p.canal==='web'?(p.etiqueta_lista?' <span class="badge b-ok">etiqueta lista ✓</span>':' <span class="badge b-mut">etiqueta pendiente</span>'):'';
+  var estadoBadge=completada?'<span class="badge b-ok">COMPLETADA</span>':(p.estado==='pendiente_deposito'?'<span class="badge b-dep">PENDIENTE DEPÓSITO</span>':'');
+
+  var html='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
+    +'<h1 style="margin-top:12px">Pedido <em>#'+esc(p.numero_pedido)+'</em> '+canal+etq+' '+estadoBadge+'</h1>'
+    +'<p class="sub">'+esc(p.comprador||'')+'</p>'
+    +'<div class="stepper">'
+    +'<div class="step '+(paso1?'done':'on')+'"><span class="n">1</span> Escaneo</div>'
+    +'<div class="step '+(paso2?'done':(paso1?'on':''))+'"><span class="n">2</span> Fotos</div>'
+    +'<div class="step '+(completada?'done':(paso2?'on':''))+'"><span class="n">✓</span> Finalizar</div>'
+    +'</div>';
+
+  if(!completada){
+    html+='<div class="scanbar">'
+      +'<input id="scan-in" placeholder="Escaneá o tipeá el código/SKU y Enter…" autocomplete="off">'
+      +'<button class="btn" onclick="escanearManual()">Confirmar</button>'
+      +'<button class="btn sec" onclick="abrirCamara()">📷 Cámara</button>'
+      +'</div><div class="flash" id="flash"></div>';
+  }
+
+  html+=p.items.map(itemHtml).join('');
+
+  html+='<div class="finbar">';
+  if(!completada){
+    html+='<button class="btn" '+(paso2?'':'disabled')+' onclick="completar()">Finalizar preparación</button>';
+    if(!paso1)html+='<span class="sub" style="margin:0">Faltan ítems por verificar.</span>';
+    else if(!paso2)html+='<span class="sub" style="margin:0">Faltan fotos obligatorias.</span>';
+  }else{
+    html+='<span class="badge b-ok">Preparación completada '+fecha(p.completado_en)+' por '+esc(p.preparado_por||'—')+'</span>';
+  }
+  html+='</div>';
+
+  document.getElementById('cuerpo').innerHTML=html;
+  var si=document.getElementById('scan-in');
+  if(si){si.focus();si.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();escanearManual();}});}
+}
+
+function itemHtml(it){
+  var listo=it.estado_item==='verificado', exento=it.estado_item==='exento';
+  var cls='item'+(listo?' verif':'')+(exento?' exento':'');
+  var cant='<span class="item-cant'+(listo?' done':'')+'">'+it.cantidad_escaneada+'/'+it.cantidad_esperada+(listo?' ✓':'')+(exento?' — exento':'')+'</span>';
+  var completada=PREP.estado==='completada';
+
+  var ctrl='';
+  if(!completada&&!listo&&!exento){
+    ctrl+='<button class="btn sec mini" onclick="confirmarManual('+it.id+')">Confirmar sin código</button>';
+  }
+  if(!completada&&it.perfil==='bici'){
+    ctrl+='<select onchange="setEmbalaje('+it.id+',this.value)">'
+      +'<option value="">Embalaje…</option>'
+      +['sellada','abierta','re_embalada'].map(function(v){
+        var lbl={sellada:'Caja de fábrica sellada',abierta:'Caja abierta',re_embalada:'Re-embalada (exhibida)'}[v];
+        return '<option value="'+v+'"'+(it.estado_embalaje===v?' selected':'')+'>'+lbl+'</option>';
+      }).join('')+'</select>';
+  }
+  if(!completada){
+    ctrl+='<select onchange="setDespacho('+it.id+',this.value)" title="Despacho desde depósito">'
+      +'<option value="local"'+(it.despacho==='local'?' selected':'')+'>Se prepara acá</option>'
+      +'<option value="deposito_relajado"'+(it.despacho==='deposito_relajado'?' selected':'')+'>Desde depósito (sin escaneo/foto)</option>'
+      +'<option value="deposito_delegado"'+(it.despacho==='deposito_delegado'?' selected':'')+'>Desde depósito (lo completa el depósito)</option>'
+      +'</select>';
+  }
+  if(it.despacho!=='local')ctrl+='<span class="badge b-dep">depósito</span>';
+  if(it.confirmado_manual)ctrl+='<span class="badge b-mut">confirmado a mano</span>';
+
+  var fotos='';
+  if(!exento){
+    var puedeFotos=listo&&!completada;
+    fotos='<div class="fotos">'+(it.requisitos_foto||[]).map(function(s,si){
+      var deSlot=(it.fotos||[]).filter(function(f){return s.tipos.indexOf(f.tipo)>=0;});
+      var falta=deSlot.length<(s.min||1);
+      return '<div class="slot"><div class="slot-l '+(falta?'falta':'okk')+'">'+(falta?'⚠︎ ':'✓ ')+esc(s.etiqueta||s.tipos.join('/'))+'</div>'
+        +'<div class="thumbs">'+deSlot.map(thumbHtml).join('')
+        +(!completada?'<button class="addfoto" '+(puedeFotos?'':'disabled title="Primero verificá el ítem"')+' onclick="subirFoto('+it.id+',\''+s.tipos[0]+'\')">+</button>':'')
+        +'</div></div>';
+    }).join('')
+    +'<div class="slot"><div class="slot-l">Fotos extra</div><div class="thumbs">'
+    +(it.fotos||[]).filter(function(f){return f.tipo==='extra';}).map(thumbHtml).join('')
+    +(!completada?'<button class="addfoto" '+(puedeFotos?'':'disabled')+' onclick="subirFoto('+it.id+',\'extra\')">+</button>':'')
+    +'</div></div></div>';
+  }
+
+  return '<div class="'+cls+'">'
+    +'<div class="item-top"><div><div class="item-nom">'+esc(it.nombre)+'</div>'
+    +'<div class="item-sku">'+esc(it.sku||'SIN CÓDIGO')+' · '+esc(it.perfil)+(it.categoria?' · '+esc(it.categoria):'')+'</div></div>'+cant+'</div>'
+    +(ctrl?'<div class="item-ctrl">'+ctrl+'</div>':'')
+    +fotos+'</div>';
+}
+
+function thumbHtml(f){
+  var del=PREP.estado!=='completada'?'<button class="del" onclick="borrarFoto('+f.id+');event.stopPropagation()">✕</button>':'';
+  return '<div class="thumb"><a href="'+esc(f.url)+'" target="_blank"><img src="'+esc(f.url)+'" loading="lazy"></a>'+del+'</div>';
+}
+
+function flash(tipo,msg){
+  var f=document.getElementById('flash');
+  if(!f)return;
+  f.className='flash '+tipo;f.textContent=msg;
+  if(navigator.vibrate)navigator.vibrate(tipo==='ok'?60:[80,60,80]);
+  clearTimeout(f._t);f._t=setTimeout(function(){f.className='flash';},3500);
+}
+
+async function escanear(codigo){
+  if(!codigo||!PREP)return;
+  var r=await api('/'+PREP.id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:codigo})});
+  var b=r.body;
+  await refrescarDetalle();
+  if(b.resultado==='match')flash('ok','✓ '+codigo+' — '+(b.item.estado_item==='verificado'?'ítem completo':'anotado '+b.item.cantidad_escaneada+'/'+b.item.cantidad_esperada));
+  else if(b.resultado==='sobrante')flash('warn','⚠︎ '+codigo+' ya está completo — ¿estás poniendo de más?');
+  else if(b.resultado==='no_coincide')flash('bad','✕ '+codigo+' NO pertenece a este pedido');
+  else flash('bad',b.error||'error');
+}
+
+function escanearManual(){
+  var i=document.getElementById('scan-in');
+  var v=(i&&i.value||'').trim();
+  if(i)i.value='';
+  if(v)escanear(v);
+  if(i)i.focus();
+}
+
+async function refrescarDetalle(){
+  if(!PREP)return;
+  var r=await api('/'+PREP.id);
+  if(r.body.ok){PREP=r.body.data;renderDetalle();}
+}
+
+async function confirmarManual(itemId){
+  if(!confirm('¿Confirmar este ítem sin escanear código?'))return;
+  await api('/'+PREP.id+'/item/'+itemId+'/confirmar-manual',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  refrescarDetalle();
+}
+
+async function setEmbalaje(itemId,v){
+  if(!v)return;
+  await api('/'+PREP.id+'/item/'+itemId+'/embalaje',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({estado_embalaje:v})});
+  refrescarDetalle();
+}
+
+async function setDespacho(itemId,modo){
+  var motivo=null;
+  if(modo!=='local'){motivo=prompt('Motivo (opcional):','bici en caja en el depósito')||null;}
+  await api('/'+PREP.id+'/item/'+itemId+'/despacho',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({modo:modo,motivo:motivo})});
+  refrescarDetalle();
+}
+
+function subirFoto(itemId,tipo){
+  var inp=document.createElement('input');
+  inp.type='file';inp.accept='image/*';inp.capture='environment';
+  inp.onchange=async function(){
+    if(!inp.files||!inp.files[0])return;
+    var fd=new FormData();
+    fd.append('archivo',inp.files[0]);
+    fd.append('item_id',itemId);
+    fd.append('tipo',tipo);
+    var r=await fetch('/api/preparacion/'+PREP.id+'/foto',{method:'POST',body:fd});
+    var d=await r.json().catch(function(){return{ok:false};});
+    if(!d.ok)alert(d.error||'no se pudo subir la foto');
+    refrescarDetalle();
+  };
+  inp.click();
+}
+
+async function borrarFoto(fotoId){
+  await api('/'+PREP.id+'/foto/'+fotoId,{method:'DELETE'});
+  refrescarDetalle();
+}
+
+async function completar(){
+  var r=await api('/'+PREP.id+'/completar',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  if(r.status===400&&r.body.faltantes){
+    flash('bad','Falta: '+r.body.faltantes.map(function(f){return (f.nombre||f.sku)+' ('+(f.motivo==='fotos'?'fotos':'sin verificar')+')';}).join(' · '));
+    refrescarDetalle();
+    return;
+  }
+  if(r.body.ok){
+    if(r.body.estado==='pendiente_deposito')alert('Quedó PENDIENTE DE DEPÓSITO: el depósito completa los ítems delegados desde su celular (Historial → pendientes de depósito).');
+    refrescarDetalle();
+  }else{
+    flash('bad',r.body.error||'error');
+  }
+}
+
+// captura tipo teclado del lector (wedge) cuando no hay un input enfocado
+var _buf='',_bufT=null;
+window.addEventListener('keydown',function(e){
+  if(!PREP||PREP.estado==='completada')return;
+  var t=e.target;
+  if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable))return;
+  if(e.key==='Enter'){if(_buf.length>=3)escanear(_buf);_buf='';return;}
+  if(e.key.length===1){_buf+=e.key;clearTimeout(_bufT);_bufT=setTimeout(function(){_buf='';},300);}
+});
+
+// ─── Cámara (BarcodeDetector nativo) ─────────────────────────────────────────
+
+var _camStream=null,_camTimer=null;
+async function abrirCamara(){
+  if(!('BarcodeDetector' in window)){alert('Este navegador no soporta escaneo por cámara. Usá el lector físico o tipeá el código.');return;}
+  var modal=document.getElementById('cam-modal'),video=document.getElementById('cam-video');
+  modal.classList.add('open');
+  try{
+    _camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    video.srcObject=_camStream;
+    var det=new BarcodeDetector();
+    _camTimer=setInterval(async function(){
+      try{
+        var codes=await det.detect(video);
+        if(codes.length){var v=codes[0].rawValue;cerrarCamara();escanear(v);}
+      }catch(_){}
+    },350);
+  }catch(e){
+    document.getElementById('cam-msg').textContent='No se pudo abrir la cámara: '+e.message;
+  }
+}
+function cerrarCamara(){
+  clearInterval(_camTimer);
+  if(_camStream){_camStream.getTracks().forEach(function(t){t.stop();});_camStream=null;}
+  document.getElementById('cam-modal').classList.remove('open');
+}
+
+// ─── Etiquetas Andreani ───────────────────────────────────────────────────────
+
+var COLS=[
+  ['pedido','Pedido'],['nombre','Nombre'],['apellido','Apellido'],
+  ['calle','Calle'],['numeracion','N°'],['piso_depto','Piso/Depto'],
+  ['localidad','Localidad'],['provincia','Provincia'],['cp','CP'],
+  ['caracteristica','Caract.'],['telefono','Teléfono'],
+  ['email','Email'],['dni_cuit','DNI/CUIT'],['notas','Notas'],
+];
+
+async function cargarEtiquetas(){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Cargando pedidos web pendientes…</div>';
+  try{
+    var r=await api('/etiquetas');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    var filas=r.body.data||[];
+    if(!filas.length){c.innerHTML='<div class="loading">No hay pedidos web en estado Andreani.</div>';return;}
+    var html='<p class="sub">Una fila por pedido. Corregí lo que haga falta (las celdas se editan) y copiá al Excel de Andreani.'
+      +' <b>Copiar tabla</b> pega en columnas; también podés copiar una columna (⧉ del encabezado) o una celda (doble click).</p>'
+      +'<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
+      +'<button class="btn" onclick="copiarTabla(false)">⧉ Copiar tabla (TSV)</button>'
+      +'<button class="btn sec" onclick="copiarTabla(true)">⧉ Copiar con encabezados</button>'
+      +'</div>'
+      +'<div class="tbl-wrap"><table id="etq-tbl"><thead><tr>'
+      +'<th>Lista</th>'
+      +COLS.map(function(col,ci){return '<th>'+col[1]+'<span class="cpcol" title="Copiar columna" onclick="copiarColumna('+ci+')">⧉</span></th>';}).join('')
+      +'</tr></thead><tbody>'
+      +filas.map(function(f){
+        var e=f.envio||{};
+        return '<tr data-wc="'+f.wc_order_id+'">'
+          +'<td><input type="checkbox" '+(f.etiqueta_lista?'checked':'')+' onchange="marcarEtiqueta('+f.wc_order_id+',this.checked,\''+esc(e.pedido)+'\')" title="etiqueta impresa/pegada"></td>'
+          +COLS.map(function(col){return '<td contenteditable spellcheck="false" ondblclick="copiarCelda(this)">'+esc(e[col[0]])+'</td>';}).join('')
+          +'</tr>';
+      }).join('')
+      +'</tbody></table></div>';
+    c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+function filasTabla(){
+  return Array.prototype.map.call(document.querySelectorAll('#etq-tbl tbody tr'),function(tr){
+    return Array.prototype.map.call(tr.querySelectorAll('td[contenteditable]'),function(td){return td.textContent.trim();});
+  });
+}
+async function copiar(texto,elFeedback){
+  try{await navigator.clipboard.writeText(texto);}catch(e){alert('No se pudo copiar: '+e.message);return;}
+  if(elFeedback){elFeedback.classList.add('copied');setTimeout(function(){elFeedback.classList.remove('copied');},900);}
+}
+function copiarTabla(conHeaders){
+  var filas=filasTabla().map(function(f){return f.join('\t');});
+  if(conHeaders)filas.unshift(COLS.map(function(c){return c[1];}).join('\t'));
+  copiar(filas.join('\n'));
+  var b=event.target;b.textContent='✓ Copiado';setTimeout(function(){b.textContent=b.classList.contains('sec')?'⧉ Copiar con encabezados':'⧉ Copiar tabla (TSV)';},1200);
+}
+function copiarColumna(ci){
+  copiar(filasTabla().map(function(f){return f[ci];}).join('\n'));
+}
+function copiarCelda(td){copiar(td.textContent.trim(),td);}
+
+async function marcarEtiqueta(wcId,lista,numero){
+  await api('/etiquetas/'+wcId+'/lista',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({lista:lista,numero_pedido:numero})});
+}
+
+// ─── Historial ────────────────────────────────────────────────────────────────
+
+async function cargarHistorial(){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Cargando…</div>';
+  try{
+    var r=await api('/historial');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    var rows=r.body.data||[];
+    var dep=rows.filter(function(p){return p.estado==='pendiente_deposito';});
+    var comp=rows.filter(function(p){return p.estado==='completada';});
+    var html='';
+    if(dep.length){
+      html+='<h1 style="font-size:1.1rem">Pendientes de <em>depósito</em></h1><div class="ped-grid" style="margin-bottom:20px">'
+        +dep.map(cardHistorial).join('')+'</div>';
+    }
+    html+='<h1 style="font-size:1.1rem">Completadas</h1>';
+    html+=comp.length?'<div class="ped-grid">'+comp.map(cardHistorial).join('')+'</div>':'<div class="loading">Todavía no hay preparaciones completadas.</div>';
+    c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+function cardHistorial(p){
+  var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
+  var st=p.estado==='completada'?'<span class="badge b-ok">completada</span>':'<span class="badge b-dep">pendiente depósito</span>';
+  return '<div class="ped" onclick="abrirDetalle('+p.id+')">'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-cli">'+esc(p.comprador||'—')+'</div>'
+    +'<div class="ped-items">'+p.total_items+' ítems · '+p.total_fotos+' fotos · '+fecha(p.completado_en||p.creado_en)
+    +(p.preparado_por?' · '+esc(p.preparado_por):'')+'</div>'
+    +'<div class="ped-foot">'+st+'</div></div>';
+}
+
+// ─── Perfiles de foto ─────────────────────────────────────────────────────────
+
+async function cargarPerfiles(){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Cargando…</div>';
+  try{
+    var r=await api('/perfiles');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    var rows=r.body.data||[];
+    var html='<p class="sub">Regla por categoría: si el nombre de la categoría del producto <b>contiene</b> el texto, se aplica ese perfil de fotos.'
+      +' <b>bici</b>: selector de embalaje (re-embalada exige lado A + lado B + caja de accesorios). <b>kit_transmision</b>: foto del set con piezas sueltas. <b>sellado</b>: 1 foto de etiqueta o artículo.</p>';
+    html+=rows.map(function(p){
+      return '<div class="perf-row">'
+        +'<input value="'+esc(p.categoria)+'" disabled style="flex:1;min-width:150px">'
+        +'<select id="perf-'+esc(p.categoria)+'">'
+        +['bici','kit_transmision','sellado'].map(function(v){return '<option'+(p.perfil===v?' selected':'')+'>'+v+'</option>';}).join('')
+        +'</select>'
+        +'<button class="btn mini" onclick="guardarPerfil(\''+esc(p.categoria)+'\')">Guardar</button>'
+        +'<button class="btn danger mini" onclick="borrarPerfil(\''+esc(p.categoria)+'\')">Borrar</button>'
+        +'</div>';
+    }).join('');
+    html+='<div class="perf-row" style="margin-top:14px;border-top:1px dashed var(--border);padding-top:14px">'
+      +'<input id="perf-nueva-cat" placeholder="Texto de categoría (ej: CASCOS)" style="flex:1;min-width:150px">'
+      +'<select id="perf-nueva-perfil"><option>bici</option><option>kit_transmision</option><option selected>sellado</option></select>'
+      +'<button class="btn mini" onclick="agregarPerfil()">Agregar</button></div>';
+    c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+async function guardarPerfil(cat){
+  var perfil=document.getElementById('perf-'+cat).value;
+  await api('/perfiles/'+encodeURIComponent(cat),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
+  cargarPerfiles();
+}
+async function borrarPerfil(cat){
+  if(!confirm('¿Borrar la regla "'+cat+'"?'))return;
+  await api('/perfiles/'+encodeURIComponent(cat),{method:'DELETE'});
+  cargarPerfiles();
+}
+async function agregarPerfil(){
+  var cat=document.getElementById('perf-nueva-cat').value.trim();
+  var perfil=document.getElementById('perf-nueva-perfil').value;
+  if(!cat)return;
+  await api('/perfiles/'+encodeURIComponent(cat),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
+  cargarPerfiles();
+}
+
+cargarPendientes();
+</script>
+</body>
+</html>
