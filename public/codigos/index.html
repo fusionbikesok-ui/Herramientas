@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Carga de Códigos Universales — Fusion Bikes</title>
+<style>
+  :root{
+    --azul:#2DB8E8;--azul-dk:#1C93BD;--bg:#0C0F16;
+    --panel:#141A25;--panel2:#1B2235;--border:#24304A;--border2:#2E3B57;
+    --txt:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
+    --green:#34D399;--amber:#FBBF24;--red:#F87171;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;}
+  .wrap{max-width:680px;margin:0 auto;padding:16px 16px 60px;}
+  a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;margin-bottom:12px;}
+  a.back:hover{color:var(--azul);}
+  h1{font-size:1.4rem;font-weight:800;letter-spacing:-.03em;margin:4px 0 4px;}
+  h1 em{font-style:normal;color:var(--azul);}
+  .hint{font-size:12px;color:var(--muted);margin:4px 2px 14px;}
+
+  /* Barra de filtros */
+  .filtros{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;}
+  .filtros select,.filtros input[type=text]{font-size:14px;padding:10px 11px;border-radius:9px;border:1px solid var(--border2);background:var(--bg);color:var(--txt);outline:none;}
+  .filtros select:focus,.filtros input[type=text]:focus{border-color:var(--azul);}
+  .filtros .grow{flex:1;min-width:140px;}
+  .toggle{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:8px 12px;cursor:pointer;user-select:none;}
+  .toggle input{accent-color:var(--azul);width:16px;height:16px;}
+  .conteo{font-size:12px;color:var(--muted2);margin:2px 2px 12px;}
+
+  .lista{display:flex;flex-direction:column;gap:10px;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:13px;display:flex;gap:12px;transition:opacity .3s,border-color .2s;}
+  .card.ok{border-color:rgba(52,211,153,.5);}
+  .card.saliendo{opacity:0;}
+  .card img{width:72px;height:72px;border-radius:10px;object-fit:cover;background:var(--panel2);border:1px solid var(--border);flex-shrink:0;}
+  .card .noimg{width:72px;height:72px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted2);font-size:10px;text-align:center;}
+  .card .info{min-width:0;flex:1;}
+  .card .marca{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--azul);}
+  .card .tit{font-size:14px;font-weight:700;line-height:1.25;margin:1px 0 4px;}
+  .card .meta{font-size:11.5px;color:var(--muted2);font-family:ui-monospace,Menlo,monospace;}
+  .card .gtin-actual{display:inline-block;margin-top:5px;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:rgba(251,191,36,.14);color:var(--amber);font-family:ui-monospace,monospace;}
+  .scanbox{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;}
+  .code-in{flex:1;min-width:120px;font-size:15px;padding:9px 10px;border-radius:8px;border:1px solid var(--border2);background:var(--bg);color:var(--txt);outline:none;font-family:ui-monospace,monospace;font-weight:700;}
+  .code-in:focus{border-color:var(--azul);}
+  .mini{border:0;border-radius:8px;padding:0 13px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;}
+  .mini.cam{background:var(--panel2);color:var(--txt);border:1px solid var(--border2);}
+  .mini.cam:hover{background:var(--border2);}
+  .mini.confirm{background:var(--azul);color:#06131C;}
+  .mini.confirm:hover{background:var(--azul-dk);}
+  .mini:disabled{opacity:.5;cursor:default;}
+  .cardmsg{font-size:12px;margin-top:7px;}
+  .cardmsg.err{color:var(--red);}
+  .cardmsg.good{color:var(--green);font-weight:700;}
+  .vacio{margin-top:24px;padding:20px;border-radius:12px;border:1px solid var(--border);background:var(--panel);font-size:14px;color:var(--muted);text-align:center;}
+
+  /* Modal cámara (idéntico a Consulta de Precios) */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
+  .modal.open{display:flex;}
+  .modal-box{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;max-width:460px;width:100%;}
+  .modal-box video{width:100%;border-radius:10px;background:#000;display:block;}
+  .modal-box .sub{color:var(--muted);font-size:13px;margin:10px 0;text-align:center;}
+  .modal-box .cerrar{width:100%;font-size:14px;font-weight:700;padding:10px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--txt);cursor:pointer;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
+  <h1>Carga de <em>Códigos Universales</em></h1>
+  <div class="hint">Recorré el depósito y escaneá el código de barras de cada producto. Al confirmar se guarda en WooCommerce (campo GTIN).</div>
+
+  <div class="filtros">
+    <select id="f-marca"><option value="">Todas las marcas</option></select>
+    <select id="f-cat"><option value="">Todas las categorías</option></select>
+    <input type="text" id="f-q" class="grow" placeholder="Buscar SKU o nombre…" autocomplete="off">
+    <label class="toggle"><input type="checkbox" id="f-stock" checked> Solo con stock</label>
+  </div>
+  <div class="conteo" id="conteo"></div>
+
+  <div class="lista" id="lista"></div>
+  <div class="vacio" id="vacio" style="display:none">No hay productos que coincidan con los filtros.</div>
+</div>
+
+<div class="modal" id="cam-modal">
+  <div class="modal-box">
+    <video id="cam-video" playsinline muted></video>
+    <div class="sub" id="cam-sub">Apuntá al código de barras…</div>
+    <button class="cerrar" id="cam-cerrar">Cerrar cámara</button>
+  </div>
+</div>
+
+<script type="module" src="../lib/scanner.js"></script>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+var faltantes = [];        // cola traída de /faltantes
+var extras = [];           // resultados de /buscar (ya-cargados u otros) para sobrescritura
+var pendientes = {};       // id_woo -> código leído/tipeado pendiente de confirmar
+var listaEl = document.getElementById('lista');
+var vacioEl = document.getElementById('vacio');
+var conteoEl = document.getElementById('conteo');
+var fMarca = document.getElementById('f-marca');
+var fCat = document.getElementById('f-cat');
+var fQ = document.getElementById('f-q');
+var fStock = document.getElementById('f-stock');
+
+// ---- Carga de la cola de faltantes ----
+async function cargarFaltantes(){
+  var r = await fetch('/api/codigos/faltantes?conStock=' + (fStock.checked ? 'true' : 'false'));
+  var d = await r.json();
+  if(!d.ok){ faltantes = []; render(); return; }
+  faltantes = d.data || [];
+  poblarDropdown(fMarca, d.marcas, 'Todas las marcas');
+  poblarDropdown(fCat, d.categorias, 'Todas las categorías');
+  render();
+}
+
+function poblarDropdown(sel, valores, etiquetaTodas){
+  var actual = sel.value;
+  sel.innerHTML = '<option value="">' + etiquetaTodas + '</option>' +
+    (valores || []).map(function(v){ return '<option value="'+esc(v)+'">'+esc(v)+'</option>'; }).join('');
+  // Conservar la selección previa si todavía existe entre las opciones.
+  if(actual && valores && valores.indexOf(actual) !== -1) sel.value = actual;
+}
+
+// ---- Búsqueda (incluye ya-cargados para sobrescribir) ----
+var tBuscar = null;
+function buscarExtras(){
+  clearTimeout(tBuscar);
+  var q = fQ.value.trim();
+  if(q.length < 2){ extras = []; render(); return; }
+  tBuscar = setTimeout(async function(){
+    var r = await fetch('/api/codigos/buscar?q=' + encodeURIComponent(q));
+    var d = await r.json();
+    extras = (d.ok && d.data) ? d.data : [];
+    render();
+  }, 220);
+}
+
+// ---- Render de la lista según filtros ----
+function coincideFiltros(p){
+  if(fMarca.value && p.marca !== fMarca.value) return false;
+  if(fCat.value && !(p.categorias || []).includes(fCat.value)) return false;
+  var q = fQ.value.trim().toLowerCase();
+  if(q){
+    var hay = (p.sku||'').toLowerCase().indexOf(q) !== -1 || (p.nombre||'').toLowerCase().indexOf(q) !== -1;
+    if(!hay) return false;
+  }
+  return true;
+}
+
+function itemsAMostrar(){
+  var vistos = {};
+  var out = [];
+  faltantes.forEach(function(p){ if(coincideFiltros(p)){ vistos[p.id_woo]=1; out.push(p); } });
+  // Los extras (búsqueda) que no estén ya en la cola — típicamente productos ya con código.
+  var q = fQ.value.trim();
+  if(q.length >= 2){
+    extras.forEach(function(p){
+      if(vistos[p.id_woo]) return;
+      if(fMarca.value && p.marca !== fMarca.value) return;
+      if(fCat.value && !(p.categorias || []).includes(fCat.value)) return;
+      vistos[p.id_woo]=1; out.push(p);
+    });
+  }
+  return out;
+}
+
+function cardHtml(p){
+  var img = p.img ? '<img src="'+esc(p.img)+'" alt="">' : '<div class="noimg">sin foto</div>';
+  var pend = pendientes[p.id_woo] != null ? pendientes[p.id_woo] : (p.gtin || '');
+  var gtinActual = p.gtin ? '<div class="gtin-actual">código actual: '+esc(p.gtin)+' — re-escaneá para corregir</div>' : '';
+  return '<div class="card" data-id="'+p.id_woo+'">' + img +
+    '<div class="info">' +
+      (p.marca ? '<div class="marca">'+esc(p.marca)+'</div>' : '') +
+      '<div class="tit">'+esc(p.nombre)+'</div>' +
+      '<div class="meta">'+esc(p.sku)+' · stock '+(p.stock==null?'?':p.stock)+'</div>' +
+      gtinActual +
+      '<div class="scanbox">' +
+        '<input class="code-in" inputmode="numeric" placeholder="Código…" value="'+esc(pend)+'">' +
+        '<button class="mini cam" data-act="cam">📷</button>' +
+        '<button class="mini confirm" data-act="confirm">Confirmar</button>' +
+      '</div>' +
+      '<div class="cardmsg"></div>' +
+    '</div></div>';
+}
+
+function render(){
+  var items = itemsAMostrar();
+  conteoEl.textContent = faltantes.length + ' faltantes en total' +
+    (items.length !== faltantes.length ? ' · ' + items.length + ' visibles' : '');
+  if(!items.length){ listaEl.innerHTML=''; vacioEl.style.display='block'; return; }
+  vacioEl.style.display='none';
+  listaEl.innerHTML = items.map(cardHtml).join('');
+}
+
+// ---- Asignar (confirmar) ----
+async function asignar(idWoo, cardEl){
+  var input = cardEl.querySelector('.code-in');
+  var msg = cardEl.querySelector('.cardmsg');
+  var btns = cardEl.querySelectorAll('.mini');
+  var gtin = input.value.trim();
+  if(!gtin){ msg.className='cardmsg err'; msg.textContent='Ingresá o escaneá un código.'; return; }
+  msg.className='cardmsg'; msg.textContent='Guardando…';
+  btns.forEach(function(b){ b.disabled=true; });
+  var r, d;
+  try{
+    r = await fetch('/api/codigos/asignar', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id_woo: idWoo, gtin: gtin }),
+    });
+    d = await r.json();
+  }catch(e){ d = { ok:false, error:'Error de red' }; }
+  if(!d.ok){
+    msg.className='cardmsg err'; msg.textContent = d.error || 'No se pudo guardar';
+    btns.forEach(function(b){ b.disabled=false; });
+    return;
+  }
+  // OK: marcar y sacar de la cola.
+  delete pendientes[idWoo];
+  faltantes = faltantes.filter(function(p){ return p.id_woo !== idWoo; });
+  extras = extras.map(function(p){ return p.id_woo === idWoo ? Object.assign({}, p, { gtin: gtin }) : p; });
+  cardEl.classList.add('ok');
+  msg.className='cardmsg good'; msg.textContent='✓ Guardado: '+gtin;
+  setTimeout(function(){
+    cardEl.classList.add('saliendo');
+    setTimeout(function(){ render(); }, 320);
+  }, 900);
+}
+
+// ---- Delegación de eventos en la lista ----
+listaEl.addEventListener('click', function(e){
+  var btn = e.target.closest('.mini'); if(!btn) return;
+  var cardEl = e.target.closest('.card'); if(!cardEl) return;
+  var idWoo = Number(cardEl.dataset.id);
+  if(btn.dataset.act === 'confirm'){ asignar(idWoo, cardEl); }
+  else if(btn.dataset.act === 'cam'){ abrirCam(idWoo); }
+});
+listaEl.addEventListener('input', function(e){
+  if(!e.target.classList.contains('code-in')) return;
+  var cardEl = e.target.closest('.card'); if(!cardEl) return;
+  pendientes[Number(cardEl.dataset.id)] = e.target.value;
+});
+listaEl.addEventListener('keydown', function(e){
+  if(e.key !== 'Enter' || !e.target.classList.contains('code-in')) return;
+  e.preventDefault();
+  var cardEl = e.target.closest('.card'); if(cardEl) asignar(Number(cardEl.dataset.id), cardEl);
+});
+
+// ---- Cámara: escanea uno, lo pega en la tarjeta y pide confirmar ----
+var modal = document.getElementById('cam-modal');
+function abrirCam(idWoo){
+  modal.classList.add('open');
+  document.getElementById('cam-sub').textContent = 'Apuntá al código de barras…';
+  var yaDisparo = false;
+  window.Scanner.open({
+    video: document.getElementById('cam-video'),
+    mode: 'single',
+    onCode: function(code){
+      if(yaDisparo) return;
+      yaDisparo = true;
+      cerrarCam();
+      pendientes[idWoo] = code;
+      render();
+      // Enfocar la tarjeta escaneada para confirmar de un toque.
+      var cardEl = listaEl.querySelector('.card[data-id="'+idWoo+'"]');
+      if(cardEl){ cardEl.scrollIntoView({block:'center'}); var inp = cardEl.querySelector('.code-in'); if(inp) inp.focus(); }
+    },
+    onError: function(m){ document.getElementById('cam-sub').textContent = m; },
+  });
+}
+function cerrarCam(){ window.Scanner.close(); modal.classList.remove('open'); }
+document.getElementById('cam-cerrar').onclick = cerrarCam;
+
+// ---- Filtros ----
+fMarca.onchange = render;
+fCat.onchange = render;
+fQ.oninput = function(){ render(); buscarExtras(); };
+fStock.onchange = cargarFaltantes;
+
+// ---- Auth gate + carga inicial ----
+fetch('/api/auth/me').then(function(r){
+  if(r.status === 401){ window.location.href = '/herramientas/login/'; return; }
+  cargarFaltantes();
+});
+</script>
+</body>
+</html>

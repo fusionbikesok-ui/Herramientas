@@ -32,7 +32,7 @@ describe('normalizarProductoWc', () => {
     expect(normalizarProductoWc(raw)).toEqual({
       id_woo: 10, nombre: 'Casco Bell L', sku: 'CBL', tipo: 'simple', id_padre: null,
       stock: 4, categorias: ['Cascos'], atributos: [], img: 'https://x/img.jpg', precio: 15000.5,
-      marca: 'Bell',
+      marca: 'Bell', gtin: '',
     });
   });
 
@@ -93,6 +93,24 @@ describe('normalizarVariacionWc', () => {
     expect(v.nombre).toBe('Casco X — Azul');
     expect(v.atributos).toEqual([{ name: 'Color', option: 'Azul' }]);
   });
+
+  it('captura su propio global_unique_id (gtin), no el del padre', () => {
+    // El padre variable no tiene gtin propio (viene vacío de Woo); la variación sí.
+    expect(padre.gtin).toBe('');
+    const rawVar = {
+      id: 24, sku: 'FB-24', stock_quantity: 2,
+      attributes: [{ name: 'Color', option: 'Verde' }],
+      global_unique_id: '7791234500009',
+    };
+    const v = normalizarVariacionWc(rawVar, padre);
+    expect(v.gtin).toBe('7791234500009');
+  });
+
+  it('sin global_unique_id propio, la variación queda con gtin vacío', () => {
+    const rawVar = { id: 25, sku: 'FB-25', stock_quantity: 1, attributes: [] };
+    const v = normalizarVariacionWc(rawVar, padre);
+    expect(v.gtin).toBe('');
+  });
 });
 
 describe('filaCatalogo / productoDesdeFilaCatalogo (round-trip)', () => {
@@ -101,7 +119,7 @@ describe('filaCatalogo / productoDesdeFilaCatalogo (round-trip)', () => {
       id_woo: 30, nombre: 'Producto Full', sku: 'PF-1', tipo: 'simple', id_padre: null,
       stock: 7, categorias: ['Bicicletas', 'Rodado 29'],
       atributos: [{ name: 'Color', option: 'Negro' }], img: 'https://x/full.jpg', precio: 99999.99,
-      marca: 'Shimano',
+      marca: 'Shimano', gtin: '7791234567890',
     };
     const fila = filaCatalogo(producto, '2026-07-20T00:00:00.000Z');
     expect(fila.categorias_json).toBe(JSON.stringify(producto.categorias));
@@ -116,7 +134,7 @@ describe('filaCatalogo / productoDesdeFilaCatalogo (round-trip)', () => {
     const producto = {
       id_woo: 31, nombre: 'Sin extras', sku: '', tipo: 'variable', id_padre: null,
       stock: 0, categorias: [], atributos: [], img: null, precio: null,
-      marca: '',
+      marca: '', gtin: '',
     };
     const fila = filaCatalogo(producto, 'now');
     expect(fila.categorias_json).toBeNull();
