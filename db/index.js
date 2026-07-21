@@ -18,6 +18,8 @@ export function openDb(dbPath) {
   // Atributos estructurados de la variación WC (color/talle) — evita re-parsear el nombre en el matcher.
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN atributos_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN marca TEXT'); } catch (_) {}
+  // Código universal (GTIN/EAN/UPC) del producto — campo nativo de Woo global_unique_id.
+  try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN gtin TEXT'); } catch (_) {}
   // Consulta de Precios ── puente EAN→SKU (el EAN no vive en Woo); aprende de a uno.
   try { db.exec(`CREATE TABLE IF NOT EXISTS ean_sku (
     ean TEXT PRIMARY KEY,
