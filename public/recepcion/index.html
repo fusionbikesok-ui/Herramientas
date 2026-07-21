@@ -4,19 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recepción de Mercadería — Fusion Bikes</title>
+<link rel="stylesheet" href="../lib/theme.css">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:root {
-  --black:#080A10; --dark:#0C0F16; --dark2:#141A25; --dark3:#1B2235;
-  --border:#24304A; --border2:#2E3B57;
-  --blue:#2DB8E8; --blue-dk:#1C93BD; --blue-bg:rgba(45,184,232,0.10); --blue-bd:rgba(45,184,232,0.35);
-  --white:#E4EAF4; --gray:#8493B0; --gray2:#5B6B8C;
-  --green:#34D399; --green-bg:rgba(52,211,153,0.10); --green-bd:rgba(52,211,153,0.35);
-  --amber:#FBBF24; --amber-bg:rgba(251,191,36,0.10); --amber-bd:rgba(251,191,36,0.35);
-  --red:#F87171; --red-bg:rgba(248,113,113,0.10); --red-bd:rgba(248,113,113,0.35);
-  --orange:#FB923C; --orange-bg:rgba(251,146,60,0.10); --orange-bd:rgba(251,146,60,0.35);
-  --radius:10px; --radius-lg:16px;
-}
 body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',sans-serif; background:var(--dark); color:var(--white); font-size:14px; line-height:1.5; min-height:100vh; }
 
 .header { background:rgba(12,15,22,.9); backdrop-filter:blur(14px); border-bottom:1px solid var(--border); padding:0 24px; height:56px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:10; }
@@ -302,20 +292,10 @@ input[type=file] { display:none; }
 
 </div>
 
+<script src="../lib/format.js"></script>
+<script src="../lib/api.js"></script>
 <script>
-(function() {
-  var token = 'cookie-session';
-  if (!token) {
-    window.location.href = '/herramientas/login/?next=' + encodeURIComponent(window.location.pathname);
-    throw new Error('redirect');
-  }
-  var _fetch = window.fetch;
-  window.fetch = function(url, opts) {
-    opts = opts || {};
-    opts.headers = Object.assign({ 'Authorization': 'Basic ' + token }, opts.headers || {});
-    return _fetch(url, opts);
-  };
-})();
+Api.installAuth();
 
 var catalogo = [];
 var items = [];   // ítems de la recepción actual
@@ -1060,7 +1040,6 @@ function toggleHist(id) {
 
 var TIPOS_LABEL = { factura:'Factura', remito:'Remito', orden_compra:'OC', otro:'Otro' };
 
-function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 function mostrarStatus(id, tipo, msg) {
   var el = document.getElementById(id);

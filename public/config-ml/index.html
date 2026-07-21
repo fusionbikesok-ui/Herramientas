@@ -315,17 +315,9 @@ tr:hover td { background: rgba(27,34,53,.5); }
 
 <div class="toast" id="toast" style="display:none"></div>
 
+<script src="../lib/api.js"></script>
 <script>
-(function() {
-  var token = 'cookie-session';
-  if (!token) { window.location.href = '/herramientas/login/?next=/herramientas/config-ml/'; throw new Error('redirect'); }
-  var _fetch = window.fetch;
-  window.fetch = function(url, opts) {
-    opts = opts || {};
-    opts.headers = Object.assign({ 'Authorization': 'Basic ' + token }, opts.headers || {});
-    return _fetch(url, opts);
-  };
-})();
+Api.installAuth();
 
 function logout() { fetch('/api/auth/logout',{method:'POST'}); window.location.href = '/herramientas/login/'; }
 
