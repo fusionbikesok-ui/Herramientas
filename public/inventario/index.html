@@ -4,11 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Fusion Bikes · Contador de inventario</title>
+<link rel="stylesheet" href="../lib/theme.css">
 <style>
-  :root{
-    --azul:#2DB8E8; --bg:#0C0F16; --panel:#141A25; --panel2:#1B2235; --line:#24304A;
-    --txt:#E4EAF4; --muted:#8493B0; --ok:#34D399; --warn:#F87171; --sku:#FBBF24;
-  }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
   body{background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
@@ -151,20 +148,9 @@
     <button class="cerrarcam" id="bCamCerrar">Cerrar</button>
   </div>
 </div>
+<script src="../lib/api.js"></script>
 <script>
-  (function() {
-    var token = 'cookie-session';
-    if (!token) {
-      window.location.href = '/herramientas/login/?next=' + encodeURIComponent(window.location.pathname);
-      throw new Error('redirect');
-    }
-    var _fetch = window.fetch;
-    window.fetch = function(url, opts) {
-      opts = opts || {};
-      opts.headers = Object.assign({ 'Authorization': 'Basic ' + token }, opts.headers || {});
-      return _fetch(url, opts);
-    };
-  })();
+  Api.installAuth();
 (function(){
   "use strict";
 

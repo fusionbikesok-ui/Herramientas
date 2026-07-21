@@ -97,19 +97,10 @@
   <div id="cuerpo"><div class="loading">Cargando estado…</div></div>
 </div>
 
+<script src="../lib/format.js"></script>
+<script src="../lib/api.js"></script>
 <script>
-(function(){
-  var token='cookie-session';
-  if(!token){window.location.href='/herramientas/login/?next='+encodeURIComponent(window.location.pathname);throw new Error('redirect');}
-  var _f=window.fetch;
-  window.fetch=function(u,o){o=o||{};o.headers=Object.assign({'Authorization':'Basic '+token},o.headers||{});return _f(u,o);};
-})();
-
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-function fecha(s){if(!s)return '—';try{return new Date(s).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return s;}}
-function nick(json){try{var o=JSON.parse(json);return o&&o.nickname?o.nickname:(o&&o.id?'ID '+o.id:'—');}catch(e){return '—';}}
-function n(x){return (x||0).toLocaleString('es-AR');}
-function money(x){return x==null?'—':Number(x).toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0});}
+Api.installAuth();
 
 async function cargar(){
   var cont=document.getElementById('cuerpo');

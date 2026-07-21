@@ -5,13 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Etiquetas Fusion Bikes — 50×25 mm</title>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<link rel="stylesheet" href="../lib/theme.css">
 <style>
-  :root {
-    --azul:#2DB8E8; --azul-dk:#1C93BD; --oscuro:#0C0F16;
-    --surface:#141A25; --surface2:#1B2235; --border:#24304A; --border2:#2E3B57;
-    --text:#E4EAF4; --muted:#8493B0; --muted2:#5B6B8C;
-    --green:#34D399; --red:#F87171;
-  }
   * { box-sizing: border-box; }
   body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif; margin:0; background:var(--oscuro); color:var(--text); }
 
@@ -254,20 +249,9 @@
 
 <div id="hoja"></div>
 
+<script src="../lib/api.js"></script>
 <script>
-  (function() {
-    var token = 'cookie-session';
-    if (!token) {
-      window.location.href = '/herramientas/login/?next=' + encodeURIComponent(window.location.pathname);
-      throw new Error('redirect');
-    }
-    var _fetch = window.fetch;
-    window.fetch = function(url, opts) {
-      opts = opts || {};
-      opts.headers = Object.assign({ 'Authorization': 'Basic ' + token }, opts.headers || {});
-      return _fetch(url, opts);
-    };
-  })();
+  Api.installAuth();
 /* ----- Pestañas de entrada ----- */
 function mostrarTab(id, btn){
   document.querySelectorAll('.bloque').forEach(b=>b.classList.add('oculto'));
