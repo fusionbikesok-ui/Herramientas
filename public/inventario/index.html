@@ -248,6 +248,9 @@
     window.Scanner.open({
       video: video,
       mode: 'continuous',
+      // El mismo producto no se re-cuenta por un parpadeo de la cámara: debe salir
+      // del cuadro al menos medio segundo para volver a contarse.
+      dropoutMs: 500,
       onCode: function(codigo){ processScan(codigo); mostrarToastCam(codigo); },
       onError: function(msg){ document.getElementById('cam-msg').textContent = msg; }
     });
