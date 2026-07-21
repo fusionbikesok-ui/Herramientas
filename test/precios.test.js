@@ -95,10 +95,10 @@ describe('mlPrecios — netoMl + precioWebClave', () => {
     expect(r.neto).toBe(850);
   });
 
-  it('precioWebClave lee el precio del SKU mapeado', () => {
+  it('precioWebClave lee el precio de LISTA del SKU mapeado y devuelve el de CONTADO (2/3)', () => {
     seedCatalogo(db, { idWoo: 10, sku: 'FB-1', precio: 1234 });
     seedDecision(db, 'MLA1|v1', 'FB-1');
-    expect(precioWebClave(db, 'MLA1|v1')).toBe(1234);
+    expect(precioWebClave(db, 'MLA1|v1')).toBe(822.67);
     expect(precioWebClave(db, 'MLA9|v9')).toBe(null);
   });
 });
@@ -113,11 +113,11 @@ describe('auditarPrecios + router', () => {
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
   it('audita una publicación activa y clasifica bajo/ok/sin_precio', async () => {
-    // bajo: neto 850 vs web 1000 (>5% debajo)
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
+    // bajo: neto 850 vs contado 1000 (precio de lista 1500 × 2/3, >5% debajo)
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
-    // ok: neto 850 vs web 870
-    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 870 });
+    // ok: neto 850 vs contado 870 (precio de lista 1305 × 2/3)
+    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 1305 });
     seedDecision(db, 'MLO|v1', 'FB-O'); seedPub(db, { clave: 'MLO|v1', itemId: 'MLO', varId: 'v1' });
     // sin_precio: sin precio web
     seedCatalogo(db, { idWoo: 3, sku: 'FB-S', precio: null });
@@ -134,7 +134,7 @@ describe('auditarPrecios + router', () => {
   });
 
   it('GET /api/precios?estado=bajo filtra por estado', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
@@ -147,9 +147,9 @@ describe('auditarPrecios + router', () => {
   });
 
   it('GET /api/precios incluye precio_sugerido solo para filas "bajo"', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
-    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 870 });
+    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 1305 });
     seedDecision(db, 'MLO|v1', 'FB-O'); seedPub(db, { clave: 'MLO|v1', itemId: 'MLO', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
@@ -162,13 +162,13 @@ describe('auditarPrecios + router', () => {
   });
 
   it('POST /api/precios/actualizar-precio corrige el precio en ML y refresca la fila', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 }); // lista 1500 → contado 1000
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
     expect(db.prepare("SELECT estado FROM ml_precio_auditoria WHERE clave='MLB|v1'").get().estado).toBe('bajo');
 
-    // Tras la corrección, el item queda a precio 1200 (neto 1050 ≥ web 1000 → ok)
+    // Tras la corrección, el item queda a precio 1200 (neto 1050 ≥ contado 1000 → ok)
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
