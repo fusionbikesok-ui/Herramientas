@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { skuDesdeMl, publicacionesDesdeWc } from '../lib/mlMapeo.js';
+import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { getAccessToken, bootstrapToken } from '../lib/mlClient.js';
 import { getReactivablesRows, reactivarItems, syncRouter } from '../routes/sync.js';
 import express from 'express';
@@ -98,6 +98,27 @@ describe('mlMapeo', () => {
 
     it('devuelve array vacío si SKU es string vacío', () => {
       expect(publicacionesDesdeWc(db, '')).toHaveLength(0);
+    });
+  });
+
+  describe('descartarVariacionMuerta', () => {
+    it('borra la decisión y descarta la clave', () => {
+      const now = new Date().toISOString();
+      db.prepare('INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)')
+        .run('MLA700|555', 'FB-9', 'Algo', 'asignar', now);
+
+      descartarVariacionMuerta(db, 'MLA700|555', 'muerta');
+
+      expect(db.prepare('SELECT 1 FROM sku_matcher_decisiones WHERE clave=?').get('MLA700|555')).toBeUndefined();
+      const desc = db.prepare('SELECT clave, motivo FROM errores_descartados WHERE clave=?').get('MLA700|555');
+      expect(desc).toMatchObject({ clave: 'MLA700|555', motivo: 'muerta' });
+    });
+
+    it('es idempotente y funciona sin decisión previa', () => {
+      descartarVariacionMuerta(db, 'MLA701|9', 'a');
+      descartarVariacionMuerta(db, 'MLA701|9', 'b');
+      expect(db.prepare('SELECT COUNT(*) n FROM errores_descartados WHERE clave=?').get('MLA701|9').n).toBe(1);
+      expect(db.prepare('SELECT motivo FROM errores_descartados WHERE clave=?').get('MLA701|9').motivo).toBe('b');
     });
   });
 });
@@ -431,6 +452,28 @@ describe('vista de detalle', () => {
     expect(res.body.data.map(r => r.clave)).toEqual(['MLA1|']);
   });
 
+  it('atencion/sin_mapeo: marca variacion_muerta cuando la variación ya no existe en ML', async () => {
+    seedToken(db);
+    seedLog(db, { clave: 'MLA_M|555', estado: 'sin_mapeo' });  // variación que ML ya no tiene
+    seedLog(db, { clave: 'MLA_V|666', estado: 'sin_mapeo' });  // variación viva
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (/\/items\?ids=/.test(url)) {
+        return { status: 200, data: [
+          { code: 200, body: { id: 'MLA_M', status: 'active', variations: [] } },
+          { code: 200, body: { id: 'MLA_V', status: 'active', variations: [{ id: 666 }] } },
+        ], headers: {} };
+      }
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const res = await request(app).get('/api/sync/atencion/sin_mapeo');
+    expect(res.status).toBe(200);
+    const byClave = Object.fromEntries(res.body.data.map(r => [r.clave, r]));
+    expect(byClave['MLA_M|555'].variacion_muerta).toBe(true);
+    expect(byClave['MLA_V|666'].variacion_muerta).toBeFalsy();
+  });
+
   it('atencion/sin_mapeo: excluye lo descartado a mano', async () => {
     seedLog(db, { clave: 'MLA1|', estado: 'sin_mapeo' });
     db.prepare("INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES ('MLA1|', null, ?)").run(ahora());
@@ -477,6 +520,24 @@ describe('vista de detalle', () => {
   it('atencion: categoría inválida → 400', async () => {
     const res = await request(app).get('/api/sync/atencion/cualquiera');
     expect(res.status).toBe(400);
+  });
+
+  it('limpiar-variaciones-muertas: descarta las que ML confirma inexistentes', async () => {
+    seedToken(db);
+    seedDecision(db, 'MLA_D|111', 'FB-D'); // item ahora simple → variación muerta
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (/\/items\?ids=/.test(url)) {
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA_D', status: 'active', variations: [] } }], headers: {} };
+      }
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const res = await request(app).post('/api/sync/limpiar-variaciones-muertas');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.muertas).toBe(1);
+    expect(db.prepare("SELECT 1 FROM errores_descartados WHERE clave='MLA_D|111'").get()).toBeTruthy();
   });
 
   it('reintentar-item: publicación activa → push de stock OK', async () => {

@@ -260,6 +260,7 @@ function render(d){
   h+='<button class="btn" onclick="disparar(this,\'/api/sync/ml-wc\',\'Trayendo ventas de ML…\')">Traer ventas de ML ahora</button>';
   h+='<button class="btn sec" onclick="disparar(this,\'/api/sync/wc-ml\',\'Empujando stock a ML…\')">Sincronizar stock ahora</button>';
   h+='<button class="btn sec" onclick="disparar(this,\'/api/sync/ml-cancelaciones\',\'Procesando cancelaciones…\')">Procesar cancelaciones</button>';
+  h+='<button class="btn sec" onclick="limpiarMuertas(this)">Limpiar variaciones muertas</button>';
   h+='</div><div class="msg" id="accion-msg"></div>';
 
   return h;
@@ -284,6 +285,24 @@ async function disparar(btn,url,txt){
     var d=await r.json();
     if(!d.ok)throw new Error(d.error||'error');
     msg.style.color='var(--green)';msg.textContent='✓ Listo. Actualizando estado…';
+    await cargar();
+  }catch(err){
+    msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
+  }finally{btn.disabled=false;}
+}
+
+// Limpieza masiva de variaciones muertas: verifica contra ML y descarta las que ya no
+// existen. Reporta cuántas descartó y cuántas salteó (ML no confirmó — fail-closed).
+async function limpiarMuertas(btn){
+  var msg=document.getElementById('accion-msg');
+  if(!confirm('Se van a revisar contra MercadoLibre las variaciones mapeadas y las pendientes de re-mapeo, y se descartarán las que ya no existen. No borra nada que ML no confirme. ¿Seguimos?'))return;
+  btn.disabled=true;msg.style.color='var(--muted)';msg.textContent='Verificando publicaciones en ML (puede tardar)…';
+  try{
+    var r=await fetch('/api/sync/limpiar-variaciones-muertas',{method:'POST'});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    msg.style.color='var(--green)';
+    msg.textContent='✓ '+n(d.muertas)+' variación(es) muerta(s) descartada(s) de '+n(d.revisados)+' revisada(s)'+(d.saltados?(' · '+n(d.saltados)+' salteada(s) porque ML no respondió'):'')+'. Actualizando…';
     await cargar();
   }catch(err){
     msg.style.color='var(--red)';msg.textContent='✗ '+err.message;

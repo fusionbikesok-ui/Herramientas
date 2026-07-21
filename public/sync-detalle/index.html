@@ -158,7 +158,13 @@ function render(rows){
     h+='<tr data-clave="'+esc(row.clave)+'">';
     h+='<td>'+pubCell(row)+'</td>';
     if(CFG.modo==='mapeo'){
-      h+='<td><div class="sku-box"><input class="sku-q" placeholder="Buscar SKU o nombre…"><div class="sku-results"></div></div></td>';
+      if(row.variacion_muerta){
+        // La variación vendida ya no existe en ML: asignar sería inútil (el sync borraría
+        // el mapeo por "doesn't have a variation"). Solo cabe descartar.
+        h+='<td><div class="diag-txt">La variación vendida ya no existe en ML (la publicación se editó o pasó a simple). No se puede re-mapear con esta clave — descartala.</div></td>';
+      }else{
+        h+='<td><div class="sku-box"><input class="sku-q" placeholder="Buscar SKU o nombre…"><div class="sku-results"></div></div></td>';
+      }
       h+='<td class="estado-cell"><div class="acc-btns"><button class="btn mini sec" onclick="descartar(this,\''+esc(row.clave)+'\')">Descartar</button></div><span class="st"></span></td>';
     }else if(CFG.modo==='diagnostico'){
       h+='<td>'+diagCell(row)+'</td>';
