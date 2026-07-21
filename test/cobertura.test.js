@@ -4,7 +4,14 @@ import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
 import { coberturaRouter } from '../routes/cobertura.js';
-import { esFaltante, calcularFaltantes, esNoVendible, parseCategorias } from '../lib/cobertura.js';
+import {
+  esFaltante,
+  calcularFaltantes,
+  esNoVendible,
+  parseCategorias,
+  esMultiPublicacion,
+  calcularMultiPublicacion,
+} from '../lib/cobertura.js';
 
 const TEST_DB = './test/tmp-cobertura.sqlite';
 
@@ -76,6 +83,88 @@ describe('lib/cobertura reglas de faltante', () => {
     ];
     const faltantes = calcularFaltantes(catalogo, skusEnML, excluidos);
     expect(faltantes.map((p) => p.id_woo)).toEqual([1]);
+  });
+});
+
+describe('lib/cobertura reglas de multi-publicación', () => {
+  const excluidos = new Set([999]);
+  const conteoPorSku = new Map([
+    ['FB-2PUB', 2],
+    ['FB-3PUB', 3],
+    ['FB-5PUB', 5],
+    ['FB-SERV', 4],
+    ['FB-VAR', 4],
+    ['FB-LOCAL', 4],
+  ]);
+
+  it('no entra un SKU con exactamente 2 publicaciones (umbral por defecto)', () => {
+    const p = { id_woo: 1, sku: 'FB-2PUB', tipo: 'simple', stock: 5, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos)).toBe(false);
+  });
+
+  it('entra un SKU con 3 publicaciones', () => {
+    const p = { id_woo: 2, sku: 'FB-3PUB', tipo: 'simple', stock: 5, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos)).toBe(true);
+  });
+
+  it('entra sin importar el stock (stock 0 con >2 publicaciones)', () => {
+    const p = { id_woo: 3, sku: 'FB-5PUB', tipo: 'simple', stock: 0, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos)).toBe(true);
+  });
+
+  it('no entra un producto sin SKU aunque tenga >2 publicaciones', () => {
+    const p = { id_woo: 4, sku: '', tipo: 'simple', stock: 5, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos)).toBe(false);
+  });
+
+  it('no entra el padre variable (placeholder)', () => {
+    const p = { id_woo: 5, sku: 'FB-VAR', tipo: 'variable', stock: 5, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos)).toBe(false);
+  });
+
+  it('no entra si es servicio (SERVICES) o QR PAGOS', () => {
+    const serv = { id_woo: 6, sku: 'FB-SERV', tipo: 'simple', stock: 5, categorias_json: '["SERVICES"]' };
+    expect(esMultiPublicacion(serv, conteoPorSku, excluidos)).toBe(false);
+  });
+
+  it('no entra si está marcado solo_local (excluido)', () => {
+    const p = { id_woo: 999, sku: 'FB-LOCAL', tipo: 'simple', stock: 5, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos)).toBe(false);
+  });
+
+  it('respeta un umbral personalizado', () => {
+    const p = { id_woo: 7, sku: 'FB-3PUB', tipo: 'simple', stock: 5, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos, 3)).toBe(false);
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos, 2)).toBe(true);
+  });
+
+  it('con umbral personalizado, un SKU justo en el límite no entra (estrictamente mayor)', () => {
+    const p = { id_woo: 8, sku: 'FB-5PUB', tipo: 'simple', stock: 5, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos, 5)).toBe(false);
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos, 4)).toBe(true);
+  });
+
+  it('no entra un SKU que no figura en conteoPorSku (0 publicaciones ML)', () => {
+    const p = { id_woo: 9, sku: 'FB-SIN-ML', tipo: 'simple', stock: 5, categorias_json: null };
+    expect(esMultiPublicacion(p, conteoPorSku, excluidos)).toBe(false);
+  });
+
+  it('el mismo SKU en dos productos WC distintos: ambos entran si superan el umbral', () => {
+    const pA = { id_woo: 10, sku: 'FB-3PUB', tipo: 'simple', stock: 5, categorias_json: null };
+    const pB = { id_woo: 11, sku: 'FB-3PUB', tipo: 'simple', stock: 0, categorias_json: null };
+    expect(esMultiPublicacion(pA, conteoPorSku, excluidos)).toBe(true);
+    expect(esMultiPublicacion(pB, conteoPorSku, excluidos)).toBe(true);
+  });
+
+  it('calcularMultiPublicacion filtra el catálogo completo', () => {
+    const catalogo = [
+      { id_woo: 1, sku: 'FB-2PUB', tipo: 'simple', stock: 5, categorias_json: null },          // 2 pub: no
+      { id_woo: 2, sku: 'FB-3PUB', tipo: 'simple', stock: 5, categorias_json: null },          // 3 pub: sí
+      { id_woo: 3, sku: 'FB-5PUB', tipo: 'simple', stock: 0, categorias_json: null },          // 5 pub, stock 0: sí
+      { id_woo: 6, sku: 'FB-SERV', tipo: 'simple', stock: 5, categorias_json: '["SERVICES"]' },// servicio: no
+    ];
+    const multi = calcularMultiPublicacion(catalogo, conteoPorSku, excluidos);
+    expect(multi.map((p) => p.id_woo)).toEqual([2, 3]);
   });
 });
 
