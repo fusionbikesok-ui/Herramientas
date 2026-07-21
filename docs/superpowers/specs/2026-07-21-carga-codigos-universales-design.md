@@ -48,17 +48,20 @@ Reutiliza el mismo criterio de exclusión que Cobertura para mantener coherencia
 2. **Filtros** (ver abajo) para acotar la cola.
 3. En el producto que tenés en mano, tocás 📷 → se abre la cámara (reusa
    `public/lib/scanner.js`, modo `single`) → escaneás el código de barras.
-4. Se guarda: **PATCH a Woo** (`global_unique_id`) **+** se actualiza `catalogo_cache.gtin`
-   **+** se siembra `ean_sku` (para que Consulta de Precios lo reconozca al toque).
-5. El producto **sale de la cola** (o muestra ✓ y avanza) y seguís con el siguiente.
-6. **Fail-closed:** si Woo rechaza (GTIN duplicado en otro producto, error de API), NO se
+4. Al escanear, la tarjeta muestra el código leído y pide **confirmar** (ver abajo).
+5. Al confirmar se guarda: **PATCH a Woo** (`global_unique_id`) **+** se actualiza
+   `catalogo_cache.gtin` **+** se siembra `ean_sku` (para que Consulta de Precios lo
+   reconozca al toque).
+6. El producto **sale de la cola** (o muestra ✓ y avanza) y seguís con el siguiente.
+7. **Fail-closed:** si Woo rechaza (GTIN duplicado en otro producto, error de API), NO se
    marca como cargado, NO se toca el cache ni `ean_sku`, y se muestra el error claro.
 
-### Guardado inmediato al escanear (sin paso de confirmación)
+### Confirmación antes de guardar
 
-Para carga masiva rápida, apenas se escanea se guarda. La tarjeta muestra el código
-recién asignado y un estado ✓. (Sin diálogo de confirmación previo — la corrección se
-hace re-escaneando o vía el flujo de sobrescritura.)
+Al escanear, la tarjeta muestra el código leído junto al producto y un botón
+**"Confirmar"** (y "Cancelar" / re-escanear). El PATCH a Woo recién ocurre al confirmar.
+Esto evita cargar un código mal leído o en el producto equivocado. La confirmación es por
+producto y rápida (un toque), para no frenar demasiado la carga en lote.
 
 ## Filtros y orden
 
