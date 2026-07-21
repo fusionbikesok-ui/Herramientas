@@ -69,14 +69,23 @@ seguirlos (los agentes tienen `Read`). Esto es robusto: funciona sin registro, s
 | `explorador` | `research`, `wayfinder` |
 | Orquestador (sesión) | `grilling`, `grill-with-docs`, `request-refactor-plan`, `to-prd`, `to-issues`, `codebase-design`, `handoff`, `ask-matt` |
 
-## Persistencia entre sesiones
+## Persistencia y disparadores entre sesiones
 
-1. Los 5 agentes son archivos `.md` en `.claude/agents/` → **cada sesión nueva los detecta
-   automáticamente**.
-2. Comando `/feature` (skill del proyecto en `.claude/skills/feature/`) que encodea el
-   pipeline de orquestación, para que una sesión nueva sepa el flujo.
-3. Nota en `MEMORY.md` que registra la existencia del equipo y apunta al comando y al spec.
-4. Todo commiteado a git (branch de trabajo → integración a mano por el usuario).
+Dos formas de disparar el pipeline, **ambas activas**:
+
+1. **Automático** (sin tipear nada): el flujo queda escrito como instrucción de proyecto en
+   `CLAUDE.md` (raíz del repo, leído al arrancar cada sesión). Cuando el usuario pide
+   crear/cambiar una función, la sesión principal dispara el pipeline sola.
+2. **Inicio forzado**: comando `/feature` (skill del proyecto en `.claude/skills/feature/`)
+   que encodea el mismo pipeline para gatillarlo explícitamente.
+
+Persistencia de las piezas:
+
+- Los 5 agentes son archivos `.md` en `.claude/agents/` → **cada sesión nueva los detecta
+  automáticamente**.
+- Nota en `MEMORY.md` que registra la existencia del equipo y apunta a `CLAUDE.md`, al
+  comando y al spec.
+- Todo commiteado a git (branch de trabajo → integración a mano por el usuario).
 
 ## Flujo del comando `/feature`
 
