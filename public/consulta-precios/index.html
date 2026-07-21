@@ -60,6 +60,11 @@
   .modal.open{display:flex;}
   .modal-box{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;max-width:460px;width:100%;}
   .modal-box video{width:100%;border-radius:10px;background:#000;display:block;}
+  .cam-viewport{position:relative;overflow:hidden;border-radius:10px;background:#000;}
+  .cam-viewport video{transform-origin:center center;transition:transform .12s ease-out;}
+  .cam-zoom{display:flex;align-items:center;gap:10px;margin-top:10px;}
+  .cam-zoom-lbl{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--azul);}
+  .cam-zoom input[type=range]{flex:1;accent-color:var(--azul);height:22px;cursor:pointer;}
   .modal-box .sub{color:var(--muted);font-size:13px;margin:10px 0;text-align:center;}
   .modal-box .cerrar{width:100%;font-size:14px;font-weight:700;padding:10px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--txt);cursor:pointer;}
 </style>
@@ -93,7 +98,8 @@
 
 <div class="modal" id="cam-modal">
   <div class="modal-box">
-    <video id="cam-video" autoplay playsinline muted></video>
+    <div class="cam-viewport"><video id="cam-video" autoplay playsinline muted></video></div>
+    <div class="cam-zoom"><span class="cam-zoom-lbl">Zoom</span><input type="range" id="cam-zoom" min="1" max="4" step="0.5" value="1"></div>
     <div class="sub" id="cam-sub">Apuntá al código de barras…</div>
     <button class="cerrar" id="cam-cerrar">Cerrar cámara</button>
   </div>
@@ -213,8 +219,11 @@ qEl.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDef
 
 // ---- Cámara (un escaneo y se cierra) ----
 var modal = document.getElementById('cam-modal');
+var zoomEl = document.getElementById('cam-zoom');
+zoomEl.addEventListener('input', function(){ window.Scanner.setZoom(parseFloat(this.value)); });
 document.getElementById('btn-cam').onclick = function(){
   modal.classList.add('open');
+  zoomEl.value = 1;
   var yaDisparo = false;   // en single, el detector puede emitir 2 frames antes de cerrar
   window.Scanner.open({
     video: document.getElementById('cam-video'),
