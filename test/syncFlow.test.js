@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { syncMlToWc, syncWcToMl, procesarReintentos } from '../routes/sync.js';
+import { syncMlToWc, syncWcToMl, procesarReintentos, limpiarVariacionesMuertas } from '../routes/sync.js';
 
 vi.mock('../lib/mlClient.js', () => ({
   mlFetch: vi.fn(),
@@ -288,6 +288,30 @@ describe('syncWcToMl', () => {
     expect(estado).toBeUndefined();
   });
 
+  it('ML dice "doesn\'t have a variation" → borra el mapeo, loguea remapeo_requerido y DESCARTA la clave', async () => {
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(200, 'Casco L', 'CASCO-L', 'variation', 150, 3, now);
+    seedPublicacion(db, { clave: 'MLA200|987', itemId: 'MLA200', variationId: '987', status: 'active' });
+
+    mlFetch.mockResolvedValue({
+      status: 400,
+      data: { cause: [{ message: "Item MLA200 doesn't have a variation with id 987" }] },
+    });
+
+    const p = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    // mapeo borrado
+    expect(db.prepare("SELECT 1 FROM sku_matcher_decisiones WHERE clave='MLA200|987'").get()).toBeUndefined();
+    // trail de auditoría conservado
+    expect(db.prepare("SELECT 1 FROM sync_log WHERE clave='MLA200|987' AND estado='remapeo_requerido'").get()).toBeTruthy();
+    // descartada → no vuelve a aparecer en ninguna vista de atención
+    expect(db.prepare("SELECT 1 FROM errores_descartados WHERE clave='MLA200|987'").get()).toBeTruthy();
+  });
+
   it('sin diff → mlFetch no es llamado', async () => {
     seedPublicacion(db, { clave: 'MLA100|', itemId: 'MLA100', status: 'active' });
     // Insertar ml_stock_estado con el mismo valor que el cache
@@ -301,6 +325,96 @@ describe('syncWcToMl', () => {
     await p;
 
     expect(mlFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('limpiarVariacionesMuertas', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  // ML devuelve el item con sus variaciones actuales. MLA_UNREACH se omite (no lo devuelve).
+  function mockMlItems() {
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (typeof path === 'string' && path.startsWith('/items?ids=')) {
+        const ids = new URLSearchParams(path.split('?')[1]).get('ids').split(',');
+        const data = ids
+          .filter(id => id !== 'MLA_UNREACH')
+          .map(id => ({
+            code: 200,
+            body: id === 'MLA_LIVE'
+              ? { id, status: 'active', variations: [{ id: 222 }] }   // la variación 222 sigue viva
+              : { id, status: 'active', variations: [] },             // simple → sin variaciones
+          }));
+        return { status: 200, data };
+      }
+      return { status: 200, data: {} };
+    });
+  }
+
+  function seedDecision(clave, sku, accion = 'asignar') {
+    db.prepare('INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)')
+      .run(clave, sku, null, accion, new Date().toISOString());
+  }
+
+  it('descarta variaciones muertas, conserva las vivas y saltea las que ML no confirma (fail-closed)', async () => {
+    seedDecision('MLA_DEAD|111', 'FB-D');       // item ahora simple → variación muerta
+    seedDecision('MLA_LIVE|222', 'FB-L');       // variación sigue existiendo → intacta
+    seedDecision('MLA_UNREACH|333', 'FB-U');    // ML no devuelve el item → no se toca
+    mockMlItems();
+
+    const p = limpiarVariacionesMuertas(db, CFG.ml);
+    await vi.runAllTimersAsync();
+    const res = await p;
+
+    expect(db.prepare("SELECT 1 FROM sku_matcher_decisiones WHERE clave='MLA_DEAD|111'").get()).toBeUndefined();
+    expect(db.prepare("SELECT 1 FROM errores_descartados WHERE clave='MLA_DEAD|111'").get()).toBeTruthy();
+
+    expect(db.prepare("SELECT 1 FROM sku_matcher_decisiones WHERE clave='MLA_LIVE|222'").get()).toBeTruthy();
+    expect(db.prepare("SELECT 1 FROM errores_descartados WHERE clave='MLA_LIVE|222'").get()).toBeUndefined();
+
+    expect(db.prepare("SELECT 1 FROM sku_matcher_decisiones WHERE clave='MLA_UNREACH|333'").get()).toBeTruthy();
+    expect(db.prepare("SELECT 1 FROM errores_descartados WHERE clave='MLA_UNREACH|333'").get()).toBeUndefined();
+
+    expect(res.muertas).toBe(1);
+    expect(res.saltados).toBe(1);
+  });
+
+  it('también descarta claves remapeo_requerido pendientes que ML confirma muertas', async () => {
+    // Sin decisión activa; solo un log remapeo_requerido pendiente de una variación muerta.
+    db.prepare(
+      "INSERT INTO sync_log (direccion, clave, sku, estado, creado_en, actualizado_en) VALUES ('wc_ml', 'MLA_DEAD|999', 'FB-Z', 'remapeo_requerido', ?, ?)"
+    ).run(new Date().toISOString(), new Date().toISOString());
+    mockMlItems();
+
+    const p = limpiarVariacionesMuertas(db, CFG.ml);
+    await vi.runAllTimersAsync();
+    const res = await p;
+
+    expect(db.prepare("SELECT 1 FROM errores_descartados WHERE clave='MLA_DEAD|999'").get()).toBeTruthy();
+    expect(res.muertas).toBe(1);
+  });
+
+  it('no toca decisiones de publicaciones simples (sin variation_id)', async () => {
+    seedDecision('MLA_SIMPLE|', 'FB-S', 'confirmar');
+    mockMlItems();
+
+    const p = limpiarVariacionesMuertas(db, CFG.ml);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(db.prepare("SELECT 1 FROM sku_matcher_decisiones WHERE clave='MLA_SIMPLE|'").get()).toBeTruthy();
+    expect(db.prepare("SELECT 1 FROM errores_descartados WHERE clave='MLA_SIMPLE|'").get()).toBeUndefined();
   });
 });
 

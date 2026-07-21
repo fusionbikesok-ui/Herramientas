@@ -9,7 +9,7 @@
 
 import { Router } from 'express';
 import { mlFetch, bootstrapToken } from '../lib/mlClient.js';
-import { skuDesdeMl, publicacionesDesdeWc } from '../lib/mlMapeo.js';
+import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache, buildWooPath } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
@@ -312,6 +312,9 @@ let _wcToMlEnCurso = false;
 // otra corrida de reactivación ni golpear el rate limit de ML).
 let _reactivarEnCurso = false;
 
+// Candado para la limpieza masiva de variaciones muertas (no solapar corridas).
+let _limpiezaMuertasEnCurso = false;
+
 export async function syncWcToMl(db, cfg) {
   if (!mlCfgOk(cfg)) return;
   if (_wcToMlEnCurso) return;
@@ -386,10 +389,12 @@ async function _syncWcToMl(db, cfg) {
         const causa = extraerErrorMl(resp, resp.data?.error || JSON.stringify(resp.data ?? {}));
 
         if (/doesn'?t have a variation/i.test(causa)) {
-          // La variación mapeada ya no existe en ML (publicación editada/recreada).
-          // Se desactiva el mapeo para que deje de reintentarse eternamente y
-          // vuelva a aparecer como pendiente en el matcher para re-mapear.
-          db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
+          // La variación mapeada ya no existe en ML (publicación editada/recreada o
+          // convertida a simple). Como ML nunca reutiliza variation_id, esa variación
+          // está muerta para siempre: se descarta la clave (borra el mapeo + errores_descartados)
+          // para que deje de reintentarse y no reaparezca en ninguna vista de atención. La
+          // publicación vigente (simple o con variaciones nuevas) se mapea aparte desde el matcher.
+          descartarVariacionMuerta(db, clave, `Variación inexistente en ML: ${causa}`.slice(0, 200));
           logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: diff.cantidad_ml, cantNueva: cantidad, estado: 'remapeo_requerido', error: causa.slice(0, 500) });
         } else if (/cannot exceeds? \d+ pictures/i.test(causa)) {
           // ML rechaza CUALQUIER update de la publicación (no solo fotos) porque
@@ -641,6 +646,92 @@ export async function reactivarItems(db, mlCfg, itemIds) {
   }
 
   return { procesados: porItem.size, resultados };
+}
+
+// ─── limpieza masiva de variaciones muertas ─────────────────────────────────────
+
+/**
+ * Trae de ML las variaciones vivas de cada publicación (multiget de a MULTIGET_CHUNK).
+ * Devuelve Map(itemId -> Set(variation_id)). Un itemId AUSENTE del Map significa que ML no
+ * lo devolvió (chunk fallido o item inaccesible): el llamador debe tratarlo fail-closed
+ * (no asumir que sus variaciones están muertas). No lanza.
+ */
+async function variacionesVivasDeMl(db, mlCfg, itemIds) {
+  const vivas = new Map();
+  const ids = [...new Set((itemIds || []).filter(Boolean))];
+  for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
+    const chunk = ids.slice(i, i + MULTIGET_CHUNK);
+    const resp = await mlFetch(db, mlCfg, 'get', `/items?ids=${chunk.join(',')}&attributes=id,status,variations`);
+    await sleep(ML_CALL_DELAY_MS);
+    if (resp.status !== 200 || !Array.isArray(resp.data)) continue; // chunk fallido → fail-closed
+    for (const entry of resp.data) {
+      if (entry.code !== 200 || !entry.body) continue;
+      const vs = Array.isArray(entry.body.variations) ? entry.body.variations : [];
+      vivas.set(String(entry.body.id), new Set(vs.map(v => String(v.id))));
+    }
+  }
+  return vivas;
+}
+
+/**
+ * Limpieza masiva de variaciones muertas: variation_id que ML confirma que ya no
+ * existen (publicaciones convertidas a simple o recreadas). Junta candidatos de dos
+ * fuentes —decisiones activas con variation_id, y claves remapeo_requerido pendientes—,
+ * verifica cada publicación EN VIVO contra ML y descarta SOLO las que ML confirma muertas.
+ * Fail-closed: si ML no devuelve un item, se saltea (no se borra ante la duda).
+ * Devuelve { revisados, muertas, saltados, items }.
+ */
+export async function limpiarVariacionesMuertas(db, mlCfg) {
+  const conVariacion = "substr(clave, instr(clave,'|')+1) <> ''";
+  // Candidatos 1: decisiones activas de variación (bombas latentes).
+  const decisiones = db.prepare(
+    `SELECT clave FROM sku_matcher_decisiones WHERE accion IN ('asignar','confirmar') AND ${conVariacion}`
+  ).all().map(r => r.clave);
+  // Candidatos 2: claves remapeo_requerido pendientes (ya sin decisión, no descartadas).
+  const remapeo = db.prepare(
+    `SELECT DISTINCT clave FROM sync_log
+     WHERE estado='remapeo_requerido' AND clave IS NOT NULL AND ${conVariacion}
+       AND clave NOT IN (SELECT clave FROM sku_matcher_decisiones WHERE accion IN ('asignar','confirmar'))
+       AND clave NOT IN (SELECT clave FROM errores_descartados)`
+  ).all().map(r => r.clave);
+
+  const claves = [...new Set([...decisiones, ...remapeo])];
+  if (!claves.length) return { revisados: 0, muertas: 0, saltados: 0, items: 0 };
+
+  const itemIds = [...new Set(claves.map(c => partirClaveMl(c).itemId).filter(Boolean))];
+  const vivasPorItem = await variacionesVivasDeMl(db, mlCfg, itemIds);
+
+  let muertas = 0, saltados = 0;
+  for (const clave of claves) {
+    const { itemId, variationId } = partirClaveMl(clave);
+    const vivas = vivasPorItem.get(itemId);
+    if (!vivas) { saltados++; continue; }   // ML no confirmó → no tocar (fail-closed)
+    if (vivas.has(variationId)) continue;   // la variación sigue viva → intacta
+    descartarVariacionMuerta(db, clave, 'Variación inexistente en ML (limpieza masiva)');
+    muertas++;
+  }
+
+  return { revisados: claves.length, muertas, saltados, items: itemIds.length };
+}
+
+/**
+ * Diagnóstico en vivo de la vista sin_mapeo: marca variacion_muerta=true en las filas
+ * cuya variación vendida ya no existe en ML (publicación convertida a simple o recreada).
+ * Asignarles un SKU es inútil —el sync borraría el mapeo por "doesn't have a variation"—;
+ * la acción correcta es descartarlas. Fail-closed y degrada elegante: si ML no confirma un
+ * item, la fila queda sin marcar (mapeable como hoy). No lanza (el llamador la envuelve).
+ */
+async function diagnosticarSinMapeo(db, mlCfg, rows) {
+  if (!mlCfg?.clientId || !rows.length) return;
+  const conVar = rows.filter(r => partirClaveMl(r.clave).variationId);
+  if (!conVar.length) return;
+  const vivasPorItem = await variacionesVivasDeMl(db, mlCfg, conVar.map(r => partirClaveMl(r.clave).itemId));
+  for (const r of rows) {
+    const { itemId, variationId } = partirClaveMl(r.clave);
+    if (!variationId) continue;
+    const vivas = vivasPorItem.get(itemId);
+    if (vivas && !vivas.has(variationId)) r.variacion_muerta = true;
+  }
 }
 
 // ─── enriquecimiento de filas con datos de ML (título + miniatura) ──────────────
@@ -1003,6 +1094,24 @@ export function syncRouter(db, cfg) {
     }
   });
 
+  // Limpieza masiva de variaciones muertas (verificada contra ML, fail-closed).
+  // Requiere acción explícita del usuario. No se solapa consigo misma.
+  router.post('/limpiar-variaciones-muertas', async (req, res) => {
+    if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+    if (_limpiezaMuertasEnCurso) {
+      return res.status(409).json({ ok: false, error: 'Ya hay una limpieza en curso' });
+    }
+    _limpiezaMuertasEnCurso = true;
+    try {
+      const r = await limpiarVariacionesMuertas(db, mlCfg);
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    } finally {
+      _limpiezaMuertasEnCurso = false;
+    }
+  });
+
   // Detalle acotado de cada categoría de "necesita atención" del dashboard.
   // Devuelve SOLO los ítems realmente pendientes (mismos filtros que /dashboard),
   // con título/variación de la publicación. No carga catálogos completos.
@@ -1048,6 +1157,11 @@ export function syncRouter(db, cfg) {
       await diagnosticarErrores(db, mlCfg, rows).catch(() => {});
     } else {
       await enriquecerConMl(db, mlCfg, rows).catch(() => {});
+      // sin_mapeo: además marcá las filas cuya variación vendida ya no existe en ML,
+      // para ofrecer Descartar en vez del buscador de SKU inútil.
+      if (req.params.cat === 'sin_mapeo') {
+        await diagnosticarSinMapeo(db, mlCfg, rows).catch(() => {});
+      }
     }
 
     res.json({ ok: true, cat: req.params.cat, total: rows.length, data: rows });
