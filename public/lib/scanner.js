@@ -68,6 +68,7 @@ export async function open({ video, mode, onCode, onError, dropoutMs }) {
     return;
   }
   video.srcObject = stream;
+  try { await video.play(); } catch (_e) { /* algunos navegadores requieren gesto; el autoplay/attr cubre el resto */ }
 
   try {
     if ('BarcodeDetector' in window) {

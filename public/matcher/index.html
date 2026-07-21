@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fusion Bikes — SKU Matcher ML↔WC</title>
+<link rel="stylesheet" href="../lib/theme.css">
 <style>
-  :root{--bg:#0C0F16;--surface:#141A25;--surface2:#1B2235;--border:#24304A;--accent:#2DB8E8;--accent-dk:#1C93BD;--accent2:#A78BFA;--accent2-dk:#8B6FE0;--green:#34D399;--green-dk:#22B98A;--red:#F87171;--yellow:#FBBF24;--text:#E4EAF4;--muted:#8493B0;}
   *{box-sizing:border-box;margin:0;padding:0;}
   body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
   .hidden{display:none!important;}
@@ -313,6 +313,8 @@
 </div>
 
 <script src="/herramientas/matcher/matcher-engine.js"></script>
+<script src="../lib/format.js"></script>
+<script src="../lib/api.js"></script>
 <script>
 "use strict";
 /* ── CAPTURA DE ERRORES VISIBLE ── */
@@ -325,11 +327,7 @@ window.onerror=function(msg,src,line,col,error){
 };
 function safe(fn,label){try{return fn();}catch(e){try{const bar=document.getElementById('err-bar'),m=document.getElementById('err-msg');if(bar&&m){bar.style.display='block';m.textContent='⚠ '+(label||'')+': '+e.message;}}catch(_){}console.error(label,e);}}
 /* ── AUTH ── */
-(function(){
-  var t='cookie-session';
-  if(!t){window.location.href='/herramientas/login/?next=/herramientas/matcher/';throw new Error('redirect');}
-  var _f=window.fetch;window.fetch=function(url,opts){opts=opts||{};opts.headers=Object.assign({'Authorization':'Basic '+t},opts.headers||{});return _f(url,opts);};
-})();
+Api.installAuth();
 
 const LS_KEY='fusion_sku_v3';
 
@@ -349,7 +347,6 @@ let filtro='all',busqueda='',activo=null,selCand={};
 let filtroEstadoPub='todas'; // todas | activa | pausada — filtro por estado de la publicación en ML
 
 function claveDe(item){return item.ml_item_id+'|'+(item.ml_variation_id||'');}
-function esc(s){return String(s===null||s===undefined?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function hoy(){return new Date().toISOString().slice(0,10);}
 function sc(s){return s>0.8?'sh':s>0.5?'sm':'sl';}
 function sl(s){return(s>0.8?'✓ ':s>0.5?'~ ':'? ')+Math.round(s*100)+'%';}

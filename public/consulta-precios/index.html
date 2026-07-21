@@ -4,13 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Consulta de Precios — Fusion Bikes</title>
+<link rel="stylesheet" href="../lib/theme.css">
 <style>
-  :root{
-    --azul:#2DB8E8;--azul-dk:#1C93BD;--bg:#0C0F16;
-    --panel:#141A25;--panel2:#1B2235;--border:#24304A;--border2:#2E3B57;
-    --txt:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
-    --green:#34D399;--amber:#FBBF24;--red:#F87171;
-  }
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;}
   .wrap{max-width:640px;margin:0 auto;padding:16px 16px 60px;}
@@ -98,15 +93,15 @@
 
 <div class="modal" id="cam-modal">
   <div class="modal-box">
-    <video id="cam-video" playsinline muted></video>
+    <video id="cam-video" autoplay playsinline muted></video>
     <div class="sub" id="cam-sub">Apuntá al código de barras…</div>
     <button class="cerrar" id="cam-cerrar">Cerrar cámara</button>
   </div>
 </div>
 
 <script type="module" src="../lib/scanner.js"></script>
+<script src="../lib/format.js"></script>
 <script>
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function fmtPrecio(n){
   if(n==null) return 'sin precio';
   return '$ ' + Number(n).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:2});

@@ -73,19 +73,13 @@
   <div class="msg" id="msg"></div>
 </div>
 
+<script src="../lib/format.js"></script>
+<script src="../lib/api.js"></script>
 <script>
-(function(){
-  var token='cookie-session';
-  if(!token){window.location.href='/herramientas/login/?next='+encodeURIComponent(window.location.pathname+window.location.search);throw new Error('redirect');}
-  var _f=window.fetch;
-  window.fetch=function(u,o){o=o||{};o.headers=Object.assign({'Authorization':'Basic '+token},o.headers||{});return _f(u,o);};
-})();
+Api.installAuth();
 
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-function n(x){return (x||0).toLocaleString('es-AR');}
 function qs(k){return new URLSearchParams(window.location.search).get(k);}
 function debounce(fn,ms){var t;return function(){var a=arguments,c=this;clearTimeout(t);t=setTimeout(function(){fn.apply(c,a);},ms);};}
-function mlUrl(itemId){return 'https://articulo.mercadolibre.com.ar/'+String(itemId||'').replace(/^(ML[A-Z])/,'$1-');}
 
 var CATS={
   sin_mapeo:{modo:'mapeo',titulo:'Ventas sin SKU mapeado',desc:'Publicaciones que se vendieron en MercadoLibre pero no están vinculadas a un SKU de WooCommerce. Buscá el producto por SKU o nombre y asignáselo. El stock se sincroniza solo en el próximo ciclo. Si la publicación ya no existe o la venta no es relevante, podés descartarla.'},
