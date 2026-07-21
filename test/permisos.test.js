@@ -31,3 +31,24 @@ describe('permiso consulta-precios', () => {
     expect(req).toEqual({ anyOf: ['consulta-precios'], nivel: 'read' });
   });
 });
+
+describe('permiso codigos (Códigos Universales)', () => {
+  it('está en la lista de herramientas con niveles', () => {
+    const h = HERRAMIENTAS.find(x => x.id === 'codigos');
+    expect(h).toBeTruthy();
+    expect(h.niveles).toBe(true);
+  });
+
+  it('GET /codigos/faltantes requiere read', () => {
+    const req = resolvePermiso('GET', '/codigos/faltantes');
+    expect(req).toEqual({ anyOf: ['codigos'], nivel: 'read' });
+    expect(permiteAcceso([{ herramienta: 'codigos', nivel: 'read' }], req)).toBe(true);
+  });
+
+  it('POST /codigos/asignar requiere write', () => {
+    const req = resolvePermiso('POST', '/codigos/asignar');
+    expect(req).toEqual({ anyOf: ['codigos'], nivel: 'write' });
+    expect(permiteAcceso([{ herramienta: 'codigos', nivel: 'read' }], req)).toBe(false);
+    expect(permiteAcceso([{ herramienta: 'codigos', nivel: 'write' }], req)).toBe(true);
+  });
+});

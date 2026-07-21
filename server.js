@@ -23,6 +23,7 @@ import { coberturaRouter } from './routes/cobertura.js';
 import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter } from './routes/preparacion.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
+import { codigosRouter } from './routes/codigos.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -103,6 +104,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/preparacion', express.static(path.join(__dirname, 'public/preparacion')));
   app.use('/api/consulta-precios', consultaPreciosRouter(db));
   app.use('/consulta-precios', express.static(path.join(__dirname, 'public/consulta-precios')));
+  app.use('/api/codigos', codigosRouter(db, wooCfg));
+  app.use('/codigos', express.static(path.join(__dirname, 'public/codigos')));
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
   app.use('/sync-ml', express.static(path.join(__dirname, 'public/sync-ml')));
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
