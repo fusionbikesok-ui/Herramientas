@@ -216,15 +216,15 @@ async function buscar(codigo){
 document.getElementById('btn-buscar').onclick = function(){ buscar(); };
 qEl.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); buscar(); } });
 
-// ---- Cámara (escaneo continuo) ----
+// ---- Cámara (un escaneo y se cierra) ----
 var modal = document.getElementById('cam-modal');
 document.getElementById('btn-cam').onclick = function(){
   modal.classList.add('open');
   window.Scanner.open({
     video: document.getElementById('cam-video'),
-    mode: 'continuous',
+    mode: 'single',
     onCode: function(code){
-      document.getElementById('cam-sub').textContent = '✓ ' + code;
+      cerrarCam();      // escanea uno y cierra la cámara
       buscar(code);
     },
     onError: function(msg){ document.getElementById('cam-sub').textContent = msg; },
