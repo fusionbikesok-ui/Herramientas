@@ -468,8 +468,8 @@ async function cargarEtiquetas(){
     var html='<p class="sub">Una fila por pedido. Corregí lo que haga falta (las celdas se editan) y copiá al Excel de Andreani.'
       +' <b>Copiar tabla</b> pega en columnas; también podés copiar una columna (⧉ del encabezado) o una celda (doble click).</p>'
       +'<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
-      +'<button class="btn" onclick="copiarTabla(false)">⧉ Copiar tabla (TSV)</button>'
-      +'<button class="btn sec" onclick="copiarTabla(true)">⧉ Copiar con encabezados</button>'
+      +'<button class="btn" onclick="copiarTabla(false, event)">⧉ Copiar tabla (TSV)</button>'
+      +'<button class="btn sec" onclick="copiarTabla(true, event)">⧉ Copiar con encabezados</button>'
       +'</div>'
       +'<div class="tbl-wrap"><table id="etq-tbl"><thead><tr>'
       +'<th>Lista</th>'
@@ -492,15 +492,34 @@ function filasTabla(){
     return Array.prototype.map.call(tr.querySelectorAll('td[contenteditable]'),function(td){return td.textContent.trim();});
   });
 }
-async function copiar(texto,elFeedback){
-  try{await navigator.clipboard.writeText(texto);}catch(e){alert('No se pudo copiar: '+e.message);return;}
-  if(elFeedback){elFeedback.classList.add('copied');setTimeout(function(){elFeedback.classList.remove('copied');},900);}
+function copiarFallback(texto){
+  var ta=null;
+  try{
+    ta=document.createElement('textarea');
+    ta.value=texto;
+    ta.setAttribute('readonly','');
+    ta.style.position='fixed';ta.style.top='-9999px';ta.style.left='-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    return document.execCommand('copy');
+  }catch(e){return false;}
+  finally{if(ta&&ta.parentNode)document.body.removeChild(ta);}
 }
-function copiarTabla(conHeaders){
+async function copiar(texto,elFeedback){
+  var ok=false;
+  if(navigator.clipboard&&window.isSecureContext){
+    try{await navigator.clipboard.writeText(texto);ok=true;}catch(e){ok=false;}
+  }
+  if(!ok)ok=copiarFallback(texto);
+  if(!ok){alert('No se pudo copiar');return false;}
+  if(elFeedback){elFeedback.classList.add('copied');setTimeout(function(){elFeedback.classList.remove('copied');},900);}
+  return true;
+}
+async function copiarTabla(conHeaders,ev){
   var filas=filasTabla().map(function(f){return f.join('\t');});
   if(conHeaders)filas.unshift(COLS.map(function(c){return c[1];}).join('\t'));
-  copiar(filas.join('\n'));
-  var b=event.target;b.textContent='✓ Copiado';setTimeout(function(){b.textContent=b.classList.contains('sec')?'⧉ Copiar con encabezados':'⧉ Copiar tabla (TSV)';},1200);
+  var ok=await copiar(filas.join('\n'));
+  var b=ev&&ev.target;if(ok&&b){b.textContent='✓ Copiado';setTimeout(function(){b.textContent=b.classList.contains('sec')?'⧉ Copiar con encabezados':'⧉ Copiar tabla (TSV)';},1200);}
 }
 function copiarColumna(ci){
   copiar(filasTabla().map(function(f){return f[ci];}).join('\n'));
