@@ -195,6 +195,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
       <div class="pill-tab active" data-tab="ambos" onclick="setTab(this)">Ambos lados</div>
       <div class="pill-tab" data-tab="problemas" onclick="setTab(this)">⚠ Problemas</div>
       <div class="pill-tab" data-tab="faltantes" onclick="setTab(this)">🎯 Faltantes ML</div>
+      <div class="pill-tab" data-tab="multipub" onclick="setTab(this)">🔁 Multi-publicación</div>
       <div class="pill-tab" data-tab="solo_ml" onclick="setTab(this)">Solo ML</div>
     </div>
     <input class="search-box" type="text" placeholder="Buscar producto, SKU o ID de publicación…" oninput="setBusqueda(this.value)">
@@ -218,6 +219,8 @@ var excluidosSet = new Set();     // id_woo marcados "solo local"
 var verExcluidos = false;         // en la pestaña Faltantes, mostrar los excluidos
 var wcCache = [];                 // catálogo WC crudo (para recomputar al marcar/desmarcar)
 var skusEnMLCache = new Set();    // SKUs presentes en publicaciones ML en vivo
+var skusEnMLConteo = new Map();   // SKU → cantidad de publicaciones ML con ese seller_sku
+var mlItemsCache = [];            // publicaciones ML crudas (para detalle de multi-publicación)
 
 /* Categorías WC que no son productos vendibles por ML (mismo criterio que lib/cobertura.js) */
 var CATEGORIAS_NO_VENDIBLES = ['SERVICES', 'QR PAGOS'];
@@ -241,6 +244,17 @@ function esFaltante(p){
   if(excluidosSet.has(p.id_woo)) return false;
   if(esNoVendible(p)) return false;
   return true;
+}
+/* Regla de multi-publicación: espejo de esMultiPublicacion() en lib/cobertura.js.
+   Como esFaltante pero SIN filtro de stock; entra si el SKU tiene > umbral publicaciones ML. */
+function esMultiPublicacion(p, umbral){
+  umbral = (umbral == null) ? 2 : umbral;
+  if(p.tipo === 'variable') return false;
+  var sku = String(p.sku||'').trim();
+  if(!sku) return false;
+  if(excluidosSet.has(p.id_woo)) return false;
+  if(esNoVendible(p)) return false;
+  return (skusEnMLConteo.get(sku) || 0) > umbral;
 }
 
 /* ── UTILS ── */
@@ -394,9 +408,14 @@ function cruzar(mlItems, wcProductos, fileName){
     if(s) wcPorSku[s] = p;
   });
 
-  /* Índice ML: set de SKUs presentes */
+  /* Índice ML: set de SKUs presentes + conteo de publicaciones por SKU */
   var skusEnML = new Set();
-  mlItems.forEach(function(m){ if(m.ml_sku) skusEnML.add(m.ml_sku); });
+  var conteoPorSku = new Map();
+  mlItems.forEach(function(m){
+    if(!m.ml_sku) return;
+    skusEnML.add(m.ml_sku);
+    conteoPorSku.set(m.ml_sku, (conteoPorSku.get(m.ml_sku) || 0) + 1);
+  });
 
   /* EN AMBOS */
   var enAmbos = [];
@@ -428,18 +447,22 @@ function cruzar(mlItems, wcProductos, fileName){
     return st && st !== 'active' && st !== 'activa';
   });
 
-  /* Caches para recomputar faltantes al marcar/desmarcar "solo local" */
+  /* Caches para recomputar faltantes/multi-publicación al marcar/desmarcar "solo local" */
   wcCache = wcProductos;
   skusEnMLCache = skusEnML;
+  skusEnMLConteo = conteoPorSku;
+  mlItemsCache = mlItems;
 
   datos = {
     en_ambos: enAmbos,
     solo_ml:  soloMl,
     pausadas: pausadas,
     faltantes: [],
-    excluidos: []
+    excluidos: [],
+    multiPub: []
   };
   recomputarFaltantes();
+  recomputarMultiPub();
 
   /* Actualizar stats */
   document.getElementById('num-ambos').textContent = enAmbos.length;
@@ -473,6 +496,15 @@ function recomputarFaltantes(){
   });
 }
 
+/* Recalcula multi-publicación (SKU con > 2 publicaciones ML) desde los caches y el estado actual */
+function recomputarMultiPub(){
+  if(!datos) return;
+  datos.multiPub = wcCache.filter(function(p){ return esMultiPublicacion(p); });
+  document.querySelectorAll('.pill-tab').forEach(function(b){
+    if(b.dataset.tab === 'multipub') b.textContent = '🔁 Multi-publicación' + (datos.multiPub.length ? ' ('+datos.multiPub.length+')' : '');
+  });
+}
+
 /* Marca un producto como "solo local": no debe publicarse en ML → sale de faltantes */
 function marcarSoloLocal(idWoo){
   var p = null;
@@ -485,6 +517,7 @@ function marcarSoloLocal(idWoo){
     if(!d.ok) throw new Error(d.error || 'No se pudo guardar');
     excluidosSet.add(idWoo);
     recomputarFaltantes();
+    recomputarMultiPub();
     render();
   }).catch(function(err){ alert('Error: ' + err.message); });
 }
@@ -496,6 +529,7 @@ function reactivar(idWoo){
       if(!d.ok) throw new Error(d.error || 'No se pudo reactivar');
       excluidosSet.delete(idWoo);
       recomputarFaltantes();
+      recomputarMultiPub();
       render();
     }).catch(function(err){ alert('Error: ' + err.message); });
 }
@@ -649,6 +683,31 @@ function render(){
         + '<a class="btn-accion accent" href="'+esc(matcherUrl)+'" target="_blank" rel="noopener">Buscar en Matcher →</a>'
         + '<button class="btn-accion" onclick="marcarSoloLocal('+r.id_woo+')">Solo local</button>'
         + '</div>'
+        + '</div>';
+    }).join('');
+
+  } else if(tabActual === 'multipub'){
+    lista = datos.multiPub.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
+    if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--green)">✓ Ningún producto tiene más de 2 publicaciones en MercadoLibre.</div>'; return; }
+    html += '<div class="section-label">' + lista.length + ' productos con más de 2 publicaciones en MercadoLibre (revisar)</div>';
+    html += lista.map(function(r){
+      var sku = String(r.sku||'').trim();
+      var n = skusEnMLConteo.get(sku) || 0;
+      var pubs = mlItemsCache.filter(function(m){ return m.ml_sku === sku; });
+      var detalle = pubs.map(function(m){
+        return '<span class="item-meta-id">' + esc(m.ml_item_id) + (m.ml_variation_id ? '|'+esc(m.ml_variation_id) : '')
+          + (m.ml_variante ? ' · '+esc(m.ml_variante) : '') + '</span>';
+      }).join('');
+      return '<div class="item-row warn">'
+        + '<div class="item-icon warn">🔁</div>'
+        + '<div class="item-body">'
+        + '<div class="item-name">' + esc(r.nombre) + '</div>'
+        + '<div class="item-meta">'
+        + '<span class="pill-sku">SKU: '+esc(r.sku)+'</span>'
+        + '<span class="pill-stock">'+n+' publicaciones ML</span>'
+        + detalle
+        + '</div></div>'
+        + '<div class="item-badges"><span class="badge badge-warn">Revisar</span></div>'
         + '</div>';
     }).join('');
 
