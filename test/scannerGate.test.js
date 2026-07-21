@@ -55,5 +55,15 @@ describe('createContinuousGate', () => {
       gate.frame('AAA', 0);
       expect(gate.frame('BBB', 100)).toBe('BBB');
     });
+
+    it('un avistaje intermedio reinicia la cuenta de ausencia (no dispara antes de tiempo)', () => {
+      const gate = createContinuousGate({ dropoutMs: 500 });
+      expect(gate.frame('AAA', 0)).toBe('AAA');
+      expect(gate.frame(null, 100)).toBeNull();      // empieza a contar ausencia en 100
+      expect(gate.frame('AAA', 150)).toBeNull();     // reaparece: se cancela la ausencia
+      expect(gate.frame(null, 200)).toBeNull();      // ausencia recontada desde 200
+      expect(gate.frame('AAA', 600)).toBeNull();     // 600-200=400 < 500 → todavía no re-cuenta
+      expect(gate.frame('AAA', 750)).toBeNull();     // sigue a la vista (mismo código)
+    });
   });
 });

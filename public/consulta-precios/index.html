@@ -220,10 +220,13 @@ qEl.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDef
 var modal = document.getElementById('cam-modal');
 document.getElementById('btn-cam').onclick = function(){
   modal.classList.add('open');
+  var yaDisparo = false;   // en single, el detector puede emitir 2 frames antes de cerrar
   window.Scanner.open({
     video: document.getElementById('cam-video'),
     mode: 'single',
     onCode: function(code){
+      if(yaDisparo) return;
+      yaDisparo = true;
       cerrarCam();      // escanea uno y cierra la cámara
       buscar(code);
     },
