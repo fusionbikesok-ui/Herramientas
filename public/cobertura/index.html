@@ -4,27 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cobertura de Catálogo — Fusion Bikes</title>
+<link rel="stylesheet" href="../lib/theme.css">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-:root {
-  --bg:       #0C0F16;
-  --surface:  #141A25;
-  --surface2: #1B2235;
-  --border:   #24304A;
-  --accent:   #2DB8E8;
-  --accent-dim: rgba(45,184,232,.12);
-  --text:     #E4EAF4;
-  --muted:    #8493B0;
-  --green:    #34D399;
-  --green-dim:rgba(52,211,153,.12);
-  --red:      #F87171;
-  --red-dim:  rgba(248,113,113,.12);
-  --amber:    #FBBF24;
-  --amber-dim:rgba(251,191,36,.12);
-  --purple:   #A78BFA;
-  --purple-dim:rgba(167,139,250,.12);
-}
 
 body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; }
 
@@ -221,14 +203,11 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
   <div id="lista" class="list-wrap"></div>
 </main>
 
+<script src="../lib/format.js"></script>
+<script src="../lib/api.js"></script>
 <script>
 /* ── AUTH ── */
-(function(){
-  var token = 'cookie-session';
-  if (!token) { window.location.href = '/herramientas/login/?next=/herramientas/cobertura/'; throw ''; }
-  var _f = window.fetch;
-  window.fetch = function(u, o){ o=o||{}; o.headers=Object.assign({'Authorization':'Basic '+token}, o.headers||{}); return _f(u,o); };
-})();
+Api.installAuth();
 
 /* ── ESTADO ── */
 var datos = null;
@@ -265,7 +244,6 @@ function esFaltante(p){
 }
 
 /* ── UTILS ── */
-function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 /* ── XLSX: cargar dinámicamente si no está disponible ── */
 function asegurarXlsx(cb){

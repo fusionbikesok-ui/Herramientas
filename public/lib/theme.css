@@ -1,0 +1,87 @@
+/*
+ * public/lib/theme.css — Paleta compartida (FusionBikes).
+ *
+ * :root con la UNIÓN de las variables de tema usadas por las páginas que comparten
+ * EXACTAMENTE la misma paleta (mismos valores). Incluye los alias de nombre distinto
+ * que apuntan al mismo color (ej. --bg / --oscuro / --dark, --border / --line,
+ * --txt / --text / --white, --muted / --gray, --azul / --accent / --blue).
+ *
+ * Se enlaza con <link rel="stylesheet" href="../lib/theme.css"> ANTES del <style> de
+ * la página, reemplazando su bloque :root local. Los valores son idénticos a los que
+ * cada página tenía, así el render queda igual pixel a pixel.
+ *
+ * OJO: algunas páginas usan la MISMA variable con OTRO valor (--muted #6B7A9B,
+ * --amber #F5B942 / #F59E0B, opacidades -dim .10/.08). Esas NO enlazan este archivo:
+ * conservan su :root local para no cambiar su color. No agregar acá esos valores en
+ * conflicto.
+ */
+:root {
+  /* Fondos / superficies */
+  --bg:        #0C0F16;
+  --oscuro:    #0C0F16;
+  --black:     #080A10;
+  --dark:      #0C0F16;
+  --dark2:     #141A25;
+  --dark3:     #1B2235;
+  --panel:     #141A25;
+  --panel2:    #1B2235;
+  --surface:   #141A25;
+  --surface2:  #1B2235;
+
+  /* Bordes */
+  --border:    #24304A;
+  --border2:   #2E3B57;
+  --line:      #24304A;
+
+  /* Acento / azul */
+  --azul:      #2DB8E8;
+  --azul-dk:   #1C93BD;
+  --accent:    #2DB8E8;
+  --accent-dk: #1C93BD;
+  --accent2:   #A78BFA;
+  --accent2-dk:#8B6FE0;
+  --accent-dim:rgba(45,184,232,.12);
+  --blue:      #2DB8E8;
+  --blue-dk:   #1C93BD;
+  --blue-bg:   rgba(45,184,232,0.10);
+  --blue-bd:   rgba(45,184,232,0.35);
+
+  /* Texto */
+  --txt:       #E4EAF4;
+  --text:      #E4EAF4;
+  --white:     #E4EAF4;
+  --muted:     #8493B0;
+  --muted2:    #5B6B8C;
+  --gray:      #8493B0;
+  --gray2:     #5B6B8C;
+
+  /* Semánticos */
+  --green:     #34D399;
+  --green-dk:  #22B98A;
+  --green-dim: rgba(52,211,153,.12);
+  --green-bg:  rgba(52,211,153,0.10);
+  --green-bd:  rgba(52,211,153,0.35);
+  --red:       #F87171;
+  --red-dim:   rgba(248,113,113,.12);
+  --red-bg:    rgba(248,113,113,0.10);
+  --red-bd:    rgba(248,113,113,0.35);
+  --amber:     #FBBF24;
+  --amber-dim: rgba(251,191,36,.12);
+  --amber-bg:  rgba(251,191,36,0.10);
+  --amber-bd:  rgba(251,191,36,0.35);
+  --yellow:    #FBBF24;
+  --orange:    #FB923C;
+  --orange-bg: rgba(251,146,60,0.10);
+  --orange-bd: rgba(251,146,60,0.35);
+  --purple:    #A78BFA;
+  --purple-dim:rgba(167,139,250,.12);
+
+  /* Alias semánticos (inventario) */
+  --ok:        #34D399;
+  --warn:      #F87171;
+  --sku:       #FBBF24;
+
+  /* Radios (pedidos / recepcion / stock) */
+  --radius:    10px;
+  --radius-lg: 16px;
+}
