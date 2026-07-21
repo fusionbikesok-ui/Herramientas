@@ -53,13 +53,13 @@ async function openWithZXing(video, gate, onCode) {
   });
 }
 
-export async function open({ video, mode, onCode, onError }) {
+export async function open({ video, mode, onCode, onError, dropoutMs }) {
   stopAll();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     onError('Este navegador no soporta escaneo por cámara. Usá el lector físico o tipeá el código.');
     return;
   }
-  const gate = mode === 'continuous' ? createContinuousGate() : null;
+  const gate = mode === 'continuous' ? createContinuousGate({ dropoutMs }) : null;
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });

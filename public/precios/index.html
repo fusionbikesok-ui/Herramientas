@@ -65,8 +65,9 @@
   <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
   <h1>Precios ML — <em>Auditoría</em></h1>
   <p class="sub">Compara el <b>neto que recibís</b> en MercadoLibre (precio − comisión − envío a tu cargo)
-    contra el <b>precio web</b> de cada publicación activa. Detecta dónde estás perdiendo margen
-    (neto &gt;5% por debajo del web), posibles sobreprecios y publicaciones sin precio comparable.</p>
+    contra el <b>precio de contado</b> de cada publicación activa (2/3 del precio de lista de la web,
+    igual que "Contado/Transf." en la ficha del producto). Detecta dónde estás perdiendo margen
+    (neto &gt;5% por debajo del contado), posibles sobreprecios y publicaciones sin precio comparable.</p>
 
   <div class="toolbar">
     <button class="btn" id="btn-recalc" onclick="recalcular()">Recalcular</button>
@@ -108,7 +109,7 @@ function render(rows){
   if(!rows.length) return '<div class="tbl-wrap"><div class="loading" style="color:var(--green)">✓ Nada en esta vista. Si nunca recalculaste, tocá "Recalcular".</div></div>';
   var h='<div class="tbl-wrap"><table><thead><tr>';
   h+='<th>Publicación</th><th class="num">Precio ML</th><th class="num">Comisión</th><th class="num">Envío</th>'
-   +'<th class="num">Neto</th><th class="num">Precio web</th><th class="num">Sugerido</th><th>Estado</th><th></th></tr></thead><tbody>';
+   +'<th class="num">Neto</th><th class="num">Precio contado</th><th class="num">Sugerido</th><th>Estado</th><th></th></tr></thead><tbody>';
   rows.forEach(function(o){
     var thumb=o.thumbnail?'<img class="pub-thumb" src="'+esc(o.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
     h+='<tr data-clave="'+esc(o.clave)+'">';
@@ -136,7 +137,7 @@ async function corregirPrecio(btn){
   var clave=tr.getAttribute('data-clave');
   var o=_rowsPorClave[clave];
   if(!o)return;
-  var precio=prompt('Nuevo precio en ML para "'+(o.titulo||o.item_id)+'"\n\nSugerido para igualar el neto al precio web ('+money(o.precio_web)+'):', Math.round(o.precio_sugerido));
+  var precio=prompt('Nuevo precio en ML para "'+(o.titulo||o.item_id)+'"\n\nSugerido para igualar el neto al precio de contado ('+money(o.precio_web)+'):', Math.round(o.precio_sugerido));
   if(precio==null)return;
   precio=Number(precio);
   if(!(precio>0)){alert('Precio inválido.');return;}

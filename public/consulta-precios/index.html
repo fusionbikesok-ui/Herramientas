@@ -116,7 +116,9 @@ var qEl = document.getElementById('q');
 var resultEl = document.getElementById('result');
 var historial = [];
 
-function focusInput(){ try{ qEl.focus(); qEl.select(); }catch(e){} }
+// No re-enfocar la caja mientras la cámara está abierta: en móvil levantaría el
+// teclado virtual sobre el video y rompería el escaneo continuo. cerrarCam() reenfoca.
+function focusInput(){ if(document.getElementById('cam-modal').classList.contains('open')) return; try{ qEl.focus(); qEl.select(); }catch(e){} }
 
 function cardHtml(p, tipo){
   var img = p.img ? '<img src="'+esc(p.img)+'" alt="">' : '<div class="noimg">sin foto</div>';
@@ -214,15 +216,18 @@ async function buscar(codigo){
 document.getElementById('btn-buscar').onclick = function(){ buscar(); };
 qEl.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); buscar(); } });
 
-// ---- Cámara (escaneo continuo) ----
+// ---- Cámara (un escaneo y se cierra) ----
 var modal = document.getElementById('cam-modal');
 document.getElementById('btn-cam').onclick = function(){
   modal.classList.add('open');
+  var yaDisparo = false;   // en single, el detector puede emitir 2 frames antes de cerrar
   window.Scanner.open({
     video: document.getElementById('cam-video'),
-    mode: 'continuous',
+    mode: 'single',
     onCode: function(code){
-      document.getElementById('cam-sub').textContent = '✓ ' + code;
+      if(yaDisparo) return;
+      yaDisparo = true;
+      cerrarCam();      // escanea uno y cierra la cámara
       buscar(code);
     },
     onError: function(msg){ document.getElementById('cam-sub').textContent = msg; },

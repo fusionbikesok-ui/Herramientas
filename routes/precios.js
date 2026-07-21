@@ -1,6 +1,9 @@
 /**
  * Auditoría de precios ML: compara el neto que recibe el vendedor (precio − comisión − envío)
- * contra el precio web de cada publicación activa mapeada, para detectar precios mal puestos.
+ * contra el precio de CONTADO de cada publicación activa mapeada, para detectar precios mal
+ * puestos. catalogo_cache.precio guarda el precio de LISTA (el que devuelve la API de
+ * WooCommerce); precioContado() en lib/mlPrecios.js lo convierte a precio de contado antes
+ * de comparar — ver el comentario ahí para el porqué.
  *
  * El scan es largo (~1000 publicaciones × varias llamadas a ML), así que corre en background
  * y persiste el resultado en ml_precio_auditoria; la página lee esa tabla y muestra progreso.
@@ -8,7 +11,7 @@
 
 import { Router } from 'express';
 import { mlFetch } from '../lib/mlClient.js';
-import { netoMl, veredictoNeto, precioSugerido, upsertAuditoria } from '../lib/mlPrecios.js';
+import { netoMl, veredictoNeto, precioSugerido, upsertAuditoria, precioContado } from '../lib/mlPrecios.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 
 const MULTIGET_CHUNK = 20;
@@ -41,13 +44,13 @@ export async function auditarPrecios(db, mlCfg) {
   _auditEnCurso = true;
 
   const candidatas = db.prepare(`
-    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_web
+    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_lista
     FROM ml_publicaciones_cache p
     JOIN sku_matcher_decisiones d ON d.clave = p.clave AND d.accion IN ('asignar','confirmar') AND d.sku <> ''
     LEFT JOIN catalogo_cache c ON c.sku = d.sku AND c.sku <> ''
     WHERE p.status = 'active'
     ORDER BY p.item_id
-  `).all();
+  `).all().map(c => ({ ...c, precio_web: precioContado(c.precio_lista) }));
 
   _auditProgreso = { enCurso: true, hechos: 0, total: candidatas.length, inicio: now(), fin: null, error: null };
 
@@ -124,14 +127,15 @@ function buildMlPriceUpdate(itemId, variationId, precio) {
  * si la clave ya no está mapeada o la publicación no se pudo consultar.
  */
 async function refrescarFila(db, mlCfg, clave) {
-  const fila = db.prepare(`
-    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_web
+  const filaRaw = db.prepare(`
+    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_lista
     FROM ml_publicaciones_cache p
     JOIN sku_matcher_decisiones d ON d.clave = p.clave AND d.accion IN ('asignar','confirmar') AND d.sku <> ''
     LEFT JOIN catalogo_cache c ON c.sku = d.sku AND c.sku <> ''
     WHERE p.clave = ?
   `).get(clave);
-  if (!fila) return null;
+  if (!filaRaw) return null;
+  const fila = { ...filaRaw, precio_web: precioContado(filaRaw.precio_lista) };
 
   const resp = await mlFetch(db, mlCfg, 'get',
     `/items/${fila.item_id}?attributes=id,price,category_id,listing_type_id,shipping,variations,status`);

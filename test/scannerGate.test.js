@@ -33,4 +33,37 @@ describe('createContinuousGate', () => {
     expect(gate.frame(null)).toBeNull();
     expect(gate.frame('')).toBeNull();
   });
+
+  describe('con dropoutMs (anti doble-conteo por parpadeo)', () => {
+    it('un hueco más corto que dropoutMs NO resetea: el mismo código no re-dispara', () => {
+      const gate = createContinuousGate({ dropoutMs: 500 });
+      expect(gate.frame('AAA', 0)).toBe('AAA');
+      expect(gate.frame(null, 300)).toBeNull();      // parpadeo de 300ms < 500ms
+      expect(gate.frame('AAA', 350)).toBeNull();     // sigue siendo el mismo producto: no cuenta de nuevo
+    });
+
+    it('un hueco de al menos dropoutMs sí resetea: el mismo código vuelve a disparar', () => {
+      const gate = createContinuousGate({ dropoutMs: 500 });
+      expect(gate.frame('AAA', 0)).toBe('AAA');
+      expect(gate.frame(null, 200)).toBeNull();
+      expect(gate.frame(null, 700)).toBeNull();      // ausente 700ms ≥ 500ms → retirado
+      expect(gate.frame('AAA', 800)).toBe('AAA');    // nueva unidad: cuenta
+    });
+
+    it('un código distinto dispara al instante aunque haya cooldown del anterior', () => {
+      const gate = createContinuousGate({ dropoutMs: 500 });
+      gate.frame('AAA', 0);
+      expect(gate.frame('BBB', 100)).toBe('BBB');
+    });
+
+    it('un avistaje intermedio reinicia la cuenta de ausencia (no dispara antes de tiempo)', () => {
+      const gate = createContinuousGate({ dropoutMs: 500 });
+      expect(gate.frame('AAA', 0)).toBe('AAA');
+      expect(gate.frame(null, 100)).toBeNull();      // empieza a contar ausencia en 100
+      expect(gate.frame('AAA', 150)).toBeNull();     // reaparece: se cancela la ausencia
+      expect(gate.frame(null, 200)).toBeNull();      // ausencia recontada desde 200
+      expect(gate.frame('AAA', 600)).toBeNull();     // 600-200=400 < 500 → todavía no re-cuenta
+      expect(gate.frame('AAA', 750)).toBeNull();     // sigue a la vista (mismo código)
+    });
+  });
 });

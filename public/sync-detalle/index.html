@@ -96,7 +96,7 @@ var CATS={
 
 // Metadatos por diagnóstico: etiqueta, color del badge y explicación.
 var DIAG={
-  reactivable:{lbl:'Reactivable',cls:'ok',txt:'Pausada por falta de stock pero hay stock web. Se puede reactivar (si el neto cubre el precio web).'},
+  reactivable:{lbl:'Reactivable',cls:'ok',txt:'Pausada por falta de stock pero hay stock web. Se puede reactivar (si el neto cubre el precio de contado).'},
   sin_stock:{lbl:'Sin stock',cls:'muted',txt:'Pausada por falta de stock y tampoco hay stock web. No es un error real.'},
   pausada_manual:{lbl:'Pausada por vos',cls:'muted',txt:'La pausaste manualmente en ML.'},
   pausada_otro:{lbl:'Pausada',cls:'muted',txt:'Pausada en ML por otro motivo.'},
@@ -237,7 +237,8 @@ async function reactivarUno(btn,clave,itemId){
     if(!d.ok)throw new Error(d.error||'error');
     var res=(d.resultados||[])[0]||{};
     if(res.ok){st.className='st ok';st.textContent='✓ Reactivada';btn.closest('tr').classList.add('row-done');}
-    else if(res.bloqueado){st.className='st bad';st.textContent='✗ Bloqueada: neto $'+n(Math.round(res.neto))+' vs web $'+n(res.precio_web)+' ('+Math.round(res.deficitPct*100)+'% abajo). Corregí el precio en ML.';btn.disabled=false;}
+    else if(res.bloqueado&&res.neto!=null&&res.precio_web!=null){st.className='st bad';st.textContent='✗ Bloqueada: neto $'+n(Math.round(res.neto))+' vs contado $'+n(res.precio_web)+' ('+Math.round(res.deficitPct*100)+'% abajo). Corregí el precio en ML.';btn.disabled=false;}
+    else if(res.bloqueado){st.className='st bad';st.textContent='✗ Bloqueada: '+(res.error||'no se pudo verificar el precio')+'.';btn.disabled=false;}
     else{st.className='st bad';st.textContent='✗ '+(res.error||'no se pudo reactivar');btn.disabled=false;}
   }catch(e){st.className='st bad';st.textContent='✗ '+e.message;btn.disabled=false;}
 }
