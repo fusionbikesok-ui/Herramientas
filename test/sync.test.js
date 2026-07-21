@@ -285,11 +285,11 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: empuja stock, activa en ML y persiste estado', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-9', 7);
-    db.prepare("UPDATE catalogo_cache SET precio=900 WHERE sku='FB-9'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1350 WHERE sku='FB-9'").run(); // lista 1350 → contado 900
     seedDecision(db, 'MLA9|v9', 'FB-9');
     seedPublicacion(db, { clave: 'MLA9|v9', itemId: 'MLA9', varId: 'v9', status: 'paused', subStatus: 'out_of_stock' });
-    // GET item (precio 1000, sin envío gratis) + comisión 50 → neto 950 vs web 900 (dentro de tolerancia,
-    // no bloquea) + PUT stock -> 200 + PUT status active -> 200
+    // GET item (precio 1000, sin envío gratis) + comisión 50 → neto 950 vs contado 900 (dentro de
+    // tolerancia, no bloquea) + PUT stock -> 200 + PUT status active -> 200
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
@@ -315,10 +315,10 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: si ML rechaza la activación, registra error y no marca activo', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-10', 4);
-    db.prepare("UPDATE catalogo_cache SET precio=900 WHERE sku='FB-10'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1350 WHERE sku='FB-10'").run(); // lista 1350 → contado 900
     seedDecision(db, 'MLA10|v10', 'FB-10');
     seedPublicacion(db, { clave: 'MLA10|v10', itemId: 'MLA10', varId: 'v10', status: 'paused', subStatus: 'out_of_stock' });
-    // chequeo de neto OK (precio 1000, comisión 50, sin envío gratis → neto 950 vs web 900, no bloquea)
+    // chequeo de neto OK (precio 1000, comisión 50, sin envío gratis → neto 950 vs contado 900, no bloquea)
     // + PUT stock OK + PUT activar falla
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
@@ -340,10 +340,10 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: bloquea si el neto ML queda >5% por debajo del precio web', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-11', 6);
-    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-11'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1350 WHERE sku='FB-11'").run(); // lista 1350 → contado 900
     seedDecision(db, 'MLA11|v11', 'FB-11');
     seedPublicacion(db, { clave: 'MLA11|v11', itemId: 'MLA11', varId: 'v11', status: 'paused', subStatus: 'out_of_stock' });
-    // GET item (precio 1000) + comisión 100 + envío 50 → neto 850 vs web 1000 (15% debajo → bloqueado)
+    // GET item (precio 1000) + comisión 100 + envío 50 → neto 850 vs contado 900 (~5.6% debajo → bloqueado)
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };

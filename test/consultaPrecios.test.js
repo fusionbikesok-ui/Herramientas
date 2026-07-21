@@ -84,6 +84,14 @@ describe('GET /api/consulta-precios/buscar', () => {
     expect(res.body.needsSku).toBeFalsy();
     db.close();
   });
+
+  it('q vacía → found:false', async () => {
+    const { app, db } = appConDatos();
+    const res = await request(app).get('/api/consulta-precios/buscar?q=');
+    expect(res.status).toBe(200);
+    expect(res.body.found).toBe(false);
+    db.close();
+  });
 });
 
 describe('POST /api/consulta-precios/ean', () => {
@@ -103,6 +111,18 @@ describe('POST /api/consulta-precios/ean', () => {
     expect(res.body.producto.sku).toBe('FB-40');
     const guardado = db.prepare('SELECT sku FROM ean_sku WHERE ean = ?').get('7000000000001');
     expect(guardado.sku).toBe('FB-40');
+    db.close();
+  });
+
+  it('re-enseñar el mismo EAN sobreescribe el SKU (upsert)', async () => {
+    const { app, db } = appConDatos();
+    const now = new Date().toISOString();
+    // segundo producto para reasignar
+    db.prepare('INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    await request(app).post('/api/consulta-precios/ean').send({ ean: '7791234567890', sku: 'FB-99' });
+    const guardado = db.prepare('SELECT sku FROM ean_sku WHERE ean = ?').get('7791234567890');
+    expect(guardado.sku).toBe('FB-99');
     db.close();
   });
 });

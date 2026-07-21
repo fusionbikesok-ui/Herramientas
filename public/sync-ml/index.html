@@ -157,7 +157,7 @@ function renderReactivables(d){
   h+='<div class="tbl-wrap"><table><thead><tr>';
   h+='<th><input type="checkbox" id="chk-all" checked onclick="toggleAll(this)"></th>';
   h+='<th>Publicación</th><th>SKU(s)</th><th class="num">Stock web</th>'
-   +'<th class="num">Precio ML</th><th class="num">Neto</th><th class="num">Precio web</th><th>Estado</th></tr></thead><tbody>';
+   +'<th class="num">Precio ML</th><th class="num">Neto</th><th class="num">Precio contado</th><th>Estado</th></tr></thead><tbody>';
   pubs.forEach(function(p){
     var skus=[...new Set(p.variaciones.map(function(v){return v.sku;}).filter(Boolean))];
     var stockTotal=p.variaciones.reduce(function(a,v){return a+(v.stock_disponible_ml||0);},0);
