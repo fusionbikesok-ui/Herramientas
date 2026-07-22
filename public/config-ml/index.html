@@ -354,7 +354,7 @@ function buscarSku(q) {
       }
       dropdown.innerHTML = d.data.map(function(item) {
         return '<div class="dropdown-item" onclick="seleccionarSku(' +
-          JSON.stringify(item.sku) + ',' + JSON.stringify(item.nombre) + ',' + item.stock + ')">' +
+          jsonAttr(item.sku) + ',' + jsonAttr(item.nombre) + ',' + item.stock + ')">' +
           '<span>' + escHtml(item.nombre) + '</span>' +
           '<span><span class="dropdown-sku">' + escHtml(item.sku) + '</span>' +
           '<span class="dropdown-stock"> · stock ' + item.stock + '</span></span>' +
@@ -454,8 +454,8 @@ function cargarTabla() {
           '<td>' + reservaCol + '</td>' +
           '<td class="stock-ml ' + mlClass + '">' + r.stock_disponible_ml + '</td>' +
           '<td><div class="actions">' +
-            '<button class="btn-edit" onclick="editarSku(' + JSON.stringify(r) + ')">✏️ Editar</button>' +
-            '<button class="btn-del"  onclick="eliminarSku(' + JSON.stringify(r.sku) + ')">✕ Quitar</button>' +
+            '<button class="btn-edit" onclick="editarSku(' + jsonAttr(r) + ')">✏️ Editar</button>' +
+            '<button class="btn-del"  onclick="eliminarSku(' + jsonAttr(r.sku) + ')">✕ Quitar</button>' +
           '</div></td>' +
           '</tr>';
       }).join('');
@@ -500,6 +500,12 @@ function toast(msg, isErr) {
 function escHtml(s) {
   return String(s || '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// JSON.stringify() envuelve en comillas dobles; hay que escaparlas para poder
+// insertar el resultado dentro de un atributo HTML también delimitado por comillas dobles.
+function jsonAttr(v) {
+  return JSON.stringify(v).replace(/"/g, '&quot;');
 }
 
 // Init
