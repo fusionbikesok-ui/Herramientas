@@ -344,7 +344,7 @@ searchEl.addEventListener('blur', function() {
 });
 
 function buscarSku(q) {
-  fetch('/api/sync/buscar-sku?q=' + encodeURIComponent(q))
+  fetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q))
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (!d.ok || !d.data.length) {
