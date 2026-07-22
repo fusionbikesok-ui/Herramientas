@@ -97,11 +97,11 @@
     font-size:8pt; line-height:1.05; text-align:center; font-weight:700;
     -webkit-text-stroke: 0.15pt currentColor;
     display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
-    overflow:hidden; max-height:5.4mm; width:100%;
+    overflow:hidden; max-height:6mm; width:100%;
   }
   .lbl-bc { display:flex; align-items:center; justify-content:center; width:100%; }
   .lbl-bc svg { display:block; width:46mm; }   /* alto y stretch los setea JS */
-  .lbl-sku { font-family:Arial; font-size:9pt; font-weight:700; -webkit-text-stroke: 0.15pt currentColor; letter-spacing:.4px; text-align:center; width:100%; margin-top:.3mm; }
+  .lbl-sku { font-family:Arial; font-size:8pt; font-weight:700; -webkit-text-stroke: 0.15pt currentColor; letter-spacing:.4px; text-align:center; width:100%; margin-top:.3mm; }
   .lbl-cat { font-size:7pt; font-weight:700; -webkit-text-stroke: 0.15pt currentColor; text-align:center; width:100%;
              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
@@ -766,7 +766,8 @@ function importarInventario(reemplazar) {
     var catProd     = _catalogoBySku[skuFallback.toLowerCase()] || _catalogoBySku[r.code.toLowerCase()] || null;
     var nombre      = catProd ? catProd.nombre : (mapEntry.desc || '');
     var displaySku  = catProd ? catProd.sku   : skuFallback;
-    return [displaySku, nombre, '', r.qty].join('\t');
+    var catCat      = (catProd && catProd.categorias && catProd.categorias[0]) || '';
+    return [displaySku, nombre, catCat, r.qty].join('\t');
   });
   appendEditor(lineas, reemplazar);
   document.getElementById('error').textContent = 'Importados ' + rows.length + ' producto(s) desde el inventario.';
