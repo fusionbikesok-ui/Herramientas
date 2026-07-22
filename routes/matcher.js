@@ -211,6 +211,66 @@ async function escribirSkuEnMl(db, cfg, clave, sku) {
  * scope='atencion' → solo las publicaciones que necesitan atención (sin mapeo / a
  * re-mapear); cualquier otro valor → todas las cacheadas. Devuelve { items, total }.
  */
+/**
+ * Anota cada publicación con stockWc (stock de Woo para su seller_sku, o null si el SKU no
+ * está en el catálogo / no tiene seller_sku) y sinStock (true si la publicación no está
+ * activa, o si tiene stock ≤ 0; SKU desconocido queda visible). Cruce 100% local contra el
+ * catálogo ya cacheado, SIN llamadas nuevas a ninguna API. Muta y devuelve `pubs`.
+ *
+ * Trim la clave al insertar y al buscar (seller_sku suele venir con espacios sucios) y ante
+ * SKUs duplicados en catalogo_cache (simple + variación pueden compartir SKU) se queda con el
+ * MÁXIMO stock, para no ocultar por error una publicación que sí tiene stock en alguna fila.
+ */
+function construirStockPorSku(db) {
+  const stockPorSku = new Map();
+  for (const c of db.prepare('SELECT sku, stock FROM catalogo_cache').all()) {
+    if (c.sku == null) continue;
+    const sku = String(c.sku).trim();
+    if (sku === '') continue;
+    const prev = stockPorSku.get(sku);
+    const stock = c.stock;
+    stockPorSku.set(sku, prev == null ? stock : Math.max(prev, stock ?? prev));
+  }
+  return stockPorSku;
+}
+
+function marcarStockWc(db, pubs) {
+  const stockPorSku = construirStockPorSku(db);
+  for (const p of pubs) {
+    const sku = (p.seller_sku || '').trim();
+    const stockWc = sku && stockPorSku.has(sku) ? stockPorSku.get(sku) : null;
+    p.stockWc = stockWc;
+    // sinStock: pausada (status != active), o mapeada con stock ≤ 0. SKU desconocido
+    // (stockWc null) queda visible.
+    p.sinStock = p.status !== 'active' || (stockWc !== null && stockWc <= 0);
+  }
+  return pubs;
+}
+
+/**
+ * Re-cruza el stock de Woo sobre los ítems YA RESUELTOS que devuelve el cache de candidatos.
+ * Es la parte barata (una lectura de catalogo_cache + un Map) y DEBE correrse en cada request,
+ * FUERA del bloque cacheado por firma: firmaCandidatos ignora deliberadamente el stock (ver
+ * hashCatalogoMatching), así que el cruce caro (LCS/matching) queda cacheado pero el stock hay
+ * que recalcularlo siempre contra el catalogo_cache actual, o el filtro "solo con stock"
+ * mostraría stock viejo y habilitaría sobreventa.
+ *
+ * - Ítems de "verificar" (tienen sku_actual, el SKU real confirmado): se re-cruzan por ESE SKU.
+ * - Ítems de "asignar" (sin sku_actual): no hay SKU con que cruzar, así que sin_stock depende
+ *   solo del status (igual que en marcarStockWc para SKU desconocido).
+ * Muta y devuelve `items`.
+ */
+export function remarcarStockResueltos(db, items) {
+  const stockPorSku = construirStockPorSku(db);
+  for (const it of items) {
+    const sku = (it.sku_actual || '').trim();
+    const stockWc = sku && stockPorSku.has(sku) ? stockPorSku.get(sku) : null;
+    it.ml_stock_wc = stockWc;
+    it.ml_sin_stock = it.ml_status !== 'active' || (stockWc !== null && stockWc <= 0);
+  }
+  return items;
+}
+
 export function computarCandidatosApi(db, scope) {
   const catalogo = db.prepare('SELECT id_woo, nombre, sku, tipo, img, atributos_json FROM catalogo_cache').all();
 
@@ -275,11 +335,20 @@ function firmaCandidatos(db) {
 function candidatosApiCacheado(db, scope, { peek = false } = {}) {
   const firma = firmaCandidatos(db);
   const hit = _cacheCandidatos.get(scope);
-  if (hit && hit.firma === firma) return { ...hit.resultado, cache: true };
-  if (peek) return { items: [], total: 0, cache: false };
-  const resultado = computarCandidatosApi(db, scope);
-  _cacheCandidatos.set(scope, { firma, resultado });
-  return { ...resultado, cache: false };
+  let out;
+  if (hit && hit.firma === firma) {
+    out = { ...hit.resultado, cache: true };
+  } else {
+    if (peek) return { items: [], total: 0, cache: false };
+    const resultado = computarCandidatosApi(db, scope);
+    _cacheCandidatos.set(scope, { firma, resultado });
+    out = { ...resultado, cache: false };
+  }
+  // Recálculo de stock FUERA del bloque cacheado: la firma ignora el stock a propósito, así
+  // que en cada request (hit o miss) se re-cruza contra el catalogo_cache actual. Sin esto,
+  // un SKU que el auto-sync bajó a 0 seguiría apareciendo "con stock" (sobreventa).
+  remarcarStockResueltos(db, out.items);
+  return out;
 }
 
 export function matcherRouter(db, cfg) {
@@ -450,6 +519,9 @@ export function matcherRouter(db, cfg) {
     } else {
       rows = db.prepare(`${SELECT_PUBS} ORDER BY titulo LIMIT ? OFFSET ?`).all(limit, offset);
     }
+    // Mismo cruce de stock que /candidatos, por consistencia (este endpoint ya no alimenta
+    // la grilla, pero mantenerlo coherente es trivial con el helper compartido).
+    marcarStockWc(db, rows);
     const actualizado = rows[0]?.actualizado_en ?? null;
     res.json({ ok: true, data: rows, actualizado, total: rows.length });
   });
