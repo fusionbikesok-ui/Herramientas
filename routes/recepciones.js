@@ -2,17 +2,47 @@ import express from 'express';
 import { wooFetch } from './woo.js';
 import { buildWooPath } from '../lib/wooStock.js';
 
+// Lock en memoria por id_woo para serializar el patrón GET→calcular→PATCH.
+// Es un solo proceso Node, así que un Map<id_woo, Promise> a nivel de módulo
+// alcanza para evitar que dos recepciones concurrentes sobre el mismo producto
+// se pisen las escrituras y pierdan stock recibido.
+const locksStockPorIdWoo = new Map();
+
 // Aplica el stock de un ítem recibido en WooCommerce (GET stock actual + PATCH suma).
 // Resuelve el path correcto para variaciones vía catalogo_cache/buildWooPath.
 // Actualiza recepcion_items (stock_previo/stock_nuevo/estado_item='aplicado') y catalogo_cache.
 // Lanza si la API de WC falla — el caller marca 'error'.
+// Serializado por id_woo: si ya hay una aplicación en curso para ese producto,
+// esta espera a que termine antes de hacer su propio GET.
 export async function aplicarStockItem(db, cfg, item) {
-  const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo)
-    || { id_woo: item.id_woo, id_padre: null, tipo: 'simple' };
+  const previa = locksStockPorIdWoo.get(item.id_woo) || Promise.resolve();
+  // Encadenamos ignorando el resultado (y errores) de la previa: cada llamada
+  // maneja su propio éxito/fallo, solo necesitamos la serialización temporal.
+  const propia = previa.catch(() => {}).then(() => aplicarStockItemInterno(db, cfg, item));
+  locksStockPorIdWoo.set(item.id_woo, propia);
+  try {
+    return await propia;
+  } finally {
+    // Liberar el lock solo si nadie encadenó después (evita retener promesas viejas).
+    if (locksStockPorIdWoo.get(item.id_woo) === propia) {
+      locksStockPorIdWoo.delete(item.id_woo);
+    }
+  }
+}
+
+async function aplicarStockItemInterno(db, cfg, item) {
+  const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
+  if (!prod) {
+    throw new Error(`No se encontró el producto id_woo=${item.id_woo} en catalogo_cache; no se puede determinar si es variación o simple`);
+  }
   const apiPath = buildWooPath(prod);
 
   const get = await wooFetch(cfg, apiPath);
-  const stockActual = get.data?.stock_quantity ?? item.stock_previo ?? 0;
+  const stockRaw = get.data?.stock_quantity;
+  const stockActual = Number(stockRaw);
+  if (stockRaw === null || stockRaw === undefined || !Number.isFinite(stockActual)) {
+    throw new Error(`WooCommerce no devolvió stock_quantity para id_woo=${item.id_woo} (¿manage_stock desactivado?); no se aplica sobre un dato posiblemente desactualizado`);
+  }
   const stockNuevo  = stockActual + item.cantidad;
 
   await wooFetch(cfg, apiPath, 'patch', { stock_quantity: stockNuevo, manage_stock: true });
@@ -241,16 +271,17 @@ export function recepcionesRouter(db, cfg) {
         AND (estado_item IS NULL OR estado_item NOT IN ('pendiente_creacion','creado'))`).run(id);
       db.prepare(`UPDATE recepcion_items SET estado_item='no_recibido'
         WHERE recepcion_id=? AND recibido=0`).run(id);
+
+      // Actualizar estado del pedido asociado solo cuando la recepción tocó stock.
+      // Una recepción "solo documento" no debe inflar el avance del pedido.
+      if (recMeta?.pedido_id) {
+        db.prepare("UPDATE pedidos SET estado='recibido_parcial' WHERE id=? AND estado='pendiente'")
+          .run(recMeta.pedido_id);
+      }
     }
 
     const now = new Date().toISOString();
     db.prepare("UPDATE recepciones SET estado='confirmada', confirmado_en=? WHERE id=?").run(now, id);
-
-    // Actualizar estado del pedido asociado
-    if (recMeta?.pedido_id) {
-      db.prepare("UPDATE pedidos SET estado='recibido_parcial' WHERE id=? AND estado='pendiente'")
-        .run(recMeta.pedido_id);
-    }
 
     const errores = resultados.filter(r => !r.ok).length;
     const aplicados = resultados.filter(r => r.ok).length;
