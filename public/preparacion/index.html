@@ -549,11 +549,15 @@ async function cargarSeguimientos(){
       +'<div class="ped-grid" id="seg-grid">'
       +filas.map(function(f){
         var e=f.envio||{};
+        var badge=f.colgado
+          ?'<span class="badge b-warn">reintentar</span>'
+          :'<span class="badge b-web">web</span>';
+        var trkVal=f.colgado&&f.tracking?' value="'+esc(f.tracking)+'"':'';
         return '<div class="ped" id="seg-'+f.wc_order_id+'">'
-          +'<div class="ped-top"><span class="ped-num">#'+esc(e.pedido)+'</span><span class="badge b-web">web</span></div>'
+          +'<div class="ped-top"><span class="ped-num">#'+esc(e.pedido)+'</span>'+badge+'</div>'
           +'<div class="ped-cli">'+esc(e.nombre)+' '+esc(e.apellido)+' — '+esc(e.localidad)+', '+esc(e.provincia)+'</div>'
           +'<div class="ped-foot">'
-          +'<input type="text" placeholder="N° de seguimiento" id="trk-'+f.wc_order_id+'" style="flex:1;min-width:140px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
+          +'<input type="text" placeholder="N° de seguimiento" id="trk-'+f.wc_order_id+'"'+trkVal+' style="flex:1;min-width:140px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
           +'<button class="btn" onclick="guardarSeguimiento('+f.wc_order_id+')">Guardar</button>'
           +'</div></div>';
       }).join('')
