@@ -215,6 +215,7 @@ var datos = null;
 var tabActual = 'ambos';
 var busqueda = '';
 var cargado = false;
+var fuenteApi = false;            // true si el cruce vino ya procesado del backend (API de ML)
 var excluidosSet = new Set();     // id_woo marcados "solo local"
 var verExcluidos = false;         // en la pestaña Faltantes, mostrar los excluidos
 var wcCache = [];                 // catálogo WC crudo (para recomputar al marcar/desmarcar)
@@ -348,32 +349,93 @@ function parsearYCruzar(rows, fileName){
   cruzarConWC(mlItems, fileName + ' — ' + mlItems.length + ' publicaciones ML leídas');
 }
 
-/* ── FUENTE: API de MercadoLibre (ml_publicaciones_cache) ── */
+/* ── FUENTE: API de MercadoLibre (cruce ya procesado en el backend) ──
+   El backend cruza catalogo_cache × ml_publicaciones_cache y devuelve las pestañas
+   listas (en_ambos, solo_ml, pausadas, faltantes, excluidos, multiPub). El cliente
+   solo pinta: no rehace joins ni filtros de negocio. */
 function cargarDesdeApiCobertura(){
   var btn = document.getElementById('btn-api-cob');
   var info = document.getElementById('api-cob-status');
   if(btn) btn.disabled = true;
-  if(info){ info.textContent = 'Leyendo publicaciones traídas de ML…'; info.style.color = 'var(--muted)'; }
-  fetch('/api/matcher/publicaciones')
+  if(info){ info.textContent = 'Cruzando publicaciones de ML con WooCommerce…'; info.style.color = 'var(--muted)'; }
+  fetch('/api/cobertura/cruce')
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if(!d.ok || !Array.isArray(d.data)) throw new Error('No se pudieron leer las publicaciones');
-      if(d.data.length === 0) throw new Error('No hay publicaciones en el cache. Andá al Matcher y usá "Traer desde API de ML" primero.');
-      var mlItems = d.data.map(function(p){
-        return {
-          ml_item_id:      String(p.item_id),
-          ml_variation_id: p.variation_id ? String(p.variation_id) : '',
-          ml_title:        p.titulo || '(sin título)',
-          ml_sku:          (p.seller_sku||'').trim(),
-          ml_status:       p.status || '',
-          ml_variante:     p.variations_texto || ''
-        };
-      });
-      cruzarConWC(mlItems, mlItems.length + ' publicaciones de ML (API)');
+      if(!d.ok) throw new Error(d.error || 'No se pudo cruzar la cobertura');
+      if(!d.resumen || d.resumen.total_ml_pubs === 0){
+        throw new Error('No hay publicaciones en el cache. Andá al Matcher y usá "Traer desde API de ML" primero.');
+      }
+      fuenteApi = true;
+      aplicarCruce(d, d.resumen.total_ml_pubs + ' publicaciones de ML (API)');
     })
     .catch(function(err){
       if(info){ info.textContent = '✗ ' + err.message; info.style.color = 'var(--red)'; }
       if(btn) btn.disabled = false;
+    });
+}
+
+/* Aplica un cruce ya procesado del backend: marca la zona cargada, guarda datos y pinta. */
+function aplicarCruce(d, etiquetaFuente){
+  cargado = true;
+  document.getElementById('upload-zone').classList.add('loaded');
+  document.getElementById('upload-idle').classList.add('hidden');
+  document.getElementById('upload-done').classList.remove('hidden');
+  document.getElementById('upload-file-name').textContent = '✓ ' + etiquetaFuente;
+
+  datos = {
+    en_ambos:  d.en_ambos  || [],
+    solo_ml:   d.solo_ml   || [],
+    pausadas:  d.pausadas  || [],
+    faltantes: d.faltantes || [],
+    excluidos: d.excluidos || [],
+    multiPub:  d.multiPub  || []
+  };
+  excluidosSet = new Set(datos.excluidos.map(function(e){ return e.id_woo; }));
+
+  var r = d.resumen || {};
+  document.getElementById('num-ambos').textContent = datos.en_ambos.length;
+  document.getElementById('num-wc').textContent    = datos.faltantes.length;
+  document.getElementById('num-ml').textContent    = datos.solo_ml.length;
+  document.getElementById('stat-row').classList.remove('hidden');
+
+  document.getElementById('source-text').textContent =
+    etiquetaFuente + ' · ' + (r.total_wc != null ? r.total_wc : '?') + ' productos WC';
+  document.getElementById('source-badge').classList.remove('hidden');
+
+  actualizarLabelsTabs();
+  document.getElementById('controls').classList.remove('hidden');
+  render();
+}
+
+/* Actualiza los contadores de las pestañas (problemas / faltantes / multi-publicación). */
+function actualizarLabelsTabs(){
+  if(!datos) return;
+  var nProb = datos.solo_ml.length + datos.pausadas.length;
+  document.querySelectorAll('.pill-tab').forEach(function(b){
+    if(b.dataset.tab === 'problemas') b.textContent = '⚠ Problemas' + (nProb ? ' ('+nProb+')' : '');
+    if(b.dataset.tab === 'faltantes') b.textContent = '🎯 Faltantes ML' + (datos.faltantes.length ? ' ('+datos.faltantes.length+')' : '');
+    if(b.dataset.tab === 'multipub')  b.textContent = '🔁 Multi-publicación' + (datos.multiPub.length ? ' ('+datos.multiPub.length+')' : '');
+  });
+}
+
+/* Re-trae el cruce del backend (tras marcar/reactivar "solo local") sin resetear la UI. */
+function refrescarCruceApi(){
+  return fetch('/api/cobertura/cruce')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d.ok) throw new Error(d.error || 'No se pudo recargar la cobertura');
+      datos = {
+        en_ambos:  d.en_ambos  || [],
+        solo_ml:   d.solo_ml   || [],
+        pausadas:  d.pausadas  || [],
+        faltantes: d.faltantes || [],
+        excluidos: d.excluidos || [],
+        multiPub:  d.multiPub  || []
+      };
+      excluidosSet = new Set(datos.excluidos.map(function(e){ return e.id_woo; }));
+      document.getElementById('num-wc').textContent = datos.faltantes.length;
+      actualizarLabelsTabs();
+      render();
     });
 }
 
@@ -401,6 +463,7 @@ function cruzarConWC(mlItems, etiquetaFuente){
 }
 
 function cruzar(mlItems, wcProductos, fileName){
+  fuenteApi = false;   // fuente Excel: el cruce se recomputa en el cliente
   /* Índice WC por SKU */
   var wcPorSku = {};
   wcProductos.forEach(function(p){
@@ -505,10 +568,22 @@ function recomputarMultiPub(){
   });
 }
 
+/* En fuente API recomputa desde el backend; en fuente Excel, desde los caches locales. */
+function recomputarTrasExclusion(){
+  if(fuenteApi) return refrescarCruceApi();
+  recomputarFaltantes();
+  recomputarMultiPub();
+  render();
+  return Promise.resolve();
+}
+
 /* Marca un producto como "solo local": no debe publicarse en ML → sale de faltantes */
 function marcarSoloLocal(idWoo){
   var p = null;
   for(var i=0;i<wcCache.length;i++){ if(wcCache[i].id_woo === idWoo){ p = wcCache[i]; break; } }
+  if(!p && datos){
+    p = (datos.faltantes||[]).concat(datos.multiPub||[]).filter(function(x){ return x.id_woo === idWoo; })[0] || null;
+  }
   fetch('/api/cobertura/exclusiones', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -516,9 +591,7 @@ function marcarSoloLocal(idWoo){
   }).then(function(r){ return r.json(); }).then(function(d){
     if(!d.ok) throw new Error(d.error || 'No se pudo guardar');
     excluidosSet.add(idWoo);
-    recomputarFaltantes();
-    recomputarMultiPub();
-    render();
+    return recomputarTrasExclusion();
   }).catch(function(err){ alert('Error: ' + err.message); });
 }
 
@@ -528,9 +601,7 @@ function reactivar(idWoo){
     .then(function(r){ return r.json(); }).then(function(d){
       if(!d.ok) throw new Error(d.error || 'No se pudo reactivar');
       excluidosSet.delete(idWoo);
-      recomputarFaltantes();
-      recomputarMultiPub();
-      render();
+      return recomputarTrasExclusion();
     }).catch(function(err){ alert('Error: ' + err.message); });
 }
 
@@ -692,8 +763,9 @@ function render(){
     html += '<div class="section-label">' + lista.length + ' productos con más de 2 publicaciones en MercadoLibre (revisar)</div>';
     html += lista.map(function(r){
       var sku = String(r.sku||'').trim();
-      var n = skusEnMLConteo.get(sku) || 0;
-      var pubs = mlItemsCache.filter(function(m){ return m.ml_sku === sku; });
+      /* Fuente API: el backend ya adjunta conteo + publicaciones. Fuente Excel: caches locales. */
+      var n = (r.conteo != null) ? r.conteo : (skusEnMLConteo.get(sku) || 0);
+      var pubs = r.publicaciones || mlItemsCache.filter(function(m){ return m.ml_sku === sku; });
       var detalle = pubs.map(function(m){
         return '<span class="item-meta-id">' + esc(m.ml_item_id) + (m.ml_variation_id ? '|'+esc(m.ml_variation_id) : '')
           + (m.ml_variante ? ' · '+esc(m.ml_variante) : '') + '</span>';

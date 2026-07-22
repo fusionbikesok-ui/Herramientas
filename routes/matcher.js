@@ -343,7 +343,18 @@ export function matcherRouter(db, cfg) {
   const SELECT_PUBS = `
     SELECT clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, permalink, catalogo, actualizado_en
     FROM ml_publicaciones_cache`;
+  // Tope defensivo por defecto: por encima del MAX de publicaciones (20.000), así el
+  // matcher sigue recibiendo el dataset completo, pero la respuesta nunca queda sin
+  // límite. Se puede acotar con ?limit / ?offset.
+  const PUBS_LIMIT_DEFAULT = 100000;
   router.get('/publicaciones', (req, res) => {
+    const rawLimit = Number(req.query.limit);
+    const rawOffset = Number(req.query.offset);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(Math.floor(rawLimit), PUBS_LIMIT_DEFAULT)
+      : PUBS_LIMIT_DEFAULT;
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+
     let rows;
     if (req.query.scope === 'atencion') {
       const claves = clavesNecesitanAtencion(db);
@@ -351,9 +362,10 @@ export function matcherRouter(db, cfg) {
         return res.json({ ok: true, data: [], actualizado: null, total: 0 });
       }
       const placeholders = claves.map(() => '?').join(',');
-      rows = db.prepare(`${SELECT_PUBS} WHERE clave IN (${placeholders}) ORDER BY titulo`).all(...claves);
+      rows = db.prepare(`${SELECT_PUBS} WHERE clave IN (${placeholders}) ORDER BY titulo LIMIT ? OFFSET ?`)
+        .all(...claves, limit, offset);
     } else {
-      rows = db.prepare(`${SELECT_PUBS} ORDER BY titulo`).all();
+      rows = db.prepare(`${SELECT_PUBS} ORDER BY titulo LIMIT ? OFFSET ?`).all(limit, offset);
     }
     const actualizado = rows[0]?.actualizado_en ?? null;
     res.json({ ok: true, data: rows, actualizado, total: rows.length });
