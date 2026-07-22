@@ -478,7 +478,8 @@ function seleccionarCategoria(cat) {
 }
 
 function agregarProdCategoria(p, qty) {
-  appendEditor([[p.sku, p.nombre || '', '', qty].join('\t')], false);
+  var cat = _catSeleccionada || (p.categorias && p.categorias[0]) || '';
+  appendEditor([[p.sku, p.nombre || '', cat, qty].join('\t')], false);
   document.getElementById('error').textContent = 'Agregado: ' + p.sku + ' × ' + qty + '.';
 }
 
@@ -488,7 +489,7 @@ function agregarCategoriaConStock() {
     return (p.categorias || []).indexOf(_catSeleccionada) !== -1 && p.stock > 0;
   });
   if (!prods.length) { document.getElementById('error').textContent = 'Ningún producto tiene stock en esta categoría.'; return; }
-  var lineas = prods.map(function(p) { return [p.sku, p.nombre || '', '', p.stock].join('\t'); });
+  var lineas = prods.map(function(p) { return [p.sku, p.nombre || '', _catSeleccionada, p.stock].join('\t'); });
   appendEditor(lineas, false);
   document.getElementById('error').textContent = 'Agregados ' + prods.length + ' productos de "' + _catSeleccionada + '" con su stock.';
 }
@@ -499,7 +500,7 @@ function agregarCategoriaTodos() {
     return (p.categorias || []).indexOf(_catSeleccionada) !== -1;
   });
   if (!prods.length) return;
-  var lineas = prods.map(function(p) { return [p.sku, p.nombre || '', '', 1].join('\t'); });
+  var lineas = prods.map(function(p) { return [p.sku, p.nombre || '', _catSeleccionada, 1].join('\t'); });
   appendEditor(lineas, false);
   document.getElementById('error').textContent = 'Agregados ' + prods.length + ' productos de "' + _catSeleccionada + '" × 1.';
 }
@@ -553,14 +554,14 @@ function buscarCatalogo(){
       btnSt.textContent = '×' + p.stock;
       btnSt.title = 'Agregar ' + p.stock + ' etiquetas (cantidad en stock)';
       btnSt.addEventListener('click', function(){
-        appendEditor([[p.sku, p.nombre||'', '', p.stock].join('\t')], false);
+        appendEditor([[p.sku, p.nombre||'', (p.categorias && p.categorias[0]) || '', p.stock].join('\t')], false);
         document.getElementById('error').textContent = 'Agregado al editor: ' + p.sku + ' × ' + p.stock + '.';
       });
       fila.appendChild(btnSt);
     }
     fila.querySelector('button').addEventListener('click', function(){
       const qty = Math.max(1, parseInt(fila.querySelector('.catQty').value, 10) || 1);
-      appendEditor([[p.sku, p.nombre||'', '', qty].join('\t')], false);
+      appendEditor([[p.sku, p.nombre||'', (p.categorias && p.categorias[0]) || '', qty].join('\t')], false);
       const err = document.getElementById('error');
       err.textContent = 'Agregado al editor: ' + p.sku + ' × ' + qty + '.';
     });
@@ -846,7 +847,7 @@ function agregarMarcaConStock() {
   if (!_marcaActual || !_catalogoListo) return;
   var prods = _prodsParaMarca(_marcaActual).filter(function(p){ return p.stock > 0; });
   if (!prods.length) { document.getElementById('error').textContent = 'Ningún producto con stock para "' + _marcaActual + '".'; return; }
-  appendEditor(prods.map(function(p){ return [p.sku, p.nombre||'', '', p.stock].join('\t'); }), false);
+  appendEditor(prods.map(function(p){ return [p.sku, p.nombre||'', (p.categorias && p.categorias[0]) || '', p.stock].join('\t'); }), false);
   document.getElementById('error').textContent = 'Agregados ' + prods.length + ' productos de "' + _marcaActual + '" con su stock.';
 }
 
@@ -854,7 +855,7 @@ function agregarMarcaTodos() {
   if (!_marcaActual || !_catalogoListo) return;
   var prods = _prodsParaMarca(_marcaActual);
   if (!prods.length) return;
-  appendEditor(prods.map(function(p){ return [p.sku, p.nombre||'', '', 1].join('\t'); }), false);
+  appendEditor(prods.map(function(p){ return [p.sku, p.nombre||'', (p.categorias && p.categorias[0]) || '', 1].join('\t'); }), false);
   document.getElementById('error').textContent = 'Agregados ' + prods.length + ' productos de "' + _marcaActual + '" × 1.';
 }
 
