@@ -491,7 +491,22 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Fotos ──
-  router.post('/:id/foto', upload.single('archivo'), async (req, res) => {
+  // Envolvemos el multer manualmente para capturar sus errores (p.ej. archivo
+  // que supera el límite de tamaño) y responder JSON claro. Sin esto, el
+  // MulterError se propaga a next() y, al no haber error-handler global que
+  // devuelva JSON, Express contesta una página HTML 500 que el frontend no
+  // puede parsear (síntoma: "No se pudo subir la foto: error").
+  router.post('/:id/foto', (req, res, next) => {
+    upload.single('archivo')(req, res, (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ ok: false, error: 'la foto es muy pesada (máx 15MB), probá con menor calidad o resolución' });
+        }
+        return res.status(400).json({ ok: false, error: 'no se pudo subir el archivo' });
+      }
+      next();
+    });
+  }, async (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
