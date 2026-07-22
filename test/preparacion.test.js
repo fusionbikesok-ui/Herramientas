@@ -428,6 +428,29 @@ describe('preparacion flujo', () => {
     expect(fotos).toHaveLength(0);
   });
 
+  it('POST /:id/foto procesa un .heic aunque el mimetype llegue vacío/octet-stream (iPhone al compartir)', async () => {
+    const id = nuevaPrep();
+    const jpegReal = await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } } })
+      .jpeg()
+      .toBuffer();
+    heicConvert.mockResolvedValueOnce(jpegReal);
+
+    // iPhone al compartir manda el .heic con application/octet-stream (no arranca con image/):
+    // el guard temprano NO debe cortarlo, la detección por extensión lo enruta a heic-convert.
+    const heicBuffer = Buffer.from('ftypheic compartido desde iPhone');
+    const r = await request(app)
+      .post(`/api/preparacion/${id}/foto`)
+      .attach('archivo', heicBuffer, { filename: 'IMG_9999.heic', contentType: 'application/octet-stream' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(heicConvert).toHaveBeenLastCalledWith(expect.objectContaining({ format: 'JPEG', buffer: heicBuffer }));
+    expect(r.body.foto.url).toMatch(/\.jpg$/);
+
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
+    expect(fotos).toHaveLength(1);
+  });
+
   it('POST /seguimientos/:wcOrderId valida wcOrderId y tracking', async () => {
     let r = await request(app).post('/api/preparacion/seguimientos/abc').send({ tracking: '123' });
     expect(r.status).toBe(400);

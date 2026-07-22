@@ -495,7 +495,17 @@ export function preparacionRouter(db, cfg) {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
-    if (!req.file.mimetype?.startsWith('image/')) return res.status(400).json({ ok: false, error: 'solo imágenes' });
+
+    // Detección de HEIC/HEIF: los iPhone al compartir mandan el .heic con mimetype
+    // vacío o application/octet-stream (no arranca con image/). Si dejáramos que el
+    // guard cortara solo por mimetype, el fix de HEIC nunca se activaría. Por eso
+    // detectamos también por extensión del nombre y lo aceptamos.
+    const nombre = (req.file.originalname || '').toLowerCase();
+    const esHeic = req.file.mimetype === 'image/heic' || req.file.mimetype === 'image/heif'
+      || nombre.endsWith('.heic') || nombre.endsWith('.heif');
+    if (!req.file.mimetype?.startsWith('image/') && !esHeic) {
+      return res.status(400).json({ ok: false, error: 'solo imágenes' });
+    }
 
     const { item_id = null, tipo = 'extra' } = req.body || {};
 
@@ -508,9 +518,7 @@ export function preparacionRouter(db, cfg) {
       // la licencia HEVC). Las fotos reales de iPhone llegan como HEIC y sharp explota.
       // Fallback en JS puro: decodificamos HEIC/HEIF a JPEG con heic-convert ANTES de
       // pasarlo a sharp, que mantiene la auto-rotación EXIF y el resto del pipeline.
-      const nombre = (req.file.originalname || '').toLowerCase();
-      const esHeic = req.file.mimetype === 'image/heic' || req.file.mimetype === 'image/heif'
-        || nombre.endsWith('.heic') || nombre.endsWith('.heif');
+      // esHeic ya se calculó arriba (para el guard); acá solo lo usamos.
       const entrada = esHeic
         ? await heicConvert({ buffer: req.file.buffer, format: 'JPEG', quality: 0.92 })
         : req.file.buffer;
