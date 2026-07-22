@@ -3,6 +3,9 @@ import { mlFetch } from '../lib/mlClient.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { aplanarItemMl } from '../lib/modelos/publicacionMl.js';
+import {
+  construirWC, construirMLdesdeApi, candidatosDeItem, derivarEstadoApi,
+} from '../lib/matcherResolver.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -199,6 +202,86 @@ async function escribirSkuEnMl(db, cfg, clave, sku) {
   return { ok: false, status: resp.status, error: extraerErrorMl(resp) };
 }
 
+/**
+ * Cruza el catálogo Woo (catalogo_cache) contra las publicaciones ML cacheadas
+ * (ml_publicaciones_cache) y devuelve los ítems ya resueltos (candidatos + score +
+ * decisión sugerida) para la fuente "API de ML". Es el cómputo caro que antes rehacía
+ * cada dispositivo en un Web Worker; ahora se calcula una vez en el servidor.
+ *
+ * scope='atencion' → solo las publicaciones que necesitan atención (sin mapeo / a
+ * re-mapear); cualquier otro valor → todas las cacheadas. Devuelve { items, total }.
+ */
+export function computarCandidatosApi(db, scope) {
+  const catalogo = db.prepare('SELECT id_woo, nombre, sku, tipo, img, atributos_json FROM catalogo_cache').all();
+
+  let pubs;
+  if (scope === 'atencion') {
+    const claves = clavesNecesitanAtencion(db);
+    if (claves.length === 0) return { items: [], total: 0 };
+    const placeholders = claves.map(() => '?').join(',');
+    pubs = db.prepare(`
+      SELECT clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, permalink, catalogo
+      FROM ml_publicaciones_cache WHERE clave IN (${placeholders}) ORDER BY titulo
+    `).all(...claves);
+  } else {
+    pubs = db.prepare(`
+      SELECT clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, permalink, catalogo
+      FROM ml_publicaciones_cache ORDER BY titulo
+    `).all();
+  }
+
+  const { wcItems, indice, wcPorSku } = construirWC(catalogo);
+  const { sinSku, conSkuValido } = construirMLdesdeApi(pubs, wcItems);
+  const items = [...sinSku, ...conSkuValido];
+  const candArr = items.map((it) => candidatosDeItem(it, wcItems, indice));
+  const resueltos = derivarEstadoApi(items, candArr, wcPorSku);
+  return { items: resueltos, total: resueltos.length };
+}
+
+// Cache en memoria del cruce por scope. Recorrer todo el catálogo por publicación es lo
+// caro que se quiere evitar repetir; se recalcula solo si cambió la firma de los caches.
+// Es un cache de proceso: se pierde al reiniciar, lo cual es correcto (fail-open, se
+// recalcula).
+const _cacheCandidatos = new Map(); // scope -> { firma, resultado }
+
+// Hash barato (djb2, no criptográfico) de SOLO los campos del catálogo que afectan el
+// matching: sku, nombre y atributos. DELIBERADAMENTE ignora stock/precio/actualizado_en,
+// que el auto-sync bumpea cada ~15 min: si la firma dependiera de eso, el cruce completo
+// (O(publicaciones × catálogo) con LCS) se recomputaría sin necesidad todo el tiempo.
+function hashCatalogoMatching(db) {
+  const rows = db.prepare('SELECT sku, nombre, atributos_json FROM catalogo_cache').all();
+  let h = 5381;
+  for (const r of rows) {
+    const s = `${r.sku || ''}${r.nombre || ''}${r.atributos_json || ''}`;
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  }
+  return `${rows.length}:${h}`;
+}
+
+function firmaCandidatos(db) {
+  // Catálogo: hash de campos relevantes al matching (NO stock — ver hashCatalogoMatching).
+  const wc = hashCatalogoMatching(db);
+  // Publicaciones ML: se refrescan a mano desde ML (no las toca el auto-sync de stock),
+  // así que conteo + max(actualizado_en) alcanza para detectar un refresco.
+  const ml = db.prepare('SELECT COUNT(*) n, MAX(actualizado_en) t FROM ml_publicaciones_cache').get();
+  // Decisiones: afectan el subconjunto 'atencion' (una decisión saca la clave de la lista).
+  const dec = db.prepare('SELECT COUNT(*) n, MAX(actualizado_en) t FROM sku_matcher_decisiones').get();
+  return `wc:${wc}|ml:${ml.n}:${ml.t || ''}|dec:${dec.n}:${dec.t || ''}`;
+}
+
+// peek=true → NO computa ante un miss: devuelve vacío con cache:false al toque. Lo usa el
+// warm-start al abrir la página, que sólo quiere saber si hay un resultado ya listo para
+// retomar sin pagar el costo del cruce completo (objetivo: abrir el matcher nunca se traba).
+function candidatosApiCacheado(db, scope, { peek = false } = {}) {
+  const firma = firmaCandidatos(db);
+  const hit = _cacheCandidatos.get(scope);
+  if (hit && hit.firma === firma) return { ...hit.resultado, cache: true };
+  if (peek) return { items: [], total: 0, cache: false };
+  const resultado = computarCandidatosApi(db, scope);
+  _cacheCandidatos.set(scope, { firma, resultado });
+  return { ...resultado, cache: false };
+}
+
 export function matcherRouter(db, cfg) {
   const router = Router();
   const mlCfg = cfg?.ml ?? cfg;
@@ -369,6 +452,24 @@ export function matcherRouter(db, cfg) {
     }
     const actualizado = rows[0]?.actualizado_en ?? null;
     res.json({ ok: true, data: rows, actualizado, total: rows.length });
+  });
+
+  // Cruce ya resuelto para la fuente "API de ML": candidatos + score + decisión sugerida
+  // por publicación, calculado server-side (antes lo rehacía cada dispositivo en un Web
+  // Worker). El modo Excel NO usa este endpoint (el archivo no llega al servidor).
+  // ?scope=atencion → solo las que necesitan atención. Cache corta por firma de caches.
+  // ?peek=1 → si el cruce no está cacheado, NO lo computa: devuelve vacío con cache:false
+  // al toque (para el warm-start al abrir la página, que sólo quiere saber si retomar).
+  router.get('/candidatos', (req, res) => {
+    try {
+      const scope = req.query.scope === 'atencion' ? 'atencion' : 'all';
+      const peek = req.query.peek === '1' || req.query.peek === 'true';
+      const { items, total, cache } = candidatosApiCacheado(db, scope, { peek });
+      const actualizado = db.prepare('SELECT MAX(actualizado_en) t FROM ml_publicaciones_cache').get().t ?? null;
+      res.json({ ok: true, data: items, total, actualizado, scope, cache });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   return router;
