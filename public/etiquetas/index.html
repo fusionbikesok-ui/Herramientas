@@ -231,10 +231,10 @@
     <button class="sec" onclick="window.print()">Imprimir</button>
     <button class="sec" onclick="vaciarEditor()">Vaciar editor</button>
     <label class="fld">Mostrar categoría:
-      <select id="verCat"><option value="si">Sí</option><option value="no">No</option></select>
+      <select id="verCat" onchange="sincronizarMaxBarcode()"><option value="si">Sí</option><option value="no">No</option></select>
     </label>
     <label class="fld">Alto del barcode:
-      <input type="number" id="altoBc" value="9" min="6" max="18" step="0.5"> mm
+      <input type="number" id="altoBc" value="9" min="6" max="14" step="0.5"> mm
     </label>
     <label class="fld">Columnas:
       <input type="number" id="cols" value="1" min="1" max="4" style="width:60px">
@@ -610,6 +610,23 @@ function parseDatos(txt){
   return filas;
 }
 
+/* ----- Alto máximo del barcode que entra en 25mm a 203dpi ----- */
+// A 203dpi la etiqueta de 25mm son ~200px; con el padding vertical (1mm+1mm=2mm) quedan
+// ~184px útiles. Reservamos el peor caso: título 2 líneas (~5.2mm) + SKU (~3mm)
+// [+ categoría (~2.55mm) si está activada]. Pasado ese tope el barcode empuja el texto
+// fuera y overflow:hidden recorta SKU/categoría -> ilegible en la térmica de 203dpi.
+function maxAltoBc(verCat){ return verCat ? 12 : 14; }
+
+// Ajusta el max del input (y clampea el valor cargado) según "Mostrar categoría".
+function sincronizarMaxBarcode(){
+  const verCat = document.getElementById('verCat').value === 'si';
+  const input  = document.getElementById('altoBc');
+  const max    = maxAltoBc(verCat);
+  input.max = max;
+  const v = parseFloat(input.value);
+  if(!isNaN(v) && v > max) input.value = max;
+}
+
 function generar(){
   const errEl = document.getElementById('error');
   const hoja  = document.getElementById('hoja');
@@ -617,7 +634,9 @@ function generar(){
   hoja.innerHTML='';
 
   const verCat  = document.getElementById('verCat').value === 'si';
-  const altoBc  = (parseFloat(document.getElementById('altoBc').value)||11) + 'mm';
+  // Clamp defensivo: aunque el usuario tipee un valor mayor al max del input, nunca
+  // dejamos que el barcode recorte el texto de la etiqueta a 203dpi.
+  const altoBc  = Math.min(parseFloat(document.getElementById('altoBc').value)||11, maxAltoBc(verCat)) + 'mm';
   const cols    = Math.max(1, Math.min(4, parseInt(document.getElementById('cols').value,10)||1));
   const gap     = Math.max(0, parseFloat(document.getElementById('gapCol').value)||0);
   const labelW=50, labelH=25;
@@ -864,6 +883,7 @@ function agregarMarcaTodos() {
 // Init
 window.addEventListener('load', function(){
   restaurarEditor();
+  sincronizarMaxBarcode();
   cargarCatalogo();
   generar();
   document.getElementById('datos').addEventListener('input', guardarEditor);
