@@ -189,6 +189,27 @@ describe('GET /api/matcher/candidatos', () => {
     expect((await request(app).get('/api/matcher/candidatos')).body.cache).toBe(false);
   });
 
+  it('ml_sin_stock refleja el stock ACTUAL aun con cache hit (stock no invalida la firma)', async () => {
+    // Publicación activa con SKU válido y stock 1 → con stock (visible en el filtro).
+    seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
+    seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });
+
+    const r1 = await request(app).get('/api/matcher/candidatos'); // llena cache
+    expect(r1.body.cache).toBe(false);
+    expect(r1.body.data[0].ml_sin_stock).toBe(false);
+    expect(r1.body.data[0].ml_stock_wc).toBe(1);
+
+    // Auto-sync de Woo baja el stock a 0: cambia stock + actualizado_en, pero NO sku/nombre/
+    // atributos ni el cache de publicaciones → la firma NO cambia (sigue siendo cache hit).
+    db.prepare('UPDATE catalogo_cache SET stock = 0, actualizado_en = ? WHERE id_woo = 1').run(now());
+
+    const r2 = await request(app).get('/api/matcher/candidatos');
+    expect(r2.body.cache).toBe(true); // sale del cache (el cruce caro no se recomputa)
+    // ...pero el stock SÍ se recalculó fuera del bloque cacheado: ahora está sin stock.
+    expect(r2.body.data[0].ml_stock_wc).toBe(0);
+    expect(r2.body.data[0].ml_sin_stock).toBe(true);
+  });
+
   it('?peek=1: cache frío no computa (cache:false, data:[]); cache tibio devuelve normal', async () => {
     seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });
