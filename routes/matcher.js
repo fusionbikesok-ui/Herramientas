@@ -304,6 +304,38 @@ export function computarCandidatosApi(db, scope) {
 // recalcula).
 const _cacheCandidatos = new Map(); // scope -> { firma, resultado }
 
+// Estado del cómputo de candidatos en background por scope. El cruce completo
+// (computarCandidatosApi: O(publicaciones × catálogo) con LCS) tarda decenas de segundos en
+// frío (tras un restart de pm2, con el cache de proceso vacío) y superaba el proxy_read_timeout
+// de nginx (120s) → el usuario veía un timeout. Ahora un GET /candidatos con cache MISS arranca
+// el cómputo en background y responde 202 al toque; el frontend sondea hasta que hay hit.
+// Mismo patrón que _refresco para /refrescar-ml. Un solo cómputo a la vez por scope.
+const _computoCandidatos = new Map(); // scope -> { running, done, total, error, iniciado_en }
+
+// Arranca (si no hay uno ya corriendo para ese scope) el cruce completo en background y lo
+// guarda en _cacheCandidatos con su firma, para que el próximo GET lo encuentre como hit.
+// OJO: computarCandidatosApi es CPU-bound y síncrono; correrlo en background con setImmediate
+// no lo saca del event loop (lo bloquea mientras corre), pero el response 202 ya salió antes de
+// arrancarlo, así que el request que lo disparó nunca choca el timeout de nginx. Es el mismo
+// trade-off (aceptado) que refrescarPublicacionesMl. Devuelve el estado actual.
+function lanzarComputoCandidatos(db, scope) {
+  const st = _computoCandidatos.get(scope);
+  if (st && st.running) return st;
+  const nuevo = { running: true, done: 0, total: 0, error: null, iniciado_en: now() };
+  _computoCandidatos.set(scope, nuevo);
+  setImmediate(() => {
+    try {
+      const firma = firmaCandidatos(db);
+      const resultado = computarCandidatosApi(db, scope);
+      _cacheCandidatos.set(scope, { firma, resultado });
+      _computoCandidatos.set(scope, { running: false, done: resultado.total, total: resultado.total, error: null, iniciado_en: nuevo.iniciado_en });
+    } catch (e) {
+      _computoCandidatos.set(scope, { running: false, done: 0, total: 0, error: e.message, iniciado_en: nuevo.iniciado_en });
+    }
+  });
+  return nuevo;
+}
+
 // Hash barato (djb2, no criptográfico) de SOLO los campos del catálogo que afectan el
 // matching: sku, nombre y atributos. DELIBERADAMENTE ignora stock/precio/actualizado_en,
 // que el auto-sync bumpea cada ~15 min: si la firma dependiera de eso, el cruce completo
@@ -536,9 +568,26 @@ export function matcherRouter(db, cfg) {
     try {
       const scope = req.query.scope === 'atencion' ? 'atencion' : 'all';
       const peek = req.query.peek === '1' || req.query.peek === 'true';
-      const { items, total, cache } = candidatosApiCacheado(db, scope, { peek });
+      // HIT-path (rápido): candidatosApiCacheado con peek:true nunca computa; si hay un
+      // resultado cacheado válido para la firma actual lo marca cache:true, y ahí lo servimos
+      // síncrono como siempre. En un peek explícito también respondemos al toque (vacío si no
+      // hay hit): comportamiento del warm-start sin cambios.
+      const cacheado = candidatosApiCacheado(db, scope, { peek: true });
       const actualizado = db.prepare('SELECT MAX(actualizado_en) t FROM ml_publicaciones_cache').get().t ?? null;
-      res.json({ ok: true, data: items, total, actualizado, scope, cache });
+      if (cacheado.cache || peek) {
+        return res.json({ ok: true, data: cacheado.items, total: cacheado.total, actualizado, scope, cache: cacheado.cache });
+      }
+      // MISS (y no es peek): el cruce completo es lo que bloqueaba el request más de 120s en
+      // frío. Si el último cómputo en background falló, devolvemos ese error una vez (y limpiamos
+      // el estado para permitir reintento en el próximo pedido). Si no, arrancamos el cómputo en
+      // background y respondemos 202 al toque; el frontend sondea /candidatos hasta el hit.
+      const prev = _computoCandidatos.get(scope);
+      if (prev && !prev.running && prev.error) {
+        _computoCandidatos.delete(scope);
+        return res.status(500).json({ ok: false, error: prev.error, scope });
+      }
+      lanzarComputoCandidatos(db, scope);
+      return res.status(202).json({ ok: true, computing: true, scope });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }

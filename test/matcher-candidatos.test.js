@@ -139,6 +139,24 @@ describe('computarCandidatosApi · cruce server-side', () => {
   });
 });
 
+// Sigue el flujo async de /candidatos: un cache MISS ahora responde 202 (arranca el cruce en
+// background con setImmediate) en vez de bloquear. Este helper espera a que el cómputo termine
+// y devuelve la respuesta 200 final; marca en `recomputo` si hubo que recomputar (hubo un 202).
+async function getCandidatos(app, qs = '') {
+  let recomputo = false;
+  for (let i = 0; i < 100; i++) {
+    const r = await request(app).get('/api/matcher/candidatos' + qs);
+    if (r.status === 202) {
+      recomputo = true;
+      await new Promise((res) => setImmediate(res)); // deja correr el cómputo en background
+      continue;
+    }
+    r.recomputo = recomputo;
+    return r;
+  }
+  throw new Error('el cómputo de candidatos no terminó a tiempo');
+}
+
 describe('GET /api/matcher/candidatos', () => {
   let db, app;
   beforeEach(() => {
@@ -148,45 +166,63 @@ describe('GET /api/matcher/candidatos', () => {
   });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
-  it('devuelve los ítems resueltos y cachea entre llamadas', async () => {
+  it('cache MISS responde 202 sin bloquear; tras el cómputo en background un GET devuelve 200 con los datos', async () => {
     seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });
 
-    const r1 = await request(app).get('/api/matcher/candidatos');
+    // Primer GET en frío: NO computa in-line (evita el timeout de nginx), responde 202 al toque.
+    const r0 = await request(app).get('/api/matcher/candidatos');
+    expect(r0.status).toBe(202);
+    expect(r0.body.ok).toBe(true);
+    expect(r0.body.computing).toBe(true);
+    expect(r0.body.scope).toBe('all');
+    expect(r0.body.data).toBeUndefined(); // el 202 no trae datos todavía
+
+    // Se deja correr el cómputo en background y un GET posterior ya trae los datos (200).
+    const r1 = await getCandidatos(app);
     expect(r1.status).toBe(200);
     expect(r1.body.ok).toBe(true);
     expect(r1.body.total).toBe(1);
     expect(r1.body.data[0].modo).toBe('verificar');
-    expect(r1.body.cache).toBe(false); // primer cómputo
-
-    const r2 = await request(app).get('/api/matcher/candidatos');
-    expect(r2.body.cache).toBe(true); // segunda vez sale del cache (firma sin cambios)
+    expect(r1.body.cache).toBe(true); // servido del cache que llenó el background
   });
 
-  it('el cache se invalida cuando cambia el cache de publicaciones', async () => {
+  it('un GET repetido sale del cache sin volver a disparar un cómputo (no hay 202)', async () => {
     seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });
-    await request(app).get('/api/matcher/candidatos'); // llena cache
+
+    const r1 = await getCandidatos(app);
+    expect(r1.recomputo).toBe(true); // primer cómputo (hubo 202)
+
+    const r2 = await request(app).get('/api/matcher/candidatos'); // ya está cacheado
+    expect(r2.status).toBe(200);
+    expect(r2.body.cache).toBe(true);
+  });
+
+  it('el cache se invalida cuando cambia el cache de publicaciones (nuevo 202)', async () => {
+    seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
+    seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });
+    expect((await getCandidatos(app)).recomputo).toBe(true); // llena cache
 
     seedCache(db, { clave: 'B|', itemId: 'B', titulo: 'Cubierta', seller_sku: '' });
-    const r = await request(app).get('/api/matcher/candidatos');
-    expect(r.body.cache).toBe(false); // firma cambió → recalcula
+    const r = await getCandidatos(app);
+    expect(r.recomputo).toBe(true); // firma cambió → volvió a computar (hubo 202)
     expect(r.body.total).toBe(2);
   });
 
   it('un cambio de stock en el catálogo NO invalida el cache; uno de sku/nombre SÍ', async () => {
     seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });
-    await request(app).get('/api/matcher/candidatos'); // llena cache
-    expect((await request(app).get('/api/matcher/candidatos')).body.cache).toBe(true);
+    await getCandidatos(app); // llena cache
+    expect((await getCandidatos(app)).recomputo).toBe(false); // sale del cache
 
     // Auto-sync de stock: cambia stock + actualizado_en, pero NO campos del matching.
     db.prepare('UPDATE catalogo_cache SET stock = 99, actualizado_en = ? WHERE id_woo = 1').run(now());
-    expect((await request(app).get('/api/matcher/candidatos')).body.cache).toBe(true);
+    expect((await getCandidatos(app)).recomputo).toBe(false);
 
-    // Cambio real de campo relevante al matching (nombre) → sí invalida.
+    // Cambio real de campo relevante al matching (nombre) → sí invalida (nuevo cómputo).
     db.prepare('UPDATE catalogo_cache SET nombre = ? WHERE id_woo = 1').run('Casco Bell Rojo');
-    expect((await request(app).get('/api/matcher/candidatos')).body.cache).toBe(false);
+    expect((await getCandidatos(app)).recomputo).toBe(true);
   });
 
   it('ml_sin_stock refleja el stock ACTUAL aun con cache hit (stock no invalida la firma)', async () => {
@@ -194,8 +230,9 @@ describe('GET /api/matcher/candidatos', () => {
     seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });
 
-    const r1 = await request(app).get('/api/matcher/candidatos'); // llena cache
-    expect(r1.body.cache).toBe(false);
+    await getCandidatos(app); // llena cache
+    const r1 = await getCandidatos(app);
+    expect(r1.recomputo).toBe(false);
     expect(r1.body.data[0].ml_sin_stock).toBe(false);
     expect(r1.body.data[0].ml_stock_wc).toBe(1);
 
@@ -203,31 +240,33 @@ describe('GET /api/matcher/candidatos', () => {
     // atributos ni el cache de publicaciones → la firma NO cambia (sigue siendo cache hit).
     db.prepare('UPDATE catalogo_cache SET stock = 0, actualizado_en = ? WHERE id_woo = 1').run(now());
 
-    const r2 = await request(app).get('/api/matcher/candidatos');
-    expect(r2.body.cache).toBe(true); // sale del cache (el cruce caro no se recomputa)
+    const r2 = await getCandidatos(app);
+    expect(r2.recomputo).toBe(false); // sale del cache (el cruce caro no se recomputa)
     // ...pero el stock SÍ se recalculó fuera del bloque cacheado: ahora está sin stock.
     expect(r2.body.data[0].ml_stock_wc).toBe(0);
     expect(r2.body.data[0].ml_sin_stock).toBe(true);
   });
 
-  it('?peek=1: cache frío no computa (cache:false, data:[]); cache tibio devuelve normal', async () => {
+  it('?peek=1: cache frío no computa ni dispara background (cache:false, data:[]); cache tibio devuelve normal', async () => {
     seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });
 
-    // Cache frío: peek NO computa, responde vacío al toque.
+    // Cache frío: peek NO computa (ni siquiera en background), responde vacío al toque (200).
     const cold = await request(app).get('/api/matcher/candidatos?peek=1');
+    expect(cold.status).toBe(200);
     expect(cold.body.cache).toBe(false);
     expect(cold.body.data).toEqual([]);
     expect(cold.body.total).toBe(0);
 
-    // Un peek no debe haber dejado nada cacheado: sigue frío.
+    // Un peek no debe haber dejado nada cacheado ni en curso: sigue frío.
     expect((await request(app).get('/api/matcher/candidatos?peek=1')).body.cache).toBe(false);
 
-    // Cómputo real (sin peek) llena el cache.
-    await request(app).get('/api/matcher/candidatos');
+    // Cómputo real (sin peek) llena el cache vía el flujo async.
+    await getCandidatos(app);
 
     // Cache tibio: peek devuelve el resultado normal.
     const warm = await request(app).get('/api/matcher/candidatos?peek=1');
+    expect(warm.status).toBe(200);
     expect(warm.body.cache).toBe(true);
     expect(warm.body.total).toBe(1);
     expect(warm.body.data[0].modo).toBe('verificar');
@@ -239,21 +278,21 @@ describe('GET /api/matcher/candidatos', () => {
     seedCache(db, { clave: 'B|', itemId: 'B', titulo: 'Otra publicación', seller_sku: '' });
     seedSyncLog(db, { clave: 'A|', estado: 'sin_mapeo' }); // solo A necesita atención
 
-    const atencion = await request(app).get('/api/matcher/candidatos?scope=atencion');
+    const atencion = await getCandidatos(app, '?scope=atencion');
     expect(atencion.status).toBe(200);
     expect(atencion.body.scope).toBe('atencion');
     expect(atencion.body.total).toBe(1);
     expect(atencion.body.data[0].ml_item_id).toBe('A');
-    expect(atencion.body.cache).toBe(false); // primer cómputo de este scope
+    expect(atencion.recomputo).toBe(true); // primer cómputo de este scope
 
     // scope=all sigue trayendo ambas y no comparte cache con 'atencion'.
-    const todas = await request(app).get('/api/matcher/candidatos');
+    const todas = await getCandidatos(app);
     expect(todas.body.scope).toBe('all');
     expect(todas.body.total).toBe(2);
-    expect(todas.body.cache).toBe(false); // scope distinto, cache propio
+    expect(todas.recomputo).toBe(true); // scope distinto, cache propio
 
     // Repetir 'atencion' ahora sí sale del cache de ese scope.
-    const atencion2 = await request(app).get('/api/matcher/candidatos?scope=atencion');
-    expect(atencion2.body.cache).toBe(true);
+    const atencion2 = await getCandidatos(app, '?scope=atencion');
+    expect(atencion2.recomputo).toBe(false);
   });
 });
