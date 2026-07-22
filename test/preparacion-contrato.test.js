@@ -196,6 +196,20 @@ describe('GET /seguimientos', () => {
     expect(colgado.tracking).toBe('AND999');
     expect(colgado.envio.pedido).toBe('902');
   });
+
+  it('excluye de colgados un completed con _andreani_tracking de solo espacios en blanco', async () => {
+    // Meta presente pero vacío tras trim: se trata como si no tuviera tracking.
+    const orderBlanco = { id: 904, number: '904', shipping: { first_name: 'Eve', last_name: 'Ruiz', address_1: 'Colon 9', city: 'CABA', state: 'CABA', postcode: '1000' }, billing: {}, meta_data: [{ id: 80, key: '_andreani_tracking', value: '   ' }] };
+    wooFetch
+      .mockResolvedValueOnce({ data: [] }) // status=lpaandreani
+      .mockResolvedValueOnce({ data: [orderBlanco] }); // status=completed
+
+    const app = buildTestApp(db);
+
+    const res = await request(app).get('/api/preparacion/seguimientos');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(0);
+  });
 });
 
 describe('POST /seguimientos/:wcOrderId', () => {
@@ -282,5 +296,29 @@ describe('POST /seguimientos/:wcOrderId', () => {
 
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:903'").get();
     expect(prep).toBeUndefined();
+  });
+
+  it('fail-closed: completed con un tracking guardado DISTINTO al recibido → 409 sin ningún PUT', async () => {
+    // El pedido ya está confirmado con AND999; llega uno distinto (AND111).
+    // No se debe pisar: dispararía el PUT1 (status:completed) y reenviaría el mail.
+    wooFetch.mockResolvedValueOnce({ data: { id: 905, status: 'completed', meta_data: [{ id: 90, key: '_andreani_tracking', value: 'AND999' }] } }); // GET actual
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/905').send({ tracking: 'AND111' });
+    expect(res.status).toBe(409);
+    expect(res.body.ok).toBe(false);
+
+    // Solo el GET; jamás se escribe nada
+    expect(wooFetch).toHaveBeenCalledTimes(1);
+    expect(wooFetch.mock.calls.some(c => c[2] === 'put')).toBe(false);
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:905'").get();
+    expect(prep).toBeUndefined();
+  });
+
+  it('wcOrderId=0 → 400 sin tocar Woo', async () => {
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/0').send({ tracking: 'AND123' });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(wooFetch).not.toHaveBeenCalled();
   });
 });
