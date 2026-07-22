@@ -1,5 +1,6 @@
 import express from 'express';
 import multer from 'multer';
+import sharp from 'sharp';
 import { wooFetch } from './woo.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
@@ -394,17 +395,29 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Fotos ──
-  router.post('/:id/foto', upload.single('archivo'), (req, res) => {
+  router.post('/:id/foto', upload.single('archivo'), async (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
     if (!req.file.mimetype?.startsWith('image/')) return res.status(400).json({ ok: false, error: 'solo imágenes' });
 
     const { item_id = null, tipo = 'extra' } = req.body || {};
+
+    // Convertir siempre a JPEG (auto-rota por EXIF): resuelve HEIC de iPhone que no
+    // se ven en la mayoría de navegadores, y las fotos rotadas. Si sharp no puede
+    // procesar el buffer (corrupto o no es imagen real) → 400, no guardamos basura.
+    let jpegBuffer;
+    try {
+      jpegBuffer = await sharp(req.file.buffer).rotate().jpeg().toBuffer();
+    } catch {
+      return res.status(400).json({ ok: false, error: 'no se pudo procesar la imagen' });
+    }
+
+    const baseName = req.file.originalname.replace(/\.[^.]+$/, '') || 'foto';
     const saved = guardarArchivo({
-      buffer: req.file.buffer,
-      originalname: req.file.originalname,
-      mimetype: req.file.mimetype,
+      buffer: jpegBuffer,
+      originalname: `${baseName}.jpg`,
+      mimetype: 'image/jpeg',
       importador: 'preparacion',
       numeroPedido: prep.numero_pedido || prep.clave,
     });
