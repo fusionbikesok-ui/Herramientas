@@ -93,6 +93,13 @@ function setCatalogo(prods) {
   vm.runInContext('_catalogo = __prodsInyectados;', ctx);
 }
 
+// _catalogoBySku también es `let` (no expuesto como propiedad global). Se
+// inyecta corriendo la asignación dentro del mismo contexto vm.
+function setCatalogoBySku(map) {
+  ctx.__bySkuInyectado = map;
+  vm.runInContext('_catalogoBySku = __bySkuInyectado;', ctx);
+}
+
 describe('etiquetas/index.html — columna categoría al agregar filas', () => {
   it('agregarProdCategoria completa la categoría con _catSeleccionada cuando hay una elegida', () => {
     ctx._catSeleccionada = 'Bicicletas';
@@ -180,5 +187,34 @@ describe('etiquetas/index.html — columna categoría al agregar filas', () => {
     expect(filas.length).toBe(2);
     expect(filas[0].split('\t')[2]).toBe('MTB');
     expect(filas[1].split('\t')[2]).toBe(''); // sin categorias -> queda vacía, comportamiento esperado
+  });
+
+  it('importarInventario completa la categoría desde el producto del catálogo', () => {
+    // Path: contar stock con cámara -> importar al editor. Antes del fix la
+    // línea forzaba categoría vacía en lugar de usar catProd.categorias[0].
+    setCatalogoBySku({
+      'inv1': { sku: 'INV1', nombre: 'Producto Inventario', categorias: ['Herramientas', 'Otra'], stock: 5 },
+    });
+    const session = { rows: [{ code: 'INV1', qty: 3 }] };
+    const originalGetItem = ctx.localStorage.getItem;
+    ctx.localStorage.getItem = (k) => {
+      if (k === 'fb_inv_session_v1') return JSON.stringify(session);
+      if (k === 'fb_inv_descmap_v1') return '{}';
+      return null;
+    };
+    ctx.document.getElementById('datos').value = '';
+
+    try {
+      ctx.importarInventario(true);
+    } finally {
+      ctx.localStorage.getItem = originalGetItem;
+    }
+
+    const filas = ctx.document.getElementById('datos').value.split('\n').filter(Boolean);
+    expect(filas.length).toBe(1);
+    const cols = filas[0].split('\t');
+    expect(cols[0]).toBe('INV1');
+    expect(cols[2]).toBe('Herramientas');
+    expect(cols[3]).toBe('3');
   });
 });
