@@ -281,9 +281,12 @@ export function preparacionRouter(db, cfg) {
       const trackingGuardado = String(metaExistente?.value || '').trim();
 
       // Fail-closed: solo se acepta desde el estado de origen (lpaandreani) o
-      // desde un pedido "colgado" en 'completed' que ya tenga el tracking cargado.
+      // desde un pedido "colgado" en 'completed' que ya tenga guardado EXACTAMENTE
+      // el mismo tracking (reintento). Si está 'completed' con un tracking distinto
+      // no se pisa: haría un PUT1 que reenvía el mail nativo al cliente. Corregir un
+      // tracking erróneo sería un flujo aparte, hoy hacemos fail-closed.
       const enOrigen = statusActual === andreaniStatus;
-      const colgadoCompletado = statusActual === 'completed' && trackingGuardado !== '';
+      const colgadoCompletado = statusActual === 'completed' && trackingGuardado === tracking;
       if (!enOrigen && !colgadoCompletado) {
         return res.status(409).json({
           ok: false,
