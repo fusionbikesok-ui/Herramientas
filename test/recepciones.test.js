@@ -5,7 +5,7 @@ import request from 'supertest';
 import Database from 'better-sqlite3';
 import axios from 'axios';
 import { openDb } from '../db/index.js';
-import { recepcionesRouter } from '../routes/recepciones.js';
+import { recepcionesRouter, aplicarStockItem } from '../routes/recepciones.js';
 
 vi.mock('axios');
 
@@ -120,6 +120,151 @@ describe('recepciones — solo_documento no genera pendientes ni toca WC', () =>
     expect(res.body.pendientes).toEqual([]);
     expect(axios.request).not.toHaveBeenCalled();
     db.close();
+  });
+
+  it('solo_documento no cambia el estado del pedido asociado', async () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    const app = makeApp(db);
+    mockWooOk();
+    const pedidoId = db.prepare(
+      "INSERT INTO pedidos (numero_pedido,importador,proveedor,estado,creado_en) VALUES ('P1','Prov','Prov','pendiente','x')"
+    ).run().lastInsertRowid;
+    const recId = db.prepare(
+      "INSERT INTO recepciones (pedido_id,proveedor,fecha,solo_documento,estado,creado_en) VALUES (?,'P','2026-07-16',1,'borrador','x')"
+    ).run(pedidoId).lastInsertRowid;
+    db.prepare('INSERT INTO recepcion_items (recepcion_id,id_woo,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?)')
+      .run(recId, 10, 'Casco', 1, 1, 'x');
+
+    await request(app).post(`/api/recepciones/${recId}/confirmar`).send();
+    // El pedido NO debe inflarse a recibido_parcial por una recepción documento-only
+    expect(db.prepare('SELECT estado FROM pedidos WHERE id=?').get(pedidoId).estado).toBe('pendiente');
+    db.close();
+  });
+});
+
+describe('aplicarStockItem — fallos visibles y serialización', () => {
+  const DB = './test/tmp-recep-aplicar.sqlite';
+  let db;
+
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+    makeApp(db); // corre migraciones (crea columnas estado_item, etc.)
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(10, 'Casco', 'CASCO', 'simple', null, 5, 'x');
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  });
+
+  function nuevoItem(id_woo, cantidad) {
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    const itemId = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?)'
+    ).run(recId, id_woo, 'X', cantidad, 1, 'x').lastInsertRowid;
+    return db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
+  }
+
+  it('lanza error explícito si el producto no está en catalogo_cache (no asume simple)', async () => {
+    axios.request.mockResolvedValue({ status: 200, data: { stock_quantity: 5 } });
+    const item = nuevoItem(999, 2); // 999 no está en cache
+    await expect(aplicarStockItem(db, cfg, item)).rejects.toThrow(/catalogo_cache/);
+    // No debe haber tocado WC
+    expect(axios.request).not.toHaveBeenCalled();
+  });
+
+  it('lanza error explícito si WC devuelve stock_quantity null (no usa stock_previo viejo)', async () => {
+    axios.request.mockResolvedValue({ status: 200, data: { stock_quantity: null } });
+    const item = nuevoItem(10, 3);
+    await expect(aplicarStockItem(db, cfg, item)).rejects.toThrow(/stock_quantity/);
+    // No debe haber hecho PATCH (solo el GET)
+    const patches = axios.request.mock.calls.filter(c => c[0].method === 'patch');
+    expect(patches).toHaveLength(0);
+    // catalogo_cache sin cambios
+    expect(db.prepare('SELECT stock FROM catalogo_cache WHERE id_woo=10').get().stock).toBe(5);
+  });
+
+  it('normaliza stock_quantity string ("5") a número (no concatena: 5+3=8, no "53")', async () => {
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: '5' } };
+      return { status: 200, data: {} };
+    });
+    const item = nuevoItem(10, 3);
+    const res = await aplicarStockItem(db, cfg, item);
+    // Resultado numérico, no concatenación de strings
+    expect(res.stock_previo).toBe(5);
+    expect(res.stock_nuevo).toBe(8);
+    // El PATCH a Woo lleva el número correcto
+    const patch = axios.request.mock.calls.find(c => c[0].method === 'patch');
+    expect(patch[0].data.stock_quantity).toBe(8);
+    // catalogo_cache guarda 8, no "53"
+    expect(db.prepare('SELECT stock FROM catalogo_cache WHERE id_woo=10').get().stock).toBe(8);
+  });
+
+  it('serializa aplicaciones concurrentes sobre el mismo id_woo (no se pisan)', async () => {
+    // Mock con estado: GET lee el stock actual, PATCH lo fija. GET con delay para
+    // forzar el interleaving que rompería sin lock (ambos leerían 5).
+    let stockWc = 5;
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') {
+        await new Promise(r => setTimeout(r, 10));
+        return { status: 200, data: { stock_quantity: stockWc } };
+      }
+      stockWc = opts.data.stock_quantity;
+      return { status: 200, data: {} };
+    });
+
+    const itemA = nuevoItem(10, 3);
+    const itemB = nuevoItem(10, 2);
+    const [rA, rB] = await Promise.all([
+      aplicarStockItem(db, cfg, itemA),
+      aplicarStockItem(db, cfg, itemB),
+    ]);
+    // Con serialización, la segunda parte de donde dejó la primera: 5 → 8 → 10
+    expect(stockWc).toBe(10);
+    const previos = [rA.stock_previo, rB.stock_previo].sort();
+    expect(previos).toEqual([5, 8]);
+  });
+
+  it('NO serializa productos distintos: dos id_woo diferentes se procesan en paralelo', async () => {
+    // Cada producto tiene su propio lock. Si el lock fuera global (por error de
+    // implementación), este test tardaría ~20ms (secuencial); con locks por
+    // id_woo, ambos GET con delay corren en simultáneo (~10ms totales).
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(11, 'Otro', 'OTRO', 'simple', null, 5, 'x');
+
+    let getsEnVuelo = 0;
+    let maxGetsSimultaneos = 0;
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') {
+        getsEnVuelo++;
+        maxGetsSimultaneos = Math.max(maxGetsSimultaneos, getsEnVuelo);
+        await new Promise(r => setTimeout(r, 15));
+        getsEnVuelo--;
+        return { status: 200, data: { stock_quantity: 5 } };
+      }
+      return { status: 200, data: {} };
+    });
+
+    const itemA = nuevoItem(10, 3); // producto 10
+    const itemB = nuevoItem(11, 2); // producto 11, distinto de A
+    const inicio = Date.now();
+    const [rA, rB] = await Promise.all([
+      aplicarStockItem(db, cfg, itemA),
+      aplicarStockItem(db, cfg, itemB),
+    ]);
+    const duracion = Date.now() - inicio;
+
+    // Ambos GETs coincidieron en el tiempo: no se esperaron entre sí.
+    expect(maxGetsSimultaneos).toBe(2);
+    expect(duracion).toBeLessThan(25); // secuencial hubiera tardado ~30ms
+    expect(rA.stock_previo).toBe(5);
+    expect(rB.stock_previo).toBe(5);
   });
 });
 
