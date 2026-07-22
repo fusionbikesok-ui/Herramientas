@@ -83,8 +83,24 @@ export async function refrescarCatalogo(db, cfg) {
   return productos.length;
 }
 
-export function getCatalogo(db) {
-  return db.prepare('SELECT * FROM catalogo_cache').all();
+// Tope defensivo por defecto: bien por encima del catálogo real (~miles) y del MAX
+// de refresco (20.000), así que no trunca a ningún consumidor actual (matcher, etc.)
+// pero evita una respuesta sin límite si la tabla crece sin control.
+const CATALOGO_LIMIT_DEFAULT = 100000;
+
+export function getCatalogo(db, { limit = CATALOGO_LIMIT_DEFAULT, offset = 0 } = {}) {
+  return db.prepare('SELECT * FROM catalogo_cache LIMIT ? OFFSET ?').all(limit, offset);
+}
+
+// Parsea ?limit / ?offset opcionales; si no vienen (o son inválidos) usa el tope alto.
+function parsePaginado(query) {
+  const rawLimit = Number(query.limit);
+  const rawOffset = Number(query.offset);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0
+    ? Math.min(rawLimit, CATALOGO_LIMIT_DEFAULT)
+    : CATALOGO_LIMIT_DEFAULT;
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+  return { limit: Math.floor(limit), offset };
 }
 
 export function wooRouter(db, cfg) {
@@ -100,7 +116,7 @@ export function wooRouter(db, cfg) {
   });
 
   router.get('/catalogo', (req, res) => {
-    res.json({ ok: true, data: getCatalogo(db) });
+    res.json({ ok: true, data: getCatalogo(db, parsePaginado(req.query)) });
   });
 
   router.post('/catalogo/recargar', async (req, res) => {

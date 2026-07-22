@@ -485,31 +485,9 @@ async function procesar(){
   }catch(err){alert('Error: '+err.message);resetLoader();}
 }
 
-/* ── CACHE LOCAL DEL MATCHING (IndexedDB) ── */
-// Firma que identifica lo que REALMENTE afecta el cómputo de candidatos: título/color/
-// talle/es_variante de cada publicación + el set sku|nombre del catálogo WC. A propósito
-// NO incluye seller_sku (cambia al escribir SKUs en ML) ni el largo del catálogo (cambia
-// con el auto-sync de stock cada ~15 min) — así el cache no se invalida por eso, que es
-// el caso normal de reapertura. Se usa un hash acumulado (DJB2) para no recorrer strings
-// gigantes de forma cara.
-function calcFirmaMatcher(d,scope){
-  let hp=5381;
-  for(const p of (d.data||[])){
-    const s=p.item_id+'|'+(p.variation_id||'')+'|'+(p.titulo||'')+'|'+(p.color||'')+'|'+(p.talle||'')+'|'+(p.es_variante?1:0)+';';
-    hp=(hp*33)^djb2(s);hp=hp>>>0;
-  }
-  let hw=5381;
-  for(const w of (wcCatalogo||[])){
-    const s=(w.sku||'')+'|'+(w.nombre||'')+';';
-    hw=(hw*33)^djb2(s);hw=hw>>>0;
-  }
-  // El scope va en la firma: distinto alcance = distinto cache local, aunque el
-  // subconjunto acotado esté contenido en el catálogo completo.
-  return 'v2|'+(scope||'all')+'|'+hp.toString(36)+'|'+hw.toString(36);
-}
-function idbOpen(){return new Promise((res,rej)=>{const q=indexedDB.open('fusion_matcher',1);q.onupgradeneeded=()=>{q.result.createObjectStore('kv');};q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);});}
-async function idbGet(k){try{const db=await idbOpen();return await new Promise(res=>{const t=db.transaction('kv').objectStore('kv').get(k);t.onsuccess=()=>res(t.result||null);t.onerror=()=>res(null);});}catch(e){return null;}}
-async function idbSet(k,v){try{const db=await idbOpen();return await new Promise(res=>{const t=db.transaction('kv','readwrite').objectStore('kv').put(v,k);t.onsuccess=()=>res(true);t.onerror=()=>res(false);});}catch(e){return false;}}
+// El cache del matching de la fuente API ahora vive en el servidor (GET /candidatos lo
+// calcula y lo cachea por firma de los caches). Ya no se guarda un cache local en
+// IndexedDB: el cliente sólo pinta lo que devuelve el servidor.
 
 /* ── PROCESAR DESDE LA API DE ML ── */
 // Alcance elegido en el panel: 'all' (catálogo completo) o 'atencion' (solo sin
@@ -566,10 +544,14 @@ async function procesarDesdeApi(){
   const scope=scopeSeleccionado();
   const setP=(txt,pct)=>{const t=document.getElementById('proc-text'),f=document.getElementById('proc-fill');if(t)t.textContent=txt;if(f)f.style.width=(pct||0)+'%';};
   try{
+    // Fuente API: el matching se calcula ENTERO en el servidor (GET /candidatos), que lo
+    // cachea y lo sirve ya resuelto (candidatos + score + decisión sugerida). Antes cada
+    // dispositivo lo recalculaba acá con un Web Worker. El catálogo WC se carga igual para
+    // validar SKUs en la asignación manual (skuExisteEnWc). El modo Excel NO pasa por acá.
     if(!wcCatalogo){setP('Cargando catálogo WooCommerce...',5);await cargarWC();}
-    setP('Leyendo publicaciones de ML...',15);
-    const {r,d}=await fetchJson('/herramientas/api/matcher/publicaciones?scope='+encodeURIComponent(scope));
-    if(!r.ok||!d.ok||!Array.isArray(d.data))throw new Error('No se pudieron leer las publicaciones cacheadas');
+    setP('Calculando matching en el servidor...',30);
+    const {r,d}=await fetchJson('/herramientas/api/matcher/candidatos?scope='+encodeURIComponent(scope));
+    if(!r.ok||!d.ok||!Array.isArray(d.data))throw new Error('No se pudo calcular el matching en el servidor');
     if(d.data.length===0){
       if(scope==='atencion'){
         const info=document.getElementById('api-status');
@@ -578,30 +560,10 @@ async function procesarDesdeApi(){
       }
       throw new Error('No hay publicaciones en el cache. Probá "Traer desde API de ML" primero.');
     }
-    // Firma del resultado: se reutilizan los CANDIDATOS cacheados (IndexedDB, por clave
-    // item_id|variation_id) salvo que cambien título/atributos de las publicaciones o el
-    // catálogo WC. El bucket asignar/verificar y el sku_actual siempre se derivan frescos
-    // más abajo (derivarEstado), así escribir SKUs en ML no invalida nada acá.
-    const firma=calcFirmaMatcher(d,scope);
-    const {wcItems,indice,wcPorSku}=construirWC(wcCatalogo);
-    const {sinSku,conSkuValido}=construirMLdesdeApi(d.data,wcItems);
-    const items=[...sinSku,...conSkuValido];
-    if(items.length===0){alert('No hay publicaciones para revisar.');resetLoader();return;}
-    const cache=await idbGet('todos');
-    let candidatosPorClave;
-    if(cache&&cache.firma===firma&&cache.candidatosPorClave){
-      setP('Cargando desde cache local…',80);
-      candidatosPorClave=cache.candidatosPorClave;
-    }else{
-      setP('Procesando '+items.length+' publicaciones...',25);
-      const candArr=await computarCandidatos(items,wcItems,indice,(done)=>{
-        setP('Procesando '+done+'/'+items.length+'...',25+(done/items.length)*63);
-      });
-      candidatosPorClave={};
-      items.forEach((it,i)=>{candidatosPorClave[claveDe(it)]=candArr[i];});
-      await idbSet('todos',{firma,candidatosPorClave});
-    }
-    derivarEstado(items,items.map(it=>candidatosPorClave[claveDe(it)]||[]),wcPorSku);
+    // El servidor ya devolvió los ítems resueltos (mismo shape que producía derivarEstado):
+    // solo hay que poblar el estado de la UI y derivar lo local (progreso, auto-confirmados).
+    setP('Cargando resultados...',85);
+    TODOS=d.data;TODOSmap=new Map();TODOS.forEach(it=>TODOSmap.set(it.idx,it));
     setP('Recuperando progreso...',90);await cargarProgresoApi();cargarProgreso();
     const nAuto=autoConfirmarSellerSku();
     const info=document.getElementById('api-status');
@@ -655,34 +617,9 @@ function construirML(rows,wcItems){
   return{sinSku,conSkuValido};
 }
 
-/* ── CONSTRUIR ML DESDE LA API (atributos estructurados) ── */
-// ctDesdeApi vive en matcher-engine.js (alias arriba); construirMLdesdeApi arma los
-// buckets asignar/verificar con los campos ya normalizados para el motor.
-function construirMLdesdeApi(pubs,wcItems){
-  const wcSkus=new Set(wcItems.map(w=>w.sku));
-  const sinSku=[],conSkuValido=[];
-  for(const p of pubs){
-    const esVar=p.es_variante===1||p.es_variante===true;
-    const base={
-      ml_item_id:String(p.item_id),
-      ml_variation_id:p.variation_id?String(p.variation_id):'',
-      ml_title:p.titulo||'(sin título)',
-      ml_variations:p.variations_texto||'',
-      ml_status:p.status||'',
-      ml_sub_status:p.sub_status||'',
-      ml_es_variante:esVar,
-      ml_permalink:p.permalink||'',
-      ml_catalogo:p.catalogo===1||p.catalogo===true,
-      _ct:ctDesdeApi(p.color||'',p.talle||''),
-      _desde_api:true,
-    };
-    const sku=(p.seller_sku||'').trim();
-    const esFbNum=/^FB-\d+$/.test(sku);
-    if(esFbNum&&wcSkus.has(sku)){ conSkuValido.push({...base,sku_actual:sku}); }
-    else { sinSku.push(base); }
-  }
-  return {sinSku,conSkuValido};
-}
+// La fuente API ya no arma los ítems ML en el cliente: el servidor los construye y
+// resuelve (ver lib/matcherResolver.js → construirMLdesdeApi/derivarEstadoApi) y los
+// devuelve ya listos por GET /candidatos. El modo Excel usa construirML (más arriba).
 
 /* ── MATCHING ── */
 // El matching se separa en dos pasos:
@@ -1288,15 +1225,16 @@ setupDropzone('dz-ml','inp-ml','dz-ml-file','ml');
   // usuario toque un botón. Así abrir el matcher nunca se traba.
   const info=document.getElementById('api-status');
   try{
+    // Cuántas publicaciones hay en el cache del servidor (barato, sin matching).
     const {d}=await fetchJson('/herramientas/api/matcher/publicaciones');
     if(d&&d.ok&&d.total>0){
-      const firma=calcFirmaMatcher(d);
-      const cache=await idbGet('todos');
-      if(cache&&cache.firma===firma&&cache.candidatosPorClave&&wcCatalogo){
-        const {wcItems,indice,wcPorSku}=construirWC(wcCatalogo);
-        const {sinSku,conSkuValido}=construirMLdesdeApi(d.data,wcItems);
-        const items=[...sinSku,...conSkuValido];
-        derivarEstado(items,items.map(it=>cache.candidatosPorClave[claveDe(it)]||[]),wcPorSku);
+      // El matching lo tiene el servidor; retomamos SOLO si ya está cacheado ahí (cache:true),
+      // así abrir el matcher nunca se traba esperando el cómputo. Usamos ?peek=1: ante un
+      // cache frío el servidor responde al toque SIN computar el cruce (que puede tardar).
+      // Si está frío, dejamos el hint para que el usuario toque un botón (que sí lo dispara).
+      const {d:dc}=await fetchJson('/herramientas/api/matcher/candidatos?peek=1');
+      if(dc&&dc.ok&&dc.cache&&Array.isArray(dc.data)&&dc.data.length){
+        TODOS=dc.data;TODOSmap=new Map();TODOS.forEach(it=>TODOSmap.set(it.idx,it));
         await cargarProgresoApi();cargarProgreso();autoConfirmarSellerSku();
         iniciarApp();
       }else if(info){
