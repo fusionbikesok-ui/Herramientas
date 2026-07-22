@@ -217,4 +217,63 @@ describe('etiquetas/index.html — columna categoría al agregar filas', () => {
     expect(cols[2]).toBe('Herramientas');
     expect(cols[3]).toBe('3');
   });
+
+  it('importarInventario deja la categoría vacía (sin romper) cuando el SKU contado no está en el catálogo', () => {
+    setCatalogoBySku({});
+    const session = { rows: [{ code: 'DESCONOCIDO', qty: 2 }] };
+    ctx.localStorage.getItem = (k) => {
+      if (k === 'fb_inv_session_v1') return JSON.stringify(session);
+      if (k === 'fb_inv_descmap_v1') return '{}';
+      return null;
+    };
+    ctx.document.getElementById('datos').value = '';
+
+    expect(() => ctx.importarInventario(true)).not.toThrow();
+
+    const filas = ctx.document.getElementById('datos').value.split('\n').filter(Boolean);
+    expect(filas.length).toBe(1);
+    const cols = filas[0].split('\t');
+    expect(cols[0]).toBe('DESCONOCIDO');
+    expect(cols[2]).toBe('');
+    expect(cols[3]).toBe('2');
+  });
+
+  it('agregarCategoriaConStock/Todos no agregan filas si no hay categoría seleccionada (_catSeleccionada vacío)', () => {
+    ctx._catSeleccionada = null;
+    setCatalogo([{ sku: 'Z1', nombre: 'Prod Z', categorias: ['X'], stock: 5 }]);
+    ctx.document.getElementById('datos').value = '';
+
+    ctx.agregarCategoriaConStock();
+    expect(ctx.document.getElementById('datos').value).toBe('');
+
+    ctx.agregarCategoriaTodos();
+    expect(ctx.document.getElementById('datos').value).toBe('');
+  });
+
+  // A 203dpi la etiqueta de 25mm tiene ~184px útiles. maxAltoBc() garantiza que el
+  // barcode nunca empuje el SKU/categoría fuera del label (overflow:hidden los recortaría
+  // dejando texto ilegible en la impresora térmica real).
+  it('maxAltoBc reserva menos alto de barcode cuando se muestra la categoría', () => {
+    expect(ctx.maxAltoBc(true)).toBe(12);   // con categoría: título + SKU + categoría
+    expect(ctx.maxAltoBc(false)).toBe(14);  // sin categoría: título + SKU
+    // Nunca supera el maximo del input (14mm) ni deja algo ilegiblemente alto (>15mm ~ recorte).
+    expect(ctx.maxAltoBc(true)).toBeLessThanOrEqual(14);
+    expect(ctx.maxAltoBc(false)).toBeLessThanOrEqual(15);
+  });
+
+  it('sincronizarMaxBarcode clampea el alto del barcode al pasar a "con categoría"', () => {
+    const verCat = ctx.document.getElementById('verCat');
+    const altoBc = ctx.document.getElementById('altoBc');
+    // Usuario con 14mm y categoría desactivada -> valido
+    verCat.value = 'no';
+    altoBc.value = '14';
+    ctx.sincronizarMaxBarcode();
+    expect(String(altoBc.max)).toBe('14');
+    expect(parseFloat(altoBc.value)).toBe(14);
+    // Activa la categoría -> el max baja a 12 y el valor se clampea
+    verCat.value = 'si';
+    ctx.sincronizarMaxBarcode();
+    expect(String(altoBc.max)).toBe('12');
+    expect(parseFloat(altoBc.value)).toBe(12);
+  });
 });
