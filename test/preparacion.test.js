@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
@@ -9,6 +9,9 @@ import {
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion } from '../routes/preparacion.js';
+import heicConvert from 'heic-convert';
+
+vi.mock('heic-convert', () => ({ default: vi.fn() }));
 
 const TEST_DB = './test/tmp-preparacion.sqlite';
 
@@ -376,6 +379,47 @@ describe('preparacion flujo', () => {
     const r = await request(app)
       .post(`/api/preparacion/${id}/foto`)
       .attach('archivo', buffer, { filename: 'foto.jpg', contentType: 'image/jpeg' });
+
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ ok: false, error: 'no se pudo procesar la imagen' });
+
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
+    expect(fotos).toHaveLength(0);
+  });
+
+  it('POST /:id/foto decodifica un HEIC de iPhone (fallback heic-convert) y lo guarda como JPEG', async () => {
+    const id = nuevaPrep();
+    // sharp/libvips de este VPS no decodifica HEIC real: simulamos que heic-convert
+    // hace su trabajo devolviendo un JPEG válido, que luego sharp rota y re-encodea.
+    const jpegReal = await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 0, g: 128, b: 255 } } })
+      .jpeg()
+      .toBuffer();
+    heicConvert.mockResolvedValueOnce(jpegReal);
+
+    // buffer HEIC "falso": si no se enrutara por heic-convert, sharp lo rechazaría.
+    const heicBuffer = Buffer.from('ftypheic no es una imagen que sharp entienda');
+    const r = await request(app)
+      .post(`/api/preparacion/${id}/foto`)
+      .attach('archivo', heicBuffer, { filename: 'IMG_1234.heic', contentType: 'image/heic' });
+
+    expect(heicConvert).toHaveBeenCalledTimes(1);
+    expect(heicConvert.mock.calls[0][0]).toMatchObject({ format: 'JPEG' });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.foto.url).toMatch(/\.jpg$/);
+
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
+    expect(fotos).toHaveLength(1);
+  });
+
+  it('POST /:id/foto responde 400 (no 500) si heic-convert falla con un HEIC corrupto', async () => {
+    const id = nuevaPrep();
+    heicConvert.mockRejectedValueOnce(new Error('HEIC corrupto'));
+
+    const heicBuffer = Buffer.from('archivo heic corrupto');
+    const r = await request(app)
+      .post(`/api/preparacion/${id}/foto`)
+      .attach('archivo', heicBuffer, { filename: 'rota.heic', contentType: 'image/heic' });
 
     expect(r.status).toBe(400);
     expect(r.body).toEqual({ ok: false, error: 'no se pudo procesar la imagen' });
