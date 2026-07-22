@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
+import heicConvert from 'heic-convert';
 import { wooFetch } from './woo.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
@@ -503,7 +504,17 @@ export function preparacionRouter(db, cfg) {
     // procesar el buffer (corrupto o no es imagen real) → 400, no guardamos basura.
     let jpegBuffer;
     try {
-      jpegBuffer = await sharp(req.file.buffer).rotate().jpeg().toBuffer();
+      // El sharp/libvips prebuilt de este VPS no trae decoder HEIC/HEIF (excluido por
+      // la licencia HEVC). Las fotos reales de iPhone llegan como HEIC y sharp explota.
+      // Fallback en JS puro: decodificamos HEIC/HEIF a JPEG con heic-convert ANTES de
+      // pasarlo a sharp, que mantiene la auto-rotación EXIF y el resto del pipeline.
+      const nombre = (req.file.originalname || '').toLowerCase();
+      const esHeic = req.file.mimetype === 'image/heic' || req.file.mimetype === 'image/heif'
+        || nombre.endsWith('.heic') || nombre.endsWith('.heif');
+      const entrada = esHeic
+        ? await heicConvert({ buffer: req.file.buffer, format: 'JPEG', quality: 0.92 })
+        : req.file.buffer;
+      jpegBuffer = await sharp(entrada).rotate().jpeg().toBuffer();
     } catch {
       return res.status(400).json({ ok: false, error: 'no se pudo procesar la imagen' });
     }
