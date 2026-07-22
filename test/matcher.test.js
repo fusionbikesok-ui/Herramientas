@@ -4,7 +4,7 @@ import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
-import { matcherRouter, refrescarPublicacionesMlAcotado } from '../routes/matcher.js';
+import { matcherRouter, refrescarPublicacionesMlAcotado, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
 
 // Mock axios para evitar llamadas reales a ML
 vi.mock('axios', async () => {
@@ -31,12 +31,20 @@ function seedDecision(db, { clave, sku, accion }) {
   ).run(clave, sku, sku, accion, now());
 }
 
-function seedCache(db, { clave, itemId, variationId = '', titulo = 'Pub', status = 'active' }) {
+function seedCache(db, { clave, itemId, variationId = '', titulo = 'Pub', status = 'active', sellerSku = '' }) {
   db.prepare(
     `INSERT INTO ml_publicaciones_cache
        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en)
-     VALUES (?, ?, ?, ?, ?, '', 0, '', '', '', '', ?)`
-  ).run(clave, itemId, variationId, titulo, status, now());
+     VALUES (?, ?, ?, ?, ?, '', 0, '', '', ?, '', ?)`
+  ).run(clave, itemId, variationId, titulo, status, sellerSku, now());
+}
+
+let _idWooSeq = 0;
+function seedCatalogo(db, { sku, stock }) {
+  db.prepare(
+    `INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, actualizado_en)
+     VALUES (?, ?, ?, 'simple', ?, ?)`
+  ).run(++_idWooSeq, 'Prod ' + sku, sku, stock, now());
 }
 
 function seedToken(db) {
@@ -121,6 +129,74 @@ describe('GET /publicaciones?scope=atencion', () => {
 
     const conOffset = await request(app).get('/api/matcher/publicaciones?limit=2&offset=4');
     expect(conOffset.body.data).toHaveLength(1);
+  });
+});
+
+describe('computarCandidatosApi — cruce de stock (ml_stock_wc / ml_sin_stock)', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  // El cruce de stock ya no vive en computarCandidatosApi (queda cacheado por firma y la
+  // firma ignora el stock a propósito): se recalcula en cada request vía remarcarStockResueltos,
+  // fuera del bloque cacheado. Estos tests unitarios ejercitan ese marcado sobre los resueltos.
+  function byItem(res) {
+    remarcarStockResueltos(db, res.items);
+    return Object.fromEntries(res.items.map(i => [i.ml_item_id, i]));
+  }
+
+  it('marca ml_sin_stock según estado y stock de Woo; SKU desconocido queda visible', () => {
+    // activa con stock > 0 → visible (sin stock false)
+    seedCache(db, { clave: 'A|', itemId: 'A', status: 'active', sellerSku: 'FB-1' });
+    seedCatalogo(db, { sku: 'FB-1', stock: 5 });
+    // activa con stock 0 → sin stock true
+    seedCache(db, { clave: 'B|', itemId: 'B', status: 'active', sellerSku: 'FB-2' });
+    seedCatalogo(db, { sku: 'FB-2', stock: 0 });
+    // pausada aunque tenga stock → sin stock true
+    seedCache(db, { clave: 'C|', itemId: 'C', status: 'paused', sellerSku: 'FB-3' });
+    seedCatalogo(db, { sku: 'FB-3', stock: 9 });
+    // activa con SKU desconocido (no está en catalogo_cache) → stockWc null, visible
+    seedCache(db, { clave: 'D|', itemId: 'D', status: 'active', sellerSku: 'FB-404' });
+    // activa sin seller_sku → stockWc null, visible
+    seedCache(db, { clave: 'E|', itemId: 'E', status: 'active', sellerSku: '' });
+
+    const items = byItem(computarCandidatosApi(db, 'all'));
+    expect(items.A.ml_stock_wc).toBe(5);
+    expect(items.A.ml_sin_stock).toBe(false);
+    expect(items.B.ml_stock_wc).toBe(0);
+    expect(items.B.ml_sin_stock).toBe(true);
+    expect(items.C.ml_stock_wc).toBe(9);
+    expect(items.C.ml_sin_stock).toBe(true);
+    expect(items.D.ml_stock_wc).toBe(null);
+    expect(items.D.ml_sin_stock).toBe(false);
+    expect(items.E.ml_stock_wc).toBe(null);
+    expect(items.E.ml_sin_stock).toBe(false);
+  });
+
+  it('stock negativo → sin stock; status no active (closed) → sin stock; seller_sku con espacios matchea (trim)', () => {
+    seedCache(db, { clave: 'N|', itemId: 'N', status: 'active', sellerSku: 'FB-11' });
+    seedCatalogo(db, { sku: 'FB-11', stock: -3 });
+    seedCache(db, { clave: 'X|', itemId: 'X', status: 'closed', sellerSku: 'FB-12' });
+    seedCatalogo(db, { sku: 'FB-12', stock: 20 });
+    seedCache(db, { clave: 'S|', itemId: 'S', status: 'active', sellerSku: '  FB-13  ' });
+    seedCatalogo(db, { sku: 'FB-13', stock: 7 });
+
+    const items = byItem(computarCandidatosApi(db, 'all'));
+    expect(items.N.ml_stock_wc).toBe(-3);
+    expect(items.N.ml_sin_stock).toBe(true);
+    expect(items.X.ml_sin_stock).toBe(true);
+    expect(items.S.ml_stock_wc).toBe(7);
+    expect(items.S.ml_sin_stock).toBe(false);
+  });
+
+  it('SKU duplicado en catalogo_cache: se queda con el máximo stock (no oculta si alguna fila tiene stock)', () => {
+    seedCache(db, { clave: 'DUP|', itemId: 'DUP', status: 'active', sellerSku: 'FB-14' });
+    seedCatalogo(db, { sku: 'FB-14', stock: 0 });
+    seedCatalogo(db, { sku: 'FB-14', stock: 5 });
+
+    const items = byItem(computarCandidatosApi(db, 'all'));
+    expect(items.DUP.ml_stock_wc).toBe(5);
+    expect(items.DUP.ml_sin_stock).toBe(false);
   });
 });
 
