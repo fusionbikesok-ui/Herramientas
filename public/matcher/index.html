@@ -553,7 +553,15 @@ async function pedirCandidatosConSondeo(scope,setP){
   const deadline=Date.now()+5*60*1000; // tope de sondeo: 5 min
   let avisado=false;
   for(;;){
-    const {r,d}=await fetchJson(url);
+    let r,d;
+    // Un blip transitorio de red (502/504) durante el sondeo NO debe cortar todo: el
+    // cómputo sigue en el server. Reintentamos hasta el deadline (mismo patrón que sondearRefresco).
+    try{ ({r,d}=await fetchJson(url)); }
+    catch(e){
+      if(Date.now()>deadline)throw new Error('El cálculo del matching está tardando demasiado. Esperá un momento y reintentá.');
+      await new Promise(res=>setTimeout(res,2500));
+      continue;
+    }
     if(r.status===200&&d&&d.ok&&Array.isArray(d.data))return d;
     if(r.status===202&&d&&d.computing){
       if(!avisado){setP&&setP('Calculando matching en el servidor… (puede tardar unos segundos)',40);avisado=true;}
