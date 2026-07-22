@@ -156,7 +156,9 @@ describe('GET /seguimientos', () => {
   it('solo devuelve pedidos web con etiqueta_lista=1', async () => {
     const orderA = { id: 900, number: '900', shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'Córdoba', postcode: '5000' }, billing: {}, meta_data: [] };
     const orderB = { id: 901, number: '901', shipping: { first_name: 'Beto', last_name: 'Diaz', address_1: 'San Martin 1', city: 'CABA', state: 'CABA', postcode: '1000' }, billing: {}, meta_data: [] };
-    wooFetch.mockResolvedValueOnce({ data: [orderA, orderB] });
+    wooFetch
+      .mockResolvedValueOnce({ data: [orderA, orderB] }) // status=lpaandreani
+      .mockResolvedValueOnce({ data: [] }); // status=completed (colgados)
 
     const app = buildTestApp(db); // ensureTables corre acá; hace falta antes de sembrar preparaciones
     const now = new Date().toISOString();
@@ -168,6 +170,31 @@ describe('GET /seguimientos', () => {
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].wc_order_id).toBe(900);
     expect(res.body.data[0].envio.pedido).toBe('900');
+    expect(res.body.data[0].colgado).toBe(false);
+  });
+
+  it('también lista pedidos colgados en completed con tracking cargado (sin llegar a enviadoandreani)', async () => {
+    const orderLpa = { id: 900, number: '900', shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'Córdoba', postcode: '5000' }, billing: {}, meta_data: [] };
+    // Colgado: quedó en 'completed' con tracking, sin registro local y sin llegar a enviadoandreani
+    const orderColgado = { id: 902, number: '902', shipping: { first_name: 'Caro', last_name: 'Lopez', address_1: 'Rivadavia 50', city: 'Rosario', state: 'Santa Fe', postcode: '2000' }, billing: {}, meta_data: [{ id: 71, key: '_andreani_tracking', value: 'AND999' }] };
+    // Otro completed sin tracking: no debe aparecer
+    const orderSinTracking = { id: 903, number: '903', shipping: { first_name: 'Dario', last_name: 'Paz', address_1: 'Mitre 1', city: 'CABA', state: 'CABA', postcode: '1000' }, billing: {}, meta_data: [] };
+    wooFetch
+      .mockResolvedValueOnce({ data: [orderLpa] }) // status=lpaandreani
+      .mockResolvedValueOnce({ data: [orderColgado, orderSinTracking] }); // status=completed
+
+    const app = buildTestApp(db);
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:900',900,1,'en_preparacion',?)`).run(now);
+
+    const res = await request(app).get('/api/preparacion/seguimientos');
+    expect(res.status).toBe(200);
+    const ids = res.body.data.map(f => f.wc_order_id).sort();
+    expect(ids).toEqual([900, 902]);
+    const colgado = res.body.data.find(f => f.wc_order_id === 902);
+    expect(colgado.colgado).toBe(true);
+    expect(colgado.tracking).toBe('AND999');
+    expect(colgado.envio.pedido).toBe('902');
   });
 });
 
@@ -186,7 +213,7 @@ describe('POST /seguimientos/:wcOrderId', () => {
 
   it('preserva el id del meta existente y encadena completed → enviadoandreani', async () => {
     wooFetch
-      .mockResolvedValueOnce({ data: { id: 900, meta_data: [{ id: 55, key: '_andreani_tracking', value: '' }] } }) // GET actual
+      .mockResolvedValueOnce({ data: { id: 900, status: 'lpaandreani', meta_data: [{ id: 55, key: '_andreani_tracking', value: '' }] } }) // GET actual
       .mockResolvedValueOnce({ data: { id: 900, status: 'completed' } }) // PUT paso 1
       .mockResolvedValueOnce({ data: { id: 900, status: 'enviadoandreani' } }); // PUT paso 2
 
@@ -210,7 +237,7 @@ describe('POST /seguimientos/:wcOrderId', () => {
 
   it('crea el meta sin id cuando el pedido no tenía tracking previo', async () => {
     wooFetch
-      .mockResolvedValueOnce({ data: { id: 901, meta_data: [] } })
+      .mockResolvedValueOnce({ data: { id: 901, status: 'lpaandreani', meta_data: [] } })
       .mockResolvedValueOnce({ data: {} })
       .mockResolvedValueOnce({ data: {} });
 
@@ -220,5 +247,40 @@ describe('POST /seguimientos/:wcOrderId', () => {
       status: 'completed',
       meta_data: [{ key: '_andreani_tracking', value: 'XYZ' }],
     });
+  });
+
+  it('reintento: pedido ya en completed con el mismo tracking → solo hace el PUT2 (no reenvía el mail)', async () => {
+    wooFetch
+      .mockResolvedValueOnce({ data: { id: 902, status: 'completed', meta_data: [{ id: 71, key: '_andreani_tracking', value: 'AND999' }] } }) // GET actual
+      .mockResolvedValueOnce({ data: { id: 902, status: 'enviadoandreani' } }); // PUT paso 2 (único)
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/902').send({ tracking: 'AND999' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // Solo GET + un único PUT: nunca se vuelve a mandar status:'completed'
+    expect(wooFetch).toHaveBeenCalledTimes(2);
+    const puts = wooFetch.mock.calls.filter(c => c[2] === 'put');
+    expect(puts).toHaveLength(1);
+    expect(puts[0][3]).toEqual({ status: 'enviadoandreani' });
+    expect(puts.some(c => c[3]?.status === 'completed')).toBe(false);
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:902'").get();
+    expect(prep.estado).toBe('completada');
+  });
+
+  it('fail-closed: pedido en otro estado (ni lpaandreani ni completed-con-tracking) → 409 sin ningún PUT', async () => {
+    wooFetch.mockResolvedValueOnce({ data: { id: 903, status: 'processing', meta_data: [] } }); // GET actual
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/903').send({ tracking: 'NOPE' });
+    expect(res.status).toBe(409);
+    expect(res.body.ok).toBe(false);
+
+    // Solo el GET; jamás se llama a wooFetch con método PUT
+    expect(wooFetch).toHaveBeenCalledTimes(1);
+    expect(wooFetch.mock.calls.some(c => c[2] === 'put')).toBe(false);
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:903'").get();
+    expect(prep).toBeUndefined();
   });
 });
