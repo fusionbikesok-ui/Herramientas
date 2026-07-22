@@ -663,3 +663,146 @@ describe('vista de detalle', () => {
     expect(dec.n).toBe(0);
   });
 });
+
+// ─── buscar-sku: filtro por tipo (bug de config-ml que excluía simple/variable) ──
+
+describe('GET /api/sync/buscar-sku', () => {
+  let db, app;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    app = buildSyncApp(db, { ml: ML_CFG, woo: { url: 'https://x', ck: 'a', cs: 'b' } });
+    seedCatalogo(db, 'BUSC-VAR-1', 5, { tipo: 'variation', idWoo: 901 });
+    seedCatalogo(db, 'BUSC-SIMPLE-1', 3, { tipo: 'simple', idPadre: 0, idWoo: 902 });
+    seedCatalogo(db, 'BUSC-VARIABLE-1', 0, { tipo: 'variable', idPadre: 0, idWoo: 903 });
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('sin q: devuelve data vacía sin consultar la base', async () => {
+    const res = await request(app).get('/api/sync/buscar-sku');
+    expect(res.body).toEqual({ ok: true, data: [] });
+  });
+
+  it('por defecto (sin tipo=all): solo trae tipo=variation, excluye simple y variable', async () => {
+    const res = await request(app).get('/api/sync/buscar-sku?q=BUSC');
+    expect(res.body.ok).toBe(true);
+    const skus = res.body.data.map(r => r.sku).sort();
+    expect(skus).toEqual(['BUSC-VAR-1']);
+  });
+
+  it('con tipo=all: incluye simple y variable además de variation', async () => {
+    const res = await request(app).get('/api/sync/buscar-sku?q=BUSC&tipo=all');
+    expect(res.body.ok).toBe(true);
+    const skus = res.body.data.map(r => r.sku).sort();
+    expect(skus).toEqual(['BUSC-SIMPLE-1', 'BUSC-VAR-1', 'BUSC-VARIABLE-1']);
+  });
+
+  it('busca por nombre además de por SKU', async () => {
+    const res = await request(app).get('/api/sync/buscar-sku?q=Prod%20BUSC-SIMPLE-1&tipo=all');
+    expect(res.body.data.map(r => r.sku)).toEqual(['BUSC-SIMPLE-1']);
+  });
+
+  it('excluye filas con sku vacío', async () => {
+    seedCatalogo(db, '', 1, { tipo: 'variation', idWoo: 999 });
+    db.prepare("UPDATE catalogo_cache SET nombre='BUSC-vacio' WHERE id_woo=999").run();
+    const res = await request(app).get('/api/sync/buscar-sku?q=BUSC-vacio&tipo=all');
+    expect(res.body.data).toEqual([]);
+  });
+});
+
+// ─── config-ml: guardar / listar / eliminar configuración de reservas locales ──
+
+describe('POST/GET/DELETE /api/sync/config-ml', () => {
+  let db, app;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    app = buildSyncApp(db, { ml: ML_CFG, woo: { url: 'https://x', ck: 'a', cs: 'b' } });
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('GET config-ml: lista vacía si no hay nada configurado', async () => {
+    const res = await request(app).get('/api/sync/config-ml');
+    expect(res.body).toEqual({ ok: true, data: [] });
+  });
+
+  it('POST config-ml: rechaza si falta sku', async () => {
+    const res = await request(app).post('/api/sync/config-ml').send({ modo: 'reserva', reserva: 2 });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('POST config-ml: rechaza modo inválido', async () => {
+    const res = await request(app).post('/api/sync/config-ml').send({ sku: 'FB-CFG-1', modo: 'otra_cosa' });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('POST config-ml: crea config en modo reserva y aparece en GET con stock disponible calculado', async () => {
+    seedCatalogo(db, 'FB-CFG-2', 10, { tipo: 'simple', idPadre: 0 });
+    const post = await request(app).post('/api/sync/config-ml').send({ sku: 'FB-CFG-2', modo: 'reserva', reserva: 3 });
+    expect(post.body.ok).toBe(true);
+
+    const list = await request(app).get('/api/sync/config-ml');
+    const row = list.body.data.find(r => r.sku === 'FB-CFG-2');
+    expect(row).toBeTruthy();
+    expect(row.modo).toBe('reserva');
+    expect(row.reserva).toBe(3);
+    expect(row.stock_wc).toBe(10);
+    expect(row.stock_disponible_ml).toBe(7); // 10 - 3
+  });
+
+  it('POST config-ml: modo solo_local siempre da stock_disponible_ml = 0 e ignora reserva enviada', async () => {
+    seedCatalogo(db, 'FB-CFG-3', 8, { tipo: 'simple', idPadre: 0 });
+    await request(app).post('/api/sync/config-ml').send({ sku: 'FB-CFG-3', modo: 'solo_local', reserva: 99 });
+
+    const list = await request(app).get('/api/sync/config-ml');
+    const row = list.body.data.find(r => r.sku === 'FB-CFG-3');
+    expect(row.modo).toBe('solo_local');
+    expect(row.reserva).toBe(0);
+    expect(row.stock_disponible_ml).toBe(0);
+  });
+
+  it('POST config-ml: toma el nombre del catálogo si no viene en el body', async () => {
+    seedCatalogo(db, 'FB-CFG-4', 5, { tipo: 'simple', idPadre: 0 });
+    await request(app).post('/api/sync/config-ml').send({ sku: 'FB-CFG-4', modo: 'reserva', reserva: 1 });
+    const list = await request(app).get('/api/sync/config-ml');
+    const row = list.body.data.find(r => r.sku === 'FB-CFG-4');
+    expect(row.nombre).toBe('Prod FB-CFG-4');
+  });
+
+  it('POST config-ml: actualiza (upsert) si ya existe config para el sku', async () => {
+    seedCatalogo(db, 'FB-CFG-5', 20, { tipo: 'simple', idPadre: 0 });
+    await request(app).post('/api/sync/config-ml').send({ sku: 'FB-CFG-5', modo: 'reserva', reserva: 5 });
+    await request(app).post('/api/sync/config-ml').send({ sku: 'FB-CFG-5', modo: 'reserva', reserva: 9 });
+
+    const list = await request(app).get('/api/sync/config-ml');
+    const rows = list.body.data.filter(r => r.sku === 'FB-CFG-5');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reserva).toBe(9);
+  });
+
+  it('DELETE config-ml/:sku: elimina la config y ya no aparece en GET', async () => {
+    seedCatalogo(db, 'FB-CFG-6', 4, { tipo: 'simple', idPadre: 0 });
+    await request(app).post('/api/sync/config-ml').send({ sku: 'FB-CFG-6', modo: 'reserva', reserva: 1 });
+
+    const del = await request(app).delete('/api/sync/config-ml/FB-CFG-6');
+    expect(del.body.ok).toBe(true);
+
+    const list = await request(app).get('/api/sync/config-ml');
+    expect(list.body.data.find(r => r.sku === 'FB-CFG-6')).toBeUndefined();
+  });
+
+  it('DELETE config-ml/:sku: no falla si el sku no existe', async () => {
+    const del = await request(app).delete('/api/sync/config-ml/NO-EXISTE');
+    expect(del.body.ok).toBe(true);
+  });
+});
