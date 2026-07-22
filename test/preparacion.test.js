@@ -451,6 +451,25 @@ describe('preparacion flujo', () => {
     expect(fotos).toHaveLength(1);
   });
 
+  it('POST /:id/foto responde 400 JSON (no 500 HTML) cuando la foto supera el límite de multer', async () => {
+    const id = nuevaPrep();
+    // Buffer de 16MB: supera el límite de 15MB de multer (fotos de cámara nativa
+    // de iPhones modernos). Antes esto propagaba un MulterError sin error-handler
+    // y el frontend recibía HTML → flash genérico. Ahora es 400 con JSON claro.
+    const gordo = Buffer.alloc(16 * 1024 * 1024, 0);
+    const r = await request(app)
+      .post(`/api/preparacion/${id}/foto`)
+      .attach('archivo', gordo, { filename: 'IMG_1234.jpg', contentType: 'image/jpeg' });
+
+    expect(r.status).toBe(400);
+    expect(r.body.ok).toBe(false);
+    expect(typeof r.body.error).toBe('string');
+    expect(r.body.error).toMatch(/pesada/i);
+
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
+    expect(fotos).toHaveLength(0);
+  });
+
   it('POST /seguimientos/:wcOrderId valida wcOrderId y tracking', async () => {
     let r = await request(app).post('/api/preparacion/seguimientos/abc').send({ tracking: '123' });
     expect(r.status).toBe(400);
