@@ -134,6 +134,7 @@
   <div class="tabs" id="tabs">
     <button class="tab on" data-v="pendientes" onclick="ir('pendientes')">A preparar</button>
     <button class="tab" data-v="etiquetas" onclick="ir('etiquetas')">Etiquetas Andreani</button>
+    <button class="tab" data-v="seguimientos" onclick="ir('seguimientos')">Cargar seguimientos</button>
     <button class="tab" data-v="historial" onclick="ir('historial')">Historial</button>
     <button class="tab" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
   </div>
@@ -159,6 +160,7 @@ function ir(v){
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
   if(v==='pendientes')cargarPendientes();
   else if(v==='etiquetas')cargarEtiquetas();
+  else if(v==='seguimientos')cargarSeguimientos();
   else if(v==='historial')cargarHistorial();
   else if(v==='perfiles')cargarPerfiles();
 }
@@ -486,6 +488,7 @@ async function cargarEtiquetas(){
       +'<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
       +'<button class="btn" onclick="copiarTabla(false, event)">⧉ Copiar tabla (TSV)</button>'
       +'<button class="btn sec" onclick="copiarTabla(true, event)">⧉ Copiar con encabezados</button>'
+      +'<button class="btn sec" onclick="ir(\'seguimientos\')">&rarr; Cargar seguimientos</button>'
       +'</div>'
       +'<div class="tbl-wrap"><table id="etq-tbl"><thead><tr>'
       +'<th>Lista</th>'
@@ -545,6 +548,59 @@ function copiarCelda(td){copiar(td.textContent.trim(),td);}
 async function marcarEtiqueta(wcId,lista,numero){
   await api('/etiquetas/'+wcId+'/lista',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({lista:lista,numero_pedido:numero})});
+}
+
+// ─── Cargar seguimientos ────────────────────────────────────────────────────
+
+async function cargarSeguimientos(){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Cargando pedidos con etiqueta lista…</div>';
+  try{
+    var r=await api('/seguimientos');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    var filas=r.body.data||[];
+    if(!filas.length){c.innerHTML='<div class="loading">No hay pedidos con etiqueta lista pendientes de tracking.</div>';return;}
+    var html='<p class="sub">Pedidos con etiqueta ya lista. Tipeá el número de seguimiento de Andreani y guardá: '
+      +'el pedido pasa a <b>completado</b> (dispara el mail al cliente) y después a <b>enviado Andreani</b>.</p>'
+      +'<div class="ped-grid" id="seg-grid">'
+      +filas.map(function(f){
+        var e=f.envio||{};
+        var badge=f.colgado
+          ?'<span class="badge b-warn">reintentar</span>'
+          :'<span class="badge b-web">web</span>';
+        var trkVal=f.colgado&&f.tracking?' value="'+esc(f.tracking)+'"':'';
+        return '<div class="ped" id="seg-'+f.wc_order_id+'">'
+          +'<div class="ped-top"><span class="ped-num">#'+esc(e.pedido)+'</span>'+badge+'</div>'
+          +'<div class="ped-cli">'+esc(e.nombre)+' '+esc(e.apellido)+' — '+esc(e.localidad)+', '+esc(e.provincia)+'</div>'
+          +'<div class="ped-foot">'
+          +'<input type="text" placeholder="N° de seguimiento" id="trk-'+f.wc_order_id+'"'+trkVal+' style="flex:1;min-width:140px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
+          +'<button class="btn" onclick="guardarSeguimiento('+f.wc_order_id+')">Guardar</button>'
+          +'</div></div>';
+      }).join('')
+      +'</div>';
+    c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+async function guardarSeguimiento(wcId){
+  var input=document.getElementById('trk-'+wcId);
+  var tracking=input.value.trim();
+  if(!tracking){input.focus();return;}
+  var card=document.getElementById('seg-'+wcId);
+  var btn=card.querySelector('.btn');
+  btn.disabled=true;btn.textContent='Guardando…';
+  try{
+    var r=await api('/seguimientos/'+wcId,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tracking:tracking})});
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    card.remove();
+    if(!document.querySelectorAll('#seg-grid .ped').length){
+      document.getElementById('cuerpo').innerHTML='<div class="loading">No hay pedidos con etiqueta lista pendientes de tracking.</div>';
+    }
+  }catch(e){
+    alert('No se pudo guardar: '+e.message);
+    btn.disabled=false;btn.textContent='Guardar';
+  }
 }
 
 // ─── Historial ────────────────────────────────────────────────────────────────
