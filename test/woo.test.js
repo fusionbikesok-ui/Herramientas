@@ -74,6 +74,17 @@ describe('woo route', () => {
     db.close();
   });
 
+  it('getCatalogo respeta limit/offset (tope defensivo)', () => {
+    const db = openDb(TEST_DB);
+    const now = new Date().toISOString();
+    const ins = db.prepare('INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, actualizado_en) VALUES (?,?,?,?,?,?)');
+    for (let i = 1; i <= 5; i++) ins.run(i, 'P' + i, 'FB-' + i, 'simple', 1, now);
+    expect(getCatalogo(db)).toHaveLength(5);          // sin límite explícito: todo
+    expect(getCatalogo(db, { limit: 2 })).toHaveLength(2);
+    expect(getCatalogo(db, { limit: 2, offset: 4 })).toHaveLength(1);
+    db.close();
+  });
+
   it('openDb crea la tabla ean_sku', () => {
     const db = openDb(TEST_DB);
     const t = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ean_sku'").get();

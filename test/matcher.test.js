@@ -109,6 +109,19 @@ describe('GET /publicaciones?scope=atencion', () => {
     expect(r.body.ok).toBe(true);
     expect(r.body.total).toBe(0);
   });
+
+  it('respeta ?limit/?offset (tope defensivo) sin romper a los consumidores que no los mandan', async () => {
+    for (let i = 1; i <= 5; i++) seedCache(db, { clave: `MLA${i}|`, itemId: `MLA${i}` });
+
+    const sinLimite = await request(app).get('/api/matcher/publicaciones');
+    expect(sinLimite.body.total).toBe(5); // default: sigue trayendo todo el dataset
+
+    const conLimite = await request(app).get('/api/matcher/publicaciones?limit=2');
+    expect(conLimite.body.data).toHaveLength(2);
+
+    const conOffset = await request(app).get('/api/matcher/publicaciones?limit=2&offset=4');
+    expect(conOffset.body.data).toHaveLength(1);
+  });
 });
 
 describe('refrescarPublicacionesMlAcotado', () => {
