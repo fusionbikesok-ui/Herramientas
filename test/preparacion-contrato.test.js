@@ -321,4 +321,20 @@ describe('POST /seguimientos/:wcOrderId', () => {
     expect(res.body.ok).toBe(false);
     expect(wooFetch).not.toHaveBeenCalled();
   });
+
+  it('tracking vacío (o solo espacios) → 400 sin tocar Woo', async () => {
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/900').send({ tracking: '   ' });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(wooFetch).not.toHaveBeenCalled();
+  });
+
+  it('si falla el GET a Woo, responde 500 sin crear la preparación', async () => {
+    wooFetch.mockRejectedValueOnce(new Error('woo caído'));
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/906').send({ tracking: 'AND123' });
+    expect(res.status).toBe(500);
+    expect(res.body.ok).toBe(false);
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:906'").get();
+    expect(prep).toBeUndefined();
+  });
 });
