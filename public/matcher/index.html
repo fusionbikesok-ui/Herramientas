@@ -544,6 +544,26 @@ async function sondearRefresco(info){
     if(!est.running)return est;
   }
 }
+// Pide GET /candidatos y maneja el 202 computing:true: si el servidor está calculando el
+// matching en frío (cache miss tras un restart), sondea cada 2.5s hasta que responde 200 con
+// los datos. Así el cruce completo (que puede tardar decenas de segundos) ya no choca el
+// proxy_read_timeout de nginx (120s) — mismo patrón que sondearRefresco para /refrescar-ml.
+async function pedirCandidatosConSondeo(scope,setP){
+  const url='/herramientas/api/matcher/candidatos?scope='+encodeURIComponent(scope);
+  const deadline=Date.now()+5*60*1000; // tope de sondeo: 5 min
+  let avisado=false;
+  for(;;){
+    const {r,d}=await fetchJson(url);
+    if(r.status===200&&d&&d.ok&&Array.isArray(d.data))return d;
+    if(r.status===202&&d&&d.computing){
+      if(!avisado){setP&&setP('Calculando matching en el servidor… (puede tardar unos segundos)',40);avisado=true;}
+      if(Date.now()>deadline)throw new Error('El cálculo del matching está tardando demasiado. Esperá un momento y reintentá.');
+      await new Promise(res=>setTimeout(res,2500));
+      continue;
+    }
+    throw new Error((d&&d.error)||'No se pudo calcular el matching en el servidor');
+  }
+}
 async function procesarDesdeApi(){
   const pp=document.getElementById('progress-proc');if(pp)pp.classList.remove('hidden');
   const scope=scopeSeleccionado();
@@ -555,8 +575,7 @@ async function procesarDesdeApi(){
     // validar SKUs en la asignación manual (skuExisteEnWc). El modo Excel NO pasa por acá.
     if(!wcCatalogo){setP('Cargando catálogo WooCommerce...',5);await cargarWC();}
     setP('Calculando matching en el servidor...',30);
-    const {r,d}=await fetchJson('/herramientas/api/matcher/candidatos?scope='+encodeURIComponent(scope));
-    if(!r.ok||!d.ok||!Array.isArray(d.data))throw new Error('No se pudo calcular el matching en el servidor');
+    const d=await pedirCandidatosConSondeo(scope,setP);
     if(d.data.length===0){
       if(scope==='atencion'){
         const info=document.getElementById('api-status');
