@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
+import sharp from 'sharp';
 import { openDb } from '../db/index.js';
 import {
   splitDireccion, splitTelefonoAr, normalizarEnvio,
@@ -347,6 +348,40 @@ describe('preparacion flujo', () => {
     expect(r.body.ok).toBe(true);
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:900'").get();
     expect(prep.etiqueta_lista).toBe(1);
+  });
+
+  it('POST /:id/foto convierte a JPEG una imagen real subida', async () => {
+    const id = nuevaPrep();
+    const png = await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 255, g: 0, b: 0 } } })
+      .png()
+      .toBuffer();
+
+    const r = await request(app)
+      .post(`/api/preparacion/${id}/foto`)
+      .attach('archivo', png, { filename: 'foto.png', contentType: 'image/png' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.foto.url).toMatch(/\.jpg$/);
+
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
+    expect(fotos).toHaveLength(1);
+    expect(fotos[0].url).toMatch(/\.jpg$/);
+  });
+
+  it('POST /:id/foto rechaza un buffer que no es una imagen real (mimetype falseado)', async () => {
+    const id = nuevaPrep();
+    const buffer = Buffer.from('esto no es una imagen');
+
+    const r = await request(app)
+      .post(`/api/preparacion/${id}/foto`)
+      .attach('archivo', buffer, { filename: 'foto.jpg', contentType: 'image/jpeg' });
+
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ ok: false, error: 'no se pudo procesar la imagen' });
+
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
+    expect(fotos).toHaveLength(0);
   });
 
   it('GET /:id devuelve detalle con items, fotos y requisitos', async () => {

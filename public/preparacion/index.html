@@ -391,14 +391,23 @@ function subirFoto(itemId,tipo){
   inp.type='file';inp.accept='image/*';inp.capture='environment';
   inp.onchange=async function(){
     if(!inp.files||!inp.files[0])return;
+    var archivo=inp.files[0];
     var fd=new FormData();
-    fd.append('archivo',inp.files[0]);
+    fd.append('archivo',archivo);
     fd.append('item_id',itemId);
     fd.append('tipo',tipo);
-    var r=await fetch('/api/preparacion/'+PREP.id+'/foto',{method:'POST',body:fd});
-    var d=await r.json().catch(function(){return{ok:false};});
-    if(!d.ok)alert(d.error||'no se pudo subir la foto');
-    refrescarDetalle();
+    flash('ok','Subiendo foto…');
+    try{
+      var r=await fetch('/api/preparacion/'+PREP.id+'/foto',{method:'POST',body:fd});
+      var d=await r.json().catch(function(){return{ok:false};});
+      if(!d.ok){
+        flash('bad','No se pudo subir la foto: '+(d.error||'error')+'. Reintentá con +foto.');
+        return; // NO refrescamos como si hubiese éxito
+      }
+      refrescarDetalle();
+    }catch(e){
+      flash('bad','Falló la subida de la foto (red). La foto NO se guardó, reintentá con +foto.');
+    }
   };
   inp.click();
 }
