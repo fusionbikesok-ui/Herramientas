@@ -16,8 +16,14 @@ falta de hardware de cámara en el entorno), decilo explícitamente con ⚪ y ex
 Nunca lo omitas en silencio ni lo cuentes como 🟢.
 
 ## Acceso
-- Login de prueba: usuario `auditor` / clave `Auditor2026!` (cuenta admin, ve todas las
+- Login de prueba (admin): usuario `auditor` / clave `Auditor2026!` (ve todas las
   herramientas). Si falla, avisá inmediatamente — no asumas que la app está bien igual.
+- Login de prueba (permisos limitados): usuario `auditor_limitado` / clave
+  `AuditorLtd2026!` — cuenta no-admin, con permiso de solo lectura únicamente en
+  Consulta de Precios. Usala para el punto 11 (permisos y rutas protegidas). Si necesitás
+  probar con otro subconjunto de herramientas, podés reasignarle permisos vía
+  `PUT /api/usuarios/:id/permisos` logueado como `auditor` (ver `routes/usuarios.js`),
+  pero dejá constancia en el reporte de qué permisos tenía durante la prueba.
 - Entorno por defecto: el que te indique quien te despacha (staging
   `https://herramientas.fusionbikes.com.ar`, o local). **Para local, usá siempre el nginx
   local (`http://localhost/herramientas/`), NUNCA Express directo (`http://localhost:3001/`)**:
@@ -77,6 +83,31 @@ Nunca lo omitas en silencio ni lo cuentes como 🟢.
    contenido que se sale del viewport, elementos con `display:none` que deberían verse.
 10. **Estados de carga y error.** Si la página hace fetch a una API, probá qué pasa si el
     fetch tarda (loading state visible) y si falla (mensaje de error, no pantalla en blanco).
+11. **Permisos y rutas protegidas** (una vez por herramienta nueva que cubras, no en cada
+    corrida repetitiva):
+    - Deslogueado (sin cookie de sesión): entrá directo a la URL de la herramienta y
+      confirmá que redirige a login o bloquea, no que expone datos.
+    - Con `auditor_limitado` (sin permiso para esa herramienta): confirmá que la UI no
+      la deja usar (oculta el link, o si entrás por URL directa, la API responde 403/401 y
+      la pantalla lo comunica, no un cuelgue en blanco).
+    - Logout y luego `browser_navigate_back`: confirmá que no quede visible contenido
+      protegido servido desde caché del navegador.
+12. **Valores límite del dominio**, no solo "inválido/vacío" genérico: probá al menos un
+    caso de cada uno donde aplique a la herramienta — stock o precio en `0`, SKU con
+    espacios o caracteres especiales (`SKU 123!`, tildes), un EAN/SKU duplicado si la
+    herramienta lo permite cargar. Estos son los casos que rompen lógica de negocio real,
+    a diferencia de un simple string vacío.
+13. **Consistencia entre herramientas**, cuando el cambio que estés probando cruza más de
+    una (ej. aprobar un match en Matcher y esperar que se refleje en Cobertura o Precios):
+    hacé la acción en una pantalla, recargá o navegá a la otra, y confirmá que el dato
+    corresponda. Si solo te pidieron cubrir una herramienta aislada, no hace falta, pero
+    si el cambio original tocó datos compartidos, es obligatorio.
+14. **Accesibilidad básica.** Inyectá axe-core con `browser_evaluate` (cargalo desde un
+    `<script>` con el bundle si está disponible localmente, o hacé el chequeo manual mínimo
+    si no lo está: todo `<img>` con `alt`, todo input con `<label>` o `aria-label`, orden de
+    tab lógico con `browser_press_key Tab` en el flujo principal, contraste no evaluable a
+    ojo — no lo inventes, marcá ⚪ si no podés correr axe-core). Reportá violations de
+    severidad "critical"/"serious" como hallazgo; "minor"/"moderate" como nota aparte.
 
 ## Qué NO hacer
 - No leas el HTML/JS y concluyas "está bien cableado" sin haberlo tocado en el navegador.
@@ -93,5 +124,19 @@ Reporte en español, **página por página** que te hayan pedido cubrir:
 - Errores de consola/red encontrados, con el mensaje exacto.
 - Problemas de responsive con screenshot/descripción concreta (qué se corta o tapa, en
   qué ancho).
+- Resultado de permisos/rutas protegidas (punto 11) y de accesibilidad (punto 14), si los
+  corriste.
 Al final: lista priorizada de arreglos, y un conteo total (cuántas páginas 🟢/🟡/🔴/⚪) para
 que quien lee no tenga que releer todo el detalle para saber si falta algo.
+
+## Fuera de tu alcance (avisá, no lo intentes vos)
+Estos tipos de bug necesitan otra herramienta, no vos. Si sospechás uno, decilo en el
+reporte como "requiere [herramienta] — fuera de alcance de probador-e2e", no intentes
+improvisarlo con Playwright:
+- **Fuzzing/property-based testing** de inputs o de la API (miles de casos generados) →
+  es trabajo del agente `tester` con `fast-check` sobre vitest, no de una sesión manual.
+- **Regresión visual (pixel diff contra baseline histórica)** → necesita Playwright real
+  con `toHaveScreenshot()`, no el MCP interactivo.
+- **Carga/performance bajo concurrencia** → herramientas tipo k6/Artillery.
+- **Escaneo de seguridad sistemático** (XSS/SQLi/etc.) → OWASP ZAP o similar, solo si te
+  lo piden explícitamente.
