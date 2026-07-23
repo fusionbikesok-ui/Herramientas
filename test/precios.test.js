@@ -207,4 +207,60 @@ describe('auditarPrecios + router', () => {
     expect(res.status).toBe(400);
     expect(res.body.ok).toBe(false);
   });
+
+  it('GET /api/precios propaga marca/categorias_json/stock desde catalogo_cache (join por SKU)', async () => {
+    // Fila CON match en catalogo_cache: debe traer marca/categorias/stock.
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, marca, categorias_json, actualizado_en)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(1, 'Prod FB-B', 'FB-B', 'variation', 1, 7, 1500, 'Maxxis', '["CUBIERTAS"]', ahora());
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+    await auditarPrecios(db, ML_CFG);
+
+    const res = await request(app).get('/api/precios?estado=all');
+    expect(res.status).toBe(200);
+    const fila = res.body.data.find(r => r.clave === 'MLB|v1');
+    expect(fila).toBeTruthy();
+    expect(fila.marca).toBe('Maxxis');
+    expect(fila.categorias_json).toBe('["CUBIERTAS"]');
+    expect(fila.stock).toBe(7);
+  });
+
+  it('GET /api/precios devuelve null (no excepción) para un SKU sin match en catalogo_cache', async () => {
+    // Publicación auditada con decisión, pero SIN fila en catalogo_cache → sin_precio.
+    seedDecision(db, 'MLN|v1', 'FB-SINCAT'); seedPub(db, { clave: 'MLN|v1', itemId: 'MLN', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+    await auditarPrecios(db, ML_CFG);
+
+    const res = await request(app).get('/api/precios?estado=all');
+    expect(res.status).toBe(200);
+    const fila = res.body.data.find(r => r.clave === 'MLN|v1');
+    expect(fila).toBeTruthy();
+    expect(fila.marca).toBeNull();
+    expect(fila.categorias_json).toBeNull();
+    expect(fila.stock).toBeNull();
+  });
+
+  it('GET /api/precios NO multiplica filas por SKU duplicado y elige la fila más reciente', async () => {
+    // catalogo_cache.sku no es único (hay duplicados reales en prod). El join debe
+    // resolver a UNA sola fila por SKU y, ante duplicados con valores distintos,
+    // elegir de forma determinística la de mayor `actualizado_en` (no una arbitraria).
+    const vieja = '2026-07-01T00:00:00.000Z';
+    const nueva = '2026-07-20T00:00:00.000Z';
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, marca, categorias_json, actualizado_en)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(1, 'Prod dup vieja', 'FB-DUP', 'variation', 1, 3, 1500, 'MarcaVieja', '["VIEJA"]', vieja);
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, marca, categorias_json, actualizado_en)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(2, 'Prod dup nueva', 'FB-DUP', 'variation', 1, 9, 1500, 'MarcaNueva', '["NUEVA"]', nueva);
+    seedDecision(db, 'MLD|v1', 'FB-DUP'); seedPub(db, { clave: 'MLD|v1', itemId: 'MLD', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+    await auditarPrecios(db, ML_CFG);
+
+    const res = await request(app).get('/api/precios?estado=all');
+    expect(res.status).toBe(200);
+    const filas = res.body.data.filter(r => r.clave === 'MLD|v1');
+    expect(filas).toHaveLength(1);
+    // Debe ganar la fila con actualizado_en más reciente.
+    expect(filas[0].marca).toBe('MarcaNueva');
+    expect(filas[0].categorias_json).toBe('["NUEVA"]');
+    expect(filas[0].stock).toBe(9);
+  });
 });
