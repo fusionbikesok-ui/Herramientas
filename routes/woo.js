@@ -1,8 +1,16 @@
 import axios from 'axios';
 import express from 'express';
 import { normalizarProductoWc, normalizarVariacionWc, filaCatalogo } from '../lib/modelos/producto.js';
+import { mapConLimite } from '../lib/concurrencia.js';
 
 const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refresco
+
+// Máximo de productos variables cuyos endpoints de variaciones se consultan en paralelo.
+// Antes se recorrían en serie (una request tras otra), lo que con catálogos grandes hacía
+// que el POST /catalogo/recargar superara el proxy_read_timeout de nginx (~120s) y se cayera
+// el request. Se acota la concurrencia (mismo patrón que Sync ML con ML_CONCURRENCIA_MAX) para
+// no dispararlas todas de golpe y evitar rate-limits/carga en WooCommerce.
+const WOO_CONCURRENCIA_MAX = 4;
 
 export async function wooFetch(cfg, path, method = 'get', body = null) {
   if (!cfg.url.startsWith('https://')) {
@@ -36,21 +44,45 @@ export async function refrescarCatalogo(db, cfg) {
 
   const productos = crudos.map(normalizarProductoWc);
 
-  // Fetch variations for variable products (they have their own SKUs and aren't returned by /products)
+  // Fetch variations for variable products (they have their own SKUs and aren't returned by /products).
+  // Se paraleliza por producto con concurrencia acotada (WOO_CONCURRENCIA_MAX): la paginación de
+  // variaciones de un mismo padre sigue siendo serial (cada página depende de la anterior), pero los
+  // distintos padres se consultan en paralelo. Cada tarea captura su propio error y lo devuelve, así
+  // un producto que falla no frena a los demás; los errores se re-lanzan al final para conservar el
+  // comportamiento observable anterior (recargar falla si alguna llamada a WC falla).
+  //
+  // OJO: no hay cancelación anticipada. A diferencia del loop serial anterior (que cortaba en el
+  // primer error), ante un fallo las demás tareas en vuelo y las pendientes de la cola siguen
+  // ejecutándose hasta drenar todo el lote — es decir, se pueden disparar hasta WOO_CONCURRENCIA_MAX
+  // requests en paralelo aun cuando WC ya está fallando (ej. 429/5xx), amplificando la carga. El
+  // corte es fail-closed de la ESCRITURA, no de las llamadas HTTP: recién se aborta antes de la
+  // transacción de persistencia (más abajo), no de las requests a WC. Aceptado por simplicidad.
   const variableProds = crudos.filter(p => p.type === 'variable');
-  for (const vp of variableProds) {
+  const resultadosVar = await mapConLimite(variableProds, WOO_CONCURRENCIA_MAX, async (vp) => {
     const padre = normalizarProductoWc(vp);
-    let vpage = 1;
-    while (vpage <= 20) {
-      const vresp = await wooFetch(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`);
-      if (!vresp.data.length) break;
-      for (const v of vresp.data) {
-        if (!v.sku) continue;
-        productos.push(normalizarVariacionWc(v, padre));
+    const variaciones = [];
+    try {
+      let vpage = 1;
+      while (vpage <= 20) {
+        const vresp = await wooFetch(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`);
+        if (!vresp.data.length) break;
+        for (const v of vresp.data) {
+          if (!v.sku) continue;
+          variaciones.push(normalizarVariacionWc(v, padre));
+        }
+        if (vresp.data.length < 100) break;
+        vpage++;
       }
-      if (vresp.data.length < 100) break;
-      vpage++;
+      return { variaciones };
+    } catch (e) {
+      return { variaciones, error: e };
     }
+  });
+
+  const errorVar = resultadosVar.find(r => r.error);
+  if (errorVar) throw errorVar.error;
+  for (const r of resultadosVar) {
+    for (const v of r.variaciones) productos.push(v);
   }
 
   const now = new Date().toISOString();

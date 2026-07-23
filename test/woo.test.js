@@ -85,6 +85,87 @@ describe('woo route', () => {
     db.close();
   });
 
+  // Helper: mockea axios ruteando por URL. `variables` es un mapa id -> array de variaciones.
+  // Cuenta llamadas concurrentes a endpoints de variaciones para verificar el límite.
+  function mockCatalogoConVariables(variables, { fallarId = null, tracker = null } = {}) {
+    const padres = Object.keys(variables).map((id) => ({
+      id: Number(id), name: 'Padre ' + id, sku: '', type: 'variable', parent_id: 0, stock_quantity: 0,
+    }));
+    axios.request.mockImplementation(async ({ url }) => {
+      // Listado de productos
+      const mProducts = url.match(/\/products\?per_page=100&page=(\d+)/);
+      if (mProducts) {
+        const page = Number(mProducts[1]);
+        return { status: 200, headers: {}, data: page === 1 ? padres : [] };
+      }
+      // Variaciones de un padre
+      const mVar = url.match(/\/products\/(\d+)\/variations\?per_page=100&page=(\d+)/);
+      if (mVar) {
+        const id = Number(mVar[1]);
+        const page = Number(mVar[2]);
+        if (tracker) {
+          tracker.enVuelo++;
+          tracker.max = Math.max(tracker.max, tracker.enVuelo);
+        }
+        // pequeña espera para que las tareas se solapen y el tracker mida concurrencia real
+        await new Promise((r) => setTimeout(r, 5));
+        if (tracker) tracker.enVuelo--;
+        if (fallarId != null && id === fallarId) {
+          return { status: 500, headers: {}, data: {} };
+        }
+        return { status: 200, headers: {}, data: page === 1 ? (variables[id] || []) : [] };
+      }
+      return { status: 200, headers: {}, data: [] };
+    });
+  }
+
+  it('refrescarCatalogo paraleliza variaciones respetando WOO_CONCURRENCIA_MAX', async () => {
+    // 10 productos variables, cada uno con 1 variación -> con límite 4 nunca debe haber >4 en vuelo
+    const variables = {};
+    for (let i = 1; i <= 10; i++) {
+      variables[i] = [{ id: 100 + i, sku: 'FB-' + i, stock_quantity: 1, attributes: [] }];
+    }
+    const tracker = { enVuelo: 0, max: 0 };
+    mockCatalogoConVariables(variables, { tracker });
+    const db = openDb(TEST_DB);
+    const total = await refrescarCatalogo(db, { url: 'https://fusionbikes.com.ar', ck: 'x', cs: 'y' });
+    expect(tracker.max).toBeGreaterThan(1);         // efectivamente hubo paralelismo
+    expect(tracker.max).toBeLessThanOrEqual(4);     // pero acotado a WOO_CONCURRENCIA_MAX
+    // 10 padres + 10 variaciones persistidas
+    expect(total).toBe(20);
+    expect(getCatalogo(db)).toHaveLength(20);
+    db.close();
+  });
+
+  it('refrescarCatalogo persiste TODAS las variaciones de todos los padres (equivalente al serial)', async () => {
+    const variables = {
+      1: [{ id: 201, sku: 'A-1', stock_quantity: 3, attributes: [] }, { id: 202, sku: 'A-2', stock_quantity: 1, attributes: [] }],
+      2: [{ id: 203, sku: 'B-1', stock_quantity: 5, attributes: [] }],
+    };
+    mockCatalogoConVariables(variables);
+    const db = openDb(TEST_DB);
+    await refrescarCatalogo(db, { url: 'https://fusionbikes.com.ar', ck: 'x', cs: 'y' });
+    const skus = getCatalogo(db).map((r) => r.sku).filter(Boolean).sort();
+    expect(skus).toEqual(['A-1', 'A-2', 'B-1']);
+    db.close();
+  });
+
+  it('refrescarCatalogo falla fail-closed si una variación falla (no persiste parcial)', async () => {
+    const variables = {
+      1: [{ id: 301, sku: 'OK-1', stock_quantity: 1, attributes: [] }],
+      2: [{ id: 302, sku: 'BAD-2', stock_quantity: 1, attributes: [] }],
+      3: [{ id: 303, sku: 'OK-3', stock_quantity: 1, attributes: [] }],
+    };
+    mockCatalogoConVariables(variables, { fallarId: 2 });
+    const db = openDb(TEST_DB);
+    await expect(
+      refrescarCatalogo(db, { url: 'https://fusionbikes.com.ar', ck: 'x', cs: 'y' })
+    ).rejects.toThrow(/WooCommerce API error 500/);
+    // Como en el comportamiento serial anterior: si falla una llamada, no se persiste nada
+    expect(getCatalogo(db)).toHaveLength(0);
+    db.close();
+  });
+
   it('openDb crea la tabla ean_sku', () => {
     const db = openDb(TEST_DB);
     const t = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ean_sku'").get();

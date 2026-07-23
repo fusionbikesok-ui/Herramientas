@@ -124,17 +124,21 @@ function poblarDropdown(sel, valores, etiquetaTodas){
 }
 
 // ---- Búsqueda (incluye ya-cargados para sobrescribir) ----
-var tBuscar = null;
+// Token incremental: cada disparo de fetch se numera; cuando llega la respuesta sólo
+// se aplica si sigue siendo la más reciente. Así una respuesta vieja y lenta no pisa a
+// una nueva que ya llegó (el usuario tipeó rápido).
+var buscarToken = 0;
 function buscarExtras(){
-  clearTimeout(tBuscar);
   var q = fQ.value.trim();
   if(q.length < 2){ extras = []; render(); return; }
-  tBuscar = setTimeout(async function(){
+  var miToken = ++buscarToken;
+  (async function(){
     var r = await fetch('/api/codigos/buscar?q=' + encodeURIComponent(q));
     var d = await r.json();
+    if(miToken !== buscarToken) return; // llegó una búsqueda más nueva; descartar
     extras = (d.ok && d.data) ? d.data : [];
     render();
-  }, 220);
+  })();
 }
 
 // ---- Render de la lista según filtros ----
@@ -167,7 +171,7 @@ function itemsAMostrar(){
 }
 
 function cardHtml(p){
-  var img = p.img ? '<img src="'+esc(p.img)+'" alt="">' : '<div class="noimg">sin foto</div>';
+  var img = p.img ? '<img src="'+esc(p.img)+'" alt="" loading="lazy">' : '<div class="noimg">sin foto</div>';
   var pend = pendientes[p.id_woo] != null ? pendientes[p.id_woo] : (p.gtin || '');
   var gtinActual = p.gtin ? '<div class="gtin-actual">código actual: '+esc(p.gtin)+' — re-escaneá para corregir</div>' : '';
   return '<div class="card" data-id="'+p.id_woo+'">' + img +
@@ -275,7 +279,11 @@ document.getElementById('cam-cerrar').onclick = cerrarCam;
 // ---- Filtros ----
 fMarca.onchange = render;
 fCat.onchange = render;
-fQ.oninput = function(){ render(); buscarExtras(); };
+var tInput = null;
+fQ.oninput = function(){
+  clearTimeout(tInput);
+  tInput = setTimeout(function(){ render(); buscarExtras(); }, 280);
+};
 fStock.onchange = cargarFaltantes;
 
 // ---- Auth gate + carga inicial ----

@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS catalogo_cache (
   actualizado_en TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_catalogo_cache_sku ON catalogo_cache(sku);
+
 CREATE TABLE IF NOT EXISTS mapeo_fusion (
   clave_normalizada TEXT PRIMARY KEY,
   id_woo INTEGER NOT NULL,
