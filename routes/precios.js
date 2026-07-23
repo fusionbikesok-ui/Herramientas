@@ -163,9 +163,18 @@ async function refrescarFila(db, mlCfg, clave) {
 
   return db.prepare(`
     SELECT a.clave, a.item_id, a.titulo, a.sku, a.precio_ml, a.sale_fee, a.envio, a.neto,
-           a.precio_web, a.deficit_pct, a.estado, a.actualizado_en, p.thumbnail
+           a.precio_web, a.deficit_pct, a.estado, a.actualizado_en, p.thumbnail,
+           c.marca AS marca, c.categorias_json AS categorias_json, c.stock AS stock
     FROM ml_precio_auditoria a
     LEFT JOIN ml_publicaciones_cache p ON p.clave = a.clave
+    LEFT JOIN (
+      SELECT sku, marca, categorias_json, stock
+      FROM catalogo_cache c1
+      WHERE sku <> '' AND actualizado_en = (
+        SELECT MAX(actualizado_en) FROM catalogo_cache c2 WHERE c2.sku = c1.sku
+      )
+      GROUP BY sku
+    ) c ON c.sku = a.sku
     WHERE a.clave = ?
   `).get(clave);
 }
@@ -200,9 +209,18 @@ export function preciosRouter(db, cfg) {
     else where = "a.estado IN ('bajo','alto','sin_precio')";
     const rows = db.prepare(`
       SELECT a.clave, a.item_id, a.titulo, a.sku, a.precio_ml, a.sale_fee, a.envio, a.neto,
-             a.precio_web, a.deficit_pct, a.estado, a.actualizado_en, p.thumbnail
+             a.precio_web, a.deficit_pct, a.estado, a.actualizado_en, p.thumbnail,
+             c.marca AS marca, c.categorias_json AS categorias_json, c.stock AS stock
       FROM ml_precio_auditoria a
       LEFT JOIN ml_publicaciones_cache p ON p.clave = a.clave
+      LEFT JOIN (
+        SELECT sku, marca, categorias_json, stock
+        FROM catalogo_cache c1
+        WHERE sku <> '' AND actualizado_en = (
+          SELECT MAX(actualizado_en) FROM catalogo_cache c2 WHERE c2.sku = c1.sku
+        )
+        GROUP BY sku
+      ) c ON c.sku = a.sku
       WHERE ${where}
       ORDER BY CASE a.estado WHEN 'bajo' THEN 0 WHEN 'alto' THEN 1 WHEN 'sin_precio' THEN 2 ELSE 3 END,
                a.deficit_pct DESC
