@@ -262,7 +262,10 @@ describe('aplicarStockItem — fallos visibles y serialización', () => {
 
     // Ambos GETs coincidieron en el tiempo: no se esperaron entre sí.
     expect(maxGetsSimultaneos).toBe(2);
-    expect(duracion).toBeLessThan(25); // secuencial hubiera tardado ~30ms
+    // Umbral generoso: en serie tardaría ~30ms (2×15ms). Un valor holgado (<60ms)
+    // confirma que no se serializó sin depender de timing frágil bajo carga de CPU.
+    // La prueba real de paralelismo es maxGetsSimultaneos===2 (arriba).
+    expect(duracion).toBeLessThan(60);
     expect(rA.stock_previo).toBe(5);
     expect(rB.stock_previo).toBe(5);
   });

@@ -614,9 +614,11 @@ function setTab(el){
   tabActual = el.dataset.tab;
   render();
 }
+let _busquedaTimer = null;
 function setBusqueda(v){
   busqueda = v.toLowerCase();
-  render();
+  clearTimeout(_busquedaTimer);
+  _busquedaTimer = setTimeout(render, 200);
 }
 function filtrar(a, b, c){
   if(!busqueda) return true;

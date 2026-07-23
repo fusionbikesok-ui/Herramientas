@@ -883,7 +883,12 @@ function setFilter(btn){
   document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');filtro=btn.dataset.f;renderList();
   if(activo!==null&&!getFiltered().find(i=>i.idx===activo)){activo=null;document.getElementById('detail-panel').innerHTML=emptyState();}
 }
-function setSearch(v){busqueda=v;renderList();}
+let _searchTimer=null;
+function setSearch(v){
+  busqueda=v;
+  clearTimeout(_searchTimer);
+  _searchTimer=setTimeout(renderList,200);
+}
 
 /* ── RENDER LISTA ── */
 function renderList(){
