@@ -4,6 +4,7 @@ import { openDb } from '../db/index.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { getAccessToken, bootstrapToken } from '../lib/mlClient.js';
 import { getReactivablesRows, reactivarItems, syncRouter } from '../routes/sync.js';
+import { mapConLimite } from '../lib/concurrencia.js';
 import express from 'express';
 import request from 'supertest';
 
@@ -547,6 +548,119 @@ describe('reactivación de pausadas por falta de stock', () => {
     expect(pub18.sub_status).toContain('paused_by_seller');
     expect(getReactivablesRows(db, ['MLA18'])).toHaveLength(0);
   });
+
+  it('reactivarItems: procesa el lote en paralelo sin superar la concurrencia máxima y con el mismo resultado', async () => {
+    seedToken(db);
+    const N = 8;
+    const ids = [];
+    for (let i = 1; i <= N; i++) {
+      const sku = `FB-P${i}`;
+      const item = `MLP${i}`;
+      seedCatalogo(db, sku, 7, { idWoo: 100 + i, idPadre: 200 + i });
+      db.prepare('UPDATE catalogo_cache SET precio=1350 WHERE sku=?').run(sku); // contado 900
+      seedDecision(db, `${item}|v${i}`, sku);
+      seedPublicacion(db, { clave: `${item}|v${i}`, itemId: item, varId: `v${i}`, status: 'paused', subStatus: 'out_of_stock' });
+      ids.push(item);
+    }
+
+    // Instrumenta cuántas llamadas a ML corren realmente en simultáneo. Cada mock cede el
+    // event loop (setTimeout) para que se solapen si el pool las dispara en paralelo.
+    let enVuelo = 0, maxEnVuelo = 0;
+    axios.request.mockImplementation(async (cfg) => {
+      enVuelo++; maxEnVuelo = Math.max(maxEnVuelo, enVuelo);
+      try {
+        await new Promise(r => setTimeout(r, 5));
+        const url = cfg.url || '';
+        if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
+        if (/\/items\/MLP\d+\?/.test(url)) {
+          const id = url.match(/\/items\/(MLP\d+)\?/)[1];
+          return { status: 200, data: { id, status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+        }
+        return { status: 200, data: {}, headers: {} };
+      } finally {
+        enVuelo--;
+      }
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ids);
+    expect(r.procesados).toBe(N);
+    expect(r.resultados).toHaveLength(N);
+    expect(r.resultados.every(x => x.ok)).toBe(true);
+    // Nunca hubo más de ML_CONCURRENCIA_MAX (4) llamadas a ML en vuelo a la vez...
+    expect(maxEnVuelo).toBeLessThanOrEqual(4);
+    // ...pero SÍ hubo paralelismo real (más de una en simultáneo): confirma que no es serie.
+    expect(maxEnVuelo).toBeGreaterThan(1);
+    // Todas quedaron activas en el caché.
+    const activas = db.prepare("SELECT COUNT(*) n FROM ml_publicaciones_cache WHERE status='active'").get();
+    expect(activas.n).toBe(N);
+  });
+
+  it('reactivarItems: en paralelo, un fallo aislado no frena ni afecta a las demás', async () => {
+    seedToken(db);
+    // 3 publicaciones OK + 1 que falla al activar (PUT /items/MLPF -> 400)
+    for (const [item, sku, i] of [['MLPA', 'FB-A', 1], ['MLPB', 'FB-B', 2], ['MLPF', 'FB-F', 3], ['MLPC', 'FB-C', 4]]) {
+      seedCatalogo(db, sku, 5, { idWoo: 300 + i, idPadre: 400 + i });
+      db.prepare('UPDATE catalogo_cache SET precio=1350 WHERE sku=?').run(sku);
+      seedDecision(db, `${item}|w${i}`, sku);
+      seedPublicacion(db, { clave: `${item}|w${i}`, itemId: item, varId: `w${i}`, status: 'paused', subStatus: 'out_of_stock' });
+    }
+    axios.request.mockImplementation(async (cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      await new Promise(r => setTimeout(r, 2));
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
+      if (/\/items\/(MLP[A-F])\?/.test(url)) {
+        const id = url.match(/\/items\/(MLP[A-F])\?/)[1];
+        return { status: 200, data: { id, status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      }
+      // activar MLPF falla; el resto OK
+      if (method === 'put' && /\/items\/MLPF$/.test(url)) return { status: 400, data: { message: 'no se puede activar' }, headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLPA', 'MLPB', 'MLPF', 'MLPC']);
+    const porId = Object.fromEntries(r.resultados.map(x => [x.item_id, x]));
+    expect(porId['MLPA'].ok).toBe(true);
+    expect(porId['MLPB'].ok).toBe(true);
+    expect(porId['MLPC'].ok).toBe(true);
+    expect(porId['MLPF'].ok).toBe(false);
+    expect(porId['MLPF'].error).toMatch(/activar/i);
+    // Las 3 OK quedaron activas; la fallida sigue pausada.
+    expect(db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave='MLPF|w3'").get().status).toBe('paused');
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_publicaciones_cache WHERE status='active'").get().n).toBe(3);
+  });
+});
+
+describe('mapConLimite (concurrencia acotada)', () => {
+  it('no supera el límite de tareas en vuelo y preserva el orden de los resultados', async () => {
+    const items = Array.from({ length: 20 }, (_, i) => i);
+    let enVuelo = 0, maxEnVuelo = 0;
+    const out = await mapConLimite(items, 5, async (n) => {
+      enVuelo++; maxEnVuelo = Math.max(maxEnVuelo, enVuelo);
+      try {
+        await new Promise(r => setTimeout(r, 3));
+        return n * 10;
+      } finally {
+        enVuelo--;
+      }
+    });
+    expect(maxEnVuelo).toBeLessThanOrEqual(5);
+    expect(maxEnVuelo).toBeGreaterThan(1);
+    expect(out).toEqual(items.map(n => n * 10)); // resultados en el mismo orden que la entrada
+  });
+
+  it('con límite 1 se comporta en serie (nunca 2 en vuelo)', async () => {
+    let enVuelo = 0, maxEnVuelo = 0;
+    await mapConLimite([1, 2, 3], 1, async () => {
+      enVuelo++; maxEnVuelo = Math.max(maxEnVuelo, enVuelo);
+      try {
+        await new Promise(r => setTimeout(r, 1));
+      } finally {
+        enVuelo--;
+      }
+    });
+    expect(maxEnVuelo).toBe(1);
+  });
 });
 
 // ─── vista de detalle: atencion/:cat y reintentar-item ──────────────────────────
@@ -792,6 +906,61 @@ describe('vista de detalle', () => {
     expect(res.body.borradas).toBe(1);
     const dec = db.prepare('SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE clave=?').get('MLD4|v4');
     expect(dec.n).toBe(0);
+  });
+
+  it('GET /reactivables: si mlFetch/netoMl lanzan (throw) para UNA publicación del lote, esa queda en sin_precio y NO afecta a las demás', async () => {
+    seedToken(db);
+    // Publicación A: la que va a fallar (throw al pedir su comisión/listing_prices).
+    seedCatalogo(db, 'FB-T1', 5, { idWoo: 501 });
+    db.prepare("UPDATE catalogo_cache SET precio=1500 WHERE sku='FB-T1'").run();
+    seedDecision(db, 'MLAT1|', 'FB-T1');
+    seedPublicacion(db, { clave: 'MLAT1|', itemId: 'MLAT1', status: 'paused', subStatus: 'out_of_stock' });
+    // Publicación B: debe evaluarse con normalidad pese al throw de la A.
+    seedCatalogo(db, 'FB-T2', 5, { idWoo: 502 });
+    db.prepare("UPDATE catalogo_cache SET precio=1500 WHERE sku='FB-T2'").run();
+    seedDecision(db, 'MLAT2|', 'FB-T2');
+    seedPublicacion(db, { clave: 'MLAT2|', itemId: 'MLAT2', status: 'paused', subStatus: 'out_of_stock' });
+
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (url.includes('/items?ids=')) {
+        return {
+          status: 200,
+          data: [
+            { code: 200, body: { id: 'MLAT1', price: 1000, category_id: 'CAT-FALLA', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } },
+            { code: 200, body: { id: 'MLAT2', price: 1000, category_id: 'CAT-OK', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } },
+          ],
+          headers: {},
+        };
+      }
+      if (url.includes('/listing_prices')) {
+        // Simula un throw real (ej. timeout de axios), no un status de error, y SOLO para la
+        // categoría de la publicación A. La B debe resolver normalmente.
+        if (url.includes('category_id=CAT-FALLA')) throw new Error('timeout de red simulado');
+        return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+      }
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const res = await request(app).get('/api/sync/reactivables');
+    expect(res.status).toBe(200);
+    const byItem = Object.fromEntries(res.body.data.map(p => [p.item_id, p]));
+
+    // Publicación A: quedó marcada sin_precio, con el resto de campos en null (no tumbó el lote).
+    expect(byItem['MLAT1'].estado).toBe('sin_precio');
+    expect(byItem['MLAT1'].precio_ml).toBeNull();
+    expect(byItem['MLAT1'].sale_fee).toBeNull();
+    expect(byItem['MLAT1'].envio).toBeNull();
+    expect(byItem['MLAT1'].neto).toBeNull();
+    expect(byItem['MLAT1'].precio_web).toBeNull();
+    expect(byItem['MLAT1'].deficit_pct).toBeNull();
+
+    // Publicación B: se evaluó con normalidad, sin verse afectada por el throw de la A.
+    expect(byItem['MLAT2'].estado).not.toBe('sin_precio');
+    expect(byItem['MLAT2'].precio_ml).toBe(1000);
+    expect(byItem['MLAT2'].sale_fee).toBe(100);
+    expect(byItem['MLAT2'].neto).toBe(900);
+    expect(byItem['MLAT2'].precio_web).not.toBeNull();
   });
 });
 
