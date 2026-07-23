@@ -59,6 +59,21 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .search-box { flex:1; min-width:180px; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:7px 12px; color:var(--text); font-size:.82rem; font-family:inherit; outline:none; }
 .search-box:focus { border-color:var(--accent); }
 
+/* Panel de filtros y ordenamiento (comparte estilos con .search-box) */
+.filtros-panel { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:10px 14px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:1.25rem; align-items:end; }
+.filtro-group { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.filtro-group.wide { grid-column:1 / -1; }
+.filtro-label { font-size:.66rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+.filtro-control { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:6px 10px; color:var(--text); font-size:.8rem; font-family:inherit; outline:none; width:100%; }
+.filtro-control:focus { border-color:var(--accent); }
+.filtro-range { display:flex; align-items:center; gap:6px; }
+.filtro-range .filtro-control { flex:1; min-width:0; }
+.filtro-range span { font-size:.72rem; color:var(--muted); }
+.filtros-footer { grid-column:1 / -1; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.filtros-count { font-size:.72rem; color:var(--muted); }
+.btn-limpiar { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 14px; font-size:.75rem; font-weight:600; cursor:pointer; font-family:inherit; transition:border-color .15s,color .15s; }
+.btn-limpiar:hover { border-color:var(--accent); color:var(--accent); }
+
 .list-wrap { display:flex; flex-direction:column; gap:6px; }
 .item-row { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.75rem 1rem; display:grid; grid-template-columns:28px 1fr auto; align-items:center; gap:12px; }
 .item-row.ok     { border-left:3px solid var(--green); }
@@ -112,6 +127,10 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
   .stat-row { grid-template-columns:1fr; }
   .topbar { padding:0 1rem; }
   .main { padding:1.5rem 1rem 4rem; }
+  .filtros-panel { grid-template-columns:1fr 1fr; }
+}
+@media(max-width:400px){
+  .filtros-panel { grid-template-columns:1fr; }
 }
 </style>
 </head>
@@ -201,6 +220,74 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
     <input class="search-box" type="text" placeholder="Buscar producto, SKU o ID de publicación…" oninput="setBusqueda(this.value)">
   </div>
 
+  <!-- Panel de filtros + ordenamiento (en memoria, sin fetches nuevos) -->
+  <div class="filtros-panel hidden" id="filtros-panel">
+    <div class="filtro-group">
+      <label class="filtro-label" for="f-categoria">Categoría</label>
+      <select class="filtro-control" id="f-categoria" onchange="setFiltro('categoria', this.value)">
+        <option value="">Todas</option>
+      </select>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label" for="f-marca">Marca</label>
+      <select class="filtro-control" id="f-marca" onchange="setFiltro('marca', this.value)">
+        <option value="">Todas</option>
+      </select>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label">Stock (rango)</label>
+      <div class="filtro-range">
+        <input class="filtro-control" id="f-stock-min" type="number" inputmode="numeric" placeholder="mín" oninput="setFiltroNum('stockMin', this.value)">
+        <span>—</span>
+        <input class="filtro-control" id="f-stock-max" type="number" inputmode="numeric" placeholder="máx" oninput="setFiltroNum('stockMax', this.value)">
+      </div>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label">Precio (rango)</label>
+      <div class="filtro-range">
+        <input class="filtro-control" id="f-precio-min" type="number" inputmode="numeric" placeholder="mín" oninput="setFiltroNum('precioMin', this.value)">
+        <span>—</span>
+        <input class="filtro-control" id="f-precio-max" type="number" inputmode="numeric" placeholder="máx" oninput="setFiltroNum('precioMax', this.value)">
+      </div>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label" for="f-imagen">Imagen</label>
+      <select class="filtro-control" id="f-imagen" onchange="setFiltroBool('conImagen', this.value)">
+        <option value="">Todas</option>
+        <option value="1">Con imagen</option>
+        <option value="0">Sin imagen</option>
+      </select>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label" for="f-gtin">GTIN / EAN</label>
+      <select class="filtro-control" id="f-gtin" onchange="setFiltroBool('conGtin', this.value)">
+        <option value="">Todos</option>
+        <option value="1">Con GTIN</option>
+        <option value="0">Sin GTIN</option>
+      </select>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label" for="f-orden">Ordenar por</label>
+      <select class="filtro-control" id="f-orden" onchange="setOrden(this.value)">
+        <option value="nombre|asc">Nombre (A→Z)</option>
+        <option value="nombre|desc">Nombre (Z→A)</option>
+        <option value="sku|asc">SKU (A→Z)</option>
+        <option value="sku|desc">SKU (Z→A)</option>
+        <option value="stock|desc">Stock (mayor→menor)</option>
+        <option value="stock|asc">Stock (menor→mayor)</option>
+        <option value="precio|desc">Precio (mayor→menor)</option>
+        <option value="precio|asc">Precio (menor→mayor)</option>
+        <option value="marca|asc">Marca (A→Z)</option>
+        <option value="categoria|asc">Categoría (A→Z)</option>
+        <option value="actualizado|desc">Última actualización</option>
+      </select>
+    </div>
+    <div class="filtros-footer">
+      <span class="filtros-count" id="filtros-count"></span>
+      <button class="btn-limpiar" onclick="limpiarFiltros()">Limpiar filtros</button>
+    </div>
+  </div>
+
   <div id="lista" class="list-wrap"></div>
 </main>
 
@@ -214,6 +301,10 @@ Api.installAuth();
 var datos = null;
 var tabActual = 'ambos';
 var busqueda = '';
+/* Filtros combinables (AND entre sí y con el buscador de texto) + ordenamiento.
+   Todo opera en memoria sobre el array ya cargado: no dispara fetches nuevos. */
+var filtros = { categoria:'', marca:'', stockMin:null, stockMax:null, precioMin:null, precioMax:null, conImagen:null, conGtin:null };
+var orden = { campo:'nombre', direccion:'asc' };
 var cargado = false;
 var fuenteApi = false;            // true si el cruce vino ya procesado del backend (API de ML)
 var excluidosSet = new Set();     // id_woo marcados "solo local"
@@ -404,6 +495,8 @@ function aplicarCruce(d, etiquetaFuente){
 
   actualizarLabelsTabs();
   document.getElementById('controls').classList.remove('hidden');
+  document.getElementById('filtros-panel').classList.remove('hidden');
+  poblarFiltros();
   render();
 }
 
@@ -490,6 +583,16 @@ function cruzar(mlItems, wcProductos, fileName){
         nombre:     wc.nombre,
         sku:        wc.sku,
         stock_wc:   wc.stock,
+        /* Mismos campos de catalogo_cache que arma el backend en computarCruce, para
+           que los filtros (categoría/marca/precio/imagen/GTIN) también funcionen en
+           el modo Excel. wc viene de /api/woo/catalogo con SELECT *, así que ya trae
+           todas las columnas; solo hay que propagarlas. */
+        marca:          wc.marca ?? null,
+        categorias_json: wc.categorias_json ?? null,
+        precio:         wc.precio ?? null,
+        img:            wc.img ?? null,
+        gtin:           wc.gtin ?? null,
+        actualizado_en: wc.actualizado_en ?? null,
         ml_title:   m.ml_title,
         ml_item_id: m.ml_item_id,
         ml_var_id:  m.ml_variation_id,
@@ -499,9 +602,16 @@ function cruzar(mlItems, wcProductos, fileName){
     }
   });
 
-  /* SOLO ML: sin SKU o SKU no existe en WC */
+  /* SOLO ML: sin SKU o SKU no existe en WC. No tiene contraparte en WC, así que los
+     campos de catalogo_cache quedan en null (igual que computarCruce en el backend),
+     por consistencia entre ambos caminos. */
   var soloMl = mlItems.filter(function(m){
     return !m.ml_sku || !wcPorSku[m.ml_sku];
+  }).map(function(m){
+    return Object.assign({}, m, {
+      marca: null, categorias_json: null, precio: null,
+      img: null, gtin: null, actualizado_en: null
+    });
   });
 
   /* Publicaciones pausadas/inactivas (están en ambos pero con problema) */
@@ -544,6 +654,8 @@ function cruzar(mlItems, wcProductos, fileName){
     if(b.dataset.tab === 'problemas') b.textContent = '⚠ Problemas' + (nProb ? ' ('+nProb+')' : '');
   });
   document.getElementById('controls').classList.remove('hidden');
+  document.getElementById('filtros-panel').classList.remove('hidden');
+  poblarFiltros();
   render();
 }
 
@@ -605,13 +717,14 @@ function reactivar(idWoo){
     }).catch(function(err){ alert('Error: ' + err.message); });
 }
 
-function toggleExcluidos(){ verExcluidos = !verExcluidos; render(); }
+function toggleExcluidos(){ verExcluidos = !verExcluidos; poblarFiltros(); render(); }
 
 /* ── TABS / BÚSQUEDA ── */
 function setTab(el){
   document.querySelectorAll('.pill-tab').forEach(function(b){ b.classList.remove('active'); });
   el.classList.add('active');
   tabActual = el.dataset.tab;
+  poblarFiltros();
   render();
 }
 let _busquedaTimer = null;
@@ -627,6 +740,159 @@ function filtrar(a, b, c){
       || (c||'').toLowerCase().includes(busqueda);
 }
 
+/* ── FILTROS COMBINABLES + ORDENAMIENTO ── */
+
+/* Stock de una fila: las pestañas WC usan `stock`; en_ambos/pausadas usan `stock_wc`. */
+function stockDe(r){
+  var s = (r.stock != null) ? r.stock : r.stock_wc;
+  return (s == null || s === '') ? null : Number(s);
+}
+function precioDe(r){
+  var p = r.precio;
+  return (p == null || p === '') ? null : Number(p);
+}
+function catsDe(r){ return parseCats(r.categorias_json).map(function(c){ return String(c).trim(); }); }
+
+/* Setters de estado (llamados desde la UI). Cada uno re-renderiza. */
+function setFiltro(campo, valor){ filtros[campo] = valor; render(); }
+function setFiltroNum(campo, valor){
+  var n = (valor === '' || valor == null) ? null : Number(valor);
+  filtros[campo] = (n == null || isNaN(n)) ? null : n;
+  render();
+}
+function setFiltroBool(campo, valor){
+  filtros[campo] = (valor === '' || valor == null) ? null : (valor === '1');
+  render();
+}
+function setOrden(valor){
+  var parts = String(valor).split('|');
+  orden.campo = parts[0] || 'nombre';
+  orden.direccion = parts[1] || 'asc';
+  render();
+}
+function limpiarFiltros(){
+  filtros = { categoria:'', marca:'', stockMin:null, stockMax:null, precioMin:null, precioMax:null, conImagen:null, conGtin:null };
+  orden = { campo:'nombre', direccion:'asc' };
+  var ids = ['f-categoria','f-marca','f-imagen','f-gtin'];
+  ids.forEach(function(id){ var el = document.getElementById(id); if(el) el.value = ''; });
+  ['f-stock-min','f-stock-max','f-precio-min','f-precio-max'].forEach(function(id){ var el = document.getElementById(id); if(el) el.value = ''; });
+  var ord = document.getElementById('f-orden'); if(ord) ord.value = 'nombre|asc';
+  render();
+}
+
+/* Núcleo reutilizable: filtra + ordena un array de filas y devuelve uno nuevo.
+   Función pura (no toca el DOM). La usan todas las ramas de render(). */
+function aplicarFiltrosYOrden(lista){
+  var out = lista.filter(function(r){
+    /* Categoría: la fila debe tener esa categoría entre las suyas. */
+    if(filtros.categoria){
+      if(catsDe(r).indexOf(filtros.categoria) === -1) return false;
+    }
+    /* Marca: match exacto. Si la fila no tiene marca y se pidió una, queda fuera. */
+    if(filtros.marca){
+      if(String(r.marca||'').trim() !== filtros.marca) return false;
+    }
+    /* Rango de stock. */
+    var st = stockDe(r);
+    if(filtros.stockMin != null){ if(st == null || st < filtros.stockMin) return false; }
+    if(filtros.stockMax != null){ if(st == null || st > filtros.stockMax) return false; }
+    /* Rango de precio. */
+    var pr = precioDe(r);
+    if(filtros.precioMin != null){ if(pr == null || pr < filtros.precioMin) return false; }
+    if(filtros.precioMax != null){ if(pr == null || pr > filtros.precioMax) return false; }
+    /* Con/sin imagen. */
+    if(filtros.conImagen != null){
+      var tieneImg = !!(r.img && String(r.img).trim());
+      if(tieneImg !== filtros.conImagen) return false;
+    }
+    /* Con/sin GTIN. */
+    if(filtros.conGtin != null){
+      var tieneGtin = !!(r.gtin && String(r.gtin).trim());
+      if(tieneGtin !== filtros.conGtin) return false;
+    }
+    return true;
+  });
+
+  var dir = orden.direccion === 'desc' ? -1 : 1;
+  var campo = orden.campo;
+  out.sort(function(a, b){
+    var va, vb;
+    if(campo === 'stock'){ va = stockDe(a); vb = stockDe(b); return cmpNum(va, vb, dir); }
+    if(campo === 'precio'){ va = precioDe(a); vb = precioDe(b); return cmpNum(va, vb, dir); }
+    if(campo === 'actualizado'){
+      va = a.actualizado_en || ''; vb = b.actualizado_en || '';
+      return cmpTexto(va, vb, dir);
+    }
+    if(campo === 'marca'){ va = String(a.marca||''); vb = String(b.marca||''); return cmpTexto(va, vb, dir); }
+    if(campo === 'categoria'){ va = (catsDe(a)[0]||''); vb = (catsDe(b)[0]||''); return cmpTexto(va, vb, dir); }
+    if(campo === 'sku'){ va = String(a.sku||''); vb = String(b.sku||''); return cmpTexto(va, vb, dir); }
+    /* nombre por defecto */
+    va = String(a.nombre || a.ml_title || ''); vb = String(b.nombre || b.ml_title || '');
+    return cmpTexto(va, vb, dir);
+  });
+  return out;
+}
+/* Comparadores: los vacíos/null van SIEMPRE al final, independiente de la dirección
+   (el sentinel null-last no se multiplica por dir; solo la comparación real entre
+   valores presentes se ve afectada por el sentido asc/desc). */
+function cmpNum(a, b, dir){
+  if(dir == null) dir = 1;  // blindaje: sin dir → ascendente (evita NaN silencioso)
+  if(a == null && b == null) return 0;
+  if(a == null) return 1;   // a vacío → después de b (sin importar dir)
+  if(b == null) return -1;  // b vacío → después de a
+  return (a - b) * dir;
+}
+function cmpTexto(a, b, dir){
+  if(dir == null) dir = 1;  // blindaje: sin dir → ascendente (evita NaN silencioso)
+  if(!a && !b) return 0;
+  if(!a) return 1;
+  if(!b) return -1;
+  return a.localeCompare(b, 'es', { sensitivity:'base', numeric:true }) * dir;
+}
+
+/* Lista cruda (sin filtrar) de la pestaña actual — base para poblar los selects. */
+function listaCrudaTab(){
+  if(!datos) return [];
+  if(tabActual === 'ambos') return datos.en_ambos;
+  if(tabActual === 'problemas') return datos.solo_ml.concat(datos.pausadas);
+  if(tabActual === 'faltantes') return verExcluidos ? datos.excluidos : datos.faltantes;
+  if(tabActual === 'multipub') return datos.multiPub;
+  if(tabActual === 'solo_ml') return datos.solo_ml;
+  return [];
+}
+
+/* Puebla los selects de categoría y marca con los valores únicos presentes en la
+   pestaña actual, preservando la selección vigente si sigue disponible. */
+function poblarFiltros(){
+  var lista = listaCrudaTab();
+  var cats = {}, marcas = {};
+  lista.forEach(function(r){
+    catsDe(r).forEach(function(c){ if(c) cats[c] = true; });
+    var m = String(r.marca||'').trim();
+    if(m) marcas[m] = true;
+  });
+  llenarSelect('f-categoria', Object.keys(cats).sort(function(a,b){ return cmpTexto(a,b,1); }), filtros.categoria, 'Todas');
+  llenarSelect('f-marca', Object.keys(marcas).sort(function(a,b){ return cmpTexto(a,b,1); }), filtros.marca, 'Todas');
+}
+function llenarSelect(id, valores, seleccionado, labelVacio){
+  var sel = document.getElementById(id);
+  if(!sel) return;
+  var existe = valores.indexOf(seleccionado) !== -1;
+  var html = '<option value="">' + labelVacio + '</option>';
+  html += valores.map(function(v){
+    return '<option value="'+esc(v)+'"'+(v===seleccionado?' selected':'')+'>'+esc(v)+'</option>';
+  }).join('');
+  sel.innerHTML = html;
+  /* Si el valor seleccionado ya no está en la lista de la pestaña, se resetea el filtro. */
+  if(seleccionado && !existe){
+    if(id === 'f-categoria') filtros.categoria = '';
+    if(id === 'f-marca') filtros.marca = '';
+    sel.value = '';
+  } else {
+    sel.value = seleccionado || '';
+  }
+}
+
 /* ── HELPERS ── */
 function variantePill(v){
   return v ? '<span class="pill-variante" title="'+esc(v)+'">'+esc(v)+'</span>' : '';
@@ -634,11 +900,23 @@ function variantePill(v){
 
 /* ── RENDER ── */
 function render(){
+  renderInterno();
+  actualizarCount();
+}
+/* Cuenta las filas efectivamente mostradas y lo refleja en el panel de filtros. */
+function actualizarCount(){
+  var el = document.getElementById('filtros-count');
+  if(!el) return;
+  var filas = document.querySelectorAll('#lista .item-row');
+  var n = filas ? filas.length : 0;
+  el.textContent = n === 1 ? '1 resultado' : (n + ' resultados');
+}
+function renderInterno(){
   if(!datos) return;
   var html = '', lista;
 
   if(tabActual === 'ambos'){
-    lista = datos.en_ambos.filter(function(r){ return filtrar(r.nombre, r.sku, r.ml_item_id); });
+    lista = aplicarFiltrosYOrden(datos.en_ambos.filter(function(r){ return filtrar(r.nombre, r.sku, r.ml_item_id); }));
     if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty">Sin resultados.</div>'; return; }
     html += '<div class="section-label">' + lista.length + ' productos presentes en WooCommerce y MercadoLibre</div>';
     html += lista.map(function(r){
@@ -664,8 +942,8 @@ function render(){
     }).join('');
 
   } else if(tabActual === 'problemas'){
-    var sinWc = datos.solo_ml.filter(function(r){ return filtrar(r.ml_title, r.ml_sku, r.ml_item_id); });
-    var pausadas = datos.pausadas.filter(function(r){ return filtrar(r.nombre, r.sku, r.ml_item_id); });
+    var sinWc = aplicarFiltrosYOrden(datos.solo_ml.filter(function(r){ return filtrar(r.ml_title, r.ml_sku, r.ml_item_id); }));
+    var pausadas = aplicarFiltrosYOrden(datos.pausadas.filter(function(r){ return filtrar(r.nombre, r.sku, r.ml_item_id); }));
     if(!sinWc.length && !pausadas.length){
       document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--green)">✓ Sin problemas detectados.</div>';
       return;
@@ -717,7 +995,7 @@ function render(){
       + '</div>';
 
     if(verExcluidos){
-      var lex = datos.excluidos.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
+      var lex = aplicarFiltrosYOrden(datos.excluidos.filter(function(r){ return filtrar(r.nombre, r.sku, ''); }));
       if(!lex.length){ document.getElementById('lista').innerHTML = html + '<div class="empty">No hay productos marcados como solo local.</div>'; return; }
       html += '<div class="section-label">' + lex.length + ' productos marcados como "solo local" (excluidos de cobertura)</div>';
       html += lex.map(function(r){
@@ -736,7 +1014,7 @@ function render(){
       return;
     }
 
-    lista = datos.faltantes.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
+    lista = aplicarFiltrosYOrden(datos.faltantes.filter(function(r){ return filtrar(r.nombre, r.sku, ''); }));
     if(!lista.length){
       var msgVacio = datos.faltantes.length
         ? '<div class="empty">Sin resultados para tu búsqueda.</div>'
@@ -765,7 +1043,7 @@ function render(){
     }).join('');
 
   } else if(tabActual === 'multipub'){
-    lista = datos.multiPub.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
+    lista = aplicarFiltrosYOrden(datos.multiPub.filter(function(r){ return filtrar(r.nombre, r.sku, ''); }));
     if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--green)">✓ Ningún producto tiene más de 2 publicaciones en MercadoLibre.</div>'; return; }
     html += '<div class="section-label">' + lista.length + ' productos con más de 2 publicaciones en MercadoLibre (revisar)</div>';
     html += lista.map(function(r){
@@ -791,7 +1069,7 @@ function render(){
     }).join('');
 
   } else if(tabActual === 'solo_ml'){
-    lista = datos.solo_ml.filter(function(r){ return filtrar(r.ml_title, r.ml_sku, r.ml_item_id); });
+    lista = aplicarFiltrosYOrden(datos.solo_ml.filter(function(r){ return filtrar(r.ml_title, r.ml_sku, r.ml_item_id); }));
     if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty">Sin resultados.</div>'; return; }
     html += '<div class="section-label">' + lista.length + ' publicaciones en ML sin producto en WooCommerce</div>';
     html += lista.map(function(r){
