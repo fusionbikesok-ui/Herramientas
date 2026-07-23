@@ -44,8 +44,21 @@ describe('GET /api/consulta-precios/buscar', () => {
     expect(res.body.tipo).toBe('sku');
     expect(res.body.producto).toMatchObject({
       sku: 'FB-40', nombre: 'Cinta SUPACAZ Bling', marca: 'SUPACAZ',
-      categorias: ['CINTAS Y PUÑOS'], precio: 15000, stock: 3, img: 'https://x/a.jpg',
+      // precio de CONTADO = 2/3 del de lista (15000) → 10000, no el precio de lista.
+      categorias: ['CINTAS Y PUÑOS'], precio: 10000, stock: 3, img: 'https://x/a.jpg',
     });
+    db.close();
+  });
+
+  it('precio null en catalogo_cache → producto.precio null (no rompe)', async () => {
+    const { app, db } = appConDatos();
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(3, 'Producto sin precio', 'FB-SINPRECIO', 'simple', 5, null, now);
+    const res = await request(app).get('/api/consulta-precios/buscar?q=FB-SINPRECIO');
+    expect(res.status).toBe(200);
+    expect(res.body.found).toBe(true);
+    expect(res.body.producto.precio).toBe(null);
     db.close();
   });
 
