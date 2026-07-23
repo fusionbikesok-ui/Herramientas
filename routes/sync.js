@@ -15,6 +15,7 @@ import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
+import { mapConLimite } from '../lib/concurrencia.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -27,6 +28,12 @@ const MAX_RETRIES = 5;
 // 500ms (~120/min) es seguro y ~3x más rápido que el valor original de 1500ms,
 // clave para que la sincronización masiva inicial (miles de variaciones) termine.
 const ML_CALL_DELAY_MS = 500;
+// Máximo de llamadas a ML en vuelo simultáneamente en los lotes de reactivación
+// (evaluación de precios y push de stock+activación). Con concurrencia acotada se baja el
+// tiempo total del lote sin dispararlo todo a la vez ni saturar el rate-limit de ML (que
+// ronda 1000+ req/min): 4 en paralelo queda muy por debajo. Es la palanca a ajustar si ML
+// empieza a devolver 429 — subir/bajar según cómo responda.
+const ML_CONCURRENCIA_MAX = 4;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -489,23 +496,36 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
   const resultado = new Map();
   const caches = { fee: new Map(), envio: new Map() };
 
-  for (let i = 0; i < itemIds.length; i += MULTIGET_CHUNK) {
-    const chunk = itemIds.slice(i, i + MULTIGET_CHUNK);
+  // 1) Multiget de los items en chunks, en paralelo con concurrencia acotada (antes: serie
+  //    con sleep fijo entre cada chunk). Se completa el mapa `items` compartido antes de evaluar.
+  const chunks = [];
+  for (let i = 0; i < itemIds.length; i += MULTIGET_CHUNK) chunks.push(itemIds.slice(i, i + MULTIGET_CHUNK));
+  const items = new Map();
+  await mapConLimite(chunks, ML_CONCURRENCIA_MAX, async (chunk) => {
     const resp = await mlFetch(
       db, mlCfg, 'get',
       `/items?ids=${chunk.join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations`
     );
-    await sleep(ML_CALL_DELAY_MS);
-
-    const items = new Map();
     if (resp.status === 200 && Array.isArray(resp.data)) {
       for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
     }
+  });
 
-    for (const itemId of chunk) {
-      const item = items.get(itemId);
-      const filas = filasPorItem.get(itemId) || [];
-      let peor = null;
+  // 2) Evaluar el neto de cada item en paralelo (concurrencia acotada). Cada item resuelve
+  //    independiente: la escritura en `resultado` es por itemId (sin choques entre tareas).
+  //    Fail-safe por tarea: si mlFetch/netoMl LANZAN (ej. timeout real de axios, que hace throw
+  //    en vez de devolver status), se captura acá y esa publicación queda como 'sin_precio' —
+  //    NO se propaga al Promise.all del pool, que tumbaría la evaluación entera y haría que
+  //    GET /reactivables responda 500 perdiendo el trabajo ya hecho de las demás.
+  //    Nota: caches.fee/envio se comparte entre tareas paralelas; varias que encuentren el cache
+  //    vacío para la misma categoría pueden disparar listing_prices/envío en paralelo antes de
+  //    que la primera lo popule (algún request redundante puntual). No es un bug, solo pierde
+  //    algo de eficiencia de cache; no se resuelve con cache de promesas por simplicidad.
+  await mapConLimite(itemIds, ML_CONCURRENCIA_MAX, async (itemId) => {
+    const item = items.get(itemId);
+    const filas = filasPorItem.get(itemId) || [];
+    let peor = null;
+    try {
       for (const fila of filas) {
         const precioWeb = precioWebClave(db, fila.clave);
         let precio_ml = null, sale_fee = null, envio = null, neto = null;
@@ -522,16 +542,19 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
             listingTypeId: item.listing_type_id, freeShipping,
           }, caches);
           sale_fee = r.sale_fee; envio = r.envio; neto = r.neto;
-          await sleep(ML_CALL_DELAY_MS);
           const v = veredictoNeto(neto, precioWeb);
           estado = v.estado; deficit_pct = v.deficitPct;
         }
         const evalFila = { precio_ml, sale_fee, envio, neto, precio_web: precioWeb, estado, deficit_pct };
         if (!peor || PRECIO_ESTADO_PRIORIDAD[estado] < PRECIO_ESTADO_PRIORIDAD[peor.estado]) peor = evalFila;
       }
-      if (peor) resultado.set(itemId, peor);
+    } catch {
+      // Falla puntual de esta publicación: no hay dato de precio confiable → sin_precio.
+      // No frena ni afecta la evaluación de las demás publicaciones del lote.
+      peor = { precio_ml: null, sale_fee: null, envio: null, neto: null, precio_web: null, estado: 'sin_precio', deficit_pct: null };
     }
-  }
+    if (peor) resultado.set(itemId, peor);
+  });
   return resultado;
 }
 
@@ -558,7 +581,6 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
 async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
   const resp = await mlFetch(db, mlCfg, 'get',
     `/items/${itemId}?attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`);
-  await sleep(ML_CALL_DELAY_MS);
   if (resp.status !== 200 || !resp.data) {
     return { error: 'No se pudo consultar el precio en ML — reintentá', clave: null, neto: null, precio_web: null, deficitPct: null };
   }
@@ -599,7 +621,6 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
       itemId, price: precio, categoryId: item.category_id,
       listingTypeId: item.listing_type_id, freeShipping,
     }, caches);
-    await sleep(ML_CALL_DELAY_MS);
     if (neto == null) {
       return { error: 'No se pudo calcular la comisión en ML — reintentá', clave: v.clave, neto: null, precio_web: precioWeb, deficitPct: null };
     }
@@ -632,9 +653,12 @@ export async function reactivarItems(db, mlCfg, itemIds) {
     porItem.get(r.item_id).push(r);
   }
 
-  const resultados = [];
-  for (const [itemId, variaciones] of porItem) {
-    let error = null;
+  // Se procesan varias publicaciones EN PARALELO con concurrencia acotada (antes: una a una
+  //  con sleep fijo entre requests). La paralelización es ENTRE publicaciones distintas: dentro
+  //  de una misma publicación los PUTs de stock siguen yendo en orden y la activación va DESPUÉS
+  //  de que todos terminen. Cada publicación resuelve independiente (éxito/omitida/bloqueada/
+  //  error): un fallo en una no frena ni afecta a las demás (fn captura su propio error).
+  const resultados = await mapConLimite([...porItem], ML_CONCURRENCIA_MAX, async ([itemId, variaciones]) => {
     try {
       // 0) Revalidación en vivo + bloqueo por neto (un solo GET del item). Omite si ya no está
       //    pausada o si el vendedor la pausó manualmente; bloquea si el neto queda >5% por debajo
@@ -646,14 +670,12 @@ export async function reactivarItems(db, mlCfg, itemIds) {
           // que el usuario no la reintente en loop (siempre "omitida") en la próxima carga.
           const refrescar = db.prepare('UPDATE ml_publicaciones_cache SET status=?, sub_status=? WHERE clave = ?');
           for (const v of variaciones) refrescar.run(bloqueo.cacheStatus, bloqueo.cacheSubStatus, v.clave);
-          resultados.push({ item_id: itemId, ok: false, omitido: true, motivo: bloqueo.motivo });
-        } else {
-          resultados.push({ item_id: itemId, ok: false, bloqueado: true, ...bloqueo });
+          return { item_id: itemId, ok: false, omitido: true, motivo: bloqueo.motivo };
         }
-        continue;
+        return { item_id: itemId, ok: false, bloqueado: true, ...bloqueo };
       }
 
-      // 1) Empujar stock de cada variación con stock web disponible
+      // 1) Empujar stock de cada variación con stock web disponible (en orden dentro del item)
       for (const v of variaciones) {
         const cantidad = Math.max(0, Math.round(v.stock_disponible_ml));
         const { path, body } = buildMlStockUpdate(itemId, v.variation_id || '', cantidad);
@@ -661,12 +683,11 @@ export async function reactivarItems(db, mlCfg, itemIds) {
         if (resp.status !== 200) {
           throw new Error(`stock ${v.clave}: ${extraerErrorMl(resp)}`);
         }
-        await sleep(ML_CALL_DELAY_MS);
       }
 
-      // 2) Reactivar la publicación
+      // 2) Reactivar la publicación — DESPUÉS de que todos los PUTs de stock de ESTA
+      //    publicación terminaron (dependencia intra-publicación, no se paraleliza).
       const act = await mlFetch(db, mlCfg, 'put', `/items/${itemId}`, { status: 'active' });
-      await sleep(ML_CALL_DELAY_MS);
       if (act.status !== 200) {
         throw new Error(`activar: ${extraerErrorMl(act)}`);
       }
@@ -679,13 +700,13 @@ export async function reactivarItems(db, mlCfg, itemIds) {
         upsertMlStockEstado(db, v.clave, v.sku, cantidad);
         logSync(db, { direccion: 'wc_ml', clave: v.clave, sku: v.sku, cantNueva: cantidad, estado: 'reactivada' });
       }
-      resultados.push({ item_id: itemId, ok: true, variaciones: variaciones.length });
+      return { item_id: itemId, ok: true, variaciones: variaciones.length };
     } catch (e) {
-      error = e.message;
+      const error = e.message;
       logSync(db, { direccion: 'wc_ml', clave: itemId, estado: 'error', error: `reactivar: ${error}`.slice(0, 500) });
-      resultados.push({ item_id: itemId, ok: false, error });
+      return { item_id: itemId, ok: false, error };
     }
-  }
+  });
 
   return { procesados: porItem.size, resultados };
 }
