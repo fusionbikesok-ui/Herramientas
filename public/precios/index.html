@@ -58,6 +58,24 @@
   a.ml-link{color:var(--azul);font-weight:600;text-decoration:none;font-size:12.5px;}
   a.ml-link:hover{text-decoration:underline;}
   .loading{color:var(--muted2);font-size:13px;padding:34px 0;text-align:center;}
+
+  /* Panel de filtros + ordenamiento (en memoria, sobre las filas ya cargadas por la tab).
+     Mismo espíritu visual que el panel de Cobertura, adaptado a las variables de esta página. */
+  .filtros-panel{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px;align-items:end;}
+  .filtro-group{display:flex;flex-direction:column;gap:4px;min-width:0;}
+  .filtro-group.buscar{grid-column:1 / -1;}
+  .filtro-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2);}
+  .filtro-control{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:13px;font-family:inherit;outline:none;width:100%;}
+  .filtro-control:focus{border-color:var(--azul);}
+  .filtro-range{display:flex;align-items:center;gap:6px;}
+  .filtro-range .filtro-control{flex:1;min-width:0;}
+  .filtro-range span{font-size:12px;color:var(--muted);}
+  .filtros-footer{grid-column:1 / -1;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .filtros-count{font-size:12px;color:var(--muted);}
+  .btn-limpiar{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:border-color .15s,color .15s;}
+  .btn-limpiar:hover{border-color:var(--azul);color:var(--azul);}
+  @media(max-width:600px){.filtros-panel{grid-template-columns:1fr 1fr;}}
+  @media(max-width:400px){.filtros-panel{grid-template-columns:1fr;}}
 </style>
 </head>
 <body>
@@ -76,6 +94,62 @@
   </div>
 
   <div class="cards" id="kpis"></div>
+
+  <!-- Panel de filtros + ordenamiento en memoria (sobre las filas ya traídas por la tab).
+       Las tabs de arriba siguen siendo el filtro primario server-side por `estado`. -->
+  <div class="filtros-panel" id="filtros-panel" style="display:none">
+    <div class="filtro-group buscar">
+      <label class="filtro-label" for="f-buscar">Buscar (título o SKU)</label>
+      <input class="filtro-control" id="f-buscar" type="text" placeholder="Escribí para filtrar…" oninput="setBusqueda(this.value)">
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label" for="f-categoria">Categoría</label>
+      <select class="filtro-control" id="f-categoria" onchange="setFiltroMem('categoria', this.value)">
+        <option value="">Todas</option>
+      </select>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label" for="f-marca">Marca</label>
+      <select class="filtro-control" id="f-marca" onchange="setFiltroMem('marca', this.value)">
+        <option value="">Todas</option>
+      </select>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label">Stock (rango)</label>
+      <div class="filtro-range">
+        <input class="filtro-control" id="f-stock-min" type="number" inputmode="numeric" placeholder="mín" oninput="setFiltroNum('stockMin', this.value)">
+        <span>—</span>
+        <input class="filtro-control" id="f-stock-max" type="number" inputmode="numeric" placeholder="máx" oninput="setFiltroNum('stockMax', this.value)">
+      </div>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label">Precio contado (rango)</label>
+      <div class="filtro-range">
+        <input class="filtro-control" id="f-precio-min" type="number" inputmode="numeric" placeholder="mín" oninput="setFiltroNum('precioMin', this.value)">
+        <span>—</span>
+        <input class="filtro-control" id="f-precio-max" type="number" inputmode="numeric" placeholder="máx" oninput="setFiltroNum('precioMax', this.value)">
+      </div>
+    </div>
+    <div class="filtro-group">
+      <label class="filtro-label" for="f-orden">Ordenar por</label>
+      <select class="filtro-control" id="f-orden" onchange="setOrden(this.value)">
+        <option value="deficit|desc">Déficit % (mayor→menor)</option>
+        <option value="deficit|asc">Déficit % (menor→mayor)</option>
+        <option value="neto|desc">Neto (mayor→menor)</option>
+        <option value="neto|asc">Neto (menor→mayor)</option>
+        <option value="stock|desc">Stock (mayor→menor)</option>
+        <option value="stock|asc">Stock (menor→mayor)</option>
+        <option value="marca|asc">Marca (A→Z)</option>
+        <option value="categoria|asc">Categoría (A→Z)</option>
+        <option value="actualizado|desc">Última actualización</option>
+      </select>
+    </div>
+    <div class="filtros-footer">
+      <span class="filtros-count" id="filtros-count"></span>
+      <button class="btn-limpiar" onclick="limpiarFiltros()">Limpiar filtros</button>
+    </div>
+  </div>
+
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
 </div>
 
@@ -84,6 +158,156 @@
 var FILTRO='problemas';
 var LABELS={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:'OK'};
 
+/* ── FILTROS + ORDENAMIENTO EN MEMORIA ──
+   Las tabs (FILTRO) siguen siendo el filtro primario server-side por `estado`.
+   Sobre las filas que devuelve la tab aplicamos una capa extra en memoria, sin
+   fetches nuevos. Mismo patrón que Cobertura de Catálogo, para consistencia. */
+var ROWS=[];                       // filas crudas de la tab actual (del último fetch)
+var busqueda='';                   // texto libre (título/SKU)
+var filtros={ categoria:'', marca:'', stockMin:null, stockMax:null, precioMin:null, precioMax:null };
+/* Orden por defecto = déficit % desc, que refleja el orden natural del backend. */
+var orden={ campo:'deficit', direccion:'desc' };
+
+/* Categorías: catalogo_cache.categorias_json puede venir como array JSON o string. */
+function parseCats(cj){
+  if(Array.isArray(cj)) return cj;
+  if(typeof cj==='string' && cj.trim()){ try{ var a=JSON.parse(cj); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+  return [];
+}
+function catsDe(r){ return parseCats(r.categorias_json).map(function(c){ return String(c).trim(); }).filter(Boolean); }
+function stockDe(r){ var s=r.stock; return (s==null||s==='')?null:Number(s); }
+/* Rango de precio = precio contado (precio_web): es contra lo que se compara el neto,
+   así que es el valor que al usuario le interesa acotar (no el precio_ml crudo). */
+function precioDe(r){ var p=r.precio_web; return (p==null||p==='')?null:Number(p); }
+function netoDe(r){ var n=r.neto; return (n==null||n==='')?null:Number(n); }
+function deficitDe(r){ var d=r.deficit_pct; return (d==null||d==='')?null:Number(d); }
+
+/* Comparadores: los vacíos/null van SIEMPRE al final, sin importar la dirección
+   (el sentinel null-last NO se multiplica por dir; solo la comparación real entre
+   valores presentes respeta asc/desc). Fix aplicado desde el inicio en esta página. */
+function cmpNum(a,b,dir){
+  if(dir==null) dir=1;
+  if(a==null && b==null) return 0;
+  if(a==null) return 1;
+  if(b==null) return -1;
+  return (a-b)*dir;
+}
+function cmpTexto(a,b,dir){
+  if(dir==null) dir=1;
+  if(!a && !b) return 0;
+  if(!a) return 1;
+  if(!b) return -1;
+  return a.localeCompare(b,'es',{sensitivity:'base',numeric:true})*dir;
+}
+
+/* Núcleo puro: filtra + ordena y devuelve un array nuevo (no muta ni toca el DOM). */
+function aplicarFiltrosYOrden(lista){
+  var q=busqueda;
+  var out=lista.filter(function(r){
+    /* Texto libre: título o SKU. */
+    if(q){
+      var t=(r.titulo||'').toLowerCase();
+      var s=(r.sku||'').toLowerCase();
+      if(t.indexOf(q)===-1 && s.indexOf(q)===-1) return false;
+    }
+    /* Categoría: la fila debe tener esa categoría entre las suyas. */
+    if(filtros.categoria){
+      if(catsDe(r).indexOf(filtros.categoria)===-1) return false;
+    }
+    /* Marca: match exacto; sin marca queda fuera si se pidió una. */
+    if(filtros.marca){
+      if(String(r.marca||'').trim()!==filtros.marca) return false;
+    }
+    /* Rango de stock. */
+    var st=stockDe(r);
+    if(filtros.stockMin!=null){ if(st==null || st<filtros.stockMin) return false; }
+    if(filtros.stockMax!=null){ if(st==null || st>filtros.stockMax) return false; }
+    /* Rango de precio contado. */
+    var pr=precioDe(r);
+    if(filtros.precioMin!=null){ if(pr==null || pr<filtros.precioMin) return false; }
+    if(filtros.precioMax!=null){ if(pr==null || pr>filtros.precioMax) return false; }
+    return true;
+  });
+
+  var dir=orden.direccion==='desc'?-1:1;
+  var campo=orden.campo;
+  out.sort(function(a,b){
+    if(campo==='neto') return cmpNum(netoDe(a),netoDe(b),dir);
+    if(campo==='deficit') return cmpNum(deficitDe(a),deficitDe(b),dir);
+    if(campo==='stock') return cmpNum(stockDe(a),stockDe(b),dir);
+    if(campo==='marca') return cmpTexto(String(a.marca||''),String(b.marca||''),dir);
+    if(campo==='categoria') return cmpTexto((catsDe(a)[0]||''),(catsDe(b)[0]||''),dir);
+    if(campo==='actualizado') return cmpTexto(a.actualizado_en||'',b.actualizado_en||'',dir);
+    return cmpTexto(String(a.titulo||''),String(b.titulo||''),dir);
+  });
+  return out;
+}
+
+/* Setters desde la UI: cada uno re-pinta. */
+function setBusqueda(v){ busqueda=String(v||'').toLowerCase(); pintar(); }
+function setFiltroMem(campo,valor){ filtros[campo]=valor; pintar(); }
+function setFiltroNum(campo,valor){
+  var n=(valor===''||valor==null)?null:Number(valor);
+  filtros[campo]=(n==null||isNaN(n))?null:n;
+  pintar();
+}
+function setOrden(valor){
+  var parts=String(valor).split('|');
+  orden.campo=parts[0]||'deficit';
+  orden.direccion=parts[1]||'desc';
+  pintar();
+}
+function limpiarFiltros(){
+  busqueda='';
+  filtros={ categoria:'', marca:'', stockMin:null, stockMax:null, precioMin:null, precioMax:null };
+  orden={ campo:'deficit', direccion:'desc' };
+  var b=document.getElementById('f-buscar'); if(b) b.value='';
+  ['f-categoria','f-marca'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  ['f-stock-min','f-stock-max','f-precio-min','f-precio-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  var ord=document.getElementById('f-orden'); if(ord) ord.value='deficit|desc';
+  poblarFiltros();
+  pintar();
+}
+
+/* Puebla los selects de categoría y marca con los valores únicos de las filas cargadas,
+   preservando la selección vigente si sigue disponible. */
+function poblarFiltros(){
+  var cats={}, marcas={};
+  ROWS.forEach(function(r){
+    catsDe(r).forEach(function(c){ if(c) cats[c]=true; });
+    var m=String(r.marca||'').trim();
+    if(m) marcas[m]=true;
+  });
+  llenarSelect('f-categoria', Object.keys(cats).sort(function(a,b){ return cmpTexto(a,b,1); }), filtros.categoria);
+  llenarSelect('f-marca', Object.keys(marcas).sort(function(a,b){ return cmpTexto(a,b,1); }), filtros.marca);
+}
+function llenarSelect(id,valores,seleccionado){
+  var sel=document.getElementById(id);
+  if(!sel) return;
+  var existe=valores.indexOf(seleccionado)!==-1;
+  var html='<option value="">Todas</option>';
+  html+=valores.map(function(v){
+    return '<option value="'+esc(v)+'"'+(v===seleccionado?' selected':'')+'>'+esc(v)+'</option>';
+  }).join('');
+  sel.innerHTML=html;
+  if(seleccionado && !existe){
+    if(id==='f-categoria') filtros.categoria='';
+    if(id==='f-marca') filtros.marca='';
+    sel.value='';
+  }else{
+    sel.value=seleccionado||'';
+  }
+}
+
+/* Toma ROWS, aplica filtros+orden en memoria y pinta el cuerpo + el contador. */
+function pintar(){
+  var cont=document.getElementById('cuerpo');
+  var lista=aplicarFiltrosYOrden(ROWS);
+  cont.innerHTML=render(lista);
+  var cnt=document.getElementById('filtros-count');
+  if(cnt) cnt.textContent=(lista.length===1?'1 resultado':(lista.length+' resultados'));
+}
+
 async function cargar(){
   var cont=document.getElementById('cuerpo');
   cont.innerHTML='<div class="loading">Cargando…</div>';
@@ -91,8 +315,13 @@ async function cargar(){
     var r=await fetch('/api/precios?estado='+encodeURIComponent(FILTRO));
     var d=await r.json();
     if(!d.ok)throw new Error(d.error||'error');
-    cont.innerHTML=render(d.data||[]);
+    ROWS=d.data||[];
+    document.getElementById('filtros-panel').style.display=ROWS.length?'grid':'none';
+    poblarFiltros();
+    pintar();
   }catch(err){
+    ROWS=[];
+    document.getElementById('filtros-panel').style.display='none';
     cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
   }
 }

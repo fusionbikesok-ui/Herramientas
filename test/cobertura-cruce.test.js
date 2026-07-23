@@ -124,6 +124,52 @@ describe('computarCruce — cruce WC × ML en el backend', () => {
     db.close();
   });
 
+  it('en_ambos y pausadas incluyen marca/categorias_json/precio/img/gtin desde catalogo_cache', () => {
+    const db = openDb(TEST_DB);
+    const now = new Date().toISOString();
+    // Producto WC completo, con activa y pausada en ML (misma SKU).
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, categorias_json, actualizado_en, marca, precio, img, gtin) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run(50, 'Cubierta 29', 'FB-CAMPOS', 'simple', 7, '["CUBIERTAS"]', now, 'Maxxis', 15000, 'http://img/x.jpg', '7791234567890');
+    insMl(db, { item_id: 'MLB1', seller_sku: 'FB-CAMPOS', status: 'active', titulo: 'Cubierta activa' });
+    insMl(db, { item_id: 'MLB2', seller_sku: 'FB-CAMPOS', status: 'paused', titulo: 'Cubierta pausada' });
+
+    const r = computarCruce(db);
+
+    const amb = r.en_ambos.find((x) => x.sku === 'FB-CAMPOS');
+    expect(amb).toBeTruthy();
+    expect(amb.marca).toBe('Maxxis');
+    expect(amb.categorias_json).toBe('["CUBIERTAS"]');
+    expect(amb.precio).toBe(15000);
+    expect(amb.img).toBe('http://img/x.jpg');
+    expect(amb.gtin).toBe('7791234567890');
+    expect(amb.actualizado_en).toBe(now);
+
+    // pausadas deriva de en_ambos → hereda los mismos campos.
+    const pau = r.pausadas.find((x) => x.sku === 'FB-CAMPOS');
+    expect(pau).toBeTruthy();
+    expect(pau.marca).toBe('Maxxis');
+    expect(pau.precio).toBe(15000);
+    expect(pau.categorias_json).toBe('["CUBIERTAS"]');
+
+    db.close();
+  });
+
+  it('solo_ml expone los campos de WC en null (no tiene contraparte en catalogo_cache)', () => {
+    const db = openDb(TEST_DB);
+    insMl(db, { item_id: 'MLC1', seller_sku: 'SIN-WC-2', status: 'active', titulo: 'Huérfana' });
+
+    const r = computarCruce(db);
+    const orf = r.solo_ml.find((x) => x.ml_sku === 'SIN-WC-2');
+    expect(orf).toBeTruthy();
+    expect(orf.marca).toBeNull();
+    expect(orf.categorias_json).toBeNull();
+    expect(orf.precio).toBeNull();
+    expect(orf.img).toBeNull();
+    expect(orf.gtin).toBeNull();
+    db.close();
+  });
+
   it('GET /cruce y los slices devuelven los mismos datos procesados', async () => {
     const db = openDb(TEST_DB);
     seedBase(db);
