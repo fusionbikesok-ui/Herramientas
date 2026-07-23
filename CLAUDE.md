@@ -17,9 +17,12 @@ de código**, seguí este pipeline sin esperar un comando:
 3. Despachar **`revisor`** sobre el diff → hallazgos priorizados (no escribe código).
 4. Si hay hallazgos, volver al **`hard-worker`** a corregir; repetir hasta que el revisor dé OK.
 5. Despachar **`tester`** → asegura vitest verde y cobertura del cambio.
-6. Despachar **`auditor-despliegue`** → gate obligatorio (auditoría + tests verdes + UI
+6. Si el cambio toca UI (`public/`), despachar **`probador-e2e`** sobre la(s) página(s)
+   tocadas → prueba interactiva real en navegador (clicks, inputs, responsive), no solo
+   lectura de código. Ver credenciales de prueba abajo.
+7. Despachar **`auditor-despliegue`** → gate obligatorio (auditoría + tests verdes + UI
    responsive sin nada oculto). Devuelve 🟢/🔴.
-7. Reportar al usuario. **El deploy a prod lo hace el usuario a mano.**
+8. Reportar al usuario. **El deploy a prod lo hace el usuario a mano.**
 
 Usá **`explorador`** como apoyo cuando necesites ubicar o entender código sin ensuciar tu
 contexto.
@@ -29,3 +32,9 @@ contexto.
 **Regla de despliegue OBLIGATORIA** (la aplica el auditor, pero vale siempre): antes de
 desplegar o dar por completo un cambio → auditoría de código + todos los tests verdes
 (`npm test`) + UI responsive sin nada oculto.
+
+## Cuenta de prueba para agentes de UI
+
+Para que `probador-e2e` / `auditor-despliegue` puedan loguearse solos: usuario `auditor` /
+clave `Auditor2026!` (cuenta admin, sembrada en `data/fusion.sqlite`). Es solo para testing
+automatizado — no usarla para operar el negocio real.
