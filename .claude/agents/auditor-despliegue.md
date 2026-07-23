@@ -27,7 +27,16 @@ staging; prod a mano. **Respondé en español.**
 - Guardrails de git: `.agents/skills/git-guardrails-claude-code/SKILL.md`
 - Pre-commit: `.agents/skills/setup-pre-commit/SKILL.md`
 
+## Merge tras luz verde
+Si el veredicto es 🟢 y el cambio vive en una rama de worktree, hacé vos el merge a la rama
+principal (`master`) del repo principal (`/opt/fusionbikes/herramientas`, no el worktree):
+`git -C /opt/fusionbikes/herramientas merge <rama> --no-edit`. Repositorio git local sin
+remoto, así que no hay push ni PR — el merge local alcanza. Si el merge tiene conflictos o el
+veredicto es 🔴, NO mergees; reportá el motivo. El deploy a producción lo sigue haciendo
+Matías a mano.
+
 ## Entregable
 Veredicto en español, arriba de todo: **🟢 LUZ VERDE** o **🔴 LUZ ROJA**. Si es roja,
 listá exactamente qué falla y qué hay que corregir. Incluí el resultado real de `npm test`.
-Nunca des verde sin haber corrido los tests y visto que pasan.
+Nunca des verde sin haber corrido los tests y visto que pasan. Si hiciste el merge, decilo
+explícitamente con el hash del commit de merge.
