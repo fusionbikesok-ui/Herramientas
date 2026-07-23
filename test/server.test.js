@@ -52,6 +52,14 @@ describe('server', () => {
     expect(scanner.status).toBe(200);
   });
 
+  it('redirects the root (/) to /herramientas/home/', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const res = await request(app).get('/').redirects(0);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('/herramientas/home/');
+  });
+
   it('rejects API requests without sesión', async () => {
     const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
