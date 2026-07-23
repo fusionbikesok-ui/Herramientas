@@ -68,6 +68,14 @@ export function computarCruce(db) {
       nombre: wc.nombre,
       sku: wc.sku,
       stock_wc: wc.stock,
+      // Campos de catalogo_cache: así el frontend puede filtrar/ordenar estas filas
+      // con el mismo set de criterios que las pestañas basadas en el catálogo WC.
+      marca: wc.marca ?? null,
+      categorias_json: wc.categorias_json ?? null,
+      precio: wc.precio ?? null,
+      img: wc.img ?? null,
+      gtin: wc.gtin ?? null,
+      actualizado_en: wc.actualizado_en ?? null,
       ml_title: m.ml_title,
       ml_item_id: m.ml_item_id,
       ml_var_id: m.ml_variation_id,
@@ -76,8 +84,19 @@ export function computarCruce(db) {
     });
   }
 
-  // SOLO ML: sin SKU o SKU inexistente en WC.
-  const solo_ml = mlItems.filter((m) => !m.ml_sku || !wcPorSku.has(m.ml_sku));
+  // SOLO ML: sin SKU o SKU inexistente en WC. No tiene contraparte en catalogo_cache,
+  // así que los campos de WC (marca/categorias/precio/…) quedan en null: no aplican.
+  const solo_ml = mlItems
+    .filter((m) => !m.ml_sku || !wcPorSku.has(m.ml_sku))
+    .map((m) => ({
+      ...m,
+      marca: null,
+      categorias_json: null,
+      precio: null,
+      img: null,
+      gtin: null,
+      actualizado_en: null,
+    }));
 
   // PAUSADAS: de en_ambos, las que no están activas.
   const pausadas = en_ambos.filter((r) => !esActivaMl(r.ml_status));
