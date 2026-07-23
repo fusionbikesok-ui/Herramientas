@@ -161,22 +161,27 @@ export function coberturaRouter(db) {
       ORDER BY c.nombre
     `).all();
 
-    // Solo en WC: productos sin ningún match en ML (activo)
+    // Solo en WC: productos sin ningún match en ML (activo).
+    // Antes esto usaba un NOT EXISTS correlacionado por cada fila de catalogo_cache
+    // (~4900 x ~4900 = escaneo cruzado, ~853ms medidos). Ahora traemos los SKUs con
+    // decisión activa a un Set en memoria y filtramos en JS: mismo resultado, unos ms.
+    const skusDecididos = new Set(
+      db.prepare(
+        "SELECT DISTINCT sku FROM sku_matcher_decisiones WHERE accion != 'omitir' AND sku IS NOT NULL AND sku != ''"
+      ).all().map((d) => d.sku)
+    );
+
     const soloWc = db.prepare(`
       SELECT c.id_woo, c.nombre, c.sku, c.stock, c.tipo, c.categorias_json
       FROM catalogo_cache c
-      WHERE (c.sku IS NULL OR c.sku = ''
-        OR NOT EXISTS (
-          SELECT 1 FROM sku_matcher_decisiones d
-          WHERE d.sku = c.sku AND d.accion != 'omitir'
-        )
-      )
-      AND c.tipo != 'variable'
+      WHERE c.tipo != 'variable'
       ORDER BY c.nombre
-    `).all().map(({ categorias_json, ...row }) => ({
-      ...row,
-      no_vendible: esNoVendible({ categorias_json }) ? 1 : 0,
-    }));
+    `).all()
+      .filter((c) => c.sku == null || c.sku === '' || !skusDecididos.has(c.sku))
+      .map(({ categorias_json, ...row }) => ({
+        ...row,
+        no_vendible: esNoVendible({ categorias_json }) ? 1 : 0,
+      }));
 
     // Solo en ML: matches que apuntan a un SKU que ya no existe en WC
     const soloMl = db.prepare(`
