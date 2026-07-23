@@ -10,7 +10,7 @@
  * la página, reemplazando su bloque :root local. Los valores son idénticos a los que
  * cada página tenía, así el render queda igual pixel a pixel.
  *
- * OJO: algunas páginas usan la MISMA variable con OTRO valor (--muted #6B7A9B,
+ * OJO: algunas páginas usan la MISMA variable con OTRO valor (ej. --muted #7A87A3,
  * --amber #F5B942 / #F59E0B, opacidades -dim .10/.08). Esas NO enlazan este archivo:
  * conservan su :root local para no cambiar su color. No agregar acá esos valores en
  * conflicto.

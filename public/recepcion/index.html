@@ -1056,7 +1056,6 @@ function mostrarStatus(id, tipo, msg) {
   var seg = (location.pathname.match(/\/herramientas\/([a-z0-9-]+)\//)||[])[1] || '';
   var tool = seg === 'sync-detalle' ? 'sync-ml' : seg;
   fetch('/api/auth/me').then(function(r){
-    if (r.status === 401) { location.href = '/herramientas/login/?next=' + encodeURIComponent(location.pathname + location.search); throw ''; }
     return r.json();
   }).then(function(d){
     if (!d || !d.ok) return;
