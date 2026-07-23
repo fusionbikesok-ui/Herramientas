@@ -536,22 +536,52 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
 }
 
 /**
- * Verifica el neto del vendedor antes de reactivar. Trae precio/categoría/listing/envío del item
- * (un GET) y, por cada variación mapeada, compara el neto contra el precio web. Si alguna queda
- * >5% por debajo (veredicto 'bajo') devuelve el detalle del bloqueo.
+ * Revalida en vivo el item antes de reactivar y verifica el neto del vendedor. Trae en un solo GET
+ * status/sub_status + precio/categoría/listing/envío del item y:
+ *  1) Revalida el estado real en ML: la lista de "reactivables" sale del caché local, y entre que
+ *     se arma y el usuario confirma el lote el vendedor pudo reactivar o pausar manualmente la
+ *     publicación. Si ya no está pausada, o si quedó pausada por el vendedor (paused_by_seller),
+ *     se omite (no es un error ni un bloqueo por margen: es un skip por dato fresco).
+ *  2) Por cada variación mapeada compara el neto contra el precio web. Si alguna queda >5% por
+ *     debajo (veredicto 'bajo') devuelve el detalle del bloqueo.
+ *
+ * Devuelve:
+ *  - null  → seguir adelante con la reactivación.
+ *  - { omitido: true, motivo } → omitir sin error (revalidación de estado en vivo).
+ *  - { error, ... } → bloqueo (por neto o fail-closed).
  *
  * Bloquea también (fail-closed) si no se pudo consultar el item en ML, si falta el precio web
  * mapeado o si no se pudo calcular la comisión: sin esos datos no hay forma de verificar el
- * margen, y dejar pasar la reactivación en ese caso anularía la protección en silencio.
+ * margen, y dejar pasar la reactivación en ese caso anularía la protección en silencio. La
+ * revalidación de estado es igual de fail-closed: si el GET falla, no reactivamos.
  */
 async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
   const resp = await mlFetch(db, mlCfg, 'get',
-    `/items/${itemId}?attributes=id,price,category_id,listing_type_id,shipping,variations`);
+    `/items/${itemId}?attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`);
   await sleep(ML_CALL_DELAY_MS);
   if (resp.status !== 200 || !resp.data) {
     return { error: 'No se pudo consultar el precio en ML — reintentá', clave: null, neto: null, precio_web: null, deficitPct: null };
   }
   const item = resp.data;
+
+  // 0) Revalidación de estado en vivo (mismo GET, sin llamada extra a ML).
+  //    Fail-closed: si ML devolvió 200 pero sin el campo status (respuesta parcial/anómala),
+  //    no lo tratamos como skip benigno — bloqueamos, porque no podemos afirmar que sigue pausada.
+  if (item.status == null) {
+    return { error: 'ML no devolvió el estado de la publicación — reintentá', clave: null, neto: null, precio_web: null, deficitPct: null };
+  }
+  const subStatus = Array.isArray(item.sub_status) ? item.sub_status.join(',') : String(item.sub_status ?? '');
+  if (item.status !== 'paused') {
+    // Ya no está pausada (p. ej. alguien la reactivó a mano): actualizar el caché para que
+    // salga de la lista de reactivables y no se reintente en loop.
+    return { omitido: true, motivo: 'Ya no está pausada en ML, se omitió', cacheStatus: item.status, cacheSubStatus: subStatus };
+  }
+  if (subStatus.includes('paused_by_seller')) {
+    // El vendedor la pausó manualmente después de armar la lista: refrescar sub_status en el
+    // caché para que getReactivablesRows deje de listarla (el filtro excluye paused_by_seller).
+    return { omitido: true, motivo: 'Pausada manualmente por el vendedor, se omitió por seguridad', cacheStatus: 'paused', cacheSubStatus: subStatus };
+  }
+
   const freeShipping = !!item.shipping?.free_shipping;
   const caches = { fee: new Map(), envio: new Map() };
 
@@ -583,9 +613,12 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
 
 /**
  * Reactiva en ML las publicaciones indicadas: empuja el stock de cada variación
- * mapeada y luego pasa la publicación a 'active'. Revalida en el servidor que
- * sigan pausadas por out_of_stock (no confía en el cliente). Procesa un lote
- * acotado para no chocar el timeout de nginx. Devuelve resultado por publicación.
+ * mapeada y luego pasa la publicación a 'active'. Revalida en el servidor, contra ML en vivo,
+ * que sigan pausadas por out_of_stock y que el vendedor no las haya reactivado (status active)
+ * ni pausado manualmente (paused_by_seller) desde que se armó la lista; en esos casos las omite
+ * y refresca el caché local para no reintentarlas en loop (no confía en el cliente ni en el
+ * caché stale). Procesa un lote acotado para no chocar el timeout de nginx. Devuelve resultado
+ * por publicación.
  */
 export async function reactivarItems(db, mlCfg, itemIds) {
   const LOTE_MAX = 50;
@@ -603,11 +636,20 @@ export async function reactivarItems(db, mlCfg, itemIds) {
   for (const [itemId, variaciones] of porItem) {
     let error = null;
     try {
-      // 0) Bloqueo por neto: no reactivar si el neto (precio − comisión − envío) queda >5%
-      //    por debajo del precio web de alguna variación mapeada. Server-side (no confía en el cliente).
+      // 0) Revalidación en vivo + bloqueo por neto (un solo GET del item). Omite si ya no está
+      //    pausada o si el vendedor la pausó manualmente; bloquea si el neto queda >5% por debajo
+      //    del precio web de alguna variación mapeada. Server-side (no confía en el cliente).
       const bloqueo = await chequearNetoReactivar(db, mlCfg, itemId, variaciones);
       if (bloqueo) {
-        resultados.push({ item_id: itemId, ok: false, bloqueado: true, ...bloqueo });
+        if (bloqueo.omitido) {
+          // Refrescar el caché local con el estado real de ML para sacarla de reactivables y
+          // que el usuario no la reintente en loop (siempre "omitida") en la próxima carga.
+          const refrescar = db.prepare('UPDATE ml_publicaciones_cache SET status=?, sub_status=? WHERE clave = ?');
+          for (const v of variaciones) refrescar.run(bloqueo.cacheStatus, bloqueo.cacheSubStatus, v.clave);
+          resultados.push({ item_id: itemId, ok: false, omitido: true, motivo: bloqueo.motivo });
+        } else {
+          resultados.push({ item_id: itemId, ok: false, bloqueado: true, ...bloqueo });
+        }
         continue;
       }
 
