@@ -33,8 +33,12 @@ contexto.
 desplegar o dar por completo un cambio → auditoría de código + todos los tests verdes
 (`npm test`) + UI responsive sin nada oculto.
 
-## Cuenta de prueba para agentes de UI
+## Cuentas de prueba para agentes de UI
 
 Para que `probador-e2e` / `auditor-despliegue` puedan loguearse solos: usuario `auditor` /
 clave `Auditor2026!` (cuenta admin, sembrada en `data/fusion.sqlite`). Es solo para testing
 automatizado — no usarla para operar el negocio real.
+
+Para probar permisos limitados/rutas protegidas: usuario `auditor_limitado` / clave
+`AuditorLtd2026!` (no-admin, solo lectura en Consulta de Precios; ver `routes/usuarios.js`
+para reasignarle permisos si hace falta cubrir otra herramienta). También solo para testing.
