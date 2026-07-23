@@ -87,7 +87,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
 
   app.use('/api/woo', wooRouter(db, wooCfg));
   app.use('/api/gemini', geminiRouter(geminiKey));
-  app.use('/api/nuevos-productos', nuevosProductosRouter(geminiKey));
+  app.use('/api/nuevos-productos', nuevosProductosRouter(geminiKey, db));
   app.use('/api/mapeo', mapeoRouter(db));
   app.use('/api/csv', csvRouter());
   app.use('/api/matcher', matcherRouter(db, syncCfg));

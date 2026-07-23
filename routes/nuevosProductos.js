@@ -1,6 +1,7 @@
 import express from 'express';
 import { llamarGemini, parseJsonArrayText } from './gemini.js';
-import { CATEGORIAS_FB, PROMPT_BATCH } from '../lib/categorias.js';
+import { CATEGORIAS_FB, armarPromptBatch } from '../lib/categorias.js';
+import { parseCategorias } from '../lib/modelos/producto.js';
 
 export function tituloCase(palabra) {
   if (!palabra) return '';
@@ -11,23 +12,56 @@ export function armarTitulo(tipo, marca, modelo, dato) {
   return [tipo, marca, modelo, dato].filter(Boolean).join(' ').trim();
 }
 
-export async function analizarProductosNuevosBatch(geminiKey, productos) {
+/**
+ * Devuelve las categorías reales/actuales de WooCommerce leyendo la columna
+ * categorias_json de catalogo_cache. Cada fila es un array JSON de categorías
+ * PLANAS (un nombre por nivel, ej "BICICLETAS POR MARCA" y "BICICLETAS TREK"
+ * por separado — NO rutas "PADRE > HIJO"). Aplana todas las filas y devuelve
+ * los valores únicos ordenados alfabéticamente. Es la misma fuente en vivo que
+ * usan Cobertura/Matcher/Preparación, refrescada por el sync periódico
+ * (refrescarCatalogo en routes/woo.js).
+ *
+ * Si el catálogo está vacío o el parseo no arroja nada, cae al array estático
+ * CATEGORIAS_FB (con un console.warn para distinguir catálogo vacío legítimo de
+ * un sync roto).
+ */
+export function categoriasReales(db) {
+  const set = new Set();
+  const filas = db.prepare("SELECT categorias_json FROM catalogo_cache WHERE categorias_json IS NOT NULL AND categorias_json <> ''").all();
+  for (const fila of filas) {
+    for (const cat of parseCategorias(fila.categorias_json)) {
+      if (typeof cat === 'string' && cat.trim()) set.add(cat.trim());
+    }
+  }
+  if (set.size === 0) {
+    console.warn('[nuevos-productos] catalogo_cache sin categorías; usando fallback CATEGORIAS_FB. Revisar el sync de Woo.');
+    return [...CATEGORIAS_FB];
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, 'es'));
+}
+
+export async function analizarProductosNuevosBatch(geminiKey, productos, categoriasDisponibles) {
   const text = await llamarGemini(geminiKey, {
-    contents: [{ parts: [{ text: `${PROMPT_BATCH}\n\nProductos:\n${JSON.stringify(productos)}` }] }]
+    contents: [{ parts: [{ text: `${armarPromptBatch(categoriasDisponibles)}\n\nProductos:\n${JSON.stringify(productos)}` }] }]
   });
   return parseJsonArrayText(text);
 }
 
-export function nuevosProductosRouter(geminiKey) {
+export function nuevosProductosRouter(geminiKey, db) {
   const router = express.Router();
 
   router.get('/categorias', (req, res) => {
-    res.json({ ok: true, categorias: CATEGORIAS_FB });
+    try {
+      res.json({ ok: true, categorias: categoriasReales(db) });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   router.post('/analizar', async (req, res) => {
     try {
-      const fichas = await analizarProductosNuevosBatch(geminiKey, req.body.productos);
+      const categorias = categoriasReales(db);
+      const fichas = await analizarProductosNuevosBatch(geminiKey, req.body.productos, categorias);
       const conTitulo = fichas.map(f => ({ ...f, titulo: armarTitulo(f.ti, f.m, f.mo, f.da) }));
       res.json({ ok: true, fichas: conTitulo });
     } catch (e) {
