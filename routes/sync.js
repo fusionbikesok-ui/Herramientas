@@ -1099,6 +1099,19 @@ export function syncRouter(db, cfg) {
     });
   });
 
+  // Conteo rápido de reactivables (solo lee el caché local, sin consultar precios en ML).
+  // Lo usa el frontend para mostrar "Evaluando N publicaciones…" antes de pedir el detalle
+  // completo (que sí evalúa precios en ML y por eso tarda unos segundos).
+  router.get('/reactivables/conteo', (req, res) => {
+    try {
+      const rows = getReactivablesRows(db);
+      const totalPublicaciones = new Set(rows.map(r => r.item_id)).size;
+      res.json({ ok: true, totalPublicaciones, totalVariaciones: rows.length });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // Publicaciones pausadas por out_of_stock con stock web disponible, agrupadas por publicación.
   // Incluye precio ML/neto vivo (si ML está configurado) para que el usuario vea de entrada
   // si el precio quedó mal puesto, sin tener que intentar reactivar primero.
@@ -1149,10 +1162,15 @@ export function syncRouter(db, cfg) {
     _reactivarEnCurso = true;
     try {
       const r = await reactivarItems(db, mlCfg, itemIds.map(String));
-      res.json({ ok: true, ...r });
+      // El cliente puede haber cancelado (AbortController) y cerrado la conexión mientras
+      // este chunk terminaba de procesarse en ML. En ese caso no intentamos escribir la
+      // respuesta (rompería con un stream ya cerrado); igual el trabajo del chunk se completó.
+      if (!res.writableEnded) res.json({ ok: true, ...r });
     } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
+      if (!res.writableEnded) res.status(500).json({ ok: false, error: e.message });
     } finally {
+      // Pase lo que pase (incluida una cancelación del cliente a mitad de camino) el candado
+      // se libera acá, así el próximo lote no queda bloqueado por una reactivación fantasma.
       _reactivarEnCurso = false;
     }
   });

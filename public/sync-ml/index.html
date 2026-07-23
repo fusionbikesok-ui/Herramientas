@@ -121,6 +121,21 @@ async function cargarReactivables(){
   var box=document.getElementById('reactivar-box');
   if(!box)return;
   try{
+    // Paso 1 (rápido, solo caché local): conteo de candidatas para mostrar progreso real.
+    // Evita el spinner ciego mientras el paso 2 evalúa precios en ML (lo que tarda).
+    try{
+      var rc=await fetch('/api/sync/reactivables/conteo');
+      var dc=await rc.json();
+      if(dc.ok){
+        var loading=box.querySelector('.loading');
+        if(loading){
+          loading.textContent=dc.totalPublicaciones>0
+            ? ('Evaluando '+n(dc.totalPublicaciones)+' publicación(es) — verificando precios en ML (puede tardar unos segundos)…')
+            : 'Verificando publicaciones pausadas…';
+        }
+      }
+    }catch(e){/* el conteo es cosmético: si falla, seguimos al detalle igual */}
+    // Paso 2 (lento): detalle completo con precio/neto vivo desde ML.
     var r=await fetch('/api/sync/reactivables');
     var d=await r.json();
     if(!d.ok)throw new Error(d.error||'error');
@@ -167,12 +182,20 @@ function renderReactivables(d){
     h+='</tr>';
   });
   h+='</tbody></table></div>';
-  h+='<div class="acciones"><button class="btn" id="btn-react" onclick="reactivarSel()">Reactivar seleccionadas</button></div>';
+  h+='<div class="acciones"><button class="btn" id="btn-react" onclick="reactivarSel()">Reactivar seleccionadas</button>'
+   +'<button class="btn sec" id="btn-react-cancel" onclick="cancelarReactivar()" style="display:none">Cancelar</button></div>';
   h+='<div class="msg" id="react-msg"></div>';
   return h;
 }
 
 function toggleAll(cb){document.querySelectorAll('.chk-item').forEach(function(x){x.checked=cb.checked;});}
+
+// Controller del lote en curso: permite cancelar los chunks que aún no se dispararon.
+var reactivarCtrl=null;
+
+function cancelarReactivar(){
+  if(reactivarCtrl)reactivarCtrl.abort();
+}
 
 async function reactivarSel(){
   var sel=[...document.querySelectorAll('.chk-item:checked')].map(function(x){return x.value;});
@@ -180,29 +203,50 @@ async function reactivarSel(){
   if(!sel.length){msg.style.color='var(--amber)';msg.textContent='No seleccionaste ninguna publicación.';return;}
   if(!confirm('Vas a reactivar '+sel.length+' publicación(es) en MercadoLibre.\n\nSe les empuja el stock actual de la web y pasan a estado activo. ¿Confirmás?'))return;
   var btn=document.getElementById('btn-react');btn.disabled=true;
-  var CHUNK=10,okTotal=0,errTotal=0,omitTotal=0,fallos=[],omitidos=[];
+  var btnCancel=document.getElementById('btn-react-cancel');
+  if(btnCancel){btnCancel.style.display='';btnCancel.disabled=false;}
+  reactivarCtrl=new AbortController();
+  var CHUNK=10,okTotal=0,errTotal=0,omitTotal=0,noProcTotal=0,fallos=[],omitidos=[];
+  var cancelado=false;
   msg.style.color='var(--muted)';
   try{
     for(var i=0;i<sel.length;i+=CHUNK){
-      msg.textContent='Reactivando… '+Math.min(i+CHUNK,sel.length)+'/'+sel.length+' (puede tardar, no cierres la pestaña)';
-      var r=await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:sel.slice(i,i+CHUNK)})});
-      var d=await r.json();
-      if(!d.ok)throw new Error(d.error||'error');
-      (d.resultados||[]).forEach(function(x){
-        if(x.ok){okTotal++;}
-        else if(x.omitido){omitTotal++;if(omitidos.length<8)omitidos.push(x.item_id+': '+(x.motivo||'omitida'));}
-        else{errTotal++;if(fallos.length<8)fallos.push(x.item_id+': '+(x.error||'error'));}
-      });
+      // Si el usuario canceló antes de disparar este chunk, contamos lo que queda como
+      // "no procesado por cancelación" (estado distinto de omitido/error) y cortamos.
+      if(reactivarCtrl.signal.aborted){cancelado=true;noProcTotal=sel.length-i;break;}
+      msg.textContent='Reactivando… '+Math.min(i+CHUNK,sel.length)+'/'+sel.length+' (podés cancelar; los que ya se están procesando terminan)';
+      try{
+        var r=await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:sel.slice(i,i+CHUNK)}),signal:reactivarCtrl.signal});
+        var d=await r.json();
+        if(!d.ok)throw new Error(d.error||'error');
+        (d.resultados||[]).forEach(function(x){
+          if(x.ok){okTotal++;}
+          else if(x.omitido){omitTotal++;if(omitidos.length<8)omitidos.push(x.item_id+': '+(x.motivo||'omitida'));}
+          else{errTotal++;if(fallos.length<8)fallos.push(x.item_id+': '+(x.error||'error'));}
+        });
+      }catch(e){
+        // AbortError: el chunk en curso se canceló del lado del cliente. El backend puede
+        // terminar de procesarlo igual (no se interrumpe un PUT a ML a mitad), pero como no
+        // sabemos su resultado lo contamos, junto con los chunks restantes, como no procesados.
+        if(e.name==='AbortError'){cancelado=true;noProcTotal=sel.length-i;break;}
+        throw e;
+      }
     }
-    msg.style.color=(errTotal||omitTotal)?'var(--amber)':'var(--green)';
-    msg.textContent='✓ Reactivadas '+okTotal
+    var hayPend=(errTotal||omitTotal||noProcTotal);
+    msg.style.color=hayPend?'var(--amber)':'var(--green)';
+    msg.textContent=(cancelado?'⚠ Cancelado. ':'✓ ')+'Reactivadas '+okTotal
       +(omitTotal?(' · '+omitTotal+' omitida(s): '+omitidos.join(' | ')):'')
       +(errTotal?(' · '+errTotal+' con error: '+fallos.join(' | ')):'')
+      +(noProcTotal?(' · '+noProcTotal+' sin procesar por cancelación'):'')
       +'. Actualizando estado…';
     await cargar();
   }catch(err){
     msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
-  }finally{btn.disabled=false;}
+  }finally{
+    reactivarCtrl=null;
+    btn.disabled=false;
+    if(btnCancel){btnCancel.style.display='none';btnCancel.disabled=false;}
+  }
 }
 
 function render(d){
