@@ -30,14 +30,14 @@
   .conteo{font-size:12px;color:var(--muted2);margin:2px 2px 12px;}
 
   .lista{display:flex;flex-direction:column;gap:10px;}
-  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:13px;display:flex;gap:12px;transition:opacity .3s,border-color .2s;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:13px;display:flex;gap:12px;min-width:0;transition:opacity .3s,border-color .2s;}
   .card.ok{border-color:rgba(52,211,153,.5);}
   .card.saliendo{opacity:0;}
   .card img{width:72px;height:72px;border-radius:10px;object-fit:cover;background:var(--panel2);border:1px solid var(--border);flex-shrink:0;}
   .card .noimg{width:72px;height:72px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted2);font-size:10px;text-align:center;}
   .card .info{min-width:0;flex:1;}
   .card .marca{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--azul);}
-  .card .tit{font-size:14px;font-weight:700;line-height:1.25;margin:1px 0 4px;}
+  .card .tit{font-size:14px;font-weight:700;line-height:1.25;margin:1px 0 4px;overflow-wrap:anywhere;}
   .card .meta{font-size:11.5px;color:var(--muted2);font-family:ui-monospace,Menlo,monospace;}
   .card .gtin-actual{display:inline-block;margin-top:5px;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:rgba(251,191,36,.14);color:var(--amber);font-family:ui-monospace,monospace;}
   .scanbox{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;}

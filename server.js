@@ -64,6 +64,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/vendor', express.static(path.join(__dirname, 'public/vendor')));
   app.use('/lib', express.static(path.join(__dirname, 'public/lib')));
 
+  // Raíz → home (que a su vez redirige a login si no hay sesión).
+  app.get('/', function (req, res) { res.redirect('/herramientas/home/'); });
+
   // Auth: público (login) + endpoints de sesión. NO pasa por requireAuth.
   app.use('/api/auth', authRouter(db));
 

@@ -735,7 +735,12 @@ function render(){
     }
 
     lista = datos.faltantes.filter(function(r){ return filtrar(r.nombre, r.sku, ''); });
-    if(!lista.length){ document.getElementById('lista').innerHTML = html + '<div class="empty" style="color:var(--green)">✓ No hay faltantes: todos los productos vendibles están en ML.</div>'; return; }
+    if(!lista.length){
+      var msgVacio = datos.faltantes.length
+        ? '<div class="empty">Sin resultados para tu búsqueda.</div>'
+        : '<div class="empty" style="color:var(--green)">✓ No hay faltantes: todos los productos vendibles están en ML.</div>';
+      document.getElementById('lista').innerHTML = html + msgVacio; return;
+    }
     html += '<div class="section-label">' + lista.length + ' productos vendibles (stock&gt;0) sin publicación en MercadoLibre</div>';
     html += lista.map(function(r){
       var cats = parseCats(r.categorias_json);
@@ -815,7 +820,6 @@ function render(){
   var seg = (location.pathname.match(/\/herramientas\/([a-z0-9-]+)\//)||[])[1] || '';
   var tool = seg === 'sync-detalle' ? 'sync-ml' : seg;
   fetch('/api/auth/me').then(function(r){
-    if (r.status === 401) { location.href = '/herramientas/login/?next=' + encodeURIComponent(location.pathname + location.search); throw ''; }
     return r.json();
   }).then(function(d){
     if (!d || !d.ok) return;

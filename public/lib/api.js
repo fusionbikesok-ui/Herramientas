@@ -10,8 +10,9 @@
  * que las páginas venían inyectando sobre todos los fetch. `installAuth()` reproduce
  * EXACTAMENTE ese override.
  *
- * El manejo de 401 de cada página vive embebido en su "permission-gate" (/api/auth/me),
- * que hace más que un fetch simple, por eso NO se centraliza acá.
+ * El manejo de 401 SÍ se centraliza acá: el override de window.fetch de installAuth()
+ * detecta cualquier respuesta 401 (sesión vencida o sin login) y redirige a
+ * /herramientas/login/?next=... . Así ninguna página necesita su propio handler de 401.
  */
 (function (root) {
   'use strict';
@@ -29,7 +30,17 @@
     window.fetch = function (url, o) {
       o = o || {};
       o.headers = Object.assign({ 'Authorization': 'Basic ' + token }, o.headers || {});
-      return _fetch(url, o);
+      return _fetch(url, o).then(function (r) {
+        // Manejo de 401 centralizado: si la sesión venció (o no hay login), redirigimos
+        // a login en vez de dejar que cada página muestre un error de "HTTP 401".
+        if (r.status === 401) {
+          window.location.href = '/herramientas/login/?next=' +
+            encodeURIComponent(window.location.pathname + window.location.search);
+          // Cortamos la cadena: la navegación descarga la página; evita el flash de error.
+          return new Promise(function () {});
+        }
+        return r;
+      });
     };
   }
 
