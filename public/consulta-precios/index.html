@@ -29,7 +29,8 @@
   .card .marca{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--azul);}
   .card .tit{font-size:15px;font-weight:700;line-height:1.25;margin:2px 0 4px;}
   .card .cat{font-size:12px;color:var(--muted);}
-  .card .precio{font-size:30px;font-weight:800;color:var(--green);margin-top:8px;font-variant-numeric:tabular-nums;}
+  .card .precio-rotulo{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:8px;}
+  .card .precio{font-size:30px;font-weight:800;color:var(--green);margin-top:1px;font-variant-numeric:tabular-nums;}
   .card .meta{font-size:11.5px;color:var(--muted2);font-family:ui-monospace,Menlo,monospace;margin-top:6px;}
   .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;margin-left:6px;}
   .b-sku{background:rgba(45,184,232,.14);color:var(--azul);}
@@ -130,6 +131,7 @@ function cardHtml(p, tipo){
       (p.marca ? '<div class="marca">'+esc(p.marca)+'</div>' : '') +
       '<div class="tit">'+esc(p.nombre)+badge+'</div>' +
       (cat ? '<div class="cat">'+cat+'</div>' : '') +
+      '<div class="precio-rotulo">Contado / Transf.</div>' +
       '<div class="precio">'+fmtPrecio(p.precio)+'</div>' +
       '<div class="meta">'+esc(p.sku)+' · stock '+(p.stock==null?'?':p.stock)+'</div>' +
     '</div></div>';

@@ -9,6 +9,7 @@
 
 import { Router } from 'express';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
+import { precioContado } from '../lib/mlPrecios.js';
 
 const now = () => new Date().toISOString();
 
@@ -18,12 +19,18 @@ export function pareceEan(codigo) {
   return /^\d+$/.test(s) && [8, 12, 13, 14].includes(s.length);
 }
 
-/** Fila de catalogo_cache → objeto liviano para la card de resultado. */
+/**
+ * Fila de catalogo_cache → objeto liviano para la card de resultado.
+ * `precio` es el precio de CONTADO/Transferencia (2/3 del de lista, ver precioContado),
+ * no el precio de lista guardado en catalogo_cache. Se mantiene el nombre `precio`
+ * (en vez de `precio_web` como en routes/precios.js) para no tocar el frontend, que
+ * ya lo consume como `p.precio` en varios lugares. La card lo rotula "Contado/Transf.".
+ */
 function productoParaCard(row) {
   const p = productoDesdeFilaCatalogo(row);
   return {
     sku: p.sku, nombre: p.nombre, marca: p.marca, categorias: p.categorias,
-    precio: p.precio, stock: p.stock, tipo: p.tipo, img: p.img,
+    precio: precioContado(p.precio), stock: p.stock, tipo: p.tipo, img: p.img,
   };
 }
 
