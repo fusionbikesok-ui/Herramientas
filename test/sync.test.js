@@ -290,16 +290,24 @@ describe('reactivación de pausadas por falta de stock', () => {
     seedPublicacion(db, { clave: 'MLA9|v9', itemId: 'MLA9', varId: 'v9', status: 'paused', subStatus: 'out_of_stock' });
     // GET item (precio 1000, sin envío gratis) + comisión 50 → neto 950 vs contado 900 (dentro de
     // tolerancia, no bloquea) + PUT stock -> 200 + PUT status active -> 200
+    let getItemCount = 0;
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-      if (/\/items\/MLA9\?/.test(url)) return { status: 200, data: { id: 'MLA9', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (method === 'get' && /\/items\/MLA9\?/.test(url)) {
+        getItemCount++;
+        return { status: 200, data: { id: 'MLA9', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      }
       return { status: 200, data: {}, headers: {} };
     });
 
     const r = await reactivarItems(db, ML_CFG, ['MLA9']);
     expect(r.procesados).toBe(1);
     expect(r.resultados[0].ok).toBe(true);
+    // La revalidación de estado reusa el mismo GET del chequeo de neto en el path exitoso completo:
+    // una sola consulta del item a ML aunque hubo push de stock + activación.
+    expect(getItemCount).toBe(1);
 
     // status en cache pasó a active
     const pub = db.prepare('SELECT status, sub_status FROM ml_publicaciones_cache WHERE clave=?').get('MLA9|v9');
@@ -324,7 +332,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-      if (/\/items\/MLA10\?/.test(url)) return { status: 200, data: { id: 'MLA10', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (/\/items\/MLA10\?/.test(url)) return { status: 200, data: { id: 'MLA10', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
       if (method === 'put' && /\/items\/MLA10\/variations\/v10$/.test(url)) return { status: 200, data: {}, headers: {} };
       if (method === 'put' && /\/items\/MLA10$/.test(url)) return { status: 400, data: { message: 'no se puede activar' }, headers: {} };
       return { status: 404, data: {}, headers: {} };
@@ -348,7 +356,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const url = cfg.url || '';
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
       if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
-      if (/\/items\/MLA11/.test(url)) return { status: 200, data: { id: 'MLA11', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, variations: [] }, headers: {} };
+      if (/\/items\/MLA11/.test(url)) return { status: 200, data: { id: 'MLA11', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, variations: [] }, headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -368,7 +376,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     seedPublicacion(db, { clave: 'MLA12|v12', itemId: 'MLA12', varId: 'v12', status: 'paused', subStatus: 'out_of_stock' });
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (/\/items\/MLA12/.test(url)) return { status: 200, data: { id: 'MLA12', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (/\/items\/MLA12/.test(url)) return { status: 200, data: { id: 'MLA12', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -388,7 +396,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       if (url.includes('/listing_prices')) return { status: 404, data: {}, headers: {} };
-      if (/\/items\/MLA14/.test(url)) return { status: 200, data: { id: 'MLA14', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (/\/items\/MLA14/.test(url)) return { status: 200, data: { id: 'MLA14', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -415,6 +423,129 @@ describe('reactivación de pausadas por falta de stock', () => {
     expect(r.resultados[0].ok).toBe(false);
     expect(r.resultados[0].bloqueado).toBe(true);
     expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA13|v13').status).toBe('paused');
+  });
+
+  it('reactivarItems: omite (no reactiva) si al momento de reactivar ya no está pausada en ML', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-15', 5);
+    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-15'").run();
+    seedDecision(db, 'MLA15|v15', 'FB-15');
+    // El caché local la tiene pausada por out_of_stock (así entró a la lista de reactivables)...
+    seedPublicacion(db, { clave: 'MLA15|v15', itemId: 'MLA15', varId: 'v15', status: 'paused', subStatus: 'out_of_stock' });
+    let getItemCount = 0, putCount = 0;
+    // ...pero en ML en vivo ya figura activa (alguien la reactivó manualmente).
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'get' && /\/items\/MLA15\?/.test(url)) {
+        getItemCount++;
+        return { status: 200, data: { id: 'MLA15', status: 'active', sub_status: [], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      }
+      if (method === 'put') { putCount++; }
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLA15']);
+    expect(r.resultados[0].ok).toBe(false);
+    expect(r.resultados[0].omitido).toBe(true);
+    expect(r.resultados[0].bloqueado).toBeUndefined();
+    expect(r.resultados[0].motivo).toMatch(/ya no está pausada/i);
+    // No se tocó ML: ni stock ni activación
+    expect(putCount).toBe(0);
+    // La revalidación reusa el GET del chequeo de neto: una sola consulta del item a ML
+    expect(getItemCount).toBe(1);
+    // El caché se refresca con el estado real (active) para sacarla de reactivables — sin log de reactivada
+    const pub15 = db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA15|v15');
+    expect(pub15.status).toBe('active');
+    expect(getReactivablesRows(db, ['MLA15'])).toHaveLength(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM sync_log WHERE estado='reactivada' AND clave='MLA15|v15'").get().n).toBe(0);
+  });
+
+  it('reactivarItems: omite (por seguridad) si el vendedor la pausó manualmente entre la carga y la reactivación', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-16', 5);
+    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-16'").run();
+    seedDecision(db, 'MLA16|v16', 'FB-16');
+    seedPublicacion(db, { clave: 'MLA16|v16', itemId: 'MLA16', varId: 'v16', status: 'paused', subStatus: 'out_of_stock' });
+    let putCount = 0;
+    // En vivo sigue pausada pero ahora con paused_by_seller (pausa manual reciente del vendedor).
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'get' && /\/items\/MLA16\?/.test(url)) {
+        return { status: 200, data: { id: 'MLA16', status: 'paused', sub_status: ['out_of_stock', 'paused_by_seller'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      }
+      if (method === 'put') { putCount++; }
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLA16']);
+    expect(r.resultados[0].ok).toBe(false);
+    expect(r.resultados[0].omitido).toBe(true);
+    expect(r.resultados[0].motivo).toMatch(/vendedor/i);
+    expect(putCount).toBe(0);
+    // Sigue pausada pero el caché ahora refleja paused_by_seller → sale de reactivables
+    const pub16 = db.prepare('SELECT status, sub_status FROM ml_publicaciones_cache WHERE clave=?').get('MLA16|v16');
+    expect(pub16.status).toBe('paused');
+    expect(pub16.sub_status).toContain('paused_by_seller');
+    expect(getReactivablesRows(db, ['MLA16'])).toHaveLength(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM sync_log WHERE estado='reactivada' AND clave='MLA16|v16'").get().n).toBe(0);
+  });
+
+  it('reactivarItems: bloquea (fail-closed) si ML responde 200 pero sin el campo status', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-17', 5);
+    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-17'").run();
+    seedDecision(db, 'MLA17|v17', 'FB-17');
+    seedPublicacion(db, { clave: 'MLA17|v17', itemId: 'MLA17', varId: 'v17', status: 'paused', subStatus: 'out_of_stock' });
+    let putCount = 0;
+    // Respuesta anómala: 200 pero sin status → no se puede afirmar que sigue pausada → bloquear, no omitir
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'get' && /\/items\/MLA17\?/.test(url)) {
+        return { status: 200, data: { id: 'MLA17', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      }
+      if (method === 'put') { putCount++; }
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLA17']);
+    expect(r.resultados[0].ok).toBe(false);
+    expect(r.resultados[0].bloqueado).toBe(true);
+    expect(r.resultados[0].omitido).toBeUndefined();
+    expect(putCount).toBe(0);
+    // No se tocó el caché: sigue pausada por out_of_stock (fail-closed, reintentable)
+    expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA17|v17').status).toBe('paused');
+  });
+
+  it('reactivarItems: omite (por seguridad) si ML devuelve sub_status como string (no array) con paused_by_seller', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-18', 5);
+    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-18'").run();
+    seedDecision(db, 'MLA18|v18', 'FB-18');
+    seedPublicacion(db, { clave: 'MLA18|v18', itemId: 'MLA18', varId: 'v18', status: 'paused', subStatus: 'out_of_stock' });
+    let putCount = 0;
+    // Algunas respuestas de ML traen sub_status como string simple en vez de array.
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'get' && /\/items\/MLA18\?/.test(url)) {
+        return { status: 200, data: { id: 'MLA18', status: 'paused', sub_status: 'paused_by_seller', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      }
+      if (method === 'put') { putCount++; }
+      return { status: 200, data: {}, headers: {} };
+    });
+
+    const r = await reactivarItems(db, ML_CFG, ['MLA18']);
+    expect(r.resultados[0].ok).toBe(false);
+    expect(r.resultados[0].omitido).toBe(true);
+    expect(r.resultados[0].motivo).toMatch(/vendedor/i);
+    expect(putCount).toBe(0);
+    const pub18 = db.prepare('SELECT status, sub_status FROM ml_publicaciones_cache WHERE clave=?').get('MLA18|v18');
+    expect(pub18.status).toBe('paused');
+    expect(pub18.sub_status).toContain('paused_by_seller');
+    expect(getReactivablesRows(db, ['MLA18'])).toHaveLength(0);
   });
 });
 
