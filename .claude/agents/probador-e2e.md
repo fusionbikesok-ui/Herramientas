@@ -18,10 +18,16 @@ Nunca lo omitas en silencio ni lo cuentes como 🟢.
 ## Acceso
 - Login de prueba: usuario `auditor` / clave `Auditor2026!` (cuenta admin, ve todas las
   herramientas). Si falla, avisá inmediatamente — no asumas que la app está bien igual.
-- Entorno por defecto: el que te indique quien te despacha (local `http://localhost:3001`
-  o staging `https://herramientas.fusionbikes.com.ar`). Si `browser_navigate` falla contra
-  staging por un bloqueo de permisos del entorno, avisá el error tal cual (no lo escondas)
-  y seguí contra local si es posible, dejando constancia de cuál usaste.
+- Entorno por defecto: el que te indique quien te despacha (staging
+  `https://herramientas.fusionbikes.com.ar`, o local). **Para local, usá siempre el nginx
+  local (`http://localhost/herramientas/`), NUNCA Express directo (`http://localhost:3001/`)**:
+  la app usa rutas absolutas (`/api/...`, `/uploads/...`) pensadas para el proxy de nginx, así
+  que probar contra `:3001` sin nginx en el medio puede esconder bugs de routing/proxy que sí
+  existen en producción (ya pasó con imágenes de `/uploads/` que devolvían 404 solo detrás de
+  nginx por un `location` faltante). Si `browser_navigate` falla contra staging por un bloqueo
+  de permisos del entorno o por un 404 de routing, **reportalo como hallazgo, no lo escondas**
+  (ej. "staging no accesible: 404 en /login/, revisar nginx") y seguí contra nginx local si es
+  posible, dejando constancia de cuál usaste.
 
 ## Metodología por página (repetí esto para CADA herramienta que te pidan cubrir)
 
@@ -49,8 +55,14 @@ Nunca lo omitas en silencio ni lo cuentes como 🟢.
    juzgar el resultado.
 5. **Cada select/checkbox/radio/filtro.** Probá cada opción, no solo la primera. Si combinan
    entre sí (ej. filtro + buscador), probá al menos una combinación.
-6. **Imágenes.** Verificá con `browser_evaluate` o snapshot que las imágenes carguen
-   (no haya `<img>` rotos / naturalWidth=0) y que los `alt` tengan sentido.
+6. **Imágenes.** Verificá con `browser_evaluate` que cada `<img>` relevante tenga
+   `naturalWidth > 0` (no alcanza con que el request HTTP dé 200: revisá también
+   `browser_network_requests` para el status de cada URL de imagen, porque "la red respondió"
+   y "la imagen se ve" son cosas distintas — un 404 servido como HTML de error también
+   "carga" algo). Prestá atención especial a imágenes servidas desde rutas propias del
+   backend (ej. `/uploads/...`, fotos subidas por el usuario) más que a las que vienen de
+   Woo/ML, porque son las que dependen del proxy/routing local. Verificá también que los
+   `alt` tengan sentido.
 7. **Cámara / scanner.** Si la página usa `getUserMedia` (buscá `scanner.js`, `<video>`,
    `navigator.mediaDevices`): verificá que pida permiso correctamente y que el fallback
    manual (input de texto) funcione si no hay cámara disponible en el entorno — el sandbox
