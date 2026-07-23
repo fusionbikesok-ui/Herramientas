@@ -962,6 +962,33 @@ describe('vista de detalle', () => {
     expect(byItem['MLAT2'].neto).toBe(900);
     expect(byItem['MLAT2'].precio_web).not.toBeNull();
   });
+
+  it('GET /reactivables/conteo: devuelve el total de publicaciones/variaciones sin consultar ML', async () => {
+    // Dos publicaciones reactivables (una con dos variaciones) → 2 publicaciones, 3 variaciones.
+    seedCatalogo(db, 'FB-C1', 5, { idWoo: 701 });
+    seedDecision(db, 'MLC1|v1', 'FB-C1');
+    seedPublicacion(db, { clave: 'MLC1|v1', itemId: 'MLC1', varId: 'v1', status: 'paused', subStatus: 'out_of_stock' });
+    seedCatalogo(db, 'FB-C2a', 5, { idWoo: 702 });
+    seedDecision(db, 'MLC2|v2', 'FB-C2a');
+    seedPublicacion(db, { clave: 'MLC2|v2', itemId: 'MLC2', varId: 'v2', status: 'paused', subStatus: 'out_of_stock' });
+    seedCatalogo(db, 'FB-C2b', 4, { idWoo: 703 });
+    seedDecision(db, 'MLC2|v3', 'FB-C2b');
+    seedPublicacion(db, { clave: 'MLC2|v3', itemId: 'MLC2', varId: 'v3', status: 'paused', subStatus: 'out_of_stock' });
+
+    const res = await request(app).get('/api/sync/reactivables/conteo');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.totalPublicaciones).toBe(2);
+    expect(res.body.totalVariaciones).toBe(3);
+    // No debe haber consultado ML para el conteo (es solo caché local).
+    expect(axios.request).not.toHaveBeenCalled();
+  });
+
+  it('GET /reactivables/conteo: sin candidatas devuelve ceros', async () => {
+    const res = await request(app).get('/api/sync/reactivables/conteo');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, totalPublicaciones: 0, totalVariaciones: 0 });
+  });
 });
 
 // ─── buscar-sku: filtro por tipo (bug de config-ml que excluía simple/variable) ──
