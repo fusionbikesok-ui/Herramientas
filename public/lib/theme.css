@@ -84,4 +84,27 @@
   /* Radios (pedidos / recepcion / stock) */
   --radius:    10px;
   --radius-lg: 16px;
+
+  --radius-pill: 999px;
+
+  /* Severidad semántica (panel "Requiere tu atención" del home).
+     Aliases sobre colores existentes — el significado no depende del nombre del color. */
+  --critical:    var(--red);
+  --critical-bg: var(--red-bg);
+  --critical-bd: var(--red-bd);
+  --warning:     var(--amber);
+  --warning-bg:  var(--amber-bg);
+  --warning-bd:  var(--amber-bd);
+  --success:     var(--green);
+  --success-bg:  var(--green-bg);
+  --success-bd:  var(--green-bd);
+
+  /* Foco visible (WCAG 2.2 — 2.4.7 / 2.4.13) */
+  --focus-color: var(--accent);
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
