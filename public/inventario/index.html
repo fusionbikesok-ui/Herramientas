@@ -67,6 +67,99 @@
   .empty{color:var(--muted);text-align:center;padding:14px;font-size:13px;}
 
   .placeholder{color:var(--muted);font-size:13px;padding:20px;text-align:center;}
+
+  /* ----- Vista Conteo ----- */
+  .conteo-barra{position:sticky;top:0;background:rgba(12,15,22,.96);backdrop-filter:blur(10px);z-index:5;
+       display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0 10px;margin:-14px 0 10px;}
+  .conteo-barra .txt{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .led{width:9px;height:9px;border-radius:50%;background:var(--warning);flex:0 0 auto;}
+  .led.on{background:var(--success);}
+  .chip-guardado{font-size:11px;font-weight:700;padding:3px 9px;border-radius:var(--radius-pill);
+       background:var(--success-bg);border:1px solid var(--success-bd);color:var(--success);opacity:0;transition:opacity .3s;flex:0 0 auto;}
+  .chip-guardado.on{opacity:1;}
+
+  #scan{width:100%;font-size:20px;font-weight:700;letter-spacing:.5px;padding:14px 12px;border-radius:12px;
+       border:2px solid var(--azul);background:var(--surface2);color:var(--txt);outline:none;
+       box-shadow:0 0 0 3px var(--accent-dim);margin-bottom:12px;}
+  #scan::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
+
+  .btn-camara{width:100%;min-height:var(--tap-min);margin-bottom:14px;background:var(--panel2);border:1px solid var(--line);
+       border-radius:10px;color:var(--txt);font-weight:700;font-size:14px;cursor:pointer;}
+
+  .contadores{display:flex;gap:8px;margin-bottom:14px;}
+  .contador{flex:1;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--azul);
+       border-radius:10px;padding:8px 10px;text-align:center;}
+  .contador .n{font-size:22px;font-weight:800;line-height:1;color:var(--azul)}
+  .contador .l{font-size:10px;color:var(--muted);margin-top:3px}
+
+  .chips-filtro{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center;}
+  .chip-filtro{min-height:32px;display:inline-flex;align-items:center;font-size:12px;font-weight:700;padding:6px 12px;
+       border-radius:var(--radius-pill);background:var(--chip-bg);border:1px solid var(--chip-bd);color:var(--chip-txt);cursor:pointer;}
+  .chip-filtro.on{background:var(--chip-on-bg);border-color:var(--chip-on-bd);color:var(--chip-on-txt);}
+  .btn-orden{margin-left:auto;font-size:12px;font-weight:700;padding:6px 12px;border-radius:var(--radius-pill);
+       background:var(--chip-bg);border:1px solid var(--chip-bd);color:var(--chip-txt);cursor:pointer;}
+  .btn-orden.on{background:var(--chip-on-bg);border-color:var(--chip-on-bd);color:var(--chip-on-txt);}
+
+  .fila-item{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:8px;
+       display:flex;align-items:center;gap:10px;}
+  .fila-item.unlinked{border-color:var(--state-unlinked);}
+  .fila-item .info{flex:1;min-width:0;}
+  .fila-item .cod{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;font-size:13px;color:var(--txt);
+       display:flex;align-items:center;gap:6px;}
+  .fila-item .cod .warn-ico{color:var(--state-unlinked);font-weight:800;}
+  .fila-item .nombre{font-size:13px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .fila-item .stockline{font-size:12px;color:var(--muted);margin-top:2px;}
+  .fila-item .diff{font-weight:800;}
+  .diff.pos{color:var(--diff-pos);}
+  .diff.neg{color:var(--diff-neg);}
+  .diff.zero{color:var(--diff-zero);}
+  .fila-item .acciones{display:flex;gap:6px;flex:0 0 auto;}
+  .fila-item .acciones button{min-width:38px;min-height:38px;border-radius:9px;border:1px solid var(--line);
+       background:var(--panel2);color:var(--txt);font-weight:800;font-size:14px;cursor:pointer;}
+  .fila-item .acciones button.plus{background:var(--azul);border-color:var(--azul);color:#06131C;}
+  .fila-item .acciones button.del{color:var(--danger);}
+  .fila-item .acciones button[disabled]{opacity:.35;cursor:not-allowed;}
+  .nota-limitacion{font-size:10px;color:var(--muted);flex-basis:100%;margin-top:4px;}
+  .fila-pendiente{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+       margin-bottom:8px;display:flex;align-items:center;gap:10px;}
+  .fila-pendiente .info{flex:1;min-width:0;}
+  .fila-pendiente .sku{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;font-weight:700;color:var(--muted);}
+  .fila-pendiente .nombre{font-size:13px;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .fila-pendiente button{min-height:38px;padding:0 12px;border-radius:9px;border:1px solid var(--line);
+       background:var(--panel2);color:var(--txt);font-weight:700;font-size:13px;cursor:pointer;}
+
+  .bottom-bar{position:sticky;bottom:0;background:rgba(12,15,22,.96);backdrop-filter:blur(10px);
+       border-top:1px solid var(--line);padding:10px 0 4px;margin-top:14px;}
+
+  /* ----- Sheet EAN nuevo ----- */
+  .sheet-veil{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:40;}
+  .sheet-veil.open{display:block;}
+  .sheet{position:fixed;left:0;right:0;bottom:0;background:var(--sheet-bg);border:1px solid var(--sheet-bd);
+       border-radius:16px 16px 0 0;padding:16px;max-height:80vh;overflow-y:auto;z-index:41;
+       transform:translateY(100%);transition:transform .2s ease-out;}
+  .sheet.open{transform:translateY(0);}
+  .sheet h3{margin:0 0 4px;font-size:15px;}
+  .sheet .ean-grande{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:24px;font-weight:800;
+       color:var(--azul);margin-bottom:14px;letter-spacing:1px;}
+  .resultado-buscar{min-height:52px;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;
+       border:1px solid var(--line);background:var(--panel2);margin-bottom:8px;cursor:pointer;width:100%;text-align:left;color:var(--txt);}
+  .resultado-buscar .sku{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;color:var(--sku);font-size:13px;}
+  .resultado-buscar .nombre{font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+  /* ----- Modal cámara (portado tal cual del index.html previo a la Task 6) ----- */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
+  .modal.open{display:flex;}
+  .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;max-width:480px;width:100%;position:relative;}
+  .modal-box video{width:100%;border-radius:10px;background:#000;display:block;}
+  .cam-viewport{position:relative;overflow:hidden;border-radius:10px;background:#000;}
+  .cam-viewport video{transform-origin:center center;transition:transform .12s ease-out;}
+  .cam-zoom{display:flex;align-items:center;gap:10px;margin-top:10px;}
+  .cam-zoom-lbl{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--azul);}
+  .cam-zoom input[type=range]{flex:1;accent-color:var(--azul);height:22px;cursor:pointer;}
+  .modal-box .sub{color:var(--muted);font-size:13px;margin:10px 0;text-align:center;}
+  .modal-box .cerrarcam{margin-top:6px;width:100%;font-size:14px;font-weight:700;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer;}
+  .cam-toast{position:absolute;left:16px;right:16px;top:26px;background:rgba(52,211,153,.94);color:#06231A;font-weight:800;font-size:15px;text-align:center;padding:8px 10px;border-radius:9px;pointer-events:none;opacity:0;transition:opacity .2s;}
+  .cam-toast.show{opacity:1;}
 </style>
 </head>
 <body>
@@ -117,14 +210,40 @@
     <button class="btn secondary" id="alcance-cancelar">Cancelar</button>
   </div>
 
-  <!-- Vista 3: Conteo (placeholder — Task 7) -->
+  <!-- Vista 3: Conteo -->
   <div class="vista" id="vista-conteo">
-    <div class="placeholder">Vista de conteo — se completa en la Task 7.</div>
+    <div class="conteo-barra">
+      <span class="txt"><span class="led" id="conteo-led"></span><span id="conteo-titulo">Contando</span></span>
+      <span class="chip-guardado" id="conteo-guardado">Guardado</span>
+    </div>
+
+    <input id="scan" aria-label="Escanear código EAN o SKU" inputmode="none" autocomplete="off" autocorrect="off"
+           autocapitalize="off" spellcheck="false" autofocus placeholder="Escaneá un código (EAN o SKU)…">
+    <button class="btn-camara" id="btn-camara">📷 Escanear con cámara</button>
+
+    <div class="contadores">
+      <div class="contador"><div class="n" id="cont-contados">0</div><div class="l">Contados</div></div>
+      <div class="contador"><div class="n" id="cont-pendientes">0</div><div class="l">Pendientes</div></div>
+      <div class="contador"><div class="n" id="cont-diferencia">0</div><div class="l">Con diferencia</div></div>
+    </div>
+
+    <div class="chips-filtro">
+      <span class="chip-filtro" id="filtro-pendientes" data-filtro="pendientes">Pendientes</span>
+      <span class="chip-filtro on" id="filtro-contados" data-filtro="contados">Contados</span>
+      <span class="chip-filtro" id="filtro-todos" data-filtro="todos">Todos</span>
+      <button class="btn-orden" id="btn-orden-diff">Por diferencia</button>
+    </div>
+
+    <div id="conteo-lista"></div>
+
+    <div class="bottom-bar">
+      <button class="btn primary" id="btn-revisar">Revisar y cerrar</button>
+    </div>
   </div>
 
-  <!-- Vista 4: EAN nuevo (placeholder — Task 7) -->
+  <!-- Vista 4: EAN nuevo (bottom-sheet, se superpone a Conteo) -->
   <div class="vista" id="vista-ean-nuevo">
-    <div class="placeholder">Vista de EAN nuevo — se completa en la Task 7.</div>
+    <div class="placeholder">(el panel EAN nuevo es un sheet sobre la vista Conteo — ver más abajo)</div>
   </div>
 
   <!-- Vista 5: Revisión (placeholder — Task 8) -->
@@ -143,6 +262,28 @@
   </div>
 
 </main>
+
+<!-- Sheet: EAN nuevo (se abre sobre la vista Conteo, sin bloquear el input de escaneo) -->
+<div class="sheet-veil" id="ean-veil"></div>
+<div class="sheet" id="ean-sheet" role="dialog" aria-label="Asociar EAN nuevo">
+  <h3>EAN sin asociar</h3>
+  <div class="ean-grande" id="ean-sheet-codigo">—</div>
+  <label for="ean-sheet-buscar">Buscar producto por SKU o nombre</label>
+  <input type="text" id="ean-sheet-buscar" placeholder="Escribí para buscar…" autocomplete="off">
+  <div id="ean-sheet-resultados" style="margin-top:10px;"></div>
+  <button class="btn secondary" id="ean-sheet-despues" style="margin-top:6px;">Después</button>
+</div>
+
+<!-- Modal cámara (portado tal cual del index.html previo a la Task 6) -->
+<div class="modal" id="cam-modal">
+  <div class="modal-box">
+    <div class="cam-viewport"><video id="cam-video" autoplay playsinline muted></video></div>
+    <div class="cam-toast" id="cam-toast"></div>
+    <div class="cam-zoom"><span class="cam-zoom-lbl">Zoom</span><input type="range" id="cam-zoom" min="1" max="4" step="0.5" value="1"></div>
+    <p class="sub" id="cam-msg">Apuntá al código de barras…</p>
+    <button class="cerrarcam" id="bCamCerrar">Cerrar</button>
+  </div>
+</div>
 
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
@@ -166,6 +307,7 @@
     });
     if(nombre === 'inicio') cargarInicio();
     if(nombre === 'alcance') cargarAlcance();
+    if(nombre === 'conteo') cargarConteo();
   }
 
   // ----- Fecha relativa (no hay helper en format.js para esto) -----
@@ -326,6 +468,320 @@
     limpiarAlcanceForm();
     mostrarVista('inicio');
   });
+
+  // ----- Vista Conteo -----
+  var scanInput = document.getElementById('scan');
+  var conteoLed = document.getElementById('conteo-led');
+  var conteoTitulo = document.getElementById('conteo-titulo');
+  var conteoGuardado = document.getElementById('conteo-guardado');
+  var conteoLista = document.getElementById('conteo-lista');
+  var contContados = document.getElementById('cont-contados');
+  var contPendientes = document.getElementById('cont-pendientes');
+  var contDiferencia = document.getElementById('cont-diferencia');
+  var btnOrdenDiff = document.getElementById('btn-orden-diff');
+
+  var conteoData = { items: [], pendientes: [] };
+  var filtroActivo = 'contados';
+  var ordenPorDiferencia = false;
+
+  // Buffer de pistola HID: la pistola tipea muy rápido y remata con Enter, así
+  // que un submit por Enter alcanza para capturarla igual que al tipeo manual.
+  // Se mantiene además un timeout de "inactividad" por si el lector no manda Enter.
+  var scanBuffer = '';
+  var scanTimer = null;
+  function limpiarBufferEscaneo(){ scanBuffer = ''; clearTimeout(scanTimer); scanTimer = null; }
+
+  function sesionId(){ return state.sesion && state.sesion.id; }
+
+  function setGuardado(on){
+    conteoGuardado.classList.toggle('on', !!on);
+    if(on){
+      clearTimeout(setGuardado._t);
+      setGuardado._t = setTimeout(function(){ conteoGuardado.classList.remove('on'); }, 2000);
+    }
+  }
+
+  function setFocusLed(on){
+    conteoLed.classList.toggle('on', !!on);
+  }
+  scanInput.addEventListener('focus', function(){ setFocusLed(true); });
+  scanInput.addEventListener('blur', function(){ setFocusLed(false); });
+  document.getElementById('vista-conteo').addEventListener('click', function(e){
+    var t = e.target;
+    if(t && t.closest && t.closest('input,button,select,textarea,a,label')) return;
+    scanInput.focus();
+  });
+
+  function cargarConteo(){
+    var id = sesionId();
+    if(!id) return;
+    fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok) return;
+      state.sesion = j.sesion;
+      conteoData.items = j.items || [];
+      conteoData.pendientes = j.pendientes || [];
+      conteoTitulo.textContent = 'Contando · ' + alcanceTexto(j.sesion);
+      renderConteo();
+      scanInput.focus();
+    }).catch(function(){});
+  }
+
+  function renderConteo(){
+    var contados = conteoData.items;
+    var pendientes = conteoData.pendientes;
+    contContados.textContent = n(contados.length);
+    contPendientes.textContent = n(pendientes.length);
+    contDiferencia.textContent = n(contados.filter(function(i){ return i.diferencia !== 0 && i.diferencia != null; }).length);
+
+    var lista = filtroActivo === 'pendientes' ? pendientes.slice()
+      : filtroActivo === 'contados' ? contados.slice()
+      : contados.slice(); // 'todos': mostramos contados + pendientes debajo
+
+    if(filtroActivo !== 'pendientes' && ordenPorDiferencia){
+      lista.sort(function(a, b){ return Math.abs(b.diferencia || 0) - Math.abs(a.diferencia || 0); });
+    }
+
+    var html = '';
+    if(filtroActivo === 'pendientes'){
+      if(!lista.length){ html = '<p class="empty">No hay pendientes en este alcance.</p>'; }
+      lista.forEach(function(p){ html += filaPendienteHtml(p); });
+    } else {
+      if(!lista.length){ html = '<p class="empty">Todavía no contaste nada.</p>'; }
+      lista.forEach(function(i){ html += filaItemHtml(i); });
+      if(filtroActivo === 'todos'){
+        pendientes.forEach(function(p){ html += filaPendienteHtml(p); });
+      }
+    }
+    conteoLista.innerHTML = html;
+    bindFilaEventos();
+  }
+
+  function diffClase(d){ return d > 0 ? 'pos' : d < 0 ? 'neg' : 'zero'; }
+  function diffTexto(d){ return d > 0 ? '+' + d : d === 0 ? '0' : String(d); }
+
+  function filaItemHtml(i){
+    var sinAsociar = !i.sku;
+    var stockTxt = i.stock_woo != null ? esc(String(i.stock_woo)) : '—';
+    var diffHtml = i.diferencia != null
+      ? '<span class="diff ' + diffClase(i.diferencia) + '">' + esc(diffTexto(i.diferencia)) + '</span>'
+      : '<span class="diff zero">—</span>';
+    var minusDisabled = i.cantidad > 1;
+    return '<div class="fila-item' + (sinAsociar ? ' unlinked' : '') + '" data-item-id="' + esc(i.id) + '" data-ean="' + esc(i.ean) + '" data-sku="' + esc(i.sku || '') + '">' +
+      '<div class="info">' +
+        '<div class="cod">' + (sinAsociar ? '<span class="warn-ico">⚠</span>' : '') + esc(i.sku || i.ean) + '</div>' +
+        '<div class="nombre">' + esc(i.nombre || (sinAsociar ? 'Sin asociar todavía' : '(sin nombre)')) + '</div>' +
+        '<div class="stockline">Contado: <b>' + n(i.cantidad) + '</b> · Stock Woo: ' + stockTxt + ' · ' + diffHtml + '</div>' +
+      '</div>' +
+      '<div class="acciones">' +
+        '<button class="plus" data-accion="plus" title="Sumar 1">+1</button>' +
+        '<button data-accion="minus" title="Restar 1"' + (minusDisabled ? ' disabled' : '') + '>−1</button>' +
+        '<button class="del" data-accion="del" title="Eliminar">✕</button>' +
+        (minusDisabled ? '<span class="nota-limitacion">−1 editable solo en Revisión (cantidad &gt; 1)</span>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  function filaPendienteHtml(p){
+    return '<div class="fila-pendiente" data-sku="' + esc(p.sku) + '">' +
+      '<div class="info"><div class="sku">' + esc(p.sku) + '</div><div class="nombre">' + esc(p.nombre || '') + '</div></div>' +
+      '<button data-accion="contar">Contar</button>' +
+    '</div>';
+  }
+
+  function bindFilaEventos(){
+    conteoLista.querySelectorAll('.fila-item [data-accion]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var fila = btn.closest('.fila-item');
+        var accion = btn.getAttribute('data-accion');
+        var itemId = fila.getAttribute('data-item-id');
+        var ean = fila.getAttribute('data-ean');
+        var sku = fila.getAttribute('data-sku');
+        if(accion === 'plus'){
+          escanear(sku || ean);
+        } else if(accion === 'minus'){
+          eliminarItem(itemId);
+        } else if(accion === 'del'){
+          eliminarItem(itemId);
+        }
+      });
+    });
+    conteoLista.querySelectorAll('.fila-pendiente [data-accion="contar"]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var sku = btn.closest('.fila-pendiente').getAttribute('data-sku');
+        escanear(sku);
+      });
+    });
+  }
+
+  function eliminarItem(itemId){
+    var id = sesionId();
+    if(!id || !itemId) return;
+    fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, { method: 'DELETE' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ if(j && j.ok) setGuardado(true); cargarConteo(); })
+      .catch(function(){});
+  }
+
+  function escanear(codigo){
+    var id = sesionId();
+    codigo = String(codigo || '').trim();
+    if(!id || !codigo) return;
+    fetch('/api/inventario/sesiones/' + id + '/escanear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codigo: codigo })
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok){ cargarConteo(); return; }
+      setGuardado(true);
+      cargarConteo();
+      if(j.item && j.item.sin_asociar){
+        abrirSheetEan(j.item.ean);
+      }
+    }).catch(function(){});
+  }
+
+  scanInput.addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      var codigo = scanInput.value.trim();
+      scanInput.value = '';
+      limpiarBufferEscaneo();
+      if(codigo) escanear(codigo);
+    }
+  });
+  // Timeout de inactividad para lectores HID que no envían Enter: si dejó de
+  // tipear 120ms y hay contenido, se toma como escaneo cerrado.
+  scanInput.addEventListener('input', function(){
+    clearTimeout(scanTimer);
+    scanTimer = setTimeout(function(){
+      var codigo = scanInput.value.trim();
+      if(codigo && codigo.length >= 4){
+        scanInput.value = '';
+        escanear(codigo);
+      }
+    }, 120);
+  });
+
+  document.querySelectorAll('.chip-filtro').forEach(function(chip){
+    chip.addEventListener('click', function(){
+      document.querySelectorAll('.chip-filtro').forEach(function(c){ c.classList.remove('on'); });
+      chip.classList.add('on');
+      filtroActivo = chip.getAttribute('data-filtro');
+      renderConteo();
+    });
+  });
+
+  btnOrdenDiff.addEventListener('click', function(){
+    ordenPorDiferencia = !ordenPorDiferencia;
+    btnOrdenDiff.classList.toggle('on', ordenPorDiferencia);
+    renderConteo();
+  });
+
+  document.getElementById('btn-revisar').addEventListener('click', function(){
+    mostrarVista('revision');
+  });
+
+  // ----- Cámara (módulo Scanner compartido) -----
+  var camToastTimer = null;
+  function mostrarToastCam(codigo){
+    var t = document.getElementById('cam-toast');
+    if(!t) return;
+    t.textContent = '✓ ' + codigo + ' leído';
+    t.classList.add('show');
+    clearTimeout(camToastTimer);
+    camToastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2200);
+  }
+  function abrirCamara(){
+    var modal = document.getElementById('cam-modal'), video = document.getElementById('cam-video');
+    modal.classList.add('open');
+    var zoomEl = document.getElementById('cam-zoom');
+    zoomEl.value = 1;
+    zoomEl.oninput = function(){ window.Scanner.setZoom(parseFloat(this.value)); };
+    document.getElementById('cam-msg').textContent = 'Apuntá al código de barras…';
+    window.Scanner.open({
+      video: video,
+      mode: 'continuous',
+      // El mismo producto no se re-cuenta por un parpadeo de la cámara: debe salir
+      // del cuadro al menos medio segundo para volver a contarse.
+      dropoutMs: 500,
+      onCode: function(codigo){ escanear(codigo); mostrarToastCam(codigo); },
+      onError: function(msg){ document.getElementById('cam-msg').textContent = msg; }
+    });
+  }
+  function cerrarCamara(){
+    if(window.Scanner) window.Scanner.close();
+    document.getElementById('cam-modal').classList.remove('open');
+    scanInput.focus();
+  }
+  document.getElementById('btn-camara').addEventListener('click', abrirCamara);
+  document.getElementById('bCamCerrar').addEventListener('click', cerrarCamara);
+
+  // ----- Sheet EAN nuevo -----
+  var eanVeil = document.getElementById('ean-veil');
+  var eanSheet = document.getElementById('ean-sheet');
+  var eanSheetCodigo = document.getElementById('ean-sheet-codigo');
+  var eanSheetBuscar = document.getElementById('ean-sheet-buscar');
+  var eanSheetResultados = document.getElementById('ean-sheet-resultados');
+  var eanActual = null;
+
+  function debounce(fn, ms){
+    var t;
+    return function(){
+      var args = arguments, ctx = this;
+      clearTimeout(t);
+      t = setTimeout(function(){ fn.apply(ctx, args); }, ms);
+    };
+  }
+
+  function abrirSheetEan(ean){
+    eanActual = ean;
+    eanSheetCodigo.textContent = ean;
+    eanSheetBuscar.value = '';
+    eanSheetResultados.innerHTML = '';
+    eanVeil.classList.add('open');
+    eanSheet.classList.add('open');
+    // No le robamos el foco al input de escaneo: la pistola sigue funcionando detrás.
+  }
+  function cerrarSheetEan(){
+    eanVeil.classList.remove('open');
+    eanSheet.classList.remove('open');
+    eanActual = null;
+    scanInput.focus();
+  }
+  eanVeil.addEventListener('click', cerrarSheetEan);
+  document.getElementById('ean-sheet-despues').addEventListener('click', cerrarSheetEan);
+
+  eanSheetBuscar.addEventListener('input', debounce(function(){
+    var q = eanSheetBuscar.value.trim();
+    if(!q){ eanSheetResultados.innerHTML = ''; return; }
+    fetch('/api/codigos/buscar?q=' + encodeURIComponent(q)).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok || !Array.isArray(j.data)){ eanSheetResultados.innerHTML = ''; return; }
+      if(!j.data.length){ eanSheetResultados.innerHTML = '<p class="empty">Sin resultados.</p>'; return; }
+      eanSheetResultados.innerHTML = j.data.map(function(p){
+        return '<button type="button" class="resultado-buscar" data-sku="' + esc(p.sku) + '">' +
+          '<span class="sku">' + esc(p.sku) + '</span>' +
+          '<span class="nombre">' + esc(p.nombre || '') + '</span>' +
+        '</button>';
+      }).join('');
+      eanSheetResultados.querySelectorAll('.resultado-buscar').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          asociarEan(eanActual, btn.getAttribute('data-sku'));
+        });
+      });
+    }).catch(function(){});
+  }, 300));
+
+  function asociarEan(ean, sku){
+    var id = sesionId();
+    if(!id) return;
+    fetch('/api/inventario/sesiones/' + id + '/asociar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ean: ean, sku: sku })
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.ok){ setGuardado(true); cerrarSheetEan(); cargarConteo(); }
+    }).catch(function(){});
+  }
 
   // Expuesto para que las próximas tareas (Conteo, Revisión, etc.) lo reusen.
   window.InvApp = { mostrarVista: mostrarVista, state: state, fechaRelativa: fechaRelativa, alcanceTexto: alcanceTexto };
