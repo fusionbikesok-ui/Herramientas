@@ -170,5 +170,65 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true, sesion, items, pendientes });
   });
 
+  router.post('/sesiones/:id/escanear', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+
+    const codigo = String(req.body?.codigo || '').trim();
+    if (!codigo) return res.status(400).json({ ok: false, error: 'Código requerido' });
+
+    let ean, sku;
+    if (looksLikeEan(codigo)) {
+      ean = codigo;
+      const catalogado = db.prepare('SELECT sku FROM catalogo_cache WHERE gtin=?').get(ean)
+        || db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get(ean);
+      sku = catalogado?.sku || null;
+    } else {
+      ean = codigo; // se guarda igual como "código leído" aunque sea SKU, para tener una clave única por fila
+      sku = codigo;
+    }
+
+    const existente = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
+    let itemId;
+    if (existente) {
+      db.prepare('UPDATE inventario_conteos SET cantidad=cantidad+1, actualizado_en=? WHERE id=?').run(now(), existente.id);
+      itemId = existente.id;
+    } else {
+      itemId = db.prepare(
+        'INSERT INTO inventario_conteos (sesion_id, ean, sku, cantidad, actualizado_en) VALUES (?,?,?,1,?)'
+      ).run(sesion.id, ean, sku, now()).lastInsertRowid;
+    }
+    const item = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(itemId);
+    res.json({ ok: true, item: { ...item, sin_asociar: !item.sku } });
+  });
+
+  router.post('/sesiones/:id/asociar', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+
+    const ean = String(req.body?.ean || '').trim();
+    const sku = String(req.body?.sku || '').trim();
+    const prod = db.prepare("SELECT sku FROM catalogo_cache WHERE sku=?").get(sku);
+    if (!prod) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+
+    db.prepare(`
+      INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
+      ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
+    `).run(ean, sku, now());
+    db.prepare('UPDATE inventario_conteos SET sku=?, actualizado_en=? WHERE sesion_id=? AND ean=?')
+      .run(sku, now(), sesion.id, ean);
+
+    const item = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
+    res.json({ ok: true, item });
+  });
+
+  router.delete('/sesiones/:id/items/:itemId', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    db.prepare('DELETE FROM inventario_conteos WHERE id=? AND sesion_id=?').run(req.params.itemId, sesion.id);
+    res.json({ ok: true });
+  });
+
   return router;
 }
