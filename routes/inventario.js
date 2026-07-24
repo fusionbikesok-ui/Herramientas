@@ -206,18 +206,27 @@ export function inventarioRouter(db, wooCfg) {
   router.post('/sesiones/:id/asociar', (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
 
     const ean = String(req.body?.ean || '').trim();
     const sku = String(req.body?.sku || '').trim();
     const prod = db.prepare("SELECT sku FROM catalogo_cache WHERE sku=?").get(sku);
     if (!prod) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
 
+    // Fail-closed: si no hay ningún ítem escaneado con ese EAN en esta sesión, no
+    // sembramos ean_sku ni hacemos nada — "enseñar EAN sin ítem" es otro caso de uso,
+    // no el de asociar dentro de un conteo. Chequeamos con el UPDATE mismo (.changes)
+    // para evitar una carrera entre el SELECT previo y el UPDATE.
+    const cambio = db.prepare('UPDATE inventario_conteos SET sku=?, actualizado_en=? WHERE sesion_id=? AND ean=?')
+      .run(sku, now(), sesion.id, ean);
+    if (cambio.changes === 0) {
+      return res.status(404).json({ ok: false, error: 'No hay ningún ítem escaneado con ese EAN en esta sesión' });
+    }
+
     db.prepare(`
       INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
       ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
     `).run(ean, sku, now());
-    db.prepare('UPDATE inventario_conteos SET sku=?, actualizado_en=? WHERE sesion_id=? AND ean=?')
-      .run(sku, now(), sesion.id, ean);
 
     const item = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
     res.json({ ok: true, item });
