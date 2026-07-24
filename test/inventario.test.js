@@ -444,6 +444,34 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     expect(r.status).toBe(400);
     expect(setStockWc).not.toHaveBeenCalled();
   });
+
+  it('evita doble ajuste ante dos /confirmar simultáneos sobre la misma sesión (carrera real)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
+    setStockWc.mockImplementation(() => new Promise(r => setTimeout(r, 50)));
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+
+    const app = buildApp(db, 'juan');
+    const [r1, r2] = await Promise.all([
+      request(app).post(`/api/inventario/sesiones/${id}/confirmar`),
+      request(app).post(`/api/inventario/sesiones/${id}/confirmar`),
+    ]);
+
+    expect(setStockWc).toHaveBeenCalledTimes(2); // N ítems, no 2N
+    // El request que pierde la carrera puede recibir 409 (perdió el claim atómico)
+    // o 400 (llegó después y encontró la sesión ya en 'confirmando', no 'abierta',
+    // en el chequeo temprano) — ambos indican que fue bloqueado correctamente.
+    const ganador = [r1, r2].find(r => r.status === 200);
+    const perdedor = [r1, r2].find(r => r.status !== 200);
+    expect(ganador).toBeTruthy();
+    expect(perdedor).toBeTruthy();
+    expect([400, 409]).toContain(perdedor.status);
+    expect(ganador.body.ajustados).toBe(2);
+  });
 });
 
 describe('GET /api/inventario/sesiones (historial)', () => {
