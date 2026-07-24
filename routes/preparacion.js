@@ -735,10 +735,9 @@ async function pendientesMl(db, mlCfg) {
 
 // ─── Caché local de pedidos (para GET /pendientes y GET /historial) ──────────
 
-// Candado por instancia de db (no global): en producción hay un solo `db`, así que se
-// comporta igual que un booleano de módulo, pero evita que tests con `db` propio (o un
-// eventual segundo proceso con otra conexión) queden trabados entre sí.
-const _pedidosCacheEnCurso = new WeakSet();
+// Candado para evitar corridas concurrentes de syncPedidosCache (cron + disparo manual
+// se pisarían y duplicarían llamadas a Woo/ML). Mismo patrón que _wcToMlEnCurso en sync.js.
+let _pedidosCacheEnCurso = false;
 
 function logSyncPedidos(db, estado, error) {
   db.prepare(`
@@ -785,8 +784,8 @@ function filaWebDesdeOrder(db, order, estadoEnvio) {
 
 export async function syncPedidosCache(db, cfg) {
   ensureTables(db);
-  if (_pedidosCacheEnCurso.has(db)) return;
-  _pedidosCacheEnCurso.add(db);
+  if (_pedidosCacheEnCurso) return;
+  _pedidosCacheEnCurso = true;
   try {
     const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
     const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
@@ -845,6 +844,6 @@ export async function syncPedidosCache(db, cfg) {
     logSyncPedidos(db, 'error', e.message);
     throw e;
   } finally {
-    _pedidosCacheEnCurso.delete(db);
+    _pedidosCacheEnCurso = false;
   }
 }

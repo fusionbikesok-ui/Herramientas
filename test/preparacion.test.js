@@ -556,11 +556,15 @@ describe('syncPedidosCache', () => {
   });
 
   it('no duplica candado: si ya hay una corrida en curso, la segunda llamada no hace fetch', async () => {
-    wooFetch.mockImplementation(() => new Promise(() => {})); // nunca resuelve, simula corrida larga
+    let resolveWoo;
+    wooFetch.mockImplementationOnce(() => new Promise(r => { resolveWoo = r; }));
+    wooFetch.mockResolvedValue({ data: [] }); // llamadas siguientes (wcCompleted, wcEnviado), ya destrabado
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
     const p1 = syncPedidosCache(db, CFG);
     await syncPedidosCache(db, CFG); // debe retornar de inmediato sin llamar wooFetch de nuevo
     expect(wooFetch).toHaveBeenCalledTimes(1);
-    // no esperamos p1 (queda colgada a propósito); el test solo verifica el candado
+    resolveWoo({ data: [] });
+    await p1;
   });
 
   it('registra el resultado en sync_log con direccion=pedidos_cache', async () => {
