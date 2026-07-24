@@ -4,20 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fusion Bikes — Herramientas</title>
+<link rel="stylesheet" href="../lib/theme.css">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:         #0C0F16;
-  --surface:    #141A25;
-  --surface2:   #1B2235;
-  --border:     #24304A;
-  --accent:     #2DB8E8;
-  --accent-dim: rgba(45,184,232,.10);
-  --text:       #E4EAF4;
-  --muted:      #7A87A3;
-  --green:      #34D399;
-  --green-dim:  rgba(52,211,153,.10);
   --blue:       #60A5FA;
   --blue-dim:   rgba(96,165,250,.10);
   --purple:     #A78BFA;
@@ -372,6 +363,37 @@ body {
   .cards { grid-template-columns: 1fr; }
   .page-title { font-size: 1.5rem; }
 }
+
+/* ── Franja "Requiere tu atención" ── */
+.attn-header { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:12px; }
+.attn-title { font-size:.95rem; font-weight:800; letter-spacing:-.01em; color:var(--text); }
+.attn-updated { font-size:.7rem; color:var(--muted); }
+
+.attn-group { margin-bottom:10px; }
+.attn-glabel { font-size:.68rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:7px; display:flex; align-items:center; gap:6px; }
+.attn-chips { display:flex; gap:10px; flex-wrap:wrap; }
+
+.chip { display:inline-flex; align-items:center; gap:10px; min-height:52px; padding:9px 16px; border-radius:14px; text-decoration:none; cursor:pointer; transition:transform .12s, border-color .15s; }
+.chip:hover { transform:translateY(-1px); }
+.chip-num { font-size:1.35rem; font-weight:800; font-variant-numeric:tabular-nums; line-height:1; }
+.chip-label { font-size:.8rem; color:var(--text); line-height:1.25; }
+
+.chip.crit { background:var(--critical-bg); border:1px solid var(--critical-bd); }
+.chip.crit .chip-num { color:var(--critical); }
+.chip.warn { background:var(--surface2); border:1px solid var(--warning-bd); }
+.chip.warn .chip-num { color:var(--warning); }
+
+.attn-ok { display:inline-flex; align-items:center; gap:8px; background:var(--success-bg); border:1px solid var(--success-bd); border-radius:12px; padding:10px 16px; font-size:.83rem; color:var(--success); font-weight:600; }
+.attn-error { display:inline-flex; align-items:center; gap:8px; background:var(--critical-bg); border:1px solid var(--critical-bd); border-radius:12px; padding:10px 16px; font-size:.83rem; color:var(--critical); }
+.attn-error button { background:transparent; border:1px solid var(--critical-bd); color:var(--critical); border-radius:6px; padding:3px 9px; font-size:.75rem; cursor:pointer; margin-left:4px; }
+
+.prog-item { background:transparent; border:1px solid var(--border); border-radius:12px; padding:13px 15px; }
+.prog-top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; }
+.prog-label { font-size:.75rem; color:var(--muted); }
+.prog-pct { font-size:.95rem; font-weight:700; font-variant-numeric:tabular-nums; }
+.prog-bar { height:7px; border-radius:6px; background:var(--surface2); overflow:hidden; }
+.prog-fill { height:100%; border-radius:6px; transition:width .8s cubic-bezier(.16,1,.3,1); }
+.prog-sub { font-size:.7rem; color:var(--muted); margin-top:7px; }
 </style>
 </head>
 <body>
@@ -403,10 +425,18 @@ body {
     </div>
   </div>
 
-  <!-- PANEL DE ESTADO (barras de progreso + atención) -->
-  <section id="panel-estado" style="display:none;margin-bottom:26px">
-    <div id="pe-barras" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:14px"></div>
-    <div id="pe-atencion" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+  <!-- REQUIERE TU ATENCIÓN -->
+  <section id="panel-atencion" style="display:none;margin-bottom:22px">
+    <div class="attn-header">
+      <span class="attn-title">Requiere tu atención</span>
+      <span class="attn-updated" id="attn-updated"></span>
+    </div>
+    <div id="pe-atencion"></div>
+  </section>
+
+  <!-- PROGRESO -->
+  <section id="panel-progreso" style="display:none;margin-bottom:26px">
+    <div id="pe-barras" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px"></div>
   </section>
 
   <!-- INGRESO -->
@@ -487,6 +517,13 @@ body {
     </div>
   </section>
 
+  <!-- CONTROL -->
+  <section class="category">
+    <div class="category-header">
+      <span class="category-label label-control">Control</span>
+      <div class="category-line"></div>
+    </div>
+    <div class="cards">
       <a class="card card-control" href="/herramientas/cobertura/" data-admin-only>
         <div class="card-top">
           <div class="card-icon icon-control">
@@ -504,16 +541,6 @@ body {
           <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         </div>
       </a>
-    </div>
-  </section>
-
-  <!-- CONTROL -->
-  <section class="category">
-    <div class="category-header">
-      <span class="category-label label-control">Control</span>
-      <div class="category-line"></div>
-    </div>
-    <div class="cards">
       <a class="card card-control" data-admin-only href="/herramientas/inventario/">
         <div class="card-top">
           <div class="card-icon icon-control">
@@ -723,58 +750,98 @@ fetch('/api/auth/me').then(function(r) {
     if (visibles.length === 0) sec.style.display = 'none';
   });
 
-  // ── Panel de estado: barras de progreso + atención ──
-  function peBarra(label, valor, total, color, sub) {
+  // ── Progreso (contexto, subordinado) ──
+  function peBarra(label, valor, total, colorVar, sub) {
     var pct = total > 0 ? Math.round(valor / total * 100) : 0;
-    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:15px 16px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px">'
-      + '<span style="font-size:13px;color:var(--muted)">' + label + '</span>'
-      + '<span style="font-size:20px;font-weight:800;color:' + color + ';font-variant-numeric:tabular-nums">' + pct + '%</span></div>'
-      + '<div style="height:9px;border-radius:6px;background:var(--surface2);overflow:hidden">'
-      + '<div style="height:100%;width:' + pct + '%;background:' + color + ';border-radius:6px;transition:width .8s cubic-bezier(.16,1,.3,1)"></div></div>'
-      + '<div style="font-size:11.5px;color:var(--muted);margin-top:8px">' + sub + '</div></div>';
+    return '<div class="prog-item">'
+      + '<div class="prog-top"><span class="prog-label">' + label + '</span>'
+      + '<span class="prog-pct" style="color:var(' + colorVar + ')">' + pct + '%</span></div>'
+      + '<div class="prog-bar"><div class="prog-fill" style="width:' + pct + '%;background:var(' + colorVar + ')"></div></div>'
+      + '<div class="prog-sub">' + sub + '</div></div>';
   }
-  function peChip(num, label, color, href) {
-    if (!num) return '';
-    var inner = '<span style="font-size:18px;font-weight:800;color:' + color + ';font-variant-numeric:tabular-nums">' + num.toLocaleString('es-AR') + '</span>'
-      + ' <span style="font-size:12.5px;color:var(--text)">' + label + '</span>';
-    var st = 'background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:8px 14px;display:inline-flex;align-items:center;gap:6px';
-    return href ? '<a href="' + href + '" style="text-decoration:none;' + st + '">' + inner + '</a>'
-      : '<span style="' + st + '">' + inner + '</span>';
-  }
-  function peMostrar() { document.getElementById('panel-estado').style.display = 'block'; }
 
-  if (!tienePermiso('sync-ml') && tienePermiso('matcher')) {
-    // Sin acceso a Sync pero sí al Matcher → muestra solo lo suyo
+  // Chip de atención. severidad: 'crit' | 'warn'. tool: id de herramienta destino (para
+  // filtrar por permiso) o null si no aplica el filtro (ej. ya viene de un fetch acotado
+  // por permiso, como el chip de matcher-only).
+  function peChip(num, label, severidad, href, tool) {
+    if (!num) return null;
+    if (tool && !tienePermiso(tool)) return null; // no ofrecer un destino que el usuario no puede abrir
+    return { num: num, label: label, severidad: severidad, href: href };
+  }
+
+  function renderChips(chips) {
+    var crit = chips.filter(function(c) { return c.severidad === 'crit'; });
+    var warn = chips.filter(function(c) { return c.severidad === 'warn'; });
+    var h = '';
+    if (crit.length) {
+      h += '<div class="attn-group"><div class="attn-glabel">⚠ Bloquea sync / plata</div><div class="attn-chips">'
+        + crit.map(chipHtml).join('') + '</div></div>';
+    }
+    if (warn.length) {
+      h += '<div class="attn-group"><div class="attn-glabel">◔ Pendiente</div><div class="attn-chips">'
+        + warn.map(chipHtml).join('') + '</div></div>';
+    }
+    return h;
+  }
+  function chipHtml(c) {
+    return '<a class="chip ' + c.severidad + '" href="' + c.href + '">'
+      + '<span class="chip-num">' + c.num.toLocaleString('es-AR') + '</span>'
+      + '<span class="chip-label">' + c.label + '</span></a>';
+  }
+
+  function peMostrarAtencion() { document.getElementById('panel-atencion').style.display = 'block'; }
+  function peMostrarProgreso() { document.getElementById('panel-progreso').style.display = 'block'; }
+
+  function peError(mensaje, reintentar) {
+    document.getElementById('pe-atencion').innerHTML =
+      '<div class="attn-error">✗ ' + mensaje + ' <button onclick="(' + reintentar + ')()">Reintentar ↻</button></div>';
+    peMostrarAtencion();
+  }
+
+  function cargarPanelSoloMatcher() {
     fetch('/api/matcher/push-skus-pendientes/count').then(function(r){return r.json();}).then(function(d){
       if (!d.ok) return;
-      var chips = [peChip(d.pendientes, 'SKUs por escribir en ML', '#F5B942', '/herramientas/matcher/')].filter(Boolean);
-      if (chips.length) { document.getElementById('pe-atencion').innerHTML = chips.join(''); peMostrar(); }
-    }).catch(function(){});
-  } else if (tienePermiso('sync-ml')) {
+      var chips = [peChip(d.pendientes, 'SKUs por escribir en ML', 'warn', '/herramientas/sync-detalle/?cat=push_pendientes', null)].filter(Boolean);
+      document.getElementById('pe-atencion').innerHTML = chips.length ? renderChips(chips)
+        : '<span class="attn-ok">✓ Todo al día — nada requiere tu atención.</span>';
+      peMostrarAtencion();
+    }).catch(function(){ peError('No se pudo cargar el estado.', 'cargarPanelSoloMatcher'); });
+  }
+
+  function cargarPanelSync() {
     fetch('/api/sync/dashboard').then(function(r){return r.json();}).then(function(d){
       if (!d.ok) return;
       var st = d.stock || {}, at = d.atencion || {}, sk = d.skus || { escritos: 0, pendientes: 0 };
       var activPend = Math.max(0, (st.pendientes || 0) - (st.pendientesPausadas || 0));
       var totalActiv = (st.sincronizadas || 0) + activPend;
+
       document.getElementById('pe-barras').innerHTML = [
-        peBarra('Stock sincronizado a ML', st.sincronizadas || 0, totalActiv, 'var(--green)',
+        peBarra('Stock sincronizado a ML', st.sincronizadas || 0, totalActiv, '--success',
           (st.sincronizadas || 0).toLocaleString('es-AR') + ' publicaciones · ' + (st.pendientesPausadas || 0).toLocaleString('es-AR') + ' pausadas no sincronizan'),
-        peBarra('SKUs cargados en ML', sk.escritos, sk.escritos + sk.pendientes, 'var(--blue)',
+        peBarra('SKUs cargados en ML', sk.escritos, sk.escritos + sk.pendientes, '--accent',
           sk.pendientes.toLocaleString('es-AR') + ' pendientes de escribir en ML')
       ].join('');
+      peMostrarProgreso();
+
       var chips = [
-        peChip(d.reactivables, 'publicaciones pausadas · reactivar', '#F5B942', '/herramientas/sync-ml/#reactivar'),
-        peChip(sk.pendientes, 'SKUs por escribir en ML', '#F5B942', '/herramientas/matcher/'),
-        peChip(at.sin_mapeo, 'ventas sin mapear', '#F5B942', '/herramientas/sync-detalle/?cat=sin_mapeo'),
-        peChip(at.remapeo_requerido, 'a re-mapear', '#F5B942', '/herramientas/sync-detalle/?cat=remapeo_requerido'),
-        peChip(at.requiere_atencion_ml, 'con exceso de fotos', '#F87171', '/herramientas/sync-detalle/?cat=requiere_atencion_ml'),
-        peChip(at.errores_reales, 'errores de sync', '#F87171', '/herramientas/sync-detalle/?cat=errores')
+        peChip(at.errores_reales, 'errores de sync', 'crit', '/herramientas/sync-detalle/?cat=errores', 'sync-ml'),
+        peChip(at.requiere_atencion_ml, 'con exceso de fotos', 'crit', '/herramientas/sync-detalle/?cat=requiere_atencion_ml', 'sync-ml'),
+        peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
+        peChip(sk.pendientes, 'SKUs por escribir en ML', 'warn', '/herramientas/sync-detalle/?cat=push_pendientes', 'matcher'),
+        peChip(at.sin_mapeo, 'ventas sin mapear', 'warn', '/herramientas/sync-detalle/?cat=sin_mapeo', 'sync-ml'),
+        peChip(at.remapeo_requerido, 'a re-mapear', 'warn', '/herramientas/sync-detalle/?cat=remapeo_requerido', 'sync-ml')
       ].filter(Boolean);
-      document.getElementById('pe-atencion').innerHTML = chips.length ? chips.join('')
-        : '<span style="font-size:12.5px;color:var(--green)">✓ Todo al día — nada requiere tu atención.</span>';
-      peMostrar();
-    }).catch(function(){});
+      document.getElementById('pe-atencion').innerHTML = chips.length ? renderChips(chips)
+        : '<span class="attn-ok">✓ Todo al día — nada requiere tu atención.</span>';
+      document.getElementById('attn-updated').textContent = 'actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      peMostrarAtencion();
+    }).catch(function(){ peError('No se pudo cargar el estado de ML.', 'cargarPanelSync'); });
+  }
+
+  if (!tienePermiso('sync-ml') && tienePermiso('matcher')) {
+    cargarPanelSoloMatcher();
+  } else if (tienePermiso('sync-ml')) {
+    cargarPanelSync();
   }
 
   fetch('/api/woo/catalogo').then(function(r) { return r.json(); }).then(function(cat) {
