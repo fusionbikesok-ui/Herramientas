@@ -95,3 +95,77 @@ describe('GET /api/inventario/sesion-activa', () => {
     expect(res.body.sesion.marca).toBe('Continental');
   });
 });
+
+describe('POST /api/inventario/sesiones', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('crea una sesión con el alcance elegido', async () => {
+    const db = openDb(TEST_DB);
+    const res = await request(buildApp(db)).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.sesion.marca).toBe('Bell');
+    expect(res.body.sesion.estado).toBe('abierta');
+  });
+
+  it('rechaza sin categoría ni marca (alcance obligatorio)', async () => {
+    const db = openDb(TEST_DB);
+    const res = await request(buildApp(db)).post('/api/inventario/sesiones').send({});
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('rechaza con 409 si otra sesión abierta ya cubre la misma marca, mostrando el dueño', async () => {
+    const db = openDb(TEST_DB);
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+
+    const res = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.ocupada_por).toBe('juan');
+  });
+
+  it('permite crear sesión con marca distinta aunque otra esté abierta', async () => {
+    const db = openDb(TEST_DB);
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+
+    const res = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marca: 'Continental' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it('rechaza si el usuario ya tiene una sesión abierta propia', async () => {
+    const db = openDb(TEST_DB);
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+
+    const res = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Continental' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/ya ten[eé]s una sesión/i);
+  });
+});
+
+describe('GET /api/inventario/sesiones/:id', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('devuelve items contados + pendientes del alcance (comparado contra stock real)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, nombre: 'Casco A' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 4, nombre: 'Casco B' });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+    db.prepare("INSERT INTO inventario_conteos (sesion_id, ean, sku, cantidad, actualizado_en) VALUES (?,?,?,?,?)")
+      .run(sesionId, '1234567890128', 'FB-1', 7, now());
+
+    const res = await request(buildApp(db, 'juan')).get(`/api/inventario/sesiones/${sesionId}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0]).toMatchObject({ sku: 'FB-1', cantidad: 7, stock_woo: 10 });
+    expect(res.body.pendientes).toHaveLength(1);
+    expect(res.body.pendientes[0].sku).toBe('FB-2');
+  });
+});
