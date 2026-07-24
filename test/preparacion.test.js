@@ -587,4 +587,33 @@ describe('syncPedidosCache', () => {
     expect(log.estado).toBe('error');
     expect(log.error).toContain('WC caído');
   });
+
+  it('acota las consultas de pedidos enviados (completed/enviadoandreani) a los últimos 60 días con after=, y no acota los pendientes', async () => {
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const [urlPend, urlCompleted, urlEnviado] = wooFetch.mock.calls.map(c => c[1]);
+    expect(urlPend).not.toContain('after=');
+    expect(urlCompleted).toMatch(/status=completed&after=/);
+    expect(urlEnviado).toMatch(/status=enviadoandreani&after=/);
+  });
+
+  it('borra de pedidos_cache las filas enviado que quedaron fuera de la ventana de 60 días', async () => {
+    buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
+    const fechaVieja = new Date(Date.now() - 120 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:100','web',100,NULL,'100','Viejo Cliente',?,'enviado','completed',0,NULL,NULL,'[]',?)
+    `).run(fechaVieja, fechaVieja);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const row = db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:100'").get();
+    expect(row).toBeUndefined();
+  });
 });
