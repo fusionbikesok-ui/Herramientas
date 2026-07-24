@@ -24,6 +24,7 @@ import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter, syncPedidosCache } from './routes/preparacion.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
+import { inventarioRouter } from './routes/inventario.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -113,6 +114,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
   app.use('/sync-ml', express.static(path.join(__dirname, 'public/sync-ml')));
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
+  app.use('/api/inventario', inventarioRouter(db, wooCfg));
 
   // ââ Error handler global (respaldo) ââââââââââââââââââââââââââ
   // Debe ir al final, con 4 argumentos para que Express lo reconozca. Cualquier
