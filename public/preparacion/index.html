@@ -660,7 +660,7 @@ function cardEnviadoSinPreparar(p){
   var pedidoId=p.canal==='web'?p.wc_order_id:p.ml_order_id;
   return '<div class="ped">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
-    +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
+    +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.creado_en)+'</div>'
     +'<div class="ped-foot"><span class="badge b-warn">enviado sin preparar</span>'
     +'<button class="btn mini" style="margin-left:auto" onclick="event.stopPropagation();completarAhora(\''+esc(p.canal)+'\','+JSON.stringify(pedidoId)+')">Completar ahora</button></div>'
     +'</div>';
