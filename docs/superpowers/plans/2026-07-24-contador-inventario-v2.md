@@ -1199,6 +1199,77 @@ git commit -m "Contador de Inventario: vistas Revisión, Confirmación y Resulta
 
 ---
 
+## Task 9: Frontend — Enviar selección a Etiquetas de Productos
+
+**Files:**
+- Modify: `public/inventario/index.html`
+
+**Interfaces:**
+- Produce: escritura de `localStorage['fb_inv_session_v1']` y
+  `localStorage['fb_inv_descmap_v1']`, mismo shape que ya consume
+  `public/etiquetas/index.html:730-793` (integración pre-existente, no se toca del lado de
+  Etiquetas).
+
+**Contexto (agregado tras aprobación del backend, no estaba en el spec original):** el
+usuario pidió poder mandar una selección de lo contado al generador de Etiquetas para
+imprimir. La integración ya existe del lado de Etiquetas (lee esas dos claves de
+`localStorage` al abrirse) — solo hace falta que el Contador v2 las escriba con el mismo
+formato antes de navegar para allá.
+
+- [ ] **Step 1: Checkboxes en la lista de Conteo**
+
+En la vista Conteo (Task 7), agregar un checkbox a la izquierda de cada fila de `items[]`
+(los ya contados, no los pendientes). Mantener un `Set` en memoria de `id`s seleccionados.
+Un checkbox "seleccionar todo" en el header de la lista, igual patrón que ya usa
+`public/sync-detalle/index.html` (`toggleAll`).
+
+- [ ] **Step 2: Botón "Enviar a Etiquetas"**
+
+Agregar al menú secundario de la vista Conteo (junto a "Descartar sesión") un botón
+"Enviar a Etiquetas ({N} seleccionados)", deshabilitado si no hay ninguna fila
+seleccionada. Al tocarlo:
+
+```javascript
+function enviarAEtiquetas(itemsSeleccionados) {
+  var rows = itemsSeleccionados.map(function(i) {
+    return { code: i.sku || i.ean, qty: i.cantidad };
+  });
+  var prev = JSON.parse(localStorage.getItem('fb_inv_session_v1') || '{"rows":[],"history":[]}');
+  var merged = { rows: rows, history: prev.history || [] };
+  localStorage.setItem('fb_inv_session_v1', JSON.stringify(merged));
+  window.location.href = '/herramientas/etiquetas/';
+}
+```
+
+Nota: se **reemplaza** `rows` (no se agrega a lo que ya hubiera de una sesión vieja del
+Contador v1) para que el envío sea predecible — "esto es exactamente lo que seleccioné
+ahora", no una mezcla con datos de otra sesión. `fb_inv_descmap_v1` no hace falta escribirlo
+en este flujo: el Contador v2 ya resuelve nombre/categoría contra `catalogo_cache` en el
+propio backend (a diferencia del v1, que dependía del mapa local), así que Etiquetas va a
+poder resolver cada `code` (que siempre es un SKU real cuando la fila está seleccionable,
+por la regla de "sin asociar" bloqueante) contra su propio `/api/woo/catalogo` sin
+necesitar el mapa de respaldo.
+
+- [ ] **Step 3: Verificación de sintaxis**
+
+Run: `node -e "
+const fs=require('fs');
+const html=fs.readFileSync('public/inventario/index.html','utf8');
+const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+scripts.forEach((s)=>{ new Function(s); });
+console.log('scripts inline OK: '+scripts.length);
+"`
+Expected: `scripts inline OK: N` sin excepción.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add public/inventario/index.html
+git commit -m "Contador de Inventario: enviar selección a Etiquetas de Productos"
+```
+
+---
+
 ## Self-Review
 
 1. **Cobertura del spec:** tabla+helpers (Task 1) ✓; anti-solape con dueño visible +
