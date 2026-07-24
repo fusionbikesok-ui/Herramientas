@@ -94,7 +94,8 @@
 
   .chips-filtro{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center;}
   .chip-filtro{min-height:32px;display:inline-flex;align-items:center;font-size:12px;font-weight:700;padding:6px 12px;
-       border-radius:var(--radius-pill);background:var(--chip-bg);border:1px solid var(--chip-bd);color:var(--chip-txt);cursor:pointer;}
+       border-radius:var(--radius-pill);background:var(--chip-bg);border:1px solid var(--chip-bd);color:var(--chip-txt);cursor:pointer;
+       font-family:inherit;-webkit-appearance:none;appearance:none;}
   .chip-filtro.on{background:var(--chip-on-bg);border-color:var(--chip-on-bd);color:var(--chip-on-txt);}
   .btn-orden{margin-left:auto;font-size:12px;font-weight:700;padding:6px 12px;border-radius:var(--radius-pill);
        background:var(--chip-bg);border:1px solid var(--chip-bd);color:var(--chip-txt);cursor:pointer;}
@@ -228,9 +229,9 @@
     </div>
 
     <div class="chips-filtro">
-      <span class="chip-filtro" id="filtro-pendientes" data-filtro="pendientes">Pendientes</span>
-      <span class="chip-filtro on" id="filtro-contados" data-filtro="contados">Contados</span>
-      <span class="chip-filtro" id="filtro-todos" data-filtro="todos">Todos</span>
+      <button type="button" class="chip-filtro" id="filtro-pendientes" data-filtro="pendientes">Pendientes</button>
+      <button type="button" class="chip-filtro on" id="filtro-contados" data-filtro="contados">Contados</button>
+      <button type="button" class="chip-filtro" id="filtro-todos" data-filtro="todos">Todos</button>
       <button class="btn-orden" id="btn-orden-diff">Por diferencia</button>
     </div>
 
@@ -486,10 +487,22 @@
 
   // Buffer de pistola HID: la pistola tipea muy rápido y remata con Enter, así
   // que un submit por Enter alcanza para capturarla igual que al tipeo manual.
-  // Se mantiene además un timeout de "inactividad" por si el lector no manda Enter.
   var scanBuffer = '';
   var scanTimer = null;
   function limpiarBufferEscaneo(){ scanBuffer = ''; clearTimeout(scanTimer); scanTimer = null; }
+
+  var audioCtx = null;
+  function beep(){
+    try{
+      audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state === 'suspended') audioCtx.resume();
+      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.connect(g); g.connect(audioCtx.destination);
+      o.type='square'; o.frequency.value=880;
+      g.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      o.start(); o.stop(audioCtx.currentTime+0.06);
+    }catch(e){}
+  }
 
   function sesionId(){ return state.sesion && state.sesion.id; }
 
@@ -646,22 +659,9 @@
       var codigo = scanInput.value.trim();
       scanInput.value = '';
       limpiarBufferEscaneo();
-      if(codigo) escanear(codigo);
+      if(codigo){ beep(); escanear(codigo); }
     }
   });
-  // Timeout de inactividad para lectores HID que no envían Enter: si dejó de
-  // tipear 120ms y hay contenido, se toma como escaneo cerrado.
-  scanInput.addEventListener('input', function(){
-    clearTimeout(scanTimer);
-    scanTimer = setTimeout(function(){
-      var codigo = scanInput.value.trim();
-      if(codigo && codigo.length >= 4){
-        scanInput.value = '';
-        escanear(codigo);
-      }
-    }, 120);
-  });
-
   document.querySelectorAll('.chip-filtro').forEach(function(chip){
     chip.addEventListener('click', function(){
       document.querySelectorAll('.chip-filtro').forEach(function(c){ c.classList.remove('on'); });
@@ -704,7 +704,7 @@
       // El mismo producto no se re-cuenta por un parpadeo de la cámara: debe salir
       // del cuadro al menos medio segundo para volver a contarse.
       dropoutMs: 500,
-      onCode: function(codigo){ escanear(codigo); mostrarToastCam(codigo); },
+      onCode: function(codigo){ beep(); escanear(codigo); mostrarToastCam(codigo); },
       onError: function(msg){ document.getElementById('cam-msg').textContent = msg; }
     });
   }
