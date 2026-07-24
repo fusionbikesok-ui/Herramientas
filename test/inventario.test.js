@@ -259,6 +259,17 @@ describe('POST /api/inventario/sesiones/:id/escanear', () => {
 
     expect(r.status).toBe(404);
   });
+
+  it('rechaza escanear sobre una sesión ya descartada/confirmada', async () => {
+    const db = openDb(TEST_DB);
+    const id = await crearSesion(db, 'juan', { marca: 'Bell' });
+    db.prepare("UPDATE inventario_sesiones SET estado='descartada' WHERE id=?").run(id);
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    expect(r.status).toBe(400);
+    expect(r.body.ok).toBe(false);
+  });
 });
 
 describe('POST /api/inventario/sesiones/:id/asociar', () => {
@@ -290,6 +301,36 @@ describe('POST /api/inventario/sesiones/:id/asociar', () => {
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'NO-EXISTE' });
 
     expect(r.status).toBe(400);
+  });
+
+  it('rechaza asociar un EAN que nunca se escaneó en esta sesión, sin sembrar ean_sku', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(404);
+    expect(r.body.ok).toBe(false);
+    const fila = db.prepare("SELECT sku FROM ean_sku WHERE ean='1234567890128'").get();
+    expect(fila).toBeUndefined();
+  });
+
+  it('rechaza asociar sobre una sesión ya descartada', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '1234567890128' });
+    db.prepare("UPDATE inventario_sesiones SET estado='descartada' WHERE id=?").run(id);
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(400);
+    expect(r.body.ok).toBe(false);
   });
 });
 
