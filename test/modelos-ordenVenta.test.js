@@ -7,7 +7,7 @@ describe('normalizarOrdenMl', () => {
       id: 'ORD-1', date_created: '2026-07-01T00:00:00Z', status: 'paid',
       buyer: { first_name: 'Ana', last_name: 'Gomez', nickname: 'anag', email: 'ana@mail.com', phone: { number: '3511234567' } },
       order_items: [
-        { item: { id: 'MLA100', variation_id: '', seller_sku: 'BIKE-1' }, quantity: 2 },
+        { item: { id: 'MLA100', variation_id: '', seller_sku: 'BIKE-1' }, quantity: 2, unit_price: 2660000 },
         { item: { id: 'MLA200', variation_id: '987654321.0', seller_sku: 'CASCO-L' }, quantity: 1 },
       ],
     };
@@ -23,8 +23,10 @@ describe('normalizarOrdenMl', () => {
     expect(ov.items[0]).toEqual({
       line_item_id: null, product_id: null, variation_id_wc: null,
       item_id_ml: 'MLA100', variation_id_ml: '', clave: 'MLA100|',
-      sku: '', seller_sku: 'BIKE-1', nombre: '', cantidad: 2,
+      sku: '', seller_sku: 'BIKE-1', nombre: '', cantidad: 2, unit_price: 2660000,
     });
+    // Sin unit_price en el order_item → queda null (no se inventa un precio).
+    expect(ov.items[1].unit_price).toBeNull();
     // El sufijo .0 se normaliza en la clave y en variation_id_ml.
     expect(ov.items[1].variation_id_ml).toBe('987654321');
     expect(ov.items[1].clave).toBe('MLA200|987654321');
