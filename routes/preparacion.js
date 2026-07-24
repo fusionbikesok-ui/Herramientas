@@ -177,27 +177,51 @@ export function preparacionRouter(db, cfg) {
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
   const TRACKING_META_KEY = '_andreani_tracking';
 
-  // ── Pendientes: unión web (WC en lpaandreani) + ML (ready_to_ship local) ──
-  router.get('/pendientes', async (req, res) => {
+  // ── Pendientes: lee de pedidos_cache (sincronizada por cron cada 5 min) ──
+  router.get('/pendientes', (req, res) => {
     try {
-      const pendientes = [];
-
-      // Web
-      const wcResp = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
-      for (const order of wcResp.data || []) {
-        pendientes.push(armarPendienteWeb(db, order));
-      }
-
-      // ML (tolerante a fallas: si ML no responde, igual devolvemos web)
-      let errorMl = null;
-      try {
-        const mlPend = await pendientesMl(db, cfg.ml);
-        pendientes.push(...mlPend);
-      } catch (e) {
-        errorMl = e.message;
-      }
-
-      res.json({ ok: true, data: pendientes, error_ml: errorMl });
+      const rows = db.prepare("SELECT * FROM pedidos_cache WHERE estado_envio='pendiente' ORDER BY fecha ASC").all();
+      const data = rows.map(row => {
+        const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(row.clave);
+        const items = JSON.parse(row.items_json);
+        if (row.canal === 'web') {
+          return {
+            canal: 'web',
+            espejo_ml: !!row.espejo_ml,
+            wc_order_id: row.wc_order_id,
+            numero_pedido: row.numero_pedido,
+            comprador: row.comprador,
+            fecha: row.fecha,
+            estado_wc: row.estado_wc,
+            items,
+            preparacion_id: prep?.id || null,
+            estado_preparacion: prep?.estado || null,
+            etiqueta_lista: prep?.etiqueta_lista || 0,
+          };
+        }
+        return {
+          canal: 'ml',
+          ml_order_id: row.ml_order_id,
+          wc_order_id: row.wc_order_id,
+          numero_pedido: row.numero_pedido,
+          comprador: row.comprador,
+          fecha: row.fecha,
+          logistic_type: row.logistic_type,
+          substatus: row.substatus,
+          items,
+          preparacion_id: prep?.id || null,
+          estado_preparacion: prep?.estado || null,
+        };
+      });
+      const ultimoLog = db.prepare(
+        "SELECT creado_en, estado, error FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1"
+      ).get();
+      res.json({
+        ok: true,
+        data,
+        actualizado_en: ultimoLog?.creado_en || null,
+        sync_error: ultimoLog?.estado === 'error' ? ultimoLog.error : null,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
@@ -379,7 +403,7 @@ export function preparacionRouter(db, cfg) {
 
   // ── Historial ──
   router.get('/historial', (req, res) => {
-    const rows = db.prepare(`
+    const preparadas = db.prepare(`
       SELECT p.*,
         (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
         (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id) AS total_fotos
@@ -387,7 +411,40 @@ export function preparacionRouter(db, cfg) {
       WHERE p.estado IN ('completada','pendiente_deposito')
       ORDER BY COALESCE(p.completado_en, p.creado_en) DESC LIMIT 200
     `).all();
-    res.json({ ok: true, data: rows });
+
+    const sinPreparar = db.prepare(`
+      SELECT * FROM pedidos_cache pc
+      WHERE pc.estado_envio='enviado'
+        AND NOT EXISTS (SELECT 1 FROM preparaciones p WHERE p.clave = pc.clave)
+      ORDER BY pc.fecha DESC LIMIT 200
+    `).all().map(row => ({
+      id: null,
+      canal: row.canal,
+      clave: row.clave,
+      wc_order_id: row.wc_order_id,
+      ml_order_id: row.ml_order_id,
+      numero_pedido: row.numero_pedido,
+      comprador: row.comprador,
+      estado: 'enviado_sin_preparar',
+      creado_en: row.fecha,
+      completado_en: null,
+      total_items: JSON.parse(row.items_json).length,
+      total_fotos: 0,
+    }));
+
+    res.json({ ok: true, data: [...preparadas, ...sinPreparar] });
+  });
+
+  // ── Estado del sync de pedidos_cache (para el aviso de frescura en el frontend) ──
+  router.get('/pedidos-cache/estado', (req, res) => {
+    const ultimoLog = db.prepare(
+      "SELECT creado_en, estado, error FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1"
+    ).get();
+    res.json({
+      ok: true,
+      actualizado_en: ultimoLog?.creado_en || null,
+      ultimo_error: ultimoLog?.estado === 'error' ? ultimoLog.error : null,
+    });
   });
 
   // ── Perfiles de foto por categoría ──

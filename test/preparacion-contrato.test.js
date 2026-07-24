@@ -89,25 +89,20 @@ describe('contrato GET /pendientes', () => {
   });
 
   it('un pendiente web y uno ml tienen exactamente la forma que espera el frontend', async () => {
-    const orderWeb = {
-      id: 900, number: '900', status: 'lpaandreani', date_created: '2026-07-01T00:00:00Z',
-      billing: { first_name: 'Juan', last_name: 'Perez' },
-      meta_data: [],
-      line_items: [{ id: 1, product_id: 501, variation_id: 0, sku: '', name: 'Bici Rodado', quantity: 2 }],
-    };
-    wooFetch.mockResolvedValueOnce({ data: [orderWeb] });
+    const app = buildTestApp(db); // ensureTables corre acá; hace falta antes de sembrar pedidos_cache
+    const itemsWeb = [{ line_item_id: 1, product_id: 501, variation_id: null, sku: 'BIKE-1', nombre: 'Bici Rodado', categoria: 'Bicicletas', cantidad: 2 }];
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:900','web',900,NULL,'900','Juan Perez','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,?,?)
+    `).run(JSON.stringify(itemsWeb), new Date().toISOString());
 
-    const ordenMl = {
-      id: 'ORD-ML-1', date_created: '2026-07-02T00:00:00Z',
-      buyer: { nickname: 'comprador_ml' },
-      shipping: { id: 'SHIP-1' },
-      order_items: [{ item: { id: 'MLA900', variation_id: '', seller_sku: 'CASCO-9' }, quantity: 1 }],
-    };
-    mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [ordenMl] } })
-      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service', substatus: null } });
+    const itemsMl = [{ line_item_id: null, product_id: 601, variation_id: null, sku: 'CASCO-9', nombre: 'Casco L', categoria: 'Cascos', cantidad: 1 }];
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:ORD-ML-1','ml',NULL,'ORD-ML-1','ORD-ML-1','comprador_ml','2026-07-02T00:00:00Z','pendiente',NULL,0,'self_service',NULL,?,?)
+    `).run(JSON.stringify(itemsMl), new Date().toISOString());
 
-    const res = await request(buildTestApp(db)).get('/api/preparacion/pendientes');
+    const res = await request(app).get('/api/preparacion/pendientes');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.data).toHaveLength(2);
