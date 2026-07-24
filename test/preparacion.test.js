@@ -12,6 +12,15 @@ import { preparacionRouter, crearPreparacion } from '../routes/preparacion.js';
 import heicConvert from 'heic-convert';
 
 vi.mock('heic-convert', () => ({ default: vi.fn() }));
+vi.mock('../routes/woo.js', async () => {
+  const actual = await vi.importActual('../routes/woo.js');
+  return { ...actual, wooFetch: vi.fn() };
+});
+vi.mock('../lib/mlClient.js', () => ({
+  mlFetch: vi.fn(),
+  bootstrapToken: vi.fn(),
+  getAccessToken: vi.fn(),
+}));
 
 const TEST_DB = './test/tmp-preparacion.sqlite';
 
@@ -483,5 +492,95 @@ describe('preparacion flujo', () => {
     expect(r.status).toBe(200);
     expect(r.body.data.items).toHaveLength(3);
     expect(r.body.data.items.find(i => i.sku === 'BICI-1').requisitos_foto.length).toBeGreaterThan(0);
+  });
+});
+
+import { wooFetch } from '../routes/woo.js';
+import { mlFetch } from '../lib/mlClient.js';
+import { syncPedidosCache } from '../routes/preparacion.js';
+
+describe('syncPedidosCache', () => {
+  let db;
+  const CFG = {
+    woo: { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' },
+    ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' },
+    andreaniStatus: 'lpaandreani',
+    enviadoAndreaniStatus: 'enviadoandreani',
+  };
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    vi.clearAllMocks();
+  });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('guarda en pedidos_cache un pedido web pendiente (lpaandreani) con estado_envio=pendiente', async () => {
+    const orderPend = {
+      id: 900, number: '900', status: 'lpaandreani', date_created: '2026-07-01T00:00:00Z',
+      billing: { first_name: 'Juan', last_name: 'Perez' }, meta_data: [],
+      line_items: [{ id: 1, product_id: 501, variation_id: 0, sku: 'BIKE-1', name: 'Bici', quantity: 1 }],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [orderPend] })  // status=lpaandreani
+      .mockResolvedValueOnce({ data: [] })            // status=completed
+      .mockResolvedValueOnce({ data: [] });           // status=enviadoandreani
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // pendientesMl (paid)
+
+    await syncPedidosCache(db, CFG);
+
+    const row = db.prepare('SELECT * FROM pedidos_cache WHERE clave=?').get('web:900');
+    expect(row).toBeTruthy();
+    expect(row.estado_envio).toBe('pendiente');
+    expect(row.canal).toBe('web');
+    expect(row.numero_pedido).toBe('900');
+    expect(JSON.parse(row.items_json)).toHaveLength(1);
+  });
+
+  it('guarda en pedidos_cache un pedido web ya enviado (completed) con estado_envio=enviado', async () => {
+    const orderEnv = {
+      id: 950, number: '950', status: 'completed', date_created: '2026-07-05T00:00:00Z',
+      billing: { first_name: 'Ana', last_name: 'Gomez' }, meta_data: [],
+      line_items: [{ id: 2, product_id: 502, variation_id: 0, sku: 'CASCO-1', name: 'Casco', quantity: 1 }],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [] })            // status=lpaandreani
+      .mockResolvedValueOnce({ data: [orderEnv] })    // status=completed
+      .mockResolvedValueOnce({ data: [] });           // status=enviadoandreani
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const row = db.prepare('SELECT * FROM pedidos_cache WHERE clave=?').get('web:950');
+    expect(row).toBeTruthy();
+    expect(row.estado_envio).toBe('enviado');
+  });
+
+  it('no duplica candado: si ya hay una corrida en curso, la segunda llamada no hace fetch', async () => {
+    wooFetch.mockImplementation(() => new Promise(() => {})); // nunca resuelve, simula corrida larga
+    const p1 = syncPedidosCache(db, CFG);
+    await syncPedidosCache(db, CFG); // debe retornar de inmediato sin llamar wooFetch de nuevo
+    expect(wooFetch).toHaveBeenCalledTimes(1);
+    // no esperamos p1 (queda colgada a propósito); el test solo verifica el candado
+  });
+
+  it('registra el resultado en sync_log con direccion=pedidos_cache', async () => {
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1").get();
+    expect(log).toBeTruthy();
+    expect(log.estado).toBe('ok');
+  });
+
+  it('si wooFetch falla, registra error en sync_log y no revienta el proceso', async () => {
+    wooFetch.mockRejectedValueOnce(new Error('WC caído'));
+
+    await expect(syncPedidosCache(db, CFG)).rejects.toThrow('WC caído');
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1").get();
+    expect(log.estado).toBe('error');
+    expect(log.error).toContain('WC caído');
   });
 });
