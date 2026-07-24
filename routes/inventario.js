@@ -264,6 +264,17 @@ export function inventarioRouter(db, wooCfg) {
       return res.status(409).json({ ok: false, error: 'Hay ítems sin asociar a un SKU. Asocialos antes de confirmar.', sin_asociar: sinAsociar.length });
     }
 
+    // Reclamo atómico (better-sqlite3 es síncrono, no cede el event loop): evita que
+    // dos /confirmar simultáneos sobre la misma sesión pasen ambos el chequeo de
+    // 'abierta' antes de que el primero termine el loop de awaits contra Woo, lo que
+    // duplicaría el ajuste de stock real. Solo uno gana la carrera; el otro recibe 409.
+    const claim = db.prepare(
+      "UPDATE inventario_sesiones SET estado='confirmando' WHERE id=? AND estado='abierta'"
+    ).run(sesion.id);
+    if (claim.changes === 0) {
+      return res.status(409).json({ ok: false, error: 'La sesión ya se está confirmando o no está abierta' });
+    }
+
     let ajustados = 0, fallidos = 0;
     const errores = [];
     for (const item of items) {
@@ -276,7 +287,7 @@ export function inventarioRouter(db, wooCfg) {
       }
     }
 
-    db.prepare("UPDATE inventario_sesiones SET estado='confirmada', confirmado_en=? WHERE id=?").run(now(), sesion.id);
+    db.prepare("UPDATE inventario_sesiones SET estado='confirmada', confirmado_en=? WHERE id=? AND estado='confirmando'").run(now(), sesion.id);
     res.json({ ok: true, ajustados, fallidos, errores });
   });
 
