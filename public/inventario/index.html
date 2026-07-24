@@ -9,7 +9,7 @@
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
   body{background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
-       display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+       display:flex;flex-direction:column;min-height:100vh;}
   header{background:rgba(12,15,22,.92);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);box-shadow:0 1px 0 var(--azul);padding:10px 12px;display:flex;flex-direction:column;gap:8px;}
   .homelink{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);text-decoration:none}
   .header-top{display:flex;align-items:center;justify-content:space-between}
@@ -20,77 +20,53 @@
   .brand-badge b{display:block;font-style:italic;font-weight:800;text-transform:uppercase;font-size:9px;line-height:1.25;letter-spacing:-.02em;padding:1px 7px;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;}
   .brand-badge .bb-t{background:#08090B;color:#fff;}
   .brand-badge .bb-b{background:var(--azul);color:#08090B;}
-  .brand .dot{width:12px;height:12px;border-radius:50%;background:var(--azul)}
-  .focusind{font-size:12px;display:flex;align-items:center;gap:6px;font-weight:600}
-  .focusind .led{width:10px;height:10px;border-radius:50%;background:var(--warn)}
-  .focusind.on .led{background:var(--ok)}
-  .scanrow{display:flex;gap:8px}
-  #scan{flex:1;font-size:22px;padding:14px 12px;border-radius:10px;border:2px solid var(--azul);
-        background:var(--bg);color:var(--txt);font-weight:700;letter-spacing:1px;outline:none;box-shadow:0 0 0 3px rgba(45,184,232,.12);}
-  #scan::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
-  .banner{min-height:22px;font-size:15px;font-weight:700;color:var(--azul);padding:2px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .counters{display:flex;gap:10px}
-  .counter{flex:1;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--azul);border-radius:10px;padding:8px 10px;text-align:center;}
-  .counter .n{font-size:26px;font-weight:800;line-height:1;color:var(--azul)}
-  .counter .l{font-size:11px;color:var(--muted);margin-top:3px}
-  .toolbar{display:flex;flex-wrap:wrap;gap:6px}
-  .toolbar button{flex:1 1 auto;min-width:110px;font-size:13px;font-weight:700;padding:9px 8px;border-radius:9px;
-                  border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer;}
-  .toolbar button.primary{background:var(--azul);border-color:var(--azul);color:#06131C;font-weight:800}
-  .toolbar button:active{transform:translateY(1px)}
-  .toolbar button{transition:border-color .15s,background .15s}
-  .toolbar button:hover{border-color:var(--azul)}
-  .toolbar .mute.muted{opacity:.55}
-  main{flex:1;overflow:auto;padding:0 8px 24px}
-  .tablewrap{overflow-x:auto}
-  table{width:100%;border-collapse:collapse;min-width:600px}
-  thead th{position:sticky;top:0;background:var(--bg);z-index:2;text-align:left;font-size:12px;color:var(--muted);
-           padding:8px 6px;border-bottom:1px solid var(--line);}
-  tbody td{padding:6px;border-bottom:1px solid var(--line);vertical-align:middle}
-  td.ceancol,td.cskucol{white-space:nowrap}
-  .keywrap{display:flex;align-items:center;gap:6px}
-  .keytag{font-size:9px;font-weight:800;letter-spacing:.5px;color:var(--bg);padding:2px 5px;border-radius:5px}
-  .keytag.ean{background:var(--azul)} .keytag.sku{background:var(--sku)}
-  .keyval{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;font-size:14px}
-  .keyval.ean{color:var(--txt)} .keyval.sku{color:var(--sku)}
-  input.ean,input.sku,input.desc{width:100%;background:transparent;border:1px solid transparent;border-radius:7px;
-                                  color:var(--txt);font-size:14px;padding:7px 8px;}
-  input.ean{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700}
-  input.sku{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--sku);font-weight:700}
-  input.sku::placeholder{color:#8A7A3E;font-weight:400}
-  input.ean::placeholder{color:var(--muted);font-weight:400}
-  input.desc::placeholder{color:var(--muted)}
-  input.ean:focus,input.sku:focus,input.desc:focus{outline:none;border-color:var(--azul);background:var(--panel2)}
-  td.qty{text-align:center;font-size:20px;font-weight:800;min-width:46px}
-  td.qty.zero{color:var(--muted)}
-  td.act{white-space:nowrap;text-align:right}
-  td.act .btn{font-size:15px;font-weight:800;width:38px;height:40px;margin-left:4px;border-radius:9px;
-              border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer;transition:border-color .15s}
-  td.act .btn.plus{background:var(--azul);border-color:var(--azul);color:#06131C}
-  td.act .btn.del{color:var(--warn)}
-  td.act .btn:hover{border-color:var(--azul)}
-  td.act .btn:active{transform:translateY(1px)}
-  tr.flash td{animation:fl .55s ease-out}
-  @keyframes fl{from{background:rgba(45,184,232,.35)}to{background:transparent}}
-  .empty{color:var(--muted);text-align:center;padding:40px 10px;font-size:14px}
-  input[type=file]{display:none}
-  .catbadge{display:inline-block;margin-left:6px;font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;vertical-align:middle}
-  .catbadge.found{background:rgba(61,220,132,.18);color:var(--ok)}
-  .catbadge.miss{background:rgba(255,91,91,.18);color:var(--warn)}
-  .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
-  .modal.open{display:flex;}
-  .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;max-width:480px;width:100%;position:relative;}
-  .modal-box video{width:100%;border-radius:10px;background:#000;display:block;}
-  .cam-viewport{position:relative;overflow:hidden;border-radius:10px;background:#000;}
-  .cam-viewport video{transform-origin:center center;transition:transform .12s ease-out;}
-  .cam-zoom{display:flex;align-items:center;gap:10px;margin-top:10px;}
-  .cam-zoom-lbl{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--azul);}
-  .cam-zoom input[type=range]{flex:1;accent-color:var(--azul);height:22px;cursor:pointer;}
-  .modal-box .sub{color:var(--muted);font-size:13px;margin:10px 0;text-align:center;}
-  .modal-box .cerrarcam{margin-top:6px;width:100%;font-size:14px;font-weight:700;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer;}
-  .cam-toast{position:absolute;left:16px;right:16px;top:26px;background:rgba(52,211,153,.94);color:#06231A;font-weight:800;font-size:15px;text-align:center;padding:8px 10px;border-radius:9px;pointer-events:none;opacity:0;transition:opacity .2s;}
-  .cam-toast.show{opacity:1;}
-  @media (max-width:640px){ .counter .n{font-size:22px} .toolbar button{min-width:calc(50% - 6px)} }
+
+  main{flex:1;padding:14px 12px 32px;max-width:640px;width:100%;margin:0 auto;}
+  .vista{display:none;}
+  .vista.on{display:block;}
+
+  h1{font-size:18px;margin:4px 0 14px;}
+  h2{font-size:15px;margin:18px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
+
+  .btn{min-height:var(--tap-min);font-size:15px;font-weight:700;padding:12px 16px;border-radius:10px;
+       border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer;width:100%;
+       display:block;text-align:center;transition:border-color .15s,opacity .15s;}
+  .btn:hover{border-color:var(--azul)}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{background:var(--azul);border-color:var(--azul);color:#06131C;font-weight:800}
+  .btn.secondary{background:var(--panel2);}
+  .btn.danger{background:var(--danger-bg);border-color:var(--danger-bd);color:var(--danger)}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .btn + .btn{margin-top:10px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px;}
+  .card-retomar{background:var(--panel);border:1px solid var(--chip-on-bd);border-left:4px solid var(--accent);border-radius:14px;padding:16px;margin-bottom:14px;}
+  .card-retomar .titulo{font-size:16px;font-weight:800;margin-bottom:4px;}
+  .card-retomar .meta{font-size:13px;color:var(--muted);margin-bottom:12px;}
+
+  .chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;padding:4px 10px;
+        border-radius:var(--radius-pill);background:var(--chip-bg);border:1px solid var(--chip-bd);color:var(--chip-txt);}
+  .chip.on{background:var(--chip-on-bg);border-color:var(--chip-on-bd);color:var(--chip-on-txt);}
+
+  .aviso{border-radius:12px;padding:14px;margin:12px 0;font-size:14px;background:var(--warning-bg);border:1px solid var(--warning-bd);}
+  .aviso b{color:var(--warning);}
+
+  label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.04em;}
+  input[type=text]{width:100%;min-height:var(--tap-min);font-size:16px;padding:10px 12px;border-radius:10px;
+       border:1px solid var(--line);background:var(--surface2);color:var(--txt);outline:none;}
+  input[type=text]:focus{border-color:var(--azul);}
+
+  details{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-top:18px;}
+  details summary{cursor:pointer;font-weight:700;font-size:14px;list-style:none;}
+  details summary::-webkit-details-marker{display:none}
+  .hist-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;}
+  .hist-row:last-child{border-bottom:none;}
+  .hist-row .estado{font-weight:700;}
+  .hist-row .estado.confirmada{color:var(--success);}
+  .hist-row .estado.descartada{color:var(--muted);}
+  .empty{color:var(--muted);text-align:center;padding:14px;font-size:13px;}
+
+  .placeholder{color:var(--muted);font-size:13px;padding:20px;text-align:center;}
 </style>
 </head>
 <body>
@@ -103,446 +79,260 @@
         Contador de inventario
       </div>
     </div>
-    <span class="focusind" id="focusind"><span class="led"></span><span id="focustxt">sin foco</span></span>
   </div>
   <a class="homelink" href="/herramientas/home/">&larr; Inicio</a>
-  <div class="scanrow">
-    <input id="scan" aria-label="Escanear código EAN o SKU" inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off"
-           spellcheck="false" placeholder="Escaneá un código (EAN o SKU)…">
-  </div>
-  <div class="banner" id="banner">Listo. Escaneá EAN o SKU para empezar.</div>
-  <div class="counters">
-    <div class="counter"><div class="n" id="cUnits">0</div><div class="l">unidades totales</div></div>
-    <div class="counter"><div class="n" id="cCodes">0</div><div class="l">códigos distintos (con unidades)</div></div>
-    <div class="counter"><div class="n" id="cRows">0</div><div class="l">filas en lista</div></div>
-  </div>
-  <div class="toolbar">
-    <button id="bUndo" class="primary">↶ Deshacer último +1</button>
-    <button id="bNew">⟲ Nueva sesión / Reiniciar</button>
-    <button id="bExport">⬇ Exportar mapa (JSON)</button>
-    <button id="bExportCsv">⬇ Exportar CSV (todo el mapa)</button>
-    <button id="bExportCsvSession">⬇ Exportar conteo (solo contados)</button>
-    <button id="bImport">⬆ Importar mapa (JSON)</button>
-    <button id="bCam">📷 Cámara</button>
-    <button id="bMute" class="mute">🔊 Sonido</button>
-    <input type="file" id="fileImport" aria-label="Archivo JSON de mapa a importar" accept=".json,application/json">
-  </div>
 </header>
 <main>
-  <div class="tablewrap">
-  <table>
-    <thead>
-      <tr>
-        <th style="width:24%">Código EAN</th>
-        <th style="width:22%">SKU interno</th>
-        <th>Descripción</th>
-        <th style="width:46px;text-align:center">Cant.</th>
-        <th style="width:130px"></th>
-      </tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
+
+  <!-- Vista 1: Inicio -->
+  <div class="vista" id="vista-inicio">
+    <h1>Contador de inventario</h1>
+    <div id="inicio-contenido">
+      <p class="empty">Cargando…</p>
+    </div>
+    <details id="inicio-historial">
+      <summary>Historial de sesiones</summary>
+      <div id="historial-contenido">
+        <p class="empty">Abrí para ver el historial.</p>
+      </div>
+    </details>
   </div>
-  <div class="empty" id="empty">Sin escaneos en esta sesión.</div>
+
+  <!-- Vista 2: Elegir alcance -->
+  <div class="vista" id="vista-alcance">
+    <h1>Elegir alcance</h1>
+    <p style="color:var(--muted);font-size:13px;">Elegí categoría y/o marca para acotar qué vas a contar.</p>
+
+    <label for="alcance-categoria">Categoría</label>
+    <input type="text" id="alcance-categoria" list="alcance-categorias-list" placeholder="Ej: Cascos" autocomplete="off">
+    <datalist id="alcance-categorias-list"></datalist>
+
+    <label for="alcance-marca">Marca</label>
+    <input type="text" id="alcance-marca" list="alcance-marcas-list" placeholder="Ej: Bell" autocomplete="off">
+    <datalist id="alcance-marcas-list"></datalist>
+
+    <div id="alcance-aviso"></div>
+
+    <button class="btn primary" id="alcance-empezar" disabled style="margin-top:18px;">Empezar a contar</button>
+    <button class="btn secondary" id="alcance-cancelar">Cancelar</button>
+  </div>
+
+  <!-- Vista 3: Conteo (placeholder — Task 7) -->
+  <div class="vista" id="vista-conteo">
+    <div class="placeholder">Vista de conteo — se completa en la Task 7.</div>
+  </div>
+
+  <!-- Vista 4: EAN nuevo (placeholder — Task 7) -->
+  <div class="vista" id="vista-ean-nuevo">
+    <div class="placeholder">Vista de EAN nuevo — se completa en la Task 7.</div>
+  </div>
+
+  <!-- Vista 5: Revisión (placeholder — Task 8) -->
+  <div class="vista" id="vista-revision">
+    <div class="placeholder">Vista de revisión — se completa en la Task 8.</div>
+  </div>
+
+  <!-- Vista 6: Confirmación (placeholder — Task 8) -->
+  <div class="vista" id="vista-confirmacion">
+    <div class="placeholder">Vista de confirmación — se completa en la Task 8.</div>
+  </div>
+
+  <!-- Vista 7: Resultado (placeholder — Task 8) -->
+  <div class="vista" id="vista-resultado">
+    <div class="placeholder">Vista de resultado — se completa en la Task 8.</div>
+  </div>
+
 </main>
-<div class="modal" id="cam-modal">
-  <div class="modal-box">
-    <div class="cam-viewport"><video id="cam-video" autoplay playsinline muted></video></div>
-    <div class="cam-toast" id="cam-toast"></div>
-    <div class="cam-zoom"><span class="cam-zoom-lbl">Zoom</span><input type="range" id="cam-zoom" min="1" max="4" step="0.5" value="1"></div>
-    <p class="sub" id="cam-msg">Apuntá al código de barras…</p>
-    <button class="cerrarcam" id="bCamCerrar">Cerrar</button>
-  </div>
-</div>
+
+<script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
 <script>
   Api.installAuth();
 (function(){
   "use strict";
 
-  var MAP_KEY = 'fb_inv_descmap_v1';    // { code: { other, desc } }  (code = lo escaneado; other = código complementario)
-  var SESSION_KEY = 'fb_inv_session_v1';
-  var MUTE_KEY = 'fb_inv_mute_v1';
+  // ----- Estado global de la SPA (compartido con las próximas tareas vía window.InvApp) -----
+  var state = {
+    sesion: null, // sesión activa/actual en memoria
+  };
 
-  var rows = [];                 // [{code, qty}] orden de aparición
-  var history = [];              // pila de codes para deshacer
-  var descMap = {};              // { code: { other, desc } }
-  var rowEls = new Map();        // code -> {tr, qtyCell, otherInput, descInput, r}
-  var muted = false;
-  var catalogBySku = {};         // sku(lowercase) -> {nombre, id_woo, sku}
-  var catalogLoaded = false;
-
-  var scan = document.getElementById('scan');
-  var tbody = document.getElementById('tbody');
-  var emptyEl = document.getElementById('empty');
-  var bannerEl = document.getElementById('banner');
-  var cUnits = document.getElementById('cUnits');
-  var cCodes = document.getElementById('cCodes');
-  var cRows = document.getElementById('cRows');
-  var focusind = document.getElementById('focusind');
-  var focustxt = document.getElementById('focustxt');
-
-  function hasOwn(o,k){ return Object.prototype.hasOwnProperty.call(o,k); }
-  function normalize(raw){ return raw==null ? '' : String(raw).replace(/[\u0000-\u001F\u007F]/g,'').trim(); }
-  function ts(){ var d=new Date(),p=function(n){return(n<10?'0':'')+n;};
-    return d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes()); }
-  function banner(t){ bannerEl.textContent = t; }
-
-  // ----- Detección EAN vs SKU por formato + dígito de control GS1 -----
-  function gtinCheckOk(code){
-    var n = code.length, sum = 0, i, d, mult;
-    for(i = n-2; i >= 0; i--){
-      d = code.charCodeAt(i) - 48;
-      mult = ((n-2 - i) % 2 === 0) ? 3 : 1;  // dígito de cuerpo más a la derecha pesa 3
-      sum += d * mult;
-    }
-    var check = (10 - (sum % 10)) % 10;
-    return check === (code.charCodeAt(n-1) - 48);
-  }
-  function looksLikeEAN(code){
-    if(!/^[0-9]+$/.test(code)) return false;
-    var n = code.length;
-    if(n!==8 && n!==12 && n!==13 && n!==14) return false;
-    return gtinCheckOk(code);
-  }
-  function kindOf(code){ return looksLikeEAN(code) ? 'ean' : 'sku'; }
-  function kindLabel(code){ return kindOf(code)==='ean' ? 'EAN' : 'SKU'; }
-
-  // ----- Sonido -----
-  var audioCtx = null;
-  function beep(){
-    if(muted) return;
-    try{
-      audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
-      if(audioCtx.state === 'suspended') audioCtx.resume();
-      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.connect(g); g.connect(audioCtx.destination);
-      o.type='square'; o.frequency.value=880;
-      g.gain.setValueAtTime(0.05, audioCtx.currentTime);
-      o.start(); o.stop(audioCtx.currentTime+0.06);
-    }catch(e){}
+  // ----- Navegación entre vistas -----
+  var VISTAS = ['inicio', 'alcance', 'conteo', 'ean-nuevo', 'revision', 'confirmacion', 'resultado'];
+  function mostrarVista(nombre){
+    VISTAS.forEach(function(v){
+      var el = document.getElementById('vista-' + v);
+      if(!el) return;
+      el.classList.toggle('on', v === nombre);
+    });
+    if(nombre === 'inicio') cargarInicio();
+    if(nombre === 'alcance') cargarAlcance();
   }
 
-  // ----- Cámara (módulo Scanner compartido: BarcodeDetector nativo o ZXing) -----
-  var camToastTimer = null;
-  function mostrarToastCam(codigo){
-    var t = document.getElementById('cam-toast');
-    if(!t) return;
-    t.textContent = '✓ ' + codigo + ' leído';
-    t.classList.add('show');
-    clearTimeout(camToastTimer);
-    camToastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2200);
+  // ----- Fecha relativa (no hay helper en format.js para esto) -----
+  function fechaRelativa(iso){
+    if(!iso) return '—';
+    var diffMs = Date.now() - new Date(iso).getTime();
+    var min = Math.floor(diffMs / 60000);
+    if(min < 1) return 'hace instantes';
+    if(min < 60) return 'hace ' + min + ' min';
+    var h = Math.floor(min / 60);
+    if(h < 24) return 'hace ' + h + ' h';
+    var d = Math.floor(h / 24);
+    return 'hace ' + d + ' día' + (d === 1 ? '' : 's');
   }
-  function abrirCamara(){
-    var modal = document.getElementById('cam-modal'), video = document.getElementById('cam-video');
-    modal.classList.add('open');
-    var zoomEl = document.getElementById('cam-zoom');
-    zoomEl.value = 1;
-    zoomEl.oninput = function(){ window.Scanner.setZoom(parseFloat(this.value)); };
-    document.getElementById('cam-msg').textContent = 'Apuntá al código de barras…';
-    window.Scanner.open({
-      video: video,
-      mode: 'continuous',
-      // El mismo producto no se re-cuenta por un parpadeo de la cámara: debe salir
-      // del cuadro al menos medio segundo para volver a contarse.
-      dropoutMs: 500,
-      onCode: function(codigo){ processScan(codigo); mostrarToastCam(codigo); },
-      onError: function(msg){ document.getElementById('cam-msg').textContent = msg; }
+
+  function alcanceTexto(sesion){
+    var partes = [];
+    if(sesion.categoria) partes.push(sesion.categoria);
+    if(sesion.marca) partes.push(sesion.marca);
+    return partes.length ? partes.join(' / ') : '(sin categoría ni marca)';
+  }
+
+  // ----- Vista Inicio -----
+  function cargarInicio(){
+    var cont = document.getElementById('inicio-contenido');
+    cont.innerHTML = '<p class="empty">Cargando…</p>';
+    fetch('/api/inventario/sesion-activa').then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok){ cont.innerHTML = '<p class="empty">No se pudo consultar la sesión activa.</p>'; return; }
+      state.sesion = j.sesion;
+      if(j.sesion){
+        cont.innerHTML =
+          '<div class="card-retomar">' +
+            '<div class="titulo">' + esc(alcanceTexto(j.sesion)) + '</div>' +
+            '<div class="meta">Sesión abierta ' + esc(fechaRelativa(j.sesion.creado_en)) + '</div>' +
+            '<button class="btn primary" id="btn-retomar">Retomar</button>' +
+          '</div>' +
+          '<button class="btn secondary" id="btn-nueva" disabled title="Ya tenés una sesión abierta — retomala o descartala">Nueva sesión</button>';
+        document.getElementById('btn-retomar').addEventListener('click', function(){
+          mostrarVista('conteo');
+        });
+      } else {
+        cont.innerHTML = '<button class="btn primary" id="btn-nueva">Nueva sesión</button>';
+        document.getElementById('btn-nueva').addEventListener('click', function(){
+          mostrarVista('alcance');
+        });
+      }
+    }).catch(function(){
+      cont.innerHTML = '<p class="empty">No se pudo consultar la sesión activa (sin conexión).</p>';
     });
   }
-  function cerrarCamara(){
-    window.Scanner.close();
-    document.getElementById('cam-modal').classList.remove('open');
-    scan.focus();
-  }
 
-  // ----- Catálogo WooCommerce (auto-completar descripción por SKU; tolera fallo/offline) -----
-  function catalogMatch(sku){
-    if(!sku) return null;
-    return catalogBySku[String(sku).toLowerCase()] || null;
-  }
-  function loadCatalog(){
-    fetch('/api/woo/catalogo').then(function(r){ return r.json(); }).then(function(j){
-      if(!j || !j.ok || !Array.isArray(j.data)) return;
-      catalogBySku = {};
-      j.data.forEach(function(p){ if(p.sku) catalogBySku[String(p.sku).toLowerCase()] = p; });
-      catalogLoaded = true;
-      banner('Catálogo cargado: ' + j.data.length + ' productos. Listo para escanear.');
-      refreshAllBadges();
-    }).catch(function(){ banner('Catálogo no disponible (sin conexión al servidor). Seguís pudiendo escanear y contar normalmente.'); });
-  }
-  function refreshAllBadges(){ rowEls.forEach(function(e, code){ updateRowCatalog(code); }); }
-  // Aplica el badge de catálogo y auto-completa descripción vacía para el SKU de esta fila
-  function updateRowCatalog(code){
-    var e = rowEls.get(code); if(!e) return;
-    var kind = kindOf(code);
-    var sku = kind === 'sku' ? code : (e.otherInput ? e.otherInput.value.trim() : '');
-    if(!sku){ if(e.catBadge) e.catBadge.style.display = 'none'; return; }
-    var match = catalogMatch(sku);
-    if(e.catBadge){
-      e.catBadge.style.display = catalogLoaded ? 'inline-block' : 'none';
-      e.catBadge.className = 'catbadge ' + (match ? 'found' : 'miss');
-      e.catBadge.textContent = match ? '✓ catálogo' : '? no encontrado';
-    }
-    if(match && match.nombre && !e.descInput.value.trim()){
-      e.descInput.value = match.nombre;
-      setField(code, 'desc', match.nombre);
-    }
-  }
-
-  // ----- Mapa -----
-  function migrateMap(m){
-    var out = {};
-    if(!m || typeof m !== 'object') return out;
-    for(var k in m){
-      if(!hasOwn(m,k)) continue;
-      var v = m[k];
-      if(typeof v === 'string'){
-        var d0 = v.trim(); if(d0) out[k] = {other:'', desc:d0};
-      }else if(v && typeof v === 'object' && !Array.isArray(v)){
-        // acepta formato nuevo {other,desc} y viejo {sku,desc}
-        var other = String(v.other != null ? v.other : (v.sku != null ? v.sku : '')).trim();
-        var desc  = String(v.desc != null ? v.desc : '').trim();
-        if(other || desc) out[k] = {other:other, desc:desc};
+  function cargarHistorial(){
+    var cont = document.getElementById('historial-contenido');
+    cont.innerHTML = '<p class="empty">Cargando…</p>';
+    fetch('/api/inventario/sesiones').then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok || !Array.isArray(j.data) || !j.data.length){
+        cont.innerHTML = '<p class="empty">Sin sesiones cerradas todavía.</p>';
+        return;
       }
-      // arrays u otros: ignorados (anti-contaminación)
+      var html = '';
+      j.data.forEach(function(s){
+        var estadoTxt = s.estado === 'confirmada' ? 'Confirmada' : 'Descartada';
+        html += '<div class="hist-row">' +
+          '<span>' + esc(alcanceTexto(s)) + '</span>' +
+          '<span class="estado ' + esc(s.estado) + '">' + esc(estadoTxt) + '</span>' +
+          '<span>' + esc(fecha(s.confirmado_en || s.creado_en)) + '</span>' +
+        '</div>';
+      });
+      cont.innerHTML = html;
+    }).catch(function(){
+      cont.innerHTML = '<p class="empty">No se pudo cargar el historial (sin conexión).</p>';
+    });
+  }
+
+  var historialCargado = false;
+  document.getElementById('inicio-historial').addEventListener('toggle', function(e){
+    if(e.target.open && !historialCargado){
+      historialCargado = true;
+      cargarHistorial();
     }
-    return out;
-  }
-  function getEntry(code){ return descMap[code] || {other:'', desc:''}; }
-  function setField(code, field, val){
-    val = (val || '').trim();
-    var e = descMap[code] || {other:'', desc:''};
-    e[field] = val;
-    if(!e.other && !e.desc){ delete descMap[code]; } else { descMap[code] = e; }
-    saveMap();
-  }
-  // reconstruye el par {ean, sku, desc} para export y lógica
-  function pairOf(code){
-    var e = getEntry(code);
-    if(kindOf(code) === 'ean') return {ean:code, sku:e.other, desc:e.desc};
-    return {ean:e.other, sku:code, desc:e.desc};
-  }
+  });
 
-  // ----- Persistencia -----
-  function saveMap(){ try{ localStorage.setItem(MAP_KEY, JSON.stringify(descMap)); }catch(e){} }
-  var lastSave = 0;
-  function saveSession(){ try{ localStorage.setItem(SESSION_KEY, JSON.stringify({rows:rows, history:history})); }catch(e){} lastSave=Date.now(); }
-  var saveT = null;
-  function saveSessionDebounced(){
-    if(Date.now()-lastSave > 2000){ clearTimeout(saveT); saveSession(); return; }
-    clearTimeout(saveT); saveT = setTimeout(saveSession, 250);
+  // ----- Vista Elegir alcance -----
+  var alcanceCategoria = document.getElementById('alcance-categoria');
+  var alcanceMarca = document.getElementById('alcance-marca');
+  var alcanceEmpezar = document.getElementById('alcance-empezar');
+  var alcanceAviso = document.getElementById('alcance-aviso');
+  var alcanceOpcionesCargadas = false;
+
+  function actualizarBotonEmpezar(){
+    var cat = alcanceCategoria.value.trim();
+    var marca = alcanceMarca.value.trim();
+    alcanceEmpezar.disabled = !cat && !marca;
   }
-  function loadAll(){
-    var raw = {};
-    try{ raw = JSON.parse(localStorage.getItem(MAP_KEY) || '{}'); }catch(e){ raw = {}; }
-    descMap = migrateMap(raw); saveMap();
-    try{ var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
-      if(s && Array.isArray(s.rows)){ rows = s.rows; history = Array.isArray(s.history) ? s.history : []; }
-    }catch(e){ rows = []; history = []; }
-    try{ muted = localStorage.getItem(MUTE_KEY) === '1'; }catch(e){}
+  alcanceCategoria.addEventListener('input', actualizarBotonEmpezar);
+  alcanceMarca.addEventListener('input', actualizarBotonEmpezar);
+
+  function cargarAlcance(){
+    alcanceAviso.innerHTML = '';
+    if(alcanceOpcionesCargadas) return;
+    fetch('/api/inventario/alcance-opciones').then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok) return;
+      alcanceOpcionesCargadas = true;
+      var catList = document.getElementById('alcance-categorias-list');
+      var marcaList = document.getElementById('alcance-marcas-list');
+      catList.innerHTML = (j.categorias || []).map(function(c){ return '<option value="' + esc(c) + '">'; }).join('');
+      marcaList.innerHTML = (j.marcas || []).map(function(m){ return '<option value="' + esc(m) + '">'; }).join('');
+    }).catch(function(){});
   }
 
-  // ----- Render -----
-  function makeRow(r){
-    var code = r.code, kind = kindOf(code), ent = getEntry(code);
-    var tr = document.createElement('tr'); tr.dataset.code = code; tr.dataset.kind = kind;
-
-    // Celda EAN
-    var cEan = document.createElement('td'); cEan.className = 'ceancol';
-    // Celda SKU
-    var cSku = document.createElement('td'); cSku.className = 'cskucol';
-    var otherInput;
-
-    var catBadgeEl = null;
-    function keyCell(parent, tagText, cls){
-      var wrap = document.createElement('div'); wrap.className = 'keywrap';
-      var tag = document.createElement('span'); tag.className = 'keytag '+cls; tag.textContent = tagText;
-      var val = document.createElement('span'); val.className = 'keyval '+cls; val.textContent = code;
-      wrap.appendChild(tag); wrap.appendChild(val);
-      if(cls === 'sku'){
-        catBadgeEl = document.createElement('span'); catBadgeEl.className = 'catbadge'; catBadgeEl.style.display = 'none';
-        wrap.appendChild(catBadgeEl);
-      }
-      parent.appendChild(wrap);
-    }
-    function complementInput(parent, cls, ph){
-      var inp = document.createElement('input');
-      inp.type='text'; inp.className = cls+' other'; inp.placeholder = ph; inp.value = ent.other;
-      inp.addEventListener('change', function(){ setField(code,'other',inp.value); updateRowCatalog(code); scan.focus(); });
-      inp.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); setField(code,'other',inp.value); updateRowCatalog(code); inp.blur(); scan.focus(); } });
-      parent.appendChild(inp);
-      if(cls === 'sku'){
-        catBadgeEl = document.createElement('span'); catBadgeEl.className = 'catbadge'; catBadgeEl.style.display = 'none';
-        parent.appendChild(catBadgeEl);
-      }
-      return inp;
-    }
-
-    if(kind === 'ean'){
-      keyCell(cEan, 'EAN', 'ean');                                   // EAN = clave (fija)
-      otherInput = complementInput(cSku, 'sku', 'SKU interno…');     // SKU = complemento editable
-    }else{
-      otherInput = complementInput(cEan, 'ean', 'EAN (opcional)…');  // EAN = complemento editable
-      keyCell(cSku, 'SKU', 'sku');                                   // SKU = clave (fija)
-    }
-
-    // Descripción
-    var cDesc = document.createElement('td');
-    var inpD = document.createElement('input');
-    inpD.type='text'; inpD.className='desc'; inpD.placeholder='(sin descripción)'; inpD.value = ent.desc;
-    inpD.addEventListener('change', function(){ setField(code,'desc',inpD.value); scan.focus(); });
-    inpD.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); setField(code,'desc',inpD.value); inpD.blur(); scan.focus(); } });
-    cDesc.appendChild(inpD);
-
-    var cQty = document.createElement('td'); cQty.className='qty'; cQty.textContent = r.qty;
-    if(r.qty === 0) cQty.classList.add('zero');
-
-    var cAct = document.createElement('td'); cAct.className='act';
-    var bPlus = document.createElement('button'); bPlus.className='btn plus'; bPlus.textContent='+1';
-    bPlus.title='Sumar 1 (sin escanear)';
-    bPlus.addEventListener('click', function(){ bump(code, '+1 manual ['+kindLabel(code)+']: '); scan.focus(); });
-    var bMinus = document.createElement('button'); bMinus.className='btn'; bMinus.textContent='−1';
-    bMinus.addEventListener('click', function(){ decrement(code); scan.focus(); });
-    var bDel = document.createElement('button'); bDel.className='btn del'; bDel.textContent='✕';
-    bDel.addEventListener('click', function(){ removeRow(code); scan.focus(); });
-    cAct.appendChild(bPlus); cAct.appendChild(bMinus); cAct.appendChild(bDel);
-
-    tr.appendChild(cEan); tr.appendChild(cSku); tr.appendChild(cDesc); tr.appendChild(cQty); tr.appendChild(cAct);
-    rowEls.set(code, {tr:tr, qtyCell:cQty, otherInput:otherInput, descInput:inpD, catBadge:catBadgeEl, r:r});
-    updateRowCatalog(code);
-    return tr;
+  function limpiarAlcanceForm(){
+    alcanceCategoria.value = '';
+    alcanceMarca.value = '';
+    alcanceAviso.innerHTML = '';
+    actualizarBotonEmpezar();
   }
 
-  function setQtyCell(e){ e.qtyCell.textContent = e.r.qty; if(e.r.qty===0) e.qtyCell.classList.add('zero'); else e.qtyCell.classList.remove('zero'); }
-  function flash(tr){ tr.classList.remove('flash'); void tr.offsetWidth; tr.classList.add('flash'); }
-  function updateEmpty(){ emptyEl.style.display = rows.length ? 'none' : 'block'; }
-  function updateCounters(){ var u=0,d=0; for(var i=0;i<rows.length;i++){ u+=rows[i].qty; if(rows[i].qty>0)d++; } cUnits.textContent=u; cCodes.textContent=d; cRows.textContent=rows.length; }
-
-  function ensureRow(code){ if(rowEls.has(code)) return; var r={code:code,qty:0}; rows.push(r); tbody.appendChild(makeRow(r)); }
-  function bump(code, label){
-    var e = rowEls.get(code); if(!e) return;
-    e.r.qty++; setQtyCell(e); flash(e.tr);
-    history.push(code); if(history.length>1000) history.shift();
-    banner(label + code + '   +1   →   total fila: ' + e.r.qty);
-    beep(); updateEmpty(); updateCounters(); saveSessionDebounced();
-  }
-  function processScan(code){ if(!code) return; ensureRow(code); bump(code, 'Última ['+kindLabel(code)+']: '); }
-  function decrement(code){
-    var e = rowEls.get(code); if(!e) return;
-    if(e.r.qty>0){ e.r.qty--; setQtyCell(e); flash(e.tr); }
-    banner('−1 en ' + code + '   →   total fila: ' + e.r.qty);
-    updateCounters(); saveSessionDebounced();
-  }
-  function removeRow(code){
-    var e = rowEls.get(code); if(!e) return;
-    e.tr.remove(); rowEls.delete(code);
-    for(var i=0;i<rows.length;i++){ if(rows[i].code===code){ rows.splice(i,1); break; } }
-    banner('Fila eliminada: ' + code + ' (el mapa se conserva)');
-    updateEmpty(); updateCounters(); saveSessionDebounced();
-  }
-  function undo(){
-    if(!history.length){ banner('Nada para deshacer'); return; }
-    var code = history.pop(); var e = rowEls.get(code);
-    if(e && e.r.qty>0){ e.r.qty--; setQtyCell(e); flash(e.tr); banner('Deshecho: '+code+'   →   total fila: '+e.r.qty); }
-    else { banner('Deshecho: '+code+' (la fila ya estaba en 0 o eliminada)'); }
-    updateCounters(); saveSessionDebounced();
-  }
-  function newSession(){
-    if(!confirm('¿Reiniciar el conteo? Se vacía la tabla de esta sesión.\nEl mapa EAN↔SKU↔descripción se conserva.')) return;
-    rows.length=0; history.length=0; rowEls.clear(); tbody.innerHTML='';
-    banner('Sesión nueva. Mapa intacto.'); updateEmpty(); updateCounters(); saveSession(); scan.focus();
+  function mostrarAvisoAlcance(mensaje, ocupadoPor, categoria, marca){
+    var texto = ocupadoPor
+      ? 'El alcance se cruza con la sesión de <b>' + esc(ocupadoPor) + '</b>' +
+        ((categoria || marca) ? ' (' + esc([categoria, marca].filter(Boolean).join('/')) + ').' : '.')
+      : esc(mensaje || 'No se pudo crear la sesión.');
+    alcanceAviso.innerHTML =
+      '<div class="aviso">' + texto +
+        '<div style="margin-top:10px;">' +
+          '<button class="btn secondary" id="aviso-cambiar">Cambiar alcance</button>' +
+          '<button class="btn secondary" id="aviso-cancelar">Cancelar</button>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('aviso-cambiar').addEventListener('click', limpiarAlcanceForm);
+    document.getElementById('aviso-cancelar').addEventListener('click', function(){ mostrarVista('inicio'); });
   }
 
-  // ----- Descargas -----
-  function download(content, filename, mime){
-    var blob = new Blob([content], {type:mime});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a'); a.href=url; a.download=filename;
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  }
-  function exportMap(){
-    download(JSON.stringify(descMap,null,2), 'fusion-mapa-'+ts()+'.json', 'application/json');
-    banner('Mapa JSON exportado ('+Object.keys(descMap).length+' códigos).'); scan.focus();
-  }
-  function csvCell(s){ s=String(s==null?'':s); if(/[",\r\n]/.test(s)) s='"'+s.replace(/"/g,'""')+'"'; return s; }
-  // Exporta SOLO lo contado en esta sesión (apto para import directo a Woo: cantidad siempre es un número real, nunca vacío)
-  function exportCsvSession(){
-    if(!rows.length){ banner('No hay nada contado en esta sesión todavía.'); return; }
-    var lines = ['ean,sku,descripcion,cantidad'];
-    var sorted = rows.slice().sort(function(a,b){ return a.code < b.code ? -1 : a.code > b.code ? 1 : 0; });
-    for(var i=0;i<sorted.length;i++){
-      var p = pairOf(sorted[i].code);
-      lines.push(csvCell(p.ean)+','+csvCell(p.sku)+','+csvCell(p.desc)+','+csvCell(sorted[i].qty));
-    }
-    download('\ufeff'+lines.join('\r\n'), 'fusion-conteo-'+ts()+'.csv', 'text/csv;charset=utf-8');
-    banner('Conteo de la sesión exportado ('+sorted.length+' códigos, todos con cantidad).'); scan.focus();
-  }
+  alcanceEmpezar.addEventListener('click', function(){
+    var categoria = alcanceCategoria.value.trim();
+    var marca = alcanceMarca.value.trim();
+    alcanceAviso.innerHTML = '';
+    fetch('/api/inventario/sesiones', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categoria: categoria, marca: marca })
+    }).then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+      .then(function(res){
+        if(res.status === 200 && res.body.ok){
+          state.sesion = res.body.sesion;
+          mostrarVista('conteo');
+        } else if(res.status === 409){
+          mostrarAvisoAlcance(res.body.error, res.body.ocupada_por, res.body.categoria, res.body.marca);
+        } else {
+          mostrarAvisoAlcance(res.body && res.body.error);
+        }
+      }).catch(function(){
+        mostrarAvisoAlcance('No se pudo crear la sesión (sin conexión).');
+      });
+  });
 
-  function exportCsv(){
-    // unión de códigos del mapa + códigos de la sesión actual (todo lo visto)
-    var seen = {}, qtyOf = {};
-    Object.keys(descMap).forEach(function(c){ seen[c]=true; });
-    rows.forEach(function(r){ seen[r.code]=true; qtyOf[r.code]=r.qty; });
-    var codes = Object.keys(seen).sort();
-    var lines = ['ean,sku,descripcion,cantidad'];
-    for(var i=0;i<codes.length;i++){
-      var c = codes[i], p = pairOf(c);
-      // cantidad solo si el código fue contado en ESTA sesión; si no, vacío
-      // (vacío != 0: evita pisar a cero stock de productos no contados hoy)
-      var q = Object.prototype.hasOwnProperty.call(qtyOf, c) ? qtyOf[c] : '';
-      lines.push(csvCell(p.ean)+','+csvCell(p.sku)+','+csvCell(p.desc)+','+csvCell(q));
-    }
-    download('\ufeff'+lines.join('\r\n'), 'fusion-mapa-'+ts()+'.csv', 'text/csv;charset=utf-8');
-    banner('CSV exportado ('+codes.length+' códigos, con cantidades contadas en esta sesión).'); scan.focus();
-  }
+  document.getElementById('alcance-cancelar').addEventListener('click', function(){
+    limpiarAlcanceForm();
+    mostrarVista('inicio');
+  });
 
-  // ----- Import (JSON, retrocompatible) -----
-  function importMap(file){
-    var reader = new FileReader();
-    reader.onload = function(){
-      var obj;
-      try{ obj = JSON.parse(reader.result); }catch(err){ alert('No pude leer el archivo: no es un JSON válido.'); return; }
-      if(!obj || typeof obj !== 'object' || Array.isArray(obj)){ alert('Formato inesperado. Esperaba { code: {other,desc} } o { code: "desc" }.'); return; }
-      var migrated = migrateMap(obj); var n = 0;
-      for(var k in migrated){ if(hasOwn(migrated,k)){ descMap[k] = migrated[k]; n++; } }
-      saveMap();
-      rowEls.forEach(function(e, code){ var ent = getEntry(code); e.otherInput.value = ent.other; e.descInput.value = ent.desc; });
-      banner('Mapa importado: '+n+' códigos cargados/actualizados.'); scan.focus();
-    };
-    reader.readAsText(file);
-  }
+  // Expuesto para que las próximas tareas (Conteo, Revisión, etc.) lo reusen.
+  window.InvApp = { mostrarVista: mostrarVista, state: state, fechaRelativa: fechaRelativa, alcanceTexto: alcanceTexto };
 
-  // ----- Foco -----
-  function setFocusState(on){ if(on){ focusind.classList.add('on'); focustxt.textContent='escáner activo'; } else { focusind.classList.remove('on'); focustxt.textContent='sin foco — tocá para reactivar'; } }
-  scan.addEventListener('focus', function(){ setFocusState(true); });
-  scan.addEventListener('blur',  function(){ setFocusState(false); });
-  document.addEventListener('click', function(e){ var t=e.target; if(t && t.closest && t.closest('input,button,select,textarea,a,label')) return; scan.focus(); });
-  scan.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); var code=normalize(scan.value); scan.value=''; if(code) processScan(code); } });
-
-  // ----- Botones -----
-  document.getElementById('bCam').addEventListener('click', abrirCamara);
-  document.getElementById('bCamCerrar').addEventListener('click', cerrarCamara);
-  document.getElementById('bUndo').addEventListener('click', function(){ undo(); scan.focus(); });
-  document.getElementById('bNew').addEventListener('click', function(){ newSession(); });
-  document.getElementById('bExport').addEventListener('click', exportMap);
-  document.getElementById('bExportCsv').addEventListener('click', exportCsv);
-  document.getElementById('bExportCsvSession').addEventListener('click', exportCsvSession);
-  document.getElementById('bImport').addEventListener('click', function(){ document.getElementById('fileImport').click(); });
-  document.getElementById('fileImport').addEventListener('change', function(e){ if(e.target.files && e.target.files[0]) importMap(e.target.files[0]); e.target.value=''; });
-  var bMute = document.getElementById('bMute');
-  function renderMute(){ bMute.textContent = muted ? '🔇 Silenciado' : '🔊 Sonido'; bMute.classList.toggle('muted', muted); }
-  bMute.addEventListener('click', function(){ muted=!muted; try{ localStorage.setItem(MUTE_KEY, muted?'1':'0'); }catch(e){} renderMute(); scan.focus(); });
-
-  window.addEventListener('beforeunload', saveSession);
-  document.addEventListener('visibilitychange', function(){ if(document.hidden) saveSession(); });
-
-  function rebuild(){ tbody.innerHTML=''; rowEls.clear(); for(var i=0;i<rows.length;i++){ tbody.appendChild(makeRow(rows[i])); } updateEmpty(); updateCounters(); }
-  loadAll(); renderMute(); rebuild(); scan.focus(); setFocusState(document.activeElement===scan);
-  loadCatalog();
+  mostrarVista('inicio');
 })();
 </script>
-<script type="module" src="../lib/scanner.js"></script>
 
 <script>
 (function(){
