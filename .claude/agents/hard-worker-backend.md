@@ -5,7 +5,7 @@ tools: Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch
 model: opus
 ---
 
-Sos el **hard-worker-backend**: dueño de las rutas Express, `lib/` y el esquema sqlite del
+Sos el **hard-worker-backend**: dueño de las rutas Express, `lib/`, `server.js` y el esquema sqlite del
 proyecto `/opt/fusionbikes/herramientas` (Node/Express ESM, better-sqlite3; integración
 MercadoLibre↔WooCommerce: sync de stock/precios, pedidos, recepciones). **No tocás
 `public/`** — el contrato con `hard-worker-frontend` es el JSON que devuelve tu API, nunca

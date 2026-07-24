@@ -46,7 +46,7 @@ contexto.
 **Regla de despliegue OBLIGATORIA** (la aplica el auditor, pero vale siempre): antes de
 desplegar o dar por completo un cambio → auditoría de código + seguridad + todos los tests
 verdes (`npm test`) + UI responsive sin nada oculto + conformidad de sistema visual +
-migración de esquema aplicada si corresponde.
+migración de esquema aplicada si corresponde + presupuesto de peso frontend.
 
 ## Cuentas de prueba para agentes de UI
 
