@@ -174,15 +174,29 @@ async function api(path,opts){
 
 // ─── Cola de pendientes ───────────────────────────────────────────────────────
 
+function haceMin(iso){
+  if(!iso)return null;
+  var ms=Date.now()-new Date(iso).getTime();
+  if(isNaN(ms)||ms<0)return null;
+  var min=Math.round(ms/60000);
+  return min<1?'menos de 1 min':(min+' min');
+}
+
 async function cargarPendientes(){
   var c=document.getElementById('cuerpo');
-  c.innerHTML='<div class="loading">Consultando WooCommerce y MercadoLibre…</div>';
+  c.innerHTML='<div class="loading">Cargando pedidos…</div>';
   try{
     var r=await api('/pendientes');
     if(!r.body.ok)throw new Error(r.body.error||'error');
     PEND_CACHE=r.body.data||[];
     var html='';
-    if(r.body.error_ml)html+='<div class="flash warn" style="display:block">MercadoLibre no respondió: '+esc(r.body.error_ml)+' — se muestran solo los pedidos web.</div>';
+    var hm=haceMin(r.body.actualizado_en);
+    if(r.body.sync_error){
+      html+='<div class="flash warn" style="display:block">⚠ El último sync de pedidos falló: '+esc(r.body.sync_error)
+        +(hm?' — mostrando datos de hace '+hm:'')+'</div>';
+    }else if(hm){
+      html+='<div style="font-size:12px;color:var(--muted,#888);margin:4px 0 8px">actualizado hace '+hm+'</div>';
+    }
     if(!PEND_CACHE.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
     else html+='<div class="ped-grid">'+PEND_CACHE.map(cardPendiente).join('')+'</div>';
     c.innerHTML=html;
@@ -614,7 +628,12 @@ async function cargarHistorial(){
     var rows=r.body.data||[];
     var dep=rows.filter(function(p){return p.estado==='pendiente_deposito';});
     var comp=rows.filter(function(p){return p.estado==='completada';});
+    var sinPreparar=rows.filter(function(p){return p.estado==='enviado_sin_preparar';});
     var html='';
+    if(sinPreparar.length){
+      html+='<h1 style="font-size:1.1rem">Enviados sin preparar</h1><div class="ped-grid" style="margin-bottom:20px">'
+        +sinPreparar.map(cardEnviadoSinPreparar).join('')+'</div>';
+    }
     if(dep.length){
       html+='<h1 style="font-size:1.1rem">Pendientes de <em>depósito</em></h1><div class="ped-grid" style="margin-bottom:20px">'
         +dep.map(cardHistorial).join('')+'</div>';
@@ -634,6 +653,28 @@ function cardHistorial(p){
     +'<div class="ped-items">'+p.total_items+' ítems · '+p.total_fotos+' fotos · '+fecha(p.completado_en||p.creado_en)
     +(p.preparado_por?' · '+esc(p.preparado_por):'')+'</div>'
     +'<div class="ped-foot">'+st+'</div></div>';
+}
+
+function cardEnviadoSinPreparar(p){
+  var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
+  var pedidoId=p.canal==='web'?p.wc_order_id:p.ml_order_id;
+  return '<div class="ped">'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
+    +'<div class="ped-foot"><span class="badge b-warn">enviado sin preparar</span>'
+    +'<button class="btn mini" style="margin-left:auto" onclick="event.stopPropagation();completarAhora(\''+esc(p.canal)+'\','+JSON.stringify(pedidoId)+')">Completar ahora</button></div>'
+    +'</div>';
+}
+
+async function completarAhora(canal,id){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Iniciando preparación…</div>';
+  try{
+    var r=await api('/iniciar',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({canal:canal,id:id})});
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    abrirDetalle(r.body.id);
+  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
 
 // ─── Perfiles de foto ─────────────────────────────────────────────────────────
