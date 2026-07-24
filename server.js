@@ -21,7 +21,7 @@ import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { preciosRouter } from './routes/precios.js';
-import { preparacionRouter } from './routes/preparacion.js';
+import { preparacionRouter, syncPedidosCache } from './routes/preparacion.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
 
@@ -176,6 +176,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     cron.schedule('*/10 * * * *', () => {
       procesarCancelacionesMl(app._db, syncCfg)
         .catch(err => console.error('cancelaciones ML error:', err.message));
+    });
+
+    cron.schedule('*/5 * * * *', () => {
+      syncPedidosCache(app._db, {
+        woo: wooCfg, ml: mlCfg,
+        andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
+        enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
+      }).catch(err => console.error('Error sincronizando pedidos_cache:', err.message));
     });
 
     const port = process.env.PORT || 3001;
