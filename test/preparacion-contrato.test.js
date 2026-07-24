@@ -135,6 +135,53 @@ describe('contrato GET /pendientes', () => {
   });
 });
 
+describe('GET /historial', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('un pedido enviado con preparación asociada no aparece duplicado como enviado_sin_preparar', async () => {
+    const app = buildTestApp(db); // ensureTables corre acá
+    const now = new Date().toISOString();
+
+    // Pedido 900: en pedidos_cache como 'enviado' Y tiene preparación completada.
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:900','web',900,NULL,'900','Juan Perez','2026-07-01T00:00:00Z','enviado','completed',0,NULL,NULL,?,?)
+    `).run(JSON.stringify([{ sku: 'BIKE-1', nombre: 'Bici', cantidad: 1 }]), now);
+    db.prepare(`
+      INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, estado, creado_en, completado_en)
+      VALUES ('web','web:900',900,'900','Juan Perez','completada',?,?)
+    `).run(now, now);
+
+    // Pedido 901: en pedidos_cache como 'enviado' pero SIN preparación → sí debe listarse como enviado_sin_preparar.
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:901','web',901,NULL,'901','Beto Diaz','2026-07-02T00:00:00Z','enviado','completed',0,NULL,NULL,?,?)
+    `).run(JSON.stringify([{ sku: 'CUB-1', nombre: 'Cubierta', cantidad: 1 }]), now);
+
+    const res = await request(app).get('/api/preparacion/historial');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const claves900 = res.body.data.filter(d => d.wc_order_id === 900);
+    expect(claves900).toHaveLength(1);
+    expect(claves900[0].estado).toBe('completada');
+
+    const claves901 = res.body.data.filter(d => d.wc_order_id === 901);
+    expect(claves901).toHaveLength(1);
+    expect(claves901[0].estado).toBe('enviado_sin_preparar');
+  });
+});
+
 describe('GET /seguimientos', () => {
   let db;
 
