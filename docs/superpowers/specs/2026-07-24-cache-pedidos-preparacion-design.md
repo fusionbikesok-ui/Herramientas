@@ -24,10 +24,15 @@ Hoy, en `routes/preparacion.js`:
 
 ## Decisiones (confirmadas con el usuario)
 
-1. **Sync periódico, no en vivo por request.** Pedidos **pendientes** (los que el
-   depósito opera activamente) sincronizan cada 5 minutos; pedidos **ya enviados**
-   (Andreani/ML) sincronizan cada 30 minutos — no cambian de estado con la misma
-   urgencia y así se reduce la carga de requests a Woo/ML.
+1. **Sync periódico, no en vivo por request.** Un único sync combinado cada 5 minutos
+   trae en la misma pasada tanto pedidos **pendientes** como **ya enviados** — no dos
+   corridas separadas con dos rondas de llamadas a Woo/ML. Ambas categorías salen del
+   mismo endpoint (`GET /orders` de WooCommerce, `GET /orders/search` de ML) con distinto
+   filtro de `status`; traer varios estados en una sola llamada y clasificar localmente es
+   más barato que pegarle dos veces a la misma API. (Decisión revisada: la primera versión
+   de este diseño proponía dos crons con cadencias distintas — 5min/30min — asumiendo que
+   "distinta frecuencia" implicaba "distinta llamada"; no es así acá, así que se simplificó
+   a una sola corrida.)
 2. **Ventana de tiempo:** últimos 30-60 días para pedidos enviados — no se sincroniza
    historial completo desde siempre.
 3. **Fail-open con aviso:** si un sync falla (Woo/ML no responden), la pantalla sigue
@@ -70,23 +75,28 @@ CREATE TABLE IF NOT EXISTS pedidos_cache (
 CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio);
 ```
 
-### Dos funciones de sync, siguiendo el patrón de `routes/sync.js`
+### Una función de sync combinada, siguiendo el patrón de `routes/sync.js`
 
-- `syncPedidosPendientes(db, cfg)` — reusa la lógica ya existente de `armarPendienteWeb`
-  (pedidos WC en `lpaandreani`) y `pendientesMl` (ML `paid`+`ready_to_ship`+local), pero en
-  vez de devolver la respuesta HTTP, hace upsert en `pedidos_cache` con
-  `estado_envio='pendiente'`. Registra resultado en `sync_log` (`direccion:
-  'pedidos_pendientes'`) para el patrón "actualizado hace X" (`MAX(creado_en) WHERE
-  estado='ok'`, ya usado en `routes/sync.js:938-940`).
-- `syncPedidosEnviados(db, cfg)` — trae pedidos WC en estado `completed`/`enviadoandreani`
-  y órdenes ML con envío `shipped`, ambos acotados a `fecha >= hoy - 60 días`, upsert con
-  `estado_envio='enviado'`. Registra en `sync_log` (`direccion: 'pedidos_enviados'`).
-- Ambas usan un candado en memoria (booleans module-level, patrón ya usado en
+- `syncPedidosCache(db, cfg)` — una sola pasada:
+  - **WooCommerce**: un solo `GET /orders?status=lpaandreani,completed,enviadoandreani&per_page=100`
+    (WooCommerce acepta múltiples estados separados por coma en `status`). Clasifica
+    localmente: `lpaandreani` → `estado_envio='pendiente'`; `completed`/`enviadoandreani`
+    → `estado_envio='enviado'` (reusa `armarPendienteWeb` para el shape de ítems).
+  - **MercadoLibre**: reusa `pendientesMl` para los pendientes (`paid`+`ready_to_ship`+
+    local); agrega una segunda pasada liviana con `order.status=shipped` acotada a
+    `fecha >= hoy - 60 días` para los enviados (usa `itemsDesdeOrdenMl` para el shape de
+    ítems). Ambas siguen siendo dos filtros de status distintos en ML porque ready_to_ship
+    vs shipped no se puede pedir en una sola query — pero es una sola función, un solo
+    cron, y no duplica el trabajo de WooCommerce.
+  - Upsert en `pedidos_cache` por `clave`, con `estado_envio` correspondiente.
+  - Registra resultado en `sync_log` (`direccion: 'pedidos_cache'`) para el patrón
+    "actualizado hace X" (`MAX(creado_en) WHERE estado='ok'`, ya usado en
+    `routes/sync.js:938-940`).
+- Usa un candado en memoria (boolean module-level, patrón ya usado en
   `routes/sync.js:316-323`) para evitar solapamiento entre el cron y un disparo manual.
-- Se registran en `server.js` junto a los cron existentes:
-  `cron.schedule('*/5 * * * *', ...)` para pendientes,
-  `cron.schedule('*/30 * * * *', ...)` para enviados — mismo patrón exacto que
-  `server.js:156-179`, con `.catch(err => console.error(...))`.
+- Se registra en `server.js` junto a los cron existentes:
+  `cron.schedule('*/5 * * * *', ...)` — mismo patrón exacto que `server.js:156-179`, con
+  `.catch(err => console.error(...))`.
 
 ### Endpoints que cambian de fuente
 
