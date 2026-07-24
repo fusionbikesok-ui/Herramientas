@@ -1,9 +1,15 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
 import { inventarioRouter, looksLikeEan } from '../routes/inventario.js';
+
+vi.mock('../lib/wooStock.js', async () => {
+  const actual = await vi.importActual('../lib/wooStock.js');
+  return { ...actual, setStockWc: vi.fn() };
+});
+import { setStockWc } from '../lib/wooStock.js';
 
 const TEST_DB = './test/tmp-inventario.sqlite';
 const CFG = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
@@ -350,5 +356,110 @@ describe('DELETE /api/inventario/sesiones/:id/items/:itemId', () => {
     expect(r.status).toBe(200);
     const fila = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(itemId);
     expect(fila).toBeUndefined();
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/descartar', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('cierra la sesión sin ajustar stock', async () => {
+    const db = openDb(TEST_DB);
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/descartar`);
+
+    expect(r.status).toBe(200);
+    expect(setStockWc).not.toHaveBeenCalled();
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('descartada');
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/confirmar', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('bloquea con 409 si hay ítems sin asociar', async () => {
+    const db = openDb(TEST_DB);
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '1234567890128' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(409);
+    expect(setStockWc).not.toHaveBeenCalled();
+  });
+
+  it('ajusta stock por cada ítem contado y marca la sesión confirmada', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
+    setStockWc.mockResolvedValue();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.ajustados).toBe(2);
+    expect(setStockWc).toHaveBeenCalledTimes(2);
+    const sesion = db.prepare('SELECT estado, confirmado_en FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('confirmada');
+    expect(sesion.confirmado_en).toBeTruthy();
+  });
+
+  it('fail-closed por ítem: un PUT que falla no aborta el resto', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
+    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.ajustados).toBe(1);
+    expect(r.body.fallidos).toBe(1);
+    expect(setStockWc).toHaveBeenCalledTimes(2);
+  });
+
+  it('rechaza confirmar una sesión ya confirmada (evita doble ajuste)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    setStockWc.mockResolvedValue();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    vi.clearAllMocks();
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(400);
+    expect(setStockWc).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/inventario/sesiones (historial)', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('devuelve solo sesiones cerradas del usuario, no las abiertas ni las de otro', async () => {
+    const db = openDb(TEST_DB);
+    setStockWc.mockResolvedValue();
+    const c1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${c1.body.sesion.id}/descartar`);
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Continental' }); // queda abierta
+    await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marca: 'Shimano' });
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones');
+
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].estado).toBe('descartada');
   });
 });

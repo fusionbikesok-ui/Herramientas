@@ -1,5 +1,6 @@
 import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
+import { setStockWc } from '../lib/wooStock.js';
 
 const now = () => new Date().toISOString();
 
@@ -237,6 +238,54 @@ export function inventarioRouter(db, wooCfg) {
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
     db.prepare('DELETE FROM inventario_conteos WHERE id=? AND sesion_id=?').run(req.params.itemId, sesion.id);
     res.json({ ok: true });
+  });
+
+  router.post('/sesiones/:id/descartar', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+    db.prepare("UPDATE inventario_sesiones SET estado='descartada' WHERE id=?").run(sesion.id);
+    res.json({ ok: true });
+  });
+
+  // Ajuste de stock REAL en WooCommerce: fail-closed por ítem — si un PATCH falla,
+  // no aborta el resto (el operario ya contó todo físicamente; mejor ajustar lo que
+  // se pueda y reportar lo que falló, que perder todo el trabajo de conteo). La
+  // sesión completa se bloquea ANTES de tocar Woo (409) si hay ítems sin asociar,
+  // porque sin SKU no hay a qué producto ajustarle el stock.
+  router.post('/sesiones/:id/confirmar', async (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+
+    const items = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=?').all(sesion.id);
+    const sinAsociar = items.filter(i => !i.sku);
+    if (sinAsociar.length) {
+      return res.status(409).json({ ok: false, error: 'Hay ítems sin asociar a un SKU. Asocialos antes de confirmar.', sin_asociar: sinAsociar.length });
+    }
+
+    let ajustados = 0, fallidos = 0;
+    const errores = [];
+    for (const item of items) {
+      try {
+        await setStockWc(wooCfg, db, item.sku, item.cantidad);
+        ajustados++;
+      } catch (e) {
+        fallidos++;
+        errores.push({ sku: item.sku, error: e.message });
+      }
+    }
+
+    db.prepare("UPDATE inventario_sesiones SET estado='confirmada', confirmado_en=? WHERE id=?").run(now(), sesion.id);
+    res.json({ ok: true, ajustados, fallidos, errores });
+  });
+
+  router.get('/sesiones', (req, res) => {
+    const usuario = req.user?.username;
+    const rows = db.prepare(
+      "SELECT * FROM inventario_sesiones WHERE usuario=? AND estado<>'abierta' ORDER BY COALESCE(confirmado_en,creado_en) DESC LIMIT 100"
+    ).all(usuario);
+    res.json({ ok: true, data: rows });
   });
 
   return router;
