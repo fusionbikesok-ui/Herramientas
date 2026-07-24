@@ -77,6 +77,24 @@ function ensureTables(db) {
   );
   seed.run('BICICLETAS', 'bici', now());
   seed.run('TRANSMISIONES', 'kit_transmision', now());
+
+  db.prepare(`CREATE TABLE IF NOT EXISTS pedidos_cache (
+    clave           TEXT PRIMARY KEY,
+    canal           TEXT NOT NULL,
+    wc_order_id     INTEGER,
+    ml_order_id     TEXT,
+    numero_pedido   TEXT,
+    comprador       TEXT,
+    fecha           TEXT,
+    estado_envio    TEXT NOT NULL,
+    estado_wc       TEXT,
+    espejo_ml       INTEGER NOT NULL DEFAULT 0,
+    logistic_type   TEXT,
+    substatus       TEXT,
+    items_json      TEXT NOT NULL,
+    actualizado_en  TEXT NOT NULL
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -713,4 +731,120 @@ async function pendientesMl(db, mlCfg) {
     });
   }
   return out;
+}
+
+// ─── Caché local de pedidos (para GET /pendientes y GET /historial) ──────────
+
+// Candado por instancia de db (no global): en producción hay un solo `db`, así que se
+// comporta igual que un booleano de módulo, pero evita que tests con `db` propio (o un
+// eventual segundo proceso con otra conexión) queden trabados entre sí.
+const _pedidosCacheEnCurso = new WeakSet();
+
+function logSyncPedidos(db, estado, error) {
+  db.prepare(`
+    INSERT INTO sync_log (direccion, clave, sku, cant_anterior, cant_nueva, estado, error, intentos, creado_en, actualizado_en)
+    VALUES ('pedidos_cache', NULL, NULL, NULL, NULL, ?, ?, 0, ?, ?)
+  `).run(estado, error ?? null, now(), now());
+}
+
+function upsertPedidoCache(db, row) {
+  db.prepare(`
+    INSERT INTO pedidos_cache
+      (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha,
+       estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+    VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @numero_pedido, @comprador, @fecha,
+       @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en)
+    ON CONFLICT(clave) DO UPDATE SET
+      numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
+      estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
+      logistic_type=excluded.logistic_type, substatus=excluded.substatus,
+      items_json=excluded.items_json, actualizado_en=excluded.actualizado_en
+  `).run(row);
+}
+
+// Un pedido WC (de cualquiera de los 3 estados relevantes) → fila de pedidos_cache.
+function filaWebDesdeOrder(db, order, estadoEnvio) {
+  const pend = armarPendienteWeb(db, order); // reusa el enriquecido de ítems/comprador ya existente
+  return {
+    clave: `web:${order.id}`,
+    canal: 'web',
+    wc_order_id: order.id,
+    ml_order_id: null,
+    numero_pedido: pend.numero_pedido,
+    comprador: pend.comprador,
+    fecha: pend.fecha,
+    estado_envio: estadoEnvio,
+    estado_wc: pend.estado_wc,
+    espejo_ml: pend.espejo_ml ? 1 : 0,
+    logistic_type: null,
+    substatus: null,
+    items_json: JSON.stringify(pend.items),
+    actualizado_en: now(),
+  };
+}
+
+export async function syncPedidosCache(db, cfg) {
+  ensureTables(db);
+  if (_pedidosCacheEnCurso.has(db)) return;
+  _pedidosCacheEnCurso.add(db);
+  try {
+    const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
+    const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
+
+    // WooCommerce: 3 llamadas, una por estado relevante (mismo endpoint /orders que ya
+    // usaban /pendientes, /etiquetas y /seguimientos por separado — acá se hace una sola
+    // vez para las 3, en una única función/único cron).
+    // Secuencial (no Promise.all): si la primera llamada no resuelve nunca (WC caído,
+    // hang de red), no queremos disparar las otras dos en paralelo igual.
+    const wcPend = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
+    const wcCompleted = await wooFetch(cfg.woo, '/orders?status=completed&per_page=100');
+    const wcEnviado = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(enviadoAndreaniStatus)}&per_page=100`);
+
+    const tx = db.transaction(() => {
+      for (const order of wcPend.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'pendiente'));
+      for (const order of wcCompleted.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'enviado'));
+      for (const order of wcEnviado.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'enviado'));
+    });
+    tx();
+
+    // MercadoLibre: reusa pendientesMl (ya filtra paid+ready_to_ship+local) para pendientes.
+    // Los "enviados" de ML quedan fuera de este alcance (no hay filtro de shipped simple
+    // sin otro GET por shipment; el historial de enviados ML se cubre desde el lado Woo,
+    // que ya refleja el pedido cuando se cargó el tracking en el tab Seguimientos).
+    try {
+      const mlPend = await pendientesMl(db, cfg.ml);
+      const txMl = db.transaction(() => {
+        for (const p of mlPend) {
+          upsertPedidoCache(db, {
+            clave: `ml:${p.ml_order_id}`,
+            canal: 'ml',
+            wc_order_id: p.wc_order_id,
+            ml_order_id: p.ml_order_id,
+            numero_pedido: p.numero_pedido,
+            comprador: p.comprador,
+            fecha: p.fecha,
+            estado_envio: 'pendiente',
+            estado_wc: null,
+            espejo_ml: 0,
+            logistic_type: p.logistic_type,
+            substatus: p.substatus,
+            items_json: JSON.stringify(p.items),
+            actualizado_en: now(),
+          });
+        }
+      });
+      txMl();
+    } catch (eMl) {
+      // ML tolerante a fallas (igual que hoy en GET /pendientes): no aborta el sync de Woo.
+      logSyncPedidos(db, 'error', `ML: ${eMl.message}`);
+      return;
+    }
+
+    logSyncPedidos(db, 'ok', null);
+  } catch (e) {
+    logSyncPedidos(db, 'error', e.message);
+    throw e;
+  } finally {
+    _pedidosCacheEnCurso.delete(db);
+  }
 }
