@@ -161,6 +161,48 @@
   .modal-box .cerrarcam{margin-top:6px;width:100%;font-size:14px;font-weight:700;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer;}
   .cam-toast{position:absolute;left:16px;right:16px;top:26px;background:rgba(52,211,153,.94);color:#06231A;font-weight:800;font-size:15px;text-align:center;padding:8px 10px;border-radius:9px;pointer-events:none;opacity:0;transition:opacity .2s;}
   .cam-toast.show{opacity:1;}
+
+  /* ----- Vista Revisión ----- */
+  .bloque-sinasociar{border:1px solid var(--danger-bd);border-left:4px solid var(--danger);border-radius:12px;padding:12px;margin-bottom:16px;background:var(--danger-bg);}
+  .bloque-sinasociar h2{color:var(--danger);margin-top:0;}
+  .fila-revision{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:10px;}
+  .fila-revision .info{flex:1;min-width:0;}
+  .fila-revision .cod{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;font-size:13px;}
+  .fila-revision .nombre{font-size:13px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .fila-revision .stockline{font-size:12px;color:var(--muted);margin-top:2px;}
+  .fila-revision input[type=number]{width:64px;min-height:38px;font-size:15px;font-weight:700;text-align:center;
+       border-radius:9px;border:1px solid var(--line);background:var(--surface2);color:var(--txt);}
+  .nota-pendientes{font-size:12px;color:var(--muted);margin:10px 0;}
+
+  /* ----- Vista Confirmación (modal denso) ----- */
+  .confirm-veil{position:fixed;inset:0;background:var(--danger-veil);display:none;align-items:center;justify-content:center;z-index:60;padding:16px;}
+  .confirm-veil.open{display:flex;}
+  .confirm-box{background:var(--panel);border:1px solid var(--danger-bd);border-radius:16px;padding:20px;max-width:420px;width:100%;}
+  .confirm-box h3{margin:0 0 10px;font-size:17px;}
+  .confirm-resumen{font-size:15px;margin-bottom:10px;}
+  .confirm-conteos{display:flex;gap:14px;font-size:13px;margin-bottom:14px;}
+  .confirm-conteos span.up{color:var(--diff-pos);font-weight:800;}
+  .confirm-conteos span.down{color:var(--diff-neg);font-weight:800;}
+  .confirm-irreversible{font-size:13px;font-weight:700;color:var(--danger);background:var(--danger-bg);
+       border:1px solid var(--danger-bd);border-radius:10px;padding:10px 12px;margin-bottom:18px;}
+  .btn-hold{position:relative;min-height:var(--tap-min);width:100%;border-radius:10px;border:1px solid var(--danger-bd);
+       background:var(--danger-on);color:#fff;font-weight:800;font-size:15px;overflow:hidden;cursor:pointer;user-select:none;-webkit-user-select:none;}
+  .btn-hold .fill{position:absolute;left:0;top:0;bottom:0;width:0%;background:var(--danger-solid);transition:width linear;z-index:0;}
+  .btn-hold .lbl{position:relative;z-index:1;}
+  .confirm-box .btn.secondary{margin-top:10px;}
+
+  /* ----- Vista Resultado ----- */
+  .resultado-num{display:flex;gap:10px;margin-bottom:14px;}
+  .resultado-num .cont{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;}
+  .resultado-num .cont .n{font-size:26px;font-weight:800;}
+  .resultado-num .cont.ok .n{color:var(--success);}
+  .resultado-num .cont.fail .n{color:var(--danger);}
+  .resultado-num .cont .l{font-size:11px;color:var(--muted);margin-top:4px;}
+  .lista-errores{list-style:none;margin:0 0 14px;padding:0;}
+  .lista-errores li{background:var(--danger-bg);border:1px solid var(--danger-bd);border-radius:9px;
+       padding:8px 10px;margin-bottom:6px;font-size:12px;color:var(--danger);}
+  .sello-cerrada{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+       padding:4px 10px;border-radius:var(--radius-pill);background:var(--panel2);border:1px solid var(--line);color:var(--muted);margin-bottom:10px;}
 </style>
 </head>
 <body>
@@ -239,6 +281,7 @@
 
     <div class="bottom-bar">
       <button class="btn primary" id="btn-revisar">Revisar y cerrar</button>
+      <button class="btn secondary" id="btn-descartar-sesion" style="margin-top:8px;">Descartar sesión</button>
     </div>
   </div>
 
@@ -247,22 +290,51 @@
     <div class="placeholder">(el panel EAN nuevo es un sheet sobre la vista Conteo — ver más abajo)</div>
   </div>
 
-  <!-- Vista 5: Revisión (placeholder — Task 8) -->
+  <!-- Vista 5: Revisión -->
   <div class="vista" id="vista-revision">
-    <div class="placeholder">Vista de revisión — se completa en la Task 8.</div>
+    <h1>Revisión</h1>
+    <div id="revision-sinasociar"></div>
+    <div id="revision-nota-pendientes" class="nota-pendientes"></div>
+    <div id="revision-lista"></div>
+    <button class="btn secondary" id="btn-volver-contar">Volver a contar</button>
+    <button class="btn danger" id="btn-confirmar-ajuste">Confirmar ajuste</button>
   </div>
 
-  <!-- Vista 6: Confirmación (placeholder — Task 8) -->
+  <!-- Vista 6: Confirmación -->
   <div class="vista" id="vista-confirmacion">
-    <div class="placeholder">Vista de confirmación — se completa en la Task 8.</div>
+    <h1>Confirmación</h1>
+    <div class="placeholder">La confirmación se hace en el modal (ver abajo).</div>
   </div>
 
-  <!-- Vista 7: Resultado (placeholder — Task 8) -->
+  <!-- Vista 7: Resultado -->
   <div class="vista" id="vista-resultado">
-    <div class="placeholder">Vista de resultado — se completa en la Task 8.</div>
+    <h1>Resultado del ajuste</h1>
+    <div id="resultado-sello"></div>
+    <div class="resultado-num">
+      <div class="cont ok"><div class="n" id="resultado-ajustados">0</div><div class="l">Ajustados</div></div>
+      <div class="cont fail"><div class="n" id="resultado-fallidos">0</div><div class="l">Fallidos</div></div>
+    </div>
+    <ul class="lista-errores" id="resultado-errores"></ul>
+    <button class="btn danger" id="btn-reintentar-fallidos" style="display:none;">Reintentar fallidos</button>
+    <button class="btn primary" id="btn-volver-inicio">Volver a Inicio</button>
   </div>
 
 </main>
+
+<!-- Modal de confirmación (fricción alta — irreversible) -->
+<div class="confirm-veil" id="confirm-veil">
+  <div class="confirm-box">
+    <h3>Confirmar ajuste de stock</h3>
+    <div class="confirm-resumen">Vas a ajustar stock de <b id="confirm-total">0</b> productos.</div>
+    <div class="confirm-conteos">
+      <span class="up" id="confirm-subas">+0 suben</span>
+      <span class="down" id="confirm-bajas">−0 bajan</span>
+    </div>
+    <div class="confirm-irreversible">Esto ajusta el stock real en WooCommerce y no se puede deshacer.</div>
+    <button type="button" class="btn-hold" id="btn-hold-confirmar"><span class="fill" id="btn-hold-fill"></span><span class="lbl">Mantené presionado 2s para confirmar</span></button>
+    <button type="button" class="btn secondary" id="btn-cancelar-confirmar">Cancelar</button>
+  </div>
+</div>
 
 <!-- Sheet: EAN nuevo (se abre sobre la vista Conteo, sin bloquear el input de escaneo) -->
 <div class="sheet-veil" id="ean-veil"></div>
@@ -309,6 +381,7 @@
     if(nombre === 'inicio') cargarInicio();
     if(nombre === 'alcance') cargarAlcance();
     if(nombre === 'conteo') cargarConteo();
+    if(nombre === 'revision') cargarRevision();
   }
 
   // ----- Fecha relativa (no hay helper en format.js para esto) -----
@@ -771,6 +844,11 @@
     }).catch(function(){});
   }, 300));
 
+  function vistaActivaNombre(){
+    var el = document.querySelector('.vista.on');
+    return el ? el.id.replace('vista-', '') : null;
+  }
+
   function asociarEan(ean, sku){
     var id = sesionId();
     if(!id) return;
@@ -779,9 +857,274 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ean: ean, sku: sku })
     }).then(function(r){ return r.json(); }).then(function(j){
-      if(j && j.ok){ setGuardado(true); cerrarSheetEan(); cargarConteo(); }
+      if(j && j.ok){
+        setGuardado(true);
+        cerrarSheetEan();
+        if(vistaActivaNombre() === 'revision') cargarRevision();
+        else cargarConteo();
+      }
     }).catch(function(){});
   }
+
+  // ----- Descartar sesión (Conteo) -----
+  document.getElementById('btn-descartar-sesion').addEventListener('click', function(){
+    var id = sesionId();
+    if(!id) return;
+    if(!confirm('¿Descartar esta sesión de conteo? No se toca el stock, pero se pierde todo lo contado.')) return;
+    fetch('/api/inventario/sesiones/' + id + '/descartar', { method: 'POST' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j && j.ok){
+          state.sesion = null;
+          historialCargado = false;
+          mostrarVista('inicio');
+        } else {
+          alert(j && j.error ? j.error : 'No se pudo descartar la sesión.');
+        }
+      }).catch(function(){ alert('No se pudo descartar la sesión (sin conexión).'); });
+  });
+
+  // ----- Vista Revisión -----
+  var revisionData = { items: [], pendientes: [] };
+
+  function apiEscanear(codigo){
+    var id = sesionId();
+    return fetch('/api/inventario/sesiones/' + id + '/escanear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codigo: codigo })
+    }).then(function(r){ return r.json(); });
+  }
+
+  function apiEliminarItem(itemId){
+    var id = sesionId();
+    return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, { method: 'DELETE' })
+      .then(function(r){ return r.json(); });
+  }
+
+  function fijarCantidad(item, valor){
+    var nuevo = parseInt(valor, 10);
+    if(isNaN(nuevo) || nuevo < 0){ renderRevision(); return; }
+    if(nuevo === item.cantidad) return;
+    var codigo = item.ean;
+    function terminar(){ cargarRevision(); }
+    if(nuevo > item.cantidad){
+      var delta = nuevo - item.cantidad;
+      var p = Promise.resolve();
+      for(var i = 0; i < delta; i++){ p = p.then(function(){ return apiEscanear(codigo); }); }
+      p.then(terminar).catch(terminar);
+    } else {
+      apiEliminarItem(item.id).then(function(){
+        if(nuevo === 0){ terminar(); return null; }
+        var p = Promise.resolve();
+        for(var i = 0; i < nuevo; i++){ p = p.then(function(){ return apiEscanear(codigo); }); }
+        return p.then(terminar);
+      }).catch(terminar);
+    }
+  }
+
+  function filaSinAsociarRevisionHtml(i){
+    return '<div class="fila-pendiente" data-ean="' + esc(i.ean) + '">' +
+      '<div class="info"><div class="sku">' + esc(i.ean) + '</div><div class="nombre">Sin asociar · contado ' + n(i.cantidad) + '</div></div>' +
+      '<button type="button" data-accion="asociar">Asociar</button>' +
+    '</div>';
+  }
+
+  function filaRevisionHtml(i){
+    var stockTxt = i.stock_woo != null ? esc(String(i.stock_woo)) : '—';
+    var diffHtml = i.diferencia != null
+      ? '<span class="diff ' + diffClase(i.diferencia) + '">' + esc(diffTexto(i.diferencia)) + '</span>'
+      : '<span class="diff zero">—</span>';
+    return '<div class="fila-revision" data-item-id="' + esc(i.id) + '" data-ean="' + esc(i.ean) + '">' +
+      '<div class="info">' +
+        '<div class="cod">' + esc(i.sku) + '</div>' +
+        '<div class="nombre">' + esc(i.nombre || '(sin nombre)') + '</div>' +
+        '<div class="stockline">Stock Woo: ' + stockTxt + ' · ' + diffHtml + '</div>' +
+      '</div>' +
+      '<input type="number" min="0" step="1" inputmode="numeric" value="' + esc(i.cantidad) + '" data-accion="nuevo-stock" aria-label="Nuevo stock contado para ' + esc(i.sku) + '">' +
+    '</div>';
+  }
+
+  function cargarRevision(){
+    var id = sesionId();
+    if(!id) return;
+    fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok) return;
+      state.sesion = j.sesion;
+      revisionData.items = j.items || [];
+      revisionData.pendientes = j.pendientes || [];
+      renderRevision();
+    }).catch(function(){});
+  }
+
+  function renderRevision(){
+    var sinAsociar = revisionData.items.filter(function(i){ return !i.sku; });
+    var asociados = revisionData.items.filter(function(i){ return !!i.sku; })
+      .sort(function(a, b){ return Math.abs(b.diferencia || 0) - Math.abs(a.diferencia || 0); });
+
+    var bloque = document.getElementById('revision-sinasociar');
+    if(sinAsociar.length){
+      bloque.innerHTML = '<div class="bloque-sinasociar"><h2>Sin asociar (' + sinAsociar.length + ')</h2>' +
+        sinAsociar.map(filaSinAsociarRevisionHtml).join('') + '</div>';
+      bloque.querySelectorAll('[data-accion="asociar"]').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var ean = btn.closest('.fila-pendiente').getAttribute('data-ean');
+          abrirSheetEan(ean);
+        });
+      });
+    } else {
+      bloque.innerHTML = '';
+    }
+
+    var notaPend = document.getElementById('revision-nota-pendientes');
+    notaPend.textContent = revisionData.pendientes.length
+      ? revisionData.pendientes.length + ' producto' + (revisionData.pendientes.length === 1 ? '' : 's') +
+        ' del alcance no se ' + (revisionData.pendientes.length === 1 ? 'contó' : 'contaron') + ' — su stock no se toca.'
+      : '';
+
+    var lista = document.getElementById('revision-lista');
+    lista.innerHTML = asociados.length ? asociados.map(filaRevisionHtml).join('') : '<p class="empty">No hay productos contados y asociados.</p>';
+    lista.querySelectorAll('[data-accion="nuevo-stock"]').forEach(function(inp){
+      inp.addEventListener('change', function(){
+        var fila = inp.closest('.fila-revision');
+        var itemId = fila.getAttribute('data-item-id');
+        var item = revisionData.items.filter(function(i){ return String(i.id) === itemId; })[0];
+        if(item) fijarCantidad(item, inp.value);
+      });
+    });
+
+    var btnConfirmar = document.getElementById('btn-confirmar-ajuste');
+    btnConfirmar.disabled = sinAsociar.length > 0;
+    btnConfirmar.title = sinAsociar.length > 0 ? 'Asociá todos los ítems sin SKU antes de confirmar' : '';
+  }
+
+  document.getElementById('btn-volver-contar').addEventListener('click', function(){
+    mostrarVista('conteo');
+  });
+
+  // ----- Vista Confirmación (modal denso, hold-to-confirm) -----
+  var confirmVeil = document.getElementById('confirm-veil');
+  var holdBtn = document.getElementById('btn-hold-confirmar');
+  var holdFill = document.getElementById('btn-hold-fill');
+  var holdTimer = null;
+
+  function abrirModalConfirmacion(){
+    var items = revisionData.items.filter(function(i){ return !!i.sku; });
+    document.getElementById('confirm-total').textContent = n(items.length);
+    var subas = items.filter(function(i){ return i.diferencia > 0; }).length;
+    var bajas = items.filter(function(i){ return i.diferencia < 0; }).length;
+    document.getElementById('confirm-subas').textContent = '+' + n(subas) + ' suben';
+    document.getElementById('confirm-bajas').textContent = '−' + n(bajas) + ' bajan';
+    confirmVeil.classList.add('open');
+  }
+
+  function holdReset(){
+    holdFill.style.transition = 'none';
+    holdFill.style.width = '0%';
+  }
+
+  function cerrarModalConfirmacion(){
+    confirmVeil.classList.remove('open');
+    if(holdTimer){ clearTimeout(holdTimer); holdTimer = null; }
+    holdReset();
+  }
+
+  function holdStart(e){
+    e.preventDefault();
+    if(holdBtn.disabled) return;
+    holdReset();
+    // Forzamos reflow para que el navegador aplique el width:0% antes de animar a 100%.
+    void holdFill.offsetWidth;
+    holdFill.style.transition = 'width 2000ms linear';
+    holdFill.style.width = '100%';
+    holdTimer = setTimeout(function(){
+      holdTimer = null;
+      ejecutarConfirmar();
+    }, 2000);
+  }
+
+  function holdCancel(){
+    if(holdTimer){ clearTimeout(holdTimer); holdTimer = null; }
+    holdReset();
+  }
+
+  holdBtn.addEventListener('pointerdown', holdStart);
+  holdBtn.addEventListener('pointerup', holdCancel);
+  holdBtn.addEventListener('pointerleave', holdCancel);
+  holdBtn.addEventListener('pointercancel', holdCancel);
+
+  document.getElementById('btn-cancelar-confirmar').addEventListener('click', cerrarModalConfirmacion);
+
+  document.getElementById('btn-confirmar-ajuste').addEventListener('click', function(){
+    if(revisionData.items.some(function(i){ return !i.sku; })) return;
+    abrirModalConfirmacion();
+  });
+
+  function ejecutarConfirmar(){
+    var id = sesionId();
+    if(!id) return;
+    holdBtn.disabled = true;
+    fetch('/api/inventario/sesiones/' + id + '/confirmar', { method: 'POST' })
+      .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+      .then(function(res){
+        holdBtn.disabled = false;
+        cerrarModalConfirmacion();
+        if(res.status === 200 && res.body.ok){
+          mostrarResultado(res.body);
+          mostrarVista('resultado');
+        } else {
+          alert(res.body && res.body.error ? res.body.error : 'No se pudo confirmar el ajuste.');
+        }
+      }).catch(function(){
+        holdBtn.disabled = false;
+        cerrarModalConfirmacion();
+        alert('No se pudo confirmar el ajuste (sin conexión).');
+      });
+  }
+
+  // ----- Vista Resultado -----
+  function cargarSelloResultado(){
+    var id = sesionId();
+    if(!id) return;
+    fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.ok && j.sesion){
+        state.sesion = j.sesion;
+        var sello = document.getElementById('resultado-sello');
+        sello.innerHTML = j.sesion.estado === 'confirmada' ? '<span class="sello-cerrada">Cerrada · Confirmada</span>' : '';
+      }
+    }).catch(function(){});
+  }
+
+  function mostrarResultado(res){
+    document.getElementById('resultado-ajustados').textContent = n(res.ajustados);
+    document.getElementById('resultado-fallidos').textContent = n(res.fallidos);
+    var ul = document.getElementById('resultado-errores');
+    ul.innerHTML = (res.errores && res.errores.length)
+      ? res.errores.map(function(e){ return '<li>' + esc(e.sku) + ': ' + esc(e.error) + '</li>'; }).join('')
+      : '';
+    document.getElementById('btn-reintentar-fallidos').style.display = (res.fallidos > 0) ? 'block' : 'none';
+    cargarSelloResultado();
+  }
+
+  document.getElementById('btn-reintentar-fallidos').addEventListener('click', function(){
+    var id = sesionId();
+    if(!id) return;
+    fetch('/api/inventario/sesiones/' + id + '/confirmar', { method: 'POST' })
+      .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+      .then(function(res){
+        if(res.status === 200 && res.body.ok){
+          mostrarResultado(res.body);
+        } else {
+          alert(res.body && res.body.error ? res.body.error : 'No se pudo reintentar el ajuste.');
+        }
+      }).catch(function(){ alert('No se pudo reintentar el ajuste (sin conexión).'); });
+  });
+
+  document.getElementById('btn-volver-inicio').addEventListener('click', function(){
+    state.sesion = null;
+    historialCargado = false;
+    mostrarVista('inicio');
+  });
 
   // Expuesto para que las próximas tareas (Conteo, Revisión, etc.) lo reusen.
   window.InvApp = { mostrarVista: mostrarVista, state: state, fechaRelativa: fechaRelativa, alcanceTexto: alcanceTexto };
