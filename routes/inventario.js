@@ -74,5 +74,86 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true, sesion: sesion || null });
   });
 
+  function coincideAlcance(prodCategorias, prodMarca, categoria, marca) {
+    const matchCat = categoria ? prodCategorias.includes(categoria) : false;
+    const matchMarca = marca ? prodMarca === marca : false;
+    if (categoria && marca) return matchCat || matchMarca;
+    if (categoria) return matchCat;
+    return matchMarca;
+  }
+
+  function solapan(a, b) {
+    // Dos alcances se solapan si comparten categoría, o comparten marca, o ambos
+    // están definidos y cualquiera de los dos coincide (mismo criterio "OR" que
+    // usa coincideAlcance para decidir qué producto entra en cada sesión).
+    if (a.categoria && b.categoria && a.categoria === b.categoria) return true;
+    if (a.marca && b.marca && a.marca === b.marca) return true;
+    return false;
+  }
+
+  router.post('/sesiones', (req, res) => {
+    const usuario = req.user?.username;
+    const categoria = String(req.body?.categoria || '').trim() || null;
+    const marca = String(req.body?.marca || '').trim() || null;
+    if (!categoria && !marca) {
+      return res.status(400).json({ ok: false, error: 'Elegí categoría y/o marca para el alcance.' });
+    }
+
+    const propia = db.prepare("SELECT id FROM inventario_sesiones WHERE usuario=? AND estado='abierta'").get(usuario);
+    if (propia) {
+      return res.status(409).json({ ok: false, error: 'Ya tenés una sesión abierta. Retomala o descartala antes de crear otra.' });
+    }
+
+    const abiertas = db.prepare("SELECT usuario, categoria, marca FROM inventario_sesiones WHERE estado='abierta'").all();
+    const nueva = { categoria, marca };
+    const choque = abiertas.find(s => solapan(s, nueva));
+    if (choque) {
+      return res.status(409).json({
+        ok: false,
+        error: `El alcance se cruza con la sesión de ${choque.usuario}.`,
+        ocupada_por: choque.usuario,
+        categoria: choque.categoria,
+        marca: choque.marca,
+      });
+    }
+
+    const id = db.prepare(
+      "INSERT INTO inventario_sesiones (usuario, categoria, marca, estado, creado_en) VALUES (?,?,?,'abierta',?)"
+    ).run(usuario, categoria, marca, now()).lastInsertRowid;
+    const sesion = db.prepare('SELECT * FROM inventario_sesiones WHERE id=?').get(id);
+    res.json({ ok: true, sesion });
+  });
+
+  function getSesion(id, usuario) {
+    const sesion = db.prepare('SELECT * FROM inventario_sesiones WHERE id=?').get(id);
+    if (!sesion || sesion.usuario !== usuario) return null;
+    return sesion;
+  }
+
+  router.get('/sesiones/:id', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+
+    const conteos = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=?').all(sesion.id);
+    const items = conteos.map(c => {
+      const prod = c.sku ? db.prepare('SELECT stock, nombre FROM catalogo_cache WHERE sku=?').get(c.sku) : null;
+      return {
+        id: c.id, ean: c.ean, sku: c.sku, cantidad: c.cantidad,
+        nombre: prod?.nombre || null,
+        stock_woo: prod ? prod.stock : null,
+        diferencia: prod ? c.cantidad - prod.stock : null,
+      };
+    });
+
+    const skusContados = new Set(items.map(i => i.sku).filter(Boolean));
+    const catalogo = db.prepare("SELECT sku, nombre, stock, categorias_json, marca FROM catalogo_cache WHERE COALESCE(sku,'')<>'' AND tipo<>'variable'").all();
+    const pendientes = catalogo
+      .filter(p => coincideAlcance(parseCategorias(p.categorias_json), p.marca, sesion.categoria, sesion.marca))
+      .filter(p => !skusContados.has(p.sku))
+      .map(p => ({ sku: p.sku, nombre: p.nombre, stock_woo: p.stock }));
+
+    res.json({ ok: true, sesion, items, pendientes });
+  });
+
   return router;
 }
