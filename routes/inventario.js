@@ -294,7 +294,7 @@ export function inventarioRouter(db, wooCfg) {
   router.get('/sesiones', (req, res) => {
     const usuario = req.user?.username;
     const rows = db.prepare(
-      "SELECT * FROM inventario_sesiones WHERE usuario=? AND estado<>'abierta' ORDER BY COALESCE(confirmado_en,creado_en) DESC LIMIT 100"
+      "SELECT * FROM inventario_sesiones WHERE usuario=? AND estado IN ('confirmada','descartada') ORDER BY COALESCE(confirmado_en,creado_en) DESC LIMIT 100"
     ).all(usuario);
     res.json({ ok: true, data: rows });
   });
