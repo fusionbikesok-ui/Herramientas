@@ -233,3 +233,46 @@ describe('refrescarPublicacionesMlAcotado', () => {
     expect(vieja).toMatchObject({ titulo: 'Vieja' });
   });
 });
+
+describe('GET /matcher/push-skus-pendientes/list', () => {
+  let db, app;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    app = express();
+    app.use(express.json());
+    app.use('/matcher', matcherRouter(db, ML_CFG));
+  });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('devuelve las decisiones pendientes de escribir en ML con datos para mostrar una fila', async () => {
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', titulo: 'Bici Roja', status: 'active', sellerSku: '' });
+    seedDecision(db, { clave: 'MLA1|', sku: 'FB-100', accion: 'asignar' });
+
+    const res = await request(app).get('/matcher/push-skus-pendientes/list');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ clave: 'MLA1|', sku: 'FB-100', titulo: 'Bici Roja', item_id: 'MLA1' });
+  });
+
+  it('no incluye decisiones ya escritas en ML (seller_sku ya coincide)', async () => {
+    seedCache(db, { clave: 'MLA2|', itemId: 'MLA2', titulo: 'Bici Azul', status: 'active', sellerSku: 'FB-200' });
+    seedDecision(db, { clave: 'MLA2|', sku: 'FB-200', accion: 'asignar' });
+
+    const res = await request(app).get('/matcher/push-skus-pendientes/list');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(0);
+  });
+
+  it('no incluye decisiones de publicaciones pausadas/inactivas', async () => {
+    seedCache(db, { clave: 'MLA3|', itemId: 'MLA3', titulo: 'Bici Verde', status: 'paused', sellerSku: '' });
+    seedDecision(db, { clave: 'MLA3|', sku: 'FB-300', accion: 'confirmar' });
+
+    const res = await request(app).get('/matcher/push-skus-pendientes/list');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(0);
+  });
+});

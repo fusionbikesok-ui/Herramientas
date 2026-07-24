@@ -522,6 +522,21 @@ export function matcherRouter(db, cfg) {
     res.json({ ok: true, pendientes: r.n });
   });
 
+  // Listado (solo lectura) de las decisiones pendientes de escribir en ML — mismo filtro
+  // que /push-skus-pendientes (POST) y /count, pero sin ejecutar la escritura. Para una
+  // vista enfocada que muestre qué falta antes de disparar la acción en lote.
+  router.get('/push-skus-pendientes/list', (req, res) => {
+    const rows = db.prepare(`
+      SELECT d.clave, d.sku, p.titulo, p.thumbnail, p.item_id
+      FROM sku_matcher_decisiones d
+      JOIN ml_publicaciones_cache p ON p.clave = d.clave
+      WHERE d.accion IN ('asignar','confirmar') AND d.sku LIKE 'FB-%'
+        AND p.status = 'active' AND COALESCE(p.seller_sku,'') <> d.sku
+      ORDER BY d.actualizado_en DESC
+    `).all();
+    res.json({ ok: true, data: rows });
+  });
+
   // Lee las publicaciones cacheadas.
   // ?scope=atencion → solo las que necesitan atención (sin mapeo / a re-mapear).
   const SELECT_PUBS = `
