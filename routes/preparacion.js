@@ -852,14 +852,22 @@ export async function syncPedidosCache(db, cfg) {
     // vez para las 3, en una única función/único cron).
     // Secuencial (no Promise.all): si la primera llamada no resuelve nunca (WC caído,
     // hang de red), no queremos disparar las otras dos en paralelo igual.
+    // Los "enviados" (completed/enviadoandreani) se acotan a los últimos 60 días — si no,
+    // el historial crece sin límite. Los "pendientes" (lpaandreani) no se acotan: un
+    // pedido pendiente de preparar sigue siendo relevante sin importar hace cuánto se
+    // generó, hasta que se procese.
+    const hace60Dias = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
     const wcPend = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
-    const wcCompleted = await wooFetch(cfg.woo, '/orders?status=completed&per_page=100');
-    const wcEnviado = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(enviadoAndreaniStatus)}&per_page=100`);
+    const wcCompleted = await wooFetch(cfg.woo, `/orders?status=completed&after=${encodeURIComponent(hace60Dias)}&per_page=100`);
+    const wcEnviado = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(enviadoAndreaniStatus)}&after=${encodeURIComponent(hace60Dias)}&per_page=100`);
 
     const tx = db.transaction(() => {
       for (const order of wcPend.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'pendiente'));
       for (const order of wcCompleted.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'enviado'));
       for (const order of wcEnviado.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'enviado'));
+      // Limpieza: el sync solo hace upsert, nunca borra — sin esto, una fila "enviado" que
+      // ya cayó fuera de la ventana de 60 días quedaría para siempre en la caché.
+      db.prepare("DELETE FROM pedidos_cache WHERE estado_envio='enviado' AND fecha < ?").run(hace60Dias);
     });
     tx();
 
