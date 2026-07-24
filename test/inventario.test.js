@@ -117,6 +117,7 @@ describe('POST /api/inventario/sesiones', () => {
 
   it('rechaza con 409 si otra sesión abierta ya cubre la misma marca, mostrando el dueño', async () => {
     const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
 
     const res = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
@@ -144,6 +145,41 @@ describe('POST /api/inventario/sesiones', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/ya ten[eé]s una sesión/i);
+  });
+
+  it('rechaza con 409 si el alcance de categoría se cruza aunque la otra sesión tenga también marca definida', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]' });
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categoria: 'Cascos', marca: 'Bell' });
+
+    const res = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ categoria: 'Cascos' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.ocupada_por).toBe('juan');
+  });
+
+  it('rechaza con 409 el caso cruzado: sesión por categoría vs. sesión por marca que comparten un producto real', async () => {
+    const db = openDb(TEST_DB);
+    // "Casco Bell": entra en el alcance de "categoria=Cascos" Y en el de "marca=Bell",
+    // aunque ningún campo coincida literalmente entre las dos sesiones.
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]' });
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categoria: 'Cascos' });
+
+    const res = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.ocupada_por).toBe('juan');
+  });
+
+  it('permite alcances que no comparten ningún producto real, aunque suene similar', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Continental', categorias_json: '["Cubiertas"]' });
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categoria: 'Cascos' });
+
+    const res = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marca: 'Continental' });
+
+    expect(res.status).toBe(200);
   });
 });
 

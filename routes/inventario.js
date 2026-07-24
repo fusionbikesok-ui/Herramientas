@@ -82,12 +82,27 @@ export function inventarioRouter(db, wooCfg) {
     return matchMarca;
   }
 
+  // SKUs que entran en un alcance dado, según la misma regla que usa GET /sesiones/:id
+  // para armar "pendientes" (coincideAlcance).
+  function skusDeAlcance(categoria, marca) {
+    const catalogo = db.prepare("SELECT sku, categorias_json, marca FROM catalogo_cache WHERE COALESCE(sku,'')<>''").all();
+    return new Set(
+      catalogo
+        .filter(p => coincideAlcance(parseCategorias(p.categorias_json), p.marca, categoria, marca))
+        .map(p => p.sku)
+    );
+  }
+
+  // Dos alcances se solapan si existe AL MENOS UN producto real que entra en ambos —
+  // no alcanza con comparar categoría-con-categoría/marca-con-marca de forma literal,
+  // porque una sesión "categoria=Cascos" y otra "marca=Bell" pueden compartir productos
+  // (ej. "Casco Bell") sin que ningún campo coincida literalmente entre las dos.
   function solapan(a, b) {
-    // Dos alcances se solapan si comparten categoría, o comparten marca, o ambos
-    // están definidos y cualquiera de los dos coincide (mismo criterio "OR" que
-    // usa coincideAlcance para decidir qué producto entra en cada sesión).
-    if (a.categoria && b.categoria && a.categoria === b.categoria) return true;
-    if (a.marca && b.marca && a.marca === b.marca) return true;
+    const skusA = skusDeAlcance(a.categoria, a.marca);
+    if (!skusA.size) return false;
+    for (const sku of skusDeAlcance(b.categoria, b.marca)) {
+      if (skusA.has(sku)) return true;
+    }
     return false;
   }
 
