@@ -275,4 +275,17 @@ describe('GET /matcher/push-skus-pendientes/list', () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(0);
   });
+
+  it('excluye decisiones con accion "descartar" y SKUs que no empiezan con FB- (no son de FusionBikes)', async () => {
+    seedCache(db, { clave: 'MLA4|', itemId: 'MLA4', titulo: 'Descartada', status: 'active', sellerSku: '' });
+    seedDecision(db, { clave: 'MLA4|', sku: 'FB-400', accion: 'descartar' });
+
+    seedCache(db, { clave: 'MLA5|', itemId: 'MLA5', titulo: 'SKU externo', status: 'active', sellerSku: '' });
+    seedDecision(db, { clave: 'MLA5|', sku: 'OTRO-500', accion: 'asignar' });
+
+    const res = await request(app).get('/matcher/push-skus-pendientes/list');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(0);
+  });
 });
