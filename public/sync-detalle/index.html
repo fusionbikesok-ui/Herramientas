@@ -85,7 +85,9 @@ var CATS={
   sin_mapeo:{modo:'mapeo',titulo:'Ventas sin SKU mapeado',desc:'Publicaciones que se vendieron en MercadoLibre pero no están vinculadas a un SKU de WooCommerce. Buscá el producto por SKU o nombre y asignáselo. El stock se sincroniza solo en el próximo ciclo. Si la publicación ya no existe o la venta no es relevante, podés descartarla.'},
   remapeo_requerido:{modo:'mapeo',titulo:'Variaciones a re-mapear',desc:'La variación mapeada ya no existe en ML (se editó o recreó la publicación). Si la venta sigue siendo válida, asignale el SKU correcto a la variación actual desde el Matcher. Si esa variación vieja ya no aplica, descartala: nunca vas a poder re-mapearla con esta clave exacta.'},
   requiere_atencion_ml:{modo:'info',titulo:'Exceso de fotos en ML',desc:'ML no permite actualizar estas publicaciones hasta que bajes la cantidad de fotos en tu cuenta de MercadoLibre. Abrí cada una, quitá fotos y el sync se reanuda solo.'},
-  errores:{modo:'diagnostico',titulo:'Errores de sincronización',desc:'Cada fallo se diagnostica en vivo contra MercadoLibre y se ofrece la acción que lo resuelve: reactivar (pausada con stock web), desvincular (la variación ya no existe), descartar (sin stock real / pausada a mano) o reintentar.'}
+  errores:{modo:'diagnostico',titulo:'Errores de sincronización',desc:'Cada fallo se diagnostica en vivo contra MercadoLibre y se ofrece la acción que lo resuelve: reactivar (pausada con stock web), desvincular (la variación ya no existe), descartar (sin stock real / pausada a mano) o reintentar.'},
+  reactivables:{modo:'reactivables',titulo:'Publicaciones pausadas reactivables',desc:'ML pausó estas publicaciones por quedarse sin stock, pero ya tenés stock en la web. Reactivarlas les empuja el stock actual y las vuelve a poner activas en ML (si el neto cubre el precio de contado).'},
+  push_pendientes:{modo:'push_pendientes',titulo:'SKUs pendientes de escribir en ML',desc:'Estas publicaciones tienen SKU asignado en el Matcher pero todavía no se escribió en MercadoLibre. Escribilas en lote para que ML quede con el SKU correcto.'}
 };
 
 // Metadatos por diagnóstico: etiqueta, color del badge y explicación.
@@ -115,6 +117,8 @@ async function cargar(){
   var cont=document.getElementById('cuerpo');
   cont.innerHTML='<div class="loading">Cargando…</div>';
   try{
+    if(CFG.modo==='reactivables'){ await cargarReactivables(cont); return; }
+    if(CFG.modo==='push_pendientes'){ await cargarPushPendientes(cont); return; }
     var r=await fetch('/api/sync/atencion/'+encodeURIComponent(CAT));
     var d=await r.json();
     if(!d.ok)throw new Error(d.error||'error');
@@ -171,6 +175,179 @@ function render(rows){
   });
   h+='</tbody></table></div>';
   return h;
+}
+
+// ── Modo reactivables (portado de sync-ml/index.html) ────────────────────────
+var LABELS_PRECIO={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:'OK'};
+
+async function cargarReactivables(cont){
+  cont.innerHTML='<div class="loading">Verificando publicaciones pausadas…</div>';
+  try{
+    try{
+      var rc=await fetch('/api/sync/reactivables/conteo');
+      var dc=await rc.json();
+      if(dc.ok){
+        var loading=cont.querySelector('.loading');
+        if(loading){
+          loading.textContent=dc.totalPublicaciones>0
+            ? ('Evaluando '+n(dc.totalPublicaciones)+' publicación(es) — verificando precios en ML (puede tardar unos segundos)…')
+            : 'Verificando publicaciones pausadas…';
+        }
+      }
+    }catch(e){/* el conteo es cosmético: si falla, seguimos al detalle igual */}
+    var r=await fetch('/api/sync/reactivables');
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    cont.innerHTML=renderReactivables(d);
+  }catch(err){
+    cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
+  }
+}
+
+function renderReactivables(d){
+  var pubs=d.data||[];
+  if(!pubs.length){
+    return '<div class="tbl-wrap"><div class="loading" style="color:var(--green)">✓ Nada para reactivar por ahora.</div></div>';
+  }
+  var h='<p class="sub" style="margin-bottom:10px">'+n(d.totalPublicaciones)+' publicaciones ('+n(d.totalVariaciones)+' variaciones) que ML pausó por quedarse sin stock y ya tienen stock en la web.</p>';
+  h+='<div class="tbl-wrap"><table><thead><tr>';
+  h+='<th><input type="checkbox" id="chk-all" checked onclick="toggleAll(this)"></th>';
+  h+='<th>Publicación</th><th>SKU(s)</th><th>Stock web</th><th>Precio ML</th><th>Neto</th><th>Precio contado</th><th>Estado</th></tr></thead><tbody>';
+  pubs.forEach(function(p){
+    var skus=[...new Set(p.variaciones.map(function(v){return v.sku;}).filter(Boolean))];
+    var stockTotal=p.variaciones.reduce(function(a,v){return a+(v.stock_disponible_ml||0);},0);
+    var thumb=p.thumbnail?'<img class="pub-thumb" src="'+esc(p.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
+    var estado=p.estado||'sin_precio';
+    h+='<tr>';
+    h+='<td><input type="checkbox" class="chk-item" value="'+esc(p.item_id)+'" checked></td>';
+    h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(p.titulo||p.item_id)+'</div>'
+      +'<div class="pub-meta">'+esc(p.item_id)+' · '+p.variaciones.length+' var.</div></div></div></td>';
+    h+='<td class="mono">'+esc(skus.slice(0,3).join(', '))+(skus.length>3?(' +'+(skus.length-3)):'')+'</td>';
+    h+='<td>'+n(stockTotal)+'</td>';
+    h+='<td>'+money(p.precio_ml)+'</td>';
+    h+='<td><b>'+money(p.neto)+'</b></td>';
+    h+='<td>'+money(p.precio_web)+'</td>';
+    h+='<td><span class="tag '+(estado==='ok'?'ok':'paused')+'">'+esc(LABELS_PRECIO[estado]||estado)+'</span></td>';
+    h+='</tr>';
+  });
+  h+='</tbody></table></div>';
+  h+='<div class="acc-btns" style="margin-top:12px"><button class="btn" id="btn-react" onclick="reactivarSel()">Reactivar seleccionadas</button>'
+   +'<button class="btn sec" id="btn-react-cancel" onclick="cancelarReactivar()" style="display:none">Cancelar</button></div>';
+  h+='<div class="msg" id="react-msg"></div>';
+  return h;
+}
+
+function toggleAll(cb){document.querySelectorAll('.chk-item').forEach(function(x){x.checked=cb.checked;});}
+
+var reactivarCtrl=null;
+function cancelarReactivar(){ if(reactivarCtrl)reactivarCtrl.abort(); }
+
+async function reactivarSel(){
+  var sel=[...document.querySelectorAll('.chk-item:checked')].map(function(x){return x.value;});
+  var msg=document.getElementById('react-msg');
+  if(!sel.length){msg.style.color='var(--amber)';msg.textContent='No seleccionaste ninguna publicación.';return;}
+  if(!confirm('Vas a reactivar '+sel.length+' publicación(es) en MercadoLibre.\n\nSe les empuja el stock actual de la web y pasan a estado activo. ¿Confirmás?'))return;
+  var btn=document.getElementById('btn-react');btn.disabled=true;
+  var btnCancel=document.getElementById('btn-react-cancel');
+  if(btnCancel){btnCancel.style.display='';btnCancel.disabled=false;}
+  reactivarCtrl=new AbortController();
+  var CHUNK=10,okTotal=0,errTotal=0,omitTotal=0,noProcTotal=0,fallos=[],omitidos=[];
+  var cancelado=false;
+  msg.style.color='var(--muted)';
+  try{
+    for(var i=0;i<sel.length;i+=CHUNK){
+      if(reactivarCtrl.signal.aborted){cancelado=true;noProcTotal=sel.length-i;break;}
+      msg.textContent='Reactivando… '+Math.min(i+CHUNK,sel.length)+'/'+sel.length+' (podés cancelar; los que ya se están procesando terminan)';
+      try{
+        var r=await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:sel.slice(i,i+CHUNK)}),signal:reactivarCtrl.signal});
+        var d=await r.json();
+        if(!d.ok)throw new Error(d.error||'error');
+        (d.resultados||[]).forEach(function(x){
+          if(x.ok){okTotal++;}
+          else if(x.omitido){omitTotal++;if(omitidos.length<8)omitidos.push(x.item_id+': '+(x.motivo||'omitida'));}
+          else{errTotal++;if(fallos.length<8)fallos.push(x.item_id+': '+(x.error||'error'));}
+        });
+      }catch(e){
+        if(e.name==='AbortError'){cancelado=true;noProcTotal=sel.length-i;break;}
+        throw e;
+      }
+    }
+    var hayPend=(errTotal||omitTotal||noProcTotal);
+    msg.style.color=hayPend?'var(--amber)':'var(--green)';
+    msg.textContent=(cancelado?'⚠ Cancelado. ':'✓ ')+'Reactivadas '+okTotal
+      +(omitTotal?(' · '+omitTotal+' omitida(s): '+omitidos.join(' | ')):'')
+      +(errTotal?(' · '+errTotal+' con error: '+fallos.join(' | ')):'')
+      +(noProcTotal?(' · '+noProcTotal+' sin procesar por cancelación'):'')
+      +'. Actualizando estado…';
+    var cont=document.getElementById('cuerpo');
+    await cargarReactivables(cont);
+  }catch(err){
+    msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
+  }finally{
+    reactivarCtrl=null;
+    btn.disabled=false;
+    if(btnCancel){btnCancel.style.display='none';btnCancel.disabled=false;}
+  }
+}
+
+// ── Modo push_pendientes (escribir SKUs pendientes en ML) ────────────────────
+async function cargarPushPendientes(cont){
+  try{
+    var r=await fetch('/api/matcher/push-skus-pendientes/list');
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    cont.innerHTML=renderPushPendientes(d.data||[]);
+  }catch(err){
+    cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
+  }
+}
+
+function renderPushPendientes(rows){
+  if(!rows.length){
+    return '<div class="tbl-wrap"><div class="loading" style="color:var(--green)">✓ No hay SKUs pendientes de escribir en ML.</div></div>';
+  }
+  var h='<p class="sub" style="margin-bottom:10px">'+n(rows.length)+' SKU(s) pendiente(s) de escribir en ML.</p>';
+  h+='<div class="tbl-wrap"><table><thead><tr><th>Publicación</th><th>SKU a escribir</th></tr></thead><tbody>';
+  rows.forEach(function(row){
+    var thumb=row.thumbnail?'<img class="pub-thumb" src="'+esc(row.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
+    h+='<tr><td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(row.titulo||row.item_id)+'</div>'
+      +'<div class="pub-meta">'+esc(row.item_id||row.clave)+'</div></div></div></td>';
+    h+='<td class="mono">'+esc(row.sku)+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  h+='<div class="acc-btns" style="margin-top:12px"><button class="btn" id="btn-push" onclick="escribirPendientes()">Escribir '+rows.length+' SKU(s) en ML</button></div>';
+  h+='<div class="msg" id="push-msg"></div>';
+  return h;
+}
+
+async function escribirPendientes(){
+  var btn=document.getElementById('btn-push');
+  var msg=document.getElementById('push-msg');
+  if(!confirm('Vas a escribir estos SKUs en MercadoLibre. ¿Confirmás?'))return;
+  btn.disabled=true;
+  var totalEscritos=0,totalErrores=0;
+  msg.style.color='var(--muted)';
+  try{
+    var restantes=1;
+    while(restantes>0){
+      msg.textContent='Escribiendo… (llevás '+totalEscritos+' escritos)';
+      var r=await fetch('/api/matcher/push-skus-pendientes',{method:'POST'});
+      var d=await r.json();
+      if(!d.ok)throw new Error(d.error||'error');
+      totalEscritos+=d.escritos||0;
+      totalErrores+=d.errores||0;
+      restantes=d.restantes||0;
+      if((d.procesados||0)===0)break;
+    }
+    msg.style.color=totalErrores?'var(--amber)':'var(--green)';
+    msg.textContent='✓ Escritos '+totalEscritos+(totalErrores?(' · '+totalErrores+' con error'):'')+'. Actualizando…';
+    var cont=document.getElementById('cuerpo');
+    await cargarPushPendientes(cont);
+  }catch(err){
+    msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
+  }finally{
+    btn.disabled=false;
+  }
 }
 
 // ── Búsqueda acotada de SKU + asignar (modo mapeo y re-mapeo desde errores) ───
