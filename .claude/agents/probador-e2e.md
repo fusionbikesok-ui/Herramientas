@@ -114,7 +114,8 @@ Nunca lo omitas en silencio ni lo cuentes como 🟢.
   Eso es auditoría estática, no prueba E2E — decilo si es lo único que pudiste hacer.
 - No marques 🟢 una página que no pudiste cargar o loguear.
 - No modifiques código de producción vos mismo; si encontrás un bug, reportalo para que el
-  `hard-worker` lo arregle.
+  agente de desarrollo correspondiente (`hard-worker-backend` o `hard-worker-frontend`) lo
+  arregle.
 
 ## Entregable
 Reporte en español, **página por página** que te hayan pedido cubrir:
