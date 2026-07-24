@@ -205,3 +205,109 @@ describe('GET /api/inventario/sesiones/:id', () => {
     expect(res.body.pendientes[0].sku).toBe('FB-2');
   });
 });
+
+describe('POST /api/inventario/sesiones/:id/escanear', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  async function crearSesion(db, usuario, body) {
+    const r = await request(buildApp(db, usuario)).post('/api/inventario/sesiones').send(body);
+    return r.body.sesion.id;
+  }
+
+  it('escanea un SKU directo: crea/incrementa la fila con ese sku', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    const id = await crearSesion(db, 'juan', { marca: 'Bell' });
+
+    const r1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    expect(r1.body.item.sku).toBe('FB-1');
+    expect(r1.body.item.cantidad).toBe(1);
+
+    const r2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    expect(r2.body.item.cantidad).toBe(2);
+  });
+
+  it('escanea un EAN conocido (en ean_sku): resuelve el sku automáticamente', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    db.prepare("INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES ('1234567890128','FB-1',?)").run(now());
+    const id = await crearSesion(db, 'juan', { marca: 'Bell' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '1234567890128' });
+
+    expect(r.body.item.sku).toBe('FB-1');
+    expect(r.body.item.ean).toBe('1234567890128');
+  });
+
+  it('escanea un EAN NO reconocido: crea fila con sku null (sin asociar)', async () => {
+    const db = openDb(TEST_DB);
+    const id = await crearSesion(db, 'juan', { marca: 'Bell' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '1234567890128' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.item.sku).toBeNull();
+    expect(r.body.item.sin_asociar).toBe(true);
+  });
+
+  it('rechaza escanear en la sesión de otro usuario', async () => {
+    const db = openDb(TEST_DB);
+    const id = await crearSesion(db, 'juan', { marca: 'Bell' });
+
+    const r = await request(buildApp(db, 'ana')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    expect(r.status).toBe(404);
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/asociar', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('asocia un EAN sin sku a un SKU existente y siembra ean_sku', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '1234567890128' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.item.sku).toBe('FB-1');
+    const fila = db.prepare("SELECT sku FROM ean_sku WHERE ean='1234567890128'").get();
+    expect(fila.sku).toBe('FB-1');
+  });
+
+  it('rechaza asociar a un SKU que no existe en el catálogo', async () => {
+    const db = openDb(TEST_DB);
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '1234567890128' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'NO-EXISTE' });
+
+    expect(r.status).toBe(400);
+  });
+});
+
+describe('DELETE /api/inventario/sesiones/:id/items/:itemId', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('elimina una fila contada (deshacer)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    const itemId = esc.body.item.id;
+
+    const r = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${id}/items/${itemId}`);
+
+    expect(r.status).toBe(200);
+    const fila = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(itemId);
+    expect(fila).toBeUndefined();
+  });
+});
