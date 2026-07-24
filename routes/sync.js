@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import { mlFetch, bootstrapToken } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
-import { buscarEnCache, buildWooPath } from '../lib/wooStock.js';
+import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
@@ -106,9 +106,28 @@ const COMPUTED_STOCK_CTE = `
 
 // ─── syncMlToWc ──────────────────────────────────────────────────────────────
 
-export async function syncMlToWc(db, cfg) {
-  if (!mlCfgOk(cfg)) return;
+// Candado para evitar corridas concurrentes de ML→WC. Sin él, dos ejecuciones en
+// paralelo sobre la misma orden ML (cron cada 3 min que se solapa por demora del
+// rate-limit, o el endpoint manual POST /api/sync/ml-wc disparado mientras el cron
+// corre) pasan ambas los SELECT de "¿ya existe?" antes de que ninguna haga el INSERT
+// de control, creando DOS pedidos WC para la misma venta. Análogo a _wcToMlEnCurso.
+let _mlToWcEnCurso = false;
 
+export async function syncMlToWc(db, cfg) {
+  if (!mlCfgOk(cfg)) return { omitido: true };
+  // Ya hay una corrida en curso (cron o llamada manual): se saltea para no duplicar
+  // pedidos WC. Se informa omitido:true para que el caller no crea que sincronizó.
+  if (_mlToWcEnCurso) return { omitido: true };
+  _mlToWcEnCurso = true;
+  try {
+    await _syncMlToWc(db, cfg);
+    return { omitido: false };
+  } finally {
+    _mlToWcEnCurso = false;
+  }
+}
+
+async function _syncMlToWc(db, cfg) {
   const { ml: mlCfg, woo: wooCfg } = cfg;
   const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get();
   const desde = cursorRow?.valor ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
@@ -194,23 +213,28 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       continue;
     }
 
-    try {
-      const resp = await wooFetch(wooCfg, buildWooPath(prod));
-      const precio = parseFloat(resp.data.price ?? resp.data.regular_price ?? '0') || 0;
-      const total = (precio * qty).toFixed(2);
-
-      const li = { quantity: qty, subtotal: total, total: total };
-      if (prod.tipo === 'variation' && prod.id_padre) {
-        li.product_id = prod.id_padre;
-        li.variation_id = prod.id_woo;
-      } else {
-        li.product_id = prod.id_woo;
-      }
-      lineItems.push(li);
-    } catch (e) {
+    // El precio del pedido WC sale del precio REAL de venta de la orden ML
+    // (item.unit_price, ya presente en ov.items), NO del catálogo Woo vigente al
+    // momento del sync: ese catálogo pudo cambiar entre la venta y el procesamiento
+    // (el cron puede demorar por el rate-limit de ML), dejando el pedido con un precio
+    // que no es ni el pagado en ML ni el actual. Fail-closed: si ML no informó el
+    // precio de la venta, no se inventa uno — se marca error y no se agrega el ítem.
+    const unitPrice = item.unit_price;
+    if (unitPrice == null || !(unitPrice >= 0)) {
       algunSinMapeo = true;
-      logSync(db, { direccion: 'ml_wc', clave, sku, estado: 'error', error: e.message });
+      logSync(db, { direccion: 'ml_wc', clave, sku, estado: 'error', error: 'Orden ML sin unit_price — no se puede fijar el precio del pedido WC' });
+      continue;
     }
+    const total = (unitPrice * qty).toFixed(2);
+
+    const li = { quantity: qty, subtotal: total, total: total };
+    if (prod.tipo === 'variation' && prod.id_padre) {
+      li.product_id = prod.id_padre;
+      li.variation_id = prod.id_woo;
+    } else {
+      li.product_id = prod.id_woo;
+    }
+    lineItems.push(li);
   }
 
   if (lineItems.length === 0) {
@@ -234,8 +258,16 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     });
 
     const wcOrderId = resp.data.id;
+    // OJO: este INSERT OR IGNORE NO protege contra pedidos Woo duplicados. Para cuando
+    // llega acá, el POST /orders de arriba YA creó el pedido en Woo; el OR IGNORE solo
+    // evita duplicar la fila de control (PK sobre ml_order_id). En un escenario
+    // multi-proceso, dos procesos podrían crear DOS pedidos Woo huérfanos y solo uno
+    // quedaría registrado en la fila de control. La ÚNICA protección real contra
+    // duplicados es el candado _mlToWcEnCurso, que es por proceso. El deploy actual
+    // corre un solo proceso Node, así que el riesgo residual es bajo — pero queda
+    // documentado. El OR IGNORE es solo defensa de última línea para la fila de control.
     db.prepare(`
-      INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en)
+      INSERT OR IGNORE INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en)
       VALUES (?, ?, ?, ?)
     `).run(orderId, wcOrderId, JSON.stringify(orden.buyer ?? null), now());
 
@@ -323,11 +355,14 @@ let _reactivarEnCurso = false;
 let _limpiezaMuertasEnCurso = false;
 
 export async function syncWcToMl(db, cfg) {
-  if (!mlCfgOk(cfg)) return;
-  if (_wcToMlEnCurso) return;
+  if (!mlCfgOk(cfg)) return { omitido: true };
+  // Ya hay una corrida en curso: se saltea. Se informa omitido:true (mismo criterio
+  // que syncMlToWc) para que el caller no crea que sincronizó.
+  if (_wcToMlEnCurso) return { omitido: true };
   _wcToMlEnCurso = true;
   try {
     await _syncWcToMl(db, cfg);
+    return { omitido: false };
   } finally {
     _wcToMlEnCurso = false;
   }
@@ -957,8 +992,9 @@ export function syncRouter(db, cfg) {
 
   router.post('/ml-wc', async (req, res) => {
     try {
-      await syncMlToWc(db, cfg);
-      res.json({ ok: true });
+      const r = await syncMlToWc(db, cfg);
+      // omitido:true cuando ya había una corrida en curso (candado) — no sincronizó.
+      res.json({ ok: true, omitido: r?.omitido === true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
@@ -966,8 +1002,9 @@ export function syncRouter(db, cfg) {
 
   router.post('/wc-ml', async (req, res) => {
     try {
-      await syncWcToMl(db, cfg);
-      res.json({ ok: true });
+      const r = await syncWcToMl(db, cfg);
+      // omitido:true cuando ya había una corrida en curso (candado) — no sincronizó.
+      res.json({ ok: true, omitido: r?.omitido === true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }

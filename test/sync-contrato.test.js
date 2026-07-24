@@ -74,15 +74,15 @@ describe('_procesarOrden — payload exacto de POST /orders', () => {
       date_created: '2026-07-01T00:00:00Z',
       buyer: { first_name: 'Ana', last_name: 'Gomez', nickname: 'anag', email: 'ana@mail.com', phone: { number: '3511234567' } },
       order_items: [
-        { item: { id: 'MLA100', variation_id: '' }, quantity: 2 },
-        { item: { id: 'MLA200', variation_id: '987654321.0' }, quantity: 1 },
+        { item: { id: 'MLA100', variation_id: '' }, quantity: 2, unit_price: 150 },
+        { item: { id: 'MLA200', variation_id: '987654321.0' }, quantity: 1, unit_price: 30000 },
       ],
     };
     mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    // El precio del line_item sale de unit_price (venta ML), no del catálogo Woo:
+    // ya no se hace GET al producto, solo el POST /orders.
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
       if (path === '/orders' && method === 'post') return { data: { id: 5050 } };
-      if (path === '/products/100') return { data: { price: '150.00' } };
-      if (path === '/products/220/variations/221') return { data: { price: '30000.00' } };
       throw new Error(`ruta wooFetch no esperada en el test: ${path}`);
     });
 
@@ -122,12 +122,12 @@ describe('_procesarOrden — payload exacto de POST /orders', () => {
     const orden = {
       id: 'ORD-CONTRATO-2', date_created: '2026-07-01T00:00:00Z',
       buyer: { nickname: 'compradorml' },
-      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1 }],
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
     };
     mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
       if (path === '/orders' && method === 'post') return { data: { id: 5051 } };
-      return { data: { price: '150.00' } };
+      return { data: {} };
     });
 
     const p = syncMlToWc(db, CFG);
