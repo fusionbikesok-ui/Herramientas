@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fusion Bikes · Contador de inventario</title>
 <link rel="stylesheet" href="../lib/theme.css">
 <style>
@@ -917,7 +917,7 @@
     var prev = JSON.parse(localStorage.getItem('fb_inv_session_v1') || '{"rows":[],"history":[]}');
     var merged = { rows: rows, history: prev.history || [] };
     localStorage.setItem('fb_inv_session_v1', JSON.stringify(merged));
-    window.location.href = '/herramientas/etiquetas/';
+    window.location.href = '/herramientas/etiquetas/?desde=inventario';
   }
 
   btnEnviarEtiquetas.addEventListener('click', function(){

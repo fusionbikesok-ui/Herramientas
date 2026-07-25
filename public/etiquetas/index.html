@@ -892,6 +892,13 @@ window.addEventListener('load', function(){
       if(e.key==='Enter'){ e.preventDefault(); agregarManual(); }
     });
   });
+  // Si se llega desde el Contador de Inventario (?desde=inventario), abrir directo el
+  // tab correspondiente en vez de dejar el usuario en "Buscar en catálogo" viendo
+  // contenido restaurado de una sesión anterior sin entender por qué no ve lo que mandó.
+  if (new URLSearchParams(location.search).get('desde') === 'inventario') {
+    var tabInventario = document.querySelector('.tab[onclick*="inventario"]');
+    if (tabInventario) tabInventario.click();
+  }
 });
 </script>
 
