@@ -237,6 +237,7 @@ export function inventarioRouter(db, wooCfg) {
   router.delete('/sesiones/:id/items/:itemId', (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
     db.prepare('DELETE FROM inventario_conteos WHERE id=? AND sesion_id=?').run(req.params.itemId, sesion.id);
     res.json({ ok: true });
   });
