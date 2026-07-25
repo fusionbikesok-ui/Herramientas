@@ -33,6 +33,75 @@ function buildTestApp(db) {
   return app;
 }
 
+function buildTestAppComo(db, usuario) {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => { req.user = { username: usuario, is_admin: 0 }; next(); });
+  app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani' }));
+  return app;
+}
+
+describe('POST /:id/heartbeat', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('registra la presencia y no devuelve a nadie si sos el único viendo la preparación', async () => {
+    const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 900, numeroPedido: '900', comprador: 'Juan', items: [] });
+
+    const res = await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.otros).toEqual([]);
+  });
+
+  it('devuelve a otro usuario que mandó heartbeat en los últimos 30s, sin incluirse a sí mismo', async () => {
+    const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 901, numeroPedido: '901', comprador: 'Ana', items: [] });
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    const res = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    expect(res.body.otros).toHaveLength(1);
+    expect(res.body.otros[0].usuario).toBe('juan');
+  });
+
+  it('no devuelve un heartbeat viejo (más de 30s)', async () => {
+    const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 902, numeroPedido: '902', comprador: 'Ana', items: [] });
+    const viejo = new Date(Date.now() - 60000).toISOString(); // hace 60s
+    db.prepare('INSERT INTO preparacion_vistas (preparacion_id, usuario, visto_en) VALUES (?,?,?)').run(prepId, 'juan', viejo);
+
+    const res = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    expect(res.body.otros).toEqual([]);
+  });
+
+  it('actualiza (no duplica) el heartbeat del mismo usuario en la misma preparación', async () => {
+    const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 903, numeroPedido: '903', comprador: 'Ana', items: [] });
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepId}/heartbeat`);
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    const filas = db.prepare('SELECT * FROM preparacion_vistas WHERE preparacion_id=?').all(prepId);
+
+    expect(filas).toHaveLength(1);
+  });
+
+  it('no mezcla presencia entre preparaciones distintas', async () => {
+    const prepA = crearPreparacion(db, { canal: 'web', wcOrderId: 904, numeroPedido: '904', comprador: 'X', items: [] });
+    const prepB = crearPreparacion(db, { canal: 'web', wcOrderId: 905, numeroPedido: '905', comprador: 'Y', items: [] });
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepA}/heartbeat`);
+
+    const res = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${prepB}/heartbeat`);
+
+    expect(res.body.otros).toEqual([]);
+  });
+
+  it('404 si la preparación no existe', async () => {
+    const res = await request(buildTestAppComo(db, 'juan')).post('/api/preparacion/999999/heartbeat');
+    expect(res.status).toBe(404);
+  });
+});
+
 // ─── lógica pura: splits de dirección y teléfono ──────────────────────────────
 
 describe('splitDireccion', () => {

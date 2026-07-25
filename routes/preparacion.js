@@ -95,6 +95,13 @@ function ensureTables(db) {
     actualizado_en  TEXT NOT NULL
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
+
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_vistas (
+    preparacion_id INTEGER NOT NULL,
+    usuario        TEXT NOT NULL,
+    visto_en       TEXT NOT NULL,
+    PRIMARY KEY (preparacion_id, usuario)
+  )`).run();
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -487,6 +494,31 @@ export function preparacionRouter(db, cfg) {
       fotos_generales: fotos.filter(f => !f.item_id),
     };
     res.json({ ok: true, data });
+  });
+
+  // ── Heartbeat de presencia: "estoy viendo esta preparación ahora" ──
+  // No bloquea nada — solo informa quién más la está viendo, para que los operarios
+  // coordinen entre sí si se están por pisar. Sin limpieza explícita de filas viejas:
+  // solo se consideran "activos" los últimos 30s, así que una fila vieja deja de contar
+  // sola sin que haga falta borrarla (se sobreescribe con el próximo heartbeat de ese
+  // mismo usuario, gracias a la PRIMARY KEY compuesta).
+  router.post('/:id/heartbeat', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const usuario = req.user?.username;
+    const ahora = now();
+
+    db.prepare(`
+      INSERT INTO preparacion_vistas (preparacion_id, usuario, visto_en) VALUES (?,?,?)
+      ON CONFLICT(preparacion_id, usuario) DO UPDATE SET visto_en=excluded.visto_en
+    `).run(prep.id, usuario, ahora);
+
+    const hace30s = new Date(Date.now() - 30000).toISOString();
+    const otros = db.prepare(
+      'SELECT usuario, visto_en FROM preparacion_vistas WHERE preparacion_id=? AND usuario<>? AND visto_en > ?'
+    ).all(prep.id, usuario, hace30s);
+
+    res.json({ ok: true, otros });
   });
 
   // ── Escanear código ──
