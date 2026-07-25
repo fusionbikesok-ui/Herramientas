@@ -1294,3 +1294,312 @@ git commit -m "Contador de Inventario: enviar selección a Etiquetas de Producto
    en vez de dejarlo como un valor no verificado que podría hacer fallar el test sin
    explicación. Ya está resuelto con esa instrucción explícita, no requiere cambio
    adicional.
+
+---
+
+## Task 10: Fix — fijar cantidad directa (incluido 0) + reintentar fallidos real
+
+**Contexto (agregado tras revisión de la Task 8, no estaba en el diseño original):** dos
+hallazgos reales del revisor sobre la pantalla de Revisión/Confirmación/Resultado, ambos
+con la misma raíz — falta una forma de fijar la cantidad de un ítem directamente:
+
+1. Poner "0" en Revisión hoy borra la fila (`DELETE /items/:itemId`) en vez de ajustar el
+   producto a stock 0 — al confirmar, ese producto queda con su stock viejo en Woo, sin
+   ningún aviso. Bug de datos silencioso en una operación irreversible.
+2. "Reintentar fallidos" llama de nuevo a `POST /confirmar`, pero ese endpoint exige
+   `estado='abierta'` (protección anti-doble-ajuste de la Task 4) — tras el primer
+   `/confirmar`, la sesión ya está `confirmada`, así que el reintento siempre falla con
+   400. El botón nunca funciona.
+
+**Files:**
+- Modify: `routes/inventario.js`
+- Modify: `test/inventario.test.js`
+- Modify: `public/inventario/index.html`
+
+**Interfaces:**
+- Produces: `PATCH /sesiones/:id/items/:itemId {cantidad}` — fija la cantidad directamente
+  (incluido 0), sin borrar la fila.
+- Modifica el contrato de `POST /sesiones/:id/confirmar`: ahora es re-invocable de forma
+  segura cuando la sesión quedó en `confirmada_con_errores` (procesa SOLO los ítems que
+  todavía no se ajustaron con éxito), sin volver a tocar los que ya se confirmaron bien.
+
+### Backend
+
+- [ ] **Step 1: Escribir los tests que fallan**
+
+Agregar a `test/inventario.test.js`:
+
+```javascript
+describe('PATCH /api/inventario/sesiones/:id/items/:itemId', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('fija la cantidad directamente, incluido 0, sin borrar la fila', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    const itemId = esc.body.item.id;
+
+    const r = await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${itemId}`).send({ cantidad: 0 });
+
+    expect(r.status).toBe(200);
+    expect(r.body.item.cantidad).toBe(0);
+    const fila = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(itemId);
+    expect(fila).toBeTruthy();
+    expect(fila.cantidad).toBe(0);
+  });
+
+  it('rechaza cantidad negativa', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`).send({ cantidad: -1 });
+
+    expect(r.status).toBe(400);
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/confirmar — reintento real tras falla parcial', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('deja la sesión en confirmada_con_errores si hubo fallos, y permite reintentar SOLO los fallidos', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
+    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+
+    const r1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(r1.status).toBe(200);
+    expect(r1.body.ajustados).toBe(1);
+    expect(r1.body.fallidos).toBe(1);
+    const sesionTrasR1 = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesionTrasR1.estado).toBe('confirmada_con_errores');
+
+    setStockWc.mockResolvedValueOnce(); // el reintento ahora sí resuelve
+    const r2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r2.status).toBe(200);
+    expect(r2.body.ajustados).toBe(1); // solo el que faltaba
+    expect(r2.body.fallidos).toBe(0);
+    expect(setStockWc).toHaveBeenCalledTimes(3); // 2 del primer intento + 1 del reintento, nunca re-ajusta el que ya salió bien
+    const sesionFinal = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesionFinal.estado).toBe('confirmada');
+  });
+
+  it('marca confirmada (sin _con_errores) cuando no hay fallos', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    setStockWc.mockResolvedValue();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.body.fallidos).toBe(0);
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('confirmada');
+  });
+});
+
+describe('GET /api/inventario/sesiones (historial) — incluye confirmada_con_errores', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('lista sesiones en confirmada_con_errores junto con confirmada/descartada', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    setStockWc.mockRejectedValue(new Error('Woo caído'));
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones');
+
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].estado).toBe('confirmada_con_errores');
+  });
+});
+```
+
+- [ ] **Step 2: Correr para confirmar que fallan**
+
+Run: `npx vitest run test/inventario.test.js -t "PATCH|reintento real|confirmada_con_errores"`
+Expected: FAIL.
+
+- [ ] **Step 3: Implementar**
+
+Agregar la columna `ajustado_en` a `inventario_conteos` en `ensureTables` (es una tabla
+nueva de este mismo ciclo, todavía sin datos en producción — se agrega directo al
+`CREATE TABLE`, no hace falta `ALTER TABLE` idempotente porque el ciclo completo no se
+mergeó todavía):
+
+```sql
+  db.prepare(`CREATE TABLE IF NOT EXISTS inventario_conteos (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    sesion_id      INTEGER NOT NULL,
+    ean            TEXT NOT NULL,
+    sku            TEXT,
+    cantidad       INTEGER NOT NULL DEFAULT 0,
+    ajustado_en    TEXT,
+    actualizado_en TEXT NOT NULL,
+    UNIQUE(sesion_id, ean)
+  )`).run();
+```
+
+Agregar el endpoint `PATCH`, después de `DELETE /sesiones/:id/items/:itemId`:
+
+```javascript
+  router.patch('/sesiones/:id/items/:itemId', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+
+    const cantidad = parseInt(req.body?.cantidad, 10);
+    if (!Number.isInteger(cantidad) || cantidad < 0) {
+      return res.status(400).json({ ok: false, error: 'Cantidad inválida' });
+    }
+
+    const cambio = db.prepare('UPDATE inventario_conteos SET cantidad=?, actualizado_en=? WHERE id=? AND sesion_id=?')
+      .run(cantidad, now(), req.params.itemId, sesion.id);
+    if (cambio.changes === 0) return res.status(404).json({ ok: false, error: 'Ítem no encontrado en esta sesión' });
+
+    const item = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(req.params.itemId);
+    res.json({ ok: true, item });
+  });
+```
+
+Reemplazar el handler completo de `POST /sesiones/:id/confirmar` por:
+
+```javascript
+  router.post('/sesiones/:id/confirmar', async (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta' && sesion.estado !== 'confirmada_con_errores') {
+      return res.status(400).json({ ok: false, error: 'La sesión no admite confirmar/reintentar en su estado actual' });
+    }
+
+    const todos = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=?').all(sesion.id);
+    const sinAsociar = todos.filter(i => !i.sku);
+    if (sinAsociar.length) {
+      return res.status(409).json({ ok: false, error: 'Hay ítems sin asociar a un SKU. Asocialos antes de confirmar.', sin_asociar: sinAsociar.length });
+    }
+
+    // Reclamo atómico desde CUALQUIERA de los dos estados de origen válidos — evita que
+    // dos /confirmar simultáneos (primer confirm o reintento) se pisen.
+    const claim = db.prepare(
+      "UPDATE inventario_sesiones SET estado='confirmando' WHERE id=? AND estado IN ('abierta','confirmada_con_errores')"
+    ).run(sesion.id);
+    if (claim.changes === 0) {
+      return res.status(409).json({ ok: false, error: 'La sesión ya se está confirmando o no admite reintento ahora' });
+    }
+
+    // Solo se procesan los ítems que TODAVÍA no se ajustaron con éxito — así un reintento
+    // nunca vuelve a tocar (ni a arriesgar) los que ya se confirmaron bien en un intento anterior.
+    const pendientesDeAjustar = todos.filter(i => !i.ajustado_en);
+    let ajustados = 0, fallidos = 0;
+    const errores = [];
+    for (const item of pendientesDeAjustar) {
+      try {
+        await setStockWc(wooCfg, db, item.sku, item.cantidad);
+        db.prepare('UPDATE inventario_conteos SET ajustado_en=? WHERE id=?').run(now(), item.id);
+        ajustados++;
+      } catch (e) {
+        fallidos++;
+        errores.push({ sku: item.sku, error: e.message });
+      }
+    }
+
+    const quedanFallidos = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND ajustado_en IS NULL').get(sesion.id).n;
+    const estadoFinal = quedanFallidos > 0 ? 'confirmada_con_errores' : 'confirmada';
+    db.prepare("UPDATE inventario_sesiones SET estado=?, confirmado_en=? WHERE id=? AND estado='confirmando'")
+      .run(estadoFinal, now(), sesion.id);
+
+    res.json({ ok: true, ajustados, fallidos, errores });
+  });
+```
+
+Actualizar el filtro de `GET /sesiones` (historial) para incluir el estado nuevo:
+
+```javascript
+      "SELECT * FROM inventario_sesiones WHERE usuario=? AND estado IN ('confirmada','confirmada_con_errores','descartada') ORDER BY COALESCE(confirmado_en,creado_en) DESC LIMIT 100"
+```
+
+- [ ] **Step 4: Correr los tests para confirmar que pasan**
+
+Run: `npx vitest run test/inventario.test.js`
+Expected: PASS, todos verdes.
+
+- [ ] **Step 5: Correr la suite completa**
+
+Run: `npm test`
+Expected: toda la suite pasa.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add routes/inventario.js test/inventario.test.js
+git commit -m "Agregar PATCH de cantidad directa y hacer reintentar-fallidos realmente funcional"
+```
+
+### Frontend
+
+- [ ] **Step 7: Vista Revisión — usar `PATCH` en vez de borrar+reconstruir**
+
+En `public/inventario/index.html`, reemplazar `fijarCantidad(item, nuevo)` (la que hace
+`DELETE` + re-escanear N veces) por una llamada directa:
+
+```javascript
+async function fijarCantidad(item, nuevo) {
+  try {
+    var r = await fetch('/api/inventario/sesiones/' + state.sesion.id + '/items/' + item.id, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({cantidad: nuevo})
+    });
+    var d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'error');
+    await cargarRevision();
+  } catch (e) {
+    alert('No se pudo actualizar: ' + e.message);
+    await cargarRevision();
+  }
+}
+```
+
+Esto reemplaza toda la lógica anterior de `DELETE`+re-escaneo (incluido el caso especial
+de `nuevo===0`) — un solo request, sin ventana de inconsistencia, y "contar 0" ahora sí
+ajusta el producto a stock 0 en vez de borrarlo del conteo.
+
+- [ ] **Step 8: Vista Resultado — "Reintentar fallidos" ya funciona con el mismo botón**
+
+No hace falta cablear un endpoint nuevo en el frontend — `#btn-reintentar-fallidos` ya
+llama `POST /sesiones/:id/confirmar` (implementado en la Task 8); con el backend
+corregido, esa misma llamada ahora sí reintenta solo los ítems fallidos. Verificar que el
+texto/estado del botón y el resumen final reflejen bien el nuevo estado
+`confirmada_con_errores` vs `confirmada` (ej. sello "Cerrada · Confirmada con errores" en
+vez de solo "Cerrada · Confirmada" si `sesion.estado==='confirmada_con_errores'`).
+
+- [ ] **Step 9: Verificación de sintaxis**
+
+Run: `node -e "
+const fs=require('fs');
+const html=fs.readFileSync('public/inventario/index.html','utf8');
+const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+scripts.forEach((s)=>{ new Function(s); });
+console.log('scripts inline OK: '+scripts.length);
+"`
+Expected: `scripts inline OK: N` sin excepción.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add public/inventario/index.html
+git commit -m "Revisión usa PATCH de cantidad directa (fix: contar 0 ya no borra la fila)"
+```
