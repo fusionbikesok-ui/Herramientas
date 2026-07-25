@@ -155,38 +155,47 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
     const syncCfg = app._syncCfg;
 
-    cron.schedule('*/15 * * * *', () => {
-      refrescarCatalogo(app._db, wooCfg)
-        .catch(err => console.error('Error refrescando catálogo:', err.message));
-    });
+    // Instancias efímeras (probador-e2e, pruebas manuales con `node server.js` apuntando
+    // a la base real) deben arrancar con DISABLE_CRONS=true — sin esto, dos procesos
+    // corriendo el mismo cron en paralelo pueden crear pedidos duplicados en WooCommerce
+    // (ver incidente 2026-07-25: ventana de carrera en _procesarOrden de routes/sync.js
+    // sumada a procesos huérfanos que quedaron corriendo estos crons por horas).
+    if (process.env.DISABLE_CRONS === 'true') {
+      console.log('DISABLE_CRONS=true — crons de sync deshabilitados en esta instancia.');
+    } else {
+      cron.schedule('*/15 * * * *', () => {
+        refrescarCatalogo(app._db, wooCfg)
+          .catch(err => console.error('Error refrescando catálogo:', err.message));
+      });
 
-    cron.schedule('*/3 * * * *', () => {
-      syncMlToWc(app._db, syncCfg)
-        .catch(err => console.error('ML→WC error:', err.message));
-    });
+      cron.schedule('*/3 * * * *', () => {
+        syncMlToWc(app._db, syncCfg)
+          .catch(err => console.error('ML→WC error:', err.message));
+      });
 
-    cron.schedule('*/5 * * * *', () => {
-      syncWcToMl(app._db, syncCfg)
-        .catch(err => console.error('WC→ML error:', err.message));
-    });
+      cron.schedule('*/5 * * * *', () => {
+        syncWcToMl(app._db, syncCfg)
+          .catch(err => console.error('WC→ML error:', err.message));
+      });
 
-    cron.schedule('*/10 * * * *', () => {
-      procesarReintentos(app._db, syncCfg)
-        .catch(err => console.error('reintentos error:', err.message));
-    });
+      cron.schedule('*/10 * * * *', () => {
+        procesarReintentos(app._db, syncCfg)
+          .catch(err => console.error('reintentos error:', err.message));
+      });
 
-    cron.schedule('*/10 * * * *', () => {
-      procesarCancelacionesMl(app._db, syncCfg)
-        .catch(err => console.error('cancelaciones ML error:', err.message));
-    });
+      cron.schedule('*/10 * * * *', () => {
+        procesarCancelacionesMl(app._db, syncCfg)
+          .catch(err => console.error('cancelaciones ML error:', err.message));
+      });
 
-    cron.schedule('*/5 * * * *', () => {
-      syncPedidosCache(app._db, {
-        woo: wooCfg, ml: mlCfg,
-        andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
-        enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
-      }).catch(err => console.error('Error sincronizando pedidos_cache:', err.message));
-    });
+      cron.schedule('*/5 * * * *', () => {
+        syncPedidosCache(app._db, {
+          woo: wooCfg, ml: mlCfg,
+          andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
+          enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
+        }).catch(err => console.error('Error sincronizando pedidos_cache:', err.message));
+      });
+    }
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => console.log(`herramientas-app escuchando en :${port}`));
