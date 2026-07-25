@@ -203,6 +203,7 @@
        padding:8px 10px;margin-bottom:6px;font-size:12px;color:var(--danger);}
   .sello-cerrada{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
        padding:4px 10px;border-radius:var(--radius-pill);background:var(--panel2);border:1px solid var(--line);color:var(--muted);margin-bottom:10px;}
+  .sello-con-errores{background:var(--danger-bg);border-color:var(--danger-bd);color:var(--danger);}
 </style>
 </head>
 <body>
@@ -906,21 +907,18 @@
     var nuevo = parseInt(valor, 10);
     if(isNaN(nuevo) || nuevo < 0){ renderRevision(); return; }
     if(nuevo === item.cantidad) return;
-    var codigo = item.ean;
-    function terminar(){ cargarRevision(); }
-    if(nuevo > item.cantidad){
-      var delta = nuevo - item.cantidad;
-      var p = Promise.resolve();
-      for(var i = 0; i < delta; i++){ p = p.then(function(){ return apiEscanear(codigo); }); }
-      p.then(terminar).catch(terminar);
-    } else {
-      apiEliminarItem(item.id).then(function(){
-        if(nuevo === 0){ terminar(); return null; }
-        var p = Promise.resolve();
-        for(var i = 0; i < nuevo; i++){ p = p.then(function(){ return apiEscanear(codigo); }); }
-        return p.then(terminar);
-      }).catch(terminar);
-    }
+    var id = sesionId();
+    fetch('/api/inventario/sesiones/' + id + '/items/' + item.id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cantidad: nuevo })
+    }).then(function(r){ return r.json(); }).then(function(d){
+      if(!d.ok) throw new Error(d.error || 'error');
+      return cargarRevision();
+    }).catch(function(e){
+      alert('No se pudo actualizar: ' + e.message);
+      cargarRevision();
+    });
   }
 
   function filaSinAsociarRevisionHtml(i){
@@ -1090,7 +1088,13 @@
       if(j && j.ok && j.sesion){
         state.sesion = j.sesion;
         var sello = document.getElementById('resultado-sello');
-        sello.innerHTML = j.sesion.estado === 'confirmada' ? '<span class="sello-cerrada">Cerrada · Confirmada</span>' : '';
+        if(j.sesion.estado === 'confirmada'){
+          sello.innerHTML = '<span class="sello-cerrada">Cerrada · Confirmada</span>';
+        } else if(j.sesion.estado === 'confirmada_con_errores'){
+          sello.innerHTML = '<span class="sello-cerrada sello-con-errores">Cerrada · Confirmada con errores</span>';
+        } else {
+          sello.innerHTML = '';
+        }
       }
     }).catch(function(){});
   }
