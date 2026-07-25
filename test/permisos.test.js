@@ -52,3 +52,33 @@ describe('permiso codigos (Códigos Universales)', () => {
     expect(permiteAcceso([{ herramienta: 'codigos', nivel: 'write' }], req)).toBe(true);
   });
 });
+
+describe('permiso inventario (Contador de Inventario)', () => {
+  it('está en la lista de herramientas, sin niveles (checkbox de acceso, no read/write)', () => {
+    const h = HERRAMIENTAS.find(x => x.id === 'inventario');
+    expect(h).toBeTruthy();
+    expect(h.niveles).toBe(false);
+  });
+
+  // `inventario` es niveles:false → la UI de Usuarios siempre otorga el permiso con
+  // nivel:'read' (checkbox de "acceso", sin selector read/write). Por eso la regla pide
+  // explícitamente nivel:'read' sin importar el método HTTP: un operario de depósito
+  // no-admin con el permiso tildado tiene que poder escanear/confirmar, no solo mirar.
+  it('GET /inventario/sesion-activa requiere el permiso inventario', () => {
+    const req = resolvePermiso('GET', '/inventario/sesion-activa');
+    expect(req).toEqual({ anyOf: ['inventario'], nivel: 'read' });
+    expect(permiteAcceso([{ herramienta: 'inventario', nivel: 'read' }], req)).toBe(true);
+  });
+
+  it('POST /inventario/sesiones/1/confirmar también alcanza con el permiso otorgado por la UI (nivel read) — no queda bloqueado el operario no-admin', () => {
+    const req = resolvePermiso('POST', '/inventario/sesiones/1/confirmar');
+    expect(req).toEqual({ anyOf: ['inventario'], nivel: 'read' });
+    expect(permiteAcceso([{ herramienta: 'inventario', nivel: 'read' }], req)).toBe(true);
+  });
+
+  it('sin el permiso otorgado, cualquier acción queda bloqueada', () => {
+    const req = resolvePermiso('POST', '/inventario/sesiones/1/confirmar');
+    expect(permiteAcceso([], req)).toBe(false);
+    expect(permiteAcceso([{ herramienta: 'otra-herramienta', nivel: 'write' }], req)).toBe(false);
+  });
+});
