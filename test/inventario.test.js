@@ -491,3 +491,102 @@ describe('GET /api/inventario/sesiones (historial)', () => {
     expect(r.body.data[0].estado).toBe('descartada');
   });
 });
+
+describe('PATCH /api/inventario/sesiones/:id/items/:itemId', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('fija la cantidad directamente, incluido 0, sin borrar la fila', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    const itemId = esc.body.item.id;
+
+    const r = await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${itemId}`).send({ cantidad: 0 });
+
+    expect(r.status).toBe(200);
+    expect(r.body.item.cantidad).toBe(0);
+    const fila = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(itemId);
+    expect(fila).toBeTruthy();
+    expect(fila.cantidad).toBe(0);
+  });
+
+  it('rechaza cantidad negativa', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`).send({ cantidad: -1 });
+
+    expect(r.status).toBe(400);
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/confirmar — reintento real tras falla parcial', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('deja la sesión en confirmada_con_errores si hubo fallos, y permite reintentar SOLO los fallidos', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
+    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+
+    const r1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(r1.status).toBe(200);
+    expect(r1.body.ajustados).toBe(1);
+    expect(r1.body.fallidos).toBe(1);
+    const sesionTrasR1 = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesionTrasR1.estado).toBe('confirmada_con_errores');
+
+    setStockWc.mockResolvedValueOnce(); // el reintento ahora sí resuelve
+    const r2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r2.status).toBe(200);
+    expect(r2.body.ajustados).toBe(1); // solo el que faltaba
+    expect(r2.body.fallidos).toBe(0);
+    expect(setStockWc).toHaveBeenCalledTimes(3); // 2 del primer intento + 1 del reintento, nunca re-ajusta el que ya salió bien
+    const sesionFinal = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesionFinal.estado).toBe('confirmada');
+  });
+
+  it('marca confirmada (sin _con_errores) cuando no hay fallos', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    setStockWc.mockResolvedValue();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.body.fallidos).toBe(0);
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('confirmada');
+  });
+});
+
+describe('GET /api/inventario/sesiones (historial) — incluye confirmada_con_errores', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('lista sesiones en confirmada_con_errores junto con confirmada/descartada', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    setStockWc.mockRejectedValue(new Error('Woo caído'));
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones');
+
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].estado).toBe('confirmada_con_errores');
+  });
+});

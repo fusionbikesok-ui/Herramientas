@@ -45,6 +45,7 @@ export function ensureTables(db) {
     ean            TEXT NOT NULL,
     sku            TEXT,
     cantidad       INTEGER NOT NULL DEFAULT 0,
+    ajustado_en    TEXT,
     actualizado_en TEXT NOT NULL,
     UNIQUE(sesion_id, ean)
   )`).run();
@@ -240,6 +241,24 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true });
   });
 
+  router.patch('/sesiones/:id/items/:itemId', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+
+    const cantidad = parseInt(req.body?.cantidad, 10);
+    if (!Number.isInteger(cantidad) || cantidad < 0) {
+      return res.status(400).json({ ok: false, error: 'Cantidad inválida' });
+    }
+
+    const cambio = db.prepare('UPDATE inventario_conteos SET cantidad=?, actualizado_en=? WHERE id=? AND sesion_id=?')
+      .run(cantidad, now(), req.params.itemId, sesion.id);
+    if (cambio.changes === 0) return res.status(404).json({ ok: false, error: 'Ítem no encontrado en esta sesión' });
+
+    const item = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(req.params.itemId);
+    res.json({ ok: true, item });
+  });
+
   router.post('/sesiones/:id/descartar', (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
@@ -256,30 +275,34 @@ export function inventarioRouter(db, wooCfg) {
   router.post('/sesiones/:id/confirmar', async (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
-    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+    if (sesion.estado !== 'abierta' && sesion.estado !== 'confirmada_con_errores') {
+      return res.status(400).json({ ok: false, error: 'La sesión no admite confirmar/reintentar en su estado actual' });
+    }
 
-    const items = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=?').all(sesion.id);
-    const sinAsociar = items.filter(i => !i.sku);
+    const todos = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=?').all(sesion.id);
+    const sinAsociar = todos.filter(i => !i.sku);
     if (sinAsociar.length) {
       return res.status(409).json({ ok: false, error: 'Hay ítems sin asociar a un SKU. Asocialos antes de confirmar.', sin_asociar: sinAsociar.length });
     }
 
-    // Reclamo atómico (better-sqlite3 es síncrono, no cede el event loop): evita que
-    // dos /confirmar simultáneos sobre la misma sesión pasen ambos el chequeo de
-    // 'abierta' antes de que el primero termine el loop de awaits contra Woo, lo que
-    // duplicaría el ajuste de stock real. Solo uno gana la carrera; el otro recibe 409.
+    // Reclamo atómico desde CUALQUIERA de los dos estados de origen válidos — evita que
+    // dos /confirmar simultáneos (primer confirm o reintento) se pisen.
     const claim = db.prepare(
-      "UPDATE inventario_sesiones SET estado='confirmando' WHERE id=? AND estado='abierta'"
+      "UPDATE inventario_sesiones SET estado='confirmando' WHERE id=? AND estado IN ('abierta','confirmada_con_errores')"
     ).run(sesion.id);
     if (claim.changes === 0) {
-      return res.status(409).json({ ok: false, error: 'La sesión ya se está confirmando o no está abierta' });
+      return res.status(409).json({ ok: false, error: 'La sesión ya se está confirmando o no admite reintento ahora' });
     }
 
+    // Solo se procesan los ítems que TODAVÍA no se ajustaron con éxito — así un reintento
+    // nunca vuelve a tocar (ni a arriesgar) los que ya se confirmaron bien en un intento anterior.
+    const pendientesDeAjustar = todos.filter(i => !i.ajustado_en);
     let ajustados = 0, fallidos = 0;
     const errores = [];
-    for (const item of items) {
+    for (const item of pendientesDeAjustar) {
       try {
         await setStockWc(wooCfg, db, item.sku, item.cantidad);
+        db.prepare('UPDATE inventario_conteos SET ajustado_en=? WHERE id=?').run(now(), item.id);
         ajustados++;
       } catch (e) {
         fallidos++;
@@ -287,14 +310,18 @@ export function inventarioRouter(db, wooCfg) {
       }
     }
 
-    db.prepare("UPDATE inventario_sesiones SET estado='confirmada', confirmado_en=? WHERE id=? AND estado='confirmando'").run(now(), sesion.id);
+    const quedanFallidos = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND ajustado_en IS NULL').get(sesion.id).n;
+    const estadoFinal = quedanFallidos > 0 ? 'confirmada_con_errores' : 'confirmada';
+    db.prepare("UPDATE inventario_sesiones SET estado=?, confirmado_en=? WHERE id=? AND estado='confirmando'")
+      .run(estadoFinal, now(), sesion.id);
+
     res.json({ ok: true, ajustados, fallidos, errores });
   });
 
   router.get('/sesiones', (req, res) => {
     const usuario = req.user?.username;
     const rows = db.prepare(
-      "SELECT * FROM inventario_sesiones WHERE usuario=? AND estado IN ('confirmada','descartada') ORDER BY COALESCE(confirmado_en,creado_en) DESC LIMIT 100"
+      "SELECT * FROM inventario_sesiones WHERE usuario=? AND estado IN ('confirmada','confirmada_con_errores','descartada') ORDER BY COALESCE(confirmado_en,creado_en) DESC LIMIT 100"
     ).all(usuario);
     res.json({ ok: true, data: rows });
   });
