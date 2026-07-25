@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 set -a
 source /opt/fusionbikes/herramientas/.env
 set +a
