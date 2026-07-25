@@ -56,6 +56,27 @@ describe('looksLikeEan', () => {
   it('rechaza longitudes no válidas de EAN (ni 8/12/13/14 dígitos)', () => {
     expect(looksLikeEan('12345')).toBe(false);
   });
+
+  // El algoritmo alterna el peso 3/1 según la paridad de la posición contada desde
+  // la derecha — con solo un caso de 13 dígitos cubierto no queda probado que la
+  // paridad se calcule bien quie para longitudes 8/12/14 (donde el punto de partida
+  // de la alternancia cae distinto). Checksums verificados a mano con el mismo
+  // algoritmo de gtinCheckOk.
+  it('reconoce un EAN-8 válido (checksum GS1 correcto)', () => {
+    expect(looksLikeEan('96385074')).toBe(true);
+  });
+  it('rechaza un EAN-8 con checksum inválido', () => {
+    expect(looksLikeEan('96385070')).toBe(false);
+  });
+  it('reconoce un UPC-A / EAN-12 válido (checksum GS1 correcto)', () => {
+    expect(looksLikeEan('036000291452')).toBe(true);
+  });
+  it('reconoce un EAN-14 (GTIN-14) válido (checksum GS1 correcto)', () => {
+    expect(looksLikeEan('07791234567898')).toBe(true);
+  });
+  it('rechaza un EAN-14 con checksum inválido', () => {
+    expect(looksLikeEan('07791234567890')).toBe(false);
+  });
 });
 
 describe('GET /api/inventario/alcance-opciones', () => {
