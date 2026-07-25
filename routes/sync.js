@@ -86,8 +86,26 @@ function buildMlStockUpdate(itemId, variationId, cantidad) {
 // CTE compartido que calcula el stock disponible para ML por publicación mapeada
 // (respeta reservas de skus_config_ml). Lo consumen _syncWcToMl, /dashboard y /reactivables.
 // Columnas: clave, sku, stock_wc, modo, reserva, stock_disponible_ml, cantidad_ml.
+//
+// catalogo_dedup: un SKU debería mapear a un único producto de WooCommerce, pero en la
+// práctica aparecieron SKUs cargados por error en más de un producto/variación distinto
+// (ej: FB-64950 en id_woo 64950 con stock 9 y también en 65189/65190 con stock 3). Sin
+// deduplicar, el JOIN de abajo multiplica filas para la misma publicación ML con distinto
+// stock, y cuál "gana" depende del orden interno no garantizado de SQLite — eso causó un
+// incidente real (2026-07-25): el stock empujado a ML oscilaba entre los dos valores cada
+// 5 minutos sin que nadie tocara nada. Se elige de forma determinística el MENOR stock entre
+// los productos duplicados (no el de id_woo más bajo): es la opción fail-closed — como
+// mucho se pierde una venta si el stock real está en el otro producto, nunca se sobrevende
+// en ML. Esto es un fallback de emergencia mientras el SKU duplicado no se corrija en
+// WooCommerce (ver aviso "SKU repetidos" en el log de calidad de catálogo).
 const COMPUTED_STOCK_CTE = `
-  WITH computed AS (
+  WITH catalogo_dedup AS (
+    SELECT sku, stock,
+      ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+    FROM catalogo_cache
+    WHERE sku IS NOT NULL AND sku <> ''
+  ),
+  computed AS (
     SELECT d.clave, d.sku, c.stock AS stock_wc,
       cfg.modo, COALESCE(cfg.reserva, 0) AS reserva,
       CASE
@@ -97,7 +115,7 @@ const COMPUTED_STOCK_CTE = `
       END AS stock_disponible_ml,
       e.cantidad_ml
     FROM sku_matcher_decisiones d
-    JOIN catalogo_cache c ON c.sku = d.sku AND c.sku <> ''
+    JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
     LEFT JOIN ml_stock_estado e ON e.clave = d.clave
     LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
     WHERE d.accion IN ('asignar','confirmar')
@@ -1432,7 +1450,16 @@ export function syncRouter(db, cfg) {
 
   // Lista de SKUs configurados
   router.get('/config-ml', (req, res) => {
+    // Mismo dedup que COMPUTED_STOCK_CTE (más arriba): sin esto, un SKU cargado en más de
+    // un producto de WooCommerce aparecería duplicado acá con distinto stock_wc, confundiendo
+    // al operador justo cuando está diagnosticando ese problema de datos.
     const rows = db.prepare(`
+      WITH catalogo_dedup AS (
+        SELECT sku, stock,
+          ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+        FROM catalogo_cache
+        WHERE sku IS NOT NULL AND sku <> ''
+      )
       SELECT s.sku, s.nombre, s.modo, s.reserva, s.actualizado_en,
         COALESCE(c.stock, 0) AS stock_wc,
         CASE
@@ -1441,7 +1468,7 @@ export function syncRouter(db, cfg) {
           ELSE MAX(COALESCE(c.stock, 0), 0)
         END AS stock_disponible_ml
       FROM skus_config_ml s
-      LEFT JOIN catalogo_cache c ON c.sku = s.sku
+      LEFT JOIN catalogo_dedup c ON c.sku = s.sku AND c.rn = 1
       ORDER BY s.actualizado_en DESC
     `).all();
     res.json({ ok: true, data: rows });
