@@ -63,6 +63,7 @@
   .scanbar{display:flex;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:6px;flex-wrap:wrap;}
   .scanbar input{flex:1;min-width:160px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:9px 12px;font-size:14px;font-family:'Courier New',monospace;}
   .scanbar input:focus{outline:none;border-color:var(--azul);}
+  .aviso{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;background:rgba(45,184,232,.15);color:var(--azul);}
   .flash{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;}
   .flash.ok{display:block;background:rgba(52,211,153,.15);color:var(--green);}
   .flash.bad{display:block;background:rgba(248,113,113,.15);color:var(--red);}
@@ -153,12 +154,14 @@
 
 <script src="../lib/format.js"></script>
 <script>
-var VISTA='pendientes', PREP=null, PEND_CACHE=[];
+var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
 
 function ir(v){
+  detenerHeartbeat();
+  if(v!=='pendientes')detenerPollingPendientes();
   VISTA=v; PREP=null;
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
-  if(v==='pendientes')cargarPendientes();
+  if(v==='pendientes'){cargarPendientes();iniciarPollingPendientes();}
   else if(v==='etiquetas')cargarEtiquetas();
   else if(v==='seguimientos')cargarSeguimientos();
   else if(v==='historial')cargarHistorial();
@@ -189,18 +192,46 @@ async function cargarPendientes(){
     var r=await api('/pendientes');
     if(!r.body.ok)throw new Error(r.body.error||'error');
     PEND_CACHE=r.body.data||[];
-    var html='';
-    var hm=haceMin(r.body.actualizado_en);
-    if(r.body.sync_error){
-      html+='<div class="flash warn" style="display:block">⚠ El último sync de pedidos falló: '+esc(r.body.sync_error)
-        +(hm?' — mostrando datos de hace '+hm:'')+'</div>';
-    }else if(hm){
-      html+='<div style="font-size:12px;color:var(--muted,#888);margin:4px 0 8px">actualizado hace '+hm+'</div>';
-    }
-    if(!PEND_CACHE.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
-    else html+='<div class="ped-grid">'+PEND_CACHE.map(cardPendiente).join('')+'</div>';
-    c.innerHTML=html;
+    PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error};
+    renderPendientes();
   }catch(e){c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
+}
+
+var PEND_META={};
+function renderPendientes(){
+  var c=document.getElementById('cuerpo');
+  var html='';
+  var hm=haceMin(PEND_META.actualizado_en);
+  if(PEND_META.sync_error){
+    html+='<div class="flash warn" style="display:block">⚠ El último sync de pedidos falló: '+esc(PEND_META.sync_error)
+      +(hm?' — mostrando datos de hace '+hm:'')+'</div>';
+  }else if(hm){
+    html+='<div style="font-size:12px;color:var(--muted,#888);margin:4px 0 8px">actualizado hace '+hm+'</div>';
+  }
+  if(!PEND_CACHE.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
+  else html+='<div class="ped-grid">'+PEND_CACHE.map(cardPendiente).join('')+'</div>';
+  c.innerHTML=html;
+}
+
+var pendientesTimer=null, pendientesEnVuelo=false;
+function iniciarPollingPendientes(){
+  detenerPollingPendientes();
+  pendientesTimer=setInterval(function(){
+    if(VISTA==='pendientes' && !pendientesEnVuelo) cargarPendientesSilencioso();
+  }, 25000);
+}
+function detenerPollingPendientes(){
+  if(pendientesTimer){ clearInterval(pendientesTimer); pendientesTimer=null; }
+}
+async function cargarPendientesSilencioso(){
+  // Igual que cargarPendientes() pero sin el "Cargando pedidos…" intermedio, para no
+  // hacer parpadear la pantalla en cada refresh automático de fondo.
+  pendientesEnVuelo=true;
+  try{
+    var r=await api('/pendientes');
+    if(r.body.ok){ PEND_CACHE=r.body.data||[]; PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error}; renderPendientes(); }
+  }catch(e){/* silencioso: un fallo de refresh en background no debe interrumpir al usuario */}
+  finally{ pendientesEnVuelo=false; }
 }
 
 function cardPendiente(p,ix){
@@ -237,6 +268,31 @@ async function abrirDetalle(id){
   if(!r.body.ok){document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>';return;}
   PREP=r.body.data;
   renderDetalle();
+  iniciarHeartbeat(id);
+}
+
+var heartbeatTimer=null;
+function iniciarHeartbeat(id){
+  detenerHeartbeat();
+  heartbeat(id);
+  heartbeatTimer=setInterval(function(){ heartbeat(id); }, 15000);
+}
+function detenerHeartbeat(){
+  if(heartbeatTimer){ clearInterval(heartbeatTimer); heartbeatTimer=null; }
+}
+async function heartbeat(id){
+  try{
+    var r=await api('/'+id+'/heartbeat',{method:'POST'});
+    if(r.body.ok) renderBannerPresencia(r.body.otros||[]);
+  }catch(e){/* no bloqueante: si falla, simplemente no se muestra el banner */}
+}
+function renderBannerPresencia(otros){
+  var el=document.getElementById('banner-presencia');
+  if(!el)return;
+  if(!otros.length){ el.style.display='none'; return; }
+  var nombres=otros.map(function(o){return esc(o.usuario);}).join(', ');
+  el.textContent=(otros.length===1?nombres+' también está':nombres+' también están')+' preparando este pedido ahora.';
+  el.style.display='block';
 }
 
 function itemListo(it){return it.estado_item==='verificado'||it.estado_item==='exento';}
@@ -261,6 +317,7 @@ function renderDetalle(){
 
   var html='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
     +'<h1 style="margin-top:12px">Pedido <em>#'+esc(p.numero_pedido)+'</em> '+canal+etq+' '+estadoBadge+'</h1>'
+    +'<div id="banner-presencia" class="aviso" style="display:none"></div>'
     +'<p class="sub">'+esc(p.comprador||'')+'</p>'
     +'<div class="stepper">'
     +'<div class="step '+(paso1?'done':'on')+'"><span class="n">1</span> Escaneo</div>'
@@ -724,7 +781,12 @@ async function agregarPerfil(){
   cargarPerfiles();
 }
 
+fetch('/api/auth/me').then(function(r){ return r.json(); }).then(function(d){
+  if (d && d.ok) USERNAME = d.user;
+}).catch(function(){});
+
 cargarPendientes();
+iniciarPollingPendientes();
 </script>
 <script type="module" src="../lib/scanner.js"></script>
 </body>
