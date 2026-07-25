@@ -317,7 +317,7 @@ function renderDetalle(){
 
   var html='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
     +'<h1 style="margin-top:12px">Pedido <em>#'+esc(p.numero_pedido)+'</em> '+canal+etq+' '+estadoBadge+'</h1>'
-    +'<div id="banner-presencia" class="aviso" style="display:none"></div>'
+    +'<div id="banner-presencia" class="aviso" role="status" aria-live="polite" style="display:none"></div>'
     +'<p class="sub">'+esc(p.comprador||'')+'</p>'
     +'<div class="stepper">'
     +'<div class="step '+(paso1?'done':'on')+'"><span class="n">1</span> Escaneo</div>'
