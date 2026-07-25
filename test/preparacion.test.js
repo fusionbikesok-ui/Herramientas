@@ -100,6 +100,29 @@ describe('POST /:id/heartbeat', () => {
     const res = await request(buildTestAppComo(db, 'juan')).post('/api/preparacion/999999/heartbeat');
     expect(res.status).toBe(404);
   });
+
+  it('un mismo usuario puede tener presencia simultánea en dos preparaciones distintas sin pisarse (PK compuesta por preparacion_id+usuario)', async () => {
+    const prepA = crearPreparacion(db, { canal: 'web', wcOrderId: 906, numeroPedido: '906', comprador: 'X', items: [] });
+    const prepB = crearPreparacion(db, { canal: 'web', wcOrderId: 907, numeroPedido: '907', comprador: 'Y', items: [] });
+
+    // juan está viendo A y B al mismo tiempo (dos pestañas, por ejemplo).
+    const resA = await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepA}/heartbeat`);
+    const resB = await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepB}/heartbeat`);
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+
+    // ana entra a A: debe ver a juan en A...
+    const desdeA = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${prepA}/heartbeat`);
+    expect(desdeA.body.otros.map(o => o.usuario)).toEqual(['juan']);
+
+    // ...y pedro entra a B: debe ver a juan en B, no contaminado por lo de A.
+    const desdeB = await request(buildTestAppComo(db, 'pedro')).post(`/api/preparacion/${prepB}/heartbeat`);
+    expect(desdeB.body.otros.map(o => o.usuario)).toEqual(['juan']);
+
+    // hay dos filas distintas para juan (una por cada preparación), no una sola pisada.
+    const filasJuan = db.prepare('SELECT * FROM preparacion_vistas WHERE usuario=?').all('juan');
+    expect(filasJuan).toHaveLength(2);
+  });
 });
 
 // ─── lógica pura: splits de dirección y teléfono ──────────────────────────────
