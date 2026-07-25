@@ -357,6 +357,18 @@ describe('DELETE /api/inventario/sesiones/:id/items/:itemId', () => {
     const fila = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(itemId);
     expect(fila).toBeUndefined();
   });
+
+  it('rechaza eliminar en una sesión que no está abierta (evita dejar confirmada_con_errores pegada)', async () => {
+    const db = openDb(TEST_DB);
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '1234567890128' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/descartar`);
+
+    const r = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`);
+
+    expect(r.status).toBe(400);
+  });
 });
 
 describe('POST /api/inventario/sesiones/:id/descartar', () => {
