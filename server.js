@@ -21,9 +21,10 @@ import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { preciosRouter } from './routes/precios.js';
-import { preparacionRouter } from './routes/preparacion.js';
+import { preparacionRouter, syncPedidosCache } from './routes/preparacion.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
+import { inventarioRouter } from './routes/inventario.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -113,6 +114,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
   app.use('/sync-ml', express.static(path.join(__dirname, 'public/sync-ml')));
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
+  app.use('/api/inventario', inventarioRouter(db, wooCfg));
 
   // ââ Error handler global (respaldo) ââââââââââââââââââââââââââ
   // Debe ir al final, con 4 argumentos para que Express lo reconozca. Cualquier
@@ -153,30 +155,47 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
     const syncCfg = app._syncCfg;
 
-    cron.schedule('*/15 * * * *', () => {
-      refrescarCatalogo(app._db, wooCfg)
-        .catch(err => console.error('Error refrescando catálogo:', err.message));
-    });
+    // Instancias efímeras (probador-e2e, pruebas manuales con `node server.js` apuntando
+    // a la base real) deben arrancar con DISABLE_CRONS=true — sin esto, dos procesos
+    // corriendo el mismo cron en paralelo pueden crear pedidos duplicados en WooCommerce
+    // (ver incidente 2026-07-25: ventana de carrera en _procesarOrden de routes/sync.js
+    // sumada a procesos huérfanos que quedaron corriendo estos crons por horas).
+    if (process.env.DISABLE_CRONS === 'true') {
+      console.log('DISABLE_CRONS=true — crons de sync deshabilitados en esta instancia.');
+    } else {
+      cron.schedule('*/15 * * * *', () => {
+        refrescarCatalogo(app._db, wooCfg)
+          .catch(err => console.error('Error refrescando catálogo:', err.message));
+      });
 
-    cron.schedule('*/3 * * * *', () => {
-      syncMlToWc(app._db, syncCfg)
-        .catch(err => console.error('ML→WC error:', err.message));
-    });
+      cron.schedule('*/3 * * * *', () => {
+        syncMlToWc(app._db, syncCfg)
+          .catch(err => console.error('ML→WC error:', err.message));
+      });
 
-    cron.schedule('*/5 * * * *', () => {
-      syncWcToMl(app._db, syncCfg)
-        .catch(err => console.error('WC→ML error:', err.message));
-    });
+      cron.schedule('*/5 * * * *', () => {
+        syncWcToMl(app._db, syncCfg)
+          .catch(err => console.error('WC→ML error:', err.message));
+      });
 
-    cron.schedule('*/10 * * * *', () => {
-      procesarReintentos(app._db, syncCfg)
-        .catch(err => console.error('reintentos error:', err.message));
-    });
+      cron.schedule('*/10 * * * *', () => {
+        procesarReintentos(app._db, syncCfg)
+          .catch(err => console.error('reintentos error:', err.message));
+      });
 
-    cron.schedule('*/10 * * * *', () => {
-      procesarCancelacionesMl(app._db, syncCfg)
-        .catch(err => console.error('cancelaciones ML error:', err.message));
-    });
+      cron.schedule('*/10 * * * *', () => {
+        procesarCancelacionesMl(app._db, syncCfg)
+          .catch(err => console.error('cancelaciones ML error:', err.message));
+      });
+
+      cron.schedule('*/5 * * * *', () => {
+        syncPedidosCache(app._db, {
+          woo: wooCfg, ml: mlCfg,
+          andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
+          enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
+        }).catch(err => console.error('Error sincronizando pedidos_cache:', err.message));
+      });
+    }
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => console.log(`herramientas-app escuchando en :${port}`));

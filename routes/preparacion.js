@@ -77,6 +77,31 @@ function ensureTables(db) {
   );
   seed.run('BICICLETAS', 'bici', now());
   seed.run('TRANSMISIONES', 'kit_transmision', now());
+
+  db.prepare(`CREATE TABLE IF NOT EXISTS pedidos_cache (
+    clave           TEXT PRIMARY KEY,
+    canal           TEXT NOT NULL,
+    wc_order_id     INTEGER,
+    ml_order_id     TEXT,
+    numero_pedido   TEXT,
+    comprador       TEXT,
+    fecha           TEXT,
+    estado_envio    TEXT NOT NULL,
+    estado_wc       TEXT,
+    espejo_ml       INTEGER NOT NULL DEFAULT 0,
+    logistic_type   TEXT,
+    substatus       TEXT,
+    items_json      TEXT NOT NULL,
+    actualizado_en  TEXT NOT NULL
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
+
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_vistas (
+    preparacion_id INTEGER NOT NULL,
+    usuario        TEXT NOT NULL,
+    visto_en       TEXT NOT NULL,
+    PRIMARY KEY (preparacion_id, usuario)
+  )`).run();
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -159,27 +184,51 @@ export function preparacionRouter(db, cfg) {
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
   const TRACKING_META_KEY = '_andreani_tracking';
 
-  // ── Pendientes: unión web (WC en lpaandreani) + ML (ready_to_ship local) ──
-  router.get('/pendientes', async (req, res) => {
+  // ── Pendientes: lee de pedidos_cache (sincronizada por cron cada 5 min) ──
+  router.get('/pendientes', (req, res) => {
     try {
-      const pendientes = [];
-
-      // Web
-      const wcResp = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
-      for (const order of wcResp.data || []) {
-        pendientes.push(armarPendienteWeb(db, order));
-      }
-
-      // ML (tolerante a fallas: si ML no responde, igual devolvemos web)
-      let errorMl = null;
-      try {
-        const mlPend = await pendientesMl(db, cfg.ml);
-        pendientes.push(...mlPend);
-      } catch (e) {
-        errorMl = e.message;
-      }
-
-      res.json({ ok: true, data: pendientes, error_ml: errorMl });
+      const rows = db.prepare("SELECT * FROM pedidos_cache WHERE estado_envio='pendiente' ORDER BY fecha ASC").all();
+      const data = rows.map(row => {
+        const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(row.clave);
+        const items = JSON.parse(row.items_json);
+        if (row.canal === 'web') {
+          return {
+            canal: 'web',
+            espejo_ml: !!row.espejo_ml,
+            wc_order_id: row.wc_order_id,
+            numero_pedido: row.numero_pedido,
+            comprador: row.comprador,
+            fecha: row.fecha,
+            estado_wc: row.estado_wc,
+            items,
+            preparacion_id: prep?.id || null,
+            estado_preparacion: prep?.estado || null,
+            etiqueta_lista: prep?.etiqueta_lista || 0,
+          };
+        }
+        return {
+          canal: 'ml',
+          ml_order_id: row.ml_order_id,
+          wc_order_id: row.wc_order_id,
+          numero_pedido: row.numero_pedido,
+          comprador: row.comprador,
+          fecha: row.fecha,
+          logistic_type: row.logistic_type,
+          substatus: row.substatus,
+          items,
+          preparacion_id: prep?.id || null,
+          estado_preparacion: prep?.estado || null,
+        };
+      });
+      const ultimoLog = db.prepare(
+        "SELECT creado_en, estado, error FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1"
+      ).get();
+      res.json({
+        ok: true,
+        data,
+        actualizado_en: ultimoLog?.creado_en || null,
+        sync_error: ultimoLog?.estado === 'error' ? ultimoLog.error : null,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
@@ -361,7 +410,7 @@ export function preparacionRouter(db, cfg) {
 
   // ── Historial ──
   router.get('/historial', (req, res) => {
-    const rows = db.prepare(`
+    const preparadas = db.prepare(`
       SELECT p.*,
         (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
         (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id) AS total_fotos
@@ -369,7 +418,40 @@ export function preparacionRouter(db, cfg) {
       WHERE p.estado IN ('completada','pendiente_deposito')
       ORDER BY COALESCE(p.completado_en, p.creado_en) DESC LIMIT 200
     `).all();
-    res.json({ ok: true, data: rows });
+
+    const sinPreparar = db.prepare(`
+      SELECT * FROM pedidos_cache pc
+      WHERE pc.estado_envio='enviado'
+        AND NOT EXISTS (SELECT 1 FROM preparaciones p WHERE p.clave = pc.clave)
+      ORDER BY pc.fecha DESC LIMIT 200
+    `).all().map(row => ({
+      id: null,
+      canal: row.canal,
+      clave: row.clave,
+      wc_order_id: row.wc_order_id,
+      ml_order_id: row.ml_order_id,
+      numero_pedido: row.numero_pedido,
+      comprador: row.comprador,
+      estado: 'enviado_sin_preparar',
+      creado_en: row.fecha,
+      completado_en: null,
+      total_items: JSON.parse(row.items_json).length,
+      total_fotos: 0,
+    }));
+
+    res.json({ ok: true, data: [...preparadas, ...sinPreparar] });
+  });
+
+  // ── Estado del sync de pedidos_cache (para el aviso de frescura en el frontend) ──
+  router.get('/pedidos-cache/estado', (req, res) => {
+    const ultimoLog = db.prepare(
+      "SELECT creado_en, estado, error FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1"
+    ).get();
+    res.json({
+      ok: true,
+      actualizado_en: ultimoLog?.creado_en || null,
+      ultimo_error: ultimoLog?.estado === 'error' ? ultimoLog.error : null,
+    });
   });
 
   // ── Perfiles de foto por categoría ──
@@ -412,6 +494,31 @@ export function preparacionRouter(db, cfg) {
       fotos_generales: fotos.filter(f => !f.item_id),
     };
     res.json({ ok: true, data });
+  });
+
+  // ── Heartbeat de presencia: "estoy viendo esta preparación ahora" ──
+  // No bloquea nada — solo informa quién más la está viendo, para que los operarios
+  // coordinen entre sí si se están por pisar. Sin limpieza explícita de filas viejas:
+  // solo se consideran "activos" los últimos 30s, así que una fila vieja deja de contar
+  // sola sin que haga falta borrarla (se sobreescribe con el próximo heartbeat de ese
+  // mismo usuario, gracias a la PRIMARY KEY compuesta).
+  router.post('/:id/heartbeat', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const usuario = req.user?.username;
+    const ahora = now();
+
+    db.prepare(`
+      INSERT INTO preparacion_vistas (preparacion_id, usuario, visto_en) VALUES (?,?,?)
+      ON CONFLICT(preparacion_id, usuario) DO UPDATE SET visto_en=excluded.visto_en
+    `).run(prep.id, usuario, ahora);
+
+    const hace30s = new Date(Date.now() - 30000).toISOString();
+    const otros = db.prepare(
+      'SELECT usuario, visto_en FROM preparacion_vistas WHERE preparacion_id=? AND usuario<>? AND visto_en > ?'
+    ).all(prep.id, usuario, hace30s);
+
+    res.json({ ok: true, otros });
   });
 
   // ── Escanear código ──
@@ -713,4 +820,127 @@ async function pendientesMl(db, mlCfg) {
     });
   }
   return out;
+}
+
+// ─── Caché local de pedidos (para GET /pendientes y GET /historial) ──────────
+
+// Candado para evitar corridas concurrentes de syncPedidosCache (cron + disparo manual
+// se pisarían y duplicarían llamadas a Woo/ML). Mismo patrón que _wcToMlEnCurso en sync.js.
+let _pedidosCacheEnCurso = false;
+
+function logSyncPedidos(db, estado, error) {
+  db.prepare(`
+    INSERT INTO sync_log (direccion, clave, sku, cant_anterior, cant_nueva, estado, error, intentos, creado_en, actualizado_en)
+    VALUES ('pedidos_cache', NULL, NULL, NULL, NULL, ?, ?, 0, ?, ?)
+  `).run(estado, error ?? null, now(), now());
+}
+
+function upsertPedidoCache(db, row) {
+  db.prepare(`
+    INSERT INTO pedidos_cache
+      (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha,
+       estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+    VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @numero_pedido, @comprador, @fecha,
+       @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en)
+    ON CONFLICT(clave) DO UPDATE SET
+      numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
+      estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
+      logistic_type=excluded.logistic_type, substatus=excluded.substatus,
+      items_json=excluded.items_json, actualizado_en=excluded.actualizado_en
+  `).run(row);
+}
+
+// Un pedido WC (de cualquiera de los 3 estados relevantes) → fila de pedidos_cache.
+function filaWebDesdeOrder(db, order, estadoEnvio) {
+  const pend = armarPendienteWeb(db, order); // reusa el enriquecido de ítems/comprador ya existente
+  return {
+    clave: `web:${order.id}`,
+    canal: 'web',
+    wc_order_id: order.id,
+    ml_order_id: null,
+    numero_pedido: pend.numero_pedido,
+    comprador: pend.comprador,
+    fecha: pend.fecha,
+    estado_envio: estadoEnvio,
+    estado_wc: pend.estado_wc,
+    espejo_ml: pend.espejo_ml ? 1 : 0,
+    logistic_type: null,
+    substatus: null,
+    items_json: JSON.stringify(pend.items),
+    actualizado_en: now(),
+  };
+}
+
+export async function syncPedidosCache(db, cfg) {
+  ensureTables(db);
+  if (_pedidosCacheEnCurso) return;
+  _pedidosCacheEnCurso = true;
+  try {
+    const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
+    const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
+
+    // WooCommerce: 3 llamadas, una por estado relevante (mismo endpoint /orders que ya
+    // usaban /pendientes, /etiquetas y /seguimientos por separado — acá se hace una sola
+    // vez para las 3, en una única función/único cron).
+    // Secuencial (no Promise.all): si la primera llamada no resuelve nunca (WC caído,
+    // hang de red), no queremos disparar las otras dos en paralelo igual.
+    // Los "enviados" (completed/enviadoandreani) se acotan a los últimos 60 días — si no,
+    // el historial crece sin límite. Los "pendientes" (lpaandreani) no se acotan: un
+    // pedido pendiente de preparar sigue siendo relevante sin importar hace cuánto se
+    // generó, hasta que se procese.
+    const hace60Dias = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
+    const wcPend = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
+    const wcCompleted = await wooFetch(cfg.woo, `/orders?status=completed&after=${encodeURIComponent(hace60Dias)}&per_page=100`);
+    const wcEnviado = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(enviadoAndreaniStatus)}&after=${encodeURIComponent(hace60Dias)}&per_page=100`);
+
+    const tx = db.transaction(() => {
+      for (const order of wcPend.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'pendiente'));
+      for (const order of wcCompleted.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'enviado'));
+      for (const order of wcEnviado.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'enviado'));
+      // Limpieza: el sync solo hace upsert, nunca borra — sin esto, una fila "enviado" que
+      // ya cayó fuera de la ventana de 60 días quedaría para siempre en la caché.
+      db.prepare("DELETE FROM pedidos_cache WHERE estado_envio='enviado' AND fecha < ?").run(hace60Dias);
+    });
+    tx();
+
+    // MercadoLibre: reusa pendientesMl (ya filtra paid+ready_to_ship+local) para pendientes.
+    // Los "enviados" de ML quedan fuera de este alcance (no hay filtro de shipped simple
+    // sin otro GET por shipment; el historial de enviados ML se cubre desde el lado Woo,
+    // que ya refleja el pedido cuando se cargó el tracking en el tab Seguimientos).
+    try {
+      const mlPend = await pendientesMl(db, cfg.ml);
+      const txMl = db.transaction(() => {
+        for (const p of mlPend) {
+          upsertPedidoCache(db, {
+            clave: `ml:${p.ml_order_id}`,
+            canal: 'ml',
+            wc_order_id: p.wc_order_id,
+            ml_order_id: p.ml_order_id,
+            numero_pedido: p.numero_pedido,
+            comprador: p.comprador,
+            fecha: p.fecha,
+            estado_envio: 'pendiente',
+            estado_wc: null,
+            espejo_ml: 0,
+            logistic_type: p.logistic_type,
+            substatus: p.substatus,
+            items_json: JSON.stringify(p.items),
+            actualizado_en: now(),
+          });
+        }
+      });
+      txMl();
+    } catch (eMl) {
+      // ML tolerante a fallas (igual que hoy en GET /pendientes): no aborta el sync de Woo.
+      logSyncPedidos(db, 'error', `ML: ${eMl.message}`);
+      return;
+    }
+
+    logSyncPedidos(db, 'ok', null);
+  } catch (e) {
+    logSyncPedidos(db, 'error', e.message);
+    throw e;
+  } finally {
+    _pedidosCacheEnCurso = false;
+  }
 }

@@ -89,25 +89,20 @@ describe('contrato GET /pendientes', () => {
   });
 
   it('un pendiente web y uno ml tienen exactamente la forma que espera el frontend', async () => {
-    const orderWeb = {
-      id: 900, number: '900', status: 'lpaandreani', date_created: '2026-07-01T00:00:00Z',
-      billing: { first_name: 'Juan', last_name: 'Perez' },
-      meta_data: [],
-      line_items: [{ id: 1, product_id: 501, variation_id: 0, sku: '', name: 'Bici Rodado', quantity: 2 }],
-    };
-    wooFetch.mockResolvedValueOnce({ data: [orderWeb] });
+    const app = buildTestApp(db); // ensureTables corre acá; hace falta antes de sembrar pedidos_cache
+    const itemsWeb = [{ line_item_id: 1, product_id: 501, variation_id: null, sku: 'BIKE-1', nombre: 'Bici Rodado', categoria: 'Bicicletas', cantidad: 2 }];
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:900','web',900,NULL,'900','Juan Perez','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,?,?)
+    `).run(JSON.stringify(itemsWeb), new Date().toISOString());
 
-    const ordenMl = {
-      id: 'ORD-ML-1', date_created: '2026-07-02T00:00:00Z',
-      buyer: { nickname: 'comprador_ml' },
-      shipping: { id: 'SHIP-1' },
-      order_items: [{ item: { id: 'MLA900', variation_id: '', seller_sku: 'CASCO-9' }, quantity: 1 }],
-    };
-    mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [ordenMl] } })
-      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service', substatus: null } });
+    const itemsMl = [{ line_item_id: null, product_id: 601, variation_id: null, sku: 'CASCO-9', nombre: 'Casco L', categoria: 'Cascos', cantidad: 1 }];
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:ORD-ML-1','ml',NULL,'ORD-ML-1','ORD-ML-1','comprador_ml','2026-07-02T00:00:00Z','pendiente',NULL,0,'self_service',NULL,?,?)
+    `).run(JSON.stringify(itemsMl), new Date().toISOString());
 
-    const res = await request(buildTestApp(db)).get('/api/preparacion/pendientes');
+    const res = await request(app).get('/api/preparacion/pendientes');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.data).toHaveLength(2);
@@ -137,6 +132,53 @@ describe('contrato GET /pendientes', () => {
       'cantidad', 'categoria', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
     ].sort());
     expect(ml.items[0]).toMatchObject({ sku: 'CASCO-9', categoria: 'Cascos', cantidad: 1 });
+  });
+});
+
+describe('GET /historial', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('un pedido enviado con preparación asociada no aparece duplicado como enviado_sin_preparar', async () => {
+    const app = buildTestApp(db); // ensureTables corre acá
+    const now = new Date().toISOString();
+
+    // Pedido 900: en pedidos_cache como 'enviado' Y tiene preparación completada.
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:900','web',900,NULL,'900','Juan Perez','2026-07-01T00:00:00Z','enviado','completed',0,NULL,NULL,?,?)
+    `).run(JSON.stringify([{ sku: 'BIKE-1', nombre: 'Bici', cantidad: 1 }]), now);
+    db.prepare(`
+      INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, estado, creado_en, completado_en)
+      VALUES ('web','web:900',900,'900','Juan Perez','completada',?,?)
+    `).run(now, now);
+
+    // Pedido 901: en pedidos_cache como 'enviado' pero SIN preparación → sí debe listarse como enviado_sin_preparar.
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:901','web',901,NULL,'901','Beto Diaz','2026-07-02T00:00:00Z','enviado','completed',0,NULL,NULL,?,?)
+    `).run(JSON.stringify([{ sku: 'CUB-1', nombre: 'Cubierta', cantidad: 1 }]), now);
+
+    const res = await request(app).get('/api/preparacion/historial');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const claves900 = res.body.data.filter(d => d.wc_order_id === 900);
+    expect(claves900).toHaveLength(1);
+    expect(claves900[0].estado).toBe('completada');
+
+    const claves901 = res.body.data.filter(d => d.wc_order_id === 901);
+    expect(claves901).toHaveLength(1);
+    expect(claves901[0].estado).toBe('enviado_sin_preparar');
   });
 });
 

@@ -99,6 +99,37 @@
   --success-bg:  var(--green-bg);
   --success-bd:  var(--green-bd);
 
+  /* Contador de Inventario — herramienta de depósito, celular en mano, luz variable. */
+  --tap-min: 44px;
+
+  --chip-bg:     var(--surface2);
+  --chip-bd:     var(--border);
+  --chip-txt:    var(--muted);
+  --chip-on-bg:  var(--accent-dim);
+  --chip-on-bd:  var(--accent);
+  --chip-on-txt: var(--accent);
+
+  --diff-neg:  var(--critical);
+  --diff-pos:  var(--success);
+  --diff-zero: var(--muted);
+
+  --state-pending:  var(--muted);
+  --state-counted:  var(--success);
+  --state-unlinked: var(--warning);
+
+  --progress-track: var(--surface2);
+  --progress-fill:  var(--accent);
+
+  --danger:       var(--red);
+  --danger-bg:    var(--red-bg);
+  --danger-bd:    var(--red-bd);
+  --danger-solid: var(--red);
+  --danger-on:    #2A0505;
+  --danger-veil:  rgba(6,8,13,.92);
+
+  --sheet-bg: var(--surface);
+  --sheet-bd: var(--border2);
+
   /* Foco visible (WCAG 2.2 — 2.4.7 / 2.4.13) */
   --focus-color: var(--accent);
 }

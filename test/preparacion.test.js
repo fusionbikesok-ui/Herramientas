@@ -12,6 +12,15 @@ import { preparacionRouter, crearPreparacion } from '../routes/preparacion.js';
 import heicConvert from 'heic-convert';
 
 vi.mock('heic-convert', () => ({ default: vi.fn() }));
+vi.mock('../routes/woo.js', async () => {
+  const actual = await vi.importActual('../routes/woo.js');
+  return { ...actual, wooFetch: vi.fn() };
+});
+vi.mock('../lib/mlClient.js', () => ({
+  mlFetch: vi.fn(),
+  bootstrapToken: vi.fn(),
+  getAccessToken: vi.fn(),
+}));
 
 const TEST_DB = './test/tmp-preparacion.sqlite';
 
@@ -23,6 +32,98 @@ function buildTestApp(db) {
   app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani' }));
   return app;
 }
+
+function buildTestAppComo(db, usuario) {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => { req.user = { username: usuario, is_admin: 0 }; next(); });
+  app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani' }));
+  return app;
+}
+
+describe('POST /:id/heartbeat', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('registra la presencia y no devuelve a nadie si sos el único viendo la preparación', async () => {
+    const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 900, numeroPedido: '900', comprador: 'Juan', items: [] });
+
+    const res = await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.otros).toEqual([]);
+  });
+
+  it('devuelve a otro usuario que mandó heartbeat en los últimos 30s, sin incluirse a sí mismo', async () => {
+    const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 901, numeroPedido: '901', comprador: 'Ana', items: [] });
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    const res = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    expect(res.body.otros).toHaveLength(1);
+    expect(res.body.otros[0].usuario).toBe('juan');
+  });
+
+  it('no devuelve un heartbeat viejo (más de 30s)', async () => {
+    const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 902, numeroPedido: '902', comprador: 'Ana', items: [] });
+    const viejo = new Date(Date.now() - 60000).toISOString(); // hace 60s
+    db.prepare('INSERT INTO preparacion_vistas (preparacion_id, usuario, visto_en) VALUES (?,?,?)').run(prepId, 'juan', viejo);
+
+    const res = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    expect(res.body.otros).toEqual([]);
+  });
+
+  it('actualiza (no duplica) el heartbeat del mismo usuario en la misma preparación', async () => {
+    const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 903, numeroPedido: '903', comprador: 'Ana', items: [] });
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepId}/heartbeat`);
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepId}/heartbeat`);
+
+    const filas = db.prepare('SELECT * FROM preparacion_vistas WHERE preparacion_id=?').all(prepId);
+
+    expect(filas).toHaveLength(1);
+  });
+
+  it('no mezcla presencia entre preparaciones distintas', async () => {
+    const prepA = crearPreparacion(db, { canal: 'web', wcOrderId: 904, numeroPedido: '904', comprador: 'X', items: [] });
+    const prepB = crearPreparacion(db, { canal: 'web', wcOrderId: 905, numeroPedido: '905', comprador: 'Y', items: [] });
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepA}/heartbeat`);
+
+    const res = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${prepB}/heartbeat`);
+
+    expect(res.body.otros).toEqual([]);
+  });
+
+  it('404 si la preparación no existe', async () => {
+    const res = await request(buildTestAppComo(db, 'juan')).post('/api/preparacion/999999/heartbeat');
+    expect(res.status).toBe(404);
+  });
+
+  it('un mismo usuario puede tener presencia simultánea en dos preparaciones distintas sin pisarse (PK compuesta por preparacion_id+usuario)', async () => {
+    const prepA = crearPreparacion(db, { canal: 'web', wcOrderId: 906, numeroPedido: '906', comprador: 'X', items: [] });
+    const prepB = crearPreparacion(db, { canal: 'web', wcOrderId: 907, numeroPedido: '907', comprador: 'Y', items: [] });
+
+    // juan está viendo A y B al mismo tiempo (dos pestañas, por ejemplo).
+    const resA = await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepA}/heartbeat`);
+    const resB = await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${prepB}/heartbeat`);
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+
+    // ana entra a A: debe ver a juan en A...
+    const desdeA = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${prepA}/heartbeat`);
+    expect(desdeA.body.otros.map(o => o.usuario)).toEqual(['juan']);
+
+    // ...y pedro entra a B: debe ver a juan en B, no contaminado por lo de A.
+    const desdeB = await request(buildTestAppComo(db, 'pedro')).post(`/api/preparacion/${prepB}/heartbeat`);
+    expect(desdeB.body.otros.map(o => o.usuario)).toEqual(['juan']);
+
+    // hay dos filas distintas para juan (una por cada preparación), no una sola pisada.
+    const filasJuan = db.prepare('SELECT * FROM preparacion_vistas WHERE usuario=?').all('juan');
+    expect(filasJuan).toHaveLength(2);
+  });
+});
 
 // ─── lógica pura: splits de dirección y teléfono ──────────────────────────────
 
@@ -483,5 +584,128 @@ describe('preparacion flujo', () => {
     expect(r.status).toBe(200);
     expect(r.body.data.items).toHaveLength(3);
     expect(r.body.data.items.find(i => i.sku === 'BICI-1').requisitos_foto.length).toBeGreaterThan(0);
+  });
+});
+
+import { wooFetch } from '../routes/woo.js';
+import { mlFetch } from '../lib/mlClient.js';
+import { syncPedidosCache } from '../routes/preparacion.js';
+
+describe('syncPedidosCache', () => {
+  let db;
+  const CFG = {
+    woo: { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' },
+    ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' },
+    andreaniStatus: 'lpaandreani',
+    enviadoAndreaniStatus: 'enviadoandreani',
+  };
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    vi.clearAllMocks();
+  });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('guarda en pedidos_cache un pedido web pendiente (lpaandreani) con estado_envio=pendiente', async () => {
+    const orderPend = {
+      id: 900, number: '900', status: 'lpaandreani', date_created: '2026-07-01T00:00:00Z',
+      billing: { first_name: 'Juan', last_name: 'Perez' }, meta_data: [],
+      line_items: [{ id: 1, product_id: 501, variation_id: 0, sku: 'BIKE-1', name: 'Bici', quantity: 1 }],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [orderPend] })  // status=lpaandreani
+      .mockResolvedValueOnce({ data: [] })            // status=completed
+      .mockResolvedValueOnce({ data: [] });           // status=enviadoandreani
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // pendientesMl (paid)
+
+    await syncPedidosCache(db, CFG);
+
+    const row = db.prepare('SELECT * FROM pedidos_cache WHERE clave=?').get('web:900');
+    expect(row).toBeTruthy();
+    expect(row.estado_envio).toBe('pendiente');
+    expect(row.canal).toBe('web');
+    expect(row.numero_pedido).toBe('900');
+    expect(JSON.parse(row.items_json)).toHaveLength(1);
+  });
+
+  it('guarda en pedidos_cache un pedido web ya enviado (completed) con estado_envio=enviado', async () => {
+    const orderEnv = {
+      id: 950, number: '950', status: 'completed', date_created: '2026-07-05T00:00:00Z',
+      billing: { first_name: 'Ana', last_name: 'Gomez' }, meta_data: [],
+      line_items: [{ id: 2, product_id: 502, variation_id: 0, sku: 'CASCO-1', name: 'Casco', quantity: 1 }],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [] })            // status=lpaandreani
+      .mockResolvedValueOnce({ data: [orderEnv] })    // status=completed
+      .mockResolvedValueOnce({ data: [] });           // status=enviadoandreani
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const row = db.prepare('SELECT * FROM pedidos_cache WHERE clave=?').get('web:950');
+    expect(row).toBeTruthy();
+    expect(row.estado_envio).toBe('enviado');
+  });
+
+  it('no duplica candado: si ya hay una corrida en curso, la segunda llamada no hace fetch', async () => {
+    let resolveWoo;
+    wooFetch.mockImplementationOnce(() => new Promise(r => { resolveWoo = r; }));
+    wooFetch.mockResolvedValue({ data: [] }); // llamadas siguientes (wcCompleted, wcEnviado), ya destrabado
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+    const p1 = syncPedidosCache(db, CFG);
+    await syncPedidosCache(db, CFG); // debe retornar de inmediato sin llamar wooFetch de nuevo
+    expect(wooFetch).toHaveBeenCalledTimes(1);
+    resolveWoo({ data: [] });
+    await p1;
+  });
+
+  it('registra el resultado en sync_log con direccion=pedidos_cache', async () => {
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1").get();
+    expect(log).toBeTruthy();
+    expect(log.estado).toBe('ok');
+  });
+
+  it('si wooFetch falla, registra error en sync_log y no revienta el proceso', async () => {
+    wooFetch.mockRejectedValueOnce(new Error('WC caído'));
+
+    await expect(syncPedidosCache(db, CFG)).rejects.toThrow('WC caído');
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1").get();
+    expect(log.estado).toBe('error');
+    expect(log.error).toContain('WC caído');
+  });
+
+  it('acota las consultas de pedidos enviados (completed/enviadoandreani) a los últimos 60 días con after=, y no acota los pendientes', async () => {
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const [urlPend, urlCompleted, urlEnviado] = wooFetch.mock.calls.map(c => c[1]);
+    expect(urlPend).not.toContain('after=');
+    expect(urlCompleted).toMatch(/status=completed&after=/);
+    expect(urlEnviado).toMatch(/status=enviadoandreani&after=/);
+  });
+
+  it('borra de pedidos_cache las filas enviado que quedaron fuera de la ventana de 60 días', async () => {
+    buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
+    const fechaVieja = new Date(Date.now() - 120 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:100','web',100,NULL,'100','Viejo Cliente',?,'enviado','completed',0,NULL,NULL,'[]',?)
+    `).run(fechaVieja, fechaVieja);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const row = db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:100'").get();
+    expect(row).toBeUndefined();
   });
 });
