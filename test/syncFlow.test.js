@@ -369,6 +369,39 @@ describe('syncWcToMl', () => {
     expect(estado).toBeUndefined();
   });
 
+  it('SKU repetido en más de un producto de catalogo_cache: usa siempre el de menor stock (fail-closed), sin oscilar ni duplicar el PUT', async () => {
+    // Incidente real 2026-07-25: BIKE-001 quedó cargado por error en dos productos WC
+    // distintos (id_woo 100 con stock 5, id_woo 999 con stock 2). Sin deduplicar, el JOIN
+    // multiplicaba la fila de la publicación ML y el stock empujado alternaba entre 5 y 2
+    // según el orden interno de SQLite — a veces incluso con dos PUT por corrida (uno por
+    // cada fila duplicada). id_woo 999 tiene menos stock pero un id_woo MAYOR a propósito,
+    // para distinguir "menor stock" (el criterio correcto, fail-closed) de "id_woo más
+    // bajo" (que hubiera elegido mal, 5 en vez de 2, arriesgando sobreventa en ML).
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(999, 'Bicicleta Simple (duplicada)', 'BIKE-001', 'simple', null, 2, now);
+    seedPublicacion(db, { clave: 'MLA100|', itemId: 'MLA100', status: 'active' });
+
+    for (let i = 0; i < 3; i++) {
+      mlFetch.mockClear();
+      mlFetch.mockResolvedValue({ status: 200, data: {} });
+      db.prepare("DELETE FROM ml_stock_estado WHERE clave = 'MLA100|'").run();
+
+      const p = syncWcToMl(db, CFG);
+      await vi.runAllTimersAsync();
+      await p;
+
+      // Una publicación → un solo PUT de stock por corrida, nunca dos (el bug original
+      // también duplicaba la llamada a ML, no solo el valor final).
+      expect(mlFetch).toHaveBeenCalledTimes(1);
+      expect(mlFetch).toHaveBeenCalledWith(db, CFG.ml, 'put', '/items/MLA100', { available_quantity: 2 });
+
+      const estado = db.prepare("SELECT * FROM ml_stock_estado WHERE clave = 'MLA100|'").get();
+      expect(estado.cantidad_ml).toBe(2); // siempre el de menor stock, nunca 5
+    }
+  });
+
   it('publicación no activa (paused) → se saltea sin PUT ni error', async () => {
     seedPublicacion(db, { clave: 'MLA100|', itemId: 'MLA100', status: 'paused' });
     mlFetch.mockResolvedValue({ status: 200, data: {} });

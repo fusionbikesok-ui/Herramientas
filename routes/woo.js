@@ -108,8 +108,17 @@ export async function refrescarCatalogo(db, cfg) {
   // se excluyen del conteo de SKU vacío.
   const negs = db.prepare('SELECT COUNT(*) n FROM catalogo_cache WHERE stock<0').get().n;
   const sinSku = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE tipo<>'variable' AND COALESCE(sku,'')=''").get().n;
-  if (negs || sinSku) {
-    console.warn(`[woo] calidad catálogo: ${negs} con stock negativo, ${sinSku} sin SKU (no-variable). Revisar en WooCommerce.`);
+  // Un SKU repetido en más de un producto/variación causa que el sync de stock a ML
+  // oscile entre valores (ver incidente 2026-07-25) — el sync ya elige un producto de forma
+  // determinística para no romperse, pero esto sigue siendo un dato mal cargado en Woo que
+  // conviene corregir (dos productos reales no deberían compartir SKU).
+  const skusDup = db.prepare(`
+    SELECT COUNT(*) n FROM (
+      SELECT sku FROM catalogo_cache WHERE COALESCE(sku,'')<>'' GROUP BY sku HAVING COUNT(*)>1
+    )
+  `).get().n;
+  if (negs || sinSku || skusDup) {
+    console.warn(`[woo] calidad catálogo: ${negs} con stock negativo, ${sinSku} sin SKU (no-variable), ${skusDup} SKU repetidos en más de un producto. Revisar en WooCommerce.`);
   }
 
   return productos.length;
