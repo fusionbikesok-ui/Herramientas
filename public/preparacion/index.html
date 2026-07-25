@@ -264,6 +264,11 @@ async function preparar(ix){
 // ─── Detalle / preparación ────────────────────────────────────────────────────
 
 async function abrirDetalle(id){
+  // Sale del flujo de tabs (VISTA sigue siendo 'pendientes' si se llegó por click en una
+  // card, ya que ese camino no pasa por ir()) — sin esto, el polling de Pendientes seguía
+  // activo y pisaba el detalle en curso cada ~25s sin ningún aviso.
+  VISTA='detalle';
+  detenerPollingPendientes();
   var r=await api('/'+id);
   if(!r.body.ok){document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>';return;}
   PREP=r.body.data;
