@@ -81,24 +81,24 @@ describe('syncMlToWc', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
-  it('happy path: orden pagada → crea pedido en WC y marca procesada', async () => {
+  it('happy path: orden pagada → crea pedido en WC con el precio real de venta ML y marca procesada', async () => {
     seedCatalogo(db); // BIKE-001 → id_woo 100
     const orden = {
       id: 'ORD-001',
       date_created: new Date().toISOString(),
-      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 2 }],
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 2, unit_price: 150 }],
     };
     mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
       if (path === '/orders' && method === 'post') return { data: { id: 5001 } };
-      return { data: { price: '150.00' } }; // GET del producto para el precio
+      return { data: { price: '999.99' } }; // catálogo Woo distinto — NO debe usarse
     });
 
     const p = syncMlToWc(db, CFG);
     await vi.runAllTimersAsync();
     await p;
 
-    // Se creó el pedido en WC con el line item mapeado (precio 150 × qty 2 = 300)
+    // El precio sale de la venta ML (unit_price 150 × qty 2 = 300), no del catálogo Woo
     const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
     expect(orderCall).toBeTruthy();
     expect(orderCall[3].line_items).toEqual([
@@ -120,6 +120,101 @@ describe('syncMlToWc', () => {
     expect(log).toBeTruthy();
     expect(log.estado).toBe('ok');
     expect(log.cant_nueva).toBe(5001);
+  });
+
+  // Bug 1 (regresión): el pedido WC debe grabar el precio REAL de venta ML, aunque
+  // el catálogo Woo haya cambiado entre la venta y el sync. Caso real: WC 66275 /
+  // ML 2000017564338280, vendido a $2.660.000, catálogo Woo $3.352.500 al sync.
+  it('bug1: usa el unit_price de la venta ML, ignora el catálogo Woo cambiado', async () => {
+    seedCatalogo(db);
+    const orden = {
+      id: '2000017564338280',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 2660000 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 66275 } };
+      return { data: { price: '3352500', regular_price: '3352500' } }; // catálogo al sync
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].line_items).toEqual([
+      { quantity: 1, subtotal: '2660000.00', total: '2660000.00', product_id: 100 },
+    ]);
+  });
+
+  // Bug 1 fail-closed: si ML no informó unit_price, no se inventa un precio.
+  it('bug1: orden ML sin unit_price → fail-closed, item con error, sin pedido WC', async () => {
+    seedCatalogo(db);
+    const orden = {
+      id: 'ORD-NOPRICE',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1 }], // sin unit_price
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'error' AND sku = 'BIKE-001'").get();
+    expect(log).toBeTruthy();
+    expect(log.error).toMatch(/unit_price/);
+    // Nada válido → no se crea pedido WC
+    expect(wooFetch.mock.calls.some(c => c[1] === '/orders' && c[2] === 'post')).toBe(false);
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NOPRICE');
+    expect(proc.estado).toBe('parcial');
+  });
+
+  // Bug 2: candado de reentrancia. Dos corridas en paralelo sobre la misma orden ML
+  // no deben crear dos pedidos WC. La segunda invocación retorna sin hacer nada.
+  it('bug2: candado impide corridas ML→WC concurrentes (sin doble pedido WC)', async () => {
+    vi.useRealTimers(); // se controla el POST con una promesa diferida
+    seedCatalogo(db);
+    const orden = {
+      id: 'ORD-CONC',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    let resolvePost;
+    const postGate = new Promise(r => { resolvePost = r; });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') {
+        await postGate; // mantiene la primera corrida en vuelo
+        return { data: { id: 7001 } };
+      }
+      return { data: {} };
+    });
+
+    const p1 = syncMlToWc(db, CFG); // toma el candado y queda esperando el POST
+    const p2 = syncMlToWc(db, CFG); // debe salir de inmediato por el candado
+    const r2 = await p2;
+    expect(r2).toEqual({ omitido: true });
+
+    // Mientras la primera sigue en vuelo, la segunda no disparó otro POST
+    const postsAntes = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post').length;
+    expect(postsAntes).toBe(1);
+
+    resolvePost();
+    const r1 = await p1;
+    expect(r1).toEqual({ omitido: false });
+
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post').length;
+    expect(posts).toBe(1);
+    const filas = db.prepare('SELECT COUNT(*) n FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-CONC');
+    expect(filas.n).toBe(1);
+  });
+
+  it('sale sin credenciales ML → retorna omitido:true', async () => {
+    const r = await syncMlToWc(db, { ml: {}, woo: CFG.woo });
+    expect(r).toEqual({ omitido: true });
   });
 
   it('idempotencia: orden ya procesada no se vuelve a procesar', async () => {
@@ -322,9 +417,55 @@ describe('syncWcToMl', () => {
 
     const p = syncWcToMl(db, CFG);
     await vi.runAllTimersAsync();
-    await p;
+    const r = await p;
 
     expect(mlFetch).not.toHaveBeenCalled();
+    expect(r).toEqual({ omitido: false });
+  });
+
+  it('caso normal (sin candado activo) → retorna omitido:false', async () => {
+    seedPublicacion(db, { clave: 'MLA100|', itemId: 'MLA100', status: 'active' });
+    mlFetch.mockResolvedValue({ status: 200, data: {} });
+
+    const p = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    const r = await p;
+
+    expect(r).toEqual({ omitido: false });
+  });
+
+  it('sale sin credenciales ML → retorna omitido:true', async () => {
+    const r = await syncWcToMl(db, { ml: {}, woo: CFG.woo });
+    expect(r).toEqual({ omitido: true });
+  });
+
+  // Bug 2 (candado análogo): dos corridas WC→ML en paralelo. La segunda debe
+  // salir de inmediato con omitido:true, sin volver a llamar a mlFetch mientras
+  // la primera sigue en vuelo.
+  it('candado impide corridas WC→ML concurrentes (segunda omitido:true, sin doble PUT)', async () => {
+    vi.useRealTimers(); // se controla el PUT con una promesa diferida
+    seedPublicacion(db, { clave: 'MLA100|', itemId: 'MLA100', status: 'active' });
+
+    let resolvePut;
+    const putGate = new Promise(r => { resolvePut = r; });
+    mlFetch.mockImplementation(async () => {
+      await putGate;
+      return { status: 200, data: {} };
+    });
+
+    const p1 = syncWcToMl(db, CFG); // toma el candado y queda esperando el PUT
+    const p2 = syncWcToMl(db, CFG); // debe salir de inmediato por el candado
+    const r2 = await p2;
+    expect(r2).toEqual({ omitido: true });
+
+    const llamadasAntes = mlFetch.mock.calls.length;
+    expect(llamadasAntes).toBe(1);
+
+    resolvePut();
+    const r1 = await p1;
+    expect(r1).toEqual({ omitido: false });
+
+    expect(mlFetch.mock.calls.length).toBe(1);
   });
 });
 
