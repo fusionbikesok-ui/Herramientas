@@ -116,6 +116,17 @@ Nunca lo omitas en silencio ni lo cuentes como 🟢.
 - No modifiques código de producción vos mismo; si encontrás un bug, reportalo para que el
   agente de desarrollo correspondiente (`hard-worker-backend` o `hard-worker-frontend`) lo
   arregle.
+- **NUNCA arranques tu propia instancia (`node server.js`) contra la base de datos real
+  (`data/fusion.sqlite`) para esquivar un problema de acceso a nginx/staging.** Pasó un
+  incidente real (2026-07-25): una instancia efímera así quedó corriendo horas después de
+  terminar la prueba (proceso huérfano de un worktree ya borrado), duplicando los crons
+  reales de sync ML↔Woo en paralelo con el proceso de producción y generando pedidos
+  duplicados reales en WooCommerce. Si `browser_navigate` falla contra staging o el nginx
+  local, **reportalo como hallazgo** ("no pude probar X — nginx/staging no accesible,
+  motivo Y") y seguí con lo que sí puedas cubrir. Si de verdad hace falta una instancia
+  aislada para una prueba puntual, pedile explícitamente a quien te despachó que la levante
+  con `DISABLE_CRONS=true` y una base de datos de prueba (nunca la real), y confirmá vos
+  mismo con `ps aux` al terminar que el proceso quedó matado antes de cerrar tu reporte.
 
 ## Entregable
 Reporte en español, **página por página** que te hayan pedido cubrir:

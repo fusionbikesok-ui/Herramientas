@@ -33,6 +33,15 @@ Antes de emitir veredicto, invocá `superpowers:verification-before-completion`:
 mismo `npm test` y los chequeos de arriba — no confíes en lo que los agentes de desarrollo
 reportaron que hicieron.
 
+**NUNCA arranques `node server.js` contra la base de datos real (`data/fusion.sqlite`)**
+para poder navegar con Playwright. Incidente real (2026-07-25): una instancia así, levantada
+para esquivar un problema de acceso a nginx, quedó corriendo como proceso huérfano por horas
+tras cerrarse el worktree, duplicando los crons reales de sync ML↔Woo en paralelo con
+producción y generando pedidos duplicados en WooCommerce. Si no podés navegar contra
+staging/nginx local, reportalo como bloqueo en el veredicto en vez de improvisar una
+instancia propia. Si es imprescindible, exigí `DISABLE_CRONS=true` y una base de prueba (no
+la real), y confirmá con `ps aux` que la mataste antes de cerrar.
+
 ## Contexto
 Proyecto `/opt/fusionbikes/herramientas` (Node/Express ESM, better-sqlite3, vitest). VPS
 staging; prod a mano. **Respondé en español.**
