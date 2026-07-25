@@ -278,10 +278,16 @@
       <button class="btn-orden" id="btn-orden-diff">Por diferencia</button>
     </div>
 
+    <div class="conteo-lista-header" id="conteo-lista-header" style="display:flex;align-items:center;gap:8px;padding:6px 4px;">
+      <input type="checkbox" id="chk-todo-conteo" aria-label="Seleccionar todos los contados">
+      <label for="chk-todo-conteo" style="font-size:13px;">Seleccionar todo</label>
+    </div>
+
     <div id="conteo-lista"></div>
 
     <div class="bottom-bar">
       <button class="btn primary" id="btn-revisar">Revisar y cerrar</button>
+      <button class="btn secondary" id="btn-enviar-etiquetas" style="margin-top:8px;" disabled>Enviar a Etiquetas (0 seleccionados)</button>
       <button class="btn secondary" id="btn-descartar-sesion" style="margin-top:8px;">Descartar sesión</button>
     </div>
   </div>
@@ -558,6 +564,9 @@
   var conteoData = { items: [], pendientes: [] };
   var filtroActivo = 'contados';
   var ordenPorDiferencia = false;
+  var seleccionConteo = new Set();
+  var chkTodoConteo = document.getElementById('chk-todo-conteo');
+  var btnEnviarEtiquetas = document.getElementById('btn-enviar-etiquetas');
 
   // Buffer de pistola HID: la pistola tipea muy rápido y remata con Enter, así
   // que un submit por Enter alcanza para capturarla igual que al tipeo manual.
@@ -641,6 +650,21 @@
     }
     conteoLista.innerHTML = html;
     bindFilaEventos();
+
+    // Podar selección: sacar ids que ya no están entre los contados (eliminados, etc.)
+    var idsContados = {};
+    contados.forEach(function(i){ idsContados[String(i.id)] = true; });
+    seleccionConteo.forEach(function(id){ if(!idsContados[id]) seleccionConteo.delete(id); });
+    actualizarSeleccionUi();
+  }
+
+  function actualizarSeleccionUi(){
+    var contados = conteoData.items;
+    var n = seleccionConteo.size;
+    btnEnviarEtiquetas.textContent = 'Enviar a Etiquetas (' + n + ' seleccionados)';
+    btnEnviarEtiquetas.disabled = n === 0;
+    chkTodoConteo.checked = contados.length > 0 && n === contados.length;
+    chkTodoConteo.indeterminate = n > 0 && n < contados.length;
   }
 
   function diffClase(d){ return d > 0 ? 'pos' : d < 0 ? 'neg' : 'zero'; }
@@ -653,7 +677,9 @@
       ? '<span class="diff ' + diffClase(i.diferencia) + '">' + esc(diffTexto(i.diferencia)) + '</span>'
       : '<span class="diff zero">—</span>';
     var minusDisabled = i.cantidad > 1;
+    var marcado = seleccionConteo.has(String(i.id));
     return '<div class="fila-item' + (sinAsociar ? ' unlinked' : '') + '" data-item-id="' + esc(i.id) + '" data-ean="' + esc(i.ean) + '" data-sku="' + esc(i.sku || '') + '">' +
+      '<input type="checkbox" class="chk-item-conteo" data-accion="select" aria-label="Seleccionar ' + esc(i.sku || i.ean) + '"' + (marcado ? ' checked' : '') + '>' +
       '<div class="info">' +
         '<div class="cod">' + (sinAsociar ? '<span class="warn-ico">⚠</span>' : '') + esc(i.sku || i.ean) + '</div>' +
         '<div class="nombre">' + esc(i.nombre || (sinAsociar ? 'Sin asociar todavía' : '(sin nombre)')) + '</div>' +
@@ -676,7 +702,15 @@
   }
 
   function bindFilaEventos(){
-    conteoLista.querySelectorAll('.fila-item [data-accion]').forEach(function(btn){
+    conteoLista.querySelectorAll('.fila-item [data-accion="select"]').forEach(function(chk){
+      chk.addEventListener('change', function(){
+        var fila = chk.closest('.fila-item');
+        var itemId = fila.getAttribute('data-item-id');
+        if(chk.checked) seleccionConteo.add(itemId); else seleccionConteo.delete(itemId);
+        actualizarSeleccionUi();
+      });
+    });
+    conteoLista.querySelectorAll('.fila-item [data-accion]:not([data-accion="select"])').forEach(function(btn){
       btn.addEventListener('click', function(){
         var fila = btn.closest('.fila-item');
         var accion = btn.getAttribute('data-accion');
@@ -866,6 +900,32 @@
       }
     }).catch(function(){});
   }
+
+  chkTodoConteo.addEventListener('change', function(){
+    if(chkTodoConteo.checked){
+      conteoData.items.forEach(function(i){ seleccionConteo.add(String(i.id)); });
+    } else {
+      seleccionConteo.clear();
+    }
+    renderConteo();
+  });
+
+  function enviarAEtiquetas(itemsSeleccionados){
+    var rows = itemsSeleccionados.map(function(i){
+      return { code: i.sku || i.ean, qty: i.cantidad };
+    });
+    var prev = JSON.parse(localStorage.getItem('fb_inv_session_v1') || '{"rows":[],"history":[]}');
+    var merged = { rows: rows, history: prev.history || [] };
+    localStorage.setItem('fb_inv_session_v1', JSON.stringify(merged));
+    window.location.href = '/herramientas/etiquetas/';
+  }
+
+  btnEnviarEtiquetas.addEventListener('click', function(){
+    if(seleccionConteo.size === 0) return;
+    var itemsSeleccionados = conteoData.items.filter(function(i){ return seleccionConteo.has(String(i.id)); });
+    if(!itemsSeleccionados.length) return;
+    enviarAEtiquetas(itemsSeleccionados);
+  });
 
   // ----- Descartar sesión (Conteo) -----
   document.getElementById('btn-descartar-sesion').addEventListener('click', function(){
