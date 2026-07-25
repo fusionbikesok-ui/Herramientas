@@ -106,54 +106,67 @@ const COMPUTED_STOCK_CTE = `
 
 // ─── syncMlToWc ──────────────────────────────────────────────────────────────
 
+// Candado para evitar corridas concurrentes de ML→WC dentro del mismo proceso (una corrida
+// que tarda más que el intervalo del cron se solaparía con la siguiente). Mismo patrón que
+// _wcToMlEnCurso más abajo. No protege contra dos procesos distintos — para eso está la
+// reserva atómica en _procesarOrden — pero evita el caso, más común, de solape en un solo
+// proceso sin gastar ese mecanismo innecesariamente.
+let _mlToWcEnCurso = false;
+
 export async function syncMlToWc(db, cfg) {
   if (!mlCfgOk(cfg)) return;
+  if (_mlToWcEnCurso) return;
+  _mlToWcEnCurso = true;
 
-  const { ml: mlCfg, woo: wooCfg } = cfg;
-  const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get();
-  const desde = cursorRow?.valor ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  try {
+    const { ml: mlCfg, woo: wooCfg } = cfg;
+    const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get();
+    const desde = cursorRow?.valor ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
 
-  let offset = 0;
-  const limit = 50;
-  let ultimaFecha = desde;
-  let hayMas = true;
+    let offset = 0;
+    const limit = 50;
+    let ultimaFecha = desde;
+    let hayMas = true;
 
-  while (hayMas) {
-    const resp = await mlFetch(
-      db, mlCfg, 'get',
-      `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_asc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limit}`
-    );
+    while (hayMas) {
+      const resp = await mlFetch(
+        db, mlCfg, 'get',
+        `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_asc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limit}`
+      );
 
-    if (resp.status !== 200) {
-      console.error(`syncMlToWc: error API ML ${resp.status}`);
-      break;
-    }
+      if (resp.status !== 200) {
+        console.error(`syncMlToWc: error API ML ${resp.status}`);
+        break;
+      }
 
-    const orders = resp.data.results ?? [];
-    hayMas = orders.length === limit;
-    offset += orders.length;
+      const orders = resp.data.results ?? [];
+      hayMas = orders.length === limit;
+      offset += orders.length;
 
-    for (const orden of orders) {
-      const orderId = String(orden.id);
+      for (const orden of orders) {
+        const orderId = String(orden.id);
 
-      // Idempotencia: saltar si ya fue procesada
-      const yaProc = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(orderId);
-      if (yaProc) continue;
+        // Idempotencia: saltar si ya fue procesada
+        const yaProc = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(orderId);
+        if (yaProc) continue;
 
-      await _procesarOrden(db, wooCfg, mlCfg, orden);
+        await _procesarOrden(db, wooCfg, mlCfg, orden);
 
-      if (orden.date_created && orden.date_created > ultimaFecha) {
-        ultimaFecha = orden.date_created;
+        if (orden.date_created && orden.date_created > ultimaFecha) {
+          ultimaFecha = orden.date_created;
+        }
       }
     }
-  }
 
-  // Avanzar cursor
-  if (ultimaFecha > desde) {
-    db.prepare(`
-      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
-      ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
-    `).run(ultimaFecha, now());
+    // Avanzar cursor
+    if (ultimaFecha > desde) {
+      db.prepare(`
+        INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
+        ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+      `).run(ultimaFecha, now());
+    }
+  } finally {
+    _mlToWcEnCurso = false;
   }
 }
 
@@ -162,6 +175,15 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const items = orden.order_items ?? [];
   let algunSinMapeo = false;
 
+  // Reservas abandonadas (proceso murió entre reservar y confirmar/liberar, ej: kill -9)
+  // no deben bloquear la orden para siempre. Umbral generoso (60min, muy por encima de
+  // cualquier operación real a Woo/ML) a propósito: un umbral corto puede confundir un
+  // proceso vivo pero lento (Woo lenta, reintentos) con uno muerto, y liberar su reserva
+  // mientras sigue trabajando — eso reintroduce el duplicado que este fix corrige.
+  db.prepare(`
+    DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0 AND creado_en < ?
+  `).run(orderId, new Date(Date.now() - 60 * 60 * 1000).toISOString());
+
   // Idempotencia: si ya se creó el pedido en WC para esta orden ML, no reprocesar.
   const yaCreado = db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(orderId);
   if (yaCreado) {
@@ -169,6 +191,28 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       INSERT OR IGNORE INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en)
       VALUES (?, ?, ?, 'ok', ?)
     `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), now());
+    return;
+  }
+
+  // Reserva atómica de ml_order_id (ml_order_id es PRIMARY KEY): entre este chequeo y la
+  // creación real del pedido en Woo hay varios `await` (precios, POST /orders) que ceden el
+  // event loop. Si dos procesos corren este sync en paralelo (ver incidente 2026-07-25:
+  // procesos huérfanos + el cron real corriendo a la vez), ambos pasaban el chequeo de
+  // arriba antes de que ninguno insertara, y ambos terminaban creando un pedido duplicado en
+  // WooCommerce. Reservar la fila ahora, antes de cualquier llamada a Woo, hace que el
+  // segundo proceso pierda la carrera acá (INSERT falla por PK) en vez de después.
+  try {
+    db.prepare(`
+      INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en)
+      VALUES (?, 0, NULL, ?)
+    `).run(orderId, now());
+  } catch (e) {
+    if (!/UNIQUE|PRIMARY ?KEY/i.test(e.message ?? '')) {
+      // No es un conflicto de reserva (otro proceso llegó primero) — es un error real de
+      // DB (disco lleno, locked, etc.). No lo tragamos en silencio.
+      console.error(`syncMlToWc: error reservando ${orderId}:`, e.message);
+    }
+    // Otro proceso ya reservó esta orden, o falló la reserva — no reprocesar acá.
     return;
   }
 
@@ -214,7 +258,9 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   }
 
   if (lineItems.length === 0) {
-    // Nada mapeable/valido en esta orden — no se puede crear el pedido.
+    // Nada mapeable/valido en esta orden — no se puede crear el pedido. Liberar la reserva
+    // para que el próximo ciclo del cron pueda reintentar (ej: el SKU se mapea después).
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(orderId);
     db.prepare(`
       INSERT OR IGNORE INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en)
       VALUES (?, ?, ?, 'parcial', ?)
@@ -235,9 +281,9 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
 
     const wcOrderId = resp.data.id;
     db.prepare(`
-      INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en)
-      VALUES (?, ?, ?, ?)
-    `).run(orderId, wcOrderId, JSON.stringify(orden.buyer ?? null), now());
+      UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, comprador_json = ?
+      WHERE ml_order_id = ?
+    `).run(wcOrderId, JSON.stringify(orden.buyer ?? null), orderId);
 
     logSync(db, { direccion: 'ml_wc', clave: orderId, cantNueva: wcOrderId, estado: 'ok' });
 
@@ -246,7 +292,11 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       VALUES (?, ?, ?, ?, ?)
     `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), algunSinMapeo ? 'parcial' : 'ok', now());
   } catch (e) {
-    // No marcar como procesada — se reintenta en el próximo ciclo del cron.
+    // No marcar como procesada — liberar la reserva para reintentar en el próximo ciclo.
+    // (Si el POST a Woo en realidad tuvo éxito pero la respuesta se perdió, esto podría
+    // reintentar y crear un duplicado — mismo riesgo que ya existía antes de este fix,
+    // no lo introduce; ver reintentos vía ordenes_ml_procesadas para ese caso aparte.)
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(orderId);
     logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: e.message });
   }
 }
@@ -291,11 +341,13 @@ export async function procesarCancelacionesMl(db, cfg) {
     for (const orden of orders) {
       const orderId = String(orden.id);
 
-      // ¿Creamos un pedido WC para esta venta y todavía no lo cancelamos?
+      // ¿Creamos un pedido WC para esta venta y todavía no lo cancelamos? wc_order_id=0 es
+      // una reserva en curso de syncMlToWc (ver _procesarOrden) — todavía no existe pedido
+      // real en Woo para cancelar, así que se ignora hasta que se confirme o libere.
       const registro = db.prepare(
         'SELECT wc_order_id, cancelado_en FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?'
       ).get(orderId);
-      if (!registro || registro.cancelado_en) continue;
+      if (!registro || registro.cancelado_en || registro.wc_order_id === 0) continue;
 
       try {
         await wooFetch(wooCfg, `/orders/${registro.wc_order_id}`, 'put', { status: 'cancelled' });
@@ -1024,11 +1076,13 @@ export function syncRouter(db, cfg) {
       reactivables = new Set(getReactivablesRows(db).map(r => r.item_id)).size;
     } catch (_) { /* cache puede no existir todavía */ }
 
+    // wc_order_id=0 es una reserva en curso (o abandonada, ver _procesarOrden) de un pedido
+    // que todavía no se creó en Woo — se excluye para no mostrarla como pedido real.
     const pedidos = db.prepare(
-      "SELECT COUNT(*) total, SUM(CASE WHEN cancelado_en IS NOT NULL THEN 1 ELSE 0 END) cancelados FROM ordenes_ml_wc_pedidos"
+      "SELECT COUNT(*) total, SUM(CASE WHEN cancelado_en IS NOT NULL THEN 1 ELSE 0 END) cancelados FROM ordenes_ml_wc_pedidos WHERE wc_order_id <> 0"
     ).get();
     const ultimosPedidos = db.prepare(
-      'SELECT ml_order_id, wc_order_id, comprador_json, creado_en, cancelado_en FROM ordenes_ml_wc_pedidos ORDER BY creado_en DESC LIMIT 12'
+      "SELECT ml_order_id, wc_order_id, comprador_json, creado_en, cancelado_en FROM ordenes_ml_wc_pedidos WHERE wc_order_id <> 0 ORDER BY creado_en DESC LIMIT 12"
     ).all();
 
     // "Necesita atención" — solo lo REALMENTE pendiente de acción hoy.
