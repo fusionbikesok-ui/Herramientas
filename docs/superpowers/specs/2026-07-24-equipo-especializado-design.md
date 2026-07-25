@@ -57,6 +57,15 @@ confirma con el usuario:
 Se mantiene el atajo para fixes triviales (una línea, typo) a criterio del orquestador — no
 es un gate duro obligatorio, sino un hábito reforzado.
 
+**Chequeo de redundancia (sumado 2026-07-24, tras un caso real: dos crons separados que
+resultaron ser el mismo request con distinto filtro).** Antes de cerrar cualquier spec o
+plan, además del self-review de placeholders/consistencia/ambigüedad ya establecido en
+`superpowers:writing-plans`, recorrer cada operación cara del diseño (llamada a API
+externa, query pesada, loop, cron) y preguntar: ¿hay otra operación en este mismo diseño
+que pegue al mismo recurso? ¿se pueden fusionar en una sola pasada con clasificación local
+en vez de repetir la llamada? El patrón de alerta específico es "dos versiones de lo mismo
+con distinta cadencia o distinto filtro" — ahí es donde más se esconde esta redundancia.
+
 Skills de superpowers sumadas al pipeline (evaluadas contra las ~38 skills locales de
 `.agents/skills/` para no duplicar):
 - `writing-plans` — plan escrito, no charla.
@@ -248,6 +257,15 @@ desarrollo.
 
 Sin cambios: sigue siendo el único que hace el merge local tras luz verde; sin cambios de
 tools (los chequeos nuevos se hacen con Read/Grep/Bash + Playwright que ya tenía).
+
+**Nota de transparencia (sumada 2026-07-24):** el merge automático a `master` tras luz
+verde es comportamiento **esperado y ya establecido** de este agente, no una acción
+improvisada — pero el harness puede marcarlo con una advertencia de seguridad genérica
+por tratarse de un cambio a una rama compartida sin autorización explícita en la
+conversación puntual (ya que es un merge a rama principal, acción de las catalogadas como
+"hard to reverse"/"visible to others"). El orquestador debe avisar igual al usuario cuando
+esto pase, citando que es el protocolo ya definido acá, no ocultarlo ni tratarlo como un
+error del agente.
 
 ### `probador-e2e` y `explorador`
 Sin cambios — ya son agnósticos a qué agente de desarrollo produjo el diff.
