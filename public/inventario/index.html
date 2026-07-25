@@ -679,7 +679,7 @@
     var minusDisabled = i.cantidad > 1;
     var marcado = seleccionConteo.has(String(i.id));
     return '<div class="fila-item' + (sinAsociar ? ' unlinked' : '') + '" data-item-id="' + esc(i.id) + '" data-ean="' + esc(i.ean) + '" data-sku="' + esc(i.sku || '') + '">' +
-      '<input type="checkbox" class="chk-item-conteo" data-accion="select" aria-label="Seleccionar ' + esc(i.sku || i.ean) + '"' + (marcado ? ' checked' : '') + '>' +
+      '<input type="checkbox" class="chk-item-conteo" data-accion="select" aria-label="Seleccionar ' + esc(i.sku || i.ean) + '"' + (marcado ? ' checked' : '') + (sinAsociar ? ' disabled title="Asociá el EAN a un SKU antes de mandarlo a Etiquetas"' : '') + '>' +
       '<div class="info">' +
         '<div class="cod">' + (sinAsociar ? '<span class="warn-ico">⚠</span>' : '') + esc(i.sku || i.ean) + '</div>' +
         '<div class="nombre">' + esc(i.nombre || (sinAsociar ? 'Sin asociar todavía' : '(sin nombre)')) + '</div>' +
@@ -903,7 +903,7 @@
 
   chkTodoConteo.addEventListener('change', function(){
     if(chkTodoConteo.checked){
-      conteoData.items.forEach(function(i){ seleccionConteo.add(String(i.id)); });
+      conteoData.items.forEach(function(i){ if(i.sku) seleccionConteo.add(String(i.id)); });
     } else {
       seleccionConteo.clear();
     }
