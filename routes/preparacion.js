@@ -593,12 +593,18 @@ export function preparacionRouter(db, cfg) {
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
     if (!item) return res.status(404).json({ ok: false, error: 'ítem no encontrado' });
 
+    // Si ya estaba verificado antes de esta llamada, es un no-op (doble tap /
+    // re-confirmación): no pasó nada nuevo que auditar, igual que "sobrante" en /escanear.
+    const yaVerificado = item.estado_item === 'verificado';
+
     db.prepare("UPDATE preparacion_items SET confirmado_manual=1, estado_item='verificado', cantidad_escaneada=cantidad_esperada WHERE id=?")
       .run(item.id);
-    registrarEvento(db, {
-      preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
-      detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada, cantidad_esperada: item.cantidad_esperada, origen: 'manual' },
-    });
+    if (!yaVerificado) {
+      registrarEvento(db, {
+        preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
+        detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada, cantidad_esperada: item.cantidad_esperada, origen: 'manual' },
+      });
+    }
     res.json({ ok: true, item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
   });
 
