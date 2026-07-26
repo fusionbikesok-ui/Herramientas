@@ -625,12 +625,36 @@ describe('preparacion flujo', () => {
     expect(eventos[0].usuario).toBe('tester');
   });
 
+  it('escanear con origen fuera de la whitelist cae al default lector_teclado (no se puede simplificar a ||)', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1', origen: 'inyectado' });
+
+    const evento = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
+    expect(JSON.parse(evento.detalle_json).origen).toBe('lector_teclado');
+  });
+
   it('confirmar-manual registra un evento tipo escaneo con origen manual', async () => {
     const id = nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
     await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
-    expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: '', origen: 'manual' });
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({
+      sku: '', origen: 'manual', cantidad_nueva: item.cantidad_esperada, cantidad_esperada: item.cantidad_esperada,
+    });
+  });
+
+  it('confirmar-manual dos veces seguidas sobre el mismo ítem no duplica el evento (re-confirmación es no-op)', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
+
+    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    const r2 = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    expect(r2.body.ok).toBe(true);
+
+    const eventos = db.prepare(
+      "SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND item_id=? AND tipo='escaneo'"
+    ).all(id, item.id);
+    expect(eventos).toHaveLength(1);
   });
 });
 
