@@ -8,7 +8,7 @@ import {
   splitDireccion, splitTelefonoAr, normalizarEnvio,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
-import { preparacionRouter, crearPreparacion } from '../routes/preparacion.js';
+import { preparacionRouter, crearPreparacion, registrarEvento } from '../routes/preparacion.js';
 import heicConvert from 'heic-convert';
 
 vi.mock('heic-convert', () => ({ default: vi.fn() }));
@@ -122,6 +122,30 @@ describe('POST /:id/heartbeat', () => {
     // hay dos filas distintas para juan (una por cada preparación), no una sola pisada.
     const filasJuan = db.prepare('SELECT * FROM preparacion_vistas WHERE usuario=?').all('juan');
     expect(filasJuan).toHaveLength(2);
+  });
+});
+
+describe('registrarEvento', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} } });
+
+  it('inserta un evento con detalle_json serializado', () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 900, numeroPedido: '900', comprador: 'Ana', items: [] });
+    registrarEvento(db, { preparacionId: id, itemId: null, tipo: 'completado', usuario: 'juan', detalle: { foo: 'bar' } });
+    const ev = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=?').get(id);
+    expect(ev.tipo).toBe('completado');
+    expect(ev.usuario).toBe('juan');
+    expect(JSON.parse(ev.detalle_json)).toEqual({ foo: 'bar' });
+    expect(ev.creado_en).toBeTruthy();
+  });
+
+  it('no lanza si el insert falla (fail-open) — se traga el error', () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 901, numeroPedido: '901', comprador: 'Ana', items: [] });
+    // preparacion_id inexistente en sí no rompe (no hay FK), forzamos el fallo con un tipo raro
+    // que igual la tabla acepta (TEXT, no hay CHECK) — probamos el catch con un db roto:
+    const dbRoto = { prepare: () => { throw new Error('boom'); } };
+    expect(() => registrarEvento(dbRoto, { preparacionId: id, tipo: 'completado', usuario: 'juan', detalle: {} })).not.toThrow();
   });
 });
 
