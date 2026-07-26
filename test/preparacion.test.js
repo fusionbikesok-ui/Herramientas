@@ -918,6 +918,38 @@ describe('preparacion flujo', () => {
       expect(item.perfil).toBe('sellado');
     });
 
+    it('item con sku vacio o null no rompe y cae a la regla de categoria (no matchea la fila "" si existiera)', () => {
+      db.prepare("INSERT INTO preparacion_perfiles (categoria, perfil, actualizado_en) VALUES ('ACCESORIOS','sellado',?)").run(new Date().toISOString());
+      // Regla "vacia" maliciosa/accidental: no deberia poder matchear items sin sku.
+      db.prepare("INSERT INTO preparacion_perfiles_sku (sku, perfil, actualizado_en) VALUES ('','kit_transmision',?)").run(new Date().toISOString());
+
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 957, numeroPedido: '957', comprador: 'X',
+        items: [
+          { line_item_id: 1, product_id: 1, sku: null, nombre: 'Sin sku', categoria: 'ACCESORIOS', cantidad: 1 },
+          { line_item_id: 2, product_id: 2, sku: '', nombre: 'Sku vacio', categoria: 'ACCESORIOS', cantidad: 1 },
+          { line_item_id: 3, product_id: 3, sku: '   ', nombre: 'Sku solo espacios', categoria: 'ACCESORIOS', cantidad: 1 },
+        ],
+      });
+      const items = db.prepare('SELECT perfil FROM preparacion_items WHERE preparacion_id=? ORDER BY id').all(id);
+      expect(items.map(i => i.perfil)).toEqual(['sellado', 'sellado', 'sellado']);
+    });
+
+    it('dos reglas de SKU distintas no se pisan entre si', () => {
+      db.prepare("INSERT INTO preparacion_perfiles_sku (sku, perfil, actualizado_en) VALUES ('KIT-A','kit_transmision',?)").run(new Date().toISOString());
+      db.prepare("INSERT INTO preparacion_perfiles_sku (sku, perfil, actualizado_en) VALUES ('KIT-B','bici',?)").run(new Date().toISOString());
+
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 958, numeroPedido: '958', comprador: 'X',
+        items: [
+          { line_item_id: 1, product_id: 1, sku: 'KIT-A', nombre: 'A', categoria: 'ACCESORIOS', cantidad: 1 },
+          { line_item_id: 2, product_id: 2, sku: 'KIT-B', nombre: 'B', categoria: 'ACCESORIOS', cantidad: 1 },
+        ],
+      });
+      const items = db.prepare('SELECT sku, perfil FROM preparacion_items WHERE preparacion_id=? ORDER BY id').all(id);
+      expect(items.map(i => i.perfil)).toEqual(['kit_transmision', 'bici']);
+    });
+
     it('GET /perfiles-sku devuelve las reglas guardadas', async () => {
       const r0 = await request(app).get('/api/preparacion/perfiles-sku');
       expect(r0.body.data).toEqual([]);
