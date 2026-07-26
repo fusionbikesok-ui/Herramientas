@@ -1,7 +1,9 @@
 # Proyecto FusionBikes — herramientas
 
 App Node/Express (ESM, better-sqlite3, vitest) en VPS **staging**; a producción se pasa **a
-mano**. Git local sin remoto. Integración MercadoLibre ↔ WooCommerce. Responder en español.
+mano**. Remoto en GitHub (`git@github.com:fusionbikesok-ui/Herramientas.git`, privado, vía
+deploy key con acceso de escritura). Integración MercadoLibre ↔ WooCommerce. Responder en
+español.
 
 ## Equipo de subagentes — flujo de trabajo
 
