@@ -30,3 +30,7 @@ export function guardarArchivo({ buffer, originalname, mimetype, importador, num
   const url = `/uploads/${carpetaImp}/${carpetaPed}/${filename}`;
   return { url, filename: originalname, filepath };
 }
+
+export function rutaAbsoluta(url) {
+  return path.join(path.dirname(UPLOADS_DIR), url);
+}

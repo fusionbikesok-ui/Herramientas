@@ -102,6 +102,24 @@ function ensureTables(db) {
     visto_en       TEXT NOT NULL,
     PRIMARY KEY (preparacion_id, usuario)
   )`).run();
+
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_eventos (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    preparacion_id INTEGER NOT NULL,
+    item_id        INTEGER,
+    tipo           TEXT NOT NULL,
+    usuario        TEXT,
+    detalle_json   TEXT NOT NULL,
+    creado_en      TEXT NOT NULL
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_eventos_prep ON preparacion_eventos(preparacion_id, id)').run();
+
+  // borrado_en: soft-delete de fotos (columna nueva, agregada con try/catch porque SQLite
+  // no tiene "ADD COLUMN IF NOT EXISTS" — falla con "duplicate column" si ya existe, y eso
+  // es justamente lo esperado en cada arranque salvo el primero).
+  try {
+    db.prepare('ALTER TABLE preparacion_fotos ADD COLUMN borrado_en TEXT').run();
+  } catch (_) { /* la columna ya existe */ }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -169,6 +187,19 @@ export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null
   });
   tx();
   return prepId;
+}
+
+export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuario, detalle }) {
+  // Fail-open a propósito: el historial de "Actividad" es auxiliar, nunca debe poder
+  // frenar la acción real (escanear, subir foto, etc.) que el operario está haciendo.
+  try {
+    db.prepare(`
+      INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
+      VALUES (?,?,?,?,?,?)
+    `).run(preparacionId, itemId, tipo, usuario ?? null, JSON.stringify(detalle ?? {}), now());
+  } catch (e) {
+    console.error('registrarEvento: no se pudo registrar', tipo, e.message);
+  }
 }
 
 function getPrep(db, id) {
