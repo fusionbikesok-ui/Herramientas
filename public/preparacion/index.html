@@ -10,6 +10,11 @@
     --surface:#141A25;--surface2:#1B2235;--border:#24304A;--border2:#2E3B57;
     --text:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
     --green:#34D399;--amber:#F5B942;--red:#F87171;--violet:#A78BFA;
+    --tap-comfort:56px;
+    --act-rail:rgba(36,48,74,.55);
+    --act-new-hold:6s;
+    --act-deleted-veil:rgba(248,113,113,.18);
+    --act-deleted-hatch:rgba(248,113,113,.25);
   }
   *{box-sizing:border-box;}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;margin:0;background:var(--oscuro);color:var(--text);}
@@ -122,6 +127,44 @@
   .perf-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;}
   .perf-row input,.perf-row select{background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;}
   @media (max-width:640px){ .wrap{padding:14px 12px 90px;} }
+
+  /* Actividad (Task 7) */
+  .act-head{width:100%;min-height:var(--tap-comfort);display:flex;align-items:center;gap:8px;
+    padding:12px 16px;background:var(--surface);border:1px solid var(--border);
+    border-radius:12px 12px 0 0;font:inherit;cursor:pointer;text-align:left;color:var(--text)}
+  .act-head.cerrado{border-radius:12px}
+  .act-head .car{font-size:12px;color:var(--muted);transition:transform .18s}
+  .act-head.abierto .car{transform:rotate(90deg)}
+  .act-head .tit{font-weight:800;font-size:14px}
+  .act-head .badge-n{font-size:11px;color:var(--muted);background:var(--surface2);
+    border:1px solid var(--border);border-radius:999px;padding:2px 8px}
+  .act-head .nuevos{font-size:11.5px;font-weight:700;color:var(--azul)}
+  .act-body{border:1px solid var(--border);border-top:none;border-radius:0 0 12px 12px;padding:4px 0}
+  .feed-item{display:grid;grid-template-columns:28px 1fr;gap:10px;padding:10px 10px 10px 0;
+    border-top:1px solid var(--act-rail)}
+  .feed-item:first-child{border-top:none}
+  .feed-item.nuevo{background:rgba(45,184,232,.08);border-left:3px solid var(--azul);
+    transition:background 1.2s, border-color 1.2s}
+  .feed-badge{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px}
+  .feed-l1{font-size:13.5px;line-height:1.35}
+  .feed-l1 b{font-weight:800}
+  .feed-sku{font-size:11.5px;color:var(--muted);font-family:monospace}
+  .feed-meta{font-size:11.5px;color:var(--muted)}
+  .feed-thumb{width:56px;height:56px;border-radius:8px;object-fit:cover;cursor:pointer}
+  .feed-thumb.borrada{filter:grayscale(1);opacity:.55;border:1px dashed var(--red);
+    background-image:repeating-linear-gradient(45deg,var(--act-deleted-hatch) 0 4px,transparent 4px 8px)}
+  .feed-delta{font-size:12px}
+  .feed-delta .antes{color:var(--muted);text-decoration:line-through}
+  .feed-delta .desp{font-weight:700}
+  .act-empty,.act-error{text-align:center;padding:20px;font-size:13px;color:var(--muted)}
+  .act-empty{border:1px dashed var(--border);border-radius:12px}
+  .act-error{border:1px solid var(--amber);background:rgba(245,185,66,.06);border-radius:12px;text-align:left;padding:14px}
+  .chip-jump{min-height:44px;padding:0 14px;border-radius:999px;background:var(--surface2);
+    border:1px solid var(--border);color:var(--muted);
+    font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+  .chip-jump.oculto{display:none}
+  .chip-jump .dot{width:7px;height:7px;border-radius:50%;background:transparent}
+  .chip-jump.nuevo .dot{background:var(--azul)}
 </style>
 </head>
 <body>
@@ -155,6 +198,9 @@
 <script src="../lib/format.js"></script>
 <script>
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
+
+function actAbierta(){ return sessionStorage.getItem('prep_actividad_abierta')==='1'; }
+function setActAbierta(v){ sessionStorage.setItem('prep_actividad_abierta', v?'1':'0'); }
 
 function ir(v){
   detenerHeartbeat();
@@ -285,10 +331,17 @@ function iniciarHeartbeat(id){
 function detenerHeartbeat(){
   if(heartbeatTimer){ clearInterval(heartbeatTimer); heartbeatTimer=null; }
 }
+var ULTIMO_EVENTO_VISTO=0;
 async function heartbeat(id){
   try{
     var r=await api('/'+id+'/heartbeat',{method:'POST'});
-    if(r.body.ok) renderBannerPresencia(r.body.otros||[]);
+    if(r.body.ok){
+      renderBannerPresencia(r.body.otros||[]);
+      if(r.body.ultimo_evento_id>ULTIMO_EVENTO_VISTO && ULTIMO_EVENTO_VISTO>0){
+        await refrescarSoloActividad();
+      }
+      ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, r.body.ultimo_evento_id||0);
+    }
   }catch(e){/* no bloqueante: si falla, simplemente no se muestra el banner */}
 }
 function renderBannerPresencia(otros){
@@ -323,7 +376,10 @@ function renderDetalle(){
   var html='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
     +'<h1 style="margin-top:12px">Pedido <em>#'+esc(p.numero_pedido)+'</em> '+canal+etq+' '+estadoBadge+'</h1>'
     +'<div id="banner-presencia" class="aviso" role="status" aria-live="polite" style="display:none"></div>'
-    +'<p class="sub">'+esc(p.comprador||'')+'</p>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center">'
+    +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
+    +'<button class="chip-jump'+((p.eventos||[]).length?'':' oculto')+'" onclick="irActividad()">'
+    +'<span class="dot"></span> Actividad ('+(p.eventos||[]).length+')</button></div>'
     +'<div class="stepper">'
     +'<div class="step '+(paso1?'done':'on')+'"><span class="n">1</span> Escaneo</div>'
     +'<div class="step '+(paso2?'done':(paso1?'on':''))+'"><span class="n">2</span> Fotos</div>'
@@ -349,6 +405,8 @@ function renderDetalle(){
     html+='<span class="badge b-ok">Preparación completada '+fecha(p.completado_en)+' por '+esc(p.preparado_por||'—')+'</span>';
   }
   html+='</div>';
+
+  html+='<div style="margin-top:16px">'+renderActividad()+'</div>';
 
   document.getElementById('cuerpo').innerHTML=html;
   var si=document.getElementById('scan-in');
@@ -420,9 +478,81 @@ function flash(tipo,msg){
   clearTimeout(f._t);f._t=setTimeout(function(){f.className='flash';},3500);
 }
 
-async function escanear(codigo){
+function verboEvento(tipo,detalle){
+  if(tipo==='escaneo'){
+    if(detalle.origen==='manual')return 'confirmó sin código';
+    return detalle.origen==='camara'?'escaneó (cámara)':'escaneó';
+  }
+  if(tipo==='foto_subida')return 'subió foto';
+  if(tipo==='foto_borrada')return 'borró foto';
+  if(tipo==='embalaje')return 'marcó embalaje';
+  if(tipo==='despacho')return 'marcó despacho';
+  if(tipo==='completado')return 'completó el pedido';
+  return tipo;
+}
+
+function feedItemHtml(ev,esNuevo){
+  var d=ev.detalle||{};
+  var iconos={escaneo:'◎',foto_subida:'▣',foto_borrada:'⌫',embalaje:'⬒',despacho:'➜',completado:'★'};
+  var quien=ev.usuario?esc(ev.usuario):'—';
+  var cuando=fecha(ev.creado_en);
+  var hm=haceMin(ev.creado_en);
+  var linea1='<b>'+verboEvento(ev.tipo,d)+'</b>'
+    +(d.nombre?' '+esc(d.nombre):'')
+    +(d.cantidad_nueva!=null?' <span class="feed-meta">'+d.cantidad_nueva+'/'+d.cantidad_esperada+'</span>':'')
+    +(esNuevo?' <span class="feed-meta" style="color:var(--azul);font-weight:700">NUEVO</span>':'');
+  var extra='';
+  if(ev.tipo==='foto_subida'||ev.tipo==='foto_borrada'){
+    var borrada=ev.tipo==='foto_borrada';
+    extra='<div style="margin-top:6px;display:flex;align-items:center;gap:8px">'
+      +'<div class="feed-thumb'+(borrada?' borrada':'')+'" style="background:var(--surface2)"></div>'
+      +'<span class="feed-meta">'+esc(d.tipo_foto||'')+(borrada?' — (borrada)':'')+'</span></div>';
+  }else if(ev.tipo==='embalaje'||ev.tipo==='despacho'){
+    extra='<div class="feed-delta">'
+      +(d.valor_anterior?'<span class="antes">'+esc(d.valor_anterior)+'</span> › ':'')
+      +'<span class="desp">'+esc(d.valor_nuevo)+'</span></div>';
+  }
+  return '<div class="feed-item'+(esNuevo?' nuevo':'')+'" data-ev="'+ev.id+'">'
+    +'<div class="feed-badge">'+(iconos[ev.tipo]||'•')+'</div>'
+    +'<div><div class="feed-l1">'+linea1+'</div>'
+    +(d.sku?'<div class="feed-sku">SKU '+esc(d.sku)+'</div>':'')
+    +'<div class="feed-meta">'+quien+' · <time title="'+esc(cuando)+'">'+esc(hm?'hace '+hm:cuando)+'</time></div>'
+    +extra+'</div></div>';
+}
+
+var ACT_TOPE=30;
+function renderActividad(){
+  var eventos=(PREP.eventos||[]);
+  var abierta=actAbierta();
+  var head='<button class="act-head'+(abierta?' abierto':' cerrado')+'" onclick="toggleActividad()">'
+    +'<span class="car">▸</span><span class="tit">Actividad</span>'
+    +'<span class="badge-n">'+eventos.length+'</span></button>';
+  if(!abierta)return head;
+
+  var cuerpo;
+  if(!eventos.length){
+    cuerpo='<div class="act-empty">No hay actividad registrada.</div>';
+  }else{
+    var tope=eventos.slice(0,ACT_TOPE);
+    cuerpo=tope.map(function(e){return feedItemHtml(e,false);}).join('');
+    if(eventos.length>ACT_TOPE){
+      cuerpo+='<button class="btn sec" style="width:100%;margin-top:8px" onclick="verMasActividad()">Ver más actividad ('+(eventos.length-ACT_TOPE)+' restantes)</button>';
+    }
+  }
+  return head+'<div class="act-body" id="act-body">'+cuerpo+'</div>';
+}
+
+function toggleActividad(){ setActAbierta(!actAbierta()); renderDetalle(); }
+function verMasActividad(){ ACT_TOPE+=30; renderDetalle(); }
+function irActividad(){
+  if(!actAbierta())toggleActividad();
+  var el=document.querySelector('.act-head');
+  if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+async function escanear(codigo,origen){
   if(!codigo||!PREP)return;
-  var r=await api('/'+PREP.id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:codigo})});
+  var r=await api('/'+PREP.id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:codigo, origen:origen||'lector_teclado'})});
   var b=r.body;
   await refrescarDetalle();
   if(b.resultado==='match')flash('ok','✓ '+codigo+' — '+(b.item.estado_item==='verificado'?'ítem completo':'anotado '+b.item.cantidad_escaneada+'/'+b.item.cantidad_esperada));
@@ -443,6 +573,42 @@ async function refrescarDetalle(){
   if(!PREP)return;
   var r=await api('/'+PREP.id);
   if(r.body.ok){PREP=r.body.data;renderDetalle();}
+}
+
+async function refrescarSoloActividad(){
+  if(!PREP)return;
+  try{
+    var r=await api('/'+PREP.id+'/eventos');
+    if(!r.body.ok)return;
+    var nuevos=r.body.eventos.filter(function(e){return e.id>ULTIMO_EVENTO_VISTO;});
+    PREP.eventos=r.body.eventos;
+    var badge=document.querySelector('.act-head .badge-n');
+    if(badge)badge.textContent=r.body.eventos.length;
+    if(!actAbierta()){
+      var head=document.querySelector('.act-head');
+      if(head && nuevos.length){
+        var extra=head.querySelector('.nuevos');
+        if(!extra){extra=document.createElement('span');extra.className='nuevos';head.appendChild(extra);}
+        extra.textContent=' · '+nuevos.length+' nuevos';
+      }
+    }else{
+      var body=document.getElementById('act-body');
+      if(body){
+        var html=nuevos.map(function(e){return feedItemHtml(e,true);}).join('');
+        body.insertAdjacentHTML('afterbegin', html);
+        setTimeout(function(){
+          nuevos.forEach(function(e){
+            var el=body.querySelector('[data-ev="'+e.id+'"]');
+            if(el)el.classList.remove('nuevo');
+          });
+        }, 6000);
+      }
+    }
+    if(nuevos.some(function(e){return e.usuario && e.usuario!==USERNAME;})){
+      var otro=nuevos.find(function(e){return e.usuario && e.usuario!==USERNAME;});
+      flash('ok', esc(otro.usuario)+' '+verboEvento(otro.tipo, otro.detalle||{}));
+    }
+  }catch(e){/* no bloqueante */}
 }
 
 async function confirmarManual(itemId){
@@ -532,7 +698,7 @@ function abrirCamara(){
   window.Scanner.open({
     video:video,
     mode:'single',
-    onCode:function(v){cerrarCamara();escanear(v);},
+    onCode:function(v){cerrarCamara();escanear(v,'camara');},
     onError:function(msg){document.getElementById('cam-msg').textContent=msg;}
   });
 }

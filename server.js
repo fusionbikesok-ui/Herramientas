@@ -21,7 +21,7 @@ import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { preciosRouter } from './routes/precios.js';
-import { preparacionRouter, syncPedidosCache } from './routes/preparacion.js';
+import { preparacionRouter, syncPedidosCache, purgarFotosBorradas } from './routes/preparacion.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
 import { inventarioRouter } from './routes/inventario.js';
@@ -194,6 +194,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
           enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
         }).catch(err => console.error('Error sincronizando pedidos_cache:', err.message));
+      });
+
+      cron.schedule('0 4 * * *', () => {
+        try {
+          const n = purgarFotosBorradas(app._db);
+          if (n) console.log(`Purgadas ${n} fotos de preparación (borrado_en > 60 días)`);
+        } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
       });
     }
 

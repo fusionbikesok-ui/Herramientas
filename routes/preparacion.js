@@ -1,3 +1,4 @@
+import fs from 'fs';
 import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
@@ -5,7 +6,7 @@ import heicConvert from 'heic-convert';
 import { wooFetch } from './woo.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
-import { guardarArchivo } from '../utils/storage.js';
+import { guardarArchivo, rutaAbsoluta } from '../utils/storage.js';
 import {
   normalizarEnvio, resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
@@ -102,6 +103,26 @@ function ensureTables(db) {
     visto_en       TEXT NOT NULL,
     PRIMARY KEY (preparacion_id, usuario)
   )`).run();
+
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_eventos (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    preparacion_id INTEGER NOT NULL,
+    item_id        INTEGER,
+    tipo           TEXT NOT NULL,
+    usuario        TEXT,
+    detalle_json   TEXT NOT NULL,
+    creado_en      TEXT NOT NULL
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_eventos_prep ON preparacion_eventos(preparacion_id, id)').run();
+
+  // borrado_en: soft-delete de fotos (columna nueva, agregada con try/catch porque SQLite
+  // no tiene "ADD COLUMN IF NOT EXISTS" — falla con "duplicate column" si ya existe, y eso
+  // es justamente lo esperado en cada arranque salvo el primero).
+  try {
+    db.prepare('ALTER TABLE preparacion_fotos ADD COLUMN borrado_en TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables borrado_en:', e.message);
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -171,8 +192,51 @@ export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null
   return prepId;
 }
 
+export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuario, detalle }) {
+  // Fail-open a propósito: el historial de "Actividad" es auxiliar, nunca debe poder
+  // frenar la acción real (escanear, subir foto, etc.) que el operario está haciendo.
+  try {
+    db.prepare(`
+      INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
+      VALUES (?,?,?,?,?,?)
+    `).run(preparacionId, itemId, tipo, usuario ?? null, JSON.stringify(detalle ?? {}), now());
+  } catch (e) {
+    console.error('registrarEvento: no se pudo registrar', tipo, e.message);
+  }
+}
+
+// Purga del disco y de la tabla las fotos con soft-delete de más de 60 días.
+// Devuelve la cantidad purgada (para logging del cron).
+export function purgarFotosBorradas(db) {
+  const limite = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
+  const vencidas = db.prepare('SELECT id, url FROM preparacion_fotos WHERE borrado_en IS NOT NULL AND borrado_en < ?').all(limite);
+  for (const f of vencidas) {
+    try { fs.unlinkSync(rutaAbsoluta(f.url)); } catch (_) { /* archivo ya no está, seguir igual */ }
+    db.prepare('DELETE FROM preparacion_fotos WHERE id=?').run(f.id);
+  }
+  return vencidas.length;
+}
+
 function getPrep(db, id) {
   return db.prepare('SELECT * FROM preparaciones WHERE id=?').get(parseInt(id));
+}
+
+// Busca en preparacion_eventos quién subió una foto, mirando el evento 'foto_subida'
+// que quedó registrado con ese foto_id en su detalle_json. Fail-open a propósito (igual
+// que registrarEvento): si json_extract fallara (JSON1 no disponible, detalle_json
+// corrupto en un evento viejo) o no hubiera evento previo (foto preexistente al ciclo de
+// instrumentación), devuelve null y nunca lanza — el borrado de la foto no debe romperse
+// por esto.
+function usuarioQueSubio(db, fotoId, preparacionId) {
+  try {
+    const evento = db.prepare(
+      "SELECT usuario FROM preparacion_eventos WHERE tipo='foto_subida' AND preparacion_id=? AND json_extract(detalle_json,'$.foto_id')=? ORDER BY id DESC LIMIT 1"
+    ).get(preparacionId, fotoId);
+    return evento?.usuario ?? null;
+  } catch (e) {
+    console.error('usuarioQueSubio: no se pudo consultar', e.message);
+    return null;
+  }
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -413,7 +477,7 @@ export function preparacionRouter(db, cfg) {
     const preparadas = db.prepare(`
       SELECT p.*,
         (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
-        (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id) AS total_fotos
+        (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id AND borrado_en IS NULL) AS total_fotos
       FROM preparaciones p
       WHERE p.estado IN ('completada','pendiente_deposito')
       ORDER BY COALESCE(p.completado_en, p.creado_en) DESC LIMIT 200
@@ -483,7 +547,9 @@ export function preparacionRouter(db, cfg) {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? ORDER BY id').all(prep.id);
-    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? ORDER BY id').all(prep.id);
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL ORDER BY id').all(prep.id);
+    const eventos = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
+      .map(e => ({ ...e, detalle: JSON.parse(e.detalle_json) }));
     const data = {
       ...prep,
       items: items.map(it => ({
@@ -492,8 +558,18 @@ export function preparacionRouter(db, cfg) {
         fotos: fotos.filter(f => f.item_id === it.id),
       })),
       fotos_generales: fotos.filter(f => !f.item_id),
+      eventos,
     };
     res.json({ ok: true, data });
+  });
+
+  // ── Eventos de actividad (refresco liviano, sin re-traer items/fotos) ──
+  router.get('/:id/eventos', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const eventos = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
+      .map(e => ({ ...e, detalle: JSON.parse(e.detalle_json) }));
+    res.json({ ok: true, eventos });
   });
 
   // ── Heartbeat de presencia: "estoy viendo esta preparación ahora" ──
@@ -518,7 +594,8 @@ export function preparacionRouter(db, cfg) {
       'SELECT usuario, visto_en FROM preparacion_vistas WHERE preparacion_id=? AND usuario<>? AND visto_en > ?'
     ).all(prep.id, usuario, hace30s);
 
-    res.json({ ok: true, otros });
+    const ultimoEvento = db.prepare('SELECT MAX(id) AS m FROM preparacion_eventos WHERE preparacion_id=?').get(prep.id);
+    res.json({ ok: true, otros, ultimo_evento_id: ultimoEvento.m || 0 });
   });
 
   // ── Escanear código ──
@@ -544,6 +621,12 @@ export function preparacionRouter(db, cfg) {
     db.prepare('UPDATE preparacion_items SET cantidad_escaneada=?, estado_item=? WHERE id=?')
       .run(nuevaCant, verificado ? 'verificado' : 'pendiente', item.id);
 
+    const origen = ['camara', 'lector_teclado'].includes(req.body?.origen) ? req.body.origen : 'lector_teclado';
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
+      detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: nuevaCant, cantidad_esperada: item.cantidad_esperada, origen },
+    });
+
     res.json({ ok: true, resultado: 'match', item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
   });
 
@@ -554,8 +637,18 @@ export function preparacionRouter(db, cfg) {
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
     if (!item) return res.status(404).json({ ok: false, error: 'ítem no encontrado' });
 
+    // Si ya estaba verificado antes de esta llamada, es un no-op (doble tap /
+    // re-confirmación): no pasó nada nuevo que auditar, igual que "sobrante" en /escanear.
+    const yaVerificado = item.estado_item === 'verificado';
+
     db.prepare("UPDATE preparacion_items SET confirmado_manual=1, estado_item='verificado', cantidad_escaneada=cantidad_esperada WHERE id=?")
       .run(item.id);
+    if (!yaVerificado) {
+      registrarEvento(db, {
+        preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
+        detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada, cantidad_esperada: item.cantidad_esperada, origen: 'manual' },
+      });
+    }
     res.json({ ok: true, item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
   });
 
@@ -571,7 +664,12 @@ export function preparacionRouter(db, cfg) {
     if (!['sellada', 'abierta', 're_embalada'].includes(estado_embalaje)) {
       return res.status(400).json({ ok: false, error: 'estado_embalaje inválido' });
     }
+    const valorAnterior = item.estado_embalaje;
     db.prepare('UPDATE preparacion_items SET estado_embalaje=? WHERE id=?').run(estado_embalaje, item.id);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item.id, tipo: 'embalaje', usuario: req.user?.username,
+      detalle: { sku: item.sku, nombre: item.nombre, valor_anterior: valorAnterior, valor_nuevo: estado_embalaje },
+    });
     const actualizado = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
     res.json({ ok: true, item: actualizado, requisitos_foto: requisitosParaItem(db, actualizado) });
   });
@@ -592,8 +690,13 @@ export function preparacionRouter(db, cfg) {
     if (modo === 'deposito_relajado') estadoItem = 'exento';
     else if (item.estado_item === 'exento') estadoItem = 'pendiente'; // revertir exención
 
+    const valorAnterior = item.despacho;
     db.prepare('UPDATE preparacion_items SET despacho=?, despacho_motivo=?, estado_item=? WHERE id=?')
       .run(modo, motivo, estadoItem, item.id);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item.id, tipo: 'despacho', usuario: req.user?.username,
+      detalle: { sku: item.sku, nombre: item.nombre, valor_anterior: valorAnterior, valor_nuevo: modo },
+    });
     res.json({ ok: true, item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
   });
 
@@ -661,14 +764,37 @@ export function preparacionRouter(db, cfg) {
       'INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, nombre_archivo, creado_en) VALUES (?,?,?,?,?,?)'
     ).run(prep.id, item_id ? parseInt(item_id) : null, tipo, saved.url, saved.filename, now()).lastInsertRowid;
 
+    const itemRef = item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(parseInt(item_id)) : null;
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item_id ? parseInt(item_id) : null, tipo: 'foto_subida', usuario: req.user?.username,
+      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: tipo, nombre_archivo: saved.filename, foto_id: fotoId },
+    });
+
     res.json({ ok: true, foto: db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId) });
   });
 
   router.delete('/:id/foto/:fotoId', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    const r = db.prepare('DELETE FROM preparacion_fotos WHERE id=? AND preparacion_id=?').run(parseInt(req.params.fotoId), prep.id);
-    res.json({ ok: true, borradas: r.changes });
+    const fotoId = parseInt(req.params.fotoId);
+    const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=? AND borrado_en IS NULL').get(fotoId, prep.id);
+    if (!foto) return res.json({ ok: true, borradas: 0 });
+
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(now(), fotoId);
+
+    const itemRef = foto.item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(foto.item_id) : null;
+    // subida_por: no hay columna dedicada en preparacion_fotos para quién la subió
+    // (fuera de alcance de este ciclo agregarla) — se recupera del propio evento
+    // foto_subida que Task 3 ya registra, buscando por foto_id en su detalle_json.
+    // Puede venir null si la foto es preexistente a esta instrumentación (no hay evento
+    // foto_subida previo) o ante cualquier fallo de la consulta (fail-open, ver helper);
+    // el frontend no debe imprimir literalmente "null" en ese caso.
+    const subidaPor = usuarioQueSubio(db, fotoId, prep.id);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: foto.item_id, tipo: 'foto_borrada', usuario: req.user?.username,
+      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: foto.tipo, nombre_archivo: foto.nombre_archivo, foto_id: fotoId, subida_por: subidaPor },
+    });
+    res.json({ ok: true, borradas: 1 });
   });
 
   // ── Completar ──
@@ -678,7 +804,7 @@ export function preparacionRouter(db, cfg) {
     if (prep.estado === 'completada') return res.status(400).json({ ok: false, error: 'ya completada' });
 
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(prep.id);
-    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(prep.id);
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL').all(prep.id);
 
     const faltantes = [];
     const delegadosPendientes = [];
@@ -713,6 +839,9 @@ export function preparacionRouter(db, cfg) {
 
     db.prepare("UPDATE preparaciones SET estado='completada', completado_en=?, preparado_por=? WHERE id=?")
       .run(now(), req.user?.username || null, prep.id);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: null, tipo: 'completado', usuario: req.user?.username, detalle: {},
+    });
     res.json({ ok: true, estado: 'completada' });
   });
 
