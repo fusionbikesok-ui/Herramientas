@@ -577,6 +577,12 @@ export function preparacionRouter(db, cfg) {
     db.prepare('UPDATE preparacion_items SET cantidad_escaneada=?, estado_item=? WHERE id=?')
       .run(nuevaCant, verificado ? 'verificado' : 'pendiente', item.id);
 
+    const origen = ['camara', 'lector_teclado'].includes(req.body?.origen) ? req.body.origen : 'lector_teclado';
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
+      detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: nuevaCant, cantidad_esperada: item.cantidad_esperada, origen },
+    });
+
     res.json({ ok: true, resultado: 'match', item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
   });
 
@@ -589,6 +595,10 @@ export function preparacionRouter(db, cfg) {
 
     db.prepare("UPDATE preparacion_items SET confirmado_manual=1, estado_item='verificado', cantidad_escaneada=cantidad_esperada WHERE id=?")
       .run(item.id);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
+      detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada, cantidad_esperada: item.cantidad_esperada, origen: 'manual' },
+    });
     res.json({ ok: true, item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
   });
 
