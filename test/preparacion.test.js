@@ -656,6 +656,38 @@ describe('preparacion flujo', () => {
     ).all(id, item.id);
     expect(eventos).toHaveLength(1);
   });
+
+  it('subir foto registra un evento foto_subida', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const r = await request(app).post(`/api/preparacion/${id}/foto`)
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_subida'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: 'CUB-1', tipo_foto: 'articulo', foto_id: r.body.foto.id });
+  });
+
+  it('borrar foto NO borra la fila (soft-delete), registra evento foto_borrada, y deja de contar para /completar', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`)
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
+    const fotoId = subida.body.foto.id;
+
+    await request(app).delete(`/api/preparacion/${id}/foto/${fotoId}`);
+
+    const fila = db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId);
+    expect(fila).toBeTruthy(); // NO se borró la fila
+    expect(fila.borrado_en).toBeTruthy();
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_borrada'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: 'CUB-1', foto_id: fotoId, subida_por: 'tester' });
+
+    const detalle = await request(app).get(`/api/preparacion/${id}`);
+    const itemDetalle = detalle.body.data.items.find(i => i.id === item.id);
+    expect(itemDetalle.fotos).toHaveLength(0); // la foto borrada no cuenta como presente
+  });
 });
 
 import { wooFetch } from '../routes/woo.js';

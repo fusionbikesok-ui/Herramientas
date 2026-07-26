@@ -446,7 +446,7 @@ export function preparacionRouter(db, cfg) {
     const preparadas = db.prepare(`
       SELECT p.*,
         (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
-        (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id) AS total_fotos
+        (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id AND borrado_en IS NULL) AS total_fotos
       FROM preparaciones p
       WHERE p.estado IN ('completada','pendiente_deposito')
       ORDER BY COALESCE(p.completado_en, p.creado_en) DESC LIMIT 200
@@ -516,7 +516,7 @@ export function preparacionRouter(db, cfg) {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? ORDER BY id').all(prep.id);
-    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? ORDER BY id').all(prep.id);
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL ORDER BY id').all(prep.id);
     const data = {
       ...prep,
       items: items.map(it => ({
@@ -710,14 +710,36 @@ export function preparacionRouter(db, cfg) {
       'INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, nombre_archivo, creado_en) VALUES (?,?,?,?,?,?)'
     ).run(prep.id, item_id ? parseInt(item_id) : null, tipo, saved.url, saved.filename, now()).lastInsertRowid;
 
+    const itemRef = item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(parseInt(item_id)) : null;
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item_id ? parseInt(item_id) : null, tipo: 'foto_subida', usuario: req.user?.username,
+      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: tipo, nombre_archivo: saved.filename, foto_id: fotoId },
+    });
+
     res.json({ ok: true, foto: db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId) });
   });
 
   router.delete('/:id/foto/:fotoId', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    const r = db.prepare('DELETE FROM preparacion_fotos WHERE id=? AND preparacion_id=?').run(parseInt(req.params.fotoId), prep.id);
-    res.json({ ok: true, borradas: r.changes });
+    const fotoId = parseInt(req.params.fotoId);
+    const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=? AND borrado_en IS NULL').get(fotoId, prep.id);
+    if (!foto) return res.json({ ok: true, borradas: 0 });
+
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(now(), fotoId);
+
+    const itemRef = foto.item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(foto.item_id) : null;
+    // subida_por: no hay columna dedicada en preparacion_fotos para quién la subió
+    // (fuera de alcance de este ciclo agregarla) — se recupera del propio evento
+    // foto_subida que Task 3 ya registra, buscando por foto_id en su detalle_json.
+    const eventoSubida = db.prepare(
+      "SELECT usuario FROM preparacion_eventos WHERE tipo='foto_subida' AND json_extract(detalle_json,'$.foto_id')=? ORDER BY id DESC LIMIT 1"
+    ).get(fotoId);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: foto.item_id, tipo: 'foto_borrada', usuario: req.user?.username,
+      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: foto.tipo, nombre_archivo: foto.nombre_archivo, foto_id: fotoId, subida_por: eventoSubida?.usuario ?? null },
+    });
+    res.json({ ok: true, borradas: 1 });
   });
 
   // ── Completar ──
@@ -727,7 +749,7 @@ export function preparacionRouter(db, cfg) {
     if (prep.estado === 'completada') return res.status(400).json({ ok: false, error: 'ya completada' });
 
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(prep.id);
-    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(prep.id);
+    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL').all(prep.id);
 
     const faltantes = [];
     const delegadosPendientes = [];
