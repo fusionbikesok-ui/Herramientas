@@ -96,22 +96,50 @@ export async function refrescarCatalogo(db, cfg) {
       atributos_json = excluded.atributos_json, marca = excluded.marca, gtin = excluded.gtin,
       actualizado_en = excluded.actualizado_en
   `);
-  const tx = db.transaction((rows) => {
+  // Borrar de catalogo_cache los productos que ya no existen en WooCommerce (borrados
+  // permanentemente, o pasados a un estado que "status=any" no devuelve). El upsert de
+  // arriba solo agrega/actualiza, nunca borra — así que un producto eliminado en WC quedaba
+  // como fila fantasma para siempre. Encontrado en un incidente real (2026-07-25): dos
+  // productos borrados hacía tiempo (404 al día de hoy en la API de WC) seguían en
+  // catalogo_cache con el mismo SKU que un producto real vigente, y el sync de stock a ML
+  // terminaba oscilando entre el valor real y el de la fila fantasma según el orden interno
+  // de SQLite en cada corrida — WooCommerce no permite SKUs duplicados de verdad, así que
+  // ver el "mismo SKU" en más de una fila acá siempre es un residuo de un borrado, nunca un
+  // caso de negocio legítimo.
+  const idsActuales = productos.map(p => p.id_woo).filter(id => id != null);
+  // Fail-closed: un fetch que trae 0 productos (WooCommerce respondiendo 200 con body vacío
+  // por un problema propio — mantenimiento, permisos degradados, etc. — sin que wooFetch lo
+  // trate como error) NO debe interpretarse como "se borró todo el catálogo real". En SQL,
+  // "id_woo NOT IN (<conjunto vacío>)" es siempre verdadero, así que sin este guard la poda
+  // de abajo borraría el 100% de catalogo_cache. Se omite la poda (y el upsert, que de todos
+  // modos no tendría nada que escribir) y se avisa — mucho más seguro que perder todo el
+  // stock local de golpe.
+  if (idsActuales.length === 0) {
+    console.warn('[woo] refrescarCatalogo: WooCommerce devolvió 0 productos, se omite la poda de catalogo_cache por seguridad (posible corte/permiso, no un catálogo real vacío).');
+    return 0;
+  }
+  const tx = db.transaction((rows, idsVigentes) => {
     for (const p of rows) {
       upsert.run(filaCatalogo(p, now));
     }
+    db.exec('CREATE TEMP TABLE IF NOT EXISTS _catalogo_ids_vigentes (id_woo INTEGER PRIMARY KEY)');
+    db.exec('DELETE FROM _catalogo_ids_vigentes');
+    const insertId = db.prepare('INSERT OR IGNORE INTO _catalogo_ids_vigentes (id_woo) VALUES (?)');
+    for (const id of idsVigentes) insertId.run(id);
+    db.prepare('DELETE FROM catalogo_cache WHERE id_woo NOT IN (SELECT id_woo FROM _catalogo_ids_vigentes)').run();
+    db.exec('DROP TABLE _catalogo_ids_vigentes');
   });
-  tx(productos);
+  tx(productos, idsActuales);
 
   // H-08: chequeo de calidad de datos WC — avisa (no bloquea) problemas upstream que
   // ensucian el sync/matcher. Los productos 'variable' (padres) no tienen SKU a propósito,
   // se excluyen del conteo de SKU vacío.
   const negs = db.prepare('SELECT COUNT(*) n FROM catalogo_cache WHERE stock<0').get().n;
   const sinSku = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE tipo<>'variable' AND COALESCE(sku,'')=''").get().n;
-  // Un SKU repetido en más de un producto/variación causa que el sync de stock a ML
-  // oscile entre valores (ver incidente 2026-07-25) — el sync ya elige un producto de forma
-  // determinística para no romperse, pero esto sigue siendo un dato mal cargado en Woo que
-  // conviene corregir (dos productos reales no deberían compartir SKU).
+  // Un SKU repetido en más de un producto/variación no debería pasar nunca en WooCommerce
+  // (SKU es único ahí) — si aparece acá es señal de un residuo de borrado que la limpieza de
+  // arriba no alcanzó a cubrir (ej. un refresh viejo que falló a mitad de camino). Se avisa
+  // para investigar, ya no se espera que ocurra en operación normal.
   const skusDup = db.prepare(`
     SELECT COUNT(*) n FROM (
       SELECT sku FROM catalogo_cache WHERE COALESCE(sku,'')<>'' GROUP BY sku HAVING COUNT(*)>1

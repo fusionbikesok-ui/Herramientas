@@ -87,17 +87,16 @@ function buildMlStockUpdate(itemId, variationId, cantidad) {
 // (respeta reservas de skus_config_ml). Lo consumen _syncWcToMl, /dashboard y /reactivables.
 // Columnas: clave, sku, stock_wc, modo, reserva, stock_disponible_ml, cantidad_ml.
 //
-// catalogo_dedup: un SKU debería mapear a un único producto de WooCommerce, pero en la
-// práctica aparecieron SKUs cargados por error en más de un producto/variación distinto
-// (ej: FB-64950 en id_woo 64950 con stock 9 y también en 65189/65190 con stock 3). Sin
-// deduplicar, el JOIN de abajo multiplica filas para la misma publicación ML con distinto
-// stock, y cuál "gana" depende del orden interno no garantizado de SQLite — eso causó un
-// incidente real (2026-07-25): el stock empujado a ML oscilaba entre los dos valores cada
-// 5 minutos sin que nadie tocara nada. Se elige de forma determinística el MENOR stock entre
-// los productos duplicados (no el de id_woo más bajo): es la opción fail-closed — como
-// mucho se pierde una venta si el stock real está en el otro producto, nunca se sobrevende
-// en ML. Esto es un fallback de emergencia mientras el SKU duplicado no se corrija en
-// WooCommerce (ver aviso "SKU repetidos" en el log de calidad de catálogo).
+// catalogo_dedup: WooCommerce no permite SKUs duplicados de verdad, así que un SKU con más
+// de una fila en catalogo_cache es siempre un residuo (nunca un caso de negocio legítimo) —
+// en el incidente real (2026-07-25) que motivó esto, eran dos productos borrados hace tiempo
+// en WooCommerce (404 al consultarlos) que refrescarCatalogo nunca había limpiado de la
+// caché local, porque el upsert original solo agregaba/actualizaba y no borraba lo que ya no
+// existía en Woo. Esto ya se corrigió de raíz en refrescarCatalogo (routes/woo.js), que ahora
+// borra las filas de catalogo_cache que no vienen en el fetch actual. Este dedup queda como
+// red de seguridad barata para esa clase de bug (o para un refresh interrumpido a mitad de
+// camino): si igual aparece un SKU repetido, se elige el MENOR stock entre las filas — opción
+// fail-closed, como mucho se pierde una venta, nunca se sobrevende en ML.
 const COMPUTED_STOCK_CTE = `
   WITH catalogo_dedup AS (
     SELECT sku, stock,
