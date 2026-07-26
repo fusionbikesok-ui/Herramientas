@@ -891,6 +891,62 @@ describe('preparacion flujo', () => {
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_borrada'").get(id);
     expect(JSON.parse(ev.detalle_json)).toMatchObject({ foto_id: fotoId, subida_por: null });
   });
+
+  // -- Override de perfil por SKU exacto (prioridad sobre la regla de categoria) --
+  describe('override de perfil por SKU', () => {
+    it('un SKU con regla propia tiene prioridad sobre la regla de categoria', () => {
+      // La categoria diria 'sellado'...
+      db.prepare("INSERT INTO preparacion_perfiles (categoria, perfil, actualizado_en) VALUES ('ACCESORIOS','sellado',?)").run(new Date().toISOString());
+      // ...pero este SKU puntual es en realidad un kit de transmision.
+      db.prepare("INSERT INTO preparacion_perfiles_sku (sku, perfil, actualizado_en) VALUES ('KIT-777','kit_transmision',?)").run(new Date().toISOString());
+
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 950, numeroPedido: '950', comprador: 'X',
+        items: [{ line_item_id: 1, product_id: 1, sku: 'KIT-777', nombre: 'Producto generico', categoria: 'ACCESORIOS', cantidad: 1 }],
+      });
+      const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
+      expect(item.perfil).toBe('kit_transmision');
+    });
+
+    it('sin regla de SKU, sigue aplicando la regla de categoria como hasta ahora', () => {
+      db.prepare("INSERT INTO preparacion_perfiles (categoria, perfil, actualizado_en) VALUES ('ACCESORIOS','sellado',?)").run(new Date().toISOString());
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 951, numeroPedido: '951', comprador: 'X',
+        items: [{ line_item_id: 1, product_id: 1, sku: 'CUALQUIERA', nombre: 'Otro producto', categoria: 'ACCESORIOS', cantidad: 1 }],
+      });
+      const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
+      expect(item.perfil).toBe('sellado');
+    });
+
+    it('GET /perfiles-sku devuelve las reglas guardadas', async () => {
+      const r0 = await request(app).get('/api/preparacion/perfiles-sku');
+      expect(r0.body.data).toEqual([]);
+      await request(app).put('/api/preparacion/perfiles-sku/ABC-1').send({ perfil: 'kit_transmision' });
+      const r1 = await request(app).get('/api/preparacion/perfiles-sku');
+      expect(r1.body.data).toHaveLength(1);
+      expect(r1.body.data[0]).toMatchObject({ sku: 'ABC-1', perfil: 'kit_transmision' });
+    });
+
+    it('PUT /perfiles-sku/:sku normaliza a mayusculas y hace upsert (no duplica)', async () => {
+      await request(app).put('/api/preparacion/perfiles-sku/xyz-9').send({ perfil: 'bici' });
+      await request(app).put('/api/preparacion/perfiles-sku/XYZ-9').send({ perfil: 'kit_transmision' });
+      const r = await request(app).get('/api/preparacion/perfiles-sku');
+      expect(r.body.data).toHaveLength(1);
+      expect(r.body.data[0].perfil).toBe('kit_transmision');
+    });
+
+    it('PUT /perfiles-sku/:sku con perfil invalido -> 400', async () => {
+      const r = await request(app).put('/api/preparacion/perfiles-sku/ABC-2').send({ perfil: 'invalido' });
+      expect(r.status).toBe(400);
+    });
+
+    it('DELETE /perfiles-sku/:sku borra la regla', async () => {
+      await request(app).put('/api/preparacion/perfiles-sku/DEL-1').send({ perfil: 'bici' });
+      await request(app).delete('/api/preparacion/perfiles-sku/DEL-1');
+      const r = await request(app).get('/api/preparacion/perfiles-sku');
+      expect(r.body.data).toHaveLength(0);
+    });
+  });
 });
 
 import { wooFetch } from '../routes/woo.js';
