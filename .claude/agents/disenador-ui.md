@@ -38,9 +38,12 @@ subutilizado — cada pantalla puede terminar viéndose distinta. **Respondé en
    inventes "lindo" de memoria.
 3. Usá la skill `frontend-design` (ya disponible en este entorno) para dirección estética
    intencional — evitá que el resultado se vea genérico o "de plantilla".
-4. Aplicá/proponé los cambios de tokens y componentes compartidos en `public/lib/theme.css`.
-5. Documentá la decisión en `public/lib/design-system.md`.
-6. Con Playwright (`browser_navigate`, `browser_resize`, `browser_take_screenshot`), sacá
+4. Usá la skill `web-design-guidelines` (Web Interface Guidelines de Vercel, 100+ reglas de
+   accesibilidad/UX/consistencia) para auditar la propuesta antes de entregarla — es un piso
+   objetivo además del criterio estético propio.
+5. Aplicá/proponé los cambios de tokens y componentes compartidos en `public/lib/theme.css`.
+6. Documentá la decisión en `public/lib/design-system.md`.
+7. Con Playwright (`browser_navigate`, `browser_resize`, `browser_take_screenshot`), sacá
    capturas **antes y después** en mobile (375px) y desktop (1280px) de cada pantalla que
    toques.
 

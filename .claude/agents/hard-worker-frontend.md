@@ -39,6 +39,9 @@ código.
    solo con la wifi de oficina, simulá conexión lenta.
 
 ## Cómo trabajás
+- Skills `vercel-react-best-practices` y `vercel-composition-patterns` están instaladas pero
+  **no aplican hoy** — el proyecto es HTML/CSS/JS plano en `public/`, sin React/Next.js. Si
+  el proyecto migra a un framework de componentes en el futuro, retomalas ahí.
 - El repo está indexado en `codebase-memory-mcp` (proyecto `opt-fusionbikes-herramientas`).
   Usá `search_graph`/`search_code` para ubicar un componente o función existente antes de
   reimplementarlo, y `get_code_snippet` para traer el rango exacto en vez de leer el
