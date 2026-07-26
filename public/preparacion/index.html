@@ -949,20 +949,28 @@ async function completarAhora(canal,id){
 
 // ─── Perfiles de foto ─────────────────────────────────────────────────────────
 
+var PERFILES_FOTO=['bici','kit_transmision','sellado'];
+function opcionesPerfil(sel){
+  return PERFILES_FOTO.map(function(v){return '<option'+(sel===v?' selected':'')+'>'+v+'</option>';}).join('');
+}
+
 async function cargarPerfiles(){
   var c=document.getElementById('cuerpo');
   c.innerHTML='<div class="loading">Cargando…</div>';
   try{
-    var r=await api('/perfiles');
-    if(!r.body.ok)throw new Error(r.body.error||'error');
-    var rows=r.body.data||[];
+    var res=await Promise.all([api('/perfiles'),api('/perfiles-sku')]);
+    var rPerf=res[0],rSku=res[1];
+    if(!rPerf.body.ok)throw new Error(rPerf.body.error||'error');
+    if(!rSku.body.ok)throw new Error(rSku.body.error||'error');
+    var rows=rPerf.body.data||[];
+    var rowsSku=rSku.body.data||[];
     var html='<p class="sub">Regla por categoría: si el nombre de la categoría del producto <b>contiene</b> el texto, se aplica ese perfil de fotos.'
       +' <b>bici</b>: selector de embalaje (re-embalada exige lado A + lado B + caja de accesorios). <b>kit_transmision</b>: foto del set con piezas sueltas. <b>sellado</b>: 1 foto de etiqueta o artículo.</p>';
     html+=rows.map(function(p){
       return '<div class="perf-row">'
         +'<input value="'+esc(p.categoria)+'" disabled style="flex:1;min-width:150px">'
         +'<select id="perf-'+esc(p.categoria)+'">'
-        +['bici','kit_transmision','sellado'].map(function(v){return '<option'+(p.perfil===v?' selected':'')+'>'+v+'</option>';}).join('')
+        +opcionesPerfil(p.perfil)
         +'</select>'
         +'<button class="btn mini" onclick="guardarPerfil(\''+esc(p.categoria)+'\')">Guardar</button>'
         +'<button class="btn danger mini" onclick="borrarPerfil(\''+esc(p.categoria)+'\')">Borrar</button>'
@@ -970,8 +978,23 @@ async function cargarPerfiles(){
     }).join('');
     html+='<div class="perf-row" style="margin-top:14px;border-top:1px dashed var(--border);padding-top:14px">'
       +'<input id="perf-nueva-cat" placeholder="Texto de categoría (ej: CASCOS)" style="flex:1;min-width:150px">'
-      +'<select id="perf-nueva-perfil"><option>bici</option><option>kit_transmision</option><option selected>sellado</option></select>'
+      +'<select id="perf-nueva-perfil">'+opcionesPerfil('sellado')+'</select>'
       +'<button class="btn mini" onclick="agregarPerfil()">Agregar</button></div>';
+    html+='<div style="margin-top:24px;border-top:1px dashed var(--border);padding-top:14px">'
+      +'<p class="sub">Reglas por <b>SKU exacto</b> — tienen prioridad sobre las reglas por categoría de arriba. Para un producto puntual mal clasificado por la heurística.</p>'
+      +rowsSku.map(function(p){
+        return '<div class="perf-row">'
+          +'<input value="'+esc(p.sku)+'" disabled style="flex:1;min-width:150px;font-family:monospace" aria-label="SKU con regla fija">'
+          +'<select id="perfsku-'+esc(p.sku)+'" aria-label="Perfil de fotos para '+esc(p.sku)+'">'+opcionesPerfil(p.perfil)+'</select>'
+          +'<button class="btn mini" onclick="guardarPerfilSku(\''+esc(p.sku)+'\')">Guardar</button>'
+          +'<button class="btn danger mini" onclick="borrarPerfilSku(\''+esc(p.sku)+'\')">Borrar</button>'
+          +'</div>';
+      }).join('')
+      +'<div class="perf-row" style="margin-top:14px">'
+      +'<input id="perfsku-nuevo-sku" placeholder="SKU exacto (ej: FB-52590)" style="flex:1;min-width:150px;font-family:monospace" aria-label="SKU exacto de la nueva regla">'
+      +'<select id="perfsku-nuevo-perfil" aria-label="Perfil de fotos de la nueva regla por SKU">'+opcionesPerfil('sellado')+'</select>'
+      +'<button class="btn mini" onclick="agregarPerfilSku()">Agregar</button></div>'
+      +'</div>';
     c.innerHTML=html;
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
@@ -991,6 +1014,24 @@ async function agregarPerfil(){
   var perfil=document.getElementById('perf-nueva-perfil').value;
   if(!cat)return;
   await api('/perfiles/'+encodeURIComponent(cat),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
+  cargarPerfiles();
+}
+
+async function guardarPerfilSku(sku){
+  var perfil=document.getElementById('perfsku-'+sku).value;
+  await api('/perfiles-sku/'+encodeURIComponent(sku),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
+  cargarPerfiles();
+}
+async function borrarPerfilSku(sku){
+  if(!confirm('¿Borrar la regla del SKU "'+sku+'"?'))return;
+  await api('/perfiles-sku/'+encodeURIComponent(sku),{method:'DELETE'});
+  cargarPerfiles();
+}
+async function agregarPerfilSku(){
+  var sku=document.getElementById('perfsku-nuevo-sku').value.trim();
+  var perfil=document.getElementById('perfsku-nuevo-perfil').value;
+  if(!sku)return;
+  await api('/perfiles-sku/'+encodeURIComponent(sku),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
   cargarPerfiles();
 }
 
