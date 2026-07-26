@@ -608,6 +608,30 @@ describe('preparacion flujo', () => {
     expect(r.body.data.items).toHaveLength(3);
     expect(r.body.data.items.find(i => i.sku === 'BICI-1').requisitos_foto.length).toBeGreaterThan(0);
   });
+
+  it('escanear con match registra un evento tipo escaneo; no_coincide y sobrante no registran nada', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1', origen: 'camara' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'NOEXISTE' }); // no_coincide
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' }); // match, sin origen -> default lector_teclado
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' }); // sobrante (ya está 2/2)
+
+    const eventos = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo' ORDER BY id").all(id);
+    expect(eventos).toHaveLength(2);
+    const d0 = JSON.parse(eventos[0].detalle_json);
+    expect(d0).toMatchObject({ sku: 'CUB-1', cantidad_nueva: 1, cantidad_esperada: 2, origen: 'camara' });
+    const d1 = JSON.parse(eventos[1].detalle_json);
+    expect(d1.origen).toBe('lector_teclado');
+    expect(eventos[0].usuario).toBe('tester');
+  });
+
+  it('confirmar-manual registra un evento tipo escaneo con origen manual', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
+    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: '', origen: 'manual' });
+  });
 });
 
 import { wooFetch } from '../routes/woo.js';
