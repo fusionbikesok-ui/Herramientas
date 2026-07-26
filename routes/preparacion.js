@@ -437,6 +437,63 @@ export function preparacionRouter(db, cfg) {
     }
   });
 
+  // ── Lookup de solo lectura: tracking actual + si es corregible ──
+  router.get('/seguimientos/:wcOrderId/tracking-actual', async (req, res) => {
+    const wcOrderId = parseInt(req.params.wcOrderId);
+    if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
+    try {
+      const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
+      const status = actual.data?.status;
+      const meta = (actual.data.meta_data || []).find(m => m.key === TRACKING_META_KEY);
+      const trackingActual = String(meta?.value || '').trim();
+      const corregible = (status === 'completed' || status === enviadoAndreaniStatus) && !!trackingActual;
+      res.json({ ok: true, status, tracking_actual: trackingActual, corregible });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Corregir un tracking ya cargado, sin reenviar el mail nativo (solo meta_data) ──
+  router.post('/seguimientos/:wcOrderId/corregir-tracking', async (req, res) => {
+    const wcOrderId = parseInt(req.params.wcOrderId);
+    if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
+    const trackingNuevo = String(req.body?.tracking || '').trim();
+    if (!trackingNuevo) return res.status(400).json({ ok: false, error: 'tracking requerido' });
+
+    try {
+      const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
+      const status = actual.data?.status;
+      if (status !== 'completed' && status !== enviadoAndreaniStatus) {
+        return res.status(409).json({ ok: false, error: `el pedido está en estado '${status}', no se puede corregir` });
+      }
+      const metaExistente = (actual.data.meta_data || []).find(m => m.key === TRACKING_META_KEY);
+      const trackingAnterior = String(metaExistente?.value || '').trim();
+      if (!trackingAnterior) {
+        return res.status(409).json({ ok: false, error: 'no hay tracking cargado para corregir — usá el flujo normal de seguimientos' });
+      }
+
+      if (trackingNuevo === trackingAnterior) {
+        return res.json({ ok: true, tracking_anterior: trackingAnterior, tracking_nuevo: trackingNuevo });
+      }
+
+      await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
+        meta_data: [{ id: metaExistente.id, key: TRACKING_META_KEY, value: trackingNuevo }],
+      });
+
+      const prep = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+      if (prep) {
+        registrarEvento(db, {
+          preparacionId: prep.id, itemId: null, tipo: 'tracking_corregido', usuario: req.user?.username,
+          detalle: { tracking_anterior: trackingAnterior, tracking_nuevo: trackingNuevo },
+        });
+      }
+
+      res.json({ ok: true, tracking_anterior: trackingAnterior, tracking_nuevo: trackingNuevo });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // ── Iniciar preparación (snapshot de ítems desde WC o ML) ──
   router.post('/iniciar', async (req, res) => {
     const { canal, id } = req.body || {};
