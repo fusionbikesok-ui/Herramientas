@@ -794,6 +794,15 @@ async function marcarEtiqueta(wcId,lista,numero){
 
 // ─── Cargar seguimientos ────────────────────────────────────────────────────
 
+function buscadorCorreccionHtml(){
+  return '<div class="ped" style="margin-bottom:16px">'
+    +'<div class="ped-top"><span class="ped-num">Corregir tracking de un pedido ya cargado</span></div>'
+    +'<div class="ped-foot">'
+    +'<input type="text" placeholder="N° de pedido" id="corr-num" style="flex:1;min-width:120px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
+    +'<button class="btn sec" onclick="buscarParaCorregir()">Buscar</button>'
+    +'</div><div id="corr-resultado"></div></div>';
+}
+
 async function cargarSeguimientos(){
   var c=document.getElementById('cuerpo');
   c.innerHTML='<div class="loading">Cargando pedidos con etiqueta lista…</div>';
@@ -801,8 +810,9 @@ async function cargarSeguimientos(){
     var r=await api('/seguimientos');
     if(!r.body.ok)throw new Error(r.body.error||'error');
     var filas=r.body.data||[];
-    if(!filas.length){c.innerHTML='<div class="loading">No hay pedidos con etiqueta lista pendientes de tracking.</div>';return;}
-    var html='<p class="sub">Pedidos con etiqueta ya lista. Tipeá el número de seguimiento de Andreani y guardá: '
+    if(!filas.length){c.innerHTML=buscadorCorreccionHtml()+'<div class="loading">No hay pedidos con etiqueta lista pendientes de tracking.</div>';return;}
+    var html=buscadorCorreccionHtml()
+      +'<p class="sub">Pedidos con etiqueta ya lista. Tipeá el número de seguimiento de Andreani y guardá: '
       +'el pedido pasa a <b>completado</b> (dispara el mail al cliente) y después a <b>enviado Andreani</b>.</p>'
       +'<div class="ped-grid" id="seg-grid">'
       +filas.map(function(f){
@@ -822,6 +832,38 @@ async function cargarSeguimientos(){
       +'</div>';
     c.innerHTML=html;
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+async function buscarParaCorregir(){
+  var num=document.getElementById('corr-num').value.trim();
+  var out=document.getElementById('corr-resultado');
+  if(!num){out.innerHTML='';return;}
+  out.innerHTML='<p class="sub">Buscando…</p>';
+  try{
+    var r=await api('/seguimientos/'+num+'/tracking-actual');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    if(!r.body.corregible){
+      out.innerHTML='<p class="sub err">Este pedido no tiene un tracking cargado para corregir (estado actual: '+esc(r.body.status)+').</p>';
+      return;
+    }
+    out.innerHTML='<div class="ped-foot" style="margin-top:8px">'
+      +'<span class="sub" style="margin:0">Actual: <b>'+esc(r.body.tracking_actual)+'</b></span>'
+      +'<input type="text" placeholder="Nuevo N° de seguimiento" id="corr-nuevo" style="flex:1;min-width:140px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
+      +'<button class="btn" onclick="confirmarCorreccion('+JSON.stringify(num)+')">Corregir</button>'
+      +'</div>';
+  }catch(e){out.innerHTML='<p class="sub err">'+esc(e.message)+'</p>';}
+}
+
+async function confirmarCorreccion(num){
+  var input=document.getElementById('corr-nuevo');
+  var nuevo=(input&&input.value||'').trim();
+  if(!nuevo){if(input)input.focus();return;}
+  var out=document.getElementById('corr-resultado');
+  try{
+    var r=await api('/seguimientos/'+num+'/corregir-tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:nuevo})});
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    out.innerHTML='<p class="sub" style="color:var(--green)">✓ Corregido: '+esc(r.body.tracking_anterior)+' → '+esc(r.body.tracking_nuevo)+'</p>';
+  }catch(e){alert('No se pudo corregir: '+e.message);}
 }
 
 async function guardarSeguimiento(wcId){
