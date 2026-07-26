@@ -116,12 +116,12 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
 
-  // ââ Error handler global (respaldo) ââââââââââââââââââââââââââ
+  // -- Error handler global (respaldo) ---------------------------------
   // Debe ir al final, con 4 argumentos para que Express lo reconozca. Cualquier
   // error no capturado en una ruta /api/* (p.ej. un MulterError por archivo muy
-  // pesado que no se atrapÃ³ en su router) se devuelve como JSON en vez de la
-  // pÃ¡gina HTML 500 por defecto, que el frontend no puede parsear. Para rutas
-  // no-API se mantiene el comportamiento default (estÃ¡ticos, etc.).
+  // pesado que no se atrapo en su router) se devuelve como JSON en vez de la
+  // pagina HTML 500 por defecto, que el frontend no puede parsear. Para rutas
+  // no-API se mantiene el comportamiento default (estaticos, etc.).
   app.use((err, req, res, next) => {
     console.error('Error no manejado:', err);
     if (res.headersSent) return next(err);
