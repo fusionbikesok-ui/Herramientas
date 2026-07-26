@@ -331,10 +331,17 @@ function iniciarHeartbeat(id){
 function detenerHeartbeat(){
   if(heartbeatTimer){ clearInterval(heartbeatTimer); heartbeatTimer=null; }
 }
+var ULTIMO_EVENTO_VISTO=0;
 async function heartbeat(id){
   try{
     var r=await api('/'+id+'/heartbeat',{method:'POST'});
-    if(r.body.ok) renderBannerPresencia(r.body.otros||[]);
+    if(r.body.ok){
+      renderBannerPresencia(r.body.otros||[]);
+      if(r.body.ultimo_evento_id>ULTIMO_EVENTO_VISTO && ULTIMO_EVENTO_VISTO>0){
+        await refrescarSoloActividad();
+      }
+      ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, r.body.ultimo_evento_id||0);
+    }
   }catch(e){/* no bloqueante: si falla, simplemente no se muestra el banner */}
 }
 function renderBannerPresencia(otros){
@@ -543,9 +550,9 @@ function irActividad(){
   if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
-async function escanear(codigo){
+async function escanear(codigo,origen){
   if(!codigo||!PREP)return;
-  var r=await api('/'+PREP.id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:codigo})});
+  var r=await api('/'+PREP.id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:codigo, origen:origen||'lector_teclado'})});
   var b=r.body;
   await refrescarDetalle();
   if(b.resultado==='match')flash('ok','✓ '+codigo+' — '+(b.item.estado_item==='verificado'?'ítem completo':'anotado '+b.item.cantidad_escaneada+'/'+b.item.cantidad_esperada));
@@ -566,6 +573,42 @@ async function refrescarDetalle(){
   if(!PREP)return;
   var r=await api('/'+PREP.id);
   if(r.body.ok){PREP=r.body.data;renderDetalle();}
+}
+
+async function refrescarSoloActividad(){
+  if(!PREP)return;
+  try{
+    var r=await api('/'+PREP.id+'/eventos');
+    if(!r.body.ok)return;
+    var nuevos=r.body.eventos.filter(function(e){return e.id>ULTIMO_EVENTO_VISTO;});
+    PREP.eventos=r.body.eventos;
+    var badge=document.querySelector('.act-head .badge-n');
+    if(badge)badge.textContent=r.body.eventos.length;
+    if(!actAbierta()){
+      var head=document.querySelector('.act-head');
+      if(head && nuevos.length){
+        var extra=head.querySelector('.nuevos');
+        if(!extra){extra=document.createElement('span');extra.className='nuevos';head.appendChild(extra);}
+        extra.textContent=' · '+nuevos.length+' nuevos';
+      }
+    }else{
+      var body=document.getElementById('act-body');
+      if(body){
+        var html=nuevos.map(function(e){return feedItemHtml(e,true);}).join('');
+        body.insertAdjacentHTML('afterbegin', html);
+        setTimeout(function(){
+          nuevos.forEach(function(e){
+            var el=body.querySelector('[data-ev="'+e.id+'"]');
+            if(el)el.classList.remove('nuevo');
+          });
+        }, 6000);
+      }
+    }
+    if(nuevos.some(function(e){return e.usuario && e.usuario!==USERNAME;})){
+      var otro=nuevos.find(function(e){return e.usuario && e.usuario!==USERNAME;});
+      flash('ok', esc(otro.usuario)+' '+verboEvento(otro.tipo, otro.detalle||{}));
+    }
+  }catch(e){/* no bloqueante */}
 }
 
 async function confirmarManual(itemId){
@@ -655,7 +698,7 @@ function abrirCamara(){
   window.Scanner.open({
     video:video,
     mode:'single',
-    onCode:function(v){cerrarCamara();escanear(v);},
+    onCode:function(v){cerrarCamara();escanear(v,'camara');},
     onError:function(msg){document.getElementById('cam-msg').textContent=msg;}
   });
 }
