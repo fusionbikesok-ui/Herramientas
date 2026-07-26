@@ -72,6 +72,15 @@ function ensureTables(db) {
     actualizado_en  TEXT NOT NULL
   )`).run();
 
+  // Overrides por SKU exacto: tienen prioridad sobre las reglas por categoria.
+  // Arranca vacia a proposito (el operario la completa caso por caso, sin seed).
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_perfiles_sku (
+    sku             TEXT PRIMARY KEY,
+    perfil          TEXT NOT NULL,
+    requisitos_json TEXT,
+    actualizado_en  TEXT NOT NULL
+  )`).run();
+
   // Seed de perfiles por defecto (el usuario los edita desde la UI)
   const seed = db.prepare(
     'INSERT OR IGNORE INTO preparacion_perfiles (categoria, perfil, requisitos_json, actualizado_en) VALUES (?,?,NULL,?)'
@@ -136,9 +145,16 @@ function ensureTables(db) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Perfil de un ítem: primero overrides de preparacion_perfiles (match por
-// substring de categoría, la regla más larga gana), después la heurística.
-function perfilParaItem(db, { categoria, nombre }) {
+// Perfil de un ítem, por orden de prioridad:
+//   1) override por SKU exacto (preparacion_perfiles_sku),
+//   2) override por categoría (preparacion_perfiles, match por substring, la regla más larga gana),
+//   3) heurística por nombre (resolverPerfil, sin cambios).
+function perfilParaItem(db, { sku, categoria, nombre }) {
+  const skuNorm = String(sku || '').trim().toUpperCase();
+  if (skuNorm) {
+    const reglaSku = db.prepare('SELECT perfil FROM preparacion_perfiles_sku WHERE sku=?').get(skuNorm);
+    if (reglaSku) return reglaSku.perfil;
+  }
   const cats = String(categoria || '').toUpperCase();
   if (cats) {
     const reglas = db.prepare('SELECT categoria, perfil FROM preparacion_perfiles ORDER BY LENGTH(categoria) DESC').all();
@@ -149,8 +165,22 @@ function perfilParaItem(db, { categoria, nombre }) {
   return resolverPerfil({ categorias: categoria, nombre });
 }
 
-// Requisitos de foto de un ítem, respetando requisitos_json custom por categoría.
+// Requisitos de foto de un ítem, respetando requisitos_json custom: primero por SKU
+// exacto, después por categoría, y al final el default del perfil.
 function requisitosParaItem(db, item) {
+  const skuNorm = String(item.sku || '').trim().toUpperCase();
+  if (skuNorm) {
+    const reglaSku = db.prepare(
+      'SELECT requisitos_json FROM preparacion_perfiles_sku WHERE sku=? AND requisitos_json IS NOT NULL'
+    ).get(skuNorm);
+    if (reglaSku) {
+      try {
+        const custom = JSON.parse(reglaSku.requisitos_json);
+        const slots = custom[item.estado_embalaje || 'default'] || custom.default;
+        if (Array.isArray(slots) && slots.length) return slots;
+      } catch (_) { /* JSON inválido: sigue con categoría/default */ }
+    }
+  }
   const cats = String(item.categoria || '').toUpperCase();
   if (cats) {
     const reglas = db.prepare(
@@ -191,7 +221,7 @@ export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null
       (preparacion_id, line_item_id, product_id, variation_id, sku, nombre, categoria, perfil, cantidad_esperada)
       VALUES (?,?,?,?,?,?,?,?,?)`);
     for (const it of items) {
-      const perfil = perfilParaItem(db, { categoria: it.categoria, nombre: it.nombre });
+      const perfil = perfilParaItem(db, { sku: it.sku, categoria: it.categoria, nombre: it.nombre });
       ins.run(prepId, it.line_item_id || null, it.product_id || null, it.variation_id || null,
         it.sku || '', it.nombre || '', it.categoria || '', perfil,
         Math.max(1, parseInt(it.cantidad) || 1));
@@ -647,6 +677,30 @@ export function preparacionRouter(db, cfg) {
 
   router.delete('/perfiles/:categoria', (req, res) => {
     db.prepare('DELETE FROM preparacion_perfiles WHERE categoria=?').run(String(req.params.categoria || '').trim().toUpperCase());
+    res.json({ ok: true });
+  });
+
+  // ── Perfiles de foto por SKU exacto (prioridad sobre los de categoría) ──
+  router.get('/perfiles-sku', (req, res) => {
+    const rows = db.prepare('SELECT * FROM preparacion_perfiles_sku ORDER BY sku').all();
+    res.json({ ok: true, data: rows });
+  });
+
+  router.put('/perfiles-sku/:sku', (req, res) => {
+    const sku = String(req.params.sku || '').trim().toUpperCase();
+    const { perfil, requisitos_json = null } = req.body || {};
+    if (!sku || !['bici', 'kit_transmision', 'sellado'].includes(perfil)) {
+      return res.status(400).json({ ok: false, error: 'sku y perfil válidos requeridos' });
+    }
+    db.prepare(`INSERT INTO preparacion_perfiles_sku (sku, perfil, requisitos_json, actualizado_en)
+      VALUES (?,?,?,?)
+      ON CONFLICT(sku) DO UPDATE SET perfil=excluded.perfil, requisitos_json=excluded.requisitos_json, actualizado_en=excluded.actualizado_en`)
+      .run(sku, perfil, requisitos_json ? JSON.stringify(requisitos_json) : null, now());
+    res.json({ ok: true });
+  });
+
+  router.delete('/perfiles-sku/:sku', (req, res) => {
+    db.prepare('DELETE FROM preparacion_perfiles_sku WHERE sku=?').run(String(req.params.sku || '').trim().toUpperCase());
     res.json({ ok: true });
   });
 
