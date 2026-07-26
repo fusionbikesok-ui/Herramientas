@@ -8,7 +8,8 @@ import {
   splitDireccion, splitTelefonoAr, normalizarEnvio,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
-import { preparacionRouter, crearPreparacion } from '../routes/preparacion.js';
+import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
+import { rutaAbsoluta } from '../utils/storage.js';
 import heicConvert from 'heic-convert';
 
 vi.mock('heic-convert', () => ({ default: vi.fn() }));
@@ -122,6 +123,29 @@ describe('POST /:id/heartbeat', () => {
     // hay dos filas distintas para juan (una por cada preparación), no una sola pisada.
     const filasJuan = db.prepare('SELECT * FROM preparacion_vistas WHERE usuario=?').all('juan');
     expect(filasJuan).toHaveLength(2);
+  });
+});
+
+describe('registrarEvento', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} } });
+
+  it('inserta un evento con detalle_json serializado', () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 900, numeroPedido: '900', comprador: 'Ana', items: [] });
+    registrarEvento(db, { preparacionId: id, itemId: null, tipo: 'completado', usuario: 'juan', detalle: { foo: 'bar' } });
+    const ev = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=?').get(id);
+    expect(ev.tipo).toBe('completado');
+    expect(ev.usuario).toBe('juan');
+    expect(JSON.parse(ev.detalle_json)).toEqual({ foo: 'bar' });
+    expect(ev.creado_en).toBeTruthy();
+  });
+
+  it('no lanza si el insert falla (fail-open) — se traga el error', () => {
+    // aseguramos que las tablas existan antes de tirar abajo la que nos interesa probar
+    crearPreparacion(db, { canal: 'web', wcOrderId: 902, numeroPedido: '902', comprador: 'Ana', items: [] });
+    db.prepare('DROP TABLE preparacion_eventos').run();
+    expect(() => registrarEvento(db, { preparacionId: 1, tipo: 'completado', usuario: 'juan', detalle: {} })).not.toThrow();
   });
 });
 
@@ -447,6 +471,43 @@ describe('preparacion flujo', () => {
     expect(r.body.estado).toBe('completada');
   });
 
+  it('embalaje y despacho registran valor_anterior -> valor_nuevo en preparacion_eventos', async () => {
+    const id = nuevaPrep();
+    const bici = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+
+    await request(app).post(`/api/preparacion/${id}/item/${bici.id}/embalaje`).send({ estado_embalaje: 'abierta' });
+    await request(app).post(`/api/preparacion/${id}/item/${bici.id}/embalaje`).send({ estado_embalaje: 're_embalada' });
+
+    const evsEmb = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='embalaje' ORDER BY id").all(id);
+    expect(evsEmb).toHaveLength(2);
+    expect(JSON.parse(evsEmb[0].detalle_json)).toMatchObject({ valor_anterior: null, valor_nuevo: 'abierta' });
+    expect(JSON.parse(evsEmb[1].detalle_json)).toMatchObject({ valor_anterior: 'abierta', valor_nuevo: 're_embalada' });
+
+    await request(app).post(`/api/preparacion/${id}/item/${bici.id}/despacho`).send({ modo: 'deposito_relajado' });
+    const evDesp = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='despacho'").get(id);
+    expect(JSON.parse(evDesp.detalle_json)).toMatchObject({ valor_anterior: 'local', valor_nuevo: 'deposito_relajado' });
+  });
+
+  it('completar registra un evento tipo completado', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'BICI-1' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    const sinCodigo = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
+    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({});
+    const now = new Date().toISOString();
+    const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
+    for (const it of db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(id)) {
+      insFoto.run(id, it.id, 'articulo', '/uploads/x.jpg', now);
+    }
+    const r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.estado).toBe('completada');
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='completado'").get(id);
+    expect(ev).toBeTruthy();
+    expect(ev.usuario).toBe('tester');
+  });
+
   it('etiqueta_lista se marca aun sin preparación previa', async () => {
     const r = await request(app).post('/api/preparacion/etiquetas/900/lista').send({ lista: true, numero_pedido: '900', comprador: 'X' });
     expect(r.body.ok).toBe(true);
@@ -584,6 +645,175 @@ describe('preparacion flujo', () => {
     expect(r.status).toBe(200);
     expect(r.body.data.items).toHaveLength(3);
     expect(r.body.data.items.find(i => i.sku === 'BICI-1').requisitos_foto.length).toBeGreaterThan(0);
+  });
+
+  it('GET /:id incluye eventos (más reciente primero)', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    const r = await request(app).get(`/api/preparacion/${id}`);
+    expect(r.body.data.eventos.length).toBe(2);
+    expect(r.body.data.eventos[0].id).toBeGreaterThan(r.body.data.eventos[1].id);
+  });
+
+  it('GET /:id/eventos devuelve solo los eventos, sin items ni fotos', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    const r = await request(app).get(`/api/preparacion/${id}/eventos`);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.eventos).toHaveLength(1);
+    expect(r.body.items).toBeUndefined();
+  });
+
+  it('heartbeat informa el id del último evento', async () => {
+    const id = nuevaPrep();
+    let r = await request(app).post(`/api/preparacion/${id}/heartbeat`);
+    expect(r.body.ultimo_evento_id).toBe(0);
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    r = await request(app).post(`/api/preparacion/${id}/heartbeat`);
+    expect(r.body.ultimo_evento_id).toBeGreaterThan(0);
+  });
+
+  it('escanear con match registra un evento tipo escaneo; no_coincide y sobrante no registran nada', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1', origen: 'camara' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'NOEXISTE' }); // no_coincide
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' }); // match, sin origen -> default lector_teclado
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' }); // sobrante (ya está 2/2)
+
+    const eventos = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo' ORDER BY id").all(id);
+    expect(eventos).toHaveLength(2);
+    const d0 = JSON.parse(eventos[0].detalle_json);
+    expect(d0).toMatchObject({ sku: 'CUB-1', cantidad_nueva: 1, cantidad_esperada: 2, origen: 'camara' });
+    const d1 = JSON.parse(eventos[1].detalle_json);
+    expect(d1.origen).toBe('lector_teclado');
+    expect(eventos[0].usuario).toBe('tester');
+  });
+
+  it('escanear con origen fuera de la whitelist cae al default lector_teclado (no se puede simplificar a ||)', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1', origen: 'inyectado' });
+
+    const evento = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
+    expect(JSON.parse(evento.detalle_json).origen).toBe('lector_teclado');
+  });
+
+  it('confirmar-manual registra un evento tipo escaneo con origen manual', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
+    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({
+      sku: '', origen: 'manual', cantidad_nueva: item.cantidad_esperada, cantidad_esperada: item.cantidad_esperada,
+    });
+  });
+
+  it('confirmar-manual dos veces seguidas sobre el mismo ítem no duplica el evento (re-confirmación es no-op)', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
+
+    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    const r2 = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    expect(r2.body.ok).toBe(true);
+
+    const eventos = db.prepare(
+      "SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND item_id=? AND tipo='escaneo'"
+    ).all(id, item.id);
+    expect(eventos).toHaveLength(1);
+  });
+
+  it('subir foto registra un evento foto_subida', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const r = await request(app).post(`/api/preparacion/${id}/foto`)
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_subida'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: 'CUB-1', tipo_foto: 'articulo', foto_id: r.body.foto.id });
+  });
+
+  it('purgarFotosBorradas borra archivo y fila si borrado_en tiene más de 60 días; conserva las más recientes', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+
+    const vieja = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'vieja.jpg');
+    const reciente = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'reciente.jpg');
+
+    const hace70dias = new Date(Date.now() - 70 * 24 * 3600 * 1000).toISOString();
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(hace70dias, vieja.body.foto.id);
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(new Date().toISOString(), reciente.body.foto.id);
+
+    const rutaVieja = rutaAbsoluta(vieja.body.foto.url);
+    expect(fs.existsSync(rutaVieja)).toBe(true);
+
+    const purgadas = purgarFotosBorradas(db);
+
+    expect(purgadas).toBe(1);
+    expect(fs.existsSync(rutaVieja)).toBe(false);
+    expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(vieja.body.foto.id)).toBeUndefined();
+    expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(reciente.body.foto.id)).toBeTruthy();
+  });
+
+  it('borrar foto NO borra la fila (soft-delete), registra evento foto_borrada, y deja de contar para /completar', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`)
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
+    const fotoId = subida.body.foto.id;
+
+    await request(app).delete(`/api/preparacion/${id}/foto/${fotoId}`);
+
+    const fila = db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId);
+    expect(fila).toBeTruthy(); // NO se borró la fila
+    expect(fila.borrado_en).toBeTruthy();
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_borrada'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: 'CUB-1', foto_id: fotoId, subida_por: 'tester' });
+
+    const detalle = await request(app).get(`/api/preparacion/${id}`);
+    const itemDetalle = detalle.body.data.items.find(i => i.id === item.id);
+    expect(itemDetalle.fotos).toHaveLength(0); // la foto borrada no cuenta como presente
+  });
+
+  it('borrar la misma foto dos veces seguidas: la segunda es no-op y no duplica el evento foto_borrada', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`)
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
+    const fotoId = subida.body.foto.id;
+
+    const r1 = await request(app).delete(`/api/preparacion/${id}/foto/${fotoId}`);
+    expect(r1.body).toMatchObject({ ok: true, borradas: 1 });
+
+    const r2 = await request(app).delete(`/api/preparacion/${id}/foto/${fotoId}`);
+    expect(r2.body).toMatchObject({ ok: true, borradas: 0 });
+
+    const eventos = db.prepare(
+      "SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_borrada'"
+    ).all(id);
+    expect(eventos).toHaveLength(1);
+  });
+
+  it('borrar una foto sin evento foto_subida previo (foto preexistente) responde ok y subida_por queda null', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`)
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
+    const fotoId = subida.body.foto.id;
+
+    // Simulamos una foto preexistente al ciclo de instrumentación: borramos su evento
+    // foto_subida para que la búsqueda de subida_por no encuentre nada.
+    db.prepare("DELETE FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_subida' AND json_extract(detalle_json,'$.foto_id')=?").run(id, fotoId);
+
+    const r = await request(app).delete(`/api/preparacion/${id}/foto/${fotoId}`);
+    expect(r.body).toMatchObject({ ok: true, borradas: 1 });
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_borrada'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ foto_id: fotoId, subida_por: null });
   });
 });
 
