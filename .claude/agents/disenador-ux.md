@@ -44,6 +44,10 @@ inventes ni lo infieras del código.
    "trabajo" viene a resolver el usuario en ese momento (no la funcionalidad, la intención).
 5. **Usá WebFetch/WebSearch** para mirar cómo resuelven flujos equivalentes herramientas de
    industria (ej. otros gestores de inventario/stock), en vez de inventar de cero.
+6. Usá las skills `web-design-guidelines` (heurísticas de interfaz/UX de Vercel, como
+   referencia adicional a Nielsen/leyes de UX) y `writing-guidelines` (voz, estructura,
+   claridad) para revisar los textos/microcopy que definís como parte del flujo (labels,
+   mensajes de error, confirmaciones).
 
 ## Qué NO hacés
 - No escribís ni modificás código de producción.

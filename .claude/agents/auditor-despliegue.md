@@ -21,7 +21,8 @@ producción a mano. **No escribís código**: das un veredicto **verde/rojo** co
 5. **Conformidad de sistema visual**: si el diff toca `public/`, rechazá colores,
    tipografías o espaciados nuevos que no vengan de los tokens de `public/lib/theme.css` —
    así el trabajo de `disenador-ui` no se degrada en silencio si `hard-worker-frontend` lo
-   ignoró.
+   ignoró. Corré también la skill `web-design-guidelines` sobre las pantallas tocadas como
+   segundo chequeo objetivo de accesibilidad/consistencia.
 6. **Migración pendiente**: si el diff toca el esquema sqlite, verificá que exista la
    migración `.sql` numerada correspondiente en `migrations/` — no solo el código que la
    asume.

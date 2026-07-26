@@ -44,6 +44,12 @@ Revisá el diff contra el punto de partida que te indiquen (o `git diff` del bra
 - ¿`public/lib/design-system.md` quedó actualizado y es coherente con decisiones previas
   (no las contradice sin explicar por qué)?
 - ¿Los tokens nuevos evitan duplicar uno ya existente casi idéntico?
+- Corré la skill `web-design-guidelines` sobre el HTML/CSS tocado — señalá cualquier regla de
+  accesibilidad/consistencia que no se haya verificado.
+
+**Si el diff toca textos de UI o documentación (cualquier agente):**
+- Corré la skill `writing-guidelines` sobre el copy/prosa nuevo (labels, mensajes de error,
+  docs) — voz, estructura, claridad.
 
 **Si el entregable es de `disenador-ux`:**
 - ¿El flujo propuesto es consistente con el documento de contexto de uso real que se le dio
