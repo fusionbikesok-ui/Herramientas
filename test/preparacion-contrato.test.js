@@ -27,7 +27,7 @@ vi.mock('../lib/mlClient.js', () => ({
 
 import { wooFetch } from '../routes/woo.js';
 import { mlFetch } from '../lib/mlClient.js';
-import { preparacionRouter } from '../routes/preparacion.js';
+import { preparacionRouter, reintentarColgadosTracking } from '../routes/preparacion.js';
 
 const TEST_DB = './test/tmp-preparacion-contrato.sqlite';
 
@@ -291,6 +291,25 @@ describe('POST /seguimientos/:wcOrderId', () => {
     expect(prep.etiqueta_lista).toBe(1);
   });
 
+  it('si el PUT 2 falla, deja woo_paso2_pendiente=1 y responde 502 con colgado:true (no 500)', async () => {
+    wooFetch
+      .mockResolvedValueOnce({ data: { id: 910, status: 'lpaandreani', meta_data: [] } }) // GET actual
+      .mockResolvedValueOnce({ data: { id: 910, status: 'completed' } }) // PUT paso 1 (ok)
+      .mockRejectedValueOnce(new Error('WC caído')); // PUT paso 2 (falla)
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/910').send({ tracking: 'AND555' });
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ ok: false, colgado: true });
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:910'").get();
+    expect(prep).toBeTruthy();
+    expect(prep.woo_paso2_pendiente).toBe(1);
+    expect(prep.estado).not.toBe('completada');
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_colgado'").get();
+    expect(ev).toBeTruthy();
+  });
+
   it('crea el meta sin id cuando el pedido no tenía tracking previo', async () => {
     wooFetch
       .mockResolvedValueOnce({ data: { id: 901, status: 'lpaandreani', meta_data: [] } })
@@ -378,5 +397,53 @@ describe('POST /seguimientos/:wcOrderId', () => {
     expect(res.body.ok).toBe(false);
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:906'").get();
     expect(prep).toBeUndefined();
+  });
+});
+
+describe('reintentarColgadosTracking', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('reintenta el PUT 2 de cada colgado; si tiene éxito, limpia la bandera y marca completada', async () => {
+    buildTestApp(db); // ensureTables
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
+      VALUES ('web','web:920',920,1,'en_preparacion',?,1)`).run(now);
+
+    wooFetch.mockResolvedValueOnce({ data: { id: 920, status: 'enviadoandreani' } });
+
+    const resueltos = await reintentarColgadosTracking(db, { woo: null, enviadoAndreaniStatus: 'enviadoandreani' });
+    expect(resueltos).toBe(1);
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:920'").get();
+    expect(prep.estado).toBe('completada');
+    expect(prep.woo_paso2_pendiente).toBe(0);
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_recuperado'").get();
+    expect(ev).toBeTruthy();
+  });
+
+  it('si vuelve a fallar, deja la bandera puesta para la corrida siguiente (fail-open, no lanza)', async () => {
+    buildTestApp(db);
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
+      VALUES ('web','web:921',921,1,'en_preparacion',?,1)`).run(now);
+
+    wooFetch.mockRejectedValueOnce(new Error('sigue caído'));
+
+    const resueltos = await reintentarColgadosTracking(db, { woo: null, enviadoAndreaniStatus: 'enviadoandreani' });
+    expect(resueltos).toBe(0);
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:921'").get();
+    expect(prep.woo_paso2_pendiente).toBe(1);
+    expect(prep.estado).not.toBe('completada');
+  });
+
+  it('sin colgados pendientes, no llama a wooFetch y devuelve 0', async () => {
+    buildTestApp(db);
+    const resueltos = await reintentarColgadosTracking(db, { woo: null, enviadoAndreaniStatus: 'enviadoandreani' });
+    expect(resueltos).toBe(0);
+    expect(wooFetch).not.toHaveBeenCalled();
   });
 });

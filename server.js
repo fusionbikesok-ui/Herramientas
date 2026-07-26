@@ -21,7 +21,7 @@ import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { preciosRouter } from './routes/precios.js';
-import { preparacionRouter, syncPedidosCache, purgarFotosBorradas } from './routes/preparacion.js';
+import { preparacionRouter, syncPedidosCache, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
 import { inventarioRouter } from './routes/inventario.js';
@@ -201,6 +201,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           const n = purgarFotosBorradas(app._db);
           if (n) console.log(`Purgadas ${n} fotos de preparación (borrado_en > 60 días)`);
         } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
+      });
+
+      cron.schedule('*/10 * * * *', () => {
+        reintentarColgadosTracking(app._db, {
+          woo: wooCfg,
+          enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
+        }).catch(err => console.error('Error en reintentarColgadosTracking:', err.message));
       });
     }
 
