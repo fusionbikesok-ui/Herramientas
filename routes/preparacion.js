@@ -119,7 +119,9 @@ function ensureTables(db) {
   // es justamente lo esperado en cada arranque salvo el primero).
   try {
     db.prepare('ALTER TABLE preparacion_fotos ADD COLUMN borrado_en TEXT').run();
-  } catch (_) { /* la columna ya existe */ }
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables borrado_en:', e.message);
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
