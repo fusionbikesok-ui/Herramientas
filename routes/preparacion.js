@@ -638,7 +638,12 @@ export function preparacionRouter(db, cfg) {
     if (!['sellada', 'abierta', 're_embalada'].includes(estado_embalaje)) {
       return res.status(400).json({ ok: false, error: 'estado_embalaje inválido' });
     }
+    const valorAnterior = item.estado_embalaje;
     db.prepare('UPDATE preparacion_items SET estado_embalaje=? WHERE id=?').run(estado_embalaje, item.id);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item.id, tipo: 'embalaje', usuario: req.user?.username,
+      detalle: { sku: item.sku, nombre: item.nombre, valor_anterior: valorAnterior, valor_nuevo: estado_embalaje },
+    });
     const actualizado = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
     res.json({ ok: true, item: actualizado, requisitos_foto: requisitosParaItem(db, actualizado) });
   });
@@ -659,8 +664,13 @@ export function preparacionRouter(db, cfg) {
     if (modo === 'deposito_relajado') estadoItem = 'exento';
     else if (item.estado_item === 'exento') estadoItem = 'pendiente'; // revertir exención
 
+    const valorAnterior = item.despacho;
     db.prepare('UPDATE preparacion_items SET despacho=?, despacho_motivo=?, estado_item=? WHERE id=?')
       .run(modo, motivo, estadoItem, item.id);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: item.id, tipo: 'despacho', usuario: req.user?.username,
+      detalle: { sku: item.sku, nombre: item.nombre, valor_anterior: valorAnterior, valor_nuevo: modo },
+    });
     res.json({ ok: true, item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
   });
 
@@ -803,6 +813,9 @@ export function preparacionRouter(db, cfg) {
 
     db.prepare("UPDATE preparaciones SET estado='completada', completado_en=?, preparado_por=? WHERE id=?")
       .run(now(), req.user?.username || null, prep.id);
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: null, tipo: 'completado', usuario: req.user?.username, detalle: {},
+    });
     res.json({ ok: true, estado: 'completada' });
   });
 

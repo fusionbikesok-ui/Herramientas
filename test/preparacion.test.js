@@ -470,6 +470,43 @@ describe('preparacion flujo', () => {
     expect(r.body.estado).toBe('completada');
   });
 
+  it('embalaje y despacho registran valor_anterior -> valor_nuevo en preparacion_eventos', async () => {
+    const id = nuevaPrep();
+    const bici = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+
+    await request(app).post(`/api/preparacion/${id}/item/${bici.id}/embalaje`).send({ estado_embalaje: 'abierta' });
+    await request(app).post(`/api/preparacion/${id}/item/${bici.id}/embalaje`).send({ estado_embalaje: 're_embalada' });
+
+    const evsEmb = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='embalaje' ORDER BY id").all(id);
+    expect(evsEmb).toHaveLength(2);
+    expect(JSON.parse(evsEmb[0].detalle_json)).toMatchObject({ valor_anterior: null, valor_nuevo: 'abierta' });
+    expect(JSON.parse(evsEmb[1].detalle_json)).toMatchObject({ valor_anterior: 'abierta', valor_nuevo: 're_embalada' });
+
+    await request(app).post(`/api/preparacion/${id}/item/${bici.id}/despacho`).send({ modo: 'deposito_relajado' });
+    const evDesp = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='despacho'").get(id);
+    expect(JSON.parse(evDesp.detalle_json)).toMatchObject({ valor_anterior: 'local', valor_nuevo: 'deposito_relajado' });
+  });
+
+  it('completar registra un evento tipo completado', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'BICI-1' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    const sinCodigo = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
+    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({});
+    const now = new Date().toISOString();
+    const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
+    for (const it of db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(id)) {
+      insFoto.run(id, it.id, 'articulo', '/uploads/x.jpg', now);
+    }
+    const r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.estado).toBe('completada');
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='completado'").get(id);
+    expect(ev).toBeTruthy();
+    expect(ev.usuario).toBe('tester');
+  });
+
   it('etiqueta_lista se marca aun sin preparación previa', async () => {
     const r = await request(app).post('/api/preparacion/etiquetas/900/lista').send({ lista: true, numero_pedido: '900', comprador: 'X' });
     expect(r.body.ok).toBe(true);
