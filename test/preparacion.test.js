@@ -946,6 +946,84 @@ describe('preparacion flujo', () => {
       const r = await request(app).get('/api/preparacion/perfiles-sku');
       expect(r.body.data).toHaveLength(0);
     });
+
+    it('el match de SKU es exacto, no substring', () => {
+      db.prepare("INSERT INTO preparacion_perfiles (categoria, perfil, actualizado_en) VALUES ('ACCESORIOS','sellado',?)").run(new Date().toISOString());
+      db.prepare("INSERT INTO preparacion_perfiles_sku (sku, perfil, actualizado_en) VALUES ('KIT-777','kit_transmision',?)").run(new Date().toISOString());
+
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 952, numeroPedido: '952', comprador: 'X',
+        items: [
+          { line_item_id: 1, product_id: 1, sku: 'KIT-7777', nombre: 'Mas largo', categoria: 'ACCESORIOS', cantidad: 1 },
+          { line_item_id: 2, product_id: 2, sku: 'KIT-77', nombre: 'Mas corto', categoria: 'ACCESORIOS', cantidad: 1 },
+          { line_item_id: 3, product_id: 3, sku: 'KIT-777', nombre: 'Exacto', categoria: 'ACCESORIOS', cantidad: 1 },
+        ],
+      });
+      const items = db.prepare('SELECT sku, perfil FROM preparacion_items WHERE preparacion_id=? ORDER BY id').all(id);
+      expect(items.map(i => i.perfil)).toEqual(['sellado', 'sellado', 'kit_transmision']);
+    });
+
+    it('el trim() aplica en ambas puntas: al guardar la regla y al resolver el item', async () => {
+      db.prepare("INSERT INTO preparacion_perfiles (categoria, perfil, actualizado_en) VALUES ('ACCESORIOS','sellado',?)").run(new Date().toISOString());
+      // Regla guardada con espacios alrededor -> se normaliza sin espacios.
+      await request(app).put(`/api/preparacion/perfiles-sku/${encodeURIComponent('  KIT-888  ')}`).send({ perfil: 'kit_transmision' });
+      const reglas = db.prepare('SELECT sku FROM preparacion_perfiles_sku').all();
+      expect(reglas.map(r => r.sku)).toEqual(['KIT-888']);
+
+      // Item con SKU con espacios alrededor -> igual matchea la regla.
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 953, numeroPedido: '953', comprador: 'X',
+        items: [{ line_item_id: 1, product_id: 1, sku: '  KIT-888  ', nombre: 'Con espacios', categoria: 'ACCESORIOS', cantidad: 1 }],
+      });
+      const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
+      expect(item.perfil).toBe('kit_transmision');
+    });
+
+    // -- requisitos_foto: la regla de SKU cortocircuita la de categoria --
+    const requisitosDelPrimerItem = async (id) => {
+      const r = await request(app).get(`/api/preparacion/${id}`);
+      return r.body.data.items[0].requisitos_foto;
+    };
+
+    it('requisitos_json de la regla de SKU gana sobre el de la categoria', async () => {
+      db.prepare("INSERT INTO preparacion_perfiles (categoria, perfil, requisitos_json, actualizado_en) VALUES ('ACCESORIOS','sellado',?,?)")
+        .run(JSON.stringify({ default: [{ tipos: ['articulo'], min: 1, etiqueta: 'DE CATEGORIA' }] }), new Date().toISOString());
+      db.prepare("INSERT INTO preparacion_perfiles_sku (sku, perfil, requisitos_json, actualizado_en) VALUES ('KIT-777','kit_transmision',?,?)")
+        .run(JSON.stringify({ default: [{ tipos: ['piezas'], min: 2, etiqueta: 'DE SKU' }] }), new Date().toISOString());
+
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 954, numeroPedido: '954', comprador: 'X',
+        items: [{ line_item_id: 1, product_id: 1, sku: 'KIT-777', nombre: 'Generico', categoria: 'ACCESORIOS', cantidad: 1 }],
+      });
+      expect(await requisitosDelPrimerItem(id)).toEqual([{ tipos: ['piezas'], min: 2, etiqueta: 'DE SKU' }]);
+    });
+
+    it('requisitos_json invalido en la regla de SKU cae a la heuristica base sin lanzar', async () => {
+      db.prepare("INSERT INTO preparacion_perfiles (categoria, perfil, requisitos_json, actualizado_en) VALUES ('ACCESORIOS','sellado',?,?)")
+        .run(JSON.stringify({ default: [{ tipos: ['articulo'], min: 1, etiqueta: 'DE CATEGORIA' }] }), new Date().toISOString());
+      db.prepare("INSERT INTO preparacion_perfiles_sku (sku, perfil, requisitos_json, actualizado_en) VALUES ('KIT-777','kit_transmision','{no-es-json',?)")
+        .run(new Date().toISOString());
+
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 955, numeroPedido: '955', comprador: 'X',
+        items: [{ line_item_id: 1, product_id: 1, sku: 'KIT-777', nombre: 'Generico', categoria: 'ACCESORIOS', cantidad: 1 }],
+      });
+      expect(await requisitosDelPrimerItem(id)).toEqual(requisitosFoto('kit_transmision', null));
+    });
+
+    it('override de perfil por SKU sin requisitos_json propio usa la heuristica del perfil nuevo, no la de la categoria', async () => {
+      // La categoria tiene requisitos_json propios (perfil 'sellado')...
+      db.prepare("INSERT INTO preparacion_perfiles (categoria, perfil, requisitos_json, actualizado_en) VALUES ('ACCESORIOS','sellado',?,?)")
+        .run(JSON.stringify({ default: [{ tipos: ['articulo'], min: 1, etiqueta: 'DE CATEGORIA' }] }), new Date().toISOString());
+      // ...pero el SKU fuerza el perfil kit_transmision sin requisitos propios.
+      db.prepare("INSERT INTO preparacion_perfiles_sku (sku, perfil, actualizado_en) VALUES ('KIT-777','kit_transmision',?)").run(new Date().toISOString());
+
+      const id = crearPreparacion(db, {
+        canal: 'web', wcOrderId: 956, numeroPedido: '956', comprador: 'X',
+        items: [{ line_item_id: 1, product_id: 1, sku: 'KIT-777', nombre: 'Generico', categoria: 'ACCESORIOS', cantidad: 1 }],
+      });
+      expect(await requisitosDelPrimerItem(id)).toEqual(requisitosFoto('kit_transmision', null));
+    });
   });
 });
 
