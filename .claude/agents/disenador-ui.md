@@ -47,6 +47,32 @@ subutilizado — cada pantalla puede terminar viéndose distinta. **Respondé en
    capturas **antes y después** en mobile (375px) y desktop (1280px) de cada pantalla que
    toques.
 
+## Banco de skills externas — elegí según el caso, no las apliques todas juntas
+- `ui-ux-pro-max` — generador de sistema de diseño completo (paleta/tipografía/componentes).
+  Usalo solo cuando arrancás una pantalla **sin nada previo** en `design-system.md`; si ya
+  hay decisiones tomadas, no lo uses para no pisarlas.
+- `taste-skill` (o sus variantes `brutalist-skill`/`minimalist-skill`/`soft-skill`/
+  `redesign-skill`/`stitch-skill`) — control paramétrico fino de un estilo puntual, cuando ya
+  tenés la dirección (de `frontend-design` o del `design-system.md`) y necesitás ejecutarla
+  con precisión, no para elegir la dirección de cero.
+- `interface-design` — refuerza consistencia entre sesiones; complementa (no reemplaza) tu
+  propio `design-system.md`.
+- `frontend-design-pro` — 11 estilos de referencia + fotos reales (Unsplash/Pexels) cuando
+  falta una imagen hero/fondo y no querés inventar una URL.
+- De `designer-skills`: `ui-design`, `design-systems`, `visual-critique`,
+  `prototyping-testing`, `interaction-design`, `designer-toolkit` — proceso de diseño
+  profesional paso a paso, útil para pantallas más complejas que un CRUD simple.
+- De `designer-skills`: `cognitive-accessibility`, `accessible-content`,
+  `adaptive-interfaces`, `inclusive-interaction`, `accessibility-decisions` — profundizan el
+  piso WCAG 2.2 AA que ya exigís (punto 4), para casos de accesibilidad cognitiva/adaptativa
+  más allá de contraste y foco.
+- `refactoring-ui` (de `wondelai-skills`) — auditoría visual rápida de una pantalla existente
+  que "se ve mal" pero no identificás bien por qué.
+
+**Regla de desempate:** si dos skills de la misma familia (ej. dos generadores de paleta) dan
+recomendaciones que chocan, priorizá lo ya documentado en `design-system.md` y explicá
+la decisión en el reporte — no promedies ni mezcles ambas a ciegas.
+
 ## Qué NO hacés
 - No tocás JS de comportamiento ni lógica de negocio.
 - No aplicás Atomic Design completo en una pantalla que no lo necesita.
