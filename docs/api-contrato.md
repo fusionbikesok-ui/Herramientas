@@ -41,6 +41,12 @@ Perfiles válidos: `bici` | `kit_transmision` | `sellado`.
 
 El `:sku` se normaliza siempre con `trim()` + mayúsculas (match exacto, no substring).
 
+Los `requisitos_foto` que devuelve el detalle (`GET /api/preparacion/:id`) siguen la misma
+prioridad: si existe regla para el SKU, esa regla decide y **no** se mira la categoría — con
+`requisitos_json` propio se usa ese, y sin él (o si es JSON inválido) se usan los requisitos
+base del perfil ya resuelto por SKU. Solo si el SKU no tiene regla se cae al
+`requisitos_json` de la categoría, y en último lugar al del perfil.
+
 ### GET /api/preparacion/perfiles-sku
 Lista las reglas por SKU, ordenadas por `sku`. Arranca vacía (sin seed).
 

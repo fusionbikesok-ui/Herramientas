@@ -17,6 +17,9 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 
 
 const now = () => new Date().toISOString();
 
+// Perfiles de foto soportados (validación de los endpoints de perfiles por categoría y por SKU).
+const PERFILES_VALIDOS = ['bici', 'kit_transmision', 'sellado'];
+
 // ─── Tablas (idempotente, patrón de routes/pedidos.js) ───────────────────────
 
 function ensureTables(db) {
@@ -170,15 +173,22 @@ function perfilParaItem(db, { sku, categoria, nombre }) {
 function requisitosParaItem(db, item) {
   const skuNorm = String(item.sku || '').trim().toUpperCase();
   if (skuNorm) {
-    const reglaSku = db.prepare(
-      'SELECT requisitos_json FROM preparacion_perfiles_sku WHERE sku=? AND requisitos_json IS NOT NULL'
-    ).get(skuNorm);
+    const reglaSku = db.prepare('SELECT requisitos_json FROM preparacion_perfiles_sku WHERE sku=?').get(skuNorm);
+    // El override por SKU es la regla más específica: si existe la fila, cortocircuita
+    // el bloque de categoría (igual que perfilParaItem). Si no cortara, un SKU con
+    // perfil forzado a kit_transmision heredaría los requisitos_json de la categoría
+    // (otro perfil, ej. sellado) y el ítem se podría completar con la foto incorrecta.
     if (reglaSku) {
-      try {
-        const custom = JSON.parse(reglaSku.requisitos_json);
-        const slots = custom[item.estado_embalaje || 'default'] || custom.default;
-        if (Array.isArray(slots) && slots.length) return slots;
-      } catch (_) { /* JSON inválido: sigue con categoría/default */ }
+      if (reglaSku.requisitos_json) {
+        try {
+          const custom = JSON.parse(reglaSku.requisitos_json);
+          const slots = custom[item.estado_embalaje || 'default'] || custom.default;
+          if (Array.isArray(slots) && slots.length) return slots;
+        } catch (_) { /* JSON inválido: cae a la heurística base del perfil ya resuelto */ }
+      }
+      // Sin requisitos_json propios (o inválidos): heurística base del perfil ya
+      // resuelto por SKU, sin pasar por la categoría.
+      return requisitosFoto(item.perfil, item.estado_embalaje);
     }
   }
   const cats = String(item.categoria || '').toUpperCase();
@@ -665,7 +675,7 @@ export function preparacionRouter(db, cfg) {
   router.put('/perfiles/:categoria', (req, res) => {
     const categoria = String(req.params.categoria || '').trim().toUpperCase();
     const { perfil, requisitos_json = null } = req.body || {};
-    if (!categoria || !['bici', 'kit_transmision', 'sellado'].includes(perfil)) {
+    if (!categoria || !PERFILES_VALIDOS.includes(perfil)) {
       return res.status(400).json({ ok: false, error: 'categoria y perfil válidos requeridos' });
     }
     db.prepare(`INSERT INTO preparacion_perfiles (categoria, perfil, requisitos_json, actualizado_en)
@@ -689,7 +699,7 @@ export function preparacionRouter(db, cfg) {
   router.put('/perfiles-sku/:sku', (req, res) => {
     const sku = String(req.params.sku || '').trim().toUpperCase();
     const { perfil, requisitos_json = null } = req.body || {};
-    if (!sku || !['bici', 'kit_transmision', 'sellado'].includes(perfil)) {
+    if (!sku || !PERFILES_VALIDOS.includes(perfil)) {
       return res.status(400).json({ ok: false, error: 'sku y perfil válidos requeridos' });
     }
     db.prepare(`INSERT INTO preparacion_perfiles_sku (sku, perfil, requisitos_json, actualizado_en)
