@@ -123,6 +123,15 @@ function ensureTables(db) {
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables borrado_en:', e.message);
   }
+
+  // woo_paso2_pendiente: marca un pedido web que llegó a 'completed' en Woo (paso 1 del
+  // seguimiento) pero cuyo paso 2 (status final enviadoandreani) todavía no se confirmó —
+  // permite que reintentarColgadosTracking lo encuentre sin volver a escanear Woo.
+  try {
+    db.prepare('ALTER TABLE preparaciones ADD COLUMN woo_paso2_pendiente INTEGER NOT NULL DEFAULT 0').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables woo_paso2_pendiente:', e.message);
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -215,6 +224,26 @@ export function purgarFotosBorradas(db) {
     db.prepare('DELETE FROM preparacion_fotos WHERE id=?').run(f.id);
   }
   return vencidas.length;
+}
+
+// Reintenta el paso 2 (status final) de cada pedido "colgado" (paso 1 ya confirmado en
+// Woo, paso 2 pendiente). Fail-open por ítem: si uno vuelve a fallar, sigue con el resto
+// y lo deja para la corrida siguiente del cron. Devuelve cuántos se resolvieron.
+export async function reintentarColgadosTracking(db, cfg) {
+  const pendientes = db.prepare('SELECT * FROM preparaciones WHERE woo_paso2_pendiente=1').all();
+  let resueltos = 0;
+  for (const prep of pendientes) {
+    try {
+      await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', { status: cfg.enviadoAndreaniStatus || 'enviadoandreani' });
+      db.prepare("UPDATE preparaciones SET estado='completada', completado_en=?, woo_paso2_pendiente=0 WHERE id=?")
+        .run(new Date().toISOString(), prep.id);
+      registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_recuperado', usuario: null, detalle: {} });
+      resueltos++;
+    } catch (e) {
+      console.error(`reintentarColgadosTracking: sigue colgado wc_order_id=${prep.wc_order_id}:`, e.message);
+    }
+  }
+  return resueltos;
 }
 
 function getPrep(db, id) {
@@ -423,13 +452,35 @@ export function preparacionRouter(db, cfg) {
           meta_data: [metaEntry],
         });
       }
-      // Paso 2: estado final custom, en una segunda escritura separada
-      await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', { status: enviadoAndreaniStatus });
+      // Registro local ANTES del paso 2: si el paso 2 falla, igual queda constancia de
+      // que el pedido llegó a 'completed' con tracking guardado — sin esto, la única
+      // fuente de verdad sería Woo (y solo se detectaría escaneando status=completed).
+      db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
+        VALUES ('web', ?, ?, 1, 'en_preparacion', ?, 1)
+        ON CONFLICT(clave) DO UPDATE SET woo_paso2_pendiente=1`)
+        .run(`web:${wcOrderId}`, wcOrderId, now());
 
-      db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, completado_en)
-        VALUES ('web', ?, ?, 1, 'completada', ?, ?)
-        ON CONFLICT(clave) DO UPDATE SET estado='completada', completado_en=excluded.completado_en`)
-        .run(`web:${wcOrderId}`, wcOrderId, now(), now());
+      // Paso 2: estado final custom, en una segunda escritura separada. Si falla, no se
+      // relanza — queda "colgado" (woo_paso2_pendiente=1) para que reintentarColgadosTracking
+      // (cron) o un reintento manual del operario lo resuelvan después.
+      try {
+        await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', { status: enviadoAndreaniStatus });
+      } catch (e) {
+        const prep = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+        if (prep) {
+          registrarEvento(db, {
+            preparacionId: prep.id, itemId: null, tipo: 'tracking_colgado', usuario: req.user?.username,
+            detalle: { error: e.message },
+          });
+        }
+        return res.status(502).json({
+          ok: false, colgado: true,
+          error: 'el tracking se guardó pero no se pudo marcar como enviado (se reintentará solo)',
+        });
+      }
+
+      db.prepare(`UPDATE preparaciones SET estado='completada', completado_en=?, woo_paso2_pendiente=0 WHERE clave=?`)
+        .run(now(), `web:${wcOrderId}`);
 
       res.json({ ok: true });
     } catch (e) {
