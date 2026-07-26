@@ -639,6 +639,82 @@ describe('preparacion flujo', () => {
     expect(r.status).toBe(400);
   });
 
+  it('GET /tracking-actual: corregible=true si el pedido está completed/enviadoandreani con tracking', async () => {
+    wooFetch.mockResolvedValueOnce({ data: {
+      status: 'enviadoandreani',
+      meta_data: [{ id: 5, key: '_andreani_tracking', value: 'AND111' }],
+    }});
+    const r = await request(app).get('/api/preparacion/seguimientos/900/tracking-actual');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true, status: 'enviadoandreani', tracking_actual: 'AND111', corregible: true });
+  });
+
+  it('GET /tracking-actual: corregible=false si el pedido sigue en lpaandreani (todavía no se cargó tracking)', async () => {
+    wooFetch.mockResolvedValueOnce({ data: { status: 'lpaandreani', meta_data: [] } });
+    const r = await request(app).get('/api/preparacion/seguimientos/901/tracking-actual');
+    expect(r.body).toMatchObject({ ok: true, corregible: false });
+  });
+
+  it('POST /corregir-tracking: 409 si el pedido no está completed/enviadoandreani', async () => {
+    wooFetch.mockResolvedValueOnce({ data: { status: 'lpaandreani', meta_data: [] } });
+    const r = await request(app).post('/api/preparacion/seguimientos/902/corregir-tracking').send({ tracking: 'AND222' });
+    expect(r.status).toBe(409);
+  });
+
+  it('POST /corregir-tracking: 409 si no hay tracking previo cargado', async () => {
+    wooFetch.mockResolvedValueOnce({ data: { status: 'completed', meta_data: [] } });
+    const r = await request(app).post('/api/preparacion/seguimientos/903/corregir-tracking').send({ tracking: 'AND222' });
+    expect(r.status).toBe(409);
+  });
+
+  it('POST /corregir-tracking: mismo valor es no-op, no llama PUT', async () => {
+    wooFetch.mockResolvedValueOnce({ data: {
+      status: 'enviadoandreani',
+      meta_data: [{ id: 5, key: '_andreani_tracking', value: 'AND111' }],
+    }});
+    const llamadasAntes = wooFetch.mock.calls.length;
+    const r = await request(app).post('/api/preparacion/seguimientos/904/corregir-tracking').send({ tracking: 'AND111' });
+    expect(r.body).toMatchObject({ ok: true, tracking_anterior: 'AND111', tracking_nuevo: 'AND111' });
+    expect(wooFetch.mock.calls.length - llamadasAntes).toBe(1); // solo el GET, ningún PUT
+  });
+
+  it('POST /corregir-tracking: valor distinto hace UN PUT con solo meta_data (sin status) y registra evento', async () => {
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, completado_en)
+      VALUES ('web','web:905',905,1,'completada',?,?)`).run(new Date().toISOString(), new Date().toISOString());
+
+    wooFetch
+      .mockResolvedValueOnce({ data: {
+        status: 'enviadoandreani',
+        meta_data: [{ id: 5, key: '_andreani_tracking', value: 'AND111' }],
+      }})
+      .mockResolvedValueOnce({ data: {} });
+
+    const llamadasAntes = wooFetch.mock.calls.length;
+    const r = await request(app).post('/api/preparacion/seguimientos/905/corregir-tracking').send({ tracking: 'AND999' });
+    expect(r.body).toMatchObject({ ok: true, tracking_anterior: 'AND111', tracking_nuevo: 'AND999' });
+    expect(wooFetch.mock.calls.length - llamadasAntes).toBe(2);
+    const putCall = wooFetch.mock.calls[wooFetch.mock.calls.length - 1];
+    expect(putCall[2]).toBe('put');
+    expect(putCall[3]).toEqual({ meta_data: [{ id: 5, key: '_andreani_tracking', value: 'AND999' }] });
+    expect(putCall[3].status).toBeUndefined();
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_corregido'").get();
+    expect(ev).toBeTruthy();
+    expect(JSON.parse(ev.detalle_json)).toEqual({ tracking_anterior: 'AND111', tracking_nuevo: 'AND999' });
+  });
+
+  it('POST /corregir-tracking: si no existe fila en preparaciones, igual corrige el tracking (evento se saltea fail-open)', async () => {
+    wooFetch
+      .mockResolvedValueOnce({ data: {
+        status: 'completed',
+        meta_data: [{ id: 5, key: '_andreani_tracking', value: 'AND111' }],
+      }})
+      .mockResolvedValueOnce({ data: {} });
+    const r = await request(app).post('/api/preparacion/seguimientos/906/corregir-tracking').send({ tracking: 'AND222' });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+  });
+
   it('GET /:id devuelve detalle con items, fotos y requisitos', async () => {
     const id = nuevaPrep();
     const r = await request(app).get(`/api/preparacion/${id}`);
