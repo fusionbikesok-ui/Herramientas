@@ -688,6 +688,45 @@ describe('preparacion flujo', () => {
     const itemDetalle = detalle.body.data.items.find(i => i.id === item.id);
     expect(itemDetalle.fotos).toHaveLength(0); // la foto borrada no cuenta como presente
   });
+
+  it('borrar la misma foto dos veces seguidas: la segunda es no-op y no duplica el evento foto_borrada', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`)
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
+    const fotoId = subida.body.foto.id;
+
+    const r1 = await request(app).delete(`/api/preparacion/${id}/foto/${fotoId}`);
+    expect(r1.body).toMatchObject({ ok: true, borradas: 1 });
+
+    const r2 = await request(app).delete(`/api/preparacion/${id}/foto/${fotoId}`);
+    expect(r2.body).toMatchObject({ ok: true, borradas: 0 });
+
+    const eventos = db.prepare(
+      "SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_borrada'"
+    ).all(id);
+    expect(eventos).toHaveLength(1);
+  });
+
+  it('borrar una foto sin evento foto_subida previo (foto preexistente) responde ok y subida_por queda null', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`)
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
+    const fotoId = subida.body.foto.id;
+
+    // Simulamos una foto preexistente al ciclo de instrumentación: borramos su evento
+    // foto_subida para que la búsqueda de subida_por no encuentre nada.
+    db.prepare("DELETE FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_subida' AND json_extract(detalle_json,'$.foto_id')=?").run(id, fotoId);
+
+    const r = await request(app).delete(`/api/preparacion/${id}/foto/${fotoId}`);
+    expect(r.body).toMatchObject({ ok: true, borradas: 1 });
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_borrada'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ foto_id: fotoId, subida_por: null });
+  });
 });
 
 import { wooFetch } from '../routes/woo.js';

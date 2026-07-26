@@ -208,6 +208,24 @@ function getPrep(db, id) {
   return db.prepare('SELECT * FROM preparaciones WHERE id=?').get(parseInt(id));
 }
 
+// Busca en preparacion_eventos quién subió una foto, mirando el evento 'foto_subida'
+// que quedó registrado con ese foto_id en su detalle_json. Fail-open a propósito (igual
+// que registrarEvento): si json_extract fallara (JSON1 no disponible, detalle_json
+// corrupto en un evento viejo) o no hubiera evento previo (foto preexistente al ciclo de
+// instrumentación), devuelve null y nunca lanza — el borrado de la foto no debe romperse
+// por esto.
+function usuarioQueSubio(db, fotoId, preparacionId) {
+  try {
+    const evento = db.prepare(
+      "SELECT usuario FROM preparacion_eventos WHERE tipo='foto_subida' AND preparacion_id=? AND json_extract(detalle_json,'$.foto_id')=? ORDER BY id DESC LIMIT 1"
+    ).get(preparacionId, fotoId);
+    return evento?.usuario ?? null;
+  } catch (e) {
+    console.error('usuarioQueSubio: no se pudo consultar', e.message);
+    return null;
+  }
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 export function preparacionRouter(db, cfg) {
@@ -732,12 +750,13 @@ export function preparacionRouter(db, cfg) {
     // subida_por: no hay columna dedicada en preparacion_fotos para quién la subió
     // (fuera de alcance de este ciclo agregarla) — se recupera del propio evento
     // foto_subida que Task 3 ya registra, buscando por foto_id en su detalle_json.
-    const eventoSubida = db.prepare(
-      "SELECT usuario FROM preparacion_eventos WHERE tipo='foto_subida' AND json_extract(detalle_json,'$.foto_id')=? ORDER BY id DESC LIMIT 1"
-    ).get(fotoId);
+    // Puede venir null si la foto es preexistente a esta instrumentación (no hay evento
+    // foto_subida previo) o ante cualquier fallo de la consulta (fail-open, ver helper);
+    // el frontend no debe imprimir literalmente "null" en ese caso.
+    const subidaPor = usuarioQueSubio(db, fotoId, prep.id);
     registrarEvento(db, {
       preparacionId: prep.id, itemId: foto.item_id, tipo: 'foto_borrada', usuario: req.user?.username,
-      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: foto.tipo, nombre_archivo: foto.nombre_archivo, foto_id: fotoId, subida_por: eventoSubida?.usuario ?? null },
+      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: foto.tipo, nombre_archivo: foto.nombre_archivo, foto_id: fotoId, subida_por: subidaPor },
     });
     res.json({ ok: true, borradas: 1 });
   });
