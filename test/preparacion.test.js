@@ -8,7 +8,8 @@ import {
   splitDireccion, splitTelefonoAr, normalizarEnvio,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
-import { preparacionRouter, crearPreparacion, registrarEvento } from '../routes/preparacion.js';
+import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
+import { rutaAbsoluta } from '../utils/storage.js';
 import heicConvert from 'heic-convert';
 
 vi.mock('heic-convert', () => ({ default: vi.fn() }));
@@ -729,6 +730,29 @@ describe('preparacion flujo', () => {
       .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_subida'").get(id);
     expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: 'CUB-1', tipo_foto: 'articulo', foto_id: r.body.foto.id });
+  });
+
+  it('purgarFotosBorradas borra archivo y fila si borrado_en tiene más de 60 días; conserva las más recientes', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
+
+    const vieja = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'vieja.jpg');
+    const reciente = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'reciente.jpg');
+
+    const hace70dias = new Date(Date.now() - 70 * 24 * 3600 * 1000).toISOString();
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(hace70dias, vieja.body.foto.id);
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(new Date().toISOString(), reciente.body.foto.id);
+
+    const rutaVieja = rutaAbsoluta(vieja.body.foto.url);
+    expect(fs.existsSync(rutaVieja)).toBe(true);
+
+    const purgadas = purgarFotosBorradas(db);
+
+    expect(purgadas).toBe(1);
+    expect(fs.existsSync(rutaVieja)).toBe(false);
+    expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(vieja.body.foto.id)).toBeUndefined();
+    expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(reciente.body.foto.id)).toBeTruthy();
   });
 
   it('borrar foto NO borra la fila (soft-delete), registra evento foto_borrada, y deja de contar para /completar', async () => {

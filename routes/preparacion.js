@@ -1,3 +1,4 @@
+import fs from 'fs';
 import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
@@ -5,7 +6,7 @@ import heicConvert from 'heic-convert';
 import { wooFetch } from './woo.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
-import { guardarArchivo } from '../utils/storage.js';
+import { guardarArchivo, rutaAbsoluta } from '../utils/storage.js';
 import {
   normalizarEnvio, resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
@@ -202,6 +203,18 @@ export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuari
   } catch (e) {
     console.error('registrarEvento: no se pudo registrar', tipo, e.message);
   }
+}
+
+// Purga del disco y de la tabla las fotos con soft-delete de más de 60 días.
+// Devuelve la cantidad purgada (para logging del cron).
+export function purgarFotosBorradas(db) {
+  const limite = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
+  const vencidas = db.prepare('SELECT id, url FROM preparacion_fotos WHERE borrado_en IS NOT NULL AND borrado_en < ?').all(limite);
+  for (const f of vencidas) {
+    try { fs.unlinkSync(rutaAbsoluta(f.url)); } catch (_) { /* archivo ya no está, seguir igual */ }
+    db.prepare('DELETE FROM preparacion_fotos WHERE id=?').run(f.id);
+  }
+  return vencidas.length;
 }
 
 function getPrep(db, id) {
