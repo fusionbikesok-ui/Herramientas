@@ -646,6 +646,33 @@ describe('preparacion flujo', () => {
     expect(r.body.data.items.find(i => i.sku === 'BICI-1').requisitos_foto.length).toBeGreaterThan(0);
   });
 
+  it('GET /:id incluye eventos (más reciente primero)', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    const r = await request(app).get(`/api/preparacion/${id}`);
+    expect(r.body.data.eventos.length).toBe(2);
+    expect(r.body.data.eventos[0].id).toBeGreaterThan(r.body.data.eventos[1].id);
+  });
+
+  it('GET /:id/eventos devuelve solo los eventos, sin items ni fotos', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    const r = await request(app).get(`/api/preparacion/${id}/eventos`);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.eventos).toHaveLength(1);
+    expect(r.body.items).toBeUndefined();
+  });
+
+  it('heartbeat informa el id del último evento', async () => {
+    const id = nuevaPrep();
+    let r = await request(app).post(`/api/preparacion/${id}/heartbeat`);
+    expect(r.body.ultimo_evento_id).toBe(0);
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    r = await request(app).post(`/api/preparacion/${id}/heartbeat`);
+    expect(r.body.ultimo_evento_id).toBeGreaterThan(0);
+  });
+
   it('escanear con match registra un evento tipo escaneo; no_coincide y sobrante no registran nada', async () => {
     const id = nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1', origen: 'camara' });
