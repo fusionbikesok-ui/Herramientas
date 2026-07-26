@@ -40,6 +40,143 @@ describe('woo route', () => {
     db.close();
   });
 
+  it('refrescarCatalogo borra de catalogo_cache los productos que ya no vienen en WooCommerce (borrados)', async () => {
+    // Incidente real 2026-07-25: dos productos borrados en WooCommerce hacía tiempo seguían
+    // en catalogo_cache para siempre (el upsert solo agrega/actualiza, nunca borraba), y
+    // terminaron compartiendo SKU con un producto real vigente — WooCommerce no permite SKUs
+    // duplicados de verdad, así que esa fila fantasma solo podía venir de un borrado no
+    // limpiado. refrescarCatalogo ahora debe podar lo que no vino en el fetch actual.
+    const db = openDb('./test/tmp-woo.sqlite');
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(999, 'Producto borrado en WC hace tiempo', 'CBL', 'simple', null, 3, now);
+
+    axios.request.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: [{ id: 10, name: 'Casco Bell L', sku: 'CBL', type: 'simple', parent_id: 0, stock_quantity: 4 }]
+    });
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+    await refrescarCatalogo(db, cfg);
+
+    const rows = getCatalogo(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id_woo).toBe(10);
+    const fantasma = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = 999').get();
+    expect(fantasma).toBeUndefined();
+    db.close();
+  });
+
+  it('refrescarCatalogo poda una variación fantasma (tipo=variation, con id_padre) igual que un producto simple', async () => {
+    // La poda es por id_woo, no por tipo — pero hay que confirmar explícitamente que una
+    // variación borrada en WC (que además arrastra id_padre) se limpia igual, y no queda
+    // "protegida" por tener un padre que sí sigue vigente.
+    const db = openDb('./test/tmp-woo.sqlite');
+    const now = new Date().toISOString();
+    // Variación fantasma: el padre (id_woo 5) sigue vigente, pero esta variación (id_woo 998)
+    // ya no viene en el fetch.
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(998, 'Casco X — Rojo / M (borrada)', 'FB-998', 'variation', 5, 2, now);
+
+    axios.request
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: [
+        { id: 5, name: 'Casco X', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 },
+      ] })
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: [
+        { id: 21, sku: 'FB-21', stock_quantity: 3, attributes: [{ name: 'Color', option: 'Rojo' }] },
+      ] })
+      .mockResolvedValue({ status: 200, headers: {}, data: [] });
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+    await refrescarCatalogo(db, cfg);
+
+    const fantasma = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = 998').get();
+    expect(fantasma).toBeUndefined();
+    const vigente = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = 21').get();
+    expect(vigente).toBeTruthy();
+    db.close();
+  });
+
+  it('refrescarCatalogo poda filas fantasma aunque ninguna tenga SKU (SKU vacío/null no las protege)', async () => {
+    // La poda usa id_woo NOT IN (...), no el SKU — confirma que un fantasma sin SKU (ej. un
+    // producto 'variable' padre borrado, que nunca tiene SKU propio) se limpia igual.
+    const db = openDb('./test/tmp-woo.sqlite');
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(997, 'Producto variable borrado (sin SKU)', null, 'variable', null, 0, now);
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(996, 'Otro producto borrado (sin SKU)', '', 'simple', null, 0, now);
+
+    axios.request.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: [{ id: 10, name: 'Casco Bell L', sku: 'CBL', type: 'simple', parent_id: 0, stock_quantity: 4 }]
+    });
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+    await refrescarCatalogo(db, cfg);
+
+    const rows = getCatalogo(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id_woo).toBe(10);
+    db.close();
+  });
+
+  it('refrescarCatalogo NO borra catalogo_cache si WooCommerce responde 200 con 0 productos (fail-closed)', async () => {
+    // Hallazgo del revisor: "id_woo NOT IN (<conjunto vacío>)" es siempre verdadero en SQL —
+    // sin este guard, un fetch de 0 productos (corte/permiso raro en WC, sin ser un error que
+    // wooFetch propague) borraría el 100% del catálogo real en la próxima poda.
+    const db = openDb('./test/tmp-woo.sqlite');
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(10, 'Casco Bell L', 'CBL', 'simple', null, 4, now);
+
+    axios.request.mockResolvedValue({ status: 200, headers: {}, data: [] });
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+    await refrescarCatalogo(db, cfg);
+
+    const rows = getCatalogo(db);
+    expect(rows).toHaveLength(1); // el producto real previo sigue ahí, no se vació el catálogo
+    expect(rows[0].id_woo).toBe(10);
+    db.close();
+  });
+
+  it('el guard de fetch vacío es solo para esa corrida: la corrida siguiente con datos reales poda normalmente', async () => {
+    // El guard evita que UN fetch vacío borre todo el catálogo, pero no debe dejarlo
+    // "congelado" para siempre: en cuanto WooCommerce vuelve a responder con productos
+    // reales, la poda normal debe seguir funcionando y limpiar lo que ya no viene.
+    const db = openDb('./test/tmp-woo.sqlite');
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(10, 'Casco Bell L', 'CBL', 'simple', null, 4, now);
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(999, 'Producto borrado en WC hace tiempo', 'CBL', 'simple', null, 3, now);
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+
+    // Corrida 1: WC responde 0 productos (corte/permiso raro) -> guard, no se toca nada.
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: [] });
+    await refrescarCatalogo(db, cfg);
+    expect(getCatalogo(db)).toHaveLength(2); // ambos siguen ahí, incluido el fantasma
+
+    // Corrida 2: WC vuelve a responder con productos reales -> la poda debe correr normal.
+    axios.request.mockResolvedValueOnce({
+      status: 200, headers: {},
+      data: [{ id: 10, name: 'Casco Bell L', sku: 'CBL', type: 'simple', parent_id: 0, stock_quantity: 4 }]
+    });
+    await refrescarCatalogo(db, cfg);
+    const rows = getCatalogo(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id_woo).toBe(10);
+    const fantasma = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = 999').get();
+    expect(fantasma).toBeUndefined();
+    db.close();
+  });
+
   it('refrescarCatalogo persiste atributos estructurados de variaciones (H-06)', async () => {
     axios.request
       .mockResolvedValueOnce({ status: 200, headers: {}, data: [

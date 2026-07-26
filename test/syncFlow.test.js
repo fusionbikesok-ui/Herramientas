@@ -402,6 +402,53 @@ describe('syncWcToMl', () => {
     }
   });
 
+  it('SKU repetido en 3+ filas de catalogo_cache: sigue eligiendo el de menor stock, no solo entre las dos primeras', async () => {
+    // El dedup usa ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) — hay
+    // que confirmar que el criterio se sostiene con más de dos filas duplicadas (no es un caso
+    // especial de "la primera vs la segunda"), y que el orden en que se insertan no importa.
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(998, 'Bicicleta Simple (duplicada 2)', 'BIKE-001', 'simple', null, 1, now);
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(999, 'Bicicleta Simple (duplicada 3)', 'BIKE-001', 'simple', null, 7, now);
+    seedPublicacion(db, { clave: 'MLA100|', itemId: 'MLA100', status: 'active' });
+    mlFetch.mockResolvedValue({ status: 200, data: {} });
+
+    const p = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    // Entre 5 (id_woo 100, seedCatalogo), 1 (id_woo 998) y 7 (id_woo 999) gana el menor: 1.
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+    expect(mlFetch).toHaveBeenCalledWith(db, CFG.ml, 'put', '/items/MLA100', { available_quantity: 1 });
+  });
+
+  it('SKU repetido con stock empatado entre dos filas: desempata por id_woo (determinístico, no oscila)', async () => {
+    // Con stock igual, ROW_NUMBER ordena también por id_woo ASC — el resultado debe ser
+    // siempre el mismo sin importar el orden físico de inserción/lectura de SQLite.
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(999, 'Bicicleta Simple (duplicada, mismo stock)', 'BIKE-001', 'simple', null, 5, now);
+    seedPublicacion(db, { clave: 'MLA100|', itemId: 'MLA100', status: 'active' });
+
+    for (let i = 0; i < 3; i++) {
+      mlFetch.mockClear();
+      mlFetch.mockResolvedValue({ status: 200, data: {} });
+      db.prepare("DELETE FROM ml_stock_estado WHERE clave = 'MLA100|'").run();
+
+      const p = syncWcToMl(db, CFG);
+      await vi.runAllTimersAsync();
+      await p;
+
+      // Empate 5 vs 5: gana id_woo 100 (menor), siempre el mismo resultado en cada corrida.
+      expect(mlFetch).toHaveBeenCalledTimes(1);
+      expect(mlFetch).toHaveBeenCalledWith(db, CFG.ml, 'put', '/items/MLA100', { available_quantity: 5 });
+    }
+  });
+
   it('publicación no activa (paused) → se saltea sin PUT ni error', async () => {
     seedPublicacion(db, { clave: 'MLA100|', itemId: 'MLA100', status: 'paused' });
     mlFetch.mockResolvedValue({ status: 200, data: {} });
