@@ -535,6 +535,8 @@ export function preparacionRouter(db, cfg) {
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? ORDER BY id').all(prep.id);
     const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL ORDER BY id').all(prep.id);
+    const eventos = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
+      .map(e => ({ ...e, detalle: JSON.parse(e.detalle_json) }));
     const data = {
       ...prep,
       items: items.map(it => ({
@@ -543,8 +545,18 @@ export function preparacionRouter(db, cfg) {
         fotos: fotos.filter(f => f.item_id === it.id),
       })),
       fotos_generales: fotos.filter(f => !f.item_id),
+      eventos,
     };
     res.json({ ok: true, data });
+  });
+
+  // ── Eventos de actividad (refresco liviano, sin re-traer items/fotos) ──
+  router.get('/:id/eventos', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const eventos = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
+      .map(e => ({ ...e, detalle: JSON.parse(e.detalle_json) }));
+    res.json({ ok: true, eventos });
   });
 
   // ── Heartbeat de presencia: "estoy viendo esta preparación ahora" ──
@@ -569,7 +581,8 @@ export function preparacionRouter(db, cfg) {
       'SELECT usuario, visto_en FROM preparacion_vistas WHERE preparacion_id=? AND usuario<>? AND visto_en > ?'
     ).all(prep.id, usuario, hace30s);
 
-    res.json({ ok: true, otros });
+    const ultimoEvento = db.prepare('SELECT MAX(id) AS m FROM preparacion_eventos WHERE preparacion_id=?').get(prep.id);
+    res.json({ ok: true, otros, ultimo_evento_id: ultimoEvento.m || 0 });
   });
 
   // ── Escanear código ──
