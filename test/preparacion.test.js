@@ -141,11 +141,10 @@ describe('registrarEvento', () => {
   });
 
   it('no lanza si el insert falla (fail-open) — se traga el error', () => {
-    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 901, numeroPedido: '901', comprador: 'Ana', items: [] });
-    // preparacion_id inexistente en sí no rompe (no hay FK), forzamos el fallo con un tipo raro
-    // que igual la tabla acepta (TEXT, no hay CHECK) — probamos el catch con un db roto:
-    const dbRoto = { prepare: () => { throw new Error('boom'); } };
-    expect(() => registrarEvento(dbRoto, { preparacionId: id, tipo: 'completado', usuario: 'juan', detalle: {} })).not.toThrow();
+    // aseguramos que las tablas existan antes de tirar abajo la que nos interesa probar
+    crearPreparacion(db, { canal: 'web', wcOrderId: 902, numeroPedido: '902', comprador: 'Ana', items: [] });
+    db.prepare('DROP TABLE preparacion_eventos').run();
+    expect(() => registrarEvento(db, { preparacionId: 1, tipo: 'completado', usuario: 'juan', detalle: {} })).not.toThrow();
   });
 });
 
