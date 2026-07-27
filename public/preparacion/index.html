@@ -964,21 +964,22 @@ async function cargarPerfiles(){
     if(!rSku.body.ok)throw new Error(rSku.body.error||'error');
     var rows=rPerf.body.data||[];
     var rowsSku=rSku.body.data||[];
-    var html='<p class="sub">Regla por categoría: si el nombre de la categoría del producto <b>contiene</b> el texto, se aplica ese perfil de fotos.'
+    var html='<div class="flash" id="flash"></div>'
+      +'<p class="sub">Regla por categoría: si el nombre de la categoría del producto <b>contiene</b> el texto, se aplica ese perfil de fotos.'
       +' <b>bici</b>: selector de embalaje (re-embalada exige lado A + lado B + caja de accesorios). <b>kit_transmision</b>: foto del set con piezas sueltas. <b>sellado</b>: 1 foto de etiqueta o artículo.</p>';
     html+=rows.map(function(p){
       return '<div class="perf-row">'
-        +'<input value="'+esc(p.categoria)+'" disabled style="flex:1;min-width:150px">'
-        +'<select id="perf-'+esc(p.categoria)+'">'
+        +'<input value="'+esc(p.categoria)+'" disabled style="flex:1;min-width:150px" aria-label="Categoría con regla fija">'
+        +'<select id="perf-'+esc(p.categoria)+'" aria-label="Perfil de fotos para '+esc(p.categoria)+'">'
         +opcionesPerfil(p.perfil)
         +'</select>'
-        +'<button class="btn mini" onclick="guardarPerfil(\''+esc(p.categoria)+'\')">Guardar</button>'
-        +'<button class="btn danger mini" onclick="borrarPerfil(\''+esc(p.categoria)+'\')">Borrar</button>'
+        +'<button class="btn mini" onclick="guardarPerfil('+esc(JSON.stringify(p.categoria))+')">Guardar</button>'
+        +'<button class="btn danger mini" onclick="borrarPerfil('+esc(JSON.stringify(p.categoria))+')">Borrar</button>'
         +'</div>';
     }).join('');
     html+='<div class="perf-row" style="margin-top:14px;border-top:1px dashed var(--border);padding-top:14px">'
-      +'<input id="perf-nueva-cat" placeholder="Texto de categoría (ej: CASCOS)" style="flex:1;min-width:150px">'
-      +'<select id="perf-nueva-perfil">'+opcionesPerfil('sellado')+'</select>'
+      +'<input id="perf-nueva-cat" placeholder="Texto de categoría (ej: CASCOS)" style="flex:1;min-width:150px" aria-label="Texto de categoría de la nueva regla">'
+      +'<select id="perf-nueva-perfil" aria-label="Perfil de fotos de la nueva regla por categoría">'+opcionesPerfil('sellado')+'</select>'
       +'<button class="btn mini" onclick="agregarPerfil()">Agregar</button></div>';
     html+='<div style="margin-top:24px;border-top:1px dashed var(--border);padding-top:14px">'
       +'<p class="sub">Reglas por <b>SKU exacto</b> — tienen prioridad sobre las reglas por categoría de arriba. Para un producto puntual mal clasificado por la heurística.</p>'
@@ -986,8 +987,8 @@ async function cargarPerfiles(){
         return '<div class="perf-row">'
           +'<input value="'+esc(p.sku)+'" disabled style="flex:1;min-width:150px;font-family:monospace" aria-label="SKU con regla fija">'
           +'<select id="perfsku-'+esc(p.sku)+'" aria-label="Perfil de fotos para '+esc(p.sku)+'">'+opcionesPerfil(p.perfil)+'</select>'
-          +'<button class="btn mini" onclick="guardarPerfilSku(\''+esc(p.sku)+'\')">Guardar</button>'
-          +'<button class="btn danger mini" onclick="borrarPerfilSku(\''+esc(p.sku)+'\')">Borrar</button>'
+          +'<button class="btn mini" onclick="guardarPerfilSku('+esc(JSON.stringify(p.sku))+')">Guardar</button>'
+          +'<button class="btn danger mini" onclick="borrarPerfilSku('+esc(JSON.stringify(p.sku))+')">Borrar</button>'
           +'</div>';
       }).join('')
       +'<div class="perf-row" style="margin-top:14px">'
@@ -999,40 +1000,56 @@ async function cargarPerfiles(){
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
 
+// Helper unico de mutacion de perfiles (categoria y SKU): chequea body.ok y avisa al
+// operario con flash() si el backend rechazo. Sin esto la lista se recargaba sin el
+// registro y sin ningun mensaje - el operario creia que habia guardado.
+async function mutarPerfil(url,opts,verbo){
+  try{
+    var r=await api(url,opts);
+    if(!r.body||!r.body.ok){
+      flash('bad','No se pudo '+verbo+' la regla: '+((r.body&&r.body.error)||'error'));
+      return false;
+    }
+  }catch(e){
+    flash('bad','No se pudo '+verbo+' la regla: '+(e.message||'error de red'));
+    return false;
+  }
+  await cargarPerfiles();
+  flash('ok','✓ Regla '+(verbo==='borrar'?'borrada':'guardada'));
+  return true;
+}
+function cuerpoPerfil(perfil){
+  return {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})};
+}
+
 async function guardarPerfil(cat){
   var perfil=document.getElementById('perf-'+cat).value;
-  await api('/perfiles/'+encodeURIComponent(cat),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
-  cargarPerfiles();
+  await mutarPerfil('/perfiles/'+encodeURIComponent(cat),cuerpoPerfil(perfil),'guardar');
 }
 async function borrarPerfil(cat){
   if(!confirm('¿Borrar la regla "'+cat+'"?'))return;
-  await api('/perfiles/'+encodeURIComponent(cat),{method:'DELETE'});
-  cargarPerfiles();
+  await mutarPerfil('/perfiles/'+encodeURIComponent(cat),{method:'DELETE'},'borrar');
 }
 async function agregarPerfil(){
   var cat=document.getElementById('perf-nueva-cat').value.trim();
   var perfil=document.getElementById('perf-nueva-perfil').value;
-  if(!cat)return;
-  await api('/perfiles/'+encodeURIComponent(cat),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
-  cargarPerfiles();
+  if(!cat){flash('bad','Escribí el texto de categoría antes de agregar.');return;}
+  await mutarPerfil('/perfiles/'+encodeURIComponent(cat),cuerpoPerfil(perfil),'guardar');
 }
 
 async function guardarPerfilSku(sku){
   var perfil=document.getElementById('perfsku-'+sku).value;
-  await api('/perfiles-sku/'+encodeURIComponent(sku),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
-  cargarPerfiles();
+  await mutarPerfil('/perfiles-sku/'+encodeURIComponent(sku),cuerpoPerfil(perfil),'guardar');
 }
 async function borrarPerfilSku(sku){
   if(!confirm('¿Borrar la regla del SKU "'+sku+'"?'))return;
-  await api('/perfiles-sku/'+encodeURIComponent(sku),{method:'DELETE'});
-  cargarPerfiles();
+  await mutarPerfil('/perfiles-sku/'+encodeURIComponent(sku),{method:'DELETE'},'borrar');
 }
 async function agregarPerfilSku(){
   var sku=document.getElementById('perfsku-nuevo-sku').value.trim();
   var perfil=document.getElementById('perfsku-nuevo-perfil').value;
-  if(!sku)return;
-  await api('/perfiles-sku/'+encodeURIComponent(sku),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({perfil:perfil})});
-  cargarPerfiles();
+  if(!sku){flash('bad','Escribí el SKU exacto antes de agregar.');return;}
+  await mutarPerfil('/perfiles-sku/'+encodeURIComponent(sku),cuerpoPerfil(perfil),'guardar');
 }
 
 fetch('/api/auth/me').then(function(r){ return r.json(); }).then(function(d){
