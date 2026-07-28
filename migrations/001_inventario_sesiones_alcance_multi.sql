@@ -43,6 +43,8 @@ CREATE INDEX IF NOT EXISTS idx_inv_sesiones_estado ON inventario_sesiones(estado
 ALTER TABLE inventario_conteos ADD COLUMN bloque TEXT;
 ALTER TABLE inventario_conteos ADD COLUMN fuera_de_alcance INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE inventario_conteos ADD COLUMN confirmado_por_omision INTEGER NOT NULL DEFAULT 0;
+-- Código escaneado que no existe en catalogo_cache (distinto de fuera_de_alcance).
+ALTER TABLE inventario_conteos ADD COLUMN codigo_desconocido INTEGER NOT NULL DEFAULT 0;
 
 -- Snapshot del alcance congelado al abrir la sesión (qué SKU entra y en qué bloque).
 CREATE TABLE IF NOT EXISTS inventario_sesion_alcance (
