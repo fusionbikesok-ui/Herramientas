@@ -988,3 +988,346 @@ describe('syncMlToWc — timeout del POST /orders (verificacion anti-duplicado)'
     expect(pedido.retenido_en).toBeNull();
   }, 30000);
 });
+
+// ─── Tests agregados por tester (cobertura de casos borde del fix) ─────────────
+
+describe('syncMlToWc — reserva atomica entre procesos concurrentes (sin candado en memoria)', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    seedCatalogo(db);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  // El candado en memoria (_mlToWcEnCurso) solo protege corridas concurrentes DENTRO del
+  // mismo proceso Node — ya cubierto por 'bug2' mas arriba. La protección real contra dos
+  // PROCESOS Node distintos corriendo el cron a la vez (el incidente real del 2026-07-25) es
+  // el INSERT atómico sobre la PK ml_order_id en ordenes_ml_wc_pedidos. Este test simula esa
+  // situación abriendo una SEGUNDA conexión a la misma DB (como si fuera otro proceso, sin
+  // el candado en memoria del primero) y disparando el mismo INSERT de reserva sin await
+  // entre medio: solo una de las dos debe ganar la fila, la otra debe fallar por PK.
+  it('dos "procesos" (dos conexiones) reservando la misma orden ML en simultaneo: solo uno gana, el otro falla por PK', async () => {
+    const dbOtroProceso = openDb(TEST_DB);
+    try {
+      const ahora = new Date().toISOString();
+      const insertar = () => db.prepare(`
+        INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en)
+        VALUES (?, 0, NULL, ?)
+      `).run('ORD-RACE-DB', ahora);
+      const insertarOtro = () => dbOtroProceso.prepare(`
+        INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en)
+        VALUES (?, 0, NULL, ?)
+      `).run('ORD-RACE-DB', ahora);
+
+      // Disparados "casi en simultaneo": sin ningun await entre ambos intentos (better-sqlite3
+      // es sincrono, asi que esto reproduce fielmente la carrera real: el segundo INSERT
+      // encuentra la fila ya reservada por el primero).
+      let errorSegundo = null;
+      insertar();
+      try {
+        insertarOtro();
+      } catch (e) {
+        errorSegundo = e;
+      }
+
+      expect(errorSegundo).toBeTruthy();
+      expect(errorSegundo.message).toMatch(/UNIQUE|PRIMARY ?KEY/i);
+
+      // Una sola fila de reserva para la orden, sin duplicado.
+      const filas = db.prepare('SELECT COUNT(*) n FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RACE-DB');
+      expect(filas.n).toBe(1);
+    } finally {
+      dbOtroProceso.close();
+    }
+  });
+
+  // Reproduce el mismo escenario pero a través del flujo real completo: dos llamadas a
+  // syncMlToWc para la MISMA orden, disparadas sin await entre ellas, sobre la misma DB.
+  // El candado en memoria ya hace que la segunda salga con omitido:true (test 'bug2'); acá
+  // se confirma además que, aunque el candado no existiera (dos procesos reales), la orden
+  // termina con un solo pedido WC creado — nunca dos — porque wooFetch('/orders','post')
+  // solo se llama una vez.
+  it('dos llamadas a syncMlToWc sin await entre ellas para la misma orden: nunca se crea un pedido WC duplicado', async () => {
+    const orden = {
+      id: 'ORD-RACE-FLUJO',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    let resolvePost;
+    const postGate = new Promise(r => { resolvePost = r; });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') {
+        await postGate;
+        return { data: { id: 8123 } };
+      }
+      return { data: {} };
+    });
+
+    const p1 = syncMlToWc(db, CFG);
+    const p2 = syncMlToWc(db, CFG); // disparada sin await entre p1 y p2
+    resolvePost();
+    await Promise.all([p1, p2]);
+
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+    const filas = db.prepare('SELECT COUNT(*) n FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RACE-FLUJO');
+    expect(filas.n).toBe(1);
+  }, 30000);
+});
+
+describe('syncMlToWc — recuperacion manual de una reserva retenida', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    seedCatalogo(db);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  function ordenSimple(id) {
+    return {
+      id,
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+  }
+
+  // Documentado en el propio código (comentario del catch de verificación): si NO existe el
+  // pedido en Woo, la recuperación manual es borrar la fila retenida y dejar que el próximo
+  // ciclo del cron reintente solo. Este test confirma que ese camino de recuperación funciona
+  // de punta a punta: primero se retiene por fail-closed, un "operador" borra la fila, y el
+  // siguiente ciclo reintenta y esta vez tiene éxito — sin que la orden haya quedado sellada
+  // como 'ok' de forma prematura en ningún momento intermedio.
+  it('operador borra la fila retenida a mano → el siguiente ciclo reintenta y esta vez tiene exito', async () => {
+    const orden = ordenSimple('ORD-RECUPERA');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    // Ciclo 1: POST timeoutea, verificacion tambien falla → fail-closed, reserva retenida.
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) throw new Error('ECONNREFUSED');
+      return { data: {} };
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await syncMlToWc(db, CFG);
+    errSpy.mockRestore();
+
+    let pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RECUPERA');
+    expect(pedido.wc_order_id).toBe(0);
+    expect(pedido.retenido_en).toBeTruthy();
+    let proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-RECUPERA');
+    expect(proc).toBeUndefined(); // nunca sellada mientras esta retenida
+
+    // Intervencion manual documentada: el operador confirmo que el pedido NO existe en Woo,
+    // asi que borra la fila retenida (no hace falta tocar nada mas).
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').run('ORD-RECUPERA');
+
+    // Ciclo 2: ahora Woo responde bien al POST.
+    wooFetch.mockReset();
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 9911 } };
+      return { data: {} };
+    });
+    await syncMlToWc(db, CFG);
+
+    pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RECUPERA');
+    expect(pedido.wc_order_id).toBe(9911);
+    expect(pedido.retenido_en).toBeNull();
+    proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-RECUPERA');
+    expect(proc.estado).toBe('ok');
+
+    // Un solo pedido creado en Woo en total (el del segundo ciclo).
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+  }, 30000);
+
+  // Camino alternativo documentado: el operador CONFIRMA que el pedido SI existe en Woo y
+  // completa la reserva a mano (UPDATE wc_order_id=<id real>, retenido_en=NULL). Confirma que
+  // luego de esa intervencion la orden queda visible como procesada 'ok' y el cron no la
+  // vuelve a tocar (no reintenta, no crea un segundo pedido).
+  it('operador confirma que el pedido SI existe en Woo y completa la reserva a mano → el cron no reintenta', async () => {
+    const orden = ordenSimple('ORD-RECUPERA-EXISTE');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) throw new Error('ECONNREFUSED');
+      return { data: {} };
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await syncMlToWc(db, CFG);
+    errSpy.mockRestore();
+
+    // Intervencion manual: el pedido SI existe (verificado por el operador fuera de banda).
+    db.prepare(`
+      UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, retenido_en = NULL WHERE ml_order_id = ?
+    `).run(7777, 'ORD-RECUPERA-EXISTE');
+    wooFetch.mockClear();
+
+    await syncMlToWc(db, CFG);
+
+    // El cron no debe haber reintentado creando otro pedido.
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(0);
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RECUPERA-EXISTE');
+    expect(pedido.wc_order_id).toBe(7777);
+  }, 30000);
+});
+
+describe('syncMlToWc — verificacion en Woo pagina hasta encontrar el pedido en paginas mas alla de la segunda', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    seedCatalogo(db);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  function ordenSimple(id) {
+    return {
+      id,
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+  }
+
+  // Hallazgo #3 del review probaba solo hasta la 2da pagina. Este test confirma que la
+  // paginacion sigue funcionando cuando el pedido aparece recien en la 3ra pagina (2 paginas
+  // llenas de 100 pedidos ajenos antes de encontrarlo) — no es un caso especial de "pagina
+  // 1 vs pagina 2", el bucle debe seguir agotando paginas hasta VERIF_WC_MAX_PAGINAS.
+  it('encuentra el pedido en la 3ra pagina de la busqueda por fecha', async () => {
+    const orden = ordenSimple('ORD-PAG3');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    const paginaLlena = () => Array.from({ length: 100 }, (_, k) => ({ id: 2000 + k, meta_data: [] }));
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        if (path.includes('&page=1&')) return { data: paginaLlena() };
+        if (path.includes('&page=2&')) return { data: paginaLlena() };
+        if (path.includes('&page=3&')) {
+          return { data: [{ id: 66777, meta_data: [{ key: '_ml_order_id', value: 'ORD-PAG3' }] }] };
+        }
+        return { data: [] };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-PAG3');
+    expect(pedido.wc_order_id).toBe(66777);
+    expect(pedido.retenido_en).toBeNull();
+
+    // Se consultaron efectivamente las 3 paginas (no se corto antes de tiempo).
+    const paginasConsultadas = new Set(
+      wooFetch.mock.calls
+        .filter(c => String(c[1]).startsWith('/orders?'))
+        .map(c => new URLSearchParams(c[1].split('?')[1]).get('page'))
+    );
+    expect(paginasConsultadas).toEqual(new Set(['1', '2', '3']));
+
+    // Orden marcada como procesada 'ok' (no queda pendiente pese a la paginacion).
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-PAG3');
+    expect(proc.estado).toBe('ok');
+  }, 30000);
+});
+
+describe('GET /api/sync/dashboard — pedidos.reservasRetenidas', () => {
+  let db, app;
+
+  beforeEach(async () => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    seedCatalogo(db);
+    vi.clearAllMocks();
+    const [{ default: express }, { syncRouter }] = await Promise.all([
+      import('express'),
+      import('../routes/sync.js'),
+    ]);
+    app = express();
+    app.use(express.json());
+    app.use('/api/sync', syncRouter(db, CFG));
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  function reservar(db, mlOrderId, { wcOrderId = 0, retenidoEn = null } = {}) {
+    db.prepare(`
+      INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en, retenido_en)
+      VALUES (?, ?, NULL, ?, ?)
+    `).run(mlOrderId, wcOrderId, new Date().toISOString(), retenidoEn);
+  }
+
+  it('sin reservas retenidas → total 0 y lista vacia', async () => {
+    const { default: request } = await import('supertest');
+    const res = await request(app).get('/api/sync/dashboard');
+    expect(res.status).toBe(200);
+    expect(res.body.pedidos.reservasRetenidas.total).toBe(0);
+    expect(res.body.pedidos.reservasRetenidas.ordenes).toEqual([]);
+  });
+
+  it('una reserva retenida → total 1 y la incluye', async () => {
+    const { default: request } = await import('supertest');
+    reservar(db, 'ORD-DASH-1', { wcOrderId: 0, retenidoEn: new Date().toISOString() });
+
+    const res = await request(app).get('/api/sync/dashboard');
+    expect(res.status).toBe(200);
+    expect(res.body.pedidos.reservasRetenidas.total).toBe(1);
+    expect(res.body.pedidos.reservasRetenidas.ordenes.map(o => o.ml_order_id)).toEqual(['ORD-DASH-1']);
+  });
+
+  it('varias reservas retenidas → cuenta todas', async () => {
+    const { default: request } = await import('supertest');
+    reservar(db, 'ORD-DASH-2', { wcOrderId: 0, retenidoEn: new Date(Date.now() - 1000).toISOString() });
+    reservar(db, 'ORD-DASH-3', { wcOrderId: 0, retenidoEn: new Date().toISOString() });
+
+    const res = await request(app).get('/api/sync/dashboard');
+    expect(res.status).toBe(200);
+    expect(res.body.pedidos.reservasRetenidas.total).toBe(2);
+    expect(res.body.pedidos.reservasRetenidas.ordenes.map(o => o.ml_order_id).sort())
+      .toEqual(['ORD-DASH-2', 'ORD-DASH-3']);
+  });
+
+  it('NO cuenta una reserva normal en curso (wc_order_id=0 sin retenido_en)', async () => {
+    const { default: request } = await import('supertest');
+    reservar(db, 'ORD-DASH-EN-CURSO', { wcOrderId: 0, retenidoEn: null });
+
+    const res = await request(app).get('/api/sync/dashboard');
+    expect(res.status).toBe(200);
+    expect(res.body.pedidos.reservasRetenidas.total).toBe(0);
+    expect(res.body.pedidos.reservasRetenidas.ordenes).toEqual([]);
+  });
+
+  it('NO cuenta un pedido ya completado (wc_order_id<>0), aunque alguna vez haya estado retenido', async () => {
+    const { default: request } = await import('supertest');
+    // Simula el estado final tras la recuperacion manual: wc_order_id real, retenido_en NULL.
+    reservar(db, 'ORD-DASH-RESUELTA', { wcOrderId: 5555, retenidoEn: null });
+
+    const res = await request(app).get('/api/sync/dashboard');
+    expect(res.status).toBe(200);
+    expect(res.body.pedidos.reservasRetenidas.total).toBe(0);
+  });
+});
