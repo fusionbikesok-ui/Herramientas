@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { inventarioRouter, looksLikeEan } from '../routes/inventario.js';
+import { inventarioRouter, looksLikeEan, productoEnAlcance, productoEnAlcanceOr, parseLista } from '../routes/inventario.js';
 
 vi.mock('../lib/wooStock.js', async () => {
   const actual = await vi.importActual('../lib/wooStock.js');
@@ -92,8 +92,15 @@ describe('GET /api/inventario/alcance-opciones', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.marcas.sort()).toEqual(['Bell', 'Continental']);
-    expect(res.body.categorias.sort()).toEqual(['Accesorios', 'Cascos', 'Cubiertas']);
+    expect(res.body.marcas).toEqual([
+      { nombre: 'Bell', productos: 2 },
+      { nombre: 'Continental', productos: 1 },
+    ]);
+    expect(res.body.categorias).toEqual([
+      { nombre: 'Accesorios', productos: 1 },
+      { nombre: 'Cascos', productos: 2 },
+      { nombre: 'Cubiertas', productos: 1 },
+    ]);
   });
 });
 
@@ -119,7 +126,9 @@ describe('GET /api/inventario/sesion-activa', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sesion).toBeTruthy();
-    expect(res.body.sesion.marca).toBe('Continental');
+    // La sesión venía del esquema viejo (columna `marca` string) y la migración
+    // la envolvió en un array de un elemento sin romperla.
+    expect(res.body.sesion.marcas).toEqual(['Continental']);
   });
 });
 
@@ -131,7 +140,7 @@ describe('POST /api/inventario/sesiones', () => {
     const res = await request(buildApp(db)).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.sesion.marca).toBe('Bell');
+    expect(res.body.sesion.marcas).toEqual(['Bell']);
     expect(res.body.sesion.estado).toBe('abierta');
   });
 
@@ -621,5 +630,348 @@ describe('GET /api/inventario/sesiones (historial) — incluye confirmada_con_er
 
     expect(r.body.data).toHaveLength(1);
     expect(r.body.data[0].estado).toBe('confirmada_con_errores');
+  });
+});
+
+// ─── Alcance: AND entre dimensiones (pendientes) vs OR (anti-solape) ─────────
+
+describe('productoEnAlcance (alcance de una sesión)', () => {
+  it('con categoría Y marca seleccionadas exige AMBAS (AND), no cualquiera', () => {
+    expect(productoEnAlcance(['Cascos'], 'Bell', ['Cascos'], ['Bell'])).toBe(true);
+    expect(productoEnAlcance(['Cascos'], 'Giro', ['Cascos'], ['Bell'])).toBe(false); // casco de otra marca
+    expect(productoEnAlcance(['Cubiertas'], 'Bell', ['Cascos'], ['Bell'])).toBe(false); // Bell de otra categoría
+  });
+
+  it('con una sola dimensión seleccionada usa esa dimensión', () => {
+    expect(productoEnAlcance(['Cascos'], 'Giro', ['Cascos'], [])).toBe(true);
+    expect(productoEnAlcance(['Cubiertas'], 'Bell', [], ['Bell'])).toBe(true);
+    expect(productoEnAlcance(['Cubiertas'], 'Giro', [], ['Bell'])).toBe(false);
+  });
+
+  it('OR dentro de cada dimensión (cualquiera de las categorías / marcas elegidas)', () => {
+    expect(productoEnAlcance(['Cubiertas'], 'Bell', ['Cascos', 'Cubiertas'], ['Bell', 'Giro'])).toBe(true);
+    expect(productoEnAlcance(['Cubiertas'], 'Shimano', ['Cascos', 'Cubiertas'], ['Bell', 'Giro'])).toBe(false);
+  });
+
+  it('sin ninguna selección no incluye nada', () => {
+    expect(productoEnAlcance(['Cascos'], 'Bell', [], [])).toBe(false);
+  });
+
+  it('acepta el formato viejo (string suelto) además de arrays', () => {
+    expect(productoEnAlcance(['Cascos'], 'Bell', 'Cascos', 'Bell')).toBe(true);
+    expect(productoEnAlcance(['Cascos'], 'Giro', 'Cascos', 'Bell')).toBe(false);
+  });
+});
+
+describe('productoEnAlcanceOr (anti-solape entre usuarios) — semántica intacta', () => {
+  it('mantiene el OR intencional: alcanza con que coincida categoría O marca', () => {
+    expect(productoEnAlcanceOr(['Cascos'], 'Giro', ['Cascos'], ['Bell'])).toBe(true);
+    expect(productoEnAlcanceOr(['Cubiertas'], 'Bell', ['Cascos'], ['Bell'])).toBe(true);
+    expect(productoEnAlcanceOr(['Cubiertas'], 'Giro', ['Cascos'], ['Bell'])).toBe(false);
+  });
+});
+
+describe('parseLista', () => {
+  it('normaliza arrays, JSON string, string suelto, null y vacíos', () => {
+    expect(parseLista(['a', ' b ', '', 'a'])).toEqual(['a', 'b']);
+    expect(parseLista('["a","b"]')).toEqual(['a', 'b']);
+    expect(parseLista('Cascos')).toEqual(['Cascos']);
+    expect(parseLista(null)).toEqual([]);
+    expect(parseLista('')).toEqual([]);
+  });
+});
+
+describe('POST /api/inventario/sesiones — alcance múltiple (AND categoría+marca)', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('los pendientes con categoría Y marca son SOLO la intersección (bug OR corregido)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Casco Bell', marca: 'Bell', categorias_json: '["Cascos"]' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Casco Giro', marca: 'Giro', categorias_json: '["Cascos"]' });
+    insertProducto(db, { id_woo: 3, sku: 'FB-3', nombre: 'Cubierta Bell', marca: 'Bell', categorias_json: '["Cubiertas"]' });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones')
+      .send({ categorias: ['Cascos'], marcas: ['Bell'] });
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + crear.body.sesion.id);
+
+    expect(r.body.pendientes.map(p => p.sku)).toEqual(['FB-1']);
+  });
+
+  it('acepta varias categorías y varias marcas (OR dentro de cada dimensión)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Giro', categorias_json: '["Cubiertas"]' });
+    insertProducto(db, { id_woo: 3, sku: 'FB-3', marca: 'Shimano', categorias_json: '["Cascos"]' });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones')
+      .send({ categorias: ['Cascos', 'Cubiertas'], marcas: ['Bell', 'Giro'] });
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + crear.body.sesion.id);
+
+    expect(r.body.pendientes.map(p => p.sku).sort()).toEqual(['FB-1', 'FB-2']);
+  });
+
+  it('el anti-solape sigue usando OR: categoría de uno vs marca de otro con producto compartido choca', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]' });
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categorias: ['Cascos'], marcas: ['Bell'] });
+
+    const r = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+
+    expect(r.status).toBe(409);
+    expect(r.body.ocupada_por).toBe('juan');
+  });
+});
+
+describe('Migración de sesiones abiertas (string → array)', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  function crearTablaVieja(db) {
+    db.prepare('CREATE TABLE IF NOT EXISTS inventario_sesiones (' +
+      'id INTEGER PRIMARY KEY AUTOINCREMENT, usuario TEXT NOT NULL, categoria TEXT, marca TEXT,' +
+      "estado TEXT NOT NULL DEFAULT 'abierta', creado_en TEXT NOT NULL, confirmado_en TEXT)").run();
+  }
+
+  it('convierte categoria/marca en arrays y preserva id, estado y fechas', async () => {
+    const db = openDb(TEST_DB);
+    crearTablaVieja(db);
+    const creado = now();
+    db.prepare("INSERT INTO inventario_sesiones (id, usuario, categoria, marca, estado, creado_en) VALUES (7,'juan','Cascos','Bell','abierta',?)").run(creado);
+    db.prepare("INSERT INTO inventario_sesiones (id, usuario, categoria, marca, estado, creado_en, confirmado_en) VALUES (8,'ana',NULL,'Giro','confirmada',?,?)").run(creado, creado);
+
+    buildApp(db, 'juan'); // dispara ensureTables → migración
+
+    const filas = db.prepare('SELECT * FROM inventario_sesiones ORDER BY id').all();
+    expect(filas.map(f => f.id)).toEqual([7, 8]);
+    expect(JSON.parse(filas[0].categorias)).toEqual(['Cascos']);
+    expect(JSON.parse(filas[0].marcas)).toEqual(['Bell']);
+    expect(filas[0].creado_en).toBe(creado);
+    expect(JSON.parse(filas[1].categorias)).toEqual([]);
+    expect(JSON.parse(filas[1].marcas)).toEqual(['Giro']);
+    expect(filas[1].estado).toBe('confirmada');
+  });
+
+  it('es idempotente: correr ensureTables de nuevo no rompe ni duplica nada', async () => {
+    const db = openDb(TEST_DB);
+    crearTablaVieja(db);
+    db.prepare("INSERT INTO inventario_sesiones (usuario, categoria, estado, creado_en) VALUES ('juan','Cascos','abierta',?)").run(now());
+
+    buildApp(db, 'juan');
+    buildApp(db, 'juan');
+
+    const filas = db.prepare('SELECT * FROM inventario_sesiones').all();
+    expect(filas).toHaveLength(1);
+    expect(JSON.parse(filas[0].categorias)).toEqual(['Cascos']);
+  });
+
+  it('una sesión abierta migrada sigue devolviendo sus pendientes', async () => {
+    const db = openDb(TEST_DB);
+    crearTablaVieja(db);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]' });
+    db.prepare("INSERT INTO inventario_sesiones (id, usuario, categoria, estado, creado_en) VALUES (3,'juan','Cascos','abierta',?)").run(now());
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/3');
+
+    expect(r.status).toBe(200);
+    expect(r.body.pendientes.map(p => p.sku)).toEqual(['FB-1']);
+  });
+});
+
+describe('POST /api/inventario/alcance-preview', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('devuelve productos, unidades esperadas y split con/sin stock del alcance', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', categorias_json: '["Cascos"]', stock: 0 });
+    insertProducto(db, { id_woo: 3, sku: 'FB-3', marca: 'Giro', categorias_json: '["Cascos"]', stock: 9 });
+
+    const r = await request(buildApp(db)).post('/api/inventario/alcance-preview')
+      .send({ categorias: ['Cascos'], marcas: ['Bell'] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.productos).toBe(2);
+    expect(r.body.unidades_esperadas).toBe(3);
+    expect(r.body.con_stock).toEqual({ productos: 1, unidades: 3 });
+    expect(r.body.sin_stock).toEqual({ productos: 1 });
+    expect(r.body.supera_umbral).toBe(false);
+  });
+
+  it('el preview coincide exactamente con los pendientes que se abren después', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Giro', categorias_json: '["Cascos"]', stock: 1 });
+
+    const prev = await request(buildApp(db, 'juan')).post('/api/inventario/alcance-preview').send({ categorias: ['Cascos'], marcas: ['Bell'] });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categorias: ['Cascos'], marcas: ['Bell'] });
+    const ses = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + crear.body.sesion.id);
+
+    expect(ses.body.pendientes).toHaveLength(prev.body.productos);
+  });
+
+  it('sin selección devuelve todo en cero, no el catálogo entero', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]', stock: 3 });
+
+    const r = await request(buildApp(db)).post('/api/inventario/alcance-preview').send({ categorias: [], marcas: [] });
+
+    expect(r.body.productos).toBe(0);
+    expect(r.body.unidades_esperadas).toBe(0);
+  });
+});
+
+describe('Orden y bloque congelado de pendientes', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('ordena con-stock primero y después por categoría, marca y nombre', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'SIN-1', nombre: 'Zeta', marca: 'Bell', categorias_json: '["Cascos"]', stock: 0 });
+    insertProducto(db, { id_woo: 2, sku: 'CON-2', nombre: 'Beta', marca: 'Bell', categorias_json: '["Cascos"]', stock: 2 });
+    insertProducto(db, { id_woo: 3, sku: 'CON-1', nombre: 'Alfa', marca: 'Bell', categorias_json: '["Cascos"]', stock: 5 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + crear.body.sesion.id);
+
+    expect(r.body.pendientes.map(p => p.sku)).toEqual(['CON-1', 'CON-2', 'SIN-1']);
+    expect(r.body.pendientes.map(p => p.bloque)).toEqual(['con_stock', 'con_stock', 'sin_stock']);
+    expect(r.body.resumen).toMatchObject({ pendientes_con_stock: 2, pendientes_sin_stock: 1 });
+  });
+
+  it('el bloque queda CONGELADO al abrir: si el stock cambia después, el ítem no salta de bloque', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Casco', marca: 'Bell', stock: 0 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+
+    db.prepare("UPDATE catalogo_cache SET stock=99 WHERE sku='FB-1'").run(); // cambio por otra vía
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + crear.body.sesion.id);
+    expect(r.body.pendientes[0].bloque).toBe('sin_stock');
+    expect(r.body.pendientes[0].stock_inicial).toBe(0);
+    expect(r.body.pendientes[0].stock_woo).toBe(99); // el stock actual sí se muestra al día
+  });
+
+  it('el ítem escaneado guarda su bloque congelado', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 4 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-1' });
+
+    const fila = db.prepare('SELECT bloque FROM inventario_conteos WHERE sesion_id=?').get(id);
+    expect(fila.bloque).toBe('con_stock');
+  });
+});
+
+describe('Hallazgo fuera de alcance', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('registra el escaneo fuera de alcance con aviso, sin descartarlo ni bloquear', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-9', marca: 'Giro' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+
+    const esc = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-9' });
+
+    expect(esc.status).toBe(200);
+    expect(esc.body.item.fuera_de_alcance).toBe(true);
+    expect(esc.body.item.cantidad).toBe(1);
+
+    const ses = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
+    expect(ses.body.resumen.fuera_de_alcance).toBe(1);
+    expect(ses.body.items.find(i => i.sku === 'FB-9').fuera_de_alcance).toBe(true);
+  });
+
+  it('un producto dentro del alcance no se marca como hallazgo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+
+    const esc = await request(buildApp(db, 'juan'))
+      .post('/api/inventario/sesiones/' + crear.body.sesion.id + '/escanear').send({ codigo: 'FB-1' });
+
+    expect(esc.body.item.fuera_de_alcance).toBe(false);
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  async function sesionConSinStock(db) {
+    insertProducto(db, { id_woo: 1, sku: 'CON-1', marca: 'Bell', stock: 2 });
+    insertProducto(db, { id_woo: 2, sku: 'SIN-1', marca: 'Bell', stock: 0 });
+    insertProducto(db, { id_woo: 3, sku: 'SIN-2', marca: 'Bell', stock: 0 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    return crear.body.sesion.id;
+  }
+
+  it('cierra en 0 todos los sin-stock pendientes y los marca confirmado_por_omision', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+
+    const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+
+    expect(r.status).toBe(200);
+    expect(r.body.cerrados).toBe(2);
+    const filas = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? ORDER BY sku').all(id);
+    expect(filas.map(f => f.sku)).toEqual(['SIN-1', 'SIN-2']);
+    expect(filas.every(f => f.cantidad === 0 && f.confirmado_por_omision === 1 && f.bloque === 'sin_stock')).toBe(true);
+  });
+
+  it('permite cerrar solo los SKUs elegidos (ítem por ítem)', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+
+    const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ skus: ['SIN-2'] });
+
+    expect(r.body.cerrados).toBe(1);
+    const filas = db.prepare('SELECT sku FROM inventario_conteos WHERE sesion_id=?').all(id);
+    expect(filas.map(f => f.sku)).toEqual(['SIN-2']);
+  });
+
+  it('nunca pisa un conteo ya hecho a mano ni toca los con-stock', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'SIN-1' });
+
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+
+    const sin1 = db.prepare("SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku='SIN-1'").get(id);
+    expect(sin1.cantidad).toBe(1);
+    expect(sin1.confirmado_por_omision).toBe(0);
+    const con1 = db.prepare("SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku='CON-1'").get(id);
+    expect(con1).toBeUndefined();
+  });
+
+  it('los ítems cerrados por omisión se ajustan en Woo como 0 al confirmar', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+    setStockWc.mockResolvedValue();
+
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+    const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
+
+    expect(r.body.ajustados).toBe(2);
+    expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'SIN-1', 0);
+  });
+
+  it('rechaza cerrar sobre una sesión que no está abierta', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/descartar');
+
+    const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+
+    expect(r.status).toBe(400);
+  });
+
+  it('rechaza cerrar en la sesión de otro usuario', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+
+    const r = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+
+    expect(r.status).toBe(404);
   });
 });
