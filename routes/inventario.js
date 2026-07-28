@@ -160,6 +160,7 @@ export function ensureTables(db) {
     cantidad       INTEGER NOT NULL DEFAULT 0,
     bloque         TEXT,
     fuera_de_alcance INTEGER NOT NULL DEFAULT 0,
+    codigo_desconocido INTEGER NOT NULL DEFAULT 0,
     confirmado_por_omision INTEGER NOT NULL DEFAULT 0,
     ajustado_en    TEXT,
     actualizado_en TEXT NOT NULL,
@@ -169,6 +170,7 @@ export function ensureTables(db) {
   try { db.exec('ALTER TABLE inventario_conteos ADD COLUMN bloque TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE inventario_conteos ADD COLUMN fuera_de_alcance INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
   try { db.exec('ALTER TABLE inventario_conteos ADD COLUMN confirmado_por_omision INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+  try { db.exec('ALTER TABLE inventario_conteos ADD COLUMN codigo_desconocido INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 
   // Snapshot del alcance CONGELADO al abrir la sesión: qué SKUs entran y en qué
   // bloque (con_stock / sin_stock). Se congela acá y no se recalcula, para que un
@@ -197,6 +199,40 @@ export function inventarioRouter(db, wooCfg) {
     "SELECT sku, nombre, stock, categorias_json, marca FROM catalogo_cache WHERE COALESCE(sku,'')<>'' AND COALESCE(tipo,'')<>'variable'";
 
   const catalogoContable = () => db.prepare(SQL_CATALOGO_CONTABLE).all();
+
+  // Estado del código escaneado, para que el frontend muestre el aviso correcto:
+  //   ok               → producto real dentro del alcance
+  //   fuera_de_alcance → producto real, pero fuera del alcance elegido (solo aviso)
+  //   desconocido      → el código no existe en el catálogo (no hay stock que ajustar)
+  //   sin_asociar      → EAN válido todavía no vinculado a un SKU
+  function estadoDeCodigo(item) {
+    if (item.codigo_desconocido) return 'desconocido';
+    if (!item.sku) return 'sin_asociar';
+    return item.fuera_de_alcance ? 'fuera_de_alcance' : 'ok';
+  }
+
+  function avisoDeCodigo(item) {
+    switch (estadoDeCodigo(item)) {
+      case 'desconocido':
+        return `El código "${item.ean}" no está en el catálogo. Asocialo a un SKU real o borralo antes de confirmar.`;
+      case 'sin_asociar':
+        return `El código "${item.ean}" todavía no está asociado a un SKU.`;
+      case 'fuera_de_alcance':
+        return 'Este producto está fuera del alcance de la sesión. Se cuenta igual, revisalo al cerrar.';
+      default:
+        return null;
+    }
+  }
+
+  function itemOut(item) {
+    return {
+      ...item,
+      sin_asociar: !item.sku,
+      fuera_de_alcance: !!item.fuera_de_alcance,
+      codigo_desconocido: !!item.codigo_desconocido,
+      estado_codigo: estadoDeCodigo(item),
+    };
+  }
 
   function sesionOut(sesion) {
     if (!sesion) return null;
@@ -397,7 +433,10 @@ export function inventarioRouter(db, wooCfg) {
         diferencia: enCatalogo ? c.cantidad - c.prod_stock : null,
         bloque: c.bloque || null,
         fuera_de_alcance: !!c.fuera_de_alcance,
+        codigo_desconocido: !!c.codigo_desconocido,
+        estado_codigo: estadoDeCodigo(c),
         confirmado_por_omision: !!c.confirmado_por_omision,
+        aviso: avisoDeCodigo(c),
       };
     });
 
@@ -434,6 +473,7 @@ export function inventarioRouter(db, wooCfg) {
         pendientes_con_stock: pendientes.filter(p => p.bloque === 'con_stock').length,
         pendientes_sin_stock: pendientes.filter(p => p.bloque === 'sin_stock').length,
         fuera_de_alcance: items.filter(i => i.fuera_de_alcance).length,
+        codigos_desconocidos: items.filter(i => i.codigo_desconocido).length,
       },
     });
   });
@@ -458,6 +498,14 @@ export function inventarioRouter(db, wooCfg) {
       sku = codigo;
     }
 
+    // Código que NO existe en el catálogo: es un caso distinto de "fuera de alcance".
+    // Fuera de alcance = producto REAL que no entra en el alcance elegido (solo aviso).
+    // Desconocido = no hay producto al que ajustarle stock, así que se guarda con
+    // sku=null y cae en el flujo fail-closed que ya existe para EAN no reconocido:
+    // /confirmar corta con 409 hasta que se asocie a un SKU real o se borre el ítem.
+    const codigoDesconocido = sku && !db.prepare('SELECT 1 FROM catalogo_cache WHERE sku=?').get(sku) ? 1 : 0;
+    if (codigoDesconocido) sku = null;
+
     // Hallazgo fuera de alcance: se registra y se avisa, pero NO se descarta el
     // escaneo ni se bloquea el flujo (y no cambia nada de la escritura a Woo).
     // Se congela al momento del escaneo, igual que el bloque.
@@ -476,14 +524,11 @@ export function inventarioRouter(db, wooCfg) {
       itemId = existente.id;
     } else {
       itemId = db.prepare(
-        'INSERT INTO inventario_conteos (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, actualizado_en) VALUES (?,?,?,1,?,?,?)'
-      ).run(sesion.id, ean, sku, enAlcance?.bloque || null, fueraDeAlcance, now()).lastInsertRowid;
+        'INSERT INTO inventario_conteos (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, codigo_desconocido, actualizado_en) VALUES (?,?,?,1,?,?,?,?)'
+      ).run(sesion.id, ean, sku, enAlcance?.bloque || null, fueraDeAlcance, codigoDesconocido, now()).lastInsertRowid;
     }
     const item = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(itemId);
-    res.json({
-      ok: true,
-      item: { ...item, sin_asociar: !item.sku, fuera_de_alcance: !!item.fuera_de_alcance },
-    });
+    res.json({ ok: true, item: itemOut(item), aviso: avisoDeCodigo(item) });
   });
 
   router.post('/sesiones/:id/asociar', (req, res) => {
@@ -501,7 +546,9 @@ export function inventarioRouter(db, wooCfg) {
     // no el de asociar dentro de un conteo. Chequeamos con el UPDATE mismo (.changes)
     // para evitar una carrera entre el SELECT previo y el UPDATE.
     const alcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
-    const cambio = db.prepare('UPDATE inventario_conteos SET sku=?, bloque=?, fuera_de_alcance=?, actualizado_en=? WHERE sesion_id=? AND ean=?')
+    // El SKU ya se validó contra el catálogo más arriba, así que el ítem deja de
+    // ser un "código desconocido" y pasa a ser un conteo real.
+    const cambio = db.prepare('UPDATE inventario_conteos SET sku=?, bloque=?, fuera_de_alcance=?, codigo_desconocido=0, actualizado_en=? WHERE sesion_id=? AND ean=?')
       .run(sku, alcance?.bloque || null, alcance ? 0 : 1, now(), sesion.id, ean);
     if (cambio.changes === 0) {
       return res.status(404).json({ ok: false, error: 'No hay ningún ítem escaneado con ese EAN en esta sesión' });
@@ -513,7 +560,7 @@ export function inventarioRouter(db, wooCfg) {
     `).run(ean, sku, now());
 
     const item = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
-    res.json({ ok: true, item: { ...item, fuera_de_alcance: !!item.fuera_de_alcance } });
+    res.json({ ok: true, item: itemOut(item) });
   });
 
   router.delete('/sesiones/:id/items/:itemId', (req, res) => {
@@ -613,7 +660,16 @@ export function inventarioRouter(db, wooCfg) {
     const todos = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=?').all(sesion.id);
     const sinAsociar = todos.filter(i => !i.sku);
     if (sinAsociar.length) {
-      return res.status(409).json({ ok: false, error: 'Hay ítems sin asociar a un SKU. Asocialos antes de confirmar.', sin_asociar: sinAsociar.length });
+      // Un "código desconocido" también llega acá con sku=null: no hay producto real
+      // al que ajustarle stock, así que se corta antes de tocar Woo (fail-closed).
+      const desconocidos = sinAsociar.filter(i => i.codigo_desconocido);
+      return res.status(409).json({
+        ok: false,
+        error: 'Hay ítems sin asociar a un SKU. Asocialos antes de confirmar.',
+        sin_asociar: sinAsociar.length,
+        codigos_desconocidos: desconocidos.length,
+        codigos: desconocidos.map(i => i.ean),
+      });
     }
 
     // Reclamo atómico desde CUALQUIERA de los dos estados de origen válidos — evita que

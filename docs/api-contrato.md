@@ -139,7 +139,8 @@ Al crearse se **congela** el alcance (qué SKUs entran y en qué bloque `con_sto
               "fuera_de_alcance": false, "confirmado_por_omision": false }],
   "pendientes": [{ "sku":"FB-1", "nombre":"...", "bloque":"con_stock", "marca":"Bell",
                    "categoria_principal":"Cascos", "stock_inicial":5, "stock_woo":5 }],
-  "resumen": { "pendientes_con_stock": 2, "pendientes_sin_stock": 1, "fuera_de_alcance": 0 } }
+  "resumen": { "pendientes_con_stock": 2, "pendientes_sin_stock": 1,
+               "fuera_de_alcance": 0, "codigos_desconocidos": 0 } }
 ```
 `pendientes` viene ordenado: con-stock primero, después categoría → marca → nombre.
 `bloque` está **congelado** al abrir la sesión: si el stock cambia por otra vía durante el
@@ -147,10 +148,20 @@ conteo, el ítem no salta de bloque (`stock_woo` sí muestra el valor actual).
 
 ### POST /api/inventario/sesiones/:id/escanear
 Request `{ "codigo": "..." }` (EAN o SKU; igual desde cámara o lector HID).
-Respuesta: `{ ok, item }` con `sin_asociar` y `fuera_de_alcance`.
-Si el producto escaneado no está en el alcance congelado, se marca
-`fuera_de_alcance: true` — es solo un aviso informativo: **no** descarta el escaneo, no
-bloquea el flujo y no cambia nada de la escritura a Woo.
+Respuesta: `{ ok, item, aviso }`. El ítem trae `estado_codigo` con cuatro valores:
+
+| `estado_codigo` | Qué pasó | Efecto |
+|---|---|---|
+| `ok` | producto real dentro del alcance | se cuenta y se ajusta en Woo |
+| `fuera_de_alcance` | producto real, fuera del alcance elegido | **fail-open**: se cuenta igual y se ajusta; solo aviso |
+| `sin_asociar` | EAN válido todavía no vinculado a un SKU | **fail-closed**: `/confirmar` corta con 409 |
+| `desconocido` | el código no existe en `catalogo_cache` | **fail-closed**: se guarda con `sku=null`, `/confirmar` corta con 409 |
+
+`fuera_de_alcance` y `codigo_desconocido` son flags separados y excluyentes: el primero es
+un producto real que no entra en el alcance elegido (solo aviso), el segundo es un código
+sin producto detrás, así que no hay stock que ajustar. Un código desconocido se resuelve
+asociándolo a un SKU real (`/asociar`, que limpia el flag) o borrando el ítem.
+`aviso` trae el texto listo para mostrar, o `null` si el estado es `ok`.
 
 ### POST /api/inventario/sesiones/:id/cerrar-sin-stock
 Cierra en 0 los pendientes del bloque `sin_stock`. No es automático: se ofrece al cerrar
@@ -168,4 +179,6 @@ IGNORE`) ni toca el bloque con-stock. `400` si la sesión no está abierta.
 Sin cambios: claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
 **fail-closed por ítem** al escribir a Woo (un PUT fallido no aborta el resto; la sesión
 queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
-`409` si hay ítems sin asociar a SKU (sin SKU no hay a qué ajustarle stock).
+`409` si hay ítems sin asociar a SKU (sin SKU no hay a qué ajustarle stock), con
+`{ sin_asociar, codigos_desconocidos, codigos: [...] }` para que la UI explique cuáles son
+códigos inexistentes. Corta **antes** de tocar Woo: ningún ítem de la sesión se ajusta.
