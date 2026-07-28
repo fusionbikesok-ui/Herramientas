@@ -86,6 +86,16 @@ con semántica OR, a propósito y más conservadora.
 ### GET /api/inventario/alcance-opciones
 Opciones de alcance con cantidad de productos por opción (para los chips).
 
+Query params opcionales `categorias` / `marcas` (varios valores separados por `|` o `,`,
+o el mismo param repetido). Si vienen, el conteo queda **condicionado a la selección de
+la otra dimensión** usando `productoEnAlcance()` (AND entre dimensiones): el conteo de
+cada marca se calcula contra las categorías ya elegidas y viceversa. Una opción que no
+intersecta devuelve `productos: 0` — el chip se muestra **deshabilitado, nunca oculto**.
+Sin query params el conteo es global (comportamiento previo). La respuesta incluye
+`seleccion: { categorias: [], marcas: [] }` con lo que se interpretó del query.
+
+Ejemplo: `GET /api/inventario/alcance-opciones?categorias=Cascos|Cubiertas&marcas=Bell`
+
 ```json
 { "ok": true,
   "categorias": [{ "nombre": "Cascos", "productos": 42 }],
