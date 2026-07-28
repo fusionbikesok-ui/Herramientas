@@ -161,7 +161,11 @@
   /* ----- Vista Conteo ----- */
   .conteo-barra{position:sticky;top:0;background:rgba(12,15,22,.96);backdrop-filter:blur(10px);z-index:5;
        display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0 10px;margin:-14px 0 10px;}
-  .conteo-barra .txt{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .conteo-barra .txt{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;}
+  /* text-overflow no aplica sobre un contenedor flex: el ellipsis va en el hijo de
+     texto, y necesita min-width:0 para poder encogerse dentro del flex (si no, el
+     título largo empuja al chip "Guardado" fuera de la vista en 375px). */
+  #conteo-titulo{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .led{width:9px;height:9px;border-radius:50%;background:var(--warning);flex:0 0 auto;}
   .led.on{background:var(--success);}
   .chip-guardado{font-size:11px;font-weight:700;padding:3px 9px;border-radius:var(--radius-pill);
@@ -529,6 +533,11 @@
     return 'hace ' + d + ' día' + (d === 1 ? '' : 's');
   }
 
+  // Pluralizado simple: n(valor) formatea el número, esto elige el sustantivo.
+  function plural(cant, singular, pluralForma){
+    return cant === 1 ? singular : pluralForma;
+  }
+
   // Tolera la forma vieja (categoria/marca string) y la nueva (categorias/marcas array).
   function listaAlcance(valor){
     if(valor == null) return [];
@@ -688,8 +697,12 @@
   function renderAlcance(){
     renderChips(chipsCategorias, opciones.categorias, selCategorias, buscarCategorias.value, 'ayuda-categorias');
     renderChips(chipsMarcas, opciones.marcas, selMarcas, buscarMarcas.value, 'ayuda-marcas');
-    resumenCategorias.textContent = selCategorias.length ? selCategorias.length + ' seleccionada(s)' : 'Ninguna seleccionada (todas)';
-    resumenMarcas.textContent = selMarcas.length ? selMarcas.length + ' seleccionada(s)' : 'Ninguna seleccionada (todas)';
+    resumenCategorias.textContent = selCategorias.length
+      ? selCategorias.length + plural(selCategorias.length, ' categoría seleccionada', ' categorías seleccionadas')
+      : 'Ninguna seleccionada (todas)';
+    resumenMarcas.textContent = selMarcas.length
+      ? selMarcas.length + plural(selMarcas.length, ' marca seleccionada', ' marcas seleccionadas')
+      : 'Ninguna seleccionada (todas)';
     actualizarCta();
   }
 
@@ -700,7 +713,8 @@
       prevUnidades.textContent = n(previewActual.unidades);
       prevCon.textContent = n(previewActual.con_stock);
       prevSin.textContent = n(previewActual.sin_stock);
-      alcanceEmpezar.textContent = 'Empezar conteo (' + n(previewActual.productos) + ' productos) →';
+      alcanceEmpezar.textContent = 'Empezar conteo (' + n(previewActual.productos) + ' ' +
+        plural(previewActual.productos, 'producto', 'productos') + ') →';
       alcanceEmpezar.disabled = !haySeleccion || previewActual.productos === 0;
     } else {
       prevProductos.textContent = '—';
@@ -729,7 +743,8 @@
     }
     if(!grande){ if(el) el.remove(); return; }
     el.innerHTML = '<b>Alcance grande.</b> Son ' + n(previewActual.productos) +
-      ' productos (más de ' + n(previewActual.umbral || UMBRAL_ALCANCE_GRANDE) + '). Podés seguir igual, pero el conteo va a llevar bastante.';
+      ' ' + plural(previewActual.productos, 'producto', 'productos') +
+      ' (más de ' + n(previewActual.umbral || UMBRAL_ALCANCE_GRANDE) + '). Podés seguir igual, pero el conteo va a llevar bastante.';
   }
 
   function paramsSeleccion(){
@@ -1043,7 +1058,10 @@
     if(llamador && !autoAbiertoSinStock){
       autoAbiertoSinStock = true;
       sinStockAbierto = true;
-      mostrarBannerEscaneo('Terminaste los productos con stock. Quedan ' + n(sin.length) + ' sin stock en sistema: decidí si los cerrás en 0 o los contás.');
+      mostrarBannerEscaneo('Terminaste los productos con stock. ' +
+        plural(sin.length, 'Queda 1 producto', 'Quedan ' + n(sin.length) + ' productos') +
+        ' sin stock en sistema: decidí si ' + plural(sin.length, 'lo cerrás', 'los cerrás') +
+        ' en 0 o ' + plural(sin.length, 'lo contás', 'los contás') + '.');
     }
     html += '<div class="collapse' + (llamador ? ' llamador' : '') + '" id="collapse-sinstock">' +
       '<button type="button" class="collapse-head" id="collapse-sinstock-head"' +
@@ -1057,7 +1075,8 @@
     } else {
       if(llamador){
         html += '<div class="eleccion" role="group" aria-label="Qué hacer con los productos sin stock">' +
-          '<button type="button" class="btn primary" id="btn-cerrar-sin-stock">Cerrar los ' + n(sin.length) + ' restantes como 0</button>' +
+          '<button type="button" class="btn primary" id="btn-cerrar-sin-stock" data-cantidad="' + sin.length + '">' +
+            plural(sin.length, 'Cerrar 1 restante como 0', 'Cerrar los ' + n(sin.length) + ' restantes como 0') + '</button>' +
           '<button type="button" class="btn secondary" id="btn-contar-sin-stock">Seguir contando estos</button>' +
         '</div>';
       }
@@ -1139,7 +1158,9 @@
       });
     }
     var btnCerrar0 = document.getElementById('btn-cerrar-sin-stock');
-    if(btnCerrar0) btnCerrar0.addEventListener('click', cerrarSinStockComoCero);
+    if(btnCerrar0) btnCerrar0.addEventListener('click', function(){
+      cerrarSinStockComoCero(parseInt(btnCerrar0.getAttribute('data-cantidad'), 10) || 0);
+    });
     var btnSeguir = document.getElementById('btn-contar-sin-stock');
     if(btnSeguir) btnSeguir.addEventListener('click', function(){
       // "Seguir contando estos": la lista ya está desplegada, movemos el foco al primero.
@@ -1165,9 +1186,17 @@
   }
 
   // Cierra en 0 todo lo que queda del bloque sin-stock (elección explícita del usuario).
-  function cerrarSinStockComoCero(){
+  // Es una acción masiva que persiste ceros y termina escribiéndose a Woo al confirmar,
+  // así que pide confirmación igual que Descartar sesión y Confirmar ajuste.
+  function cerrarSinStockComoCero(cantidad){
     var id = sesionId();
     if(!id) return;
+    if(cantidad > 0){
+      var aviso = cantidad === 1
+        ? '¿Cerrar en 0 el producto sin stock que queda?'
+        : '¿Cerrar en 0 los ' + n(cantidad) + ' productos sin stock que quedan?';
+      if(!confirm(aviso + ' Se van a contar como 0 y ese valor se escribe en el stock al confirmar el ajuste.')) return;
+    }
     fetch('/api/inventario/sesiones/' + id + '/cerrar-sin-stock', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
