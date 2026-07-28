@@ -71,12 +71,12 @@
   /* ===== Stepper (patrón ya existente en public/stock — se reusa, no se inventa) ===== */
   .stepper{display:flex;align-items:center;gap:8px;margin:0 0 18px;flex-wrap:wrap;}
   .stepper-item{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--muted);}
-  .stepper-dot{width:22px;height:22px;border-radius:50%;background:var(--dark3);border:1px solid var(--border2);
+  .stepper-dot{width:22px;height:22px;border-radius:50%;background:var(--surface2);border:1px solid var(--border2);
        display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;}
-  .stepper-item.done .stepper-dot{background:var(--green);border-color:var(--green);color:#06231A;}
-  .stepper-item.current .stepper-dot{background:var(--blue);border-color:var(--blue);color:#06131C;box-shadow:0 0 0 4px var(--blue-bg);}
-  .stepper-item.current{color:var(--white);}
-  .stepper-item.done{color:var(--gray);}
+  .stepper-item.done .stepper-dot{background:var(--success);border-color:var(--success);color:#06231A;}
+  .stepper-item.current .stepper-dot{background:var(--accent);border-color:var(--accent);color:#06131C;box-shadow:0 0 0 4px var(--accent-dim);}
+  .stepper-item.current{color:var(--txt);}
+  .stepper-item.done{color:var(--muted);}
   .stepper-line{width:32px;height:1px;background:var(--border2);flex-shrink:0;}
 
   /* ===== P1 · Alcance ===== */
@@ -86,12 +86,18 @@
        padding:7px 13px;border-radius:var(--radius-pill);background:var(--chip-bg);border:1px solid var(--chip-bd);
        color:var(--chip-txt);cursor:pointer;font-family:inherit;-webkit-appearance:none;appearance:none;}
   .chip-multi[aria-pressed="true"]{background:var(--chip-on-bg);border-color:var(--chip-on-bd);color:var(--chip-on-txt);}
-  .chip-multi[disabled]{opacity:.55;cursor:not-allowed;}
+  /* Sin intersección con el resto del alcance: sigue enfocable (aria-disabled, NO
+     disabled) para que la explicación llegue a teclado y lector de pantalla. El motivo
+     está en el contador visible «×0» y en el texto de ayuda del grupo (aria-describedby).
+     Se distingue con borde punteado, no bajando la opacidad (rompía el 4.5:1). */
+  .chip-multi[aria-disabled="true"]{background:transparent;border-style:dashed;
+       border-color:var(--border2);color:var(--muted);cursor:not-allowed;}
+  .dim-ayuda{font-size:12px;color:var(--muted);margin:8px 0 0;}
   .chip-multi .cnt{font-variant-numeric:tabular-nums;font-weight:800;}
   .dim-vacia{font-size:12px;color:var(--muted);padding:6px 2px;}
   .dim-resumen{font-size:12px;color:var(--muted);margin-top:8px;}
 
-  .preview{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;}
+  .preview{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;}
   .preview-nums{display:flex;gap:14px;}
   .preview-num{flex:1;min-width:0;}
   .preview-num .n{font-size:32px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;color:var(--txt);}
@@ -110,8 +116,9 @@
     .preview-wrap{position:sticky;top:88px;}
   }
   @media(max-width:899px){
-    .preview-wrap{position:sticky;bottom:0;z-index:6;background:rgba(12,15,22,.96);backdrop-filter:blur(10px);
-         border-top:1px solid var(--line);margin:0 -12px;padding:8px 12px calc(6px + env(safe-area-inset-bottom));}
+    /* Barra inferior: fondo sólido con el token de fondo real, sin rgba() hardcodeado. */
+    .preview-wrap{position:sticky;bottom:0;z-index:6;background:var(--bg);
+         border-top:1px solid var(--border);margin:0 -12px;padding:8px 12px calc(6px + env(safe-area-inset-bottom));}
     .preview{border:none;background:none;padding:0;border-radius:0;}
     .preview-nums{gap:12px;align-items:baseline;}
     .preview-num{display:flex;align-items:baseline;gap:6px;}
@@ -126,7 +133,7 @@
        border:1px solid var(--warning-bd);background:var(--warning-bg);color:var(--warning);}
   .banner-escaneo.on{display:block;}
   .bloque-titulo{font-size:13px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px;}
-  .collapse{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-top:14px;}
+  .collapse{border:1px solid var(--border);border-radius:12px;background:var(--surface);margin-top:14px;}
   .collapse.llamador{border-color:var(--accent);background:var(--accent-dim);}
   .collapse-head{width:100%;min-height:var(--tap-comfort);display:flex;align-items:center;gap:8px;padding:10px 14px;
        background:none;border:none;color:var(--txt);font:inherit;font-weight:700;font-size:14px;cursor:pointer;text-align:left;}
@@ -337,6 +344,7 @@
           <input type="text" id="buscar-categorias" placeholder="Buscar categoría…" autocomplete="off">
           <div class="chips-multi" id="chips-categorias" role="group" aria-label="Categorías del alcance"></div>
           <div class="dim-resumen" id="resumen-categorias"></div>
+          <p class="dim-ayuda" id="ayuda-categorias">Las categorías con «×0» no tienen productos al combinarlas con el resto del alcance elegido, por eso no se pueden seleccionar.</p>
         </div>
 
         <div class="card">
@@ -344,6 +352,7 @@
           <input type="text" id="buscar-marcas" placeholder="Buscar marca…" autocomplete="off">
           <div class="chips-multi" id="chips-marcas" role="group" aria-label="Marcas del alcance"></div>
           <div class="dim-resumen" id="resumen-marcas"></div>
+          <p class="dim-ayuda" id="ayuda-marcas">Las marcas con «×0» no tienen productos al combinarlas con el resto del alcance elegido, por eso no se pueden seleccionar.</p>
         </div>
 
         <div id="alcance-aviso"></div>
@@ -559,6 +568,7 @@
           '</div>' +
           '<button class="btn secondary" id="btn-nueva" disabled title="Ya tenés una sesión abierta — retomala o descartala">Nueva sesión</button>';
         document.getElementById('btn-retomar').addEventListener('click', function(){
+          resetEstadoBloqueSinStock();
           mostrarVista('conteo');
         });
       } else {
@@ -622,6 +632,10 @@
   var selCategorias = [];
   var selMarcas = [];
   var previewActual = null;
+  // Contadores de secuencia: con dos toggles rápidos, la respuesta del fetch viejo puede
+  // llegar después de la del nuevo. Se descarta toda respuesta que no sea la última pedida.
+  var seqOpciones = 0;
+  var seqPreview = 0;
 
   function normOpcion(o){
     if(o == null) return null;
@@ -641,7 +655,7 @@
     if(i === -1) lista.push(valor); else lista.splice(i, 1);
   }
 
-  function renderChips(cont, lista, seleccion, filtro, dimension){
+  function renderChips(cont, lista, seleccion, filtro, idAyuda){
     var q = String(filtro || '').trim().toLowerCase();
     var vis = lista.filter(function(o){ return !q || o.nombre.toLowerCase().indexOf(q) !== -1; });
     if(!vis.length){
@@ -652,16 +666,17 @@
       var on = seleccion.indexOf(o.nombre) !== -1;
       // N=0 → no interseca con el resto del alcance: se deshabilita, nunca se oculta.
       var cero = !on && o.productos === 0;
-      var titulo = 'Ninguna ' + dimension + ' con productos al combinarla con el alcance ya elegido';
       return '<button type="button" class="chip-multi" data-valor="' + esc(o.nombre) + '"' +
         ' aria-pressed="' + (on ? 'true' : 'false') + '"' +
-        (cero ? ' disabled title="' + esc(titulo) + '"' : '') + '>' +
+        (cero ? ' aria-disabled="true" aria-describedby="' + esc(idAyuda) + '"' : '') + '>' +
         '<span>' + esc(o.nombre) + '</span>' +
         (o.productos != null ? '<span class="cnt">×' + n(o.productos) + '</span>' : '') +
       '</button>';
     }).join('');
     cont.querySelectorAll('.chip-multi').forEach(function(btn){
       btn.addEventListener('click', function(){
+        // aria-disabled no bloquea el click como `disabled`: hay que ignorarlo a mano.
+        if(btn.getAttribute('aria-disabled') === 'true') return;
         toggleSeleccion(seleccion, btn.getAttribute('data-valor'));
         renderAlcance();
         refrescarOpciones();
@@ -671,8 +686,8 @@
   }
 
   function renderAlcance(){
-    renderChips(chipsCategorias, opciones.categorias, selCategorias, buscarCategorias.value, 'categoría');
-    renderChips(chipsMarcas, opciones.marcas, selMarcas, buscarMarcas.value, 'marca');
+    renderChips(chipsCategorias, opciones.categorias, selCategorias, buscarCategorias.value, 'ayuda-categorias');
+    renderChips(chipsMarcas, opciones.marcas, selMarcas, buscarMarcas.value, 'ayuda-marcas');
     resumenCategorias.textContent = selCategorias.length ? selCategorias.length + ' seleccionada(s)' : 'Ninguna seleccionada (todas)';
     resumenMarcas.textContent = selMarcas.length ? selMarcas.length + ' seleccionada(s)' : 'Ninguna seleccionada (todas)';
     actualizarCta();
@@ -728,11 +743,25 @@
   // productos quedan por opción DADA esa selección (los que dan 0 se deshabilitan).
   // Si el backend ignora los parámetros, devuelve los conteos globales y no se
   // deshabilita nada — degradación aceptable, nunca se ocultan opciones.
+  // Compara la `seleccion` que el backend devuelve con la vigente: descarta respuestas
+  // de una selección que el usuario ya cambió (defensa extra sobre el número de secuencia).
+  function seleccionVigente(sel){
+    if(!sel) return true;
+    var mismo = function(a, b){
+      a = listaAlcance(a).slice().sort();
+      b = (b || []).slice().sort();
+      return a.length === b.length && a.every(function(v, i){ return v === b[i]; });
+    };
+    return mismo(sel.categorias, selCategorias) && mismo(sel.marcas, selMarcas);
+  }
+
   var refrescarOpciones = debounce(function(){
+    var mio = ++seqOpciones;
     fetch('/api/inventario/alcance-opciones' + paramsSeleccion())
       .then(function(r){ return r.json(); })
       .then(function(j){
-        if(!j || !j.ok) return;
+        if(mio !== seqOpciones) return;           // llegó tarde: ya hay otra pedida
+        if(!j || !j.ok || !seleccionVigente(j.seleccion)) return;
         opciones.categorias = normOpciones(j.categorias);
         opciones.marcas = normOpciones(j.marcas);
         renderAlcance();
@@ -740,13 +769,15 @@
   }, 220);
 
   var pedirPreview = debounce(function(){
+    var mio = ++seqPreview;
     if(!selCategorias.length && !selMarcas.length){ previewActual = null; actualizarCta(); return; }
     fetch('/api/inventario/alcance-preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ categorias: selCategorias, marcas: selMarcas })
     }).then(function(r){ return r.json(); }).then(function(j){
-      if(!j || !j.ok){ previewActual = null; actualizarCta(); return; }
+      if(mio !== seqPreview) return;              // llegó tarde: ya hay otra pedida
+      if(!j || !j.ok || !seleccionVigente(j.seleccion)){ previewActual = null; actualizarCta(); return; }
       var con = j.con_stock, sin = j.sin_stock;
       previewActual = {
         productos: Number(j.productos != null ? j.productos : (j.total_productos != null ? j.total_productos : 0)) || 0,
@@ -757,7 +788,10 @@
         supera_umbral: j.supera_umbral != null ? !!j.supera_umbral : null
       };
       actualizarCta();
-    }).catch(function(){ previewActual = null; actualizarCta(); });
+    }).catch(function(){
+      if(mio !== seqPreview) return;
+      previewActual = null; actualizarCta();
+    });
   }, 220);
 
   buscarCategorias.addEventListener('input', function(){ renderAlcance(); });
@@ -778,6 +812,7 @@
   }
 
   function limpiarAlcanceForm(){
+    seqOpciones++; seqPreview++;   // invalida respuestas en vuelo de la selección anterior
     selCategorias = [];
     selMarcas = [];
     buscarCategorias.value = '';
@@ -820,6 +855,7 @@
       .then(function(res){
         if(res.status === 200 && res.body.ok){
           state.sesion = res.body.sesion;
+          resetEstadoBloqueSinStock();
           mostrarVista('conteo');
         } else if(res.status === 409){
           mostrarAvisoAlcance(res.body.error, res.body.ocupada_por,
@@ -853,6 +889,12 @@
   var filtroActivo = 'pendientes';
   var sinStockAbierto = false;
   var autoAbiertoSinStock = false;
+  // El despliegue automático del bloque sin-stock es por sesión: sin esto, una segunda
+  // sesión abierta sin recargar la página no volvería a dispararlo.
+  function resetEstadoBloqueSinStock(){
+    sinStockAbierto = false;
+    autoAbiertoSinStock = false;
+  }
   var ordenPorDiferencia = false;
   var seleccionConteo = new Set();
   var chkTodoConteo = document.getElementById('chk-todo-conteo');
@@ -1346,6 +1388,7 @@
       .then(function(j){
         if(j && j.ok){
           state.sesion = null;
+          resetEstadoBloqueSinStock();
           historialCargado = false;
           mostrarVista('inicio');
         } else {
@@ -1595,6 +1638,7 @@
 
   document.getElementById('btn-volver-inicio').addEventListener('click', function(){
     state.sesion = null;
+    resetEstadoBloqueSinStock();
     historialCargado = false;
     mostrarVista('inicio');
   });
