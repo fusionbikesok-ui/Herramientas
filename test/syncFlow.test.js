@@ -889,7 +889,6 @@ describe('syncMlToWc — timeout del POST /orders (verificacion anti-duplicado)'
     // Se envejece la reserva mas alla del umbral de 60min y se vuelve a correr el sync
     db.prepare('UPDATE ordenes_ml_wc_pedidos SET creado_en = ? WHERE ml_order_id = ?')
       .run(new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), 'ORD-RETENIDA');
-    db.prepare('DELETE FROM ordenes_ml_procesadas WHERE order_id = ?').run('ORD-RETENIDA');
     await syncMlToWc(db, CFG);
     errSpy.mockRestore();
 
@@ -899,5 +898,93 @@ describe('syncMlToWc — timeout del POST /orders (verificacion anti-duplicado)'
     // Y no se disparo un segundo POST de creacion
     const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
     expect(posts).toHaveLength(1);
+  }, 30000);
+
+  // Hallazgo #1 del review: si `yaCreado` contara la reserva retenida, el ciclo siguiente
+  // sellaria la orden como 'ok' en ordenes_ml_procesadas y la venta de ML se perderia en
+  // silencio (el panel filtra wc_order_id<>0 y las cancelaciones la saltean).
+  it('fail-closed: el ciclo siguiente NO sella la orden como procesada mientras la reserva este retenida', async () => {
+    const orden = ordenSimple('ORD-NO-SELLAR');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) throw new Error('ECONNREFUSED');
+      return { data: {} };
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await syncMlToWc(db, CFG);
+    await syncMlToWc(db, CFG); // segundo ciclo, sin tocar nada a mano
+    errSpy.mockRestore();
+
+    // Nunca se marca procesada: la orden sigue siendo visible como pendiente real
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NO-SELLAR');
+    expect(proc).toBeUndefined();
+    // Y la reserva sigue retenida (ningun ciclo la libera ni crea un segundo pedido)
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-NO-SELLAR');
+    expect(pedido.wc_order_id).toBe(0);
+    expect(pedido.retenido_en).toBeTruthy();
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+  }, 30000);
+
+  // Hallazgo #5: un 4xx significa que Woo recibio y rechazo la request -> no hay pedido
+  // creado, no hace falta verificar (ni pagar el costo de 4 intentos con backoff).
+  it('POST rechazado con 4xx → libera la reserva sin verificar en Woo', async () => {
+    const orden = ordenSimple('ORD-400');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('WooCommerce API error 400');
+      if (path.startsWith('/orders?')) return { data: [] };
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    const gets = wooFetch.mock.calls.filter(c => String(c[1]).startsWith('/orders?'));
+    expect(gets).toHaveLength(0); // no se verifico
+    expect(db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-400')).toBeUndefined();
+  });
+
+  // Hallazgo #4: un 200 con cuerpo que no es lista (HTML de un WAF) no es certeza de
+  // inexistencia -> no concluyente -> fail-closed, no liberar.
+  it('respuesta de Woo con forma inesperada → no concluyente, fail-closed', async () => {
+    const orden = ordenSimple('ORD-WAF');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) return { data: '<html>Access denied</html>' };
+      return { data: {} };
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await syncMlToWc(db, CFG);
+    errSpy.mockRestore();
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-WAF');
+    expect(pedido.wc_order_id).toBe(0);
+    expect(pedido.retenido_en).toBeTruthy();
+  }, 30000);
+
+  // Hallazgo #3: sin paginar, con >100 pedidos nuevos en la ventana el pedido creado no
+  // aparecia en la unica pagina consultada -> falso negativo -> duplicado.
+  it('pagina la verificacion: encuentra el pedido aunque este en la 2da pagina', async () => {
+    const orden = ordenSimple('ORD-PAG');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    const pagina1 = Array.from({ length: 100 }, (_, k) => ({ id: 1000 + k, meta_data: [] }));
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        expect(path).toContain('after=');
+        if (path.includes('&page=1&')) return { data: pagina1 };
+        return { data: [{ id: 66543, meta_data: [{ key: '_ml_order_id', value: 'ORD-PAG' }] }] };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-PAG');
+    expect(pedido.wc_order_id).toBe(66543);
+    expect(pedido.retenido_en).toBeNull();
   }, 30000);
 });
