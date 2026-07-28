@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { inventarioRouter, looksLikeEan, productoEnAlcance, productoEnAlcanceOr, parseLista } from '../routes/inventario.js';
+import { inventarioRouter, looksLikeEan, productoEnAlcance, productoEnAlcanceOr, parseLista, parseSeleccionQuery } from '../routes/inventario.js';
 
 vi.mock('../lib/wooStock.js', async () => {
   const actual = await vi.importActual('../lib/wooStock.js');
@@ -973,5 +973,91 @@ describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
     const r = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
 
     expect(r.status).toBe(404);
+  });
+});
+
+describe('GET /api/inventario/alcance-opciones — conteo condicionado a la selección', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  function catalogoMixto(db) {
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Giro', categorias_json: '["Cascos"]' });
+    insertProducto(db, { id_woo: 3, sku: 'FB-3', marca: 'Maxxis', categorias_json: '["Cubiertas"]' });
+  }
+
+  it('sin query params mantiene el conteo global', async () => {
+    const db = openDb(TEST_DB);
+    catalogoMixto(db);
+
+    const r = await request(buildApp(db)).get('/api/inventario/alcance-opciones');
+
+    expect(r.body.categorias).toEqual([
+      { nombre: 'Cascos', productos: 2 },
+      { nombre: 'Cubiertas', productos: 1 },
+    ]);
+    expect(r.body.marcas).toEqual([
+      { nombre: 'Bell', productos: 1 },
+      { nombre: 'Giro', productos: 1 },
+      { nombre: 'Maxxis', productos: 1 },
+    ]);
+  });
+
+  it('con categoría elegida, las marcas que no intersectan quedan en 0 (chip deshabilitado, no oculto)', async () => {
+    const db = openDb(TEST_DB);
+    catalogoMixto(db);
+
+    const r = await request(buildApp(db)).get('/api/inventario/alcance-opciones?categorias=Cascos');
+
+    expect(r.body.marcas).toEqual([
+      { nombre: 'Bell', productos: 1 },
+      { nombre: 'Giro', productos: 1 },
+      { nombre: 'Maxxis', productos: 0 }, // no intersecta, pero sigue estando en la lista
+    ]);
+  });
+
+  it('con marca elegida, las categorías se condicionan a esa marca', async () => {
+    const db = openDb(TEST_DB);
+    catalogoMixto(db);
+
+    const r = await request(buildApp(db)).get('/api/inventario/alcance-opciones?marcas=Maxxis');
+
+    expect(r.body.categorias).toEqual([
+      { nombre: 'Cascos', productos: 0 },
+      { nombre: 'Cubiertas', productos: 1 },
+    ]);
+  });
+
+  it('acepta varias opciones separadas por | (formato del frontend) y por coma', async () => {
+    const db = openDb(TEST_DB);
+    catalogoMixto(db);
+
+    const pipe = await request(buildApp(db)).get('/api/inventario/alcance-opciones?categorias=Cascos|Cubiertas');
+    const coma = await request(buildApp(db)).get('/api/inventario/alcance-opciones?categorias=Cascos,Cubiertas');
+
+    const esperado = [
+      { nombre: 'Bell', productos: 1 },
+      { nombre: 'Giro', productos: 1 },
+      { nombre: 'Maxxis', productos: 1 },
+    ];
+    expect(pipe.body.marcas).toEqual(esperado);
+    expect(coma.body.marcas).toEqual(esperado);
+    expect(pipe.body.seleccion.categorias).toEqual(['Cascos', 'Cubiertas']);
+  });
+
+  it('el conteo condicionado coincide con el preview de esa combinación', async () => {
+    const db = openDb(TEST_DB);
+    catalogoMixto(db);
+
+    const op = await request(buildApp(db)).get('/api/inventario/alcance-opciones?categorias=Cascos');
+    const prev = await request(buildApp(db)).post('/api/inventario/alcance-preview').send({ categorias: ['Cascos'], marcas: ['Bell'] });
+
+    expect(op.body.marcas.find(m => m.nombre === 'Bell').productos).toBe(prev.body.productos);
+  });
+
+  it('parseSeleccionQuery normaliza array repetido, string con separadores y vacíos', () => {
+    expect(parseSeleccionQuery(['a|b', 'c'])).toEqual(['a', 'b', 'c']);
+    expect(parseSeleccionQuery('a,b|c')).toEqual(['a', 'b', 'c']);
+    expect(parseSeleccionQuery('')).toEqual([]);
+    expect(parseSeleccionQuery(undefined)).toEqual([]);
   });
 });

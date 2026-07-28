@@ -52,6 +52,14 @@ export function parseLista(valor) {
   return [...new Set(limpio)];
 }
 
+// Selección que llega por query string: array repetido (?marcas=a&marcas=b) o un
+// solo valor con separador `|` (el que usa el frontend) o coma.
+export function parseSeleccionQuery(valor) {
+  if (Array.isArray(valor)) return parseLista(valor.flatMap(v => String(v).split(/[|,]/)));
+  if (valor == null) return [];
+  return parseLista(String(valor).split(/[|,]/));
+}
+
 /**
  * ¿Este producto entra en el alcance elegido por el usuario para SU sesión?
  *
@@ -193,20 +201,39 @@ export function inventarioRouter(db, wooCfg) {
     return { ...sesion, categorias: parseLista(sesion.categorias), marcas: parseLista(sesion.marcas) };
   }
 
+  // Conteo CONDICIONADO a la selección actual: cuántos productos quedarían si se
+  // agregara esta opción a lo ya elegido en la OTRA dimensión. Reusa
+  // productoEnAlcance() (AND entre dimensiones), así un chip de marca que no
+  // intersecta con las categorías elegidas queda en 0 → el frontend lo deshabilita
+  // (nunca lo oculta). Sin selección en la otra dimensión el resultado es el
+  // conteo global de esa opción, igual que antes.
   router.get('/alcance-opciones', (req, res) => {
-    const rows = catalogoContable();
+    const catsSel = parseSeleccionQuery(req.query?.categorias);
+    const marcasSel = parseSeleccionQuery(req.query?.marcas);
+    const rows = catalogoContable().map(r => ({ cats: parseCategorias(r.categorias_json), marca: r.marca }));
+
     const categorias = new Map();
     const marcas = new Map();
     for (const r of rows) {
-      for (const c of parseCategorias(r.categorias_json)) {
-        if (c) categorias.set(c, (categorias.get(c) || 0) + 1);
-      }
-      if (r.marca) marcas.set(r.marca, (marcas.get(r.marca) || 0) + 1);
+      for (const c of r.cats) if (c) categorias.set(c, 0);
+      if (r.marca) marcas.set(r.marca, 0);
     }
+    for (const c of categorias.keys()) {
+      categorias.set(c, rows.filter(r => productoEnAlcance(r.cats, r.marca, [c], marcasSel)).length);
+    }
+    for (const m of marcas.keys()) {
+      marcas.set(m, rows.filter(r => productoEnAlcance(r.cats, r.marca, catsSel, [m])).length);
+    }
+
     const aLista = m => [...m.entries()]
       .map(([nombre, productos]) => ({ nombre, productos }))
       .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-    res.json({ ok: true, categorias: aLista(categorias), marcas: aLista(marcas) });
+    res.json({
+      ok: true,
+      categorias: aLista(categorias),
+      marcas: aLista(marcas),
+      seleccion: { categorias: catsSel, marcas: marcasSel },
+    });
   });
 
   // Preview del alcance ANTES de abrir la sesión. Usa productoEnAlcance() — la
