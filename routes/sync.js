@@ -24,6 +24,10 @@ const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // manual: se copia el ?code= de la barra de direcciones después de autorizar.
 const REDIRECT_URI = 'https://fusionbikes.com.ar/oauth-mercadolibre';
 const MAX_RETRIES = 5;
+// Marca que se deja en comprador_json de una reserva retenida por fail-closed (POST a Woo
+// fallido + verificacion no concluyente): impide que la limpieza de reservas abandonadas
+// la libere y deje pasar un reintento que podria duplicar el pedido.
+const RESERVA_FAIL_CLOSED = '__fail_closed_verificacion_woo__';
 // Delay entre llamadas a la API de ML. El límite de ML ronda 1000+ req/min;
 // 500ms (~120/min) es seguro y ~3x más rápido que el valor original de 1500ms,
 // clave para que la sincronización masiva inicial (miles de variaciones) termine.
@@ -196,6 +200,41 @@ async function _syncMlToWc(db, cfg) {
   }
 }
 
+// Backoff simple para la verificacion post-timeout contra Woo (sin libreria de
+// resiliencia: es un solo proceso con trafico bajo). 3 reintentos crecientes.
+const VERIF_WC_BACKOFF_MS = [500, 1500, 4000];
+
+/**
+ * Busca en WooCommerce un pedido con meta `_ml_order_id = orderId`.
+ * Devuelve el wc_order_id si existe, null si con certeza no existe.
+ * Lanza si NO se pudo verificar (todos los intentos fallaron) -> el llamador decide
+ * fail-closed.
+ */
+async function buscarPedidoWcPorMlOrderId(wooCfg, orderId) {
+  let ultimoError;
+  for (let intento = 0; intento <= VERIF_WC_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(VERIF_WC_BACKOFF_MS[intento - 1]);
+    try {
+      const resp = await wooFetch(
+        wooCfg,
+        `/orders?per_page=100&status=any&meta_key=_ml_order_id&meta_value=${encodeURIComponent(orderId)}`
+      );
+      const pedidos = Array.isArray(resp?.data) ? resp.data : [];
+      // No se confia en que Woo haya aplicado el filtro por meta: si no lo soporta, lo
+      // ignora y devuelve los ultimos pedidos igual. Se re-verifica el meta localmente,
+      // asi un filtro ignorado nunca produce un falso positivo (seria peor: daria por
+      // creado un pedido inexistente y la venta de ML nunca llegaria a Woo).
+      const match = pedidos.find(pedido =>
+        (pedido?.meta_data ?? []).some(m => m?.key === '_ml_order_id' && String(m?.value) === String(orderId))
+      );
+      return match ? match.id : null;
+    } catch (e) {
+      ultimoError = e;
+    }
+  }
+  throw ultimoError ?? new Error('verificacion en Woo fallo');
+}
+
 async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const orderId = String(orden.id);
   const items = orden.order_items ?? [];
@@ -207,8 +246,12 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   // proceso vivo pero lento (Woo lenta, reintentos) con uno muerto, y liberar su reserva
   // mientras sigue trabajando — eso reintroduce el duplicado que este fix corrige.
   db.prepare(`
-    DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0 AND creado_en < ?
+    DELETE FROM ordenes_ml_wc_pedidos
+    WHERE ml_order_id = ? AND wc_order_id = 0 AND comprador_json IS NULL AND creado_en < ?
   `).run(orderId, new Date(Date.now() - 60 * 60 * 1000).toISOString());
+  // `comprador_json IS NULL` distingue una reserva abandonada (siempre nace con NULL) de
+  // una retenida a proposito por fail-closed tras un POST no verificable (marcada con
+  // RESERVA_FAIL_CLOSED): esa ultima NO debe liberarse sola nunca, requiere revision.
 
   // Idempotencia: si ya se creó el pedido en WC para esta orden ML, no reprocesar.
   const yaCreado = db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(orderId);
@@ -327,10 +370,46 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       VALUES (?, ?, ?, ?, ?)
     `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), algunSinMapeo ? 'parcial' : 'ok', now());
   } catch (e) {
-    // No marcar como procesada — liberar la reserva para reintentar en el próximo ciclo.
-    // (Si el POST a Woo en realidad tuvo éxito pero la respuesta se perdió, esto podría
-    // reintentar y crear un duplicado — mismo riesgo que ya existía antes de este fix,
-    // no lo introduce; ver reintentos vía ordenes_ml_procesadas para ese caso aparte.)
+    // El POST pudo haber tenido EXITO en el servidor de Woo aunque la respuesta se haya
+    // perdido del lado del cliente (timeout de 20s de wooFetch, corte de red). Liberar la
+    // reserva sin mas haria que el proximo ciclo del cron reintente y cree un pedido
+    // DUPLICADO real. Antes de liberar, se verifica contra la API de Woo si ya existe un
+    // pedido con meta _ml_order_id.
+    let wcExistente;
+    try {
+      wcExistente = await buscarPedidoWcPorMlOrderId(wooCfg, orderId);
+    } catch (eVerif) {
+      // FAIL-CLOSED: no se pudo verificar (Woo caida/inaccesible). NO se libera la reserva:
+      // bloquear un reintento es preferible a arriesgar un pedido duplicado. Queda para
+      // intervencion manual (completar la fila con el wc_order_id real, o borrarla si se
+      // confirma que el pedido no existe).
+      db.prepare(
+        'UPDATE ordenes_ml_wc_pedidos SET comprador_json = ? WHERE ml_order_id = ? AND wc_order_id = 0'
+      ).run(RESERVA_FAIL_CLOSED, orderId);
+      const msg = `POST /orders fallo (${e.message}) y la verificacion en Woo tambien fallo (${eVerif.message}) - reserva RETENIDA (fail-closed), revisar manualmente si el pedido existe en WooCommerce`;
+      console.error(`syncMlToWc: orden ML ${orderId}: ${msg}`);
+      logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: msg });
+      return;
+    }
+
+    if (wcExistente) {
+      // El pedido SI se habia creado en Woo: se completa la reserva con el id real (mismo
+      // camino que el exito) en vez de dejar que el proximo ciclo cree un duplicado.
+      db.prepare(`
+        UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, comprador_json = ?
+        WHERE ml_order_id = ?
+      `).run(wcExistente, JSON.stringify(orden.buyer ?? null), orderId);
+      console.warn(`syncMlToWc: orden ML ${orderId}: el POST a Woo fallo (${e.message}) pero el pedido ${wcExistente} SI existe - reserva completada, sin duplicado.`);
+      logSync(db, { direccion: 'ml_wc', clave: orderId, cantNueva: wcExistente, estado: 'ok', error: `respuesta perdida (${e.message}), pedido verificado en Woo` });
+      db.prepare(`
+        INSERT OR IGNORE INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), algunSinMapeo ? 'parcial' : 'ok', now());
+      return;
+    }
+
+    // Verificacion concluyente: el pedido NO existe en Woo -> falla real. Se libera la
+    // reserva y el proximo ciclo puede reintentar sin riesgo de duplicado.
     db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(orderId);
     logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: e.message });
   }
