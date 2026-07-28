@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { inventarioRouter, looksLikeEan, productoEnAlcance, productoEnAlcanceOr, parseLista, parseSeleccionQuery } from '../routes/inventario.js';
+import { inventarioRouter, looksLikeEan, productoEnAlcance, productoEnAlcanceOr, parseLista, parseSeleccionQuery, migrarSesionesAlcanceMulti } from '../routes/inventario.js';
 
 vi.mock('../lib/wooStock.js', async () => {
   const actual = await vi.importActual('../lib/wooStock.js');
@@ -1059,5 +1059,86 @@ describe('GET /api/inventario/alcance-opciones — conteo condicionado a la sele
     expect(parseSeleccionQuery('a,b|c')).toEqual(['a', 'b', 'c']);
     expect(parseSeleccionQuery('')).toEqual([]);
     expect(parseSeleccionQuery(undefined)).toEqual([]);
+  });
+});
+
+describe('Hallazgos de revisión — cerrar-sin-stock, omisión y migración', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  async function sesionConSinStock(db) {
+    insertProducto(db, { id_woo: 1, sku: 'CON-1', marca: 'Bell', stock: 2 });
+    insertProducto(db, { id_woo: 2, sku: 'SIN-1', marca: 'Bell', stock: 0 });
+    insertProducto(db, { id_woo: 3, sku: 'SIN-2', marca: 'Bell', stock: 0 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    return crear.body.sesion.id;
+  }
+
+  it('fail-closed: un body vacío NO cierra nada en 0 (400)', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+
+    const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({});
+
+    expect(r.status).toBe(400);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
+  });
+
+  it('fail-closed: `{skus: []}` tampoco cierra nada (400)', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+
+    const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ skus: [] });
+
+    expect(r.status).toBe(400);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
+  });
+
+  it('volver a escanear un ítem cerrado en 0 lo deja de marcar como confirmado por omisión', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionConSinStock(db);
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+    expect(db.prepare("SELECT confirmado_por_omision c FROM inventario_conteos WHERE sesion_id=? AND sku='SIN-1'").get(id).c).toBe(1);
+
+    const esc = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'SIN-1' });
+
+    expect(esc.body.item.cantidad).toBe(1);
+    const fila = db.prepare("SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku='SIN-1'").get(id);
+    expect(fila.confirmado_por_omision).toBe(0);
+  });
+
+  it('la migración es atómica: si falla, la tabla original no se pierde', async () => {
+    const db = openDb(TEST_DB);
+    db.prepare('CREATE TABLE IF NOT EXISTS inventario_sesiones (' +
+      'id INTEGER PRIMARY KEY AUTOINCREMENT, usuario TEXT, categoria TEXT, marca TEXT,' +
+      "estado TEXT NOT NULL DEFAULT 'abierta', creado_en TEXT NOT NULL, confirmado_en TEXT)").run();
+    // usuario NULL legado: viola el NOT NULL de la tabla nueva → la migración falla entera.
+    db.prepare("INSERT INTO inventario_sesiones (usuario, categoria, estado, creado_en) VALUES (NULL,'Cascos','abierta',?)").run(now());
+
+    expect(() => migrarSesionesAlcanceMulti(db)).toThrow();
+
+    const filas = db.prepare('SELECT * FROM inventario_sesiones').all();
+    expect(filas).toHaveLength(1);
+    expect(filas[0].categoria).toBe('Cascos'); // sigue con el esquema viejo, sin datos perdidos
+    const sobrante = db.prepare("SELECT name FROM sqlite_master WHERE name='inventario_sesiones_mig'").get();
+    expect(sobrante).toBeUndefined();
+  });
+
+  it('GET /sesiones/:id resuelve nombre y diferencia de varios ítems en una sola consulta', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Casco A', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Casco B', marca: 'Bell', stock: 1 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-2' });
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: '1234567890128' });
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
+
+    expect(r.body.items).toHaveLength(3);
+    expect(r.body.items[0]).toMatchObject({ sku: 'FB-1', nombre: 'Casco A', stock_woo: 5, diferencia: -4 });
+    expect(r.body.items[1]).toMatchObject({ sku: 'FB-2', nombre: 'Casco B', stock_woo: 1, diferencia: 0 });
+    // ítem sin asociar: no está en el catálogo, se devuelve sin nombre ni diferencia
+    expect(r.body.items[2]).toMatchObject({ sku: null, nombre: null, stock_woo: null, diferencia: null });
   });
 });

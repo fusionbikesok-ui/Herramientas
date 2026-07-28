@@ -114,7 +114,9 @@ function tieneColumna(db, tabla, columna) {
  */
 export function migrarSesionesAlcanceMulti(db) {
   if (!tieneColumna(db, 'inventario_sesiones', 'categoria')) return false;
-  db.exec(`
+  // En transacción: si el rebuild falla a mitad (ej. una fila legada que viola una
+  // constraint nueva), se revierte entero y la tabla original queda intacta.
+  db.transaction(() => db.exec(`
     CREATE TABLE inventario_sesiones_mig (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       usuario        TEXT NOT NULL,
@@ -133,7 +135,7 @@ export function migrarSesionesAlcanceMulti(db) {
     DROP TABLE inventario_sesiones;
     ALTER TABLE inventario_sesiones_mig RENAME TO inventario_sesiones;
     CREATE INDEX IF NOT EXISTS idx_inv_sesiones_estado ON inventario_sesiones(estado);
-  `);
+  `))();
   return true;
 }
 
@@ -214,15 +216,21 @@ export function inventarioRouter(db, wooCfg) {
 
     const categorias = new Map();
     const marcas = new Map();
+    // Una sola pasada por el catálogo (se llama en cada toggle de chip). Equivale a
+    // productoEnAlcance(cats, marca, [opcion], selDeLaOtraDimension) para cada opción:
+    // con la otra dimensión vacía es el conteo global; con selección, manda el AND,
+    // y ahí el producto solo suma si además pasa el filtro de la otra dimensión.
+    const pasaMarcas = r => !marcasSel.length || productoEnAlcance(r.cats, r.marca, [], marcasSel);
+    const pasaCategorias = r => !catsSel.length || productoEnAlcance(r.cats, r.marca, catsSel, []);
     for (const r of rows) {
-      for (const c of r.cats) if (c) categorias.set(c, 0);
-      if (r.marca) marcas.set(r.marca, 0);
-    }
-    for (const c of categorias.keys()) {
-      categorias.set(c, rows.filter(r => productoEnAlcance(r.cats, r.marca, [c], marcasSel)).length);
-    }
-    for (const m of marcas.keys()) {
-      marcas.set(m, rows.filter(r => productoEnAlcance(r.cats, r.marca, catsSel, [m])).length);
+      const sumaCat = pasaMarcas(r);
+      for (const c of r.cats) {
+        if (!c) continue;
+        categorias.set(c, (categorias.get(c) || 0) + (sumaCat ? 1 : 0));
+      }
+      if (r.marca) {
+        marcas.set(r.marca, (marcas.get(r.marca) || 0) + (pasaCategorias(r) ? 1 : 0));
+      }
     }
 
     const aLista = m => [...m.entries()]
@@ -371,14 +379,22 @@ export function inventarioRouter(db, wooCfg) {
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
     asegurarAlcance(sesion);
 
-    const conteos = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? ORDER BY id').all(sesion.id);
+    // LEFT JOIN en una sola consulta: esta pantalla se refresca después de cada
+    // escaneo, no conviene compilar y correr un SELECT por ítem contado.
+    const conteos = db.prepare(`
+      SELECT t.*, p.sku AS prod_sku, p.stock AS prod_stock, p.nombre AS prod_nombre
+      FROM inventario_conteos t
+      LEFT JOIN catalogo_cache p ON p.sku = t.sku
+      WHERE t.sesion_id = ?
+      ORDER BY t.id
+    `).all(sesion.id);
     const items = conteos.map(c => {
-      const prod = c.sku ? db.prepare('SELECT stock, nombre FROM catalogo_cache WHERE sku=?').get(c.sku) : null;
+      const enCatalogo = c.prod_sku != null;
       return {
         id: c.id, ean: c.ean, sku: c.sku, cantidad: c.cantidad,
-        nombre: prod?.nombre || null,
-        stock_woo: prod ? prod.stock : null,
-        diferencia: prod ? c.cantidad - prod.stock : null,
+        nombre: c.prod_nombre || null,
+        stock_woo: enCatalogo ? c.prod_stock : null,
+        diferencia: enCatalogo ? c.cantidad - c.prod_stock : null,
         bloque: c.bloque || null,
         fuera_de_alcance: !!c.fuera_de_alcance,
         confirmado_por_omision: !!c.confirmado_por_omision,
@@ -453,7 +469,10 @@ export function inventarioRouter(db, wooCfg) {
     const existente = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
     let itemId;
     if (existente) {
-      db.prepare('UPDATE inventario_conteos SET cantidad=cantidad+1, actualizado_en=? WHERE id=?').run(now(), existente.id);
+      // Volver a escanear una fila que se había cerrado en 0 por omisión la
+      // convierte en un conteo real: deja de estar "confirmada por omisión".
+      db.prepare('UPDATE inventario_conteos SET cantidad=cantidad+1, confirmado_por_omision=0, actualizado_en=? WHERE id=?')
+        .run(now(), existente.id);
       itemId = existente.id;
     } else {
       itemId = db.prepare(
@@ -539,8 +558,16 @@ export function inventarioRouter(db, wooCfg) {
     if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
     asegurarAlcance(sesion);
 
+    // Fail-closed: esto termina escribiendo stock 0 en Woo al confirmar, así que
+    // exige intención EXPLÍCITA. Un body vacío o `{skus:[]}` no cierra nada.
     const pedidos = parseLista(req.body?.skus);
-    const todos = req.body?.todos === true || (!pedidos.length && req.body?.todos !== false);
+    const todos = req.body?.todos === true;
+    if (!todos && !pedidos.length) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Indicá `todos: true` o una lista `skus` no vacía para cerrar en 0.',
+      });
+    }
 
     const candidatos = db.prepare(`
       SELECT a.sku FROM inventario_sesion_alcance a

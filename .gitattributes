@@ -1,0 +1,2 @@
+# Todo el repo trabaja en LF (VPS Linux); evita que un editor Windows meta CRLF.
+* text=auto eol=lf

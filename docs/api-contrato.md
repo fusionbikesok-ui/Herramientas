@@ -155,10 +155,13 @@ bloquea el flujo y no cambia nada de la escritura a Woo.
 ### POST /api/inventario/sesiones/:id/cerrar-sin-stock
 Cierra en 0 los pendientes del bloque `sin_stock`. No es automático: se ofrece al cerrar
 la sesión y el usuario elige.
-Request: `{ "todos": true }` o `{ "skus": ["SIN-2"] }`.
+Request: `{ "todos": true }` o `{ "skus": ["SIN-2"] }` — **intención explícita obligatoria**:
+un body vacío o `{ "skus": [] }` responde `400` y no cierra nada (fail-closed, porque esto
+termina escribiendo stock 0 en Woo al confirmar).
 Respuesta: `{ ok, cerrados: 2, skus: [...] }`.
 Las filas creadas quedan con `cantidad=0`, `bloque='sin_stock'` y
-`confirmado_por_omision=1` (auditoría). Nunca pisa un conteo hecho a mano (`INSERT OR
+`confirmado_por_omision=1` (auditoría; se resetea a 0 si después se escanea o se edita
+la cantidad a mano). Nunca pisa un conteo hecho a mano (`INSERT OR
 IGNORE`) ni toca el bloque con-stock. `400` si la sesión no está abierta.
 
 ### POST /api/inventario/sesiones/:id/confirmar
