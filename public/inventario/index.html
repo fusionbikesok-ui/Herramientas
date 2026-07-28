@@ -68,6 +68,89 @@
 
   .placeholder{color:var(--muted);font-size:13px;padding:20px;text-align:center;}
 
+  /* ===== Stepper (patrón ya existente en public/stock — se reusa, no se inventa) ===== */
+  .stepper{display:flex;align-items:center;gap:8px;margin:0 0 18px;flex-wrap:wrap;}
+  .stepper-item{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--muted);}
+  .stepper-dot{width:22px;height:22px;border-radius:50%;background:var(--dark3);border:1px solid var(--border2);
+       display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;}
+  .stepper-item.done .stepper-dot{background:var(--green);border-color:var(--green);color:#06231A;}
+  .stepper-item.current .stepper-dot{background:var(--blue);border-color:var(--blue);color:#06131C;box-shadow:0 0 0 4px var(--blue-bg);}
+  .stepper-item.current{color:var(--white);}
+  .stepper-item.done{color:var(--gray);}
+  .stepper-line{width:32px;height:1px;background:var(--border2);flex-shrink:0;}
+
+  /* ===== P1 · Alcance ===== */
+  .alcance-grid{display:grid;grid-template-columns:1fr;gap:16px;align-items:start;}
+  .chips-multi{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;}
+  .chip-multi{min-height:var(--tap-min);display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;
+       padding:7px 13px;border-radius:var(--radius-pill);background:var(--chip-bg);border:1px solid var(--chip-bd);
+       color:var(--chip-txt);cursor:pointer;font-family:inherit;-webkit-appearance:none;appearance:none;}
+  .chip-multi[aria-pressed="true"]{background:var(--chip-on-bg);border-color:var(--chip-on-bd);color:var(--chip-on-txt);}
+  .chip-multi[disabled]{opacity:.55;cursor:not-allowed;}
+  .chip-multi .cnt{font-variant-numeric:tabular-nums;font-weight:800;}
+  .dim-vacia{font-size:12px;color:var(--muted);padding:6px 2px;}
+  .dim-resumen{font-size:12px;color:var(--muted);margin-top:8px;}
+
+  .preview{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;}
+  .preview-nums{display:flex;gap:14px;}
+  .preview-num{flex:1;min-width:0;}
+  .preview-num .n{font-size:32px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;color:var(--txt);}
+  .preview-num .l{font-size:11px;color:var(--muted);margin-top:4px;text-transform:uppercase;letter-spacing:.04em;}
+  .preview-split{margin-top:14px;display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted);}
+  .split-row{display:flex;align-items:center;gap:8px;}
+  .split-row b{font-variant-numeric:tabular-nums;color:var(--txt);}
+  .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
+  .dot.con{background:var(--success);}
+  .dot.sin{background:var(--muted);}
+  .preview .btn{margin-top:14px;}
+
+  @media(min-width:900px){
+    main{max-width:1100px;}
+    .alcance-grid{grid-template-columns:1fr 380px;}
+    .preview-wrap{position:sticky;top:88px;}
+  }
+  @media(max-width:899px){
+    .preview-wrap{position:sticky;bottom:0;z-index:6;background:rgba(12,15,22,.96);backdrop-filter:blur(10px);
+         border-top:1px solid var(--line);margin:0 -12px;padding:8px 12px calc(6px + env(safe-area-inset-bottom));}
+    .preview{border:none;background:none;padding:0;border-radius:0;}
+    .preview-nums{gap:12px;align-items:baseline;}
+    .preview-num{display:flex;align-items:baseline;gap:6px;}
+    .preview-num .n{font-size:20px;}
+    .preview-num .l{margin-top:0;}
+    .preview-split{margin-top:4px;flex-direction:row;gap:14px;font-size:12px;}
+    .preview .btn{margin-top:8px;}
+  }
+
+  /* ===== P2 · Bloques de conteo ===== */
+  .banner-escaneo{display:none;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:700;margin-bottom:10px;
+       border:1px solid var(--warning-bd);background:var(--warning-bg);color:var(--warning);}
+  .banner-escaneo.on{display:block;}
+  .bloque-titulo{font-size:13px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px;}
+  .collapse{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-top:14px;}
+  .collapse.llamador{border-color:var(--accent);background:var(--accent-dim);}
+  .collapse-head{width:100%;min-height:var(--tap-comfort);display:flex;align-items:center;gap:8px;padding:10px 14px;
+       background:none;border:none;color:var(--txt);font:inherit;font-weight:700;font-size:14px;cursor:pointer;text-align:left;}
+  .collapse-head .caret{display:inline-block;transition:transform .15s;}
+  .collapse-head[aria-expanded="true"] .caret{transform:rotate(90deg);}
+  .collapse-body{padding:0 14px 14px;}
+  .eleccion{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;}
+  .eleccion .btn{margin-top:0;}
+
+  /* Barra lateral semántica (3px) — SIEMPRE acompañada de glifo + texto, nunca color solo. */
+  .fila-item[data-estado],.fila-pendiente[data-estado]{border-left-width:3px;border-left-style:solid;}
+  [data-estado="coincide"]{border-left-color:var(--success);}
+  [data-estado="falta"]{border-left-color:var(--diff-neg);}
+  [data-estado="sobra"]{border-left-color:var(--diff-pos);}
+  [data-estado="no_identificado"]{border-left-color:var(--warning);}
+  [data-estado="fuera_de_alcance"]{border-left-color:var(--warning);}
+  [data-estado="pendiente"]{border-left-color:var(--state-pending);}
+  .estado-glifo{font-weight:900;margin-right:4px;}
+  .estado-txt{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);}
+
+  @media (prefers-reduced-motion: reduce){
+    .collapse-head .caret,.chip-guardado,.sheet,.cam-toast{transition:none;}
+  }
+
   /* ----- Vista Conteo ----- */
   .conteo-barra{position:sticky;top:0;background:rgba(12,15,22,.96);backdrop-filter:blur(10px);z-index:5;
        display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0 10px;margin:-14px 0 10px;}
@@ -237,21 +320,52 @@
 
   <!-- Vista 2: Elegir alcance -->
   <div class="vista" id="vista-alcance">
+    <div class="stepper" aria-label="Progreso del conteo">
+      <div class="stepper-item current" aria-current="step"><span class="stepper-dot">1</span> Alcance</div>
+      <div class="stepper-line"></div>
+      <div class="stepper-item"><span class="stepper-dot">2</span> Conteo</div>
+      <div class="stepper-line"></div>
+      <div class="stepper-item"><span class="stepper-dot">3</span> Revisión</div>
+    </div>
     <h1>Elegir alcance</h1>
-    <p style="color:var(--muted);font-size:13px;">Elegí categoría y/o marca para acotar qué vas a contar.</p>
+    <p style="color:var(--muted);font-size:13px;margin:0 0 14px;">Elegí una o varias categorías y/o marcas para acotar qué vas a contar.</p>
 
-    <label for="alcance-categoria">Categoría</label>
-    <input type="text" id="alcance-categoria" list="alcance-categorias-list" placeholder="Ej: Cascos" autocomplete="off">
-    <datalist id="alcance-categorias-list"></datalist>
+    <div class="alcance-grid">
+      <div>
+        <div class="card">
+          <label for="buscar-categorias">Categorías</label>
+          <input type="text" id="buscar-categorias" placeholder="Buscar categoría…" autocomplete="off">
+          <div class="chips-multi" id="chips-categorias" role="group" aria-label="Categorías del alcance"></div>
+          <div class="dim-resumen" id="resumen-categorias"></div>
+        </div>
 
-    <label for="alcance-marca">Marca</label>
-    <input type="text" id="alcance-marca" list="alcance-marcas-list" placeholder="Ej: Bell" autocomplete="off">
-    <datalist id="alcance-marcas-list"></datalist>
+        <div class="card">
+          <label for="buscar-marcas">Marcas</label>
+          <input type="text" id="buscar-marcas" placeholder="Buscar marca…" autocomplete="off">
+          <div class="chips-multi" id="chips-marcas" role="group" aria-label="Marcas del alcance"></div>
+          <div class="dim-resumen" id="resumen-marcas"></div>
+        </div>
 
-    <div id="alcance-aviso"></div>
+        <div id="alcance-aviso"></div>
+        <button class="btn secondary" id="alcance-cancelar">Cancelar</button>
+      </div>
 
-    <button class="btn primary" id="alcance-empezar" disabled style="margin-top:18px;">Empezar a contar</button>
-    <button class="btn secondary" id="alcance-cancelar">Cancelar</button>
+      <div class="preview-wrap">
+        <div class="preview">
+          <div id="alcance-preview" aria-live="polite">
+            <div class="preview-nums">
+              <div class="preview-num"><div class="n" id="prev-productos">0</div><div class="l">Productos</div></div>
+              <div class="preview-num"><div class="n" id="prev-unidades">0</div><div class="l">Unidades esperadas</div></div>
+            </div>
+            <div class="preview-split">
+              <span class="split-row"><span class="dot con"></span><span>Con stock: <b id="prev-con">0</b></span></span>
+              <span class="split-row"><span class="dot sin"></span><span>Sin stock: <b id="prev-sin">0</b></span></span>
+            </div>
+          </div>
+          <button class="btn primary" id="alcance-empezar" disabled>Empezar conteo</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Vista 3: Conteo -->
@@ -260,6 +374,8 @@
       <span class="txt"><span class="led" id="conteo-led"></span><span id="conteo-titulo">Contando</span></span>
       <span class="chip-guardado" id="conteo-guardado">Guardado</span>
     </div>
+
+    <div class="banner-escaneo" id="banner-escaneo" role="status" aria-live="polite"></div>
 
     <input id="scan" aria-label="Escanear código EAN o SKU" inputmode="none" autocomplete="off" autocorrect="off"
            autocapitalize="off" spellcheck="false" autofocus placeholder="Escaneá un código (EAN o SKU)…">
@@ -272,8 +388,8 @@
     </div>
 
     <div class="chips-filtro">
-      <button type="button" class="chip-filtro" id="filtro-pendientes" data-filtro="pendientes">Pendientes</button>
-      <button type="button" class="chip-filtro on" id="filtro-contados" data-filtro="contados">Contados</button>
+      <button type="button" class="chip-filtro on" id="filtro-pendientes" data-filtro="pendientes">Pendientes</button>
+      <button type="button" class="chip-filtro" id="filtro-contados" data-filtro="contados">Contados</button>
       <button type="button" class="chip-filtro" id="filtro-todos" data-filtro="todos">Todos</button>
       <button class="btn-orden" id="btn-orden-diff">Por diferencia</button>
     </div>
@@ -404,10 +520,26 @@
     return 'hace ' + d + ' día' + (d === 1 ? '' : 's');
   }
 
+  // Tolera la forma vieja (categoria/marca string) y la nueva (categorias/marcas array).
+  function listaAlcance(valor){
+    if(valor == null) return [];
+    if(Array.isArray(valor)) return valor.filter(Boolean).map(String);
+    if(typeof valor === 'string'){
+      var s = valor.trim();
+      if(!s) return [];
+      if(s.charAt(0) === '['){ try { return listaAlcance(JSON.parse(s)); } catch(e){ return [s]; } }
+      return [s];
+    }
+    return [];
+  }
+
   function alcanceTexto(sesion){
+    if(!sesion) return '(sin alcance)';
+    var cats = listaAlcance(sesion.categorias != null ? sesion.categorias : sesion.categoria);
+    var mrcs = listaAlcance(sesion.marcas != null ? sesion.marcas : sesion.marca);
     var partes = [];
-    if(sesion.categoria) partes.push(sesion.categoria);
-    if(sesion.marca) partes.push(sesion.marca);
+    if(cats.length) partes.push(cats.join(', '));
+    if(mrcs.length) partes.push(mrcs.join(', '));
     return partes.length ? partes.join(' / ') : '(sin categoría ni marca)';
   }
 
@@ -471,45 +603,195 @@
     }
   });
 
-  // ----- Vista Elegir alcance -----
-  var alcanceCategoria = document.getElementById('alcance-categoria');
-  var alcanceMarca = document.getElementById('alcance-marca');
+  // ----- Vista Elegir alcance (chips multi-select buscables + preview en vivo) -----
+  var buscarCategorias = document.getElementById('buscar-categorias');
+  var buscarMarcas = document.getElementById('buscar-marcas');
+  var chipsCategorias = document.getElementById('chips-categorias');
+  var chipsMarcas = document.getElementById('chips-marcas');
+  var resumenCategorias = document.getElementById('resumen-categorias');
+  var resumenMarcas = document.getElementById('resumen-marcas');
   var alcanceEmpezar = document.getElementById('alcance-empezar');
   var alcanceAviso = document.getElementById('alcance-aviso');
-  var alcanceOpcionesCargadas = false;
+  var prevProductos = document.getElementById('prev-productos');
+  var prevUnidades = document.getElementById('prev-unidades');
+  var prevCon = document.getElementById('prev-con');
+  var prevSin = document.getElementById('prev-sin');
 
-  function actualizarBotonEmpezar(){
-    var cat = alcanceCategoria.value.trim();
-    var marca = alcanceMarca.value.trim();
-    alcanceEmpezar.disabled = !cat && !marca;
+  var UMBRAL_ALCANCE_GRANDE = 300;
+  var opciones = { categorias: [], marcas: [] };
+  var selCategorias = [];
+  var selMarcas = [];
+  var previewActual = null;
+
+  function normOpcion(o){
+    if(o == null) return null;
+    if(typeof o === 'string') return { nombre: o, productos: null };
+    var nombre = o.nombre != null ? o.nombre : (o.valor != null ? o.valor : (o.categoria != null ? o.categoria : o.marca));
+    var prod = o.productos != null ? o.productos
+      : (o.total != null ? o.total : (o.count != null ? o.count : o.n));
+    if(nombre == null) return null;
+    return { nombre: String(nombre), productos: (prod == null ? null : Number(prod)) };
   }
-  alcanceCategoria.addEventListener('input', actualizarBotonEmpezar);
-  alcanceMarca.addEventListener('input', actualizarBotonEmpezar);
+  function normOpciones(arr){
+    return (Array.isArray(arr) ? arr : []).map(normOpcion).filter(Boolean);
+  }
+
+  function toggleSeleccion(lista, valor){
+    var i = lista.indexOf(valor);
+    if(i === -1) lista.push(valor); else lista.splice(i, 1);
+  }
+
+  function renderChips(cont, lista, seleccion, filtro, dimension){
+    var q = String(filtro || '').trim().toLowerCase();
+    var vis = lista.filter(function(o){ return !q || o.nombre.toLowerCase().indexOf(q) !== -1; });
+    if(!vis.length){
+      cont.innerHTML = '<p class="dim-vacia">' + (lista.length ? 'Sin resultados para esa búsqueda.' : 'Sin opciones disponibles.') + '</p>';
+      return;
+    }
+    cont.innerHTML = vis.map(function(o){
+      var on = seleccion.indexOf(o.nombre) !== -1;
+      // N=0 → no interseca con el resto del alcance: se deshabilita, nunca se oculta.
+      var cero = !on && o.productos === 0;
+      var titulo = 'Ninguna ' + dimension + ' con productos al combinarla con el alcance ya elegido';
+      return '<button type="button" class="chip-multi" data-valor="' + esc(o.nombre) + '"' +
+        ' aria-pressed="' + (on ? 'true' : 'false') + '"' +
+        (cero ? ' disabled title="' + esc(titulo) + '"' : '') + '>' +
+        '<span>' + esc(o.nombre) + '</span>' +
+        (o.productos != null ? '<span class="cnt">×' + n(o.productos) + '</span>' : '') +
+      '</button>';
+    }).join('');
+    cont.querySelectorAll('.chip-multi').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        toggleSeleccion(seleccion, btn.getAttribute('data-valor'));
+        renderAlcance();
+        refrescarOpciones();
+        pedirPreview();
+      });
+    });
+  }
+
+  function renderAlcance(){
+    renderChips(chipsCategorias, opciones.categorias, selCategorias, buscarCategorias.value, 'categoría');
+    renderChips(chipsMarcas, opciones.marcas, selMarcas, buscarMarcas.value, 'marca');
+    resumenCategorias.textContent = selCategorias.length ? selCategorias.length + ' seleccionada(s)' : 'Ninguna seleccionada (todas)';
+    resumenMarcas.textContent = selMarcas.length ? selMarcas.length + ' seleccionada(s)' : 'Ninguna seleccionada (todas)';
+    actualizarCta();
+  }
+
+  function actualizarCta(){
+    var haySeleccion = selCategorias.length > 0 || selMarcas.length > 0;
+    if(previewActual){
+      prevProductos.textContent = n(previewActual.productos);
+      prevUnidades.textContent = n(previewActual.unidades);
+      prevCon.textContent = n(previewActual.con_stock);
+      prevSin.textContent = n(previewActual.sin_stock);
+      alcanceEmpezar.textContent = 'Empezar conteo (' + n(previewActual.productos) + ' productos) →';
+      alcanceEmpezar.disabled = !haySeleccion || previewActual.productos === 0;
+    } else {
+      prevProductos.textContent = '—';
+      prevUnidades.textContent = '—';
+      prevCon.textContent = '—';
+      prevSin.textContent = '—';
+      alcanceEmpezar.textContent = 'Empezar a contar';
+      alcanceEmpezar.disabled = !haySeleccion;
+    }
+    renderAvisoAlcanceGrande();
+  }
+
+  function renderAvisoAlcanceGrande(){
+    var el = document.getElementById('aviso-alcance-grande');
+    // El umbral lo manda el backend (`umbral`/`supera_umbral`); si no viene, se usa el local.
+    var grande = !!previewActual && (previewActual.supera_umbral != null
+      ? previewActual.supera_umbral
+      : previewActual.productos > UMBRAL_ALCANCE_GRANDE);
+    if(grande && !el){
+      var div = document.createElement('div');
+      div.id = 'aviso-alcance-grande';
+      div.className = 'aviso';
+      div.setAttribute('role', 'status');
+      alcanceAviso.appendChild(div);
+      el = div;
+    }
+    if(!grande){ if(el) el.remove(); return; }
+    el.innerHTML = '<b>Alcance grande.</b> Son ' + n(previewActual.productos) +
+      ' productos (más de ' + n(previewActual.umbral || UMBRAL_ALCANCE_GRANDE) + '). Podés seguir igual, pero el conteo va a llevar bastante.';
+  }
+
+  function paramsSeleccion(){
+    var qs = [];
+    if(selCategorias.length) qs.push('categorias=' + encodeURIComponent(selCategorias.join('|')));
+    if(selMarcas.length) qs.push('marcas=' + encodeURIComponent(selMarcas.join('|')));
+    return qs.length ? '?' + qs.join('&') : '';
+  }
+
+  // Los conteos por chip se piden con la selección actual: el backend devuelve cuántos
+  // productos quedan por opción DADA esa selección (los que dan 0 se deshabilitan).
+  // Si el backend ignora los parámetros, devuelve los conteos globales y no se
+  // deshabilita nada — degradación aceptable, nunca se ocultan opciones.
+  var refrescarOpciones = debounce(function(){
+    fetch('/api/inventario/alcance-opciones' + paramsSeleccion())
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok) return;
+        opciones.categorias = normOpciones(j.categorias);
+        opciones.marcas = normOpciones(j.marcas);
+        renderAlcance();
+      }).catch(function(){});
+  }, 220);
+
+  var pedirPreview = debounce(function(){
+    if(!selCategorias.length && !selMarcas.length){ previewActual = null; actualizarCta(); return; }
+    fetch('/api/inventario/alcance-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categorias: selCategorias, marcas: selMarcas })
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok){ previewActual = null; actualizarCta(); return; }
+      var con = j.con_stock, sin = j.sin_stock;
+      previewActual = {
+        productos: Number(j.productos != null ? j.productos : (j.total_productos != null ? j.total_productos : 0)) || 0,
+        unidades: Number(j.unidades_esperadas != null ? j.unidades_esperadas : (j.unidades != null ? j.unidades : 0)) || 0,
+        con_stock: Number((con && typeof con === 'object') ? (con.productos != null ? con.productos : con.total) : con) || 0,
+        sin_stock: Number((sin && typeof sin === 'object') ? (sin.productos != null ? sin.productos : sin.total) : sin) || 0,
+        umbral: Number(j.umbral) || UMBRAL_ALCANCE_GRANDE,
+        supera_umbral: j.supera_umbral != null ? !!j.supera_umbral : null
+      };
+      actualizarCta();
+    }).catch(function(){ previewActual = null; actualizarCta(); });
+  }, 220);
+
+  buscarCategorias.addEventListener('input', function(){ renderAlcance(); });
+  buscarMarcas.addEventListener('input', function(){ renderAlcance(); });
 
   function cargarAlcance(){
     alcanceAviso.innerHTML = '';
-    if(alcanceOpcionesCargadas) return;
-    fetch('/api/inventario/alcance-opciones').then(function(r){ return r.json(); }).then(function(j){
-      if(!j || !j.ok) return;
-      alcanceOpcionesCargadas = true;
-      var catList = document.getElementById('alcance-categorias-list');
-      var marcaList = document.getElementById('alcance-marcas-list');
-      catList.innerHTML = (j.categorias || []).map(function(c){ return '<option value="' + esc(c) + '">'; }).join('');
-      marcaList.innerHTML = (j.marcas || []).map(function(m){ return '<option value="' + esc(m) + '">'; }).join('');
-    }).catch(function(){});
+    fetch('/api/inventario/alcance-opciones' + paramsSeleccion())
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok) return;
+        opciones.categorias = normOpciones(j.categorias);
+        opciones.marcas = normOpciones(j.marcas);
+        renderAlcance();
+      }).catch(function(){ renderAlcance(); });
+    renderAlcance();
+    pedirPreview();
   }
 
   function limpiarAlcanceForm(){
-    alcanceCategoria.value = '';
-    alcanceMarca.value = '';
+    selCategorias = [];
+    selMarcas = [];
+    buscarCategorias.value = '';
+    buscarMarcas.value = '';
+    previewActual = null;
     alcanceAviso.innerHTML = '';
-    actualizarBotonEmpezar();
+    renderAlcance();
+    refrescarOpciones();
   }
 
   function mostrarAvisoAlcance(mensaje, ocupadoPor, categoria, marca){
+    var detalle = listaAlcance(categoria).concat(listaAlcance(marca)).join(', ');
     var texto = ocupadoPor
-      ? 'El alcance se cruza con la sesión de <b>' + esc(ocupadoPor) + '</b>' +
-        ((categoria || marca) ? ' (' + esc([categoria, marca].filter(Boolean).join('/')) + ').' : '.')
+      ? 'El alcance se cruza con la sesión de <b>' + esc(ocupadoPor) + '</b>' + (detalle ? ' (' + esc(detalle) + ').' : '.')
       : esc(mensaje || 'No se pudo crear la sesión.');
     alcanceAviso.innerHTML =
       '<div class="aviso">' + texto +
@@ -523,20 +805,26 @@
   }
 
   alcanceEmpezar.addEventListener('click', function(){
-    var categoria = alcanceCategoria.value.trim();
-    var marca = alcanceMarca.value.trim();
     alcanceAviso.innerHTML = '';
     fetch('/api/inventario/sesiones', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ categoria: categoria, marca: marca })
+      // categoria/marca van también en singular por compatibilidad con la forma vieja.
+      body: JSON.stringify({
+        categorias: selCategorias,
+        marcas: selMarcas,
+        categoria: selCategorias[0] || '',
+        marca: selMarcas[0] || ''
+      })
     }).then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
       .then(function(res){
         if(res.status === 200 && res.body.ok){
           state.sesion = res.body.sesion;
           mostrarVista('conteo');
         } else if(res.status === 409){
-          mostrarAvisoAlcance(res.body.error, res.body.ocupada_por, res.body.categoria, res.body.marca);
+          mostrarAvisoAlcance(res.body.error, res.body.ocupada_por,
+            res.body.categorias != null ? res.body.categorias : res.body.categoria,
+            res.body.marcas != null ? res.body.marcas : res.body.marca);
         } else {
           mostrarAvisoAlcance(res.body && res.body.error);
         }
@@ -562,7 +850,9 @@
   var btnOrdenDiff = document.getElementById('btn-orden-diff');
 
   var conteoData = { items: [], pendientes: [] };
-  var filtroActivo = 'contados';
+  var filtroActivo = 'pendientes';
+  var sinStockAbierto = false;
+  var autoAbiertoSinStock = false;
   var ordenPorDiferencia = false;
   var seleccionConteo = new Set();
   var chkTodoConteo = document.getElementById('chk-todo-conteo');
@@ -629,24 +919,18 @@
     contPendientes.textContent = n(pendientes.length);
     contDiferencia.textContent = n(contados.filter(function(i){ return i.diferencia !== 0 && i.diferencia != null; }).length);
 
-    var lista = filtroActivo === 'pendientes' ? pendientes.slice()
-      : filtroActivo === 'contados' ? contados.slice()
-      : contados.slice(); // 'todos': mostramos contados + pendientes debajo
-
-    if(filtroActivo !== 'pendientes' && ordenPorDiferencia){
-      lista.sort(function(a, b){ return Math.abs(b.diferencia || 0) - Math.abs(a.diferencia || 0); });
-    }
-
     var html = '';
-    if(filtroActivo === 'pendientes'){
-      if(!lista.length){ html = '<p class="empty">No hay pendientes en este alcance.</p>'; }
-      lista.forEach(function(p){ html += filaPendienteHtml(p); });
-    } else {
-      if(!lista.length){ html = '<p class="empty">Todavía no contaste nada.</p>'; }
-      lista.forEach(function(i){ html += filaItemHtml(i); });
-      if(filtroActivo === 'todos'){
-        pendientes.forEach(function(p){ html += filaPendienteHtml(p); });
+    if(filtroActivo !== 'contados'){
+      html += bloquesPendientesHtml(pendientes);
+    }
+    if(filtroActivo !== 'pendientes'){
+      var lista = contados.slice();
+      if(ordenPorDiferencia){
+        lista.sort(function(a, b){ return Math.abs(b.diferencia || 0) - Math.abs(a.diferencia || 0); });
       }
+      if(filtroActivo === 'todos') html += '<h2 class="bloque-titulo">Contados (' + n(lista.length) + ')</h2>';
+      if(!lista.length){ html += '<p class="empty">Todavía no contaste nada.</p>'; }
+      lista.forEach(function(i){ html += filaItemHtml(i); });
     }
     conteoLista.innerHTML = html;
     bindFilaEventos();
@@ -670,6 +954,77 @@
   function diffClase(d){ return d > 0 ? 'pos' : d < 0 ? 'neg' : 'zero'; }
   function diffTexto(d){ return d > 0 ? '+' + d : d === 0 ? '0' : String(d); }
 
+  // ----- Estados semánticos de fila (color SIEMPRE acompañado de glifo + texto) -----
+  var ESTADOS = {
+    coincide:         { glifo: '=', txt: 'Coincide' },
+    falta:            { glifo: '−', txt: 'Falta' },
+    sobra:            { glifo: '+', txt: 'Sobra' },
+    no_identificado:  { glifo: '⚠', txt: 'Sin asociar' },
+    fuera_de_alcance: { glifo: '⚑', txt: 'Fuera de alcance' },
+    pendiente:        { glifo: '○', txt: 'Pendiente' }
+  };
+
+  function estadoItem(i){
+    if(i.fuera_de_alcance) return 'fuera_de_alcance';
+    if(!i.sku) return 'no_identificado';
+    if(i.diferencia == null) return 'pendiente';
+    if(i.diferencia > 0) return 'sobra';
+    if(i.diferencia < 0) return 'falta';
+    return 'coincide';
+  }
+
+  function estadoHtml(clave){
+    var e = ESTADOS[clave] || ESTADOS.pendiente;
+    return '<span class="estado-glifo" aria-hidden="true">' + e.glifo + '</span><span class="estado-txt">' + esc(e.txt) + '</span>';
+  }
+
+  // El bloque se congela en el backend (campo `bloque`); si aún no viene, se deduce del stock.
+  function bloqueDe(p){
+    if(p.bloque === 'con_stock' || p.bloque === 'sin_stock') return p.bloque;
+    var st = p.stock != null ? p.stock : p.stock_woo;
+    return (Number(st) > 0) ? 'con_stock' : 'sin_stock';
+  }
+
+  function bloquesPendientesHtml(pendientes){
+    var con = pendientes.filter(function(p){ return bloqueDe(p) === 'con_stock'; });
+    var sin = pendientes.filter(function(p){ return bloqueDe(p) === 'sin_stock'; });
+    var html = '<h2 class="bloque-titulo">Pendientes · con stock (' + n(con.length) + ')</h2>';
+    if(!con.length){
+      html += '<p class="empty">No quedan pendientes con stock en este alcance.</p>';
+    } else {
+      con.forEach(function(p){ html += filaPendienteHtml(p); });
+    }
+
+    // Cuando el bloque con-stock llega a 0, el colapsable se vuelve "llamador" y se abre
+    // solo una vez (después respeta lo que el usuario haya decidido).
+    var llamador = con.length === 0 && sin.length > 0;
+    if(llamador && !autoAbiertoSinStock){
+      autoAbiertoSinStock = true;
+      sinStockAbierto = true;
+      mostrarBannerEscaneo('Terminaste los productos con stock. Quedan ' + n(sin.length) + ' sin stock en sistema: decidí si los cerrás en 0 o los contás.');
+    }
+    html += '<div class="collapse' + (llamador ? ' llamador' : '') + '" id="collapse-sinstock">' +
+      '<button type="button" class="collapse-head" id="collapse-sinstock-head"' +
+        ' aria-expanded="' + (sinStockAbierto ? 'true' : 'false') + '" aria-controls="collapse-sinstock-body">' +
+        '<span class="caret" aria-hidden="true">▸</span>' +
+        '<span>Sin stock en sistema (' + n(sin.length) + ')</span>' +
+      '</button>' +
+      '<div class="collapse-body" id="collapse-sinstock-body"' + (sinStockAbierto ? '' : ' hidden') + '>';
+    if(!sin.length){
+      html += '<p class="empty">No hay productos sin stock en este alcance.</p>';
+    } else {
+      if(llamador){
+        html += '<div class="eleccion" role="group" aria-label="Qué hacer con los productos sin stock">' +
+          '<button type="button" class="btn primary" id="btn-cerrar-sin-stock">Cerrar los ' + n(sin.length) + ' restantes como 0</button>' +
+          '<button type="button" class="btn secondary" id="btn-contar-sin-stock">Seguir contando estos</button>' +
+        '</div>';
+      }
+      sin.forEach(function(p){ html += filaPendienteHtml(p); });
+    }
+    html += '</div></div>';
+    return html;
+  }
+
   function filaItemHtml(i){
     var sinAsociar = !i.sku;
     var stockTxt = i.stock_woo != null ? esc(String(i.stock_woo)) : '—';
@@ -678,12 +1033,13 @@
       : '<span class="diff zero">—</span>';
     var minusDisabled = i.cantidad > 1;
     var marcado = seleccionConteo.has(String(i.id));
-    return '<div class="fila-item' + (sinAsociar ? ' unlinked' : '') + '" data-item-id="' + esc(i.id) + '" data-ean="' + esc(i.ean) + '" data-sku="' + esc(i.sku || '') + '">' +
+    var est = estadoItem(i);
+    return '<div class="fila-item' + (sinAsociar ? ' unlinked' : '') + '" data-estado="' + esc(est) + '" data-item-id="' + esc(i.id) + '" data-ean="' + esc(i.ean) + '" data-sku="' + esc(i.sku || '') + '">' +
       '<input type="checkbox" class="chk-item-conteo" data-accion="select" aria-label="Seleccionar ' + esc(i.sku || i.ean) + '"' + (marcado ? ' checked' : '') + (sinAsociar ? ' disabled title="Asociá el EAN a un SKU antes de mandarlo a Etiquetas"' : '') + '>' +
       '<div class="info">' +
         '<div class="cod">' + (sinAsociar ? '<span class="warn-ico">⚠</span>' : '') + esc(i.sku || i.ean) + '</div>' +
         '<div class="nombre">' + esc(i.nombre || (sinAsociar ? 'Sin asociar todavía' : '(sin nombre)')) + '</div>' +
-        '<div class="stockline">Contado: <b>' + n(i.cantidad) + '</b> · Stock Woo: ' + stockTxt + ' · ' + diffHtml + '</div>' +
+        '<div class="stockline">' + estadoHtml(est) + ' · Contado: <b>' + n(i.cantidad) + '</b> · Stock Woo: ' + stockTxt + ' · ' + diffHtml + '</div>' +
       '</div>' +
       '<div class="acciones">' +
         '<button class="plus" data-accion="plus" title="Sumar 1">+1</button>' +
@@ -695,8 +1051,13 @@
   }
 
   function filaPendienteHtml(p){
-    return '<div class="fila-pendiente" data-sku="' + esc(p.sku) + '">' +
-      '<div class="info"><div class="sku">' + esc(p.sku) + '</div><div class="nombre">' + esc(p.nombre || '') + '</div></div>' +
+    var st = p.stock != null ? p.stock : p.stock_woo;
+    return '<div class="fila-pendiente" data-estado="pendiente" data-sku="' + esc(p.sku) + '">' +
+      '<div class="info">' +
+        '<div class="sku">' + estadoHtml('pendiente') + ' ' + esc(p.sku) + '</div>' +
+        '<div class="nombre">' + esc(p.nombre || '') + '</div>' +
+        '<div class="stockline" style="font-size:12px;color:var(--muted);">Stock Woo: ' + (st != null ? esc(String(st)) : '—') + '</div>' +
+      '</div>' +
       '<button data-accion="contar">Contar</button>' +
     '</div>';
   }
@@ -726,6 +1087,24 @@
         }
       });
     });
+    var head = document.getElementById('collapse-sinstock-head');
+    if(head){
+      head.addEventListener('click', function(){
+        sinStockAbierto = !sinStockAbierto;
+        head.setAttribute('aria-expanded', sinStockAbierto ? 'true' : 'false');
+        var body = document.getElementById('collapse-sinstock-body');
+        if(body) body.hidden = !sinStockAbierto;
+      });
+    }
+    var btnCerrar0 = document.getElementById('btn-cerrar-sin-stock');
+    if(btnCerrar0) btnCerrar0.addEventListener('click', cerrarSinStockComoCero);
+    var btnSeguir = document.getElementById('btn-contar-sin-stock');
+    if(btnSeguir) btnSeguir.addEventListener('click', function(){
+      // "Seguir contando estos": la lista ya está desplegada, movemos el foco al primero.
+      var primera = conteoLista.querySelector('#collapse-sinstock-body .fila-pendiente [data-accion="contar"]');
+      if(primera) primera.focus();
+    });
+
     conteoLista.querySelectorAll('.fila-pendiente [data-accion="contar"]').forEach(function(btn){
       btn.addEventListener('click', function(){
         var sku = btn.closest('.fila-pendiente').getAttribute('data-sku');
@@ -743,6 +1122,31 @@
       .catch(function(){});
   }
 
+  // Cierra en 0 todo lo que queda del bloque sin-stock (elección explícita del usuario).
+  function cerrarSinStockComoCero(){
+    var id = sesionId();
+    if(!id) return;
+    fetch('/api/inventario/sesiones/' + id + '/cerrar-sin-stock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ todos: true })
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.ok){ setGuardado(true); cargarConteo(); }
+      else mostrarBannerEscaneo((j && j.error) || 'No se pudieron cerrar los productos sin stock.');
+    }).catch(function(){ mostrarBannerEscaneo('No se pudieron cerrar los productos sin stock (sin conexión).'); });
+  }
+
+  // Aviso no bloqueante (ej. escaneo fuera del alcance de la sesión).
+  var bannerEscaneo = document.getElementById('banner-escaneo');
+  var bannerTimer = null;
+  function mostrarBannerEscaneo(texto){
+    if(!texto){ bannerEscaneo.classList.remove('on'); bannerEscaneo.textContent = ''; return; }
+    bannerEscaneo.textContent = '⚑ ' + texto;
+    bannerEscaneo.classList.add('on');
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(function(){ bannerEscaneo.classList.remove('on'); }, 6000);
+  }
+
   function escanear(codigo){
     var id = sesionId();
     codigo = String(codigo || '').trim();
@@ -754,6 +1158,11 @@
     }).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok){ cargarConteo(); return; }
       setGuardado(true);
+      var fuera = j.fuera_de_alcance || (j.item && j.item.fuera_de_alcance);
+      if(fuera){
+        mostrarBannerEscaneo('«' + ((j.item && (j.item.sku || j.item.ean)) || codigo) +
+          '» está fuera del alcance de esta sesión. Se registró como hallazgo, no se descartó.');
+      }
       cargarConteo();
       if(j.item && j.item.sin_asociar){
         abrirSheetEan(j.item.ean);
