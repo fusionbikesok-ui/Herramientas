@@ -71,3 +71,88 @@ Borra la regla del SKU. Idempotente: si no existía igual responde `ok`.
 
 Nota: estos tres endpoints son puramente locales (sqlite), no llaman a la API de ML ni de
 Woo, así que no aplica decisión de fail-closed/fail-open.
+
+## Contador de Inventario (`/api/inventario`)
+
+Todos los endpoints requieren sesión iniciada; las consultas de sesión están scopeadas
+por `req.user.username` (una sesión de otro usuario responde 404, nunca 403 con datos).
+El alcance de una sesión es **selección múltiple**: `categorias` y `marcas` son arrays.
+
+Semántica de alcance (`productoEnAlcance`): **OR dentro** de cada dimensión y **AND entre
+dimensiones** cuando ambas tienen selección (categoría "Cascos" + marca "Bell" → solo
+cascos Bell). El anti-solape entre usuarios usa una función aparte (`productoEnAlcanceOr`)
+con semántica OR, a propósito y más conservadora.
+
+### GET /api/inventario/alcance-opciones
+Opciones de alcance con cantidad de productos por opción (para los chips).
+
+```json
+{ "ok": true,
+  "categorias": [{ "nombre": "Cascos", "productos": 42 }],
+  "marcas": [{ "nombre": "Bell", "productos": 12 }] }
+```
+Ambas listas vienen ordenadas alfabéticamente (locale es). Base: productos con SKU y
+`tipo <> 'variable'` (misma base que preview y pendientes).
+
+### POST /api/inventario/alcance-preview
+Request: `{ "categorias": ["Cascos"], "marcas": ["Bell"] }` (acepta también los
+nombres legados `categoria` / `marca` como string suelto).
+
+```json
+{ "ok": true, "categorias": ["Cascos"], "marcas": ["Bell"],
+  "productos": 2, "unidades_esperadas": 3,
+  "con_stock": { "productos": 1, "unidades": 3 },
+  "sin_stock": { "productos": 1 },
+  "umbral": 300, "supera_umbral": false }
+```
+Sin selección devuelve todo en 0 (nunca el catálogo entero). Usa la misma función de
+alcance que los pendientes, así el preview coincide exactamente con lo que se abre.
+
+### POST /api/inventario/sesiones
+Request: `{ "categorias": [], "marcas": [] }` (al menos una con contenido).
+Respuesta 200: `{ ok, sesion }` con `sesion.categorias` / `sesion.marcas` como arrays.
+Al crearse se **congela** el alcance (qué SKUs entran y en qué bloque `con_stock` /
+`sin_stock`) en `inventario_sesion_alcance`.
+- `400` sin categorías ni marcas.
+- `409` si el usuario ya tiene una sesión abierta.
+- `409` si el alcance se cruza con la sesión abierta de otro usuario:
+  `{ ok:false, error, ocupada_por, categorias, marcas }`.
+
+### GET /api/inventario/sesion-activa
+`{ ok, sesion|null }` — la sesión abierta propia, con arrays.
+
+### GET /api/inventario/sesiones/:id
+```json
+{ "ok": true, "sesion": { "...": "", "categorias": [], "marcas": [] },
+  "items": [{ "id":1, "ean":"...", "sku":"FB-1", "cantidad":3, "nombre":"...",
+              "stock_woo":5, "diferencia":-2, "bloque":"con_stock",
+              "fuera_de_alcance": false, "confirmado_por_omision": false }],
+  "pendientes": [{ "sku":"FB-1", "nombre":"...", "bloque":"con_stock", "marca":"Bell",
+                   "categoria_principal":"Cascos", "stock_inicial":5, "stock_woo":5 }],
+  "resumen": { "pendientes_con_stock": 2, "pendientes_sin_stock": 1, "fuera_de_alcance": 0 } }
+```
+`pendientes` viene ordenado: con-stock primero, después categoría → marca → nombre.
+`bloque` está **congelado** al abrir la sesión: si el stock cambia por otra vía durante el
+conteo, el ítem no salta de bloque (`stock_woo` sí muestra el valor actual).
+
+### POST /api/inventario/sesiones/:id/escanear
+Request `{ "codigo": "..." }` (EAN o SKU; igual desde cámara o lector HID).
+Respuesta: `{ ok, item }` con `sin_asociar` y `fuera_de_alcance`.
+Si el producto escaneado no está en el alcance congelado, se marca
+`fuera_de_alcance: true` — es solo un aviso informativo: **no** descarta el escaneo, no
+bloquea el flujo y no cambia nada de la escritura a Woo.
+
+### POST /api/inventario/sesiones/:id/cerrar-sin-stock
+Cierra en 0 los pendientes del bloque `sin_stock`. No es automático: se ofrece al cerrar
+la sesión y el usuario elige.
+Request: `{ "todos": true }` o `{ "skus": ["SIN-2"] }`.
+Respuesta: `{ ok, cerrados: 2, skus: [...] }`.
+Las filas creadas quedan con `cantidad=0`, `bloque='sin_stock'` y
+`confirmado_por_omision=1` (auditoría). Nunca pisa un conteo hecho a mano (`INSERT OR
+IGNORE`) ni toca el bloque con-stock. `400` si la sesión no está abierta.
+
+### POST /api/inventario/sesiones/:id/confirmar
+Sin cambios: claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
+**fail-closed por ítem** al escribir a Woo (un PUT fallido no aborta el resto; la sesión
+queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
+`409` si hay ítems sin asociar a SKU (sin SKU no hay a qué ajustarle stock).
