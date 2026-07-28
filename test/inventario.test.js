@@ -1143,6 +1143,220 @@ describe('Hallazgos de revisión — cerrar-sin-stock, omisión y migración', (
   });
 });
 
+describe('Casos borde adicionales — cobertura de tester', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  // 1. Concurrencia: sesiones con solape parcial (categoría vs marca) — la
+  // semántica OR de sesionesSolapan detecta el choque, pero productoEnAlcance
+  // (AND) de cada sesión da resultados distintos para el mismo catálogo.
+  describe('Concurrencia: alcances que se solapan parcialmente', () => {
+    it('sesionesSolapan (OR) detecta el choque aunque productoEnAlcance (AND) de cada sesión difiera', async () => {
+      const db = openDb(TEST_DB);
+      // Producto que cae en la intersección (dispara el solape OR)
+      insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Casco Bell', marca: 'Bell', categorias_json: '["Cascos"]' });
+      // Producto que solo entra en el alcance AND de la sesión de juan (Cascos + Bell)
+      insertProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Guante Bell', marca: 'Bell', categorias_json: '["Guantes"]' });
+      // Producto que solo entra en el alcance AND de la sesión de ana (Cascos + Giro)
+      insertProducto(db, { id_woo: 3, sku: 'FB-3', nombre: 'Casco Giro', marca: 'Giro', categorias_json: '["Cascos"]' });
+
+      // juan pide Cascos (categoría) — se cruza por OR con lo que pediría ana (marca Bell)
+      const crearJuan = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categorias: ['Cascos'] });
+      expect(crearJuan.status).toBe(200);
+
+      const rechazoAna = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+      expect(rechazoAna.status).toBe(409);
+      expect(rechazoAna.body.ocupada_por).toBe('juan');
+
+      // Verificamos la semántica AND de cada alcance de forma independiente:
+      // el alcance de juan (solo categoría Cascos) incluye FB-1 y FB-3, no FB-2.
+      expect(productoEnAlcance(['Cascos'], 'Bell', ['Cascos'], [])).toBe(true);
+      expect(productoEnAlcance(['Guantes'], 'Bell', ['Cascos'], [])).toBe(false);
+      expect(productoEnAlcance(['Cascos'], 'Giro', ['Cascos'], [])).toBe(true);
+
+      // el alcance hipotético de ana (solo marca Bell) incluiría FB-1 y FB-2, no FB-3 —
+      // resultado DISTINTO al de juan para el mismo catálogo, a pesar del solape OR.
+      expect(productoEnAlcance(['Cascos'], 'Bell', [], ['Bell'])).toBe(true);
+      expect(productoEnAlcance(['Guantes'], 'Bell', [], ['Bell'])).toBe(true);
+      expect(productoEnAlcance(['Cascos'], 'Giro', [], ['Bell'])).toBe(false);
+    });
+
+    it('sesionesSolapan es false cuando ninguna combinación de productos reales coincide entre las dos sesiones', async () => {
+      const db = openDb(TEST_DB);
+      insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]' });
+      insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Giro', categorias_json: '["Cubiertas"]' });
+
+      await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categorias: ['Cascos'], marcas: ['Bell'] });
+      const r = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ categorias: ['Cubiertas'], marcas: ['Giro'] });
+
+      expect(r.status).toBe(200);
+    });
+  });
+
+  // 2. cerrar-sin-stock sobre sesión ya confirmada (no solo descartada)
+  describe('cerrar-sin-stock sobre sesión en estado no-abierta', () => {
+    async function sesionConSinStockConfirmada(db, estadoFinal) {
+      insertProducto(db, { id_woo: 1, sku: 'CON-1', marca: 'Bell', stock: 2 });
+      insertProducto(db, { id_woo: 2, sku: 'SIN-1', marca: 'Bell', stock: 0 });
+      const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+      const id = crear.body.sesion.id;
+      if (estadoFinal === 'confirmada') {
+        await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'CON-1' });
+        setStockWc.mockResolvedValue();
+        await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+        const confirmar = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
+        expect(confirmar.body.ok).toBe(true);
+      }
+      return id;
+    }
+
+    it('rechaza (400) sobre una sesión confirmada y no cierra ni modifica nada', async () => {
+      const db = openDb(TEST_DB);
+      const id = await sesionConSinStockConfirmada(db, 'confirmada');
+      const sesionAntes = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+      expect(sesionAntes.estado).toBe('confirmada');
+      const conteosAntes = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n;
+
+      const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+
+      expect(r.status).toBe(400);
+      const sesionDespues = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+      expect(sesionDespues.estado).toBe('confirmada'); // sin cambios de estado
+      const conteosDespues = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n;
+      expect(conteosDespues).toBe(conteosAntes); // ninguna fila nueva insertada
+    });
+
+    it('rechaza (400) sobre una sesión descartada y no crea filas de conteo', async () => {
+      const db = openDb(TEST_DB);
+      insertProducto(db, { id_woo: 1, sku: 'SIN-1', marca: 'Bell', stock: 0 });
+      const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+      const id = crear.body.sesion.id;
+      await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/descartar');
+
+      const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+
+      expect(r.status).toBe(400);
+      const conteos = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n;
+      expect(conteos).toBe(0);
+    });
+  });
+
+  // 3. Migración corrida dos veces seguidas: idempotencia directa sobre
+  // migrarSesionesAlcanceMulti (no solo vía ensureTables/buildApp).
+  describe('Idempotencia de la migración de alcance (categoria/marca → arrays)', () => {
+    function crearTablaVieja(db) {
+      db.prepare('CREATE TABLE IF NOT EXISTS inventario_sesiones (' +
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, usuario TEXT NOT NULL, categoria TEXT, marca TEXT,' +
+        "estado TEXT NOT NULL DEFAULT 'abierta', creado_en TEXT NOT NULL, confirmado_en TEXT)").run();
+    }
+
+    it('correr migrarSesionesAlcanceMulti dos veces seguidas no duplica filas ni pierde datos', async () => {
+      const db = openDb(TEST_DB);
+      crearTablaVieja(db);
+      const creado = now();
+      db.prepare("INSERT INTO inventario_sesiones (id, usuario, categoria, marca, estado, creado_en) VALUES (1,'juan','Cascos','Bell','abierta',?)").run(creado);
+      db.prepare("INSERT INTO inventario_sesiones (id, usuario, categoria, marca, estado, creado_en) VALUES (2,'ana','Cubiertas',NULL,'confirmada',?)").run(creado);
+
+      const primeraCorrida = migrarSesionesAlcanceMulti(db);
+      expect(primeraCorrida).toBe(true);
+
+      // Segunda corrida: ya no existe la columna 'categoria', debe devolver false
+      // y no tocar absolutamente nada de la tabla ya migrada.
+      const segundaCorrida = migrarSesionesAlcanceMulti(db);
+      expect(segundaCorrida).toBe(false);
+
+      const filas = db.prepare('SELECT * FROM inventario_sesiones ORDER BY id').all();
+      expect(filas).toHaveLength(2);
+      expect(filas.map(f => f.id)).toEqual([1, 2]);
+      expect(JSON.parse(filas[0].categorias)).toEqual(['Cascos']);
+      expect(JSON.parse(filas[0].marcas)).toEqual(['Bell']);
+      expect(JSON.parse(filas[1].categorias)).toEqual(['Cubiertas']);
+      expect(JSON.parse(filas[1].marcas)).toEqual([]);
+
+      // No quedó ninguna tabla temporal de la migración huérfana.
+      const mig = db.prepare("SELECT name FROM sqlite_master WHERE name='inventario_sesiones_mig'").get();
+      expect(mig).toBeUndefined();
+      // No hay columnas duplicadas (categoria/marca viejas no reaparecen).
+      const columnas = db.prepare('PRAGMA table_info(inventario_sesiones)').all().map(c => c.name);
+      expect(columnas.filter(c => c === 'categorias')).toHaveLength(1);
+      expect(columnas.filter(c => c === 'marcas')).toHaveLength(1);
+      expect(columnas).not.toContain('categoria');
+      expect(columnas).not.toContain('marca');
+    });
+  });
+
+  // 4. El bloque congelado no debe cambiar aunque el producto deje de matchear
+  // el alcance original después de que la sesión ya se abrió.
+  describe('Alcance congelado: cambios de catálogo posteriores a la apertura no afectan el bloque/pendientes', () => {
+    it('un producto que cambia de categoría después de abrir la sesión sigue en pendientes con su bloque original', async () => {
+      const db = openDb(TEST_DB);
+      insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Casco Bell', marca: 'Bell', categorias_json: '["Cascos"]', stock: 3 });
+
+      const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categorias: ['Cascos'], marcas: ['Bell'] });
+      expect(crear.status).toBe(200);
+      const id = crear.body.sesion.id;
+
+      // Antes de contar nada, el producto cambia de categoría en el catálogo:
+      // ya no matchea el alcance original (Cascos).
+      db.prepare("UPDATE catalogo_cache SET categorias_json='[\"Cubiertas\"]' WHERE sku='FB-1'").run();
+
+      // productoEnAlcance recalculado en vivo diría que YA NO entra:
+      expect(productoEnAlcance(['Cubiertas'], 'Bell', ['Cascos'], ['Bell'])).toBe(false);
+
+      // Pero el snapshot congelado (inventario_sesion_alcance) no se recalcula:
+      // el ítem sigue apareciendo en pendientes con su bloque original.
+      const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
+      expect(r.body.pendientes.map(p => p.sku)).toEqual(['FB-1']);
+      expect(r.body.pendientes[0].bloque).toBe('con_stock');
+
+      const snapshot = db.prepare('SELECT * FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+      expect(snapshot.categoria_principal).toBe('Cascos'); // congelado, no actualizado
+      expect(snapshot.bloque).toBe('con_stock');
+    });
+
+    it('un producto que pasa a stock 0 después de abrir la sesión mantiene el bloque con_stock congelado', async () => {
+      const db = openDb(TEST_DB);
+      insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]', stock: 3 });
+      const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+      const id = crear.body.sesion.id;
+
+      db.prepare("UPDATE catalogo_cache SET stock=0 WHERE sku='FB-1'").run();
+
+      const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
+      // El bloque sigue siendo con_stock (congelado), aunque stock_woo refleje el valor actual.
+      expect(r.body.pendientes[0].bloque).toBe('con_stock');
+      expect(r.body.pendientes[0].stock_woo).toBe(0);
+    });
+  });
+
+  // 5. alcance-preview con selección completamente vacía / ausente
+  describe('alcance-preview sin categorías ni marcas (selección vacía)', () => {
+    it('body vacío {} no rompe (no 500) y devuelve todo en cero', async () => {
+      const db = openDb(TEST_DB);
+      insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]', stock: 3 });
+
+      const r = await request(buildApp(db)).post('/api/inventario/alcance-preview').send({});
+
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(r.body.productos).toBe(0);
+      expect(r.body.unidades_esperadas).toBe(0);
+      expect(r.body.con_stock).toEqual({ productos: 0, unidades: 0 });
+      expect(r.body.sin_stock).toEqual({ productos: 0 });
+      expect(r.body.supera_umbral).toBe(false);
+    });
+
+    it('sin body en absoluto (Content-Type sin payload) tampoco rompe', async () => {
+      const db = openDb(TEST_DB);
+      insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', categorias_json: '["Cascos"]', stock: 3 });
+
+      const r = await request(buildApp(db)).post('/api/inventario/alcance-preview');
+
+      expect(r.status).toBe(200);
+      expect(r.body.productos).toBe(0);
+    });
+  });
+});
+
 describe('Código escaneado que no existe en el catálogo', () => {
   afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
 
