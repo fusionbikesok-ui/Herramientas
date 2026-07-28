@@ -733,3 +733,171 @@ describe('procesarReintentos', () => {
     expect(log.intentos).toBe(0);
   });
 });
+
+// ─── Fix duplicado por timeout del POST /orders (2026-07-28) ──────────────────
+//
+// Hueco cerrado: si el POST /orders a Woo tiene exito en el servidor pero la respuesta
+// se pierde/timeoutea del lado del cliente, el codigo viejo borraba la reserva atomica y
+// el proximo ciclo del cron creaba un pedido DUPLICADO real. Ahora, antes de liberar la
+// reserva, se verifica contra la API de Woo si el pedido ya existe (meta _ml_order_id).
+describe('syncMlToWc — timeout del POST /orders (verificacion anti-duplicado)', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    seedCatalogo(db);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  function ordenSimple(id) {
+    return {
+      id,
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+  }
+
+  it('POST timeoutea pero el pedido SI existe en Woo → completa la reserva con el id real, sin duplicar', async () => {
+    const orden = ordenSimple('ORD-TIMEOUT-OK');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') {
+        throw new Error('timeout of 20000ms exceeded');
+      }
+      if (path.startsWith('/orders?')) {
+        // Woo si habia creado el pedido: lo devuelve con el meta correspondiente
+        return {
+          data: [
+            { id: 66542, meta_data: [{ key: '_ml_order_id', value: 'ORD-TIMEOUT-OK' }] },
+          ],
+        };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    // Un solo POST: no se creo un segundo pedido
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+
+    // Reserva completada con el wc_order_id real encontrado en Woo
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-TIMEOUT-OK');
+    expect(pedido).toBeTruthy();
+    expect(pedido.wc_order_id).toBe(66542);
+
+    // Marcada como procesada → el cron no la reintenta
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-TIMEOUT-OK');
+    expect(proc.estado).toBe('ok');
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'ORD-TIMEOUT-OK'").get();
+    expect(log.estado).toBe('ok');
+    expect(log.cant_nueva).toBe(66542);
+  });
+
+  it('no confia en el filtro por meta de Woo: si devuelve pedidos ajenos, NO los toma como propios', async () => {
+    const orden = ordenSimple('ORD-META-AJENA');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('socket hang up');
+      if (path.startsWith('/orders?')) {
+        // Woo ignoro el filtro y devolvio los ultimos pedidos, de OTRAS ventas
+        return {
+          data: [
+            { id: 999, meta_data: [{ key: '_ml_order_id', value: 'OTRA-ORDEN' }] },
+            { id: 998, meta_data: [] },
+          ],
+        };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    // Ningun pedido ajeno adoptado → reserva liberada para reintento
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-META-AJENA');
+    expect(pedido).toBeUndefined();
+  });
+
+  it('POST falla y el pedido NO existe en Woo → libera la reserva, permite reintento (regresion)', async () => {
+    const orden = ordenSimple('ORD-TIMEOUT-NO');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('WooCommerce API error 500');
+      if (path.startsWith('/orders?')) return { data: [] };
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-TIMEOUT-NO');
+    expect(pedido).toBeUndefined(); // reserva liberada
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-TIMEOUT-NO');
+    expect(proc).toBeUndefined(); // no marcada como procesada → reintentable
+    const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'ORD-TIMEOUT-NO'").get();
+    expect(log.estado).toBe('error');
+  });
+
+  it('POST falla y la verificacion TAMBIEN falla → fail-closed: la reserva NO se libera', async () => {
+    const orden = ordenSimple('ORD-TIMEOUT-CIEGO');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) throw new Error('ECONNREFUSED');
+      return { data: {} };
+    });
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await syncMlToWc(db, CFG);
+    errSpy.mockRestore();
+
+    // Reserva retenida (wc_order_id sigue en 0) → ningun ciclo posterior puede duplicar
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-TIMEOUT-CIEGO');
+    expect(pedido).toBeTruthy();
+    expect(pedido.wc_order_id).toBe(0);
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'ORD-TIMEOUT-CIEGO'").get();
+    expect(log.estado).toBe('error');
+    expect(log.error).toMatch(/fail-closed/);
+
+    // La verificacion reintenta con backoff antes de rendirse (4 intentos)
+    const gets = wooFetch.mock.calls.filter(c => String(c[1]).startsWith('/orders?'));
+    expect(gets.length).toBe(4);
+  }, 30000);
+
+  it('fail-closed: la limpieza de reservas abandonadas (60min) NO libera una reserva retenida', async () => {
+    const orden = ordenSimple('ORD-RETENIDA');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) throw new Error('ECONNREFUSED');
+      return { data: {} };
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await syncMlToWc(db, CFG);
+
+    // Se envejece la reserva mas alla del umbral de 60min y se vuelve a correr el sync
+    db.prepare('UPDATE ordenes_ml_wc_pedidos SET creado_en = ? WHERE ml_order_id = ?')
+      .run(new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), 'ORD-RETENIDA');
+    db.prepare('DELETE FROM ordenes_ml_procesadas WHERE order_id = ?').run('ORD-RETENIDA');
+    await syncMlToWc(db, CFG);
+    errSpy.mockRestore();
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RETENIDA');
+    expect(pedido).toBeTruthy();
+    expect(pedido.wc_order_id).toBe(0);
+    // Y no se disparo un segundo POST de creacion
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+  }, 30000);
+});
