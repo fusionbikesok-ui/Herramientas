@@ -1117,7 +1117,7 @@ function itemsDesdeOrdenMl(db, orden) {
 
 // Órdenes ML pagas cuyo envío está listo y lo despacha el local.
 // Devuelve { pendientes, confiable }: `confiable` indica si esta corrida vio el listado
-// completo (sin truncar por el límite de /orders/search) y sin fallos de /shipments/:id.
+// completo (paginación agotada sin errores) y sin fallos de /shipments/:id.
 // Cuando confiable=false, el caller NO debe usar el resultado para podar (solo para
 // alimentar/actualizar filas existentes), porque puede faltar un pedido real todavía
 // ready_to_ship que simplemente no se pudo confirmar esta vez.
@@ -1125,15 +1125,33 @@ async function pendientesMl(db, mlCfg) {
   if (!mlCfg?.clientId || !mlCfg?.userId) return { pendientes: [], confiable: false };
   const desde = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
   const limite = 50;
-  const resp = await mlFetch(db, mlCfg, 'get',
-    `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_desc&order.date_created.from=${encodeURIComponent(desde)}&limit=${limite}`);
-  if (resp.status !== 200) throw new Error(`ML orders ${resp.status}`);
 
-  const resultados = resp.data.results || [];
-  // Heurística de truncamiento: si vino tanto como el límite pedido, o si ML informa un
-  // total mayor a lo que trajo esta página, hay más resultados que no vimos.
-  const truncado = resultados.length >= limite
-    || (typeof resp.data.paging?.total === 'number' && resp.data.paging.total > resultados.length);
+  // Paginación real (mismo patrón que syncMlToWc/procesarCancelacionesMl en sync.js):
+  // con el volumen actual (~34 pendientes ML en 30 días) la primera página ya viene llena
+  // seguido, así que quedarse con una sola página marcaba `confiable=false` casi siempre y
+  // la poda nunca corría. Se agota la paginación hasta la última página incompleta.
+  let offset = 0;
+  let hayMas = true;
+  let resultados = [];
+  // Fail-closed: si una página después de la primera falla, se corta la paginación (no se
+  // reintenta indefinidamente) y se marca el listado como no confiable -> el caller no poda
+  // con un resultado parcial. Si falla la primera página, se aborta con throw como antes
+  // (no hay nada útil que devolver).
+  let paginacionCortada = false;
+  while (hayMas) {
+    const resp = await mlFetch(db, mlCfg, 'get',
+      `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_desc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limite}`);
+    if (resp.status !== 200) {
+      if (offset === 0) throw new Error(`ML orders ${resp.status}`);
+      paginacionCortada = true;
+      break;
+    }
+    const pagina = resp.data.results || [];
+    resultados = resultados.concat(pagina);
+    hayMas = pagina.length === limite;
+    offset += pagina.length;
+  }
+  const truncado = paginacionCortada;
 
   let fallosShipment = 0;
   const out = [];
@@ -1266,6 +1284,10 @@ export async function syncPedidosCache(db, cfg) {
     // sin otro GET por shipment; el historial de enviados ML se cubre desde el lado Woo,
     // que ya refleja el pedido cuando se cargó el tracking en el tab Seguimientos).
     try {
+      // Misma ventana de 30 días que usa pendientesMl para consultar /orders/search: la poda
+      // de abajo solo puede confiar en la ausencia de una fila si esa fila estaba dentro del
+      // rango que la consulta a ML pudo haber visto.
+      const desdeMl = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
       const { pendientes: mlPend, confiable: mlConfiable } = await pendientesMl(db, cfg.ml);
       const clavesVigentesMl = new Set(mlPend.map((p) => `ml:${p.ml_order_id}`));
       const txMl = db.transaction(() => {
@@ -1291,17 +1313,20 @@ export async function syncPedidosCache(db, cfg) {
         // desaparece del resultado de pendientesMl, pero el upsert de arriba nunca lo toca
         // -> quedaría huérfano para siempre como "pendiente" (mismo bug ya visto en
         // catalogo_cache/refrescarCatalogo). Fail-closed: solo podamos si pendientesMl marcó
-        // el listado como confiable (no truncado por el límite de /orders/search y sin
-        // fallos de /shipments/:id); si no es confiable, dejamos los pendientes viejos tal
-        // cual esta corrida (falso positivo temporal) en vez de arriesgar borrar de golpe un
-        // pedido real que no se pudo confirmar.
+        // el listado como confiable (paginación agotada sin fallos y sin fallos de
+        // /shipments/:id); si no es confiable, dejamos los pendientes viejos tal cual esta
+        // corrida (falso positivo temporal) en vez de arriesgar borrar de golpe un pedido
+        // real que no se pudo confirmar. Además, solo se poda dentro de la ventana de 30
+        // días que pendientesMl pudo confirmar: un pedido ML pagado hace más de 30 días que
+        // sigue genuinamente ready_to_ship (envío demorado, etc.) queda fuera del alcance de
+        // esta poda -- ni se confirma ni se descarta, se deja como está.
         if (mlConfiable) {
           const filasViejas = db.prepare(
             "SELECT pc.clave AS clave, p.estado AS estado_prep " +
             "FROM pedidos_cache pc " +
             "LEFT JOIN preparaciones p ON p.clave = pc.clave " +
-            "WHERE pc.canal='ml' AND pc.estado_envio='pendiente'"
-          ).all();
+            "WHERE pc.canal='ml' AND pc.estado_envio='pendiente' AND pc.fecha >= ?"
+          ).all(desdeMl);
           const borrar = db.prepare('DELETE FROM pedidos_cache WHERE clave=?');
           for (const r of filasViejas) {
             // Una preparación ya completada nunca se vuelve a refetchear en pendientesMl
