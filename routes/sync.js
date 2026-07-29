@@ -216,7 +216,60 @@ const VERIF_WC_BACKOFF_MS = [500, 1500, 4000];
  * ese rango, verificando `meta_data` localmente en cada pedido. Sin paginar, con mas de
  * 100 pedidos nuevos en la ventana el pedido creado no aparecia -> falso negativo ->
  * duplicado, justo lo que este fix evita.
+ *
+ * `dates_are_gmt=true` es OBLIGATORIO: sin ese parametro Woo interpreta `after` en la
+ * hora LOCAL del sitio (incidente 2026-07-29, pedidos 66554/66555). Con el sitio en
+ * UTC-3, mandar `after` en UTC equivale a pedir "3 horas en el futuro": Woo devolvia 0
+ * pedidos, la verificacion lo leia como certeza de inexistencia, liberaba la reserva y
+ * el siguiente ciclo del cron creaba el pedido DUPLICADO.
  */
+function _matchMlOrderId(pedidos, orderId) {
+  // El meta se re-verifica localmente porque Woo pudo haber ignorado el filtro por meta:
+  // asi un filtro ignorado nunca produce un falso positivo (seria peor: daria por creado
+  // un pedido inexistente y la venta de ML nunca llegaria a Woo).
+  return pedidos.find(pedido =>
+    (pedido?.meta_data ?? []).some(m => m?.key === '_ml_order_id' && String(m?.value) === String(orderId))
+  );
+}
+
+/**
+ * Ultimo control antes de afirmar "el pedido con certeza NO existe" (afirmacion que libera
+ * la reserva y habilita que el proximo ciclo del cron cree el pedido).
+ *
+ * Existe porque la busqueda principal esta acotada por fecha, y CUALQUIER defecto en ese
+ * filtro -zona horaria mal interpretada (incidente 2026-07-29), desfase de reloj, lag de
+ * indexacion/cache de Woo que todavia no muestra el pedido recien creado- se manifiesta
+ * como un falso negativo indistinguible de una ventana legitimamente vacia. Por eso NO
+ * alcanza con cubrir el caso "0 pedidos": un rango con 7 pedidos legitimos pero sin el
+ * nuestro produce exactamente el mismo duplicado. Se re-consulta sin filtro de fecha.
+ *
+ * `orderby=date&order=desc` va explicito a proposito: la correctitud depende de que el
+ * pedido recien creado este en la primera pagina. Es el default de WC hoy, pero un plugin
+ * o un cambio de version que lo altere convertiria esta red en decorativa (devolveria los
+ * 100 pedidos mas viejos) sin que nada falle a la vista.
+ *
+ * Devuelve el wc_order_id si aparece, null si la inexistencia se confirma, y LANZA si no
+ * se pudo verificar -> fail-closed en el llamador.
+ */
+async function _confirmarInexistenciaEnWc(wooCfg, orderId) {
+  // `status=any` en Woo NO incluye `trash`, y esa exclusion importa acá: cuando el sistema
+  // crea un duplicado, el operador lo manda a la papelera a mano (paso lo del incidente
+  // 2026-07-25). Si un pedido en papelera contara como inexistente, el cron lo volveria a
+  // crear y el duplicado reapareceria despues de cada limpieza. Se consultan ambos.
+  for (const status of ['any', 'trash']) {
+    const resp = await wooFetch(
+      wooCfg,
+      `/orders?per_page=100&status=${status}&orderby=date&order=desc&page=1`
+    );
+    if (!Array.isArray(resp?.data)) {
+      throw new Error('respuesta de Woo con forma inesperada al reverificar sin filtro de fecha');
+    }
+    const match = _matchMlOrderId(resp.data, orderId);
+    if (match) return match.id;
+  }
+  return null;
+}
+
 async function buscarPedidoWcPorMlOrderId(wooCfg, orderId, desdeIso) {
   const after = new Date(new Date(desdeIso).getTime() - VERIF_WC_MARGEN_MS).toISOString();
   let ultimoError;
@@ -227,7 +280,7 @@ async function buscarPedidoWcPorMlOrderId(wooCfg, orderId, desdeIso) {
       for (let page = 1; page <= VERIF_WC_MAX_PAGINAS; page++) {
         const resp = await wooFetch(
           wooCfg,
-          `/orders?per_page=100&status=any&page=${page}&after=${encodeURIComponent(after)}&meta_key=_ml_order_id&meta_value=${encodeURIComponent(orderId)}`
+          `/orders?per_page=100&status=any&page=${page}&dates_are_gmt=true&after=${encodeURIComponent(after)}&meta_key=_ml_order_id&meta_value=${encodeURIComponent(orderId)}`
         );
         if (!Array.isArray(resp?.data)) {
           // 200 con un cuerpo que no es lista (HTML de un WAF, error de plugin, etc.):
@@ -235,14 +288,14 @@ async function buscarPedidoWcPorMlOrderId(wooCfg, orderId, desdeIso) {
           throw new Error('respuesta de Woo con forma inesperada al verificar el pedido');
         }
         const pedidos = resp.data;
-        // El meta se re-verifica localmente porque Woo pudo haber ignorado el filtro por
-        // meta: asi un filtro ignorado nunca produce un falso positivo (seria peor: daria
-        // por creado un pedido inexistente y la venta de ML nunca llegaria a Woo).
-        const match = pedidos.find(pedido =>
-          (pedido?.meta_data ?? []).some(m => m?.key === '_ml_order_id' && String(m?.value) === String(orderId))
-        );
+        const match = _matchMlOrderId(pedidos, orderId);
         if (match) return match.id;
-        if (pedidos.length < 100) return null; // rango agotado: con certeza no existe
+        if (pedidos.length < 100) {
+          // Rango agotado. NO se concluye inexistencia directo: todo camino que devuelve
+          // null pasa antes por la red de seguridad (ver _confirmarInexistenciaEnWc).
+          const idReverificado = await _confirmarInexistenciaEnWc(wooCfg, orderId);
+          return idReverificado ?? null;
+        }
       }
       // Se agotaron las paginas sin encontrarlo y sin agotar el rango: no concluyente.
       throw new Error('demasiados pedidos en el rango, verificacion no concluyente');
