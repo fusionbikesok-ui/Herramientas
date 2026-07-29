@@ -316,6 +316,7 @@ async function abrirDetalle(id){
   VISTA='detalle';
   detenerPollingPendientes();
   ACT_TOPE=30;
+  NUEVOS_ACUMULADOS=0;
   var r=await api('/'+id);
   if(!r.body.ok){document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>';return;}
   PREP=r.body.data;
@@ -380,7 +381,7 @@ function renderDetalle(){
     +'<div id="banner-presencia" class="aviso" role="status" aria-live="polite" style="display:none"></div>'
     +'<div style="display:flex;justify-content:space-between;align-items:center">'
     +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
-    +'<button class="chip-jump'+((p.eventos||[]).length?'':' oculto')+'" onclick="irActividad()">'
+    +'<button class="chip-jump'+((p.eventos||[]).length?'':' oculto')+(!actAbierta()&&NUEVOS_ACUMULADOS>0?' nuevo':'')+'" onclick="irActividad()">'
     +'<span class="dot"></span> Actividad ('+(p.eventos||[]).length+')</button></div>'
     +'<div class="stepper">'
     +'<div class="step '+(paso1?'done':'on')+'"><span class="n">1</span> Escaneo</div>'
@@ -524,12 +525,22 @@ function feedItemHtml(ev,esNuevo){
 
 var ACT_TOPE=30;
 var NUEVOS_ACUMULADOS=0;
+// Fuente de verdad única para el texto "· N nuevos" del header de Actividad: la usan
+// tanto renderActividad() (render completo) como refrescarSoloActividad() (parche de DOM
+// en heartbeat), para que ningún camino de render quede con NUEVOS_ACUMULADOS desincronizado.
+function actNuevosExtra(){
+  if(actAbierta()||NUEVOS_ACUMULADOS<=0)return '';
+  return ' · '+NUEVOS_ACUMULADOS+(NUEVOS_ACUMULADOS===1?' nuevo':' nuevos');
+}
 function renderActividad(){
   var eventos=(PREP.eventos||[]);
   var abierta=actAbierta();
+  var extraTxt=actNuevosExtra();
   var head='<button class="act-head'+(abierta?' abierto':' cerrado')+'" onclick="toggleActividad()">'
     +'<span class="car">▸</span><span class="tit">Actividad</span>'
-    +'<span class="badge-n">'+eventos.length+'</span></button>';
+    +'<span class="badge-n">'+eventos.length+'</span>'
+    +(extraTxt?'<span class="nuevos">'+extraTxt+'</span>':'')
+    +'</button>';
   if(!abierta)return head;
 
   var cuerpo;
@@ -616,10 +627,15 @@ async function refrescarSoloActividad(){
       NUEVOS_ACUMULADOS+=nuevos.length;
       if(chip)chip.classList.toggle('nuevo', NUEVOS_ACUMULADOS>0);
       var head=document.querySelector('.act-head');
-      if(head && NUEVOS_ACUMULADOS>0){
+      if(head){
         var extra=head.querySelector('.nuevos');
-        if(!extra){extra=document.createElement('span');extra.className='nuevos';head.appendChild(extra);}
-        extra.textContent=' · '+NUEVOS_ACUMULADOS+(NUEVOS_ACUMULADOS===1?' nuevo':' nuevos');
+        var extraTxt=actNuevosExtra();
+        if(extraTxt){
+          if(!extra){extra=document.createElement('span');extra.className='nuevos';head.appendChild(extra);}
+          extra.textContent=extraTxt;
+        }else if(extra){
+          extra.remove();
+        }
       }
     }else{
       var body=document.getElementById('act-body');
@@ -638,6 +654,11 @@ async function refrescarSoloActividad(){
       var otro=nuevos.find(function(e){return e.usuario && e.usuario!==USERNAME;});
       flash('ok', esc(otro.usuario)+' '+verboEvento(otro.tipo, otro.detalle||{}));
     }
+    // Cierra la ventana de duplicado: si entró un evento nuevo justo entre el POST de
+    // heartbeat (que dio r.body.ultimo_evento_id) y este GET, ese evento ya quedó pintado
+    // acá — hay que avanzar ULTIMO_EVENTO_VISTO con lo que efectivamente se mostró, si no
+    // el próximo ciclo lo vuelve a detectar como "nuevo" y lo inserta duplicado.
+    ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, r.body.eventos[0]?r.body.eventos[0].id:0);
   }catch(e){/* no bloqueante */}
 }
 
