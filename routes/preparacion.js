@@ -1116,24 +1116,42 @@ function itemsDesdeOrdenMl(db, orden) {
 }
 
 // Órdenes ML pagas cuyo envío está listo y lo despacha el local.
+// Devuelve { pendientes, confiable }: `confiable` indica si esta corrida vio el listado
+// completo (sin truncar por el límite de /orders/search) y sin fallos de /shipments/:id.
+// Cuando confiable=false, el caller NO debe usar el resultado para podar (solo para
+// alimentar/actualizar filas existentes), porque puede faltar un pedido real todavía
+// ready_to_ship que simplemente no se pudo confirmar esta vez.
 async function pendientesMl(db, mlCfg) {
-  if (!mlCfg?.clientId || !mlCfg?.userId) return [];
+  if (!mlCfg?.clientId || !mlCfg?.userId) return { pendientes: [], confiable: false };
   const desde = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const limite = 50;
   const resp = await mlFetch(db, mlCfg, 'get',
-    `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_desc&order.date_created.from=${encodeURIComponent(desde)}&limit=50`);
+    `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_desc&order.date_created.from=${encodeURIComponent(desde)}&limit=${limite}`);
   if (resp.status !== 200) throw new Error(`ML orders ${resp.status}`);
 
+  const resultados = resp.data.results || [];
+  // Heurística de truncamiento: si vino tanto como el límite pedido, o si ML informa un
+  // total mayor a lo que trajo esta página, hay más resultados que no vimos.
+  const truncado = resultados.length >= limite
+    || (typeof resp.data.paging?.total === 'number' && resp.data.paging.total > resultados.length);
+
+  let fallosShipment = 0;
   const out = [];
-  for (const orden of resp.data.results || []) {
+  for (const orden of resultados) {
     const shipmentId = orden.shipping?.id;
     if (!shipmentId) continue;
 
-    // Saltar las ya completadas sin gastar un GET de shipment
+    // Saltar las ya completadas sin gastar un GET de shipment. No cuenta como fallo (la
+    // preparación ya está confirmada del lado local) y esas filas se excluyen de la poda
+    // por separado en syncPedidosCache, no dependen de aparecer acá.
     const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(`ml:${orden.id}`);
     if (prep?.estado === 'completada') continue;
 
     const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
-    if (shipResp.status !== 200) continue;
+    if (shipResp.status !== 200) {
+      fallosShipment++;
+      continue;
+    }
     const envio = shipResp.data;
     if (envio.status !== 'ready_to_ship') continue;
     if (!esEnvioLocal(envio.logistic_type)) continue;
@@ -1154,7 +1172,12 @@ async function pendientesMl(db, mlCfg) {
       estado_preparacion: prep?.estado || null,
     });
   }
-  return out;
+
+  const confiable = !truncado && fallosShipment === 0;
+  if (!confiable && fallosShipment > 0) {
+    console.warn(`pendientesMl: ${fallosShipment} fallo(s) de /shipments al listar pendientes ML`);
+  }
+  return { pendientes: out, confiable };
 }
 
 // ─── Caché local de pedidos (para GET /pendientes y GET /historial) ──────────
@@ -1243,7 +1266,7 @@ export async function syncPedidosCache(db, cfg) {
     // sin otro GET por shipment; el historial de enviados ML se cubre desde el lado Woo,
     // que ya refleja el pedido cuando se cargó el tracking en el tab Seguimientos).
     try {
-      const mlPend = await pendientesMl(db, cfg.ml);
+      const { pendientes: mlPend, confiable: mlConfiable } = await pendientesMl(db, cfg.ml);
       const clavesVigentesMl = new Set(mlPend.map((p) => `ml:${p.ml_order_id}`));
       const txMl = db.transaction(() => {
         for (const p of mlPend) {
@@ -1267,18 +1290,29 @@ export async function syncPedidosCache(db, cfg) {
         // Poda: un pedido ML que dejó de estar ready_to_ship (se despachó) simplemente
         // desaparece del resultado de pendientesMl, pero el upsert de arriba nunca lo toca
         // -> quedaría huérfano para siempre como "pendiente" (mismo bug ya visto en
-        // catalogo_cache/refrescarCatalogo). Fail-closed: solo podamos si mlPend trajo al
-        // menos un resultado; si vino vacío por un corte parcial de la API de ML (sin tirar
-        // excepción), preferimos dejar pendientes viejos de más (falso positivo temporal) a
-        // borrar de golpe toda la cola real de pendientes ML.
-        if (mlPend.length > 0) {
+        // catalogo_cache/refrescarCatalogo). Fail-closed: solo podamos si pendientesMl marcó
+        // el listado como confiable (no truncado por el límite de /orders/search y sin
+        // fallos de /shipments/:id); si no es confiable, dejamos los pendientes viejos tal
+        // cual esta corrida (falso positivo temporal) en vez de arriesgar borrar de golpe un
+        // pedido real que no se pudo confirmar.
+        if (mlConfiable) {
           const filasViejas = db.prepare(
-            "SELECT clave FROM pedidos_cache WHERE canal='ml' AND estado_envio='pendiente'"
+            "SELECT pc.clave AS clave, p.estado AS estado_prep " +
+            "FROM pedidos_cache pc " +
+            "LEFT JOIN preparaciones p ON p.clave = pc.clave " +
+            "WHERE pc.canal='ml' AND pc.estado_envio='pendiente'"
           ).all();
           const borrar = db.prepare('DELETE FROM pedidos_cache WHERE clave=?');
           for (const r of filasViejas) {
+            // Una preparación ya completada nunca se vuelve a refetchear en pendientesMl
+            // (optimización de cuota) -> nunca va a aparecer en clavesVigentesMl aunque el
+            // despacho real siga sin confirmarse. No es candidata a poda por ausencia; solo
+            // se poda lo que se confirmó activamente que ya no es ready_to_ship.
+            if (r.estado_prep === 'completada') continue;
             if (!clavesVigentesMl.has(r.clave)) borrar.run(r.clave);
           }
+        } else {
+          console.warn('syncPedidosCache: listado ML no confiable esta corrida (truncado o fallos de shipment), se omite la poda');
         }
       });
       txMl();
