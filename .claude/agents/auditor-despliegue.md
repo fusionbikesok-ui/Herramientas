@@ -16,6 +16,20 @@ producción a mano. **No escribís código**: das un veredicto **verde/rojo** co
      anterior. Chequealo vos: `git log --oneline` y `git diff <base>..HEAD --stat`; si hay
      commits posteriores a la revisión que el revisor nunca vio, es **🔴** — que lo
      re-despachen sobre el diff actual.
+   - **Higiene de rama — esto lo verificás vos SIEMPRE, aunque el revisor haya dado OK.**
+     Es lo único de la auditoría de código que el revisor estructuralmente no ve: él revisa
+     el diff que le pasan, casi siempre acotado a los archivos del cambio, así que una rama
+     desactualizada le resulta invisible. Corré `git log --oneline HEAD..master` (¿cuántos
+     commits de `master` le faltan a la rama?) y `git diff master --stat` (¿toca archivos
+     que el cambio no tenía por qué tocar?). Si el diff **revierte** trabajo ya mergeado en
+     `master` — líneas eliminadas que no son del cambio, archivos ajenos al tema — es
+     **🔴**: que rebaseen sobre `master` y vuelvan.
+     Incidente real (2026-07-29): un worktree creado desde `origin/master` quedó 12 commits
+     atrás del `master` local; el revisor dio hallazgos correctos sobre `routes/sync.js`,
+     pero el diff completo revertía en silencio la contención de path traversal de
+     `purgarFotosBorradas` y la poda fail-closed de `pendientesMl`. Lo atajó el auditor, no
+     el revisor. `EnterWorktree` branchea desde `origin/master`, que en este repo suele
+     estar atrás del `master` local — por eso este chequeo no es teórico.
    - Si el revisor dejó hallazgos "aceptados con justificación" o pendientes, evaluá si son
      tolerables para producción. Ahí sí opinás vos: es la decisión de despliegue.
    - **Spot-check acotado, no barrido**: leé solo los hunks del diff que tocan sync ML↔Woo,
