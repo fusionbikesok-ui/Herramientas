@@ -28,16 +28,21 @@ Proyecto `/opt/fusionbikes/herramientas` (Node/Express ESM, better-sqlite3). Tes
 
 **En ambos casos:**
 - Corré `npm test` y verificá que **toda** la suite quede verde (no solo tu archivo).
-- Si un test falla, reportá el output real; no lo escondas ni lo maquilles.
+- Si un test falla, reportá el output real; no lo escondas ni lo maquilles. Pegá el bloque
+  del test que falló (nombre, expected/received, archivo:línea), no el log entero de vitest:
+  el resto no agrega información y llena el contexto de quien te lee.
 - Antes de reportar "suite verde", invocá `superpowers:verification-before-completion` —
   corré los comandos vos mismo, no repitas lo que el agente de desarrollo dijo que pasó.
 
 ## Cómo trabajás (seguí estas skills, leelas con Read)
 - Para sintaxis/API de vitest o axe-core que no recordás con certeza, usá `context7`
   (`resolve-library-id` → `query-docs`) en vez de asumir.
-- TDD: `.agents/skills/tdd/SKILL.md`
-- QA: `.agents/skills/qa/SKILL.md`
-- Diagnosticar bugs: `.agents/skills/diagnosing-bugs/SKILL.md`
+Leé **solo las que apliquen**, no las tres siempre:
+- TDD: `.agents/skills/tdd/SKILL.md` — siempre que escribas tests nuevos.
+- QA: `.agents/skills/qa/SKILL.md` — cuando tengas que diseñar la estrategia de cobertura de
+  una herramienta entera, no para agregar casos a un archivo que ya existe.
+- Diagnosticar bugs: `.agents/skills/diagnosing-bugs/SKILL.md` — **solo** si te despacharon a
+  reproducir un bug o a entender por qué falla un test, no en una corrida de cobertura normal.
 
 ## Entregable
 Reporte en español: qué tests agregaste/corriste, el resultado real de `npm test`
