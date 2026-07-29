@@ -1244,6 +1244,7 @@ export async function syncPedidosCache(db, cfg) {
     // que ya refleja el pedido cuando se cargó el tracking en el tab Seguimientos).
     try {
       const mlPend = await pendientesMl(db, cfg.ml);
+      const clavesVigentesMl = new Set(mlPend.map((p) => `ml:${p.ml_order_id}`));
       const txMl = db.transaction(() => {
         for (const p of mlPend) {
           upsertPedidoCache(db, {
@@ -1262,6 +1263,22 @@ export async function syncPedidosCache(db, cfg) {
             items_json: JSON.stringify(p.items),
             actualizado_en: now(),
           });
+        }
+        // Poda: un pedido ML que dejó de estar ready_to_ship (se despachó) simplemente
+        // desaparece del resultado de pendientesMl, pero el upsert de arriba nunca lo toca
+        // -> quedaría huérfano para siempre como "pendiente" (mismo bug ya visto en
+        // catalogo_cache/refrescarCatalogo). Fail-closed: solo podamos si mlPend trajo al
+        // menos un resultado; si vino vacío por un corte parcial de la API de ML (sin tirar
+        // excepción), preferimos dejar pendientes viejos de más (falso positivo temporal) a
+        // borrar de golpe toda la cola real de pendientes ML.
+        if (mlPend.length > 0) {
+          const filasViejas = db.prepare(
+            "SELECT clave FROM pedidos_cache WHERE canal='ml' AND estado_envio='pendiente'"
+          ).all();
+          const borrar = db.prepare('DELETE FROM pedidos_cache WHERE clave=?');
+          for (const r of filasViejas) {
+            if (!clavesVigentesMl.has(r.clave)) borrar.run(r.clave);
+          }
         }
       });
       txMl();

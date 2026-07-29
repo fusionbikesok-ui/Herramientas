@@ -1239,4 +1239,42 @@ describe('syncPedidosCache', () => {
     const row = db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:100'").get();
     expect(row).toBeUndefined();
   });
+
+  it('poda de pedidos_cache las filas ML pendientes que ya no están ready_to_ship (pedido despachado)', async () => {
+    buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/555
+
+    await syncPedidosCache(db, CFG);
+
+    const filaVieja = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get();
+    expect(filaVieja).toBeUndefined();
+    const filaNueva = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:2222'").get();
+    expect(filaNueva).toBeTruthy();
+    expect(filaNueva.estado_envio).toBe('pendiente');
+  });
+
+  it('guard fail-closed: si pendientesMl devuelve vacío, NO borra los pendientes ML existentes', async () => {
+    buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // orders/search vacío (corte parcial de la API)
+
+    await syncPedidosCache(db, CFG);
+
+    const filaVieja = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get();
+    expect(filaVieja).toBeTruthy();
+    expect(filaVieja.estado_envio).toBe('pendiente');
+  });
 });
