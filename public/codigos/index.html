@@ -84,7 +84,7 @@
 <div class="modal" id="cam-modal">
   <div class="modal-box">
     <video id="cam-video" autoplay playsinline muted></video>
-    <div class="sub" id="cam-sub">Apuntá al código de barras…</div>
+    <div class="sub" id="cam-sub">Centrá el código de barras dentro de la banda</div>
     <button class="cerrar" id="cam-cerrar">Cerrar cámara</button>
   </div>
 </div>
@@ -255,7 +255,7 @@ listaEl.addEventListener('keydown', function(e){
 var modal = document.getElementById('cam-modal');
 function abrirCam(idWoo){
   modal.classList.add('open');
-  document.getElementById('cam-sub').textContent = 'Apuntá al código de barras…';
+  document.getElementById('cam-sub').textContent = 'Centrá el código de barras dentro de la banda';
   var yaDisparo = false;
   window.Scanner.open({
     video: document.getElementById('cam-video'),
