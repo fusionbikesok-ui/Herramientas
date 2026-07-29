@@ -845,15 +845,6 @@ async function marcarEtiqueta(wcId,lista,numero){
 
 // ─── Cargar seguimientos ────────────────────────────────────────────────────
 
-function buscadorCorreccionHtml(){
-  return '<div class="ped" style="margin-bottom:16px">'
-    +'<div class="ped-top"><span class="ped-num">Corregir tracking de un pedido (por N° de pedido)</span></div>'
-    +'<div class="ped-foot">'
-    +'<input type="text" placeholder="N° de pedido" id="corr-num" style="flex:1;min-width:120px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
-    +'<button class="btn sec" onclick="buscarParaCorregir()">Buscar</button>'
-    +'</div><div id="corr-resultado"></div></div>';
-}
-
 async function cargarSeguimientos(){
   var c=document.getElementById('cuerpo');
   c.innerHTML='<div class="loading">Cargando pedidos con etiqueta lista…</div>';
@@ -884,35 +875,31 @@ async function cargarSeguimientos(){
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
 
-async function buscarParaCorregir(){
-  var num=document.getElementById('corr-num').value.trim();
-  var out=document.getElementById('corr-resultado');
-  if(!num){out.innerHTML='';return;}
-  out.innerHTML='<p class="sub">Buscando…</p>';
+// Corrección de tracking desde la tarjeta de Historial: usa siempre el wc_order_id real
+// de la tarjeta (p.wc_order_id), nunca un número tipeado a mano — así no hay riesgo de
+// corregir el pedido equivocado por numeración custom de Woo o IDs de ML.
+async function abrirCorreccionTracking(wcOrderId,event){
+  if(event)event.stopPropagation();
   try{
-    var r=await api('/seguimientos/'+num+'/tracking-actual');
+    var r=await api('/seguimientos/'+wcOrderId+'/tracking-actual');
     if(!r.body.ok)throw new Error(r.body.error||'error');
     if(!r.body.corregible){
-      out.innerHTML='<p class="sub err">Este pedido no tiene un tracking cargado para corregir (estado actual: '+esc(r.body.status)+').</p>';
+      alert('Este pedido no tiene un tracking cargado para corregir (estado actual: '+r.body.status+').');
       return;
     }
-    out.innerHTML='<div class="ped-foot" style="margin-top:8px">'
-      +'<span class="sub" style="margin:0">Actual: <b>'+esc(r.body.tracking_actual)+'</b></span>'
-      +'<input type="text" placeholder="Nuevo N° de seguimiento" id="corr-nuevo" style="flex:1;min-width:140px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
-      +'<button class="btn" onclick="confirmarCorreccion(\''+esc(num)+'\')">Corregir</button>'
-      +'</div>';
-  }catch(e){out.innerHTML='<p class="sub err">'+esc(e.message)+'</p>';}
+    var nuevo=prompt('Tracking actual: '+r.body.tracking_actual+'\n\nNuevo N° de seguimiento de Andreani:');
+    if(nuevo===null)return;
+    nuevo=nuevo.trim();
+    if(!nuevo)return;
+    await confirmarCorreccion(wcOrderId,nuevo);
+  }catch(e){alert('No se pudo consultar el tracking: '+e.message);}
 }
 
-async function confirmarCorreccion(num){
-  var input=document.getElementById('corr-nuevo');
-  var nuevo=(input&&input.value||'').trim();
-  if(!nuevo){if(input)input.focus();return;}
-  var out=document.getElementById('corr-resultado');
+async function confirmarCorreccion(wcOrderId,nuevo){
   try{
-    var r=await api('/seguimientos/'+num+'/corregir-tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:nuevo})});
+    var r=await api('/seguimientos/'+wcOrderId+'/corregir-tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:nuevo})});
     if(!r.body.ok)throw new Error(r.body.error||'error');
-    out.innerHTML='<p class="sub" style="color:var(--green)">✓ Corregido: '+esc(r.body.tracking_anterior)+' → '+esc(r.body.tracking_nuevo)+'</p>';
+    alert('✓ Corregido: '+r.body.tracking_anterior+' → '+r.body.tracking_nuevo);
   }catch(e){alert('No se pudo corregir: '+e.message);}
 }
 
@@ -949,7 +936,7 @@ async function cargarHistorial(){
     var dep=rows.filter(function(p){return p.estado==='pendiente_deposito';});
     var comp=rows.filter(function(p){return p.estado==='completada';});
     var sinPreparar=rows.filter(function(p){return p.estado==='enviado_sin_preparar';});
-    var html=buscadorCorreccionHtml();
+    var html='';
     if(sinPreparar.length){
       html+='<h1 style="font-size:1.1rem">Enviados sin preparar</h1><div class="ped-grid" style="margin-bottom:20px">'
         +sinPreparar.map(cardEnviadoSinPreparar).join('')+'</div>';
@@ -967,12 +954,15 @@ async function cargarHistorial(){
 function cardHistorial(p){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
   var st=p.estado==='completada'?'<span class="badge b-ok">completada</span>':'<span class="badge b-dep">pendiente depósito</span>';
+  var corregirBtn=p.canal==='web'
+    ?'<button class="btn mini sec" style="margin-left:auto" onclick="abrirCorreccionTracking('+p.wc_order_id+',event)">Corregir tracking</button>'
+    :'';
   return '<div class="ped" onclick="abrirDetalle('+p.id+')">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+'</div>'
     +'<div class="ped-items">'+p.total_items+' ítems · '+p.total_fotos+' fotos · '+fecha(p.completado_en||p.creado_en)
     +(p.preparado_por?' · '+esc(p.preparado_por):'')+'</div>'
-    +'<div class="ped-foot">'+st+'</div></div>';
+    +'<div class="ped-foot">'+st+corregirBtn+'</div></div>';
 }
 
 function cardEnviadoSinPreparar(p){
