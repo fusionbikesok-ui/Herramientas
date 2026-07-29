@@ -1414,4 +1414,59 @@ describe('syncPedidosCache', () => {
     const fila = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get();
     expect(fila).toBeTruthy();
   });
+
+  it('GET /pendientes no muestra una fila cuya preparación local ya está completada (bug real: pedido ya entregado seguía en la cola)', async () => {
+    const app = buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:2000017571249972','ml',NULL,'2000017571249972','2000017571249972','Cliente Ya Entregado','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en, completado_en, preparado_por)
+      VALUES ('ml', 'ml:2000017571249972', 'completada', 1, '2026-07-24T00:00:00Z', '2026-07-24T01:00:00Z', 'Joaco')
+    `).run();
+
+    const r = await request(app).get('/api/preparacion/pendientes');
+
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.data.find(p => p.ml_order_id === '2000017571249972')).toBeUndefined();
+  });
+
+  it('GET /pendientes no muestra una fila con preparación en pendiente_deposito (tiene pantalla propia en Historial)', async () => {
+    const app = buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:3333','ml',NULL,'3333','3333','Cliente Deposito','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en)
+      VALUES ('ml', 'ml:3333', 'pendiente_deposito', 0, '2026-07-24T00:00:00Z')
+    `).run();
+
+    const r = await request(app).get('/api/preparacion/pendientes');
+
+    expect(r.body.data.find(p => p.ml_order_id === '3333')).toBeUndefined();
+  });
+
+  it('GET /pendientes SÍ muestra filas sin preparación todavía o en_preparacion (no rompe el flujo normal)', async () => {
+    const app = buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:4444','ml',NULL,'4444','4444','Cliente Sin Preparar','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:5555','ml',NULL,'5555','5555','Cliente En Preparacion','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en)
+      VALUES ('ml', 'ml:5555', 'en_preparacion', 0, '2026-07-24T00:00:00Z')
+    `).run();
+
+    const r = await request(app).get('/api/preparacion/pendientes');
+
+    expect(r.body.data.find(p => p.ml_order_id === '4444')).toBeTruthy();
+    expect(r.body.data.find(p => p.ml_order_id === '5555')).toBeTruthy();
+  });
 });
