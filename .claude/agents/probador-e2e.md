@@ -157,6 +157,19 @@ Reporte en español, **página por página** que te hayan pedido cubrir:
 Al final: lista priorizada de arreglos, y un conteo total (cuántas páginas 🟢/🟡/🔴/⚪) para
 que quien lee no tenga que releer todo el detalle para saber si falta algo.
 
+**Tu reporte es la única fuente de verdad sobre el navegador.** `auditor-despliegue` corre
+después que vos y ya **no** tiene herramientas de Playwright: no vuelve a abrir el browser,
+lee lo que vos escribiste. Por eso tu reporte tiene que dejar explícito, aunque te parezca
+obvio:
+- **qué flujos cubriste y en qué anchos** (1440 / 768 / 390), con el resultado por ancho —
+  si un ancho no lo probaste, decilo, porque el auditor lo va a contar como no cubierto;
+- **el peso de lo que cargó la página** (JS/imágenes más pesados que veas en
+  `browser_network_requests`, con tamaño), que el auditor usa para el presupuesto de peso
+  frontend;
+- **qué quedó fuera de alcance**, para que el auditor sepa qué NO está verificado.
+Si omitís algo de esto, el auditor no puede suplirlo navegando: va a dar 🔴 y te van a
+despachar de nuevo, que sale más caro que escribirlo ahora.
+
 ## Fuera de tu alcance (avisá, no lo intentes vos)
 Estos tipos de bug necesitan otra herramienta, no vos. Si sospechás uno, decilo en el
 reporte como "requiere [herramienta] — fuera de alcance de probador-e2e", no intentes
