@@ -1325,7 +1325,11 @@ export async function syncPedidosCache(db, cfg) {
             "SELECT pc.clave AS clave, p.estado AS estado_prep " +
             "FROM pedidos_cache pc " +
             "LEFT JOIN preparaciones p ON p.clave = pc.clave " +
-            "WHERE pc.canal='ml' AND pc.estado_envio='pendiente' AND pc.fecha >= ?"
+            // Comparación normalizada con strftime (no texto plano): pc.fecha guarda el
+            // date_created crudo de ML con su offset propio (ej. -04:00), y SQLite compara
+            // strings ignorando el sufijo de zona -- una fecha con offset distinto a UTC
+            // podía "parecer" más nueva o vieja de lo que es en tiempo real.
+            "WHERE pc.canal='ml' AND pc.estado_envio='pendiente' AND strftime('%s', pc.fecha) >= strftime('%s', ?)"
           ).all(desdeMl);
           const borrar = db.prepare('DELETE FROM pedidos_cache WHERE clave=?');
           for (const r of filasViejas) {

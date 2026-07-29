@@ -1368,6 +1368,33 @@ describe('syncPedidosCache', () => {
     expect(fila).toBeTruthy();
   });
 
+  it('fila ml:vieja con fecha en offset de zona horaria distinto a UTC se poda según su tiempo real (comparación normalizada, no texto plano)', async () => {
+    buildTestApp(db);
+    // '-04:00' es lexicográficamente MENOR que 'Z' -- con comparación de texto plano
+    // ("...-04:00" >= "...Z" como strings) esta fecha se leería como más vieja de lo que es
+    // en tiempo real y podría quedar mal clasificada según el corte de 30 días.
+    // Instante real: 20 días atrás (bien adentro de la ventana de 30 días), pero escrito
+    // con offset -04:00 en vez de 'Z' -- mismo instante, distinta representación de texto.
+    const veinteDiasAtrasUtc = new Date(Date.now() - 20 * 24 * 3600 * 1000);
+    const mismoInstanteOffset4 = new Date(veinteDiasAtrasUtc.getTime() + 4 * 3600 * 1000)
+      .toISOString().replace('Z', '-04:00');
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:vieja','ml',NULL,'vieja','vieja','Cliente Offset TZ',?,'pendiente',NULL,0,'self_service',NULL,'[]',?)
+    `).run(mismoInstanteOffset4, mismoInstanteOffset4);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // listado confiable, sin pendientes vigentes
+
+    await syncPedidosCache(db, CFG);
+
+    // El instante real está dentro de la ventana de 30 días -> debe podarse porque no
+    // aparece en el listado vigente ML. Con comparación de texto plano ignorando el offset,
+    // este caso podía quedar mal clasificado según el corte.
+    const fila = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:vieja'").get();
+    expect(fila).toBeUndefined();
+  });
+
   it('una fila con preparación completada no se poda aunque no aparezca en el listado de pendientesMl', async () => {
     buildTestApp(db);
     db.prepare(`
