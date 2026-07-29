@@ -59,8 +59,12 @@ código.
   orquestador en vez de decidir vos.
 - Reutilizá los módulos compartidos existentes: `public/lib/format.js`, `public/lib/api.js`,
   `public/lib/theme.css`, `public/lib/scanner.js`.
-- Antes de reportar terminado, invocá `superpowers:verification-before-completion`: corré
-  `npm test` (vitest) de verdad y confirmá el resultado real, no lo asumas.
+- **Mientras iterás**, corré solo el archivo de test que te toca
+  (`npx vitest run test/<archivo>.test.js`), no la suite entera (~110s, 658 tests). La suite
+  completa (`npm test`) va **una vez al final**, invocando
+  `superpowers:verification-before-completion` — esa corrida no es negociable.
+- Si un test falla, pegá solo el bloque del test que falló (nombre, expected/received,
+  archivo:línea), no el log entero de vitest.
 - Si el `revisor` te devuelve hallazgos, usá `superpowers:receiving-code-review` —
   verificalos técnicamente antes de aceptarlos o rechazarlos, no los apliques a ciegas.
 
