@@ -496,6 +496,7 @@
 
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
+<script type="module" src="../lib/scanner.js"></script>
 <script>
   Api.installAuth();
 (function(){
@@ -1280,6 +1281,12 @@
     camToastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2200);
   }
   function abrirCamara(){
+    // Sin el módulo cargado no tiene sentido abrir el modal: avisamos en la página
+    // y salimos antes de armar el slider, que quedaría apuntando a nada.
+    if(!window.Scanner){
+      alert('No se pudo cargar el lector de códigos. Recargá la página.');
+      return;
+    }
     var modal = document.getElementById('cam-modal'), video = document.getElementById('cam-video');
     modal.classList.add('open');
     var zoomEl = document.getElementById('cam-zoom');
