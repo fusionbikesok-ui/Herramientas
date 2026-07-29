@@ -105,6 +105,30 @@ Borra la regla del SKU. Idempotente: si no existía igual responde `ok`.
 Nota: estos tres endpoints son puramente locales (sqlite), no llaman a la API de ML ni de
 Woo, así que no aplica decisión de fail-closed/fail-open.
 
+## Preparación de pedidos — Actividad (auditoría por paso)
+
+### GET /api/preparacion/:id (campo agregado)
+`data.eventos` — historial completo de eventos de auditoría de la preparación, orden
+`id DESC` (más reciente primero). Cada evento: `{ id, preparacion_id, item_id, tipo,
+usuario, detalle_json, detalle, creado_en }`. `detalle` es `detalle_json` ya parseado; si
+`detalle_json` es inválido o NULL, `detalle` viene como `{}` (nunca tira 500 — la Actividad
+es auxiliar y no debe bloquear la apertura del pedido).
+
+### GET /api/preparacion/:id/eventos
+Refresco liviano de eventos, sin re-traer items/fotos (pensado para polling cada ~15s).
+
+- Request: query param opcional `desde=<id>` (entero). Si viene y es válido, devuelve solo
+  eventos con `id > desde`. Si no viene o no es un entero válido, devuelve todo el
+  historial (mismo comportamiento que antes de agregar el filtro).
+- Response 200: `{ "ok": true, "eventos": [ { ...igual formato que en GET /:id... } ] }`.
+- Response 404: `{ "ok": false, "error": "no encontrada" }`.
+
+### POST /api/preparacion/:id/heartbeat (campo agregado)
+Además de `otros` (quién más está viendo la preparación), la respuesta incluye
+`ultimo_evento_id`: el `MAX(id)` de `preparacion_eventos` para esa preparación (0 si no hay
+eventos aún). Pensado para que el frontend sepa si conviene pedir `GET
+/:id/eventos?desde=<ultimo_evento_id_previo>` en el próximo ciclo.
+
 ## Contador de Inventario (`/api/inventario`)
 
 Todos los endpoints requieren sesión iniciada; las consultas de sesión están scopeadas
