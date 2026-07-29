@@ -37,7 +37,10 @@ de código**, seguí este pipeline sin esperar un comando:
    lectura de código. Ver credenciales de prueba abajo.
 8. Despachar **`auditor-despliegue`** → gate obligatorio (auditoría + seguridad + tests
    verdes + UI responsive + conformidad de sistema visual + migración pendiente +
-   presupuesto de peso frontend). Devuelve 🟢/🔴.
+   presupuesto de peso frontend). Devuelve 🟢/🔴. **El auditor no abre el navegador**: si
+   corriste el paso 7, pegale el reporte de `probador-e2e` en el prompt de despacho — de
+   ahí saca la evidencia de responsive y peso. Sin ese reporte, un cambio que toca
+   `public/` es 🔴 automático (no lo suple navegando él).
 9. Reportar al usuario. **El deploy a prod lo hace el usuario a mano.**
 
 Usá **`explorador`** como apoyo cuando necesites ubicar o entender código sin ensuciar tu
