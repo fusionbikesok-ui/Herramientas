@@ -348,9 +348,21 @@ export function preparacionRouter(db, cfg) {
   router.get('/pendientes', (req, res) => {
     try {
       const rows = db.prepare("SELECT * FROM pedidos_cache WHERE estado_envio='pendiente' ORDER BY fecha ASC").all();
-      const data = rows.map(row => {
-        const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(row.clave);
-        const items = JSON.parse(row.items_json);
+      // Filtramos filas cuya preparación local ya está resuelta (completada, o en flujo de
+      // depósito con pantalla propia en Historial). El sync de ML nunca marca estado_envio
+      // como "enviado" en la caché (diseño existente, fuera de alcance acá) y la poda de
+      // syncPedidosCache excluye a propósito estas filas para no borrar de más — por eso
+      // pueden quedar en pedidos_cache con estado_envio='pendiente' para siempre aunque el
+      // operario ya haya terminado. Filtramos acá, en la lectura, sin tocar la poda.
+      const RESUELTAS = ['completada', 'pendiente_deposito'];
+      const data = rows
+        .map(row => {
+          const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(row.clave);
+          return { row, prep };
+        })
+        .filter(({ prep }) => !prep || !RESUELTAS.includes(prep.estado))
+        .map(({ row, prep }) => {
+          const items = JSON.parse(row.items_json);
         if (row.canal === 'web') {
           return {
             canal: 'web',
