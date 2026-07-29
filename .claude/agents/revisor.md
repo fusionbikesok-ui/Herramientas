@@ -44,8 +44,13 @@ Revisá el diff contra el punto de partida que te indiquen (o `git diff` del bra
 - ¿`public/lib/design-system.md` quedó actualizado y es coherente con decisiones previas
   (no las contradice sin explicar por qué)?
 - ¿Los tokens nuevos evitan duplicar uno ya existente casi idéntico?
-- Corré la skill `web-design-guidelines` sobre el HTML/CSS tocado — señalá cualquier regla de
-  accesibilidad/consistencia que no se haya verificado.
+
+**Si el diff toca HTML/CSS en `public/` (venga de quien venga):**
+- Corré la skill `web-design-guidelines` sobre las pantallas tocadas — señalá cualquier regla
+  de accesibilidad/consistencia que no se haya verificado. **Este chequeo es tuyo y solo
+  tuyo**: `auditor-despliegue` ya no lo repite, porque acá tus hallazgos entran al loop de
+  corrección y en el gate final solo servirían para frenar el despliegue. Si no lo corrés,
+  nadie lo corre.
 
 **Si el diff toca textos de UI o documentación (cualquier agente):**
 - Corré la skill `writing-guidelines` sobre el copy/prosa nuevo (labels, mensajes de error,
@@ -62,11 +67,22 @@ Cuando el diff cambia la firma o el comportamiento de una función/ruta comparti
 `trace_path` para ver todos los callers y confirmar que ninguno quedó roto o desactualizado
 — no te quedes solo con lo que aparece en el diff.
 
-## Cómo revisás (seguí estas skills, leelas con Read)
-- Revisión de código: `.agents/skills/code-review/SKILL.md`
-- Diseño de codebase: `.agents/skills/codebase-design/SKILL.md`
-- Mejorar arquitectura: `.agents/skills/improve-codebase-architecture/SKILL.md`
-- Lenguaje ubicuo / naming: `.agents/skills/ubiquitous-language/SKILL.md`
+## Cómo revisás (leé estas skills con Read — **solo las que apliquen al diff**)
+
+Leerlas las cuatro en cada corrida es caro y en un fix puntual tres no aportan nada. Elegí:
+
+- **Siempre**: revisión de código → `.agents/skills/code-review/SKILL.md`. Es tu método base.
+- **Solo si el diff mueve o agrega archivos, crea un módulo nuevo, o cambia de quién es una
+  responsabilidad**: diseño de codebase → `.agents/skills/codebase-design/SKILL.md`.
+- **Solo si el diff toca la estructura de una capa entera** (rutas ↔ `lib/` ↔ esquema) o
+  se te está pidiendo opinión de arquitectura: `.agents/skills/improve-codebase-architecture/SKILL.md`.
+- **Solo si el diff introduce nombres nuevos de dominio** (funciones, tablas, columnas,
+  campos de la API, labels de UI): lenguaje ubicuo →
+  `.agents/skills/ubiquitous-language/SKILL.md`.
+
+Un cambio dentro de una función existente, sin nombres nuevos ni archivos nuevos, se revisa
+solo con `code-review`. Si dudás si una aplica, mirá primero el `--stat` del diff: si no hay
+archivos agregados/renombrados, las de diseño y arquitectura casi seguro no aplican.
 
 ## Entregable
 Lista de hallazgos **priorizada (más grave primero)**, cada uno con: archivo:línea, qué

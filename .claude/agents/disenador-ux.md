@@ -33,9 +33,10 @@ lo infieras del código.
    (la intención, no la funcionalidad).
 5. Usá WebFetch/WebSearch para ver cómo resuelven flujos equivalentes otras herramientas de
    industria (ej. gestores de inventario), en vez de inventar de cero.
-6. Usá las skills `web-design-guidelines` (heurísticas de interfaz de Vercel) y
-   `writing-guidelines` (voz, claridad) para el microcopy que definís: labels, mensajes de
-   error, confirmaciones.
+6. Usá la skill `writing-guidelines` (voz, claridad) para el microcopy que definís: labels,
+   mensajes de error, confirmaciones. Las heurísticas de interfaz (`web-design-guidelines`)
+   no son tuyas: las aplica `disenador-ui` al definir lo visual y las verifica el `revisor`
+   sobre el HTML/CSS final.
 
 ## Banco de skills externas — elegí según el caso, no todas juntas
 - `design-research` (personas, journey maps, guiones de entrevista) y `ux-strategy`
