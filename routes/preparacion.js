@@ -285,8 +285,11 @@ export function purgarFotosBorradas(db) {
 // Parsea detalle_json de forma defensiva: la Actividad es auxiliar y nunca debe poder
 // bloquear la apertura del pedido por un JSON corrupto o NULL en un evento viejo.
 function mapearEvento(e) {
-  let detalle = {};
-  try { detalle = JSON.parse(e.detalle_json); } catch (_) { /* detalle inválido, se deja {} */ }
+  let parsed = null;
+  try { parsed = JSON.parse(e.detalle_json); } catch (_) { /* detalle_json inválido */ }
+  // JSON.parse('null') no lanza excepción y devuelve `null` (no un objeto), así que el
+  // catch de arriba no lo agarra: hay que chequear el tipo del resultado también.
+  const detalle = (parsed && typeof parsed === 'object') ? parsed : {};
   return { ...e, detalle };
 }
 

@@ -755,6 +755,22 @@ describe('preparacion flujo', () => {
     expect(rEventos.body.eventos[0].detalle).toEqual({});
   });
 
+  it('GET /:id y GET /:id/eventos devuelven detalle:{} si detalle_json es el string literal "null"', async () => {
+    // JSON.parse('null') no lanza excepción, devuelve `null` (no un objeto): caso aparte
+    // del JSON inválido de arriba, que sí dispara el catch.
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    db.prepare("UPDATE preparacion_eventos SET detalle_json='null' WHERE preparacion_id=?").run(id);
+
+    const rDetalle = await request(app).get(`/api/preparacion/${id}`);
+    expect(rDetalle.status).toBe(200);
+    expect(rDetalle.body.data.eventos[0].detalle).toEqual({});
+
+    const rEventos = await request(app).get(`/api/preparacion/${id}/eventos`);
+    expect(rEventos.status).toBe(200);
+    expect(rEventos.body.eventos[0].detalle).toEqual({});
+  });
+
   it('GET /:id/eventos?desde=N devuelve solo eventos con id>N', async () => {
     const id = nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });

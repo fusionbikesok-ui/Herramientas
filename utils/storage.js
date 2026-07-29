@@ -42,5 +42,3 @@ export function rutaAbsoluta(url) {
 export function estaDentroDeUploads(abs) {
   return abs === UPLOADS_DIR || abs.startsWith(UPLOADS_DIR + path.sep);
 }
-
-export { UPLOADS_DIR };
