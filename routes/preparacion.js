@@ -1355,6 +1355,20 @@ export async function syncPedidosCache(db, cfg) {
         } else {
           console.warn('syncPedidosCache: listado ML no confiable esta corrida (truncado o fallos de shipment), se omite la poda');
         }
+
+        // Limpieza aparte de la poda "activa" de arriba: las filas ML con preparación ya
+        // completada nunca se podan por ausencia (ver comentario arriba, no se refetchean),
+        // y desde el fix que las ocultó de /pendientes tampoco son visibles en la UI -> sin
+        // esto se acumularían para siempre en pedidos_cache. Misma ventana de retención de
+        // 60 días que ya se usa para estado_envio='enviado' más arriba en esta función.
+        db.prepare(
+          "DELETE FROM pedidos_cache WHERE clave IN (" +
+          "  SELECT pc.clave FROM pedidos_cache pc " +
+          "  JOIN preparaciones p ON p.clave = pc.clave " +
+          "  WHERE pc.canal='ml' AND pc.estado_envio='pendiente' " +
+          "    AND p.estado='completada' AND p.completado_en < ?" +
+          ")"
+        ).run(hace60Dias);
       });
       txMl();
     } catch (eMl) {

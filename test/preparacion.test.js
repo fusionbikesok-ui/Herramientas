@@ -1415,6 +1415,48 @@ describe('syncPedidosCache', () => {
     expect(fila).toBeTruthy();
   });
 
+  it('borra de pedidos_cache una fila ml pendiente cuya preparación se completó hace más de 60 días (limpieza por antigüedad)', async () => {
+    buildTestApp(db);
+    const hace70Dias = new Date(Date.now() - 70 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:2222','ml',NULL,'2222','2222','Cliente Viejo','2026-01-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-01-01T00:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en, completado_en)
+      VALUES ('ml', 'ml:2222', 'completada', 1, '2026-01-01T00:00:00Z', ?)
+    `).run(hace70Dias);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const fila = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:2222'").get();
+    expect(fila).toBeUndefined();
+  });
+
+  it('NO borra una fila ml pendiente cuya preparación se completó hace 10 días (sigue en la tabla, aunque no aparezca en /pendientes)', async () => {
+    buildTestApp(db);
+    const hace10Dias = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:3333','ml',NULL,'3333','3333','Cliente Reciente','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en, completado_en)
+      VALUES ('ml', 'ml:3333', 'completada', 1, '2026-07-01T00:00:00Z', ?)
+    `).run(hace10Dias);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const fila = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:3333'").get();
+    expect(fila).toBeTruthy();
+  });
+
   it('GET /pendientes no muestra una fila cuya preparación local ya está completada (bug real: pedido ya entregado seguía en la cola)', async () => {
     const app = buildTestApp(db);
     db.prepare(`

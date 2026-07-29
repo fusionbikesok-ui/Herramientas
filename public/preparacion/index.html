@@ -283,8 +283,7 @@ async function cargarPendientesSilencioso(){
 function cardPendiente(p,ix){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">ML · '+esc(p.logistic_type==='self_service'?'Flex':'Colecta')+'</span>';
   var estado='';
-  if(p.estado_preparacion==='pendiente_deposito')estado='<span class="badge b-dep">pendiente depósito</span>';
-  else if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
+  if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
   if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   return '<div class="ped" onclick="preparar('+ix+')">'
