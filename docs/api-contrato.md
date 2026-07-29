@@ -20,6 +20,39 @@ Nota: ante error de la API de ML/Woo el comportamiento es fail-closed (no se inv
 precios ni se crean pedidos sin datos; se registra el error y se reintenta en el próximo
 ciclo).
 
+Caso especial — POST /orders a Woo que falla sin respuesta (timeout, corte de red, 5xx,
+429): antes de liberar la reserva y permitir un reintento, el backend verifica contra la
+API de Woo si el pedido ya se creó (busca por `after=<fecha de la reserva>` paginando y
+matcheando el meta `_ml_order_id` localmente; reintentos con backoff 500/1500/4000ms).
+- Si el pedido existe → se adopta ese `wc_order_id`, no se crea otro.
+- Si con certeza no existe → se libera la reserva y se reintenta en el próximo ciclo.
+- Si la verificación no es concluyente (Woo caída, respuesta con forma inesperada) →
+  **fail-closed**: la reserva queda RETENIDA (`retenido_en` seteado), no se reintenta sola
+  y requiere intervención manual. Se expone en `GET /api/sync/estado` (ver abajo).
+Un rechazo 4xx (salvo 429) no dispara verificación: la request llegó a Woo y fue
+rechazada, no hay pedido creado.
+
+### GET /api/sync/estado (campo agregado)
+Además de lo que ya devolvía, `pedidos` ahora incluye:
+
+```
+"pedidos": {
+  "total": 0, "cancelados": 0, "ultimos": [...],
+  "reservasRetenidas": {
+    "total": 0,
+    "ordenes": [{ "ml_order_id": "...", "creado_en": "...", "retenido_en": "..." }]
+  }
+}
+```
+
+`reservasRetenidas` lista (máx. 20) las órdenes de ML cuya creación de pedido en Woo quedó
+en estado no verificable. Requieren acción manual:
+- si el pedido SÍ existe en Woo:
+  `UPDATE ordenes_ml_wc_pedidos SET wc_order_id=<id>, retenido_en=NULL WHERE ml_order_id=<orden>`
+- si NO existe: `DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id=<orden>` — con eso
+  alcanza, la orden nunca se marca como procesada mientras está retenida, así que el cron
+  la reintenta sola en el próximo ciclo.
+
 ### POST /api/sync/wc-ml
 Dispara manualmente la sincronización de stock de WooCommerce hacia MercadoLibre.
 Protegida por el candado `_wcToMlEnCurso`.

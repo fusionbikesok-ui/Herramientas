@@ -41,6 +41,7 @@ export function openDb(dbPath) {
     creado_en TEXT NOT NULL
   )`); } catch (_) {}
   try { db.exec('ALTER TABLE ordenes_ml_wc_pedidos ADD COLUMN cancelado_en TEXT'); } catch (_) {}
+  try { db.exec('ALTER TABLE ordenes_ml_wc_pedidos ADD COLUMN retenido_en TEXT'); } catch (_) {}
   try { db.exec(`CREATE TABLE IF NOT EXISTS ml_publicaciones_cache (
     clave TEXT PRIMARY KEY,
     item_id TEXT NOT NULL,
