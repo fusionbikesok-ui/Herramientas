@@ -40,7 +40,8 @@ anterior, para que no re-explore el repo desde cero.
 8. **Auditar.** Despachá `auditor-despliegue` como gate final: auditoría de código +
    seguridad + todos los tests verdes + UI responsive + conformidad de sistema visual +
    migración pendiente + presupuesto de peso frontend. Devuelve 🟢/🔴. **No abre el
-   navegador**: pegale el reporte de `probador-e2e` del paso 7 en el prompt de despacho.
+   navegador ni re-revisa el código**: pegale el veredicto final del `revisor` (paso 5) y
+   el reporte de `probador-e2e` (paso 7) en el prompt de despacho. Sin esos insumos, 🔴.
 9. **Reportar** al usuario en español el resultado y el veredicto del auditor. El deploy a
    producción lo hace el usuario **a mano**.
 
