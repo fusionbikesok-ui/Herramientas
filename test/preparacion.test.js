@@ -1261,7 +1261,7 @@ describe('syncPedidosCache', () => {
     expect(filaNueva.estado_envio).toBe('pendiente');
   });
 
-  it('guard fail-closed: si pendientesMl devuelve vacío, NO borra los pendientes ML existentes', async () => {
+  it('guard fail-closed: si pendientesMl devuelve vacío pero confiable (sin truncar, sin fallos), SÍ poda (nada quedó pendiente de verdad)', async () => {
     buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
@@ -1269,12 +1269,91 @@ describe('syncPedidosCache', () => {
     `).run();
 
     wooFetch.mockResolvedValue({ data: [] });
-    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // orders/search vacío (corte parcial de la API)
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // orders/search: sin resultados, listado confiable
+
+    await syncPedidosCache(db, CFG);
+
+    const filaVieja = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get();
+    expect(filaVieja).toBeUndefined();
+  });
+
+  it('la poda NO borra filas web ni filas ML ya enviado, solo pendientes ML ausentes del listado vigente', async () => {
+    buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES
+        ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z'),
+        ('web:200','web',200,NULL,'200','Cliente Web','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,'[]','2026-07-01T00:00:00Z'),
+        ('ml:3333','ml',NULL,'3333','3333','Cliente Enviado ML','2026-07-01T00:00:00Z','enviado',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // sin pendientes vigentes, listado confiable
+
+    await syncPedidosCache(db, CFG);
+
+    expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get()).toBeUndefined();
+    expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:200'").get()).toBeTruthy();
+    expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:3333'").get()).toBeTruthy();
+  });
+
+  it('si falla un GET /shipments/:id, la poda se omite esa corrida (listado no confiable)', async () => {
+    buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 500, data: {} }); // shipments/555 falla
 
     await syncPedidosCache(db, CFG);
 
     const filaVieja = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get();
     expect(filaVieja).toBeTruthy();
     expect(filaVieja.estado_envio).toBe('pendiente');
+  });
+
+  it('si /orders/search viene truncado (results.length == límite), la poda se omite esa corrida', async () => {
+    buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+
+    const resultadosLlenos = Array.from({ length: 50 }, (_, i) => ({
+      id: 9000 + i, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: null, order_items: [],
+    }));
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: resultadosLlenos } }); // orders/search truncado en 50
+
+    await syncPedidosCache(db, CFG);
+
+    const filaVieja = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get();
+    expect(filaVieja).toBeTruthy();
+    expect(filaVieja.estado_envio).toBe('pendiente');
+  });
+
+  it('una fila con preparación completada no se poda aunque no aparezca en el listado de pendientesMl', async () => {
+    buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Completado','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en)
+      VALUES ('ml', 'ml:1111', 'completada', 0, '2026-07-01T00:00:00Z')
+    `).run();
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // no vuelve a aparecer: pendientesMl no la refetchea
+
+    await syncPedidosCache(db, CFG);
+
+    const fila = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get();
+    expect(fila).toBeTruthy();
   });
 });
