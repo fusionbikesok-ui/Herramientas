@@ -44,8 +44,13 @@ VPS staging, a producción se pasa a mano — no despliegues. No toques `.env`, 
   veces cuesta más que todo el resto de la tarea.
 - Seguí el plan del orquestador (`superpowers:executing-plans`) como fuente de verdad. Si
   algo no está definido ahí, reportá el hueco puntual — no lo decidas solo.
-- Antes de reportar terminado, invocá `superpowers:verification-before-completion`: corré
-  `npm test` de verdad.
+- **Mientras iterás**, corré solo el archivo que estás tocando
+  (`npx vitest run test/<archivo>.test.js`), no la suite entera: son ~110s y 658 tests cada
+  vez. La suite completa (`npm test`) corrésela **una vez al final**, antes de reportar,
+  invocando `superpowers:verification-before-completion`. Esa corrida final no es negociable.
+- Si un test falla, no vuelques el output entero al reporte: pegá el bloque del test que
+  falló (nombre, expected/received) y el archivo:línea. El log completo de vitest no agrega
+  información y llena el contexto.
 - Si el `revisor` te devuelve hallazgos, usá `superpowers:receiving-code-review` —
   verificalos técnicamente antes de aplicarlos, no a ciegas.
 
