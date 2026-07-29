@@ -80,10 +80,12 @@ todos los despachos siguientes, en vez de que cada agente repita la búsqueda.
    lectura de código. Ver credenciales de prueba abajo.
 8. Despachar **`auditor-despliegue`** → gate obligatorio (auditoría + seguridad + tests
    verdes + UI responsive + conformidad de sistema visual + migración pendiente +
-   presupuesto de peso frontend). Devuelve 🟢/🔴. **El auditor no abre el navegador**: si
-   corriste el paso 7, pegale el reporte de `probador-e2e` en el prompt de despacho — de
-   ahí saca la evidencia de responsive y peso. Sin ese reporte, un cambio que toca
-   `public/` es 🔴 automático (no lo suple navegando él).
+   presupuesto de peso frontend). Devuelve 🟢/🔴. **El auditor no abre el navegador ni
+   re-revisa el código**: pegale en el prompt de despacho el **veredicto final del
+   `revisor`** (paso 5) y, si corriste el paso 7, el **reporte de `probador-e2e`**. De ahí
+   saca la auditoría de código y la evidencia de responsive/peso; él verifica que sean del
+   diff final y agrega lo que solo hace él (seguridad, `npm test`, migraciones, tokens,
+   peso). Si falta alguno de los dos insumos, es 🔴 automático — no los suple él.
 9. Reportar al usuario. **El deploy a prod lo hace el usuario a mano.**
 
 **Inicio forzado:** el comando `/feature` dispara este mismo pipeline explícitamente.
