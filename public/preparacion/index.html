@@ -315,9 +315,11 @@ async function abrirDetalle(id){
   // activo y pisaba el detalle en curso cada ~25s sin ningún aviso.
   VISTA='detalle';
   detenerPollingPendientes();
+  ACT_TOPE=30;
   var r=await api('/'+id);
   if(!r.body.ok){document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>';return;}
   PREP=r.body.data;
+  ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, (PREP.eventos&&PREP.eventos[0])?PREP.eventos[0].id:0);
   renderDetalle();
   iniciarHeartbeat(id);
 }
@@ -521,6 +523,7 @@ function feedItemHtml(ev,esNuevo){
 }
 
 var ACT_TOPE=30;
+var NUEVOS_ACUMULADOS=0;
 function renderActividad(){
   var eventos=(PREP.eventos||[]);
   var abierta=actAbierta();
@@ -542,8 +545,24 @@ function renderActividad(){
   return head+'<div class="act-body" id="act-body">'+cuerpo+'</div>';
 }
 
-function toggleActividad(){ setActAbierta(!actAbierta()); renderDetalle(); }
-function verMasActividad(){ ACT_TOPE+=30; renderDetalle(); }
+function toggleActividad(){
+  var abrir=!actAbierta();
+  setActAbierta(abrir);
+  if(abrir)NUEVOS_ACUMULADOS=0;
+  renderDetalle();
+}
+function verMasActividad(){
+  ACT_TOPE+=30;
+  var body=document.getElementById('act-body');
+  if(!body){renderDetalle();return;}
+  var eventos=(PREP.eventos||[]);
+  var tope=eventos.slice(0,ACT_TOPE);
+  var cuerpo=tope.map(function(e){return feedItemHtml(e,false);}).join('');
+  if(eventos.length>ACT_TOPE){
+    cuerpo+='<button class="btn sec" style="width:100%;margin-top:8px" onclick="verMasActividad()">Ver más actividad ('+(eventos.length-ACT_TOPE)+' restantes)</button>';
+  }
+  body.innerHTML=cuerpo;
+}
 function irActividad(){
   if(!actAbierta())toggleActividad();
   var el=document.querySelector('.act-head');
@@ -572,7 +591,11 @@ function escanearManual(){
 async function refrescarDetalle(){
   if(!PREP)return;
   var r=await api('/'+PREP.id);
-  if(r.body.ok){PREP=r.body.data;renderDetalle();}
+  if(r.body.ok){
+    PREP=r.body.data;
+    ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, (PREP.eventos&&PREP.eventos[0])?PREP.eventos[0].id:0);
+    renderDetalle();
+  }
 }
 
 async function refrescarSoloActividad(){
@@ -584,12 +607,19 @@ async function refrescarSoloActividad(){
     PREP.eventos=r.body.eventos;
     var badge=document.querySelector('.act-head .badge-n');
     if(badge)badge.textContent=r.body.eventos.length;
+    var chip=document.querySelector('.chip-jump');
+    if(chip){
+      chip.innerHTML='<span class="dot"></span> Actividad ('+r.body.eventos.length+')';
+      chip.classList.toggle('oculto', !r.body.eventos.length);
+    }
     if(!actAbierta()){
+      NUEVOS_ACUMULADOS+=nuevos.length;
+      if(chip)chip.classList.toggle('nuevo', NUEVOS_ACUMULADOS>0);
       var head=document.querySelector('.act-head');
-      if(head && nuevos.length){
+      if(head && NUEVOS_ACUMULADOS>0){
         var extra=head.querySelector('.nuevos');
         if(!extra){extra=document.createElement('span');extra.className='nuevos';head.appendChild(extra);}
-        extra.textContent=' · '+nuevos.length+' nuevos';
+        extra.textContent=' · '+NUEVOS_ACUMULADOS+(NUEVOS_ACUMULADOS===1?' nuevo':' nuevos');
       }
     }else{
       var body=document.getElementById('act-body');
