@@ -1252,6 +1252,263 @@ describe('syncMlToWc — verificacion en Woo pagina hasta encontrar el pedido en
   }, 30000);
 });
 
+// Regresion del incidente 2026-07-29 (pedidos WC 66554/66555 para la orden ML
+// 2000017646759842): `after` se mandaba en ISO UTC pero Woo lo interpretaba en hora LOCAL
+// del sitio (UTC-3) -> el rango pedido quedaba en el futuro -> 0 pedidos -> falso negativo
+// de inexistencia -> reserva liberada -> el cron creaba un pedido DUPLICADO.
+describe('syncMlToWc — verificacion anti-duplicado: dates_are_gmt y reverificacion sin filtro de fecha', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    seedCatalogo(db);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  function ordenSimple(id) {
+    return {
+      id,
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+  }
+
+  it('la query de verificacion por fecha incluye dates_are_gmt=true', async () => {
+    const orden = ordenSimple('ORD-GMT');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?') && path.includes('after=')) {
+        return { data: [{ id: 77001, meta_data: [{ key: '_ml_order_id', value: 'ORD-GMT' }] }] };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    const consultasConFecha = wooFetch.mock.calls.filter(
+      c => String(c[1]).startsWith('/orders?') && c[1].includes('after=')
+    );
+    expect(consultasConFecha.length).toBeGreaterThan(0);
+    for (const c of consultasConFecha) {
+      expect(c[1]).toContain('dates_are_gmt=true');
+    }
+  });
+
+  it('el rango por fecha (pagina 1) vuelve vacio y el pedido SI existe en la reconsulta sin filtro de fecha → completa la reserva, no crea un duplicado', async () => {
+    const orden = ordenSimple('ORD-REVERIF-EXISTE');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        // El rango por fecha (con after= y dates_are_gmt=true) vuelve vacio, como en el
+        // incidente real cuando el filtro quedaba mal interpretado.
+        if (path.includes('after=')) return { data: [] };
+        // Reconsulta sin filtro de fecha: el pedido SI esta.
+        return {
+          data: [{ id: 66554, meta_data: [{ key: '_ml_order_id', value: 'ORD-REVERIF-EXISTE' }] }],
+        };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    // Un solo POST: no se creo un segundo pedido (el bug real habria creado el 66555).
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-REVERIF-EXISTE');
+    expect(pedido.wc_order_id).toBe(66554);
+    expect(pedido.retenido_en).toBeNull();
+
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-REVERIF-EXISTE');
+    expect(proc.estado).toBe('ok');
+  });
+
+  it('el rango por fecha vuelve vacio y la reconsulta sin filtro de fecha TAMPOCO lo encuentra → concluye inexistencia real, libera la reserva', async () => {
+    const orden = ordenSimple('ORD-REVERIF-NO-EXISTE');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        if (path.includes('after=')) return { data: [] };
+        // Reconsulta sin filtro de fecha: tampoco aparece (otros pedidos, ninguno propio).
+        return { data: [{ id: 1, meta_data: [] }] };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-REVERIF-NO-EXISTE');
+    expect(pedido).toBeUndefined(); // reserva liberada: inexistencia confirmada
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-REVERIF-NO-EXISTE');
+    expect(proc).toBeUndefined(); // reintentable en el proximo ciclo
+  });
+
+  it('la reconsulta sin filtro de fecha pide orderby=date&order=desc explicito (no confia en el default de Woo)', async () => {
+    const orden = ordenSimple('ORD-ORDERBY');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        if (path.includes('after=')) return { data: [] };
+        return { data: [{ id: 55001, meta_data: [{ key: '_ml_order_id', value: 'ORD-ORDERBY' }] }] };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    const reconsultas = wooFetch.mock.calls.filter(
+      c => String(c[1]).startsWith('/orders?') && !c[1].includes('after=')
+    );
+    expect(reconsultas.length).toBeGreaterThan(0);
+    for (const c of reconsultas) {
+      expect(c[1]).toContain('orderby=date&order=desc');
+    }
+  });
+
+  // Hueco senalado por la revision: el bug no es solo "rango vacio". Un rango CON pedidos
+  // legitimos (pero sin el nuestro) agotaba la ventana igual (pedidos.length < 100) y debe
+  // disparar la misma reverificacion sin filtro de fecha antes de concluir inexistencia.
+  it('el rango por fecha vuelve NO vacio (7 pedidos ajenos, ninguno propio) pero igual dispara la reverificacion y encuentra el pedido → no crea un duplicado', async () => {
+    const orden = ordenSimple('ORD-RANGO-NO-VACIO');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    const pedidosAjenos = Array.from({ length: 7 }, (_, k) => ({ id: 3000 + k, meta_data: [] }));
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        // El rango acotado por fecha SI trae pedidos (7, legitimos), pero ninguno es el
+        // nuestro: length < 100 agota la ventana igual, debe reverificar.
+        if (path.includes('after=')) return { data: pedidosAjenos };
+        return {
+          data: [{ id: 66900, meta_data: [{ key: '_ml_order_id', value: 'ORD-RANGO-NO-VACIO' }] }],
+        };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    // Un solo POST: no se creo un segundo pedido
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RANGO-NO-VACIO');
+    expect(pedido.wc_order_id).toBe(66900);
+    expect(pedido.retenido_en).toBeNull();
+  });
+
+  // `status=any` en Woo NO incluye `trash`: un duplicado que el operador mando a la papelera
+  // no debe contar como inexistente, o el cron lo recrearia despues de cada limpieza.
+  it('el pedido esta en la papelera (status=trash): status=any no lo encuentra pero la segunda consulta si → no lo recrea', async () => {
+    const orden = ordenSimple('ORD-EN-PAPELERA');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        if (path.includes('after=')) return { data: [] };
+        if (path.includes('status=any')) return { data: [] }; // any NO incluye trash
+        if (path.includes('status=trash')) {
+          return {
+            data: [{ id: 66601, meta_data: [{ key: '_ml_order_id', value: 'ORD-EN-PAPELERA' }] }],
+          };
+        }
+        return { data: [] };
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    // Ambas consultas (any y trash) se hicieron
+    const statusConsultados = new Set(
+      wooFetch.mock.calls
+        .filter(c => String(c[1]).startsWith('/orders?') && !c[1].includes('after='))
+        .map(c => new URLSearchParams(c[1].split('?')[1]).get('status'))
+    );
+    expect(statusConsultados).toEqual(new Set(['any', 'trash']));
+
+    // Encontrado en papelera → NO se recrea (un solo POST, reserva completada con el id real)
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-EN-PAPELERA');
+    expect(pedido.wc_order_id).toBe(66601);
+    expect(pedido.retenido_en).toBeNull();
+  });
+
+  // Inexistencia real: ni `status=any` ni `status=trash` lo encuentran → recien ahi se
+  // confirma inexistencia y se libera la reserva.
+  it('inexistencia confirmada en AMBAS consultas (any y trash) → libera la reserva de verdad', async () => {
+    const orden = ordenSimple('ORD-INEXISTENTE-REAL');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        if (path.includes('after=')) return { data: [] };
+        return { data: [] }; // ni any ni trash lo tienen
+      }
+      return { data: {} };
+    });
+
+    await syncMlToWc(db, CFG);
+
+    const statusConsultados = new Set(
+      wooFetch.mock.calls
+        .filter(c => String(c[1]).startsWith('/orders?') && !c[1].includes('after='))
+        .map(c => new URLSearchParams(c[1].split('?')[1]).get('status'))
+    );
+    expect(statusConsultados).toEqual(new Set(['any', 'trash']));
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-INEXISTENTE-REAL');
+    expect(pedido).toBeUndefined(); // reserva liberada: inexistencia confirmada en ambos status
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-INEXISTENTE-REAL');
+    expect(proc).toBeUndefined(); // reintentable en el proximo ciclo
+  });
+
+  it('la reconsulta sin filtro de fecha vuelve con forma inesperada → no concluyente, fail-closed', async () => {
+    const orden = ordenSimple('ORD-REVERIF-WAF');
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) {
+        if (path.includes('after=')) return { data: [] };
+        // Reconsulta sin filtro de fecha con cuerpo con forma inesperada (WAF, plugin roto).
+        return { data: '<html>Access denied</html>' };
+      }
+      return { data: {} };
+    });
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await syncMlToWc(db, CFG);
+    errSpy.mockRestore();
+
+    // Fail-closed: reserva NO liberada, queda retenida para intervencion manual.
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-REVERIF-WAF');
+    expect(pedido).toBeTruthy();
+    expect(pedido.wc_order_id).toBe(0);
+    expect(pedido.retenido_en).toBeTruthy();
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'ORD-REVERIF-WAF'").get();
+    expect(log.estado).toBe('error');
+    expect(log.error).toMatch(/fail-closed/);
+  }, 30000);
+});
+
 describe('GET /api/sync/dashboard — pedidos.reservasRetenidas', () => {
   let db, app;
 

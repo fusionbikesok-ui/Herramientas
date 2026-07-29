@@ -1219,8 +1219,23 @@ describe('syncPedidosCache', () => {
 
     const [urlPend, urlCompleted, urlEnviado] = wooFetch.mock.calls.map(c => c[1]);
     expect(urlPend).not.toContain('after=');
-    expect(urlCompleted).toMatch(/status=completed&after=/);
-    expect(urlEnviado).toMatch(/status=enviadoandreani&after=/);
+    expect(urlCompleted).toMatch(/status=completed&dates_are_gmt=true&after=/);
+    expect(urlEnviado).toMatch(/status=enviadoandreani&dates_are_gmt=true&after=/);
+  });
+
+  // `dates_are_gmt=true` es obligatorio junto con `after` (incidente 2026-07-29): sin él,
+  // Woo interpreta `after` en hora local del sitio (UTC-3) en vez de UTC, y el rango pedido
+  // queda corrido, produciendo falsos negativos. Se verifica explícito en ambas consultas
+  // acotadas por fecha (completed y enviadoandreani), no solo que "contengan after=".
+  it('las dos consultas acotadas por fecha (completed, enviadoandreani) incluyen dates_are_gmt=true', async () => {
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    const [, urlCompleted, urlEnviado] = wooFetch.mock.calls.map(c => c[1]);
+    expect(urlCompleted).toContain('dates_are_gmt=true');
+    expect(urlEnviado).toContain('dates_are_gmt=true');
   });
 
   it('borra de pedidos_cache las filas enviado que quedaron fuera de la ventana de 60 días', async () => {

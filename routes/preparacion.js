@@ -1276,10 +1276,16 @@ export async function syncPedidosCache(db, cfg) {
     // el historial crece sin límite. Los "pendientes" (lpaandreani) no se acotan: un
     // pedido pendiente de preparar sigue siendo relevante sin importar hace cuánto se
     // generó, hasta que se procese.
+    // `dates_are_gmt=true` es obligatorio junto con `after`: sin el, Woo interpreta la
+    // fecha en la hora LOCAL del sitio y la ventana queda corrida (con el sitio en UTC-3,
+    // 3 horas). Acá el impacto es leve porque la ventana es de 60 días, pero es el mismo
+    // defecto que causó los pedidos duplicados 66554/66555 el 2026-07-29 — donde la
+    // ventana era de minutos y el desfase la vaciaba por completo. Ver
+    // buscarPedidoWcPorMlOrderId en routes/sync.js.
     const hace60Dias = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
     const wcPend = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
-    const wcCompleted = await wooFetch(cfg.woo, `/orders?status=completed&after=${encodeURIComponent(hace60Dias)}&per_page=100`);
-    const wcEnviado = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(enviadoAndreaniStatus)}&after=${encodeURIComponent(hace60Dias)}&per_page=100`);
+    const wcCompleted = await wooFetch(cfg.woo, `/orders?status=completed&dates_are_gmt=true&after=${encodeURIComponent(hace60Dias)}&per_page=100`);
+    const wcEnviado = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(enviadoAndreaniStatus)}&dates_are_gmt=true&after=${encodeURIComponent(hace60Dias)}&per_page=100`);
 
     const tx = db.transaction(() => {
       for (const order of wcPend.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'pendiente'));
