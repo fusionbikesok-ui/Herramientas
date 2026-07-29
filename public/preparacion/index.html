@@ -847,7 +847,7 @@ async function marcarEtiqueta(wcId,lista,numero){
 
 function buscadorCorreccionHtml(){
   return '<div class="ped" style="margin-bottom:16px">'
-    +'<div class="ped-top"><span class="ped-num">Corregir tracking de un pedido ya cargado</span></div>'
+    +'<div class="ped-top"><span class="ped-num">Corregir tracking de un pedido (por N° de pedido)</span></div>'
     +'<div class="ped-foot">'
     +'<input type="text" placeholder="N° de pedido" id="corr-num" style="flex:1;min-width:120px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
     +'<button class="btn sec" onclick="buscarParaCorregir()">Buscar</button>'
@@ -861,9 +861,8 @@ async function cargarSeguimientos(){
     var r=await api('/seguimientos');
     if(!r.body.ok)throw new Error(r.body.error||'error');
     var filas=r.body.data||[];
-    if(!filas.length){c.innerHTML=buscadorCorreccionHtml()+'<div class="loading">No hay pedidos con etiqueta lista pendientes de tracking.</div>';return;}
-    var html=buscadorCorreccionHtml()
-      +'<p class="sub">Pedidos con etiqueta ya lista. Tipeá el número de seguimiento de Andreani y guardá: '
+    if(!filas.length){c.innerHTML='<div class="loading">No hay pedidos con etiqueta lista pendientes de tracking.</div>';return;}
+    var html='<p class="sub">Pedidos con etiqueta ya lista. Tipeá el número de seguimiento de Andreani y guardá: '
       +'el pedido pasa a <b>completado</b> (dispara el mail al cliente) y después a <b>enviado Andreani</b>.</p>'
       +'<div class="ped-grid" id="seg-grid">'
       +filas.map(function(f){
@@ -950,7 +949,7 @@ async function cargarHistorial(){
     var dep=rows.filter(function(p){return p.estado==='pendiente_deposito';});
     var comp=rows.filter(function(p){return p.estado==='completada';});
     var sinPreparar=rows.filter(function(p){return p.estado==='enviado_sin_preparar';});
-    var html='';
+    var html=buscadorCorreccionHtml();
     if(sinPreparar.length){
       html+='<h1 style="font-size:1.1rem">Enviados sin preparar</h1><div class="ped-grid" style="margin-bottom:20px">'
         +sinPreparar.map(cardEnviadoSinPreparar).join('')+'</div>';
