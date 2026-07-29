@@ -61,7 +61,11 @@ CREATE TABLE IF NOT EXISTS ordenes_ml_wc_pedidos (
   wc_order_id INTEGER NOT NULL,
   comprador_json TEXT,
   creado_en TEXT NOT NULL,
-  cancelado_en TEXT
+  cancelado_en TEXT,
+  -- Timestamp en que la reserva (wc_order_id=0) quedo RETENIDA por fail-closed: el POST a
+  -- Woo fallo y no se pudo verificar si el pedido llego a crearse. Mientras no sea NULL la
+  -- reserva no se libera ni se reintenta sola: requiere intervencion manual.
+  retenido_en TEXT
 );
 
 -- Cache de publicaciones de MercadoLibre (traídas de la API para el matcher)
