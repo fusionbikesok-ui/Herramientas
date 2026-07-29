@@ -1316,25 +1316,56 @@ describe('syncPedidosCache', () => {
     expect(filaVieja.estado_envio).toBe('pendiente');
   });
 
-  it('si /orders/search viene truncado (results.length == límite), la poda se omite esa corrida', async () => {
+  it('con más de 50 órdenes paid, pagina /orders/search hasta agotar el resultado (no se queda con la primera página) y sí poda si queda confiable', async () => {
     buildTestApp(db);
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
       VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
     `).run();
 
-    const resultadosLlenos = Array.from({ length: 50 }, (_, i) => ({
+    // Sin shipping.id para no tener que mockear /shipments por cada una: lo que importa acá
+    // es que la paginación agote las 2 páginas, no el filtrado de shipments.
+    const pagina1 = Array.from({ length: 50 }, (_, i) => ({
       id: 9000 + i, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: null, order_items: [],
     }));
+    const pagina2 = [
+      { id: 9100, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'y' }, shipping: null, order_items: [] },
+      { id: 9101, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'z' }, shipping: null, order_items: [] },
+    ];
 
     wooFetch.mockResolvedValue({ data: [] });
-    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: resultadosLlenos } }); // orders/search truncado en 50
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: pagina1 } }) // orders/search offset=0
+      .mockResolvedValueOnce({ status: 200, data: { results: pagina2 } }); // orders/search offset=50
 
     await syncPedidosCache(db, CFG);
 
+    const urlsOrdersSearch = mlFetch.mock.calls.filter(c => c[3]?.includes('/orders/search')).map(c => c[3]);
+    expect(urlsOrdersSearch).toHaveLength(2);
+    expect(urlsOrdersSearch[0]).toContain('offset=0');
+    expect(urlsOrdersSearch[1]).toContain('offset=50');
+
+    // Ninguna orden tiene shipping.id, así que pendientesMl no encuentra pendientes vigentes,
+    // pero pudo confirmarlo (paginación agotada, sin fallos) -> poda de la fila vieja.
     const filaVieja = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:1111'").get();
-    expect(filaVieja).toBeTruthy();
-    expect(filaVieja.estado_envio).toBe('pendiente');
+    expect(filaVieja).toBeUndefined();
+  });
+
+  it('fila ml:vieja con fecha anterior a la ventana de 30 días NO se poda aunque no aparezca en el listado vigente', async () => {
+    buildTestApp(db);
+    const fechaFueraDeVentana = new Date(Date.now() - 45 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:vieja','ml',NULL,'vieja','vieja','Cliente Fuera De Ventana',?,'pendiente',NULL,0,'self_service',NULL,'[]',?)
+    `).run(fechaFueraDeVentana, fechaFueraDeVentana);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // listado confiable, sin pendientes vigentes
+
+    await syncPedidosCache(db, CFG);
+
+    const fila = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:vieja'").get();
+    expect(fila).toBeTruthy();
   });
 
   it('una fila con preparación completada no se poda aunque no aparezca en el listado de pendientesMl', async () => {
