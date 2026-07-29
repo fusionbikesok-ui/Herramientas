@@ -741,6 +741,34 @@ describe('preparacion flujo', () => {
     expect(r.body.items).toBeUndefined();
   });
 
+  it('GET /:id y GET /:id/eventos no rompen si un evento tiene detalle_json inválido', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    db.prepare("UPDATE preparacion_eventos SET detalle_json='{rota' WHERE preparacion_id=?").run(id);
+
+    const rDetalle = await request(app).get(`/api/preparacion/${id}`);
+    expect(rDetalle.status).toBe(200);
+    expect(rDetalle.body.data.eventos[0].detalle).toEqual({});
+
+    const rEventos = await request(app).get(`/api/preparacion/${id}/eventos`);
+    expect(rEventos.status).toBe(200);
+    expect(rEventos.body.eventos[0].detalle).toEqual({});
+  });
+
+  it('GET /:id/eventos?desde=N devuelve solo eventos con id>N', async () => {
+    const id = nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    const primeros = db.prepare("SELECT id FROM preparacion_eventos WHERE preparacion_id=?").all(id);
+    const ultimoId = Math.max(...primeros.map(e => e.id));
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'BICI-1' });
+
+    const r = await request(app).get(`/api/preparacion/${id}/eventos?desde=${ultimoId}`);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.eventos.every(e => e.id > ultimoId)).toBe(true);
+    expect(r.body.eventos.length).toBe(2);
+  });
+
   it('heartbeat informa el id del último evento', async () => {
     const id = nuevaPrep();
     let r = await request(app).post(`/api/preparacion/${id}/heartbeat`);
@@ -829,6 +857,21 @@ describe('preparacion flujo', () => {
     expect(fs.existsSync(rutaVieja)).toBe(false);
     expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(vieja.body.foto.id)).toBeUndefined();
     expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(reciente.body.foto.id)).toBeTruthy();
+  });
+
+  it('purgarFotosBorradas NO borra archivo ni fila si la url resuelta cae fuera de uploads/ (defensa en profundidad)', async () => {
+    const id = nuevaPrep();
+    const hace70dias = new Date(Date.now() - 70 * 24 * 3600 * 1000).toISOString();
+    // Fila insertada directamente en la tabla (sin pasar por guardarArchivo/sanitize),
+    // simulando el caso hipotético de una url maliciosa que llegara por otra vía.
+    const ins = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en, borrado_en) VALUES (?,?,?,?,?,?)')
+      .run(id, null, 'articulo', '/uploads/../../../etc/passwd', new Date().toISOString(), hace70dias);
+    const fotoId = ins.lastInsertRowid;
+
+    const purgadas = purgarFotosBorradas(db);
+
+    expect(purgadas).toBe(0);
+    expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId)).toBeTruthy();
   });
 
   it('borrar foto NO borra la fila (soft-delete), registra evento foto_borrada, y deja de contar para /completar', async () => {

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
@@ -6,7 +7,7 @@ import heicConvert from 'heic-convert';
 import { wooFetch } from './woo.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
-import { guardarArchivo, rutaAbsoluta } from '../utils/storage.js';
+import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
 import {
   normalizarEnvio, resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
@@ -259,11 +260,34 @@ export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuari
 export function purgarFotosBorradas(db) {
   const limite = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
   const vencidas = db.prepare('SELECT id, url FROM preparacion_fotos WHERE borrado_en IS NOT NULL AND borrado_en < ?').all(limite);
+  let purgadas = 0;
   for (const f of vencidas) {
-    try { fs.unlinkSync(rutaAbsoluta(f.url)); } catch (_) { /* archivo ya no está, seguir igual */ }
+    // Contención (defensa en profundidad): si la ruta resuelta cae fuera de uploads/,
+    // no borramos nada y dejamos la fila para revisión manual.
+    const abs = path.resolve(rutaAbsoluta(f.url));
+    if (!estaDentroDeUploads(abs)) {
+      console.error('purgarFotosBorradas: url fuera de uploads/, se omite (revisión manual):', f.id, f.url);
+      continue;
+    }
+    try {
+      fs.unlinkSync(abs);
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        console.error('purgarFotosBorradas: error al borrar archivo, se borra igual la fila:', f.id, f.url, err.message);
+      }
+    }
     db.prepare('DELETE FROM preparacion_fotos WHERE id=?').run(f.id);
+    purgadas++;
   }
-  return vencidas.length;
+  return purgadas;
+}
+
+// Parsea detalle_json de forma defensiva: la Actividad es auxiliar y nunca debe poder
+// bloquear la apertura del pedido por un JSON corrupto o NULL en un evento viejo.
+function mapearEvento(e) {
+  let detalle = {};
+  try { detalle = JSON.parse(e.detalle_json); } catch (_) { /* detalle inválido, se deja {} */ }
+  return { ...e, detalle };
 }
 
 // Reintenta el paso 2 (status final) de cada pedido "colgado" (paso 1 ya confirmado en
@@ -721,7 +745,7 @@ export function preparacionRouter(db, cfg) {
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? ORDER BY id').all(prep.id);
     const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL ORDER BY id').all(prep.id);
     const eventos = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
-      .map(e => ({ ...e, detalle: JSON.parse(e.detalle_json) }));
+      .map(mapearEvento);
     const data = {
       ...prep,
       items: items.map(it => ({
@@ -736,11 +760,18 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Eventos de actividad (refresco liviano, sin re-traer items/fotos) ──
+  // Query param opcional `desde=<id>`: si viene y es un entero válido, solo trae eventos
+  // con id>desde (para que el frontend haga polling incremental en vez de repetir todo
+  // el historial cada 15s). Sin `desde` (o inválido), se mantiene el comportamiento
+  // actual: todo el historial.
   router.get('/:id/eventos', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    const eventos = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
-      .map(e => ({ ...e, detalle: JSON.parse(e.detalle_json) }));
+    const desde = parseInt(req.query.desde, 10);
+    const eventos = (Number.isInteger(desde)
+      ? db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND id>? ORDER BY id DESC').all(prep.id, desde)
+      : db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
+    ).map(mapearEvento);
     res.json({ ok: true, eventos });
   });
 

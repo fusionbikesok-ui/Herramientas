@@ -34,3 +34,13 @@ export function guardarArchivo({ buffer, originalname, mimetype, importador, num
 export function rutaAbsoluta(url) {
   return path.join(path.dirname(UPLOADS_DIR), url);
 }
+
+// Defensa en profundidad: valida que una ruta absoluta ya calculada caiga dentro de
+// UPLOADS_DIR antes de operar sobre el filesystem (ver purgarFotosBorradas). Hoy todo
+// `url` en preparacion_fotos pasa por sanitize() en guardarArchivo, pero si algún día
+// llegara una url con "../" por otra vía, esto evita borrar algo fuera de uploads/.
+export function estaDentroDeUploads(abs) {
+  return abs === UPLOADS_DIR || abs.startsWith(UPLOADS_DIR + path.sep);
+}
+
+export { UPLOADS_DIR };
