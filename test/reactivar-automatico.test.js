@@ -23,10 +23,12 @@ let db;
 
 /** Siembra una publicación pausada por out_of_stock, mapeada, con stock web disponible. */
 function sembrarReactivable({ clave = 'MLA1|', itemId = 'MLA1', sku = 'FB-1', stockWc = 3, precioWc = 300000, titulo = null, sinPrecioWeb = false } = {}) {
-  if (!sinPrecioWeb) {
-    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
-      VALUES (?, ?, ?, 'simple', ?, ?, '2026-07-30T00:00:00Z')`).run(Math.floor(Math.random() * 1e6), 'Producto ' + sku, sku, stockWc, precioWc);
-  }
+  // sinPrecioWeb: sigue con stock > 0 (así hay reactivable de verdad y la corrida avanza
+  // hasta chequearNetoReactivar) pero con precio NULL, para que precioWebClave devuelva
+  // null y dispare el bloqueo "Sin precio web mapeado" en vez de vaciar getReactivablesRows.
+  db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
+    VALUES (?, ?, ?, 'simple', ?, ?, '2026-07-30T00:00:00Z')`)
+    .run(Math.floor(Math.random() * 1e6), 'Producto ' + sku, sku, stockWc, sinPrecioWeb ? null : precioWc);
   db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
     VALUES (?, ?, ?, 'asignar', '2026-07-30T00:00:00Z')`).run(clave, sku, 'Producto ' + sku);
   db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
@@ -138,6 +140,9 @@ describe('reactivarAutomatico', () => {
     });
 
     const r = await reactivarAutomatico(db, CFG);
+    // Blindaje: si getReactivablesRows volviera a devolver vacío (test vacuo), mlFetch nunca
+    // se llamaría y este assert lo detectaría antes que los de abajo.
+    expect(mlFetch).toHaveBeenCalled();
     expect(r.reactivadas).toBe(0);
     expect(r.frenadas).toBe(0);
     expect(db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n).toBe(0);
