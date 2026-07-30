@@ -37,6 +37,7 @@ describe('aplanarItemMl', () => {
       clave: '111|', item_id: '111', variation_id: '', titulo: 'Casco Bell', status: 'active',
       sub_status: '', es_variante: 0, color: '', talle: '', seller_sku: 'CBL',
       variations_texto: '', thumbnail: 'https://x/t.jpg', permalink: 'https://ml/p', catalogo: 1,
+      precio: null, available_quantity: null,
     }]);
   });
 
