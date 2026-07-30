@@ -1325,10 +1325,13 @@ async function diagnosticarErrores(db, mlCfg, rows) {
  * El dedup por SKU es el mismo criterio que COMPUTED_STOCK_CTE: si un SKU está cargado en
  * más de un producto de WC, se toma uno solo (el de menor stock) para no multiplicar filas.
  */
-function filasDeVinculos(db, { sku = null } = {}) {
+function filasDeVinculos(db, { sku = null, ordenar = true } = {}) {
   const params = [];
   let filtro = '';
   if (sku) { filtro = 'AND d.sku = ?'; params.push(sku); }
+  // El ORDER BY es trabajo puro al pedo cuando solo se cuenta (contarVinculosSospechosos):
+  // se puede saltear sin ensuciar la firma ni el resto de los usos.
+  const orden = ordenar ? 'ORDER BY c.nombre, p.titulo, d.clave' : '';
   return db.prepare(`
     WITH catalogo_dedup AS (
       SELECT sku, nombre, stock, precio, atributos_json, img,
@@ -1348,7 +1351,7 @@ function filasDeVinculos(db, { sku = null } = {}) {
     JOIN ml_publicaciones_cache p ON p.clave = d.clave
     LEFT JOIN ml_stock_estado e ON e.clave = d.clave
     WHERE d.accion IN ('asignar','confirmar') AND d.sku IS NOT NULL AND d.sku <> '' ${filtro}
-    ORDER BY c.nombre, p.titulo, d.clave
+    ${orden}
   `).all(...params);
 }
 
@@ -1382,7 +1385,7 @@ function cargarDescartes(db) {
 function contarVinculosSospechosos(db) {
   const descartes = cargarDescartes(db);
   let n = 0;
-  for (const fila of filasDeVinculos(db)) {
+  for (const fila of filasDeVinculos(db, { ordenar: false })) {
     if (senalesVigentes(fila, descartes).length > 0) n++;
   }
   return n;
@@ -1789,9 +1792,15 @@ export function syncRouter(db, cfg) {
   router.post('/desvincular', (req, res) => {
     const { clave } = req.body || {};
     if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
-    const info = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
-    // Los descartes de sospechosos valían para el vínculo anterior, no para el que le toque después.
-    db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+    // Atómico: si el borrado de descartes fallara a mitad de camino, la clave quedaría
+    // reasignable pero con descartes del vínculo anterior todavía vivos, tapando en silencio
+    // señales legítimas del vínculo que la remapee después.
+    const info = db.transaction(() => {
+      const r = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
+      // Los descartes de sospechosos valían para el vínculo anterior, no para el que le toque después.
+      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+      return r;
+    })();
     logSync(db, { direccion: 'wc_ml', clave, estado: 'remapeo_requerido', error: 'desvinculada manualmente para re-mapear' });
     res.json({ ok: true, borradas: info.changes });
   });
@@ -1801,13 +1810,16 @@ export function syncRouter(db, cfg) {
     const sku = String(req.params.sku || '').trim();
     if (!sku) return res.status(400).json({ ok: false, error: 'sku requerido' });
 
-    const filas = filasDeVinculos(db, { sku });
-    const descartes = cargarDescartes(db);
+    // El 404 se resuelve ANTES de pagar las dos consultas pesadas (CTE con window function
+    // sobre todo el catálogo + carga de descartes) cuando el SKU ni siquiera existe.
     const prod = db.prepare(`
       SELECT sku, nombre, stock, precio, img FROM catalogo_cache
       WHERE sku = ? AND sku <> '' ORDER BY stock ASC, id_woo ASC LIMIT 1
     `).get(sku);
     if (!prod) return res.status(404).json({ ok: false, error: 'SKU no encontrado en el catálogo' });
+
+    const filas = filasDeVinculos(db, { sku });
+    const descartes = cargarDescartes(db);
 
     const publicaciones = filas.map(f => ({
       clave: f.clave, item_id: f.item_id, variation_id: f.variation_id,
@@ -1853,27 +1865,47 @@ export function syncRouter(db, cfg) {
   // Marcar una señal como revisada y correcta. Guarda el VALOR: si el dato cambia, reaparece.
   router.post('/vinculos/revisado', (req, res) => {
     const { clave, senal, valor } = req.body || {};
-    if (!clave || !senal) return res.status(400).json({ ok: false, error: 'clave y senal requeridas' });
+    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
+    if (!senal || typeof senal !== 'string') return res.status(400).json({ ok: false, error: 'senal requerida' });
+    // El contrato es "reenviá el valor tal cual lo recibiste": sin valor, se guardaría `null`,
+    // que nunca coincide con ningún valor real y el cliente creería que descartó sin lograrlo.
+    if (valor == null || typeof valor !== 'string') return res.status(400).json({ ok: false, error: 'valor requerido' });
+    // Sin esto, un typo de clave crea un descarte huérfano que nadie limpia nunca (no aparece
+    // en ningún listado porque filasDeVinculos hace JOIN con ml_publicaciones_cache).
+    const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
+    if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
+
     db.prepare(`
       INSERT INTO ml_vinculos_revisados (clave, senal, valor_revisado, revisado_por, revisado_en)
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(clave, senal) DO UPDATE SET
         valor_revisado=excluded.valor_revisado, revisado_por=excluded.revisado_por, revisado_en=excluded.revisado_en
-    `).run(clave, senal, valor == null ? null : String(valor), req.user?.username ?? null, now());
+    `).run(clave, senal, valor, req.user?.username ?? null, now());
     res.json({ ok: true });
   });
 
   // Reasignar el vínculo a otro SKU. Mismo statement que usa el matcher para sus decisiones.
   router.post('/vinculos/reasignar', (req, res) => {
     const { clave, sku } = req.body || {};
-    if (!clave || !sku) return res.status(400).json({ ok: false, error: 'clave y sku requeridos' });
+    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
+    if (!sku || typeof sku !== 'string') return res.status(400).json({ ok: false, error: 'sku requerido' });
+    // Sin esto, una clave inexistente (typo, publicación borrada de ML entre el render y el
+    // click) crea un vínculo fantasma en sku_matcher_decisiones: no aparece en ningún listado
+    // (filasDeVinculos hace JOIN con el caché) pero ensucia para siempre el contador de
+    // "necesitan atención" del home, sin ninguna pantalla desde la que limpiarlo.
+    const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
+    if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
     const prod = db.prepare("SELECT nombre FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1").get(sku);
     if (!prod) return res.status(400).json({ ok: false, error: 'El SKU no existe en el catálogo' });
 
-    db.prepare('INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)')
-      .run(clave, sku, prod.nombre, 'asignar', now());
-    // Los descartes valían para el vínculo anterior, no para el nuevo.
-    db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+    // Atómico: si el borrado de descartes fallara a mitad de camino, quedarían vivos los
+    // descartes del vínculo VIEJO tapando en silencio señales legítimas del vínculo nuevo.
+    db.transaction(() => {
+      db.prepare('INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)')
+        .run(clave, sku, prod.nombre, 'asignar', now());
+      // Los descartes valían para el vínculo anterior, no para el nuevo.
+      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+    })();
     logSync(db, { direccion: 'wc_ml', clave, sku, estado: 'remapeo_requerido', error: 'reasignada manualmente desde Vínculos' });
     res.json({ ok: true });
   });

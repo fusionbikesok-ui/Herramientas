@@ -145,25 +145,39 @@ Listado de todos los vínculos con al menos una señal vigente, ordenados por se
 Marca una señal puntual como revisada y correcta ("descartar"). Persiste el **valor** que
 disparó la señal, no solo la clave: si el dato concreto vuelve a cambiar, el descarte deja de
 aplicar y la señal reaparece — descartar significa "esta discrepancia concreta está bien",
-no "no me muestres más esta publicación".
+no "no me muestres más esta publicación". El cliente debe reenviar el `valor` **tal cual** lo
+recibió en la señal (comparación por igualdad estricta, no por contención/substring: un
+descarte parcial podría tapar en silencio una discrepancia nueva y distinta).
 
-- Request: `{ "clave", "senal", "valor" }`.
+- Request: `{ "clave", "senal", "valor" }` — los tres strings no vacíos.
 - Response 200: `{ "ok": true }`.
-- Response 400: `{ "ok": false, "error": "clave y senal requeridas" }`.
+- Response 400: `{ "ok": false, "error": "clave requerida" }`,
+  `{ "ok": false, "error": "senal requerida" }`,
+  `{ "ok": false, "error": "valor requerido" }` (sin `valor` se guardaría `null`, que nunca
+  coincide con ningún valor real y el cliente creería que descartó sin lograrlo — fail-open
+  deliberado del lado de la señal, pero el request debe rechazarse), o
+  `{ "ok": false, "error": "La clave no existe en el caché de publicaciones" }` (evita
+  descartes huérfanos de claves con typo o publicaciones ya borradas de ML).
 
 ### POST /api/sync/vinculos/reasignar
 Reasigna manualmente el vínculo (`clave`) a otro SKU de WC. Escribe con el mismo statement
 que usa el matcher (`INSERT OR REPLACE INTO sku_matcher_decisiones ... accion='asignar'`) para
-no tener un segundo camino de escritura que pueda divergir. Borra los descartes de esa clave:
-valían para el vínculo anterior, no para el nuevo.
+no tener un segundo camino de escritura que pueda divergir. Borra los descartes de esa clave
+en la MISMA transacción que la reasignación: valían para el vínculo anterior, no para el
+nuevo, y si el borrado quedara fuera de la transacción un fallo a mitad de camino dejaría
+descartes viejos tapando señales legítimas del vínculo nuevo.
 
-- Request: `{ "clave", "sku" }`.
+- Request: `{ "clave", "sku" }` — ambos strings no vacíos.
 - Response 200: `{ "ok": true }`.
-- Response 400: `{ "ok": false, "error": "clave y sku requeridos" }` o
+- Response 400: `{ "ok": false, "error": "clave requerida" }`,
+  `{ "ok": false, "error": "sku requerido" }`,
+  `{ "ok": false, "error": "La clave no existe en el caché de publicaciones" }` (evita crear un
+  vínculo fantasma en `sku_matcher_decisiones` que no aparece en ningún listado pero ensucia
+  el contador de "necesitan atención" del home), o
   `{ "ok": false, "error": "El SKU no existe en el catálogo" }`.
 
-Nota: `POST /api/sync/desvincular` (ya existente) también borra ahora los descartes de esa
-clave, por la misma razón.
+Nota: `POST /api/sync/desvincular` (ya existente) también borra los descartes de esa clave
+en la misma transacción que el borrado del mapeo, por la misma razón de atomicidad.
 
 ## Preparación de pedidos — perfiles de foto por SKU
 

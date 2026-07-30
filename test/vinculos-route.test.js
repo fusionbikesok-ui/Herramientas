@@ -277,4 +277,45 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-9999');
     expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
   });
+
+  it('POST /api/sync/desvincular borra también los descartes de esa clave', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
+    await request(app).post('/api/sync/vinculos/revisado')
+      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(1);
+
+    const res = await request(app).post('/api/sync/desvincular').send({ clave: 'MLA1|10' });
+    expect(res.status).toBe(200);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
+  });
+
+  it('GET /api/sync/dashboard incluye vinculos_sospechosos', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    const res = await request(app).get('/api/sync/dashboard');
+    expect(res.body.vinculos_sospechosos).toBe(1);
+  });
+
+  it('reasignar con SKU inexistente responde 400 y no toca nada', async () => {
+    sembrarVinculo();
+    const res = await request(app).post('/api/sync/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'NO-EXISTE' });
+    expect(res.status).toBe(400);
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-6411');
+  });
+
+  it('reasignar con clave inexistente responde 400 y no crea un vínculo fantasma', async () => {
+    // La publicación con esta clave nunca se sembró en ml_publicaciones_cache (typo, o se
+    // borró de ML entre que se renderizó la pantalla y el click).
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
+      VALUES (1, 'Producto', 'FB-1', 'simple', 2, 100000, '2026-07-30T00:00:00Z')`).run();
+    const res = await request(app).post('/api/sync/vinculos/reasignar').send({ clave: 'MLA-NO-EXISTE|', sku: 'FB-1' });
+    expect(res.status).toBe(400);
+    expect(db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE clave='MLA-NO-EXISTE|'").get().n).toBe(0);
+  });
+
+  it('GET /api/sync/vinculos/:sku con SKU inexistente responde 404', async () => {
+    const res = await request(app).get('/api/sync/vinculos/NO-EXISTE');
+    expect(res.status).toBe(404);
+  });
 });
