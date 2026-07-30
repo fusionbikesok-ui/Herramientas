@@ -193,7 +193,8 @@ Al crearse se **congela** el alcance (qué SKUs entran y en qué bloque `con_sto
 { "ok": true, "sesion": { "...": "", "categorias": [], "marcas": [] },
   "items": [{ "id":1, "ean":"...", "sku":"FB-1", "cantidad":3, "nombre":"...",
               "stock_woo":5, "diferencia":-2, "bloque":"con_stock",
-              "fuera_de_alcance": false, "confirmado_por_omision": false }],
+              "fuera_de_alcance": false, "confirmado_por_omision": false,
+              "ajustado": false, "ajustado_en": null }],
   "pendientes": [{ "sku":"FB-1", "nombre":"...", "bloque":"con_stock", "marca":"Bell",
                    "categoria_principal":"Cascos", "stock_inicial":5, "stock_woo":5 }],
   "resumen": { "pendientes_con_stock": 2, "pendientes_sin_stock": 1,
@@ -202,6 +203,22 @@ Al crearse se **congela** el alcance (qué SKUs entran y en qué bloque `con_sto
 `pendientes` viene ordenado: con-stock primero, después categoría → marca → nombre.
 `bloque` está **congelado** al abrir la sesión: si el stock cambia por otra vía durante el
 conteo, el ítem no salta de bloque (`stock_woo` sí muestra el valor actual).
+`ajustado`/`ajustado_en` en cada ítem sirven para que el historial muestre (y el frontend
+filtre) qué quedó sin ajustar en Woo tras un `confirmada_con_errores`; no filtra por estado
+de sesión, así que este mismo endpoint sirve para abrir en modo lectura una sesión cerrada
+y reintentarla desde `/confirmar`.
+`sesion.confirmado_por` trae el usuario que ejecutó el último `/confirmar`; `null` si nunca
+se confirmó. Hoy `getSesion()` solo permite operar sobre sesiones propias, así que
+`confirmado_por` siempre coincide con `sesion.usuario` — la columna deja registro explícito
+de la acción de confirmar/reintentar y queda lista por si en el futuro se habilita que otro
+usuario (ej. un admin) reintente una sesión ajena.
+
+### GET /api/inventario/sesiones
+Historial de sesiones cerradas (`confirmada`, `confirmada_con_errores`, `descartada`) del
+usuario logueado, más recientes primero. `{ ok, data: [sesion, ...] }`, cada `sesion` trae
+además `fallidos`: cantidad de conteos con `ajustado_en IS NULL` (0 para `descartada`, que
+nunca llegó a intentar el ajuste en Woo). Sirve para que la UI muestre qué sesiones tienen
+pendiente un reintento.
 
 ### POST /api/inventario/sesiones/:id/escanear
 Request `{ "codigo": "..." }` (EAN o SKU; igual desde cámara o lector HID).
