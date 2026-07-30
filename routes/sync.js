@@ -997,8 +997,28 @@ export async function reactivarItems(db, mlCfg, itemIds) {
  * él. Se reintenta solo en el próximo ciclo. El discriminador es deficitPct != null: solo el
  * bloqueo por neto bajo calcula un déficit.
  *
+ * Anti-starvation: reactivarItems trunca a LOTE_MAX y getReactivablesRows ordena siempre
+ * igual (por título), así que sin reordenar, un conjunto grande de frenadas crónicas con
+ * títulos alfabéticamente tempranos ocuparía el lote entero en cada corrida y una publicación
+ * nueva con stock recién repuesto (título tardío) nunca entraría a procesarse. Por eso acá se
+ * antepone lo que NO tiene frenada registrada: eso es lo que puede reactivarse de verdad, y
+ * las frenadas crónicas quedan relegadas a los lugares que sobren (se siguen reintentando,
+ * pero sin bloquear a nadie). No se implementa backoff temporal: el usuario tiene un botón de
+ * reintento inmediato tras corregir el precio, así que una ventana de tiempo solo agregaría
+ * demora sin resolver nada.
+ *
+ * Barrido de huérfanas: al final se borran las frenadas cuya clave ya no está en la lista de
+ * reactivables vigente (leída al inicio de ESTA corrida) — cubre reactivación manual,
+ * pausado manual, pérdida de stock o de mapeo por cualquier vía que no sea este cron. Si no
+ * hay reactivables, todas las frenadas existentes son huérfanas por definición (una frenada
+ * solo tiene sentido para algo reactivable) y se limpian todas.
+ *
  * Comparte el candado _reactivarEnCurso con la reactivación manual: nunca corren a la vez
- * (se pisarían contra ML y competirían por el rate limit).
+ * (se pisarían contra ML y competirían por el rate limit). El candado es en memoria de UN
+ * proceso: alcanza con una sola instancia corriendo el cron; con varias instancias en paralelo
+ * no protege (no hay lock distribuido). Antes esto era un detalle menor de la acción manual;
+ * ahora que es un cron periódico y no un click de usuario, es un supuesto que sostiene la
+ * corrección de esta función.
  */
 export async function reactivarAutomatico(db, cfg) {
   if (!mlCfgOk(cfg)) return { omitido: true };
@@ -1006,10 +1026,6 @@ export async function reactivarAutomatico(db, cfg) {
   _reactivarEnCurso = true;
   try {
     const rows = getReactivablesRows(db);
-    const itemIds = [...new Set(rows.map(r => r.item_id))];
-    if (itemIds.length === 0) return { omitido: false, reactivadas: 0, frenadas: 0 };
-
-    const { resultados } = await reactivarItems(db, cfg.ml, itemIds);
 
     const guardarFrenada = db.prepare(`
       INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
@@ -1020,6 +1036,28 @@ export async function reactivarAutomatico(db, cfg) {
     `);
     const borrarFrenada = db.prepare('DELETE FROM ml_reactivacion_frenada WHERE clave = ?');
     const skuDeClave = db.prepare('SELECT sku FROM sku_matcher_decisiones WHERE clave = ?');
+
+    if (rows.length === 0) {
+      // No hay ningún reactivable: cualquier frenada existente quedó huérfana (ya no
+      // corresponde a nada de la lista vigente) — limpieza total.
+      db.prepare('DELETE FROM ml_reactivacion_frenada').run();
+      return { omitido: false, reactivadas: 0, frenadas: 0 };
+    }
+
+    const clavesFrenadas = new Set(
+      db.prepare('SELECT clave FROM ml_reactivacion_frenada').all().map(f => f.clave)
+    );
+    // Primero los items SIN ninguna frenada registrada (candidatos reales a reactivarse),
+    // después los que ya vienen frenados: así el lote (LOTE_MAX en reactivarItems) siempre
+    // avanza sobre publicaciones nuevas en vez de reprocesar por siempre el mismo bloque.
+    const itemIds = [...new Set(rows.map(r => r.item_id))];
+    const itemTieneFrenada = new Map();
+    for (const r of rows) {
+      if (clavesFrenadas.has(r.clave)) itemTieneFrenada.set(r.item_id, true);
+    }
+    itemIds.sort((a, b) => (itemTieneFrenada.get(a) ? 1 : 0) - (itemTieneFrenada.get(b) ? 1 : 0));
+
+    const { resultados } = await reactivarItems(db, cfg.ml, itemIds);
 
     let reactivadas = 0;
     let frenadas = 0;
@@ -1039,13 +1077,21 @@ export async function reactivarAutomatico(db, cfg) {
         guardarFrenada.run({
           clave: r.clave,
           sku: skuDeClave.get(r.clave)?.sku ?? null,
-          motivo: r.error ?? 'El neto de ML queda por debajo del precio web',
+          motivo: r.error,
           neto: r.neto ?? null,
           precio_contado: r.precio_web ?? null,
           deficit_pct: r.deficitPct,
           detectado_en: ts,
         });
       }
+    }
+
+    // Barrido de huérfanas: cualquier frenada cuya clave ya no esté entre los reactivables
+    // leídos al inicio de esta corrida (la publicación se reactivó a mano, se pausó por otra
+    // razón, se quedó sin stock o perdió el mapeo) deja de tener sentido y se borra.
+    const clavesVigentes = new Set(rows.map(r => r.clave));
+    for (const clave of clavesFrenadas) {
+      if (!clavesVigentes.has(clave)) borrarFrenada.run(clave);
     }
 
     return { omitido: false, reactivadas, frenadas };
