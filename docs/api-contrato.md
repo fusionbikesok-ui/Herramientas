@@ -64,6 +64,41 @@ Protegida por el candado `_wcToMlEnCurso`.
     lista; NO sincronizó.
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
 
+### GET /api/sync/dashboard (campo agregado)
+Además de lo que ya devolvía, incluye:
+
+```
+"frenadas": 0
+```
+
+Cantidad de publicaciones que la reactivación automática frenó por precio (ver
+`GET /api/sync/frenadas`).
+
+### GET /api/sync/frenadas
+Publicaciones pausadas por falta de stock que recuperaron stock pero la reactivación
+automática NO las reactivó porque el neto de ML queda por debajo del precio de contado
+(ver `ml_reactivacion_frenada`, poblada por el cron de reactivación automática).
+
+- Request: sin body.
+- Response 200: `{ "ok": true, "data": [{ "clave", "sku", "motivo", "neto", "precio_contado",
+  "deficit_pct", "detectado_en", "item_id", "titulo", "thumbnail", "permalink",
+  "variations_texto" }] }`, ordenado por déficit descendente y luego por más reciente.
+
+### POST /api/sync/frenadas/forzar
+Reintenta AHORA la reactivación de las publicaciones frenadas indicadas, sin esperar al
+próximo ciclo del cron (caso típico: el usuario acaba de corregir el precio en ML). Reutiliza
+`reactivarItems`, que **siempre** aplica el chequeo de neto contra el precio de contado — este
+endpoint no es un "forzar a pérdida": si el precio sigue mal, la publicación vuelve a quedar
+frenada. Fail-closed deliberado, no se saltea la guarda de precio bajo ningún flag.
+
+- Request: `{ "itemIds": ["MLA123", ...] }`.
+- Response 200: `{ "ok": true, "resultados": [...] }` (mismo shape que `POST /api/sync/reactivar`).
+  Las claves de `ml_reactivacion_frenada` correspondientes a los `item_id` que salieron OK se
+  borran; las que siguieron bloqueadas quedan (y su `motivo`/`deficit_pct` se actualiza en el
+  próximo ciclo del cron).
+- Response 400: `{ "ok": false, "error": "MercadoLibre no configurado" }` o
+  `{ "ok": false, "error": "itemIds requerido" }`.
+
 ## Preparación de pedidos — perfiles de foto por SKU
 
 Overrides de perfil de foto para un producto puntual. Prioridad de resolución del perfil
