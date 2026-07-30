@@ -984,6 +984,76 @@ export async function reactivarItems(db, mlCfg, itemIds) {
   return { procesados: porItem.size, resultados };
 }
 
+/**
+ * Reactivación AUTOMÁTICA (cron): reactiva sola toda publicación pausada por out_of_stock
+ * que recuperó stock y cuyo neto de ML pasa el chequeo contra el precio de contado.
+ *
+ * Las que NO pasan el chequeo de precio quedan pausadas y se registran en
+ * ml_reactivacion_frenada para que el usuario las vea y corrija el precio en ML. La tabla se
+ * limpia sola: si en un ciclo posterior el precio pasa, se reactiva y se borra la fila.
+ *
+ * FAIL-CLOSED: un bloqueo por ML caído (no se pudo consultar el precio o la comisión) NO se
+ * registra como frenada — no es un problema de precio y el usuario no puede hacer nada con
+ * él. Se reintenta solo en el próximo ciclo. El discriminador es deficitPct != null: solo el
+ * bloqueo por neto bajo calcula un déficit.
+ *
+ * Comparte el candado _reactivarEnCurso con la reactivación manual: nunca corren a la vez
+ * (se pisarían contra ML y competirían por el rate limit).
+ */
+export async function reactivarAutomatico(db, cfg) {
+  if (!mlCfgOk(cfg)) return { omitido: true };
+  if (_reactivarEnCurso) return { omitido: true };
+  _reactivarEnCurso = true;
+  try {
+    const rows = getReactivablesRows(db);
+    const itemIds = [...new Set(rows.map(r => r.item_id))];
+    if (itemIds.length === 0) return { omitido: false, reactivadas: 0, frenadas: 0 };
+
+    const { resultados } = await reactivarItems(db, cfg.ml, itemIds);
+
+    const guardarFrenada = db.prepare(`
+      INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
+      VALUES (@clave, @sku, @motivo, @neto, @precio_contado, @deficit_pct, @detectado_en)
+      ON CONFLICT(clave) DO UPDATE SET
+        motivo=excluded.motivo, neto=excluded.neto, precio_contado=excluded.precio_contado,
+        deficit_pct=excluded.deficit_pct, detectado_en=excluded.detectado_en
+    `);
+    const borrarFrenada = db.prepare('DELETE FROM ml_reactivacion_frenada WHERE clave = ?');
+    const skuDeClave = db.prepare('SELECT sku FROM sku_matcher_decisiones WHERE clave = ?');
+
+    let reactivadas = 0;
+    let frenadas = 0;
+    const ts = now();
+
+    for (const r of resultados) {
+      if (r.ok) {
+        reactivadas++;
+        // Reactivada: si venía frenada por precio, ya no lo está.
+        for (const v of rows.filter(x => x.item_id === r.item_id)) borrarFrenada.run(v.clave);
+        continue;
+      }
+      // Solo el bloqueo por neto bajo trae deficitPct. Los demás (ML caído, sin precio web)
+      // no son frenadas de precio: se reintentan solos, sin ensuciar la lista.
+      if (r.bloqueado && r.deficitPct != null && r.clave) {
+        frenadas++;
+        guardarFrenada.run({
+          clave: r.clave,
+          sku: skuDeClave.get(r.clave)?.sku ?? null,
+          motivo: r.error ?? 'El neto de ML queda por debajo del precio web',
+          neto: r.neto ?? null,
+          precio_contado: r.precio_web ?? null,
+          deficit_pct: r.deficitPct,
+          detectado_en: ts,
+        });
+      }
+    }
+
+    return { omitido: false, reactivadas, frenadas };
+  } finally {
+    _reactivarEnCurso = false;
+  }
+}
+
 // ─── limpieza masiva de variaciones muertas ─────────────────────────────────────
 
 /**
