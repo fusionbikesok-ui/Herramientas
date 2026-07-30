@@ -22,13 +22,15 @@ const CFG = { ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' }, woo:
 let db;
 
 /** Siembra una publicación pausada por out_of_stock, mapeada, con stock web disponible. */
-function sembrarReactivable({ clave = 'MLA1|', itemId = 'MLA1', sku = 'FB-1', stockWc = 3, precioWc = 300000 } = {}) {
-  db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
-    VALUES (?, ?, ?, 'simple', ?, ?, '2026-07-30T00:00:00Z')`).run(Math.floor(Math.random() * 1e6), 'Producto ' + sku, sku, stockWc, precioWc);
+function sembrarReactivable({ clave = 'MLA1|', itemId = 'MLA1', sku = 'FB-1', stockWc = 3, precioWc = 300000, titulo = null, sinPrecioWeb = false } = {}) {
+  if (!sinPrecioWeb) {
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
+      VALUES (?, ?, ?, 'simple', ?, ?, '2026-07-30T00:00:00Z')`).run(Math.floor(Math.random() * 1e6), 'Producto ' + sku, sku, stockWc, precioWc);
+  }
   db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
     VALUES (?, ?, ?, 'asignar', '2026-07-30T00:00:00Z')`).run(clave, sku, 'Producto ' + sku);
   db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
-    VALUES (?, ?, '', ?, 'paused', 'out_of_stock', 0, '2026-07-30T00:00:00Z')`).run(clave, itemId, 'Pub ' + sku);
+    VALUES (?, ?, '', ?, 'paused', 'out_of_stock', 0, '2026-07-30T00:00:00Z')`).run(clave, itemId, titulo ?? ('Pub ' + sku));
 }
 
 beforeEach(() => {
@@ -105,5 +107,110 @@ describe('reactivarAutomatico', () => {
     const r = await reactivarAutomatico(db, CFG);
     expect(r.reactivadas).toBe(0);
     expect(mlFetch).not.toHaveBeenCalled();
+  });
+
+  it('fail-closed: "no se pudo calcular la comisión" no registra frenada (deficitPct null pero clave no nula)', async () => {
+    sembrarReactivable({ precioWc: 300000 });
+    mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
+        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      }
+      // El GET de comisión falla: chequearNetoReactivar devuelve bloqueo con clave no nula
+      // pero deficitPct: null — no es un problema de precio, no debe registrarse.
+      if (metodo === 'get' && path.includes('listing_prices')) return { status: 500, data: null };
+      return { status: 200, data: {} };
+    });
+
+    const r = await reactivarAutomatico(db, CFG);
+    expect(r.reactivadas).toBe(0);
+    expect(r.frenadas).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n).toBe(0);
+  });
+
+  it('fail-closed: sin precio web mapeado no registra frenada (deficitPct null pero clave no nula)', async () => {
+    sembrarReactivable({ sinPrecioWeb: true });
+    mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
+        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      }
+      if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
+      return { status: 200, data: {} };
+    });
+
+    const r = await reactivarAutomatico(db, CFG);
+    expect(r.reactivadas).toBe(0);
+    expect(r.frenadas).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n).toBe(0);
+  });
+
+  it('candado: si ya hay una corrida en curso, la segunda no llama a ML y devuelve omitido', async () => {
+    sembrarReactivable();
+    let resolveFetch;
+    mlFetch.mockImplementation(() => new Promise(res => { resolveFetch = res; }));
+
+    const p1 = reactivarAutomatico(db, CFG); // arranca, llega al await de ML y queda pendiente
+    const r2 = await reactivarAutomatico(db, CFG); // corre mientras la primera sigue en curso
+
+    expect(r2).toEqual({ omitido: true });
+
+    resolveFetch({ status: 500, data: null }); // libera la primera corrida para no dejarla colgada
+    await p1;
+  });
+
+  it('barrido de huérfanas: borra una frenada cuya publicación ya no está entre las reactivables', async () => {
+    sembrarReactivable({ clave: 'MLA1|', itemId: 'MLA1', sku: 'FB-1', precioWc: 300000 });
+    // Frenada huérfana: no corresponde a ninguna fila reactivable vigente (otra clave/sku).
+    db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
+      VALUES ('MLA999|', 'FB-999', 'vieja', 1, 2, 0.5, '2026-07-29T00:00:00Z')`).run();
+    mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
+        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      }
+      if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
+      return { status: 200, data: {} };
+    });
+
+    await reactivarAutomatico(db, CFG);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_reactivacion_frenada WHERE clave='MLA999|'").get().n).toBe(0);
+  });
+
+  it('barrido de huérfanas: si no hay reactivables, limpia todas las frenadas existentes', async () => {
+    db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
+      VALUES ('MLA999|', 'FB-999', 'vieja', 1, 2, 0.5, '2026-07-29T00:00:00Z')`).run();
+
+    const r = await reactivarAutomatico(db, CFG);
+    expect(r.reactivadas).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n).toBe(0);
+  });
+
+  it('anti-starvation: una publicación sin frenada y de título tardío entra en el lote aunque haya más de LOTE_MAX frenadas crónicas con título temprano', async () => {
+    const LOTE_MAX = 50;
+    // 50 publicaciones "crónicamente frenadas" con títulos alfabéticamente tempranos.
+    for (let i = 0; i < LOTE_MAX; i++) {
+      const n = String(i).padStart(2, '0');
+      const clave = `MLA_A${n}|`;
+      const itemId = `MLA_A${n}`;
+      sembrarReactivable({ clave, itemId, sku: `FB-A${n}`, precioWc: 300000, titulo: `A${n} - producto viejo` });
+      db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
+        VALUES (?, ?, 'crónica', 1, 2, 0.5, '2026-07-29T00:00:00Z')`).run(clave, `FB-A${n}`);
+    }
+    // Una publicación nueva, sin frenada, con título alfabéticamente TARDÍO (quedaría en la
+    // posición 51 si no se reordenara — nunca entraría al lote de LOTE_MAX=50).
+    sembrarReactivable({ clave: 'MLA_ZZZ|', itemId: 'MLA_ZZZ', sku: 'FB-ZZZ', precioWc: 300000, titulo: 'ZZZ - producto nuevo con stock' });
+
+    const itemsConsultados = new Set();
+    mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+      if (metodo === 'get' && path.startsWith('/items/')) {
+        const itemId = path.slice('/items/'.length).split('?')[0];
+        itemsConsultados.add(itemId);
+        return { status: 200, data: { id: itemId, status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      }
+      if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
+      return { status: 200, data: {} };
+    });
+
+    await reactivarAutomatico(db, CFG);
+
+    expect(itemsConsultados.has('MLA_ZZZ')).toBe(true);
   });
 });

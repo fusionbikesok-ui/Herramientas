@@ -192,6 +192,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // Las que no pasan el chequeo de precio quedan registradas como frenadas (badge en el home).
       cron.schedule('*/10 * * * *', () => {
         reactivarAutomatico(app._db, syncCfg)
+          .then(r => {
+            // Solo dejar rastro cuando hubo algo que hacer, para no ensuciar el log.
+            if (r && !r.omitido && (r.reactivadas || r.frenadas)) {
+              console.log(`reactivación automática: ${r.reactivadas} reactivadas, ${r.frenadas} frenadas`);
+            }
+          })
           .catch(err => console.error('reactivación automática error:', err.message));
       });
 
