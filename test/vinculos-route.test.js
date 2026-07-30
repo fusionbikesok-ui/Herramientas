@@ -155,3 +155,95 @@ describe('Rutas de publicaciones frenadas por precio', () => {
     });
   });
 });
+
+describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)', () => {
+  let db, app;
+
+  /** Siembra un producto WC + una publicación ML mapeada. */
+  function sembrarVinculo({ clave = 'MLA1|10', itemId = 'MLA1', sku = 'FB-6411', sellerSku = 'FB-6411',
+    color = 'Negro/Rojo', talle = 'M', precioMl = 218700, precioWc = 218700 } = {}) {
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, atributos_json, actualizado_en)
+      VALUES (?, ?, ?, 'variation', 5, ?, ?, '2026-07-30T00:00:00Z')`)
+      .run(Math.floor(Math.random() * 1e6), 'Casco Giro Syntax Matte — Negro/Rojo / M (55-59cm)', sku, precioWc,
+           '[{"name":"Color","option":"Negro/Rojo"},{"name":"Talle","option":"M (55-59cm)"}]');
+    db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
+      VALUES (?, ?, 'Casco Giro', 'asignar', '2026-07-30T00:00:00Z')`).run(clave, sku);
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, es_variante, color, talle, seller_sku, precio, available_quantity, actualizado_en, precio_actualizado_en)
+      VALUES (?, ?, '10', 'Casco Giro Syntax', 'active', 1, ?, ?, ?, ?, 3, '2026-07-30T00:00:00Z', '2026-07-30T00:00:00Z')`)
+      .run(clave, itemId, color, talle, sellerSku, precioMl);
+  }
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    app = express();
+    app.use(express.json());
+    app.use('/api/sync', syncRouter(db, CFG));
+    mlFetch.mockReset();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('GET /api/sync/vinculos/:sku devuelve el producto y sus publicaciones', async () => {
+    sembrarVinculo();
+    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    expect(res.status).toBe(200);
+    expect(res.body.producto.sku).toBe('FB-6411');
+    expect(res.body.publicaciones).toHaveLength(1);
+    expect(res.body.publicaciones[0].senales).toEqual([]);
+  });
+
+  it('varias publicaciones para un mismo SKU no generan sospecha (multi-publicación es intencional)', async () => {
+    sembrarVinculo({ clave: 'MLA1|10', itemId: 'MLA1' });
+    db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
+      VALUES ('MLA2|', 'FB-6411', 'Casco Giro', 'asignar', '2026-07-30T00:00:00Z')`).run();
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, es_variante, seller_sku, precio, actualizado_en)
+      VALUES ('MLA2|', 'MLA2', '', 'Casco Giro Syntax', 'active', 0, 'FB-6411', 218700, '2026-07-30T00:00:00Z')`).run();
+
+    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    expect(res.body.publicaciones).toHaveLength(2);
+    expect(res.body.publicaciones.every(p => p.senales.length === 0)).toBe(true);
+    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    expect(sosp.body.data).toHaveLength(0);
+  });
+
+  it('GET /api/sync/vinculos-sospechosos lista los que tienen señales', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    const res = await request(app).get('/api/sync/vinculos-sospechosos');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].senales.map(s => s.senal)).toContain('seller_sku');
+  });
+
+  it('marcar revisado OK saca al sospechoso de la lista', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    await request(app).post('/api/sync/vinculos/revisado')
+      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: 'FB-9999' });
+    const res = await request(app).get('/api/sync/vinculos-sospechosos');
+    expect(res.body.data).toHaveLength(0);
+  });
+
+  it('el sospechoso REAPARECE si el valor descartado cambia', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    await request(app).post('/api/sync/vinculos/revisado')
+      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: 'FB-9999' });
+    // El SKU en ML cambia a otro valor equivocado distinto: el descarte ya no aplica.
+    db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='FB-7777' WHERE clave='MLA1|10'").run();
+    const res = await request(app).get('/api/sync/vinculos-sospechosos');
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('reasignar cambia el SKU del vínculo y borra los descartes viejos', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
+      VALUES (777777, 'Otro producto', 'FB-9999', 'simple', 2, 218700, '2026-07-30T00:00:00Z')`).run();
+    await request(app).post('/api/sync/vinculos/revisado')
+      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: 'FB-9999' });
+
+    const res = await request(app).post('/api/sync/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-9999' });
+    expect(res.status).toBe(200);
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-9999');
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
+  });
+});
