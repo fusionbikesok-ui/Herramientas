@@ -104,11 +104,18 @@ ML cambia y vuelve a desviarse, el sospechoso reaparece. Descartar significa "es
 discrepancia concreta está bien", no "no me muestres más esta publicación". Sin esto, la
 lista acumula ruido permanente y termina ignorada.
 
-### 5. Esquema — migración `003`
+### 5. Esquema
+
+Los cambios van como sentencias idempotentes en `db/index.js` (`ALTER TABLE` dentro de
+`try/catch` y `CREATE TABLE IF NOT EXISTS`), que es la convención real del proyecto para este
+tipo de cambio — los archivos `.sql` numerados de `migrations/` se usan para otra cosa.
 
 - `ml_publicaciones_cache`: `+ precio`, `+ available_quantity`, `+ precio_actualizado_en`
-- `ml_reactivacion_frenada`: `clave` PK, `sku`, `motivo`, `neto`, `precio_contado`, `detectado_en`
-- `ml_vinculos_revisados`: `clave` PK, `senal`, `valor_revisado`, `revisado_por`, `revisado_en`
+- `ml_reactivacion_frenada`: `clave` PK, `sku`, `motivo`, `neto`, `precio_contado`,
+  `deficit_pct`, `detectado_en`
+- `ml_vinculos_revisados`: PK **compuesta** `(clave, senal)`, `valor_revisado`, `revisado_por`,
+  `revisado_en`. La PK es compuesta porque una publicación puede tener una señal descartada y
+  otra vigente; con PK simple, descartar una borraría la otra.
 
 ### 6. Home
 
