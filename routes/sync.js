@@ -1477,6 +1477,9 @@ export function syncRouter(db, cfg) {
       skus = { escritos: s.escritos || 0, pendientes: s.pendientes || 0 };
     } catch (_) { /* cache puede no existir */ }
 
+    // Publicaciones que la reactivación automática frenó por precio (ver /frenadas).
+    const frenadas = db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n;
+
     res.json({
       ok: true,
       token: tokenRow
@@ -1498,6 +1501,7 @@ export function syncRouter(db, cfg) {
         errores_reales: erroresReales,
       },
       skus,
+      frenadas,
     });
   });
 
@@ -1575,6 +1579,40 @@ export function syncRouter(db, cfg) {
       // se libera acá, así el próximo lote no queda bloqueado por una reactivación fantasma.
       _reactivarEnCurso = false;
     }
+  });
+
+  // Publicaciones que la reactivación automática frenó por precio (neto por debajo del contado).
+  router.get('/frenadas', (req, res) => {
+    const data = db.prepare(`
+      SELECT f.clave, f.sku, f.motivo, f.neto, f.precio_contado, f.deficit_pct, f.detectado_en,
+             p.item_id, p.titulo, p.thumbnail, p.permalink, p.variations_texto
+      FROM ml_reactivacion_frenada f
+      LEFT JOIN ml_publicaciones_cache p ON p.clave = f.clave
+      ORDER BY f.deficit_pct DESC, f.detectado_en DESC
+    `).all();
+    res.json({ ok: true, data });
+  });
+
+  // Override: reintentar la reactivación de publicaciones frenadas (típicamente después de
+  // corregir el precio en ML, sin esperar al próximo ciclo del cron). NO saltea el chequeo de
+  // neto — reactivarItems aplica chequearNetoReactivar siempre. Si el precio sigue mal, la
+  // publicación vuelve a quedar frenada (fail-closed: nunca se vende a pérdida por apuro).
+  router.post('/frenadas/forzar', async (req, res) => {
+    if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+    const itemIds = Array.isArray(req.body?.itemIds) ? req.body.itemIds.map(String).filter(Boolean) : [];
+    if (itemIds.length === 0) return res.status(400).json({ ok: false, error: 'itemIds requerido' });
+
+    const { resultados } = await reactivarItems(db, mlCfg, itemIds);
+    // Borra las frenadas de las claves que pertenecen a las publicaciones que salieron OK.
+    // La subconsulta trae TODAS las claves cacheadas de ese item_id (una publicación con
+    // variaciones tiene varias claves): correcto, porque chequearNetoReactivar evalúa el
+    // precio a nivel publicación (todas sus variaciones juntas), así que si el item quedó
+    // ok=true todas sus frenadas pendientes quedaron resueltas y corresponde borrarlas todas.
+    const borrar = db.prepare('DELETE FROM ml_reactivacion_frenada WHERE clave IN (SELECT clave FROM ml_publicaciones_cache WHERE item_id = ?)');
+    for (const r of resultados) {
+      if (r.ok) borrar.run(r.item_id);
+    }
+    res.json({ ok: true, resultados });
   });
 
   // Limpieza masiva de variaciones muertas (verificada contra ML, fail-closed).
