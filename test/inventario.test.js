@@ -1357,6 +1357,110 @@ describe('Casos borde adicionales — cobertura de tester', () => {
   });
 });
 
+describe('Reintentar desde el historial: conteo de fallidos y reintento selectivo', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('sesión descartada tiene fallidos=0 aunque haya conteos sin ajustar (bug de fila fantasma del LEFT JOIN)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/descartar`);
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones');
+
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].estado).toBe('descartada');
+    expect(r.body.data[0].fallidos).toBe(0);
+  });
+
+  it('sesión confirmada sin ningún conteo tiene fallidos=0 (otro caso de fila fantasma del LEFT JOIN)', async () => {
+    const db = openDb(TEST_DB);
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    // Confirmamos directo sin escanear nada: la sesión queda sin filas en inventario_conteos.
+    db.prepare("UPDATE inventario_sesiones SET estado='confirmada', confirmado_en=? WHERE id=?").run(now(), id);
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones');
+
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].fallidos).toBe(0);
+  });
+
+  it('sesión confirmada_con_errores con 2 conteos, uno ajustado y otro no, da fallidos=1', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
+    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones');
+
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].estado).toBe('confirmada_con_errores');
+    expect(r.body.data[0].fallidos).toBe(1);
+  });
+
+  it('GET /sesiones/:id expone ajustado + ajustado_en por ítem tras un confirmar parcial', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
+    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const r = await request(buildApp(db, 'juan')).get(`/api/inventario/sesiones/${id}`);
+
+    const item1 = r.body.items.find(i => i.sku === 'FB-1');
+    const item2 = r.body.items.find(i => i.sku === 'FB-2');
+    expect(item1.ajustado).toBe(false);
+    expect(item1.ajustado_en).toBeNull();
+    expect(item2.ajustado).toBe(true);
+    expect(item2.ajustado_en).toBeTruthy();
+  });
+
+  it('POST /confirmar deja confirmado_por con el username que hizo la request', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    setStockWc.mockResolvedValue();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const sesion = db.prepare('SELECT confirmado_por FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.confirmado_por).toBe('juan');
+  });
+
+  it('reintentar una sesión confirmada_con_errores NO vuelve a ajustar en Woo el ítem que ya tenía ajustado_en', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
+    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`); // FB-1 falla, FB-2 ajusta ok
+    vi.clearAllMocks();
+
+    setStockWc.mockResolvedValue();
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`); // reintento
+
+    expect(setStockWc).toHaveBeenCalledTimes(1);
+    expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'FB-1', 1);
+  });
+});
+
 describe('Código escaneado que no existe en el catálogo', () => {
   afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
 
