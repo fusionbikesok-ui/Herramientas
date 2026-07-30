@@ -83,6 +83,8 @@ automática NO las reactivó porque el neto de ML queda por debajo del precio de
 - Response 200: `{ "ok": true, "data": [{ "clave", "sku", "motivo", "neto", "precio_contado",
   "deficit_pct", "detectado_en", "item_id", "titulo", "thumbnail", "permalink",
   "variations_texto" }] }`, ordenado por déficit descendente y luego por más reciente.
+  `variations_texto` viene directo de `ml_publicaciones_cache` (puede ser `null` en
+  publicaciones sin variaciones).
 
 ### POST /api/sync/frenadas/forzar
 Reintenta AHORA la reactivación de las publicaciones frenadas indicadas, sin esperar al
@@ -92,10 +94,16 @@ endpoint no es un "forzar a pérdida": si el precio sigue mal, la publicación v
 frenada. Fail-closed deliberado, no se saltea la guarda de precio bajo ningún flag.
 
 - Request: `{ "itemIds": ["MLA123", ...] }`.
-- Response 200: `{ "ok": true, "resultados": [...] }` (mismo shape que `POST /api/sync/reactivar`).
-  Las claves de `ml_reactivacion_frenada` correspondientes a los `item_id` que salieron OK se
-  borran; las que siguieron bloqueadas quedan (y su `motivo`/`deficit_pct` se actualiza en el
-  próximo ciclo del cron).
+- Response 200: `{ "ok": true, "pedidos": N, "procesados": M, "truncado": bool, "resultados":
+  [...] }` (`resultados` con el mismo shape que `POST /api/sync/reactivar`).
+  - `pedidos`: cantidad de `itemIds` recibidos en el request.
+  - `procesados`: cantidad efectivamente procesada. `reactivarItems` trunca internamente a
+    un lote máximo de 50 (`LOTE_MAX`); si se piden más de 50, `procesados` va a ser 50 y
+    `truncado` va a ser `true` — el cliente tiene que avisar al usuario que quedaron
+    `pedidos - procesados` sin tocar (van a entrar en el próximo pedido/ciclo).
+  - Las claves de `ml_reactivacion_frenada` correspondientes a los `item_id` que salieron OK
+    se borran; las que siguieron bloqueadas quedan (y su `motivo`/`deficit_pct` se actualiza
+    en el próximo ciclo del cron).
 - Response 400: `{ "ok": false, "error": "MercadoLibre no configurado" }` o
   `{ "ok": false, "error": "itemIds requerido" }`.
 

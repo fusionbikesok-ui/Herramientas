@@ -1602,7 +1602,10 @@ export function syncRouter(db, cfg) {
     const itemIds = Array.isArray(req.body?.itemIds) ? req.body.itemIds.map(String).filter(Boolean) : [];
     if (itemIds.length === 0) return res.status(400).json({ ok: false, error: 'itemIds requerido' });
 
-    const { resultados } = await reactivarItems(db, mlCfg, itemIds);
+    // reactivarItems trunca a LOTE_MAX (50) internamente y NO avisa por sí solo: hay que
+    // decírselo al cliente explícitamente, si no "forzar 80 frenadas" parece haber procesado
+    // las 80 cuando en realidad solo tocó 50 y las 30 restantes quedaron intactas sin rastro.
+    const { procesados, resultados } = await reactivarItems(db, mlCfg, itemIds);
     // Borra las frenadas de las claves que pertenecen a las publicaciones que salieron OK.
     // La subconsulta trae TODAS las claves cacheadas de ese item_id (una publicación con
     // variaciones tiene varias claves): correcto, porque chequearNetoReactivar evalúa el
@@ -1612,7 +1615,13 @@ export function syncRouter(db, cfg) {
     for (const r of resultados) {
       if (r.ok) borrar.run(r.item_id);
     }
-    res.json({ ok: true, resultados });
+    res.json({
+      ok: true,
+      pedidos: itemIds.length,
+      procesados,
+      truncado: itemIds.length > procesados,
+      resultados,
+    });
   });
 
   // Limpieza masiva de variaciones muertas (verificada contra ML, fail-closed).
