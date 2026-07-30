@@ -92,4 +92,50 @@ describe('senalesDeVinculo', () => {
     const s = senalesDeVinculo({ ...base, seller_sku: 'FB-9999', precio: 80000 });
     expect(s[0].peso).toBe('alta');
   });
+
+  it('marca talle discrepante cuando uno es prefijo literal del otro sin separador (S vs SM)', () => {
+    const s = senalesDeVinculo({
+      ...base,
+      talle: 'S',
+      atributos_json: '[{"name":"Color","option":"Negro/Rojo"},{"name":"Talle","option":"SM"}]',
+    });
+    expect(s.map(x => x.senal)).toContain('atributos');
+  });
+
+  it('marca talle discrepante cuando uno es prefijo literal del otro sin separador (L vs XL), en cualquier dirección', () => {
+    const s = senalesDeVinculo({
+      ...base,
+      talle: 'XL',
+      atributos_json: '[{"name":"Color","option":"Negro/Rojo"},{"name":"Talle","option":"L"}]',
+    });
+    expect(s.map(x => x.senal)).toContain('atributos');
+  });
+
+  it('sigue sin marcar cuando el prefijo termina en separador (M vs M (55-59cm))', () => {
+    expect(senalesDeVinculo({ ...base, talle: 'M' })).toEqual([]);
+  });
+
+  it('el valor de la señal seller_sku cambia si cambia el lado mapeado (sku), no solo el de ML', () => {
+    const a = senalesDeVinculo({ ...base, seller_sku: 'FB-9999', sku: 'FB-1111' })
+      .find(x => x.senal === 'seller_sku').valor;
+    const b = senalesDeVinculo({ ...base, seller_sku: 'FB-9999', sku: 'FB-2222' })
+      .find(x => x.senal === 'seller_sku').valor;
+    expect(a).not.toBe(b);
+  });
+
+  it('el valor de la señal atributos cambia si cambia el lado de WC, no solo el de ML', () => {
+    const a = senalesDeVinculo({ ...base, color: 'Azul' }).find(x => x.senal === 'atributos').valor;
+    const b = senalesDeVinculo({
+      ...base,
+      color: 'Azul',
+      atributos_json: '[{"name":"Color","option":"Verde"},{"name":"Talle","option":"M (55-59cm)"}]',
+    }).find(x => x.senal === 'atributos').valor;
+    expect(a).not.toBe(b);
+  });
+
+  it('el valor de la señal precio cambia si cambia el precio de lista de WC, no solo el de ML', () => {
+    const a = senalesDeVinculo({ ...base, precio: 80000 }).find(x => x.senal === 'precio').valor;
+    const b = senalesDeVinculo({ ...base, precio: 80000, precio_wc: 150000 }).find(x => x.senal === 'precio').valor;
+    expect(a).not.toBe(b);
+  });
 });
