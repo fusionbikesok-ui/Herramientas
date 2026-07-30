@@ -12,7 +12,8 @@ import { mlFetch, bootstrapToken } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
-import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
+import { netoMl, veredictoNeto, precioWebClave, precioContado } from '../lib/mlPrecios.js';
+import { senalesDeVinculo, normalizarAtributo } from '../lib/vinculosSenales.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
@@ -1317,6 +1318,80 @@ async function diagnosticarErrores(db, mlCfg, rows) {
   }
 }
 
+/**
+ * Filas crudas de vínculos WC↔ML (publicación mapeada + su producto de WC), listas para
+ * pasarle a senalesDeVinculo. Si se pasa `sku`, se acota a ese producto.
+ *
+ * El dedup por SKU es el mismo criterio que COMPUTED_STOCK_CTE: si un SKU está cargado en
+ * más de un producto de WC, se toma uno solo (el de menor stock) para no multiplicar filas.
+ */
+function filasDeVinculos(db, { sku = null } = {}) {
+  const params = [];
+  let filtro = '';
+  if (sku) { filtro = 'AND d.sku = ?'; params.push(sku); }
+  return db.prepare(`
+    WITH catalogo_dedup AS (
+      SELECT sku, nombre, stock, precio, atributos_json, img,
+        ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+      FROM catalogo_cache
+      WHERE sku IS NOT NULL AND sku <> ''
+    )
+    SELECT d.clave, d.sku,
+           p.item_id, p.variation_id, p.titulo, p.status, p.sub_status, p.color, p.talle,
+           p.seller_sku, p.variations_texto, p.thumbnail, p.permalink, p.precio,
+           p.available_quantity, p.precio_actualizado_en,
+           c.nombre AS wc_nombre, c.stock AS stock_wc, c.precio AS precio_wc,
+           c.atributos_json, c.img AS wc_img,
+           e.cantidad_ml
+    FROM sku_matcher_decisiones d
+    JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
+    JOIN ml_publicaciones_cache p ON p.clave = d.clave
+    LEFT JOIN ml_stock_estado e ON e.clave = d.clave
+    WHERE d.accion IN ('asignar','confirmar') AND d.sku IS NOT NULL AND d.sku <> '' ${filtro}
+    ORDER BY c.nombre, p.titulo, d.clave
+  `).all(...params);
+}
+
+/**
+ * Señales vigentes de una fila: las que dispara senalesDeVinculo menos las que el usuario
+ * marcó como revisadas CON EL MISMO VALOR. Si el valor cambió, el descarte no aplica y la
+ * señal vuelve a aparecer — descartar significa "esta discrepancia concreta está bien".
+ *
+ * `senal.valor` es compuesto (ej. "fb-9999|fb-6411" para seller_sku: SKU en ML | SKU mapeado)
+ * y lo que se descarta puede ser el composite completo (si el cliente reenvía tal cual el
+ * `valor` que le llegó en la lista) o solo el dato concreto que cambió (ej. el SKU mal
+ * cargado en ML). Por eso la comparación es por contención normalizada, no igualdad estricta:
+ * alcanza con que el valor descartado sea (o esté dentro de) el valor vigente de la señal.
+ */
+function senalesVigentes(fila, descartesPorClave) {
+  const descartes = descartesPorClave.get(fila.clave) || new Map();
+  return senalesDeVinculo(fila).filter(s => {
+    const guardado = descartes.get(s.senal);
+    if (guardado == null) return true;
+    return !normalizarAtributo(s.valor).includes(normalizarAtributo(guardado));
+  });
+}
+
+/** Mapa clave → Map(senal → valor_revisado), para no consultar por fila. */
+function cargarDescartes(db) {
+  const m = new Map();
+  for (const r of db.prepare('SELECT clave, senal, valor_revisado FROM ml_vinculos_revisados').all()) {
+    if (!m.has(r.clave)) m.set(r.clave, new Map());
+    m.get(r.clave).set(r.senal, r.valor_revisado);
+  }
+  return m;
+}
+
+/** Cantidad de vínculos con al menos una señal vigente (para el chip del home). */
+function contarVinculosSospechosos(db) {
+  const descartes = cargarDescartes(db);
+  let n = 0;
+  for (const fila of filasDeVinculos(db)) {
+    if (senalesVigentes(fila, descartes).length > 0) n++;
+  }
+  return n;
+}
+
 // ─── syncRouter ───────────────────────────────────────────────────────────────
 
 export function syncRouter(db, cfg) {
@@ -1502,6 +1577,7 @@ export function syncRouter(db, cfg) {
       },
       skus,
       frenadas,
+      vinculos_sospechosos: contarVinculosSospechosos(db),
     });
   });
 
@@ -1718,8 +1794,92 @@ export function syncRouter(db, cfg) {
     const { clave } = req.body || {};
     if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
     const info = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
+    // Los descartes de sospechosos valían para el vínculo anterior, no para el que le toque después.
+    db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
     logSync(db, { direccion: 'wc_ml', clave, estado: 'remapeo_requerido', error: 'desvinculada manualmente para re-mapear' });
     res.json({ ok: true, borradas: info.changes });
+  });
+
+  // Detalle de un producto de WC y TODAS las publicaciones de ML mapeadas a su SKU.
+  router.get('/vinculos/:sku', (req, res) => {
+    const sku = String(req.params.sku || '').trim();
+    if (!sku) return res.status(400).json({ ok: false, error: 'sku requerido' });
+
+    const filas = filasDeVinculos(db, { sku });
+    const descartes = cargarDescartes(db);
+    const prod = db.prepare(`
+      SELECT sku, nombre, stock, precio, img FROM catalogo_cache
+      WHERE sku = ? AND sku <> '' ORDER BY stock ASC, id_woo ASC LIMIT 1
+    `).get(sku);
+    if (!prod) return res.status(404).json({ ok: false, error: 'SKU no encontrado en el catálogo' });
+
+    const publicaciones = filas.map(f => ({
+      clave: f.clave, item_id: f.item_id, variation_id: f.variation_id,
+      titulo: f.titulo, status: f.status, sub_status: f.sub_status,
+      color: f.color, talle: f.talle, variations_texto: f.variations_texto,
+      seller_sku: f.seller_sku, thumbnail: f.thumbnail, permalink: f.permalink,
+      precio_ml: f.precio, precio_actualizado_en: f.precio_actualizado_en,
+      stock_ml: f.available_quantity, stock_sincronizado: f.cantidad_ml,
+      senales: senalesVigentes(f, descartes),
+    }));
+
+    res.json({
+      ok: true,
+      producto: {
+        sku: prod.sku, nombre: prod.nombre, stock: prod.stock, img: prod.img,
+        precio_lista: prod.precio,
+        precio_contado: prod.precio > 0 ? precioContado(prod.precio) : null,
+      },
+      publicaciones,
+    });
+  });
+
+  // Listado de vínculos con señales vigentes, ordenado por severidad (alta primero).
+  router.get('/vinculos-sospechosos', (req, res) => {
+    const descartes = cargarDescartes(db);
+    const data = [];
+    for (const f of filasDeVinculos(db)) {
+      const senales = senalesVigentes(f, descartes);
+      if (senales.length === 0) continue;
+      data.push({
+        clave: f.clave, sku: f.sku, item_id: f.item_id,
+        titulo: f.titulo, wc_nombre: f.wc_nombre, thumbnail: f.thumbnail, permalink: f.permalink,
+        precio_ml: f.precio, precio_wc: f.precio_wc, senales,
+      });
+    }
+    data.sort((a, b) => {
+      const peor = (x) => (x.senales.some(s => s.peso === 'alta') ? 0 : 1);
+      return peor(a) - peor(b) || b.senales.length - a.senales.length;
+    });
+    res.json({ ok: true, data });
+  });
+
+  // Marcar una señal como revisada y correcta. Guarda el VALOR: si el dato cambia, reaparece.
+  router.post('/vinculos/revisado', (req, res) => {
+    const { clave, senal, valor } = req.body || {};
+    if (!clave || !senal) return res.status(400).json({ ok: false, error: 'clave y senal requeridas' });
+    db.prepare(`
+      INSERT INTO ml_vinculos_revisados (clave, senal, valor_revisado, revisado_por, revisado_en)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(clave, senal) DO UPDATE SET
+        valor_revisado=excluded.valor_revisado, revisado_por=excluded.revisado_por, revisado_en=excluded.revisado_en
+    `).run(clave, senal, valor == null ? null : String(valor), req.user?.username ?? null, now());
+    res.json({ ok: true });
+  });
+
+  // Reasignar el vínculo a otro SKU. Mismo statement que usa el matcher para sus decisiones.
+  router.post('/vinculos/reasignar', (req, res) => {
+    const { clave, sku } = req.body || {};
+    if (!clave || !sku) return res.status(400).json({ ok: false, error: 'clave y sku requeridos' });
+    const prod = db.prepare("SELECT nombre FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1").get(sku);
+    if (!prod) return res.status(400).json({ ok: false, error: 'El SKU no existe en el catálogo' });
+
+    db.prepare('INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)')
+      .run(clave, sku, prod.nombre, 'asignar', now());
+    // Los descartes valían para el vínculo anterior, no para el nuevo.
+    db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+    logSync(db, { direccion: 'wc_ml', clave, sku, estado: 'remapeo_requerido', error: 'reasignada manualmente desde Vínculos' });
+    res.json({ ok: true });
   });
 
   // Reintenta la sincronización de stock de UN solo ítem (para resolver un error puntual).
