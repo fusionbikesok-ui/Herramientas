@@ -13,7 +13,7 @@ import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../l
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado } from '../lib/mlPrecios.js';
-import { senalesDeVinculo, normalizarAtributo } from '../lib/vinculosSenales.js';
+import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
@@ -1357,19 +1357,15 @@ function filasDeVinculos(db, { sku = null } = {}) {
  * marcó como revisadas CON EL MISMO VALOR. Si el valor cambió, el descarte no aplica y la
  * señal vuelve a aparecer — descartar significa "esta discrepancia concreta está bien".
  *
- * `senal.valor` es compuesto (ej. "fb-9999|fb-6411" para seller_sku: SKU en ML | SKU mapeado)
- * y lo que se descarta puede ser el composite completo (si el cliente reenvía tal cual el
- * `valor` que le llegó en la lista) o solo el dato concreto que cambió (ej. el SKU mal
- * cargado en ML). Por eso la comparación es por contención normalizada, no igualdad estricta:
- * alcanza con que el valor descartado sea (o esté dentro de) el valor vigente de la señal.
+ * Igualdad ESTRICTA a propósito: `senal.valor` ya viene normalizado (compuesto, ambos lados
+ * de la comparación) desde `senalesDeVinculo`, así que comparar por contención/substring
+ * reintroduciría el bug que ese diseño evita — un descarte viejo taparía en silencio una
+ * discrepancia nueva y distinta con un SKU/precio que casualmente sea substring del actual.
+ * El cliente debe reenviar el `valor` tal cual lo recibió en la señal, sin editarlo.
  */
 function senalesVigentes(fila, descartesPorClave) {
   const descartes = descartesPorClave.get(fila.clave) || new Map();
-  return senalesDeVinculo(fila).filter(s => {
-    const guardado = descartes.get(s.senal);
-    if (guardado == null) return true;
-    return !normalizarAtributo(s.valor).includes(normalizarAtributo(guardado));
-  });
+  return senalesDeVinculo(fila).filter(s => descartes.get(s.senal) !== s.valor);
 }
 
 /** Mapa clave → Map(senal → valor_revisado), para no consultar por fila. */

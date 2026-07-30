@@ -218,28 +218,59 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
 
   it('marcar revisado OK saca al sospechoso de la lista', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
+    // El contrato real: el cliente reenvía el `valor` tal cual lo recibió de la señal,
+    // no un dato inventado a mano.
+    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
     await request(app).post('/api/sync/vinculos/revisado')
-      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: 'FB-9999' });
+      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
     const res = await request(app).get('/api/sync/vinculos-sospechosos');
     expect(res.body.data).toHaveLength(0);
   });
 
   it('el sospechoso REAPARECE si el valor descartado cambia', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
+    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
     await request(app).post('/api/sync/vinculos/revisado')
-      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: 'FB-9999' });
+      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
     // El SKU en ML cambia a otro valor equivocado distinto: el descarte ya no aplica.
     db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='FB-7777' WHERE clave='MLA1|10'").run();
     const res = await request(app).get('/api/sync/vinculos-sospechosos');
     expect(res.body.data).toHaveLength(1);
   });
 
+  it('el sospechoso REAPARECE si cambia el dato aunque el nuevo valor "contenga" texto del viejo', async () => {
+    // Caso que una comparación por contención (substring) rompería: usamos la señal `precio`
+    // (valor compuesto puramente numérico "precioMl|precioWc") porque ahí es fácil construir
+    // una colisión real de substring. precioWc fijo en 100000; precioMl pasa de 50000 (valor
+    // guardado "50000|100000") a 350000 (valor nuevo "350000|100000"). El string viejo
+    // "50000|100000" es literalmente substring de "350000|100000" — una comparación por
+    // `includes` taparía en silencio una discrepancia de precio totalmente distinta y nueva.
+    sembrarVinculo({ precioWc: 100000, precioMl: 50000 });
+    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const senal = sosp.body.data[0].senales.find(s => s.senal === 'precio');
+    expect(senal.valor).toBe('50000|100000');
+    await request(app).post('/api/sync/vinculos/revisado')
+      .send({ clave: 'MLA1|10', senal: 'precio', valor: senal.valor });
+    let res = await request(app).get('/api/sync/vinculos-sospechosos');
+    expect(res.body.data).toHaveLength(0); // descartado
+
+    db.prepare("UPDATE ml_publicaciones_cache SET precio=350000 WHERE clave='MLA1|10'").run();
+    res = await request(app).get('/api/sync/vinculos-sospechosos');
+    const senalPrecio = res.body.data[0]?.senales.find(s => s.senal === 'precio');
+    expect(senalPrecio?.valor).toBe('350000|100000'); // confirma la colisión de substring
+    expect(res.body.data).toHaveLength(1); // reaparece: es una discrepancia distinta
+  });
+
   it('reasignar cambia el SKU del vínculo y borra los descartes viejos', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
     db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
       VALUES (777777, 'Otro producto', 'FB-9999', 'simple', 2, 218700, '2026-07-30T00:00:00Z')`).run();
+    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
     await request(app).post('/api/sync/vinculos/revisado')
-      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: 'FB-9999' });
+      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
 
     const res = await request(app).post('/api/sync/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-9999' });
     expect(res.status).toBe(200);
