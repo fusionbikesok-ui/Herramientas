@@ -216,6 +216,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(res.body.data[0].senales.map(s => s.senal)).toContain('seller_sku');
   });
 
+  it('POST /api/sync/vinculos/revisado sin el campo valor responde 400 y no crea descarte', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    const res = await request(app).post('/api/sync/vinculos/revisado')
+      .send({ clave: 'MLA1|10', senal: 'seller_sku' });
+    expect(res.status).toBe(400);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
+  });
+
   it('marcar revisado OK saca al sospechoso de la lista', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
     // El contrato real: el cliente reenvía el `valor` tal cual lo recibió de la señal,
