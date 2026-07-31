@@ -672,6 +672,13 @@ if (location.hash === '#sospechosos') {
 } else {
   buscarInput.focus();
 }
+
+// El hash puede cambiar sin recarga completa (link a #sospechosos estando ya en la
+// pantalla, botón de atrás/adelante del navegador): reevaluamos con la misma función que
+// se usa al cargar, no una lógica aparte.
+window.addEventListener('hashchange', function () {
+  setTab(location.hash === '#sospechosos' ? 'sospechosos' : 'buscar', { sinHash: true });
+});
 </script>
 
 <script>
