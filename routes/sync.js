@@ -17,6 +17,7 @@ import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
+import { parseCategorias } from '../lib/modelos/producto.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -2045,6 +2046,315 @@ export function syncRouter(db, cfg) {
     const sku = req.params.sku;
     db.prepare('DELETE FROM skus_config_ml WHERE sku = ?').run(sku);
     res.json({ ok: true });
+  });
+
+  // ── Config ML masiva ────────────────────────────────────────────────────────
+  // Reutiliza el mismo criterio de dedup por SKU que /config-ml y COMPUTED_STOCK_CTE
+  // (menor stock, menor id_woo): un SKU repetido en catalogo_cache es siempre dato sucio,
+  // nunca un caso de negocio legítimo, y elegir el mínimo es fail-closed (no sobrevende).
+  const CATALOGO_DEDUP_CTE = `
+    WITH catalogo_dedup AS (
+      SELECT sku, nombre, marca, stock, categorias_json,
+        ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+      FROM catalogo_cache
+      WHERE sku IS NOT NULL AND sku <> ''
+    )
+  `;
+
+  const ESTADOS_VALIDOS = ['sin_config', 'solo_local', 'reserva'];
+
+  // Arma el WHERE + params del filtro (q/marca/estado/categoria), compartido por el GET y
+  // el resolver de "todo el filtro" del POST /lote — evita mantener dos SQLs en paralelo.
+  // orden/dir/estado NUNCA se interpolan crudos: siempre pasan por whitelist antes de esto.
+  // Escapa los comodines propios de LIKE (%, _) y la barra de escape misma, para que un `q`
+  // con esos caracteres literales (ej. "50%" o "A_B") no traiga de más — sin esto, ese "más"
+  // se arrastra tal cual al lote si el operador después aplica "todo el filtro".
+  function escaparLike(valor) {
+    return valor.replace(/[\\%_]/g, (c) => `\\${c}`);
+  }
+
+  function construirFiltroCatalogo({ q, marca, estado, categoria }) {
+    const clausulas = [];
+    const params = [];
+    if (q) {
+      const qEscapado = escaparLike(q);
+      clausulas.push("(c.sku LIKE ? ESCAPE '\\' OR c.nombre LIKE ? ESCAPE '\\')");
+      params.push(`%${qEscapado}%`, `%${qEscapado}%`);
+    }
+    if (marca) {
+      clausulas.push('c.marca = ?');
+      params.push(marca);
+    }
+    if (categoria) {
+      // categorias_json es un array JSON embebido (ej. ["Cascos","Indumentaria"]), no una
+      // columna propia — se resuelve con json_each de sqlite (extensión JSON1, siempre
+      // disponible en better-sqlite3) en vez de traer todo a JS y filtrar ahí: así el
+      // filtro sigue viviendo en el WHERE de SQL y no rompe la paginación/el total ni
+      // obliga a escanear el catálogo entero en Node en cada request. json_valid() cubre
+      // el caso NULL/JSON corrupto sin que json_each tire error y rompa la consulta.
+      clausulas.push('(c.categorias_json IS NOT NULL AND json_valid(c.categorias_json) AND EXISTS (SELECT 1 FROM json_each(c.categorias_json) WHERE value = ?))');
+      params.push(categoria);
+    }
+    if (estado === 'sin_config') clausulas.push('s.sku IS NULL');
+    else if (estado === 'solo_local') clausulas.push("s.modo = 'solo_local'");
+    else if (estado === 'reserva') clausulas.push("s.modo = 'reserva'");
+    return { where: clausulas.length ? 'AND ' + clausulas.join(' AND ') : '', params };
+  }
+
+  // Catálogo completo (todas las variaciones/simples con SKU) + config ML de cada uno,
+  // haya o no fila en skus_config_ml. Base para elegir SKUs a granel desde el frontend.
+  router.get('/catalogo-config', (req, res) => {
+    const q = String(req.query.q || '').trim();
+    const marca = String(req.query.marca || '').trim();
+    const categoria = String(req.query.categoria || '').trim();
+    const estado = String(req.query.estado || '').trim();
+    if (estado && !ESTADOS_VALIDOS.includes(estado)) {
+      return res.status(400).json({ ok: false, error: `estado debe ser uno de: ${ESTADOS_VALIDOS.join(', ')}` });
+    }
+
+    // Whitelist de orden/dir: nunca se interpola el valor del usuario en el SQL.
+    const ORDEN_MAP = { nombre: 'c.nombre', stock: 'c.stock', sku: 'c.sku', marca: 'c.marca' };
+    const ordenParam = String(req.query.orden || 'nombre');
+    if (!ORDEN_MAP[ordenParam]) {
+      return res.status(400).json({ ok: false, error: `orden debe ser uno de: ${Object.keys(ORDEN_MAP).join(', ')}` });
+    }
+    const dirParam = String(req.query.dir || 'asc').toLowerCase();
+    if (!['asc', 'desc'].includes(dirParam)) {
+      return res.status(400).json({ ok: false, error: 'dir debe ser asc o desc' });
+    }
+
+    let limite = parseInt(req.query.limite, 10);
+    if (!Number.isFinite(limite) || limite <= 0) limite = 100;
+    limite = Math.min(limite, 500);
+    let offset = parseInt(req.query.offset, 10);
+    if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+    const { where, params } = construirFiltroCatalogo({ q, marca, estado, categoria });
+
+    const baseFrom = `
+      ${CATALOGO_DEDUP_CTE}
+      SELECT c.sku, c.nombre, c.marca, COALESCE(c.stock, 0) AS stock_wc, s.modo,
+        COALESCE(s.reserva, 0) AS reserva,
+        CASE
+          WHEN s.modo = 'solo_local' THEN 0
+          WHEN s.modo = 'reserva' THEN MAX(COALESCE(c.stock, 0) - COALESCE(s.reserva, 0), 0)
+          ELSE MAX(COALESCE(c.stock, 0), 0)
+        END AS stock_disponible_ml
+      FROM catalogo_dedup c
+      LEFT JOIN skus_config_ml s ON s.sku = c.sku
+      WHERE c.rn = 1 ${where}
+    `;
+
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM (${baseFrom})`).get(...params).n;
+    const data = db.prepare(`${baseFrom} ORDER BY ${ORDEN_MAP[ordenParam]} ${dirParam.toUpperCase()} LIMIT ? OFFSET ?`)
+      .all(...params, limite, offset);
+
+    const respuesta = { ok: true, data, total };
+
+    // marcas/categorias no cambian con el filtro ni con la página — armarlas es un full scan
+    // de catalogo_cache con parseo JSON en JS (medido ~3-4ms) que no vale la pena pagar en
+    // cada tecleo del buscador ni en cada cambio de página. Solo se calculan cuando el
+    // frontend las pide explícitamente (primera carga de la pantalla), con ?facetas=1.
+    if (String(req.query.facetas || '') === '1') {
+      // Marcas del catálogo completo (no del filtro) para poblar el desplegable.
+      respuesta.marcas = db.prepare(`
+        SELECT DISTINCT marca FROM catalogo_cache WHERE marca IS NOT NULL AND marca <> '' ORDER BY marca ASC
+      `).all().map(r => r.marca);
+      // Categorías distintas de TODO el catálogo (no del filtro), igual criterio que marcas.
+      // categorias_json es un array por fila, así que el DISTINCT no sirve a nivel columna:
+      // se parsea en JS con el mismo helper que ya usa cobertura (tolera NULL/JSON inválido)
+      // y se deduplica con un Set — el catálogo completo es chico (miles de filas, no
+      // millones), así que un solo recorrido en Node es más simple que json_each + GROUP BY
+      // en SQL acá.
+      const categoriasSet = new Set();
+      for (const row of db.prepare('SELECT categorias_json FROM catalogo_cache').all()) {
+        for (const cat of parseCategorias(row.categorias_json)) {
+          const limpio = String(cat ?? '').trim();
+          if (limpio) categoriasSet.add(limpio);
+        }
+      }
+      respuesta.categorias = [...categoriasSet].sort((a, b) => a.localeCompare(b));
+    }
+
+    res.json(respuesta);
+  });
+
+  // Resuelve los SKUs (existentes en catalogo_cache) que matchean un filtro, sin paginar —
+  // usado por el POST /lote cuando viene { filtro } en vez de { skus }.
+  function resolverSkusPorFiltro({ q, marca, estado, categoria }) {
+    const { where, params } = construirFiltroCatalogo({ q, marca, estado, categoria });
+    const rows = db.prepare(`
+      ${CATALOGO_DEDUP_CTE}
+      SELECT c.sku FROM catalogo_dedup c
+      LEFT JOIN skus_config_ml s ON s.sku = c.sku
+      WHERE c.rn = 1 ${where}
+    `).all(...params);
+    return rows.map(r => r.sku);
+  }
+
+  // Trae { sku -> nombre } (mismo dedup) para los SKUs de una lista, en chunks para no pisar
+  // el límite de parámetros de sqlite (~999) con lotes grandes.
+  const CHUNK_SQLITE = 400;
+  function nombresPorSku(skus) {
+    const mapa = new Map();
+    for (let i = 0; i < skus.length; i += CHUNK_SQLITE) {
+      const chunk = skus.slice(i, i + CHUNK_SQLITE);
+      if (!chunk.length) continue;
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = db.prepare(`
+        SELECT sku, nombre FROM (
+          SELECT sku, nombre, stock, id_woo,
+            ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+          FROM catalogo_cache
+          WHERE sku IN (${placeholders})
+        ) WHERE rn = 1
+      `).all(...chunk);
+      for (const r of rows) mapa.set(r.sku, r.nombre);
+    }
+    return mapa;
+  }
+
+  // De una lista de SKUs, cuáles ya tienen fila en skus_config_ml (para pisados/sin_cambio).
+  function tienenConfigPrevia(skus) {
+    const set = new Set();
+    for (let i = 0; i < skus.length; i += CHUNK_SQLITE) {
+      const chunk = skus.slice(i, i + CHUNK_SQLITE);
+      if (!chunk.length) continue;
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = db.prepare(`SELECT sku FROM skus_config_ml WHERE sku IN (${placeholders})`).all(...chunk);
+      for (const r of rows) set.add(r.sku);
+    }
+    return set;
+  }
+
+  // Config ML masiva: aplica reserva/solo_local/quitar a muchos SKUs de una, ya sea una lista
+  // pegada a mano o "todo lo que matchea el filtro actual". No llama a ML ni a Woo (es
+  // operación 100% local sobre skus_config_ml) — no aplica la política fail-closed/fail-open
+  // de reintentos hacia servicios externos, solo la transaccionalidad local.
+  router.post('/config-ml/lote', (req, res) => {
+    const body = req.body || {};
+    const { accion, reserva, vista_previa } = body;
+
+    if (!['reserva', 'solo_local', 'quitar'].includes(accion)) {
+      return res.status(400).json({ ok: false, error: 'accion debe ser reserva|solo_local|quitar' });
+    }
+
+    let reservaVal = 0;
+    if (accion === 'reserva') {
+      // Chequeo estricto de tipo: Number("") === 0 y Number(null) === 0 harían pasar una
+      // reserva "vacía" disfrazada de reserva 0 real. Solo se acepta un number JS genuino.
+      if (typeof reserva !== 'number' || !Number.isInteger(reserva) || reserva < 0) {
+        return res.status(400).json({ ok: false, error: 'reserva debe ser un entero >= 0' });
+      }
+      reservaVal = reserva;
+    }
+
+    // skus y filtro son excluyentes: se valida por presencia de la clave, no por su verdad,
+    // para poder distinguir { skus: [] } (lista vacía explícita, igual 400 más abajo) de
+    // "no vino nada".
+    const tieneSkus = Object.prototype.hasOwnProperty.call(body, 'skus');
+    const tieneFiltro = Object.prototype.hasOwnProperty.call(body, 'filtro');
+    if (tieneSkus === tieneFiltro) {
+      return res.status(400).json({ ok: false, error: 'Debe indicarse exactamente uno: skus o filtro' });
+    }
+
+    let skusList;
+    if (tieneSkus) {
+      if (!Array.isArray(body.skus)) {
+        return res.status(400).json({ ok: false, error: 'skus debe ser un array' });
+      }
+      const vistos = new Set();
+      skusList = [];
+      for (const s of body.skus) {
+        const t = String(s ?? '').trim();
+        if (!t || vistos.has(t)) continue;
+        vistos.add(t);
+        skusList.push(t);
+      }
+    } else {
+      const filtro = body.filtro;
+      if (!filtro || typeof filtro !== 'object' || Array.isArray(filtro)) {
+        return res.status(400).json({ ok: false, error: 'filtro debe ser un objeto' });
+      }
+      const estado = String(filtro.estado || '').trim();
+      if (estado && !ESTADOS_VALIDOS.includes(estado)) {
+        return res.status(400).json({ ok: false, error: `filtro.estado debe ser uno de: ${ESTADOS_VALIDOS.join(', ')}` });
+      }
+      skusList = resolverSkusPorFiltro({
+        q: String(filtro.q || '').trim(),
+        marca: String(filtro.marca || '').trim(),
+        categoria: String(filtro.categoria || '').trim(),
+        estado,
+      });
+    }
+
+    if (skusList.length > 5000) {
+      return res.status(400).json({ ok: false, error: `Máximo 5000 SKUs por request (se recibieron ${skusList.length})` });
+    }
+
+    // Guard fail-closed contra doble resolución del filtro: entre la vista previa y la
+    // confirmación puede correr un refresco de catálogo (Woo) o los crons y el universo
+    // resuelto cambiar — el operador confirmó "812" pero se aplicarían "850". Si viene
+    // `esperados` (lo que devolvió la vista previa) y no coincide con lo resuelto AHORA,
+    // se corta antes de escribir nada y se pide re-previsualizar.
+    if (Object.prototype.hasOwnProperty.call(body, 'esperados') && body.esperados !== skusList.length) {
+      return res.status(409).json({
+        ok: false,
+        error: `El catálogo cambió desde la vista previa (esperados=${body.esperados}, ahora=${skusList.length}); volvé a previsualizar antes de aplicar.`,
+      });
+    }
+
+    // Los SKUs que no existen en catalogo_cache no se aplican (fail-closed: no crear config
+    // "huérfana" con un nombre inventado) — se informan aparte para que el operador vea
+    // qué tipeó mal si pegó una lista a mano.
+    const catalogoMap = nombresPorSku(skusList);
+    const aplicadosSkus = skusList.filter(s => catalogoMap.has(s));
+    const inexistentes = skusList.filter(s => !catalogoMap.has(s));
+
+    const configPrevia = tienenConfigPrevia(aplicadosSkus);
+    const pisados = accion !== 'quitar' ? aplicadosSkus.filter(s => configPrevia.has(s)).length : 0;
+    const sinCambio = accion === 'quitar' ? aplicadosSkus.filter(s => !configPrevia.has(s)).length : 0;
+
+    const resumen = {
+      solicitados: skusList.length,
+      aplicados: aplicadosSkus.length,
+      pisados,
+      sin_cambio: sinCambio,
+      inexistentes,
+    };
+
+    // Guard de una operación destructiva: se exige el booleano explícito, no truthiness —
+    // un `"false"` string o un `0` no deben colarse como "aplicar de verdad".
+    if (vista_previa === true) {
+      return res.json({ ok: true, vista_previa: true, resumen, esperados: skusList.length });
+    }
+
+    // Todo el lote en una transacción: si algo falla a mitad de camino, no queda la mitad de
+    // los SKUs con config nueva y la otra mitad sin tocar.
+    const aplicarLote = db.transaction((lista) => {
+      if (accion === 'quitar') {
+        const del = db.prepare('DELETE FROM skus_config_ml WHERE sku = ?');
+        for (const sku of lista) del.run(sku);
+      } else {
+        const ts = now();
+        const upsert = db.prepare(`
+          INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(sku) DO UPDATE SET
+            nombre = excluded.nombre,
+            modo = excluded.modo,
+            reserva = excluded.reserva,
+            actualizado_en = excluded.actualizado_en
+        `);
+        for (const sku of lista) {
+          const nombre = catalogoMap.get(sku) || sku;
+          upsert.run(sku, nombre, accion, accion === 'reserva' ? reservaVal : 0, ts);
+        }
+      }
+    });
+    aplicarLote(aplicadosSkus);
+
+    res.json({ ok: true, vista_previa: false, resumen });
   });
 
   return router;
