@@ -197,6 +197,10 @@ function renderFrenadas(d){
       +'<div class="pub-meta">'+esc(p.item_id||p.clave)+(p.variations_texto?(' · '+esc(p.variations_texto)):'')+'</div></div></div></td>';
     h+='<td class="num">'+money(p.neto)+'</td>';
     h+='<td class="num">'+money(p.precio_contado)+'</td>';
+    // b-bajo fijo a propósito, sin resolverlo dinámicamente como en renderReactivables:
+    // TODA fila de /api/sync/frenadas es por definición un caso de neto bajo (es la única
+    // razón por la que una publicación entra en ml_reactivacion_frenada), así que no hay
+    // otro estado posible que mostrar acá.
     h+='<td class="num"><span class="badge b-bajo">'+pct(p.deficit_pct)+'</span></td>';
     h+='<td style="max-width:220px">'+esc(p.motivo||'—')+'</td>';
     h+='<td>'+fecha(p.detectado_en)+'</td>';
@@ -217,6 +221,7 @@ async function reintentarFrenadasSel(){
   var sel=[...document.querySelectorAll('.chk-fr:checked')].map(function(x){return x.value;}).filter(Boolean);
   var resultado=document.getElementById('fr-resultado');
   if(!sel.length){resultado.style.color='var(--amber)';resultado.textContent='No seleccionaste ninguna publicación.';return;}
+  if(!confirm('Vas a reintentar la reactivación de '+sel.length+' publicación(es) en MercadoLibre.\n\nVuelve a chequear el precio, NO lo saltea: las que sigan con el precio mal van a quedar frenadas otra vez. ¿Confirmás?'))return;
   var btn=document.getElementById('btn-fr');btn.disabled=true;
   resultado.style.color='var(--muted)';resultado.textContent='Reintentando reactivación — vuelve a chequear el precio, no lo saltea…';
   try{
@@ -227,7 +232,11 @@ async function reintentarFrenadasSel(){
     var siguenFrenadas=(d.resultados||[]).filter(function(x){return !x.ok;});
     var partes=[];
     if(reactivadas.length)partes.push(reactivadas.length+' reactivada(s): '+reactivadas.map(function(x){return x.item_id;}).join(', '));
-    if(siguenFrenadas.length)partes.push(siguenFrenadas.length+' siguen frenadas: '+siguenFrenadas.map(function(x){return x.item_id+' ('+(x.error||'motivo desconocido')+')';}).join(' | '));
+    // El motivo puede venir en `error` (bloqueo por precio, fallo de ML) o en `motivo`
+    // (rama `omitido` de chequearNetoReactivar: "ya no está pausada", "pausada manualmente
+    // por el vendedor…") — son campos distintos según el caso, y omitir cualquiera de los
+    // dos deja al usuario viendo "motivo desconocido" justo cuando el sistema sí sabe por qué.
+    if(siguenFrenadas.length)partes.push(siguenFrenadas.length+' siguen frenadas: '+siguenFrenadas.map(function(x){return x.item_id+' ('+(x.error||x.motivo||'motivo desconocido')+')';}).join(' | '));
     var truncadoTxt=d.truncado?(' · Se pidieron '+n(d.pedidos)+' pero solo se procesaron '+n(d.procesados)+' en esta llamada (el resto entra en el próximo ciclo o reintento).'):'';
     resultado.style.color=siguenFrenadas.length?'var(--amber)':'var(--green)';
     resultado.textContent=(partes.join(' · ')||'Sin cambios.')+truncadoTxt;
