@@ -369,7 +369,18 @@ function actualizarAvisoPedido() {
 function cargarCatalogo() {
   fetch('/api/woo/catalogo')
     .then(function(r){ return r.json(); })
-    .then(function(d){ if (d.ok) catalogo = d.data || []; })
+    .then(function(d){
+      if (!d.ok) return;
+      catalogo = (d.data || []).map(function(p){
+        // Precalculados una sola vez (no por keystroke). _busq (sku+nombre) es el texto
+        // libre para el filtro por palabras; _gtinNorm se compara aparte, solo exacto o
+        // por prefijo (un GTIN completo no debe matchear por substring arbitrario).
+        p._skuNorm  = normalizar(p.sku||'');
+        p._gtinNorm = normalizar(p.gtin||'');
+        p._busq     = p._skuNorm + ' ' + normalizar(p.nombre||'');
+        return p;
+      });
+    })
     .catch(function(){});
 }
 
@@ -686,10 +697,18 @@ function buscarWC(inp, itemId) {
   var q = normalizar(inp.value);
   var dd = document.getElementById('dd-' + itemId);
   if (!q || q.length < 2) { dd.innerHTML=''; dd.classList.remove('open'); return; }
-  var palabras = q.split(' ').filter(function(w){ return w.length>1; });
+  // Se conservan los fragmentos de 1 carácter: descartarlos dejaba `palabras` vacío para
+  // consultas como "A-1" (normalizar() parte por el guión), y un every() sobre un array
+  // vacío da true para TODO el catálogo — devolvía 20 productos sin relación con lo buscado.
+  var palabras = q.split(' ').filter(function(w){ return w.length>0; });
   var resultados = catalogo.filter(function(p){
-    var hay = normalizar(p.nombre);
-    return palabras.every(function(w){ return hay.indexOf(w)!==-1; });
+    if (palabras.every(function(w){ return p._busq.indexOf(w)!==-1; })) return true;
+    // GTIN: solo exacto o por prefijo (evita falsos positivos por substring en medio del código)
+    return !!p._gtinNorm && (p._gtinNorm === q || p._gtinNorm.indexOf(q) === 0);
+  }).sort(function(a,b){
+    var scoreA = (a._skuNorm===q) ? 2 : (a._skuNorm.indexOf(q)===0 ? 1 : 0);
+    var scoreB = (b._skuNorm===q) ? 2 : (b._skuNorm.indexOf(q)===0 ? 1 : 0);
+    return scoreB - scoreA;
   }).slice(0, 20);
   if (!resultados.length) {
     dd.innerHTML='<div class="wc-opt" style="color:var(--gray2);pointer-events:none">Sin resultados</div>';

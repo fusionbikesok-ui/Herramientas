@@ -374,13 +374,40 @@ option { background:var(--dark3); }
       statusEl.innerHTML = '<span class="spinner"></span> ' + (forzar ? 'Recargando catálogo...' : 'Cargando catálogo...');
     }
 
+    function attrsDeFila(fila) {
+      var raw = fila.atributos_json;
+      var arr = raw;
+      if (typeof raw === 'string') {
+        try { arr = JSON.parse(raw); } catch (e) { arr = []; }
+      }
+      if (!Array.isArray(arr)) arr = [];
+      return arr.map(function(a){ return a && a.option ? a.option : ''; })
+        .filter(Boolean).join(' / ');
+    }
+
+    function normalizarCatalogo(filas) {
+      return (filas || []).map(function(fila){
+        return {
+          id: fila.id_woo,
+          nombre: fila.nombre,
+          sku: fila.sku,
+          stock: fila.stock,
+          idPadre: fila.id_padre,
+          attrs: attrsDeFila(fila),
+          tipo: fila.tipo,
+          precio: fila.precio,
+          marca: fila.marca,
+          gtin: fila.gtin
+        };
+      });
+    }
+
     function onCatalogoOk(data) {
-      catalogo = data || [];
-      var privados = catalogo.filter(function(p){ return p.status === 'private'; }).length;
+      catalogo = normalizarCatalogo(data);
+      // No hay columna `status` en catalogo_cache: no podemos distinguir privados desde el backend.
       if (statusEl) {
         statusEl.innerHTML = '<span style="color:var(--green)">✓</span> '
           + catalogo.length + ' productos cargados'
-          + (privados>0 ? ' · <span style="color:var(--amber)">'+privados+' privados</span>' : '')
           + ' <button class="btn btn-sm" style="margin-left:auto" onclick="cargarCatalogo(true)">↻ Actualizar</button>';
       }
     }
@@ -501,8 +528,11 @@ option { background:var(--dark3); }
     }
 
     var nuevos = rawItems.map(function(item, i) {
-      var claveMapeo   = ((item.nombre||'') + '|' + (item.variacion||'')).toLowerCase();
-      var idAprendido  = mapeoConocido[claveMapeo];
+      // Clave normalizada IDÉNTICA a normalizarTexto() de db/mapeo.js (backend): minúsculas,
+      // sin diacríticos, no-alfanumérico colapsado a '-', sin guiones en los bordes.
+      var claveMapeo   = normalizarTextoMapeo((item.nombre||'') + ' ' + (item.variacion||''));
+      var entradaMapeo = mapeoConocido[claveMapeo];
+      var idAprendido  = entradaMapeo ? Number(entradaMapeo.idWoo) : null;
       var prodAprendido= idAprendido ? catalogo.find(function(p){ return p.id === idAprendido; }) : null;
 
       var matches  = fuzzyMatch(item.nombre, item.variacion);
@@ -606,6 +636,17 @@ option { background:var(--dark3); }
     return (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
   }
 
+  // R\u00e9plica EXACTA de normalizarTexto() en db/mapeo.js (backend) \u2014 misma clave, mismo
+  // resultado, para que el mapeo aprendido matchee. Si el backend cambia el criterio,
+  // hay que actualizar ac\u00e1 tambi\u00e9n.
+  function normalizarTextoMapeo(s) {
+    return String(s||'')
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9]+/g,'-')
+      .replace(/^-+|-+$/g,'');
+  }
+
   var COLOR_MAP = { bk:'negro', rd:'rojo', gn:'verde', bl:'azul', gy:'gris', bz:'bronce', cn:'carbon', wt:'blanco', ch:'charcoal', sk:'skeleton', ms:'plata', sl:'plata', or:'naranja', pk:'rosa', pr:'morado', wh:'blanco' };
   var TALLES = {xs:1,s:1,m:1,l:1,xl:1,xxl:1,ml:1,sm:1};
   var STOPWORDS = {bicicleta:1,mtb:1,ruta:1,gravel:1,bike:1,trek:1,shimano:1,sram:1,gen:1,edicion:1,'2026':1,'2025':1,con:1,sin:1,par:1,force:1,de:1};
@@ -686,7 +727,7 @@ option { background:var(--dark3); }
       if (resultados.length === 0) {
         var palabras = q.split(' ').filter(function(w){ return w.length>0; });
         resultados = catalogo.filter(function(p){
-          var pNorm = normalizar(p.id + ' ' + p.nombre);
+          var pNorm = normalizar(p.id + ' ' + p.nombre + ' ' + (p.sku||'') + ' ' + (p.attrs||''));
           return palabras.every(function(w){ return pNorm.indexOf(w)>=0; });
         }).slice(0, 30);
       }
@@ -720,11 +761,17 @@ option { background:var(--dark3); }
     }, 150);
   }
 
+  // Invariante: selectedId es SIEMPRE el id_woo numérico (o null). El id llega como
+  // string desde el HTML (onmousedown pasa el id entre comillas) porque catalogo[].id
+  // (id_woo) puede tener más dígitos de los que un literal numérico en atributo HTML
+  // soporta con seguridad; se coerciona acá, en el único punto de entrada, para que
+  // todas las comparaciones `catalogo.find(p => p.id === item.selectedId)` matcheen.
   function setMatch(id, val){
     var i=getItem(id);
     if(!i) return;
-    i.selectedId = val || null;
-    if (val && i.estado==='nuevo') { i.estado='pendiente'; }
+    var num = (val !== null && val !== undefined && val !== '') ? Number(val) : null;
+    i.selectedId = (num !== null && !isNaN(num)) ? num : null;
+    if (i.selectedId && i.estado==='nuevo') { i.estado='pendiente'; }
     renderItems();
   }
 
