@@ -288,8 +288,10 @@ function errorConReintento(msg, onReintentar) {
   return '<div class="estado-msg error">✗ ' + esc(msg) + '<br><button type="button" class="btn primary btn-reintentar" id="' + id + '">Reintentar</button></div>';
 }
 
+// Clase CSS del chip según el peso de la señal (semáforo). 'alta' → rojo,
+// cualquier otro peso conocido cae en 'media' (ámbar) — no hay un tercer nivel.
 function pesoLabel(peso) {
-  return peso === 'alta' ? 'alta' : (peso === 'media' ? 'media' : peso);
+  return peso === 'alta' ? 'alta' : 'media';
 }
 
 function renderDetalle(producto, publicaciones) {
@@ -324,7 +326,7 @@ function renderPubCard(pub, wcNombre) {
     chipsHtml = '<div class="chips-wrap"><span class="chip ninguna"><span class="chip-txt">Sin señales</span></span></div>';
   } else {
     chipsHtml = '<div class="chips-wrap">' + senales.map(function (s) {
-      var clase = s.peso === 'alta' ? 'alta' : 'media';
+      var clase = pesoLabel(s.peso);
       return '<span class="chip ' + clase + '" data-senal="' + esc(s.senal) + '">' +
         '<span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
         '<button type="button" class="chip-revisar" data-clave="' + esc(pub.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button>' +
@@ -337,7 +339,7 @@ function renderPubCard(pub, wcNombre) {
     (pub.thumbnail ? '<img src="' + esc(pub.thumbnail) + '" alt="Foto de la publicación en ML">' : '') +
     '<div class="pub-titulos">' +
     '<div class="pub-titulo-ml">' + esc(pub.titulo || pub.item_id) + '</div>' +
-    '<div class="pub-nombre-wc">WC: ' + esc(pub.seller_sku || '—') + '</div>' +
+    '<div class="pub-nombre-wc">WC: ' + esc(wcNombre || '—') + '</div>' +
     '</div></div>' +
     '<div class="pub-grid">' +
     '<div class="pub-dato"><span class="k">SKU en ML</span><span class="v">' + esc(pub.seller_sku || '—') + '</span></div>' +
@@ -382,12 +384,13 @@ function marcarRevisado(btn) {
   var valor = btn.getAttribute('data-valor');
   var pubCard = btn.closest('.pub-card');
   var flash = pubCard ? pubCard.querySelector('[data-flash]') : null;
+  var wrap = pubCard ? pubCard.querySelector('.chips-wrap') : null;
 
   chip.classList.add('saliendo');
   btn.disabled = true;
-  setTimeout(function () {
-    if (chip.parentElement) chip.remove();
-    var wrap = pubCard ? pubCard.querySelector('.chips-wrap') : null;
+  var quitado = false;
+  var timerQuitar = setTimeout(function () {
+    if (chip.parentElement) { chip.remove(); quitado = true; }
     if (wrap && !wrap.querySelector('.chip')) {
       wrap.innerHTML = '<span class="chip ninguna"><span class="chip-txt">Sin señales</span></span>';
     }
@@ -400,14 +403,48 @@ function marcarRevisado(btn) {
     if (!d.ok) throw new Error(d.error || 'No se pudo guardar la revisión.');
     if (flash) { flash.className = 'pub-flash ok'; flash.textContent = '✓ Revisado.'; setTimeout(function () { flash.textContent = ''; }, 3000); }
   }).catch(function (e) {
-    if (flash) { flash.className = 'pub-flash err'; flash.textContent = '✗ No se guardó: ' + e.message + ' — la señal puede haber reaparecido.'; }
+    // Rollback: la señal sigue viva en el backend, así que el chip tiene que
+    // volver a aparecer — si el usuario cree que quedó resuelta cuando no,
+    // deja de confiar en la lista de sospechosos (ver sección 7 del doc de UX).
+    clearTimeout(timerQuitar);
+    if (quitado && wrap) {
+      chip.classList.remove('saliendo');
+      var soloSinSenales = wrap.querySelector('.chip.ninguna');
+      if (soloSinSenales) wrap.innerHTML = '';
+      wrap.appendChild(chip);
+    } else {
+      chip.classList.remove('saliendo');
+    }
+    btn.disabled = false;
+    if (flash) { flash.className = 'pub-flash err'; flash.textContent = '✗ No se guardó: ' + e.message + ' — la señal sigue vigente.'; }
   });
 }
 
 /* ── Modal genérico ── */
 var modalRoot = document.getElementById('modal-root');
 function cerrarModal() { modalRoot.innerHTML = ''; document.removeEventListener('keydown', onModalKeydown); }
-function onModalKeydown(ev) { if (ev.key === 'Escape') cerrarModal(); }
+function onModalKeydown(ev) {
+  if (ev.key === 'Escape') { cerrarModal(); return; }
+  // Ciclado de foco dentro del modal: sin esto, Tab/Shift+Tab se escapan al
+  // overlay hacia la topbar y las pestañas que quedan detrás, que siguen
+  // siendo operables por teclado aunque estén tapadas visualmente.
+  if (ev.key === 'Tab') {
+    var box = modalRoot.querySelector('.modal-box');
+    if (!box) return;
+    var focusables = Array.prototype.slice.call(
+      box.querySelectorAll('button, input, a[href], [tabindex]:not([tabindex="-1"])')
+    ).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+    if (!focusables.length) return;
+    var primero = focusables[0], ultimo = focusables[focusables.length - 1];
+    if (ev.shiftKey && document.activeElement === primero) {
+      ev.preventDefault(); ultimo.focus();
+    } else if (!ev.shiftKey && document.activeElement === ultimo) {
+      ev.preventDefault(); primero.focus();
+    } else if (!box.contains(document.activeElement)) {
+      ev.preventDefault(); primero.focus();
+    }
+  }
+}
 function abrirModal(html) {
   modalRoot.innerHTML = '<div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-box">' + html + '</div></div>';
   document.addEventListener('keydown', onModalKeydown);
@@ -451,6 +488,8 @@ function abrirModalDesvincular(btn) {
 /* ── Reasignar ── */
 function abrirModalReasignar(btn) {
   var clave = btn.getAttribute('data-clave');
+  var pubCard = btn.closest('.pub-card');
+  var nombreActual = (pubCard && pubCard.getAttribute('data-wc-nombre')) || 'el producto actual';
   abrirModal(
     '<div class="modal-title" id="modal-title">Reasignar a otro SKU</div>' +
     '<div class="modal-body">Buscá el producto al que querés que esta publicación sincronice stock.' +
@@ -490,10 +529,19 @@ function abrirModalReasignar(btn) {
     nombreElegido = opt.getAttribute('data-nombre');
     input.value = skuElegido;
     results.classList.add('hidden'); results.innerHTML = '';
-    resumen.innerHTML = '<div class="modal-resumen">Esta publicación va a sincronizar stock con <b>' + esc(nombreElegido || skuElegido) + '</b> en vez del vínculo actual.' +
+    resumen.innerHTML = '<div class="modal-resumen">Esta publicación va a sincronizar stock con <b>' + esc(nombreElegido || skuElegido) + '</b> en vez de con <b>' + esc(nombreActual) + '</b>.' +
       '<div class="aviso">Nota: si esta publicación tenía revisiones "OK" guardadas, se van a borrar — valían para el vínculo anterior, no para el nuevo.</div></div>';
     confirmarBtn.disabled = false;
   });
+  // Sin esto, el dropdown del buscador embebido en el modal queda tapando el
+  // resto del modal si el usuario clickea afuera de él (el listener global
+  // de la búsqueda principal solo cubre `.search-wrap`, no este dropdown).
+  var cerrarResultsModal = function (ev) {
+    if (!ev.target.closest('#modal-sku-input, #modal-sku-results')) {
+      results.classList.add('hidden');
+    }
+  };
+  document.getElementById('modal-overlay').addEventListener('click', cerrarResultsModal);
 
   confirmarBtn.addEventListener('click', function () {
     if (!skuElegido) return;
@@ -570,7 +618,7 @@ function renderSospechosos(data) {
 function renderSospechosoRow(row) {
   var senales = row.senales || [];
   var chipsHtml = '<div class="chips-wrap">' + senales.map(function (s) {
-    var clase = s.peso === 'alta' ? 'alta' : 'media';
+    var clase = pesoLabel(s.peso);
     return '<span class="chip ' + clase + '" data-senal="' + esc(s.senal) + '">' +
       '<span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
       '<button type="button" class="chip-revisar" data-clave="' + esc(row.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button>' +
@@ -624,6 +672,26 @@ if (location.hash === '#sospechosos') {
 } else {
   buscarInput.focus();
 }
+</script>
+
+<script>
+// Guard de permiso del lado del cliente: el backend ya bloquea /api/sync/vinculos*
+// con 403 (herramienta 'sync-ml', mismo prefijo /api/sync que usa el resto de la
+// pantalla de Sync ML), pero sin esto un usuario sin permiso entra, ve la pantalla
+// vacía y una lluvia de 403 crudos en vez de la redirección limpia del resto de
+// la app (mismo patrón que public/cobertura/index.html).
+(function(){
+  var tool = 'sync-ml';
+  fetch('/api/auth/me').then(function(r){
+    return r.json();
+  }).then(function(d){
+    if (!d || !d.ok) return;
+    var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+    if (isAdmin) return;
+    var ok = (d.permisos||[]).some(function(p){ return p.herramienta === tool; });
+    if (!ok) location.href = '/herramientas/home/';
+  }).catch(function(){});
+})();
 </script>
 </body>
 </html>
