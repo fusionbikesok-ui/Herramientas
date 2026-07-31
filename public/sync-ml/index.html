@@ -111,6 +111,7 @@ async function cargar(){
     if(!d.ok)throw new Error(d.error||'error');
     cont.innerHTML=render(d);
     cargarReactivables();
+    cargarFrenadas();
   }catch(err){
     cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
   }finally{btn.disabled=false;}
@@ -152,6 +153,110 @@ async function cargarReactivables(){
 }
 
 var LABELS_PRECIO={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:'OK'};
+
+var yaScrolleFrenadas=false;
+async function cargarFrenadas(){
+  var box=document.getElementById('frenadas-box');
+  if(!box)return;
+  try{
+    var r=await fetch('/api/sync/frenadas');
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    box.innerHTML=renderFrenadas(d);
+  }catch(err){
+    box.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+' <button class="btn sec" onclick="cargarFrenadas()">Reintentar</button></div>';
+  }
+  // Deep-link desde el home (/sync-ml/#frenadas): igual patrón que #reactivar — scrollear
+  // recién cuando la sección ya cargó, una sola vez por carga de página.
+  if(location.hash==='#frenadas' && !yaScrolleFrenadas){
+    yaScrolleFrenadas=true;
+    scrollAFrenadas();
+  }
+}
+
+function scrollAFrenadas(){
+  document.getElementById('frenadas')?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// El hash puede cambiar sin recarga completa (link a #frenadas estando ya en la pantalla,
+// botón de atrás/adelante del navegador): la carga inicial de arriba no corre de nuevo, así
+// que sin esto el scroll queda roto en ese caso. La sección ya está renderizada (no hay tabs
+// que cambiar acá, a diferencia de /vinculos/), así que alcanza con reintentar el scroll.
+window.addEventListener('hashchange', function(){
+  if(location.hash==='#frenadas') scrollAFrenadas();
+});
+
+function renderFrenadas(d){
+  var pubs=d.data||[];
+  if(!pubs.length){
+    return '<div class="card good"><div class="lbl">Ninguna publicación frenada por precio ahora mismo.</div><div class="hint">La reactivación automática no dejó nada pendiente de corregir.</div></div>';
+  }
+  var h='';
+  h+='<p class="sub" style="margin-bottom:10px">Estas publicaciones recuperaron stock, pero el sistema '
+   +'<b>no las reactivó a propósito</b>: al precio actual en ML, venderían por debajo del precio de contado. '
+   +'Corregí el precio en ML y reintentá desde acá — el reintento vuelve a chequear el precio, no lo saltea.</p>';
+  h+='<div class="tbl-wrap"><table><thead><tr>';
+  h+='<th aria-label="Seleccionar todas las publicaciones frenadas"><input type="checkbox" id="chk-all-fr" checked onclick="toggleAllFrenadas(this)" aria-label="Seleccionar todas las publicaciones frenadas"></th>';
+  h+='<th>Publicación</th><th class="num">Neto ML</th><th class="num">Precio contado</th>'
+   +'<th class="num">Déficit</th><th>Motivo</th><th>Frenada desde</th></tr></thead><tbody>';
+  pubs.forEach(function(p){
+    var thumb=p.thumbnail?'<img class="pub-thumb" src="'+esc(p.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
+    var titulo=p.titulo||p.item_id||p.clave;
+    var link=p.permalink?('<a href="'+esc(p.permalink)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">'+esc(titulo)+'</a>'):esc(titulo);
+    h+='<tr>';
+    h+='<td><input type="checkbox" class="chk-fr" value="'+esc(p.item_id||'')+'" data-clave="'+esc(p.clave)+'" aria-label="Seleccionar '+esc(titulo)+'" '+(p.item_id?'checked':'disabled')+'></td>';
+    h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+link+'</div>'
+      +'<div class="pub-meta">'+esc(p.item_id||p.clave)+(p.variations_texto?(' · '+esc(p.variations_texto)):'')+'</div></div></div></td>';
+    h+='<td class="num">'+money(p.neto)+'</td>';
+    h+='<td class="num">'+money(p.precio_contado)+'</td>';
+    // b-bajo fijo a propósito, sin resolverlo dinámicamente como en renderReactivables:
+    // TODA fila de /api/sync/frenadas es por definición un caso de neto bajo (es la única
+    // razón por la que una publicación entra en ml_reactivacion_frenada), así que no hay
+    // otro estado posible que mostrar acá.
+    h+='<td class="num"><span class="badge b-bajo">'+pct(p.deficit_pct)+'</span></td>';
+    h+='<td style="max-width:220px">'+esc(p.motivo||'—')+'</td>';
+    h+='<td>'+fecha(p.detectado_en)+'</td>';
+    h+='</tr>';
+  });
+  h+='</tbody></table></div>';
+  h+='<div class="acciones"><button class="btn" id="btn-fr" onclick="reintentarFrenadasSel()">Reintentar reactivación</button></div>';
+  return h;
+}
+
+function toggleAllFrenadas(cb){document.querySelectorAll('.chk-fr').forEach(function(x){if(!x.disabled)x.checked=cb.checked;});}
+
+async function reintentarFrenadasSel(){
+  // fr-resultado vive FUERA de frenadas-box a propósito: cargarFrenadas() reemplaza todo
+  // el contenido de frenadas-box (incluida cualquier tabla nueva), así que si el resultado
+  // viviera adentro se borraría apenas se refresca la lista, y el usuario nunca llegaría a
+  // ver qué se reactivó y qué siguió frenada.
+  var sel=[...document.querySelectorAll('.chk-fr:checked')].map(function(x){return x.value;}).filter(Boolean);
+  var resultado=document.getElementById('fr-resultado');
+  if(!sel.length){resultado.style.color='var(--amber)';resultado.textContent='No seleccionaste ninguna publicación.';return;}
+  if(!confirm('Vas a reintentar la reactivación de '+sel.length+' publicación(es) en MercadoLibre.\n\nVuelve a chequear el precio, NO lo saltea: las que sigan con el precio mal van a quedar frenadas otra vez. ¿Confirmás?'))return;
+  var btn=document.getElementById('btn-fr');btn.disabled=true;
+  resultado.style.color='var(--muted)';resultado.textContent='Reintentando reactivación — vuelve a chequear el precio, no lo saltea…';
+  try{
+    var r=await fetch('/api/sync/frenadas/forzar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:sel})});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    var reactivadas=(d.resultados||[]).filter(function(x){return x.ok;});
+    var siguenFrenadas=(d.resultados||[]).filter(function(x){return !x.ok;});
+    var partes=[];
+    if(reactivadas.length)partes.push(reactivadas.length+' reactivada(s): '+reactivadas.map(function(x){return x.item_id;}).join(', '));
+    // El motivo puede venir en `error` (bloqueo por precio, fallo de ML) o en `motivo`
+    // (rama `omitido` de chequearNetoReactivar: "ya no está pausada", "pausada manualmente
+    // por el vendedor…") — son campos distintos según el caso, y omitir cualquiera de los
+    // dos deja al usuario viendo "motivo desconocido" justo cuando el sistema sí sabe por qué.
+    if(siguenFrenadas.length)partes.push(siguenFrenadas.length+' siguen frenadas: '+siguenFrenadas.map(function(x){return x.item_id+' ('+(x.error||x.motivo||'motivo desconocido')+')';}).join(' | '));
+    var truncadoTxt=d.truncado?(' · Se pidieron '+n(d.pedidos)+' pero solo se procesaron '+n(d.procesados)+' en esta llamada (el resto entra en el próximo ciclo o reintento).'):'';
+    resultado.style.color=siguenFrenadas.length?'var(--amber)':'var(--green)';
+    resultado.textContent=(partes.join(' · ')||'Sin cambios.')+truncadoTxt;
+    await cargarFrenadas();
+  }catch(err){
+    resultado.style.color='var(--red)';resultado.textContent='✗ '+err.message;
+  }finally{btn.disabled=false;}
+}
 
 function renderReactivables(d){
   var pubs=d.data||[];
@@ -273,6 +378,11 @@ function render(d){
   // Reactivar pausadas por falta de stock (se llena aparte, async)
   h+='<div class="sec-title" id="reactivar">Reactivar publicaciones pausadas por falta de stock</div>';
   h+='<div id="reactivar-box"><div class="loading">Buscando publicaciones y verificando precios en ML (puede tardar unos segundos)…</div></div>';
+
+  // Frenadas por precio (se llena aparte, async)
+  h+='<div class="sec-title" id="frenadas">Publicaciones frenadas por precio</div>';
+  h+='<div class="msg" id="fr-resultado"></div>';
+  h+='<div id="frenadas-box"><div class="loading">Buscando publicaciones frenadas…</div></div>';
 
   // Pedidos
   h+='<div class="sec-title">Pedidos de MercadoLibre en WooCommerce</div><div class="cards c2">';
