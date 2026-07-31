@@ -64,6 +64,121 @@ Protegida por el candado `_wcToMlEnCurso`.
     lista; NO sincronizó.
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
 
+### GET /api/sync/dashboard (campo agregado)
+Además de lo que ya devolvía, incluye:
+
+```
+"frenadas": 0,
+"vinculos_sospechosos": 0
+```
+
+`frenadas`: cantidad de publicaciones que la reactivación automática frenó por precio (ver
+`GET /api/sync/frenadas`).
+
+`vinculos_sospechosos`: cantidad de vínculos WC↔ML con al menos una señal vigente de posible
+mal matcheo (ver `GET /api/sync/vinculos-sospechosos`).
+
+### GET /api/sync/frenadas
+Publicaciones pausadas por falta de stock que recuperaron stock pero la reactivación
+automática NO las reactivó porque el neto de ML queda por debajo del precio de contado
+(ver `ml_reactivacion_frenada`, poblada por el cron de reactivación automática).
+
+- Request: sin body.
+- Response 200: `{ "ok": true, "data": [{ "clave", "sku", "motivo", "neto", "precio_contado",
+  "deficit_pct", "detectado_en", "item_id", "titulo", "thumbnail", "permalink",
+  "variations_texto" }] }`, ordenado por déficit descendente y luego por más reciente.
+  `variations_texto` viene directo de `ml_publicaciones_cache` (puede ser `null` en
+  publicaciones sin variaciones).
+
+### POST /api/sync/frenadas/forzar
+Reintenta AHORA la reactivación de las publicaciones frenadas indicadas, sin esperar al
+próximo ciclo del cron (caso típico: el usuario acaba de corregir el precio en ML). Reutiliza
+`reactivarItems`, que **siempre** aplica el chequeo de neto contra el precio de contado — este
+endpoint no es un "forzar a pérdida": si el precio sigue mal, la publicación vuelve a quedar
+frenada. Fail-closed deliberado, no se saltea la guarda de precio bajo ningún flag.
+
+- Request: `{ "itemIds": ["MLA123", ...] }`.
+- Response 200: `{ "ok": true, "pedidos": N, "procesados": M, "truncado": bool, "resultados":
+  [...] }` (`resultados` con el mismo shape que `POST /api/sync/reactivar`).
+  - `pedidos`: cantidad de `itemIds` recibidos en el request.
+  - `procesados`: cantidad efectivamente procesada. `reactivarItems` trunca internamente a
+    un lote máximo de 50 (`LOTE_MAX`); si se piden más de 50, `procesados` va a ser 50 y
+    `truncado` va a ser `true` — el cliente tiene que avisar al usuario que quedaron
+    `pedidos - procesados` sin tocar (van a entrar en el próximo pedido/ciclo).
+  - Las claves de `ml_reactivacion_frenada` correspondientes a los `item_id` que salieron OK
+    se borran; las que siguieron bloqueadas quedan (y su `motivo`/`deficit_pct` se actualiza
+    en el próximo ciclo del cron).
+- Response 400: `{ "ok": false, "error": "MercadoLibre no configurado" }` o
+  `{ "ok": false, "error": "itemIds requerido" }`.
+
+## Vínculos WC↔ML
+
+Auditoría de qué publicaciones de ML están mapeadas a cada producto de WC, señales de posible
+mal matcheo (`lib/vinculosSenales.js`: `seller_sku`, `atributos`, `precio`) y las acciones para
+corregirlas. Que un SKU tenga varias publicaciones NO es señal (multi-publicación intencional
+por condiciones de venta distintas).
+
+### GET /api/sync/vinculos/:sku
+Detalle de un producto de WC y TODAS las publicaciones de ML mapeadas a su SKU (`sku_matcher_decisiones`
+con `accion` en `asignar`/`confirmar`).
+
+- Request: sin body. `:sku` en la URL.
+- Response 200: `{ "ok": true, "producto": { "sku", "nombre", "stock", "img", "precio_lista",
+  "precio_contado" }, "publicaciones": [{ "clave", "item_id", "variation_id", "titulo",
+  "status", "sub_status", "color", "talle", "variations_texto", "seller_sku", "thumbnail",
+  "permalink", "precio_ml", "precio_actualizado_en", "stock_ml", "stock_sincronizado",
+  "senales": [{ "senal", "peso", "detalle", "valor" }] }] }`.
+  `senales` ya viene filtrada de las que el usuario descartó con el mismo valor concreto
+  (ver `POST /vinculos/revisado`).
+- Response 400: `{ "ok": false, "error": "sku requerido" }`.
+- Response 404: `{ "ok": false, "error": "SKU no encontrado en el catálogo" }`.
+
+### GET /api/sync/vinculos-sospechosos
+Listado de todos los vínculos con al menos una señal vigente, ordenados por severidad
+(los que tienen alguna señal de peso `alta` primero, después por cantidad de señales).
+
+- Request: sin body.
+- Response 200: `{ "ok": true, "data": [{ "clave", "sku", "item_id", "titulo", "wc_nombre",
+  "thumbnail", "permalink", "precio_ml", "precio_wc", "senales": [...] }] }`.
+
+### POST /api/sync/vinculos/revisado
+Marca una señal puntual como revisada y correcta ("descartar"). Persiste el **valor** que
+disparó la señal, no solo la clave: si el dato concreto vuelve a cambiar, el descarte deja de
+aplicar y la señal reaparece — descartar significa "esta discrepancia concreta está bien",
+no "no me muestres más esta publicación". El cliente debe reenviar el `valor` **tal cual** lo
+recibió en la señal (comparación por igualdad estricta, no por contención/substring: un
+descarte parcial podría tapar en silencio una discrepancia nueva y distinta).
+
+- Request: `{ "clave", "senal", "valor" }` — los tres strings no vacíos.
+- Response 200: `{ "ok": true }`.
+- Response 400: `{ "ok": false, "error": "clave requerida" }`,
+  `{ "ok": false, "error": "senal requerida" }`,
+  `{ "ok": false, "error": "valor requerido" }` (sin `valor` se guardaría `null`, que nunca
+  coincide con ningún valor real y el cliente creería que descartó sin lograrlo — fail-open
+  deliberado del lado de la señal, pero el request debe rechazarse), o
+  `{ "ok": false, "error": "La clave no existe en el caché de publicaciones" }` (evita
+  descartes huérfanos de claves con typo o publicaciones ya borradas de ML).
+
+### POST /api/sync/vinculos/reasignar
+Reasigna manualmente el vínculo (`clave`) a otro SKU de WC. Escribe con el mismo statement
+que usa el matcher (`INSERT OR REPLACE INTO sku_matcher_decisiones ... accion='asignar'`) para
+no tener un segundo camino de escritura que pueda divergir. Borra los descartes de esa clave
+en la MISMA transacción que la reasignación: valían para el vínculo anterior, no para el
+nuevo, y si el borrado quedara fuera de la transacción un fallo a mitad de camino dejaría
+descartes viejos tapando señales legítimas del vínculo nuevo.
+
+- Request: `{ "clave", "sku" }` — ambos strings no vacíos.
+- Response 200: `{ "ok": true }`.
+- Response 400: `{ "ok": false, "error": "clave requerida" }`,
+  `{ "ok": false, "error": "sku requerido" }`,
+  `{ "ok": false, "error": "La clave no existe en el caché de publicaciones" }` (evita crear un
+  vínculo fantasma en `sku_matcher_decisiones` que no aparece en ningún listado pero ensucia
+  el contador de "necesitan atención" del home), o
+  `{ "ok": false, "error": "El SKU no existe en el catálogo" }`.
+
+Nota: `POST /api/sync/desvincular` (ya existente) también borra los descartes de esa clave
+en la misma transacción que el borrado del mapeo, por la misma razón de atomicidad.
+
 ## Preparación de pedidos — perfiles de foto por SKU
 
 Overrides de perfil de foto para un producto puntual. Prioridad de resolución del perfil
