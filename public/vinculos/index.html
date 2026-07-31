@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vínculos ML — Fusion Bikes</title>
+<link rel="stylesheet" href="../lib/theme.css">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; }
+
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+
+a:focus-visible, button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+
+.topbar { position:sticky; top:0; z-index:10; background:rgba(12,15,22,.92); backdrop-filter:blur(14px); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 2rem; height:54px; }
+.brand-badge { display:inline-flex; flex-direction:column; transform:skewX(-8deg); border-radius:6px 3px 3px 6px; overflow:hidden; }
+.brand-badge b { display:block; font-style:italic; font-weight:800; text-transform:uppercase; font-size:10px; line-height:1.25; letter-spacing:-.02em; padding:1.5px 8px; font-family:Arial,sans-serif; }
+.brand-badge .bt { background:#08090B; color:#fff; }
+.brand-badge .bb { background:var(--accent); color:#08090B; }
+.topbar-right { display:flex; align-items:center; gap:10px; }
+.hbtn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:5px 12px; font-size:.75rem; cursor:pointer; font-family:inherit; text-decoration:none; transition:border-color .15s,color .15s; }
+.hbtn:hover { border-color:var(--accent); color:var(--accent); }
+
+.main { max-width:900px; margin:0 auto; padding:2.5rem 2rem 5rem; }
+.page-eyebrow { font-size:.68rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin-bottom:6px; }
+.page-title { font-size:1.75rem; font-weight:800; letter-spacing:-.05em; line-height:1.1; margin-bottom:6px; }
+.page-title em { font-style:normal; color:var(--accent); }
+.page-desc { font-size:.83rem; color:var(--muted); margin-bottom:2rem; }
+
+.pill-tabs { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:1.25rem; }
+.pill-tab { padding:6px 14px; border-radius:6px; font-size:.78rem; font-weight:600; cursor:pointer; border:1px solid var(--border); color:var(--muted); background:var(--surface); transition:all .15s; white-space:nowrap; font-family:inherit; }
+.pill-tab.active { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); }
+
+.hidden { display:none !important; }
+
+/* ── Buscar ── */
+.search-wrap { position:relative; margin-bottom:1.5rem; }
+.search-label { display:block; font-size:.72rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+.search-box { width:100%; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:9px 12px; color:var(--text); font-size:.9rem; font-family:inherit; outline:none; }
+.search-box:focus { border-color:var(--accent); }
+.autocomplete-results { position:absolute; z-index:5; top:100%; left:0; right:0; margin-top:4px; background:var(--surface); border:1px solid var(--border); border-radius:8px; max-height:280px; overflow-y:auto; box-shadow:0 8px 24px rgba(0,0,0,.4); }
+.ac-opt { display:block; width:100%; text-align:left; background:none; border:none; border-bottom:1px solid var(--border); color:var(--text); padding:9px 12px; font-size:.82rem; font-family:inherit; cursor:pointer; }
+.ac-opt:last-child { border-bottom:none; }
+.ac-opt:hover, .ac-opt:focus { background:var(--surface2); }
+.ac-opt b { font-family:monospace; }
+.ac-opt .ac-stock { color:var(--muted); font-size:.75rem; }
+.ac-empty { padding:10px 12px; font-size:.8rem; color:var(--muted); }
+
+/* ── Estados ── */
+.estado-msg { text-align:center; padding:2.5rem 1rem; color:var(--muted); font-size:.85rem; }
+.estado-msg.error { color:var(--red); }
+.estado-msg .btn-reintentar { display:inline-block; margin-top:12px; }
+.estado-bueno { text-align:center; padding:3rem 1.5rem; }
+.estado-bueno .icono { font-size:2.5rem; color:var(--green); margin-bottom:.75rem; }
+.estado-bueno .titulo { font-size:1rem; font-weight:700; color:var(--green); margin-bottom:4px; }
+.estado-bueno .desc { font-size:.8rem; color:var(--muted); }
+
+.skeleton { background:linear-gradient(90deg,var(--surface) 25%,var(--surface2) 50%,var(--surface) 75%); background-size:200% 100%; animation:sk 1.3s ease-in-out infinite; border-radius:8px; }
+@keyframes sk { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+.skel-card { height:90px; margin-bottom:12px; }
+.skel-row { height:150px; margin-bottom:12px; }
+
+.btn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 14px; font-size:.78rem; font-weight:600; cursor:pointer; font-family:inherit; text-decoration:none; display:inline-block; transition:border-color .15s,color .15s; }
+.btn:hover { border-color:var(--accent); color:var(--accent); }
+.btn.primary { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); }
+.btn.danger { border-color:rgba(248,113,113,.4); color:var(--red); }
+.btn.danger:hover { border-color:var(--red); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+
+/* ── Producto card ── */
+.producto-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; display:flex; gap:14px; align-items:center; margin-bottom:1.5rem; }
+.producto-card img { width:56px; height:56px; object-fit:cover; border-radius:8px; background:var(--surface2); flex-shrink:0; }
+.producto-info { min-width:0; flex:1; }
+.producto-nombre { font-size:.98rem; font-weight:700; margin-bottom:4px; }
+.producto-meta { display:flex; flex-wrap:wrap; gap:10px; font-size:.78rem; color:var(--muted); }
+.producto-meta .contado { color:var(--green); font-weight:700; }
+.pill-sku { font-family:monospace; font-size:.72rem; padding:1px 7px; border-radius:4px; background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
+
+.section-label { font-size:.65rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:0 0 .6rem; }
+
+/* ── Publicación card ── */
+.pub-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; margin-bottom:12px; }
+.pub-head { display:flex; gap:12px; }
+.pub-head img { width:64px; height:64px; object-fit:cover; border-radius:8px; background:var(--surface2); flex-shrink:0; }
+.pub-titulos { min-width:0; flex:1; }
+.pub-titulo-ml { font-size:.9rem; font-weight:700; line-height:1.3; }
+.pub-nombre-wc { font-size:.75rem; color:var(--muted); margin-top:3px; }
+.pub-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; margin:12px 0; }
+.pub-dato { font-size:.78rem; }
+.pub-dato .k { color:var(--muted); display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:2px; }
+.pub-dato .v { color:var(--text); }
+.pub-dato .v.destacado { font-weight:700; }
+
+.chips-wrap { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.chip { display:inline-flex; align-items:center; gap:8px; border-radius:8px; padding:6px 10px; font-size:.76rem; border:1px solid; max-width:100%; }
+.chip.alta { background:var(--red-dim); color:var(--red); border-color:rgba(248,113,113,.35); }
+.chip.media { background:var(--amber-dim); color:var(--amber); border-color:rgba(251,191,36,.35); }
+.chip.ninguna { background:var(--green-dim); color:var(--green); border-color:rgba(52,211,153,.35); }
+.chip-txt { flex:1; min-width:0; }
+.chip-revisar { background:none; border:1px solid currentColor; color:inherit; border-radius:5px; padding:2px 8px; font-size:.7rem; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap; }
+.chip-revisar:hover { opacity:.8; }
+.chip.saliendo { opacity:0; transform:translateY(-4px); transition:opacity .2s,transform .2s; }
+
+.pub-acciones { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.pub-flash { font-size:.76rem; margin-top:8px; }
+.pub-flash.ok { color:var(--green); }
+.pub-flash.err { color:var(--red); }
+
+/* ── Sospechosos ── */
+.sosp-footer { margin-top:1.5rem; font-size:.82rem; color:var(--muted); text-align:center; }
+.sosp-footer a { color:var(--accent); }
+
+/* ── Modal ── */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:50; padding:1rem; }
+.modal-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1.5rem; max-width:440px; width:100%; max-height:85vh; overflow-y:auto; }
+.modal-title { font-size:1rem; font-weight:700; margin-bottom:10px; }
+.modal-body { font-size:.85rem; color:var(--text); line-height:1.5; margin-bottom:14px; }
+.modal-body .aviso { color:var(--amber); margin-top:6px; }
+.modal-actions { display:flex; justify-content:flex-end; gap:10px; }
+.modal-search-results { max-height:220px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; margin-top:8px; }
+.modal-resumen { background:var(--surface2); border-radius:8px; padding:10px 12px; font-size:.8rem; margin-top:10px; }
+
+@media(max-width:600px){
+  .topbar { padding:0 1rem; }
+  .main { padding:1.5rem 1rem 4rem; }
+  .pub-grid { grid-template-columns:1fr; }
+  .producto-card { flex-direction:column; align-items:flex-start; }
+  .modal-box { padding:1.1rem; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand-badge"><b class="bt">Fusion</b><b class="bb">Bikes</b></div>
+  <div class="topbar-right">
+    <a href="/herramientas/home/" class="hbtn">← Inicio</a>
+  </div>
+</header>
+
+<main class="main">
+  <div class="page-eyebrow">Sincronización</div>
+  <h1 class="page-title">Vínculos <em>WC · ML</em></h1>
+  <p class="page-desc">Auditá a qué publicaciones de MercadoLibre está vinculado cada producto y detectá vínculos mal matcheados.</p>
+
+  <div class="pill-tabs" role="tablist" aria-label="Modo">
+    <button class="pill-tab active" data-tab="buscar" id="tab-buscar" role="tab" aria-selected="true" aria-controls="panel-buscar">Buscar producto</button>
+    <button class="pill-tab" data-tab="sospechosos" id="tab-sospechosos" role="tab" aria-selected="false" aria-controls="panel-sospechosos">Sospechosos</button>
+  </div>
+
+  <section id="panel-buscar" role="tabpanel" aria-labelledby="tab-buscar">
+    <div class="search-wrap">
+      <label class="search-label" for="buscar-input">Buscar producto por SKU o nombre</label>
+      <input class="search-box" type="text" id="buscar-input" placeholder="SKU o nombre del producto" autocomplete="off">
+      <div class="autocomplete-results hidden" id="buscar-results" role="listbox"></div>
+    </div>
+    <div id="buscar-contenido"></div>
+  </section>
+
+  <section id="panel-sospechosos" role="tabpanel" aria-labelledby="tab-sospechosos" class="hidden">
+    <div id="sospechosos-contenido"></div>
+  </section>
+</main>
+
+<div id="modal-root"></div>
+
+<script src="../lib/format.js"></script>
+<script src="../lib/api.js"></script>
+<script>
+/* ── AUTH ── */
+Api.installAuth();
+
+/* ── Helpers de tiempo ── */
+function antiguedad(iso) {
+  if (!iso) return null;
+  var ms = Date.now() - new Date(iso).getTime();
+  if (!isFinite(ms) || ms < 0) return null;
+  var min = Math.floor(ms / 60000);
+  if (min < 60) return 'hace ' + Math.max(min, 1) + ' min';
+  var horas = Math.floor(min / 60);
+  if (horas < 24) return 'hace ' + horas + ' h';
+  var dias = Math.floor(horas / 24);
+  return 'hace ' + dias + ' d';
+}
+
+/* ── Tabs ── */
+var tabs = { buscar: document.getElementById('tab-buscar'), sospechosos: document.getElementById('tab-sospechosos') };
+var panels = { buscar: document.getElementById('panel-buscar'), sospechosos: document.getElementById('panel-sospechosos') };
+
+function setTab(nombre, opts) {
+  opts = opts || {};
+  Object.keys(tabs).forEach(function (k) {
+    var activo = k === nombre;
+    tabs[k].classList.toggle('active', activo);
+    tabs[k].setAttribute('aria-selected', activo ? 'true' : 'false');
+    panels[k].classList.toggle('hidden', !activo);
+  });
+  if (!opts.sinHash) {
+    history.replaceState(null, '', nombre === 'sospechosos' ? '#sospechosos' : location.pathname);
+  }
+  if (nombre === 'sospechosos' && !sospechososCargado) cargarSospechosos();
+}
+tabs.buscar.addEventListener('click', function () { setTab('buscar'); });
+tabs.sospechosos.addEventListener('click', function () { setTab('sospechosos'); });
+
+/* ── Buscador con autocompletado (Buscar producto) ── */
+var buscarInput = document.getElementById('buscar-input');
+var buscarResults = document.getElementById('buscar-results');
+var buscarContenido = document.getElementById('buscar-contenido');
+var debounceTimer = null;
+
+function debounce(fn, ms) {
+  return function () {
+    clearTimeout(debounceTimer);
+    var args = arguments;
+    debounceTimer = setTimeout(function () { fn.apply(null, args); }, ms);
+  };
+}
+
+buscarInput.addEventListener('input', debounce(function () {
+  var q = buscarInput.value.trim();
+  if (q.length < 2) { buscarResults.classList.add('hidden'); buscarResults.innerHTML = ''; return; }
+  fetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var data = d.data || [];
+      if (!data.length) {
+        buscarResults.innerHTML = '<div class="ac-empty">No encontramos productos con ese término. Revisá el SKU o el nombre.</div>';
+      } else {
+        buscarResults.innerHTML = data.map(function (o) {
+          return '<button type="button" class="ac-opt" role="option" data-sku="' + esc(o.sku) + '"><b>' + esc(o.sku) + '</b> — ' + esc(o.nombre || '') + ' <span class="ac-stock">(stock ' + n(o.stock) + ')</span></button>';
+        }).join('');
+      }
+      buscarResults.classList.remove('hidden');
+    })
+    .catch(function () { buscarResults.innerHTML = '<div class="ac-empty">No se pudo buscar. Reintentá.</div>'; buscarResults.classList.remove('hidden'); });
+}, 300));
+
+buscarResults.addEventListener('click', function (ev) {
+  var btn = ev.target.closest('.ac-opt[data-sku]');
+  if (!btn) return;
+  var sku = btn.getAttribute('data-sku');
+  buscarInput.value = sku;
+  buscarResults.classList.add('hidden');
+  buscarResults.innerHTML = '';
+  mostrarDetalle(sku);
+});
+document.addEventListener('click', function (ev) {
+  if (!ev.target.closest('.search-wrap')) { buscarResults.classList.add('hidden'); }
+});
+
+/* ── Detalle de producto (compartido entre Buscar y Sospechosos) ── */
+function mostrarDetalle(sku) {
+  setTab('buscar');
+  buscarContenido.innerHTML = skeletonDetalle();
+  fetch('/api/sync/vinculos/' + encodeURIComponent(sku))
+    .then(function (r) { return r.json().then(function (d) { return { status: r.status, d: d }; }); })
+    .then(function (res) {
+      if (!res.d.ok) {
+        if (res.status === 404) {
+          buscarContenido.innerHTML = '<div class="estado-msg">No encontramos "' + esc(sku) + '" en el catálogo. Revisá el SKU e intentá de nuevo.</div>';
+        } else {
+          buscarContenido.innerHTML = errorConReintento(res.d.error || 'No se pudo cargar el detalle.', function () { mostrarDetalle(sku); });
+        }
+        return;
+      }
+      renderDetalle(res.d.producto, res.d.publicaciones);
+    })
+    .catch(function () {
+      buscarContenido.innerHTML = errorConReintento('No se pudo conectar con el servidor.', function () { mostrarDetalle(sku); });
+    });
+}
+
+function skeletonDetalle() {
+  return '<div class="skeleton skel-card"></div><div class="skeleton skel-row"></div><div class="skeleton skel-row"></div>';
+}
+
+function errorConReintento(msg, onReintentar) {
+  var id = 'err-' + Math.random().toString(36).slice(2);
+  setTimeout(function () {
+    var b = document.getElementById(id);
+    if (b) b.addEventListener('click', onReintentar);
+  }, 0);
+  return '<div class="estado-msg error">✗ ' + esc(msg) + '<br><button type="button" class="btn primary btn-reintentar" id="' + id + '">Reintentar</button></div>';
+}
+
+function pesoLabel(peso) {
+  return peso === 'alta' ? 'alta' : (peso === 'media' ? 'media' : peso);
+}
+
+function renderDetalle(producto, publicaciones) {
+  var html = '';
+  html += '<div class="producto-card">';
+  html += producto.img ? '<img src="' + esc(producto.img) + '" alt="Foto de ' + esc(producto.nombre || producto.sku) + '">' : '';
+  html += '<div class="producto-info">';
+  html += '<div class="producto-nombre">' + esc(producto.nombre || '(sin nombre)') + '</div>';
+  html += '<div class="producto-meta">';
+  html += '<span class="pill-sku">' + esc(producto.sku) + '</span>';
+  html += '<span>Stock: ' + n(producto.stock) + '</span>';
+  html += '<span>Lista: ' + money(producto.precio_lista) + '</span>';
+  html += '<span class="contado">Contado: ' + money(producto.precio_contado) + '</span>';
+  html += '</div></div></div>';
+
+  html += '<div class="section-label">Publicaciones vinculadas</div>';
+
+  if (!publicaciones.length) {
+    html += '<div class="estado-msg">Este producto no tiene ninguna publicación de ML vinculada. Vínculos no cubre "falta publicar/vincular" — eso lo maneja <a href="/cobertura/" class="btn">Cobertura →</a></div>';
+  } else {
+    html += '<div id="pubs-wrap">' + publicaciones.map(function (pub) { return renderPubCard(pub, producto.nombre); }).join('') + '</div>';
+  }
+  buscarContenido.innerHTML = html;
+  wirePubs();
+}
+
+function renderPubCard(pub, wcNombre) {
+  var precioEdad = antiguedad(pub.precio_actualizado_en);
+  var senales = pub.senales || [];
+  var chipsHtml;
+  if (!senales.length) {
+    chipsHtml = '<div class="chips-wrap"><span class="chip ninguna"><span class="chip-txt">Sin señales</span></span></div>';
+  } else {
+    chipsHtml = '<div class="chips-wrap">' + senales.map(function (s) {
+      var clase = s.peso === 'alta' ? 'alta' : 'media';
+      return '<span class="chip ' + clase + '" data-senal="' + esc(s.senal) + '">' +
+        '<span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
+        '<button type="button" class="chip-revisar" data-clave="' + esc(pub.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button>' +
+        '</span>';
+    }).join('') + '</div>';
+  }
+
+  return '<div class="pub-card" data-clave="' + esc(pub.clave) + '" data-wc-nombre="' + esc(wcNombre || '') + '">' +
+    '<div class="pub-head">' +
+    (pub.thumbnail ? '<img src="' + esc(pub.thumbnail) + '" alt="Foto de la publicación en ML">' : '') +
+    '<div class="pub-titulos">' +
+    '<div class="pub-titulo-ml">' + esc(pub.titulo || pub.item_id) + '</div>' +
+    '<div class="pub-nombre-wc">WC: ' + esc(pub.seller_sku || '—') + '</div>' +
+    '</div></div>' +
+    '<div class="pub-grid">' +
+    '<div class="pub-dato"><span class="k">SKU en ML</span><span class="v">' + esc(pub.seller_sku || '—') + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Variación</span><span class="v">' + esc(pub.variations_texto || [pub.color, pub.talle].filter(Boolean).join(' / ') || '—') + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Estado</span><span class="v">' + esc(pub.status || '—') + (pub.sub_status ? ' (' + esc(pub.sub_status) + ')' : '') + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Stock ML vs web</span><span class="v">' + n(pub.stock_ml) + ' / ' + n(pub.stock_sincronizado) + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Precio ML</span><span class="v destacado">' + money(pub.precio_ml) + (precioEdad ? ' <span style="color:var(--muted);font-weight:400">(' + esc(precioEdad) + ')</span>' : '') + '</span></div>' +
+    '</div>' +
+    chipsHtml +
+    '<div class="pub-acciones">' +
+    (pub.permalink ? '<a class="btn" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
+    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(pub.clave) + '" data-item="' + esc(pub.item_id) + '">Reasignar a otro SKU</button>' +
+    '<button type="button" class="btn danger" data-accion="desvincular" data-clave="' + esc(pub.clave) + '" data-item="' + esc(pub.item_id) + '">Desvincular</button>' +
+    '</div>' +
+    '<div class="pub-flash" data-flash></div>' +
+    '</div>';
+}
+
+function wirePubs() {
+  document.querySelectorAll('.chip-revisar').forEach(function (btn) {
+    if (btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', function () { marcarRevisado(btn); });
+  });
+  document.querySelectorAll('[data-accion="desvincular"]').forEach(function (btn) {
+    if (btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', function () { abrirModalDesvincular(btn); });
+  });
+  document.querySelectorAll('[data-accion="reasignar"]').forEach(function (btn) {
+    if (btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', function () { abrirModalReasignar(btn); });
+  });
+}
+
+/* ── Revisado, está bien así (optimista) ── */
+function marcarRevisado(btn) {
+  var chip = btn.closest('.chip');
+  var clave = btn.getAttribute('data-clave');
+  var senal = btn.getAttribute('data-senal');
+  var valor = btn.getAttribute('data-valor');
+  var pubCard = btn.closest('.pub-card');
+  var flash = pubCard ? pubCard.querySelector('[data-flash]') : null;
+
+  chip.classList.add('saliendo');
+  btn.disabled = true;
+  setTimeout(function () {
+    if (chip.parentElement) chip.remove();
+    var wrap = pubCard ? pubCard.querySelector('.chips-wrap') : null;
+    if (wrap && !wrap.querySelector('.chip')) {
+      wrap.innerHTML = '<span class="chip ninguna"><span class="chip-txt">Sin señales</span></span>';
+    }
+  }, 200);
+
+  fetch('/api/sync/vinculos/revisado', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clave: clave, senal: senal, valor: valor })
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.ok) throw new Error(d.error || 'No se pudo guardar la revisión.');
+    if (flash) { flash.className = 'pub-flash ok'; flash.textContent = '✓ Revisado.'; setTimeout(function () { flash.textContent = ''; }, 3000); }
+  }).catch(function (e) {
+    if (flash) { flash.className = 'pub-flash err'; flash.textContent = '✗ No se guardó: ' + e.message + ' — la señal puede haber reaparecido.'; }
+  });
+}
+
+/* ── Modal genérico ── */
+var modalRoot = document.getElementById('modal-root');
+function cerrarModal() { modalRoot.innerHTML = ''; document.removeEventListener('keydown', onModalKeydown); }
+function onModalKeydown(ev) { if (ev.key === 'Escape') cerrarModal(); }
+function abrirModal(html) {
+  modalRoot.innerHTML = '<div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-box">' + html + '</div></div>';
+  document.addEventListener('keydown', onModalKeydown);
+  document.getElementById('modal-overlay').addEventListener('click', function (ev) {
+    if (ev.target.id === 'modal-overlay') cerrarModal();
+  });
+  var focusable = modalRoot.querySelector('button, input');
+  if (focusable) focusable.focus();
+}
+
+/* ── Desvincular ── */
+function abrirModalDesvincular(btn) {
+  var clave = btn.getAttribute('data-clave');
+  var pubCard = btn.closest('.pub-card');
+  var nombreProducto = (pubCard && pubCard.getAttribute('data-wc-nombre')) || 'este producto';
+  abrirModal(
+    '<div class="modal-title" id="modal-title">Desvincular publicación</div>' +
+    '<div class="modal-body">Esta publicación va a dejar de sincronizar stock con <b>' + esc(nombreProducto) + '</b>. Vas a tener que volver a vincularla a mano.</div>' +
+    '<div class="modal-actions">' +
+    '<button type="button" class="btn" id="modal-cancelar">Cancelar</button>' +
+    '<button type="button" class="btn danger" id="modal-confirmar">Desvincular</button>' +
+    '</div>'
+  );
+  document.getElementById('modal-cancelar').addEventListener('click', cerrarModal);
+  document.getElementById('modal-confirmar').addEventListener('click', function () {
+    var confirmarBtn = document.getElementById('modal-confirmar');
+    confirmarBtn.disabled = true; confirmarBtn.textContent = 'Desvinculando…';
+    fetch('/api/sync/desvincular', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clave: clave })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) throw new Error(d.error || 'No se pudo desvincular.');
+      cerrarModal();
+      quitarFilaDeClave(clave, 'Publicación desvinculada. Podés volver a mapearla desde <a href="/cobertura/" style="color:var(--accent)">Cobertura →</a>');
+    }).catch(function (e) {
+      confirmarBtn.disabled = false; confirmarBtn.textContent = 'Desvincular';
+      mostrarErrorModal(e.message);
+    });
+  });
+}
+
+/* ── Reasignar ── */
+function abrirModalReasignar(btn) {
+  var clave = btn.getAttribute('data-clave');
+  abrirModal(
+    '<div class="modal-title" id="modal-title">Reasignar a otro SKU</div>' +
+    '<div class="modal-body">Buscá el producto al que querés que esta publicación sincronice stock.' +
+    '<label class="search-label" for="modal-sku-input" style="margin-top:10px">Buscar por SKU o nombre</label>' +
+    '<input class="search-box" type="text" id="modal-sku-input" placeholder="SKU o nombre" autocomplete="off">' +
+    '<div class="modal-search-results hidden" id="modal-sku-results"></div>' +
+    '<div id="modal-resumen"></div>' +
+    '</div>' +
+    '<div class="modal-actions">' +
+    '<button type="button" class="btn" id="modal-cancelar">Cancelar</button>' +
+    '<button type="button" class="btn primary" id="modal-confirmar" disabled>Reasignar</button>' +
+    '</div>'
+  );
+  document.getElementById('modal-cancelar').addEventListener('click', cerrarModal);
+  var input = document.getElementById('modal-sku-input');
+  var results = document.getElementById('modal-sku-results');
+  var resumen = document.getElementById('modal-resumen');
+  var confirmarBtn = document.getElementById('modal-confirmar');
+  var skuElegido = null, nombreElegido = null;
+
+  input.addEventListener('input', debounce(function () {
+    var q = input.value.trim();
+    if (q.length < 2) { results.classList.add('hidden'); results.innerHTML = ''; return; }
+    fetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q)).then(function (r) { return r.json(); }).then(function (d) {
+      var data = d.data || [];
+      results.innerHTML = data.length
+        ? data.map(function (o) { return '<button type="button" class="ac-opt" data-sku="' + esc(o.sku) + '" data-nombre="' + esc(o.nombre || '') + '"><b>' + esc(o.sku) + '</b> — ' + esc(o.nombre || '') + '</button>'; }).join('')
+        : '<div class="ac-empty">No encontramos productos con ese término.</div>';
+      results.classList.remove('hidden');
+    });
+  }, 300));
+
+  results.addEventListener('click', function (ev) {
+    var opt = ev.target.closest('.ac-opt[data-sku]');
+    if (!opt) return;
+    skuElegido = opt.getAttribute('data-sku');
+    nombreElegido = opt.getAttribute('data-nombre');
+    input.value = skuElegido;
+    results.classList.add('hidden'); results.innerHTML = '';
+    resumen.innerHTML = '<div class="modal-resumen">Esta publicación va a sincronizar stock con <b>' + esc(nombreElegido || skuElegido) + '</b> en vez del vínculo actual.' +
+      '<div class="aviso">Nota: si esta publicación tenía revisiones "OK" guardadas, se van a borrar — valían para el vínculo anterior, no para el nuevo.</div></div>';
+    confirmarBtn.disabled = false;
+  });
+
+  confirmarBtn.addEventListener('click', function () {
+    if (!skuElegido) return;
+    confirmarBtn.disabled = true; confirmarBtn.textContent = 'Reasignando…';
+    fetch('/api/sync/vinculos/reasignar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clave: clave, sku: skuElegido })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) throw new Error(d.error || 'No se pudo reasignar.');
+      cerrarModal();
+      var skuDestino = skuElegido;
+      quitarFilaDeClave(clave, 'Vínculo reasignado. <button type="button" class="btn" id="ir-nuevo-vinculo" style="margin-left:6px">Ver nuevo vínculo →</button>');
+      setTimeout(function () {
+        var irBtn = document.getElementById('ir-nuevo-vinculo');
+        if (irBtn) irBtn.addEventListener('click', function () { mostrarDetalle(skuDestino); });
+      }, 0);
+    }).catch(function (e) {
+      confirmarBtn.disabled = false; confirmarBtn.textContent = 'Reasignar';
+      mostrarErrorModal(e.message);
+    });
+  });
+}
+
+function mostrarErrorModal(msg) {
+  var body = modalRoot.querySelector('.modal-body');
+  if (!body) return;
+  var errEl = document.createElement('div');
+  errEl.style.color = 'var(--red)'; errEl.style.marginTop = '10px'; errEl.style.fontSize = '.8rem';
+  errEl.textContent = '✗ ' + msg;
+  body.appendChild(errEl);
+}
+
+/* Quita la fila/card de una clave dada (en el detalle o en sospechosos) y muestra un mensaje. */
+function quitarFilaDeClave(clave, mensajeHtml) {
+  var els = document.querySelectorAll('.pub-card[data-clave="' + CSS.escape(clave) + '"]');
+  els.forEach(function (el) {
+    var flash = document.createElement('div');
+    flash.className = 'pub-flash ok';
+    flash.innerHTML = mensajeHtml;
+    el.parentElement.insertBefore(flash, el);
+    el.remove();
+  });
+}
+
+/* ── Sospechosos ── */
+var sospechososCargado = false;
+function cargarSospechosos() {
+  var cont = document.getElementById('sospechosos-contenido');
+  cont.innerHTML = skeletonDetalle();
+  fetch('/api/sync/vinculos-sospechosos')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) throw new Error(d.error || 'No se pudo cargar la lista.');
+      sospechososCargado = true;
+      renderSospechosos(d.data || []);
+    })
+    .catch(function (e) {
+      cont.innerHTML = errorConReintento(e.message || 'No se pudo conectar con el servidor.', function () { sospechososCargado = false; cargarSospechosos(); });
+    });
+}
+
+function renderSospechosos(data) {
+  var cont = document.getElementById('sospechosos-contenido');
+  var html = '';
+  if (!data.length) {
+    html = '<div class="estado-bueno"><div class="icono">✓</div><div class="titulo">Todos los vínculos están en orden</div><div class="desc">No hay señales de mal matcheo pendientes de revisar.</div></div>';
+  } else {
+    html = '<div id="sosp-wrap">' + data.map(renderSospechosoRow).join('') + '</div>';
+  }
+  html += '<div class="sosp-footer">¿Buscás productos sin publicación en ML o publicaciones sin SKU? Eso lo cubre <a href="/cobertura/">Cobertura →</a></div>';
+  cont.innerHTML = html;
+  wireSospechosos();
+}
+
+function renderSospechosoRow(row) {
+  var senales = row.senales || [];
+  var chipsHtml = '<div class="chips-wrap">' + senales.map(function (s) {
+    var clase = s.peso === 'alta' ? 'alta' : 'media';
+    return '<span class="chip ' + clase + '" data-senal="' + esc(s.senal) + '">' +
+      '<span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
+      '<button type="button" class="chip-revisar" data-clave="' + esc(row.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button>' +
+      '</span>';
+  }).join('') + '</div>';
+
+  return '<div class="pub-card" data-clave="' + esc(row.clave) + '" data-wc-nombre="' + esc(row.wc_nombre || '') + '">' +
+    '<div class="pub-head">' +
+    (row.thumbnail ? '<img src="' + esc(row.thumbnail) + '" alt="Foto de la publicación en ML">' : '') +
+    '<div class="pub-titulos">' +
+    '<button type="button" class="pub-titulo-ml" data-abrir-sku="' + esc(row.sku) + '" style="background:none;border:none;color:var(--text);text-align:left;cursor:pointer;padding:0;font:inherit">' + esc(row.titulo || row.item_id) + '</button>' +
+    '<div class="pub-nombre-wc">WC: ' + esc(row.wc_nombre || '—') + ' · SKU ' + esc(row.sku) + '</div>' +
+    '</div></div>' +
+    '<div class="pub-grid">' +
+    '<div class="pub-dato"><span class="k">Precio ML</span><span class="v">' + money(row.precio_ml) + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Precio WC</span><span class="v">' + money(row.precio_wc) + '</span></div>' +
+    '</div>' +
+    chipsHtml +
+    '<div class="pub-acciones">' +
+    (row.permalink ? '<a class="btn" href="' + esc(row.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
+    '<button type="button" class="btn" data-abrir-sku="' + esc(row.sku) + '">Ver detalle completo</button>' +
+    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(row.clave) + '">Reasignar a otro SKU</button>' +
+    '<button type="button" class="btn danger" data-accion="desvincular" data-clave="' + esc(row.clave) + '">Desvincular</button>' +
+    '</div>' +
+    '<div class="pub-flash" data-flash></div>' +
+    '</div>';
+}
+
+function wireSospechosos() {
+  document.querySelectorAll('#sosp-wrap .chip-revisar').forEach(function (btn) {
+    if (btn.dataset.wired) return; btn.dataset.wired = '1';
+    btn.addEventListener('click', function () { marcarRevisado(btn); });
+  });
+  document.querySelectorAll('#sosp-wrap [data-accion="desvincular"]').forEach(function (btn) {
+    if (btn.dataset.wired) return; btn.dataset.wired = '1';
+    btn.addEventListener('click', function () { abrirModalDesvincular(btn); });
+  });
+  document.querySelectorAll('#sosp-wrap [data-accion="reasignar"]').forEach(function (btn) {
+    if (btn.dataset.wired) return; btn.dataset.wired = '1';
+    btn.addEventListener('click', function () { abrirModalReasignar(btn); });
+  });
+  document.querySelectorAll('#sosp-wrap [data-abrir-sku]').forEach(function (btn) {
+    if (btn.dataset.wired) return; btn.dataset.wired = '1';
+    btn.addEventListener('click', function () { mostrarDetalle(btn.getAttribute('data-abrir-sku')); });
+  });
+}
+
+/* ── Init ── */
+if (location.hash === '#sospechosos') {
+  setTab('sospechosos', { sinHash: true });
+} else {
+  buscarInput.focus();
+}
+</script>
+</body>
+</html>

@@ -114,6 +114,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
   app.use('/sync-ml', express.static(path.join(__dirname, 'public/sync-ml')));
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
+  app.use('/vinculos', express.static(path.join(__dirname, 'public/vinculos')));
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
 
   // -- Error handler global (respaldo) ---------------------------------
