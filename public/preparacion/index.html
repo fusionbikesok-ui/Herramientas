@@ -1095,11 +1095,9 @@ async function agregarPerfilSku(){
 // Criterio unificado en toda la suite (18 herramientas): sin permiso, redirigir a /home/
 // ANTES de pintar el shell. Antes esta página cargaba el shell entero y mostraba el 403
 // inline por cada request — inconsistente con el resto.
-Api.requirePermiso('preparacion').then(function(ok){
-  if (!ok) return;
-  fetch('/api/auth/me').then(function(r){ return r.json(); }).then(function(d){
-    if (d && d.ok) USERNAME = d.user;
-  }).catch(function(){});
+Api.requirePermiso('preparacion').then(function(d){
+  if (!d) return;
+  if (d.user) USERNAME = d.user;
   cargarPendientes();
   iniciarPollingPendientes();
 });

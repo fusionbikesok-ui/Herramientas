@@ -148,7 +148,7 @@ function render(rows,total,truncado){
   }
   var h='';
   if(truncado && typeof total==='number' && total>rows.length){
-    h+='<p class="sub" style="margin-bottom:10px;color:var(--amber,#FBBF24)">⚠ Mostrando '+n(rows.length)+' de '+n(total)+' ítem(s) pendientes — hay más de los que se ven acá.</p>';
+    h+='<p class="sub" style="margin-bottom:10px;color:var(--amber,#FBBF24)">⚠ Mostrando '+n(rows.length)+' de '+n(total)+' ítem(s) pendientes.</p>';
   }else{
     h+='<p class="sub" style="margin-bottom:10px">'+n(rows.length)+' ítem(s) pendientes.</p>';
   }
