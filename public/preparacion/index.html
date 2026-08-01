@@ -196,6 +196,7 @@
 </div>
 
 <script src="../lib/format.js"></script>
+<script src="../lib/api.js"></script>
 <script>
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
 
@@ -1091,12 +1092,17 @@ async function agregarPerfilSku(){
   await mutarPerfil('/perfiles-sku/'+encodeURIComponent(sku),cuerpoPerfil(perfil),'guardar');
 }
 
-fetch('/api/auth/me').then(function(r){ return r.json(); }).then(function(d){
-  if (d && d.ok) USERNAME = d.user;
-}).catch(function(){});
-
-cargarPendientes();
-iniciarPollingPendientes();
+// Criterio unificado en toda la suite (18 herramientas): sin permiso, redirigir a /home/
+// ANTES de pintar el shell. Antes esta página cargaba el shell entero y mostraba el 403
+// inline por cada request — inconsistente con el resto.
+Api.requirePermiso('preparacion').then(function(ok){
+  if (!ok) return;
+  fetch('/api/auth/me').then(function(r){ return r.json(); }).then(function(d){
+    if (d && d.ok) USERNAME = d.user;
+  }).catch(function(){});
+  cargarPendientes();
+  iniciarPollingPendientes();
+});
 </script>
 <script type="module" src="../lib/scanner.js"></script>
 </body>

@@ -332,6 +332,14 @@ function campoMapeo(label,id,headers,sel){
 
 function cargarCSV(input){
   const f=input.files[0]; if(!f) return;
+  const nombreOk = /\.csv$/i.test(f.name || '');
+  const tipoOk = !f.type || f.type === 'text/csv' || f.type === 'application/vnd.ms-excel' || f.type === 'text/plain';
+  if (!nombreOk || !tipoOk) {
+    document.getElementById('error').textContent = 'El archivo elegido no parece un CSV (' + (f.name || 'sin nombre') + '). Elegí un archivo .csv.';
+    document.getElementById('mapeo-wrap').style.display = 'none';
+    input.value = '';
+    return;
+  }
   const r=new FileReader();
   r.onload=function(){
     _csv = leerCSVtexto(r.result);
@@ -398,10 +406,15 @@ function cargarCatalogo(){
     buscar.placeholder = 'Escribí un SKU o parte del nombre… (' + _catalogo.length + ' productos)';
     renderizarCategoriasChips();
   }).catch(function(err){
-    document.getElementById('catEstado').innerHTML =
-      '<span style="color:var(--red)">⚠</span> No se pudo cargar el catálogo ('+escHtml(err.message||'error')+'). '+
+    var mensajeError = '<span style="color:var(--red)">⚠</span> No se pudo cargar el catálogo ('+escHtml(err.message||'error')+'). '+
       'Usá Pegar / CSV / Carga manual mientras tanto. '+
       '<button class="btn btn-sm" style="margin-left:6px" onclick="cargarCatalogo()">↻ Reintentar</button>';
+    document.getElementById('catEstado').innerHTML = mensajeError;
+    // El tab "Por categoría" consume el mismo fetch: si falla, tenía que quedar
+    // en "Cargando categorías…" para siempre. Ahora avisa igual que "Buscar en
+    // catálogo", con el mismo botón de reintentar.
+    var chipsWrap = document.getElementById('catChipsWrap');
+    if (chipsWrap) chipsWrap.innerHTML = mensajeError;
   });
 }
 

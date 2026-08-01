@@ -211,7 +211,7 @@ function renderReactivables(d){
   }
   var h='<p class="sub" style="margin-bottom:10px">'+n(d.totalPublicaciones)+' publicaciones ('+n(d.totalVariaciones)+' variaciones) que ML pausó por quedarse sin stock y ya tienen stock en la web.</p>';
   h+='<div class="tbl-wrap"><table><thead><tr>';
-  h+='<th><input type="checkbox" id="chk-all" checked onclick="toggleAll(this)"></th>';
+  h+='<th><input type="checkbox" id="chk-all" onclick="toggleAll(this)" aria-label="Seleccionar todas"></th>';
   h+='<th>Publicación</th><th>SKU(s)</th><th>Stock web</th><th>Precio ML</th><th>Neto</th><th>Precio contado</th><th>Estado</th></tr></thead><tbody>';
   pubs.forEach(function(p){
     var skus=[...new Set(p.variaciones.map(function(v){return v.sku;}).filter(Boolean))];
@@ -219,7 +219,7 @@ function renderReactivables(d){
     var thumb=p.thumbnail?'<img class="pub-thumb" src="'+esc(p.thumbnail)+'" alt="'+esc(p.titulo||p.item_id)+'" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
     var estado=p.estado||'sin_precio';
     h+='<tr>';
-    h+='<td><input type="checkbox" class="chk-item" value="'+esc(p.item_id)+'" checked onchange="actualizarBtnReactivar()"></td>';
+    h+='<td><input type="checkbox" class="chk-item" value="'+esc(p.item_id)+'" onchange="actualizarBtnReactivar()"></td>';
     h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(p.titulo||p.item_id)+'</div>'
       +'<div class="pub-meta">'+esc(p.item_id)+' · '+p.variaciones.length+' var.</div></div></div></td>';
     h+='<td class="mono">'+esc(skus.slice(0,3).join(', '))+(skus.length>3?(' +'+(skus.length-3)):'')+'</td>';
@@ -231,7 +231,7 @@ function renderReactivables(d){
     h+='</tr>';
   });
   h+='</tbody></table></div>';
-  h+='<div class="acc-btns" style="margin-top:12px"><button class="btn" id="btn-react" onclick="reactivarSel()">Reactivar '+pubs.length+' seleccionadas</button>'
+  h+='<div class="acc-btns" style="margin-top:12px"><button class="btn" id="btn-react" onclick="reactivarSel()" disabled>Reactivar seleccionadas</button>'
    +'<button class="btn sec" id="btn-react-cancel" onclick="cancelarReactivar()" style="display:none">Cancelar</button></div>';
   h+='<div class="msg" id="react-msg"></div>';
   return h;

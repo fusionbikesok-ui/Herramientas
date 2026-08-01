@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { precioContado } from '../lib/mlPrecios.js';
+import { armarLike } from '../lib/busqueda.js';
 
 const now = () => new Date().toISOString();
 
@@ -92,10 +93,10 @@ export function consultaPreciosRouter(db) {
   router.get('/buscar-sku', (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q) return res.json({ ok: true, data: [] });
-    const like = `%${q}%`;
+    const like = armarLike(q);
     const rows = db.prepare(`
       SELECT sku, nombre, stock, tipo FROM catalogo_cache
-      WHERE (sku LIKE ? OR nombre LIKE ?) AND sku <> ''
+      WHERE (sku LIKE ? ESCAPE '\\' OR nombre LIKE ? ESCAPE '\\') AND sku <> ''
       ORDER BY nombre ASC LIMIT 20
     `).all(like, like);
     res.json({ ok: true, data: rows });

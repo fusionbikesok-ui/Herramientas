@@ -161,7 +161,7 @@ function renderReactivables(d){
   var h='';
   h+='<p class="sub" style="margin-bottom:10px">'+n(d.totalPublicaciones)+' publicaciones ('+n(d.totalVariaciones)+' variaciones) que ML pausó por quedarse sin stock y ya tienen stock en la web. Reactivarlas les empuja el stock actual y las vuelve a poner activas en ML.</p>';
   h+='<div class="tbl-wrap"><table><thead><tr>';
-  h+='<th><input type="checkbox" id="chk-all" checked onclick="toggleAll(this)"></th>';
+  h+='<th><input type="checkbox" id="chk-all" onclick="toggleAll(this)" aria-label="Seleccionar todas"></th>';
   h+='<th>Publicación</th><th>SKU(s)</th><th class="num">Stock web</th>'
    +'<th class="num">Precio ML</th><th class="num">Neto</th><th class="num">Precio contado</th><th>Estado</th></tr></thead><tbody>';
   pubs.forEach(function(p){
@@ -170,7 +170,7 @@ function renderReactivables(d){
     var thumb=p.thumbnail?'<img class="pub-thumb" src="'+esc(p.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
     var estado=p.estado||'sin_precio';
     h+='<tr>';
-    h+='<td><input type="checkbox" class="chk-item" value="'+esc(p.item_id)+'" checked></td>';
+    h+='<td><input type="checkbox" class="chk-item" value="'+esc(p.item_id)+'" onclick="actualizarBtnReactivar()"></td>';
     h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(p.titulo||p.item_id)+'</div>'
       +'<div class="pub-meta">'+esc(p.item_id)+' · '+p.variaciones.length+' var.</div></div></div></td>';
     h+='<td class="mono">'+esc(skus.slice(0,3).join(', '))+(skus.length>3?(' +'+(skus.length-3)):'')+'</td>';
@@ -182,13 +182,27 @@ function renderReactivables(d){
     h+='</tr>';
   });
   h+='</tbody></table></div>';
-  h+='<div class="acciones"><button class="btn" id="btn-react" onclick="reactivarSel()">Reactivar seleccionadas</button>'
+  h+='<div class="acciones"><button class="btn" id="btn-react" onclick="reactivarSel()" disabled>Reactivar seleccionadas (0)</button>'
    +'<button class="btn sec" id="btn-react-cancel" onclick="cancelarReactivar()" style="display:none">Cancelar</button></div>';
   h+='<div class="msg" id="react-msg"></div>';
   return h;
 }
 
-function toggleAll(cb){document.querySelectorAll('.chk-item').forEach(function(x){x.checked=cb.checked;});}
+// Default DESTILDADO siempre (decisión de UX tras el incidente de reactivación masiva
+// accidental): el botón arranca deshabilitado y solo se habilita cuando el usuario tilda
+// algo a propósito. El label muestra siempre cuántas quedaron seleccionadas.
+function actualizarBtnReactivar(){
+  var btn=document.getElementById('btn-react');
+  if(!btn) return;
+  var n=document.querySelectorAll('.chk-item:checked').length;
+  btn.disabled=(n===0);
+  btn.textContent='Reactivar seleccionadas ('+n+')';
+  var chkAll=document.getElementById('chk-all');
+  var total=document.querySelectorAll('.chk-item').length;
+  if(chkAll) chkAll.checked=(total>0 && n===total);
+}
+
+function toggleAll(cb){document.querySelectorAll('.chk-item').forEach(function(x){x.checked=cb.checked;});actualizarBtnReactivar();}
 
 // Controller del lote en curso: permite cancelar los chunks que aún no se dispararon.
 var reactivarCtrl=null;

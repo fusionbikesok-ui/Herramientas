@@ -113,6 +113,7 @@
       <label class="fld">Herramientas permitidas</label>
       <div class="perm-grid" id="perm-grid"></div>
     </div>
+    <div class="msg" id="modal-msg"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" id="modal-save" onclick="guardar()">Guardar</button>
@@ -125,6 +126,11 @@ var HERRAMIENTAS = [];
 var editId = null; // null = alta
 
 function showMsg(txt, ok){ var m=document.getElementById('msg'); m.textContent=txt; m.className='msg '+(ok?'ok':'err'); setTimeout(function(){m.className='msg';},4000); }
+// El modal tapa el mensaje de arriba (z-index) mientras está abierto: los errores de
+// guardar() (ej. 400 por campos vacíos) se mostraban en #msg pero quedaban invisibles
+// detrás del overlay. showModalMsg() pinta el error DENTRO del modal.
+function showModalMsg(txt, ok){ var m=document.getElementById('modal-msg'); m.textContent=txt; m.className='msg '+(ok?'ok':'err'); }
+function clearModalMsg(){ var m=document.getElementById('modal-msg'); m.textContent=''; m.className='msg'; }
 function logout(){ fetch('/api/auth/logout',{method:'POST'}).finally(function(){location.href='/herramientas/login/';}); }
 
 async function api(url, opts){
@@ -223,6 +229,7 @@ function abrirCrear(){
   document.getElementById('f-admin').checked = false;
   renderPermGrid([]);
   onAdminToggle();
+  clearModalMsg();
   document.getElementById('modal-bg').classList.add('show');
 }
 
@@ -238,6 +245,7 @@ async function abrirEditar(id){
   document.getElementById('f-admin').checked = u.is_admin;
   renderPermGrid(u.permisos);
   onAdminToggle();
+  clearModalMsg();
   document.getElementById('modal-bg').classList.add('show');
 }
 
@@ -246,11 +254,14 @@ function cerrarModal(){ document.getElementById('modal-bg').classList.remove('sh
 async function guardar(){
   var isAdmin = document.getElementById('f-admin').checked;
   var permisos = recogerPermisos();
+  clearModalMsg();
   try {
     if (editId === null) {
       var username = document.getElementById('f-username').value.trim();
       var password = document.getElementById('f-password').value;
       var email = document.getElementById('f-email').value.trim() || null;
+      if (!username) { showModalMsg('Ingresá un nombre de usuario.', false); return; }
+      if (!password || password.length < 6) { showModalMsg('La contraseña tiene que tener al menos 6 caracteres.', false); return; }
       await api('/api/usuarios', { method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ username, password, is_admin:isAdmin, permisos, email }) });
       showMsg('Usuario creado.', true);
@@ -265,7 +276,7 @@ async function guardar(){
     }
     cerrarModal();
     cargar();
-  } catch(e){ showMsg(e.message || 'Error al guardar', false); }
+  } catch(e){ showModalMsg(e.message || 'Error al guardar', false); }
 }
 
 async function resetPass(id, username){
