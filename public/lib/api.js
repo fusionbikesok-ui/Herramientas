@@ -124,7 +124,7 @@
     var btn = (mostrarReintentar && opciones.onReintentar)
       ? '<button type="button" class="btn-reintentar" data-api-reintentar>Reintentar</button>'
       : '';
-    container.innerHTML = '<div class="api-estado api-estado--' + resultado.state + '">' +
+    container.innerHTML = '<div class="api-estado api-estado--' + resultado.state + '" role="status" aria-live="polite">' +
       '<p>' + mensaje.replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }) + '</p>' + btn + '</div>';
     if (mostrarReintentar && opciones.onReintentar) {
       var btnEl = container.querySelector('[data-api-reintentar]');
@@ -152,13 +152,13 @@
           return new Promise(function () {});
         }
         var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
-        if (isAdmin || !tool) return true;
+        if (isAdmin || !tool) return d;
         var ok = (d.permisos || []).some(function (p) { return p.herramienta === tool; });
         if (!ok) {
           window.location.href = '/herramientas/home/';
           return new Promise(function () {});
         }
-        return true;
+        return d;
       });
     }, function () {
       // error de red: no redirigimos a ciegas, pero tampoco silencio total.
