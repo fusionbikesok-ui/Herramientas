@@ -1408,10 +1408,20 @@
   });
 
   // ----- Descartar sesión (Conteo) -----
+  // Guard contra doble invocación: sin esto, un doble click (o el usuario reintentando tras
+  // ver el alert de la primera respuesta lenta) dispara la petición dos veces; la primera
+  // descarta la sesión y la segunda llega después con la sesión ya cerrada -> 400 "La sesión
+  // no está abierta", que tapaba con un alert de error una operación que en realidad SÍ se
+  // había completado.
+  var descartandoSesion = false;
   document.getElementById('btn-descartar-sesion').addEventListener('click', function(){
+    if(descartandoSesion) return;
     var id = sesionId();
     if(!id) return;
     if(!confirm('¿Descartar esta sesión de conteo? No se toca el stock, pero se pierde todo lo contado.')) return;
+    descartandoSesion = true;
+    var btn = document.getElementById('btn-descartar-sesion');
+    btn.disabled = true;
     fetch('/api/inventario/sesiones/' + id + '/descartar', { method: 'POST' })
       .then(function(r){ return r.json(); })
       .then(function(j){
@@ -1423,7 +1433,8 @@
         } else {
           alert(j && j.error ? j.error : 'No se pudo descartar la sesión.');
         }
-      }).catch(function(){ alert('No se pudo descartar la sesión (sin conexión).'); });
+      }).catch(function(){ alert('No se pudo descartar la sesión (sin conexión).'); })
+      .finally(function(){ descartandoSesion = false; btn.disabled = false; });
   });
 
   // ----- Vista Revisión -----

@@ -683,7 +683,10 @@ body {
   </section>
 </main>
 
+<script src="../lib/api.js"></script>
 <script>
+Api.guardBfcache();
+
 function logout() {
   fetch('/api/auth/logout', { method: 'POST' }).finally(function() {
     window.location.href = '/herramientas/login/';

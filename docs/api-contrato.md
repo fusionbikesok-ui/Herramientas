@@ -239,3 +239,52 @@ queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
 `409` si hay ítems sin asociar a SKU (sin SKU no hay a qué ajustarle stock), con
 `{ sin_asociar, codigos_desconocidos, codigos: [...] }` para que la UI explique cuáles son
 códigos inexistentes. Corta **antes** de tocar Woo: ningún ítem de la sesión se ajusta.
+
+## Búsqueda con comodines SQL escapados (fix hallazgo E2E)
+
+`GET /api/codigos/buscar?q=`, `GET /api/sync/buscar-sku?q=` y
+`GET /api/consulta-precios/buscar-sku?q=` arman el patrón `LIKE` con `lib/busqueda.js#armarLike`,
+que escapa `%`, `_` y la barra de escape antes de envolver el término entre `%...%`, y las
+queries usan `LIKE ? ESCAPE '\\'`. Antes de este fix, `q=%` o `q=_` actuaban como comodín
+total (devolvían cualquier fila) en vez de buscarse como texto literal. Sin cambio de forma
+en la respuesta, solo de comportamiento de búsqueda.
+
+## GET /api/precios (contrato de `total`/`truncado` agregado)
+
+La query interna tiene `LIMIT 1000` (deliberado, se mantiene). Antes, `total` reportaba
+`data.length` (el tope del LIMIT) como si fuera el total real, ocultando publicaciones sin
+aviso ni paginación. Ahora:
+
+```
+{ "ok": true, "total": <COUNT real, sin LIMIT>, "truncado": <bool>, "data": [...] }
+```
+
+`truncado=true` cuando `total > data.length` (hay más filas de las que trajo esta
+respuesta). El frontend debe mostrar "mostrando N de M" cuando `truncado` sea `true`.
+
+Mismo contrato aplicado en `GET /api/sync/atencion/:cat` (también tenía `LIMIT 500`
+reportado como `total: rows.length`): ahora `total` es el COUNT real de esa categoría y se
+agregó `truncado`.
+
+## GET/POST /api/auth/* — Cache-Control: no-store
+
+Todas las respuestas de `authRouter` (`/login`, `/logout`, `/me`, `/forgot`, `/reset`,
+`/reset/check`) llevan `Cache-Control: no-store` y `Pragma: no-cache`. Antes, `GET /me` sin
+este header podía quedar cacheado por el navegador; tras un logout, el botón "atrás"
+restauraba una respuesta vieja con el usuario todavía logueado (el servidor sí invalidaba la
+sesión — un fetch manual daba 401 — pero el navegador nunca volvía a pedirlo).
+
+## POST /api/auth/login — rate limiting fail-closed por usuario+IP
+
+Nuevo: tras 5 intentos fallidos consecutivos (usuario+IP, en memoria del proceso), cada
+falla adicional dispara un bloqueo temporal con backoff creciente (arranca en 1s, dobla por
+intento, techo en 60s). Mientras está bloqueado, responde:
+
+- `429 { "ok": false, "error": "Demasiados intentos fallidos. Esperá antes de reintentar." }`
+  con header `Retry-After: <segundos>`.
+
+El contador se resetea al primer login exitoso de esa clave, o solo por inactividad si pasan
+15 minutos sin ningún intento (para no dejar una cuenta bloqueada de por vida por errores de
+tipeo). No aplica límite por cuenta global — es por combinación usuario+IP, así una IP
+compartida no bloquea a otro usuario. Ver `lib/auth.js` (`claveRateLimit`, `loginBloqueado`,
+`registrarLoginFallido`, `registrarLoginExitoso`).

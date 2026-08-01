@@ -207,6 +207,8 @@ export function preciosRouter(db, cfg) {
     if (estado === 'all') where = '1=1';
     else if (['bajo', 'alto', 'sin_precio', 'ok'].includes(estado)) where = `a.estado = '${estado}'`;
     else where = "a.estado IN ('bajo','alto','sin_precio')";
+    // Total real (sin LIMIT), para no reportar el tope de la query como si fuera el total.
+    const totalReal = db.prepare(`SELECT COUNT(*) n FROM ml_precio_auditoria a WHERE ${where}`).get().n;
     const rows = db.prepare(`
       SELECT a.clave, a.item_id, a.titulo, a.sku, a.precio_ml, a.sale_fee, a.envio, a.neto,
              a.precio_web, a.deficit_pct, a.estado, a.actualizado_en, p.thumbnail,
@@ -230,7 +232,8 @@ export function preciosRouter(db, cfg) {
       ...r,
       precio_sugerido: r.estado === 'bajo' ? precioSugerido(r.precio_ml, r.sale_fee, r.envio, r.precio_web) : null,
     }));
-    res.json({ ok: true, total: data.length, data });
+    // total = COUNT real (no el LIMIT); truncado avisa cuando data.length quedó recortado.
+    res.json({ ok: true, total: totalReal, truncado: totalReal > data.length, data });
   });
 
   // Corrige el precio de una publicación/variación en ML y refresca su fila auditada.

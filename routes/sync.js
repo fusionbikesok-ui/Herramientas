@@ -16,6 +16,7 @@ import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
+import { armarLike } from '../lib/busqueda.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -1504,6 +1505,17 @@ export function syncRouter(db, cfg) {
   router.get('/atencion/:cat', async (req, res) => {
     const def = ATENCION_DEFS[req.params.cat];
     if (!def) return res.status(400).json({ ok: false, error: 'categoría inválida' });
+    // Total real (sin LIMIT), para no reportar el tope de la query como si fuera el total.
+    const totalReal = db.prepare(`
+      SELECT COUNT(*) n FROM (
+        SELECT s.clave
+        FROM sync_log s
+        WHERE s.estado IN (${def.estados})
+          AND s.clave IS NOT NULL
+          AND ${def.exclude}
+        GROUP BY s.clave
+      )
+    `).get().n;
     // GROUP BY clave con MAX(creado_en): SQLite toma sku/error de la fila más reciente.
     const rows = db.prepare(`
       SELECT s.clave, s.sku, s.error, s.estado, MAX(s.creado_en) AS creado_en,
@@ -1531,7 +1543,8 @@ export function syncRouter(db, cfg) {
       }
     }
 
-    res.json({ ok: true, cat: req.params.cat, total: rows.length, data: rows });
+    // total = COUNT real (no el LIMIT); truncado avisa cuando rows quedó recortado.
+    res.json({ ok: true, cat: req.params.cat, total: totalReal, truncado: totalReal > rows.length, data: rows });
   });
 
   // Descarta claves no accionables (sin stock real, pausa manual, publicación cerrada,
@@ -1628,11 +1641,11 @@ export function syncRouter(db, cfg) {
   router.get('/buscar-sku', (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q) return res.json({ ok: true, data: [] });
-    const like = `%${q}%`;
+    const like = armarLike(q);
     const soloVar = req.query.tipo !== 'all';
     const rows = db.prepare(`
       SELECT sku, nombre, stock, tipo FROM catalogo_cache
-      WHERE (sku LIKE ? OR nombre LIKE ?) AND sku <> ''
+      WHERE (sku LIKE ? ESCAPE '\\' OR nombre LIKE ? ESCAPE '\\') AND sku <> ''
       ${soloVar ? "AND tipo = 'variation'" : ''}
       ORDER BY nombre ASC LIMIT 20
     `).all(like, like);

@@ -719,6 +719,22 @@ describe('vista de detalle', () => {
     expect(byClave['MLA_V|666'].variacion_muerta).toBeFalsy();
   });
 
+  it('atencion/:cat: total es el COUNT real (no el LIMIT 500) y avisa truncado', async () => {
+    for (let i = 0; i < 520; i++) seedLog(db, { clave: `MLBULK${i}|`, estado: 'sin_mapeo' });
+    const res = await request(app).get('/api/sync/atencion/sin_mapeo');
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(520);
+    expect(res.body.truncado).toBe(true);
+    expect(res.body.data).toHaveLength(500);
+  });
+
+  it('atencion/:cat: sin truncar, total coincide con la cantidad de filas devueltas', async () => {
+    seedLog(db, { clave: 'MLA1|', estado: 'sin_mapeo' });
+    const res = await request(app).get('/api/sync/atencion/sin_mapeo');
+    expect(res.body.total).toBe(res.body.data.length);
+    expect(res.body.truncado).toBe(false);
+  });
+
   it('atencion/sin_mapeo: excluye lo descartado a mano', async () => {
     seedLog(db, { clave: 'MLA1|', estado: 'sin_mapeo' });
     db.prepare("INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES ('MLA1|', null, ?)").run(ahora());
@@ -1038,6 +1054,13 @@ describe('GET /api/sync/buscar-sku', () => {
     db.prepare("UPDATE catalogo_cache SET nombre='BUSC-vacio' WHERE id_woo=999").run();
     const res = await request(app).get('/api/sync/buscar-sku?q=BUSC-vacio&tipo=all');
     expect(res.body.data).toEqual([]);
+  });
+
+  it('"%" y "_" se buscan como texto literal, no como comodín que matchea todo', async () => {
+    const porcentaje = await request(app).get('/api/sync/buscar-sku?q=%&tipo=all');
+    expect(porcentaje.body.data).toEqual([]);
+    const guionBajo = await request(app).get('/api/sync/buscar-sku?q=_&tipo=all');
+    expect(guionBajo.body.data).toEqual([]);
   });
 });
 

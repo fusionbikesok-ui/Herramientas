@@ -209,3 +209,24 @@ describe('POST /api/codigos/asignar', () => {
     db.close();
   });
 });
+
+describe('GET /api/codigos/buscar — comodines SQL escapados', () => {
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('"%" y "_" se buscan como texto literal, no como comodín que matchea todo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Producto uno', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Producto dos', stock: 5 });
+    const app = buildApp(db);
+
+    const porcentaje = await request(app).get('/api/codigos/buscar?q=%');
+    expect(porcentaje.body.data).toEqual([]);
+
+    const guionBajo = await request(app).get('/api/codigos/buscar?q=_');
+    expect(guionBajo.body.data).toEqual([]);
+
+    db.close();
+  });
+});
