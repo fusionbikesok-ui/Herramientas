@@ -59,11 +59,30 @@
   details{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-top:18px;}
   details summary{cursor:pointer;font-weight:700;font-size:14px;list-style:none;}
   details summary::-webkit-details-marker{display:none}
-  .hist-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;}
+  .hist-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:10px 4px;
+       border-bottom:1px solid var(--line);font-size:13px;width:100%;background:none;border-left:none;border-right:none;
+       border-top:none;text-align:left;color:inherit;font:inherit;cursor:pointer;min-height:var(--tap-min);}
   .hist-row:last-child{border-bottom:none;}
+  .hist-row:hover{background:var(--panel2);}
+  .hist-row-main{display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .hist-row-top{font-weight:600;}
+  .hist-row-meta{font-size:12px;color:var(--muted);}
+  .hist-row-side{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex:0 0 auto;}
   .hist-row .estado{font-weight:700;}
   .hist-row .estado.confirmada{color:var(--success);}
+  .hist-row .estado.confirmada_con_errores{color:var(--warning);}
   .hist-row .estado.descartada{color:var(--muted);}
+  .hist-fallidos{font-size:11px;font-weight:700;color:var(--warning);background:var(--warning-bg);
+       border:1px solid var(--warning-bd);border-radius:var(--radius-pill);padding:2px 8px;}
+  .hist-fecha{font-size:12px;color:var(--muted);}
+  .resultado-meta{font-size:13px;color:var(--muted);margin-bottom:10px;}
+  .resultado-meta div{margin-bottom:2px;}
+  .fila-item.readonly .acciones,.fila-item.readonly input[type=checkbox]{display:none;}
+  .ajuste-linea{font-size:12px;margin-top:4px;font-weight:700;}
+  [data-estado="ajustado"] .ajuste-linea{color:var(--success);}
+  [data-estado="sin_ajustar"] .ajuste-linea{color:var(--warning);}
+  [data-estado="ajustado"]{border-left-color:var(--success);}
+  [data-estado="sin_ajustar"]{border-left-color:var(--warning);}
   .empty{color:var(--muted);text-align:center;padding:14px;font-size:13px;}
 
   .placeholder{color:var(--muted);font-size:13px;padding:20px;text-align:center;}
@@ -249,7 +268,8 @@
   .cam-viewport{position:relative;overflow:hidden;border-radius:10px;background:#000;}
   .cam-viewport video{transform-origin:center center;transition:transform .12s ease-out;}
   .cam-zoom{display:flex;align-items:center;gap:10px;margin-top:10px;}
-  .cam-zoom-lbl{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--azul);}
+  /* text-transform/margin explícitos: neutralizan la regla global de `label` de esta página. */
+  .cam-zoom-lbl{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--azul);text-transform:none;margin:0;}
   .cam-zoom input[type=range]{flex:1;accent-color:var(--azul);height:22px;cursor:pointer;}
   .modal-box .sub{color:var(--muted);font-size:13px;margin:10px 0;text-align:center;}
   .modal-box .cerrarcam{margin-top:6px;width:100%;font-size:14px;font-weight:700;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);cursor:pointer;}
@@ -444,13 +464,15 @@
 
   <!-- Vista 7: Resultado -->
   <div class="vista" id="vista-resultado">
-    <h1>Resultado del ajuste</h1>
+    <h1 id="vista-resultado-titulo">Resultado del ajuste</h1>
     <div id="resultado-sello"></div>
-    <div class="resultado-num">
+    <div id="resultado-meta" class="resultado-meta"></div>
+    <div class="resultado-num" id="resultado-contadores">
       <div class="cont ok"><div class="n" id="resultado-ajustados">0</div><div class="l">Ajustados</div></div>
       <div class="cont fail"><div class="n" id="resultado-fallidos">0</div><div class="l">Fallidos</div></div>
     </div>
     <ul class="lista-errores" id="resultado-errores"></ul>
+    <div id="resultado-items"></div>
     <button class="btn danger" id="btn-reintentar-fallidos" style="display:none;">Reintentar fallidos</button>
     <button class="btn primary" id="btn-volver-inicio">Volver a Inicio</button>
   </div>
@@ -488,14 +510,15 @@
   <div class="modal-box">
     <div class="cam-viewport"><video id="cam-video" autoplay playsinline muted></video></div>
     <div class="cam-toast" id="cam-toast"></div>
-    <div class="cam-zoom"><span class="cam-zoom-lbl">Zoom</span><input type="range" id="cam-zoom" min="1" max="4" step="0.5" value="1"></div>
-    <p class="sub" id="cam-msg">Apuntá al código de barras…</p>
+    <div class="cam-zoom"><label class="cam-zoom-lbl" for="cam-zoom">Zoom</label><input type="range" id="cam-zoom" min="1" max="4" step="0.5" value="1"></div>
+    <p class="sub" id="cam-msg">Centrá el código de barras dentro de la banda</p>
     <button class="cerrarcam" id="bCamCerrar">Cerrar</button>
   </div>
 </div>
 
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
+<script type="module" src="../lib/scanner.js"></script>
 <script>
   Api.installAuth();
 (function(){
@@ -504,6 +527,7 @@
   // ----- Estado global de la SPA (compartido con las próximas tareas vía window.InvApp) -----
   var state = {
     sesion: null, // sesión activa/actual en memoria
+    sesionVista: null, // sesión cerrada abierta en modo lectura desde el historial (no pisa la activa)
   };
 
   // ----- Navegación entre vistas -----
@@ -591,6 +615,12 @@
     });
   }
 
+  function estadoHistorialTexto(s){
+    if(s.estado === 'confirmada') return 'Confirmada';
+    if(s.estado === 'confirmada_con_errores') return 'Confirmada con errores';
+    return 'Descartada';
+  }
+
   function cargarHistorial(){
     var cont = document.getElementById('historial-contenido');
     cont.innerHTML = '<p class="empty">Cargando…</p>';
@@ -601,12 +631,21 @@
       }
       var html = '';
       j.data.forEach(function(s){
-        var estadoTxt = s.estado === 'confirmada' ? 'Confirmada' : 'Descartada';
-        html += '<div class="hist-row">' +
-          '<span>' + esc(alcanceTexto(s)) + '</span>' +
-          '<span class="estado ' + esc(s.estado) + '">' + esc(estadoTxt) + '</span>' +
-          '<span>' + esc(fecha(s.confirmado_en || s.creado_en)) + '</span>' +
-        '</div>';
+        var estadoTxt = estadoHistorialTexto(s);
+        var fallidosTxt = s.fallidos > 0 ? ', ' + n(s.fallidos) + ' sin ajustar' : '';
+        var fechaTxt = fecha(s.confirmado_en || s.creado_en);
+        var labelTxt = 'Ver detalle de la sesión ' + alcanceTexto(s) + ', ' + estadoTxt + fallidosTxt + ', ' + fechaTxt;
+        html += '<button type="button" class="hist-row" data-id="' + esc(s.id) + '" aria-label="' + esc(labelTxt) + '">' +
+          '<span class="hist-row-main">' +
+            '<span class="hist-row-top">' + esc(alcanceTexto(s)) + '</span>' +
+            '<span class="hist-row-meta">Contó: ' + esc(s.usuario || '—') + '</span>' +
+          '</span>' +
+          '<span class="hist-row-side">' +
+            '<span class="estado ' + esc(s.estado) + '">' + esc(estadoTxt) + '</span>' +
+            (s.fallidos > 0 ? '<span class="hist-fallidos">' + n(s.fallidos) + ' sin ajustar</span>' : '') +
+            '<span class="hist-fecha">' + esc(fecha(s.confirmado_en || s.creado_en)) + '</span>' +
+          '</span>' +
+        '</button>';
       });
       cont.innerHTML = html;
     }).catch(function(){
@@ -620,6 +659,15 @@
       historialCargado = true;
       cargarHistorial();
     }
+  });
+
+  // Delegación: click (o Enter/Espacio, nativos de <button>) sobre una fila del historial
+  // abre esa sesión cerrada en modo lectura (vista Resultado, sin acciones de conteo).
+  document.getElementById('historial-contenido').addEventListener('click', function(e){
+    var btn = e.target.closest('.hist-row');
+    if(!btn) return;
+    var id = btn.getAttribute('data-id');
+    if(id) abrirDetalleHistorial(id);
   });
 
   // ----- Vista Elegir alcance (chips multi-select buscables + preview en vivo) -----
@@ -934,7 +982,10 @@
     }catch(e){}
   }
 
-  function sesionId(){ return state.sesion && state.sesion.id; }
+  function sesionId(){
+    if(modoHistorial) return state.sesionVista && state.sesionVista.id;
+    return state.sesion && state.sesion.id;
+  }
 
   function setGuardado(on){
     conteoGuardado.classList.toggle('on', !!on);
@@ -1280,12 +1331,18 @@
     camToastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2200);
   }
   function abrirCamara(){
+    // Sin el módulo cargado no tiene sentido abrir el modal: avisamos en la página
+    // y salimos antes de armar el slider, que quedaría apuntando a nada.
+    if(!window.Scanner){
+      alert('No se pudo cargar el lector de códigos. Recargá la página.');
+      return;
+    }
     var modal = document.getElementById('cam-modal'), video = document.getElementById('cam-video');
     modal.classList.add('open');
     var zoomEl = document.getElementById('cam-zoom');
     zoomEl.value = 1;
     zoomEl.oninput = function(){ window.Scanner.setZoom(parseFloat(this.value)); };
-    document.getElementById('cam-msg').textContent = 'Apuntá al código de barras…';
+    document.getElementById('cam-msg').textContent = 'Centrá el código de barras dentro de la banda';
     window.Scanner.open({
       video: video,
       mode: 'continuous',
@@ -1633,53 +1690,167 @@
   }
 
   // ----- Vista Resultado -----
+  // modoHistorial: true cuando se llegó acá abriendo una sesión cerrada desde el historial
+  // (vista de solo lectura); false cuando se llegó recién confirmando la sesión activa.
+  var modoHistorial = false;
+
+  function pintarSello(sesion){
+    var sello = document.getElementById('resultado-sello');
+    if(!sesion){ sello.innerHTML = ''; return; }
+    if(sesion.estado === 'confirmada'){
+      sello.innerHTML = '<span class="sello-cerrada">Cerrada · Confirmada</span>';
+    } else if(sesion.estado === 'confirmada_con_errores'){
+      sello.innerHTML = '<span class="sello-cerrada sello-con-errores">Cerrada · Confirmada con errores</span>';
+    } else if(sesion.estado === 'descartada'){
+      sello.innerHTML = '<span class="sello-cerrada">Descartada</span>';
+    } else {
+      sello.innerHTML = '';
+    }
+  }
+
+  function pintarMetaResultado(sesion){
+    var meta = document.getElementById('resultado-meta');
+    if(!sesion){ meta.innerHTML = ''; return; }
+    var partes = ['<div>Contó: ' + esc(sesion.usuario || '—') + '</div>'];
+    if(sesion.confirmado_por){
+      partes.push('<div>Confirmó: ' + esc(sesion.confirmado_por) +
+        (sesion.confirmado_en ? ' · ' + esc(fecha(sesion.confirmado_en)) : '') + '</div>');
+    }
+    meta.innerHTML = partes.join('');
+  }
+
+  // Lista de ítems de la sesión (solo lectura), marcando cuáles quedaron sin ajustar en Woo.
+  function pintarItemsResultado(items, sinBadgeAjuste){
+    var cont = document.getElementById('resultado-items');
+    if(!items || !items.length){ cont.innerHTML = ''; return; }
+    cont.innerHTML = items.map(function(i){
+      var estadoAjuste = (!sinBadgeAjuste && i.ajustado === false) ? 'sin_ajustar' : ((!sinBadgeAjuste && i.ajustado === true) ? 'ajustado' : '');
+      var badge = '';
+      if(!sinBadgeAjuste && i.ajustado === false){
+        badge = '<div class="ajuste-linea"><span aria-hidden="true">⚠</span> Sin ajustar en Woo</div>';
+      } else if(!sinBadgeAjuste && i.ajustado === true){
+        badge = '<div class="ajuste-linea"><span aria-hidden="true">✓</span> Ajustado' +
+          (i.ajustado_en ? ' · ' + esc(fecha(i.ajustado_en)) : '') + '</div>';
+      }
+      return '<div class="fila-item readonly"' + (estadoAjuste ? ' data-estado="' + esc(estadoAjuste) + '"' : '') + '>' +
+        '<div class="info">' +
+          '<div class="cod">' + esc(i.sku || i.ean || '(sin código)') + '</div>' +
+          '<div class="nombre">' + esc(i.nombre || '') + '</div>' +
+          '<div class="stockline">Contado: <b>' + n(i.cantidad) + '</b>' +
+            (i.diferencia != null ? ' · Diferencia: ' + esc(diffTexto(i.diferencia)) : '') + '</div>' +
+          badge +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
   function cargarSelloResultado(){
     var id = sesionId();
     if(!id) return;
     fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
       if(j && j.ok && j.sesion){
         state.sesion = j.sesion;
-        var sello = document.getElementById('resultado-sello');
-        if(j.sesion.estado === 'confirmada'){
-          sello.innerHTML = '<span class="sello-cerrada">Cerrada · Confirmada</span>';
-        } else if(j.sesion.estado === 'confirmada_con_errores'){
-          sello.innerHTML = '<span class="sello-cerrada sello-con-errores">Cerrada · Confirmada con errores</span>';
-        } else {
-          sello.innerHTML = '';
-        }
+        pintarSello(j.sesion);
+        pintarMetaResultado(j.sesion);
       }
     }).catch(function(){});
   }
 
   function mostrarResultado(res){
+    modoHistorial = false;
+    pintarSello(null);
+    pintarMetaResultado(null);
+    document.getElementById('vista-resultado-titulo').textContent = 'Resultado del ajuste';
+    document.getElementById('resultado-contadores').style.display = '';
     document.getElementById('resultado-ajustados').textContent = n(res.ajustados);
     document.getElementById('resultado-fallidos').textContent = n(res.fallidos);
     var ul = document.getElementById('resultado-errores');
     ul.innerHTML = (res.errores && res.errores.length)
       ? res.errores.map(function(e){ return '<li>' + esc(e.sku) + ': ' + esc(e.error) + '</li>'; }).join('')
       : '';
+    pintarItemsResultado([]);
     document.getElementById('btn-reintentar-fallidos').style.display = (res.fallidos > 0) ? 'block' : 'none';
+    document.getElementById('btn-volver-inicio').textContent = 'Volver a Inicio';
     cargarSelloResultado();
+  }
+
+  // Abre una sesión cerrada del historial en modo lectura: sin escanear, asociar,
+  // editar cantidades ni cerrar-sin-stock — solo el sello, quién contó/confirmó,
+  // los ítems (marcando los que quedaron sin ajustar) y, si corresponde, reintentar.
+  function abrirDetalleHistorial(id){
+    fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok || !j.sesion){ alert('No se pudo abrir la sesión.'); return; }
+      state.sesionVista = j.sesion;
+      mostrarDetalleSesion(j.sesion, j.items || []);
+      mostrarVista('resultado');
+    }).catch(function(){ alert('No se pudo abrir la sesión (sin conexión).'); });
+  }
+
+  function mostrarDetalleSesion(sesion, items, erroresReintento){
+    modoHistorial = true;
+    pintarSello(sesion);
+    pintarMetaResultado(sesion);
+    var esDescartada = sesion.estado === 'descartada';
+    document.getElementById('vista-resultado-titulo').textContent =
+      esDescartada ? 'Sesión descartada' : 'Detalle de sesión';
+    var contadores = document.getElementById('resultado-contadores');
+    var errores = document.getElementById('resultado-errores');
+    if(esDescartada){
+      // Una sesión descartada nunca intentó ajustar nada: no hay ajustados/fallidos que mostrar.
+      contadores.style.display = 'none';
+      errores.innerHTML = '';
+    } else {
+      contadores.style.display = '';
+      var ajustados = items.filter(function(i){ return i.ajustado === true; }).length;
+      var fallidos = items.filter(function(i){ return i.ajustado === false; }).length;
+      document.getElementById('resultado-ajustados').textContent = n(ajustados);
+      document.getElementById('resultado-fallidos').textContent = n(fallidos);
+      errores.innerHTML = (erroresReintento && erroresReintento.length)
+        ? erroresReintento.map(function(e){ return '<li>' + esc(e.sku) + ': ' + esc(e.error) + '</li>'; }).join('')
+        : '';
+    }
+    pintarItemsResultado(items, esDescartada);
+    var totalFallidos = esDescartada ? 0 : items.filter(function(i){ return i.ajustado === false; }).length;
+    document.getElementById('btn-reintentar-fallidos').style.display =
+      (totalFallidos > 0 && !esDescartada) ? 'block' : 'none';
+    document.getElementById('btn-volver-inicio').textContent = 'Volver al historial';
   }
 
   document.getElementById('btn-reintentar-fallidos').addEventListener('click', function(){
     var id = sesionId();
     if(!id) return;
+    var btn = document.getElementById('btn-reintentar-fallidos');
+    btn.disabled = true;
     fetch('/api/inventario/sesiones/' + id + '/confirmar', { method: 'POST' })
       .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
       .then(function(res){
+        btn.disabled = false;
         if(res.status === 200 && res.body.ok){
-          mostrarResultado(res.body);
+          historialCargado = false;
+          if(modoHistorial){
+            // No pintamos optimista: volvemos a pedir la sesión completa al servidor.
+            fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
+              if(j && j.ok && j.sesion){
+                state.sesionVista = j.sesion;
+                mostrarDetalleSesion(j.sesion, j.items || [], res.body.errores);
+              }
+            }).catch(function(){});
+          } else {
+            mostrarResultado(res.body);
+          }
         } else {
           alert(res.body && res.body.error ? res.body.error : 'No se pudo reintentar el ajuste.');
         }
-      }).catch(function(){ alert('No se pudo reintentar el ajuste (sin conexión).'); });
+      }).catch(function(){ btn.disabled = false; alert('No se pudo reintentar el ajuste (sin conexión).'); });
   });
 
   document.getElementById('btn-volver-inicio').addEventListener('click', function(){
     state.sesion = null;
+    state.sesionVista = null;
+    modoHistorial = false;
     resetEstadoBloqueSinStock();
-    historialCargado = false;
+    var det = document.getElementById('inicio-historial');
+    if(det.open){ cargarHistorial(); } else { historialCargado = false; }
     mostrarVista('inicio');
   });
 

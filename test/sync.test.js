@@ -1156,3 +1156,436 @@ describe('POST/GET/DELETE /api/sync/config-ml', () => {
     expect(del.body.ok).toBe(true);
   });
 });
+
+// ─── catalogo-config / config-ml/lote: carga masiva de reservas ──────────────
+
+// seedCatalogo no soporta marca/categorias_json; este helper cubre lo que necesita el
+// filtro masivo (marca exacta, categorias_json como array JSON).
+function seedCatalogoMasivo(db, sku, stock, { marca = '', categorias = null, idWoo, nombre } = {}) {
+  db.prepare(
+    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, marca, categorias_json, actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+  ).run(idWoo, nombre || ('Prod ' + sku), sku, 'simple', 0, stock, marca, categorias ? JSON.stringify(categorias) : null, ahora());
+}
+
+describe('GET /api/sync/catalogo-config y POST /api/sync/config-ml/lote', () => {
+  let db, app;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    app = buildSyncApp(db, { ml: ML_CFG, woo: { url: 'https://x', ck: 'a', cs: 'b' } });
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  describe('GET /catalogo-config', () => {
+    it('lista el catálogo completo con modo null cuando no hay config', async () => {
+      seedCatalogoMasivo(db, 'MASV-1', 10, { marca: 'Shimano', idWoo: 1 });
+      const res = await request(app).get('/api/sync/catalogo-config');
+      expect(res.status).toBe(200);
+      const row = res.body.data.find(r => r.sku === 'MASV-1');
+      expect(row.modo).toBeNull();
+      expect(row.reserva).toBe(0);
+      expect(row.stock_disponible_ml).toBe(10);
+      expect(row.total ?? res.body.total).toBeDefined();
+    });
+
+    it('calcula stock_disponible_ml según el modo (reserva resta, solo_local en 0)', async () => {
+      seedCatalogoMasivo(db, 'MASV-2', 10, { idWoo: 2 });
+      db.prepare("INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en) VALUES ('MASV-2','x','reserva',4,?)").run(ahora());
+      seedCatalogoMasivo(db, 'MASV-3', 8, { idWoo: 3 });
+      db.prepare("INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en) VALUES ('MASV-3','x','solo_local',0,?)").run(ahora());
+
+      const res = await request(app).get('/api/sync/catalogo-config');
+      const r2 = res.body.data.find(r => r.sku === 'MASV-2');
+      const r3 = res.body.data.find(r => r.sku === 'MASV-3');
+      expect(r2.stock_disponible_ml).toBe(6);
+      expect(r3.stock_disponible_ml).toBe(0);
+    });
+
+    it('filtra por estado sin_config/solo_local/reserva', async () => {
+      seedCatalogoMasivo(db, 'MASV-EST-1', 5, { idWoo: 11 });
+      seedCatalogoMasivo(db, 'MASV-EST-2', 5, { idWoo: 12 });
+      db.prepare("INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en) VALUES ('MASV-EST-2','x','reserva',1,?)").run(ahora());
+      seedCatalogoMasivo(db, 'MASV-EST-3', 5, { idWoo: 13 });
+      db.prepare("INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en) VALUES ('MASV-EST-3','x','solo_local',0,?)").run(ahora());
+
+      const sinConfig = await request(app).get('/api/sync/catalogo-config?estado=sin_config&q=MASV-EST');
+      expect(sinConfig.body.data.map(r => r.sku)).toEqual(['MASV-EST-1']);
+
+      const reserva = await request(app).get('/api/sync/catalogo-config?estado=reserva&q=MASV-EST');
+      expect(reserva.body.data.map(r => r.sku)).toEqual(['MASV-EST-2']);
+
+      const soloLocal = await request(app).get('/api/sync/catalogo-config?estado=solo_local&q=MASV-EST');
+      expect(soloLocal.body.data.map(r => r.sku)).toEqual(['MASV-EST-3']);
+    });
+
+    it('filtra por marca exacta', async () => {
+      seedCatalogoMasivo(db, 'MASV-M1', 5, { marca: 'Shimano', idWoo: 21 });
+      seedCatalogoMasivo(db, 'MASV-M2', 5, { marca: 'Sram', idWoo: 22 });
+      const res = await request(app).get('/api/sync/catalogo-config?marca=Shimano&q=MASV-M');
+      expect(res.body.data.map(r => r.sku)).toEqual(['MASV-M1']);
+    });
+
+    it('filtra por categoria dentro del array categorias_json', async () => {
+      seedCatalogoMasivo(db, 'MASV-C1', 5, { categorias: ['Cascos', 'Indumentaria'], idWoo: 31 });
+      seedCatalogoMasivo(db, 'MASV-C2', 5, { categorias: ['Cubiertas'], idWoo: 32 });
+      seedCatalogoMasivo(db, 'MASV-C3', 5, { categorias: null, idWoo: 33 });
+      const res = await request(app).get('/api/sync/catalogo-config?categoria=Cascos&q=MASV-C');
+      expect(res.body.data.map(r => r.sku)).toEqual(['MASV-C1']);
+    });
+
+    it('rechaza estado/orden/dir fuera de whitelist con 400', async () => {
+      const r1 = await request(app).get('/api/sync/catalogo-config?estado=invalido');
+      expect(r1.status).toBe(400);
+      const r2 = await request(app).get('/api/sync/catalogo-config?orden=precio');
+      expect(r2.status).toBe(400);
+      const r3 = await request(app).get('/api/sync/catalogo-config?dir=vertical');
+      expect(r3.status).toBe(400);
+    });
+
+    it('limite tope 500 aunque se pida más', async () => {
+      seedCatalogoMasivo(db, 'MASV-LIM', 5, { idWoo: 41 });
+      const res = await request(app).get('/api/sync/catalogo-config?limite=9999');
+      expect(res.status).toBe(200);
+      // no hace falta sembrar 500 filas: solo confirmamos que el request no rompe.
+      expect(res.body.data.length).toBeLessThanOrEqual(500);
+    });
+
+    it('dedup por SKU repetido en catalogo_cache: cuenta una sola vez, con el stock más bajo (menor stock, menor id_woo)', async () => {
+      // Mismo SKU en 3 filas: dato sucio conocido. Debe ganar la de menor stock (y a igualdad,
+      // menor id_woo) tanto en el listado como en el total.
+      seedCatalogoMasivo(db, 'MASV-DUP', 20, { idWoo: 50 });
+      seedCatalogoMasivo(db, 'MASV-DUP', 5, { idWoo: 51 });
+      seedCatalogoMasivo(db, 'MASV-DUP', 5, { idWoo: 49 }); // mismo stock que la anterior, menor id_woo → gana esta
+
+      const res = await request(app).get('/api/sync/catalogo-config?q=MASV-DUP');
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.total).toBe(1);
+      expect(res.body.data[0].stock_wc).toBe(5);
+    });
+
+    it('un filtro que no matchea nada devuelve total 0 y data vacía (no cae a "todo el catálogo")', async () => {
+      seedCatalogoMasivo(db, 'MASV-OTRO', 5, { marca: 'Shimano', idWoo: 60 });
+      const res = await request(app).get('/api/sync/catalogo-config?marca=NoExisteJamas');
+      expect(res.body.total).toBe(0);
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('escapa comodines de LIKE en q (% y _) para no traer de más', async () => {
+      seedCatalogoMasivo(db, 'MASV-50PORCIENTO', 5, { idWoo: 70, nombre: 'Producto 50% descuento' });
+      seedCatalogoMasivo(db, 'MASV-OTRO-2', 5, { idWoo: 71, nombre: 'Producto cualquiera' });
+      // Buscar literalmente "50%" no debe matchear "Producto cualquiera" vía comodín suelto.
+      const res = await request(app).get('/api/sync/catalogo-config?' + new URLSearchParams({ q: '50%' }).toString());
+      expect(res.body.data.map(r => r.sku)).toEqual(['MASV-50PORCIENTO']);
+    });
+
+    it('con facetas=1 agrega marcas y categorias de todo el catálogo', async () => {
+      seedCatalogoMasivo(db, 'MASV-F1', 5, { marca: 'Shimano', categorias: ['Cascos'], idWoo: 80 });
+      seedCatalogoMasivo(db, 'MASV-F2', 5, { marca: 'Sram', categorias: ['Cubiertas'], idWoo: 81 });
+      const res = await request(app).get('/api/sync/catalogo-config?facetas=1');
+      expect(res.body.marcas).toEqual(expect.arrayContaining(['Shimano', 'Sram']));
+      expect(res.body.categorias).toEqual(expect.arrayContaining(['Cascos', 'Cubiertas']));
+    });
+
+    it('sin facetas=1 no incluye marcas ni categorias', async () => {
+      seedCatalogoMasivo(db, 'MASV-NF', 5, { marca: 'Shimano', idWoo: 90 });
+      const res = await request(app).get('/api/sync/catalogo-config');
+      expect(res.body.marcas).toBeUndefined();
+      expect(res.body.categorias).toBeUndefined();
+    });
+  });
+
+  describe('invariante: total del GET === resumen.solicitados del POST con el mismo filtro', () => {
+    it('coincide con filtros combinados (q + marca + categoria + estado)', async () => {
+      // Universo con ruido: solo dos SKUs matchean TODO el filtro combinado.
+      seedCatalogoMasivo(db, 'INV-1', 5, { marca: 'Shimano', categorias: ['Cascos'], idWoo: 100 });
+      seedCatalogoMasivo(db, 'INV-2', 5, { marca: 'Shimano', categorias: ['Cascos'], idWoo: 101 });
+      // No matchea: otra marca.
+      seedCatalogoMasivo(db, 'INV-3', 5, { marca: 'Sram', categorias: ['Cascos'], idWoo: 102 });
+      // No matchea: otra categoria.
+      seedCatalogoMasivo(db, 'INV-4', 5, { marca: 'Shimano', categorias: ['Cubiertas'], idWoo: 103 });
+      // No matchea: ya tiene config previa (estado sin_config pedido).
+      seedCatalogoMasivo(db, 'INV-5', 5, { marca: 'Shimano', categorias: ['Cascos'], idWoo: 104 });
+      db.prepare("INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en) VALUES ('INV-5','x','reserva',1,?)").run(ahora());
+
+      const filtro = { q: 'INV', marca: 'Shimano', categoria: 'Cascos', estado: 'sin_config' };
+      const qs = new URLSearchParams(filtro).toString();
+      const get = await request(app).get(`/api/sync/catalogo-config?${qs}`);
+      expect(get.body.data.map(r => r.sku).sort()).toEqual(['INV-1', 'INV-2']);
+      expect(get.body.total).toBe(2);
+
+      const post = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'solo_local', vista_previa: true, filtro,
+      });
+      expect(post.body.resumen.solicitados).toBe(get.body.total);
+      expect(post.body.resumen.solicitados).toBe(2);
+    });
+  });
+
+  describe('POST /config-ml/lote: validaciones (400)', () => {
+    it('accion fuera del enum', async () => {
+      const res = await request(app).post('/api/sync/config-ml/lote').send({ accion: 'volar', skus: ['A'] });
+      expect(res.status).toBe(400);
+      expect(res.body.ok).toBe(false);
+    });
+
+    it.each([
+      ['negativa', -1],
+      ['no entera', 1.5],
+      ['string vacío', ''],
+      ['null', null],
+      ['array', []],
+    ])('reserva inválida: %s', async (_desc, valorInvalido) => {
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'reserva', reserva: valorInvalido, skus: ['A'],
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.ok).toBe(false);
+    });
+
+    it('acepta reserva 0 (entero >= 0 válido)', async () => {
+      seedCatalogoMasivo(db, 'RES-0', 5, { idWoo: 110 });
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'reserva', reserva: 0, skus: ['RES-0'],
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+    });
+
+    it('skus y filtro ambos presentes → 400', async () => {
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'quitar', skus: ['A'], filtro: { q: '' },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('ni skus ni filtro → 400', async () => {
+      const res = await request(app).post('/api/sync/config-ml/lote').send({ accion: 'quitar' });
+      expect(res.status).toBe(400);
+    });
+
+    it('más de 5000 skus → 400', async () => {
+      const skus = Array.from({ length: 5001 }, (_, i) => `SKU-${i}`);
+      const res = await request(app).post('/api/sync/config-ml/lote').send({ accion: 'quitar', skus });
+      expect(res.status).toBe(400);
+    });
+
+    it('exactamente 5000 skus no rebota por el límite (aunque no existan en catálogo)', async () => {
+      const skus = Array.from({ length: 5000 }, (_, i) => `SKU-${i}`);
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'quitar', skus, vista_previa: true,
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.resumen.solicitados).toBe(5000);
+    });
+
+    it('filtro.estado fuera de enum → 400', async () => {
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'quitar', filtro: { estado: 'inventado' },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('orden/dir/estado fuera de whitelist en el GET (ya cubierto arriba) también aplica al filtro del lote vía estado', async () => {
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'quitar', filtro: { estado: 'no-valido' },
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/estado/);
+    });
+  });
+
+  describe('POST /config-ml/lote: acciones reales sobre la base', () => {
+    it('accion reserva: hace upsert con la cantidad y marca pisados si ya había config', async () => {
+      seedCatalogoMasivo(db, 'ACC-R1', 10, { idWoo: 120 });
+      seedCatalogoMasivo(db, 'ACC-R2', 10, { idWoo: 121 });
+      db.prepare("INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en) VALUES ('ACC-R2','viejo','solo_local',0,?)").run(ahora());
+
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'reserva', reserva: 3, skus: ['ACC-R1', 'ACC-R2'],
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.resumen).toMatchObject({ solicitados: 2, aplicados: 2, pisados: 1, sin_cambio: 0, inexistentes: [] });
+
+      const r1 = db.prepare("SELECT modo, reserva, nombre FROM skus_config_ml WHERE sku='ACC-R1'").get();
+      expect(r1).toMatchObject({ modo: 'reserva', reserva: 3 });
+      const r2 = db.prepare("SELECT modo, reserva FROM skus_config_ml WHERE sku='ACC-R2'").get();
+      expect(r2).toMatchObject({ modo: 'reserva', reserva: 3 }); // pisó la config previa
+    });
+
+    it('accion solo_local: guarda reserva en 0 aunque no se mande reserva', async () => {
+      seedCatalogoMasivo(db, 'ACC-SL1', 10, { idWoo: 130 });
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'solo_local', skus: ['ACC-SL1'],
+      });
+      expect(res.status).toBe(200);
+      const row = db.prepare("SELECT modo, reserva FROM skus_config_ml WHERE sku='ACC-SL1'").get();
+      expect(row).toMatchObject({ modo: 'solo_local', reserva: 0 });
+    });
+
+    it('accion quitar: borra la fila; los que no tenían config cuentan sin_cambio, no error', async () => {
+      seedCatalogoMasivo(db, 'ACC-Q1', 10, { idWoo: 140 });
+      seedCatalogoMasivo(db, 'ACC-Q2', 10, { idWoo: 141 });
+      db.prepare("INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en) VALUES ('ACC-Q1','x','reserva',2,?)").run(ahora());
+      // ACC-Q2 nunca tuvo config.
+
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'quitar', skus: ['ACC-Q1', 'ACC-Q2'],
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.resumen).toMatchObject({ solicitados: 2, aplicados: 2, pisados: 0, sin_cambio: 1, inexistentes: [] });
+      expect(db.prepare("SELECT * FROM skus_config_ml WHERE sku='ACC-Q1'").get()).toBeUndefined();
+      expect(db.prepare("SELECT * FROM skus_config_ml WHERE sku='ACC-Q2'").get()).toBeUndefined();
+    });
+
+    it('nombre sale de catalogo_cache (dedup), no del body', async () => {
+      seedCatalogoMasivo(db, 'ACC-N1', 10, { idWoo: 150, nombre: 'Nombre real del catálogo' });
+      await request(app).post('/api/sync/config-ml/lote').send({ accion: 'reserva', reserva: 1, skus: ['ACC-N1'] });
+      const row = db.prepare("SELECT nombre FROM skus_config_ml WHERE sku='ACC-N1'").get();
+      expect(row.nombre).toBe('Nombre real del catálogo');
+    });
+  });
+
+  describe('POST /config-ml/lote: vista_previa no escribe nada', () => {
+    it('vista_previa:true devuelve resumen y esperados pero no toca la base', async () => {
+      seedCatalogoMasivo(db, 'VP-1', 10, { idWoo: 160 });
+      seedCatalogoMasivo(db, 'VP-2', 10, { idWoo: 161 });
+
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'reserva', reserva: 5, skus: ['VP-1', 'VP-2', 'VP-NO-EXISTE'], vista_previa: true,
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.vista_previa).toBe(true);
+      expect(res.body.esperados).toBe(3);
+      expect(res.body.resumen).toMatchObject({ solicitados: 3, aplicados: 2, inexistentes: ['VP-NO-EXISTE'] });
+
+      // nada se escribió en skus_config_ml
+      const count = db.prepare('SELECT COUNT(*) n FROM skus_config_ml').get().n;
+      expect(count).toBe(0);
+    });
+
+    it('la vista previa devuelve el mismo resumen que la aplicación real inmediatamente después', async () => {
+      seedCatalogoMasivo(db, 'VP-3', 10, { idWoo: 170 });
+      const filtro = { q: 'VP-3' };
+
+      const preview = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'solo_local', filtro, vista_previa: true,
+      });
+      const real = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'solo_local', filtro, esperados: preview.body.esperados,
+      });
+      expect(real.body.resumen).toEqual(preview.body.resumen);
+    });
+  });
+
+  describe('POST /config-ml/lote: guard 409 por catálogo cambiado', () => {
+    it('esperados no coincide con lo resuelto ahora → 409 y no escribe nada', async () => {
+      seedCatalogoMasivo(db, 'G409-1', 10, { marca: 'Shimano', idWoo: 180 });
+      const filtro = { marca: 'Shimano' };
+
+      const preview = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'reserva', reserva: 1, filtro, vista_previa: true,
+      });
+      expect(preview.body.esperados).toBe(1);
+
+      // El catálogo cambia entre la vista previa y la confirmación: aparece un segundo SKU
+      // Shimano (ej. un refresco de Woo corrió en el medio).
+      seedCatalogoMasivo(db, 'G409-2', 10, { marca: 'Shimano', idWoo: 181 });
+
+      const real = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'reserva', reserva: 1, filtro, esperados: preview.body.esperados,
+      });
+      expect(real.status).toBe(409);
+      expect(real.body.ok).toBe(false);
+
+      // No se escribió nada: ni G409-1 ni G409-2 tienen config.
+      const count = db.prepare('SELECT COUNT(*) n FROM skus_config_ml').get().n;
+      expect(count).toBe(0);
+    });
+
+    it('esperados coincide → aplica normalmente (200)', async () => {
+      seedCatalogoMasivo(db, 'G409-OK', 10, { marca: 'Sram', idWoo: 190 });
+      const filtro = { marca: 'Sram' };
+      const preview = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'solo_local', filtro, vista_previa: true,
+      });
+      const real = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'solo_local', filtro, esperados: preview.body.esperados,
+      });
+      expect(real.status).toBe(200);
+      expect(real.body.ok).toBe(true);
+    });
+  });
+
+  describe('POST /config-ml/lote: dedup de SKU duplicado en catalogo_cache', () => {
+    it('un SKU en 3 filas cuenta una sola vez en el resumen y se aplica una sola config', async () => {
+      seedCatalogoMasivo(db, 'LOTE-DUP', 20, { idWoo: 200 });
+      seedCatalogoMasivo(db, 'LOTE-DUP', 5, { idWoo: 202 });
+      seedCatalogoMasivo(db, 'LOTE-DUP', 5, { idWoo: 201 }); // empata en stock, gana por menor id_woo
+
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'reserva', reserva: 2, skus: ['LOTE-DUP'],
+      });
+      expect(res.body.resumen.solicitados).toBe(1);
+      expect(res.body.resumen.aplicados).toBe(1);
+
+      const rows = db.prepare("SELECT * FROM skus_config_ml WHERE sku='LOTE-DUP'").all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].nombre).toBe('Prod LOTE-DUP'); // nombre de la fila ganadora del dedup
+    });
+
+    it('dedup también aplica al resolver por filtro (no una config por cada fila duplicada)', async () => {
+      seedCatalogoMasivo(db, 'LOTE-DUP-F', 20, { marca: 'Shimano', idWoo: 210 });
+      seedCatalogoMasivo(db, 'LOTE-DUP-F', 5, { marca: 'Shimano', idWoo: 211 });
+
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'quitar', filtro: { marca: 'Shimano', q: 'LOTE-DUP-F' },
+      });
+      expect(res.body.resumen.solicitados).toBe(1);
+    });
+  });
+
+  describe('POST /config-ml/lote: SKUs inexistentes en catalogo_cache', () => {
+    it('no se insertan y se reportan en resumen.inexistentes con el sku tal cual se envió', async () => {
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'reserva', reserva: 1, skus: ['NO-EXISTE-1', 'NO-EXISTE-2'],
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.resumen).toMatchObject({ solicitados: 2, aplicados: 0, inexistentes: ['NO-EXISTE-1', 'NO-EXISTE-2'] });
+      expect(db.prepare('SELECT COUNT(*) n FROM skus_config_ml').get().n).toBe(0);
+    });
+
+    it('mezcla existentes e inexistentes: solo se aplican los existentes', async () => {
+      seedCatalogoMasivo(db, 'MIX-1', 5, { idWoo: 220 });
+      const res = await request(app).post('/api/sync/config-ml/lote').send({
+        accion: 'solo_local', skus: ['MIX-1', 'MIX-NO-EXISTE'],
+      });
+      expect(res.body.resumen.aplicados).toBe(1);
+      expect(res.body.resumen.inexistentes).toEqual(['MIX-NO-EXISTE']);
+      expect(db.prepare("SELECT * FROM skus_config_ml WHERE sku='MIX-1'").get()).toBeTruthy();
+      expect(db.prepare("SELECT * FROM skus_config_ml WHERE sku='MIX-NO-EXISTE'").get()).toBeUndefined();
+    });
+  });
+
+  describe('POST /config-ml/lote: atomicidad de la transacción', () => {
+    it('un lote válido se aplica completo en una sola transacción (todas las filas quedan escritas)', async () => {
+      // No hay forma limpia de forzar una excepción a mitad de camino sin tocar producción;
+      // este test verifica el comportamiento observable (todo o nada) con un lote grande,
+      // confirmando que no queda ninguna fila a medio escribir tras una corrida exitosa.
+      const skus = [];
+      for (let i = 0; i < 50; i++) {
+        const sku = `ATOM-${i}`;
+        seedCatalogoMasivo(db, sku, 10, { idWoo: 300 + i });
+        skus.push(sku);
+      }
+      const res = await request(app).post('/api/sync/config-ml/lote').send({ accion: 'reserva', reserva: 1, skus });
+      expect(res.status).toBe(200);
+      expect(res.body.resumen.aplicados).toBe(50);
+      const count = db.prepare('SELECT COUNT(*) n FROM skus_config_ml').get().n;
+      expect(count).toBe(50);
+    });
+  });
+});

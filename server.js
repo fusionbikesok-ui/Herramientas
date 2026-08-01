@@ -16,7 +16,7 @@ import { nuevosProductosRouter } from './routes/nuevosProductos.js';
 import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
 import { matcherRouter } from './routes/matcher.js';
-import { syncRouter, syncMlToWc, syncWcToMl, procesarReintentos, procesarCancelacionesMl } from './routes/sync.js';
+import { syncRouter, syncMlToWc, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
@@ -114,6 +114,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
   app.use('/sync-ml', express.static(path.join(__dirname, 'public/sync-ml')));
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
+  app.use('/vinculos', express.static(path.join(__dirname, 'public/vinculos')));
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
 
   // -- Error handler global (respaldo) ---------------------------------
@@ -186,6 +187,19 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('*/10 * * * *', () => {
         procesarCancelacionesMl(app._db, syncCfg)
           .catch(err => console.error('cancelaciones ML error:', err.message));
+      });
+
+      // Reactivación automática de pausadas por falta de stock que ya recuperaron stock.
+      // Las que no pasan el chequeo de precio quedan registradas como frenadas (badge en el home).
+      cron.schedule('*/10 * * * *', () => {
+        reactivarAutomatico(app._db, syncCfg)
+          .then(r => {
+            // Solo dejar rastro cuando hubo algo que hacer, para no ensuciar el log.
+            if (r && !r.omitido && (r.reactivadas || r.frenadas)) {
+              console.log(`reactivación automática: ${r.reactivadas} reactivadas, ${r.frenadas} frenadas`);
+            }
+          })
+          .catch(err => console.error('reactivación automática error:', err.message));
       });
 
       cron.schedule('*/5 * * * *', () => {

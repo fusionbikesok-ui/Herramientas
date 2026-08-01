@@ -5,18 +5,31 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // importado con globals de navegador falsificados a mano, ya que el
 // proyecto corre vitest en entorno 'node', sin jsdom).
 //
-// Objetivo: reproducir la secuencia de zoom 1→2→1→3→1 en el camino ZXing
-// (fallback iPhone/Safari sin BarcodeDetector) y confirmar que
-// decodeFromStream (el método que internamente hace reset() y podía matar
-// la cámara) se invoca UNA SOLA VEZ en toda la sesión, y que
-// stopContinuousDecode se invoca al menos una vez al pasar a zoom>1.
+// Desde el ROI (región de interés) siempre activo, el camino ZXing (fallback
+// iPhone/Safari sin BarcodeDetector) usa SIEMPRE el loop de canvas: ya no
+// existe el modo decodeFromStream directo sobre el <video> (mataba el ROI).
+// Objetivo: confirmar que decodeBitmap se invoca repetidamente sin importar
+// el nivel de zoom, y que decodeFromStream/stopContinuousDecode ya no forman
+// parte de la API interna usada por el módulo.
+//
+// IMPORTANTE (post-revisión): un <canvas> recién creado con
+// document.createElement('canvas') vale 300×150 por especificación del DOM,
+// NUNCA 0×0. El mock tiene que ser fiel a eso — con 0×0 un bug real de
+// dimensionado (usar "!canvas.width" como guard de "sin dimensionar") pasa
+// desapercibido en el test y rompe en el navegador. Por eso makeCanvasMock
+// arranca en 300/150, y hay un test dedicado que asierta la geometría real
+// de drawImage (los 8 argumentos) para no depender solo de conteos.
 
 function makeCanvasMock() {
-  return {
-    width: 0,
-    height: 0,
-    getContext: () => ({ drawImage: () => {} }),
+  const canvas = {
+    width: 300,  // valor real por defecto del DOM, no 0 — ver nota arriba.
+    height: 150,
+    drawCalls: [],
   };
+  canvas.getContext = () => ({
+    drawImage: (...args) => { canvas.drawCalls.push(args); },
+  });
+  return canvas;
 }
 
 function makeVideoMock() {
@@ -26,23 +39,47 @@ function makeVideoMock() {
     style: {},
     srcObject: null,
     play: async () => {},
+    // Sin parentElement real: el overlay ROI se protege con try/catch en el
+    // módulo (degradando el ROI efectivo a cuadro completo si falla), así
+    // que su ausencia no debe afectar la máquina de estados de zoom/lectura
+    // en los tests que no verifican geometría.
   };
 }
 
-function installFakeBrowserGlobals({ decodeFromStreamCalls, stopContinuousDecodeCalls }) {
+// Mock mínimo de un elemento genérico del DOM (div/span/style), fiel a lo que
+// ensureRoiWrap/ensureRoiOverlay necesitan: className/classList, children,
+// insertBefore/appendChild, setAttribute, style.
+function makeGenericElementMock() {
+  const el = {
+    children: [],
+    style: {},
+    className: '',
+    classList: { contains(c) { return el.className.split(/\s+/).includes(c); } },
+    setAttribute() {},
+    appendChild(child) { el.children.push(child); child.parentElement = el; return child; },
+    insertBefore(child) { el.children.unshift(child); child.parentElement = el; return child; },
+  };
+  Object.defineProperty(el, 'innerHTML', { set() {} });
+  return el;
+}
+
+// Para los tests de geometría del ROI necesitamos que attachRoiOverlay tenga
+// éxito (si no, se degrada a ROI 1/1 = cuadro completo, que es justamente el
+// fallback que NO queremos ejercitar acá). El <video> necesita un
+// parentElement real (mock) para que ensureRoiWrap pueda envolverlo.
+function makeVideoMockConOverlay() {
+  const video = makeVideoMock();
+  const parent = makeGenericElementMock();
+  parent.appendChild(video);
+  return video;
+}
+
+function installFakeBrowserGlobals({ decodeBitmapCalls, canvasRef }) {
   class FakeBrowserMultiFormatReader {
     reset() {}
-    async decodeFromStream(_stream, _video, _cb) {
-      decodeFromStreamCalls.count += 1;
-      // No invocamos el callback: no hace falta simular una decodificación
-      // real para probar la máquina de estados de zoom.
-      return Promise.resolve();
-    }
-    stopContinuousDecode() {
-      stopContinuousDecodeCalls.count += 1;
-    }
     decodeBitmap(_bitmap) {
-      return null; // sin código detectado en el frame, no importa para este test
+      if (decodeBitmapCalls) decodeBitmapCalls.count += 1;
+      return null; // sin código detectado en el frame, no importa para estos tests
     }
   }
 
@@ -57,11 +94,19 @@ function installFakeBrowserGlobals({ decodeFromStreamCalls, stopContinuousDecode
       HybridBinarizer: class { constructor() {} },
     },
     // BarcodeDetector deliberadamente ausente: fuerza el camino ZXing
-    // (fallback de iPhone/Safari), que es el que tiene el bug del reset().
+    // (fallback de iPhone/Safari).
   };
   global.document = {
-    createElement: (tag) => (tag === 'canvas' ? makeCanvasMock() : {}),
+    createElement: (tag) => {
+      if (tag === 'canvas') {
+        const c = makeCanvasMock();
+        if (canvasRef) canvasRef.current = c;
+        return c;
+      }
+      return makeGenericElementMock();
+    },
     head: { appendChild: () => {} },
+    getElementById: () => null,
   };
   global.navigator = {
     mediaDevices: {
@@ -80,19 +125,20 @@ describe('scanner.js — máquina de estados de zoom (camino ZXing, fallback iPh
     savedGlobals.document = global.document;
     savedGlobals.navigator = global.navigator;
     vi.resetModules();
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
     global.window = savedGlobals.window;
     global.document = savedGlobals.document;
     global.navigator = savedGlobals.navigator;
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it('la secuencia de zoom 1→2→1→3→1 llama decodeFromStream una sola vez y stopContinuousDecode al menos una vez', async () => {
-    const decodeFromStreamCalls = { count: 0 };
-    const stopContinuousDecodeCalls = { count: 0 };
-    installFakeBrowserGlobals({ decodeFromStreamCalls, stopContinuousDecodeCalls });
+  it('decodifica siempre por el loop de canvas (ROI activo) sin importar el zoom', async () => {
+    const decodeBitmapCalls = { count: 0 };
+    installFakeBrowserGlobals({ decodeBitmapCalls });
 
     const { open, setZoom, close } = await import('../public/lib/scanner.js');
 
@@ -102,45 +148,106 @@ describe('scanner.js — máquina de estados de zoom (camino ZXing, fallback iPh
 
     await open({ video, mode: 'single', onCode, onError });
 
-    // Al abrir con zoom=1 (default) debe usarse decodeFromStream una vez.
-    expect(decodeFromStreamCalls.count).toBe(1);
-    expect(stopContinuousDecodeCalls.count).toBe(0);
+    // A zoom 1 ya decodifica por el loop de canvas (ROI siempre activo).
+    await vi.advanceTimersByTimeAsync(350);
+    expect(decodeBitmapCalls.count).toBeGreaterThan(0);
 
-    setZoom(2); // primer paso a zoom>1: switch de una sola vía a modo loop/canvas
-    expect(stopContinuousDecodeCalls.count).toBe(1);
-    expect(decodeFromStreamCalls.count).toBe(1);
+    const before = decodeBitmapCalls.count;
+    setZoom(2);
+    await vi.advanceTimersByTimeAsync(350);
+    expect(decodeBitmapCalls.count).toBeGreaterThan(before);
 
-    setZoom(1); // vuelve a 1x: NO debe reactivar decodeFromStream (mataría la cámara)
-    expect(decodeFromStreamCalls.count).toBe(1);
-    expect(stopContinuousDecodeCalls.count).toBe(1);
-
-    setZoom(3); // sigue en modo loop: no debe volver a llamar stopContinuousDecode
-    expect(decodeFromStreamCalls.count).toBe(1);
-    expect(stopContinuousDecodeCalls.count).toBe(1);
-
-    setZoom(1); // otra vez a 1x: sigue sin reactivar decodeFromStream
-    expect(decodeFromStreamCalls.count).toBe(1);
-    expect(stopContinuousDecodeCalls.count).toBe(1);
+    setZoom(1); // volver a 1x no debe romper el loop
+    await vi.advanceTimersByTimeAsync(350);
+    expect(decodeBitmapCalls.count).toBeGreaterThan(before);
 
     close();
   });
 
-  it('si nunca se hace zoom>1, nunca se llama stopContinuousDecode y decodeFromStream se llama una sola vez', async () => {
-    const decodeFromStreamCalls = { count: 0 };
-    const stopContinuousDecodeCalls = { count: 0 };
-    installFakeBrowserGlobals({ decodeFromStreamCalls, stopContinuousDecodeCalls });
-
-    const { open, setZoom, close } = await import('../public/lib/scanner.js');
+  it('la API interna ya no expone decodeFromStream/stopContinuousDecode (eliminados junto al modo 1x directo)', async () => {
+    installFakeBrowserGlobals({ decodeBitmapCalls: { count: 0 } });
+    // Si el módulo llamara a estos métodos inexistentes, open() explotaría.
+    const { open, close } = await import('../public/lib/scanner.js');
 
     const video = makeVideoMock();
-    await open({ video, mode: 'single', onCode: () => {}, onError: () => {} });
-
-    setZoom(1);
-    setZoom(1);
-
-    expect(decodeFromStreamCalls.count).toBe(1);
-    expect(stopContinuousDecodeCalls.count).toBe(0);
+    await open({ video, mode: 'single', onCode: () => {}, onError: (msg) => { throw new Error(msg); } });
+    await vi.advanceTimersByTimeAsync(350);
 
     close();
+  });
+
+  describe('geometría real de drawRoiFrame (regresión del bug del canvas 300×150)', () => {
+    // vw=1920, vh=1080 (el ideal que pide open()); ROI_W=0.92, ROI_H=0.30 y
+    // CANVAS_MAX_W=960 son las constantes actuales de scanner.js. Si se
+    // recalibran ahí, estos números hay que recalcularlos a mano — es
+    // intencional: este test tiene que doler si alguien rompe el sizing.
+
+    it('a zoom 1x, dimensiona el canvas al ROI (nunca se queda en el 300×150 por defecto del DOM) y recorta la banda correcta', async () => {
+      const canvasRef = { current: null };
+      installFakeBrowserGlobals({ canvasRef });
+      const { open, close } = await import('../public/lib/scanner.js');
+
+      const video = makeVideoMockConOverlay();
+      await open({ video, mode: 'single', onCode: () => {}, onError: (msg) => { throw new Error(msg); } });
+      await vi.advanceTimersByTimeAsync(350);
+
+      const canvas = canvasRef.current;
+      // Bug real que este test tiene que cazar: si el guard de sizing usa
+      // "!canvas.width" contra un canvas que ya nace en 300×150, este bloque
+      // nunca corre y el canvas se queda en 300×150 (ratio 2:1) en vez del
+      // ratio real del ROI (~1766:324 ≈ 5.45:1).
+      expect(canvas.width).not.toBe(300);
+      expect(canvas.height).not.toBe(150);
+      expect(canvas.width).toBe(960);   // techo CANVAS_MAX_W
+      expect(canvas.height).toBeCloseTo(176, 0);
+
+      expect(canvas.drawCalls.length).toBeGreaterThan(0);
+      const [, sx, sy, sw, sh, dx, dy, dw, dh] = canvas.drawCalls[0];
+      // Región fuente: banda ROI centrada (92% ancho × 30% alto) del frame completo a 1x.
+      expect(sx).toBeCloseTo(76.8, 1);
+      expect(sy).toBeCloseTo(378, 1);
+      expect(sw).toBeCloseTo(1766.4, 1);
+      expect(sh).toBeCloseTo(324, 1);
+      // Destino: todo el canvas ya dimensionado.
+      expect(dx).toBe(0);
+      expect(dy).toBe(0);
+      expect(dw).toBe(canvas.width);
+      expect(dh).toBe(canvas.height);
+
+      close();
+    });
+
+    it('a zoom 3x, el recorte fuente se achica pero el destino sigue siendo el mismo canvas ya dimensionado', async () => {
+      const canvasRef = { current: null };
+      installFakeBrowserGlobals({ canvasRef });
+      const { open, setZoom, close } = await import('../public/lib/scanner.js');
+
+      const video = makeVideoMockConOverlay();
+      await open({ video, mode: 'single', onCode: () => {}, onError: (msg) => { throw new Error(msg); } });
+      await vi.advanceTimersByTimeAsync(350); // primer frame a 1x, fija el tamaño del canvas
+
+      const canvas = canvasRef.current;
+      const sizedWidth = canvas.width, sizedHeight = canvas.height;
+
+      setZoom(3);
+      canvas.drawCalls.length = 0; // solo nos interesan los frames posteriores al cambio de zoom
+      await vi.advanceTimersByTimeAsync(350);
+
+      expect(canvas.drawCalls.length).toBeGreaterThan(0);
+      const [, sx, sy, sw, sh, dx, dy, dw, dh] = canvas.drawCalls[0];
+      expect(sx).toBeCloseTo(665.6, 1);
+      expect(sy).toBeCloseTo(486, 1);
+      expect(sw).toBeCloseTo(588.8, 1);
+      expect(sh).toBeCloseTo(108, 1);
+      // El canvas NO se redimensiona al cambiar de zoom: se fija una sola vez.
+      expect(canvas.width).toBe(sizedWidth);
+      expect(canvas.height).toBe(sizedHeight);
+      expect(dx).toBe(0);
+      expect(dy).toBe(0);
+      expect(dw).toBe(sizedWidth);
+      expect(dh).toBe(sizedHeight);
+
+      close();
+    });
   });
 });
