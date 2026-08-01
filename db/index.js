@@ -60,6 +60,39 @@ export function openDb(dbPath) {
   try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN permalink TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN catalogo INTEGER'); } catch (_) {}
 
+  // Precio y stock de ML cacheados en el mismo barrido del matcher (el multiget ya trae el
+  // item completo). Habilitan el listado de vínculos sospechosos como query local, sin una
+  // llamada a la API por publicación. precio_actualizado_en permite mostrar la antigüedad
+  // del dato en la UI en vez de fingir que es en vivo.
+  try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN precio REAL'); } catch (_) {}
+  try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN available_quantity INTEGER'); } catch (_) {}
+  try { db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN precio_actualizado_en TEXT'); } catch (_) {}
+
+  // Publicaciones que recuperaron stock pero la reactivación automática NO reactivó porque
+  // el neto de ML quedaría por debajo del precio de contado. Se limpia sola: cuando el precio
+  // pasa el chequeo, se reactiva y se borra la fila.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS ml_reactivacion_frenada (
+    clave TEXT PRIMARY KEY,
+    sku TEXT,
+    motivo TEXT,
+    neto REAL,
+    precio_contado REAL,
+    deficit_pct REAL,
+    detectado_en TEXT NOT NULL
+  )`); } catch (_) {}
+
+  // Descartes de vínculos sospechosos ("revisado OK"). Guarda el VALOR descartado, no solo la
+  // clave: si el dato cambia (ej. el precio de ML se mueve otra vez), el sospechoso reaparece.
+  // PK compuesta porque una publicación puede tener una señal descartada y otra vigente.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS ml_vinculos_revisados (
+    clave TEXT NOT NULL,
+    senal TEXT NOT NULL,
+    valor_revisado TEXT,
+    revisado_por TEXT,
+    revisado_en TEXT NOT NULL,
+    PRIMARY KEY (clave, senal)
+  )`); } catch (_) {}
+
   // Auditoría de precios ML: neto (precio − comisión − envío) vs precio web por publicación.
   try { db.exec(`CREATE TABLE IF NOT EXISTS ml_precio_auditoria (
     clave TEXT PRIMARY KEY,
