@@ -122,7 +122,7 @@ async function cargar(){
     var r=await fetch('/api/sync/atencion/'+encodeURIComponent(CAT));
     var d=await r.json();
     if(!d.ok)throw new Error(d.error||'error');
-    cont.innerHTML=render(d.data||[]);
+    cont.innerHTML=render(d.data||[],d.total,d.truncado);
     if(CFG.modo==='mapeo')wireMapeo();
   }catch(err){
     cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
@@ -142,11 +142,16 @@ function pubCell(row){
   return '<div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(tit)+'</div><div class="pub-meta">'+meta+'</div></div></div>';
 }
 
-function render(rows){
+function render(rows,total,truncado){
   if(!rows.length){
     return '<div class="tbl-wrap"><div class="loading" style="color:var(--green)">✓ Nada pendiente en esta categoría.</div></div>';
   }
-  var h='<p class="sub" style="margin-bottom:10px">'+n(rows.length)+' ítem(s) pendientes.</p>';
+  var h='';
+  if(truncado && typeof total==='number' && total>rows.length){
+    h+='<p class="sub" style="margin-bottom:10px;color:var(--amber,#FBBF24)">⚠ Mostrando '+n(rows.length)+' de '+n(total)+' ítem(s) pendientes — hay más de los que se ven acá.</p>';
+  }else{
+    h+='<p class="sub" style="margin-bottom:10px">'+n(rows.length)+' ítem(s) pendientes.</p>';
+  }
   h+='<div class="tbl-wrap"><table><thead><tr>';
   if(CFG.modo==='mapeo')      h+='<th>Publicación</th><th>Asignar SKU de WooCommerce</th><th>Estado</th>';
   else if(CFG.modo==='diagnostico') h+='<th>Publicación</th><th>Diagnóstico</th><th>Acción</th>';

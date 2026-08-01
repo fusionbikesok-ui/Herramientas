@@ -60,7 +60,7 @@
   //   'vacio'   → fetch 2xx pero el payload está vacío (0 resultados reales).
   //   'error'   → fetch falló (status no-2xx, error de red, JSON inválido).
   //
-  // No es opcional: renderLista() más abajo obliga a resolver el estado
+  // No es opcional: renderState() más abajo obliga a resolver el estado
   // antes de pintar nada, para que sea imposible repetir el bug de
   // "Sin resultados" cuando en realidad el fetch falló.
   function fetchState(url, opts) {
@@ -114,7 +114,9 @@
       mensaje = opciones.mensajeVacio || 'No hay resultados.';
       mostrarReintentar = false;
     } else if (resultado.state === 'error') {
-      mensaje = (opciones.prefijoError || 'No se pudo cargar: ') + (resultado.error || 'error desconocido');
+      mensaje = typeof opciones.mensajeError === 'function'
+        ? opciones.mensajeError(resultado)
+        : (opciones.prefijoError || 'No se pudo cargar: ') + (resultado.error || 'error desconocido');
     } else {
       mensaje = 'Cargando…';
       mostrarReintentar = false;
@@ -138,17 +140,31 @@
   // (codigos) por inconsistentes y porque el segundo es indistinguible de
   // "no hay datos".
   function requirePermiso(tool) {
-    return fetch('/api/auth/me').then(function (r) { return r.json(); }).then(function (d) {
-      if (!d || !d.ok) return false;
-      var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
-      if (isAdmin || !tool) return true;
-      var ok = (d.permisos || []).some(function (p) { return p.herramienta === tool; });
-      if (!ok) {
-        window.location.href = '/herramientas/home/';
-        return false;
+    return fetch('/api/auth/me').then(function (r) {
+      if (r.status === 401) {
+        window.location.href = '/herramientas/login/?next=' +
+          encodeURIComponent(window.location.pathname + window.location.search);
+        return new Promise(function () {}); // corta la cadena: la navegación descarga la página
       }
-      return true;
-    }, function () { return false; });
+      return r.json().then(function (d) {
+        if (!d || !d.ok) {
+          window.location.href = '/herramientas/home/';
+          return new Promise(function () {});
+        }
+        var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+        if (isAdmin || !tool) return true;
+        var ok = (d.permisos || []).some(function (p) { return p.herramienta === tool; });
+        if (!ok) {
+          window.location.href = '/herramientas/home/';
+          return new Promise(function () {});
+        }
+        return true;
+      });
+    }, function () {
+      // error de red: no redirigimos a ciegas, pero tampoco silencio total.
+      window.alert('No se pudo verificar la sesión. Revisá tu conexión y recargá la página.');
+      return false;
+    });
   }
 
   // guardBfcache(): defensa en profundidad contra el bug de "logout + botón atrás".

@@ -154,8 +154,8 @@ input[type=file] { display:none; }
     <div class="page-desc">Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic.</div>
   </div>
 
-  <div id="banner-catalogo" role="alert" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--amber-bg,#3a2c0d);border:1px solid var(--amber-bd,#8a6d1a);color:var(--amber,#e8b93b);font-size:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <span>⚠ No se pudo cargar el catálogo de WooCommerce. La búsqueda y el matcheo automático NO están confiables ahora mismo: un producto puede existir aunque el buscador diga "Sin resultados".</span>
+  <div id="banner-catalogo" role="alert" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--amber-bg,#3a2c0d);border:1px solid var(--amber-bd,#8a6d1a);color:var(--amber,#e8b93b);font-size:13px;align-items:center;gap:10px;flex-wrap:wrap">
+    <span>⚠ No se pudo cargar el catálogo de WooCommerce. La búsqueda y el matcheo automático no son confiables ahora mismo: un producto puede existir aunque el buscador diga "Sin resultados".</span>
     <button type="button" onclick="cargarCatalogo()" style="border:1px solid currentColor;background:transparent;color:inherit;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer">Reintentar</button>
   </div>
 
@@ -929,15 +929,16 @@ function confirmarRecepcion() {
 
 function cargarHistorial() {
   document.getElementById('hist-lista').innerHTML = '<div class="empty-state"><div class="empty-icon">⏳</div>Cargando...</div>';
-  fetch('/api/recepciones')
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if (!d.ok) throw new Error(d.error);
-      renderHistorial(d.data || []);
-    })
-    .catch(function(err){
-      document.getElementById('hist-lista').innerHTML = '<div class="empty-state" style="color:var(--red)">Error: ' + esc(err.message) + '</div>';
+  Api.fetchState('/api/recepciones', {
+    esVacio: function(d){ return !d || !d.ok || !Array.isArray(d.data) || d.data.length===0; }
+  }).then(function(resultado){
+    if (resultado.state === 'ok') { renderHistorial(resultado.data.data || []); return; }
+    Api.renderState(document.getElementById('hist-lista'), resultado, {
+      mensajeVacio: 'No hay recepciones aún.',
+      prefijoError: 'No se pudo cargar el historial: ',
+      onReintentar: cargarHistorial
     });
+  });
 }
 
 function renderHistorial(lista) {

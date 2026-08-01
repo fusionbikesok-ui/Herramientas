@@ -2082,17 +2082,15 @@ export function syncRouter(db, cfg) {
   // Escapa los comodines propios de LIKE (%, _) y la barra de escape misma, para que un `q`
   // con esos caracteres literales (ej. "50%" o "A_B") no traiga de más — sin esto, ese "más"
   // se arrastra tal cual al lote si el operador después aplica "todo el filtro".
-  function escaparLike(valor) {
-    return valor.replace(/[\\%_]/g, (c) => `\\${c}`);
-  }
-
+  // Usa armarLike (lib/busqueda.js), el mismo helper que /buscar-sku: misma semántica de
+  // escape (ya viene envuelto en %...%), evita mantener dos implementaciones equivalentes.
   function construirFiltroCatalogo({ q, marca, estado, categoria }) {
     const clausulas = [];
     const params = [];
     if (q) {
-      const qEscapado = escaparLike(q);
+      const qLike = armarLike(q);
       clausulas.push("(c.sku LIKE ? ESCAPE '\\' OR c.nombre LIKE ? ESCAPE '\\')");
-      params.push(`%${qEscapado}%`, `%${qEscapado}%`);
+      params.push(qLike, qLike);
     }
     if (marca) {
       clausulas.push('c.marca = ?');

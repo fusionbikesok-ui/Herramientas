@@ -151,3 +151,40 @@
   outline-offset: 2px;
   border-radius: 4px;
 }
+
+/*
+ * .api-estado — usado por Api.renderState() (public/lib/api.js) para comunicar de forma
+ * consistente los 4 estados de una carga de datos (cargando/vacío/error) en cualquier
+ * página que lo use. Un solo lugar para decidir cómo se ve un fallo de fetch.
+ */
+.api-estado {
+  padding: 14px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  text-align: center;
+}
+.api-estado p { margin: 0 0 8px; }
+.api-estado--error {
+  background: var(--red-bg);
+  border: 1px solid var(--red-bd);
+  color: var(--red);
+}
+.api-estado--vacio {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.api-estado--cargando {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.btn-reintentar {
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}

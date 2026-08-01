@@ -196,7 +196,7 @@ function renderFrenadas(d){
    +'<b>no las reactivó a propósito</b>: al precio actual en ML, venderían por debajo del precio de contado. '
    +'Corregí el precio en ML y reintentá desde acá — el reintento vuelve a chequear el precio, no lo saltea.</p>';
   h+='<div class="tbl-wrap"><table><thead><tr>';
-  h+='<th aria-label="Seleccionar todas las publicaciones frenadas"><input type="checkbox" id="chk-all-fr" checked onclick="toggleAllFrenadas(this)" aria-label="Seleccionar todas las publicaciones frenadas"></th>';
+  h+='<th aria-label="Seleccionar todas las publicaciones frenadas"><input type="checkbox" id="chk-all-fr" onclick="toggleAllFrenadas(this)" aria-label="Seleccionar todas las publicaciones frenadas"></th>';
   h+='<th>Publicación</th><th class="num">Neto ML</th><th class="num">Precio contado</th>'
    +'<th class="num">Déficit</th><th>Motivo</th><th>Frenada desde</th></tr></thead><tbody>';
   pubs.forEach(function(p){
@@ -204,7 +204,7 @@ function renderFrenadas(d){
     var titulo=p.titulo||p.item_id||p.clave;
     var link=p.permalink?('<a href="'+esc(p.permalink)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">'+esc(titulo)+'</a>'):esc(titulo);
     h+='<tr>';
-    h+='<td><input type="checkbox" class="chk-fr" value="'+esc(p.item_id||'')+'" data-clave="'+esc(p.clave)+'" aria-label="Seleccionar '+esc(titulo)+'" '+(p.item_id?'checked':'disabled')+'></td>';
+    h+='<td><input type="checkbox" class="chk-fr" value="'+esc(p.item_id||'')+'" data-clave="'+esc(p.clave)+'" aria-label="Seleccionar '+esc(titulo)+'" '+(p.item_id?'onclick="actualizarBtnFrenadas()"':'disabled')+'></td>';
     h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+link+'</div>'
       +'<div class="pub-meta">'+esc(p.item_id||p.clave)+(p.variations_texto?(' · '+esc(p.variations_texto)):'')+'</div></div></div></td>';
     h+='<td class="num">'+money(p.neto)+'</td>';
@@ -219,11 +219,25 @@ function renderFrenadas(d){
     h+='</tr>';
   });
   h+='</tbody></table></div>';
-  h+='<div class="acciones"><button class="btn" id="btn-fr" onclick="reintentarFrenadasSel()">Reintentar reactivación</button></div>';
+  h+='<div class="acciones"><button class="btn" id="btn-fr" onclick="reintentarFrenadasSel()" disabled>Reintentar reactivación (0)</button></div>';
   return h;
 }
 
-function toggleAllFrenadas(cb){document.querySelectorAll('.chk-fr').forEach(function(x){if(!x.disabled)x.checked=cb.checked;});}
+// Mismo criterio que actualizarBtnReactivar(): default DESTILDADO, botón deshabilitado
+// con 0 seleccionados y label con el conteo real (evita el reintento masivo accidental
+// contra ML real que reportó el probador e2e).
+function actualizarBtnFrenadas(){
+  var btn=document.getElementById('btn-fr');
+  if(!btn) return;
+  var n=document.querySelectorAll('.chk-fr:checked').length;
+  btn.disabled=(n===0);
+  btn.textContent='Reintentar reactivación ('+n+')';
+  var chkAll=document.getElementById('chk-all-fr');
+  var total=document.querySelectorAll('.chk-fr:not(:disabled)').length;
+  if(chkAll) chkAll.checked=(total>0 && n===total);
+}
+
+function toggleAllFrenadas(cb){document.querySelectorAll('.chk-fr').forEach(function(x){if(!x.disabled)x.checked=cb.checked;});actualizarBtnFrenadas();}
 
 async function reintentarFrenadasSel(){
   // fr-resultado vive FUERA de frenadas-box a propósito: cargarFrenadas() reemplaza todo
