@@ -369,8 +369,14 @@
       var next = params.get('next');
       // Solo se respeta si es una ruta interna real (empieza con "/herramientas/" y no es
       // protocolo-relativo "//host/..." ni tiene esquema): evita que ?next= se use como
-      // open redirect hacia un sitio externo.
-      if (next && /^\/herramientas\/[a-zA-Z0-9/_-]*$/.test(next) && next.indexOf('//') !== 0) {
+      // open redirect hacia un sitio externo. Se admite un querystring acotado (p. ej.
+      // /herramientas/sync-detalle/?cat=errores) sin abrir el hueco: sigue anclado a
+      // "/herramientas/" y no permite otro "?"/esquema/"//" adentro del querystring.
+      if (
+        next &&
+        /^\/herramientas\/[a-zA-Z0-9/_-]*(\?[a-zA-Z0-9=&_.-]*)?$/.test(next) &&
+        next.indexOf('//') !== 0
+      ) {
         return next;
       }
       return '/herramientas/home/';

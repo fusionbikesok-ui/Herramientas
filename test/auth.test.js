@@ -1,11 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import express from 'express';
 import session from 'express-session';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
 import { authRouter } from '../routes/auth.js';
-import { hashPassword } from '../lib/auth.js';
+import { hashPassword, registrarLoginFallido, _tamanioIntentosLoginParaTest } from '../lib/auth.js';
 
 const TEST_DB = './test/tmp-auth-route.sqlite';
 
@@ -84,5 +84,31 @@ describe('routes/auth — cabeceras y rate limiting', () => {
     const res = await agent.post('/api/auth/login').send({ username: 'rl-atacado', password: 'otra123456' });
     expect(res.status).toBe(200);
     db.close();
+  });
+
+  it('el sweep perezoso evita que intentosLogin crezca sin cota con claves rotadas (scanner)', () => {
+    // Simula un scanner que rota usuario/IP: 250 claves distintas, todas fallando una sola
+    // vez y quedando "viejas" en el tiempo. El sweep se dispara cada 200 fallos registrados
+    // (ver REGISTROS_LOGIN_ANTES_DE_SWEEP en lib/auth.js) y purga las inactivas hace más de
+    // 15 minutos, así que el mapa no debería terminar con las 250 claves vivas.
+    vi.useFakeTimers();
+    try {
+      const base = Date.now();
+      for (let i = 0; i < 250; i++) {
+        vi.setSystemTime(base + i); // cada clave "envejece" un poco más rápido que la próxima
+        registrarLoginFallido(`scanner-key-${i}`);
+      }
+      // Avanza más de la ventana de inactividad (15 min) y registra fallos nuevos hasta
+      // cruzar el umbral del sweep (200) — eso dispara la purga de las 250 claves viejas.
+      vi.setSystemTime(base + 16 * 60 * 1000);
+      for (let i = 0; i < 200; i++) {
+        registrarLoginFallido(`clave-nueva-${i}`);
+      }
+      // Las 250 claves originales ya vencieron; solo deberían sobrevivir las 200 nuevas
+      // (más margen si alguna se resolvió antes del umbral exacto de disparo del sweep).
+      expect(_tamanioIntentosLoginParaTest()).toBeLessThan(250);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

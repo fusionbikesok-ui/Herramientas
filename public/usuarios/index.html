@@ -10,7 +10,16 @@
     --bg:#0C0F16;--surface:#141A25;--surface2:#1B2235;--border:#24304A;
     --accent:#2DB8E8;--accent-dim:rgba(45,184,232,.10);--text:#E4EAF4;--muted:#7A87A3;
     --green:#34D399;--red:#F87171;--amber:#F5B942;
+  --red-bg:rgba(248,113,113,.10);--red-bd:rgba(248,113,113,.35);
   }
+  /* .api-estado / .btn-reintentar — mismas clases que public/lib/theme.css usa para
+     Api.renderState(), reproducidas acá con la paleta LOCAL de esta página (que
+     intencionalmente no enlaza theme.css, ver comentario en ese archivo). */
+  .api-estado{padding:14px 16px;border-radius:10px;font-size:13px;text-align:center}
+  .api-estado p{margin:0 0 8px}
+  .api-estado--error{background:var(--red-bg);border:1px solid var(--red-bd);color:var(--red)}
+  .api-estado--vacio{background:var(--surface2);border:1px solid var(--border);color:var(--muted)}
+  .btn-reintentar{border:1px solid currentColor;background:transparent;color:inherit;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer}
   body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;padding:28px 22px}
   .wrap{max-width:1080px;margin:0 auto}
   header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:6px;flex-wrap:wrap}
@@ -121,6 +130,7 @@
   </div>
 </div>
 
+<script src="../lib/api.js"></script>
 <script>
 var HERRAMIENTAS = [];
 var editId = null; // null = alta
@@ -142,11 +152,36 @@ async function api(url, opts){
   return d;
 }
 
+// tablaEstado(): reusa Api.renderState (mismo helper y clases que recepcion/etiquetas)
+// para comunicar error/vacío en la tabla, pero el contenedor real es <tbody> — un <div>
+// ahí es HTML inválido, así que se arma en un nodo temporal y se reubica dentro de un
+// <tr><td colspan> válido, conservando el listener de "Reintentar".
+function tablaEstado(resultado, opciones){
+  var tmp = document.createElement('div');
+  Api.renderState(tmp, resultado, opciones);
+  var tbody = document.getElementById('tbody');
+  tbody.innerHTML = '<tr><td colspan="5">' + tmp.innerHTML + '</td></tr>';
+  var btn = tbody.querySelector('[data-api-reintentar]');
+  if (btn && opciones.onReintentar) btn.addEventListener('click', opciones.onReintentar);
+}
+
 async function cargar(){
-  var h = await api('/api/usuarios/herramientas');
-  HERRAMIENTAS = h.herramientas;
-  var d = await api('/api/usuarios');
-  renderTabla(d.usuarios);
+  try {
+    var h = await api('/api/usuarios/herramientas');
+    HERRAMIENTAS = h.herramientas;
+    var d = await api('/api/usuarios');
+    if (!d.usuarios || !d.usuarios.length) {
+      tablaEstado({state:'vacio'}, {mensajeVacio:'Sin usuarios.'});
+      return;
+    }
+    renderTabla(d.usuarios);
+  } catch(e) {
+    tablaEstado({state:'error', error:(e && e.message) || 'error desconocido'}, {
+      prefijoError: 'No se pudo cargar la lista de usuarios: ',
+      onReintentar: cargar
+    });
+    throw e; // preserva el .catch(...) de abajo que ya muestra el toast showMsg
+  }
 }
 
 function renderTabla(usuarios){
