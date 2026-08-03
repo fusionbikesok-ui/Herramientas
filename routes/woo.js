@@ -87,12 +87,13 @@ export async function refrescarCatalogo(db, cfg) {
 
   const now = new Date().toISOString();
   const upsert = db.prepare(`
-    INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, atributos_json, marca, gtin, actualizado_en)
-    VALUES (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @atributos_json, @marca, @gtin, @actualizado_en)
+    INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, regular_price, atributos_json, marca, gtin, actualizado_en)
+    VALUES (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @regular_price, @atributos_json, @marca, @gtin, @actualizado_en)
     ON CONFLICT(id_woo) DO UPDATE SET
       nombre = excluded.nombre, sku = excluded.sku, tipo = excluded.tipo,
       id_padre = excluded.id_padre, stock = excluded.stock,
       categorias_json = excluded.categorias_json, img = excluded.img, precio = excluded.precio,
+      regular_price = excluded.regular_price,
       atributos_json = excluded.atributos_json, marca = excluded.marca, gtin = excluded.gtin,
       actualizado_en = excluded.actualizado_en
   `);

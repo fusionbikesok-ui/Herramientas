@@ -12,7 +12,7 @@ import { mlFetch, bootstrapToken } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
-import { netoMl, veredictoNeto, precioWebClave, precioContado } from '../lib/mlPrecios.js';
+import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
 import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
@@ -358,6 +358,81 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     return;
   }
 
+  // Chequeo local barato ANTES de gastar una llamada a ML (2da pasada del revisor,
+  // 2026-08-03): una orden con reserva RETENIDA por fail-closed nunca se sella en
+  // ordenes_ml_procesadas a propósito, así que el cron (cada 3min) la retoma en cada ciclo
+  // hasta que un humano la resuelva. Antes de mover shipments más arriba, esa repetición
+  // salía por el fallo de PK del INSERT de la reserva sin ninguna llamada externa; ahora,
+  // sin este corte, consultaría /shipments/{id} en CADA ciclo — una sola orden retenida
+  // esperando intervención humana son ~480 llamadas/día desperdiciadas compitiendo por el
+  // rate-limit de ML (el mismo problema que ya documentó procesarReintentos). Esta consulta
+  // es la MISMA que ya hace el INSERT de más abajo (existe la fila, cualquiera sea su
+  // estado) — no cambia ninguna semántica, solo evita la llamada a ML cuando ya sabemos que
+  // esta corrida no va a llegar a reservar/crear nada.
+  if (db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(orderId)) {
+    return;
+  }
+
+  // Envío/destinatario vía API de shipments de ML — dato accesorio, FAIL-OPEN a propósito
+  // (decisión del usuario, 2026-08-03): si la consulta falla, tira error, o la orden no
+  // tiene envío asociado, el pedido se crea igual sin estos datos. Perder la venta entera
+  // por no poder resolver un dato accesorio sería peor que crearla incompleta.
+  //
+  // Se resuelve ACÁ, ANTES de la reserva atómica de abajo (hallazgo del revisor, 2026-08-03):
+  // `mlFetch` puede dormir hasta `Retry-After` segundos sin cota ante un 429 de ML (ver
+  // lib/mlClient.js). Si este await quedara DESPUÉS de reservar, la fila podría acercarse al
+  // umbral de 60min de limpieza de reservas abandonadas de más arriba mientras el proceso
+  // sigue vivo, y otro proceso la liberaría por error → duplicado. Poniéndolo antes, la
+  // ventana de la reserva no crece nada: los datos igual entran en el mismo POST de abajo.
+  let shipping;
+  let metodoEnvio = null;
+  if (orden.shipping?.id) {
+    try {
+      const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${orden.shipping.id}`);
+      // mlFetch usa validateStatus: () => true (nunca lanza por HTTP status) — un
+      // 403/404/500 de ML llega acá como respuesta normal, no como excepción. Hay que
+      // chequear el status a mano (mismo patrón que routes/preparacion.js) o un error de
+      // ML pasaría desapercibido: el pedido se crearía sin destinatario y sin ningún rastro.
+      if (shipResp.status !== 200) {
+        throw new Error(`ML respondió ${shipResp.status} al consultar /shipments/${orden.shipping.id}`);
+      }
+      const ship = shipResp.data;
+      const addr = ship?.receiver_address;
+      // Solo se arma `shipping` si hay al menos un dato real (nombre o calle) — si no, un
+      // objeto shipping vacío deja al pedido con una dirección "declarada" pero en blanco,
+      // y la preparación/etiqueta muestra un destinatario vacío en vez de dejar clara la
+      // ausencia del dato (hallazgo del revisor, 2026-08-03).
+      if (addr && (addr.receiver_name || addr.street_name)) {
+        // Woo espera first_name/last_name separados; receiver_name de ML viene junto. Se
+        // parte por el primer espacio (mejor esfuerzo: "Juan Pérez" → first="Juan",
+        // last="Pérez") en vez de mandar todo en first_name y dejar last_name vacío, que
+        // rompe cualquier listado/etiqueta que dependa de last_name.
+        const nombreCompleto = (addr.receiver_name || '').trim();
+        const espacio = nombreCompleto.indexOf(' ');
+        const firstName = espacio === -1 ? nombreCompleto : nombreCompleto.slice(0, espacio);
+        const lastName = espacio === -1 ? '' : nombreCompleto.slice(espacio + 1);
+        shipping = {
+          first_name: firstName,
+          last_name: lastName,
+          address_1: [addr.street_name, addr.street_number].filter(Boolean).join(' '),
+          address_2: [addr.comment, addr.floor ? `Piso ${addr.floor}` : '', addr.apartment]
+            .filter(Boolean).join(' '),
+          city: addr.city?.name || '',
+          state: addr.state?.name || '',
+          postcode: addr.zip_code || '',
+          country: 'AR',
+        };
+      }
+      metodoEnvio = ship?.logistic_type || ship?.shipping_option?.name || null;
+    } catch (eShip) {
+      // No aborta, no libera ni retiene la reserva: es solo un aviso para detectar el caso.
+      logSync(db, {
+        direccion: 'ml_wc', clave: orderId, estado: 'error',
+        error: `No se pudo consultar el envío ML (fail-open, el pedido se crea igual sin esos datos): ${eShip.message}`,
+      });
+    }
+  }
+
   // Reserva atómica de ml_order_id (ml_order_id es PRIMARY KEY): entre este chequeo y la
   // creación real del pedido en Woo hay varios `await` (precios, POST /orders) que ceden el
   // event loop. Si dos procesos corren este sync en paralelo (ver incidente 2026-07-25:
@@ -405,7 +480,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
 
     // Decisión del usuario (2026-08-03): el pedido WC NO lleva el precio de venta de ML
     // (item.unit_price) como precio de línea — quiere el precio de CONTADO de la propia
-    // web. `catalogo_cache.precio` es el precio de LISTA; precioContado() calcula el 2/3
+    // web. `catalogo_cache.regular_price` es el precio de LISTA; precioContado() calcula el 2/3
     // real de contado/transferencia (ver lib/mlPrecios.js). Si se dejara que Woo pusiera
     // el precio solo con product_id/quantity, Woo aplicaría el de LISTA, no el de contado
     // — por eso hay que fijar subtotal/total a mano.
@@ -414,7 +489,26 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     // variation_id + quantity y SIN subtotal/total, para que Woo aplique el precio que
     // tiene registrado (de lista, no de contado) — mejor una línea con precio de lista que
     // ninguna venta registrada. NUNCA se cae al unit_price de ML en este camino.
-    const contado = precioContado(prod.precio);
+    //
+    // El contado SIEMPRE se calcula sobre el precio de LISTA (`regular_price`), NUNCA sobre
+    // el vigente (`precio`): si el producto está en oferta, `precio` ya es el sale_price, y
+    // aplicarle otro descuento de contado encima "acumularía" ambos. Hallazgo de la 2da
+    // pasada del revisor (2026-08-03): el fallback `regular_price ?? precio` que hubo acá
+    // violaba esa regla EN SILENCIO durante toda la ventana de transición entre el refresco
+    // de catálogo (15min) y el de ventas (3min) — exactamente el caso real que la regla
+    // existe para evitar, sin una sola línea en sync_log. Se sacó: si `regular_price` es
+    // null (catálogo sin refrescar todavía, o directamente sin precio de lista cargado), la
+    // línea cae en la MISMA rama fail-open que "sin precio en catalogo_cache" de abajo — sin
+    // subtotal/total, para que Woo aplique el precio de lista que tiene cargado. Nunca
+    // aplica un descuento sobre otro, nunca pierde la venta, reusa un camino ya testeado.
+    // Doble redondeo (hallazgo del tester, 2026-08-03): precioContado() ya redondea el
+    // UNITARIO a 2 decimales; multiplicarlo por qty y volver a redondear el total puede
+    // desviarse hasta un centavo por unidad extra (regular_price=1000, qty=3 → unitario
+    // redondeado 666.67 × 3 = 2000.01, cuando el total exacto es 2000.00). totalContado()
+    // calcula el total sobre el precio de lista sin pasar por el unitario ya redondeado, y
+    // redondea UNA sola vez, al final — ver JSDoc en lib/mlPrecios.js.
+    const contado = precioContado(prod.regular_price); // solo para el chequeo de "hay precio"
+    const total = totalContado(prod.regular_price, qty);
 
     const li = { quantity: qty };
     if (prod.tipo === 'variation' && prod.id_padre) {
@@ -424,14 +518,23 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       li.product_id = prod.id_woo;
     }
     if (contado != null && contado > 0) {
-      const total = (contado * qty).toFixed(2);
-      li.subtotal = total;
-      li.total = total;
+      // En Woo, subtotal y total de la línea son ambos el importe de la línea COMPLETA
+      // (no el unitario) — los dos toman el mismo total ya redondeado una sola vez.
+      // `.toFixed(2)` acá es solo formato de string (2 decimales fijos para la API), no un
+      // segundo redondeo: `total` ya viene con precisión de 2 decimales desde totalContado().
+      const totalStr = total.toFixed(2);
+      li.subtotal = totalStr;
+      li.total = totalStr;
     } else {
       // No marca algunSinMapeo: la línea SÍ se creó, solo sin precio de contado propio.
+      // Se distingue el motivo (regular_price ausente vs. sin ningún precio) para poder
+      // priorizar el refresco de catálogo si el aviso es el primero.
+      const motivo = prod.regular_price == null
+        ? 'catalogo_cache.regular_price (precio de LISTA) vacío — probablemente el catálogo no se refrescó desde que se agregó este campo'
+        : 'catalogo_cache.regular_price es 0/inválido';
       logSync(db, {
         direccion: 'ml_wc', clave, sku, estado: 'error',
-        error: 'SKU sin precio en catalogo_cache — línea creada con el precio registrado en WC (de lista, no de contado)',
+        error: `SKU sin precio de LISTA en catalogo_cache (${motivo}) — línea creada con el precio registrado en WC, no con el de contado`,
       });
     }
     lineItems.push(li);
@@ -450,59 +553,56 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
 
   const billing = billingWcDesdeOrdenMl(orden);
 
-  // Envío/destinatario vía API de shipments de ML — dato accesorio, FAIL-OPEN a propósito
-  // (decisión del usuario, 2026-08-03): si la consulta falla, tira error, o la orden no
-  // tiene envío asociado, el pedido se crea igual sin estos datos. Perder la venta entera
-  // por no poder resolver un dato accesorio sería peor que crearla incompleta. Va ANTES
-  // del POST porque estos datos entran en el mismo POST (nunca hay un PUT posterior).
-  let shipping;
-  let metodoEnvio = null;
-  if (orden.shipping?.id) {
-    try {
-      const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${orden.shipping.id}`);
-      const ship = shipResp?.data;
-      const addr = ship?.receiver_address;
-      if (addr) {
-        shipping = {
-          first_name: addr.receiver_name || '',
-          address_1: [addr.street_name, addr.street_number].filter(Boolean).join(' '),
-          address_2: [addr.comment, addr.floor ? `Piso ${addr.floor}` : '', addr.apartment]
-            .filter(Boolean).join(' '),
-          city: addr.city?.name || '',
-          state: addr.state?.name || '',
-          postcode: addr.zip_code || '',
-          country: 'AR',
-        };
-      }
-      metodoEnvio = ship?.logistic_type || ship?.shipping_option?.name || null;
-    } catch (eShip) {
-      // No aborta, no libera ni retiene la reserva: es solo un aviso para detectar el caso.
-      logSync(db, {
-        direccion: 'ml_wc', clave: orderId, estado: 'error',
-        error: `No se pudo consultar el envío ML (fail-open, el pedido se crea igual sin esos datos): ${eShip.message}`,
-      });
-    }
-  }
-
   // Datos informativos de la venta ML — nunca se usan como precio de línea (eso ya se
-  // resolvió arriba con precioContado). sale_fee es la comisión de ML por order_item; si
-  // no viene, el neto NO se estima/inventa, se omite ese dato (decisión del plan).
-  const totalMlPagado = items.reduce((acc, oi) => acc + (oi.unit_price ?? 0) * (oi.quantity ?? 1), 0);
-  const tieneSaleFee = items.some(oi => oi.sale_fee != null);
-  const netoMlTotal = tieneSaleFee
-    ? items.reduce((acc, oi) => acc + (oi.unit_price ?? 0) * (oi.quantity ?? 1) - (oi.sale_fee ?? 0), 0)
+  // resolvió arriba con precioContado). "No inventar" aplica a los dos:
+  // - precio pagado total: si ALGÚN unit_price vino null, no se suma un total parcial que
+  //   parecería completo — se omite la meta entera. Además, ojo: este total es de la orden
+  //   ML COMPLETA (todos los order_items), incluidos ítems sin mapeo/sin SKU en WC que no
+  //   llegaron a lineItems — no es "lo que se facturó en este pedido WC".
+  // - neto: sale_fee es la comisión de ML por order_item; hace falta que TODOS los items la
+  //   tengan (no alcanza con que uno la tenga) para no mezclar neto real con bruto de otros
+  //   ítems y presentar un neto sobreestimado como si fuera un dato confiable. Además
+  //   (2da pasada del revisor, 2026-08-03): en el resto del repo la comisión de ML es POR
+  //   UNIDAD (ver saleFeeMl en lib/mlPrecios.js, que consulta listing_prices con el precio
+  //   UNITARIO) — no hay forma de confirmar ahora, sin una orden real con quantity>1, si
+  //   `order_items[].sale_fee` viene también por unidad o ya multiplicado por la cantidad.
+  //   Restando solo UN sale_fee de un total ×quantity subestimaría la comisión real en
+  //   ítems con más de una unidad, presentando un neto inflado como dato duro. Criterio de
+  //   "no inventar": si algún ítem tiene quantity>1, se omite la meta entera (mejor ausente
+  //   que falsa) hasta poder confirmar la semántica exacta contra una orden real.
+  const tienenUnitPrice = items.every(oi => oi.unit_price != null);
+  const totalMlPagado = tienenUnitPrice
+    ? items.reduce((acc, oi) => acc + oi.unit_price * (oi.quantity ?? 1), 0)
+    : null;
+  const tienenSaleFee = items.length > 0 && items.every(oi => oi.sale_fee != null);
+  const soloCantidadUnitaria = items.every(oi => (oi.quantity ?? 1) <= 1);
+  const netoMlTotal = (tienenSaleFee && soloCantidadUnitaria)
+    ? items.reduce((acc, oi) => acc + (oi.unit_price ?? 0) * (oi.quantity ?? 1) - oi.sale_fee, 0)
     : null;
 
-  const metaData = [
-    { key: '_ml_order_id', value: orderId },
-    { key: '_ml_precio_pagado_total', value: totalMlPagado.toFixed(2) },
-  ];
+  const metaData = [{ key: '_ml_order_id', value: orderId }];
+  if (totalMlPagado != null) metaData.push({ key: '_ml_precio_pagado_total', value: totalMlPagado.toFixed(2) });
   if (netoMlTotal != null) metaData.push({ key: '_ml_neto_estimado', value: netoMlTotal.toFixed(2) });
   if (metodoEnvio) metaData.push({ key: '_ml_metodo_envio', value: metodoEnvio });
 
   const linkVentaMl = `https://www.mercadolibre.com.ar/ventas/${orderId}/detalle`;
   const nicknameComprador = orden.buyer?.nickname ?? '';
-  const customerNote = `Venta MercadoLibre #${orderId} (${orden.date_created ?? ''}) — comprador: ${nicknameComprador}. ${linkVentaMl}`;
+  // Fecha en hora LOCAL (es-AR), no ISO crudo con milisegundos/Z: la lee una persona en el
+  // admin de Woo, no un programa, y un ISO en UTC confunde la hora real (ver la memoria del
+  // proyecto sobre Woo interpretando fechas). Si falta algún dato (fecha o nickname), se
+  // omite esa parte entera de la nota en vez de dejar paréntesis/frases vacías.
+  let fechaLocal = '';
+  if (orden.date_created) {
+    const d = new Date(orden.date_created);
+    fechaLocal = Number.isNaN(d.getTime())
+      ? ''
+      : d.toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+  }
+  const partesNota = [`Venta MercadoLibre #${orderId}`];
+  if (fechaLocal) partesNota.push(`(${fechaLocal})`);
+  if (nicknameComprador) partesNota.push(`— comprador: ${nicknameComprador}.`);
+  partesNota.push(linkVentaMl);
+  const notaPrivada = partesNota.join(' ');
 
   try {
     const resp = await wooFetch(wooCfg, '/orders', 'post', {
@@ -512,7 +612,6 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       billing,
       ...(shipping ? { shipping } : {}),
       meta_data: metaData,
-      customer_note: customerNote,
     });
 
     const wcOrderId = resp.data.id;
@@ -531,6 +630,23 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       INSERT OR IGNORE INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en)
       VALUES (?, ?, ?, ?, ?)
     `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), algunSinMapeo ? 'parcial' : 'ok', now());
+
+    // Nota PRIVADA del pedido (decisión del usuario, 2026-08-03): customer_note del POST de
+    // creación la ve el cliente en la web y en los mails — se pasa a un recurso separado
+    // (POST /orders/{id}/notes con customer_note:false) para que quede solo del lado admin.
+    // No es una modificación del pedido (no viola la regla de "nada de PUT/PATCH": es un
+    // POST a un sub-recurso de notas, no un UPDATE de la orden), y es FAIL-OPEN: el pedido
+    // ya existe y no se toca, no se reintenta ni se retiene/libera la reserva por esto.
+    try {
+      await wooFetch(wooCfg, `/orders/${wcOrderId}/notes`, 'post', {
+        note: notaPrivada, customer_note: false,
+      });
+    } catch (eNota) {
+      logSync(db, {
+        direccion: 'ml_wc', clave: orderId, estado: 'error',
+        error: `No se pudo agregar la nota privada al pedido ${wcOrderId} (fail-open, el pedido queda creado igual): ${eNota.message}`,
+      });
+    }
   } catch (e) {
     // El POST pudo haber tenido EXITO en el servidor de Woo aunque la respuesta se haya
     // perdido del lado del cliente (timeout de 20s de wooFetch, corte de red). Liberar la

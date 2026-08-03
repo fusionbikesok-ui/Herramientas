@@ -51,11 +51,14 @@ function seedMatcher(db) {
   ).run('MLA200|987', 'CASCO-L', 'Casco L', 'asignar', now);
 }
 
-function seedCatalogo(db, { precio = 300 } = {}) {
+// Por default, regularPrice = precio (sin oferta: LISTA y vigente coinciden), salvo que un
+// test pase explícitamente otro valor (u null) para simular oferta o catálogo sin refrescar.
+function seedCatalogo(db, { precio = 300, regularPrice } = {}) {
   const now = new Date().toISOString();
+  const rp = regularPrice !== undefined ? regularPrice : precio;
   db.prepare(
-    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, precio, now);
+    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, precio, rp, now);
 }
 
 // Publicación ML en cache — syncWcToMl solo empuja stock a publicaciones activas.
@@ -173,7 +176,7 @@ describe('syncMlToWc', () => {
 
     const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'error' AND sku = 'BIKE-001'").get();
     expect(log).toBeTruthy();
-    expect(log.error).toMatch(/sin precio en catalogo_cache/);
+    expect(log.error).toMatch(/sin precio de LISTA en catalogo_cache/);
 
     // La venta SÍ se crea: línea con product_id/quantity, sin subtotal/total, y NUNCA con
     // el unit_price de ML como precio.
@@ -183,6 +186,72 @@ describe('syncMlToWc', () => {
 
     // algunSinMapeo NO debe marcarse por esto — la línea sí se creó.
     const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NOPRICE');
+    expect(proc.estado).toBe('ok');
+  });
+
+  // Hallazgo del revisor (2026-08-03): catalogo_cache.precio es el VIGENTE, que si el
+  // producto está en oferta ya es el sale_price. El contado tiene que calcularse siempre
+  // sobre regular_price (LISTA), no sobre precio, o el descuento de contado se "acumularía"
+  // con el de la oferta.
+  it('producto en oferta: usa precioContado(regular_price), no precioContado(precio de oferta)', async () => {
+    // Lista $1.000.000, en oferta a $800.000 → contado correcto sobre LISTA: 666666.67 (no 533333.33)
+    seedCatalogo(db, { precio: 800000, regularPrice: 1000000 });
+    const orden = {
+      id: 'ORD-OFERTA',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 750000 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 5010 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].line_items).toEqual([
+      { quantity: 1, subtotal: '666666.67', total: '666666.67', product_id: 100 },
+    ]);
+  });
+
+  // 2da pasada del revisor (2026-08-03): el fallback `regular_price ?? precio` violaba en
+  // silencio la regla "el contado se calcula sobre LISTA, nunca sobre el vigente" durante
+  // toda la ventana de transición (catálogo sin refrescar todavía, o producto en oferta sin
+  // regular_price cargado). Se sacó: sin regular_price, la línea cae en el MISMO fail-open
+  // que "sin precio en catalogo_cache" — nunca aplica el descuento de contado sobre el
+  // precio vigente, aunque este último exista y sea distinto de null.
+  it('regular_price NULL (catálogo sin refrescar, o sin precio de lista cargado) → fail-open sin subtotal/total, NUNCA cae a `precio`', async () => {
+    // precio (vigente) sí tiene un valor — si hubiera fallback, la línea saldría con
+    // contado sobre 300 (200.00). Con el fix, debe salir SIN subtotal/total.
+    seedCatalogo(db, { precio: 300, regularPrice: null });
+    const orden = {
+      id: 'ORD-SIN-REFRESH',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 5011 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].line_items).toEqual([{ quantity: 1, product_id: 100 }]);
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'error' AND sku = 'BIKE-001'").get();
+    expect(log).toBeTruthy();
+    expect(log.error).toMatch(/sin precio de LISTA en catalogo_cache/);
+    expect(log.error).toMatch(/no se refrescó/);
+
+    // La venta se crea igual, no se pierde (algunSinMapeo no se marca por esto).
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-SIN-REFRESH');
     expect(proc.estado).toBe('ok');
   });
 
@@ -372,7 +441,8 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     const body = orderCall[3];
 
     expect(body.shipping).toEqual({
-      first_name: 'Juan Pérez',
+      first_name: 'Juan',
+      last_name: 'Pérez',
       address_1: 'Av Siempreviva 742',
       address_2: 'Piso 3 B',
       city: 'CABA',
@@ -388,9 +458,17 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     expect(meta._ml_neto_estimado).toBe('230.00'); // 250 - sale_fee 20
     expect(meta._ml_metodo_envio).toBe('self_service');
 
-    expect(body.customer_note).toContain('ORD-SHIP-OK');
-    expect(body.customer_note).toContain('comprador123');
-    expect(body.customer_note).toContain('https://www.mercadolibre.com.ar/ventas/ORD-SHIP-OK/detalle');
+    // La nota va PRIVADA (POST /orders/{id}/notes con customer_note:false), NO en el
+    // customer_note del pedido (eso lo vería el cliente en la web/mails).
+    expect(body.customer_note).toBeUndefined();
+    const notaCall = wooFetch.mock.calls.find(c => c[1] === `/orders/6001/notes` && c[2] === 'post');
+    expect(notaCall).toBeTruthy();
+    expect(notaCall[3].customer_note).toBe(false);
+    expect(notaCall[3].note).toContain('ORD-SHIP-OK');
+    expect(notaCall[3].note).toContain('comprador123');
+    expect(notaCall[3].note).toContain('https://www.mercadolibre.com.ar/ventas/ORD-SHIP-OK/detalle');
+    // La fecha va formateada en local (es-AR), no como ISO crudo con milisegundos/Z.
+    expect(notaCall[3].note).not.toContain('2026-08-01T12:00:00.000Z');
 
     // El precio de línea sigue siendo el de contado del catálogo propio, no el de ML.
     expect(body.line_items).toEqual([{ quantity: 1, subtotal: '200.00', total: '200.00', product_id: 100 }]);
@@ -430,6 +508,122 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     expect(proc.estado).toBe('ok');
   });
 
+  // mlFetch usa validateStatus:()=>true (nunca lanza por status HTTP) — un 404/500 de ML
+  // llega como respuesta normal, no como excepción. Sin el chequeo explícito de status esto
+  // pasaría desapercibido: el pedido se crearía sin destinatario y sin ningún aviso en el log.
+  it('la consulta de shipments devuelve 404 (sin lanzar, validateStatus:true) → FAIL-OPEN con aviso en el log', async () => {
+    const orden = ordenConEnvio('ORD-SHIP-404', 4004);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/4004') return { status: 404, data: { message: 'not_found' } };
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6009 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall).toBeTruthy();
+    expect(orderCall[3].shipping).toBeUndefined();
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'ORD-SHIP-404' AND estado = 'error'").get();
+    expect(log).toBeTruthy();
+    expect(log.error).toMatch(/404/);
+
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-SHIP-404');
+    expect(pedido.wc_order_id).toBe(6009);
+    expect(pedido.retenido_en).toBeNull();
+  });
+
+  it('la nota privada del pedido falla al crearla (POST /orders/{id}/notes) → FAIL-OPEN: el pedido queda creado igual, sin reintentar', async () => {
+    const orden = ordenConEnvio('ORD-NOTA-FALLA', 5005);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/5005') return { status: 200, data: { receiver_address: { receiver_name: 'Ana Diaz' } } };
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6010 } };
+      if (path === '/orders/6010/notes' && method === 'post') throw new Error('WooCommerce API error 500');
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    // El pedido queda creado y sellado como 'ok' — la nota es un dato accesorio posterior.
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-NOTA-FALLA');
+    expect(pedido.wc_order_id).toBe(6010);
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NOTA-FALLA');
+    expect(proc.estado).toBe('ok');
+
+    // Un solo POST /orders — no se reintenta la creación por el fallo de la nota.
+    const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
+    expect(posts).toHaveLength(1);
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'ORD-NOTA-FALLA' AND estado = 'error'").get();
+    expect(log).toBeTruthy();
+    expect(log.error).toMatch(/nota privada/);
+  });
+
+  it('unit_price null en algún order_item → se omite _ml_precio_pagado_total (no se inventa un total parcial)', async () => {
+    const orden = {
+      id: 'ORD-SIN-UNITPRICE',
+      date_created: new Date().toISOString(),
+      buyer: { nickname: 'compradorY' },
+      order_items: [
+        { item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 250 },
+        { item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: null },
+      ],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6011 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    const meta = Object.fromEntries(orderCall[3].meta_data.map(m => [m.key, m.value]));
+    expect(meta._ml_precio_pagado_total).toBeUndefined();
+    expect(meta._ml_order_id).toBe('ORD-SIN-UNITPRICE');
+  });
+
+  // Hallazgo del revisor (2026-08-03): si falta la fecha o el nickname, la nota no debe
+  // quedar con paréntesis vacíos ni frases a medias como "Venta MercadoLibre #X () — comprador: .".
+  it('orden sin date_created ni nickname → la nota privada omite esas partes, sin paréntesis/frases vacías', async () => {
+    const orden = {
+      id: 'ORD-SIN-DATOS-NOTA',
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6015 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const notaCall = wooFetch.mock.calls.find(c => c[1] === '/orders/6015/notes' && c[2] === 'post');
+    expect(notaCall).toBeTruthy();
+    const note = notaCall[3].note;
+    expect(note).toContain('ORD-SIN-DATOS-NOTA');
+    expect(note).toContain('https://www.mercadolibre.com.ar/ventas/ORD-SIN-DATOS-NOTA/detalle');
+    expect(note).not.toContain('()');
+    expect(note).not.toMatch(/comprador:\s*\./);
+  });
+
   it('orden sin shipping.id → no consulta /shipments, el pedido se crea igual sin datos de envío', async () => {
     const orden = ordenConEnvio('ORD-SIN-SHIP', undefined);
     mlFetch.mockImplementation(async (d, cfg, method, path) => {
@@ -448,6 +642,34 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     expect(mlFetch.mock.calls.some(c => String(c[3]).startsWith('/shipments/'))).toBe(false);
     const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
     expect(orderCall[3].shipping).toBeUndefined();
+  });
+
+  // Hallazgo del revisor (2026-08-03): un receiver_address SIN nombre ni calle no debe volcarse
+  // como `shipping` — dejaría al pedido con una dirección "declarada" pero en blanco, en vez
+  // de reflejar claramente que el dato no está.
+  it('receiver_address sin receiver_name ni street_name → NO manda shipping vacío', async () => {
+    const orden = ordenConEnvio('ORD-SHIP-VACIO', 8181);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/8181') {
+        return { status: 200, data: { logistic_type: 'self_service', receiver_address: { city: { name: 'CABA' } } } };
+      }
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6014 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].shipping).toBeUndefined();
+    // El método de envío (dato aparte) sí se informa, aunque no haya dirección.
+    const meta = Object.fromEntries(orderCall[3].meta_data.map(m => [m.key, m.value]));
+    expect(meta._ml_metodo_envio).toBe('self_service');
   });
 
   it('order_items sin sale_fee → no se estima/inventa el neto, se omite ese dato', async () => {
@@ -473,6 +695,63 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     expect(meta._ml_precio_pagado_total).toBe('250.00');
   });
 
+  // Hallazgo del revisor: no alcanza con que UN item tenga sale_fee — si solo algunos lo
+  // traen, sumar bruto entero de los demás sobreestima el neto y lo presenta como dato real.
+  it('solo algunos order_items traen sale_fee (no todos) → se omite el neto igual, no se mezcla', async () => {
+    const orden = {
+      id: 'ORD-FEE-PARCIAL',
+      date_created: new Date().toISOString(),
+      buyer: { nickname: 'compradorZ' },
+      order_items: [
+        { item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 250, sale_fee: 20 },
+        { item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 300 }, // sin sale_fee
+      ],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6012 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    const meta = Object.fromEntries(orderCall[3].meta_data.map(m => [m.key, m.value]));
+    expect(meta._ml_neto_estimado).toBeUndefined();
+    expect(meta._ml_precio_pagado_total).toBe('550.00');
+  });
+
+  // 2da pasada del revisor (2026-08-03): no está confirmado si sale_fee es por unidad o ya
+  // multiplicado por la cantidad. Con quantity>1 se omite el neto en vez de arriesgar un
+  // dato falso (restar un solo sale_fee de un total ×quantity subestimaría la comisión).
+  it('todos los items traen sale_fee pero alguno tiene quantity>1 → se omite el neto (semántica de sale_fee con cantidad no confirmada)', async () => {
+    const orden = {
+      id: 'ORD-FEE-CANTIDAD',
+      date_created: new Date().toISOString(),
+      buyer: { nickname: 'compradorW' },
+      order_items: [
+        { item: { id: 'MLA100', variation_id: '' }, quantity: 2, unit_price: 250, sale_fee: 20 },
+      ],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6013 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    const meta = Object.fromEntries(orderCall[3].meta_data.map(m => [m.key, m.value]));
+    expect(meta._ml_neto_estimado).toBeUndefined();
+    // El precio pagado total sí se informa (no depende de la duda sobre sale_fee).
+    expect(meta._ml_precio_pagado_total).toBe('500.00');
+  });
+
   it('en ningún caso se emite un PUT/PATCH sobre el pedido WC ya creado (solo el POST de creación)', async () => {
     const orden = ordenConEnvio('ORD-NO-PUT', 777);
     mlFetch.mockImplementation(async (d, cfg, method, path) => {
@@ -491,6 +770,175 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
 
     const noPost = wooFetch.mock.calls.filter(c => c[2] === 'put' || c[2] === 'patch');
     expect(noPost).toHaveLength(0);
+  });
+});
+
+describe('syncMlToWc — casos borde de cobertura (tester, 2026-08-03)', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  // Caso borde del plan: orden multi-ítem donde solo ALGUNOS SKU mapean. El pedido debe
+  // crearse igual con la línea que sí mapea (precio de contado propio), la que no mapea
+  // queda en sin_mapeo, y la orden se sella como 'parcial' (no 'ok', no se pierde la venta,
+  // pero tampoco se declara completa).
+  it('orden multi-ítem: un SKU mapea (usa precio de contado) y otro no mapea → pedido se crea con la línea válida, orden queda parcial', async () => {
+    seedCatalogo(db, { precio: 300 }); // BIKE-001 (MLA100) → contado 200
+    const orden = {
+      id: 'ORD-MIXTA',
+      date_created: new Date().toISOString(),
+      order_items: [
+        { item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 },
+        { item: { id: 'MLA999', variation_id: '' }, quantity: 1, unit_price: 999 }, // sin mapeo
+      ],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 7001 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall).toBeTruthy();
+    // Solo la línea mapeada, con el precio de contado propio — nunca el unit_price de ML.
+    expect(orderCall[3].line_items).toEqual([
+      { quantity: 1, subtotal: '200.00', total: '200.00', product_id: 100 },
+    ]);
+
+    const logSinMapeo = db.prepare("SELECT * FROM sync_log WHERE estado = 'sin_mapeo'").get();
+    expect(logSinMapeo).toBeTruthy();
+    expect(logSinMapeo.clave).toBe('MLA999|');
+
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-MIXTA');
+    expect(proc.estado).toBe('parcial');
+
+    // Pedido igual quedó vinculado en ordenes_ml_wc_pedidos (no se perdió por el item sin mapeo).
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-MIXTA');
+    expect(pedido.wc_order_id).toBe(7001);
+  });
+
+  // Orden ML sin order_items (campo ausente): no debe explotar, no crea pedido (nada
+  // mapeable), y libera la reserva para que el próximo ciclo pueda reintentar.
+  it('orden ML sin order_items (campo ausente) → no crea pedido, no explota, libera la reserva', async () => {
+    const orden = { id: 'ORD-SIN-ITEMS', date_created: new Date().toISOString() };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(wooFetch).not.toHaveBeenCalled();
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-SIN-ITEMS');
+    expect(proc.estado).toBe('parcial');
+    // La reserva se liberó (no queda wc_order_id=0 colgada) — el próximo ciclo puede reintentar.
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-SIN-ITEMS');
+    expect(pedido).toBeUndefined();
+  });
+
+  // Regresión de redondeo único (fix del tester, 2026-08-03): precioContado() redondea el
+  // UNITARIO a 2 decimales (666.67 = round(1000×2/3)); multiplicar ESE valor ya redondeado
+  // por la cantidad y volver a aplicar toFixed(2) es un DOBLE redondeo que arrastra hasta un
+  // centavo de diferencia frente al cálculo exacto (3 × 666.6666... = 2000.00, pero
+  // 3 × 666.67 = 2000.01). El código ahora usa totalContado() (lib/mlPrecios.js), que
+  // calcula sobre el precio de lista sin pasar por el unitario redondeado y redondea una
+  // sola vez, al final — el total tiene que ser el exacto (2000.00), no 2000.01.
+  it('cantidad=3 con precio de contado no exacto en centavos → el total es el EXACTO (2000.00), sin doble redondeo', async () => {
+    seedCatalogo(db, { precio: 1000 }); // contado unitario 666.67 (ya redondeado) — total exacto: 2000.00
+    const orden = {
+      id: 'ORD-QTY3',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 3, unit_price: 700 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 8003 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].line_items).toEqual([
+      { quantity: 3, subtotal: '2000.00', total: '2000.00', product_id: 100 },
+    ]);
+  });
+
+  // Segundo caso de doble redondeo (pedido del tester): cantidad alta con un precio de
+  // lista que tampoco divide exacto en centavos al aplicar el 2/3. 7 × (999.99×2/3 exacto
+  // 666.66) = 4666.62 exacto; con doble redondeo (unitario 666.66 redondeado × 7) daría el
+  // mismo valor por casualidad en este caso puntual, así que se usa un precio donde el
+  // redondeo del unitario SÍ desvía el total: regular_price=100 → unitario exacto
+  // 66.6666... redondeado a 66.67; × 7 con doble redondeo = 466.69, exacto = 466.6666... → 466.67.
+  it('cantidad=7 con regular_price=100 (2/3 no exacto) → el total es el exacto (466.67), no el de doble redondeo (466.69)', async () => {
+    seedCatalogo(db, { precio: 100 });
+    const orden = {
+      id: 'ORD-QTY7',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 7, unit_price: 90 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 8004 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].line_items).toEqual([
+      { quantity: 7, subtotal: '466.67', total: '466.67', product_id: 100 },
+    ]);
+  });
+
+  // Caso borde del plan: producto con regular_price EXPLÍCITAMENTE 0 (no null) — camino
+  // distinto en el código al de "null" (mensaje de log diferente), debe seguir el mismo
+  // fail-open: línea sin subtotal/total, venta no se pierde.
+  it('regular_price = 0 (explícito, no null) → fail-open sin subtotal/total, log distingue el motivo', async () => {
+    seedCatalogo(db, { precio: 300, regularPrice: 0 });
+    const orden = {
+      id: 'ORD-RP0',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 9001 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall).toBeTruthy();
+    expect(orderCall[3].line_items).toEqual([{ quantity: 1, product_id: 100 }]);
+
+    const log = db.prepare("SELECT * FROM sync_log WHERE sku = 'BIKE-001' AND estado = 'error'").get();
+    expect(log.error).toMatch(/regular_price es 0\/inválido/);
+
+    // No se pierde la venta: el pedido se creó y quedó vinculado.
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RP0');
+    expect(pedido.wc_order_id).toBe(9001);
   });
 });
 
@@ -1127,6 +1575,38 @@ describe('syncMlToWc — timeout del POST /orders (verificacion anti-duplicado)'
     expect(pedido.retenido_en).toBeTruthy();
     const posts = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post');
     expect(posts).toHaveLength(1);
+  }, 30000);
+
+  // 2da pasada del revisor (2026-08-03): una orden con reserva RETENIDA nunca se sella, así
+  // que el cron (cada 3min) la retoma en cada ciclo. Sin un corte local antes de shipments,
+  // cada retoma gastaría una llamada a /shipments/{id} para siempre — este test confirma que
+  // el segundo ciclo sobre una orden retenida sale ANTES de llamar a mlFetch de nuevo.
+  it('reserva RETENIDA: el ciclo siguiente sale por el chequeo local, sin gastar una llamada a /shipments/{id}', async () => {
+    const orden = {
+      id: 'ORD-RETENIDA-SIN-SHIP',
+      date_created: new Date().toISOString(),
+      shipping: { id: 4242 }, // tiene envío asociado — si no hubiera corte, gastaría el GET
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 100 }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') throw new Error('timeout of 20000ms exceeded');
+      if (path.startsWith('/orders?')) throw new Error('ECONNREFUSED');
+      return { data: {} };
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await syncMlToWc(db, CFG); // 1er ciclo: POST y verificación fallan → reserva RETENIDA
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-RETENIDA-SIN-SHIP');
+    expect(pedido.retenido_en).toBeTruthy();
+
+    mlFetch.mockClear();
+    await syncMlToWc(db, CFG); // 2do ciclo: el cron la retoma (nunca se sella)
+    errSpy.mockRestore();
+
+    // El chequeo local corta ANTES de llamar a mlFetch — ni /shipments/ ni /orders/search
+    // (mlFetch no se llama en absoluto en este segundo ciclo para esta orden).
+    expect(mlFetch).not.toHaveBeenCalledWith(db, CFG.ml, 'get', '/shipments/4242');
   }, 30000);
 
   // Hallazgo #5: un 4xx significa que Woo recibio y rechazo la request -> no hay pedido

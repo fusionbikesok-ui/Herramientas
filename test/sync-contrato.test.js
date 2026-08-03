@@ -46,13 +46,14 @@ function seedMatcher(db) {
 
 function seedCatalogo(db) {
   const now = new Date().toISOString();
-  // precio = precio de LISTA; el precio de línea del pedido WC usa precioContado() (2/3).
+  // El precio de línea usa precioContado() sobre regular_price (LISTA), no sobre precio
+  // (vigente) — se cargan iguales acá porque no es un producto en oferta.
   db.prepare(
-    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, 300, now); // contado 200
+    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, 300, 300, now); // contado 200
   db.prepare(
-    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(221, 'Casco Talla L', 'CASCO-L', 'variation', 220, 3, 45000, now); // contado 30000
+    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(221, 'Casco Talla L', 'CASCO-L', 'variation', 220, 3, 45000, 45000, now); // contado 30000
 }
 
 describe('_procesarOrden — payload exacto de POST /orders', () => {
@@ -87,6 +88,7 @@ describe('_procesarOrden — payload exacto de POST /orders', () => {
     // sobre catalogo_cache.precio), no de unit_price (venta ML) ni de un GET al catálogo Woo.
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
       if (path === '/orders' && method === 'post') return { data: { id: 5050 } };
+      if (path === '/orders/5050/notes' && method === 'post') return { data: {} };
       throw new Error(`ruta wooFetch no esperada en el test: ${path}`);
     });
 
@@ -106,7 +108,12 @@ describe('_procesarOrden — payload exacto de POST /orders', () => {
       { key: '_ml_order_id', value: 'ORD-CONTRATO-1' },
       { key: '_ml_precio_pagado_total', value: '30300.00' }, // 150*2 + 30000*1 (unit_price ML)
     ]);
-    expect(payload.customer_note).toContain('ORD-CONTRATO-1');
+    // La nota va PRIVADA (POST /orders/{id}/notes), no en customer_note del pedido.
+    expect(payload.customer_note).toBeUndefined();
+    const notaCall = wooFetch.mock.calls.find(c => c[1] === '/orders/5050/notes' && c[2] === 'post');
+    expect(notaCall).toBeTruthy();
+    expect(notaCall[3]).toEqual({ note: notaCall[3].note, customer_note: false });
+    expect(notaCall[3].note).toContain('ORD-CONTRATO-1');
     expect(payload.billing).toEqual({
       first_name: 'Ana', last_name: 'Gomez', email: 'ana@mail.com', phone: '3511234567',
     });

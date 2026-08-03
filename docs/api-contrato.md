@@ -23,24 +23,42 @@ próximo ciclo), con dos excepciones fail-open explícitas dentro del mismo POST
 - **Precio de línea (2026-08-03, decisión del usuario):** el pedido WC **nunca** lleva el
   precio de venta de ML (`unit_price`) como precio de línea. El precio de cada línea es el
   **precio de contado de la web propia** (`precioContado()` de `lib/mlPrecios.js`, 2/3 sobre
-  `catalogo_cache.precio`, que es el de LISTA). Si el SKU del caché no tiene precio
-  registrado, la línea se crea igual (`product_id`/`variation_id` + `quantity`, sin
-  `subtotal`/`total`) y Woo aplica el precio que tenga cargado — **fail-open**: no perder la
-  venta por un dato de precio faltante. Se deja un `sync_log` de aviso (`estado='error'`,
-  no marca la orden como `parcial`).
+  `catalogo_cache.regular_price`, el precio de LISTA — **nunca** sobre `catalogo_cache.precio`,
+  que es el VIGENTE y puede ser un `sale_price` de oferta; usar `precio` ahí "acumularía" el
+  descuento de oferta con el de contado). Mientras `regular_price` esté NULL (catálogo sin
+  refrescar todavía tras este despliegue — **hace falta un refresco de catálogo antes de que
+  el precio de contado sea exacto para productos en oferta**) se usa `precio` como fallback
+  transitorio. Si el SKU del caché no tiene ningún precio, la línea se crea igual
+  (`product_id`/`variation_id` + `quantity`, sin `subtotal`/`total`) y Woo aplica el precio
+  que tenga cargado — **fail-open**: no perder la venta por un dato de precio faltante. Se
+  deja un `sync_log` de aviso (`estado='error'`, no marca la orden como `parcial`).
 - **Envío/destinatario:** si la orden ML tiene `shipping.id`, se consulta
-  `GET /shipments/{id}` de ML (antes del POST, mismo request) para volcar destinatario,
-  dirección y método de envío en el campo `shipping` del pedido WC. **Fail-open**: si la
-  consulta falla o la orden no tiene envío, el pedido se crea igual sin esos datos (aviso en
-  `sync_log`, la reserva no se retiene ni se libera de más por esto).
+  `GET /shipments/{id}` de ML (antes de reservar la orden, mismo POST final) para volcar
+  destinatario, dirección y método de envío en el campo `shipping` del pedido WC. **Fail-open**:
+  si la consulta falla, devuelve un status distinto de 200 (`mlFetch` no lanza por HTTP status,
+  hay que chequearlo a mano) o la orden no tiene envío, el pedido se crea igual sin esos datos
+  (aviso en `sync_log`, la reserva no se retiene ni se libera de más por esto).
 
-Datos informativos que se agregan en el mismo POST (nunca en un PUT/PATCH posterior — el
-único cambio permitido a un pedido WC creado desde ML es la cancelación, ver
-`procesarCancelacionesMl`): `meta_data` con `_ml_order_id`, `_ml_precio_pagado_total` (suma
-de `unit_price × cantidad` de la venta ML), `_ml_neto_estimado` (solo si ML informó
-`sale_fee` por ítem — si no viene, se omite, no se estima) y `_ml_metodo_envio`; más
-`customer_note` con Nº de orden ML, fecha, nickname del comprador y link directo a la venta
-(`https://www.mercadolibre.com.ar/ventas/{id}/detalle`).
+Datos informativos que se agregan en el mismo POST de creación (nunca en un PUT/PATCH
+posterior — el único cambio permitido a un pedido WC creado desde ML es la cancelación, ver
+`procesarCancelacionesMl`): `meta_data` con `_ml_order_id`, `_ml_precio_pagado_total` (suma de
+`unit_price × cantidad` de la orden ML COMPLETA, incluidos ítems sin mapeo que no llegaron al
+pedido WC — se omite si algún `unit_price` vino null, para no grabar un total parcial como si
+fuera completo), `_ml_neto_estimado` (solo si TODOS los `order_items` traen `sale_fee` Y
+todos tienen `quantity<=1` — no está confirmado si `sale_fee` es por unidad o ya multiplicado
+por la cantidad, así que con más de una unidad se omite entero antes que arriesgar un neto
+falso) y `_ml_metodo_envio`.
+
+Además, **después** de creado el pedido (no es un PUT/PATCH del pedido: es un POST a un
+sub-recurso, `POST /orders/{id}/notes` con `customer_note:false`) se agrega una **nota
+PRIVADA** (no visible al cliente, a diferencia de `customer_note`) con Nº de orden ML, fecha
+en hora local, nickname del comprador y link directo a la venta
+(`https://www.mercadolibre.com.ar/ventas/{id}/detalle`). **Fail-open**: si falla, el pedido ya
+existe y queda tal cual — no se reintenta, no afecta la reserva ni el sellado en
+`ordenes_ml_procesadas`. **Excepción conocida, aceptada** (no es un hueco a cerrar): en el
+camino de recuperación donde el POST /orders timeoutea pero el pedido YA existía en Woo
+(`wcExistente`, ver más abajo), la nota privada NO se agrega — ese pedido queda sin la nota
+informativa, aunque sí con todos los demás datos (line_items, billing, shipping, meta_data).
 
 Caso especial — POST /orders a Woo que falla sin respuesta (timeout, corte de red, 5xx,
 429): antes de liberar la reserva y permitir un reintento, el backend verifica contra la
