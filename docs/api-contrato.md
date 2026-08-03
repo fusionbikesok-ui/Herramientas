@@ -578,3 +578,59 @@ El contador se resetea al primer login exitoso de esa clave, o solo por inactivi
 tipeo). No aplica límite por cuenta global — es por combinación usuario+IP, así una IP
 compartida no bloquea a otro usuario. Ver `lib/auth.js` (`claveRateLimit`, `loginBloqueado`,
 `registrarLoginFallido`, `registrarLoginExitoso`).
+## Matcher: push automático de SKU a ML
+
+Motor en `lib/matcherPush.js`, expuesto en `routes/matcher.js`. Corre también solo via
+cron cada 10 min (server.js) — el botón manual y el cron comparten el mismo motor/mutex,
+nunca hay dos corridas en simultáneo. Escribe tanto publicaciones **activas** como
+**pausadas** (antes solo activas); las activas van primero en la cola.
+
+Fail-open/fail-closed explícito: **429 de ML (rate limit) no es un fallo de la
+publicación** — se reintenta con backoff 350/1000/3000/8000ms y, si persiste, se corta la
+corrida ENTERA sin marcar fallo, dejando el resto para el próximo ciclo de cron (fail-open
+respecto de esas publicaciones no intentadas). Cualquier otro error (400/403/etc., fallo
+real de esa publicación puntual) SÍ se registra en `ml_sku_push_fallos` con backoff
+exponencial por publicación (2^intentos horas, tope 24h) — fail-closed respecto de esa
+publicación: no se reintenta hasta que venza el backoff.
+
+### POST /api/matcher/push-skus-pendientes
+Arranca la corrida en background (no bloquea el request; mismo patrón que
+`POST /refrescar-ml`).
+- Request: sin body.
+- Response 202: `{ "ok": true, "running": true }`.
+- Response 409 (ya hay una corrida en curso, del botón o del cron):
+  `{ "ok": false, "running": true, "error": "Ya hay un push en curso" }`.
+
+### GET /api/matcher/push-skus-pendientes/estado
+Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
+- Response 200:
+  ```json
+  {
+    "ok": true,
+    "running": false,
+    "escritos": 12,
+    "errores": 1,
+    "restantes": 380,
+    "fallos": [{ "clave": "MLA1|", "sku": "FB-100", "error": "...", "status": 400 }],
+    "iniciado_en": "2026-08-03T10:00:00.000Z",
+    "fin_en": "2026-08-03T10:00:42.000Z",
+    "cortado_por_rate_limit": false,
+    "error": null
+  }
+  ```
+- `fallos` es un resumen (tope 20) de la corrida actual/última, no el historial completo
+  (para eso, `GET /push-skus-pendientes/list` trae `ultimo_error`/`intentos` por clave desde
+  `ml_sku_push_fallos`).
+
+### GET /api/matcher/push-skus-pendientes/count
+**Cambio de contrato**: ahora incluye pausadas. Excluye claves en backoff (`en_espera`).
+- Response 200: `{ "ok": true, "pendientes": 1083, "activas": 393, "pausadas": 690, "en_espera": 24 }`.
+  (`pendientes = activas + pausadas`, listas para intentar ahora; `en_espera` son las que
+  tienen un fallo reciente con `proximo_intento_en` futuro, no cuentan en `pendientes`).
+
+### GET /api/matcher/push-skus-pendientes/list
+**Cambio de contrato**: ya no filtra por `status='active'`; agrega `status` de la
+publicación y, por LEFT JOIN a `ml_sku_push_fallos`, `intentos`/`ultimo_error`/
+`proximo_intento_en` (todos `null` si nunca falló). Orden: activas primero, luego por
+`d.actualizado_en DESC`.
+- Response 200: `{ "ok": true, "data": [{ "clave", "sku", "titulo", "thumbnail", "item_id", "status", "intentos", "ultimo_error", "proximo_intento_en" }] }`.
