@@ -332,6 +332,17 @@ function campoMapeo(label,id,headers,sel){
 
 function cargarCSV(input){
   const f=input.files[0]; if(!f) return;
+  // Validamos por extensión: el parseo es en cliente (no hay riesgo de seguridad) y el
+  // MIME que mandan navegadores/Android para un .csv legítimo varía mucho (application/csv,
+  // text/comma-separated-values, application/octet-stream, o directamente vacío) — usarlo
+  // como bloqueante solo generaba falsos negativos con CSVs válidos.
+  const nombreOk = /\.csv$/i.test(f.name || '');
+  if (!nombreOk) {
+    document.getElementById('error').textContent = 'El archivo elegido no parece un CSV (' + (f.name || 'sin nombre') + '). Elegí un archivo .csv.';
+    document.getElementById('mapeo-wrap').style.display = 'none';
+    input.value = '';
+    return;
+  }
   const r=new FileReader();
   r.onload=function(){
     _csv = leerCSVtexto(r.result);
@@ -381,27 +392,39 @@ let _catalogoBySku = {};     // sku(lowercase) -> {sku, nombre, stock}
 let _catalogoListo = false;
 
 function cargarCatalogo(){
-  fetch('/api/woo/catalogo').then(function(r){ return r.json(); }).then(function(j){
-    if(!j || !j.ok || !Array.isArray(j.data)) throw new Error('respuesta inesperada');
-    _catalogo = j.data.filter(function(p){ return p.sku; })
-      .map(function(p){
-        var cats = [];
-        try { cats = JSON.parse(p.categorias_json || '[]'); } catch(e) {}
-        return {sku:p.sku, nombre:p.nombre, stock:p.stock, categorias:cats};
-      });
-    _catalogoBySku = {};
-    _catalogo.forEach(function(p){ _catalogoBySku[p.sku.toLowerCase()] = p; });
-    _catalogoListo = true;
-    document.getElementById('catEstado').textContent = 'Catálogo cargado: ' + _catalogo.length + ' productos.';
-    var buscar = document.getElementById('catBuscar');
-    buscar.disabled = false;
-    buscar.placeholder = 'Escribí un SKU o parte del nombre… (' + _catalogo.length + ' productos)';
-    renderizarCategoriasChips();
-  }).catch(function(err){
-    document.getElementById('catEstado').innerHTML =
-      '<span style="color:var(--red)">⚠</span> No se pudo cargar el catálogo ('+escHtml(err.message||'error')+'). '+
-      'Usá Pegar / CSV / Carga manual mientras tanto. '+
-      '<button class="btn btn-sm" style="margin-left:6px" onclick="cargarCatalogo()">↻ Reintentar</button>';
+  Api.fetchState('/api/woo/catalogo', {
+    esVacio: function(j){ return !j || !j.ok || !Array.isArray(j.data) || j.data.length===0; }
+  }).then(function(resultado){
+    if (resultado.state === 'ok') {
+      var j = resultado.data;
+      _catalogo = j.data.filter(function(p){ return p.sku; })
+        .map(function(p){
+          var cats = [];
+          try { cats = JSON.parse(p.categorias_json || '[]'); } catch(e) {}
+          return {sku:p.sku, nombre:p.nombre, stock:p.stock, categorias:cats};
+        });
+      _catalogoBySku = {};
+      _catalogo.forEach(function(p){ _catalogoBySku[p.sku.toLowerCase()] = p; });
+      _catalogoListo = true;
+      document.getElementById('catEstado').textContent = 'Catálogo cargado: ' + _catalogo.length + ' productos.';
+      var buscar = document.getElementById('catBuscar');
+      buscar.disabled = false;
+      buscar.placeholder = 'Escribí un SKU o parte del nombre… (' + _catalogo.length + ' productos)';
+      renderizarCategoriasChips();
+      return;
+    }
+    // El tab "Por categoría" consume el mismo fetch: si falla, tenía que quedar
+    // en "Cargando categorías…" para siempre. Ahora avisa igual que "Buscar en
+    // catálogo", con el mismo botón de reintentar (mismo estado, Api.renderState
+    // centraliza el look de ambos).
+    var opciones = {
+      mensajeError: function(r){ return 'No se pudo cargar el catálogo (' + (r.error || 'error') + '). Usá Pegar / CSV / Carga manual mientras tanto.'; },
+      mensajeVacio: 'El catálogo está vacío. Usá Pegar / CSV / Carga manual mientras tanto.',
+      onReintentar: cargarCatalogo
+    };
+    Api.renderState(document.getElementById('catEstado'), resultado, opciones);
+    var chipsWrap = document.getElementById('catChipsWrap');
+    if (chipsWrap) Api.renderState(chipsWrap, resultado, opciones);
   });
 }
 
