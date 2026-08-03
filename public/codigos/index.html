@@ -53,6 +53,8 @@
   .cardmsg.err{color:var(--red);}
   .cardmsg.good{color:var(--green);font-weight:700;}
   .vacio{margin-top:24px;padding:20px;border-radius:12px;border:1px solid var(--border);background:var(--panel);font-size:14px;color:var(--muted);text-align:center;}
+  .vacio.error{color:var(--red);border-color:rgba(248,113,113,.4);}
+  .vacio .btn-reintentar{margin-top:10px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;}
 
   /* Modal cámara (idéntico a Consulta de Precios) */
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
@@ -83,19 +85,21 @@
 
 <div class="modal" id="cam-modal">
   <div class="modal-box">
-    <video id="cam-video" playsinline muted></video>
-    <div class="sub" id="cam-sub">Apuntá al código de barras…</div>
+    <video id="cam-video" autoplay playsinline muted></video>
+    <div class="sub" id="cam-sub">Centrá el código de barras dentro de la banda</div>
     <button class="cerrar" id="cam-cerrar">Cerrar cámara</button>
   </div>
 </div>
 
 <script type="module" src="../lib/scanner.js"></script>
+<script src="../lib/api.js"></script>
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 
 var faltantes = [];        // cola traída de /faltantes
 var extras = [];           // resultados de /buscar (ya-cargados u otros) para sobrescritura
 var pendientes = {};       // id_woo -> código leído/tipeado pendiente de confirmar
+var estadoFaltantes = 'cargando'; // 'cargando' | 'ok' | 'vacio' | 'error' — contador y lista SIEMPRE se leen desde acá, nunca del array crudo
 var listaEl = document.getElementById('lista');
 var vacioEl = document.getElementById('vacio');
 var conteoEl = document.getElementById('conteo');
@@ -106,9 +110,18 @@ var fStock = document.getElementById('f-stock');
 
 // ---- Carga de la cola de faltantes ----
 async function cargarFaltantes(){
-  var r = await fetch('/api/codigos/faltantes?conStock=' + (fStock.checked ? 'true' : 'false'));
-  var d = await r.json();
-  if(!d.ok){ faltantes = []; render(); return; }
+  estadoFaltantes = 'cargando';
+  var res = await Api.fetchState('/api/codigos/faltantes?conStock=' + (fStock.checked ? 'true' : 'false'), {
+    esVacio: function(d){ return !d.ok || !(d.data || []).length; }
+  });
+  if(res.state === 'error' || !res.data || !res.data.ok){
+    estadoFaltantes = 'error';
+    faltantes = [];
+    render();
+    return;
+  }
+  var d = res.data;
+  estadoFaltantes = res.state; // 'ok' | 'vacio'
   faltantes = d.data || [];
   poblarDropdown(fMarca, d.marcas, 'Todas las marcas');
   poblarDropdown(fCat, d.categorias, 'Todas las categorías');
@@ -171,7 +184,7 @@ function itemsAMostrar(){
 }
 
 function cardHtml(p){
-  var img = p.img ? '<img src="'+esc(p.img)+'" alt="" loading="lazy">' : '<div class="noimg">sin foto</div>';
+  var img = p.img ? '<img src="'+esc(p.img)+'" alt="'+esc(p.nombre||'')+'" loading="lazy">' : '<div class="noimg">sin foto</div>';
   var pend = pendientes[p.id_woo] != null ? pendientes[p.id_woo] : (p.gtin || '');
   var gtinActual = p.gtin ? '<div class="gtin-actual">código actual: '+esc(p.gtin)+' — re-escaneá para corregir</div>' : '';
   return '<div class="card" data-id="'+p.id_woo+'">' + img +
@@ -190,10 +203,24 @@ function cardHtml(p){
 }
 
 function render(){
+  if(estadoFaltantes === 'error'){
+    listaEl.innerHTML = '';
+    conteoEl.textContent = '';
+    vacioEl.className = 'vacio error';
+    vacioEl.innerHTML = 'No se pudo cargar la cola de códigos faltantes. Puede que existan productos pendientes aunque acá no se vean.' +
+      '<div><button type="button" class="btn-reintentar" id="btn-reintentar-faltantes">Reintentar</button></div>';
+    vacioEl.style.display = 'block';
+    var btn = document.getElementById('btn-reintentar-faltantes');
+    if(btn) btn.onclick = cargarFaltantes;
+    return;
+  }
+  vacioEl.className = 'vacio';
   var items = itemsAMostrar();
+  // El contador SIEMPRE se calcula desde la misma fuente que la lista (faltantes, ya
+  // resuelto por estadoFaltantes), nunca mezclado con el array de "extras" de búsqueda.
   conteoEl.textContent = faltantes.length + ' faltantes en total' +
     (items.length !== faltantes.length ? ' · ' + items.length + ' visibles' : '');
-  if(!items.length){ listaEl.innerHTML=''; vacioEl.style.display='block'; return; }
+  if(!items.length){ listaEl.innerHTML=''; vacioEl.textContent='No hay productos que coincidan con los filtros.'; vacioEl.style.display='block'; return; }
   vacioEl.style.display='none';
   listaEl.innerHTML = items.map(cardHtml).join('');
 }
@@ -255,7 +282,7 @@ listaEl.addEventListener('keydown', function(e){
 var modal = document.getElementById('cam-modal');
 function abrirCam(idWoo){
   modal.classList.add('open');
-  document.getElementById('cam-sub').textContent = 'Apuntá al código de barras…';
+  document.getElementById('cam-sub').textContent = 'Centrá el código de barras dentro de la banda';
   var yaDisparo = false;
   window.Scanner.open({
     video: document.getElementById('cam-video'),
@@ -286,10 +313,9 @@ fQ.oninput = function(){
 };
 fStock.onchange = cargarFaltantes;
 
-// ---- Auth gate + carga inicial ----
-fetch('/api/auth/me').then(function(r){
-  if(r.status === 401){ window.location.href = '/herramientas/login/'; return; }
-  cargarFaltantes();
+// ---- Auth gate (permisos, criterio unificado en toda la suite: sin permiso -> /home/) + carga inicial ----
+Api.requirePermiso('codigos').then(function(ok){
+  if(ok) cargarFaltantes();
 });
 </script>
 </body>

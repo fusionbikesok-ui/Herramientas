@@ -13,9 +13,12 @@ import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../l
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado } from '../lib/mlPrecios.js';
+import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
+import { armarLike } from '../lib/busqueda.js';
+import { parseCategorias } from '../lib/modelos/producto.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -1050,6 +1053,122 @@ export async function reactivarItems(db, mlCfg, itemIds) {
   return { procesados: porItem.size, resultados };
 }
 
+/**
+ * Reactivación AUTOMÁTICA (cron): reactiva sola toda publicación pausada por out_of_stock
+ * que recuperó stock y cuyo neto de ML pasa el chequeo contra el precio de contado.
+ *
+ * Las que NO pasan el chequeo de precio quedan pausadas y se registran en
+ * ml_reactivacion_frenada para que el usuario las vea y corrija el precio en ML. La tabla se
+ * limpia sola: si en un ciclo posterior el precio pasa, se reactiva y se borra la fila.
+ *
+ * FAIL-CLOSED: un bloqueo por ML caído (no se pudo consultar el precio o la comisión) NO se
+ * registra como frenada — no es un problema de precio y el usuario no puede hacer nada con
+ * él. Se reintenta solo en el próximo ciclo. El discriminador es deficitPct != null: solo el
+ * bloqueo por neto bajo calcula un déficit.
+ *
+ * Anti-starvation: reactivarItems trunca a LOTE_MAX y getReactivablesRows ordena siempre
+ * igual (por título), así que sin reordenar, un conjunto grande de frenadas crónicas con
+ * títulos alfabéticamente tempranos ocuparía el lote entero en cada corrida y una publicación
+ * nueva con stock recién repuesto (título tardío) nunca entraría a procesarse. Por eso acá se
+ * antepone lo que NO tiene frenada registrada: eso es lo que puede reactivarse de verdad, y
+ * las frenadas crónicas quedan relegadas a los lugares que sobren (se siguen reintentando,
+ * pero sin bloquear a nadie). No se implementa backoff temporal: el usuario tiene un botón de
+ * reintento inmediato tras corregir el precio, así que una ventana de tiempo solo agregaría
+ * demora sin resolver nada.
+ *
+ * Barrido de huérfanas: al final se borran las frenadas cuya clave ya no está en la lista de
+ * reactivables vigente (leída al inicio de ESTA corrida) — cubre reactivación manual,
+ * pausado manual, pérdida de stock o de mapeo por cualquier vía que no sea este cron. Si no
+ * hay reactivables, todas las frenadas existentes son huérfanas por definición (una frenada
+ * solo tiene sentido para algo reactivable) y se limpian todas.
+ *
+ * Comparte el candado _reactivarEnCurso con la reactivación manual: nunca corren a la vez
+ * (se pisarían contra ML y competirían por el rate limit). El candado es en memoria de UN
+ * proceso: alcanza con una sola instancia corriendo el cron; con varias instancias en paralelo
+ * no protege (no hay lock distribuido). Antes esto era un detalle menor de la acción manual;
+ * ahora que es un cron periódico y no un click de usuario, es un supuesto que sostiene la
+ * corrección de esta función.
+ */
+export async function reactivarAutomatico(db, cfg) {
+  if (!mlCfgOk(cfg)) return { omitido: true };
+  if (_reactivarEnCurso) return { omitido: true };
+  _reactivarEnCurso = true;
+  try {
+    const rows = getReactivablesRows(db);
+
+    const guardarFrenada = db.prepare(`
+      INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
+      VALUES (@clave, @sku, @motivo, @neto, @precio_contado, @deficit_pct, @detectado_en)
+      ON CONFLICT(clave) DO UPDATE SET
+        motivo=excluded.motivo, neto=excluded.neto, precio_contado=excluded.precio_contado,
+        deficit_pct=excluded.deficit_pct, detectado_en=excluded.detectado_en
+    `);
+    const borrarFrenada = db.prepare('DELETE FROM ml_reactivacion_frenada WHERE clave = ?');
+    const skuDeClave = db.prepare('SELECT sku FROM sku_matcher_decisiones WHERE clave = ?');
+
+    if (rows.length === 0) {
+      // No hay ningún reactivable: cualquier frenada existente quedó huérfana (ya no
+      // corresponde a nada de la lista vigente) — limpieza total.
+      db.prepare('DELETE FROM ml_reactivacion_frenada').run();
+      return { omitido: false, reactivadas: 0, frenadas: 0 };
+    }
+
+    const clavesFrenadas = new Set(
+      db.prepare('SELECT clave FROM ml_reactivacion_frenada').all().map(f => f.clave)
+    );
+    // Primero los items SIN ninguna frenada registrada (candidatos reales a reactivarse),
+    // después los que ya vienen frenados: así el lote (LOTE_MAX en reactivarItems) siempre
+    // avanza sobre publicaciones nuevas en vez de reprocesar por siempre el mismo bloque.
+    const itemIds = [...new Set(rows.map(r => r.item_id))];
+    const itemTieneFrenada = new Map();
+    for (const r of rows) {
+      if (clavesFrenadas.has(r.clave)) itemTieneFrenada.set(r.item_id, true);
+    }
+    itemIds.sort((a, b) => (itemTieneFrenada.get(a) ? 1 : 0) - (itemTieneFrenada.get(b) ? 1 : 0));
+
+    const { resultados } = await reactivarItems(db, cfg.ml, itemIds);
+
+    let reactivadas = 0;
+    let frenadas = 0;
+    const ts = now();
+
+    for (const r of resultados) {
+      if (r.ok) {
+        reactivadas++;
+        // Reactivada: si venía frenada por precio, ya no lo está.
+        for (const v of rows.filter(x => x.item_id === r.item_id)) borrarFrenada.run(v.clave);
+        continue;
+      }
+      // Solo el bloqueo por neto bajo trae deficitPct. Los demás (ML caído, sin precio web)
+      // no son frenadas de precio: se reintentan solos, sin ensuciar la lista.
+      if (r.bloqueado && r.deficitPct != null && r.clave) {
+        frenadas++;
+        guardarFrenada.run({
+          clave: r.clave,
+          sku: skuDeClave.get(r.clave)?.sku ?? null,
+          motivo: r.error,
+          neto: r.neto ?? null,
+          precio_contado: r.precio_web ?? null,
+          deficit_pct: r.deficitPct,
+          detectado_en: ts,
+        });
+      }
+    }
+
+    // Barrido de huérfanas: cualquier frenada cuya clave ya no esté entre los reactivables
+    // leídos al inicio de esta corrida (la publicación se reactivó a mano, se pausó por otra
+    // razón, se quedó sin stock o perdió el mapeo) deja de tener sentido y se borra.
+    const clavesVigentes = new Set(rows.map(r => r.clave));
+    for (const clave of clavesFrenadas) {
+      if (!clavesVigentes.has(clave)) borrarFrenada.run(clave);
+    }
+
+    return { omitido: false, reactivadas, frenadas };
+  } finally {
+    _reactivarEnCurso = false;
+  }
+}
+
 // ─── limpieza masiva de variaciones muertas ─────────────────────────────────────
 
 /**
@@ -1267,6 +1386,79 @@ async function diagnosticarErrores(db, mlCfg, rows) {
   }
 }
 
+/**
+ * Filas crudas de vínculos WC↔ML (publicación mapeada + su producto de WC), listas para
+ * pasarle a senalesDeVinculo. Si se pasa `sku`, se acota a ese producto.
+ *
+ * El dedup por SKU es el mismo criterio que COMPUTED_STOCK_CTE: si un SKU está cargado en
+ * más de un producto de WC, se toma uno solo (el de menor stock) para no multiplicar filas.
+ */
+function filasDeVinculos(db, { sku = null, ordenar = true } = {}) {
+  const params = [];
+  let filtro = '';
+  if (sku) { filtro = 'AND d.sku = ?'; params.push(sku); }
+  // El ORDER BY es trabajo puro al pedo cuando solo se cuenta (contarVinculosSospechosos):
+  // se puede saltear sin ensuciar la firma ni el resto de los usos.
+  const orden = ordenar ? 'ORDER BY c.nombre, p.titulo, d.clave' : '';
+  return db.prepare(`
+    WITH catalogo_dedup AS (
+      SELECT sku, nombre, stock, precio, atributos_json, img,
+        ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+      FROM catalogo_cache
+      WHERE sku IS NOT NULL AND sku <> ''
+    )
+    SELECT d.clave, d.sku,
+           p.item_id, p.variation_id, p.titulo, p.status, p.sub_status, p.color, p.talle,
+           p.seller_sku, p.variations_texto, p.thumbnail, p.permalink, p.precio,
+           p.available_quantity, p.precio_actualizado_en,
+           c.nombre AS wc_nombre, c.stock AS stock_wc, c.precio AS precio_wc,
+           c.atributos_json, c.img AS wc_img,
+           e.cantidad_ml
+    FROM sku_matcher_decisiones d
+    JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
+    JOIN ml_publicaciones_cache p ON p.clave = d.clave
+    LEFT JOIN ml_stock_estado e ON e.clave = d.clave
+    WHERE d.accion IN ('asignar','confirmar') AND d.sku IS NOT NULL AND d.sku <> '' ${filtro}
+    ${orden}
+  `).all(...params);
+}
+
+/**
+ * Señales vigentes de una fila: las que dispara senalesDeVinculo menos las que el usuario
+ * marcó como revisadas CON EL MISMO VALOR. Si el valor cambió, el descarte no aplica y la
+ * señal vuelve a aparecer — descartar significa "esta discrepancia concreta está bien".
+ *
+ * Igualdad ESTRICTA a propósito: `senal.valor` ya viene normalizado (compuesto, ambos lados
+ * de la comparación) desde `senalesDeVinculo`, así que comparar por contención/substring
+ * reintroduciría el bug que ese diseño evita — un descarte viejo taparía en silencio una
+ * discrepancia nueva y distinta con un SKU/precio que casualmente sea substring del actual.
+ * El cliente debe reenviar el `valor` tal cual lo recibió en la señal, sin editarlo.
+ */
+function senalesVigentes(fila, descartesPorClave) {
+  const descartes = descartesPorClave.get(fila.clave) || new Map();
+  return senalesDeVinculo(fila).filter(s => descartes.get(s.senal) !== s.valor);
+}
+
+/** Mapa clave → Map(senal → valor_revisado), para no consultar por fila. */
+function cargarDescartes(db) {
+  const m = new Map();
+  for (const r of db.prepare('SELECT clave, senal, valor_revisado FROM ml_vinculos_revisados').all()) {
+    if (!m.has(r.clave)) m.set(r.clave, new Map());
+    m.get(r.clave).set(r.senal, r.valor_revisado);
+  }
+  return m;
+}
+
+/** Cantidad de vínculos con al menos una señal vigente (para el chip del home). */
+function contarVinculosSospechosos(db) {
+  const descartes = cargarDescartes(db);
+  let n = 0;
+  for (const fila of filasDeVinculos(db, { ordenar: false })) {
+    if (senalesVigentes(fila, descartes).length > 0) n++;
+  }
+  return n;
+}
+
 // ─── syncRouter ───────────────────────────────────────────────────────────────
 
 export function syncRouter(db, cfg) {
@@ -1427,6 +1619,9 @@ export function syncRouter(db, cfg) {
       skus = { escritos: s.escritos || 0, pendientes: s.pendientes || 0 };
     } catch (_) { /* cache puede no existir */ }
 
+    // Publicaciones que la reactivación automática frenó por precio (ver /frenadas).
+    const frenadas = db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n;
+
     res.json({
       ok: true,
       token: tokenRow
@@ -1448,6 +1643,8 @@ export function syncRouter(db, cfg) {
         errores_reales: erroresReales,
       },
       skus,
+      frenadas,
+      vinculos_sospechosos: contarVinculosSospechosos(db),
     });
   });
 
@@ -1527,6 +1724,49 @@ export function syncRouter(db, cfg) {
     }
   });
 
+  // Publicaciones que la reactivación automática frenó por precio (neto por debajo del contado).
+  router.get('/frenadas', (req, res) => {
+    const data = db.prepare(`
+      SELECT f.clave, f.sku, f.motivo, f.neto, f.precio_contado, f.deficit_pct, f.detectado_en,
+             p.item_id, p.titulo, p.thumbnail, p.permalink, p.variations_texto
+      FROM ml_reactivacion_frenada f
+      LEFT JOIN ml_publicaciones_cache p ON p.clave = f.clave
+      ORDER BY f.deficit_pct DESC, f.detectado_en DESC
+    `).all();
+    res.json({ ok: true, data });
+  });
+
+  // Override: reintentar la reactivación de publicaciones frenadas (típicamente después de
+  // corregir el precio en ML, sin esperar al próximo ciclo del cron). NO saltea el chequeo de
+  // neto — reactivarItems aplica chequearNetoReactivar siempre. Si el precio sigue mal, la
+  // publicación vuelve a quedar frenada (fail-closed: nunca se vende a pérdida por apuro).
+  router.post('/frenadas/forzar', async (req, res) => {
+    if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+    const itemIds = Array.isArray(req.body?.itemIds) ? req.body.itemIds.map(String).filter(Boolean) : [];
+    if (itemIds.length === 0) return res.status(400).json({ ok: false, error: 'itemIds requerido' });
+
+    // reactivarItems trunca a LOTE_MAX (50) internamente y NO avisa por sí solo: hay que
+    // decírselo al cliente explícitamente, si no "forzar 80 frenadas" parece haber procesado
+    // las 80 cuando en realidad solo tocó 50 y las 30 restantes quedaron intactas sin rastro.
+    const { procesados, resultados } = await reactivarItems(db, mlCfg, itemIds);
+    // Borra las frenadas de las claves que pertenecen a las publicaciones que salieron OK.
+    // La subconsulta trae TODAS las claves cacheadas de ese item_id (una publicación con
+    // variaciones tiene varias claves): correcto, porque chequearNetoReactivar evalúa el
+    // precio a nivel publicación (todas sus variaciones juntas), así que si el item quedó
+    // ok=true todas sus frenadas pendientes quedaron resueltas y corresponde borrarlas todas.
+    const borrar = db.prepare('DELETE FROM ml_reactivacion_frenada WHERE clave IN (SELECT clave FROM ml_publicaciones_cache WHERE item_id = ?)');
+    for (const r of resultados) {
+      if (r.ok) borrar.run(r.item_id);
+    }
+    res.json({
+      ok: true,
+      pedidos: itemIds.length,
+      procesados,
+      truncado: itemIds.length > procesados,
+      resultados,
+    });
+  });
+
   // Limpieza masiva de variaciones muertas (verificada contra ML, fail-closed).
   // Requiere acción explícita del usuario. No se solapa consigo misma.
   router.post('/limpiar-variaciones-muertas', async (req, res) => {
@@ -1570,6 +1810,17 @@ export function syncRouter(db, cfg) {
   router.get('/atencion/:cat', async (req, res) => {
     const def = ATENCION_DEFS[req.params.cat];
     if (!def) return res.status(400).json({ ok: false, error: 'categoría inválida' });
+    // Total real (sin LIMIT), para no reportar el tope de la query como si fuera el total.
+    const totalReal = db.prepare(`
+      SELECT COUNT(*) n FROM (
+        SELECT s.clave
+        FROM sync_log s
+        WHERE s.estado IN (${def.estados})
+          AND s.clave IS NOT NULL
+          AND ${def.exclude}
+        GROUP BY s.clave
+      )
+    `).get().n;
     // GROUP BY clave con MAX(creado_en): SQLite toma sku/error de la fila más reciente.
     const rows = db.prepare(`
       SELECT s.clave, s.sku, s.error, s.estado, MAX(s.creado_en) AS creado_en,
@@ -1597,7 +1848,8 @@ export function syncRouter(db, cfg) {
       }
     }
 
-    res.json({ ok: true, cat: req.params.cat, total: rows.length, data: rows });
+    // total = COUNT real (no el LIMIT); truncado avisa cuando rows quedó recortado.
+    res.json({ ok: true, cat: req.params.cat, total: totalReal, truncado: totalReal > rows.length, data: rows });
   });
 
   // Descarta claves no accionables (sin stock real, pausa manual, publicación cerrada,
@@ -1620,9 +1872,122 @@ export function syncRouter(db, cfg) {
   router.post('/desvincular', (req, res) => {
     const { clave } = req.body || {};
     if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
-    const info = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
+    // Atómico: si el borrado de descartes fallara a mitad de camino, la clave quedaría
+    // reasignable pero con descartes del vínculo anterior todavía vivos, tapando en silencio
+    // señales legítimas del vínculo que la remapee después.
+    const info = db.transaction(() => {
+      const r = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
+      // Los descartes de sospechosos valían para el vínculo anterior, no para el que le toque después.
+      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+      return r;
+    })();
     logSync(db, { direccion: 'wc_ml', clave, estado: 'remapeo_requerido', error: 'desvinculada manualmente para re-mapear' });
     res.json({ ok: true, borradas: info.changes });
+  });
+
+  // Detalle de un producto de WC y TODAS las publicaciones de ML mapeadas a su SKU.
+  router.get('/vinculos/:sku', (req, res) => {
+    const sku = String(req.params.sku || '').trim();
+    if (!sku) return res.status(400).json({ ok: false, error: 'sku requerido' });
+
+    // El 404 se resuelve ANTES de pagar las dos consultas pesadas (CTE con window function
+    // sobre todo el catálogo + carga de descartes) cuando el SKU ni siquiera existe.
+    const prod = db.prepare(`
+      SELECT sku, nombre, stock, precio, img FROM catalogo_cache
+      WHERE sku = ? AND sku <> '' ORDER BY stock ASC, id_woo ASC LIMIT 1
+    `).get(sku);
+    if (!prod) return res.status(404).json({ ok: false, error: 'SKU no encontrado en el catálogo' });
+
+    const filas = filasDeVinculos(db, { sku });
+    const descartes = cargarDescartes(db);
+
+    const publicaciones = filas.map(f => ({
+      clave: f.clave, item_id: f.item_id, variation_id: f.variation_id,
+      titulo: f.titulo, status: f.status, sub_status: f.sub_status,
+      color: f.color, talle: f.talle, variations_texto: f.variations_texto,
+      seller_sku: f.seller_sku, thumbnail: f.thumbnail, permalink: f.permalink,
+      precio_ml: f.precio, precio_actualizado_en: f.precio_actualizado_en,
+      stock_ml: f.available_quantity, stock_sincronizado: f.cantidad_ml,
+      senales: senalesVigentes(f, descartes),
+    }));
+
+    res.json({
+      ok: true,
+      producto: {
+        sku: prod.sku, nombre: prod.nombre, stock: prod.stock, img: prod.img,
+        precio_lista: prod.precio,
+        precio_contado: prod.precio > 0 ? precioContado(prod.precio) : null,
+      },
+      publicaciones,
+    });
+  });
+
+  // Listado de vínculos con señales vigentes, ordenado por severidad (alta primero).
+  router.get('/vinculos-sospechosos', (req, res) => {
+    const descartes = cargarDescartes(db);
+    const data = [];
+    for (const f of filasDeVinculos(db)) {
+      const senales = senalesVigentes(f, descartes);
+      if (senales.length === 0) continue;
+      data.push({
+        clave: f.clave, sku: f.sku, item_id: f.item_id,
+        titulo: f.titulo, wc_nombre: f.wc_nombre, thumbnail: f.thumbnail, permalink: f.permalink,
+        precio_ml: f.precio, precio_wc: f.precio_wc, senales,
+      });
+    }
+    data.sort((a, b) => {
+      const peor = (x) => (x.senales.some(s => s.peso === 'alta') ? 0 : 1);
+      return peor(a) - peor(b) || b.senales.length - a.senales.length;
+    });
+    res.json({ ok: true, data });
+  });
+
+  // Marcar una señal como revisada y correcta. Guarda el VALOR: si el dato cambia, reaparece.
+  router.post('/vinculos/revisado', (req, res) => {
+    const { clave, senal, valor } = req.body || {};
+    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
+    if (!senal || typeof senal !== 'string') return res.status(400).json({ ok: false, error: 'senal requerida' });
+    // El contrato es "reenviá el valor tal cual lo recibiste": sin valor, se guardaría `null`,
+    // que nunca coincide con ningún valor real y el cliente creería que descartó sin lograrlo.
+    if (valor == null || typeof valor !== 'string') return res.status(400).json({ ok: false, error: 'valor requerido' });
+    // Sin esto, un typo de clave crea un descarte huérfano que nadie limpia nunca (no aparece
+    // en ningún listado porque filasDeVinculos hace JOIN con ml_publicaciones_cache).
+    const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
+    if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
+
+    db.prepare(`
+      INSERT INTO ml_vinculos_revisados (clave, senal, valor_revisado, revisado_por, revisado_en)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(clave, senal) DO UPDATE SET
+        valor_revisado=excluded.valor_revisado, revisado_por=excluded.revisado_por, revisado_en=excluded.revisado_en
+    `).run(clave, senal, valor, req.user?.username ?? null, now());
+    res.json({ ok: true });
+  });
+
+  // Reasignar el vínculo a otro SKU. Mismo statement que usa el matcher para sus decisiones.
+  router.post('/vinculos/reasignar', (req, res) => {
+    const { clave, sku } = req.body || {};
+    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
+    if (!sku || typeof sku !== 'string') return res.status(400).json({ ok: false, error: 'sku requerido' });
+    // Sin esto, una clave inexistente (typo, publicación borrada de ML entre el render y el
+    // click) crea un vínculo fantasma en sku_matcher_decisiones: no aparece en ningún listado
+    // (filasDeVinculos hace JOIN con el caché) pero ensucia para siempre el contador de
+    // "necesitan atención" del home, sin ninguna pantalla desde la que limpiarlo.
+    const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
+    if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
+    const prod = db.prepare("SELECT nombre FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1").get(sku);
+    if (!prod) return res.status(400).json({ ok: false, error: 'El SKU no existe en el catálogo' });
+
+    // Atómico: si el borrado de descartes fallara a mitad de camino, quedarían vivos los
+    // descartes del vínculo VIEJO tapando en silencio señales legítimas del vínculo nuevo.
+    db.transaction(() => {
+      db.prepare('INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)')
+        .run(clave, sku, prod.nombre, 'asignar', now());
+      // Los descartes valían para el vínculo anterior, no para el nuevo.
+      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+    })();
+    logSync(db, { direccion: 'wc_ml', clave, sku, estado: 'remapeo_requerido', error: 'reasignada manualmente desde Vínculos' });
+    res.json({ ok: true });
   });
 
   // Reintenta la sincronización de stock de UN solo ítem (para resolver un error puntual).
@@ -1694,11 +2059,11 @@ export function syncRouter(db, cfg) {
   router.get('/buscar-sku', (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q) return res.json({ ok: true, data: [] });
-    const like = `%${q}%`;
+    const like = armarLike(q);
     const soloVar = req.query.tipo !== 'all';
     const rows = db.prepare(`
       SELECT sku, nombre, stock, tipo FROM catalogo_cache
-      WHERE (sku LIKE ? OR nombre LIKE ?) AND sku <> ''
+      WHERE (sku LIKE ? ESCAPE '\\' OR nombre LIKE ? ESCAPE '\\') AND sku <> ''
       ${soloVar ? "AND tipo = 'variation'" : ''}
       ORDER BY nombre ASC LIMIT 20
     `).all(like, like);
@@ -1760,6 +2125,313 @@ export function syncRouter(db, cfg) {
     const sku = req.params.sku;
     db.prepare('DELETE FROM skus_config_ml WHERE sku = ?').run(sku);
     res.json({ ok: true });
+  });
+
+  // ── Config ML masiva ────────────────────────────────────────────────────────
+  // Reutiliza el mismo criterio de dedup por SKU que /config-ml y COMPUTED_STOCK_CTE
+  // (menor stock, menor id_woo): un SKU repetido en catalogo_cache es siempre dato sucio,
+  // nunca un caso de negocio legítimo, y elegir el mínimo es fail-closed (no sobrevende).
+  const CATALOGO_DEDUP_CTE = `
+    WITH catalogo_dedup AS (
+      SELECT sku, nombre, marca, stock, categorias_json,
+        ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+      FROM catalogo_cache
+      WHERE sku IS NOT NULL AND sku <> ''
+    )
+  `;
+
+  const ESTADOS_VALIDOS = ['sin_config', 'solo_local', 'reserva'];
+
+  // Arma el WHERE + params del filtro (q/marca/estado/categoria), compartido por el GET y
+  // el resolver de "todo el filtro" del POST /lote — evita mantener dos SQLs en paralelo.
+  // orden/dir/estado NUNCA se interpolan crudos: siempre pasan por whitelist antes de esto.
+  // Escapa los comodines propios de LIKE (%, _) y la barra de escape misma, para que un `q`
+  // con esos caracteres literales (ej. "50%" o "A_B") no traiga de más — sin esto, ese "más"
+  // se arrastra tal cual al lote si el operador después aplica "todo el filtro".
+  // Usa armarLike (lib/busqueda.js), el mismo helper que /buscar-sku: misma semántica de
+  // escape (ya viene envuelto en %...%), evita mantener dos implementaciones equivalentes.
+  function construirFiltroCatalogo({ q, marca, estado, categoria }) {
+    const clausulas = [];
+    const params = [];
+    if (q) {
+      const qLike = armarLike(q);
+      clausulas.push("(c.sku LIKE ? ESCAPE '\\' OR c.nombre LIKE ? ESCAPE '\\')");
+      params.push(qLike, qLike);
+    }
+    if (marca) {
+      clausulas.push('c.marca = ?');
+      params.push(marca);
+    }
+    if (categoria) {
+      // categorias_json es un array JSON embebido (ej. ["Cascos","Indumentaria"]), no una
+      // columna propia — se resuelve con json_each de sqlite (extensión JSON1, siempre
+      // disponible en better-sqlite3) en vez de traer todo a JS y filtrar ahí: así el
+      // filtro sigue viviendo en el WHERE de SQL y no rompe la paginación/el total ni
+      // obliga a escanear el catálogo entero en Node en cada request. json_valid() cubre
+      // el caso NULL/JSON corrupto sin que json_each tire error y rompa la consulta.
+      clausulas.push('(c.categorias_json IS NOT NULL AND json_valid(c.categorias_json) AND EXISTS (SELECT 1 FROM json_each(c.categorias_json) WHERE value = ?))');
+      params.push(categoria);
+    }
+    if (estado === 'sin_config') clausulas.push('s.sku IS NULL');
+    else if (estado === 'solo_local') clausulas.push("s.modo = 'solo_local'");
+    else if (estado === 'reserva') clausulas.push("s.modo = 'reserva'");
+    return { where: clausulas.length ? 'AND ' + clausulas.join(' AND ') : '', params };
+  }
+
+  // Catálogo completo (todas las variaciones/simples con SKU) + config ML de cada uno,
+  // haya o no fila en skus_config_ml. Base para elegir SKUs a granel desde el frontend.
+  router.get('/catalogo-config', (req, res) => {
+    const q = String(req.query.q || '').trim();
+    const marca = String(req.query.marca || '').trim();
+    const categoria = String(req.query.categoria || '').trim();
+    const estado = String(req.query.estado || '').trim();
+    if (estado && !ESTADOS_VALIDOS.includes(estado)) {
+      return res.status(400).json({ ok: false, error: `estado debe ser uno de: ${ESTADOS_VALIDOS.join(', ')}` });
+    }
+
+    // Whitelist de orden/dir: nunca se interpola el valor del usuario en el SQL.
+    const ORDEN_MAP = { nombre: 'c.nombre', stock: 'c.stock', sku: 'c.sku', marca: 'c.marca' };
+    const ordenParam = String(req.query.orden || 'nombre');
+    if (!ORDEN_MAP[ordenParam]) {
+      return res.status(400).json({ ok: false, error: `orden debe ser uno de: ${Object.keys(ORDEN_MAP).join(', ')}` });
+    }
+    const dirParam = String(req.query.dir || 'asc').toLowerCase();
+    if (!['asc', 'desc'].includes(dirParam)) {
+      return res.status(400).json({ ok: false, error: 'dir debe ser asc o desc' });
+    }
+
+    let limite = parseInt(req.query.limite, 10);
+    if (!Number.isFinite(limite) || limite <= 0) limite = 100;
+    limite = Math.min(limite, 500);
+    let offset = parseInt(req.query.offset, 10);
+    if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+    const { where, params } = construirFiltroCatalogo({ q, marca, estado, categoria });
+
+    const baseFrom = `
+      ${CATALOGO_DEDUP_CTE}
+      SELECT c.sku, c.nombre, c.marca, COALESCE(c.stock, 0) AS stock_wc, s.modo,
+        COALESCE(s.reserva, 0) AS reserva,
+        CASE
+          WHEN s.modo = 'solo_local' THEN 0
+          WHEN s.modo = 'reserva' THEN MAX(COALESCE(c.stock, 0) - COALESCE(s.reserva, 0), 0)
+          ELSE MAX(COALESCE(c.stock, 0), 0)
+        END AS stock_disponible_ml
+      FROM catalogo_dedup c
+      LEFT JOIN skus_config_ml s ON s.sku = c.sku
+      WHERE c.rn = 1 ${where}
+    `;
+
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM (${baseFrom})`).get(...params).n;
+    const data = db.prepare(`${baseFrom} ORDER BY ${ORDEN_MAP[ordenParam]} ${dirParam.toUpperCase()} LIMIT ? OFFSET ?`)
+      .all(...params, limite, offset);
+
+    const respuesta = { ok: true, data, total };
+
+    // marcas/categorias no cambian con el filtro ni con la página — armarlas es un full scan
+    // de catalogo_cache con parseo JSON en JS (medido ~3-4ms) que no vale la pena pagar en
+    // cada tecleo del buscador ni en cada cambio de página. Solo se calculan cuando el
+    // frontend las pide explícitamente (primera carga de la pantalla), con ?facetas=1.
+    if (String(req.query.facetas || '') === '1') {
+      // Marcas del catálogo completo (no del filtro) para poblar el desplegable.
+      respuesta.marcas = db.prepare(`
+        SELECT DISTINCT marca FROM catalogo_cache WHERE marca IS NOT NULL AND marca <> '' ORDER BY marca ASC
+      `).all().map(r => r.marca);
+      // Categorías distintas de TODO el catálogo (no del filtro), igual criterio que marcas.
+      // categorias_json es un array por fila, así que el DISTINCT no sirve a nivel columna:
+      // se parsea en JS con el mismo helper que ya usa cobertura (tolera NULL/JSON inválido)
+      // y se deduplica con un Set — el catálogo completo es chico (miles de filas, no
+      // millones), así que un solo recorrido en Node es más simple que json_each + GROUP BY
+      // en SQL acá.
+      const categoriasSet = new Set();
+      for (const row of db.prepare('SELECT categorias_json FROM catalogo_cache').all()) {
+        for (const cat of parseCategorias(row.categorias_json)) {
+          const limpio = String(cat ?? '').trim();
+          if (limpio) categoriasSet.add(limpio);
+        }
+      }
+      respuesta.categorias = [...categoriasSet].sort((a, b) => a.localeCompare(b));
+    }
+
+    res.json(respuesta);
+  });
+
+  // Resuelve los SKUs (existentes en catalogo_cache) que matchean un filtro, sin paginar —
+  // usado por el POST /lote cuando viene { filtro } en vez de { skus }.
+  function resolverSkusPorFiltro({ q, marca, estado, categoria }) {
+    const { where, params } = construirFiltroCatalogo({ q, marca, estado, categoria });
+    const rows = db.prepare(`
+      ${CATALOGO_DEDUP_CTE}
+      SELECT c.sku FROM catalogo_dedup c
+      LEFT JOIN skus_config_ml s ON s.sku = c.sku
+      WHERE c.rn = 1 ${where}
+    `).all(...params);
+    return rows.map(r => r.sku);
+  }
+
+  // Trae { sku -> nombre } (mismo dedup) para los SKUs de una lista, en chunks para no pisar
+  // el límite de parámetros de sqlite (~999) con lotes grandes.
+  const CHUNK_SQLITE = 400;
+  function nombresPorSku(skus) {
+    const mapa = new Map();
+    for (let i = 0; i < skus.length; i += CHUNK_SQLITE) {
+      const chunk = skus.slice(i, i + CHUNK_SQLITE);
+      if (!chunk.length) continue;
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = db.prepare(`
+        SELECT sku, nombre FROM (
+          SELECT sku, nombre, stock, id_woo,
+            ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+          FROM catalogo_cache
+          WHERE sku IN (${placeholders})
+        ) WHERE rn = 1
+      `).all(...chunk);
+      for (const r of rows) mapa.set(r.sku, r.nombre);
+    }
+    return mapa;
+  }
+
+  // De una lista de SKUs, cuáles ya tienen fila en skus_config_ml (para pisados/sin_cambio).
+  function tienenConfigPrevia(skus) {
+    const set = new Set();
+    for (let i = 0; i < skus.length; i += CHUNK_SQLITE) {
+      const chunk = skus.slice(i, i + CHUNK_SQLITE);
+      if (!chunk.length) continue;
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = db.prepare(`SELECT sku FROM skus_config_ml WHERE sku IN (${placeholders})`).all(...chunk);
+      for (const r of rows) set.add(r.sku);
+    }
+    return set;
+  }
+
+  // Config ML masiva: aplica reserva/solo_local/quitar a muchos SKUs de una, ya sea una lista
+  // pegada a mano o "todo lo que matchea el filtro actual". No llama a ML ni a Woo (es
+  // operación 100% local sobre skus_config_ml) — no aplica la política fail-closed/fail-open
+  // de reintentos hacia servicios externos, solo la transaccionalidad local.
+  router.post('/config-ml/lote', (req, res) => {
+    const body = req.body || {};
+    const { accion, reserva, vista_previa } = body;
+
+    if (!['reserva', 'solo_local', 'quitar'].includes(accion)) {
+      return res.status(400).json({ ok: false, error: 'accion debe ser reserva|solo_local|quitar' });
+    }
+
+    let reservaVal = 0;
+    if (accion === 'reserva') {
+      // Chequeo estricto de tipo: Number("") === 0 y Number(null) === 0 harían pasar una
+      // reserva "vacía" disfrazada de reserva 0 real. Solo se acepta un number JS genuino.
+      if (typeof reserva !== 'number' || !Number.isInteger(reserva) || reserva < 0) {
+        return res.status(400).json({ ok: false, error: 'reserva debe ser un entero >= 0' });
+      }
+      reservaVal = reserva;
+    }
+
+    // skus y filtro son excluyentes: se valida por presencia de la clave, no por su verdad,
+    // para poder distinguir { skus: [] } (lista vacía explícita, igual 400 más abajo) de
+    // "no vino nada".
+    const tieneSkus = Object.prototype.hasOwnProperty.call(body, 'skus');
+    const tieneFiltro = Object.prototype.hasOwnProperty.call(body, 'filtro');
+    if (tieneSkus === tieneFiltro) {
+      return res.status(400).json({ ok: false, error: 'Debe indicarse exactamente uno: skus o filtro' });
+    }
+
+    let skusList;
+    if (tieneSkus) {
+      if (!Array.isArray(body.skus)) {
+        return res.status(400).json({ ok: false, error: 'skus debe ser un array' });
+      }
+      const vistos = new Set();
+      skusList = [];
+      for (const s of body.skus) {
+        const t = String(s ?? '').trim();
+        if (!t || vistos.has(t)) continue;
+        vistos.add(t);
+        skusList.push(t);
+      }
+    } else {
+      const filtro = body.filtro;
+      if (!filtro || typeof filtro !== 'object' || Array.isArray(filtro)) {
+        return res.status(400).json({ ok: false, error: 'filtro debe ser un objeto' });
+      }
+      const estado = String(filtro.estado || '').trim();
+      if (estado && !ESTADOS_VALIDOS.includes(estado)) {
+        return res.status(400).json({ ok: false, error: `filtro.estado debe ser uno de: ${ESTADOS_VALIDOS.join(', ')}` });
+      }
+      skusList = resolverSkusPorFiltro({
+        q: String(filtro.q || '').trim(),
+        marca: String(filtro.marca || '').trim(),
+        categoria: String(filtro.categoria || '').trim(),
+        estado,
+      });
+    }
+
+    if (skusList.length > 5000) {
+      return res.status(400).json({ ok: false, error: `Máximo 5000 SKUs por request (se recibieron ${skusList.length})` });
+    }
+
+    // Guard fail-closed contra doble resolución del filtro: entre la vista previa y la
+    // confirmación puede correr un refresco de catálogo (Woo) o los crons y el universo
+    // resuelto cambiar — el operador confirmó "812" pero se aplicarían "850". Si viene
+    // `esperados` (lo que devolvió la vista previa) y no coincide con lo resuelto AHORA,
+    // se corta antes de escribir nada y se pide re-previsualizar.
+    if (Object.prototype.hasOwnProperty.call(body, 'esperados') && body.esperados !== skusList.length) {
+      return res.status(409).json({
+        ok: false,
+        error: `El catálogo cambió desde la vista previa (esperados=${body.esperados}, ahora=${skusList.length}); volvé a previsualizar antes de aplicar.`,
+      });
+    }
+
+    // Los SKUs que no existen en catalogo_cache no se aplican (fail-closed: no crear config
+    // "huérfana" con un nombre inventado) — se informan aparte para que el operador vea
+    // qué tipeó mal si pegó una lista a mano.
+    const catalogoMap = nombresPorSku(skusList);
+    const aplicadosSkus = skusList.filter(s => catalogoMap.has(s));
+    const inexistentes = skusList.filter(s => !catalogoMap.has(s));
+
+    const configPrevia = tienenConfigPrevia(aplicadosSkus);
+    const pisados = accion !== 'quitar' ? aplicadosSkus.filter(s => configPrevia.has(s)).length : 0;
+    const sinCambio = accion === 'quitar' ? aplicadosSkus.filter(s => !configPrevia.has(s)).length : 0;
+
+    const resumen = {
+      solicitados: skusList.length,
+      aplicados: aplicadosSkus.length,
+      pisados,
+      sin_cambio: sinCambio,
+      inexistentes,
+    };
+
+    // Guard de una operación destructiva: se exige el booleano explícito, no truthiness —
+    // un `"false"` string o un `0` no deben colarse como "aplicar de verdad".
+    if (vista_previa === true) {
+      return res.json({ ok: true, vista_previa: true, resumen, esperados: skusList.length });
+    }
+
+    // Todo el lote en una transacción: si algo falla a mitad de camino, no queda la mitad de
+    // los SKUs con config nueva y la otra mitad sin tocar.
+    const aplicarLote = db.transaction((lista) => {
+      if (accion === 'quitar') {
+        const del = db.prepare('DELETE FROM skus_config_ml WHERE sku = ?');
+        for (const sku of lista) del.run(sku);
+      } else {
+        const ts = now();
+        const upsert = db.prepare(`
+          INSERT INTO skus_config_ml (sku, nombre, modo, reserva, actualizado_en)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(sku) DO UPDATE SET
+            nombre = excluded.nombre,
+            modo = excluded.modo,
+            reserva = excluded.reserva,
+            actualizado_en = excluded.actualizado_en
+        `);
+        for (const sku of lista) {
+          const nombre = catalogoMap.get(sku) || sku;
+          upsert.run(sku, nombre, accion, accion === 'reserva' ? reservaVal : 0, ts);
+        }
+      }
+    });
+    aplicarLote(aplicadosSkus);
+
+    res.json({ ok: true, vista_previa: false, resumen });
   });
 
   return router;

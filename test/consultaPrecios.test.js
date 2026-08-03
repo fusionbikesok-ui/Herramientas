@@ -168,4 +168,13 @@ describe('GET /api/consulta-precios/buscar-sku', () => {
     expect(res.body.data.some(r => r.sku === 'FB-40')).toBe(true);
     db.close();
   });
+
+  it('"%" y "_" se buscan como texto literal, no como comodín que matchea todo', async () => {
+    const { app, db } = appConDatos();
+    const porcentaje = await request(app).get('/api/consulta-precios/buscar-sku?q=%');
+    expect(porcentaje.body.data).toEqual([]);
+    const guionBajo = await request(app).get('/api/consulta-precios/buscar-sku?q=_');
+    expect(guionBajo.body.data).toEqual([]);
+    db.close();
+  });
 });

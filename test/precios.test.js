@@ -161,6 +161,33 @@ describe('auditarPrecios + router', () => {
     expect(ok.precio_sugerido).toBeNull();
   });
 
+  it('GET /api/precios: total es el COUNT real (no el LIMIT) y avisa truncado', async () => {
+    const ins = db.prepare(`
+      INSERT INTO ml_precio_auditoria
+        (clave, item_id, titulo, sku, precio_ml, sale_fee, envio, neto, precio_web, deficit_pct, estado, actualizado_en)
+      VALUES (?, ?, 't', 'FB-X', 100, 10, 5, 85, 200, 50, 'bajo', datetime('now'))
+    `);
+    const tx = db.transaction((n) => { for (let i = 0; i < n; i++) ins.run(`MLX${i}|v1`, `MLX${i}`); });
+    tx(1050); // por encima del LIMIT 1000 de la query
+
+    const res = await request(app).get('/api/precios?estado=all');
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1050);
+    expect(res.body.truncado).toBe(true);
+    expect(res.body.data).toHaveLength(1000);
+  });
+
+  it('GET /api/precios: sin truncar, total coincide con la cantidad de filas devueltas', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+    await auditarPrecios(db, ML_CFG);
+
+    const res = await request(app).get('/api/precios?estado=all');
+    expect(res.body.total).toBe(res.body.data.length);
+    expect(res.body.truncado).toBe(false);
+  });
+
   it('POST /api/precios/actualizar-precio corrige el precio en ML y refresca la fila', async () => {
     seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 }); // lista 1500 → contado 1000
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });

@@ -15,6 +15,7 @@ import axios from 'axios';
 import { Router } from 'express';
 import { esNoVendible } from '../lib/cobertura.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
+import { armarLike } from '../lib/busqueda.js';
 
 const now = () => new Date().toISOString();
 
@@ -105,10 +106,10 @@ export function codigosRouter(db, cfg) {
   router.get('/buscar', (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q) return res.json({ ok: true, data: [] });
-    const like = `%${q}%`;
+    const like = armarLike(q);
     const rows = db.prepare(`
       SELECT * FROM catalogo_cache
-      WHERE (sku LIKE ? OR nombre LIKE ?)
+      WHERE (sku LIKE ? ESCAPE '\\' OR nombre LIKE ? ESCAPE '\\')
         AND COALESCE(sku, '') <> ''
         AND tipo <> 'variable'
       ORDER BY marca COLLATE NOCASE, nombre COLLATE NOCASE
