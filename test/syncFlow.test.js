@@ -51,11 +51,11 @@ function seedMatcher(db) {
   ).run('MLA200|987', 'CASCO-L', 'Casco L', 'asignar', now);
 }
 
-function seedCatalogo(db) {
+function seedCatalogo(db, { precio = 300 } = {}) {
   const now = new Date().toISOString();
   db.prepare(
-    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, now);
+    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, precio, now);
 }
 
 // Publicación ML en cache — syncWcToMl solo empuja stock a publicaciones activas.
@@ -81,8 +81,8 @@ describe('syncMlToWc', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
-  it('happy path: orden pagada → crea pedido en WC con el precio real de venta ML y marca procesada', async () => {
-    seedCatalogo(db); // BIKE-001 → id_woo 100
+  it('happy path: orden pagada → crea pedido en WC con el precio de CONTADO del catálogo propio (no el de ML) y marca procesada', async () => {
+    seedCatalogo(db, { precio: 300 }); // BIKE-001 → id_woo 100, precio de LISTA 300 → contado 200
     const orden = {
       id: 'ORD-001',
       date_created: new Date().toISOString(),
@@ -98,12 +98,15 @@ describe('syncMlToWc', () => {
     await vi.runAllTimersAsync();
     await p;
 
-    // El precio sale de la venta ML (unit_price 150 × qty 2 = 300), no del catálogo Woo
+    // El precio de línea es el de CONTADO del catálogo propio (200 = 2/3 de 300 de lista),
+    // no el unit_price de ML (150) ni el catálogo Woo devuelto por el mock (999.99).
     const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
     expect(orderCall).toBeTruthy();
     expect(orderCall[3].line_items).toEqual([
-      { quantity: 2, subtotal: '300.00', total: '300.00', product_id: 100 },
+      { quantity: 2, subtotal: '400.00', total: '400.00', product_id: 100 },
     ]);
+    // El unit_price de ML queda como dato informativo en meta_data, nunca como precio de línea.
+    expect(orderCall[3].meta_data.find(m => m.key === '_ml_precio_pagado_total').value).toBe('300.00');
 
     // Vínculo ML→WC persistido
     const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-001');
@@ -122,11 +125,11 @@ describe('syncMlToWc', () => {
     expect(log.cant_nueva).toBe(5001);
   });
 
-  // Bug 1 (regresión): el pedido WC debe grabar el precio REAL de venta ML, aunque
-  // el catálogo Woo haya cambiado entre la venta y el sync. Caso real: WC 66275 /
-  // ML 2000017564338280, vendido a $2.660.000, catálogo Woo $3.352.500 al sync.
-  it('bug1: usa el unit_price de la venta ML, ignora el catálogo Woo cambiado', async () => {
-    seedCatalogo(db);
+  // Bug 1 (regla vigente desde 2026-08-03): el pedido WC debe grabar el precio de CONTADO
+  // del catálogo propio, ignorando tanto el unit_price de ML como el catálogo Woo devuelto
+  // por wooFetch en otras rutas (mock genérico) — la única fuente válida es catalogo_cache.
+  it('bug1: usa precioContado(catalogo_cache.precio), ignora el unit_price de ML', async () => {
+    seedCatalogo(db, { precio: 3352500 }); // precio de lista propio → contado 2235000
     const orden = {
       id: '2000017564338280',
       date_created: new Date().toISOString(),
@@ -135,7 +138,7 @@ describe('syncMlToWc', () => {
     mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
       if (path === '/orders' && method === 'post') return { data: { id: 66275 } };
-      return { data: { price: '3352500', regular_price: '3352500' } }; // catálogo al sync
+      return { data: { price: '999999999' } }; // otra ruta de Woo — no debe usarse tampoco
     });
 
     const p = syncMlToWc(db, CFG);
@@ -144,19 +147,25 @@ describe('syncMlToWc', () => {
 
     const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
     expect(orderCall[3].line_items).toEqual([
-      { quantity: 1, subtotal: '2660000.00', total: '2660000.00', product_id: 100 },
+      { quantity: 1, subtotal: '2235000.00', total: '2235000.00', product_id: 100 },
     ]);
   });
 
-  // Bug 1 fail-closed: si ML no informó unit_price, no se inventa un precio.
-  it('bug1: orden ML sin unit_price → fail-closed, item con error, sin pedido WC', async () => {
-    seedCatalogo(db);
+  // Bug 1, fail-open (decisión explícita del usuario 2026-08-03): si el SKU no tiene precio
+  // en catalogo_cache, la venta NO se pierde — la línea se crea igual sin subtotal/total
+  // (Woo aplica el precio que tenga registrado) y queda un aviso en el log.
+  it('SKU sin precio en catalogo_cache → línea sin subtotal/total, pedido se crea igual, log de aviso', async () => {
+    seedCatalogo(db, { precio: null });
     const orden = {
       id: 'ORD-NOPRICE',
       date_created: new Date().toISOString(),
-      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1 }], // sin unit_price
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 999 }],
     };
     mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 5002 } };
+      return { data: {} };
+    });
 
     const p = syncMlToWc(db, CFG);
     await vi.runAllTimersAsync();
@@ -164,11 +173,17 @@ describe('syncMlToWc', () => {
 
     const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'error' AND sku = 'BIKE-001'").get();
     expect(log).toBeTruthy();
-    expect(log.error).toMatch(/unit_price/);
-    // Nada válido → no se crea pedido WC
-    expect(wooFetch.mock.calls.some(c => c[1] === '/orders' && c[2] === 'post')).toBe(false);
+    expect(log.error).toMatch(/sin precio en catalogo_cache/);
+
+    // La venta SÍ se crea: línea con product_id/quantity, sin subtotal/total, y NUNCA con
+    // el unit_price de ML como precio.
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall).toBeTruthy();
+    expect(orderCall[3].line_items).toEqual([{ quantity: 1, product_id: 100 }]);
+
+    // algunSinMapeo NO debe marcarse por esto — la línea sí se creó.
     const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NOPRICE');
-    expect(proc.estado).toBe('parcial');
+    expect(proc.estado).toBe('ok');
   });
 
   // Bug 2: candado de reentrancia. Dos corridas en paralelo sobre la misma orden ML
@@ -290,6 +305,192 @@ describe('syncMlToWc', () => {
     await vi.runAllTimersAsync();
     await p;
     expect(mlFetch).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Datos de envío/destinatario y meta informativa en el pedido WC ────────────
+describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de la venta ML', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    seedCatalogo(db, { precio: 300 }); // contado 200
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  function ordenConEnvio(id, shippingId) {
+    return {
+      id,
+      date_created: '2026-08-01T12:00:00.000Z',
+      buyer: { nickname: 'comprador123' },
+      shipping: shippingId != null ? { id: shippingId } : undefined,
+      order_items: [{
+        item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 250, sale_fee: 20,
+      }],
+    };
+  }
+
+  it('orden con shipping.id → consulta GET /shipments/{id} y vuelca destinatario+dirección+método de envío en el mismo POST', async () => {
+    const orden = ordenConEnvio('ORD-SHIP-OK', 555);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/555') {
+        return {
+          status: 200,
+          data: {
+            logistic_type: 'self_service',
+            shipping_option: { name: 'Mercado Envíos Flex' },
+            receiver_address: {
+              receiver_name: 'Juan Pérez', street_name: 'Av Siempreviva', street_number: '742',
+              floor: '3', apartment: 'B', city: { name: 'CABA' }, state: { name: 'Buenos Aires' },
+              zip_code: '1000',
+            },
+          },
+        };
+      }
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6001 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall).toBeTruthy();
+    const body = orderCall[3];
+
+    expect(body.shipping).toEqual({
+      first_name: 'Juan Pérez',
+      address_1: 'Av Siempreviva 742',
+      address_2: 'Piso 3 B',
+      city: 'CABA',
+      state: 'Buenos Aires',
+      postcode: '1000',
+      country: 'AR',
+    });
+
+    // Nº de orden ML, precio pagado y neto (sale_fee) como dato informativo — nunca como precio de línea.
+    const meta = Object.fromEntries(body.meta_data.map(m => [m.key, m.value]));
+    expect(meta._ml_order_id).toBe('ORD-SHIP-OK');
+    expect(meta._ml_precio_pagado_total).toBe('250.00');
+    expect(meta._ml_neto_estimado).toBe('230.00'); // 250 - sale_fee 20
+    expect(meta._ml_metodo_envio).toBe('self_service');
+
+    expect(body.customer_note).toContain('ORD-SHIP-OK');
+    expect(body.customer_note).toContain('comprador123');
+    expect(body.customer_note).toContain('https://www.mercadolibre.com.ar/ventas/ORD-SHIP-OK/detalle');
+
+    // El precio de línea sigue siendo el de contado del catálogo propio, no el de ML.
+    expect(body.line_items).toEqual([{ quantity: 1, subtotal: '200.00', total: '200.00', product_id: 100 }]);
+  });
+
+  it('la consulta de shipments falla → FAIL-OPEN: el pedido se crea igual, sin datos de envío, reserva no queda retenida ni liberada de más', async () => {
+    const orden = ordenConEnvio('ORD-SHIP-FALLA', 999);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/999') throw new Error('ML shipments 500');
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6002 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    // El pedido se crea igual, sin `shipping`
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall).toBeTruthy();
+    expect(orderCall[3].shipping).toBeUndefined();
+
+    // Reserva completada normalmente (no queda retenida ni se libera de más)
+    const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-SHIP-FALLA');
+    expect(pedido.wc_order_id).toBe(6002);
+    expect(pedido.retenido_en).toBeNull();
+
+    // Aviso en el log, pero sin marcar la orden como error/parcial por esto
+    const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'ORD-SHIP-FALLA' AND estado = 'error'").get();
+    expect(log).toBeTruthy();
+    expect(log.error).toMatch(/envío ML/);
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-SHIP-FALLA');
+    expect(proc.estado).toBe('ok');
+  });
+
+  it('orden sin shipping.id → no consulta /shipments, el pedido se crea igual sin datos de envío', async () => {
+    const orden = ordenConEnvio('ORD-SIN-SHIP', undefined);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6003 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(mlFetch.mock.calls.some(c => String(c[3]).startsWith('/shipments/'))).toBe(false);
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].shipping).toBeUndefined();
+  });
+
+  it('order_items sin sale_fee → no se estima/inventa el neto, se omite ese dato', async () => {
+    const orden = {
+      id: 'ORD-SIN-FEE',
+      date_created: new Date().toISOString(),
+      buyer: { nickname: 'compradorX' },
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 250 }], // sin sale_fee
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6004 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    const meta = Object.fromEntries(orderCall[3].meta_data.map(m => [m.key, m.value]));
+    expect(meta._ml_neto_estimado).toBeUndefined();
+    expect(meta._ml_precio_pagado_total).toBe('250.00');
+  });
+
+  it('en ningún caso se emite un PUT/PATCH sobre el pedido WC ya creado (solo el POST de creación)', async () => {
+    const orden = ordenConEnvio('ORD-NO-PUT', 777);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/777') return { status: 200, data: { receiver_address: { receiver_name: 'X' } } };
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6005 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const noPost = wooFetch.mock.calls.filter(c => c[2] === 'put' || c[2] === 'patch');
+    expect(noPost).toHaveLength(0);
   });
 });
 
