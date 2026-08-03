@@ -12,7 +12,7 @@ import { mlFetch, bootstrapToken } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
-import { netoMl, veredictoNeto, precioWebClave } from '../lib/mlPrecios.js';
+import { netoMl, veredictoNeto, precioWebClave, precioContado } from '../lib/mlPrecios.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
@@ -400,26 +400,36 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       continue;
     }
 
-    // El precio del pedido WC sale del precio REAL de venta de la orden ML
-    // (item.unit_price, ya presente en ov.items), NO del catálogo Woo vigente al
-    // momento del sync: ese catálogo pudo cambiar entre la venta y el procesamiento
-    // (el cron puede demorar por el rate-limit de ML), dejando el pedido con un precio
-    // que no es ni el pagado en ML ni el actual. Fail-closed: si ML no informó el
-    // precio de la venta, no se inventa uno — se marca error y no se agrega el ítem.
-    const unitPrice = item.unit_price;
-    if (unitPrice == null || !(unitPrice >= 0)) {
-      algunSinMapeo = true;
-      logSync(db, { direccion: 'ml_wc', clave, sku, estado: 'error', error: 'Orden ML sin unit_price — no se puede fijar el precio del pedido WC' });
-      continue;
-    }
-    const total = (unitPrice * qty).toFixed(2);
+    // Decisión del usuario (2026-08-03): el pedido WC NO lleva el precio de venta de ML
+    // (item.unit_price) como precio de línea — quiere el precio de CONTADO de la propia
+    // web. `catalogo_cache.precio` es el precio de LISTA; precioContado() calcula el 2/3
+    // real de contado/transferencia (ver lib/mlPrecios.js). Si se dejara que Woo pusiera
+    // el precio solo con product_id/quantity, Woo aplicaría el de LISTA, no el de contado
+    // — por eso hay que fijar subtotal/total a mano.
+    // Fail-open a propósito (decisión explícita, no perder la venta por un dato de precio):
+    // si el producto del caché no tiene precio, la línea se crea igual con product_id/
+    // variation_id + quantity y SIN subtotal/total, para que Woo aplique el precio que
+    // tiene registrado (de lista, no de contado) — mejor una línea con precio de lista que
+    // ninguna venta registrada. NUNCA se cae al unit_price de ML en este camino.
+    const contado = precioContado(prod.precio);
 
-    const li = { quantity: qty, subtotal: total, total: total };
+    const li = { quantity: qty };
     if (prod.tipo === 'variation' && prod.id_padre) {
       li.product_id = prod.id_padre;
       li.variation_id = prod.id_woo;
     } else {
       li.product_id = prod.id_woo;
+    }
+    if (contado != null && contado > 0) {
+      const total = (contado * qty).toFixed(2);
+      li.subtotal = total;
+      li.total = total;
+    } else {
+      // No marca algunSinMapeo: la línea SÍ se creó, solo sin precio de contado propio.
+      logSync(db, {
+        direccion: 'ml_wc', clave, sku, estado: 'error',
+        error: 'SKU sin precio en catalogo_cache — línea creada con el precio registrado en WC (de lista, no de contado)',
+      });
     }
     lineItems.push(li);
   }
@@ -437,13 +447,69 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
 
   const billing = billingWcDesdeOrdenMl(orden);
 
+  // Envío/destinatario vía API de shipments de ML — dato accesorio, FAIL-OPEN a propósito
+  // (decisión del usuario, 2026-08-03): si la consulta falla, tira error, o la orden no
+  // tiene envío asociado, el pedido se crea igual sin estos datos. Perder la venta entera
+  // por no poder resolver un dato accesorio sería peor que crearla incompleta. Va ANTES
+  // del POST porque estos datos entran en el mismo POST (nunca hay un PUT posterior).
+  let shipping;
+  let metodoEnvio = null;
+  if (orden.shipping?.id) {
+    try {
+      const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${orden.shipping.id}`);
+      const ship = shipResp?.data;
+      const addr = ship?.receiver_address;
+      if (addr) {
+        shipping = {
+          first_name: addr.receiver_name || '',
+          address_1: [addr.street_name, addr.street_number].filter(Boolean).join(' '),
+          address_2: [addr.comment, addr.floor ? `Piso ${addr.floor}` : '', addr.apartment]
+            .filter(Boolean).join(' '),
+          city: addr.city?.name || '',
+          state: addr.state?.name || '',
+          postcode: addr.zip_code || '',
+          country: 'AR',
+        };
+      }
+      metodoEnvio = ship?.logistic_type || ship?.shipping_option?.name || null;
+    } catch (eShip) {
+      // No aborta, no libera ni retiene la reserva: es solo un aviso para detectar el caso.
+      logSync(db, {
+        direccion: 'ml_wc', clave: orderId, estado: 'error',
+        error: `No se pudo consultar el envío ML (fail-open, el pedido se crea igual sin esos datos): ${eShip.message}`,
+      });
+    }
+  }
+
+  // Datos informativos de la venta ML — nunca se usan como precio de línea (eso ya se
+  // resolvió arriba con precioContado). sale_fee es la comisión de ML por order_item; si
+  // no viene, el neto NO se estima/inventa, se omite ese dato (decisión del plan).
+  const totalMlPagado = items.reduce((acc, oi) => acc + (oi.unit_price ?? 0) * (oi.quantity ?? 1), 0);
+  const tieneSaleFee = items.some(oi => oi.sale_fee != null);
+  const netoMlTotal = tieneSaleFee
+    ? items.reduce((acc, oi) => acc + (oi.unit_price ?? 0) * (oi.quantity ?? 1) - (oi.sale_fee ?? 0), 0)
+    : null;
+
+  const metaData = [
+    { key: '_ml_order_id', value: orderId },
+    { key: '_ml_precio_pagado_total', value: totalMlPagado.toFixed(2) },
+  ];
+  if (netoMlTotal != null) metaData.push({ key: '_ml_neto_estimado', value: netoMlTotal.toFixed(2) });
+  if (metodoEnvio) metaData.push({ key: '_ml_metodo_envio', value: metodoEnvio });
+
+  const linkVentaMl = `https://www.mercadolibre.com.ar/ventas/${orderId}/detalle`;
+  const nicknameComprador = orden.buyer?.nickname ?? '';
+  const customerNote = `Venta MercadoLibre #${orderId} (${orden.date_created ?? ''}) — comprador: ${nicknameComprador}. ${linkVentaMl}`;
+
   try {
     const resp = await wooFetch(wooCfg, '/orders', 'post', {
       status: 'mercadolibre',
       set_paid: true,
       line_items: lineItems,
       billing,
-      meta_data: [{ key: '_ml_order_id', value: orderId }],
+      ...(shipping ? { shipping } : {}),
+      meta_data: metaData,
+      customer_note: customerNote,
     });
 
     const wcOrderId = resp.data.id;

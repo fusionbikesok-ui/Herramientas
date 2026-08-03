@@ -16,9 +16,31 @@ WooCommerce (equivalente al ciclo del cron). Protegida por el candado `_mlToWcEn
     (candado activo) o la config de ML no está lista; NO sincronizó.
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
 
-Nota: ante error de la API de ML/Woo el comportamiento es fail-closed (no se inventan
-precios ni se crean pedidos sin datos; se registra el error y se reintenta en el próximo
-ciclo).
+Nota: ante error de la API de ML/Woo el comportamiento por defecto es fail-closed (no se
+inventan precios ni se crean pedidos sin datos; se registra el error y se reintenta en el
+próximo ciclo), con dos excepciones fail-open explícitas dentro del mismo POST /orders:
+
+- **Precio de línea (2026-08-03, decisión del usuario):** el pedido WC **nunca** lleva el
+  precio de venta de ML (`unit_price`) como precio de línea. El precio de cada línea es el
+  **precio de contado de la web propia** (`precioContado()` de `lib/mlPrecios.js`, 2/3 sobre
+  `catalogo_cache.precio`, que es el de LISTA). Si el SKU del caché no tiene precio
+  registrado, la línea se crea igual (`product_id`/`variation_id` + `quantity`, sin
+  `subtotal`/`total`) y Woo aplica el precio que tenga cargado — **fail-open**: no perder la
+  venta por un dato de precio faltante. Se deja un `sync_log` de aviso (`estado='error'`,
+  no marca la orden como `parcial`).
+- **Envío/destinatario:** si la orden ML tiene `shipping.id`, se consulta
+  `GET /shipments/{id}` de ML (antes del POST, mismo request) para volcar destinatario,
+  dirección y método de envío en el campo `shipping` del pedido WC. **Fail-open**: si la
+  consulta falla o la orden no tiene envío, el pedido se crea igual sin esos datos (aviso en
+  `sync_log`, la reserva no se retiene ni se libera de más por esto).
+
+Datos informativos que se agregan en el mismo POST (nunca en un PUT/PATCH posterior — el
+único cambio permitido a un pedido WC creado desde ML es la cancelación, ver
+`procesarCancelacionesMl`): `meta_data` con `_ml_order_id`, `_ml_precio_pagado_total` (suma
+de `unit_price × cantidad` de la venta ML), `_ml_neto_estimado` (solo si ML informó
+`sale_fee` por ítem — si no viene, se omite, no se estima) y `_ml_metodo_envio`; más
+`customer_note` con Nº de orden ML, fecha, nickname del comprador y link directo a la venta
+(`https://www.mercadolibre.com.ar/ventas/{id}/detalle`).
 
 Caso especial — POST /orders a Woo que falla sin respuesta (timeout, corte de red, 5xx,
 429): antes de liberar la reserva y permitir un reintento, el backend verifica contra la

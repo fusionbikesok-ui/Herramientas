@@ -95,6 +95,16 @@ desplegar o dar por completo un cambio → auditoría de código + seguridad + t
 verdes (`npm test`) + UI responsive sin nada oculto + conformidad de sistema visual +
 migración de esquema aplicada si corresponde + presupuesto de peso frontend.
 
+## Reglas de negocio que no se rompen
+
+- **Precio de un pedido WC creado desde una venta de ML:** nunca se graba el precio de venta de
+  ML. Se registran los productos y el precio de la línea es el **precio de contado de la web**
+  (`precioContado()` de `lib/mlPrecios.js` sobre `catalogo_cache.precio`, que es el de LISTA).
+  El precio de ML puede quedar como dato informativo (meta/nota), jamás como precio de línea.
+- **Un pedido WC creado desde ML no se modifica después**, con la única excepción de la
+  cancelación de la compra. Todos los datos de la venta (destinatario, dirección, método de
+  envío, Nº y link de la orden ML) se escriben en el POST de creación.
+
 ## Cuentas de prueba para agentes de UI
 
 Para que `probador-e2e` / `auditor-despliegue` puedan loguearse solos: usuario `auditor` /

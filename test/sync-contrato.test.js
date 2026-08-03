@@ -1,9 +1,12 @@
 /**
  * Test de CARACTERIZACIÓN del payload exacto que syncMlToWc (_procesarOrden)
- * envía a WooCommerce, corrido ANTES de adoptar el modelo canónico de Orden de
- * venta (Fase 4 de lib/modelos/). Es la ruta que crea pedidos reales con plata
- * real — el refactor de routes/sync.js debe dejar este payload byte-idéntico.
- * Debe seguir en verde, sin modificarse, después del refactor.
+ * envía a WooCommerce. Es la ruta que crea pedidos reales con plata real.
+ *
+ * 2026-08-03: el precio de línea cambió de forma intencional (decisión del usuario) —
+ * ya no es el unit_price de la venta ML, es el precio de CONTADO del catálogo propio
+ * (precioContado() sobre catalogo_cache.precio). El payload también suma meta_data
+ * informativa (precio pagado en ML, envío) y customer_note. Ver
+ * docs/superpowers/plans/2026-08-03-venta-ml-precio-contado-y-datos.md.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -43,12 +46,13 @@ function seedMatcher(db) {
 
 function seedCatalogo(db) {
   const now = new Date().toISOString();
+  // precio = precio de LISTA; el precio de línea del pedido WC usa precioContado() (2/3).
   db.prepare(
-    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, now);
+    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, 300, now); // contado 200
   db.prepare(
-    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(221, 'Casco Talla L', 'CASCO-L', 'variation', 220, 3, now);
+    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(221, 'Casco Talla L', 'CASCO-L', 'variation', 220, 3, 45000, now); // contado 30000
 }
 
 describe('_procesarOrden — payload exacto de POST /orders', () => {
@@ -79,8 +83,8 @@ describe('_procesarOrden — payload exacto de POST /orders', () => {
       ],
     };
     mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
-    // El precio del line_item sale de unit_price (venta ML), no del catálogo Woo:
-    // ya no se hace GET al producto, solo el POST /orders.
+    // El precio del line_item sale del precio de CONTADO del catálogo propio (precioContado
+    // sobre catalogo_cache.precio), no de unit_price (venta ML) ni de un GET al catálogo Woo.
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
       if (path === '/orders' && method === 'post') return { data: { id: 5050 } };
       throw new Error(`ruta wooFetch no esperada en el test: ${path}`);
@@ -96,12 +100,18 @@ describe('_procesarOrden — payload exacto de POST /orders', () => {
 
     expect(payload.status).toBe('mercadolibre');
     expect(payload.set_paid).toBe(true);
-    expect(payload.meta_data).toEqual([{ key: '_ml_order_id', value: 'ORD-CONTRATO-1' }]);
+    // meta_data lleva el Nº de orden ML y el precio pagado en ML como dato informativo,
+    // nunca como precio de línea (eso queda en line_items, con el precio de contado propio).
+    expect(payload.meta_data).toEqual([
+      { key: '_ml_order_id', value: 'ORD-CONTRATO-1' },
+      { key: '_ml_precio_pagado_total', value: '30300.00' }, // 150*2 + 30000*1 (unit_price ML)
+    ]);
+    expect(payload.customer_note).toContain('ORD-CONTRATO-1');
     expect(payload.billing).toEqual({
       first_name: 'Ana', last_name: 'Gomez', email: 'ana@mail.com', phone: '3511234567',
     });
     expect(payload.line_items).toEqual([
-      { quantity: 2, subtotal: '300.00', total: '300.00', product_id: 100 },
+      { quantity: 2, subtotal: '400.00', total: '400.00', product_id: 100 },
       { quantity: 1, subtotal: '30000.00', total: '30000.00', product_id: 220, variation_id: 221 },
     ]);
 
