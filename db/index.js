@@ -159,6 +159,18 @@ export function openDb(dbPath) {
     PRIMARY KEY (user_id, herramienta),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   )`); } catch (_) {}
+  // Matcher: push automático de SKU a ML — fallos por publicación (backoff exponencial,
+  // ver migrations/002_ml_sku_push_fallos.sql y lib/matcherPush.js).
+  try { db.exec(`CREATE TABLE IF NOT EXISTS ml_sku_push_fallos (
+    clave              TEXT PRIMARY KEY,
+    sku                TEXT NOT NULL,
+    intentos           INTEGER NOT NULL DEFAULT 0,
+    ultimo_error       TEXT,
+    ultimo_status      INTEGER,
+    proximo_intento_en TEXT,
+    actualizado_en     TEXT NOT NULL
+  )`); } catch (_) {}
+
   // Store de sesiones (better-sqlite3-session-store crea su propia tabla 'sessions' al iniciar)
 
   return db;
