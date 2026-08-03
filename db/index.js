@@ -15,6 +15,11 @@ export function openDb(dbPath) {
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
+  // Precio de LISTA de Woo (regular_price), separado del vigente (precio, que puede ser
+  // sale_price si el producto está en oferta). El contado de una venta ML se calcula
+  // siempre sobre LISTA (decisión del usuario, 2026-08-03) — ver precioContado() en
+  // routes/sync.js. Queda NULL hasta el próximo refresco de catálogo tras desplegar esto.
+  try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN regular_price REAL'); } catch (_) {}
   // Atributos estructurados de la variación WC (color/talle) — evita re-parsear el nombre en el matcher.
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN atributos_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN marca TEXT'); } catch (_) {}

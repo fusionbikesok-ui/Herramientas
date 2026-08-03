@@ -40,6 +40,27 @@ describe('woo route', () => {
     db.close();
   });
 
+  // Hallazgo del revisor (2026-08-03): el contado de una venta ML se calcula sobre el precio
+  // de LISTA (regular_price), no sobre el vigente (que puede ser sale_price en oferta).
+  // refrescarCatalogo tiene que persistir regular_price por separado de precio.
+  it('refrescarCatalogo persiste regular_price (precio de LISTA) separado de precio (vigente)', async () => {
+    axios.request.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: [{
+        id: 16, name: 'Bici en oferta', sku: 'BO-1', type: 'simple', parent_id: 0,
+        stock_quantity: 2, price: '800000', regular_price: '1000000',
+      }],
+    });
+    const db = openDb(TEST_DB);
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+    await refrescarCatalogo(db, cfg);
+    const fila = db.prepare('SELECT precio, regular_price FROM catalogo_cache WHERE id_woo = 16').get();
+    expect(fila.precio).toBe(800000);
+    expect(fila.regular_price).toBe(1000000);
+    db.close();
+  });
+
   it('refrescarCatalogo borra de catalogo_cache los productos que ya no vienen en WooCommerce (borrados)', async () => {
     // Incidente real 2026-07-25: dos productos borrados en WooCommerce hacía tiempo seguían
     // en catalogo_cache para siempre (el upsert solo agrega/actualiza, nunca borraba), y

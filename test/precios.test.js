@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { veredictoNeto, netoMl, precioWebClave, precioSugerido } from '../lib/mlPrecios.js';
+import { veredictoNeto, netoMl, precioWebClave, precioSugerido, precioContado, totalContado } from '../lib/mlPrecios.js';
 import { auditarPrecios, preciosRouter } from '../routes/precios.js';
 
 vi.mock('axios', async () => {
@@ -51,6 +51,31 @@ function mockMl({ saleFee = 100, envio = 50, itemPrice = 1000, freeShipping = tr
     return { status: 404, data: {}, headers: {} };
   });
 }
+
+// totalContado (fix del tester, 2026-08-03): totalContado(precioLista, qty) tiene que dar el
+// mismo resultado que precioContado(precioLista)*qty SOLO cuando ese producto no divide con
+// resto en centavos; en el caso general (2/3 no exacto) tiene que dar el total EXACTO, sin el
+// centavo de diferencia que arrastra multiplicar el unitario ya redondeado por la cantidad.
+describe('mlPrecios — totalContado (evita el doble redondeo)', () => {
+  it('null si no hay precio de lista (mismo criterio fail-open que precioContado)', () => {
+    expect(totalContado(null, 3)).toBeNull();
+  });
+
+  it('qty=1: coincide con precioContado (redondear una vez o dos da lo mismo con una sola unidad)', () => {
+    expect(totalContado(1000, 1)).toBe(precioContado(1000));
+  });
+
+  it('regular_price=1000, qty=3: total EXACTO 2000.00, no 2000.01 (doble redondeo del unitario 666.67×3)', () => {
+    expect(precioContado(1000)).toBe(666.67); // unitario ya redondeado
+    expect(666.67 * 3).toBeCloseTo(2000.01, 2); // lo que daría el doble redondeo
+    expect(totalContado(1000, 3)).toBe(2000);
+  });
+
+  it('regular_price=100, qty=7: total EXACTO 466.67, no 466.69 (doble redondeo del unitario 66.67×7)', () => {
+    expect(precioContado(100)).toBe(66.67);
+    expect(totalContado(100, 7)).toBe(466.67);
+  });
+});
 
 describe('mlPrecios — veredictoNeto', () => {
   it('bajo: neto >5% por debajo del web', () => {
