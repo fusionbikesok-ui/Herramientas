@@ -25,6 +25,15 @@ vi.mock('../lib/mlClient.js', () => ({
 
 const TEST_DB = './test/tmp-preparacion.sqlite';
 
+// Fechas RELATIVAS al momento de correr, no fijas: la poda de pedidos_cache solo
+// alcanza filas dentro de la ventana de 30 días (ver desdeMl en routes/preparacion.js),
+// así que un seed con fecha hardcodeada deja de ser candidato a poda apenas pasa esa
+// ventana y el test empieza a fallar solo por el paso del tiempo (fue lo que pasó con
+// '2026-07-01', que caducó el 2026-07-31).
+const isoHace = (dias) => new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString();
+const HACE_10_DIAS = isoHace(10); // dentro de la ventana de poda de 30 días
+const HACE_5_DIAS = isoHace(5);   // orden ML "nueva" que sigue vigente
+
 function buildTestApp(db) {
   const app = express();
   app.use(express.json());
@@ -1259,12 +1268,12 @@ describe('syncPedidosCache', () => {
     buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','${HACE_10_DIAS}','pendiente',NULL,0,'self_service',NULL,'[]','${HACE_10_DIAS}')
     `).run();
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: HACE_5_DIAS, buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/555
 
     await syncPedidosCache(db, CFG);
@@ -1280,7 +1289,7 @@ describe('syncPedidosCache', () => {
     buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','${HACE_10_DIAS}','pendiente',NULL,0,'self_service',NULL,'[]','${HACE_10_DIAS}')
     `).run();
 
     wooFetch.mockResolvedValue({ data: [] });
@@ -1297,9 +1306,9 @@ describe('syncPedidosCache', () => {
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
       VALUES
-        ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z'),
-        ('web:200','web',200,NULL,'200','Cliente Web','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,'[]','2026-07-01T00:00:00Z'),
-        ('ml:3333','ml',NULL,'3333','3333','Cliente Enviado ML','2026-07-01T00:00:00Z','enviado',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+        ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','${HACE_10_DIAS}','pendiente',NULL,0,'self_service',NULL,'[]','${HACE_10_DIAS}'),
+        ('web:200','web',200,NULL,'200','Cliente Web','${HACE_10_DIAS}','pendiente','lpaandreani',0,NULL,NULL,'[]','${HACE_10_DIAS}'),
+        ('ml:3333','ml',NULL,'3333','3333','Cliente Enviado ML','${HACE_10_DIAS}','enviado',NULL,0,'self_service',NULL,'[]','${HACE_10_DIAS}')
     `).run();
 
     wooFetch.mockResolvedValue({ data: [] });
@@ -1316,12 +1325,12 @@ describe('syncPedidosCache', () => {
     buildTestApp(db);
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','${HACE_10_DIAS}','pendiente',NULL,0,'self_service',NULL,'[]','${HACE_10_DIAS}')
     `).run();
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: HACE_5_DIAS, buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 500, data: {} }); // shipments/555 falla
 
     await syncPedidosCache(db, CFG);
@@ -1335,17 +1344,17 @@ describe('syncPedidosCache', () => {
     buildTestApp(db);
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','${HACE_10_DIAS}','pendiente',NULL,0,'self_service',NULL,'[]','${HACE_10_DIAS}')
     `).run();
 
     // Sin shipping.id para no tener que mockear /shipments por cada una: lo que importa acá
     // es que la paginación agote las 2 páginas, no el filtrado de shipments.
     const pagina1 = Array.from({ length: 50 }, (_, i) => ({
-      id: 9000 + i, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: null, order_items: [],
+      id: 9000 + i, date_created: HACE_5_DIAS, buyer: { nickname: 'x' }, shipping: null, order_items: [],
     }));
     const pagina2 = [
-      { id: 9100, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'y' }, shipping: null, order_items: [] },
-      { id: 9101, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'z' }, shipping: null, order_items: [] },
+      { id: 9100, date_created: HACE_5_DIAS, buyer: { nickname: 'y' }, shipping: null, order_items: [] },
+      { id: 9101, date_created: HACE_5_DIAS, buyer: { nickname: 'z' }, shipping: null, order_items: [] },
     ];
 
     wooFetch.mockResolvedValue({ data: [] });
