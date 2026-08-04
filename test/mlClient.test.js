@@ -18,6 +18,13 @@ function seedToken(db) {
     VALUES (1,'tok','ref',?,?)`).run(exp, ahora());
 }
 
+function seedTokenVencido(db) {
+  // Vencido hace 1 minuto: fuerza refresh en la próxima llamada.
+  const exp = new Date(Date.now() - 60_000).toISOString();
+  db.prepare(`INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
+    VALUES (1,'tok-viejo','ref-viejo',?,?)`).run(exp, ahora());
+}
+
 function makeDb() {
   if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   const db = new Database(TEST_DB);
@@ -220,5 +227,163 @@ describe('mlClient — cooldown global de rate-limit', () => {
     expect(r.status).toBe(429);
     expect(duracion).toBeLessThan(500); // no hay espera de 2s
     expect(axios.request).toHaveBeenCalledTimes(1); // sin segundo intento
+  });
+});
+
+describe('mlClient — 429 en el refresh de token OAuth', () => {
+  let db;
+
+  // Helper: reemplaza la DB de test por una con un token vencido, forzando
+  // el refresh en la próxima llamada. Antes estaba duplicado en cada test.
+  function reseedConTokenVencido() {
+    db.close();
+    fs.unlinkSync(TEST_DB);
+    db = makeDb();
+    db.prepare('DELETE FROM ml_oauth_token').run();
+    seedTokenVencido(db);
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    axios.request.mockReset();
+    axios.post.mockReset();
+    db = makeDb();
+    reseedConTokenVencido();
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('un 429 en /oauth/token arma el cooldown global (mismo mecanismo que un 429 de API)', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.post.mockResolvedValueOnce({ status: 429, headers: { 'retry-after': '30' }, data: null });
+
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/rate limit ML \(429\)/);
+
+    expect(estadoCooldownMl().activo).toBe(true);
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('tras el 429 del refresh, la siguiente llamada no vuelve a pegarle a /oauth/token (cooldown corta antes de getAccessToken)', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    axios.post.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+
+    // Segunda llamada no-manual: el cooldown ya está activo, mlFetch corta
+    // antes de llamar a getAccessToken/_doRefresh — no debe salir a red de nuevo.
+    const r2 = await mlFetch(db, ML_CFG, 'get', '/items/MLA2');
+    expect(r2.status).toBe(429);
+    expect(r2.__cooldownSintetico).toBe(true);
+    expect(axios.post).toHaveBeenCalledTimes(1); // sin llamada nueva a /oauth/token
+    expect(axios.request).not.toHaveBeenCalled(); // ni siquiera llegó a pedir el recurso
+  });
+
+  it('un 400 en el refresh NO arma cooldown (es fatal, no transitorio) y nombra client_secret/OAuth', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.post.mockResolvedValueOnce({ status: 400, headers: {}, data: null });
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/client_secret|autorización OAuth/);
+
+    expect(estadoCooldownMl().activo).toBe(false);
+  });
+
+  it('un 401 en el refresh también es fatal, no arma cooldown, y el mensaje nombra las dos causas posibles (client_secret o refresh_token)', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.post.mockResolvedValueOnce({ status: 401, headers: {}, data: null });
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/client_secret|autorización OAuth/);
+
+    expect(estadoCooldownMl().activo).toBe(false);
+  });
+
+  it('un status inesperado no-5xx (ej. 403) en el refresh da mensaje con el status real y NO arma cooldown', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.post.mockResolvedValueOnce({ status: 403, headers: {}, data: null });
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/\(403\)/);
+
+    expect(estadoCooldownMl().activo).toBe(false);
+  });
+
+  it('un 5xx sostenido en el refresh arma cooldown igual que un 429 (ML caído, no solo rate-limitado)', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.post.mockResolvedValueOnce({ status: 503, headers: {}, data: null });
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/\(503\)/);
+
+    expect(estadoCooldownMl().activo).toBe(true);
+  });
+
+  it('un fallo de conectividad (excepción de axios) en el refresh también arma cooldown', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.post.mockRejectedValueOnce(new Error('ECONNRESET'));
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/conectividad/);
+
+    expect(estadoCooldownMl().activo).toBe(true);
+  });
+
+  it('el lock de refresh no queda colgado tras un 429 — un refresh posterior (cooldown vencido) funciona normal', async () => {
+    vi.useFakeTimers();
+
+    const { mlFetch, getAccessToken } = await import('../lib/mlClient.js');
+
+    axios.post.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow();
+
+    // Avanza más allá del cooldown (nivel 0 = 60s) para que getAccessToken
+    // vuelva a intentar el refresh en vez de cortar por el cooldown sintético.
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    axios.post.mockResolvedValueOnce({
+      status: 200, headers: {}, data: { access_token: 'nuevo', refresh_token: 'nuevo-ref', expires_in: 21600 },
+    });
+    const token = await getAccessToken(db, ML_CFG);
+    expect(token).toBe('nuevo');
+    expect(axios.post).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+
+  it('BLOQUEANTE 1: una llamada manual con cooldown activo y token vencido NO le pega al OAuth', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    // Primero se arma el cooldown con un 429 real del refresh.
+    axios.post.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow();
+    expect(estadoCooldownMl().activo).toBe(true);
+    expect(axios.post).toHaveBeenCalledTimes(1);
+
+    // Segunda llamada, esta vez MANUAL (p.ej. "Refrescar ML" del matcher).
+    // El token en DB sigue vencido (el 429 no lo actualizó). Con cooldown
+    // activo, getAccessToken debe cortar sin volver a golpear /oauth/token,
+    // aunque opts.manual salte el chequeo de cooldown de mlFetch.
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA2', null, { manual: true }))
+      .rejects.toThrow(/cooldown/i);
+    expect(axios.post).toHaveBeenCalledTimes(1); // sin POST nuevo a /oauth/token
+    expect(axios.request).not.toHaveBeenCalled(); // ni siquiera llegó a pedir el recurso
+  });
+
+  it('BLOQUEANTE 2: dos mlFetch no-manuales concurrentes con token vencido y 429 en el refresh generan un solo POST a /oauth/token', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    // Ambas llamadas salen "casi juntas", antes de que el cooldown exista —
+    // simula la ráfaga de 9 crons arrancando en el mismo ciclo.
+    axios.post.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+
+    const [r1, r2] = await Promise.allSettled([
+      mlFetch(db, ML_CFG, 'get', '/items/MLA1'),
+      mlFetch(db, ML_CFG, 'get', '/items/MLA2'),
+    ]);
+
+    expect(r1.status).toBe('rejected');
+    expect(r2.status).toBe('rejected');
+    expect(axios.post).toHaveBeenCalledTimes(1); // un solo POST pese a la concurrencia
+    expect(estadoCooldownMl().activo).toBe(true);
   });
 });
