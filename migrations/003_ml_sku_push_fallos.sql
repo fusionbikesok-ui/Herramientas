@@ -1,4 +1,4 @@
--- 002_ml_sku_push_fallos.sql
+-- 003_ml_sku_push_fallos.sql
 --
 -- Push automático de SKU del matcher a MercadoLibre (lib/matcherPush.js): fallos por
 -- publicación, con backoff exponencial (tope 24h) para no reintentar en cada ciclo de cron
