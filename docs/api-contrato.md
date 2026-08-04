@@ -169,7 +169,10 @@ con `accion` en `asignar`/`confirmar`).
   "permalink", "precio_ml", "precio_actualizado_en", "stock_ml", "stock_sincronizado",
   "senales": [{ "senal", "peso", "detalle", "valor" }] }] }`.
   `senales` ya viene filtrada de las que el usuario descartó con el mismo valor concreto
-  (ver `POST /vinculos/revisado`).
+  (ver `POST /vinculos/revisado`). `precio_lista` y `precio_contado` salen ambos de
+  `catalogo_cache.regular_price` (precio de LISTA), nunca de `precio` (VIGENTE) — ver el
+  porqué en el comentario de `precioWebClave()` en `lib/mlPrecios.js`. Ambos son `null` si
+  `regular_price` es NULL.
 - Response 400: `{ "ok": false, "error": "sku requerido" }`.
 - Response 404: `{ "ok": false, "error": "SKU no encontrado en el catálogo" }`.
 

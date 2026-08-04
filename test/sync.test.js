@@ -286,7 +286,7 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: empuja stock, activa en ML y persiste estado', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-9', 7);
-    db.prepare("UPDATE catalogo_cache SET precio=1350 WHERE sku='FB-9'").run(); // lista 1350 → contado 900
+    db.prepare("UPDATE catalogo_cache SET precio=1350, regular_price=1350 WHERE sku='FB-9'").run(); // lista 1350 → contado 900
     seedDecision(db, 'MLA9|v9', 'FB-9');
     seedPublicacion(db, { clave: 'MLA9|v9', itemId: 'MLA9', varId: 'v9', status: 'paused', subStatus: 'out_of_stock' });
     // GET item (precio 1000, sin envío gratis) + comisión 50 → neto 950 vs contado 900 (dentro de
@@ -324,7 +324,7 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: si ML rechaza la activación, registra error y no marca activo', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-10', 4);
-    db.prepare("UPDATE catalogo_cache SET precio=1350 WHERE sku='FB-10'").run(); // lista 1350 → contado 900
+    db.prepare("UPDATE catalogo_cache SET precio=1350, regular_price=1350 WHERE sku='FB-10'").run(); // lista 1350 → contado 900
     seedDecision(db, 'MLA10|v10', 'FB-10');
     seedPublicacion(db, { clave: 'MLA10|v10', itemId: 'MLA10', varId: 'v10', status: 'paused', subStatus: 'out_of_stock' });
     // chequeo de neto OK (precio 1000, comisión 50, sin envío gratis → neto 950 vs contado 900, no bloquea)
@@ -349,7 +349,7 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: bloquea si el neto ML queda >5% por debajo del precio web', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-11', 6);
-    db.prepare("UPDATE catalogo_cache SET precio=1350 WHERE sku='FB-11'").run(); // lista 1350 → contado 900
+    db.prepare("UPDATE catalogo_cache SET precio=1350, regular_price=1350 WHERE sku='FB-11'").run(); // lista 1350 → contado 900
     seedDecision(db, 'MLA11|v11', 'FB-11');
     seedPublicacion(db, { clave: 'MLA11|v11', itemId: 'MLA11', varId: 'v11', status: 'paused', subStatus: 'out_of_stock' });
     // GET item (precio 1000) + comisión 100 + envío 50 → neto 850 vs contado 900 (~5.6% debajo → bloqueado)
@@ -390,7 +390,7 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: bloquea (fail-closed) si no se pudo calcular la comisión en ML', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-14', 5);
-    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-14'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1000, regular_price=1000 WHERE sku='FB-14'").run();
     seedDecision(db, 'MLA14|v14', 'FB-14');
     seedPublicacion(db, { clave: 'MLA14|v14', itemId: 'MLA14', varId: 'v14', status: 'paused', subStatus: 'out_of_stock' });
     // item OK y precio web mapeado, pero ML no devuelve la comisión (antes de este fix: 'sin_precio', no bloqueaba)
@@ -405,13 +405,16 @@ describe('reactivación de pausadas por falta de stock', () => {
     expect(r.resultados[0].ok).toBe(false);
     expect(r.resultados[0].bloqueado).toBe(true);
     expect(r.resultados[0].neto).toBeNull();
+    // Pinnea el motivo real (comisión), para que este test no quede tapado por el bloqueo
+    // "sin precio web mapeado" si algún día se rompe el fail-closed de la comisión.
+    expect(r.resultados[0].error).toMatch(/comisión/i);
     expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA14|v14').status).toBe('paused');
   });
 
   it('reactivarItems: bloquea (fail-closed) si falla la consulta del item en ML', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-13', 5);
-    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-13'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1000, regular_price=1000 WHERE sku='FB-13'").run();
     seedDecision(db, 'MLA13|v13', 'FB-13');
     seedPublicacion(db, { clave: 'MLA13|v13', itemId: 'MLA13', varId: 'v13', status: 'paused', subStatus: 'out_of_stock' });
     axios.request.mockImplementation((cfg) => {
@@ -423,13 +426,15 @@ describe('reactivación de pausadas por falta de stock', () => {
     const r = await reactivarItems(db, ML_CFG, ['MLA13']);
     expect(r.resultados[0].ok).toBe(false);
     expect(r.resultados[0].bloqueado).toBe(true);
+    // Pinnea el motivo real (falla al consultar el item), no el bloqueo "sin precio web".
+    expect(r.resultados[0].error).toMatch(/no se pudo consultar el precio/i);
     expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA13|v13').status).toBe('paused');
   });
 
   it('reactivarItems: omite (no reactiva) si al momento de reactivar ya no está pausada en ML', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-15', 5);
-    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-15'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1000, regular_price=1000 WHERE sku='FB-15'").run();
     seedDecision(db, 'MLA15|v15', 'FB-15');
     // El caché local la tiene pausada por out_of_stock (así entró a la lista de reactivables)...
     seedPublicacion(db, { clave: 'MLA15|v15', itemId: 'MLA15', varId: 'v15', status: 'paused', subStatus: 'out_of_stock' });
@@ -465,7 +470,7 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: omite (por seguridad) si el vendedor la pausó manualmente entre la carga y la reactivación', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-16', 5);
-    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-16'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1000, regular_price=1000 WHERE sku='FB-16'").run();
     seedDecision(db, 'MLA16|v16', 'FB-16');
     seedPublicacion(db, { clave: 'MLA16|v16', itemId: 'MLA16', varId: 'v16', status: 'paused', subStatus: 'out_of_stock' });
     let putCount = 0;
@@ -496,7 +501,7 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: bloquea (fail-closed) si ML responde 200 pero sin el campo status', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-17', 5);
-    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-17'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1000, regular_price=1000 WHERE sku='FB-17'").run();
     seedDecision(db, 'MLA17|v17', 'FB-17');
     seedPublicacion(db, { clave: 'MLA17|v17', itemId: 'MLA17', varId: 'v17', status: 'paused', subStatus: 'out_of_stock' });
     let putCount = 0;
@@ -515,6 +520,8 @@ describe('reactivación de pausadas por falta de stock', () => {
     expect(r.resultados[0].ok).toBe(false);
     expect(r.resultados[0].bloqueado).toBe(true);
     expect(r.resultados[0].omitido).toBeUndefined();
+    // Pinnea el motivo real (falta el campo status), no el bloqueo "sin precio web".
+    expect(r.resultados[0].error).toMatch(/no devolvió el estado/i);
     expect(putCount).toBe(0);
     // No se tocó el caché: sigue pausada por out_of_stock (fail-closed, reintentable)
     expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA17|v17').status).toBe('paused');
@@ -523,7 +530,7 @@ describe('reactivación de pausadas por falta de stock', () => {
   it('reactivarItems: omite (por seguridad) si ML devuelve sub_status como string (no array) con paused_by_seller', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-18', 5);
-    db.prepare("UPDATE catalogo_cache SET precio=1000 WHERE sku='FB-18'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1000, regular_price=1000 WHERE sku='FB-18'").run();
     seedDecision(db, 'MLA18|v18', 'FB-18');
     seedPublicacion(db, { clave: 'MLA18|v18', itemId: 'MLA18', varId: 'v18', status: 'paused', subStatus: 'out_of_stock' });
     let putCount = 0;
@@ -557,7 +564,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const sku = `FB-P${i}`;
       const item = `MLP${i}`;
       seedCatalogo(db, sku, 7, { idWoo: 100 + i, idPadre: 200 + i });
-      db.prepare('UPDATE catalogo_cache SET precio=1350 WHERE sku=?').run(sku); // contado 900
+      db.prepare('UPDATE catalogo_cache SET precio=1350, regular_price=1350 WHERE sku=?').run(sku); // contado 900
       seedDecision(db, `${item}|v${i}`, sku);
       seedPublicacion(db, { clave: `${item}|v${i}`, itemId: item, varId: `v${i}`, status: 'paused', subStatus: 'out_of_stock' });
       ids.push(item);
@@ -600,7 +607,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     // 3 publicaciones OK + 1 que falla al activar (PUT /items/MLPF -> 400)
     for (const [item, sku, i] of [['MLPA', 'FB-A', 1], ['MLPB', 'FB-B', 2], ['MLPF', 'FB-F', 3], ['MLPC', 'FB-C', 4]]) {
       seedCatalogo(db, sku, 5, { idWoo: 300 + i, idPadre: 400 + i });
-      db.prepare('UPDATE catalogo_cache SET precio=1350 WHERE sku=?').run(sku);
+      db.prepare('UPDATE catalogo_cache SET precio=1350, regular_price=1350 WHERE sku=?').run(sku);
       seedDecision(db, `${item}|w${i}`, sku);
       seedPublicacion(db, { clave: `${item}|w${i}`, itemId: item, varId: `w${i}`, status: 'paused', subStatus: 'out_of_stock' });
     }
@@ -928,12 +935,12 @@ describe('vista de detalle', () => {
     seedToken(db);
     // Publicación A: la que va a fallar (throw al pedir su comisión/listing_prices).
     seedCatalogo(db, 'FB-T1', 5, { idWoo: 501 });
-    db.prepare("UPDATE catalogo_cache SET precio=1500 WHERE sku='FB-T1'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1500, regular_price=1500 WHERE sku='FB-T1'").run();
     seedDecision(db, 'MLAT1|', 'FB-T1');
     seedPublicacion(db, { clave: 'MLAT1|', itemId: 'MLAT1', status: 'paused', subStatus: 'out_of_stock' });
     // Publicación B: debe evaluarse con normalidad pese al throw de la A.
     seedCatalogo(db, 'FB-T2', 5, { idWoo: 502 });
-    db.prepare("UPDATE catalogo_cache SET precio=1500 WHERE sku='FB-T2'").run();
+    db.prepare("UPDATE catalogo_cache SET precio=1500, regular_price=1500 WHERE sku='FB-T2'").run();
     seedDecision(db, 'MLAT2|', 'FB-T2');
     seedPublicacion(db, { clave: 'MLAT2|', itemId: 'MLAT2', status: 'paused', subStatus: 'out_of_stock' });
 

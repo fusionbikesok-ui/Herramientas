@@ -26,9 +26,12 @@ function sembrarReactivable({ clave = 'MLA1|', itemId = 'MLA1', sku = 'FB-1', st
   // sinPrecioWeb: sigue con stock > 0 (así hay reactivable de verdad y la corrida avanza
   // hasta chequearNetoReactivar) pero con precio NULL, para que precioWebClave devuelva
   // null y dispare el bloqueo "Sin precio web mapeado" en vez de vaciar getReactivablesRows.
-  db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
-    VALUES (?, ?, ?, 'simple', ?, ?, '2026-07-30T00:00:00Z')`)
-    .run(Math.floor(Math.random() * 1e6), 'Producto ' + sku, sku, stockWc, sinPrecioWeb ? null : precioWc);
+  // regular_price (precio de LISTA) igual a precio (vigente): sin oferta en estos escenarios,
+  // así el contado de referencia sigue siendo el mismo que antes de separar los dos campos.
+  db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, regular_price, actualizado_en)
+    VALUES (?, ?, ?, 'simple', ?, ?, ?, '2026-07-30T00:00:00Z')`)
+    .run(Math.floor(Math.random() * 1e6), 'Producto ' + sku, sku, stockWc,
+      sinPrecioWeb ? null : precioWc, sinPrecioWeb ? null : precioWc);
   db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
     VALUES (?, ?, ?, 'asignar', '2026-07-30T00:00:00Z')`).run(clave, sku, 'Producto ' + sku);
   db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
@@ -145,7 +148,26 @@ describe('reactivarAutomatico', () => {
     expect(mlFetch).toHaveBeenCalled();
     expect(r.reactivadas).toBe(0);
     expect(r.frenadas).toBe(0);
+    // Contador observable (2026-08-03): este es justo el modo de falla mudo que server.js
+    // ahora loguea — sin este contador, este ciclo se ve idéntico a "no había nada que hacer".
+    expect(r.sin_precio_web).toBe(1);
     expect(db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n).toBe(0);
+  });
+
+  it('sin_precio_web queda en 0 cuando el bloqueo es por otro motivo (comisión no calculable)', async () => {
+    // Contraprueba: el contador NO debe subir con el bloqueo "no se pudo calcular la
+    // comisión" (mismo test de la línea 117), para no mezclar los dos motivos fail-closed.
+    sembrarReactivable({ precioWc: 300000 });
+    mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
+        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      }
+      if (metodo === 'get' && path.includes('listing_prices')) return { status: 500, data: null };
+      return { status: 200, data: {} };
+    });
+
+    const r = await reactivarAutomatico(db, CFG);
+    expect(r.sin_precio_web).toBe(0);
   });
 
   it('candado: si ya hay una corrida en curso, la segunda no llama a ML y devuelve omitido', async () => {

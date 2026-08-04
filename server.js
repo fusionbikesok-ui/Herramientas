@@ -198,6 +198,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             if (r && !r.omitido && (r.reactivadas || r.frenadas)) {
               console.log(`reactivación automática: ${r.reactivadas} reactivadas, ${r.frenadas} frenadas`);
             }
+            // Modo de falla mudo (hallazgo del revisor 2026-08-03): si este cron corre antes
+            // que el de catálogo tras un reinicio, catalogo_cache.regular_price puede estar
+            // vacío para todo el mundo y TODAS las reactivables quedan bloqueadas por "sin
+            // precio web mapeado" sin dejar frenada (se reintentan solas) — indistinguible en
+            // el log de un ciclo sin trabajo. Avisar explícitamente para que no pase inadvertido.
+            if (r && !r.omitido && r.sin_precio_web > 0) {
+              console.warn(`reactivación automática: ${r.sin_precio_web} bloqueadas por falta de precio web (catalogo_cache.regular_price vacío) — si persiste varios ciclos, refrescar el catálogo de WooCommerce`);
+            }
           })
           .catch(err => console.error('reactivación automática error:', err.message));
       });

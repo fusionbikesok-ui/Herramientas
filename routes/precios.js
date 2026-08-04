@@ -1,9 +1,9 @@
 /**
  * Auditoría de precios ML: compara el neto que recibe el vendedor (precio − comisión − envío)
  * contra el precio de CONTADO de cada publicación activa mapeada, para detectar precios mal
- * puestos. catalogo_cache.precio guarda el precio de LISTA (el que devuelve la API de
- * WooCommerce); precioContado() en lib/mlPrecios.js lo convierte a precio de contado antes
- * de comparar — ver el comentario ahí para el porqué.
+ * puestos. catalogo_cache.regular_price guarda el precio de LISTA (catalogo_cache.precio es
+ * el VIGENTE, que ya trae el sale_price si hay oferta); precioContado() en lib/mlPrecios.js
+ * convierte el de lista a precio de contado antes de comparar — ver el comentario ahí.
  *
  * El scan es largo (~1000 publicaciones × varias llamadas a ML), así que corre en background
  * y persiste el resultado en ml_precio_auditoria; la página lee esa tabla y muestra progreso.
@@ -43,8 +43,10 @@ export async function auditarPrecios(db, mlCfg) {
   if (_auditEnCurso) return { yaEnCurso: true };
   _auditEnCurso = true;
 
+  // c.regular_price es el precio de LISTA (ver JSDoc arriba); NUNCA c.precio (vigente, ya
+  // trae el sale_price si el producto está en oferta) — evita acumular dos descuentos.
   const candidatas = db.prepare(`
-    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_lista
+    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.regular_price AS precio_lista
     FROM ml_publicaciones_cache p
     JOIN sku_matcher_decisiones d ON d.clave = p.clave AND d.accion IN ('asignar','confirmar') AND d.sku <> ''
     LEFT JOIN catalogo_cache c ON c.sku = d.sku AND c.sku <> ''
@@ -128,7 +130,7 @@ function buildMlPriceUpdate(itemId, variationId, precio) {
  */
 async function refrescarFila(db, mlCfg, clave) {
   const filaRaw = db.prepare(`
-    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_lista
+    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.regular_price AS precio_lista
     FROM ml_publicaciones_cache p
     JOIN sku_matcher_decisiones d ON d.clave = p.clave AND d.accion IN ('asignar','confirmar') AND d.sku <> ''
     LEFT JOIN catalogo_cache c ON c.sku = d.sku AND c.sku <> ''
