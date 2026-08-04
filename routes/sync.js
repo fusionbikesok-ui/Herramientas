@@ -379,11 +379,12 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   // por no poder resolver un dato accesorio sería peor que crearla incompleta.
   //
   // Se resuelve ACÁ, ANTES de la reserva atómica de abajo (hallazgo del revisor, 2026-08-03):
-  // `mlFetch` puede dormir hasta `Retry-After` segundos sin cota ante un 429 de ML (ver
-  // lib/mlClient.js). Si este await quedara DESPUÉS de reservar, la fila podría acercarse al
-  // umbral de 60min de limpieza de reservas abandonadas de más arriba mientras el proceso
-  // sigue vivo, y otro proceso la liberaría por error → duplicado. Poniéndolo antes, la
-  // ventana de la reserva no crece nada: los datos igual entran en el mismo POST de abajo.
+  // `mlFetch` tiene un timeout HTTP fijo de 20s (ML_HTTP_TIMEOUT_MS) y, ante un 429 activo,
+  // ya no duerme — devuelve un 429 sintético al instante (ver lib/mlClient.js). Aun así, si
+  // este await quedara DESPUÉS de reservar, la fila podría acercarse al umbral de 60min de
+  // limpieza de reservas abandonadas de más arriba mientras el proceso sigue vivo, y otro
+  // proceso la liberaría por error → duplicado. Poniéndolo antes, la ventana de la reserva no
+  // crece nada: los datos igual entran en el mismo POST de abajo.
   let shipping;
   let metodoEnvio = null;
   if (orden.shipping?.id) {
@@ -830,12 +831,28 @@ async function _syncWcToMl(db, cfg) {
     try {
       if (!estadoItem.has(itemId)) {
         const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
+        if (est.status === 429) {
+          // Cooldown global activo (real o sintético): TODAS las consultas de status que
+          // falten en esta corrida van a devolver el mismo 429 — cortar el bucle entero en
+          // vez de seguir recorriendo cientos de diffs haciendo `continue` en silencio, que
+          // dejaba el stock de ML desincronizado sin ningún rastro. El próximo ciclo del
+          // cron retoma desde el mismo `diffs` (no se pierde nada, solo se pospone).
+          logSync(db, { direccion: 'wc_ml', clave, sku, estado: 'error', error: 'Cooldown ML activo (429) — corte de corrida, se retoma en el próximo ciclo' });
+          break;
+        }
         estadoItem.set(itemId, est.status === 200 ? est.data.status : 'desconocido');
         await sleep(ML_CALL_DELAY_MS);
       }
       const status = estadoItem.get(itemId);
+      if (status === 'desconocido') {
+        // Fallo real de la consulta de status (no un 429 de cooldown, ya cortado arriba):
+        // no se puede saber si está activa. Registrar en vez de saltear en silencio, para
+        // que un problema persistente de esta publicación quede visible en el log de sync.
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: diff.cantidad_ml, cantNueva: cantidad, estado: 'error', error: 'No se pudo consultar el status de la publicación en ML' });
+        continue;
+      }
       if (status !== 'active') {
-        // Publicación no activa: saltar sin registrar error.
+        // Publicación no activa (paused/closed/under_review): skip legítimo, sin error.
         continue;
       }
       if (status === 'active' && itemsBloqueados.has(itemId)) {
@@ -1041,9 +1058,10 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
 // compartida con reactivarAutomatico, que cuenta cuántas reactivaciones cayeron en este motivo
 // puntual para que el operador pueda distinguirlo de "no había nada que hacer" (ver server.js).
 const MOTIVO_SIN_PRECIO_WEB = 'Sin precio web mapeado para esta variación — no se puede verificar el margen';
-async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
+async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, opts = {}) {
   const resp = await mlFetch(db, mlCfg, 'get',
-    `/items/${itemId}?attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`);
+    `/items/${itemId}?attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`,
+    null, opts);
   if (resp.status !== 200 || !resp.data) {
     return { error: 'No se pudo consultar el precio en ML — reintentá', clave: null, neto: null, precio_web: null, deficitPct: null };
   }
@@ -1083,7 +1101,7 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
     const { neto } = await netoMl(db, mlCfg, {
       itemId, price: precio, categoryId: item.category_id,
       listingTypeId: item.listing_type_id, freeShipping,
-    }, caches);
+    }, caches, opts);
     if (neto == null) {
       return { error: 'No se pudo calcular la comisión en ML — reintentá', clave: v.clave, neto: null, precio_web: precioWeb, deficitPct: null };
     }
@@ -1104,7 +1122,7 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
  * caché stale). Procesa un lote acotado para no chocar el timeout de nginx. Devuelve resultado
  * por publicación.
  */
-export async function reactivarItems(db, mlCfg, itemIds) {
+export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
   const LOTE_MAX = 50;
   const aProcesar = itemIds.slice(0, LOTE_MAX);
   const rows = getReactivablesRows(db, aProcesar);
@@ -1126,7 +1144,7 @@ export async function reactivarItems(db, mlCfg, itemIds) {
       // 0) Revalidación en vivo + bloqueo por neto (un solo GET del item). Omite si ya no está
       //    pausada o si el vendedor la pausó manualmente; bloquea si el neto queda >5% por debajo
       //    del precio web de alguna variación mapeada. Server-side (no confía en el cliente).
-      const bloqueo = await chequearNetoReactivar(db, mlCfg, itemId, variaciones);
+      const bloqueo = await chequearNetoReactivar(db, mlCfg, itemId, variaciones, opts);
       if (bloqueo) {
         if (bloqueo.omitido) {
           // Refrescar el caché local con el estado real de ML para sacarla de reactivables y
@@ -1142,7 +1160,7 @@ export async function reactivarItems(db, mlCfg, itemIds) {
       for (const v of variaciones) {
         const cantidad = Math.max(0, Math.round(v.stock_disponible_ml));
         const { path, body } = buildMlStockUpdate(itemId, v.variation_id || '', cantidad);
-        const resp = await mlFetch(db, mlCfg, 'put', path, body);
+        const resp = await mlFetch(db, mlCfg, 'put', path, body, opts);
         if (resp.status !== 200) {
           throw new Error(`stock ${v.clave}: ${extraerErrorMl(resp)}`);
         }
@@ -1150,7 +1168,7 @@ export async function reactivarItems(db, mlCfg, itemIds) {
 
       // 2) Reactivar la publicación — DESPUÉS de que todos los PUTs de stock de ESTA
       //    publicación terminaron (dependencia intra-publicación, no se paraleliza).
-      const act = await mlFetch(db, mlCfg, 'put', `/items/${itemId}`, { status: 'active' });
+      const act = await mlFetch(db, mlCfg, 'put', `/items/${itemId}`, { status: 'active' }, opts);
       if (act.status !== 200) {
         throw new Error(`activar: ${extraerErrorMl(act)}`);
       }
@@ -1840,7 +1858,8 @@ export function syncRouter(db, cfg) {
     }
     _reactivarEnCurso = true;
     try {
-      const r = await reactivarItems(db, mlCfg, itemIds.map(String));
+      // manual: true — reactivación disparada a mano por el usuario (acción explícita).
+      const r = await reactivarItems(db, mlCfg, itemIds.map(String), { manual: true });
       // El cliente puede haber cancelado (AbortController) y cerrado la conexión mientras
       // este chunk terminaba de procesarse en ML. En ese caso no intentamos escribir la
       // respuesta (rompería con un stream ya cerrado); igual el trabajo del chunk se completó.
@@ -1878,7 +1897,8 @@ export function syncRouter(db, cfg) {
     // reactivarItems trunca a LOTE_MAX (50) internamente y NO avisa por sí solo: hay que
     // decírselo al cliente explícitamente, si no "forzar 80 frenadas" parece haber procesado
     // las 80 cuando en realidad solo tocó 50 y las 30 restantes quedaron intactas sin rastro.
-    const { procesados, resultados } = await reactivarItems(db, mlCfg, itemIds);
+    // manual: true — override disparado a mano por el usuario tras corregir el precio.
+    const { procesados, resultados } = await reactivarItems(db, mlCfg, itemIds, { manual: true });
     // Borra las frenadas de las claves que pertenecen a las publicaciones que salieron OK.
     // La subconsulta trae TODAS las claves cacheadas de ese item_id (una publicación con
     // variaciones tiene varias claves): correcto, porque chequearNetoReactivar evalúa el
@@ -2144,7 +2164,8 @@ export function syncRouter(db, cfg) {
     const cantidad = Math.max(0, Math.round(row.stock_disponible_ml));
     try {
       const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
-      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+      // manual: true — reintento puntual disparado a mano desde el panel.
+      const resp = await mlFetch(db, mlCfg, 'put', path, body, { manual: true });
       if (resp.status === 200) {
         upsertMlStockEstado(db, clave, row.sku, cantidad);
         logSync(db, { direccion: 'wc_ml', clave, sku: row.sku, cantNueva: cantidad, estado: 'ok' });

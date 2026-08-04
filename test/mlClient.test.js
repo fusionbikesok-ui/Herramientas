@@ -74,7 +74,7 @@ describe('mlClient — cooldown global de rate-limit', () => {
     expect(axios.request).toHaveBeenCalledTimes(2);
   });
 
-  it('respeta Retry-After si es mayor al escalón calculado', async () => {
+  it('respeta Retry-After si es mayor al escalón calculado, pero nunca supera el tope de 10 min', async () => {
     const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
 
     axios.request.mockResolvedValueOnce({ status: 429, headers: { 'retry-after': '900' }, data: null });
@@ -83,15 +83,65 @@ describe('mlClient — cooldown global de rate-limit', () => {
     const estado = estadoCooldownMl();
     expect(estado.activo).toBe(true);
     const restanteMs = new Date(estado.hasta).getTime() - Date.now();
-    expect(restanteMs).toBeGreaterThan(600_000); // más que el tope de 10 min normal
+    // Retry-After pidió 900s (15min) pero el tope duro es 10min: nunca puede superarlo.
+    expect(restanteMs).toBeGreaterThan(590_000);
+    expect(restanteMs).toBeLessThanOrEqual(600_000);
   });
 
-  it('resetea el backoff tras una respuesta exitosa', async () => {
+  it('Retry-After en formato HTTP-date (NaN en parseInt) cae al escalón calculado', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({
+      status: 429, headers: { 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' }, data: null,
+    });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+
+    const estado = estadoCooldownMl();
+    expect(estado.activo).toBe(true);
+    const restanteMs = new Date(estado.hasta).getTime() - Date.now();
+    // Nivel 0 del escalón: 60s (con margen por el paso del tiempo del test).
+    expect(restanteMs).toBeGreaterThan(55_000);
+    expect(restanteMs).toBeLessThan(65_000);
+  });
+
+  it('resetea el backoff tras una respuesta exitosa NO manual', async () => {
     const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
 
     axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
     await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
     expect(estadoCooldownMl()).toEqual({ activo: false, hasta: null, nivel: -1 });
+  });
+
+  it('un 200 de una llamada manual NO resetea el cooldown activo', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    expect(estadoCooldownMl().activo).toBe(true);
+
+    // Llamada manual exitosa mientras el cooldown sigue activo: no debe cancelarlo.
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: { id: 'MLA2' } });
+    const r = await mlFetch(db, ML_CFG, 'get', '/items/MLA2', null, { manual: true });
+    expect(r.status).toBe(200);
+    expect(estadoCooldownMl().activo).toBe(true);
+  });
+
+  it('429s concurrentes con cooldown ya activo no escalan el nivel ni extienden la ventana', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    const estado1 = estadoCooldownMl();
+    expect(estado1.nivel).toBe(0);
+
+    // Otra request "en vuelo" que también recibe 429 mientras el cooldown ya está activo
+    // (simula concurrencia real: varias llamadas salieron a red casi juntas).
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA2', null, { manual: true }); // manual para forzar salida a red
+    const estado2 = estadoCooldownMl();
+
+    expect(estado2.nivel).toBe(0); // no escaló a nivel 1
+    expect(new Date(estado2.hasta).getTime()).toBe(new Date(estado1.hasta).getTime()); // no extendió la ventana
   });
 
   it('no reintenta inmediatamente ante 429 (sin sleep de 2s como antes)', async () => {
