@@ -140,7 +140,8 @@ async function refrescarFila(db, mlCfg, clave) {
   const fila = { ...filaRaw, precio_web: precioContado(filaRaw.precio_lista) };
 
   const resp = await mlFetch(db, mlCfg, 'get',
-    `/items/${fila.item_id}?attributes=id,price,category_id,listing_type_id,shipping,variations,status`);
+    `/items/${fila.item_id}?attributes=id,price,category_id,listing_type_id,shipping,variations,status`,
+    null, { manual: true });
   if (resp.status !== 200 || !resp.data) return null;
   const item = resp.data;
 
@@ -151,7 +152,7 @@ async function refrescarFila(db, mlCfg, clave) {
     const r = await netoMl(db, mlCfg, {
       itemId: fila.item_id, price: precio_ml, categoryId: item.category_id,
       listingTypeId: item.listing_type_id, freeShipping,
-    });
+    }, {}, { manual: true });
     sale_fee = r.sale_fee; envio = r.envio; neto = r.neto;
     const v = veredictoNeto(neto, fila.precio_web);
     estado = v.estado; deficit_pct = v.deficitPct;
@@ -248,7 +249,7 @@ export function preciosRouter(db, cfg) {
     if (!itemId) return res.status(400).json({ ok: false, error: 'Clave inválida' });
     try {
       const { path, body } = buildMlPriceUpdate(itemId, variationId, precio);
-      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+      const resp = await mlFetch(db, mlCfg, 'put', path, body, { manual: true });
       if (resp.status !== 200) return res.status(400).json({ ok: false, error: extraerErrorMl(resp) });
       const fila = await refrescarFila(db, mlCfg, clave);
       res.json({ ok: true, data: fila });

@@ -2269,3 +2269,115 @@ describe('GET /api/sync/dashboard — pedidos.reservasRetenidas', () => {
     expect(res.body.pedidos.reservasRetenidas.total).toBe(0);
   });
 });
+
+/**
+ * REGLA DE NEGOCIO CRÍTICA (incidente 2026-08-04): el cursor de ventas de ML
+ * NO debe avanzar cuando la consulta a ML falla.
+ *
+ * `_syncMlToWc` arranca desde `sync_estado.ultima_orden_ml` y pide las órdenes
+ * con `date_created.from=<cursor>`. Si el cursor avanzara ante un fallo, las
+ * ventas de esa ventana no se volverían a consultar nunca y NUNCA se crearía
+ * el pedido en WooCommerce: ventas perdidas en silencio.
+ *
+ * Esto importa especialmente desde que `mlFetch` tiene cooldown global: durante
+ * un cooldown devuelve un 429 *sintético* sin salir a la red, así que este
+ * camino ahora se recorre de forma sistemática (hasta 10 min seguidos) y no
+ * solo de forma esporádica como cuando el 429 venía de ML.
+ *
+ * El contraste con el caso 200 es deliberado: sin él, un test que solo afirma
+ * "el cursor no cambió" pasaría igual aunque el cursor no se escribiera nunca.
+ */
+describe('syncMlToWc — el cursor de ventas no avanza si ML no responde (cooldown/429)', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  // Nota: las fechas se calculan con Date.now() DESPUÉS de instalar los timers falsos.
+  // Funciona porque vitest arranca el reloj falso en el tiempo real actual. Son relativas
+  // a propósito: un cursor hardcodeado caduca solo con el paso del tiempo.
+  function seedCursor(db, valor) {
+    db.prepare(
+      "INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)"
+    ).run(valor, new Date().toISOString());
+  }
+
+  function leerCursor(db) {
+    return db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get()?.valor ?? null;
+  }
+
+  it('con cooldown activo (429 sintético de mlFetch) el cursor queda intacto', async () => {
+    // Fecha relativa a Date.now(): un cursor hardcodeado caduca solo con el tiempo.
+    const cursorPrevio = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    seedCursor(db, cursorPrevio);
+
+    // Forma exacta del 429 sintético que devuelve mlFetch durante un cooldown:
+    // no sale a la red, data va en null.
+    mlFetch.mockResolvedValue({ status: 429, headers: {}, data: null, __cooldownSintetico: true });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(leerCursor(db)).toBe(cursorPrevio);
+    // Y no se creó ningún pedido en Woo.
+    expect(wooFetch).not.toHaveBeenCalled();
+  });
+
+  // Con mlFetch mockeado en este archivo, un 429 "real" y uno sintético son el mismo
+  // objeto para _syncMlToWc: ese caso no agregaría cobertura. Lo que sí importa fijar
+  // acá es que CUALQUIER no-200 preserva el cursor, no solo el 429.
+  it('ante un 500 de ML el cursor tampoco avanza (vale para cualquier no-200)', async () => {
+    const cursorPrevio = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    seedCursor(db, cursorPrevio);
+
+    mlFetch.mockResolvedValue({ status: 500, headers: {}, data: null });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(leerCursor(db)).toBe(cursorPrevio);
+  });
+
+  it('CONTRASTE: con 200 y una orden nueva, el cursor SÍ avanza (si no, el test de arriba sería vacuo)', async () => {
+    const cursorPrevio = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    const fechaOrden = new Date(Date.now() - 60 * 1000).toISOString();
+    seedCursor(db, cursorPrevio);
+    seedCatalogo(db, { precio: 300 });
+
+    const orden = {
+      id: 'ORD-CURSOR-1',
+      date_created: fechaOrden,
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
+    };
+    // Primera página con la orden, siguientes vacías (corta la paginación).
+    let llamada = 0;
+    mlFetch.mockImplementation(async () => {
+      llamada += 1;
+      return llamada === 1
+        ? { status: 200, data: { results: [orden] } }
+        : { status: 200, data: { results: [] } };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 7001 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(leerCursor(db)).toBe(fechaOrden);
+  });
+});
