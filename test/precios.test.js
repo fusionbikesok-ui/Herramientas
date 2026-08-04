@@ -21,9 +21,12 @@ function seedToken(db) {
   db.prepare(`INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
     VALUES (1,'tok','ref',?,?)`).run(exp, ahora());
 }
-function seedCatalogo(db, { idWoo, sku, precio, stock = 5 }) {
-  db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, actualizado_en)
-    VALUES (?,?,?,?,?,?,?,?)`).run(idWoo, 'Prod ' + sku, sku, 'variation', 1, stock, precio, ahora());
+// regularPrice por defecto = precio (sin oferta): el contado auditado se calcula sobre
+// regular_price (LISTA), nunca sobre precio (vigente) — pasar regularPrice explícito
+// para simular un producto en oferta (regular_price != precio).
+function seedCatalogo(db, { idWoo, sku, precio, regularPrice = precio, stock = 5 }) {
+  db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(idWoo, 'Prod ' + sku, sku, 'variation', 1, stock, precio, regularPrice, ahora());
 }
 function seedDecision(db, clave, sku) {
   db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
@@ -125,6 +128,20 @@ describe('mlPrecios — netoMl + precioWebClave', () => {
     seedDecision(db, 'MLA1|v1', 'FB-1');
     expect(precioWebClave(db, 'MLA1|v1')).toBe(822.67);
     expect(precioWebClave(db, 'MLA9|v9')).toBe(null);
+  });
+
+  it('producto en oferta: usa regular_price (LISTA), no precio (vigente) — no acumula descuentos', () => {
+    // regular_price 1000 (lista), precio 800 (vigente, en oferta). El contado de
+    // referencia es 666.67 (2/3 de 1000), NO 533.33 (2/3 de 800, descuento sobre descuento).
+    seedCatalogo(db, { idWoo: 11, sku: 'FB-OFERTA', precio: 800, regularPrice: 1000 });
+    seedDecision(db, 'MLA2|v1', 'FB-OFERTA');
+    expect(precioWebClave(db, 'MLA2|v1')).toBe(666.67);
+  });
+
+  it('regular_price NULL: fail-closed, precioWebClave devuelve null sin fallback a precio', () => {
+    seedCatalogo(db, { idWoo: 12, sku: 'FB-SINLISTA', precio: 800, regularPrice: null });
+    seedDecision(db, 'MLA3|v1', 'FB-SINLISTA');
+    expect(precioWebClave(db, 'MLA3|v1')).toBe(null);
   });
 });
 

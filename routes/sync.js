@@ -1036,6 +1036,11 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
  * margen, y dejar pasar la reactivación en ese caso anularía la protección en silencio. La
  * revalidación de estado es igual de fail-closed: si el GET falla, no reactivamos.
  */
+// Mensaje exacto del bloqueo "sin precio web mapeado" (precioWebClave devolvió null: SKU sin
+// regular_price, típicamente el catálogo todavía no se refrescó tras un reinicio). Constante
+// compartida con reactivarAutomatico, que cuenta cuántas reactivaciones cayeron en este motivo
+// puntual para que el operador pueda distinguirlo de "no había nada que hacer" (ver server.js).
+const MOTIVO_SIN_PRECIO_WEB = 'Sin precio web mapeado para esta variación — no se puede verificar el margen';
 async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
   const resp = await mlFetch(db, mlCfg, 'get',
     `/items/${itemId}?attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`);
@@ -1068,7 +1073,7 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones) {
   for (const v of variaciones) {
     const precioWeb = precioWebClave(db, v.clave);
     if (!(precioWeb > 0)) {
-      return { error: 'Sin precio web mapeado para esta variación — no se puede verificar el margen', clave: v.clave, neto: null, precio_web: null, deficitPct: null };
+      return { error: MOTIVO_SIN_PRECIO_WEB, clave: v.clave, neto: null, precio_web: null, deficitPct: null };
     }
     let precio = item.price ?? null;
     if (v.variation_id) {
@@ -1226,7 +1231,7 @@ export async function reactivarAutomatico(db, cfg) {
       // No hay ningún reactivable: cualquier frenada existente quedó huérfana (ya no
       // corresponde a nada de la lista vigente) — limpieza total.
       db.prepare('DELETE FROM ml_reactivacion_frenada').run();
-      return { omitido: false, reactivadas: 0, frenadas: 0 };
+      return { omitido: false, reactivadas: 0, frenadas: 0, sin_precio_web: 0 };
     }
 
     const clavesFrenadas = new Set(
@@ -1246,6 +1251,14 @@ export async function reactivarAutomatico(db, cfg) {
 
     let reactivadas = 0;
     let frenadas = 0;
+    // Cuenta aparte del bloqueo puntual "sin precio web mapeado" (precioWebClave devolvió
+    // null): NO se persiste en ml_reactivacion_frenada a propósito (no es una frenada de
+    // precio, se reintenta sola en el próximo ciclo), así que sin este contador ese modo de
+    // falla es indistinguible de "no había nada que hacer" en el log del cron (ver server.js,
+    // hallazgo del revisor 2026-08-03: puede pasar entero el catálogo tras un reinicio, si
+    // este cron corre antes que el de catálogo). No cambia ninguna decisión de reactivar/
+    // bloquear, solo la visibilidad.
+    let sinPrecioWeb = 0;
     const ts = now();
 
     for (const r of resultados) {
@@ -1255,6 +1268,7 @@ export async function reactivarAutomatico(db, cfg) {
         for (const v of rows.filter(x => x.item_id === r.item_id)) borrarFrenada.run(v.clave);
         continue;
       }
+      if (r.error === MOTIVO_SIN_PRECIO_WEB) sinPrecioWeb++;
       // Solo el bloqueo por neto bajo trae deficitPct. Los demás (ML caído, sin precio web)
       // no son frenadas de precio: se reintentan solos, sin ensuciar la lista.
       if (r.bloqueado && r.deficitPct != null && r.clave) {
@@ -1279,7 +1293,7 @@ export async function reactivarAutomatico(db, cfg) {
       if (!clavesVigentes.has(clave)) borrarFrenada.run(clave);
     }
 
-    return { omitido: false, reactivadas, frenadas };
+    return { omitido: false, reactivadas, frenadas, sin_precio_web: sinPrecioWeb };
   } finally {
     _reactivarEnCurso = false;
   }
@@ -2009,7 +2023,7 @@ export function syncRouter(db, cfg) {
     // El 404 se resuelve ANTES de pagar las dos consultas pesadas (CTE con window function
     // sobre todo el catálogo + carga de descartes) cuando el SKU ni siquiera existe.
     const prod = db.prepare(`
-      SELECT sku, nombre, stock, precio, img FROM catalogo_cache
+      SELECT sku, nombre, stock, regular_price, img FROM catalogo_cache
       WHERE sku = ? AND sku <> '' ORDER BY stock ASC, id_woo ASC LIMIT 1
     `).get(sku);
     if (!prod) return res.status(404).json({ ok: false, error: 'SKU no encontrado en el catálogo' });
@@ -2031,8 +2045,14 @@ export function syncRouter(db, cfg) {
       ok: true,
       producto: {
         sku: prod.sku, nombre: prod.nombre, stock: prod.stock, img: prod.img,
-        precio_lista: prod.precio,
-        precio_contado: prod.precio > 0 ? precioContado(prod.precio) : null,
+        // precio_lista sale de regular_price (LISTA real), no de precio (VIGENTE) — mismo
+        // criterio que precio_contado, y evita el contrasentido de mostrar "Lista" con el
+        // precio de oferta en la misma respuesta que ya calcula "Contado" sobre la lista real
+        // (hallazgo del coordinador, 2026-08-03). Puede ser null (50 filas hoy sin
+        // regular_price, ver comentario en precioWebClave); el frontend (public/vinculos/
+        // index.html, vía money()) ya muestra "—" para null, no hace falta tocarlo.
+        precio_lista: prod.regular_price,
+        precio_contado: prod.regular_price > 0 ? precioContado(prod.regular_price) : null,
       },
       publicaciones,
     });

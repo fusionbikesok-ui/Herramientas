@@ -76,9 +76,10 @@ describe('Rutas de publicaciones frenadas por precio', () => {
 
     /** Siembra una publicación pausada+frenada, mapeada, con stock web disponible. */
     function sembrarFrenada({ clave = 'MLA1|', itemId = 'MLA1', sku = 'FB-1', stockWc = 3, precioWc = 300000 } = {}) {
-      db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
-        VALUES (?, ?, ?, 'simple', ?, ?, '2026-07-30T00:00:00Z')`)
-        .run(Math.floor(Math.random() * 1e6), 'Producto ' + sku, sku, stockWc, precioWc);
+      // regular_price = precio (sin oferta en este escenario): precioWebClave lee regular_price.
+      db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, regular_price, actualizado_en)
+        VALUES (?, ?, ?, 'simple', ?, ?, ?, '2026-07-30T00:00:00Z')`)
+        .run(Math.floor(Math.random() * 1e6), 'Producto ' + sku, sku, stockWc, precioWc, precioWc);
       db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
         VALUES (?, ?, ?, 'asignar', '2026-07-30T00:00:00Z')`).run(clave, sku, 'Producto ' + sku);
       db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
@@ -161,10 +162,10 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
 
   /** Siembra un producto WC + una publicación ML mapeada. */
   function sembrarVinculo({ clave = 'MLA1|10', itemId = 'MLA1', sku = 'FB-6411', sellerSku = 'FB-6411',
-    color = 'Negro/Rojo', talle = 'M', precioMl = 218700, precioWc = 218700 } = {}) {
-    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, atributos_json, actualizado_en)
-      VALUES (?, ?, ?, 'variation', 5, ?, ?, '2026-07-30T00:00:00Z')`)
-      .run(Math.floor(Math.random() * 1e6), 'Casco Giro Syntax Matte — Negro/Rojo / M (55-59cm)', sku, precioWc,
+    color = 'Negro/Rojo', talle = 'M', precioMl = 218700, precioWc = 218700, regularPrice = precioWc } = {}) {
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, regular_price, atributos_json, actualizado_en)
+      VALUES (?, ?, ?, 'variation', 5, ?, ?, ?, '2026-07-30T00:00:00Z')`)
+      .run(Math.floor(Math.random() * 1e6), 'Casco Giro Syntax Matte — Negro/Rojo / M (55-59cm)', sku, precioWc, regularPrice,
            '[{"name":"Color","option":"Negro/Rojo"},{"name":"Talle","option":"M (55-59cm)"}]');
     db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
       VALUES (?, ?, 'Casco Giro', 'asignar', '2026-07-30T00:00:00Z')`).run(clave, sku);
@@ -193,6 +194,26 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(res.body.producto.sku).toBe('FB-6411');
     expect(res.body.publicaciones).toHaveLength(1);
     expect(res.body.publicaciones[0].senales).toEqual([]);
+  });
+
+  it('precio_lista y precio_contado se calculan sobre regular_price (LISTA), no sobre precio (vigente, en oferta)', async () => {
+    // regular_price 1000 (lista), precio 800 (vigente, en oferta): precio_lista tiene que
+    // mostrar la lista real (1000, no 800 — sería contradictorio con "Contado" calculado
+    // sobre la lista) y el contado de referencia es 666.67 (2/3 de 1000), NO 533.33 (2/3 de
+    // 800, descuento sobre descuento). Corregido a pedido del coordinador (2026-08-03): antes
+    // este endpoint mostraba precio_lista=precio (vigente) junto a precio_contado=sobre lista,
+    // contradictorio a simple vista.
+    sembrarVinculo({ precioWc: 800, regularPrice: 1000 });
+    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    expect(res.body.producto.precio_lista).toBe(1000);
+    expect(res.body.producto.precio_contado).toBe(666.67);
+  });
+
+  it('precio_lista y precio_contado son null si regular_price es NULL (catálogo sin refrescar ese campo)', async () => {
+    sembrarVinculo({ regularPrice: null });
+    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    expect(res.body.producto.precio_lista).toBe(null);
+    expect(res.body.producto.precio_contado).toBe(null);
   });
 
   it('varias publicaciones para un mismo SKU no generan sospecha (multi-publicación es intencional)', async () => {
