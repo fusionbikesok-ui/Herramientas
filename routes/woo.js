@@ -2,6 +2,7 @@ import axios from 'axios';
 import express from 'express';
 import { normalizarProductoWc, normalizarVariacionWc, filaCatalogo } from '../lib/modelos/producto.js';
 import { mapConLimite } from '../lib/concurrencia.js';
+import { buildWooPath } from '../lib/wooStock.js';
 
 const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refresco
 
@@ -212,7 +213,17 @@ export function wooRouter(db, cfg) {
         continue;
       }
       try {
-        const resp = await wooFetch(cfg, `/products/${u.id_woo}`, 'patch', { stock_quantity: u.stock_nuevo });
+        // El path depende de si es variación (/products/{padre}/variations/{id}) o simple.
+        // Sin la fila del cache no se puede saber: fail-closed en vez de pegarle a
+        // /products/{id}, que para una variación devuelve 404.
+        const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(u.id_woo);
+        if (!prod) {
+          throw new Error(`No se encontró el producto id_woo=${u.id_woo} en catalogo_cache; no se puede determinar si es variación o simple`);
+        }
+        const resp = await wooFetch(cfg, buildWooPath(prod), 'put', {
+          stock_quantity: u.stock_nuevo,
+          manage_stock: true
+        });
         if (resp.status && resp.status !== 200) throw new Error(`WC status ${resp.status}`);
         db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?')
           .run(u.stock_nuevo, new Date().toISOString(), u.id_woo);
