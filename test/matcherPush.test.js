@@ -147,6 +147,48 @@ describe('lib/matcherPush', () => {
     expect(contarPendientes(db).total).toBe(2);
   }, 15000);
 
+  it('acepta la config de sync completa {woo, ml} (forma real que usa el cron) y normaliza internamente', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+    axios.request.mockResolvedValue(respOk());
+    const syncCfg = { woo: { url: 'https://x', ck: 'a', cs: 'b' }, ml: ML_CFG };
+    const r = await pushSkusPendientes(db, syncCfg);
+
+    expect(r.escritos).toBe(1);
+    expect(r.errores).toBe(0);
+  });
+
+  it('status 0 (config/red, sin respuesta de ML) NO registra backoff y corta la corrida (fail-open)', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+    seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
+    seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
+
+    // cfg sin clientId → getAccessToken revienta con "ML_CLIENT_ID no configurado" antes de
+    // llegar a ML: status 0, igual que un error de red.
+    const r = await pushSkusPendientes(db, { userId: '99999' });
+
+    expect(r.cortado_por_error).toBe(true);
+    expect(r.escritos).toBe(0);
+    const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
+    expect(fallos).toBe(0); // nunca se penaliza con backoff una publicación que ML no evaluó
+    expect(contarPendientes(db).total).toBe(2); // ambas siguen pendientes para el próximo ciclo
+  });
+
+  it('el fallo registrado en /estado incluye proximo_intento_en e intentos', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+    axios.request.mockResolvedValue(resp400('publicación con restricciones'));
+    const r = await pushSkusPendientes(db, ML_CFG);
+
+    expect(r.fallos).toHaveLength(1);
+    expect(r.fallos[0].intentos).toBe(1);
+    expect(typeof r.fallos[0].proximo_intento_en).toBe('string');
+    expect(new Date(r.fallos[0].proximo_intento_en).getTime()).toBeGreaterThan(Date.now());
+  });
+
   it('no corre dos corridas en paralelo (anti-solape)', async () => {
     seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
     seedDecision(db, { clave: 'A1|', sku: 'FB-1' });

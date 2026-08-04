@@ -236,7 +236,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // Push automático matcher → ML: escribe los SKU de decisiones pendientes (activas y
       // pausadas; activas primero) directo en las publicaciones, sin depender de que alguien
       // tenga la pestaña del matcher abierta. Comparte el mismo motor/mutex que el botón
-      // manual (POST /api/matcher/push-skus-pendientes) — nunca corren dos a la vez.
+      // manual (POST /api/matcher/push-skus-pendientes) — nunca corren dos a la vez DENTRO
+      // de este proceso (el mutex es una variable en memoria, no cubre dos procesos node en
+      // paralelo contra la misma base; ver incidente de pedidos duplicados del 2026-07-25).
       cron.schedule('*/10 * * * *', () => {
         pushSkusPendientes(app._db, syncCfg)
           .catch(err => console.error('push SKUs matcher error:', err.message));

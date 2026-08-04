@@ -319,6 +319,7 @@
 <script src="/herramientas/matcher/matcher-engine.js"></script>
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
+<script src="../lib/matcherPush.js"></script>
 <script>
 "use strict";
 /* ── CAPTURA DE ERRORES VISIBLE ── */
@@ -801,60 +802,48 @@ function exportarProgreso(){
 // disparar una corrida ahora). El POST devuelve 202 al toque y sondeamos
 // GET /push-skus-pendientes/estado hasta que termina — mismo patrón que sondearRefresco.
 // Cerrar la pestaña YA NO corta el trabajo: sigue en el server.
-let _pushSondeoActivo=false;
+const pushCliente=MatcherPush.crear('/herramientas/api/matcher/push-skus-pendientes');
 async function escribirSkusEnMl(){
-  const btn=document.getElementById('btn-push-ml');
   let pend=0,activas=0,pausadas=0;
-  try{const r=await fetch('/herramientas/api/matcher/push-skus-pendientes/count');const d=await r.json();pend=d.pendientes||0;activas=d.activas||0;pausadas=d.pausadas||0;}catch(e){}
+  try{const d=await pushCliente.contar();pend=d.pendientes||0;activas=d.activas||0;pausadas=d.pausadas||0;}catch(e){}
   if(pend===0){mostrarEstadoPushAuto('✓ ML ya tiene todos los SKUs de tus decisiones al día.','var(--green)');return;}
-  if(!confirm('Se van a escribir '+pend.toLocaleString('es-AR')+' SKUs en publicaciones de MercadoLibre ('+activas.toLocaleString('es-AR')+' activas, '+pausadas.toLocaleString('es-AR')+' pausadas).\n\nCorre en el servidor — podés cerrar la pestaña. ¿Continuar?'))return;
+  if(!confirm('Hay '+pend.toLocaleString('es-AR')+' SKUs pendientes de escribir en ML ('+activas.toLocaleString('es-AR')+' activas, '+pausadas.toLocaleString('es-AR')+' pausadas).\n\nEsta corrida escribe un lote ahora; el resto lo sigue el automático del servidor cada 10 minutos, sin que tengas que volver a tocar nada. Corre en el servidor — podés cerrar la pestaña. ¿Continuar?'))return;
   try{
-    const r=await fetch('/herramientas/api/matcher/push-skus-pendientes',{method:'POST'});
-    const d=await r.json();
-    if(!(r.status===202||r.status===409||d.ok))throw new Error(d.error||'error del servidor');
+    await pushCliente.iniciar();
   }catch(err){
     mostrarEstadoPushAuto('✗ '+err.message,'var(--red)');
     return;
   }
   sondearPushAuto();
 }
-// Sondea GET /push-skus-pendientes/estado cada ~3s mientras haya una corrida en curso
-// (propia o del cron). Si al abrir la página ya hay una corriendo, se retoma el sondeo
-// desde chequearPushAutoAlAbrir().
+// Sondea el progreso (propio o del cron) vía lib/matcherPush.js. Si al abrir la página ya
+// hay una corriendo, se retoma el sondeo desde chequearPushAutoAlAbrir().
 async function sondearPushAuto(){
-  if(_pushSondeoActivo)return;
-  _pushSondeoActivo=true;
+  if(pushCliente.estaSondeando())return;
   const btn=document.getElementById('btn-push-ml');
   if(btn){btn.disabled=true;}
-  try{
-    for(;;){
-      let est;
-      try{const r=await fetch('/herramientas/api/matcher/push-skus-pendientes/estado');est=await r.json();}
-      catch(e){await new Promise(res=>setTimeout(res,3000));continue;}
-      if(!est||!est.ok){await new Promise(res=>setTimeout(res,3000));continue;}
-      if(est.running){
-        mostrarEstadoPushAuto('Corre en el servidor — podés cerrar la pestaña. Escritos '+(est.escritos||0).toLocaleString('es-AR')+' · restantes '+(est.restantes||0).toLocaleString('es-AR')+'…','var(--muted)');
-        await new Promise(res=>setTimeout(res,3000));
-        continue;
-      }
-      // Terminó: mostrar resultado final y los fallos si los hay
+  let terminoConMensaje=false;
+  await pushCliente.sondear({
+    onRunning:function(est){
+      mostrarEstadoPushAuto('Corre en el servidor — podés cerrar la pestaña. Escritos '+(est.escritos||0).toLocaleString('es-AR')+' · restantes '+(est.restantes||0).toLocaleString('es-AR')+'…','var(--muted)');
+    },
+    onDone:function(est){
+      // Mostrar resultado final y los fallos si los hay. El mensaje ya incluye los
+      // pendientes restantes, así que NO lo pisamos con actualizarEstadoPendientesPush().
       if(est.error){mostrarEstadoPushAuto('✗ '+est.error,'var(--red)');}
       else mostrarFallosPushMl(est.fallos||[],est.escritos||0,est.restantes||0);
-      return;
+      terminoConMensaje=true;
     }
-  }finally{
-    _pushSondeoActivo=false;
-    if(btn)btn.disabled=false;
-    actualizarEstadoPendientesPush();
-  }
+  });
+  if(btn)btn.disabled=false;
+  if(!terminoConMensaje)actualizarEstadoPendientesPush();
 }
 // Estado siempre visible: pendientes totales (activas/pausadas) según /count. Se llama al
 // abrir la página y después de cada corrida, para que el usuario nunca dependa de haber
 // tocado el botón para saber qué falta.
 async function actualizarEstadoPendientesPush(){
   try{
-    const r=await fetch('/herramientas/api/matcher/push-skus-pendientes/count');
-    const d=await r.json();
+    const d=await pushCliente.contar();
     if(!d||d.pendientes===undefined)return;
     if(d.pendientes===0){mostrarEstadoPushAuto('✓ ML está al día con las decisiones tomadas.','var(--green)');return;}
     mostrarEstadoPushAuto('Automático: '+d.pendientes.toLocaleString('es-AR')+' SKUs pendientes de escribir en ML ('+(d.activas||0).toLocaleString('es-AR')+' activas, '+(d.pausadas||0).toLocaleString('es-AR')+' pausadas'+(d.en_espera?(', '+d.en_espera.toLocaleString('es-AR')+' en espera por reintento)'):')'),'var(--muted)');
@@ -868,8 +857,7 @@ function mostrarEstadoPushAuto(texto,color){
 // sondeo (para que el progreso siga avanzando aunque se haya recargado a mitad de camino).
 async function chequearPushAutoAlAbrir(){
   try{
-    const r=await fetch('/herramientas/api/matcher/push-skus-pendientes/estado');
-    const est=await r.json();
+    const est=await pushCliente.estado();
     if(est&&est.ok&&est.running){sondearPushAuto();return;}
   }catch(e){}
   actualizarEstadoPendientesPush();
@@ -893,14 +881,20 @@ function mostrarFallosPushMl(fallos,totalEscritos,restantes){
 }
 
 /* ── FILTROS ── */
+// Mientras haya ítems provisionales (candidatos aún calculándose en el servidor, ver
+// itemProvisionalDesdePublicacion), cualquier contador que dependa de d.candidatos o
+// d.score_confianza mentiría (0 candidatos / null score en el 100% de las filas). Esos
+// filtros muestran "calculando…" en vez de un número falso hasta que completarCandidatosDeFondo
+// reemplace TODOS con los ítems resueltos.
+function hayProvisionales(){return TODOS.some(d=>d.provisional);}
 const FDEFS=[
   {f:'all',       label:()=>`Todos (${TODOS.length})`},
   {f:'asignar',   label:()=>`Asignar SKU (${TODOS.filter(d=>d.modo==='asignar').length})`,cls:''},
   {f:'verificar', label:()=>`Verificar (${TODOS.filter(d=>d.modo==='verificar').length})`,cls:'mode-verificar'},
-  {f:'revisar',   label:()=>`Conf. baja (${TODOS.filter(d=>d.modo==='verificar'&&(d.score_confianza||0)<0.7).length})`,cls:'mode-verificar'},
-  {f:'perfecto',  label:()=>`Color+Talle ✓ (${TODOS.filter(esPerfecto).length})`,cls:''},
+  {f:'revisar',   label:()=>hayProvisionales()?'Conf. baja (calculando…)':`Conf. baja (${TODOS.filter(d=>d.modo==='verificar'&&(d.score_confianza||0)<0.7).length})`,cls:'mode-verificar'},
+  {f:'perfecto',  label:()=>hayProvisionales()?'Color+Talle ✓ (calculando…)':`Color+Talle ✓ (${TODOS.filter(esPerfecto).length})`,cls:''},
   {f:'pending',   label:()=>`Pendientes sin decisión (${TODOS.filter(d=>!(claveDe(d) in decisiones)).length})`},
-  {f:'sin_candidato', label:()=>`Sin candidato (${TODOS.filter(d=>!d.candidatos.length).length})`,cls:''},
+  {f:'sin_candidato', label:()=>hayProvisionales()?'Sin candidato (calculando…)':`Sin candidato (${TODOS.filter(d=>!d.candidatos.length).length})`,cls:''},
   {f:'autoconf',  label:()=>`Auto-confirmadas (${autoConfirmadas.size})`,cls:'mode-verificar',soloSi:()=>autoConfirmadas.size>0},
 ];
 function esPerfecto(d){const c=d.candidatos[0];return d.ml_es_variante&&c&&c.color_ok&&c.talle_ok;}
@@ -1331,11 +1325,15 @@ function itemProvisionalDesdePublicacion(row,idx){
   const mlItemId=row.item_id!==undefined&&row.item_id!==null?String(row.item_id):(partes[0]||'');
   const mlVariationId=partes.length>1?partes[1]:'';
   const sku=row.seller_sku?String(row.seller_sku).trim():'';
-  const variaciones=[row.color,row.talle].filter(Boolean).join(' / ');
+  // Mismo criterio que construirMLdesdeApi (lib/matcherResolver.js): sólo cuenta como
+  // "verificar" un SKU con formato FB-<n> que además exista en el catálogo WC. Cualquier
+  // otro seller_sku (vacío, con otro formato, o un FB-<n> que ya no existe en WC) es "asignar".
+  const esFbNum=/^FB-\d+$/.test(sku);
+  const skuValido=esFbNum&&wcSkuExiste(sku);
   return {
     idx,
-    modo:sku?'verificar':'asignar',
-    sku_actual:sku||null,
+    modo:skuValido?'verificar':'asignar',
+    sku_actual:skuValido?sku:null,
     score_confianza:null,
     wc_actual:null,
     candidatos:[],
@@ -1344,8 +1342,10 @@ function itemProvisionalDesdePublicacion(row,idx){
     ml_item_id:mlItemId,
     ml_variation_id:mlVariationId,
     ml_title:row.titulo||'(sin título)',
-    ml_variations:variaciones,
+    ml_variations:row.variations_texto||'',
     ml_status:row.status||'',
+    ml_sub_status:row.sub_status||'',
+    ml_catalogo:row.catalogo===1||row.catalogo===true,
     ml_es_variante:!!row.es_variante,
     ml_permalink:row.permalink||'',
     ml_sin_stock:row.sinStock===true,
