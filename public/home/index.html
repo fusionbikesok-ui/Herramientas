@@ -364,6 +364,58 @@ body {
   .page-title { font-size: 1.5rem; }
 }
 
+/* ── Aviso de estado del token de ML ── */
+.token-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-radius: var(--radius);
+  padding: 13px 16px;
+  margin-bottom: 14px;
+  font-size: .85rem;
+  line-height: 1.5;
+}
+.token-banner.crit {
+  background: var(--critical-bg);
+  border: 1px solid var(--critical-bd);
+  color: var(--text);
+}
+.token-banner.warn {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-bd);
+  color: var(--text);
+}
+.token-banner-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+}
+.token-banner.crit .token-banner-icon { color: var(--critical); }
+.token-banner.warn .token-banner-icon { color: var(--warning); }
+.token-banner-body { flex: 1; min-width: 0; }
+.token-banner-title { font-weight: 700; margin-bottom: 2px; }
+.token-banner.crit .token-banner-title { color: var(--critical); }
+.token-banner.warn .token-banner-title { color: var(--warning); }
+.token-banner-desc { color: var(--muted); }
+.token-banner-actions { margin-top: 9px; }
+.token-banner-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--critical-bg);
+  border: 1px solid var(--critical);
+  color: var(--critical);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: .8rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.token-banner-btn:hover { background: var(--critical); color: #2A0505; }
+
 /* ── Franja "Requiere tu atención" ── */
 .attn-header { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:12px; }
 .attn-title { font-size:.95rem; font-weight:800; letter-spacing:-.01em; color:var(--text); }
@@ -424,6 +476,9 @@ body {
       <p class="page-desc">Operaciones internas — Stock, catálogo y sincronización.</p>
     </div>
   </div>
+
+  <!-- ESTADO DEL TOKEN ML — arriba de todo dentro de la zona de atención -->
+  <div id="token-ml-banner"></div>
 
   <!-- REQUIERE TU ATENCIÓN -->
   <section id="panel-atencion" style="display:none;margin-bottom:22px">
@@ -683,6 +738,7 @@ body {
   </section>
 </main>
 
+<script src="../lib/format.js"></script>
 <script>
 function logout() {
   fetch('/api/auth/logout', { method: 'POST' }).finally(function() {
@@ -837,6 +893,63 @@ fetch('/api/auth/me').then(function(r) {
       peMostrarAtencion();
     }).catch(function(){ peError('No se pudo cargar el estado de ML.', 'cargarPanelSync'); });
   }
+
+  // ── Estado del token de ML (banner de atención, arriba de todo) ──
+  function humanizarMinutos(min) {
+    if (min == null) return '';
+    if (min <= 0) return 'ya venció';
+    var h = Math.floor(min / 60), m = Math.round(min % 60);
+    if (h <= 0) return 'en ' + m + ' min';
+    if (m <= 0) return 'en ' + h + ' h';
+    return 'en ' + h + ' h ' + m + ' min';
+  }
+
+  function renderTokenBanner(t) {
+    var host = document.getElementById('token-ml-banner');
+    if (!t || (t.ok && !t.motivo && !t.vencido && !t.requiere_reautorizacion)) {
+      host.innerHTML = '';
+      return;
+    }
+    var critico = !!(t.vencido || t.requiere_reautorizacion);
+    var venceTxt = t.expires_at ? window.Fmt.fecha(t.expires_at) : '—';
+    var restanteTxt = humanizarMinutos(t.minutos_restantes);
+
+    var accionesHtml = '';
+    if (t.requiere_reautorizacion) {
+      if (tienePermiso('config-ml')) {
+        accionesHtml = '<div class="token-banner-actions">'
+          + '<a class="token-banner-btn" href="' + esc(t.reautorizar_url || '/api/sync/ml-auth-url') + '">Re-autorizar MercadoLibre</a>'
+          + '</div>';
+      } else {
+        accionesHtml = '<div class="token-banner-actions token-banner-desc">Pedile a un admin que re-autorice la conexión con MercadoLibre.</div>';
+      }
+    }
+
+    var titulo, desc;
+    if (critico) {
+      titulo = 'El token de MercadoLibre está vencido — el sync está detenido';
+      desc = t.vencido
+        ? 'Venció' + (venceTxt !== '—' ? ' el ' + venceTxt : '') + '. Nada se sincroniza con ML hasta re-autorizar.'
+        : 'Hace falta re-autorizar la conexión con MercadoLibre para que el sync siga funcionando.';
+    } else {
+      titulo = 'Aviso al renovar el token de MercadoLibre';
+      desc = (t.motivo ? esc(t.motivo) : 'Hubo un problema transitorio renovando el token.') + '.'
+        + (venceTxt !== '—' ? ' El token actual todavía sirve, vence ' + restanteTxt + ' (' + venceTxt + ').' : '');
+    }
+
+    host.innerHTML = '<div class="token-banner ' + (critico ? 'crit' : 'warn') + '" role="' + (critico ? 'alert' : 'status') + '">'
+      + '<svg class="token-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>'
+      + '<div class="token-banner-body">'
+      + '<div class="token-banner-title">' + titulo + '</div>'
+      + '<div class="token-banner-desc">' + desc + '</div>'
+      + accionesHtml
+      + '</div></div>';
+  }
+
+  fetch('/api/ml/token-estado').then(function(r) { return r.json(); }).then(function(t) {
+    if (!t) return;
+    renderTokenBanner(t);
+  }).catch(function() { /* degradar en silencio: nunca mostrar un banner falso */ });
 
   if (!tienePermiso('sync-ml') && tienePermiso('matcher')) {
     cargarPanelSoloMatcher();

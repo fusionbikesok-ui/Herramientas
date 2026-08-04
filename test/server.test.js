@@ -84,4 +84,37 @@ describe('server', () => {
     expect(syncEstado.status).toBe(200);
     expect(syncEstado.body.ok).toBe(true);
   });
+
+  it('GET /api/ml/token-estado: accesible por cualquier autenticado, fail-closed sin token', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+
+    const res = await agent.get('/api/ml/token-estado');
+    expect(res.status).toBe(200);
+    // Sin bootstrap OAuth previo: vencido y requiere re-autorización (fail-closed).
+    expect(res.body).toMatchObject({
+      ok: false,
+      vencido: true,
+      requiere_reautorizacion: true,
+      reautorizar_url: '/api/sync/ml-auth-url',
+    });
+  });
+
+  it('GET /api/ml/token-estado: token vigente reporta ok:true', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const now = new Date().toISOString();
+    const vence = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
+    app._db.prepare(`INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
+      VALUES (1, 'tok', 'ref', ?, ?)`).run(vence, now);
+    const agent = await loginComoAdmin(app);
+
+    const res = await agent.get('/api/ml/token-estado');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.vencido).toBe(false);
+    expect(res.body.requiere_reautorizacion).toBe(false);
+    expect(res.body.minutos_restantes).toBeGreaterThan(0);
+  });
 });
