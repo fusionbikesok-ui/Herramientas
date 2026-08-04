@@ -2303,6 +2303,9 @@ describe('syncMlToWc — el cursor de ventas no avanza si ML no responde (cooldo
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
+  // Nota: las fechas se calculan con Date.now() DESPUÉS de instalar los timers falsos.
+  // Funciona porque vitest arranca el reloj falso en el tiempo real actual. Son relativas
+  // a propósito: un cursor hardcodeado caduca solo con el paso del tiempo.
   function seedCursor(db, valor) {
     db.prepare(
       "INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)"
@@ -2331,11 +2334,14 @@ describe('syncMlToWc — el cursor de ventas no avanza si ML no responde (cooldo
     expect(wooFetch).not.toHaveBeenCalled();
   });
 
-  it('con un 429 real de ML (sin cooldown todavía) el cursor tampoco avanza', async () => {
+  // Con mlFetch mockeado en este archivo, un 429 "real" y uno sintético son el mismo
+  // objeto para _syncMlToWc: ese caso no agregaría cobertura. Lo que sí importa fijar
+  // acá es que CUALQUIER no-200 preserva el cursor, no solo el 429.
+  it('ante un 500 de ML el cursor tampoco avanza (vale para cualquier no-200)', async () => {
     const cursorPrevio = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
     seedCursor(db, cursorPrevio);
 
-    mlFetch.mockResolvedValue({ status: 429, headers: { 'retry-after': '120' }, data: null });
+    mlFetch.mockResolvedValue({ status: 500, headers: {}, data: null });
 
     const p = syncMlToWc(db, CFG);
     await vi.runAllTimersAsync();

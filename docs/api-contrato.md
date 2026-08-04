@@ -73,7 +73,19 @@ Un rechazo 4xx (salvo 429) no dispara verificación: la request llegó a Woo y f
 rechazada, no hay pedido creado.
 
 ### GET /api/sync/estado (campo agregado)
-Además de lo que ya devolvía, `pedidos` ahora incluye:
+Además de lo que ya devolvía, la respuesta ahora incluye `cooldownMl` (aditivo, no rompe el
+contrato existente):
+
+```
+"cooldownMl": { "activo": false, "hasta": null, "nivel": -1 }
+```
+
+`activo`: true si hay un cooldown global de rate-limit (429) de ML vigente ahora mismo.
+`hasta`: ISO string de cuándo vence (null si no está activo). `nivel`: índice en la escala
+de backoff 60s/120s/300s/600s (-1 = sin backoff acumulado). Sirve para distinguir "ML en
+cooldown hasta las HH:MM" de un sync realmente colgado — ver incidente 2026-08-04.
+
+Además, `pedidos` ahora incluye:
 
 ```
 "pedidos": {
