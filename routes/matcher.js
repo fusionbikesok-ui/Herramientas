@@ -531,8 +531,8 @@ export function matcherRouter(db, cfg) {
     } else {
       rows = db.prepare(`${SELECT_PUBS} ORDER BY titulo LIMIT ? OFFSET ?`).all(limit, offset);
     }
-    // Mismo cruce de stock que /candidatos, por consistencia (este endpoint ya no alimenta
-    // la grilla, pero mantenerlo coherente es trivial con el helper compartido).
+    // Mismo cruce de stock que /candidatos, por consistencia (con el push automático,
+    // /publicaciones vuelve a alimentar la grilla del matcher).
     marcarStockWc(db, rows);
     const actualizado = rows[0]?.actualizado_en ?? null;
     res.json({ ok: true, data: rows, actualizado, total: rows.length });

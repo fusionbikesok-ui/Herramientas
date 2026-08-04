@@ -595,7 +595,9 @@ publicación: no se reintenta hasta que venza el backoff.
 
 ### POST /api/matcher/push-skus-pendientes
 Arranca la corrida en background (no bloquea el request; mismo patrón que
-`POST /refrescar-ml`).
+`POST /refrescar-ml`). Una corrida ya no procesa un único lote de 120: cicla tandas de 120
+hasta agotar los pendientes, cortar por 429 persistente / error de config-red, o llegar al
+tope de tiempo por corrida (5 min, deja margen contra el próximo ciclo de cron a los 10 min).
 - Request: sin body.
 - Response 202: `{ "ok": true, "running": true }`.
 - Response 409 (ya hay una corrida en curso, del botón o del cron):
@@ -611,16 +613,29 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
     "escritos": 12,
     "errores": 1,
     "restantes": 380,
-    "fallos": [{ "clave": "MLA1|", "sku": "FB-100", "error": "...", "status": 400 }],
+    "fallos": [
+      { "clave": "MLA1|", "sku": "FB-100", "error": "...", "status": 400, "intentos": 1, "proximo_intento_en": "2026-08-03T12:00:00.000Z" }
+    ],
     "iniciado_en": "2026-08-03T10:00:00.000Z",
     "fin_en": "2026-08-03T10:00:42.000Z",
     "cortado_por_rate_limit": false,
+    "cortado_por_error": false,
     "error": null
   }
   ```
+- `restantes` se actualiza en vivo durante la corrida (decrementa por cada publicación
+  intentada), no solo al terminar — antes quedaba en 0 todo el transcurso.
 - `fallos` es un resumen (tope 20) de la corrida actual/última, no el historial completo
   (para eso, `GET /push-skus-pendientes/list` trae `ultimo_error`/`intentos` por clave desde
-  `ml_sku_push_fallos`).
+  `ml_sku_push_fallos`). Cada fallo con `status` distinto de `0` trae `intentos` y
+  `proximo_intento_en` (cuándo se reintenta, según el backoff exponencial). Un fallo con
+  `status: 0` (no hubo respuesta de ML: config faltante o error de red) no lleva esos dos
+  campos porque no se registró backoff — ver `cortado_por_error`.
+- `cortado_por_error: true` → la corrida se cortó porque una llamada a ML devolvió
+  `status: 0` (no llegamos a hablar con ML). Fail-open: esa/s publicación/es NO se
+  penalizaron con backoff (no fueron rechazadas por ML, así que no corresponde tratarlas
+  como una publicación con restricciones); se asume que la causa (ej. config de ML faltante,
+  caída de red) afecta al resto del lote y se corta para reintentar en el próximo ciclo.
 
 ### GET /api/matcher/push-skus-pendientes/count
 **Cambio de contrato**: ahora incluye pausadas. Excluye claves en backoff (`en_espera`).
