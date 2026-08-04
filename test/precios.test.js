@@ -143,6 +143,33 @@ describe('mlPrecios — netoMl + precioWebClave', () => {
     seedDecision(db, 'MLA3|v1', 'FB-SINLISTA');
     expect(precioWebClave(db, 'MLA3|v1')).toBe(null);
   });
+
+  it('regular_price NULL con precio con valor real (caso peligroso del fallback): sigue dando null', () => {
+    // Este es el caso que un `regular_price ?? precio` reintroducido dejaría pasar en
+    // silencio: acá precio SÍ tiene un valor sustancioso (2500), y aun así el resultado
+    // tiene que ser null porque regular_price es NULL. Si algún día devuelve 1666.67
+    // (2/3 de 2500) en vez de null, es la señal de que el fallback volvió.
+    seedCatalogo(db, { idWoo: 13, sku: 'FB-PELIGRO', precio: 2500, regularPrice: null });
+    seedDecision(db, 'MLA4|v1', 'FB-PELIGRO');
+    expect(precioWebClave(db, 'MLA4|v1')).toBe(null);
+  });
+
+  it('regular_price=0 (no NULL): precioWebClave devuelve 0, no null y no el fallback a precio', () => {
+    // 0 != null, así que la condición `row.regular_price != null` es verdadera y
+    // precioContado(0) = 0. El llamador (chequearNetoReactivar) trata 0 como "sin precio
+    // web" vía `!(precioWeb > 0)`, así que el bloqueo fail-closed sigue funcionando, pero
+    // a este nivel el valor correcto es 0, no null ni el contado de `precio`.
+    seedCatalogo(db, { idWoo: 14, sku: 'FB-CERO', precio: 900, regularPrice: 0 });
+    seedDecision(db, 'MLA5|v1', 'FB-CERO');
+    expect(precioWebClave(db, 'MLA5|v1')).toBe(0);
+  });
+
+  it('oferta con números que redondean feo (regular_price=1, precio=0.5): sigue sobre la lista', () => {
+    // 2/3 de 1 = 0.666...67 → 0.67. Si usara precio (vigente=0.5) daría 0.33.
+    seedCatalogo(db, { idWoo: 15, sku: 'FB-CENT', precio: 0.5, regularPrice: 1 });
+    seedDecision(db, 'MLA6|v1', 'FB-CENT');
+    expect(precioWebClave(db, 'MLA6|v1')).toBe(0.67);
+  });
 });
 
 describe('auditarPrecios + router', () => {
@@ -173,6 +200,37 @@ describe('auditarPrecios + router', () => {
     expect(g('MLB|v1').neto).toBe(850);
     expect(g('MLO|v1').estado).toBe('ok');
     expect(g('MLS|v1').estado).toBe('sin_precio');
+  });
+
+  it('auditarPrecios: producto en oferta usa regular_price (LISTA), no precio (vigente) — call site real', async () => {
+    // regular_price 1500 (lista) → contado 1000; precio vigente 1000 (30% off). Si el query
+    // de auditarPrecios usara `c.precio AS precio_lista` (el bug que se corrigió), el
+    // contado de referencia caería a 666.67 y esta publicación pasaría a "ok" cuando en
+    // realidad tiene que seguir "bajo" contra la lista real.
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-OFERTA-AUD', precio: 1000, regularPrice: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-OFERTA-AUD'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 }); // neto = 850
+
+    await auditarPrecios(db, ML_CFG);
+
+    const fila = db.prepare('SELECT estado, neto, precio_web FROM ml_precio_auditoria WHERE clave=?').get('MLB|v1');
+    expect(fila.precio_web).toBe(1000); // 2/3 de 1500, no de 1000
+    expect(fila.estado).toBe('bajo'); // 850 vs 1000 → >5% debajo
+  });
+
+  it('auditarPrecios: regular_price NULL con precio con valor (caso peligroso) sigue dando sin_precio', async () => {
+    // precio (vigente) tiene un valor real (1500); si algún fallback reintrodujera
+    // `regular_price ?? precio`, esta fila pasaría a "bajo"/"ok" en vez de "sin_precio".
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(1, 'Prod FB-PELIGRO-AUD', 'FB-PELIGRO-AUD', 'variation', 1, 5, 1500, null, ahora());
+    seedDecision(db, 'MLP|v1', 'FB-PELIGRO-AUD'); seedPub(db, { clave: 'MLP|v1', itemId: 'MLP', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+
+    await auditarPrecios(db, ML_CFG);
+
+    const fila = db.prepare('SELECT estado, precio_web FROM ml_precio_auditoria WHERE clave=?').get('MLP|v1');
+    expect(fila.estado).toBe('sin_precio');
+    expect(fila.precio_web).toBeNull();
   });
 
   it('GET /api/precios?estado=bajo filtra por estado', async () => {

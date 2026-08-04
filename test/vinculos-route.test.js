@@ -216,6 +216,26 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(res.body.producto.precio_contado).toBe(null);
   });
 
+  it('regular_price NULL con precio (vigente) con valor real: sigue null, sin fallback (caso peligroso)', async () => {
+    // precio (vigente) tiene un valor sustancioso (218700); si algún fallback
+    // `regular_price ?? precio` volviera, esta fila mostraría precio_lista/precio_contado
+    // con datos en vez de null.
+    sembrarVinculo({ precioWc: 218700, regularPrice: null });
+    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    expect(res.body.producto.precio_lista).toBe(null);
+    expect(res.body.producto.precio_contado).toBe(null);
+  });
+
+  it('regular_price=0 (no NULL): precio_lista es 0 y precio_contado null, no el contado sobre el vigente', async () => {
+    // 0 no es NULL, así que precio_lista se muestra como 0 (dato real); pero
+    // `prod.regular_price > 0 ? precioContado(...) : null` corta en 0 y precio_contado da
+    // null en vez de calcular sobre 0 o caer al vigente.
+    sembrarVinculo({ precioWc: 900, regularPrice: 0 });
+    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    expect(res.body.producto.precio_lista).toBe(0);
+    expect(res.body.producto.precio_contado).toBe(null);
+  });
+
   it('varias publicaciones para un mismo SKU no generan sospecha (multi-publicación es intencional)', async () => {
     sembrarVinculo({ clave: 'MLA1|10', itemId: 'MLA1' });
     db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)

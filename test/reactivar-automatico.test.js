@@ -170,6 +170,30 @@ describe('reactivarAutomatico', () => {
     expect(r.sin_precio_web).toBe(0);
   });
 
+  it('lote mixto: sin_precio_web y frenadas por déficit real coexisten sin mezclarse', async () => {
+    // MLA1 sin precio web mapeado (sin_precio_web). MLB1 con precio web real pero neto que
+    // no lo alcanza (frenada de verdad, con deficit_pct). Un contador no debe pisar al otro.
+    sembrarReactivable({ clave: 'MLA1|', itemId: 'MLA1', sku: 'FB-1', sinPrecioWeb: true });
+    sembrarReactivable({ clave: 'MLB1|', itemId: 'MLB1', sku: 'FB-B1', precioWc: 900000 });
+    mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
+        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      }
+      if (metodo === 'get' && path.startsWith('/items/MLB1?')) {
+        return { status: 200, data: { id: 'MLB1', status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      }
+      if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
+      return { status: 200, data: {} };
+    });
+
+    const r = await reactivarAutomatico(db, CFG);
+    expect(r.sin_precio_web).toBe(1);
+    expect(r.frenadas).toBe(1);
+    expect(r.reactivadas).toBe(0);
+    const frenada = db.prepare('SELECT clave FROM ml_reactivacion_frenada').get();
+    expect(frenada.clave).toBe('MLB1|'); // solo la de déficit real, no la de sin precio web
+  });
+
   it('candado: si ya hay una corrida en curso, la segunda no llama a ML y devuelve omitido', async () => {
     sembrarReactivable();
     let resolveFetch;

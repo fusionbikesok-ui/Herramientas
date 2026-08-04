@@ -384,6 +384,8 @@ describe('reactivación de pausadas por falta de stock', () => {
     const r = await reactivarItems(db, ML_CFG, ['MLA12']);
     expect(r.resultados[0].ok).toBe(false);
     expect(r.resultados[0].bloqueado).toBe(true);
+    // Pinnea el motivo real (sin precio web), no otro bloqueo fail-closed cualquiera.
+    expect(r.resultados[0].error).toMatch(/sin precio web mapeado/i);
     expect(db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave=?').get('MLA12|v12').status).toBe('paused');
   });
 
