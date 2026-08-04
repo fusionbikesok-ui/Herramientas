@@ -105,6 +105,14 @@ var DIAG={
 var CAT=qs('cat');
 var CFG=CATS[CAT];
 
+// Cliente del push (ver public/lib/matcherPush.js). Se crea ACÁ, antes del cargar() de
+// más abajo: `cargar()` corre al parsear el script y, para cat=push_pendientes, llega a
+// pushCliente.listar() antes de su primer await. Declararlo junto al resto del código de
+// push (más abajo en el archivo) dejaba la variable hoisted pero sin asignar, y la página
+// moría con "Cannot read properties of undefined (reading 'listar')" sin renderizar nunca
+// la tabla.
+var pushCliente=MatcherPush.crear('/api/matcher/push-skus-pendientes');
+
 if(!CFG){
   document.getElementById('titulo').textContent='Categoría inválida';
   document.getElementById('cuerpo').innerHTML='<div class="loading" style="color:var(--red)">La categoría "'+esc(CAT)+'" no existe.</div>';
@@ -308,8 +316,7 @@ async function reactivarSel(){
 // El push corre en el SERVIDOR (cron cada 10 min + este botón para disparar una corrida
 // ahora). Ver public/lib/matcherPush.js: mismo cliente que usa el Matcher, ya adaptado
 // al contrato 202/estado (el contrato viejo con escritos/procesados/restantes en el POST
-// ya no existe).
-var pushCliente=MatcherPush.crear('/api/matcher/push-skus-pendientes');
+// ya no existe). `pushCliente` se crea arriba, junto a CAT/CFG — ver el comentario ahí.
 async function cargarPushPendientes(cont){
   try{
     var d=await pushCliente.listar();
