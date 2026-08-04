@@ -177,7 +177,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           .catch(err => console.error('Error refrescando catálogo:', err.message));
       });
 
-      cron.schedule('*/10 * * * *', () => {             // ML
+      cron.schedule('3-59/10 * * * *', () => {          // ML
         syncMlToWc(app._db, syncCfg)
           .catch(err => console.error('ML→WC error:', err.message));
       });
