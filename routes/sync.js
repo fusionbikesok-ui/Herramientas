@@ -8,7 +8,7 @@
  */
 
 import { Router } from 'express';
-import { mlFetch, bootstrapToken } from '../lib/mlClient.js';
+import { mlFetch, bootstrapToken, estadoCooldownMl } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
@@ -816,6 +816,7 @@ async function _syncWcToMl(db, cfg) {
   // (manejado); si una activa figura pausada, se saltea hasta el próximo refresh.
   const estadoItem = new Map();
   const itemsBloqueados = new Set();
+  let cortadoPor429 = false;
   try {
     const cacheStatus = db.prepare('SELECT DISTINCT item_id, status FROM ml_publicaciones_cache').all();
     for (const r of cacheStatus) {
@@ -837,10 +838,10 @@ async function _syncWcToMl(db, cfg) {
           // vez de seguir recorriendo cientos de diffs haciendo `continue` en silencio, que
           // dejaba el stock de ML desincronizado sin ningún rastro. El próximo ciclo del
           // cron retoma desde el mismo `diffs` (no se pierde nada, solo se pospone).
-          logSync(db, { direccion: 'wc_ml', clave, sku, estado: 'error', error: 'Cooldown ML activo (429) — corte de corrida, se retoma en el próximo ciclo' });
+          cortadoPor429 = true;
           break;
         }
-        estadoItem.set(itemId, est.status === 200 ? est.data.status : 'desconocido');
+        estadoItem.set(itemId, est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido');
         await sleep(ML_CALL_DELAY_MS);
       }
       const status = estadoItem.get(itemId);
@@ -863,6 +864,15 @@ async function _syncWcToMl(db, cfg) {
 
       const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
       const resp = await mlFetch(db, mlCfg, 'put', path, body);
+
+      if (resp.status === 429) {
+        // Mismo cooldown detectado durante el PUT de stock (camino real: la mayoría de
+        // los items ya tienen status en cache y llegan directo acá, nunca pasan por el
+        // GET de arriba). Cortar igual que en el GET, sin loguear por clave: el diff no
+        // se tocó (no hay error real, "no se intentó"), se retoma en el próximo ciclo.
+        cortadoPor429 = true;
+        break;
+      }
 
       if (resp.status === 200) {
         upsertMlStockEstado(db, clave, sku, cantidad);
@@ -895,6 +905,14 @@ async function _syncWcToMl(db, cfg) {
 
     // Delay para respetar rate limits de ML.
     await sleep(ML_CALL_DELAY_MS);
+  }
+
+  if (cortadoPor429) {
+    // Un solo evento por corrida (no uno por clave pendiente): con cientos de diffs
+    // encadenar cooldowns generaría cientos de filas de "error" que procesarReintentos
+    // termina envejeciendo a 'agotado', perdiendo de pendientes diffs de stock válidos
+    // por un rate limit transitorio. Esto es solo una traza informativa de la corte.
+    logSync(db, { direccion: 'wc_ml', clave: null, sku: null, estado: 'info', error: 'Cooldown ML activo (429) — corte de corrida, se retoma en el próximo ciclo' });
   }
 }
 
@@ -1631,6 +1649,7 @@ export function syncRouter(db, cfg) {
         : { configurado: false },
       ultimasSyncsOk: ultimosOk,
       erroresPendientes: errores?.n ?? 0,
+      cooldownMl: estadoCooldownMl(),
     });
   });
 
