@@ -683,7 +683,10 @@ body {
   </section>
 </main>
 
+<script src="../lib/api.js"></script>
 <script>
+Api.guardBfcache();
+
 function logout() {
   fetch('/api/auth/logout', { method: 'POST' }).finally(function() {
     window.location.href = '/herramientas/login/';
@@ -827,6 +830,8 @@ fetch('/api/auth/me').then(function(r) {
         peChip(at.errores_reales, 'errores de sync', 'crit', '/herramientas/sync-detalle/?cat=errores', 'sync-ml'),
         peChip(at.requiere_atencion_ml, 'con exceso de fotos', 'crit', '/herramientas/sync-detalle/?cat=requiere_atencion_ml', 'sync-ml'),
         peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
+        peChip(d.frenadas, 'pausadas frenadas por precio', 'warn', '/herramientas/sync-ml/#frenadas', 'sync-ml'),
+        peChip(d.vinculos_sospechosos, 'vínculos sospechosos', 'warn', '/herramientas/vinculos/#sospechosos', 'sync-ml'),
         peChip(sk.pendientes, 'SKUs por escribir en ML', 'warn', '/herramientas/sync-detalle/?cat=push_pendientes', 'matcher'),
         peChip(at.sin_mapeo, 'ventas sin mapear', 'warn', '/herramientas/sync-detalle/?cat=sin_mapeo', 'sync-ml'),
         peChip(at.remapeo_requerido, 'a re-mapear', 'warn', '/herramientas/sync-detalle/?cat=remapeo_requerido', 'sync-ml')

@@ -95,6 +95,23 @@ desplegar o dar por completo un cambio → auditoría de código + seguridad + t
 verdes (`npm test`) + UI responsive sin nada oculto + conformidad de sistema visual +
 migración de esquema aplicada si corresponde + presupuesto de peso frontend.
 
+## Reglas de negocio que no se rompen
+
+- **Precio de un pedido WC creado desde una venta de ML:** nunca se graba el precio de venta de
+  ML. Se registran los productos y el precio de la línea es el **precio de contado de la web**
+  (`precioContado()` de `lib/mlPrecios.js`). Ojo con la columna: se calcula sobre
+  `catalogo_cache.regular_price` (precio de **LISTA**), NO sobre `catalogo_cache.precio`, que
+  guarda el precio **VIGENTE** de Woo y ya trae el `sale_price` si el producto está en oferta.
+  Una venta de ML nunca hereda un descuento de oferta de la web. Si no hay precio de lista
+  disponible, la línea se crea igual sin `subtotal`/`total` y Woo aplica el suyo: nunca se
+  pierde la venta y nunca se cae al precio de ML, que solo puede quedar como dato informativo
+  (meta/nota).
+- **Un pedido WC creado desde ML no se modifica después.** Únicas dos excepciones: la
+  cancelación de la compra, y el alta de una nota privada (`POST /orders/{id}/notes` con
+  `customer_note:false`), que es un sub-recurso y no una modificación del pedido. Todos los
+  datos de la venta (destinatario, dirección, método de envío, Nº y link de la orden ML) se
+  escriben en el POST de creación.
+
 ## Cuentas de prueba para agentes de UI
 
 Para que `probador-e2e` / `auditor-despliegue` puedan loguearse solos: usuario `auditor` /
