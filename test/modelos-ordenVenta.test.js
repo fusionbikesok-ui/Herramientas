@@ -134,4 +134,28 @@ describe('billingWcDesdeOrdenMl', () => {
     const orden = { buyer: { nickname: 'anag' } };
     expect(billingWcDesdeOrdenMl(orden, undefined)).toEqual({ first_name: 'anag', last_name: 'MercadoLibre' });
   });
+
+  it('shipping con first_name pero last_name vacío (receiver_name de una sola palabra) → billing conserva el first_name real y cae al apellido de fallback', () => {
+    const orden = { buyer: { nickname: 'anag' } };
+    const shipping = {
+      first_name: 'Madonna', last_name: '',
+      address_1: 'Av Colon 100', address_2: '',
+      city: 'Cordoba', state: 'Cordoba', postcode: '5000', country: 'AR',
+    };
+    expect(billingWcDesdeOrdenMl(orden, shipping)).toEqual({
+      first_name: 'Madonna', last_name: 'MercadoLibre',
+      address_1: 'Av Colon 100', address_2: '',
+      city: 'Cordoba', state: 'Cordoba', postcode: '5000', country: 'AR',
+    });
+  });
+
+  it('shipping con address_2 en "" (sin comment/floor/apartment) se replica tal cual, sin inventar contenido', () => {
+    const orden = { buyer: { nickname: 'anag' } };
+    const shipping = {
+      first_name: 'Ana', last_name: 'Diaz',
+      address_1: 'San Martin 50', address_2: '',
+      city: 'Cordoba', state: 'Cordoba', postcode: '5000', country: 'AR',
+    };
+    expect(billingWcDesdeOrdenMl(orden, shipping).address_2).toBe('');
+  });
 });

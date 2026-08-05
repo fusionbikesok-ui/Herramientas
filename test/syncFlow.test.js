@@ -690,6 +690,145 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     expect(meta._ml_metodo_envio).toBe('self_service');
   });
 
+  // Hallazgo del tester: receiver_name de una sola palabra (sin espacio) → routes/sync.js
+  // parte por el primer espacio y deja last_name = '' (no hay nada después). En `shipping`
+  // eso se refleja tal cual (fiel a lo que dijo ML). En `billing`, como shipping.last_name
+  // es '' (falsy), billingWcDesdeOrdenMl cae al fallback 'MercadoLibre' para el apellido,
+  // aunque sí toma el first_name real del envío — mezcla nombre real + apellido de fallback,
+  // nunca deja el apellido vacío en la facturación.
+  it('receiver_name de una sola palabra → shipping.last_name vacío, billing usa first_name real + apellido de fallback', async () => {
+    const orden = ordenConEnvio('ORD-SHIP-1PALABRA', 7001);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/7001') {
+        return {
+          status: 200,
+          data: {
+            receiver_address: {
+              receiver_name: 'Madonna', street_name: 'Av Colon', street_number: '100',
+              city: { name: 'Cordoba' }, state: { name: 'Cordoba' }, zip_code: '5000',
+            },
+          },
+        };
+      }
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6020 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    // shipping refleja fielmente lo que dijo ML: nombre completo en first_name, last_name vacío.
+    expect(orderCall[3].shipping.first_name).toBe('Madonna');
+    expect(orderCall[3].shipping.last_name).toBe('');
+    // billing toma el first_name real pero cae al apellido de fallback (nunca vacío).
+    expect(orderCall[3].billing.first_name).toBe('Madonna');
+    expect(orderCall[3].billing.last_name).toBe('MercadoLibre');
+    expect(orderCall[3].billing.address_1).toBe('Av Colon 100');
+  });
+
+  // Hallazgo del tester: cuando comment/floor/apartment vienen todos vacíos/ausentes,
+  // address_2 debe quedar en '' (string vacío), nunca undefined ni con espacios sueltos
+  // por el .filter(Boolean).join(' ') de routes/sync.js.
+  it('receiver_address sin comment/floor/apartment → address_2 queda en "" tanto en shipping como en billing', async () => {
+    const orden = ordenConEnvio('ORD-SHIP-SINPISO', 7002);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/7002') {
+        return {
+          status: 200,
+          data: {
+            receiver_address: {
+              receiver_name: 'Ana Diaz', street_name: 'San Martin', street_number: '50',
+              city: { name: 'Cordoba' }, state: { name: 'Cordoba' }, zip_code: '5000',
+            },
+          },
+        };
+      }
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6021 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].shipping.address_2).toBe('');
+    expect(orderCall[3].billing.address_2).toBe('');
+  });
+
+  // Hallazgo del tester: una calle SIN receiver_name (nombre vacío) llegando desde ML no debe
+  // pisar la dirección real en `billing` con el fallback — solo el nombre/apellido se
+  // reemplazan, la dirección real del envío se conserva íntegra. El `shipping` del pedido
+  // sigue reflejando fielmente el nombre vacío que dijo ML (no se "arregla").
+  it('calle sin receiver_name → billing conserva la dirección real y solo reemplaza nombre/apellido', async () => {
+    const orden = ordenConEnvio('ORD-SHIP-SINNOMBRE', 7003);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/7003') {
+        return {
+          status: 200,
+          data: {
+            receiver_address: {
+              street_name: 'Belgrano', street_number: '900',
+              city: { name: 'Cordoba' }, state: { name: 'Cordoba' }, zip_code: '5000',
+            },
+          },
+        };
+      }
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6022 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    // shipping refleja fielmente el nombre vacío (nunca se "arregla" acá).
+    expect(orderCall[3].shipping.first_name).toBe('');
+    expect(orderCall[3].shipping.last_name).toBe('');
+    expect(orderCall[3].shipping.address_1).toBe('Belgrano 900');
+    // billing reemplaza SOLO nombre/apellido por el fallback, conserva la dirección real.
+    expect(orderCall[3].billing.first_name).toBe('comprador123');
+    expect(orderCall[3].billing.last_name).toBe('MercadoLibre');
+    expect(orderCall[3].billing.address_1).toBe('Belgrano 900');
+    expect(orderCall[3].billing.city).toBe('Cordoba');
+  });
+
+  it('orden sin shipping.id → no consulta /shipments, billing también cae al fallback de nickname', async () => {
+    const orden = ordenConEnvio('ORD-SIN-SHIP-BILLING', undefined);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6023 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(mlFetch.mock.calls.some(c => String(c[3]).startsWith('/shipments/'))).toBe(false);
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall[3].shipping).toBeUndefined();
+    expect(orderCall[3].billing).toEqual({ first_name: 'comprador123', last_name: 'MercadoLibre' });
+  });
+
   it('order_items sin sale_fee → no se estima/inventa el neto, se omite ese dato', async () => {
     const orden = {
       id: 'ORD-SIN-FEE',
