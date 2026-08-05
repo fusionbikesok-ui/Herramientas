@@ -640,7 +640,8 @@ export function preparacionRouter(db, cfg) {
         return res.json({ ok: true, id: prepId });
       }
       if (canal === 'ml') {
-        const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${id}`);
+        // manual: true — armado de preparación disparado a mano desde el panel.
+        const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${id}`, null, { manual: true });
         if (resp.status !== 200) throw new Error(`ML order ${resp.status}`);
         const orden = resp.data;
         const items = itemsDesdeOrdenMl(db, orden);

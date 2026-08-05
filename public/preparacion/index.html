@@ -189,13 +189,14 @@
 <div class="modal" id="cam-modal">
   <div class="modal-box">
     <div class="cam-viewport"><video id="cam-video" autoplay playsinline muted></video></div>
-    <div class="cam-zoom"><span class="cam-zoom-lbl">Zoom</span><input type="range" id="cam-zoom" min="1" max="4" step="0.5" value="1"></div>
-    <p class="sub" id="cam-msg" style="margin:10px 0;">Apuntá al código de barras…</p>
+    <div class="cam-zoom"><label class="cam-zoom-lbl" for="cam-zoom">Zoom</label><input type="range" id="cam-zoom" min="1" max="4" step="0.5" value="1"></div>
+    <p class="sub" id="cam-msg" style="margin:10px 0;">Centrá el código de barras dentro de la banda</p>
     <button class="btn sec" onclick="cerrarCamara()">Cancelar</button>
   </div>
 </div>
 
 <script src="../lib/format.js"></script>
+<script src="../lib/api.js"></script>
 <script>
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
 
@@ -744,7 +745,7 @@ function abrirCamara(){
   var zoomEl=document.getElementById('cam-zoom');
   zoomEl.value=1;
   zoomEl.oninput=function(){window.Scanner.setZoom(parseFloat(this.value));};
-  document.getElementById('cam-msg').textContent='Apuntá al código de barras…';
+  document.getElementById('cam-msg').textContent='Centrá el código de barras dentro de la banda';
   window.Scanner.open({
     video:video,
     mode:'single',
@@ -1091,12 +1092,15 @@ async function agregarPerfilSku(){
   await mutarPerfil('/perfiles-sku/'+encodeURIComponent(sku),cuerpoPerfil(perfil),'guardar');
 }
 
-fetch('/api/auth/me').then(function(r){ return r.json(); }).then(function(d){
-  if (d && d.ok) USERNAME = d.user;
-}).catch(function(){});
-
-cargarPendientes();
-iniciarPollingPendientes();
+// Criterio unificado en toda la suite (18 herramientas): sin permiso, redirigir a /home/
+// ANTES de pintar el shell. Antes esta página cargaba el shell entero y mostraba el 403
+// inline por cada request — inconsistente con el resto.
+Api.requirePermiso('preparacion').then(function(d){
+  if (!d) return;
+  if (d.user) USERNAME = d.user;
+  cargarPendientes();
+  iniciarPollingPendientes();
+});
 </script>
 <script type="module" src="../lib/scanner.js"></script>
 </body>

@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { wooFetch, refrescarCatalogo, getCatalogo } from '../routes/woo.js';
+import { wooFetch, refrescarCatalogo, getCatalogo, wooRouter } from '../routes/woo.js';
 import axios from 'axios';
+import express from 'express';
+import request from 'supertest';
 
 vi.mock('axios');
 
@@ -37,6 +39,27 @@ describe('woo route', () => {
     const rows = getCatalogo(db);
     expect(rows).toHaveLength(1);
     expect(rows[0].nombre).toBe('Casco Bell L');
+    db.close();
+  });
+
+  // Hallazgo del revisor (2026-08-03): el contado de una venta ML se calcula sobre el precio
+  // de LISTA (regular_price), no sobre el vigente (que puede ser sale_price en oferta).
+  // refrescarCatalogo tiene que persistir regular_price por separado de precio.
+  it('refrescarCatalogo persiste regular_price (precio de LISTA) separado de precio (vigente)', async () => {
+    axios.request.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: [{
+        id: 16, name: 'Bici en oferta', sku: 'BO-1', type: 'simple', parent_id: 0,
+        stock_quantity: 2, price: '800000', regular_price: '1000000',
+      }],
+    });
+    const db = openDb(TEST_DB);
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+    await refrescarCatalogo(db, cfg);
+    const fila = db.prepare('SELECT precio, regular_price FROM catalogo_cache WHERE id_woo = 16').get();
+    expect(fila.precio).toBe(800000);
+    expect(fila.regular_price).toBe(1000000);
     db.close();
   });
 
@@ -308,5 +331,67 @@ describe('woo route', () => {
     const t = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ean_sku'").get();
     expect(t).toBeTruthy();
     db.close();
+  });
+});
+
+describe('POST /stock/aplicar', () => {
+  const DB_PATH = './test/tmp-woo-aplicar.sqlite';
+  let db;
+
+  function app() {
+    const a = express();
+    a.use(express.json());
+    a.use('/api/woo', wooRouter(db, { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' }));
+    return a;
+  }
+
+  beforeEach(() => {
+    if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);
+    db = openDb(DB_PATH);
+    db.prepare("INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?,?,?,?,?,?,?)")
+      .run(29985, 'Venzo Raptor Negro/Rojo L', 'FB-29985', 'variation', 24452, 0, '2026-08-03T00:00:00.000Z');
+    db.prepare("INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?,?,?,?,?,?,?)")
+      .run(1001, 'Producto simple', 'FB-1001', 'simple', null, 0, '2026-08-03T00:00:00.000Z');
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);
+    vi.resetAllMocks();
+  });
+
+  it('usa el endpoint de variaciones para un producto variation (regresión del 404)', async () => {
+    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+    const r = await request(app()).post('/api/woo/stock/aplicar')
+      .send({ updates: [{ sku: 'FB-29985', id_woo: 29985, stock_nuevo: 4 }] });
+
+    expect(r.body).toMatchObject({ ok: true, aplicados: 1, errores: 0 });
+    expect(axios.request).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://fusionbikes.com.ar/wp-json/wc/v3/products/24452/variations/29985',
+      method: 'put',
+      data: { stock_quantity: 4, manage_stock: true }
+    }));
+    expect(db.prepare('SELECT stock FROM catalogo_cache WHERE id_woo=?').get(29985).stock).toBe(4);
+  });
+
+  it('usa /products/{id} para un producto simple', async () => {
+    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+    const r = await request(app()).post('/api/woo/stock/aplicar')
+      .send({ updates: [{ sku: 'FB-1001', id_woo: 1001, stock_nuevo: 7 }] });
+
+    expect(r.body.aplicados).toBe(1);
+    expect(axios.request).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://fusionbikes.com.ar/wp-json/wc/v3/products/1001'
+    }));
+  });
+
+  it('falla cerrado si el producto no está en catalogo_cache', async () => {
+    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+    const r = await request(app()).post('/api/woo/stock/aplicar')
+      .send({ updates: [{ sku: 'FB-9999', id_woo: 9999, stock_nuevo: 3 }] });
+
+    expect(r.body).toMatchObject({ ok: false, aplicados: 0, errores: 1 });
+    expect(r.body.resultados[0].error).toMatch(/catalogo_cache/);
+    expect(axios.request).not.toHaveBeenCalled();
   });
 });

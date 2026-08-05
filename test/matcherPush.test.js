@@ -1,0 +1,214 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'fs';
+import { openDb } from '../db/index.js';
+import {
+  seleccionarPendientes, contarPendientes, pushSkusPendientes,
+  getEstadoPush, _resetEstadoPushParaTests,
+} from '../lib/matcherPush.js';
+import { _resetCooldownParaTests } from '../lib/mlClient.js';
+
+// Mock axios para evitar llamadas reales a ML
+vi.mock('axios', async () => {
+  const actual = await vi.importActual('axios');
+  return { default: { ...actual.default, post: vi.fn(), request: vi.fn() } };
+});
+import axios from 'axios';
+
+const TEST_DB = './test/tmp-matcher-push.sqlite';
+const ML_CFG = { clientId: 'client123', clientSecret: 'secret456', userId: '99999' };
+
+function now() { return new Date().toISOString(); }
+
+function seedToken(db) {
+  const expiresAt = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
+  db.prepare(
+    `INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
+     VALUES (1, 'tok', 'ref', ?, ?)`
+  ).run(expiresAt, now());
+}
+
+function seedDecision(db, { clave, sku, accion = 'asignar' }) {
+  db.prepare(
+    'INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+  ).run(clave, sku, sku, accion, now());
+}
+
+function seedCache(db, { clave, itemId, variationId = '', titulo = 'Pub', status = 'active', sellerSku = '' }) {
+  db.prepare(
+    `INSERT INTO ml_publicaciones_cache
+       (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en)
+     VALUES (?, ?, ?, ?, ?, '', 0, '', '', ?, '', ?)`
+  ).run(clave, itemId, variationId, titulo, status, sellerSku, now());
+}
+
+function respOk() {
+  return { status: 200, headers: {}, data: {} };
+}
+function resp429() {
+  return { status: 429, headers: { 'retry-after': '0' }, data: {} };
+}
+function resp400(msg = 'no se pudo') {
+  return { status: 400, headers: {}, data: { message: msg } };
+}
+
+describe('lib/matcherPush', () => {
+  let db;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedToken(db);
+    vi.clearAllMocks();
+    _resetEstadoPushParaTests();
+    // El cooldown de 429 vive en el módulo mlClient: sin esto, el test de "429
+    // persistente" se lo deja activo a los siguientes y los corta de entrada.
+    _resetCooldownParaTests();
+  });
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('seleccionarPendientes prioriza activas sobre pausadas', () => {
+    seedCache(db, { clave: 'P1|', itemId: 'P1', status: 'paused' });
+    seedDecision(db, { clave: 'P1|', sku: 'FB-1' });
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-2' });
+
+    const lote = seleccionarPendientes(db, 10);
+    expect(lote.map(p => p.clave)).toEqual(['A1|', 'P1|']);
+  });
+
+  it('contarPendientes separa activas/pausadas/en_espera (backoff futuro)', () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+    seedCache(db, { clave: 'P1|', itemId: 'P1', status: 'paused' });
+    seedDecision(db, { clave: 'P1|', sku: 'FB-2' });
+    seedCache(db, { clave: 'W1|', itemId: 'W1', status: 'active' });
+    seedDecision(db, { clave: 'W1|', sku: 'FB-3' });
+    const futuro = new Date(Date.now() + 3600 * 1000).toISOString();
+    db.prepare(`INSERT INTO ml_sku_push_fallos (clave, sku, intentos, proximo_intento_en, actualizado_en) VALUES (?, ?, 1, ?, ?)`)
+      .run('W1|', 'FB-3', futuro, now());
+
+    const r = contarPendientes(db);
+    expect(r).toEqual({ total: 2, activas: 1, pausadas: 1, enEspera: 1 });
+  });
+
+  it('éxito borra un fallo previo registrado para esa clave', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+    db.prepare(`INSERT INTO ml_sku_push_fallos (clave, sku, intentos, proximo_intento_en, actualizado_en) VALUES ('A1|', 'FB-1', 1, ?, ?)`)
+      .run(new Date(Date.now() - 3600 * 1000).toISOString(), now());
+
+    axios.request.mockResolvedValue(respOk());
+    const r = await pushSkusPendientes(db, ML_CFG);
+
+    expect(r.escritos).toBe(1);
+    expect(r.errores).toBe(0);
+    const fallo = db.prepare('SELECT * FROM ml_sku_push_fallos WHERE clave = ?').get('A1|');
+    expect(fallo).toBeUndefined();
+  });
+
+  it('error 400 registra fallo con backoff creciente entre corridas', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+    axios.request.mockResolvedValue(resp400('publicación con restricciones'));
+    const r1 = await pushSkusPendientes(db, ML_CFG);
+    expect(r1.errores).toBe(1);
+    const fallo1 = db.prepare('SELECT * FROM ml_sku_push_fallos WHERE clave = ?').get('A1|');
+    expect(fallo1.intentos).toBe(1);
+    const proximo1 = new Date(fallo1.proximo_intento_en).getTime();
+    // Backoff 2^1 = 2h
+    expect(proximo1 - Date.now()).toBeGreaterThan(1.9 * 3600 * 1000);
+
+    // Fuerza el próximo intento venciendo el backoff, para poder correr una 2da corrida
+    db.prepare('UPDATE ml_sku_push_fallos SET proximo_intento_en = ? WHERE clave = ?')
+      .run(new Date(Date.now() - 1000).toISOString(), 'A1|');
+    _resetEstadoPushParaTests();
+    const r2 = await pushSkusPendientes(db, ML_CFG);
+    expect(r2.errores).toBe(1);
+    const fallo2 = db.prepare('SELECT * FROM ml_sku_push_fallos WHERE clave = ?').get('A1|');
+    expect(fallo2.intentos).toBe(2);
+    const proximo2 = new Date(fallo2.proximo_intento_en).getTime();
+    // Backoff 2^2 = 4h > el de la corrida anterior
+    expect(proximo2).toBeGreaterThan(proximo1);
+  });
+
+  it('429 persistente corta la corrida entera sin marcar fallo, dejando el resto para el próximo ciclo', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+    seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
+    seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
+
+    axios.request.mockResolvedValue(resp429());
+    const r = await pushSkusPendientes(db, ML_CFG);
+
+    expect(r.cortado_por_rate_limit).toBe(true);
+    expect(r.errores).toBe(0);
+    expect(r.escritos).toBe(0);
+    const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
+    expect(fallos).toBe(0);
+    // Nada se escribió: las dos claves siguen pendientes para el próximo ciclo
+    expect(contarPendientes(db).total).toBe(2);
+  }, 15000);
+
+  it('acepta la config de sync completa {woo, ml} (forma real que usa el cron) y normaliza internamente', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+    axios.request.mockResolvedValue(respOk());
+    const syncCfg = { woo: { url: 'https://x', ck: 'a', cs: 'b' }, ml: ML_CFG };
+    const r = await pushSkusPendientes(db, syncCfg);
+
+    expect(r.escritos).toBe(1);
+    expect(r.errores).toBe(0);
+  });
+
+  it('status 0 (config/red, sin respuesta de ML) NO registra backoff y corta la corrida (fail-open)', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+    seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
+    seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
+
+    // cfg sin clientId → getAccessToken revienta con "ML_CLIENT_ID no configurado" antes de
+    // llegar a ML: status 0, igual que un error de red.
+    const r = await pushSkusPendientes(db, { userId: '99999' });
+
+    expect(r.cortado_por_error).toBe(true);
+    expect(r.escritos).toBe(0);
+    const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
+    expect(fallos).toBe(0); // nunca se penaliza con backoff una publicación que ML no evaluó
+    expect(contarPendientes(db).total).toBe(2); // ambas siguen pendientes para el próximo ciclo
+  });
+
+  it('el fallo registrado en /estado incluye proximo_intento_en e intentos', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+    axios.request.mockResolvedValue(resp400('publicación con restricciones'));
+    const r = await pushSkusPendientes(db, ML_CFG);
+
+    expect(r.fallos).toHaveLength(1);
+    expect(r.fallos[0].intentos).toBe(1);
+    expect(typeof r.fallos[0].proximo_intento_en).toBe('string');
+    expect(new Date(r.fallos[0].proximo_intento_en).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('no corre dos corridas en paralelo (anti-solape)', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+    let resolverPrimera;
+    axios.request.mockImplementation(() => new Promise(res => { resolverPrimera = res; }));
+
+    const p1 = pushSkusPendientes(db, ML_CFG);
+    // Da tiempo a que la primera corrida marque running=true antes de lanzar la segunda
+    await new Promise(r => setTimeout(r, 10));
+    expect(getEstadoPush().running).toBe(true);
+
+    const r2 = await pushSkusPendientes(db, ML_CFG);
+    expect(r2.yaEnCurso).toBe(true);
+
+    resolverPrimera(respOk());
+    await p1;
+  });
+});

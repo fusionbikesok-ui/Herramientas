@@ -82,3 +82,26 @@ describe('permiso inventario (Contador de Inventario)', () => {
     expect(permiteAcceso([{ herramienta: 'otra-herramienta', nivel: 'write' }], req)).toBe(false);
   });
 });
+
+describe('permiso config-ml masivo (reservas locales por lote)', () => {
+  it('GET /sync/catalogo-config acepta config-ml o sync-ml, nivel read (misma regla que buscar-sku)', () => {
+    const req = resolvePermiso('GET', '/sync/catalogo-config');
+    expect(req).toEqual({ anyOf: ['config-ml', 'sync-ml'], nivel: 'read' });
+    expect(permiteAcceso([{ herramienta: 'config-ml', nivel: 'read' }], req)).toBe(true);
+    expect(permiteAcceso([{ herramienta: 'sync-ml', nivel: 'read' }], req)).toBe(true);
+    expect(permiteAcceso([], req)).toBe(false);
+  });
+
+  it('un usuario con solo config-ml (sin sync-ml) puede acceder a catalogo-config para poder usar el lote', () => {
+    const req = resolvePermiso('GET', '/sync/catalogo-config');
+    expect(permiteAcceso([{ herramienta: 'config-ml', nivel: 'read' }], req)).toBe(true);
+  });
+
+  it('POST /sync/config-ml/lote exige config-ml con nivel write (igual que el alta unitaria)', () => {
+    const req = resolvePermiso('POST', '/sync/config-ml/lote');
+    expect(req).toEqual({ anyOf: ['config-ml'], nivel: 'write' });
+    expect(permiteAcceso([{ herramienta: 'config-ml', nivel: 'read' }], req)).toBe(false);
+    expect(permiteAcceso([{ herramienta: 'config-ml', nivel: 'write' }], req)).toBe(true);
+    expect(permiteAcceso([{ herramienta: 'sync-ml', nivel: 'write' }], req)).toBe(false);
+  });
+});
