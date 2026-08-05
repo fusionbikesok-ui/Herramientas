@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { mlFetch } from '../lib/mlClient.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
-import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { aplanarItemMl } from '../lib/modelos/publicacionMl.js';
 import {
   construirWC, construirMLdesdeApi, candidatosDeItem, derivarEstadoApi,
 } from '../lib/matcherResolver.js';
+import {
+  escribirSkuEnMl, contarPendientes, pushSkusPendientes, getEstadoPush,
+} from '../lib/matcherPush.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -47,9 +49,13 @@ async function listarItemIds(db, cfg, status) {
   const MAX_PAGINAS = 200; // guarda: 200 × 100 = 20.000 items máximo por status
   for (let pag = 0; pag < MAX_PAGINAS; pag++) {
     const scrollParam = scrollId ? `&scroll_id=${encodeURIComponent(scrollId)}` : '';
+    // manual: true — este refresco lo dispara el usuario a mano desde el botón
+    // "Refrescar ML" (POST /refrescar-ml), no un cron. No debe quedar bloqueado
+    // por el cooldown global de los crons.
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`
+      `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`,
+      null, { manual: true }
     );
     // Fallo de API (429/500/etc.): abortar en vez de devolver una lista parcial
     // — el llamador reemplaza el cache de forma atómica y una lista incompleta
@@ -89,9 +95,11 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   const filas = [];
   for (let i = 0; i < allIds.length; i += MULTIGET_CHUNK) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
+    // manual: true — mismo refresco disparado a mano que en listarItemIds.
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing`
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`,
+      null, { manual: true }
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
     // borraría publicaciones válidas sin aviso.
@@ -126,13 +134,15 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
 function prepararUpsertCache(db) {
   return db.prepare(`
     INSERT INTO ml_publicaciones_cache
-      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, permalink, catalogo, actualizado_en)
-    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @permalink, @catalogo, @actualizado_en)
+      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, permalink, catalogo, precio, available_quantity, precio_actualizado_en, actualizado_en)
+    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @permalink, @catalogo, @precio, @available_quantity, @actualizado_en, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
       item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
       status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
       talle=excluded.talle, seller_sku=excluded.seller_sku, variations_texto=excluded.variations_texto,
-      thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo, actualizado_en=excluded.actualizado_en
+      thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo,
+      precio=excluded.precio, available_quantity=excluded.available_quantity,
+      precio_actualizado_en=excluded.precio_actualizado_en, actualizado_en=excluded.actualizado_en
   `);
 }
 
@@ -152,7 +162,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing`
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
@@ -174,32 +184,6 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
   return { total: filas.length, items: ids.length, variaciones };
-}
-
-/**
- * Escribe el SELLER_SKU de una publicación/variación en MercadoLibre.
- * Variaciones usan el endpoint puntual /items/{id}/variations/{varId} (evita la
- * revalidación del item completo, ej. límite de fotos). Devuelve { ok, status, saltado }.
- */
-async function escribirSkuEnMl(db, cfg, clave, sku) {
-  const { itemId, variationId } = partirClaveMl(clave);
-  if (!itemId || !sku) return { ok: false, status: 0, error: 'clave o sku inválido' };
-
-  // Idempotencia: si ML ya tiene ese SKU, no reescribir
-  const cacheRow = db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
-  if (cacheRow && (cacheRow.seller_sku || '') === sku) return { ok: true, status: 200, saltado: true };
-
-  const path = variationId
-    ? `/items/${itemId}/variations/${variationId}`
-    : `/items/${itemId}`;
-  const body = { attributes: [{ id: 'SELLER_SKU', value_name: sku }] };
-
-  const resp = await mlFetch(db, cfg, 'put', path, body);
-  if (resp.status === 200) {
-    db.prepare('UPDATE ml_publicaciones_cache SET seller_sku = ? WHERE clave = ?').run(sku, clave);
-    return { ok: true, status: 200 };
-  }
-  return { ok: false, status: resp.status, error: extraerErrorMl(resp) };
 }
 
 /**
@@ -474,65 +458,53 @@ export function matcherRouter(db, cfg) {
       return res.status(400).json({ ok: false, error: 'clave y sku (FB-xxx) requeridos' });
     }
     try {
-      const r = await escribirSkuEnMl(db, mlCfg, clave, sku);
+      // manual: true — escritura disparada por el usuario al confirmar un match.
+      const r = await escribirSkuEnMl(db, mlCfg, clave, sku, { manual: true });
       res.json({ ok: r.ok, ...r });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
   });
 
-  // Escribe en ML las decisiones mapeadas pendientes, en LOTES (evita el timeout de
-  // nginx de 120s). El frontend llama repetido hasta que restantes = 0.
-  const LOTE_PUSH = 120;
-  router.post('/push-skus-pendientes', async (req, res) => {
-    const wherePend = `
-      FROM sku_matcher_decisiones d
-      JOIN ml_publicaciones_cache p ON p.clave = d.clave
-      WHERE d.accion IN ('asignar','confirmar')
-        AND d.sku LIKE 'FB-%'
-        AND p.status = 'active'
-        AND COALESCE(p.seller_sku,'') <> d.sku`;
-
-    const lote = db.prepare(`SELECT d.clave, d.sku ${wherePend} LIMIT ${LOTE_PUSH}`).all();
-
-    let escritos = 0, errores = 0;
-    const fallos = [];
-    for (const p of lote) {
-      try {
-        const r = await escribirSkuEnMl(db, mlCfg, p.clave, p.sku);
-        if (r.ok) escritos++;
-        else { errores++; if (fallos.length < 20) fallos.push({ clave: p.clave, sku: p.sku, error: r.error }); }
-      } catch (e) {
-        errores++; if (fallos.length < 20) fallos.push({ clave: p.clave, sku: p.sku, error: e.message });
-      }
-      await sleep(CALL_DELAY_MS);
+  // Arranca la escritura en ML de las decisiones mapeadas pendientes en background (mismo
+  // patrón que POST /refrescar-ml: evita el timeout de nginx de 120s y permite cerrar la
+  // pestaña — corre igual, disparado también por el cron de server.js). 202 al toque, o 409
+  // si ya hay una corrida en curso (cron u otro request). El progreso se sondea en
+  // GET /push-skus-pendientes/estado.
+  router.post('/push-skus-pendientes', (req, res) => {
+    if (getEstadoPush().running) {
+      return res.status(409).json({ ok: false, running: true, error: 'Ya hay un push en curso' });
     }
-    const restantes = db.prepare(`SELECT COUNT(*) n ${wherePend}`).get().n;
-    res.json({ ok: true, procesados: lote.length, escritos, errores, restantes, fallos });
+    pushSkusPendientes(db, mlCfg).catch(err => console.error('push SKUs matcher error:', err.message));
+    res.status(202).json({ ok: true, running: true });
   });
 
-  // Cuántas decisiones tienen SKU pendiente de escribir en ML
+  // Estado del push (para sondeo del frontend, y para ver el resultado del último ciclo
+  // del cron aunque nadie haya tocado el botón).
+  router.get('/push-skus-pendientes/estado', (req, res) => {
+    res.json({ ok: true, ...getEstadoPush() });
+  });
+
+  // Cuántas decisiones tienen SKU pendiente de escribir en ML. Incluye activas Y pausadas
+  // (las pausadas también se escriben; las activas van primero en la cola de push).
   router.get('/push-skus-pendientes/count', (req, res) => {
-    const r = db.prepare(`
-      SELECT COUNT(*) n FROM sku_matcher_decisiones d
-      JOIN ml_publicaciones_cache p ON p.clave = d.clave
-      WHERE d.accion IN ('asignar','confirmar') AND d.sku LIKE 'FB-%'
-        AND p.status = 'active' AND COALESCE(p.seller_sku,'') <> d.sku
-    `).get();
-    res.json({ ok: true, pendientes: r.n });
+    const { total, activas, pausadas, enEspera } = contarPendientes(db);
+    res.json({ ok: true, pendientes: total, activas, pausadas, en_espera: enEspera });
   });
 
   // Listado (solo lectura) de las decisiones pendientes de escribir en ML — mismo filtro
-  // que /push-skus-pendientes (POST) y /count, pero sin ejecutar la escritura. Para una
-  // vista enfocada que muestre qué falta antes de disparar la acción en lote.
+  // que /push-skus-pendientes (POST) y /count (sin filtro de status), más el estado del
+  // último intento fallido (si lo hay), para una vista enfocada de qué falta y por qué.
   router.get('/push-skus-pendientes/list', (req, res) => {
     const rows = db.prepare(`
-      SELECT d.clave, d.sku, p.titulo, p.thumbnail, p.item_id
+      SELECT d.clave, d.sku, p.titulo, p.thumbnail, p.item_id, p.status,
+             f.intentos, f.ultimo_error, f.proximo_intento_en
       FROM sku_matcher_decisiones d
       JOIN ml_publicaciones_cache p ON p.clave = d.clave
+      LEFT JOIN ml_sku_push_fallos f ON f.clave = d.clave
       WHERE d.accion IN ('asignar','confirmar') AND d.sku LIKE 'FB-%'
-        AND p.status = 'active' AND COALESCE(p.seller_sku,'') <> d.sku
-      ORDER BY d.actualizado_en DESC
+        AND COALESCE(p.seller_sku,'') <> d.sku
+      ORDER BY CASE WHEN p.status = 'active' THEN 0 ELSE 1 END, d.actualizado_en DESC
     `).all();
     res.json({ ok: true, data: rows });
   });
@@ -566,8 +538,8 @@ export function matcherRouter(db, cfg) {
     } else {
       rows = db.prepare(`${SELECT_PUBS} ORDER BY titulo LIMIT ? OFFSET ?`).all(limit, offset);
     }
-    // Mismo cruce de stock que /candidatos, por consistencia (este endpoint ya no alimenta
-    // la grilla, pero mantenerlo coherente es trivial con el helper compartido).
+    // Mismo cruce de stock que /candidatos, por consistencia (con el push automático,
+    // /publicaciones vuelve a alimentar la grilla del matcher).
     marcarStockWc(db, rows);
     const actualizado = rows[0]?.actualizado_en ?? null;
     res.json({ ok: true, data: rows, actualizado, total: rows.length });

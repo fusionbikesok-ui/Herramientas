@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { precioContado } from '../lib/mlPrecios.js';
+import { armarLike } from '../lib/busqueda.js';
 
 const now = () => new Date().toISOString();
 
@@ -25,6 +26,13 @@ export function pareceEan(codigo) {
  * no el precio de lista guardado en catalogo_cache. Se mantiene el nombre `precio`
  * (en vez de `precio_web` como en routes/precios.js) para no tocar el frontend, que
  * ya lo consume como `p.precio` en varios lugares. La card lo rotula "Contado/Transf.".
+ *
+ * A PROPÓSITO usa `p.precio` (VIGENTE) y no `regular_price` (LISTA), a diferencia de los
+ * demás call sites de precioContado() en el repo (lib/mlPrecios.js, routes/precios.js,
+ * routes/sync.js — todos comparan contra publicaciones de ML y deben ignorar la oferta de
+ * la web). Decisión explícita del usuario (2026-08-03): Consulta de Precios es el mostrador
+ * — el cliente tiene que ver el mismo "Contado/Transf." que ve en la página del producto,
+ * oferta incluida. NO "unificar" este call site con los demás.
  */
 function productoParaCard(row) {
   const p = productoDesdeFilaCatalogo(row);
@@ -92,10 +100,10 @@ export function consultaPreciosRouter(db) {
   router.get('/buscar-sku', (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q) return res.json({ ok: true, data: [] });
-    const like = `%${q}%`;
+    const like = armarLike(q);
     const rows = db.prepare(`
       SELECT sku, nombre, stock, tipo FROM catalogo_cache
-      WHERE (sku LIKE ? OR nombre LIKE ?) AND sku <> ''
+      WHERE (sku LIKE ? ESCAPE '\\' OR nombre LIKE ? ESCAPE '\\') AND sku <> ''
       ORDER BY nombre ASC LIMIT 20
     `).all(like, like);
     res.json({ ok: true, data: rows });

@@ -1,23 +1,44 @@
 import express from 'express';
 import crypto from 'crypto';
-import { verifyPassword, hashPassword, cargarUsuario } from '../lib/auth.js';
+import {
+  verifyPassword, hashPassword, cargarUsuario,
+  claveRateLimit, loginBloqueado, registrarLoginFallido, registrarLoginExitoso,
+} from '../lib/auth.js';
 import { enviarEmailReset } from '../lib/mailer.js';
+
+// Evita que el navegador cachee respuestas de sesión: sin esto, el botón "atrás" tras un
+// logout puede servir de la bfcache/caché HTTP un /me con el usuario todavía autenticado,
+// aunque el servidor ya invalidó la sesión (confirmado con curl: 401 en un fetch manual).
+function sinCache(req, res, next) {
+  res.set('Cache-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+  next();
+}
 
 // Router de autenticación. Se monta SIN requireAuth: /login debe ser público.
 export function authRouter(db) {
   const router = express.Router();
+  router.use(sinCache);
 
   router.post('/login', (req, res) => {
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ ok: false, error: 'Faltan credenciales' });
     }
+    const key = claveRateLimit(username, req.ip);
+    const lockedUntil = loginBloqueado(key);
+    if (lockedUntil) {
+      res.set('Retry-After', String(Math.ceil((lockedUntil - Date.now()) / 1000)));
+      return res.status(429).json({ ok: false, error: 'Demasiados intentos fallidos. Esperá antes de reintentar.' });
+    }
     const row = db
       .prepare('SELECT id, pass_hash, activo FROM users WHERE username = ? COLLATE NOCASE')
       .get(String(username).trim());
     if (!row || !row.activo || !verifyPassword(password, row.pass_hash)) {
+      registrarLoginFallido(key);
       return res.status(401).json({ ok: false, error: 'Usuario o contraseña incorrectos' });
     }
+    registrarLoginExitoso(key);
     // Regenerar sesión para evitar fijación de sesión
     req.session.regenerate((err) => {
       if (err) return res.status(500).json({ ok: false, error: 'Error de sesión' });

@@ -150,6 +150,8 @@ export function ensureTables(db) {
     confirmado_en  TEXT
   )`).run();
   migrarSesionesAlcanceMulti(db);
+  // Migración 002: quién confirmó/reintentó el ajuste (historial de sesiones cerradas).
+  try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN confirmado_por TEXT'); } catch (_) {}
   db.prepare('CREATE INDEX IF NOT EXISTS idx_inv_sesiones_estado ON inventario_sesiones(estado)').run();
 
   db.prepare(`CREATE TABLE IF NOT EXISTS inventario_conteos (
@@ -437,6 +439,8 @@ export function inventarioRouter(db, wooCfg) {
         estado_codigo: estadoDeCodigo(c),
         confirmado_por_omision: !!c.confirmado_por_omision,
         aviso: avisoDeCodigo(c),
+        ajustado: !!c.ajustado_en,
+        ajustado_en: c.ajustado_en || null,
       };
     });
 
@@ -699,17 +703,26 @@ export function inventarioRouter(db, wooCfg) {
 
     const quedanFallidos = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND ajustado_en IS NULL').get(sesion.id).n;
     const estadoFinal = quedanFallidos > 0 ? 'confirmada_con_errores' : 'confirmada';
-    db.prepare("UPDATE inventario_sesiones SET estado=?, confirmado_en=? WHERE id=? AND estado='confirmando'")
-      .run(estadoFinal, now(), sesion.id);
+    // confirmado_por queda con el último que confirmó/reintentó (no acumula historial de reintentos previos).
+    db.prepare("UPDATE inventario_sesiones SET estado=?, confirmado_en=?, confirmado_por=? WHERE id=? AND estado='confirmando'")
+      .run(estadoFinal, now(), req.user?.username || null, sesion.id);
 
     res.json({ ok: true, ajustados, fallidos, errores });
   });
 
   router.get('/sesiones', (req, res) => {
     const usuario = req.user?.username;
-    const rows = db.prepare(
-      "SELECT * FROM inventario_sesiones WHERE usuario=? AND estado IN ('confirmada','confirmada_con_errores','descartada') ORDER BY COALESCE(confirmado_en,creado_en) DESC LIMIT 100"
-    ).all(usuario);
+    // Una sola consulta agregada (LEFT JOIN + COUNT condicional) en vez de un COUNT
+    // por sesión en un loop: para 'descartada' el conteo de fallidos no aplica (0),
+    // porque esas sesiones nunca llegaron a intentar el ajuste en Woo.
+    const rows = db.prepare(`
+      SELECT s.*, COUNT(CASE WHEN s.estado <> 'descartada' AND t.id IS NOT NULL AND t.ajustado_en IS NULL THEN 1 END) AS fallidos
+      FROM inventario_sesiones s
+      LEFT JOIN inventario_conteos t ON t.sesion_id = s.id AND s.estado <> 'descartada'
+      WHERE s.usuario=? AND s.estado IN ('confirmada','confirmada_con_errores','descartada')
+      GROUP BY s.id
+      ORDER BY COALESCE(s.confirmado_en, s.creado_en) DESC LIMIT 100
+    `).all(usuario);
     res.json({ ok: true, data: rows.map(sesionOut) });
   });
 

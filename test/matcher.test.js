@@ -5,6 +5,7 @@ import request from 'supertest';
 import { openDb } from '../db/index.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
 import { matcherRouter, refrescarPublicacionesMlAcotado, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
+import { _resetEstadoPushParaTests } from '../lib/matcherPush.js';
 
 // Mock axios para evitar llamadas reales a ML
 vi.mock('axios', async () => {
@@ -266,14 +267,15 @@ describe('GET /matcher/push-skus-pendientes/list', () => {
     expect(res.body.data).toHaveLength(0);
   });
 
-  it('no incluye decisiones de publicaciones pausadas/inactivas', async () => {
+  it('SÍ incluye decisiones de publicaciones pausadas (con status y sin fallo previo)', async () => {
     seedCache(db, { clave: 'MLA3|', itemId: 'MLA3', titulo: 'Bici Verde', status: 'paused', sellerSku: '' });
     seedDecision(db, { clave: 'MLA3|', sku: 'FB-300', accion: 'confirmar' });
 
     const res = await request(app).get('/matcher/push-skus-pendientes/list');
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(0);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ clave: 'MLA3|', status: 'paused', intentos: null });
   });
 
   it('excluye decisiones con accion "descartar" y SKUs que no empiezan con FB- (no son de FusionBikes)', async () => {
@@ -287,5 +289,58 @@ describe('GET /matcher/push-skus-pendientes/list', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(0);
+  });
+});
+
+describe('POST /matcher/push-skus-pendientes y estado (background)', () => {
+  let db, app;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedToken(db);
+    _resetEstadoPushParaTests();
+    app = express();
+    app.use(express.json());
+    app.use('/matcher', matcherRouter(db, ML_CFG));
+  });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('devuelve 202 y arranca en background; 409 si ya hay una corrida en curso', async () => {
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', status: 'active', sellerSku: '' });
+    seedDecision(db, { clave: 'MLA1|', sku: 'FB-100', accion: 'asignar' });
+    axios.request.mockImplementation(() => new Promise(() => {})); // nunca resuelve
+
+    const r1 = await request(app).post('/matcher/push-skus-pendientes');
+    expect(r1.status).toBe(202);
+    expect(r1.body).toMatchObject({ ok: true, running: true });
+
+    const r2 = await request(app).post('/matcher/push-skus-pendientes');
+    expect(r2.status).toBe(409);
+  });
+
+  it('GET /estado refleja el estado sondeable', async () => {
+    const r = await request(app).get('/matcher/push-skus-pendientes/estado');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true, running: false });
+  });
+});
+
+describe('GET /matcher/push-skus-pendientes/count', () => {
+  let db, app;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    app = express();
+    app.use(express.json());
+    app.use('/matcher', matcherRouter(db, ML_CFG));
+  });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('incluye pausadas y las separa de activas', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active', sellerSku: '' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1', accion: 'asignar' });
+    seedCache(db, { clave: 'P1|', itemId: 'P1', status: 'paused', sellerSku: '' });
+    seedDecision(db, { clave: 'P1|', sku: 'FB-2', accion: 'asignar' });
+
+    const r = await request(app).get('/matcher/push-skus-pendientes/count');
+    expect(r.body).toMatchObject({ ok: true, pendientes: 2, activas: 1, pausadas: 1, en_espera: 0 });
   });
 });
