@@ -26,6 +26,8 @@ import { preparacionRouter, syncPedidosCache, purgarFotosBorradas, reintentarCol
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
 import { inventarioRouter } from './routes/inventario.js';
+import { mlEstadoRouter } from './routes/mlEstado.js';
+import { getAccessToken } from './lib/mlClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -117,6 +119,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
   app.use('/vinculos', express.static(path.join(__dirname, 'public/vinculos')));
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
+  app.use('/api/ml', mlEstadoRouter(db));
 
   // -- Error handler global (respaldo) ---------------------------------
   // Debe ir al final, con 4 argumentos para que Express lo reconozca. Cualquier
@@ -239,6 +242,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           woo: wooCfg,
           enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
         }).catch(err => console.error('Error en reintentarColgadosTracking:', err.message));
+      });
+
+      // Renovación proactiva del token ML: da una oportunidad regular de renovar antes de
+      // que el token llegue a vencer, sin sumar otro llamador más a la tormenta que causó
+      // el incidente original (getAccessToken no pega a ML si el token sigue vigente, y no
+      // hace nada si hay cooldown activo).
+      cron.schedule('*/30 * * * *', () => {
+        getAccessToken(app._db, mlCfg)
+          .catch(err => console.error('Error renovando token ML (cron dedicado):', err.message));
       });
 
       // Push automático matcher → ML: escribe los SKU de decisiones pendientes (activas y

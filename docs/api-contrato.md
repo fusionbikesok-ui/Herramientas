@@ -542,6 +542,47 @@ queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
 `{ sin_asociar, codigos_desconocidos, codigos: [...] }` para que la UI explique cuáles son
 códigos inexistentes. Corta **antes** de tocar Woo: ningún ítem de la sesión se ajusta.
 
+## Estado del token ML (banner del Home)
+
+Incidente 2026-08: un 429 (rate limit) de ML al refrescar el token se trataba igual que
+un 400/401 ("verificar credenciales"), y 9 crons sin backoff reintentaban en loop cada
+3-15min manteniendo el 429 — el token quedó vencido 16h. Fix en `lib/mlClient.js`:
+clasificación transitorio/fatal, backoff compartido en memoria del módulo (1m→2m→5m→10m,
+tope 10m — NO 30m: se comería el margen de renovación), margen de renovación de 60s, más el
+presupuesto global de `lib/mlLimites.js` (85% del límite documentado), cron dedicado de
+renovación proactiva cada 30min en `server.js`, y alerta por mail (una por episodio) vía
+`lib/mailer.js` / `ALERTAS_EMAIL`.
+
+### GET /api/ml/token-estado
+Solo lectura, sin permiso de herramienta — cualquier usuario autenticado lo puede consultar
+(pensado para el banner del Home). No pega a la API de ML: lee `ml_oauth_token` y el estado
+en memoria del último refresh de `lib/mlClient.js`.
+
+- Request: sin body ni query.
+- Response 200:
+```json
+{
+  "ok": true,
+  "expires_at": "2026-08-04T18:00:00.000Z",
+  "actualizado_en": "2026-08-04T12:00:00.000Z",
+  "vencido": false,
+  "minutos_restantes": 340,
+  "motivo": null,
+  "requiere_reautorizacion": false,
+  "reautorizar_url": "/api/sync/ml-auth-url"
+}
+```
+  - `ok`: `false` si el token está vencido (`vencido:true`) o si el último fallo de refresh
+    fue fatal (`requiere_reautorizacion:true`). Un fallo transitorio (429/5xx) con el token
+    todavía vigente deja `ok:true` con `motivo` informativo (no bloquea el banner en rojo).
+  - `motivo`: mensaje del último error de refresh conocido, o `null` si el último refresh
+    (o el actual, si nunca falló) fue exitoso.
+  - `requiere_reautorizacion`: `true` únicamente si el último fallo fue 400/401 (refresh_token
+    quemado o credenciales inválidas) — nunca ante un 429/5xx transitorio.
+  - `reautorizar_url`: path de la ruta existente que arranca el flujo OAuth manual
+    (`GET /api/sync/ml-auth-url`, requiere permiso `config-ml`) — para que el banner enlace ahí.
+  - Si `ml_oauth_token` no tiene fila (nunca se hizo bootstrap): `vencido:true`,
+    `requiere_reautorizacion:true`, `expires_at`/`actualizado_en` en `null`.
 ## Búsqueda con comodines SQL escapados (fix hallazgo E2E)
 
 `GET /api/codigos/buscar?q=`, `GET /api/sync/buscar-sku?q=` y
