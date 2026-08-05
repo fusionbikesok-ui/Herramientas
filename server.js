@@ -165,34 +165,42 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (process.env.DISABLE_CRONS === 'true') {
       console.log('DISABLE_CRONS=true — crons de sync deshabilitados en esta instancia.');
     } else {
-      cron.schedule('*/15 * * * *', () => {
+      // Frecuencias bajas y ESCALONADAS a propósito (incidente 2026-08-04): ML empezó a
+      // devolver 429 sobre toda su API —no solo /oauth/token— con el token sano, porque el
+      // volumen de llamadas en régimen excedía su límite. Dos causas sumadas: la frecuencia,
+      // y que todos los `*/10` disparaban en el MISMO minuto (:00, :10, …), o sea una ráfaga
+      // simultánea de 5-6 jobs pegándole a ML de golpe. Por eso cada uno arranca en un minuto
+      // distinto. Antes de volver a subir cualquiera de estas frecuencias o de realinearlas
+      // al mismo minuto, revisar el límite de ML: el backoff de lib/mlClient.js amortigua el
+      // 429 pero no lo evita. Los que pegan a ML están marcados.
+      cron.schedule('1-59/15 * * * *', () => {          // Woo
         refrescarCatalogo(app._db, wooCfg)
           .catch(err => console.error('Error refrescando catálogo:', err.message));
       });
 
-      cron.schedule('*/3 * * * *', () => {
+      cron.schedule('3-59/10 * * * *', () => {          // ML
         syncMlToWc(app._db, syncCfg)
           .catch(err => console.error('ML→WC error:', err.message));
       });
 
-      cron.schedule('*/5 * * * *', () => {
+      cron.schedule('2-59/10 * * * *', () => {          // ML
         syncWcToMl(app._db, syncCfg)
           .catch(err => console.error('WC→ML error:', err.message));
       });
 
-      cron.schedule('*/10 * * * *', () => {
+      cron.schedule('4-59/10 * * * *', () => {          // ML
         procesarReintentos(app._db, syncCfg)
           .catch(err => console.error('reintentos error:', err.message));
       });
 
-      cron.schedule('*/10 * * * *', () => {
+      cron.schedule('6-59/15 * * * *', () => {          // ML
         procesarCancelacionesMl(app._db, syncCfg)
           .catch(err => console.error('cancelaciones ML error:', err.message));
       });
 
       // Reactivación automática de pausadas por falta de stock que ya recuperaron stock.
       // Las que no pasan el chequeo de precio quedan registradas como frenadas (badge en el home).
-      cron.schedule('*/10 * * * *', () => {
+      cron.schedule('8-59/15 * * * *', () => {          // ML
         reactivarAutomatico(app._db, syncCfg)
           .then(r => {
             // Solo dejar rastro cuando hubo algo que hacer, para no ensuciar el log.
@@ -211,7 +219,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           .catch(err => console.error('reactivación automática error:', err.message));
       });
 
-      cron.schedule('*/5 * * * *', () => {
+      cron.schedule('5-59/10 * * * *', () => {          // ML + Woo
         syncPedidosCache(app._db, {
           woo: wooCfg, ml: mlCfg,
           andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
@@ -226,7 +234,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
       });
 
-      cron.schedule('*/10 * * * *', () => {
+      cron.schedule('7-59/10 * * * *', () => {          // Woo
         reintentarColgadosTracking(app._db, {
           woo: wooCfg,
           enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',

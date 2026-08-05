@@ -5,6 +5,7 @@ import {
   seleccionarPendientes, contarPendientes, pushSkusPendientes,
   getEstadoPush, _resetEstadoPushParaTests,
 } from '../lib/matcherPush.js';
+import { _resetCooldownParaTests } from '../lib/mlClient.js';
 
 // Mock axios para evitar llamadas reales a ML
 vi.mock('axios', async () => {
@@ -57,6 +58,9 @@ describe('lib/matcherPush', () => {
     seedToken(db);
     vi.clearAllMocks();
     _resetEstadoPushParaTests();
+    // El cooldown de 429 vive en el módulo mlClient: sin esto, el test de "429
+    // persistente" se lo deja activo a los siguientes y los corta de entrada.
+    _resetCooldownParaTests();
   });
   afterEach(() => {
     db.close();
