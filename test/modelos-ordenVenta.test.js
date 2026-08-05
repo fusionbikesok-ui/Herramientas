@@ -88,4 +88,50 @@ describe('billingWcDesdeOrdenMl', () => {
   it('sin buyer en absoluto usa los defaults', () => {
     expect(billingWcDesdeOrdenMl({})).toEqual({ first_name: 'Comprador', last_name: 'MercadoLibre' });
   });
+
+  it('con shipping normalizado, la facturación se replica del envío en vez del nickname', () => {
+    const orden = { buyer: { nickname: 'anag' } };
+    const shipping = {
+      first_name: 'Juan', last_name: 'Perez',
+      address_1: 'San Martin 123', address_2: 'Piso 2',
+      city: 'Cordoba', state: 'Cordoba', postcode: '5000', country: 'AR',
+    };
+    expect(billingWcDesdeOrdenMl(orden, shipping)).toEqual({
+      first_name: 'Juan', last_name: 'Perez',
+      address_1: 'San Martin 123', address_2: 'Piso 2',
+      city: 'Cordoba', state: 'Cordoba', postcode: '5000', country: 'AR',
+    });
+  });
+
+  it('con shipping parcial (solo calle, sin nombre), billing cae al nickname para el nombre pero conserva la dirección real', () => {
+    const orden = { buyer: { nickname: 'anag' } };
+    const shipping = {
+      first_name: '', last_name: '',
+      address_1: 'San Martin 123', address_2: '',
+      city: 'Cordoba', state: 'Cordoba', postcode: '5000', country: 'AR',
+    };
+    expect(billingWcDesdeOrdenMl(orden, shipping)).toEqual({
+      first_name: 'anag', last_name: 'MercadoLibre',
+      address_1: 'San Martin 123', address_2: '',
+      city: 'Cordoba', state: 'Cordoba', postcode: '5000', country: 'AR',
+    });
+  });
+
+  it('con shipping presente, si buyer trae email/phone igual se agregan a billing', () => {
+    const orden = { buyer: { nickname: 'anag', email: 'ana@mail.com', phone: { number: '3511234567' } } };
+    const shipping = {
+      first_name: 'Juan', last_name: 'Perez',
+      address_1: 'San Martin 123', address_2: '',
+      city: 'Cordoba', state: 'Cordoba', postcode: '5000', country: 'AR',
+    };
+    const billing = billingWcDesdeOrdenMl(orden, shipping);
+    expect(billing.email).toBe('ana@mail.com');
+    expect(billing.phone).toBe('3511234567');
+    expect(billing.first_name).toBe('Juan');
+  });
+
+  it('sin shipping (fail-open), se mantiene el comportamiento anterior con nickname', () => {
+    const orden = { buyer: { nickname: 'anag' } };
+    expect(billingWcDesdeOrdenMl(orden, undefined)).toEqual({ first_name: 'anag', last_name: 'MercadoLibre' });
+  });
 });

@@ -451,6 +451,19 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
       country: 'AR',
     });
 
+    // La facturación replica el destinatario/dirección del envío (routes/sync.js llama a
+    // billingWcDesdeOrdenMl(orden, shipping)): protege el cableado, no solo la función pura.
+    expect(body.billing).toEqual({
+      first_name: 'Juan',
+      last_name: 'Pérez',
+      address_1: 'Av Siempreviva 742',
+      address_2: 'Piso 3 B',
+      city: 'CABA',
+      state: 'Buenos Aires',
+      postcode: '1000',
+      country: 'AR',
+    });
+
     // Nº de orden ML, precio pagado y neto (sale_fee) como dato informativo — nunca como precio de línea.
     const meta = Object.fromEntries(body.meta_data.map(m => [m.key, m.value]));
     expect(meta._ml_order_id).toBe('ORD-SHIP-OK');
@@ -494,6 +507,11 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
     expect(orderCall).toBeTruthy();
     expect(orderCall[3].shipping).toBeUndefined();
+
+    // Sin datos de envío, `billing` cae al comportamiento anterior (nickname + 'MercadoLibre')
+    // — este es el caso que protege la decisión fail-open en producción: si el cableado de
+    // routes/sync.js dejara de pasar `shipping` a billingWcDesdeOrdenMl, este assert lo detecta.
+    expect(orderCall[3].billing).toEqual({ first_name: 'comprador123', last_name: 'MercadoLibre' });
 
     // Reserva completada normalmente (no queda retenida ni se libera de más)
     const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-SHIP-FALLA');
