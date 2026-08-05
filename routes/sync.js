@@ -552,7 +552,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     return;
   }
 
-  const billing = billingWcDesdeOrdenMl(orden);
+  // Se replican los datos de envío en la facturación (ver comentario en
+  // billingWcDesdeOrdenMl): las facturas de ML se emiten por otro medio, la facturación de
+  // Woo acá no tiene consecuencia fiscal.
+  const billing = billingWcDesdeOrdenMl(orden, shipping);
 
   // Datos informativos de la venta ML — nunca se usan como precio de línea (eso ya se
   // resolvió arriba con precioContado). "No inventar" aplica a los dos:

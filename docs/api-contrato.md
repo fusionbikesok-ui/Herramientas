@@ -38,6 +38,19 @@ próximo ciclo), con dos excepciones fail-open explícitas dentro del mismo POST
   si la consulta falla, devuelve un status distinto de 200 (`mlFetch` no lanza por HTTP status,
   hay que chequearlo a mano) o la orden no tiene envío, el pedido se crea igual sin esos datos
   (aviso en `sync_log`, la reserva no se retiene ni se libera de más por esto).
+- **Facturación (`billing`) replica el envío (2026-08-05):** con los mismos datos de envío de
+  arriba, `billing` del pedido WC replica nombre y dirección del destinatario en vez del
+  nickname de ML — las facturas de una venta ML se emiten por otro medio (no por Woo), así que
+  la facturación acá no tiene consecuencia fiscal y es más útil con el destinatario real.
+  Fallback explícito, siempre nickname + `'MercadoLibre'` como apellido (nunca vacío, para no
+  dejar el pedido titulado "de " sin nadie en el admin de Woo):
+  - Sin `shipping` (fail-open de la consulta a ML, o la orden no tiene envío): `billing` completo
+    cae a `{ first_name: nickname || 'Comprador', last_name: 'MercadoLibre' }`, igual que antes
+    de este cambio.
+  - Con `shipping` presente pero sin nombre (ML solo dio la calle, `receiver_name` vacío):
+    `billing.first_name`/`last_name` caen al mismo fallback de nickname, pero **la dirección
+    real del envío se conserva** (`shipping` del pedido WC, en cambio, sigue reflejando
+    fielmente lo que dijo ML, incluido el nombre vacío si así vino).
 
 Datos informativos que se agregan en el mismo POST de creación (nunca en un PUT/PATCH
 posterior — el único cambio permitido a un pedido WC creado desde ML es la cancelación, ver
