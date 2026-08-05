@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
-import { getAccessToken, bootstrapToken } from '../lib/mlClient.js';
+import { getAccessToken, bootstrapToken, getEstadoRefresh, _resetCooldownParaTests } from '../lib/mlClient.js';
 import { getReactivablesRows, reactivarItems, syncRouter } from '../routes/sync.js';
 import { mapConLimite } from '../lib/concurrencia.js';
 import express from 'express';
@@ -144,11 +144,13 @@ describe('mlClient', () => {
   beforeEach(() => {
     db = openDb(TEST_DB);
     vi.resetAllMocks();
+    _resetCooldownParaTests();
   });
 
   afterEach(() => {
     db.close();
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    _resetCooldownParaTests();
   });
 
   it('getAccessToken: devuelve token vigente sin hacer refresh', async () => {
@@ -158,7 +160,7 @@ describe('mlClient', () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  it('getAccessToken: hace refresh si el token vence en < 60s', async () => {
+  it('getAccessToken: hace refresh si el token esta por vencer (margen de 60s)', async () => {
     seedToken(db, { expiresInMs: 30 * 1000 }); // vence en 30s
     axios.post.mockResolvedValueOnce({
       status: 200,
@@ -203,6 +205,52 @@ describe('mlClient', () => {
       data: { message: 'invalid_code' },
     });
     await expect(bootstrapToken(db, ML_CFG, 'BAD-CODE')).rejects.toThrow('Bootstrap ML falló');
+  });
+
+  it('getAccessToken: 429 al refrescar es transitorio, NO pide re-autorización, y activa backoff', async () => {
+    seedToken(db, { expiresInMs: 30 * 1000 });
+    axios.post.mockResolvedValueOnce({ status: 429, data: {} });
+
+    await expect(getAccessToken(db, ML_CFG)).rejects.toThrow(/rate limit|no disponible/);
+
+    const estado = getEstadoRefresh();
+    expect(estado.ultimoError.clase).toBe('transitorio');
+    expect(estado.backoffHasta).not.toBeNull();
+
+    // Mientras dure el cooldown, un segundo llamador NO debe volver a pegarle a ML.
+    await expect(getAccessToken(db, ML_CFG)).rejects.toThrow();
+    expect(axios.post).toHaveBeenCalledOnce();
+  });
+
+  it('getAccessToken: 401 al refrescar es fatal (requiere re-autorización)', async () => {
+    seedToken(db, { expiresInMs: 30 * 1000 });
+    axios.post.mockResolvedValueOnce({ status: 401, data: {} });
+
+    // master redacta el mensaje nombrando las dos causas posibles del 400/401
+    // (client_secret mal, o refresh_token quemado); lo que importa acá es que
+    // quede clasificado como fatal, que es lo que dispara el banner de
+    // re-autorización — se verifica abajo.
+    await expect(getAccessToken(db, ML_CFG)).rejects.toThrow(/autorización OAuth|client_secret/);
+
+    const estado = getEstadoRefresh();
+    expect(estado.ultimoError.clase).toBe('fatal');
+  });
+
+  it('getAccessToken: un refresh exitoso resetea el backoff previo', async () => {
+    seedToken(db, { expiresInMs: 30 * 1000 });
+    axios.post.mockResolvedValueOnce({ status: 429, data: {} });
+    await expect(getAccessToken(db, ML_CFG)).rejects.toThrow();
+    expect(getEstadoRefresh().backoffHasta).not.toBeNull();
+
+    // Forzar salida del cooldown para simular que pasó el tiempo de backoff.
+    _resetCooldownParaTests();
+    axios.post.mockResolvedValueOnce({
+      status: 200,
+      data: { access_token: 'tok-recuperado', refresh_token: 'ref-recuperado', expires_in: 21600 },
+    });
+    const token = await getAccessToken(db, ML_CFG);
+    expect(token).toBe('tok-recuperado');
+    expect(getEstadoRefresh().ultimoError).toBeNull();
   });
 });
 
