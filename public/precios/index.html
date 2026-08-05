@@ -97,6 +97,7 @@
 
   <!-- Panel de filtros + ordenamiento en memoria (sobre las filas ya traídas por la tab).
        Las tabs de arriba siguen siendo el filtro primario server-side por `estado`. -->
+  <div class="aviso-truncado" id="aviso-truncado" style="display:none;margin-bottom:12px;padding:9px 12px;border-radius:9px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:var(--amber,#FBBF24);font-size:13px"></div>
   <div class="filtros-panel" id="filtros-panel" style="display:none">
     <div class="filtro-group buscar">
       <label class="filtro-label" for="f-buscar">Buscar (título o SKU)</label>
@@ -163,6 +164,8 @@ var LABELS={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:'OK'};
    Sobre las filas que devuelve la tab aplicamos una capa extra en memoria, sin
    fetches nuevos. Mismo patrón que Cobertura de Catálogo, para consistencia. */
 var ROWS=[];                       // filas crudas de la tab actual (del último fetch)
+var TOTAL_REAL=null;               // total real informado por el backend (COUNT), si vino
+var TRUNCADO=false;                // true si el backend truncó la respuesta a menos del total real
 var busqueda='';                   // texto libre (título/SKU)
 var filtros={ categoria:'', marca:'', stockMin:null, stockMax:null, precioMin:null, precioMax:null };
 /* Orden por defecto = déficit % desc, que refleja el orden natural del backend. */
@@ -306,6 +309,15 @@ function pintar(){
   cont.innerHTML=render(lista);
   var cnt=document.getElementById('filtros-count');
   if(cnt) cnt.textContent=(lista.length===1?'1 resultado':(lista.length+' resultados'));
+  var avisoTrunc=document.getElementById('aviso-truncado');
+  if(avisoTrunc){
+    if(TRUNCADO && TOTAL_REAL!=null){
+      avisoTrunc.style.display='';
+      avisoTrunc.textContent='⚠ Mostrando '+ROWS.length+' de '+TOTAL_REAL+' publicaciones — hay más de las que se ven acá, refiná el filtro de estado.';
+    } else {
+      avisoTrunc.style.display='none';
+    }
+  }
 }
 
 async function cargar(){
@@ -316,6 +328,11 @@ async function cargar(){
     var d=await r.json();
     if(!d.ok)throw new Error(d.error||'error');
     ROWS=d.data||[];
+    // Contrato nuevo del backend: { data, total, truncado }. Programamos defensivo por si
+    // todavía no está desplegado: sin esos campos, TRUNCADO queda false (comportamiento
+    // previo, sin banner).
+    TOTAL_REAL=(typeof d.total==='number')?d.total:null;
+    TRUNCADO=!!d.truncado;
     document.getElementById('filtros-panel').style.display=ROWS.length?'grid':'none';
     poblarFiltros();
     pintar();

@@ -154,6 +154,11 @@ input[type=file] { display:none; }
     <div class="page-desc">Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic.</div>
   </div>
 
+  <div id="banner-catalogo" role="alert" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--amber-bg,#3a2c0d);border:1px solid var(--amber-bd,#8a6d1a);color:var(--amber,#e8b93b);font-size:13px;align-items:center;gap:10px;flex-wrap:wrap">
+    <span>⚠ No se pudo cargar el catálogo de WooCommerce. La búsqueda y el matcheo automático no son confiables ahora mismo: un producto puede existir aunque el buscador diga "Sin resultados".</span>
+    <button type="button" onclick="cargarCatalogo()" style="border:1px solid currentColor;background:transparent;color:inherit;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer">Reintentar</button>
+  </div>
+
   <div class="pill-tabs" role="tablist" aria-label="Secciones de recepción de mercadería">
     <button type="button" class="pill-tab active" role="tab" aria-selected="true" id="tab-nueva" onclick="mostrarTab('nueva')">Nueva recepción</button>
     <button type="button" class="pill-tab" role="tab" aria-selected="false" id="tab-historial" onclick="mostrarTab('historial'); cargarHistorial()">Historial</button>
@@ -298,6 +303,7 @@ input[type=file] { display:none; }
 Api.installAuth();
 
 var catalogo = [];
+var catalogoEstado = 'cargando'; // 'cargando' | 'ok' | 'error' — todo lo que lee catalogo[] chequea esto antes de decir "no existe"
 var items = [];   // ítems de la recepción actual
 var docs  = [];   // documentos de la recepción actual
 var recepcionGuardadaId = null;
@@ -367,10 +373,28 @@ function actualizarAvisoPedido() {
 }
 
 function cargarCatalogo() {
+  catalogoEstado = 'cargando';
+  document.getElementById('banner-catalogo').style.display = 'none';
   fetch('/api/woo/catalogo')
     .then(function(r){ return r.json(); })
-    .then(function(d){ if (d.ok) catalogo = d.data || []; })
-    .catch(function(){});
+    .then(function(d){
+      if (!d.ok) throw new Error('respuesta no-ok');
+      catalogo = (d.data || []).map(function(p){
+        // Precalculados una sola vez (no por keystroke). _busq (sku+nombre) es el texto
+        // libre para el filtro por palabras; _gtinNorm se compara aparte, solo exacto o
+        // por prefijo (un GTIN completo no debe matchear por substring arbitrario).
+        p._skuNorm  = normalizar(p.sku||'');
+        p._gtinNorm = normalizar(p.gtin||'');
+        p._busq     = p._skuNorm + ' ' + normalizar(p.nombre||'');
+        return p;
+      });
+      catalogoEstado = 'ok';
+    })
+    .catch(function(){
+      catalogo = [];
+      catalogoEstado = 'error';
+      document.getElementById('banner-catalogo').style.display = 'flex';
+    });
 }
 
 function cargarProveedoresRecientes() {
@@ -686,10 +710,22 @@ function buscarWC(inp, itemId) {
   var q = normalizar(inp.value);
   var dd = document.getElementById('dd-' + itemId);
   if (!q || q.length < 2) { dd.innerHTML=''; dd.classList.remove('open'); return; }
-  var palabras = q.split(' ').filter(function(w){ return w.length>1; });
+  if (catalogoEstado !== 'ok') {
+    dd.innerHTML='<div class="wc-opt" style="color:var(--amber,#e8b93b);pointer-events:none">⚠ Catálogo no disponible — no se puede buscar. <a href="javascript:void(0)" onmousedown="event.preventDefault();cargarCatalogo()" style="color:inherit;text-decoration:underline">Reintentar</a></div>';
+    dd.classList.add('open'); return;
+  }
+  // Se conservan los fragmentos de 1 carácter: descartarlos dejaba `palabras` vacío para
+  // consultas como "A-1" (normalizar() parte por el guión), y un every() sobre un array
+  // vacío da true para TODO el catálogo — devolvía 20 productos sin relación con lo buscado.
+  var palabras = q.split(' ').filter(function(w){ return w.length>0; });
   var resultados = catalogo.filter(function(p){
-    var hay = normalizar(p.nombre);
-    return palabras.every(function(w){ return hay.indexOf(w)!==-1; });
+    if (palabras.every(function(w){ return p._busq.indexOf(w)!==-1; })) return true;
+    // GTIN: solo exacto o por prefijo (evita falsos positivos por substring en medio del código)
+    return !!p._gtinNorm && (p._gtinNorm === q || p._gtinNorm.indexOf(q) === 0);
+  }).sort(function(a,b){
+    var scoreA = (a._skuNorm===q) ? 2 : (a._skuNorm.indexOf(q)===0 ? 1 : 0);
+    var scoreB = (b._skuNorm===q) ? 2 : (b._skuNorm.indexOf(q)===0 ? 1 : 0);
+    return scoreB - scoreA;
   }).slice(0, 20);
   if (!resultados.length) {
     dd.innerHTML='<div class="wc-opt" style="color:var(--gray2);pointer-events:none">Sin resultados</div>';
@@ -893,15 +929,16 @@ function confirmarRecepcion() {
 
 function cargarHistorial() {
   document.getElementById('hist-lista').innerHTML = '<div class="empty-state"><div class="empty-icon">⏳</div>Cargando...</div>';
-  fetch('/api/recepciones')
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if (!d.ok) throw new Error(d.error);
-      renderHistorial(d.data || []);
-    })
-    .catch(function(err){
-      document.getElementById('hist-lista').innerHTML = '<div class="empty-state" style="color:var(--red)">Error: ' + esc(err.message) + '</div>';
+  Api.fetchState('/api/recepciones', {
+    esVacio: function(d){ return !d || !d.ok || !Array.isArray(d.data) || d.data.length===0; }
+  }).then(function(resultado){
+    if (resultado.state === 'ok') { renderHistorial(resultado.data.data || []); return; }
+    Api.renderState(document.getElementById('hist-lista'), resultado, {
+      mensajeVacio: 'No hay recepciones aún.',
+      prefijoError: 'No se pudo cargar el historial: ',
+      onReintentar: cargarHistorial
     });
+  });
 }
 
 function renderHistorial(lista) {

@@ -1160,8 +1160,12 @@ describe('syncPedidosCache', () => {
   });
 
   it('guarda en pedidos_cache un pedido web ya enviado (completed) con estado_envio=enviado', async () => {
+    // Fecha relativa, adentro de la ventana móvil de 60 días para 'enviado' (routes/preparacion.js
+    // línea ~1296): si se hardcodea una fecha absoluta, el test se pudre solo cuando pasan
+    // 60 días y la fila queda podada antes de que la aserción la vea.
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
     const orderEnv = {
-      id: 950, number: '950', status: 'completed', date_created: '2026-07-05T00:00:00Z',
+      id: 950, number: '950', status: 'completed', date_created: haceCincoDias,
       billing: { first_name: 'Ana', last_name: 'Gomez' }, meta_data: [],
       line_items: [{ id: 2, product_id: 502, variation_id: 0, sku: 'CASCO-1', name: 'Casco', quantity: 1 }],
     };
@@ -1257,10 +1261,13 @@ describe('syncPedidosCache', () => {
 
   it('poda de pedidos_cache las filas ML pendientes que ya no están ready_to_ship (pedido despachado)', async () => {
     buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
+    // Fecha relativa, adentro de la ventana móvil de 30 días que usa la poda ML (routes/preparacion.js
+    // línea ~1308): con fecha absoluta el test se pudre solo cuando pasan 30 días.
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
-    `).run();
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo',?,'pendiente',NULL,0,'self_service',NULL,'[]',?)
+    `).run(haceCincoDias, haceCincoDias);
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
@@ -1278,10 +1285,12 @@ describe('syncPedidosCache', () => {
 
   it('guard fail-closed: si pendientesMl devuelve vacío pero confiable (sin truncar, sin fallos), SÍ poda (nada quedó pendiente de verdad)', async () => {
     buildTestApp(db); // asegura las tablas (ensureTables) antes de sembrar directo
+    // Fecha relativa, adentro de la ventana móvil de 30 días (ver comentario en el test anterior).
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
-    `).run();
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo',?,'pendiente',NULL,0,'self_service',NULL,'[]',?)
+    `).run(haceCincoDias, haceCincoDias);
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // orders/search: sin resultados, listado confiable
@@ -1294,13 +1303,15 @@ describe('syncPedidosCache', () => {
 
   it('la poda NO borra filas web ni filas ML ya enviado, solo pendientes ML ausentes del listado vigente', async () => {
     buildTestApp(db);
+    // Fecha relativa, adentro de la ventana móvil de 30 días (ver comentario más arriba).
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
       VALUES
-        ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z'),
-        ('web:200','web',200,NULL,'200','Cliente Web','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,'[]','2026-07-01T00:00:00Z'),
-        ('ml:3333','ml',NULL,'3333','3333','Cliente Enviado ML','2026-07-01T00:00:00Z','enviado',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
-    `).run();
+        ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo',?,'pendiente',NULL,0,'self_service',NULL,'[]',?),
+        ('web:200','web',200,NULL,'200','Cliente Web',?,'pendiente','lpaandreani',0,NULL,NULL,'[]',?),
+        ('ml:3333','ml',NULL,'3333','3333','Cliente Enviado ML',?,'enviado',NULL,0,'self_service',NULL,'[]',?)
+    `).run(haceCincoDias, haceCincoDias, haceCincoDias, haceCincoDias, haceCincoDias, haceCincoDias);
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // sin pendientes vigentes, listado confiable
@@ -1314,10 +1325,13 @@ describe('syncPedidosCache', () => {
 
   it('si falla un GET /shipments/:id, la poda se omite esa corrida (listado no confiable)', async () => {
     buildTestApp(db);
+    // Fecha relativa por consistencia (no participa de la comparación de ventana acá, porque
+    // mlConfiable queda en false y la poda se omite entera, pero evita confusión a futuro).
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
-    `).run();
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo',?,'pendiente',NULL,0,'self_service',NULL,'[]',?)
+    `).run(haceCincoDias, haceCincoDias);
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
@@ -1333,10 +1347,12 @@ describe('syncPedidosCache', () => {
 
   it('con más de 50 órdenes paid, pagina /orders/search hasta agotar el resultado (no se queda con la primera página) y sí poda si queda confiable', async () => {
     buildTestApp(db);
+    // Fecha relativa, adentro de la ventana móvil de 30 días (ver comentario más arriba).
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
-    `).run();
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Viejo',?,'pendiente',NULL,0,'self_service',NULL,'[]',?)
+    `).run(haceCincoDias, haceCincoDias);
 
     // Sin shipping.id para no tener que mockear /shipments por cada una: lo que importa acá
     // es que la paginación agote las 2 páginas, no el filtrado de shipments.
@@ -1412,14 +1428,19 @@ describe('syncPedidosCache', () => {
 
   it('una fila con preparación completada no se poda aunque no aparezca en el listado de pendientesMl', async () => {
     buildTestApp(db);
+    // Fecha relativa, adentro de la ventana móvil de 30 días (ver comentario más arriba). Esta
+    // fila igual queda a salvo por el filtro de estado_prep='completada' de la poda, pero se
+    // mantiene dentro de la ventana para que el test siga probando ese camino y no el otro
+    // (fuera de ventana), que ya se cubre en un test aparte.
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
     db.prepare(`
       INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Completado','2026-07-01T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-07-01T00:00:00Z')
-    `).run();
+      VALUES ('ml:1111','ml',NULL,'1111','1111','Cliente Completado',?,'pendiente',NULL,0,'self_service',NULL,'[]',?)
+    `).run(haceCincoDias, haceCincoDias);
     db.prepare(`
       INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en)
-      VALUES ('ml', 'ml:1111', 'completada', 0, '2026-07-01T00:00:00Z')
-    `).run();
+      VALUES ('ml', 'ml:1111', 'completada', 0, ?)
+    `).run(haceCincoDias);
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // no vuelve a aparecer: pendientesMl no la refetchea

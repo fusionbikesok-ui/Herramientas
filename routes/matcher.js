@@ -47,9 +47,13 @@ async function listarItemIds(db, cfg, status) {
   const MAX_PAGINAS = 200; // guarda: 200 × 100 = 20.000 items máximo por status
   for (let pag = 0; pag < MAX_PAGINAS; pag++) {
     const scrollParam = scrollId ? `&scroll_id=${encodeURIComponent(scrollId)}` : '';
+    // manual: true — este refresco lo dispara el usuario a mano desde el botón
+    // "Refrescar ML" (POST /refrescar-ml), no un cron. No debe quedar bloqueado
+    // por el cooldown global de los crons.
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`
+      `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`,
+      null, { manual: true }
     );
     // Fallo de API (429/500/etc.): abortar en vez de devolver una lista parcial
     // — el llamador reemplaza el cache de forma atómica y una lista incompleta
@@ -89,9 +93,11 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   const filas = [];
   for (let i = 0; i < allIds.length; i += MULTIGET_CHUNK) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
+    // manual: true — mismo refresco disparado a mano que en listarItemIds.
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing`
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`,
+      null, { manual: true }
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
     // borraría publicaciones válidas sin aviso.
@@ -126,13 +132,15 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
 function prepararUpsertCache(db) {
   return db.prepare(`
     INSERT INTO ml_publicaciones_cache
-      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, permalink, catalogo, actualizado_en)
-    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @permalink, @catalogo, @actualizado_en)
+      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, permalink, catalogo, precio, available_quantity, precio_actualizado_en, actualizado_en)
+    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @permalink, @catalogo, @precio, @available_quantity, @actualizado_en, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
       item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
       status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
       talle=excluded.talle, seller_sku=excluded.seller_sku, variations_texto=excluded.variations_texto,
-      thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo, actualizado_en=excluded.actualizado_en
+      thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo,
+      precio=excluded.precio, available_quantity=excluded.available_quantity,
+      precio_actualizado_en=excluded.precio_actualizado_en, actualizado_en=excluded.actualizado_en
   `);
 }
 
@@ -152,7 +160,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing`
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
@@ -194,7 +202,8 @@ async function escribirSkuEnMl(db, cfg, clave, sku) {
     : `/items/${itemId}`;
   const body = { attributes: [{ id: 'SELLER_SKU', value_name: sku }] };
 
-  const resp = await mlFetch(db, cfg, 'put', path, body);
+  // manual: true — escritura disparada por el usuario al confirmar un match.
+  const resp = await mlFetch(db, cfg, 'put', path, body, { manual: true });
   if (resp.status === 200) {
     db.prepare('UPDATE ml_publicaciones_cache SET seller_sku = ? WHERE clave = ?').run(sku, clave);
     return { ok: true, status: 200 };

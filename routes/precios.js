@@ -1,9 +1,9 @@
 /**
  * Auditoría de precios ML: compara el neto que recibe el vendedor (precio − comisión − envío)
  * contra el precio de CONTADO de cada publicación activa mapeada, para detectar precios mal
- * puestos. catalogo_cache.precio guarda el precio de LISTA (el que devuelve la API de
- * WooCommerce); precioContado() en lib/mlPrecios.js lo convierte a precio de contado antes
- * de comparar — ver el comentario ahí para el porqué.
+ * puestos. catalogo_cache.regular_price guarda el precio de LISTA (catalogo_cache.precio es
+ * el VIGENTE, que ya trae el sale_price si hay oferta); precioContado() en lib/mlPrecios.js
+ * convierte el de lista a precio de contado antes de comparar — ver el comentario ahí.
  *
  * El scan es largo (~1000 publicaciones × varias llamadas a ML), así que corre en background
  * y persiste el resultado en ml_precio_auditoria; la página lee esa tabla y muestra progreso.
@@ -43,8 +43,10 @@ export async function auditarPrecios(db, mlCfg) {
   if (_auditEnCurso) return { yaEnCurso: true };
   _auditEnCurso = true;
 
+  // c.regular_price es el precio de LISTA (ver JSDoc arriba); NUNCA c.precio (vigente, ya
+  // trae el sale_price si el producto está en oferta) — evita acumular dos descuentos.
   const candidatas = db.prepare(`
-    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_lista
+    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.regular_price AS precio_lista
     FROM ml_publicaciones_cache p
     JOIN sku_matcher_decisiones d ON d.clave = p.clave AND d.accion IN ('asignar','confirmar') AND d.sku <> ''
     LEFT JOIN catalogo_cache c ON c.sku = d.sku AND c.sku <> ''
@@ -128,7 +130,7 @@ function buildMlPriceUpdate(itemId, variationId, precio) {
  */
 async function refrescarFila(db, mlCfg, clave) {
   const filaRaw = db.prepare(`
-    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.precio AS precio_lista
+    SELECT p.clave, p.item_id, p.variation_id, p.titulo, d.sku, c.regular_price AS precio_lista
     FROM ml_publicaciones_cache p
     JOIN sku_matcher_decisiones d ON d.clave = p.clave AND d.accion IN ('asignar','confirmar') AND d.sku <> ''
     LEFT JOIN catalogo_cache c ON c.sku = d.sku AND c.sku <> ''
@@ -138,7 +140,8 @@ async function refrescarFila(db, mlCfg, clave) {
   const fila = { ...filaRaw, precio_web: precioContado(filaRaw.precio_lista) };
 
   const resp = await mlFetch(db, mlCfg, 'get',
-    `/items/${fila.item_id}?attributes=id,price,category_id,listing_type_id,shipping,variations,status`);
+    `/items/${fila.item_id}?attributes=id,price,category_id,listing_type_id,shipping,variations,status`,
+    null, { manual: true });
   if (resp.status !== 200 || !resp.data) return null;
   const item = resp.data;
 
@@ -149,7 +152,7 @@ async function refrescarFila(db, mlCfg, clave) {
     const r = await netoMl(db, mlCfg, {
       itemId: fila.item_id, price: precio_ml, categoryId: item.category_id,
       listingTypeId: item.listing_type_id, freeShipping,
-    });
+    }, {}, { manual: true });
     sale_fee = r.sale_fee; envio = r.envio; neto = r.neto;
     const v = veredictoNeto(neto, fila.precio_web);
     estado = v.estado; deficit_pct = v.deficitPct;
@@ -207,6 +210,8 @@ export function preciosRouter(db, cfg) {
     if (estado === 'all') where = '1=1';
     else if (['bajo', 'alto', 'sin_precio', 'ok'].includes(estado)) where = `a.estado = '${estado}'`;
     else where = "a.estado IN ('bajo','alto','sin_precio')";
+    // Total real (sin LIMIT), para no reportar el tope de la query como si fuera el total.
+    const totalReal = db.prepare(`SELECT COUNT(*) n FROM ml_precio_auditoria a WHERE ${where}`).get().n;
     const rows = db.prepare(`
       SELECT a.clave, a.item_id, a.titulo, a.sku, a.precio_ml, a.sale_fee, a.envio, a.neto,
              a.precio_web, a.deficit_pct, a.estado, a.actualizado_en, p.thumbnail,
@@ -230,7 +235,8 @@ export function preciosRouter(db, cfg) {
       ...r,
       precio_sugerido: r.estado === 'bajo' ? precioSugerido(r.precio_ml, r.sale_fee, r.envio, r.precio_web) : null,
     }));
-    res.json({ ok: true, total: data.length, data });
+    // total = COUNT real (no el LIMIT); truncado avisa cuando data.length quedó recortado.
+    res.json({ ok: true, total: totalReal, truncado: totalReal > data.length, data });
   });
 
   // Corrige el precio de una publicación/variación en ML y refresca su fila auditada.
@@ -243,7 +249,7 @@ export function preciosRouter(db, cfg) {
     if (!itemId) return res.status(400).json({ ok: false, error: 'Clave inválida' });
     try {
       const { path, body } = buildMlPriceUpdate(itemId, variationId, precio);
-      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+      const resp = await mlFetch(db, mlCfg, 'put', path, body, { manual: true });
       if (resp.status !== 200) return res.status(400).json({ ok: false, error: extraerErrorMl(resp) });
       const fila = await refrescarFila(db, mlCfg, clave);
       res.json({ ok: true, data: fila });
