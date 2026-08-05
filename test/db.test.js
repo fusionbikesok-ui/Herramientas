@@ -25,6 +25,7 @@ describe('db schema', () => {
       'ml_precio_auditoria',
       'ml_publicaciones_cache',
       'ml_reactivacion_frenada',
+      'ml_sku_push_fallos',
       'ml_stock_estado',
       'ml_vinculos_revisados',
       'ordenes_ml_procesadas',

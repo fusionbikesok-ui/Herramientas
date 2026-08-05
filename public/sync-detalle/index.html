@@ -75,6 +75,7 @@
 
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
+<script src="../lib/matcherPush.js"></script>
 <script>
 Api.installAuth();
 
@@ -103,6 +104,14 @@ var DIAG={
 
 var CAT=qs('cat');
 var CFG=CATS[CAT];
+
+// Cliente del push (ver public/lib/matcherPush.js). Se crea ACÁ, antes del cargar() de
+// más abajo: `cargar()` corre al parsear el script y, para cat=push_pendientes, llega a
+// pushCliente.listar() antes de su primer await. Declararlo junto al resto del código de
+// push (más abajo en el archivo) dejaba la variable hoisted pero sin asignar, y la página
+// moría con "Cannot read properties of undefined (reading 'listar')" sin renderizar nunca
+// la tabla.
+var pushCliente=MatcherPush.crear('/api/matcher/push-skus-pendientes');
 
 if(!CFG){
   document.getElementById('titulo').textContent='Categoría inválida';
@@ -304,10 +313,13 @@ async function reactivarSel(){
 }
 
 // ── Modo push_pendientes (escribir SKUs pendientes en ML) ────────────────────
+// El push corre en el SERVIDOR (cron cada 10 min + este botón para disparar una corrida
+// ahora). Ver public/lib/matcherPush.js: mismo cliente que usa el Matcher, ya adaptado
+// al contrato 202/estado (el contrato viejo con escritos/procesados/restantes en el POST
+// ya no existe). `pushCliente` se crea arriba, junto a CAT/CFG — ver el comentario ahí.
 async function cargarPushPendientes(cont){
   try{
-    var r=await fetch('/api/matcher/push-skus-pendientes/list');
-    var d=await r.json();
+    var d=await pushCliente.listar();
     if(!d.ok)throw new Error(d.error||'error');
     cont.innerHTML=renderPushPendientes(d.data||[]);
   }catch(err){
@@ -315,17 +327,29 @@ async function cargarPushPendientes(cont){
   }
 }
 
+// /list ya no filtra por status='active': incluye también publicaciones pausadas (~690).
+// Se muestra el status de cada una y, si tuvo un fallo previo, el motivo — si no, el
+// usuario ve una lista que triplicó de tamaño sin ninguna explicación.
+function tagStatus(status){
+  if(status==='active')return '<span class="tag ok">Activa</span>';
+  if(status==='paused')return '<span class="tag paused">Pausada</span>';
+  return '<span class="tag paused">'+esc(status||'—')+'</span>';
+}
+
 function renderPushPendientes(rows){
   if(!rows.length){
     return '<div class="tbl-wrap"><div class="loading" style="color:var(--green)">✓ No hay SKUs pendientes de escribir en ML.</div></div>';
   }
   var h='<p class="sub" style="margin-bottom:10px">'+n(rows.length)+' SKU(s) pendiente(s) de escribir en ML.</p>';
-  h+='<div class="tbl-wrap"><table><thead><tr><th>Publicación</th><th>SKU a escribir</th></tr></thead><tbody>';
+  h+='<div class="tbl-wrap"><table><thead><tr><th>Publicación</th><th>Estado</th><th>SKU a escribir</th><th>Último fallo</th></tr></thead><tbody>';
   rows.forEach(function(row){
     var thumb=row.thumbnail?'<img class="pub-thumb" src="'+esc(row.thumbnail)+'" alt="'+esc(row.titulo||row.item_id)+'" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
     h+='<tr><td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(row.titulo||row.item_id)+'</div>'
       +'<div class="pub-meta">'+esc(row.item_id||row.clave)+'</div></div></div></td>';
-    h+='<td class="mono">'+esc(row.sku)+'</td></tr>';
+    h+='<td>'+tagStatus(row.status)+'</td>';
+    h+='<td class="mono">'+esc(row.sku)+'</td>';
+    var motivo=row.ultimo_error?esc(row.ultimo_error)+(row.proximo_intento_en?' (reintenta '+esc(fecha(row.proximo_intento_en))+')':''):'—';
+    h+='<td class="err-txt">'+motivo+'</td></tr>';
   });
   h+='</tbody></table></div>';
   h+='<div class="acc-btns" style="margin-top:12px"><button class="btn" id="btn-push" onclick="escribirPendientes()">Escribir '+rows.length+' SKU(s) en ML</button></div>';
@@ -336,27 +360,39 @@ function renderPushPendientes(rows){
 async function escribirPendientes(){
   var btn=document.getElementById('btn-push');
   var msg=document.getElementById('push-msg');
-  if(!confirm('Vas a escribir estos SKUs en MercadoLibre. ¿Confirmás?'))return;
+  if(!confirm('Esta corrida escribe un lote de SKUs ahora en MercadoLibre; el resto lo sigue el automático del servidor cada 10 minutos. Corre en el servidor — podés cerrar la pestaña. ¿Continuás?'))return;
   btn.disabled=true;
-  var totalEscritos=0,totalErrores=0;
   msg.style.color='var(--muted)';
+  msg.textContent='Iniciando…';
   try{
-    var restantes=1;
-    while(restantes>0){
-      msg.textContent='Escribiendo… (llevás '+totalEscritos+' escritos)';
-      var r=await fetch('/api/matcher/push-skus-pendientes',{method:'POST'});
-      var d=await r.json();
-      if(!d.ok)throw new Error(d.error||'error');
-      totalEscritos+=d.escritos||0;
-      totalErrores+=d.errores||0;
-      restantes=d.restantes||0;
-      if((d.procesados||0)===0)break;
-    }
-    msg.style.color=totalErrores?'var(--amber)':'var(--green)';
-    msg.textContent='✓ Escritos '+totalEscritos+(totalErrores?(' · '+totalErrores+' con error'):'')+'. Actualizando…';
+    await pushCliente.iniciar();
+    await pushCliente.sondear({
+      onRunning:function(est){
+        msg.style.color='var(--muted)';
+        msg.textContent='Corre en el servidor — podés cerrar la pestaña. Escritos '+(est.escritos||0)+' · restantes '+(est.restantes||0)+'…';
+      },
+      onDone:function(est){
+        var top=document.getElementById('msg');
+        var texto,color;
+        if(est.error){
+          color='var(--red)';texto='✗ '+est.error;
+        }else{
+          var restantes=est.restantes||0;
+          color=restantes>0?'var(--amber)':'var(--green)';
+          texto='✓ '+(est.escritos||0)+' escritos'+(restantes>0?(' · '+restantes+' quedan pendientes (el automático los reintenta)'):'')+'.';
+        }
+        // cargarPushPendientes() reemplaza cont.innerHTML (donde vive #push-msg), así que
+        // el resultado final se guarda en el #msg de nivel de página para que sobreviva
+        // al refresco de la tabla y el usuario efectivamente lo vea.
+        if(top){top.style.color=color;top.textContent=texto;}
+        msg.style.color=color;msg.textContent=texto;
+      }
+    });
     var cont=document.getElementById('cuerpo');
     await cargarPushPendientes(cont);
   }catch(err){
+    var top2=document.getElementById('msg');
+    if(top2){top2.style.color='var(--red)';top2.textContent='✗ '+err.message;}
     msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
   }finally{
     btn.disabled=false;
