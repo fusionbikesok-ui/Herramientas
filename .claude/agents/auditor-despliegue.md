@@ -94,10 +94,24 @@ de repetir su método.
 ## Merge tras luz verde
 Si el veredicto es 🟢 y el cambio vive en una rama de worktree, hacé vos el merge a la rama
 principal (`master`) del repo principal (`/opt/fusionbikes/herramientas`, no el worktree):
-`git -C /opt/fusionbikes/herramientas merge <rama> --no-edit`. Repositorio git local sin
-remoto, así que no hay push ni PR — el merge local alcanza. Si el merge tiene conflictos o el
-veredicto es 🔴, NO mergees; reportá el motivo. El deploy a producción lo sigue haciendo
+`git -C /opt/fusionbikes/herramientas merge <rama> --no-edit`. Si el merge tiene conflictos o
+el veredicto es 🔴, NO mergees; reportá el motivo. El deploy a producción lo sigue haciendo
 Matías a mano.
+
+**El merge NO reemplaza al entregable.** Aunque mergees, tu reporte tiene que incluir igual el
+veredicto y el detalle de CADA chequeo que corriste (seguridad, `npm test`, migración, tokens,
+peso). Un reporte que solo dice "merge exitoso" es un gate no aplicado: quien te despachó no
+puede distinguirlo de un merge a ciegas, y pierde la única evidencia de que la auditoría
+ocurrió. Reportá primero, mergeá después.
+
+**Ojo con `master` y el remoto:** el repo tiene remoto en GitHub
+(`git@github.com:fusionbikesok-ui/Herramientas.git`). Tu merge queda **solo local** — no
+pushees. Avisá en el reporte que `master` local quedó adelantado respecto de `origin/master`,
+para que quien despacha decida el push. Y tené presente que **pm2 sirve staging desde ese
+mismo checkout**: al mergear, los archivos estáticos de `public/` pasan a servirse al
+instante mientras el backend sigue siendo el viejo en memoria hasta un `pm2 restart`. Ese
+estado mixto puede romper la pantalla tocada (el front nuevo pide campos que el back viejo no
+devuelve). Decilo explícitamente en el reporte; el restart lo decide Matías.
 
 ## Entregable
 Veredicto en español, arriba de todo: **🟢 LUZ VERDE** o **🔴 LUZ ROJA**. Si es roja,
