@@ -140,16 +140,33 @@ REAL de ML para publicaciones activas mapeadas, con multiget en chunks de 20 y p
 **No escribe en ML.** La corrección real hacia ML la sigue haciendo `syncWcToMl` en su
 próxima corrida, por su camino ya probado.
 
-Fail-closed: si un item queda ausente del multiget, el status ya no es `active`, o la cantidad
-devuelta no es un número finito, esa fila de `ml_stock_estado` se deja intacta.
+Fail-closed: si un item queda ausente del multiget (incluye elemento con `code !== 200` dentro
+del array, chunk con excepción de red, o cooldown 429 — corta el resto de los chunks de la
+corrida igual que `syncWcToMl`), el status ya no es `active`, o la cantidad devuelta no es un
+número finito, esa fila de `ml_stock_estado` se deja intacta y cuenta como `sinDato`.
+
+Universo: publicaciones con `ml_publicaciones_cache.status = 'active'` **o** con
+`ml_stock_estado.cantidad_ml > 0` aunque la caché diga otra cosa — cubre el caso en que la
+caché del matcher (no tiene cron propio, solo se refresca a mano) quedó desactualizada y una
+publicación real-activa-con-stock caería fuera del barrido en silencio. El multiget resuelve
+el status real de cada una.
 
 Protegida por el candado `_reconciliarStockEnCurso`. Cursor circular persistido en
 `sync_estado` (clave `cursor_reconciliacion_stock`): cada corrida toma el siguiente lote de
-hasta 100 publicaciones y, al llegar al final del universo, vuelve a empezar.
+hasta 100 publicaciones y, al llegar al final del universo, vuelve a empezar. Si la clave del
+cursor ya no está en el universo actual, retoma en la siguiente clave lexicográficamente mayor
+(no en 0) para no perder la posición del barrido cuando el universo cambia entre corridas. El
+cursor solo avanza hasta la última publicación del lote que efectivamente tuvo dato de ML: si
+el multiget no devolvió nada útil (429 sostenido, etc.), el cursor no avanza y la corrida
+siguiente reintenta el mismo lote en vez de darlo por revisado.
 
 - Request: sin body.
-- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n> }`.
-  `omitido: true` cuando ya había una corrida en curso o falta config de ML — no revisó nada.
+- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n>, "sinDato": <n> }`.
+  `sinDato` son publicaciones del lote que quedaron sin dato real de ML (fail-closed); no
+  cuentan como revisadas a efectos de avance de cursor. `omitido: true` cuando no corrió, con
+  `motivo: 'en_curso' | 'sin_config'` — no revisó nada.
+- Costo: cada POST efectivo dispara hasta 5 llamadas a ML (multiget en chunks de 20 para un
+  lote de 100) y bloquea la respuesta ~7.5s (pausa de 1.5s entre chunks).
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
 
 ### GET /api/sync/dashboard (campo agregado)
