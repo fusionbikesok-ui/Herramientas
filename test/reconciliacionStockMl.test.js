@@ -379,6 +379,36 @@ describe('reconciliarStockMl', () => {
     expect(mlFetch).not.toHaveBeenCalled();
   });
 
+  it('compare-and-swap: si otro proceso ya escribió ml_stock_estado (changes === 0), no cuenta como corregida ni loguea, y el cursor avanza igual', async () => {
+    // Simula la carrera descrita en el código: entre la lectura del universo y el UPDATE de
+    // reconciliarStockMl, otro proceso (syncWcToMl/procesarReintentos) ya actualizó la fila
+    // con un valor más fresco. El UPDATE con "AND cantidad_ml = ?" (valor viejo leído acá) no
+    // matchea ninguna fila → changes === 0. No hay nada que corregir: ya está actualizada.
+    seedPublicacion(db, { clave: 'MLA990|', itemId: 'MLA990', sku: 'CADENA-1', cantidadMl: 0 });
+    mlFetch.mockResolvedValue({
+      status: 200,
+      data: [{ code: 200, body: { id: 'MLA990', status: 'active', available_quantity: 1 } }],
+    });
+
+    // Otro proceso pisa la fila ANTES del UPDATE de reconciliarStockMl (simulado adelantando
+    // el cambio real acá mismo, ya que en el test es síncrono con la lectura del universo).
+    db.prepare("UPDATE ml_stock_estado SET cantidad_ml = 1, actualizado_en = datetime('now') WHERE clave = 'MLA990|'").run();
+
+    const r = await correr(db, CFG);
+
+    // No se cuenta como corregida (el UPDATE con predicado viejo no matcheó ninguna fila).
+    expect(r.corregidas).toBe(0);
+    // No se logueó nada: no había nada que corregir.
+    expect(db.prepare("SELECT * FROM sync_log WHERE clave = 'MLA990|'").all().length).toBe(0);
+    // La fila quedó con el valor que ya tenía (el que puso el "otro proceso"), no se pisó.
+    const estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA990|'").get();
+    expect(estado.cantidad_ml).toBe(1);
+    // El cursor avanzó igual: sí hubo dato real de ML para esta clave (item.status activo,
+    // cantidad finita), aunque el UPDATE no haya escrito nada.
+    const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+    expect(cursor.valor).toBe('MLA990|');
+  });
+
   describe('POST /api/sync/reconciliar-stock', () => {
     function armarApp(cfg) {
       const app = express();

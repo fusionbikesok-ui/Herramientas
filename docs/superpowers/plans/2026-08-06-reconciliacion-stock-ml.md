@@ -25,7 +25,9 @@ devuelve la unidad, una edición manual en ML, un ajuste de ML— queda invisibl
 ## Decisiones del usuario (2026-08-06)
 
 - **Alcance:** solo publicaciones **activas**. Son las únicas que pueden vender, o sea las
-  únicas donde la sobreventa es real. ~975 publicaciones mapeadas activas.
+  únicas donde la sobreventa es real. **Actualizado (revisor, 2026-08-06): 1358 filas** con el
+  filtro implementado (`p.status='active' OR e.cantidad_ml > 0`), medido contra la base
+  (1339 con el filtro anterior, solo `status='active'`).
 - **Dirección:** corregir **en ambos sentidos**. Si ML tiene de más, se baja (sobreventa). Si
   ML tiene de menos, se sube: recupera ventas de publicaciones que quedaron en cero por error.
 - **Visibilidad:** cada divergencia se **registra en `sync_log`** con la clave, lo que tenía ML
@@ -33,7 +35,8 @@ devuelve la unidad, una edición manual en ML, un ajuste de ML— queda invisibl
 
 ## Restricción de presupuesto — medida hoy, no estimada
 
-- ~975 items activos mapeados → barrido completo con multiget de a 20 = **49 llamadas**.
+- ~1358 items mapeados (activos o con stock ML>0) → barrido completo con multiget de a 20 =
+  ~68 llamadas.
 - **Medido el 2026-08-06: ML devuelve 429 tras 2-3 multiget consecutivos sin pausa.** Con
   ~1,5-2s entre lotes el barrido pasa limpio. El límite efectivo está MUY por debajo de los
   1500 rpm que documenta `lib/mlLimites.js`. El diseño tiene que **espaciar, nunca ráfagar**.
@@ -52,8 +55,8 @@ Cron nuevo, **separado** del sync de stock, que recorre el universo de a poco:
    del diseño: la reconciliación solo abre los ojos.
 5. Al llegar al final del universo, el cursor vuelve al principio.
 
-Con 100 items por corrida cada 10 min: barrido completo en ~1h40m, **5 llamadas por corrida
-(~720/día)**, sin ráfagas.
+Con 100 items por corrida cada 10 min: barrido completo en ~2h16m (1358 items / 100 por
+corrida ≈ 14 corridas), **5 llamadas por corrida (~720/día)**, sin ráfagas.
 
 ## Criterio de aceptación
 
