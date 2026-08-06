@@ -471,12 +471,18 @@ export function matcherRouter(db, cfg) {
   // pestaña — corre igual, disparado también por el cron de server.js). 202 al toque, o 409
   // si ya hay una corrida en curso (cron u otro request). El progreso se sondea en
   // GET /push-skus-pendientes/estado.
+  //
+  // A diferencia del cron (que aplica CUOTA_PAUSADAS_DEFAULT para no competir con el sync
+  // por presupuesto de ML), el botón manual IGNORA la cuota de pausadas (cuotaPausadas: null)
+  // porque el usuario disparó la acción a propósito y está esperando el resultado completo.
+  // Sigue manteniendo la verificación previa y el agrupado por publicación (paso 1 y 2).
   router.post('/push-skus-pendientes', (req, res) => {
     if (getEstadoPush().running) {
       return res.status(409).json({ ok: false, running: true, error: 'Ya hay un push en curso' });
     }
-    pushSkusPendientes(db, mlCfg).catch(err => console.error('push SKUs matcher error:', err.message));
-    res.status(202).json({ ok: true, running: true });
+    pushSkusPendientes(db, mlCfg, { cuotaPausadas: null })
+      .catch(err => console.error('push SKUs matcher error:', err.message));
+    res.status(202).json({ ok: true, running: true, cuota_pausadas_ignorada: true });
   });
 
   // Estado del push (para sondeo del frontend, y para ver el resultado del último ciclo
