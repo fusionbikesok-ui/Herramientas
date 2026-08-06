@@ -672,11 +672,8 @@ un `while` que encadena varias tandas de 120 no la ignora. **Este botón manual 
 cuota** — el usuario disparó la acción a propósito y espera el resultado completo; responde
 `cuota_pausadas_ignorada: true` para que quede explícito.
 
-Se evaluó (y se descartó) verificar el SKU contra ML antes de escribir y agrupar variaciones
-en un solo PUT — contra la API real de ML, el multiget de variaciones no trae el atributo
-SELLER_SKU (solo el endpoint puntual por variación, que cuesta lo mismo que el PUT que
-pretendía evitar) y el PUT agrupado con array `variations` parcial arriesga borrar
-variaciones no incluidas. Sigue siendo 1 PUT por variación/publicación, camino probado.
+Sigue siendo 1 PUT por variación/publicación (no hay verificación previa ni agrupado en un
+único PUT).
 - Request: sin body.
 - Response 202: `{ "ok": true, "running": true, "cuota_pausadas_ignorada": true }`.
 - Response 409 (ya hay una corrida en curso, del botón o del cron):
@@ -700,6 +697,7 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
     "fin_en": "2026-08-03T10:00:42.000Z",
     "cortado_por_rate_limit": false,
     "cortado_por_error": false,
+    "cortado_por_cuota": false,
     "error": null
   }
   ```
@@ -719,6 +717,13 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
   penalizaron con backoff (no fueron rechazadas por ML, así que no corresponde tratarlas
   como una publicación con restricciones); se asume que la causa (ej. config de ML faltante,
   caída de red) afecta al resto del lote y se corta para reintentar en el próximo ciclo.
+- `cortado_por_cuota: true` → la corrida terminó (procesó todas las activas y vació la
+  cuota de pausadas) pero todavía quedan publicaciones pausadas pendientes que no entraron
+  por la cuota de 10 por corrida del cron automático (nunca aplica al botón manual, que la
+  ignora). No es un corte del `while` como los otros dos flags — la corrida sigue hasta el
+  final vaciando activas — sino una explicación de por qué `restantes` no bajó a 0: sin este
+  flag, el operador vería "restantes=N" sin ningún motivo, exactamente el riesgo de "cuota
+  que esconde trabajo" que motivó la cuota. Se resuelve solo, corrida a corrida del cron.
 
 ### GET /api/matcher/push-skus-pendientes/count
 **Cambio de contrato**: ahora incluye pausadas. Excluye claves en backoff (`en_espera`).
