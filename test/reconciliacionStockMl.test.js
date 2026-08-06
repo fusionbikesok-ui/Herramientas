@@ -13,8 +13,10 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
+import express from 'express';
+import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { reconciliarStockMl } from '../routes/sync.js';
+import { reconciliarStockMl, syncRouter } from '../routes/sync.js';
 
 vi.mock('../lib/mlClient.js', () => ({
   mlFetch: vi.fn(),
@@ -87,7 +89,7 @@ describe('reconciliarStockMl', () => {
     expect(log.cant_anterior).toBe(0);
     expect(log.cant_nueva).toBe(1);
     expect(log.error).toMatch(/ML tenía 1/);
-    expect(log.error).toMatch(/registrado 0/);
+    expect(log.error).toMatch(/ml_stock_estado tenía 0/);
   });
 
   it('sin divergencia (estado y ML coinciden) → no escribe nada ni ensucia el log', async () => {
@@ -228,10 +230,187 @@ describe('reconciliarStockMl', () => {
     expect(r2.revisadas).toBe(3);
   });
 
-  it('sin config de ML → omitido, sin tocar nada', async () => {
+  // RECONCILIACION_LOTE es 100 y el lote siempre cubre min(LOTE, universo.length): con un
+  // universo de 3-4 filas (como el test de arriba) el lote SIEMPRE da la vuelta entera y
+  // nunca prueba avance real del cursor (su propio comentario lo admitía). Para probar
+  // avance real hace falta un universo > 100, así el lote deja filas afuera.
+  function seedUniversoGrande(db, n) {
+    for (let i = 0; i < n; i++) {
+      const clave = `MLA1${String(i).padStart(4, '0')}|`;
+      seedPublicacion(db, { clave, itemId: `MLA1${String(i).padStart(4, '0')}`, sku: `SKU${i}`, cantidadMl: 1 });
+    }
+  }
+
+  it('avance real del cursor con lote menor al universo (universo > RECONCILIACION_LOTE)', async () => {
+    seedUniversoGrande(db, 105); // > 100: el lote de la primera corrida no cubre todo
+
+    mlFetch.mockImplementation(async (dbArg, cfgArg, method, path) => {
+      const ids = path.match(/ids=([^&]+)/)[1].split(',');
+      return {
+        status: 200,
+        data: ids.map(id => ({ code: 200, body: { id, status: 'active', available_quantity: 1 } })),
+      };
+    });
+
+    const r1 = await correr(db, CFG);
+    expect(r1.revisadas).toBe(100); // tamanoLote = min(100, 105)
+
+    // El cursor avanzó, no dio la vuelta: debe apuntar a la clave Nº100 (índice 100, base 0),
+    // no a la primera del universo.
+    const cursor1 = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+    expect(cursor1.valor).toBe('MLA10100|');
+    expect(cursor1.valor).not.toBe('MLA10000|');
+
+    // Segunda corrida: cubre las 5 restantes y da la vuelta, tomando 95 de las ya vistas
+    // (lote circular) — lo importante es que retomó desde donde quedó, no desde 0.
+    const r2 = await correr(db, CFG);
+    expect(r2.revisadas).toBe(100);
+  });
+
+  it('clave del cursor desaparecida del universo → arranca en la siguiente lexicográficamente mayor, no en 0', async () => {
+    seedUniversoGrande(db, 105);
+
+    const idsConsultados = [];
+    mlFetch.mockImplementation(async (dbArg, cfgArg, method, path) => {
+      const ids = path.match(/ids=([^&]+)/)[1].split(',');
+      idsConsultados.push(...ids);
+      return {
+        status: 200,
+        data: ids.map(id => ({ code: 200, body: { id, status: 'active', available_quantity: 1 } })),
+      };
+    });
+
+    // El cursor apunta a una clave que ya no está en el universo (se desmapeó, cayó del
+    // filtro, etc), intermedia entre MLA10049| y MLA10050|. Con el fallback ingenuo a 0 se
+    // reprocesarían las primeras 100 de nuevo; el fallback correcto retoma en MLA10050|.
+    db.prepare(`
+      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('cursor_reconciliacion_stock', 'MLA10049|X', datetime('now'))
+    `).run();
+
+    await correr(db, CFG);
+
+    // Lo que importa: arrancó en MLA10050| (siguiente mayor a la clave desaparecida), no en
+    // MLA10000| (que hubiera sido el fallback ingenuo a 0). El lote de 100 sobre un universo
+    // de 105 da la vuelta y sí vuelve a tocar las primeras claves — eso es circular esperado,
+    // no el bug que este test cubre.
+    expect(idsConsultados[0]).toBe('MLA10050');
+  });
+
+  describe('universo con 429/errores: el cursor no debe dar vueltas en falso', () => {
+    it('elemento con code !== 200 dentro del array del multiget → fail-closed, no lo cuenta como revisado a efectos de cursor', async () => {
+      seedPublicacion(db, { clave: 'MLA940|', itemId: 'MLA940', sku: 'A', cantidadMl: 3 });
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 404, body: null }],
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(r.corregidas).toBe(0);
+      expect(r.sinDato).toBe(1);
+      const estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA940|'").get();
+      expect(estado.cantidad_ml).toBe(3);
+      // El único ítem del lote quedó sin dato: el cursor no debe haber avanzado.
+      const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor).toBeUndefined();
+    });
+
+    it('un chunk lanza excepción de axios → no tumba el resto del lote', async () => {
+      seedPublicacion(db, { clave: 'MLA950|', itemId: 'MLA950', sku: 'A', cantidadMl: 1 });
+      seedPublicacion(db, { clave: 'MLA951|', itemId: 'MLA951', sku: 'B', cantidadMl: 1 });
+
+      // itemIdsUnicos tiene 2 elementos < RECONCILIACION_MULTIGET_CHUNK(20), o sea va todo
+      // en un solo chunk: para forzar dos chunks distintos con uno fallando habría que subir
+      // el universo a 21+. En cambio probamos que, si el único chunk lanza, el resto del
+      // proceso (avance de cursor, retorno) sigue funcionando sin excepción no capturada.
+      mlFetch.mockRejectedValue(new Error('timeout de red'));
+
+      const r = await correr(db, CFG);
+
+      expect(r.omitido).toBe(false);
+      expect(r.corregidas).toBe(0);
+      expect(r.sinDato).toBe(2);
+      const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor).toBeUndefined();
+    });
+
+    it('429 sostenido en TODOS los chunks → corta el bucle, no avanza el cursor, avisa por consola', async () => {
+      seedPublicacion(db, { clave: 'MLA960|', itemId: 'MLA960', sku: 'A', cantidadMl: 1 });
+      seedPublicacion(db, { clave: 'MLA961|', itemId: 'MLA961', sku: 'B', cantidadMl: 1 });
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mlFetch.mockResolvedValue({ status: 429, data: null });
+
+      const r = await correr(db, CFG);
+
+      expect(r.corregidas).toBe(0);
+      expect(r.sinDato).toBe(2);
+      expect(mlFetch).toHaveBeenCalledTimes(1); // cortó tras el primer 429, no siguió con más chunks
+      const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+  });
+
+  it('candado anti-solape: una corrida en curso hace que la segunda se omita con motivo en_curso', async () => {
+    seedPublicacion(db, { clave: 'MLA970|', itemId: 'MLA970', sku: 'A', cantidadMl: 1 });
+    let resolverPrimera;
+    mlFetch.mockImplementation(() => new Promise(resolve => { resolverPrimera = resolve; }));
+
+    const p1 = reconciliarStockMl(db, CFG);
+    // Dejar que la primera corrida entre al candado antes de lanzar la segunda.
+    await vi.advanceTimersByTimeAsync(0);
+    const r2 = await reconciliarStockMl(db, CFG);
+
+    expect(r2.omitido).toBe(true);
+    expect(r2.motivo).toBe('en_curso');
+
+    resolverPrimera({ status: 200, data: [{ code: 200, body: { id: 'MLA970', status: 'active', available_quantity: 1 } }] });
+    await vi.runAllTimersAsync();
+    await p1;
+  });
+
+  it('sin config de ML → omitido con motivo sin_config, sin tocar nada', async () => {
     seedPublicacion(db, { clave: 'MLA800|', itemId: 'MLA800', sku: 'X', cantidadMl: 1 });
     const r = await reconciliarStockMl(db, { ml: {}, woo: CFG.woo });
     expect(r.omitido).toBe(true);
+    expect(r.motivo).toBe('sin_config');
     expect(mlFetch).not.toHaveBeenCalled();
+  });
+
+  describe('POST /api/sync/reconciliar-stock', () => {
+    function armarApp(cfg) {
+      const app = express();
+      app.use(express.json());
+      app.use('/api/sync', syncRouter(db, cfg));
+      return app;
+    }
+
+    it('corre un lote y devuelve revisadas/corregidas/sinDato', async () => {
+      seedPublicacion(db, { clave: 'MLA980|', itemId: 'MLA980', sku: 'A', cantidadMl: 0 });
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA980', status: 'active', available_quantity: 1 } }],
+      });
+
+      const res = await request(armarApp(CFG)).post('/api/sync/reconciliar-stock');
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.omitido).toBe(false);
+      expect(res.body.revisadas).toBe(1);
+      expect(res.body.corregidas).toBe(1);
+      expect(res.body.sinDato).toBe(0);
+    });
+
+    it('sin config de ML → omitido con motivo sin_config', async () => {
+      const res = await request(armarApp({ ml: {}, woo: CFG.woo })).post('/api/sync/reconciliar-stock');
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.omitido).toBe(true);
+      expect(res.body.motivo).toBe('sin_config');
+    });
   });
 });
