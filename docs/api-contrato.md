@@ -664,8 +664,20 @@ Arranca la corrida en background (no bloquea el request; mismo patrón que
 `POST /refrescar-ml`). Una corrida ya no procesa un único lote de 120: cicla tandas de 120
 hasta agotar los pendientes, cortar por 429 persistente / error de config-red, o llegar al
 tope de tiempo por corrida (5 min, deja margen contra el próximo ciclo de cron a los 10 min).
+
+**Ahorro de llamadas a ML (2026-08-06):** antes de escribir, cada tanda se verifica contra ML
+en vivo (multiget en chunks de 20 publicaciones) para no reescribir un SKU que ML ya tiene
+(la caché de `seller_sku` solo se refresca a mano vía `POST /refrescar-ml`). Publicaciones con
+2+ variaciones pendientes se escriben con 1 solo PUT a `/items/{itemId}` en vez de 1 PUT por
+variación, con fallback automático por variación si ML rechaza el agrupado.
+
+El cron automático (cada 10 min) aplica una **cuota de 20 publicaciones pausadas por
+corrida** (las activas entran siempre, sin cuota) para no competir con el sync por
+presupuesto de ML. **Este botón manual ignora esa cuota** — el usuario disparó la acción a
+propósito y espera el resultado completo; responde `cuota_pausadas_ignorada: true` para que
+quede explícito.
 - Request: sin body.
-- Response 202: `{ "ok": true, "running": true }`.
+- Response 202: `{ "ok": true, "running": true, "cuota_pausadas_ignorada": true }`.
 - Response 409 (ya hay una corrida en curso, del botón o del cron):
   `{ "ok": false, "running": true, "error": "Ya hay un push en curso" }`.
 
