@@ -17,7 +17,7 @@ import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
 import { matcherRouter } from './routes/matcher.js';
 import { pushSkusPendientes } from './lib/matcherPush.js';
-import { syncRouter, syncMlToWc, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico } from './routes/sync.js';
+import { syncRouter, syncMlToWc, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
@@ -262,6 +262,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('*/10 * * * *', () => {
         pushSkusPendientes(app._db, syncCfg)
           .catch(err => console.error('push SKUs matcher error:', err.message));
+      });
+
+      // Reconciliación incremental de stock contra ML real (plan 2026-08-06, caso real:
+      // MLA1117110786| quedó 3 semanas con sobreventa invisible porque ml_stock_estado
+      // guardaba lo que RECORDÁBAMOS haber empujado, no lo que ML tenía de verdad). NO
+      // escribe en ML: solo corrige ml_stock_estado; syncWcToMl empuja la corrección real
+      // en su próxima corrida por su camino ya probado. Minuto propio (:09, libre — ver el
+      // comentario de arriba con los minutos ya ocupados) para no sumar ráfaga a los demás.
+      cron.schedule('9-59/10 * * * *', () => {          // ML
+        reconciliarStockMl(app._db, syncCfg)
+          .catch(err => console.error('reconciliación de stock ML error:', err.message));
       });
     }
 

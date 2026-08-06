@@ -43,6 +43,19 @@ const ML_CALL_DELAY_MS = 500;
 // empieza a devolver 429 — subir/bajar según cómo responda.
 const ML_CONCURRENCIA_MAX = 4;
 
+// ── reconciliarStockMl: constantes ──────────────────────────────────────────
+// Tamaño del lote por corrida del cursor (5 multiget de a 20). Con un cron cada 10 min
+// el barrido completo de ~975 publicaciones activas tarda ~1h40m (ver plan
+// docs/superpowers/plans/2026-08-06-reconciliacion-stock-ml.md).
+const RECONCILIACION_LOTE = 100;
+const RECONCILIACION_MULTIGET_CHUNK = 20;
+// MEDIDO el 2026-08-06 (no estimado): ML devuelve 429 tras 2-3 multiget consecutivos SIN
+// pausa entre ellos — muy por debajo de los 1500 rpm documentados en lib/mlLimites.js. Con
+// ~1,5-2s entre chunks el barrido pasa limpio. Por eso acá el multiget va EN SERIE (no con
+// mapConLimite como evaluarPreciosReactivables) con esta pausa explícita: el espaciado no es
+// cosmético, es lo que evita el 429.
+const RECONCILIACION_PAUSA_CHUNK_MS = 1500;
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
@@ -917,6 +930,163 @@ async function _syncWcToMl(db, cfg) {
     // por un rate limit transitorio. Esto es solo una traza informativa de la corte.
     logSync(db, { direccion: 'wc_ml', clave: null, sku: null, estado: 'info', error: 'Cooldown ML activo (429) — corte de corrida, se retoma en el próximo ciclo' });
   }
+}
+
+// ─── reconciliarStockMl ──────────────────────────────────────────────────────
+//
+// Caso real que motivó esto (2026-08-06): syncWcToMl compara el stock deseado contra
+// ml_stock_estado.cantidad_ml, que es lo que NOSOTROS recordamos haber empujado, no lo que
+// ML tiene de verdad. La publicación MLA1117110786| (SKU FB-4501) quedó con cantidad_ml=0
+// desde el 2026-07-17 mientras ML tenía 1 unidad activa y vendible: como deseado (0) ==
+// recordado (0), el sync nunca la tocó. Tres semanas de sobreventa invisible, sin error ni
+// log. Esta función abre los ojos: compara ml_stock_estado contra el valor REAL de ML y
+// corrige el estado local en AMBOS sentidos (decisión del usuario 2026-08-06: si ML tiene de
+// más se baja —sobreventa—, si tiene de menos se sube —recupera ventas perdidas por error—).
+//
+// CLAVE DEL DISEÑO: esta función NO escribe en ML. Solo corrige ml_stock_estado; la próxima
+// corrida de syncWcToMl ve la diferencia contra el stock real de Woo y empuja la corrección
+// por su camino ya probado (reintentos, 429, remapeo de variación muerta, etc. — todo eso
+// sigue viviendo ahí, no se duplica acá). Esto mantiene el cambio acotado y reversible.
+
+let _reconciliarStockEnCurso = false;
+
+export async function reconciliarStockMl(db, cfg) {
+  if (!mlCfgOk(cfg)) return { omitido: true };
+  // Candado anti-solape en el mismo proceso, mismo patrón que _mlToWcEnCurso/_wcToMlEnCurso.
+  if (_reconciliarStockEnCurso) return { omitido: true };
+  _reconciliarStockEnCurso = true;
+  try {
+    return await _reconciliarStockMl(db, cfg);
+  } finally {
+    _reconciliarStockEnCurso = false;
+  }
+}
+
+async function _reconciliarStockMl(db, cfg) {
+  const { ml: mlCfg } = cfg;
+
+  // Universo: publicaciones ACTIVAS (única alcance donde la sobreventa es real — una pausada
+  // no vende), con decisión de matcher (asignar/confirmar) y con fila existente en
+  // ml_stock_estado (si no la tiene todavía, no hay "recordado" contra qué comparar; syncWcToMl
+  // la crea sola en su primer push). Orden estable por clave para que el cursor tenga sentido
+  // entre corridas aunque el universo cambie un poco de una corrida a la otra.
+  const universo = db.prepare(`
+    SELECT e.clave, e.sku, e.cantidad_ml
+    FROM ml_stock_estado e
+    JOIN sku_matcher_decisiones d ON d.clave = e.clave AND d.accion IN ('asignar','confirmar')
+    JOIN ml_publicaciones_cache p ON p.clave = e.clave AND p.status = 'active'
+    ORDER BY e.clave
+  `).all();
+
+  if (universo.length === 0) return { omitido: false, revisadas: 0, corregidas: 0 };
+
+  // Cursor persistido en sync_estado. Si la clave guardada ya no está en el universo actual
+  // (se desmapeó, se pausó, etc.) se arranca de nuevo desde el principio en vez de perder la
+  // posición en el vacío.
+  const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+  let desde = 0;
+  if (cursorRow?.valor) {
+    const idx = universo.findIndex(r => r.clave === cursorRow.valor);
+    if (idx >= 0) desde = idx;
+  }
+
+  // Lote circular: si el universo es más chico que RECONCILIACION_LOTE, el módulo hace que
+  // el lote cubra el universo entero sin repetir de más (mismo criterio abajo al avanzar
+  // el cursor). Da la vuelta solo al llegar al final, sin saltearse publicaciones.
+  const tamanoLote = Math.min(RECONCILIACION_LOTE, universo.length);
+  const lote = [];
+  for (let i = 0; i < tamanoLote; i++) lote.push(universo[(desde + i) % universo.length]);
+
+  // Multiget de los itemIds del lote, en chunks de a 20, EN SERIE con pausa explícita entre
+  // chunks (ver RECONCILIACION_PAUSA_CHUNK_MS) — nunca en paralelo/ráfaga.
+  const itemIdsUnicos = [...new Set(lote.map(r => partirClaveMl(r.clave).itemId))];
+  const chunks = [];
+  for (let i = 0; i < itemIdsUnicos.length; i += RECONCILIACION_MULTIGET_CHUNK) {
+    chunks.push(itemIdsUnicos.slice(i, i + RECONCILIACION_MULTIGET_CHUNK));
+  }
+
+  const porItem = new Map(); // itemId -> body del item devuelto por ML
+  for (const chunk of chunks) {
+    try {
+      const resp = await mlFetch(
+        db, mlCfg, 'get',
+        `/items?ids=${chunk.join(',')}&attributes=id,status,available_quantity,variations`
+      );
+      if (resp.status === 200 && Array.isArray(resp.data)) {
+        for (const e of resp.data) if (e.code === 200 && e.body) porItem.set(String(e.body.id), e.body);
+      }
+      // status !== 200, o un elemento con code !== 200 dentro del array: ese/esos itemIds
+      // quedan AUSENTES de porItem, tratado fail-closed más abajo (mismo criterio que
+      // evaluarPreciosReactivables/reactivarItems: nunca se afirma nada sobre un item que no
+      // se pudo consultar).
+    } catch (e) {
+      // mlFetch no lanza por status HTTP (usa validateStatus:()=>true), pero SÍ por
+      // timeout/error de red de axios. Un chunk que lanza no debe tumbar el resto del lote:
+      // sus itemIds quedan ausentes de porItem y cada clave de ese item se saltea fail-closed.
+      console.error(`reconciliarStockMl: multiget falló para un chunk: ${e.message}`);
+    }
+    await sleep(RECONCILIACION_PAUSA_CHUNK_MS);
+  }
+
+  let corregidas = 0;
+  for (const fila of lote) {
+    const { itemId, variationId } = partirClaveMl(fila.clave);
+    const item = porItem.get(itemId);
+    // Fail-closed: item ausente del multiget (chunk fallido, respuesta parcial, item
+    // inaccesible) → no se puede afirmar nada sobre su stock real. Se deja la fila de
+    // ml_stock_estado tal cual está y se sigue con la próxima.
+    if (!item) continue;
+
+    // No está activa en ML (puede haber cambiado desde el último refresh del cache local):
+    // no es sobreventa real porque no vende. Se saltea sin tocar el estado.
+    if (item.status !== 'active') continue;
+
+    // Misma granularidad que ml_stock_estado.clave: variación si la fila tiene variationId,
+    // si no la cantidad a nivel item.
+    let cantidadReal;
+    if (variationId) {
+      const variacion = Array.isArray(item.variations)
+        ? item.variations.find(v => String(v.id) === String(variationId))
+        : null;
+      cantidadReal = variacion?.available_quantity;
+    } else {
+      cantidadReal = item.available_quantity;
+    }
+
+    // Fail-closed: solo se corrige con una cantidad numérica finita. Escribir acá un valor
+    // equivocado (null, NaN, undefined) haría que syncWcToMl empuje stock equivocado A ML —
+    // el peor resultado posible de este cambio.
+    if (!Number.isFinite(cantidadReal)) continue;
+
+    if (cantidadReal !== fila.cantidad_ml) {
+      upsertMlStockEstado(db, fila.clave, fila.sku, cantidadReal);
+      // direccion 'wc_ml' porque la corrección de estado es la misma vía por la que syncWcToMl
+      // va a terminar empujando el valor real de Woo. Mensaje pensado para leerse sin contexto
+      // (ver plan): deja explícito qué tenía ML y qué teníamos registrado.
+      logSync(db, {
+        direccion: 'wc_ml',
+        clave: fila.clave,
+        sku: fila.sku,
+        cantAnterior: fila.cantidad_ml,
+        cantNueva: cantidadReal,
+        estado: 'reconciliado',
+        error: `Divergencia detectada por reconciliación: ML tenía ${cantidadReal} unidad(es), ml_stock_estado tenía registrado ${fila.cantidad_ml}. Se corrigió el estado local a ${cantidadReal}; syncWcToMl empujará el valor real de Woo en su próxima corrida.`,
+      });
+      corregidas++;
+    }
+  }
+
+  // Avanzar el cursor a la clave siguiente al final de este lote (circular). No escribe nada
+  // si el lote resultó vacío por algún motivo excepcional (universo cambió a 0 entre el SELECT
+  // de arriba y acá) — ya se devolvió antes en ese caso.
+  const siguienteIdx = (desde + lote.length) % universo.length;
+  const siguienteClave = universo[siguienteIdx].clave;
+  db.prepare(`
+    INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('cursor_reconciliacion_stock', ?, ?)
+    ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+  `).run(siguienteClave, now());
+
+  return { omitido: false, revisadas: lote.length, corregidas };
 }
 
 // ─── procesarReintentos ───────────────────────────────────────────────────────
@@ -1945,6 +2115,16 @@ export function syncRouter(db, cfg) {
       const r = await syncWcToMl(db, cfg);
       // omitido:true cuando ya había una corrida en curso (candado) — no sincronizó.
       res.json({ ok: true, omitido: r?.omitido === true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.post('/reconciliar-stock', async (req, res) => {
+    try {
+      const r = await reconciliarStockMl(db, cfg);
+      // omitido:true cuando ya había una corrida en curso (candado) o falta config de ML.
+      res.json({ ok: true, omitido: r?.omitido === true, revisadas: r?.revisadas ?? 0, corregidas: r?.corregidas ?? 0 });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
