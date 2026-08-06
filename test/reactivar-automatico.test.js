@@ -303,9 +303,16 @@ describe('reactivarAutomatico', () => {
       // precioContado(300000) sería el resultado esperado si el sku tuviera regular_price=300000,
       // pero acá seedeamos directamente los valores evaluados para que coincidan con el estado actual.
       sembrarReactivable({ precioWc: 300000 }); // precio de contado real hoy: precioContado(300000)
+      // Precio ML conocido e IGUAL en ambos lados (columna local y frenada evaluada): caso
+      // realista de "nada cambió". Antes este test sembraba precioMlEvaluado:null sin tocar
+      // ml_publicaciones_cache.precio (también NULL), así que pasaba por `null === null` —
+      // el bug que consagraba el agujero del BLOQUEANTE 2 (sin ninguna información sobre el
+      // precio de ML, se decidía que "no cambió"). Con un valor conocido e igual, el caso de
+      // verdad "no cambió" se prueba sin depender de esa comparación rota.
+      db.prepare("UPDATE ml_publicaciones_cache SET precio = 400000 WHERE clave = 'MLA1|'").run();
       // Insumos evaluados = exactamente lo que hoy calcularía precioWebClave/ml_publicaciones_cache.precio.
       const contadoActual = 200000; // 300000 * 2/3
-      sembrarFrenadaConInsumos({ precioMlEvaluado: null, precioWebEvaluado: contadoActual });
+      sembrarFrenadaConInsumos({ precioMlEvaluado: 400000, precioWebEvaluado: contadoActual });
 
       const r = await reactivarAutomatico(db, CFG);
       expect(mlFetch).not.toHaveBeenCalled();
@@ -335,6 +342,26 @@ describe('reactivarAutomatico', () => {
       // Sembrar un precio ML distinto en ml_publicaciones_cache al que se evaluó la frenada.
       db.prepare("UPDATE ml_publicaciones_cache SET precio = 111111 WHERE clave = 'MLA1|'").run();
       sembrarFrenadaConInsumos({ precioMlEvaluado: 999999, precioWebEvaluado: 200000 });
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
+        return { status: 200, data: {} };
+      });
+
+      await reactivarAutomatico(db, CFG);
+      expect(mlFetch).toHaveBeenCalled();
+    });
+
+    it('precio ML desconocido en ambos lados (NULL local y NULL evaluado): se reevalúa, no se lee como "no cambió" (BLOQUEANTE 2)', async () => {
+      // ml_publicaciones_cache.precio nunca se sembró (queda NULL por defecto) y la frenada
+      // también se guardó con precio_ml_evaluado: null. `null !== null` da `false` en JS, así
+      // que sin la guarda explícita esto pasaba como "no cambió" y saltaba el recheck sin
+      // ninguna base real — exactamente el bug que encontró el revisor.
+      sembrarReactivable({ precioWc: 300000 });
+      const contadoActual = 200000;
+      sembrarFrenadaConInsumos({ precioMlEvaluado: null, precioWebEvaluado: contadoActual });
       mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
         if (metodo === 'get' && path.startsWith('/items?ids=')) {
           return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
@@ -377,6 +404,53 @@ describe('reactivarAutomatico', () => {
       const r = await reactivarAutomatico(db, CFG);
       expect(mlFetch).toHaveBeenCalled();
       expect(r.sin_precio_web).toBe(1); // cae en el camino existente, no contamina ni bloquea para siempre
+    });
+  });
+
+  // IMPORTANTE 3 (hallazgo del revisor): un item con varias variaciones mapeadas debe
+  // persistir una frenada POR CADA variación bloqueada, no solo la primera — si no, la
+  // variación sin frenada nunca satisface necesitaRecheck y el item entero vuelve a
+  // re-consultarse en cada corrida para siempre.
+  describe('multi-variación: todas las variaciones bloqueadas quedan frenadas', () => {
+    it('persiste una frenada por cada variación con neto bajo del mismo item', async () => {
+      const sku1 = 'FB-V1', sku2 = 'FB-V2';
+      db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, regular_price, actualizado_en)
+        VALUES (1, 'Producto V1', ?, 'simple', 3, 900000, 900000, '2026-07-30T00:00:00Z')`).run(sku1);
+      db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, regular_price, actualizado_en)
+        VALUES (2, 'Producto V2', ?, 'simple', 3, 900000, 900000, '2026-07-30T00:00:00Z')`).run(sku2);
+      db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
+        VALUES ('MLA1|var10', ?, 'Producto V1', 'asignar', '2026-07-30T00:00:00Z')`).run(sku1);
+      db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
+        VALUES ('MLA1|var20', ?, 'Producto V2', 'asignar', '2026-07-30T00:00:00Z')`).run(sku2);
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA1|var10', 'MLA1', 'var10', 'Pub V1', 'paused', 'out_of_stock', 1, '2026-07-30T00:00:00Z')`).run();
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA1|var20', 'MLA1', 'var20', 'Pub V2', 'paused', 'out_of_stock', 1, '2026-07-30T00:00:00Z')`).run();
+
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return {
+            status: 200,
+            data: [{
+              code: 200,
+              body: {
+                id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'],
+                price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special',
+                shipping: { free_shipping: false },
+                variations: [{ id: 'var10', price: 200000 }, { id: 'var20', price: 210000 }],
+              },
+            }],
+          };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
+        return { status: 200, data: {} };
+      });
+
+      const r = await reactivarAutomatico(db, CFG);
+      expect(r.reactivadas).toBe(0);
+      expect(r.frenadas).toBe(2);
+      const claves = db.prepare('SELECT clave FROM ml_reactivacion_frenada ORDER BY clave').all().map(f => f.clave);
+      expect(claves).toEqual(['MLA1|var10', 'MLA1|var20']);
     });
   });
 
