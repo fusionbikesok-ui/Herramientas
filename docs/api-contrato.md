@@ -699,6 +699,7 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
     "cortado_por_cooldown_propio": false,
     "cortado_por_error": false,
     "cortado_por_cuota": false,
+    "cortado_por_tiempo": false,
     "error": null
   }
   ```
@@ -732,8 +733,12 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
   otro de los 9 crons) y nunca llegaba a hablar con ML. Corrección posterior el mismo día
   (commit `737d54a` y siguiente): la distinción original clasificaba mal el caso más común
   en producción (429 real → sintético en el intento siguiente, ver arriba); ahora
-  `real429EstaCorrida` (variable local a cada corrida en `pushSkusPendientes`) separa "429
-  real de ESTA corrida" de "cooldown heredado de otro cron".
+  `real429EstaPublicacion` (variable local a cada PUBLICACIÓN, no a la corrida entera, dentro
+  de `pushSkusPendientes`) separa "429 real de ESTA publicación" de "cooldown heredado de
+  otro cron". IMPORTANTE (corrección posterior, hallazgo del `revisor`): este flag ya NO se
+  marca cuando la corrida corta simplemente porque se acabó `TIEMPO_MAX_CORRIDA_MS` sin que
+  hubiera habido ningún cooldown/cupo esperando — ver `cortado_por_tiempo` más abajo, que es
+  el flag correcto para ese caso.
 - `cortado_por_error: true` → la corrida se cortó porque una llamada a ML devolvió
   `status: 0` (no llegamos a hablar con ML). Fail-open: esa/s publicación/es NO se
   penalizaron con backoff (no fueron rechazadas por ML, así que no corresponde tratarlas
@@ -746,6 +751,16 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
   final vaciando activas — sino una explicación de por qué `restantes` no bajó a 0: sin este
   flag, el operador vería "restantes=N" sin ningún motivo, exactamente el riesgo de "cuota
   que esconde trabajo" que motivó la cuota. Se resuelve solo, corrida a corrida del cron.
+- `cortado_por_tiempo: true` → la corrida se cortó porque se agotó `TIEMPO_MAX_CORRIDA_MS`
+  (5 min) simplemente por volumen de publicaciones sanas (ML respondiendo 200 a todo, sin
+  ningún cooldown/cupo propio esperando de por medio). Fail-open: el resto queda para el
+  próximo ciclo de cron, sin marcar fallo en ninguna publicación. Se distingue de
+  `cortado_por_cooldown_propio` (hallazgo del `revisor`, 2026-08-06): antes los dos
+  chequeos del tope de tiempo DENTRO del `for` de publicaciones marcaban
+  `cortado_por_cooldown_propio` aunque no hubiera habido ninguna espera real por cooldown/cupo
+  — le mentía al operador con "(cortado por cooldown/cupo PROPIO, no es rechazo de ML)"
+  cuando en realidad no hubo ningún 429 ni cupo agotado, solo se acabó el tiempo. Ambos flags
+  son mutuamente excluyentes en una misma corrida.
 
 ### GET /api/matcher/push-skus-pendientes/count
 **Cambio de contrato**: ahora incluye pausadas. Excluye claves en backoff (`en_espera`).

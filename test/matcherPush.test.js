@@ -323,6 +323,60 @@ describe('lib/matcherPush', () => {
     });
   });
 
+  describe('corte por tope de tiempo puro (hallazgo A del revisor, 2026-08-06)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+    // Con muchas publicaciones sanas (ML responde 200 a todo) el CALL_DELAY_MS entre cada una
+    // termina agotando TIEMPO_MAX_CORRIDA_MS sin que haya habido ningún cooldown/cupo propio
+    // esperando. Antes esto se reportaba (falsamente) como cortado_por_cooldown_propio.
+    it('corta por TIEMPO_MAX_CORRIDA_MS en el chequeo de ANTES de la llamada, sin marcar cooldown propio', async () => {
+      // 900 pendientes * 350ms (CALL_DELAY_MS) = 315s > TIEMPO_MAX_CORRIDA_MS (300s):
+      // sanas de punta a punta, el corte tiene que venir por tiempo, no por cooldown/cupo.
+      for (let i = 0; i < 900; i++) {
+        seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
+        seedDecision(db, { clave: `A${i}|`, sku: `FB-${i}` });
+      }
+      axios.request.mockResolvedValue(respOk());
+
+      vi.useFakeTimers();
+      const p = pushSkusPendientes(db, ML_CFG);
+      await vi.advanceTimersByTimeAsync(320_000); // > 900*350ms, sobra margen
+      const r = await p;
+
+      expect(r.cortado_por_tiempo).toBe(true);
+      expect(r.cortado_por_cooldown_propio).toBe(false);
+      expect(r.cortado_por_rate_limit).toBe(false);
+      expect(r.cortado_por_error).toBe(false);
+      expect(r.errores).toBe(0);
+      expect(contarPendientes(db).total).toBeGreaterThan(0); // quedó trabajo para el próximo ciclo
+    }, 20_000); // 900 seeds + iteraciones reales bajo fake timers superan el timeout default de 5s
+
+    it('corta por TIEMPO_MAX_CORRIDA_MS en el chequeo de DESPUÉS de la llamada (rama 429), sin marcar cooldown propio', async () => {
+      // Un 429 sintético heredado cuyo `hasta` cae justo por debajo del tope, pero cuya espera
+      // sumada al tiempo ya transcurrido en la corrida SÍ lo supera, corta por el chequeo de
+      // DESPUÉS de la llamada — sigue siendo un 429 nuestro, así que acá cortadoCooldownPropio
+      // es lo esperable (no cortadoPorTiempo). Este test documenta el límite entre A y el resto:
+      // solo los dos chequeos "de guardia" del `for` (antes de llamar / dentro del while externo)
+      // deben marcar cortadoPorTiempo cuando NO hay ninguna espera de por medio.
+      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+      vi.useFakeTimers();
+      const t0 = new Date('2026-02-01T00:00:00.000Z');
+      vi.setSystemTime(t0);
+      // Cooldown nuestro sostenido: reservarCupo siempre sin cupo, agota MAX_REINTENTOS_SIN_CUPO
+      // y en el camino el reloj ya pasó el tope → corta en el chequeo de DESPUÉS de la llamada.
+      reservarCupo.mockResolvedValue(false);
+      const p = pushSkusPendientes(db, ML_CFG);
+      await vi.advanceTimersByTimeAsync(310_000);
+      const r = await p;
+
+      expect(r.cortado_por_cooldown_propio).toBe(true);
+      expect(r.cortado_por_tiempo).toBe(false);
+    });
+  });
+
   it('acepta la config de sync completa {woo, ml} (forma real que usa el cron) y normaliza internamente', async () => {
     seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
     seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
