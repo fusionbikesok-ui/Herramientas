@@ -352,21 +352,23 @@ describe('lib/matcherPush', () => {
       expect(contarPendientes(db).total).toBeGreaterThan(0); // quedó trabajo para el próximo ciclo
     }, 20_000); // 900 seeds + iteraciones reales bajo fake timers superan el timeout default de 5s
 
-    it('corta por TIEMPO_MAX_CORRIDA_MS en el chequeo de DESPUÉS de la llamada (rama 429), sin marcar cooldown propio', async () => {
-      // Un 429 sintético heredado cuyo `hasta` cae justo por debajo del tope, pero cuya espera
-      // sumada al tiempo ya transcurrido en la corrida SÍ lo supera, corta por el chequeo de
-      // DESPUÉS de la llamada — sigue siendo un 429 nuestro, así que acá cortadoCooldownPropio
-      // es lo esperable (no cortadoPorTiempo). Este test documenta el límite entre A y el resto:
-      // solo los dos chequeos "de guardia" del `for` (antes de llamar / dentro del while externo)
-      // deben marcar cortadoPorTiempo cuando NO hay ninguna espera de por medio.
+    it('agota MAX_REINTENTOS_SIN_CUPO (no el tope de tiempo) cuando el presupuesto propio nunca se libera', async () => {
+      // NOTA (tester, corrección post-revisor): con reservarCupo devolviendo false SIEMPRE,
+      // MAX_REINTENTOS_SIN_CUPO (3 reintentos * ESPERA_SIN_CUPO_MS=1000ms) se agota a los ~3s
+      // de reloj simulado, mucho antes de los 300s de TIEMPO_MAX_CORRIDA_MS: el corte viene
+      // por el tope de REINTENTOS (lib/matcherPush.js:407), no por el chequeo de tiempo. El
+      // resultado (cortado_por_cooldown_propio=true, cortado_por_tiempo=false) es el mismo que
+      // en "__sinCupo sostenido" de arriba (:299+) — este test es, en la práctica, un
+      // duplicado de aquel. Se deja documentado el motivo real en vez de eliminarlo porque
+      // fija en el tiempo el orden de magnitud de MAX_REINTENTOS_SIN_CUPO vs. el tope de la
+      // corrida; la cobertura del chequeo de tiempo POST-llamada (lib/matcherPush.js:399) está
+      // en el test siguiente.
       seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
       seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
 
       vi.useFakeTimers();
       const t0 = new Date('2026-02-01T00:00:00.000Z');
       vi.setSystemTime(t0);
-      // Cooldown nuestro sostenido: reservarCupo siempre sin cupo, agota MAX_REINTENTOS_SIN_CUPO
-      // y en el camino el reloj ya pasó el tope → corta en el chequeo de DESPUÉS de la llamada.
       reservarCupo.mockResolvedValue(false);
       const p = pushSkusPendientes(db, ML_CFG);
       await vi.advanceTimersByTimeAsync(310_000);
@@ -374,6 +376,38 @@ describe('lib/matcherPush', () => {
 
       expect(r.cortado_por_cooldown_propio).toBe(true);
       expect(r.cortado_por_tiempo).toBe(false);
+    });
+
+    it('corta por TIEMPO_MAX_CORRIDA_MS en el chequeo de DESPUÉS de la llamada (rama 429), antes de evaluar __sinCupo', async () => {
+      // Cobertura real de lib/matcherPush.js:399 (el chequeo de tiempo que va DESPUÉS de la
+      // llamada a escribirSkuEnMl, adentro del `for`, distinto del chequeo "de guardia" ANTES
+      // de la llamada que ya cubre el test de arriba "en el chequeo de ANTES de la llamada").
+      // Para llegar ahí sin pasar por la rama __sinCupo (que tiene su propio corte por
+      // reintentos, ver el test anterior) reservarCupo hace avanzar el reloj simulado más allá
+      // de TIEMPO_MAX_CORRIDA_MS DENTRO de su propia resolución, en el primer intento: el
+      // reloj ya está vencido cuando el código llega a la línea 399, antes de siquiera mirar
+      // resultado.__sinCupo — por eso corta con cortadoPorTiempo, no con
+      // cortado_por_cooldown_propio (a diferencia del test anterior).
+      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+      vi.useFakeTimers();
+      const t0 = new Date('2026-02-01T00:00:00.000Z');
+      vi.setSystemTime(t0);
+      reservarCupo.mockImplementation(async () => {
+        // Simula el ~15s real que puede tardar reservarCupo puertas adentro (9 crons
+        // compitiendo) pero llevado más allá del tope de la corrida para forzar el chequeo
+        // de la línea 399 antes de que se evalúe __sinCupo.
+        vi.setSystemTime(new Date(Date.now() + 310_000));
+        return false;
+      });
+      const p = pushSkusPendientes(db, ML_CFG);
+      await vi.advanceTimersByTimeAsync(310_000);
+      const r = await p;
+
+      expect(r.cortado_por_tiempo).toBe(true);
+      expect(r.cortado_por_cooldown_propio).toBe(false);
+      expect(r.cortado_por_rate_limit).toBe(false);
     });
   });
 
