@@ -5,7 +5,7 @@ import {
   seleccionarPendientes, contarPendientes, pushSkusPendientes,
   getEstadoPush, _resetEstadoPushParaTests,
 } from '../lib/matcherPush.js';
-import { _resetCooldownParaTests } from '../lib/mlClient.js';
+import { mlFetch, estadoCooldownMl, _resetCooldownParaTests } from '../lib/mlClient.js';
 
 // Mock axios para evitar llamadas reales a ML
 vi.mock('axios', async () => {
@@ -13,6 +13,28 @@ vi.mock('axios', async () => {
   return { default: { ...actual.default, post: vi.fn(), request: vi.fn() } };
 });
 import axios from 'axios';
+
+// Mock del rate limiter propio para simular __sinCupo de forma determinística:
+// el token bucket real se rellena continuo y en 15s de espera (ESPERA_MAX_MS)
+// recupera cupo solo, así que no se puede provocar un __sinCupo confiable sin
+// mockear reservarCupo directamente.
+vi.mock('../lib/mlRateLimiter.js', async () => {
+  const actual = await vi.importActual('../lib/mlRateLimiter.js');
+  return { ...actual, reservarCupo: vi.fn(actual.reservarCupo) };
+});
+import { reservarCupo } from '../lib/mlRateLimiter.js';
+
+// Mock parcial de mlClient para poder forzar un 429 REAL "puro" (sin __cooldownSintetico
+// ni __sinCupo) de forma aislada: con el mlClient real, un 429 real SIEMPRE activa el
+// cooldown propio (mínimo 60s), así que un 2do intento inmediato del loop de
+// pushSkusPendientes ya lo vería como sintético — no hay forma de provocar dos 429 REALES
+// consecutivos sin mockear mlFetch directamente. Por default reenvía a la implementación
+// real (mlFetch = vi.fn(actual.mlFetch)); los tests que necesitan el 429 real "puro"
+// sobreescriben con mockResolvedValueOnce/mockImplementation puntual.
+vi.mock('../lib/mlClient.js', async () => {
+  const actual = await vi.importActual('../lib/mlClient.js');
+  return { ...actual, mlFetch: vi.fn(actual.mlFetch) };
+});
 
 const TEST_DB = './test/tmp-matcher-push.sqlite';
 const ML_CFG = { clientId: 'client123', clientSecret: 'secret456', userId: '99999' };
@@ -53,10 +75,15 @@ function resp400(msg = 'no se pudo') {
 
 describe('lib/matcherPush', () => {
   let db;
-  beforeEach(() => {
+  beforeEach(async () => {
     db = openDb(TEST_DB);
     seedToken(db);
     vi.clearAllMocks();
+    // mlFetch es un mock que por default reenvía a la implementación real (vi.fn(actual));
+    // clearAllMocks() no borra un mockResolvedValue puntual de un test anterior, así que se
+    // restaura acá explícitamente para no dejar un 429 "puro" pisando el resto de la suite.
+    const actualMlClient = await vi.importActual('../lib/mlClient.js');
+    mlFetch.mockImplementation(actualMlClient.mlFetch);
     _resetEstadoPushParaTests();
     // El cooldown de 429 vive en el módulo mlClient: sin esto, el test de "429
     // persistente" se lo deja activo a los siguientes y los corta de entrada.
@@ -139,10 +166,15 @@ describe('lib/matcherPush', () => {
     seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
     seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
 
-    axios.request.mockResolvedValue(resp429());
+    // 429 REAL "puro" (sin __cooldownSintetico/__sinCupo), mockeado directo sobre mlFetch:
+    // con el mlClient real, un 429 real activa SIEMPRE el cooldown propio (mínimo 60s), así
+    // que un 2do intento inmediato del loop ya lo vería como sintético — no hay forma de
+    // provocar dos 429 REALES consecutivos sin aislar mlFetch de esa mecánica.
+    mlFetch.mockResolvedValue({ status: 429, headers: {}, data: null });
     const r = await pushSkusPendientes(db, ML_CFG);
 
     expect(r.cortado_por_rate_limit).toBe(true);
+    expect(r.cortado_por_cooldown_propio).toBe(false); // distinción: esto es 429 REAL de ML
     expect(r.errores).toBe(0);
     expect(r.escritos).toBe(0);
     const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
@@ -150,6 +182,92 @@ describe('lib/matcherPush', () => {
     // Nada se escribió: las dos claves siguen pendientes para el próximo ciclo
     expect(contarPendientes(db).total).toBe(2);
   }, 15000);
+
+  // --- Distinción 429 propio (cooldown/cupo) vs 429 REAL de ML (2026-08-06) ---
+  describe('429 propio (cooldown/cupo) vs 429 real de ML', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('429 sintético (__cooldownSintetico) al principio de la corrida NO aborta: espera el cooldown y termina escribiendo el lote', async () => {
+      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+      // Prime el cooldown propio con un 429 REAL de ML (simula que otro cron de los
+      // 9 lo disparó segundos antes, tal como en el incidente diagnosticado): nivel 0,
+      // 60s de cooldown — bien por debajo de TIEMPO_MAX_CORRIDA_MS (5min).
+      axios.request.mockResolvedValueOnce(resp429());
+      await mlFetch(db, ML_CFG, 'get', '/users/me');
+      expect(estadoCooldownMl().activo).toBe(true);
+
+      axios.request.mockResolvedValue(respOk());
+      vi.useFakeTimers();
+      const p = pushSkusPendientes(db, ML_CFG);
+      await vi.advanceTimersByTimeAsync(65_000); // supera el escalón de 60s
+      const r = await p;
+
+      expect(r.escritos).toBe(1);
+      expect(r.cortado_por_rate_limit).toBe(false);
+      expect(r.cortado_por_cooldown_propio).toBe(false);
+      expect(contarPendientes(db).total).toBe(0);
+    });
+
+    it('429 sintético cuyo `hasta` cae más allá de TIEMPO_MAX_CORRIDA_MS corta sin marcar fallo, y las publicaciones quedan pendientes', async () => {
+      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+      vi.useFakeTimers();
+      const t0 = new Date('2026-02-01T00:00:00.000Z');
+      vi.setSystemTime(t0);
+
+      // Escala el cooldown a nivel 3 (600s = 10min > TIEMPO_MAX_CORRIDA_MS de 5min):
+      // cada escalón solo sube si el 429 llega con el cooldown anterior YA vencido.
+      const escalones = [
+        { esperaMs: 60_000, avanzar: 61_000 },   // nivel 0 → 60s
+        { esperaMs: 120_000, avanzar: 121_000 }, // nivel 1 → 120s
+        { esperaMs: 300_000, avanzar: 301_000 }, // nivel 2 → 300s
+      ];
+      for (const e of escalones) {
+        axios.request.mockResolvedValueOnce(resp429());
+        await mlFetch(db, ML_CFG, 'get', '/users/me');
+        vi.setSystemTime(new Date(Date.now() + e.avanzar));
+      }
+      // Último 429: escala a nivel 3, cooldown de 600s desde "ahora"
+      axios.request.mockResolvedValueOnce(resp429());
+      await mlFetch(db, ML_CFG, 'get', '/users/me');
+      const cooldown = estadoCooldownMl();
+      expect(cooldown.nivel).toBe(3);
+      expect(new Date(cooldown.hasta).getTime() - Date.now()).toBeGreaterThan(5 * 60 * 1000);
+
+      const r = await pushSkusPendientes(db, ML_CFG);
+
+      expect(r.cortado_por_cooldown_propio).toBe(true);
+      expect(r.cortado_por_rate_limit).toBe(false);
+      expect(r.escritos).toBe(0);
+      expect(r.errores).toBe(0);
+      const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
+      expect(fallos).toBe(0); // fail-open: no se penaliza la publicación
+      expect(contarPendientes(db).total).toBe(1); // sigue pendiente para el próximo ciclo
+    });
+
+    it('__sinCupo (presupuesto propio agotado) espera y reintenta, no aborta la corrida', async () => {
+      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+      reservarCupo.mockResolvedValueOnce(false); // simula presupuesto propio agotado
+      axios.request.mockResolvedValue(respOk());
+
+      vi.useFakeTimers();
+      const p = pushSkusPendientes(db, ML_CFG);
+      await vi.advanceTimersByTimeAsync(2_000); // ESPERA_SIN_CUPO_MS + margen
+      const r = await p;
+
+      expect(r.escritos).toBe(1);
+      expect(r.cortado_por_rate_limit).toBe(false);
+      expect(r.cortado_por_cooldown_propio).toBe(false);
+      expect(contarPendientes(db).total).toBe(0);
+    });
+  });
 
   it('acepta la config de sync completa {woo, ml} (forma real que usa el cron) y normaliza internamente', async () => {
     seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
@@ -293,7 +411,9 @@ describe('lib/matcherPush', () => {
         seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
       }
 
-      axios.request.mockResolvedValue(resp429());
+      // 429 REAL "puro" mockeado directo sobre mlFetch (ver comentario en el test de arriba
+      // sobre por qué no se puede simular con el mlClient real).
+      mlFetch.mockResolvedValue({ status: 429, headers: {}, data: null });
       const r = await pushSkusPendientes(db, ML_CFG, { limite: 1000, cuotaPausadas: 10 });
 
       expect(r.cortado_por_rate_limit).toBe(true);

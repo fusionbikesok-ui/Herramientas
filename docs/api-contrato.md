@@ -696,6 +696,7 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
     "iniciado_en": "2026-08-03T10:00:00.000Z",
     "fin_en": "2026-08-03T10:00:42.000Z",
     "cortado_por_rate_limit": false,
+    "cortado_por_cooldown_propio": false,
     "cortado_por_error": false,
     "cortado_por_cuota": false,
     "error": null
@@ -712,6 +713,19 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
   `proximo_intento_en` (cuándo se reintenta, según el backoff exponencial). Un fallo con
   `status: 0` (no hubo respuesta de ML: config faltante o error de red) no lleva esos dos
   campos porque no se registró backoff — ver `cortado_por_error`.
+- `cortado_por_rate_limit: true` → la corrida se cortó por un 429 **REAL de ML** (mlFetch
+  no marcó la respuesta como propia): se agotaron los reintentos cortos (`REINTENTOS_429_MS`,
+  350/1000ms) y se corta sin marcar fallo, para el próximo ciclo de cron.
+- `cortado_por_cooldown_propio: true` → la corrida se cortó por un 429 **NUESTRO**
+  (`__cooldownSintetico` o `__sinCupo` en `lib/mlClient.js`: cooldown global propio activo o
+  presupuesto propio agotado, ML no llegó a ser consultado en ese intento) cuyo tiempo de
+  espera restante superaba lo que le quedaba a `TIEMPO_MAX_CORRIDA_MS` (5 min) — mientras la
+  espera entra en ese margen, la corrida NO se corta: espera a que venza y reintenta la misma
+  publicación. Fail-open igual que `cortado_por_rate_limit`, sin backoff registrado.
+  2026-08-06: antes ambos casos caían en `cortado_por_rate_limit` sin distinción, lo que
+  ocultó durante días que el push se cortaba solo por nuestro propio cooldown (activado por
+  otro de los 9 crons) y nunca llegaba a hablar con ML — ver `docs/superpowers/plans/` o el
+  changelog del commit para el diagnóstico completo.
 - `cortado_por_error: true` → la corrida se cortó porque una llamada a ML devolvió
   `status: 0` (no llegamos a hablar con ML). Fail-open: esa/s publicación/es NO se
   penalizaron con backoff (no fueron rechazadas por ML, así que no corresponde tratarlas
