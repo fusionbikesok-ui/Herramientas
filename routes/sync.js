@@ -1147,12 +1147,16 @@ async function evaluarNetoVariaciones(db, mlCfg, itemId, item, variaciones, opts
  * Screening con caché (FOCO, decisión del orquestador 2026-08-06): esta función es el
  * "cribado" barato que corre para TODO el lote (incluidas publicaciones que van a quedar
  * bloqueadas o que ni siquiera se van a reactivar), así que llama a evaluarNetoVariaciones
- * SIN `saltarCachePersistente` — usa `ml_precios_cache` normalmente. La revalidación en vivo
- * (saltando esa caché) queda acotada a `reactivarItems`, JUSTO ANTES del PUT de activación,
- * y solo para las publicaciones que de verdad van a reactivarse (ver ahí). Antes esta misma
- * función forzaba `saltarCachePersistente: true` para el lote entero, así que la caché
- * persistente solo se ESCRIBÍA y nunca se LEÍA en este camino — desviación del plan original
- * (que acotaba el salteo a "las que van a reactivarse de verdad").
+ * usando `ml_precios_cache` normalmente (SIN `saltarCachePersistente`), salvo una excepción
+ * puntual: si `opts.saltarCachePersistenteItems` (armado por reactivarAutomatico) incluye este
+ * itemId — la publicación entró al lote porque venció la ventana de 2h de la red de seguridad,
+ * ver VENTANA_REVALIDACION_FRENADA_MS — reactivarItems le fuerza `saltarCachePersistente: true`
+ * ahí mismo. La revalidación en vivo del RESTO de las publicaciones (las que sí usaron caché
+ * acá) queda acotada a `reactivarItems`, JUSTO ANTES del PUT de activación, y solo para las que
+ * de verdad van a reactivarse (ver ahí). Antes esta misma función forzaba
+ * `saltarCachePersistente: true` para el lote entero, así que la caché persistente solo se
+ * ESCRIBÍA y nunca se LEÍA en este camino — desviación del plan original (que acotaba el
+ * salteo a "las que van a reactivarse de verdad").
  */
 // Mensaje exacto del bloqueo "sin precio web mapeado" (precioWebClave devolvió null: SKU sin
 // regular_price, típicamente el catálogo todavía no se refrescó tras un reinicio). Constante
@@ -1248,7 +1252,18 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
       //    llamada extra). Omite si ya no está pausada o si el vendedor la pausó manualmente;
       //    bloquea si el neto queda >5% por debajo del precio web de alguna variación mapeada.
       //    Server-side (no confía en el cliente).
-      const bloqueo = await chequearNetoReactivar(db, mlCfg, itemId, variaciones, items.get(itemId), opts);
+      //
+      // Red de seguridad de 2h (hallazgo del revisor, IMPORTANTE): si esta publicación entró
+      // al lote PORQUE venció la ventana de 2h (opts.saltarCachePersistenteItems, armado por
+      // reactivarAutomatico), el screening tiene que ir en vivo contra ML — si usara
+      // ml_precios_cache normal, releería el MISMO valor de comisión/envío que produjo la
+      // frenada original (TTL de 7 días) y la red de seguridad sería ciega exactamente a lo
+      // que la motivó. Las demás publicaciones del lote (frenadas por otro motivo, o
+      // candidatas nuevas) siguen usando la caché persistente sin cambios.
+      const opsScreening = opts.saltarCachePersistenteItems?.has(itemId)
+        ? { ...opts, saltarCachePersistente: true }
+        : opts;
+      const bloqueo = await chequearNetoReactivar(db, mlCfg, itemId, variaciones, items.get(itemId), opsScreening);
       if (bloqueo) {
         if (bloqueo.omitido) {
           // Refrescar el caché local con el estado real de ML para sacarla de reactivables y
@@ -1358,17 +1373,29 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
  */
 // Red de seguridad del paso 4: aunque nada haya cambiado en las dos columnas locales, una
 // frenada se re-evalúa igual pasadas 2h desde detectado_en (puede haber cambiado la comisión
-// o el envío de ML, que no vivimos en esta tabla).
+// o el envío de ML, que no viven en esta tabla — solo se conocen pegándole a ML).
 //
-// Bajada de 24h a 2h (hallazgo del revisor, BLOQUEANTE 1): la premisa original de que
-// `ml_publicaciones_cache.precio` "se refresca por crons que corren igual" es falsa — la
-// única escritura de esa columna es el refresco MANUAL del matcher, más el fix puntual que
-// ahora hace POST /api/precios/actualizar-precio al corregir un precio (ver routes/precios.js).
-// Sin la ventana corta, una frenada por precio de ML desactualizado por cualquier otra vía
-// podía quedar bloqueada hasta 24h sin ningún rastro en el log. Con ~24 publicaciones frenadas
-// hoy, re-chequear cada 2h son ~12 multiget/día más comisión y envío de las que de verdad se
-// reactivan — dos órdenes de magnitud menos que las 5.000-8.000 llamadas/día que motivaron
-// este cambio, y el presupuesto de lib/mlLimites.js lo aguanta de sobra.
+// Mecanismo real (hallazgo del revisor, IMPORTANTE, 2026-08-05): que la fila entre por esta
+// ventana NO alcanza por sí solo — si el screening de esa publicación en reactivarItems
+// siguiera usando ml_precios_cache (TTL 7 días), releería el MISMO valor de comisión/envío
+// que produjo la frenada original y la ventana sería ciega exactamente a lo que la motivó.
+// Por eso reactivarAutomatico marca en `itemsPorVentana` los item_id cuya ÚNICA razón de
+// recheck es el vencimiento de esta ventana (ni precio_ml ni precio_web local cambiaron) y
+// reactivarItems, al recibirlos en opts.saltarCachePersistenteItems, les fuerza
+// saltarCachePersistente:true en el screening — o sea, ML en vivo para esas publicaciones
+// puntuales aunque ml_precios_cache tenga una fila fresca. El resto del lote (frenadas por
+// otro motivo, o candidatas nuevas) sigue usando la caché persistente sin cambios.
+//
+// Bajada de 24h a 2h (hallazgo del revisor, BLOQUEANTE 1 de la pasada anterior): la premisa
+// original de que `ml_publicaciones_cache.precio` "se refresca por crons que corren igual" es
+// falsa — la única escritura de esa columna es el refresco MANUAL del matcher, más el fix
+// puntual que ahora hace POST /api/precios/actualizar-precio al corregir un precio (ver
+// routes/precios.js). Sin la ventana corta, una frenada por precio de ML desactualizado por
+// cualquier otra vía podía quedar bloqueada hasta 24h sin ningún rastro en el log. Con ~24
+// publicaciones frenadas hoy y screening en vivo solo para las que entran por acá, el costo
+// estimado es ~24 × 2 llamadas cada 2h ≈ 576/día en el peor caso — un orden de magnitud por
+// debajo de las 5.000-8.000 llamadas/día que motivaron este cambio, y el presupuesto de
+// lib/mlLimites.js lo aguanta de sobra.
 const VENTANA_REVALIDACION_FRENADA_MS = 2 * 60 * 60 * 1000;
 
 export async function reactivarAutomatico(db, cfg) {
@@ -1417,32 +1444,52 @@ export async function reactivarAutomatico(db, cfg) {
     // operador corrige el precio en ML. Sin ese fix esta columna podía quedar desactualizada
     // en masa y la comparación de abajo perdía sentido; con él, más la ventana de red de
     // seguridad bajada a 2h, el riesgo de frenada fantasma queda acotado.
+    //
+    // ACOPLAMIENTO IMPLÍCITO A VIGILAR (hallazgo del revisor, MENOR, 2026-08-06): hoy la única
+    // vía que mantiene `ml_publicaciones_cache.precio` fresco es ese POST puntual. Si el día de
+    // mañana se agrega OTRA vía de cambio de precio de ML (push masivo, integración nueva,
+    // script de carga), esa vía tiene que sumarle el mismo par
+    // actualizar-caché/borrar-frenada que hoy tiene POST /actualizar-precio — si no, esta
+    // comparación local vuelve a comparar contra un valor viejo y la red de seguridad de 2h
+    // queda como único mecanismo real (correcto, pero mucho más lento: hasta 2h de demora en
+    // vez de instantáneo). No hay ningún chequeo automático que detecte esta desviación: es
+    // responsabilidad de quien agregue esa vía nueva acordarse de este comentario.
+    // Devuelve { recheck, porVentana }. `porVentana` distingue el caso puntual en que la
+    // ÚNICA razón para re-consultar es que venció la ventana de 2h (red de seguridad) sin que
+    // haya cambiado nada de lo que vemos localmente — ese es el caso en que el screening tiene
+    // que ir en vivo (ver reactivarItems, opts.saltarCachePersistenteItems), porque si no
+    // releería el mismo precio_ml/comisión/envío cacheado que ya produjo la frenada.
     function necesitaRecheck(row) {
       const frenada = frenadasPorClave.get(row.clave);
-      if (!frenada) return true; // candidata nueva, o ya no tiene frenada vigente
+      if (!frenada) return { recheck: true, porVentana: false }; // candidata nueva, o ya no tiene frenada vigente
       const edadMs = ahoraMs - new Date(frenada.detectado_en).getTime();
-      if (!(edadMs >= 0) || edadMs > VENTANA_REVALIDACION_FRENADA_MS) return true; // red de seguridad 2h
+      if (!(edadMs >= 0) || edadMs > VENTANA_REVALIDACION_FRENADA_MS) return { recheck: true, porVentana: true }; // red de seguridad 2h
       // Precio web nulo (regular_price vacío, ej. tras reinicio antes del refresco de
       // catálogo): AMBIGUO, no se puede afirmar "cambió" ni "no cambió" — se reevalúa contra
       // ML, que cae sola en MOTIVO_SIN_PRECIO_WEB sin persistir frenada (fail-closed, no
       // contamina la comparación ni bloquea en silencio para siempre).
       const precioWebActual = precioWebClave(db, row.clave);
-      if (precioWebActual == null) return true;
-      if (precioWebActual !== frenada.precio_web_evaluado) return true;
+      if (precioWebActual == null) return { recheck: true, porVentana: false };
+      if (precioWebActual !== frenada.precio_web_evaluado) return { recheck: true, porVentana: false };
       // Mismo criterio que el precio web (hallazgo del revisor, BLOQUEANTE 2): `null !== null`
       // da `false` en JS, así que sin esta guarda un precio ML "no sé" (columna NULL) se leía
       // como "no cambió" y saltaba el recheck sin ninguna base real para esa decisión — la
       // columna puede estar NULL en masa por el motivo de arriba, así que sin esto toda la
       // protección del paso 4 se apoyaba en comparar una columna vacía contra sí misma.
       const precioMlActual = precioMlDeClave.get(row.clave)?.precio ?? null;
-      if (precioMlActual == null || frenada.precio_ml_evaluado == null) return true;
-      if (precioMlActual !== frenada.precio_ml_evaluado) return true;
-      return false;
+      if (precioMlActual == null || frenada.precio_ml_evaluado == null) return { recheck: true, porVentana: false };
+      if (precioMlActual !== frenada.precio_ml_evaluado) return { recheck: true, porVentana: false };
+      return { recheck: false, porVentana: false };
     }
 
     const itemsConRecheck = new Set();
+    // FOCO (hallazgo del revisor, IMPORTANTE): item_id cuya ÚNICA razón de recheck es la
+    // ventana de 2h — a esos hay que forzarles screening en vivo en reactivarItems, ver ahí.
+    const itemsPorVentana = new Set();
     for (const r of rows) {
-      if (necesitaRecheck(r)) itemsConRecheck.add(r.item_id);
+      const { recheck, porVentana } = necesitaRecheck(r);
+      if (recheck) itemsConRecheck.add(r.item_id);
+      if (porVentana) itemsPorVentana.add(r.item_id);
     }
 
     // Primero los items SIN ninguna frenada registrada (candidatos reales a reactivarse),
@@ -1456,8 +1503,10 @@ export async function reactivarAutomatico(db, cfg) {
     itemIds.sort((a, b) => (itemTieneFrenada.get(a) ? 1 : 0) - (itemTieneFrenada.get(b) ? 1 : 0));
 
     // Sin nada que re-consultar: 0 llamadas a ML, todas las frenadas vigentes siguen igual.
+    // saltarCachePersistenteItems viaja para que reactivarItems fuerce screening en vivo SOLO
+    // en las publicaciones que entraron por la ventana de 2h (ver ahí).
     const { resultados } = itemIds.length
-      ? await reactivarItems(db, cfg.ml, itemIds)
+      ? await reactivarItems(db, cfg.ml, itemIds, { saltarCachePersistenteItems: itemsPorVentana })
       : { resultados: [] };
 
     let reactivadas = 0;

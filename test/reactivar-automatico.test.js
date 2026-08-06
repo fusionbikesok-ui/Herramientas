@@ -374,10 +374,11 @@ describe('reactivarAutomatico', () => {
       expect(mlFetch).toHaveBeenCalled();
     });
 
-    it('red de seguridad: frenada de más de 24h se re-evalúa igual aunque nada haya cambiado', async () => {
+    it('red de seguridad: frenada de más de 2h se re-evalúa igual aunque nada haya cambiado', async () => {
       sembrarReactivable({ precioWc: 300000 });
       const contadoActual = 200000;
-      sembrarFrenadaConInsumos({ precioMlEvaluado: null, precioWebEvaluado: contadoActual, detectadoEn: '2026-07-29T00:00:00Z' });
+      const hace3h = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+      sembrarFrenadaConInsumos({ precioMlEvaluado: null, precioWebEvaluado: contadoActual, detectadoEn: hace3h });
       mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
         if (metodo === 'get' && path.startsWith('/items?ids=')) {
           return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
@@ -387,7 +388,7 @@ describe('reactivarAutomatico', () => {
       });
 
       await reactivarAutomatico(db, CFG);
-      expect(mlFetch).toHaveBeenCalled(); // pasaron >24h desde detectado_en: se re-evalúa igual
+      expect(mlFetch).toHaveBeenCalled(); // pasaron >2h desde detectado_en: se re-evalúa igual
     });
 
     it('regular_price nulo (precio web actual desconocido): no es "cambió" ni "no cambió" — se reevalúa (fail-closed hacia no bloquear en silencio)', async () => {
@@ -492,6 +493,59 @@ describe('reactivarAutomatico', () => {
 
       const r = await reactivarAutomatico(db, CFG);
       expect(r.reactivadas).toBe(0);
+      expect(db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave='MLA1|'").get().status).toBe('paused');
+    });
+  });
+
+  // Hallazgo del revisor (IMPORTANTE, 2026-08-06): una frenada que entra por la ventana de 2h
+  // (VENTANA_REVALIDACION_FRENADA_MS) tiene que hacer SCREENING en vivo — si releyera
+  // ml_precios_cache (TTL 7 días) estaría comparando contra el mismo valor cacheado que
+  // produjo la frenada original, y la red de seguridad no serviría para nada.
+  describe('red de seguridad de 2h: screening en vivo, no releer ml_precios_cache (IMPORTANTE)', () => {
+    it('una frenada que entra por la ventana de 2h consulta ML en vivo en el screening aunque ml_precios_cache tenga fila fresca', async () => {
+      sembrarReactivable({ precioWc: 300000 }); // contado = 200000 (2/3 de 300000)
+      const hace3h = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+      db.prepare(`INSERT INTO ml_reactivacion_frenada
+          (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en, precio_ml_evaluado, precio_web_evaluado)
+        VALUES ('MLA1|', 'FB-1', 'bajo', 100000, 200000, 0.5, ?, 400000, 200000)`).run(hace3h);
+
+      // Fila fresca (TTL 7 días) con una comisión BAJA que daría neto=370000 (>200000, 'ok'):
+      // si el screening la usara, no bloquearía y el item pasaría a la revalidación final ya
+      // "aprobado". Con la fila más chica de comisión el neto queda ok, algo que la corrida en
+      // vivo (comisión más alta) no confirma.
+      db.prepare(`INSERT INTO ml_precios_cache (clave, valor, actualizado_en)
+        VALUES ('fee:400000:MLA1234:gold_special', 30000, ?)`).run(new Date().toISOString());
+
+      let llamadasListingPrices = 0;
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) {
+          llamadasListingPrices++;
+          // Comisión real EN VIVO más alta que la cacheada: neto=400000-250000=150000, por
+          // debajo del 95% de 200000 → sigue bloqueada.
+          return { status: 200, data: { sale_fee_amount: 250000 } };
+        }
+        return { status: 200, data: {} };
+      });
+
+      const r = await reactivarAutomatico(db, CFG);
+
+      // Si el screening hubiera usado la fila cacheada (30000), el item habría pasado a la
+      // revalidación final y esa SÍ es siempre en vivo (2da llamada), pero la clave del bug es
+      // que el screening en sí mismo no debe leer la caché para publicaciones de esta ventana:
+      // por eso listing_prices se llama, como mínimo, una vez con el valor en vivo (250000) y
+      // el veredicto final sigue bloqueado con ese valor, no con el cacheado.
+      expect(llamadasListingPrices).toBeGreaterThanOrEqual(1);
+      expect(r.reactivadas).toBe(0);
+      expect(r.frenadas).toBe(1);
+      const f = db.prepare('SELECT * FROM ml_reactivacion_frenada WHERE clave = ?').get('MLA1|');
+      expect(f.precio_ml_evaluado).toBe(400000);
+      // El neto persistido tiene que corresponder a la comisión EN VIVO (250000), no a la
+      // cacheada (30000): 400000 - 250000 = 150000. Si el screening hubiera confiado en la
+      // caché, este valor habría dado 370000 (comisión 30000) y el test lo detectaría.
+      expect(f.neto).toBe(150000);
       expect(db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave='MLA1|'").get().status).toBe('paused');
     });
   });

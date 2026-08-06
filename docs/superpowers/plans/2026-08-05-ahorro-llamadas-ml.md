@@ -145,6 +145,24 @@ veredicto haya cambiado por algo que no está en nuestras dos columnas (comisió
 de envío), y actúa como segunda red por si el fix de `POST /actualizar-precio` no cubre la vía
 por la que cambió el precio (ej. lo cambiaron directo desde la app de ML, sin pasar por acá).
 
+**CORRECCIÓN (revisor, 2026-08-06, IMPORTANTE):** la primera implementación solo comparaba
+`detectado_en` contra la ventana, pero el re-chequeo en sí (el screening de `chequearNetoReactivar`,
+ver paso 5) seguía leyendo `ml_precios_cache` normalmente — TTL de **7 días** (decisión del
+usuario). Resultado: una frenada que entraba por la ventana de 2h releía el MISMO valor de
+comisión/envío que produjo la frenada original, así que la red de seguridad era ciega
+exactamente a las dos cosas para las que fue creada (comisión y envío de ML). Corregido
+propagando el MOTIVO del recheck: `necesitaRecheck` ahora devuelve, además de si hay que
+re-consultar, si la ÚNICA razón es el vencimiento de la ventana de 2h (`porVentana`).
+`reactivarAutomatico` junta esos `item_id` en `itemsPorVentana` y se los pasa a `reactivarItems`
+como `opts.saltarCachePersistenteItems`; `reactivarItems`, al llamar al screening
+(`chequearNetoReactivar`) de esas publicaciones puntuales, les fuerza
+`saltarCachePersistente: true` — ML en vivo para ellas, aunque `ml_precios_cache` tenga una fila
+fresca. El resto del lote (frenadas por cambio de precio local, o candidatas nuevas) sigue
+usando la caché persistente sin cambios. Costo estimado: ~24 publicaciones × 2 llamadas
+(screening en vivo + revalidación pre-PUT del paso 5, si de verdad se reactiva) cada 2h ≈
+576/día en el peor caso — un orden de magnitud por debajo de las 5.000-8.000 llamadas/día
+originales.
+
 **Cierre del agujero en el origen:** además de la ventana de 2h, `POST /api/precios/actualizar-precio`
 (`routes/precios.js`) actualiza `ml_publicaciones_cache.precio` y borra la fila de
 `ml_reactivacion_frenada` de esa clave inmediatamente después de un PUT a ML exitoso — es el
@@ -162,8 +180,10 @@ web nulo **no** debe interpretarse como "cambió" ni como "no cambió": esa fila
 ya existente de `MOTIVO_SIN_PRECIO_WEB`, que no persiste frenada y se reintenta sola.
 
 **Aceptación:** tests de los cuatro caminos — sin cambios (0 llamadas), cambió el precio web
-(entra), cambió el precio ML (entra), frenada de más de 24 h (entra igual). Más el caso de
-`regular_price` nulo, que no debe romper ni contaminar la comparación.
+(entra), cambió el precio ML (entra), frenada de más de 2 h (entra igual). Más el caso de
+`regular_price` nulo, que no debe romper ni contaminar la comparación. Más un test de que una
+frenada que entra por la ventana de 2h consulta ML **en vivo en el screening** aunque
+`ml_precios_cache` tenga una fila fresca (no solo en la revalidación pre-PUT del paso 5).
 
 ## Paso 5 — Revalidación en vivo antes de activar (separada del screening)
 
@@ -203,8 +223,9 @@ fresca, y de que un fallo de esa consulta impide el PUT de activación.
 ## Riesgos
 
 - **Reactivar de menos:** si la comparación local del paso 4 tiene un bug, una publicación que ya
-  podría venderse queda frenada en silencio. Mitigación: la red de seguridad de 24 h y los tests
-  de los cuatro caminos.
+  podría venderse queda frenada en silencio. Mitigación: la red de seguridad de 2 h con
+  screening en vivo real (no solo el vencimiento del timestamp, ver corrección de arriba) y los
+  tests de los cuatro caminos.
 - **Caché envenenada:** una respuesta de error de ML guardada como valor válido daría un margen
   falso. Mitigación: solo se escribe la fila ante status 200 con valor numérico.
 - **Migraciones:** son dos nuevas (004 y 005) y hay una previa (`003_ml_sku_push_fallos.sql`)
