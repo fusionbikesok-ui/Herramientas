@@ -713,19 +713,27 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
   `proximo_intento_en` (cuándo se reintenta, según el backoff exponencial). Un fallo con
   `status: 0` (no hubo respuesta de ML: config faltante o error de red) no lleva esos dos
   campos porque no se registró backoff — ver `cortado_por_error`.
-- `cortado_por_rate_limit: true` → la corrida se cortó por un 429 **REAL de ML** (mlFetch
-  no marcó la respuesta como propia): se agotaron los reintentos cortos (`REINTENTOS_429_MS`,
-  350/1000ms) y se corta sin marcar fallo, para el próximo ciclo de cron.
-- `cortado_por_cooldown_propio: true` → la corrida se cortó por un 429 **NUESTRO**
-  (`__cooldownSintetico` o `__sinCupo` en `lib/mlClient.js`: cooldown global propio activo o
-  presupuesto propio agotado, ML no llegó a ser consultado en ese intento) cuyo tiempo de
-  espera restante superaba lo que le quedaba a `TIEMPO_MAX_CORRIDA_MS` (5 min) — mientras la
-  espera entra en ese margen, la corrida NO se corta: espera a que venza y reintenta la misma
+- `cortado_por_rate_limit: true` → la corrida se cortó por un 429 **REAL de ML**: se
+  agotaron los reintentos cortos (`REINTENTOS_429_MS`, 350/1000ms) y se corta sin marcar
+  fallo, para el próximo ciclo de cron. Importante (corrección 2026-08-06, ver docstring de
+  `lib/matcherPush.js`): mlFetch activa su propio cooldown ANTES de devolver el 429 real, así
+  que el intento siguiente de la misma publicación llega como `__cooldownSintetico` aunque el
+  429 que lo originó fue real — ese sintético se sigue tratando como continuación del 429 real
+  (consume `REINTENTOS_429_MS`, termina acá) y NO en `cortado_por_cooldown_propio`.
+- `cortado_por_cooldown_propio: true` → la corrida se cortó por un 429 **NUESTRO heredado**:
+  un `__cooldownSintetico` (cooldown global activado por OTRO de los 9 crons, sin que esta
+  corrida haya visto un 429 real todavía) o un `__sinCupo` (presupuesto propio agotado,
+  `lib/mlRateLimiter.js`, acotado a `MAX_REINTENTOS_SIN_CUPO` reintentos por publicación) cuya
+  espera superaba lo que le quedaba a `TIEMPO_MAX_CORRIDA_MS` (5 min). Mientras la espera
+  entra en ese margen, la corrida NO se corta: espera a que venza y reintenta la misma
   publicación. Fail-open igual que `cortado_por_rate_limit`, sin backoff registrado.
   2026-08-06: antes ambos casos caían en `cortado_por_rate_limit` sin distinción, lo que
   ocultó durante días que el push se cortaba solo por nuestro propio cooldown (activado por
-  otro de los 9 crons) y nunca llegaba a hablar con ML — ver `docs/superpowers/plans/` o el
-  changelog del commit para el diagnóstico completo.
+  otro de los 9 crons) y nunca llegaba a hablar con ML. Corrección posterior el mismo día
+  (commit `737d54a` y siguiente): la distinción original clasificaba mal el caso más común
+  en producción (429 real → sintético en el intento siguiente, ver arriba); ahora
+  `real429EstaCorrida` (variable local a cada corrida en `pushSkusPendientes`) separa "429
+  real de ESTA corrida" de "cooldown heredado de otro cron".
 - `cortado_por_error: true` → la corrida se cortó porque una llamada a ML devolvió
   `status: 0` (no llegamos a hablar con ML). Fail-open: esa/s publicación/es NO se
   penalizaron con backoff (no fueron rechazadas por ML, así que no corresponde tratarlas

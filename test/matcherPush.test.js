@@ -24,13 +24,12 @@ vi.mock('../lib/mlRateLimiter.js', async () => {
 });
 import { reservarCupo } from '../lib/mlRateLimiter.js';
 
-// Mock parcial de mlClient para poder forzar un 429 REAL "puro" (sin __cooldownSintetico
-// ni __sinCupo) de forma aislada: con el mlClient real, un 429 real SIEMPRE activa el
-// cooldown propio (mínimo 60s), así que un 2do intento inmediato del loop de
-// pushSkusPendientes ya lo vería como sintético — no hay forma de provocar dos 429 REALES
-// consecutivos sin mockear mlFetch directamente. Por default reenvía a la implementación
-// real (mlFetch = vi.fn(actual.mlFetch)); los tests que necesitan el 429 real "puro"
-// sobreescriben con mockResolvedValueOnce/mockImplementation puntual.
+// Mock parcial de mlClient: por default reenvía a la implementación real
+// (mlFetch = vi.fn(actual.mlFetch)), así que el camino real (429 real → cooldown propio →
+// sintético en el intento siguiente, ver BLOQUEANTE 1 del revisor 2026-08-06) queda cubierto
+// end-to-end vía axios.request en los tests que no tocan este mock. Algunos tests igual
+// sobreescriben mlFetch directo con mockResolvedValue/mockImplementation puntual como caso
+// EXTRA para aislar el loop de reintentos de la mecánica de cooldown de mlClient.
 vi.mock('../lib/mlClient.js', async () => {
   const actual = await vi.importActual('../lib/mlClient.js');
   return { ...actual, mlFetch: vi.fn(actual.mlFetch) };
@@ -84,6 +83,10 @@ describe('lib/matcherPush', () => {
     // restaura acá explícitamente para no dejar un 429 "puro" pisando el resto de la suite.
     const actualMlClient = await vi.importActual('../lib/mlClient.js');
     mlFetch.mockImplementation(actualMlClient.mlFetch);
+    // Mismo motivo: clearAllMocks() no deshace un mockResolvedValue persistente de un test
+    // anterior (ej. __sinCupo sostenido), así que sin esto ese mock "pisaba" a los siguientes.
+    const actualRateLimiter = await vi.importActual('../lib/mlRateLimiter.js');
+    reservarCupo.mockImplementation(actualRateLimiter.reservarCupo);
     _resetEstadoPushParaTests();
     // El cooldown de 429 vive en el módulo mlClient: sin esto, el test de "429
     // persistente" se lo deja activo a los siguientes y los corta de entrada.
@@ -160,17 +163,22 @@ describe('lib/matcherPush', () => {
     expect(proximo2).toBeGreaterThan(proximo1);
   });
 
-  it('429 persistente corta la corrida entera sin marcar fallo, dejando el resto para el próximo ciclo', async () => {
+  it('429 REAL de ML (end-to-end, sin mockear mlFetch) corta por rate_limit y NO por cooldown propio', async () => {
+    // BLOQUEANTE 2 (revisor): este es el camino que de verdad ocurre en producción. Con el
+    // mlClient real, mlFetch activa SU PROPIO cooldown apenas ve un 429 (ver _activarCooldown
+    // en lib/mlClient.js) ANTES de devolvernos la respuesta — así que el intento siguiente de
+    // la misma publicación ya ve `_cooldownActivo()` en true y recibe __cooldownSintetico,
+    // aunque el 429 que lo originó fue real. Si pushSkusPendientes no distingue "sintético
+    // heredado de otro cron" de "sintético continuación de un 429 real de ESTA corrida", un
+    // 429 real de ML termina clasificado como cortado_por_cooldown_propio ("no es rechazo de
+    // ML") y la corrida se queda reintentando la misma publicación hasta 5 minutos en vez de
+    // cortar en ~1,4s — la inversión exacta del diagnóstico que este módulo vino a resolver.
     seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
     seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
     seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
     seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
 
-    // 429 REAL "puro" (sin __cooldownSintetico/__sinCupo), mockeado directo sobre mlFetch:
-    // con el mlClient real, un 429 real activa SIEMPRE el cooldown propio (mínimo 60s), así
-    // que un 2do intento inmediato del loop ya lo vería como sintético — no hay forma de
-    // provocar dos 429 REALES consecutivos sin aislar mlFetch de esa mecánica.
-    mlFetch.mockResolvedValue({ status: 429, headers: {}, data: null });
+    axios.request.mockResolvedValue(resp429());
     const r = await pushSkusPendientes(db, ML_CFG);
 
     expect(r.cortado_por_rate_limit).toBe(true);
@@ -180,6 +188,26 @@ describe('lib/matcherPush', () => {
     const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
     expect(fallos).toBe(0);
     // Nada se escribió: las dos claves siguen pendientes para el próximo ciclo
+    expect(contarPendientes(db).total).toBe(2);
+  }, 15000);
+
+  it('429 persistente corta la corrida entera sin marcar fallo (mock directo sobre mlFetch, caso extra)', async () => {
+    seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+    seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+    seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
+    seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
+
+    // Mock directo sobre mlFetch: caso extra que aísla el loop de reintentos de la mecánica
+    // de cooldown de mlClient. El test end-to-end de arriba es el que cubre el camino real.
+    mlFetch.mockResolvedValue({ status: 429, headers: {}, data: null });
+    const r = await pushSkusPendientes(db, ML_CFG);
+
+    expect(r.cortado_por_rate_limit).toBe(true);
+    expect(r.cortado_por_cooldown_propio).toBe(false);
+    expect(r.errores).toBe(0);
+    expect(r.escritos).toBe(0);
+    const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
+    expect(fallos).toBe(0);
     expect(contarPendientes(db).total).toBe(2);
   }, 15000);
 
@@ -266,6 +294,32 @@ describe('lib/matcherPush', () => {
       expect(r.cortado_por_rate_limit).toBe(false);
       expect(r.cortado_por_cooldown_propio).toBe(false);
       expect(contarPendientes(db).total).toBe(0);
+    });
+
+    it('__sinCupo sostenido (presupuesto propio nunca se libera) corta tras MAX_REINTENTOS_SIN_CUPO, sin marcar fallo', async () => {
+      // IMPORTANTE 4 (revisor): sin un tope de reintentos, __sinCupo sostenido (9 crons
+      // compitiendo por el mismo presupuesto) podía girar sobre la MISMA publicación durante
+      // toda la corrida (hasta 5 minutos) reteniendo el mutex. Acá reservarCupo devuelve false
+      // siempre — nunca hay cupo — y la corrida debe cortar sola, rápido, sin agotar el tope
+      // de 5 minutos ni penalizar la publicación con backoff.
+      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+      reservarCupo.mockResolvedValue(false); // presupuesto propio agotado, siempre
+      axios.request.mockResolvedValue(respOk());
+
+      vi.useFakeTimers();
+      const p = pushSkusPendientes(db, ML_CFG);
+      await vi.advanceTimersByTimeAsync(10_000); // sobra margen para agotar MAX_REINTENTOS_SIN_CUPO
+      const r = await p;
+
+      expect(r.escritos).toBe(0);
+      expect(r.cortado_por_rate_limit).toBe(false);
+      expect(r.cortado_por_cooldown_propio).toBe(true); // presupuesto NUESTRO, no rechazo de ML
+      expect(r.errores).toBe(0);
+      const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
+      expect(fallos).toBe(0); // fail-open: no se penaliza la publicación
+      expect(contarPendientes(db).total).toBe(1); // sigue pendiente para el próximo ciclo
     });
   });
 
@@ -411,8 +465,8 @@ describe('lib/matcherPush', () => {
         seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
       }
 
-      // 429 REAL "puro" mockeado directo sobre mlFetch (ver comentario en el test de arriba
-      // sobre por qué no se puede simular con el mlClient real).
+      // Mock directo sobre mlFetch (caso extra, aísla el loop de reintentos de la cuota de
+      // pausadas; el test end-to-end con axios está en la suite de arriba).
       mlFetch.mockResolvedValue({ status: 429, headers: {}, data: null });
       const r = await pushSkusPendientes(db, ML_CFG, { limite: 1000, cuotaPausadas: 10 });
 
