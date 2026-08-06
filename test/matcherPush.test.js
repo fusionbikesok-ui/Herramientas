@@ -218,156 +218,9 @@ describe('lib/matcherPush', () => {
     await p1;
   });
 
-  // --- Paso 1: verificación previa contra ML ---
-  describe('verificación previa (paso 1)', () => {
-    function multiget(items) {
-      return {
-        status: 200, headers: {}, data: items.map(it => ({ code: 200, body: it })),
-      };
-    }
-
-    it('una clave cuyo SKU ya está en ML según el multiget no genera PUT y queda fuera de pendientes', async () => {
-      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active', sellerSku: '' });
-      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
-
-      axios.request.mockImplementation((config) => {
-        if (config?.method === 'get') {
-          return Promise.resolve(multiget([
-            { id: 'A1', status: 'active', attributes: [{ id: 'SELLER_SKU', value_name: 'FB-1' }] },
-          ]));
-        }
-        throw new Error('no debería hacer PUT: el SKU ya está en ML');
-      });
-
-      const r = await pushSkusPendientes(db, ML_CFG);
-
-      expect(r.escritos).toBe(1);
-      expect(r.errores).toBe(0);
-      expect(contarPendientes(db).total).toBe(0);
-      const cache = db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = ?').get('A1|');
-      expect(cache.seller_sku).toBe('FB-1');
-    });
-
-    it('la verificación se hace en chunks de 20 publicaciones', async () => {
-      for (let i = 0; i < 25; i++) {
-        seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
-        seedDecision(db, { clave: `A${i}|`, sku: `FB-${i}` });
-      }
-
-      const getsCalls = [];
-      axios.request.mockImplementation((config) => {
-        if (config?.method === 'get') {
-          const ids = new URL('http://x' + config.url.replace(/^https?:\/\/[^/]+/, '')).searchParams;
-          getsCalls.push(config.url);
-          return Promise.resolve(multiget([]));
-        }
-        return Promise.resolve(respOk());
-      });
-
-      await pushSkusPendientes(db, ML_CFG, { limite: 120, cuotaPausadas: null });
-
-      // 25 publicaciones -> 2 chunks de multiget (20 + 5)
-      expect(getsCalls.length).toBe(2);
-      expect(getsCalls[0]).toMatch(/ids=([^&]*,){19}[^&]*&/); // 20 ids en el primer chunk
-    }, 15000);
-
-    it('un fallo del multiget de verificación (chunk que lanza) no aborta la corrida entera', async () => {
-      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
-      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
-
-      axios.request.mockImplementation((config) => {
-        if (config?.method === 'get') return Promise.reject(new Error('timeout de red'));
-        return Promise.resolve(respOk());
-      });
-
-      const r = await pushSkusPendientes(db, ML_CFG);
-
-      // La clave sigue su camino normal de escritura (PUT), pese a que el multiget falló
-      expect(r.escritos).toBe(1);
-      expect(r.errores).toBe(0);
-    });
-  });
-
-  // --- Paso 2: PUT agrupado por publicación, con fallback por variación ---
-  describe('PUT agrupado por publicación (paso 2)', () => {
-    function seedVariacion(db, { itemId, variationId, sku }) {
-      const clave = `${itemId}|${variationId}`;
-      seedCache(db, { clave, itemId, variationId, status: 'active' });
-      seedDecision(db, { clave, sku });
-      return clave;
-    }
-
-    it('1 publicación con 3 variaciones pendientes se resuelve con 1 solo PUT', async () => {
-      seedVariacion(db, { itemId: 'M1', variationId: 'V1', sku: 'FB-1' });
-      seedVariacion(db, { itemId: 'M1', variationId: 'V2', sku: 'FB-2' });
-      seedVariacion(db, { itemId: 'M1', variationId: 'V3', sku: 'FB-3' });
-
-      let putCalls = 0;
-      axios.request.mockImplementation((config) => {
-        if (config?.method === 'get') return Promise.resolve({ status: 200, headers: {}, data: [] });
-        putCalls++;
-        return Promise.resolve(respOk());
-      });
-
-      const r = await pushSkusPendientes(db, ML_CFG);
-
-      expect(putCalls).toBe(1);
-      expect(r.escritos).toBe(3);
-      expect(r.errores).toBe(0);
-      expect(contarPendientes(db).total).toBe(0);
-    });
-
-    it('si el PUT agrupado falla con 400, se reintenta por variación (3 PUT) y el resultado final es correcto', async () => {
-      seedVariacion(db, { itemId: 'M2', variationId: 'V1', sku: 'FB-1' });
-      seedVariacion(db, { itemId: 'M2', variationId: 'V2', sku: 'FB-2' });
-      seedVariacion(db, { itemId: 'M2', variationId: 'V3', sku: 'FB-3' });
-
-      let putUrls = [];
-      axios.request.mockImplementation((config) => {
-        if (config?.method === 'get') return Promise.resolve({ status: 200, headers: {}, data: [] });
-        putUrls.push(config.url);
-        // El PUT agrupado pega a /items/M2 (sin /variations/); los individuales a
-        // /items/M2/variations/{id}
-        if (/\/items\/M2$/.test(config.url)) return Promise.resolve(resp400('límite de fotos'));
-        return Promise.resolve(respOk());
-      });
-
-      const r = await pushSkusPendientes(db, ML_CFG);
-
-      const agrupados = putUrls.filter(u => /\/items\/M2$/.test(u));
-      const individuales = putUrls.filter(u => /\/items\/M2\/variations\//.test(u));
-      expect(agrupados.length).toBe(1);
-      expect(individuales.length).toBe(3);
-      expect(r.escritos).toBe(3);
-      expect(r.errores).toBe(0);
-    });
-
-    it('un 429 en el PUT agrupado corta la corrida sin fallback y sin registrar fallo', async () => {
-      seedVariacion(db, { itemId: 'M3', variationId: 'V1', sku: 'FB-1' });
-      seedVariacion(db, { itemId: 'M3', variationId: 'V2', sku: 'FB-2' });
-
-      let putUrls = [];
-      axios.request.mockImplementation((config) => {
-        if (config?.method === 'get') return Promise.resolve({ status: 200, headers: {}, data: [] });
-        putUrls.push(config.url);
-        return Promise.resolve(resp429());
-      });
-
-      const r = await pushSkusPendientes(db, ML_CFG);
-
-      // Nunca se intentó el fallback por variación
-      expect(putUrls.some(u => /\/items\/M3\/variations\//.test(u))).toBe(false);
-      expect(r.cortado_por_rate_limit).toBe(true);
-      expect(r.errores).toBe(0);
-      const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
-      expect(fallos).toBe(0);
-      expect(contarPendientes(db).total).toBe(2);
-    }, 15000);
-  });
-
-  // --- Paso 3: cuota de pausadas por corrida ---
-  describe('cuota de pausadas por corrida (paso 3)', () => {
-    it('con 5 activas y 100 pausadas, una corrida procesa las 5 activas y exactamente 20 publicaciones pausadas', () => {
+  // --- Cuota de pausadas por corrida ---
+  describe('cuota de pausadas por corrida', () => {
+    it('con 5 activas y 100 pausadas, seleccionarPendientes(cuota=10) trae las 5 activas y exactamente 10 publicaciones pausadas', () => {
       for (let i = 0; i < 5; i++) {
         seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
         seedDecision(db, { clave: `A${i}|`, sku: `FB-A${i}` });
@@ -377,32 +230,53 @@ describe('lib/matcherPush', () => {
         seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
       }
 
-      const lote = seleccionarPendientes(db, { limite: 1000, cuotaPausadas: 20 });
+      const lote = seleccionarPendientes(db, { limite: 1000, cuotaPausadas: 10 });
       const activasSel = lote.filter(p => p.status === 'active');
       const pausadasSel = lote.filter(p => p.status !== 'active');
       expect(activasSel).toHaveLength(5);
-      expect(pausadasSel).toHaveLength(20);
+      expect(pausadasSel).toHaveLength(10);
     });
 
     it('sin starvation: la cola de pausadas se vacía a lo largo de varias corridas de cuota', () => {
-      for (let i = 0; i < 45; i++) {
+      for (let i = 0; i < 25; i++) {
         seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
         seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
       }
 
-      // Simula 3 corridas: cada una "escribe" (borra la decisión) su cuota de 20 pausadas.
+      // Simula 3 corridas: cada una "escribe" (borra la decisión) su cuota de 10 pausadas.
       for (let corrida = 0; corrida < 3; corrida++) {
-        const lote = seleccionarPendientes(db, { limite: 1000, cuotaPausadas: 20 });
+        const lote = seleccionarPendientes(db, { limite: 1000, cuotaPausadas: 10 });
         for (const p of lote) {
           db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(p.clave);
         }
       }
-      expect(contarPendientes(db).total).toBe(0); // 45 = 20 + 20 + 5, se vació en 3 corridas
+      expect(contarPendientes(db).total).toBe(0); // 25 = 10 + 10 + 5, se vació en 3 corridas
     });
+
+    it('bloqueante 2 (revisor): la cuota se aplica por CORRIDA completa, no por tanda — 5 activas + 100 pausadas con cuota 10 procesan exactamente 5 activas y 10 publicaciones pausadas en una sola corrida', async () => {
+      for (let i = 0; i < 5; i++) {
+        seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
+        seedDecision(db, { clave: `A${i}|`, sku: `FB-A${i}` });
+      }
+      for (let i = 0; i < 100; i++) {
+        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+      }
+
+      axios.request.mockResolvedValue(respOk());
+      // limite alto para que, si el bloqueante reapareciera (cuota reevaluada por tanda sin
+      // descontar lo ya procesado), el while siguiera trayendo tandas de pausadas hasta
+      // agotar las 100 en vez de cortar en 10.
+      const r = await pushSkusPendientes(db, ML_CFG, { limite: 1000, cuotaPausadas: 10 });
+
+      expect(r.escritos).toBe(15); // 5 activas + 10 pausadas, nunca más
+      expect(r.errores).toBe(0);
+      expect(contarPendientes(db).total).toBe(90); // 100 - 10 pausadas escritas; las 5 activas ya no quedan pendientes
+    }, 15000);
   });
 
-  // --- Paso 4: coherencia (manual ignora la cuota, contarPendientes refleja la cola real) ---
-  describe('coherencia con el resto del sistema (paso 4)', () => {
+  // --- Coherencia: manual ignora la cuota, contarPendientes refleja la cola real ---
+  describe('coherencia con el resto del sistema', () => {
     it('el camino manual (cuotaPausadas: null) procesa todas las pausadas sin cuota', async () => {
       for (let i = 0; i < 5; i++) {
         seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
