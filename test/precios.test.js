@@ -329,6 +329,71 @@ describe('auditarPrecios + router', () => {
     expect(res.body.error).toMatch(/inválido/);
   });
 
+  // Paso 4/cierre del agujero (plan ahorro-llamadas-ml): POST /actualizar-precio es el punto
+  // donde el sistema SABE que el precio de ML cambió — debe borrar la frenada de esa clave y
+  // refrescar ml_publicaciones_cache.precio, para que necesitaRecheck no la lea como "no cambió".
+  it('POST /api/precios/actualizar-precio borra la frenada existente y refresca el precio local tras el PUT 200', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en, precio_ml_evaluado, precio_web_evaluado)
+      VALUES ('MLB|v1', 'FB-B', 'bajo', 100, 1000, 0.5, ?, 900, 1000)`).run(ahora());
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'put' && /\/items\/MLB\/variations\/v1$/.test(url)) return { status: 200, data: {}, headers: {} };
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+      if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
+      if (/\/items\/MLB\?/.test(url)) return { status: 200, data: { id: 'MLB', price: 1200, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, status: 'active', variations: [] }, headers: {} };
+      return { status: 404, data: {}, headers: {} };
+    });
+
+    const res = await request(app).post('/api/precios/actualizar-precio').send({ clave: 'MLB|v1', precio: 1200 });
+    expect(res.status).toBe(200);
+    expect(db.prepare("SELECT precio FROM ml_publicaciones_cache WHERE clave='MLB|v1'").get().precio).toBe(1200);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_reactivacion_frenada WHERE clave='MLB|v1'").get().n).toBe(0);
+  });
+
+  it('POST /api/precios/actualizar-precio: si el PUT falla, NO toca ml_publicaciones_cache ni borra la frenada', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    db.prepare("UPDATE ml_publicaciones_cache SET precio = 900 WHERE clave='MLB|v1'").run();
+    db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en, precio_ml_evaluado, precio_web_evaluado)
+      VALUES ('MLB|v1', 'FB-B', 'bajo', 100, 1000, 0.5, ?, 900, 1000)`).run(ahora());
+    axios.request.mockResolvedValue({ status: 400, data: { message: 'precio inválido' }, headers: {} });
+
+    const res = await request(app).post('/api/precios/actualizar-precio').send({ clave: 'MLB|v1', precio: 1200 });
+    expect(res.status).toBe(400);
+    expect(db.prepare("SELECT precio FROM ml_publicaciones_cache WHERE clave='MLB|v1'").get().precio).toBe(900);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_reactivacion_frenada WHERE clave='MLB|v1'").get().n).toBe(1);
+  });
+
+  it('POST /api/precios/actualizar-precio: fail-open — un error al refrescar el caché local NO hace fallar la respuesta (queda log)', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'put' && /\/items\/MLB\/variations\/v1$/.test(url)) return { status: 200, data: {}, headers: {} };
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+      if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
+      if (/\/items\/MLB\?/.test(url)) return { status: 200, data: { id: 'MLB', price: 1200, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, status: 'active', variations: [] }, headers: {} };
+      return { status: 404, data: {}, headers: {} };
+    });
+    // Forzar que el UPDATE local del caché falle (columna inexistente rompería el SQL real,
+    // pero acá simulamos el mismo efecto cerrando la conexión antes del segundo prepare no es
+    // viable con better-sqlite3 sincrónico dentro de la misma request; en cambio verificamos
+    // que el PUT ya exitoso a ML responde 200 incluso si db.close() se hubiera llamado antes
+    // del bloque try/catch de refresco — se cubre indirectamente vía el spy de console.error.
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    db.prepare('DROP TABLE ml_reactivacion_frenada').run(); // rompe el DELETE del bloque try/catch, no el PUT
+
+    const res = await request(app).post('/api/precios/actualizar-precio').send({ clave: 'MLB|v1', precio: 1200 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
   it('POST /api/precios/actualizar-precio valida clave/precio', async () => {
     const res = await request(app).post('/api/precios/actualizar-precio').send({ clave: '', precio: 0 });
     expect(res.status).toBe(400);
