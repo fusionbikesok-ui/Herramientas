@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { veredictoNeto, netoMl, precioWebClave, precioSugerido, precioContado, totalContado } from '../lib/mlPrecios.js';
+import { veredictoNeto, netoMl, precioWebClave, precioSugerido, precioContado, totalContado, saleFeeMl, costoEnvioMl, invalidarCachePreciosMl } from '../lib/mlPrecios.js';
 import { auditarPrecios, preciosRouter } from '../routes/precios.js';
 
 vi.mock('axios', async () => {
@@ -389,5 +389,100 @@ describe('auditarPrecios + router', () => {
     expect(filas[0].marca).toBe('MarcaNueva');
     expect(filas[0].categorias_json).toBe('["NUEVA"]');
     expect(filas[0].stock).toBe(9);
+  });
+});
+
+// Paso 2 del plan ahorro-llamadas-ml: caché persistente de comisión (sale_fee) y costo de
+// envío en sqlite (ml_precios_cache), vigente 7 días, para no repetir listing_prices /
+// shipping_options/free que devuelven siempre lo mismo dentro de esa ventana.
+describe('mlPrecios — caché persistente (ml_precios_cache)', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); seedToken(db); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('saleFeeMl: hit de caché fresca no llama a ML', async () => {
+    let llamadas = 0;
+    axios.request.mockImplementation((cfg) => {
+      llamadas++;
+      return { status: 200, data: { sale_fee_amount: 999 }, headers: {} };
+    });
+    const primero = await saleFeeMl(db, ML_CFG, 1000, 'MLA1', 'gold_special');
+    expect(primero).toBe(999);
+    expect(llamadas).toBe(1);
+
+    const segundo = await saleFeeMl(db, ML_CFG, 1000, 'MLA1', 'gold_special');
+    expect(segundo).toBe(999);
+    expect(llamadas).toBe(1); // no repitió la llamada: hit de caché persistente
+  });
+
+  it('saleFeeMl: miss por vencimiento (más de 7 días) vuelve a consultar y reescribe', async () => {
+    axios.request.mockImplementation(() => ({ status: 200, data: { sale_fee_amount: 100 }, headers: {} }));
+    await saleFeeMl(db, ML_CFG, 1000, 'MLA1', 'gold_special');
+
+    // Envejecer la fila manualmente más de 7 días.
+    const vieja = new Date(Date.now() - 8 * 24 * 3600 * 1000).toISOString();
+    db.prepare("UPDATE ml_precios_cache SET actualizado_en = ? WHERE clave LIKE 'fee:%'").run(vieja);
+
+    axios.request.mockImplementation(() => ({ status: 200, data: { sale_fee_amount: 222 }, headers: {} }));
+    const valor = await saleFeeMl(db, ML_CFG, 1000, 'MLA1', 'gold_special');
+    expect(valor).toBe(222); // se reconsultó y reescribió
+  });
+
+  it('costoEnvioMl: la clave de caché incluye el precio — precios distintos del mismo item no comparten fila', async () => {
+    let llamadas = 0;
+    axios.request.mockImplementation((cfg) => {
+      llamadas++;
+      const url = cfg.url || '';
+      const precio = url.includes('item_id=MLA1') ? (llamadas === 1 ? 40 : 70) : 0;
+      return { status: 200, data: { coverage: { all_country: { list_cost: precio } } }, headers: {} };
+    });
+    const c1 = await costoEnvioMl(db, ML_CFG, 'MLA1', 1000, true);
+    const c2 = await costoEnvioMl(db, ML_CFG, 'MLA1', 2000, true); // mismo item, otro precio
+    expect(llamadas).toBe(2); // no hit de caché entre precios distintos
+    expect(c1).toBe(40);
+    expect(c2).toBe(70);
+
+    // Repetir el mismo precio SÍ pega en caché.
+    const c1DeNuevo = await costoEnvioMl(db, ML_CFG, 'MLA1', 1000, true);
+    expect(llamadas).toBe(2);
+    expect(c1DeNuevo).toBe(40);
+  });
+
+  it('un fallo de ML no escribe una fila envenenada en la caché', async () => {
+    axios.request.mockImplementation(() => ({ status: 500, data: null, headers: {} }));
+    const valor = await saleFeeMl(db, ML_CFG, 1000, 'MLA1', 'gold_special');
+    expect(valor).toBeNull();
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_precios_cache').get().n).toBe(0);
+  });
+
+  it('invalidarCachePreciosMl borra todo, o solo el prefijo indicado', async () => {
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (url.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+      return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
+    });
+    await saleFeeMl(db, ML_CFG, 1000, 'MLA1', 'gold_special');
+    await costoEnvioMl(db, ML_CFG, 'MLA1', 1000, true);
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_precios_cache').get().n).toBe(2);
+
+    invalidarCachePreciosMl(db, 'fee:');
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_precios_cache WHERE clave LIKE 'fee:%'").get().n).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_precios_cache WHERE clave LIKE 'envio:%'").get().n).toBe(1);
+
+    invalidarCachePreciosMl(db);
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_precios_cache').get().n).toBe(0);
+  });
+
+  it('opts.saltarCachePersistente fuerza consulta en vivo aunque haya fila fresca (paso 5)', async () => {
+    let llamadas = 0;
+    axios.request.mockImplementation(() => {
+      llamadas++;
+      return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+    });
+    await saleFeeMl(db, ML_CFG, 1000, 'MLA1', 'gold_special');
+    expect(llamadas).toBe(1);
+
+    await saleFeeMl(db, ML_CFG, 1000, 'MLA1', 'gold_special', null, { saltarCachePersistente: true });
+    expect(llamadas).toBe(2); // no usó la fila fresca
   });
 });

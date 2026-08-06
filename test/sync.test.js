@@ -344,9 +344,9 @@ describe('reactivación de pausadas por falta de stock', () => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-      if (method === 'get' && /\/items\/MLA9\?/.test(url)) {
+      if (method === 'get' && /\/items\?ids=/.test(url)) {
         getItemCount++;
-        return { status: 200, data: { id: 'MLA9', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA9', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
       return { status: 200, data: {}, headers: {} };
     });
@@ -381,7 +381,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-      if (/\/items\/MLA10\?/.test(url)) return { status: 200, data: { id: 'MLA10', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (method === 'get' && /\/items\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA10', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       if (method === 'put' && /\/items\/MLA10\/variations\/v10$/.test(url)) return { status: 200, data: {}, headers: {} };
       if (method === 'put' && /\/items\/MLA10$/.test(url)) return { status: 400, data: { message: 'no se puede activar' }, headers: {} };
       return { status: 404, data: {}, headers: {} };
@@ -405,7 +405,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const url = cfg.url || '';
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
       if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
-      if (/\/items\/MLA11/.test(url)) return { status: 200, data: { id: 'MLA11', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, variations: [] }, headers: {} };
+      if (/\/items\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA11', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, variations: [] } }], headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -425,7 +425,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     seedPublicacion(db, { clave: 'MLA12|v12', itemId: 'MLA12', varId: 'v12', status: 'paused', subStatus: 'out_of_stock' });
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (/\/items\/MLA12/.test(url)) return { status: 200, data: { id: 'MLA12', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (/\/items\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA12', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -447,7 +447,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       if (url.includes('/listing_prices')) return { status: 404, data: {}, headers: {} };
-      if (/\/items\/MLA14/.test(url)) return { status: 200, data: { id: 'MLA14', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (/\/items\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA14', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -469,7 +469,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     seedPublicacion(db, { clave: 'MLA13|v13', itemId: 'MLA13', varId: 'v13', status: 'paused', subStatus: 'out_of_stock' });
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (/\/items\/MLA13/.test(url)) return { status: 500, data: null, headers: {} };
+      if (/\/items\?ids=/.test(url)) return { status: 500, data: null, headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -493,9 +493,9 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
-      if (method === 'get' && /\/items\/MLA15\?/.test(url)) {
+      if (method === 'get' && /\/items\?ids=/.test(url)) {
         getItemCount++;
-        return { status: 200, data: { id: 'MLA15', status: 'active', sub_status: [], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA15', status: 'active', sub_status: [], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
       if (method === 'put') { putCount++; }
       return { status: 200, data: {}, headers: {} };
@@ -528,8 +528,8 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
-      if (method === 'get' && /\/items\/MLA16\?/.test(url)) {
-        return { status: 200, data: { id: 'MLA16', status: 'paused', sub_status: ['out_of_stock', 'paused_by_seller'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (method === 'get' && /\/items\?ids=/.test(url)) {
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA16', status: 'paused', sub_status: ['out_of_stock', 'paused_by_seller'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
       if (method === 'put') { putCount++; }
       return { status: 200, data: {}, headers: {} };
@@ -559,8 +559,8 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
-      if (method === 'get' && /\/items\/MLA17\?/.test(url)) {
-        return { status: 200, data: { id: 'MLA17', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (method === 'get' && /\/items\?ids=/.test(url)) {
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA17', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
       if (method === 'put') { putCount++; }
       return { status: 200, data: {}, headers: {} };
@@ -588,8 +588,8 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
-      if (method === 'get' && /\/items\/MLA18\?/.test(url)) {
-        return { status: 200, data: { id: 'MLA18', status: 'paused', sub_status: 'paused_by_seller', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (method === 'get' && /\/items\?ids=/.test(url)) {
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA18', status: 'paused', sub_status: 'paused_by_seller', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
       if (method === 'put') { putCount++; }
       return { status: 200, data: {}, headers: {} };
@@ -629,9 +629,17 @@ describe('reactivación de pausadas por falta de stock', () => {
         await new Promise(r => setTimeout(r, 5));
         const url = cfg.url || '';
         if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-        if (/\/items\/MLP\d+\?/.test(url)) {
-          const id = url.match(/\/items\/(MLP\d+)\?/)[1];
-          return { status: 200, data: { id, status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+        if (/\/items\?ids=/.test(url)) {
+          const idsParam = url.match(/ids=([^&]*)/)[1];
+          const ids = idsParam.split(',');
+          return {
+            status: 200,
+            data: ids.map(id => ({
+              code: 200,
+              body: { id, status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] },
+            })),
+            headers: {},
+          };
         }
         return { status: 200, data: {}, headers: {} };
       } finally {
@@ -666,9 +674,17 @@ describe('reactivación de pausadas por falta de stock', () => {
       const method = (cfg.method || '').toLowerCase();
       await new Promise(r => setTimeout(r, 2));
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-      if (/\/items\/(MLP[A-F])\?/.test(url)) {
-        const id = url.match(/\/items\/(MLP[A-F])\?/)[1];
-        return { status: 200, data: { id, status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] }, headers: {} };
+      if (/\/items\?ids=/.test(url)) {
+        const idsParam = url.match(/ids=([^&]*)/)[1];
+        const ids = idsParam.split(',');
+        return {
+          status: 200,
+          data: ids.map(id => ({
+            code: 200,
+            body: { id, status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] },
+          })),
+          headers: {},
+        };
       }
       // activar MLPF falla; el resto OK
       if (method === 'put' && /\/items\/MLPF$/.test(url)) return { status: 400, data: { message: 'no se puede activar' }, headers: {} };

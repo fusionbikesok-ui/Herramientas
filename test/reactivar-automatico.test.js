@@ -19,6 +19,23 @@ import { reactivarAutomatico } from '../routes/sync.js';
 const TEST_DB = './test/tmp-reactivar-auto.sqlite';
 const CFG = { ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' }, woo: { url: 'x', ck: 'c', cs: 's' } };
 
+/**
+ * Responde al multiget /items?ids=... (reactivarItems, paso 3 del plan ahorro-llamadas-ml)
+ * a partir de un mapa itemId -> datos del item. Un id ausente de `itemsById` simula "no
+ * devuelto por ML" (code !== 200), para probar el camino fail-closed.
+ */
+function respMultiget(itemsById) {
+  return (path) => {
+    const ids = path.match(/ids=([^&]*)/)[1].split(',');
+    return {
+      status: 200,
+      data: ids.map(id => itemsById[id]
+        ? { code: 200, body: { id, ...itemsById[id] } }
+        : { code: 404, body: null }),
+    };
+  };
+}
+
 let db;
 
 /** Siembra una publicación pausada por out_of_stock, mapeada, con stock web disponible. */
@@ -49,8 +66,8 @@ describe('reactivarAutomatico', () => {
   it('reactiva la publicación cuando el neto pasa el chequeo', async () => {
     sembrarReactivable({ precioWc: 300000 });
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
-        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
       }
       if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
       return { status: 200, data: {} };
@@ -65,8 +82,8 @@ describe('reactivarAutomatico', () => {
   it('NO reactiva y registra la frenada cuando el neto queda por debajo del precio de contado', async () => {
     sembrarReactivable({ precioWc: 900000 });
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
-        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
       }
       if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
       return { status: 200, data: {} };
@@ -97,8 +114,8 @@ describe('reactivarAutomatico', () => {
     db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
       VALUES ('MLA1|', 'FB-1', 'viejo', 1, 2, 0.5, '2026-07-29T00:00:00Z')`).run();
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
-        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
       }
       if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
       return { status: 200, data: {} };
@@ -135,8 +152,8 @@ describe('reactivarAutomatico', () => {
   it('fail-closed: sin precio web mapeado no registra frenada (deficitPct null pero clave no nula)', async () => {
     sembrarReactivable({ sinPrecioWeb: true });
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
-        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
       }
       if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
       return { status: 200, data: {} };
@@ -159,8 +176,8 @@ describe('reactivarAutomatico', () => {
     // comisión" (mismo test de la línea 117), para no mezclar los dos motivos fail-closed.
     sembrarReactivable({ precioWc: 300000 });
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
-        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
       }
       if (metodo === 'get' && path.includes('listing_prices')) return { status: 500, data: null };
       return { status: 200, data: {} };
@@ -176,11 +193,11 @@ describe('reactivarAutomatico', () => {
     sembrarReactivable({ clave: 'MLA1|', itemId: 'MLA1', sku: 'FB-1', sinPrecioWeb: true });
     sembrarReactivable({ clave: 'MLB1|', itemId: 'MLB1', sku: 'FB-B1', precioWc: 900000 });
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
-        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
-      }
-      if (metodo === 'get' && path.startsWith('/items/MLB1?')) {
-        return { status: 200, data: { id: 'MLB1', status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        return respMultiget({
+          MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } },
+          MLB1: { status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } },
+        })(path);
       }
       if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
       return { status: 200, data: {} };
@@ -214,8 +231,8 @@ describe('reactivarAutomatico', () => {
     db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
       VALUES ('MLA999|', 'FB-999', 'vieja', 1, 2, 0.5, '2026-07-29T00:00:00Z')`).run();
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-      if (metodo === 'get' && path.startsWith('/items/MLA1?')) {
-        return { status: 200, data: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
       }
       if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
       return { status: 200, data: {} };
@@ -251,10 +268,16 @@ describe('reactivarAutomatico', () => {
 
     const itemsConsultados = new Set();
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-      if (metodo === 'get' && path.startsWith('/items/')) {
-        const itemId = path.slice('/items/'.length).split('?')[0];
-        itemsConsultados.add(itemId);
-        return { status: 200, data: { id: itemId, status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } };
+      if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        const ids = path.match(/ids=([^&]*)/)[1].split(',');
+        for (const id of ids) itemsConsultados.add(id);
+        return {
+          status: 200,
+          data: ids.map(id => ({
+            code: 200,
+            body: { id, status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } },
+          })),
+        };
       }
       if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
       return { status: 200, data: {} };
@@ -263,5 +286,139 @@ describe('reactivarAutomatico', () => {
     await reactivarAutomatico(db, CFG);
 
     expect(itemsConsultados.has('MLA_ZZZ')).toBe(true);
+  });
+
+  // Paso 4 del plan ahorro-llamadas-ml: si ninguno de los dos precios (web/ML) cambió desde
+  // que se registró la frenada, no hay que gastar una sola llamada para reconfirmarlo.
+  describe('evaluación local (paso 4): saltear ML cuando nada cambió desde la frenada', () => {
+    function sembrarFrenadaConInsumos({ clave = 'MLA1|', sku = 'FB-1', precioMlEvaluado = 400000, precioWebEvaluado = 300000, detectadoEn = now() } = {}) {
+      db.prepare(`INSERT INTO ml_reactivacion_frenada
+          (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en, precio_ml_evaluado, precio_web_evaluado)
+        VALUES (?, ?, 'bajo', 350000, ?, 0.1, ?, ?, ?)`)
+        .run(clave, sku, precioWebEvaluado, detectadoEn, precioMlEvaluado, precioWebEvaluado);
+    }
+    function now() { return new Date().toISOString(); }
+
+    it('sin cambios: 0 llamadas a ML, la frenada sigue vigente', async () => {
+      // precioContado(300000) sería el resultado esperado si el sku tuviera regular_price=300000,
+      // pero acá seedeamos directamente los valores evaluados para que coincidan con el estado actual.
+      sembrarReactivable({ precioWc: 300000 }); // precio de contado real hoy: precioContado(300000)
+      // Insumos evaluados = exactamente lo que hoy calcularía precioWebClave/ml_publicaciones_cache.precio.
+      const contadoActual = 200000; // 300000 * 2/3
+      sembrarFrenadaConInsumos({ precioMlEvaluado: null, precioWebEvaluado: contadoActual });
+
+      const r = await reactivarAutomatico(db, CFG);
+      expect(mlFetch).not.toHaveBeenCalled();
+      expect(r.reactivadas).toBe(0);
+      expect(r.frenadas).toBe(0); // no se re-evaluó nada: la frenada existente sigue tal cual
+      expect(db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n).toBe(1);
+    });
+
+    it('cambió el precio web: entra al lote (llama a ML)', async () => {
+      sembrarReactivable({ precioWc: 300000 });
+      // precio_web_evaluado distinto del contado actual (200000) → forzar re-chequeo.
+      sembrarFrenadaConInsumos({ precioMlEvaluado: null, precioWebEvaluado: 999999 });
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
+        return { status: 200, data: {} };
+      });
+
+      await reactivarAutomatico(db, CFG);
+      expect(mlFetch).toHaveBeenCalled();
+    });
+
+    it('cambió el precio ML conocido: entra al lote (llama a ML)', async () => {
+      sembrarReactivable({ precioWc: 300000 });
+      // Sembrar un precio ML distinto en ml_publicaciones_cache al que se evaluó la frenada.
+      db.prepare("UPDATE ml_publicaciones_cache SET precio = 111111 WHERE clave = 'MLA1|'").run();
+      sembrarFrenadaConInsumos({ precioMlEvaluado: 999999, precioWebEvaluado: 200000 });
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
+        return { status: 200, data: {} };
+      });
+
+      await reactivarAutomatico(db, CFG);
+      expect(mlFetch).toHaveBeenCalled();
+    });
+
+    it('red de seguridad: frenada de más de 24h se re-evalúa igual aunque nada haya cambiado', async () => {
+      sembrarReactivable({ precioWc: 300000 });
+      const contadoActual = 200000;
+      sembrarFrenadaConInsumos({ precioMlEvaluado: null, precioWebEvaluado: contadoActual, detectadoEn: '2026-07-29T00:00:00Z' });
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
+        return { status: 200, data: {} };
+      });
+
+      await reactivarAutomatico(db, CFG);
+      expect(mlFetch).toHaveBeenCalled(); // pasaron >24h desde detectado_en: se re-evalúa igual
+    });
+
+    it('regular_price nulo (precio web actual desconocido): no es "cambió" ni "no cambió" — se reevalúa (fail-closed hacia no bloquear en silencio)', async () => {
+      sembrarReactivable({ sinPrecioWeb: true });
+      sembrarFrenadaConInsumos({ precioMlEvaluado: null, precioWebEvaluado: 200000 });
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
+        return { status: 200, data: {} };
+      });
+
+      const r = await reactivarAutomatico(db, CFG);
+      expect(mlFetch).toHaveBeenCalled();
+      expect(r.sin_precio_web).toBe(1); // cae en el camino existente, no contamina ni bloquea para siempre
+    });
+  });
+
+  // Paso 5: revalidación en vivo antes de activar, aunque haya caché persistente fresca.
+  describe('revalidación en vivo antes de activar (paso 5)', () => {
+    it('consulta ML aunque ml_precios_cache tenga una fila fresca de comisión', async () => {
+      sembrarReactivable({ precioWc: 300000 });
+      let llamadasListingPrices = 0;
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) {
+          llamadasListingPrices++;
+          return { status: 200, data: { sale_fee_amount: 40000 } };
+        }
+        return { status: 200, data: {} };
+      });
+
+      // Fila fresca ya cacheada para exactamente la misma combinación precio/categoría/listing.
+      db.prepare(`INSERT INTO ml_precios_cache (clave, valor, actualizado_en)
+        VALUES ('fee:400000:MLA1234:gold_special', 1, ?)`).run(new Date().toISOString());
+
+      await reactivarAutomatico(db, CFG);
+      // Se consultó igual: chequearNetoReactivar (revalidación previa al PUT) usa
+      // saltarCachePersistente:true, no la fila fresca.
+      expect(llamadasListingPrices).toBe(1);
+    });
+
+    it('fail-closed: un fallo en la revalidación en vivo impide el PUT de activación', async () => {
+      sembrarReactivable({ precioWc: 300000 });
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 500, data: null }; // ML caído en la revalidación
+        return { status: 200, data: {} };
+      });
+
+      const r = await reactivarAutomatico(db, CFG);
+      expect(r.reactivadas).toBe(0);
+      expect(db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave='MLA1|'").get().status).toBe('paused');
+    });
   });
 });

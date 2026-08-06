@@ -196,7 +196,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           .catch(err => console.error('reintentos error:', err.message));
       });
 
-      cron.schedule('6-59/15 * * * *', () => {          // ML
+      cron.schedule('6 1-23/2 * * *', () => {          // ML — cada 2h (bajado del 15 min, ver plan ahorro-llamadas-ml)
         procesarCancelacionesMl(app._db, syncCfg)
           .catch(err => console.error('cancelaciones ML error:', err.message));
       });
