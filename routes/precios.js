@@ -251,6 +251,22 @@ export function preciosRouter(db, cfg) {
       const { path, body } = buildMlPriceUpdate(itemId, variationId, precio);
       const resp = await mlFetch(db, mlCfg, 'put', path, body, { manual: true });
       if (resp.status !== 200) return res.status(400).json({ ok: false, error: extraerErrorMl(resp) });
+      // Cerrar el agujero encontrado por el revisor (BLOQUEANTE 1): `ml_publicaciones_cache.precio`
+      // NO se refresca por ningún cron (solo por el refresco manual del matcher), así que si el
+      // operador corrige acá el precio que frenó una reactivación automática, sin esto la fila de
+      // ml_reactivacion_frenada seguía viva y `necesitaRecheck` (routes/sync.js) leía el precio
+      // local desactualizado como "no cambió" — la reactivación quedaba sin efecto hasta la red
+      // de seguridad de horas, sin error ni rastro. Este es el punto exacto donde el sistema SABE
+      // que el precio de ML cambió: se actualiza el caché y se borra la frenada, si existía.
+      // Fail-open respecto del PUT: si esto falla, el precio en ML YA se corrigió y la respuesta
+      // al usuario no debe fallar por un problema de caché local — se deja rastro en el log.
+      try {
+        db.prepare('UPDATE ml_publicaciones_cache SET precio = ?, precio_actualizado_en = ? WHERE clave = ?')
+          .run(precio, now(), clave);
+        db.prepare('DELETE FROM ml_reactivacion_frenada WHERE clave = ?').run(clave);
+      } catch (e) {
+        console.error(`actualizar-precio: no se pudo refrescar el caché local de ${clave}:`, e.message);
+      }
       const fila = await refrescarFila(db, mlCfg, clave);
       res.json({ ok: true, data: fila });
     } catch (e) {

@@ -998,12 +998,20 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
   for (let i = 0; i < itemIds.length; i += MULTIGET_CHUNK) chunks.push(itemIds.slice(i, i + MULTIGET_CHUNK));
   const items = new Map();
   await mapConLimite(chunks, ML_CONCURRENCIA_MAX, async (chunk) => {
-    const resp = await mlFetch(
-      db, mlCfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations`
-    );
-    if (resp.status === 200 && Array.isArray(resp.data)) {
-      for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+    try {
+      const resp = await mlFetch(
+        db, mlCfg, 'get',
+        `/items?ids=${chunk.join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations`
+      );
+      if (resp.status === 200 && Array.isArray(resp.data)) {
+        for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+      }
+    } catch (e) {
+      // mlFetch no lanza por status HTTP, pero SÍ por timeout/error de red de axios (ver
+      // convención en la nota de más arriba). Si un chunk lanza, no debe tumbar el
+      // Promise.all del pool: los ítems de este chunk quedan ausentes de `items` y el
+      // fail-closed por ítem ausente (peor = 'sin_precio') ya los cubre más abajo.
+      console.error(`evaluarPreciosReactivables: multiget falló para un chunk: ${e.message}`);
     }
   });
 
@@ -1055,19 +1063,75 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
 }
 
 /**
+ * Evalúa el neto de TODAS las variaciones mapeadas de un item contra su precio web y
+ * devuelve la lista de bloqueos por margen (una entrada por variación con veredicto 'bajo').
+ *
+ * A diferencia de una versión anterior que hacía `return` en la PRIMERA variación con neto
+ * bajo: acá se evalúan TODAS. Cortar en la primera dejaba sin evaluar (y sin fila en
+ * `ml_reactivacion_frenada`) al resto de las variaciones de un item multi-variación, y como
+ * el recheck de `necesitaRecheck` es a nivel item, esas variaciones nunca frenadas hacían que
+ * el item entero volviera a re-consultarse en CADA corrida, para siempre (hallazgo del
+ * revisor, IMPORTANTE 3). Persistir una frenada por cada variación que bloquea es además el
+ * dato correcto para el badge del home.
+ *
+ * Devuelve:
+ *  - null → ninguna variación bloquea, seguir adelante.
+ *  - { error, clave, ... } → bloqueo fail-closed que no es "neto bajo" (sin precio web
+ *    mapeado o comisión no calculable): corta ahí mismo, porque sin ese dato no se puede
+ *    seguir evaluando esa variación ni tiene sentido persistir frenada (deficitPct null).
+ *  - { bloqueos: [...] } → una o más variaciones con veredicto 'bajo' (ninguna de las
+ *    anteriores saltó fail-closed antes).
+ */
+async function evaluarNetoVariaciones(db, mlCfg, itemId, item, variaciones, opts = {}) {
+  const freeShipping = !!item.shipping?.free_shipping;
+  const caches = { fee: new Map(), envio: new Map() };
+  const bloqueos = [];
+
+  for (const v of variaciones) {
+    const precioWeb = precioWebClave(db, v.clave);
+    if (!(precioWeb > 0)) {
+      return { error: MOTIVO_SIN_PRECIO_WEB, clave: v.clave, neto: null, precio_web: null, deficitPct: null };
+    }
+    let precio = item.price ?? null;
+    if (v.variation_id) {
+      const vv = (item.variations || []).find(x => String(x.id) === String(v.variation_id));
+      if (vv && vv.price != null) precio = vv.price;
+    }
+    const { neto } = await netoMl(db, mlCfg, {
+      itemId, price: precio, categoryId: item.category_id,
+      listingTypeId: item.listing_type_id, freeShipping,
+    }, caches, opts);
+    if (neto == null) {
+      return { error: 'No se pudo calcular la comisión en ML — reintentá', clave: v.clave, neto: null, precio_web: precioWeb, deficitPct: null };
+    }
+    const { estado, deficitPct } = veredictoNeto(neto, precioWeb);
+    if (estado === 'bajo') {
+      // precio_ml viaja en el bloqueo para que reactivarAutomatico lo persista en
+      // ml_reactivacion_frenada.precio_ml_evaluado (paso 4: insumo para decidir localmente,
+      // sin ML, si una frenada sigue vigente en el próximo ciclo).
+      bloqueos.push({ error: 'El neto de ML queda por debajo del precio web', clave: v.clave, neto, precio_web: precioWeb, deficitPct, precio_ml: precio });
+    }
+  }
+  return bloqueos.length ? { bloqueos } : null;
+}
+
+/**
  * Revalida en vivo el item antes de reactivar y verifica el neto del vendedor. Trae en un solo GET
  * status/sub_status + precio/categoría/listing/envío del item y:
  *  1) Revalida el estado real en ML: la lista de "reactivables" sale del caché local, y entre que
  *     se arma y el usuario confirma el lote el vendedor pudo reactivar o pausar manualmente la
  *     publicación. Si ya no está pausada, o si quedó pausada por el vendedor (paused_by_seller),
  *     se omite (no es un error ni un bloqueo por margen: es un skip por dato fresco).
- *  2) Por cada variación mapeada compara el neto contra el precio web. Si alguna queda >5% por
- *     debajo (veredicto 'bajo') devuelve el detalle del bloqueo.
+ *  2) Por cada variación mapeada compara el neto contra el precio web (evaluarNetoVariaciones,
+ *     evalúa TODAS, no corta en la primera). Si alguna queda >5% por debajo (veredicto 'bajo')
+ *     devuelve el detalle del bloqueo de cada una.
  *
  * Devuelve:
- *  - null  → seguir adelante con la reactivación.
+ *  - null  → seguir adelante con la reactivación (todavía falta la revalidación previa al PUT,
+ *    ver reactivarItems).
  *  - { omitido: true, motivo } → omitir sin error (revalidación de estado en vivo).
- *  - { error, ... } → bloqueo (por neto o fail-closed).
+ *  - { error, ... } → bloqueo fail-closed puntual (sin precio web / sin comisión).
+ *  - { bloqueos: [...] } → una o más variaciones con neto bajo.
  *
  * Bloquea también (fail-closed) si no se pudo consultar el item en ML, si falta el precio web
  * mapeado o si no se pudo calcular la comisión: sin esos datos no hay forma de verificar el
@@ -1080,11 +1144,15 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
  * quedó AUSENTE de la respuesta del multiget (chunk fallido o item inaccesible): se trata
  * fail-closed, igual que un GET individual que hubiera fallado.
  *
- * Revalida SIEMPRE en vivo contra ML (paso 5): netoMl se llama con
- * `saltarCachePersistente: true`, así que aunque `ml_precios_cache` tenga una fila fresca de
- * comisión/envío, esta verificación previa al PUT de activación no la usa — son poquísimas
- * publicaciones (las que de verdad se van a reactivar), el costo es despreciable y protege la
- * regla de no vender por debajo del margen con el dato más nuevo posible.
+ * Screening con caché (FOCO, decisión del orquestador 2026-08-06): esta función es el
+ * "cribado" barato que corre para TODO el lote (incluidas publicaciones que van a quedar
+ * bloqueadas o que ni siquiera se van a reactivar), así que llama a evaluarNetoVariaciones
+ * SIN `saltarCachePersistente` — usa `ml_precios_cache` normalmente. La revalidación en vivo
+ * (saltando esa caché) queda acotada a `reactivarItems`, JUSTO ANTES del PUT de activación,
+ * y solo para las publicaciones que de verdad van a reactivarse (ver ahí). Antes esta misma
+ * función forzaba `saltarCachePersistente: true` para el lote entero, así que la caché
+ * persistente solo se ESCRIBÍA y nunca se LEÍA en este camino — desviación del plan original
+ * (que acotaba el salteo a "las que van a reactivarse de verdad").
  */
 // Mensaje exacto del bloqueo "sin precio web mapeado" (precioWebClave devolvió null: SKU sin
 // regular_price, típicamente el catálogo todavía no se refrescó tras un reinicio). Constante
@@ -1114,35 +1182,9 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, item, opts 
     return { omitido: true, motivo: 'Pausada manualmente por el vendedor, se omitió por seguridad', cacheStatus: 'paused', cacheSubStatus: subStatus };
   }
 
-  const freeShipping = !!item.shipping?.free_shipping;
-  const caches = { fee: new Map(), envio: new Map() };
-
-  for (const v of variaciones) {
-    const precioWeb = precioWebClave(db, v.clave);
-    if (!(precioWeb > 0)) {
-      return { error: MOTIVO_SIN_PRECIO_WEB, clave: v.clave, neto: null, precio_web: null, deficitPct: null };
-    }
-    let precio = item.price ?? null;
-    if (v.variation_id) {
-      const vv = (item.variations || []).find(x => String(x.id) === String(v.variation_id));
-      if (vv && vv.price != null) precio = vv.price;
-    }
-    const { neto } = await netoMl(db, mlCfg, {
-      itemId, price: precio, categoryId: item.category_id,
-      listingTypeId: item.listing_type_id, freeShipping,
-    }, caches, { ...opts, saltarCachePersistente: true });
-    if (neto == null) {
-      return { error: 'No se pudo calcular la comisión en ML — reintentá', clave: v.clave, neto: null, precio_web: precioWeb, deficitPct: null };
-    }
-    const { estado, deficitPct } = veredictoNeto(neto, precioWeb);
-    if (estado === 'bajo') {
-      // precio_ml viaja en el bloqueo para que reactivarAutomatico lo persista en
-      // ml_reactivacion_frenada.precio_ml_evaluado (paso 4: insumo para decidir localmente,
-      // sin ML, si una frenada sigue vigente en el próximo ciclo).
-      return { error: 'El neto de ML queda por debajo del precio web', clave: v.clave, neto, precio_web: precioWeb, deficitPct, precio_ml: precio };
-    }
-  }
-  return null;
+  // Screening: usa la caché persistente de comisión/envío si está fresca (sin forzar
+  // saltarCachePersistente). La revalidación en vivo va en reactivarItems, justo antes del PUT.
+  return evaluarNetoVariaciones(db, mlCfg, itemId, item, variaciones, opts);
 }
 
 /**
@@ -1177,13 +1219,21 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
   const chunks = [];
   for (let i = 0; i < itemIdsLote.length; i += MULTIGET_CHUNK) chunks.push(itemIdsLote.slice(i, i + MULTIGET_CHUNK));
   await mapConLimite(chunks, ML_CONCURRENCIA_MAX, async (chunk) => {
-    const resp = await mlFetch(
-      db, mlCfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`,
-      null, opts
-    );
-    if (resp.status === 200 && Array.isArray(resp.data)) {
-      for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+    try {
+      const resp = await mlFetch(
+        db, mlCfg, 'get',
+        `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`,
+        null, opts
+      );
+      if (resp.status === 200 && Array.isArray(resp.data)) {
+        for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+      }
+    } catch (e) {
+      // Igual criterio que evaluarPreciosReactivables: mlFetch puede lanzar por timeout/error
+      // de red de axios (no por status HTTP). Si UN chunk lanza, no debe tumbar el lote
+      // completo — los itemIds de este chunk quedan ausentes de `items` y
+      // chequearNetoReactivar los trata fail-closed (item === undefined).
+      console.error(`reactivarItems: multiget falló para un chunk: ${e.message}`);
     }
   });
 
@@ -1207,7 +1257,31 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
           for (const v of variaciones) refrescar.run(bloqueo.cacheStatus, bloqueo.cacheSubStatus, v.clave);
           return { item_id: itemId, ok: false, omitido: true, motivo: bloqueo.motivo };
         }
+        if (bloqueo.bloqueos) {
+          // Compat: los campos del PRIMER bloqueo se aplanan igual que antes (clave/neto/
+          // precio_web/deficitPct/precio_ml, consumidos por la UI y por tests existentes),
+          // más `bloqueos` con el detalle completo de TODAS las variaciones bloqueadas —
+          // reactivarAutomatico persiste frenada por cada una (IMPORTANTE 3).
+          return { item_id: itemId, ok: false, bloqueado: true, ...bloqueo.bloqueos[0], bloqueos: bloqueo.bloqueos };
+        }
         return { item_id: itemId, ok: false, bloqueado: true, ...bloqueo };
+      }
+
+      // 0.5) Revalidación en vivo JUSTO ANTES del PUT de activación (FOCO, separación
+      //      screening/revalidación): el screening de arriba (chequearNetoReactivar) pudo usar
+      //      la caché persistente de comisión/envío. Acá, para la publicación que de verdad va
+      //      a reactivarse, se recalcula el neto de TODAS sus variaciones con
+      //      `saltarCachePersistente: true` — dato lo más nuevo posible, fail-closed: si la
+      //      consulta falla o el veredicto ahora da 'bajo', NO se activa. Son pocas
+      //      publicaciones (solo las que pasan el screening), así que el costo (+2 llamadas
+      //      por publicación reactivada) es despreciable frente a la protección de no vender
+      //      por debajo del margen con datos de minutos atrás.
+      const revalidacion = await evaluarNetoVariaciones(db, mlCfg, itemId, items.get(itemId), variaciones, { ...opts, saltarCachePersistente: true });
+      if (revalidacion) {
+        if (revalidacion.bloqueos) {
+          return { item_id: itemId, ok: false, bloqueado: true, ...revalidacion.bloqueos[0], bloqueos: revalidacion.bloqueos };
+        }
+        return { item_id: itemId, ok: false, bloqueado: true, ...revalidacion };
       }
 
       // 1) Empujar stock de cada variación con stock web disponible (en orden dentro del item)
@@ -1283,9 +1357,19 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
  * corrección de esta función.
  */
 // Red de seguridad del paso 4: aunque nada haya cambiado en las dos columnas locales, una
-// frenada se re-evalúa igual pasadas 24h desde detectado_en (puede haber cambiado la comisión
+// frenada se re-evalúa igual pasadas 2h desde detectado_en (puede haber cambiado la comisión
 // o el envío de ML, que no vivimos en esta tabla).
-const VENTANA_REVALIDACION_FRENADA_MS = 24 * 60 * 60 * 1000;
+//
+// Bajada de 24h a 2h (hallazgo del revisor, BLOQUEANTE 1): la premisa original de que
+// `ml_publicaciones_cache.precio` "se refresca por crons que corren igual" es falsa — la
+// única escritura de esa columna es el refresco MANUAL del matcher, más el fix puntual que
+// ahora hace POST /api/precios/actualizar-precio al corregir un precio (ver routes/precios.js).
+// Sin la ventana corta, una frenada por precio de ML desactualizado por cualquier otra vía
+// podía quedar bloqueada hasta 24h sin ningún rastro en el log. Con ~24 publicaciones frenadas
+// hoy, re-chequear cada 2h son ~12 multiget/día más comisión y envío de las que de verdad se
+// reactivan — dos órdenes de magnitud menos que las 5.000-8.000 llamadas/día que motivaron
+// este cambio, y el presupuesto de lib/mlLimites.js lo aguanta de sobra.
+const VENTANA_REVALIDACION_FRENADA_MS = 2 * 60 * 60 * 1000;
 
 export async function reactivarAutomatico(db, cfg) {
   if (!mlCfgOk(cfg)) return { omitido: true };
@@ -1324,14 +1408,20 @@ export async function reactivarAutomatico(db, cfg) {
     const ahoraMs = Date.now();
 
     // Paso 4 (ahorro-llamadas-ml): decidir SIN pegarle a ML si una fila reactivable necesita
-    // re-consultarse. Precio ML y precio web ya están en la base local, refrescados por otros
-    // crons — no hace falta gastar una llamada para saber si el veredicto de una frenada
-    // pudo haber cambiado.
+    // re-consultarse. Precio ML y precio web ya están en la base local — no hace falta gastar
+    // una llamada para saber si el veredicto de una frenada pudo haber cambiado.
+    //
+    // OJO (hallazgo del revisor, BLOQUEANTE 1): `ml_publicaciones_cache.precio` NO se refresca
+    // por ningún cron — solo por el refresco manual del matcher y, ahora, por el fix puntual
+    // en POST /actualizar-precio (routes/precios.js) que la actualiza en el momento en que el
+    // operador corrige el precio en ML. Sin ese fix esta columna podía quedar desactualizada
+    // en masa y la comparación de abajo perdía sentido; con él, más la ventana de red de
+    // seguridad bajada a 2h, el riesgo de frenada fantasma queda acotado.
     function necesitaRecheck(row) {
       const frenada = frenadasPorClave.get(row.clave);
       if (!frenada) return true; // candidata nueva, o ya no tiene frenada vigente
       const edadMs = ahoraMs - new Date(frenada.detectado_en).getTime();
-      if (!(edadMs >= 0) || edadMs > VENTANA_REVALIDACION_FRENADA_MS) return true; // red de seguridad 24h
+      if (!(edadMs >= 0) || edadMs > VENTANA_REVALIDACION_FRENADA_MS) return true; // red de seguridad 2h
       // Precio web nulo (regular_price vacío, ej. tras reinicio antes del refresco de
       // catálogo): AMBIGUO, no se puede afirmar "cambió" ni "no cambió" — se reevalúa contra
       // ML, que cae sola en MOTIVO_SIN_PRECIO_WEB sin persistir frenada (fail-closed, no
@@ -1339,7 +1429,13 @@ export async function reactivarAutomatico(db, cfg) {
       const precioWebActual = precioWebClave(db, row.clave);
       if (precioWebActual == null) return true;
       if (precioWebActual !== frenada.precio_web_evaluado) return true;
+      // Mismo criterio que el precio web (hallazgo del revisor, BLOQUEANTE 2): `null !== null`
+      // da `false` en JS, así que sin esta guarda un precio ML "no sé" (columna NULL) se leía
+      // como "no cambió" y saltaba el recheck sin ninguna base real para esa decisión — la
+      // columna puede estar NULL en masa por el motivo de arriba, así que sin esto toda la
+      // protección del paso 4 se apoyaba en comparar una columna vacía contra sí misma.
       const precioMlActual = precioMlDeClave.get(row.clave)?.precio ?? null;
+      if (precioMlActual == null || frenada.precio_ml_evaluado == null) return true;
       if (precioMlActual !== frenada.precio_ml_evaluado) return true;
       return false;
     }
@@ -1384,9 +1480,30 @@ export async function reactivarAutomatico(db, cfg) {
         continue;
       }
       if (r.error === MOTIVO_SIN_PRECIO_WEB) sinPrecioWeb++;
-      // Solo el bloqueo por neto bajo trae deficitPct. Los demás (ML caído, sin precio web)
-      // no son frenadas de precio: se reintentan solos, sin ensuciar la lista.
-      if (r.bloqueado && r.deficitPct != null && r.clave) {
+      // IMPORTANTE 3 (hallazgo del revisor): un item multi-variación puede traer varios
+      // bloqueos por neto bajo (uno por variación), no uno solo — evaluarNetoVariaciones ya
+      // no corta en la primera. Persistir frenada por CADA variación bloqueada es lo que
+      // evita que el item entero vuelva a re-consultarse en cada corrida para siempre (la
+      // variación sin frenada nunca satisfacía necesitaRecheck).
+      if (r.bloqueado && Array.isArray(r.bloqueos)) {
+        for (const b of r.bloqueos) {
+          if (b.deficitPct == null || !b.clave) continue;
+          frenadas++;
+          guardarFrenada.run({
+            clave: b.clave,
+            sku: skuDeClave.get(b.clave)?.sku ?? null,
+            motivo: b.error,
+            neto: b.neto ?? null,
+            precio_contado: b.precio_web ?? null,
+            deficit_pct: b.deficitPct,
+            detectado_en: ts,
+            precio_ml_evaluado: b.precio_ml ?? null,
+            precio_web_evaluado: b.precio_web ?? null,
+          });
+        }
+      } else if (r.bloqueado && r.deficitPct != null && r.clave) {
+        // Solo el bloqueo por neto bajo trae deficitPct. Los demás (ML caído, sin precio web)
+        // no son frenadas de precio: se reintentan solos, sin ensuciar la lista.
         frenadas++;
         guardarFrenada.run({
           clave: r.clave,

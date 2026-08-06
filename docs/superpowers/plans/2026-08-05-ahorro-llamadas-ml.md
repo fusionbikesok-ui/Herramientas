@@ -36,8 +36,19 @@ El consumo real es `reactivarAutomatico`, y tiene tres derroches independientes:
 3. **Re-evalúa contra ML publicaciones cuyo veredicto no puede haber cambiado.** Las 24 frenadas
    lo están *por precio*. Ese veredicto solo cambia si se mueve el precio web
    (`catalogo_cache.regular_price`) o el de ML (`ml_publicaciones_cache.precio`) — **ambos ya
-   están en la base local**, refrescados por crons que corren igual. Se puede decidir a quién
-   consultar sin gastar una sola llamada.
+   están en la base local**. Se puede decidir a quién consultar sin gastar una sola llamada.
+
+   **CORRECCIÓN (revisor, 2026-08-06): la premisa "ambos refrescados por crons que corren
+   igual" es FALSA para el precio de ML.** `ml_publicaciones_cache.precio` NO tiene ningún
+   cron que la refresque — la única escritura es `prepararUpsertCache` en
+   `routes/matcher.js`, disparada solo por el refresco MANUAL del matcher
+   (`POST /api/matcher/refrescar-ml`). Consecuencia real: el operador corrige el precio en ML
+   justo cuando la herramienta le avisa que está frenado (incluso desde el botón de la propia
+   app, `POST /api/precios/actualizar-precio`), pero esa columna no cambiaba y la comparación
+   del paso 4 leía "no cambió" — la reactivación quedaba sin efecto hasta la red de seguridad
+   de 24h, sin error ni rastro. Corregido con dos mitigaciones (ver paso 4): (a) el propio
+   `POST /actualizar-precio` ahora actualiza esa columna y borra la frenada en el momento en
+   que el sistema sabe que el precio cambió; (b) la red de seguridad bajó de 24h a 2h.
 
 ## Decisiones del usuario (2026-08-05)
 
@@ -127,8 +138,23 @@ web actual (`catalogo_cache.regular_price` vía `precioWebClave`) y el precio de
 - **Cambió alguno**, o **no hay frenada registrada** (candidata nueva) → entra al lote que va a ML.
 
 **Red de seguridad (obligatoria):** aunque nada haya cambiado, una frenada debe re-evaluarse
-igual si pasaron más de **24 h** desde `detectado_en`. Cubre el caso de que el veredicto haya
-cambiado por algo que no está en nuestras dos columnas (comisión de ML, costo de envío).
+igual si pasaron más de **2 h** desde `detectado_en` (bajado de 24h a 2h por el hallazgo de la
+premisa falsa de arriba: mientras el precio de ML no tuviera ningún otro camino de
+actualización, 24h de bloqueo silencioso era demasiado riesgo). Cubre el caso de que el
+veredicto haya cambiado por algo que no está en nuestras dos columnas (comisión de ML, costo
+de envío), y actúa como segunda red por si el fix de `POST /actualizar-precio` no cubre la vía
+por la que cambió el precio (ej. lo cambiaron directo desde la app de ML, sin pasar por acá).
+
+**Cierre del agujero en el origen:** además de la ventana de 2h, `POST /api/precios/actualizar-precio`
+(`routes/precios.js`) actualiza `ml_publicaciones_cache.precio` y borra la fila de
+`ml_reactivacion_frenada` de esa clave inmediatamente después de un PUT a ML exitoso — es el
+punto exacto donde el sistema sabe que el precio cambió. Fail-open respecto del PUT (no debe
+fallar la respuesta al usuario por esto), con log si falla.
+
+**Comparación fail-closed simétrica:** un precio de ML NULL (columna nunca refrescada) debe
+tratarse igual que un precio web NULL — "no sé" no es "no cambió". `null !== null` da `false`
+en JS, así que la comparación necesita una guarda explícita (`precioMlActual == null ||
+frenada.precio_ml_evaluado == null → reevaluar`), no una comparación directa.
 
 **Ojo con el modo de falla mudo ya documentado** (`server.js:213-215`): si este cron corre antes
 que el de catálogo tras un reinicio, `catalogo_cache.regular_price` puede estar vacío. Un precio
@@ -139,17 +165,30 @@ ya existente de `MOTIVO_SIN_PRECIO_WEB`, que no persiste frenada y se reintenta 
 (entra), cambió el precio ML (entra), frenada de más de 24 h (entra igual). Más el caso de
 `regular_price` nulo, que no debe romper ni contaminar la comparación.
 
-## Paso 5 — Revalidación en vivo antes de activar
+## Paso 5 — Revalidación en vivo antes de activar (separada del screening)
 
-**Archivo:** `routes/sync.js` (`reactivarItems`)
+**Archivo:** `routes/sync.js` (`chequearNetoReactivar`, `evaluarNetoVariaciones`, `reactivarItems`)
 
 El PUT que activa la publicación debe seguir precedido de una verificación de margen con datos
-**frescos de ML**, no de caché: para las publicaciones que van a reactivarse de verdad (las que
-pasaron el filtro), la comisión y el envío se consultan salteando la caché de sqlite.
+**frescos de ML**, no de caché — pero **solo para las publicaciones que de verdad se van a
+reactivar**, no para todo el lote que se está cribando.
 
-Son poquísimas (las que efectivamente se reactivan), así que el costo es despreciable y protege
-la regla de negocio: nunca vender por debajo del margen. **Fail-closed**: si esa consulta falla,
-no se reactiva.
+**CORRECCIÓN (revisor, 2026-08-06):** la primera implementación de este paso pasaba
+`saltarCachePersistente: true` para TODAS las publicaciones del lote (el screening entero), no
+solo las que se activan — la caché persistente del paso 2 solo se ESCRIBÍA y nunca se LEÍA en
+este camino, desviación de lo que dice este mismo documento arriba. Corregido separando dos
+funciones:
+
+- `evaluarNetoVariaciones` (screening, se llama para TODO el lote vía `chequearNetoReactivar`):
+  usa la caché persistente normalmente (sin forzar el salteo).
+- `reactivarItems`: justo antes del PUT de activación de una publicación que pasó el screening,
+  vuelve a llamar a `evaluarNetoVariaciones` con `saltarCachePersistente: true` — revalidación
+  en vivo real, con el dato más nuevo posible.
+
+Costo: +2 llamadas por publicación que de verdad se reactiva (poquísimas), y de yapa cierra una
+ventana que no existía antes: sin este paso, no había ninguna verificación entre que se arma el
+screening y el PUT — si el lote es grande pueden pasar segundos o minutos entre uno y otro.
+**Fail-closed**: si la revalidación falla o el veredicto da 'bajo', no se activa.
 
 **Aceptación:** test de que en el camino de reactivación real se consulta ML aunque la caché esté
 fresca, y de que un fallo de esa consulta impide el PUT de activación.
