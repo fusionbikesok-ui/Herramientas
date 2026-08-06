@@ -197,14 +197,8 @@ describe('lib/matcherPush', () => {
     seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
     seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
 
-    // La verificación previa (paso 1) hace un GET multiget antes del PUT: se resuelve al
-    // toque para no bloquear ahí, y solo el PUT (que es lo que queremos que quede "en curso")
-    // se cuelga hasta que el test lo libera.
     let resolverPrimera;
-    axios.request.mockImplementation((config) => {
-      if (config?.method === 'get') return Promise.resolve(respOk());
-      return new Promise(res => { resolverPrimera = res; });
-    });
+    axios.request.mockImplementation(() => new Promise(res => { resolverPrimera = res; }));
 
     const p1 = pushSkusPendientes(db, ML_CFG);
     // Da tiempo a que la primera corrida marque running=true antes de lanzar la segunda
@@ -287,10 +281,7 @@ describe('lib/matcherPush', () => {
         seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
       }
 
-      axios.request.mockImplementation((config) => {
-        if (config?.method === 'get') return Promise.resolve({ status: 200, headers: {}, data: [] });
-        return Promise.resolve(respOk());
-      });
+      axios.request.mockResolvedValue(respOk());
 
       const r = await pushSkusPendientes(db, ML_CFG, { limite: 1000, cuotaPausadas: null });
 
