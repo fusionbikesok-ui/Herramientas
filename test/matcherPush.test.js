@@ -267,6 +267,115 @@ describe('lib/matcherPush', () => {
       expect(r.errores).toBe(0);
       expect(contarPendientes(db).total).toBe(90); // 100 - 10 pausadas escritas; las 5 activas ya no quedan pendientes
     }, 15000);
+
+    it('una pausada que falla con backoff (fail-closed) consume su cupo de cuota igual que una exitosa', async () => {
+      for (let i = 0; i < 100; i++) {
+        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+      }
+
+      axios.request.mockResolvedValue(resp400('publicación con restricciones'));
+      const r = await pushSkusPendientes(db, ML_CFG, { limite: 1000, cuotaPausadas: 10 });
+
+      // Las 10 pausadas de la cuota fallaron con backoff: consumieron su cupo igual, y
+      // pasan a "en espera" (backoff futuro), por lo que salen de `pausadas` en contarPendientes.
+      expect(r.errores).toBe(10);
+      expect(r.escritos).toBe(0);
+      const conteo = contarPendientes(db);
+      expect(conteo.pausadas).toBe(90);
+      expect(conteo.enEspera).toBe(10);
+      expect(conteo.total).toBe(90);
+    }, 15000);
+
+    it('una corrida cortada por 429 (fail-open) consume el cupo de la tanda seleccionada sin dejar la cuota en un estado raro', async () => {
+      for (let i = 0; i < 100; i++) {
+        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+      }
+
+      axios.request.mockResolvedValue(resp429());
+      const r = await pushSkusPendientes(db, ML_CFG, { limite: 1000, cuotaPausadas: 10 });
+
+      expect(r.cortado_por_rate_limit).toBe(true);
+      expect(r.escritos).toBe(0);
+      expect(r.errores).toBe(0);
+      const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
+      expect(fallos).toBe(0); // fail-open: nada de backoff
+      // Nada se escribió (ML nunca respondió sano): las 100 siguen pendientes para el
+      // próximo ciclo, y la cuota gastada en esta corrida (que cortó) no deja rastros que
+      // afecten la próxima corrida (cuotaRestante es local a cada llamada).
+      expect(contarPendientes(db).total).toBe(100);
+    }, 15000);
+
+    it('una corrida cortada por status 0 (fail-open, config/red) tampoco deja la cuota en un estado raro', async () => {
+      for (let i = 0; i < 100; i++) {
+        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+      }
+
+      // cfg sin clientId → status 0 antes de hablar con ML
+      const r = await pushSkusPendientes(db, { userId: '99999' }, { limite: 1000, cuotaPausadas: 10 });
+
+      expect(r.cortado_por_error).toBe(true);
+      expect(r.escritos).toBe(0);
+      const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
+      expect(fallos).toBe(0);
+      expect(contarPendientes(db).total).toBe(100);
+    });
+
+    it('cortado_por_cuota es true cuando la cuota se agota y quedan pausadas sin procesar', async () => {
+      for (let i = 0; i < 100; i++) {
+        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+      }
+
+      axios.request.mockResolvedValue(respOk());
+      const r = await pushSkusPendientes(db, ML_CFG, { limite: 1000, cuotaPausadas: 10 });
+
+      expect(r.escritos).toBe(10);
+      expect(r.cortado_por_cuota).toBe(true);
+    }, 15000);
+
+    it('cortado_por_cuota es false cuando la corrida vacía toda la cola de pausadas disponible', async () => {
+      for (let i = 0; i < 10; i++) {
+        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+      }
+
+      axios.request.mockResolvedValue(respOk());
+      const r = await pushSkusPendientes(db, ML_CFG, { limite: 1000, cuotaPausadas: 10 });
+
+      expect(r.escritos).toBe(10);
+      expect(contarPendientes(db).total).toBe(0);
+      expect(r.cortado_por_cuota).toBe(false);
+    }, 15000);
+
+    it('una clave saltada por idempotencia (caché refrescada por otro proceso) cuenta en "saltados", no en "escritos"', async () => {
+      // A2 se seedea primero (queda con timestamp más viejo) y A1 después (más nuevo), para
+      // que el ORDER BY ... DESC procese A1 primero dentro del grupo de activas.
+      seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
+      seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
+      seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+
+      let llamados = 0;
+      axios.request.mockImplementation(async () => {
+        llamados++;
+        if (llamados === 1) {
+          // Simula un refresco de caché concurrente (POST /refrescar-ml) que deja la
+          // caché de A2 al día con el SKU que le íbamos a escribir, antes de que le
+          // llegue su turno en esta misma corrida.
+          db.prepare('UPDATE ml_publicaciones_cache SET seller_sku = ? WHERE clave = ?').run('FB-2', 'A2|');
+        }
+        return respOk();
+      });
+
+      const r = await pushSkusPendientes(db, ML_CFG);
+
+      expect(r.escritos).toBe(1); // solo A1 generó un PUT real
+      expect(r.saltados).toBe(1); // A2 se saltó por idempotencia
+      expect(r.errores).toBe(0);
+    });
   });
 
   // --- Coherencia: manual ignora la cuota, contarPendientes refleja la cola real ---
