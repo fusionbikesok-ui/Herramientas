@@ -16,7 +16,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { reconciliarStockMl, syncRouter } from '../routes/sync.js';
+import { reconciliarStockMl, syncWcToMl, syncRouter } from '../routes/sync.js';
 
 vi.mock('../lib/mlClient.js', () => ({
   mlFetch: vi.fn(),
@@ -407,6 +407,86 @@ describe('reconciliarStockMl', () => {
     // cantidad finita), aunque el UPDATE no haya escrito nada.
     const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
     expect(cursor.valor).toBe('MLA990|');
+  });
+
+  it('cadena completa (el bug real): reconciliación sube el estado a 1 (lo que ML tenía) y la corrida siguiente de syncWcToMl empuja el stock real de Woo (0) a ML', async () => {
+    seedPublicacion(db, { clave: 'MLA1117110786|', itemId: 'MLA1117110786', sku: 'FB-4501', cantidadMl: 0 });
+    const nowIso = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(500, 'Producto FB-4501', 'FB-4501', 'simple', null, 0, nowIso);
+
+    mlFetch.mockImplementation(async (dbArg, cfgArg, method, path) => {
+      if (method === 'get' && path.includes('/items?ids=')) {
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA1117110786', status: 'active', available_quantity: 1 } }] };
+      }
+      return { status: 200, data: {} }; // PUT de syncWcToMl
+    });
+
+    const r = await correr(db, CFG);
+    expect(r.corregidas).toBe(1);
+    let estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA1117110786|'").get();
+    expect(estado.cantidad_ml).toBe(1); // reconciliación dejó el estado igual a lo que ML tenía
+
+    // Corrida siguiente: syncWcToMl ve deseado(Woo=0) != recordado(1) -> diff real -> empuja 0 a ML.
+    const p = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(mlFetch).toHaveBeenCalledWith(db, CFG.ml, 'put', '/items/MLA1117110786', { available_quantity: 0 });
+    estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA1117110786|'").get();
+    expect(estado.cantidad_ml).toBe(0);
+  });
+
+  it('la pausa entre chunks se aplica de verdad: no antes del primer chunk, sí antes del segundo, no después del último', async () => {
+    seedUniversoGrande(db, 25); // 25 itemIds únicos -> 2 chunks (20 + 5)
+    mlFetch.mockImplementation(async (dbArg, cfgArg, method, path) => {
+      const ids = path.match(/ids=([^&]+)/)[1].split(',');
+      return { status: 200, data: ids.map(id => ({ code: 200, body: { id, status: 'active', available_quantity: 1 } })) };
+    });
+
+    const p = reconciliarStockMl(db, CFG);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mlFetch).toHaveBeenCalledTimes(1); // primer chunk sale sin esperar pausa previa
+
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(mlFetch).toHaveBeenCalledTimes(1); // todavía no se cumplió la pausa de 1500ms
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mlFetch).toHaveBeenCalledTimes(2); // segundo chunk recién ahora
+
+    await vi.runAllTimersAsync();
+    const r = await p;
+    expect(mlFetch).toHaveBeenCalledTimes(2); // sin pausa (ni tercer chunk) después del último
+    expect(r.revisadas).toBe(25);
+  });
+
+  describe('universo: filas con status distinto de "active" en la caché local', () => {
+    it('con cantidad_ml > 0 (falso negativo peligroso) SÍ entra al universo, y se saltea sin tocar el estado si ML confirma que sigue no-activa', async () => {
+      seedPublicacion(db, { clave: 'MLA850|', itemId: 'MLA850', sku: 'CASCO-Z', cantidadMl: 2, status: 'paused' });
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA850', status: 'paused', available_quantity: 2 } }],
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(mlFetch).toHaveBeenCalled(); // se consultó pese a que la caché local dice "paused"
+      expect(r.revisadas).toBe(1);
+      expect(r.corregidas).toBe(0); // ML confirma que sigue sin estar activa: se saltea sin corregir
+      const estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA850|'").get();
+      expect(estado.cantidad_ml).toBe(2);
+    });
+
+    it('con cantidad_ml = 0 queda FUERA del universo (nada que vender, nada que reconciliar) y ni siquiera se consulta a ML', async () => {
+      seedPublicacion(db, { clave: 'MLA851|', itemId: 'MLA851', sku: 'CASCO-Y', cantidadMl: 0, status: 'closed' });
+
+      const r = await correr(db, CFG);
+
+      expect(r.revisadas).toBe(0);
+      expect(mlFetch).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /api/sync/reconciliar-stock', () => {
