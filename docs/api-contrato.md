@@ -129,6 +129,29 @@ Protegida por el candado `_wcToMlEnCurso`.
     lista; NO sincronizó.
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
 
+### POST /api/sync/reconciliar-stock
+Dispara manualmente un lote de la reconciliación incremental de stock contra ML real
+(`reconciliarStockMl`, cron cada 10 min en `:09`, ver `server.js`). Compara
+`ml_stock_estado.cantidad_ml` (lo que recordamos haber empujado) contra el `available_quantity`
+REAL de ML para publicaciones activas mapeadas, con multiget en chunks de 20 y pausa de
+~1.5s entre chunks (medido: ML devuelve 429 sin esa pausa). Corrige divergencias en
+`ml_stock_estado` en ambos sentidos y registra cada una en `sync_log` (`estado: 'reconciliado'`).
+
+**No escribe en ML.** La corrección real hacia ML la sigue haciendo `syncWcToMl` en su
+próxima corrida, por su camino ya probado.
+
+Fail-closed: si un item queda ausente del multiget, el status ya no es `active`, o la cantidad
+devuelta no es un número finito, esa fila de `ml_stock_estado` se deja intacta.
+
+Protegida por el candado `_reconciliarStockEnCurso`. Cursor circular persistido en
+`sync_estado` (clave `cursor_reconciliacion_stock`): cada corrida toma el siguiente lote de
+hasta 100 publicaciones y, al llegar al final del universo, vuelve a empezar.
+
+- Request: sin body.
+- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n> }`.
+  `omitido: true` cuando ya había una corrida en curso o falta config de ML — no revisó nada.
+- Response 500: `{ "ok": false, "error": "<mensaje>" }`.
+
 ### GET /api/sync/dashboard (campo agregado)
 Además de lo que ya devolvía, incluye:
 
