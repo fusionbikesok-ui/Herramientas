@@ -1082,20 +1082,48 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
  *  - { bloqueos: [...] } → una o más variaciones con veredicto 'bajo' (ninguna de las
  *    anteriores saltó fail-closed antes).
  */
+// Persiste en ml_publicaciones_cache.precio (+ precio_actualizado_en) el precio de ML ya
+// resuelto por el multiget de reactivarItems (ver evaluarNetoVariaciones). NO agrega ninguna
+// llamada a ML: el dato ya vino en la respuesta del /items?ids= que igual se hace para el
+// screening/revalidación. Cierra el bug medido 2026-08-06: las 30 filas de
+// ml_reactivacion_frenada tenían precio_ml_evaluado no nulo pero
+// ml_publicaciones_cache.precio en NULL (esa columna solo se llenaba desde el refresco MANUAL
+// del matcher o el fix puntual de /actualizar-precio), así que necesitaRecheck() forzaba
+// recheck SIEMPRE por la guarda `precioMlActual == null` y el ahorro del paso 4 nunca se
+// materializaba para ellas. Solo escribe si el precio es un número válido — si ML no lo
+// devolvió, se deja la columna como está (NULL o el valor previo), que es lo conservador:
+// necesitaRecheck sigue re-consultando esa clave hasta tener un dato confiable.
+function persistirPrecioMlCache(db, clave, precio) {
+  if (!(typeof precio === 'number') || !Number.isFinite(precio)) return;
+  try {
+    db.prepare('UPDATE ml_publicaciones_cache SET precio = ?, precio_actualizado_en = ? WHERE clave = ?')
+      .run(precio, now(), clave);
+  } catch (e) {
+    // Best-effort: si falla la escritura del caché, no se aborta la evaluación de neto (que
+    // ya tiene el precio en la mano) — solo se pierde el ahorro de la próxima corrida.
+    console.error(`persistirPrecioMlCache: no se pudo refrescar ${clave}:`, e.message);
+  }
+}
+
 async function evaluarNetoVariaciones(db, mlCfg, itemId, item, variaciones, opts = {}) {
   const freeShipping = !!item.shipping?.free_shipping;
   const caches = { fee: new Map(), envio: new Map() };
   const bloqueos = [];
 
   for (const v of variaciones) {
-    const precioWeb = precioWebClave(db, v.clave);
-    if (!(precioWeb > 0)) {
-      return { error: MOTIVO_SIN_PRECIO_WEB, clave: v.clave, neto: null, precio_web: null, deficitPct: null };
-    }
     let precio = item.price ?? null;
     if (v.variation_id) {
       const vv = (item.variations || []).find(x => String(x.id) === String(v.variation_id));
       if (vv && vv.price != null) precio = vv.price;
+    }
+    // Se persiste ANTES del chequeo de precio web y sin importar el veredicto de neto: el
+    // dato ya está resuelto acá y hay que guardarlo aunque la publicación termine bloqueada
+    // por neto bajo (es justo el caso de las 30 frenadas del bug) o falte el precio web.
+    persistirPrecioMlCache(db, v.clave, precio);
+
+    const precioWeb = precioWebClave(db, v.clave);
+    if (!(precioWeb > 0)) {
+      return { error: MOTIVO_SIN_PRECIO_WEB, clave: v.clave, neto: null, precio_web: null, deficitPct: null };
     }
     const { neto } = await netoMl(db, mlCfg, {
       itemId, price: precio, categoryId: item.category_id,

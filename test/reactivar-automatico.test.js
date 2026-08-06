@@ -549,4 +549,106 @@ describe('reactivarAutomatico', () => {
       expect(db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave='MLA1|'").get().status).toBe('paused');
     });
   });
+
+  // Fix del bug medido 2026-08-06: ml_publicaciones_cache.precio quedaba NULL para toda
+  // publicación que nunca pasó por el refresco manual del matcher, así que necesitaRecheck
+  // forzaba recheck SIEMPRE (guarda `precioMlActual == null`) y el ahorro del paso 4 nunca se
+  // materializaba. evaluarNetoVariaciones ahora persiste el precio ya resuelto por el
+  // multiget, sin ninguna llamada extra a ML.
+  describe('persistencia de ml_publicaciones_cache.precio (fix bug 2026-08-06)', () => {
+    it('tras una corrida con precio NULL, la columna queda con el precio devuelto por el multiget', async () => {
+      sembrarReactivable({ precioWc: 900000 }); // precio de contado alto: neto va a quedar bajo (frenada)
+      expect(db.prepare("SELECT precio FROM ml_publicaciones_cache WHERE clave='MLA1|'").get().precio).toBeNull();
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
+        return { status: 200, data: {} };
+      });
+
+      const r = await reactivarAutomatico(db, CFG);
+      expect(r.frenadas).toBe(1); // sigue bloqueada por neto bajo, igual que antes del fix
+      expect(db.prepare("SELECT precio FROM ml_publicaciones_cache WHERE clave='MLA1|'").get().precio).toBe(200000);
+    });
+
+    it('caso completo del bug: primera corrida con precio NULL consulta y persiste; segunda corrida sin cambios no llama a ML', async () => {
+      sembrarReactivable({ precioWc: 900000 });
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
+        return { status: 200, data: {} };
+      });
+
+      const r1 = await reactivarAutomatico(db, CFG);
+      expect(r1.frenadas).toBe(1);
+      expect(mlFetch).toHaveBeenCalled();
+      expect(db.prepare("SELECT precio FROM ml_publicaciones_cache WHERE clave='MLA1|'").get().precio).toBe(200000);
+
+      mlFetch.mockClear();
+      const r2 = await reactivarAutomatico(db, CFG);
+      expect(mlFetch).not.toHaveBeenCalled(); // el ahorro del paso 4 ahora sí se materializa
+      expect(r2.reactivadas).toBe(0);
+      expect(r2.frenadas).toBe(0); // no se re-evaluó nada: la frenada existente sigue vigente
+      expect(db.prepare('SELECT COUNT(*) n FROM ml_reactivacion_frenada').get().n).toBe(1);
+    });
+
+    it('si ML no devuelve precio para la clave, la columna sigue NULL y se sigue reevaluando', async () => {
+      sembrarReactivable({ precioWc: 900000 });
+      // El multiget devuelve el item SIN el campo price (respuesta anómala/parcial de ML).
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return respMultiget({ MLA1: { status: 'paused', sub_status: ['out_of_stock'], category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } })(path);
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
+        return { status: 200, data: {} };
+      });
+
+      await reactivarAutomatico(db, CFG);
+      expect(db.prepare("SELECT precio FROM ml_publicaciones_cache WHERE clave='MLA1|'").get().precio).toBeNull();
+
+      mlFetch.mockClear();
+      await reactivarAutomatico(db, CFG);
+      // Sin precio_ml persistido, necesitaRecheck sigue forzando recheck (comportamiento
+      // conservador intacto): no debe quedar en 0 llamadas como en el caso "sin cambios".
+      expect(mlFetch).toHaveBeenCalled();
+    });
+
+    it('variación vs ítem simple: se persiste el precio de la variación correcta, no el del ítem', async () => {
+      const sku1 = 'FB-VP1', sku2 = 'FB-VP2';
+      db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, regular_price, actualizado_en)
+        VALUES (10, 'Producto VP1', ?, 'simple', 3, 100000, 100000, '2026-07-30T00:00:00Z')`).run(sku1);
+      db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, regular_price, actualizado_en)
+        VALUES (11, 'Producto VP2', ?, 'simple', 3, 100000, 100000, '2026-07-30T00:00:00Z')`).run(sku2);
+      db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
+        VALUES ('MLA9|100', ?, 'Producto VP1', 'asignar', '2026-07-30T00:00:00Z')`).run(sku1);
+      db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
+        VALUES ('MLA9|200', ?, 'Producto VP2', 'asignar', '2026-07-30T00:00:00Z')`).run(sku2);
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA9|100', 'MLA9', '100', 'Pub VP1', 'paused', 'out_of_stock', 1, '2026-07-30T00:00:00Z')`).run();
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA9|200', 'MLA9', '200', 'Pub VP2', 'paused', 'out_of_stock', 1, '2026-07-30T00:00:00Z')`).run();
+
+      mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
+        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+          return respMultiget({
+            MLA9: {
+              status: 'paused', sub_status: ['out_of_stock'],
+              price: 999999, // precio "del ítem" (no debería quedar persistido para ninguna variación)
+              category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false },
+              variations: [{ id: 100, price: 150000 }, { id: 200, price: 250000 }],
+            },
+          })(path);
+        }
+        if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 10000 } };
+        return { status: 200, data: {} };
+      });
+
+      await reactivarAutomatico(db, CFG);
+      expect(db.prepare("SELECT precio FROM ml_publicaciones_cache WHERE clave='MLA9|100'").get().precio).toBe(150000);
+      expect(db.prepare("SELECT precio FROM ml_publicaciones_cache WHERE clave='MLA9|200'").get().precio).toBe(250000);
+    });
+  });
 });
