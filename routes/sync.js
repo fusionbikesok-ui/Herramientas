@@ -1073,22 +1073,30 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
  * mapeado o si no se pudo calcular la comisión: sin esos datos no hay forma de verificar el
  * margen, y dejar pasar la reactivación en ese caso anularía la protección en silencio. La
  * revalidación de estado es igual de fail-closed: si el GET falla, no reactivamos.
+ *
+ * `item` llega YA RESUELTO por el multiget de `reactivarItems` (paso 3 del plan
+ * ahorro-llamadas-ml: antes era un GET /items/{itemId} por publicación, ahora un solo
+ * /items?ids= en chunks de 20 para todo el lote). `item` es `undefined` si esa publicación
+ * quedó AUSENTE de la respuesta del multiget (chunk fallido o item inaccesible): se trata
+ * fail-closed, igual que un GET individual que hubiera fallado.
+ *
+ * Revalida SIEMPRE en vivo contra ML (paso 5): netoMl se llama con
+ * `saltarCachePersistente: true`, así que aunque `ml_precios_cache` tenga una fila fresca de
+ * comisión/envío, esta verificación previa al PUT de activación no la usa — son poquísimas
+ * publicaciones (las que de verdad se van a reactivar), el costo es despreciable y protege la
+ * regla de no vender por debajo del margen con el dato más nuevo posible.
  */
 // Mensaje exacto del bloqueo "sin precio web mapeado" (precioWebClave devolvió null: SKU sin
 // regular_price, típicamente el catálogo todavía no se refrescó tras un reinicio). Constante
 // compartida con reactivarAutomatico, que cuenta cuántas reactivaciones cayeron en este motivo
 // puntual para que el operador pueda distinguirlo de "no había nada que hacer" (ver server.js).
 const MOTIVO_SIN_PRECIO_WEB = 'Sin precio web mapeado para esta variación — no se puede verificar el margen';
-async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, opts = {}) {
-  const resp = await mlFetch(db, mlCfg, 'get',
-    `/items/${itemId}?attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`,
-    null, opts);
-  if (resp.status !== 200 || !resp.data) {
+async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, item, opts = {}) {
+  if (!item) {
     return { error: 'No se pudo consultar el precio en ML — reintentá', clave: null, neto: null, precio_web: null, deficitPct: null };
   }
-  const item = resp.data;
 
-  // 0) Revalidación de estado en vivo (mismo GET, sin llamada extra a ML).
+  // 0) Revalidación de estado en vivo (mismo multiget, sin llamada extra a ML).
   //    Fail-closed: si ML devolvió 200 pero sin el campo status (respuesta parcial/anómala),
   //    no lo tratamos como skip benigno — bloqueamos, porque no podemos afirmar que sigue pausada.
   if (item.status == null) {
@@ -1122,13 +1130,16 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, opts = {}) 
     const { neto } = await netoMl(db, mlCfg, {
       itemId, price: precio, categoryId: item.category_id,
       listingTypeId: item.listing_type_id, freeShipping,
-    }, caches, opts);
+    }, caches, { ...opts, saltarCachePersistente: true });
     if (neto == null) {
       return { error: 'No se pudo calcular la comisión en ML — reintentá', clave: v.clave, neto: null, precio_web: precioWeb, deficitPct: null };
     }
     const { estado, deficitPct } = veredictoNeto(neto, precioWeb);
     if (estado === 'bajo') {
-      return { error: 'El neto de ML queda por debajo del precio web', clave: v.clave, neto, precio_web: precioWeb, deficitPct };
+      // precio_ml viaja en el bloqueo para que reactivarAutomatico lo persista en
+      // ml_reactivacion_frenada.precio_ml_evaluado (paso 4: insumo para decidir localmente,
+      // sin ML, si una frenada sigue vigente en el próximo ciclo).
+      return { error: 'El neto de ML queda por debajo del precio web', clave: v.clave, neto, precio_web: precioWeb, deficitPct, precio_ml: precio };
     }
   }
   return null;
@@ -1155,6 +1166,27 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
     porItem.get(r.item_id).push(r);
   }
 
+  // Multiget de todos los items del lote de a MULTIGET_CHUNK (paso 3 del plan
+  // ahorro-llamadas-ml: antes era un GET /items/{itemId} por publicación dentro de
+  // chequearNetoReactivar; mismo patrón que evaluarPreciosReactivables). Un itemId AUSENTE
+  // de `items` (chunk fallido o item inaccesible) queda fail-closed dentro de
+  // chequearNetoReactivar, que trata `item === undefined` como "no se pudo consultar".
+  const MULTIGET_CHUNK = 20;
+  const itemIdsLote = [...porItem.keys()];
+  const items = new Map();
+  const chunks = [];
+  for (let i = 0; i < itemIdsLote.length; i += MULTIGET_CHUNK) chunks.push(itemIdsLote.slice(i, i + MULTIGET_CHUNK));
+  await mapConLimite(chunks, ML_CONCURRENCIA_MAX, async (chunk) => {
+    const resp = await mlFetch(
+      db, mlCfg, 'get',
+      `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`,
+      null, opts
+    );
+    if (resp.status === 200 && Array.isArray(resp.data)) {
+      for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+    }
+  });
+
   // Se procesan varias publicaciones EN PARALELO con concurrencia acotada (antes: una a una
   //  con sleep fijo entre requests). La paralelización es ENTRE publicaciones distintas: dentro
   //  de una misma publicación los PUTs de stock siguen yendo en orden y la activación va DESPUÉS
@@ -1162,10 +1194,11 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
   //  error): un fallo en una no frena ni afecta a las demás (fn captura su propio error).
   const resultados = await mapConLimite([...porItem], ML_CONCURRENCIA_MAX, async ([itemId, variaciones]) => {
     try {
-      // 0) Revalidación en vivo + bloqueo por neto (un solo GET del item). Omite si ya no está
-      //    pausada o si el vendedor la pausó manualmente; bloquea si el neto queda >5% por debajo
-      //    del precio web de alguna variación mapeada. Server-side (no confía en el cliente).
-      const bloqueo = await chequearNetoReactivar(db, mlCfg, itemId, variaciones, opts);
+      // 0) Revalidación en vivo + bloqueo por neto (dato del multiget de arriba, ninguna
+      //    llamada extra). Omite si ya no está pausada o si el vendedor la pausó manualmente;
+      //    bloquea si el neto queda >5% por debajo del precio web de alguna variación mapeada.
+      //    Server-side (no confía en el cliente).
+      const bloqueo = await chequearNetoReactivar(db, mlCfg, itemId, variaciones, items.get(itemId), opts);
       if (bloqueo) {
         if (bloqueo.omitido) {
           // Refrescar el caché local con el estado real de ML para sacarla de reactivables y
@@ -1249,6 +1282,11 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
  * ahora que es un cron periódico y no un click de usuario, es un supuesto que sostiene la
  * corrección de esta función.
  */
+// Red de seguridad del paso 4: aunque nada haya cambiado en las dos columnas locales, una
+// frenada se re-evalúa igual pasadas 24h desde detectado_en (puede haber cambiado la comisión
+// o el envío de ML, que no vivimos en esta tabla).
+const VENTANA_REVALIDACION_FRENADA_MS = 24 * 60 * 60 * 1000;
+
 export async function reactivarAutomatico(db, cfg) {
   if (!mlCfgOk(cfg)) return { omitido: true };
   if (_reactivarEnCurso) return { omitido: true };
@@ -1257,11 +1295,13 @@ export async function reactivarAutomatico(db, cfg) {
     const rows = getReactivablesRows(db);
 
     const guardarFrenada = db.prepare(`
-      INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
-      VALUES (@clave, @sku, @motivo, @neto, @precio_contado, @deficit_pct, @detectado_en)
+      INSERT INTO ml_reactivacion_frenada
+        (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en, precio_ml_evaluado, precio_web_evaluado)
+      VALUES (@clave, @sku, @motivo, @neto, @precio_contado, @deficit_pct, @detectado_en, @precio_ml_evaluado, @precio_web_evaluado)
       ON CONFLICT(clave) DO UPDATE SET
         motivo=excluded.motivo, neto=excluded.neto, precio_contado=excluded.precio_contado,
-        deficit_pct=excluded.deficit_pct, detectado_en=excluded.detectado_en
+        deficit_pct=excluded.deficit_pct, detectado_en=excluded.detectado_en,
+        precio_ml_evaluado=excluded.precio_ml_evaluado, precio_web_evaluado=excluded.precio_web_evaluado
     `);
     const borrarFrenada = db.prepare('DELETE FROM ml_reactivacion_frenada WHERE clave = ?');
     const skuDeClave = db.prepare('SELECT sku FROM sku_matcher_decisiones WHERE clave = ?');
@@ -1273,20 +1313,56 @@ export async function reactivarAutomatico(db, cfg) {
       return { omitido: false, reactivadas: 0, frenadas: 0, sin_precio_web: 0 };
     }
 
-    const clavesFrenadas = new Set(
-      db.prepare('SELECT clave FROM ml_reactivacion_frenada').all().map(f => f.clave)
+    const frenadasPorClave = new Map(
+      db.prepare(`
+        SELECT clave, precio_ml_evaluado, precio_web_evaluado, detectado_en
+        FROM ml_reactivacion_frenada
+      `).all().map(f => [f.clave, f])
     );
+    const clavesFrenadas = new Set(frenadasPorClave.keys());
+    const precioMlDeClave = db.prepare('SELECT precio FROM ml_publicaciones_cache WHERE clave = ?');
+    const ahoraMs = Date.now();
+
+    // Paso 4 (ahorro-llamadas-ml): decidir SIN pegarle a ML si una fila reactivable necesita
+    // re-consultarse. Precio ML y precio web ya están en la base local, refrescados por otros
+    // crons — no hace falta gastar una llamada para saber si el veredicto de una frenada
+    // pudo haber cambiado.
+    function necesitaRecheck(row) {
+      const frenada = frenadasPorClave.get(row.clave);
+      if (!frenada) return true; // candidata nueva, o ya no tiene frenada vigente
+      const edadMs = ahoraMs - new Date(frenada.detectado_en).getTime();
+      if (!(edadMs >= 0) || edadMs > VENTANA_REVALIDACION_FRENADA_MS) return true; // red de seguridad 24h
+      // Precio web nulo (regular_price vacío, ej. tras reinicio antes del refresco de
+      // catálogo): AMBIGUO, no se puede afirmar "cambió" ni "no cambió" — se reevalúa contra
+      // ML, que cae sola en MOTIVO_SIN_PRECIO_WEB sin persistir frenada (fail-closed, no
+      // contamina la comparación ni bloquea en silencio para siempre).
+      const precioWebActual = precioWebClave(db, row.clave);
+      if (precioWebActual == null) return true;
+      if (precioWebActual !== frenada.precio_web_evaluado) return true;
+      const precioMlActual = precioMlDeClave.get(row.clave)?.precio ?? null;
+      if (precioMlActual !== frenada.precio_ml_evaluado) return true;
+      return false;
+    }
+
+    const itemsConRecheck = new Set();
+    for (const r of rows) {
+      if (necesitaRecheck(r)) itemsConRecheck.add(r.item_id);
+    }
+
     // Primero los items SIN ninguna frenada registrada (candidatos reales a reactivarse),
     // después los que ya vienen frenados: así el lote (LOTE_MAX en reactivarItems) siempre
     // avanza sobre publicaciones nuevas en vez de reprocesar por siempre el mismo bloque.
-    const itemIds = [...new Set(rows.map(r => r.item_id))];
+    const itemIds = [...new Set(rows.map(r => r.item_id))].filter(id => itemsConRecheck.has(id));
     const itemTieneFrenada = new Map();
     for (const r of rows) {
       if (clavesFrenadas.has(r.clave)) itemTieneFrenada.set(r.item_id, true);
     }
     itemIds.sort((a, b) => (itemTieneFrenada.get(a) ? 1 : 0) - (itemTieneFrenada.get(b) ? 1 : 0));
 
-    const { resultados } = await reactivarItems(db, cfg.ml, itemIds);
+    // Sin nada que re-consultar: 0 llamadas a ML, todas las frenadas vigentes siguen igual.
+    const { resultados } = itemIds.length
+      ? await reactivarItems(db, cfg.ml, itemIds)
+      : { resultados: [] };
 
     let reactivadas = 0;
     let frenadas = 0;
@@ -1320,6 +1396,10 @@ export async function reactivarAutomatico(db, cfg) {
           precio_contado: r.precio_web ?? null,
           deficit_pct: r.deficitPct,
           detectado_en: ts,
+          // Insumos de la decisión (paso 4): permiten al próximo ciclo saltear la re-consulta
+          // a ML si ninguno de los dos cambió desde acá.
+          precio_ml_evaluado: r.precio_ml ?? null,
+          precio_web_evaluado: r.precio_web ?? null,
         });
       }
     }

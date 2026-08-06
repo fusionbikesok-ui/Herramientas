@@ -171,6 +171,21 @@ export function openDb(dbPath) {
     actualizado_en     TEXT NOT NULL
   )`); } catch (_) {}
 
+  // Caché persistente de comisión/envío de ML (ver migrations/004_ml_precios_cache.sql y
+  // lib/mlPrecios.js) — evita repetir listing_prices/shipping_options/free que dan siempre
+  // el mismo valor dentro de la ventana de vigencia (7 días, aplicado en código).
+  try { db.exec(`CREATE TABLE IF NOT EXISTS ml_precios_cache (
+    clave          TEXT PRIMARY KEY,
+    valor          REAL NOT NULL,
+    actualizado_en TEXT NOT NULL
+  )`); } catch (_) {}
+
+  // Insumos con los que se tomó la decisión de frenar una reactivación por precio (ver
+  // migrations/005_reactivacion_frenada_insumos.sql): permiten re-evaluar localmente sin
+  // pegarle a ML cuando ninguno de los dos precios cambió desde que se detectó la frenada.
+  try { db.exec('ALTER TABLE ml_reactivacion_frenada ADD COLUMN precio_ml_evaluado REAL'); } catch (_) {}
+  try { db.exec('ALTER TABLE ml_reactivacion_frenada ADD COLUMN precio_web_evaluado REAL'); } catch (_) {}
+
   // Store de sesiones (better-sqlite3-session-store crea su propia tabla 'sessions' al iniciar)
 
   return db;
