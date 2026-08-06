@@ -45,8 +45,9 @@ const ML_CONCURRENCIA_MAX = 4;
 
 // ── reconciliarStockMl: constantes ──────────────────────────────────────────
 // Tamaño del lote por corrida del cursor (5 multiget de a 20). Con un cron cada 10 min
-// el barrido completo de ~975 publicaciones activas tarda ~1h40m (ver plan
-// docs/superpowers/plans/2026-08-06-reconciliacion-stock-ml.md).
+// el barrido completo de ~1358 publicaciones (MEDIDO contra la base el 2026-08-06 con el
+// filtro p.status='active' OR e.cantidad_ml > 0; ver plan
+// docs/superpowers/plans/2026-08-06-reconciliacion-stock-ml.md) tarda ~2h16m.
 const RECONCILIACION_LOTE = 100;
 const RECONCILIACION_MULTIGET_CHUNK = 20;
 // MEDIDO el 2026-08-06 (no estimado): ML devuelve 429 tras 2-3 multiget consecutivos SIN
@@ -1062,9 +1063,11 @@ async function _reconciliarStockMl(db, cfg) {
   let corregidas = 0;
   let sinDato = 0;
   // Última clave del lote (en orden) que sí tuvo dato real de ML, sea o no divergente.
-  // El cursor solo puede avanzar hasta ahí (ver más abajo): las que quedaron sin dato
-  // (fail-closed, 429, chunk caído) no fueron efectivamente revisadas y deben reintentarse
-  // en la corrida siguiente, no saltearse una hora y media.
+  // El cursor solo puede avanzar hasta ahí (ver más abajo). Ojo (M2, revisor): esto solo
+  // garantiza que las filas sin dato al FINAL del lote se reintenten en la corrida
+  // siguiente. Las filas sin dato que quedan en el MEDIO del lote (ML no contestó ese
+  // chunk puntual, pero sí contestó chunks posteriores) se saltean igual y no vuelven a
+  // consultarse hasta que el cursor complete una vuelta entera y llegue de nuevo a ellas.
   let ultimaIdxConDato = -1;
   for (let i = 0; i < lote.length; i++) {
     const fila = lote[i];
@@ -1095,7 +1098,14 @@ async function _reconciliarStockMl(db, cfg) {
     // Fail-closed: solo se corrige con una cantidad numérica finita. Escribir acá un valor
     // equivocado (null, NaN, undefined) haría que syncWcToMl empuje stock equivocado A ML —
     // el peor resultado posible de este cambio.
-    if (!Number.isFinite(cantidadReal)) { sinDato++; continue; }
+    // Distinción clave (M1, revisor): esto NO es "ML no contestó" — el item existe y ML
+    // respondió 200, pero la variación puntual ya no está en item.variations (variación
+    // muerta) o available_quantity vino undefined. Es una condición estable que no va a
+    // cambiar por reintentar, a diferencia de un chunk caído o un 429 (transitorio). Si no
+    // avanzara el cursor acá, un lote entero de variaciones muertas lo dejaría clavado para
+    // siempre. Sigue sin escribir nada (fail-closed intacto) y sigue contando como sinDato
+    // para el aviso de más abajo.
+    if (!Number.isFinite(cantidadReal)) { sinDato++; ultimaIdxConDato = i; continue; }
 
     ultimaIdxConDato = i;
 
