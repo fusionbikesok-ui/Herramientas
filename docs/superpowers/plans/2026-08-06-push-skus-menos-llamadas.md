@@ -16,15 +16,12 @@ Medición real sobre la base de staging (2026-08-06):
 - Corresponden a **126 publicaciones distintas** (~4,5 variaciones por publicación).
 - `ml_publicaciones_cache.actualizado_en` es **`2026-07-30T21:57:20Z`** — 7 días de antigüedad.
 
-Tres derroches:
+Tres derroches identificados originalmente:
 
 1. **Escribe sin verificar.** El chequeo de idempotencia de `escribirSkuEnMl`
    (`lib/matcherPush.js:64-65`) compara contra `ml_publicaciones_cache.seller_sku`, columna que
    **solo se refresca a mano** (`prepararUpsertCache` en `routes/matcher.js`, disparado por
-   `POST /api/matcher/refrescar-ml`). Con la caché de hace 7 días no sabemos cuáles de los 561
-   le faltan realmente a ML: se pueden estar reescribiendo SKUs ya puestos, gastando un PUT por
-   cada uno. Es el mismo acoplamiento implícito que ya mordió con
-   `ml_publicaciones_cache.precio` (ver plan 2026-08-05, paso 4).
+   `POST /api/matcher/refrescar-ml`).
 2. **Un PUT por variación.** `escribirSkuEnMl` usa `/items/{id}/variations/{varId}`
    (`lib/matcherPush.js:67-69`), a propósito, para que ML no revalide la publicación entera. Con
    126 publicaciones y 561 variaciones, eso son 561 llamadas donde podrían ser 126.
@@ -33,114 +30,141 @@ Tres derroches:
    `CALL_DELAY_MS` = 350 ms → hasta ~850 PUT por corrida. El `ORDER BY` prioriza activas, pero
    nada limita cuánto presupuesto de ML se lleva el push frente al sync, que es lo que factura.
 
-## Decisiones del usuario (2026-08-06)
+## Descartados (2026-08-06, tras revisión + verificación contra ML real)
 
-- **Pausadas:** cuota chica por corrida. Las activas se escriben siempre y primero; las pausadas
-  avanzan de a poco, sin competir con el sync por el presupuesto de ML.
-- **Agrupar:** sí, un PUT por publicación con todas sus variaciones, **con fallback por variación**
-  cuando ML rechace el agrupado (típicamente porque revalida la publicación entera, ej. límite de
-  fotos).
+El `revisor` devolvió NO APROBADO (2 bloqueantes) sobre la primera implementación de los 4 pasos.
+Antes de corregirlos, se verificó el paso 1 contra la API real de ML y resultó inviable; el
+usuario decidió no seguir con el paso 2. Se eliminan ambos del alcance:
 
-## Criterio de aceptación global
+### Paso 1 descartado — verificación previa por multiget (NO viable)
 
-Vaciar la cola actual debe costar **~133 llamadas** (7 de verificación + ~126 de escritura
-agrupada) en vez de 561 reintentadas indefinidamente. Ningún SKU que ML no tenga puede quedar sin
-escribirse: el ahorro no puede convertirse en "escribir de menos".
+Evidencia contra ML real (`GET /items/{id}` e `/items/{id}/variations/{varId}` sobre
+`MLA885463683|66762882764`, seller_sku `FB-25180` real):
+
+- El multiget de un item (`variations` embebido) devuelve cada variación **sin ningún array
+  `attributes`** — ni siquiera pidiendo `attributes=id,status,variations,attributes` explícito.
+  Las claves reales de una variación ahí son `id, price, attribute_combinations,
+  available_quantity, sold_quantity, sale_terms, picture_ids, seller_custom_field,
+  catalog_product_id, inventory_id, item_relations, user_product_id` — el SELLER_SKU no está, y
+  `seller_custom_field` viene `null` aunque el SKU exista.
+- Solo el endpoint **puntual** `/items/{id}/variations/{varId}` devuelve `attributes` con el
+  SELLER_SKU real.
+
+Consecuencia: leer el SKU de una variación cuesta **1 llamada por variación**, exactamente las
+mismas que el PUT que se quería evitar — no hay ahorro. Peor: tal como se había implementado,
+`extraerSellerSkuDeAtributos` nunca encontraba el atributo (porque no está en la respuesta del
+multiget), devolvía `''`, y `actualizarCacheDesdeItemMl` escribía ese `''` en
+`ml_publicaciones_cache.seller_sku` de TODAS las variaciones del lote — blanquearía la caché
+entera, inflaría la cola muy por encima de los 561 reales y dispararía reescrituras masivas de
+SKUs que ML ya tenía. Confirma el hallazgo 5 del revisor.
+
+### Paso 2 descartado — PUT agrupado por publicación (decisión del usuario)
+
+El revisor advirtió (bloqueante 1) que `PUT /items/{id}` con un array `variations` **parcial**
+puede borrar las variaciones de esa publicación que no vienen incluidas en el array — comprobarlo
+exigía una escritura real sobre una publicación con variaciones (riesgo de perder talles, stock y
+fotos de un producto publicado en serio, para verificar una optimización). El usuario eligió
+explícitamente **no agrupar**: se mantiene 1 PUT por variación/publicación
+(`/items/{id}/variations/{varId}` o `/items/{id}`), que es el camino ya probado en producción.
+
+`lib/matcherPush.js` volvió a la versión de master en estos dos puntos: no existen
+`verificarLoteEnMl`, `actualizarCacheDesdeItemMl`, `extraerSellerSkuDeAtributos`,
+`escribirSkusAgrupadoEnMl`, `agruparPorItem`, `procesarGrupo`, `intentarConReintentos429` ni
+`procesarEntradaIndividual`/`procesarEntradasIndividualmente`. `escribirSkuEnMl` es exactamente
+la de master.
+
+## Decisiones del usuario (2026-08-06, vigentes)
+
+- **Pausadas:** cuota chica **por corrida completa** (no por tanda), 10 publicaciones distintas.
+  Las activas se escriben siempre y primero, sin cuota; las pausadas avanzan de a poco, sin
+  competir con el sync por el presupuesto de ML.
+- **Agrupar:** descartado (ver arriba). Se mantiene 1 PUT por variación/publicación.
+
+## Criterio de aceptación global (reescrito)
+
+El objetivo ya **no** es reducir a "~133 llamadas": sin verificación previa ni agrupado, cada
+publicación pendiente sigue costando 1 PUT. El objetivo es **drenar la cola de 561 sin chocar el
+429 ni competirle presupuesto al sync**, dejando el costo en prácticamente 0 una vez vacía (el
+filtro de `seleccionarPendientes`/`contarPendientes` ya excluye lo resuelto, así que una corrida
+sobre una cola vacía no genera ninguna llamada a ML). La cuota de 10 pausadas por corrida
+completa (no por tanda) logra esto: en ~13 corridas del cron (cada 10 min, ~2h15) se vacían las
+556 pausadas sin que ninguna corrida individual dispare un lote de cientos de PUT seguidos.
 
 ---
 
-## Paso 1 — Verificar contra ML antes de escribir
+## Paso 3 (conservado) — Cuota de pausadas por corrida COMPLETA
 
 **Archivo:** `lib/matcherPush.js`
 
-Antes de escribir un lote, traer el estado real de esas publicaciones con **multiget**
-`/items?ids=...&attributes=id,status,variations,attributes` en chunks de 20 — el mismo patrón que
-ya usan `evaluarPreciosReactivables` y `reactivarItems` en `routes/sync.js`.
-
-Con esa respuesta:
-- Refrescar `ml_publicaciones_cache.seller_sku` y `status` de las claves del lote.
-- **Descartar del lote** las claves cuyo SELLER_SKU en ML ya coincide con el de la decisión: no
-  gastan PUT. Cuentan como resueltas, no como error.
-- Las que ML ya no tiene (item o variación inexistente) se tratan con el camino de fallo que ya
-  existe, no se reintentan en loop.
-
-Costo: 1 llamada cada 20 publicaciones, contra hasta 4,5 PUT por publicación que evita.
-
-**Aceptación:** test de que una clave cuyo SKU ya está en ML no genera PUT y queda fuera de
-pendientes; test de que la verificación se hace en chunks de 20; test de que un fallo del multiget
-no aborta la corrida entera (mismo criterio que `routes/sync.js:1221-1237`).
-
-## Paso 2 — Un PUT por publicación, con fallback por variación
-
-**Archivo:** `lib/matcherPush.js`
-
-Para una publicación con N variaciones pendientes, mandar **un** PUT a `/items/{itemId}` con el
-array `variations` llevando el `SELLER_SKU` de cada una, en vez de N PUT a
-`/items/{id}/variations/{varId}`.
-
-**Fallback obligatorio:** si ese PUT no devuelve 200, reintentar esa publicación **por variación**
-con el método actual, que es el camino ya probado. El motivo está documentado en
-`lib/matcherPush.js:51-53`: a nivel item ML revalida la publicación completa y puede rechazarla
-por algo ajeno al SKU (ej. límite de fotos). El fallback evita que una publicación quede sin
-escribir por culpa de la optimización.
-
-Un 429 en el PUT agrupado **no** debe disparar el fallback (sería martillar a ML): cae en el
-camino de rate limit que ya existe, que corta la corrida sin marcar fallo.
-
-Las publicaciones **sin** variaciones siguen con el PUT simple a `/items/{itemId}` de siempre.
-
-**Aceptación:** test de que 1 publicación con 3 variaciones se resuelve con 1 PUT; test de que si
-ese PUT falla con 400, se reintenta con 3 PUT por variación y el resultado final es correcto; test
-de que un 429 en el agrupado corta la corrida sin fallback y sin registrar fallo.
-
-## Paso 3 — Cuota de pausadas por corrida
-
-**Archivos:** `lib/matcherPush.js`, `server.js`
-
-`seleccionarPendientes` (`lib/matcherPush.js:98-106`) hoy ordena activas primero pero no acota
-cuántas pausadas entran. Agregar una **cuota de pausadas por corrida** (sugerido: 20 publicaciones,
-no variaciones) manteniendo:
+`seleccionarPendientes` ya soportaba `cuotaPausadas` (número de publicaciones distintas, no
+variaciones) manteniendo:
 
 - **Todas** las activas listas para intentar entran siempre, sin cuota.
 - Las pausadas se toman después, hasta la cuota, con el orden actual (más recientes primero).
 
-Revisar además `TIEMPO_MAX_CORRIDA_MS` (5 min): con el agrupado y la cuota, una corrida debería
-terminar en mucho menos. El tope queda como red de seguridad, no como objetivo.
+**Bloqueante 2 del revisor, corregido:** la cuota se aplicaba por TANDA (cada vuelta del `while`
+volvía a llamar `seleccionarPendientes` con la misma cuota fija), no por CORRIDA — como las ya
+procesadas salen del filtro (`COALESCE(p.seller_sku,'') <> d.sku`), la vuelta siguiente volvía a
+traer otras `cuotaPausadas` publicaciones y así hasta agotar la cola entera o llegar a
+`TIEMPO_MAX_CORRIDA_MS`. La cuota no acotaba nada real.
 
-**Aceptación:** test de que con 5 activas y 100 pausadas pendientes, una corrida procesa las 5
-activas y exactamente 20 pausadas; test de que la cola igual se vacía a lo largo de varias
-corridas (sin starvation de pausadas).
+Corrección: `pushSkusPendientes` lleva un contador `cuotaRestante` (inicializado en
+`cuotaPausadas`) que se descuenta, después de cada vuelta del `while`, por la cantidad de
+publicaciones pausadas DISTINTAS (`item_id`) que trajo esa vuelta — no por cuántas se
+escribieron con éxito, sino por cuántas se intentaron (ya consumieron su cupo de la corrida,
+tengan éxito, error fail-closed con backoff, o error fail-open que corta la corrida entera). Al
+llegar a 0, `seleccionarPendientes(..., cuotaPausadas: 0)` devuelve solo activas (código ya
+existente: `if (cuotaPausadas <= 0) return activas;`), y el `while` corta en cuanto ese lote de
+solo-activas viene vacío.
 
-## Paso 4 — Coherencia con el resto del sistema
+`CUOTA_PAUSADAS_DEFAULT = 10` (decisión del usuario, antes se había sugerido 20).
+
+`TIEMPO_MAX_CORRIDA_MS` (5 min) queda como red de seguridad, sin cambios — con la cuota, una
+corrida real termina mucho antes.
+
+**Aceptación:** test de que con 5 activas y 100 pausadas pendientes, una corrida COMPLETA
+(`pushSkusPendientes`, no `seleccionarPendientes` aislado) procesa exactamente las 5 activas y 10
+pausadas — no más, aunque el `while` encadene varias tandas internas; test de que la cola igual
+se vacía a lo largo de varias corridas (sin starvation de pausadas).
+
+## Paso 4 (conservado) — Coherencia con el resto del sistema
 
 **Archivos:** `lib/matcherPush.js`, `routes/matcher.js`
 
-- El **botón manual** (`POST /api/matcher/push-skus-pendientes`, `routes/matcher.js:478`) comparte
-  el mismo motor. Decidir explícitamente si el manual respeta la cuota de pausadas o la ignora
-  (el usuario está esperando el resultado). Sugerido: el manual **ignora la cuota** pero mantiene
-  la verificación previa y el agrupado, y lo documenta en la respuesta.
-- El contador de `contarPendientes` debe seguir reflejando la cola real, no la cuota.
-- Dejar en el comentario de cabecera que la verificación previa existe porque
-  `ml_publicaciones_cache.seller_sku` no tiene refresco automático — mismo acoplamiento implícito
-  que ya se documentó para `precio` en `necesitaRecheck` (`routes/sync.js`).
+- El **botón manual** (`POST /api/matcher/push-skus-pendientes`, `routes/matcher.js`) comparte el
+  mismo motor y pasa `cuotaPausadas: null` para ignorar la cuota — el usuario está esperando el
+  resultado completo y ya disparó la acción a propósito. La respuesta lo informa
+  (`cuota_pausadas_ignorada: true`).
+- `contarPendientes` sigue reflejando la cola real (sin acotar por cuota): si no, el operador ve
+  "0 pendientes" con 546 sin escribir.
+- El log de la corrida sigue mostrando `restantes` real.
 
 **Aceptación:** test del camino manual con la cuota ignorada; `GET /push-skus-pendientes/estado`
-sigue devolviendo el total real de pendientes.
+y `GET /push-skus-pendientes/count` siguen devolviendo el total real de pendientes.
+
+## Hallazgos menores del revisor aplicados
+
+- **MENOR 9:** `_estado.escritos++` contaba también las claves saltadas por idempotencia
+  (`escribirSkuEnMl` devuelve `{ ok:true, status:200, saltado:true }` cuando ML ya tenía ese SKU).
+  Se separó en `_estado.saltados`, expuesto también en `getEstadoPush()` y en el log de la
+  corrida, para que `escritos=120` refleje solo llamadas PUT reales.
+- **MENOR 11:** el plan original pedía tocar `server.js` en el paso 3. No hace falta: el default
+  de la firma de `pushSkusPendientes` (`cuotaPausadas = CUOTA_PAUSADAS_DEFAULT`) ya cubre al cron,
+  que llama `pushSkusPendientes(app._db, syncCfg)` sin ese argumento.
 
 ## Fuera de alcance
 
 - No se toca el flujo del matcher en `public/` (sin cambios de UI).
 - No se toca el sync ML↔Woo ni la regla de precio de contado.
 - No se cambia el backoff exponencial por publicación de `registrarFallo`, que ya funciona.
+- Verificación previa por multiget y PUT agrupado: descartados, ver sección arriba.
 
 ## Riesgos
 
-- **Escribir de menos:** si la verificación del paso 1 tiene un bug, un SKU que ML no tiene queda
-  sin escribirse y el matcher lo da por resuelto. Mitigación: solo se descarta del lote cuando ML
-  devuelve explícitamente un SELLER_SKU **igual** al de la decisión; cualquier otra cosa (atributo
-  ausente, respuesta parcial, item no devuelto) mantiene la clave en la cola.
-- **Fallback que no se dispara:** si el PUT agrupado falla de una forma que no se detecta como
-  fallo, N variaciones quedan sin escribir en silencio. Mitigación: solo el status 200 cuenta como
-  éxito (`mlFetch` usa `validateStatus: () => true` y nunca lanza por status HTTP).
 - **Cuota que esconde trabajo:** con cuota, la cola tarda más en vaciarse y puede parecer trabada.
-  Mitigación: el log de la corrida ya informa `restantes`, y debe seguir mostrando el total real.
+  Mitigación: el log de la corrida y `contarPendientes` siguen mostrando el total real, sin
+  acotar por cuota.
+- **Cuota mal descontada:** si el contador `cuotaRestante` no bajara correctamente entre vueltas
+  del `while`, el bloqueante 2 reaparecería en otra forma. Mitigación: test de corrida completa
+  (no solo de `seleccionarPendientes` aislado) que ejercita varias vueltas internas del `while`
+  con un límite de tanda alto.

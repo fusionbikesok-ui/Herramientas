@@ -665,17 +665,18 @@ Arranca la corrida en background (no bloquea el request; mismo patrón que
 hasta agotar los pendientes, cortar por 429 persistente / error de config-red, o llegar al
 tope de tiempo por corrida (5 min, deja margen contra el próximo ciclo de cron a los 10 min).
 
-**Ahorro de llamadas a ML (2026-08-06):** antes de escribir, cada tanda se verifica contra ML
-en vivo (multiget en chunks de 20 publicaciones) para no reescribir un SKU que ML ya tiene
-(la caché de `seller_sku` solo se refresca a mano vía `POST /refrescar-ml`). Publicaciones con
-2+ variaciones pendientes se escriben con 1 solo PUT a `/items/{itemId}` en vez de 1 PUT por
-variación, con fallback automático por variación si ML rechaza el agrupado.
+El cron automático (cada 10 min) aplica una **cuota de 10 publicaciones pausadas distintas
+por CORRIDA completa** (las activas entran siempre, sin cuota) para no competir con el sync
+por presupuesto de ML — la cuota se descuenta corrida a corrida, no tanda a tanda, así que
+un `while` que encadena varias tandas de 120 no la ignora. **Este botón manual ignora esa
+cuota** — el usuario disparó la acción a propósito y espera el resultado completo; responde
+`cuota_pausadas_ignorada: true` para que quede explícito.
 
-El cron automático (cada 10 min) aplica una **cuota de 20 publicaciones pausadas por
-corrida** (las activas entran siempre, sin cuota) para no competir con el sync por
-presupuesto de ML. **Este botón manual ignora esa cuota** — el usuario disparó la acción a
-propósito y espera el resultado completo; responde `cuota_pausadas_ignorada: true` para que
-quede explícito.
+Se evaluó (y se descartó) verificar el SKU contra ML antes de escribir y agrupar variaciones
+en un solo PUT — contra la API real de ML, el multiget de variaciones no trae el atributo
+SELLER_SKU (solo el endpoint puntual por variación, que cuesta lo mismo que el PUT que
+pretendía evitar) y el PUT agrupado con array `variations` parcial arriesga borrar
+variaciones no incluidas. Sigue siendo 1 PUT por variación/publicación, camino probado.
 - Request: sin body.
 - Response 202: `{ "ok": true, "running": true, "cuota_pausadas_ignorada": true }`.
 - Response 409 (ya hay una corrida en curso, del botón o del cron):
@@ -689,6 +690,7 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
     "ok": true,
     "running": false,
     "escritos": 12,
+    "saltados": 3,
     "errores": 1,
     "restantes": 380,
     "fallos": [
@@ -703,6 +705,9 @@ Sondeo del progreso/resultado de la corrida (en curso o la última terminada).
   ```
 - `restantes` se actualiza en vivo durante la corrida (decrementa por cada publicación
   intentada), no solo al terminar — antes quedaba en 0 todo el transcurso.
+- `saltados` cuenta las claves que no generaron PUT porque ML ya tenía ese SKU cacheado
+  (idempotencia de `escribirSkuEnMl`) — separado de `escritos` para que este último refleje
+  llamadas reales a ML, no incluya lo saltado.
 - `fallos` es un resumen (tope 20) de la corrida actual/última, no el historial completo
   (para eso, `GET /push-skus-pendientes/list` trae `ultimo_error`/`intentos` por clave desde
   `ml_sku_push_fallos`). Cada fallo con `status` distinto de `0` trae `intentos` y
