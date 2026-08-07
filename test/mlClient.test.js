@@ -387,3 +387,153 @@ describe('mlClient — 429 en el refresh de token OAuth', () => {
     expect(estadoCooldownMl().activo).toBe(true);
   });
 });
+
+describe('mlClient — trazabilidad de errores', () => {
+  let db;
+  let errorSpy;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    axios.request.mockReset();
+    axios.post.mockReset();
+    db = makeDb();
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+    vi.useRealTimers();
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('el 429 real loguea método y path normalizado', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA123');
+
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    expect(mensajes.some(m => m.includes('429') && m.includes('GET') && m.includes('/items/MLA123'))).toBe(true);
+  });
+
+  it('el path largo del multiget se colapsa y no se vuelca entero', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    const ids = Array.from({ length: 20 }, (_, i) => `MLA${i}`).join(',');
+    const path = `/items?ids=${ids}&attributes=id,price`;
+
+    axios.request.mockResolvedValueOnce({ status: 500, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', path);
+
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    const conError = mensajes.find(m => m.includes('[ML][error]'));
+    expect(conError).toBeDefined();
+    expect(conError).toContain('<20 ids>');
+    expect(conError).not.toContain('MLA19'); // el listado crudo no se vuelca
+  });
+
+  it('un no-2xx deja rastro en el log central', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 404, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA999');
+
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    expect(mensajes.some(m => m.includes('[ML][error]') && m.includes('404'))).toBe(true);
+  });
+
+  it('la deduplicación no emite N líneas para N repeticiones: emite resumen al vencer la ventana', async () => {
+    vi.useFakeTimers();
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValue({ status: 500, headers: {}, data: null });
+
+    for (let i = 0; i < 5; i++) {
+      await mlFetch(db, ML_CFG, 'post', '/items/MLA913043039', { foo: 'bar' });
+    }
+
+    let mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    const lineasError = mensajes.filter(m => m.includes('[ML][error]') && m.includes('MLA913043039'));
+    expect(lineasError.length).toBe(1); // una sola línea, no 5
+
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1000);
+
+    mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    const resumen = mensajes.find(m => m.includes('MLA913043039') && m.includes('veces más'));
+    expect(resumen).toBeDefined();
+    expect(resumen).toContain('4 veces más');
+  });
+
+  it('los sintéticos NO loguean por llamada pero incrementan sus contadores', async () => {
+    const { mlFetch, estadoErroresMl, _resetCooldownParaTests } = await import('../lib/mlClient.js');
+    _resetCooldownParaTests();
+
+    // Fuerza cooldown_sintetico: primero un 429 real arma el cooldown.
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    errorSpy.mockClear();
+
+    // Esta y la próxima caen en el corte sintético — no deben pegarle a axios.
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA2');
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA3');
+
+    expect(axios.request).toHaveBeenCalledTimes(1); // solo la primera real
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    expect(mensajes.some(m => m.includes('MLA2') || m.includes('MLA3'))).toBe(false);
+
+    const estado = estadoErroresMl();
+    expect(estado.sinteticos.cooldown_sintetico).toBe(2);
+  });
+
+  it('los contadores salen por GET /api/sync/estado', async () => {
+    const { mlFetch, _resetCooldownParaTests } = await import('../lib/mlClient.js');
+    _resetCooldownParaTests();
+    const { syncRouter } = await import('../routes/sync.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA2'); // sintético
+
+    // Sembrar tablas mínimas que consulta el endpoint.
+    db.exec(`
+      CREATE TABLE sync_estado (clave TEXT, valor TEXT, actualizado_en TEXT);
+      CREATE TABLE sync_log (id INTEGER PRIMARY KEY, direccion TEXT, estado TEXT, creado_en TEXT);
+    `);
+
+    const router = syncRouter(db, { ml: ML_CFG });
+    const capa = router.stack.find(l => l.route?.path === '/estado');
+    let statusCode = 200;
+    let body = null;
+    const res = {
+      json: (b) => { body = b; },
+      status: (c) => { statusCode = c; return res; },
+    };
+    await capa.route.stack[0].handle({}, res);
+
+    expect(statusCode).toBe(200);
+    expect(body.erroresMl.sinteticos.cooldown_sintetico).toBeGreaterThanOrEqual(1);
+  });
+
+  it('nunca se loguea el body de la request', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 400, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'post', '/orders/123/notes', { customer_note: false, secreto: 'no-debe-salir' });
+
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    expect(mensajes.some(m => m.includes('no-debe-salir'))).toBe(false);
+  });
+
+  it('un error de red deja rastro con método y path, sin el body', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    const errRed = Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
+    axios.request.mockRejectedValueOnce(errRed);
+
+    await expect(mlFetch(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow('timeout');
+
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    expect(mensajes.some(m => m.includes('[ML][error]') && m.includes('/items/MLA1'))).toBe(true);
+  });
+});

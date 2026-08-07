@@ -98,6 +98,24 @@ contrato existente):
 de backoff 60s/120s/300s/600s (-1 = sin backoff acumulado). Sirve para distinguir "ML en
 cooldown hasta las HH:MM" de un sync realmente colgado — ver incidente 2026-08-04.
 
+También incluye `erroresMl` (2026-08-07, trazabilidad de errores — aditivo):
+
+```
+"erroresMl": {
+  "sinteticos": { "cooldown_sintetico": 0, "sin_cupo": 0 },
+  "porRecurso": { "lectura": { "cooldown_sintetico": 3, "sin_cupo": 0 }, ... }
+}
+```
+
+Contadores **acumulativos desde que arrancó el proceso** (no por ventana) de los 429
+sintéticos que `mlFetch` genera sin pegarle a ML: `cooldown_sintetico` (cortó porque el
+cooldown global estaba activo) y `sin_cupo` (cortó por presupuesto agotado, ver
+`lib/mlLimites.js`). `porRecurso` desglosa por `clasificarRecurso` (`lectura`/`escritura`/
+`oauth`). Sirve para distinguir en vivo, sin gastar una sola llamada a ML, "ML nos
+rechazó de verdad" (ver logs `[ML][error]` y `[ML] 429 real de ML — cooldown activado`)
+de "nos frenamos solos" — la distinción que costó horas de diagnóstico en el incidente
+de reconciliarStockMl del 2026-08-07.
+
 Además, `pedidos` ahora incluye:
 
 ```

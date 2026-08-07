@@ -8,7 +8,7 @@
  */
 
 import { Router } from 'express';
-import { mlFetch, bootstrapToken, estadoCooldownMl } from '../lib/mlClient.js';
+import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
@@ -2505,6 +2505,10 @@ export function syncRouter(db, cfg) {
       ultimasSyncsOk: ultimosOk,
       erroresPendientes: errores?.n ?? 0,
       cooldownMl: estadoCooldownMl(),
+      // Contadores de 429 sintéticos (nuestro propio freno, no rechazo de ML)
+      // acumulativos desde el arranque, globales y por recurso. Vía para
+      // diagnosticar sin gastar una sola llamada a ML — ver lib/mlClient.js.
+      erroresMl: estadoErroresMl(),
     });
   });
 
