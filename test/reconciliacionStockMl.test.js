@@ -438,6 +438,55 @@ describe('reconciliarStockMl', () => {
     expect(estado.cantidad_ml).toBe(0);
   });
 
+  it('caso Starvos completo (integración): syncWcToMl saltea la publicación por status "paused" stale en caché; reconciliarStockMl refresca el status a "active"; la corrida siguiente de syncWcToMl deja de saltearla y empuja el stock real', async () => {
+    // Publicación activa y vendiendo en ML, pero la caché local (solo se refresca con el
+    // botón del matcher) todavía la cree "paused" desde hace tiempo. Sin fila en
+    // ml_stock_estado (punto ciego). Woo tiene stock real 15 (2 unidades menos que las 17
+    // que ML todavía figura vendiendo — sobreventa real del caso Starvos).
+    seedPublicacion(db, { clave: 'MLA3101044322|', itemId: 'MLA3101044322', sku: 'FB-58761', cantidadMl: 17, status: 'paused' });
+    db.prepare("UPDATE ml_publicaciones_cache SET sub_status = 'paused_by_seller' WHERE clave = 'MLA3101044322|'").run();
+    const nowIso = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(700, 'Casco Bontrager Starvos', 'FB-58761', 'simple', null, 15, nowIso);
+
+    // Paso 0 (control): ANTES de reconciliar, syncWcToMl la saltea — su caché de status por
+    // item_id sigue leyendo 'paused' de ml_publicaciones_cache, así que ni siquiera intenta
+    // el PUT. Esto es lo que reproducía el bug: la publicación quedaba invisible al sync.
+    const p0 = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    await p0;
+    expect(mlFetch).not.toHaveBeenCalledWith(db, CFG.ml, 'put', '/items/MLA3101044322', expect.anything());
+    let estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA3101044322|'").get();
+    expect(estado.cantidad_ml).toBe(17); // intacto: la publicación ni se tocó
+
+    // Paso 1: reconciliarStockMl consulta ML directo (multiget), ignora el status stale de
+    // la caché (universo ya no filtra por status), y descubre que ML la tiene 'active' con
+    // 17 unidades — refresca status Y corrige ml_stock_estado.
+    mlFetch.mockResolvedValue({
+      status: 200,
+      data: [{ code: 200, body: { id: 'MLA3101044322', status: 'active', sub_status: [], available_quantity: 17 } }],
+    });
+    const r1 = await correr(db, CFG);
+    expect(r1.statusRefrescados).toBe(1);
+    const cache = db.prepare("SELECT status, sub_status FROM ml_publicaciones_cache WHERE clave = 'MLA3101044322|'").get();
+    expect(cache.status).toBe('active');
+    estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA3101044322|'").get();
+    expect(estado.cantidad_ml).toBe(17); // reconciliación deja el estado en lo que ML tenía
+
+    // Paso 2: con la caché ya al día, syncWcToMl deja de saltearla — ve deseado(Woo=15) !=
+    // recordado(17) -> diff real -> empuja el stock real de Woo a ML, cerrando la sobreventa.
+    mlFetch.mockClear();
+    mlFetch.mockResolvedValue({ status: 200, data: {} }); // PUT de syncWcToMl
+    const p2 = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    await p2;
+
+    expect(mlFetch).toHaveBeenCalledWith(db, CFG.ml, 'put', '/items/MLA3101044322', { available_quantity: 15 });
+    estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA3101044322|'").get();
+    expect(estado.cantidad_ml).toBe(15);
+  });
+
   it('la pausa entre chunks se aplica de verdad: no antes del primer chunk, sí antes del segundo, no después del último', async () => {
     seedUniversoGrande(db, 25); // 25 itemIds únicos -> 2 chunks (20 + 5)
     mlFetch.mockImplementation(async (dbArg, cfgArg, method, path) => {
