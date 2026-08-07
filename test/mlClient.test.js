@@ -417,6 +417,43 @@ describe('mlClient — trazabilidad de errores', () => {
     expect(mensajes.some(m => m.includes('429') && m.includes('GET') && m.includes('/items/MLA123'))).toBe(true);
   });
 
+  it('un 429 real con el cooldown YA activo igual deja rastro (no cae en un punto ciego)', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    // Primer 429: activa el cooldown y lo loguea con su contexto.
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA111');
+
+    errorSpy.mockClear();
+
+    // Segundo 429 con el cooldown ya activo. Es el camino NORMAL de una llamada manual
+    // (ignora el cooldown por diseño) y del reintento manual. _activarCooldown sale por
+    // su return temprano y no loguea, así que sin el registro central este 429 real de ML
+    // no quedaría registrado en ningún lado — justo la pregunta que este cambio contesta.
+    // mockResolvedValue (no Once): en modo manual mlFetch reintenta, o sea que consume
+    // dos respuestas, y el reintento también tiene que dar 429.
+    vi.useFakeTimers();
+    axios.request.mockResolvedValue({ status: 429, headers: {}, data: null });
+    const p = mlFetch(db, ML_CFG, 'get', '/items/MLA222', null, { manual: true });
+    await vi.runAllTimersAsync();
+    await p;
+
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    expect(mensajes.some(m => m.includes('429') && m.includes('/items/'))).toBe(true);
+  });
+
+  it('la clave de dedup agrupa /listing_prices aunque el price cambie en cada publicación', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    for (const precio of [1000, 2500, 33999, 41500, 7250]) {
+      axios.request.mockResolvedValueOnce({ status: 500, headers: {}, data: null });
+      await mlFetch(db, ML_CFG, 'get', `/sites/MLA/listing_prices?price=${precio}&category_id=MLA1234`);
+    }
+
+    const lineas = errorSpy.mock.calls.map(c => c.join(' ')).filter(m => m.includes('[ML][error]'));
+    expect(lineas).toHaveLength(1); // 5 precios distintos, un solo endpoint
+  });
+
   it('el path largo del multiget se colapsa y no se vuelca entero', async () => {
     const { mlFetch } = await import('../lib/mlClient.js');
 
