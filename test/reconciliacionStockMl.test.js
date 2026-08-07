@@ -366,7 +366,9 @@ describe('reconciliarStockMl', () => {
         return { status: 200, data: [{ code: 200, body: { id: 'MLA962', status: 'active', available_quantity: 1 } }] };
       });
 
+      const antes = Date.now();
       const r = await correr(db, CFG);
+      const despues = Date.now();
 
       expect(mlFetch).toHaveBeenCalledTimes(2); // el 429 original + el reintento post-cooldown
       expect(r.esperasCooldown).toBe(1);
@@ -374,6 +376,36 @@ describe('reconciliarStockMl', () => {
       expect(r.corregidas).toBe(0); // ML confirmó lo mismo que ya estaba registrado
       const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
       expect(cursor.valor).toBe('MLA962|'); // avanzó: el reintento sí trajo dato real
+      // Aritmética de la espera (revisor #2): esperaMs = 5000 (hasta) + 500 (margen) = 5500ms,
+      // por encima del piso de RECONCILIACION_PAUSA_CHUNK_MS (1500ms), así que manda esperaMs.
+      // Fake timers mockean Date, el assert es determinístico (no solo "algún timer disparó").
+      expect(despues - antes).toBe(5500);
+    });
+
+    it('cooldown por vencer → la espera respeta el piso de 1500ms, no sale en ráfaga contra ML', async () => {
+      seedPublicacion(db, { clave: 'MLA965|', itemId: 'MLA965', sku: 'A', cantidadMl: 1 });
+
+      // Cooldown a punto de vencer: esperaMs = 200 + 500 de margen = 700ms, MUY por debajo de
+      // RECONCILIACION_PAUSA_CHUNK_MS. Sin el piso, el reintento saldría a los 700ms del 429
+      // anterior — exactamente la ráfaga que medimos que dispara el 429 al 2º/3er multiget.
+      // Este test es la única cosa que impide que alguien "simplifique" el Math.max.
+      const hasta = new Date(Date.now() + 200).toISOString();
+      estadoCooldownMl.mockReturnValue({ activo: true, hasta, nivel: 0 });
+
+      mlFetch
+        .mockResolvedValueOnce({ status: 429, data: null })
+        .mockResolvedValueOnce({
+          status: 200,
+          data: [{ code: 200, body: { id: 'MLA965', status: 'active', available_quantity: 1 } }],
+        });
+
+      const antes = Date.now();
+      const r = await correr(db, CFG);
+      const despues = Date.now();
+
+      expect(mlFetch).toHaveBeenCalledTimes(2);
+      expect(r.esperasCooldown).toBe(1);
+      expect(despues - antes).toBe(1500); // el piso, no los 700ms del cooldown
     });
 
     it('429 en el primer chunk, reintento también 429 → corta como antes, cursor no avanza', async () => {
@@ -412,24 +444,45 @@ describe('reconciliarStockMl', () => {
       expect(mlFetch).toHaveBeenCalledTimes(1); // no hubo reintento: cortó directo
       expect(r.esperasCooldown).toBe(0);
       expect(r.sinDato).toBe(1);
-      // No debe haber quedado ningún timer pendiente de una espera larga (runAllTimersAsync ya
-      // habría fallado/colgado si hubiera un sleep de 5 min sin resolver dentro de `correr`).
+      // Que NO se haya esperado se prueba con estas dos cosas juntas, no con runAllTimersAsync:
+      // ese helper dispara cualquier timer sin chistar, así que un sleep de 5 min lo habría
+      // ejecutado igual y el test pasaría lo mismo. Lo que realmente protege es que mlFetch se
+      // llamó una sola vez y que el reloj (mockeado por los fake timers) no avanzó.
       expect(despues - antes).toBeLessThan(1000);
     });
 
     it('un solo reintento por corrida: dos chunks distintos con 429 no producen dos esperas', async () => {
       seedUniversoGrande(db, 25); // 25 itemIds -> 2 chunks (20 + 5)
 
-      const hasta = new Date(Date.now() + 5000).toISOString();
-      estadoCooldownMl.mockReturnValue({ activo: true, hasta, nivel: 0 });
+      // `hasta` SIEMPRE futuro, recalculado en cada consulta. Con un timestamp fijo el cooldown
+      // ya habría vencido cuando el bucle llega al chunk 2 (los fake timers avanzaron el reloj
+      // durante la primera espera), y entonces la ausencia de segunda espera se explicaría por
+      // el cooldown vencido y no por el gate — el test pasaría aunque el gate no existiera.
+      // Verificado por mutación: con el mock fijo, borrar `esperasCooldown === 0` no rompe nada.
+      estadoCooldownMl.mockImplementation(() => ({
+        activo: true,
+        hasta: new Date(Date.now() + 5000).toISOString(),
+        nivel: 0,
+      }));
 
-      mlFetch.mockResolvedValue({ status: 429, data: null }); // ambos chunks, y el reintento, dan 429
+      // Secuencia deliberada 429 / 200 / 429 (revisor #3). Con 429 en TODAS las llamadas la
+      // corrida cortaría en el chunk 1 y el chunk 2 nunca se ejecutaría, así que el test pasaría
+      // igual aunque el gate `esperasCooldown === 0` no existiera. Para probar de verdad que la
+      // espera es una POR CORRIDA y no una por chunk, el reintento del chunk 1 tiene que salir
+      // bien: recién ahí el bucle llega al chunk 2, se come otro 429, y se puede verificar que
+      // esta vez NO vuelve a esperar. Es el camino que protege la restricción de carga sobre ML.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mlFetch
+        .mockResolvedValueOnce({ status: 429, data: null })   // chunk 1
+        .mockResolvedValueOnce({ status: 200, data: [] })     // reintento del chunk 1: OK
+        .mockResolvedValueOnce({ status: 429, data: null });  // chunk 2: 429 de nuevo
 
       const r = await correr(db, CFG);
 
-      // Chunk 1 (429) + reintento (429, corta acá) = 2 llamadas; el chunk 2 nunca se intenta.
-      expect(mlFetch).toHaveBeenCalledTimes(2);
+      // 3 llamadas: chunk 1, su reintento, y el chunk 2. Si hubiera una segunda espera serían 4.
+      expect(mlFetch).toHaveBeenCalledTimes(3);
       expect(r.esperasCooldown).toBe(1);
+      warnSpy.mockRestore();
     });
   });
 

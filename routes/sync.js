@@ -100,6 +100,13 @@ const RECONCILIACION_PAUSA_CHUNK_MS = 1500;
 // bloquear ESTA corrida (y el candado _reconciliarStockEnCurso que la acompaña) más de lo
 // razonable. 90s es bien menor a los 10 min entre corridas, así que nunca se solapa con el
 // tick siguiente.
+// OJO (revisor #5): esta espera rompe, para esta única llamada, el aislamiento por minuto que
+// server.js separa a propósito entre los crons ML (ver comentario ahí, ":09" para evitar varios
+// jobs pegándole a ML de golpe). Con hasta 90s de espera el reintento puede caer dentro de la
+// ventana de otro cron ML (ej. */10 en :10). Impacto acotado (una sola llamada de más, no un
+// job entero), pero la premisa de "cada job tiene su minuto" deja de ser estrictamente cierta
+// mientras dura este reintento — que quede escrito acá para no descubrirlo recién en el
+// próximo incidente de cuota.
 const RECONCILIACION_ESPERA_MAX_COOLDOWN_MS = 90_000;
 // Margen chico sobre el `hasta` del cooldown para no reintentar en el instante exacto en que
 // vence (jitter/relojes) y volver a comerse el mismo 429.
@@ -1146,28 +1153,28 @@ async function _reconciliarStockMl(db, cfg) {
   let esperasCooldown = 0;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
+    const path = `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,available_quantity,variations`;
     let resp;
     try {
-      resp = await mlFetch(
-        db, mlCfg, 'get',
-        `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,available_quantity,variations`
-      );
+      resp = await mlFetch(db, mlCfg, 'get', path);
       if (resp.status === 429 && esperasCooldown === 0) {
         const { hasta } = estadoCooldownMl();
         const esperaMs = hasta ? new Date(hasta).getTime() - Date.now() + RECONCILIACION_MARGEN_COOLDOWN_MS : null;
         if (esperaMs != null && esperaMs > 0 && esperaMs <= RECONCILIACION_ESPERA_MAX_COOLDOWN_MS) {
           esperasCooldown++;
-          await sleep(esperaMs);
-          try {
-            resp = await mlFetch(
-              db, mlCfg, 'get',
-              `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,available_quantity,variations`
-            );
-          } catch (e) {
-            console.error(`reconciliarStockMl: multiget (reintento post-cooldown) falló para un chunk: ${e.message}`);
-            cortadoPor429 = true;
-            break;
-          }
+          // Piso de RECONCILIACION_PAUSA_CHUNK_MS (revisor #4): si el cooldown está por
+          // vencer, esperaMs puede quedar muy por debajo de la pausa mínima entre llamadas
+          // (ej. ~600ms) y el reintento saldría en ráfaga contra ML — exactamente el patrón
+          // que dispara el 429 al 2º/3er multiget (ver comentario de
+          // RECONCILIACION_PAUSA_CHUNK_MS más arriba). El tope de 90s se sigue evaluando
+          // sobre esperaMs sin este piso, así que no cambia la decisión de esperar o cortar.
+          await sleep(Math.max(esperaMs, RECONCILIACION_PAUSA_CHUNK_MS));
+          // Sin try/catch propio (revisor #1): una excepción acá (timeout/red, no un 429) no
+          // es un fallo de cuota. Se deja caer al catch externo, que ya trata cualquier chunk
+          // que lanza igual: ausente de porItem, fail-closed, se sigue con el resto del lote.
+          // Envolverla acá y cortar la corrida entera además mentía en el warn de más abajo
+          // atribuyendo a "cooldown 429" un fallo que fue de red.
+          resp = await mlFetch(db, mlCfg, 'get', path);
         }
       }
       if (resp.status === 429) {
