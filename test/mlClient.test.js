@@ -644,3 +644,49 @@ describe('mlClient — trazabilidad de errores', () => {
     expect(mensajes.some(m => m.includes('[ML][error]') && m.includes('/items/MLA1'))).toBe(true);
   });
 });
+
+// Describe propio: mockea parcialmente mlRateLimiter (mismo patrón que
+// test/matcherPush.test.js) para forzar el camino "sin cupo" sin agotar las ~1275
+// llamadas reales del presupuesto, que hacía tardar el test más de 30s.
+describe('mlClient — 429 sintético por falta de cupo propio', () => {
+  let db;
+  let errorSpy;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    axios.request.mockReset();
+    axios.post.mockReset();
+    db = makeDb();
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+    vi.doUnmock('../lib/mlRateLimiter.js');
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('se cuenta, no sale a red y NO se disfraza de rechazo de ML', async () => {
+    vi.doMock('../lib/mlRateLimiter.js', async () => {
+      const actual = await vi.importActual('../lib/mlRateLimiter.js');
+      return { ...actual, reservarCupo: vi.fn(async () => false) };
+    });
+    const { mlFetch, estadoErroresMl } = await import('../lib/mlClient.js');
+
+    const resp = await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+
+    expect(resp.status).toBe(429);
+    expect(resp.__sinCupo).toBe(true);
+    expect(axios.request).not.toHaveBeenCalled();
+
+    const estado = estadoErroresMl();
+    expect(estado.sinteticos.sin_cupo).toBe(1);
+
+    // La invariante que sostiene todo el cambio: `[ML][error] … → 429` significa SIEMPRE
+    // un 429 real de ML. Un freno nuestro no puede dejar una línea que se lea como
+    // rechazo de ML, o volvemos exactamente al problema que originó todo esto.
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    expect(mensajes.some(m => m.includes('[ML][error]'))).toBe(false);
+  });
+});
