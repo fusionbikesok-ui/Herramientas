@@ -53,6 +53,12 @@ describe('reconciliarStockMl', () => {
   beforeEach(() => {
     db = openDb(TEST_DB);
     vi.clearAllMocks();
+    // clearAllMocks limpia mock.calls pero NO las implementaciones: un mockReturnValue o
+    // mockImplementation puesto en un test sigue vigente en los siguientes. Sin este default
+    // explícito, los tests de espera-y-reintento dejaban `estadoCooldownMl` devolviendo un
+    // cooldown activo para todo el resto del archivo, y los tests posteriores recorrían en
+    // silencio el camino de reintento sin decirlo (además de volverse dependientes del orden).
+    estadoCooldownMl.mockReturnValue({ activo: false, hasta: null, nivel: 0 });
     vi.useFakeTimers();
   });
 
