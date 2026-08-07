@@ -43,12 +43,29 @@ const ML_CALL_DELAY_MS = 500;
 // empieza a devolver 429 — subir/bajar según cómo responda.
 const ML_CONCURRENCIA_MAX = 4;
 
+// Tope de diffs procesados por corrida de _syncWcToMl (revisor, M3 2026-08-07). Antes del
+// write-back de status de reconciliarStockMl, syncWcToMl saltea cualquier item cuyo status en
+// caché no sea 'active' — con ~1255 filas recién alineadas de 'paused' a 'active' tras el
+// primer barrido (más ~1061 sin ml_stock_estado todavía), el bucle de diffs pasa de saltear
+// casi todo a entrarle a una masa grande de golpe. Sin tope, 600-1200 diffs × ML_CALL_DELAY_MS
+// encadenados con el cron cada 10 min (candado _wcToMlEnCurso evita solape pero no acota
+// duración) reproduce el patrón del incidente de 429 del 2026-08-04. Con 200 el peor caso es
+// ~100s por corrida, muy por debajo del cron. Los diffs que no entran no se pierden: la query
+// se recalcula entera cada corrida (idempotente), así que quedan para la próxima — por eso el
+// ORDER BY más abajo prioriza los más viejos (NULLs primero), para que el tope rote y no
+// favorezca siempre a las mismas claves si el backlog es más grande que el tope.
+const SYNC_WC_ML_MAX_POR_CORRIDA = 200;
+
 // ── reconciliarStockMl: constantes ──────────────────────────────────────────
-// Tamaño del lote por corrida del cursor (5 multiget de a 20). Con un cron cada 10 min
-// el barrido completo de ~1358 publicaciones (MEDIDO contra la base el 2026-08-06 con el
-// filtro p.status='active' OR e.cantidad_ml > 0; ver plan
-// docs/superpowers/plans/2026-08-06-reconciliacion-stock-ml.md) tarda ~2h16m.
-const RECONCILIACION_LOTE = 100;
+// Tamaño del lote por corrida del cursor (8 multiget de a 20). Con un cron cada 10 min
+// el barrido completo tarda ~2h53m. MEDIDO contra la base el 2026-08-07 tras sacar el
+// filtro de status del universo (caso Starvos: publicaciones activas en ML que la caché,
+// refrescada solo a mano, tenía como pausadas — ver docs/superpowers/plans/
+// 2026-08-07-universo-reconciliacion-status.md): el universo pasó de 1358 a 2595 filas
+// (1340 con status='active' en caché + 1255 'paused'), de las cuales 1061 no tenían fila
+// en ml_stock_estado todavía. El barrido se duplica en tiempo (2h16m → ~4h20m con lote 100),
+// por eso el lote sube de 100 a 150: ~8 multiget espaciados 1500ms = ~12s por corrida.
+const RECONCILIACION_LOTE = 150;
 const RECONCILIACION_MULTIGET_CHUNK = 20;
 // MEDIDO el 2026-08-06 (no estimado): ML devuelve 429 tras 2-3 multiget consecutivos SIN
 // pausa entre ellos — muy por debajo de los 1500 rpm documentados en lib/mlLimites.js. Con
@@ -134,7 +151,7 @@ const COMPUTED_STOCK_CTE = `
         WHEN cfg.modo = 'reserva' THEN MAX(c.stock - COALESCE(cfg.reserva, 0), 0)
         ELSE MAX(c.stock, 0)
       END AS stock_disponible_ml,
-      e.cantidad_ml
+      e.cantidad_ml, e.actualizado_en AS ml_stock_actualizado_en
     FROM sku_matcher_decisiones d
     JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
     LEFT JOIN ml_stock_estado e ON e.clave = d.clave
@@ -814,10 +831,17 @@ async function _syncWcToMl(db, cfg) {
 
   // JOIN para encontrar publicaciones ML cuyo stock disponible difiere del estado conocido.
   // LEFT JOIN skus_config_ml para aplicar reservas de unidades para local/web.
+  // Tope SYNC_WC_ML_MAX_POR_CORRIDA por corrida (revisor, M3) + orden por lo más viejo primero
+  // (NULL, nunca registrado en ml_stock_estado, va primero): con un backlog más grande que el
+  // tope, cada corrida procesa el extremo más viejo y lo "envejece" (queda con
+  // ml_stock_actualizado_en fresco), así el próximo recorte natural avanza sobre el resto del
+  // backlog en vez de reprocesar siempre las mismas claves.
   const diffs = db.prepare(`
     ${COMPUTED_STOCK_CTE}
     SELECT * FROM computed
     WHERE cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml
+    ORDER BY ml_stock_actualizado_en IS NOT NULL, ml_stock_actualizado_en ASC
+    LIMIT ${SYNC_WC_ML_MAX_POR_CORRIDA}
   `).all();
 
   // Cache de estado de publicación por itemId (una consulta por item por corrida).
@@ -830,7 +854,12 @@ async function _syncWcToMl(db, cfg) {
   // — eran cientos de llamadas de 500ms desperdiciadas re-verificando pausadas. Solo
   // se hace el GET como fallback si el item no está en el cache. Si el cache está algo
   // desactualizado no hay drama: si una pausada figura activa, el PUT falla con 400
-  // (manejado); si una activa figura pausada, se saltea hasta el próximo refresh.
+  // (manejado); si una activa figura pausada, se saltea, PERO el refresh de esa columna
+  // ya no depende de que el usuario apriete el botón del matcher: reconciliarStockMl
+  // (más abajo) reescribe status/sub_status con el dato vivo del multiget cada corrida
+  // del cron ('9-59/10'), así que el caché queda alineado con ML a lo sumo cada ~3h (el
+  // tiempo del barrido completo con RECONCILIACION_LOTE=150) — ventana máxima en la que
+  // una activa puede quedar salteada acá antes de corregirse sola.
   const estadoItem = new Map();
   const itemsBloqueados = new Set();
   let cortadoPor429 = false;
@@ -966,29 +995,33 @@ export async function reconciliarStockMl(db, cfg) {
 async function _reconciliarStockMl(db, cfg) {
   const { ml: mlCfg } = cfg;
 
-  // Universo: publicaciones ACTIVAS (única alcance donde la sobreventa es real — una pausada
-  // no vende), con decisión de matcher (asignar/confirmar) y con fila existente en
-  // ml_stock_estado (si no la tiene todavía, no hay "recordado" contra qué comparar; syncWcToMl
-  // la crea sola en su primer push). Orden estable por clave para que el cursor tenga sentido
-  // entre corridas aunque el universo cambie un poco de una corrida a la otra.
-  // IMPORTANTE 3 (revisor): el filtro por status='active' de ml_publicaciones_cache solo
-  // cubre el falso positivo (caché dice activa pero ML la pausó — se detecta más abajo con
-  // el dato vivo del multiget). El falso negativo es el peligroso: caché desactualizada dice
-  // no-activa para una publicación que ML tiene activa CON STOCK, y esa fila queda afuera del
-  // universo, invisible para siempre hasta el próximo refresh manual del matcher. Por eso se
-  // incluyen también las filas cuya caché no dice 'active' pero cuyo ml_stock_estado registra
-  // cantidad_ml > 0: son pocas y el multiget de abajo resuelve el status real (si ML confirma
-  // que no está activa, el chequeo de status más abajo la vuelve a saltear sin tocar nada).
+  // Universo: TODAS las publicaciones con decisión de matcher (asignar/confirmar) que existan
+  // en ml_publicaciones_cache. LEFT JOIN a ml_stock_estado (no INNER): una fila sin
+  // ml_stock_estado todavía no tiene "recordado" contra qué comparar, pero igual entra al
+  // universo para que el multiget de abajo la resuelva y la dé de alta con el valor REAL de ML
+  // (ver más abajo el INSERT ON CONFLICT DO NOTHING). Orden estable por la clave de la decisión
+  // (no por e.clave, que ahora puede venir NULL) para que el cursor tenga sentido entre corridas.
+  //
+  // IMPORTANTE 3 (revisor, reescrito 2026-08-07 — caso Starvos): el universo YA NO depende de
+  // ml_publicaciones_cache.status. Esa columna solo se escribe a mano (cuando el usuario aprieta
+  // "refrescar" en el matcher) o, desde este mismo cambio, la reescribe esta función con el dato
+  // vivo del multiget — no hay ningún cron que la mantenga al día por su cuenta. Filtrar el
+  // universo por ella era el bug real: cuatro publicaciones de Bontrager Starvos quedaron
+  // 'paused_by_seller' en caché desde el 07-30 mientras estaban ACTIVAS y vendiendo en ML,
+  // invisibles para la reconciliación hasta el próximo refresh manual que nunca llegó. El status
+  // real de cada publicación lo resuelve el multiget de abajo (item.status !== 'active' → se
+  // saltea sin tocar el stock, es lo correcto: una pausada de verdad no vende); acá arriba no se
+  // filtra nada por status, se trae el universo entero de publicaciones mapeadas.
   const universo = db.prepare(`
-    SELECT e.clave, e.sku, e.cantidad_ml
-    FROM ml_stock_estado e
-    JOIN sku_matcher_decisiones d ON d.clave = e.clave AND d.accion IN ('asignar','confirmar')
-    JOIN ml_publicaciones_cache p ON p.clave = e.clave
-    WHERE p.status = 'active' OR e.cantidad_ml > 0
-    ORDER BY e.clave
+    SELECT d.clave, COALESCE(e.sku, d.sku) AS sku, e.cantidad_ml
+    FROM sku_matcher_decisiones d
+    JOIN ml_publicaciones_cache p ON p.clave = d.clave
+    LEFT JOIN ml_stock_estado e ON e.clave = d.clave
+    WHERE d.accion IN ('asignar','confirmar')
+    ORDER BY d.clave
   `).all();
 
-  if (universo.length === 0) return { omitido: false, revisadas: 0, corregidas: 0, sinDato: 0 };
+  if (universo.length === 0) return { omitido: false, revisadas: 0, corregidas: 0, sinDato: 0, statusRefrescados: 0 };
 
   // Cursor persistido en sync_estado. Si la clave guardada ya no está en el universo actual
   // (se desmapeó, se pausó y cayó del filtro, etc.) NO se reinicia a 0 en silencio: eso
@@ -1024,6 +1057,21 @@ async function _reconciliarStockMl(db, cfg) {
     chunks.push(itemIdsUnicos.slice(i, i + RECONCILIACION_MULTIGET_CHUNK));
   }
 
+  // Snapshot de status/sub_status ANTES del multiget (M1, revisor): el multiget puede tardar
+  // hasta ~12s (8 chunks x 1.5s) y en ese tiempo otro flujo (reactivarItems, el botón
+  // "refrescar" del matcher) puede escribir un status más fresco en ml_publicaciones_cache.
+  // Leer la caché recién al escribir (como antes) comparaba contra un dato potencialmente
+  // stale y pisaba ese cambio más fresco con el status viejo del multiget — reintroducía el
+  // punto ciego de Starvos vía el camino inverso (una recién reactivada podía volver a
+  // marcarse 'paused'). El CAS de abajo usa ESTE snapshot, tomado antes de la primera llamada
+  // a ML, como condición: si cambió desde entonces, el otro flujo ganó y no se pisa.
+  const statusSnapshot = new Map(); // itemId -> { status, sub_status } | null (sin fila)
+  const snapshotStmt = db.prepare('SELECT status, sub_status FROM ml_publicaciones_cache WHERE item_id = ? LIMIT 1');
+  for (const itemId of itemIdsUnicos) {
+    const row = snapshotStmt.get(itemId);
+    statusSnapshot.set(itemId, row ? { status: row.status, sub_status: row.sub_status } : null);
+  }
+
   const porItem = new Map(); // itemId -> body del item devuelto por ML
   let cortadoPor429 = false;
   for (let i = 0; i < chunks.length; i++) {
@@ -1031,7 +1079,7 @@ async function _reconciliarStockMl(db, cfg) {
     try {
       const resp = await mlFetch(
         db, mlCfg, 'get',
-        `/items?ids=${chunk.join(',')}&attributes=id,status,available_quantity,variations`
+        `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,available_quantity,variations`
       );
       if (resp.status === 429) {
         // Mismo criterio que syncWcToMl (routes/sync.js, cortadoPor429): con 429 sostenido
@@ -1060,8 +1108,29 @@ async function _reconciliarStockMl(db, cfg) {
     if (i < chunks.length - 1) await sleep(RECONCILIACION_PAUSA_CHUNK_MS);
   }
 
+  // db.prepare() hoisteados fuera del bucle de 150 iteraciones (m1, revisor) — mismo criterio
+  // que refrescar/marcarActivo más abajo en el archivo.
+  const stmtUpdateStatusYSub = db.prepare('UPDATE ml_publicaciones_cache SET status = ?, sub_status = ? WHERE item_id = ? AND status IS ?');
+  const stmtUpdateSoloStatus = db.prepare('UPDATE ml_publicaciones_cache SET status = ? WHERE item_id = ? AND status IS ?');
+  const stmtAltaStockEstado = db.prepare(`
+    INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES (?, ?, ?, ?)
+    ON CONFLICT(clave) DO NOTHING
+  `);
+  const stmtCasStockEstado = db.prepare(
+    'UPDATE ml_stock_estado SET cantidad_ml = ?, actualizado_en = ? WHERE clave = ? AND cantidad_ml = ?'
+  );
+
   let corregidas = 0;
   let sinDato = 0;
+  // Filas cuya decisión de matcher no tiene sku resuelto: no es un fallo de ML (que sí
+  // contestó), es una condición estable del lado nuestro. Contador separado (m2, revisor):
+  // mezclado con sinDato, el warn de fail-closed de más abajo gritaba en cada corrida por
+  // filas que no tienen nada que ver con un 429 o un chunk caído, y nadie lo miraba.
+  let sinSku = 0;
+  let statusRefrescados = 0;
+  // Items cuyo status/sub_status en ml_publicaciones_cache ya se refrescó en esta corrida
+  // (una sola escritura por item_id, no por fila/variación del lote).
+  const statusRefrescadoItemIds = new Set();
   // Última clave del lote (en orden) que sí tuvo dato real de ML, sea o no divergente.
   // El cursor solo puede avanzar hasta ahí (ver más abajo). Ojo (M2, revisor): esto solo
   // garantiza que las filas sin dato al FINAL del lote se reintenten en la corrida
@@ -1078,9 +1147,57 @@ async function _reconciliarStockMl(db, cfg) {
     // ml_stock_estado tal cual está y se sigue con la próxima.
     if (!item) { sinDato++; continue; }
 
+    // Refresco de status/sub_status en ml_publicaciones_cache con el dato vivo del multiget
+    // (esto es lo que cierra el punto ciego de _syncWcToMl, que hoy lee esa columna sin
+    // ningún cron que la mantenga al día). Fail-closed: solo se escribe si ML respondió 200
+    // con un status presente; se hace UNA vez por item_id (no por fila/variación).
+    //
+    // CAS (M1, revisor): se condiciona contra `statusSnapshot`, tomado ANTES del multiget, no
+    // contra una relectura de la caché al momento de escribir — si otro flujo (reactivarItems,
+    // "refrescar" del matcher) cambió el status en el medio, su dato es más fresco y gana; el
+    // UPDATE con WHERE status IS <snapshot> no matchea (changes===0) y no se pisa ni se cuenta.
+    //
+    // sub_status (M2, revisor): si ML respondió 200 pero omitió el atributo sub_status (no
+    // está en el objeto), NO se escribe '' encima del valor guardado — eso borraría, por
+    // ejemplo, 'out_of_stock' de una pausada por falta de stock y la sacaría en falso de
+    // getReactivablesRows. Solo se pisa sub_status cuando el atributo vino presente.
+    //
+    // actualizado_en (B1, revisor): deliberadamente NO se toca acá. firmaCandidatos (matcher.js)
+    // usa MAX(actualizado_en) de esta tabla como firma de invalidación del caché de candidatos
+    // del matcher, asumiendo que nada la escribe fuera del refresh manual — si este UPDATE
+    // tocara actualizado_en, cada corrida del barrido (cron 9-59/10) invalidaría ese caché
+    // entero (recómputo de >120s) sin que título/sku/atributos hayan cambiado. status/sub_status
+    // no participan del cruce de candidatos, así que dejar actualizado_en intacto mantiene la
+    // firma válida como invalidador sin perder la corrección de status.
+    if (item.status != null && !statusRefrescadoItemIds.has(itemId)) {
+      statusRefrescadoItemIds.add(itemId);
+      const snapshot = statusSnapshot.get(itemId);
+      const subStatusPresente = 'sub_status' in item;
+      const subStatus = Array.isArray(item.sub_status) ? item.sub_status.join(',') : String(item.sub_status ?? '');
+      const cambia = snapshot && (snapshot.status !== item.status || (subStatusPresente && (snapshot.sub_status ?? '') !== subStatus));
+      if (snapshot && cambia) {
+        // El UPDATE es por item_id (todas las claves/variaciones de esa publicación, ver
+        // "Lo que el revisor verificó y está BIEN" — write-back por item_id es lo correcto),
+        // así que puede tocar varias filas de ml_publicaciones_cache a la vez: changes > 0
+        // (no === 1) es la condición correcta de "sí escribió".
+        const res = subStatusPresente
+          ? stmtUpdateStatusYSub.run(item.status, subStatus, itemId, snapshot.status)
+          : stmtUpdateSoloStatus.run(item.status, itemId, snapshot.status);
+        if (res.changes > 0) statusRefrescados++;
+      }
+    }
+
     // No está activa en ML (puede haber cambiado desde el último refresh del cache local):
     // no es sobreventa real porque no vende. Se saltea sin tocar el estado. Sí hubo dato real
     // de ML para este item (confirmó que no está activa), así que el cursor puede avanzar.
+    //
+    // (m3, revisor) Distinción entre status AUSENTE (ML respondió 200 pero sin el atributo
+    // status — no debería pasar pidiéndolo explícito en `attributes=`, pero no se descarta) y
+    // status presente no-activo. Lo primero es fail-closed real (mismo criterio que
+    // chequearNetoReactivar con item===undefined): no se puede afirmar que no está activa, así
+    // que cuenta sinDato y el cursor NO avanza por esta fila, para reintentarla. Lo segundo es
+    // una confirmación real de ML (no vende) y el cursor sí avanza.
+    if (item.status == null) { sinDato++; continue; }
     if (item.status !== 'active') { ultimaIdxConDato = i; continue; }
 
     // Misma granularidad que ml_stock_estado.clave: variación si la fila tiene variationId,
@@ -1109,6 +1226,34 @@ async function _reconciliarStockMl(db, cfg) {
 
     ultimaIdxConDato = i;
 
+    // Fila sin ml_stock_estado todavía (universo con LEFT JOIN — ver arriba): no hay un
+    // "recordado" contra el cual comparar. Se da de alta directamente con el valor REAL de
+    // ML, no con un UPDATE condicional. ml_stock_estado.sku es NOT NULL: si no hay sku
+    // resuelto (COALESCE(e.sku, d.sku) vino null/vacío), no se puede insertar — se cuenta
+    // como sinSku (m2, revisor — no es "sin dato de ML", ML sí contestó; es una condición
+    // estable: la decisión del matcher no tiene sku) y el cursor avanza igual, no tiene
+    // sentido reintentarla en la próxima vuelta.
+    if (fila.cantidad_ml == null) {
+      if (!fila.sku) { sinSku++; continue; }
+      const alta = stmtAltaStockEstado.run(fila.clave, fila.sku, cantidadReal, now());
+
+      if (alta.changes === 1) {
+        // Mismo criterio CAS que el UPDATE de abajo: si otro proceso ya creó la fila entre la
+        // lectura del universo y este INSERT, no se pisa (su dato es más fresco) y no se cuenta.
+        logSync(db, {
+          direccion: 'wc_ml',
+          clave: fila.clave,
+          sku: fila.sku,
+          cantAnterior: null,
+          cantNueva: cantidadReal,
+          estado: 'reconciliado',
+          error: `Reconciliación: publicación sin ml_stock_estado registrado (punto ciego cerrado). ML tiene ${cantidadReal} unidades. Estado local dado de alta con ese valor; syncWcToMl empujará el stock real de Woo en la próxima corrida.`,
+        });
+        corregidas++;
+      }
+      continue;
+    }
+
     if (cantidadReal !== fila.cantidad_ml) {
       // IMPORTANTE 4 (revisor): compare-and-swap contra el valor leído al armar el universo,
       // no un upsert incondicional. Entre esa lectura y este UPDATE pasan hasta ~7.5s (5
@@ -1117,9 +1262,14 @@ async function _reconciliarStockMl(db, cfg) {
       // generaría una fila de sync_log engañosa y un push de más hacia ML. Si otro proceso
       // ya cambió la fila, este UPDATE no matchea (changes === 0) y no se cuenta como
       // corregida ni se loguea: no hay nada que corregir, ya está actualizada.
-      const cambio = db.prepare(
-        'UPDATE ml_stock_estado SET cantidad_ml = ?, actualizado_en = ? WHERE clave = ? AND cantidad_ml = ?'
-      ).run(cantidadReal, now(), fila.clave, fila.cantidad_ml);
+      //
+      // (m4, revisor, no arreglado a propósito) Churn posible: si syncWcToMl empuja hacia ML
+      // el mismo valor que reconciliarStockMl ya había leído acá, el CAS de esta corrida SÍ
+      // matchea contra el `cantidad_ml` viejo y reescribe con la lectura de ML de este barrido;
+      // el próximo syncWcToMl puede volver a empujar el mismo PUT. Converge solo (no queda
+      // desincronizado) y cuesta como mucho un PUT de más por vuelta — no vale la complejidad
+      // de resolverlo, se deja anotado.
+      const cambio = stmtCasStockEstado.run(cantidadReal, now(), fila.clave, fila.cantidad_ml);
 
       if (cambio.changes === 1) {
         // direccion 'wc_ml' porque la corrección de estado es la misma vía por la que syncWcToMl
@@ -1142,8 +1292,16 @@ async function _reconciliarStockMl(db, cfg) {
   if (sinDato > 0) {
     // Modo de falla mudo (mismo criterio aplicado en reactivarAutomatico, server.js): sin
     // este aviso, un 429 sostenido hace que el cursor dé vueltas completas sin haber leído
-    // un solo dato real de ML, indistinguible en el log de una corrida normal.
+    // un solo dato real de ML, indistinguible en el log de una corrida normal. Este contador
+    // es SOLO transitorias/fail-closed (ML no contestó, o el status vino ausente pese a 200) —
+    // ver sinSku abajo para lo permanente, que no es un problema de ML.
     console.warn(`reconciliarStockMl: ${sinDato} de ${lote.length} publicaciones del lote quedaron sin dato de ML (fail-closed)${cortadoPor429 ? ' — cooldown 429 activo' : ''}`);
+  }
+  if (sinSku > 0) {
+    // (m2, revisor) Warn separado y accionable: estas filas SÍ tuvieron respuesta de ML, el
+    // problema es que la decisión del matcher no tiene sku resuelto. No es un fallo transitorio
+    // que se arregle solo reintentando — necesita que el usuario complete el sku en el matcher.
+    console.warn(`reconciliarStockMl: ${sinSku} de ${lote.length} publicaciones del lote no tienen sku resuelto en la decisión del matcher (requiere completar el sku, no es fail transitorio de ML)`);
   }
 
   // Avanzar el cursor solo hasta la última clave del lote que sí tuvo dato real de ML
@@ -1159,7 +1317,7 @@ async function _reconciliarStockMl(db, cfg) {
     `).run(siguienteClave, now());
   }
 
-  return { omitido: false, revisadas: lote.length, corregidas, sinDato };
+  return { omitido: false, revisadas: lote.length, corregidas, sinDato, sinSku, statusRefrescados };
 }
 
 // ─── procesarReintentos ───────────────────────────────────────────────────────
@@ -2206,6 +2364,7 @@ export function syncRouter(db, cfg) {
         revisadas: r?.revisadas ?? 0,
         corregidas: r?.corregidas ?? 0,
         sinDato: r?.sinDato ?? 0,
+        statusRefrescados: r?.statusRefrescados ?? 0,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });

@@ -337,8 +337,14 @@ function hashCatalogoMatching(db) {
 function firmaCandidatos(db) {
   // Catálogo: hash de campos relevantes al matching (NO stock — ver hashCatalogoMatching).
   const wc = hashCatalogoMatching(db);
-  // Publicaciones ML: se refrescan a mano desde ML (no las toca el auto-sync de stock),
-  // así que conteo + max(actualizado_en) alcanza para detectar un refresco.
+  // Publicaciones ML: se refrescan a mano desde ML (el refresh completo del botón del
+  // matcher), así que conteo + max(actualizado_en) alcanza para detectar ESE refresco.
+  // Excepción deliberada (revisor, B1 2026-08-07): reconciliarStockMl (routes/sync.js)
+  // también escribe status/sub_status de esta misma tabla, en cron, pero a propósito NO
+  // toca actualizado_en al hacerlo — si lo tocara, cada corrida del barrido invalidaría este
+  // caché completo (recómputo de >120s) sin que título/sku/atributos hayan cambiado. La firma
+  // sigue siendo válida como invalidador porque el cruce de candidatos (candidatosDeItem en
+  // lib/matcherEngine.js) no usa status/sub_status para nada, solo sku/nombre/atributos.
   const ml = db.prepare('SELECT COUNT(*) n, MAX(actualizado_en) t FROM ml_publicaciones_cache').get();
   // Decisiones: afectan el subconjunto 'atencion' (una decisión saca la clave de la lista).
   const dec = db.prepare('SELECT COUNT(*) n, MAX(actualizado_en) t FROM sku_matcher_decisiones').get();

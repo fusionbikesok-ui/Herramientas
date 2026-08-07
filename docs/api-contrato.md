@@ -122,9 +122,18 @@ en estado no verificable. Requieren acción manual:
 Dispara manualmente la sincronización de stock de WooCommerce hacia MercadoLibre.
 Protegida por el candado `_wcToMlEnCurso`.
 
+Tope por corrida (2026-08-07, revisor M3): procesa como máximo `SYNC_WC_ML_MAX_POR_CORRIDA`
+(200) diffs, ordenados por `ml_stock_estado.actualizado_en` ascendente (NULL/nunca registrado
+primero). Los diffs que no entran en el tope no se pierden — la query de diffs se recalcula
+entera en cada corrida (idempotente) y quedan para la siguiente, con el orden garantizando que
+rotan (no favorece siempre a las mismas claves). Con el `ML_CALL_DELAY_MS=500`, el peor caso
+es ~100s por corrida, muy por debajo del cron de 10 min. Se agregó tras alinear el status de
+`ml_publicaciones_cache` con ML real (ver `/api/sync/reconciliar-stock` abajo), que hizo que
+este flujo dejara de saltear una masa grande de publicaciones que antes creía pausadas.
+
 - Request: sin body.
 - Response 200:
-  - `{ "ok": true, "omitido": false }` — corrió la sincronización.
+  - `{ "ok": true, "omitido": false }` — corrió la sincronización (hasta el tope de diffs).
   - `{ "ok": true, "omitido": true }` — se salteó por candado activo o config de ML no
     lista; NO sincronizó.
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
@@ -133,40 +142,57 @@ Protegida por el candado `_wcToMlEnCurso`.
 Dispara manualmente un lote de la reconciliación incremental de stock contra ML real
 (`reconciliarStockMl`, cron cada 10 min en `:09`, ver `server.js`). Compara
 `ml_stock_estado.cantidad_ml` (lo que recordamos haber empujado) contra el `available_quantity`
-REAL de ML para publicaciones activas mapeadas, con multiget en chunks de 20 y pausa de
+REAL de ML para publicaciones mapeadas, con multiget en chunks de 20 y pausa de
 ~1.5s entre chunks (medido: ML devuelve 429 sin esa pausa). Corrige divergencias en
 `ml_stock_estado` en ambos sentidos y registra cada una en `sync_log` (`estado: 'reconciliado'`).
 
-**No escribe en ML.** La corrección real hacia ML la sigue haciendo `syncWcToMl` en su
-próxima corrida, por su camino ya probado.
+**No escribe stock en ML** (la corrección real hacia ML la sigue haciendo `syncWcToMl` en su
+próxima corrida, por su camino ya probado), **pero desde 2026-08-07 SÍ escribe**
+`status`/`sub_status` **en `ml_publicaciones_cache`** con el dato vivo del mismo multiget —
+antes esa tabla era solo-lectura para este flujo. Antes de escribir, toma un snapshot del
+status/sub_status guardado (antes de arrancar el multiget) y condiciona el UPDATE a que siga
+siendo ese valor (compare-and-swap por `item_id`, todas las claves/variaciones de la
+publicación a la vez): si otro flujo (reactivación manual/automática, refresh del matcher)
+cambió el status en el medio, su dato es más fresco y gana, no se pisa. Si ML no informó
+`sub_status` en la respuesta (atributo ausente), no se toca el valor guardado — nunca se pisa
+con `''`. **Deliberadamente NO toca `actualizado_en`** de `ml_publicaciones_cache`: esa columna
+es la firma de invalidación del caché de candidatos del matcher (`firmaCandidatos`,
+`routes/matcher.js`), que no depende de status/sub_status — tocarla invalidaría ese caché
+(recómputo O(publicaciones × catálogo), >120s) en cada corrida del cron sin necesidad.
 
 Fail-closed: si un item queda ausente del multiget (incluye elemento con `code !== 200` dentro
-del array, chunk con excepción de red, o cooldown 429 — corta el resto de los chunks de la
-corrida igual que `syncWcToMl`), el status ya no es `active`, o la cantidad devuelta no es un
-número finito, esa fila de `ml_stock_estado` se deja intacta y cuenta como `sinDato`.
+del array, chunk con excepción de red, cooldown 429 — corta el resto de los chunks de la
+corrida igual que `syncWcToMl` —, o la respuesta 200 omite el atributo `status`), la cantidad
+devuelta no es un número finito, esa fila de `ml_stock_estado` se deja intacta y cuenta como
+`sinDato` (no avanza el cursor por esa fila). Si la fila no tiene sku resuelto en la decisión
+del matcher, cuenta aparte como `sinSku` (no es una falla de ML, requiere completar el sku).
 
-Universo: publicaciones con `ml_publicaciones_cache.status = 'active'` **o** con
-`ml_stock_estado.cantidad_ml > 0` aunque la caché diga otra cosa — cubre el caso en que la
-caché del matcher (no tiene cron propio, solo se refresca a mano) quedó desactualizada y una
-publicación real-activa-con-stock caería fuera del barrido en silencio. El multiget resuelve
-el status real de cada una.
+Universo: TODAS las publicaciones con decisión de matcher (`asignar`/`confirmar`) presentes en
+`ml_publicaciones_cache`, sin filtrar por `status` (cambio 2026-08-07, caso Starvos: la caché
+de status solo se refresca a mano o por este mismo write-back, no hay cron que la mantenga al
+día por su cuenta — filtrar el universo por ella dejaba publicaciones activas-y-vendiendo
+invisibles para la reconciliación). El multiget resuelve el status real de cada una.
 
 Protegida por el candado `_reconciliarStockEnCurso`. Cursor circular persistido en
 `sync_estado` (clave `cursor_reconciliacion_stock`): cada corrida toma el siguiente lote de
-hasta 100 publicaciones y, al llegar al final del universo, vuelve a empezar. Si la clave del
-cursor ya no está en el universo actual, retoma en la siguiente clave lexicográficamente mayor
-(no en 0) para no perder la posición del barrido cuando el universo cambia entre corridas. El
-cursor solo avanza hasta la última publicación del lote que efectivamente tuvo dato de ML: si
-el multiget no devolvió nada útil (429 sostenido, etc.), el cursor no avanza y la corrida
-siguiente reintenta el mismo lote en vez de darlo por revisado.
+hasta 150 publicaciones (`RECONCILIACION_LOTE`, subido de 100 el 2026-08-07 al duplicarse el
+universo por sacar el filtro de status) y, al llegar al final del universo, vuelve a empezar.
+Si la clave del cursor ya no está en el universo actual, retoma en la siguiente clave
+lexicográficamente mayor (no en 0) para no perder la posición del barrido cuando el universo
+cambia entre corridas. El cursor solo avanza hasta la última publicación del lote que
+efectivamente tuvo dato de ML: si el multiget no devolvió nada útil (429 sostenido, etc.), el
+cursor no avanza y la corrida siguiente reintenta el mismo lote en vez de darlo por revisado.
 
 - Request: sin body.
-- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n>, "sinDato": <n> }`.
+- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n>, "sinDato": <n>, "sinSku": <n>, "statusRefrescados": <n> }`.
   `sinDato` son publicaciones del lote que quedaron sin dato real de ML (fail-closed); no
-  cuentan como revisadas a efectos de avance de cursor. `omitido: true` cuando no corrió, con
-  `motivo: 'en_curso' | 'sin_config'` — no revisó nada.
-- Costo: cada POST efectivo dispara hasta 5 llamadas a ML (multiget en chunks de 20 para un
-  lote de 100) y bloquea la respuesta ~7.5s (pausa de 1.5s entre chunks).
+  cuentan como revisadas a efectos de avance de cursor. `sinSku` son publicaciones sin sku
+  resuelto en la decisión del matcher (ML sí contestó). `statusRefrescados` cuenta items
+  (no filas/variaciones) cuyo status/sub_status se escribió en `ml_publicaciones_cache` esta
+  corrida. `omitido: true` cuando no corrió, con `motivo: 'en_curso' | 'sin_config'` — no
+  revisó nada.
+- Costo: cada POST efectivo dispara hasta 8 llamadas a ML (multiget en chunks de 20 para un
+  lote de 150) y bloquea la respuesta ~10.5s (pausa de 1.5s entre chunks).
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
 
 ### GET /api/sync/dashboard (campo agregado)

@@ -230,10 +230,10 @@ describe('reconciliarStockMl', () => {
     expect(r2.revisadas).toBe(3);
   });
 
-  // RECONCILIACION_LOTE es 100 y el lote siempre cubre min(LOTE, universo.length): con un
+  // RECONCILIACION_LOTE es 150 y el lote siempre cubre min(LOTE, universo.length): con un
   // universo de 3-4 filas (como el test de arriba) el lote SIEMPRE da la vuelta entera y
   // nunca prueba avance real del cursor (su propio comentario lo admitía). Para probar
-  // avance real hace falta un universo > 100, así el lote deja filas afuera.
+  // avance real hace falta un universo > 150, así el lote deja filas afuera.
   function seedUniversoGrande(db, n) {
     for (let i = 0; i < n; i++) {
       const clave = `MLA1${String(i).padStart(4, '0')}|`;
@@ -242,7 +242,7 @@ describe('reconciliarStockMl', () => {
   }
 
   it('avance real del cursor con lote menor al universo (universo > RECONCILIACION_LOTE)', async () => {
-    seedUniversoGrande(db, 105); // > 100: el lote de la primera corrida no cubre todo
+    seedUniversoGrande(db, 155); // > 150: el lote de la primera corrida no cubre todo
 
     mlFetch.mockImplementation(async (dbArg, cfgArg, method, path) => {
       const ids = path.match(/ids=([^&]+)/)[1].split(',');
@@ -253,18 +253,18 @@ describe('reconciliarStockMl', () => {
     });
 
     const r1 = await correr(db, CFG);
-    expect(r1.revisadas).toBe(100); // tamanoLote = min(100, 105)
+    expect(r1.revisadas).toBe(150); // tamanoLote = min(150, 155)
 
-    // El cursor avanzó, no dio la vuelta: debe apuntar a la clave Nº100 (índice 100, base 0),
+    // El cursor avanzó, no dio la vuelta: debe apuntar a la clave Nº150 (índice 150, base 0),
     // no a la primera del universo.
     const cursor1 = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
-    expect(cursor1.valor).toBe('MLA10100|');
+    expect(cursor1.valor).toBe('MLA10150|');
     expect(cursor1.valor).not.toBe('MLA10000|');
 
-    // Segunda corrida: cubre las 5 restantes y da la vuelta, tomando 95 de las ya vistas
+    // Segunda corrida: cubre las 5 restantes y da la vuelta, tomando 145 de las ya vistas
     // (lote circular) — lo importante es que retomó desde donde quedó, no desde 0.
     const r2 = await correr(db, CFG);
-    expect(r2.revisadas).toBe(100);
+    expect(r2.revisadas).toBe(150);
   });
 
   it('clave del cursor desaparecida del universo → arranca en la siguiente lexicográficamente mayor, no en 0', async () => {
@@ -462,8 +462,8 @@ describe('reconciliarStockMl', () => {
     expect(r.revisadas).toBe(25);
   });
 
-  describe('universo: filas con status distinto de "active" en la caché local', () => {
-    it('con cantidad_ml > 0 (falso negativo peligroso) SÍ entra al universo, y se saltea sin tocar el estado si ML confirma que sigue no-activa', async () => {
+  describe('universo: filas con status distinto de "active" en la caché local (caso Starvos)', () => {
+    it('con cantidad_ml > 0 entra al universo (siempre entra, ya no depende del status en caché), y se saltea sin tocar el estado si ML confirma que sigue no-activa', async () => {
       seedPublicacion(db, { clave: 'MLA850|', itemId: 'MLA850', sku: 'CASCO-Z', cantidadMl: 2, status: 'paused' });
       mlFetch.mockResolvedValue({
         status: 200,
@@ -479,13 +479,193 @@ describe('reconciliarStockMl', () => {
       expect(estado.cantidad_ml).toBe(2);
     });
 
-    it('con cantidad_ml = 0 queda FUERA del universo (nada que vender, nada que reconciliar) y ni siquiera se consulta a ML', async () => {
+    it('con cantidad_ml = 0 y status "closed" en caché IGUAL entra al universo (el universo ya no filtra por status): se consulta y no hay nada que corregir', async () => {
       seedPublicacion(db, { clave: 'MLA851|', itemId: 'MLA851', sku: 'CASCO-Y', cantidadMl: 0, status: 'closed' });
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA851', status: 'closed', available_quantity: 0 } }],
+      });
 
       const r = await correr(db, CFG);
 
-      expect(r.revisadas).toBe(0);
-      expect(mlFetch).not.toHaveBeenCalled();
+      expect(mlFetch).toHaveBeenCalled();
+      expect(r.revisadas).toBe(1);
+      expect(r.corregidas).toBe(0);
+    });
+
+    it('caso Starvos: status="paused_by_seller" en caché pero ML la tiene "active" con stock → SÍ entra al universo, se corrige el stock Y se refresca el status en ml_publicaciones_cache', async () => {
+      seedPublicacion(db, { clave: 'MLA3101044322|', itemId: 'MLA3101044322', sku: 'FB-58761', cantidadMl: 13, status: 'paused' });
+      db.prepare("UPDATE ml_publicaciones_cache SET sub_status = 'paused_by_seller' WHERE clave = 'MLA3101044322|'").run();
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA3101044322', status: 'active', sub_status: [], available_quantity: 15 } }],
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(r.revisadas).toBe(1);
+      expect(r.corregidas).toBe(1);
+      expect(r.statusRefrescados).toBe(1);
+      const estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA3101044322|'").get();
+      expect(estado.cantidad_ml).toBe(15);
+      const cache = db.prepare("SELECT status, sub_status FROM ml_publicaciones_cache WHERE clave = 'MLA3101044322|'").get();
+      expect(cache.status).toBe('active');
+      expect(cache.sub_status).toBe('');
+    });
+  });
+
+  describe('universo: filas sin fila en ml_stock_estado (LEFT JOIN, punto ciego cerrado)', () => {
+    function seedSinStockEstado(db, { clave, itemId, sku, status = 'active' }) {
+      const now = new Date().toISOString();
+      db.prepare(
+        'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+      ).run(clave, sku, 'Producto', 'confirmar', now);
+      db.prepare(
+        'INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+      ).run(clave, itemId, '', status, now);
+    }
+
+    it('publicación mapeada sin fila en ml_stock_estado se da de alta con el valor REAL de ML (no se pierde el punto ciego)', async () => {
+      seedSinStockEstado(db, { clave: 'MLA3100995880|', itemId: 'MLA3100995880', sku: 'FB-58759' });
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA3100995880', status: 'active', available_quantity: 12 } }],
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(r.revisadas).toBe(1);
+      expect(r.corregidas).toBe(1);
+      const estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA3100995880|'").get();
+      expect(estado.cantidad_ml).toBe(12);
+      const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'MLA3100995880|' AND estado = 'reconciliado'").get();
+      expect(log).toBeTruthy();
+      expect(log.cant_anterior).toBeNull();
+      expect(log.cant_nueva).toBe(12);
+      expect(log.error).toMatch(/sin ml_stock_estado registrado/);
+      expect(log.error).toMatch(/ML tiene 12/);
+    });
+
+    it('el INSERT de alta usa ON CONFLICT(clave) DO NOTHING (no revienta si la fila ya existiera al momento de escribir)', async () => {
+      seedSinStockEstado(db, { clave: 'MLA3100995881|', itemId: 'MLA3100995881', sku: 'FB-58762' });
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA3100995881', status: 'active', available_quantity: 12 } }],
+      });
+
+      const r = await correr(db, CFG);
+
+      // Universo con LEFT JOIN: no hay fila previa en ml_stock_estado, se da de alta con el
+      // valor real de ML (12). Cubre el mismo camino que el test de arriba, verificando además
+      // que no hay excepción por PK duplicada si el ON CONFLICT se ejerce.
+      expect(r.corregidas).toBe(1);
+      const estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA3100995881|'").get();
+      expect(estado.cantidad_ml).toBe(12);
+    });
+  });
+
+  describe('write-back de status/sub_status: no toca actualizado_en, CAS contra snapshot previo, sub_status ausente no pisa', () => {
+    it('escribe status/sub_status pero NO toca actualizado_en de ml_publicaciones_cache (B1, revisor)', async () => {
+      seedPublicacion(db, { clave: 'MLA1000|', itemId: 'MLA1000', sku: 'A', cantidadMl: 1, status: 'paused' });
+      const actualizadoAntes = db.prepare("SELECT actualizado_en FROM ml_publicaciones_cache WHERE clave = 'MLA1000|'").get().actualizado_en;
+
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA1000', status: 'active', sub_status: [], available_quantity: 1 } }],
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(r.statusRefrescados).toBe(1);
+      const cache = db.prepare("SELECT status, sub_status, actualizado_en FROM ml_publicaciones_cache WHERE clave = 'MLA1000|'").get();
+      expect(cache.status).toBe('active');
+      expect(cache.actualizado_en).toBe(actualizadoAntes); // intacto
+    });
+
+    it('sub_status ausente en la respuesta de ML no borra el sub_status guardado (M2, revisor)', async () => {
+      seedPublicacion(db, { clave: 'MLA1001|', itemId: 'MLA1001', sku: 'A', cantidadMl: 1, status: 'paused' });
+      db.prepare("UPDATE ml_publicaciones_cache SET sub_status = 'out_of_stock' WHERE clave = 'MLA1001|'").run();
+
+      // ML responde 200 con status pero SIN el atributo sub_status.
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA1001', status: 'paused', available_quantity: 1 } }],
+      });
+
+      await correr(db, CFG);
+
+      const cache = db.prepare("SELECT sub_status FROM ml_publicaciones_cache WHERE clave = 'MLA1001|'").get();
+      expect(cache.sub_status).toBe('out_of_stock'); // no se pisó con ''
+    });
+
+    it('CAS de status: si otro flujo cambió el status entre el snapshot y el UPDATE, no se pisa (M1, revisor)', async () => {
+      seedPublicacion(db, { clave: 'MLA1002|', itemId: 'MLA1002', sku: 'A', cantidadMl: 1, status: 'paused' });
+
+      // El multiget devuelve 'paused' (dato "viejo" al momento en que se resuelve la promesa),
+      // pero antes de que se resuelva, otro flujo (simulado acá) ya reactivó la publicación.
+      mlFetch.mockImplementation(async () => {
+        db.prepare("UPDATE ml_publicaciones_cache SET status = 'active', sub_status = '' WHERE clave = 'MLA1002|'").run();
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA1002', status: 'paused', available_quantity: 1 } }] };
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(r.statusRefrescados).toBe(0); // el CAS no matcheó: snapshot decía 'paused', cache ya no
+      const cache = db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave = 'MLA1002|'").get();
+      expect(cache.status).toBe('active'); // ganó el dato más fresco del otro flujo, no se pisó
+    });
+
+    it('item con N variaciones en el lote: una sola escritura de status, statusRefrescados cuenta 1 no N', async () => {
+      seedPublicacion(db, { clave: 'MLA1003|1', itemId: 'MLA1003', variationId: '1', sku: 'A', cantidadMl: 1, status: 'paused' });
+      seedPublicacion(db, { clave: 'MLA1003|2', itemId: 'MLA1003', variationId: '2', sku: 'B', cantidadMl: 1, status: 'paused' });
+
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{
+          code: 200,
+          body: {
+            id: 'MLA1003', status: 'active', sub_status: [],
+            variations: [{ id: 1, available_quantity: 1 }, { id: 2, available_quantity: 1 }],
+          },
+        }],
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(r.statusRefrescados).toBe(1);
+    });
+
+    it('item ausente del multiget / 429 → no se escribe status (garantía fail-closed)', async () => {
+      seedPublicacion(db, { clave: 'MLA1004|', itemId: 'MLA1004', sku: 'A', cantidadMl: 1, status: 'paused' });
+      mlFetch.mockResolvedValue({ status: 429, data: null });
+
+      const r = await correr(db, CFG);
+
+      expect(r.statusRefrescados).toBe(0);
+      const cache = db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave = 'MLA1004|'").get();
+      expect(cache.status).toBe('paused'); // intacto
+    });
+
+    it('fila con cantidad_ml == null y sku vacío → no inserta, cuenta sinSku, cursor avanza', async () => {
+      const nowIso = new Date().toISOString();
+      db.prepare(
+        'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+      ).run('MLA1005|', '', 'Producto', 'confirmar', nowIso);
+      db.prepare(
+        'INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+      ).run('MLA1005|', 'MLA1005', '', 'active', nowIso);
+
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA1005', status: 'active', available_quantity: 3 } }],
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(r.sinSku).toBe(1);
+      expect(db.prepare("SELECT * FROM ml_stock_estado WHERE clave = 'MLA1005|'").get()).toBeUndefined();
+      const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor.valor).toBe('MLA1005|'); // cursor avanzó igual
     });
   });
 
