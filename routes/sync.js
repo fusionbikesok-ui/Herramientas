@@ -898,8 +898,9 @@ async function _syncWcToMl(db, cfg, opts = {}) {
 
   for (const diff of diffs) {
     // Tope por LLAMADAS a ML, no por filas leídas (B1, ronda 2 revisor) — ver comentario de la
-    // constante. Se corta ANTES de gastar la llamada de esta iteración, así el contador nunca
-    // supera el tope.
+    // constante. Se chequea al INICIO de cada iteración, no dentro de ella: una iteración
+    // puede gastar hasta 2 llamadas (GET de status de fallback + PUT de stock), así que el
+    // tope puede excederse en 1 llamada como máximo — irrelevante contra el presupuesto.
     if (llamadasMl >= maxLlamadas) {
       cortadoPorTope = true;
       break;
@@ -1417,6 +1418,16 @@ async function _reconciliarStockMl(db, cfg) {
   // por corrida, no por fila. Filas fuera del lote de esta corrida conservan su contador previo
   // (no se tocan). db vacío (`{}`) se persiste igual para no dejar un valor stale si todo se
   // resolvió esta vuelta.
+  //
+  // Poda de claves fuera del universo actual (menor 4, revisor): una clave que sale del
+  // universo (matcher desvinculado, publicación borrada) con 1 o 2 fallos acumulados nunca
+  // llega a MAX_STATUS_AUSENTE_CONSECUTIVO ni se resetea (delete solo corre cuando la clave
+  // vuelve a aparecer en un lote) — quedaría en el JSON para siempre. Se poda acá, barato
+  // (un Set + filter sobre un objeto ya chico), en vez de dejar crecer el archivo en silencio.
+  const clavesUniverso = new Set(universo.map(r => r.clave));
+  for (const clave of Object.keys(contadorStatusAusente)) {
+    if (!clavesUniverso.has(clave)) delete contadorStatusAusente[clave];
+  }
   db.prepare(`
     INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)
     ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
