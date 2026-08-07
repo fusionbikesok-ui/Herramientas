@@ -8,6 +8,7 @@ import {
 import {
   escribirSkuEnMl, contarPendientes, pushSkusPendientes, getEstadoPush,
 } from '../lib/matcherPush.js';
+import { armarClaveMl } from '../lib/mlUtil.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -254,15 +255,22 @@ export function remarcarStockResueltos(db, items) {
   // de candidatos. Sin este re-cruce, la base ya diría 'active' pero la grilla seguiría
   // mostrando 'paused' hasta el próximo refresh manual o restart. Igual criterio que el
   // stock: barato (una query + Map), se recalcula en cada request, fuera del bloque cacheado.
-  const statusPorItemId = new Map();
-  for (const r of db.prepare('SELECT item_id, status FROM ml_publicaciones_cache').all()) {
-    if (r.status != null) statusPorItemId.set(String(r.item_id), r.status);
+  // Mapeado por clave (item_id|variation_id), no por item_id solo: dos variaciones del mismo
+  // ítem pueden divergir en status (mismo patrón ya corregido en sync.js) y un mapa por
+  // item_id le pisaría a todas el status de la última fila leída.
+  const statusPorClave = new Map();
+  for (const r of db.prepare('SELECT item_id, variation_id, status, sub_status FROM ml_publicaciones_cache').all()) {
+    if (r.status != null) {
+      statusPorClave.set(armarClaveMl(r.item_id, r.variation_id), { status: r.status, sub_status: r.sub_status || '' });
+    }
   }
   for (const it of items) {
     const sku = (it.sku_actual || '').trim();
     const stockWc = sku && stockPorSku.has(sku) ? stockPorSku.get(sku) : null;
-    const statusVivo = statusPorItemId.get(it.ml_item_id) ?? it.ml_status;
+    const vivo = statusPorClave.get(armarClaveMl(it.ml_item_id, it.ml_variation_id));
+    const statusVivo = vivo ? vivo.status : it.ml_status;
     it.ml_status = statusVivo;
+    if (vivo) it.ml_sub_status = vivo.sub_status;
     it.ml_stock_wc = stockWc;
     it.ml_sin_stock = statusVivo !== 'active' || (stockWc !== null && stockWc <= 0);
   }

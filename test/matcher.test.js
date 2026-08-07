@@ -199,6 +199,42 @@ describe('computarCandidatosApi — cruce de stock (ml_stock_wc / ml_sin_stock)'
     expect(items.DUP.ml_stock_wc).toBe(5);
     expect(items.DUP.ml_sin_stock).toBe(false);
   });
+
+  it('refresca sub_status junto con status (reconciliarStockMl reescribe paused+out_of_stock)', () => {
+    // Simula la caché de candidatos con dato stale (status paused pero sub_status vacío,
+    // como quedaría cacheado antes de que reconciliarStockMl escriba out_of_stock).
+    seedCache(db, { clave: 'SS|', itemId: 'SS', status: 'active', sellerSku: 'FB-20' });
+    seedCatalogo(db, { sku: 'FB-20', stock: 3 });
+    const res = computarCandidatosApi(db, 'all');
+
+    // reconciliarStockMl reescribió la fila viva en ml_publicaciones_cache mientras tanto.
+    db.prepare('UPDATE ml_publicaciones_cache SET status = ?, sub_status = ? WHERE clave = ?')
+      .run('paused', 'out_of_stock', 'SS|');
+
+    remarcarStockResueltos(db, res.items);
+    const item = res.items.find(i => i.ml_item_id === 'SS');
+    expect(item.ml_status).toBe('paused');
+    expect(item.ml_sub_status).toBe('out_of_stock');
+  });
+
+  it('dos variaciones del mismo item con status divergente: cada una muestra el suyo (no el de la última fila leída)', () => {
+    seedCache(db, { clave: 'VAR|1', itemId: 'VAR', variationId: '1', status: 'active', sellerSku: 'FB-21' });
+    seedCache(db, { clave: 'VAR|2', itemId: 'VAR', variationId: '2', status: 'active', sellerSku: 'FB-22' });
+    seedCatalogo(db, { sku: 'FB-21', stock: 3 });
+    seedCatalogo(db, { sku: 'FB-22', stock: 3 });
+    const res = computarCandidatosApi(db, 'all');
+
+    // Solo una variación se pausó en ML; la otra sigue activa.
+    db.prepare('UPDATE ml_publicaciones_cache SET status = ?, sub_status = ? WHERE clave = ?')
+      .run('paused', 'out_of_stock', 'VAR|1');
+
+    remarcarStockResueltos(db, res.items);
+    const v1 = res.items.find(i => i.ml_item_id === 'VAR' && i.ml_variation_id === '1');
+    const v2 = res.items.find(i => i.ml_item_id === 'VAR' && i.ml_variation_id === '2');
+    expect(v1.ml_status).toBe('paused');
+    expect(v1.ml_sub_status).toBe('out_of_stock');
+    expect(v2.ml_status).toBe('active');
+  });
 });
 
 describe('refrescarPublicacionesMlAcotado', () => {
