@@ -1269,22 +1269,24 @@ describe('syncWcToMl', () => {
     expect(estado).toBeUndefined();
   });
 
-  it('tope SYNC_WC_ML_MAX_POR_CORRIDA: con más diffs que el tope, procesa exactamente el tope y deja el resto para la corrida siguiente (M3, revisor)', async () => {
-    // Timeout explícito (default 5000ms no alcanza): son 200+10 iteraciones reales de
-    // microtasks/awaits con vi.runAllTimersAsync — los delays son instantáneos por fake
-    // timers, pero el propio scheduling de tantas promesas encadenadas sí consume wall-clock
-    // real, más aún bajo carga (suite completa). Sin esto, el test corta a mitad de camino y
-    // la corrida de syncWcToMl sigue en background, contaminando el test siguiente.
+  it('tope SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA: con más diffs que el tope, procesa exactamente el tope y deja el resto para la corrida siguiente (M3, revisor; tope inyectado chico — m5, ronda 2 revisor)', async () => {
+    // m5 (ronda 2 revisor): antes este test usaba 210 filas contra el tope real de 200
+    // (~420 iteraciones entre las dos corridas) con un margen de timeout fijo de 30s — escala
+    // con la carga de la suite y vuelve flaky. Ahora se prueba la MISMA propiedad con
+    // opts.maxLlamadas inyectado chico (5) y pocas filas (7): el costo es de milisegundos, no
+    // de wall-clock real, y documenta de paso que el tope es configurable.
     // Limpiar las decisiones/catálogo del seed genérico del describe (MLA100|/BIKE-001,
     // MLA200|987/CASCO-L) para que este test controle el universo de diffs con precisión.
     db.prepare("DELETE FROM sku_matcher_decisiones").run();
     db.prepare("DELETE FROM catalogo_cache").run();
 
-    // 210 publicaciones con diff (> 200, el tope) — ninguna con ml_stock_estado todavía, así
-    // que las 210 son diffs (cantidad_ml IS NULL). Cada una tiene su propio sku/producto para
-    // no chocar con el dedup de catalogo_cache.
+    const TOPE = 5;
+    const FILAS = 7;
+    // 7 publicaciones con diff (> tope de 5) — ninguna con ml_stock_estado todavía, así que
+    // las 7 son diffs (cantidad_ml IS NULL). Cada una tiene su propio sku/producto para no
+    // chocar con el dedup de catalogo_cache.
     const now = new Date().toISOString();
-    for (let i = 0; i < 210; i++) {
+    for (let i = 0; i < FILAS; i++) {
       const sku = `SKU-TOPE-${String(i).padStart(4, '0')}`;
       const clave = `MLATOPE${String(i).padStart(4, '0')}|`;
       db.prepare(
@@ -1299,25 +1301,81 @@ describe('syncWcToMl', () => {
     }
     mlFetch.mockResolvedValue({ status: 200, data: {} });
 
-    const p = syncWcToMl(db, CFG);
+    const p = syncWcToMl(db, CFG, { maxLlamadas: TOPE });
     await vi.runAllTimersAsync();
     await p;
 
-    // Se procesaron exactamente 200 (el tope), no las 210. Cada diff procesado con éxito
-    // deja fila en ml_stock_estado; las que quedaron fuera del tope, no.
+    // Se procesaron exactamente el tope (5), no las 7. Cada diff procesado con éxito deja
+    // fila en ml_stock_estado; las que quedaron fuera del tope, no.
     const procesadas = db.prepare("SELECT COUNT(*) n FROM ml_stock_estado WHERE clave LIKE 'MLATOPE%'").get().n;
-    expect(procesadas).toBe(200);
+    expect(procesadas).toBe(TOPE);
 
-    // Las que quedaron sin ml_stock_estado (10 restantes) van primero en la próxima corrida:
+    // Las que quedaron sin ml_stock_estado (2 restantes) van primero en la próxima corrida:
     // el ORDER BY prioriza NULL/lo más viejo. Corremos una segunda vez y deben completarse.
     mlFetch.mockClear();
     mlFetch.mockResolvedValue({ status: 200, data: {} });
-    const p2 = syncWcToMl(db, CFG);
+    const p2 = syncWcToMl(db, CFG, { maxLlamadas: TOPE });
     await vi.runAllTimersAsync();
     await p2;
 
     const procesadasFinal = db.prepare("SELECT COUNT(*) n FROM ml_stock_estado WHERE clave LIKE 'MLATOPE%'").get().n;
-    expect(procesadasFinal).toBe(210); // las 10 restantes se completaron en la corrida siguiente
+    expect(procesadasFinal).toBe(FILAS); // las 2 restantes se completaron en la corrida siguiente
+  });
+
+  it('B1 (ronda 2, revisor): un tope por filas leídas se puede clavar con publicaciones pausadas que nunca envejecen — el tope real es por llamadas a ML, así que una activa al final del lote igual se empuja en la misma corrida', async () => {
+    // Reproduce el modo de falla mudo que describe el hallazgo: 250 publicaciones PAUSADAS
+    // (status='paused' en ml_publicaciones_cache, sin ml_stock_estado, así que cantidad_ml
+    // IS NULL y ml_stock_actualizado_en NULL → van TODAS primero en el ORDER BY, por encima
+    // del tope de 200) + 1 publicación ACTIVA con diff al final de la cola. Con un LIMIT sobre
+    // filas leídas, las 200 primeras (todas pausadas) agotarían el tope en `continue`
+    // instantáneos y la activa jamás se alcanzaría. Con el tope por llamadas a ML, los skips
+    // de las pausadas no cuestan nada y la activa sí se procesa en esta misma corrida.
+    db.prepare("DELETE FROM sku_matcher_decisiones").run();
+    db.prepare("DELETE FROM catalogo_cache").run();
+
+    const now = new Date().toISOString();
+    for (let i = 0; i < 250; i++) {
+      const sku = `SKU-PAUSADA-${String(i).padStart(4, '0')}`;
+      const clave = `MLAPAUSADA${String(i).padStart(4, '0')}|`;
+      db.prepare(
+        'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+      ).run(clave, sku, 'Producto pausado', 'confirmar', now);
+      db.prepare(
+        'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(2000 + i, 'Producto pausado', sku, 'simple', null, 1, now);
+      db.prepare(
+        'INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+      ).run(clave, `MLAPAUSADA${String(i).padStart(4, '0')}`, '', 'paused', now);
+    }
+    // La activa al final del universo lexicográfico ('MLZ...' ordena después de 'MLAPAUSADA...').
+    db.prepare(
+      'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+    ).run('MLZACTIVA|', 'SKU-ACTIVA', 'Producto activo', 'confirmar', now);
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(9999, 'Producto activo', 'SKU-ACTIVA', 'simple', null, 1, now);
+    db.prepare(
+      'INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+    ).run('MLZACTIVA|', 'MLZACTIVA', '', 'active', now);
+
+    mlFetch.mockResolvedValue({ status: 200, data: {} });
+
+    const p = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    // La activa se empujó en esta misma corrida: quedó con fila en ml_stock_estado.
+    const estadoActiva = db.prepare("SELECT * FROM ml_stock_estado WHERE clave = 'MLZACTIVA|'").get();
+    expect(estadoActiva).toBeDefined();
+    expect(estadoActiva.cantidad_ml).toBe(1);
+
+    // Las pausadas no consumieron el tope de llamadas: solo se hizo 1 PUT (el de la activa),
+    // ningún GET de status (todas ya tenían status en ml_publicaciones_cache).
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+
+    // Ninguna pausada quedó dada de alta en ml_stock_estado (se saltearon, correcto).
+    const pausadasConEstado = db.prepare("SELECT COUNT(*) n FROM ml_stock_estado WHERE clave LIKE 'MLAPAUSADA%'").get().n;
+    expect(pausadasConEstado).toBe(0);
   }, 30000);
 
   it('ML dice "doesn\'t have a variation" → borra el mapeo, loguea remapeo_requerido y DESCARTA la clave', async () => {

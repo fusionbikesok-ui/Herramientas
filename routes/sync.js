@@ -43,18 +43,32 @@ const ML_CALL_DELAY_MS = 500;
 // empieza a devolver 429 — subir/bajar según cómo responda.
 const ML_CONCURRENCIA_MAX = 4;
 
-// Tope de diffs procesados por corrida de _syncWcToMl (revisor, M3 2026-08-07). Antes del
+// Tope de LLAMADAS A ML (no de filas leídas) por corrida de _syncWcToMl (revisor, M3
+// 2026-08-07; corregido a "tope por trabajo hecho" en la ronda 2, B1 revisor). Antes del
 // write-back de status de reconciliarStockMl, syncWcToMl saltea cualquier item cuyo status en
 // caché no sea 'active' — con ~1255 filas recién alineadas de 'paused' a 'active' tras el
 // primer barrido (más ~1061 sin ml_stock_estado todavía), el bucle de diffs pasa de saltear
 // casi todo a entrarle a una masa grande de golpe. Sin tope, 600-1200 diffs × ML_CALL_DELAY_MS
 // encadenados con el cron cada 10 min (candado _wcToMlEnCurso evita solape pero no acota
-// duración) reproduce el patrón del incidente de 429 del 2026-08-04. Con 200 el peor caso es
-// ~100s por corrida, muy por debajo del cron. Los diffs que no entran no se pierden: la query
-// se recalcula entera cada corrida (idempotente), así que quedan para la próxima — por eso el
-// ORDER BY más abajo prioriza los más viejos (NULLs primero), para que el tope rote y no
-// favorezca siempre a las mismas claves si el backlog es más grande que el tope.
-const SYNC_WC_ML_MAX_POR_CORRIDA = 200;
+// duración) reproduce el patrón del incidente de 429 del 2026-08-04.
+//
+// BUG real (B1, ronda 2 revisor): un `LIMIT` sobre la QUERY de diffs (filas leídas) en vez de
+// sobre las llamadas a ML puede quedar monopolizado para siempre por filas que nunca se
+// procesan: "procesar" una fila solo envejece `ml_stock_estado.actualizado_en` en el camino
+// feliz (PUT 200). Todo salteo (status no-active, status desconocido, item bloqueado por
+// límite de fotos —condición PERMANENTE—, cualquier HTTP≠200, cualquier excepción) deja el
+// timestamp intacto. Una publicación pausada de verdad y sin fila en `ml_stock_estado` tiene
+// `cantidad_ml IS NULL` (entra siempre a `diffs`) y `ml_stock_actualizado_en NULL` (va PRIMERA
+// en el orden): con 200+ filas así al frente de la cola, cada corrida consumía el tope entero
+// en `continue` instantáneos (sin `sleep`, que queda salteado por el `continue`) sin empujar
+// un solo stock real — el sync quedaba muerto en silencio, sin error ni log.
+//
+// Por eso el tope ahora cuenta LLAMADAS a ML (el GET de status de fallback + el PUT de stock):
+// los skips no cuestan llamada ni tiempo, así que no consumen presupuesto y no pueden clavar
+// la corrida. La query de diffs ya NO tiene LIMIT — el corte lo hace el `break` del bucle. El
+// ORDER BY se mantiene (más viejo primero) para que, con más llamadas disponibles que tope, el
+// corte rote entre corridas y no favorezca siempre a las mismas claves.
+const SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA = 200;
 
 // ── reconciliarStockMl: constantes ──────────────────────────────────────────
 // Tamaño del lote por corrida del cursor (8 multiget de a 20). Con un cron cada 10 min
@@ -812,36 +826,43 @@ let _reactivarEnCurso = false;
 // Candado para la limpieza masiva de variaciones muertas (no solapar corridas).
 let _limpiezaMuertasEnCurso = false;
 
-export async function syncWcToMl(db, cfg) {
+// opts.maxLlamadas (m5, ronda 2 revisor): tope de llamadas a ML inyectable, default
+// SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA. server.js y el router (routes/sync.js más abajo) lo
+// llaman sin este tercer argumento (usan el default de producción); existe solo para que los
+// tests puedan probar la propiedad "corta al llegar al tope" con un tope chico y pocas filas,
+// en vez de escalar el costo del test con la carga de la suite real (~420 iteraciones con
+// margen de timeout fijo, propenso a flaky). No cambia la firma que ya usan los callers reales.
+export async function syncWcToMl(db, cfg, opts = {}) {
   if (!mlCfgOk(cfg)) return { omitido: true };
   // Ya hay una corrida en curso: se saltea. Se informa omitido:true (mismo criterio
   // que syncMlToWc) para que el caller no crea que sincronizó.
   if (_wcToMlEnCurso) return { omitido: true };
   _wcToMlEnCurso = true;
   try {
-    await _syncWcToMl(db, cfg);
+    await _syncWcToMl(db, cfg, opts);
     return { omitido: false };
   } finally {
     _wcToMlEnCurso = false;
   }
 }
 
-async function _syncWcToMl(db, cfg) {
+async function _syncWcToMl(db, cfg, opts = {}) {
   const { ml: mlCfg } = cfg;
+  const maxLlamadas = opts.maxLlamadas ?? SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA;
 
   // JOIN para encontrar publicaciones ML cuyo stock disponible difiere del estado conocido.
   // LEFT JOIN skus_config_ml para aplicar reservas de unidades para local/web.
-  // Tope SYNC_WC_ML_MAX_POR_CORRIDA por corrida (revisor, M3) + orden por lo más viejo primero
-  // (NULL, nunca registrado en ml_stock_estado, va primero): con un backlog más grande que el
-  // tope, cada corrida procesa el extremo más viejo y lo "envejece" (queda con
-  // ml_stock_actualizado_en fresco), así el próximo recorte natural avanza sobre el resto del
-  // backlog en vez de reprocesar siempre las mismas claves.
+  // SIN LIMIT (B1, ronda 2 revisor — ver comentario de SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA
+  // más arriba): un LIMIT acá tope filas leídas, no trabajo hecho, y podía quedar monopolizado
+  // para siempre por filas que solo hacen `continue` (nunca "envejecen"). El corte real es el
+  // `break` del bucle de abajo por llamadas a ML. El ORDER BY (más viejo primero, NULL —nunca
+  // registrado— primero) se mantiene: sigue siendo útil para que ese corte rote entre corridas
+  // y no favorezca siempre a las mismas claves cuando el backlog excede el tope de llamadas.
   const diffs = db.prepare(`
     ${COMPUTED_STOCK_CTE}
     SELECT * FROM computed
     WHERE cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml
     ORDER BY ml_stock_actualizado_en IS NOT NULL, ml_stock_actualizado_en ASC
-    LIMIT ${SYNC_WC_ML_MAX_POR_CORRIDA}
   `).all();
 
   // Cache de estado de publicación por itemId (una consulta por item por corrida).
@@ -863,6 +884,11 @@ async function _syncWcToMl(db, cfg) {
   const estadoItem = new Map();
   const itemsBloqueados = new Set();
   let cortadoPor429 = false;
+  // Contador de LLAMADAS a ML hechas en esta corrida (B1, ronda 2 revisor): el GET de status
+  // de fallback y el PUT de stock, cada uno suma 1 al hacerse. Los skips (status no-active,
+  // bloqueado, etc.) NO suman — ver comentario de la constante más arriba.
+  let llamadasMl = 0;
+  let cortadoPorTope = false;
   try {
     const cacheStatus = db.prepare('SELECT DISTINCT item_id, status FROM ml_publicaciones_cache').all();
     for (const r of cacheStatus) {
@@ -871,12 +897,21 @@ async function _syncWcToMl(db, cfg) {
   } catch (_) { /* cache puede no existir todavía */ }
 
   for (const diff of diffs) {
+    // Tope por LLAMADAS a ML, no por filas leídas (B1, ronda 2 revisor) — ver comentario de la
+    // constante. Se corta ANTES de gastar la llamada de esta iteración, así el contador nunca
+    // supera el tope.
+    if (llamadasMl >= maxLlamadas) {
+      cortadoPorTope = true;
+      break;
+    }
+
     const { clave, sku, stock_disponible_ml } = diff;
     const { itemId, variationId } = partirClaveMl(clave);
     const cantidad = Math.max(0, Math.round(stock_disponible_ml));
 
     try {
       if (!estadoItem.has(itemId)) {
+        llamadasMl++;
         const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
         if (est.status === 429) {
           // Cooldown global activo (real o sintético): TODAS las consultas de status que
@@ -909,6 +944,7 @@ async function _syncWcToMl(db, cfg) {
       }
 
       const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
+      llamadasMl++;
       const resp = await mlFetch(db, mlCfg, 'put', path, body);
 
       if (resp.status === 429) {
@@ -959,6 +995,12 @@ async function _syncWcToMl(db, cfg) {
     // termina envejeciendo a 'agotado', perdiendo de pendientes diffs de stock válidos
     // por un rate limit transitorio. Esto es solo una traza informativa de la corte.
     logSync(db, { direccion: 'wc_ml', clave: null, sku: null, estado: 'info', error: 'Cooldown ML activo (429) — corte de corrida, se retoma en el próximo ciclo' });
+  }
+  if (cortadoPorTope) {
+    // Traza informativa (B1, ronda 2 revisor): igual criterio que el corte por 429 — un solo
+    // evento por corrida, no uno por diff restante. Distingue "cortó por tope normal (backlog
+    // grande, se retoma la próxima corrida)" de "cortó por 429" en el log.
+    logSync(db, { direccion: 'wc_ml', clave: null, sku: null, estado: 'info', error: `Tope de ${maxLlamadas} llamadas a ML alcanzado — corte de corrida, se retoma en el próximo ciclo` });
   }
 }
 
@@ -1021,7 +1063,7 @@ async function _reconciliarStockMl(db, cfg) {
     ORDER BY d.clave
   `).all();
 
-  if (universo.length === 0) return { omitido: false, revisadas: 0, corregidas: 0, sinDato: 0, statusRefrescados: 0 };
+  if (universo.length === 0) return { omitido: false, revisadas: 0, corregidas: 0, altas: 0, sinDato: 0, sinSku: 0, statusRefrescados: 0 };
 
   // Cursor persistido en sync_estado. Si la clave guardada ya no está en el universo actual
   // (se desmapeó, se pausó y cayó del filtro, etc.) NO se reinicia a 0 en silencio: eso
@@ -1065,11 +1107,18 @@ async function _reconciliarStockMl(db, cfg) {
   // punto ciego de Starvos vía el camino inverso (una recién reactivada podía volver a
   // marcarse 'paused'). El CAS de abajo usa ESTE snapshot, tomado antes de la primera llamada
   // a ML, como condición: si cambió desde entonces, el otro flujo ganó y no se pisa.
-  const statusSnapshot = new Map(); // itemId -> { status, sub_status } | null (sin fila)
-  const snapshotStmt = db.prepare('SELECT status, sub_status FROM ml_publicaciones_cache WHERE item_id = ? LIMIT 1');
+  // Snapshot POR CLAVE (m1, ronda 2 revisor), no un único snapshot por item_id con LIMIT 1 sin
+  // ORDER BY: si dos filas del mismo item_id (variaciones) tienen status distinto entre sí
+  // (refresh parcial, alta de variación posterior — no debería pasar en teoría, pero el CAS
+  // tiene que sobrevivir si pasa), un solo snapshot arbitrario dejaba las filas divergentes del
+  // snapshot elegido sin poder actualizarse NUNCA: el UPDATE por item_id con WHERE status IS
+  // <snapshot único> nunca matchea esas filas, y la corrida siguiente vuelve a snapshotear la
+  // misma fila "ganadora" de siempre (estado absorbente). Ahora se snapshotea cada fila
+  // (clave) del item y el CAS de escritura de abajo también es por clave.
+  const statusSnapshot = new Map(); // itemId -> [{ clave, status, sub_status }, ...]
+  const snapshotStmt = db.prepare('SELECT clave, status, sub_status FROM ml_publicaciones_cache WHERE item_id = ?');
   for (const itemId of itemIdsUnicos) {
-    const row = snapshotStmt.get(itemId);
-    statusSnapshot.set(itemId, row ? { status: row.status, sub_status: row.sub_status } : null);
+    statusSnapshot.set(itemId, snapshotStmt.all(itemId));
   }
 
   const porItem = new Map(); // itemId -> body del item devuelto por ML
@@ -1108,10 +1157,28 @@ async function _reconciliarStockMl(db, cfg) {
     if (i < chunks.length - 1) await sleep(RECONCILIACION_PAUSA_CHUNK_MS);
   }
 
+  // Contador de corridas CONSECUTIVAS con status ausente por clave (M3, ronda 2 revisor):
+  // sin esto, una fila que cae al FINAL del lote con status ausente deja `ultimaIdxConDato`
+  // antes de ella y el cursor no avanza — si la condición es PERMANENTE (una publicación que
+  // sistemáticamente responde 200 sin `status`), el barrido toma el mismo lote, se clava en la
+  // misma fila para siempre, y el resto del universo deja de reconciliarse. Persistido en
+  // `sync_estado` como JSON (mismo patrón que el cursor, sin tabla/columna nueva: alternativa
+  // más chica que evita una migración para un contador que no necesita ser relacional) bajo la
+  // clave 'status_ausente_contador_reconciliacion'. Se lee una vez al arrancar la corrida y se
+  // escribe una vez al final.
+  const CONTADOR_STATUS_AUSENTE_CLAVE = 'status_ausente_contador_reconciliacion';
+  const MAX_STATUS_AUSENTE_CONSECUTIVO = 3;
+  let contadorStatusAusente = {};
+  try {
+    const row = db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(CONTADOR_STATUS_AUSENTE_CLAVE);
+    if (row?.valor) contadorStatusAusente = JSON.parse(row.valor);
+  } catch (_) { contadorStatusAusente = {}; }
+
   // db.prepare() hoisteados fuera del bucle de 150 iteraciones (m1, revisor) — mismo criterio
-  // que refrescar/marcarActivo más abajo en el archivo.
-  const stmtUpdateStatusYSub = db.prepare('UPDATE ml_publicaciones_cache SET status = ?, sub_status = ? WHERE item_id = ? AND status IS ?');
-  const stmtUpdateSoloStatus = db.prepare('UPDATE ml_publicaciones_cache SET status = ? WHERE item_id = ? AND status IS ?');
+  // que refrescar/marcarActivo más abajo en el archivo. CAS por CLAVE (m1, ronda 2 revisor,
+  // ver comentario del snapshot más arriba), no por item_id.
+  const stmtUpdateStatusYSub = db.prepare('UPDATE ml_publicaciones_cache SET status = ?, sub_status = ? WHERE clave = ? AND status IS ?');
+  const stmtUpdateSoloStatus = db.prepare('UPDATE ml_publicaciones_cache SET status = ? WHERE clave = ? AND status IS ?');
   const stmtAltaStockEstado = db.prepare(`
     INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES (?, ?, ?, ?)
     ON CONFLICT(clave) DO NOTHING
@@ -1121,6 +1188,11 @@ async function _reconciliarStockMl(db, cfg) {
   );
 
   let corregidas = 0;
+  // Altas de ml_stock_estado (fila que no existía todavía) contadas aparte de `corregidas`
+  // (m2, ronda 2 revisor): en el primer barrido tras sacar el filtro de status del universo
+  // hay ~1061 filas sin ml_stock_estado — si sumaran a `corregidas`, ahogarían la señal real
+  // (sobreventa corregida) detrás de un ruido de "puesta al día" que no es un problema.
+  let altas = 0;
   let sinDato = 0;
   // Filas cuya decisión de matcher no tiene sku resuelto: no es un fallo de ML (que sí
   // contestó), es una condición estable del lado nuestro. Contador separado (m2, revisor):
@@ -1166,25 +1238,38 @@ async function _reconciliarStockMl(db, cfg) {
     // usa MAX(actualizado_en) de esta tabla como firma de invalidación del caché de candidatos
     // del matcher, asumiendo que nada la escribe fuera del refresh manual — si este UPDATE
     // tocara actualizado_en, cada corrida del barrido (cron 9-59/10) invalidaría ese caché
-    // entero (recómputo de >120s) sin que título/sku/atributos hayan cambiado. status/sub_status
-    // no participan del cruce de candidatos, así que dejar actualizado_en intacto mantiene la
-    // firma válida como invalidador sin perder la corrección de status.
+    // entero (recómputo de >120s) sin que título/sku/atributos hayan cambiado. El cruce de
+    // candidatos en sí (candidatosDeItem, lib/matcherEngine.js) no usa status/sub_status, así
+    // que dejar actualizado_en intacto mantiene la firma válida como invalidador. OJO (ronda 2,
+    // M2 revisor): status SÍ viaja como `ml_status` en el payload cacheado por request (lo mete
+    // construirMLdesdeApi) y alimenta el badge/filtro/orden del front — remarcarStockResueltos
+    // (routes/matcher.js) re-lee el status vivo de esta tabla en cada request para que ese
+    // write-back no quede stale hasta 3h; ver el comentario ahí y en firmaCandidatos.
     if (item.status != null && !statusRefrescadoItemIds.has(itemId)) {
       statusRefrescadoItemIds.add(itemId);
-      const snapshot = statusSnapshot.get(itemId);
       const subStatusPresente = 'sub_status' in item;
       const subStatus = Array.isArray(item.sub_status) ? item.sub_status.join(',') : String(item.sub_status ?? '');
-      const cambia = snapshot && (snapshot.status !== item.status || (subStatusPresente && (snapshot.sub_status ?? '') !== subStatus));
-      if (snapshot && cambia) {
-        // El UPDATE es por item_id (todas las claves/variaciones de esa publicación, ver
-        // "Lo que el revisor verificó y está BIEN" — write-back por item_id es lo correcto),
-        // así que puede tocar varias filas de ml_publicaciones_cache a la vez: changes > 0
-        // (no === 1) es la condición correcta de "sí escribió".
+      // Filas snapshoteadas de este item_id (m1, ronda 2 revisor): una por CADA clave/variación
+      // vista antes del multiget, no un único snapshot arbitrario del item. El UPDATE de abajo
+      // condiciona por `clave`, con el valor de status QUE ESA FILA tenía en su propio
+      // snapshot — así una fila cuyo status ya había divergido de las demás variaciones del
+      // mismo item también puede actualizarse, en vez de quedar bloqueada para siempre por el
+      // WHERE de un snapshot ajeno (estado absorbente que describía el hallazgo).
+      const filasSnapshot = statusSnapshot.get(itemId) || [];
+      let escribioAlgunaFila = false;
+      for (const snap of filasSnapshot) {
+        const cambia = snap.status !== item.status || (subStatusPresente && (snap.sub_status ?? '') !== subStatus);
+        if (!cambia) continue;
         const res = subStatusPresente
-          ? stmtUpdateStatusYSub.run(item.status, subStatus, itemId, snapshot.status)
-          : stmtUpdateSoloStatus.run(item.status, itemId, snapshot.status);
-        if (res.changes > 0) statusRefrescados++;
+          ? stmtUpdateStatusYSub.run(item.status, subStatus, snap.clave, snap.status)
+          : stmtUpdateSoloStatus.run(item.status, snap.clave, snap.status);
+        // changes === 1 acá sí es correcto: el UPDATE es por `clave` (única), no por item_id.
+        if (res.changes === 1) escribioAlgunaFila = true;
       }
+      // statusRefrescados sigue contando ITEMS, no filas/variaciones (mismo criterio previo,
+      // documentado en docs/api-contrato.md): aunque ahora la escritura es por clave, una sola
+      // publicación con 3 variaciones que cambiaron de status sigue sumando 1, no 3.
+      if (escribioAlgunaFila) statusRefrescados++;
     }
 
     // No está activa en ML (puede haber cambiado desde el último refresh del cache local):
@@ -1197,7 +1282,31 @@ async function _reconciliarStockMl(db, cfg) {
     // chequearNetoReactivar con item===undefined): no se puede afirmar que no está activa, así
     // que cuenta sinDato y el cursor NO avanza por esta fila, para reintentarla. Lo segundo es
     // una confirmación real de ML (no vende) y el cursor sí avanza.
-    if (item.status == null) { sinDato++; continue; }
+    //
+    // EXCEPCIÓN (M3, ronda 2 revisor): si la MISMA clave viene sin status en
+    // MAX_STATUS_AUSENTE_CONSECUTIVO corridas seguidas, la condición dejó de ser transitoria —
+    // es una publicación que sistemáticamente responde 200 sin el atributo. Sin cortar acá, si
+    // esa fila cae al final del lote el cursor nunca avanza más allá de ella y el resto del
+    // universo deja de reconciliarse para siempre (mismo modo de falla mudo que B1, por otra
+    // puerta). Se avanza el cursor igual, se deja un sync_log 'error' accionable (requiere
+    // mirada humana en ML, no se resuelve reintentando) y se resetea el contador.
+    if (item.status == null) {
+      sinDato++;
+      const clave = fila.clave;
+      const veces = (contadorStatusAusente[clave] || 0) + 1;
+      if (veces >= MAX_STATUS_AUSENTE_CONSECUTIVO) {
+        delete contadorStatusAusente[clave];
+        ultimaIdxConDato = i;
+        logSync(db, {
+          direccion: 'wc_ml', clave, sku: fila.sku, estado: 'error',
+          error: `Reconciliación: ML respondió 200 sin atributo 'status' para esta publicación en ${veces} corridas consecutivas — condición permanente, no transitoria. Requiere revisión manual en ML.`,
+        });
+      } else {
+        contadorStatusAusente[clave] = veces;
+      }
+      continue;
+    }
+    delete contadorStatusAusente[fila.clave];
     if (item.status !== 'active') { ultimaIdxConDato = i; continue; }
 
     // Misma granularidad que ml_stock_estado.clave: variación si la fila tiene variationId,
@@ -1249,7 +1358,7 @@ async function _reconciliarStockMl(db, cfg) {
           estado: 'reconciliado',
           error: `Reconciliación: publicación sin ml_stock_estado registrado (punto ciego cerrado). ML tiene ${cantidadReal} unidades. Estado local dado de alta con ese valor; syncWcToMl empujará el stock real de Woo en la próxima corrida.`,
         });
-        corregidas++;
+        altas++;
       }
       continue;
     }
@@ -1304,6 +1413,15 @@ async function _reconciliarStockMl(db, cfg) {
     console.warn(`reconciliarStockMl: ${sinSku} de ${lote.length} publicaciones del lote no tienen sku resuelto en la decisión del matcher (requiere completar el sku, no es fail transitorio de ML)`);
   }
 
+  // Persistir el contador de status-ausente-consecutivo (M3, ronda 2 revisor) — una escritura
+  // por corrida, no por fila. Filas fuera del lote de esta corrida conservan su contador previo
+  // (no se tocan). db vacío (`{}`) se persiste igual para no dejar un valor stale si todo se
+  // resolvió esta vuelta.
+  db.prepare(`
+    INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)
+    ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+  `).run(CONTADOR_STATUS_AUSENTE_CLAVE, JSON.stringify(contadorStatusAusente), now());
+
   // Avanzar el cursor solo hasta la última clave del lote que sí tuvo dato real de ML
   // (revisor, bloqueante 2): si el multiget no devolvió nada útil para ninguna fila del
   // lote, el cursor NO avanza, para que la corrida siguiente vuelva a intentar exactamente
@@ -1317,7 +1435,7 @@ async function _reconciliarStockMl(db, cfg) {
     `).run(siguienteClave, now());
   }
 
-  return { omitido: false, revisadas: lote.length, corregidas, sinDato, sinSku, statusRefrescados };
+  return { omitido: false, revisadas: lote.length, corregidas, altas, sinDato, sinSku, statusRefrescados };
 }
 
 // ─── procesarReintentos ───────────────────────────────────────────────────────
@@ -2363,7 +2481,9 @@ export function syncRouter(db, cfg) {
         motivo: r?.motivo,
         revisadas: r?.revisadas ?? 0,
         corregidas: r?.corregidas ?? 0,
+        altas: r?.altas ?? 0,
         sinDato: r?.sinDato ?? 0,
+        sinSku: r?.sinSku ?? 0,
         statusRefrescados: r?.statusRefrescados ?? 0,
       });
     } catch (e) {
@@ -2493,7 +2613,11 @@ export function syncRouter(db, cfg) {
         ? { configurado: true, vence: tokenRow.expires_at, vigente: new Date(tokenRow.expires_at) > new Date() }
         : { configurado: false },
       ultimasSyncsOk: ultimasOk,
-      stock: { sincronizadas, pendientes, pendientesPausadas },
+      // maxLlamadasPorCorrida (m3, ronda 2 revisor): el panel puede mostrar `pendientes` en
+      // cientos con el sync funcionando bien (drena de a `maxLlamadasPorCorrida` cada 10 min);
+      // sin este dato el usuario no puede distinguir "hay backlog, drena de a tope" de "el sync
+      // está roto y no procesa nada". No requiere tocar public/: el front decide si lo muestra.
+      stock: { sincronizadas, pendientes, pendientesPausadas, maxLlamadasPorCorrida: SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA },
       reactivables,
       pedidos: {
         total: pedidos.total ?? 0,
