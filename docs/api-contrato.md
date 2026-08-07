@@ -206,17 +206,34 @@ cambia entre corridas. El cursor solo avanza hasta la última publicación del l
 efectivamente tuvo dato de ML: si el multiget no devolvió nada útil (429 sostenido, etc.), el
 cursor no avanza y la corrida siguiente reintenta el mismo lote en vez de darlo por revisado.
 
+Espera-y-reintento ante 429 (2026-08-07, medido: 108 corridas seguidas cortadas en el primer
+chunk pese a cooldown libre al arrancar — 429 intermitente real de ML, cuota compartida fuera
+de nuestro control, ver `lib/mlLimites.js`). Si un chunk devuelve 429, en vez de cortar la
+corrida directo: se consulta `estadoCooldownMl().hasta` y, si el tiempo restante hasta esa
+expiración es ≤ `RECONCILIACION_ESPERA_MAX_COOLDOWN_MS` (90s), la corrida **espera** hasta ese
+momento (+ margen chico) y **reintenta ese mismo chunk una vez**. Un solo reintento por
+corrida (no por chunk): si el reintento también da 429, corta como antes
+(`cortadoPor429`/`sinDato`, cursor no avanza para esa fila). Si el cooldown a esperar es mayor
+a 90s (nivel de backoff alto → ML rechazando en serio, no un blip), no espera y corta directo
+— igual que antes. No aumenta la carga sobre ML: la llamada reintentada es la misma que se
+iba a hacer en el ciclo siguiente, y `RECONCILIACION_PAUSA_CHUNK_MS`/la serialización de
+chunks no cambian. El candado `_reconciliarStockEnCurso` puede quedar tomado hasta 90s más por
+esta espera, pero el ciclo siguiente es 10 min después, así que nunca se solapan.
+
 - Request: sin body.
-- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n>, "altas": <n>, "sinDato": <n>, "sinSku": <n>, "statusRefrescados": <n> }`.
+- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n>, "altas": <n>, "sinDato": <n>, "sinSku": <n>, "statusRefrescados": <n>, "esperasCooldown": <0|1> }`.
   `sinDato` son publicaciones del lote que quedaron sin dato real de ML (fail-closed); no
   cuentan como revisadas a efectos de avance de cursor. `sinSku` son publicaciones sin sku
   resuelto en la decisión del matcher (ML sí contestó). `altas` son publicaciones dadas de alta
   en `ml_stock_estado` por no tener fila todavía (ver arriba); no suman a `corregidas`.
   `statusRefrescados` cuenta items (no filas/variaciones) cuyo status/sub_status se escribió en
-  `ml_publicaciones_cache` esta corrida. `omitido: true` cuando no corrió, con
+  `ml_publicaciones_cache` esta corrida. `esperasCooldown` es 1 si la corrida esperó y
+  reintentó un chunk tras un 429 (haya salido bien o mal el reintento), 0 si no hubo 429 o si
+  el cooldown a esperar superaba el tope. `omitido: true` cuando no corrió, con
   `motivo: 'en_curso' | 'sin_config'` — no revisó nada.
 - Costo: cada POST efectivo dispara hasta 8 llamadas a ML (multiget en chunks de 20 para un
-  lote de 150) y bloquea la respuesta ~10.5s (pausa de 1.5s entre chunks).
+  lote de 150) y bloquea la respuesta ~10.5s (pausa de 1.5s entre chunks); si hubo un 429 con
+  reintento, hasta ~90s adicionales de espera (una sola vez por corrida).
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
 
 ### GET /api/sync/dashboard (campo agregado)

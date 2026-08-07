@@ -88,6 +88,23 @@ const RECONCILIACION_MULTIGET_CHUNK = 20;
 // cosmético, es lo que evita el 429.
 const RECONCILIACION_PAUSA_CHUNK_MS = 1500;
 
+// MEDIDO el 2026-08-07: 108 corridas seguidas cortadas por 429 en el PRIMER chunk pese a que
+// el cooldown estaba libre justo antes de arrancar (429 intermitente real de ML, cuota
+// compartida fuera de nuestro control — ver lib/mlLimites.js). Cortar la corrida entera
+// perdía el ciclo de 10 min completo. Un único reintento tras esperar a que expire el
+// cooldown (estadoCooldownMl().hasta) recupera esas corridas sin pegarle más a ML: la
+// llamada reintentada es la misma que se iba a hacer en el ciclo siguiente, no una de más.
+// Tope de espera (m1): un cooldown de nivel alto (escala 60s/120s/.../10min en
+// lib/mlClient.js) significa que ML está rechazando en serio, no un blip — ahí conviene
+// cortar como antes y dejar que la corrida siguiente (10 min después) reintente sola, no
+// bloquear ESTA corrida (y el candado _reconciliarStockEnCurso que la acompaña) más de lo
+// razonable. 90s es bien menor a los 10 min entre corridas, así que nunca se solapa con el
+// tick siguiente.
+const RECONCILIACION_ESPERA_MAX_COOLDOWN_MS = 90_000;
+// Margen chico sobre el `hasta` del cooldown para no reintentar en el instante exacto en que
+// vence (jitter/relojes) y volver a comerse el mismo 429.
+const RECONCILIACION_MARGEN_COOLDOWN_MS = 500;
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
@@ -1064,7 +1081,7 @@ async function _reconciliarStockMl(db, cfg) {
     ORDER BY d.clave
   `).all();
 
-  if (universo.length === 0) return { omitido: false, revisadas: 0, corregidas: 0, altas: 0, sinDato: 0, sinSku: 0, statusRefrescados: 0 };
+  if (universo.length === 0) return { omitido: false, revisadas: 0, corregidas: 0, altas: 0, sinDato: 0, sinSku: 0, statusRefrescados: 0, esperasCooldown: 0 };
 
   // Cursor persistido en sync_estado. Si la clave guardada ya no está en el universo actual
   // (se desmapeó, se pausó y cayó del filtro, etc.) NO se reinicia a 0 en silencio: eso
@@ -1124,20 +1141,44 @@ async function _reconciliarStockMl(db, cfg) {
 
   const porItem = new Map(); // itemId -> body del item devuelto por ML
   let cortadoPor429 = false;
+  // Un solo reintento por CORRIDA (no por chunk) — ver comentario de
+  // RECONCILIACION_ESPERA_MAX_COOLDOWN_MS más arriba.
+  let esperasCooldown = 0;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
+    let resp;
     try {
-      const resp = await mlFetch(
+      resp = await mlFetch(
         db, mlCfg, 'get',
         `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,available_quantity,variations`
       );
+      if (resp.status === 429 && esperasCooldown === 0) {
+        const { hasta } = estadoCooldownMl();
+        const esperaMs = hasta ? new Date(hasta).getTime() - Date.now() + RECONCILIACION_MARGEN_COOLDOWN_MS : null;
+        if (esperaMs != null && esperaMs > 0 && esperaMs <= RECONCILIACION_ESPERA_MAX_COOLDOWN_MS) {
+          esperasCooldown++;
+          await sleep(esperaMs);
+          try {
+            resp = await mlFetch(
+              db, mlCfg, 'get',
+              `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,available_quantity,variations`
+            );
+          } catch (e) {
+            console.error(`reconciliarStockMl: multiget (reintento post-cooldown) falló para un chunk: ${e.message}`);
+            cortadoPor429 = true;
+            break;
+          }
+        }
+      }
       if (resp.status === 429) {
         // Mismo criterio que syncWcToMl (routes/sync.js, cortadoPor429): con 429 sostenido
         // TODOS los chunks que faltan van a devolver lo mismo. Seguir la ronda entera
         // pagando ~1.5s por chunk sin conseguir un solo dato real no aporta nada y retrasa
         // más la corrida siguiente. Cortar acá; los itemIds sin consultar quedan ausentes
         // de porItem y sus filas se saltean fail-closed más abajo, igual que un item
-        // inaccesible por cualquier otro motivo.
+        // inaccesible por cualquier otro motivo. Llega acá tanto si no hubo reintento (tope
+        // de espera superado o ya se gastó el único reintento de esta corrida) como si el
+        // reintento post-cooldown también dio 429.
         cortadoPor429 = true;
         break;
       }
@@ -1446,7 +1487,7 @@ async function _reconciliarStockMl(db, cfg) {
     `).run(siguienteClave, now());
   }
 
-  return { omitido: false, revisadas: lote.length, corregidas, altas, sinDato, sinSku, statusRefrescados };
+  return { omitido: false, revisadas: lote.length, corregidas, altas, sinDato, sinSku, statusRefrescados, esperasCooldown };
 }
 
 // ─── procesarReintentos ───────────────────────────────────────────────────────
@@ -2496,6 +2537,7 @@ export function syncRouter(db, cfg) {
         sinDato: r?.sinDato ?? 0,
         sinSku: r?.sinSku ?? 0,
         statusRefrescados: r?.statusRefrescados ?? 0,
+        esperasCooldown: r?.esperasCooldown ?? 0,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
