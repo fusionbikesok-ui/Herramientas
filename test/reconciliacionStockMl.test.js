@@ -22,9 +22,10 @@ vi.mock('../lib/mlClient.js', () => ({
   mlFetch: vi.fn(),
   bootstrapToken: vi.fn(),
   getAccessToken: vi.fn(),
+  estadoCooldownMl: vi.fn(() => ({ activo: false, hasta: null, nivel: 0 })),
 }));
 
-import { mlFetch } from '../lib/mlClient.js';
+import { mlFetch, estadoCooldownMl } from '../lib/mlClient.js';
 
 const TEST_DB = './test/tmp-reconciliacion.sqlite';
 
@@ -350,6 +351,85 @@ describe('reconciliarStockMl', () => {
       expect(cursor).toBeUndefined();
       expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
+    });
+
+    it('429 en el primer chunk con cooldown corto → espera y reintenta ese chunk; si el reintento da 200, la corrida completa el lote y el cursor avanza', async () => {
+      seedPublicacion(db, { clave: 'MLA962|', itemId: 'MLA962', sku: 'A', cantidadMl: 1 });
+
+      const hasta = new Date(Date.now() + 5000).toISOString();
+      estadoCooldownMl.mockReturnValue({ activo: true, hasta, nivel: 0 });
+
+      let llamada = 0;
+      mlFetch.mockImplementation(async () => {
+        llamada++;
+        if (llamada === 1) return { status: 429, data: null };
+        return { status: 200, data: [{ code: 200, body: { id: 'MLA962', status: 'active', available_quantity: 1 } }] };
+      });
+
+      const r = await correr(db, CFG);
+
+      expect(mlFetch).toHaveBeenCalledTimes(2); // el 429 original + el reintento post-cooldown
+      expect(r.esperasCooldown).toBe(1);
+      expect(r.revisadas).toBe(1);
+      expect(r.corregidas).toBe(0); // ML confirmó lo mismo que ya estaba registrado
+      const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor.valor).toBe('MLA962|'); // avanzó: el reintento sí trajo dato real
+    });
+
+    it('429 en el primer chunk, reintento también 429 → corta como antes, cursor no avanza', async () => {
+      seedPublicacion(db, { clave: 'MLA963|', itemId: 'MLA963', sku: 'A', cantidadMl: 1 });
+
+      const hasta = new Date(Date.now() + 5000).toISOString();
+      estadoCooldownMl.mockReturnValue({ activo: true, hasta, nivel: 0 });
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mlFetch.mockResolvedValue({ status: 429, data: null });
+
+      const r = await correr(db, CFG);
+
+      expect(mlFetch).toHaveBeenCalledTimes(2); // 429 original + el único reintento permitido
+      expect(r.esperasCooldown).toBe(1);
+      expect(r.sinDato).toBe(1);
+      const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('cooldown 429 activo'));
+      warnSpy.mockRestore();
+    });
+
+    it('cooldown a esperar más largo que el tope → NO espera, corta directo (sin sleep real)', async () => {
+      seedPublicacion(db, { clave: 'MLA964|', itemId: 'MLA964', sku: 'A', cantidadMl: 1 });
+
+      // Nivel de backoff alto: el cooldown vence en 5 minutos, muy por encima del tope de 90s.
+      const hasta = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      estadoCooldownMl.mockReturnValue({ activo: true, hasta, nivel: 2 });
+
+      mlFetch.mockResolvedValue({ status: 429, data: null });
+
+      const antes = Date.now();
+      const r = await correr(db, CFG);
+      const despues = Date.now();
+
+      expect(mlFetch).toHaveBeenCalledTimes(1); // no hubo reintento: cortó directo
+      expect(r.esperasCooldown).toBe(0);
+      expect(r.sinDato).toBe(1);
+      // No debe haber quedado ningún timer pendiente de una espera larga (runAllTimersAsync ya
+      // habría fallado/colgado si hubiera un sleep de 5 min sin resolver dentro de `correr`).
+      expect(despues - antes).toBeLessThan(1000);
+    });
+
+    it('un solo reintento por corrida: dos chunks distintos con 429 no producen dos esperas', async () => {
+      seedUniversoGrande(db, 25); // 25 itemIds -> 2 chunks (20 + 5)
+
+      const hasta = new Date(Date.now() + 5000).toISOString();
+      estadoCooldownMl.mockReturnValue({ activo: true, hasta, nivel: 0 });
+
+      mlFetch.mockResolvedValue({ status: 429, data: null }); // ambos chunks, y el reintento, dan 429
+
+      const r = await correr(db, CFG);
+
+      // Chunk 1 (429) + reintento (429, corta acá) = 2 llamadas; el chunk 2 nunca se intenta.
+      expect(mlFetch).toHaveBeenCalledTimes(2);
+      expect(r.esperasCooldown).toBe(1);
     });
   });
 
