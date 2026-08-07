@@ -1269,6 +1269,57 @@ describe('syncWcToMl', () => {
     expect(estado).toBeUndefined();
   });
 
+  it('tope SYNC_WC_ML_MAX_POR_CORRIDA: con más diffs que el tope, procesa exactamente el tope y deja el resto para la corrida siguiente (M3, revisor)', async () => {
+    // Timeout explícito (default 5000ms no alcanza): son 200+10 iteraciones reales de
+    // microtasks/awaits con vi.runAllTimersAsync — los delays son instantáneos por fake
+    // timers, pero el propio scheduling de tantas promesas encadenadas sí consume wall-clock
+    // real, más aún bajo carga (suite completa). Sin esto, el test corta a mitad de camino y
+    // la corrida de syncWcToMl sigue en background, contaminando el test siguiente.
+    // Limpiar las decisiones/catálogo del seed genérico del describe (MLA100|/BIKE-001,
+    // MLA200|987/CASCO-L) para que este test controle el universo de diffs con precisión.
+    db.prepare("DELETE FROM sku_matcher_decisiones").run();
+    db.prepare("DELETE FROM catalogo_cache").run();
+
+    // 210 publicaciones con diff (> 200, el tope) — ninguna con ml_stock_estado todavía, así
+    // que las 210 son diffs (cantidad_ml IS NULL). Cada una tiene su propio sku/producto para
+    // no chocar con el dedup de catalogo_cache.
+    const now = new Date().toISOString();
+    for (let i = 0; i < 210; i++) {
+      const sku = `SKU-TOPE-${String(i).padStart(4, '0')}`;
+      const clave = `MLATOPE${String(i).padStart(4, '0')}|`;
+      db.prepare(
+        'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+      ).run(clave, sku, 'Producto tope', 'confirmar', now);
+      db.prepare(
+        'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(1000 + i, 'Producto tope', sku, 'simple', null, 1, now);
+      db.prepare(
+        'INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+      ).run(clave, `MLATOPE${String(i).padStart(4, '0')}`, '', 'active', now);
+    }
+    mlFetch.mockResolvedValue({ status: 200, data: {} });
+
+    const p = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    // Se procesaron exactamente 200 (el tope), no las 210. Cada diff procesado con éxito
+    // deja fila en ml_stock_estado; las que quedaron fuera del tope, no.
+    const procesadas = db.prepare("SELECT COUNT(*) n FROM ml_stock_estado WHERE clave LIKE 'MLATOPE%'").get().n;
+    expect(procesadas).toBe(200);
+
+    // Las que quedaron sin ml_stock_estado (10 restantes) van primero en la próxima corrida:
+    // el ORDER BY prioriza NULL/lo más viejo. Corremos una segunda vez y deben completarse.
+    mlFetch.mockClear();
+    mlFetch.mockResolvedValue({ status: 200, data: {} });
+    const p2 = syncWcToMl(db, CFG);
+    await vi.runAllTimersAsync();
+    await p2;
+
+    const procesadasFinal = db.prepare("SELECT COUNT(*) n FROM ml_stock_estado WHERE clave LIKE 'MLATOPE%'").get().n;
+    expect(procesadasFinal).toBe(210); // las 10 restantes se completaron en la corrida siguiente
+  }, 30000);
+
   it('ML dice "doesn\'t have a variation" → borra el mapeo, loguea remapeo_requerido y DESCARTA la clave', async () => {
     const now = new Date().toISOString();
     db.prepare(
