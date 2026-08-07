@@ -246,11 +246,25 @@ function marcarStockWc(db, pubs) {
  */
 export function remarcarStockResueltos(db, items) {
   const stockPorSku = construirStockPorSku(db);
+  // Status vivo por item_id (ronda 2, M2 revisor): el `ml_status` cacheado en el payload de
+  // candidatos (armado por construirMLdesdeApi al calcular el cruce, dentro del bloque
+  // cacheado por firma) puede quedar stale hasta 3h — reconciliarStockMl (routes/sync.js)
+  // reescribe status/sub_status de ml_publicaciones_cache en cron sin tocar `actualizado_en`
+  // a propósito (ver firmaCandidatos más abajo), así que ese write-back NO invalida el caché
+  // de candidatos. Sin este re-cruce, la base ya diría 'active' pero la grilla seguiría
+  // mostrando 'paused' hasta el próximo refresh manual o restart. Igual criterio que el
+  // stock: barato (una query + Map), se recalcula en cada request, fuera del bloque cacheado.
+  const statusPorItemId = new Map();
+  for (const r of db.prepare('SELECT item_id, status FROM ml_publicaciones_cache').all()) {
+    if (r.status != null) statusPorItemId.set(String(r.item_id), r.status);
+  }
   for (const it of items) {
     const sku = (it.sku_actual || '').trim();
     const stockWc = sku && stockPorSku.has(sku) ? stockPorSku.get(sku) : null;
+    const statusVivo = statusPorItemId.get(it.ml_item_id) ?? it.ml_status;
+    it.ml_status = statusVivo;
     it.ml_stock_wc = stockWc;
-    it.ml_sin_stock = it.ml_status !== 'active' || (stockWc !== null && stockWc <= 0);
+    it.ml_sin_stock = statusVivo !== 'active' || (stockWc !== null && stockWc <= 0);
   }
   return items;
 }
@@ -342,9 +356,18 @@ function firmaCandidatos(db) {
   // Excepción deliberada (revisor, B1 2026-08-07): reconciliarStockMl (routes/sync.js)
   // también escribe status/sub_status de esta misma tabla, en cron, pero a propósito NO
   // toca actualizado_en al hacerlo — si lo tocara, cada corrida del barrido invalidaría este
-  // caché completo (recómputo de >120s) sin que título/sku/atributos hayan cambiado. La firma
-  // sigue siendo válida como invalidador porque el cruce de candidatos (candidatosDeItem en
-  // lib/matcherEngine.js) no usa status/sub_status para nada, solo sku/nombre/atributos.
+  // caché completo (recómputo de >120s) sin que título/sku/atributos hayan cambiado.
+  //
+  // OJO (ronda 2, M2 revisor): el cruce de candidatos en sí (candidatosDeItem, en
+  // lib/matcherEngine.js) NO usa status/sub_status, solo sku/nombre/atributos — hasta ahí la
+  // firma sigue siendo válida como invalidador. Pero el payload cacheado por request SÍ trae
+  // status: construirMLdesdeApi (matcherResolver.js) lo mete como `ml_status` en cada ítem
+  // resuelto, y ese campo alimenta `ml_sin_stock` en remarcarStockResueltos, y en el front el
+  // filtro activa/pausada, el orden y el badge de estado. Sin la re-lectura de status vivo que
+  // agrega remarcarStockResueltos (mismo patrón que ya usaba para el stock, ver más abajo en
+  // este archivo), la grilla podía mostrar un status stale hasta 3h tras el write-back de
+  // reconciliarStockMl. Se acepta no invalidar la firma (evita el recómputo de >120s) a cambio
+  // de resolver el stale status con ese re-cruce barato en cada request.
   const ml = db.prepare('SELECT COUNT(*) n, MAX(actualizado_en) t FROM ml_publicaciones_cache').get();
   // Decisiones: afectan el subconjunto 'atencion' (una decisión saca la clave de la lista).
   const dec = db.prepare('SELECT COUNT(*) n, MAX(actualizado_en) t FROM sku_matcher_decisiones').get();

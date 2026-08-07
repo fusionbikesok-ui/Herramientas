@@ -247,6 +247,29 @@ describe('GET /api/matcher/candidatos', () => {
     expect(r2.body.data[0].ml_sin_stock).toBe(true);
   });
 
+  it('ml_status/ml_sin_stock reflejan el status VIVO de ml_publicaciones_cache aun con cache hit (M2, ronda 2 revisor: el write-back de reconciliarStockMl no invalida la firma)', async () => {
+    // Publicación pausada al momento del primer cómputo: entra al bucket cacheado con
+    // ml_status='paused'.
+    seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
+    seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1', status: 'paused' });
+
+    await getCandidatos(app); // llena cache
+    const r1 = await getCandidatos(app);
+    expect(r1.recomputo).toBe(false);
+    expect(r1.body.data[0].ml_status).toBe('paused');
+    expect(r1.body.data[0].ml_sin_stock).toBe(true); // no activa → sin stock
+
+    // reconciliarStockMl reescribe status en ml_publicaciones_cache SIN tocar actualizado_en
+    // (deliberado, ver firmaCandidatos) — la firma no cambia, sigue siendo cache hit.
+    db.prepare("UPDATE ml_publicaciones_cache SET status = 'active' WHERE clave = 'A|'").run();
+
+    const r2 = await getCandidatos(app);
+    expect(r2.recomputo).toBe(false); // sale del cache (el cruce caro no se recomputa)
+    // ...pero el status SÍ se releyó fuera del bloque cacheado: ya no queda 'paused' stale.
+    expect(r2.body.data[0].ml_status).toBe('active');
+    expect(r2.body.data[0].ml_sin_stock).toBe(false);
+  });
+
   it('?peek=1: cache frío no computa ni dispara background (cache:false, data:[]); cache tibio devuelve normal', async () => {
     seedProducto(db, { id_woo: 1, nombre: 'Casco Bell Negro', sku: 'FB-1' });
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: 'FB-1' });

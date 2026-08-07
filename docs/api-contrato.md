@@ -122,14 +122,22 @@ en estado no verificable. Requieren acción manual:
 Dispara manualmente la sincronización de stock de WooCommerce hacia MercadoLibre.
 Protegida por el candado `_wcToMlEnCurso`.
 
-Tope por corrida (2026-08-07, revisor M3): procesa como máximo `SYNC_WC_ML_MAX_POR_CORRIDA`
-(200) diffs, ordenados por `ml_stock_estado.actualizado_en` ascendente (NULL/nunca registrado
-primero). Los diffs que no entran en el tope no se pierden — la query de diffs se recalcula
-entera en cada corrida (idempotente) y quedan para la siguiente, con el orden garantizando que
-rotan (no favorece siempre a las mismas claves). Con el `ML_CALL_DELAY_MS=500`, el peor caso
-es ~100s por corrida, muy por debajo del cron de 10 min. Se agregó tras alinear el status de
-`ml_publicaciones_cache` con ML real (ver `/api/sync/reconciliar-stock` abajo), que hizo que
-este flujo dejara de saltear una masa grande de publicaciones que antes creía pausadas.
+Tope por corrida (2026-08-07, revisor M3; corregido a "tope por llamadas a ML" en la ronda 2,
+B1 revisor): procesa como máximo `SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA` (200) LLAMADAS a ML
+(el GET de status de fallback + el PUT de stock), no filas leídas. La query de diffs ya NO
+tiene LIMIT: se recorre entera, ordenada por `ml_stock_estado.actualizado_en` ascendente
+(NULL/nunca registrado primero), pero los skips (publicación no activa, status desconocido,
+bloqueada por límite de fotos) no gastan llamada ni tiempo, así que no pueden agotar el tope
+por sí solos. Motivo del cambio: un tope sobre filas leídas podía quedar monopolizado para
+siempre por publicaciones pausadas de verdad y sin `ml_stock_estado` — "procesar" una fila solo
+envejece el timestamp en el camino feliz (PUT 200), así que esas filas nunca salían de la
+cabeza de la cola y el sync quedaba muerto en silencio, sin empujar un solo stock real. Los
+diffs/llamadas que no entran no se pierden — la query se recalcula entera cada corrida
+(idempotente) y quedan para la siguiente, con el orden garantizando que rotan (no favorece
+siempre a las mismas claves). Con el `ML_CALL_DELAY_MS=500`, el peor caso es ~100s por corrida,
+muy por debajo del cron de 10 min. Se agregó tras alinear el status de `ml_publicaciones_cache`
+con ML real (ver `/api/sync/reconciliar-stock` abajo), que hizo que este flujo dejara de
+saltear una masa grande de publicaciones que antes creía pausadas.
 
 - Request: sin body.
 - Response 200:
@@ -150,10 +158,11 @@ REAL de ML para publicaciones mapeadas, con multiget en chunks de 20 y pausa de
 próxima corrida, por su camino ya probado), **pero desde 2026-08-07 SÍ escribe**
 `status`/`sub_status` **en `ml_publicaciones_cache`** con el dato vivo del mismo multiget —
 antes esa tabla era solo-lectura para este flujo. Antes de escribir, toma un snapshot del
-status/sub_status guardado (antes de arrancar el multiget) y condiciona el UPDATE a que siga
-siendo ese valor (compare-and-swap por `item_id`, todas las claves/variaciones de la
-publicación a la vez): si otro flujo (reactivación manual/automática, refresh del matcher)
-cambió el status en el medio, su dato es más fresco y gana, no se pisa. Si ML no informó
+status/sub_status guardado por CADA fila/clave (antes de arrancar el multiget, m1 ronda 2
+revisor — no un único snapshot por item_id, que dejaba filas divergentes sin poder
+actualizarse nunca) y condiciona el UPDATE de esa fila a que siga siendo ese valor
+(compare-and-swap por `clave`): si otro flujo (reactivación manual/automática, refresh del
+matcher) cambió el status en el medio, su dato es más fresco y gana, no se pisa. Si ML no informó
 `sub_status` en la respuesta (atributo ausente), no se toca el valor guardado — nunca se pisa
 con `''`. **Deliberadamente NO toca `actualizado_en`** de `ml_publicaciones_cache`: esa columna
 es la firma de invalidación del caché de candidatos del matcher (`firmaCandidatos`,
@@ -167,11 +176,25 @@ devuelta no es un número finito, esa fila de `ml_stock_estado` se deja intacta 
 `sinDato` (no avanza el cursor por esa fila). Si la fila no tiene sku resuelto en la decisión
 del matcher, cuenta aparte como `sinSku` (no es una falla de ML, requiere completar el sku).
 
+Divergencias corregidas contra un `ml_stock_estado` ya existente cuentan como `corregidas`.
+Filas del universo que todavía NO tenían fila en `ml_stock_estado` (LEFT JOIN, punto ciego
+original) se dan de alta directo con el valor real de ML y cuentan aparte como `altas` — no
+sumadas a `corregidas`, para no ahogar la señal de sobreventa real detrás del ruido de puesta
+al día del primer barrido (~1061 filas la primera vez).
+
 Universo: TODAS las publicaciones con decisión de matcher (`asignar`/`confirmar`) presentes en
 `ml_publicaciones_cache`, sin filtrar por `status` (cambio 2026-08-07, caso Starvos: la caché
 de status solo se refresca a mano o por este mismo write-back, no hay cron que la mantenga al
 día por su cuenta — filtrar el universo por ella dejaba publicaciones activas-y-vendiendo
 invisibles para la reconciliación). El multiget resuelve el status real de cada una.
+
+Nota sobre el write-back de status (ronda 2, M2 revisor): el cruce de candidatos del matcher en
+sí (`candidatosDeItem`, `lib/matcherEngine.js`) no usa status/sub_status. Pero sí viaja como
+`ml_status` en el payload cacheado de `/api/matcher/candidatos` (lo agrega
+`construirMLdesdeApi`), y ese campo alimenta el badge/filtro/orden de estado en la grilla del
+matcher — `routes/matcher.js` (`remarcarStockResueltos`) re-lee el status vivo de
+`ml_publicaciones_cache` en cada request para que ese write-back no quede visible recién en el
+próximo refresh manual/restart.
 
 Protegida por el candado `_reconciliarStockEnCurso`. Cursor circular persistido en
 `sync_estado` (clave `cursor_reconciliacion_stock`): cada corrida toma el siguiente lote de
@@ -184,13 +207,14 @@ efectivamente tuvo dato de ML: si el multiget no devolvió nada útil (429 soste
 cursor no avanza y la corrida siguiente reintenta el mismo lote en vez de darlo por revisado.
 
 - Request: sin body.
-- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n>, "sinDato": <n>, "sinSku": <n>, "statusRefrescados": <n> }`.
+- Response 200: `{ "ok": true, "omitido": false, "revisadas": <n>, "corregidas": <n>, "altas": <n>, "sinDato": <n>, "sinSku": <n>, "statusRefrescados": <n> }`.
   `sinDato` son publicaciones del lote que quedaron sin dato real de ML (fail-closed); no
   cuentan como revisadas a efectos de avance de cursor. `sinSku` son publicaciones sin sku
-  resuelto en la decisión del matcher (ML sí contestó). `statusRefrescados` cuenta items
-  (no filas/variaciones) cuyo status/sub_status se escribió en `ml_publicaciones_cache` esta
-  corrida. `omitido: true` cuando no corrió, con `motivo: 'en_curso' | 'sin_config'` — no
-  revisó nada.
+  resuelto en la decisión del matcher (ML sí contestó). `altas` son publicaciones dadas de alta
+  en `ml_stock_estado` por no tener fila todavía (ver arriba); no suman a `corregidas`.
+  `statusRefrescados` cuenta items (no filas/variaciones) cuyo status/sub_status se escribió en
+  `ml_publicaciones_cache` esta corrida. `omitido: true` cuando no corrió, con
+  `motivo: 'en_curso' | 'sin_config'` — no revisó nada.
 - Costo: cada POST efectivo dispara hasta 8 llamadas a ML (multiget en chunks de 20 para un
   lote de 150) y bloquea la respuesta ~10.5s (pausa de 1.5s entre chunks).
 - Response 500: `{ "ok": false, "error": "<mensaje>" }`.
@@ -208,6 +232,14 @@ Además de lo que ya devolvía, incluye:
 
 `vinculos_sospechosos`: cantidad de vínculos WC↔ML con al menos una señal vigente de posible
 mal matcheo (ver `GET /api/sync/vinculos-sospechosos`).
+
+### GET /api/sync/dashboard — `stock.maxLlamadasPorCorrida` (campo agregado, m3 ronda 2 revisor)
+`stock.pendientes` no tiene tope (es el backlog total real), pero `syncWcToMl` solo drena hasta
+`SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA` llamadas a ML por corrida (ver `/api/sync/wc-ml`
+arriba). Sin este dato el panel no puede distinguir "hay backlog grande, drena de a tope cada
+10 min" de "el sync está roto y no procesa nada" cuando `pendientes` queda en cientos. Se agrega
+`stock.maxLlamadasPorCorrida` (número, valor de la constante) para que el frontend lo muestre si
+quiere — no requiere cambios en `public/` de por sí.
 
 ### GET /api/sync/frenadas
 Publicaciones pausadas por falta de stock que recuperaron stock pero la reactivación

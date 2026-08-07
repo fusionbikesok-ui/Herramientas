@@ -535,7 +535,8 @@ describe('reconciliarStockMl', () => {
       const r = await correr(db, CFG);
 
       expect(r.revisadas).toBe(1);
-      expect(r.corregidas).toBe(1);
+      expect(r.altas).toBe(1); // alta (m2, ronda 2 revisor), no corregidas — no había fila previa
+      expect(r.corregidas).toBe(0);
       const estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA3100995880|'").get();
       expect(estado.cantidad_ml).toBe(12);
       const log = db.prepare("SELECT * FROM sync_log WHERE clave = 'MLA3100995880|' AND estado = 'reconciliado'").get();
@@ -546,21 +547,31 @@ describe('reconciliarStockMl', () => {
       expect(log.error).toMatch(/ML tiene 12/);
     });
 
-    it('el INSERT de alta usa ON CONFLICT(clave) DO NOTHING (no revienta si la fila ya existiera al momento de escribir)', async () => {
+    it('el INSERT de alta usa ON CONFLICT(clave) DO NOTHING: si otro proceso ya insertó la fila entre la lectura del universo y este INSERT, no la pisa (m4, ronda 2 revisor)', async () => {
       seedSinStockEstado(db, { clave: 'MLA3100995881|', itemId: 'MLA3100995881', sku: 'FB-58762' });
-      mlFetch.mockResolvedValue({
-        status: 200,
-        data: [{ code: 200, body: { id: 'MLA3100995881', status: 'active', available_quantity: 12 } }],
+      // Simula el proceso concurrente (syncWcToMl/procesarReintentos) insertando la fila DESPUÉS
+      // de que el universo se leyó (LEFT JOIN, sin fila todavía) pero ANTES de que este INSERT se
+      // ejecute — el ON CONFLICT tiene que ejercerse de verdad, no pasar por accidente porque no
+      // había fila previa.
+      mlFetch.mockImplementation(async () => {
+        db.prepare(
+          'INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES (?, ?, ?, ?)'
+        ).run('MLA3100995881|', 'FB-58762', 5, new Date().toISOString());
+        return {
+          status: 200,
+          data: [{ code: 200, body: { id: 'MLA3100995881', status: 'active', available_quantity: 12 } }],
+        };
       });
 
       const r = await correr(db, CFG);
 
-      // Universo con LEFT JOIN: no hay fila previa en ml_stock_estado, se da de alta con el
-      // valor real de ML (12). Cubre el mismo camino que el test de arriba, verificando además
-      // que no hay excepción por PK duplicada si el ON CONFLICT se ejerce.
-      expect(r.corregidas).toBe(1);
+      // El ON CONFLICT DO NOTHING no pisó la fila del otro proceso (5), y no cuenta como
+      // corregida/alta: el dato del otro proceso es más fresco que la lectura de ML de esta
+      // corrida.
+      expect(r.corregidas).toBe(0);
+      expect(r.altas).toBe(0);
       const estado = db.prepare("SELECT cantidad_ml FROM ml_stock_estado WHERE clave = 'MLA3100995881|'").get();
-      expect(estado.cantidad_ml).toBe(12);
+      expect(estado.cantidad_ml).toBe(5); // conserva el valor del otro proceso, no el 12 de ML
     });
   });
 
@@ -633,6 +644,86 @@ describe('reconciliarStockMl', () => {
       const r = await correr(db, CFG);
 
       expect(r.statusRefrescados).toBe(1);
+    });
+
+    it('m1 (ronda 2, revisor): dos filas del MISMO item_id con status divergente entre sí — el CAS es por clave, así que ambas se corrigen (no queda una absorbida para siempre)', async () => {
+      // Caso que describe el hallazgo: refresh parcial dejó las dos variaciones del mismo
+      // item_id con status distinto entre sí ANTES de esta corrida (dato inconsistente ya
+      // existente). Con un único snapshot por item_id (LIMIT 1 sin ORDER BY) el UPDATE por
+      // item_id con WHERE status IS <snapshot único> solo podía matchear una de las dos —
+      // la otra quedaba clavada para siempre, porque la corrida siguiente volvía a snapshotear
+      // la misma fila "ganadora". Con snapshot y CAS por clave, ambas se actualizan.
+      seedPublicacion(db, { clave: 'MLA1006|1', itemId: 'MLA1006', variationId: '1', sku: 'A', cantidadMl: 1, status: 'paused' });
+      seedPublicacion(db, { clave: 'MLA1006|2', itemId: 'MLA1006', variationId: '2', sku: 'B', cantidadMl: 1, status: 'active' });
+
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{
+          code: 200,
+          body: {
+            id: 'MLA1006', status: 'active', sub_status: [],
+            variations: [{ id: 1, available_quantity: 1 }, { id: 2, available_quantity: 1 }],
+          },
+        }],
+      });
+
+      const r = await correr(db, CFG);
+
+      // Ambas filas terminan con status='active' en la caché: la que ya decía 'active' no
+      // cambió (no suma al UPDATE), la que decía 'paused' sí se corrigió.
+      expect(r.statusRefrescados).toBe(1); // sigue contando por ítem, no por fila (ver test de arriba)
+      const c1 = db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave = 'MLA1006|1'").get();
+      const c2 = db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave = 'MLA1006|2'").get();
+      expect(c1.status).toBe('active');
+      expect(c2.status).toBe('active');
+    });
+
+    it('M3 (ronda 2, revisor): status ausente en la última fila del lote, PERMANENTE en corridas consecutivas — el cursor no avanza las primeras dos veces, pero SÍ a la tercera, con sync_log error accionable', async () => {
+      // Universo de 1 sola clave: con lote de tamaño 1 esa fila es a la vez la primera Y la
+      // última del lote — la reproducción más simple de "status ausente al final del lote",
+      // que es justamente el caso que dejaba `ultimaIdxConDato` sin setear y el cursor sin
+      // avanzar. ML responde 200 pero el body no trae el atributo `status` (ausente, no null
+      // explícito — mismo caso que describe el comentario del código).
+      seedPublicacion(db, { clave: 'MLA1007|', itemId: 'MLA1007', sku: 'A', cantidadMl: 1, status: 'paused' });
+      mlFetch.mockResolvedValue({
+        status: 200,
+        data: [{ code: 200, body: { id: 'MLA1007', available_quantity: 1 } }], // sin `status`
+      });
+
+      // 1ra y 2da corrida: transitorio todavía (< 3 consecutivas) — el cursor NO avanza, sin
+      // log de error, la fila se reintenta en la próxima corrida.
+      let r = await correr(db, CFG);
+      expect(r.sinDato).toBe(1);
+      let cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor).toBeUndefined(); // nunca se seteó: ultimaIdxConDato quedó en -1
+
+      r = await correr(db, CFG);
+      expect(r.sinDato).toBe(1);
+      cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor).toBeUndefined();
+
+      let errorLog = db.prepare("SELECT * FROM sync_log WHERE clave = 'MLA1007|' AND estado = 'error'").get();
+      expect(errorLog).toBeUndefined(); // todavía no es "permanente"
+
+      // 3ra corrida consecutiva: la condición ya no es transitoria — el cursor avanza igual
+      // (universo de 1 sola clave: vuelve a la misma) y queda un sync_log 'error' accionable.
+      r = await correr(db, CFG);
+      expect(r.sinDato).toBe(1);
+      cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'cursor_reconciliacion_stock'").get();
+      expect(cursor.valor).toBe('MLA1007|'); // avanzó (única clave del universo)
+
+      errorLog = db.prepare("SELECT * FROM sync_log WHERE clave = 'MLA1007|' AND estado = 'error'").get();
+      expect(errorLog).toBeTruthy();
+      expect(errorLog.error).toMatch(/status/i);
+      expect(errorLog.error).toMatch(/3 corridas consecutivas|permanente/i);
+
+      // 4ta corrida: el contador se reseteó tras el log de error — vuelve a comportarse como
+      // transitorio (no dispara un error en cada corrida sucesiva).
+      const cantLogsAntes = db.prepare("SELECT COUNT(*) n FROM sync_log WHERE clave = 'MLA1007|' AND estado = 'error'").get().n;
+      r = await correr(db, CFG);
+      expect(r.sinDato).toBe(1);
+      const cantLogsDespues = db.prepare("SELECT COUNT(*) n FROM sync_log WHERE clave = 'MLA1007|' AND estado = 'error'").get().n;
+      expect(cantLogsDespues).toBe(cantLogsAntes); // no logueó de nuevo, iba en 1/3
     });
 
     it('item ausente del multiget / 429 → no se escribe status (garantía fail-closed)', async () => {
