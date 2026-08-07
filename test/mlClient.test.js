@@ -465,6 +465,76 @@ describe('mlClient — trazabilidad de errores', () => {
     expect(resumen).toContain('4 veces más');
   });
 
+  it('la clave de dedup agrupa por ENDPOINT: N ids distintos sobre el mismo recurso producen una sola línea', async () => {
+    // Este es el test que le da valor a la normalización de #1: si se revierte
+    // (clave = método+path crudo+status), cada id distinto arma una clave nueva
+    // y este test falla porque aparecen 6 líneas en vez de 1.
+    vi.useFakeTimers();
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValue({ status: 500, headers: {}, data: null });
+
+    for (let i = 0; i < 6; i++) {
+      await mlFetch(db, ML_CFG, 'put', `/items/MLA${i}`, { available_quantity: 1 });
+    }
+
+    let mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    const lineasError = mensajes.filter(m => m.includes('[ML][error]') && m.includes('PUT'));
+    expect(lineasError.length).toBe(1); // una sola línea para las 6 publicaciones distintas
+
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1000);
+
+    mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    const resumen = mensajes.find(m => m.includes('veces más'));
+    expect(resumen).toBeDefined();
+    expect(resumen).toContain('5 veces más');
+  });
+
+  it('un offset/fecha distinto en /orders/search no rompe el agrupamiento del dedup', async () => {
+    vi.useFakeTimers();
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValue({ status: 500, headers: {}, data: null });
+
+    for (let i = 0; i < 3; i++) {
+      const path = `/orders/search?seller=123&order.status=paid&sort=date_asc&order.date_created.from=${encodeURIComponent(new Date(Date.now() + i * 1000).toISOString())}&offset=${i * 50}&limit=50`;
+      await mlFetch(db, ML_CFG, 'get', path);
+    }
+
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    const lineasError = mensajes.filter(m => m.includes('[ML][error]') && m.includes('/orders/search'));
+    expect(lineasError.length).toBe(1);
+  });
+
+  it('el 429 real no duplica línea: solo la de _activarCooldown, no la de _registrarErrorMl', async () => {
+    const { mlFetch } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+
+    const mensajes = errorSpy.mock.calls.map(c => c.join(' '));
+    const lineas429 = mensajes.filter(m => m.includes('429') && m.includes('MLA1'));
+    expect(lineas429.length).toBe(1);
+    expect(lineas429[0]).toContain('cooldown activado');
+  });
+
+  it('el techo de 200 entradas no crece sin límite y no filtra timers al purgar', async () => {
+    vi.useFakeTimers();
+    const { mlFetch, _estadoDedupParaTests } = await import('../lib/mlClient.js');
+
+    for (let i = 0; i < 205; i++) {
+      // 500+i evita pisar el 429 (que dispara cooldown y cambiaría el escenario).
+      axios.request.mockResolvedValueOnce({ status: 500 + i, headers: {}, data: null });
+      await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    }
+
+    const estado = _estadoDedupParaTests();
+    expect(estado.entradas).toBeLessThanOrEqual(200);
+    expect(estado.timers).toBe(estado.entradas); // ninguna entrada quedó con timer huérfano
+
+    vi.useRealTimers();
+  });
+
   it('los sintéticos NO loguean por llamada pero incrementan sus contadores', async () => {
     const { mlFetch, estadoErroresMl, _resetCooldownParaTests } = await import('../lib/mlClient.js');
     _resetCooldownParaTests();

@@ -113,8 +113,7 @@ cooldown global estaba activo) y `sin_cupo` (cortó por presupuesto agotado, ver
 `lib/mlLimites.js`). `porRecurso` desglosa por `clasificarRecurso` (`lectura`/`escritura`/
 `oauth`). Sirve para distinguir en vivo, sin gastar una sola llamada a ML, "ML nos
 rechazó de verdad" (ver logs `[ML][error]` y `[ML] 429 real de ML — cooldown activado`)
-de "nos frenamos solos" — la distinción que costó horas de diagnóstico en el incidente
-de reconciliarStockMl del 2026-08-07.
+de "nos frenamos solos" — ver `lib/mlClient.js` para el porqué de la distinción.
 
 Además, `pedidos` ahora incluye:
 
