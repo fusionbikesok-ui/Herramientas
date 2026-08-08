@@ -1134,6 +1134,20 @@ function itemsDesdeOrdenMl(db, orden) {
 // Cuando confiable=false, el caller NO debe usar el resultado para podar (solo para
 // alimentar/actualizar filas existentes), porque puede faltar un pedido real todavía
 // ready_to_ship que simplemente no se pudo confirmar esta vez.
+// Estados de envío ML que ya no cambian: una vez alcanzados, nunca vuelven a
+// ready_to_ship. Ver migrations/006_ml_shipment_estado.sql.
+// OJO: 'not_delivered' queda afuera a propósito -- es una visita fallida, no un estado
+// final, y para envíos locales (self_service/Flex, los únicos que mira esEnvioLocal) hay
+// reintento de visita: el envío puede volver a ready_to_ship. Tratarlo como terminal
+// borraría en silencio un pedido real pendiente de despachar (ver revisión 2026-08-08).
+const ESTADOS_SHIPMENT_TERMINALES = new Set(['shipped', 'delivered', 'cancelled']);
+
+// Vigencia del cacheo de un estado terminal: aunque shipped/delivered/cancelled no
+// deberían volver atrás, no confiamos ciegamente en un dato que puede llevar semanas sin
+// revalidar -- se re-verifica contra ML pasados 7 días, igual que el criterio ya usado
+// para ml_reactivacion_frenada (ver migrations/005_reactivacion_frenada_insumos.sql).
+const VIGENCIA_SHIPMENT_TERMINAL_MS = 7 * 24 * 3600 * 1000;
+
 async function pendientesMl(db, mlCfg) {
   if (!mlCfg?.clientId || !mlCfg?.userId) return { pendientes: [], confiable: false };
   const desde = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
@@ -1178,12 +1192,35 @@ async function pendientesMl(db, mlCfg) {
     const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(`ml:${orden.id}`);
     if (prep?.estado === 'completada') continue;
 
+    // Saltar envíos ya en estado terminal sin gastar el GET, pero solo mientras el cacheo
+    // sea reciente (< 7 días): pasado ese plazo se re-verifica contra ML por las dudas. No
+    // cuenta como fallo -- no es un error, es información que ya sabíamos -- y un envío
+    // terminal tampoco sería `pendiente` igual que hoy.
+    const estadoPrevio = db.prepare('SELECT status, actualizado_en FROM ml_shipment_estado WHERE shipment_id=?').get(String(shipmentId));
+    if (estadoPrevio && ESTADOS_SHIPMENT_TERMINALES.has(estadoPrevio.status)) {
+      const edadMs = Date.now() - new Date(estadoPrevio.actualizado_en).getTime();
+      if (edadMs < VIGENCIA_SHIPMENT_TERMINAL_MS) continue;
+    }
+
     const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
     if (shipResp.status !== 200) {
       fallosShipment++;
       continue;
     }
     const envio = shipResp.data;
+    // Un 200 sin `status` es un dato inservible, no un éxito: la columna es NOT NULL y
+    // cachear NULL/vacío tira SqliteError, que sube sin capturar y le hace perder a
+    // syncPedidosCache la sección ML entera de la corrida (ver revisión 2026-08-08). Se
+    // trata igual que un fallo de red: cuenta para `fallosShipment` y nunca se cachea.
+    if (!envio?.status) {
+      fallosShipment++;
+      continue;
+    }
+    db.prepare(`
+      INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
+    `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
     if (envio.status !== 'ready_to_ship') continue;
     if (!esEnvioLocal(envio.logistic_type)) continue;
 
@@ -1376,6 +1413,11 @@ export async function syncPedidosCache(db, cfg) {
           "    AND p.estado='completada' AND p.completado_en < ?" +
           ")"
         ).run(hace60Dias);
+
+        // ml_shipment_estado tampoco se poda nunca por su cuenta (mismo patrón de arriba):
+        // sin esto, cada envío consultado alguna vez queda para siempre en la tabla, aunque
+        // ya no tenga ninguna relación con un pedido vigente en pedidos_cache.
+        db.prepare('DELETE FROM ml_shipment_estado WHERE actualizado_en < ?').run(hace60Dias);
       });
       txMl();
     } catch (eMl) {

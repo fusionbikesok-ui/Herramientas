@@ -180,6 +180,17 @@ export function openDb(dbPath) {
     actualizado_en TEXT NOT NULL
   )`); } catch (_) {}
 
+  // Último status conocido de cada envío ML (ver migrations/006_ml_shipment_estado.sql y
+  // routes/preparacion.js#pendientesMl) — un envío en estado terminal (shipped/delivered/
+  // cancelled) no vuelve nunca a ready_to_ship, así que dejamos de repreguntar su GET
+  // /shipments/:id en cada corrida mientras el cacheo sea reciente (< 7 días).
+  try { db.exec(`CREATE TABLE IF NOT EXISTS ml_shipment_estado (
+    shipment_id    TEXT PRIMARY KEY,
+    status         TEXT NOT NULL,
+    logistic_type  TEXT,
+    actualizado_en TEXT NOT NULL
+  )`); } catch (_) {}
+
   // Insumos con los que se tomó la decisión de frenar una reactivación por precio (ver
   // migrations/005_reactivacion_frenada_insumos.sql): permiten re-evaluar localmente sin
   // pegarle a ML cuando ninguno de los dos precios cambió desde que se detectó la frenada.

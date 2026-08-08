@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { LIMITES_ML, MARGEN_SEGURIDAD, cupoEfectivo, clasificarRecurso, resumenLimites } from '../lib/mlLimites.js';
-import { reservarCupo, estadoPresupuesto, _resetPresupuestoParaTests } from '../lib/mlRateLimiter.js';
+import { reservarCupo, estadoPresupuesto, _resetPresupuestoParaTests, _techoRafagaParaTests } from '../lib/mlRateLimiter.js';
 
 describe('lib/mlLimites — presupuesto del 15%', () => {
   it('el margen de seguridad es 15% y NO se afloja', () => {
@@ -54,23 +54,26 @@ describe('lib/mlRateLimiter — token bucket', () => {
   it('descuenta del recurso específico Y del global en la misma llamada', async () => {
     await reservarCupo(['global', 'escritura']);
     const estado = estadoPresupuesto();
-    expect(estado.global.disponibles).toBe(cupoEfectivo('global') - 1);
-    expect(estado.escritura.disponibles).toBe(cupoEfectivo('escritura') - 1);
+    // El bucket arranca en el techo de ráfaga, no en el cupo/minuto entero.
+    expect(estado.global.disponibles).toBe(_techoRafagaParaTests('global') - 1);
+    expect(estado.escritura.disponibles).toBe(_techoRafagaParaTests('escritura') - 1);
   });
 
   it('gana el más restrictivo: agotar oauth frena aunque el global tenga cupo de sobra', async () => {
-    // oauth tiene el techo más bajo (17/min efectivo). Lo vaciamos entero.
-    const cupoOauth = cupoEfectivo('oauth');
-    for (let i = 0; i < cupoOauth; i++) {
+    // El bucket ya NO arranca lleno con el cupo/minuto entero (17 para oauth), sino con
+    // el techo de ráfaga (ventana de 3s) — para oauth eso redondea a 1 solo token.
+    const techoOauth = _techoRafagaParaTests('oauth');
+    for (let i = 0; i < techoOauth; i++) {
       expect(await reservarCupo(['global', 'oauth'])).toBe(true);
     }
     expect(estadoPresupuesto().oauth.disponibles).toBe(0);
-    // El global sigue teniendo muchísimo cupo...
-    expect(estadoPresupuesto().global.disponibles).toBeGreaterThan(1000);
+    // El global (techo de ráfaga propio, no el cupo/minuto entero) sigue teniendo cupo:
+    // solo se gastó 1, lo mismo que oauth en esta corrida.
+    expect(estadoPresupuesto().global.disponibles).toBeGreaterThan(0);
 
     // ...y aun así la próxima llamada NO sale al toque: tiene que esperar a que
-    // el bucket de oauth recargue (17/min ≈ 1 token cada 3,5s). El limitador
-    // FRENA en vez de rechazar — el caller se ralentiza, no falla. Ésa es la
+    // el bucket de oauth recargue (17/min ≈ 1 token cada 3,5s, el promedio no cambió).
+    // El limitador FRENA en vez de rechazar — el caller se ralentiza, no falla. Ésa es la
     // regla pedida: gana siempre el recurso más restrictivo.
     const t0 = Date.now();
     expect(await reservarCupo(['global', 'oauth'])).toBe(true);
@@ -79,21 +82,23 @@ describe('lib/mlRateLimiter — token bucket', () => {
   }, 30_000);
 
   it('el bucket se recarga con el tiempo (refill continuo, sin picos de ventana fija)', async () => {
-    const cupoOauth = cupoEfectivo('oauth');
-    for (let i = 0; i < cupoOauth; i++) await reservarCupo(['oauth']);
+    const techoOauth = _techoRafagaParaTests('oauth');
+    for (let i = 0; i < techoOauth; i++) await reservarCupo(['oauth']);
     expect(estadoPresupuesto().oauth.disponibles).toBe(0);
 
-    // Un bucket de 17/min recarga ~1 token cada 3,5s. Esperamos algo más.
+    // Un bucket de 17/min recarga ~1 token cada 3,5s (el refill promedio no cambió).
+    // Esperamos algo más.
     await new Promise(r => setTimeout(r, 4500));
     expect(estadoPresupuesto().oauth.disponibles).toBeGreaterThanOrEqual(1);
   }, 20_000);
 
   it('bajo contención sostenida devuelve false en vez de esperar para siempre', async () => {
-    // 40 llamadas peleando por un bucket de 17/min: las primeras entran, y las
-    // que no consigan cupo dentro de la espera máxima (15s) deben rendirse con
-    // false para que el caller las trate como 429 — nunca colgarse.
-    const cupoOauth = cupoEfectivo('oauth');
-    for (let i = 0; i < cupoOauth; i++) await reservarCupo(['oauth']);
+    // Muchas llamadas peleando por un bucket que arranca en el techo de ráfaga de oauth
+    // (1 token): las primeras entran, y las que no consigan cupo dentro de la espera
+    // máxima (15s) deben rendirse con false para que el caller las trate como 429 —
+    // nunca colgarse.
+    const techoOauth = _techoRafagaParaTests('oauth');
+    for (let i = 0; i < techoOauth; i++) await reservarCupo(['oauth']);
 
     const resultados = await Promise.all(
       Array.from({ length: 40 }, () => reservarCupo(['oauth']))
@@ -101,9 +106,41 @@ describe('lib/mlRateLimiter — token bucket', () => {
     expect(resultados.some(r => r === false)).toBe(true);
   }, 40_000);
 
-  it('nunca acumula más cupo que el techo, por más que el proceso esté ocioso', async () => {
+  it('nunca acumula más cupo que el techo de ráfaga, por más que el proceso esté ocioso', async () => {
     await reservarCupo(['oauth']);
     await new Promise(r => setTimeout(r, 300));
-    expect(estadoPresupuesto().oauth.disponibles).toBeLessThanOrEqual(cupoEfectivo('oauth'));
+    // Antes el tope era cupoEfectivo (el minuto entero); ahora es el techo de ráfaga,
+    // mucho más chico — el proceso ocioso ya no puede acumular un minuto de golpe.
+    expect(estadoPresupuesto().oauth.disponibles).toBeLessThanOrEqual(_techoRafagaParaTests('oauth'));
+    expect(estadoPresupuesto().oauth.disponibles).toBeLessThan(cupoEfectivo('oauth'));
   });
+
+  // Criterio de aceptación del plan (paso 2): con 'lectura' (cupo efectivo 425/min), las
+  // primeras ~22 salidas de un lote de 100 no esperan (techo de ráfaga de 3s), y el resto
+  // queda paceado por el refill real -> el lote entero tarda al menos lo que el promedio
+  // exige, y ninguna llamada devuelve false (15s de espera máxima alcanza de sobra).
+  it('techo de ráfaga: en un lote de 100 lecturas, las primeras ~22 salen sin espera y el resto se pacea sin fallar ninguna', async () => {
+    const cupoLectura = cupoEfectivo('lectura');
+    const techoLectura = _techoRafagaParaTests('lectura');
+
+    const t0 = Date.now();
+    const resultados = [];
+    const tiemposMs = [];
+    for (let i = 0; i < 100; i++) {
+      resultados.push(await reservarCupo(['lectura']));
+      tiemposMs.push(Date.now() - t0);
+    }
+
+    expect(resultados.every(r => r === true)).toBe(true);
+
+    // Las primeras `techoLectura` llamadas salieron de la ráfaga inicial: rápido (bien por
+    // debajo del ritmo de refill, que exigiría ~141ms cada una para 425rpm).
+    expect(tiemposMs[techoLectura - 1]).toBeLessThan(1000);
+
+    // El lote entero (100 llamadas) no puede salir más rápido que lo que el promedio de
+    // 425/min permite una vez agotada la ráfaga: (100 - techoLectura) llamadas al ritmo de
+    // refill.
+    const esperaMinimaMs = ((100 - techoLectura) / cupoLectura) * 60_000;
+    expect(tiemposMs[99]).toBeGreaterThanOrEqual(esperaMinimaMs * 0.9); // 10% de margen por jitter de setTimeout
+  }, 40_000);
 });

@@ -7,6 +7,7 @@ vi.mock('axios', async () => {
   return { default: { ...actual.default, post: vi.fn(), request: vi.fn() } };
 });
 import axios from 'axios';
+import { _resetPresupuestoParaTests } from '../lib/mlRateLimiter.js';
 
 const TEST_DB = './test/tmp-mlclient.sqlite';
 const ML_CFG = { clientId: 'c', clientSecret: 's', userId: '999' };
@@ -49,6 +50,12 @@ describe('mlClient — cooldown global de rate-limit', () => {
   });
 
   afterEach(() => {
+    // Aislamiento del presupuesto: algunos tests de este describe usan fake timers
+    // con el limitador REAL (mlRateLimiter.js sin mockear). Si un test queda con
+    // `ultimoRefill` en el futuro (reloj falso adelantado) y no se resetea acá, el
+    // bucket deja de recargarse hasta que el reloj real lo alcance (ver
+    // lib/mlRateLimiter.js:64..66) y arrastra el problema a los tests siguientes.
+    _resetPresupuestoParaTests();
     db.close();
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
@@ -252,6 +259,9 @@ describe('mlClient — 429 en el refresh de token OAuth', () => {
   });
 
   afterEach(() => {
+    // Ver comentario en el describe anterior: aísla el presupuesto de un fake timer
+    // adelantado que haya quedado grabado en `ultimoRefill`.
+    _resetPresupuestoParaTests();
     db.close();
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
@@ -401,6 +411,9 @@ describe('mlClient — trazabilidad de errores', () => {
   });
 
   afterEach(() => {
+    // Ver comentario en el primer describe del archivo: este describe también mezcla
+    // fake timers (incluido el bucle de 205 llamadas) con el limitador real.
+    _resetPresupuestoParaTests();
     errorSpy.mockRestore();
     vi.useRealTimers();
     db.close();
@@ -562,7 +575,16 @@ describe('mlClient — trazabilidad de errores', () => {
     for (let i = 0; i < 205; i++) {
       // 500+i evita pisar el 429 (que dispara cooldown y cambiaría el escenario).
       axios.request.mockResolvedValueOnce({ status: 500 + i, headers: {}, data: null });
-      await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+      // 205 llamadas secuenciales pasan por reservarCupo, que arranca cada bucket en su
+      // techo de ráfaga (22 para 'lectura', ver lib/mlRateLimiter.js) y no en el cupo
+      // entero del minuto: desde la llamada 23 hay que esperar a que el refill libere
+      // token, y con timers falsos esa espera (setTimeout real, aunque interceptado por
+      // vi.useFakeTimers) no avanza sola. Se dispara la llamada y se adelanta el reloj en
+      // paralelo -- si no hiciera falta esperar (primeras ~22), avanzar el reloj no rompe
+      // nada, así que no hace falta ramificar por índice.
+      const llamada = mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+      await vi.advanceTimersByTimeAsync(500);
+      await llamada;
     }
 
     const estado = _estadoDedupParaTests();
