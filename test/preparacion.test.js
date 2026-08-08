@@ -1345,6 +1345,154 @@ describe('syncPedidosCache', () => {
     expect(filaVieja.estado_envio).toBe('pendiente');
   });
 
+  it('no repregunta /shipments/:id de un envío ya en estado terminal (shipped) reciente — usa la caché local y no cuenta como fallo', async () => {
+    buildTestApp(db); // asegura las tablas de preparaciones (ensureTables); ml_shipment_estado la crea openDb (db/index.js), ya aplicado en el beforeEach vía openDb(TEST_DB)
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+    // Ya sabíamos, de una corrida anterior (hace 5 días, dentro de la vigencia de 7), que
+    // el envío 555 está 'shipped' (terminal).
+    db.prepare(`
+      INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
+      VALUES ('555', 'shipped', 'self_service', ?)
+    `).run(haceCincoDias);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }); // orders/search — sin mock de /shipments/555: si lo llamara, el test fallaría por falta de mock
+
+    await syncPedidosCache(db, CFG);
+
+    // Un solo GET a ML (orders/search); el GET de /shipments/555 se salteó por estado terminal.
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+    // El salteo no es un fallo: el listado sigue confiable y sí poda lo que ya no aparece.
+    const log = db.prepare("SELECT * FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1").get();
+    expect(log.estado).toBe('ok');
+    // El envío terminal no es 'pendiente' -> el pedido 2222 no debe entrar a pedidos_cache como pendiente.
+    const fila2222 = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:2222'").get();
+    expect(fila2222).toBeUndefined();
+  });
+
+  it('un GET real con status:"shipped" persiste la fila en ml_shipment_estado (no solo el salteo)', async () => {
+    buildTestApp(db);
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 3333, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 777 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { status: 'shipped', logistic_type: 'self_service' } }); // shipments/777
+
+    await syncPedidosCache(db, CFG);
+
+    const fila = db.prepare("SELECT * FROM ml_shipment_estado WHERE shipment_id='777'").get();
+    expect(fila).toBeTruthy();
+    expect(fila.status).toBe('shipped');
+  });
+
+  it('un status cacheado NO terminal (ready_to_ship) sí se repregunta contra ML', async () => {
+    buildTestApp(db);
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
+      VALUES ('888', 'ready_to_ship', 'self_service', ?)
+    `).run(haceCincoDias);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 4444, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 888 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/888 -- SE repregunta
+
+    await syncPedidosCache(db, CFG);
+
+    // 2 llamadas: orders/search + shipments/888. Si el status no-terminal se hubiera
+    // salteado igual que un terminal, acá quedaría en 1.
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+    const fila4444 = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:4444'").get();
+    expect(fila4444).toBeTruthy();
+  });
+
+  it('un 200 sin status en el body no se cachea y cuenta como fallo (listado no confiable, no revienta el proceso)', async () => {
+    buildTestApp(db);
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 5555, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 999 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: {} }); // shipments/999 -- 200 pero sin status
+
+    await expect(syncPedidosCache(db, CFG)).resolves.not.toThrow();
+
+    // Nunca se cachea un status vacío: si se hubiera intentado, la columna NOT NULL habría
+    // tirado SqliteError (el `resolves.not.toThrow()` de arriba ya lo cubre indirectamente).
+    const fila = db.prepare("SELECT * FROM ml_shipment_estado WHERE shipment_id='999'").get();
+    expect(fila).toBeUndefined();
+    // Se trató como fallo de shipment (fallosShipment++) -> listado no confiable -> la poda
+    // se omite esta corrida (no se borra nada con datos incompletos), pero la corrida en sí
+    // no revienta: sync_log sigue en 'ok' (mismo comportamiento que un 500 de /shipments).
+    const log = db.prepare("SELECT * FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1").get();
+    expect(log.estado).toBe('ok');
+  });
+
+  it('un status terminal cacheado hace más de 7 días se vuelve a verificar contra ML', async () => {
+    buildTestApp(db);
+    const hace10Dias = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
+      VALUES ('111', 'shipped', 'self_service', ?)
+    `).run(hace10Dias);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 6666, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 111 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { status: 'shipped', logistic_type: 'self_service' } }); // shipments/111 -- SE repregunta por vencimiento de vigencia
+
+    await syncPedidosCache(db, CFG);
+
+    // 2 llamadas: si el cacheo viejo se hubiera respetado igual, acá quedaría en 1.
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+    const fila = db.prepare("SELECT * FROM ml_shipment_estado WHERE shipment_id='111'").get();
+    expect(fila.actualizado_en).not.toBe(hace10Dias); // se refrescó
+  });
+
+  it('not_delivered NO se trata como terminal: se repregunta siempre (puede volver a ready_to_ship)', async () => {
+    buildTestApp(db);
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
+      VALUES ('222', 'not_delivered', 'self_service', ?)
+    `).run(haceCincoDias);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 7777, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 222 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/222 -- reintento de visita, ahora está pendiente de nuevo
+
+    await syncPedidosCache(db, CFG);
+
+    expect(mlFetch).toHaveBeenCalledTimes(2);
+    // El pedido vuelve a aparecer como pendiente -- si not_delivered se hubiera tratado
+    // como terminal, este pedido real habría quedado invisible para siempre.
+    const fila7777 = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:7777'").get();
+    expect(fila7777).toBeTruthy();
+    expect(fila7777.estado_envio).toBe('pendiente');
+  });
+
+  it('poda ml_shipment_estado por antigüedad: filas de hace 90 días desaparecen, filas de hace 5 días sobreviven', async () => {
+    buildTestApp(db);
+    const hace90Dias = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+    const haceCincoDias = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
+      VALUES ('333', 'shipped', 'self_service', ?)
+    `).run(hace90Dias);
+    db.prepare(`
+      INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
+      VALUES ('444', 'shipped', 'self_service', ?)
+    `).run(haceCincoDias);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // orders/search sin resultados
+
+    await syncPedidosCache(db, CFG);
+
+    expect(db.prepare("SELECT * FROM ml_shipment_estado WHERE shipment_id='333'").get()).toBeUndefined();
+    expect(db.prepare("SELECT * FROM ml_shipment_estado WHERE shipment_id='444'").get()).toBeTruthy();
+  });
+
   it('con más de 50 órdenes paid, pagina /orders/search hasta agotar el resultado (no se queda con la primera página) y sí poda si queda confiable', async () => {
     buildTestApp(db);
     // Fecha relativa, adentro de la ventana móvil de 30 días (ver comentario más arriba).

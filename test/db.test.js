@@ -26,6 +26,7 @@ describe('db schema', () => {
       'ml_precios_cache',
       'ml_publicaciones_cache',
       'ml_reactivacion_frenada',
+      'ml_shipment_estado',
       'ml_sku_push_fallos',
       'ml_stock_estado',
       'ml_vinculos_revisados',
