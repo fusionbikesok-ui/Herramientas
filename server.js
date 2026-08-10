@@ -176,7 +176,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // distinto. Antes de volver a subir cualquiera de estas frecuencias o de realinearlas
       // al mismo minuto, revisar el límite de ML: el backoff de lib/mlClient.js amortigua el
       // 429 pero no lo evita. Los que pegan a ML están marcados.
-      cron.schedule('1-59/15 * * * *', () => {          // Woo
+      // Bajado de cada 15 min a cada 5 min (plan 2026-08-10-codigos-frescura-y-catalogo-
+      // incremental): con el modo incremental, una corrida en régimen estable es 1 sola
+      // llamada a /products y 0 de variaciones (antes eran ~584 SIEMPRE, haya cambiado algo
+      // o no). El barrido completo periódico (cada 6h, ver INTERVALO_COMPLETO_MS en
+      // routes/woo.js) sigue siendo el único que poda borrados, así que subir la frecuencia
+      // acá no lo reemplaza ni compite con él en costo. Minuto 1, paso 5 no pisa ningún otro
+      // cron de esta lista (los /10 caen en offsets 2,3,4,5,7,8,9; el único cruce es con la
+      // cancelación ML de "6 1-23/2", una vez cada 2h, insignificante).
+      cron.schedule('1-59/5 * * * *', () => {          // Woo
         refrescarCatalogo(app._db, wooCfg)
           .catch(err => console.error('Error refrescando catálogo:', err.message));
       });

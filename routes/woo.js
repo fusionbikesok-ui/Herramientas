@@ -32,11 +32,95 @@ export async function wooFetch(cfg, path, method = 'get', body = null) {
   return resp;
 }
 
-export async function refrescarCatalogo(db, cfg) {
+// Claves en sync_estado que gobiernan el modo incremental (ver plan
+// 2026-08-10-codigos-frescura-y-catalogo-incremental.md, Paso 2):
+// - CLAVE_ULTIMO_REFRESCO: marca de tiempo de la ÚLTIMA corrida exitosa, sea completa o
+//   incremental. Es la base para calcular `modified_after` de la PRÓXIMA corrida incremental.
+// - CLAVE_ULTIMO_COMPLETO: marca de tiempo del último barrido COMPLETO exitoso. Determina
+//   cuándo toca el próximo barrido completo (red de seguridad + poda de borrados).
+const CLAVE_ULTIMO_REFRESCO = 'catalogo_ultimo_refresco';
+const CLAVE_ULTIMO_COMPLETO = 'catalogo_ultimo_completo';
+
+// Cada cuánto se fuerza un barrido completo aunque el incremental venga andando bien.
+// Es la única corrida que poda productos borrados en Woo (el incremental no los ve) y la
+// única red de seguridad ante algo que el incremental pudiera pasar por alto — incluido
+// `status=any`, que NO incluye `trash`: un producto papelereado en Woo desaparece de toda
+// consulta (completa o incremental) sin que el incremental lo pode, así que puede quedar
+// como fila fantasma con SKU repetido hasta el próximo completo (mismo cuadro que el
+// incidente 2026-07-25). Es un motivo más, independiente del de abajo, para no estirar
+// mucho este intervalo.
+// 1 hora, PROVISORIO: `catalogo_cache.stock` (que alimenta `stock_disponible_ml`) solo se
+// refresca desde Woo acá. Si una venta web mueve el stock sin mover `date_modified` del
+// producto, el incremental nunca la ve y el barrido completo es la única red — con 6h de
+// intervalo eso serían hasta 6h de sobreventa potencial hacia ML. Está en medición empírica
+// si un cambio de stock mueve `date_modified` (primera muestra, insuficiente: 1/1 sí la
+// movió). Hasta tener el número, 1h acota el riesgo. Ajustar cuando esté la medición.
+const INTERVALO_COMPLETO_MS = 60 * 60 * 1000; // 1 hora (provisorio, ver comentario arriba)
+
+// Margen de solape al calcular `modified_after`: sin esto, una edición que ocurrió DURANTE
+// la corrida anterior (entre que se leyó `modified_after` y que Woo terminó de responder)
+// podría quedar justo debajo de la marca y perderse para siempre. 5 min es generoso frente
+// a la duración real de una corrida (segundos).
+const SOLAPE_INCREMENTAL_MS = 5 * 60 * 1000; // 5 minutos
+
+function leerMarca(db, clave) {
+  const row = db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(clave);
+  return row ? row.valor : null;
+}
+
+function guardarMarca(db, clave, valorIso) {
+  db.prepare(`
+    INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)
+    ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+  `).run(clave, valorIso, valorIso);
+}
+
+// Candado anti-solape en memoria, mismo patrón que _mlToWcEnCurso/_wcToMlEnCurso/
+// _reconciliarStockEnCurso en routes/sync.js. A 15 min el solape entre corridas era
+// improbable; a 5 min ya no, y un completo lento (o el botón manual, que ahora SIEMPRE
+// fuerza completo) puede pisarse con uno o varios incrementales en danza, multiplicando la
+// carga contra Woo justo cuando ya viene lento.
+let _refrescarCatalogoEnCurso = false;
+
+// options.forzarCompleto: true fuerza un barrido completo (usado por el botón manual
+// POST /catalogo/recargar, que siempre debe traer y podar TODO, sin depender del cron).
+export async function refrescarCatalogo(db, cfg, opts = {}) {
+  if (_refrescarCatalogoEnCurso) return { omitido: true, motivo: 'en_curso' };
+  _refrescarCatalogoEnCurso = true;
+  try {
+    return await _refrescarCatalogo(db, cfg, opts);
+  } finally {
+    _refrescarCatalogoEnCurso = false;
+  }
+}
+
+async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
+  const inicio = new Date();
+  const ultimoCompleto = leerMarca(db, CLAVE_ULTIMO_COMPLETO);
+  const completo = forzarCompleto || !ultimoCompleto
+    || (inicio.getTime() - new Date(ultimoCompleto).getTime() >= INTERVALO_COMPLETO_MS);
+
+  // `dates_are_gmt=true` NO es opcional: sin él, Woo interpreta `modified_after` en la hora
+  // LOCAL del sitio, no en UTC — el mismo problema que ya costó los pedidos duplicados
+  // 66554/66555 el 2026-07-29 (ver docs, incidente [[woo-after-hora-local]]). Con eso mal,
+  // el incremental pediría "productos modificados en el futuro" y siempre volvería vacío,
+  // dejando el catálogo local congelado sin que nada avise el error.
+  let modifiedAfterQS = '';
+  if (!completo) {
+    const ultimoRefresco = leerMarca(db, CLAVE_ULTIMO_REFRESCO);
+    // Si por algún motivo no hay marca de refresco (no debería pasar: completo=false implica
+    // que hubo al menos un barrido completo previo, que siempre deja la marca), caemos al
+    // último completo como base — nunca a "sin marca", que equivaldría a un fetch completo
+    // disfrazado de incremental sin decirlo.
+    const base = ultimoRefresco || ultimoCompleto;
+    const modifiedAfter = new Date(new Date(base).getTime() - SOLAPE_INCREMENTAL_MS).toISOString();
+    modifiedAfterQS = `&modified_after=${encodeURIComponent(modifiedAfter)}&dates_are_gmt=true`;
+  }
+
   const crudos = [];
   let page = 1;
   while (page <= MAX_PAGES) {
-    const resp = await wooFetch(cfg, `/products?per_page=100&page=${page}&status=any`);
+    const resp = await wooFetch(cfg, `/products?per_page=100&page=${page}&status=any${modifiedAfterQS}`);
     if (!resp.data.length) break;
     crudos.push(...resp.data);
     if (resp.data.length < 100) break;
@@ -117,13 +201,29 @@ export async function refrescarCatalogo(db, cfg) {
   // modos no tendría nada que escribir) y se avisa — mucho más seguro que perder todo el
   // stock local de golpe.
   if (idsActuales.length === 0) {
-    console.warn('[woo] refrescarCatalogo: WooCommerce devolvió 0 productos, se omite la poda de catalogo_cache por seguridad (posible corte/permiso, no un catálogo real vacío).');
+    // Guard fail-closed, completo E incremental: 0 productos siempre puede ser Woo
+    // devolviendo 200 con lista vacía por un problema propio (mantenimiento, permisos
+    // degradados), no solo "nada cambió". En COMPLETO ese caso siempre fue sospechoso
+    // (nunca es un catálogo real vacío). Hallazgo del revisor: en INCREMENTAL el mismo 0
+    // es indistinguible entre "nada cambió de verdad" y "Woo está fallando en silencio" —
+    // así que tampoco ahí se avanza la marca. Es más barato que acotar el caso: la próxima
+    // corrida vuelve a pedir la MISMA ventana (sigue siendo 1 sola llamada mientras nada
+    // cambie), la ventana solo crece mientras no haya nada nuevo, y en cuanto algo cambie
+    // se trae completo y correcto — sin ventana ciega ni log de sospecha en el camino feliz.
+    if (completo) {
+      console.warn('[woo] refrescarCatalogo: WooCommerce devolvió 0 productos, se omite la poda de catalogo_cache por seguridad (posible corte/permiso, no un catálogo real vacío).');
+    }
     return 0;
   }
-  const tx = db.transaction((rows, idsVigentes) => {
+  // La poda (detectar y borrar productos ya no vigentes en Woo) SOLO corre en el barrido
+  // completo: el incremental, por diseño, solo ve los padres modificados desde la marca —
+  // un producto borrado en Woo no "modificado" nunca aparecería ahí, así que podar con ese
+  // universo parcial borraría por error todo lo que el incremental no tocó esta vez.
+  const tx = db.transaction((rows, idsVigentes, podar) => {
     for (const p of rows) {
       upsert.run(filaCatalogo(p, now));
     }
+    if (!podar) return;
     db.exec('CREATE TEMP TABLE IF NOT EXISTS _catalogo_ids_vigentes (id_woo INTEGER PRIMARY KEY)');
     db.exec('DELETE FROM _catalogo_ids_vigentes');
     const insertId = db.prepare('INSERT OR IGNORE INTO _catalogo_ids_vigentes (id_woo) VALUES (?)');
@@ -131,7 +231,7 @@ export async function refrescarCatalogo(db, cfg) {
     db.prepare('DELETE FROM catalogo_cache WHERE id_woo NOT IN (SELECT id_woo FROM _catalogo_ids_vigentes)').run();
     db.exec('DROP TABLE _catalogo_ids_vigentes');
   });
-  tx(productos, idsActuales);
+  tx(productos, idsActuales, completo);
 
   // H-08: chequeo de calidad de datos WC — avisa (no bloquea) problemas upstream que
   // ensucian el sync/matcher. Los productos 'variable' (padres) no tienen SKU a propósito,
@@ -150,6 +250,12 @@ export async function refrescarCatalogo(db, cfg) {
   if (negs || sinSku || skusDup) {
     console.warn(`[woo] calidad catálogo: ${negs} con stock negativo, ${sinSku} sin SKU (no-variable), ${skusDup} SKU repetidos en más de un producto. Revisar en WooCommerce.`);
   }
+
+  // Fail-closed: las marcas solo avanzan si la corrida llegó hasta acá sin errores (un fetch
+  // de variaciones fallido ya relanzó su excepción más arriba, antes de la transacción de
+  // persistencia). Si algo falla, la próxima corrida vuelve a mirar desde la marca vieja.
+  guardarMarca(db, CLAVE_ULTIMO_REFRESCO, inicio.toISOString());
+  if (completo) guardarMarca(db, CLAVE_ULTIMO_COMPLETO, inicio.toISOString());
 
   return productos.length;
 }
@@ -192,8 +298,17 @@ export function wooRouter(db, cfg) {
 
   router.post('/catalogo/recargar', async (req, res) => {
     try {
-      const total = await refrescarCatalogo(db, cfg);
-      res.json({ ok: true, total });
+      // El botón manual siempre fuerza el barrido COMPLETO: es la única corrida que poda
+      // borrados, y quien lo aprieta espera ver el catálogo entero al día, no un delta.
+      const resultado = await refrescarCatalogo(db, cfg, { forzarCompleto: true });
+      // El candado anti-solape puede devolver {omitido:true} si ya había una corrida en
+      // curso (cron u otro botón). No hay que disfrazarlo de éxito vacío: quien lo apretó
+      // tiene que enterarse de que no pasó nada todavía, no ver "total:0" como si el
+      // catálogo estuviera realmente vacío.
+      if (resultado && typeof resultado === 'object' && resultado.omitido) {
+        return res.json({ ok: true, omitido: true, motivo: resultado.motivo });
+      }
+      res.json({ ok: true, total: resultado });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
