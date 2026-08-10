@@ -230,3 +230,95 @@ describe('GET /api/codigos/buscar — comodines SQL escapados', () => {
     db.close();
   });
 });
+
+describe('GET /api/codigos/firma — firma liviana de la cola', () => {
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('cambia cuando se asigna un código (baja el count y mueve el max)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', tipo: 'simple', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', tipo: 'simple', stock: 5 });
+    const app = buildApp(db);
+
+    const antes = await request(app).get('/api/codigos/firma');
+    expect(antes.body.ok).toBe(true);
+
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+    await request(app).post('/api/codigos/asignar').send({ id_woo: 1, gtin: '7791234567890' });
+
+    const despues = await request(app).get('/api/codigos/firma');
+    expect(despues.body.firma).not.toBe(antes.body.firma);
+    db.close();
+  });
+
+  it('no cambia si no pasó nada en la cola (misma consulta, mismo resultado)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', tipo: 'simple', stock: 5 });
+    const app = buildApp(db);
+
+    const a = await request(app).get('/api/codigos/firma');
+    const b = await request(app).get('/api/codigos/firma');
+    expect(a.body.firma).toBe(b.body.firma);
+    db.close();
+  });
+
+  it('respeta el mismo WHERE que /faltantes: conStock=false suma lo que está sin stock', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', tipo: 'simple', stock: 0 }); // sin stock
+    const app = buildApp(db);
+
+    // Con stock (default): la fila sin stock no cuenta -> count 0 -> max_act vacío.
+    const conStock = await request(app).get('/api/codigos/firma');
+    expect(conStock.body.firma).toBe('0:');
+
+    // Sin filtro de stock: la fila entra.
+    const sinFiltro = await request(app).get('/api/codigos/firma?conStock=false');
+    expect(sinFiltro.body.firma).not.toBe('0:');
+    expect(sinFiltro.body.firma.startsWith('1:')).toBe(true);
+    db.close();
+  });
+
+  // Mutation test: si el WHERE de /firma se desincroniza del de /faltantes (ej. alguien
+  // olvida el filtro de stock al tocar uno de los dos), este test debe fallar.
+  it('mutación: sin el filtro de stock, la firma no distinguiría conStock=true/false', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', tipo: 'simple', stock: 0 });
+    const app = buildApp(db);
+
+    const conStock = await request(app).get('/api/codigos/firma');
+    const sinFiltro = await request(app).get('/api/codigos/firma?conStock=false');
+    // Si el filtro de stock se rompiera (siempre aplicado o nunca aplicado), estas dos
+    // firmas serían iguales — deben ser distintas.
+    expect(conStock.body.firma).not.toBe(sinFiltro.body.firma);
+    db.close();
+  });
+
+  // Hallazgo del revisor (mutation testing): `firma: \`${row.n}:\`` (tirar el MAX) seguía
+  // dando 26/26 verde con los tests de arriba, porque todos cambian el COUNT. El MAX es
+  // load-bearing para el caso "una fila sale de la cola Y otra entra en el mismo instante,
+  // el count vuelve al mismo número" — sin el MAX, esa firma sería indistinguible de la
+  // original y el front nunca se enteraría del cambio real.
+  it('el count puede volver al mismo número (una sale, otra entra) y la firma igual cambia por el MAX', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', tipo: 'simple', stock: 5, actualizado_en: '2026-08-01T00:00:00.000Z' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', tipo: 'simple', stock: 5, actualizado_en: '2026-08-01T00:00:00.000Z' });
+    const app = buildApp(db);
+
+    const antes = await request(app).get('/api/codigos/firma');
+    expect(antes.body.firma.startsWith('2:')).toBe(true);
+
+    // Sale FB-1 de la cola (se le asigna código)...
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+    await request(app).post('/api/codigos/asignar').send({ id_woo: 1, gtin: '7791234567890' });
+    // ...y entra FB-3 (simula un producto nuevo que trajo el refresco de catálogo), con
+    // fecha más nueva que las anteriores.
+    insertProducto(db, { id_woo: 3, sku: 'FB-3', tipo: 'simple', stock: 5, actualizado_en: '2026-08-09T00:00:00.000Z' });
+
+    const despues = await request(app).get('/api/codigos/firma');
+    expect(despues.body.firma.startsWith('2:')).toBe(true); // el count volvió al mismo número...
+    expect(despues.body.firma).not.toBe(antes.body.firma);  // ...pero la firma cambió igual (MAX)
+    db.close();
+  });
+});
