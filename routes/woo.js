@@ -49,13 +49,24 @@ const CLAVE_ULTIMO_COMPLETO = 'catalogo_ultimo_completo';
 // como fila fantasma con SKU repetido hasta el próximo completo (mismo cuadro que el
 // incidente 2026-07-25). Es un motivo más, independiente del de abajo, para no estirar
 // mucho este intervalo.
-// 1 hora, PROVISORIO: `catalogo_cache.stock` (que alimenta `stock_disponible_ml`) solo se
-// refresca desde Woo acá. Si una venta web mueve el stock sin mover `date_modified` del
-// producto, el incremental nunca la ve y el barrido completo es la única red — con 6h de
-// intervalo eso serían hasta 6h de sobreventa potencial hacia ML. Está en medición empírica
-// si un cambio de stock mueve `date_modified` (primera muestra, insuficiente: 1/1 sí la
-// movió). Hasta tener el número, 1h acota el riesgo. Ajustar cuando esté la medición.
-const INTERVALO_COMPLETO_MS = 60 * 60 * 1000; // 1 hora (provisorio, ver comentario arriba)
+// 1 hora. El riesgo que definía este número era: `catalogo_cache.stock` (que alimenta
+// `stock_disponible_ml`) solo se refresca desde Woo acá, así que si una venta moviera el
+// stock SIN mover el `date_modified` del producto, el incremental nunca la vería y el
+// barrido completo sería la única red — o sea, sobreventa hacia ML durante todo el intervalo.
+//
+// MEDIDO el 2026-08-10 y descartado: muestreo de solo lectura sobre 2181 entidades
+// (productos y variaciones), ventanas de 10 min durante ~2,5 h. Se observaron 5 cambios de
+// stock por ventas reales del sitio y los 5 movieron `date_modified`; cero contraejemplos.
+// Uno de ellos dejó el producto en 0, o sea una venta que agotó la existencia. Las ventas
+// bajan stock por el camino interno de Woo (`wc_reduce_stock_levels`), el mismo que usan los
+// pedidos que creamos nosotros desde ML — así que la muestra habla del mecanismo, no de un
+// caso especial.
+//
+// Conclusión: el incremental SÍ ve las ventas, y la frescura efectiva del stock pasa a ser
+// la del cron (5 min) contra los 15 min de antes. Este barrido completo queda como red para
+// lo que el incremental no puede ver por diseño: borrados y papelera (ver comentario de
+// arriba sobre `trash`), que es lo que ahora fija el número.
+const INTERVALO_COMPLETO_MS = 60 * 60 * 1000; // 1 hora
 
 // Margen de solape al calcular `modified_after`: sin esto, una edición que ocurrió DURANTE
 // la corrida anterior (entre que se leyó `modified_after` y que Woo terminó de responder)
