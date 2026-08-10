@@ -7,3 +7,10 @@ uploads/
 *.bak
 *.bak.*
 .claude/settings.local.json
+
+# Artefactos de las sesiones de prueba en navegador (probador-e2e / Playwright MCP):
+# snapshots de página, logs de consola y capturas sueltas en la raíz. No son código
+# ni evidencia que valga versionar — algunos snapshots pasan las 12.000 líneas y ya
+# se colaron una vez en un commit por un `git add -A` (73.394 líneas de ruido).
+.playwright-mcp/
+/*.png
