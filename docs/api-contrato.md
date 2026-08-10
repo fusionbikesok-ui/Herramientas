@@ -913,3 +913,73 @@ publicación y, por LEFT JOIN a `ml_sku_push_fallos`, `intentos`/`ultimo_error`/
 `proximo_intento_en` (todos `null` si nunca falló). Orden: activas primero, luego por
 `d.actualizado_en DESC`.
 - Response 200: `{ "ok": true, "data": [{ "clave", "sku", "titulo", "thumbnail", "item_id", "status", "intentos", "ultimo_error", "proximo_intento_en" }] }`.
+
+## GET /api/codigos/firma — firma liviana de la cola de Carga de Códigos
+
+Nuevo (2026-08-10, plan `codigos-frescura-y-catalogo-incremental`). Pensado para que el
+front sondee cada ~20s sin bajar los 417 KB de `GET /api/codigos/faltantes` cuando no
+cambió nada: solo si la firma cambia respecto de la última conocida vale la pena pedir
+`/faltantes` de nuevo. Mismo patrón que `firmaCandidatos` (`routes/matcher.js`): firma
+barata en SQL, separada del payload completo.
+
+- Request: `GET /api/codigos/firma?conStock=` — mismo parámetro `conStock` que `/faltantes`
+  (default `true`; `conStock=false` incluye también lo que no tiene stock).
+- Response 200: `{ "ok": true, "firma": "<count>:<max_actualizado_en>" }`, ej.
+  `{ "ok": true, "firma": "184:2026-08-10T12:00:00.000Z" }`. Si el count es 0 el campo queda
+  `"0:"` (sin fecha).
+- La firma se calcula con **exactamente el mismo WHERE SQL** que `/faltantes`
+  (`tipo <> 'variable' AND sku no vacío AND gtin vacío`, + `stock > 0` si `conStock`), vía
+  el helper compartido `whereFaltantes()` en `routes/codigos.js` — evita que ambos se
+  desincronicen. Una asignación de código baja el `COUNT` y mueve el `MAX`, así que
+  cualquiera de los dos movimientos cambia la firma.
+- **Decisión explícita sobre lo que la firma NO replica**: `/faltantes` filtra además en JS
+  por `cobertura_exclusiones` (productos "solo local") y `esNoVendible()` (categorías
+  SERVICES/QR PAGOS). La firma no aplica esos dos filtros — son baratos y estables (edición
+  manual rarísima), y replicarlos exigiría traer las filas completas en vez de un
+  `COUNT`/`MAX` puro. Riesgo aceptado, asimétrico a propósito: un cambio en una fila que de
+  todos modos estaría excluida mueve la firma sin que la cola visible cambie (refresco de
+  más, inofensivo); el caso peligroso — cola visible cambia y la firma no se entera — no
+  puede pasar, porque toda fila que entra/sale de la cola por una asignación real
+  (INSERT/UPDATE de `gtin`/`stock`/`sku`) siempre pasa por el WHERE de SQL. Si en cambio se
+  edita `cobertura_exclusiones` a mano o cambian categorías, la cola visible puede tardar
+  hasta un F5 en reflejarlo — no es el escenario ("otro operador asignó un código") que
+  motivó este endpoint.
+
+## `refrescarCatalogo` (Woo) — modo incremental (2026-08-10, mismo plan, Paso 2)
+
+La forma de request/response de los endpoints no cambia (`GET /api/woo/catalogo`:
+`{ ok:true, data:[...] }`), salvo `POST /api/woo/catalogo/recargar` que ahora puede devolver
+`{ ok:true, omitido:true, motivo:'en_curso' }` en vez de `{ ok:true, total }` — ver candado
+más abajo. El resto es comportamiento interno de `refrescarCatalogo`, que igual vale dejar
+escrito porque es contrato operativo, no solo de código.
+
+- Cada corrida es **incremental** salvo que corresponda un barrido **completo**: primera vez
+  (sin marca previa), pasó ≥1h desde el último completo (`sync_estado.catalogo_ultimo_completo`,
+  intervalo **provisorio** — ver comentario junto a `INTERVALO_COMPLETO_MS` en `routes/woo.js`
+  sobre la medición pendiente de si un cambio de stock mueve `date_modified`), o se pide
+  explícito (`{ forzarCompleto: true }`).
+- Incremental: `GET /products?modified_after=<marca-5min>&dates_are_gmt=true&per_page=100&status=any`
+  (margen de solape de 5 min para no perder ediciones ocurridas durante la corrida anterior)
+  y variaciones **solo** de los padres que devolvió esa consulta. En régimen estable (nada
+  cambió), es 1 sola llamada a `/products` y 0 de variaciones.
+- Completo: igual que antes (todas las páginas, todas las variaciones de todos los
+  productos variables) — es la **única** corrida que poda `catalogo_cache` (productos
+  borrados en Woo no aparecen nunca en un `modified_after`, así que el incremental no puede
+  detectarlos ni podarlos sin riesgo de falso positivo). Ojo: `status=any` tampoco incluye
+  `trash` — un producto papelereado (no borrado) en Woo puede quedar como fila fantasma
+  hasta que se borre de verdad; no resuelto en este cambio, motivo adicional para no estirar
+  el intervalo del completo.
+- `POST /api/woo/catalogo/recargar` (botón manual) **siempre** fuerza completo.
+- **Candado anti-solape** (`_refrescarCatalogoEnCurso`, en memoria del proceso, mismo patrón
+  que `_wcToMlEnCurso`/`_reconciliarStockEnCurso` de `routes/sync.js`): si ya hay una corrida
+  en curso (cron u otro llamado a `POST /catalogo/recargar`), la nueva se omite y devuelve
+  `{ omitido:true, motivo:'en_curso' }` en vez de disparar otro fetch en paralelo contra Woo.
+- Fail-closed: `sync_estado.catalogo_ultimo_refresco`/`catalogo_ultimo_completo` solo avanzan
+  si la corrida terminó sin error. Una falla en variaciones ya relanzaba antes de persistir
+  (sigue igual). Con **0 resultados** (completo o incremental) tampoco avanza ninguna marca:
+  0 es indistinguible entre "nada cambió" y "Woo falló en silencio" (200 con lista vacía por
+  mantenimiento/permisos degradados), así que la corrida siguiente vuelve a pedir la misma
+  ventana — sigue siendo 1 sola llamada mientras nada cambie de verdad.
+- Cron bajado de cada 15 min a cada 5 min (`server.js`) — el costo por corrida en régimen
+  estable se derrumbó de ~584 llamadas a 1, así que la frecuencia más alta no compite con el
+  presupuesto de llamadas.

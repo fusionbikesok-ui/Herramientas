@@ -77,7 +77,7 @@
     <input type="text" id="f-q" class="grow" placeholder="Buscar SKU o nombre…" autocomplete="off">
     <label class="toggle"><input type="checkbox" id="f-stock" checked> Solo con stock</label>
   </div>
-  <div class="conteo" id="conteo"></div>
+  <div class="conteo" id="conteo" role="status" aria-live="polite"></div>
 
   <div class="lista" id="lista"></div>
   <div class="vacio" id="vacio" style="display:none">No hay productos que coincidan con los filtros.</div>
@@ -100,6 +100,7 @@ var faltantes = [];        // cola traída de /faltantes
 var extras = [];           // resultados de /buscar (ya-cargados u otros) para sobrescritura
 var pendientes = {};       // id_woo -> código leído/tipeado pendiente de confirmar
 var estadoFaltantes = 'cargando'; // 'cargando' | 'ok' | 'vacio' | 'error' — contador y lista SIEMPRE se leen desde acá, nunca del array crudo
+var ultimaFirma = null;    // firma correspondiente a los datos que están en pantalla
 var listaEl = document.getElementById('lista');
 var vacioEl = document.getElementById('vacio');
 var conteoEl = document.getElementById('conteo');
@@ -109,8 +110,14 @@ var fQ = document.getElementById('f-q');
 var fStock = document.getElementById('f-stock');
 
 // ---- Carga de la cola de faltantes ----
+// La firma se consulta ANTES de pedir /faltantes (no al final): si otro operador asigna
+// justo entre el pedido de /faltantes y el de la firma, guardar la firma "de después" haría
+// creer que la pantalla ya refleja ese cambio cuando en realidad no. Consultando antes, en el
+// peor caso queda un refresco de más en el próximo ciclo (barato) en vez de uno de menos que
+// nunca se corrige solo.
 async function cargarFaltantes(){
   estadoFaltantes = 'cargando';
+  var firmaDeEstePedido = await consultarFirma();
   var res = await Api.fetchState('/api/codigos/faltantes?conStock=' + (fStock.checked ? 'true' : 'false'), {
     esVacio: function(d){ return !d.ok || !(d.data || []).length; }
   });
@@ -126,6 +133,50 @@ async function cargarFaltantes(){
   poblarDropdown(fMarca, d.marcas, 'Todas las marcas');
   poblarDropdown(fCat, d.categorias, 'Todas las categorías');
   render();
+  // Solo pisamos ultimaFirma si pudimos leerla; si consultarFirma() falló (red caída), no la
+  // dejamos en null — eso dispararía una recarga de 417 KB en el próximo ciclo por una falla
+  // transitoria. Conservamos la anterior y se corrige sola cuando la red vuelva.
+  if(firmaDeEstePedido != null) ultimaFirma = firmaDeEstePedido;
+}
+
+// ---- Firma liviana: se entera de cambios ajenos sin bajar los 417 KB de /faltantes ----
+async function consultarFirma(){
+  try{
+    var r = await Api.fetchState('/api/codigos/firma?conStock=' + (fStock.checked ? 'true' : 'false'));
+    return (r.data && r.data.ok) ? r.data.firma : null;
+  }catch(e){ return null; }
+}
+
+// Hay foco en el input de código de una tarjeta: postergamos el refresco automático para no
+// arriesgar el caret/la edición en curso. Ojo: NO miramos `pendientes` acá — cardHtml() ya
+// reinyecta pendientes[id] en el value= de cada tarjeta al re-renderizar, así que lo tecleado
+// sobrevive solo. Si además frenáramos por "pendientes tiene algo", un operador que tipea y
+// se distrae (o se equivoca de tarjeta) dejaría la cola congelada para siempre: exactamente
+// el bug que este trabajo viene a arreglar, sin ninguna señal en pantalla.
+function hayEdicionEnCurso(){
+  var activo = document.activeElement;
+  return !!(activo && activo.classList && activo.classList.contains('code-in'));
+}
+
+async function chequearFrescura(){
+  if(document.hidden) return; // nada de polling en background (batería/datos del depósito)
+  if(hayEdicionEnCurso()) return; // ver comentario de hayEdicionEnCurso()
+  var firma = await consultarFirma();
+  if(firma == null) return; // fallo de red: no forzar nada, se reintenta en el próximo ciclo
+  if(firma === ultimaFirma) return; // sin cambios: no se pide /faltantes
+  // Revalidamos DESPUÉS del await: pasaron cientos de ms desde el chequeo de arriba y el
+  // operador pudo haber empezado a tipear recién ahí. Si es así, postergamos igual.
+  if(hayEdicionEnCurso()) return;
+  await cargarFaltantes();
+}
+
+var pollingFrescura = null;
+function iniciarPollingFrescura(){
+  if(pollingFrescura) return;
+  pollingFrescura = setInterval(chequearFrescura, 20000);
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden) chequearFrescura();
+  });
 }
 
 function poblarDropdown(sel, valores, etiquetaTodas){
@@ -314,8 +365,11 @@ fQ.oninput = function(){
 fStock.onchange = cargarFaltantes;
 
 // ---- Auth gate (permisos, criterio unificado en toda la suite: sin permiso -> /home/) + carga inicial ----
+// El polling de frescura arranca DENTRO de este .then: si arranca afuera, un usuario sin
+// permiso (que nunca llega a cargarFaltantes) igual quedaría sondeando /firma cada 20 s
+// contra un endpoint que le devuelve 403, de por vida.
 Api.requirePermiso('codigos').then(function(ok){
-  if(ok) cargarFaltantes();
+  if(ok){ cargarFaltantes(); iniciarPollingFrescura(); }
 });
 </script>
 </body>
