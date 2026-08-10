@@ -1,0 +1,97 @@
+- generic [active] [ref=f5e1]:
+  - banner [ref=f5e2]:
+    - generic [ref=f5e4]:
+      - generic [ref=f5e5]: Fusion
+      - generic [ref=f5e6]: Bikes
+    - generic [ref=f5e7]:
+      - generic [ref=f5e8]: Conectando…
+      - generic [ref=f5e11]:
+        - generic [ref=f5e12]: A
+        - generic [ref=f5e13]: auditor
+      - button "Salir" [ref=f5e14] [cursor=pointer]
+  - main [ref=f5e15]:
+    - generic [ref=f5e17]:
+      - generic [ref=f5e18]: Hola, auditor
+      - heading [level=1] [ref=f5e19]:
+        - text: Panel de
+        - emphasis [ref=f5e20]: herramientas
+      - paragraph [ref=f5e21]: Operaciones internas — Stock, catálogo y sincronización.
+    - generic [ref=f5e22]:
+      - generic [ref=f5e23]: Ingreso
+      - generic [ref=f5e26]:
+        - link "Ingreso de Stock Subí archivos del proveedor (CSV, PDF, XLSX, imagen), mapeá al catálogo WooCommerce y generá el CSV de importación. Catálogo · Mapeo · CSV" [ref=f5e27] [cursor=pointer]:
+          - /url: /herramientas/stock/
+          - generic [ref=f5e33]: Ingreso de Stock
+          - generic [ref=f5e34]: Subí archivos del proveedor (CSV, PDF, XLSX, imagen), mapeá al catálogo WooCommerce y generá el CSV de importación.
+          - generic [ref=f5e35]: Catálogo · Mapeo · CSV
+        - link "Recepción de Mercadería Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic. Facturas · Remitos · Stock" [ref=f5e39] [cursor=pointer]:
+          - /url: /herramientas/recepcion/
+          - generic [ref=f5e47]: Recepción de Mercadería
+          - generic [ref=f5e48]: Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic.
+          - generic [ref=f5e49]: Facturas · Remitos · Stock
+        - 'link "Pedidos de Compra Seguí el estado de cada pedido: documentos recibidos, recepciones confirmadas y mercadería pendiente de llegada. Pedidos · OC · Importadores" [ref=f5e53] [cursor=pointer]':
+          - /url: /herramientas/pedidos/
+          - generic [ref=f5e59]: Pedidos de Compra
+          - generic [ref=f5e60]: "Seguí el estado de cada pedido: documentos recibidos, recepciones confirmadas y mercadería pendiente de llegada."
+          - generic [ref=f5e61]: Pedidos · OC · Importadores
+        - link "Preparación de Pedidos Escaneá y fotografiá cada pedido antes de embalarlo (web Andreani + ML Flex/colecta) y armá las etiquetas de Andreani en lote. Escaneo · Fotos · Etiquetas" [ref=f5e65] [cursor=pointer]:
+          - /url: /herramientas/preparacion/
+          - generic [ref=f5e71]: Preparación de Pedidos
+          - generic [ref=f5e72]: Escaneá y fotografiá cada pedido antes de embalarlo (web Andreani + ML Flex/colecta) y armá las etiquetas de Andreani en lote.
+          - generic [ref=f5e73]: Escaneo · Fotos · Etiquetas
+        - link "Usuarios y Permisos Gestioná las cuentas del equipo y qué herramientas puede usar cada una. Solo administradores. Cuentas · Permisos · Admin" [ref=f5e77] [cursor=pointer]:
+          - /url: /herramientas/usuarios/
+          - generic [ref=f5e85]: Usuarios y Permisos
+          - generic [ref=f5e86]: Gestioná las cuentas del equipo y qué herramientas puede usar cada una. Solo administradores.
+          - generic [ref=f5e87]: Cuentas · Permisos · Admin
+    - generic [ref=f5e91]:
+      - generic [ref=f5e92]: Control
+      - generic [ref=f5e95]:
+        - link "Cobertura de Catálogo Verificá qué productos están en WooCommerce, en MercadoLibre o en ambos, y si los SKUs coinciden. WC · ML · SKU" [ref=f5e96] [cursor=pointer]:
+          - /url: /herramientas/cobertura/
+          - generic [ref=f5e103]: Cobertura de Catálogo
+          - generic [ref=f5e104]: Verificá qué productos están en WooCommerce, en MercadoLibre o en ambos, y si los SKUs coinciden.
+          - generic [ref=f5e105]: WC · ML · SKU
+        - link "Contador de Inventario Conteo físico de stock uno por uno. Registrá cantidades para conciliar el inventario real contra WooCommerce. Conteo · Auditoría" [ref=f5e109] [cursor=pointer]:
+          - /url: /herramientas/inventario/
+          - generic [ref=f5e115]: Contador de Inventario
+          - generic [ref=f5e116]: Conteo físico de stock uno por uno. Registrá cantidades para conciliar el inventario real contra WooCommerce.
+          - generic [ref=f5e117]: Conteo · Auditoría
+        - link "Consulta de Precios Escaneá o tipeá un SKU o código EAN y mirá al instante el precio web, con foto, marca y categoría del producto. SKU · EAN · Precio" [ref=f5e121] [cursor=pointer]:
+          - /url: /herramientas/consulta-precios/
+          - generic [ref=f5e127]: Consulta de Precios
+          - generic [ref=f5e128]: Escaneá o tipeá un SKU o código EAN y mirá al instante el precio web, con foto, marca y categoría del producto.
+          - generic [ref=f5e129]: SKU · EAN · Precio
+        - link "Carga de Códigos Universales Recorré el depósito escaneando el código de barras (GTIN) de cada producto sin cargar y guardalo en WooCommerce al instante. GTIN · Cámara · Woo" [ref=f5e133] [cursor=pointer]:
+          - /url: /herramientas/codigos/
+          - generic [ref=f5e138]: Carga de Códigos Universales
+          - generic [ref=f5e139]: Recorré el depósito escaneando el código de barras (GTIN) de cada producto sin cargar y guardalo en WooCommerce al instante.
+          - generic [ref=f5e140]: GTIN · Cámara · Woo
+        - link "Etiquetas de Productos Generá e imprimí etiquetas de precio. Catálogo completo, búsqueda por SKU, y filtro por categoría con stock. Impresión · Etiquetas" [ref=f5e144] [cursor=pointer]:
+          - /url: /herramientas/etiquetas/
+          - generic [ref=f5e149]: Etiquetas de Productos
+          - generic [ref=f5e150]: Generá e imprimí etiquetas de precio. Catálogo completo, búsqueda por SKU, y filtro por categoría con stock.
+          - generic [ref=f5e151]: Impresión · Etiquetas
+    - generic [ref=f5e155]:
+      - generic [ref=f5e156]: Sincronización
+      - generic [ref=f5e159]:
+        - link "SKU Matcher ML ↔ WooCommerce Vinculá publicaciones de MercadoLibre con productos WooCommerce por score de similitud. Confirmás SKUs y exportás el CSV. Mapeo · SKU · ML" [ref=f5e160] [cursor=pointer]:
+          - /url: /herramientas/matcher/
+          - generic [ref=f5e166]: SKU Matcher ML ↔ WooCommerce
+          - generic [ref=f5e167]: Vinculá publicaciones de MercadoLibre con productos WooCommerce por score de similitud. Confirmás SKUs y exportás el CSV.
+          - generic [ref=f5e168]: Mapeo · SKU · ML
+        - link "Config ML — Reservas Locales Marcá SKUs individuales como \"solo local\" o reservá N unidades para el local. El resto del stock se sincroniza normalmente a MercadoLibre. SKU · Reserva · Stock" [ref=f5e172] [cursor=pointer]:
+          - /url: /herramientas/config-ml/
+          - generic [ref=f5e178]: Config ML — Reservas Locales
+          - generic [ref=f5e179]: Marcá SKUs individuales como "solo local" o reservá N unidades para el local. El resto del stock se sincroniza normalmente a MercadoLibre.
+          - generic [ref=f5e180]: SKU · Reserva · Stock
+        - link "Precios ML — Auditoría Compará el neto que recibís en MercadoLibre (precio − comisión − envío) contra el precio de contado. Detectá dónde perdés margen o hay precios mal puestos. Neto · Comisión · Envío" [ref=f5e184] [cursor=pointer]:
+          - /url: /herramientas/precios/
+          - generic [ref=f5e189]: Precios ML — Auditoría
+          - generic [ref=f5e190]: Compará el neto que recibís en MercadoLibre (precio − comisión − envío) contra el precio de contado. Detectá dónde perdés margen o hay precios mal puestos.
+          - generic [ref=f5e191]: Neto · Comisión · Envío
+        - 'link "Sincronización ML — Estado Estado en vivo de la integración con MercadoLibre: stock sincronizado, pedidos de ML en WooCommerce, cancelaciones y qué necesita tu atención. Stock · Pedidos · Alertas" [ref=f5e195] [cursor=pointer]':
+          - /url: /herramientas/sync-ml/
+          - generic [ref=f5e202]: Sincronización ML — Estado
+          - generic [ref=f5e203]: "Estado en vivo de la integración con MercadoLibre: stock sincronizado, pedidos de ML en WooCommerce, cancelaciones y qué necesita tu atención."
+          - generic [ref=f5e204]: Stock · Pedidos · Alertas

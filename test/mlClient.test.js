@@ -118,12 +118,198 @@ describe('mlClient — cooldown global de rate-limit', () => {
     expect(restanteMs).toBeLessThan(65_000);
   });
 
-  it('resetea el backoff tras una respuesta exitosa NO manual', async () => {
+  it('sin backoff acumulado, una respuesta exitosa NO manual deja el estado en reposo', async () => {
     const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
 
     axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
     await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
     expect(estadoCooldownMl()).toEqual({ activo: false, hasta: null, nivel: -1 });
+  });
+
+  it('CRITERIO 1: 429/éxito alternados (patrón real de los 9 crons) escalan monótonamente hasta el techo, sin oscilar en 0/1', async () => {
+    vi.useFakeTimers();
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    // 429 -> nivel 0 (60s)
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    expect(estadoCooldownMl().nivel).toBe(0);
+
+    // Un éxito de OTRO recurso, cooldown ya vencido: cierra la ventana pero
+    // (con el cambio) NO debe bajar el nivel — si lo bajara, el próximo 429
+    // volvería a escalar desde 0 y nunca llegaríamos al techo.
+    await vi.advanceTimersByTimeAsync(61_000);
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA-liviano');
+    expect(estadoCooldownMl().activo).toBe(false);
+
+    // 429 -> nivel 1 (120s)
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA2');
+    expect(estadoCooldownMl().nivel).toBe(1);
+
+    // éxito intermedio, cooldown vencido
+    await vi.advanceTimersByTimeAsync(121_000);
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA-liviano');
+
+    // 429 -> nivel 2 (300s)
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA3');
+    expect(estadoCooldownMl().nivel).toBe(2);
+
+    // éxito intermedio, cooldown vencido
+    await vi.advanceTimersByTimeAsync(301_000);
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA-liviano');
+
+    // 429 -> nivel 3, el techo (600s)
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA4');
+    const estadoFinal = estadoCooldownMl();
+    expect(estadoFinal.nivel).toBe(3);
+    const restanteMs = new Date(estadoFinal.hasta).getTime() - Date.now();
+    expect(restanteMs).toBeGreaterThan(595_000);
+    expect(restanteMs).toBeLessThanOrEqual(600_000);
+
+    vi.useRealTimers();
+  });
+
+  it('CRITERIO 2: un éxito no manual sigue cerrando la ventana de cooldown (aunque no baje el nivel)', async () => {
+    vi.useFakeTimers();
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    expect(estadoCooldownMl().activo).toBe(true);
+
+    // Una llamada no-manual no sale a red mientras el cooldown sigue activo
+    // (corta antes, con un 429 sintético) — hace falta que venza primero para
+    // que la llamada exitosa llegue a red y sea ella quien cierre la ventana.
+    await vi.advanceTimersByTimeAsync(61_000);
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
+    const r = await mlFetch(db, ML_CFG, 'get', '/items/MLA2');
+    expect(r.status).toBe(200);
+    expect(estadoCooldownMl().activo).toBe(false);
+    // el nivel se mantiene: la ventana se cerró, pero la escalada no se resetea por éxito.
+    expect(estadoCooldownMl().nivel).toBe(0);
+
+    vi.useRealTimers();
+  });
+
+  it('H1: un 200 de una request ya en vuelo cuando se activó el cooldown lo cierra sin adelantar la gracia (se cuenta desde el vencimiento proyectado, no desde el cierre)', async () => {
+    vi.useFakeTimers();
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    // Simula concurrencia real: dos requests no-manuales salen a red casi
+    // juntas, ANTES de que ninguna active el cooldown (ambas pasan el guard
+    // de _cooldownActivo mientras todavía está libre). Se controla a mano
+    // cuándo resuelve cada una para poder intercalar el 429 de una con el
+    // 200 de la otra, con tiempo real transcurrido entre medio.
+    let resolveA, resolveB;
+    axios.request
+      .mockImplementationOnce(() => new Promise((r) => { resolveA = r; }))
+      .mockImplementationOnce(() => new Promise((r) => { resolveB = r; }));
+
+    const callA = mlFetch(db, ML_CFG, 'get', '/items/MLA-A'); // será el 429 que activa el cooldown
+    const callB = mlFetch(db, ML_CFG, 'get', '/items/MLA-B'); // ya en vuelo; resolverá 200 después
+
+    // Deja que ambas lleguen al punto de espera de axios.request antes de resolver
+    // (reservarCupo/getAccessToken son async reales, no solo microtasks).
+    await vi.advanceTimersByTimeAsync(0);
+    resolveA({ status: 429, headers: {}, data: null });
+    await callA;
+    expect(estadoCooldownMl().nivel).toBe(0); // cooldown de 60s recién armado por A
+
+    // Pasan 30s reales antes de que B (ya en vuelo) devuelva 200 y cierre la
+    // ventana — todavía dentro de los 60s del cooldown que armó A.
+    await vi.advanceTimersByTimeAsync(30_000);
+    resolveB({ status: 200, headers: {}, data: {} });
+    await callB;
+    expect(estadoCooldownMl().activo).toBe(false); // B cerró la ventana
+
+    // Punto medio: 945s desde el 429 de A. Si la gracia se contara desde el
+    // cierre de B (T0+30s), ya habría decaído (30s + 900s = 930s < 945s). Con
+    // la semántica elegida (desde el vencimiento que A proyectó, T0+60s), a
+    // los 945s TODAVÍA no decayó (60s + 900s = 960s > 945s) — este es el
+    // punto que mata la mutación de pisar la marca con Date.now() al cerrar.
+    await vi.advanceTimersByTimeAsync(945_000 - 30_000); // total desde el 429 de A: 945s
+    expect(estadoCooldownMl().nivel).toBe(0); // no decayó todavía
+
+    // Recién tras vencimiento proyectado (60s) + gracia (900s) = 960s desde el 429 de A.
+    await vi.advanceTimersByTimeAsync(15_001); // total desde el 429 de A: 960.001s
+    expect(estadoCooldownMl().nivel).toBe(-1);
+
+    vi.useRealTimers();
+  });
+
+  it('CRITERIO 3: tras GRACIA_DECAIMIENTO_MS sin cooldown nuevo, el nivel vuelve a -1 y el próximo 429 arranca otra vez en 60s', async () => {
+    vi.useFakeTimers();
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    expect(estadoCooldownMl().nivel).toBe(0);
+
+    // El cooldown vence solo (60s) y luego un éxito cierra formalmente la
+    // ventana — la gracia se cuenta desde acá.
+    await vi.advanceTimersByTimeAsync(61_000);
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA-liviano');
+    expect(estadoCooldownMl().activo).toBe(false);
+    expect(estadoCooldownMl().nivel).toBe(0); // todavía no decayó
+
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1000);
+    expect(estadoCooldownMl().nivel).toBe(-1);
+
+    // El siguiente 429 arranca otra vez en el piso (60s), no donde había quedado.
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA2');
+    const estado = estadoCooldownMl();
+    expect(estado.nivel).toBe(0);
+    const restanteMs = new Date(estado.hasta).getTime() - Date.now();
+    expect(restanteMs).toBeGreaterThan(55_000);
+    expect(restanteMs).toBeLessThanOrEqual(60_000);
+
+    vi.useRealTimers();
+  });
+
+  it('H3: al decaer por gracia sin ningún 200 de por medio, _cooldownHasta también se limpia (no queda un timestamp viejo colgado)', async () => {
+    vi.useFakeTimers();
+    const { mlFetch, estadoCooldownMl, getEstadoRefresh } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    expect(estadoCooldownMl().nivel).toBe(0);
+    // Mientras el cooldown vive, backoffHasta refleja el vencimiento.
+    expect(getEstadoRefresh().backoffHasta).not.toBeNull();
+
+    // El cooldown vence solo y pasa además la gracia, SIN que llegue ningún
+    // 200 que lo cierre explícitamente (ni estadoCooldownMl lo consulta en
+    // el medio) — el único disparador de la limpieza es _decaimientoPorGracia.
+    await vi.advanceTimersByTimeAsync(60_000 + 15 * 60 * 1000 + 1000);
+    expect(estadoCooldownMl().nivel).toBe(-1);
+
+    // Sin la limpieza de H3, este seguiría devolviendo el timestamp vencido
+    // en vez de null — GET /api/ml/token-estado mentiría indefinidamente.
+    expect(getEstadoRefresh().backoffHasta).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it('CRITERIO 4: una llamada manual exitosa sigue sin resetear nada (ni ventana ni nivel), regla ya existente', async () => {
+    const { mlFetch, estadoCooldownMl } = await import('../lib/mlClient.js');
+
+    axios.request.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    expect(estadoCooldownMl().activo).toBe(true);
+    expect(estadoCooldownMl().nivel).toBe(0);
+
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: { id: 'MLA2' } });
+    const r = await mlFetch(db, ML_CFG, 'get', '/items/MLA2', null, { manual: true });
+    expect(r.status).toBe(200);
+    expect(estadoCooldownMl().activo).toBe(true); // sigue activo: manual no cierra la ventana
+    expect(estadoCooldownMl().nivel).toBe(0); // tampoco baja el nivel
   });
 
   it('un 200 de una llamada manual NO resetea el cooldown activo', async () => {
