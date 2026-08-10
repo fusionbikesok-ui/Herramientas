@@ -98,6 +98,14 @@ contrato existente):
 de backoff 60s/120s/300s/600s (-1 = sin backoff acumulado). Sirve para distinguir "ML en
 cooldown hasta las HH:MM" de un sync realmente colgado — ver incidente 2026-08-04.
 
+**`nivel` ya NO baja al primer éxito** (corregido 2026-08-08: con los ~9 crons pegando a
+recursos distintos, siempre hay un 200 barato entre dos 429, y bajar el nivel por eso hacía
+que el backoff nunca escalara de verdad — medido: 0 veces llegó al techo en 4000 líneas de
+log real). Ahora `nivel` solo decae por tiempo: 15 minutos sin que se arme un cooldown
+nuevo. Consecuencia visible para quien lea este campo: combinaciones antes imposibles como
+`{ "activo": false, "hasta": null, "nivel": 3 }` son normales — significa "ahora mismo no
+estamos frenados, pero el próximo 429 va a costar 10 minutos porque venimos escalando".
+
 También incluye `erroresMl` (2026-08-07, trazabilidad de errores — aditivo):
 
 ```

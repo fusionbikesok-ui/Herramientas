@@ -1,0 +1,29 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - img "Fusion Bikes" [ref=e5]
+    - generic [ref=e6]:
+      - heading [level=1] [ref=e7]:
+        - text: Panel de
+        - emphasis [ref=e8]: operaciones
+      - paragraph [ref=e9]: Stock, etiquetas, catálogo y sincronización con WooCommerce y MercadoLibre — en un solo lugar para el equipo.
+      - generic [ref=e10]:
+        - generic [ref=e11]: WooCommerce
+        - generic [ref=e12]: MercadoLibre
+        - generic [ref=e13]: Catálogo
+        - generic [ref=e14]: Etiquetas
+        - generic [ref=e15]: SKU Matcher
+  - generic [ref=e17]:
+    - generic [ref=e18]: Equipo Fusion Bikes
+    - heading "Ingresá al panel" [level=2] [ref=e19]
+    - paragraph [ref=e20]: Usá tus credenciales de equipo para continuar.
+    - generic [ref=e21]:
+      - generic [ref=e22]: Usuario
+      - textbox "Usuario" [active] [ref=e23]:
+        - /placeholder: tu usuario
+    - generic [ref=e24]:
+      - generic [ref=e25]: Contraseña
+      - textbox "Contraseña" [ref=e26]:
+        - /placeholder: ••••••••
+    - link "¿Olvidaste tu contraseña?" [ref=e28] [cursor=pointer]:
+      - /url: /herramientas/reset-password/
+    - button "Entrar" [ref=e29] [cursor=pointer]

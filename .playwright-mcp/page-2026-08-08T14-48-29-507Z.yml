@@ -1,0 +1,25 @@
+- generic [active] [ref=f1e1]:
+  - banner [ref=f1e2]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e5]: Fusion
+      - generic [ref=f1e6]: Bikes
+    - generic [ref=f1e7]:
+      - generic [ref=f1e8]: 5.074 productos
+      - generic [ref=f1e11]:
+        - generic [ref=f1e12]: A
+        - generic [ref=f1e13]: auditor_limitado
+      - button "Salir" [ref=f1e14] [cursor=pointer]
+  - main [ref=f1e15]:
+    - generic [ref=f1e17]:
+      - generic [ref=f1e18]: Hola, auditor_limitado
+      - heading [level=1] [ref=f1e19]:
+        - text: Tus
+        - emphasis [ref=f1e20]: herramientas
+      - paragraph [ref=f1e21]: Operaciones internas — Stock, catálogo y sincronización.
+    - generic [ref=f1e22]:
+      - generic [ref=f1e23]: Control
+      - link "Consulta de Precios Escaneá o tipeá un SKU o código EAN y mirá al instante el precio web, con foto, marca y categoría del producto. SKU · EAN · Precio" [ref=f1e27] [cursor=pointer]:
+        - /url: /herramientas/consulta-precios/
+        - generic [ref=f1e33]: Consulta de Precios
+        - generic [ref=f1e34]: Escaneá o tipeá un SKU o código EAN y mirá al instante el precio web, con foto, marca y categoría del producto.
+        - generic [ref=f1e35]: SKU · EAN · Precio
