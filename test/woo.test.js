@@ -334,6 +334,351 @@ describe('woo route', () => {
   });
 });
 
+// Paso 2 del plan 2026-08-10-codigos-frescura-y-catalogo-incremental.md: refresco incremental.
+describe('refrescarCatalogo — modo incremental', () => {
+  const TEST_DB2 = './test/tmp-woo-incremental.sqlite';
+  const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB2)) fs.unlinkSync(TEST_DB2);
+    vi.resetAllMocks();
+  });
+
+  function marcarComoRecienCompleto(db) {
+    // Simula que ya corrió un barrido completo hace instantes, para que la próxima corrida
+    // tome el camino incremental (completo = false).
+    const ahora = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)
+      ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+    `).run('catalogo_ultimo_completo', ahora, ahora);
+    db.prepare(`
+      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)
+      ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+    `).run('catalogo_ultimo_refresco', ahora, ahora);
+  }
+
+  // Criterio 1: en régimen estable (nada cambió en Woo), una corrida incremental hace UNA
+  // sola llamada a /products y CERO llamadas de variaciones. Es el criterio que da sentido
+  // a todo el cambio: si esto se rompe, volvemos al costo original de ~584 llamadas.
+  //
+  // Mutation testing: comenté `if (idsActuales.length === 0) { ... return 0; }`'s rama
+  // `completo` (forzando siempre el camino de poda/tx) — sin la rama incremental temprana,
+  // el test de abajo que cuenta llamadas seguía en 1 (no dispara variaciones porque no hay
+  // productos variables en el fixture), así que el mutation real que prueba esta rama es
+  // revertir `completo` a `forzarCompleto` puro (sacar `!ultimoCompleto` / el chequeo de
+  // tiempo) — ver el test de fallback más abajo, que sí lo cubre en rojo.
+  it('en régimen estable hace 1 sola llamada a /products y 0 de variaciones', async () => {
+    const db = openDb(TEST_DB2);
+    marcarComoRecienCompleto(db);
+    // El mock distingue completo (sin modified_after) de incremental: si por un mutante
+    // `completo` quedara pegado en `true`, esta consulta SÍ traería un padre variable con
+    // variaciones — el test lo detectaría por la cantidad de llamadas y por `total`.
+    axios.request.mockImplementation(async ({ url }) => {
+      if (url.includes('modified_after')) return { status: 200, headers: {}, data: [] };
+      if (url.includes('/products?')) {
+        return { status: 200, headers: {}, data: [
+          { id: 99, name: 'Padre existente', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 },
+        ] };
+      }
+      return { status: 200, headers: {}, data: [{ id: 991, sku: 'FB-991', stock_quantity: 1, attributes: [] }] };
+    });
+
+    const total = await refrescarCatalogo(db, cfg);
+
+    expect(total).toBe(0);
+    expect(axios.request).toHaveBeenCalledTimes(1);
+    const [[llamada]] = axios.request.mock.calls;
+    expect(llamada.url).toMatch(/\/products\?per_page=100&page=1&status=any/);
+    expect(llamada.url).toMatch(/modified_after=/);
+    expect(llamada.url).not.toMatch(/variations/);
+    db.close();
+  });
+
+  // Criterio 5: dates_are_gmt=true no es opcional en una consulta con modified_after.
+  it('la corrida incremental manda dates_are_gmt=true junto con modified_after', async () => {
+    const db = openDb(TEST_DB2);
+    marcarComoRecienCompleto(db);
+    axios.request.mockResolvedValue({ status: 200, headers: {}, data: [] });
+
+    await refrescarCatalogo(db, cfg);
+
+    const [[llamada]] = axios.request.mock.calls;
+    expect(llamada.url).toMatch(/modified_after=/);
+    expect(llamada.url).toMatch(/dates_are_gmt=true/);
+    db.close();
+  });
+
+  // Criterio 2: un cambio en una variación se refleja en catalogo_cache en la siguiente
+  // corrida incremental (solo se traen variaciones de los padres que volvió la consulta).
+  it('trae variaciones solo de los padres devueltos por la consulta incremental', async () => {
+    const db = openDb(TEST_DB2);
+    marcarComoRecienCompleto(db);
+    // Un padre "modificado" existente ya en catalogo_cache, y otro padre no tocado que NO
+    // debería disparar una llamada de variaciones.
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(50, 'Padre no tocado', '', 'variable', null, 0, now);
+
+    axios.request
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: [
+        { id: 60, name: 'Padre modificado', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 },
+      ] })
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: [
+        { id: 61, sku: 'FB-61', stock_quantity: 9, attributes: [] },
+      ] })
+      .mockResolvedValue({ status: 200, headers: {}, data: [] });
+
+    await refrescarCatalogo(db, cfg);
+
+    const llamadas = axios.request.mock.calls.map(([c]) => c.url);
+    expect(llamadas.some(u => u.includes('/products/60/variations'))).toBe(true);
+    expect(llamadas.some(u => u.includes('/products/50/variations'))).toBe(false);
+    const v = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo=?').get(61);
+    expect(v).toBeTruthy();
+    expect(v.stock).toBe(9);
+    db.close();
+  });
+
+  // Criterio 3: la poda de borrados SOLO corre en el barrido completo. Una corrida
+  // incremental con universo parcial no debe borrar productos que simplemente no vinieron
+  // porque no cambiaron desde la marca.
+  it('la corrida incremental NO poda productos que no vinieron en su consulta parcial', async () => {
+    const db = openDb(TEST_DB2);
+    marcarComoRecienCompleto(db);
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(70, 'Producto no tocado (no vino en el incremental)', 'FB-70', 'simple', null, 3, now);
+
+    axios.request.mockResolvedValue({
+      status: 200, headers: {},
+      data: [{ id: 71, name: 'Producto modificado', sku: 'FB-71', type: 'simple', parent_id: 0, stock_quantity: 5 }],
+    });
+
+    await refrescarCatalogo(db, cfg);
+
+    const rows = getCatalogo(db);
+    expect(rows.map(r => r.id_woo).sort()).toEqual([70, 71]);
+    db.close();
+  });
+
+  // Criterio 3 (parte 2): el barrido completo SÍ sigue podando como siempre.
+  it('un barrido completo (forzarCompleto) poda un producto borrado en Woo', async () => {
+    const db = openDb(TEST_DB2);
+    marcarComoRecienCompleto(db);
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(80, 'Producto borrado en Woo', 'FB-80', 'simple', null, 3, now);
+
+    axios.request.mockResolvedValue({
+      status: 200, headers: {},
+      data: [{ id: 81, name: 'Producto vigente', sku: 'FB-81', type: 'simple', parent_id: 0, stock_quantity: 5 }],
+    });
+
+    await refrescarCatalogo(db, cfg, { forzarCompleto: true });
+
+    const rows = getCatalogo(db);
+    expect(rows.map(r => r.id_woo)).toEqual([81]);
+    // Y no manda modified_after: es un barrido completo real.
+    const [[llamada]] = axios.request.mock.calls;
+    expect(llamada.url).not.toMatch(/modified_after/);
+    db.close();
+  });
+
+  // Criterio 4: si una llamada a Woo falla, la marca no avanza y no se persiste catálogo
+  // parcial (fail-closed).
+  it('si la corrida falla, la marca catalogo_ultimo_refresco NO avanza', async () => {
+    const db = openDb(TEST_DB2);
+    marcarComoRecienCompleto(db);
+    const marcaVieja = db.prepare("SELECT valor FROM sync_estado WHERE clave='catalogo_ultimo_refresco'").get().valor;
+
+    axios.request
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: [
+        { id: 90, name: 'Padre', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 },
+      ] })
+      .mockResolvedValueOnce({ status: 500, headers: {}, data: {} }); // falla la llamada de variaciones
+
+    await expect(refrescarCatalogo(db, cfg)).rejects.toThrow(/WooCommerce API error 500/);
+
+    const marcaNueva = db.prepare("SELECT valor FROM sync_estado WHERE clave='catalogo_ultimo_refresco'").get().valor;
+    expect(marcaNueva).toBe(marcaVieja);
+    db.close();
+  });
+
+  // Fallback de marca: si por algún motivo faltara catalogo_ultimo_refresco (no debería
+  // pasar en operación normal: completo=false implica que ya hubo un barrido completo
+  // previo, que siempre deja las dos marcas), la corrida incremental no debe explotar ni
+  // caer a "sin marca" (que equivaldría a un completo disfrazado): usa catalogo_ultimo_completo.
+  it('si falta catalogo_ultimo_refresco, la incremental usa catalogo_ultimo_completo como base', async () => {
+    const db = openDb(TEST_DB2);
+    const ahora = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('catalogo_ultimo_completo', ?, ?)
+    `).run(ahora, ahora);
+    axios.request.mockResolvedValue({ status: 200, headers: {}, data: [] });
+
+    await refrescarCatalogo(db, cfg);
+
+    const [[llamada]] = axios.request.mock.calls;
+    expect(llamada.url).toMatch(/modified_after=/);
+    db.close();
+  });
+
+  // El barrido completo periódico (red de seguridad) se dispara solo cuando ya pasó
+  // INTERVALO_COMPLETO_MS (1h, provisorio — ver comentario en routes/woo.js) desde el
+  // último completo, aunque no se fuerce por parámetro.
+  it('dispara un barrido completo automático si pasó más de 1h desde el último completo', async () => {
+    const db = openDb(TEST_DB2);
+    const hace2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('catalogo_ultimo_completo', ?, ?)
+    `).run(hace2h, hace2h);
+    db.prepare(`
+      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('catalogo_ultimo_refresco', ?, ?)
+    `).run(hace2h, hace2h);
+    // Con productos reales (no vacío): el guard fail-closed de "0 productos" es para el caso
+    // sospechoso, no aplica acá y no debe tapar que la marca sí avanza en un completo normal.
+    axios.request.mockResolvedValue({
+      status: 200, headers: {},
+      data: [{ id: 95, name: 'Producto', sku: 'FB-95', type: 'simple', parent_id: 0, stock_quantity: 1 }],
+    });
+
+    await refrescarCatalogo(db, cfg); // sin forzarCompleto: debe detectar solo que toca completo
+
+    const [[llamada]] = axios.request.mock.calls;
+    expect(llamada.url).not.toMatch(/modified_after/);
+    const marcaCompleto = db.prepare("SELECT valor FROM sync_estado WHERE clave='catalogo_ultimo_completo'").get();
+    expect(marcaCompleto.valor).not.toBe(hace2h); // se actualizó
+    db.close();
+  });
+
+  // Hallazgo del revisor: margen de solape sin cubrir. Si SOLAPE_INCREMENTAL_MS se rompiera
+  // a 0, la marca guardada se usaría tal cual como `modified_after` — este test lo detecta
+  // afirmando que el `modified_after` enviado es estrictamente ANTERIOR a la marca (por lo
+  // menos los 5 min de margen), no igual a ella.
+  it('el modified_after enviado tiene el margen de solape de ~5 min respecto de la marca guardada', async () => {
+    const db = openDb(TEST_DB2);
+    const marca = new Date(Date.now() - 20 * 60 * 1000).toISOString(); // hace 20 min, bien dentro de la ventana incremental (< 1h)
+    db.prepare(`
+      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('catalogo_ultimo_completo', ?, ?)
+    `).run(marca, marca);
+    db.prepare(`
+      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('catalogo_ultimo_refresco', ?, ?)
+    `).run(marca, marca);
+    axios.request.mockResolvedValue({ status: 200, headers: {}, data: [] });
+
+    await refrescarCatalogo(db, cfg);
+
+    const [[llamada]] = axios.request.mock.calls;
+    const m = llamada.url.match(/modified_after=([^&]+)/);
+    expect(m).toBeTruthy();
+    const modifiedAfter = new Date(decodeURIComponent(m[1])).getTime();
+    const marcaMs = new Date(marca).getTime();
+    expect(modifiedAfter).toBeLessThan(marcaMs); // no manda la marca tal cual
+    const solapeMinutos = (marcaMs - modifiedAfter) / 60000;
+    expect(solapeMinutos).toBeCloseTo(5, 1); // ~5 min de margen
+    db.close();
+  });
+
+  // Hallazgo del revisor (BLOQUEANTE): con 0 resultados en incremental, la marca NO debe
+  // avanzar — 0 es indistinguible entre "nada cambió" y "Woo falló en silencio", y avanzar
+  // la marca en ese caso salteaba la ventana para siempre sin dejar rastro.
+  it('con 0 resultados en incremental, catalogo_ultimo_refresco NO avanza (la ventana se reintenta)', async () => {
+    const db = openDb(TEST_DB2);
+    marcarComoRecienCompleto(db);
+    const marcaVieja = db.prepare("SELECT valor FROM sync_estado WHERE clave='catalogo_ultimo_refresco'").get().valor;
+    axios.request.mockResolvedValue({ status: 200, headers: {}, data: [] });
+
+    const total = await refrescarCatalogo(db, cfg);
+
+    expect(total).toBe(0);
+    const marcaNueva = db.prepare("SELECT valor FROM sync_estado WHERE clave='catalogo_ultimo_refresco'").get().valor;
+    expect(marcaNueva).toBe(marcaVieja);
+    db.close();
+  });
+});
+
+// Hallazgo del revisor (BLOQUEANTE): candado anti-solape en memoria, mismo patrón que
+// _mlToWcEnCurso/_wcToMlEnCurso/_reconciliarStockEnCurso de routes/sync.js.
+describe('refrescarCatalogo — candado anti-solape', () => {
+  const TEST_DB3 = './test/tmp-woo-candado.sqlite';
+  const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB3)) fs.unlinkSync(TEST_DB3);
+    vi.resetAllMocks();
+  });
+
+  it('una segunda corrida disparada mientras la primera sigue en vuelo se omite (no duplica llamadas a Woo)', async () => {
+    const db = openDb(TEST_DB3);
+    let resolverPrimeraLlamada;
+    const primeraLlamadaColgada = new Promise((r) => { resolverPrimeraLlamada = r; });
+    let llamadas = 0;
+    axios.request.mockImplementation(async () => {
+      llamadas++;
+      if (llamadas === 1) await primeraLlamadaColgada; // la 1ra corrida queda "en vuelo"
+      return { status: 200, headers: {}, data: [] };
+    });
+
+    const p1 = refrescarCatalogo(db, cfg); // arranca y se cuelga en la 1ra llamada a Woo
+    // Deja que arranque de verdad antes de disparar la segunda (microtask flush).
+    await new Promise((r) => setTimeout(r, 0));
+    const r2 = await refrescarCatalogo(db, cfg); // debe omitirse: la 1ra sigue en curso
+
+    expect(r2).toMatchObject({ omitido: true, motivo: 'en_curso' });
+    expect(llamadas).toBe(1); // la 2da corrida no llegó a pegarle a Woo
+
+    resolverPrimeraLlamada();
+    await p1; // deja terminar la 1ra corrida, no queda una promesa colgada
+    db.close();
+  });
+
+  it('el candado se libera al terminar: una corrida posterior (ya no solapada) sí corre normal', async () => {
+    const db = openDb(TEST_DB3);
+    axios.request.mockResolvedValue({ status: 200, headers: {}, data: [] });
+
+    const r1 = await refrescarCatalogo(db, cfg);
+    const r2 = await refrescarCatalogo(db, cfg);
+
+    expect(r1).not.toMatchObject({ omitido: true });
+    expect(r2).not.toMatchObject({ omitido: true });
+    db.close();
+  });
+
+  it('POST /catalogo/recargar devuelve {ok:true, omitido:true} si ya había una corrida en curso, no un falso total:0', async () => {
+    const db = openDb(TEST_DB3);
+    let resolverPrimeraLlamada;
+    const primeraLlamadaColgada = new Promise((r) => { resolverPrimeraLlamada = r; });
+    let llamadas = 0;
+    axios.request.mockImplementation(async () => {
+      llamadas++;
+      if (llamadas === 1) await primeraLlamadaColgada;
+      return { status: 200, headers: {}, data: [] };
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api/woo', wooRouter(db, cfg));
+
+    // Deja una corrida "en vuelo" llamando directo a la función (el candado es un mutex de
+    // módulo, no depende de si se dispara por HTTP o por cron), y recién ahí golpea la ruta.
+    const primeraEnVuelo = refrescarCatalogo(db, cfg, { forzarCompleto: true });
+    await new Promise((r) => setTimeout(r, 10));
+    const r2 = await request(app).post('/api/woo/catalogo/recargar');
+
+    expect(r2.body).toMatchObject({ ok: true, omitido: true, motivo: 'en_curso' });
+    expect(r2.body.total).toBeUndefined();
+
+    resolverPrimeraLlamada();
+    await primeraEnVuelo;
+    db.close();
+  });
+});
+
+
+
 describe('POST /stock/aplicar', () => {
   const DB_PATH = './test/tmp-woo-aplicar.sqlite';
   let db;

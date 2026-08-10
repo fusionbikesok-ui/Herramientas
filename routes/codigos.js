@@ -5,6 +5,8 @@
  *
  * - GET  /faltantes  → cola de productos con stock sin código todavía (+ listas de
  *                      marcas y categorías presentes para poblar los desplegables).
+ * - GET  /firma      → firma liviana (COUNT + MAX actualizado_en) de esa misma cola, para
+ *                      que el front sondee cada ~20s sin bajar los 417 KB de /faltantes.
  * - GET  /buscar     → busca por SKU/nombre incluyendo productos YA con código
  *                      (para el flujo de sobrescritura).
  * - POST /asignar    → PATCH a Woo del global_unique_id y, si OK, actualiza el cache
@@ -45,6 +47,19 @@ async function patchWoo(cfg, path, body) {
   return { ok: true };
 }
 
+// WHERE compartido entre /faltantes y /firma: si se toca acá, se toca para las dos —
+// evita que la firma se desincronice de lo que realmente lista la cola (mismo patrón que
+// firmaCandidatos en routes/matcher.js, que separa firma barata de cómputo caro).
+function whereFaltantes(conStock) {
+  const filtroStock = conStock ? 'AND stock > 0' : '';
+  return `
+    tipo <> 'variable'
+      AND COALESCE(sku, '') <> ''
+      AND COALESCE(gtin, '') = ''
+      ${filtroStock}
+  `;
+}
+
 /** Fila de catalogo_cache → objeto liviano para la tarjeta de la cola. */
 function productoParaCola(row) {
   const p = productoDesdeFilaCatalogo(row);
@@ -77,13 +92,9 @@ export function codigosRouter(db, cfg) {
   router.get('/faltantes', (req, res) => {
     // conStock ON por defecto: solo lo que tenés físicamente para escanear.
     const conStock = String(req.query.conStock ?? 'true') !== 'false';
-    const filtroStock = conStock ? 'AND stock > 0' : '';
     const rows = db.prepare(`
       SELECT * FROM catalogo_cache
-      WHERE tipo <> 'variable'
-        AND COALESCE(sku, '') <> ''
-        AND COALESCE(gtin, '') = ''
-        ${filtroStock}
+      WHERE ${whereFaltantes(conStock)}
       ORDER BY marca COLLATE NOCASE, nombre COLLATE NOCASE
     `).all();
 
@@ -100,6 +111,22 @@ export function codigosRouter(db, cfg) {
       .sort((a, b) => a.localeCompare(b, 'es'));
 
     res.json({ ok: true, data, marcas, categorias });
+  });
+
+  // ── Firma liviana de la cola (para que el front sepa si vale la pena pedir /faltantes) ──
+  // COUNT(*) + MAX(actualizado_en) sobre el mismo WHERE que /faltantes. NO replica el
+  // filtro JS de exclusionesRows/esNoVendible (riesgo asimétrico aceptado a propósito) —
+  // detalle completo en docs/api-contrato.md, sección "GET /api/codigos/firma".
+  router.get('/firma', (req, res) => {
+    const conStock = String(req.query.conStock ?? 'true') !== 'false';
+    const row = db.prepare(`
+      SELECT COUNT(*) n, MAX(actualizado_en) max_act FROM catalogo_cache
+      WHERE ${whereFaltantes(conStock)}
+    `).get();
+    // no-store: se sondea cada ~20s a propósito; un 200 cacheado por el navegador
+    // congelaría la feature en silencio sin que nada lo avise.
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, firma: `${row.n}:${row.max_act || ''}` });
   });
 
   // ── Búsqueda (incluye productos ya con código, para sobrescribir) ───────────
