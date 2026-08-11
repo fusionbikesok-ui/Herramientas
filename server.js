@@ -100,7 +100,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/recepcion', express.static(path.join(__dirname, 'public/recepcion')));
   app.use('/api/pedidos', pedidosRouter(db));
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
-  app.use('/api/cobertura', coberturaRouter(db));
+  app.use('/api/cobertura', coberturaRouter(db, syncCfg));
   app.use('/cobertura', express.static(path.join(__dirname, 'public/cobertura')));
   app.use('/api/precios', preciosRouter(db, syncCfg));
   app.use('/precios', express.static(path.join(__dirname, 'public/precios')));

@@ -83,6 +83,45 @@ describe('permiso inventario (Contador de Inventario)', () => {
   });
 });
 
+describe('permiso cobertura (matcher inverso WC → ML, accionable)', () => {
+  it('está en la lista de herramientas, sin niveles (checkbox de acceso, no read/write)', () => {
+    const h = HERRAMIENTAS.find(x => x.id === 'cobertura');
+    expect(h).toBeTruthy();
+    expect(h.niveles).toBe(false);
+  });
+
+  // niveles:false → la UI de Usuarios siempre otorga el permiso con nivel:'read' (checkbox
+  // de "acceso", sin selector read/write) — mismo criterio EXACTO que /inventario arriba.
+  // Hallazgo del revisor: antes la regla resolvía por método (nivelDe(m)), así que TODO
+  // POST/PATCH/DELETE (confirmar/descartar/saltear/publicar/pausar/desvincular/deshacer —
+  // la herramienta entera) pedía 'write', que niveles:false nunca puede otorgar. Un operario
+  // no-admin con el permiso tildado quedaba con acceso de solo lectura a una herramienta que
+  // es 100% acciones.
+  it('GET /cobertura/resumen requiere el permiso cobertura', () => {
+    const req = resolvePermiso('GET', '/cobertura/resumen');
+    expect(req).toEqual({ anyOf: ['cobertura'], nivel: 'read' });
+    expect(permiteAcceso([{ herramienta: 'cobertura', nivel: 'read' }], req)).toBe(true);
+  });
+
+  it('POST /cobertura/productos/1/confirmar también alcanza con el permiso otorgado por la UI (nivel read) — no queda bloqueado el operario no-admin', () => {
+    const req = resolvePermiso('POST', '/cobertura/productos/1/confirmar');
+    expect(req).toEqual({ anyOf: ['cobertura'], nivel: 'read' });
+    expect(permiteAcceso([{ herramienta: 'cobertura', nivel: 'read' }], req)).toBe(true);
+  });
+
+  it('POST /cobertura/multi-publicacion/:clave/pausar (escritura a ML) también alcanza con nivel read', () => {
+    const req = resolvePermiso('POST', '/cobertura/multi-publicacion/MLA1|/pausar');
+    expect(req).toEqual({ anyOf: ['cobertura'], nivel: 'read' });
+    expect(permiteAcceso([{ herramienta: 'cobertura', nivel: 'read' }], req)).toBe(true);
+  });
+
+  it('sin el permiso otorgado, cualquier acción queda bloqueada', () => {
+    const req = resolvePermiso('POST', '/cobertura/productos/1/confirmar');
+    expect(permiteAcceso([], req)).toBe(false);
+    expect(permiteAcceso([{ herramienta: 'otra-herramienta', nivel: 'write' }], req)).toBe(false);
+  });
+});
+
 describe('permiso config-ml masivo (reservas locales por lote)', () => {
   it('GET /sync/catalogo-config acepta config-ml o sync-ml, nivel read (misma regla que buscar-sku)', () => {
     const req = resolvePermiso('GET', '/sync/catalogo-config');

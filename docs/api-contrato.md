@@ -991,3 +991,236 @@ escrito porque es contrato operativo, no solo de código.
 - Cron bajado de cada 15 min a cada 5 min (`server.js`) — el costo por corrida en régimen
   estable se derrumbó de ~584 llamadas a 1, así que la frecuencia más alta no compite con el
   presupuesto de llamadas.
+
+## Cobertura accionable — matcher inverso WC → ML (`/api/cobertura`, 2026-08-10)
+
+Reemplaza el flujo de "informe" de Cobertura por una herramienta de trabajo: cola priorizada
+por marca, tarjeta de confirmación con candidatos + diff estructurado, multi-publicación y
+solo-ML accionables. Ver `docs/superpowers/plans/2026-08-10-cobertura-accionable.md` y
+`2026-08-10-cobertura-flujo-ux.md`. El motor de matching (candidatos + diff) vive en
+`lib/matcherEngine.js` (`construirML`, `candidatosDeWC`, `candidatosParaWC`, `diffTokens`);
+las rutas y la persistencia son este contrato.
+
+**Estados de un producto en la cola** (no todos tienen columna propia — ver
+`migrations/007_cobertura_cola.sql`):
+- `pendiente` — default, en la cola de su marca.
+- `vinculado` — decisión en `sku_matcher_decisiones` (`accion='confirmar'`), el push a ML lo
+  hace `pushSkusPendientes`/`escribirSkuEnMl` (mismo camino que el Matcher ML→WC existente).
+- `descartado` ("solo local") — fila en `cobertura_exclusiones` (tabla ya existente, sin
+  campo nuevo — regla explícita del encargo).
+- `hay_que_publicarlo` — fila en `cobertura_hay_que_publicar`.
+- `salteado` — fila en `cobertura_salteados`. **No es terminal**: sigue en la cola pendiente
+  de su marca, ordenado al final de la tanda (no al principio).
+- `sin_stock` — no tiene tabla: se calcula (stock <= 0), lista aparte, no se mezcla con la cola.
+
+### GET /api/cobertura/resumen
+Pantalla de entrada, liviana a propósito (NO el universo entero — el endpoint viejo `GET /`
+pesaba 1 MB, es justo lo que este contrato reemplaza para la pantalla de entrada).
+- Response: `{ ok, total_pendientes, total_valor, marcas: [{marca, conteo, valor}] (top 10),
+  total_marcas, seguir_donde_quede: {marca, pendientes} | null, progreso_hoy:
+  {resueltos_hoy, valor_desinmovilizado_hoy}, otras_secciones: {hay_que_publicarlo,
+  multi_publicacion, solo_ml, sin_stock}, ultima_actualizacion_ml, refresco_ml_en_curso }`.
+- `ultima_actualizacion_ml` es `MAX(actualizado_en)` de `ml_publicaciones_cache` (columna
+  real, no un contador en memoria): está disponible **sin forzar ningún refresco** — incluso
+  recién arrancado el server — y sobrevive un restart, a diferencia del estado del punto
+  siguiente. Es lo que la interfaz muestra como "última actualización: hace X" (plan de
+  flujo §9, "siempre visible").
+
+### POST /api/cobertura/actualizar-ml
+Botón "Actualizar desde ML" (plan de flujo §1 y §9): fuerza el refresco de **todo** el
+universo de publicaciones ML (`ml_publicaciones_cache` completo, no solo las que están sin
+`seller_sku`) que alimenta el matcher inverso. Reusa el mismo motor de refresco que
+`POST /api/matcher/refrescar-ml` (`refrescarPublicacionesMl`, `lib/mlClient.js#mlFetch`) —
+no es un camino nuevo hacia ML.
+- Request: sin body.
+- Response 202: `{ ok:true, running:true, scope:'all' }` — arrancó en background (el scan +
+  multiget completo tarda 1-3 min, más que el timeout de nginx; el frontend sondea el estado).
+- Response 409 (**candado anti-reentrada, COMPARTIDO con el Matcher**): `{ ok:false,
+  running:true, error:'Ya hay un refresco en curso', scope }` — si ya había un refresco
+  corriendo (disparado desde Cobertura O desde el Matcher, da igual: es el mismo recurso),
+  no arranca un segundo. Tocar el botón varias veces no multiplica la carga contra ML.
+- **Presupuesto**: las llamadas usan `manual:true` (mismo trato que el resto de refrescos
+  manuales del repo) — eso saltea el *cooldown* de 429, **nunca** el presupuesto de
+  `lib/mlLimites.js` (`reservarCupo` se llama siempre dentro de `mlFetch`, con o sin `manual`).
+- **Fail-closed**: si el scan o el multiget de ML fallan, `refrescarPublicacionesMl` aborta
+  ANTES de tocar la caché (el reemplazo es una transacción atómica al final) — ninguna
+  publicación válida se pierde ni queda a mitad de camino. El error queda expuesto en el
+  estado sondeable, `ultima_actualizacion_ml` NO avanza.
+
+### GET /api/cobertura/actualizar-ml/estado
+Sondeo del refresco forzado — mismo estado compartido que
+`GET /api/matcher/refrescar-ml/estado` (un solo refresco a la vez, se vea desde donde se vea).
+- Response: `{ ok, running, scope, phase, done, total, error, resultado, actualizado_en }`.
+  `resultado` es `{ total, items, variaciones }` del último refresco exitoso; `error` viene
+  poblado si el último intento falló (fail-closed, ver arriba) y `resultado` queda `null`.
+
+### GET /api/cobertura/marcas
+Todas las marcas con conteo/valor (para "ver todas").
+
+### GET /api/cobertura/marcas/:marca/cola?limit=&offset=
+Cola paginada de una marca — la tarjeta siguiente no espera al universo entero. Cada ítem
+trae `candidatos` (hasta 8, motor `candidatosParaWC`) y `sin_candidato`. Al pedirla se
+actualiza `cobertura_sesion` ("seguir donde quedé" apunta a la última marca consultada).
+- Response: `{ ok, marca, total, data: [{...catalogo_cache, salteado, candidatos, sin_candidato}] }`.
+
+### GET /api/cobertura/productos/:id_woo/buscar-ml?q=
+Búsqueda manual entre publicaciones ML sin `seller_sku`, con el mismo diff estructurado que
+los candidatos sugeridos (mismo componente de tarjeta en el frontend). Disponible siempre.
+
+### POST /api/cobertura/productos/:id_woo/confirmar
+Body: `{ ml_clave }`. Escribe la decisión en `sku_matcher_decisiones` (accion='confirmar',
+`origen='cobertura'`) **antes** de intentar el push — si ML no responde, la decisión queda
+igual guardada (fail-open, el cron la toma después). La respuesta distingue a propósito:
+- `{ ok:true, estado:'vinculado', clave, sku }` — ML confirmó al toque.
+- `{ ok:true, estado:'pendiente_sync', clave, sku, motivo }` — guardado, ML no respondió
+  todavía. **El frontend debe mostrar un mensaje distinto**, nunca el mismo que "vinculado".
+- **400** `{ ok:false, error }` — la `ml_clave` no existe en `ml_publicaciones_cache` (pestaña
+  vieja tras un refresco que cerró publicaciones).
+- **409** `{ ok:false, error }` — **BLOQUEANTE corregido**: la clave ya tiene una decisión
+  viva en `sku_matcher_decisiones` que no es esta (accion='omitir' del Matcher ML→WC, o
+  'confirmar'/'asignar' para OTRO sku). Antes esto se pisaba en silencio: A confirmaba una
+  publicación, B la confirmaba después contra otro producto (push de A todavía pendiente,
+  `seller_sku` seguía NULL en caché) y A perdía su vínculo sin aviso. `origen='cobertura'`
+  en la fila distingue estas decisiones de las que escribe el Matcher ML→WC sobre la misma
+  tabla — así "resueltos hoy" (`GET /resumen`) y el historial no se inflan con trabajo de la
+  otra herramienta.
+
+### POST /api/cobertura/productos/:id_woo/descartar
+"Solo local" → `cobertura_exclusiones` (motivo `solo_local`). Sin body.
+
+### DELETE /api/cobertura/exclusiones/:id_woo/revertir
+Revierte "solo local": el producto vuelve a `pendiente`.
+
+### POST /api/cobertura/productos/:id_woo/publicar
+Manda a "hay que publicarlo" (`cobertura_hay_que_publicar`).
+
+### DELETE /api/cobertura/hay-que-publicar/:id_woo
+Revierte: el producto vuelve a `pendiente`.
+
+### POST /api/cobertura/productos/:id_woo/saltear
+`cobertura_salteados`. No terminal — reaparece al final de la cola de su marca.
+
+### GET /api/cobertura/historial?q=&limit=
+Vinculados (`sku_matcher_decisiones` accion='confirmar') + descartados
+(`cobertura_exclusiones`), buscable por nombre/SKU, orden por fecha desc. Cada entrada de
+vínculo trae `pendiente_sync` (true si `ml_publicaciones_cache.seller_sku` todavía no
+coincide con el SKU de la decisión — mismo criterio que POST /confirmar).
+
+### POST /api/cobertura/vinculos/:clave/deshacer
+Solo deshace vínculos con `origen='cobertura'` (no toca decisiones del Matcher ML→WC sobre
+la misma tabla). Revierte un vínculo: vuelve el producto a `pendiente`. Si el push a ML **ya
+se efectivizó** (`seller_sku` cacheado == sku de la decisión), dispara la desvinculación en
+ML primero. **FAIL-CLOSED explícito**: si ML no confirma la desvinculación, NO se toca nada
+local (ni la decisión ni la caché) y responde `502 { ok:false, error, fail_closed:true }` —
+evita dejar el producto libre localmente mientras ML sigue mostrando el SKU viejo (el riesgo
+de "vínculo equivocado" que todo el diseño de Cobertura existe para evitar). Si nunca se
+efectivizó en ML, revierte local sin llamar a ML.
+
+**ALTO corregido (revisor) — carrera con `pushSkusPendientes` (cron cada 10 min):**
+- Si hay un push corriendo (`getEstadoPush().running`), responde `409 { ok:false, error,
+  fail_closed:true, push_en_curso:true }` de entrada, sin intentar nada — reintentar en unos
+  segundos alcanza.
+- Ventana residual (push que arranca justo después de ese chequeo): tras borrar la decisión
+  local, se **relee** `ml_publicaciones_cache`. Si el push ganó la carrera y el `seller_sku`
+  ya está puesto, se dispara `desvincularSkuEnMl` fail-closed; si esa desvinculación falla,
+  **se restaura la decisión local** (vuelve a coincidir con la realidad de ML) y responde
+  `502 { fail_closed:true }` — nunca queda local diciendo "libre" mientras ML sigue con el SKU.
+
+**🟡 corregido (revisor, ronda 3) — `mlFetch` LANZA ante fallo de transporte, no siempre
+devuelve `{ ok:false }`** (`lib/mlClient.js`: `throw e` tras un error de red/timeout/DNS, a
+diferencia de un 4xx/5xx de ML que sí vuelve como respuesta normal). Las tres llamadas a
+`desvincularSkuEnMl`/`pausarPublicacionMl` de este contrato (rama `yaEfectivizado`, rama
+post-delete de este endpoint, y `pausarConAdvertencia` de multi-publicación/solo-ML) están
+envueltas en `try/catch` tratando la excepción igual que `{ ok:false }` — sin esto, un cable
+de red cortado en el momento exacto de la desvinculación post-delete dejaba la decisión ya
+borrada, ML con el SKU intacto, y un 500 genérico en vez del 502 fail-closed con
+restauración: exactamente la divergencia que el fix anterior prometía cerrar, solo que
+alcanzable con un error de transporte en vez de un 4xx de ML.
+
+### GET /api/cobertura/hay-que-publicar
+Lista ordenada por valor desc. `PATCH /api/cobertura/hay-que-publicar/:id_woo` con
+`{ tachado: true|false }` es el check manual (no dispara nada de sistema).
+
+### GET /api/cobertura/hay-que-publicar/export.csv
+Excel/CSV de la lista completa (`lib/csv.js#generarCSVHayQuePublicar`).
+
+### GET /api/cobertura/multi-publicacion
+**Reemplaza** el slice liviano que antes servía `computarCruce().multiPub` en esta misma
+ruta (ese dato crudo sigue disponible en `GET /cruce`). Por producto: `{ id_woo, nombre, sku,
+stock_wc, sobreventa, publicaciones: [{ clave, item_id, variation_id, status, stock,
+sin_stock_ml }] }`. El encabezado del frontend debe aclarar que es intencional (condiciones
+de venta distintas) — no se "arregla" desvinculando todo.
+- `sobreventa` (🟡 corregido, a nivel de PRODUCTO): `true` si la suma del stock ML de todas
+  las publicaciones **activas** supera el stock WC — el mismo stock físico único se está
+  prometiendo más de una vez. Antes este nombre lo llevaba, mal, una señal por-publicación
+  ("esta publicación no tiene stock en ML") que es lo contrario de sobreventa.
+- `sin_stock_ml` (por publicación, antes mal llamado `sobreventa`): `true` si esa publicación
+  puntual no tiene stock cargado en ML. Señal aparte, no reemplaza a `sobreventa`.
+- Publicaciones marcadas "correcta" (ver abajo) **no aparecen** en `publicaciones` — si un
+  producto se queda sin ninguna publicación por marcar-correcta, el producto entero
+  desaparece de la lista (🟡 corregido: antes el flag no suprimía nada).
+
+- `POST /api/cobertura/multi-publicacion/:clave/marcar-correcta` — decisión puramente local
+  (`cobertura_marcados_correcto`, sección `multi_publicacion`), no escribe en ML. **Saca la
+  publicación de la lista** (no solo marca un flag).
+- `POST /api/cobertura/multi-publicacion/:clave/pausar` — escritura a ML (`status:'paused'`,
+  **nunca cerrar**). FAIL-CLOSED: si ML no confirma, la caché local no cambia, `502
+  { fail_closed:true }`.
+  - **ALTO corregido (revisor):** ML no permite pausar una variación individual — pausar
+    cualquier clave de un `item_id` pausa TODAS sus variaciones hermanas. Si la clave es una
+    variación con hermanas y el body no trae `{ confirmado: true }`, responde `409
+    { ok:false, requiere_confirmacion:true, variaciones_afectadas:N, error }` **sin ejecutar
+    nada**. Con `{ confirmado: true }` (o si es una publicación simple, sin hermanas)
+    procede y responde `200 { ok:true, estado:'paused', variaciones_afectadas:N }`.
+- `POST /api/cobertura/multi-publicacion/:clave/desvincular` — limpia `seller_sku` en ML
+  (mismo criterio fail-closed que `POST /vinculos/:clave/deshacer`) y borra la decisión local.
+
+### GET /api/cobertura/solo-ml?q=&limit=&offset=
+Publicaciones sin `seller_sku` **y sin decisión viva** (ver BLOQUEANTE abajo), buscable por
+título (son ~3638: consulta filtrada, no cola de a una). Las marcadas "correcta" también
+quedan excluidas (mismo criterio de supresión que multi-publicación) — no viaja más el campo
+`marcada_correcta`, la fila directamente no aparece.
+- **BLOQUEANTE corregido (revisor):** antes solo miraba `seller_sku` vacío. Ahora excluye
+  también cualquier clave con una fila en `sku_matcher_decisiones` (omitida por el Matcher
+  ML→WC, o ya confirmada para un producto con el push todavía pendiente) — mismo criterio
+  que el universo de candidatos del matcher inverso (`construirIndiceMlSinSku`). El conteo de
+  `GET /resumen.otras_secciones.solo_ml` usa el mismo criterio exacto.
+- `POST /api/cobertura/solo-ml/:clave/marcar-correcta` — igual que en multi-publicación (suprime).
+- `POST /api/cobertura/solo-ml/:clave/pausar` — mismo criterio de advertencia por variación
+  (`variaciones_afectadas`, 409 sin `confirmado:true`) y fail-closed que multi-publicación.
+- `POST /api/cobertura/solo-ml/:clave/vincular` — body `{ id_woo }`. El mismo trabajo al
+  revés que `POST /productos/:id_woo/confirmar`: mismas validaciones (clave existente, 409 si
+  ya tiene otra decisión viva), mismo camino de escritura (`escribirSkuEnMl`), mismo criterio
+  fail-open (`estado: 'vinculado'|'pendiente_sync'`).
+
+### GET /api/cobertura/sin-stock
+Lista aparte (stock <= 0, resto de las reglas de `esFaltante` sin el filtro de stock). No se
+mezcla con la cola principal — por si reponen.
+
+### Nota de escritura a ML (todo lo de arriba)
+Todo lo que escribe en ML pasa por `mlFetch` (`lib/mlClient.js`), que ya aplica el
+presupuesto de `lib/mlLimites.js` y el cooldown/backoff ante 429 — Cobertura no reinventa
+nada de eso. `escribirSkuEnMl`/`desvincularSkuEnMl`/`pausarPublicacionMl` (`lib/matcherPush.js`)
+son los tres únicos puntos de escritura hacia ML que usa este contrato.
+
+### Permisos (🔴 BLOQUEANTE corregido, revisor)
+`cobertura` es `niveles:false` en `lib/permisos.js` (checkbox de "acceso" en la UI de
+Usuarios, sin selector read/write — igual que `inventario`/`etiquetas`). La regla pide
+`nivel:'read'` **fijo**, sin importar el método HTTP: con `nivelDe(m)` (derivado del método),
+todo POST/PATCH/DELETE de esta lista pedía `write`, que `niveles:false` nunca puede otorgar
+— un operario no-admin con el permiso tildado no podía usar ni un solo botón (403 en todo
+menos las lecturas). Mismo bug que ya costó el Contador de Inventario v2.
+
+### Conteos consistentes entre `/resumen` y las listas reales
+`GET /resumen.otras_secciones.sin_stock` usa el mismo criterio EXACTO que `GET /sin-stock`
+(`lib/coberturaCola.js#calcularSinStock`, función compartida) y `.solo_ml` usa el mismo
+criterio EXACTO que `GET /solo-ml` (sin `seller_sku` y sin decisión viva). Antes divergían —
+🔵 hallazgo del revisor: la tarjeta de entrada mostraba un número que la lista real nunca
+podía alcanzar.
+
+### `origen` en `sku_matcher_decisiones` (columna nueva, migración 008)
+Distingue las decisiones que escribe Cobertura (`origen='cobertura'`) de las que escribe el
+Matcher ML→WC (`routes/matcher.js`, mismo tabla, `origen` queda `NULL`). `GET
+/resumen.progreso_hoy.resueltos_hoy`, `GET /historial` y `POST /vinculos/:clave/deshacer`
+filtran por `origen='cobertura'` — sin esto, confirmar un vínculo desde la otra herramienta
+inflaba "resueltos hoy" y aparecía en el historial de Cobertura (🟡 hallazgo del revisor).

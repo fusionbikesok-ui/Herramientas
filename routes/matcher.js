@@ -20,10 +20,72 @@ const CALL_DELAY_MS = 350;   // respeta rate limit (mlFetch ya tiene timeout)
 // 1-3 min y superaba el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de
 // error que el frontend no podía parsear. Ahora el POST arranca el trabajo y devuelve 202
 // al toque; el frontend sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+//
+// Candado COMPARTIDO a nivel de módulo (no solo dentro de matcherRouter): el botón
+// "Actualizar desde ML" de Cobertura (routes/cobertura.js) pega exactamente al mismo
+// recurso — ml_publicaciones_cache completo — así que usa este mismo `_refresco` a través
+// de dispararRefrescoMl()/estadoRefrescoMl() en vez de tener su propio candado. Dos
+// candados independientes sobre el mismo recurso permitirían un refresco del Matcher y uno
+// de Cobertura corriendo en paralelo, duplicando la carga contra ML sin que el presupuesto
+// lo note hasta que ya es tarde (ver lib/mlLimites.js).
 let _refresco = {
   running: false, scope: null, phase: null, done: 0, total: 0,
   error: null, resultado: null, actualizado_en: null, iniciado_en: null,
 };
+
+/** Snapshot de solo lectura del estado del refresco compartido — para sondeo del frontend. */
+export function estadoRefrescoMl() {
+  const { running, scope, phase, done, total, error, resultado, actualizado_en } = _refresco;
+  return { running, scope, phase, done, total, error, resultado, actualizado_en };
+}
+
+/**
+ * Dispara el refresco compartido de publicaciones ML (candado anti-reentrada único: si ya
+ * hay un refresco en curso —disparado desde el Matcher o desde Cobertura, da igual—, NO
+ * arranca otro y devuelve running:true con el motivo, en vez de lanzar un segundo scan en
+ * paralelo. Mismo patrón que _wcToMlEnCurso/_reconciliarStockEnCurso/_refrescarCatalogoEnCurso
+ * de routes/sync.js. Devuelve `{ ok:false, running:true, error, scope }` si estaba en curso
+ * (para responder 409), o `{ ok:true, running:true, scope }` si lo arrancó (para responder 202).
+ */
+export function dispararRefrescoMl(db, cfg, scope = 'all') {
+  if (_refresco.running) {
+    return { ok: false, running: true, error: 'Ya hay un refresco en curso', scope: _refresco.scope };
+  }
+  const scopeNorm = scope === 'atencion' ? 'atencion' : 'all';
+  _refresco = {
+    running: true, scope: scopeNorm, phase: 'iniciando', done: 0, total: 0,
+    // actualizado_en se conserva del refresco anterior hasta que este termine bien: así
+    // "última actualización" nunca queda en null mientras un refresco está en curso.
+    error: null, resultado: null, actualizado_en: _refresco.actualizado_en, iniciado_en: now(),
+  };
+  const onProgress = (p) => { _refresco.phase = p.phase; _refresco.done = p.done || 0; _refresco.total = p.total || 0; };
+
+  // Corre en background; el handler ya respondió. FAIL-CLOSED: si ML falla a mitad de
+  // camino, refrescarPublicacionesMl/Acotado ya garantizan no pisar el cache con datos
+  // parciales (abortan antes del upsert atómico) — acá solo se registra el error, `resultado`
+  // queda null y `actualizado_en` NO avanza (se ve reflejado también en MAX(actualizado_en)
+  // de ml_publicaciones_cache, que es la fuente real que consulta Cobertura para "hace X").
+  (async () => {
+    try {
+      let r;
+      if (scopeNorm === 'atencion') {
+        const itemIds = [...new Set(clavesNecesitanAtencion(db).map(c => String(c).split('|')[0]))];
+        r = await refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress);
+      } else {
+        r = await refrescarPublicacionesMl(db, cfg, onProgress);
+      }
+      _refresco.resultado = r;
+      _refresco.actualizado_en = now();
+    } catch (e) {
+      _refresco.error = e.message;
+    } finally {
+      _refresco.running = false;
+      _refresco.phase = _refresco.error ? 'error' : 'listo';
+    }
+  })();
+
+  return { ok: true, running: true, scope: scopeNorm };
+}
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
@@ -437,43 +499,14 @@ export function matcherRouter(db, cfg) {
   // nginx). body { scope:'atencion' } → refresco acotado (rápido); sin scope → refresco total.
   // El progreso se consulta en GET /refrescar-ml/estado.
   router.post('/refrescar-ml', (req, res) => {
-    if (_refresco.running) {
-      return res.status(409).json({ ok: false, running: true, error: 'Ya hay un refresco en curso' });
-    }
     const scope = req.body?.scope === 'atencion' ? 'atencion' : 'all';
-    _refresco = {
-      running: true, scope, phase: 'iniciando', done: 0, total: 0,
-      error: null, resultado: null, actualizado_en: null, iniciado_en: now(),
-    };
-    const onProgress = (p) => { _refresco.phase = p.phase; _refresco.done = p.done || 0; _refresco.total = p.total || 0; };
-
-    // Corre en background; el handler ya respondió. Si ML falla, queda registrado en _refresco.error.
-    (async () => {
-      try {
-        let r;
-        if (scope === 'atencion') {
-          const itemIds = [...new Set(clavesNecesitanAtencion(db).map(c => String(c).split('|')[0]))];
-          r = await refrescarPublicacionesMlAcotado(db, mlCfg, itemIds, onProgress);
-        } else {
-          r = await refrescarPublicacionesMl(db, mlCfg, onProgress);
-        }
-        _refresco.resultado = r;
-        _refresco.actualizado_en = now();
-      } catch (e) {
-        _refresco.error = e.message;
-      } finally {
-        _refresco.running = false;
-        _refresco.phase = _refresco.error ? 'error' : 'listo';
-      }
-    })();
-
-    res.status(202).json({ ok: true, running: true, scope });
+    const r = dispararRefrescoMl(db, mlCfg, scope);
+    res.status(r.ok ? 202 : 409).json(r);
   });
 
   // Estado del refresco (para sondeo del frontend). Devuelve progreso y último resultado.
   router.get('/refrescar-ml/estado', (req, res) => {
-    const { running, scope, phase, done, total, error, resultado, actualizado_en } = _refresco;
-    res.json({ ok: true, running, scope, phase, done, total, error, resultado, actualizado_en });
+    res.json({ ok: true, ...estadoRefrescoMl() });
   });
 
   // Mapeos huérfanos: decisiones activas cuya publicación ya no está en el cache (cerrada/

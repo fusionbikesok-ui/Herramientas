@@ -7,1108 +7,1155 @@
 <link rel="stylesheet" href="../lib/theme.css">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
 body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; }
+a { color:inherit; }
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
 
-.topbar { position:sticky; top:0; z-index:10; background:rgba(12,15,22,.92); backdrop-filter:blur(14px); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 2rem; height:54px; }
-.brand-badge { display:inline-flex; flex-direction:column; transform:skewX(-8deg); border-radius:6px 3px 3px 6px; overflow:hidden; }
-.brand-badge b { display:block; font-style:italic; font-weight:800; text-transform:uppercase; font-size:10px; line-height:1.25; letter-spacing:-.02em; padding:1.5px 8px; font-family:Arial,sans-serif; }
-.brand-badge .bt { background:#08090B; color:#fff; }
-.brand-badge .bb { background:var(--accent); color:#08090B; }
-.topbar-right { display:flex; align-items:center; gap:10px; }
-.hbtn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:5px 12px; font-size:.75rem; cursor:pointer; font-family:inherit; text-decoration:none; transition:border-color .15s,color .15s; }
-.hbtn:hover { border-color:var(--accent); color:var(--accent); }
+/* ── Topbar ─────────────────────────────────────────────────────────── */
+.topbar { position:sticky; top:0; z-index:20; background:rgba(12,15,22,.92); backdrop-filter:blur(14px); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 1rem; height:54px; }
+.back-link { display:inline-flex; align-items:center; gap:5px; font-size:.78rem; color:var(--muted); text-decoration:none; padding:8px; }
+.back-link:hover, .back-link:focus-visible { color:var(--accent); }
+.topbar-title { font-size:.85rem; font-weight:700; }
+.hbtn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:7px 12px; font-size:.75rem; cursor:pointer; font-family:inherit; text-decoration:none; transition:border-color .15s,color .15s; min-height:var(--tap-min); display:inline-flex; align-items:center; gap:6px; }
+.hbtn:hover, .hbtn:focus-visible { border-color:var(--accent); color:var(--accent); }
 
-.main { max-width:1100px; margin:0 auto; padding:2.5rem 2rem 5rem; }
-.page-eyebrow { font-size:.68rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin-bottom:6px; }
-.page-title { font-size:1.75rem; font-weight:800; letter-spacing:-.05em; line-height:1.1; margin-bottom:6px; }
+.main { max-width:960px; margin:0 auto; padding:1.25rem 1rem 5rem; }
+.view { display:none; }
+.view.active { display:block; }
+
+.page-title { font-size:1.5rem; font-weight:800; letter-spacing:-.04em; line-height:1.15; margin-bottom:4px; }
 .page-title em { font-style:normal; color:var(--accent); }
-.page-desc { font-size:.83rem; color:var(--muted); margin-bottom:2rem; }
+.page-sub { font-size:.83rem; color:var(--muted); margin-bottom:1.25rem; }
 
-.source-badge { display:inline-flex; align-items:center; gap:6px; background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:4px 12px; font-size:.72rem; color:var(--muted); margin-bottom:1.5rem; }
-.source-badge .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
-.dot-xl { background:var(--amber); }
-
-.upload-zone { background:var(--surface); border:2px dashed var(--border); border-radius:12px; padding:2.5rem; text-align:center; cursor:pointer; transition:border-color .2s,background .2s; margin-bottom:2rem; }
-.upload-zone:hover, .upload-zone.drag { border-color:var(--purple); background:var(--purple-dim); }
-.upload-zone.loaded { border-color:var(--green); background:var(--green-dim); border-style:solid; }
-.upload-zone input { display:none; }
-.upload-icon { font-size:2rem; margin-bottom:.75rem; }
-.upload-title { font-size:.95rem; font-weight:700; margin-bottom:4px; }
-.upload-hint { font-size:.75rem; color:var(--muted); }
-.upload-file-name { font-size:.8rem; color:var(--green); font-weight:600; margin-top:8px; }
-.btn-cambiar { background:none; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:4px 10px; font-size:.72rem; cursor:pointer; font-family:inherit; margin-top:10px; }
-.btn-cambiar:hover { border-color:var(--accent); color:var(--accent); }
-
-.stat-row { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:2rem; }
-.stat-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; display:flex; align-items:center; gap:14px; }
-.stat-icon { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:12px; font-weight:800; }
-.stat-icon.both { background:var(--green-dim); color:var(--green); }
-.stat-icon.wc   { background:var(--accent-dim); color:var(--accent); }
-.stat-icon.ml   { background:var(--purple-dim); color:var(--purple); }
-.stat-num { font-size:1.6rem; font-weight:800; letter-spacing:-.04em; line-height:1; }
-.stat-num.both { color:var(--green); }
-.stat-num.wc   { color:var(--accent); }
-.stat-num.ml   { color:var(--purple); }
-.stat-label { font-size:.72rem; color:var(--muted); margin-top:2px; }
-
-.controls { display:flex; align-items:center; gap:10px; margin-bottom:1.25rem; flex-wrap:wrap; }
-.pill-tabs { display:flex; gap:4px; flex-wrap:wrap; }
-.pill-tab { padding:6px 14px; border-radius:6px; font-size:.78rem; font-weight:600; cursor:pointer; border:1px solid var(--border); color:var(--muted); background:var(--surface); transition:all .15s; white-space:nowrap; }
-.pill-tab.active { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); }
-.search-box { flex:1; min-width:180px; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:7px 12px; color:var(--text); font-size:.82rem; font-family:inherit; outline:none; }
-.search-box:focus { border-color:var(--accent); }
-
-/* Panel de filtros y ordenamiento (comparte estilos con .search-box) */
-.filtros-panel { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:10px 14px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:1.25rem; align-items:end; }
-.filtro-group { display:flex; flex-direction:column; gap:4px; min-width:0; }
-.filtro-group.wide { grid-column:1 / -1; }
-.filtro-label { font-size:.66rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
-.filtro-control { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:6px 10px; color:var(--text); font-size:.8rem; font-family:inherit; outline:none; width:100%; }
-.filtro-control:focus { border-color:var(--accent); }
-.filtro-range { display:flex; align-items:center; gap:6px; }
-.filtro-range .filtro-control { flex:1; min-width:0; }
-.filtro-range span { font-size:.72rem; color:var(--muted); }
-.filtros-footer { grid-column:1 / -1; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
-.filtros-count { font-size:.72rem; color:var(--muted); }
-.btn-limpiar { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 14px; font-size:.75rem; font-weight:600; cursor:pointer; font-family:inherit; transition:border-color .15s,color .15s; }
-.btn-limpiar:hover { border-color:var(--accent); color:var(--accent); }
-
-.list-wrap { display:flex; flex-direction:column; gap:6px; }
-.item-row { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.75rem 1rem; display:grid; grid-template-columns:28px 1fr auto; align-items:center; gap:12px; }
-.item-row.ok     { border-left:3px solid var(--green); }
-.item-row.ok-warn{ border-left:3px solid var(--amber); }
-.item-row.warn   { border-left:3px solid var(--amber); }
-.item-row.onlywc { border-left:3px solid var(--accent); }
-.item-row.onlyml { border-left:3px solid var(--purple); }
-.item-icon { width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0; }
-.item-icon.ok     { background:var(--green-dim); color:var(--green); }
-.item-icon.ok-warn{ background:var(--amber-dim); color:var(--amber); }
-.item-icon.warn   { background:var(--amber-dim); color:var(--amber); }
-.item-icon.onlywc { background:var(--accent-dim); color:var(--accent); }
-.item-icon.onlyml { background:var(--purple-dim); color:var(--purple); }
-.item-body { min-width:0; }
-.item-name { font-size:.88rem; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.item-meta { display:flex; align-items:center; gap:8px; margin-top:3px; flex-wrap:wrap; }
-.meta-pill { font-size:.7rem; padding:1px 7px; border-radius:10px; font-weight:600; border:1px solid; }
-.pill-wc  { background:var(--accent-dim); color:var(--accent); border-color:rgba(45,184,232,.3); }
-.pill-ml  { background:var(--purple-dim); color:var(--purple); border-color:rgba(167,139,250,.3); }
-.pill-sku { font-family:monospace; font-size:.69rem; padding:1px 7px; border-radius:4px; background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
-.pill-sku.match   { background:var(--green-dim); color:var(--green); border-color:rgba(52,211,153,.3); }
-.pill-sku.mismatch{ background:var(--amber-dim); color:var(--amber); border-color:rgba(251,191,36,.3); }
-.pill-sku.nosku   { background:var(--red-dim); color:var(--red); border-color:rgba(248,113,113,.3); }
-.pill-stock { font-size:.7rem; color:var(--muted); }
-.pill-cat { font-size:.7rem; padding:1px 7px; border-radius:10px; background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
-
-.faltantes-bar { display:flex; justify-content:flex-end; margin-bottom:.6rem; }
-.btn-toggle-excl { background:var(--surface); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:5px 12px; font-size:.75rem; cursor:pointer; font-family:inherit; transition:border-color .15s,color .15s; }
-.btn-toggle-excl:hover, .btn-toggle-excl.on { border-color:var(--accent); color:var(--accent); }
-.btn-accion { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:4px 10px; font-size:.72rem; font-weight:600; cursor:pointer; font-family:inherit; text-decoration:none; white-space:nowrap; transition:border-color .15s,color .15s; }
-.btn-accion:hover { border-color:var(--accent); color:var(--accent); }
-.btn-accion.accent { border-color:rgba(45,184,232,.3); color:var(--accent); background:var(--accent-dim); }
-.btn-accion.accent:hover { border-color:var(--accent); }
-.item-meta-id { font-size:.68rem; color:var(--muted); }
-.pill-variante { font-size:.69rem; padding:1px 7px; border-radius:4px; background:rgba(167,139,250,.1); color:var(--purple); border:1px solid rgba(167,139,250,.25); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle; }
-.item-badges { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0; }
-.badge { font-size:.67rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:2px 8px; border-radius:10px; border:1px solid; white-space:nowrap; }
-.badge-ok  { background:var(--green-dim); color:var(--green); border-color:rgba(52,211,153,.3); }
-.badge-warn{ background:var(--amber-dim); color:var(--amber); border-color:rgba(251,191,36,.3); }
-.badge-wc  { background:var(--accent-dim); color:var(--accent); border-color:rgba(45,184,232,.3); }
-.badge-ml  { background:var(--purple-dim); color:var(--purple); border-color:rgba(167,139,250,.3); }
-.badge-red { background:var(--red-dim); color:var(--red); border-color:rgba(248,113,113,.3); }
-
-.section-label { font-size:.65rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:1.5rem 0 .6rem; }
-.empty { text-align:center; padding:3rem 1rem; color:var(--muted); font-size:.85rem; }
-.spinner { display:inline-block; width:18px; height:18px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-right:6px; }
-@keyframes spin { to { transform:rotate(360deg); } }
-.hidden { display:none !important; }
-
-@media(max-width:600px){
-  .stat-row { grid-template-columns:1fr; }
-  .topbar { padding:0 1rem; }
-  .main { padding:1.5rem 1rem 4rem; }
-  .filtros-panel { grid-template-columns:1fr 1fr; }
+/* ── Foco visible global (piso WCAG) ───────────────────────────────── */
+a:focus-visible, button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
 }
-@media(max-width:400px){
-  .filtros-panel { grid-template-columns:1fr; }
+
+/* ── Skeleton ───────────────────────────────────────────────────────── */
+.skel { background: linear-gradient(90deg, var(--skeleton-base) 25%, var(--skeleton-highlight) 37%, var(--skeleton-base) 63%); background-size: 400% 100%; animation: skel-sweep 1.4s ease infinite; border-radius:10px; }
+@keyframes skel-sweep { 0%{background-position:100% 50%;} 100%{background-position:0 50%;} }
+@media (prefers-reduced-motion: reduce) { .skel { animation:none; background:var(--skeleton-base); } }
+.skel-marca { height:64px; border:1px solid var(--border); }
+
+/* ── Vacíos ─────────────────────────────────────────────────────────── */
+.vacio { border:1px dashed var(--border); border-radius:10px; padding:1.5rem 1rem; text-align:center; color:var(--muted); font-size:.85rem; }
+.vacio strong { display:block; color:var(--text); font-size:1rem; margin-bottom:6px; }
+.vacio .vacio-links { margin-top:12px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+
+/* ── Entrada: highlight "seguir donde quedé" ───────────────────────── */
+.highlight-card { display:block; width:100%; text-align:left; background:var(--chip-on-bg); border:1px solid var(--chip-on-bd); border-radius:12px; padding:16px; margin-bottom:1.25rem; cursor:pointer; font-family:inherit; color:var(--text); min-height:var(--tap-comfort); }
+.highlight-card:hover, .highlight-card:focus-visible { border-color:var(--accent); }
+.highlight-eyebrow { font-size:.68rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin-bottom:4px; }
+.highlight-title { font-size:1.05rem; font-weight:800; }
+.highlight-title b { color:var(--accent); }
+
+.resumen-top { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:1.25rem; }
+.resumen-num { font-size:1.7rem; font-weight:800; letter-spacing:-.04em; }
+.resumen-txt { font-size:.85rem; color:var(--muted); }
+
+.section-label { font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:1.25rem 0 .6rem; }
+
+/* ── Tarjetas de marca ──────────────────────────────────────────────── */
+.marcas-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin-bottom:1rem; }
+.marca-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; text-align:left; cursor:pointer; font-family:inherit; color:var(--text); min-height:var(--tap-comfort); }
+.marca-card:hover, .marca-card:focus-visible { border-color:var(--accent); }
+.marca-nombre { font-weight:700; font-size:.9rem; margin-bottom:2px; }
+.marca-meta { font-size:.72rem; color:var(--muted); }
+.marca-valor { font-size:.78rem; color:var(--text); font-weight:600; margin-top:2px; }
+.btn-vertodas { background:none; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:8px 14px; font-size:.78rem; cursor:pointer; font-family:inherit; min-height:var(--tap-min); }
+.btn-vertodas:hover, .btn-vertodas:focus-visible { border-color:var(--accent); color:var(--accent); }
+
+/* ── Otras secciones (lista) ────────────────────────────────────────── */
+.otras-lista { display:flex; flex-direction:column; gap:6px; }
+.otra-link { display:flex; align-items:center; justify-content:space-between; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 14px; text-decoration:none; color:var(--text); font-size:.85rem; min-height:var(--tap-comfort); }
+.otra-link:hover, .otra-link:focus-visible { border-color:var(--accent); }
+.otra-link .n { color:var(--muted); font-variant-numeric:tabular-nums; }
+
+/* ── Cola: progreso ─────────────────────────────────────────────────── */
+.cola-header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:.5rem; flex-wrap:wrap; }
+.progreso-bar-row { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
+.progreso-track { flex:1; height:8px; background:var(--progress-track); border-radius:6px; overflow:hidden; }
+.progreso-fill { height:100%; background:var(--progress-fill); border-radius:6px; transition:width .25s ease; }
+.progreso-frac { font-size:.85rem; font-weight:600; white-space:nowrap; }
+.progreso-secundaria { font-size:.72rem; color:var(--muted); margin-bottom:1rem; }
+
+/* ── Match card ─────────────────────────────────────────────────────── */
+.match-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:16px; }
+.conf-badge { display:inline-flex; align-items:center; gap:5px; font-size:13px; font-weight:600; padding:3px 10px; border-radius:var(--radius-pill); margin-bottom:12px; }
+.conf-badge.alta { color:var(--conf-alta); background:var(--conf-alta-bg); border:1px solid var(--conf-alta-bd); }
+.conf-badge.revisar { color:var(--conf-revisar); background:var(--conf-revisar-bg); border:1px solid var(--conf-revisar-bd); }
+.conf-badge.baja { color:var(--conf-baja); background:var(--conf-baja-bg); border:1px solid var(--conf-baja-bd); }
+
+.fotos-row { display:flex; gap:8px; margin-bottom:12px; }
+.foto-box { flex:1; min-width:0; aspect-ratio:1; border-radius:10px; overflow:hidden; background:var(--surface2); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; }
+.foto-box img { width:100%; height:100%; object-fit:cover; display:block; }
+.foto-box .sinfoto { font-size:.7rem; color:var(--muted); }
+
+.titulos-stack { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+.titulo-fuente-label { font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:2px; }
+.title-diff { font-size:14px; line-height:1.35; }
+.tok { display:inline; }
+.tok-match { color:var(--tok-match-txt); }
+.tok-diff { color:var(--tok-diff-txt); background:var(--tok-diff-bg); border-bottom:1px dashed var(--tok-diff-bd); font-weight:600; padding:0 1px; }
+.tok-discriminant { color:var(--tok-discriminant-txt); background:var(--tok-discriminant-bg); border:1px solid var(--tok-discriminant-bd); border-radius:4px; font-weight:700; padding:0 3px; font-family:var(--tok-discriminant-font); }
+
+.nivel2 { display:grid; grid-template-columns:1fr 1fr; gap:2px 14px; font-size:12px; margin-bottom:10px; }
+.nivel2 .n2-label { color:var(--muted); }
+.nivel2 .n2-val { color:var(--text); font-weight:600; }
+.nivel2 .n2-head { font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-top:4px; }
+
+details.atributos-toggle { margin-bottom:12px; font-size:12px; }
+details.atributos-toggle summary { cursor:pointer; color:var(--accent); font-weight:600; }
+details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
+
+.btn-confirmar { display:block; width:100%; background:var(--accent); color:#06131C; border:0; border-radius:10px; font-size:.95rem; font-weight:800; padding:0 14px; height:var(--tap-comfort); cursor:pointer; font-family:inherit; margin-bottom:10px; }
+.btn-confirmar:hover, .btn-confirmar:focus-visible { background:var(--accent-dk); }
+.btn-confirmar:disabled { opacity:.55; cursor:default; }
+
+.acciones-fila { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
+@media (max-width: 480px) { .acciones-fila { grid-template-columns:repeat(2,1fr); } }
+.accion-btn { background:none; border:1px solid var(--border); color:var(--muted); border-radius:8px; font-size:.72rem; font-weight:600; padding:6px 4px; min-height:var(--tap-min); cursor:pointer; font-family:inherit; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center; gap:4px; }
+.accion-btn:hover, .accion-btn:focus-visible { border-color:var(--accent); color:var(--accent); }
+
+.candidatos-lista { display:flex; flex-direction:column; gap:8px; margin:14px 0; }
+.match-card--compact { background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px; display:flex; gap:10px; align-items:center; cursor:pointer; text-align:left; font-family:inherit; color:var(--text); width:100%; min-height:var(--tap-comfort); }
+.match-card--compact:hover, .match-card--compact:focus-visible { border-color:var(--accent); }
+.match-card--compact.selected { border-color:var(--accent); background:var(--accent-dim); }
+.mc-thumb { width:40px; height:40px; border-radius:6px; object-fit:cover; background:var(--surface); flex-shrink:0; border:1px solid var(--border); }
+.mc-info { min-width:0; flex:1; }
+.mc-info .title-diff { font-size:12.5px; }
+
+.buscar-manual { margin-top:14px; }
+.buscar-manual summary { cursor:pointer; color:var(--accent); font-weight:600; font-size:.82rem; padding:8px 0; }
+.buscar-manual-box { margin-top:8px; }
+.buscar-manual input { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.85rem; font-family:inherit; outline:none; margin-bottom:8px; min-height:var(--tap-min); }
+.buscar-manual input:focus { border-color:var(--accent); }
+
+.sin-candidato-box { text-align:center; padding:1.5rem 1rem; color:var(--muted); font-size:.85rem; border:1px dashed var(--border); border-radius:10px; margin-bottom:14px; }
+
+.cola-fin { text-align:center; padding:2.5rem 1rem; }
+.cola-fin .icon { font-size:2rem; margin-bottom:.5rem; }
+.cola-fin-acciones { display:flex; gap:10px; justify-content:center; margin-top:1rem; flex-wrap:wrap; }
+
+/* Confirmación extra (fricción proporcional al riesgo) */
+.friccion-box { background:var(--conf-baja-bg); border:1px solid var(--conf-baja-bd); border-radius:8px; padding:10px 12px; font-size:.78rem; color:var(--text); margin-bottom:10px; display:flex; flex-direction:column; gap:6px; }
+
+/* ── Toast ──────────────────────────────────────────────────────────── */
+.toast-wrap { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:50; display:flex; flex-direction:column; gap:6px; align-items:center; width:calc(100% - 24px); max-width:420px; }
+.toast { background:var(--surface2); border:1px solid var(--border2); border-radius:10px; padding:10px 14px; font-size:.8rem; display:flex; align-items:center; gap:12px; box-shadow:0 8px 24px rgba(0,0,0,.35); width:100%; justify-content:space-between; }
+.toast.ok { border-color:var(--success-bd); }
+.toast.pendiente { border-color:var(--warning-bd); }
+.toast.error { border-color:var(--critical-bd); }
+.toast .toast-txt { display:flex; align-items:center; gap:6px; }
+.toast button { background:none; border:1px solid var(--border); color:var(--accent); border-radius:6px; padding:5px 10px; font-size:.75rem; cursor:pointer; font-family:inherit; }
+
+/* ── Listas de gestión (multi-pub / solo-ml / hay-que-publicar / sin-stock / historial / problemas) ── */
+.filtros-panel { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem; }
+.filtro-control { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text); font-size:.82rem; font-family:inherit; outline:none; min-height:var(--tap-min); }
+.filtro-control:focus { border-color:var(--accent); }
+.filtro-control.grow { flex:1; min-width:150px; }
+
+.gestion-lista { display:flex; flex-direction:column; gap:8px; }
+.grupo-sku { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
+.grupo-sku-head { font-size:.85rem; font-weight:700; margin-bottom:8px; }
+.grupo-sku-head .sku-mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--accent); }
+.pub-row { display:flex; align-items:center; gap:10px; padding:8px 4px; border-top:1px solid var(--border); flex-wrap:wrap; }
+.pub-row:first-of-type { border-top:0; }
+.pub-row.sobreventa { background:var(--critical-bg); border-radius:6px; padding:8px; }
+.pub-row .pub-txt { flex:1; min-width:120px; font-size:.8rem; }
+.pub-row .pub-mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--muted); }
+.pub-row .pub-acciones { display:flex; gap:6px; flex-wrap:wrap; }
+.mini-btn { background:none; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 10px; font-size:.72rem; cursor:pointer; font-family:inherit; min-height:var(--tap-min); }
+.mini-btn:hover, .mini-btn:focus-visible { border-color:var(--accent); color:var(--accent); }
+.sobreventa-tag { color:var(--critical); font-size:.72rem; font-weight:700; display:inline-flex; align-items:center; gap:3px; }
+.aviso-info { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:.78rem; color:var(--muted); margin-bottom:1rem; }
+
+.item-row { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.75rem 1rem; display:flex; align-items:center; gap:12px; }
+.item-row .flex1 { flex:1; min-width:0; }
+.item-row .nombre { font-size:.85rem; font-weight:600; }
+.item-row .meta { font-size:.72rem; color:var(--muted); margin-top:2px; }
+.item-row input[type=checkbox] { width:20px; height:20px; accent-color:var(--accent); flex-shrink:0; }
+
+.solo-ml-row { display:flex; gap:10px; align-items:center; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; flex-wrap:wrap; }
+.solo-ml-row img { width:40px; height:40px; border-radius:6px; object-fit:cover; background:var(--surface2); flex-shrink:0; }
+.solo-ml-row .flex1 { flex:1; min-width:140px; font-size:.82rem; }
+.solo-ml-row .buscador-inline { display:flex; gap:6px; flex-wrap:wrap; align-items:center; width:100%; margin-top:8px; }
+.solo-ml-row .buscador-inline input { flex:1; min-width:140px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:6px 10px; color:var(--text); font-size:.78rem; font-family:inherit; }
+.resultado-vincular { display:flex; align-items:center; gap:8px; background:var(--surface2); border-radius:6px; padding:6px 10px; font-size:.78rem; }
+
+.hist-grupo-head { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--warning); margin:1rem 0 .4rem; }
+
+/* Estados vinculado / pendiente-sync (aplican en historial y toasts) */
+.estado-vinculado { display:inline-flex; align-items:center; gap:5px; color:var(--success); font-weight:600; font-size:.78rem; }
+.estado-pendiente { display:inline-flex; align-items:center; gap:5px; color:var(--warning); font-weight:600; font-size:.78rem; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+
+/* Refresco */
+.refresco-bar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:1rem; font-size:.75rem; color:var(--muted); }
+
+@media (min-width: 760px) {
+  .main { max-width:1080px; padding:2rem 2rem 5rem; }
+  .fotos-row { max-width:520px; }
+  .foto-box { flex:0 0 180px; aspect-ratio:1; }
+  .titulos-stack { flex-direction:row; gap:20px; }
+  .titulos-stack > div { flex:1; }
+  .nivel2 { grid-template-columns:repeat(6,auto); gap:6px 22px; }
+  .btn-confirmar { width:auto; padding:0 28px; }
+  .acciones-fila { grid-template-columns:repeat(4,auto); }
+  .marcas-grid { grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); }
 }
 </style>
 </head>
 <body>
 
 <header class="topbar">
-  <div class="brand-badge"><b class="bt">Fusion</b><b class="bb">Bikes</b></div>
-  <div class="topbar-right">
-    <a href="/herramientas/home/" class="hbtn">← Inicio</a>
-  </div>
+  <a class="back-link" href="/herramientas/home/">&larr; Inicio</a>
+  <div class="topbar-title">Cobertura de catálogo</div>
+  <button type="button" class="hbtn" id="btn-actualizar-ml">↻ <span id="btn-actualizar-txt">Actualizar desde ML</span></button>
 </header>
 
+<!-- Región viva para anunciar refrescos de contenido a lectores de pantalla (aria-live contrato de UX) -->
+<div id="aria-live" class="sr-only" role="status" aria-live="polite"></div>
+
 <main class="main">
-  <div class="page-eyebrow">Catálogo</div>
-  <h1 class="page-title">Cobertura <em>WC · ML</em></h1>
-  <p class="page-desc">Subí el Excel de MercadoLibre para cruzarlo con el catálogo de WooCommerce y ver qué productos están en cada lado y si los SKUs coinciden.</p>
 
-  <!-- Fuente API (recomendada) -->
-  <div style="border:1px solid var(--accent,#2DB8E8);border-radius:14px;padding:16px 18px;margin-bottom:14px;background:rgba(45,184,232,.06)">
-    <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent,#2DB8E8);margin-bottom:5px">Recomendado</div>
-    <div style="font-size:14.5px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px">Usar las publicaciones traídas de la API de ML</div>
-    <div style="font-size:12px;color:var(--muted,#8493B0);line-height:1.5;margin-bottom:11px">Cruza el catálogo completo y real de ML (activas + pausadas, con SKU y status reales) contra WooCommerce. Si todavía no las trajiste, hacelo desde el Matcher.</div>
-    <button class="btn-cambiar" id="btn-api-cob" style="background:var(--accent,#2DB8E8);color:#06131C;font-weight:700" onclick="cargarDesdeApiCobertura()">Cruzar con publicaciones de ML →</button>
-    <div id="api-cob-status" style="font-size:12px;color:var(--muted,#8493B0);margin-top:9px;min-height:15px"></div>
-  </div>
-  <div style="text-align:center;font-size:11px;color:var(--muted2,#5B6B8C);text-transform:uppercase;letter-spacing:.1em;margin:2px 0 10px">— o subí el Excel (respaldo) —</div>
+  <!-- ══════════════ VISTA: ENTRADA ══════════════ -->
+  <section class="view" id="view-entrada" data-view="entrada">
+    <h1 class="page-title">Cobertura de <em>catálogo</em></h1>
+    <div id="entrada-resumen" class="resumen-top">
+      <div class="skel skel-marca" style="width:100%;height:40px;"></div>
+    </div>
 
-  <!-- Upload zone -->
-  <div class="upload-zone" id="upload-zone"
-       onclick="if(!cargado)document.getElementById('inp-xl').click()"
-       ondragover="event.preventDefault();this.classList.add('drag')"
-       ondragleave="this.classList.remove('drag')"
-       ondrop="soltar(event)">
-    <input type="file" id="inp-xl" accept=".xlsx,.xls" onchange="cargarExcel(this.files[0])">
-    <div id="upload-idle">
-      <div class="upload-icon">📊</div>
-      <div class="upload-title">Excel de publicaciones de MercadoLibre</div>
-      <div class="upload-hint">El .xlsx tal cual lo exportás desde ML, sin modificar · También podés arrastrarlo acá</div>
-    </div>
-    <div id="upload-done" class="hidden">
-      <div class="upload-icon">✅</div>
-      <div class="upload-file-name" id="upload-file-name"></div>
-      <button class="btn-cambiar" onclick="event.stopPropagation();resetUpload()">Cambiar archivo</button>
-    </div>
-  </div>
+    <div id="entrada-seguir"></div>
 
-  <!-- Source badge -->
-  <div class="source-badge hidden" id="source-badge">
-    <span class="dot dot-xl"></span>
-    <span id="source-text"></span>
-  </div>
+    <div class="section-label">Elegí una marca para trabajar</div>
+    <div id="entrada-marcas" class="marcas-grid">
+      <div class="skel skel-marca"></div><div class="skel skel-marca"></div><div class="skel skel-marca"></div>
+    </div>
+    <button type="button" class="btn-vertodas" id="btn-ver-todas-marcas" hidden>Ver todas las marcas</button>
 
-  <!-- Stats -->
-  <div class="stat-row hidden" id="stat-row">
-    <div class="stat-card">
-      <div class="stat-icon both">✓</div>
-      <div>
-        <div class="stat-num both" id="num-ambos">—</div>
-        <div class="stat-label">En ambos lados</div>
-      </div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-icon wc">WC</div>
-      <div>
-        <div class="stat-num wc" id="num-wc">—</div>
-        <div class="stat-label">Faltantes en ML (stock&gt;0)</div>
-      </div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-icon ml">ML</div>
-      <div>
-        <div class="stat-num ml" id="num-ml">—</div>
-        <div class="stat-label">Solo en MercadoLibre</div>
-      </div>
-    </div>
-  </div>
+    <div class="section-label">Otras secciones</div>
+    <div class="otras-lista" id="entrada-otras"></div>
+  </section>
 
-  <!-- Controls -->
-  <div class="controls hidden" id="controls">
-    <div class="pill-tabs">
-      <div class="pill-tab active" data-tab="ambos" onclick="setTab(this)">Ambos lados</div>
-      <div class="pill-tab" data-tab="problemas" onclick="setTab(this)">⚠ Problemas</div>
-      <div class="pill-tab" data-tab="faltantes" onclick="setTab(this)">🎯 Faltantes ML</div>
-      <div class="pill-tab" data-tab="multipub" onclick="setTab(this)">🔁 Multi-publicación</div>
-      <div class="pill-tab" data-tab="solo_ml" onclick="setTab(this)">Solo ML</div>
+  <!-- ══════════════ VISTA: COLA (tarjeta de a una) ══════════════ -->
+  <section class="view" id="view-cola" data-view="cola">
+    <h1 class="sr-only" id="cola-h1">Trabajando marca</h1>
+    <div class="cola-header">
+      <a href="#/" class="back-link">&larr; Elegir otra marca</a>
+      <a href="#/historial" class="back-link">Historial</a>
     </div>
-    <input class="search-box" type="text" placeholder="Buscar producto, SKU o ID de publicación…" oninput="setBusqueda(this.value)">
-  </div>
+    <div class="progreso-bar-row">
+      <div class="progreso-track"><div class="progreso-fill" id="cola-progreso-fill" style="width:0%"></div></div>
+      <div class="progreso-frac" id="cola-progreso-frac">—</div>
+    </div>
+    <div class="progreso-secundaria" id="cola-progreso-secundaria">Hoy resolviste 0 · desinmovilizaste $0</div>
 
-  <!-- Panel de filtros + ordenamiento (en memoria, sin fetches nuevos) -->
-  <div class="filtros-panel hidden" id="filtros-panel">
-    <div class="filtro-group">
-      <label class="filtro-label" for="f-categoria">Categoría</label>
-      <select class="filtro-control" id="f-categoria" onchange="setFiltro('categoria', this.value)">
-        <option value="">Todas</option>
-      </select>
-    </div>
-    <div class="filtro-group">
-      <label class="filtro-label" for="f-marca">Marca</label>
-      <select class="filtro-control" id="f-marca" onchange="setFiltro('marca', this.value)">
-        <option value="">Todas</option>
-      </select>
-    </div>
-    <div class="filtro-group">
-      <label class="filtro-label">Stock (rango)</label>
-      <div class="filtro-range">
-        <input class="filtro-control" id="f-stock-min" type="number" inputmode="numeric" placeholder="mín" oninput="setFiltroNum('stockMin', this.value)">
-        <span>—</span>
-        <input class="filtro-control" id="f-stock-max" type="number" inputmode="numeric" placeholder="máx" oninput="setFiltroNum('stockMax', this.value)">
-      </div>
-    </div>
-    <div class="filtro-group">
-      <label class="filtro-label">Precio (rango)</label>
-      <div class="filtro-range">
-        <input class="filtro-control" id="f-precio-min" type="number" inputmode="numeric" placeholder="mín" oninput="setFiltroNum('precioMin', this.value)">
-        <span>—</span>
-        <input class="filtro-control" id="f-precio-max" type="number" inputmode="numeric" placeholder="máx" oninput="setFiltroNum('precioMax', this.value)">
-      </div>
-    </div>
-    <div class="filtro-group">
-      <label class="filtro-label" for="f-imagen">Imagen</label>
-      <select class="filtro-control" id="f-imagen" onchange="setFiltroBool('conImagen', this.value)">
-        <option value="">Todas</option>
-        <option value="1">Con imagen</option>
-        <option value="0">Sin imagen</option>
-      </select>
-    </div>
-    <div class="filtro-group">
-      <label class="filtro-label" for="f-gtin">GTIN / EAN</label>
-      <select class="filtro-control" id="f-gtin" onchange="setFiltroBool('conGtin', this.value)">
-        <option value="">Todos</option>
-        <option value="1">Con GTIN</option>
-        <option value="0">Sin GTIN</option>
-      </select>
-    </div>
-    <div class="filtro-group">
-      <label class="filtro-label" for="f-orden">Ordenar por</label>
-      <select class="filtro-control" id="f-orden" onchange="setOrden(this.value)">
-        <option value="nombre|asc">Nombre (A→Z)</option>
-        <option value="nombre|desc">Nombre (Z→A)</option>
-        <option value="sku|asc">SKU (A→Z)</option>
-        <option value="sku|desc">SKU (Z→A)</option>
-        <option value="stock|desc">Stock (mayor→menor)</option>
-        <option value="stock|asc">Stock (menor→mayor)</option>
-        <option value="precio|desc">Precio (mayor→menor)</option>
-        <option value="precio|asc">Precio (menor→mayor)</option>
-        <option value="marca|asc">Marca (A→Z)</option>
-        <option value="categoria|asc">Categoría (A→Z)</option>
-        <option value="actualizado|desc">Última actualización</option>
-      </select>
-    </div>
-    <div class="filtros-footer">
-      <span class="filtros-count" id="filtros-count"></span>
-      <button class="btn-limpiar" onclick="limpiarFiltros()">Limpiar filtros</button>
-    </div>
-  </div>
+    <div id="cola-contenido"><div class="skel" style="height:340px;"></div></div>
+  </section>
 
-  <div id="lista" class="list-wrap"></div>
+  <!-- ══════════════ VISTA: HISTORIAL ══════════════ -->
+  <section class="view" id="view-historial" data-view="historial">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Historial</h1>
+    <p class="page-sub">Vínculos y descartes recientes. Deshacer disponible en cada uno.</p>
+    <div class="filtros-panel">
+      <input class="filtro-control grow" type="search" id="hist-buscar" placeholder="Buscar por producto o SKU…" aria-label="Buscar por producto o SKU">
+    </div>
+    <div id="hist-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: HAY QUE PUBLICARLO ══════════════ -->
+  <section class="view" id="view-publicar" data-view="publicar">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Hay que <em>publicarlo</em></h1>
+    <p class="page-sub">Productos sin candidato usable en ML, ordenados por valor. No publica nada por vos — prepara los datos.</p>
+    <div class="filtros-panel">
+      <button type="button" class="hbtn" id="btn-export-csv">⬇ Exportar a Excel</button>
+    </div>
+    <div id="publicar-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: MULTI-PUBLICACIÓN ══════════════ -->
+  <section class="view" id="view-multipub" data-view="multipub">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Multi-<em>publicación</em></h1>
+    <div class="aviso-info">Un SKU con más de dos publicaciones suele ser <strong>intencional</strong> (condiciones de venta distintas). No se "arregla" desvinculando todo: marcá como correcta la que está bien, pausá o desvinculá solo la que corresponda.</div>
+    <div id="multipub-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: SOLO ML ══════════════ -->
+  <section class="view" id="view-solo-ml" data-view="solo-ml">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Solo ML <em>— sin SKU</em></h1>
+    <p class="page-sub">Publicaciones que no tienen un producto web vinculado. Zona de consulta y limpieza puntual: filtrá o buscá, no se recorre de a una.</p>
+    <div class="filtros-panel">
+      <input class="filtro-control grow" type="search" id="soloml-buscar" placeholder="Buscar por título…" aria-label="Buscar publicación de ML por título">
+    </div>
+    <div id="soloml-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: SIN STOCK ══════════════ -->
+  <section class="view" id="view-sin-stock" data-view="sin-stock">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Sin <em>stock</em></h1>
+    <p class="page-sub">Faltantes con stock 0. Aparte de la cola principal, por si reponen.</p>
+    <div id="sinstock-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: PROBLEMAS ══════════════ -->
+  <section class="view" id="view-problemas" data-view="problemas">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Problemas</h1>
+    <p class="page-sub">Publicaciones pausadas que siguen vinculadas a un producto con stock. Filtrá por marca o categoría.</p>
+    <div class="filtros-panel">
+      <select class="filtro-control" id="prob-marca" aria-label="Filtrar por marca"><option value="">Todas las marcas</option></select>
+      <select class="filtro-control" id="prob-categoria" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option></select>
+    </div>
+    <div id="prob-lista"></div>
+  </section>
+
 </main>
 
-<script src="../lib/format.js"></script>
+<div class="toast-wrap" id="toast-wrap"></div>
+
 <script src="../lib/api.js"></script>
+<script src="../lib/format.js"></script>
 <script>
-/* ── AUTH ── */
+'use strict';
 Api.installAuth();
+Api.guardBfcache();
 
-/* ── ESTADO ── */
-var datos = null;
-var tabActual = 'ambos';
-var busqueda = '';
-/* Filtros combinables (AND entre sí y con el buscador de texto) + ordenamiento.
-   Todo opera en memoria sobre el array ya cargado: no dispara fetches nuevos. */
-var filtros = { categoria:'', marca:'', stockMin:null, stockMax:null, precioMin:null, precioMax:null, conImagen:null, conGtin:null };
-var orden = { campo:'nombre', direccion:'asc' };
-var cargado = false;
-var fuenteApi = false;            // true si el cruce vino ya procesado del backend (API de ML)
-var excluidosSet = new Set();     // id_woo marcados "solo local"
-var verExcluidos = false;         // en la pestaña Faltantes, mostrar los excluidos
-var wcCache = [];                 // catálogo WC crudo (para recomputar al marcar/desmarcar)
-var skusEnMLCache = new Set();    // SKUs presentes en publicaciones ML en vivo
-var skusEnMLConteo = new Map();   // SKU → cantidad de publicaciones ML con ese seller_sku
-var mlItemsCache = [];            // publicaciones ML crudas (para detalle de multi-publicación)
+/* ═══════════════════════════════════════════════════════════════════════
+ * Utilidades generales
+ * ═══════════════════════════════════════════════════════════════════════ */
 
-/* Categorías WC que no son productos vendibles por ML (mismo criterio que lib/cobertura.js) */
-var CATEGORIAS_NO_VENDIBLES = ['SERVICES', 'QR PAGOS'];
-function parseCats(cj){
-  if(Array.isArray(cj)) return cj;
-  if(typeof cj === 'string' && cj.trim()){ try{ var a=JSON.parse(cj); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function announce(msg) {
+  var el = document.getElementById('aria-live');
+  el.textContent = '';
+  // Forzar re-anuncio aunque el texto sea idéntico al anterior.
+  window.setTimeout(function () { el.textContent = msg; }, 30);
+}
+
+function parseCats(cj) {
+  if (Array.isArray(cj)) return cj;
+  if (typeof cj === 'string' && cj.trim()) { try { var a = JSON.parse(cj); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
   return [];
 }
-function esNoVendible(p){
-  return parseCats(p.categorias_json).some(function(c){
-    return CATEGORIAS_NO_VENDIBLES.indexOf(String(c).trim().toUpperCase()) !== -1;
-  });
-}
-/* Regla de faltante: espejo de esFaltante() en lib/cobertura.js */
-function esFaltante(p){
-  if(!(Number(p.stock) > 0)) return false;
-  if(p.tipo === 'variable') return false;
-  var sku = String(p.sku||'').trim();
-  if(!sku) return false;
-  if(skusEnMLCache.has(sku)) return false;
-  if(excluidosSet.has(p.id_woo)) return false;
-  if(esNoVendible(p)) return false;
-  return true;
-}
-/* Regla de multi-publicación: espejo de esMultiPublicacion() en lib/cobertura.js.
-   Como esFaltante pero SIN filtro de stock; entra si el SKU tiene > umbral publicaciones ML. */
-function esMultiPublicacion(p, umbral){
-  umbral = (umbral == null) ? 2 : umbral;
-  if(p.tipo === 'variable') return false;
-  var sku = String(p.sku||'').trim();
-  if(!sku) return false;
-  if(excluidosSet.has(p.id_woo)) return false;
-  if(esNoVendible(p)) return false;
-  return (skusEnMLConteo.get(sku) || 0) > umbral;
-}
+function catsDe(p) { return parseCats(p.categorias_json).map(function (c) { return String(c).trim(); }).filter(Boolean); }
 
-/* ── UTILS ── */
-
-/* ── XLSX: cargar dinámicamente si no está disponible ── */
-function asegurarXlsx(cb){
-  if(typeof XLSX !== 'undefined'){ cb(); return; }
-  var s = document.createElement('script');
-  s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
-  s.onload = cb;
-  s.onerror = function(){ alert('No se pudo cargar la librería para leer Excel. Verificá la conexión a internet.'); };
-  document.head.appendChild(s);
-}
-
-/* ── DROPZONE ── */
-function soltar(ev){
-  ev.preventDefault();
-  document.getElementById('upload-zone').classList.remove('drag');
-  var f = ev.dataTransfer && ev.dataTransfer.files[0];
-  if(f) cargarExcel(f);
-}
-function resetUpload(){
-  cargado = false;
-  datos = null;
-  document.getElementById('upload-zone').classList.remove('loaded');
-  document.getElementById('upload-idle').classList.remove('hidden');
-  document.getElementById('upload-done').classList.add('hidden');
-  document.getElementById('source-badge').classList.add('hidden');
-  document.getElementById('stat-row').classList.add('hidden');
-  document.getElementById('controls').classList.add('hidden');
-  document.getElementById('lista').innerHTML = '';
-  document.getElementById('inp-xl').value = '';
-}
-
-/* ── LECTURA EXCEL ── */
-function cargarExcel(file){
-  if(!file) return;
-  asegurarXlsx(function(){
-    var reader = new FileReader();
-    reader.onload = function(e){
-      try{
-        var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
-        var ws = wb.Sheets['Publicaciones'] || wb.Sheets[wb.SheetNames[0]];
-        if(!ws) throw new Error('No se encontró la hoja "Publicaciones" en el Excel.');
-        var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
-        parsearYCruzar(rows, file.name);
-      }catch(err){
-        alert('Error leyendo el Excel: ' + err.message);
-      }
-    };
-    reader.onerror = function(){ alert('Error al leer el archivo.'); };
-    reader.readAsArrayBuffer(file);
+function jsonFetch(url, opts) {
+  return fetch(url, opts).then(function (r) {
+    return r.text().then(function (txt) {
+      var data = null;
+      try { data = txt ? JSON.parse(txt) : null; } catch (e) { /* respuesta no-JSON */ }
+      return { ok: r.ok, status: r.status, data: data };
+    });
+  }).catch(function (err) {
+    return { ok: false, status: 0, data: null, error: (err && err.message) || 'Fallo de red' };
   });
 }
 
-function parsearYCruzar(rows, fileName){
-  /* Parseo idéntico al matcher */
-  var headers = rows[0] || [];
-  var idx = {};
-  headers.forEach(function(h,i){ if(h!==null) idx[String(h)] = i; });
-  var dataRows = rows.slice(5).filter(function(r){ return r && r.some(function(c){ return c!==null; }); });
+/* Toast no bloqueante. tipo: 'ok' | 'pendiente' | 'error'. onDeshacer opcional. */
+function toast(mensaje, tipo, onDeshacer) {
+  var wrap = document.getElementById('toast-wrap');
+  var el = document.createElement('div');
+  el.className = 'toast ' + (tipo || 'ok');
+  el.setAttribute('role', 'status');
+  var icono = tipo === 'error' ? '✕' : tipo === 'pendiente' ? '↻' : '✓';
+  el.innerHTML = '<span class="toast-txt"><span aria-hidden="true">' + icono + '</span>' + esc(mensaje) + '</span>';
+  if (onDeshacer) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Deshacer';
+    btn.addEventListener('click', function () { onDeshacer(); el.remove(); });
+    el.appendChild(btn);
+  }
+  wrap.appendChild(el);
+  announce(mensaje);
+  window.setTimeout(function () { if (el.parentNode) el.remove(); }, onDeshacer ? 8000 : 4500);
+}
 
-  var mlItems = [];
-  var tit = '';
-  for(var i=0; i<dataRows.length; i++){
-    var r = dataRows[i];
-    var itemId   = r[idx['ITEM_ID']];
-    var varId    = r[idx['VARIATION_ID']];
-    var sku      = r[idx['SKU']];
-    var title    = r[idx['TITLE']];
-    var status   = r[idx['STATUS']];
-    var variations = r[idx['VARIATIONS']];
-    if(itemId===null||itemId===undefined) continue;
-    if(title!==null && String(title).trim() && String(title).trim()!=='nan') tit = String(title).trim();
-    var esVar    = varId!==null && varId!==undefined && String(varId).trim()!=='';
-    var varStr   = variations!==null ? String(variations) : '';
-    var esSimple = !esVar && varStr.trim()!=='-';
-    if(!esSimple && !esVar) continue; // fila de encabezado variable padre, skip
-    var skuStr   = (sku!==null && String(sku).trim() && String(sku)!=='nan') ? String(sku).trim() : '';
-    var varAttr  = (varStr && varStr !== '-' && varStr !== 'nan') ? varStr.trim() : '';
-    mlItems.push({
-      ml_item_id:     String(itemId),
-      ml_variation_id: esVar ? String(varId).replace(/\.0$/,'') : '',
-      ml_title:       tit || '(sin título)',
-      ml_sku:         skuStr,
-      ml_status:      status ? String(status) : '',
-      ml_variante:    varAttr   // atributos de la variante: "Color: Negro | Talle: L"
+/* ═══════════════════════════════════════════════════════════════════════
+ * Router muy simple por hash: #/, #/cola/MARCA, #/historial, #/publicar,
+ * #/multipub, #/solo-ml, #/sin-stock, #/problemas
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var VISTAS = ['entrada', 'cola', 'historial', 'publicar', 'multipub', 'solo-ml', 'sin-stock', 'problemas'];
+function mostrarVista(nombre) {
+  VISTAS.forEach(function (v) {
+    document.getElementById('view-' + v).classList.toggle('active', v === nombre);
+  });
+}
+
+function router() {
+  var hash = window.location.hash.replace(/^#\/?/, '');
+  var partes = hash.split('/').filter(Boolean);
+  if (!partes.length) { mostrarVista('entrada'); cargarEntrada(); return; }
+  var seccion = partes[0];
+  if (seccion === 'cola' && partes[1]) {
+    mostrarVista('cola');
+    cargarCola(decodeURIComponent(partes[1]));
+  } else if (seccion === 'historial') {
+    mostrarVista('historial'); cargarHistorial();
+  } else if (seccion === 'publicar') {
+    mostrarVista('publicar'); cargarPublicar();
+  } else if (seccion === 'multipub') {
+    mostrarVista('multipub'); cargarMultipub();
+  } else if (seccion === 'solo-ml') {
+    mostrarVista('solo-ml'); cargarSoloMl();
+  } else if (seccion === 'sin-stock') {
+    mostrarVista('sin-stock'); cargarSinStock();
+  } else if (seccion === 'problemas') {
+    mostrarVista('problemas'); cargarProblemas();
+  } else {
+    mostrarVista('entrada'); cargarEntrada();
+  }
+}
+window.addEventListener('hashchange', router);
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: ENTRADA
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function cargarEntrada() {
+  jsonFetch('/api/cobertura/resumen').then(function (res) {
+    var resumenEl = document.getElementById('entrada-resumen');
+    var seguirEl = document.getElementById('entrada-seguir');
+    var marcasEl = document.getElementById('entrada-marcas');
+    var otrasEl = document.getElementById('entrada-otras');
+    var btnTodas = document.getElementById('btn-ver-todas-marcas');
+
+    if (!res.ok || !res.data || !res.data.ok) {
+      resumenEl.innerHTML = '<div class="vacio">No se pudo cargar el resumen. <button type="button" class="hbtn" onclick="cargarEntrada()">Reintentar</button></div>';
+      seguirEl.innerHTML = ''; marcasEl.innerHTML = ''; otrasEl.innerHTML = '';
+      return;
+    }
+    var d = res.data;
+
+    resumenEl.innerHTML =
+      '<span class="resumen-num">' + n(d.total_pendientes) + '</span>' +
+      '<span class="resumen-txt">faltantes · ' + money(d.total_valor) + ' sin publicar</span>';
+
+    if (d.seguir_donde_quede) {
+      var sq = d.seguir_donde_quede;
+      seguirEl.innerHTML =
+        '<button type="button" class="highlight-card" onclick="irACola(' + JSON.stringify(sq.marca).replace(/"/g, '&quot;') + ')">' +
+        '<div class="highlight-eyebrow">Seguir donde quedé</div>' +
+        '<div class="highlight-title">' + esc(sq.marca) + ' <b>(' + n(sq.pendientes) + ' pendientes)</b></div>' +
+        '</button>';
+    } else {
+      seguirEl.innerHTML = '';
+    }
+
+    if (!d.marcas.length) {
+      marcasEl.innerHTML = '<div class="vacio" style="grid-column:1/-1;"><strong>No hay faltantes pendientes. Cobertura al día.</strong>Puede que igual haya trabajo en Multi-publicación o Solo ML.<div class="vacio-links"><a class="hbtn" href="#/multipub">Multi-publicación</a><a class="hbtn" href="#/solo-ml">Solo ML</a></div></div>';
+      btnTodas.hidden = true;
+    } else {
+      marcasEl.innerHTML = d.marcas.map(function (m) {
+        return '<button type="button" class="marca-card" onclick="irACola(' + JSON.stringify(m.marca).replace(/"/g, '&quot;') + ')">' +
+          '<div class="marca-nombre">' + esc(m.marca) + '</div>' +
+          '<div class="marca-meta">' + n(m.conteo) + ' faltantes</div>' +
+          '<div class="marca-valor">' + money(m.valor) + '</div>' +
+          '</button>';
+      }).join('');
+      btnTodas.hidden = d.total_marcas <= d.marcas.length;
+    }
+
+    var o = d.otras_secciones || {};
+    otrasEl.innerHTML =
+      '<a class="otra-link" href="#/publicar">Hay que publicarlo <span class="n">' + n(o.hay_que_publicarlo) + '</span></a>' +
+      '<a class="otra-link" href="#/multipub">Multi-publicación <span class="n">' + n(o.multi_publicacion) + '</span></a>' +
+      '<a class="otra-link" href="#/solo-ml">Solo ML — sin SKU <span class="n">' + n(o.solo_ml) + '</span></a>' +
+      '<a class="otra-link" href="#/sin-stock">Sin stock <span class="n">' + n(o.sin_stock) + '</span></a>' +
+      '<a class="otra-link" href="#/problemas">Problemas <span class="n">›</span></a>';
+  });
+}
+
+document.getElementById('btn-ver-todas-marcas').addEventListener('click', function () {
+  jsonFetch('/api/cobertura/marcas').then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) return;
+    var marcasEl = document.getElementById('entrada-marcas');
+    marcasEl.innerHTML = res.data.marcas.map(function (m) {
+      return '<button type="button" class="marca-card" onclick="irACola(' + JSON.stringify(m.marca).replace(/"/g, '&quot;') + ')">' +
+        '<div class="marca-nombre">' + esc(m.marca) + '</div>' +
+        '<div class="marca-meta">' + n(m.conteo) + ' faltantes</div>' +
+        '<div class="marca-valor">' + money(m.valor) + '</div>' +
+        '</button>';
+    }).join('');
+    document.getElementById('btn-ver-todas-marcas').hidden = true;
+  });
+});
+
+function irACola(marca) {
+  window.location.hash = '#/cola/' + encodeURIComponent(marca);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: COLA — de a una, pantalla completa
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var colaEstado = {
+  marca: null,
+  items: [],     // buffer de ítems ya traídos de la marca actual
+  offset: 0,
+  total: 0,
+  actual: null,  // ítem que se está mostrando ahora mismo
+  candidatoSeleccionado: null, // clave del candidato/manual elegido actualmente
+  cargandoMas: false,
+};
+
+function cargarCola(marca) {
+  colaEstado = { marca: marca, items: [], offset: 0, total: 0, actual: null, candidatoSeleccionado: null, cargandoMas: false };
+  document.getElementById('cola-h1').textContent = 'Trabajando marca ' + marca;
+  document.getElementById('cola-contenido').innerHTML = '<div class="skel" style="height:340px;"></div>';
+  traerMasDeCola().then(function () {
+    avanzarSiguiente();
+  });
+}
+
+function traerMasDeCola() {
+  if (colaEstado.cargandoMas) return Promise.resolve();
+  colaEstado.cargandoMas = true;
+  return jsonFetch('/api/cobertura/marcas/' + encodeURIComponent(colaEstado.marca) + '/cola?limit=20&offset=' + colaEstado.offset)
+    .then(function (res) {
+      colaEstado.cargandoMas = false;
+      if (!res.ok || !res.data || !res.data.ok) return;
+      colaEstado.total = res.data.total;
+      colaEstado.items = colaEstado.items.concat(res.data.data);
+      colaEstado.offset += res.data.data.length;
+    });
+}
+
+function actualizarProgreso() {
+  jsonFetch('/api/cobertura/marcas/' + encodeURIComponent(colaEstado.marca) + '/cola?limit=1&offset=0').then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) return;
+    var restante = res.data.total;
+    var total = restante; // no conocemos el total original de la marca desde acá salvo por resumen inicial
+    // Usamos el conteo total original guardado al entrar (primer fetch de esta sesión de cola).
+    if (colaEstado.totalOriginal == null) colaEstado.totalOriginal = restante;
+    var resueltos = Math.max(colaEstado.totalOriginal - restante, 0);
+    var pct = colaEstado.totalOriginal ? Math.round((resueltos / colaEstado.totalOriginal) * 100) : 0;
+    document.getElementById('cola-progreso-fill').style.width = pct + '%';
+    document.getElementById('cola-progreso-frac').textContent = resueltos + '/' + colaEstado.totalOriginal;
+  });
+  jsonFetch('/api/cobertura/resumen').then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) return;
+    var p = res.data.progreso_hoy || { resueltos_hoy: 0, valor_desinmovilizado_hoy: 0 };
+    document.getElementById('cola-progreso-secundaria').textContent =
+      'Hoy resolviste ' + n(p.resueltos_hoy) + ' · desinmovilizaste ' + money(p.valor_desinmovilizado_hoy);
+  });
+}
+
+function avanzarSiguiente() {
+  window.scrollTo(0, 0);
+  // Si el buffer se está por agotar, pedimos más antes de que falte.
+  var necesitaMas = colaEstado.items.length < 3 && colaEstado.offset < colaEstado.total;
+  var p = necesitaMas ? traerMasDeCola() : Promise.resolve();
+  p.then(function () {
+    if (colaEstado.totalOriginal == null) colaEstado.totalOriginal = colaEstado.total;
+    actualizarProgreso();
+    if (!colaEstado.items.length) {
+      renderFinDeTanda();
+      return;
+    }
+    colaEstado.actual = colaEstado.items.shift();
+    colaEstado.candidatoSeleccionado = null;
+    renderTarjeta(colaEstado.actual);
+  });
+}
+
+function renderFinDeTanda() {
+  document.getElementById('cola-contenido').innerHTML =
+    '<div class="cola-fin"><div class="icon" aria-hidden="true">🎉</div>' +
+    '<strong>Terminaste la tanda de ' + esc(colaEstado.marca) + '.</strong>' +
+    '<div class="cola-fin-acciones">' +
+    '<a class="hbtn" href="#/">Elegir otra marca</a>' +
+    '<a class="hbtn" href="/herramientas/home/">Volver al inicio</a>' +
+    '</div></div>';
+  announce('Terminaste la tanda de ' + colaEstado.marca + '.');
+}
+
+function nivelConfianzaTexto(nivel) {
+  if (nivel === 'alta') return { texto: 'Coincidencia alta', icono: '✓' };
+  if (nivel === 'revisar') return { texto: 'Revisar bien', icono: '⚠' };
+  return { texto: 'Poco parecido', icono: '✕' };
+}
+
+/* Pinta un título tokenizado según el diff estructurado del motor (coincide / solo de este
+   lado genérico / solo de este lado discriminante). ladoTokens = diff.solo_wc o diff.solo_ml.
+   IMPORTANTE: el motor (norm() en lib/matcherEngine.js) tokeniza partiendo cada palabra por
+   cualquier carácter no alfanumérico ("11-25T" → "11"+"25t", "29x2.20" → "29x2"+"20"), así
+   que acá hay que sub-tokenizar con el MISMO criterio, o los códigos con guion/punto —que
+   son justo los discriminantes que más importan (medidas de cassette, rodado)— nunca
+   coinciden contra los tokens del motor y quedan mal clasificados como "coincide" (atenuados)
+   en vez de "discriminante". El separador (guion, punto, barra…) se muestra igual que en el
+   título original, sin resaltar — no se reescribe el título, solo se colorea por partes. */
+function pintarTitleDiff(titulo, tokensCoincide, tokensSoloEsteLado, tokensDiscriminantes) {
+  var soloSet = new Set(tokensSoloEsteLado);
+  var discSet = new Set(tokensDiscriminantes);
+  var palabras = String(titulo).split(/(\s+)/);
+  return palabras.map(function (palabra) {
+    if (/^\s+$/.test(palabra) || !palabra) return esc(palabra);
+    var subtokens = palabra.match(/[a-z0-9]+|[^a-z0-9]+/gi) || [palabra];
+    return subtokens.map(function (parte) {
+      if (!/[a-z0-9]/i.test(parte)) return esc(parte); // separador visual: sin resaltar, se ve igual que en Woo/ML
+      var norma = parte.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      var cls = 'tok-match';
+      if (soloSet.has(norma)) cls = discSet.has(norma) ? 'tok-discriminant' : 'tok-diff';
+      return '<span class="tok ' + cls + '">' + esc(parte) + '</span>';
+    }).join('');
+  }).join('');
+}
+
+function renderNivel2(prod, ml) {
+  var cats = catsDe(prod).join(', ') || '—';
+  return '<div class="nivel2">' +
+    '<div class="n2-head">Web</div><div class="n2-head">ML</div>' +
+    '<div class="n2-val">' + money(prod.precio) + '</div><div class="n2-val">' + money(ml.ml_precio) + '</div>' +
+    '<div class="n2-val">' + n(prod.stock) + ' unid.</div><div class="n2-val">' + n(ml.ml_stock) + ' unid.</div>' +
+    '<div class="n2-val">' + esc(cats) + '</div><div class="n2-val">—</div>' +
+    '</div>';
+}
+
+function tarjetaHtml(prod, cand, opts) {
+  opts = opts || {};
+  var conf = nivelConfianzaTexto(cand.confianza);
+  var diff = cand.diff;
+  var wcHtml = pintarTitleDiff(prod.nombre, diff.coincide, diff.solo_wc, diff.discriminantes_conflicto);
+  var mlHtml = pintarTitleDiff(cand.ml_titulo, diff.coincide, diff.solo_ml, diff.discriminantes_conflicto);
+  var friccion = cand.confianza === 'baja'
+    ? '<div class="friccion-box" id="friccion-box"><label style="display:flex;gap:8px;align-items:flex-start;"><input type="checkbox" id="friccion-check" style="width:18px;height:18px;margin-top:2px;accent-color:var(--critical);"><span>¿Seguro? El sistema encontró poca coincidencia entre estos dos productos.</span></label></div>'
+    : '';
+  return (
+    '<div class="match-card" id="tarjeta-principal">' +
+    '<div class="conf-badge ' + cand.confianza + '"><span aria-hidden="true">' + conf.icono + '</span>' + conf.texto + '</div>' +
+    '<div class="fotos-row">' +
+    '<div class="foto-box">' + (prod.img ? '<img src="' + esc(prod.img) + '" alt="Foto del producto web: ' + esc(prod.nombre) + '">' : '<span class="sinfoto">Sin foto</span>') + '</div>' +
+    '<div class="foto-box">' + (cand.ml_img ? '<img src="' + esc(cand.ml_img) + '" alt="Foto de la publicación de ML: ' + esc(cand.ml_titulo) + '">' : '<span class="sinfoto">Sin foto</span>') + '</div>' +
+    '</div>' +
+    '<div class="titulos-stack">' +
+    '<div><div class="titulo-fuente-label">Web</div><div class="title-diff">' + wcHtml + '</div></div>' +
+    '<div><div class="titulo-fuente-label">Mercado Libre</div><div class="title-diff">' + mlHtml + '</div></div>' +
+    '</div>' +
+    renderNivel2(prod, cand) +
+    '<details class="atributos-toggle"><summary>Ver atributos completos</summary>' +
+    '<div class="atr-body">SKU: ' + esc(prod.sku || '—') + ' · Clave ML: ' + esc(cand.ml_clave || '—') + ' · Estado ML: ' + esc(cand.ml_status || '—') + '</div>' +
+    '</details>' +
+    friccion +
+    '<button type="button" class="btn-confirmar" id="btn-confirmar-vinculo">Confirmar vínculo</button>' +
+    '<div class="acciones-fila">' +
+    '<a class="accion-btn" href="' + mlUrl(cand.ml_item_id) + '" target="_blank" rel="noopener" id="btn-abrir-ml">↗ Abrir en ML</a>' +
+    '<button type="button" class="accion-btn" id="btn-solo-local">Solo local</button>' +
+    '<button type="button" class="accion-btn" id="btn-hay-que-publicar">Hay que publicarlo</button>' +
+    '<button type="button" class="accion-btn" id="btn-saltear">Saltear</button>' +
+    '</div>' +
+    '</div>'
+  );
+}
+
+function candidatoCompactoHtml(prod, cand, idx) {
+  var diff = cand.diff;
+  var mlHtml = pintarTitleDiff(cand.ml_titulo, diff.coincide, diff.solo_ml, diff.discriminantes_conflicto);
+  var conf = nivelConfianzaTexto(cand.confianza);
+  return (
+    '<button type="button" class="match-card--compact" data-idx="' + idx + '">' +
+    (cand.ml_img ? '<img class="mc-thumb" src="' + esc(cand.ml_img) + '" alt="">' : '<div class="mc-thumb"></div>') +
+    '<div class="mc-info"><div class="conf-badge ' + cand.confianza + '" style="margin-bottom:4px;"><span aria-hidden="true">' + conf.icono + '</span>' + conf.texto + '</div>' +
+    '<div class="title-diff">' + mlHtml + '</div></div>' +
+    '</button>'
+  );
+}
+
+function renderTarjeta(prod) {
+  var cont = document.getElementById('cola-contenido');
+  var candidatos = (prod.candidatos || []).slice(0, 3);
+  var candidatoActivo = candidatos.length ? candidatos[0] : null;
+
+  var html = '';
+  if (!candidatoActivo) {
+    html += '<div class="sin-candidato-box">No se encontró un candidato confiable en ML para <strong>' + esc(prod.nombre) + '</strong>.<br>Podés buscarlo a mano o mandarlo a "Hay que publicarlo".</div>';
+    html += '<div class="acciones-fila" style="grid-template-columns:1fr 1fr;">' +
+      '<button type="button" class="accion-btn" id="btn-hay-que-publicar-directo">Hay que publicarlo</button>' +
+      '<button type="button" class="accion-btn" id="btn-saltear-directo">Saltear</button>' +
+      '</div>';
+  } else {
+    html += tarjetaHtml(prod, candidatoActivo);
+    if (candidatos.length > 1) {
+      html += '<div class="candidatos-lista">' + candidatos.map(function (c, i) {
+        return candidatoCompactoHtml(prod, c, i);
+      }).join('') + '</div>';
+    }
+  }
+
+  html += '<details class="buscar-manual"><summary>Buscar manualmente</summary>' +
+    '<div class="buscar-manual-box">' +
+    '<input type="search" id="buscar-manual-input" placeholder="Escribí parte del título…" aria-label="Buscar publicación de ML manualmente">' +
+    '<div id="buscar-manual-resultados"></div>' +
+    '</div></details>';
+
+  cont.innerHTML = html;
+  announce('Nueva tarjeta: ' + prod.nombre);
+
+  var candidatosMap = candidatos.slice();
+
+  function seleccionarCandidato(cand) {
+    document.getElementById('cola-contenido').querySelector('#tarjeta-principal').outerHTML = tarjetaHtml(prod, cand);
+    ligarAccionesTarjeta(prod, cand);
+  }
+
+  if (candidatoActivo) {
+    ligarAccionesTarjeta(prod, candidatoActivo);
+    candidatosMap.forEach(function (c, i) {
+      var btn = cont.querySelector('.match-card--compact[data-idx="' + i + '"]');
+      if (btn) btn.addEventListener('click', function () { seleccionarCandidato(c); });
+    });
+  } else {
+    document.getElementById('btn-hay-que-publicar-directo').addEventListener('click', function () {
+      accionProducto(prod, 'publicar').then(function () { toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente(); });
+    });
+    document.getElementById('btn-saltear-directo').addEventListener('click', function () {
+      accionProducto(prod, 'saltear').then(function () { toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente(); });
     });
   }
 
-  cruzarConWC(mlItems, fileName + ' — ' + mlItems.length + ' publicaciones ML leídas');
+  ligarBusquedaManual(prod);
 }
 
-/* ── FUENTE: API de MercadoLibre (cruce ya procesado en el backend) ──
-   El backend cruza catalogo_cache × ml_publicaciones_cache y devuelve las pestañas
-   listas (en_ambos, solo_ml, pausadas, faltantes, excluidos, multiPub). El cliente
-   solo pinta: no rehace joins ni filtros de negocio. */
-function cargarDesdeApiCobertura(){
-  var btn = document.getElementById('btn-api-cob');
-  var info = document.getElementById('api-cob-status');
-  if(btn) btn.disabled = true;
-  if(info){ info.textContent = 'Cruzando publicaciones de ML con WooCommerce…'; info.style.color = 'var(--muted)'; }
-  fetch('/api/cobertura/cruce')
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if(!d.ok) throw new Error(d.error || 'No se pudo cruzar la cobertura');
-      if(!d.resumen || d.resumen.total_ml_pubs === 0){
-        throw new Error('No hay publicaciones en el cache. Andá al Matcher y usá "Traer desde API de ML" primero.');
-      }
-      fuenteApi = true;
-      aplicarCruce(d, d.resumen.total_ml_pubs + ' publicaciones de ML (API)');
-    })
-    .catch(function(err){
-      if(info){ info.textContent = '✗ ' + err.message; info.style.color = 'var(--red)'; }
-      if(btn) btn.disabled = false;
-    });
-}
-
-/* Aplica un cruce ya procesado del backend: marca la zona cargada, guarda datos y pinta. */
-function aplicarCruce(d, etiquetaFuente){
-  cargado = true;
-  document.getElementById('upload-zone').classList.add('loaded');
-  document.getElementById('upload-idle').classList.add('hidden');
-  document.getElementById('upload-done').classList.remove('hidden');
-  document.getElementById('upload-file-name').textContent = '✓ ' + etiquetaFuente;
-
-  datos = {
-    en_ambos:  d.en_ambos  || [],
-    solo_ml:   d.solo_ml   || [],
-    pausadas:  d.pausadas  || [],
-    faltantes: d.faltantes || [],
-    excluidos: d.excluidos || [],
-    multiPub:  d.multiPub  || []
-  };
-  excluidosSet = new Set(datos.excluidos.map(function(e){ return e.id_woo; }));
-
-  var r = d.resumen || {};
-  document.getElementById('num-ambos').textContent = datos.en_ambos.length;
-  document.getElementById('num-wc').textContent    = datos.faltantes.length;
-  document.getElementById('num-ml').textContent    = datos.solo_ml.length;
-  document.getElementById('stat-row').classList.remove('hidden');
-
-  document.getElementById('source-text').textContent =
-    etiquetaFuente + ' · ' + (r.total_wc != null ? r.total_wc : '?') + ' productos WC';
-  document.getElementById('source-badge').classList.remove('hidden');
-
-  actualizarLabelsTabs();
-  document.getElementById('controls').classList.remove('hidden');
-  document.getElementById('filtros-panel').classList.remove('hidden');
-  poblarFiltros();
-  render();
-}
-
-/* Actualiza los contadores de las pestañas (problemas / faltantes / multi-publicación). */
-function actualizarLabelsTabs(){
-  if(!datos) return;
-  var nProb = datos.solo_ml.length + datos.pausadas.length;
-  document.querySelectorAll('.pill-tab').forEach(function(b){
-    if(b.dataset.tab === 'problemas') b.textContent = '⚠ Problemas' + (nProb ? ' ('+nProb+')' : '');
-    if(b.dataset.tab === 'faltantes') b.textContent = '🎯 Faltantes ML' + (datos.faltantes.length ? ' ('+datos.faltantes.length+')' : '');
-    if(b.dataset.tab === 'multipub')  b.textContent = '🔁 Multi-publicación' + (datos.multiPub.length ? ' ('+datos.multiPub.length+')' : '');
-  });
-}
-
-/* Re-trae el cruce del backend (tras marcar/reactivar "solo local") sin resetear la UI. */
-function refrescarCruceApi(){
-  return fetch('/api/cobertura/cruce')
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if(!d.ok) throw new Error(d.error || 'No se pudo recargar la cobertura');
-      datos = {
-        en_ambos:  d.en_ambos  || [],
-        solo_ml:   d.solo_ml   || [],
-        pausadas:  d.pausadas  || [],
-        faltantes: d.faltantes || [],
-        excluidos: d.excluidos || [],
-        multiPub:  d.multiPub  || []
-      };
-      excluidosSet = new Set(datos.excluidos.map(function(e){ return e.id_woo; }));
-      document.getElementById('num-wc').textContent = datos.faltantes.length;
-      actualizarLabelsTabs();
-      render();
-    });
-}
-
-/* Tail compartido: marca la zona cargada, trae el catálogo WC y cruza */
-function cruzarConWC(mlItems, etiquetaFuente){
-  cargado = true;
-  document.getElementById('upload-zone').classList.add('loaded');
-  document.getElementById('upload-idle').classList.add('hidden');
-  document.getElementById('upload-done').classList.remove('hidden');
-  document.getElementById('upload-file-name').textContent = '✓ ' + etiquetaFuente;
-  document.getElementById('lista').innerHTML = '<div class="empty"><span class="spinner"></span>Cargando catálogo WooCommerce…</div>';
-
-  Promise.all([
-    fetch('/api/woo/catalogo').then(function(r){ return r.json(); }),
-    fetch('/api/cobertura/exclusiones').then(function(r){ return r.json(); }).catch(function(){ return {ok:false}; })
-  ]).then(function(res){
-    var d = res[0], ex = res[1];
-    if(!d.ok) throw new Error(d.error || 'Error cargando catálogo WC');
-    var wcProductos = d.productos || d.items || d.data || [];
-    excluidosSet = new Set((ex && ex.ok && Array.isArray(ex.data) ? ex.data : []).map(function(e){ return e.id_woo; }));
-    cruzar(mlItems, wcProductos, etiquetaFuente);
-  }).catch(function(err){
-    document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--red)">Error al cargar catálogo WC: ' + esc(err.message) + '</div>';
-  });
-}
-
-function cruzar(mlItems, wcProductos, fileName){
-  fuenteApi = false;   // fuente Excel: el cruce se recomputa en el cliente
-  /* Índice WC por SKU */
-  var wcPorSku = {};
-  wcProductos.forEach(function(p){
-    var s = String(p.sku||'').trim();
-    if(s) wcPorSku[s] = p;
-  });
-
-  /* Índice ML: set de SKUs presentes + conteo de publicaciones por SKU */
-  var skusEnML = new Set();
-  var conteoPorSku = new Map();
-  mlItems.forEach(function(m){
-    if(!m.ml_sku) return;
-    skusEnML.add(m.ml_sku);
-    conteoPorSku.set(m.ml_sku, (conteoPorSku.get(m.ml_sku) || 0) + 1);
-  });
-
-  /* EN AMBOS */
-  var enAmbos = [];
-  mlItems.forEach(function(m){
-    if(!m.ml_sku) return;
-    var wc = wcPorSku[m.ml_sku];
-    if(wc){
-      enAmbos.push({
-        nombre:     wc.nombre,
-        sku:        wc.sku,
-        stock_wc:   wc.stock,
-        /* Mismos campos de catalogo_cache que arma el backend en computarCruce, para
-           que los filtros (categoría/marca/precio/imagen/GTIN) también funcionen en
-           el modo Excel. wc viene de /api/woo/catalogo con SELECT *, así que ya trae
-           todas las columnas; solo hay que propagarlas. */
-        marca:          wc.marca ?? null,
-        categorias_json: wc.categorias_json ?? null,
-        precio:         wc.precio ?? null,
-        img:            wc.img ?? null,
-        gtin:           wc.gtin ?? null,
-        actualizado_en: wc.actualizado_en ?? null,
-        ml_title:   m.ml_title,
-        ml_item_id: m.ml_item_id,
-        ml_var_id:  m.ml_variation_id,
-        ml_status:  m.ml_status,
-        ml_variante: m.ml_variante
+var buscarManualDebounce = null;
+function ligarBusquedaManual(prod) {
+  var input = document.getElementById('buscar-manual-input');
+  var resultados = document.getElementById('buscar-manual-resultados');
+  input.addEventListener('input', function () {
+    var q = input.value.trim();
+    window.clearTimeout(buscarManualDebounce);
+    if (q.length < 2) { resultados.innerHTML = ''; return; }
+    buscarManualDebounce = window.setTimeout(function () {
+      jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/buscar-ml?q=' + encodeURIComponent(q)).then(function (res) {
+        if (!res.ok || !res.data || !res.data.ok) { resultados.innerHTML = '<div class="vacio">No se pudo buscar.</div>'; return; }
+        var data = res.data.data || [];
+        if (!data.length) { resultados.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
+        resultados.innerHTML = '<div class="candidatos-lista">' + data.slice(0, 20).map(function (m, i) {
+          var cand = { ml_clave: m.ml_clave, ml_item_id: m.ml_item_id, ml_variation_id: m.ml_variation_id, ml_titulo: m.ml_titulo, ml_img: m.ml_img, ml_precio: m.ml_precio, ml_stock: m.ml_stock, ml_status: m.ml_status, diff: m.diff, confianza: m.confianza };
+          return candidatoCompactoHtml(prod, cand, 'm' + i);
+        }).join('') + '</div>';
+        data.forEach(function (m, i) {
+          var cand = { ml_clave: m.ml_clave, ml_item_id: m.ml_item_id, ml_variation_id: m.ml_variation_id, ml_titulo: m.ml_titulo, ml_img: m.ml_img, ml_precio: m.ml_precio, ml_stock: m.ml_stock, ml_status: m.ml_status, diff: m.diff, confianza: m.confianza };
+          var btn = resultados.querySelector('.match-card--compact[data-idx="m' + i + '"]');
+          if (btn) btn.addEventListener('click', function () {
+            var cont = document.getElementById('cola-contenido');
+            var tarjetaVieja = cont.querySelector('#tarjeta-principal');
+            var htmlNuevo = tarjetaHtml(prod, cand);
+            if (tarjetaVieja) tarjetaVieja.outerHTML = htmlNuevo;
+            else cont.insertAdjacentHTML('afterbegin', htmlNuevo);
+            ligarAccionesTarjeta(prod, cand);
+          });
+        });
       });
-    }
+    }, 300);
   });
-
-  /* SOLO ML: sin SKU o SKU no existe en WC. No tiene contraparte en WC, así que los
-     campos de catalogo_cache quedan en null (igual que computarCruce en el backend),
-     por consistencia entre ambos caminos. */
-  var soloMl = mlItems.filter(function(m){
-    return !m.ml_sku || !wcPorSku[m.ml_sku];
-  }).map(function(m){
-    return Object.assign({}, m, {
-      marca: null, categorias_json: null, precio: null,
-      img: null, gtin: null, actualizado_en: null
+}
+function ligarAccionesTarjeta(prod, cand) {
+  var btnConfirmar = document.getElementById('btn-confirmar-vinculo');
+  var friccionCheck = document.getElementById('friccion-check');
+  if (cand.confianza === 'baja' && friccionCheck) {
+    btnConfirmar.disabled = false; // no se deshabilita del todo (el usuario puede tener certeza), pero exige el toque extra
+  }
+  btnConfirmar.addEventListener('click', function () {
+    if (cand.confianza === 'baja') {
+      var chk = document.getElementById('friccion-check');
+      if (chk && !chk.checked) { chk.focus(); return; }
+    }
+    btnConfirmar.disabled = true;
+    confirmarVinculo(prod, cand.ml_clave).then(function (res) {
+      btnConfirmar.disabled = false;
+      if (!res.ok) { toast('No se pudo guardar. Reintentá.', 'error'); return; }
+      if (res.data.estado === 'vinculado') {
+        toast('Vinculado a ' + res.data.sku + ' → ' + cand.ml_item_id, 'ok', function () { deshacerVinculo(cand.ml_clave); });
+      } else {
+        toast('Guardado · se sincroniza con ML apenas se pueda', 'pendiente', function () { deshacerVinculo(cand.ml_clave); });
+      }
+      avanzarSiguiente();
     });
   });
 
-  /* Publicaciones pausadas/inactivas (están en ambos pero con problema) */
-  var pausadas = enAmbos.filter(function(r){
-    var st = (r.ml_status||'').toLowerCase();
-    return st && st !== 'active' && st !== 'activa';
+  document.getElementById('btn-solo-local').addEventListener('click', function () {
+    accionProducto(prod, 'descartar').then(function () { toast('Marcado como "solo local".', 'ok'); avanzarSiguiente(); });
   });
-
-  /* Caches para recomputar faltantes/multi-publicación al marcar/desmarcar "solo local" */
-  wcCache = wcProductos;
-  skusEnMLCache = skusEnML;
-  skusEnMLConteo = conteoPorSku;
-  mlItemsCache = mlItems;
-
-  datos = {
-    en_ambos: enAmbos,
-    solo_ml:  soloMl,
-    pausadas: pausadas,
-    faltantes: [],
-    excluidos: [],
-    multiPub: []
-  };
-  recomputarFaltantes();
-  recomputarMultiPub();
-
-  /* Actualizar stats */
-  document.getElementById('num-ambos').textContent = enAmbos.length;
-  document.getElementById('num-wc').textContent    = datos.faltantes.length;
-  document.getElementById('num-ml').textContent    = soloMl.length;
-  document.getElementById('stat-row').classList.remove('hidden');
-
-  /* Source badge */
-  document.getElementById('source-text').textContent = 'Excel ML: ' + fileName + ' · ' + mlItems.length + ' publicaciones · ' + wcProductos.length + ' productos WC';
-  document.getElementById('source-badge').classList.remove('hidden');
-
-  /* Controls */
-  /* Actualizar label del tab de problemas */
-  var nProb = soloMl.length + pausadas.length;
-  document.querySelectorAll('.pill-tab').forEach(function(b){
-    if(b.dataset.tab === 'problemas') b.textContent = '⚠ Problemas' + (nProb ? ' ('+nProb+')' : '');
+  document.getElementById('btn-hay-que-publicar').addEventListener('click', function () {
+    accionProducto(prod, 'publicar').then(function () { toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente(); });
   });
-  document.getElementById('controls').classList.remove('hidden');
-  document.getElementById('filtros-panel').classList.remove('hidden');
-  poblarFiltros();
-  render();
+  document.getElementById('btn-saltear').addEventListener('click', function () {
+    accionProducto(prod, 'saltear').then(function () { toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente(); });
+  });
+  // Abrir en ML NO consume la tarjeta: target=_blank ya lo garantiza, sin listener extra.
 }
 
-/* Recalcula faltantes (y la lista de excluidos) desde los caches y el estado actual */
-function recomputarFaltantes(){
-  if(!datos) return;
-  datos.faltantes = wcCache.filter(esFaltante);
-  datos.excluidos = wcCache.filter(function(p){ return excluidosSet.has(p.id_woo); });
-  var el = document.getElementById('num-wc');
-  if(el) el.textContent = datos.faltantes.length;
-  document.querySelectorAll('.pill-tab').forEach(function(b){
-    if(b.dataset.tab === 'faltantes') b.textContent = '🎯 Faltantes ML' + (datos.faltantes.length ? ' ('+datos.faltantes.length+')' : '');
+function confirmarVinculo(prod, mlClave) {
+  return jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/confirmar', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ml_clave: mlClave }),
+  });
+}
+function accionProducto(prod, accion) {
+  return jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/' + accion, { method: 'POST' });
+}
+function deshacerVinculo(clave) {
+  jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(clave) + '/deshacer', { method: 'POST' }).then(function (res) {
+    if (res.ok && res.data && res.data.ok) { toast('Vínculo deshecho.', 'ok'); return; }
+    // Solo el 502 fail_closed significa que ML fue consultado y no confirmó; el resto de los
+    // casos (sin conexión, vínculo ya inexistente) no pueden afirmar eso sin haber pasado por ML.
+    if (res.status === 0) { toast('No se pudo conectar con el servidor. Reintentá.', 'error'); return; }
+    if (res.status === 404) { toast('El vínculo ya no existe (puede que se haya deshecho antes). No hace falta reintentar.', 'error'); return; }
+    if (res.status === 502) { toast('ML no confirmó la desvinculación. No se cambió nada.', 'error'); return; }
+    toast('No se pudo deshacer. Reintentá.', 'error');
   });
 }
 
-/* Recalcula multi-publicación (SKU con > 2 publicaciones ML) desde los caches y el estado actual */
-function recomputarMultiPub(){
-  if(!datos) return;
-  datos.multiPub = wcCache.filter(function(p){ return esMultiPublicacion(p); });
-  document.querySelectorAll('.pill-tab').forEach(function(b){
-    if(b.dataset.tab === 'multipub') b.textContent = '🔁 Multi-publicación' + (datos.multiPub.length ? ' ('+datos.multiPub.length+')' : '');
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: HISTORIAL
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var histDebounce = null;
+document.getElementById('hist-buscar').addEventListener('input', function () {
+  window.clearTimeout(histDebounce);
+  histDebounce = window.setTimeout(cargarHistorial, 250);
+});
+
+function cargarHistorial() {
+  var q = document.getElementById('hist-buscar').value.trim();
+  jsonFetch('/api/cobertura/historial?q=' + encodeURIComponent(q)).then(function (res) {
+    var cont = document.getElementById('hist-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar el historial.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin movimientos todavía.</div>'; return; }
+    var pendientes = data.filter(function (r) { return r.tipo === 'vinculo' && r.pendiente_sync; });
+    var resto = data.filter(function (r) { return !(r.tipo === 'vinculo' && r.pendiente_sync); });
+    var html = '';
+    if (pendientes.length) {
+      html += '<div class="hist-grupo-head">' + pendientes.length + ' pendientes de sincronizar</div>';
+      html += '<div class="gestion-lista">' + pendientes.map(histRowHtml).join('') + '</div>';
+    }
+    html += '<div class="gestion-lista" style="margin-top:10px;">' + resto.map(histRowHtml).join('') + '</div>';
+    cont.innerHTML = html;
+    data.forEach(function (r) {
+      var btn = cont.querySelector('[data-deshacer="' + r.tipo + '-' + (r.clave || r.id_woo) + '"]');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        if (r.tipo === 'vinculo') {
+          jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(r.clave) + '/deshacer', { method: 'POST' }).then(function (res2) {
+            if (res2.ok && res2.data && res2.data.ok) { toast('Deshecho.', 'ok'); cargarHistorial(); }
+            else toast('No se pudo deshacer.', 'error');
+          });
+        } else {
+          jsonFetch('/api/cobertura/exclusiones/' + r.id_woo + '/revertir', { method: 'DELETE' }).then(function (res2) {
+            if (res2.ok && res2.data && res2.data.ok) { toast('Revertido.', 'ok'); cargarHistorial(); }
+            else toast('No se pudo revertir.', 'error');
+          });
+        }
+      });
+    });
+  });
+}
+function histRowHtml(r) {
+  var estado = r.tipo === 'vinculo'
+    ? (r.pendiente_sync
+      ? '<span class="estado-pendiente"><span aria-hidden="true">↻</span>Guardado · se sincroniza con ML apenas se pueda</span>'
+      : '<span class="estado-vinculado"><span aria-hidden="true">✓</span>Vinculado a <span class="mono">' + esc(r.clave) + '</span></span>')
+    : '<span style="color:var(--muted);">Solo local</span>';
+  return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(r.nombre) + '</div><div class="meta">' + fecha(r.fecha) + ' · ' + esc(r.sku || '—') + '</div>' + estado + '</div>' +
+    '<button type="button" class="mini-btn" data-deshacer="' + r.tipo + '-' + (r.clave || r.id_woo) + '">Deshacer</button></div>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: HAY QUE PUBLICARLO
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+document.getElementById('btn-export-csv').addEventListener('click', function () {
+  window.location.href = '/api/cobertura/hay-que-publicar/export.csv';
+});
+
+function cargarPublicar() {
+  jsonFetch('/api/cobertura/hay-que-publicar').then(function (res) {
+    var cont = document.getElementById('publicar-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar la lista.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Nada pendiente de publicar.</div>'; return; }
+    cont.innerHTML = '<div class="gestion-lista">' + data.map(function (r) {
+      return '<div class="item-row">' +
+        '<input type="checkbox" ' + (r.tachado ? 'checked' : '') + ' data-tachar="' + r.id_woo + '" aria-label="Marcar como hecho: ' + esc(r.nombre) + '">' +
+        '<div class="flex1"><div class="nombre">' + esc(r.nombre) + '</div><div class="meta">' + esc(r.sku || '—') + ' · ' + esc(r.marca || '—') + ' · ' + money(r.valor) + '</div></div>' +
+        '<button type="button" class="mini-btn" data-copiar="' + r.id_woo + '">Copiar datos</button>' +
+        '</div>';
+    }).join('') + '</div>';
+    data.forEach(function (r) {
+      var chk = cont.querySelector('[data-tachar="' + r.id_woo + '"]');
+      chk.addEventListener('change', function () {
+        jsonFetch('/api/cobertura/hay-que-publicar/' + r.id_woo, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tachado: chk.checked }),
+        });
+      });
+      var btnCopiar = cont.querySelector('[data-copiar="' + r.id_woo + '"]');
+      btnCopiar.addEventListener('click', function () {
+        var texto = [r.nombre, r.sku || '', money(r.valor).replace(/[^\d,.-]/g, ''), r.marca || ''].join('\t');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(texto).then(function () { toast('Copiado.', 'ok'); }, function () { toast('No se pudo copiar.', 'error'); });
+        } else {
+          toast('Copiado no disponible en este navegador.', 'error');
+        }
+      });
+    });
   });
 }
 
-/* En fuente API recomputa desde el backend; en fuente Excel, desde los caches locales. */
-function recomputarTrasExclusion(){
-  if(fuenteApi) return refrescarCruceApi();
-  recomputarFaltantes();
-  recomputarMultiPub();
-  render();
-  return Promise.resolve();
-}
-
-/* Marca un producto como "solo local": no debe publicarse en ML → sale de faltantes */
-function marcarSoloLocal(idWoo){
-  var p = null;
-  for(var i=0;i<wcCache.length;i++){ if(wcCache[i].id_woo === idWoo){ p = wcCache[i]; break; } }
-  if(!p && datos){
-    p = (datos.faltantes||[]).concat(datos.multiPub||[]).filter(function(x){ return x.id_woo === idWoo; })[0] || null;
-  }
-  fetch('/api/cobertura/exclusiones', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id_woo: idWoo, sku: p ? p.sku : null, nombre: p ? p.nombre : null })
-  }).then(function(r){ return r.json(); }).then(function(d){
-    if(!d.ok) throw new Error(d.error || 'No se pudo guardar');
-    excluidosSet.add(idWoo);
-    return recomputarTrasExclusion();
-  }).catch(function(err){ alert('Error: ' + err.message); });
-}
-
-/* Reactiva un producto excluido: vuelve a contar como faltante si corresponde */
-function reactivar(idWoo){
-  fetch('/api/cobertura/exclusiones/' + idWoo, { method: 'DELETE' })
-    .then(function(r){ return r.json(); }).then(function(d){
-      if(!d.ok) throw new Error(d.error || 'No se pudo reactivar');
-      excluidosSet.delete(idWoo);
-      return recomputarTrasExclusion();
-    }).catch(function(err){ alert('Error: ' + err.message); });
-}
-
-function toggleExcluidos(){ verExcluidos = !verExcluidos; poblarFiltros(); render(); }
-
-/* ── TABS / BÚSQUEDA ── */
-function setTab(el){
-  document.querySelectorAll('.pill-tab').forEach(function(b){ b.classList.remove('active'); });
-  el.classList.add('active');
-  tabActual = el.dataset.tab;
-  poblarFiltros();
-  render();
-}
-let _busquedaTimer = null;
-function setBusqueda(v){
-  busqueda = v.toLowerCase();
-  clearTimeout(_busquedaTimer);
-  _busquedaTimer = setTimeout(render, 200);
-}
-function filtrar(a, b, c){
-  if(!busqueda) return true;
-  return (a||'').toLowerCase().includes(busqueda)
-      || (b||'').toLowerCase().includes(busqueda)
-      || (c||'').toLowerCase().includes(busqueda);
-}
-
-/* ── FILTROS COMBINABLES + ORDENAMIENTO ── */
-
-/* Stock de una fila: las pestañas WC usan `stock`; en_ambos/pausadas usan `stock_wc`. */
-function stockDe(r){
-  var s = (r.stock != null) ? r.stock : r.stock_wc;
-  return (s == null || s === '') ? null : Number(s);
-}
-function precioDe(r){
-  var p = r.precio;
-  return (p == null || p === '') ? null : Number(p);
-}
-function catsDe(r){ return parseCats(r.categorias_json).map(function(c){ return String(c).trim(); }); }
-
-/* Setters de estado (llamados desde la UI). Cada uno re-renderiza. */
-function setFiltro(campo, valor){ filtros[campo] = valor; render(); }
-function setFiltroNum(campo, valor){
-  var n = (valor === '' || valor == null) ? null : Number(valor);
-  filtros[campo] = (n == null || isNaN(n)) ? null : n;
-  render();
-}
-function setFiltroBool(campo, valor){
-  filtros[campo] = (valor === '' || valor == null) ? null : (valor === '1');
-  render();
-}
-function setOrden(valor){
-  var parts = String(valor).split('|');
-  orden.campo = parts[0] || 'nombre';
-  orden.direccion = parts[1] || 'asc';
-  render();
-}
-function limpiarFiltros(){
-  filtros = { categoria:'', marca:'', stockMin:null, stockMax:null, precioMin:null, precioMax:null, conImagen:null, conGtin:null };
-  orden = { campo:'nombre', direccion:'asc' };
-  var ids = ['f-categoria','f-marca','f-imagen','f-gtin'];
-  ids.forEach(function(id){ var el = document.getElementById(id); if(el) el.value = ''; });
-  ['f-stock-min','f-stock-max','f-precio-min','f-precio-max'].forEach(function(id){ var el = document.getElementById(id); if(el) el.value = ''; });
-  var ord = document.getElementById('f-orden'); if(ord) ord.value = 'nombre|asc';
-  render();
-}
-
-/* Núcleo reutilizable: filtra + ordena un array de filas y devuelve uno nuevo.
-   Función pura (no toca el DOM). La usan todas las ramas de render(). */
-function aplicarFiltrosYOrden(lista){
-  var out = lista.filter(function(r){
-    /* Categoría: la fila debe tener esa categoría entre las suyas. */
-    if(filtros.categoria){
-      if(catsDe(r).indexOf(filtros.categoria) === -1) return false;
+/* Pausar una publicación de ML puede pedir confirmación extra: si la clave es una variación
+   con hermanas, ML no permite pausar solo esa variación — pausaría TODA la publicación,
+   arrastrando las demás. El backend (pausarConAdvertencia en routes/cobertura.js) corta con
+   409 { requiere_confirmacion:true, variaciones_afectadas } ANTES de tocar ML. Este helper es
+   compartido por Multi-publicación y Solo ML (mismo patrón, mismo bug que encontró el
+   revisor en los dos lugares): sin este manejo, un 409 caía en la rama de error genérica y
+   el usuario veía "ML no confirmó la pausa" — un mensaje FALSO, porque ML nunca fue
+   consultado — sin ningún camino para confirmar y seguir. */
+function pausarConConfirmacion(url, onExito) {
+  jsonFetch(url, { method: 'POST' }).then(function (r) {
+    if (r.ok && r.data && r.data.ok) {
+      var extra = r.data.variaciones_afectadas ? ' (arrastró ' + n(r.data.variaciones_afectadas) + ' variación(es) más de la misma publicación).' : '.';
+      toast('Pausada' + extra, 'ok');
+      onExito();
+      return;
     }
-    /* Marca: match exacto. Si la fila no tiene marca y se pidió una, queda fuera. */
-    if(filtros.marca){
-      if(String(r.marca||'').trim() !== filtros.marca) return false;
+    if (r.status === 409 && r.data && r.data.requiere_confirmacion) {
+      var cant = r.data.variaciones_afectadas || 0;
+      var confirma = window.confirm('ML no permite pausar solo esta variación: esto pausa la publicación entera, incluidas ' + cant + ' variación(es) más. ¿Seguir?');
+      if (!confirma) return;
+      jsonFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmado: true }) }).then(function (r2) {
+        if (r2.ok && r2.data && r2.data.ok) {
+          var extra2 = r2.data.variaciones_afectadas ? ' (arrastró ' + n(r2.data.variaciones_afectadas) + ' variación(es) más).' : '.';
+          toast('Pausada' + extra2, 'ok');
+          onExito();
+        } else {
+          toast('ML no confirmó la pausa. No se cambió nada.', 'error');
+        }
+      });
+      return;
     }
-    /* Rango de stock. */
-    var st = stockDe(r);
-    if(filtros.stockMin != null){ if(st == null || st < filtros.stockMin) return false; }
-    if(filtros.stockMax != null){ if(st == null || st > filtros.stockMax) return false; }
-    /* Rango de precio. */
-    var pr = precioDe(r);
-    if(filtros.precioMin != null){ if(pr == null || pr < filtros.precioMin) return false; }
-    if(filtros.precioMax != null){ if(pr == null || pr > filtros.precioMax) return false; }
-    /* Con/sin imagen. */
-    if(filtros.conImagen != null){
-      var tieneImg = !!(r.img && String(r.img).trim());
-      if(tieneImg !== filtros.conImagen) return false;
-    }
-    /* Con/sin GTIN. */
-    if(filtros.conGtin != null){
-      var tieneGtin = !!(r.gtin && String(r.gtin).trim());
-      if(tieneGtin !== filtros.conGtin) return false;
-    }
+    if (r.status === 0) { toast('No se pudo conectar con el servidor. No se cambió nada. Revisá tu conexión y reintentá.', 'error'); return; }
+    // Único caso restante: 502 fail_closed de pausarPublicacionMl, donde ML SÍ fue
+    // consultado y respondió que no — acá "ML no confirmó" es verdad, no una suposición.
+    toast('ML no confirmó la pausa. No se cambió nada.', 'error');
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: MULTI-PUBLICACIÓN
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function cargarMultipub() {
+  jsonFetch('/api/cobertura/multi-publicacion').then(function (res) {
+    var cont = document.getElementById('multipub-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin casos de multi-publicación.</div>'; return; }
+    cont.innerHTML = data.map(function (p) {
+      return '<div class="grupo-sku"><div class="grupo-sku-head">' + esc(p.nombre) + ' — <span class="sku-mono">' + esc(p.sku) + '</span> <span style="color:var(--muted);font-weight:400;">(' + p.publicaciones.length + ' publicaciones)</span></div>' +
+        p.publicaciones.map(function (pub) {
+          return '<div class="pub-row' + (pub.sobreventa ? ' sobreventa' : '') + '">' +
+            '<div class="pub-txt"><span class="pub-mono">' + esc(pub.clave) + '</span> · Estado: ' + esc(pub.status) + ' · Stock ' + n(pub.stock) +
+            (pub.sobreventa ? ' <span class="sobreventa-tag"><span aria-hidden="true">⚠</span>posible sobreventa</span>' : '') + '</div>' +
+            '<div class="pub-acciones">' +
+            '<button type="button" class="mini-btn" data-mc="' + pub.clave + '">' + (pub.marcada_correcta ? '✓ Correcta' : 'Marcar correcta') + '</button>' +
+            '<button type="button" class="mini-btn" data-pausar="' + pub.clave + '">Pausar</button>' +
+            '<button type="button" class="mini-btn" data-desvincular="' + pub.clave + '">Desvincular</button>' +
+            '</div></div>';
+        }).join('') + '</div>';
+    }).join('');
+    cont.querySelectorAll('[data-mc]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        jsonFetch('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function () { toast('Marcada como correcta.', 'ok'); cargarMultipub(); });
+      });
+    });
+    cont.querySelectorAll('[data-pausar]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        pausarConConfirmacion('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.pausar) + '/pausar', cargarMultipub);
+      });
+    });
+    cont.querySelectorAll('[data-desvincular]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (!window.confirm('¿Desvincular esta publicación del SKU?')) return;
+        jsonFetch('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.desvincular) + '/desvincular', { method: 'POST' }).then(function (r) {
+          if (r.ok && r.data && r.data.ok) { toast('Desvinculada.', 'ok'); cargarMultipub(); }
+          else toast('ML no confirmó la desvinculación. No se cambió nada.', 'error');
+        });
+      });
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: SOLO ML
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var soloMlDebounce = null;
+document.getElementById('soloml-buscar').addEventListener('input', function () {
+  window.clearTimeout(soloMlDebounce);
+  soloMlDebounce = window.setTimeout(cargarSoloMl, 250);
+});
+
+function cargarSoloMl() {
+  var q = document.getElementById('soloml-buscar').value.trim();
+  jsonFetch('/api/cobertura/solo-ml?q=' + encodeURIComponent(q) + '&limit=50').then(function (res) {
+    var cont = document.getElementById('soloml-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
+    cont.innerHTML = '<p class="page-sub">' + n(res.data.total) + ' publicaciones sin SKU en total.</p>' +
+      '<div class="gestion-lista">' + data.map(function (r) {
+        return '<div class="solo-ml-row">' +
+          (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="">' : '<div class="mc-thumb"></div>') +
+          '<div class="flex1">' + esc(r.titulo) + '<div class="meta" style="color:var(--muted);font-size:.72rem;">' + esc(r.clave) + ' · ' + money(r.precio) + ' · Stock ' + n(r.available_quantity) + '</div></div>' +
+          '<div class="pub-acciones">' +
+          '<button type="button" class="mini-btn" data-mc="' + r.clave + '">' + (r.marcada_correcta ? '✓ Correcta' : 'Marcar correcta') + '</button>' +
+          '<button type="button" class="mini-btn" data-pausar="' + r.clave + '">Pausar</button>' +
+          '<button type="button" class="mini-btn" data-vincular-toggle="' + r.clave + '">Vincular a producto</button>' +
+          '</div>' +
+          '<div class="buscador-inline" hidden data-vincular-box="' + r.clave + '">' +
+          '<input type="text" placeholder="Buscar producto web por nombre o SKU…" aria-label="Buscar producto web para vincular a ' + esc(r.titulo) + '" data-vincular-input="' + r.clave + '">' +
+          '<div data-vincular-resultados="' + r.clave + '"></div>' +
+          '</div>' +
+          '</div>';
+      }).join('') + '</div>';
+
+    cont.querySelectorAll('[data-mc]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        jsonFetch('/api/cobertura/solo-ml/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function () { toast('Marcada como correcta.', 'ok'); cargarSoloMl(); });
+      });
+    });
+    cont.querySelectorAll('[data-pausar]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        pausarConConfirmacion('/api/cobertura/solo-ml/' + encodeURIComponent(btn.dataset.pausar) + '/pausar', cargarSoloMl);
+      });
+    });
+    cont.querySelectorAll('[data-vincular-toggle]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var clave = btn.dataset.vincularToggle;
+        var box = cont.querySelector('[data-vincular-box="' + clave + '"]');
+        box.hidden = !box.hidden;
+      });
+    });
+    cont.querySelectorAll('[data-vincular-input]').forEach(function (input) {
+      var clave = input.dataset.vincularInput;
+      var resultados = cont.querySelector('[data-vincular-resultados="' + clave + '"]');
+      var deb = null;
+      input.addEventListener('input', function () {
+        window.clearTimeout(deb);
+        var q2 = input.value.trim();
+        if (q2.length < 2) { resultados.innerHTML = ''; return; }
+        deb = window.setTimeout(function () {
+          jsonFetch('/api/woo/catalogo').then(function (r) {
+            if (!r.ok || !r.data) { resultados.innerHTML = ''; return; }
+            var lista = (r.data.data || r.data || []).filter(function (p) {
+              var texto = (String(p.nombre || '') + ' ' + String(p.sku || '')).toLowerCase();
+              return texto.indexOf(q2.toLowerCase()) !== -1;
+            }).slice(0, 8);
+            resultados.innerHTML = lista.map(function (p) {
+              return '<div class="resultado-vincular"><span>' + esc(p.nombre) + ' (' + esc(p.sku || '—') + ')</span><button type="button" class="mini-btn" data-elegir="' + p.id_woo + '">Vincular</button></div>';
+            }).join('') || '<div class="meta">Sin resultados.</div>';
+            resultados.querySelectorAll('[data-elegir]').forEach(function (btn2) {
+              btn2.addEventListener('click', function () {
+                jsonFetch('/api/cobertura/solo-ml/' + encodeURIComponent(clave) + '/vincular', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id_woo: Number(btn2.dataset.elegir) }),
+                }).then(function (res2) {
+                  if (!res2.ok || !res2.data || !res2.data.ok) { toast('No se pudo vincular.', 'error'); return; }
+                  toast(res2.data.estado === 'vinculado' ? 'Vinculado.' : 'Guardado · se sincroniza con ML apenas se pueda', res2.data.estado === 'vinculado' ? 'ok' : 'pendiente');
+                  cargarSoloMl();
+                });
+              });
+            });
+          });
+        }, 300);
+      });
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: SIN STOCK
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function cargarSinStock() {
+  jsonFetch('/api/cobertura/sin-stock').then(function (res) {
+    var cont = document.getElementById('sinstock-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Nada sin stock por ahora.</div>'; return; }
+    cont.innerHTML = '<div class="gestion-lista">' + data.map(function (p) {
+      return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(p.nombre) + '</div><div class="meta">' + esc(p.sku || '—') + ' · ' + esc(p.marca || '—') + '</div></div></div>';
+    }).join('') + '</div>';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: PROBLEMAS (publicaciones pausadas que siguen "en ambos")
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var problemasCache = [];
+function cargarProblemas() {
+  jsonFetch('/api/cobertura/cruce').then(function (res) {
+    var cont = document.getElementById('prob-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    problemasCache = res.data.pausadas || [];
+    var marcas = Array.from(new Set(problemasCache.map(function (p) { return p.marca; }).filter(Boolean))).sort();
+    var selMarca = document.getElementById('prob-marca');
+    selMarca.innerHTML = '<option value="">Todas las marcas</option>' + marcas.map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('');
+    var cats = Array.from(new Set(problemasCache.flatMap(catsDe))).sort();
+    var selCat = document.getElementById('prob-categoria');
+    selCat.innerHTML = '<option value="">Todas las categorías</option>' + cats.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
+    renderProblemas();
+  });
+}
+document.getElementById('prob-marca').addEventListener('change', renderProblemas);
+document.getElementById('prob-categoria').addEventListener('change', renderProblemas);
+function renderProblemas() {
+  var marca = document.getElementById('prob-marca').value;
+  var categoria = document.getElementById('prob-categoria').value;
+  var cont = document.getElementById('prob-lista');
+  var filtrado = problemasCache.filter(function (p) {
+    if (marca && p.marca !== marca) return false;
+    if (categoria && catsDe(p).indexOf(categoria) === -1) return false;
     return true;
   });
+  if (!filtrado.length) { cont.innerHTML = '<div class="vacio" style="color:var(--success);">✓ Sin problemas detectados.</div>'; return; }
+  cont.innerHTML = '<div class="gestion-lista">' + filtrado.map(function (p) {
+    return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(p.nombre) + '</div><div class="meta">' + esc(p.sku || '—') + ' · ML: ' + esc(p.ml_status) + ' · <a href="' + mlUrl(p.ml_item_id) + '" target="_blank" rel="noopener">abrir en ML</a></div></div></div>';
+  }).join('') + '</div>';
+}
 
-  var dir = orden.direccion === 'desc' ? -1 : 1;
-  var campo = orden.campo;
-  out.sort(function(a, b){
-    var va, vb;
-    if(campo === 'stock'){ va = stockDe(a); vb = stockDe(b); return cmpNum(va, vb, dir); }
-    if(campo === 'precio'){ va = precioDe(a); vb = precioDe(b); return cmpNum(va, vb, dir); }
-    if(campo === 'actualizado'){
-      va = a.actualizado_en || ''; vb = b.actualizado_en || '';
-      return cmpTexto(va, vb, dir);
-    }
-    if(campo === 'marca'){ va = String(a.marca||''); vb = String(b.marca||''); return cmpTexto(va, vb, dir); }
-    if(campo === 'categoria'){ va = (catsDe(a)[0]||''); vb = (catsDe(b)[0]||''); return cmpTexto(va, vb, dir); }
-    if(campo === 'sku'){ va = String(a.sku||''); vb = String(b.sku||''); return cmpTexto(va, vb, dir); }
-    /* nombre por defecto */
-    va = String(a.nombre || a.ml_title || ''); vb = String(b.nombre || b.ml_title || '');
-    return cmpTexto(va, vb, dir);
+/* ═══════════════════════════════════════════════════════════════════════
+ * Actualizar desde ML (botón del topbar) — placeholder de refresco manual:
+ * dispara la sincronización que ya existe en el proyecto (sync-ml) para no
+ * duplicar lógica; acá solo se recarga la vista actual después.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+document.getElementById('btn-actualizar-ml').addEventListener('click', function () {
+  var btn = document.getElementById('btn-actualizar-ml');
+  var txt = document.getElementById('btn-actualizar-txt');
+  txt.textContent = 'Actualizando…';
+  btn.disabled = true;
+  jsonFetch('/api/sync/estado').then(function () {
+    btn.disabled = false;
+    txt.textContent = 'Actualizar desde ML';
+    router();
+    toast('Datos actualizados.', 'ok');
   });
-  return out;
-}
-/* Comparadores: los vacíos/null van SIEMPRE al final, independiente de la dirección
-   (el sentinel null-last no se multiplica por dir; solo la comparación real entre
-   valores presentes se ve afectada por el sentido asc/desc). */
-function cmpNum(a, b, dir){
-  if(dir == null) dir = 1;  // blindaje: sin dir → ascendente (evita NaN silencioso)
-  if(a == null && b == null) return 0;
-  if(a == null) return 1;   // a vacío → después de b (sin importar dir)
-  if(b == null) return -1;  // b vacío → después de a
-  return (a - b) * dir;
-}
-function cmpTexto(a, b, dir){
-  if(dir == null) dir = 1;  // blindaje: sin dir → ascendente (evita NaN silencioso)
-  if(!a && !b) return 0;
-  if(!a) return 1;
-  if(!b) return -1;
-  return a.localeCompare(b, 'es', { sensitivity:'base', numeric:true }) * dir;
-}
+});
 
-/* Lista cruda (sin filtrar) de la pestaña actual — base para poblar los selects. */
-function listaCrudaTab(){
-  if(!datos) return [];
-  if(tabActual === 'ambos') return datos.en_ambos;
-  if(tabActual === 'problemas') return datos.solo_ml.concat(datos.pausadas);
-  if(tabActual === 'faltantes') return verExcluidos ? datos.excluidos : datos.faltantes;
-  if(tabActual === 'multipub') return datos.multiPub;
-  if(tabActual === 'solo_ml') return datos.solo_ml;
-  return [];
-}
+/* ═══════════════════════════════════════════════════════════════════════
+ * Arranque
+ * ═══════════════════════════════════════════════════════════════════════ */
 
-/* Puebla los selects de categoría y marca con los valores únicos presentes en la
-   pestaña actual, preservando la selección vigente si sigue disponible. */
-function poblarFiltros(){
-  var lista = listaCrudaTab();
-  var cats = {}, marcas = {};
-  lista.forEach(function(r){
-    catsDe(r).forEach(function(c){ if(c) cats[c] = true; });
-    var m = String(r.marca||'').trim();
-    if(m) marcas[m] = true;
-  });
-  llenarSelect('f-categoria', Object.keys(cats).sort(function(a,b){ return cmpTexto(a,b,1); }), filtros.categoria, 'Todas');
-  llenarSelect('f-marca', Object.keys(marcas).sort(function(a,b){ return cmpTexto(a,b,1); }), filtros.marca, 'Todas');
-}
-function llenarSelect(id, valores, seleccionado, labelVacio){
-  var sel = document.getElementById(id);
-  if(!sel) return;
-  var existe = valores.indexOf(seleccionado) !== -1;
-  var html = '<option value="">' + labelVacio + '</option>';
-  html += valores.map(function(v){
-    return '<option value="'+esc(v)+'"'+(v===seleccionado?' selected':'')+'>'+esc(v)+'</option>';
-  }).join('');
-  sel.innerHTML = html;
-  /* Si el valor seleccionado ya no está en la lista de la pestaña, se resetea el filtro. */
-  if(seleccionado && !existe){
-    if(id === 'f-categoria') filtros.categoria = '';
-    if(id === 'f-marca') filtros.marca = '';
-    sel.value = '';
-  } else {
-    sel.value = seleccionado || '';
-  }
-}
-
-/* ── HELPERS ── */
-function variantePill(v){
-  return v ? '<span class="pill-variante" title="'+esc(v)+'">'+esc(v)+'</span>' : '';
-}
-
-/* ── RENDER ── */
-function render(){
-  renderInterno();
-  actualizarCount();
-}
-/* Cuenta las filas efectivamente mostradas y lo refleja en el panel de filtros. */
-function actualizarCount(){
-  var el = document.getElementById('filtros-count');
-  if(!el) return;
-  var filas = document.querySelectorAll('#lista .item-row');
-  var n = filas ? filas.length : 0;
-  el.textContent = n === 1 ? '1 resultado' : (n + ' resultados');
-}
-function renderInterno(){
-  if(!datos) return;
-  var html = '', lista;
-
-  if(tabActual === 'ambos'){
-    lista = aplicarFiltrosYOrden(datos.en_ambos.filter(function(r){ return filtrar(r.nombre, r.sku, r.ml_item_id); }));
-    if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty">Sin resultados.</div>'; return; }
-    html += '<div class="section-label">' + lista.length + ' productos presentes en WooCommerce y MercadoLibre</div>';
-    html += lista.map(function(r){
-      var st = (r.ml_status||'').toLowerCase();
-      var activo = !st || st === 'active' || st === 'activa';
-      var badge = activo
-        ? '<span class="badge badge-ok">SKU ✓</span>'
-        : '<span class="badge badge-warn">' + esc(r.ml_status) + '</span>';
-      return '<div class="item-row ok">'
-        + '<div class="item-icon ok">✓</div>'
-        + '<div class="item-body">'
-        + '<div class="item-name">' + esc(r.nombre) + '</div>'
-        + '<div class="item-meta">'
-        + '<span class="meta-pill pill-wc">WooCommerce</span>'
-        + '<span class="meta-pill pill-ml">MercadoLibre</span>'
-        + '<span class="pill-sku match">SKU: ' + esc(r.sku) + '</span>'
-        + variantePill(r.ml_variante)
-        + (r.stock_wc!=null ? '<span class="pill-stock">Stock WC: '+r.stock_wc+'</span>' : '')
-        + '<span class="item-meta-id">' + esc(r.ml_item_id) + (r.ml_var_id?'|'+r.ml_var_id:'') + '</span>'
-        + '</div></div>'
-        + '<div class="item-badges">' + badge + '</div>'
-        + '</div>';
-    }).join('');
-
-  } else if(tabActual === 'problemas'){
-    var sinWc = aplicarFiltrosYOrden(datos.solo_ml.filter(function(r){ return filtrar(r.ml_title, r.ml_sku, r.ml_item_id); }));
-    var pausadas = aplicarFiltrosYOrden(datos.pausadas.filter(function(r){ return filtrar(r.nombre, r.sku, r.ml_item_id); }));
-    if(!sinWc.length && !pausadas.length){
-      document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--green)">✓ Sin problemas detectados.</div>';
-      return;
-    }
-    if(sinWc.length){
-      html += '<div class="section-label">⚠ ' + sinWc.length + ' publicaciones ML sin producto WooCommerce activo</div>';
-      html += sinWc.map(function(r){
-        var skuPill = r.ml_sku
-          ? '<span class="pill-sku mismatch">SKU ML: ' + esc(r.ml_sku) + ' — no existe en WC</span>'
-          : '<span class="pill-sku nosku">Sin SKU</span>';
-        return '<div class="item-row warn">'
-          + '<div class="item-icon warn">⚠</div>'
-          + '<div class="item-body">'
-          + '<div class="item-name">' + esc(r.ml_title||'(sin título)') + '</div>'
-          + '<div class="item-meta">'
-          + '<span class="meta-pill pill-ml">MercadoLibre</span>'
-          + skuPill
-          + variantePill(r.ml_variante)
-          + '<span class="item-meta-id">' + esc(r.ml_item_id) + '</span>'
-          + '</div></div>'
-          + '<div class="item-badges"><span class="badge badge-warn">Sin WC</span></div>'
-          + '</div>';
-      }).join('');
-    }
-    if(pausadas.length){
-      html += '<div class="section-label">⏸ ' + pausadas.length + ' publicaciones pausadas o inactivas</div>';
-      html += pausadas.map(function(r){
-        return '<div class="item-row ok-warn">'
-          + '<div class="item-icon ok-warn">⏸</div>'
-          + '<div class="item-body">'
-          + '<div class="item-name">' + esc(r.nombre) + '</div>'
-          + '<div class="item-meta">'
-          + '<span class="meta-pill pill-wc">WooCommerce</span>'
-          + '<span class="meta-pill pill-ml">MercadoLibre</span>'
-          + '<span class="pill-sku">' + esc(r.sku) + '</span>'
-          + '<span class="pill-sku mismatch">Estado: ' + esc(r.ml_status) + '</span>'
-          + '</div></div>'
-          + '<div class="item-badges"><span class="badge badge-warn">' + esc(r.ml_status) + '</span></div>'
-          + '</div>';
-      }).join('');
-    }
-
-  } else if(tabActual === 'faltantes'){
-    /* Barra: alternar entre faltantes y excluidos "solo local" */
-    var nExcl = datos.excluidos.length;
-    html += '<div class="faltantes-bar">'
-      + '<button class="btn-toggle-excl' + (verExcluidos ? ' on' : '') + '" onclick="toggleExcluidos()">'
-      + (verExcluidos ? '← Volver a faltantes' : ('Ver excluidos (solo local)' + (nExcl ? ' · ' + nExcl : ''))) + '</button>'
-      + '</div>';
-
-    if(verExcluidos){
-      var lex = aplicarFiltrosYOrden(datos.excluidos.filter(function(r){ return filtrar(r.nombre, r.sku, ''); }));
-      if(!lex.length){ document.getElementById('lista').innerHTML = html + '<div class="empty">No hay productos marcados como solo local.</div>'; return; }
-      html += '<div class="section-label">' + lex.length + ' productos marcados como "solo local" (excluidos de cobertura)</div>';
-      html += lex.map(function(r){
-        return '<div class="item-row">'
-          + '<div class="item-icon" style="background:var(--surface2);color:var(--muted)">🏠</div>'
-          + '<div class="item-body">'
-          + '<div class="item-name">' + esc(r.nombre) + '</div>'
-          + '<div class="item-meta">'
-          + (r.sku ? '<span class="pill-sku">SKU: '+esc(r.sku)+'</span>' : '<span class="pill-sku nosku">Sin SKU</span>')
-          + (r.stock!=null ? '<span class="pill-stock">Stock: '+r.stock+'</span>' : '')
-          + '</div></div>'
-          + '<div class="item-badges"><button class="btn-accion" onclick="reactivar('+r.id_woo+')">↺ Reactivar</button></div>'
-          + '</div>';
-      }).join('');
-      document.getElementById('lista').innerHTML = html;
-      return;
-    }
-
-    lista = aplicarFiltrosYOrden(datos.faltantes.filter(function(r){ return filtrar(r.nombre, r.sku, ''); }));
-    if(!lista.length){
-      var msgVacio = datos.faltantes.length
-        ? '<div class="empty">Sin resultados para tu búsqueda.</div>'
-        : '<div class="empty" style="color:var(--green)">✓ No hay faltantes: todos los productos vendibles están en ML.</div>';
-      document.getElementById('lista').innerHTML = html + msgVacio; return;
-    }
-    html += '<div class="section-label">' + lista.length + ' productos vendibles (stock&gt;0) sin publicación en MercadoLibre</div>';
-    html += lista.map(function(r){
-      var cats = parseCats(r.categorias_json);
-      var catPill = cats.length ? '<span class="pill-cat">'+esc(cats[0])+'</span>' : '';
-      var matcherUrl = '/herramientas/matcher/?buscar=' + encodeURIComponent(r.nombre||'');
-      return '<div class="item-row onlywc">'
-        + '<div class="item-icon onlywc">WC</div>'
-        + '<div class="item-body">'
-        + '<div class="item-name">' + esc(r.nombre) + '</div>'
-        + '<div class="item-meta">'
-        + '<span class="pill-sku">SKU: '+esc(r.sku)+'</span>'
-        + (r.stock!=null ? '<span class="pill-stock">Stock: '+r.stock+'</span>' : '')
-        + catPill
-        + '</div></div>'
-        + '<div class="item-badges">'
-        + '<a class="btn-accion accent" href="'+esc(matcherUrl)+'" target="_blank" rel="noopener">Buscar en Matcher →</a>'
-        + '<button class="btn-accion" onclick="marcarSoloLocal('+r.id_woo+')">Solo local</button>'
-        + '</div>'
-        + '</div>';
-    }).join('');
-
-  } else if(tabActual === 'multipub'){
-    lista = aplicarFiltrosYOrden(datos.multiPub.filter(function(r){ return filtrar(r.nombre, r.sku, ''); }));
-    if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty" style="color:var(--green)">✓ Ningún producto tiene más de 2 publicaciones en MercadoLibre.</div>'; return; }
-    html += '<div class="section-label">' + lista.length + ' productos con más de 2 publicaciones en MercadoLibre (revisar)</div>';
-    html += lista.map(function(r){
-      var sku = String(r.sku||'').trim();
-      /* Fuente API: el backend ya adjunta conteo + publicaciones. Fuente Excel: caches locales. */
-      var n = (r.conteo != null) ? r.conteo : (skusEnMLConteo.get(sku) || 0);
-      var pubs = r.publicaciones || mlItemsCache.filter(function(m){ return m.ml_sku === sku; });
-      var detalle = pubs.map(function(m){
-        return '<span class="item-meta-id">' + esc(m.ml_item_id) + (m.ml_variation_id ? '|'+esc(m.ml_variation_id) : '')
-          + (m.ml_variante ? ' · '+esc(m.ml_variante) : '') + '</span>';
-      }).join('');
-      return '<div class="item-row warn">'
-        + '<div class="item-icon warn">🔁</div>'
-        + '<div class="item-body">'
-        + '<div class="item-name">' + esc(r.nombre) + '</div>'
-        + '<div class="item-meta">'
-        + '<span class="pill-sku">SKU: '+esc(r.sku)+'</span>'
-        + '<span class="pill-stock">'+n+' publicaciones ML</span>'
-        + detalle
-        + '</div></div>'
-        + '<div class="item-badges"><span class="badge badge-warn">Revisar</span></div>'
-        + '</div>';
-    }).join('');
-
-  } else if(tabActual === 'solo_ml'){
-    lista = aplicarFiltrosYOrden(datos.solo_ml.filter(function(r){ return filtrar(r.ml_title, r.ml_sku, r.ml_item_id); }));
-    if(!lista.length){ document.getElementById('lista').innerHTML = '<div class="empty">Sin resultados.</div>'; return; }
-    html += '<div class="section-label">' + lista.length + ' publicaciones en ML sin producto en WooCommerce</div>';
-    html += lista.map(function(r){
-      var skuPill = r.ml_sku
-        ? '<span class="pill-sku mismatch">SKU: '+esc(r.ml_sku)+' — no en WC</span>'
-        : '<span class="pill-sku nosku">Sin SKU</span>';
-      return '<div class="item-row onlyml">'
-        + '<div class="item-icon onlyml">ML</div>'
-        + '<div class="item-body">'
-        + '<div class="item-name">' + esc(r.ml_title||'(sin título)') + '</div>'
-        + '<div class="item-meta">'
-        + '<span class="meta-pill pill-ml">MercadoLibre</span>'
-        + skuPill
-        + variantePill(r.ml_variante)
-        + '<span class="item-meta-id">' + esc(r.ml_item_id) + '</span>'
-        + '</div></div>'
-        + '<div class="item-badges"><span class="badge badge-ml">Solo ML</span></div>'
-        + '</div>';
-    }).join('');
-  }
-
-  document.getElementById('lista').innerHTML = html || '<div class="empty">Sin resultados.</div>';
-}
-</script>
-
-<script>
-(function(){
-  var seg = (location.pathname.match(/\/herramientas\/([a-z0-9-]+)\//)||[])[1] || '';
-  var tool = seg === 'sync-detalle' ? 'sync-ml' : seg;
-  fetch('/api/auth/me').then(function(r){
-    return r.json();
-  }).then(function(d){
-    if (!d || !d.ok) return;
-    var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
-    if (isAdmin || !tool) return;
-    var ok = (d.permisos||[]).some(function(p){ return p.herramienta === tool; });
-    if (!ok) location.href = '/herramientas/home/';
-  }).catch(function(){});
-})();
+Api.requirePermiso('cobertura').then(function (ok) {
+  if (ok) router();
+});
 </script>
 </body>
 </html>
