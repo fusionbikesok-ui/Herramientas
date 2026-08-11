@@ -144,6 +144,42 @@
 
   /* Foco visible (WCAG 2.2 — 2.4.7 / 2.4.13) */
   --focus-color: var(--accent);
+
+  /* Cobertura de Catálogo — resaltado de diferencias entre títulos (WC vs. ML).
+     Defensa central contra el error medido (M520 vs M540): un match por bolsa de
+     palabras destaca lo COMPARTIDO; acá se invierte a propósito, se destaca lo que
+     DIFIERE, y dentro de eso se separa "genérico" de "discriminante" (modelo, medida,
+     marca). Cada nivel cambia MÁS de un canal visual (fondo + peso + forma), nunca
+     solo color, para no depender de distinguir rojo/ámbar/verde. */
+  --tok-match-txt:      var(--muted);       /* palabra que coincide en ambos títulos: se atenúa, no compite */
+  --tok-diff-bg:         var(--amber-bg);    /* palabra que difiere, genérica (ej. "alambre" vs "kevlar") */
+  --tok-diff-bd:         var(--amber-bd);
+  --tok-diff-txt:        var(--text);
+  --tok-discriminant-bg: var(--red-bg);      /* palabra que difiere Y es token discriminante: modelo/medida/marca */
+  --tok-discriminant-bd: var(--red-bd);
+  --tok-discriminant-txt:var(--text);
+  --tok-discriminant-font: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; /* forma distinta, no solo color; misma convención que SKU en el resto de la app */
+
+  /* Confianza del matcher inverso, en palabras — nunca porcentaje (ver decisión UX).
+     Icono + texto + color: tres canales, ninguno solo. */
+  --conf-alta:      var(--success);
+  --conf-alta-bg:   var(--success-bg);
+  --conf-alta-bd:   var(--success-bd);
+  --conf-revisar:      var(--warning);
+  --conf-revisar-bg:   var(--warning-bg);
+  --conf-revisar-bd:   var(--warning-bd);
+  --conf-baja:      var(--critical);
+  --conf-baja-bg:   var(--critical-bg);
+  --conf-baja-bd:   var(--critical-bd);
+
+  /* Skeleton de carga (pantalla de entrada: tarjetas de marca). Nunca spinner ciego. */
+  --skeleton-base:      var(--surface2);
+  --skeleton-highlight: var(--border2);
+
+  /* Vinculado en firme vs. pendiente de sincronizar con ML: reusa --success/--warning
+     (ya existentes) pero la distinción NUNCA depende solo de ese color — ver
+     design-system.md "Vinculado vs. pendiente de sincronizar" para el contrato de
+     icono + texto obligatorio que acompaña a cada uno. */
 }
 
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {

@@ -199,5 +199,35 @@ export function openDb(dbPath) {
 
   // Store de sesiones (better-sqlite3-session-store crea su propia tabla 'sessions' al iniciar)
 
+  // Cobertura accionable (migrations/007_cobertura_cola.sql) — ver ese archivo para el porqué
+  // de qué SÍ y qué NO tiene tabla propia (vinculado/descartado reutilizan tablas existentes).
+  try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_hay_que_publicar (
+    id_woo INTEGER PRIMARY KEY,
+    sku TEXT,
+    nombre TEXT,
+    marca TEXT,
+    valor REAL,
+    tachado INTEGER NOT NULL DEFAULT 0,
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_salteados (
+    id_woo INTEGER PRIMARY KEY,
+    marca TEXT,
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_sesion (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    marca_actual TEXT,
+    actualizado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_marcados_correcto (
+    clave TEXT PRIMARY KEY,
+    seccion TEXT NOT NULL,
+    marcado_en TEXT NOT NULL
+  )`); } catch (_) {}
+
+  // migrations/008_decisiones_origen.sql — distingue decisiones de Cobertura vs Matcher ML→WC.
+  try { db.exec('ALTER TABLE sku_matcher_decisiones ADD COLUMN origen TEXT'); } catch (_) {}
+
   return db;
 }
