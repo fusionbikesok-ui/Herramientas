@@ -574,6 +574,63 @@ Además de `otros` (quién más está viendo la preparación), la respuesta incl
 eventos aún). Pensado para que el frontend sepa si conviene pedir `GET
 /:id/eventos?desde=<ultimo_evento_id_previo>` en el próximo ciclo.
 
+## Preparación de pedidos — fotos: subida instantánea + cola de procesamiento (2026-08-12)
+
+Antes, `POST /:id/foto` convertía HEIC→JPEG de forma sincrónica dentro del request (`heic-
+convert`, libheif compilado a JS puro — el sharp/libvips de este VPS no trae decoder HEIC por
+la licencia HEVC). Eso bloqueaba el único hilo de Node **3-7 segundos enteros por foto**
+(medido en el VPS con fotos reales de iPhone) — mientras duraba, la app no respondía a nadie,
+no solo a quien subía la foto. Ahora el request solo guarda el archivo **tal como llegó** y
+responde al instante; una cola en segundo plano (`lib/fotosPreparacionCola.js`), corriendo la
+conversión en un worker thread aparte, genera una versión liviana. Medido: con el worker, el
+hilo principal queda con ~9ms de atraso máximo durante la conversión (vs. ~5900ms bloqueado
+corriendo en línea).
+
+**Cambio de contrato en el objeto `foto`** (afecta `POST /:id/foto`, `GET /:id`,
+`GET /:id/eventos` y cualquier lugar que liste `preparacion_fotos`):
+
+- `url`: ahora es el archivo **original, tal cual se subió** (sin re-encodear) — nunca se
+  toca ni se pierde. Antes era siempre un `.jpg` convertido; ahora conserva la extensión real
+  (`.heic`, `.png`, `.jpg`, lo que haya mandado el cliente). Es servible por HTTP desde el
+  instante de la subida.
+- `url_liviana` (nueva): la versión procesada (JPEG, rotada por EXIF, lado largo ≤1600px,
+  calidad 78) que llena la cola cuando termina. `NULL` hasta que `estado_proceso='listo'`.
+  **Fotos que ya existían antes de este cambio quedan con `url_liviana=NULL` para siempre**
+  (su `url` YA es el jpeg final del pipeline viejo) — el frontend debe mostrar `url_liviana ??
+  url`, nunca asumir que `url_liviana` siempre está.
+- `estado_proceso` (nueva): `'pendiente' | 'procesando' | 'listo' | 'error'`. Filas previas a
+  este cambio migran a `'listo'`.
+- `es_heic` (nueva): `0` o `1`, detectado en el momento de la subida.
+- `intentos`, `ultimo_error`, `proximo_intento_en`, `procesado_en` (nuevas): estado de la cola
+  para esa foto. `ultimo_error` es el mensaje de la librería (heic-convert/sharp), nunca
+  contenido del archivo.
+
+### POST /api/preparacion/:id/foto (comportamiento cambiado)
+- Sigue aceptando `multipart/form-data` con campo `archivo` (límite 15MB), `item_id` y `tipo`
+  opcionales en el body.
+- El guard de "solo imágenes" (mimetype `image/*` o extensión `.heic`/`.heif`) sigue siendo
+  sincrónico y sigue devolviendo 400 `{ ok: false, error: 'solo imágenes' }` si no matchea.
+- **Ya no valida que el contenido sea una imagen real decodificable** (antes lo hacía sharp
+  dentro del request, con 400 `'no se pudo procesar la imagen'` si fallaba) — decidir eso
+  exigiría el mismo trabajo bloqueante que se está evitando. Un archivo corrupto o que no sea
+  una imagen real se guarda igual como "original" y la cola lo marca `estado_proceso='error'`
+  cuando falla la conversión (fail-open en la subida, fail-closed en el procesamiento: nunca
+  se muestra `'listo'` con datos basura, nunca desaparece en silencio).
+- Response 200: `{ "ok": true, "foto": { ...id, url, url_liviana:null, estado_proceso:
+  'pendiente', es_heic, ... } }` — inmediato, sin esperar la conversión.
+
+### POST /api/preparacion/:id/foto/:fotoId/reintentar (nuevo)
+Reintento manual de una foto que agotó sus 3 intentos automáticos (backoff 500/1500/4000ms,
+ver `lib/fotosPreparacionCola.js`) y quedó en `estado_proceso='error'`. Le da otra tanda
+completa de 3 intentos — útil porque no se pudo reproducir de forma determinística la causa
+exacta de un fallo de `heic-convert` con las muestras disponibles (ver el plan), así que un
+reintento manual puede resolver algo transitorio.
+
+- Response 200: `{ "ok": true, "foto": { ...estado_proceso: 'pendiente', intentos: 0, ... } }`.
+- Response 400: `{ "ok": false, "error": "la foto no está en estado de error" }` — si la foto
+  está `pendiente`/`procesando`/`listo`, no hay nada que reintentar.
+- Response 404: preparación o foto inexistente.
+
 ## Contador de Inventario (`/api/inventario`)
 
 Todos los endpoints requieren sesión iniciada; las consultas de sesión están scopeadas
