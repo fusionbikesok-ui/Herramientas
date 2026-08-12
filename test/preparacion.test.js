@@ -25,12 +25,17 @@ vi.mock('../lib/mlClient.js', () => ({
 
 const TEST_DB = './test/tmp-preparacion.sqlite';
 
+// colaFotos.disparoInmediato:false en los dos builders de abajo: sin esto, cada test que sube
+// una foto dispararía un worker thread REAL de fondo (heic-convert/sharp de verdad) que puede
+// seguir corriendo después de que el test cierre la base de datos (afterEach borra el .sqlite).
+// El módulo de la cola (lib/fotosPreparacionCola.js) se testea aparte, con un worker de prueba
+// inyectado — ver test/fotos-preparacion-cola.test.js.
 function buildTestApp(db) {
   const app = express();
   app.use(express.json());
   // simular usuario autenticado (el server real lo inyecta requireAuth)
   app.use((req, _res, next) => { req.user = { username: 'tester', is_admin: 1 }; next(); });
-  app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani' }));
+  app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani', colaFotos: { disparoInmediato: false } }));
   return app;
 }
 
@@ -38,7 +43,7 @@ function buildTestAppComo(db, usuario) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { req.user = { username: usuario, is_admin: 0 }; next(); });
-  app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani' }));
+  app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani', colaFotos: { disparoInmediato: false } }));
   return app;
 }
 
@@ -515,7 +520,12 @@ describe('preparacion flujo', () => {
     expect(prep.etiqueta_lista).toBe(1);
   });
 
-  it('POST /:id/foto convierte a JPEG una imagen real subida', async () => {
+  // A partir de acá, la subida NO convierte de forma sincrónica (plan 2026-08-12-fotos-
+  // preparacion.md): guarda el archivo tal como llegó y responde al instante. La conversión/
+  // achicado corre en segundo plano (lib/fotosPreparacionCola.js, testeado en su propio
+  // archivo) — acá solo se verifica lo que hace el endpoint mismo.
+
+  it('POST /:id/foto guarda el archivo TAL COMO LLEGÓ (sin convertir) y responde al instante', async () => {
     const id = nuevaPrep();
     const png = await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 255, g: 0, b: 0 } } })
       .png()
@@ -527,14 +537,21 @@ describe('preparacion flujo', () => {
 
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
-    expect(r.body.foto.url).toMatch(/\.jpg$/);
+    // Extensión ORIGINAL preservada (.png), no convertida a .jpg — la conversión es trabajo
+    // de la cola, no del request.
+    expect(r.body.foto.url).toMatch(/\.png$/);
+    expect(r.body.foto.estado_proceso).toBe('pendiente');
+    expect(r.body.foto.url_liviana).toBeNull();
+    expect(r.body.foto.es_heic).toBe(0);
 
     const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
     expect(fotos).toHaveLength(1);
-    expect(fotos[0].url).toMatch(/\.jpg$/);
+    expect(fotos[0].estado_proceso).toBe('pendiente');
+    // El archivo YA está en disco y sería servible por HTTP desde el instante de la subida.
+    expect(fs.existsSync(rutaAbsoluta(fotos[0].url))).toBe(true);
   });
 
-  it('POST /:id/foto rechaza un buffer que no es una imagen real (mimetype falseado)', async () => {
+  it('POST /:id/foto NO valida que el buffer sea una imagen real: lo guarda igual (fail-open acá; la cola lo marca error después)', async () => {
     const id = nuevaPrep();
     const buffer = Buffer.from('esto no es una imagen');
 
@@ -542,63 +559,38 @@ describe('preparacion flujo', () => {
       .post(`/api/preparacion/${id}/foto`)
       .attach('archivo', buffer, { filename: 'foto.jpg', contentType: 'image/jpeg' });
 
-    expect(r.status).toBe(400);
-    expect(r.body).toEqual({ ok: false, error: 'no se pudo procesar la imagen' });
-
-    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
-    expect(fotos).toHaveLength(0);
-  });
-
-  it('POST /:id/foto decodifica un HEIC de iPhone (fallback heic-convert) y lo guarda como JPEG', async () => {
-    const id = nuevaPrep();
-    // sharp/libvips de este VPS no decodifica HEIC real: simulamos que heic-convert
-    // hace su trabajo devolviendo un JPEG válido, que luego sharp rota y re-encodea.
-    const jpegReal = await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 0, g: 128, b: 255 } } })
-      .jpeg()
-      .toBuffer();
-    heicConvert.mockResolvedValueOnce(jpegReal);
-
-    // buffer HEIC "falso": si no se enrutara por heic-convert, sharp lo rechazaría.
-    const heicBuffer = Buffer.from('ftypheic no es una imagen que sharp entienda');
-    const r = await request(app)
-      .post(`/api/preparacion/${id}/foto`)
-      .attach('archivo', heicBuffer, { filename: 'IMG_1234.heic', contentType: 'image/heic' });
-
-    expect(heicConvert).toHaveBeenCalledTimes(1);
-    expect(heicConvert.mock.calls[0][0]).toMatchObject({ format: 'JPEG' });
+    // A diferencia del pipeline viejo (que rechazaba con 400 porque sharp fallaba en el
+    // request), ahora el guard es solo por mimetype/extensión declarados — decodificar el
+    // contenido de verdad es trabajo de la cola, no del request (por eso el request es
+    // instantáneo). Ver test/fotos-preparacion-cola.test.js para el caso "termina en error".
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
-    expect(r.body.foto.url).toMatch(/\.jpg$/);
+    expect(r.body.foto.estado_proceso).toBe('pendiente');
 
     const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
     expect(fotos).toHaveLength(1);
   });
 
-  it('POST /:id/foto responde 400 (no 500) si heic-convert falla con un HEIC corrupto', async () => {
+  it('POST /:id/foto detecta HEIC por mimetype y marca es_heic=1, sin decodificar nada en el request', async () => {
     const id = nuevaPrep();
-    heicConvert.mockRejectedValueOnce(new Error('HEIC corrupto'));
-
-    const heicBuffer = Buffer.from('archivo heic corrupto');
+    const heicBuffer = Buffer.from('ftypheic no es una imagen que sharp entienda');
     const r = await request(app)
       .post(`/api/preparacion/${id}/foto`)
-      .attach('archivo', heicBuffer, { filename: 'rota.heic', contentType: 'image/heic' });
+      .attach('archivo', heicBuffer, { filename: 'IMG_1234.heic', contentType: 'image/heic' });
 
-    expect(r.status).toBe(400);
-    expect(r.body).toEqual({ ok: false, error: 'no se pudo procesar la imagen' });
-
-    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
-    expect(fotos).toHaveLength(0);
+    // heic-convert NUNCA se llama desde el request — solo desde el worker de la cola.
+    expect(heicConvert).not.toHaveBeenCalled();
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.foto.url).toMatch(/\.heic$/i);
+    expect(r.body.foto.es_heic).toBe(1);
+    expect(r.body.foto.estado_proceso).toBe('pendiente');
   });
 
-  it('POST /:id/foto procesa un .heic aunque el mimetype llegue vacío/octet-stream (iPhone al compartir)', async () => {
+  it('POST /:id/foto detecta HEIC por extensión aunque el mimetype llegue vacío/octet-stream (iPhone al compartir)', async () => {
     const id = nuevaPrep();
-    const jpegReal = await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } } })
-      .jpeg()
-      .toBuffer();
-    heicConvert.mockResolvedValueOnce(jpegReal);
-
     // iPhone al compartir manda el .heic con application/octet-stream (no arranca con image/):
-    // el guard temprano NO debe cortarlo, la detección por extensión lo enruta a heic-convert.
+    // el guard temprano NO debe cortarlo, la detección por extensión lo acepta igual.
     const heicBuffer = Buffer.from('ftypheic compartido desde iPhone');
     const r = await request(app)
       .post(`/api/preparacion/${id}/foto`)
@@ -606,11 +598,50 @@ describe('preparacion flujo', () => {
 
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
-    expect(heicConvert).toHaveBeenLastCalledWith(expect.objectContaining({ format: 'JPEG', buffer: heicBuffer }));
-    expect(r.body.foto.url).toMatch(/\.jpg$/);
+    expect(r.body.foto.es_heic).toBe(1);
+  });
 
-    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=?').all(id);
-    expect(fotos).toHaveLength(1);
+  it('POST /:id/foto rechaza un archivo que no es imagen ni HEIC (mimetype no-image y sin extensión heic/heif)', async () => {
+    const id = nuevaPrep();
+    const r = await request(app)
+      .post(`/api/preparacion/${id}/foto`)
+      .attach('archivo', Buffer.from('contenido pdf'), { filename: 'factura.pdf', contentType: 'application/pdf' });
+
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ ok: false, error: 'solo imágenes' });
+    expect(db.prepare('SELECT * FROM preparacion_fotos').all()).toHaveLength(0);
+  });
+
+  it('POST /:id/foto/:fotoId/reintentar reinicia una foto en error a pendiente y dispara la cola', async () => {
+    const id = nuevaPrep();
+    const buf = await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`).attach('archivo', buf, 'a.jpg');
+    const fotoId = subida.body.foto.id;
+    db.prepare("UPDATE preparacion_fotos SET estado_proceso='error', intentos=3, ultimo_error='x' WHERE id=?").run(fotoId);
+
+    const r = await request(app).post(`/api/preparacion/${id}/foto/${fotoId}/reintentar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.foto.estado_proceso).toBe('pendiente');
+    expect(r.body.foto.intentos).toBe(0);
+  });
+
+  it('POST /:id/foto/:fotoId/reintentar responde 400 si la foto no está en estado de error', async () => {
+    const id = nuevaPrep();
+    const buf = await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`).attach('archivo', buf, 'a.jpg');
+    const fotoId = subida.body.foto.id; // recién subida: estado_proceso='pendiente', no 'error'
+
+    const r = await request(app).post(`/api/preparacion/${id}/foto/${fotoId}/reintentar`);
+
+    expect(r.status).toBe(400);
+    expect(r.body.ok).toBe(false);
+  });
+
+  it('POST /:id/foto/:fotoId/reintentar responde 404 si la foto no existe', async () => {
+    const id = nuevaPrep();
+    const r = await request(app).post(`/api/preparacion/${id}/foto/999999/reintentar`);
+    expect(r.status).toBe(404);
   });
 
   it('POST /:id/foto responde 400 JSON (no 500 HTML) cuando la foto supera el límite de multer', async () => {
@@ -949,6 +980,39 @@ describe('preparacion flujo', () => {
 
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_borrada'").get(id);
     expect(JSON.parse(ev.detalle_json)).toMatchObject({ foto_id: fotoId, subida_por: null });
+  });
+
+  // -- Integración end-to-end del disparo de la cola (con un worker de prueba, no el real) --
+  describe('cola de fotos: disparo inmediato tras la subida', () => {
+    const WORKER_OK = new URL('./fixtures/workerFakeOk.js', import.meta.url).pathname;
+
+    function buildTestAppConCola(db) {
+      const appCola = express();
+      appCola.use(express.json());
+      appCola.use((req, _res, next) => { req.user = { username: 'tester', is_admin: 1 }; next(); });
+      appCola.use('/api/preparacion', preparacionRouter(db, {
+        woo: null, ml: null, andreaniStatus: 'lpaandreani',
+        colaFotos: { disparoInmediato: true, workerPath: WORKER_OK },
+      }));
+      return appCola;
+    }
+
+    it('el request responde con estado_proceso=pendiente al instante, y la foto pasa a listo en segundo plano', async () => {
+      const appCola = buildTestAppConCola(db);
+      const id = crearPreparacion(db, { canal: 'web', wcOrderId: 950, numeroPedido: '950', comprador: 'Ana', items: [] });
+      const buf = await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).jpeg().toBuffer();
+
+      const r = await request(appCola).post(`/api/preparacion/${id}/foto`).attach('archivo', buf, 'a.jpg');
+      expect(r.body.foto.estado_proceso).toBe('pendiente'); // la respuesta NO espera al procesamiento
+
+      // El disparo es fire-and-forget (después de responder): esperamos un tick del event loop
+      // para que el worker (rápido, es el fake) termine y actualice la fila.
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(r.body.foto.id);
+      expect(foto.estado_proceso).toBe('listo');
+      expect(foto.url_liviana).toMatch(/-liviana\.jpg$/);
+    });
   });
 
   // -- Override de perfil por SKU exacto (prioridad sobre la regla de categoria) --

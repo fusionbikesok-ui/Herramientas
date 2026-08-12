@@ -2,12 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import express from 'express';
 import multer from 'multer';
-import sharp from 'sharp';
-import heicConvert from 'heic-convert';
 import { wooFetch } from './woo.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
+import { procesarColaFotos, reintentarFoto } from '../lib/fotosPreparacionCola.js';
 import {
   normalizarEnvio, resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
@@ -137,6 +136,27 @@ function ensureTables(db) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables borrado_en:', e.message);
   }
 
+  // Cola de procesamiento en segundo plano (migrations/009_preparacion_fotos_cola.sql, y ver
+  // lib/fotosPreparacionCola.js para el porqué). DEFAULT 'listo' en estado_proceso: las filas
+  // que ya existían antes de este cambio vienen del pipeline viejo, que SÍ convertía de forma
+  // sincrónica — para ellas `url` ya es el jpeg final, no hay nada pendiente que procesar.
+  const colaCols = [
+    ["estado_proceso TEXT NOT NULL DEFAULT 'listo'", 'estado_proceso'],
+    ['url_liviana TEXT', 'url_liviana'],
+    ['es_heic INTEGER NOT NULL DEFAULT 0', 'es_heic'],
+    ['intentos INTEGER NOT NULL DEFAULT 0', 'intentos'],
+    ['ultimo_error TEXT', 'ultimo_error'],
+    ['proximo_intento_en TEXT', 'proximo_intento_en'],
+    ['procesado_en TEXT', 'procesado_en'],
+  ];
+  for (const [ddl, nombre] of colaCols) {
+    try {
+      db.prepare(`ALTER TABLE preparacion_fotos ADD COLUMN ${ddl}`).run();
+    } catch (e) {
+      if (!/duplicate column/i.test(e.message)) console.error(`ensureTables ${nombre}:`, e.message);
+    }
+  }
+
   // woo_paso2_pendiente: marca un pedido web que llegó a 'completed' en Woo (paso 1 del
   // seguimiento) pero cuyo paso 2 (status final enviadoandreani) todavía no se confirmó —
   // permite que reintentarColgadosTracking lo encuentre sin volver a escanear Woo.
@@ -259,7 +279,7 @@ export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuari
 // Devuelve la cantidad purgada (para logging del cron).
 export function purgarFotosBorradas(db) {
   const limite = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
-  const vencidas = db.prepare('SELECT id, url FROM preparacion_fotos WHERE borrado_en IS NOT NULL AND borrado_en < ?').all(limite);
+  const vencidas = db.prepare('SELECT id, url, url_liviana FROM preparacion_fotos WHERE borrado_en IS NOT NULL AND borrado_en < ?').all(limite);
   let purgadas = 0;
   for (const f of vencidas) {
     // Contención (defensa en profundidad): si la ruta resuelta cae fuera de uploads/,
@@ -274,6 +294,18 @@ export function purgarFotosBorradas(db) {
     } catch (err) {
       if (err.code !== 'ENOENT') {
         console.error('purgarFotosBorradas: error al borrar archivo, se borra igual la fila:', f.id, f.url, err.message);
+      }
+    }
+    // url_liviana puede no existir todavía (foto que nunca llegó a procesarse) — se borra
+    // best-effort, sin frenar la purga de la fila si falta.
+    if (f.url_liviana) {
+      const absLiviana = path.resolve(rutaAbsoluta(f.url_liviana));
+      if (estaDentroDeUploads(absLiviana)) {
+        try { fs.unlinkSync(absLiviana); } catch (err) {
+          if (err.code !== 'ENOENT') console.error('purgarFotosBorradas: error al borrar liviana:', f.id, f.url_liviana, err.message);
+        }
+      } else {
+        console.error('purgarFotosBorradas: url_liviana fuera de uploads/, se omite:', f.id, f.url_liviana);
       }
     }
     db.prepare('DELETE FROM preparacion_fotos WHERE id=?').run(f.id);
@@ -343,6 +375,16 @@ export function preparacionRouter(db, cfg) {
   const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
   const TRACKING_META_KEY = '_andreani_tracking';
+
+  // Disparo inmediato de la cola de fotos tras cada subida/reintento (además del cron de
+  // barrido en server.js). Default ON en producción; los tests lo apagan (cfg.colaFotos.
+  // disparoInmediato: false) para no lanzar workers threads reales de fondo en cada test que
+  // sube una foto — el módulo de la cola se testea aparte, inyectando un worker de prueba vía
+  // cfg.colaFotos.workerPath.
+  const dispararColaFotos = cfg?.colaFotos?.disparoInmediato !== false
+    ? () => procesarColaFotos(db, { workerPath: cfg?.colaFotos?.workerPath })
+        .catch(e => console.error('[preparacion] error disparando cola de fotos:', e.message))
+    : () => {};
 
   // ── Pendientes: lee de pedidos_cache (sincronizada por cron cada 5 min) ──
   router.get('/pendientes', (req, res) => {
@@ -935,7 +977,7 @@ export function preparacionRouter(db, cfg) {
       }
       next();
     });
-  }, async (req, res) => {
+  }, (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
@@ -953,35 +995,45 @@ export function preparacionRouter(db, cfg) {
 
     const { item_id = null, tipo = 'extra' } = req.body || {};
 
-    // Convertir siempre a JPEG (auto-rota por EXIF): resuelve HEIC de iPhone que no
-    // se ven en la mayoría de navegadores, y las fotos rotadas. Si sharp no puede
-    // procesar el buffer (corrupto o no es imagen real) → 400, no guardamos basura.
-    let jpegBuffer;
+    // GUARDAR Y RESPONDER AL INSTANTE, sin conversión sincrónica (plan 2026-08-12-fotos-
+    // preparacion.md): heic-convert es JS puro y bloquea el único hilo de Node 3-7s enteros
+    // por foto (medido en el VPS) — mientras dura, la app no responde a NADIE, no solo a
+    // quien subió la foto. La conversión/rotación/achicado se hace en segundo plano, en un
+    // worker thread (lib/fotosPreparacionCola.js) que no compite por el hilo principal.
+    //
+    // Guardamos el archivo TAL COMO LLEGÓ (sin re-encodear) como el "original" — nunca se
+    // toca ni se pierde, lo pide el uso real (detalle fino). La versión liviana la llena la
+    // cola cuando termina; hasta entonces el original ya es servible por HTTP igual.
+    //
+    // Fail-open deliberado acá: no validamos con sharp que el buffer sea una imagen real
+    // decodificable (eso exigiría el mismo trabajo bloqueante que estamos evitando). Un
+    // archivo corrupto o que no sea una imagen queda guardado como "original" y la cola lo
+    // marca estado_proceso='error' cuando falla — fail-closed del lado de abajo: nunca se
+    // muestra como "listo" con datos basura, nunca desaparece en silencio.
+    let saved;
     try {
-      // El sharp/libvips prebuilt de este VPS no trae decoder HEIC/HEIF (excluido por
-      // la licencia HEVC). Las fotos reales de iPhone llegan como HEIC y sharp explota.
-      // Fallback en JS puro: decodificamos HEIC/HEIF a JPEG con heic-convert ANTES de
-      // pasarlo a sharp, que mantiene la auto-rotación EXIF y el resto del pipeline.
-      // esHeic ya se calculó arriba (para el guard); acá solo lo usamos.
-      const entrada = esHeic
-        ? await heicConvert({ buffer: req.file.buffer, format: 'JPEG', quality: 0.92 })
-        : req.file.buffer;
-      jpegBuffer = await sharp(entrada).rotate().jpeg().toBuffer();
-    } catch {
-      return res.status(400).json({ ok: false, error: 'no se pudo procesar la imagen' });
+      saved = guardarArchivo({
+        buffer: req.file.buffer,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        importador: 'preparacion',
+        numeroPedido: prep.numero_pedido || prep.clave,
+      });
+    } catch (e) {
+      console.error('[preparacion] no se pudo guardar el archivo subido:', JSON.stringify({
+        mimetype: req.file.mimetype || '(vacío)',
+        extension: (nombre.match(/\.[^.]+$/) || ['(sin extensión)'])[0],
+        bytes: req.file.size,
+        error: e.message,
+      }));
+      return res.status(500).json({ ok: false, error: 'no se pudo guardar la foto' });
     }
 
-    const baseName = req.file.originalname.replace(/\.[^.]+$/, '') || 'foto';
-    const saved = guardarArchivo({
-      buffer: jpegBuffer,
-      originalname: `${baseName}.jpg`,
-      mimetype: 'image/jpeg',
-      importador: 'preparacion',
-      numeroPedido: prep.numero_pedido || prep.clave,
-    });
-    const fotoId = db.prepare(
-      'INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, nombre_archivo, creado_en) VALUES (?,?,?,?,?,?)'
-    ).run(prep.id, item_id ? parseInt(item_id) : null, tipo, saved.url, saved.filename, now()).lastInsertRowid;
+    const fotoId = db.prepare(`
+      INSERT INTO preparacion_fotos
+        (preparacion_id, item_id, tipo, url, nombre_archivo, creado_en, estado_proceso, es_heic)
+      VALUES (?,?,?,?,?,?, 'pendiente', ?)
+    `).run(prep.id, item_id ? parseInt(item_id) : null, tipo, saved.url, saved.filename, now(), esHeic ? 1 : 0).lastInsertRowid;
 
     const itemRef = item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(parseInt(item_id)) : null;
     registrarEvento(db, {
@@ -990,6 +1042,28 @@ export function preparacionRouter(db, cfg) {
     });
 
     res.json({ ok: true, foto: db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId) });
+
+    // Disparo en segundo plano, DESPUÉS de responder: fire-and-forget a propósito (mismo
+    // criterio fail-open que los crons del resto del repo). Si esto falla, el cron de
+    // barrido de server.js (cada 1 min) toma la foto igual — nunca queda huérfana.
+    dispararColaFotos();
+  });
+
+  // Reintento manual de una foto que agotó sus reintentos automáticos (estado_proceso='error').
+  // La cola en segundo plano ya reintenta sola con backoff (ver lib/fotosPreparacionCola.js);
+  // esto es para cuando esos reintentos ya se agotaron y la causa pudo haber sido transitoria.
+  router.post('/:id/foto/:fotoId/reintentar', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const fotoId = parseInt(req.params.fotoId);
+    const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=?').get(fotoId, prep.id);
+    if (!foto) return res.status(404).json({ ok: false, error: 'foto no encontrada' });
+    const reseteada = reintentarFoto(db, fotoId);
+    if (!reseteada) {
+      return res.status(400).json({ ok: false, error: 'la foto no está en estado de error' });
+    }
+    res.json({ ok: true, foto: db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId) });
+    dispararColaFotos();
   });
 
   router.delete('/:id/foto/:fotoId', (req, res) => {

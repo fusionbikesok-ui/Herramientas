@@ -23,6 +23,7 @@ import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter, syncPedidosCache, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
+import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
 import { inventarioRouter } from './routes/inventario.js';
@@ -243,6 +244,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           const n = purgarFotosBorradas(app._db);
           if (n) console.log(`Purgadas ${n} fotos de preparación (borrado_en > 60 días)`);
         } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
+      });
+
+      // Cola de procesamiento de fotos de preparación (plan 2026-08-12-fotos-preparacion.md):
+      // red de seguridad además del disparo inmediato tras cada subida (routes/preparacion.js).
+      // Cubre lo que el disparo inmediato pudo perder (ej. el proceso se reinició justo
+      // después de guardar el original y antes de procesarlo) y drena backlogs grandes en
+      // varias corridas (MAX_POR_TICK en lib/fotosPreparacionCola.js). No pega a ML/Woo —
+      // solo CPU/disco locales — así que 1 min de frecuencia no compite por el presupuesto de
+      // llamadas a ML de los demás crons.
+      cron.schedule('* * * * *', () => {
+        procesarColaFotos(app._db)
+          .catch(err => console.error('Error en cola de fotos de preparación:', err.message));
       });
 
       cron.schedule('7-59/10 * * * *', () => {          // Woo
