@@ -49,6 +49,7 @@
   /* cards de la cola */
   .ped-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
   .ped{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;cursor:pointer;transition:border-color .15s;}
+  .ped.static{cursor:default;}
   .ped:hover{border-color:var(--azul);}
   .ped-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
   .ped-num{font-weight:800;font-size:15px;}
@@ -90,6 +91,7 @@
   .slot-l{font-size:11.5px;color:var(--muted);margin-bottom:5px;}
   .slot-l.falta{color:var(--amber);}
   .slot-l.okk{color:var(--green);}
+  .slot-l.later{color:var(--muted2);}
   .thumbs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   .thumb{position:relative;width:64px;height:64px;border-radius:8px;overflow:hidden;border:1px solid var(--border2);}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -119,13 +121,23 @@
   /* modal camara */
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
   .modal.open{display:flex;}
-  .modal-box{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;max-width:520px;width:100%;}
+  .modal-box{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;max-width:520px;width:100%;max-height:90vh;overflow-y:auto;overscroll-behavior:contain;}
   .modal-box video{width:100%;border-radius:10px;background:#000;display:block;}
   .cam-viewport{position:relative;overflow:hidden;border-radius:10px;background:#000;}
   .cam-viewport video{transform-origin:center center;transition:transform .12s ease-out;}
   .cam-zoom{display:flex;align-items:center;gap:10px;margin-top:10px;}
   .cam-zoom-lbl{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--azul);}
   .cam-zoom input[type=range]{flex:1;accent-color:var(--azul);height:22px;cursor:pointer;}
+  .cam-progress{min-height:20px;font-size:13.5px;font-weight:700;color:var(--green);margin:8px 0 0;}
+
+  /* motivo de confirmación manual (sin escanear) */
+  .motivo-opts{display:flex;flex-direction:column;gap:8px;}
+  .motivo-btn{min-height:var(--tap-comfort);border-radius:10px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-size:13.5px;font-weight:700;cursor:pointer;text-align:left;padding:0 14px;}
+  .motivo-btn:hover,.motivo-btn:focus-visible{border-color:var(--azul);color:var(--azul);}
+  .motivo-otro textarea{width:100%;background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:vertical;}
+
+  /* fotos del paquete (piso obligatorio, no atado a ningún ítem) */
+  .paquete-fotos{border-top:1px solid var(--border);margin-top:16px;padding-top:14px;}
 
   /* perfiles */
   .perf-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;}
@@ -184,6 +196,8 @@
     <button class="tab" data-v="etiquetas" onclick="ir('etiquetas')">Etiquetas Andreani</button>
     <button class="tab" data-v="seguimientos" onclick="ir('seguimientos')">Cargar seguimientos</button>
     <button class="tab" data-v="historial" onclick="ir('historial')">Historial</button>
+    <button class="tab" data-v="cerradas" onclick="ir('cerradas')">Cerradas sin evidencia</button>
+    <button class="tab" data-v="despachadas" onclick="ir('despachadas')">Despachadas sin verificar</button>
     <button class="tab" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
   </div>
 
@@ -192,11 +206,30 @@
 </div>
 
 <div class="modal" id="cam-modal">
-  <div class="modal-box">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-label="Escanear código de barras">
     <div class="cam-viewport"><video id="cam-video" autoplay playsinline muted></video></div>
     <div class="cam-zoom"><label class="cam-zoom-lbl" for="cam-zoom">Zoom</label><input type="range" id="cam-zoom" min="1" max="4" step="0.5" value="1"></div>
-    <p class="sub" id="cam-msg" style="margin:10px 0;">Centrá el código de barras dentro de la banda</p>
-    <button class="btn sec" onclick="cerrarCamara()">Cancelar</button>
+    <p class="sub" id="cam-msg" style="margin:10px 0 0;">Centrá el código de barras dentro de la banda. Podés escanear varios artículos seguidos sin cerrar la cámara.</p>
+    <p class="cam-progress" id="cam-progress" role="status" aria-live="polite"></p>
+    <button class="btn sec" id="cam-close-btn" onclick="cerrarCamara()">Listo, cerrar cámara</button>
+  </div>
+</div>
+
+<div class="modal" id="manual-modal">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="manual-modal-title">
+    <h2 id="manual-modal-title" style="margin:0 0 4px;font-size:15px">Confirmar sin escanear</h2>
+    <p class="sub" id="manual-modal-sub" style="margin:0 0 12px"></p>
+    <div class="motivo-opts" role="group" aria-label="Motivo de la confirmación manual">
+      <button type="button" class="motivo-btn" onclick="elegirMotivo('codigo_ilegible')">Código ilegible</button>
+      <button type="button" class="motivo-btn" onclick="elegirMotivo('sin_etiqueta')">Producto sin etiqueta</button>
+      <button type="button" class="motivo-btn" onclick="elegirMotivo('otro')">Otro motivo</button>
+    </div>
+    <div class="motivo-otro" id="motivo-otro-wrap" style="display:none;margin-top:10px">
+      <label for="motivo-otro-texto" class="slot-l">Contanos qué pasó (obligatorio)</label>
+      <textarea id="motivo-otro-texto" rows="2" placeholder="Ej: el producto vino sin caja ni etiqueta…"></textarea>
+      <button class="btn" style="margin-top:8px" onclick="confirmarMotivoOtro()">Confirmar</button>
+    </div>
+    <button class="btn sec" style="margin-top:12px;width:100%" onclick="cerrarManualModal()">Cancelar</button>
   </div>
 </div>
 
@@ -227,6 +260,8 @@ function ir(v){
   else if(v==='etiquetas')cargarEtiquetas();
   else if(v==='seguimientos')cargarSeguimientos();
   else if(v==='historial')cargarHistorial();
+  else if(v==='cerradas')cargarCerradas();
+  else if(v==='despachadas')cargarDespachadas();
   else if(v==='perfiles')cargarPerfiles();
 }
 
@@ -382,10 +417,112 @@ function fotosFaltanItem(it){
   });
 }
 
+// El backend (requisitosConCantidad, lib/preparacion.js) le agrega a la etiqueta del slot
+// "de artículo" un sufijo técnico cuando cantidad_esperada>1: "— que se vean las N unidades
+// (control humano, no verificable por el sistema)". Ese texto está escrito para quien
+// audita el cambio, no para quien está sacando la foto con guantes puestos. Acá se separa
+// en dos: una instrucción corta e imperativa que va EN el slot ("Mostrá las N unidades
+// juntas en la foto"), y la aclaración de que el sistema no lo verifica se muestra UNA
+// SOLA VEZ para todo el pedido (hayFotosConCantidad + el aviso en renderDetalle), no
+// repetida en cada slot.
+var SUFIJO_CANTIDAD_RE=/ — que se vean las (\d+) unidades \(control humano, no verificable por el sistema\)$/;
+function partirEtiquetaSlot(etiqueta){
+  var m=SUFIJO_CANTIDAD_RE.exec(etiqueta||'');
+  if(!m)return {base:etiqueta||'',cantidad:null};
+  return {base:etiqueta.slice(0,m.index),cantidad:parseInt(m[1],10)};
+}
+function textoSlot(etiqueta){
+  var p=partirEtiquetaSlot(etiqueta);
+  return p.cantidad!=null?(p.base+' — Mostrá las '+p.cantidad+' unidades juntas en la foto.'):p.base;
+}
+function hayFotosConCantidad(p){
+  return (p.items||[]).some(function(it){
+    return (it.requisitos_foto||[]).some(function(s){return partirEtiquetaSlot(s.etiqueta).cantidad!=null;});
+  });
+}
+
+// Glifo ⚠︎/✓/— + texto del estado del slot de foto. El glifo va aria-hidden (es puro
+// refuerzo visual, la clase de color tampoco llega a lectores de pantalla) y el estado
+// real ("Falta"/"Lista"/etc.) se dice en texto, no solo con color+ícono.
+function slotEstadoHtml(estado,texto){
+  var glifo={falta:'⚠︎',okk:'✓',later:'—'}[estado]||'';
+  var prefijoSr={falta:'Falta: ',okk:'Lista: ',later:'Pendiente, no obligatoria todavía: '}[estado]||'';
+  return '<span aria-hidden="true">'+glifo+'</span> <span class="sr-only">'+prefijoSr+'</span>'+esc(texto);
+}
+
+// Espejo de requisitosPaquete() (lib/preparacion.js): dos fotos fijas del paquete entero
+// (item_id NULL), no atadas a ningún artículo. El backend es la fuente de verdad — esto
+// solo pinta el requisito ANTES de intentar completar, para no depender del 400 reactivo.
+var REQ_PAQUETE=[
+  {tipos:['paquete_abierto'],min:1,etiqueta:'Paquete abierto, con todo el contenido a la vista antes de cerrar'},
+  {tipos:['paquete_cerrado'],min:1,etiqueta:'Paquete ya cerrado, con la etiqueta puesta'},
+];
+function fotosFaltanPaquete(){
+  var porTipo={};(PREP.fotos_generales||[]).forEach(function(f){porTipo[f.tipo]=(porTipo[f.tipo]||0)+1;});
+  return REQ_PAQUETE.filter(function(s){
+    var n=s.tipos.reduce(function(a,t){return a+(porTipo[t]||0);},0);
+    return n<(s.min||1);
+  });
+}
+// ¿Hay ítems delegados al depósito que TODAVÍA no se resolvieron? Mismo criterio que
+// routes/preparacion.js:1176-1182 (delegadosPendientes): mientras existan, el primer
+// /completar deja la preparación en 'pendiente_deposito' SIN pedir fotos de paquete —
+// el paquete todavía no existe (lo termina de armar el depósito). Si acá exigiéramos esas
+// dos fotos igual, la única forma de destrabar el botón sería fotografiar un "paquete
+// cerrado con la etiqueta puesta" que en los hechos no está cerrado: evidencia fabricada
+// por la propia interfaz, justo lo que este cambio existe para evitar.
+function hayDelegadosPendientes(p){
+  return (p.items||[]).some(function(it){
+    return it.estado_item!=='exento' && it.estado_item!=='verificado' && it.despacho==='deposito_delegado';
+  });
+}
+
+function renderFotosPaquete(p){
+  var completada=p.estado==='completada';
+  var pendeDeposito=!completada&&hayDelegadosPendientes(p);
+  var aviso=pendeDeposito
+    ?'<p class="sub" style="margin:2px 0 10px">Este pedido tiene ítems delegados al depósito: las fotos del paquete no son obligatorias todavía — se piden en el cierre final, cuando el depósito complete lo que falta y el paquete exista de verdad.</p>'
+    :'';
+  return '<div class="fotos paquete-fotos">'
+    +'<div class="item-nom" style="margin-bottom:8px">Fotos del paquete</div>'
+    +aviso
+    +REQ_PAQUETE.map(function(s){
+      var deSlot=(p.fotos_generales||[]).filter(function(f){return s.tipos.indexOf(f.tipo)>=0;});
+      var tieneFoto=deSlot.length>=(s.min||1);
+      var estado=tieneFoto?'okk':(pendeDeposito?'later':'falta');
+      return '<div class="slot"><div class="slot-l '+(estado==='falta'?'falta':(estado==='okk'?'okk':'later'))+'">'+slotEstadoHtml(estado,s.etiqueta)+'</div>'
+        +'<div class="thumbs" id="'+slotDomId(null,s.tipos[0])+'">'+deSlot.map(thumbHtml).join('')
+        +(!completada?'<button class="addfoto" aria-label="Agregar foto: '+esc(s.etiqueta)+'" onclick="subirFotoGeneral(\''+s.tipos[0]+'\')">+</button>':'')
+        +'</div></div>';
+    }).join('')
+    +'</div>';
+}
+
 function renderDetalle(){
   var p=PREP;
+
+  // Defensa contra un caso raro (otra pestaña la cerró sin evidencia mientras esta la
+  // tenía abierta): el flujo normal de "Reabrir" (cardCerrada→reabrirCerrada→abrirDetalle)
+  // ya deja el estado en 'en_preparacion' antes de llegar acá, así que esta rama casi nunca
+  // se pinta — pero si se pinta, no debe ofrecer escanear/fotografiar sobre algo que el
+  // servidor va a rechazar (fail-closed también en la UI).
+  if(p.estado==='cerrada_sin_evidencia'){
+    document.getElementById('cuerpo').innerHTML='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
+      +'<h1 style="margin-top:12px">Pedido <em>#'+esc(p.numero_pedido)+'</em> <span class="badge b-warn">cerrada sin evidencia</span></h1>'
+      +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
+      +'<p class="sub">Esta preparación se cerró sin poder verificar el contenido (ítems sin escanear o sin fotos). No está confirmada como completa. Si necesitás trabajarla — por ejemplo, entró un reclamo — reabrila primero.</p>'
+      +'<button class="btn" onclick="reabrirCerrada('+p.id+')">Reabrir preparación</button>';
+    return;
+  }
+
   var paso1=p.items.every(function(it){return itemListo(it)||it.despacho==='deposito_delegado';});
-  var paso2=paso1&&p.items.every(function(it){return it.estado_item!=='verificado'||fotosFaltanItem(it).length===0;});
+  // El requisito de fotos de paquete se salta acá mismo criterio que el backend
+  // (routes/preparacion.js /completar): mientras haya ítems 'deposito_delegado' sin
+  // resolver, ESTE /completar va a dejar la preparación en 'pendiente_deposito' sin pedir
+  // esas fotos — el paquete todavía no existe. Exigirlas igual obligaría a fotografiar un
+  // paquete "cerrado" que en los hechos no está cerrado (ver hayDelegadosPendientes).
+  var paso2=paso1&&p.items.every(function(it){return it.estado_item!=='verificado'||fotosFaltanItem(it).length===0;})
+    &&(hayDelegadosPendientes(p)||fotosFaltanPaquete().length===0);
   var completada=p.estado==='completada';
 
   var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">MercadoLibre</span>';
@@ -410,11 +547,24 @@ function renderDetalle(){
       +'<input id="scan-in" placeholder="Escaneá o tipeá el código/SKU y Enter…" autocomplete="off">'
       +'<button class="btn" onclick="escanearManual()">Confirmar</button>'
       +'<button class="btn sec" onclick="abrirCamara()">📷 Cámara</button>'
-      +'</div><div class="flash" id="flash"></div>';
+      +'</div><div class="flash" id="flash" role="status" aria-live="polite"></div>';
   }
 
+  if(!completada&&hayFotosConCantidad(p)){
+    html+='<p class="sub" style="margin:2px 0 10px">Cuando un ítem pide varias unidades, mostralas TODAS juntas en la misma foto. El sistema no puede comprobar que estén — es un control humano, no una validación automática.</p>';
+  }
   html+=p.items.map(itemHtml).join('');
+  html+=renderFotosPaquete(p);
 
+  html+='<div style="margin-top:16px">'+renderActividad()+'</div>';
+
+  // .finbar va DESPUÉS de Actividad a propósito (antes iba antes): con position:sticky
+  // solo queda pegado al fondo mientras el contenedor (#cuerpo) tiene más contenido
+  // DEBAJO de él — si Actividad venía después del finbar, apenas el operario bajaba a
+  // leerla el botón se salía del viewport y había que volver a subir para poder cerrar
+  // (con guantes, de pie, caja en la otra mano). Siendo el ÚLTIMO hijo, se pega al fondo
+  // y no hay nada después que lo empuje afuera — se ve todo el tiempo que hace falta,
+  // largo de Actividad aparte (ahora hay un evento por unidad escaneada, no por ítem).
   html+='<div class="finbar">';
   if(!completada){
     html+='<button class="btn" '+(paso2?'':'disabled')+' onclick="completar()">Finalizar preparación</button>';
@@ -424,8 +574,6 @@ function renderDetalle(){
     html+='<span class="badge b-ok">Preparación completada '+fecha(p.completado_en)+' por '+esc(p.preparado_por||'—')+'</span>';
   }
   html+='</div>';
-
-  html+='<div style="margin-top:16px">'+renderActividad()+'</div>';
 
   document.getElementById('cuerpo').innerHTML=html;
   var si=document.getElementById('scan-in');
@@ -440,7 +588,7 @@ function itemHtml(it){
 
   var ctrl='';
   if(!completada&&!listo&&!exento){
-    ctrl+='<button class="btn sec mini" onclick="confirmarManual('+it.id+')">Confirmar sin código</button>';
+    ctrl+='<button class="btn sec mini" onclick="confirmarManual('+it.id+')">Confirmar sin código…</button>';
   }
   if(!completada&&it.perfil==='bici'){
     ctrl+='<select onchange="setEmbalaje('+it.id+',this.value)">'
@@ -466,14 +614,15 @@ function itemHtml(it){
     fotos='<div class="fotos">'+(it.requisitos_foto||[]).map(function(s,si){
       var deSlot=(it.fotos||[]).filter(function(f){return s.tipos.indexOf(f.tipo)>=0;});
       var falta=deSlot.length<(s.min||1);
-      return '<div class="slot"><div class="slot-l '+(falta?'falta':'okk')+'">'+(falta?'⚠︎ ':'✓ ')+esc(s.etiqueta||s.tipos.join('/'))+'</div>'
+      var etiquetaBase=s.etiqueta||s.tipos.join('/');
+      return '<div class="slot"><div class="slot-l '+(falta?'falta':'okk')+'">'+slotEstadoHtml(falta?'falta':'okk',textoSlot(etiquetaBase))+'</div>'
         +'<div class="thumbs" id="'+slotDomId(it.id,s.tipos[0])+'">'+deSlot.map(thumbHtml).join('')
-        +(!completada?'<button class="addfoto" '+(puedeFotos?'':'disabled title="Primero verificá el ítem"')+' onclick="subirFoto('+it.id+',\''+s.tipos[0]+'\')">+</button>':'')
+        +(!completada?'<button class="addfoto" aria-label="Agregar foto: '+esc(etiquetaBase)+'" '+(puedeFotos?'':'disabled title="Primero verificá el ítem"')+' onclick="subirFoto('+it.id+',\''+s.tipos[0]+'\')">+</button>':'')
         +'</div></div>';
     }).join('')
     +'<div class="slot"><div class="slot-l">Fotos extra</div><div class="thumbs" id="'+slotDomId(it.id,'extra')+'">'
     +(it.fotos||[]).filter(function(f){return f.tipo==='extra';}).map(thumbHtml).join('')
-    +(!completada?'<button class="addfoto" '+(puedeFotos?'':'disabled')+' onclick="subirFoto('+it.id+',\'extra\')">+</button>':'')
+    +(!completada?'<button class="addfoto" aria-label="Agregar foto extra" '+(puedeFotos?'':'disabled')+' onclick="subirFoto('+it.id+',\'extra\')">+</button>':'')
     +'</div></div></div>';
   }
 
@@ -509,10 +658,32 @@ function thumbHtml(f){
 function flash(tipo,msg){
   var f=document.getElementById('flash');
   if(!f)return;
+  clearTimeout(f._t);
   f.className='flash '+tipo;f.textContent=msg;
   if(navigator.vibrate)navigator.vibrate(tipo==='ok'?60:[80,60,80]);
-  clearTimeout(f._t);f._t=setTimeout(function(){f.className='flash';},3500);
+  f._t=setTimeout(function(){f.className='flash';f.textContent='';},3500);
 }
+
+// Flash con botón "Deshacer" (confirmar-manual diferido, ver programarConfirmacionManual):
+// se mantiene ms milisegundos, con un botón que ejecuta onDeshacer si se toca a tiempo.
+function flashDeshacer(msg,onDeshacer,ms){
+  var f=document.getElementById('flash');
+  if(!f)return;
+  clearTimeout(f._t);
+  f.className='flash warn';
+  f.textContent='';
+  var span=document.createElement('span');span.textContent=msg;
+  var btn=document.createElement('button');
+  btn.type='button';btn.className='btn mini sec';btn.style.marginLeft='10px';btn.textContent='Deshacer';
+  btn.onclick=function(){f.className='flash';f.textContent='';onDeshacer();};
+  f.appendChild(span);f.appendChild(btn);
+  if(navigator.vibrate)navigator.vibrate(60);
+  f._t=setTimeout(function(){f.className='flash';f.textContent='';},ms);
+}
+
+// Motivos de confirmar-manual en texto legible (mismos 3 valores que
+// MOTIVOS_CONFIRMACION_MANUAL en routes/preparacion.js).
+var MOTIVO_MANUAL_LABEL={codigo_ilegible:'código ilegible',sin_etiqueta:'producto sin etiqueta'};
 
 function verboEvento(tipo,detalle){
   if(tipo==='escaneo'){
@@ -524,15 +695,35 @@ function verboEvento(tipo,detalle){
   if(tipo==='embalaje')return 'marcó embalaje';
   if(tipo==='despacho')return 'marcó despacho';
   if(tipo==='completado')return 'completó el pedido';
+  if(tipo==='reabierta')return 'reabrió la preparación';
+  // Lo dispara scripts/cerrar-preparaciones-sin-evidencia.mjs (usuario NULL: no fue una
+  // sesión humana), no la app en uso normal — pero si el evento aparece en la Actividad
+  // tiene que leerse como el hecho real que es, no como un literal sin traducir.
+  if(tipo==='cerrada_sin_evidencia')return 'se cerró sin evidencia (mantenimiento)';
+  // Lo dispara marcarPreparacionEnviada (POST /seguimientos/:wcOrderId o el cron
+  // reintentarColgadosTracking) cuando el tracking se cargó y el pedido salió, pero NO
+  // estaba verificado (ver docs/api-contrato.md "Estado nuevo: despachada_sin_verificar").
+  // No es un error: es el sistema diciendo la verdad sobre un envío que ya salió.
+  if(tipo==='despachado_sin_verificar')return 'se despachó sin verificar (tracking cargado sin escaneo/fotos)';
   return tipo;
+}
+
+// Texto legible del motivo de una confirmación manual, para mostrar en la Actividad —
+// sin esto el rastro decía solo "confirmó sin código" y el motivo (la mitad del valor de
+// exigirlo) quedaba invisible justo para quien investiga un reclamo.
+function motivoManualTexto(d){
+  if(!d||d.origen!=='manual'||!d.motivo)return '';
+  if(d.motivo==='otro')return d.detalle_texto?('Otro: '+d.detalle_texto):'Otro motivo';
+  return MOTIVO_MANUAL_LABEL[d.motivo]||d.motivo;
 }
 
 function feedItemHtml(ev,esNuevo){
   var d=ev.detalle||{};
-  var iconos={escaneo:'◎',foto_subida:'▣',foto_borrada:'⌫',embalaje:'⬒',despacho:'➜',completado:'★'};
+  var iconos={escaneo:'◎',foto_subida:'▣',foto_borrada:'⌫',embalaje:'⬒',despacho:'➜',completado:'★',reabierta:'↺',cerrada_sin_evidencia:'⛔',despachado_sin_verificar:'✈'};
   var quien=ev.usuario?esc(ev.usuario):'—';
   var cuando=fecha(ev.creado_en);
   var hm=haceMin(ev.creado_en);
+  var motivoTxt=motivoManualTexto(d);
   var linea1='<b>'+verboEvento(ev.tipo,d)+'</b>'
     +(d.nombre?' '+esc(d.nombre):'')
     +(d.cantidad_nueva!=null?' <span class="feed-meta">'+d.cantidad_nueva+'/'+d.cantidad_esperada+'</span>':'')
@@ -547,6 +738,12 @@ function feedItemHtml(ev,esNuevo){
     extra='<div class="feed-delta">'
       +(d.valor_anterior?'<span class="antes">'+esc(d.valor_anterior)+'</span> › ':'')
       +'<span class="desp">'+esc(d.valor_nuevo)+'</span></div>';
+  }else if(motivoTxt){
+    // El evento sin esto se leía "confirmó sin código" a secas — el motivo (por qué se
+    // saltó el escaneo) es justo lo que alguien investigando un reclamo necesita ver acá.
+    extra='<div class="feed-meta" style="margin-top:4px">Motivo: '+esc(motivoTxt)+'</div>';
+  }else if(ev.tipo==='cerrada_sin_evidencia'&&d.motivo){
+    extra='<div class="feed-meta" style="margin-top:4px">'+esc(d.motivo)+'</div>';
   }
   return '<div class="feed-item'+(esNuevo?' nuevo':'')+'" data-ev="'+ev.id+'">'
     +'<div class="feed-badge">'+(iconos[ev.tipo]||'•')+'</div>'
@@ -644,6 +841,7 @@ async function escanear(codigo,origen){
   else if(b.resultado==='sobrante')flash('warn','⚠︎ '+codigo+' ya está completo — ¿estás poniendo de más?');
   else if(b.resultado==='no_coincide')flash('bad','✕ '+codigo+' NO pertenece a este pedido');
   else flash('bad',b.error||'error');
+  return b;
 }
 
 function escanearManual(){
@@ -717,12 +915,165 @@ async function refrescarSoloActividad(){
   }catch(e){/* no bloqueante */}
 }
 
-async function confirmarManual(itemId){
-  if(!confirm('¿Confirmar este ítem sin escanear código?'))return;
-  var r=await api('/'+PREP.id+'/item/'+itemId+'/confirmar-manual',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-  if(r.body.ok&&mergeItemLocal(r.body.item)){renderDetalle();refrescarSoloActividad();}
-  else refrescarDetalle();
+// Focus trap genérico: mientras el modal está abierto, Tab/Shift+Tab no se escapan hacia
+// el resto de la página (WCAG 2.4.3 orden de foco — sin esto, tabular desde el último
+// control del modal caía en elementos de #cuerpo tapados por el overlay). Solo cuenta
+// elementos realmente visibles/habilitados (offsetParent!==null), porque el textarea de
+// "otro motivo" está oculto hasta que se elige ese motivo.
+function focosVisibles(container){
+  return Array.prototype.filter.call(
+    container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+    function(el){return !el.disabled && el.offsetParent!==null;}
+  );
 }
+function atraparFoco(modalEl){
+  modalEl.addEventListener('keydown',function(e){
+    if(e.key!=='Tab')return;
+    var f=focosVisibles(modalEl);
+    if(!f.length)return;
+    var first=f[0],last=f[f.length-1];
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+  });
+}
+var _manualModalEl=document.getElementById('manual-modal');
+if(_manualModalEl)atraparFoco(_manualModalEl);
+
+// Confirmar sin código exige motivo desde 2026-08-12 (el atajo gratuito dejó salir un
+// pedido de 5 unidades con 1 sola en la caja). El motivo tiene que quedar auditable, pero
+// elegirlo no puede ser más lento que escanear: para "código ilegible" o "sin etiqueta",
+// tocar el motivo YA envía — no hay un segundo botón de "confirmar" de más. Solo "otro"
+// pide texto libre (obligatorio, si no sería la misma vía libre con un paso extra).
+var MANUAL_ITEM_ID=null;
+var MANUAL_TRIGGER_EL=null; // el botón "Confirmar sin código…" que abrió el modal, para
+                             // devolverle el foco al cerrar (cancelar o tras confirmar).
+function confirmarManual(itemId){
+  // Ya hay una confirmación de ESTE ítem esperando el "Deshacer" — abrir el modal de nuevo
+  // encima solo confundiría (¿cuál de las dos motivo cuenta?). Se le recuerda que puede
+  // deshacer la que ya está en curso, en vez de apilar una segunda.
+  if(pendienteManual&&pendienteManual.itemId===itemId){
+    flash('warn','Ya hay una confirmación de este ítem esperando — mirá el aviso con "Deshacer" arriba.');
+    return;
+  }
+  MANUAL_ITEM_ID=itemId;
+  MANUAL_TRIGGER_EL=document.activeElement&&document.activeElement.tagName==='BUTTON'?document.activeElement:null;
+  var it=(PREP.items||[]).find(function(x){return x.id===itemId;});
+  document.getElementById('manual-modal-sub').textContent=it?('Ítem: '+(it.nombre||it.sku||'')):'';
+  document.getElementById('motivo-otro-wrap').style.display='none';
+  document.getElementById('motivo-otro-texto').value='';
+  document.getElementById('manual-modal').classList.add('open');
+  var first=document.querySelector('#manual-modal .motivo-btn');
+  if(first)first.focus();
+}
+function cerrarManualModal(){
+  document.getElementById('manual-modal').classList.remove('open');
+  MANUAL_ITEM_ID=null;
+  if(MANUAL_TRIGGER_EL&&document.contains(MANUAL_TRIGGER_EL))MANUAL_TRIGGER_EL.focus();
+  MANUAL_TRIGGER_EL=null;
+}
+function elegirMotivo(motivo){
+  if(motivo==='otro'){
+    document.getElementById('motivo-otro-wrap').style.display='block';
+    document.getElementById('motivo-otro-texto').focus();
+    return;
+  }
+  programarConfirmacionManual(motivo,null);
+}
+function confirmarMotivoOtro(){
+  var texto=document.getElementById('motivo-otro-texto').value.trim();
+  if(!texto){document.getElementById('motivo-otro-texto').focus();return;}
+  programarConfirmacionManual('otro',texto);
+}
+
+// Elegir el motivo TIENE que seguir enviando al toque (es la condición para que "confirmar
+// sin código" no vuelva a ser más lento que escanear) — pero con tres botones apilados de
+// 56px en un celular con guantes, el toque errado va a pasar, y antes no había forma de
+// corregirlo: el ítem quedaba "verificado" con un motivo equivocado escrito en el rastro
+// que alguien va a leer ante un reclamo. Acá el envío real se demora unos segundos con un
+// "Deshacer" visible en el flash: si nadie lo toca, se manda igual (misma velocidad de
+// siempre); si se toca, NUNCA se llega a escribir nada — no hace falta revertir un evento
+// que no llegó a existir.
+//
+// El riesgo que abre esperar 4,5s: en el depósito el operario confirma y sigue caminando
+// con el celular en la mano — bloquea pantalla, cambia de app, se le corta la batería. Si
+// el timer nunca llega a disparar, la pantalla mostró "confirmando…" pero el servidor no
+// se enteró nunca: la misma mentira silenciosa que este cambio entero existe para cazar.
+// Por eso, apenas la pestaña deja de estar visible (visibilitychange a 'hidden') o la
+// página se va de verdad (pagehide — tab cerrada, navegación, o volver atrás), se dispara
+// YA el envío pendiente por navigator.sendBeacon: sigue viaje aunque el proceso se mate un
+// instante después, que es exactamente el caso que fetch() no puede garantizar. NO se
+// engancha en 'beforeunload': en mobile no es confiable (Safari/Chrome Android lo saltean
+// al bloquear pantalla o cambiar de app, que es el caso real acá) y además desactiva el
+// back/forward cache — 'visibilitychange'+'pagehide' es el patrón recomendado por la Page
+// Lifecycle API para esto mismo. Y como sendBeacon es fire-and-forget (no hay forma de
+// saber si el servidor lo procesó), al volver a foco se refresca el detalle contra el
+// servidor: la pantalla nunca vuelve a afirmar algo que no confirmó de nuevo con la fuente
+// de verdad.
+var MANUAL_UNDO_MS=4500;
+var pendienteManual=null; // {itemId, motivo, detalleTexto, timer}
+var huboFlushPorOcultarse=false; // hay que refrescar contra el servidor al volver a foco
+function programarConfirmacionManual(motivo,detalleTexto){
+  var itemId=MANUAL_ITEM_ID;
+  if(!itemId)return;
+  cerrarManualModal();
+  if(pendienteManual)clearTimeout(pendienteManual.timer);
+  var it=(PREP.items||[]).find(function(x){return x.id===itemId;});
+  var nombreItem=it?(it.nombre||it.sku||'este ítem'):'este ítem';
+  var pend={itemId:itemId,motivo:motivo,detalleTexto:detalleTexto};
+  pendienteManual=pend;
+  flashDeshacer('Confirmando "'+nombreItem+'" sin código…',function(){
+    if(pendienteManual!==pend)return;
+    clearTimeout(pend.timer);
+    pendienteManual=null;
+    flash('ok','Confirmación cancelada — no se guardó nada.');
+  },MANUAL_UNDO_MS);
+  pend.timer=setTimeout(function(){
+    if(pendienteManual!==pend)return; // se deshizo antes de disparar
+    pendienteManual=null;
+    enviarConfirmacionManual(itemId,motivo,detalleTexto);
+  },MANUAL_UNDO_MS);
+}
+async function enviarConfirmacionManual(itemId,motivo,detalleTexto){
+  var body={motivo:motivo};
+  if(detalleTexto)body.detalle_texto=detalleTexto;
+  var r=await api('/'+PREP.id+'/item/'+itemId+'/confirmar-manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.body.ok&&mergeItemLocal(r.body.item)){renderDetalle();refrescarSoloActividad();}
+  else{flash('bad',r.body.error||'No se pudo confirmar sin código');refrescarDetalle();}
+}
+
+// Corta en seco la espera del "Deshacer" y manda YA lo que estaba pendiente, por
+// sendBeacon (sigue viaje aunque el proceso se mate al toque siguiente — a diferencia de
+// fetch(), que un navegador puede cancelar sin avisar si la página desaparece a mitad de
+// la request). No hay forma de leer la respuesta (fire-and-forget): por eso marca
+// huboFlushPorOcultarse, para que el próximo regreso a foco reconcilie contra el servidor
+// en vez de confiar en el estado local optimista.
+function flushConfirmacionManualPendiente(){
+  if(!pendienteManual)return;
+  var pend=pendienteManual;
+  clearTimeout(pend.timer);
+  pendienteManual=null;
+  huboFlushPorOcultarse=true;
+  var body={motivo:pend.motivo};
+  if(pend.detalleTexto)body.detalle_texto=pend.detalleTexto;
+  var url='/api/preparacion/'+PREP.id+'/item/'+pend.itemId+'/confirmar-manual';
+  if(navigator.sendBeacon){
+    navigator.sendBeacon(url,new Blob([JSON.stringify(body)],{type:'application/json'}));
+  }else{
+    // Navegador sin sendBeacon (rarísimo hoy): mejor un fetch disparado igual que nada —
+    // puede no llegar a completarse si la página se va a mitad de camino, pero el refetch
+    // al volver a foco (visibilitychange→'visible') va a decir la verdad de todos modos.
+    enviarConfirmacionManual(pend.itemId,pend.motivo,pend.detalleTexto);
+  }
+}
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='hidden'){
+    flushConfirmacionManualPendiente();
+  }else if(document.visibilityState==='visible'&&huboFlushPorOcultarse){
+    huboFlushPorOcultarse=false;
+    if(VISTA==='detalle'&&PREP)refrescarDetalle();
+  }
+});
+window.addEventListener('pagehide',flushConfirmacionManualPendiente);
 
 async function setEmbalaje(itemId,v){
   if(!v)return;
@@ -758,6 +1109,19 @@ function subirFoto(itemId,tipo){
   inp.click();
 }
 
+// Fotos del paquete (paquete_abierto/paquete_cerrado): no van atadas a ningún artículo
+// (item_id NULL en preparacion_fotos) — mismo mecanismo de subida que las de ítem, solo
+// que intentarSubida(null,...) las cuelga de PREP.fotos_generales en vez de PREP.items.
+function subirFotoGeneral(tipo){
+  var inp=document.createElement('input');
+  inp.type='file';inp.accept='image/*';inp.capture='environment';
+  inp.onchange=function(){
+    if(!inp.files||!inp.files[0])return;
+    intentarSubida(null,tipo,inp.files[0]);
+  };
+  inp.click();
+}
+
 // tempId opcional: si viene, es un REINTENTO sobre una miniatura que ya está en pantalla
 // (subida anterior cortada por la red) — no crea una segunda miniatura, reusa la que ya
 // tiene el operario a la vista con el mismo archivo.
@@ -785,7 +1149,10 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
 
   var fd=new FormData();
   fd.append('archivo',archivo);
-  fd.append('item_id',itemId);
+  // itemId null (foto de paquete, no atada a ningún artículo): mandar '' y no el string
+  // "null" — FormData.append(k, null) lo convertiría en el texto "null", que el backend
+  // leería como un item_id truthy no numérico (parseInt('null') = NaN) en vez de vacío.
+  fd.append('item_id',itemId==null?'':itemId);
   fd.append('tipo',tipo);
   try{
     var r=await fetch('/api/preparacion/'+PREP.id+'/foto',{method:'POST',body:fd});
@@ -805,8 +1172,13 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
     delete FOTO_PREVIEWS[tempId];
     delete SUBIDAS_PENDIENTES[tempId];
     FOTO_PREVIEWS[d.foto.id]=previewUrl;
-    var item=(PREP.items||[]).find(function(it){return it.id===itemId;});
-    if(item){item.fotos=item.fotos||[];item.fotos.push(d.foto);}
+    if(itemId){
+      var item=(PREP.items||[]).find(function(it){return it.id===itemId;});
+      if(item){item.fotos=item.fotos||[];item.fotos.push(d.foto);}
+    }else{
+      PREP.fotos_generales=PREP.fotos_generales||[];
+      PREP.fotos_generales.push(d.foto);
+    }
     if(elAhora)elAhora.remove();
     renderDetalle(); // slot pasa a completo / stepper se recalcula con el dato ya en mano — sin otro round trip
     iniciarPollFotos();
@@ -999,6 +1371,12 @@ async function completar(){
 // captura tipo teclado del lector (wedge) cuando no hay un input enfocado
 var _buf='',_bufT=null;
 window.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){
+    var camModal=document.getElementById('cam-modal');
+    var manModal=document.getElementById('manual-modal');
+    if(camModal&&camModal.classList.contains('open')){cerrarCamara();return;}
+    if(manModal&&manModal.classList.contains('open')){cerrarManualModal();return;}
+  }
   if(!PREP||PREP.estado==='completada')return;
   var t=e.target;
   if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable))return;
@@ -1007,24 +1385,93 @@ window.addEventListener('keydown',function(e){
 });
 
 // ─── Cámara (módulo Scanner compartido: BarcodeDetector nativo o ZXing) ──────
-
+//
+// EL REQUISITO QUE GOBIERNA ESTO: escanear tiene que ser más rápido que el atajo de
+// "confirmar sin código", si no la gente vuelve a abandonar la herramienta (motivo real
+// de este cambio). Antes (`mode:'single'`) la cámara se cerraba sola tras CADA código: para
+// 5 unidades del mismo producto había que reabrirla 5 veces (5 toques de "📷 Cámara").
+// Con `mode:'continuous'` la cámara queda abierta y el gate (dropoutMs) permite re-contar
+// la MISMA unidad al retirarla y volver a mostrarla — se abre una vez y se apunta N veces,
+// sin volver a tocar la pantalla entre medio. Se cierra sola cuando ya no queda nada por
+// escanear (todosLosItemsListos), o a mano con "Listo, cerrar cámara"/Escape.
 function abrirCamara(){
+  if(!window.Scanner){alert('No se pudo cargar el lector de códigos. Recargá la página.');return;}
   var modal=document.getElementById('cam-modal'),video=document.getElementById('cam-video');
   modal.classList.add('open');
   var zoomEl=document.getElementById('cam-zoom');
   zoomEl.value=1;
   zoomEl.oninput=function(){window.Scanner.setZoom(parseFloat(this.value));};
-  document.getElementById('cam-msg').textContent='Centrá el código de barras dentro de la banda';
+  document.getElementById('cam-msg').textContent='Centrá el código de barras dentro de la banda. Podés escanear varios artículos seguidos sin cerrar la cámara.';
+  setCamProgress('');
   window.Scanner.open({
     video:video,
-    mode:'single',
-    onCode:function(v){cerrarCamara();escanear(v,'camara');},
+    mode:'continuous',
+    // El mismo código no se re-cuenta por un parpadeo de la cámara: la unidad tiene que
+    // salir del cuadro al menos medio segundo para que la siguiente vuelva a contar
+    // (mismo criterio que inventario/codigos/consulta-precios).
+    dropoutMs:500,
+    onCode:function(v){escanearCamara(v);},
     onError:function(msg){document.getElementById('cam-msg').textContent=msg;}
   });
+  var closeBtn=document.getElementById('cam-close-btn');
+  if(closeBtn)closeBtn.focus();
 }
 function cerrarCamara(){
-  window.Scanner.close();
+  // Mismo guard que abrirCamara(): si el módulo nunca cargó (falló el <script type="module">,
+  // caso real con 4G irregular) no hay nada que cerrar del lado del Scanner, pero el modal
+  // igual tiene que poder cerrarse — si no, "Listo, cerrar cámara"/Escape quedarían rotos
+  // exactamente cuando ya está todo mal (sin cámara Y sin forma de salir del modal).
+  if(window.Scanner)window.Scanner.close();
   document.getElementById('cam-modal').classList.remove('open');
+}
+function setCamProgress(msg){
+  var el=document.getElementById('cam-progress');
+  if(el)el.textContent=msg;
+}
+function todosLosItemsListos(){
+  return !!PREP&&(PREP.items||[]).every(function(it){return itemListo(it)||it.despacho==='deposito_delegado';});
+}
+// Feedback SIN mirar la pantalla (guantes, apuntando con el celular): pitido + vibración
+// distintos por resultado, y una línea de progreso con aria-live para que el conteo "3 de
+// 5" también sea perceptible con lector de pantalla (no solo un color en la interfaz).
+async function escanearCamara(codigo){
+  var b=await escanear(codigo,'camara');
+  if(!b)return;
+  if(b.resultado==='match'){
+    var it=b.item, verificado=it.estado_item==='verificado';
+    beep(verificado?'ok2':'ok');
+    if(navigator.vibrate)navigator.vibrate(verificado?[40,40,40]:40);
+    setCamProgress((verificado?'✓ completo — ':'')+(it.nombre||it.sku)+' — '+it.cantidad_escaneada+' de '+it.cantidad_esperada);
+    if(todosLosItemsListos()){
+      // Pausa breve para que se alcance a oír/leer el último resultado antes de cerrar solo
+      // — cerrar en el instante cortaría el pitido/anuncio del último escaneo.
+      setTimeout(function(){cerrarCamara();flash('ok','✓ Todos los ítems escaneados.');},550);
+    }
+  }else if(b.resultado==='sobrante'){
+    beep('warn');
+    if(navigator.vibrate)navigator.vibrate([80,60,80]);
+    setCamProgress('⚠ '+codigo+' ya está completo — ¿estás poniendo de más?');
+  }else if(b.resultado==='no_coincide'){
+    beep('bad');
+    if(navigator.vibrate)navigator.vibrate([80,60,80]);
+    setCamProgress('✕ '+codigo+' no pertenece a este pedido');
+  }else{
+    setCamProgress(b.error||'No se pudo escanear');
+  }
+}
+
+var _audioCtx=null;
+function beep(tipo){
+  try{
+    _audioCtx=_audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+    if(_audioCtx.state==='suspended')_audioCtx.resume();
+    var freqs={ok:880,ok2:1180,warn:520,bad:300};
+    var o=_audioCtx.createOscillator(),g=_audioCtx.createGain();
+    o.connect(g);g.connect(_audioCtx.destination);
+    o.type='square';o.frequency.value=freqs[tipo]||880;
+    g.gain.setValueAtTime(0.05,_audioCtx.currentTime);
+    o.start();o.stop(_audioCtx.currentTime+0.07);
+  }catch(e){/* sin audio no se frena el escaneo: la vibración/texto siguen andando */}
 }
 
 // ─── Etiquetas Andreani ───────────────────────────────────────────────────────
@@ -1256,6 +1703,88 @@ async function completarAhora(canal,id){
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
 
+// ─── Cerradas sin evidencia ─────────────────────────────────────────────────
+// Sección propia (GET /cerradas-sin-evidencia), separada del Historial a propósito: estas
+// preparaciones NO se verificaron de verdad (quedaron colgadas antes de este cambio, o se
+// cerrarán por mantenimiento en el futuro) — mezclarlas con las completadas repetiría el
+// problema que este estado existe para resolver. Reabrir (POST /:id/reabrir) es la única
+// forma de volver a tocarlas.
+
+async function cargarCerradas(){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Cargando…</div>';
+  try{
+    var r=await api('/cerradas-sin-evidencia');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    var filas=r.body.data||[];
+    if(!filas.length){c.innerHTML='<div class="loading">No hay preparaciones cerradas sin evidencia.</div>';return;}
+    var html='<p class="sub">Estas preparaciones se cerraron sin poder verificar el contenido (ítems sin escanear o sin fotos): no están confirmadas como completas. Si entra un reclamo, reabrilas para trabajarlas con el flujo normal.</p>'
+      +'<div class="ped-grid">'+filas.map(cardCerrada).join('')+'</div>';
+    c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+function cardCerrada(p){
+  var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
+  // .static: esta card no tiene onclick (la única acción es el botón "Reabrir") — sin el
+  // modificador heredaba cursor:pointer de .ped y parecía clickeable en toda su superficie
+  // cuando no lo era.
+  return '<div class="ped static">'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-cli">'+esc(p.comprador||'—')+'</div>'
+    +'<div class="ped-items">'+p.total_items+' ítems · '+p.total_fotos+' fotos · '+fecha(p.creado_en)+'</div>'
+    +'<div class="ped-foot"><span class="badge b-warn">cerrada sin evidencia</span>'
+    +'<button class="btn mini" style="margin-left:auto" onclick="reabrirCerrada('+p.id+')">Reabrir</button></div>'
+    +'</div>';
+}
+
+async function reabrirCerrada(id){
+  if(!confirm('¿Reabrir esta preparación? Vas a poder escanear y sacar fotos de nuevo.'))return;
+  try{
+    var r=await api('/'+id+'/reabrir',{method:'POST'});
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    abrirDetalle(id);
+  }catch(e){alert('No se pudo reabrir: '+e.message);}
+}
+
+// ─── Despachadas sin verificar ──────────────────────────────────────────────
+// Estado nuevo (docs/api-contrato.md "despachada_sin_verificar"): el pedido YA SALIÓ y el
+// cliente YA recibió el mail de envío — el flujo de WooCommerce no cambia — pero se le
+// cargó el tracking sin haber escaneado ni fotografiado nada, así que el sistema no puede
+// afirmar una verificación que no ocurrió. A propósito NO es lo mismo que "cerrada sin
+// evidencia" (esas las cerramos nosotros por mantenimiento, viejas y ya no trabajables sin
+// reabrir) ni un pendiente (no hay ninguna acción esperada): es un hecho consumado, y la
+// sección tiene que leerse así — sin badge de alerta, sin botón de "arreglar esto". Sigue
+// siendo trabajable con el flujo normal (por eso la card SÍ es clickeable, a diferencia de
+// las cerradas sin evidencia): si más adelante alguien completa la verificación,
+// /completar la sube sola a 'completada'.
+async function cargarDespachadas(){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Cargando…</div>';
+  try{
+    var r=await api('/despachadas-sin-verificar');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    var filas=r.body.data||[];
+    if(!filas.length){c.innerHTML='<div class="loading">No hay pedidos despachados sin verificar.</div>';return;}
+    var html='<p class="sub">Estos pedidos ya salieron y el cliente ya recibió el mail de envío — no es un pendiente de trabajo. Se les cargó el tracking sin haber escaneado ni fotografiado el contenido, así que el sistema no puede afirmar que se verificaron. Quedan acá para consultarlos ante un reclamo; si más adelante se completa la verificación (escaneo + fotos), pasan solas a completada.</p>'
+      +'<div class="ped-grid">'+filas.map(cardDespachadaSinVerificar).join('')+'</div>';
+    c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+function cardDespachadaSinVerificar(p){
+  var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
+  return '<div class="ped" onclick="abrirDetalle('+p.id+')">'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-cli">'+esc(p.comprador||'—')+'</div>'
+    +'<div class="ped-items">'+p.total_items+' ítems · '+p.total_fotos+' fotos · despachado '+fecha(p.completado_en||p.creado_en)+'</div>'
+    // b-mut (gris neutro, ya usado para "confirmado a mano"/"etiqueta pendiente"): a
+    // propósito NO es b-warn (ámbar) como "cerrada sin evidencia" — esto no es una alerta
+    // ni algo por resolver, es información sobre un envío que ya salió.
+    +'<div class="ped-foot"><span class="badge b-mut">despachado sin verificar</span></div>'
+    +'</div>';
+}
+
 // ─── Perfiles de foto ─────────────────────────────────────────────────────────
 
 var PERFILES_FOTO=['bici','kit_transmision','sellado'];
@@ -1273,7 +1802,7 @@ async function cargarPerfiles(){
     if(!rSku.body.ok)throw new Error(rSku.body.error||'error');
     var rows=rPerf.body.data||[];
     var rowsSku=rSku.body.data||[];
-    var html='<div class="flash" id="flash"></div>'
+    var html='<div class="flash" id="flash" role="status" aria-live="polite"></div>'
       +'<p class="sub">Regla por categoría: si el nombre de la categoría del producto <b>contiene</b> el texto, se aplica ese perfil de fotos.'
       +' <b>bici</b>: selector de embalaje (re-embalada exige lado A + lado B + caja de accesorios). <b>kit_transmision</b>: foto del set con piezas sueltas. <b>sellado</b>: 1 foto de etiqueta o artículo.</p>';
     html+=rows.map(function(p){

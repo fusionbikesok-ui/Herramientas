@@ -27,7 +27,7 @@ vi.mock('../lib/mlClient.js', () => ({
 
 import { wooFetch } from '../routes/woo.js';
 import { mlFetch } from '../lib/mlClient.js';
-import { preparacionRouter, reintentarColgadosTracking } from '../routes/preparacion.js';
+import { preparacionRouter, reintentarColgadosTracking, crearPreparacion } from '../routes/preparacion.js';
 
 const TEST_DB = './test/tmp-preparacion-contrato.sqlite';
 
@@ -267,7 +267,7 @@ describe('POST /seguimientos/:wcOrderId', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
-  it('preserva el id del meta existente y encadena completed → enviadoandreani', async () => {
+  it('preserva el id del meta existente y encadena completed → enviadoandreani; sin verificación previa queda despachada_sin_verificar, NO completada', async () => {
     wooFetch
       .mockResolvedValueOnce({ data: { id: 900, status: 'lpaandreani', meta_data: [{ id: 55, key: '_andreani_tracking', value: '' }] } }) // GET actual
       .mockResolvedValueOnce({ data: { id: 900, status: 'completed' } }) // PUT paso 1
@@ -286,9 +286,59 @@ describe('POST /seguimientos/:wcOrderId', () => {
     expect(wooFetch.mock.calls[2][2]).toBe('put');
     expect(wooFetch.mock.calls[2][3]).toEqual({ status: 'enviadoandreani' });
 
+    // Este flujo (etiqueta lista -> nunca se abre -> cargar tracking) es EXACTAMENTE el
+    // atajo que reportó el revisor: la preparación acá no tuvo ni un escaneo ni una foto.
+    // El pedido salió igual (Woo ya mandó el mail) pero el estado LOCAL tiene que decir
+    // la verdad: no se verificó nada. (MUTATION: bloqueante crítico del revisor)
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:900'").get();
-    expect(prep.estado).toBe('completada');
+    expect(prep.estado).toBe('despachada_sin_verificar');
     expect(prep.etiqueta_lista).toBe(1);
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='despachado_sin_verificar'").get(prep.id);
+    expect(ev).toBeTruthy();
+  });
+
+  it('si la preparación YA estaba completamente verificada antes de cargar el tracking, queda completada', async () => {
+    // Arma la preparación con ítems y fotos de verdad (via crearPreparacion, como hace
+    // /iniciar) ANTES de que el operario cargue el tracking.
+    const prepId = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 930, numeroPedido: '930', comprador: 'Ana',
+      items: [{ line_item_id: 1, product_id: 1, sku: 'CASCO-1', nombre: 'Casco', categoria: 'CASCOS', cantidad: 1 }],
+    });
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=?').get(prepId);
+    db.prepare("UPDATE preparacion_items SET estado_item='verificado', cantidad_escaneada=1 WHERE id=?").run(item.id);
+    const iso = new Date().toISOString();
+    const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
+    insFoto.run(prepId, item.id, 'articulo', '/x.jpg', iso);
+    insFoto.run(prepId, null, 'paquete_abierto', '/a.jpg', iso);
+    insFoto.run(prepId, null, 'paquete_cerrado', '/c.jpg', iso);
+
+    wooFetch
+      .mockResolvedValueOnce({ data: { id: 930, status: 'lpaandreani', meta_data: [] } })
+      .mockResolvedValueOnce({ data: { id: 930, status: 'completed' } })
+      .mockResolvedValueOnce({ data: { id: 930, status: 'enviadoandreani' } });
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/930').send({ tracking: 'AND777' });
+    expect(res.status).toBe(200);
+
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    expect(prep.estado).toBe('completada');
+  });
+
+  it('NUNCA pisa una cerrada_sin_evidencia con completada ni con despachada_sin_verificar al cargar el tracking', async () => {
+    const app = buildTestApp(db); // ensureTables corre acá; hace falta antes del INSERT
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en)
+      VALUES ('web','web:940',940,1,'cerrada_sin_evidencia',?)`).run(new Date().toISOString());
+
+    wooFetch
+      .mockResolvedValueOnce({ data: { id: 940, status: 'lpaandreani', meta_data: [] } })
+      .mockResolvedValueOnce({ data: { id: 940, status: 'completed' } })
+      .mockResolvedValueOnce({ data: { id: 940, status: 'enviadoandreani' } });
+
+    const res = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND888' });
+    expect(res.status).toBe(200); // el pedido sale igual del lado Woo
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:940'").get();
+    expect(prep.estado).toBe('cerrada_sin_evidencia'); // el estado local NO se lava
   });
 
   it('si el PUT 2 falla, deja woo_paso2_pendiente=1 y responde 502 con colgado:true (no 500)', async () => {
@@ -340,8 +390,10 @@ describe('POST /seguimientos/:wcOrderId', () => {
     expect(puts[0][3]).toEqual({ status: 'enviadoandreani' });
     expect(puts.some(c => c[3]?.status === 'completed')).toBe(false);
 
+    // Sin ítems ni fotos de paquete puestas: igual que en el resto de estos tests, sin
+    // verificación real el estado local queda 'despachada_sin_verificar', no 'completada'.
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:902'").get();
-    expect(prep.estado).toBe('completada');
+    expect(prep.estado).toBe('despachada_sin_verificar');
   });
 
   it('fail-closed: pedido en otro estado (ni lpaandreani ni completed-con-tracking) → 409 sin ningún PUT', async () => {
@@ -405,11 +457,22 @@ describe('reintentarColgadosTracking', () => {
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
-  it('reintenta el PUT 2 de cada colgado; si tiene éxito, limpia la bandera y marca completada', async () => {
+  // Inserta las dos fotos generales del paquete (item_id NULL) — desde que /completar y el
+  // criterio de "verificada" las exigen, un test que quiere ver 'completada' tiene que
+  // dejarlas puestas, si no la preparación (aunque no tenga ítems) queda "sin verificar".
+  function insertarFotosPaquete(prepId) {
+    const iso = new Date().toISOString();
+    const ins = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,NULL,?,?,?)');
+    ins.run(prepId, 'paquete_abierto', '/uploads/a.jpg', iso);
+    ins.run(prepId, 'paquete_cerrado', '/uploads/c.jpg', iso);
+  }
+
+  it('reintenta el PUT 2 de cada colgado; si tiene éxito, limpia la bandera y, si estaba verificada, marca completada', async () => {
     buildTestApp(db); // ensureTables
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
+    const ins = db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
       VALUES ('web','web:920',920,1,'en_preparacion',?,1)`).run(now);
+    insertarFotosPaquete(ins.lastInsertRowid); // sin ítems + las dos fotos de paquete = verificada
 
     wooFetch.mockResolvedValueOnce({ data: { id: 920, status: 'enviadoandreani' } });
 
@@ -422,6 +485,44 @@ describe('reintentarColgadosTracking', () => {
 
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_recuperado'").get();
     expect(ev).toBeTruthy();
+  });
+
+  it('si el paso 2 se recupera pero la preparación NO estaba verificada (sin las fotos de paquete), queda despachada_sin_verificar, no completada (MUTATION: bloqueante crítico del revisor)', async () => {
+    buildTestApp(db);
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
+      VALUES ('web','web:922',922,1,'en_preparacion',?,1)`).run(now);
+    // Sin fotos de paquete puestas: el camino real de "etiqueta lista -> nunca se abre ->
+    // se carga el tracking" que describió el revisor.
+
+    wooFetch.mockResolvedValueOnce({ data: { id: 922, status: 'enviadoandreani' } });
+
+    const resueltos = await reintentarColgadosTracking(db, { woo: null, enviadoAndreaniStatus: 'enviadoandreani' });
+    expect(resueltos).toBe(1);
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:922'").get();
+    expect(prep.estado).toBe('despachada_sin_verificar');
+    expect(prep.woo_paso2_pendiente).toBe(0);
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='despachado_sin_verificar'").get();
+    expect(ev).toBeTruthy();
+  });
+
+  it('NUNCA pisa una cerrada_sin_evidencia con completada, aunque se recupere el paso 2 (MUTATION: bloqueante crítico del revisor)', async () => {
+    buildTestApp(db);
+    const now = new Date().toISOString();
+    const ins = db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
+      VALUES ('web','web:923',923,1,'cerrada_sin_evidencia',?,1)`).run(now);
+    insertarFotosPaquete(ins.lastInsertRowid); // aunque "estaría verificada", el estado manda
+
+    wooFetch.mockResolvedValueOnce({ data: { id: 923, status: 'enviadoandreani' } });
+
+    const resueltos = await reintentarColgadosTracking(db, { woo: null, enviadoAndreaniStatus: 'enviadoandreani' });
+    expect(resueltos).toBe(1); // el paso 2 de Woo sí se resolvió...
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:923'").get();
+    expect(prep.estado).toBe('cerrada_sin_evidencia'); // ...pero el estado local no se lava
+    expect(prep.woo_paso2_pendiente).toBe(0); // esto sí se limpia (flag del lado Woo, no de verificación)
   });
 
   it('si vuelve a fallar, deja la bandera puesta para la corrida siguiente (fail-open, no lanza)', async () => {
