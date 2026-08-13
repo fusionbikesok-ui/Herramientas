@@ -2,15 +2,18 @@ import { describe, it, expect } from 'vitest';
 import {
   construirWC, construirML, candidatosDeWC, candidatosParaWC, diffTokens,
   esDiscriminante, esCodigoAlfanumerico, esMedidaNumerica, esTokenRaro, confianzaDesdeScore,
-  colorCanonico, medidaCanonica, canonToken, marcaEnConflicto, toks,
+  colorCanonico, medidaCanonica, canonToken, marcaEnConflicto, normalizarMarcas, otrasMarcasPosibles, toks, ratio,
 } from '../lib/matcherEngine.js';
 
 // Helper: arma el ítem WC (vía construirWC, igual que el resto del motor) y el universo ML
 // (vía construirML) para un solo par a comparar. mlExtra son publicaciones de "relleno" que
 // simulan el resto del corpus sin SKU, para que la señal de rareza (regla 3) tenga sentido.
-function armar(wcNombre, mlTitulo, mlExtra = [], marcaWc = '') {
+// marcasConocidas (si se pasa) se cuelga de mlIndex — candidatosDeWC ya no la recibe como
+// parámetro aparte (hallazgo del revisor: reenviarla a mano por niveles se olvida en silencio).
+function armar(wcNombre, mlTitulo, mlExtra = [], marcaWc = '', marcasConocidas) {
   const { wcItems } = construirWC([{ sku: 'X', nombre: wcNombre, tipo: 'simple' }]);
   const mlIndex = construirML([{ clave: 'A|', item_id: 'A', titulo: mlTitulo }, ...mlExtra]);
+  if (marcasConocidas) mlIndex.marcasConocidas = marcasConocidas;
   return { wc: wcItems[0], mlIndex, top: candidatosDeWC(wcItems[0], mlIndex, marcaWc)[0] };
 }
 
@@ -151,16 +154,28 @@ describe('matcherEngine · diffTokens, requisito de contrato (no solo un score)'
     expect(d.hay_contradiccion).toBe(true);
   });
 
-  it('conflicto de marca estructurada (catalogo_cache.marca) aunque la marca sea frecuente en el corpus', () => {
-    // "shimano" es muy común (no cae por rareza) pero si la marca de WC ni aparece en el
-    // título ML, es señal fuerte de producto distinto igual.
-    const d = diffTokens(toks('cadena shimano'), toks('cadena sram'), { cadena: 100, shimano: 80, sram: 80 }, 200, 'Shimano');
+  it('conflicto de marca estructurada (catalogo_cache.marca): el título ML nombra OTRA marca conocida', () => {
+    // "shimano" es muy común (no cae por rareza); el conflicto acá no viene de rareza sino de
+    // que el título ML nombra explícitamente otra marca del catálogo ("sram").
+    const marcas = normalizarMarcas(['Shimano', 'Sram']);
+    const d = diffTokens(toks('cadena shimano'), toks('cadena sram'), { cadena: 100, shimano: 80, sram: 80 }, 200, 'Shimano', otrasMarcasPosibles('Shimano', marcas));
     expect(d.discriminantes_conflicto).toContain('shimano');
     expect(d.hay_contradiccion).toBe(true);
   });
 
   it('sin conflicto de marca cuando la marca de WC sí aparece en el título ML', () => {
     const d = diffTokens(toks('cadena shimano hg53'), toks('cadena shimano hg53'), {}, 10, 'Shimano');
+    expect(d.hay_contradiccion).toBe(false);
+  });
+
+  it('sin conflicto de marca cuando el título ML simplemente OMITE la marca (no nombra otra)', () => {
+    // El defecto que esto corrige: la mitad de los títulos de ML no mencionan la marca. Antes
+    // eso solo ya era "conflicto"; ahora hace falta que ML nombre otra marca conocida. (El "r29"
+    // de WC sigue siendo un discriminante propio aparte —no relacionado a marca— así que acá se
+    // valida puntualmente conflicto_marca, no hay_contradiccion en general.)
+    const marcas = normalizarMarcas(['Chaoyang', 'Maxxis', 'Vittoria']);
+    const d = diffTokens(toks('camara chaoyang valvula de auto'), toks('camara bicicleta rodado 29 valvula de auto'), { camara: 5, chaoyang: 5, valvula: 5, de: 5, auto: 5, bicicleta: 5, rodado: 5, 29: 5 }, 10, 'Chaoyang', otrasMarcasPosibles('Chaoyang', marcas));
+    expect(d.conflicto_marca).toBe(false);
     expect(d.hay_contradiccion).toBe(false);
   });
 });
@@ -286,25 +301,41 @@ describe('matcherEngine · hallazgo de probador-e2e: conflicto de marca fuerza b
   // Caso real sacado de la cola: "Jersey Elite KOKUEN" contra "Casco Giro Seyen Mips". Marca Y
   // categoría distintas, pero "Fusion Bikes" + "Talle S" compartidos alcanzaban para un score
   // 0.69 → 'revisar' → un solo click de confirmación, la misma fricción que un match legítimo.
-  it('marca WC vs marca ML totalmente distinta → confianza SIEMPRE baja, aunque el score sea alto', () => {
-    const { top } = armar('Jersey Elite KOKUEN Talle S - Fusion Bikes', 'Casco Giro Seyen Mips Talle S - Fusion Bikes', [], 'Kokuen');
+  it('marca WC vs marca ML totalmente distinta (ML nombra la otra marca) → confianza SIEMPRE baja, aunque el score sea alto', () => {
+    const marcas = normalizarMarcas(['Kokuen', 'Giro']);
+    const { top } = armar('Jersey Elite KOKUEN Talle S - Fusion Bikes', 'Casco Giro Seyen Mips Talle S - Fusion Bikes', [], 'Kokuen', marcas);
     expect(top.score).toBeGreaterThan(0.5); // confirma que el score solo lo salvaría a 'revisar'
     expect(top.diff.conflicto_marca).toBe(true);
     expect(top.confianza).toBe('baja');
   });
 
-  it('marcaEnConflicto: marca distinta sin ningún parecido → true', () => {
-    expect(marcaEnConflicto('Kokuen', toks('casco giro seyen mips'))).toBe(true);
+  it('marcaEnConflicto: marca distinta y el título ML nombra OTRA marca conocida → true', () => {
+    const marcas = normalizarMarcas(['Kokuen', 'Giro']);
+    expect(marcaEnConflicto('Kokuen', toks('casco giro seyen mips'), otrasMarcasPosibles('Kokuen', marcas))).toBe(true);
   });
 
   it('marcaEnConflicto: marca ausente en WC → false SIEMPRE (nunca contradicción por ausencia)', () => {
-    expect(marcaEnConflicto('', toks('casco giro seyen mips'))).toBe(false);
-    expect(marcaEnConflicto(null, toks('casco giro seyen mips'))).toBe(false);
-    expect(marcaEnConflicto(undefined, toks('casco giro seyen mips'))).toBe(false);
+    const marcas = normalizarMarcas(['Giro']);
+    expect(marcaEnConflicto('', toks('casco giro seyen mips'), marcas)).toBe(false);
+    expect(marcaEnConflicto(null, toks('casco giro seyen mips'), marcas)).toBe(false);
+    expect(marcaEnConflicto(undefined, toks('casco giro seyen mips'), marcas)).toBe(false);
   });
 
   it('marcaEnConflicto: escritura distinta pero parecida ("Metha" vs "Mtha") → false, no es conflicto', () => {
     expect(marcaEnConflicto('Metha', toks('bicicleta mtha aro 29'))).toBe(false);
+  });
+
+  it('marcaEnConflicto: SIN marcasConocidas, marca ausente → false (fail-open: no hay forma de afirmar "otra marca")', () => {
+    // Regresión directa del defecto en producción: antes, "no aparece" ya alcanzaba solo.
+    expect(marcaEnConflicto('Kokuen', toks('casco giro seyen mips'))).toBe(false);
+    expect(marcaEnConflicto('Kokuen', toks('casco giro seyen mips'), new Set())).toBe(false);
+  });
+
+  it('marcaEnConflicto: el título ML solo OMITE la marca (no nombra ninguna otra conocida) → false', () => {
+    // Los dos casos reales del encargo: la mitad de los títulos de ML no mencionan la marca.
+    const marcas = normalizarMarcas(['Chaoyang', 'Maxxis', 'Cateye', 'Giant']);
+    expect(marcaEnConflicto('Chaoyang', toks('camara bicicleta rodado 29 valvula de auto'), otrasMarcasPosibles('Chaoyang', marcas))).toBe(false);
+    expect(marcaEnConflicto('Cateye', toks('velocimetro inalambrico cat eye padrone'), otrasMarcasPosibles('Cateye', marcas))).toBe(false);
   });
 
   it('marca ausente en WC no fuerza baja: un match legítimo sin marca estructurada conserva su confianza real', () => {
@@ -313,12 +344,176 @@ describe('matcherEngine · hallazgo de probador-e2e: conflicto de marca fuerza b
     expect(top.confianza).not.toBe('baja');
   });
 
+  it('mutation testing: si se revierte a la regla vieja (ausencia sola = conflicto, ignorando marcasConocidas) este caso rompe', () => {
+    // Ancla explícita contra volver a "no aparece" como criterio único: con marcasConocidas
+    // vacío/ausente, una marca simplemente omitida en el título ML NUNCA es conflicto.
+    expect(marcaEnConflicto('Chaoyang', toks('camara bicicleta rodado 29 valvula de auto'))).toBe(false);
+  });
+
   it('confianzaDesdeScore: conflictoMarca gana incluso con score perfecto y sin otra contradicción', () => {
     expect(confianzaDesdeScore(1, false, true)).toBe('baja');
   });
 
   it('confianzaDesdeScore: sin conflicto de marca, se comporta como antes (compat con llamadas de 2 args)', () => {
     expect(confianzaDesdeScore(0.9, false)).toBe('alta');
+  });
+});
+
+describe('matcherEngine · hallazgo 🔴 del revisor: marca multi-palabra NO puede entrar en conflicto consigo misma', () => {
+  // Bug real: el primer chequeo (marca SÍ está) compara TOKENS de marcaWc ("buzz","rack") contra
+  // tokens de ML; el segundo (¿otra marca?) compara la marca conocida ENTERA normalizada ("buzz
+  // rack", con el espacio) contra esos mismos tokens. Con la marca escrita SIN espacio en el
+  // título ML ("Buzzrack"), el primero no la reconoce (ratio('buzz','buzzrack')=0.67<0.75) pero
+  // el segundo sí matchea contra sí misma (ratio('buzz rack','buzzrack')=0.94≥0.92) y la declara
+  // "otra marca". catalogo_cache tiene 20 marcas multi-palabra reales (Buzz Rack, Selle Italia,
+  // Rudy Project, Crank Brothers, Super B...), y el daño no es solo un falso rojo: con un solo
+  // candidato correcto, candidatosParaWC lo filtra por 'baja' y manda el producto a "hay que
+  // publicarlo" en vez de mostrarlo — el conflicto falso ESCONDE el match, no solo lo margina.
+  //
+  // Los dos pares de acá son REALES (data/fusion.sqlite, FB-16220/MLA737640957 y
+  // FB-55035/MLA2790986970): también protegen el caso central del cambio completo — el título
+  // ML omite la marca como tokens separados ("buzz"/"rack" no aparecen sueltos), la reconoce
+  // solo concatenada. marcaEnConflicto ya NO hace el filtro de auto-marca internamente (motivo:
+  // hallazgo 🟡 de performance, ver otrasMarcasPosibles) — el llamador tiene que pasar por
+  // otrasMarcasPosibles() primero, igual que hacen candidatosDeWC y buscarMlManual en producción.
+  it('marcaEnConflicto: "Buzz Rack" vs título ML real que la escribe sin espacio ("Buzzrack") → false, es la MISMA marca', () => {
+    const marcas = normalizarMarcas(['Buzz Rack', 'Thule', 'Yakima']);
+    const otrasMarcas = otrasMarcasPosibles('Buzz Rack', marcas);
+    expect(marcaEnConflicto('Buzz Rack', toks('Porta Bicicletas Buzzrack Para 3 Bicis Envio Gratis.'), otrasMarcas)).toBe(false);
+  });
+
+  it('marcaEnConflicto: "Selle Italia" vs título ML real que la escribe sin espacio ("Selleitalia") → false, es la MISMA marca', () => {
+    const marcas = normalizarMarcas(['Selle Italia', 'Fizik', 'Fabric']);
+    const otrasMarcas = otrasMarcasPosibles('Selle Italia', marcas);
+    expect(marcaEnConflicto('Selle Italia', toks('Sillín Selleitalia Novus Evo Boost Endurance L3'), otrasMarcas)).toBe(false);
+  });
+
+  it('candidatosDeWC: producto real Buzz Rack no queda oculto como sin_candidato por auto-conflicto', () => {
+    const marcas = normalizarMarcas(['Buzz Rack', 'Thule']);
+    const { wcItems } = construirWC([{ sku: 'FB-16220', nombre: 'Portabicicletas Buzzrack Mozzquito - Para 3 Bicicletas', tipo: 'simple' }]);
+    const mlIndex = construirML([{ clave: 'MLA737640957|', item_id: 'MLA737640957', titulo: 'Porta Bicicletas Buzzrack Para 3 Bicis Envio Gratis.' }]);
+    mlIndex.marcasConocidas = marcas;
+    const { sin_candidato, candidatos } = candidatosParaWC(wcItems[0], mlIndex, 'Buzz Rack');
+    expect(candidatos[0].diff.conflicto_marca).toBe(false);
+    expect(sin_candidato).toBe(false); // antes del fix: 'baja' por auto-conflicto → sin_candidato true → se pierde el match
+  });
+
+  it('contrato: si el llamador NO pasa por otrasMarcasPosibles primero (marcasConocidas cruda), marcaEnConflicto explota en vez de mentir', () => {
+    // marcaEnConflicto ya no filtra la propia marca internamente (se movió a otrasMarcasPosibles
+    // para no recalcularlo por candidato, hallazgo 🟡 de performance). El riesgo que eso abre —
+    // medido en la práctica por el revisor: pasar la lista CRUDA de marcasConocidas en vez del
+    // resultado de otrasMarcasPosibles da un resultado plausible pero FALSO (el auto-conflicto
+    // del hallazgo 🔴 reaparece en silencio) — está cubierto por una guarda O(1) (membresía
+    // exacta) que hace fallar esto ruidosamente en vez de devolver un booleano equivocado.
+    const marcasCrudas = normalizarMarcas(['Buzz Rack', 'Thule']);
+    expect(() => marcaEnConflicto('Buzz Rack', toks('Porta Bicicletas Buzzrack Para 3 Bicis Envio Gratis.'), marcasCrudas))
+      .toThrow(/otrasMarcasPosibles/);
+  });
+});
+
+describe('matcherEngine · hallazgo 🟠 del revisor: umbral de "otra marca" (0.92) — tests que sí ejercitan la rama', () => {
+  // Hallazgo del revisor sobre la primera versión de estos tests: los tres usaban 'Shimano'
+  // como marcaWc CON 'shimano' presente en el título ML — el primer loop de marcaEnConflicto
+  // (la marca SÍ está) devuelve false ANTES de llegar a la rama del umbral, así que ninguno de
+  // los tres ejercitaba lo que decían proteger (mutantes 0.85, 0.60 y 1.0 pasaban igual). Acá
+  // la marcaWc está SIEMPRE ausente del título ('Kokuen', que no aparece en ningún caso), para
+  // forzar el camino real hasta la comparación de umbral.
+  it('palabra de catálogo común que se PARECE a una marca (ratio 0.889) NO dispara conflicto — mata los mutantes 0.85 y 0.60', () => {
+    // ratio('cubre','cube')=0.889: por debajo del umbral real (0.92, correcto: es una palabra
+    // de catálogo, no una mención de la marca Cube) pero por encima de 0.85 (el umbral viejo
+    // rechazado) y muy por encima de 0.60. Cualquier mutante que baje el umbral a 0.85 o 0.60
+    // hace que este caso pase a `true` — la marcaWc ('Kokuen') está ausente del título, así que
+    // SÍ se llega a la rama del umbral.
+    expect(ratio('cubre', 'cube')).toBeGreaterThan(0.85);
+    expect(ratio('cubre', 'cube')).toBeLessThan(0.92);
+    const marcas = normalizarMarcas(['Cube', 'Fundax', 'Elite']);
+    const otrasMarcas = otrasMarcasPosibles('Kokuen', marcas);
+    expect(marcaEnConflicto('Kokuen', toks('cadena bicicleta cubre negro'), otrasMarcas)).toBe(false);
+  });
+
+  it('mención real de otra marca, concatenada sin espacio (ratio 0.94) SÍ dispara conflicto — mata el mutante 1.0', () => {
+    // Lado opuesto del caso anterior: "buzzrack" contra la marca conocida "Buzz Rack" (ratio
+    // 0.94, por debajo de un umbral mutante de 1.0 pero por encima del real 0.92). Acá la
+    // marcaWc ('Kokuen') es DISTINTA de Buzz Rack — es la mención de una marca ajena real, no
+    // el auto-conflicto del hallazgo 🔴 (ese usa la propia marca, este usa una diferente).
+    const marcas = normalizarMarcas(['Buzz Rack', 'Thule']);
+    const otrasMarcas = otrasMarcasPosibles('Kokuen', marcas);
+    expect(marcaEnConflicto('Kokuen', toks('porta bicicletas buzzrack para 3 bicis'), otrasMarcas)).toBe(true);
+  });
+
+  it('mención real de otra marca (match exacto, ratio 1.0) sigue detectándose con el umbral nuevo', () => {
+    const marcas = normalizarMarcas(['Giro', 'Bell']);
+    const otrasMarcas = otrasMarcasPosibles('Kokuen', marcas);
+    expect(marcaEnConflicto('Kokuen', toks('casco giro seyen mips'), otrasMarcas)).toBe(true);
+  });
+});
+
+describe('matcherEngine · hallazgo 🟠 del revisor: marcas cortas (3 caracteres) recuperadas por normalizarMarcas', () => {
+  // Kmc, Poc, Fox, Fsa, Bbb son marcas reales de catalogo_cache con hermanos parecidos en su
+  // categoría (cadenas, cascos/lentes) — justo donde más hace falta la señal. El corte viejo
+  // (4+) las dejaba completamente afuera de marcasConocidas.
+  it('normalizarMarcas conserva marcas de 3 caracteres (Kmc, Poc)', () => {
+    const marcas = normalizarMarcas(['Kmc', 'Poc', 'Shimano']);
+    expect(marcas.has('kmc')).toBe(true);
+    expect(marcas.has('poc')).toBe(true);
+  });
+
+  it('normalizarMarcas descarta marcas de 2 caracteres o menos (QR: colisiona con la categoría "QR Pagos")', () => {
+    const marcas = normalizarMarcas(['QR', 'Kmc']);
+    expect(marcas.has('qr')).toBe(false);
+    expect(marcas.has('kmc')).toBe(true);
+  });
+
+  it('marcaEnConflicto detecta una marca corta de 3 caracteres mencionada en el título ML', () => {
+    const marcas = normalizarMarcas(['Poc', 'Giro']);
+    const otrasMarcas = otrasMarcasPosibles('Giro', marcas);
+    expect(marcaEnConflicto('Giro', toks('lentes ciclismo poc devour hydrogen'), otrasMarcas)).toBe(true);
+  });
+
+  it('normalizarMarcas excluye "Pro" (línea de producto genérica, ej. "Rapha Pro Team") aunque tenga 3+ caracteres', () => {
+    const marcas = normalizarMarcas(['Pro', 'Kmc']);
+    expect(marcas.has('pro')).toBe(false);
+    expect(marcas.has('kmc')).toBe(true);
+  });
+
+  it('normalizarMarcas excluye cualquier marca que sea también un color de COLORES (ej. "Lima")', () => {
+    // Hallazgo del revisor: "Lima" es marca real de catalogo_cache Y color real del motor
+    // (COLORES) — 6 de sus 7 apariciones en el corpus son el color ("Verde Lima"), no la marca.
+    // Regla derivada de datos que ya vive en el motor, en vez de mantener una lista a mano.
+    const marcas = normalizarMarcas(['Lima', 'Kmc']);
+    expect(marcas.has('lima')).toBe(false);
+    expect(marcas.has('kmc')).toBe(true);
+  });
+
+  it('mutation testing: si el corte de longitud volviera a 4, "Kmc" deja de detectarse como otra marca', () => {
+    const marcasConCorteViejo = new Set([...normalizarMarcas(['Poc'])].filter((m) => m.length >= 4)); // simula el corte roto
+    expect(marcasConCorteViejo.has('poc')).toBe(false); // confirma que el corte de 4 sí perdía "poc"
+  });
+});
+
+describe('matcherEngine · hallazgo 🟡 del revisor: otrasMarcasPosibles se calcula una vez por producto, no por candidato', () => {
+  // Función pura extraída de adentro de marcaEnConflicto (antes recalculaba el filtro de
+  // auto-marca en cada llamada — hasta 50 veces por producto, una por candidato). Tests directos
+  // sobre el contrato: excluye la propia marca (exacta o escrita distinto), deja el resto intacto.
+  it('excluye del set la propia marca, exacta', () => {
+    const marcas = normalizarMarcas(['Shimano', 'Sram', 'Maxxis']);
+    const otras = otrasMarcasPosibles('Shimano', marcas);
+    expect(otras.has('shimano')).toBe(false);
+    expect(otras.has('sram')).toBe(true);
+    expect(otras.has('maxxis')).toBe(true);
+  });
+
+  it('excluye del set la propia marca aunque esté escrita distinto (concatenada sin espacio)', () => {
+    const marcas = normalizarMarcas(['Buzz Rack', 'Thule']);
+    const otras = otrasMarcasPosibles('Buzz Rack', marcas);
+    expect(otras.has('buzz rack')).toBe(false);
+    expect(otras.has('thule')).toBe(true);
+  });
+
+  it('sin marcaWc o sin marcasConocidas, devuelve el set tal cual (sin filtrar nada)', () => {
+    const marcas = normalizarMarcas(['Shimano']);
+    expect(otrasMarcasPosibles('', marcas)).toBe(marcas);
+    expect([...otrasMarcasPosibles('Shimano', new Set())]).toEqual([]);
   });
 });
 
