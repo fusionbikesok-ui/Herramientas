@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "vitest run",
-    "audit": "node scripts/audit-matcher.mjs"
+    "audit": "node scripts/audit-matcher.mjs",
+    "cerrar-preparaciones-sin-evidencia": "node scripts/cerrar-preparaciones-sin-evidencia.mjs"
   },
   "keywords": [],
   "author": "",

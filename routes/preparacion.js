@@ -8,7 +8,8 @@ import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
 import { procesarColaFotos, reintentarFoto } from '../lib/fotosPreparacionCola.js';
 import {
-  normalizarEnvio, resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
+  normalizarEnvio, resolverPerfil, requisitosFoto, requisitosPaquete, requisitosConCantidad,
+  fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
@@ -19,6 +20,32 @@ const now = () => new Date().toISOString();
 
 // Perfiles de foto soportados (validación de los endpoints de perfiles por categoría y por SKU).
 const PERFILES_VALIDOS = ['bici', 'kit_transmision', 'sellado'];
+
+// Motivos válidos para confirmar-manual (atajo que salta el escaneo real). Lista corta a
+// propósito — el objetivo es dejar rastro auditable, no dar una excusa en blanco.
+const MOTIVOS_CONFIRMACION_MANUAL = ['codigo_ilegible', 'sin_etiqueta', 'otro'];
+
+// Estados en los que NO se puede seguir trabajando una preparación (escanear, confirmar
+// manual, subir fotos) — hallazgo del revisor: antes se podía escanear/fotografiar una
+// 'cerrada_sin_evidencia' sin pasar por /reabrir, así que el evento 'reabierta' (el
+// rastro de "entró un reclamo y alguien la reactivó") quedaba registrado después de que
+// ya se había trabajado encima, o directamente nunca. 'completada' también se bloquea
+// para no poder alterar el historial de una preparación ya cerrada de verdad.
+// 'despachada_sin_verificar' y 'pendiente_deposito' quedan AFUERA a propósito: siguen
+// siendo trabajables (la primera, para que después /completar la pueda subir a
+// 'completada' si se verifica todo; la segunda, para que el depósito termine su parte).
+const ESTADOS_BLOQUEADOS_PARA_TRABAJAR = new Set(['completada', 'cerrada_sin_evidencia']);
+
+// Mensaje genérico para la pantalla del operario — el detalle de qué endpoint usar para
+// desbloquear (/reabrir) es del contrato/log, no de una pantalla de alguien embalando
+// cajas (hallazgo del revisor).
+function bloqueoPorEstado(prep) {
+  if (!ESTADOS_BLOQUEADOS_PARA_TRABAJAR.has(prep.estado)) return null;
+  if (prep.estado === 'cerrada_sin_evidencia') {
+    return 'esta preparación está cerrada — pedile a un compañero que la reabra antes de seguir';
+  }
+  return 'ya completada';
+}
 
 // ─── Tablas (idempotente, patrón de routes/pedidos.js) ───────────────────────
 
@@ -190,8 +217,20 @@ function perfilParaItem(db, { sku, categoria, nombre }) {
 }
 
 // Requisitos de foto de un ítem, respetando requisitos_json custom: primero por SKU
-// exacto, después por categoría, y al final el default del perfil.
+// exacto, después por categoría, y al final el default del perfil. Al final se le anota
+// la cantidad esperada a los slots "de artículo" (requisitosConCantidad) cuando el ítem
+// pide más de 1 unidad — un único punto de salida para no tener que repetir esa llamada
+// en cada return de abajo.
+//
+// La foto de artículo es el PISO, no el techo: requisitosBaseParaItem ya garantiza al
+// menos un slot para cualquier perfil (nunca devuelve vacío), y las reglas por SKU/
+// categoría que ya existían pueden seguir pidiendo fotos ADICIONALES encima de ese piso
+// (más slots, no menos) — este cambio no las reemplaza ni las achica.
 function requisitosParaItem(db, item) {
+  return requisitosConCantidad(requisitosBaseParaItem(db, item), item.cantidad_esperada);
+}
+
+function requisitosBaseParaItem(db, item) {
   const skuNorm = String(item.sku || '').trim().toUpperCase();
   if (skuNorm) {
     const reglaSku = db.prepare('SELECT requisitos_json FROM preparacion_perfiles_sku WHERE sku=?').get(skuNorm);
@@ -227,6 +266,86 @@ function requisitosParaItem(db, item) {
     }
   }
   return requisitosFoto(item.perfil, item.estado_embalaje);
+}
+
+// Recorre los ítems y fotos de una preparación y devuelve exactamente lo que le falta
+// para poder completarse — MISMA función que usa POST /:id/completar para decidir si
+// bloquea (no una versión paralela que se pueda desincronizar). La reusan también
+// preparacionEstaVerificada (para decidir 'completada' vs 'despachada_sin_verificar' al
+// cargar el tracking) y el cron reintentarColgadosTracking, con el mismo criterio.
+function calcularFaltantesPreparacion(db, prep) {
+  const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(prep.id);
+  const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL').all(prep.id);
+
+  const faltantes = [];
+  const delegadosPendientes = [];
+
+  for (const it of items) {
+    if (it.estado_item === 'exento') continue;
+
+    if (it.estado_item !== 'verificado') {
+      if (it.despacho === 'deposito_delegado') {
+        delegadosPendientes.push({ item_id: it.id, sku: it.sku, nombre: it.nombre });
+      } else {
+        faltantes.push({ item_id: it.id, sku: it.sku, nombre: it.nombre, motivo: 'sin_verificar' });
+      }
+      continue;
+    }
+
+    const req_ = requisitosParaItem(db, it);
+    const faltan = fotosFaltantes(req_, fotos.filter(f => f.item_id === it.id));
+    if (faltan.length) {
+      faltantes.push({ item_id: it.id, sku: it.sku, nombre: it.nombre, motivo: 'fotos', faltan });
+    }
+  }
+
+  const fotosGenerales = fotos.filter(f => !f.item_id);
+  const faltaPaquete = fotosFaltantes(requisitosPaquete(), fotosGenerales);
+
+  return { faltantes, delegadosPendientes, faltaPaquete };
+}
+
+// ¿Esta preparación está completamente verificada (todo escaneado/confirmado con motivo,
+// con sus fotos, incluidas las dos del paquete, y sin nada delegado al depósito
+// pendiente)? Se usa para decidir el estado interno al cargar el tracking — cargar el
+// tracking sigue moviendo el pedido en Woo (mail al cliente incluido), pero el estado
+// LOCAL solo puede decir 'completada' si esto da true; si no, 'despachada_sin_verificar'
+// (ver marcarPreparacionEnviada). No mira el estado de la fila `preparaciones` en sí
+// (cerrada_sin_evidencia se filtra antes de llegar acá, en el caller).
+function preparacionEstaVerificada(db, prep) {
+  const { faltantes, delegadosPendientes, faltaPaquete } = calcularFaltantesPreparacion(db, prep);
+  return faltantes.length === 0 && delegadosPendientes.length === 0 && faltaPaquete.length === 0;
+}
+
+// Cierra el lado LOCAL de la preparación una vez que el pedido ya salió en Woo (paso 2 de
+// /seguimientos, o el reintento del cron reintentarColgadosTracking). El flujo de Woo NO
+// cambia: el mail al cliente ya se mandó en el paso 1, eso es correcto y no se toca. Lo
+// que se decide acá es el estado INTERNO:
+//   - si preparacionEstaVerificada -> 'completada' (como antes de este ciclo).
+//   - si NO -> 'despachada_sin_verificar': el envío salió igual, pero el sistema no puede
+//     afirmar una verificación que no ocurrió (mismo espíritu que 'cerrada_sin_evidencia').
+// Fail-closed por partida doble contra pisar una 'cerrada_sin_evidencia': se lee el
+// estado ANTES y el UPDATE además lleva `AND estado<>'cerrada_sin_evidencia'` en el WHERE
+// (defensa en profundidad ante una corrida concurrente — cron + script de mantenimiento
+// — aunque hoy, de un solo proceso y sin await entre la lectura y el UPDATE, no haga
+// falta para el caso simple).
+// `woo_paso2_pendiente` se limpia siempre (es un flag del lado Woo, no del de
+// verificación) — incluso si la preparación resultó ser 'cerrada_sin_evidencia'.
+function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
+  db.prepare('UPDATE preparaciones SET woo_paso2_pendiente=0 WHERE clave=?').run(clave);
+  const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(clave);
+  if (!prep || prep.estado === 'cerrada_sin_evidencia') return null;
+
+  const estadoFinal = preparacionEstaVerificada(db, prep) ? 'completada' : 'despachada_sin_verificar';
+  const cambio = db.prepare(
+    "UPDATE preparaciones SET estado=?, completado_en=? WHERE id=? AND estado<>'cerrada_sin_evidencia'"
+  ).run(estadoFinal, now(), prep.id);
+  if (!cambio.changes) return null; // se cerró sin evidencia justo entre el SELECT y el UPDATE
+
+  if (estadoFinal === 'despachada_sin_verificar') {
+    registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'despachado_sin_verificar', usuario, detalle: {} });
+  }
+  return estadoFinal;
 }
 
 // Crea (o completa) una preparación con el snapshot de sus ítems.
@@ -334,8 +453,9 @@ export async function reintentarColgadosTracking(db, cfg) {
   for (const prep of pendientes) {
     try {
       await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', { status: cfg.enviadoAndreaniStatus || 'enviadoandreani' });
-      db.prepare("UPDATE preparaciones SET estado='completada', completado_en=?, woo_paso2_pendiente=0 WHERE id=?")
-        .run(new Date().toISOString(), prep.id);
+      // Mismo criterio que /seguimientos/:wcOrderId: 'completada' solo si de verdad está
+      // verificada, y nunca pisa una 'cerrada_sin_evidencia' — ver marcarPreparacionEnviada.
+      marcarPreparacionEnviada(db, prep.clave, { usuario: null });
       registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_recuperado', usuario: null, detalle: {} });
       resueltos++;
     } catch (e) {
@@ -396,7 +516,15 @@ export function preparacionRouter(db, cfg) {
       // syncPedidosCache excluye a propósito estas filas para no borrar de más — por eso
       // pueden quedar en pedidos_cache con estado_envio='pendiente' para siempre aunque el
       // operario ya haya terminado. Filtramos acá, en la lectura, sin tocar la poda.
-      const RESUELTAS = ['completada', 'pendiente_deposito'];
+      // 'cerrada_sin_evidencia': preparaciones viejas cerradas por el script de
+      // mantenimiento (ver scripts/cerrar-preparaciones-sin-evidencia.mjs) — salen de la
+      // cola de trabajo igual que una completada, pero se consultan desde su sección propia
+      // (GET /cerradas-sin-evidencia) si entra un reclamo, no desde acá.
+      // 'despachada_sin_verificar': el pedido ya salió (tracking cargado, mail al cliente
+      // ya mandado) aunque no estaba verificado — no es "pendiente de trabajo" (ya se
+      // despachó, no tiene sentido que el sector lo vuelva a ver acá), se consulta desde
+      // GET /despachadas-sin-verificar.
+      const RESUELTAS = ['completada', 'pendiente_deposito', 'cerrada_sin_evidencia', 'despachada_sin_verificar'];
       const data = rows
         .map(row => {
           const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(row.clave);
@@ -600,8 +728,12 @@ export function preparacionRouter(db, cfg) {
         });
       }
 
-      db.prepare(`UPDATE preparaciones SET estado='completada', completado_en=?, woo_paso2_pendiente=0 WHERE clave=?`)
-        .run(now(), `web:${wcOrderId}`);
+      // El envío ya salió (Woo confirmado, mail al cliente ya mandado) — el estado LOCAL
+      // distingue si de verdad se verificó o no, y nunca pisa una 'cerrada_sin_evidencia'
+      // (ver marcarPreparacionEnviada). Bloqueante crítico del revisor: antes esto
+      // marcaba 'completada' sin mirar ítems/fotos/estado previo, y era un atajo más
+      // rápido que confirmar-manual para "verificar" un pedido sin escanear nada.
+      marcarPreparacionEnviada(db, `web:${wcOrderId}`, { usuario: req.user?.username });
 
       res.json({ ok: true });
     } catch (e) {
@@ -736,6 +868,43 @@ export function preparacionRouter(db, cfg) {
     res.json({ ok: true, data: [...preparadas, ...sinPreparar] });
   });
 
+  // ── Cerradas sin evidencia: sección propia, separada del historial de verificadas ──
+  // A propósito NO se mezclan con GET /historial (que solo trae 'completada'/
+  // 'pendiente_deposito'): el sentido del estado 'cerrada_sin_evidencia' es que se puedan
+  // distinguir de las que sí se verificaron de verdad cuando alguien las consulte por un
+  // reclamo — mezclarlas en la misma lista sería repetir el problema que este estado
+  // existe para resolver. Se reabren con POST /:id/reabrir.
+  router.get('/cerradas-sin-evidencia', (req, res) => {
+    const data = db.prepare(`
+      SELECT p.*,
+        (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
+        (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id AND borrado_en IS NULL) AS total_fotos
+      FROM preparaciones p
+      WHERE p.estado='cerrada_sin_evidencia'
+      ORDER BY p.creado_en DESC LIMIT 200
+    `).all();
+    res.json({ ok: true, data });
+  });
+
+  // ── Despachadas sin verificar: sección propia, mismo criterio que cerradas-sin-evidencia ──
+  // El pedido SÍ salió (Woo ya confirmó el envío y mandó el mail al cliente), pero la
+  // preparación no estaba completamente verificada cuando se cargó el tracking (ver
+  // marcarPreparacionEnviada). El sentido de este estado es justo poder consultarlo ante
+  // un reclamo — un estado que no se puede listar no sirve para nada (hallazgo del
+  // revisor). Tampoco se mezcla con GET /historial (que solo trae 'completada'/
+  // 'pendiente_deposito'): mezclarlo ahí sería volver a "indistinguible de una verificada".
+  router.get('/despachadas-sin-verificar', (req, res) => {
+    const data = db.prepare(`
+      SELECT p.*,
+        (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
+        (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id AND borrado_en IS NULL) AS total_fotos
+      FROM preparaciones p
+      WHERE p.estado='despachada_sin_verificar'
+      ORDER BY p.creado_en DESC LIMIT 200
+    `).all();
+    res.json({ ok: true, data });
+  });
+
   // ── Estado del sync de pedidos_cache (para el aviso de frescura en el frontend) ──
   router.get('/pedidos-cache/estado', (req, res) => {
     const ultimoLog = db.prepare(
@@ -863,7 +1032,8 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/escanear', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    if (prep.estado === 'completada') return res.status(400).json({ ok: false, error: 'ya completada' });
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
 
     const codigo = String(req.body?.codigo || '').trim().toUpperCase();
     if (!codigo) return res.status(400).json({ ok: false, error: 'codigo requerido' });
@@ -892,11 +1062,31 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Confirmar sin código ──
+  // Ya no es gratis (incidente 2026-08-12: un pedido de 5 unidades salió con 1 porque el
+  // atajo verificaba sin escanear nada — ver plan 2026-08-12-escaneo-obligatorio.md). Fail-
+  // closed: sin motivo válido de la lista corta, 400 y no se toca el ítem. Cualquier usuario
+  // puede usarla (decisión del usuario: no se restringe a admin), pero motivo+usuario+hora
+  // quedan en preparacion_eventos.
   router.post('/:id/item/:itemId/confirmar-manual', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
     if (!item) return res.status(404).json({ ok: false, error: 'ítem no encontrado' });
+
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!MOTIVOS_CONFIRMACION_MANUAL.includes(motivo)) {
+      return res.status(400).json({
+        ok: false,
+        error: `motivo requerido (uno de: ${MOTIVOS_CONFIRMACION_MANUAL.join(', ')})`,
+      });
+    }
+    // "otro" sin texto libre no es un motivo real — sería el mismo agujero con un paso más.
+    const detalleTexto = String(req.body?.detalle_texto || '').trim();
+    if (motivo === 'otro' && !detalleTexto) {
+      return res.status(400).json({ ok: false, error: 'detalle_texto requerido cuando motivo es "otro"' });
+    }
 
     // Si ya estaba verificado antes de esta llamada, es un no-op (doble tap /
     // re-confirmación): no pasó nada nuevo que auditar, igual que "sobrante" en /escanear.
@@ -907,7 +1097,11 @@ export function preparacionRouter(db, cfg) {
     if (!yaVerificado) {
       registrarEvento(db, {
         preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
-        detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada, cantidad_esperada: item.cantidad_esperada, origen: 'manual' },
+        detalle: {
+          sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada,
+          cantidad_esperada: item.cantidad_esperada, origen: 'manual',
+          motivo, detalle_texto: detalleTexto || null,
+        },
       });
     }
     res.json({ ok: true, item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
@@ -980,6 +1174,8 @@ export function preparacionRouter(db, cfg) {
   }, (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
 
     // Detección de HEIC/HEIF: los iPhone al compartir mandan el .heic con mimetype
@@ -1095,47 +1291,90 @@ export function preparacionRouter(db, cfg) {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (prep.estado === 'completada') return res.status(400).json({ ok: false, error: 'ya completada' });
-
-    const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(prep.id);
-    const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL').all(prep.id);
-
-    const faltantes = [];
-    const delegadosPendientes = [];
-
-    for (const it of items) {
-      if (it.estado_item === 'exento') continue;
-
-      if (it.estado_item !== 'verificado') {
-        if (it.despacho === 'deposito_delegado') {
-          delegadosPendientes.push({ item_id: it.id, sku: it.sku, nombre: it.nombre });
-        } else {
-          faltantes.push({ item_id: it.id, sku: it.sku, nombre: it.nombre, motivo: 'sin_verificar' });
-        }
-        continue;
-      }
-
-      const req_ = requisitosParaItem(db, it);
-      const faltan = fotosFaltantes(req_, fotos.filter(f => f.item_id === it.id));
-      if (faltan.length) {
-        faltantes.push({ item_id: it.id, sku: it.sku, nombre: it.nombre, motivo: 'fotos', faltan });
-      }
+    // Fail-closed: una 'cerrada_sin_evidencia' no se completa directamente — primero hay
+    // que reabrirla (POST /:id/reabrir, ver docs/api-contrato.md), que deja registrado el
+    // quién/cuándo del reclamo que la reactivó. Sin este freno, /completar la sacaría del
+    // estado "sin evidencia" en silencio, sin ese rastro. El mensaje al operario es
+    // genérico a propósito: el detalle del endpoint para reabrir es del contrato/log, no
+    // de una pantalla de alguien embalando cajas.
+    if (prep.estado === 'cerrada_sin_evidencia') {
+      console.error(`POST /completar rechazado: preparación ${prep.id} está cerrada_sin_evidencia — reabrir con POST /:id/reabrir antes de completar`);
+      return res.status(400).json({ ok: false, error: 'esta preparación está cerrada y no se puede completar así — pedile a un compañero que la reabra' });
     }
+
+    // Misma función que decide 'completada' vs 'despachada_sin_verificar' al cargar el
+    // tracking (calcularFaltantesPreparacion/preparacionEstaVerificada) — un solo criterio
+    // de "qué falta", no dos que se puedan desincronizar.
+    const { faltantes, delegadosPendientes, faltaPaquete } = calcularFaltantesPreparacion(db, prep);
 
     if (faltantes.length) {
       return res.status(400).json({ ok: false, error: 'preparación incompleta', faltantes });
     }
 
     if (delegadosPendientes.length) {
-      db.prepare("UPDATE preparaciones SET estado='pendiente_deposito' WHERE id=?").run(prep.id);
+      // Todavía no es el cierre final (falta lo que resuelva el depósito) -> el paquete no
+      // está sellado y no tiene sentido pedir "la foto del paquete armado" acá. Se exige en
+      // el completar final, más abajo.
+      db.prepare("UPDATE preparaciones SET estado='pendiente_deposito' WHERE id=? AND estado<>'cerrada_sin_evidencia'").run(prep.id);
       return res.json({ ok: true, estado: 'pendiente_deposito', pendientes_deposito: delegadosPendientes });
     }
 
-    db.prepare("UPDATE preparaciones SET estado='completada', completado_en=?, preparado_por=? WHERE id=?")
-      .run(now(), req.user?.username || null, prep.id);
+    if (faltaPaquete.length) {
+      return res.status(400).json({
+        ok: false, error: 'preparación incompleta',
+        faltantes: [{ item_id: null, sku: null, nombre: 'Paquete armado', motivo: 'fotos', faltan: faltaPaquete }],
+      });
+    }
+
+    // Guard de estado también en el WHERE (defensa en profundidad, no solo en el `if` de
+    // arriba): hoy no hay TOCTOU dentro de este proceso (sin await entre la lectura de
+    // `prep` y este UPDATE, better-sqlite3 es síncrono), pero con dos procesos —cron,
+    // script de mantenimiento, otro request— corriendo en paralelo, un `/completar` no
+    // debería poder pisar una preparación que se cerró sin evidencia justo en el medio.
+    // `changes` en 0 significa que alguien más la cambió de estado antes: se lo decimos
+    // al cliente en vez de mentir con un 200.
+    const cambio = db.prepare(
+      "UPDATE preparaciones SET estado='completada', completado_en=?, preparado_por=? WHERE id=? AND estado<>'cerrada_sin_evidencia'"
+    ).run(now(), req.user?.username || null, prep.id);
+    if (!cambio.changes) {
+      return res.status(409).json({ ok: false, error: 'la preparación cambió de estado mientras se completaba, volvé a intentarlo' });
+    }
     registrarEvento(db, {
       preparacionId: prep.id, itemId: null, tipo: 'completado', usuario: req.user?.username, detalle: {},
     });
     res.json({ ok: true, estado: 'completada' });
+  });
+
+  // ── Reabrir una preparación cerrada sin evidencia ──
+  // No es un cierre definitivo: si entra un reclamo por una de las preparaciones viejas
+  // cerradas por el script de mantenimiento, hace falta poder volver a trabajarla con el
+  // flujo normal (escanear/fotografiar/completar). Cualquiera puede reabrir — mismo
+  // criterio que confirmar-manual: no se restringe a admin — pero motivo implícito
+  // (reclamo), usuario y hora quedan en preparacion_eventos. Fail-closed: solo se puede
+  // reabrir desde 'cerrada_sin_evidencia' — reabrir una 'completada' sería otro flujo (no
+  // existe hoy, fuera de alcance; ver la regla de negocio de "un pedido WC creado desde ML
+  // no se modifica después", que no aplica acá porque esto es local, pero el mismo
+  // criterio de no tocar lo ya verificado sin querer aplica igual).
+  router.post('/:id/reabrir', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (prep.estado !== 'cerrada_sin_evidencia') {
+      return res.status(400).json({
+        ok: false,
+        error: `solo se puede reabrir una preparación 'cerrada_sin_evidencia' (está '${prep.estado}')`,
+      });
+    }
+    // Guard de estado también en el WHERE (mismo criterio que /completar): defensa contra
+    // una corrida concurrente que haya cambiado el estado entre el SELECT de arriba y este
+    // UPDATE.
+    const cambio = db.prepare("UPDATE preparaciones SET estado='en_preparacion' WHERE id=? AND estado='cerrada_sin_evidencia'").run(prep.id);
+    if (!cambio.changes) {
+      return res.status(409).json({ ok: false, error: 'la preparación cambió de estado, volvé a intentarlo' });
+    }
+    registrarEvento(db, {
+      preparacionId: prep.id, itemId: null, tipo: 'reabierta', usuario: req.user?.username, detalle: {},
+    });
+    res.json({ ok: true, estado: 'en_preparacion' });
   });
 
   return router;

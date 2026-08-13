@@ -6,7 +6,7 @@ import sharp from 'sharp';
 import { openDb } from '../db/index.js';
 import {
   splitDireccion, splitTelefonoAr, normalizarEnvio,
-  resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal,
+  resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
 import { rutaAbsoluta } from '../utils/storage.js';
@@ -301,6 +301,45 @@ describe('fotosFaltantes', () => {
   });
 });
 
+describe('requisitosConCantidad', () => {
+  it('con cantidad 1 (o menos) no toca nada', () => {
+    const slots = requisitosFoto('sellado', null);
+    expect(requisitosConCantidad(slots, 1)).toEqual(slots);
+    expect(requisitosConCantidad(slots, 0)).toEqual(slots);
+  });
+
+  it('anota el slot "de artículo" cuando matchea por tipo (sellado/bici default)', () => {
+    const slots = requisitosConCantidad(requisitosFoto('sellado', null), 3);
+    expect(slots[0].etiqueta).toMatch(/3 unidades/);
+  });
+
+  it('fallback: si ningún slot es "de artículo" por tipo (bici re_embalada), anota el PRIMERO igual (MUTATION: hallazgo del revisor — sin el fallback, la nota desaparece acá)', () => {
+    const slots = requisitosConCantidad(requisitosFoto('bici', 're_embalada'), 4);
+    // Ninguno de lado_a/lado_b/caja_accesorios matchea 'articulo'/'piezas' por nombre.
+    expect(slots.map(s => s.tipos[0])).toEqual(['lado_a', 'lado_b', 'caja_accesorios']);
+    expect(slots[0].etiqueta).toMatch(/4 unidades/);
+    // Solo el primero lleva la nota, no se duplica en los otros.
+    expect(slots[1].etiqueta).not.toMatch(/unidades/);
+    expect(slots[2].etiqueta).not.toMatch(/unidades/);
+  });
+
+  it('fallback también aplica a un requisitos_json custom con tipos propios (mecanismo real de fotos extra por SKU/categoría)', () => {
+    const customSlots = [{ tipos: ['detalle_costura'], min: 1, etiqueta: 'Detalle de costura' }];
+    const anotados = requisitosConCantidad(customSlots, 2);
+    expect(anotados[0].etiqueta).toMatch(/2 unidades/);
+  });
+
+  it('no anota dos veces si YA hay más de un slot "de artículo" — cada uno con su propia nota', () => {
+    const slots = [
+      { tipos: ['articulo'], min: 1, etiqueta: 'Foto 1' },
+      { tipos: ['articulo'], min: 1, etiqueta: 'Foto 2' },
+    ];
+    const anotados = requisitosConCantidad(slots, 5);
+    expect(anotados[0].etiqueta).toMatch(/5 unidades/);
+    expect(anotados[1].etiqueta).toMatch(/5 unidades/);
+  });
+});
+
 describe('esEnvioLocal', () => {
   it('acepta flex y colecta, rechaza full', () => {
     expect(esEnvioLocal('self_service')).toBe(true);
@@ -339,6 +378,16 @@ describe('preparacion flujo', () => {
     });
   }
 
+  // Las dos fotos generales del paquete (contenido a la vista + cerrado con etiqueta) son
+  // obligatorias para completar cualquier preparación desde este ciclo — helper para no
+  // repetir el insert en cada test que llega hasta /completar.
+  function insertarFotosPaquete(prepId) {
+    const now = new Date().toISOString();
+    const ins = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,NULL,?,?,?)');
+    ins.run(prepId, 'paquete_abierto', '/uploads/paquete-abierto.jpg', now);
+    ins.run(prepId, 'paquete_cerrado', '/uploads/paquete-cerrado.jpg', now);
+  }
+
   it('crearPreparacion es idempotente por clave', () => {
     const id1 = nuevaPrep();
     const id2 = nuevaPrep();
@@ -371,17 +420,58 @@ describe('preparacion flujo', () => {
     expect(r.body.resultado).toBe('sobrante');
   });
 
-  it('confirmar-manual verifica ítems sin código', async () => {
+  it('confirmar-manual verifica ítems sin código, con motivo válido', async () => {
     const id = nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
-    const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
     expect(r.body.ok).toBe(true);
     const row = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
     expect(row.estado_item).toBe('verificado');
     expect(row.confirmado_manual).toBe(1);
   });
 
-  it('completar exige ítems verificados y fotos según perfil', async () => {
+  it('confirmar-manual sin motivo → 400, no toca el ítem (MUTATION: si se saca el chequeo de motivo, este test se pone en rojo)', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
+    const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    expect(r.status).toBe(400);
+    expect(r.body.ok).toBe(false);
+    const row = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
+    expect(row.estado_item).not.toBe('verificado');
+    expect(row.confirmado_manual).toBe(0);
+  });
+
+  it('confirmar-manual con motivo inválido (fuera de la lista corta) → 400', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
+    const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'porque_si' });
+    expect(r.status).toBe(400);
+    const row = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
+    expect(row.estado_item).not.toBe('verificado');
+  });
+
+  it('confirmar-manual con motivo "otro" sin detalle_texto → 400', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
+    const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'otro' });
+    expect(r.status).toBe(400);
+    const row = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
+    expect(row.estado_item).not.toBe('verificado');
+  });
+
+  it('confirmar-manual con motivo "otro" y detalle_texto verifica y registra el texto libre', async () => {
+    const id = nuevaPrep();
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
+    const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`)
+      .send({ motivo: 'otro', detalle_texto: 'llegó sin caja, el vendedor lo confirmó por teléfono' });
+    expect(r.status).toBe(200);
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({
+      motivo: 'otro', detalle_texto: 'llegó sin caja, el vendedor lo confirmó por teléfono',
+    });
+  });
+
+  it('completar exige ítems verificados, fotos por artículo Y las dos fotos de paquete', async () => {
     const id = nuevaPrep();
     // nada verificado → 400 con detalle
     let r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
@@ -393,7 +483,7 @@ describe('preparacion flujo', () => {
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     const sinCodigo = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
-    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({});
+    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({ motivo: 'codigo_ilegible' });
 
     // bici re_embalada: faltan fotos → 400
     const bici = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
@@ -402,7 +492,7 @@ describe('preparacion flujo', () => {
     expect(r.status).toBe(400);
     expect(JSON.stringify(r.body.faltantes)).toContain('lado_a');
 
-    // insertar fotos requeridas de todos los ítems y completar
+    // insertar fotos requeridas de todos los ítems (sin las de paquete todavía) y completar
     const now = new Date().toISOString();
     const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(id);
@@ -413,6 +503,13 @@ describe('preparacion flujo', () => {
         insFoto.run(id, it.id, 'articulo', '/uploads/x.jpg', now);
       }
     }
+    // todos los ítems ya tienen su foto, pero faltan las dos generales del paquete → 400
+    // (MUTATION: si se saca el chequeo del paquete en /completar, este bloque queda en rojo)
+    r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
+    expect(r.status).toBe(400);
+    expect(JSON.stringify(r.body.faltantes)).toMatch(/paquete_abierto|paquete_cerrado/);
+
+    insertarFotosPaquete(id);
     r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
     expect(r.status).toBe(200);
     expect(r.body.estado).toBe('completada');
@@ -420,6 +517,75 @@ describe('preparacion flujo', () => {
     expect(prep.estado).toBe('completada');
     expect(prep.preparado_por).toBe('tester');
     expect(prep.completado_en).toBeTruthy();
+  });
+
+  // Estos dos tests aíslan el chequeo `estado_item !== 'verificado'` de calcularFaltantesPreparacion
+  // (routes/preparacion.js) del chequeo de fotos: TODAS las fotos (artículo + las dos de
+  // paquete) ya están puestas, así que si /completar da 400 acá, es EXCLUSIVAMENTE por el
+  // escaneo incompleto. El test viejo de la línea ~474 no probaba esto — pasaba por el 400 de
+  // fotos, no por el de verificación (revisor, 2026-08-13).
+  it('completar con todas las fotos puestas pero un ítem sin escanear ninguna unidad → 400 sin_verificar, no cambia el estado (MUTATION: sacando el if estado_item!==\'verificado\' de calcularFaltantesPreparacion, este test se pone en rojo)', async () => {
+    const id = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 701, numeroPedido: '701', comprador: 'Caso incidente',
+      items: [{ line_item_id: 1, product_id: 20, sku: 'CUB-1', nombre: 'Cubierta Maxxis', categoria: 'CUBIERTAS', cantidad: 5 }],
+    });
+    const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
+    expect(item.cantidad_esperada).toBe(5);
+    expect(item.cantidad_escaneada).toBe(0);
+    expect(item.estado_item).toBe('pendiente');
+
+    // Todas las fotos: la del artículo y las dos de paquete — nada de fotos falta.
+    const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
+    insFoto.run(id, item.id, 'articulo', '/uploads/x.jpg', new Date().toISOString());
+    insertarFotosPaquete(id);
+
+    const r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
+    expect(r.status).toBe(400);
+    expect(r.body.faltantes).toEqual([
+      { item_id: item.id, sku: 'CUB-1', nombre: 'Cubierta Maxxis', motivo: 'sin_verificar' },
+    ]);
+
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
+    expect(prep.estado).toBe('en_preparacion'); // no se movió
+    expect(prep.completado_en).toBeNull();
+  });
+
+  it('completar con todas las fotos puestas y un ítem parcialmente escaneado (2 de 5, el caso real del incidente) → 400 sin_verificar, no cambia el estado (MUTATION: sacando el if estado_item!==\'verificado\' de calcularFaltantesPreparacion, este test se pone en rojo)', async () => {
+    const id = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 702, numeroPedido: '702', comprador: 'Caso incidente parcial',
+      items: [{ line_item_id: 1, product_id: 20, sku: 'CUB-1', nombre: 'Cubierta Maxxis', categoria: 'CUBIERTAS', cantidad: 5 }],
+    });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
+    expect(item.cantidad_escaneada).toBe(2);
+    expect(item.estado_item).toBe('pendiente'); // 2 de 5, no llegó a verificado
+
+    const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
+    insFoto.run(id, item.id, 'articulo', '/uploads/x.jpg', new Date().toISOString());
+    insertarFotosPaquete(id);
+
+    const r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
+    expect(r.status).toBe(400);
+    expect(r.body.faltantes).toEqual([
+      { item_id: item.id, sku: 'CUB-1', nombre: 'Cubierta Maxxis', motivo: 'sin_verificar' },
+    ]);
+
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
+    expect(prep.estado).toBe('en_preparacion');
+    expect(prep.completado_en).toBeNull();
+  });
+
+  it('el requisito de foto de un ítem con cantidad_esperada>1 pide explícitamente que se vean las N unidades (nota humana, no validación)', async () => {
+    const id = nuevaPrep();
+    const cub = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id); // cantidad 2
+    const r = await request(app).get(`/api/preparacion/${id}`);
+    const itemDetalle = r.body.data.items.find(i => i.id === cub.id);
+    expect(itemDetalle.requisitos_foto[0].etiqueta).toMatch(/2 unidades/);
+
+    // el ítem sin código (cantidad 1) NO lleva la nota
+    const sinCodigo = r.body.data.items.find(i => i.sku === '');
+    expect(sinCodigo.requisitos_foto[0].etiqueta).not.toMatch(/unidades/);
   });
 
   it('despacho deposito_relajado exime escaneo y fotos', async () => {
@@ -436,12 +602,13 @@ describe('preparacion flujo', () => {
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     const sinCodigo = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
-    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({});
+    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
     const now = new Date().toISOString();
     const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
     for (const it of db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND estado_item='verificado'").all(id)) {
       insFoto.run(id, it.id, 'articulo', '/uploads/x.jpg', now);
     }
+    insertarFotosPaquete(id);
     const fin = await request(app).post(`/api/preparacion/${id}/completar`).send({});
     expect(fin.status).toBe(200);
     expect(fin.body.estado).toBe('completada');
@@ -456,21 +623,25 @@ describe('preparacion flujo', () => {
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     const sinCodigo = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
-    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({});
+    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
     const now = new Date().toISOString();
     const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
     for (const it of db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND estado_item='verificado'").all(id)) {
       insFoto.run(id, it.id, 'articulo', '/uploads/x.jpg', now);
     }
 
-    // completar → queda pendiente_deposito (la bici la termina el depósito)
+    // completar → queda pendiente_deposito (la bici la termina el depósito). El paquete
+    // todavía no está sellado (falta la bici), así que NO se exige la foto de paquete acá
+    // aunque no se haya subido ninguna: sería pedir la foto del cierre antes de cerrar.
     let r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
     expect(r.status).toBe(200);
     expect(r.body.estado).toBe('pendiente_deposito');
 
-    // el depósito escanea la bici y sube su foto → completar de nuevo
+    // el depósito escanea la bici y sube su foto → completar de nuevo (acá sí es el cierre
+    // final, y ahí se exigen las dos fotos de paquete)
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'BICI-1' });
     insFoto.run(id, bici.id, 'articulo', '/uploads/x.jpg', now); // sellada por defecto: 1 foto
+    insertarFotosPaquete(id);
     r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
     expect(r.status).toBe(200);
     expect(r.body.estado).toBe('completada');
@@ -499,12 +670,13 @@ describe('preparacion flujo', () => {
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     const sinCodigo = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
-    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({});
+    await request(app).post(`/api/preparacion/${id}/item/${sinCodigo.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
     const now = new Date().toISOString();
     const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
     for (const it of db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(id)) {
       insFoto.run(id, it.id, 'articulo', '/uploads/x.jpg', now);
     }
+    insertarFotosPaquete(id);
     const r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
     expect(r.status).toBe(200);
     expect(r.body.estado).toBe('completada');
@@ -518,6 +690,187 @@ describe('preparacion flujo', () => {
     expect(r.body.ok).toBe(true);
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:900'").get();
     expect(prep.etiqueta_lista).toBe(1);
+  });
+
+  describe('cerrada_sin_evidencia / reabrir', () => {
+    function nuevaPrepCerrada() {
+      const id = nuevaPrep();
+      db.prepare("UPDATE preparaciones SET estado='cerrada_sin_evidencia' WHERE id=?").run(id);
+      return id;
+    }
+
+    it('GET /cerradas-sin-evidencia lista solo las cerradas sin evidencia, no las completadas', async () => {
+      const cerrada = nuevaPrepCerrada();
+      const otraCompletada = crearPreparacion(db, { canal: 'web', wcOrderId: 600, numeroPedido: '600', comprador: 'Beto', items: [] });
+      db.prepare("UPDATE preparaciones SET estado='completada', completado_en=? WHERE id=?").run(new Date().toISOString(), otraCompletada);
+
+      const r = await request(app).get('/api/preparacion/cerradas-sin-evidencia');
+      expect(r.status).toBe(200);
+      const ids = r.body.data.map(p => p.id);
+      expect(ids).toContain(cerrada);
+      expect(ids).not.toContain(otraCompletada);
+    });
+
+    it('GET /historial NO mezcla cerradas sin evidencia con las completadas (sección propia, no compartida)', async () => {
+      const cerrada = nuevaPrepCerrada();
+      const r = await request(app).get('/api/preparacion/historial');
+      expect(r.body.data.some(p => p.id === cerrada)).toBe(false);
+    });
+
+    it('GET /pendientes no muestra una preparación cerrada sin evidencia como trabajo pendiente', async () => {
+      const id = nuevaPrepCerrada();
+      const prep = db.prepare('SELECT clave FROM preparaciones WHERE id=?').get(id);
+      const iso = new Date().toISOString();
+      db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
+        VALUES (?, 'web', 500, '500', 'Ana Gomez', ?, 'pendiente', '[]', ?)`).run(prep.clave, iso, iso);
+
+      const r = await request(app).get('/api/preparacion/pendientes');
+      expect(r.body.data.find(p => p.wc_order_id === 500)).toBeUndefined();
+    });
+
+    it('POST /:id/reabrir vuelve a en_preparacion y registra el evento reabierta con usuario', async () => {
+      const id = nuevaPrepCerrada();
+      const r = await request(app).post(`/api/preparacion/${id}/reabrir`);
+      expect(r.status).toBe(200);
+      expect(r.body.estado).toBe('en_preparacion');
+
+      const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
+      expect(prep.estado).toBe('en_preparacion');
+
+      const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='reabierta'").get(id);
+      expect(ev).toBeTruthy();
+      expect(ev.usuario).toBe('tester');
+    });
+
+    it('POST /:id/reabrir sobre una preparación que NO está cerrada_sin_evidencia → 400 (MUTATION: sacando el chequeo de estado, este test se pone en rojo)', async () => {
+      const id = nuevaPrep(); // en_preparacion normal
+      const r = await request(app).post(`/api/preparacion/${id}/reabrir`);
+      expect(r.status).toBe(400);
+      const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
+      expect(prep.estado).toBe('en_preparacion'); // sin cambios
+    });
+
+    it('POST /:id/completar sobre una cerrada_sin_evidencia → 400, exige reabrir primero (MUTATION: sacando el chequeo, completaría en silencio sin el rastro de reabrir)', async () => {
+      // Preparación SIN ítems (como en los tests de heartbeat) y con las dos fotos de
+      // paquete ya puestas: si no fuera por el guard de cerrada_sin_evidencia, no habría
+      // ningún otro motivo para que /completar la rechace (0 ítems -> nada pendiente de
+      // verificar/fotografiar). Aísla el guard bajo prueba del resto de las validaciones.
+      const id = crearPreparacion(db, { canal: 'web', wcOrderId: 610, numeroPedido: '610', comprador: 'X', items: [] });
+      db.prepare("UPDATE preparaciones SET estado='cerrada_sin_evidencia' WHERE id=?").run(id);
+      insertarFotosPaquete(id);
+
+      const r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
+      expect(r.status).toBe(400);
+      const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
+      expect(prep.estado).toBe('cerrada_sin_evidencia');
+    });
+
+    it('escanear/confirmar-manual/subir foto sobre una cerrada_sin_evidencia → 400, no tocan nada (hallazgo del revisor: se podía trabajar encima sin reabrir)', async () => {
+      const id = nuevaPrepCerrada();
+      const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
+
+      const rEscanear = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: item.sku || 'CUB-1' });
+      expect(rEscanear.status).toBe(400);
+
+      const rConfirmar = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
+      expect(rConfirmar.status).toBe(400);
+
+      const buf = await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).jpeg().toBuffer();
+      const rFoto = await request(app).post(`/api/preparacion/${id}/foto`).attach('archivo', buf, 'a.jpg');
+      expect(rFoto.status).toBe(400);
+
+      // Nada de esto tocó al ítem ni sumó fotos.
+      const itemDespues = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
+      expect(itemDespues.cantidad_escaneada).toBe(0);
+      expect(itemDespues.estado_item).toBe('pendiente');
+      expect(db.prepare('SELECT COUNT(*) n FROM preparacion_fotos WHERE preparacion_id=?').get(id).n).toBe(0);
+    });
+
+    it('escanear sobre una cerrada_sin_evidencia → 400 (MUTATION: sin el guard de estado, escanearía igual sin reabrir)', async () => {
+      const id = nuevaPrepCerrada();
+      const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
+      const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: item.sku });
+      expect(r.status).toBe(400);
+      const itemDespues = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
+      expect(itemDespues.cantidad_escaneada).toBe(0);
+    });
+
+    it('confirmar-manual sobre una cerrada_sin_evidencia → 400 (MUTATION: sin el guard de estado, confirmaría igual sin reabrir)', async () => {
+      const id = nuevaPrepCerrada();
+      const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
+      const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
+      expect(r.status).toBe(400);
+      const itemDespues = db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
+      expect(itemDespues.estado_item).not.toBe('verificado');
+    });
+
+    it('confirmar-manual sobre una preparación completada → 400, no se puede confirmar un ítem después del cierre', async () => {
+      const id = nuevaPrep();
+      db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
+      const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
+      const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
+      expect(r.status).toBe(400);
+    });
+
+    it('reabrir una preparación completada (no aplica) → 400, no la reabre', async () => {
+      const id = nuevaPrep();
+      db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
+      const r = await request(app).post(`/api/preparacion/${id}/reabrir`);
+      expect(r.status).toBe(400);
+      const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
+      expect(prep.estado).toBe('completada');
+    });
+  });
+
+  // Mismo criterio que 'cerrada_sin_evidencia': un estado que no se puede consultar no
+  // sirve para nada (hallazgo del revisor — el frontend ya construyó la pestaña esperando
+  // GET /despachadas-sin-verificar, mismo patrón que /cerradas-sin-evidencia).
+  describe('despachada_sin_verificar', () => {
+    function nuevaPrepDespachadaSinVerificar() {
+      const id = nuevaPrep();
+      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar', completado_en=? WHERE id=?")
+        .run(new Date().toISOString(), id);
+      return id;
+    }
+
+    it('GET /despachadas-sin-verificar lista solo ese estado, no las completadas ni las cerradas sin evidencia', async () => {
+      const despachada = nuevaPrepDespachadaSinVerificar();
+      const completada = crearPreparacion(db, { canal: 'web', wcOrderId: 620, numeroPedido: '620', comprador: 'Beto', items: [] });
+      db.prepare("UPDATE preparaciones SET estado='completada', completado_en=? WHERE id=?").run(new Date().toISOString(), completada);
+      const cerrada = crearPreparacion(db, { canal: 'web', wcOrderId: 621, numeroPedido: '621', comprador: 'Caro', items: [] });
+      db.prepare("UPDATE preparaciones SET estado='cerrada_sin_evidencia' WHERE id=?").run(cerrada);
+
+      const r = await request(app).get('/api/preparacion/despachadas-sin-verificar');
+      expect(r.status).toBe(200);
+      const ids = r.body.data.map(p => p.id);
+      expect(ids).toContain(despachada);
+      expect(ids).not.toContain(completada);
+      expect(ids).not.toContain(cerrada);
+    });
+
+    it('GET /despachadas-sin-verificar devuelve total_items y total_fotos, mismo shape que /cerradas-sin-evidencia', async () => {
+      const id = nuevaPrepDespachadaSinVerificar();
+      const r = await request(app).get('/api/preparacion/despachadas-sin-verificar');
+      const fila = r.body.data.find(p => p.id === id);
+      expect(fila).toMatchObject({ estado: 'despachada_sin_verificar', total_items: 3, total_fotos: 0 });
+    });
+
+    it('GET /historial NO mezcla despachadas sin verificar con las completadas (MUTATION: si se agregara ese estado al IN de /historial, este test se pone en rojo)', async () => {
+      const id = nuevaPrepDespachadaSinVerificar();
+      const r = await request(app).get('/api/preparacion/historial');
+      expect(r.body.data.some(p => p.id === id)).toBe(false);
+    });
+
+    it('GET /pendientes no muestra una preparación despachada sin verificar como trabajo pendiente (ya salió, no es "por hacer") (MUTATION: sin el estado en RESUELTAS, este test se pone en rojo)', async () => {
+      const id = nuevaPrepDespachadaSinVerificar();
+      const prep = db.prepare('SELECT clave FROM preparaciones WHERE id=?').get(id);
+      const iso = new Date().toISOString();
+      db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
+        VALUES (?, 'web', 500, '500', 'Ana Gomez', ?, 'pendiente', '[]', ?)`).run(prep.clave, iso, iso);
+
+      const r = await request(app).get('/api/preparacion/pendientes');
+      expect(r.body.data.find(p => p.wc_order_id === 500)).toBeUndefined();
+    });
   });
 
   // A partir de acá, la subida NO convierte de forma sincrónica (plan 2026-08-12-fotos-
@@ -668,6 +1021,58 @@ describe('preparacion flujo', () => {
     expect(r.status).toBe(400);
     r = await request(app).post('/api/preparacion/seguimientos/900').send({});
     expect(r.status).toBe(400);
+  });
+
+  // El camino real que produce 'despachada_sin_verificar' (marcarPreparacionEnviada, disparado
+  // desde acá) no tenía NINGÚN test hasta ahora — solo estaban cubiertas las consultas
+  // (GET /despachadas-sin-verificar) sobre un estado sembrado a mano por UPDATE directo, nunca
+  // la transición en sí. Gap encontrado en la revisión de cobertura del 2026-08-13.
+  it('POST /seguimientos/:wcOrderId con el único ítem verificado y todas las fotos marca la preparación completada', async () => {
+    const id = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 950, numeroPedido: '950', comprador: 'Full',
+      items: [{ line_item_id: 1, product_id: 20, sku: 'CUB-1', nombre: 'Cubierta Maxxis', categoria: 'CUBIERTAS', cantidad: 1 }],
+    });
+    const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
+    db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)')
+      .run(id, item.id, 'articulo', '/uploads/x.jpg', new Date().toISOString());
+    insertarFotosPaquete(id);
+
+    wooFetch
+      .mockResolvedValueOnce({ data: { status: 'lpaandreani', meta_data: [] } }) // GET
+      .mockResolvedValueOnce({ data: {} }) // PUT completed
+      .mockResolvedValueOnce({ data: {} }); // PUT enviadoandreani
+
+    const r = await request(app).post('/api/preparacion/seguimientos/950').send({ tracking: 'AND777' });
+    expect(r.status).toBe(200);
+
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
+    expect(prep.estado).toBe('completada');
+    expect(prep.completado_en).toBeTruthy();
+  });
+
+  it('POST /seguimientos/:wcOrderId con el ítem sin verificar marca despachada_sin_verificar (no completada) y registra el evento (MUTATION: si marcarPreparacionEnviada pusiera siempre \'completada\' sin llamar a preparacionEstaVerificada, este test se pone en rojo)', async () => {
+    const id = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 951, numeroPedido: '951', comprador: 'Sin verificar',
+      items: [{ line_item_id: 1, product_id: 20, sku: 'CUB-1', nombre: 'Cubierta Maxxis', categoria: 'CUBIERTAS', cantidad: 5 }],
+    });
+    // No se escanea nada: el ítem queda 'pendiente'.
+
+    wooFetch
+      .mockResolvedValueOnce({ data: { status: 'lpaandreani', meta_data: [] } })
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: {} });
+
+    const r = await request(app).post('/api/preparacion/seguimientos/951').send({ tracking: 'AND778' });
+    expect(r.status).toBe(200);
+
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
+    expect(prep.estado).toBe('despachada_sin_verificar');
+    expect(prep.completado_en).toBeTruthy();
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='despachado_sin_verificar'").get(id);
+    expect(ev).toBeTruthy();
+    expect(ev.usuario).toBe('tester');
   });
 
   it('GET /tracking-actual: corregible=true si el pedido está completed/enviadoandreani con tracking', async () => {
@@ -849,22 +1254,24 @@ describe('preparacion flujo', () => {
     expect(JSON.parse(evento.detalle_json).origen).toBe('lector_teclado');
   });
 
-  it('confirmar-manual registra un evento tipo escaneo con origen manual', async () => {
+  it('confirmar-manual registra un evento tipo escaneo con origen manual, motivo y detalle_texto', async () => {
     const id = nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
-    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'codigo_ilegible' });
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
     expect(JSON.parse(ev.detalle_json)).toMatchObject({
       sku: '', origen: 'manual', cantidad_nueva: item.cantidad_esperada, cantidad_esperada: item.cantidad_esperada,
+      motivo: 'codigo_ilegible', detalle_texto: null,
     });
+    expect(ev.usuario).toBe('tester');
   });
 
   it('confirmar-manual dos veces seguidas sobre el mismo ítem no duplica el evento (re-confirmación es no-op)', async () => {
     const id = nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
 
-    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
-    const r2 = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
+    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'codigo_ilegible' });
+    const r2 = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
     expect(r2.body.ok).toBe(true);
 
     const eventos = db.prepare(

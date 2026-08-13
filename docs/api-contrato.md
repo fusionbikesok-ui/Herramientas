@@ -631,6 +631,160 @@ reintento manual puede resolver algo transitorio.
   está `pendiente`/`procesando`/`listo`, no hay nada que reintentar.
 - Response 404: preparación o foto inexistente.
 
+## Preparación de pedidos — escaneo obligatorio y evidencia (2026-08-12)
+
+Incidente disparador: un pedido de 5 unidades salió con 1 porque `confirmar-manual` (el
+atajo que salta el escaneo) verificaba de un saque sin escanear nada, y era el 48% de los
+ítems reales. Cambios de esta ronda:
+
+### POST /api/preparacion/:id/item/:itemId/confirmar-manual (comportamiento cambiado)
+Ya no es gratis. Requiere `motivo` de una lista corta — sin él, 400 y no se toca el ítem.
+Cualquier usuario puede usarla (no se restringe a admin); motivo, usuario y hora quedan en
+`preparacion_eventos` (evento `tipo:'escaneo'`, `detalle.origen:'manual'`,
+`detalle.motivo`, `detalle.detalle_texto`).
+
+- Request: `{ "motivo": "codigo_ilegible" | "sin_etiqueta" | "otro", "detalle_texto": "..." }`.
+  `detalle_texto` es obligatorio (y no puede ser solo espacios) cuando `motivo` es `"otro"`;
+  para los otros dos motivos es opcional y se ignora si viene.
+- Response 200: igual que antes — `{ "ok": true, "item": {...} }`.
+- Response 400: `{ "ok": false, "error": "motivo requerido (uno de: codigo_ilegible, sin_etiqueta, otro)" }`
+  o `{ "ok": false, "error": "detalle_texto requerido cuando motivo es \"otro\"" }`.
+- Response 404: preparación o ítem inexistente (sin cambios).
+- Re-confirmar un ítem ya `verificado` sigue siendo no-op para el evento (no duplica), pero
+  igual exige `motivo` válido en el request — no hay atajo para saltear la validación.
+
+### GET /api/preparacion/:id (campo agregado: `requisitos_foto` con nota de cantidad)
+Cuando un ítem tiene `cantidad_esperada > 1`, el slot de foto "de artículo" (o "de piezas"
+en `kit_transmision`) lleva la cantidad anotada en `etiqueta`: *"... — que se vean las N
+unidades (control humano, no verificable por el sistema)"*. **Esto NO es una validación
+automática** — el backend no puede comprobar que la foto muestre realmente N unidades
+(se podría fotografiar 5 piezas sueltas y empacar 1 igual). Es un texto para que la
+interfaz se lo pida explícitamente al operario; el control real lo hace la persona que
+mira la foto después, ante un reclamo. Las reglas de perfil/categoría/SKU que ya existían
+(`requisitosParaItem`) no se reemplazan — este piso se agrega encima, no las sustituye.
+La nota se agrega al slot cuyo `tipos` incluye `articulo`/`piezas`; si ninguno matchea por
+nombre (bici `re_embalada`, o un `requisitos_json` custom con tipos propios por SKU/
+categoría) se anota el **primer** slot como fallback — nunca desaparece en silencio.
+
+### POST /api/preparacion/:id/completar (comportamiento cambiado: fotos de paquete)
+Además de lo que ya exigía (todos los ítems `verificado`, con sus fotos de artículo según
+perfil), ahora exige **dos fotos generales de la preparación** (no atadas a un ítem,
+`item_id: null` en `preparacion_fotos`), subidas con `POST /:id/foto` sin `item_id` y
+`tipo` en `'paquete_abierto'` / `'paquete_cerrado'`:
+
+- `paquete_abierto`: el paquete abierto, con todo el contenido a la vista antes de cerrar.
+- `paquete_cerrado`: el paquete ya cerrado, con la etiqueta puesta.
+
+Ambas obligatorias para el cierre **final** (transición a `completada`). Si la preparación
+tiene algún ítem `deposito_delegado` pendiente, el primer `/completar` la deja en
+`pendiente_deposito` **sin** exigir estas dos fotos todavía (el paquete no está sellado —
+falta lo que agregue el depósito); se exigen recién en el `/completar` que efectivamente
+cierra.
+
+- Response 400 (fotos de paquete faltantes): mismo shape que las fotos por ítem —
+  `{ "ok": false, "error": "preparación incompleta", "faltantes": [{ "item_id": null, "sku": null, "nombre": "Paquete armado", "motivo": "fotos", "faltan": [...] }] }`.
+- Response 400 (nuevo): `{ "ok": false, "error": "esta preparación está cerrada y no se puede completar así — pedile a un compañero que la reabra" }`
+  si `estado='cerrada_sin_evidencia'` — no se completa directamente, hay que reabrir con
+  `POST /:id/reabrir` antes (deja rastro de quién reactivó el caso). El mensaje al operario
+  es deliberadamente genérico (no menciona el endpoint); el detalle va a `console.error`.
+- Response 409 (nuevo, defensa en profundidad): `{ "ok": false, "error": "la preparación cambió de estado mientras se completaba, volvé a intentarlo" }`
+  — si el `UPDATE` final (`WHERE id=? AND estado<>'cerrada_sin_evidencia'`) no afecta
+  ninguna fila porque otro proceso (cron, script de mantenimiento) cerró la preparación sin
+  evidencia justo en el medio. No hay TOCTOU posible dentro de un solo proceso (sin `await`
+  entre la lectura del estado y este `UPDATE`), es defensa contra dos procesos corriendo en
+  paralelo.
+
+### POST /api/preparacion/:id/escanear, /item/:itemId/confirmar-manual, /foto (guard de estado agregado)
+Los tres rechazan con 400 si la preparación está `completada` o `cerrada_sin_evidencia` —
+antes se podía escanear/confirmar/subir fotos sobre una `cerrada_sin_evidencia` sin pasar
+por `/reabrir`, así que el evento `reabierta` (el rastro de "entró un reclamo y alguien la
+reactivó") podía quedar registrado después de haber tocado datos, o directamente nunca.
+`despachada_sin_verificar` y `pendiente_deposito` siguen siendo trabajables (para que
+`/completar` las pueda subir a `completada` más adelante, o para que el depósito termine su
+parte).
+
+- Response 400: `{ "ok": false, "error": "esta preparación está cerrada — pedile a un compañero que la reabra antes de seguir" }`
+  (`cerrada_sin_evidencia`) o `{ "ok": false, "error": "ya completada" }` (`completada`).
+
+### Estado nuevo: `despachada_sin_verificar` — cargar el tracking ya NO fuerza `completada`
+**Bloqueante crítico de esta ronda:** antes, `POST /seguimientos/:wcOrderId` (y el cron
+`reintentarColgadosTracking`) marcaban la preparación como `completada` sin mirar ítems,
+fotos NI el estado previo — un camino más rápido que el propio `confirmar-manual` para
+"verificar" un pedido sin escanear nada (etiqueta lista → nunca se abre la preparación →
+cargar tracking → `completada` con 0 escaneos y 0 fotos).
+
+**El flujo de WooCommerce no cambia**: cargar el tracking sigue pasando el pedido a
+`completed` (dispara el mail al cliente) y después al status final (`enviadoandreani`) —
+eso es correcto y necesario, el envío sale igual. **Lo que cambia es el estado INTERNO** de
+la preparación (`marcarPreparacionEnviada`, misma función para el endpoint y el cron):
+
+- Si la preparación ya estaba completamente verificada (mismo criterio que `/completar`:
+  todos los ítems `verificado` con sus fotos, y las dos fotos de paquete) → `completada`,
+  como antes.
+- Si NO → **`despachada_sin_verificar`**: el pedido salió igual, pero el sistema no puede
+  afirmar una verificación que no ocurrió (mismo espíritu que `cerrada_sin_evidencia`).
+  Queda un evento `tipo:'despachado_sin_verificar'` en `preparacion_eventos`.
+- **Nunca pisa una `cerrada_sin_evidencia`**: si el estado al momento de cerrar el paso 2
+  es `cerrada_sin_evidencia`, ni `completada` ni `despachada_sin_verificar` la reemplazan
+  (el `UPDATE` lleva `AND estado<>'cerrada_sin_evidencia'` en el `WHERE`, además del chequeo
+  previo). `woo_paso2_pendiente` sí se limpia siempre — es un flag del lado Woo, no de
+  verificación.
+- Sigue siendo trabajable con el flujo normal (escanear/confirmar/fotos) y, si más tarde
+  queda todo verificado, `/completar` la puede subir a `completada`.
+- Sale de `GET /pendientes` (mismo criterio que `completada`/`cerrada_sin_evidencia`: ya
+  salió, no es trabajo pendiente) y **no se mezcla** con `GET /historial` (solo trae
+  `completada`/`pendiente_deposito`) — se consulta desde `GET /despachadas-sin-verificar`.
+
+#### GET /api/preparacion/despachadas-sin-verificar (nuevo)
+Lista las preparaciones en `despachada_sin_verificar`, más recientes primero. Mismo
+criterio y forma que `GET /cerradas-sin-evidencia` (misma consulta, mismo shape) — un
+estado que existe para poder consultarlo ante un reclamo, así que tiene que tener dónde
+listarse igual que el otro.
+
+- Request: sin body.
+- Response 200: `{ "ok": true, "data": [ { ...preparación, total_items, total_fotos } ] }`.
+
+### Estado nuevo: `cerrada_sin_evidencia`
+Preparaciones viejas que nunca se completaron ni verificaron de verdad, cerradas por el
+script de mantenimiento `scripts/cerrar-preparaciones-sin-evidencia.mjs` (dry-run por
+default; `--aplicar` para escribir). **No es `completada`**: el sistema no puede afirmar
+una verificación que no ocurrió. Salen de `GET /pendientes` (igual que `completada`/
+`pendiente_deposito`) y **no se mezclan** con `GET /historial` (que solo trae `completada`/
+`pendiente_deposito`) — tienen su propia sección.
+
+El script valida `--corte` (`corteEsValido`: prefijo `YYYY-MM-DD` + `Date.parse` no-NaN)
+antes de usarlo en el `WHERE creado_en < ?` — SQLite compara ese `WHERE` como **texto**, así
+que un valor no-ISO (ej. `--corte=hoy`) compararía mal contra los `creado_en` reales y
+cerraría filas de más (`'2026-08-01T...' < 'hoy'` da `true` para cualquier fecha ISO real).
+Corte inválido → `exit 1` con mensaje claro, no escribe nada. `CORTE_DEFAULT` es una fecha
+FIJA (medianoche UTC del 2026-08-12): corrido otro día hay que pasar `--corte=` explícito.
+
+#### GET /api/preparacion/cerradas-sin-evidencia (nuevo)
+Lista las preparaciones en `cerrada_sin_evidencia`, más recientes primero.
+
+- Request: sin body.
+- Response 200: `{ "ok": true, "data": [ { ...preparación, total_items, total_fotos } ] }`
+  (mismo shape que las filas de `GET /historial`).
+
+#### POST /api/preparacion/:id/reabrir (nuevo)
+Reabre una `cerrada_sin_evidencia` (p.ej. si entra un reclamo) y la devuelve al flujo
+normal. Cualquier usuario puede reabrir (no se restringe a admin); queda un evento
+`tipo:'reabierta'` con usuario y hora en `preparacion_eventos`.
+
+- Request: sin body.
+- Response 200: `{ "ok": true, "estado": "en_preparacion" }`.
+- Response 400: `{ "ok": false, "error": "solo se puede reabrir una preparación 'cerrada_sin_evidencia' (está '<estado>')" }`
+  — no aplica a `completada`, `pendiente_deposito` ni `en_preparacion` (ya está abierta).
+- Response 404: preparación inexistente.
+
+### Velocidad del escaneo (medido)
+`POST /:id/escanear` no cambió de forma (sigue siendo un `UPDATE` simple + insert de
+evento, sin llamadas a red): benchmark local de 200 requests secuenciales sobre
+`supertest` — **avg 7.65ms, p50 6.40ms, p95 13.94ms**. El costo de "escanear 5 veces" es
+el de la cámara/lector detectando el código, no el del backend — el requisito de "la
+cámara queda lista para el siguiente escaneo sin toques intermedios" es responsabilidad
+del frontend (fuera de este archivo).
+
 ## Contador de Inventario (`/api/inventario`)
 
 Todos los endpoints requieren sesión iniciada; las consultas de sesión están scopeadas
