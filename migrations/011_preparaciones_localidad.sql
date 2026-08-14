@@ -1,0 +1,14 @@
+-- Seguimientos: que "a_medias" tenga con qué identificar el pedido (hallazgo del revisor,
+-- plan 2026-08-13-seguimientos.md).
+--
+-- El INSERT del paso 1 de POST /seguimientos/:wcOrderId no grababa numero_pedido ni
+-- comprador para una fila nueva (el caso central de "sin_preparacion": pedido sin fila
+-- local previa). La tarjeta terminaba mostrando wc_order_id como número Y como nombre, y
+-- ese id NO es el número de pedido real de Woo (numeración custom vía `order.number`,
+-- ver lib/preparacion.js normalizarEnvio) — el operario quedaba sin forma de ubicar en
+-- Woo el único pedido que está trabado.
+--
+-- Esta columna nueva (localidad) se suma a numero_pedido/comprador, que ya existían pero
+-- no se llenaban en ese INSERT — ahora los tres salen de `actual.data` (el GET a Woo que
+-- la ruta ya hacía antes de este INSERT, sin costo extra).
+ALTER TABLE preparaciones ADD COLUMN localidad TEXT;

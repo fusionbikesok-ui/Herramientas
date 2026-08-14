@@ -735,14 +735,19 @@ la preparación (`marcarPreparacionEnviada`, misma función para el endpoint y e
   salió, no es trabajo pendiente) y **no se mezcla** con `GET /historial` (solo trae
   `completada`/`pendiente_deposito`) — se consulta desde `GET /despachadas-sin-verificar`.
 
-#### GET /api/preparacion/despachadas-sin-verificar (nuevo)
-Lista las preparaciones en `despachada_sin_verificar`, más recientes primero. Mismo
-criterio y forma que `GET /cerradas-sin-evidencia` (misma consulta, mismo shape) — un
-estado que existe para poder consultarlo ante un reclamo, así que tiene que tener dónde
-listarse igual que el otro.
+#### GET /api/preparacion/despachadas-sin-verificar (nuevo; `total`/`truncado` agregados)
+Lista las preparaciones en `despachada_sin_verificar`, canal `web`, más recientes primero.
+Mismo criterio y consulta que `GET /cerradas-sin-evidencia` — un estado que existe para
+poder consultarlo ante un reclamo, así que tiene que tener dónde listarse igual que el
+otro. **No filtra por ventana temporal, a propósito** (ver `despachados_sin_verificar` en
+`GET /seguimientos` más abajo: el estado no es terminal y "nada se oculta" es el criterio
+de la pantalla) — pero antes tenía un `LIMIT 200` en silencio, exactamente lo que ese
+criterio prohíbe. Ahora expone `total`/`truncado`, mismo patrón que `a_medias_total` (hallazgo
+del revisor).
 
 - Request: sin body.
-- Response 200: `{ "ok": true, "data": [ { ...preparación, total_items, total_fotos } ] }`.
+- Response 200: `{ "ok": true, "data": [ { ...preparación, total_items, total_fotos } ], "total": 3, "truncado": false }`.
+  `data` viene con `LIMIT 200`; `truncado:true` si `total > data.length`.
 
 ### Estado nuevo: `cerrada_sin_evidencia`
 Preparaciones viejas que nunca se completaron ni verificaron de verdad, cerradas por el
@@ -784,6 +789,140 @@ evento, sin llamadas a red): benchmark local de 200 requests secuenciales sobre
 el de la cámara/lector detectando el código, no el del backend — el requisito de "la
 cámara queda lista para el siguiente escaneo sin toques intermedios" es responsabilidad
 del frontend (fuera de este archivo).
+
+## Seguimientos: 3 secciones locales, ya no se infiere desde Woo (2026-08-13)
+
+Medido en el plan `docs/superpowers/plans/2026-08-13-seguimientos.md`: la pantalla mostraba
+**70 pedidos** como "colgados" (a medias) que en realidad nunca pasaron por esta herramienta
+— el usuario carga el tracking a mano en WooCommerce por costumbre, y la versión vieja de
+`GET /seguimientos` infería "a medias" mirando la meta `_andreani_tracking` en pedidos
+`completed` de Woo, que es exactamente donde esa costumbre deja rastro. **Contrato viejo
+retirado** (array plano con `colgado:true`, dos llamadas a Woo por carga de pantalla).
+
+**Ronda de revisión (mismo día):** el revisor encontró que "acotado, típicamente 0" para
+`a_medias` era cierto hoy pero sin techo — si el paso 2 empieza a fallar sistemáticamente,
+cada carga de tracking del día deja una fila y la pantalla pasa a hacer N GET seriales a Woo
+sin límite. Se sacó esa dependencia de Woo por completo (ver `a_medias` más abajo), se agregó
+`truncado` para el universo principal (también sin techo antes) y se corrigieron dos defectos
+de `cargados_hoy` (corte a medianoche UTC en vez de Buenos Aires, y `COUNT(*)` que doblaba un
+pedido con reintento manual). El contrato de abajo ya refleja esos cambios.
+
+### GET /api/preparacion/seguimientos (contrato nuevo)
+Parte del universo de pedidos Woo en `andreaniStatus` (`lpaandreani`, **una sola llamada** a
+Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es dato
+**exclusivamente local** (`preparaciones.woo_paso2_pendiente=1`), nunca se deriva de Woo.
+
+- Request: sin body.
+- Response 200:
+  ```json
+  { "ok": true, "data": {
+    "esperando":       [{ "wc_order_id", "envio", "preparacion_id", "estado_preparacion" }],
+    "sin_preparacion": [{ "wc_order_id", "envio", "preparacion_id", "estado_preparacion" }],
+    "a_medias":        [{ "wc_order_id", "envio", "preparacion_id", "tracking" }],
+    "a_medias_total": 1,
+    "despachados_sin_verificar": 3,
+    "cargados_hoy": 5,
+    "truncado": false
+  }}
+  ```
+- **`esperando`**: pedidos en `lpaandreani` cuya preparación local está `completada`
+  (preparado y **verificado**) — falta cargar el tracking. Cierra el circuito
+  preparar → verificar → despachar.
+- **`sin_preparacion`**: **todo el resto** del universo `lpaandreani` — sin fila local, o en
+  `en_preparacion` / `despachada_sin_verificar` / `cerrada_sin_evidencia` (`estado_preparacion`
+  viene `null` en el primer caso, para que el frontend arme el badge). A propósito **no** se
+  excluyen los `en_preparacion`: marcar "etiqueta lista" (`POST /etiquetas/:wcOrderId/lista`)
+  ya crea una preparación en ese estado sin trabajo real — excluirlos escondería justo los
+  pedidos por despacharse, y un pedido que no aparece manda al operario de vuelta a Woo.
+- **`a_medias`**: `woo_paso2_pendiente=1` — paso 1 confirmado en Woo (tracking guardado,
+  mail ya mandado) pero el paso 2 (status final `enviadoandreani`) todavía no. El `tracking`
+  sale de la columna local `preparaciones.tracking` (guardada en el mismo INSERT que pone
+  `woo_paso2_pendiente=1`, ver más abajo) — de solo lectura, no se le vuelve a pedir a Woo.
+  **`envio` también sale entero de datos locales** (`preparaciones.numero_pedido`/`comprador`/
+  `localidad`, guardados en ese mismo INSERT — ver ronda de revisión I2 más abajo):
+  `{ pedido, nombre, apellido:'', localidad, provincia:'' }`, sin llamar a Woo por fila. Antes
+  se le pedía a Woo el pedido completo por cada fila — costo "típicamente 0" hoy, pero sin
+  techo: si el paso 2 empieza a fallar en cadena, cada carga de tracking del día deja una fila
+  acá y la pantalla pasaba a hacer N GET seriales sin límite (hallazgo del revisor). El `envio`
+  local es más pobre (sin dirección exacta) pero alcanza para identificar al comprador — no
+  hace falta reimprimir la etiqueta desde acá. `pedido` es **`order.number`** (numeración
+  custom de esta tienda en Woo), nunca `wc_order_id`: son valores distintos, y el operario
+  busca por el primero. La lista viene con **`LIMIT 20`** (`ORDER BY id`); `a_medias_total` es
+  el conteo real del universo `woo_paso2_pendiente=1`, para que el frontend pueda decir
+  "mostrando 20 de N".
+- **`despachados_sin_verificar`**: solo el número (`COUNT(*)` de preparaciones `canal='web'`
+  en ese estado — esta pantalla es exclusivamente Andreani/web, y hoy nada del flujo `ml` deja
+  preparaciones en este estado). **Sin ventana temporal, a propósito**: `despachada_sin_verificar`
+  no es terminal (`POST /:id/completar` la puede subir a `completada` si se verifica después),
+  así que el número baja solo con trabajo real; ocultar los viejos con una ventana escondería
+  justo los reclamos más urgentes de resolver, contra el criterio de "nada se oculta" de esta
+  pantalla. El detalle sigue en `GET /despachadas-sin-verificar` (ya existe, ver arriba).
+- **`cargados_hoy`**: `COUNT(DISTINCT preparacion_id)` de eventos `tracking_cargado` de hoy
+  — **no** `COUNT(*)`: un reintento manual sobre un pedido colgado registra un segundo evento
+  para el mismo pedido, y `COUNT(*)` lo contaba dos veces (hallazgo del revisor). El corte de
+  "hoy" es **hora de Buenos Aires** (`lib/tiempo.js#inicioHoyBuenosAiresISO`, UTC-3 fijo), no
+  medianoche UTC/hora del server como antes — a las 00:00 UTC (21:00 Argentina) el contador se
+  reiniciaba tres horas antes de tiempo y arrastraba trabajo del día anterior. La misma función
+  reemplaza la copia equivalente que tenía `lib/coberturaCola.js#progresoHoy` (mismo defecto,
+  ahora una sola fuente). Requiere el evento nuevo que registra `POST /seguimientos/:wcOrderId`
+  en su camino de éxito (ver abajo), que antes no dejaba ningún rastro.
+- **`truncado`**: `true` cuando el universo `lpaandreani` devuelve exactamente 100 filas (el
+  `per_page` de la consulta) — señal explícita de que puede haber pedidos 101+ que no se están
+  mostrando, en vez de que desaparezcan en silencio de una pantalla cuyo criterio de diseño es
+  que nada se oculte (hallazgo del revisor). No pagina todavía; si en la práctica se llega a
+  tocar el límite, paginar es el siguiente paso.
+- Response 500: `{ "ok": false, "error": "..." }` si falla la consulta a Woo.
+
+### POST /api/preparacion/seguimientos/:wcOrderId (ronda de revisión I1/I2, resto sin cambios)
+El fail-closed por estado, el salteo del paso 1 en el reintento (para no reenviar el mail) y
+`marcarPreparacionEnviada` (ver `despachada_sin_verificar` más arriba) **no cambian**.
+
+- **I1 — CAMBIO DE CONTRATO, avisar al frontend**: el evento `tipo:'tracking_cargado'` en
+  `preparacion_eventos` (`detalle: { tracking }`, fuente de `GET /seguimientos.data.cargados_hoy`)
+  ahora se registra **inmediatamente después del INSERT local del paso 1** (antes de intentar
+  el paso 2), no solo "en el camino de éxito" como decía esta misma sección hasta la ronda
+  anterior. Motivo: el paso 1 (Woo en `completed`, tracking guardado, mail nativo ya
+  mandado) es el momento real en que el tracking "quedó cargado" — si el paso 2 falla
+  (`502`/`colgado:true`) el pedido ya salió igual, y antes ese caso no sumaba a
+  `cargados_hoy` (justo el día de más trabajo, cuando Woo está lento y varios quedan
+  colgados). `GET /seguimientos.data.cargados_hoy` sigue dedupeando con
+  `COUNT(DISTINCT preparacion_id)`, así que un reintento posterior sobre el mismo pedido no
+  duplica el conteo. **El frontend hoy incrementa `cargados_hoy` en memoria solo en la rama
+  `ok:true` de la respuesta** — con este cambio el backend también lo cuenta cuando la
+  respuesta es `502 colgado:true`, así que el frontend tiene que dejar de incrementarlo a
+  mano ahí (o incrementarlo también en la rama `colgado`) para no quedar corrido en -1 el
+  resto del día; lo más simple es refrescar `cargados_hoy` desde `GET /seguimientos` después
+  de cada intento, éxito o colgado.
+- **I2 — el INSERT del paso 1 ahora llena `numero_pedido`/`comprador`/`localidad`** desde el
+  `GET /orders/{id}` que la ruta ya hacía antes de este INSERT (`actual.data`), tanto en el
+  `INSERT` como en el `ON CONFLICT ... DO UPDATE`. Antes, para un pedido sin fila local previa
+  (el caso central de la sección "sin_preparacion" de esta pantalla) la fila nacía con los dos
+  en `NULL`, y `a_medias` terminaba mostrando `wc_order_id` como número **y** como nombre —
+  ese id además no es el número de pedido real de Woo (`order.number`, numeración custom de
+  esta tienda), así que el operario no podía ubicar en Woo el único pedido que está trabado.
+  `localidad` sale de `shipping.city` con fallback a `billing.city` (mismo criterio que
+  `normalizarEnvio`).
+
+### POST /api/preparacion/seguimientos/:wcOrderId/corregir-tracking (ajuste menor)
+Ahora también actualiza `preparaciones.tracking` (el mismo espejo local de arriba) al tracking
+nuevo, tanto si hace el PUT a Woo como en el atajo "mismo valor, no-op". Antes solo tocaba
+`meta_data` en Woo — la columna local quedaba con el valor viejo, y un Deshacer posterior
+(reintento de `a_medias` con el tracking de la columna) reintentaba contra un número que ya no
+era el vigente en Woo (hallazgo del revisor).
+
+### `reintentarColgadosTracking` (cron): 404/410 ya no quedan colgados para siempre (I3)
+Ahora que `a_medias` es 100% local (`woo_paso2_pendiente=1`), un pedido borrado o pasado a
+papelera en Woo hacía que el PUT del paso 2 fallara **siempre** — antes esto se resolvía solo
+porque la sección vieja se derivaba de Woo; con el dato local, la fila quedaba como ruido
+permanente (el chip la contaba todos los días, y "Reintentar" nunca podía resolverla).
+
+- Si `wooFetch` del PUT del paso 2 falla con **404 o 410**, se interpreta como "el pedido ya
+  no existe en Woo": se limpia `woo_paso2_pendiente=0` y se registra un evento
+  `tipo:'tracking_abandonado'` (`detalle: { error, motivo }`) para que un reclamo posterior
+  pueda ver qué pasó. No cuenta como `resuelto` (no llegó a `enviadoandreani`).
+- **Cualquier otro error sigue fail-closed** (5xx, timeout, red): no se toca la bandera, se
+  reintenta en la corrida siguiente — no hay forma de distinguir ahí "temporal" de
+  "permanente".
 
 ## Contador de Inventario (`/api/inventario`)
 

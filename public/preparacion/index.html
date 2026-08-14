@@ -46,6 +46,40 @@
   .b-dep{background:rgba(167,139,250,.14);color:var(--violet);}
   .b-mut{background:rgba(132,147,176,.14);color:var(--muted);}
 
+  /* Seguimientos: tira de chips de excepción, buscador y tarjeta de carga de tracking */
+  .seg-strip{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+  .seg-chip{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:20px;padding:6px 13px;font-size:12px;font-weight:600;}
+  .seg-chip.on{border-color:var(--amber);color:var(--amber);background:rgba(245,185,66,.1);cursor:pointer;}
+  .seg-chip.on:hover{background:rgba(245,185,66,.18);}
+  /* Gris, no ámbar (hallazgo I6 del revisor): "despachados sin verificar" es un universo que
+     la propia página pinta neutro en la tarjeta (:2251) porque no es una alerta — un chip
+     ámbar que solo crece enseña a ignorar toda la tira, incluida la de "a medias". */
+  .seg-chip.mut{border-color:var(--border2);color:var(--muted);background:var(--surface2);cursor:pointer;}
+  .seg-chip.mut:hover{background:var(--border2);}
+  .seg-search{width:100%;padding:10px 13px;border-radius:10px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:16px;}
+  .seg-search:focus{outline:none;border-color:var(--azul);}
+  .seg-section h2{font-size:1.05rem;margin:0 0 4px;}
+  .seg-section .sub{margin:0 0 12px;}
+  .seg-ok{border-radius:10px;padding:14px 16px;font-size:14px;font-weight:700;color:var(--green);background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);}
+  .seg-card-foot{display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;}
+  .seg-card-foot input{flex:1;min-width:130px;min-height:44px;padding:8px 9px;border-radius:6px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-family:'Courier New',monospace;font-size:13px;}
+  /* 44px = piso WCAG 2.5.8 (hardcodeado a propósito: esta página no linkea theme.css y
+     define su propio --tap-comfort:56px, no un token --tap-min), guantes/manos ocupadas
+     en depósito */
+  .seg-cam-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--azul);border-radius:8px;width:44px;height:44px;font-size:18px;cursor:pointer;flex:0 0 auto;}
+  .seg-cam-btn:hover{border-color:var(--azul);}
+  /* --muted (no --muted2): a 11px, --muted2 sobre --surface da 3.26:1 (bajo el piso WCAG
+     AA de 4.5:1 para texto normal, hallado con axe-core). --muted sí cumple. */
+  .seg-hint{font-size:11px;color:var(--muted);margin-top:4px;}
+
+  .toast-wrap{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:60;display:flex;flex-direction:column;gap:6px;align-items:center;width:calc(100% - 24px);max-width:440px;}
+  .seg-toast{background:var(--surface2);border:1px solid var(--border2);border-radius:10px;padding:11px 14px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 8px 24px rgba(0,0,0,.35);width:100%;justify-content:space-between;}
+  .seg-toast.ok{border-color:rgba(52,211,153,.4);}
+  .seg-toast.warn{border-color:rgba(245,185,66,.4);}
+  .seg-toast.bad{border-color:rgba(248,113,113,.4);}
+  .seg-toast .tx{display:flex;align-items:center;gap:7px;flex:1;}
+  .seg-toast button{background:none;border:1px solid var(--border2);color:var(--azul);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;flex:0 0 auto;}
+
   /* cards de la cola */
   .ped-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
   .ped{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;cursor:pointer;transition:border-color .15s;}
@@ -214,6 +248,17 @@
     <button class="btn sec" id="cam-close-btn" onclick="cerrarCamara()">Listo, cerrar cámara</button>
   </div>
 </div>
+
+<div class="modal" id="seg-cam-modal">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-label="Escanear código de la etiqueta de Andreani">
+    <p class="sub" id="seg-cam-target" style="margin:0 0 8px;font-weight:700;color:var(--text)"></p>
+    <div class="cam-viewport"><video id="seg-cam-video" autoplay playsinline muted></video></div>
+    <p class="sub" id="seg-cam-msg" style="margin:10px 0 0;">Apuntá al código de barras de la etiqueta. Se completa solo apenas lo reconoce.</p>
+    <button class="btn sec" id="seg-cam-close-btn" style="margin-top:10px" onclick="cerrarCamaraSeg()">Cancelar</button>
+  </div>
+</div>
+
+<div class="toast-wrap" id="seg-toast-wrap" aria-live="polite"></div>
 
 <div class="modal" id="manual-modal">
   <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="manual-modal-title">
@@ -705,6 +750,13 @@ function verboEvento(tipo,detalle){
   // estaba verificado (ver docs/api-contrato.md "Estado nuevo: despachada_sin_verificar").
   // No es un error: es el sistema diciendo la verdad sobre un envío que ya salió.
   if(tipo==='despachado_sin_verificar')return 'se despachó sin verificar (tracking cargado sin escaneo/fotos)';
+  // Los tres del flujo de Cargar seguimientos (2026-08-13): sin traducir, "tracking_cargado"
+  // aparecía literal en TODAS las preparaciones web (hallazgo del revisor).
+  if(tipo==='tracking_cargado')return 'cargó el tracking'+(detalle&&detalle.tracking?' <code>'+esc(String(detalle.tracking))+'</code>':'');
+  // "a medias" en los dos lados (hallazgo del revisor): la UI de arriba dice "a medias" y
+  // estos eventos decían "colgado" — misma persona, un solo término para lo mismo.
+  if(tipo==='tracking_colgado')return 'quedó a medias cargando el tracking (se reintenta solo)';
+  if(tipo==='tracking_recuperado')return 'se recuperó el tracking que había quedado a medias';
   return tipo;
 }
 
@@ -719,7 +771,7 @@ function motivoManualTexto(d){
 
 function feedItemHtml(ev,esNuevo){
   var d=ev.detalle||{};
-  var iconos={escaneo:'◎',foto_subida:'▣',foto_borrada:'⌫',embalaje:'⬒',despacho:'➜',completado:'★',reabierta:'↺',cerrada_sin_evidencia:'⛔',despachado_sin_verificar:'✈'};
+  var iconos={escaneo:'◎',foto_subida:'▣',foto_borrada:'⌫',embalaje:'⬒',despacho:'➜',completado:'★',reabierta:'↺',cerrada_sin_evidencia:'⛔',despachado_sin_verificar:'✈',tracking_cargado:'▤',tracking_colgado:'⏳',tracking_recuperado:'♻'};
   var quien=ev.usuario?esc(ev.usuario):'—';
   var cuando=fecha(ev.creado_en);
   var hm=haceMin(ev.creado_en);
@@ -1374,8 +1426,10 @@ window.addEventListener('keydown',function(e){
   if(e.key==='Escape'){
     var camModal=document.getElementById('cam-modal');
     var manModal=document.getElementById('manual-modal');
+    var segCamModal=document.getElementById('seg-cam-modal');
     if(camModal&&camModal.classList.contains('open')){cerrarCamara();return;}
     if(manModal&&manModal.classList.contains('open')){cerrarManualModal();return;}
+    if(segCamModal&&segCamModal.classList.contains('open')){cerrarCamaraSeg();return;}
   }
   if(!PREP||PREP.estado==='completada')return;
   var t=e.target;
@@ -1560,40 +1614,243 @@ async function marcarEtiqueta(wcId,lista,numero){
 }
 
 // ─── Cargar seguimientos ────────────────────────────────────────────────────
+// Rediseño 2026-08-13 (docs/superpowers/plans/2026-08-13-seguimientos.md): la pantalla
+// tiene que ser MÁS CÓMODA que cargar el tracking a mano en Woo, o el operario sigue ahí
+// por costumbre. El pedido se elige SIEMPRE primero (tarjeta con nombre+localidad visibles
+// sin scroll); pegar o escanear pasan por esa tarjeta, nunca por un campo/cámara sueltos
+// arriba de la grilla — así "elegir el pedido antes de escanear" queda forzado por la
+// interfaz, no por una instrucción que se puede saltear.
+//
+// GET /seguimientos ya viene PARTIDO por el backend en "esperando" (verificado, circuito
+// ideal) y "sin_preparacion" (todo el resto, con badge de cuál caso es) — nada del universo
+// de lpaandreani queda oculto. "a_medias" (woo_paso2_pendiente=1) y el conteo de
+// "despachados_sin_verificar" son universos APARTE (no dependen de lpaandreani) y viven en
+// la tira de chips de arriba: circuito sano = todo gris y sin click.
 
+var SEG={};                              // data, guardadosSesion, extraOpen, despachadosList, filtro
+var TRACKING_RE=/^\d{10,20}$/;           // formato liviano: solo dígitos, largo de Andreani (ej. 360003042094910)
+
+// El backend ahora registra tracking_cargado apenas el paso 1 queda guardado (también en
+// 502/colgado:true, no solo en ok:true) y dedupea con COUNT(DISTINCT preparacion_id) — ver
+// I1 en docs/api-contrato.md. Duplicar esa regla de conteo acá (sumar +1 a mano en cada
+// rama) es exactamente cómo se generó el desfasaje que motivó el cambio: se refresca desde
+// el backend en su lugar, una llamada liviana que no puede desincronizarse.
+async function refrescarCargadosHoy(){
+  try{
+    var r=await api('/seguimientos');
+    if(r.body.ok&&SEG.data)SEG.data.cargados_hoy=(r.body.data&&r.body.data.cargados_hoy)||0;
+  }catch(e){/* si falla, se queda con el valor anterior — no bloquea la carga que sí funcionó */}
+}
 async function cargarSeguimientos(){
   var c=document.getElementById('cuerpo');
-  c.innerHTML='<div class="loading">Cargando pedidos con etiqueta lista…</div>';
+  c.innerHTML='<div class="loading">Cargando…</div>';
+  // guardadosSesion (la defensa de "número ya usado en otra tarjeta") es SOLO en memoria:
+  // se resetea acá, cada vez que se entra a la pestaña (incluida una recarga de página).
+  // No protege contra un duplicado cargado en una sesión anterior, a propósito — es una
+  // defensa contra el error de foco de "ya está pasando", no un chequeo contra el backend.
+  SEG={data:null,guardadosSesion:{},extraOpen:null,despachadosList:null,filtro:''};
   try{
     var r=await api('/seguimientos');
     if(!r.body.ok)throw new Error(r.body.error||'error');
-    var filas=r.body.data||[];
-    if(!filas.length){c.innerHTML='<div class="loading">No hay pedidos con etiqueta lista pendientes de tracking.</div>';return;}
-    var html='<p class="sub">Pedidos con etiqueta ya lista. Tipeá el número de seguimiento de Andreani y guardá: '
-      +'el pedido pasa a <b>completado</b> (dispara el mail al cliente) y después a <b>enviado Andreani</b>.</p>'
-      +'<div class="ped-grid" id="seg-grid">'
-      +filas.map(function(f){
-        var e=f.envio||{};
-        var badge=f.colgado
-          ?'<span class="badge b-warn">reintentar</span>'
-          :'<span class="badge b-web">web</span>';
-        var trkVal=f.colgado&&f.tracking?' value="'+esc(f.tracking)+'"':'';
-        return '<div class="ped" id="seg-'+f.wc_order_id+'">'
-          +'<div class="ped-top"><span class="ped-num">#'+esc(e.pedido)+'</span>'+badge+'</div>'
-          +'<div class="ped-cli">'+esc(e.nombre)+' '+esc(e.apellido)+' — '+esc(e.localidad)+', '+esc(e.provincia)+'</div>'
-          +'<div class="ped-foot">'
-          +'<input type="text" placeholder="N° de seguimiento" id="trk-'+f.wc_order_id+'"'+trkVal+' style="flex:1;min-width:140px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text)">'
-          +'<button class="btn" onclick="guardarSeguimiento('+f.wc_order_id+')">Guardar</button>'
-          +'</div></div>';
-      }).join('')
-      +'</div>';
-    c.innerHTML=html;
+    SEG.data=r.body.data||{};
+    renderSeguimientos();
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
 
-// Corrección de tracking desde la tarjeta de Historial: usa siempre el wc_order_id real
-// de la tarjeta (p.wc_order_id), nunca un número tipeado a mano — así no hay riesgo de
-// corregir el pedido equivocado por numeración custom de Woo o IDs de ML.
+function badgeEstadoPrep(estado){
+  if(estado==='en_preparacion')return '<span class="badge b-warn">en preparación</span>';
+  if(estado==='despachada_sin_verificar')return '<span class="badge b-mut">despachada sin verificar</span>';
+  if(estado==='cerrada_sin_evidencia')return '<span class="badge b-warn">cerrada sin evidencia</span>';
+  // Está escaneada y verificada: lo opuesto de "sin preparación" (hallazgo del revisor,
+  // caía en el default y mentía). Ver ESTADOS_BLOQUEADOS_PARA_TRABAJAR en preparacion.js:
+  // no está bloqueada, solo espera a que el depósito termine su parte.
+  if(estado==='pendiente_deposito')return '<span class="badge b-dep">esperando al depósito</span>';
+  return '<span class="badge b-warn">sin preparación</span>';
+}
+
+// "Iniciar preparación ahora" prometía una acción de un click también en filas
+// 'cerrada_sin_evidencia', donde el backend termina bloqueando con "pedile a un compañero
+// que la reabra" (ESTADOS_BLOQUEADOS_PARA_TRABAJAR en preparacion.js) — un callejón sin
+// salida. Sin botón ahí; "Abrir preparación" cuando ya existe una fila trabajable.
+function iniciarBtnSeg(f){
+  var estado=f.estado_preparacion;
+  if(estado==='cerrada_sin_evidencia')return '';
+  var texto=estado?'Abrir preparación':'Iniciar preparación ahora';
+  // 44px (nit del revisor: WCAG 2.5.8): es la acción principal de "Sin preparación
+  // verificada", la sección más poblada, en una pantalla táctil de depósito.
+  return '<div style="margin:6px 0 0"><button type="button" class="btn mini sec" style="min-height:44px" onclick="completarAhora(\'web\','+f.wc_order_id+')">'+texto+'</button></div>';
+}
+
+function segBuscarFila(wcId){
+  if(!SEG.data)return null;
+  var arrs=[SEG.data.esperando||[],SEG.data.sin_preparacion||[],SEG.data.a_medias||[]];
+  for(var i=0;i<arrs.length;i++)for(var j=0;j<arrs[i].length;j++)if(arrs[i][j].wc_order_id===wcId)return arrs[i][j];
+  return null;
+}
+function quitarFilaSeg(wcId){
+  ['esperando','sin_preparacion'].forEach(function(k){
+    if(SEG.data&&SEG.data[k])SEG.data[k]=SEG.data[k].filter(function(f){return f.wc_order_id!==wcId;});
+  });
+}
+function nombreDe(e){return ((e.nombre||'')+' '+(e.apellido||'')).trim();}
+
+function cardSeguimiento(f,seccion){
+  var e=f.envio||{};
+  var nombre=nombreDe(e)||('#'+e.pedido);
+  var busq=(String(e.pedido||'')+' '+nombre+' '+(e.localidad||'')).toLowerCase();
+  var badge=seccion==='sin_preparacion'?badgeEstadoPrep(f.estado_preparacion):'';
+  var iniciar=seccion==='sin_preparacion'?iniciarBtnSeg(f):'';
+  return '<div class="ped static" id="seg-'+f.wc_order_id+'" data-search="'+esc(busq)+'">'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(e.pedido)+'</span>'+badge+'</div>'
+    +'<div class="ped-cli">'+esc(nombre)+' — '+esc(e.localidad)+', '+esc(e.provincia)+'</div>'
+    +iniciar
+    +'<div class="seg-card-foot">'
+      // A propósito NO hay submit con Enter acá (ni handler de keydown): es una escritura
+      // irreversible con mail al cliente de por medio, y muchos lectores de código de
+      // barras tipo wedge (o un Enter accidental) lo mandarían solos. Defensa deliberada,
+      // no un olvido — el guardado exige el clic explícito en "Guardar".
+      +'<input type="text" inputmode="numeric" autocomplete="off" placeholder="N° de seguimiento Andreani" class="trk-input" id="trk-'+f.wc_order_id+'" aria-label="Número de seguimiento para '+esc(nombre)+'" oninput="onTrkInput('+f.wc_order_id+')">'
+      +'<button type="button" class="seg-cam-btn" id="cam-btn-'+f.wc_order_id+'" title="Escanear código de la etiqueta de '+esc(nombre)+'" aria-label="Escanear código de la etiqueta de '+esc(nombre)+'" onclick="abrirCamaraSeg('+f.wc_order_id+')">📷</button>'
+    +'</div>'
+    +'<p class="seg-hint" id="trk-hint-'+f.wc_order_id+'">Ej: 360003042094910</p>'
+    // Aviso de número duplicado: inline y con botón propio, no confirm() — un confirm()
+    // nativo lo acepta un Enter suelto (o el que mandan muchos lectores de código de
+    // barras tipo wedge) sin que nadie lo lea (hallazgo del revisor).
+    +'<p class="seg-hint" id="trk-dup-'+f.wc_order_id+'" style="display:none"></p>'
+    +'<button type="button" class="btn" id="btn-'+f.wc_order_id+'" disabled style="width:100%;margin-top:2px;min-height:44px" onclick="guardarTracking('+f.wc_order_id+')">Guardar para '+esc(nombre)+'</button>'
+  +'</div>';
+}
+
+// Nadie confirmó todavía qué encodea de verdad el código de barras de una etiqueta
+// Andreani (solo se sabe qué guarda la meta de Woo: 15 dígitos). Si lo leído/tipeado no
+// matchea pero trae 10-20 dígitos rodeados de otros caracteres, se ofrecen como sugerencia
+// en vez de descartar en silencio — el operario siempre tiene que poder terminar la carga.
+function onTrkInput(wcId){
+  var input=document.getElementById('trk-'+wcId), btn=document.getElementById('btn-'+wcId), hint=document.getElementById('trk-hint-'+wcId);
+  if(!input||!btn)return;
+  if(btn.dataset.colgado==='1')return; // en modo "Reintentar" el botón queda habilitado sin retipear
+  var v=input.value.trim();
+  var ok=TRACKING_RE.test(v);
+  btn.disabled=!ok;
+  if(!hint)return;
+  if(!v||ok){hint.textContent='Ej: 360003042094910';hint.style.color='';return;}
+  hint.style.color='var(--amber)';
+  var digitos=v.replace(/\D/g,'');
+  if(digitos.length>=10&&digitos.length<=20&&digitos!==v){
+    hint.innerHTML='Se leyó «'+esc(v)+'» — se esperan 10-20 dígitos. ¿Usar <button type="button" class="btn mini sec" onclick="usarSugerenciaTrk('+wcId+',\''+esc(digitos)+'\')">'+esc(digitos)+'</button>?';
+  }else{
+    hint.textContent='Se leyó «'+v+'» — se esperan 10-20 dígitos.';
+  }
+}
+function usarSugerenciaTrk(wcId,valor){
+  var input=document.getElementById('trk-'+wcId);
+  if(!input)return;
+  input.value=valor;
+  onTrkInput(wcId);
+  input.focus();
+}
+
+// Saca UNA tarjeta del DOM en vez de repintar #cuerpo entero (renderSeguimientos()
+// regenera todos los inputs desde SEG.data): si se venían cargando dos etiquetas en
+// paralelo, repintar todo borraba sin aviso lo tipeado en las otras tarjetas (hallazgo
+// del revisor). Recalcula el contador de la sección y, si quedó vacía, la saca; si
+// alDiaFallback y ya no queda ninguna sección, arma el cartel "✓ Al día" a mano.
+function quitarTarjetaPorId(elId,opts){
+  opts=opts||{};
+  var card=document.getElementById(elId);
+  if(!card){filtrarSeg();return;}
+  var section=card.closest('.seg-section');
+  card.remove();
+  var quedoVacia=false;
+  if(section){
+    var grid=section.querySelector('.ped-grid');
+    var total=grid?grid.children.length:0;
+    var cuenta=section.querySelector('.seg-count');
+    if(cuenta)cuenta.textContent=total;
+    if(!total){section.remove();quedoVacia=true;}
+  }
+  if(opts.alDiaFallback&&quedoVacia&&!document.querySelector('#cuerpo .seg-section')&&!document.querySelector('#cuerpo .seg-ok')){
+    var buscador=document.getElementById('seg-buscador');
+    var okDiv=document.createElement('div');
+    okDiv.className='seg-ok';
+    okDiv.textContent='✓ Al día.'+(SEG.data&&SEG.data.cargados_hoy?(' Ya cargaste '+SEG.data.cargados_hoy+' hoy.'):'');
+    if(buscador)buscador.insertAdjacentElement('afterend',okDiv);
+  }
+  filtrarSeg();
+}
+
+async function guardarTracking(wcId,forzado){
+  var input=document.getElementById('trk-'+wcId), btn=document.getElementById('btn-'+wcId);
+  var tracking=input.value.trim();
+  if(!TRACKING_RE.test(tracking))return;
+  var f=segBuscarFila(wcId), e=(f&&f.envio)||{};
+  var nombre=nombreDe(e)||('#'+(e.pedido||wcId));
+  var localidad=e.localidad||'—';
+  var dupEl=document.getElementById('trk-dup-'+wcId);
+
+  // Defensa contra el error caro: número ya usado en OTRA tarjeta en esta misma carga de
+  // pantalla → aviso con un toque extra antes de escribir. Cubre pegar el mismo número en
+  // la tarjeta de al lado por error de foco. Inline, exige clic explícito en un botón
+  // propio — no confirm(), cuyo botón por defecto lo acepta un Enter suelto (o el que
+  // mandan muchos lectores de código de barras tipo wedge) sin que nadie lo lea.
+  var dup=SEG.guardadosSesion[tracking];
+  if(dup&&dup.wcOrderId!==wcId&&!forzado){
+    if(dupEl){
+      dupEl.style.display='block';
+      dupEl.style.color='var(--amber)';
+      dupEl.innerHTML='Este número ya se cargó en el pedido #'+esc(String(dup.pedido))+'. <button type="button" class="btn mini sec" onclick="guardarTracking('+wcId+',true)">Cargar igual</button>';
+    }
+    return;
+  }
+  if(dupEl)dupEl.style.display='none';
+
+  var colgado=btn.dataset.colgado==='1';
+  btn.disabled=true;btn.textContent=colgado?'Reintentando…':'Guardando…';
+  try{
+    var r=await api('/seguimientos/'+wcId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:tracking})});
+    if(r.body.ok){
+      SEG.guardadosSesion[tracking]={wcOrderId:wcId,pedido:e.pedido};
+      await refrescarCargadosHoy();
+      quitarFilaSeg(wcId);
+      // El límite real —el mail con el número anterior YA salió y no se puede retirar— se
+      // lee SIN clickear, en el propio toast, no recién dentro del confirm() (hallazgo del
+      // revisor: ocultarlo hasta el click sería peor que no tener Deshacer).
+      toastSeg('Guardado para '+nombre+', '+localidad+'. El mail ya salió: Deshacer corrige el número en el pedido, pero el cliente ya recibió el anterior.','ok',function(){
+        if(!confirm('Vas a corregir el número en el pedido, pero el cliente ya recibió el mail con el anterior. ¿Continuar?'))return;
+        abrirCorreccionTracking(wcId);
+      });
+      if(VISTA==='seguimientos')quitarTarjetaPorId('seg-'+wcId,{alDiaFallback:true});
+      return;
+    }
+    if(r.status===502&&r.body.colgado){
+      // Paso 1 sí (mail ya salió), paso 2 no. No se pide retipear: el backend acepta el
+      // mismo tracking sin reenviar el mail (colgadoCompletado en routes/preparacion.js).
+      SEG.guardadosSesion[tracking]={wcOrderId:wcId,pedido:e.pedido};
+      await refrescarCargadosHoy();
+      btn.dataset.colgado='1';btn.disabled=false;btn.textContent='Reintentar';
+      input.readOnly=true;
+      toastSeg('El tracking se guardó y el cliente ya recibió el mail. Falta un paso interno, se reintenta solo.','warn');
+      return;
+    }
+    if(r.status===409){
+      quitarFilaSeg(wcId);
+      // Importa el porqué real: si el PUT del paso 1 se aplicó pero se perdió la respuesta
+      // por red, el operario reintenta con otro número y este 409 es la única pista de si
+      // el tracking entró o no (hallazgo del revisor).
+      toastSeg(r.body.error?('No se pudo cargar: '+r.body.error+'.'):'Este pedido ya no está disponible para cargar tracking.','bad');
+      if(VISTA==='seguimientos')quitarTarjetaPorId('seg-'+wcId,{alDiaFallback:true});
+      return;
+    }
+    throw new Error(r.body.error||'error');
+  }catch(err){
+    toastSeg('No se guardó. Volvé a intentar.','bad');
+    btn.disabled=false;btn.textContent=colgado?'Reintentar':('Guardar para '+nombre);
+  }
+}
+
+// Corrección de tracking desde la tarjeta de Historial (o desde "Deshacer" del toast de
+// arriba): usa siempre el wc_order_id real de la tarjeta, nunca un número tipeado a mano —
+// así no hay riesgo de corregir el pedido equivocado por numeración custom de Woo o IDs de ML.
 async function abrirCorreccionTracking(wcOrderId,event){
   if(event)event.stopPropagation();
   try{
@@ -1619,25 +1876,300 @@ async function confirmarCorreccion(wcOrderId,nuevo){
   }catch(e){alert('No se pudo corregir: '+e.message);}
 }
 
-async function guardarSeguimiento(wcId){
-  var input=document.getElementById('trk-'+wcId);
-  var tracking=input.value.trim();
-  if(!tracking){input.focus();return;}
-  var card=document.getElementById('seg-'+wcId);
-  var btn=card.querySelector('.btn');
-  btn.disabled=true;btn.textContent='Guardando…';
+// ── "A medias de verdad" (woo_paso2_pendiente=1): el tracking YA está guardado y el mail
+// YA salió, solo falta reintentar el paso interno. Universo aparte de lpaandreani.
+function cardAMedias(f){
+  // f.envio ya NO viene de Woo (antes: GET puntual por fila, podía dar null si fallaba).
+  // Ahora es SIEMPRE un objeto armado con datos locales guardados en el mismo INSERT que
+  // dejó woo_paso2_pendiente=1: { pedido, nombre, apellido:'', localidad:'', provincia:'' }.
+  // localidad/provincia vienen siempre vacías (no se guardan localmente) — nunca null, pero
+  // tampoco un dato real: por eso NO se muestra "— , " cuando están vacías (se mostraría un
+  // renglón huérfano, como si faltara justo la localidad de un pedido real). El fallback
+  // ||{pedido:f.wc_order_id} queda solo por defensa ante un contrato futuro que la rompa.
+  var e=f.envio||{pedido:f.wc_order_id};
+  var nombre=nombreDe(e)||('#'+(e.pedido||f.wc_order_id));
+  var busq=(String(e.pedido||f.wc_order_id)+' '+nombre+' '+(e.localidad||'')).toLowerCase();
+  return '<div class="ped static" id="amedias-'+f.wc_order_id+'" data-search="'+esc(busq)+'">'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(e.pedido||f.wc_order_id)+'</span><span class="badge b-warn">a medias</span></div>'
+    +'<div class="ped-cli">'+esc(nombre)+(e.localidad?' — '+esc(e.localidad)+', '+esc(e.provincia):'')+'</div>'
+    +(f.tracking
+      // color:var(--muted), NO la clase .ped-items sola: --muted2 (heredado de .ped-items)
+      // sobre --surface da 3.26:1, bajo el piso AA de 4.5:1 (mismo hallazgo del comentario
+      // de .seg-hint más arriba, aplicado acá porque este contenido es nuevo).
+      ?'<div class="ped-items" style="color:var(--muted)">tracking guardado: <code>'+esc(f.tracking)+'</code> — el cliente ya recibió el mail</div>'
+        // Sin tracking en el atributo onclick (nit del revisor: esc() no escapa comilla
+        // simple, public/lib/format.js:16-20): reintentarAMedias saca el tracking de
+        // segBuscarFila(wcId), que ya lo tiene en memoria — nada que escapar.
+        +'<div class="ped-foot"><button type="button" class="btn mini" style="min-height:44px" onclick="reintentarAMedias('+f.wc_order_id+')">Reintentar</button></div>'
+      // Fila previa a la migración que agregó preparaciones.tracking (sin el número guardado
+      // localmente): no hay con qué reintentar en un click, se corrige a mano en Woo.
+      :'<div class="ped-items" style="color:var(--muted)">Sin tracking registrado localmente — revisar en WooCommerce.</div>')
+  +'</div>';
+}
+async function reintentarAMedias(wcId){
+  var f=segBuscarFila(wcId), e=(f&&f.envio)||{};
+  var nombre=nombreDe(e)||('#'+wcId);
+  var tracking=f&&f.tracking;
+  if(!tracking){toastSeg('No se guardó. Volvé a intentar.','bad');return;}
   try{
-    var r=await api('/seguimientos/'+wcId,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({tracking:tracking})});
-    if(!r.body.ok)throw new Error(r.body.error||'error');
-    card.remove();
-    if(!document.querySelectorAll('#seg-grid .ped').length){
-      document.getElementById('cuerpo').innerHTML='<div class="loading">No hay pedidos con etiqueta lista pendientes de tracking.</div>';
+    var r=await api('/seguimientos/'+wcId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:tracking})});
+    if(r.body.ok){
+      if(SEG.data){
+        SEG.data.a_medias=(SEG.data.a_medias||[]).filter(function(x){return x.wc_order_id!==wcId;});
+        // Decrementar el total real, no solo la lista topada en 20 (hallazgo I4 del
+        // revisor): si no, el chip sigue diciendo "1 a medias" con la sección vacía.
+        if(SEG.data.a_medias_total)SEG.data.a_medias_total--;
+      }
+      // e.envio acá es local (sin localidad real, ver cardAMedias): no se inventa "—" para
+      // un dato que nunca se tuvo.
+      toastSeg('Guardado para '+nombre+'.','ok');
+      // Acá SÍ se puede repintar entero (a diferencia de quitarTarjetaPorId, pensado para
+      // no perder lo tipeado en OTRAS tarjetas): la vista de a_medias no tiene inputs, así
+      // que renderSeguimientos() recalcula bien el "Mostrando N de M" y no deja la pantalla
+      // en blanco cuando la sección se queda sin filas (hallazgo I4 del revisor).
+      if(VISTA==='seguimientos')renderSeguimientos();
+      return;
     }
-  }catch(e){
-    alert('No se pudo guardar: '+e.message);
-    btn.disabled=false;btn.textContent='Guardar';
+    if(r.status===502&&r.body.colgado){toastSeg('El tracking se guardó y el cliente ya recibió el mail. Falta un paso interno, se reintenta solo.','warn');return;}
+    if(r.status===409){
+      if(SEG.data){
+        SEG.data.a_medias=(SEG.data.a_medias||[]).filter(function(x){return x.wc_order_id!==wcId;});
+        if(SEG.data.a_medias_total)SEG.data.a_medias_total--;
+      }
+      toastSeg(r.body.error?('No se pudo cargar: '+r.body.error+'.'):'Este pedido ya no está disponible para cargar tracking.','bad');
+      if(VISTA==='seguimientos')renderSeguimientos();
+      return;
+    }
+    throw new Error(r.body.error||'error');
+  }catch(err){toastSeg('No se guardó. Volvé a intentar.','bad');}
+}
+
+// Chips de excepción: se abren solo si el contador es >0. Colapsan las secciones
+// principales mientras están abiertos a propósito — nunca más de dos grillas de tarjetas
+// visibles a la vez (regla del diseño). El chip sigue arriba para volver con el mismo click.
+function toggleSegExtra(tipo){
+  if(SEG.extraOpen===tipo){SEG.extraOpen=null;renderSeguimientos();return;}
+  SEG.extraOpen=tipo;
+  if(tipo==='despachados'&&SEG.despachadosList==null){
+    renderSeguimientos();
+    api('/despachadas-sin-verificar').then(function(r){
+      if(VISTA!=='seguimientos')return; // se saltó a otra pestaña mientras la llamada estaba en vuelo
+      SEG.despachadosList=(r.body&&r.body.ok)?(r.body.data||[]):[];
+      renderSeguimientos();
+    }).catch(function(){
+      if(VISTA!=='seguimientos')return;
+      SEG.despachadosList=[];renderSeguimientos();
+    });
+    return;
   }
+  renderSeguimientos();
+}
+
+function renderSeguimientos(){
+  var c=document.getElementById('cuerpo');
+  if(!SEG.data){c.innerHTML='<div class="loading">Cargando…</div>';return;}
+  var d=SEG.data, esperando=d.esperando||[], sinPrep=d.sin_preparacion||[], aMedias=d.a_medias||[];
+  var despCount=d.despachados_sin_verificar||0;
+  var aMediasTotal=(d.a_medias_total==null?aMedias.length:d.a_medias_total);
+
+  var html='';
+  // `truncado`: la consulta a Woo del universo lpaandreani volvió al tope de per_page=100 —
+  // puede haber pedidos 101+ que no se están mostrando en "esperando"/"sin_preparacion".
+  // Mismo criterio que el resto de la pantalla: nada se oculta sin decirlo (hallazgo del
+  // revisor, ver docs/api-contrato.md#Seguimientos).
+  if(d.truncado){
+    html+='<div class="flash warn" style="display:block">⚠ Hay 100 pedidos o más en Andreani. Esta pantalla trae los primeros 100 — puede haber más sin mostrar.</div>';
+  }
+
+  html+='<div class="seg-strip">'
+    // El chip usa el TOTAL real (`a_medias_total`), no aMedias.length (la lista viene topada
+    // en 20): si hubiera 25 "a medias" y el chip dijera "20 a medias", ya estaría ocultando
+    // 5 antes de que el operario llegue a abrir la sección.
+    +(aMediasTotal
+      ?'<button type="button" class="seg-chip on" onclick="toggleSegExtra(\'amedias\')">'+aMediasTotal+' a medias</button>'
+      :'<span class="seg-chip">0 a medias</span>')
+    +(despCount
+      ?'<button type="button" class="seg-chip mut" onclick="toggleSegExtra(\'despachados\')">'+despCount+' despachados sin verificar</button>'
+      :'<span class="seg-chip">0 despachados sin verificar</span>')
+    +'</div>';
+
+  html+='<input type="search" class="seg-search" id="seg-buscador" placeholder="Buscar por pedido o nombre…" value="'+esc(SEG.filtro||'')+'" oninput="filtrarSeg()" aria-label="Buscar pedido por número o nombre">';
+
+  // El <button> "‹ Volver" fuera del <h2> (hallazgo del revisor: adentro, el nombre
+  // accesible del encabezado quedaba "A medias de verdad (1) ‹ Volver").
+  if(SEG.extraOpen==='amedias'){
+    html+='<div class="seg-section"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+      // Mismo nombre y mismo número que el chip de arriba (hallazgo del revisor): "de
+      // verdad" respondía al bug de los 70 falsos positivos, que el operario nunca vivió.
+      // data-total: el universo real (>=cards.length si la lista viene topada en 20).
+      // filtrarSeg() lo usa como base en vez de cards.length — sin esto, su repintado sin
+      // filtro pisaba el "27" recién puesto acá con un "20" que solo cuenta lo mostrado.
+      +'<h2 style="margin:0">A medias (<span class="seg-count" data-total="'+aMediasTotal+'">'+aMediasTotal+'</span>)</h2>'
+      +'<button type="button" class="btn mini sec" onclick="toggleSegExtra(\'amedias\')">‹ Volver</button></div>'
+      +'<p class="sub">La herramienta ya cargó el tracking y el mail ya salió; falta reintentar el paso interno final.</p>'
+      // La lista viene con LIMIT 20 (`a_medias`); `a_medias_total` es el conteo real del
+      // universo woo_paso2_pendiente=1. Si hay más de las que se muestran, decirlo: ocultar
+      // filas en silencio es el peor fallo posible en esta pantalla (mismo criterio que el
+      // buscador con su contador de visibles).
+      +(aMediasTotal>aMedias.length?'<p class="sub" style="color:var(--amber)">Mostrando '+aMedias.length+' de '+aMediasTotal+'.</p>':'')
+      // Al reintentar la última fila la sección se queda sin tarjetas: una grilla vacía sin
+      // texto deja al operario sin saber si se resolvió o si algo falló (probador-e2e).
+      +(aMedias.length?'<div class="ped-grid">'+aMedias.map(cardAMedias).join('')+'</div>'
+        :'<p class="sub">✓ No queda ningún pedido a medias.</p>')
+      +'</div>';
+  }else if(SEG.extraOpen==='despachados'){
+    html+='<div class="seg-section"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+      +'<h2 style="margin:0">Despachados sin verificar (<span class="seg-count">'+despCount+'</span>)</h2>'
+      +'<button type="button" class="btn mini sec" onclick="toggleSegExtra(\'despachados\')">‹ Volver</button></div>'
+      +'<p class="sub">Ya salieron y el cliente ya recibió el mail. Se cargó el tracking sin escanear ni fotografiar el contenido, quedan acá por si hay un reclamo.</p>'
+      +(SEG.despachadosList==null?'<div class="loading">Cargando…</div>':'<div class="ped-grid">'+SEG.despachadosList.map(cardDespachadaSinVerificar).join('')+'</div>')
+      +'</div>';
+  }else{
+    // "Al día" solo cuando LAS DOS secciones están en 0 (bloqueante del revisor): hoy nadie
+    // prepara en la herramienta, así que esperando=0 casi siempre — con sinPrep>0 abajo, el
+    // cartel verde era el mensaje exacto que hacía que el operario cerrara la pantalla y
+    // volviera a Woo (el fracaso del objetivo de esta pantalla).
+    if(!esperando.length&&!sinPrep.length){
+      html+='<div class="seg-ok">✓ Al día.'+(d.cargados_hoy?(' Ya cargaste '+d.cargados_hoy+' hoy.'):'')+'</div>';
+    }else{
+      if(esperando.length){
+        html+='<div class="seg-section"><h2>Esperando tracking (<span class="seg-count">'+esperando.length+'</span>)</h2>'
+          +'<div class="ped-grid">'+esperando.map(function(f){return cardSeguimiento(f,'esperando');}).join('')+'</div></div>';
+      }
+      if(sinPrep.length){
+        html+='<div class="seg-section"><h2>Sin preparación verificada (<span class="seg-count">'+sinPrep.length+'</span>)</h2>'
+          +'<p class="sub">Van camino a despacharse pero no pasaron (o no terminaron) por la preparación de la herramienta. Se les puede cargar el tracking igual.</p>'
+          +'<div class="ped-grid">'+sinPrep.map(function(f){return cardSeguimiento(f,'sin_preparacion');}).join('')+'</div></div>';
+      }
+    }
+  }
+
+  c.innerHTML=html;
+  filtrarSeg();
+}
+
+function limpiarFiltroSeg(){
+  SEG.filtro='';
+  var inp=document.getElementById('seg-buscador');
+  if(inp)inp.value='';
+  filtrarSeg();
+}
+
+// Ocultar sin ninguna señal es el peor fallo posible acá (hallazgo del revisor): con la
+// grilla vacía y el encabezado sin cambios, un "Gonzalez" que no matchea "González" se lee
+// como "el pedido no está en la herramienta". Ahora el conteo del <h2> refleja "N · M
+// visible(s)" mientras se filtra, y si un filtro esconde TODA una sección aparece un
+// mensaje con botón para mostrarlos igual.
+function filtrarSeg(){
+  var inp=document.getElementById('seg-buscador');
+  var q=(inp?inp.value:(SEG.filtro||'')).trim().toLowerCase();
+  SEG.filtro=q;
+  document.querySelectorAll('#cuerpo .seg-section').forEach(function(sec){
+    var cards=sec.querySelectorAll('[data-search]');
+    var cuenta=sec.querySelector('.seg-count');
+    var vacio=sec.querySelector('.seg-sin-resultados');
+    if(!cards.length){if(vacio)vacio.remove();return;}
+    var visibles=0;
+    cards.forEach(function(card){
+      var ok=!q||card.dataset.search.indexOf(q)!==-1;
+      card.style.display=ok?'':'none';
+      if(ok)visibles++;
+    });
+    // Base = el universo real (data-total, ej. a_medias_total) si es mayor a lo mostrado en
+    // esta grilla, no cards.length — si no, un repintado sin filtro pisa el total real con
+    // "lo que se ve" (mismo hallazgo que el h2 de "A medias").
+    var totalReal=cuenta&&cuenta.dataset.total?parseInt(cuenta.dataset.total,10):cards.length;
+    if(totalReal<cards.length)totalReal=cards.length;
+    if(cuenta)cuenta.textContent=q?(cards.length+' · '+visibles+' visible'+(visibles===1?'':'s')):String(totalReal);
+    var grid=sec.querySelector('.ped-grid');
+    if(!grid)return;
+    if(q&&!visibles){
+      if(!vacio){
+        vacio=document.createElement('div');
+        vacio.className='seg-sin-resultados';
+        vacio.style.cssText='font-size:12.5px;color:var(--muted);padding:10px 0';
+        grid.parentNode.insertBefore(vacio,grid);
+      }
+      vacio.innerHTML='Ningún pedido coincide con «'+esc(q)+'» — <button type="button" class="btn mini sec" onclick="limpiarFiltroSeg()">mostrar los '+cards.length+'</button>';
+    }else if(vacio){
+      vacio.remove();
+    }
+  });
+}
+
+// Toast no bloqueante con Deshacer opcional. Mismo patrón que public/cobertura/index.html
+// (docs/superpowers/plans/2026-08-10-cobertura-flujo-ux.md), paleta propia de esta página.
+function toastSeg(mensaje,tipo,onDeshacer){
+  var wrap=document.getElementById('seg-toast-wrap');
+  var el=document.createElement('div');
+  el.className='seg-toast '+(tipo||'ok');
+  // 'bad' con role="alert" (nit del revisor): distinto del contenedor con aria-live="polite"
+  // de :52, para que un error no espere su turno detrás de un anuncio 'ok' en cola.
+  el.setAttribute('role',tipo==='bad'?'alert':'status');
+  var icono=tipo==='bad'?'✕':tipo==='warn'?'⚠':'✓';
+  el.innerHTML='<span class="tx"><span aria-hidden="true">'+icono+'</span><span>'+esc(mensaje)+'</span></span>';
+  if(onDeshacer){
+    var btn=document.createElement('button');
+    btn.type='button';btn.textContent='Deshacer';
+    btn.addEventListener('click',function(){onDeshacer();el.remove();});
+    el.appendChild(btn);
+  }
+  // Los 'bad' no se autodestruyen (hallazgo I5 del revisor): un 409 trae el único motivo
+  // real de si el paso 1 llegó a aplicarse, y la tarjeta ya se sacó de la lista — a los 5s
+  // no queda ningún rastro. Se cierran con el botón propio.
+  if(tipo==='bad'){
+    var cerrar=document.createElement('button');
+    cerrar.type='button';cerrar.textContent='Cerrar';cerrar.setAttribute('aria-label','Cerrar aviso');
+    cerrar.addEventListener('click',function(){el.remove();});
+    el.appendChild(cerrar);
+  }
+  wrap.appendChild(el);
+  if(tipo!=='bad')window.setTimeout(function(){if(el.parentNode)el.remove();},onDeshacer?9000:5000);
+}
+
+// ── Cámara de Seguimientos (single-shot: mode!=='continuous' dispara onCode en el primer
+// frame decodificado; acá cerramos la cámara ahí mismo, ver public/lib/scanner.js) ──
+var SEG_CAM_WCID=null;
+function abrirCamaraSeg(wcId){
+  if(!window.Scanner){alert('No se pudo cargar el lector de códigos. Recargá la página.');return;}
+  SEG_CAM_WCID=wcId;
+  var f=segBuscarFila(wcId), e=(f&&f.envio)||{};
+  var nombre=nombreDe(e)||('#'+wcId);
+  document.getElementById('seg-cam-target').textContent='Escaneando para '+nombre+' — '+(e.localidad||'—');
+  document.getElementById('seg-cam-msg').textContent='Apuntá al código de barras de la etiqueta. Se completa solo apenas lo reconoce.';
+  var modal=document.getElementById('seg-cam-modal'), video=document.getElementById('seg-cam-video');
+  modal.classList.add('open');
+  window.Scanner.open({
+    video:video,
+    mode:'single',
+    onCode:function(v){onCodigoSeg(v);},
+    onError:function(msg){document.getElementById('seg-cam-msg').textContent=msg;}
+  });
+  var closeBtn=document.getElementById('seg-cam-close-btn');if(closeBtn)closeBtn.focus();
+}
+function cerrarCamaraSeg(devolverFoco){
+  if(window.Scanner)window.Scanner.close();
+  document.getElementById('seg-cam-modal').classList.remove('open');
+  var wcId=SEG_CAM_WCID;
+  SEG_CAM_WCID=null;
+  // Al cancelar sin escanear, el foco de teclado tiene que volver al botón de cámara que
+  // abrió el modal, no quedarse en <body> (hallazgo del revisor). El camino de éxito
+  // (onCodigoSeg) ya enfoca el input de destino y pasa devolverFoco=false para no pisarlo.
+  if(devolverFoco!==false&&wcId!=null){
+    var btn=document.getElementById('cam-btn-'+wcId);
+    if(btn)btn.focus();
+  }
+}
+function onCodigoSeg(codigo){
+  var wcId=SEG_CAM_WCID;
+  cerrarCamaraSeg(false);
+  if(!wcId)return;
+  var input=document.getElementById('trk-'+wcId);
+  if(!input)return;
+  input.value=String(codigo).trim();
+  onTrkInput(wcId);
+  input.focus();
+  if(navigator.vibrate)navigator.vibrate(40);
 }
 
 // ─── Historial ────────────────────────────────────────────────────────────────
@@ -1774,10 +2306,16 @@ async function cargarDespachadas(){
 
 function cardDespachadaSinVerificar(p){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
-  return '<div class="ped" onclick="abrirDetalle('+p.id+')">'
+  // data-search (hallazgo del revisor): sin esto filtrarSeg() no encuentra nada que filtrar
+  // en esta sección y el operario tipea sin que pase nada, sin ninguna explicación.
+  var busq=(String(p.numero_pedido||'')+' '+(p.comprador||'')).toLowerCase();
+  return '<div class="ped" data-search="'+esc(busq)+'" onclick="abrirDetalle('+p.id+')">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+'</div>'
-    +'<div class="ped-items">'+p.total_items+' ítems · '+p.total_fotos+' fotos · despachado '+fecha(p.completado_en||p.creado_en)+'</div>'
+    // --muted (5.63:1) y no el --muted2 heredado de .ped-items (3.26:1, bajo el piso AA):
+    // mismo arreglo que ya se había aplicado en cardAMedias y que acá faltaba (axe-core,
+    // probador-e2e 2026-08-13).
+    +'<div class="ped-items" style="color:var(--muted)">'+p.total_items+' ítems · '+p.total_fotos+' fotos · despachado '+fecha(p.completado_en||p.creado_en)+'</div>'
     // b-mut (gris neutro, ya usado para "confirmado a mano"/"etiqueta pendiente"): a
     // propósito NO es b-warn (ámbar) como "cerrada sin evidencia" — esto no es una alerta
     // ni algo por resolver, es información sobre un envío que ya salió.
