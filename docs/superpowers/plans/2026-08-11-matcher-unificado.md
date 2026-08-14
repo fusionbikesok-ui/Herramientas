@@ -123,6 +123,35 @@ marcó como no negociable. Se le preguntó y decidió:
 - **`/cobertura` y `/vinculos` redirigen al Matcher con un aviso** de que la herramienta se
   unificó. Un acceso directo viejo no puede terminar en un 404 crudo.
 
+## Las dos entregas (decidido el 2026-08-14)
+
+Se corta **por valor**, no por capa: cada entrega tiene que ser una mejora usable sola.
+
+**Entrega 1 — la herramienta se unifica y Joaco entra.** Dirección **Woo→ML**, la que hoy ya
+funciona y está desplegada. Incluye: permiso único `matcher` (Joaco gana acceso a la cola de
+cobertura), absorción de Vínculos (Buscar + Sospechosos + las dos acciones admin-only),
+sesión por usuario, concurrencia optimista, chips persistentes, línea calma del push y
+redirects con aviso desde `/cobertura` y `/vinculos`.
+
+**Ya se llama Matcher, y la dirección ML→Woo aparece deshabilitada con un "próximamente"**
+(decisión del usuario). Así el rebautizo pasa una sola vez y la pantalla de elegir dirección
+no queda coja.
+
+Vale sola: Joaco gana trabajo que hoy no puede hacer, hay una herramienta menos donde buscar,
+revisar lo que quedó mal deja de vivir aparte, y dos personas pueden trabajar sin pisarse. Y
+**no toca el motor ML→Woo**, así que lo que Joaco usa a diario queda idéntico hasta que el
+motor esté probado.
+
+**Entrega 2 — la dirección ML→Woo con el motor unificado.** Cuando el motor llegue a la vara
+(no antes: ver abajo). El Matcher gana las defensas que hoy no tiene y la cola priorizada
+reemplaza la carga por Excel. Acá va el aviso de primera visita.
+
+**La vara del motor no se negocia:** no puede recuperar menos vínculos reales que el motor
+viejo (95,0% en top-8 sobre 2634 pares). Se itera hasta alcanzarla; no hay plan B de dos
+motores.
+
+Todo el riesgo incierto queda en la entrega 2, y la entrega 1 puede salir sin depender de él.
+
 ## Alcance
 
 ### 1. ~~Corrección pendiente: el conflicto de marca~~ — YA ENTREGADO (`2164283`)

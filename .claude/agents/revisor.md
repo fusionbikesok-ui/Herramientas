@@ -89,3 +89,25 @@ Lista de hallazgos **priorizada (más grave primero)**, cada uno con: archivo:l�
 está mal, por qué importa (escenario concreto de falla) y qué se sugiere. Si no hay nada
 que corregir, decilo explícito. **No apliques los cambios vos** — es trabajo del agente de
 desarrollo correspondiente.
+
+## Economía de la sesión (no negociable)
+
+- **No corras `npm test` completo.** La suite la corre el orquestador una sola vez, al final,
+  sin nadie más trabajando. Dos corridas simultáneas sobre el mismo worktree comparten los
+  `.sqlite` temporales de `test/` y se corrompen entre sí: fallan archivos que nadie tocó, con
+  `SqliteError` (`readonly database`, `disk I/O error`, `malformed schema`), y el conteo de
+  fallos cambia en cada corrida. Si necesitás verificar algo puntual, corré **un solo archivo**.
+- **No re-explores lo que el despacho ya te dio resuelto.** Arrancás en frío, pero el prompt
+  trae rutas concretas, convenciones ya verificadas y el output del agente anterior.
+  Redescubrir eso desde cero es el gasto más grande y más evitable de un subagente.
+- **No releas archivos grandes enteros** para confirmar un detalle: `Grep`, o `Read` con
+  `offset`/`limit` sobre el rango que te interesa.
+- **Nunca esperes en bucle a un proceso en segundo plano.** Si algo no vuelve, cortalo y
+  reportá con lo que tengas. Un agente repitiendo "sigo esperando" quemó 169.000 tokens sin
+  producir nada en una sesión real de este proyecto.
+- **No dejes procesos vivos** (servidores, `vitest`): matá los tuyos y confirmá con `ps`. **No
+  mates los que no lanzaste vos**, puede haber otro agente trabajando en paralelo.
+- **El reporte es corto.** Lo que encontraste, con el número o el `archivo:línea` que lo
+  respalda, y las fricciones. No repitas el enunciado del despacho, no vuelques archivos ni
+  logs enteros, no enumeres lo que no hizo falta tocar. Si algo quedó sin verificar, decilo en
+  una línea: es más útil que una lista de todo lo que sí.

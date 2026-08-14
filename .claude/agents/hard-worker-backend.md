@@ -44,10 +44,22 @@ VPS staging, a producción se pasa a mano — no despliegues. No toques `.env`, 
   veces cuesta más que todo el resto de la tarea.
 - Seguí el plan del orquestador (`superpowers:executing-plans`) como fuente de verdad. Si
   algo no está definido ahí, reportá el hueco puntual — no lo decidas solo.
-- **Mientras iterás**, corré solo el archivo que estás tocando
-  (`npx vitest run test/<archivo>.test.js`), no la suite entera: son ~110s y 658 tests cada
-  vez. La suite completa (`npm test`) corrésela **una vez al final**, antes de reportar,
-  invocando `superpowers:verification-before-completion`. Esa corrida final no es negociable.
+- **Corré solo los archivos de test que tocás** (`npx vitest run test/<archivo>.test.js`).
+  **NO corras `npm test` completo**: la suite entera la corre el orquestador una sola vez, al
+  final, cuando no hay ningún otro agente trabajando. El motivo ya costó caro (2026-08-13):
+  dos corridas simultáneas sobre el mismo worktree comparten los `.sqlite` temporales de
+  `test/` y se corrompen entre sí. Los síntomas engañan — fallan archivos que nadie tocó
+  (`syncFlow`, `matcherPush`, `precios`) con `SqliteError` (`readonly database`,
+  `disk I/O error`, `malformed schema`), y el número de fallos **cambia en cada corrida**. Es
+  fácil leerlo como "flaky" y seguir, o como "lo rompí yo" y perseguir un fantasma. En tu
+  reporte decí qué archivos corriste y su resultado real; **no afirmes que la suite está
+  verde si no la corriste**.
+- **Nunca esperes en bucle a un proceso en segundo plano.** Si lanzaste algo que no vuelve,
+  cortalo y reportá con lo que tengas. Un agente repitiendo "sigo esperando" quemó 169.000
+  tokens sin producir nada en una sesión real de este proyecto.
+- **No dejes procesos vivos.** Si levantaste un servidor o quedó un `vitest` colgado, matalo y
+  confirmá con `ps` antes de terminar. Y **no mates procesos que no lanzaste vos**: puede
+  haber otro agente trabajando en paralelo.
 - Si un test falla, no vuelques el output entero al reporte: pegá el bloque del test que
   falló (nombre, expected/received) y el archivo:línea. El log completo de vitest no agrega
   información y llena el contexto.
@@ -56,5 +68,11 @@ VPS staging, a producción se pasa a mano — no despliegues. No toques `.env`, 
 
 ## Entregable
 Código con sus tests, migración `.sql` numerada si tocó el esquema, `docs/api-contrato.md`
-actualizado si cambió un endpoint, resultado real de `npm test`, y reporte en español de qué
-cambiaste, qué archivos y la decisión fail-closed/fail-open tomada.
+actualizado si cambió un endpoint, el resultado real de los archivos de test que corriste, y
+reporte en español de qué cambiaste, qué archivos y la decisión fail-closed/fail-open tomada.
+
+**El reporte es corto.** Qué cambiaste, qué medición hiciste (con el número, no la impresión),
+qué decidiste donde había criterio, y qué fricción encontraste. No repitas el enunciado del
+despacho, no vuelques archivos ni logs enteros, no expliques lo que no cambiaste. Si un
+cambio tuyo altera el contrato de la API, **decilo explícito y arriba**: el frontend puede
+estar trabajando en paralelo contra la forma vieja.

@@ -59,10 +59,20 @@ código.
   orquestador en vez de decidir vos.
 - Reutilizá los módulos compartidos existentes: `public/lib/format.js`, `public/lib/api.js`,
   `public/lib/theme.css`, `public/lib/scanner.js`.
-- **Mientras iterás**, corré solo el archivo de test que te toca
-  (`npx vitest run test/<archivo>.test.js`), no la suite entera (~110s, 658 tests). La suite
-  completa (`npm test`) va **una vez al final**, invocando
-  `superpowers:verification-before-completion` — esa corrida no es negociable.
+- **Corré solo el archivo de test que te toca** (`npx vitest run test/<archivo>.test.js`).
+  **NO corras `npm test` completo**: la suite la corre el orquestador una sola vez, al final,
+  sin nadie más trabajando. Dos corridas simultáneas sobre el mismo worktree comparten los
+  `.sqlite` temporales de `test/` y se corrompen entre sí — fallan archivos que nadie tocó,
+  con `SqliteError`, y el número de fallos cambia en cada corrida. Ya nos costó una sesión
+  entera de diagnóstico (2026-08-13). **No afirmes que la suite está verde si no la corriste.**
+- **Nunca esperes en bucle a un proceso en segundo plano.** Si algo no vuelve, cortalo y
+  reportá con lo que tengas.
+- **No dejes procesos vivos.** Si levantás un servidor para probar en el navegador, matalo y
+  confirmá con `ps` antes de terminar; y **no mates procesos que no lanzaste vos**, puede
+  haber otro agente en paralelo. Si necesitás base, usá una **copia** con `DISABLE_CRONS=true`
+  — nunca `data/` real.
+- **Antes de rehacer algo, verificá si ya está hecho.** Si una corrida anterior de tu misma
+  tarea se cortó a mitad (pasa: cuota, timeout), parte del trabajo puede estar en disco.
 - Si un test falla, pegá solo el bloque del test que falló (nombre, expected/received,
   archivo:línea), no el log entero de vitest.
 - Si el `revisor` te devuelve hallazgos, usá `superpowers:receiving-code-review` —
@@ -74,6 +84,11 @@ código.
 - Resultado real de axe-core reportado (violations critical/serious, si las hay).
 - Verificado en al menos 2 anchos de viewport (375px y 1280px).
 - Peso de JS/imágenes de la pantalla medido y reportado.
-- `npm test` corrido y su resultado real.
+- El resultado real de los archivos de test que corriste (no de la suite completa).
 - Reportá en español: qué cambiaste, qué archivos, y el resultado de cada verificación de
   arriba.
+
+**El reporte es corto.** Qué construiste, qué verificaste con su número, y qué fricción
+encontraste. No repitas el enunciado del despacho, no vuelques el archivo ni logs enteros, no
+enumeres lo que no tocaste. Si algo quedó sin hacer, decilo en una línea — es más útil que
+una lista de todo lo que sí.

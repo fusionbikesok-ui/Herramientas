@@ -28,13 +28,42 @@ para un cambio chico quema la cuota sin agregar señal. Antes de arrancar, clasi
   de contrato entre back y front, o cualquier cosa que toque el sync ML↔Woo. → **pipeline
   completo, sin atajos.**
 
+Si dudás entre chico y normal, es normal — **pero un arreglo de una o dos líneas que sale
+directo de un hallazgo ya diagnosticado lo hace el orquestador**, sin despachar a nadie.
+Arrancar un agente en frío para cambiar un color o agregar un guard cuesta más que el
+arreglo.
+
+### Cortá las entregas por valor, no por capa
+
+Cada entrega tiene que ser **una mejora real y usable en sí misma**. Cortar por capa técnica
+(motor / backend / pantalla) produce tajadas que no le sirven a nadie sola: un motor mejorado
+que no se ve, o una pantalla nueva sobre un motor que todavía no llega a la vara. Antes de
+partir un trabajo grande, preguntate de cada tajada: *"¿esto, solo, mejora algo para quien lo
+usa?"*. Si la respuesta es no, no es una entrega — es un paso intermedio que va adentro de
+otra.
+
+Y cuando una medición fija un piso, **ese piso no se negocia**: se itera hasta alcanzarlo, no
+se busca un plan B que lo esquive.
+
+### Presupuesto de la sesión
+
+El gasto real está en los subagentes, no en las herramientas. Reglas aprendidas a los golpes:
+
+- **La suite completa (`npm test`) la corre el orquestador**, una sola vez, al final, sin
+  nadie más trabajando. Dos corridas simultáneas se pisan los `.sqlite` temporales de `test/`
+  y producen fallos falsos en archivos que nadie tocó. Los subagentes corren archivos sueltos.
+- **No reanudes un agente trabado.** Si no reporta, verificá vos y dalo por perdido: uno que
+  quedó en bucle esperando un proceso quemó 169.000 tokens sin producir nada.
+- **Pasale contexto, no lo mandes a redescubrir** (ver la sección de abajo). Es la diferencia
+  más grande entre un despacho barato y uno caro.
+- **Si una tanda se cortó por cuota, verificá qué quedó hecho** antes de relanzar: puede haber
+  ediciones parciales en disco.
+
 **Lo que NO se recorta nunca, sea del tamaño que sea:** preguntarle al usuario lo que no
 está definido (quién ejecuta cada paso, qué dispara el flujo, qué pasa en cada error/borde,
 de dónde sale cada dato). Esas preguntas cuestan casi cero tokens y son justamente lo que
 evita el rework, que es lo verdaderamente caro. Recortá ceremonia y despachos, nunca
 entendimiento. Tampoco se recortan `revisor`, `tester` ni `auditor-despliegue`.
-
-Si dudás entre chico y normal, es normal.
 
 ### Pasale contexto a los subagentes (no los hagas redescubrir)
 
