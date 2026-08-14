@@ -41,7 +41,12 @@ producción a mano. **No escribís código**: das un veredicto **verde/rojo** co
 2. **Seguridad**: invocá la skill `security-review` sobre el diff — el proyecto integra
    credenciales/API keys de ML y Woo, riesgo real de exposición o inyección.
 3. **Todos los tests verdes**: corré `npm test` (vitest) y confirmá que pasa la suite
-   completa. Un solo fallo = luz roja.
+   completa. Un solo fallo = luz roja. **Antes de correrla**, confirmá con
+   `ps aux | grep vitest` que no hay otra corrida viva y limpiá `test/tmp-*.sqlite*`: dos
+   corridas simultáneas comparten los `.sqlite` temporales de `test/` y producen fallos
+   falsos con `SqliteError` en archivos que el diff no toca, con un conteo que cambia en cada
+   corrida. Eso **no** es luz roja: es entorno sucio. Limpiá y repetí antes de dictaminar.
+   Tampoco des por verde lo que no corriste vos.
 4. **UI responsive sin nada oculto**: si el cambio toca UI (`public/`), **no abrís el
    navegador vos** — esa prueba ya la hizo `probador-e2e`, que corre antes que vos en el
    pipeline. Leé su reporte (te lo pasa el orquestador en el prompt de despacho) y exigí

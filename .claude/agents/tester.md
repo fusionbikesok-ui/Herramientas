@@ -27,7 +27,16 @@ Proyecto `/opt/fusionbikes/herramientas` (Node/Express ESM, better-sqlite3). Tes
   hace `probador-e2e`.
 
 **En ambos casos:**
-- Corré `npm test` y verificá que **toda** la suite quede verde (no solo tu archivo).
+- Corré `npm test` y verificá que **toda** la suite quede verde (no solo tu archivo). Sos de
+  los pocos agentes que sí corre la suite entera, así que **antes de correrla**: confirmá con
+  `ps aux | grep vitest` que no hay otra corrida viva, y limpiá `test/tmp-*.sqlite*`. Si ves
+  fallos con `SqliteError` (`readonly database`, `disk I/O error`, `malformed schema`,
+  `UNIQUE constraint failed`) en archivos que nadie tocó, o el número de fallos **cambia entre
+  corridas idénticas**, no es el código: son corridas concurrentes pisándose los `.sqlite`
+  temporales, o un archivo corrupto que dejó una corrida muerta. Limpiá y repetí. **No lo
+  llames "flaky" sin probarlo** — la forma de probarlo es un worktree de control desde
+  `master` corriendo lo mismo (`git worktree add --detach`, con symlink a `node_modules`): si
+  el control pasa y el worktree de trabajo falla, entonces sí es el diff.
 - Si un test falla, reportá el output real; no lo escondas ni lo maquilles. Pegá el bloque
   del test que falló (nombre, expected/received, archivo:línea), no el log entero de vitest:
   el resto no agrega información y llena el contexto de quien te lee.
