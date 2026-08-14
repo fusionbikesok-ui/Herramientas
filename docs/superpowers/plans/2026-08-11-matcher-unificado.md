@@ -209,6 +209,25 @@ pantalla pasa a ser una vista del Matcher y hacerlos por separado sería trabajo
   pila no baja.
 - **El encabezado se parte a 375px.** Se usa desde el celular.
 
+### Dónde caen las dos salidas nuevas (resuelto por simetría, 2026-08-14)
+
+El diseño visual marcó que las dos secciones nuevas no estaban en la lista de chips. Se
+resuelve mirando qué hace hoy su equivalente, no inventando:
+
+- **"Solo local" no es una sección con chip:** es una **exclusión terminal**
+  (`cobertura_exclusiones` con `motivo='solo_local'`, `routes/cobertura.js:342`). Saca el
+  producto del universo y no genera trabajo pendiente. Por lo tanto **"Solo ML" tampoco
+  lleva chip**: es su espejo exacto, una exclusión, visible desde la superficie de revisión
+  junto con las demás.
+- **"Hay que crearlo en la web" sí es cola de trabajo**, igual que "Hay que publicarlo": son
+  huecos del catálogo que alguien tiene que llenar.
+
+**Y eso resuelve el problema de espacio en la tira de chips:** las dos colas son
+**excluyentes por dirección** — "Hay que publicarlo" solo aplica trabajando de Woo hacia ML,
+y "Hay que crearlo en la web" solo al revés. Se muestra **la que corresponde a la dirección
+activa**, así que los chips frecuentes siguen siendo cuatro y no cinco. No hay que apretar
+nada en 375px.
+
 ## Flujo cerrado (diseño, 2026-08-14)
 
 - **La entrada no es un peaje.** Arriba, "Seguir donde quedé" (por usuario y por dirección)
