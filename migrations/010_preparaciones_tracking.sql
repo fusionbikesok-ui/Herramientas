@@ -1,0 +1,13 @@
+-- Seguimientos: dejar de INFERIR "a medias" desde Woo (plan 2026-08-13-seguimientos.md).
+--
+-- GET /seguimientos armaba la sección "colgados" mirando la meta _andreani_tracking en
+-- pedidos 'completed' de WooCommerce. Esa inferencia daba falso positivo en cualquier
+-- pedido con el tracking cargado A MANO en Woo (el hábito real del usuario, nunca pasó por
+-- esta herramienta) — medido en 70 pedidos falsos de un total de 70 mostrados.
+--
+-- La marca correcta ya existía: preparaciones.woo_paso2_pendiente (puesta en 1 por esta
+-- misma herramienta en el paso 1 de POST /seguimientos/:wcOrderId, limpiada en el paso 2).
+-- Esta columna nueva guarda el tracking cargado en ese mismo paso 1, para que la sección
+-- "a_medias" no tenga que volver a pedírselo a Woo por cada fila (es de solo lectura, ya
+-- se guardó ahí mismo).
+ALTER TABLE preparaciones ADD COLUMN tracking TEXT;

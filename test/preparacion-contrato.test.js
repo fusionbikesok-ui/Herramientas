@@ -182,7 +182,7 @@ describe('GET /historial', () => {
   });
 });
 
-describe('GET /seguimientos', () => {
+describe('GET /seguimientos (contrato nuevo: 3 secciones + contadores, plan 2026-08-13)', () => {
   let db;
 
   beforeEach(() => {
@@ -195,62 +195,140 @@ describe('GET /seguimientos', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
-  it('solo devuelve pedidos web con etiqueta_lista=1', async () => {
-    const orderA = { id: 900, number: '900', shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'Córdoba', postcode: '5000' }, billing: {}, meta_data: [] };
-    const orderB = { id: 901, number: '901', shipping: { first_name: 'Beto', last_name: 'Diaz', address_1: 'San Martin 1', city: 'CABA', state: 'CABA', postcode: '1000' }, billing: {}, meta_data: [] };
-    wooFetch
-      .mockResolvedValueOnce({ data: [orderA, orderB] }) // status=lpaandreani
-      .mockResolvedValueOnce({ data: [] }); // status=completed (colgados)
+  it('reparte TODO el universo lpaandreani entre esperando y sin_preparacion, sin excluir en_preparacion', async () => {
+    const mk = (id) => ({ id, number: String(id), shipping: { first_name: 'N', last_name: 'A', address_1: 'Calle 1', city: 'Cordoba', state: 'Cordoba', postcode: '5000' }, billing: {}, meta_data: [] });
+    // 900: preparación 'completada' (verificada) -> esperando
+    // 901: sin ninguna fila local -> sin_preparacion
+    // 902: en_preparacion (p.ej. solo "etiqueta lista") -> sin_preparacion, NO se excluye
+    // 903: despachada_sin_verificar -> sin_preparacion
+    wooFetch.mockResolvedValueOnce({ data: [mk(900), mk(901), mk(902), mk(903)] }); // status=lpaandreani (única llamada del universo)
 
-    const app = buildTestApp(db); // ensureTables corre acá; hace falta antes de sembrar preparaciones
+    const app = buildTestApp(db); // ensureTables corre acá
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:900',900,1,'en_preparacion',?)`).run(now);
-    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:901',901,0,'en_preparacion',?)`).run(now);
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:900',900,1,'completada',?)`).run(now);
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:902',902,1,'en_preparacion',?)`).run(now);
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:903',903,1,'despachada_sin_verificar',?)`).run(now);
 
     const res = await request(app).get('/api/preparacion/seguimientos');
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].wc_order_id).toBe(900);
-    expect(res.body.data[0].envio.pedido).toBe('900');
-    expect(res.body.data[0].colgado).toBe(false);
+    expect(res.body.ok).toBe(true);
+
+    expect(res.body.data.esperando.map(f => f.wc_order_id)).toEqual([900]);
+    expect(res.body.data.esperando[0].envio.pedido).toBe('900');
+    expect(res.body.data.esperando[0].estado_preparacion).toBe('completada');
+
+    const sinPrepIds = res.body.data.sin_preparacion.map(f => f.wc_order_id).sort();
+    expect(sinPrepIds).toEqual([901, 902, 903]);
+    const fila901 = res.body.data.sin_preparacion.find(f => f.wc_order_id === 901);
+    expect(fila901.preparacion_id).toBeNull();
+    expect(fila901.estado_preparacion).toBeNull();
+    const fila902 = res.body.data.sin_preparacion.find(f => f.wc_order_id === 902);
+    expect(fila902.estado_preparacion).toBe('en_preparacion');
+
+    // Nunca se llama a Woo con status=completed: eso era la fuente de los 70 falsos positivos.
+    expect(wooFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('también lista pedidos colgados en completed con tracking cargado (sin llegar a enviadoandreani)', async () => {
-    const orderLpa = { id: 900, number: '900', shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'Córdoba', postcode: '5000' }, billing: {}, meta_data: [] };
-    // Colgado: quedó en 'completed' con tracking, sin registro local y sin llegar a enviadoandreani
-    const orderColgado = { id: 902, number: '902', shipping: { first_name: 'Caro', last_name: 'Lopez', address_1: 'Rivadavia 50', city: 'Rosario', state: 'Santa Fe', postcode: '2000' }, billing: {}, meta_data: [{ id: 71, key: '_andreani_tracking', value: 'AND999' }] };
-    // Otro completed sin tracking: no debe aparecer
-    const orderSinTracking = { id: 903, number: '903', shipping: { first_name: 'Dario', last_name: 'Paz', address_1: 'Mitre 1', city: 'CABA', state: 'CABA', postcode: '1000' }, billing: {}, meta_data: [] };
-    wooFetch
-      .mockResolvedValueOnce({ data: [orderLpa] }) // status=lpaandreani
-      .mockResolvedValueOnce({ data: [orderColgado, orderSinTracking] }); // status=completed
+  it('a_medias sale SOLO de woo_paso2_pendiente=1 (dato local), nunca de la meta _andreani_tracking de Woo', async () => {
+    // Pedido viejo con tracking cargado a mano en Woo (nunca pasó por esta herramienta):
+    // no debe aparecer en ningún lado, ni siquiera si estuviera en lpaandreani.
+    wooFetch.mockResolvedValueOnce({ data: [] }); // status=lpaandreani, universo vacío
 
     const app = buildTestApp(db);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:900',900,1,'en_preparacion',?)`).run(now);
+    // woo_paso2_pendiente=1 puesto por esta misma herramienta, con tracking ya guardado local.
+    // numero_pedido/comprador también quedan guardados localmente (mismo INSERT del paso 1
+    // real, ver POST /seguimientos/:wcOrderId) — de ahí sale `envio` acá, SIN pedirle nada
+    // a Woo fila por fila (hallazgo del revisor: I4).
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, tracking)
+      VALUES ('web','web:905',905,'905','Caro Lopez',1,'en_preparacion',?,1,'AND555')`).run(now);
 
     const res = await request(app).get('/api/preparacion/seguimientos');
     expect(res.status).toBe(200);
-    const ids = res.body.data.map(f => f.wc_order_id).sort();
-    expect(ids).toEqual([900, 902]);
-    const colgado = res.body.data.find(f => f.wc_order_id === 902);
-    expect(colgado.colgado).toBe(true);
-    expect(colgado.tracking).toBe('AND999');
-    expect(colgado.envio.pedido).toBe('902');
+    // Una sola llamada a Woo (el universo lpaandreani): a_medias ya no pide nada fila por fila.
+    expect(wooFetch).toHaveBeenCalledTimes(1);
+    expect(res.body.data.a_medias).toHaveLength(1);
+    expect(res.body.data.a_medias[0]).toMatchObject({ wc_order_id: 905, tracking: 'AND555' });
+    expect(res.body.data.a_medias[0].envio).toMatchObject({ pedido: '905', nombre: 'Caro Lopez' });
+    expect(res.body.data.a_medias_total).toBe(1);
   });
 
-  it('excluye de colgados un completed con _andreani_tracking de solo espacios en blanco', async () => {
-    // Meta presente pero vacío tras trim: se trata como si no tuviera tracking.
-    const orderBlanco = { id: 904, number: '904', shipping: { first_name: 'Eve', last_name: 'Ruiz', address_1: 'Colon 9', city: 'CABA', state: 'CABA', postcode: '1000' }, billing: {}, meta_data: [{ id: 80, key: '_andreani_tracking', value: '   ' }] };
-    wooFetch
-      .mockResolvedValueOnce({ data: [] }) // status=lpaandreani
-      .mockResolvedValueOnce({ data: [orderBlanco] }); // status=completed
+  it('despachados_sin_verificar y cargados_hoy son solo números, calculados de tablas locales', async () => {
+    wooFetch.mockResolvedValueOnce({ data: [] });
+    const app = buildTestApp(db);
+    const now = new Date().toISOString();
+    const prepId = db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:910',910,1,'despachada_sin_verificar',?)`).run(now).lastInsertRowid;
+    db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, tipo, usuario, detalle_json, creado_en) VALUES (?, 'tracking_cargado', 'tester', '{}', ?)`).run(prepId, now);
 
+    const res = await request(app).get('/api/preparacion/seguimientos');
+    expect(res.status).toBe(200);
+    expect(res.body.data.despachados_sin_verificar).toBe(1);
+    expect(res.body.data.cargados_hoy).toBe(1);
+  });
+
+  it('a_medias: LIMIT 20 en la lista pero a_medias_total cuenta el universo entero (hallazgo I4)', async () => {
+    wooFetch.mockResolvedValueOnce({ data: [] });
+    const app = buildTestApp(db);
+    const now = new Date().toISOString();
+    const ins = db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, tracking)
+      VALUES ('web',?,?,?,?,1,'en_preparacion',?,1,?)`);
+    for (let i = 0; i < 25; i++) {
+      const id = 2000 + i;
+      ins.run(`web:${id}`, id, String(id), `Comprador ${i}`, now, `AND${id}`);
+    }
+
+    const res = await request(app).get('/api/preparacion/seguimientos');
+    expect(res.status).toBe(200);
+    expect(res.body.data.a_medias).toHaveLength(20);
+    expect(res.body.data.a_medias_total).toBe(25);
+    // Nunca golpea Woo por fila, ni con 25 colgados: una sola llamada (el universo lpaandreani).
+    expect(wooFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('cargados_hoy no dobla cuenta un pedido con dos eventos tracking_cargado (reintento manual, hallazgo I6)', async () => {
+    wooFetch.mockResolvedValueOnce({ data: [] });
+    const app = buildTestApp(db);
+    const now = new Date().toISOString();
+    const prepId = db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:911',911,1,'despachada_sin_verificar',?)`).run(now).lastInsertRowid;
+    db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, tipo, usuario, detalle_json, creado_en) VALUES (?, 'tracking_cargado', 'tester', '{}', ?)`).run(prepId, now);
+    db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, tipo, usuario, detalle_json, creado_en) VALUES (?, 'tracking_cargado', 'tester', '{}', ?)`).run(prepId, now);
+
+    const res = await request(app).get('/api/preparacion/seguimientos');
+    expect(res.status).toBe(200);
+    // Dos eventos, un solo pedido: cuenta 1, no 2.
+    expect(res.body.data.cargados_hoy).toBe(1);
+  });
+
+  it('despachados_sin_verificar solo cuenta canal web (hallazgo menor del revisor)', async () => {
+    wooFetch.mockResolvedValueOnce({ data: [] });
+    const app = buildTestApp(db);
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en) VALUES ('web','web:912',912,1,'despachada_sin_verificar',?)`).run(now);
+    db.prepare(`INSERT INTO preparaciones (canal, clave, ml_order_id, etiqueta_lista, estado, creado_en) VALUES ('ml','ml:ORD-1',NULL,1,'despachada_sin_verificar',?)`).run(now);
+
+    const res = await request(app).get('/api/preparacion/seguimientos');
+    expect(res.status).toBe(200);
+    expect(res.body.data.despachados_sin_verificar).toBe(1);
+  });
+
+  it('truncado:true si el universo lpaandreani viene al tope de per_page (100), truncado:false si no (hallazgo I9)', async () => {
+    const mk = (id) => ({ id, number: String(id), shipping: {}, billing: {}, meta_data: [] });
+    wooFetch.mockResolvedValueOnce({ data: Array.from({ length: 100 }, (_, i) => mk(3000 + i)) });
     const app = buildTestApp(db);
 
     const res = await request(app).get('/api/preparacion/seguimientos');
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(0);
+    expect(res.body.data.truncado).toBe(true);
+  });
+
+  it('truncado:false con menos de 100 en el universo', async () => {
+    const mk = (id) => ({ id, number: String(id), shipping: {}, billing: {}, meta_data: [] });
+    wooFetch.mockResolvedValueOnce({ data: [mk(4000)] });
+    const app = buildTestApp(db);
+
+    const res = await request(app).get('/api/preparacion/seguimientos');
+    expect(res.status).toBe(200);
+    expect(res.body.data.truncado).toBe(false);
   });
 });
 
@@ -295,6 +373,12 @@ describe('POST /seguimientos/:wcOrderId', () => {
     expect(prep.etiqueta_lista).toBe(1);
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='despachado_sin_verificar'").get(prep.id);
     expect(ev).toBeTruthy();
+
+    // Evento que alimenta GET /seguimientos.data.cargados_hoy (antes no se registraba nada acá).
+    const evCargado = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='tracking_cargado'").get(prep.id);
+    expect(evCargado).toBeTruthy();
+    expect(JSON.parse(evCargado.detalle_json)).toEqual({ tracking: 'AND123' });
+    expect(prep.tracking).toBe('AND123');
   });
 
   it('si la preparación YA estaba completamente verificada antes de cargar el tracking, queda completada', async () => {
@@ -358,6 +442,36 @@ describe('POST /seguimientos/:wcOrderId', () => {
 
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_colgado'").get();
     expect(ev).toBeTruthy();
+
+    // I1 (revisor, plan 2026-08-13-seguimientos.md): el paso 1 SÍ terminó bien (Woo ya tiene
+    // el tracking guardado y el mail nativo ya salió) aunque el paso 2 haya fallado —
+    // cargados_hoy tiene que contarlo, no solo el camino de éxito completo.
+    const evCargado = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_cargado'").get();
+    expect(evCargado).toBeTruthy();
+  });
+
+  it('I2 (revisor): llena numero_pedido/comprador/localidad desde el GET a Woo, aunque no exista fila local previa (caso central: "sin_preparacion")', async () => {
+    wooFetch
+      .mockResolvedValueOnce({
+        data: {
+          id: 950, number: 'FB-9950', status: 'lpaandreani', meta_data: [],
+          billing: { first_name: 'Caro', last_name: 'Lopez', city: 'CABA' },
+          shipping: { city: 'Cordoba' },
+        },
+      })
+      .mockResolvedValueOnce({ data: { id: 950, status: 'completed' } })
+      .mockResolvedValueOnce({ data: { id: 950, status: 'enviadoandreani' } });
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/950').send({ tracking: 'AND950' });
+    expect(res.status).toBe(200);
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:950'").get();
+    // número real de Woo (numeración custom vía order.number), NUNCA el wc_order_id crudo —
+    // ese id no es lo que el operario va a buscar en Woo.
+    expect(prep.numero_pedido).toBe('FB-9950');
+    expect(prep.comprador).toBe('Caro Lopez');
+    // localidad de envío, con fallback a la de facturación (mismo criterio que normalizarEnvio).
+    expect(prep.localidad).toBe('Cordoba');
   });
 
   it('crea el meta sin id cuando el pedido no tenía tracking previo', async () => {
@@ -546,5 +660,42 @@ describe('reintentarColgadosTracking', () => {
     const resueltos = await reintentarColgadosTracking(db, { woo: null, enviadoAndreaniStatus: 'enviadoandreani' });
     expect(resueltos).toBe(0);
     expect(wooFetch).not.toHaveBeenCalled();
+  });
+
+  it('I3 (revisor): si Woo devuelve 404/410 (pedido borrado o en papelera), limpia la bandera y registra tracking_abandonado en vez de reintentar para siempre', async () => {
+    buildTestApp(db);
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
+      VALUES ('web','web:924',924,1,'en_preparacion',?,1)`).run(now);
+
+    wooFetch.mockRejectedValueOnce(new Error('WooCommerce API error 404'));
+
+    const resueltos = await reintentarColgadosTracking(db, { woo: null, enviadoAndreaniStatus: 'enviadoandreani' });
+    expect(resueltos).toBe(0); // no se "resolvió" en el sentido de completar el paso 2
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:924'").get();
+    expect(prep.woo_paso2_pendiente).toBe(0); // pero deja de ser ruido permanente
+    expect(prep.estado).not.toBe('completada');
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_abandonado'").get();
+    expect(ev).toBeTruthy();
+  });
+
+  it('I3: otros errores (5xx, red) siguen fail-closed — no tocan la bandera', async () => {
+    buildTestApp(db);
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
+      VALUES ('web','web:925',925,1,'en_preparacion',?,1)`).run(now);
+
+    wooFetch.mockRejectedValueOnce(new Error('WooCommerce API error 500'));
+
+    const resueltos = await reintentarColgadosTracking(db, { woo: null, enviadoAndreaniStatus: 'enviadoandreani' });
+    expect(resueltos).toBe(0);
+
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:925'").get();
+    expect(prep.woo_paso2_pendiente).toBe(1);
+
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_abandonado'").get();
+    expect(ev).toBeFalsy();
   });
 });

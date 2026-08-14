@@ -13,6 +13,7 @@ import {
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
+import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -191,6 +192,26 @@ function ensureTables(db) {
     db.prepare('ALTER TABLE preparaciones ADD COLUMN woo_paso2_pendiente INTEGER NOT NULL DEFAULT 0').run();
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables woo_paso2_pendiente:', e.message);
+  }
+
+  // tracking: número cargado en el paso 1 (guardado ANTES del intento de paso 2, ver POST
+  // /seguimientos/:wcOrderId) — permite que GET /seguimientos arme la sección "a medias"
+  // (woo_paso2_pendiente=1) sin pedirle de nuevo el tracking a Woo por cada fila.
+  try {
+    db.prepare('ALTER TABLE preparaciones ADD COLUMN tracking TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables tracking:', e.message);
+  }
+
+  // localidad: se llena junto con numero_pedido/comprador en el INSERT del paso 1 de
+  // POST /seguimientos/:wcOrderId (fix del hallazgo del revisor: la fila de "a_medias"
+  // nacía sin nombre ni número de pedido reales). No forma parte del `comprador` porque
+  // GET /seguimientos ya arma un objeto `envio` con campos separados (nombre/localidad)
+  // y mezclarla en el string de comprador obligaría a parsearla de vuelta.
+  try {
+    db.prepare('ALTER TABLE preparaciones ADD COLUMN localidad TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables localidad:', e.message);
   }
 }
 
@@ -459,6 +480,24 @@ export async function reintentarColgadosTracking(db, cfg) {
       registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_recuperado', usuario: null, detalle: {} });
       resueltos++;
     } catch (e) {
+      // 404/410: el pedido ya no existe en Woo (borrado o pasado a papelera) — el paso 2
+      // va a fallar SIEMPRE, así que dejar woo_paso2_pendiente=1 deja una fila irrecuperable
+      // que el chip de a_medias cuenta todos los días y que "Reintentar" nunca puede resolver
+      // (hallazgo del revisor: antes de que a_medias fuera 100% local, esto se resolvía solo
+      // porque la sección se derivaba de Woo). Se limpia el flag y se deja constancia con un
+      // evento propio para que un reclamo posterior pueda ver qué pasó. Cualquier otro error
+      // (5xx, timeout, red) sigue fail-closed: no se toca el flag, se reintenta en la corrida
+      // siguiente del cron — no hay forma de distinguir "temporal" de "permanente" ahí.
+      const status = Number((/error (\d+)/.exec(e.message) || [])[1]);
+      if (status === 404 || status === 410) {
+        db.prepare('UPDATE preparaciones SET woo_paso2_pendiente=0 WHERE id=?').run(prep.id);
+        registrarEvento(db, {
+          preparacionId: prep.id, itemId: null, tipo: 'tracking_abandonado', usuario: null,
+          detalle: { error: e.message, motivo: 'pedido inexistente en Woo (404/410)' },
+        });
+        console.error(`reintentarColgadosTracking: abandonado wc_order_id=${prep.wc_order_id} (Woo ${status}):`, e.message);
+        continue;
+      }
       console.error(`reintentarColgadosTracking: sigue colgado wc_order_id=${prep.wc_order_id}:`, e.message);
     }
   }
@@ -622,39 +661,109 @@ export function preparacionRouter(db, cfg) {
     res.json({ ok: true, etiqueta_lista: lista ? 1 : 0 });
   });
 
-  // ── Seguimientos: pedidos web con etiqueta ya lista, esperando tracking ──
-  // Incluye además "colgados": pedidos en 'completed' con el tracking ya cargado
-  // pero que nunca llegaron a enviadoandreani (p.ej. si el 2º PUT falló), para
-  // poder reintentar sin reenviar el mail al cliente.
+  // ── Seguimientos: tres secciones que reparten TODO el universo lpaandreani ──
+  // Antes (versión vieja, retirada): "a medias" se INFERÍA mirando la meta _andreani_tracking
+  // en pedidos 'completed' de Woo. Esa inferencia daba falso positivo en cualquier pedido con
+  // el tracking cargado A MANO en WooCommerce (el hábito real del usuario, confirmado por él),
+  // así que mostraba ~70 pedidos "colgados" que nunca pasaron por esta herramienta — ver
+  // docs/superpowers/plans/2026-08-13-seguimientos.md. Ahora "a medias" es EXCLUSIVAMENTE
+  // el dato local `woo_paso2_pendiente=1`, que esta misma herramienta pone en 1 al hacer el
+  // paso 1 y limpia al confirmar el paso 2 (o al reintentar) — nunca se infiere de Woo.
+  //
+  // - esperando: preparación local 'completada' (preparado y VERIFICADO) todavía en
+  //   lpaandreani — falta cargar el tracking.
+  // - sin_preparacion: TODO el resto del universo lpaandreani (sin fila local, o
+  //   en_preparacion/despachada_sin_verificar/cerrada_sin_evidencia). A propósito no se
+  //   excluye 'en_preparacion': marcar "etiqueta lista" ya crea una preparación en ese
+  //   estado sin trabajo real (POST /etiquetas/:wcOrderId/lista), así que excluirla
+  //   escondería justo los pedidos por despacharse.
+  // - a_medias: woo_paso2_pendiente=1 (dato local). Ya no están en lpaandreani (Woo los
+  //   movió a 'completed' en el paso 1). Antes se armaba `envio` pidiéndole a Woo un GET
+  //   por fila (costo "típicamente 0" pero sin techo: si el paso 2 empieza a fallar
+  //   sistemáticamente, cada carga de tracking del día deja una fila acá y la pantalla
+  //   pasa a hacer N GET seriales sin límite — hallazgo del revisor). Ahora `envio` sale
+  //   ENTERO de datos locales (preparaciones.numero_pedido/comprador, ya guardados en el
+  //   mismo INSERT que pone woo_paso2_pendiente=1): más pobre que el de Woo (sin
+  //   dirección/localidad), pero cardAMedias() en el frontend solo usa pedido/nombre/
+  //   localidad con fallback a null, y estos son justo los pedidos trabados que YA
+  //   pasaron por el paso 1 (mail al cliente ya mandado) — no hace falta reimprimir
+  //   etiqueta desde acá. Además LIMIT 20 + `a_medias_total`: sin tope, un universo que
+  //   crece de verdad (el escenario de arriba) también volvía sin límite.
   router.get('/seguimientos', async (req, res) => {
     try {
       const resp = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
-      const filas = (resp.data || [])
-        .map(order => {
-          const prep = db.prepare('SELECT id, etiqueta_lista, estado FROM preparaciones WHERE clave=?').get(`web:${order.id}`);
-          return prep && prep.etiqueta_lista
-            ? { wc_order_id: order.id, envio: normalizarEnvio(order), preparacion_id: prep.id, estado_preparacion: prep.estado, colgado: false }
-            : null;
-        })
-        .filter(Boolean);
-
-      // Colgados en 'completed' con tracking cargado (sin llegar a enviadoandreani)
-      const compResp = await wooFetch(cfg.woo, '/orders?status=completed&per_page=100');
-      for (const order of compResp.data || []) {
-        const meta = (order.meta_data || []).find(m => m.key === TRACKING_META_KEY && String(m.value || '').trim());
-        if (!meta) continue;
+      const filasUniverso = resp.data || [];
+      // Universo truncado en silencio si hay más de 100 en lpaandreani: el criterio de
+      // diseño de esta pantalla es que nada se oculte, así que un `truncado:true` explícito
+      // es mejor que una lista incompleta sin ninguna señal (hallazgo del revisor).
+      const truncado = filasUniverso.length === 100;
+      const esperando = [];
+      const sinPreparacion = [];
+      for (const order of filasUniverso) {
         const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(`web:${order.id}`);
-        filas.push({
+        const fila = {
           wc_order_id: order.id,
           envio: normalizarEnvio(order),
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
-          colgado: true,
-          tracking: String(meta.value).trim(),
-        });
+        };
+        if (prep?.estado === 'completada') esperando.push(fila);
+        else sinPreparacion.push(fila);
       }
 
-      res.json({ ok: true, data: filas });
+      const totalAMedias = db.prepare(
+        "SELECT COUNT(*) n FROM preparaciones WHERE canal='web' AND woo_paso2_pendiente=1"
+      ).get().n;
+      const pendientesPaso2 = db.prepare(
+        `SELECT id, wc_order_id, tracking, numero_pedido, comprador, localidad FROM preparaciones
+         WHERE canal='web' AND woo_paso2_pendiente=1 ORDER BY id LIMIT 20`
+      ).all();
+      const aMedias = pendientesPaso2.map((row) => ({
+        wc_order_id: row.wc_order_id,
+        envio: {
+          pedido: row.numero_pedido || String(row.wc_order_id),
+          nombre: row.comprador || '',
+          apellido: '',
+          localidad: row.localidad || '',
+          provincia: '',
+        },
+        preparacion_id: row.id,
+        tracking: row.tracking || null,
+      }));
+
+      // Solo canal='web': esta pantalla trabaja exclusivamente el universo lpaandreani/
+      // Andreani, y hoy nada del flujo 'ml' pone una preparación en este estado — filtrar
+      // por canal deja el número atado al dominio real de la pantalla en vez de a la tabla
+      // entera. Sin ventana temporal a propósito: 'despachada_sin_verificar' NO es terminal
+      // (POST /:id/completar la puede subir a 'completada' si se verifica después), así que
+      // el conteo baja solo con trabajo real. Ocultar los viejos con una ventana escondería
+      // justo los reclamos más urgentes de resolver, contra el criterio de "nada se oculta"
+      // de esta pantalla (hallazgo del revisor).
+      const despachadosSinVerificar = db.prepare(
+        "SELECT COUNT(*) n FROM preparaciones WHERE canal='web' AND estado='despachada_sin_verificar'"
+      ).get().n;
+
+      // COUNT(DISTINCT preparacion_id), no COUNT(*): un reintento manual sobre un pedido
+      // colgado registra un segundo evento 'tracking_cargado' para el MISMO pedido, y
+      // COUNT(*) lo contaba dos veces (hallazgo del revisor). El corte de "hoy" es en hora
+      // de Buenos Aires (lib/tiempo.js) — antes era medianoche UTC = 21:00 Argentina.
+      const inicioHoy = inicioHoyBuenosAiresISO();
+      const cargadosHoy = db.prepare(
+        "SELECT COUNT(DISTINCT preparacion_id) n FROM preparacion_eventos WHERE tipo='tracking_cargado' AND creado_en >= ?"
+      ).get(inicioHoy).n;
+
+      res.json({
+        ok: true,
+        data: {
+          esperando,
+          sin_preparacion: sinPreparacion,
+          a_medias: aMedias,
+          a_medias_total: totalAMedias,
+          despachados_sin_verificar: despachadosSinVerificar,
+          cargados_hoy: cargadosHoy,
+          truncado,
+        },
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
@@ -704,10 +813,43 @@ export function preparacionRouter(db, cfg) {
       // Registro local ANTES del paso 2: si el paso 2 falla, igual queda constancia de
       // que el pedido llegó a 'completed' con tracking guardado — sin esto, la única
       // fuente de verdad sería Woo (y solo se detectaría escaneando status=completed).
-      db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, woo_paso2_pendiente)
-        VALUES ('web', ?, ?, 1, 'en_preparacion', ?, 1)
-        ON CONFLICT(clave) DO UPDATE SET woo_paso2_pendiente=1`)
-        .run(`web:${wcOrderId}`, wcOrderId, now());
+      // También llenamos numero_pedido/comprador/localidad desde el GET de más arriba
+      // (`actual.data`): para un pedido de "sin_preparacion" (el caso central de esta
+      // pantalla) esta es la PRIMERA fila local que se crea, y sin esto nace con ambos en
+      // NULL — la tarjeta de `a_medias` terminaba mostrando el wc_order_id como número Y
+      // como nombre, y ese id además NO es el número de pedido real de Woo (que usa
+      // numeración custom vía `order.number`, ver lib/preparacion.js normalizarEnvio) — el
+      // operario quedaba sin forma de ubicar en Woo el único pedido que está trabado
+      // (hallazgo del revisor). ON CONFLICT también los actualiza: si ya existía una fila
+      // vieja con datos desactualizados (ej. el comprador cambió el pedido), se refresca.
+      db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, tracking)
+        VALUES ('web', ?, ?, ?, ?, ?, 1, 'en_preparacion', ?, 1, ?)
+        ON CONFLICT(clave) DO UPDATE SET numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, localidad=excluded.localidad, woo_paso2_pendiente=1, tracking=excluded.tracking`)
+        .run(
+          `web:${wcOrderId}`, wcOrderId,
+          String(actual.data.number ?? wcOrderId),
+          `${actual.data.billing?.first_name || ''} ${actual.data.billing?.last_name || ''}`.trim() || null,
+          actual.data.shipping?.city || actual.data.billing?.city || null,
+          now(), tracking,
+        );
+
+      // Evento para GET /seguimientos.data.cargados_hoy — se registra ACÁ, apenas el
+      // tracking quedó cargado de verdad (Woo ya tiene el tracking guardado y el mail
+      // nativo del paso 1 ya salió), no solo si el paso 2 sale bien. Antes se registraba
+      // después del try del paso 2 y el contador ignoraba todo pedido que quedara
+      // "colgado" ese día — exactamente el escenario de Woo lento que motivó a_medias
+      // (hallazgo del revisor, ver plan 2026-08-13-seguimientos.md). El COUNT(DISTINCT
+      // preparacion_id) de GET /seguimientos ya dedupea un reintento posterior sobre el
+      // mismo pedido. CONTRATO: el frontend hoy solo incrementa cargados_hoy en la rama
+      // 'ok' de la respuesta — con este cambio el backend también lo cuenta cuando la
+      // respuesta es 502/colgado, así que el frontend tiene que dejar de incrementarlo
+      // localmente y refrescar desde GET /seguimientos (o incrementar también en la rama
+      // colgado) para no quedar corrido en -1 el resto del día.
+      const prepId = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`).id;
+      registrarEvento(db, {
+        preparacionId: prepId, itemId: null, tipo: 'tracking_cargado', usuario: req.user?.username,
+        detalle: { tracking },
+      });
 
       // Paso 2: estado final custom, en una segunda escritura separada. Si falla, no se
       // relanza — queda "colgado" (woo_paso2_pendiente=1) para que reintentarColgadosTracking
@@ -715,13 +857,10 @@ export function preparacionRouter(db, cfg) {
       try {
         await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', { status: enviadoAndreaniStatus });
       } catch (e) {
-        const prep = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
-        if (prep) {
-          registrarEvento(db, {
-            preparacionId: prep.id, itemId: null, tipo: 'tracking_colgado', usuario: req.user?.username,
-            detalle: { error: e.message },
-          });
-        }
+        registrarEvento(db, {
+          preparacionId: prepId, itemId: null, tipo: 'tracking_colgado', usuario: req.user?.username,
+          detalle: { error: e.message },
+        });
         return res.status(502).json({
           ok: false, colgado: true,
           error: 'el tracking se guardó pero no se pudo marcar como enviado (se reintentará solo)',
@@ -777,12 +916,20 @@ export function preparacionRouter(db, cfg) {
       }
 
       if (trackingNuevo === trackingAnterior) {
+        // Aun sin cambio en Woo, `preparaciones.tracking` (espejo local, columna nueva) puede
+        // estar desincronizada si nunca pasó por acá — corregirla igual (hallazgo del revisor:
+        // antes esta ruta no la tocaba, y un Deshacer siguiente comparaba contra un valor viejo).
+        db.prepare("UPDATE preparaciones SET tracking=? WHERE clave=?").run(trackingNuevo, `web:${wcOrderId}`);
         return res.json({ ok: true, tracking_anterior: trackingAnterior, tracking_nuevo: trackingNuevo });
       }
 
       await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
         meta_data: [{ id: metaExistente.id, key: TRACKING_META_KEY, value: trackingNuevo }],
       });
+      // Espejo local: preparaciones.tracking es lo que lee `a_medias` para reintentar sin
+      // volver a preguntarle a Woo — si no se actualiza acá, un Deshacer deja esa columna
+      // apuntando al tracking viejo (hallazgo del revisor).
+      db.prepare("UPDATE preparaciones SET tracking=? WHERE clave=?").run(trackingNuevo, `web:${wcOrderId}`);
 
       const prep = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
       if (prep) {
@@ -893,16 +1040,30 @@ export function preparacionRouter(db, cfg) {
   // un reclamo — un estado que no se puede listar no sirve para nada (hallazgo del
   // revisor). Tampoco se mezcla con GET /historial (que solo trae 'completada'/
   // 'pendiente_deposito'): mezclarlo ahí sería volver a "indistinguible de una verificada".
+  //
+  // Filtrado por canal='web', igual que el conteo de GET /seguimientos (línea ~742): hoy no
+  // hay ninguna fila 'ml' en este estado (el flujo ML no lo produce), pero si algún día lo
+  // hiciera, contador y lista tienen que coincidir — antes discrepaban en silencio (hallazgo
+  // del revisor).
+  //
+  // Este estado NO es terminal (POST /:id/completar lo puede subir a 'completada' si se
+  // verifica después) y a propósito no tiene ventana temporal — la lista completa es el
+  // criterio de esta pantalla ("nada se oculta"). Sin tope explícito, sin embargo, un
+  // LIMIT 200 en silencio sería la misma trampa que a_medias_total/truncado ya resuelven: se
+  // aplica el mismo patrón acá (hallazgo del revisor).
   router.get('/despachadas-sin-verificar', (req, res) => {
+    const total = db.prepare(
+      "SELECT COUNT(*) n FROM preparaciones WHERE canal='web' AND estado='despachada_sin_verificar'"
+    ).get().n;
     const data = db.prepare(`
       SELECT p.*,
         (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
         (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id AND borrado_en IS NULL) AS total_fotos
       FROM preparaciones p
-      WHERE p.estado='despachada_sin_verificar'
+      WHERE p.canal='web' AND p.estado='despachada_sin_verificar'
       ORDER BY p.creado_en DESC LIMIT 200
     `).all();
-    res.json({ ok: true, data });
+    res.json({ ok: true, data, total, truncado: total > data.length });
   });
 
   // ── Estado del sync de pedidos_cache (para el aviso de frescura en el frontend) ──

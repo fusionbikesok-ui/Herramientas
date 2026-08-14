@@ -855,6 +855,47 @@ describe('preparacion flujo', () => {
       expect(fila).toMatchObject({ estado: 'despachada_sin_verificar', total_items: 3, total_fotos: 0 });
     });
 
+    // I6 (revisor): este estado no es terminal y a propósito no tiene ventana temporal (el
+    // criterio de la pantalla es que nada se oculte) — pero eso solo se sostiene si la
+    // lista avisa cuando el LIMIT 200 la corta, igual que a_medias_total/truncado en
+    // GET /seguimientos.
+    // wc_order_id distinto por fila: nuevaPrep()/nuevaPrepDespachadaSinVerificar() usan
+    // siempre wcOrderId=500 (crearPreparacion es idempotente por clave), así que para varias
+    // filas reales hay que insertar directo con claves únicas.
+    function nuevaDespachadaSinVerificarConId(wcOrderId) {
+      const iso = new Date().toISOString();
+      return db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, completado_en)
+        VALUES ('web', ?, ?, 1, 'despachada_sin_verificar', ?, ?)`)
+        .run(`web:${wcOrderId}`, wcOrderId, iso, iso).lastInsertRowid;
+    }
+
+    it('GET /despachadas-sin-verificar expone total y truncado:false cuando entran todas', async () => {
+      nuevaDespachadaSinVerificarConId(600);
+      nuevaDespachadaSinVerificarConId(601);
+      const r = await request(app).get('/api/preparacion/despachadas-sin-verificar');
+      expect(r.body.total).toBe(2);
+      expect(r.body.truncado).toBe(false);
+      expect(r.body.data).toHaveLength(2);
+    });
+
+    it('GET /despachadas-sin-verificar corta en 200 pero avisa truncado:true si hay más', async () => {
+      for (let i = 0; i < 201; i++) nuevaDespachadaSinVerificarConId(700 + i);
+      const r = await request(app).get('/api/preparacion/despachadas-sin-verificar');
+      expect(r.body.total).toBe(201);
+      expect(r.body.data).toHaveLength(200);
+      expect(r.body.truncado).toBe(true);
+    });
+
+    it('GET /despachadas-sin-verificar solo cuenta/lista canal web, igual que el chip de GET /seguimientos', async () => {
+      nuevaDespachadaSinVerificarConId(602);
+      const now = new Date().toISOString();
+      db.prepare(`INSERT INTO preparaciones (canal, clave, ml_order_id, etiqueta_lista, estado, creado_en)
+        VALUES ('ml','ml:ORD-1',NULL,1,'despachada_sin_verificar',?)`).run(now);
+      const r = await request(app).get('/api/preparacion/despachadas-sin-verificar');
+      expect(r.body.total).toBe(1);
+      expect(r.body.data).toHaveLength(1);
+    });
+
     it('GET /historial NO mezcla despachadas sin verificar con las completadas (MUTATION: si se agregara ese estado al IN de /historial, este test se pone en rojo)', async () => {
       const id = nuevaPrepDespachadaSinVerificar();
       const r = await request(app).get('/api/preparacion/historial');
@@ -1137,6 +1178,24 @@ describe('preparacion flujo', () => {
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE tipo='tracking_corregido'").get();
     expect(ev).toBeTruthy();
     expect(JSON.parse(ev.detalle_json)).toEqual({ tracking_anterior: 'AND111', tracking_nuevo: 'AND999' });
+  });
+
+  it('POST /corregir-tracking: actualiza también preparaciones.tracking (espejo local, hallazgo del revisor)', async () => {
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en, completado_en, tracking)
+      VALUES ('web','web:907',907,1,'completada',?,?,'AND111')`).run(new Date().toISOString(), new Date().toISOString());
+
+    wooFetch
+      .mockResolvedValueOnce({ data: {
+        status: 'enviadoandreani',
+        meta_data: [{ id: 5, key: '_andreani_tracking', value: 'AND111' }],
+      }})
+      .mockResolvedValueOnce({ data: {} });
+
+    const r = await request(app).post('/api/preparacion/seguimientos/907/corregir-tracking').send({ tracking: 'AND999' });
+    expect(r.status).toBe(200);
+
+    const prep = db.prepare("SELECT tracking FROM preparaciones WHERE clave='web:907'").get();
+    expect(prep.tracking).toBe('AND999');
   });
 
   it('POST /corregir-tracking: si no existe fila en preparaciones, igual corrige el tracking (evento se saltea fail-open)', async () => {
