@@ -303,3 +303,23 @@ nada en 375px.
 `npm test` verde + revisor OK + `probador-e2e` + auditor 🟢. Toca UX y UI, así que van
 `disenador-ux` y `disenador-ui` antes del código. Merge y `pm2 restart` los autoriza el usuario;
 el push al repo lo hace él.
+
+## Estado de la entrega 1 y lo que quedó afuera (2026-08-14)
+
+**Decidido:** el **progreso es del equipo**, y la pantalla lo dice ("resueltos hoy por el
+equipo"). Hacerlo por persona hoy solo es posible para los confirmados (`confirmado_por`,
+migración 013); `cobertura_exclusiones` y `cobertura_hay_que_publicar` no tienen columna de
+usuario, y agregarla es churn de esquema que no paga en un equipo de dos o tres personas.
+
+**Postergado por presupuesto de cuota, no por criterio** (queda escrito para no perderlo):
+
+- **"Seguir donde quedé" sigue mostrando solo lo pendiente, no el progreso de esa marca.** El
+  backend no devuelve "hechas de esta marca" en ningún endpoint, así que la pantalla no tiene
+  con qué. Era un pendiente absorbido de Cobertura; se hace cuando haya cuota.
+- **Faltan los casos 403 de `solo-ml/:clave/pausar` y `multi-publicacion/:clave/desvincular`**
+  en los tests. `multi-publicacion/:clave/pausar` sí está cubierto, así que la regla está
+  probada; falta la cobertura de las hermanas.
+- **Deuda de capas:** `routes/cobertura.js` (1022 líneas) importa lógica de dominio desde
+  `routes/sync.js` (`filasDeVinculos`, `cargarDescartes`, `senalesVigentes`, `logSync`). Eso
+  va en `lib/`. **Se hace en la entrega 2**, que suma la otra dirección al mismo archivo: ahí
+  se ve el alcance completo y se mueve una sola vez.

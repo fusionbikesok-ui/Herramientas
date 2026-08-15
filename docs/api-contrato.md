@@ -280,7 +280,7 @@ Además de lo que ya devolvía, incluye:
 `GET /api/sync/frenadas`).
 
 `vinculos_sospechosos`: cantidad de vínculos WC↔ML con al menos una señal vigente de posible
-mal matcheo (ver `GET /api/sync/vinculos-sospechosos`).
+mal matcheo (ver `GET /api/cobertura/vinculos-sospechosos`).
 
 ### GET /api/sync/dashboard — `stock.maxLlamadasPorCorrida` (campo agregado, m3 ronda 2 revisor)
 `stock.pendientes` no tiene tope (es el backlog total real), pero `syncWcToMl` solo drena hasta
@@ -323,14 +323,22 @@ frenada. Fail-closed deliberado, no se saltea la guarda de precio bajo ningún f
 - Response 400: `{ "ok": false, "error": "MercadoLibre no configurado" }` o
   `{ "ok": false, "error": "itemIds requerido" }`.
 
-## Vínculos WC↔ML
+## Vínculos WC↔ML — MOVIDO a `/api/cobertura/vinculos*`
+
+**Matcher unificado, entrega 1 (2026-08-14)** — ver la sección al final del documento.
+`public/vinculos/index.html` se retira
+(`/vinculos` ahora redirige). El motor (`filasDeVinculos`, `cargarDescartes`,
+`senalesVigentes`, `logSync`) se mantiene en `routes/sync.js` (lo sigue usando `GET
+/api/sync/dashboard` para `vinculos_sospechosos`) y se reusa por export, no se duplicó. El
+texto de abajo describe el **comportamiento** (sigue vigente tal cual, cambiaron las rutas y
+se sumó admin-only a desvincular) — se deja como referencia funcional.
 
 Auditoría de qué publicaciones de ML están mapeadas a cada producto de WC, señales de posible
 mal matcheo (`lib/vinculosSenales.js`: `seller_sku`, `atributos`, `precio`) y las acciones para
 corregirlas. Que un SKU tenga varias publicaciones NO es señal (multi-publicación intencional
 por condiciones de venta distintas).
 
-### GET /api/sync/vinculos/:sku
+### GET /api/cobertura/vinculos/:sku (antes `/api/sync/vinculos/:sku`)
 Detalle de un producto de WC y TODAS las publicaciones de ML mapeadas a su SKU (`sku_matcher_decisiones`
 con `accion` en `asignar`/`confirmar`).
 
@@ -348,7 +356,7 @@ con `accion` en `asignar`/`confirmar`).
 - Response 400: `{ "ok": false, "error": "sku requerido" }`.
 - Response 404: `{ "ok": false, "error": "SKU no encontrado en el catálogo" }`.
 
-### GET /api/sync/vinculos-sospechosos
+### GET /api/cobertura/vinculos-sospechosos (antes `/api/sync/vinculos-sospechosos`)
 Listado de todos los vínculos con al menos una señal vigente, ordenados por severidad
 (los que tienen alguna señal de peso `alta` primero, después por cantidad de señales).
 
@@ -356,7 +364,7 @@ Listado de todos los vínculos con al menos una señal vigente, ordenados por se
 - Response 200: `{ "ok": true, "data": [{ "clave", "sku", "item_id", "titulo", "wc_nombre",
   "thumbnail", "permalink", "precio_ml", "precio_wc", "senales": [...] }] }`.
 
-### POST /api/sync/vinculos/revisado
+### POST /api/cobertura/vinculos/revisado (antes `/api/sync/vinculos/revisado`)
 Marca una señal puntual como revisada y correcta ("descartar"). Persiste el **valor** que
 disparó la señal, no solo la clave: si el dato concreto vuelve a cambiar, el descarte deja de
 aplicar y la señal reaparece — descartar significa "esta discrepancia concreta está bien",
@@ -374,11 +382,11 @@ descarte parcial podría tapar en silencio una discrepancia nueva y distinta).
   `{ "ok": false, "error": "La clave no existe en el caché de publicaciones" }` (evita
   descartes huérfanos de claves con typo o publicaciones ya borradas de ML).
 
-### POST /api/sync/vinculos/reasignar
-Reasigna manualmente el vínculo (`clave`) a otro SKU de WC. Escribe con el mismo statement
-que usa el matcher (`INSERT OR REPLACE INTO sku_matcher_decisiones ... accion='asignar'`) para
-no tener un segundo camino de escritura que pueda divergir. Borra los descartes de esa clave
-en la MISMA transacción que la reasignación: valían para el vínculo anterior, no para el
+### POST /api/cobertura/vinculos/reasignar (antes `/api/sync/vinculos/reasignar`)
+Reasigna manualmente el vínculo (`clave`) a otro SKU de WC. **NO es admin-only** (a
+diferencia de desvincular, ver abajo): corrige un vínculo equivocado apuntándolo al SKU
+correcto, es trabajo normal de la cola, no una acción destructiva. Borra los descartes de esa
+clave en la MISMA transacción que la reasignación: valían para el vínculo anterior, no para el
 nuevo, y si el borrado quedara fuera de la transacción un fallo a mitad de camino dejaría
 descartes viejos tapando señales legítimas del vínculo nuevo.
 
@@ -391,8 +399,19 @@ descartes viejos tapando señales legítimas del vínculo nuevo.
   el contador de "necesitan atención" del home), o
   `{ "ok": false, "error": "El SKU no existe en el catálogo" }`.
 
-Nota: `POST /api/sync/desvincular` (ya existente) también borra los descartes de esa clave
-en la misma transacción que el borrado del mapeo, por la misma razón de atomicidad.
+### POST /api/cobertura/vinculos/:clave/desvincular (nuevo, **ADMIN-ONLY**)
+Borra el mapeo (`sku_matcher_decisiones` + descartes de `ml_vinculos_revisados`) para que la
+publicación se vuelva a linkear. Equivalente conceptual de `POST /api/sync/desvincular` (que
+**sigue existiendo tal cual, sin tocar** — lo usa `public/sync-detalle/index.html`, otra
+herramienta con otro permiso; no se fusionaron para no acoplar dos consumidores distintos a
+un único endpoint con reglas de acceso distintas). Rechaza con `403` si `req.user.is_admin`
+no es `true` (`requireAdmin`, `lib/auth.js`) — Joaco (no-admin) puede reasignar pero no
+desvincular.
+
+- Request: sin body, `:clave` en la URL.
+- Response 200: `{ "ok": true, "borradas": N }`.
+- Response 403 (no-admin): `{ "ok": false, "error": "Requiere administrador" }`.
+
 ## Config ML (reservas locales) — configuración masiva
 
 Endpoints agregados para configurar `skus_config_ml` (modo `solo_local`/`reserva`) de a
@@ -1553,13 +1572,22 @@ presupuesto de `lib/mlLimites.js` y el cooldown/backoff ante 429 — Cobertura n
 nada de eso. `escribirSkuEnMl`/`desvincularSkuEnMl`/`pausarPublicacionMl` (`lib/matcherPush.js`)
 son los tres únicos puntos de escritura hacia ML que usa este contrato.
 
-### Permisos (🔴 BLOQUEANTE corregido, revisor)
-`cobertura` es `niveles:false` en `lib/permisos.js` (checkbox de "acceso" en la UI de
-Usuarios, sin selector read/write — igual que `inventario`/`etiquetas`). La regla pide
+### Permisos — **SUPERADO por el Matcher unificado, entrega 1 (2026-08-14, ver sección al
+final del documento)**. `cobertura` como permiso aparte (`niveles:false`) ya no existe: se
+absorbió en el permiso único `matcher` (`niveles:true`). Se deja el texto original como
+registro de por qué `/cobertura` pedía `nivel:'read'` fijo — ya no aplica, ahora deriva del
+método (`nivelDe(m)`) como el resto de las herramientas `niveles:true`.
+
+<details><summary>Texto original (histórico)</summary>
+
+`cobertura` era `niveles:false` en `lib/permisos.js` (checkbox de "acceso" en la UI de
+Usuarios, sin selector read/write — igual que `inventario`/`etiquetas`). La regla pedía
 `nivel:'read'` **fijo**, sin importar el método HTTP: con `nivelDe(m)` (derivado del método),
-todo POST/PATCH/DELETE de esta lista pedía `write`, que `niveles:false` nunca puede otorgar
+todo POST/PATCH/DELETE de esta lista pedía `write`, que `niveles:false` nunca podía otorgar
 — un operario no-admin con el permiso tildado no podía usar ni un solo botón (403 en todo
 menos las lecturas). Mismo bug que ya costó el Contador de Inventario v2.
+
+</details>
 
 ### Conteos consistentes entre `/resumen` y las listas reales
 `GET /resumen.otras_secciones.sin_stock` usa el mismo criterio EXACTO que `GET /sin-stock`
@@ -1574,3 +1602,141 @@ Matcher ML→WC (`routes/matcher.js`, mismo tabla, `origen` queda `NULL`). `GET
 /resumen.progreso_hoy.resueltos_hoy`, `GET /historial` y `POST /vinculos/:clave/deshacer`
 filtran por `origen='cobertura'` — sin esto, confirmar un vínculo desde la otra herramienta
 inflaba "resueltos hoy" y aparecía en el historial de Cobertura (🟡 hallazgo del revisor).
+
+## Matcher unificado — entrega 1 (2026-08-14)
+
+Permiso único, sesión por usuario, concurrencia optimista, Vínculos absorbido y redirects.
+
+Fusiona `cobertura` (WC→ML, `/api/cobertura`), `matcher` (ML→WC, `/api/matcher`) y `vinculos`
+(`public/vinculos/index.html`) en una sola herramienta llamada **Matcher**. **Solo backend en
+esta entrega** — el frontend único (una pantalla, dos direcciones, dirección ML→WC
+deshabilitada como "próximamente") es un despacho aparte contra este contrato. Ver
+`docs/superpowers/plans/2026-08-11-matcher-unificado.md`, sección "Las dos entregas". El
+motor de matching **no se tocó** (`lib/matcherEngine.js` sigue como estaba — eso es la
+entrega 2).
+
+**IMPORTANTE para el frontend que consuma este contrato: nada de lo de arriba en este
+documento (rutas de `/api/cobertura/*` y `/api/matcher/*`) cambió de forma** — mismos paths,
+mismos requests, mismas responses de éxito. Lo que cambió es (1) qué permiso hace falta para
+llamarlos, (2) cuatro rutas nuevas absorbidas de Vínculos bajo `/api/cobertura/vinculos*`
+(arriba, sección "Vínculos WC↔ML"), (3) dos campos nuevos en la respuesta de `POST
+/productos/:id_woo/confirmar` y `POST /solo-ml/:clave/vincular` cuando hay conflicto de
+concurrencia, y (4) `GET /resumen.seguir_donde_quede` ahora es por usuario.
+
+### 1. Permiso único `matcher`
+`lib/permisos.js`: `cobertura` (`niveles:false`) desapareció de `HERRAMIENTAS`. Todo lo que
+antes pedía `cobertura` ahora pide `matcher` (`niveles:true`, igual que ya tenía la dirección
+ML→WC) — incluye `/api/cobertura/*` completo (nivel deriva del método: GET→read,
+POST/PATCH/DELETE→write) y el endpoint compartido `GET /api/sync/buscar-sku` (Buscar
+producto), que ahora acepta `matcher` además de `config-ml`/`sync-ml`.
+
+**El permiso se migra solo** (`migrations/014_permiso_cobertura_a_matcher.sql`): quien tuviera
+`cobertura` recibe `matcher` **con el mismo nivel**, y las filas de `cobertura` se borran. Si
+ya tenía `matcher`, ese gana — bajarlo sería quitarle acceso que hoy usa.
+
+Es defensivo a propósito. Medido sobre la base de staging del 2026-08-14, **nadie quedaría
+afuera** (el único con `cobertura` es Santi, que además tiene `matcher=write`, así que solo
+se le limpia la fila huérfana). Pero **producción es una base distinta que se pasa a mano** y
+no se puede verificar desde el entorno de desarrollo: sin la migración, un usuario que allá
+tuviera solo `cobertura` perdería el acceso **en silencio** al desplegar. Verificado sobre una
+copia de la base real, en los dos casos: el de Santi (conserva `write`, se limpia la huérfana)
+y el de un usuario con solo `cobertura` (recibe `matcher` con su nivel y conserva sus otros
+permisos).
+
+Joaco, que hoy tiene `matcher` (write) pero no tenía `cobertura`, **ya queda con acceso a
+todo** sin que nadie toque nada — es el efecto buscado. Santi pasa de `read` en cobertura a
+poder trabajar la cola completa: **consultado y confirmado con el usuario el 2026-08-14.**
+
+**Excepción admin-only, aplicada en el handler (`requireAdmin`, `lib/auth.js`), NO en
+`lib/permisos.js`** (`resolvePermiso` no distingue por sub-ruta con esa granularidad):
+- `POST /api/cobertura/multi-publicacion/:clave/pausar`
+- `POST /api/cobertura/solo-ml/:clave/pausar`
+- `POST /api/cobertura/multi-publicacion/:clave/desvincular`
+- `POST /api/cobertura/vinculos/:clave/desvincular` (nuevo, absorbido de Vínculos)
+
+Responden `403 { ok:false, error:'Requiere administrador' }` a un no-admin, aunque tenga
+`matcher` con nivel `write`.
+
+**`POST /api/cobertura/vinculos/:clave/deshacer` exige ser el autor, o admin.** Un no-admin
+solo puede deshacer un vínculo cuyo `confirmado_por` sea el suyo; sobre uno ajeno recibe 403
+diciendo quién lo confirmó. Los vínculos anteriores a la migración 013 no tienen autor
+registrado y quedan solo para admin, que es el default seguro. *(La versión anterior de este
+documento decía que `deshacer` no era la misma acción que "desvincular" porque no escribía en
+la publicación en vivo. Era falso: cuando el vínculo ya se efectivizó, `deshacer` llama al
+mismo `desvincularSkuEnMl` y escribe en ML igual. Hallazgo del revisor.)*
+
+**`POST /api/cobertura/vinculos/reasignar` no es admin-only**, pero desde la entrega 1 pasa
+por la **misma revalidación** que confirmar: si la clave ya la resolvió otra persona con otro
+SKU, devuelve `409 { ya_resuelto, resuelto_por, propio, sku, wc_nombre }` en vez de pisarla en
+silencio. Antes vivía bajo el permiso `sync-ml` (otra herramienta, otro perfil de usuario) y
+esa diferencia era defendible; al mudarla a la superficie del Matcher quedan las dos
+escrituras a un click de distancia y tienen que jugar con la misma regla.
+
+**Límite real del gate de "desvincular", para que no diga lo que no es:** es admin-only *en
+la superficie del Matcher*. Quien además tenga `sync-ml` con nivel `write` puede desvincular
+desde `POST /api/sync/desvincular` (Sync ML Detalle), que no pasa por `requireAdmin`. Medido
+sobre la base real el 2026-08-14: el único con ese permiso es **Santi**, que no es admin.
+**No es una regresión de esta entrega** — ya era así —, pero afirmar sin condiciones que "un
+no-admin no puede desvincular" sería falso.
+
+El frontend debe mostrar pausar/desvincular **deshabilitados con el motivo** a un no-admin,
+nunca ocultos (si Joaco no los ve, va a creer que es un bug — decisión de flujo ya cerrada).
+
+### 2. Sesión por usuario (migración 012)
+`cobertura_sesion` deja de ser un singleton (`id=1`, compartido por todos) y pasa a
+`(user_id, direccion)` — `direccion` queda fija en `'wc_ml'` en esta entrega (pensando en la
+entrega 2, ML→WC, que tendrá la suya). `lib/coberturaCola.js#seguirDondeQuede` y `#tocarSesion`
+ahora reciben `userId` (de `req.user.id`); sin `userId` son no-op / devuelven `null` (no
+debería pasar detrás de `authGuard`, pero no revientan si pasa en un test o script).
+**Efecto en el contrato:** `GET /api/cobertura/resumen.seguir_donde_quede` y el side-effect
+de `GET /api/cobertura/marcas/:marca/cola` (que actualiza la sesión) ahora son **por
+usuario** — dos personas trabajando la cola al mismo tiempo ya no se pisan el progreso. La
+forma de la respuesta no cambió (`{marca, pendientes} | null`).
+
+Se pierde el dato del singleton viejo al migrar (sqlite no soporta cambiar la PRIMARY KEY,
+se recrea la tabla) — es solo "en qué marca estaba trabajando", dato de conveniencia, no de
+negocio.
+
+### 3. Concurrencia optimista al confirmar
+La cola está priorizada: dos personas pueden ver primero las mismas publicaciones. **Sin
+locks por ítem** (decisión del plan — sobre-ingeniería para dos personas ocasionales, y deja
+candados huérfanos si alguien cierra la pestaña). La revalidación ya estaba: `confirmarDecisionCobertura`
+(`routes/cobertura.js`) lee la decisión existente y recién después escribe, todo síncrono
+(`better-sqlite3`, sin `await` en el medio) — no hay ventana de carrera real dentro de ese
+proceso Node.
+
+**Lo nuevo es el CONTENIDO del 409 cuando otra persona ya resolvió la misma clave con OTRO
+sku** (`POST /api/cobertura/productos/:id_woo/confirmar` y `POST
+/api/cobertura/solo-ml/:clave/vincular`):
+
+```json
+{
+  "ok": false,
+  "error": "Ya lo resolvió Ana: vinculado a FB-1",
+  "ya_resuelto": true,
+  "resuelto_por": "Ana",
+  "accion": "confirmar",
+  "sku": "FB-1",
+  "wc_nombre": "Pedales M520"
+}
+```
+`resuelto_por` es el `username` de quien lo confirmó (columna nueva `confirmado_por` en
+`sku_matcher_decisiones`, migración 013 — puede ser `null` en decisiones viejas, previas a
+esta entrega, o escritas por el Matcher ML→WC). El frontend debe mostrar "Ya lo resolvió
+{resuelto_por}: vinculado a {sku}" y **avanzar solo** al siguiente ítem de la cola — no es un
+error que frene el flujo. El caso `accion==='omitir'` (la publicación fue descartada desde el
+Matcher ML→WC) sigue devolviendo el mismo 409 mudo de antes (sin `ya_resuelto`): no es un
+conflicto entre dos personas de Cobertura, es una decisión de la otra herramienta.
+
+### 4. Vínculos absorbido
+Ver la sección "Vínculos WC↔ML" más arriba en este documento — se movió completa a
+`/api/cobertura/vinculos*`, con el detalle ruta por ruta (incluida la nueva
+`POST /vinculos/:clave/desvincular`, admin-only). `POST /api/sync/desvincular` sigue vivo sin
+cambios (otro consumidor: Sync ML Detalle).
+
+### 5. Redirects con aviso
+`/cobertura` y `/vinculos` (las pantallas estáticas, NO `/api/cobertura`) redirigen con
+`302` a `/herramientas/matcher/?aviso=unificado`. El query param `aviso=unificado` es la
+señal para que el frontend del Matcher muestre el cartel "se unificó" — la implementación del
+cartel (texto, cierre, si se repite) es responsabilidad del frontend, acá solo se garantiza
+que nunca hay un 404 crudo en un acceso directo viejo.

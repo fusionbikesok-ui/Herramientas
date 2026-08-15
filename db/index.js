@@ -215,11 +215,49 @@ export function openDb(dbPath) {
     marca TEXT,
     creado_en TEXT NOT NULL
   )`); } catch (_) {}
+  // Forma NUEVA para instalaciones limpias: así una base nueva nunca depende de que el bloque
+  // de migración de abajo corra bien (hallazgo del revisor). El bloque 012 queda solo como
+  // camino de upgrade para las bases que ya tienen el singleton viejo.
   try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_sesion (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
+    user_id INTEGER NOT NULL,
+    direccion TEXT NOT NULL DEFAULT 'wc_ml',
     marca_actual TEXT,
-    actualizado_en TEXT NOT NULL
+    actualizado_en TEXT NOT NULL,
+    PRIMARY KEY (user_id, direccion)
   )`); } catch (_) {}
+  // migrations/012_cobertura_sesion_por_usuario.sql — "seguir donde quedé" era un singleton
+  // (id=1) compartido por TODOS los usuarios: con Cobertura sola y un solo operario no
+  // molestaba, pero con el Matcher unificado (Joaco gana acceso) dos personas trabajando la
+  // cola al mismo tiempo se pisarían el progreso. Recreación (no ALTER: sqlite no soporta
+  // cambiar la PRIMARY KEY) a (user_id, direccion) — direccion queda fija en 'wc_ml' en esta
+  // entrega (solo existe esa dirección), pero la columna ya está para la entrega 2 (ML→WC).
+  // Se pierde la marca "en trabajo" que hubiera en el singleton viejo (dato de conveniencia,
+  // no de negocio) — aceptable, nadie pierde nada más que "seguir donde quedé" una vez.
+  // En TRANSACCIÓN y con DROP IF EXISTS de la tabla intermedia (hallazgo del revisor): sin
+  // eso, un corte entre el DROP y el RENAME —un kill de PM2 a destiempo— dejaba la base sin
+  // `cobertura_sesion`; al reiniciar se recreaba con el esquema viejo, el CREATE de la
+  // intermedia fallaba por "ya existe", el catch mudo se lo comía, y `tocarSesion` reventaba
+  // en CADA carga de la cola: 500 en la pantalla principal, para siempre y sin log que lo
+  // explicara. sqlite soporta DDL transaccional, así que o pasa entero o no pasa nada.
+  try {
+    const colsSesion = db.prepare("PRAGMA table_info(cobertura_sesion)").all().map((c) => c.name);
+    if (colsSesion.length && !colsSesion.includes('user_id')) {
+      db.transaction(() => {
+        db.exec(`
+          DROP TABLE IF EXISTS cobertura_sesion_nueva;
+          CREATE TABLE cobertura_sesion_nueva (
+            user_id INTEGER NOT NULL,
+            direccion TEXT NOT NULL DEFAULT 'wc_ml',
+            marca_actual TEXT,
+            actualizado_en TEXT NOT NULL,
+            PRIMARY KEY (user_id, direccion)
+          );
+          DROP TABLE cobertura_sesion;
+          ALTER TABLE cobertura_sesion_nueva RENAME TO cobertura_sesion;
+        `);
+      })();
+    }
+  } catch (_) {}
   try { db.exec(`CREATE TABLE IF NOT EXISTS cobertura_marcados_correcto (
     clave TEXT PRIMARY KEY,
     seccion TEXT NOT NULL,
@@ -228,6 +266,34 @@ export function openDb(dbPath) {
 
   // migrations/008_decisiones_origen.sql — distingue decisiones de Cobertura vs Matcher ML→WC.
   try { db.exec('ALTER TABLE sku_matcher_decisiones ADD COLUMN origen TEXT'); } catch (_) {}
+  // migrations/013_decisiones_confirmado_por.sql — quién confirmó, para la concurrencia
+  // optimista del Matcher unificado (dos personas pueden abrir el mismo ítem de la cola
+  // priorizada; al confirmar se revalida y, si ya lo resolvió otra persona, la respuesta
+  // dice quién y qué se decidió en vez de un 409 mudo). Username, no user_id: es solo para
+  // mostrar en pantalla, no hay FK a `users` acá y el usuario puede borrarse después.
+  try { db.exec('ALTER TABLE sku_matcher_decisiones ADD COLUMN confirmado_por TEXT'); } catch (_) {}
+  // migrations/014_permiso_cobertura_a_matcher.sql — `cobertura` deja de existir como permiso
+  // y queda cubierta por `matcher`. Sin esto, quien tuviera SOLO `cobertura` perdería el
+  // acceso en silencio al desplegar. En staging no le pasa a nadie, pero producción es otra
+  // base que se pasa a mano y no se puede verificar desde acá: la migración es defensiva.
+  // Otorga `write`, NO el nivel guardado: `cobertura` era niveles:false y grabó siempre
+  // 'read', pero ese 'read' habilitaba toda la herramienta. Con el nivel derivado del método,
+  // copiarlo tal cual dejaría al usuario viendo la cola y con 403 en cada botón — una pérdida
+  // de acceso silenciosa, peor que la visible que esta migración vino a evitar.
+  // Si ya tiene `matcher`, ese gana (bajarlo sería quitarle acceso que hoy usa).
+  try {
+    db.exec(`
+      INSERT INTO user_permisos (user_id, herramienta, nivel)
+      SELECT c.user_id, 'matcher', 'write'
+        FROM user_permisos c
+       WHERE c.herramienta = 'cobertura'
+         AND NOT EXISTS (
+              SELECT 1 FROM user_permisos m
+               WHERE m.user_id = c.user_id AND m.herramienta = 'matcher'
+         );
+      DELETE FROM user_permisos WHERE herramienta = 'cobertura';
+    `);
+  } catch (_) {}
 
   return db;
 }

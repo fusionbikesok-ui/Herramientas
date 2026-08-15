@@ -13,6 +13,7 @@ vi.mock('../routes/woo.js', () => ({ wooFetch: vi.fn() }));
 
 import { mlFetch } from '../lib/mlClient.js';
 import { syncRouter } from '../routes/sync.js';
+import { coberturaRouter } from '../routes/cobertura.js';
 
 const TEST_DB = './test/tmp-vinculos-route.sqlite';
 
@@ -164,7 +165,7 @@ describe('Rutas de publicaciones frenadas por precio', () => {
   });
 });
 
-describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)', () => {
+describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar) — absorbidas por el Matcher (routes/cobertura.js), entrega 1 2026-08-14', () => {
   let db, app;
 
   /** Siembra un producto WC + una publicación ML mapeada. */
@@ -185,7 +186,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     db = openDb(TEST_DB);
     app = express();
     app.use(express.json());
+    // req.user admin de prueba: el permiso ('matcher') lo enforce lib/permisos.js en
+    // server.js, no el router; acá solo hace falta para requireAdmin (desvincular) y para
+    // confirmado_por/revisado_por.
+    app.use((req, res, next) => { req.user = { id: 1, username: 'tester', is_admin: 1 }; next(); });
+    // /api/sync sigue vivo para /desvincular (compartido con Sync ML Detalle) y /dashboard.
     app.use('/api/sync', syncRouter(db, CFG));
+    // Detalle/sospechosos/revisado/reasignar/desvincular del Matcher viven en /api/cobertura.
+    app.use('/api/cobertura', coberturaRouter(db, CFG));
     mlFetch.mockReset();
   });
 
@@ -194,9 +202,9 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
-  it('GET /api/sync/vinculos/:sku devuelve el producto y sus publicaciones', async () => {
+  it('GET /api/cobertura/vinculos/:sku devuelve el producto y sus publicaciones', async () => {
     sembrarVinculo();
-    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    const res = await request(app).get('/api/cobertura/vinculos/FB-6411');
     expect(res.status).toBe(200);
     expect(res.body.producto.sku).toBe('FB-6411');
     expect(res.body.publicaciones).toHaveLength(1);
@@ -211,14 +219,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     // este endpoint mostraba precio_lista=precio (vigente) junto a precio_contado=sobre lista,
     // contradictorio a simple vista.
     sembrarVinculo({ precioWc: 800, regularPrice: 1000 });
-    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    const res = await request(app).get('/api/cobertura/vinculos/FB-6411');
     expect(res.body.producto.precio_lista).toBe(1000);
     expect(res.body.producto.precio_contado).toBe(666.67);
   });
 
   it('precio_lista y precio_contado son null si regular_price es NULL (catálogo sin refrescar ese campo)', async () => {
     sembrarVinculo({ regularPrice: null });
-    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    const res = await request(app).get('/api/cobertura/vinculos/FB-6411');
     expect(res.body.producto.precio_lista).toBe(null);
     expect(res.body.producto.precio_contado).toBe(null);
   });
@@ -228,7 +236,7 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     // `regular_price ?? precio` volviera, esta fila mostraría precio_lista/precio_contado
     // con datos en vez de null.
     sembrarVinculo({ precioWc: 218700, regularPrice: null });
-    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    const res = await request(app).get('/api/cobertura/vinculos/FB-6411');
     expect(res.body.producto.precio_lista).toBe(null);
     expect(res.body.producto.precio_contado).toBe(null);
   });
@@ -238,7 +246,7 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     // `prod.regular_price > 0 ? precioContado(...) : null` corta en 0 y precio_contado da
     // null en vez de calcular sobre 0 o caer al vigente.
     sembrarVinculo({ precioWc: 900, regularPrice: 0 });
-    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    const res = await request(app).get('/api/cobertura/vinculos/FB-6411');
     expect(res.body.producto.precio_lista).toBe(0);
     expect(res.body.producto.precio_contado).toBe(null);
   });
@@ -250,23 +258,23 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, es_variante, seller_sku, precio, actualizado_en)
       VALUES ('MLA2|', 'MLA2', '', 'Casco Giro Syntax', 'active', 0, 'FB-6411', 218700, '2026-07-30T00:00:00Z')`).run();
 
-    const res = await request(app).get('/api/sync/vinculos/FB-6411');
+    const res = await request(app).get('/api/cobertura/vinculos/FB-6411');
     expect(res.body.publicaciones).toHaveLength(2);
     expect(res.body.publicaciones.every(p => p.senales.length === 0)).toBe(true);
-    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
     expect(sosp.body.data).toHaveLength(0);
   });
 
-  it('GET /api/sync/vinculos-sospechosos lista los que tienen señales', async () => {
+  it('GET /api/cobertura/vinculos-sospechosos lista los que tienen señales', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
-    const res = await request(app).get('/api/sync/vinculos-sospechosos');
+    const res = await request(app).get('/api/cobertura/vinculos-sospechosos');
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].senales.map(s => s.senal)).toContain('seller_sku');
   });
 
-  it('POST /api/sync/vinculos/revisado sin el campo valor responde 400 y no crea descarte', async () => {
+  it('POST /api/cobertura/vinculos/revisado sin el campo valor responde 400 y no crea descarte', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
-    const res = await request(app).post('/api/sync/vinculos/revisado')
+    const res = await request(app).post('/api/cobertura/vinculos/revisado')
       .send({ clave: 'MLA1|10', senal: 'seller_sku' });
     expect(res.status).toBe(400);
     expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
@@ -276,23 +284,23 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     sembrarVinculo({ sellerSku: 'FB-9999' });
     // El contrato real: el cliente reenvía el `valor` tal cual lo recibió de la señal,
     // no un dato inventado a mano.
-    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
     const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
-    await request(app).post('/api/sync/vinculos/revisado')
+    await request(app).post('/api/cobertura/vinculos/revisado')
       .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
-    const res = await request(app).get('/api/sync/vinculos-sospechosos');
+    const res = await request(app).get('/api/cobertura/vinculos-sospechosos');
     expect(res.body.data).toHaveLength(0);
   });
 
   it('el sospechoso REAPARECE si el valor descartado cambia', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
-    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
     const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
-    await request(app).post('/api/sync/vinculos/revisado')
+    await request(app).post('/api/cobertura/vinculos/revisado')
       .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
     // El SKU en ML cambia a otro valor equivocado distinto: el descarte ya no aplica.
     db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='FB-7777' WHERE clave='MLA1|10'").run();
-    const res = await request(app).get('/api/sync/vinculos-sospechosos');
+    const res = await request(app).get('/api/cobertura/vinculos-sospechosos');
     expect(res.body.data).toHaveLength(1);
   });
 
@@ -304,16 +312,16 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     // "50000|100000" es literalmente substring de "350000|100000" — una comparación por
     // `includes` taparía en silencio una discrepancia de precio totalmente distinta y nueva.
     sembrarVinculo({ precioWc: 100000, precioMl: 50000 });
-    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
     const senal = sosp.body.data[0].senales.find(s => s.senal === 'precio');
     expect(senal.valor).toBe('50000|100000');
-    await request(app).post('/api/sync/vinculos/revisado')
+    await request(app).post('/api/cobertura/vinculos/revisado')
       .send({ clave: 'MLA1|10', senal: 'precio', valor: senal.valor });
-    let res = await request(app).get('/api/sync/vinculos-sospechosos');
+    let res = await request(app).get('/api/cobertura/vinculos-sospechosos');
     expect(res.body.data).toHaveLength(0); // descartado
 
     db.prepare("UPDATE ml_publicaciones_cache SET precio=350000 WHERE clave='MLA1|10'").run();
-    res = await request(app).get('/api/sync/vinculos-sospechosos');
+    res = await request(app).get('/api/cobertura/vinculos-sospechosos');
     const senalPrecio = res.body.data[0]?.senales.find(s => s.senal === 'precio');
     expect(senalPrecio?.valor).toBe('350000|100000'); // confirma la colisión de substring
     expect(res.body.data).toHaveLength(1); // reaparece: es una discrepancia distinta
@@ -323,22 +331,46 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     sembrarVinculo({ sellerSku: 'FB-9999' });
     db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
       VALUES (777777, 'Otro producto', 'FB-9999', 'simple', 2, 218700, '2026-07-30T00:00:00Z')`).run();
-    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
     const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
-    await request(app).post('/api/sync/vinculos/revisado')
+    await request(app).post('/api/cobertura/vinculos/revisado')
       .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
 
-    const res = await request(app).post('/api/sync/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-9999' });
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-9999' });
     expect(res.status).toBe(200);
     expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-9999');
     expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
   });
 
-  it('POST /api/sync/desvincular borra también los descartes de esa clave', async () => {
+  it('POST /api/cobertura/vinculos/:clave/desvincular (admin) borra también los descartes de esa clave', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
-    const sosp = await request(app).get('/api/sync/vinculos-sospechosos');
+    const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
     const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
-    await request(app).post('/api/sync/vinculos/revisado')
+    await request(app).post('/api/cobertura/vinculos/revisado')
+      .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(1);
+
+    const res = await request(app).post('/api/cobertura/vinculos/MLA1|10/desvincular');
+    expect(res.status).toBe(200);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
+  });
+
+  it('POST /api/cobertura/vinculos/:clave/desvincular sin ser admin responde 403', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    const appNoAdmin = express();
+    appNoAdmin.use(express.json());
+    appNoAdmin.use((req, res, next) => { req.user = { id: 2, username: 'joaco', is_admin: 0 }; next(); });
+    appNoAdmin.use('/api/cobertura', coberturaRouter(db, CFG));
+    const res = await request(appNoAdmin).post('/api/cobertura/vinculos/MLA1|10/desvincular');
+    expect(res.status).toBe(403);
+    expect(db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().n).toBe(1); // no se tocó
+  });
+
+  it('POST /api/sync/desvincular sigue vivo (lo usa Sync ML Detalle) y borra también los descartes', async () => {
+    sembrarVinculo({ sellerSku: 'FB-9999' });
+    const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
+    const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
+    await request(app).post('/api/cobertura/vinculos/revisado')
       .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
     expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(1);
 
@@ -355,7 +387,7 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
 
   it('reasignar con SKU inexistente responde 400 y no toca nada', async () => {
     sembrarVinculo();
-    const res = await request(app).post('/api/sync/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'NO-EXISTE' });
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'NO-EXISTE' });
     expect(res.status).toBe(400);
     expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-6411');
   });
@@ -365,13 +397,13 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     // borró de ML entre que se renderizó la pantalla y el click).
     db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
       VALUES (1, 'Producto', 'FB-1', 'simple', 2, 100000, '2026-07-30T00:00:00Z')`).run();
-    const res = await request(app).post('/api/sync/vinculos/reasignar').send({ clave: 'MLA-NO-EXISTE|', sku: 'FB-1' });
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA-NO-EXISTE|', sku: 'FB-1' });
     expect(res.status).toBe(400);
     expect(db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE clave='MLA-NO-EXISTE|'").get().n).toBe(0);
   });
 
-  it('GET /api/sync/vinculos/:sku con SKU inexistente responde 404', async () => {
-    const res = await request(app).get('/api/sync/vinculos/NO-EXISTE');
+  it('GET /api/cobertura/vinculos/:sku con SKU inexistente responde 404', async () => {
+    const res = await request(app).get('/api/cobertura/vinculos/NO-EXISTE');
     expect(res.status).toBe(404);
   });
 });
