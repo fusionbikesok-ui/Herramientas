@@ -345,6 +345,110 @@ describe('syncMlToWc', () => {
     expect(wooFetch).not.toHaveBeenCalled();
   });
 
+  // ── Anti-sobreventa: el SKU que trae la venta de ML (2026-08-15) ─────────────────
+  // Sobreventa real: se vendió un "Casco Crazy Safety Azul" que no existe en el catálogo web.
+  // La publicación tenía cargado FB-7245 —el SKU de OTRO casco, un "Rembrandt Tigre Blanco"
+  // con stock 2— puesto a mano en ML, por fuera de la herramienta. Hasta acá el sync ignoraba
+  // el seller_sku que la venta trae: marcaba sin_mapeo, no creaba el pedido en WC y el stock
+  // nunca se descontaba. Medido sobre 60 días: 83 ventas sin mapear, 54 con SKU válido.
+  it('venta sin vínculo propio pero con seller_sku válido → usa ese SKU y crea el pedido', async () => {
+    db.prepare("INSERT INTO catalogo_cache (id_woo, id_padre, sku, tipo, nombre, stock, precio, regular_price, actualizado_en) VALUES (5001, NULL, 'FB-5001', 'simple', 'Cubierta Maxxis Ardent 29', 4, 90000, 90000, ?)").run(new Date().toISOString());
+    const orden = {
+      id: 'ORD-FALLBACK',
+      date_created: new Date().toISOString(),
+      order_items: [{
+        item: { id: 'MLA5001', variation_id: '', title: 'Cubierta Maxxis Ardent 29 Mtb', seller_sku: 'FB-5001' },
+        quantity: 1,
+      }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockResolvedValue({ status: 201, data: { id: 9001, number: '9001' } });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-FALLBACK');
+    expect(proc.estado).toBe('ok');
+    const post = wooFetch.mock.calls.find((c) => c[1] === '/orders' && c[2] === 'post');
+    expect(post).toBeTruthy();
+    expect(post[3].line_items[0].product_id).toBe(5001);
+  });
+
+  // La guarda que faltaba: sin ella, el fallback de arriba habría descontado el Rembrandt en
+  // vez de avisar — cambiando una sobreventa por un descuento del producto equivocado, que es
+  // peor porque no se nota. Umbral medido (0.57): el caso real da 0.537 y el vínculo correcto
+  // más flojo de las 54 ventas da 0.602.
+  it('seller_sku que apunta a otro producto → NO descuenta, avisa y deja la orden parcial', async () => {
+    db.prepare("INSERT INTO catalogo_cache (id_woo, id_padre, sku, nombre, stock, precio, regular_price, actualizado_en) VALUES (7245, 1732, 'FB-7245', 'Casco Rembrandt Para Niños — Tigre Blanco', 2, 134846, 134846, ?)").run(new Date().toISOString());
+    const orden = {
+      id: 'ORD-INCOHERENTE',
+      date_created: new Date().toISOString(),
+      order_items: [{
+        item: { id: 'MLA1685632164', variation_id: '', title: 'Casco Crazy Safety Azul Niños Bicicleta Skate Rollers Con Luz 49-55cm', seller_sku: 'FB-7245' },
+        quantity: 1,
+      }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-INCOHERENTE');
+    expect(proc.estado).toBe('parcial');
+    const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'sku_incoherente'").get();
+    expect(log).toBeTruthy();
+    expect(log.sku).toBe('FB-7245');
+    // Lo que de verdad importa: no se creó pedido, así que no se descontó el producto equivocado.
+    expect(wooFetch.mock.calls.find((c) => c[1] === '/orders' && c[2] === 'post')).toBeFalsy();
+  });
+
+  // CONTRASTE: sin este test, el de arriba pasaría igual si la guarda frenara TODO.
+  it('la guarda no frena un vínculo correcto con redacción distinta', async () => {
+    db.prepare("INSERT INTO catalogo_cache (id_woo, id_padre, sku, tipo, nombre, stock, precio, regular_price, actualizado_en) VALUES (43427, NULL, 'FB-43427', 'simple', 'Soporte Para Gps Frontal Delantero Igpsport M80', 8, 30000, 30000, ?)").run(new Date().toISOString());
+    const orden = {
+      id: 'ORD-REDACCION',
+      date_created: new Date().toISOString(),
+      order_items: [{
+        item: { id: 'MLA43427', variation_id: '', title: 'Soporte Ciclocomputador Igpsport M80 Negro', seller_sku: 'FB-43427' },
+        quantity: 1,
+      }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockResolvedValue({ status: 201, data: { id: 9002, number: '9002' } });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-REDACCION').estado).toBe('ok');
+  });
+
+  // El vínculo propio (revisado por una persona) NO pasa por la guarda de coherencia: si
+  // alguien decidió a mano que esa publicación es ese producto, se respeta.
+  it('vínculo propio manda aunque el título no se parezca', async () => {
+    db.prepare("INSERT INTO catalogo_cache (id_woo, id_padre, sku, tipo, nombre, stock, precio, regular_price, actualizado_en) VALUES (6001, NULL, 'FB-6001', 'simple', 'Producto Con Nombre Totalmente Distinto', 3, 50000, 50000, ?)").run(new Date().toISOString());
+    db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, accion, actualizado_en) VALUES ('MLA6001|', 'FB-6001', 'confirmar', ?)").run(new Date().toISOString());
+    const orden = {
+      id: 'ORD-VINCULO-PROPIO',
+      date_created: new Date().toISOString(),
+      order_items: [{
+        item: { id: 'MLA6001', variation_id: '', title: 'Xyz Abc Qwerty Zzz', seller_sku: '' },
+        quantity: 1,
+      }],
+    };
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockResolvedValue({ status: 201, data: { id: 9003, number: '9003' } });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-VINCULO-PROPIO').estado).toBe('ok');
+  });
+
+
   it('SKU mapeado ausente del catálogo WC → log error, orden marcada parcial', async () => {
     // Sin seedCatalogo: BIKE-001 no existe en catalogo_cache
     const orden = {
