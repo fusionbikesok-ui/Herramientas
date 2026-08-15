@@ -122,7 +122,9 @@ function now() {
   return new Date().toISOString();
 }
 
-function logSync(db, { direccion, clave, sku, cantAnterior, cantNueva, estado, error, intentos = 0 }) {
+// Exportado: lo reusa routes/cobertura.js (Matcher unificado, entrega 1) para reasignar/
+// desvincular vínculos desde su propia superficie, sin duplicar el statement de sync_log.
+export function logSync(db, { direccion, clave, sku, cantAnterior, cantNueva, estado, error, intentos = 0 }) {
   db.prepare(`
     INSERT INTO sync_log (direccion, clave, sku, cant_anterior, cant_nueva, estado, error, intentos, creado_en, actualizado_en)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2414,7 +2416,10 @@ async function diagnosticarErrores(db, mlCfg, rows) {
  * El dedup por SKU es el mismo criterio que COMPUTED_STOCK_CTE: si un SKU está cargado en
  * más de un producto de WC, se toma uno solo (el de menor stock) para no multiplicar filas.
  */
-function filasDeVinculos(db, { sku = null, ordenar = true } = {}) {
+// Exportado: routes/cobertura.js reusa este motor para sus rutas GET /vinculos/:sku y
+// GET /vinculos-sospechosos (Matcher unificado, entrega 1) — la superficie se movió, el
+// cálculo se comparte (también lo usa GET /dashboard de este mismo archivo, más abajo).
+export function filasDeVinculos(db, { sku = null, ordenar = true } = {}) {
   const params = [];
   let filtro = '';
   if (sku) { filtro = 'AND d.sku = ?'; params.push(sku); }
@@ -2455,13 +2460,13 @@ function filasDeVinculos(db, { sku = null, ordenar = true } = {}) {
  * discrepancia nueva y distinta con un SKU/precio que casualmente sea substring del actual.
  * El cliente debe reenviar el `valor` tal cual lo recibió en la señal, sin editarlo.
  */
-function senalesVigentes(fila, descartesPorClave) {
+export function senalesVigentes(fila, descartesPorClave) {
   const descartes = descartesPorClave.get(fila.clave) || new Map();
   return senalesDeVinculo(fila).filter(s => descartes.get(s.senal) !== s.valor);
 }
 
 /** Mapa clave → Map(senal → valor_revisado), para no consultar por fila. */
-function cargarDescartes(db) {
+export function cargarDescartes(db) {
   const m = new Map();
   for (const r of db.prepare('SELECT clave, senal, valor_revisado FROM ml_vinculos_revisados').all()) {
     if (!m.has(r.clave)) m.set(r.clave, new Map());
@@ -2940,116 +2945,17 @@ export function syncRouter(db, cfg) {
     res.json({ ok: true, borradas: info.changes });
   });
 
-  // Detalle de un producto de WC y TODAS las publicaciones de ML mapeadas a su SKU.
-  router.get('/vinculos/:sku', (req, res) => {
-    const sku = String(req.params.sku || '').trim();
-    if (!sku) return res.status(400).json({ ok: false, error: 'sku requerido' });
-
-    // El 404 se resuelve ANTES de pagar las dos consultas pesadas (CTE con window function
-    // sobre todo el catálogo + carga de descartes) cuando el SKU ni siquiera existe.
-    const prod = db.prepare(`
-      SELECT sku, nombre, stock, regular_price, img FROM catalogo_cache
-      WHERE sku = ? AND sku <> '' ORDER BY stock ASC, id_woo ASC LIMIT 1
-    `).get(sku);
-    if (!prod) return res.status(404).json({ ok: false, error: 'SKU no encontrado en el catálogo' });
-
-    const filas = filasDeVinculos(db, { sku });
-    const descartes = cargarDescartes(db);
-
-    const publicaciones = filas.map(f => ({
-      clave: f.clave, item_id: f.item_id, variation_id: f.variation_id,
-      titulo: f.titulo, status: f.status, sub_status: f.sub_status,
-      color: f.color, talle: f.talle, variations_texto: f.variations_texto,
-      seller_sku: f.seller_sku, thumbnail: f.thumbnail, permalink: f.permalink,
-      precio_ml: f.precio, precio_actualizado_en: f.precio_actualizado_en,
-      stock_ml: f.available_quantity, stock_sincronizado: f.cantidad_ml,
-      senales: senalesVigentes(f, descartes),
-    }));
-
-    res.json({
-      ok: true,
-      producto: {
-        sku: prod.sku, nombre: prod.nombre, stock: prod.stock, img: prod.img,
-        // precio_lista sale de regular_price (LISTA real), no de precio (VIGENTE) — mismo
-        // criterio que precio_contado, y evita el contrasentido de mostrar "Lista" con el
-        // precio de oferta en la misma respuesta que ya calcula "Contado" sobre la lista real
-        // (hallazgo del coordinador, 2026-08-03). Puede ser null (50 filas hoy sin
-        // regular_price, ver comentario en precioWebClave); el frontend (public/vinculos/
-        // index.html, vía money()) ya muestra "—" para null, no hace falta tocarlo.
-        precio_lista: prod.regular_price,
-        precio_contado: prod.regular_price > 0 ? precioContado(prod.regular_price) : null,
-      },
-      publicaciones,
-    });
-  });
-
-  // Listado de vínculos con señales vigentes, ordenado por severidad (alta primero).
-  router.get('/vinculos-sospechosos', (req, res) => {
-    const descartes = cargarDescartes(db);
-    const data = [];
-    for (const f of filasDeVinculos(db)) {
-      const senales = senalesVigentes(f, descartes);
-      if (senales.length === 0) continue;
-      data.push({
-        clave: f.clave, sku: f.sku, item_id: f.item_id,
-        titulo: f.titulo, wc_nombre: f.wc_nombre, thumbnail: f.thumbnail, permalink: f.permalink,
-        precio_ml: f.precio, precio_wc: f.precio_wc, senales,
-      });
-    }
-    data.sort((a, b) => {
-      const peor = (x) => (x.senales.some(s => s.peso === 'alta') ? 0 : 1);
-      return peor(a) - peor(b) || b.senales.length - a.senales.length;
-    });
-    res.json({ ok: true, data });
-  });
-
-  // Marcar una señal como revisada y correcta. Guarda el VALOR: si el dato cambia, reaparece.
-  router.post('/vinculos/revisado', (req, res) => {
-    const { clave, senal, valor } = req.body || {};
-    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
-    if (!senal || typeof senal !== 'string') return res.status(400).json({ ok: false, error: 'senal requerida' });
-    // El contrato es "reenviá el valor tal cual lo recibiste": sin valor, se guardaría `null`,
-    // que nunca coincide con ningún valor real y el cliente creería que descartó sin lograrlo.
-    if (valor == null || typeof valor !== 'string') return res.status(400).json({ ok: false, error: 'valor requerido' });
-    // Sin esto, un typo de clave crea un descarte huérfano que nadie limpia nunca (no aparece
-    // en ningún listado porque filasDeVinculos hace JOIN con ml_publicaciones_cache).
-    const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
-    if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
-
-    db.prepare(`
-      INSERT INTO ml_vinculos_revisados (clave, senal, valor_revisado, revisado_por, revisado_en)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(clave, senal) DO UPDATE SET
-        valor_revisado=excluded.valor_revisado, revisado_por=excluded.revisado_por, revisado_en=excluded.revisado_en
-    `).run(clave, senal, valor, req.user?.username ?? null, now());
-    res.json({ ok: true });
-  });
-
-  // Reasignar el vínculo a otro SKU. Mismo statement que usa el matcher para sus decisiones.
-  router.post('/vinculos/reasignar', (req, res) => {
-    const { clave, sku } = req.body || {};
-    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
-    if (!sku || typeof sku !== 'string') return res.status(400).json({ ok: false, error: 'sku requerido' });
-    // Sin esto, una clave inexistente (typo, publicación borrada de ML entre el render y el
-    // click) crea un vínculo fantasma en sku_matcher_decisiones: no aparece en ningún listado
-    // (filasDeVinculos hace JOIN con el caché) pero ensucia para siempre el contador de
-    // "necesitan atención" del home, sin ninguna pantalla desde la que limpiarlo.
-    const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
-    if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
-    const prod = db.prepare("SELECT nombre FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1").get(sku);
-    if (!prod) return res.status(400).json({ ok: false, error: 'El SKU no existe en el catálogo' });
-
-    // Atómico: si el borrado de descartes fallara a mitad de camino, quedarían vivos los
-    // descartes del vínculo VIEJO tapando en silencio señales legítimas del vínculo nuevo.
-    db.transaction(() => {
-      db.prepare('INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)')
-        .run(clave, sku, prod.nombre, 'asignar', now());
-      // Los descartes valían para el vínculo anterior, no para el nuevo.
-      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
-    })();
-    logSync(db, { direccion: 'wc_ml', clave, sku, estado: 'remapeo_requerido', error: 'reasignada manualmente desde Vínculos' });
-    res.json({ ok: true });
-  });
+  // GET /vinculos/:sku, GET /vinculos-sospechosos, POST /vinculos/revisado y
+  // POST /vinculos/reasignar se MOVIERON a routes/cobertura.js (Matcher unificado, entrega 1,
+  // 2026-08-14): eran la única superficie de public/vinculos/index.html, que se retira (ver
+  // el redirect de /vinculos en server.js). El motor que usaban (filasDeVinculos,
+  // cargarDescartes, senalesVigentes, logSync, arriba en este archivo) se exporta y se sigue
+  // usando desde acá también (GET /dashboard, más abajo, para `vinculos_sospechosos`).
+  //
+  // POST /desvincular (arriba) NO se movió — sigue siendo el que usa
+  // public/sync-detalle/index.html (otra herramienta, otro permiso). routes/cobertura.js
+  // agregó su propio POST /vinculos/:clave/desvincular (admin-only) para la superficie del
+  // Matcher, en vez de reusar este endpoint compartido.
 
   // Reintenta la sincronización de stock de UN solo ítem (para resolver un error puntual).
   router.post('/reintentar-item', async (req, res) => {

@@ -19,6 +19,8 @@ const CFG = { ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' } };
 function buildApp(db) {
   const app = express();
   app.use(express.json());
+  // req.user admin de prueba: requireAdmin (pausar/desvincular) lo necesita.
+  app.use((req, res, next) => { req.user = { id: 1, username: 'tester', is_admin: 1 }; next(); });
   app.use('/api/cobertura', coberturaRouter(db, CFG));
   return app;
 }
@@ -291,17 +293,20 @@ describe('Cobertura — hallazgos del revisor (2ª ronda)', () => {
     expect(res.body.fail_closed).toBe(true);
   });
 
-  // ── Permisos: auditor_limitado-equivalente (no-admin con cobertura:read) puede operar ──
+  // ── Permisos: Matcher unificado (entrega 1, 2026-08-14) — un solo permiso 'matcher' ──
+  // niveles:true reemplazó al extinto 'cobertura' (niveles:false). Un no-admin necesita
+  // nivel:'write' para las acciones (POST/PATCH/DELETE) de esta herramienta, no alcanza con
+  // 'read' — a diferencia del comportamiento viejo (ver test/permisos.test.js).
 
-  it('un usuario no-admin con permiso cobertura (nivel read, otorgado por la UI de niveles:false) puede ejecutar un POST real', async () => {
+  it('un usuario no-admin con matcher:write puede ejecutar un POST real', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     const serverApp = express();
     serverApp.use(express.json());
     serverApp.use((req, res, next) => {
-      req.user = { is_admin: 0, permisos: [{ herramienta: 'cobertura', nivel: 'read' }] };
+      req.user = { id: 2, username: 'joaco', is_admin: 0, permisos: [{ herramienta: 'matcher', nivel: 'write' }] };
       next();
     });
-    // Replica EXACTA de scopeCheck (server.js) — la pieza que el hallazgo del revisor rompía.
+    // Replica EXACTA de scopeCheck (server.js).
     const { resolvePermiso, permiteAcceso } = await import('../lib/permisos.js');
     serverApp.use('/api', (req, res, next) => {
       if (req.user?.is_admin) return next();
@@ -312,19 +317,18 @@ describe('Cobertura — hallazgos del revisor (2ª ronda)', () => {
     serverApp.use('/api/cobertura', coberturaRouter(db, CFG));
 
     const res = await request(serverApp).post('/api/cobertura/productos/1/descartar');
-    expect(res.status).toBe(200); // NO 403 — este es el bug que el hallazgo describía
+    expect(res.status).toBe(200);
     expect(res.body.estado).toBe('descartado');
-
-    // Mutation testing manual: volví la regla de /cobertura en lib/permisos.js a
-    // `resolve: (m) => ({ anyOf: ['cobertura'], nivel: nivelDe(m) })` (la versión rota) y
-    // corrí este test — res.status daba 403. Restaurada a nivel:'read' fijo, vuelve a 200.
   });
 
-  it('un usuario no-admin SIN el permiso cobertura sigue bloqueado (default-deny se mantiene)', async () => {
+  it('un usuario no-admin con matcher:read (sin write) queda bloqueado en una acción', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     const serverApp = express();
     serverApp.use(express.json());
-    serverApp.use((req, res, next) => { req.user = { is_admin: 0, permisos: [] }; next(); });
+    serverApp.use((req, res, next) => {
+      req.user = { id: 2, username: 'joaco', is_admin: 0, permisos: [{ herramienta: 'matcher', nivel: 'read' }] };
+      next();
+    });
     const { resolvePermiso, permiteAcceso } = await import('../lib/permisos.js');
     serverApp.use('/api', (req, res, next) => {
       if (req.user?.is_admin) return next();
@@ -335,6 +339,37 @@ describe('Cobertura — hallazgos del revisor (2ª ronda)', () => {
     serverApp.use('/api/cobertura', coberturaRouter(db, CFG));
 
     const res = await request(serverApp).post('/api/cobertura/productos/1/descartar');
+    expect(res.status).toBe(403);
+  });
+
+  it('un usuario no-admin SIN el permiso matcher sigue bloqueado (default-deny se mantiene)', async () => {
+    seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
+    const serverApp = express();
+    serverApp.use(express.json());
+    serverApp.use((req, res, next) => { req.user = { id: 2, username: 'joaco', is_admin: 0, permisos: [] }; next(); });
+    const { resolvePermiso, permiteAcceso } = await import('../lib/permisos.js');
+    serverApp.use('/api', (req, res, next) => {
+      if (req.user?.is_admin) return next();
+      const permiso = resolvePermiso(req.method, req.path);
+      if (permiteAcceso(req.user.permisos, permiso)) return next();
+      return res.status(403).json({ ok: false, error: 'Acceso no autorizado' });
+    });
+    serverApp.use('/api/cobertura', coberturaRouter(db, CFG));
+
+    const res = await request(serverApp).post('/api/cobertura/productos/1/descartar');
+    expect(res.status).toBe(403);
+  });
+
+  it('pausar (admin-only) rechaza a un no-admin con matcher:write, aunque el permiso de herramienta alcance', async () => {
+    seedMl(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'X' });
+    const serverApp = express();
+    serverApp.use(express.json());
+    serverApp.use((req, res, next) => {
+      req.user = { id: 2, username: 'joaco', is_admin: 0, permisos: [{ herramienta: 'matcher', nivel: 'write' }] };
+      next();
+    });
+    serverApp.use('/api/cobertura', coberturaRouter(db, CFG));
+    const res = await request(serverApp).post('/api/cobertura/multi-publicacion/MLA1|/pausar');
     expect(res.status).toBe(403);
   });
 });

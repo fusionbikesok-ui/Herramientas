@@ -15,6 +15,9 @@ import {
 import { generarCSVHayQuePublicar } from '../lib/csv.js';
 import { partirClaveMl } from '../lib/mlUtil.js';
 import { dispararRefrescoMl, estadoRefrescoMl } from './matcher.js';
+import { requireAdmin } from '../lib/auth.js';
+import { precioContado } from '../lib/mlPrecios.js';
+import { filasDeVinculos, cargarDescartes, senalesVigentes, logSync } from './sync.js';
 
 /**
  * Cruza el catálogo de WooCommerce (catalogo_cache) contra las publicaciones de ML
@@ -202,31 +205,58 @@ async function pausarConAdvertencia(db, mlCfg, clave, body) {
  *    sku, se rechaza con 409 en vez de pisarla en silencio — ese pisado silencioso era
  *    exactamente el escenario grave del hallazgo (A pierde su vínculo sin aviso porque B lo
  *    confirmó primero contra la misma publicación).
+ *
+ * Concurrencia optimista (Matcher unificado, entrega 1): la cola está priorizada, así que dos
+ * personas trabajando al mismo tiempo probablemente vean primero las mismas publicaciones.
+ * `db.prepare().get()` seguido de `.run()` es 100% síncrono (better-sqlite3, sin `await` en el
+ * medio) — no hay ventana real de carrera entre el SELECT de `existente` y el INSERT/UPDATE de
+ * abajo dentro de este proceso, así que "revalidar antes de escribir" ya está garantizado por
+ * el orden del código, sin necesitar transacción ni lock explícito. Cuando SÍ hay conflicto
+ * real (otra persona ya lo resolvió con OTRO sku), el 409 devuelve QUIÉN (confirmado_por) y QUÉ
+ * (accion/sku/wc_nombre) para que el frontend muestre "Ya lo resolvió Fulano: vinculado a
+ * MLA123" y avanza solo — nunca un 409 mudo.
  * `origen: 'cobertura'` distingue estas decisiones de las que escribe el Matcher ML→WC
  * (routes/matcher.js) — necesario para que "resueltos hoy" (progresoHoy) no se infle con
  * trabajo de la otra herramienta (hallazgo del revisor).
  */
-function confirmarDecisionCobertura(db, clave, sku, wcNombre) {
+function confirmarDecisionCobertura(db, clave, sku, wcNombre, confirmadoPor) {
   const existePublicacion = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
   if (!existePublicacion) {
     return { ok: false, status: 400, error: 'La publicación de ML ya no existe en caché (refrescá e intentá de nuevo)' };
   }
-  const existente = db.prepare('SELECT sku, accion FROM sku_matcher_decisiones WHERE clave = ?').get(clave);
-  if (existente && (existente.accion === 'omitir' || (existente.sku && existente.sku !== sku))) {
+  const existente = db.prepare(
+    'SELECT sku, accion, wc_nombre, confirmado_por FROM sku_matcher_decisiones WHERE clave = ?'
+  ).get(clave);
+  if (existente && existente.accion === 'omitir') {
     return {
       ok: false, status: 409,
-      error: existente.accion === 'omitir'
-        ? 'Esta publicación fue descartada del matcher (omitir) y no se puede confirmar desde acá'
-        : `Esta publicación ya está vinculada al SKU ${existente.sku}`,
+      error: 'Esta publicación fue descartada del matcher (omitir) y no se puede confirmar desde acá',
+    };
+  }
+  if (existente && existente.sku && existente.sku !== sku) {
+    // La cola está priorizada: es probable que dos personas —o la misma con el celular y la
+    // compu— vean lo mismo arriba. Distinguir "fuiste vos en otra pestaña" de "fue otro" evita
+    // el mensaje absurdo de leer "Ya lo resolvió joaco" siendo Joaco (hallazgo del revisor).
+    const propio = existente.confirmado_por && existente.confirmado_por === confirmadoPor;
+    return {
+      ok: false, status: 409, ya_resuelto: true,
+      resuelto_por: existente.confirmado_por || null,
+      propio: !!propio,
+      accion: existente.accion, sku: existente.sku, wc_nombre: existente.wc_nombre,
+      error: propio
+        ? `Ya lo resolviste en otra pestaña: vinculado a ${existente.sku}`
+        : existente.confirmado_por
+          ? `Ya lo resolvió ${existente.confirmado_por}: vinculado a ${existente.sku}`
+          : `Esta publicación ya está vinculada al SKU ${existente.sku}`,
     };
   }
   db.prepare(`
-    INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, actualizado_en)
-    VALUES (@clave, @sku, @wc_nombre, 'confirmar', 'cobertura', @ts)
+    INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, confirmado_por, actualizado_en)
+    VALUES (@clave, @sku, @wc_nombre, 'confirmar', 'cobertura', @confirmado_por, @ts)
     ON CONFLICT(clave) DO UPDATE SET
       sku = excluded.sku, wc_nombre = excluded.wc_nombre, accion = excluded.accion,
-      origen = excluded.origen, actualizado_en = excluded.actualizado_en
-  `).run({ clave, sku, wc_nombre: wcNombre, ts: new Date().toISOString() });
+      origen = excluded.origen, confirmado_por = excluded.confirmado_por, actualizado_en = excluded.actualizado_en
+  `).run({ clave, sku, wc_nombre: wcNombre, confirmado_por: confirmadoPor || null, ts: new Date().toISOString() });
   return { ok: true };
 }
 
@@ -372,7 +402,8 @@ export function coberturaRouter(db, cfg) {
   router.get('/resumen', (req, res) => {
     const { marcas, total_pendientes, total_valor } = resumenMarcas(db);
     const progreso = progresoHoy(db);
-    const retomar = seguirDondeQuede(db);
+    // Por usuario (migración 012): "seguir donde quedé" ya no es un singleton compartido.
+    const retomar = seguirDondeQuede(db, req.user?.id);
     const conteoPorSkuResumen = new Map();
     for (const r of db.prepare("SELECT seller_sku FROM ml_publicaciones_cache WHERE seller_sku IS NOT NULL AND seller_sku != ''").all()) {
       conteoPorSkuResumen.set(r.seller_sku, (conteoPorSkuResumen.get(r.seller_sku) || 0) + 1);
@@ -446,7 +477,7 @@ export function coberturaRouter(db, cfg) {
     const marca = req.params.marca;
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
-    tocarSesion(db, marca);
+    tocarSesion(db, marca, req.user?.id);
     const { total, items } = productosDeMarca(db, marca, { limit, offset });
     const mlIndex = construirIndiceMlSinSku(db);
     const data = items.map((prod) => ({
@@ -484,8 +515,20 @@ export function coberturaRouter(db, cfg) {
     }
     // Se persiste la decisión ANTES de intentar el push: si ML no responde, el usuario no
     // se frena (regla no negociable del encargo) y el cron la va a tomar en su próximo ciclo.
-    const decision = confirmarDecisionCobertura(db, ml_clave, sku, prod.nombre);
-    if (!decision.ok) return res.status(decision.status).json({ ok: false, error: decision.error });
+    const decision = confirmarDecisionCobertura(db, ml_clave, sku, prod.nombre, req.user?.username);
+    if (!decision.ok) {
+      // ya_resuelto: concurrencia optimista (entrega 1 Matcher unificado) — otra persona
+      // confirmó esta misma clave con OTRO sku antes que nosotros. El body ya trae quién y
+      // qué, para que el frontend muestre "Ya lo resolvió Fulano: vinculado a X" y avance
+      // solo, en vez de un 409 mudo.
+      return res.status(decision.status).json({
+        ok: false, error: decision.error,
+        ...(decision.ya_resuelto ? {
+          ya_resuelto: true, resuelto_por: decision.resuelto_por, propio: !!decision.propio,
+          accion: decision.accion, sku: decision.sku, wc_nombre: decision.wc_nombre,
+        } : {}),
+      });
+    }
     // Se saca de "salteado" si estaba: ya se decidió, no vuelve a aparecer en la tanda.
     db.prepare('DELETE FROM cobertura_salteados WHERE id_woo = ?').run(prod.id_woo);
 
@@ -581,6 +624,20 @@ export function coberturaRouter(db, cfg) {
     // (misma tabla, otra herramienta, otro flujo de decisión) — mismo criterio que historial/progreso.
     const decision = db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave = ? AND accion = 'confirmar' AND origen = 'cobertura'").get(clave);
     if (!decision) return res.status(404).json({ ok: false, error: 'vínculo no encontrado' });
+    // Deshacer lo PROPIO, o ser admin (hallazgo del revisor). Este endpoint, cuando el vínculo
+    // ya se efectivizó, llama desvincularSkuEnMl: borra el mapeo local Y escribe en la
+    // publicación de ML en vivo — exactamente lo mismo que "desvincular", que sí es admin-only.
+    // Sin esta guarda, cualquier no-admin con matcher:write podía deshacer un vínculo ajeno, de
+    // hoy o de hace un mes. Las decisiones anteriores a la migración 013 no tienen
+    // `confirmado_por`: quedan solo para admin, que es el default seguro.
+    if (!req.user?.is_admin && decision.confirmado_por !== req.user?.username) {
+      return res.status(403).json({
+        ok: false,
+        error: decision.confirmado_por
+          ? `este vínculo lo confirmó ${decision.confirmado_por}; solo puede deshacerlo esa persona o un administrador`
+          : 'este vínculo es anterior al registro de autoría; solo un administrador puede deshacerlo',
+      });
+    }
     const cacheRow = db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
     const yaEfectivizado = cacheRow && cacheRow.seller_sku === decision.sku;
 
@@ -650,6 +707,163 @@ export function coberturaRouter(db, cfg) {
       }
     }
     res.json({ ok: true, estado: 'pendiente' });
+  });
+
+  // ── Vínculos (absorbido de public/vinculos/index.html, Matcher unificado entrega 1) ────
+  // Buscar producto (detalle + señales) y Sospechosos, más reasignar/desvincular. Se movió
+  // la SUPERFICIE (rutas) bajo el permiso único `matcher`; el motor (filasDeVinculos,
+  // cargarDescartes, senalesVigentes, logSync) se sigue calculando en routes/sync.js —ahí
+  // también lo usa GET /api/sync/dashboard para `vinculos_sospechosos`— y se reusa vía
+  // export, no se duplica. POST /api/sync/desvincular (routes/sync.js) NO se tocó ni se
+  // movió: lo sigue usando public/sync-detalle/index.html (herramienta Sync ML, permiso
+  // aparte), que es un consumidor distinto del mismo botón conceptual.
+
+  // Detalle de un producto de WC y TODAS las publicaciones de ML mapeadas a su SKU.
+  router.get('/vinculos/:sku', (req, res) => {
+    const sku = String(req.params.sku || '').trim();
+    if (!sku) return res.status(400).json({ ok: false, error: 'sku requerido' });
+
+    const prod = db.prepare(`
+      SELECT sku, nombre, stock, regular_price, img FROM catalogo_cache
+      WHERE sku = ? AND sku <> '' ORDER BY stock ASC, id_woo ASC LIMIT 1
+    `).get(sku);
+    if (!prod) return res.status(404).json({ ok: false, error: 'SKU no encontrado en el catálogo' });
+
+    const filas = filasDeVinculos(db, { sku });
+    const descartes = cargarDescartes(db);
+
+    const publicaciones = filas.map(f => ({
+      clave: f.clave, item_id: f.item_id, variation_id: f.variation_id,
+      titulo: f.titulo, status: f.status, sub_status: f.sub_status,
+      color: f.color, talle: f.talle, variations_texto: f.variations_texto,
+      seller_sku: f.seller_sku, thumbnail: f.thumbnail, permalink: f.permalink,
+      precio_ml: f.precio, precio_actualizado_en: f.precio_actualizado_en,
+      stock_ml: f.available_quantity, stock_sincronizado: f.cantidad_ml,
+      senales: senalesVigentes(f, descartes),
+    }));
+
+    res.json({
+      ok: true,
+      producto: {
+        sku: prod.sku, nombre: prod.nombre, stock: prod.stock, img: prod.img,
+        // precio_lista sale de regular_price (LISTA real), no de precio (VIGENTE) — mismo
+        // criterio que precio_contado (ver REGLA en CLAUDE.md sobre precios de venta ML).
+        precio_lista: prod.regular_price,
+        precio_contado: prod.regular_price > 0 ? precioContado(prod.regular_price) : null,
+      },
+      publicaciones,
+    });
+  });
+
+  // Listado de vínculos con señales vigentes, ordenado por severidad (alta primero). Se
+  // junta conceptualmente con Problemas — es el mismo tipo de trabajo ("cosas que el sistema
+  // marca como raras"), no un flujo de decidir sí/no como la cola principal.
+  router.get('/vinculos-sospechosos', (req, res) => {
+    const descartes = cargarDescartes(db);
+    const data = [];
+    for (const f of filasDeVinculos(db)) {
+      const senales = senalesVigentes(f, descartes);
+      if (senales.length === 0) continue;
+      data.push({
+        clave: f.clave, sku: f.sku, item_id: f.item_id,
+        titulo: f.titulo, wc_nombre: f.wc_nombre, thumbnail: f.thumbnail, permalink: f.permalink,
+        precio_ml: f.precio, precio_wc: f.precio_wc, senales,
+      });
+    }
+    data.sort((a, b) => {
+      const peor = (x) => (x.senales.some(s => s.peso === 'alta') ? 0 : 1);
+      return peor(a) - peor(b) || b.senales.length - a.senales.length;
+    });
+    res.json({ ok: true, data });
+  });
+
+  // Marcar una señal como revisada y correcta. Guarda el VALOR: si el dato cambia, reaparece.
+  router.post('/vinculos/revisado', (req, res) => {
+    const { clave, senal, valor } = req.body || {};
+    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
+    if (!senal || typeof senal !== 'string') return res.status(400).json({ ok: false, error: 'senal requerida' });
+    if (valor == null || typeof valor !== 'string') return res.status(400).json({ ok: false, error: 'valor requerido' });
+    const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
+    if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
+
+    db.prepare(`
+      INSERT INTO ml_vinculos_revisados (clave, senal, valor_revisado, revisado_por, revisado_en)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(clave, senal) DO UPDATE SET
+        valor_revisado=excluded.valor_revisado, revisado_por=excluded.revisado_por, revisado_en=excluded.revisado_en
+    `).run(clave, senal, valor, req.user?.username ?? null, now());
+    res.json({ ok: true });
+  });
+
+  // Reasignar el vínculo a otro SKU. Mismo statement que usa el matcher para sus decisiones.
+  // NO es admin-only (a diferencia de desvincular): reasignar corrige un vínculo equivocado
+  // asignándolo al SKU correcto, es trabajo normal de la cola, no una acción destructiva.
+  router.post('/vinculos/reasignar', (req, res) => {
+    const { clave, sku } = req.body || {};
+    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
+    if (!sku || typeof sku !== 'string') return res.status(400).json({ ok: false, error: 'sku requerido' });
+    const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
+    if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
+    const prod = db.prepare("SELECT nombre FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1").get(sku);
+    if (!prod) return res.status(400).json({ ok: false, error: 'El SKU no existe en el catálogo' });
+
+    // Misma revalidación que confirmarDecisionCobertura (hallazgo del revisor): antes esto
+    // pisaba en silencio la decisión de otra persona con un ON CONFLICT DO UPDATE que no leía
+    // nada. Es el escenario exacto que la concurrencia optimista vino a evitar, pero entrando
+    // por otra puerta: Ana confirma MLA1→FB-1 desde la cola, Joaco reasigna MLA1→FB-2 desde
+    // Sospechosos, Ana nunca se entera y el push manda FB-2 a ML. Antes vivía bajo el permiso
+    // `sync-ml` (otra herramienta, otro perfil); al mudarlo a la superficie del Matcher quedan
+    // las dos escrituras a un click de distancia y tienen que jugar con la misma regla.
+    const existente = db.prepare("SELECT sku, confirmado_por, wc_nombre FROM sku_matcher_decisiones WHERE clave = ? AND accion = 'confirmar'").get(clave);
+    if (existente && existente.sku !== sku) {
+      const propio = existente.confirmado_por && existente.confirmado_por === req.user?.username;
+      return res.status(409).json({
+        ok: false,
+        ya_resuelto: true,
+        resuelto_por: existente.confirmado_por || null,
+        propio: !!propio,
+        accion: 'confirmar',
+        sku: existente.sku,
+        wc_nombre: existente.wc_nombre,
+        error: propio
+          ? `ya lo resolviste en otra pestaña: vinculado a ${existente.sku}`
+          : `ya lo resolvió ${existente.confirmado_por || 'otra persona'}: vinculado a ${existente.sku}`,
+      });
+    }
+
+    db.transaction(() => {
+      // origen='cobertura' y accion='confirmar' (hallazgo del revisor): con 'asignar' y sin
+      // origen, el vínculo resultante no se podía deshacer desde el Matcher —`deshacer` filtra
+      // por accion='confirmar' AND origen='cobertura'—, no contaba en el progreso y no aparecía
+      // en el historial. Un callejón sin salida dentro de la misma herramienta.
+      db.prepare(`
+        INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, confirmado_por, actualizado_en)
+        VALUES (?, ?, ?, 'confirmar', 'cobertura', ?, ?)
+        ON CONFLICT(clave) DO UPDATE SET
+          sku=excluded.sku, wc_nombre=excluded.wc_nombre, accion=excluded.accion,
+          origen=excluded.origen, confirmado_por=excluded.confirmado_por,
+          actualizado_en=excluded.actualizado_en
+      `).run(clave, sku, prod.nombre, req.user?.username ?? null, now());
+      // Los descartes valían para el vínculo anterior, no para el nuevo.
+      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+    })();
+    logSync(db, { direccion: 'wc_ml', clave, sku, estado: 'remapeo_requerido', error: 'reasignada manualmente desde el Matcher (Vínculos)' });
+    res.json({ ok: true });
+  });
+
+  // ADMIN-ONLY (permiso único `matcher`, entrega 1): desvincular (borrar el mapeo para que
+  // se vuelva a linkear) es la otra excepción, junto con pausar. Equivalente conceptual de
+  // POST /api/sync/desvincular (que NO se tocó, sigue siendo el que usa Sync ML Detalle, otro
+  // consumidor con otro permiso) pero expuesto acá con el gate admin que pide esta entrega.
+  router.post('/vinculos/:clave/desvincular', requireAdmin, (req, res) => {
+    const clave = req.params.clave;
+    const info = db.transaction(() => {
+      const r = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
+      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+      return r;
+    })();
+    logSync(db, { direccion: 'wc_ml', clave, estado: 'remapeo_requerido', error: 'desvinculada manualmente desde el Matcher para re-mapear' });
+    res.json({ ok: true, borradas: info.changes });
   });
 
   router.delete('/exclusiones/:id_woo/revertir', (req, res) => {
@@ -753,12 +967,16 @@ export function coberturaRouter(db, cfg) {
   // explícita (`{ confirmado: true }` en el body) y se informa cuántas variaciones arrastra
   // ANTES de ejecutar. Sin confirmación, 409 con el conteo — nunca 200 con un efecto que el
   // usuario no pidió.
-  router.post('/multi-publicacion/:clave/pausar', async (req, res) => {
+  //
+  // ADMIN-ONLY (permiso único `matcher`, entrega 1): pausar/desvincular son las dos
+  // excepciones — Joaco (no-admin) trabaja la cola completa pero no estas dos acciones. El
+  // backend las rechaza con `requireAdmin`, no confía en que el frontend las esconda.
+  router.post('/multi-publicacion/:clave/pausar', requireAdmin, async (req, res) => {
     const r = await pausarConAdvertencia(db, mlCfg, req.params.clave, req.body);
     res.status(r.status).json(r.body);
   });
 
-  router.post('/multi-publicacion/:clave/desvincular', async (req, res) => {
+  router.post('/multi-publicacion/:clave/desvincular', requireAdmin, async (req, res) => {
     // Mismo try/catch que los otros caminos de escritura a ML de este router: mlFetch LANZA
     // ante fallo de transporte, no devuelve {ok:false}. Acá la excepción no produce
     // divergencia (el DELETE local ocurre recién después de que ML confirma, así que un throw
@@ -807,7 +1025,10 @@ export function coberturaRouter(db, cfg) {
     res.json({ ok: true });
   });
 
-  router.post('/solo-ml/:clave/pausar', async (req, res) => {
+  // ADMIN-ONLY (permiso único `matcher`, entrega 1): pausar una publicación es una de las
+  // dos excepciones — Joaco (no-admin) tiene acceso a toda la cola pero no a esta acción. El
+  // backend la rechaza, no confía en que el frontend la esconda.
+  router.post('/solo-ml/:clave/pausar', requireAdmin, async (req, res) => {
     const r = await pausarConAdvertencia(db, mlCfg, req.params.clave, req.body);
     res.status(r.status).json(r.body);
   });
@@ -821,8 +1042,16 @@ export function coberturaRouter(db, cfg) {
     const sku = String(prod.sku || '').trim();
     if (!sku) return res.status(400).json({ ok: false, error: 'el producto no tiene SKU' });
     const clave = req.params.clave;
-    const decision = confirmarDecisionCobertura(db, clave, sku, prod.nombre);
-    if (!decision.ok) return res.status(decision.status).json({ ok: false, error: decision.error });
+    const decision = confirmarDecisionCobertura(db, clave, sku, prod.nombre, req.user?.username);
+    if (!decision.ok) {
+      return res.status(decision.status).json({
+        ok: false, error: decision.error,
+        ...(decision.ya_resuelto ? {
+          ya_resuelto: true, resuelto_por: decision.resuelto_por, propio: !!decision.propio,
+          accion: decision.accion, sku: decision.sku, wc_nombre: decision.wc_nombre,
+        } : {}),
+      });
+    }
     let resultado;
     try {
       resultado = await escribirSkuEnMl(db, mlCfg, clave, sku, { manual: true });

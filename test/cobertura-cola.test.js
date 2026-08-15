@@ -21,6 +21,9 @@ const CFG = { ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' } };
 function buildApp(db) {
   const app = express();
   app.use(express.json());
+  // req.user admin de prueba: requireAdmin (pausar/desvincular) y confirmado_por/sesión por
+  // usuario lo necesitan; el enforcement real del permiso 'matcher' vive en server.js, no acá.
+  app.use((req, res, next) => { req.user = { id: 1, username: 'tester', is_admin: 1 }; next(); });
   app.use('/api/cobertura', coberturaRouter(db, CFG));
   return app;
 }
@@ -141,6 +144,37 @@ describe('Cobertura accionable — cola de trabajo', () => {
     // detectaría porque 'pendiente_sync' !== 'vinculado' — confirmado revirtiendo a mano el
     // if/else (invertir la condición `resultado.ok`) y viendo el test fallar en rojo antes
     // de restaurar.
+  });
+
+  it('concurrencia optimista: si otra persona ya confirmó la misma clave con OTRO sku, el 409 dice quién y qué', async () => {
+    seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Pedales M520' });
+    seedProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Otro producto' });
+    seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'Pedales Shimano M520' });
+    mlFetch.mockResolvedValue({ status: 200, data: {} });
+
+    const appAna = express();
+    appAna.use(express.json());
+    appAna.use((req, res, next) => { req.user = { id: 1, username: 'ana' }; next(); });
+    appAna.use('/api/cobertura', coberturaRouter(db, CFG));
+
+    const appJoaco = express();
+    appJoaco.use(express.json());
+    appJoaco.use((req, res, next) => { req.user = { id: 2, username: 'joaco' }; next(); });
+    appJoaco.use('/api/cobertura', coberturaRouter(db, CFG));
+
+    // Ana confirma primero, contra el producto 1 (sku FB-1).
+    const resAna = await request(appAna).post('/api/cobertura/productos/1/confirmar').send({ ml_clave: 'MLA1|' });
+    expect(resAna.status).toBe(200);
+
+    // Joaco, sin saberlo, llega a la misma publicación pero la quiere confirmar contra OTRO
+    // producto (FB-2): revalidación ANTES de escribir → 409 con quién y qué, no mudo.
+    const resJoaco = await request(appJoaco).post('/api/cobertura/productos/2/confirmar').send({ ml_clave: 'MLA1|' });
+    expect(resJoaco.status).toBe(409);
+    expect(resJoaco.body.ya_resuelto).toBe(true);
+    expect(resJoaco.body.resuelto_por).toBe('ana');
+    expect(resJoaco.body.sku).toBe('FB-1');
+    // No pisó la decisión de Ana.
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave = 'MLA1|'").get().sku).toBe('FB-1');
   });
 
   it('POST /productos/:id/descartar mapea 1:1 a cobertura_exclusiones (solo_local)', async () => {
@@ -335,8 +369,34 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(item.candidatos[0].diff).toBeDefined();
     expect(item.candidatos[0].diff.coincide).toBeDefined();
 
-    // "seguir donde quedé" queda registrado tras pedir la cola de una marca.
-    const sesion = db.prepare('SELECT marca_actual FROM cobertura_sesion WHERE id = 1').get();
+    // "seguir donde quedé" queda registrado tras pedir la cola de una marca, para ESTE
+    // usuario (migración 012 — sesión por usuario y por dirección, ya no singleton id=1).
+    const sesion = db.prepare(
+      "SELECT marca_actual FROM cobertura_sesion WHERE user_id = 1 AND direccion = 'wc_ml'"
+    ).get();
     expect(sesion.marca_actual).toBe('Shimano');
+  });
+
+  it('seguir donde quedé es por usuario: dos usuarios distintos no comparten sesión', async () => {
+    seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Pedales Shimano M520', marca: 'Shimano' });
+    seedProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Casco Giro', marca: 'Giro' });
+
+    const appUsuario1 = express();
+    appUsuario1.use(express.json());
+    appUsuario1.use((req, res, next) => { req.user = { id: 1, username: 'ana' }; next(); });
+    appUsuario1.use('/api/cobertura', coberturaRouter(db, CFG));
+
+    const appUsuario2 = express();
+    appUsuario2.use(express.json());
+    appUsuario2.use((req, res, next) => { req.user = { id: 2, username: 'joaco' }; next(); });
+    appUsuario2.use('/api/cobertura', coberturaRouter(db, CFG));
+
+    await request(appUsuario1).get('/api/cobertura/marcas/Shimano/cola');
+    await request(appUsuario2).get('/api/cobertura/marcas/Giro/cola');
+
+    const res1 = await request(appUsuario1).get('/api/cobertura/resumen');
+    const res2 = await request(appUsuario2).get('/api/cobertura/resumen');
+    expect(res1.body.seguir_donde_quede.marca).toBe('Shimano');
+    expect(res2.body.seguir_donde_quede.marca).toBe('Giro');
   });
 });

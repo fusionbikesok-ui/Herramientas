@@ -300,6 +300,162 @@ sigue siendo oscuro). Verificación puntual de los pares nuevos:
   (WCAG 1.4.11, piso 3:1 contra el fondo adyacente): mismos valores de opacidad (`.35`) que
   `--red-bd`/`--amber-bd`/`--green-bd`, ya en uso como borde de estado en toda la app.
 
+### 8. Matcher unificado (2026-08-14) — absorbe Cobertura + Matcher viejo + Vínculos
+
+**Punto de partida: el sistema de Cobertura (§1-§7 arriba), no uno nuevo.** Cobertura ya
+enlaza `theme.css` sin overrides locales — igual que el Matcher viejo y Vínculos, así que
+no hay conflicto de tokens que resolver al fusionar (los tres ya comparten paleta). Lo que
+sí hay que resolver es cómo ese sistema absorbe dos pantallas más sin que la tarjeta de
+trabajo (`.match-card`) pierda protagonismo. Ver
+`docs/superpowers/plans/2026-08-11-matcher-unificado.md` (plan + flujo cerrado 2026-08-14)
+para las decisiones de producto — acá solo el sistema visual.
+
+**No se retiran `.chip`, `.pub-card`, `.pill-tabs` de Vínculos ni `.match-card`/`.conf-badge`
+de Cobertura como conceptos**: la sección Problemas (que absorbe Sospechosos) reusa
+`.pub-card` + `.chip.alta/.media/.ninguna` de Vínculos casi tal cual (ya están bien resueltos
+y auditados), la cola sigue usando `.match-card` de Cobertura. El Matcher viejo
+(`candidate-card`, `attr-badge`, colores hardcodeados `rgba(245,166,35,...)`) **no se porta**:
+su master-detail queda reemplazado por la cola de a una: es exactamente el patrón que ya
+se retiró en Cobertura, no había motivo para mantener una segunda versión.
+
+#### 8.1 Tarjeta que no se espeja: cómo se distingue el lado fijo del candidato
+
+**La decisión de diseño más importante de la entrega.** WC (Web) siempre en el mismo lugar
+de la tarjeta, ML siempre en el mismo lugar — nunca se invierte el layout según la
+dirección. Lo que cambia es **cuál de los dos lados lleva la etiqueta de rol**, con tres
+canales redundantes (nunca solo color):
+
+| Canal | Lado fijo ("Punto de partida") | Lado candidato ("Candidato") |
+|---|---|---|
+| Pill de rol sobre la foto | texto "Punto de partida", `--role-anchor-txt` (muted) sobre `--role-anchor-bg` (gris, chip neutro) | texto "Candidato" (o "Candidato #2/#3" en la variante compacta), `--role-candidate-txt` (accent) sobre `--role-candidate-bg` (accent-dim) — **mismo lenguaje visual que "seguir donde quedé" y los filtros activos**: en toda la app, acento tenue = "esto es tu próximo paso" |
+| Fondo de la columna | `--surface2` (calmo, ya resuelto) | `--surface` (default de la tarjeta, sin tratamiento especial — es la foto que se está evaluando, no necesita "asentarse") |
+| Frase de contexto arriba de la tarjeta | — | una sola línea, 11px uppercase `--muted`, arriba del badge de confianza: *"Producto de la Web sin publicación → buscando candidato en ML"* o *"Publicación de ML sin producto → buscando candidato en la Web"* según la dirección activa |
+
+Con los tres canales, alguien que alterna de dirección en la misma sesión no depende de
+memorizar "izquierda es fijo hoy": lo lee en la pill de cada foto y, si duda, en la frase de
+arriba. Ninguna clase nueva de color: `--role-anchor-*`/`--role-candidate-*` son alias sobre
+`--chip-*`/`--chip-on-*` ya existentes (ver theme.css).
+
+En la variante compacta (candidatos #2/#3, filas de listas), el pill de rol se reduce a un
+número ("#2") sobre el mismo `--role-candidate-bg`, sin la palabra completa — ya hay
+suficiente contexto porque están debajo del candidato #1 con la etiqueta completa.
+
+#### 8.2 Tira de chips de secciones, persistente
+
+Va debajo del selector de dirección (subheader), **no sticky** — a diferencia del topbar y
+el selector de dirección, que sí lo son. Motivo: el presupuesto de sticky a 375px ya lo
+gastan el topbar (54px) + el selector de dirección (44px, ver §8.4); si la tira de chips
+también quedara fija, entre las tres franjas se comerían ~190px permanentes de un viewport
+de 812px (23%) antes de llegar a la tarjeta, que es donde está el trabajo. No sticky, la
+tira scrollea con el resto — sigue siendo alcanzable con un swipe hacia arriba desde
+cualquier vista secundaria, que es lo que pide el punto 3 del brief ("no hay que volver al
+inicio para pasar de Historial a Multi-publicación").
+
+**Fila única con scroll horizontal**, no wrap a dos líneas (evita que la tira empuje la
+tarjeta hacia abajo de forma impredecible según cuántos chips entren). Los 4 chips
+frecuentes sueltos + un chip final "Más ▾" que expande los 2 raros **en la misma fila**
+(no un menú aparte): mismo patrón que ya usa `.buscar-manual` (details/toggle) en Cobertura,
+adaptado a chip. Altura `--tap-min` (44px), igual que `.chip-jump` en Seguimientos.
+
+**Estados (criterio ya escrito para Seguimientos, `public/preparacion/index.html:54-57`,
+se aplica igual acá):**
+
+- **En 0**: chip neutro, no interactivo visualmente distinto — `<span>` en vez de `<button>`
+  si no hay nada que ver, mismos tokens `--chip-bg/--chip-bd/--chip-txt` (gris). Toda la
+  tira en gris = "circuito sano", léase de un vistazo sin contar números.
+- **Con contenido, accionable** (*Hay que publicarlo*, *Problemas*): `--chip-alert-bg`/
+  `--chip-alert-bd`/`--chip-alert-txt` (ámbar) — son las dos secciones que representan
+  trabajo pendiente real, no una condición del negocio. Solo estas dos pueden ponerse
+  ámbar, y solo cuando el contador es mayor a 0.
+- **Con contenido, informativo** (*Multi-publicación*, *Sin stock*, y los dos detrás de
+  "Más": *Huérfanos*, *Omitidas*): quedan en gris **aunque el contador suba** —
+  `--chip-bg/--chip-bd/--chip-txt`, igual que en 0. Multi-publicación es intencional
+  (ver memoria `matcher-multi-publicacion`: 1 SKU → N publicaciones no es un error);
+  Sin stock puede ser stock agotado transitorio; Huérfanos se limpia solo; Omitidas es
+  "fuera del trabajo normal, mirar cuando se quiera". Un chip ámbar que solo crece enseña
+  a ignorar la tira entera — es el mismo razonamiento que ya está escrito para
+  "despachados sin verificar" en Seguimientos, y se reutiliza literal acá.
+
+**Tensión para el orquestador/`disenador-ux`:** el brief de esta tarea lista 6 secciones
+fijas (4 frecuentes + 2 tras "Más"), pero el plan de flujo (2026-08-14) agrega dos
+secciones nuevas por la simetría ML→WC: *"Hay que crearlo en la web"* y *"Solo ML"*
+(equivalentes exactos de *"Hay que publicarlo"* y *"Solo local"*, del otro lado). No están
+en la lista de 6 chips. No decido esto — es alcance de `disenador-ux`/producto, no de
+sistema visual — pero dejo resuelto el tratamiento para cuando se sume: *"Hay que crearlo
+en la web"* es accionable (mismo tipo que "Hay que publicarlo" → ámbar con contenido) y
+*"Solo ML"* es informativo (mismo tipo que "Solo local" → gris siempre). Si se agregan,
+son dos chips más en la misma fila con scroll horizontal, mismos tokens, sin rediseñar el
+componente.
+
+#### 8.3 Línea calma del push de SKUs
+
+Mismo renglón donde hoy vive "Actualizado hace 3 min" (`.refresco-bar` en Cobertura), dos
+estados excluyentes:
+
+| Estado | Texto | Color | Ícono |
+|---|---|---|---|
+| Sano | "sincronizando sola cada 10 min · SKUs al día" | `--muted`, 12px, sin negrita | ninguno — mudo a propósito |
+| Trabado | "⚠ Push de SKUs trabado hace 23 min · 14 pendientes [Ver]" | `--warning`, 12px/600 | `⚠` |
+
+Sin tokens nuevos (reusa `--muted`/`--warning` ya auditados). El motivo de que el estado
+sano tenga texto y no desaparezca está en el plan (2026-08-14): "algo que desaparece cuando
+todo está bien deja sin dónde mirar el día que alguien dude si sigue funcionando." "[Ver]"
+en trabado es un link inline `--accent`, no un botón — va a Huérfanos/detalle del push, no
+abre un modal nuevo.
+
+#### 8.4 Selector de dirección + progreso de dos niveles en el subheader
+
+Sticky, debajo del topbar (topbar 54px + este bloque ≈ 44px = ~98px fijos a 375px — la
+tira de chips y la barra de progreso NO están dentro de este sticky, ver §8.2). Segmented
+control de 2 pills, 50/50 de ancho a 375px, `--tap-min` de alto:
+
+```
+┌──────────────────────┬──────────────────────┐
+│ Sin publicación (693) │ Sin producto (3638)  │  ← activa: --accent, --accent-dim bg
+└──────────────────────┴──────────────────────┘
+```
+
+Reusa el patrón `.pill-tab.active` ya en Vínculos (borde+texto `--accent`, fondo
+`--accent-dim`), no una tercera variante de "activo". La barra de progreso de dos niveles
+(§4 arriba) va **debajo** de este segmented control, pero fuera del sticky, junto a la
+tira de chips — así el cambio de dirección siempre está a un toque, sin que el progreso
+compita por el espacio fijo.
+
+#### 8.5 Acciones admin-only: deshabilitadas con motivo visible
+
+`Pausar publicación` y `Desvincular` se muestran siempre, nunca ocultas. Para quien no es
+administrador (Joaco): `disabled` + `aria-disabled="true"`, mismo tratamiento visual que
+`.btn:disabled` ya existe en Vínculos (`opacity:.5`), **más** una etiqueta persistente al
+lado (no tooltip — no hay hover en celular): "🔒 Solo administradores", 11px `--muted`,
+visible siempre que el botón está deshabilitado, no solo al intentar tocarlo. El candado es
+el canal no-textual (por si alguien no lee la frase completa a las apuradas), el texto es
+explícito para que quede claro que es un permiso y no una función rota. Tap target se
+mantiene en `--tap-min` (44px) aunque esté deshabilitado — así se puede tocar para
+confirmar que "no pasa nada" en vez de asumir que el botón ni está ahí. Sin tokens nuevos.
+
+#### 8.6 Piezas menores reusadas sin cambios
+
+- **Toast "ya lo resolvió otra persona"** (concurrencia optimista): el `.toast` base de
+  Cobertura ya tiene una variante neutra por defecto (`border-color:var(--border2)`, sin
+  `.ok`/`.pendiente`/`.error`) — se usa tal cual para "Ya lo resolvió Fulano: vinculado a
+  MLA123 [Ver] [Deshacer]". No es ni éxito propio ni error; no necesita ni verde ni rojo.
+- **Publicación borrada mientras estaba en la cola**: mismo tratamiento que "trabado" en
+  §8.3 — `--warning`, línea inline dentro del slot de la tarjeta ("Ya no existe en ML, se
+  movió a Huérfanos"), la cola avanza sola al siguiente ítem.
+- **Aviso de primera visita** ("ya no subís nada, la cola se arma sola"): reusa
+  `.highlight-card` (fondo `--chip-on-bg`, borde `--chip-on-bd`) ya definido para "seguir
+  donde quedé" en Cobertura — incluso puede ser el mismo bloque con dos estados según si es
+  la primera visita del usuario o no, en vez de dos componentes distintos.
+
+### Contraste verificado — bloque Matcher unificado (WCAG 2.2 AA)
+
+Todos los tokens nuevos de esta sección son **alias sin cambiar el valor** de tokens ya
+auditados en bloques anteriores de este documento: `--chip-alert-*` = `--warning-*` (9.95:1
+sobre `--surface`, ver Feed de Actividad); `--role-anchor-*` = `--chip-*` (texto `--muted`
+5.6-5.7:1, ya auditado); `--role-candidate-*` = `--chip-on-*` (`--accent` sobre
+`--accent-dim`, patrón ya en producción en "seguir donde quedé" — no se reabre esa
+verificación). No hay contraste nuevo que verificar porque no hay color nuevo.
+
 **Piso de accesibilidad además del contraste:**
 - Objetivos táctiles: `--tap-comfort` (56px) en el botón primario de la tarjeta,
   `--tap-min` (44px) en el resto — mismos tokens ya usados en Contador de Inventario para

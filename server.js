@@ -102,7 +102,12 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/pedidos', pedidosRouter(db));
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
   app.use('/api/cobertura', coberturaRouter(db, syncCfg));
-  app.use('/cobertura', express.static(path.join(__dirname, 'public/cobertura')));
+  // Matcher unificado, entrega 1 (2026-08-14): Cobertura dejó de ser una pantalla propia,
+  // pasó a ser la dirección Woo→ML del Matcher. `/cobertura` no puede dar 404 (puede haber
+  // accesos directos guardados) — redirige con `?aviso=unificado` para que el frontend del
+  // Matcher muestre el cartel de "se unificó" (la parte visible la hace el frontend, acá solo
+  // la señal). `/api/cobertura` NO se toca: sigue siendo el mismo router.
+  app.use('/cobertura', (req, res) => res.redirect('/herramientas/matcher/?aviso=unificado'));
   app.use('/api/precios', preciosRouter(db, syncCfg));
   app.use('/precios', express.static(path.join(__dirname, 'public/precios')));
   app.use('/api/preparacion', preparacionRouter(db, {
@@ -118,7 +123,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/config-ml', express.static(path.join(__dirname, 'public/config-ml')));
   app.use('/sync-ml', express.static(path.join(__dirname, 'public/sync-ml')));
   app.use('/sync-detalle', express.static(path.join(__dirname, 'public/sync-detalle')));
-  app.use('/vinculos', express.static(path.join(__dirname, 'public/vinculos')));
+  // Vínculos se absorbió dentro del Matcher (Buscar producto + Sospechosos, ver
+  // routes/cobertura.js) — mismo criterio de redirect con aviso que /cobertura arriba.
+  app.use('/vinculos', (req, res) => res.redirect('/herramientas/matcher/?aviso=unificado'));
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
   app.use('/api/ml', mlEstadoRouter(db));
 

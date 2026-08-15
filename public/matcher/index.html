@@ -3,1394 +3,1842 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fusion Bikes — SKU Matcher ML↔WC</title>
+<title>Matcher — Fusion Bikes</title>
 <link rel="stylesheet" href="../lib/theme.css">
 <style>
-  *{box-sizing:border-box;margin:0;padding:0;}
-  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
-  .hidden{display:none!important;}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; }
+a { color:inherit; }
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
+.hidden{display:none!important;}
 
-  /* LOADER */
-  .loader-screen{max-width:760px;margin:0 auto;padding:48px 24px;}
-  .loader-eyebrow{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);opacity:.75;margin-bottom:8px;}
-  .loader-title{font-size:2rem;font-weight:800;letter-spacing:-.04em;line-height:1.1;color:var(--text);margin-bottom:6px;}
-  .loader-title em{font-style:normal;color:var(--accent);}
-  .loader-sub{color:var(--muted);margin-bottom:32px;font-size:14px;}
-  .dropzone{border:2px dashed var(--border);border-radius:12px;padding:28px 20px;text-align:center;margin-bottom:16px;cursor:pointer;transition:all .2s;background:var(--surface);position:relative;overflow:hidden;}
-  .dropzone:hover,.dropzone.dragover{border-color:var(--accent2);background:var(--surface2);}
-  .dropzone.loaded{border-color:var(--green);border-style:solid;background:rgba(52,211,153,.05);}
-  .dz-icon{font-size:32px;margin-bottom:10px;}
-  .dz-title{font-size:15px;font-weight:600;margin-bottom:4px;}
-  .dz-hint{font-size:12px;color:var(--muted);}
-  .dz-file{font-size:13px;color:var(--green);margin-top:8px;font-family:monospace;}
-  .dz-input{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0;}
-  .opt-progress{border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin:8px 0 24px;background:var(--surface);}
-  .opt-title{font-size:13px;font-weight:600;margin-bottom:4px;}
-  .opt-hint{font-size:12px;color:var(--muted);margin-bottom:10px;}
-  .btn-import{display:inline-block;padding:7px 14px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;cursor:pointer;font-size:12px;position:relative;overflow:hidden;}
-  .btn-import:hover{border-color:var(--accent2);}
-  .btn-import input{position:absolute;inset:0;opacity:0;cursor:pointer;}
-  .btn-procesar{width:100%;padding:14px;background:var(--accent);color:#06131C;border:none;border-radius:10px;cursor:pointer;font-size:16px;font-weight:700;transition:all .2s;}
-  .btn-procesar:hover:not(:disabled){background:var(--accent-dk);}
-  .btn-procesar:disabled{background:var(--surface2);color:var(--muted);cursor:not-allowed;}
-  .progress-proc{margin-top:20px;text-align:center;}
-  .progress-proc-bar{background:var(--surface2);border-radius:6px;height:8px;overflow:hidden;margin-top:10px;}
-  .progress-proc-fill{height:100%;background:var(--accent);width:0%;transition:width .15s;}
-  .progress-proc-text{font-size:13px;color:var(--muted);margin-top:8px;}
+/* ── Foco visible global (piso WCAG) ───────────────────────────────── */
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
-  /* APP */
-  .header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
-  .logo{font-size:16px;font-weight:700;color:var(--accent);display:flex;align-items:center;gap:8px;}
-  .brand-badge{display:inline-flex;flex-direction:column;transform:skewX(-8deg);border-radius:5px 3px 3px 5px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.4);}
-  .brand-badge b{display:block;font-style:italic;font-weight:800;text-transform:uppercase;font-size:9px;line-height:1.25;letter-spacing:-.02em;padding:1px 7px;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;}
-  .brand-badge .bb-t{background:#08090B;color:#fff;}
-  .brand-badge .bb-b{background:var(--accent);color:#08090B;}
-  .badge{font-size:11px;background:var(--surface2);border:1px solid var(--border);padding:3px 8px;border-radius:20px;color:var(--muted);margin-left:12px;}
-  .header-actions{display:flex;gap:8px;align-items:center;}
-  .hbtn{padding:6px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;cursor:pointer;font-size:12px;}
-  .hbtn:hover{border-color:var(--accent2);}
-  .statsbar{background:var(--surface);border-bottom:1px solid var(--border);padding:9px 24px;display:flex;gap:20px;align-items:center;flex-wrap:wrap;}
-  .stat{display:flex;align-items:center;gap:6px;font-size:13px;}
-  .stat-val{font-weight:700;font-size:15px;}
-  .sv-green{color:var(--green);}.sv-muted{color:var(--muted);}.sv-accent{color:var(--accent);}.sv-yellow{color:var(--yellow);}
-  .progress-wrap{flex:1;background:var(--surface2);border-radius:4px;height:6px;overflow:hidden;min-width:80px;}
-  .progress-bar{height:100%;background:var(--green);border-radius:4px;transition:width .3s;}
-  .filters{padding:9px 24px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border);background:var(--bg);flex-wrap:wrap;}
-  .filter-btn{padding:5px 12px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:12px;transition:all .15s;}
-  .filter-btn:hover{border-color:var(--accent);color:var(--text);}
-  .filter-btn.active{background:var(--accent);border-color:var(--accent);color:#06131C;font-weight:600;}
-  .filter-btn.mode-verificar{border-color:rgba(167,139,250,.4);}
-  .filter-btn.mode-verificar.active{background:var(--accent2);border-color:var(--accent2);color:#fff;}
-  .filtro-stock{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none;}
-  .filtro-stock input{cursor:pointer;accent-color:var(--accent);}
-  .filtro-stock input:disabled{cursor:not-allowed;}
-  .search-input{margin-left:auto;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 12px;border-radius:6px;font-size:13px;width:220px;}
-  .search-input:focus{outline:none;border-color:var(--accent2);}
+/* ── Topbar (sticky) ────────────────────────────────────────────────── */
+.topbar { position:sticky; top:0; z-index:30; background:rgba(12,15,22,.92); backdrop-filter:blur(14px); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 .75rem; height:54px; gap:8px; }
+.back-link { display:inline-flex; align-items:center; gap:5px; font-size:.78rem; color:var(--muted); text-decoration:none; padding:8px; white-space:nowrap; }
+.back-link:hover, .back-link:focus-visible { color:var(--accent); }
+.topbar-title { font-size:.85rem; font-weight:700; flex:1; text-align:center; }
+.topbar-right { display:flex; align-items:center; gap:6px; }
+.hbtn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:7px 10px; font-size:.75rem; cursor:pointer; font-family:inherit; text-decoration:none; transition:border-color .15s,color .15s; min-height:var(--tap-min); min-width:var(--tap-min); display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.hbtn:hover, .hbtn:focus-visible { border-color:var(--accent); color:var(--accent); }
+.hbtn.icon-only { padding:7px; font-size:1rem; }
 
-  .main{display:flex;height:calc(100vh - 180px);}
-  .list-panel{width:320px;min-width:260px;border-right:1px solid var(--border);overflow-y:auto;background:var(--surface);}
-  .list-item{padding:11px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s;position:relative;}
-  .list-item:hover{background:var(--surface2);}
-  .list-item.active{background:var(--surface2);border-left:3px solid var(--accent);padding-left:11px;}
-  .list-item.active.modo-verificar{border-left-color:var(--accent2);}
-  .list-item.approved::after{content:'✓';position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--green);font-weight:700;}
-  .list-item.confirmed::after{content:'✓';position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--accent2);font-weight:700;}
-  .list-item.skipped::after{content:'—';position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--muted);}
-  .item-title{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:20px;}
-  .item-vars{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
-  .item-meta{display:flex;align-items:center;gap:6px;margin-top:4px;}
-  .item-score{display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600;}
-  .item-modo{display:inline-block;font-size:9px;padding:1px 5px;border-radius:10px;background:rgba(167,139,250,.15);color:var(--accent2);}
-  .sh{background:rgba(52,211,153,.15);color:var(--green);}
-  .sm{background:rgba(251,191,36,.15);color:var(--yellow);}
-  .sl{background:rgba(248,113,113,.15);color:var(--red);}
+/* ── Subheader: selector de dirección (sticky, debajo del topbar) ─────── */
+.subheader { position:sticky; top:54px; z-index:25; background:var(--bg); border-bottom:1px solid var(--border); padding:.4rem .75rem; }
+.dir-selector { display:flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; max-width:960px; margin:0 auto; }
+.dir-pill { flex:1; min-height:var(--tap-min); background:var(--surface); border:0; color:var(--muted); font-size:.78rem; font-weight:600; font-family:inherit; cursor:pointer; padding:6px 8px; text-align:center; }
+.dir-pill + .dir-pill { border-left:1px solid var(--border); }
+.dir-pill.active { background:var(--accent-dim); color:var(--accent); }
+.dir-pill:disabled { cursor:not-allowed; opacity:.6; }
+.dir-pill .dir-n { font-variant-numeric:tabular-nums; }
+.dir-pill .dir-proximamente { display:block; font-size:.65rem; font-weight:400; color:var(--muted); }
 
-  .detail-panel{flex:1;overflow-y:auto;padding:18px 24px;}
-  .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--muted);gap:8px;}
-  .btn-volver-lista{display:none;}
+/* ── Tira de chips de secciones (persistente, NO sticky) ───────────── */
+.chips-tira-wrap { max-width:960px; margin:0 auto; padding:.6rem .75rem 0; }
+.chips-tira { display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px; }
+.chip-sec { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; min-height:var(--tap-min); padding:0 12px; border-radius:var(--radius-pill); font-size:.76rem; font-weight:600; white-space:nowrap; background:var(--chip-bg); border:1px solid var(--chip-bd); color:var(--chip-txt); font-family:inherit; cursor:pointer; text-decoration:none; }
+.chip-sec:hover, .chip-sec:focus-visible { border-color:var(--accent); }
+.chip-sec.accionable { background:var(--chip-alert-bg); border-color:var(--chip-alert-bd); color:var(--chip-alert-txt); }
+.chip-sec[aria-disabled="true"] { cursor:not-allowed; opacity:.65; }
+.chip-sec .n { font-variant-numeric:tabular-nums; }
+.chip-mas-panel { display:flex; gap:6px; flex-wrap:wrap; padding:6px 0 0; }
 
-  /* RESPONSIVE: en pantallas angostas, lista y detalle se muestran de a una
-     (patrón master-detail, como una app de mail en el celular) — antes el
-     sidebar de 320px dejaba el detalle prácticamente sin espacio. */
-  @media (max-width:760px){
-    .header{padding:10px 14px;flex-wrap:wrap;gap:8px;}
-    .badge{margin-left:6px;}
-    .header-actions{gap:6px;}
-    .hbtn{padding:6px 9px;font-size:11px;}
-    .statsbar{padding:8px 14px;gap:10px;overflow-x:auto;}
-    .filters{padding:8px 14px;}
-    .search-input{width:100%;margin-left:0;order:99;}
-    .main{height:calc(100vh - 220px);}
-    .list-panel{width:100%;min-width:0;border-right:0;}
-    .list-panel.mobile-hidden{display:none;}
-    .detail-panel{padding:14px 16px;}
-    .detail-panel.mobile-hidden{display:none;}
-    .btn-volver-lista{display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 12px;font-size:12px;cursor:pointer;margin-bottom:14px;}
-    .btn-volver-lista:hover{border-color:var(--accent2);}
-    .sku-actual-card{flex-wrap:wrap;}
-  }
+/* ── Línea calma del push de SKUs (mismo renglón que "actualizado hace X") ── */
+.refresco-bar { max-width:960px; margin:0 auto; padding:.4rem .75rem 0; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:.75rem; color:var(--muted); }
+.refresco-bar.trabado { color:var(--warning); font-weight:600; }
+.refresco-bar a { color:var(--accent); }
 
-  /* MODO BADGE */
-  .modo-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600;margin-bottom:12px;}
-  .modo-badge.asignar{background:rgba(245,166,35,.12);color:var(--accent);border:1px solid rgba(245,166,35,.3);}
-  .modo-badge.verificar{background:rgba(167,139,250,.12);color:var(--accent2);border:1px solid rgba(167,139,250,.3);}
+/* ── Aviso banner (unificación) y primera visita ───────────────────── */
+.banner-aviso { max-width:960px; margin:.75rem auto 0; padding:0 .75rem; }
+.banner-aviso-box { background:var(--accent-dim); border:1px solid var(--accent); border-radius:10px; padding:12px 14px; font-size:.82rem; display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.banner-aviso-box button { background:none; border:0; color:var(--muted); font-size:1rem; cursor:pointer; line-height:1; min-height:var(--tap-min); min-width:var(--tap-min); }
 
-  /* SKU ACTUAL (modo verificar) */
-  .sku-actual-card{background:rgba(167,139,250,.07);border:1px solid rgba(167,139,250,.25);border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;gap:14px;align-items:center;}
-  .sku-actual-img{width:54px;height:54px;border-radius:6px;object-fit:cover;border:1px solid var(--border);flex-shrink:0;}
-  .sku-actual-img-ph{width:54px;height:54px;border-radius:6px;background:var(--surface2);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:9px;border:1px solid var(--border);text-align:center;}
-  .sku-actual-body{flex:1;min-width:0;}
-  .sku-actual-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--accent2);margin-bottom:3px;}
-  .sku-actual-sku{font-family:monospace;font-size:13px;color:var(--accent);font-weight:700;margin-bottom:2px;}
-  .sku-actual-nombre{font-size:13px;font-weight:600;margin-bottom:4px;}
-  .conf-badge{font-size:11px;padding:2px 8px;border-radius:10px;display:inline-block;}
+.main { max-width:960px; margin:0 auto; padding:1rem 1rem 5rem; }
+.view { display:none; }
+.view.active { display:block; }
 
-  .section-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:8px;}
-  .filter-nav{font-size:12px;color:var(--muted);margin-bottom:12px;padding:7px 12px;background:var(--surface);border-radius:6px;border:1px solid var(--border);}
+.page-title { font-size:1.5rem; font-weight:800; letter-spacing:-.04em; line-height:1.15; margin-bottom:4px; }
+.page-title em { font-style:normal; color:var(--accent); }
+.page-sub { font-size:.83rem; color:var(--muted); margin-bottom:1.25rem; }
 
-  .ml-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;}
-  .ml-id{font-size:11px;color:var(--accent);font-family:monospace;margin-bottom:3px;}
-  .ml-name{font-size:16px;font-weight:700;margin-bottom:4px;}
-  .ml-vars{font-size:13px;color:var(--accent2);}
-  .ml-type{font-size:11px;color:var(--muted);margin-top:5px;}
+/* ── Skeleton ───────────────────────────────────────────────────────── */
+.skel { background: linear-gradient(90deg, var(--skeleton-base) 25%, var(--skeleton-highlight) 37%, var(--skeleton-base) 63%); background-size: 400% 100%; animation: skel-sweep 1.4s ease infinite; border-radius:10px; }
+@keyframes skel-sweep { 0%{background-position:100% 50%;} 100%{background-position:0 50%;} }
+@media (prefers-reduced-motion: reduce) { .skel { animation:none; background:var(--skeleton-base); } }
+.skel-marca { height:64px; border:1px solid var(--border); }
 
-  .candidates-grid{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;}
-  .candidate-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;transition:all .15s;position:relative;display:flex;gap:12px;align-items:center;}
-  .candidate-card:hover{border-color:var(--accent2);}
-  .candidate-card.selected{border-color:var(--accent);background:rgba(245,166,35,.06);}
-  .candidate-card.es-actual{border-color:rgba(167,139,250,.4);background:rgba(167,139,250,.04);}
-  .candidate-card.es-actual.selected{border-color:var(--accent2);background:rgba(167,139,250,.1);}
-  .cand-img{width:54px;height:54px;border-radius:6px;object-fit:cover;background:var(--surface2);flex-shrink:0;border:1px solid var(--border);}
-  .cand-img-ph{width:54px;height:54px;border-radius:6px;background:var(--surface2);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:9px;border:1px solid var(--border);text-align:center;}
-  .cand-body{flex:1;min-width:0;}
-  .cand-score-badge{position:absolute;top:10px;right:10px;font-size:11px;font-weight:700;padding:2px 7px;border-radius:10px;}
-  .cand-sku{font-family:monospace;font-size:12px;color:var(--accent);margin-bottom:2px;}
-  .cand-nombre{font-size:13px;font-weight:600;padding-right:60px;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .cand-attrs{display:flex;gap:6px;flex-wrap:wrap;}
-  .attr-badge{font-size:10px;padding:2px 7px;border-radius:10px;}
-  .attr-ok{background:rgba(52,211,153,.15);color:var(--green);}
-  .attr-no{background:rgba(248,113,113,.15);color:var(--red);}
-  .attr-neutral{background:var(--surface2);color:var(--muted);}
-  .actual-tag{font-size:9px;background:rgba(167,139,250,.2);color:var(--accent2);padding:1px 5px;border-radius:8px;margin-left:4px;vertical-align:middle;}
+/* ── Vacíos / próximamente ──────────────────────────────────────────── */
+.vacio { border:1px dashed var(--border); border-radius:10px; padding:1.5rem 1rem; text-align:center; color:var(--muted); font-size:.85rem; }
+.vacio strong { display:block; color:var(--text); font-size:1rem; margin-bottom:6px; }
+.vacio .vacio-links { margin-top:12px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
 
-  .manual-label{font-size:12px;color:var(--muted);margin-bottom:6px;}
-  .manual-row{display:flex;gap:8px;margin-bottom:14px;}
-  .manual-input{flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px;font-family:monospace;}
-  .manual-input:focus{outline:none;border-color:var(--accent);}
-  .btn-use{padding:8px 14px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;cursor:pointer;font-size:13px;white-space:nowrap;}
-  .btn-use:hover{border-color:var(--accent);}
+/* ── Entrada: highlight "seguir donde quedé" / primera visita ─────────── */
+.highlight-card { display:block; width:100%; text-align:left; background:var(--chip-on-bg); border:1px solid var(--chip-on-bd); border-radius:12px; padding:16px; margin-bottom:1.25rem; cursor:pointer; font-family:inherit; color:var(--text); min-height:var(--tap-comfort); }
+.highlight-card:hover, .highlight-card:focus-visible { border-color:var(--accent); }
+.highlight-eyebrow { font-size:.68rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin-bottom:4px; }
+.highlight-title { font-size:1.05rem; font-weight:800; }
+.highlight-title b { color:var(--accent); }
+.highlight-card.static { cursor:default; }
+.highlight-close { float:right; background:none; border:0; color:var(--muted); font-size:1rem; cursor:pointer; min-height:var(--tap-min); min-width:var(--tap-min); }
 
-  .actions{display:flex;gap:10px;margin-top:6px;}
-  .btn{padding:10px 20px;border-radius:8px;border:none;cursor:pointer;font-size:14px;font-weight:600;transition:all .15s;}
-  .btn-approve{background:var(--green);color:#fff;flex:1;}
-  .btn-approve:hover{background:var(--green-dk);}
-  .btn-approve:disabled{background:var(--surface2);color:var(--muted);cursor:not-allowed;}
-  .btn-confirm{background:var(--accent2);color:#fff;flex:1;}
-  .btn-confirm:hover{background:var(--accent2-dk);}
-  .btn-skip{background:var(--surface2);border:1px solid var(--border);color:var(--muted);}
-  .btn-skip:hover{border-color:var(--muted);color:var(--text);}
-  .btn-nav{background:var(--surface2);border:1px solid var(--border);color:var(--text);}
-  .btn-nav:hover{border-color:var(--accent2);}
+.resumen-top { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:1.25rem; }
+.resumen-num { font-size:1.7rem; font-weight:800; letter-spacing:-.04em; }
+.resumen-txt { font-size:.85rem; color:var(--muted); }
 
-  .estado-card{border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;display:flex;align-items:center;justify-content:space-between;}
-  .estado-aprobado{background:rgba(52,211,153,.1);border:1px solid var(--green);}
-  .estado-confirmado{background:rgba(167,139,250,.1);border:1px solid var(--accent2);}
-  .estado-omitido{background:rgba(122,127,154,.1);border:1px solid var(--border);color:var(--muted);}
-  .btn-deshacer{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:0;}
-  .btn-deshacer:hover{color:var(--text);}
+.section-label { font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:1.25rem 0 .6rem; }
 
-  .filtro-completo{background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.3);border-radius:8px;padding:20px;text-align:center;margin-top:20px;}
-  .filtro-completo h3{color:var(--green);margin-bottom:8px;}
-  .filtro-completo p{color:var(--muted);font-size:13px;margin-bottom:12px;}
-  .btn-otro-filtro{padding:8px 18px;background:var(--accent);color:#06131C;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;}
+/* ── Tarjetas de marca ──────────────────────────────────────────────── */
+.marcas-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin-bottom:1rem; }
+.marca-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; text-align:left; cursor:pointer; font-family:inherit; color:var(--text); min-height:var(--tap-comfort); }
+.marca-card:hover, .marca-card:focus-visible { border-color:var(--accent); }
+.marca-nombre { font-weight:700; font-size:.9rem; margin-bottom:2px; }
+.marca-meta { font-size:.72rem; color:var(--muted); }
+.marca-valor { font-size:.78rem; color:var(--text); font-weight:600; margin-top:2px; }
+.btn-vertodas { background:none; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:8px 14px; font-size:.78rem; cursor:pointer; font-family:inherit; min-height:var(--tap-min); }
+.btn-vertodas:hover, .btn-vertodas:focus-visible { border-color:var(--accent); color:var(--accent); }
 
-  .export-bar{padding:11px 24px;border-top:1px solid var(--border);background:var(--surface);display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
-  .btn-export{padding:8px 20px;background:var(--accent);color:#06131C;border:none;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px;}
-  .btn-export:hover{background:var(--accent-dk);}
-  .btn-export:disabled{background:var(--surface2);color:var(--muted);cursor:not-allowed;}
-  .btn-export2{padding:8px 16px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;cursor:pointer;font-weight:600;font-size:13px;}
-  .btn-export2:hover{border-color:var(--accent2);}
-  .export-info{font-size:12px;color:var(--muted);}
-  .autosave-ind{font-size:11px;color:var(--green);margin-left:auto;}
+.otras-lista { display:flex; flex-direction:column; gap:6px; }
+.otra-link { display:flex; align-items:center; justify-content:space-between; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 14px; text-decoration:none; color:var(--text); font-size:.85rem; min-height:var(--tap-comfort); }
+.otra-link:hover, .otra-link:focus-visible { border-color:var(--accent); }
+.otra-link .n { color:var(--muted); font-variant-numeric:tabular-nums; }
 
-  ::-webkit-scrollbar{width:5px;}
-  ::-webkit-scrollbar-track{background:transparent;}
-  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+/* ── Cola: progreso ─────────────────────────────────────────────────── */
+.cola-header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:.5rem; flex-wrap:wrap; }
+.progreso-bar-row { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
+.progreso-track { flex:1; height:8px; background:var(--progress-track); border-radius:6px; overflow:hidden; }
+.progreso-fill { height:100%; background:var(--progress-fill); border-radius:6px; transition:width .25s ease; }
+.progreso-frac { font-size:.85rem; font-weight:600; white-space:nowrap; }
+.progreso-secundaria { font-size:.72rem; color:var(--muted); margin-bottom:1rem; }
+
+/* ── Contexto de dirección (arriba de la tarjeta) ──────────────────────── */
+.contexto-direccion { font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:8px; }
+
+/* ── Match card ─────────────────────────────────────────────────────── */
+.match-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:16px; }
+.conf-badge { display:inline-flex; align-items:center; gap:5px; font-size:13px; font-weight:600; padding:3px 10px; border-radius:var(--radius-pill); margin-bottom:12px; }
+.conf-badge.alta { color:var(--conf-alta); background:var(--conf-alta-bg); border:1px solid var(--conf-alta-bd); }
+.conf-badge.revisar { color:var(--conf-revisar); background:var(--conf-revisar-bg); border:1px solid var(--conf-revisar-bd); }
+.conf-badge.baja { color:var(--conf-baja); background:var(--conf-baja-bg); border:1px solid var(--conf-baja-bd); }
+
+.fotos-row { display:flex; gap:8px; margin-bottom:6px; }
+.foto-col { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
+.rol-pill { align-self:flex-start; font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:2px 8px; border-radius:var(--radius-pill); }
+.rol-pill.anchor { background:var(--role-anchor-bg); color:var(--role-anchor-txt); border:1px solid var(--role-anchor-bd); }
+.rol-pill.candidate { background:var(--role-candidate-bg); color:var(--role-candidate-txt); border:1px solid var(--role-candidate-bd); }
+.foto-box { aspect-ratio:1; border-radius:10px; overflow:hidden; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; }
+.foto-col.anchor .foto-box { background:var(--surface2); }
+.foto-col.candidate .foto-box { background:var(--surface); }
+.foto-box img { width:100%; height:100%; object-fit:cover; display:block; }
+.foto-box .sinfoto { font-size:.7rem; color:var(--muted); }
+
+.titulos-stack { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+.titulo-fuente-label { font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:2px; }
+.title-diff { font-size:14px; line-height:1.35; }
+.tok { display:inline; }
+.tok-match { color:var(--tok-match-txt); }
+.tok-diff { color:var(--tok-diff-txt); background:var(--tok-diff-bg); border-bottom:1px dashed var(--tok-diff-bd); font-weight:600; padding:0 1px; }
+.tok-discriminant { color:var(--tok-discriminant-txt); background:var(--tok-discriminant-bg); border:1px solid var(--tok-discriminant-bd); border-radius:4px; font-weight:700; padding:0 3px; font-family:var(--tok-discriminant-font); }
+
+.nivel2 { display:grid; grid-template-columns:1fr 1fr; gap:2px 14px; font-size:12px; margin-bottom:10px; }
+.nivel2 .n2-label { color:var(--muted); }
+.nivel2 .n2-val { color:var(--text); font-weight:600; }
+.nivel2 .n2-head { font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-top:4px; }
+
+details.atributos-toggle { margin-bottom:12px; font-size:12px; }
+details.atributos-toggle summary { cursor:pointer; color:var(--accent); font-weight:600; }
+details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
+
+.btn-confirmar { display:block; width:100%; background:var(--accent); color:#06131C; border:0; border-radius:10px; font-size:.95rem; font-weight:800; padding:0 14px; height:var(--tap-comfort); cursor:pointer; font-family:inherit; margin-bottom:10px; }
+.btn-confirmar:hover, .btn-confirmar:focus-visible { background:var(--accent-dk); }
+.btn-confirmar:disabled { opacity:.55; cursor:default; }
+
+.acciones-fila { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
+@media (max-width: 480px) { .acciones-fila { grid-template-columns:repeat(2,1fr); } }
+.accion-btn { background:none; border:1px solid var(--border); color:var(--muted); border-radius:8px; font-size:.72rem; font-weight:600; padding:6px 4px; min-height:var(--tap-min); cursor:pointer; font-family:inherit; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center; gap:4px; }
+.accion-btn:hover, .accion-btn:focus-visible { border-color:var(--accent); color:var(--accent); }
+.accion-btn:disabled { opacity:.5; cursor:not-allowed; }
+.accion-btn-lock { font-size:.65rem; color:var(--muted); text-align:center; margin-top:2px; }
+
+.candidatos-lista { display:flex; flex-direction:column; gap:8px; margin:14px 0; }
+.match-card--compact { background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px; display:flex; gap:10px; align-items:center; cursor:pointer; text-align:left; font-family:inherit; color:var(--text); width:100%; min-height:var(--tap-comfort); }
+.match-card--compact:hover, .match-card--compact:focus-visible { border-color:var(--accent); }
+.mc-thumb { width:40px; height:40px; border-radius:6px; object-fit:cover; background:var(--surface); flex-shrink:0; border:1px solid var(--border); }
+.mc-info { min-width:0; flex:1; }
+.mc-info .title-diff { font-size:12.5px; }
+.mc-num { font-size:.65rem; font-weight:700; color:var(--role-candidate-txt); background:var(--role-candidate-bg); border-radius:var(--radius-pill); padding:1px 6px; margin-bottom:3px; display:inline-block; }
+
+.buscar-manual { margin-top:14px; }
+.buscar-manual summary { cursor:pointer; color:var(--accent); font-weight:600; font-size:.82rem; padding:8px 0; }
+.buscar-manual-box { margin-top:8px; }
+.buscar-manual input { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.85rem; font-family:inherit; outline:none; margin-bottom:8px; min-height:var(--tap-min); }
+.buscar-manual input:focus { border-color:var(--accent); }
+
+.sin-candidato-box { text-align:center; padding:1.5rem 1rem; color:var(--muted); font-size:.85rem; border:1px dashed var(--border); border-radius:10px; margin-bottom:14px; }
+
+.cola-fin { text-align:center; padding:2.5rem 1rem; }
+.cola-fin .icon { font-size:2rem; margin-bottom:.5rem; }
+.cola-fin-acciones { display:flex; gap:10px; justify-content:center; margin-top:1rem; flex-wrap:wrap; }
+
+.aviso-borrada { display:flex; align-items:center; gap:6px; color:var(--warning); font-size:.8rem; font-weight:600; padding:1rem; border:1px solid var(--warning-bd); background:var(--warning-bg); border-radius:10px; margin-bottom:12px; }
+
+/* Confirmación extra (fricción proporcional al riesgo) */
+.friccion-box { background:var(--conf-baja-bg); border:1px solid var(--conf-baja-bd); border-radius:8px; padding:10px 12px; font-size:.78rem; color:var(--text); margin-bottom:10px; display:flex; flex-direction:column; gap:6px; }
+
+/* ── Toast ──────────────────────────────────────────────────────────── */
+.toast-wrap { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:50; display:flex; flex-direction:column; gap:6px; align-items:center; width:calc(100% - 24px); max-width:420px; }
+.toast { background:var(--surface2); border:1px solid var(--border2); border-radius:10px; padding:10px 14px; font-size:.8rem; display:flex; align-items:center; gap:12px; box-shadow:0 8px 24px rgba(0,0,0,.35); width:100%; justify-content:space-between; }
+.toast.ok { border-color:var(--success-bd); }
+.toast.pendiente { border-color:var(--warning-bd); }
+.toast.error { border-color:var(--critical-bd); }
+.toast .toast-txt { display:flex; align-items:center; gap:6px; }
+.toast button { background:none; border:1px solid var(--border); color:var(--accent); border-radius:6px; padding:5px 10px; font-size:.75rem; cursor:pointer; font-family:inherit; }
+
+/* ── Listas de gestión ──────────────────────────────────────────────── */
+.filtros-panel { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem; }
+.filtro-control { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text); font-size:.82rem; font-family:inherit; outline:none; min-height:var(--tap-min); }
+.filtro-control:focus { border-color:var(--accent); }
+.filtro-control.grow { flex:1; min-width:150px; }
+
+.gestion-lista { display:flex; flex-direction:column; gap:8px; }
+.grupo-sku { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
+.grupo-sku-head { font-size:.85rem; font-weight:700; margin-bottom:8px; }
+.grupo-sku-head .sku-mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--accent); }
+.pub-row { display:flex; align-items:center; gap:10px; padding:8px 4px; border-top:1px solid var(--border); flex-wrap:wrap; }
+.pub-row:first-of-type { border-top:0; }
+.pub-row.sobreventa { background:var(--critical-bg); border-radius:6px; padding:8px; }
+.pub-row .pub-txt { flex:1; min-width:120px; font-size:.8rem; }
+.pub-row .pub-mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--muted); }
+.pub-row .pub-acciones { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.mini-btn { background:none; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 10px; font-size:.72rem; cursor:pointer; font-family:inherit; min-height:var(--tap-min); }
+.mini-btn:hover, .mini-btn:focus-visible { border-color:var(--accent); color:var(--accent); }
+.mini-btn:disabled { opacity:.5; cursor:not-allowed; }
+.lock-nota { font-size:.65rem; color:var(--muted); white-space:nowrap; }
+.sobreventa-tag { color:var(--critical); font-size:.72rem; font-weight:700; display:inline-flex; align-items:center; gap:3px; }
+.aviso-info { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:.78rem; color:var(--muted); margin-bottom:1rem; }
+
+.item-row { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.75rem 1rem; display:flex; align-items:center; gap:12px; }
+.item-row .flex1 { flex:1; min-width:0; }
+.item-row .nombre { font-size:.85rem; font-weight:600; }
+.item-row .meta { font-size:.72rem; color:var(--muted); margin-top:2px; }
+.item-row input[type=checkbox] { width:20px; height:20px; accent-color:var(--accent); flex-shrink:0; }
+
+.solo-ml-row { display:flex; gap:10px; align-items:center; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; flex-wrap:wrap; }
+.solo-ml-row img { width:40px; height:40px; border-radius:6px; object-fit:cover; background:var(--surface2); flex-shrink:0; }
+.solo-ml-row .flex1 { flex:1; min-width:140px; font-size:.82rem; }
+.solo-ml-row .buscador-inline { display:flex; gap:6px; flex-wrap:wrap; align-items:center; width:100%; margin-top:8px; }
+.solo-ml-row .buscador-inline input { flex:1; min-width:140px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:6px 10px; color:var(--text); font-size:.78rem; font-family:inherit; }
+.resultado-vincular { display:flex; align-items:center; gap:8px; background:var(--surface2); border-radius:6px; padding:6px 10px; font-size:.78rem; }
+
+.hist-grupo-head { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--warning); margin:1rem 0 .4rem; }
+
+.estado-vinculado { display:inline-flex; align-items:center; gap:5px; color:var(--success); font-weight:600; font-size:.78rem; }
+.estado-pendiente { display:inline-flex; align-items:center; gap:5px; color:var(--warning); font-weight:600; font-size:.78rem; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+
+/* ── Buscador puntual (overlay desde el ícono de la topbar) ────────────── */
+.search-overlay { position:fixed; inset:0; z-index:60; background:var(--danger-veil, rgba(6,8,13,.92)); display:flex; align-items:flex-start; justify-content:center; padding:5vh 1rem 1rem; overflow-y:auto; }
+.search-panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; max-width:600px; width:100%; padding:1.25rem; }
+.search-panel-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+.search-panel-head button { background:none; border:0; color:var(--muted); font-size:1.1rem; cursor:pointer; min-height:var(--tap-min); min-width:var(--tap-min); }
+.search-box { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.9rem; font-family:inherit; outline:none; min-height:var(--tap-min); }
+.search-box:focus { border-color:var(--accent); }
+.ac-opt { display:block; width:100%; text-align:left; background:none; border:none; border-bottom:1px solid var(--border); color:var(--text); padding:9px 12px; font-size:.82rem; font-family:inherit; cursor:pointer; min-height:var(--tap-min); }
+.ac-opt:last-child { border-bottom:none; }
+.ac-opt:hover, .ac-opt:focus-visible { background:var(--surface2); }
+.ac-opt b { font-family:monospace; }
+.ac-empty { padding:10px 12px; font-size:.8rem; color:var(--muted); }
+
+/* Producto/publicación cards de Problemas y Buscar (absorbido de Vínculos) */
+.producto-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; display:flex; gap:14px; align-items:center; margin-bottom:1rem; }
+.producto-card img { width:56px; height:56px; object-fit:cover; border-radius:8px; background:var(--surface2); flex-shrink:0; }
+.producto-info { min-width:0; flex:1; }
+.producto-nombre { font-size:.98rem; font-weight:700; margin-bottom:4px; }
+.producto-meta { display:flex; flex-wrap:wrap; gap:10px; font-size:.78rem; color:var(--muted); }
+.producto-meta .contado { color:var(--success); font-weight:700; }
+.pill-sku { font-family:monospace; font-size:.72rem; padding:1px 7px; border-radius:4px; background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
+
+.pub-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; margin-bottom:12px; }
+.pub-head { display:flex; gap:12px; }
+.pub-head img { width:64px; height:64px; object-fit:cover; border-radius:8px; background:var(--surface2); flex-shrink:0; }
+.pub-titulos { min-width:0; flex:1; }
+.pub-titulo-ml { font-size:.9rem; font-weight:700; line-height:1.3; }
+.pub-nombre-wc { font-size:.75rem; color:var(--muted); margin-top:3px; }
+.pub-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; margin:12px 0; }
+.pub-dato { font-size:.78rem; }
+.pub-dato .k { color:var(--muted); display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:2px; }
+.pub-dato .v { color:var(--text); }
+.pub-dato .v.destacado { font-weight:700; }
+.chips-wrap { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.chip { display:inline-flex; align-items:center; gap:8px; border-radius:8px; padding:6px 10px; font-size:.76rem; border:1px solid; max-width:100%; }
+.chip.alta { background:var(--critical-bg); color:var(--critical); border-color:var(--critical-bd); }
+.chip.media { background:var(--warning-bg); color:var(--warning); border-color:var(--warning-bd); }
+.chip.ninguna { background:var(--success-bg); color:var(--success); border-color:var(--success-bd); }
+.chip-txt { flex:1; min-width:0; }
+.chip-revisar { background:none; border:1px solid currentColor; color:inherit; border-radius:5px; padding:2px 8px; font-size:.7rem; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap; }
+.pub-acciones { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+.pub-flash { font-size:.76rem; margin-top:8px; }
+.pub-flash.ok { color:var(--success); }
+.pub-flash.err { color:var(--critical); }
+
+.btn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 14px; font-size:.78rem; font-weight:600; cursor:pointer; font-family:inherit; text-decoration:none; display:inline-block; transition:border-color .15s,color .15s; min-height:var(--tap-min); }
+.btn:hover { border-color:var(--accent); color:var(--accent); }
+.btn.primary { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); }
+.btn.danger { border-color:var(--critical-bd); color:var(--critical); }
+.btn.danger:hover { border-color:var(--critical); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+
+/* ── Modal ── */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:70; padding:1rem; }
+.modal-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1.5rem; max-width:440px; width:100%; max-height:85vh; overflow-y:auto; }
+.modal-title { font-size:1rem; font-weight:700; margin-bottom:10px; }
+.modal-body { font-size:.85rem; color:var(--text); line-height:1.5; margin-bottom:14px; }
+.modal-body .aviso { color:var(--warning); margin-top:6px; }
+.modal-actions { display:flex; justify-content:flex-end; gap:10px; }
+.modal-search-results { max-height:220px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; margin-top:8px; }
+.modal-resumen { background:var(--surface2); border-radius:8px; padding:10px 12px; font-size:.8rem; margin-top:10px; }
+
+@media (min-width: 760px) {
+  .main { max-width:1080px; padding:2rem 2rem 5rem; }
+  .fotos-row { max-width:620px; }
+  .foto-box { flex:0 0 180px; aspect-ratio:1; }
+  .titulos-stack { flex-direction:row; gap:20px; }
+  .titulos-stack > div { flex:1; }
+  .nivel2 { grid-template-columns:repeat(6,auto); gap:6px 22px; }
+  .btn-confirmar { width:auto; padding:0 28px; }
+  .acciones-fila { grid-template-columns:repeat(4,auto); }
+  .marcas-grid { grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); }
+  .pub-grid { grid-template-columns:repeat(4,1fr); }
+}
 </style>
 </head>
 <body>
 
-<div id="err-bar" style="display:none;position:fixed;bottom:0;left:0;right:0;background:var(--red);color:#fff;padding:10px 16px;font-size:12px;z-index:9999;font-family:monospace;max-height:120px;overflow:auto;">
-  <span style="float:right;cursor:pointer;font-weight:700;padding:0 6px" onclick="document.getElementById('err-bar').style.display='none'">✕</span>
-  <span id="err-msg"></span>
-</div>
-
-<div id="loader-screen" class="loader-screen">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
-    <span class="brand-badge"><b class="bb-t">Fusion</b><b class="bb-b">Bikes</b></span>
-    <a href="/herramientas/home/" style="font-size:12px;color:var(--muted);text-decoration:none;margin-left:auto">&larr; Inicio</a>
+<header class="topbar">
+  <a class="back-link" href="/herramientas/home/">&larr; Inicio</a>
+  <div class="topbar-title">Matcher</div>
+  <div class="topbar-right">
+    <button type="button" class="hbtn icon-only" id="btn-buscar-topbar" aria-label="Buscar producto o publicación">🔍</button>
+    <button type="button" class="hbtn" id="btn-actualizar-ml">↻ <span id="btn-actualizar-txt">Actualizar</span></button>
   </div>
-  <div class="loader-eyebrow">Herramienta de cruce</div>
-  <div class="loader-title">SKU Matcher <em>ML ↔ WC</em></div>
-  <div class="loader-sub">Subí el Excel de MercadoLibre para empezar. El catálogo de WooCommerce se carga automáticamente.</div>
+</header>
 
-  <div class="dropzone" id="dz-wc" style="border-style:solid;border-color:var(--green);background:rgba(52,211,153,.05);cursor:default;">
-    <div class="dz-icon">
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" style="color:var(--green);display:block;margin:0 auto 6px">
-        <rect x="4" y="6" width="24" height="20" rx="2"/><path d="M4 11h24"/><path d="M11 6v5M21 6v5"/><path d="M9 16h4M9 20h8"/>
-      </svg>
+<div class="banner-aviso hidden" id="banner-aviso">
+  <div class="banner-aviso-box">
+    <div>
+      <strong>Cobertura y Vínculos se unificaron acá.</strong> Todo lo que hacías en esas dos herramientas —confirmar vínculos, multi-publicación, Solo ML, Buscar producto, Sospechosos— ahora vive en el Matcher, en un solo lugar.
     </div>
-    <div class="dz-title" id="wc-status-title" style="color:var(--green)">Cargando catálogo WooCommerce...</div>
-    <div class="dz-hint" id="wc-status-hint">Conectando con la API...</div>
-  </div>
-
-  <div style="border:1px solid var(--accent2);border-radius:14px;padding:18px 20px;margin-bottom:14px;background:rgba(45,184,232,.06)">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-      <span style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent2)">Recomendado</span>
-    </div>
-    <div style="font-size:15px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px">Traer publicaciones desde la API de MercadoLibre</div>
-    <div style="font-size:12.5px;color:var(--muted);line-height:1.5;margin-bottom:12px">Trae tus publicaciones activas y pausadas directo de ML, con color, talle y SKU <b>estructurados y reales</b> — mucho más preciso que el Excel.</div>
-    <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:12px">
-      <label style="display:flex;align-items:flex-start;gap:8px;font-size:12.5px;cursor:pointer">
-        <input type="radio" name="api-scope" value="all" checked style="margin-top:2px">
-        <span><b>Todas las publicaciones</b> <span style="color:var(--muted)">— el catálogo completo. Tarda 1-3 min la primera vez.</span></span>
-      </label>
-      <label style="display:flex;align-items:flex-start;gap:8px;font-size:12.5px;cursor:pointer">
-        <input type="radio" name="api-scope" value="atencion" style="margin-top:2px">
-        <span><b>Solo las que necesitan atención</b> <span style="color:var(--muted)">— ventas sin mapear y publicaciones a re-mapear que saltaron como error en el sync. Rápido.</span></span>
-      </label>
-    </div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button class="btn-procesar" id="btn-api-refrescar" style="margin:0;width:auto;padding:10px 18px" onclick="refrescarMLapi()">↻ Traer desde API de ML</button>
-      <button class="hbtn" id="btn-api-usar" onclick="procesarDesdeApi()" title="Usar las publicaciones ya traídas sin volver a descargar">Usar las ya traídas →</button>
-    </div>
-    <div id="api-status" style="font-size:12.5px;color:var(--muted);margin-top:10px;min-height:16px"></div>
-    <div id="huerfanos-aviso" class="hidden" style="font-size:12px;color:var(--muted);margin-top:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(251,191,36,.06)"></div>
-  </div>
-
-  <div style="text-align:center;font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:.1em;margin:4px 0 10px">— o subí el Excel (respaldo) —</div>
-
-  <div class="dropzone" id="dz-ml">
-    <input type="file" class="dz-input" id="inp-ml" accept=".xlsx,.xls" aria-label="Subir archivo de publicaciones de MercadoLibre">
-    <div class="dz-icon">
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" style="color:var(--accent2);display:block;margin:0 auto 6px">
-        <path d="M8 4h10l8 8v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M18 4v8h8"/><path d="M12 20l2 2 4-4"/>
-      </svg>
-    </div>
-    <div class="dz-title">Excel de publicaciones de MercadoLibre</div>
-    <div class="dz-hint">El .xlsx tal cual lo baja ML, sin modificar</div>
-    <div class="dz-file hidden" id="dz-ml-file"></div>
-  </div>
-
-  <div class="opt-progress">
-    <div class="opt-title">¿Tenés progreso guardado?</div>
-    <div class="opt-hint">El progreso se guarda automáticamente en el servidor. También podés importar un .json de respaldo.</div>
-    <label class="btn-import">📂 Importar progreso (.json)
-      <input type="file" id="inp-prog" accept=".json">
-    </label>
-    <span id="prog-import-info" style="font-size:12px;color:var(--muted);margin-left:10px;"></span>
-  </div>
-
-  <button class="btn-procesar" id="btn-procesar" disabled onclick="procesar()">Procesar y revisar →</button>
-  <div class="progress-proc hidden" id="progress-proc">
-    <div class="progress-proc-text" id="proc-text">Cargando...</div>
-    <div class="progress-proc-bar"><div class="progress-proc-fill" id="proc-fill"></div></div>
+    <button type="button" id="banner-aviso-cerrar" aria-label="Cerrar aviso">✕</button>
   </div>
 </div>
 
-<div id="app-screen" class="hidden">
-  <div class="header">
-    <div style="display:flex;align-items:center;gap:12px">
-      <span class="brand-badge"><b class="bb-t">Fusion</b><b class="bb-b">Bikes</b></span>
-      <span style="font-size:16px;font-weight:800;letter-spacing:-.03em">SKU Matcher</span>
-      <span class="badge">ML ↔ WooCommerce</span>
+<div class="banner-aviso hidden" id="banner-bienvenida">
+  <div class="banner-aviso-box" style="background:var(--chip-on-bg);border-color:var(--chip-on-bd);">
+    <div>
+      <strong>Ya no subís ningún archivo.</strong> La cola de trabajo se arma sola a partir del catálogo y de ML — elegí una dirección abajo y empezá a resolver de a una.
     </div>
-    <div class="header-actions">
-      <span class="autosave-ind hidden" id="autosave-ind">✓ guardado</span>
-      <a href="/herramientas/home/" class="hbtn" style="text-decoration:none">← Inicio</a>
-      <button class="hbtn" onclick="exportarProgreso()">💾 Guardar progreso</button>
-      <button class="hbtn" onclick="volverInicio()">↻ Cambiar archivos</button>
-    </div>
-  </div>
-  <div class="statsbar">
-    <div class="stat"><span class="stat-val sv-green" id="st-ap">0</span><span style="color:var(--muted)">Asignados</span></div>
-    <div class="stat"><span class="stat-val sv-yellow" id="st-conf">0</span><span style="color:var(--muted)">Confirmados</span></div>
-    <div class="stat"><span class="stat-val sv-muted" id="st-om">0</span><span style="color:var(--muted)">Omitidos</span></div>
-    <div class="stat"><span class="stat-val sv-accent" id="st-pe">0</span><span style="color:var(--muted)">Pendientes</span></div>
-    <div class="progress-wrap"><div class="progress-bar" id="pbar" style="width:0%"></div></div>
-    <span id="ppct" style="font-size:12px;color:var(--muted);min-width:35px">0%</span>
-  </div>
-  <div class="filters" id="filters-bar"></div>
-  <div class="main">
-    <div class="list-panel" id="list-panel"></div>
-    <div class="detail-panel" id="detail-panel">
-      <div class="empty-state"><span style="font-size:32px">←</span><span>Seleccioná una publicación</span></div>
-    </div>
-  </div>
-  <div class="export-bar">
-    <button class="btn-export" id="btn-push-ml" onclick="escribirSkusEnMl()">↑ Escribir SKUs en ML</button>
-    <button class="btn-export2" id="btn-export" disabled onclick="exportarCSV()">⬇ Exportar CSV para ML</button>
-    <button class="btn-export2" onclick="exportarProgreso()">💾 Guardar progreso (.json)</button>
-    <span class="export-info" id="export-info">Revisá ítems para exportar</span>
-    <span class="export-info" id="push-auto-status" style="width:100%" aria-live="polite"></span>
+    <button type="button" id="banner-bienvenida-cerrar" aria-label="Cerrar aviso">✕</button>
   </div>
 </div>
 
-<script src="/herramientas/matcher/matcher-engine.js"></script>
-<script src="../lib/format.js"></script>
+<!-- Región viva para anunciar refrescos de contenido a lectores de pantalla -->
+<div id="aria-live" class="sr-only" role="status" aria-live="polite"></div>
+
+<div class="subheader">
+  <div class="dir-selector" role="tablist" aria-label="Dirección de trabajo">
+    <button type="button" class="dir-pill active" id="dir-wc-ml" data-dir="wc_ml" role="tab" aria-selected="true">Sin publicación <span class="dir-n" id="dir-wc-ml-n">…</span></button>
+    <button type="button" class="dir-pill" id="dir-ml-wc" data-dir="ml_wc" role="tab" aria-selected="false" disabled aria-disabled="true">Sin producto <span class="dir-n" id="dir-ml-wc-n">…</span><span class="dir-proximamente">Próximamente</span></button>
+  </div>
+</div>
+
+<div class="chips-tira-wrap">
+  <div class="chips-tira" id="chips-tira" role="tablist" aria-label="Secciones"></div>
+</div>
+
+<div class="refresco-bar" id="refresco-bar">Cargando estado de sincronización…</div>
+
+<main class="main">
+
+  <!-- ══════════════ VISTA: ENTRADA ══════════════ -->
+  <section class="view" id="view-entrada" data-view="entrada">
+    <h1 class="page-title">Matcher de <em>catálogo</em></h1>
+    <div id="entrada-resumen" class="resumen-top">
+      <div class="skel skel-marca" style="width:100%;height:40px;"></div>
+    </div>
+
+    <div id="entrada-seguir"></div>
+
+    <div class="section-label">Elegí una marca para trabajar</div>
+    <div id="entrada-marcas" class="marcas-grid">
+      <div class="skel skel-marca"></div><div class="skel skel-marca"></div><div class="skel skel-marca"></div>
+    </div>
+    <button type="button" class="btn-vertodas" id="btn-ver-todas-marcas" hidden>Ver todas las marcas</button>
+
+    <div class="section-label">Otras formas de revisar</div>
+    <div class="otras-lista">
+      <a class="otra-link" href="#/solo-ml">Solo ML — publicaciones sin SKU <span class="n">›</span></a>
+    </div>
+  </section>
+
+  <!-- ══════════════ VISTA: COLA (tarjeta de a una) ══════════════ -->
+  <section class="view" id="view-cola" data-view="cola">
+    <h1 class="sr-only" id="cola-h1">Trabajando marca</h1>
+    <div class="cola-header">
+      <a href="#/" class="back-link">&larr; Elegir otra marca</a>
+      <a href="#/historial" class="back-link">Historial</a>
+    </div>
+    <div class="progreso-bar-row">
+      <div class="progreso-track"><div class="progreso-fill" id="cola-progreso-fill" style="width:0%"></div></div>
+      <div class="progreso-frac" id="cola-progreso-frac">—</div>
+    </div>
+    <div class="progreso-secundaria" id="cola-progreso-secundaria">Hoy resolviste 0 · desinmovilizaste $0</div>
+
+    <div id="cola-contenido"><div class="skel" style="height:340px;"></div></div>
+  </section>
+
+  <!-- ══════════════ VISTA: HISTORIAL ══════════════ -->
+  <section class="view" id="view-historial" data-view="historial">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Historial</h1>
+    <p class="page-sub">Vínculos y descartes recientes. Deshacer disponible en cada uno.</p>
+    <div class="filtros-panel">
+      <input class="filtro-control grow" type="search" id="hist-buscar" placeholder="Buscar por producto o SKU…" aria-label="Buscar por producto o SKU">
+    </div>
+    <div id="hist-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: HAY QUE PUBLICARLO ══════════════ -->
+  <section class="view" id="view-publicar" data-view="publicar">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Hay que <em>publicarlo</em></h1>
+    <p class="page-sub">Productos sin candidato usable en ML, ordenados por valor. No publica nada por vos — prepara los datos.</p>
+    <div class="filtros-panel">
+      <button type="button" class="hbtn" id="btn-export-csv">⬇ Exportar a Excel</button>
+    </div>
+    <div id="publicar-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: MULTI-PUBLICACIÓN ══════════════ -->
+  <section class="view" id="view-multipub" data-view="multipub">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Multi-<em>publicación</em></h1>
+    <div class="aviso-info">Un SKU con más de dos publicaciones suele ser <strong>intencional</strong> (condiciones de venta distintas). No se "arregla" desvinculando todo: marcá como correcta la que está bien, pausá o desvinculá solo la que corresponda.</div>
+    <div id="multipub-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: SOLO ML ══════════════ -->
+  <section class="view" id="view-solo-ml" data-view="solo-ml">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Solo ML <em>— sin SKU</em></h1>
+    <p class="page-sub">Publicaciones que no tienen un producto web vinculado. Zona de consulta y limpieza puntual: filtrá o buscá, no se recorre de a una.</p>
+    <div class="filtros-panel">
+      <input class="filtro-control grow" type="search" id="soloml-buscar" placeholder="Buscar por título…" aria-label="Buscar publicación de ML por título">
+    </div>
+    <div id="soloml-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: SIN STOCK ══════════════ -->
+  <section class="view" id="view-sin-stock" data-view="sin-stock">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Sin <em>stock</em></h1>
+    <p class="page-sub">Faltantes con stock 0. Aparte de la cola principal, por si reponen.</p>
+    <div id="sinstock-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: PROBLEMAS (absorbe Sospechosos de Vínculos) ══════════════ -->
+  <section class="view" id="view-problemas" data-view="problemas">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Problemas</h1>
+    <p class="page-sub">Cosas que el sistema marca como raras: publicaciones pausadas que siguen vinculadas, y señales de posible mal matcheo.</p>
+
+    <div class="section-label">Pausadas que siguen vinculadas a un producto con stock</div>
+    <div class="filtros-panel">
+      <select class="filtro-control" id="prob-marca" aria-label="Filtrar por marca"><option value="">Todas las marcas</option></select>
+      <select class="filtro-control" id="prob-categoria" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option></select>
+    </div>
+    <div id="prob-lista"></div>
+
+    <div class="section-label">Señales de posible mal matcheo</div>
+    <div id="sospechosos-lista"></div>
+  </section>
+
+  <!-- ══════════════ VISTA: HUÉRFANOS (próximamente, entrega 2) ══════════════ -->
+  <section class="view" id="view-huerfanos" data-view="huerfanos">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Huérfanos</h1>
+    <div class="vacio"><strong>Próximamente.</strong>Decisiones que apuntan a publicaciones que ya no existen en ML. Se limpian solas y esta sección va a servir para revisarlas — llega con el motor unificado (dirección Sin producto).</div>
+  </section>
+
+  <!-- ══════════════ VISTA: OMITIDAS (próximamente, entrega 2) ══════════════ -->
+  <section class="view" id="view-omitidas" data-view="omitidas">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Omitidas</h1>
+    <div class="vacio"><strong>Próximamente.</strong>Publicaciones que se descartaron del trabajo normal, fuera de la cola. Llega con el motor unificado (dirección Sin producto).</div>
+  </section>
+
+  <!-- ══════════════ VISTA: SIN PRODUCTO (próximamente) ══════════════ -->
+  <section class="view" id="view-ml-wc" data-view="ml-wc">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Publicaciones sin <em>producto</em></h1>
+    <div class="vacio"><strong>Próximamente.</strong>Esta dirección (buscar el producto web para una publicación de ML sin vincular) llega con el motor unificado. Por ahora seguí usando "Sin publicación" — es la que ya funciona.</div>
+  </section>
+
+</main>
+
+<!-- ══════════════ Buscador puntual (overlay, alcanzable desde cualquier vista) ══════════════ -->
+<div class="search-overlay hidden" id="search-overlay" role="dialog" aria-modal="true" aria-labelledby="search-overlay-title">
+  <div class="search-panel">
+    <div class="search-panel-head">
+      <span id="search-overlay-title" style="font-weight:700;font-size:.95rem;">Buscar producto</span>
+      <button type="button" id="search-overlay-cerrar" aria-label="Cerrar buscador">✕</button>
+    </div>
+    <label class="sr-only" for="buscar-topbar-input">Buscar producto por SKU o nombre</label>
+    <input class="search-box" type="text" id="buscar-topbar-input" placeholder="SKU o nombre del producto" autocomplete="off">
+    <div id="buscar-topbar-results" style="margin-top:8px;"></div>
+    <div id="buscar-topbar-detalle" style="margin-top:12px;"></div>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
 <script src="../lib/api.js"></script>
+<script src="../lib/format.js"></script>
 <script src="../lib/matcherPush.js"></script>
 <script>
-"use strict";
-/* ── CAPTURA DE ERRORES VISIBLE ── */
-window.onerror=function(msg,src,line,col,error){
-  try{
-    const bar=document.getElementById('err-bar'),m=document.getElementById('err-msg');
-    if(bar&&m){bar.style.display='block';m.textContent='⚠ Error: '+msg+' (línea '+line+')';}
-  }catch(e){}
-  return false;
-};
-function safe(fn,label){try{return fn();}catch(e){try{const bar=document.getElementById('err-bar'),m=document.getElementById('err-msg');if(bar&&m){bar.style.display='block';m.textContent='⚠ '+(label||'')+': '+e.message;}}catch(_){}console.error(label,e);}}
-/* ── AUTH ── */
+'use strict';
 Api.installAuth();
+Api.guardBfcache();
 
-const LS_KEY='fusion_sku_v3';
+/* ═══════════════════════════════════════════════════════════════════════
+ * Estado de sesión / permisos
+ * ═══════════════════════════════════════════════════════════════════════ */
+var esAdmin = false;
+var push = MatcherPush.crear('/api/matcher/push-skus-pendientes');
 
-/* ── MOTOR ── */
-// El motor puro (norm/tsr/getCandidatos/etc.) vive en matcher-engine.js, compartido
-// con el Web Worker. Acá se usan por alias directo para no tocar el resto del archivo.
-const {EQUIV,COLORES,TALLE_RE,norm,toks,extraerAtributos,extraerAtributosWC,attrScore,lcsLen,ratio,tsr,intersecta,construirWC,ctDesdeApi,candidatosDeItem,djb2}=MatcherEngine;
+/* ═══════════════════════════════════════════════════════════════════════
+ * Utilidades generales
+ * ═══════════════════════════════════════════════════════════════════════ */
 
-/* ── ESTADO ── */
-let wcCatalogo=null,archivoML=null;
-let TODOS=[],TODOSmap=new Map();
-let decisiones={};   // clave -> {sku,wc_nombre,accion:'asignar'|'confirmar'|'omitir'}
-let decisionesEstaSesion=new Set(); // claves modificadas en esta sesión (para exportar solo cambios)
-let autoConfirmadas=new Set(); // claves confirmadas automáticamente por seller_sku (para revisar, H-09)
-let progresoImportado={};
-let filtro='all',busqueda='',activo=null,selCand={};
-let filtroEstadoPub='todas'; // todas | activa | pausada — filtro por estado de la publicación en ML
-let soloConStock=true; // tildado por defecto: oculta pausadas / sin stock (baja sobreventa)
-let fuenteEsApi=false; // el filtro "solo con stock" solo aplica cuando la fuente es la API de ML (no el Excel)
-
-function claveDe(item){return item.ml_item_id+'|'+(item.ml_variation_id||'');}
-function hoy(){return new Date().toISOString().slice(0,10);}
-function sc(s){return s>0.8?'sh':s>0.5?'sm':'sl';}
-function sl(s){return(s>0.8?'✓ ':s>0.5?'~ ':'? ')+Math.round(s*100)+'%';}
-function confColor(s){return s>=0.9?'var(--green)':s>=0.7?'var(--yellow)':'var(--red)';}
-function confLabel(s){return s>=0.9?'Confianza alta':s>=0.7?'Revisar':'Revisar';}
-
-/* ── DROPZONES ── */
-function setupDropzone(dzId,inpId,fileId,tipo){
-  const dz=document.getElementById(dzId),inp=document.getElementById(inpId),fileEl=document.getElementById(fileId);
-  inp.addEventListener('change',e=>{if(e.target.files[0])recibirArchivo(e.target.files[0],tipo,dz,fileEl);});
-  dz.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();dz.classList.add('dragover');});
-  dz.addEventListener('dragleave',e=>{if(!dz.contains(e.relatedTarget))dz.classList.remove('dragover');});
-  dz.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();dz.classList.remove('dragover');const f=e.dataTransfer.files[0];if(f)recibirArchivo(f,tipo,dz,fileEl);});
-}
-function recibirArchivo(file,tipo,dz,fileEl){
-  archivoML=file;
-  dz.classList.add('loaded');fileEl.classList.remove('hidden');fileEl.textContent='✓ '+file.name;
-  document.getElementById('btn-procesar').disabled=!archivoML;
-}
-document.getElementById('inp-prog').addEventListener('change',e=>{
-  const f=e.target.files[0];if(!f)return;
-  const reader=new FileReader();
-  reader.onload=ev=>{
-    try{
-      const p=JSON.parse(ev.target.result);
-      if(!p||typeof p!=='object'||Array.isArray(p))throw new Error('formato inválido');
-      progresoImportado=p;
-      document.getElementById('prog-import-info').textContent='✓ '+Object.keys(p).length+' decisiones cargadas';
-      document.getElementById('prog-import-info').style.color='var(--green)';
-    }catch(err){
-      progresoImportado={};
-      document.getElementById('prog-import-info').textContent='✗ '+err.message;
-      document.getElementById('prog-import-info').style.color='var(--red)';
-    }
-  };
-  reader.readAsText(f);
-});
-
-/* ── LECTURA ── */
-// leerWC removed: WC catalog loaded from API
-// SheetJS/xlsx pesa ~700KB minificado; se sacó del HTML (public/matcher/xlsx.min.js,
-// estático y cacheable) y se carga sólo si hace falta (respaldo por Excel — el flujo
-// normal por API nunca lo descarga).
-let _xlsxCargando=null;
-function cargarXLSX(){
-  if(typeof XLSX!=='undefined')return Promise.resolve();
-  if(_xlsxCargando)return _xlsxCargando;
-  _xlsxCargando=new Promise((res,rej)=>{
-    const s=document.createElement('script');
-    s.src='/herramientas/matcher/xlsx.min.js';
-    s.onload=()=>res();
-    s.onerror=()=>{_xlsxCargando=null;rej(new Error('No se pudo cargar xlsx.min.js'));};
-    document.head.appendChild(s);
-  });
-  return _xlsxCargando;
-}
-function leerML(file){
-  return cargarXLSX().then(()=>new Promise((res,rej)=>{
-    const reader=new FileReader();
-    reader.onload=e=>{
-      try{const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});const ws=wb.Sheets['Publicaciones']||wb.Sheets[wb.SheetNames[0]];if(!ws)throw new Error('No se encontró la hoja "Publicaciones"');res(XLSX.utils.sheet_to_json(ws,{header:1,defval:null}));}
-      catch(err){rej(err);}
-    };
-    reader.onerror=rej;reader.readAsArrayBuffer(file);
-  }));
+function announce(msg) {
+  var el = document.getElementById('aria-live');
+  el.textContent = '';
+  window.setTimeout(function () { el.textContent = msg; }, 30);
 }
 
-/* ── FETCH JSON ROBUSTO ──
-   Valida r.ok y que la respuesta sea JSON antes de parsear. Evita el clásico
-   "Unexpected token '<'" cuando nginx corta con una página HTML de error (504/502).
-   Devuelve {r,d}; el llamador decide según r.ok / r.status / d.ok. */
-async function fetchJson(url,opts){
-  let r;
-  try{ r=await fetch(url,opts); }
-  catch(e){ throw new Error('No se pudo contactar al servidor ('+((e&&e.message)||'red')+')'); }
-  const ct=r.headers.get('content-type')||'';
-  if(!ct.includes('application/json')){
-    if(r.status===504||r.status===502||r.status===0)
-      throw new Error('El servidor tardó demasiado en responder. La operación puede seguir en curso — esperá un momento y reintentá.');
-    throw new Error('Respuesta inesperada del servidor (HTTP '+r.status+')');
-  }
-  const d=await r.json().catch(()=>null);
-  return {r,d:d||{}};
+function parseCats(cj) {
+  if (Array.isArray(cj)) return cj;
+  if (typeof cj === 'string' && cj.trim()) { try { var a = JSON.parse(cj); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+  return [];
 }
+function catsDe(p) { return parseCats(p.categorias_json).map(function (c) { return String(c).trim(); }).filter(Boolean); }
 
-/* ── WC API ── */
-async function cargarWC(){
-  const {r,d}=await fetchJson('/herramientas/api/woo/catalogo');
-  if(!r.ok||!d.ok||!d.data)throw new Error('No se pudo cargar el catálogo WooCommerce (HTTP '+r.status+')');
-  wcCatalogo=d.data;
-  _wcSkusSet=null; // invalida el cache de validación de SKUs
-  document.getElementById('wc-status-title').textContent='✓ '+d.data.length.toLocaleString('es-AR')+' productos cargados';
-  document.getElementById('wc-status-hint').textContent='Catálogo WooCommerce · se actualiza automáticamente cada 15 min';
-  document.getElementById('btn-procesar').disabled=!archivoML;
-}
-async function cargarProgresoApi(){
-  try{
-    const {r,d}=await fetchJson('/herramientas/api/matcher/decisiones');
-    if(r.ok&&d.ok&&d.data){for(const k in d.data){if(!progresoImportado[k])progresoImportado[k]=d.data[k];}}
-  }catch(e){}
-}
-// H-03: avisa cuántas decisiones activas apuntan a publicaciones que ya no están en el
-// cache de ML (cerradas/borradas). No las borra — solo las hace visibles para revisión.
-async function chequearHuerfanos(){
-  const el=document.getElementById('huerfanos-aviso');
-  if(!el)return;
-  try{
-    const {r,d}=await fetchJson('/herramientas/api/matcher/huerfanos');
-    if(r.ok&&d.ok&&d.total>0){
-      el.textContent='⚠ '+d.total.toLocaleString('es-AR')+' mapeo(s) apuntan a publicaciones que ya no están activas/pausadas en ML (cerradas o borradas). No afectan el matcheo actual; revisalos si el sync marca errores.';
-      el.classList.remove('hidden');
-    }else{ el.classList.add('hidden'); }
-  }catch(e){/* silencioso: no es crítico */}
-}
-
-/* ── PROCESAR ── */
-async function procesar(){
-  document.getElementById('btn-procesar').disabled=true;
-  const pp=document.getElementById('progress-proc');pp.classList.remove('hidden');
-  const setP=(txt,pct)=>{document.getElementById('proc-text').textContent=txt;document.getElementById('proc-fill').style.width=(pct||0)+'%';};
-  try{
-    if(!wcCatalogo){setP('Cargando catálogo WooCommerce...',5);await cargarWC();}
-    setP('Leyendo MercadoLibre...',15);const mlRows=await leerML(archivoML);
-    setP('Analizando estructura...',20);
-    const {wcItems,indice,wcPorSku}=construirWC(wcCatalogo);
-    const {sinSku,conSkuValido}=construirML(mlRows,wcItems);
-    const items=[...sinSku,...conSkuValido];
-    if(items.length===0){alert('No hay publicaciones para revisar en este archivo.');resetLoader();return;}
-    setP('Procesando '+items.length+' publicaciones...',25);
-    const candArr=await computarCandidatos(items,wcItems,indice,(done)=>{
-      setP('Procesando '+done+'/'+items.length+'...',25+(done/items.length)*63);
+function jsonFetch(url, opts) {
+  return fetch(url, opts).then(function (r) {
+    return r.text().then(function (txt) {
+      var data = null;
+      try { data = txt ? JSON.parse(txt) : null; } catch (e) { /* respuesta no-JSON */ }
+      return { ok: r.ok, status: r.status, data: data };
     });
-    derivarEstado(items,candArr,wcPorSku);
-    setP('Recuperando progreso...',90);await cargarProgresoApi();cargarProgreso();
-    setP('¡Listo!',100);setTimeout(iniciarApp,300);
-  }catch(err){alert('Error: '+err.message);resetLoader();}
-}
-
-// El cache del matching de la fuente API ahora vive en el servidor (GET /candidatos lo
-// calcula y lo cachea por firma de los caches). Ya no se guarda un cache local en
-// IndexedDB: el cliente sólo pinta lo que devuelve el servidor.
-
-/* ── PROCESAR DESDE LA API DE ML ── */
-// Alcance elegido en el panel: 'all' (catálogo completo) o 'atencion' (solo sin
-// mapeo / a re-mapear). Ambos flujos (refrescar y "usar las ya traídas") lo respetan.
-function scopeSeleccionado(){
-  const el=document.querySelector('input[name="api-scope"]:checked');
-  return el?el.value:'all';
-}
-async function refrescarMLapi(){
-  const btn=document.getElementById('btn-api-refrescar');
-  const info=document.getElementById('api-status');
-  const scope=scopeSeleccionado();
-  if(btn)btn.disabled=true;
-  if(info){info.textContent=scope==='atencion'?'Trayendo las publicaciones que necesitan atención…':'Trayendo todas las publicaciones desde MercadoLibre… (puede tardar 1-3 min)';info.style.color='var(--muted)';}
-  try{
-    // El refresco es asíncrono: el POST devuelve 202 al toque (o 409 si ya hay uno en curso)
-    // y sondeamos el estado. Así el scan largo ya no choca el timeout de nginx (120s).
-    const {r,d}=await fetchJson('/herramientas/api/matcher/refrescar-ml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope})});
-    if(!(r.status===202||r.status===409||d.ok))throw new Error(d.error||'error del servidor');
-    const est=await sondearRefresco(info);
-    if(est.error)throw new Error(est.error);
-    const total=est.resultado?est.resultado.total:0;
-    if(scope==='atencion'&&total===0){
-      if(info){info.textContent='✓ No hay publicaciones pendientes de atención (sin mapeo / a re-mapear). ¡Todo al día!';info.style.color='var(--green)';}
-      if(btn)btn.disabled=false;return;
-    }
-    if(info){info.textContent='✓ '+total.toLocaleString('es-AR')+' publicaciones traídas. Procesando…';info.style.color='var(--green)';}
-    await procesarDesdeApi();
-  }catch(err){
-    if(info){info.textContent='✗ '+err.message;info.style.color='var(--red)';}
-    if(btn)btn.disabled=false;
-  }
-}
-// Sondea GET /refrescar-ml/estado hasta que running=false, mostrando progreso real.
-// Los errores transitorios de red no cortan el sondeo (el refresco sigue en el server).
-async function sondearRefresco(info){
-  for(;;){
-    await new Promise(res=>setTimeout(res,1500));
-    let est;
-    try{ const {d}=await fetchJson('/herramientas/api/matcher/refrescar-ml/estado'); est=d; }
-    catch(e){ continue; }
-    if(!est.ok){ continue; }
-    if(info&&est.running){
-      info.textContent=est.phase==='listando'
-        ?'Listando publicaciones en ML…'
-        :(est.total?('Trayendo '+est.done.toLocaleString('es-AR')+'/'+est.total.toLocaleString('es-AR')+' publicaciones…'):'Trayendo publicaciones…');
-      info.style.color='var(--muted)';
-    }
-    if(!est.running)return est;
-  }
-}
-// Pide GET /candidatos y maneja el 202 computing:true: si el servidor está calculando el
-// matching en frío (cache miss tras un restart), sondea cada 2.5s hasta que responde 200 con
-// los datos. Así el cruce completo (que puede tardar decenas de segundos) ya no choca el
-// proxy_read_timeout de nginx (120s) — mismo patrón que sondearRefresco para /refrescar-ml.
-async function pedirCandidatosConSondeo(scope,setP){
-  const url='/herramientas/api/matcher/candidatos?scope='+encodeURIComponent(scope);
-  const deadline=Date.now()+5*60*1000; // tope de sondeo: 5 min
-  let avisado=false;
-  for(;;){
-    let r,d;
-    // Un blip transitorio de red (502/504) durante el sondeo NO debe cortar todo: el
-    // cómputo sigue en el server. Reintentamos hasta el deadline (mismo patrón que sondearRefresco).
-    try{ ({r,d}=await fetchJson(url)); }
-    catch(e){
-      if(Date.now()>deadline)throw new Error('El cálculo del matching está tardando demasiado. Esperá un momento y reintentá.');
-      await new Promise(res=>setTimeout(res,2500));
-      continue;
-    }
-    if(r.status===200&&d&&d.ok&&Array.isArray(d.data))return d;
-    if(r.status===202&&d&&d.computing){
-      if(!avisado){setP&&setP('Calculando matching en el servidor… (puede tardar unos segundos)',40);avisado=true;}
-      if(Date.now()>deadline)throw new Error('El cálculo del matching está tardando demasiado. Esperá un momento y reintentá.');
-      await new Promise(res=>setTimeout(res,2500));
-      continue;
-    }
-    throw new Error((d&&d.error)||'No se pudo calcular el matching en el servidor');
-  }
-}
-async function procesarDesdeApi(){
-  const pp=document.getElementById('progress-proc');if(pp)pp.classList.remove('hidden');
-  const scope=scopeSeleccionado();
-  const setP=(txt,pct)=>{const t=document.getElementById('proc-text'),f=document.getElementById('proc-fill');if(t)t.textContent=txt;if(f)f.style.width=(pct||0)+'%';};
-  try{
-    // Fuente API: el matching se calcula ENTERO en el servidor (GET /candidatos), que lo
-    // cachea y lo sirve ya resuelto (candidatos + score + decisión sugerida). Antes cada
-    // dispositivo lo recalculaba acá con un Web Worker. El catálogo WC se carga igual para
-    // validar SKUs en la asignación manual (skuExisteEnWc). El modo Excel NO pasa por acá.
-    if(!wcCatalogo){setP('Cargando catálogo WooCommerce...',5);await cargarWC();}
-    setP('Calculando matching en el servidor...',30);
-    const d=await pedirCandidatosConSondeo(scope,setP);
-    if(d.data.length===0){
-      if(scope==='atencion'){
-        const info=document.getElementById('api-status');
-        if(info){info.textContent='✓ No hay publicaciones pendientes de atención (sin mapeo / a re-mapear). ¡Todo al día!';info.style.color='var(--green)';}
-        resetLoader();return;
-      }
-      throw new Error('No hay publicaciones en el cache. Probá "Traer desde API de ML" primero.');
-    }
-    // El servidor ya devolvió los ítems resueltos (mismo shape que producía derivarEstado):
-    // solo hay que poblar el estado de la UI y derivar lo local (progreso, auto-confirmados).
-    setP('Cargando resultados...',85);
-    TODOS=d.data;TODOSmap=new Map();TODOS.forEach(it=>TODOSmap.set(it.idx,it));
-    setP('Recuperando progreso...',90);await cargarProgresoApi();cargarProgreso();
-    const nAuto=autoConfirmarSellerSku();
-    const info=document.getElementById('api-status');
-    if(info&&nAuto>0){info.textContent='✓ '+nAuto.toLocaleString('es-AR')+' publicaciones auto-confirmadas por su SKU de ML (revisalas si querés). El resto están listas para matchear.';info.style.color='var(--green)';}
-    setP('¡Listo!',100);setTimeout(iniciarApp,300);
-  }catch(err){alert('Error: '+err.message);resetLoader();}
-}
-// Auto-confirma publicaciones cuyo SELLER_SKU (traído de ML) ya es un FB-xxx que
-// existe en WC — es el SKU que el propio vendedor declaró en esa publicación, así
-// que es autoritativo. No pisa decisiones ya tomadas a mano.
-function autoConfirmarSellerSku(){
-  let n=0;
-  for(const item of TODOS){
-    const clave=claveDe(item);
-    if(item._desde_api&&item.modo==='verificar'&&item.sku_actual&&!decisiones[clave]){
-      const c0=item.candidatos&&item.candidatos[0];
-      decisiones[clave]={sku:item.sku_actual,wc_nombre:(c0&&c0.wc_nombre)||item.sku_actual,accion:'confirmar'};
-      autoConfirmadas.add(clave);
-      n++;
-    }
-  }
-  if(n>0)guardarLS();
-  return n;
-}
-
-/* ── CONSTRUIR ML ── */
-function construirML(rows,wcItems){
-  const headers=rows[0]||[];const idx={};headers.forEach((h,i)=>{if(h!==null)idx[String(h)]=i;});
-  const dataRows=rows.slice(5).filter(r=>r&&r.some(c=>c!==null));
-  const wcSkus=new Set(wcItems.map(w=>w.sku));
-  let tit='';const sinSku=[],conSkuValido=[];
-  for(const r of dataRows){
-    const itemId=r[idx['ITEM_ID']],varId=r[idx['VARIATION_ID']],sku=r[idx['SKU']];
-    const title=r[idx['TITLE']],variations=r[idx['VARIATIONS']],status=r[idx['STATUS']];
-    if(itemId===null||itemId===undefined)continue;
-    if(title!==null&&String(title).trim()&&String(title).trim()!=='nan')tit=String(title).trim();
-    const esVar=varId!==null&&varId!==undefined&&String(varId).trim()!=='';
-    const tieneSku=sku!==null&&String(sku).trim()&&String(sku)!=='nan';
-    const varStr=variations!==null?String(variations):'';
-    const esSimple=!esVar&&varStr.trim()!=='-';
-    const debeSku=esSimple||esVar;
-    if(!debeSku)continue;
-    const skuStr=tieneSku?String(sku).trim():'';
-    const esFbNum=/^FB-\d+$/.test(skuStr);
-    const existeEnWc=wcSkus.has(skuStr);
-    const base={ml_item_id:String(itemId),ml_variation_id:esVar?String(varId).replace(/\.0$/,''):'',ml_title:tit||'(sin título)',ml_variations:varStr&&varStr!=='-'&&varStr!=='nan'?varStr:'',ml_status:status?String(status):'',ml_es_variante:esVar};
-    if(!tieneSku){sinSku.push(base);}
-    else if(esFbNum&&existeEnWc){conSkuValido.push({...base,sku_actual:skuStr});}
-    // SKU no-FB o no existe → ignorar
-  }
-  return{sinSku,conSkuValido};
-}
-
-// La fuente API ya no arma los ítems ML en el cliente: el servidor los construye y
-// resuelve (ver lib/matcherResolver.js → construirMLdesdeApi/derivarEstadoApi) y los
-// devuelve ya listos por GET /candidatos. El modo Excel usa construirML (más arriba).
-
-/* ── MATCHING ── */
-// El matching se separa en dos pasos:
-//  (i)  computarCandidatos: lo CARO — índice invertido + scoring LCS/tsr por publicación
-//       contra el catálogo WC. Sólo depende de título/atributos, NO de seller_sku. Es lo
-//       que se cachea en IndexedDB y lo que se manda al Web Worker.
-//  (ii) derivarEstado: lo BARATO — a partir de candidatos ya calculados + el seller_sku
-//       fresco de cada publicación, arma modo (asignar/verificar), sku_actual,
-//       score_confianza y reordena "actual primero". Se corre siempre, aunque los
-//       candidatos vengan del cache, así el estado nunca queda desactualizado.
-function computarCandidatos(items,wcItems,indice,onProgress){
-  return new Promise(resolve=>{
-    const total=items.length;
-    if(total===0){resolve([]);return;}
-    if(typeof Worker!=='undefined'){
-      try{
-        const worker=new Worker('/herramientas/matcher/matcher-worker.js');
-        let liquidado=false;
-        worker.onmessage=function(e){
-          const msg=e.data||{};
-          if(msg.type==='progress'){ if(onProgress)onProgress(msg.done); }
-          else if(msg.type==='done'){ liquidado=true;worker.terminate();resolve(msg.candidatos); }
-          else if(msg.type==='error'){ liquidado=true;worker.terminate();fallback(); }
-        };
-        worker.onerror=function(){ if(!liquidado){liquidado=true;worker.terminate();fallback();} };
-        worker.postMessage({wcItems,indice,pubs:items});
-        return;
-      }catch(e){ /* sin soporte de Worker en este contexto → fallback */ }
-    }
-    fallback();
-    function fallback(){
-      let i=0;const CHUNK=50;const out=new Array(total);
-      function paso(){
-        const fin=Math.min(i+CHUNK,total);
-        for(;i<fin;i++)out[i]=candidatosDeItem(items[i],wcItems,indice);
-        if(onProgress)onProgress(i);
-        if(i<total)setTimeout(paso,0);else resolve(out);
-      }
-      paso();
-    }
+  }).catch(function (err) {
+    return { ok: false, status: 0, data: null, error: (err && err.message) || 'Fallo de red' };
   });
 }
-function derivarEstado(items,candidatosArr,wcPorSku){
-  TODOS=[];TODOSmap=new Map();
-  for(let i=0;i<items.length;i++){
-    const ml=items[i];
-    let candidatos=candidatosArr[i]||[];
-    let modo,skuActual=null,scoreConfianza=null,wcActual=null;
-    if(ml.sku_actual){
-      modo='verificar';skuActual=ml.sku_actual;
-      const wc=wcPorSku[skuActual];
-      const tn=norm(ml.ml_title);
-      scoreConfianza=wc?+tsr(tn,wc.baseNorm).toFixed(3):0;
-      const posAct=candidatos.findIndex(c=>c.wc_sku===skuActual);
-      if(posAct>0){candidatos=[candidatos[posAct],...candidatos.filter((_,ii)=>ii!==posAct)];}
-      else if(posAct<0&&wc){
-        const ct=ml._ct||(ml.ml_es_variante?extraerAtributos(ml.ml_variations):{colores:new Set(),talles:new Set()});
-        const cOk=ct.colores.size?intersecta(ct.colores,wc.colorToks):null;
-        const tOk=ct.talles.size?intersecta(ct.talles,wc.talleToks):null;
-        candidatos=[{score:scoreConfianza,color_ok:cOk,talle_ok:tOk,wc_sku:skuActual,wc_nombre:wc.nombre,wc_tipo:wc.tipo,wc_color:wc.color,wc_talle:wc.talle,wc_img:wc.img},...candidatos.slice(0,7)];
-      }
-      wcActual=wc?{nombre:wc.nombre,color:wc.color,talle:wc.talle,img:wc.img}:null;
-    } else {
-      modo='asignar';
-    }
-    const item={idx:i,modo,sku_actual:skuActual,score_confianza:scoreConfianza,wc_actual:wcActual,...ml,candidatos};
-    TODOS.push(item);TODOSmap.set(i,item);
+
+function toast(mensaje, tipo, onDeshacer) {
+  var wrap = document.getElementById('toast-wrap');
+  var el = document.createElement('div');
+  el.className = 'toast ' + (tipo || 'ok');
+  el.setAttribute('role', 'status');
+  var icono = tipo === 'error' ? '✕' : tipo === 'pendiente' ? '↻' : tipo === 'neutro' ? 'ℹ' : '✓';
+  el.innerHTML = '<span class="toast-txt"><span aria-hidden="true">' + icono + '</span>' + esc(mensaje) + '</span>';
+  if (onDeshacer) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Deshacer';
+    btn.addEventListener('click', function () { onDeshacer(); el.remove(); });
+    el.appendChild(btn);
   }
+  wrap.appendChild(el);
+  announce(mensaje);
+  window.setTimeout(function () { if (el.parentNode) el.remove(); }, onDeshacer ? 8000 : 4500);
 }
 
-/* ── PERSISTENCIA ── */
-function normalizarDecision(d){
-  // Retrocompat: progreso viejo puede no tener 'accion' o tener otra forma
-  if(!d||typeof d!=='object')return null;
-  if(d.accion)return d; // ya es v3
-  // v2: tenía {sku, wc_nombre} sin accion → era una asignación
-  if(d.sku===null||d.sku===undefined||d.sku==='')return {sku:null,wc_nombre:null,accion:'omitir'};
-  return {sku:d.sku,wc_nombre:d.wc_nombre||'(importado)',accion:'asignar'};
+/* Botón admin-only: si no es admin, queda disabled + candado visible al lado (nunca oculto). */
+function botonAdminHtml(clasesExtra, dataAttrs, texto) {
+  var disabled = esAdmin ? '' : 'disabled aria-disabled="true"';
+  var html = '<button type="button" class="' + clasesExtra + '" ' + dataAttrs + ' ' + disabled + '>' + esc(texto) + '</button>';
+  if (!esAdmin) html += '<span class="lock-nota">🔒 Solo administradores</span>';
+  return html;
 }
-function cargarProgreso(){
-  decisiones={};
-  let guardado={};
-  // Probar la clave actual y claves de versiones anteriores
-  for(const key of [LS_KEY,'fusion_sku_v2','fusion_sku_matcher']){
-    try{const raw=localStorage.getItem(key);if(raw){const obj=JSON.parse(raw);if(obj&&typeof obj==='object'&&Object.keys(obj).length){guardado=obj;break;}}}catch(e){}
-  }
-  const fuente=Object.keys(progresoImportado).length?progresoImportado:guardado;
-  const validas=new Set(TODOS.map(claveDe));
-  let cargadas=0,descartadas=0;
-  for(const k in fuente){
-    if(validas.has(k)){const nd=normalizarDecision(fuente[k]);if(nd){decisiones[k]=nd;cargadas++;}}
-    else descartadas++;
-  }
-  // Aviso visible si había progreso pero nada matcheó (señal de claves incompatibles)
-  if(Object.keys(fuente).length>0&&cargadas===0){
-    try{const bar=document.getElementById('err-bar'),m=document.getElementById('err-msg');
-      if(bar&&m){bar.style.display='block';bar.style.background='var(--yellow)';
-        m.textContent='⚠ Había '+Object.keys(fuente).length+' decisiones guardadas pero ninguna coincide con este archivo. ¿Subiste el mismo Excel de ML? El progreso se guarda por ITEM_ID+VARIATION_ID.';}}catch(e){}
-  } else if(descartadas>0){
-    console.log('Progreso: '+cargadas+' cargadas, '+descartadas+' descartadas (de otro archivo)');
-  }
-}
-let _guardarServidorTimer=null;
-let _saveReintentos=0;
-let _saveReintentoTimer=null;
-// Indicador de estado de guardado al servidor: 'guardado' | 'pendiente' | 'error'.
-function setSaveInd(estado){
-  const ind=document.getElementById('autosave-ind');
-  if(!ind)return;
-  ind.classList.remove('hidden');
-  if(estado==='guardado'){ind.textContent='✓ guardado';ind.style.color='var(--green)';setTimeout(()=>ind.classList.add('hidden'),2000);}
-  else if(estado==='pendiente'){ind.textContent='⟳ guardando…';ind.style.color='var(--muted)';}
-  else if(estado==='error'){ind.textContent='✗ sin guardar (reintentando)';ind.style.color='var(--red)';}
-}
-function guardarLS(){
-  // localStorage es instantáneo (seguridad ante recarga). El POST al servidor con
-  // TODAS las decisiones es lo pesado, así que se DEBOUNCEA: se manda 1,2s después
-  // de la última decisión, no en cada clic. Antes esto ralentizaba el matcher.
-  try{localStorage.setItem(LS_KEY,JSON.stringify(decisiones));}catch(e){}
-  setSaveInd('pendiente');
-  if(_guardarServidorTimer)clearTimeout(_guardarServidorTimer);
-  _guardarServidorTimer=setTimeout(guardarEnServidor,1200);
-}
-// Persiste TODAS las decisiones en el servidor. Si falla, reintenta con backoff: el dato
-// ya está en localStorage, así que nunca se pierde entre reintentos (arregla el
-// fire-and-forget que perdía mapeos en silencio al fallar el POST).
-async function guardarEnServidor(){
-  if(_saveReintentoTimer){clearTimeout(_saveReintentoTimer);_saveReintentoTimer=null;}
-  try{
-    const {r,d}=await fetchJson('/herramientas/api/matcher/decisiones',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decisiones})});
-    if(!r.ok||!d.ok)throw new Error('server');
-    _saveReintentos=0;setSaveInd('guardado');
-  }catch(e){
-    _saveReintentos=Math.min(_saveReintentos+1,6);
-    setSaveInd('error');
-    const espera=Math.min(1500*Math.pow(2,_saveReintentos-1),60000);
-    _saveReintentoTimer=setTimeout(guardarEnServidor,espera);
-  }
-}
-function exportarProgreso(){
-  const blob=new Blob([JSON.stringify(decisiones,null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);const a=document.createElement('a');
-  a.href=url;a.download='fusion_progreso_'+hoy()+'.json';a.click();URL.revokeObjectURL(url);
-}
-// El push de SKUs a ML corre en el SERVIDOR (cron cada 10 min + este botón para
-// disparar una corrida ahora). El POST devuelve 202 al toque y sondeamos
-// GET /push-skus-pendientes/estado hasta que termina — mismo patrón que sondearRefresco.
-// Cerrar la pestaña YA NO corta el trabajo: sigue en el server.
-const pushCliente=MatcherPush.crear('/herramientas/api/matcher/push-skus-pendientes');
-async function escribirSkusEnMl(){
-  let pend=0,activas=0,pausadas=0;
-  try{const d=await pushCliente.contar();pend=d.pendientes||0;activas=d.activas||0;pausadas=d.pausadas||0;}catch(e){}
-  if(pend===0){mostrarEstadoPushAuto('✓ ML ya tiene todos los SKUs de tus decisiones al día.','var(--green)');return;}
-  if(!confirm('Hay '+pend.toLocaleString('es-AR')+' SKUs pendientes de escribir en ML ('+activas.toLocaleString('es-AR')+' activas, '+pausadas.toLocaleString('es-AR')+' pausadas).\n\nEsta corrida escribe un lote ahora; el resto lo sigue el automático del servidor cada 10 minutos, sin que tengas que volver a tocar nada. Corre en el servidor — podés cerrar la pestaña. ¿Continuar?'))return;
-  try{
-    await pushCliente.iniciar();
-  }catch(err){
-    mostrarEstadoPushAuto('✗ '+err.message,'var(--red)');
-    return;
-  }
-  sondearPushAuto();
-}
-// Sondea el progreso (propio o del cron) vía lib/matcherPush.js. Si al abrir la página ya
-// hay una corriendo, se retoma el sondeo desde chequearPushAutoAlAbrir().
-async function sondearPushAuto(){
-  if(pushCliente.estaSondeando())return;
-  const btn=document.getElementById('btn-push-ml');
-  if(btn){btn.disabled=true;}
-  let terminoConMensaje=false;
-  await pushCliente.sondear({
-    onRunning:function(est){
-      mostrarEstadoPushAuto('Corre en el servidor — podés cerrar la pestaña. Escritos '+(est.escritos||0).toLocaleString('es-AR')+' · restantes '+(est.restantes||0).toLocaleString('es-AR')+'…','var(--muted)');
-    },
-    onDone:function(est){
-      // Mostrar resultado final y los fallos si los hay. El mensaje ya incluye los
-      // pendientes restantes, así que NO lo pisamos con actualizarEstadoPendientesPush().
-      if(est.error){mostrarEstadoPushAuto('✗ '+est.error,'var(--red)');}
-      else mostrarFallosPushMl(est.fallos||[],est.escritos||0,est.restantes||0);
-      terminoConMensaje=true;
-    }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Router por hash: #/, #/cola/MARCA, #/historial, #/publicar, #/multipub,
+ * #/solo-ml, #/sin-stock, #/problemas, #/huerfanos, #/omitidas, #/ml-wc
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var VISTAS = ['entrada', 'cola', 'historial', 'publicar', 'multipub', 'solo-ml', 'sin-stock', 'problemas', 'huerfanos', 'omitidas', 'ml-wc'];
+function mostrarVista(nombre) {
+  VISTAS.forEach(function (v) {
+    document.getElementById('view-' + v).classList.toggle('active', v === nombre);
   });
-  if(btn)btn.disabled=false;
-  if(!terminoConMensaje)actualizarEstadoPendientesPush();
-}
-// Estado siempre visible: pendientes totales (activas/pausadas) según /count. Se llama al
-// abrir la página y después de cada corrida, para que el usuario nunca dependa de haber
-// tocado el botón para saber qué falta.
-async function actualizarEstadoPendientesPush(){
-  try{
-    const d=await pushCliente.contar();
-    if(!d||d.pendientes===undefined)return;
-    if(d.pendientes===0){mostrarEstadoPushAuto('✓ ML está al día con las decisiones tomadas.','var(--green)');return;}
-    mostrarEstadoPushAuto('Automático: '+d.pendientes.toLocaleString('es-AR')+' SKUs pendientes de escribir en ML ('+(d.activas||0).toLocaleString('es-AR')+' activas, '+(d.pausadas||0).toLocaleString('es-AR')+' pausadas'+(d.en_espera?(', '+d.en_espera.toLocaleString('es-AR')+' en espera por reintento)'):')'),'var(--muted)');
-  }catch(e){/* silencioso: no hay nada crítico que reportar acá */}
-}
-function mostrarEstadoPushAuto(texto,color){
-  const el=document.getElementById('push-auto-status');
-  if(el){el.textContent=texto;el.style.color=color||'var(--muted)';}
-}
-// Al abrir la página: si el cron o una corrida manual anterior está corriendo, retomar el
-// sondeo (para que el progreso siga avanzando aunque se haya recargado a mitad de camino).
-async function chequearPushAutoAlAbrir(){
-  try{
-    const est=await pushCliente.estado();
-    if(est&&est.ok&&est.running){sondearPushAuto();return;}
-  }catch(e){}
-  actualizarEstadoPendientesPush();
-}
-// Muestra qué publicaciones NO se pudieron escribir en ML y por qué, con motivo y
-// próximo reintento (backoff exponencial por publicación, tope 24h — lo calcula el server).
-// Reusa la barra de errores (#err-bar).
-function mostrarFallosPushMl(fallos,totalEscritos,restantes){
-  mostrarEstadoPushAuto('✓ '+totalEscritos.toLocaleString('es-AR')+' SKUs escritos en ML'+(restantes>0?(' · '+restantes.toLocaleString('es-AR')+' quedan pendientes (el automático los reintenta)'):'')+'.',restantes>0?'var(--yellow)':'var(--green)');
-  if(!fallos.length)return;
-  const bar=document.getElementById('err-bar'),m=document.getElementById('err-msg');
-  if(!bar||!m)return;
-  const detalle=fallos.slice(0,8).map(f=>{
-    const motivo=f.ultimo_error||f.error||'motivo desconocido';
-    const reintento=f.proximo_intento_en?' (reintenta '+new Date(f.proximo_intento_en).toLocaleString('es-AR')+')':'';
-    return (f.sku||'?')+': '+motivo+reintento;
-  }).join(' · ');
-  const extra=fallos.length>8?' (+'+(fallos.length-8)+' más)':'';
-  bar.style.display='block';bar.style.background='var(--yellow)';
-  m.textContent='⚠ '+fallos.length+' publicaciones no se pudieron escribir en ML — '+detalle+extra;
+  actualizarChipsActivo(nombre);
 }
 
-/* ── FILTROS ── */
-// Mientras haya ítems provisionales (candidatos aún calculándose en el servidor, ver
-// itemProvisionalDesdePublicacion), cualquier contador que dependa de d.candidatos o
-// d.score_confianza mentiría (0 candidatos / null score en el 100% de las filas). Esos
-// filtros muestran "calculando…" en vez de un número falso hasta que completarCandidatosDeFondo
-// reemplace TODOS con los ítems resueltos.
-function hayProvisionales(){return TODOS.some(d=>d.provisional);}
-const FDEFS=[
-  {f:'all',       label:()=>`Todos (${TODOS.length})`},
-  {f:'asignar',   label:()=>`Asignar SKU (${TODOS.filter(d=>d.modo==='asignar').length})`,cls:''},
-  {f:'verificar', label:()=>`Verificar (${TODOS.filter(d=>d.modo==='verificar').length})`,cls:'mode-verificar'},
-  {f:'revisar',   label:()=>hayProvisionales()?'Conf. baja (calculando…)':`Conf. baja (${TODOS.filter(d=>d.modo==='verificar'&&(d.score_confianza||0)<0.7).length})`,cls:'mode-verificar'},
-  {f:'perfecto',  label:()=>hayProvisionales()?'Color+Talle ✓ (calculando…)':`Color+Talle ✓ (${TODOS.filter(esPerfecto).length})`,cls:''},
-  {f:'pending',   label:()=>`Pendientes sin decisión (${TODOS.filter(d=>!(claveDe(d) in decisiones)).length})`},
-  {f:'sin_candidato', label:()=>hayProvisionales()?'Sin candidato (calculando…)':`Sin candidato (${TODOS.filter(d=>!d.candidatos.length).length})`,cls:''},
-  {f:'autoconf',  label:()=>`Auto-confirmadas (${autoConfirmadas.size})`,cls:'mode-verificar',soloSi:()=>autoConfirmadas.size>0},
-];
-function esPerfecto(d){const c=d.candidatos[0];return d.ml_es_variante&&c&&c.color_ok&&c.talle_ok;}
-function getFiltered(){
-  return TODOS.filter(d=>{
-    let ok=filtro==='all'?true:
-      filtro==='asignar'?d.modo==='asignar':
-      filtro==='verificar'?d.modo==='verificar':
-      filtro==='revisar'?d.modo==='verificar'&&(d.score_confianza||0)<0.7:
-      filtro==='perfecto'?esPerfecto(d):
-      filtro==='pending'?!(claveDe(d) in decisiones):
-      filtro==='autoconf'?autoConfirmadas.has(claveDe(d)):
-      filtro==='sin_candidato'?!d.candidatos.length:true;
-    // Filtro por estado de la publicación en ML (se combina en AND con el filtro de modo)
-    if(ok&&filtroEstadoPub!=='todas'){const st=(d.ml_status||'').toLowerCase();ok=filtroEstadoPub==='activa'?st==='active':st==='paused';}
-    // "Solo activas con stock": oculta las marcadas sinStock por el backend (pausadas o stock ≤ 0)
-    if(ok&&soloConStock&&d.ml_sin_stock===true)ok=false;
-    if(ok&&busqueda){const q=busqueda.toLowerCase();ok=d.ml_title.toLowerCase().includes(q)||d.ml_variations.toLowerCase().includes(q);}
-    return ok;
-  }).sort((a,b)=>{
-    // 1° activas primero
-    const aA=a.ml_status.toLowerCase()==='active'?1:0,bA=b.ml_status.toLowerCase()==='active'?1:0;
-    if(bA!==aA)return bA-aA;
-    // 2° mayor nivel de match del candidato #1
-    const ca=a.candidatos[0],cb=b.candidatos[0];
-    const am=ca?attrScore(ca.color_ok)+attrScore(ca.talle_ok):0;
-    const bm=cb?attrScore(cb.color_ok)+attrScore(cb.talle_ok):0;
-    if(bm!==am)return bm-am;
-    // 3° mayor score de texto
-    return (cb?cb.score:0)-(ca?ca.score:0);
+function router() {
+  var hash = window.location.hash.replace(/^#\/?/, '');
+  var partes = hash.split('/').filter(Boolean);
+  if (!partes.length) { mostrarVista('entrada'); cargarEntrada(); return; }
+  var seccion = partes[0];
+  if (seccion === 'cola' && partes[1]) {
+    mostrarVista('cola');
+    cargarCola(decodeURIComponent(partes[1]));
+  } else if (seccion === 'historial') {
+    mostrarVista('historial'); cargarHistorial();
+  } else if (seccion === 'publicar') {
+    mostrarVista('publicar'); cargarPublicar();
+  } else if (seccion === 'multipub') {
+    mostrarVista('multipub'); cargarMultipub();
+  } else if (seccion === 'solo-ml') {
+    mostrarVista('solo-ml'); cargarSoloMl();
+  } else if (seccion === 'sin-stock') {
+    mostrarVista('sin-stock'); cargarSinStock();
+  } else if (seccion === 'problemas') {
+    mostrarVista('problemas'); cargarProblemas();
+  } else if (seccion === 'huerfanos') {
+    mostrarVista('huerfanos');
+  } else if (seccion === 'omitidas') {
+    mostrarVista('omitidas');
+  } else if (seccion === 'ml-wc') {
+    mostrarVista('ml-wc');
+  } else {
+    mostrarVista('entrada'); cargarEntrada();
+  }
+}
+window.addEventListener('hashchange', router);
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Avisos: unificación (?aviso=unificado) y primera visita (localStorage)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+(function initAvisos() {
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('aviso') === 'unificado') {
+    document.getElementById('banner-aviso').classList.remove('hidden');
+  }
+  document.getElementById('banner-aviso-cerrar').addEventListener('click', function () {
+    document.getElementById('banner-aviso').classList.add('hidden');
+    // Limpia el query param para que un refresh no lo vuelva a mostrar.
+    var url = new URL(window.location.href);
+    url.searchParams.delete('aviso');
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
   });
-}
-function setFilter(btn){
-  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');filtro=btn.dataset.f;renderList();
-  if(activo!==null&&!getFiltered().find(i=>i.idx===activo)){activo=null;document.getElementById('detail-panel').innerHTML=emptyState();}
-}
-let _searchTimer=null;
-function setSearch(v){
-  busqueda=v;
-  clearTimeout(_searchTimer);
-  _searchTimer=setTimeout(renderList,200);
-}
 
-/* ── RENDER LISTA ── */
-function renderList(){
-  const items=getFiltered();
-  document.getElementById('list-panel').innerHTML=items.map(item=>{
-    const s=item.candidatos[0]?item.candidatos[0].score:0;
-    const k=claveDe(item);
-    const dec=decisiones[k];
-    const est=dec?(dec.accion==='omitir'?'skipped':dec.accion==='confirmar'?'confirmed':'approved'):'';
-    const act=activo===item.idx?'active':'';
-    const modoC=item.modo==='verificar'?'modo-verificar':'';
-    const modoBadge=item.modo==='verificar'?`<span class="item-modo">verificar</span>`:'';
-    return `<div class="list-item ${est} ${act} ${modoC}" onclick="seleccionar(${item.idx})">
-      <div class="item-title">${esc(item.ml_title)}${badgeEstado(item)}</div>
-      <div class="item-vars">${esc(item.ml_variations||'(simple)')}</div>
-      <div class="item-meta">
-        <span class="item-score ${sc(s)}">${sl(s)}</span>
-        ${modoBadge}
-        ${item.modo==='verificar'&&item.score_confianza!==null?`<span style="font-size:10px;color:${confColor(item.score_confianza)}">${Math.round(item.score_confianza*100)}% conf</span>`:''}
-      </div>
-    </div>`;
-  }).join('');
-  if(activo!==null){const el=document.querySelector('.list-item.active');if(el)el.scrollIntoView({block:'nearest'});}
-}
-function emptyState(){return `<button type="button" class="btn-volver-lista" onclick="mostrarPanelMobile('list')">← Ver lista</button><div class="empty-state"><span style="font-size:32px">←</span><span>Seleccioná una publicación</span></div>`;}
-function badge(ok,label){
-  if(ok===null||ok===undefined)return `<span class="attr-badge attr-neutral">${esc(label)}</span>`;
-  return ok?`<span class="attr-badge attr-ok">✓ ${esc(label)}</span>`:`<span class="attr-badge attr-no">✗ ${esc(label)}</span>`;
-}
-// Badge del estado de la publicación en ML. Los ítems del path Excel no traen
-// ml_status (queda '') → no se muestra badge.
-function badgeEstado(item){
-  const st=(item.ml_status||'').toLowerCase();
-  if(!st)return '';
-  const sub=(item.ml_sub_status||'').toLowerCase();
-  const stl='display:inline-block;padding:1px 7px;border-radius:20px;font-size:10px;font-weight:600;vertical-align:middle;margin-left:6px';
-  const b=(hex,txt)=>`<span style="${stl};background:${hex}22;color:${hex};border:1px solid ${hex}44">${txt}</span>`;
-  let estado;
-  if(st==='active')estado=b('#34D399','● Activa');
-  else if(st==='paused'&&sub.includes('out_of_stock'))estado=b('#FBBF24','■ Pausada · sin stock');
-  else if(st==='paused')estado=b('#8493B0','■ Pausada');
-  else estado=b('#8493B0',esc(st));
-  // Badge extra de catálogo: son las que "no aparecen" al buscar por código en el panel de ML.
-  const cat=item.ml_catalogo?b('#A78BFA','📖 Catálogo'):'';
-  return estado+cat;
-}
-function setFilterEstado(v){filtroEstadoPub=v;
-  // "Solo pausadas" + "solo con stock" darían lista vacía (las pausadas son sinStock por
-  // definición): al pedir pausadas destildamos el checkbox para no mostrar un falso vacío.
-  if(v==='pausada'&&soloConStock){soloConStock=false;const cb=document.querySelector('.filtro-stock input');if(cb)cb.checked=false;}
-  renderList();if(activo!==null&&!getFiltered().find(i=>i.idx===activo)){activo=null;document.getElementById('detail-panel').innerHTML=emptyState();}}
-function setSoloConStock(v){soloConStock=v;renderList();if(activo!==null&&!getFiltered().find(i=>i.idx===activo)){activo=null;document.getElementById('detail-panel').innerHTML=emptyState();}}
-
-/* ── RENDER DETALLE ── */
-function renderDetail(){
-  if(activo===null)return;
-  const item=TODOSmap.get(activo);if(!item){document.getElementById('detail-panel').innerHTML=emptyState();return;}
-  const k=claveDe(item);const ci=selCand[activo]||0;const dec=decisiones[k];
-  const filt=getFiltered();const pos=filt.findIndex(i=>i.idx===activo);
-  const navInfo=pos>=0?`${pos+1} de ${filt.length} en este filtro`:'';
-  const esVerificar=item.modo==='verificar';
-
-  let estadoHtml='';
-  if(dec){
-    if(dec.accion==='omitir') estadoHtml=`<div class="estado-card estado-omitido"><span>— Omitido</span><button class="btn-deshacer" onclick="deshacer()">↩ Deshacer</button></div>`;
-    else if(dec.accion==='confirmar') estadoHtml=`<div class="estado-card estado-confirmado"><span>✓ Confirmado — <strong style="color:var(--accent2);font-family:monospace">${esc(dec.sku)}</strong></span><button class="btn-deshacer" onclick="deshacer()">↩ Deshacer</button></div>`;
-    else estadoHtml=`<div class="estado-card estado-aprobado"><span>✓ Asignado — <strong style="color:var(--green);font-family:monospace">${esc(dec.sku)}</strong> → ${esc(dec.wc_nombre)}</span><button class="btn-deshacer" onclick="deshacer()">↩ Deshacer</button></div>`;
+  var YA_VISTO = 'matcher_bienvenida_vista';
+  if (!window.localStorage.getItem(YA_VISTO)) {
+    document.getElementById('banner-bienvenida').classList.remove('hidden');
   }
+  document.getElementById('banner-bienvenida-cerrar').addEventListener('click', function () {
+    document.getElementById('banner-bienvenida').classList.add('hidden');
+    window.localStorage.setItem(YA_VISTO, '1');
+  });
+})();
 
-  // Tarjeta SKU actual (solo en modo verificar)
-  let skuActualHtml='';
-  if(esVerificar&&item.sku_actual){
-    const conf=item.score_confianza||0;
-    const wca=item.wc_actual;
-    const img=wca&&wca.img?`<img class="sku-actual-img" src="${esc(wca.img)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy"><div class="sku-actual-img-ph" style="display:none">sin<br>img</div>`:`<div class="sku-actual-img-ph">sin<br>img</div>`;
-    skuActualHtml=`
-      <div class="section-label">SKU actualmente cargado en ML</div>
-      <div class="sku-actual-card">
-        ${img}
-        <div class="sku-actual-body">
-          <div class="sku-actual-label">SKU actual</div>
-          <div class="sku-actual-sku">${esc(item.sku_actual)}</div>
-          <div class="sku-actual-nombre">${esc(wca?wca.nombre:'(producto no encontrado en WC)')}</div>
-          ${wca?`<span class="conf-badge" style="background:${confColor(conf)}22;color:${confColor(conf)};border:1px solid ${confColor(conf)}44">${Math.round(conf*100)}% confianza</span>`:''}
-        </div>
-      </div>`;
+/* ═══════════════════════════════════════════════════════════════════════
+ * Selector de dirección (solo Sin publicación funciona en esta entrega)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+document.getElementById('dir-ml-wc').addEventListener('click', function () {
+  window.location.hash = '#/ml-wc';
+});
+document.getElementById('dir-wc-ml').addEventListener('click', function () {
+  if (window.location.hash.replace(/^#\/?/, '').split('/')[0] === 'ml-wc' || !window.location.hash || window.location.hash === '#/') {
+    window.location.hash = '#/';
   }
-
-  const candsHtml=item.candidatos.map((c,i)=>{
-    const esActual=esVerificar&&c.wc_sku===item.sku_actual;
-    const img=c.wc_img?`<img class="cand-img" src="${esc(c.wc_img)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy"><div class="cand-img-ph" style="display:none">sin<br>img</div>`:`<div class="cand-img-ph">sin<br>img</div>`;
-    const attrs=item.ml_es_variante
-      ?`<div class="cand-attrs">${badge(c.color_ok,'Color: '+(c.wc_color||'—'))} ${badge(c.talle_ok,'Talle: '+(c.wc_talle||'—'))}</div>`
-      :`<div class="cand-attrs"><span class="attr-badge attr-neutral">${esc(c.wc_tipo)}</span></div>`;
-    return `<div class="candidate-card ${i===ci?'selected':''} ${esActual?'es-actual':''}" onclick="elegirCand(${i})">
-      ${img}
-      <div class="cand-body">
-        <span class="cand-score-badge ${sc(c.score)}">${sl(c.score)}</span>
-        <div class="cand-sku">${esc(c.wc_sku)}${esActual?`<span class="actual-tag">actual</span>`:''}</div>
-        <div class="cand-nombre">${esc(c.wc_nombre)}</div>
-        ${attrs}
-      </div></div>`;
-  }).join('');
-
-  const skuSel=item.candidatos[ci]?item.candidatos[ci].wc_sku:'';
-  const esActualSel=esVerificar&&skuSel===item.sku_actual;
-
-  // Mientras el ítem es provisional (candidatos aún calculándose en el servidor), el botón
-  // de acción por candidato queda deshabilitado — no hay candidato a la vista para decidir
-  // sobre él. El SKU manual sigue disponible (accionManual/aprobar/confirmar sin candidato).
-  const provisional=item.provisional===true;
-  const btnAccion=esVerificar
-    ?`<button class="btn btn-confirm" id="btn-accion" onclick="confirmar()" ${!skuSel||provisional?'disabled':''}>${esActualSel?'✓ Confirmar SKU actual':'✓ Confirmar cambio'}: <span id="sku-label">${esc(skuSel||'—')}</span></button>`
-    :`<button class="btn btn-approve" id="btn-accion" onclick="aprobar()" ${!skuSel||provisional?'disabled':''}>Aprobar: <span id="sku-label">${esc(skuSel||'—')}</span> ✓</button>`;
-
-  document.getElementById('detail-panel').innerHTML=`
-    <button type="button" class="btn-volver-lista" onclick="mostrarPanelMobile('list')">← Ver lista</button>
-    ${navInfo?`<div class="filter-nav">${esc(navInfo)}</div>`:''}
-    ${estadoHtml}
-    <span class="modo-badge ${item.modo}">${item.modo==='verificar'?'🔍 Verificar SKU existente':'➕ Asignar SKU nuevo'}</span>
-    ${skuActualHtml}
-    <div style="margin-bottom:14px">
-      <div class="section-label">Publicación MercadoLibre</div>
-      <div class="ml-card">
-        <div class="ml-id">${esc(item.ml_item_id)}${item.ml_variation_id?' / VAR '+esc(item.ml_variation_id):''}${badgeEstado(item)}</div>
-        ${item.ml_permalink?`<a href="${esc(item.ml_permalink)}" target="_blank" rel="noopener" title="${item.ml_catalogo?'Abre la ficha de catálogo en ML':'Abre la publicación en ML'}" style="display:inline-block;margin:4px 0;font-size:12px;font-weight:600;color:#4C7DF0;text-decoration:none">Abrir en ML ↗${item.ml_catalogo?' <span style="color:var(--muted);font-weight:400">(catálogo)</span>':''}</a>`:''}
-        <div class="ml-name">${esc(item.ml_title)}</div>
-        ${item.ml_variations?`<div class="ml-vars">🔀 ${esc(item.ml_variations)}</div>`:''}
-        <div class="ml-type">${item.ml_es_variante?'Variante':'Producto simple'}</div>
-      </div>
-    </div>
-    <div style="margin-bottom:14px">
-      <div class="section-label">${esVerificar?'Candidatos WooCommerce (el actual aparece primero)':'Candidatos WooCommerce (top 8)'}</div>
-      <div class="candidates-grid">${provisional?'<span style="color:var(--muted);font-size:13px">⏳ Calculando candidatos… (podés usar el SKU manual mientras tanto)</span>':(candsHtml||'<span style="color:var(--muted);font-size:13px">Sin candidatos — usá SKU manual</span>')}</div>
-    </div>
-    <div class="manual-label">${esVerificar?'O escribí el SKU correcto:':'O escribí el SKU manualmente:'}</div>
-    <div class="manual-row">
-      <input type="text" class="manual-input" id="manual-inp" placeholder="FB-XXXXX" value="${esc(skuSel)}"
-        oninput="actualizarBtnAccion(this.value)"
-        onkeydown="if(event.key==='Enter'){event.preventDefault();accionManual();}">
-      <button class="btn-use" onclick="accionManual()">Usar este SKU</button>
-    </div>
-    <div id="manual-err" class="hidden" style="color:var(--red);font-size:12px;margin-top:4px"></div>
-    <div class="actions">
-      <button class="btn btn-nav" onclick="irAnterior()">← Ant</button>
-      <button class="btn btn-skip" onclick="omitir()">Omitir</button>
-      ${btnAccion}
-    </div>`;
-}
-
-function actualizarBtnAccion(val){
-  const v=val.trim();
-  const btn=document.getElementById('btn-accion');
-  const lbl=document.getElementById('sku-label');
-  if(!btn||!lbl)return;
-  btn.disabled=!v;lbl.textContent=v||'—';
-  const item=TODOSmap.get(activo);
-  if(item&&item.modo==='verificar'&&btn){
-    const esActual=v===item.sku_actual;
-    btn.textContent='';btn.innerHTML=(esActual?'✓ Confirmar SKU actual':'✓ Confirmar cambio')+': <span id="sku-label">'+esc(v||'—')+'</span>';
-  }
-}
-
-/* ── ACCIONES ── */
-function seleccionar(idx){activo=idx;if(!(idx in selCand))selCand[idx]=0;renderList();renderDetail();mostrarPanelMobile('detail');}
-// En pantallas angostas (<=760px), alterna cuál panel se ve (patrón master-detail).
-// En desktop es un no-op: ambos paneles quedan visibles siempre.
-function mostrarPanelMobile(cual){
-  if(window.innerWidth>760)return;
-  const lp=document.getElementById('list-panel'),dp=document.getElementById('detail-panel');
-  if(!lp||!dp)return;
-  if(cual==='list'){lp.classList.remove('mobile-hidden');dp.classList.add('mobile-hidden');}
-  else{lp.classList.add('mobile-hidden');dp.classList.remove('mobile-hidden');}
-}
-function elegirCand(ci){selCand[activo]=ci;renderDetail();}
-
-// Escribe el SKU decidido en la publicación de ML (fire-and-forget, best effort).
-// Solo para FB-xxx; los omitidos y manuales no-FB no se tocan.
-function pushSkuAml(clave,sku){
-  if(!sku||!/^FB-\d+$/.test(sku))return;
-  fetch('/herramientas/api/matcher/push-sku',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave,sku})}).catch(function(){});
-}
-// Validación de SKU manual (H-05): formato FB-<n> + existencia en el catálogo WC.
-// Los candidatos ya son válidos; solo se valida lo que el usuario escribe a mano.
-let _wcSkusSet=null;
-function wcSkuExiste(sku){
-  if(!_wcSkusSet&&Array.isArray(wcCatalogo)){
-    _wcSkusSet=new Set(wcCatalogo.map(w=>String(w.sku||'').trim()).filter(Boolean));
-  }
-  return _wcSkusSet?_wcSkusSet.has(sku):true; // sin catálogo cargado no bloquea
-}
-function validarSkuManual(sku){
-  if(!/^FB-\d+$/.test(sku))return{ok:false,error:'El SKU debe tener el formato FB-#### (ej. FB-12345).'};
-  if(!wcSkuExiste(sku))return{ok:false,error:'El SKU '+sku+' no existe en el catálogo de WooCommerce.'};
-  return{ok:true};
-}
-function mostrarErrorManual(msg){
-  const el=document.getElementById('manual-err');
-  if(!el)return;
-  if(msg){el.textContent='✗ '+msg;el.classList.remove('hidden');}
-  else{el.classList.add('hidden');}
-}
-function aprobar(){
-  const item=TODOSmap.get(activo);if(!item)return;
-  const manualVal=document.getElementById('manual-inp')?.value.trim()||'';
-  const ci=selCand[activo]||0;
-  const skuCand=item.candidatos[ci]?.wc_sku||'';
-  const sku=manualVal||skuCand;if(!sku)return;
-  if(manualVal&&manualVal!==skuCand){const v=validarSkuManual(manualVal);if(!v.ok){mostrarErrorManual(v.error);return;}}
-  mostrarErrorManual('');
-  const wc_nombre=item.candidatos[ci]&&item.candidatos[ci].wc_sku===sku?item.candidatos[ci].wc_nombre:'(manual)';
-  decisiones[claveDe(item)]={sku,wc_nombre,accion:'asignar'};
-  decisionesEstaSesion.add(claveDe(item));
-  pushSkuAml(claveDe(item),sku);
-  safe(guardarLS,"guardar");safe(updateStats,"stats");irSiguiente();
-}
-function confirmar(){
-  const item=TODOSmap.get(activo);if(!item)return;
-  const manualVal=document.getElementById('manual-inp')?.value.trim()||'';
-  const ci=selCand[activo]||0;
-  const skuCand=item.candidatos[ci]?.wc_sku||'';
-  const sku=manualVal||skuCand;if(!sku)return;
-  if(manualVal&&manualVal!==skuCand){const v=validarSkuManual(manualVal);if(!v.ok){mostrarErrorManual(v.error);return;}}
-  mostrarErrorManual('');
-  const wc_nombre=item.candidatos[ci]&&item.candidatos[ci].wc_sku===sku?item.candidatos[ci].wc_nombre:'(manual)';
-  decisiones[claveDe(item)]={sku,wc_nombre,accion:'confirmar'};
-  decisionesEstaSesion.add(claveDe(item));
-  pushSkuAml(claveDe(item),sku);
-  safe(guardarLS,"guardar");safe(updateStats,"stats");irSiguiente();
-}
-function accionManual(){
-  const v=document.getElementById('manual-inp')?.value.trim();if(!v)return;
-  const item=TODOSmap.get(activo);if(!item)return;
-  const val=validarSkuManual(v);if(!val.ok){mostrarErrorManual(val.error);return;}
-  mostrarErrorManual('');
-  const accion=item.modo==='verificar'?'confirmar':'asignar';
-  decisiones[claveDe(item)]={sku:v,wc_nombre:'(manual)',accion};
-  decisionesEstaSesion.add(claveDe(item));
-  pushSkuAml(claveDe(item),v);
-  safe(guardarLS,"guardar");safe(updateStats,"stats");irSiguiente();
-}
-function omitir(){
-  const item=TODOSmap.get(activo);if(!item)return;
-  decisiones[claveDe(item)]={sku:null,wc_nombre:null,accion:'omitir'};
-  decisionesEstaSesion.add(claveDe(item));
-  safe(guardarLS,"guardar");safe(updateStats,"stats");irSiguiente();
-}
-function deshacer(){
-  const item=TODOSmap.get(activo);if(!item)return;
-  delete decisiones[claveDe(item)];
-  guardarLS();updateStats();renderList();renderDetail();
-}
-
-function irSiguiente(){
-  const filt=getFiltered();
-  if(!filt.length){activo=null;renderList();document.getElementById('detail-panel').innerHTML=emptyState();return;}
-  // Posición del item recién decidido dentro del filtro actual
-  const pos=filt.findIndex(i=>i.idx===activo);
-  // 1) Buscar el siguiente PENDIENTE hacia adelante desde la posición actual
-  for(let k=pos+1;k<filt.length;k++){
-    if(!(claveDe(filt[k]) in decisiones)){seleccionar(filt[k].idx);return;}
-  }
-  // 2) Si no hay hacia adelante, buscar cualquier pendiente hacia atrás (por si saltaste)
-  for(let k=0;k<filt.length;k++){
-    if(!(claveDe(filt[k]) in decisiones)){seleccionar(filt[k].idx);return;}
-  }
-  // 3) No quedan pendientes en este filtro
-  renderList();
-  const pendGlobal=TODOS.filter(d=>!(claveDe(d) in decisiones));
-  document.getElementById('detail-panel').innerHTML=pendGlobal.length>0
-    ?`<div class="filtro-completo"><h3>✓ Filtro completo</h3><p>Quedan <strong>${pendGlobal.length}</strong> pendientes en otros filtros.</p><button class="btn-otro-filtro" onclick="irAPendientesGlobal()">Ver todos los pendientes →</button></div>`
-    :`<div class="filtro-completo"><h3>🎉 ¡Todo revisado!</h3><p>Exportá el CSV para subir a ML.</p><button class="btn-otro-filtro" onclick="exportarCSV()">⬇ Exportar CSV</button></div>`;
-}
-function irAPendientesGlobal(){
-  const btn=document.querySelector('.filter-btn[data-f="pending"]');
-  if(btn){document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');}
-  filtro='pending';renderList();
-  const pend=getFiltered().filter(d=>!(claveDe(d) in decisiones));
-  if(pend.length>0)seleccionar(pend[0].idx);
-}
-function irAnterior(){const f=getFiltered();const ci=f.findIndex(i=>i.idx===activo);if(ci>0)seleccionar(f[ci-1].idx);}
-
-/* ── STATS ── */
-function updateStats(){
-  const vals=Object.values(decisiones);
-  const ap=vals.filter(v=>v.accion==='asignar').length;
-  const conf=vals.filter(v=>v.accion==='confirmar').length;
-  const om=vals.filter(v=>v.accion==='omitir').length;
-  const pe=TODOS.length-ap-conf-om;
-  const pct=TODOS.length?Math.round(((ap+conf+om)/TODOS.length)*100):0;
-  document.getElementById('st-ap').textContent=ap;
-  document.getElementById('st-conf').textContent=conf;
-  document.getElementById('st-om').textContent=om;
-  document.getElementById('st-pe').textContent=pe;
-  document.getElementById('pbar').style.width=pct+'%';
-  document.getElementById('ppct').textContent=pct+'%';
-  const total=ap+conf;
-  // Exportar solo los cambios de esta sesión
-  const cambiados=Object.entries(decisiones).filter(([k,v])=>decisionesEstaSesion.has(k)&&v.accion!=='omitir'&&v.sku).length;
-  document.getElementById('btn-export').disabled=cambiados===0;
-  document.getElementById('export-info').textContent=cambiados>0?`${cambiados} cambio(s) de esta sesión listos para exportar`:(total>0?`${total} total guardados — revisá para exportar cambios`:'Revisá ítems para exportar');
-  document.querySelectorAll('.filter-btn').forEach(b=>{const ff=FDEFS.find(x=>x.f===b.dataset.f);if(ff)b.textContent=ff.label();});
-}
-
-/* ── EXPORT CSV ── */
-function exportarCSV(){
-  // Solo exportar decisiones tomadas en esta sesión (cambios del archivo ML actual)
-  const activos=Object.entries(decisiones).filter(([k,v])=>decisionesEstaSesion.has(k)&&v.accion!=='omitir'&&v.sku);
-  if(!activos.length){
-    document.getElementById('export-info').textContent='Sin cambios en esta sesión para exportar.';
-    return;
-  }
-  let csv='ITEM_ID,VARIATION_ID,SKU\n';
-  activos.forEach(([k,dec])=>{const[item,vid]=k.split('|');csv+=item+','+vid+','+dec.sku+'\n';});
-  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
-  const url=URL.createObjectURL(blob);const a=document.createElement('a');
-  a.href=url;a.download='fusion_sku_'+hoy()+'.csv';a.click();URL.revokeObjectURL(url);
-  document.getElementById('export-info').textContent=`✓ Exportados ${activos.length} cambios de esta sesión — ${hoy()}`;
-}
-
-/* ── INICIAR APP ── */
-function iniciarApp(){
-  document.getElementById('loader-screen').classList.add('hidden');
-  document.getElementById('app-screen').classList.remove('hidden');
-  // El filtro "solo con stock" depende de datos (ml_sin_stock) que solo trae la API de ML;
-  // en el path Excel no hay señal de stock → se deshabilita y se destilda para no engañar.
-  fuenteEsApi=TODOS.some(i=>i._desde_api===true);
-  if(!fuenteEsApi) soloConStock=false;
-  document.getElementById('filters-bar').innerHTML=
-    FDEFS.filter(ff=>!ff.soloSi||ff.soloSi()).map((ff,i)=>`<button class="filter-btn ${i===0?'active':''} ${ff.cls||''}" data-f="${ff.f}" onclick="setFilter(this)">${ff.label()}</button>`).join('')
-    +`<select class="filter-btn" title="Estado de la publicación en ML" onchange="setFilterEstado(this.value)">`
-    +`<option value="todas">Estado: todas</option>`
-    +`<option value="activa">Solo activas</option>`
-    +`<option value="pausada">Solo pausadas</option></select>`
-    +`<label class="filtro-stock" title="${fuenteEsApi?'Oculta las pausadas y las sin stock en Woo (baja riesgo de sobreventa)':'Este filtro solo aplica cuando la fuente es la API de ML (no el Excel)'}"><input type="checkbox" ${soloConStock?'checked':''} ${fuenteEsApi?'':'disabled'} onchange="setSoloConStock(this.checked)"> Mostrar solo activas con stock</label>`
-    +`<input type="text" class="search-input" placeholder="Buscar título ML..." oninput="setSearch(this.value)">`;
-  // Deep-link desde Cobertura: /herramientas/matcher/?buscar=<nombre> precarga el buscador
-  try {
-    const qBuscar = new URLSearchParams(location.search).get('buscar');
-    if(qBuscar){ busqueda = qBuscar; const si = document.querySelector('.search-input'); if(si) si.value = qBuscar; }
-  } catch(_){}
-  updateStats();renderList();
-  const pend=TODOS.filter(d=>!(claveDe(d) in decisiones));
-  if(pend.length>0)seleccionar(pend[0].idx);
-  else if(TODOS.length>0)seleccionar(TODOS[0].idx);
-}
-
-/* ── RESET ── */
-function resetLoader(){
-  document.getElementById('progress-proc').classList.add('hidden');
-  document.getElementById('btn-procesar').disabled=!archivoML;
-}
-function volverInicio(){
-  document.getElementById('app-screen').classList.add('hidden');
-  document.getElementById('loader-screen').classList.remove('hidden');
-  document.getElementById('progress-proc').classList.add('hidden');
-  document.getElementById('btn-procesar').disabled=true;
-  wcCatalogo=null;archivoML=null;TODOS=[];TODOSmap=new Map();
-  decisiones={};progresoImportado={};activo=null;selCand={};filtro='all';busqueda='';
-  ['dz-wc','dz-ml'].forEach(id=>document.getElementById(id).classList.remove('loaded'));
-  ['dz-wc-file','dz-ml-file'].forEach(id=>{const el=document.getElementById(id);el.classList.add('hidden');el.textContent='';});
-  ['inp-wc','inp-ml','inp-prog'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('prog-import-info').textContent='';
-}
-
-/* ── TECLADO ── */
-document.addEventListener('keydown',e=>{
-  if(document.getElementById('app-screen').classList.contains('hidden'))return;
-  if(e.target.tagName==='INPUT')return;
-  if(e.key==='ArrowDown'||e.key==='j'){e.preventDefault();const f=getFiltered();const ci=f.findIndex(i=>i.idx===activo);if(ci<f.length-1)seleccionar(f[ci+1].idx);}
-  else if(e.key==='ArrowUp'||e.key==='k'){e.preventDefault();const f=getFiltered();const ci=f.findIndex(i=>i.idx===activo);if(ci>0)seleccionar(f[ci-1].idx);}
-  else if(e.key==='Enter'&&activo!==null){e.preventDefault();const item=TODOSmap.get(activo);if(item)item.modo==='verificar'?confirmar():aprobar();}
-  else if(e.key==='s'&&activo!==null){e.preventDefault();omitir();}
 });
 
-/* INIT */
-// WC catalog loads from API automatically
-setupDropzone('dz-ml','inp-ml','dz-ml-file','ml');
-/* ── AUTO-LOAD WC + retomar desde cache ── */
-// Construye un item PROVISIONAL con la misma forma que produce derivarEstado/el resolver
-// del servidor (idx, modo, sku_actual, candidatos:[], ...) a partir de una fila barata de
-// GET /publicaciones (sin matching todavía). Con candidatos:[] y provisional:true, la
-// grilla y los filtros (que hacen d.candidatos.length / d.candidatos[0]) no rompen.
-function itemProvisionalDesdePublicacion(row,idx){
-  const partes=String(row.clave||'').split('|');
-  const mlItemId=row.item_id!==undefined&&row.item_id!==null?String(row.item_id):(partes[0]||'');
-  const mlVariationId=partes.length>1?partes[1]:'';
-  const sku=row.seller_sku?String(row.seller_sku).trim():'';
-  // Mismo criterio que construirMLdesdeApi (lib/matcherResolver.js): sólo cuenta como
-  // "verificar" un SKU con formato FB-<n> que además exista en el catálogo WC. Cualquier
-  // otro seller_sku (vacío, con otro formato, o un FB-<n> que ya no existe en WC) es "asignar".
-  const esFbNum=/^FB-\d+$/.test(sku);
-  const skuValido=esFbNum&&wcSkuExiste(sku);
-  return {
-    idx,
-    modo:skuValido?'verificar':'asignar',
-    sku_actual:skuValido?sku:null,
-    score_confianza:null,
-    wc_actual:null,
-    candidatos:[],
-    provisional:true,
-    _desde_api:true,
-    ml_item_id:mlItemId,
-    ml_variation_id:mlVariationId,
-    ml_title:row.titulo||'(sin título)',
-    ml_variations:row.variations_texto||'',
-    ml_status:row.status||'',
-    ml_sub_status:row.sub_status||'',
-    ml_catalogo:row.catalogo===1||row.catalogo===true,
-    ml_es_variante:!!row.es_variante,
-    ml_permalink:row.permalink||'',
-    ml_sin_stock:row.sinStock===true,
-    ml_thumbnail:row.thumbnail||''
-  };
-}
-(async function(){
-  try{await cargarWC();}catch(e){
-    document.getElementById('wc-status-title').textContent='\u2717 Error cargando WooCommerce';
-    document.getElementById('wc-status-hint').textContent=e.message;
+/* ═══════════════════════════════════════════════════════════════════════
+ * Tira de chips de secciones (persistente, no sticky)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var CHIPS_FRECUENTES = [
+  { key: 'publicar', hash: '#/publicar', label: 'Hay que publicarlo', accionable: true },
+  { key: 'problemas', hash: '#/problemas', label: 'Problemas', accionable: true },
+  { key: 'multipub', hash: '#/multipub', label: 'Multi-publicación', accionable: false },
+  { key: 'sin-stock', hash: '#/sin-stock', label: 'Sin stock', accionable: false },
+];
+var CHIPS_RARAS = [
+  { key: 'huerfanos', hash: '#/huerfanos', label: 'Huérfanos', accionable: false, proximamente: true },
+  { key: 'omitidas', hash: '#/omitidas', label: 'Omitidas', accionable: false, proximamente: true },
+];
+
+function chipHtml(c, n) {
+  var accionableConContenido = c.accionable && n > 0;
+  var claseExtra = accionableConContenido ? ' accionable' : '';
+  var esBoton = n > 0 && !c.proximamente;
+  var etiqueta = esc(c.label) + ' <span class="n">' + (c.proximamente ? '—' : n) + '</span>';
+  if (esBoton) {
+    return '<a class="chip-sec' + claseExtra + '" data-chip="' + c.key + '" href="' + c.hash + '">' + etiqueta + '</a>';
   }
-  const info=document.getElementById('api-status');
-  try{
-    // Grilla inmediata: GET /publicaciones es barato (solo cache, sin matching) y pinta
-    // la lista al toque con items provisionales. Los candidatos se calculan de fondo
-    // (GET /candidatos) y reemplazan TODOS cuando llegan — ver completarCandidatosDeFondo.
-    const {d}=await fetchJson('/herramientas/api/matcher/publicaciones');
-    if(d&&d.ok&&d.total>0&&Array.isArray(d.data)&&d.data.length){
-      TODOS=d.data.map((row,idx)=>itemProvisionalDesdePublicacion(row,idx));
-      TODOSmap=new Map();TODOS.forEach(it=>TODOSmap.set(it.idx,it));
-      await cargarProgresoApi();cargarProgreso();
-      iniciarApp();
-      completarCandidatosDeFondo();
-    }else if(info){
-      info.textContent='Tocá "Usar las ya traídas" para retomar ('+(d&&d.total?d.total.toLocaleString('es-AR'):'0')+' publicaciones), o "Traer desde API de ML" para actualizar.';info.style.color='var(--muted)';
-    }
-  }catch(e){/* si falla, queda la pantalla de carga manual */}
-  chequearHuerfanos();
-  chequearPushAutoAlAbrir();
-})();
-// Reemplaza los items provisionales por los resueltos (con candidatos) apenas el servidor
-// termina de calcular el matching. Usa el mismo sondeo con 202 que pedirCandidatosConSondeo.
-async function completarCandidatosDeFondo(){
-  try{
-    const d=await pedirCandidatosConSondeo('all',null);
-    if(!d||!Array.isArray(d.data)||!d.data.length)return;
-    // Conservar filtro activo e ítem seleccionado al reemplazar TODOS.
-    const claveActiva=activo!==null&&TODOSmap.has(activo)?claveDe(TODOSmap.get(activo)):null;
-    TODOS=d.data;TODOSmap=new Map();TODOS.forEach(it=>TODOSmap.set(it.idx,it));
-    autoConfirmarSellerSku();
-    if(claveActiva){const nuevo=TODOS.find(it=>claveDe(it)===claveActiva);if(nuevo)activo=nuevo.idx;}
-    updateStats();renderList();
-    if(activo!==null&&TODOSmap.has(activo))renderDetail();
-  }catch(e){/* si falla el cómputo de fondo, la grilla provisional sigue usable */}
+  return '<span class="chip-sec' + claseExtra + '" data-chip="' + c.key + '" aria-disabled="' + (c.proximamente ? 'true' : 'false') + '"' +
+    (c.proximamente ? '' : ' tabindex="0" role="link"') + '>' + etiqueta + '</span>';
 }
+
+function renderChipsTira(counts) {
+  var cont = document.getElementById('chips-tira');
+  var html = CHIPS_FRECUENTES.map(function (c) { return chipHtml(c, counts[c.key] || 0); }).join('');
+  html += '<details style="display:inline-flex;"><summary class="chip-sec" style="list-style:none;cursor:pointer;">Más ▾</summary>' +
+    '<div class="chip-mas-panel">' + CHIPS_RARAS.map(function (c) { return chipHtml(c, counts[c.key] || 0); }).join('') + '</div></details>';
+  cont.innerHTML = html;
+  // Chips en 0 no clickeables (aunque no lleven `<a>`, evitamos navegar por teclado con Enter).
+  cont.querySelectorAll('span.chip-sec[role="link"][tabindex]').forEach(function (span) {
+    // en 0: no interactivo a propósito (ver design-system.md §8.2). No se liga ningún handler.
+  });
+}
+
+function actualizarChipsActivo(vistaActual) {
+  document.querySelectorAll('.chip-sec').forEach(function (el) {
+    var key = el.getAttribute('data-chip');
+    var activo = (key === 'publicar' && vistaActual === 'publicar') ||
+      (key === 'problemas' && vistaActual === 'problemas') ||
+      (key === 'multipub' && vistaActual === 'multipub') ||
+      (key === 'sin-stock' && vistaActual === 'sin-stock') ||
+      (key === 'huerfanos' && vistaActual === 'huerfanos') ||
+      (key === 'omitidas' && vistaActual === 'omitidas');
+    el.style.borderColor = activo ? 'var(--accent)' : '';
+  });
+}
+
+function cargarChips() {
+  var counts = {};
+  var pSospechosos = jsonFetch('/api/cobertura/vinculos-sospechosos').then(function (res) {
+    counts.problemas = (res.ok && res.data && res.data.ok) ? (res.data.data || []).length : 0;
+  });
+  var pResumen = jsonFetch('/api/cobertura/resumen').then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) return;
+    var o = res.data.data ? res.data.data.otras_secciones : res.data.otras_secciones;
+    var o2 = res.data.otras_secciones || {};
+    counts.publicar = o2.hay_que_publicarlo || 0;
+    counts.multipub = o2.multi_publicacion || 0;
+    counts['sin-stock'] = o2.sin_stock || 0;
+    document.getElementById('dir-wc-ml-n').textContent = '(' + n(res.data.total_pendientes) + ')';
+  });
+  Promise.all([pSospechosos, pResumen]).then(function () { renderChipsTira(counts); actualizarChipsActivo(vistaActualNombre()); });
+}
+function vistaActualNombre() {
+  var hash = window.location.hash.replace(/^#\/?/, '');
+  return (hash.split('/').filter(Boolean)[0]) || 'entrada';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Línea calma del push de SKUs (mismo renglón que "última actualización")
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function antiguedadTexto(iso) {
+  if (!iso) return null;
+  var ms = Date.now() - new Date(iso).getTime();
+  if (!isFinite(ms) || ms < 0) return null;
+  var min = Math.floor(ms / 60000);
+  if (min < 1) return 'hace instantes';
+  if (min < 60) return 'hace ' + min + ' min';
+  var horas = Math.floor(min / 60);
+  if (horas < 24) return 'hace ' + horas + ' h';
+  var dias = Math.floor(horas / 24);
+  return 'hace ' + dias + ' d';
+}
+
+function cargarRefrescoBar() {
+  var bar = document.getElementById('refresco-bar');
+  Promise.all([
+    jsonFetch('/api/cobertura/resumen'),
+    push.contar().catch(function () { return null; }),
+  ]).then(function (results) {
+    var resumenRes = results[0];
+    var cont = results[1];
+    var actualizadoTxt = (resumenRes.ok && resumenRes.data && resumenRes.data.ok)
+      ? antiguedadTexto(resumenRes.data.ultima_actualizacion_ml) : null;
+    var actualizado = 'Actualizado ' + (actualizadoTxt || '—');
+
+    // "Trabado": hay pendientes en espera (backoff) desde hace rato, o pendientes altos sin moverse.
+    var trabado = cont && cont.ok && (cont.en_espera || 0) > 0;
+    if (trabado) {
+      bar.className = 'refresco-bar trabado';
+      bar.innerHTML = '<span><span aria-hidden="true">⚠</span> Push de SKUs trabado · ' + n(cont.en_espera) + ' pendientes en espera <a href="#/publicar">Ver</a></span><span>' + esc(actualizado) + '</span>';
+    } else {
+      bar.className = 'refresco-bar';
+      bar.innerHTML = '<span>sincronizando sola cada 10 min · SKUs al día</span><span>' + esc(actualizado) + '</span>';
+    }
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: ENTRADA
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function cargarEntrada() {
+  jsonFetch('/api/cobertura/resumen').then(function (res) {
+    var resumenEl = document.getElementById('entrada-resumen');
+    var seguirEl = document.getElementById('entrada-seguir');
+    var marcasEl = document.getElementById('entrada-marcas');
+    var btnTodas = document.getElementById('btn-ver-todas-marcas');
+
+    if (!res.ok || !res.data || !res.data.ok) {
+      resumenEl.innerHTML = '<div class="vacio">No se pudo cargar el resumen. <button type="button" class="hbtn" onclick="cargarEntrada()">Reintentar</button></div>';
+      seguirEl.innerHTML = ''; marcasEl.innerHTML = '';
+      return;
+    }
+    var d = res.data;
+
+    resumenEl.innerHTML =
+      '<span class="resumen-num">' + n(d.total_pendientes) + '</span>' +
+      '<span class="resumen-txt">faltantes · ' + money(d.total_valor) + ' sin publicar</span>';
+
+    if (d.seguir_donde_quede) {
+      var sq = d.seguir_donde_quede;
+      seguirEl.innerHTML =
+        '<button type="button" class="highlight-card" onclick="irACola(' + JSON.stringify(sq.marca).replace(/"/g, '&quot;') + ')">' +
+        '<div class="highlight-eyebrow">Seguir donde quedé</div>' +
+        '<div class="highlight-title">' + esc(sq.marca) + ' <b>(' + n(sq.pendientes) + ' pendientes)</b></div>' +
+        '<div style="font-size:.78rem;color:var(--muted);margin-top:4px;">Hoy resolviste ' + n((d.progreso_hoy || {}).resueltos_hoy) + ' · desinmovilizaste ' + money((d.progreso_hoy || {}).valor_desinmovilizado_hoy) + '</div>' +
+        '</button>';
+    } else {
+      seguirEl.innerHTML = '';
+    }
+
+    if (!d.marcas.length) {
+      marcasEl.innerHTML = '<div class="vacio" style="grid-column:1/-1;"><strong>No hay faltantes pendientes. Matcher al día.</strong>Puede que igual haya trabajo en Multi-publicación o Solo ML.<div class="vacio-links"><a class="hbtn" href="#/multipub">Multi-publicación</a><a class="hbtn" href="#/solo-ml">Solo ML</a></div></div>';
+      btnTodas.hidden = true;
+    } else {
+      marcasEl.innerHTML = d.marcas.map(function (m) {
+        return '<button type="button" class="marca-card" onclick="irACola(' + JSON.stringify(m.marca).replace(/"/g, '&quot;') + ')">' +
+          '<div class="marca-nombre">' + esc(m.marca) + '</div>' +
+          '<div class="marca-meta">' + n(m.conteo) + ' faltantes</div>' +
+          '<div class="marca-valor">' + money(m.valor) + '</div>' +
+          '</button>';
+      }).join('');
+      btnTodas.hidden = d.total_marcas <= d.marcas.length;
+    }
+  });
+}
+
+document.getElementById('btn-ver-todas-marcas').addEventListener('click', function () {
+  jsonFetch('/api/cobertura/marcas').then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) return;
+    var marcasEl = document.getElementById('entrada-marcas');
+    marcasEl.innerHTML = res.data.marcas.map(function (m) {
+      return '<button type="button" class="marca-card" onclick="irACola(' + JSON.stringify(m.marca).replace(/"/g, '&quot;') + ')">' +
+        '<div class="marca-nombre">' + esc(m.marca) + '</div>' +
+        '<div class="marca-meta">' + n(m.conteo) + ' faltantes</div>' +
+        '<div class="marca-valor">' + money(m.valor) + '</div>' +
+        '</button>';
+    }).join('');
+    document.getElementById('btn-ver-todas-marcas').hidden = true;
+  });
+});
+
+function irACola(marca) {
+  window.location.hash = '#/cola/' + encodeURIComponent(marca);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: COLA — de a una, pantalla completa
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var colaEstado = {
+  marca: null,
+  items: [],
+  offset: 0,
+  total: 0,
+  actual: null,
+  cargandoMas: false,
+};
+
+function cargarCola(marca) {
+  colaEstado = { marca: marca, items: [], offset: 0, total: 0, actual: null, cargandoMas: false };
+  document.getElementById('cola-h1').textContent = 'Trabajando marca ' + marca;
+  document.getElementById('cola-contenido').innerHTML = '<div class="skel" style="height:340px;"></div>';
+  traerMasDeCola().then(function () {
+    avanzarSiguiente();
+  });
+}
+
+function traerMasDeCola() {
+  if (colaEstado.cargandoMas) return Promise.resolve();
+  colaEstado.cargandoMas = true;
+  return jsonFetch('/api/cobertura/marcas/' + encodeURIComponent(colaEstado.marca) + '/cola?limit=20&offset=' + colaEstado.offset)
+    .then(function (res) {
+      colaEstado.cargandoMas = false;
+      if (!res.ok || !res.data || !res.data.ok) return;
+      colaEstado.total = res.data.total;
+      colaEstado.items = colaEstado.items.concat(res.data.data);
+      colaEstado.offset += res.data.data.length;
+    });
+}
+
+function actualizarProgreso() {
+  jsonFetch('/api/cobertura/marcas/' + encodeURIComponent(colaEstado.marca) + '/cola?limit=1&offset=0').then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) return;
+    var restante = res.data.total;
+    if (colaEstado.totalOriginal == null) colaEstado.totalOriginal = restante;
+    var resueltos = Math.max(colaEstado.totalOriginal - restante, 0);
+    var pct = colaEstado.totalOriginal ? Math.round((resueltos / colaEstado.totalOriginal) * 100) : 0;
+    document.getElementById('cola-progreso-fill').style.width = pct + '%';
+    document.getElementById('cola-progreso-frac').textContent = resueltos + '/' + colaEstado.totalOriginal;
+  });
+  jsonFetch('/api/cobertura/resumen').then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) return;
+    var p = res.data.progreso_hoy || { resueltos_hoy: 0, valor_desinmovilizado_hoy: 0 };
+    document.getElementById('cola-progreso-secundaria').textContent =
+      'Hoy resolviste ' + n(p.resueltos_hoy) + ' · desinmovilizaste ' + money(p.valor_desinmovilizado_hoy);
+  });
+}
+
+function avanzarSiguiente() {
+  window.scrollTo(0, 0);
+  var necesitaMas = colaEstado.items.length < 3 && colaEstado.offset < colaEstado.total;
+  var p = necesitaMas ? traerMasDeCola() : Promise.resolve();
+  p.then(function () {
+    if (colaEstado.totalOriginal == null) colaEstado.totalOriginal = colaEstado.total;
+    actualizarProgreso();
+    if (!colaEstado.items.length) {
+      renderFinDeTanda();
+      return;
+    }
+    colaEstado.actual = colaEstado.items.shift();
+    renderTarjeta(colaEstado.actual);
+  });
+}
+
+function renderFinDeTanda() {
+  document.getElementById('cola-contenido').innerHTML =
+    '<div class="cola-fin"><div class="icon" aria-hidden="true">🎉</div>' +
+    '<strong>Terminaste la tanda de ' + esc(colaEstado.marca) + '.</strong>' +
+    '<div class="cola-fin-acciones">' +
+    '<a class="hbtn" href="#/">Elegir otra marca</a>' +
+    '<a class="hbtn" href="/herramientas/home/">Volver al inicio</a>' +
+    '</div></div>';
+  announce('Terminaste la tanda de ' + colaEstado.marca + '.');
+}
+
+function nivelConfianzaTexto(nivel) {
+  if (nivel === 'alta') return { texto: 'Coincidencia alta', icono: '✓' };
+  if (nivel === 'revisar') return { texto: 'Revisar bien', icono: '⚠' };
+  return { texto: 'Poco parecido', icono: '✕' };
+}
+
+/* Ver comentario detallado en el motor (lib/matcherEngine.js#norm): la sub-tokenización acá
+   tiene que replicar el mismo criterio de separación que usa el motor, o los códigos con
+   guion/punto quedan mal clasificados. */
+function pintarTitleDiff(titulo, tokensCoincide, tokensSoloEsteLado, tokensDiscriminantes) {
+  var soloSet = new Set(tokensSoloEsteLado);
+  var discSet = new Set(tokensDiscriminantes);
+  var palabras = String(titulo).split(/(\s+)/);
+  return palabras.map(function (palabra) {
+    if (/^\s+$/.test(palabra) || !palabra) return esc(palabra);
+    var subtokens = palabra.match(/[a-z0-9]+|[^a-z0-9]+/gi) || [palabra];
+    return subtokens.map(function (parte) {
+      if (!/[a-z0-9]/i.test(parte)) return esc(parte);
+      var norma = parte.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      var cls = 'tok-match';
+      if (soloSet.has(norma)) cls = discSet.has(norma) ? 'tok-discriminant' : 'tok-diff';
+      return '<span class="tok ' + cls + '">' + esc(parte) + '</span>';
+    }).join('');
+  }).join('');
+}
+
+function renderNivel2(prod, ml) {
+  var cats = catsDe(prod).join(', ') || '—';
+  return '<div class="nivel2">' +
+    '<div class="n2-head">Web</div><div class="n2-head">ML</div>' +
+    '<div class="n2-val">' + money(prod.precio) + '</div><div class="n2-val">' + money(ml.ml_precio) + '</div>' +
+    '<div class="n2-val">' + n(prod.stock) + ' unid.</div><div class="n2-val">' + n(ml.ml_stock) + ' unid.</div>' +
+    '<div class="n2-val">' + esc(cats) + '</div><div class="n2-val">—</div>' +
+    '</div>';
+}
+
+/* La tarjeta NUNCA se espeja: Web siempre a la izquierda/arriba con el rol "Punto de
+   partida", ML siempre a la derecha/abajo con el rol "Candidato" — tres señales redundantes
+   (pill de rol, fondo de columna, frase de contexto), nunca solo la posición. En esta entrega
+   la dirección activa siempre es wc→ml, pero se deja explícita para cuando entre ml→wc. */
+function tarjetaHtml(prod, cand, opts) {
+  opts = opts || {};
+  var conf = nivelConfianzaTexto(cand.confianza);
+  var diff = cand.diff;
+  var wcHtml = pintarTitleDiff(prod.nombre, diff.coincide, diff.solo_wc, diff.discriminantes_conflicto);
+  var mlHtml = pintarTitleDiff(cand.ml_titulo, diff.coincide, diff.solo_ml, diff.discriminantes_conflicto);
+  var friccion = cand.confianza === 'baja'
+    ? '<div class="friccion-box" id="friccion-box"><label style="display:flex;gap:8px;align-items:flex-start;"><input type="checkbox" id="friccion-check" style="width:18px;height:18px;margin-top:2px;accent-color:var(--critical);"><span>¿Seguro? El sistema encontró poca coincidencia entre estos dos productos.</span></label></div>'
+    : '';
+  return (
+    '<div class="contexto-direccion">Producto de la Web sin publicación → buscando candidato en ML</div>' +
+    '<div class="match-card" id="tarjeta-principal">' +
+    '<div class="conf-badge ' + cand.confianza + '"><span aria-hidden="true">' + conf.icono + '</span>' + conf.texto + '</div>' +
+    '<div class="fotos-row">' +
+    '<div class="foto-col anchor"><span class="rol-pill anchor">Punto de partida</span><div class="foto-box">' + (prod.img ? '<img src="' + esc(prod.img) + '" alt="Foto del producto web: ' + esc(prod.nombre) + '">' : '<span class="sinfoto">Sin foto</span>') + '</div></div>' +
+    '<div class="foto-col candidate"><span class="rol-pill candidate">Candidato</span><div class="foto-box">' + (cand.ml_img ? '<img src="' + esc(cand.ml_img) + '" alt="Foto de la publicación de ML: ' + esc(cand.ml_titulo) + '">' : '<span class="sinfoto">Sin foto</span>') + '</div></div>' +
+    '</div>' +
+    '<div class="titulos-stack">' +
+    '<div><div class="titulo-fuente-label">Web</div><div class="title-diff">' + wcHtml + '</div></div>' +
+    '<div><div class="titulo-fuente-label">Mercado Libre</div><div class="title-diff">' + mlHtml + '</div></div>' +
+    '</div>' +
+    renderNivel2(prod, cand) +
+    '<details class="atributos-toggle"><summary>Ver atributos completos</summary>' +
+    '<div class="atr-body">SKU: ' + esc(prod.sku || '—') + ' · Clave ML: ' + esc(cand.ml_clave || '—') + ' · Estado ML: ' + esc(cand.ml_status || '—') + '</div>' +
+    '</details>' +
+    friccion +
+    '<button type="button" class="btn-confirmar" id="btn-confirmar-vinculo">Confirmar vínculo</button>' +
+    '<div class="acciones-fila">' +
+    '<a class="accion-btn" href="' + mlUrl(cand.ml_item_id) + '" target="_blank" rel="noopener" id="btn-abrir-ml">↗ Abrir en ML</a>' +
+    '<button type="button" class="accion-btn" id="btn-solo-local">Solo local</button>' +
+    '<button type="button" class="accion-btn" id="btn-hay-que-publicar">Hay que publicarlo</button>' +
+    '<button type="button" class="accion-btn" id="btn-saltear">Saltear</button>' +
+    '</div>' +
+    '</div>'
+  );
+}
+
+function candidatoCompactoHtml(prod, cand, idx, numeroVisible) {
+  var diff = cand.diff;
+  var mlHtml = pintarTitleDiff(cand.ml_titulo, diff.coincide, diff.solo_ml, diff.discriminantes_conflicto);
+  var conf = nivelConfianzaTexto(cand.confianza);
+  return (
+    '<button type="button" class="match-card--compact" data-idx="' + idx + '">' +
+    (cand.ml_img ? '<img class="mc-thumb" src="' + esc(cand.ml_img) + '" alt="">' : '<div class="mc-thumb"></div>') +
+    '<div class="mc-info"><span class="mc-num">#' + numeroVisible + '</span> <div class="conf-badge ' + cand.confianza + '" style="margin-bottom:4px;"><span aria-hidden="true">' + conf.icono + '</span>' + conf.texto + '</div>' +
+    '<div class="title-diff">' + mlHtml + '</div></div>' +
+    '</button>'
+  );
+}
+
+function renderTarjeta(prod) {
+  var cont = document.getElementById('cola-contenido');
+  var candidatos = (prod.candidatos || []).slice(0, 3);
+  var candidatoActivo = candidatos.length ? candidatos[0] : null;
+
+  var html = '';
+  if (!candidatoActivo) {
+    html += '<div class="contexto-direccion">Producto de la Web sin publicación → buscando candidato en ML</div>';
+    html += '<div class="sin-candidato-box">No se encontró un candidato confiable en ML para <strong>' + esc(prod.nombre) + '</strong>.<br>Podés buscarlo a mano o mandarlo a "Hay que publicarlo".</div>';
+    html += '<div class="acciones-fila" style="grid-template-columns:1fr 1fr;">' +
+      '<button type="button" class="accion-btn" id="btn-hay-que-publicar-directo">Hay que publicarlo</button>' +
+      '<button type="button" class="accion-btn" id="btn-saltear-directo">Saltear</button>' +
+      '</div>';
+  } else {
+    html += tarjetaHtml(prod, candidatoActivo);
+    if (candidatos.length > 1) {
+      html += '<div class="candidatos-lista">' + candidatos.map(function (c, i) {
+        return candidatoCompactoHtml(prod, c, i, i + 1);
+      }).join('') + '</div>';
+    }
+  }
+
+  html += '<details class="buscar-manual"><summary>Buscar manualmente</summary>' +
+    '<div class="buscar-manual-box">' +
+    '<input type="search" id="buscar-manual-input" placeholder="Escribí parte del título…" aria-label="Buscar publicación de ML manualmente">' +
+    '<div id="buscar-manual-resultados"></div>' +
+    '</div></details>';
+
+  cont.innerHTML = html;
+  announce('Nueva tarjeta: ' + prod.nombre);
+
+  var candidatosMap = candidatos.slice();
+
+  function seleccionarCandidato(cand) {
+    document.getElementById('cola-contenido').querySelector('#tarjeta-principal').outerHTML = tarjetaHtml(prod, cand);
+    ligarAccionesTarjeta(prod, cand);
+  }
+
+  if (candidatoActivo) {
+    ligarAccionesTarjeta(prod, candidatoActivo);
+    candidatosMap.forEach(function (c, i) {
+      var btn = cont.querySelector('.match-card--compact[data-idx="' + i + '"]');
+      if (btn) btn.addEventListener('click', function () { seleccionarCandidato(c); });
+    });
+  } else {
+    document.getElementById('btn-hay-que-publicar-directo').addEventListener('click', function () {
+      accionProducto(prod, 'publicar').then(function () { toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente(); });
+    });
+    document.getElementById('btn-saltear-directo').addEventListener('click', function () {
+      accionProducto(prod, 'saltear').then(function () { toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente(); });
+    });
+  }
+
+  ligarBusquedaManual(prod);
+}
+
+var buscarManualDebounce = null;
+function ligarBusquedaManual(prod) {
+  var input = document.getElementById('buscar-manual-input');
+  var resultados = document.getElementById('buscar-manual-resultados');
+  input.addEventListener('input', function () {
+    var q = input.value.trim();
+    window.clearTimeout(buscarManualDebounce);
+    if (q.length < 2) { resultados.innerHTML = ''; return; }
+    buscarManualDebounce = window.setTimeout(function () {
+      jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/buscar-ml?q=' + encodeURIComponent(q)).then(function (res) {
+        if (!res.ok || !res.data || !res.data.ok) { resultados.innerHTML = '<div class="vacio">No se pudo buscar.</div>'; return; }
+        var data = res.data.data || [];
+        if (!data.length) { resultados.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
+        resultados.innerHTML = '<div class="candidatos-lista">' + data.slice(0, 20).map(function (m, i) {
+          var cand = { ml_clave: m.ml_clave, ml_item_id: m.ml_item_id, ml_variation_id: m.ml_variation_id, ml_titulo: m.ml_titulo, ml_img: m.ml_img, ml_precio: m.ml_precio, ml_stock: m.ml_stock, ml_status: m.ml_status, diff: m.diff, confianza: m.confianza };
+          return candidatoCompactoHtml(prod, cand, 'm' + i, i + 1);
+        }).join('') + '</div>';
+        data.forEach(function (m, i) {
+          var cand = { ml_clave: m.ml_clave, ml_item_id: m.ml_item_id, ml_variation_id: m.ml_variation_id, ml_titulo: m.ml_titulo, ml_img: m.ml_img, ml_precio: m.ml_precio, ml_stock: m.ml_stock, ml_status: m.ml_status, diff: m.diff, confianza: m.confianza };
+          var btn = resultados.querySelector('.match-card--compact[data-idx="m' + i + '"]');
+          if (btn) btn.addEventListener('click', function () {
+            var cont = document.getElementById('cola-contenido');
+            var tarjetaVieja = cont.querySelector('#tarjeta-principal');
+            var htmlNuevo = tarjetaHtml(prod, cand);
+            if (tarjetaVieja) tarjetaVieja.outerHTML = htmlNuevo;
+            else cont.insertAdjacentHTML('afterbegin', htmlNuevo);
+            ligarAccionesTarjeta(prod, cand);
+          });
+        });
+      });
+    }, 300);
+  });
+}
+function ligarAccionesTarjeta(prod, cand) {
+  var btnConfirmar = document.getElementById('btn-confirmar-vinculo');
+  btnConfirmar.addEventListener('click', function () {
+    if (cand.confianza === 'baja') {
+      var chk = document.getElementById('friccion-check');
+      if (chk && !chk.checked) { chk.focus(); return; }
+    }
+    btnConfirmar.disabled = true;
+    confirmarVinculo(prod, cand.ml_clave).then(function (res) {
+      btnConfirmar.disabled = false;
+      if (res.status === 409 && res.data && res.data.ya_resuelto) {
+        // Colisión entre dos personas: mostrar quién y qué decidió, avanzar sola (no error).
+        toast('Ya lo resolvió ' + res.data.resuelto_por + ': vinculado a ' + res.data.sku, 'neutro');
+        avanzarSiguiente();
+        return;
+      }
+      if (!res.ok) { toast('No se pudo guardar. Reintentá.', 'error'); return; }
+      if (res.data.estado === 'vinculado') {
+        toast('Vinculado a ' + res.data.sku + ' → ' + cand.ml_item_id, 'ok', function () { deshacerVinculo(cand.ml_clave); });
+      } else {
+        toast('Guardado · se sincroniza con ML apenas se pueda', 'pendiente', function () { deshacerVinculo(cand.ml_clave); });
+      }
+      avanzarSiguiente();
+    });
+  });
+
+  document.getElementById('btn-solo-local').addEventListener('click', function () {
+    accionProducto(prod, 'descartar').then(function () { toast('Marcado como "solo local".', 'ok'); avanzarSiguiente(); });
+  });
+  document.getElementById('btn-hay-que-publicar').addEventListener('click', function () {
+    accionProducto(prod, 'publicar').then(function () { toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente(); });
+  });
+  document.getElementById('btn-saltear').addEventListener('click', function () {
+    accionProducto(prod, 'saltear').then(function () { toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente(); });
+  });
+}
+
+function confirmarVinculo(prod, mlClave) {
+  return jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/confirmar', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ml_clave: mlClave }),
+  });
+}
+function accionProducto(prod, accion) {
+  return jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/' + accion, { method: 'POST' });
+}
+function deshacerVinculo(clave) {
+  jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(clave) + '/deshacer', { method: 'POST' }).then(function (res) {
+    if (res.ok && res.data && res.data.ok) { toast('Vínculo deshecho.', 'ok'); return; }
+    if (res.status === 0) { toast('No se pudo conectar con el servidor. Reintentá.', 'error'); return; }
+    if (res.status === 404) { toast('El vínculo ya no existe (puede que se haya deshecho antes). No hace falta reintentar.', 'error'); return; }
+    if (res.status === 409 && res.data && res.data.push_en_curso) { toast('Hay un push en curso. Reintentá en unos segundos.', 'error'); return; }
+    if (res.status === 502) { toast('ML no confirmó la desvinculación. No se cambió nada.', 'error'); return; }
+    toast('No se pudo deshacer. Reintentá.', 'error');
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: HISTORIAL
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var histDebounce = null;
+document.getElementById('hist-buscar').addEventListener('input', function () {
+  window.clearTimeout(histDebounce);
+  histDebounce = window.setTimeout(cargarHistorial, 250);
+});
+
+function cargarHistorial() {
+  var q = document.getElementById('hist-buscar').value.trim();
+  jsonFetch('/api/cobertura/historial?q=' + encodeURIComponent(q)).then(function (res) {
+    var cont = document.getElementById('hist-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar el historial.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin movimientos todavía.</div>'; return; }
+    var pendientes = data.filter(function (r) { return r.tipo === 'vinculo' && r.pendiente_sync; });
+    var resto = data.filter(function (r) { return !(r.tipo === 'vinculo' && r.pendiente_sync); });
+    var html = '';
+    if (pendientes.length) {
+      html += '<div class="hist-grupo-head">' + pendientes.length + ' pendientes de sincronizar</div>';
+      html += '<div class="gestion-lista">' + pendientes.map(histRowHtml).join('') + '</div>';
+    }
+    html += '<div class="gestion-lista" style="margin-top:10px;">' + resto.map(histRowHtml).join('') + '</div>';
+    cont.innerHTML = html;
+    data.forEach(function (r) {
+      var btn = cont.querySelector('[data-deshacer="' + r.tipo + '-' + (r.clave || r.id_woo) + '"]');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        if (r.tipo === 'vinculo') {
+          jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(r.clave) + '/deshacer', { method: 'POST' }).then(function (res2) {
+            if (res2.ok && res2.data && res2.data.ok) { toast('Deshecho.', 'ok'); cargarHistorial(); }
+            else toast('No se pudo deshacer.', 'error');
+          });
+        } else {
+          jsonFetch('/api/cobertura/exclusiones/' + r.id_woo + '/revertir', { method: 'DELETE' }).then(function (res2) {
+            if (res2.ok && res2.data && res2.data.ok) { toast('Revertido.', 'ok'); cargarHistorial(); }
+            else toast('No se pudo revertir.', 'error');
+          });
+        }
+      });
+    });
+  });
+}
+function histRowHtml(r) {
+  var estado = r.tipo === 'vinculo'
+    ? (r.pendiente_sync
+      ? '<span class="estado-pendiente"><span aria-hidden="true">↻</span>Guardado · se sincroniza con ML apenas se pueda</span>'
+      : '<span class="estado-vinculado"><span aria-hidden="true">✓</span>Vinculado a <span class="mono">' + esc(r.clave) + '</span></span>')
+    : '<span style="color:var(--muted);">Solo local</span>';
+  return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(r.nombre) + '</div><div class="meta">' + fecha(r.fecha) + ' · ' + esc(r.sku || '—') + '</div>' + estado + '</div>' +
+    '<button type="button" class="mini-btn" data-deshacer="' + r.tipo + '-' + (r.clave || r.id_woo) + '">Deshacer</button></div>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: HAY QUE PUBLICARLO
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+document.getElementById('btn-export-csv').addEventListener('click', function () {
+  window.location.href = '/api/cobertura/hay-que-publicar/export.csv';
+});
+
+function cargarPublicar() {
+  jsonFetch('/api/cobertura/hay-que-publicar').then(function (res) {
+    var cont = document.getElementById('publicar-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar la lista.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Nada pendiente de publicar.</div>'; return; }
+    cont.innerHTML = '<div class="gestion-lista">' + data.map(function (r) {
+      return '<div class="item-row">' +
+        '<input type="checkbox" ' + (r.tachado ? 'checked' : '') + ' data-tachar="' + r.id_woo + '" aria-label="Marcar como hecho: ' + esc(r.nombre) + '">' +
+        '<div class="flex1"><div class="nombre">' + esc(r.nombre) + '</div><div class="meta">' + esc(r.sku || '—') + ' · ' + esc(r.marca || '—') + ' · ' + money(r.valor) + '</div></div>' +
+        '<button type="button" class="mini-btn" data-copiar="' + r.id_woo + '">Copiar datos</button>' +
+        '</div>';
+    }).join('') + '</div>';
+    data.forEach(function (r) {
+      var chk = cont.querySelector('[data-tachar="' + r.id_woo + '"]');
+      chk.addEventListener('change', function () {
+        jsonFetch('/api/cobertura/hay-que-publicar/' + r.id_woo, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tachado: chk.checked }),
+        });
+      });
+      var btnCopiar = cont.querySelector('[data-copiar="' + r.id_woo + '"]');
+      btnCopiar.addEventListener('click', function () {
+        var texto = [r.nombre, r.sku || '', money(r.valor).replace(/[^\d,.-]/g, ''), r.marca || ''].join('\t');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(texto).then(function () { toast('Copiado.', 'ok'); }, function () { toast('No se pudo copiar.', 'error'); });
+        } else {
+          toast('Copiado no disponible en este navegador.', 'error');
+        }
+      });
+    });
+  });
+}
+
+/* Pausar puede pedir confirmación extra (ML no permite pausar solo una variación con
+   hermanas). Compartido por Multi-publicación y Solo ML. */
+function pausarConConfirmacion(url, onExito) {
+  jsonFetch(url, { method: 'POST' }).then(function (r) {
+    if (r.ok && r.data && r.data.ok) {
+      var extra = r.data.variaciones_afectadas ? ' (arrastró ' + n(r.data.variaciones_afectadas) + ' variación(es) más de la misma publicación).' : '.';
+      toast('Pausada' + extra, 'ok');
+      onExito();
+      return;
+    }
+    if (r.status === 403) { toast('Solo administradores pueden pausar publicaciones.', 'error'); return; }
+    if (r.status === 409 && r.data && r.data.requiere_confirmacion) {
+      var cant = r.data.variaciones_afectadas || 0;
+      var confirma = window.confirm('ML no permite pausar solo esta variación: esto pausa la publicación entera, incluidas ' + cant + ' variación(es) más. ¿Seguir?');
+      if (!confirma) return;
+      jsonFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmado: true }) }).then(function (r2) {
+        if (r2.ok && r2.data && r2.data.ok) {
+          var extra2 = r2.data.variaciones_afectadas ? ' (arrastró ' + n(r2.data.variaciones_afectadas) + ' variación(es) más).' : '.';
+          toast('Pausada' + extra2, 'ok');
+          onExito();
+        } else {
+          toast('ML no confirmó la pausa. No se cambió nada.', 'error');
+        }
+      });
+      return;
+    }
+    if (r.status === 0) { toast('No se pudo conectar con el servidor. No se cambió nada. Revisá tu conexión y reintentá.', 'error'); return; }
+    toast('ML no confirmó la pausa. No se cambió nada.', 'error');
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: MULTI-PUBLICACIÓN
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function cargarMultipub() {
+  jsonFetch('/api/cobertura/multi-publicacion').then(function (res) {
+    var cont = document.getElementById('multipub-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin casos de multi-publicación.</div>'; return; }
+    cont.innerHTML = data.map(function (p) {
+      return '<div class="grupo-sku"><div class="grupo-sku-head">' + esc(p.nombre) + ' — <span class="sku-mono">' + esc(p.sku) + '</span> <span style="color:var(--muted);font-weight:400;">(' + p.publicaciones.length + ' publicaciones)</span></div>' +
+        p.publicaciones.map(function (pub) {
+          return '<div class="pub-row' + (pub.sobreventa ? ' sobreventa' : '') + '">' +
+            '<div class="pub-txt"><span class="pub-mono">' + esc(pub.clave) + '</span> · Estado: ' + esc(pub.status) + ' · Stock ' + n(pub.stock) +
+            (pub.sin_stock_ml ? ' <span class="sobreventa-tag" style="color:var(--muted);">sin stock ML</span>' : '') +
+            (pub.sobreventa ? ' <span class="sobreventa-tag"><span aria-hidden="true">⚠</span>posible sobreventa</span>' : '') + '</div>' +
+            '<div class="pub-acciones">' +
+            '<button type="button" class="mini-btn" data-mc="' + esc(pub.clave) + '">' + (pub.marcada_correcta ? '✓ Correcta' : 'Marcar correcta') + '</button>' +
+            botonAdminHtml('mini-btn', 'data-pausar="' + esc(pub.clave) + '"', 'Pausar') +
+            botonAdminHtml('mini-btn', 'data-desvincular="' + esc(pub.clave) + '"', 'Desvincular') +
+            '</div></div>';
+        }).join('') + '</div>';
+    }).join('');
+    cont.querySelectorAll('[data-mc]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        jsonFetch('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function () { toast('Marcada como correcta.', 'ok'); cargarMultipub(); });
+      });
+    });
+    cont.querySelectorAll('[data-pausar]:not(:disabled)').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        pausarConConfirmacion('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.pausar) + '/pausar', cargarMultipub);
+      });
+    });
+    cont.querySelectorAll('[data-desvincular]:not(:disabled)').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (!window.confirm('¿Desvincular esta publicación del SKU?')) return;
+        jsonFetch('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.desvincular) + '/desvincular', { method: 'POST' }).then(function (r) {
+          if (r.ok && r.data && r.data.ok) { toast('Desvinculada.', 'ok'); cargarMultipub(); }
+          else if (r.status === 403) { toast('Solo administradores pueden desvincular.', 'error'); }
+          else toast('ML no confirmó la desvinculación. No se cambió nada.', 'error');
+        });
+      });
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: SOLO ML
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var soloMlDebounce = null;
+document.getElementById('soloml-buscar').addEventListener('input', function () {
+  window.clearTimeout(soloMlDebounce);
+  soloMlDebounce = window.setTimeout(cargarSoloMl, 250);
+});
+
+function cargarSoloMl() {
+  var q = document.getElementById('soloml-buscar').value.trim();
+  jsonFetch('/api/cobertura/solo-ml?q=' + encodeURIComponent(q) + '&limit=50').then(function (res) {
+    var cont = document.getElementById('soloml-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
+    cont.innerHTML = '<p class="page-sub">' + n(res.data.total) + ' publicaciones sin SKU en total.</p>' +
+      '<div class="gestion-lista">' + data.map(function (r) {
+        return '<div class="solo-ml-row">' +
+          (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="">' : '<div class="mc-thumb"></div>') +
+          '<div class="flex1">' + esc(r.titulo) + '<div class="meta" style="color:var(--muted);font-size:.72rem;">' + esc(r.clave) + ' · ' + money(r.precio) + ' · Stock ' + n(r.available_quantity) + '</div></div>' +
+          '<div class="pub-acciones">' +
+          '<button type="button" class="mini-btn" data-mc="' + esc(r.clave) + '">' + (r.marcada_correcta ? '✓ Correcta' : 'Marcar correcta') + '</button>' +
+          botonAdminHtml('mini-btn', 'data-pausar="' + esc(r.clave) + '"', 'Pausar') +
+          '<button type="button" class="mini-btn" data-vincular-toggle="' + esc(r.clave) + '">Vincular a producto</button>' +
+          '</div>' +
+          '<div class="buscador-inline" hidden data-vincular-box="' + esc(r.clave) + '">' +
+          '<input type="text" placeholder="Buscar producto web por nombre o SKU…" aria-label="Buscar producto web para vincular a ' + esc(r.titulo) + '" data-vincular-input="' + esc(r.clave) + '">' +
+          '<div data-vincular-resultados="' + esc(r.clave) + '"></div>' +
+          '</div>' +
+          '</div>';
+      }).join('') + '</div>';
+
+    cont.querySelectorAll('[data-mc]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        jsonFetch('/api/cobertura/solo-ml/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function () { toast('Marcada como correcta.', 'ok'); cargarSoloMl(); });
+      });
+    });
+    cont.querySelectorAll('[data-pausar]:not(:disabled)').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        pausarConConfirmacion('/api/cobertura/solo-ml/' + encodeURIComponent(btn.dataset.pausar) + '/pausar', cargarSoloMl);
+      });
+    });
+    cont.querySelectorAll('[data-vincular-toggle]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var clave = btn.dataset.vincularToggle;
+        var box = cont.querySelector('[data-vincular-box="' + clave + '"]');
+        box.hidden = !box.hidden;
+      });
+    });
+    cont.querySelectorAll('[data-vincular-input]').forEach(function (input) {
+      var clave = input.dataset.vincularInput;
+      var resultados = cont.querySelector('[data-vincular-resultados="' + clave + '"]');
+      var deb = null;
+      input.addEventListener('input', function () {
+        window.clearTimeout(deb);
+        var q2 = input.value.trim();
+        if (q2.length < 2) { resultados.innerHTML = ''; return; }
+        deb = window.setTimeout(function () {
+          jsonFetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q2)).then(function (r) {
+            if (!r.ok || !r.data) { resultados.innerHTML = ''; return; }
+            var lista = (r.data.data || []).slice(0, 8);
+            resultados.innerHTML = lista.map(function (p) {
+              return '<div class="resultado-vincular"><span>' + esc(p.nombre || '') + ' (' + esc(p.sku || '—') + ')</span><button type="button" class="mini-btn" data-elegir="' + esc(p.sku) + '">Vincular</button></div>';
+            }).join('') || '<div class="meta">Sin resultados.</div>';
+            resultados.querySelectorAll('[data-elegir]').forEach(function (btn2) {
+              btn2.addEventListener('click', function () {
+                jsonFetch('/api/woo/catalogo').then(function (rc) {
+                  var lista2 = (rc.data && (rc.data.data || rc.data)) || [];
+                  var prodEl = lista2.filter(function (p) { return p.sku === btn2.dataset.elegir; })[0];
+                  var idWoo = prodEl ? prodEl.id_woo : null;
+                  vincularSoloMl(clave, idWoo, resultados);
+                });
+              });
+            });
+          });
+        }, 300);
+      });
+    });
+  });
+}
+function vincularSoloMl(clave, idWoo, resultados) {
+  if (!idWoo) { toast('No se pudo resolver el producto elegido.', 'error'); return; }
+  jsonFetch('/api/cobertura/solo-ml/' + encodeURIComponent(clave) + '/vincular', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id_woo: idWoo }),
+  }).then(function (res2) {
+    if (res2.status === 409 && res2.data && res2.data.ya_resuelto) {
+      toast('Ya lo resolvió ' + res2.data.resuelto_por + ': vinculado a ' + res2.data.sku, 'neutro');
+      cargarSoloMl();
+      return;
+    }
+    if (!res2.ok || !res2.data || !res2.data.ok) { toast('No se pudo vincular.', 'error'); return; }
+    toast(res2.data.estado === 'vinculado' ? 'Vinculado.' : 'Guardado · se sincroniza con ML apenas se pueda', res2.data.estado === 'vinculado' ? 'ok' : 'pendiente');
+    cargarSoloMl();
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: SIN STOCK
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function cargarSinStock() {
+  jsonFetch('/api/cobertura/sin-stock').then(function (res) {
+    var cont = document.getElementById('sinstock-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio">Nada sin stock por ahora.</div>'; return; }
+    cont.innerHTML = '<div class="gestion-lista">' + data.map(function (p) {
+      return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(p.nombre) + '</div><div class="meta">' + esc(p.sku || '—') + ' · ' + esc(p.marca || '—') + '</div></div></div>';
+    }).join('') + '</div>';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * VISTA: PROBLEMAS — pausadas-que-siguen-vinculadas + Sospechosos (absorbido de Vínculos)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var problemasCache = [];
+function cargarProblemas() {
+  jsonFetch('/api/cobertura/cruce').then(function (res) {
+    var cont = document.getElementById('prob-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    problemasCache = res.data.pausadas || [];
+    var marcas = Array.from(new Set(problemasCache.map(function (p) { return p.marca; }).filter(Boolean))).sort();
+    var selMarca = document.getElementById('prob-marca');
+    selMarca.innerHTML = '<option value="">Todas las marcas</option>' + marcas.map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('');
+    var cats = Array.from(new Set(problemasCache.flatMap(catsDe))).sort();
+    var selCat = document.getElementById('prob-categoria');
+    selCat.innerHTML = '<option value="">Todas las categorías</option>' + cats.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
+    renderProblemas();
+  });
+  cargarSospechosos();
+}
+document.getElementById('prob-marca').addEventListener('change', renderProblemas);
+document.getElementById('prob-categoria').addEventListener('change', renderProblemas);
+function renderProblemas() {
+  var marca = document.getElementById('prob-marca').value;
+  var categoria = document.getElementById('prob-categoria').value;
+  var cont = document.getElementById('prob-lista');
+  var filtrado = problemasCache.filter(function (p) {
+    if (marca && p.marca !== marca) return false;
+    if (categoria && catsDe(p).indexOf(categoria) === -1) return false;
+    return true;
+  });
+  if (!filtrado.length) { cont.innerHTML = '<div class="vacio" style="color:var(--success);">✓ Sin pausadas-que-siguen-vinculadas.</div>'; return; }
+  cont.innerHTML = '<div class="gestion-lista">' + filtrado.map(function (p) {
+    return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(p.nombre) + '</div><div class="meta">' + esc(p.sku || '—') + ' · ML: ' + esc(p.ml_status) + ' · <a href="' + mlUrl(p.ml_item_id) + '" target="_blank" rel="noopener">abrir en ML</a></div></div></div>';
+  }).join('') + '</div>';
+}
+
+/* Clase CSS del chip de señal según su peso. 'alta' → crítico, cualquier otro → 'media'. */
+function pesoLabel(peso) { return peso === 'alta' ? 'alta' : 'media'; }
+
+var sospechososCache = [];
+function cargarSospechosos() {
+  var cont = document.getElementById('sospechosos-lista');
+  cont.innerHTML = '<div class="skel" style="height:150px;"></div>';
+  jsonFetch('/api/cobertura/vinculos-sospechosos').then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    sospechososCache = res.data.data || [];
+    renderSospechosos();
+  });
+}
+function renderSospechosos() {
+  var cont = document.getElementById('sospechosos-lista');
+  if (!sospechososCache.length) {
+    cont.innerHTML = '<div class="vacio" style="color:var(--success);">✓ Sin señales de mal matcheo pendientes.</div>';
+    return;
+  }
+  cont.innerHTML = sospechososCache.map(renderSospechosoRow).join('');
+  wireSospechosos();
+}
+function renderSospechosoRow(row) {
+  var senales = row.senales || [];
+  var chipsHtml = '<div class="chips-wrap">' + senales.map(function (s) {
+    var clase = pesoLabel(s.peso);
+    return '<span class="chip ' + clase + '" data-senal="' + esc(s.senal) + '">' +
+      '<span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
+      '<button type="button" class="chip-revisar" data-clave="' + esc(row.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button>' +
+      '</span>';
+  }).join('') + '</div>';
+
+  return '<div class="pub-card" data-clave="' + esc(row.clave) + '" data-wc-nombre="' + esc(row.wc_nombre || '') + '">' +
+    '<div class="pub-head">' +
+    (row.thumbnail ? '<img src="' + esc(row.thumbnail) + '" alt="Foto de la publicación en ML">' : '') +
+    '<div class="pub-titulos">' +
+    '<button type="button" class="pub-titulo-ml" data-abrir-sku="' + esc(row.sku) + '" style="background:none;border:none;color:var(--text);text-align:left;cursor:pointer;padding:0;font:inherit">' + esc(row.titulo || row.item_id) + '</button>' +
+    '<div class="pub-nombre-wc">WC: ' + esc(row.wc_nombre || '—') + ' · SKU ' + esc(row.sku) + '</div>' +
+    '</div></div>' +
+    '<div class="pub-grid">' +
+    '<div class="pub-dato"><span class="k">Precio ML</span><span class="v">' + money(row.precio_ml) + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Precio WC</span><span class="v">' + money(row.precio_wc) + '</span></div>' +
+    '</div>' +
+    chipsHtml +
+    '<div class="pub-acciones">' +
+    (row.permalink ? '<a class="btn" href="' + esc(row.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
+    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(row.clave) + '">Reasignar a otro SKU</button>' +
+    botonAdminHtml('btn danger', 'data-accion="desvincular" data-clave="' + esc(row.clave) + '"', 'Desvincular') +
+    '</div>' +
+    '<div class="pub-flash" data-flash></div>' +
+    '</div>';
+}
+function wireSospechosos() {
+  var cont = document.getElementById('sospechosos-lista');
+  cont.querySelectorAll('.chip-revisar').forEach(function (btn) {
+    btn.addEventListener('click', function () { marcarRevisado(btn); });
+  });
+  cont.querySelectorAll('[data-accion="desvincular"]:not(:disabled)').forEach(function (btn) {
+    btn.addEventListener('click', function () { abrirModalDesvincular(btn, function () { sospechososCache = sospechososCache.filter(function (r) { return r.clave !== btn.dataset.clave; }); renderSospechosos(); }); });
+  });
+  cont.querySelectorAll('[data-accion="reasignar"]').forEach(function (btn) {
+    btn.addEventListener('click', function () { abrirModalReasignar(btn, function () { sospechososCache = sospechososCache.filter(function (r) { return r.clave !== btn.dataset.clave; }); renderSospechosos(); }); });
+  });
+  cont.querySelectorAll('[data-abrir-sku]').forEach(function (btn) {
+    btn.addEventListener('click', function () { abrirBuscador(btn.getAttribute('data-abrir-sku')); });
+  });
+}
+
+/* ── Revisado, está bien así (optimista) — reusado en Problemas y en el buscador puntual ── */
+function marcarRevisado(btn) {
+  var chip = btn.closest('.chip');
+  var clave = btn.getAttribute('data-clave');
+  var senal = btn.getAttribute('data-senal');
+  var valor = btn.getAttribute('data-valor');
+  var pubCard = btn.closest('.pub-card');
+  var flash = pubCard ? pubCard.querySelector('[data-flash]') : null;
+  var wrap = pubCard ? pubCard.querySelector('.chips-wrap') : null;
+
+  btn.disabled = true;
+  jsonFetch('/api/cobertura/vinculos/revisado', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clave: clave, senal: senal, valor: valor }),
+  }).then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) {
+      btn.disabled = false;
+      if (flash) { flash.className = 'pub-flash err'; flash.textContent = '✗ No se guardó: ' + (res.data && res.data.error || 'error') + ' — la señal sigue vigente.'; }
+      return;
+    }
+    if (chip) chip.remove();
+    if (wrap && !wrap.querySelector('.chip')) wrap.innerHTML = '<span class="chip ninguna"><span class="chip-txt">Sin señales</span></span>';
+    if (flash) { flash.className = 'pub-flash ok'; flash.textContent = '✓ Revisado.'; setTimeout(function () { flash.textContent = ''; }, 3000); }
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Modal genérico (desvincular / reasignar) — reusado por Problemas y Buscar
+ * ═══════════════════════════════════════════════════════════════════════ */
+var modalRoot = document.getElementById('modal-root');
+function cerrarModal() { modalRoot.innerHTML = ''; document.removeEventListener('keydown', onModalKeydown); }
+function onModalKeydown(ev) {
+  if (ev.key === 'Escape') { cerrarModal(); return; }
+  if (ev.key === 'Tab') {
+    var box = modalRoot.querySelector('.modal-box');
+    if (!box) return;
+    var focusables = Array.prototype.slice.call(box.querySelectorAll('button, input, a[href], [tabindex]:not([tabindex="-1"])')).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+    if (!focusables.length) return;
+    var primero = focusables[0], ultimo = focusables[focusables.length - 1];
+    if (ev.shiftKey && document.activeElement === primero) { ev.preventDefault(); ultimo.focus(); }
+    else if (!ev.shiftKey && document.activeElement === ultimo) { ev.preventDefault(); primero.focus(); }
+    else if (!box.contains(document.activeElement)) { ev.preventDefault(); primero.focus(); }
+  }
+}
+function abrirModal(html) {
+  modalRoot.innerHTML = '<div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-box">' + html + '</div></div>';
+  document.addEventListener('keydown', onModalKeydown);
+  document.getElementById('modal-overlay').addEventListener('click', function (ev) { if (ev.target.id === 'modal-overlay') cerrarModal(); });
+  var focusable = modalRoot.querySelector('button, input');
+  if (focusable) focusable.focus();
+}
+function abrirModalDesvincular(btn, onExito) {
+  var clave = btn.getAttribute('data-clave');
+  var pubCard = btn.closest('.pub-card');
+  var nombreProducto = (pubCard && pubCard.getAttribute('data-wc-nombre')) || 'este producto';
+  abrirModal(
+    '<div class="modal-title" id="modal-title">Desvincular publicación</div>' +
+    '<div class="modal-body">Esta publicación va a dejar de sincronizar stock con <b>' + esc(nombreProducto) + '</b>. Vas a tener que volver a vincularla a mano.</div>' +
+    '<div class="modal-actions"><button type="button" class="btn" id="modal-cancelar">Cancelar</button><button type="button" class="btn danger" id="modal-confirmar">Desvincular</button></div>'
+  );
+  document.getElementById('modal-cancelar').addEventListener('click', cerrarModal);
+  document.getElementById('modal-confirmar').addEventListener('click', function () {
+    var confirmarBtn = document.getElementById('modal-confirmar');
+    confirmarBtn.disabled = true; confirmarBtn.textContent = 'Desvinculando…';
+    jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(clave) + '/desvincular', { method: 'POST' }).then(function (res) {
+      if (!res.ok || !res.data || !res.data.ok) {
+        confirmarBtn.disabled = false; confirmarBtn.textContent = 'Desvincular';
+        mostrarErrorModal(res.status === 403 ? 'Solo administradores pueden desvincular.' : (res.data && res.data.error) || 'No se pudo desvincular.');
+        return;
+      }
+      cerrarModal();
+      toast('Publicación desvinculada.', 'ok');
+      if (onExito) onExito();
+    });
+  });
+}
+function abrirModalReasignar(btn, onExito) {
+  var clave = btn.getAttribute('data-clave');
+  var pubCard = btn.closest('.pub-card');
+  var nombreActual = (pubCard && pubCard.getAttribute('data-wc-nombre')) || 'el producto actual';
+  abrirModal(
+    '<div class="modal-title" id="modal-title">Reasignar a otro SKU</div>' +
+    '<div class="modal-body">Buscá el producto al que querés que esta publicación sincronice stock.' +
+    '<label class="sr-only" for="modal-sku-input">Buscar por SKU o nombre</label>' +
+    '<input class="search-box" type="text" id="modal-sku-input" placeholder="SKU o nombre" autocomplete="off" style="margin-top:10px;">' +
+    '<div class="modal-search-results hidden" id="modal-sku-results"></div>' +
+    '<div id="modal-resumen"></div></div>' +
+    '<div class="modal-actions"><button type="button" class="btn" id="modal-cancelar">Cancelar</button><button type="button" class="btn primary" id="modal-confirmar" disabled>Reasignar</button></div>'
+  );
+  document.getElementById('modal-cancelar').addEventListener('click', cerrarModal);
+  var input = document.getElementById('modal-sku-input');
+  var results = document.getElementById('modal-sku-results');
+  var resumen = document.getElementById('modal-resumen');
+  var confirmarBtn = document.getElementById('modal-confirmar');
+  var skuElegido = null, nombreElegido = null;
+  var deb = null;
+  input.addEventListener('input', function () {
+    window.clearTimeout(deb);
+    var q = input.value.trim();
+    if (q.length < 2) { results.classList.add('hidden'); results.innerHTML = ''; return; }
+    deb = window.setTimeout(function () {
+      jsonFetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q)).then(function (r) {
+        var data = (r.data && r.data.data) || [];
+        results.innerHTML = data.length
+          ? data.map(function (o) { return '<button type="button" class="ac-opt" data-sku="' + esc(o.sku) + '" data-nombre="' + esc(o.nombre || '') + '"><b>' + esc(o.sku) + '</b> — ' + esc(o.nombre || '') + '</button>'; }).join('')
+          : '<div class="ac-empty">No encontramos productos con ese término.</div>';
+        results.classList.remove('hidden');
+      });
+    }, 300);
+  });
+  results.addEventListener('click', function (ev) {
+    var opt = ev.target.closest('.ac-opt[data-sku]');
+    if (!opt) return;
+    skuElegido = opt.getAttribute('data-sku');
+    nombreElegido = opt.getAttribute('data-nombre');
+    input.value = skuElegido;
+    results.classList.add('hidden'); results.innerHTML = '';
+    resumen.innerHTML = '<div class="modal-resumen">Esta publicación va a sincronizar stock con <b>' + esc(nombreElegido || skuElegido) + '</b> en vez de con <b>' + esc(nombreActual) + '</b>.' +
+      '<div class="aviso">Nota: si esta publicación tenía revisiones "OK" guardadas, se van a borrar — valían para el vínculo anterior, no para el nuevo.</div></div>';
+    confirmarBtn.disabled = false;
+  });
+  var cerrarResultsModal = function (ev) { if (!ev.target.closest('#modal-sku-input, #modal-sku-results')) results.classList.add('hidden'); };
+  document.getElementById('modal-overlay').addEventListener('click', cerrarResultsModal);
+  confirmarBtn.addEventListener('click', function () {
+    if (!skuElegido) return;
+    confirmarBtn.disabled = true; confirmarBtn.textContent = 'Reasignando…';
+    jsonFetch('/api/cobertura/vinculos/reasignar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clave: clave, sku: skuElegido }),
+    }).then(function (res) {
+      if (!res.ok || !res.data || !res.data.ok) {
+        confirmarBtn.disabled = false; confirmarBtn.textContent = 'Reasignar';
+        mostrarErrorModal((res.data && res.data.error) || 'No se pudo reasignar.');
+        return;
+      }
+      cerrarModal();
+      toast('Vínculo reasignado a ' + skuElegido + '.', 'ok');
+      if (onExito) onExito();
+    });
+  });
+}
+function mostrarErrorModal(msg) {
+  var body = modalRoot.querySelector('.modal-body');
+  if (!body) return;
+  var errEl = document.createElement('div');
+  errEl.style.color = 'var(--critical)'; errEl.style.marginTop = '10px'; errEl.style.fontSize = '.8rem';
+  errEl.textContent = '✗ ' + msg;
+  body.appendChild(errEl);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Buscador puntual (ícono fijo en la topbar, alcanzable desde cualquier vista)
+ * — absorbe "Buscar producto" de Vínculos.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+var searchOverlay = document.getElementById('search-overlay');
+var buscarTopbarInput = document.getElementById('buscar-topbar-input');
+var buscarTopbarResults = document.getElementById('buscar-topbar-results');
+var buscarTopbarDetalle = document.getElementById('buscar-topbar-detalle');
+var buscarTopbarDebounce = null;
+
+function abrirBuscador(skuInicial) {
+  searchOverlay.classList.remove('hidden');
+  buscarTopbarResults.innerHTML = '';
+  buscarTopbarDetalle.innerHTML = '';
+  buscarTopbarInput.value = '';
+  if (skuInicial) { mostrarDetalleProducto(skuInicial); }
+  window.setTimeout(function () { buscarTopbarInput.focus(); }, 0);
+}
+function cerrarBuscador() {
+  searchOverlay.classList.add('hidden');
+}
+document.getElementById('btn-buscar-topbar').addEventListener('click', function () { abrirBuscador(); });
+document.getElementById('search-overlay-cerrar').addEventListener('click', cerrarBuscador);
+searchOverlay.addEventListener('click', function (ev) { if (ev.target === searchOverlay) cerrarBuscador(); });
+document.addEventListener('keydown', function (ev) {
+  if (ev.key === 'Escape' && !searchOverlay.classList.contains('hidden')) cerrarBuscador();
+});
+
+buscarTopbarInput.addEventListener('input', function () {
+  window.clearTimeout(buscarTopbarDebounce);
+  var q = buscarTopbarInput.value.trim();
+  if (q.length < 2) { buscarTopbarResults.innerHTML = ''; return; }
+  buscarTopbarDebounce = window.setTimeout(function () {
+    jsonFetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q)).then(function (res) {
+      var data = (res.data && res.data.data) || [];
+      if (!data.length) { buscarTopbarResults.innerHTML = '<div class="ac-empty">No encontramos productos con ese término. Revisá el SKU o el nombre.</div>'; return; }
+      buscarTopbarResults.innerHTML = data.map(function (o) {
+        return '<button type="button" class="ac-opt" data-sku="' + esc(o.sku) + '"><b>' + esc(o.sku) + '</b> — ' + esc(o.nombre || '') + ' <span style="color:var(--muted);">(stock ' + n(o.stock) + ')</span></button>';
+      }).join('');
+      buscarTopbarResults.querySelectorAll('[data-sku]').forEach(function (btn) {
+        btn.addEventListener('click', function () { mostrarDetalleProducto(btn.getAttribute('data-sku')); });
+      });
+    });
+  }, 300);
+});
+
+function mostrarDetalleProducto(sku) {
+  buscarTopbarResults.innerHTML = '';
+  buscarTopbarInput.value = sku;
+  buscarTopbarDetalle.innerHTML = '<div class="skel" style="height:120px;"></div>';
+  jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(sku)).then(function (res) {
+    if (!res.ok || !res.data || !res.data.ok) {
+      buscarTopbarDetalle.innerHTML = res.status === 404
+        ? '<div class="vacio">No encontramos "' + esc(sku) + '" en el catálogo.</div>'
+        : '<div class="vacio">No se pudo cargar el detalle. <button type="button" class="hbtn" id="retry-detalle">Reintentar</button></div>';
+      var retry = document.getElementById('retry-detalle');
+      if (retry) retry.addEventListener('click', function () { mostrarDetalleProducto(sku); });
+      return;
+    }
+    renderDetalleProducto(res.data.producto, res.data.publicaciones);
+  });
+}
+function renderDetalleProducto(producto, publicaciones) {
+  var html = '<div class="producto-card">' +
+    (producto.img ? '<img src="' + esc(producto.img) + '" alt="Foto de ' + esc(producto.nombre || producto.sku) + '">' : '') +
+    '<div class="producto-info"><div class="producto-nombre">' + esc(producto.nombre || '(sin nombre)') + '</div>' +
+    '<div class="producto-meta"><span class="pill-sku">' + esc(producto.sku) + '</span><span>Stock: ' + n(producto.stock) + '</span>' +
+    '<span>Lista: ' + money(producto.precio_lista) + '</span><span class="contado">Contado: ' + money(producto.precio_contado) + '</span></div></div></div>';
+  if (!publicaciones.length) {
+    html += '<div class="vacio">Este producto no tiene ninguna publicación de ML vinculada. Si tiene que publicarse, usá la cola desde la entrada del Matcher.</div>';
+  } else {
+    html += publicaciones.map(function (pub) { return renderPubCardDetalle(pub, producto.nombre); }).join('');
+  }
+  buscarTopbarDetalle.innerHTML = html;
+  buscarTopbarDetalle.querySelectorAll('.chip-revisar').forEach(function (btn) { btn.addEventListener('click', function () { marcarRevisado(btn); }); });
+  buscarTopbarDetalle.querySelectorAll('[data-accion="desvincular"]:not(:disabled)').forEach(function (btn) {
+    btn.addEventListener('click', function () { abrirModalDesvincular(btn, function () { mostrarDetalleProducto(producto.sku); }); });
+  });
+  buscarTopbarDetalle.querySelectorAll('[data-accion="reasignar"]').forEach(function (btn) {
+    btn.addEventListener('click', function () { abrirModalReasignar(btn, function () { mostrarDetalleProducto(producto.sku); }); });
+  });
+}
+function renderPubCardDetalle(pub, wcNombre) {
+  var senales = pub.senales || [];
+  var chipsHtml = !senales.length
+    ? '<div class="chips-wrap"><span class="chip ninguna"><span class="chip-txt">Sin señales</span></span></div>'
+    : '<div class="chips-wrap">' + senales.map(function (s) {
+      var clase = pesoLabel(s.peso);
+      return '<span class="chip ' + clase + '"><span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
+        '<button type="button" class="chip-revisar" data-clave="' + esc(pub.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button></span>';
+    }).join('') + '</div>';
+  return '<div class="pub-card" data-clave="' + esc(pub.clave) + '" data-wc-nombre="' + esc(wcNombre || '') + '">' +
+    '<div class="pub-head">' + (pub.thumbnail ? '<img src="' + esc(pub.thumbnail) + '" alt="">' : '') +
+    '<div class="pub-titulos"><div class="pub-titulo-ml">' + esc(pub.titulo || pub.item_id) + '</div><div class="pub-nombre-wc">WC: ' + esc(wcNombre || '—') + '</div></div></div>' +
+    '<div class="pub-grid">' +
+    '<div class="pub-dato"><span class="k">SKU en ML</span><span class="v">' + esc(pub.seller_sku || '—') + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Estado</span><span class="v">' + esc(pub.status || '—') + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Stock ML / web</span><span class="v">' + n(pub.stock_ml) + ' / ' + n(pub.stock_sincronizado) + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Precio ML</span><span class="v destacado">' + money(pub.precio_ml) + '</span></div>' +
+    '</div>' + chipsHtml +
+    '<div class="pub-acciones">' +
+    (pub.permalink ? '<a class="btn" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
+    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(pub.clave) + '">Reasignar a otro SKU</button>' +
+    botonAdminHtml('btn danger', 'data-accion="desvincular" data-clave="' + esc(pub.clave) + '"', 'Desvincular') +
+    '</div><div class="pub-flash" data-flash></div></div>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Actualizar desde ML (botón del topbar)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+document.getElementById('btn-actualizar-ml').addEventListener('click', function () {
+  var btn = document.getElementById('btn-actualizar-ml');
+  var txt = document.getElementById('btn-actualizar-txt');
+  txt.textContent = 'Actualizando…';
+  btn.disabled = true;
+  jsonFetch('/api/sync/estado').then(function () {
+    btn.disabled = false;
+    txt.textContent = 'Actualizar';
+    router();
+    cargarChips();
+    cargarRefrescoBar();
+    toast('Datos actualizados.', 'ok');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Arranque
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+Api.requirePermiso('matcher').then(function (d) {
+  if (!d) return;
+  esAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+  router();
+  cargarChips();
+  cargarRefrescoBar();
+  window.setInterval(cargarRefrescoBar, 60000);
+});
 </script>
 </body>
 </html>

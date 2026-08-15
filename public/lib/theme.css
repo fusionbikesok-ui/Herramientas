@@ -180,6 +180,29 @@
      (ya existentes) pero la distinción NUNCA depende solo de ese color — ver
      design-system.md "Vinculado vs. pendiente de sincronizar" para el contrato de
      icono + texto obligatorio que acompaña a cada uno. */
+
+  /* Matcher unificado — tira de chips de secciones persistente.
+     Alias explícitos sobre --chip-*/--warning-* (mismos valores, ya auditados) para que
+     el criterio "ámbar es solo para lo accionable" quede escrito en el nombre del token
+     y no dependa de que quien escriba CSS se acuerde de la regla. Ver design-system.md
+     §Matcher unificado y el criterio ya aplicado en Seguimientos (public/preparacion). */
+  --chip-alert-bg:  var(--warning-bg);
+  --chip-alert-bd:  var(--warning-bd);
+  --chip-alert-txt: var(--warning);
+
+  /* Matcher unificado — rol de cada lado de la tarjeta de comparación (fijo vs.
+     candidato). La tarjeta NO se espeja: WC siempre en el mismo lugar, ML siempre en
+     el mismo lugar; lo que cambia es cuál lado lleva la etiqueta "Punto de partida" y
+     cuál lleva "Candidato". Son alias sobre tokens ya existentes, no colores nuevos:
+     "candidato" reusa el mismo lenguaje que ya significa "tu próximo paso" en el resto
+     de la app (--chip-on-*, usado en "seguir donde quedé" y filtros activos); "punto de
+     partida" reusa el chip neutro por defecto. */
+  --role-anchor-bg:     var(--chip-bg);
+  --role-anchor-bd:     var(--chip-bd);
+  --role-anchor-txt:    var(--chip-txt);
+  --role-candidate-bg:  var(--chip-on-bg);
+  --role-candidate-bd:  var(--chip-on-bd);
+  --role-candidate-txt: var(--chip-on-txt);
 }
 
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
