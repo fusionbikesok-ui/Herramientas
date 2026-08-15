@@ -14,6 +14,7 @@ import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
 import { senalesDeVinculo } from '../lib/vinculosSenales.js';
+import { norm, tsr } from '../lib/matcherEngine.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
@@ -120,6 +121,36 @@ function sleep(ms) {
 
 function now() {
   return new Date().toISOString();
+}
+
+// Umbral de la guarda de coherencia, MEDIDO sobre datos reales (2026-08-15), no elegido a ojo.
+// Primero probé "alcanza una palabra en común" y la medición lo tiró abajo: el caso real que
+// motivó todo esto —"Casco Crazy Safety Azul Niños" vinculado a "Casco Rembrandt Para Niños"—
+// comparte "casco" y "niños", así que pasaba la guarda igual. Palabras de categoría, no de
+// producto.
+//
+// Con la similitud del motor (`tsr`, la misma que usa el Matcher) sobre las 54 ventas reales
+// que este cambio recupera, la separación es limpia:
+//   0.537  ← el caso mal vinculado (el único que hay que frenar)
+//   0.602  ← el siguiente más bajo, y es un vínculo CORRECTO ("Soporte Ciclocomputador
+//            Igpsport M80" ↔ "Soporte Para Gps Frontal Delantero Igpsport")
+// 0.57 cae en el medio de ese hueco: frena 1 de 54 y deja pasar las 53 correctas.
+//
+// Contraste contra los 2658 vínculos ya hechos y revisados por una persona: la mediana da
+// 0.900 y el percentil 1 da 0.554, así que este umbral marcaría ~1,5% de ellos. El costo de
+// un falso positivo es no descontar stock y avisar — que es exactamente lo que pasa HOY en el
+// 100% de estos casos. El error va siempre hacia el lado seguro.
+const UMBRAL_COHERENCIA_SKU_ML = 0.57;
+
+/**
+ * ¿El título de la publicación de ML y el nombre del producto de WC hablan del mismo
+ * producto? No es un matcher —para eso está `lib/matcherEngine.js`, con sus tokens
+ * discriminantes y sus niveles de confianza—: es una guarda contra el caso grosero de que el
+ * SKU cargado a mano en una publicación apunte a otro producto.
+ */
+export function titulosCompatibles(tituloMl, nombreWc) {
+  if (!tituloMl || !nombreWc) return false; // sin dato no se afirma compatibilidad
+  return tsr(norm(tituloMl), norm(nombreWc)) >= UMBRAL_COHERENCIA_SKU_ML;
 }
 
 function logSync(db, { direccion, clave, sku, cantAnterior, cantNueva, estado, error, intentos = 0 }) {
@@ -534,7 +565,16 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     const qty = item.cantidad;
     const clave = item.clave;
 
-    const sku = skuDesdeMl(db, itemId, varId);
+    // El SKU sale primero de NUESTRO vínculo y, si no hay, del que la venta de ML ya trae
+    // (`seller_sku`). Hasta el 2026-08-15 ese segundo camino no existía: si la publicación no
+    // estaba vinculada acá, la venta se marcaba `sin_mapeo`, no se creaba el pedido en WC y el
+    // stock NUNCA se descontaba — mientras la web (que alimenta el stock de ML) seguía
+    // diciendo que había. Esa es la fábrica de sobreventas: medido sobre 60 días, 83 ventas
+    // sin mapear, y 54 de ellas traían un SKU que SÍ existe en el catálogo. Casi una por día.
+    // `routes/preparacion.js` ya usaba este fallback; el sync que crea el pedido no.
+    let sku = skuDesdeMl(db, itemId, varId);
+    const skuDeLaVenta = !sku && !!String(item.seller_sku || '').trim();
+    if (skuDeLaVenta) sku = String(item.seller_sku).trim();
     if (!sku) {
       algunSinMapeo = true;
       logSync(db, { direccion: 'ml_wc', clave, estado: 'sin_mapeo' });
@@ -546,6 +586,29 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       algunSinMapeo = true;
       logSync(db, { direccion: 'ml_wc', clave, sku, estado: 'error', error: 'SKU no encontrado en WC' });
       continue;
+    }
+
+    // Guarda de coherencia, SOLO para el SKU que viene de ML (nuestro vínculo ya pasó por la
+    // revisión de una persona). El SKU de la publicación lo puede haber cargado cualquiera a
+    // mano en ML, y puede apuntar a otro producto: el 2026-08-14 se vendió un "Casco Crazy
+    // Safety Azul" cuya publicación tenía el SKU de un "Casco Rembrandt Tigre Blanco". Sin
+    // esta guarda, el fallback de arriba habría descontado el Rembrandt — cambiando una
+    // sobreventa por un descuento del producto equivocado, que es peor porque no se nota.
+    // Fail-closed: ante la duda no se descuenta y queda registrado para revisar.
+    if (skuDeLaVenta) {
+      // `buscarEnCache` no trae el nombre (solo ids y precios), y compararlo contra un
+      // undefined daba SIEMPRE incompatible: la guarda frenaba todo, incluidas las 53 ventas
+      // que este cambio viene a recuperar. Lo peor es que el test de la guarda pasaba igual
+      // —por el motivo equivocado— y sin el test de contraste no se habría notado.
+      const nombreWc = db.prepare("SELECT nombre FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1").get(sku)?.nombre;
+      if (!titulosCompatibles(item.nombre, nombreWc)) {
+        algunSinMapeo = true;
+        logSync(db, {
+          direccion: 'ml_wc', clave, sku, estado: 'sku_incoherente',
+          error: `el SKU ${sku} de la publicación apunta a "${nombreWc || '(sin nombre)'}", que no se parece a "${item.nombre}" — no se descontó stock`,
+        });
+        continue;
+      }
     }
 
     // Decisión del usuario (2026-08-03): el pedido WC NO lleva el precio de venta de ML
