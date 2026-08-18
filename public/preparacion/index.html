@@ -376,7 +376,6 @@ async function cargarPendientesSilencioso(){
   finally{ pendientesEnVuelo=false; }
 }
 
-function cardPendiente(p,ix){
 // El número que hay que mostrar es el que el operario tiene DELANTE en ML. Cuando la compra
 // agrupa varios ítems, ML le muestra al vendedor el número de "pack", que NO es el id de la
 // orden: medido el 2026-08-18, 37 de las 50 ventas más recientes tienen un pack distinto. Con
@@ -385,6 +384,7 @@ function cardPendiente(p,ix){
 // vivía como 2000017948004320 y ya estaba preparada.
 function numMostrar(p){ return p && p.pack_id ? p.pack_id : (p ? p.numero_pedido : ''); }
 
+function cardPendiente(p,ix){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">ML · '+esc(p.logistic_type==='self_service'?'Flex':'Colecta')+'</span>';
   var estado='';
   if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
