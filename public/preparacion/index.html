@@ -377,13 +377,21 @@ async function cargarPendientesSilencioso(){
 }
 
 function cardPendiente(p,ix){
+// El número que hay que mostrar es el que el operario tiene DELANTE en ML. Cuando la compra
+// agrupa varios ítems, ML le muestra al vendedor el número de "pack", que NO es el id de la
+// orden: medido el 2026-08-18, 37 de las 50 ventas más recientes tienen un pack distinto. Con
+// el id de la orden en la tarjeta, buscar a ojo lo que se lee en ML no encontraba nada y la
+// venta parecía no existir — pasó con la venta que ML muestra como 2000014544268249, que acá
+// vivía como 2000017948004320 y ya estaba preparada.
+function numMostrar(p){ return p && p.pack_id ? p.pack_id : (p ? p.numero_pedido : ''); }
+
   var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">ML · '+esc(p.logistic_type==='self_service'?'Flex':'Colecta')+'</span>';
   var estado='';
   if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
   if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   return '<div class="ped" onclick="preparar('+ix+')">'
-    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
     +'<div class="ped-foot">'+estado+'<button class="btn mini" style="margin-left:auto">Preparar →</button></div>'
@@ -553,7 +561,7 @@ function renderDetalle(){
   // servidor va a rechazar (fail-closed también en la UI).
   if(p.estado==='cerrada_sin_evidencia'){
     document.getElementById('cuerpo').innerHTML='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
-      +'<h1 style="margin-top:12px">Pedido <em>#'+esc(p.numero_pedido)+'</em> <span class="badge b-warn">cerrada sin evidencia</span></h1>'
+      +'<h1 style="margin-top:12px">Pedido <em>#'+esc(numMostrar(p))+'</em> <span class="badge b-warn">cerrada sin evidencia</span></h1>'
       +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
       +'<p class="sub">Esta preparación se cerró sin poder verificar el contenido (ítems sin escanear o sin fotos). No está confirmada como completa. Si necesitás trabajarla — por ejemplo, entró un reclamo — reabrila primero.</p>'
       +'<button class="btn" onclick="reabrirCerrada('+p.id+')">Reabrir preparación</button>';
@@ -575,7 +583,10 @@ function renderDetalle(){
   var estadoBadge=completada?'<span class="badge b-ok">COMPLETADA</span>':(p.estado==='pendiente_deposito'?'<span class="badge b-dep">PENDIENTE DEPÓSITO</span>':'');
 
   var html='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
-    +'<h1 style="margin-top:12px">Pedido <em>#'+esc(p.numero_pedido)+'</em> '+canal+etq+' '+estadoBadge+'</h1>'
+    +'<h1 style="margin-top:12px">Pedido <em>#'+esc(numMostrar(p))+'</em> '+canal+etq+' '+estadoBadge+'</h1>'
+    // Cuando el número visible es el del pack, el id de la orden queda igual a la vista: es
+    // el que aparece en la etiqueta y en el resto de la herramienta.
+    +(p.pack_id&&p.numero_pedido&&p.pack_id!==p.numero_pedido?'<p class="sub" style="margin-top:-6px">Orden ML '+esc(p.numero_pedido)+'</p>':'')
     +'<div id="banner-presencia" class="aviso" role="status" aria-live="polite" style="display:none"></div>'
     +'<div style="display:flex;justify-content:space-between;align-items:center">'
     +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
@@ -2206,7 +2217,7 @@ function cardHistorial(p){
     ?'<button class="btn mini sec" style="margin-left:auto" onclick="abrirCorreccionTracking('+p.wc_order_id+',event)">Corregir tracking</button>'
     :'';
   return '<div class="ped" onclick="abrirDetalle('+p.id+')">'
-    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+'</div>'
     +'<div class="ped-items">'+p.total_items+' ítems · '+p.total_fotos+' fotos · '+fecha(p.completado_en||p.creado_en)
     +(p.preparado_por?' · '+esc(p.preparado_por):'')+'</div>'
@@ -2217,7 +2228,7 @@ function cardEnviadoSinPreparar(p){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
   var pedidoId=p.canal==='web'?p.wc_order_id:p.ml_order_id;
   return '<div class="ped">'
-    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.creado_en)+'</div>'
     +'<div class="ped-foot"><span class="badge b-warn">enviado sin preparar</span>'
     +'<button class="btn mini" style="margin-left:auto" onclick="event.stopPropagation();completarAhora(\''+esc(p.canal)+'\','+JSON.stringify(pedidoId)+')">Completar ahora</button></div>'
@@ -2262,7 +2273,7 @@ function cardCerrada(p){
   // modificador heredaba cursor:pointer de .ped y parecía clickeable en toda su superficie
   // cuando no lo era.
   return '<div class="ped static">'
-    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+'</div>'
     +'<div class="ped-items">'+p.total_items+' ítems · '+p.total_fotos+' fotos · '+fecha(p.creado_en)+'</div>'
     +'<div class="ped-foot"><span class="badge b-warn">cerrada sin evidencia</span>'
@@ -2308,9 +2319,9 @@ function cardDespachadaSinVerificar(p){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
   // data-search (hallazgo del revisor): sin esto filtrarSeg() no encuentra nada que filtrar
   // en esta sección y el operario tipea sin que pase nada, sin ninguna explicación.
-  var busq=(String(p.numero_pedido||'')+' '+(p.comprador||'')).toLowerCase();
+  var busq=(String(p.numero_pedido||'')+' '+String(p.pack_id||'')+' '+(p.comprador||'')).toLowerCase();
   return '<div class="ped" data-search="'+esc(busq)+'" onclick="abrirDetalle('+p.id+')">'
-    +'<div class="ped-top"><span class="ped-num">#'+esc(p.numero_pedido)+'</span>'+canal+'</div>'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+'</div>'
     // --muted (5.63:1) y no el --muted2 heredado de .ped-items (3.26:1, bajo el piso AA):
     // mismo arreglo que ya se había aplicado en cardAMedias y que acá faltaba (axe-core,
