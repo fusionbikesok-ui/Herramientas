@@ -136,6 +136,14 @@ function ensureTables(db) {
     actualizado_en  TEXT NOT NULL
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
+  // pack_id acá también: pedidos_cache es lo que alimenta tanto "A preparar" como el
+  // Historial, así que es el único lugar donde ponerlo hace que el número que se lee en ML
+  // sea encontrable en las dos pantallas (ver el comentario de preparaciones.pack_id).
+  try {
+    db.prepare('ALTER TABLE pedidos_cache ADD COLUMN pack_id TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables pedidos_cache.pack_id:', e.message);
+  }
 
   db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_vistas (
     preparacion_id INTEGER NOT NULL,
@@ -212,6 +220,17 @@ function ensureTables(db) {
     db.prepare('ALTER TABLE preparaciones ADD COLUMN localidad TEXT').run();
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables localidad:', e.message);
+  }
+  // pack_id: el número que ML le MUESTRA al vendedor cuando la compra agrupa varios ítems.
+  // No coincide con el id de la orden — medido el 2026-08-18 sobre las 50 ventas más
+  // recientes, 37 tienen un pack distinto. Sin esta columna, buscar en la herramienta por el
+  // número que se lee en ML no encontraba nada, y la venta parecía no existir aunque
+  // estuviera procesada y hasta preparada (caso real: pack 2000014544268249 ↔ orden
+  // 2000017948004320, ya preparada por Joaco).
+  try {
+    db.prepare('ALTER TABLE preparaciones ADD COLUMN pack_id TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables pack_id:', e.message);
   }
 }
 
@@ -371,7 +390,7 @@ function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
 
 // Crea (o completa) una preparación con el snapshot de sus ítems.
 // Idempotente por clave: si ya existe con ítems, devuelve el id existente.
-export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null, numeroPedido, comprador, items = [] }) {
+export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null, packId = null, numeroPedido, comprador, items = [] }) {
   ensureTables(db);
   const clave = canal === 'web' ? `web:${wcOrderId}` : `ml:${mlOrderId}`;
 
@@ -381,9 +400,9 @@ export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null
   const tx = db.transaction(() => {
     if (!prepId) {
       prepId = db.prepare(`INSERT INTO preparaciones
-        (canal, clave, wc_order_id, ml_order_id, numero_pedido, comprador, estado, creado_en)
-        VALUES (?,?,?,?,?,?, 'en_preparacion', ?)`)
-        .run(canal, clave, wcOrderId, mlOrderId, numeroPedido || null, comprador || null, now()).lastInsertRowid;
+        (canal, clave, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, estado, creado_en)
+        VALUES (?,?,?,?,?,?,?, 'en_preparacion', ?)`)
+        .run(canal, clave, wcOrderId, mlOrderId, packId || null, numeroPedido || null, comprador || null, now()).lastInsertRowid;
     }
     const tieneItems = db.prepare('SELECT 1 FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(prepId);
     if (tieneItems) return;
@@ -591,6 +610,7 @@ export function preparacionRouter(db, cfg) {
           canal: 'ml',
           ml_order_id: row.ml_order_id,
           wc_order_id: row.wc_order_id,
+          pack_id: row.pack_id || null,
           numero_pedido: row.numero_pedido,
           comprador: row.comprador,
           fecha: row.fecha,
@@ -969,6 +989,7 @@ export function preparacionRouter(db, cfg) {
         const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(String(orden.id));
         const prepId = crearPreparacion(db, {
           canal: 'ml', mlOrderId: String(orden.id), wcOrderId: vinculo?.wc_order_id || null,
+          packId: orden.pack_id ? String(orden.pack_id) : null,
           numeroPedido: String(orden.id),
           comprador: orden.buyer?.nickname || 'Comprador ML',
           items,
@@ -1704,6 +1725,9 @@ async function pendientesMl(db, mlCfg) {
       canal: 'ml',
       ml_order_id: ov.ml_order_id,
       wc_order_id: vinculo?.wc_order_id || null,
+      // El número que el operario ve en ML es el del pack cuando existe: mostrarlo es lo que
+      // permite que buscar acá lo que se lee allá encuentre algo (ver ensureTables#pack_id).
+      pack_id: ov.pack_id,
       numero_pedido: ov.numero,
       comprador: ov.comprador.nickname || 'Comprador ML',
       fecha: ov.fecha,
@@ -1738,11 +1762,12 @@ function logSyncPedidos(db, estado, error) {
 function upsertPedidoCache(db, row) {
   db.prepare(`
     INSERT INTO pedidos_cache
-      (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha,
+      (clave, canal, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, fecha,
        estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-    VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @numero_pedido, @comprador, @fecha,
+    VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @pack_id, @numero_pedido, @comprador, @fecha,
        @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
+      pack_id=excluded.pack_id,
       numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
       estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
       logistic_type=excluded.logistic_type, substatus=excluded.substatus,
@@ -1758,6 +1783,7 @@ function filaWebDesdeOrder(db, order, estadoEnvio) {
     canal: 'web',
     wc_order_id: order.id,
     ml_order_id: null,
+    pack_id: null, // los pedidos web no tienen pack: el concepto es de ML
     numero_pedido: pend.numero_pedido,
     comprador: pend.comprador,
     fecha: pend.fecha,
@@ -1827,6 +1853,7 @@ export async function syncPedidosCache(db, cfg) {
             canal: 'ml',
             wc_order_id: p.wc_order_id,
             ml_order_id: p.ml_order_id,
+            pack_id: p.pack_id || null,
             numero_pedido: p.numero_pedido,
             comprador: p.comprador,
             fecha: p.fecha,
