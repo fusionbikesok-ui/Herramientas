@@ -348,14 +348,14 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
 <div id="aria-live" class="sr-only" role="status" aria-live="polite"></div>
 
 <div class="subheader">
-  <div class="dir-selector" role="tablist" aria-label="Dirección de trabajo">
-    <button type="button" class="dir-pill active" id="dir-wc-ml" data-dir="wc_ml" role="tab" aria-selected="true">Sin publicación <span class="dir-n" id="dir-wc-ml-n">…</span></button>
-    <button type="button" class="dir-pill" id="dir-ml-wc" data-dir="ml_wc" role="tab" aria-selected="false" disabled aria-disabled="true">Sin producto <span class="dir-n" id="dir-ml-wc-n">…</span><span class="dir-proximamente">Próximamente</span></button>
+  <div class="dir-selector" role="group" aria-label="Dirección de trabajo">
+    <button type="button" class="dir-pill active" id="dir-wc-ml" data-dir="wc_ml" aria-current="true">Sin publicación <span class="dir-n" id="dir-wc-ml-n">…</span></button>
+    <button type="button" class="dir-pill" id="dir-ml-wc" data-dir="ml_wc" aria-current="false">Sin producto<span class="dir-proximamente">Próximamente</span></button>
   </div>
 </div>
 
 <div class="chips-tira-wrap">
-  <div class="chips-tira" id="chips-tira" role="tablist" aria-label="Secciones"></div>
+  <div class="chips-tira" id="chips-tira" role="group" aria-label="Secciones"></div>
 </div>
 
 <div class="refresco-bar" id="refresco-bar">Cargando estado de sincronización…</div>
@@ -454,7 +454,7 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
     <h1 class="page-title">Problemas</h1>
     <p class="page-sub">Cosas que el sistema marca como raras: publicaciones pausadas que siguen vinculadas, y señales de posible mal matcheo.</p>
 
-    <div class="section-label">Pausadas que siguen vinculadas a un producto con stock</div>
+    <div class="section-label">Pausadas que siguen vinculadas a un producto</div>
     <div class="filtros-panel">
       <select class="filtro-control" id="prob-marca" aria-label="Filtrar por marca"><option value="">Todas las marcas</option></select>
       <select class="filtro-control" id="prob-categoria" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option></select>
@@ -547,6 +547,19 @@ function jsonFetch(url, opts) {
   }).catch(function (err) {
     return { ok: false, status: 0, data: null, error: (err && err.message) || 'Fallo de red' };
   });
+}
+
+/* /api/cobertura/resumen se pide en simultáneo desde cargarChips/cargarRefrescoBar/
+   cargarEntrada al arrancar la pantalla — dedupe corto (ventana de 1.5s) para no pedirlo
+   3 veces por el mismo motivo, sin transformarlo en un caché de verdad. */
+var resumenPromiseCache = null;
+function fetchResumen() {
+  if (resumenPromiseCache) return resumenPromiseCache;
+  resumenPromiseCache = jsonFetch('/api/cobertura/resumen');
+  resumenPromiseCache.then(function () {
+    window.setTimeout(function () { resumenPromiseCache = null; }, 1500);
+  });
+  return resumenPromiseCache;
 }
 
 function toast(mensaje, tipo, onDeshacer) {
@@ -684,8 +697,9 @@ function chipHtml(c, n) {
   if (esBoton) {
     return '<a class="chip-sec' + claseExtra + '" data-chip="' + c.key + '" href="' + c.hash + '">' + etiqueta + '</a>';
   }
-  return '<span class="chip-sec' + claseExtra + '" data-chip="' + c.key + '" aria-disabled="' + (c.proximamente ? 'true' : 'false') + '"' +
-    (c.proximamente ? '' : ' tabindex="0" role="link"') + '>' + etiqueta + '</span>';
+  // En 0 (o "próximamente"): no interactivo a propósito (ver design-system.md §8.2) — sin
+  // `tabindex`/`role`, para no tabular a algo que Enter no responde.
+  return '<span class="chip-sec' + claseExtra + '" data-chip="' + c.key + '" aria-disabled="true">' + etiqueta + '</span>';
 }
 
 function renderChipsTira(counts) {
@@ -694,10 +708,6 @@ function renderChipsTira(counts) {
   html += '<details style="display:inline-flex;"><summary class="chip-sec" style="list-style:none;cursor:pointer;">Más ▾</summary>' +
     '<div class="chip-mas-panel">' + CHIPS_RARAS.map(function (c) { return chipHtml(c, counts[c.key] || 0); }).join('') + '</div></details>';
   cont.innerHTML = html;
-  // Chips en 0 no clickeables (aunque no lleven `<a>`, evitamos navegar por teclado con Enter).
-  cont.querySelectorAll('span.chip-sec[role="link"][tabindex]').forEach(function (span) {
-    // en 0: no interactivo a propósito (ver design-system.md §8.2). No se liga ningún handler.
-  });
 }
 
 function actualizarChipsActivo(vistaActual) {
@@ -710,6 +720,7 @@ function actualizarChipsActivo(vistaActual) {
       (key === 'huerfanos' && vistaActual === 'huerfanos') ||
       (key === 'omitidas' && vistaActual === 'omitidas');
     el.style.borderColor = activo ? 'var(--accent)' : '';
+    if (activo) el.setAttribute('aria-current', 'true'); else el.removeAttribute('aria-current');
   });
 }
 
@@ -718,9 +729,8 @@ function cargarChips() {
   var pSospechosos = jsonFetch('/api/cobertura/vinculos-sospechosos').then(function (res) {
     counts.problemas = (res.ok && res.data && res.data.ok) ? (res.data.data || []).length : 0;
   });
-  var pResumen = jsonFetch('/api/cobertura/resumen').then(function (res) {
+  var pResumen = fetchResumen().then(function (res) {
     if (!res.ok || !res.data || !res.data.ok) return;
-    var o = res.data.data ? res.data.data.otras_secciones : res.data.otras_secciones;
     var o2 = res.data.otras_secciones || {};
     counts.publicar = o2.hay_que_publicarlo || 0;
     counts.multipub = o2.multi_publicacion || 0;
@@ -754,7 +764,7 @@ function antiguedadTexto(iso) {
 function cargarRefrescoBar() {
   var bar = document.getElementById('refresco-bar');
   Promise.all([
-    jsonFetch('/api/cobertura/resumen'),
+    fetchResumen(),
     push.contar().catch(function () { return null; }),
   ]).then(function (results) {
     var resumenRes = results[0];
@@ -768,9 +778,18 @@ function cargarRefrescoBar() {
     if (trabado) {
       bar.className = 'refresco-bar trabado';
       bar.innerHTML = '<span><span aria-hidden="true">⚠</span> Push de SKUs trabado · ' + n(cont.en_espera) + ' pendientes en espera <a href="#/publicar">Ver</a></span><span>' + esc(actualizado) + '</span>';
+    } else if (!cont || !cont.ok) {
+      // No sabemos si están al día: el endpoint de contar falló. Nunca afirmar "al día" a
+      // ciegas — misma enfermedad que los bloqueantes de esta pantalla.
+      // `!cont.ok` y no solo `cont === null` (hallazgo del revisor, 2ª pasada): un 403 de
+      // scopeCheck devuelve JSON válido `{ok:false}`, así que la promesa RESUELVE y el
+      // `cont === null` de antes no lo agarraba. Ese es justamente el caso más probable —
+      // alguien sin permiso sobre /api/matcher/* veía "SKUs al día" con la cola trabada.
+      bar.className = 'refresco-bar';
+      bar.innerHTML = '<span>No se pudo confirmar el estado del push de SKUs.</span><span>' + esc(actualizado) + '</span>';
     } else {
       bar.className = 'refresco-bar';
-      bar.innerHTML = '<span>sincronizando sola cada 10 min · SKUs al día</span><span>' + esc(actualizado) + '</span>';
+      bar.innerHTML = '<span>Sincroniza sola cada 10 min · SKUs al día</span><span>' + esc(actualizado) + '</span>';
     }
   });
 }
@@ -780,7 +799,7 @@ function cargarRefrescoBar() {
  * ═══════════════════════════════════════════════════════════════════════ */
 
 function cargarEntrada() {
-  jsonFetch('/api/cobertura/resumen').then(function (res) {
+  fetchResumen().then(function (res) {
     var resumenEl = document.getElementById('entrada-resumen');
     var seguirEl = document.getElementById('entrada-seguir');
     var marcasEl = document.getElementById('entrada-marcas');
@@ -855,10 +874,11 @@ var colaEstado = {
   total: 0,
   actual: null,
   cargandoMas: false,
+  fallo: false,
 };
 
 function cargarCola(marca) {
-  colaEstado = { marca: marca, items: [], offset: 0, total: 0, actual: null, cargandoMas: false };
+  colaEstado = { marca: marca, items: [], offset: 0, total: 0, actual: null, cargandoMas: false, fallo: false };
   document.getElementById('cola-h1').textContent = 'Trabajando marca ' + marca;
   document.getElementById('cola-contenido').innerHTML = '<div class="skel" style="height:340px;"></div>';
   traerMasDeCola().then(function () {
@@ -872,7 +892,8 @@ function traerMasDeCola() {
   return jsonFetch('/api/cobertura/marcas/' + encodeURIComponent(colaEstado.marca) + '/cola?limit=20&offset=' + colaEstado.offset)
     .then(function (res) {
       colaEstado.cargandoMas = false;
-      if (!res.ok || !res.data || !res.data.ok) return;
+      if (!res.ok || !res.data || !res.data.ok) { colaEstado.fallo = true; return; }
+      colaEstado.fallo = false;
       colaEstado.total = res.data.total;
       colaEstado.items = colaEstado.items.concat(res.data.data);
       colaEstado.offset += res.data.data.length;
@@ -905,11 +926,31 @@ function avanzarSiguiente() {
     if (colaEstado.totalOriginal == null) colaEstado.totalOriginal = colaEstado.total;
     actualizarProgreso();
     if (!colaEstado.items.length) {
+      if (colaEstado.fallo) { renderErrorCola(); return; }
       renderFinDeTanda();
       return;
     }
     colaEstado.actual = colaEstado.items.shift();
     renderTarjeta(colaEstado.actual);
+  });
+}
+
+/* No confundir "no pude traer más" con "no hay más" — festejar un fallo de red es la misma
+   enfermedad que los demás bloqueantes de esta pantalla. */
+function renderErrorCola() {
+  document.getElementById('cola-contenido').innerHTML =
+    '<div class="cola-fin"><div class="icon" aria-hidden="true">⚠</div>' +
+    '<strong>No se pudo traer más productos de ' + esc(colaEstado.marca) + '.</strong>' +
+    '<div class="page-sub">Puede ser la conexión o el servidor. No perdiste el trabajo que ya hiciste — reintentá.</div>' +
+    '<div class="cola-fin-acciones">' +
+    '<button type="button" class="hbtn" id="btn-reintentar-cola">Reintentar</button>' +
+    '<a class="hbtn" href="#/">Elegir otra marca</a>' +
+    '</div></div>';
+  announce('No se pudo traer más productos de ' + colaEstado.marca + '.');
+  document.getElementById('btn-reintentar-cola').addEventListener('click', function () {
+    colaEstado.fallo = false;
+    document.getElementById('cola-contenido').innerHTML = '<div class="skel" style="height:340px;"></div>';
+    traerMasDeCola().then(function () { avanzarSiguiente(); });
   });
 }
 
@@ -1016,11 +1057,18 @@ function candidatoCompactoHtml(prod, cand, idx, numeroVisible) {
 
 function renderTarjeta(prod) {
   var cont = document.getElementById('cola-contenido');
-  var candidatos = (prod.candidatos || []).slice(0, 3);
-  var candidatoActivo = candidatos.length ? candidatos[0] : null;
+  // 'baja' nunca es una propuesta automática usable (lib/matcherEngine.js#candidatosParaWC):
+  // el producto tiene que cruzar a "Hay que publicarlo", nunca mostrarse como si el peor
+  // candidato fuera una sugerencia. `sin_candidato` es la fuente de verdad del motor —
+  // se respeta aunque `candidatos` no esté vacío (puede traer solo candidatos 'baja').
+  var todos = prod.candidatos || [];
+  var usables = todos.filter(function (c) { return c.confianza !== 'baja'; });
+  var sinCandidato = !!prod.sin_candidato || !usables.length;
+  var candidatos = sinCandidato ? [] : usables.slice(0, 3);
+  var activoIdx = 0;
 
   var html = '';
-  if (!candidatoActivo) {
+  if (sinCandidato) {
     html += '<div class="contexto-direccion">Producto de la Web sin publicación → buscando candidato en ML</div>';
     html += '<div class="sin-candidato-box">No se encontró un candidato confiable en ML para <strong>' + esc(prod.nombre) + '</strong>.<br>Podés buscarlo a mano o mandarlo a "Hay que publicarlo".</div>';
     html += '<div class="acciones-fila" style="grid-template-columns:1fr 1fr;">' +
@@ -1028,12 +1076,7 @@ function renderTarjeta(prod) {
       '<button type="button" class="accion-btn" id="btn-saltear-directo">Saltear</button>' +
       '</div>';
   } else {
-    html += tarjetaHtml(prod, candidatoActivo);
-    if (candidatos.length > 1) {
-      html += '<div class="candidatos-lista">' + candidatos.map(function (c, i) {
-        return candidatoCompactoHtml(prod, c, i, i + 1);
-      }).join('') + '</div>';
-    }
+    html += '<div id="tarjeta-principal-wrap"></div><div class="candidatos-lista" id="candidatos-lista"></div>';
   }
 
   html += '<details class="buscar-manual"><summary>Buscar manualmente</summary>' +
@@ -1045,29 +1088,43 @@ function renderTarjeta(prod) {
   cont.innerHTML = html;
   announce('Nueva tarjeta: ' + prod.nombre);
 
-  var candidatosMap = candidatos.slice();
-
-  function seleccionarCandidato(cand) {
-    document.getElementById('cola-contenido').querySelector('#tarjeta-principal').outerHTML = tarjetaHtml(prod, cand);
-    ligarAccionesTarjeta(prod, cand);
-  }
-
-  if (candidatoActivo) {
-    ligarAccionesTarjeta(prod, candidatoActivo);
-    candidatosMap.forEach(function (c, i) {
-      var btn = cont.querySelector('.match-card--compact[data-idx="' + i + '"]');
-      if (btn) btn.addEventListener('click', function () { seleccionarCandidato(c); });
-    });
+  if (!sinCandidato) {
+    /* La tarjeta grande muestra `candidatos[activoIdx]`; la compacta muestra los DEMÁS,
+       numerados por su rango ORIGINAL (#2/#3 de design-system.md §8.1) — nunca duplica al
+       que ya se ve arriba, y la numeración se mantiene estable al cambiar de candidato. */
+    function pintarCandidatos() {
+      var activo = candidatos[activoIdx];
+      document.getElementById('tarjeta-principal-wrap').innerHTML = tarjetaHtml(prod, activo);
+      ligarAccionesTarjeta(prod, activo);
+      var listaEl = document.getElementById('candidatos-lista');
+      var resto = candidatos.map(function (c, i) { return { c: c, i: i }; }).filter(function (o) { return o.i !== activoIdx; });
+      listaEl.innerHTML = resto.map(function (o) { return candidatoCompactoHtml(prod, o.c, o.i, o.i + 1); }).join('');
+      resto.forEach(function (o) {
+        var btn = listaEl.querySelector('.match-card--compact[data-idx="' + o.i + '"]');
+        if (btn) btn.addEventListener('click', function () { activoIdx = o.i; pintarCandidatos(); });
+      });
+    }
+    pintarCandidatos();
   } else {
     document.getElementById('btn-hay-que-publicar-directo').addEventListener('click', function () {
-      accionProducto(prod, 'publicar').then(function () { toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente(); });
+      accionProducto(prod, 'publicar').then(function (res) {
+        if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
+        toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente();
+      });
     });
     document.getElementById('btn-saltear-directo').addEventListener('click', function () {
-      accionProducto(prod, 'saltear').then(function () { toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente(); });
+      accionProducto(prod, 'saltear').then(function (res) {
+        if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
+        toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente();
+      });
     });
   }
 
   ligarBusquedaManual(prod);
+}
+
+function armarCand(m) {
+  return { ml_clave: m.ml_clave, ml_item_id: m.ml_item_id, ml_variation_id: m.ml_variation_id, ml_titulo: m.ml_titulo, ml_img: m.ml_img, ml_precio: m.ml_precio, ml_stock: m.ml_stock, ml_status: m.ml_status, diff: m.diff, confianza: m.confianza };
 }
 
 var buscarManualDebounce = null;
@@ -1083,12 +1140,14 @@ function ligarBusquedaManual(prod) {
         if (!res.ok || !res.data || !res.data.ok) { resultados.innerHTML = '<div class="vacio">No se pudo buscar.</div>'; return; }
         var data = res.data.data || [];
         if (!data.length) { resultados.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
-        resultados.innerHTML = '<div class="candidatos-lista">' + data.slice(0, 20).map(function (m, i) {
-          var cand = { ml_clave: m.ml_clave, ml_item_id: m.ml_item_id, ml_variation_id: m.ml_variation_id, ml_titulo: m.ml_titulo, ml_img: m.ml_img, ml_precio: m.ml_precio, ml_stock: m.ml_stock, ml_status: m.ml_status, diff: m.diff, confianza: m.confianza };
-          return candidatoCompactoHtml(prod, cand, 'm' + i, i + 1);
+        // El backend ya tope a 20 (buscarMlManual, routes/cobertura.js); si llenó el tope no
+        // sabemos si hay más — avisamos en vez de mostrar 20 en silencio como si fueran todos.
+        var avisoTope = data.length === 20 ? '<div class="page-sub">Mostrando los 20 resultados más relevantes. Afiná la búsqueda si no está en la lista.</div>' : '';
+        resultados.innerHTML = avisoTope + '<div class="candidatos-lista">' + data.map(function (m, i) {
+          return candidatoCompactoHtml(prod, armarCand(m), 'm' + i, i + 1);
         }).join('') + '</div>';
         data.forEach(function (m, i) {
-          var cand = { ml_clave: m.ml_clave, ml_item_id: m.ml_item_id, ml_variation_id: m.ml_variation_id, ml_titulo: m.ml_titulo, ml_img: m.ml_img, ml_precio: m.ml_precio, ml_stock: m.ml_stock, ml_status: m.ml_status, diff: m.diff, confianza: m.confianza };
+          var cand = armarCand(m);
           var btn = resultados.querySelector('.match-card--compact[data-idx="m' + i + '"]');
           if (btn) btn.addEventListener('click', function () {
             var cont = document.getElementById('cola-contenido');
@@ -1114,12 +1173,27 @@ function ligarAccionesTarjeta(prod, cand) {
     confirmarVinculo(prod, cand.ml_clave).then(function (res) {
       btnConfirmar.disabled = false;
       if (res.status === 409 && res.data && res.data.ya_resuelto) {
-        // Colisión entre dos personas: mostrar quién y qué decidió, avanzar sola (no error).
-        toast('Ya lo resolvió ' + res.data.resuelto_por + ': vinculado a ' + res.data.sku, 'neutro');
+        // Colisión entre dos personas (o la misma en otra pestaña, la cola está priorizada
+        // así que es el caso más común): `propio` distingue "lo resolvió otro" de "fuiste
+        // vos mismo en otra pestaña" — avanzar sola en los dos casos, no es un error, pero
+        // el mensaje tiene que decir la verdad.
+        if (res.data.propio) {
+          toast('Ya lo vinculaste vos (en otra pestaña) a ' + res.data.sku, 'neutro');
+        } else {
+          toast('Ya lo resolvió ' + res.data.resuelto_por + ': vinculado a ' + res.data.sku, 'neutro');
+        }
         avanzarSiguiente();
         return;
       }
-      if (!res.ok) { toast('No se pudo guardar. Reintentá.', 'error'); return; }
+      if (res.status === 409) {
+        // Sin `ya_resuelto`: la clave ya tiene otra decisión viva no reversible acá (p.ej.
+        // accion='omitir' del Matcher ML→WC descartó la publicación). Reintentar nunca
+        // funciona — no es una falla técnica, es un rechazo definitivo para esta clave.
+        toast('Esta publicación ya no está disponible para vincular (fue descartada en otro lugar). Elegí otro candidato o buscá manualmente.', 'error');
+        return;
+      }
+      if (res.status === 403) { toast('No tenés permiso para confirmar vínculos.', 'error'); return; }
+      if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
       if (res.data.estado === 'vinculado') {
         toast('Vinculado a ' + res.data.sku + ' → ' + cand.ml_item_id, 'ok', function () { deshacerVinculo(cand.ml_clave); });
       } else {
@@ -1130,14 +1204,32 @@ function ligarAccionesTarjeta(prod, cand) {
   });
 
   document.getElementById('btn-solo-local').addEventListener('click', function () {
-    accionProducto(prod, 'descartar').then(function () { toast('Marcado como "solo local".', 'ok'); avanzarSiguiente(); });
+    accionProducto(prod, 'descartar').then(function (res) {
+      if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
+      toast('Marcado como "solo local".', 'ok'); avanzarSiguiente();
+    });
   });
   document.getElementById('btn-hay-que-publicar').addEventListener('click', function () {
-    accionProducto(prod, 'publicar').then(function () { toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente(); });
+    accionProducto(prod, 'publicar').then(function (res) {
+      if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
+      toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente();
+    });
   });
   document.getElementById('btn-saltear').addEventListener('click', function () {
-    accionProducto(prod, 'saltear').then(function () { toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente(); });
+    accionProducto(prod, 'saltear').then(function (res) {
+      if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
+      toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente();
+    });
   });
+}
+
+/* Mensaje uniforme para las acciones simples de la cola (descartar/publicar/saltear):
+   distingue permiso (403) y red caída (status 0) del error genérico — nunca "reintentá"
+   para algo que no es reintentable, y nunca festejar sin haber mirado res.ok. */
+function mensajeErrorAccion(res) {
+  if (res.status === 403) return 'No tenés permiso para esta acción.';
+  if (res.status === 0) return 'No se pudo conectar con el servidor. La decisión NO se guardó — reintentá.';
+  return 'No se pudo guardar. Reintentá.';
 }
 
 function confirmarVinculo(prod, mlClave) {
@@ -1153,6 +1245,12 @@ function deshacerVinculo(clave) {
     if (res.ok && res.data && res.data.ok) { toast('Vínculo deshecho.', 'ok'); return; }
     if (res.status === 0) { toast('No se pudo conectar con el servidor. Reintentá.', 'error'); return; }
     if (res.status === 404) { toast('El vínculo ya no existe (puede que se haya deshecho antes). No hace falta reintentar.', 'error'); return; }
+    if (res.status === 403) {
+      // No es una falla técnica: solo el autor (o un admin) puede deshacer este vínculo.
+      // El backend ya manda quién en `error` (ver routes/cobertura.js).
+      toast((res.data && res.data.error) || 'Solo el autor del vínculo (o un admin) puede deshacerlo.', 'error');
+      return;
+    }
     if (res.status === 409 && res.data && res.data.push_en_curso) { toast('Hay un push en curso. Reintentá en unos segundos.', 'error'); return; }
     if (res.status === 502) { toast('ML no confirmó la desvinculación. No se cambió nada.', 'error'); return; }
     toast('No se pudo deshacer. Reintentá.', 'error');
@@ -1191,8 +1289,9 @@ function cargarHistorial() {
       btn.addEventListener('click', function () {
         if (r.tipo === 'vinculo') {
           jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(r.clave) + '/deshacer', { method: 'POST' }).then(function (res2) {
-            if (res2.ok && res2.data && res2.data.ok) { toast('Deshecho.', 'ok'); cargarHistorial(); }
-            else toast('No se pudo deshacer.', 'error');
+            if (res2.ok && res2.data && res2.data.ok) { toast('Deshecho.', 'ok'); cargarHistorial(); return; }
+            if (res2.status === 403) { toast((res2.data && res2.data.error) || 'Solo el autor del vínculo (o un admin) puede deshacerlo.', 'error'); return; }
+            toast('No se pudo deshacer.', 'error');
           });
         } else {
           jsonFetch('/api/cobertura/exclusiones/' + r.id_woo + '/revertir', { method: 'DELETE' }).then(function (res2) {
@@ -1238,8 +1337,16 @@ function cargarPublicar() {
     data.forEach(function (r) {
       var chk = cont.querySelector('[data-tachar="' + r.id_woo + '"]');
       chk.addEventListener('change', function () {
+        var valorPedido = chk.checked;
+        chk.disabled = true;
         jsonFetch('/api/cobertura/hay-que-publicar/' + r.id_woo, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tachado: chk.checked }),
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tachado: valorPedido }),
+        }).then(function (res) {
+          chk.disabled = false;
+          if (!res.ok || !res.data || !res.data.ok) {
+            chk.checked = !valorPedido; // no se guardó: no dejamos el tilde mintiendo
+            toast(mensajeErrorAccion(res), 'error');
+          }
         });
       });
       var btnCopiar = cont.querySelector('[data-copiar="' + r.id_woo + '"]');
@@ -1312,7 +1419,10 @@ function cargarMultipub() {
     }).join('');
     cont.querySelectorAll('[data-mc]').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        jsonFetch('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function () { toast('Marcada como correcta.', 'ok'); cargarMultipub(); });
+        jsonFetch('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function (res) {
+          if (!res.ok || !res.data || !res.data.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
+          toast('Marcada como correcta.', 'ok'); cargarMultipub();
+        });
       });
     });
     cont.querySelectorAll('[data-pausar]:not(:disabled)').forEach(function (btn) {
@@ -1350,7 +1460,9 @@ function cargarSoloMl() {
     if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
     var data = res.data.data || [];
     if (!data.length) { cont.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
-    cont.innerHTML = '<p class="page-sub">' + n(res.data.total) + ' publicaciones sin SKU en total.</p>' +
+    var avisoParcial = data.length < res.data.total
+      ? ' Mostrando ' + n(data.length) + ' de ' + n(res.data.total) + ' — afiná la búsqueda para acotar.' : '';
+    cont.innerHTML = '<p class="page-sub">' + n(res.data.total) + ' publicaciones sin SKU en total.' + avisoParcial + '</p>' +
       '<div class="gestion-lista">' + data.map(function (r) {
         return '<div class="solo-ml-row">' +
           (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="">' : '<div class="mc-thumb"></div>') +
@@ -1369,7 +1481,10 @@ function cargarSoloMl() {
 
     cont.querySelectorAll('[data-mc]').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        jsonFetch('/api/cobertura/solo-ml/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function () { toast('Marcada como correcta.', 'ok'); cargarSoloMl(); });
+        jsonFetch('/api/cobertura/solo-ml/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function (res) {
+          if (!res.ok || !res.data || !res.data.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
+          toast('Marcada como correcta.', 'ok'); cargarSoloMl();
+        });
       });
     });
     cont.querySelectorAll('[data-pausar]:not(:disabled)').forEach(function (btn) {
@@ -1401,10 +1516,20 @@ function cargarSoloMl() {
             }).join('') || '<div class="meta">Sin resultados.</div>';
             resultados.querySelectorAll('[data-elegir]').forEach(function (btn2) {
               btn2.addEventListener('click', function () {
+                /* RIESGO CONOCIDO: no hay endpoint que resuelva SKU→id_woo directo, así que
+                   bajamos el catálogo entero por click y filtramos acá (pesado — reportado al
+                   orquestador). Con SKU duplicado en Woo (dato sucio conocido, ver CLAUDE.md)
+                   NO elegimos el primero en silencio: eso podría vincular al producto
+                   equivocado. Fail-closed: si hay más de un id_woo con el mismo SKU, avisamos
+                   y no vinculamos nada. */
                 jsonFetch('/api/woo/catalogo').then(function (rc) {
                   var lista2 = (rc.data && (rc.data.data || rc.data)) || [];
-                  var prodEl = lista2.filter(function (p) { return p.sku === btn2.dataset.elegir; })[0];
-                  var idWoo = prodEl ? prodEl.id_woo : null;
+                  var coincidencias = lista2.filter(function (p) { return p.sku === btn2.dataset.elegir; });
+                  if (coincidencias.length > 1) {
+                    toast('Ese SKU está repetido en ' + coincidencias.length + ' productos de Woo — no se puede vincular automáticamente. Avisá a quien mantiene el catálogo.', 'error');
+                    return;
+                  }
+                  var idWoo = coincidencias.length ? coincidencias[0].id_woo : null;
                   vincularSoloMl(clave, idWoo, resultados);
                 });
               });
@@ -1421,10 +1546,15 @@ function vincularSoloMl(clave, idWoo, resultados) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id_woo: idWoo }),
   }).then(function (res2) {
     if (res2.status === 409 && res2.data && res2.data.ya_resuelto) {
-      toast('Ya lo resolvió ' + res2.data.resuelto_por + ': vinculado a ' + res2.data.sku, 'neutro');
+      if (res2.data.propio) {
+        toast('Ya lo vinculaste vos (en otra pestaña) a ' + res2.data.sku, 'neutro');
+      } else {
+        toast('Ya lo resolvió ' + res2.data.resuelto_por + ': vinculado a ' + res2.data.sku, 'neutro');
+      }
       cargarSoloMl();
       return;
     }
+    if (res2.status === 403) { toast('No tenés permiso para vincular.', 'error'); return; }
     if (!res2.ok || !res2.data || !res2.data.ok) { toast('No se pudo vincular.', 'error'); return; }
     toast(res2.data.estado === 'vinculado' ? 'Vinculado.' : 'Guardado · se sincroniza con ML apenas se pueda', res2.data.estado === 'vinculado' ? 'ok' : 'pendiente');
     cargarSoloMl();
@@ -1478,8 +1608,26 @@ function renderProblemas() {
     if (categoria && catsDe(p).indexOf(categoria) === -1) return false;
     return true;
   });
-  if (!filtrado.length) { cont.innerHTML = '<div class="vacio" style="color:var(--success);">✓ Sin pausadas-que-siguen-vinculadas.</div>'; return; }
-  cont.innerHTML = '<div class="gestion-lista">' + filtrado.map(function (p) {
+  // El verde con tilde solo cuando NO HAY problemas de verdad. Si hay y el filtro los dejó
+  // afuera, el mensaje es neutro y dice cuántos hay (hallazgo del revisor, 2ª pasada): antes
+  // filtrar por una marca sin coincidencias pintaba "✓ Sin pausadas-que-siguen-vinculadas"
+  // con 40 problemas reales debajo del filtro — la misma enfermedad que los bloqueantes.
+  if (!filtrado.length) {
+    cont.innerHTML = problemasCache.length
+      ? '<div class="vacio">Ninguna coincide con el filtro — hay ' + n(problemasCache.length) + ' en total. '
+        + '<button type="button" class="btn-link" data-limpiar-filtro>Ver todas</button></div>'
+      : '<div class="vacio" style="color:var(--success);">✓ Sin pausadas-que-siguen-vinculadas.</div>';
+    var btnLimpiar = cont.querySelector('[data-limpiar-filtro]');
+    if (btnLimpiar) btnLimpiar.addEventListener('click', function () {
+      document.getElementById('prob-marca').value = '';
+      document.getElementById('prob-categoria').value = '';
+      renderProblemas();
+    });
+    return;
+  }
+  var avisoFiltro = filtrado.length < problemasCache.length
+    ? '<p class="page-sub">Mostrando ' + n(filtrado.length) + ' de ' + n(problemasCache.length) + ' — el resto quedó afuera por el filtro.</p>' : '';
+  cont.innerHTML = avisoFiltro + '<div class="gestion-lista">' + filtrado.map(function (p) {
     return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(p.nombre) + '</div><div class="meta">' + esc(p.sku || '—') + ' · ML: ' + esc(p.ml_status) + ' · <a href="' + mlUrl(p.ml_item_id) + '" target="_blank" rel="noopener">abrir en ML</a></div></div></div>';
   }).join('') + '</div>';
 }
@@ -1581,7 +1729,13 @@ function marcarRevisado(btn) {
  * Modal genérico (desvincular / reasignar) — reusado por Problemas y Buscar
  * ═══════════════════════════════════════════════════════════════════════ */
 var modalRoot = document.getElementById('modal-root');
-function cerrarModal() { modalRoot.innerHTML = ''; document.removeEventListener('keydown', onModalKeydown); }
+var focoAntesDeModal = null;
+function cerrarModal() {
+  modalRoot.innerHTML = '';
+  document.removeEventListener('keydown', onModalKeydown);
+  if (focoAntesDeModal && document.contains(focoAntesDeModal)) focoAntesDeModal.focus();
+  focoAntesDeModal = null;
+}
 function onModalKeydown(ev) {
   if (ev.key === 'Escape') { cerrarModal(); return; }
   if (ev.key === 'Tab') {
@@ -1596,6 +1750,7 @@ function onModalKeydown(ev) {
   }
 }
 function abrirModal(html) {
+  focoAntesDeModal = document.activeElement;
   modalRoot.innerHTML = '<div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-box">' + html + '</div></div>';
   document.addEventListener('keydown', onModalKeydown);
   document.getElementById('modal-overlay').addEventListener('click', function (ev) { if (ev.target.id === 'modal-overlay') cerrarModal(); });
@@ -1694,7 +1849,10 @@ function abrirModalReasignar(btn, onExito) {
 function mostrarErrorModal(msg) {
   var body = modalRoot.querySelector('.modal-body');
   if (!body) return;
+  var previo = body.querySelector('[data-modal-error]');
+  if (previo) previo.remove(); // un reintento fallido no debe apilar sobre el anterior
   var errEl = document.createElement('div');
+  errEl.setAttribute('data-modal-error', '1');
   errEl.style.color = 'var(--critical)'; errEl.style.marginTop = '10px'; errEl.style.fontSize = '.8rem';
   errEl.textContent = '✗ ' + msg;
   body.appendChild(errEl);
@@ -1711,23 +1869,39 @@ var buscarTopbarResults = document.getElementById('buscar-topbar-results');
 var buscarTopbarDetalle = document.getElementById('buscar-topbar-detalle');
 var buscarTopbarDebounce = null;
 
+var focoAntesDeBuscador = null;
+function onBuscadorKeydown(ev) {
+  if (ev.key === 'Escape') { cerrarBuscador(); return; }
+  if (ev.key !== 'Tab') return;
+  var panel = searchOverlay.querySelector('.search-panel');
+  if (!panel) return;
+  var focusables = Array.prototype.slice.call(panel.querySelectorAll('button, input, a[href], [tabindex]:not([tabindex="-1"])')).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+  if (!focusables.length) return;
+  var primero = focusables[0], ultimo = focusables[focusables.length - 1];
+  if (ev.shiftKey && document.activeElement === primero) { ev.preventDefault(); ultimo.focus(); }
+  else if (!ev.shiftKey && document.activeElement === ultimo) { ev.preventDefault(); primero.focus(); }
+  else if (!panel.contains(document.activeElement)) { ev.preventDefault(); primero.focus(); }
+}
 function abrirBuscador(skuInicial) {
+  focoAntesDeBuscador = document.activeElement;
   searchOverlay.classList.remove('hidden');
   buscarTopbarResults.innerHTML = '';
   buscarTopbarDetalle.innerHTML = '';
   buscarTopbarInput.value = '';
   if (skuInicial) { mostrarDetalleProducto(skuInicial); }
+  document.addEventListener('keydown', onBuscadorKeydown);
   window.setTimeout(function () { buscarTopbarInput.focus(); }, 0);
 }
 function cerrarBuscador() {
   searchOverlay.classList.add('hidden');
+  document.removeEventListener('keydown', onBuscadorKeydown);
+  if (focoAntesDeBuscador && document.contains(focoAntesDeBuscador)) focoAntesDeBuscador.focus();
+  focoAntesDeBuscador = null;
 }
 document.getElementById('btn-buscar-topbar').addEventListener('click', function () { abrirBuscador(); });
 document.getElementById('search-overlay-cerrar').addEventListener('click', cerrarBuscador);
 searchOverlay.addEventListener('click', function (ev) { if (ev.target === searchOverlay) cerrarBuscador(); });
-document.addEventListener('keydown', function (ev) {
-  if (ev.key === 'Escape' && !searchOverlay.classList.contains('hidden')) cerrarBuscador();
-});
+/* Escape y Tab (trampa de foco) los maneja onBuscadorKeydown, ligado/quitado en abrir/cerrar. */
 
 buscarTopbarInput.addEventListener('input', function () {
   window.clearTimeout(buscarTopbarDebounce);
@@ -1812,18 +1986,70 @@ function renderPubCardDetalle(pub, wcNombre) {
  * Actualizar desde ML (botón del topbar)
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/* POST /api/cobertura/actualizar-ml (202, arranca en background) + sondeo de
+   GET /api/cobertura/actualizar-ml/estado hasta que termine. El candado anti-reentrada es
+   COMPARTIDO con el Matcher: un 409 significa que YA hay un refresco corriendo (disparado
+   desde acá o desde otro lado) — no es un error, hay que sondear igual hasta que termine.
+   Nunca festejar sin haber confirmado `running:false` sin `error`. */
+function sondearActualizarMl(btn, txt) {
+  var intentos = 0;
+  var maxIntentos = 90; // ~3 min a 2s, cubre el "1-3 min" documentado
+  var poll = window.setInterval(function () {
+    intentos++;
+    jsonFetch('/api/cobertura/actualizar-ml/estado').then(function (res) {
+      if (!res.ok || !res.data || !res.data.ok) {
+        window.clearInterval(poll);
+        btn.disabled = false;
+        txt.textContent = 'Actualizar';
+        toast('No se pudo confirmar el estado de la actualización. Reintentá.', 'error');
+        return;
+      }
+      var st = res.data;
+      if (st.running) {
+        if (intentos >= maxIntentos) {
+          window.clearInterval(poll);
+          btn.disabled = false;
+          txt.textContent = 'Actualizar';
+          toast('La actualización está tardando más de lo esperado. Seguí más tarde desde acá.', 'error');
+        }
+        return;
+      }
+      window.clearInterval(poll);
+      btn.disabled = false;
+      txt.textContent = 'Actualizar';
+      if (st.error) {
+        toast('ML no confirmó la actualización: ' + st.error + '. No se perdió nada, quedó lo anterior.', 'error');
+        return;
+      }
+      router();
+      cargarChips();
+      cargarRefrescoBar();
+      toast('Datos actualizados desde ML.', 'ok');
+    });
+  }, 2000);
+}
+
 document.getElementById('btn-actualizar-ml').addEventListener('click', function () {
   var btn = document.getElementById('btn-actualizar-ml');
   var txt = document.getElementById('btn-actualizar-txt');
   txt.textContent = 'Actualizando…';
   btn.disabled = true;
-  jsonFetch('/api/sync/estado').then(function () {
+  jsonFetch('/api/cobertura/actualizar-ml', { method: 'POST' }).then(function (res) {
+    if (res.status === 202) { sondearActualizarMl(btn, txt); return; }
+    if (res.status === 409 && res.data && res.data.running) {
+      // Ya había un refresco en curso (desde acá o desde el Matcher ML→WC): sondeamos igual.
+      sondearActualizarMl(btn, txt);
+      return;
+    }
+    if (res.status === 403) {
+      btn.disabled = false;
+      txt.textContent = 'Actualizar';
+      toast('No tenés permiso para actualizar desde ML.', 'error');
+      return;
+    }
     btn.disabled = false;
     txt.textContent = 'Actualizar';
-    router();
-    cargarChips();
-    cargarRefrescoBar();
-    toast('Datos actualizados.', 'ok');
+    toast('No se pudo iniciar la actualización. Reintentá.', 'error');
   });
 });
 
