@@ -227,13 +227,21 @@
   .diff.pos{color:var(--diff-pos);}
   .diff.neg{color:var(--diff-neg);}
   .diff.zero{color:var(--diff-zero);}
-  .fila-item .acciones{display:flex;gap:6px;flex:0 0 auto;}
+  .fila-item .acciones{display:flex;align-items:center;gap:8px;flex:0 0 auto;}
   .fila-item .acciones button{min-width:38px;min-height:38px;border-radius:9px;border:1px solid var(--line);
        background:var(--panel2);color:var(--txt);font-weight:800;font-size:14px;cursor:pointer;}
-  .fila-item .acciones button.plus{background:var(--azul);border-color:var(--azul);color:#06131C;}
   .fila-item .acciones button.del{color:var(--danger);}
   .fila-item .acciones button[disabled]{opacity:.35;cursor:not-allowed;}
-  .nota-limitacion{font-size:10px;color:var(--muted);flex-basis:100%;margin-top:4px;}
+  .cantidad-ctrl{display:flex;align-items:center;gap:6px;}
+  .cantidad-ctrl .qty-btn{min-width:38px;min-height:38px;border-radius:9px;border:1px solid var(--line);
+       background:var(--panel2);color:var(--txt);font-weight:800;font-size:18px;line-height:1;cursor:pointer;}
+  .cantidad-ctrl .qty-plus{background:var(--azul);border-color:var(--azul);color:#06131C;}
+  .cantidad-ctrl .qty-btn[disabled]{opacity:.35;cursor:not-allowed;}
+  .cantidad-ctrl .qty-input{width:52px;min-height:38px;font-size:16px;font-weight:800;text-align:center;
+       border-radius:9px;border:1px solid var(--line);background:var(--surface2);color:var(--txt);
+       -moz-appearance:textfield;}
+  .cantidad-ctrl .qty-input::-webkit-outer-spin-button,
+  .cantidad-ctrl .qty-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
   .fila-pendiente{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
        margin-bottom:8px;display:flex;align-items:center;gap:10px;}
   .fila-pendiente .info{flex:1;min-width:0;}
@@ -1143,21 +1151,23 @@
     var diffHtml = i.diferencia != null
       ? '<span class="diff ' + diffClase(i.diferencia) + '">' + esc(diffTexto(i.diferencia)) + '</span>'
       : '<span class="diff zero">—</span>';
-    var minusDisabled = i.cantidad > 1;
     var marcado = seleccionConteo.has(String(i.id));
     var est = estadoItem(i);
+    var etiqueta = esc(i.sku || i.ean);
     return '<div class="fila-item' + (sinAsociar ? ' unlinked' : '') + '" data-estado="' + esc(est) + '" data-item-id="' + esc(i.id) + '" data-ean="' + esc(i.ean) + '" data-sku="' + esc(i.sku || '') + '">' +
-      '<input type="checkbox" class="chk-item-conteo" data-accion="select" aria-label="Seleccionar ' + esc(i.sku || i.ean) + '"' + (marcado ? ' checked' : '') + (sinAsociar ? ' disabled title="Asociá el EAN a un SKU antes de mandarlo a Etiquetas"' : '') + '>' +
+      '<input type="checkbox" class="chk-item-conteo" data-accion="select" aria-label="Seleccionar ' + etiqueta + '"' + (marcado ? ' checked' : '') + (sinAsociar ? ' disabled title="Asociá el EAN a un SKU antes de mandarlo a Etiquetas"' : '') + '>' +
       '<div class="info">' +
         '<div class="cod">' + (sinAsociar ? '<span class="warn-ico">⚠</span>' : '') + esc(i.sku || i.ean) + '</div>' +
         '<div class="nombre">' + esc(i.nombre || (sinAsociar ? 'Sin asociar todavía' : '(sin nombre)')) + '</div>' +
-        '<div class="stockline">' + estadoHtml(est) + ' · Contado: <b>' + n(i.cantidad) + '</b> · Stock Woo: ' + stockTxt + ' · ' + diffHtml + '</div>' +
+        '<div class="stockline">' + estadoHtml(est) + ' · Stock Woo: ' + stockTxt + ' · ' + diffHtml + '</div>' +
       '</div>' +
       '<div class="acciones">' +
-        '<button class="plus" data-accion="plus" title="Sumar 1">+1</button>' +
-        '<button data-accion="minus" title="Restar 1"' + (minusDisabled ? ' disabled' : '') + '>−1</button>' +
-        '<button class="del" data-accion="del" title="Eliminar">✕</button>' +
-        (minusDisabled ? '<span class="nota-limitacion">−1 editable solo en Revisión (cantidad &gt; 1)</span>' : '') +
+        '<div class="cantidad-ctrl" role="group" aria-label="Cantidad contada de ' + etiqueta + '">' +
+          '<button type="button" class="qty-btn qty-minus" data-accion="minus" title="Restar 1" aria-label="Restar 1"' + (i.cantidad <= 0 ? ' disabled' : '') + '>−</button>' +
+          '<input type="number" class="qty-input" inputmode="numeric" min="0" step="1" value="' + esc(i.cantidad) + '" data-accion="cantidad" aria-label="Cantidad contada de ' + etiqueta + '">' +
+          '<button type="button" class="qty-btn qty-plus" data-accion="plus" title="Sumar 1" aria-label="Sumar 1">+</button>' +
+        '</div>' +
+        '<button class="del" data-accion="del" title="Eliminar" aria-label="Eliminar ' + etiqueta + '">✕</button>' +
       '</div>' +
     '</div>';
   }
@@ -1183,7 +1193,7 @@
         actualizarSeleccionUi();
       });
     });
-    conteoLista.querySelectorAll('.fila-item [data-accion]:not([data-accion="select"])').forEach(function(btn){
+    conteoLista.querySelectorAll('.fila-item [data-accion]:not([data-accion="select"]):not([data-accion="cantidad"])').forEach(function(btn){
       btn.addEventListener('click', function(){
         var fila = btn.closest('.fila-item');
         var accion = btn.getAttribute('data-accion');
@@ -1193,10 +1203,25 @@
         if(accion === 'plus'){
           escanear(sku || ean);
         } else if(accion === 'minus'){
-          eliminarItem(itemId);
+          var item = obtenerItemConteo(itemId);
+          var actual = item ? item.cantidad : parseInt(fila.querySelector('[data-accion="cantidad"]').value, 10);
+          fijarCantidadConteo(itemId, clampCantidad(actual) - 1);
         } else if(accion === 'del'){
           eliminarItem(itemId);
         }
+      });
+    });
+    conteoLista.querySelectorAll('.fila-item [data-accion="cantidad"]').forEach(function(inp){
+      inp.addEventListener('keydown', function(e){
+        if(e.key === 'Enter'){ e.preventDefault(); inp.blur(); }
+      });
+      inp.addEventListener('blur', function(){
+        var fila = inp.closest('.fila-item');
+        var itemId = fila.getAttribute('data-item-id');
+        var item = obtenerItemConteo(itemId);
+        var nuevo = clampCantidad(inp.value);
+        if(item && nuevo === item.cantidad){ inp.value = nuevo; return; }
+        fijarCantidadConteo(itemId, nuevo);
       });
     });
     var head = document.getElementById('collapse-sinstock-head');
@@ -1234,6 +1259,34 @@
       .then(function(r){ return r.json(); })
       .then(function(j){ if(j && j.ok) setGuardado(true); cargarConteo(); })
       .catch(function(){});
+  }
+
+  function obtenerItemConteo(itemId){
+    return conteoData.items.filter(function(i){ return String(i.id) === String(itemId); })[0] || null;
+  }
+
+  // Cantidad nunca negativa: el control −/+/tipeado siempre clampea a 0 en vez de
+  // dejar pasar un valor inválido al backend.
+  function clampCantidad(v){
+    var num = parseInt(v, 10);
+    if(isNaN(num) || num < 0) return 0;
+    return num;
+  }
+
+  // Fija la cantidad a mano (tap en el número, o botón −). Reusa el mismo PATCH que
+  // ya limpia confirmado_por_omision: llegar a 0 no borra la fila, borrar es aparte (✕).
+  function fijarCantidadConteo(itemId, nuevaCantidad){
+    var id = sesionId();
+    if(!id || !itemId) return;
+    nuevaCantidad = clampCantidad(nuevaCantidad);
+    fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cantidad: nuevaCantidad })
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.ok) setGuardado(true);
+      cargarConteo();
+    }).catch(function(){ cargarConteo(); });
   }
 
   // Cierra en 0 todo lo que queda del bloque sin-stock (elección explícita del usuario).
