@@ -137,4 +137,26 @@ describe('conteoCantidad.js (ConteoCantidad)', () => {
       expect(ConteoCantidad.excedeTope(20, 30)).toBe(false);
     });
   });
+  // Un negativo se lleva a 0 —eso ya estaba— pero antes se hacía en SILENCIO, mientras que
+  // un decimal sí avisaba. Es la misma asimetría del campo vacío: el operario tipea una cosa
+  // y se guarda otra sin enterarse. El flag `negativa` existe para que la pantalla avise.
+  describe('negativo: se lleva a 0 pero avisando', () => {
+    it('normalizarCantidad marca negativa y devuelve 0', () => {
+      const r = ConteoCantidad.normalizarCantidad('-3');
+      expect(r.valor).toBe(0);
+      expect(r.negativa).toBe(true);
+    });
+
+    it('un valor válido no queda marcado como negativa', () => {
+      expect(ConteoCantidad.normalizarCantidad('4').negativa).toBe(false);
+    });
+
+    it('decidirCantidadAEnviar propaga el motivo para que la pantalla pueda avisar', () => {
+      const d = ConteoCantidad.decidirCantidadAEnviar(5, '-2', {});
+      expect(d.enviar).toBe(true);
+      expect(d.valorEnviar).toBe(0);
+      expect(d.motivo).toBe('negativa');
+    });
+  });
+
 });

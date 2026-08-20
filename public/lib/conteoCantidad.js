@@ -31,8 +31,12 @@
     if (!isFinite(num) || isNaN(num)) return { ok: false, motivo: 'invalida' };
     var truncada = !Number.isInteger(num);
     var entero = Math.round(num);
-    if (entero < 0) entero = 0;
-    return { ok: true, valor: entero, truncada: !!truncada };
+    // Un negativo se lleva a 0, pero se AVISA: dejarlo pasar en silencio es la misma
+    // asimetría que ya corregimos con el campo vacío — el operario tipeó una cosa y se
+    // guardó otra sin enterarse. Un decimal avisa ("se redondeó"); un negativo también debe.
+    var negativa = entero < 0;
+    if (negativa) entero = 0;
+    return { ok: true, valor: entero, truncada: !!truncada, negativa: negativa };
   }
 
   // true si el valor supera el tope (pistola HID tipeando un código de barras
@@ -62,7 +66,11 @@
     if (norm.valor === base && !norm.truncada) {
       return { enviar: false, valorMostrar: base, motivo: 'sin_cambio' };
     }
-    return { enviar: true, valorMostrar: norm.valor, valorEnviar: norm.valor, truncada: norm.truncada, motivo: norm.truncada ? 'truncada' : 'ok' };
+    return {
+      enviar: true, valorMostrar: norm.valor, valorEnviar: norm.valor,
+      truncada: norm.truncada, negativa: norm.negativa,
+      motivo: norm.negativa ? 'negativa' : (norm.truncada ? 'truncada' : 'ok'),
+    };
   }
 
   // Delta puro del botón "−": SIEMPRE se calcula sobre el último valor
