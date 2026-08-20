@@ -150,3 +150,16 @@ automatizado — no usarla para operar el negocio real.
 Para probar permisos limitados/rutas protegidas: usuario `auditor_limitado` / clave
 `AuditorLtd2026!` (no-admin, solo lectura en Consulta de Precios; ver `routes/usuarios.js`
 para reasignarle permisos si hace falta cubrir otra herramienta). También solo para testing.
+
+## La suite completa tampoco convive con un servidor de prueba
+
+La regla conocida era "dos `npm test` simultáneos se pisan los `.sqlite` temporales de `test/`".
+Es más amplia: el 2026-08-20, con `npm test` corriendo mientras un agente de `probador-e2e`
+tenía su servidor levantado, la suite dio **35 fallos en 3 archivos que nadie había tocado**
+(`recepciones`, `reconciliacionStockMl`, `woo`), y con forma de aserción real
+(`expected 2 to be 0`), no de `SqliteError` — o sea que **no se distingue a simple vista de una
+regresión de verdad**. Los mismos 3 archivos, corridos solos, dieron 81/81.
+
+Antes de correr la suite completa: `pgrep -af "vitest|node.*server"` y que no quede nada de
+ningún agente. Y ante un fallo en un archivo ajeno al cambio, **re-correr ese archivo solo**
+antes de creerle.
