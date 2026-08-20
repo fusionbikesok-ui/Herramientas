@@ -45,15 +45,35 @@ solo cuando por casualidad hubo un hueco largo: de ahí "cuento 8 y me marca 3".
 lecturas de forma pareja", lo que sugiere una pérdida probabilística por muestreo grueso. No lo
 es, y esa lectura manda el debugging para el lado equivocado.
 
-**Corolario que invierte el arreglo obvio:** bajar el intervalo de muestreo de 350ms —candidato
-principal de la versión anterior— **empeora el bug**. Más frames leídos ⇒ menos frames vacíos ⇒
-el gate se re-arma menos veces ⇒ cuenta **menos** unidades, no más.
+**Sobre el muestreo (corrección de una afirmación equivocada que estuvo en este spec):** se
+dijo acá que bajar el intervalo de 350ms *empeoraría* el bug, razonando que más frames leídos
+son menos frames vacíos. **Es falso.** Muestrear más fino no acorta el hueco entre unidades:
+aumenta la probabilidad de **observarlo**. Un frame vacío es la *observación* del hueco, no su
+ausencia. Medido (`test/scannerGate-conteo.test.js`): con `dropoutMs: 0`, pasar de 350ms a
+100ms sube el conteo de 5/8 a 8/8.
 
-**Límite de fondo:** dos unidades idénticas emiten **la misma señal**. Nada en el código de
-barras las distingue; la única evidencia de "esta es otra unidad" es un hueco temporal. Todo
-umbral cambia un error por otro: hueco corto y una unidad que se queda quieta cuenta dos veces;
-hueco largo y se pierden unidades, que es lo que pasa hoy. **Contar unidades idénticas por
-cámara no tiene solución exacta**, solo un punto de compromiso.
+**Pero el muestreo no es la causa.** Con el `dropoutMs: 500` de producción el conteo es **1 de
+8 con cualquier muestreo** — 350ms, 200ms, 100ms y 50ms dan todos 1. El hueco real entre
+unidades pasadas a mano (~200ms) es menor que el umbral de 500ms, así que el gate **no se
+re-arma nunca**. El umbral es el bloqueo dominante.
+
+**Límite de fondo, ahora medido:** dos unidades idénticas emiten **la misma señal**. Nada en el
+código de barras las distingue; la única evidencia de "esta es otra unidad" es un hueco
+temporal. Y el gate no puede distinguir ese hueco de un **parpadeo** (la lectura falla un
+instante con la misma unidad todavía delante: mala luz, un reflejo, la mano encima).
+
+Se midieron los **dos** errores a la vez — subconteo de 8 unidades iguales, y sobreconteo de
+UNA unidad quieta con parpadeo — sobre ocho combinaciones de muestreo y umbral. Resultado: la
+única que acierta en las dos columnas es `muestreo 50ms / dropout 150ms`, y acierta **por
+construcción del escenario**: el parpadeo simulado llega a 150ms y el hueco entre unidades es
+200ms. Son **50ms de separación**. En el depósito real esas dos duraciones se solapan, así que
+ese punto no sobrevive fuera de la simulación. Además, muestrear a 50ms es correr la detección
+20 veces por segundo en un celular, con el costo de batería que eso implica.
+
+**Conclusión: no existe un umbral seguro, y buscarlo es perder el tiempo.** No es que el
+compromiso sea difícil de calibrar: las dos señales que hay que separar tienen la misma
+duración. Por eso el conteo por cámara de unidades iguales **no se promete**, y el peso del
+diseño va donde sí hay una respuesta correcta: el campo de cantidad.
 
 Por eso la conclusión de diseño —**separar identificar de contar**— no es un rodeo del bug: es
 la única respuesta correcta. La cámara identifica el producto; la cantidad la fija un control
@@ -130,11 +150,15 @@ usuario), así que el trabajo arranca por reproducir y diagnosticar antes de toc
    (`detectTimer` en `scanner.js`) vs. lógica del gate (`scannerGate.js`) vs. el `POST` de
    `escanear()`. Sospechoso principal: el intervalo de 350ms es demasiado grueso para el ritmo
    con que se pasan las unidades.
-3. **Arreglar la causa real** que revele el diagnóstico. **Descartado de entrada: bajar el
-   intervalo de muestreo** — va en la dirección contraria (ver el corolario del diagnóstico).
-   El candidato con sentido es la **condición de re-armado del gate**: hoy exige ausencia
-   sostenida del código, que es justo lo que no ocurre en un flujo continuo de unidades. El fix
-   concreto sale del diagnóstico, no de este spec.
+3. **Lo medido cierra este paso** (`test/scannerGate-conteo.test.js`): la causa es el umbral
+   `dropoutMs`, no el muestreo, y **no hay un umbral seguro** — el parpadeo y el cambio de
+   unidad duran lo mismo (ver el límite de fondo). Por lo tanto **no se toca el gate para
+   perseguir el conteo exacto de unidades iguales**: sería calibrar contra ruido.
+
+   Lo que sí queda pendiente de decidir, con evidencia y no por intuición: si conviene bajar el
+   muestreo de 350ms para mejorar la **identificación** (que sí mejora, y es lo que la cámara
+   hace bien), pesándolo contra el costo de batería de correr la detección más seguido en un
+   celular. Es una decisión aparte, no el fix del bug.
 
 Criterio de aceptación del fix (verificable, TDD sobre el bug): el test que reproducía el drop
 pasa; pasar N unidades (iguales o distintas) al ritmo real registra exactamente N; recargando
