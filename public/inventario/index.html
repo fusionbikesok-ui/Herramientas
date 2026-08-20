@@ -1332,6 +1332,20 @@
   // de "−", en vez de releer conteoData.items (que puede estar vieja mientras
   // la respuesta del PATCH anterior todavía no volvió).
   var cantidadOptimista = {};
+  // colaEscrituras: el PATCH de cantidad manda un valor ABSOLUTO y el escaneo suma +1 en el
+  // servidor. Si los dos viajan a la vez gana el que LLEGA, no el que se envió, y el +1 del
+  // escaneo se pierde en silencio — justo el subconteo que esta pantalla vino a arreglar.
+  // Descartar respuestas viejas (cantidadSeq) no alcanza: el daño ya ocurrió en el servidor.
+  // Por eso las escrituras del conteo se serializan: una por vez, en el orden en que las hizo
+  // el operario. Es el caso real (una persona, un celular); el costo es que un escaneo espera
+  // a que termine la escritura anterior, que son milisegundos contra perder una unidad.
+  var colaEscrituras = Promise.resolve();
+  function encolarEscritura(hacer){
+    var p = colaEscrituras.then(hacer, hacer);
+    colaEscrituras = p.catch(function(){});   // un fallo no puede cortar la cola
+    return p;
+  }
+
   // cantidadSeq: itemId -> número de envíos hechos para ese ítem. Cada respuesta
   // se descarta si ya se mandó un envío más nuevo para el mismo ítem (mismo
   // patrón que seqOpciones/seqPreview de la vista Elegir alcance).
@@ -1361,7 +1375,8 @@
     if(truncada) mostrarBannerEscaneo('Se redondeó a ' + nuevaCantidad + ' (no se permiten decimales).');
     cantidadOptimista[itemId] = nuevaCantidad;
     var miSeq = (cantidadSeq[itemId] = (cantidadSeq[itemId] || 0) + 1);
-    fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, {
+    encolarEscritura(function(){
+      return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cantidad: nuevaCantidad })
@@ -1379,6 +1394,7 @@
       if(cantidadSeq[itemId] !== miSeq) return;
       mostrarBannerEscaneo('No se pudo guardar la cantidad (sin conexión).');
       revertirCantidad(itemId, inp);
+    });
     });
   }
 
@@ -1419,7 +1435,8 @@
     var id = sesionId();
     codigo = String(codigo || '').trim();
     if(!id || !codigo) return;
-    fetch('/api/inventario/sesiones/' + id + '/escanear', {
+    encolarEscritura(function(){
+      return fetch('/api/inventario/sesiones/' + id + '/escanear', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ codigo: codigo })
@@ -1441,6 +1458,7 @@
         abrirSheetEan(j.item.ean);
       }
     }).catch(function(){});
+    });
   }
 
   scanInput.addEventListener('keydown', function(e){
