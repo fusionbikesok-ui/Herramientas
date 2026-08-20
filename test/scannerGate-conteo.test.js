@@ -34,9 +34,17 @@ const RITMO_REAL = { unidades: 8, periodoMs: 800, visibleMs: 600 };
 const PRODUCCION = { muestreoMs: 350, dropoutMs: 500 };
 
 describe('conteo por cámara — reproducción del bug', () => {
-  // ESTE ES EL TEST QUE TIENE QUE FALLAR ANTES DEL FIX. Hoy da 1.
-  it('8 unidades iguales al ritmo real se cuentan las 8', () => {
-    expect(simularPasada({ ...RITMO_REAL, ...PRODUCCION })).toBe(8);
+  // Este test nació esperando 8 —"el que tiene que fallar antes del fix"— y falló, que era su
+  // trabajo: reprodujo el bug. Pero el fix del gate se descartó DESPUÉS, con evidencia (ver el
+  // test de abajo y el spec): no existe un umbral que separe el parpadeo de la cámara del
+  // cambio de unidad, porque duran lo mismo. Dejarlo esperando 8 dejaba la suite en rojo para
+  // siempre, esperando un arreglo que decidimos no hacer.
+  //
+  // Así que ahora afirma el TECHO MEDIDO del gate: pasando unidades iguales a mano, la cámara
+  // cuenta 1. No es una aspiración, es el dato que justifica que la cantidad se fije a mano.
+  // Si algún día alguien toca el gate y este número sube, este test se lo va a avisar.
+  it('el techo del gate con unidades iguales es 1 de 8 (por eso la cantidad se fija a mano)', () => {
+    expect(simularPasada({ ...RITMO_REAL, ...PRODUCCION })).toBe(1);
   });
 
   // El hueco entre unidades (200ms) es MENOR que dropoutMs (500ms), así que el gate no se
