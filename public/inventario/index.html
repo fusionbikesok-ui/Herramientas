@@ -1026,15 +1026,21 @@
 
   function cargarConteo(){
     var id = sesionId();
-    if(!id) return;
-    fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
+    if(!id) return Promise.resolve();
+    // Devuelve la promesa: una escritura encolada tiene que poder ESPERAR a que el estado
+    // local se refresque antes de soltar la cola, si no la operación siguiente calcula su
+    // base contra datos viejos (ver el comentario de colaEscrituras).
+    return fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok) return;
       state.sesion = j.sesion;
       conteoData.items = j.items || [];
       conteoData.pendientes = j.pendientes || [];
       conteoTitulo.textContent = 'Contando · ' + alcanceTexto(j.sesion);
       renderConteo();
-      scanInput.focus();
+      // El render se pospone si hay un campo de cantidad enfocado; el foco tenía que
+      // respetar lo mismo. Si no, un escaneo que llega mientras alguien tipea la cantidad
+      // le saca el cursor de abajo del dedo aunque el número no se pierda.
+      if(!hayInputCantidadEnfocado()) scanInput.focus();
     }).catch(function(){
       // Fail-closed: si no se puede refrescar contra el servidor, avisar en vez
       // de dejar en pantalla un número que la base puede no tener.
@@ -1250,10 +1256,13 @@
           // Delta puro contra el ÚLTIMO valor local conocido (confirmado o el que
           // ESTE mismo control ya calculó), nunca contra una copia que puede estar
           // vieja: así dos toques seguidos siempre bajan 2, no 1 (ver conteoCantidad.js).
-          var item = obtenerItemConteo(itemId);
-          var base = valorBaseCantidad(itemId, item);
-          var nuevo = ConteoCantidad.siguienteAlRestar(base);
-          enviarCantidad(itemId, nuevo, fila.querySelector('[data-accion="cantidad"]'));
+          // Se pasa un CALCULADOR, no un número: la base se lee cuando a este "−" le toca
+          // el turno en la cola, no al hacer clic. Así dos toques seguidos siguen bajando 2,
+          // y un "−" disparado justo después de un escaneo resta sobre el valor YA
+          // incrementado en vez de borrarlo.
+          enviarCantidad(itemId, function(){
+            return ConteoCantidad.siguienteAlRestar(valorBaseCantidad(itemId, obtenerItemConteo(itemId)));
+          }, fila.querySelector('[data-accion="cantidad"]'));
         } else if(accion === 'del'){
           eliminarItem(itemId);
         }
@@ -1281,6 +1290,7 @@
           scanInput.focus(); // la pistola HID tiene que volver a apuntar al campo de escaneo
           return;
         }
+        if(decision.negativa) mostrarBannerEscaneo('No se puede contar en negativo. Se guardó 0.');
         enviarCantidad(itemId, decision.valorEnviar, inp, decision.truncada);
         scanInput.focus();
       });
@@ -1373,19 +1383,25 @@
     var id = sesionId();
     if(!id || !itemId) return;
     if(truncada) mostrarBannerEscaneo('Se redondeó a ' + nuevaCantidad + ' (no se permiten decimales).');
-    cantidadOptimista[itemId] = nuevaCantidad;
     var miSeq = (cantidadSeq[itemId] = (cantidadSeq[itemId] || 0) + 1);
+    // `nuevaCantidad` puede venir como FUNCIÓN: el "−" no puede fijar su valor al hacer clic,
+    // porque para cuando le toque el turno en la cola el estado pudo haber cambiado (un
+    // escaneo en vuelo, por ejemplo). Resolviéndolo acá adentro, ya con el refresco anterior
+    // aplicado, el PATCH absoluto nunca pisa un +1 que el servidor ya sumó.
     encolarEscritura(function(){
+      var cantidadFinal = (typeof nuevaCantidad === 'function') ? nuevaCantidad() : nuevaCantidad;
+      cantidadOptimista[itemId] = cantidadFinal;
+      if(inp) inp.value = cantidadFinal;
       return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cantidad: nuevaCantidad })
+      body: JSON.stringify({ cantidad: cantidadFinal })
     }).then(function(r){ return r.json(); }).then(function(j){
       if(cantidadSeq[itemId] !== miSeq) return; // ya hay un envío más nuevo para este ítem: descartar
       if(j && j.ok){
         setGuardado(true);
         delete cantidadOptimista[itemId]; // el servidor vuelve a ser la fuente de verdad
-        cargarConteo();
+        return cargarConteo();
       } else {
         mostrarBannerEscaneo((j && j.error) || 'No se pudo guardar la cantidad.');
         revertirCantidad(itemId, inp);
@@ -1443,8 +1459,7 @@
     }).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok){
         mostrarBannerEscaneo((j && j.error) || 'No se pudo registrar el escaneo.');
-        cargarConteo();
-        return;
+        return cargarConteo();
       }
       setGuardado(true);
       var fuera = j.fuera_de_alcance || (j.item && j.item.fuera_de_alcance);
@@ -1453,10 +1468,13 @@
           '» está fuera del alcance de esta sesión. Se registró como hallazgo, no se descartó.');
       }
       if(j.item && j.item.id != null) ultimoItemFlash = j.item.id;
-      cargarConteo();
       if(j.item && j.item.sin_asociar){
         abrirSheetEan(j.item.ean);
       }
+      // Esperar el refresco ANTES de soltar la cola: si no, un "−" tocado enseguida
+      // calcularía su base contra el valor previo al +1 y su PATCH absoluto borraría
+      // el incremento que el servidor ya aplicó.
+      return cargarConteo();
     }).catch(function(){});
     });
   }
