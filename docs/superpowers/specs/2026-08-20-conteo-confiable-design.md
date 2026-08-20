@@ -117,16 +117,16 @@ producto necesita **una** lectura exitosa entre muchos frames, así que es robus
 sin arreglarlo. El drop solo degrada el **re-conteo** del mismo código (tallado por unidad),
 que es lo que arregla la sección siguiente.
 
-## Fix del drop del escaneo (con `systematic-debugging`)
+## Fix del re-conteo por cámara (con `systematic-debugging`)
 
 **No se diseña el fix a ciegas.** El bug es reproducible de forma constante (confirmado por el
 usuario), así que el trabajo arranca por reproducir y diagnosticar antes de tocar nada:
 
-1. **Reproducir** el drop en un test que **primero falla**: alimentar al gate/muestreo una
+1. **Reproducir** el bug en un test que **primero falla**: alimentar al gate/muestreo una
    secuencia de frames que simule N unidades al ritmo real y verificar que hoy registra < N.
    La lógica del gate (`public/lib/scannerGate.js`) es pura y ya es testeable por unidad
    (`frame(code, now)` acepta un `now` inyectable).
-2. **Instrumentar** para ubicar en qué eslabón se pierden las lecturas: muestreo de 350ms
+2. **Instrumentar** para confirmar el eslabón (el diagnóstico ya señala el gate): muestreo de 350ms
    (`detectTimer` en `scanner.js`) vs. lógica del gate (`scannerGate.js`) vs. el `POST` de
    `escanear()`. Sospechoso principal: el intervalo de 350ms es demasiado grueso para el ritmo
    con que se pasan las unidades.
