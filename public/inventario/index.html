@@ -170,11 +170,19 @@
   [data-estado="no_identificado"]{border-left-color:var(--warning);}
   [data-estado="fuera_de_alcance"]{border-left-color:var(--warning);}
   [data-estado="pendiente"]{border-left-color:var(--state-pending);}
+  /* Cerrado en 0 SIN contar a mano (cierre masivo "sin stock"), distinto del 0
+     que el operario cuenta de verdad (ese cae en coincide/falta como cualquier otro). */
+  [data-estado="cerrado_omision"]{border-left-color:var(--muted2);}
   .estado-glifo{font-weight:900;margin-right:4px;}
   .estado-txt{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);}
 
+  /* Refuerzo visual del +1 del escaneo: destaca la fila que acaba de subir. */
+  .fila-item.flash{animation:filaFlash .9s ease-out;}
+  @keyframes filaFlash{0%{background:var(--success-bg);}100%{background:var(--panel);}}
+
   @media (prefers-reduced-motion: reduce){
     .collapse-head .caret,.chip-guardado,.sheet,.cam-toast{transition:none;}
+    .fila-item.flash{animation:none;}
   }
 
   /* ----- Vista Conteo ----- */
@@ -526,6 +534,7 @@
 
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
+<script src="../lib/conteoCantidad.js"></script>
 <script type="module" src="../lib/scanner.js"></script>
 <script>
   Api.installAuth();
@@ -967,6 +976,7 @@
     autoAbiertoSinStock = false;
   }
   var ordenPorDiferencia = false;
+  var ultimoItemFlash = null; // id del ítem que acaba de escanearse, para el refuerzo visual del +1
   var seleccionConteo = new Set();
   var chkTodoConteo = document.getElementById('chk-todo-conteo');
   var btnEnviarEtiquetas = document.getElementById('btn-enviar-etiquetas');
@@ -1025,10 +1035,27 @@
       conteoTitulo.textContent = 'Contando · ' + alcanceTexto(j.sesion);
       renderConteo();
       scanInput.focus();
-    }).catch(function(){});
+    }).catch(function(){
+      // Fail-closed: si no se puede refrescar contra el servidor, avisar en vez
+      // de dejar en pantalla un número que la base puede no tener.
+      mostrarBannerEscaneo('No se pudo actualizar el conteo (sin conexión). Mostrando los últimos datos confirmados.');
+    });
+  }
+
+  // Si el operario está tipeando una cantidad, sacar esa fila del DOM (lo que hace
+  // reescribir conteoLista.innerHTML) le borra el valor tipeado sin disparar blur
+  // (perder el foco por remoción del DOM no emite blur) y encima le roba el foco.
+  // Mientras haya un qty-input enfocado adentro de la lista, se pospone el
+  // re-render completo: el blur de ese input vuelve a pedirlo.
+  var renderPendiente = false;
+  function hayInputCantidadEnfocado(){
+    var a = document.activeElement;
+    return !!(a && conteoLista.contains(a) && a.matches && a.matches('[data-accion="cantidad"]'));
   }
 
   function renderConteo(){
+    if(hayInputCantidadEnfocado()){ renderPendiente = true; return; }
+    renderPendiente = false;
     var contados = conteoData.items;
     var pendientes = conteoData.pendientes;
     contContados.textContent = n(contados.length);
@@ -1050,6 +1077,17 @@
     }
     conteoLista.innerHTML = html;
     bindFilaEventos();
+
+    // Refuerzo visual del +1: además del beep, la fila que acaba de subir por
+    // un escaneo se destaca un instante para que el operario vea cuál cambió.
+    if(ultimoItemFlash != null){
+      var filaFlash = conteoLista.querySelector('.fila-item[data-item-id="' + String(ultimoItemFlash).replace(/"/g, '') + '"]');
+      if(filaFlash){
+        filaFlash.classList.add('flash');
+        filaFlash.addEventListener('animationend', function(){ filaFlash.classList.remove('flash'); }, { once: true });
+      }
+      ultimoItemFlash = null;
+    }
 
     // Podar selección: sacar ids que ya no están entre los contados (eliminados, etc.)
     var idsContados = {};
@@ -1077,13 +1115,19 @@
     sobra:            { glifo: '+', txt: 'Sobra' },
     no_identificado:  { glifo: '⚠', txt: 'Sin asociar' },
     fuera_de_alcance: { glifo: '⚑', txt: 'Fuera de alcance' },
-    pendiente:        { glifo: '○', txt: 'Pendiente' }
+    pendiente:        { glifo: '○', txt: 'Pendiente' },
+    // Cerrado en 0 por el botón masivo "sin stock", sin que nadie lo haya contado
+    // a mano — distinto de un 0 tipeado/restado por el operario, que sí es un
+    // conteo real y cae en coincide/falta como cualquier otro (ver regla del spec:
+    // el total mostrado es siempre el valor real).
+    cerrado_omision:  { glifo: '⊘', txt: 'Cerrado sin contar (0)' }
   };
 
   function estadoItem(i){
     if(i.fuera_de_alcance) return 'fuera_de_alcance';
     if(!i.sku) return 'no_identificado';
     if(i.diferencia == null) return 'pendiente';
+    if(i.confirmado_por_omision) return 'cerrado_omision';
     if(i.diferencia > 0) return 'sobra';
     if(i.diferencia < 0) return 'falta';
     return 'coincide';
@@ -1164,7 +1208,7 @@
       '<div class="acciones">' +
         '<div class="cantidad-ctrl" role="group" aria-label="Cantidad contada de ' + etiqueta + '">' +
           '<button type="button" class="qty-btn qty-minus" data-accion="minus" title="Restar 1" aria-label="Restar 1"' + (i.cantidad <= 0 ? ' disabled' : '') + '>−</button>' +
-          '<input type="number" class="qty-input" inputmode="numeric" min="0" step="1" value="' + esc(i.cantidad) + '" data-accion="cantidad" aria-label="Cantidad contada de ' + etiqueta + '">' +
+          '<input type="number" class="qty-input" inputmode="numeric" min="0" max="' + ConteoCantidad.TOPE_CANTIDAD_DEFECTO + '" step="1" value="' + esc(i.cantidad) + '" data-accion="cantidad" aria-label="Cantidad contada de ' + etiqueta + '">' +
           '<button type="button" class="qty-btn qty-plus" data-accion="plus" title="Sumar 1" aria-label="Sumar 1">+</button>' +
         '</div>' +
         '<button class="del" data-accion="del" title="Eliminar" aria-label="Eliminar ' + etiqueta + '">✕</button>' +
@@ -1203,9 +1247,13 @@
         if(accion === 'plus'){
           escanear(sku || ean);
         } else if(accion === 'minus'){
+          // Delta puro contra el ÚLTIMO valor local conocido (confirmado o el que
+          // ESTE mismo control ya calculó), nunca contra una copia que puede estar
+          // vieja: así dos toques seguidos siempre bajan 2, no 1 (ver conteoCantidad.js).
           var item = obtenerItemConteo(itemId);
-          var actual = item ? item.cantidad : parseInt(fila.querySelector('[data-accion="cantidad"]').value, 10);
-          fijarCantidadConteo(itemId, clampCantidad(actual) - 1);
+          var base = valorBaseCantidad(itemId, item);
+          var nuevo = ConteoCantidad.siguienteAlRestar(base);
+          enviarCantidad(itemId, nuevo, fila.querySelector('[data-accion="cantidad"]'));
         } else if(accion === 'del'){
           eliminarItem(itemId);
         }
@@ -1219,9 +1267,22 @@
         var fila = inp.closest('.fila-item');
         var itemId = fila.getAttribute('data-item-id');
         var item = obtenerItemConteo(itemId);
-        var nuevo = clampCantidad(inp.value);
-        if(item && nuevo === item.cantidad){ inp.value = nuevo; return; }
-        fijarCantidadConteo(itemId, nuevo);
+        var base = valorBaseCantidad(itemId, item);
+        var decision = ConteoCantidad.decidirCantidadAEnviar(base, inp.value, { tope: ConteoCantidad.TOPE_CANTIDAD_DEFECTO });
+        inp.value = decision.valorMostrar;
+        if(!decision.enviar){
+          // Campo vacío/inválido: se revierte al valor anterior y NO se manda nada
+          // (un vacío nunca puede transformarse en un PATCH de cantidad 0).
+          if(decision.motivo === 'invalida'){
+            mostrarBannerEscaneo('Ese valor no es un número válido. Se mantuvo ' + decision.valorMostrar + '.');
+          } else if(decision.motivo === 'tope'){
+            mostrarBannerEscaneo('Cantidad demasiado alta (¿se leyó un código de barras en el campo de cantidad?). Se mantuvo ' + decision.valorMostrar + '.');
+          }
+          scanInput.focus(); // la pistola HID tiene que volver a apuntar al campo de escaneo
+          return;
+        }
+        enviarCantidad(itemId, decision.valorEnviar, inp, decision.truncada);
+        scanInput.focus();
       });
     });
     var head = document.getElementById('collapse-sinstock-head');
@@ -1265,28 +1326,60 @@
     return conteoData.items.filter(function(i){ return String(i.id) === String(itemId); })[0] || null;
   }
 
-  // Cantidad nunca negativa: el control −/+/tipeado siempre clampea a 0 en vez de
-  // dejar pasar un valor inválido al backend.
-  function clampCantidad(v){
-    var num = parseInt(v, 10);
-    if(isNaN(num) || num < 0) return 0;
-    return num;
+  // ----- Cantidad a mano (tap en el número, o botón −) -----
+  // cantidadOptimista: itemId -> último valor LOCAL conocido, mientras haya un
+  // envío en vuelo para ese ítem. Es la base de la que parte el siguiente toque
+  // de "−", en vez de releer conteoData.items (que puede estar vieja mientras
+  // la respuesta del PATCH anterior todavía no volvió).
+  var cantidadOptimista = {};
+  // cantidadSeq: itemId -> número de envíos hechos para ese ítem. Cada respuesta
+  // se descarta si ya se mandó un envío más nuevo para el mismo ítem (mismo
+  // patrón que seqOpciones/seqPreview de la vista Elegir alcance).
+  var cantidadSeq = {};
+
+  function valorBaseCantidad(itemId, item){
+    if(Object.prototype.hasOwnProperty.call(cantidadOptimista, itemId)) return cantidadOptimista[itemId];
+    return item ? item.cantidad : 0;
   }
 
-  // Fija la cantidad a mano (tap en el número, o botón −). Reusa el mismo PATCH que
-  // ya limpia confirmado_por_omision: llegar a 0 no borra la fila, borrar es aparte (✕).
-  function fijarCantidadConteo(itemId, nuevaCantidad){
+  // Ante un PATCH que falla (o que no se puede confirmar por red caída), revertir
+  // al último valor CONFIRMADO por el servidor — nunca dejar en pantalla el valor
+  // optimista que la base no tiene (fail-closed).
+  function revertirCantidad(itemId, inp){
+    delete cantidadOptimista[itemId];
+    var item = obtenerItemConteo(itemId);
+    var valor = item ? item.cantidad : 0;
+    if(inp && conteoLista.contains(inp)) inp.value = valor;
+    cargarConteo();
+  }
+
+  // Fija la cantidad a mano. Reusa el mismo PATCH que ya limpia
+  // confirmado_por_omision: llegar a 0 no borra la fila, borrar es aparte (✕).
+  function enviarCantidad(itemId, nuevaCantidad, inp, truncada){
     var id = sesionId();
     if(!id || !itemId) return;
-    nuevaCantidad = clampCantidad(nuevaCantidad);
+    if(truncada) mostrarBannerEscaneo('Se redondeó a ' + nuevaCantidad + ' (no se permiten decimales).');
+    cantidadOptimista[itemId] = nuevaCantidad;
+    var miSeq = (cantidadSeq[itemId] = (cantidadSeq[itemId] || 0) + 1);
     fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cantidad: nuevaCantidad })
     }).then(function(r){ return r.json(); }).then(function(j){
-      if(j && j.ok) setGuardado(true);
-      cargarConteo();
-    }).catch(function(){ cargarConteo(); });
+      if(cantidadSeq[itemId] !== miSeq) return; // ya hay un envío más nuevo para este ítem: descartar
+      if(j && j.ok){
+        setGuardado(true);
+        delete cantidadOptimista[itemId]; // el servidor vuelve a ser la fuente de verdad
+        cargarConteo();
+      } else {
+        mostrarBannerEscaneo((j && j.error) || 'No se pudo guardar la cantidad.');
+        revertirCantidad(itemId, inp);
+      }
+    }).catch(function(){
+      if(cantidadSeq[itemId] !== miSeq) return;
+      mostrarBannerEscaneo('No se pudo guardar la cantidad (sin conexión).');
+      revertirCantidad(itemId, inp);
+    });
   }
 
   // Cierra en 0 todo lo que queda del bloque sin-stock (elección explícita del usuario).
@@ -1331,13 +1424,18 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ codigo: codigo })
     }).then(function(r){ return r.json(); }).then(function(j){
-      if(!j || !j.ok){ cargarConteo(); return; }
+      if(!j || !j.ok){
+        mostrarBannerEscaneo((j && j.error) || 'No se pudo registrar el escaneo.');
+        cargarConteo();
+        return;
+      }
       setGuardado(true);
       var fuera = j.fuera_de_alcance || (j.item && j.item.fuera_de_alcance);
       if(fuera){
         mostrarBannerEscaneo('«' + ((j.item && (j.item.sku || j.item.ean)) || codigo) +
           '» está fuera del alcance de esta sesión. Se registró como hallazgo, no se descartó.');
       }
+      if(j.item && j.item.id != null) ultimoItemFlash = j.item.id;
       cargarConteo();
       if(j.item && j.item.sin_asociar){
         abrirSheetEan(j.item.ean);
