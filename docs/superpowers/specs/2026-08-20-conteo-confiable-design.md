@@ -223,3 +223,38 @@ sospechoso equivocado. Verificado contra el código, no por lectura del document
 - Se quieren **los dos modos** de conteo (unidad por unidad y escanear+cantidad), resueltos en
   una **pantalla unificada** sin interruptor.
 - Orden acordado: **Entrega A (esta) primero**, Entrega B después.
+
+## Revisión del 2026-08-21 — el `+1` perdido tuvo tres capas, no una
+
+Este bug se dio por arreglado tres veces y volvió dos. Vale la pena dejar escrito el
+recorrido, porque cada capa tapaba a la siguiente y ninguna se veía leyendo el código.
+
+**Capa 1 — dos escrituras con semánticas distintas.** `POST /escanear` suma `+1` en el
+servidor (relativo); `PATCH /items/:id` manda un valor **absoluto**. Si viajan juntas gana la
+que *llega*, no la que se envió, y el `+1` desaparece sin error. Arreglo: serializar las
+escrituras en una cola.
+
+**Capa 2 — la cola no alcanza si la base es vieja.** Serializar el HTTP no arregla un valor
+calculado al hacer *clic*: para cuando al `−` le toca el turno, el escaneo ya subió el
+número. Arreglo: el `−` pasa una **función**, no un número, y resuelve su valor cuando le
+toca el turno. Esto lo encontró una prueba en navegador contra la base, no la lectura del
+código: mi arreglo de la capa 1 lo di por bueno y estaba incompleto.
+
+**Capa 3 — la protección sobrante corrompía el estado.** Quedó vivo un `cantidadSeq` que
+descartaba "respuestas viejas". Con la cola no existe una respuesta vieja (nunca hay dos
+escrituras en vuelo), pero además `miSeq` se capturaba **al hacer clic**, no al ejecutarse:
+tres toques rápidos incrementaban el contador todos juntos antes de que arrancara la primera
+escritura, así que la respuesta **buena** se descartaba y con ella se salteaba el
+`delete cantidadOptimista`. Ese valor local obsoleto quedaba de base para el `−` siguiente.
+Medido en navegador: tres pares escaneo+`−` sobre cantidad 4 terminaban en **2**.
+
+**Lo transferible:** una guarda que ya no protege nada no es código muerto inofensivo —
+sigue teniendo efectos. Al agregar un mecanismo de orden más fuerte (la cola), hay que
+**sacar** el más débil, no dejarlo por las dudas.
+
+**Corolario sobre los tests:** al testear la cola por mutación aparecieron dos defectos en
+los tests mismos. El escenario alternado arrancaba en `4` y daba bien aunque el orden se
+rompiera (la suma conmuta lejos del piso; `siguienteAlRestar` satura en 0, así que hay que
+arrancar cerca del piso para que el orden importe). Y el código tenía **dos** mecanismos
+redundantes para sobrevivir a un fallo — `then(hacer, hacer)` y el `catch` — lo que volvía
+intesteables a los dos: mutar uno lo tapaba el otro. Quedó uno solo.
