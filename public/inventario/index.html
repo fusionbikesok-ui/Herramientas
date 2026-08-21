@@ -1326,10 +1326,15 @@
   function eliminarItem(itemId){
     var id = sesionId();
     if(!id || !itemId) return;
-    fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, { method: 'DELETE' })
-      .then(function(r){ return r.json(); })
-      .then(function(j){ if(j && j.ok) setGuardado(true); cargarConteo(); })
-      .catch(function(){});
+    // Encolado: si el DELETE viaja en paralelo a un escaneo en vuelo puede llegar ANTES, y
+    // el backend hace INSERT cuando no encuentra la fila (routes/inventario.js) — el ítem
+    // que el operario acaba de descartar reaparece con cantidad 1.
+    encolarEscritura(function(){
+      return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, opcionesConCorte({ method: 'DELETE' }))
+        .then(function(r){ return r.json(); })
+        .then(function(j){ if(j && j.ok) setGuardado(true); return cargarConteo(); })
+        .catch(function(){});
+    });
   }
 
   function obtenerItemConteo(itemId){
@@ -1352,8 +1357,14 @@
   // hubo llegó a descartar la respuesta BUENA (los clics incrementaban el contador todos
   // juntos, antes de que la primera escritura arrancara) y con ella se saltaba el
   // `delete cantidadOptimista`, dejando un valor local obsoleto como base del "−"
-  // siguiente: contar 4 terminaba en 2. Si alguna vez se agrega una escritura FUERA de
-  // esta cola, esa protección vuelve a hacer falta.
+  // siguiente: contar 4 terminaba en 2.
+  //
+  // Qué pasa por la cola: escanear, enviarCantidad, eliminarItem y cerrarSinStockComoCero —
+  // o sea TODO lo que cambia la cantidad contada de un ítem. Queda afuera a propósito
+  // `asociarEan` (mapea EAN→SKU, no toca cantidades) y las escrituras de la vista Revisión,
+  // donde no hay pistola ni +1 relativo: ahí todo es absoluto y las vistas son excluyentes.
+  // Si se agrega una escritura de CANTIDAD fuera de esta cola, vuelve a hacer falta ordenar
+  // las respuestas de alguna otra forma.
   var encolarEscritura = ConteoCantidad.crearColaEscrituras();
 
   function valorBaseCantidad(itemId, item){
@@ -1369,7 +1380,24 @@
     var item = obtenerItemConteo(itemId);
     var valor = item ? item.cantidad : 0;
     if(inp && conteoLista.contains(inp)) inp.value = valor;
-    cargarConteo();
+    // Se DEVUELVE el refresco: quien llama está dentro de una escritura encolada, y si la
+    // cola se libera antes de que conteoData esté al día, la escritura siguiente calcula su
+    // base contra datos viejos — el mismo subconteo que la cola vino a evitar, entrando por
+    // el camino de error (PATCH aplicado en el servidor, respuesta perdida).
+    return cargarConteo();
+  }
+
+  // Un fetch colgado (wifi de depósito: el request no falla, queda pendiente hasta el
+  // timeout de TCP del SO, minutos) traba la cola entera. Y como el escaneo no muestra nada
+  // al encolar, el operario sigue pistoleando contra una cola muerta: se pierde la sesión
+  // desde ese punto, no un escaneo. Con el corte, el `catch` de cada escritura muestra el
+  // banner "sin conexión" y la cola sigue viva.
+  var CORTE_ESCRITURA_MS = 10000;
+  function opcionesConCorte(opts){
+    if(typeof AbortSignal !== 'undefined' && AbortSignal.timeout){
+      opts.signal = AbortSignal.timeout(CORTE_ESCRITURA_MS);
+    }
+    return opts;
   }
 
   // Fija la cantidad a mano. Reusa el mismo PATCH que ya limpia
@@ -1386,22 +1414,22 @@
       var cantidadFinal = (typeof nuevaCantidad === 'function') ? nuevaCantidad() : nuevaCantidad;
       cantidadOptimista[itemId] = cantidadFinal;
       if(inp) inp.value = cantidadFinal;
-      return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, {
+      return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, opcionesConCorte({
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cantidad: cantidadFinal })
-    }).then(function(r){ return r.json(); }).then(function(j){
+    })).then(function(r){ return r.json(); }).then(function(j){
       if(j && j.ok){
         setGuardado(true);
         delete cantidadOptimista[itemId]; // el servidor vuelve a ser la fuente de verdad
         return cargarConteo();
       } else {
         mostrarBannerEscaneo((j && j.error) || 'No se pudo guardar la cantidad.');
-        revertirCantidad(itemId, inp);
+        return revertirCantidad(itemId, inp);
       }
     }).catch(function(){
       mostrarBannerEscaneo('No se pudo guardar la cantidad (sin conexión).');
-      revertirCantidad(itemId, inp);
+      return revertirCantidad(itemId, inp);
     });
     });
   }
@@ -1418,14 +1446,16 @@
         : '¿Cerrar en 0 los ' + n(cantidad) + ' productos sin stock que quedan?';
       if(!confirm(aviso + ' Se van a contar como 0 y ese valor se escribe en el stock al confirmar el ajuste.')) return;
     }
-    fetch('/api/inventario/sesiones/' + id + '/cerrar-sin-stock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ todos: true })
-    }).then(function(r){ return r.json(); }).then(function(j){
-      if(j && j.ok){ setGuardado(true); cargarConteo(); }
-      else mostrarBannerEscaneo((j && j.error) || 'No se pudieron cerrar los productos sin stock.');
-    }).catch(function(){ mostrarBannerEscaneo('No se pudieron cerrar los productos sin stock (sin conexión).'); });
+    encolarEscritura(function(){
+      return fetch('/api/inventario/sesiones/' + id + '/cerrar-sin-stock', opcionesConCorte({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ todos: true })
+      })).then(function(r){ return r.json(); }).then(function(j){
+        if(j && j.ok){ setGuardado(true); return cargarConteo(); }
+        mostrarBannerEscaneo((j && j.error) || 'No se pudieron cerrar los productos sin stock.');
+      }).catch(function(){ mostrarBannerEscaneo('No se pudieron cerrar los productos sin stock (sin conexión).'); });
+    });
   }
 
   // Aviso no bloqueante (ej. escaneo fuera del alcance de la sesión).
@@ -1444,11 +1474,11 @@
     codigo = String(codigo || '').trim();
     if(!id || !codigo) return;
     encolarEscritura(function(){
-      return fetch('/api/inventario/sesiones/' + id + '/escanear', {
+      return fetch('/api/inventario/sesiones/' + id + '/escanear', opcionesConCorte({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ codigo: codigo })
-    }).then(function(r){ return r.json(); }).then(function(j){
+    })).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok){
         mostrarBannerEscaneo((j && j.error) || 'No se pudo registrar el escaneo.');
         return cargarConteo();
@@ -1675,21 +1705,6 @@
 
   // ----- Vista Revisión -----
   var revisionData = { items: [], pendientes: [] };
-
-  function apiEscanear(codigo){
-    var id = sesionId();
-    return fetch('/api/inventario/sesiones/' + id + '/escanear', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ codigo: codigo })
-    }).then(function(r){ return r.json(); });
-  }
-
-  function apiEliminarItem(itemId){
-    var id = sesionId();
-    return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, { method: 'DELETE' })
-      .then(function(r){ return r.json(); });
-  }
 
   function fijarCantidad(item, valor){
     var nuevo = parseInt(valor, 10);
