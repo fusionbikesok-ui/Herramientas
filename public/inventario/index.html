@@ -1342,24 +1342,19 @@
   // de "−", en vez de releer conteoData.items (que puede estar vieja mientras
   // la respuesta del PATCH anterior todavía no volvió).
   var cantidadOptimista = {};
-  // colaEscrituras: el PATCH de cantidad manda un valor ABSOLUTO y el escaneo suma +1 en el
-  // servidor. Si los dos viajan a la vez gana el que LLEGA, no el que se envió, y el +1 del
-  // escaneo se pierde en silencio — justo el subconteo que esta pantalla vino a arreglar.
-  // Descartar respuestas viejas (cantidadSeq) no alcanza: el daño ya ocurrió en el servidor.
-  // Por eso las escrituras del conteo se serializan: una por vez, en el orden en que las hizo
-  // el operario. Es el caso real (una persona, un celular); el costo es que un escaneo espera
-  // a que termine la escritura anterior, que son milisegundos contra perder una unidad.
-  var colaEscrituras = Promise.resolve();
-  function encolarEscritura(hacer){
-    var p = colaEscrituras.then(hacer, hacer);
-    colaEscrituras = p.catch(function(){});   // un fallo no puede cortar la cola
-    return p;
-  }
-
-  // cantidadSeq: itemId -> número de envíos hechos para ese ítem. Cada respuesta
-  // se descarta si ya se mandó un envío más nuevo para el mismo ítem (mismo
-  // patrón que seqOpciones/seqPreview de la vista Elegir alcance).
-  var cantidadSeq = {};
+  // Las escrituras del conteo se serializan: una por vez, en el orden en que las hizo el
+  // operario (ver ConteoCantidad.crearColaEscrituras para el porqué). Es el caso real —
+  // una persona, un celular; el costo es que un escaneo espera a que termine la escritura
+  // anterior, milisegundos contra perder una unidad.
+  //
+  // Y por eso NO hay acá un contador de secuencia para descartar respuestas viejas: con la
+  // cola no existe una respuesta vieja, porque nunca hay dos escrituras en vuelo. El que
+  // hubo llegó a descartar la respuesta BUENA (los clics incrementaban el contador todos
+  // juntos, antes de que la primera escritura arrancara) y con ella se saltaba el
+  // `delete cantidadOptimista`, dejando un valor local obsoleto como base del "−"
+  // siguiente: contar 4 terminaba en 2. Si alguna vez se agrega una escritura FUERA de
+  // esta cola, esa protección vuelve a hacer falta.
+  var encolarEscritura = ConteoCantidad.crearColaEscrituras();
 
   function valorBaseCantidad(itemId, item){
     if(Object.prototype.hasOwnProperty.call(cantidadOptimista, itemId)) return cantidadOptimista[itemId];
@@ -1383,7 +1378,6 @@
     var id = sesionId();
     if(!id || !itemId) return;
     if(truncada) mostrarBannerEscaneo('Se redondeó a ' + nuevaCantidad + ' (no se permiten decimales).');
-    var miSeq = (cantidadSeq[itemId] = (cantidadSeq[itemId] || 0) + 1);
     // `nuevaCantidad` puede venir como FUNCIÓN: el "−" no puede fijar su valor al hacer clic,
     // porque para cuando le toque el turno en la cola el estado pudo haber cambiado (un
     // escaneo en vuelo, por ejemplo). Resolviéndolo acá adentro, ya con el refresco anterior
@@ -1397,7 +1391,6 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cantidad: cantidadFinal })
     }).then(function(r){ return r.json(); }).then(function(j){
-      if(cantidadSeq[itemId] !== miSeq) return; // ya hay un envío más nuevo para este ítem: descartar
       if(j && j.ok){
         setGuardado(true);
         delete cantidadOptimista[itemId]; // el servidor vuelve a ser la fuente de verdad
@@ -1407,7 +1400,6 @@
         revertirCantidad(itemId, inp);
       }
     }).catch(function(){
-      if(cantidadSeq[itemId] !== miSeq) return;
       mostrarBannerEscaneo('No se pudo guardar la cantidad (sin conexión).');
       revertirCantidad(itemId, inp);
     });

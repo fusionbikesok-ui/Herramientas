@@ -159,4 +159,60 @@ describe('conteoCantidad.js (ConteoCantidad)', () => {
     });
   });
 
+
+  // La cola de escrituras es la pieza que hace que el orden en que TOCÓ el operario sea el
+  // orden en que se APLICA. Sin ella, el escaneo (+1 relativo en el servidor) y el control de
+  // cantidad (valor absoluto) viajan juntos y gana el que llega: el +1 se pierde en silencio.
+  describe('crearColaEscrituras', () => {
+    const diferido = () => {
+      let resolver, rechazar;
+      const promesa = new Promise((res, rej) => { resolver = res; rechazar = rej; });
+      return { promesa, resolver, rechazar };
+    };
+
+    it('no arranca la segunda escritura hasta que termina la primera', async () => {
+      const encolar = ConteoCantidad.crearColaEscrituras();
+      const a = diferido();
+      const arrancaron = [];
+      encolar(() => { arrancaron.push('a'); return a.promesa; });
+      encolar(() => { arrancaron.push('b'); return Promise.resolve(); });
+      await Promise.resolve();
+      expect(arrancaron).toEqual(['a']);   // 'b' todavía no arrancó
+      a.resolver();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(arrancaron).toEqual(['a', 'b']);
+    });
+
+    // El caso que rompe en la pantalla: el "−" resuelve su valor DENTRO de la escritura,
+    // así que lo que importa es que para entonces la escritura anterior ya haya terminado
+    // (y con ella el refresco del estado). Acá se modela con un contador compartido.
+    it('escaneo(+1) y resta(absoluto) alternados dejan el valor correcto', async () => {
+      const encolar = ConteoCantidad.crearColaEscrituras();
+      const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+      // Arranca en 1 a propósito: `siguienteAlRestar` satura en 0, así que la suma NO es
+      // conmutativa cerca del piso. Con un valor alto (4) el resultado da bien aunque el
+      // orden se rompa, y el test no probaría nada — se verificó por mutación.
+      let servidor = 1;
+      const ultima = [];
+      for (let i = 0; i < 3; i++) {
+        // El escaneo tarda (viaja al servidor); la resta resuelve su valor al arrancar.
+        // Sin serialización la resta lee `servidor` ANTES de que el escaneo lo haya subido
+        // y el +1 se pierde: es exactamente el subconteo que se vio en el navegador.
+        ultima.push(encolar(() => esperar(5).then(() => { servidor += 1; })));
+        ultima.push(encolar(() => { servidor = ConteoCantidad.siguienteAlRestar(servidor); }));
+      }
+      await Promise.all(ultima);
+      expect(servidor).toBe(1);   // 3 escaneos y 3 restas alternados: sin cambio neto
+    });
+
+    it('una escritura que falla no corta la cola', async () => {
+      const encolar = ConteoCantidad.crearColaEscrituras();
+      const corridas = [];
+      encolar(() => { corridas.push('falla'); return new Promise((_r, rej) => setTimeout(() => rej(new Error('sin red')), 5)); }).catch(() => {});
+      const segunda = encolar(() => { corridas.push('sigue'); return Promise.resolve(); });
+      await segunda;
+      expect(corridas).toEqual(['falla', 'sigue']);
+    });
+  });
+
 });
