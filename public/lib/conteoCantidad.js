@@ -84,12 +84,36 @@
     return Math.max(0, b - 1);
   }
 
+
+  // Cola de escrituras: el conteo tiene DOS escrituras que pegan al mismo ítem con
+  // semánticas distintas — el escaneo suma +1 en el servidor (relativo) y el control de
+  // cantidad manda un valor ABSOLUTO. Si viajan a la vez gana el que LLEGA, no el que se
+  // envió, y el +1 del escaneo se pierde en silencio: justo el subconteo que esta pantalla
+  // vino a arreglar. Serializarlas es lo que hace que el orden en que tocó el operario sea
+  // el orden en que se aplica.
+  //
+  // Un fallo NO puede cortar la cola: si una escritura rechaza, la siguiente igual corre.
+  // Eso lo hace el `catch` — la cadena que se GUARDA es la domada, y por eso el próximo
+  // `then` siempre arranca. Lo que se DEVUELVE es la promesa original, para que quien llama
+  // pueda seguir viendo el error. (Una versión anterior además pasaba `hacer` como segundo
+  // argumento de `then`: hacía lo mismo dos veces, y esa redundancia volvía imposible
+  // testear cualquiera de los dos mecanismos — la mutación de uno la tapaba el otro.)
+  function crearColaEscrituras() {
+    var cola = Promise.resolve();
+    return function encolar(hacer) {
+      var p = cola.then(hacer);
+      cola = p.catch(function () {});
+      return p;
+    };
+  }
+
   var ConteoCantidad = {
     TOPE_CANTIDAD_DEFECTO: TOPE_CANTIDAD_DEFECTO,
     normalizarCantidad: normalizarCantidad,
     decidirCantidadAEnviar: decidirCantidadAEnviar,
     siguienteAlRestar: siguienteAlRestar,
-    excedeTope: excedeTope
+    excedeTope: excedeTope,
+    crearColaEscrituras: crearColaEscrituras
   };
 
   root.ConteoCantidad = ConteoCantidad;
