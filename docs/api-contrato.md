@@ -1109,6 +1109,25 @@ sin producto detrás, así que no hay stock que ajustar. Un código desconocido 
 asociándolo a un SKU real (`/asociar`, que limpia el flag) o borrando el ítem.
 `aviso` trae el texto listo para mostrar, o `null` si el estado es `ok`.
 
+### POST /api/inventario/sesiones/:id/asociar (respuesta ampliada: sube el código a Woo — spec 2026-08-21)
+Request `{ "ean": "...", "sku": "...", "pisar_codigo"?: true }`.
+Respuesta: `{ ok, item, codigo }`. `codigo.estado`:
+
+| `codigo.estado` | Cuándo | Llamada a Woo |
+|---|---|---|
+| `no_valido` | el código escaneado no es un GTIN válido (`looksLikeEan`) | ninguna |
+| `subido` | GTIN válido y se escribió en Woo (producto sin código, o con `pisar_codigo:true`) | sí, PATCH `global_unique_id` |
+| `sin_cambio` | el producto ya tenía ese mismo código en Woo | ninguna |
+| `conflicto` | el producto tiene **otro** código en Woo; no se pisó; trae `gtin_actual` | ninguna |
+| `fallo` | se intentó y Woo rechazó o no respondió; trae `error` | sí (falló) |
+
+La asociación local del ítem (`item.sku`, `ean_sku`) se hace **siempre**, incluso en
+`fallo` — excepción deliberada al fail-closed del resto del sistema: el trabajo físico
+del operario no se descarta por un error de Woo. En `conflicto`, la pantalla pregunta y,
+si el operario confirma pisar, repite el POST con `pisar_codigo: true`. Esta subida se
+extrajo a `lib/gtinWoo.js`, compartida con `POST /api/codigos/asignar` (mismo comportamiento,
+no cambia), porque `inventario` y `codigos` son permisos distintos.
+
 ### POST /api/inventario/sesiones/:id/cerrar-sin-stock
 Cierra en 0 los pendientes del bloque `sin_stock`. No es automático: se ofrece al cerrar
 la sesión y el usuario elige.

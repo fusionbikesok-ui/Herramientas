@@ -1,6 +1,7 @@
 import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { setStockWc } from '../lib/wooStock.js';
+import { subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
 const now = () => new Date().toISOString();
 
@@ -535,15 +536,21 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true, item: itemOut(item), aviso: avisoDeCodigo(item) });
   });
 
-  router.post('/sesiones/:id/asociar', (req, res) => {
+  // Subida del código a Woo al asociar (spec 2026-08-21-subir-ean-a-woo-design.md).
+  // Excepción DELIBERADA al fail-closed del resto del sistema: si Woo rechaza o no
+  // responde, la asociación LOCAL se hace igual y el conteo sigue (estado 'fallo').
+  // El trabajo físico del operario no se descarta por un error de Woo. El ajuste de
+  // stock (confirmar sesión) sigue siendo fail-closed como siempre, no se toca acá.
+  router.post('/sesiones/:id/asociar', async (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
     if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
 
     const ean = String(req.body?.ean || '').trim();
     const sku = String(req.body?.sku || '').trim();
-    const prod = db.prepare("SELECT sku FROM catalogo_cache WHERE sku=?").get(sku);
-    if (!prod) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    const pisarCodigo = req.body?.pisar_codigo === true;
+    const fila = db.prepare('SELECT * FROM catalogo_cache WHERE sku=?').get(sku);
+    if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
 
     // Fail-closed: si no hay ningún ítem escaneado con ese EAN en esta sesión, no
     // sembramos ean_sku ni hacemos nada — "enseñar EAN sin ítem" es otro caso de uso,
@@ -558,13 +565,40 @@ export function inventarioRouter(db, wooCfg) {
       return res.status(404).json({ ok: false, error: 'No hay ningún ítem escaneado con ese EAN en esta sesión' });
     }
 
+    // La asociación local (SKU ↔ código escaneado) se hace SIEMPRE, pase lo que pase
+    // con Woo más abajo — este ean_sku es el mapeo "código físico → sku" que usa
+    // Consulta de Precios, no el global_unique_id de Woo.
     db.prepare(`
       INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
       ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
     `).run(ean, sku, now());
 
+    // Subida del código a Woo, solo si es un GTIN válido de verdad (no cualquier código).
+    let codigo;
+    if (!looksLikeEan(ean)) {
+      codigo = { estado: 'no_valido' };
+    } else {
+      const gtinActual = String(fila.gtin || '').trim();
+      if (!gtinActual) {
+        codigo = await subirGtin(fila, ean, sku);
+      } else if (gtinActual === ean) {
+        codigo = { estado: 'sin_cambio' };
+      } else if (!pisarCodigo) {
+        codigo = { estado: 'conflicto', gtin: ean, gtin_actual: gtinActual };
+      } else {
+        codigo = await subirGtin(fila, ean, sku);
+      }
+    }
+
+    async function subirGtin(filaProducto, gtin, skuProducto) {
+      const resultado = await subirGtinAWoo(wooCfg, filaProducto, gtin);
+      if (!resultado.ok) return { estado: 'fallo', gtin, error: resultado.error };
+      persistirGtinConfirmado(db, filaProducto, gtin, skuProducto);
+      return { estado: 'subido', gtin };
+    }
+
     const item = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
-    res.json({ ok: true, item: itemOut(item) });
+    res.json({ ok: true, item: itemOut(item), codigo });
   });
 
   router.delete('/sesiones/:id/items/:itemId', (req, res) => {

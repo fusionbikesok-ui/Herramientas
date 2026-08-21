@@ -11,6 +11,13 @@ vi.mock('../lib/wooStock.js', async () => {
 });
 import { setStockWc } from '../lib/wooStock.js';
 
+// Ninguna llamada real a Woo en los tests: mockeamos axios, igual que codigos.test.js.
+// Los tests de /asociar que NO configuran un mock explícito reciben el automock
+// (axios.request() sin implementación) — eso hace que subirGtinAWoo falle "sola" con
+// estado 'fallo', que es justamente el camino fail-open que no debe romper nada.
+vi.mock('axios');
+import axios from 'axios';
+
 const TEST_DB = './test/tmp-inventario.sqlite';
 const CFG = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
 const now = () => new Date().toISOString();
@@ -309,7 +316,13 @@ describe('POST /api/inventario/sesiones/:id/escanear', () => {
 });
 
 describe('POST /api/inventario/sesiones/:id/asociar', () => {
-  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+  // Con el código válido (spec 2026-08-21) el handler también llama a axios (automock,
+  // falla sola con estado 'fallo' — ver comentario del vi.mock('axios') arriba). Sin
+  // resetear, las llamadas quedan registradas y contaminan el describe siguiente.
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    vi.resetAllMocks();
+  });
 
   it('asocia un EAN sin sku a un SKU existente y siembra ean_sku', async () => {
     const db = openDb(TEST_DB);
@@ -367,6 +380,132 @@ describe('POST /api/inventario/sesiones/:id/asociar', () => {
 
     expect(r.status).toBe(400);
     expect(r.body.ok).toBe(false);
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/asociar — subida del código a Woo (spec 2026-08-21)', () => {
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    vi.resetAllMocks();
+  });
+
+  async function crearSesionYEscanear(db, codigo, usuario = 'juan') {
+    const crear = await request(buildApp(db, usuario)).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, usuario)).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo });
+    return id;
+  }
+
+  it('código no-GTIN: asocia local y no llama a Woo — estado no_valido', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: null });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    // Código desconocido y NO GTIN (no es numérico de 8/12/13/14 con checksum OK).
+    const id = await crearSesionYEscanear(db, 'XYZ-999');
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: 'XYZ-999', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.item.sku).toBe('FB-1');
+    expect(r.body.codigo).toEqual({ estado: 'no_valido' });
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('GTIN válido, producto sin código en Woo: sube y persiste — estado subido', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: null });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const id = await crearSesionYEscanear(db, '1234567890128');
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo.estado).toBe('subido');
+    expect(r.body.codigo.gtin).toBe('1234567890128');
+    expect(axios.request).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://fusionbikes.com.ar/wp-json/wc/v3/products/1',
+      method: 'patch',
+      data: { global_unique_id: '1234567890128' },
+    }));
+    const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
+    expect(fila.gtin).toBe('1234567890128');
+    db.close();
+  });
+
+  it('el producto ya tiene ese mismo código: no llama a Woo — estado sin_cambio', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: '1234567890128' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const id = await crearSesionYEscanear(db, '1234567890128');
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo).toEqual({ estado: 'sin_cambio' });
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('el producto tiene OTRO código: no pisa — estado conflicto con gtin_actual, cero llamadas a Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: '7791234567898' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const id = await crearSesionYEscanear(db, '1234567890128');
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo).toEqual({ estado: 'conflicto', gtin: '1234567890128', gtin_actual: '7791234567898' });
+    expect(axios.request).not.toHaveBeenCalled();
+    const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
+    expect(fila.gtin).toBe('7791234567898'); // no se tocó
+    db.close();
+  });
+
+  it('conflicto + pisar_codigo:true: sube y borra el ean_sku huérfano del código viejo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: '7791234567898' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    db.prepare("INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES ('7791234567898','FB-1',?)").run(now());
+    const id = await crearSesionYEscanear(db, '1234567890128');
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`)
+      .send({ ean: '1234567890128', sku: 'FB-1', pisar_codigo: true });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo.estado).toBe('subido');
+    expect(axios.request).toHaveBeenCalledTimes(1);
+    const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
+    expect(fila.gtin).toBe('1234567890128');
+    expect(db.prepare("SELECT sku FROM ean_sku WHERE ean='7791234567898'").get()).toBeUndefined();
+    db.close();
+  });
+
+  it('Woo rechaza o no responde: la asociación local se hace igual — estado fallo, el conteo sigue', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: null });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const id = await crearSesionYEscanear(db, '1234567890128');
+    axios.request.mockResolvedValueOnce({
+      status: 400,
+      data: { code: 'duplicate_global_unique_id', message: 'El código universal ya está en uso por otro producto.' },
+      headers: {},
+    });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    // El conteo no se corta por el error de Woo: la asociación local se hizo igual.
+    expect(r.status).toBe(200);
+    expect(r.body.item.sku).toBe('FB-1');
+    expect(r.body.codigo.estado).toBe('fallo');
+    expect(r.body.codigo.error).toBeTruthy();
+    // Fail-open SOLO para la subida del código; no se persiste el gtin en catalogo_cache.
+    const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
+    expect(fila.gtin).toBeNull();
+    db.close();
   });
 });
 
