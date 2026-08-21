@@ -1,9 +1,14 @@
 /*
- * public/lib/conteoCantidad.js — Lógica pura de decisión de cantidad contada
- * (Contador de inventario). Nada de DOM ni fetch acá: solo la parte que
- * decide QUÉ significa lo que el operario tipeó/tocó y QUÉ hay que mandar
- * (o revertir) — es la lógica que, mal hecha, termina escribiendo stock en
- * Woo por accidente.
+ * public/lib/conteoCantidad.js — Lógica pura del conteo (Contador de inventario).
+ * Nada de DOM ni fetch acá. Dos cosas viven en este archivo:
+ *
+ *   1. QUÉ significa lo que el operario tipeó/tocó y qué hay que mandar (o
+ *      revertir) — la lógica que, mal hecha, termina escribiendo stock en Woo
+ *      por accidente.
+ *   2. En qué ORDEN se aplican las escrituras (crearColaEscrituras). No decide
+ *      ninguna cantidad, pero es lo que hace que el orden en que tocó el
+ *      operario sea el orden en que se aplica: sin eso, el punto 1 puede estar
+ *      perfecto y el conteo salir mal igual.
  *
  * Se carga como <script src="../lib/conteoCantidad.js"></script> (script
  * CLÁSICO, no module), igual que format.js: queda disponible de forma

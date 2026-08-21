@@ -175,11 +175,13 @@ describe('conteoCantidad.js (ConteoCantidad)', () => {
       const a = diferido();
       const arrancaron = [];
       encolar(() => { arrancaron.push('a'); return a.promesa; });
-      encolar(() => { arrancaron.push('b'); return Promise.resolve(); });
-      await Promise.resolve();
+      const segunda = encolar(() => { arrancaron.push('b'); });
+      // Un tick de macrotask, no `await Promise.resolve()`: contar microtasks exactas ata el
+      // test a la implementación y lo rompe con cualquier `await` interno, sin regresión real.
+      await new Promise((r) => setTimeout(r, 0));
       expect(arrancaron).toEqual(['a']);   // 'b' todavía no arrancó
       a.resolver();
-      await new Promise((r) => setTimeout(r, 0));
+      await segunda;
       expect(arrancaron).toEqual(['a', 'b']);
     });
 
@@ -203,6 +205,15 @@ describe('conteoCantidad.js (ConteoCantidad)', () => {
       }
       await Promise.all(ultima);
       expect(servidor).toBe(1);   // 3 escaneos y 3 restas alternados: sin cambio neto
+    });
+
+    // El comentario de crearColaEscrituras promete que se devuelve la promesa ORIGINAL, no la
+    // domada con catch — si no, quien llama nunca vería el error. Sin este test, mutar
+    // `return p` a `return cola` no mataba nada.
+    it('devuelve la promesa original, con su error, no la domada', async () => {
+      const encolar = ConteoCantidad.crearColaEscrituras();
+      const p = encolar(() => Promise.reject(new Error('sin red')));
+      await expect(p).rejects.toThrow('sin red');
     });
 
     it('una escritura que falla no corta la cola', async () => {
