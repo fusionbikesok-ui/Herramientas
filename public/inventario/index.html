@@ -1780,8 +1780,10 @@
 
   function cargarRevision(){
     var id = sesionId();
-    if(!id) return;
-    fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
+    if(!id) return Promise.resolve();
+    // Devuelve la promesa: quien acaba de escribir necesita esperar el refresco antes de
+    // mostrar un resumen, o mostraría uno calculado sobre datos previos a su propia escritura.
+    return fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok) return;
       state.sesion = j.sesion;
       revisionData.items = j.items || [];
@@ -1970,11 +1972,15 @@
     var skus = skusNoTildadosCierre();
     btnCierreConfirmar.disabled = true;
     cerrarEnCero(skus).then(function(j){
-      btnCierreConfirmar.disabled = false;
-      if(j && j.ok){
+      if(!j || !j.ok){ btnCierreConfirmar.disabled = false; return; }
+      // Refrescar ANTES de abrir el modal: su resumen sale de revisionData, que todavía no
+      // tiene los ceros recién creados. Sin esto el operario vería menos bajas de las que
+      // realmente se van a escribir en Woo, justo en la pantalla que confirma la escritura.
+      return cargarRevision().then(function(){
+        btnCierreConfirmar.disabled = false;
         cerrarPantallaCierre();
         abrirModalConfirmacion();
-      }
+      });
     });
   });
 
