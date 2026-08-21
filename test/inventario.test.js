@@ -943,6 +943,69 @@ describe('Hallazgo fuera de alcance', () => {
   });
 });
 
+describe('POST /api/inventario/sesiones/:id/cerrar-en-cero', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  // Mismo patrón que el resto del archivo: sembrar catálogo con insertProducto y crear la
+  // sesión por la API. El alcance sale solo de catalogo_cache (stock>0 → bloque con_stock).
+  it('cierra en 0 un producto CON stock cuando se lo pide por SKU', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-2'] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.cerrados).toBe(1);
+    const fila = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-2');
+    expect(fila.cantidad).toBe(0);
+    expect(fila.confirmado_por_omision).toBe(1);
+    expect(fila.bloque).toBe('con_stock');
+  });
+
+  // Bajar a 0 algo que tenía stock es destructivo: pasa por Woo al confirmar. Un `todos:true`
+  // acá sería el botón que vacía el depósito cuando el operario se cansó.
+  it('rechaza todos:true para productos con stock', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ todos: true });
+
+    expect(r.status).toBe(400);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
+  });
+
+  it('ignora un SKU que no esta en el alcance de la sesion', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-999'] });
+
+    expect(r.body.cerrados).toBe(0);
+  });
+
+  it('no cierra nada si la sesion no esta abierta', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    db.prepare("UPDATE inventario_sesiones SET estado='confirmada' WHERE id=?").run(id);
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-2'] });
+
+    expect(r.status).toBe(400);
+  });
+});
+
 describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
   afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
 
