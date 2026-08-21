@@ -320,6 +320,10 @@
   .btn-hold .fill{position:absolute;left:0;top:0;bottom:0;width:0%;background:var(--danger-solid);transition:width linear;z-index:0;}
   .btn-hold .lbl{position:relative;z-index:1;}
   .confirm-box .btn.secondary{margin-top:10px;}
+  .confirm-box .codigo-linea{display:flex;justify-content:space-between;gap:10px;align-items:center;
+       padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);margin-bottom:8px;}
+  .confirm-box .codigo-linea .etq{font-size:12px;color:var(--muted);}
+  .confirm-box .codigo-mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;font-size:15px;letter-spacing:.5px;}
 
   /* ----- Pantalla de cierre (pendientes con stock) ----- */
   .cierre-box{max-width:520px;max-height:90vh;display:flex;flex-direction:column;}
@@ -533,6 +537,21 @@
     <button type="button" class="btn danger" id="btn-cierre-confirmar">Pasar a 0 y confirmar</button>
     <button type="button" class="btn secondary" id="btn-cierre-guardar">Guardar y seguir después</button>
     <button type="button" class="btn secondary" id="btn-cierre-cancelar">Volver</button>
+  </div>
+</div>
+
+<!-- Modal: el producto ya tiene otro código en Woo. No se pisa sin preguntar. -->
+<div class="confirm-veil" id="codigo-conflicto-veil" role="dialog" aria-modal="true" aria-label="El producto ya tiene otro código en Woo">
+  <div class="confirm-box">
+    <h3>Este producto ya tiene otro código</h3>
+    <p class="confirm-resumen">En WooCommerce este producto tiene un código distinto al que acabás de escanear.
+      No se modificó nada todavía.</p>
+    <div class="codigo-linea"><span class="etq">Ya está en Woo</span>
+      <span class="codigo-mono" id="conflicto-gtin-actual">—</span></div>
+    <div class="codigo-linea"><span class="etq">Recién escaneado</span>
+      <span class="codigo-mono" id="conflicto-gtin-nuevo">—</span></div>
+    <button type="button" class="btn primary" id="btn-conflicto-reemplazar">Reemplazar por el escaneado</button>
+    <button type="button" class="btn secondary" id="btn-conflicto-dejar">Dejar el de Woo como está</button>
   </div>
 </div>
 
@@ -1662,16 +1681,61 @@
     return el ? el.id.replace('vista-', '') : null;
   }
 
-  function asociarEan(ean, sku){
+  function tratarCodigoSubido(j){
+    // Aviso no bloqueante para 'subido' y 'fallo'. 'sin_cambio' y 'no_valido' son el caso
+    // normal y no ameritan nada en pantalla (ver contrato en el spec de la entrega C1).
+    var c = j && j.codigo;
+    if(!c) return;
+    if(c.estado === 'subido'){
+      mostrarBannerEscaneo('Código ' + c.gtin + ' subido a Woo.');
+    } else if(c.estado === 'fallo'){
+      mostrarBannerEscaneo('El código no se pudo subir a Woo (' + (c.error || 'motivo desconocido') +
+        '). El conteo se guardó igual.');
+    }
+  }
+
+  var conflictoVeil = document.getElementById('codigo-conflicto-veil');
+  var conflictoEanActual = document.getElementById('conflicto-gtin-actual');
+  var conflictoEanNuevo = document.getElementById('conflicto-gtin-nuevo');
+  var conflictoPendiente = null; // { ean, sku }
+
+  function abrirConflictoCodigo(ean, sku, gtinActual){
+    conflictoPendiente = { ean: ean, sku: sku };
+    conflictoEanActual.textContent = gtinActual || '—';
+    conflictoEanNuevo.textContent = ean || '—';
+    conflictoVeil.classList.add('open');
+  }
+  function cerrarConflictoCodigo(){
+    conflictoVeil.classList.remove('open');
+    conflictoPendiente = null;
+  }
+  document.getElementById('btn-conflicto-dejar').addEventListener('click', cerrarConflictoCodigo);
+  document.getElementById('btn-conflicto-reemplazar').addEventListener('click', function(){
+    var p = conflictoPendiente;
+    cerrarConflictoCodigo();
+    if(p) asociarEan(p.ean, p.sku, true);
+  });
+
+  function asociarEan(ean, sku, pisarCodigo){
     var id = sesionId();
     if(!id) return;
+    var body = { ean: ean, sku: sku };
+    if(pisarCodigo) body.pisar_codigo = true;
     fetch('/api/inventario/sesiones/' + id + '/asociar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ean: ean, sku: sku })
+      body: JSON.stringify(body)
     }).then(function(r){ return r.json(); }).then(function(j){
       if(j && j.ok){
         setGuardado(true);
+        var c = j.codigo;
+        if(c && c.estado === 'conflicto'){
+          // No se tocó nada en el backend: la asociación local ya quedó hecha (item real),
+          // pero el código en Woo sigue esperando la decisión del operario.
+          abrirConflictoCodigo(ean, sku, c.gtin_actual);
+        } else {
+          tratarCodigoSubido(j);
+        }
         cerrarSheetEan();
         if(vistaActivaNombre() === 'revision') cargarRevision();
         else cargarConteo();
