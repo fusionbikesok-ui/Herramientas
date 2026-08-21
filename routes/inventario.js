@@ -549,8 +549,15 @@ export function inventarioRouter(db, wooCfg) {
     const ean = String(req.body?.ean || '').trim();
     const sku = String(req.body?.sku || '').trim();
     const pisarCodigo = req.body?.pisar_codigo === true;
-    const fila = db.prepare('SELECT * FROM catalogo_cache WHERE sku=?').get(sku);
+    if (!sku) return res.status(400).json({ ok: false, error: 'Falta el SKU' });
+    // `sku <> ''` y LIMIT 1, mismo criterio que routes/codigos.js:61. El índice de sku NO es
+    // único: con el body vacío esta consulta podía matchear cualquier fila sin SKU.
+    const fila = db.prepare("SELECT * FROM catalogo_cache WHERE sku=? AND sku <> '' LIMIT 1").get(sku);
     if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    // Cuántos productos comparten ese SKU. Ya pasó en producción que tres productos de WC
+    // tuvieran el mismo (incidente 2026-07-25): elegir uno arbitrario acá significaba
+    // escribirle el código de barras al producto equivocado. Con ambigüedad no se sube nada.
+    const homonimos = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku=? AND sku <> ''").get(sku).n;
 
     // Fail-closed: si no hay ningún ítem escaneado con ese EAN en esta sesión, no
     // sembramos ean_sku ni hacemos nada — "enseñar EAN sin ítem" es otro caso de uso,
@@ -577,6 +584,11 @@ export function inventarioRouter(db, wooCfg) {
     let codigo;
     if (!looksLikeEan(ean)) {
       codigo = { estado: 'no_valido' };
+    } else if (homonimos > 1) {
+      codigo = {
+        estado: 'fallo', gtin: ean, motivo: 'sku_ambiguo',
+        error: `Hay ${homonimos} productos con el SKU ${sku} en el catálogo: no se puede saber a cuál corresponde el código.`,
+      };
     } else {
       const gtinActual = String(fila.gtin || '').trim();
       if (!gtinActual) {
@@ -590,9 +602,12 @@ export function inventarioRouter(db, wooCfg) {
       }
     }
 
+    // `motivo` viaja a la respuesta para que la pantalla pueda distinguir un fallo
+    // REINTENTABLE (Woo caído, rechazo) de uno que no lo es (un padre variable no lleva
+    // código: reintentar el escaneo no va a funcionar nunca).
     async function subirGtin(filaProducto, gtin, skuProducto) {
       const resultado = await subirGtinAWoo(wooCfg, filaProducto, gtin);
-      if (!resultado.ok) return { estado: 'fallo', gtin, error: resultado.error };
+      if (!resultado.ok) return { estado: 'fallo', gtin, error: resultado.error, motivo: resultado.motivo || 'woo' };
       persistirGtinConfirmado(db, filaProducto, gtin, skuProducto);
       return { estado: 'subido', gtin };
     }
@@ -636,7 +651,8 @@ export function inventarioRouter(db, wooCfg) {
       WHERE a.sesion_id=? AND a.bloque=?
         AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)
     `).all(sesionId, bloque, sesionId).map(r => r.sku);
-    const aCerrar = candidatos.filter(s => skusPedidos.includes(s));
+    const pedidosSet = new Set(skusPedidos);
+    const aCerrar = candidatos.filter(s => pedidosSet.has(s));
     const insertar = db.prepare(`INSERT OR IGNORE INTO inventario_conteos
       (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, confirmado_por_omision, actualizado_en)
       VALUES (?,?,?,0,?,0,1,?)`);
@@ -736,6 +752,10 @@ export function inventarioRouter(db, wooCfg) {
         codigos: desconocidos.map(i => i.ean),
       });
     }
+
+    // El gate se apoya en el alcance congelado: sin filas de alcance daría [] y confirmaría
+    // sin gate — fail-OPEN justo en la función que existe para ser fail-closed.
+    if (sesion.estado === 'abierta') asegurarAlcance(sesion);
 
     // Fail-closed contra la sobreventa: un producto CON stock que nunca se contó no tiene
     // fila en inventario_conteos, así que el ajuste de abajo ni lo ve — se queda publicado

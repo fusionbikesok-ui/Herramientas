@@ -1759,3 +1759,48 @@ cambios (otro consumidor: Sync ML Detalle).
 señal para que el frontend del Matcher muestre el cartel "se unificó" — la implementación del
 cartel (texto, cierre, si se repite) es responsabilidad del frontend, acá solo se garantiza
 que nunca hay un 404 crudo en un acceso directo viejo.
+
+## Contador de inventario — cierre seguro (2026-08-21)
+
+Origen: `docs/incidentes/2026-08-21-sobreventa-por-no-contado.md`. Se vendió en ML un producto
+que un conteo nunca verificó y seguía publicado con stock. Causa: `/confirmar` recorría solo
+`inventario_conteos`, y un producto del alcance nunca escaneado no tiene fila ahí.
+
+### `POST /api/inventario/sesiones/:id/confirmar` — 409 nuevo
+
+Si la sesión está **abierta** y quedan productos del bloque `con_stock` sin ninguna fila de
+conteo, responde **409 sin tocar Woo ni el estado de la sesión**:
+
+```json
+{ "ok": false, "error": "Quedan productos con stock sin contar...",
+  "pendientes_con_stock": 9,
+  "pendientes": [{ "sku": "FB-7555", "nombre": "...", "stock_woo": 2 }] }
+```
+
+El bloque `sin_stock` **no** entra al gate: ya está en 0 en Woo, ajustarlo a 0 es un no-op.
+
+El gate corre **solo con la sesión abierta**. Un reintento desde `confirmada_con_errores` no
+se bloquea: esa sesión ya está cerrada y sus pendientes no se pueden decidir nunca más, así
+que bloquearlo no protegería nada y dejaría trabados para siempre los ajustes que fallaron por
+un error de Woo (la sesión 5 de producción está justo así).
+
+### `POST /api/inventario/sesiones/:id/cerrar-en-cero`
+
+Crea filas de conteo en 0 (`confirmado_por_omision=1`) para productos del bloque `con_stock`
+del alcance que todavía no se contaron. Es lo que permite salir del 409 de arriba.
+
+```json
+// request
+{ "skus": ["FB-2", "FB-3"] }
+// response
+{ "ok": true, "cerrados": 2, "skus": ["FB-2", "FB-3"] }
+```
+
+**Nunca acepta `todos: true`** — devuelve 400 si falta `skus` o viene vacío. Esto no es una
+omisión: bajar a 0 productos que tenían stock termina escribiendo en Woo al confirmar, y un
+botón masivo sería la salida fácil que devuelve el problema que el gate vino a arreglar. Su
+hermana `cerrar-sin-stock` sí acepta `todos:true`, porque esos productos ya están en 0.
+
+Los SKU pedidos se intersectan con el alcance de **esa** sesión y **ese** bloque: no se puede
+colar un SKU de otra sesión, fuera del alcance, ni del bloque `sin_stock`. 400 si la sesión no
+está abierta.
