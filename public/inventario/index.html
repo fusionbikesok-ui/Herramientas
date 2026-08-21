@@ -321,6 +321,17 @@
   .btn-hold .lbl{position:relative;z-index:1;}
   .confirm-box .btn.secondary{margin-top:10px;}
 
+  /* ----- Pantalla de cierre (pendientes con stock) ----- */
+  .cierre-box{max-width:520px;max-height:90vh;display:flex;flex-direction:column;}
+  .cierre-lista{overflow-y:auto;margin-bottom:14px;}
+  .fila-cierre{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);
+       border-radius:12px;padding:10px 12px;margin-bottom:8px;cursor:pointer;}
+  .fila-cierre input[type=checkbox]{width:22px;height:22px;flex:none;}
+  .fila-cierre .cierre-nombre{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .fila-cierre .cierre-stock{font-size:12px;color:var(--muted);white-space:nowrap;}
+  .fila-cierre .cierre-marca{font-size:11px;font-weight:700;color:var(--danger);white-space:nowrap;visibility:hidden;}
+  .fila-cierre input[type=checkbox]:checked ~ .cierre-marca{visibility:visible;}
+
   /* ----- Vista Resultado ----- */
   .resultado-num{display:flex;gap:10px;margin-bottom:14px;}
   .resultado-num .cont{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;}
@@ -507,6 +518,21 @@
     <div class="confirm-irreversible">Esto ajusta el stock real en WooCommerce y no se puede deshacer.</div>
     <button type="button" class="btn-hold" id="btn-hold-confirmar"><span class="fill" id="btn-hold-fill"></span><span class="lbl">Mantené presionado 2s para confirmar</span></button>
     <button type="button" class="btn secondary" id="btn-cancelar-confirmar">Cancelar</button>
+  </div>
+</div>
+
+<!-- Pantalla de cierre: productos con stock que nunca se contaron. Aparece en vez del modal
+     de confirmación cuando hay pendientes del bloque con_stock (ver renderRevision). -->
+<div class="confirm-veil" id="cierre-veil" role="dialog" aria-modal="true" aria-label="Decidir los productos sin contar">
+  <div class="confirm-box cierre-box">
+    <h3>Productos con stock sin contar</h3>
+    <p class="confirm-resumen">No llegaste a contar estos productos y siguen publicados con stock. Para cada uno,
+      tildá "no lo revisé" si no lo verificaste, o dejalo sin tildar si ya buscaste y no había ninguna
+      unidad (se pasa a 0).</p>
+    <div class="cierre-lista" id="cierre-lista"></div>
+    <button type="button" class="btn danger" id="btn-cierre-confirmar">Pasar a 0 y confirmar</button>
+    <button type="button" class="btn secondary" id="btn-cierre-guardar">Guardar y seguir después</button>
+    <button type="button" class="btn secondary" id="btn-cierre-cancelar">Volver</button>
   </div>
 </div>
 
@@ -1784,9 +1810,11 @@
     }
 
     var notaPend = document.getElementById('revision-nota-pendientes');
-    notaPend.textContent = revisionData.pendientes.length
-      ? revisionData.pendientes.length + ' producto' + (revisionData.pendientes.length === 1 ? '' : 's') +
-        ' del alcance no se ' + (revisionData.pendientes.length === 1 ? 'contó' : 'contaron') + ' — su stock no se toca.'
+    var pendConStock = revisionData.pendientes.filter(function(p){ return p.bloque === 'con_stock'; });
+    notaPend.textContent = pendConStock.length
+      ? pendConStock.length + ' producto' + (pendConStock.length === 1 ? '' : 's') +
+        ' con stock todavía sin contar. Hay que decidir qué pasa con ' +
+        (pendConStock.length === 1 ? 'ese' : 'cada uno') + ' antes de confirmar.'
       : '';
 
     var lista = document.getElementById('revision-lista');
@@ -1862,8 +1890,109 @@
 
   document.getElementById('btn-cancelar-confirmar').addEventListener('click', cerrarModalConfirmacion);
 
+  // ----- Pantalla de cierre: pendientes del bloque con_stock -----
+  // Se abre en vez del modal de confirmación cuando queda al menos un producto con stock
+  // sin contar (ver el incidente 2026-08-21: eso es lo que dejó vendible por ML algo que ya
+  // no estaba). Sin tildar = "no había ninguna" (default, pasa a 0); tildado = "no lo
+  // revisé" (queda pendiente, la sesión sigue abierta).
+  var cierreVeil = document.getElementById('cierre-veil');
+  var cierreLista = document.getElementById('cierre-lista');
+  var btnCierreConfirmar = document.getElementById('btn-cierre-confirmar');
+  var btnCierreGuardar = document.getElementById('btn-cierre-guardar');
+  var btnCierreCancelar = document.getElementById('btn-cierre-cancelar');
+
+  function filaCierreHtml(p){
+    var stockTxt = p.stock_woo != null ? esc(String(p.stock_woo)) : '—';
+    return '<label class="fila-cierre">' +
+      '<input type="checkbox" data-sku="' + esc(p.sku) + '">' +
+      '<span class="cierre-nombre">' + esc(p.nombre || p.sku) + '</span>' +
+      '<span class="cierre-stock">' + stockTxt + ' publicada' + (p.stock_woo === 1 ? '' : 's') + '</span>' +
+      '<span class="cierre-marca">no lo revisé</span>' +
+    '</label>';
+  }
+
+  // Habilitado SOLO si ningún checkbox está tildado: "pasar a 0 y confirmar" no puede
+  // dejar pendientes sin decidir, para eso está "guardar y seguir después".
+  function actualizarDisabledCierre(){
+    var algunoTildado = Array.prototype.some.call(
+      cierreLista.querySelectorAll('input[type=checkbox]'),
+      function(c){ return c.checked; }
+    );
+    btnCierreConfirmar.disabled = algunoTildado;
+  }
+
+  function abrirPantallaCierre(pendConStock){
+    cierreLista.innerHTML = pendConStock.map(filaCierreHtml).join('');
+    cierreLista.querySelectorAll('input[type=checkbox]').forEach(function(chk){
+      chk.addEventListener('change', actualizarDisabledCierre);
+    });
+    actualizarDisabledCierre();
+    cierreVeil.classList.add('open');
+  }
+
+  function cerrarPantallaCierre(){
+    cierreVeil.classList.remove('open');
+  }
+
+  function skusNoTildadosCierre(){
+    return Array.prototype.filter.call(
+      cierreLista.querySelectorAll('input[type=checkbox]'),
+      function(c){ return !c.checked; }
+    ).map(function(c){ return c.getAttribute('data-sku'); });
+  }
+
+  // Manda cerrar-en-cero por la cola de escrituras (como el resto de las escrituras del
+  // conteo) y devuelve la promesa encolada para que quien llama pueda esperar la respuesta
+  // antes de seguir. Si no hay SKUs para mandar, no pega al backend.
+  function cerrarEnCero(skus){
+    var id = sesionId();
+    if(!id || !skus.length) return Promise.resolve({ ok: true, cerrados: 0, skus: [] });
+    return encolarEscritura(function(){
+      return fetch('/api/inventario/sesiones/' + id + '/cerrar-en-cero', opcionesConCorte({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skus: skus })
+      })).then(function(r){ return r.json(); }).then(function(j){
+        if(j && j.ok){ setGuardado(true); return j; }
+        mostrarBannerEscaneo((j && j.error) || 'No se pudieron cerrar los productos pendientes.');
+        return j;
+      }).catch(function(){
+        mostrarBannerEscaneo('No se pudieron cerrar los productos pendientes (sin conexión).');
+        return { ok: false };
+      });
+    });
+  }
+
+  btnCierreCancelar.addEventListener('click', cerrarPantallaCierre);
+
+  btnCierreConfirmar.addEventListener('click', function(){
+    if(btnCierreConfirmar.disabled) return;
+    var skus = skusNoTildadosCierre();
+    btnCierreConfirmar.disabled = true;
+    cerrarEnCero(skus).then(function(j){
+      btnCierreConfirmar.disabled = false;
+      if(j && j.ok){
+        cerrarPantallaCierre();
+        abrirModalConfirmacion();
+      }
+    });
+  });
+
+  btnCierreGuardar.addEventListener('click', function(){
+    var skus = skusNoTildadosCierre();
+    if(!skus.length){ cerrarPantallaCierre(); mostrarVista('conteo'); return; }
+    btnCierreGuardar.disabled = true;
+    cerrarEnCero(skus).then(function(){
+      btnCierreGuardar.disabled = false;
+      cerrarPantallaCierre();
+      mostrarVista('conteo');
+    });
+  });
+
   document.getElementById('btn-confirmar-ajuste').addEventListener('click', function(){
     if(revisionData.items.some(function(i){ return !i.sku; })) return;
+    var pendConStock = revisionData.pendientes.filter(function(p){ return p.bloque === 'con_stock'; });
+    if(pendConStock.length){ abrirPantallaCierre(pendConStock); return; }
     abrirModalConfirmacion();
   });
 
