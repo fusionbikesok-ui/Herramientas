@@ -1333,7 +1333,7 @@
       return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, opcionesConCorte({ method: 'DELETE' }))
         .then(function(r){ return r.json(); })
         .then(function(j){ if(j && j.ok) setGuardado(true); return cargarConteo(); })
-        .catch(function(){});
+        .catch(function(){ mostrarBannerEscaneo('No se pudo borrar el producto (sin conexión).'); });
     });
   }
 
@@ -1497,7 +1497,13 @@
       // calcularía su base contra el valor previo al +1 y su PATCH absoluto borraría
       // el incremento que el servidor ya aplicó.
       return cargarConteo();
-    }).catch(function(){});
+    }).catch(function(){
+      // Un escaneo que se pierde por red no puede fallar en silencio: el operario oye el
+      // beep (que es local, previo al fetch), ve que el número no sube, y no tiene forma de
+      // saber si contó mal o si se cayó la red. Con el corte de CORTE_ESCRITURA_MS esto pasó
+      // a ser alcanzable de verdad, no teórico.
+      mostrarBannerEscaneo('No se pudo registrar el escaneo (sin conexión). Volvé a pasarlo.');
+    });
     });
   }
 
