@@ -594,15 +594,6 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true, item });
   });
 
-  /**
-   * Cierre en bloque (o por lista) de los pendientes SIN STOCK como cantidad 0.
-   * Decisión de producto: NO es automático — se pregunta al cerrar la sesión y el
-   * usuario elige ítem por ítem o todo el bloque. Los ítems creados acá quedan
-   * marcados con confirmado_por_omision=1 para auditoría.
-   *
-   * No toca la lógica atómica de /confirmar: esto solo crea filas de conteo en 0;
-   * el ajuste a Woo lo sigue haciendo /confirmar con su claim atómico intacto.
-   */
   // Inserta filas de conteo en 0 para SKUs del alcance que todavía no se contaron.
   // `bloque` acota a qué mitad del alcance se aplica; devuelve cuántas filas creó.
   function cerrarEnCero(sesionId, skusPedidos, bloque) {
@@ -623,6 +614,15 @@ export function inventarioRouter(db, wooCfg) {
     return { cerrados: tx(aCerrar), skus: aCerrar };
   }
 
+  /**
+   * Cierre en bloque (o por lista) de los pendientes SIN STOCK como cantidad 0.
+   * Decisión de producto: NO es automático — se pregunta al cerrar la sesión y el
+   * usuario elige ítem por ítem o todo el bloque. Los ítems creados acá quedan
+   * marcados con confirmado_por_omision=1 para auditoría.
+   *
+   * No toca la lógica atómica de /confirmar: esto solo crea filas de conteo en 0;
+   * el ajuste a Woo lo sigue haciendo /confirmar con su claim atómico intacto.
+   */
   router.post('/sesiones/:id/cerrar-sin-stock', (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
