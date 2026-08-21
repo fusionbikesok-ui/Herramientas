@@ -517,6 +517,28 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
 
   // El alcance se arma solo desde catalogo_cache: un producto con stock>0 cae en el bloque
   // `con_stock`. No hay helper para sembrar alcance a mano — se siembra con insertProducto.
+  // El gate solo vale para el PRIMER confirm (sesión abierta). En un reintento la sesión ya
+  // está cerrada: sus pendientes no se pueden decidir nunca más, así que bloquearlo no protege
+  // nada (el stock de esos ya quedó sin tocar) y sí deja trabados para siempre los ajustes que
+  // fallaron por un error de Woo. Caso real: la sesión 5 de producción quedó en
+  // confirmada_con_errores con 9 pendientes con stock.
+  it('el reintento de una sesion con errores NO se bloquea por pendientes con stock', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    // Se la deja como quedó una sesión vieja: cerrada con errores y con FB-2 nunca contado.
+    db.prepare("UPDATE inventario_sesiones SET estado='confirmada_con_errores' WHERE id=?").run(id);
+
+    setStockWc.mockResolvedValue();
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(setStockWc).toHaveBeenCalledTimes(1);   // reintenta el que quedó sin ajustar
+  });
+
   it('no confirma si quedan productos CON STOCK sin contar, y no toca Woo', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
