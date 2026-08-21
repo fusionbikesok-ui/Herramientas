@@ -535,7 +535,7 @@
       unidad (se pasa a 0).</p>
     <div class="cierre-lista" id="cierre-lista"></div>
     <button type="button" class="btn danger" id="btn-cierre-confirmar">Pasar a 0 y confirmar</button>
-    <button type="button" class="btn secondary" id="btn-cierre-guardar">Guardar y seguir después</button>
+    <button type="button" class="btn secondary" id="btn-cierre-guardar">Guardar lo decidido y seguir después</button>
     <button type="button" class="btn secondary" id="btn-cierre-cancelar">Volver</button>
   </div>
 </div>
@@ -1689,8 +1689,12 @@
     if(c.estado === 'subido'){
       mostrarBannerEscaneo('Código ' + c.gtin + ' subido a Woo.');
     } else if(c.estado === 'fallo'){
-      mostrarBannerEscaneo('El código no se pudo subir a Woo (' + (c.error || 'motivo desconocido') +
-        '). El conteo se guardó igual.');
+      var noReintentable = (c.motivo === 'no_endpoint' || c.motivo === 'sku_ambiguo');
+      mostrarBannerEscaneo(
+        (noReintentable ? 'A este producto no se le puede cargar el código: ' : 'El código no se pudo subir a Woo: ') +
+        (c.error || 'motivo desconocido') +
+        (noReintentable ? ' El conteo se guardó igual; no hace falta reintentar.'
+                        : ' El conteo se guardó igual, podés reintentar más tarde.'));
     }
   }
 
@@ -1719,14 +1723,20 @@
   function asociarEan(ean, sku, pisarCodigo){
     var id = sesionId();
     if(!id) return;
+    if(asociarEnVuelo) return;   // esta request ahora incluye un PATCH a Woo: sin esto, el
+    asociarEnVuelo = true;       // operario impaciente dispara varios PATCH del mismo código
     var body = { ean: ean, sku: sku };
     if(pisarCodigo) body.pisar_codigo = true;
-    fetch('/api/inventario/sesiones/' + id + '/asociar', {
+    fetch('/api/inventario/sesiones/' + id + '/asociar', opcionesConCorte({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    }).then(function(r){ return r.json(); }).then(function(j){
-      if(j && j.ok){
+    })).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok){
+        mostrarBannerEscaneo((j && j.error) || 'No se pudo asociar el código.');
+        return;
+      }
+      {
         setGuardado(true);
         var c = j.codigo;
         if(c && c.estado === 'conflicto'){
@@ -1737,11 +1747,14 @@
           tratarCodigoSubido(j);
         }
         cerrarSheetEan();
-        if(vistaActivaNombre() === 'revision') cargarRevision();
-        else cargarConteo();
+        if(vistaActivaNombre() === 'revision') return cargarRevision();
+        return cargarConteo();
       }
-    }).catch(function(){});
+    }).catch(function(){
+      mostrarBannerEscaneo('No se pudo asociar el código (sin conexión). Probá de nuevo.');
+    }).then(function(){ asociarEnVuelo = false; });
   }
+  var asociarEnVuelo = false;
 
   chkTodoConteo.addEventListener('change', function(){
     if(chkTodoConteo.checked){
@@ -1853,7 +1866,7 @@
       revisionData.items = j.items || [];
       revisionData.pendientes = j.pendientes || [];
       renderRevision();
-    }).catch(function(){});
+    });
   }
 
   function renderRevision(){
@@ -1881,7 +1894,10 @@
       ? pendConStock.length + ' producto' + (pendConStock.length === 1 ? '' : 's') +
         ' con stock todavía sin contar. Hay que decidir qué pasa con ' +
         (pendConStock.length === 1 ? 'ese' : 'cada uno') + ' antes de confirmar.'
-      : '';
+      : (revisionData.pendientes.length
+          ? revisionData.pendientes.length + ' producto' + (revisionData.pendientes.length === 1 ? '' : 's') +
+            ' del alcance sin contar, todos sin stock: su stock ya está en 0 y no se toca.'
+          : '');
 
     var lista = document.getElementById('revision-lista');
     lista.innerHTML = asociados.length ? asociados.map(filaRevisionHtml).join('') : '<p class="empty">No hay productos contados y asociados.</p>';
@@ -1980,11 +1996,16 @@
   // Habilitado SOLO si ningún checkbox está tildado: "pasar a 0 y confirmar" no puede
   // dejar pendientes sin decidir, para eso está "guardar y seguir después".
   function actualizarDisabledCierre(){
+    // (el title se fija abajo, junto con el disabled: un botón gris sin motivo visible es
+    // el mismo problema que ya se resolvió con title en btn-confirmar-ajuste)
     var algunoTildado = Array.prototype.some.call(
       cierreLista.querySelectorAll('input[type=checkbox]'),
       function(c){ return c.checked; }
     );
     btnCierreConfirmar.disabled = algunoTildado;
+    btnCierreConfirmar.title = algunoTildado
+      ? 'Destildá los que marcaste como "no lo revisé" para poder confirmar, o usá "Guardar lo decidido y seguir después".'
+      : '';
   }
 
   function abrirPantallaCierre(pendConStock){
@@ -2041,10 +2062,13 @@
       // tiene los ceros recién creados. Sin esto el operario vería menos bajas de las que
       // realmente se van a escribir en Woo, justo en la pantalla que confirma la escritura.
       return cargarRevision().then(function(){
-        btnCierreConfirmar.disabled = false;
         cerrarPantallaCierre();
         abrirModalConfirmacion();
-      });
+      }).catch(function(){
+        // Los ceros YA se escribieron; lo que falló es el refresco. Sin esto el botón
+        // quedaba gris con el veil abierto y la única salida era recargar la página.
+        mostrarBannerEscaneo('Se guardaron los ceros, pero no se pudo actualizar la pantalla. Probá de nuevo.');
+      }).then(function(){ btnCierreConfirmar.disabled = false; });
     });
   });
 

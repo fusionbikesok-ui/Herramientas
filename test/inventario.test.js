@@ -396,6 +396,38 @@ describe('POST /api/inventario/sesiones/:id/asociar — subida del código a Woo
     return id;
   }
 
+  // El índice de sku NO es único y ya pasó en producción que tres productos de WC tuvieran
+  // el mismo (incidente 2026-07-25). Antes de C1 esto era inocuo (solo se comprobaba
+  // existencia); ahora de esa fila sale el id_woo de un PATCH real.
+  it('SKU duplicado en el catalogo: NO sube nada a Woo y lo explica', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-DUP', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-DUP', marca: 'Bell', stock: 5 });
+    const id = await crearSesionYEscanear(db, '1234567890128');
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-DUP' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo.estado).toBe('fallo');
+    expect(r.body.codigo.motivo).toBe('sku_ambiguo');
+    expect(axios).not.toHaveBeenCalled();
+    // la asociación local igual se hizo: el conteo no se pierde
+    expect(r.body.item.sku).toBe('FB-DUP');
+  });
+
+  it('sku vacio se rechaza antes de tocar nada', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    const id = await crearSesionYEscanear(db, '1234567890128');
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: '' });
+
+    expect(r.status).toBe(400);
+    expect(axios).not.toHaveBeenCalled();
+  });
+
   it('código no-GTIN: asocia local y no llama a Woo — estado no_valido', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: null });
