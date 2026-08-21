@@ -603,6 +603,26 @@ export function inventarioRouter(db, wooCfg) {
    * No toca la lógica atómica de /confirmar: esto solo crea filas de conteo en 0;
    * el ajuste a Woo lo sigue haciendo /confirmar con su claim atómico intacto.
    */
+  // Inserta filas de conteo en 0 para SKUs del alcance que todavía no se contaron.
+  // `bloque` acota a qué mitad del alcance se aplica; devuelve cuántas filas creó.
+  function cerrarEnCero(sesionId, skusPedidos, bloque) {
+    const candidatos = db.prepare(`
+      SELECT a.sku FROM inventario_sesion_alcance a
+      WHERE a.sesion_id=? AND a.bloque=?
+        AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)
+    `).all(sesionId, bloque, sesionId).map(r => r.sku);
+    const aCerrar = candidatos.filter(s => skusPedidos.includes(s));
+    const insertar = db.prepare(`INSERT OR IGNORE INTO inventario_conteos
+      (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, confirmado_por_omision, actualizado_en)
+      VALUES (?,?,?,0,?,0,1,?)`);
+    const tx = db.transaction(skus => {
+      let n = 0;
+      for (const sku of skus) n += insertar.run(sesionId, sku, sku, bloque, now()).changes;
+      return n;
+    });
+    return { cerrados: tx(aCerrar), skus: aCerrar };
+  }
+
   router.post('/sesiones/:id/cerrar-sin-stock', (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
@@ -620,25 +640,32 @@ export function inventarioRouter(db, wooCfg) {
       });
     }
 
-    const candidatos = db.prepare(`
-      SELECT a.sku FROM inventario_sesion_alcance a
-      WHERE a.sesion_id=? AND a.bloque='sin_stock'
-        AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)
-    `).all(sesion.id, sesion.id).map(r => r.sku);
+    const aCerrarTodos = todos
+      ? db.prepare(`SELECT a.sku FROM inventario_sesion_alcance a
+           WHERE a.sesion_id=? AND a.bloque='sin_stock'
+             AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)`)
+          .all(sesion.id, sesion.id).map(r => r.sku)
+      : pedidos;
+    res.json({ ok: true, ...cerrarEnCero(sesion.id, aCerrarTodos, 'sin_stock') });
+  });
 
-    const aCerrar = todos ? candidatos : candidatos.filter(s => pedidos.includes(s));
+  // Cierra en 0 productos que SÍ tenían stock ("lo busqué, no había ninguna"). A diferencia
+  // de cerrar-sin-stock, acá NO existe `todos:true`: esto termina bajando stock real en Woo,
+  // y un botón masivo sería la salida fácil que devuelve el problema que este cambio arregla.
+  router.post('/sesiones/:id/cerrar-en-cero', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+    asegurarAlcance(sesion);
 
-    const insertar = db.prepare(`INSERT OR IGNORE INTO inventario_conteos
-      (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, confirmado_por_omision, actualizado_en)
-      VALUES (?,?,?,0,'sin_stock',0,1,?)`);
-    const tx = db.transaction(skus => {
-      let n = 0;
-      for (const sku of skus) n += insertar.run(sesion.id, sku, sku, now()).changes;
-      return n;
-    });
-    const cerrados = tx(aCerrar);
-
-    res.json({ ok: true, cerrados, skus: aCerrar });
+    const pedidos = parseLista(req.body?.skus);
+    if (!pedidos.length) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Indicá una lista `skus` no vacía. Para productos con stock no existe `todos`.',
+      });
+    }
+    res.json({ ok: true, ...cerrarEnCero(sesion.id, pedidos, 'con_stock') });
   });
 
   router.post('/sesiones/:id/descartar', (req, res) => {
