@@ -676,6 +676,28 @@ export function inventarioRouter(db, wooCfg) {
       });
     }
 
+    // Fail-closed contra la sobreventa: un producto CON stock que nunca se contó no tiene
+    // fila en inventario_conteos, así que el ajuste de abajo ni lo ve — se queda publicado
+    // con el stock que tenía. Si ya no está físicamente, se vende (incidente 2026-08-21).
+    // El bloque sin_stock no entra: ya está en 0 en Woo, ajustarlo a 0 es un no-op.
+    const pendientesConStock = db.prepare(`
+      SELECT a.sku, a.nombre, COALESCE(c.stock, a.stock_inicial) AS stock_woo
+      FROM inventario_sesion_alcance a
+      LEFT JOIN catalogo_cache c ON c.sku = a.sku
+      WHERE a.sesion_id=? AND a.bloque='con_stock'
+        AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)
+      ORDER BY a.sku
+    `).all(sesion.id, sesion.id);
+    if (pendientesConStock.length) {
+      return res.status(409).json({
+        ok: false,
+        error: 'Quedan productos con stock sin contar. Decidí uno por uno antes de confirmar: '
+             + 'pasalos a 0 si no había ninguna, o dejalos pendientes para revisar.',
+        pendientes_con_stock: pendientesConStock.length,
+        pendientes: pendientesConStock,
+      });
+    }
+
     // Reclamo atómico desde CUALQUIERA de los dos estados de origen válidos — evita que
     // dos /confirmar simultáneos (primer confirm o reintento) se pisen.
     const claim = db.prepare(

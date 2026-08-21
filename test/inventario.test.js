@@ -514,6 +514,54 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     expect([400, 409]).toContain(perdedor.status);
     expect(ganador.body.ajustados).toBe(2);
   });
+
+  // El alcance se arma solo desde catalogo_cache: un producto con stock>0 cae en el bloque
+  // `con_stock`. No hay helper para sembrar alcance a mano — se siembra con insertProducto.
+  it('no confirma si quedan productos CON STOCK sin contar, y no toca Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(409);
+    expect(r.body.pendientes_con_stock).toBe(1);
+    expect(r.body.pendientes[0].sku).toBe('FB-2');
+    expect(setStockWc).not.toHaveBeenCalled();          // NI UNA llamada a Woo
+    // el reclamo atómico no se ejecutó: la sesión sigue reintentable
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('abierta');
+  });
+
+  it('confirma normalmente cuando el pendiente con stock se cerró en 0', async () => {
+    setStockWc.mockResolvedValue();
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-2'] });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+  });
+
+  it('un pendiente SIN stock no bloquea: ajustarlo a 0 seria un no-op', async () => {
+    setStockWc.mockResolvedValue();
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
+    insertProducto(db, { id_woo: 9, sku: 'FB-9', marca: 'Bell', stock: 0 });   // bloque sin_stock
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(r.status).toBe(200);
+  });
 });
 
 describe('GET /api/inventario/sesiones (historial)', () => {
@@ -950,9 +998,13 @@ describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
     setStockWc.mockResolvedValue();
 
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+    // CON-1 tiene stock y nunca se contó/cerró: antes de este cambio confirmar lo dejaba
+    // publicado con su stock intacto (el bug del incidente 2026-08-21). Ahora el gate lo
+    // bloquea, así que hay que decidirlo explícitamente para poder confirmar.
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'CON-1' });
     const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
 
-    expect(r.body.ajustados).toBe(2);
+    expect(r.body.ajustados).toBe(3);
     expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'SIN-1', 0);
   });
 
