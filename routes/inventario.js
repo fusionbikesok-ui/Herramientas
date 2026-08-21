@@ -707,7 +707,12 @@ export function inventarioRouter(db, wooCfg) {
     // fila en inventario_conteos, así que el ajuste de abajo ni lo ve — se queda publicado
     // con el stock que tenía. Si ya no está físicamente, se vende (incidente 2026-08-21).
     // El bloque sin_stock no entra: ya está en 0 en Woo, ajustarlo a 0 es un no-op.
-    const pendientesConStock = db.prepare(`
+    //
+    // Solo aplica al PRIMER confirm. En un reintento (confirmada_con_errores) la sesión ya
+    // está cerrada y sus pendientes no se pueden decidir nunca más: bloquearlo no protegería
+    // nada —el stock de esos ya quedó sin tocar— y dejaría trabados para siempre los ajustes
+    // que fallaron por un error de Woo. La sesión 5 de producción está justo así.
+    const pendientesConStock = sesion.estado !== 'abierta' ? [] : db.prepare(`
       SELECT a.sku, a.nombre, COALESCE(c.stock, a.stock_inicial) AS stock_woo
       FROM inventario_sesion_alcance a
       LEFT JOIN catalogo_cache c ON c.sku = a.sku
