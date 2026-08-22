@@ -587,23 +587,24 @@ export function inventarioRouter(db, wooCfg) {
       return res.status(404).json({ ok: false, error: 'No hay ningún ítem escaneado con ese EAN en esta sesión' });
     }
 
-    // La asociación local (SKU ↔ código escaneado) se hace SIEMPRE, pase lo que pase
-    // con Woo más abajo — este ean_sku es el mapeo "código físico → sku" que usa
-    // Consulta de Precios, no el global_unique_id de Woo.
-    db.prepare(`
-      INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
-      ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
-    `).run(ean, sku, now());
-
-    // Subida del código a Woo, solo si es un GTIN válido de verdad (no cualquier código).
+    // Un SKU homónimo sí queda asociado al ítem de esta sesión (el operario ya identificó
+    // físicamente el conteo), pero NO se siembra ean_sku: ese mapeo global no puede apuntar
+    // arbitrariamente a uno de varios productos. Para cualquier SKU inequívoco, la
+    // asociación local se conserva incluso si el código no es GTIN o Woo falla.
+    if (homonimos <= 1) {
+      db.prepare(`
+        INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
+        ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
+      `).run(ean, sku, now());
+    }
     let codigo;
-    if (!looksLikeEan(ean)) {
-      codigo = { estado: 'no_valido' };
-    } else if (homonimos > 1) {
+    if (homonimos > 1) {
       codigo = {
         estado: 'fallo', gtin: ean, motivo: 'sku_ambiguo',
-        error: `Hay ${homonimos} productos con el SKU ${sku} en el catálogo: no se puede saber a cuál corresponde el código.`,
+        error: `Hay ${homonimos} productos con el SKU ${sku} en el catálogo: no se puede saber a cuál corresponde.`,
       };
+    } else if (!looksLikeEan(ean)) {
+      codigo = { estado: 'no_valido' };
     } else {
       const gtinActual = String(fila.gtin || '').trim();
       if (!gtinActual) {
