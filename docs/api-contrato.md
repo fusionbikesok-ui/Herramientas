@@ -671,13 +671,14 @@ El frontend debe mostrar los candidatos y pedir una elección explícita. Para c
 elección existe `POST /api/preparacion/:id/asociar-codigo`:
 
 ```json
-{ "codigo": "4006381333931", "item_id": 12, "pisar_codigo": false }
+{ "codigo": "4006381333931", "item_id": 12, "pisar_codigo": false, "pisar_mapa": false }
 ```
 
 La respuesta exitosa cuenta una unidad y devuelve `resultado:"match"`, el `item` actualizado
 y `codigo.estado` (`subido`, `sin_cambio`, `fallo`). Si el SKU tiene un GTIN diferente, devuelve
-`resultado:"conflicto"` sin contar ni escribir; repetir con `pisar_codigo:true` confirma el
-reemplazo. Un fallo o ausencia de WooCommerce conserva el conteo y el mapa local cuando el
+`resultado:"conflicto"` sin contar ni escribir; `pisar_codigo:true` confirma únicamente el
+reemplazo en WooCommerce y `pisar_mapa:true` confirma únicamente mover un mapa `ean_sku` que
+apuntaba a otro SKU. Si ambos conflictos existen, hacen falta ambas confirmaciones. Un fallo o ausencia de WooCommerce conserva el conteo y el mapa local cuando el
 SKU es inequívoco, pero informa `codigo.estado:"fallo"` para que pueda reintentarse.
 Si ya existe un mapa `ean_sku` hacia otro SKU, aplica el mismo freno (`conflicto`, con
 `sku_actual`) antes de moverlo.

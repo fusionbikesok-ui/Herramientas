@@ -914,6 +914,10 @@ function mergeItemLocal(itemNuevo){
 
 async function escanear(codigo,origen){
   if(!codigo||!PREP)return;
+  if(ASOCIACION_PENDIENTE){
+    flash('warn','Terminá la asociación de '+ASOCIACION_PENDIENTE.codigo+' antes de escanear otro código.');
+    return {resultado:'asociacion_pendiente'};
+  }
   var r=await api('/'+PREP.id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:codigo, origen:origen||'lector_teclado'})});
   var b=r.body;
   if(b.resultado==='match'&&mergeItemLocal(b.item)){
@@ -936,16 +940,27 @@ async function escanear(codigo,origen){
   return b;
 }
 
-async function asociarCodigoAItem(itemId,pisarCodigo){
+async function asociarCodigoAItem(itemId,opciones){
   if(!PREP||!ASOCIACION_PENDIENTE)return;
+  opciones=opciones||{};
   var p=ASOCIACION_PENDIENTE;
-  var r=await api('/'+PREP.id+'/asociar-codigo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:p.codigo,item_id:itemId,pisar_codigo:!!pisarCodigo})});
+  var r=await api('/'+PREP.id+'/asociar-codigo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:p.codigo,item_id:itemId,pisar_codigo:!!opciones.pisarCodigo,pisar_mapa:!!opciones.pisarMapa})});
   var b=r.body||{};
   if(b.resultado==='conflicto'||b.codigo&&b.codigo.estado==='conflicto'){
-    var actual=b.codigo.gtin_actual?('el código '+b.codigo.gtin_actual):(b.codigo.sku_actual?('el SKU '+b.codigo.sku_actual):'otra asociación');
-    if(confirm('El artículo ya tiene '+actual+'. ¿Querés reemplazarlo por '+p.codigo+'?')){
-      return asociarCodigoAItem(itemId,true);
+    var conflictos=b.codigo.conflictos||[];
+    if(conflictos.indexOf('mapa')>=0&&!opciones.pisarMapa){
+      if(confirm('El código ya está asociado al SKU '+b.codigo.sku_actual+'. ¿Querés mover el mapa local a este artículo?')){
+        return asociarCodigoAItem(itemId,{pisarMapa:true,pisarCodigo:!!opciones.pisarCodigo});
+      }
+      return;
     }
+    if(conflictos.indexOf('woo')>=0&&!opciones.pisarCodigo){
+      if(confirm('El artículo ya tiene el código '+b.codigo.gtin_actual+' en WooCommerce. ¿Querés reemplazarlo por '+p.codigo+'?')){
+        return asociarCodigoAItem(itemId,{pisarMapa:!!opciones.pisarMapa,pisarCodigo:true});
+      }
+      return;
+    }
+    flash('bad',b.codigo.error||'Hay un conflicto de códigos');
     return;
   }
   if(b.resultado==='match'&&b.item){
