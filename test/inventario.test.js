@@ -412,8 +412,10 @@ describe('POST /api/inventario/sesiones/:id/asociar — subida del código a Woo
     expect(r.body.codigo.estado).toBe('fallo');
     expect(r.body.codigo.motivo).toBe('sku_ambiguo');
     expect(axios).not.toHaveBeenCalled();
-    // la asociación local igual se hizo: el conteo no se pierde
+    // la asociación local igual se hizo: el conteo no se pierde, pero el mapeo global
+    // se omite para no apuntar arbitrariamente a uno de los homónimos.
     expect(r.body.item.sku).toBe('FB-DUP');
+    expect(db.prepare('SELECT 1 FROM ean_sku WHERE ean=?').get('1234567890128')).toBeUndefined();
   });
 
   it('sku vacio se rechaza antes de tocar nada', async () => {
