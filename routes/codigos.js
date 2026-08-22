@@ -59,6 +59,7 @@ export function codigosRouter(db, cfg) {
   const exclusionesRows = db.prepare('SELECT id_woo FROM cobertura_exclusiones');
   const porId = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = ? LIMIT 1');
   const porSku = db.prepare("SELECT * FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1");
+  const contarPorSku = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku = ? AND sku <> ''");
 
   // ── Cola de faltantes ──────────────────────────────────────────────────────
   // Un producto entra si: stock>0 (salvo que se pida sin ese filtro), sin gtin,
@@ -129,8 +130,21 @@ export function codigosRouter(db, cfg) {
 
     // Resolver el producto en el cache (por id_woo o, si no vino, por sku).
     let fila = null;
-    if (idWoo != null && idWoo !== '') fila = porId.get(Number(idWoo));
-    else if (skuIn) fila = porSku.get(skuIn);
+    if (idWoo != null && idWoo !== '') {
+      fila = porId.get(Number(idWoo));
+    } else if (skuIn) {
+      // Fail-closed: si el SKU es homónimo (hay múltiples productos), rechazar sin
+      // llamar a Woo. El usuario debe ser más específico (id_woo).
+      const cnt = contarPorSku.get(skuIn);
+      if (cnt.n > 1) {
+        return res.status(400).json({
+          ok: false,
+          error: `El SKU '${skuIn}' es ambiguo: hay ${cnt.n} productos. Especificá el id_woo para desambiguar.`,
+          codigo: 'sku_ambiguo',
+        });
+      }
+      fila = porSku.get(skuIn);
+    }
     if (!fila) return res.status(404).json({ ok: false, error: 'Producto no encontrado en el catálogo' });
 
     const sku = String(fila.sku || '').trim();

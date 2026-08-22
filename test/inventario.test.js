@@ -1173,6 +1173,20 @@ describe('POST /api/inventario/sesiones/:id/cerrar-en-cero', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
   });
 
+  it('rechaza todos:true aunque también venga una lista explícita', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`)
+      .send({ todos: true, skus: ['FB-2'] });
+
+    expect(r.status).toBe(400);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
+  });
+
   it('ignora un SKU que no esta en el alcance de la sesion', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
@@ -1183,6 +1197,36 @@ describe('POST /api/inventario/sesiones/:id/cerrar-en-cero', () => {
       .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-999'] });
 
     expect(r.body.cerrados).toBe(0);
+  });
+
+  it('no cierra por esta ruta un SKU del bloque sin_stock', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-CERO', marca: 'Bell', stock: 0 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-CERO'] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.cerrados).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
+  });
+
+  it('no toma un SKU pendiente que pertenece al snapshot de otra sesion', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 2 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-CONTI', marca: 'Continental', stock: 3 });
+    const propia = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const ajena = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marca: 'Continental' });
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${propia.body.sesion.id}/cerrar-en-cero`)
+      .send({ skus: ['FB-CONTI'] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.cerrados).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(ajena.body.sesion.id).n).toBe(0);
   });
 
   it('no cierra nada si la sesion no esta abierta', async () => {
@@ -1196,6 +1240,54 @@ describe('POST /api/inventario/sesiones/:id/cerrar-en-cero', () => {
       .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-2'] });
 
     expect(r.status).toBe(400);
+  });
+});
+
+describe('canarios de contrato fail-closed del frontend de inventario', () => {
+  it('no pide reescanear a ciegas y bloquea el scanner si tampoco puede reconciliar', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    expect(html).not.toContain('Volvé a pasarlo.');
+    expect(html).toContain('no vuelvas a pasarlo a ciegas');
+    expect(html).toContain('scanInput.disabled = true');
+  });
+
+  it('no abandona Revisión si guardar ceros falló y protege el segundo POST del conflicto', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    expect(html).toContain('errorSesion.sesionInvalida = true');
+    expect(html).toContain('if(!j || !j.ok){');
+    expect(html).toContain('var miSeq = ++asociarSeq;');
+    expect(html).toContain('if(miSeq === asociarSeq) asociarEnVuelo = false;');
+  });
+
+  it('mantiene el foco dentro del conflicto GTIN mientras refresca el conteo', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    expect(html).toContain("!document.querySelector('.confirm-veil.open')");
+    expect(html).toContain('cerrarSheetEan(false);');
+    expect(html.indexOf('cerrarSheetEan(false);')).toBeLessThan(html.indexOf('abrirConflictoCodigo(ean, sku, c.gtin_actual);'));
+  });
+
+  it('restaura foco solo si el elemento previo está conectado y visible; fallback a scanInput', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    // Verifica que la función cerrarDialogoAccesible valida que el elemento esté en el DOM
+    // antes de hacer focus, y fallback a scanInput si no está
+    expect(html).toContain('document.contains(previo)');
+    expect(html).toContain('previo.offsetParent !== null');
+    expect(html).toContain('previo.getClientRects().length > 0');
+    expect(html).toContain('scanInput.focus()');
+    expect(html).toContain('if(!hayInputCantidadEnfocado()');
+    // Verifica que hay manejo de fail-closed con botón de reintento
+    expect(html).toContain('mostrarControlReintento');
+    expect(html).toContain('ocultarControlReintento');
+    expect(html).toContain("document.getElementById('btn-reintentar-escaneo').focus()");
+    expect(html).toContain('background:var(--warning-bg)');
+  });
+
+  it('listeners de cierre de sheet pasan booleano explícito, no Event', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    // Verifica que los listeners usen wrappers que pasen explícitamente true/false
+    expect(html).toContain("eanVeil.addEventListener('click', function()");
+    expect(html).toContain('cerrarSheetEan(true)');  // Parámetro explícito
+    expect(html).toContain("addEventListener('click', function()");
   });
 });
 
@@ -1448,6 +1540,31 @@ describe('Hallazgos de revisión — cerrar-sin-stock, omisión y migración', (
     expect(r.body.items[1]).toMatchObject({ sku: 'FB-2', nombre: 'Casco B', stock_woo: 1, diferencia: 0 });
     // ítem sin asociar: no está en el catálogo, se devuelve sin nombre ni diferencia
     expect(r.body.items[2]).toMatchObject({ sku: null, nombre: null, stock_woo: null, diferencia: null });
+  });
+
+  it('GET /sesiones/:id con SKU homónimo: resuelve determinística (LIMIT 1) sin duplicar ítems', async () => {
+    const db = openDb(TEST_DB);
+    // Dos productos con el mismo SKU (homónimos).
+    insertProducto(db, { id_woo: 1, sku: 'FB-AMBIGUO', nombre: 'Casco A', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-AMBIGUO', nombre: 'Casco B', marca: 'Bell', stock: 3 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+    // Escanear el SKU homónimo.
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-AMBIGUO' });
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
+
+    // Debe haber exactamente 1 ítem, no 2 (no duplicado por el LEFT JOIN).
+    expect(r.body.items).toHaveLength(1);
+    // El ítem debe tener nombre y stock_woo (resuelto determinísticamente a UNO de los dos).
+    expect(r.body.items[0]).toMatchObject({
+      sku: 'FB-AMBIGUO',
+      cantidad: 1,
+      // No importa cuál de los dos se resolvió (1 o 2), pero debe haber UNO.
+      nombre: expect.any(String),
+      stock_woo: expect.any(Number),
+      diferencia: expect.any(Number),
+    });
   });
 });
 
