@@ -35,8 +35,9 @@ Actualizado: 2026-08-21.
 
 ## Bloqueos conocidos
 
-- Revisión formal nueva de Claude y auditoría independiente pendientes por indisponibilidad
-  temporal del ejecutable Claude; la revisión local, suite global y E2E previo están aprobados.
+- Revisión formal nueva de Claude y auditoría independiente pendientes: el reintento del
+  2026-08-22 terminó por timeout controlado a los 60 s, sin procesos ni cambios. La revisión
+  local, suite global y E2E previo están aprobados.
 - Los logs de PM2 muestran 429 de ML y fallos de Woo ya existentes en crons; el proceso quedó
   online y el endpoint de login responde correctamente.
 - Las notas del E2E no bloquean Entrega 2; el auditor debe decidir si registra el prefijo
