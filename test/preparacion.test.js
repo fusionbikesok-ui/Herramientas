@@ -3,6 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import sharp from 'sharp';
+import axios from 'axios';
 import { openDb } from '../db/index.js';
 import {
   splitDireccion, splitTelefonoAr, normalizarEnvio,
@@ -30,14 +31,16 @@ const TEST_DB = './test/tmp-preparacion.sqlite';
 // seguir corriendo después de que el test cierre la base de datos (afterEach borra el .sqlite).
 // El módulo de la cola (lib/fotosPreparacionCola.js) se testea aparte, con un worker de prueba
 // inyectado — ver test/fotos-preparacion-cola.test.js.
-function buildTestApp(db) {
+function buildTestAppConCfg(db, cfg) {
   const app = express();
   app.use(express.json());
   // simular usuario autenticado (el server real lo inyecta requireAuth)
   app.use((req, _res, next) => { req.user = { username: 'tester', is_admin: 1 }; next(); });
-  app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani', colaFotos: { disparoInmediato: false } }));
+  app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani', colaFotos: { disparoInmediato: false }, ...cfg }));
   return app;
 }
+
+function buildTestApp(db) { return buildTestAppConCfg(db); }
 
 function buildTestAppComo(db, usuario) {
   const app = express();
@@ -418,6 +421,66 @@ describe('preparacion flujo', () => {
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'BICI-1' });
     r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'BICI-1' });
     expect(r.body.resultado).toBe('sobrante');
+  });
+
+  it('escanear: EAN válido desconocido devuelve candidatos sin contar nada', async () => {
+    const id = nuevaPrep();
+    const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '4006381333931' });
+    expect(r.body).toMatchObject({ ok: true, resultado: 'necesita_asociacion', codigo: '4006381333931' });
+    expect(r.body.candidatos).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sku: 'BICI-1', restante: 1 }),
+      expect.objectContaining({ sku: 'CUB-1', restante: 2 }),
+    ]));
+    expect(db.prepare('SELECT cantidad_escaneada FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1').cantidad_escaneada).toBe(0);
+  });
+
+  it('asociar-codigo cuenta el artículo y conserva el mapa local aunque Woo no esté configurado', async () => {
+    const id = nuevaPrep();
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (?,?,?,?,?,?)')
+      .run(100, 'Bicicleta Trek Marlin 7', 'BICI-1', 'simple', 2, new Date().toISOString());
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+    const r = await request(app).post(`/api/preparacion/${id}/asociar-codigo`)
+      .send({ codigo: '4006381333931', item_id: item.id });
+    expect(r.body).toMatchObject({ ok: true, resultado: 'match', codigo: { estado: 'fallo', motivo: 'woo_no_configurado' } });
+    expect(r.body.item.cantidad_escaneada).toBe(1);
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('4006381333931').sku).toBe('BICI-1');
+    expect(db.prepare('SELECT tipo, detalle_json FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC LIMIT 1').get(id).tipo).toBe('escaneo');
+  });
+
+  it('asociar-codigo sube a Woo y actualiza catalogo_cache cuando el PATCH es aceptado', async () => {
+    const requestMock = vi.spyOn(axios, 'request').mockResolvedValue({ status: 200, data: {} });
+    const id = nuevaPrep();
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(101, 'Bicicleta Trek Marlin 7', 'BICI-1', 'simple', null, 2, new Date().toISOString());
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+    const appWoo = buildTestAppConCfg(db, { woo: { url: 'https://woo.test', ck: 'ck', cs: 'cs' } });
+    const r = await request(appWoo).post(`/api/preparacion/${id}/asociar-codigo`)
+      .send({ codigo: '4006381333931', item_id: item.id });
+    expect(r.body.codigo).toMatchObject({ estado: 'subido', gtin: '4006381333931' });
+    expect(requestMock).toHaveBeenCalledWith(expect.objectContaining({ method: 'patch', url: expect.stringContaining('/products/101') }));
+    expect(db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo=101').get().gtin).toBe('4006381333931');
+    requestMock.mockRestore();
+  });
+
+  it('asociar-codigo no cuenta ni pisa un GTIN vigente sin confirmación', async () => {
+    const id = nuevaPrep();
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,gtin,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(102, 'Bicicleta Trek Marlin 7', 'BICI-1', 'simple', 2, '01234565', new Date().toISOString());
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+    const r = await request(app).post(`/api/preparacion/${id}/asociar-codigo`).send({ codigo: '4006381333931', item_id: item.id });
+    expect(r.body).toMatchObject({ ok: true, resultado: 'conflicto', codigo: { estado: 'conflicto', gtin_actual: '01234565' } });
+    expect(r.body.item.cantidad_escaneada).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM ean_sku WHERE ean=?').get('4006381333931').n).toBe(0);
+  });
+
+  it('asociar-codigo no mueve un EAN ya mapeado a otro SKU sin confirmación', async () => {
+    const id = nuevaPrep();
+    db.prepare('INSERT INTO ean_sku (ean,sku,actualizado_en) VALUES (?,?,?)')
+      .run('4006381333931', 'OTRO-SKU', new Date().toISOString());
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+    const r = await request(app).post(`/api/preparacion/${id}/asociar-codigo`).send({ codigo: '4006381333931', item_id: item.id });
+    expect(r.body).toMatchObject({ ok: true, resultado: 'conflicto', codigo: { estado: 'conflicto', sku_actual: 'OTRO-SKU' } });
+    expect(r.body.item.cantidad_escaneada).toBe(0);
   });
 
   it('confirmar-manual verifica ítems sin código, con motivo válido', async () => {

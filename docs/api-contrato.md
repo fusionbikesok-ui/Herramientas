@@ -652,6 +652,40 @@ reintento manual puede resolver algo transitorio.
 
 ## Preparación de pedidos — escaneo obligatorio y evidencia (2026-08-12)
 
+### EAN/GTIN desconocido durante el escaneo (2026-08-22)
+
+`POST /api/preparacion/:id/escanear` mantiene el match exacto por SKU. Si el valor leído es
+un GTIN válido (EAN-8/UPC-A/EAN-13/GTIN-14), no coincide con un SKU y todavía no existe un
+mapa `ean_sku`/`catalogo_cache.gtin` aplicable a esta preparación, responde 200 sin contar:
+
+```json
+{
+  "ok": true,
+  "resultado": "necesita_asociacion",
+  "codigo": "4006381333931",
+  "candidatos": [{ "id": 12, "sku": "FB-123", "nombre": "Título largo", "restante": 1 }]
+}
+```
+
+El frontend debe mostrar los candidatos y pedir una elección explícita. Para confirmar esa
+elección existe `POST /api/preparacion/:id/asociar-codigo`:
+
+```json
+{ "codigo": "4006381333931", "item_id": 12, "pisar_codigo": false }
+```
+
+La respuesta exitosa cuenta una unidad y devuelve `resultado:"match"`, el `item` actualizado
+y `codigo.estado` (`subido`, `sin_cambio`, `fallo`). Si el SKU tiene un GTIN diferente, devuelve
+`resultado:"conflicto"` sin contar ni escribir; repetir con `pisar_codigo:true` confirma el
+reemplazo. Un fallo o ausencia de WooCommerce conserva el conteo y el mapa local cuando el
+SKU es inequívoco, pero informa `codigo.estado:"fallo"` para que pueda reintentarse.
+Si ya existe un mapa `ean_sku` hacia otro SKU, aplica el mismo freno (`conflicto`, con
+`sku_actual`) antes de moverlo.
+
+Los códigos no válidos siguen el flujo anterior (`no_coincide`); no se aceptan en el endpoint
+de asociación. Los candidatos se limitan a ítems pendientes de esta preparación y nunca se
+elige uno automáticamente por nombre o cercanía.
+
 Incidente disparador: un pedido de 5 unidades salió con 1 porque `confirmar-manual` (el
 atajo que salta el escaneo) verificaba de un saque sin escanear nada, y era el 48% de los
 ítems reales. Cambios de esta ronda:

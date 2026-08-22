@@ -14,6 +14,7 @@ import {
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
+import { looksLikeGtin, persistirGtinConfirmado, subirGtinAWoo } from '../lib/gtinWoo.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -553,6 +554,24 @@ export function preparacionRouter(db, cfg) {
   const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
   const TRACKING_META_KEY = '_andreani_tracking';
+
+  const eanPorSku = db.prepare('SELECT sku FROM ean_sku WHERE ean=?');
+  const skuPorGtin = db.prepare("SELECT sku FROM catalogo_cache WHERE gtin=? AND sku IS NOT NULL AND sku <> '' LIMIT 1");
+
+  function incrementarItem(item, codigo, origen, usuario) {
+    const nuevaCant = item.cantidad_escaneada + 1;
+    const verificado = nuevaCant >= item.cantidad_esperada;
+    db.prepare('UPDATE preparacion_items SET cantidad_escaneada=?, estado_item=? WHERE id=?')
+      .run(nuevaCant, verificado ? 'verificado' : 'pendiente', item.id);
+    registrarEvento(db, {
+      preparacionId: item.preparacion_id, itemId: item.id, tipo: 'escaneo', usuario,
+      detalle: {
+        sku: item.sku, nombre: item.nombre, cantidad_nueva: nuevaCant,
+        cantidad_esperada: item.cantidad_esperada, origen, codigo,
+      },
+    });
+    return db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id);
+  }
 
   // Disparo inmediato de la cola de fotos tras cada subida/reintento (además del cron de
   // barrido en server.js). Default ON en producción; los tests lo apagan (cfg.colaFotos.
@@ -1224,23 +1243,129 @@ export function preparacionRouter(db, cfg) {
       "SELECT * FROM preparacion_items WHERE preparacion_id=? AND UPPER(TRIM(sku))=? AND estado_item <> 'exento'"
     ).all(prep.id, codigo);
 
+    if (!items.length && looksLikeGtin(codigo)) {
+      // Un EAN que ya aprendimos en Consulta de Precios o que viene del catálogo se
+      // puede usar sin volver a interrumpir al operario: solo si apunta a un SKU que
+      // realmente está en esta preparación.
+      const mapeo = eanPorSku.get(codigo) || skuPorGtin.get(codigo);
+      if (mapeo?.sku) {
+        const mapeados = db.prepare(
+          "SELECT * FROM preparacion_items WHERE preparacion_id=? AND UPPER(TRIM(sku))=? AND estado_item <> 'exento'"
+        ).all(prep.id, String(mapeo.sku).trim().toUpperCase());
+        const itemMapeado = mapeados.find(i => i.cantidad_escaneada < i.cantidad_esperada);
+        if (itemMapeado) {
+          const actualizado = incrementarItem(itemMapeado, codigo, 'ean', req.user?.username);
+          return res.json({
+            ok: true, resultado: 'match', item: actualizado,
+            codigo: { gtin: codigo, estado: 'sin_cambio', origen: 'ean' },
+          });
+        }
+        if (mapeados.length) return res.json({ ok: true, resultado: 'sobrante', codigo });
+      }
+
+      // EAN válido pero sin relación conocida: no se elige un producto por proximidad
+      // ni se cuenta en silencio. La pantalla recibe candidatos acotados a esta orden y
+      // el operario confirma explícitamente cuál es.
+      const candidatos = db.prepare(`
+        SELECT id, sku, nombre, cantidad_esperada, cantidad_escaneada
+        FROM preparacion_items
+        WHERE preparacion_id=? AND estado_item <> 'exento' AND TRIM(COALESCE(sku,'')) <> ''
+          AND cantidad_escaneada < cantidad_esperada
+        ORDER BY id ASC
+      `).all(prep.id).map(i => ({
+        id: i.id, sku: i.sku, nombre: i.nombre,
+        restante: i.cantidad_esperada - i.cantidad_escaneada,
+      }));
+      return res.json({ ok: true, resultado: 'necesita_asociacion', codigo, candidatos });
+    }
+
     if (!items.length) return res.json({ ok: true, resultado: 'no_coincide', codigo });
 
     const item = items.find(i => i.cantidad_escaneada < i.cantidad_esperada);
     if (!item) return res.json({ ok: true, resultado: 'sobrante', codigo });
 
-    const nuevaCant = item.cantidad_escaneada + 1;
-    const verificado = nuevaCant >= item.cantidad_esperada;
-    db.prepare('UPDATE preparacion_items SET cantidad_escaneada=?, estado_item=? WHERE id=?')
-      .run(nuevaCant, verificado ? 'verificado' : 'pendiente', item.id);
-
     const origen = ['camara', 'lector_teclado'].includes(req.body?.origen) ? req.body.origen : 'lector_teclado';
-    registrarEvento(db, {
-      preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
-      detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: nuevaCant, cantidad_esperada: item.cantidad_esperada, origen },
-    });
+    res.json({ ok: true, resultado: 'match', item: incrementarItem(item, codigo, origen, req.user?.username) });
+  });
 
-    res.json({ ok: true, resultado: 'match', item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
+  // ── Asociar un EAN desconocido a un artículo de esta preparación ──
+  // La asociación es deliberada: el EAN válido no se asigna por heurística. El conteo
+  // físico se conserva aunque Woo esté caído; un conflicto de código sí frena hasta que
+  // alguien confirme que quiere reemplazar el GTIN vigente.
+  router.post('/:id/asociar-codigo', async (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
+
+    const codigo = String(req.body?.codigo || req.body?.ean || '').trim().toUpperCase();
+    const itemId = Number(req.body?.item_id);
+    const pisarCodigo = req.body?.pisar_codigo === true;
+    if (!looksLikeGtin(codigo)) return res.status(400).json({ ok: false, error: 'se requiere un GTIN/EAN válido' });
+    if (!Number.isInteger(itemId)) return res.status(400).json({ ok: false, error: 'item_id requerido' });
+
+    const item = db.prepare(
+      "SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=? AND estado_item <> 'exento'"
+    ).get(itemId, prep.id);
+    if (!item) return res.status(404).json({ ok: false, error: 'ítem no encontrado en esta preparación' });
+    if (item.cantidad_escaneada >= item.cantidad_esperada) {
+      return res.json({ ok: true, resultado: 'sobrante', codigo, item });
+    }
+
+    const filasCatalogo = item.sku
+      ? db.prepare('SELECT * FROM catalogo_cache WHERE sku=? AND sku <> \'\'').all(item.sku)
+      : [];
+    const fila = filasCatalogo.length === 1 ? filasCatalogo[0] : null;
+    const codigoBase = { gtin: codigo };
+    const mapaActual = eanPorSku.get(codigo);
+    if (mapaActual?.sku && String(mapaActual.sku).trim().toUpperCase() !== String(item.sku || '').trim().toUpperCase() && !pisarCodigo) {
+      return res.json({
+        ok: true, resultado: 'conflicto', codigo: {
+          ...codigoBase, estado: 'conflicto', sku_actual: mapaActual.sku,
+          error: `El código ya está asociado al SKU ${mapaActual.sku}. Confirmá si querés moverlo.`,
+        }, item,
+      });
+    }
+    if (fila?.gtin && String(fila.gtin).trim() !== codigo && !pisarCodigo) {
+      return res.json({
+        ok: true, resultado: 'conflicto', codigo: { ...codigoBase, estado: 'conflicto', gtin_actual: String(fila.gtin).trim() },
+        item,
+      });
+    }
+
+    let codigoEstado;
+    if (filasCatalogo.length > 1) {
+      codigoEstado = {
+        ...codigoBase, estado: 'fallo', motivo: 'sku_ambiguo',
+        error: `Hay ${filasCatalogo.length} productos con el SKU ${item.sku}; no se actualizó Woo ni el mapa global.`,
+      };
+    } else if (fila?.gtin && String(fila.gtin).trim() === codigo) {
+      codigoEstado = { ...codigoBase, estado: 'sin_cambio' };
+    } else if (!fila) {
+      codigoEstado = { ...codigoBase, estado: 'fallo', motivo: 'sku_no_catalogado', error: `El SKU ${item.sku || '(sin SKU)'} no está en el catálogo` };
+    } else if (!cfg?.woo) {
+      codigoEstado = { ...codigoBase, estado: 'fallo', motivo: 'woo_no_configurado', error: 'WooCommerce no está configurado' };
+    } else {
+      const woo = await subirGtinAWoo(cfg.woo, fila, codigo);
+      if (woo.ok) {
+        persistirGtinConfirmado(db, fila, codigo, item.sku);
+        codigoEstado = { ...codigoBase, estado: 'subido' };
+      } else {
+        codigoEstado = { ...codigoBase, estado: 'fallo', motivo: woo.motivo || 'woo', error: woo.error };
+      }
+    }
+
+    // El mapa local solo se siembra cuando el SKU es inequívoco. Aun con Woo caído,
+    // queda disponible para el próximo escaneo y el trabajo físico no se pierde.
+    if (item.sku && filasCatalogo.length === 1) {
+      db.prepare(`
+        INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
+        ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
+      `).run(codigo, item.sku, now());
+    }
+
+    const actualizado = incrementarItem(item, codigo, 'asociacion_ean', req.user?.username);
+    return res.json({ ok: true, resultado: 'match', codigo: codigoEstado, item: actualizado });
   });
 
   // ── Confirmar sin código ──
