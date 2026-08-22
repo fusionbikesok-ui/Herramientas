@@ -18,6 +18,12 @@
   deshacer al autor o a un administrador.
 - Preparación carga todas las páginas de seguimientos pendientes y distingue visualmente los
   resultados inciertos que requieren verificación.
+- Conteo mantiene el foco del campo de cantidad durante refrescos asincrónicos; el render
+  pendiente se consume al terminar blur/reversión. El cierre expone en texto visible por qué
+  el botón masivo está deshabilitado y la hoja EAN usa `role=region` sin secuestrar el foco.
+- Los resultados de asociación SKU/EAN/UPC muestran el identificador siempre visible y dejan
+  que el nombre/variante haga wrap en móvil; los dropdowns usan columnas fluidas y metadata en
+  segunda línea en anchos estrechos, sin elipsis que oculte la variante.
 
 ## Cuándo actualizar
 
