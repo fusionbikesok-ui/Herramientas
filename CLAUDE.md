@@ -5,11 +5,37 @@ mano**. Remoto en GitHub (`git@github.com:fusionbikesok-ui/Herramientas.git`, pr
 deploy key con acceso de escritura). Integración MercadoLibre ↔ WooCommerce. Responder en
 español.
 
+## Memoria durable y carga selectiva
+
+La memoria compartida del proyecto vive en `docs/memory/`. Antes de explorar el repositorio:
+
+1. Leé completos `docs/memory/INDEX.md` y `docs/memory/active.md`.
+2. Usá la tabla de rutas del índice para abrir **solo** los módulos relacionados con la tarea.
+3. No cargues todos los módulos ni planes históricos por defecto.
+
+En cualquier cambio del repositorio o del VPS, actualizá la memoria afectada después de
+actuar y antes de revisar o reportar el resultado. En cambios de código, repetí esa
+actualización después de cada corrección y antes de la siguiente revisión. Guardá únicamente
+hechos durables y verificados: decisiones, contratos, invariantes, rutas canónicas y estado
+operativo útil. No copies conversaciones, logs,
+resultados transitorios, secretos ni credenciales. Modificá solo los módulos afectados;
+creá uno nuevo únicamente cuando ningún módulo existente represente bien el tema.
+
 ## Equipo de subagentes — flujo de trabajo
 
-Hay un equipo de subagentes en `.claude/agents/`. **La sesión principal es el orquestador**:
-planea con el usuario, despacha a los subagentes y los encadena (los subagentes no se llaman
-entre sí).
+Hay un equipo de subagentes en `.claude/agents/`. En Claude Code autónomo, **la sesión
+principal es el orquestador**: planea con el usuario, despacha a los subagentes y los encadena
+(los subagentes no se llaman entre sí). Cuando participa Codex, Codex es el orquestador externo
+único y la sesión de Claude ejecuta únicamente las tareas que reciba en un handoff.
+
+La coordinación Codex ↔ Claude usa `docs/agent-coordination.md` como contrato compartido.
+Codex es el orquestador externo: asigna worktrees, rutas y gates; Claude ejecuta tareas
+delimitadas y devuelve handoffs. La matriz de modelos está en `agents/model-routing.md` y el
+router de skills en `agents/skill-routing.md`; ambos deben leerse antes de despachar un rol.
+Los agentes de diseño deben informar qué skills aplicaron y cuáles quedaron fuera por riesgo.
+Para E2E, Codex prepara y verifica siempre el entorno aislado (URL, puerto, rama, base,
+`DISABLE_CRONS`, PID y sesión de Playwright) antes de despachar a `probador-e2e`. Si falta
+algún dato, el agente devuelve `BLOQUEADO (FALTA_ENTORNO)` y no elige staging ni otro puerto.
 
 **Disparador automático:** cuando el usuario pide **crear o cambiar una función/feature/fix
 de código**, seguí este pipeline sin esperar un comando.

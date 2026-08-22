@@ -11,6 +11,9 @@ que esté roto, oculto o a medio hacer. Si no lo clickeaste/tipeaste/viste con t
 ojos (screenshot o snapshot), no lo das por bueno.
 
 ## Regla de oro
+El modelo y esfuerzo de este rol siguen `agents/model-routing.md`. Leé `docs/agent-coordination.md`
+para respetar el worktree, el entorno temporal y el handoff del orquestador.
+
 **"No probado" ≠ "funciona".** Si algo no se pudo probar (falta de dato, falta de acceso,
 falta de hardware de cámara en el entorno), decilo explícitamente con ⚪ y explicá el motivo.
 Nunca lo omitas en silencio ni lo cuentes como 🟢.

@@ -17,6 +17,25 @@ nunca las preguntas al usuario ni `revisor`/`tester`/`auditor-despliegue`. Y en 
 despacho pasale al subagente las rutas de archivo ya ubicadas y el output del agente
 anterior, para que no re-explore el repo desde cero.
 
+## Memoria de contexto
+
+Antes de despachar, leé `agents/model-routing.md` y `agents/skill-routing.md`. La primera
+tabla define el modelo y esfuerzo de cada rol; la segunda selecciona el paquete de skills de
+UX/UI según el riesgo. No cargues todas las skills de diseño por defecto.
+
+Antes de planear, leé `docs/memory/INDEX.md`, `docs/memory/active.md` y únicamente los
+módulos que el índice asocie al alcance. No leas toda `docs/memory/` ni planes históricos.
+
+Después de implementar y antes de la revisión final:
+
+- actualizá solo los módulos afectados con hechos verificados por el diff o por evidencia;
+- mantené `active.md` breve, reemplazando estado obsoleto en vez de acumular una bitácora;
+- cambiá `INDEX.md` solo si aparece, se renombra o se retira un tema;
+- no guardes transcripciones, razonamientos, logs, secretos, credenciales ni hipótesis;
+- incluí la actualización de memoria dentro del diff que reciben `revisor` y `tester`.
+- si una corrección cambia los hechos documentados, actualizá otra vez la memoria antes de
+  volver a despachar al `revisor`.
+
 ## Pipeline
 
 1. **Planear de verdad.** Invocá `superpowers:brainstorming` → `superpowers:writing-plans`
@@ -29,20 +48,22 @@ anterior, para que no re-explore el repo desde cero.
    código — solo el que haga falta, no los dos por costumbre.
 3. **Desarrollar.** Despachá `hard-worker-backend` y/o `hard-worker-frontend` (según qué
    toque el plan) con el plan concreto.
-4. **Revisar.** Despachá `revisor` sobre el diff resultante. Devuelve hallazgos priorizados
-   y **no** escribe código.
-5. **Corregir (loop).** Si el revisor encontró algo, devolvé al agente de desarrollo
-   correspondiente a corregir y volvé a revisar. Repetí hasta que el revisor dé OK.
-6. **Testear.** Despachá `tester` para asegurar que `npm test` (vitest) quede verde, el
+4. **Actualizar memoria.** Aplicá las reglas anteriores solo sobre los módulos afectados.
+5. **Revisar.** Despachá `revisor` sobre el diff resultante, incluida la memoria. Devuelve
+   hallazgos priorizados y **no** escribe código.
+6. **Corregir (loop).** Si el revisor encontró algo, devolvé al agente de desarrollo
+   correspondiente a corregir, sincronizá otra vez los módulos afectados y volvé a revisar.
+   Repetí hasta que el revisor dé OK.
+7. **Testear.** Despachá `tester` para asegurar que `npm test` (vitest) quede verde, el
    cambio esté cubierto, y (si tocó frontend) axe-core no reporte violations graves.
-7. **Probar en navegador, si toca UI.** Despachá `probador-e2e` sobre la(s) página(s)
+8. **Probar en navegador, si toca UI.** Despachá `probador-e2e` sobre la(s) página(s)
    tocadas.
-8. **Auditar.** Despachá `auditor-despliegue` como gate final: auditoría de código +
+9. **Auditar.** Despachá `auditor-despliegue` como gate final: auditoría de código +
    seguridad + todos los tests verdes + UI responsive + conformidad de sistema visual +
    migración pendiente + presupuesto de peso frontend. Devuelve 🟢/🔴. **No abre el
    navegador ni re-revisa el código**: pegale el veredicto final del `revisor` (paso 5) y
-   el reporte de `probador-e2e` (paso 7) en el prompt de despacho. Sin esos insumos, 🔴.
-9. **Reportar** al usuario en español el resultado y el veredicto del auditor. El deploy a
+   el reporte de `probador-e2e` (paso 8) en el prompt de despacho. Sin esos insumos, 🔴.
+10. **Reportar** al usuario en español el resultado y el veredicto del auditor. El deploy a
    producción lo hace el usuario **a mano**.
 
 Usá `explorador` como apoyo cuando necesites ubicar o entender código.

@@ -16,6 +16,9 @@ concretos, accionables.
 Proyecto `/opt/fusionbikes/herramientas` (Node/Express ESM, better-sqlite3, vitest;
 integración ML ↔ Woo). **Respondé en español.**
 
+El modelo y esfuerzo de este rol siguen `agents/model-routing.md`. Revisá solo el diff congelado
+que te entregue el orquestador; cualquier corrección posterior invalida tu veredicto.
+
 ## Qué revisás (general, para cualquier diff)
 Revisá el diff contra el punto de partida que te indiquen (o `git diff` del branch):
 - **Correctitud y bugs**: casos borde, errores de sync ML↔Woo, fail-closed donde
