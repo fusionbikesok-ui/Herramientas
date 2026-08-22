@@ -1051,6 +1051,27 @@ sin producto detrás, así que no hay stock que ajustar. Un código desconocido 
 asociándolo a un SKU real (`/asociar`, que limpia el flag) o borrando el ítem.
 `aviso` trae el texto listo para mostrar, o `null` si el estado es `ok`.
 
+### POST /api/inventario/sesiones/:id/asociar (respuesta ampliada: sube el código a Woo — spec 2026-08-21)
+Request `{ "ean": "...", "sku": "...", "pisar_codigo"?: true }`.
+Respuesta: `{ ok, item, codigo }`. `codigo.estado`:
+
+| `codigo.estado` | Cuándo | Llamada a Woo |
+|---|---|---|
+| `no_valido` | el código escaneado no es un GTIN válido (`looksLikeEan`) | ninguna |
+| `subido` | GTIN válido y se escribió en Woo (producto sin código, o con `pisar_codigo:true`) | sí, PATCH `global_unique_id` |
+| `sin_cambio` | el producto ya tenía ese mismo código en Woo | ninguna |
+| `conflicto` | el producto tiene **otro** código en Woo; no se pisó; trae `gtin_actual` | ninguna |
+| `fallo` | no se pudo subir; trae `error` y `motivo` | depende de `motivo` |
+
+La asociación local del ítem (`item.sku`, `ean_sku`) se hace **siempre**, incluso en
+`fallo` — excepción deliberada al fail-closed del resto del sistema: el trabajo físico
+del operario no se descarta por un error de Woo. En `conflicto`, la pantalla pregunta y,
+si el operario confirma pisar, repite el POST con `pisar_codigo: true`. Esta subida se
+extrajo a `lib/gtinWoo.js`, compartida con `POST /api/codigos/asignar` (mismo comportamiento,
+no cambia), porque `inventario` y `codigos` son permisos distintos.
+`motivo='woo'` indica que hubo un intento remoto fallido; `sku_ambiguo` y `no_endpoint`
+son rechazos locales fail-closed y no hacen ninguna llamada a Woo.
+
 ### POST /api/inventario/sesiones/:id/cerrar-sin-stock
 Cierra en 0 los pendientes del bloque `sin_stock`. No es automático: se ofrece al cerrar
 la sesión y el usuario elige.
@@ -1064,12 +1085,44 @@ la cantidad a mano). Nunca pisa un conteo hecho a mano (`INSERT OR
 IGNORE`) ni toca el bloque con-stock. `400` si la sesión no está abierta.
 
 ### POST /api/inventario/sesiones/:id/confirmar
-Sin cambios: claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
+Sin cambios en la lógica: claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
 **fail-closed por ítem** al escribir a Woo (un PUT fallido no aborta el resto; la sesión
 queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
-`409` si hay ítems sin asociar a SKU (sin SKU no hay a qué ajustarle stock), con
-`{ sin_asociar, codigos_desconocidos, codigos: [...] }` para que la UI explique cuáles son
-códigos inexistentes. Corta **antes** de tocar Woo: ningún ítem de la sesión se ajusta.
+
+**Respuesta 409:** corta **antes** de tocar Woo. Dos escenarios:
+
+1. **Ítems sin asociar a SKU** (sin SKU no hay a qué ajustarle stock):
+   ```json
+   {
+     "ok": false,
+     "error": "Hay ítems sin asociar a un SKU...",
+     "sin_asociar": 2,
+     "codigos_desconocidos": 1,
+     "codigos": ["13000000000088"]
+   }
+   ```
+
+2. **Pendientes con stock sin contar** (`estado === 'abierta'` solamente):
+   ```json
+   {
+     "ok": false,
+     "error": "Quedan productos con stock sin contar...",
+     "pendientes_con_stock": 2,
+     "pendientes": [
+       {
+         "sku": "FB-1",
+         "nombre": "Casco Bell",
+         "bloque": "con_stock",
+         "marca": "Bell",
+         "categoria_principal": "Cascos",
+         "stock_inicial": 5,
+         "stock_woo": 5
+       },
+       ...
+     ]
+   }
+   ```
+   `pendientes` viene ordenado: `bloque` con_stock primero (CASE WHEN='con_stock' THEN 0), después categoría → marca → nombre, todas COLLATE NOCASE.
 
 ## Estado del token ML (banner del Home)
 
@@ -1740,3 +1793,48 @@ cambios (otro consumidor: Sync ML Detalle).
 señal para que el frontend del Matcher muestre el cartel "se unificó" — la implementación del
 cartel (texto, cierre, si se repite) es responsabilidad del frontend, acá solo se garantiza
 que nunca hay un 404 crudo en un acceso directo viejo.
+
+## Contador de inventario — cierre seguro (2026-08-21)
+
+Origen: `docs/incidentes/2026-08-21-sobreventa-por-no-contado.md`. Se vendió en ML un producto
+que un conteo nunca verificó y seguía publicado con stock. Causa: `/confirmar` recorría solo
+`inventario_conteos`, y un producto del alcance nunca escaneado no tiene fila ahí.
+
+### `POST /api/inventario/sesiones/:id/confirmar` — 409 nuevo
+
+Si la sesión está **abierta** y quedan productos del bloque `con_stock` sin ninguna fila de
+conteo, responde **409 sin tocar Woo ni el estado de la sesión**:
+
+```json
+{ "ok": false, "error": "Quedan productos con stock sin contar...",
+  "pendientes_con_stock": 9,
+  "pendientes": [{ "sku": "FB-7555", "nombre": "...", "stock_woo": 2 }] }
+```
+
+El bloque `sin_stock` **no** entra al gate: ya está en 0 en Woo, ajustarlo a 0 es un no-op.
+
+El gate corre **solo con la sesión abierta**. Un reintento desde `confirmada_con_errores` no
+se bloquea: esa sesión ya está cerrada y sus pendientes no se pueden decidir nunca más, así
+que bloquearlo no protegería nada y dejaría trabados para siempre los ajustes que fallaron por
+un error de Woo (la sesión 5 de producción está justo así).
+
+### `POST /api/inventario/sesiones/:id/cerrar-en-cero`
+
+Crea filas de conteo en 0 (`confirmado_por_omision=1`) para productos del bloque `con_stock`
+del alcance que todavía no se contaron. Es lo que permite salir del 409 de arriba.
+
+```json
+// request
+{ "skus": ["FB-2", "FB-3"] }
+// response
+{ "ok": true, "cerrados": 2, "skus": ["FB-2", "FB-3"] }
+```
+
+**Nunca acepta `todos: true`** — devuelve 400 si falta `skus` o viene vacío. Esto no es una
+omisión: bajar a 0 productos que tenían stock termina escribiendo en Woo al confirmar, y un
+botón masivo sería la salida fácil que devuelve el problema que el gate vino a arreglar. Su
+hermana `cerrar-sin-stock` sí acepta `todos:true`, porque esos productos ya están en 0.
+
+Los SKU pedidos se intersectan con el alcance de **esa** sesión y **ese** bloque: no se puede
+colar un SKU de otra sesión, fuera del alcance, ni del bloque `sin_stock`. 400 si la sesión no
+está abierta.
