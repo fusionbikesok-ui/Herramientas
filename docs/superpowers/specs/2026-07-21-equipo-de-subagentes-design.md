@@ -45,19 +45,22 @@ UI responsive sin nada oculto).
 
 | Agente | Rol | Herramientas | Modelo | Escribe código |
 |---|---|---|---|---|
-| `hard-worker` | Todo el desarrollo | Todas | opus | Sí |
+| `hard-worker-backend/frontend` | Desarrollo por worktree | Todas | haiku | Sí |
 | `revisor` | Revisa el diff del hard-worker | Read, Grep, Glob, Bash | opus | **No** |
 | `tester` | Escribe/corre vitest, reproduce bugs | Read, Edit, Write, Bash, Grep, Glob | sonnet | Solo tests |
+| `probador-e2e` | Navegador real, responsive y evidencia | Read, Grep, Glob, Bash, playwright | sonnet | No |
 | `auditor-despliegue` | Gate pre-deploy (regla obligatoria) | Read, Grep, Glob, Bash, playwright | opus | No |
-| `explorador` | Búsqueda rápida, devuelve conclusión | Read, Grep, Glob, Bash | sonnet | No |
+| `disenador-ux/ui` | Flujo y sistema visual | Read, Grep, Glob, Web* | sonnet | Diseño |
+| `explorador` | Búsqueda rápida, devuelve conclusión | Read, Grep, Glob, Bash | haiku | No |
 
 ## Skills embebidas en cada agente
 
-Las skills viven en `.agents/skills/` (sistema Matt Pocock) y **no están registradas como
+Las skills viven en `.agents/skills/`, `.claude/skills/` y los plugins instalados de Claude; **no están registradas como
 skills nativas de Claude Code**; varias tienen `disable-model-invocation: true`. Por eso
 **no** se pasan como herramientas ni se dejan al mecanismo `Skill`. En su lugar, el prompt
 de cada agente **referencia por ruta los `SKILL.md` correspondientes** y le indica leerlos y
-seguirlos (los agentes tienen `Read`). Esto es robusto: funciona sin registro, sin importar
+seguirlos (los agentes tienen `Read`). El mapa vigente está en `agents/skill-routing.md`.
+Esto es robusto: funciona sin registro, sin importar
 `disable-model-invocation`, y sobrevive a sesiones nuevas.
 
 | Agente | Skills que sigue (`.agents/skills/<x>/SKILL.md`) |
