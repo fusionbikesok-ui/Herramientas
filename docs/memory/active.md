@@ -4,6 +4,9 @@ Actualizado: 2026-08-22.
 
 ## En curso
 
+- C2 — Consulta de Precios: implementación congelada localmente; el plan y contrato de subida
+  de GTIN están en `docs/superpowers/plans/2026-08-22-consulta-precios-gtin.md`. Falta el gate
+  E2E/auditoría antes de publicarla.
 - Entrega 2, conteo confiable + cierre seguro + subida de GTIN C1, en
   `.claude/worktrees/matcher-unificado` (`conteo-confiable-revisado`), integrada en `e4e8bbf`.
   Corrección post-revisión: render pendiente de cantidades, motivo visible del cierre,
@@ -26,13 +29,16 @@ Actualizado: 2026-08-22.
 
 ## Próximo paso
 
-- Tras la renovación de cuota, ejecutar la revisión formal de Claude para los dropdowns y
-  registrar su resultado; no presentarla como aprobada antes de ejecutarla.
+- Ejecutar E2E/auditoría de C2 y pasar luego a C3 (Preparación). La revisión formal de
+  Claude para los dropdowns de C1 queda pendiente hasta que la cuota vuelva a responder.
 
 ## Evidencia reciente
 
 - Suites dirigidas: inventario 129/129, códigos 15/15 y wooStock 11/11.
 - Suite global con `--testTimeout=60000 --reporter=dot`: 65 archivos, 1326 tests en verde, 1 skip.
+- C2: Consulta de Precios 22/22; Códigos + permisos 36/36; Inventario 129/129. Suite global
+  serial: 64 archivos verdes, 1332 tests aprobados y 1 skip; `matcherPush` aislado 28/28
+  (el timeout de 20s bajo suite completa es intermitente y ya está documentado).
 
 ## Bloqueos conocidos
 
