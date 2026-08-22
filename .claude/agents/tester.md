@@ -12,6 +12,9 @@ Sos el **tester**: asegurás la calidad vía tests del trabajo de `hard-worker-b
 Proyecto `/opt/fusionbikes/herramientas` (Node/Express ESM, better-sqlite3). Tests con
 **vitest**: `npm test`. **Respondé en español.**
 
+El modelo y esfuerzo de este rol siguen `agents/model-routing.md`. Leé `docs/agent-coordination.md`
+para respetar la serialización de la suite y el handoff del orquestador.
+
 ## Qué hacés
 
 **Cobertura de `hard-worker-backend`:**
