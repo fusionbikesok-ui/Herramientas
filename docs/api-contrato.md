@@ -1119,7 +1119,7 @@ Respuesta: `{ ok, item, codigo }`. `codigo.estado`:
 | `subido` | GTIN válido y se escribió en Woo (producto sin código, o con `pisar_codigo:true`) | sí, PATCH `global_unique_id` |
 | `sin_cambio` | el producto ya tenía ese mismo código en Woo | ninguna |
 | `conflicto` | el producto tiene **otro** código en Woo; no se pisó; trae `gtin_actual` | ninguna |
-| `fallo` | se intentó y Woo rechazó o no respondió; trae `error` | sí (falló) |
+| `fallo` | no se pudo subir; trae `error` y `motivo` | depende de `motivo` |
 
 La asociación local del ítem (`item.sku`, `ean_sku`) se hace **siempre**, incluso en
 `fallo` — excepción deliberada al fail-closed del resto del sistema: el trabajo físico
@@ -1127,6 +1127,8 @@ del operario no se descarta por un error de Woo. En `conflicto`, la pantalla pre
 si el operario confirma pisar, repite el POST con `pisar_codigo: true`. Esta subida se
 extrajo a `lib/gtinWoo.js`, compartida con `POST /api/codigos/asignar` (mismo comportamiento,
 no cambia), porque `inventario` y `codigos` son permisos distintos.
+`motivo='woo'` indica que hubo un intento remoto fallido; `sku_ambiguo` y `no_endpoint`
+son rechazos locales fail-closed y no hacen ninguna llamada a Woo.
 
 ### POST /api/inventario/sesiones/:id/cerrar-sin-stock
 Cierra en 0 los pendientes del bloque `sin_stock`. No es automático: se ofrece al cerrar
@@ -1141,12 +1143,44 @@ la cantidad a mano). Nunca pisa un conteo hecho a mano (`INSERT OR
 IGNORE`) ni toca el bloque con-stock. `400` si la sesión no está abierta.
 
 ### POST /api/inventario/sesiones/:id/confirmar
-Sin cambios: claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
+Sin cambios en la lógica: claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
 **fail-closed por ítem** al escribir a Woo (un PUT fallido no aborta el resto; la sesión
 queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
-`409` si hay ítems sin asociar a SKU (sin SKU no hay a qué ajustarle stock), con
-`{ sin_asociar, codigos_desconocidos, codigos: [...] }` para que la UI explique cuáles son
-códigos inexistentes. Corta **antes** de tocar Woo: ningún ítem de la sesión se ajusta.
+
+**Respuesta 409:** corta **antes** de tocar Woo. Dos escenarios:
+
+1. **Ítems sin asociar a SKU** (sin SKU no hay a qué ajustarle stock):
+   ```json
+   {
+     "ok": false,
+     "error": "Hay ítems sin asociar a un SKU...",
+     "sin_asociar": 2,
+     "codigos_desconocidos": 1,
+     "codigos": ["13000000000088"]
+   }
+   ```
+
+2. **Pendientes con stock sin contar** (`estado === 'abierta'` solamente):
+   ```json
+   {
+     "ok": false,
+     "error": "Quedan productos con stock sin contar...",
+     "pendientes_con_stock": 2,
+     "pendientes": [
+       {
+         "sku": "FB-1",
+         "nombre": "Casco Bell",
+         "bloque": "con_stock",
+         "marca": "Bell",
+         "categoria_principal": "Cascos",
+         "stock_inicial": 5,
+         "stock_woo": 5
+       },
+       ...
+     ]
+   }
+   ```
+   `pendientes` viene ordenado: `bloque` con_stock primero (CASE WHEN='con_stock' THEN 0), después categoría → marca → nombre, todas COLLATE NOCASE.
 
 ## Estado del token ML (banner del Home)
 
