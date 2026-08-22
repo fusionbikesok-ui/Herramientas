@@ -4,9 +4,9 @@ Actualizado: 2026-08-22.
 
 ## En curso
 
-- C2 — Consulta de Precios: implementación congelada localmente; el plan y contrato de subida
-  de GTIN están en `docs/superpowers/plans/2026-08-22-consulta-precios-gtin.md`. Falta el gate
-  E2E/auditoría antes de publicarla.
+- C2 — Consulta de Precios: implementación congelada y publicada en GitHub (`0c4a445`); el
+  plan y contrato de subida de GTIN están en `docs/superpowers/plans/2026-08-22-consulta-precios-gtin.md`.
+  Falta el gate E2E/auditoría antes de reiniciar PM2.
 - Entrega 2, conteo confiable + cierre seguro + subida de GTIN C1, en
   `.claude/worktrees/matcher-unificado` (`conteo-confiable-revisado`), integrada en `e4e8bbf`.
   Corrección post-revisión: render pendiente de cantidades, motivo visible del cierre,
@@ -47,6 +47,9 @@ Actualizado: 2026-08-22.
   1 omitido, además de las pruebas dirigidas de inventario/códigos/stock.
 - Los logs de PM2 muestran 429 de ML y fallos de Woo ya existentes en crons; el proceso quedó
   online y el endpoint de login responde correctamente.
+- El E2E local de C2 quedó bloqueado por la instalación disponible: el CLI Playwright no pudo
+  importar el paquete desde Node y el navegador root del wrapper no ofrece una opción segura
+  de `--no-sandbox`; no se inventó un veredicto. La instancia temporal se cerró y limpió.
 - Las notas del E2E no bloquean Entrega 2; el auditor debe decidir si registra el prefijo
   `/herramientas/` y el mensaje de permisos como backlog separado.
 
