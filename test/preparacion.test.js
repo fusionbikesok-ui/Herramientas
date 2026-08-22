@@ -483,6 +483,49 @@ describe('preparacion flujo', () => {
     expect(r.body.item.cantidad_escaneada).toBe(0);
   });
 
+  it('asociar-codigo exige confirmar por separado el mapa local y el GTIN de Woo', async () => {
+    const requestMock = vi.spyOn(axios, 'request').mockResolvedValue({ status: 200, data: {} });
+    const id = nuevaPrep();
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,gtin,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(103, 'Bicicleta Trek Marlin 7', 'BICI-1', 'simple', 2, '01234565', new Date().toISOString());
+    db.prepare('INSERT INTO ean_sku (ean,sku,actualizado_en) VALUES (?,?,?)')
+      .run('4006381333931', 'OTRO-SKU', new Date().toISOString());
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+    const appWoo = buildTestAppConCfg(db, { woo: { url: 'https://woo.test', ck: 'ck', cs: 'cs' } });
+
+    let r = await request(appWoo).post(`/api/preparacion/${id}/asociar-codigo`)
+      .send({ codigo: '4006381333931', item_id: item.id });
+    expect(r.body.codigo.conflictos).toEqual(expect.arrayContaining(['mapa', 'woo']));
+
+    r = await request(appWoo).post(`/api/preparacion/${id}/asociar-codigo`)
+      .send({ codigo: '4006381333931', item_id: item.id, pisar_codigo: true });
+    expect(r.body.codigo.conflictos).toEqual(['mapa']);
+    expect(r.body.item.cantidad_escaneada).toBe(0);
+
+    r = await request(appWoo).post(`/api/preparacion/${id}/asociar-codigo`)
+      .send({ codigo: '4006381333931', item_id: item.id, pisar_codigo: true, pisar_mapa: true });
+    expect(r.body).toMatchObject({ ok: true, resultado: 'match', codigo: { estado: 'subido' } });
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('4006381333931').sku).toBe('BICI-1');
+    expect(db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo=103').get().gtin).toBe('4006381333931');
+    requestMock.mockRestore();
+  });
+
+  it('asociar-codigo conserva conteo y mapa local si Woo rechaza o falla', async () => {
+    const requestMock = vi.spyOn(axios, 'request').mockRejectedValue(new Error('Woo caído'));
+    const id = nuevaPrep();
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (?,?,?,?,?,?)')
+      .run(104, 'Bicicleta Trek Marlin 7', 'BICI-1', 'simple', 2, new Date().toISOString());
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+    const appWoo = buildTestAppConCfg(db, { woo: { url: 'https://woo.test', ck: 'ck', cs: 'cs' } });
+    const r = await request(appWoo).post(`/api/preparacion/${id}/asociar-codigo`)
+      .send({ codigo: '4006381333931', item_id: item.id });
+    expect(r.body.codigo).toMatchObject({ estado: 'fallo' });
+    expect(r.body.item.cantidad_escaneada).toBe(1);
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('4006381333931').sku).toBe('BICI-1');
+    expect(db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo=104').get().gtin).toBeNull();
+    requestMock.mockRestore();
+  });
+
   it('confirmar-manual verifica ítems sin código, con motivo válido', async () => {
     const id = nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
