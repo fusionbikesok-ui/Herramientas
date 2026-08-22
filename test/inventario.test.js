@@ -11,6 +11,13 @@ vi.mock('../lib/wooStock.js', async () => {
 });
 import { setStockWc } from '../lib/wooStock.js';
 
+// Ninguna llamada real a Woo en los tests: mockeamos axios, igual que codigos.test.js.
+// Los tests de /asociar que NO configuran un mock explícito reciben el automock
+// (axios.request() sin implementación) — eso hace que subirGtinAWoo falle "sola" con
+// estado 'fallo', que es justamente el camino fail-open que no debe romper nada.
+vi.mock('axios');
+import axios from 'axios';
+
 const TEST_DB = './test/tmp-inventario.sqlite';
 const CFG = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
 const now = () => new Date().toISOString();
@@ -309,7 +316,13 @@ describe('POST /api/inventario/sesiones/:id/escanear', () => {
 });
 
 describe('POST /api/inventario/sesiones/:id/asociar', () => {
-  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+  // Con el código válido (spec 2026-08-21) el handler también llama a axios (automock,
+  // falla sola con estado 'fallo' — ver comentario del vi.mock('axios') arriba). Sin
+  // resetear, las llamadas quedan registradas y contaminan el describe siguiente.
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    vi.resetAllMocks();
+  });
 
   it('asocia un EAN sin sku a un SKU existente y siembra ean_sku', async () => {
     const db = openDb(TEST_DB);
@@ -367,6 +380,164 @@ describe('POST /api/inventario/sesiones/:id/asociar', () => {
 
     expect(r.status).toBe(400);
     expect(r.body.ok).toBe(false);
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/asociar — subida del código a Woo (spec 2026-08-21)', () => {
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    vi.resetAllMocks();
+  });
+
+  async function crearSesionYEscanear(db, codigo, usuario = 'juan') {
+    const crear = await request(buildApp(db, usuario)).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, usuario)).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo });
+    return id;
+  }
+
+  // El índice de sku NO es único y ya pasó en producción que tres productos de WC tuvieran
+  // el mismo (incidente 2026-07-25). Antes de C1 esto era inocuo (solo se comprobaba
+  // existencia); ahora de esa fila sale el id_woo de un PATCH real.
+  it('SKU duplicado en el catalogo: NO sube nada a Woo y lo explica', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-DUP', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-DUP', marca: 'Bell', stock: 5 });
+    const id = await crearSesionYEscanear(db, '1234567890128');
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-DUP' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo.estado).toBe('fallo');
+    expect(r.body.codigo.motivo).toBe('sku_ambiguo');
+    expect(axios).not.toHaveBeenCalled();
+    // la asociación local igual se hizo: el conteo no se pierde
+    expect(r.body.item.sku).toBe('FB-DUP');
+  });
+
+  it('sku vacio se rechaza antes de tocar nada', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    const id = await crearSesionYEscanear(db, '1234567890128');
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: '' });
+
+    expect(r.status).toBe(400);
+    expect(axios).not.toHaveBeenCalled();
+  });
+
+  it('código no-GTIN: asocia local y no llama a Woo — estado no_valido', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: null });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    // Código desconocido y NO GTIN (no es numérico de 8/12/13/14 con checksum OK).
+    const id = await crearSesionYEscanear(db, 'XYZ-999');
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: 'XYZ-999', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.item.sku).toBe('FB-1');
+    expect(r.body.codigo).toEqual({ estado: 'no_valido' });
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('GTIN válido, producto sin código en Woo: sube y persiste — estado subido', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: null });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const id = await crearSesionYEscanear(db, '1234567890128');
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo.estado).toBe('subido');
+    expect(r.body.codigo.gtin).toBe('1234567890128');
+    expect(axios.request).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://fusionbikes.com.ar/wp-json/wc/v3/products/1',
+      method: 'patch',
+      data: { global_unique_id: '1234567890128' },
+    }));
+    const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
+    expect(fila.gtin).toBe('1234567890128');
+    db.close();
+  });
+
+  it('el producto ya tiene ese mismo código: no llama a Woo — estado sin_cambio', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: '1234567890128' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const id = await crearSesionYEscanear(db, '1234567890128');
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo).toEqual({ estado: 'sin_cambio' });
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('el producto tiene OTRO código: no pisa — estado conflicto con gtin_actual, cero llamadas a Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: '7791234567898' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const id = await crearSesionYEscanear(db, '1234567890128');
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo).toEqual({ estado: 'conflicto', gtin: '1234567890128', gtin_actual: '7791234567898' });
+    expect(axios.request).not.toHaveBeenCalled();
+    const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
+    expect(fila.gtin).toBe('7791234567898'); // no se tocó
+    db.close();
+  });
+
+  it('conflicto + pisar_codigo:true: sube y borra el ean_sku huérfano del código viejo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: '7791234567898' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    db.prepare("INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES ('7791234567898','FB-1',?)").run(now());
+    const id = await crearSesionYEscanear(db, '1234567890128');
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`)
+      .send({ ean: '1234567890128', sku: 'FB-1', pisar_codigo: true });
+
+    expect(r.status).toBe(200);
+    expect(r.body.codigo.estado).toBe('subido');
+    expect(axios.request).toHaveBeenCalledTimes(1);
+    const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
+    expect(fila.gtin).toBe('1234567890128');
+    expect(db.prepare("SELECT sku FROM ean_sku WHERE ean='7791234567898'").get()).toBeUndefined();
+    db.close();
+  });
+
+  it('Woo rechaza o no responde: la asociación local se hace igual — estado fallo, el conteo sigue', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: null });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const id = await crearSesionYEscanear(db, '1234567890128');
+    axios.request.mockResolvedValueOnce({
+      status: 400,
+      data: { code: 'duplicate_global_unique_id', message: 'El código universal ya está en uso por otro producto.' },
+      headers: {},
+    });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+
+    // El conteo no se corta por el error de Woo: la asociación local se hizo igual.
+    expect(r.status).toBe(200);
+    expect(r.body.item.sku).toBe('FB-1');
+    expect(r.body.codigo.estado).toBe('fallo');
+    expect(r.body.codigo.error).toBeTruthy();
+    // Fail-open SOLO para la subida del código; no se persiste el gtin en catalogo_cache.
+    const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
+    expect(fila.gtin).toBeNull();
+    db.close();
   });
 });
 
@@ -513,6 +684,76 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     expect(perdedor).toBeTruthy();
     expect([400, 409]).toContain(perdedor.status);
     expect(ganador.body.ajustados).toBe(2);
+  });
+
+  // El alcance se arma solo desde catalogo_cache: un producto con stock>0 cae en el bloque
+  // `con_stock`. No hay helper para sembrar alcance a mano — se siembra con insertProducto.
+  // El gate solo vale para el PRIMER confirm (sesión abierta). En un reintento la sesión ya
+  // está cerrada: sus pendientes no se pueden decidir nunca más, así que bloquearlo no protege
+  // nada (el stock de esos ya quedó sin tocar) y sí deja trabados para siempre los ajustes que
+  // fallaron por un error de Woo. Caso real: la sesión 5 de producción quedó en
+  // confirmada_con_errores con 9 pendientes con stock.
+  it('el reintento de una sesion con errores NO se bloquea por pendientes con stock', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    // Se la deja como quedó una sesión vieja: cerrada con errores y con FB-2 nunca contado.
+    db.prepare("UPDATE inventario_sesiones SET estado='confirmada_con_errores' WHERE id=?").run(id);
+
+    setStockWc.mockResolvedValue();
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(setStockWc).toHaveBeenCalledTimes(1);   // reintenta el que quedó sin ajustar
+  });
+
+  it('no confirma si quedan productos CON STOCK sin contar, y no toca Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(409);
+    expect(r.body.pendientes_con_stock).toBe(1);
+    expect(r.body.pendientes[0].sku).toBe('FB-2');
+    expect(setStockWc).not.toHaveBeenCalled();          // NI UNA llamada a Woo
+    // el reclamo atómico no se ejecutó: la sesión sigue reintentable
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('abierta');
+  });
+
+  it('confirma normalmente cuando el pendiente con stock se cerró en 0', async () => {
+    setStockWc.mockResolvedValue();
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-2'] });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+  });
+
+  it('un pendiente SIN stock no bloquea: ajustarlo a 0 seria un no-op', async () => {
+    setStockWc.mockResolvedValue();
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
+    insertProducto(db, { id_woo: 9, sku: 'FB-9', marca: 'Bell', stock: 0 });   // bloque sin_stock
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(r.status).toBe(200);
   });
 });
 
@@ -895,6 +1136,161 @@ describe('Hallazgo fuera de alcance', () => {
   });
 });
 
+describe('POST /api/inventario/sesiones/:id/cerrar-en-cero', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  // Mismo patrón que el resto del archivo: sembrar catálogo con insertProducto y crear la
+  // sesión por la API. El alcance sale solo de catalogo_cache (stock>0 → bloque con_stock).
+  it('cierra en 0 un producto CON stock cuando se lo pide por SKU', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-2'] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.cerrados).toBe(1);
+    const fila = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-2');
+    expect(fila.cantidad).toBe(0);
+    expect(fila.confirmado_por_omision).toBe(1);
+    expect(fila.bloque).toBe('con_stock');
+  });
+
+  // Bajar a 0 algo que tenía stock es destructivo: pasa por Woo al confirmar. Un `todos:true`
+  // acá sería el botón que vacía el depósito cuando el operario se cansó.
+  it('rechaza todos:true para productos con stock', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ todos: true });
+
+    expect(r.status).toBe(400);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
+  });
+
+  it('rechaza todos:true aunque también venga una lista explícita', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`)
+      .send({ todos: true, skus: ['FB-2'] });
+
+    expect(r.status).toBe(400);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
+  });
+
+  it('ignora un SKU que no esta en el alcance de la sesion', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-999'] });
+
+    expect(r.body.cerrados).toBe(0);
+  });
+
+  it('no cierra por esta ruta un SKU del bloque sin_stock', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-CERO', marca: 'Bell', stock: 0 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-CERO'] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.cerrados).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(id).n).toBe(0);
+  });
+
+  it('no toma un SKU pendiente que pertenece al snapshot de otra sesion', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 2 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-CONTI', marca: 'Continental', stock: 3 });
+    const propia = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const ajena = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marca: 'Continental' });
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${propia.body.sesion.id}/cerrar-en-cero`)
+      .send({ skus: ['FB-CONTI'] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.cerrados).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=?').get(ajena.body.sesion.id).n).toBe(0);
+  });
+
+  it('no cierra nada si la sesion no esta abierta', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    db.prepare("UPDATE inventario_sesiones SET estado='confirmada' WHERE id=?").run(id);
+
+    const r = await request(buildApp(db, 'juan'))
+      .post(`/api/inventario/sesiones/${id}/cerrar-en-cero`).send({ skus: ['FB-2'] });
+
+    expect(r.status).toBe(400);
+  });
+});
+
+describe('canarios de contrato fail-closed del frontend de inventario', () => {
+  it('no pide reescanear a ciegas y bloquea el scanner si tampoco puede reconciliar', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    expect(html).not.toContain('Volvé a pasarlo.');
+    expect(html).toContain('no vuelvas a pasarlo a ciegas');
+    expect(html).toContain('scanInput.disabled = true');
+  });
+
+  it('no abandona Revisión si guardar ceros falló y protege el segundo POST del conflicto', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    expect(html).toContain('errorSesion.sesionInvalida = true');
+    expect(html).toContain('if(!j || !j.ok){');
+    expect(html).toContain('var miSeq = ++asociarSeq;');
+    expect(html).toContain('if(miSeq === asociarSeq) asociarEnVuelo = false;');
+  });
+
+  it('mantiene el foco dentro del conflicto GTIN mientras refresca el conteo', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    expect(html).toContain("!document.querySelector('.confirm-veil.open')");
+    expect(html).toContain('cerrarSheetEan(false);');
+    expect(html.indexOf('cerrarSheetEan(false);')).toBeLessThan(html.indexOf('abrirConflictoCodigo(ean, sku, c.gtin_actual);'));
+  });
+
+  it('restaura foco solo si el elemento previo está conectado y visible; fallback a scanInput', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    // Verifica que la función cerrarDialogoAccesible valida que el elemento esté en el DOM
+    // antes de hacer focus, y fallback a scanInput si no está
+    expect(html).toContain('document.contains(previo)');
+    expect(html).toContain('previo.offsetParent !== null');
+    expect(html).toContain('previo.getClientRects().length > 0');
+    expect(html).toContain('scanInput.focus()');
+    expect(html).toContain('if(!hayInputCantidadEnfocado()');
+    // Verifica que hay manejo de fail-closed con botón de reintento
+    expect(html).toContain('mostrarControlReintento');
+    expect(html).toContain('ocultarControlReintento');
+    expect(html).toContain("document.getElementById('btn-reintentar-escaneo').focus()");
+    expect(html).toContain('background:var(--warning-bg)');
+  });
+
+  it('listeners de cierre de sheet pasan booleano explícito, no Event', () => {
+    const html = fs.readFileSync('./public/inventario/index.html', 'utf8');
+    // Verifica que los listeners usen wrappers que pasen explícitamente true/false
+    expect(html).toContain("eanVeil.addEventListener('click', function()");
+    expect(html).toContain('cerrarSheetEan(true)');  // Parámetro explícito
+    expect(html).toContain("addEventListener('click', function()");
+  });
+});
+
 describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
   afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
 
@@ -950,9 +1346,13 @@ describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
     setStockWc.mockResolvedValue();
 
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
+    // CON-1 tiene stock y nunca se contó/cerró: antes de este cambio confirmar lo dejaba
+    // publicado con su stock intacto (el bug del incidente 2026-08-21). Ahora el gate lo
+    // bloquea, así que hay que decidirlo explícitamente para poder confirmar.
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'CON-1' });
     const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
 
-    expect(r.body.ajustados).toBe(2);
+    expect(r.body.ajustados).toBe(3);
     expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'SIN-1', 0);
   });
 
@@ -1140,6 +1540,31 @@ describe('Hallazgos de revisión — cerrar-sin-stock, omisión y migración', (
     expect(r.body.items[1]).toMatchObject({ sku: 'FB-2', nombre: 'Casco B', stock_woo: 1, diferencia: 0 });
     // ítem sin asociar: no está en el catálogo, se devuelve sin nombre ni diferencia
     expect(r.body.items[2]).toMatchObject({ sku: null, nombre: null, stock_woo: null, diferencia: null });
+  });
+
+  it('GET /sesiones/:id con SKU homónimo: resuelve determinística (LIMIT 1) sin duplicar ítems', async () => {
+    const db = openDb(TEST_DB);
+    // Dos productos con el mismo SKU (homónimos).
+    insertProducto(db, { id_woo: 1, sku: 'FB-AMBIGUO', nombre: 'Casco A', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-AMBIGUO', nombre: 'Casco B', marca: 'Bell', stock: 3 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+    // Escanear el SKU homónimo.
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-AMBIGUO' });
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
+
+    // Debe haber exactamente 1 ítem, no 2 (no duplicado por el LEFT JOIN).
+    expect(r.body.items).toHaveLength(1);
+    // El ítem debe tener nombre y stock_woo (resuelto determinísticamente a UNO de los dos).
+    expect(r.body.items[0]).toMatchObject({
+      sku: 'FB-AMBIGUO',
+      cantidad: 1,
+      // No importa cuál de los dos se resolvió (1 o 2), pero debe haber UNO.
+      nombre: expect.any(String),
+      stock_woo: expect.any(Number),
+      diferencia: expect.any(Number),
+    });
   });
 });
 

@@ -13,39 +13,13 @@
  *                      + siembra ean_sku. Fail-closed: si Woo rechaza, no toca la DB.
  */
 
-import axios from 'axios';
 import { Router } from 'express';
 import { esNoVendible } from '../lib/cobertura.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { armarLike } from '../lib/busqueda.js';
+import { subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
 const now = () => new Date().toISOString();
-
-/**
- * PATCH puntual a Woo que preserva el motivo real del rechazo (ej. GTIN duplicado).
- * No reusamos wooFetch porque su contrato descarta el body de error; acá lo necesitamos
- * para mostrarle al usuario por qué Woo no aceptó el código.
- * @returns {{ ok: boolean, error?: string }}
- */
-async function patchWoo(cfg, path, body) {
-  if (!String(cfg.url || '').startsWith('https://')) {
-    return { ok: false, error: 'WooCommerce URL debe usar HTTPS' };
-  }
-  const url = cfg.url.replace(/\/$/, '') + '/wp-json/wc/v3' + path;
-  const resp = await axios.request({
-    url,
-    method: 'patch',
-    data: body,
-    auth: { username: cfg.ck, password: cfg.cs },
-    timeout: 20000,
-    validateStatus: () => true,
-  });
-  if (resp.status < 200 || resp.status >= 300) {
-    const d = resp.data || {};
-    return { ok: false, error: d.message || d.code || `error ${resp.status}` };
-  }
-  return { ok: true };
-}
 
 // WHERE compartido entre /faltantes y /firma: si se toca acá, se toca para las dos —
 // evita que la firma se desincronice de lo que realmente lista la cola (mismo patrón que
@@ -85,6 +59,7 @@ export function codigosRouter(db, cfg) {
   const exclusionesRows = db.prepare('SELECT id_woo FROM cobertura_exclusiones');
   const porId = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = ? LIMIT 1');
   const porSku = db.prepare("SELECT * FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1");
+  const contarPorSku = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku = ? AND sku <> ''");
 
   // ── Cola de faltantes ──────────────────────────────────────────────────────
   // Un producto entra si: stock>0 (salvo que se pida sin ese filtro), sin gtin,
@@ -155,54 +130,35 @@ export function codigosRouter(db, cfg) {
 
     // Resolver el producto en el cache (por id_woo o, si no vino, por sku).
     let fila = null;
-    if (idWoo != null && idWoo !== '') fila = porId.get(Number(idWoo));
-    else if (skuIn) fila = porSku.get(skuIn);
+    if (idWoo != null && idWoo !== '') {
+      fila = porId.get(Number(idWoo));
+    } else if (skuIn) {
+      // Fail-closed: si el SKU es homónimo (hay múltiples productos), rechazar sin
+      // llamar a Woo. El usuario debe ser más específico (id_woo).
+      const cnt = contarPorSku.get(skuIn);
+      if (cnt.n > 1) {
+        return res.status(400).json({
+          ok: false,
+          error: `El SKU '${skuIn}' es ambiguo: hay ${cnt.n} productos. Especificá el id_woo para desambiguar.`,
+          codigo: 'sku_ambiguo',
+        });
+      }
+      fila = porSku.get(skuIn);
+    }
     if (!fila) return res.status(404).json({ ok: false, error: 'Producto no encontrado en el catálogo' });
 
-    if (fila.tipo === 'variable') {
-      return res.status(400).json({ ok: false, error: 'Un producto variable (padre) no lleva código; usá sus variaciones' });
-    }
-
     const sku = String(fila.sku || '').trim();
-    // Endpoint correcto según tipo: variación vs producto simple.
-    const path = fila.tipo === 'variation'
-      ? `/products/${fila.id_padre}/variations/${fila.id_woo}`
-      : `/products/${fila.id_woo}`;
-    if (fila.tipo === 'variation' && !fila.id_padre) {
-      return res.status(400).json({ ok: false, error: 'Variación sin id_padre; no se puede resolver el endpoint de Woo' });
-    }
 
-    let woo;
-    try {
-      woo = await patchWoo(cfg, path, { global_unique_id: gtin });
-    } catch (e) {
-      // Falla de red/timeout: no se toca la DB.
-      return res.status(502).json({ ok: false, error: `No se pudo contactar a WooCommerce: ${e.message}` });
-    }
+    // PATCH a Woo + resolución de endpoint (compartido con /api/inventario/.../asociar).
+    // Fail-closed acá: si Woo rechaza o falla, no se toca la DB.
+    const woo = await subirGtinAWoo(cfg, fila, gtin);
     if (!woo.ok) {
-      // Woo rechazó (GTIN duplicado en otro producto, error de API, etc.): no se toca la DB.
-      return res.status(502).json({ ok: false, error: `WooCommerce rechazó el código: ${woo.error}` });
+      const status = woo.motivo === 'no_endpoint' ? 400 : 502;
+      return res.status(status).json({ ok: false, error: woo.error });
     }
 
     // Woo confirmó → persistimos en el cache y sembramos ean_sku (para Consulta de Precios).
-    const gtinPrevio = String(fila.gtin || '').trim();
-    const ahora = now();
-    const tx = db.transaction(() => {
-      db.prepare('UPDATE catalogo_cache SET gtin = ?, actualizado_en = ? WHERE id_woo = ?')
-        .run(gtin, ahora, fila.id_woo);
-      // Sobrescritura: si el código previo era distinto, borrar su fila ean_sku huérfana
-      // para que Consulta de Precios no siga resolviendo el código viejo.
-      if (gtinPrevio && gtinPrevio !== gtin) {
-        db.prepare('DELETE FROM ean_sku WHERE ean = ?').run(gtinPrevio);
-      }
-      if (sku) {
-        db.prepare(`
-          INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?, ?, ?)
-          ON CONFLICT(ean) DO UPDATE SET sku = excluded.sku, actualizado_en = excluded.actualizado_en
-        `).run(gtin, sku, ahora);
-      }
-    });
-    tx();
+    persistirGtinConfirmado(db, fila, gtin, sku);
 
     res.json({ ok: true, id_woo: fila.id_woo, sku, gtin });
   });

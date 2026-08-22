@@ -1,6 +1,7 @@
 import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { setStockWc } from '../lib/wooStock.js';
+import { subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
 const now = () => new Date().toISOString();
 
@@ -201,6 +202,37 @@ export function inventarioRouter(db, wooCfg) {
     "SELECT sku, nombre, stock, categorias_json, marca FROM catalogo_cache WHERE COALESCE(sku,'')<>'' AND COALESCE(tipo,'')<>'variable'";
 
   const catalogoContable = () => db.prepare(SQL_CATALOGO_CONTABLE).all();
+
+  // Fuente única de verdad para "pendiente": pertenece al snapshot de la sesión y no
+  // existe todavía un conteo con ese SKU. La pantalla, los cierres en cero y el gate de
+  // confirmación deben consultar exactamente este mismo universo.
+  function pendientesDeSesion(sesionId, bloque = null) {
+    return db.prepare(`
+      SELECT a.sku, a.nombre, a.bloque, a.stock_inicial, a.marca,
+             a.categoria_principal,
+             (SELECT c.stock FROM catalogo_cache c WHERE c.sku=a.sku LIMIT 1) AS stock_actual
+      FROM inventario_sesion_alcance a
+      WHERE a.sesion_id=?
+        AND NOT EXISTS (
+          SELECT 1 FROM inventario_conteos t
+          WHERE t.sesion_id=a.sesion_id AND t.sku=a.sku
+        )
+      ORDER BY CASE a.bloque WHEN 'con_stock' THEN 0 ELSE 1 END,
+               COALESCE(a.categoria_principal,'') COLLATE NOCASE,
+               COALESCE(a.marca,'') COLLATE NOCASE,
+               COALESCE(a.nombre,'') COLLATE NOCASE
+    `).all(sesionId)
+      .filter(p => bloque == null || p.bloque === bloque)
+      .map(p => ({
+        sku: p.sku,
+        nombre: p.nombre,
+        bloque: p.bloque,
+        marca: p.marca,
+        categoria_principal: p.categoria_principal,
+        stock_inicial: p.stock_inicial,
+        stock_woo: p.stock_actual ?? p.stock_inicial,
+      }));
+  }
 
   // Estado del código escaneado, para que el frontend muestre el aviso correcto:
   //   ok               → producto real dentro del alcance
@@ -419,10 +451,14 @@ export function inventarioRouter(db, wooCfg) {
 
     // LEFT JOIN en una sola consulta: esta pantalla se refresca después de cada
     // escaneo, no conviene compilar y correr un SELECT por ítem contado.
+    // Resolución determinista (subselect LIMIT 1) para evitar duplicar ítems si
+    // hay SKU homónimos en catalogo_cache.
     const conteos = db.prepare(`
-      SELECT t.*, p.sku AS prod_sku, p.stock AS prod_stock, p.nombre AS prod_nombre
+      SELECT t.*,
+             (SELECT sku FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_sku,
+             (SELECT stock FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_stock,
+             (SELECT nombre FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_nombre
       FROM inventario_conteos t
-      LEFT JOIN catalogo_cache p ON p.sku = t.sku
       WHERE t.sesion_id = ?
       ORDER BY t.id
     `).all(sesion.id);
@@ -444,29 +480,9 @@ export function inventarioRouter(db, wooCfg) {
       };
     });
 
-    const skusContados = new Set(items.map(i => i.sku).filter(Boolean));
     // Orden: primero con stock, después por categoría → marca → nombre. El bloque
     // viene congelado del snapshot, no se recalcula contra el stock actual.
-    const pendientes = db.prepare(`
-      SELECT a.sku, a.nombre, a.bloque, a.stock_inicial, a.marca, a.categoria_principal, c.stock AS stock_actual
-      FROM inventario_sesion_alcance a
-      LEFT JOIN catalogo_cache c ON c.sku = a.sku
-      WHERE a.sesion_id = ?
-      ORDER BY CASE a.bloque WHEN 'con_stock' THEN 0 ELSE 1 END,
-               COALESCE(a.categoria_principal,'') COLLATE NOCASE,
-               COALESCE(a.marca,'') COLLATE NOCASE,
-               COALESCE(a.nombre,'') COLLATE NOCASE
-    `).all(sesion.id)
-      .filter(p => !skusContados.has(p.sku))
-      .map(p => ({
-        sku: p.sku,
-        nombre: p.nombre,
-        bloque: p.bloque,
-        marca: p.marca,
-        categoria_principal: p.categoria_principal,
-        stock_inicial: p.stock_inicial,
-        stock_woo: p.stock_actual ?? p.stock_inicial,
-      }));
+    const pendientes = pendientesDeSesion(sesion.id);
 
     res.json({
       ok: true,
@@ -535,15 +551,28 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true, item: itemOut(item), aviso: avisoDeCodigo(item) });
   });
 
-  router.post('/sesiones/:id/asociar', (req, res) => {
+  // Subida del código a Woo al asociar (spec 2026-08-21-subir-ean-a-woo-design.md).
+  // Excepción DELIBERADA al fail-closed del resto del sistema: si Woo rechaza o no
+  // responde, la asociación LOCAL se hace igual y el conteo sigue (estado 'fallo').
+  // El trabajo físico del operario no se descarta por un error de Woo. El ajuste de
+  // stock (confirmar sesión) sigue siendo fail-closed como siempre, no se toca acá.
+  router.post('/sesiones/:id/asociar', async (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
     if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
 
     const ean = String(req.body?.ean || '').trim();
     const sku = String(req.body?.sku || '').trim();
-    const prod = db.prepare("SELECT sku FROM catalogo_cache WHERE sku=?").get(sku);
-    if (!prod) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    const pisarCodigo = req.body?.pisar_codigo === true;
+    if (!sku) return res.status(400).json({ ok: false, error: 'Falta el SKU' });
+    // `sku <> ''` y LIMIT 1, mismo criterio que routes/codigos.js:61. El índice de sku NO es
+    // único: con el body vacío esta consulta podía matchear cualquier fila sin SKU.
+    const fila = db.prepare("SELECT * FROM catalogo_cache WHERE sku=? AND sku <> '' LIMIT 1").get(sku);
+    if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    // Cuántos productos comparten ese SKU. Ya pasó en producción que tres productos de WC
+    // tuvieran el mismo (incidente 2026-07-25): elegir uno arbitrario acá significaba
+    // escribirle el código de barras al producto equivocado. Con ambigüedad no se sube nada.
+    const homonimos = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku=? AND sku <> ''").get(sku).n;
 
     // Fail-closed: si no hay ningún ítem escaneado con ese EAN en esta sesión, no
     // sembramos ean_sku ni hacemos nada — "enseñar EAN sin ítem" es otro caso de uso,
@@ -558,13 +587,48 @@ export function inventarioRouter(db, wooCfg) {
       return res.status(404).json({ ok: false, error: 'No hay ningún ítem escaneado con ese EAN en esta sesión' });
     }
 
+    // La asociación local (SKU ↔ código escaneado) se hace SIEMPRE, pase lo que pase
+    // con Woo más abajo — este ean_sku es el mapeo "código físico → sku" que usa
+    // Consulta de Precios, no el global_unique_id de Woo.
     db.prepare(`
       INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
       ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
     `).run(ean, sku, now());
 
+    // Subida del código a Woo, solo si es un GTIN válido de verdad (no cualquier código).
+    let codigo;
+    if (!looksLikeEan(ean)) {
+      codigo = { estado: 'no_valido' };
+    } else if (homonimos > 1) {
+      codigo = {
+        estado: 'fallo', gtin: ean, motivo: 'sku_ambiguo',
+        error: `Hay ${homonimos} productos con el SKU ${sku} en el catálogo: no se puede saber a cuál corresponde el código.`,
+      };
+    } else {
+      const gtinActual = String(fila.gtin || '').trim();
+      if (!gtinActual) {
+        codigo = await subirGtin(fila, ean, sku);
+      } else if (gtinActual === ean) {
+        codigo = { estado: 'sin_cambio' };
+      } else if (!pisarCodigo) {
+        codigo = { estado: 'conflicto', gtin: ean, gtin_actual: gtinActual };
+      } else {
+        codigo = await subirGtin(fila, ean, sku);
+      }
+    }
+
+    // `motivo` viaja a la respuesta para que la pantalla pueda distinguir un fallo
+    // REINTENTABLE (Woo caído, rechazo) de uno que no lo es (un padre variable no lleva
+    // código: reintentar el escaneo no va a funcionar nunca).
+    async function subirGtin(filaProducto, gtin, skuProducto) {
+      const resultado = await subirGtinAWoo(wooCfg, filaProducto, gtin);
+      if (!resultado.ok) return { estado: 'fallo', gtin, error: resultado.error, motivo: resultado.motivo || 'woo' };
+      persistirGtinConfirmado(db, filaProducto, gtin, skuProducto);
+      return { estado: 'subido', gtin };
+    }
+
     const item = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
-    res.json({ ok: true, item: itemOut(item) });
+    res.json({ ok: true, item: itemOut(item), codigo });
   });
 
   router.delete('/sesiones/:id/items/:itemId', (req, res) => {
@@ -594,6 +658,24 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true, item });
   });
 
+  // Inserta filas de conteo en 0 para SKUs del alcance que todavía no se contaron.
+  // `bloque` acota a qué mitad del alcance se aplica; devuelve cuántas filas creó.
+  function cerrarEnCero(sesionId, skusPedidos, bloque, candidatosPrecalculados = null) {
+    const candidatos = candidatosPrecalculados
+      || pendientesDeSesion(sesionId, bloque).map(r => r.sku);
+    const pedidosSet = new Set(skusPedidos);
+    const aCerrar = candidatos.filter(s => pedidosSet.has(s));
+    const insertar = db.prepare(`INSERT OR IGNORE INTO inventario_conteos
+      (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, confirmado_por_omision, actualizado_en)
+      VALUES (?,?,?,0,?,0,1,?)`);
+    const tx = db.transaction(skus => {
+      let n = 0;
+      for (const sku of skus) n += insertar.run(sesionId, sku, sku, bloque, now()).changes;
+      return n;
+    });
+    return { cerrados: tx(aCerrar), skus: aCerrar };
+  }
+
   /**
    * Cierre en bloque (o por lista) de los pendientes SIN STOCK como cantidad 0.
    * Decisión de producto: NO es automático — se pregunta al cerrar la sesión y el
@@ -620,25 +702,38 @@ export function inventarioRouter(db, wooCfg) {
       });
     }
 
-    const candidatos = db.prepare(`
-      SELECT a.sku FROM inventario_sesion_alcance a
-      WHERE a.sesion_id=? AND a.bloque='sin_stock'
-        AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)
-    `).all(sesion.id, sesion.id).map(r => r.sku);
-
-    const aCerrar = todos ? candidatos : candidatos.filter(s => pedidos.includes(s));
-
-    const insertar = db.prepare(`INSERT OR IGNORE INTO inventario_conteos
-      (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, confirmado_por_omision, actualizado_en)
-      VALUES (?,?,?,0,'sin_stock',0,1,?)`);
-    const tx = db.transaction(skus => {
-      let n = 0;
-      for (const sku of skus) n += insertar.run(sesion.id, sku, sku, now()).changes;
-      return n;
+    const aCerrarTodos = todos
+      ? pendientesDeSesion(sesion.id, 'sin_stock').map(r => r.sku)
+      : pedidos;
+    res.json({
+      ok: true,
+      ...cerrarEnCero(sesion.id, aCerrarTodos, 'sin_stock', todos ? aCerrarTodos : null),
     });
-    const cerrados = tx(aCerrar);
+  });
 
-    res.json({ ok: true, cerrados, skus: aCerrar });
+  // Cierra en 0 productos que SÍ tenían stock ("lo busqué, no había ninguna"). A diferencia
+  // de cerrar-sin-stock, acá NO existe `todos:true`: esto termina bajando stock real en Woo,
+  // y un botón masivo sería la salida fácil que devuelve el problema que este cambio arregla.
+  router.post('/sesiones/:id/cerrar-en-cero', (req, res) => {
+    const sesion = getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+    asegurarAlcance(sesion);
+
+    if (req.body?.todos === true) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Los productos con stock se cierran uno por uno: elegí cuáles pasar a 0.',
+      });
+    }
+    const pedidos = parseLista(req.body?.skus);
+    if (!pedidos.length) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Indicá una lista `skus` no vacía. Para productos con stock no existe `todos`.',
+      });
+    }
+    res.json({ ok: true, ...cerrarEnCero(sesion.id, pedidos, 'con_stock') });
   });
 
   router.post('/sesiones/:id/descartar', (req, res) => {
@@ -673,6 +768,32 @@ export function inventarioRouter(db, wooCfg) {
         sin_asociar: sinAsociar.length,
         codigos_desconocidos: desconocidos.length,
         codigos: desconocidos.map(i => i.ean),
+      });
+    }
+
+    // El gate se apoya en el alcance congelado: sin filas de alcance daría [] y confirmaría
+    // sin gate — fail-OPEN justo en la función que existe para ser fail-closed.
+    if (sesion.estado === 'abierta') asegurarAlcance(sesion);
+
+    // Fail-closed contra la sobreventa: un producto CON stock que nunca se contó no tiene
+    // fila en inventario_conteos, así que el ajuste de abajo ni lo ve — se queda publicado
+    // con el stock que tenía. Si ya no está físicamente, se vende (incidente 2026-08-21).
+    // El bloque sin_stock no entra: ya está en 0 en Woo, ajustarlo a 0 es un no-op.
+    //
+    // Solo aplica al PRIMER confirm. En un reintento (confirmada_con_errores) la sesión ya
+    // está cerrada y sus pendientes no se pueden decidir nunca más: bloquearlo no protegería
+    // nada —el stock de esos ya quedó sin tocar— y dejaría trabados para siempre los ajustes
+    // que fallaron por un error de Woo. La sesión 5 de producción está justo así.
+    const pendientesConStock = sesion.estado !== 'abierta'
+      ? []
+      : pendientesDeSesion(sesion.id, 'con_stock');
+    if (pendientesConStock.length) {
+      return res.status(409).json({
+        ok: false,
+        error: 'Quedan productos con stock sin contar. Decidí uno por uno antes de confirmar: '
+             + 'pasalos a 0 si no había ninguna, o dejalos pendientes para revisar.',
+        pendientes_con_stock: pendientesConStock.length,
+        pendientes: pendientesConStock,
       });
     }
 
