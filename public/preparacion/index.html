@@ -108,6 +108,14 @@
   .flash.ok{display:block;background:rgba(52,211,153,.15);color:var(--green);}
   .flash.bad{display:block;background:rgba(248,113,113,.15);color:var(--red);}
   .flash.warn{display:block;background:rgba(245,185,66,.15);color:var(--amber);}
+  .ean-assoc{background:var(--surface);border:1px solid var(--amber);border-radius:12px;padding:13px 14px;margin:8px 0 12px;}
+  .ean-assoc h2{font-size:14px;margin:0 0 4px;color:var(--amber);}
+  .ean-assoc p{font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.45;}
+  .ean-candidates{display:flex;flex-direction:column;gap:8px;}
+  .ean-candidate{min-height:var(--tap-comfort);width:100%;text-align:left;padding:9px 12px;border-radius:9px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);cursor:pointer;overflow-wrap:anywhere;}
+  .ean-candidate:hover,.ean-candidate:focus-visible{border-color:var(--azul);}
+  .ean-candidate strong{display:block;font-size:13px;line-height:1.3;}
+  .ean-candidate small{display:block;color:var(--muted);font:11px 'Courier New',monospace;margin-top:3px;}
 
   .item{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:13px 15px;margin-bottom:10px;}
   .item.verif{border-color:rgba(52,211,153,.4);}
@@ -281,7 +289,7 @@
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
 <script>
-var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
+var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null, ASOCIACION_PENDIENTE=null;
 // fotoId (o id temporal mientras sube) -> object URL local. Vive fuera de PREP a propósito:
 // sobrevive a los refrescos completos de PREP (refrescarDetalle) mientras el servidor todavía
 // no tiene la versión liviana lista, así la miniatura no parpadea a una URL rota en el medio.
@@ -299,7 +307,7 @@ function ir(v){
   detenerHeartbeat();
   detenerPollFotos();
   if(v!=='pendientes')detenerPollingPendientes();
-  VISTA=v; PREP=null;
+  VISTA=v; PREP=null; ASOCIACION_PENDIENTE=null;
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
   if(v==='pendientes'){cargarPendientes();iniciarPollingPendientes();}
   else if(v==='etiquetas')cargarEtiquetas();
@@ -420,6 +428,7 @@ async function abrirDetalle(id){
   detenerPollingPendientes();
   ACT_TOPE=30;
   NUEVOS_ACUMULADOS=0;
+  ASOCIACION_PENDIENTE=null;
   var r=await api('/'+id);
   if(!r.body.ok){document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>';return;}
   PREP=r.body.data;
@@ -604,6 +613,7 @@ function renderDetalle(){
       +'<button class="btn" onclick="escanearManual()">Confirmar</button>'
       +'<button class="btn sec" onclick="abrirCamara()">📷 Cámara</button>'
       +'</div><div class="flash" id="flash" role="status" aria-live="polite"></div>';
+    html+=renderAsociacionEan();
   }
 
   if(!completada&&hayFotosConCantidad(p)){
@@ -634,6 +644,19 @@ function renderDetalle(){
   document.getElementById('cuerpo').innerHTML=html;
   var si=document.getElementById('scan-in');
   if(si){si.focus();si.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();escanearManual();}});}
+}
+
+function renderAsociacionEan(){
+  var p=ASOCIACION_PENDIENTE;
+  if(!p||!p.candidatos||!p.candidatos.length)return p?'<div class="ean-assoc" role="status"><h2>EAN '+esc(p.codigo)+' sin asociación</h2><p>No hay artículos con SKU disponible y unidades pendientes para asociar. Revisá la etiqueta o usá “Confirmar sin código…” con el motivo correspondiente.</p></div>':'';
+  return '<section class="ean-assoc" aria-labelledby="ean-assoc-title">'
+    +'<h2 id="ean-assoc-title">Código '+esc(p.codigo)+' no reconocido</h2>'
+    +'<p>Elegí explícitamente el artículo al que pertenece. El sistema no lo asigna automáticamente porque podría contar otro producto.</p>'
+    +'<div class="ean-candidates">'+p.candidatos.map(function(c){
+      return '<button type="button" class="ean-candidate" onclick="asociarCodigoAItem('+Number(c.id)+')">'
+        +'<strong>'+esc(c.nombre||c.sku||'Artículo')+' · '+esc(String(c.restante))+' pendiente(s)</strong>'
+        +'<small>SKU '+esc(c.sku)+'</small></button>';
+    }).join('')+'</div></section>';
 }
 
 function itemHtml(it){
@@ -744,6 +767,8 @@ var MOTIVO_MANUAL_LABEL={codigo_ilegible:'código ilegible',sin_etiqueta:'produc
 function verboEvento(tipo,detalle){
   if(tipo==='escaneo'){
     if(detalle.origen==='manual')return 'confirmó sin código';
+    if(detalle.origen==='asociacion_ean')return 'asoció EAN y escaneó';
+    if(detalle.origen==='ean')return 'escaneó (EAN conocido)';
     return detalle.origen==='camara'?'escaneó (cámara)':'escaneó';
   }
   if(tipo==='foto_subida')return 'subió foto';
@@ -894,6 +919,9 @@ async function escanear(codigo,origen){
   if(b.resultado==='match'&&mergeItemLocal(b.item)){
     renderDetalle();
     refrescarSoloActividad();
+  }else if(b.resultado==='necesita_asociacion'){
+    ASOCIACION_PENDIENTE={codigo:b.codigo||codigo,candidatos:b.candidatos||[]};
+    renderDetalle();
   }else if(b.resultado==='match'||b.resultado==='sobrante'||b.resultado==='no_coincide'){
     // resultado sin cambio de ítem local (sobrante/no_coincide) o el merge falló por algún
     // motivo raro: no hay nada que redibujar a mano, así que no hace falta ningún refetch.
@@ -903,8 +931,35 @@ async function escanear(codigo,origen){
   if(b.resultado==='match')flash('ok','✓ '+codigo+' — '+(b.item.estado_item==='verificado'?'ítem completo':'anotado '+b.item.cantidad_escaneada+'/'+b.item.cantidad_esperada));
   else if(b.resultado==='sobrante')flash('warn','⚠︎ '+codigo+' ya está completo — ¿estás poniendo de más?');
   else if(b.resultado==='no_coincide')flash('bad','✕ '+codigo+' NO pertenece a este pedido');
+  else if(b.resultado==='necesita_asociacion')flash('warn','Elegí el artículo que corresponde al código '+(b.codigo||codigo));
   else flash('bad',b.error||'error');
   return b;
+}
+
+async function asociarCodigoAItem(itemId,pisarCodigo){
+  if(!PREP||!ASOCIACION_PENDIENTE)return;
+  var p=ASOCIACION_PENDIENTE;
+  var r=await api('/'+PREP.id+'/asociar-codigo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:p.codigo,item_id:itemId,pisar_codigo:!!pisarCodigo})});
+  var b=r.body||{};
+  if(b.resultado==='conflicto'||b.codigo&&b.codigo.estado==='conflicto'){
+    var actual=b.codigo.gtin_actual?('el código '+b.codigo.gtin_actual):(b.codigo.sku_actual?('el SKU '+b.codigo.sku_actual):'otra asociación');
+    if(confirm('El artículo ya tiene '+actual+'. ¿Querés reemplazarlo por '+p.codigo+'?')){
+      return asociarCodigoAItem(itemId,true);
+    }
+    return;
+  }
+  if(b.resultado==='match'&&b.item){
+    ASOCIACION_PENDIENTE=null;
+    mergeItemLocal(b.item);
+    renderDetalle();
+    refrescarSoloActividad();
+    var estado=b.codigo&&b.codigo.estado;
+    if(estado==='subido')flash('ok','✓ Código asociado y subido a Woo — '+b.item.cantidad_escaneada+'/'+b.item.cantidad_esperada);
+    else if(estado==='fallo')flash('warn','✓ Conteo guardado; el código quedó local ('+(b.codigo.error||'Woo no disponible')+')');
+    else flash('ok','✓ Código asociado — '+b.item.cantidad_escaneada+'/'+b.item.cantidad_esperada);
+    return;
+  }
+  flash('bad',b.error||'No se pudo asociar el código');
 }
 
 function escanearManual(){
@@ -1520,6 +1575,11 @@ async function escanearCamara(codigo){
     beep('bad');
     if(navigator.vibrate)navigator.vibrate([80,60,80]);
     setCamProgress('✕ '+codigo+' no pertenece a este pedido');
+  }else if(b.resultado==='necesita_asociacion'){
+    beep('warn');
+    if(navigator.vibrate)navigator.vibrate([80,60,80]);
+    cerrarCamara();
+    flash('warn','Elegí en la pantalla el artículo para asociar '+(b.codigo||codigo));
   }else{
     setCamProgress(b.error||'No se pudo escanear');
   }
