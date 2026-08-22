@@ -1361,6 +1361,7 @@ export function preparacionRouter(db, cfg) {
     const codigo = String(req.body?.codigo || req.body?.ean || '').trim().toUpperCase();
     const itemId = Number(req.body?.item_id);
     const pisarCodigo = req.body?.pisar_codigo === true;
+    const pisarMapa = req.body?.pisar_mapa === true;
     if (!looksLikeGtin(codigo)) return res.status(400).json({ ok: false, error: 'se requiere un GTIN/EAN válido' });
     if (!Number.isInteger(itemId)) return res.status(400).json({ ok: false, error: 'item_id requerido' });
 
@@ -1378,17 +1379,20 @@ export function preparacionRouter(db, cfg) {
     const fila = filasCatalogo.length === 1 ? filasCatalogo[0] : null;
     const codigoBase = { gtin: codigo };
     const mapaActual = eanPorSku.get(codigo);
-    if (mapaActual?.sku && String(mapaActual.sku).trim().toUpperCase() !== String(item.sku || '').trim().toUpperCase() && !pisarCodigo) {
+    const conflictoMapa = mapaActual?.sku
+      && String(mapaActual.sku).trim().toUpperCase() !== String(item.sku || '').trim().toUpperCase();
+    const gtinActual = fila?.gtin ? String(fila.gtin).trim() : '';
+    const conflictoWoo = !!(gtinActual && gtinActual !== codigo);
+    if ((conflictoMapa && !pisarMapa) || (conflictoWoo && !pisarCodigo)) {
+      const conflictos = [];
+      if (conflictoMapa && !pisarMapa) conflictos.push('mapa');
+      if (conflictoWoo && !pisarCodigo) conflictos.push('woo');
       return res.json({
         ok: true, resultado: 'conflicto', codigo: {
-          ...codigoBase, estado: 'conflicto', sku_actual: mapaActual.sku,
-          error: `El código ya está asociado al SKU ${mapaActual.sku}. Confirmá si querés moverlo.`,
-        }, item,
-      });
-    }
-    if (fila?.gtin && String(fila.gtin).trim() !== codigo && !pisarCodigo) {
-      return res.json({
-        ok: true, resultado: 'conflicto', codigo: { ...codigoBase, estado: 'conflicto', gtin_actual: String(fila.gtin).trim() },
+          ...codigoBase, estado: 'conflicto', conflictos,
+          ...(conflictoMapa ? { sku_actual: mapaActual.sku } : {}),
+          ...(conflictoWoo ? { gtin_actual: gtinActual } : {}),
+        },
         item,
       });
     }
