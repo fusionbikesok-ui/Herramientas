@@ -83,6 +83,16 @@ describe('wooStock', () => {
         .rejects.toThrow('no encontrado en catalogo_cache');
       expect(wooFetch).not.toHaveBeenCalled();
     });
+
+    it('rechaza SKU homónimo antes de tocar Woo', async () => {
+      db.prepare(
+        'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, actualizado_en) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(101, 'Bicicleta duplicada', 'BIKE-001', 'simple', 2, new Date().toISOString());
+
+      await expect(setStockWc(WOO_CFG, db, 'BIKE-001', 10))
+        .rejects.toThrow('SKU "BIKE-001" ambiguo');
+      expect(wooFetch).not.toHaveBeenCalled();
+    });
   });
 
   describe('getStockLiveWc', () => {

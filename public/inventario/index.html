@@ -150,7 +150,8 @@
   /* ===== P2 · Bloques de conteo ===== */
   .banner-escaneo{display:none;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:700;margin-bottom:10px;
        border:1px solid var(--warning-bd);background:var(--warning-bg);color:var(--warning);}
-  .banner-escaneo.on{display:block;}
+  .banner-escaneo.on{display:block;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:50;width:min(680px,calc(100% - 24px));pointer-events:none;}
+  .control-reintento{position:fixed;top:58px;left:50%;transform:translateX(-50%);z-index:51;width:min(680px,calc(100% - 24px));padding:10px;text-align:center;background:var(--warning-bg);border:1px solid var(--warning-bd);border-radius:10px;}
   .bloque-titulo{font-size:13px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px;}
   .collapse{border:1px solid var(--border);border-radius:12px;background:var(--surface);margin-top:14px;}
   .collapse.llamador{border-color:var(--accent);background:var(--accent-dim);}
@@ -365,6 +366,10 @@
   <a class="homelink" href="/herramientas/home/">&larr; Inicio</a>
 </header>
 <main>
+  <div class="banner-escaneo" id="banner-escaneo" role="status" aria-live="polite"></div>
+  <div class="control-reintento" id="control-reintento" hidden>
+    <button type="button" class="btn primary" id="btn-reintentar-escaneo">Reintentar</button>
+  </div>
 
   <!-- Vista 1: Inicio -->
   <div class="vista" id="vista-inicio">
@@ -438,8 +443,6 @@
       <span class="txt"><span class="led" id="conteo-led"></span><span id="conteo-titulo">Contando</span></span>
       <span class="chip-guardado" id="conteo-guardado">Guardado</span>
     </div>
-
-    <div class="banner-escaneo" id="banner-escaneo" role="status" aria-live="polite"></div>
 
     <input id="scan" aria-label="Escanear código EAN o SKU" inputmode="none" autocomplete="off" autocorrect="off"
            autocapitalize="off" spellcheck="false" autofocus placeholder="Escaneá un código (EAN o SKU)…">
@@ -545,7 +548,7 @@
   <div class="confirm-box">
     <h3>Este producto ya tiene otro código</h3>
     <p class="confirm-resumen">En WooCommerce este producto tiene un código distinto al que acabás de escanear.
-      No se modificó nada todavía.</p>
+      No se modificó WooCommerce todavía.</p>
     <div class="codigo-linea"><span class="etq">Ya está en Woo</span>
       <span class="codigo-mono" id="conflicto-gtin-actual">—</span></div>
     <div class="codigo-linea"><span class="etq">Recién escaneado</span>
@@ -557,7 +560,7 @@
 
 <!-- Sheet: EAN nuevo (se abre sobre la vista Conteo, sin bloquear el input de escaneo) -->
 <div class="sheet-veil" id="ean-veil"></div>
-<div class="sheet" id="ean-sheet" role="dialog" aria-label="Asociar EAN nuevo">
+<div class="sheet" id="ean-sheet" aria-label="Asociar EAN nuevo">
   <h3>EAN sin asociar</h3>
   <div class="ean-grande" id="ean-sheet-codigo">—</div>
   <label for="ean-sheet-buscar">Buscar producto por SKU o nombre</label>
@@ -1069,27 +1072,43 @@
     scanInput.focus();
   });
 
-  function cargarConteo(){
+  function cargarConteo(propagarError){
     var id = sesionId();
     if(!id) return Promise.resolve();
     // Devuelve la promesa: una escritura encolada tiene que poder ESPERAR a que el estado
     // local se refresque antes de soltar la cola, si no la operación siguiente calcula su
     // base contra datos viejos (ver el comentario de colaEscrituras).
     return fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
-      if(!j || !j.ok) return;
+      if(!j || !j.ok){
+        var errorSesion = new Error((j && j.error) || 'La sesión ya no está disponible.');
+        errorSesion.sesionInvalida = true;
+        throw errorSesion;
+      }
       state.sesion = j.sesion;
       conteoData.items = j.items || [];
       conteoData.pendientes = j.pendientes || [];
       conteoTitulo.textContent = 'Contando · ' + alcanceTexto(j.sesion);
       renderConteo();
+      ocultarControlReintento();  // Carga exitosa: quita el control de reintento
       // El render se pospone si hay un campo de cantidad enfocado; el foco tenía que
       // respetar lo mismo. Si no, un escaneo que llega mientras alguien tipea la cantidad
       // le saca el cursor de abajo del dedo aunque el número no se pierda.
-      if(!hayInputCantidadEnfocado()) scanInput.focus();
-    }).catch(function(){
+      // Un diálogo abierto es dueño del foco: el refresco no puede devolvérselo
+      // al scanner por detrás de la veil (en particular, el conflicto GTIN).
+      if(!hayInputCantidadEnfocado() && !document.querySelector('.confirm-veil.open')) scanInput.focus();
+    }).catch(function(err){
+      if(err && err.sesionInvalida){
+        ocultarControlReintento();
+        mostrarBannerEscaneo(err.message);
+        mostrarVista('inicio');
+        if(propagarError) throw err;
+        return false;
+      }
       // Fail-closed: si no se puede refrescar contra el servidor, avisar en vez
       // de dejar en pantalla un número que la base puede no tener.
       mostrarBannerEscaneo('No se pudo actualizar el conteo (sin conexión). Mostrando los últimos datos confirmados.');
+      if(propagarError) throw err;
+      return false;
     });
   }
 
@@ -1505,13 +1524,26 @@
 
   // Aviso no bloqueante (ej. escaneo fuera del alcance de la sesión).
   var bannerEscaneo = document.getElementById('banner-escaneo');
+  var controlReintento = document.getElementById('control-reintento');
   var bannerTimer = null;
+  var estadoReintentoPendiente = false;
+
   function mostrarBannerEscaneo(texto){
     if(!texto){ bannerEscaneo.classList.remove('on'); bannerEscaneo.textContent = ''; return; }
     bannerEscaneo.textContent = '⚑ ' + texto;
     bannerEscaneo.classList.add('on');
     clearTimeout(bannerTimer);
     bannerTimer = setTimeout(function(){ bannerEscaneo.classList.remove('on'); }, 6000);
+  }
+
+  function mostrarControlReintento(){
+    controlReintento.hidden = false;
+    document.getElementById('btn-reintentar-escaneo').focus();
+  }
+
+  function ocultarControlReintento(){
+    controlReintento.hidden = true;
+    estadoReintentoPendiente = false;
   }
 
   function escanear(codigo){
@@ -1543,11 +1575,20 @@
       // el incremento que el servidor ya aplicó.
       return cargarConteo();
     }).catch(function(){
-      // Un escaneo que se pierde por red no puede fallar en silencio: el operario oye el
-      // beep (que es local, previo al fetch), ve que el número no sube, y no tiene forma de
-      // saber si contó mal o si se cayó la red. Con el corte de CORTE_ESCRITURA_MS esto pasó
-      // a ser alcanzable de verdad, no teórico.
-      mostrarBannerEscaneo('No se pudo registrar el escaneo (sin conexión). Volvé a pasarlo.');
+      // El POST pudo haberse aplicado aunque su respuesta se haya perdido. Nunca pedir un
+      // reescaneo ciego: primero reconciliar contra la sesión persistida.
+      return cargarConteo(true).then(function(){
+        mostrarBannerEscaneo('La respuesta del escaneo se perdió. Verificá la cantidad mostrada antes de continuar; no vuelvas a pasarlo a ciegas.');
+        ocultarControlReintento();
+      }).catch(function(err){
+        if(err && err.sesionInvalida) return;
+        // Fail-closed: bloquea scanner y muestra botón Reintentar
+        scanInput.disabled = true;
+        document.getElementById('btn-camara').disabled = true;
+        estadoReintentoPendiente = true;
+        mostrarBannerEscaneo('No se pudo confirmar si el escaneo quedó guardado. Usá Reintentar para verificar.');
+        mostrarControlReintento();
+      });
     });
     });
   }
@@ -1561,6 +1602,26 @@
       if(codigo){ beep(); escanear(codigo); }
     }
   });
+
+  document.getElementById('btn-reintentar-escaneo').addEventListener('click', function(){
+    if(!estadoReintentoPendiente) return;
+    var boton = document.getElementById('btn-reintentar-escaneo');
+    boton.disabled = true;
+    // Reintenta cargarConteo: si recupera, rehabilita controles y enfoca scanner
+    cargarConteo(true).then(function(){
+      ocultarControlReintento();
+      scanInput.disabled = false;
+      document.getElementById('btn-camara').disabled = false;
+      scanInput.focus();
+      mostrarBannerEscaneo('Sesión recuperada. Podés continuar escaneando.');
+    }).catch(function(){
+      // Sigue fail-closed si no recupera
+      boton.disabled = false;
+      mostrarBannerEscaneo('Todavía no se puede verificar. Probá de nuevo más tarde.');
+      mostrarControlReintento();
+    });
+  });
+
   document.querySelectorAll('.chip-filtro').forEach(function(chip){
     chip.addEventListener('click', function(){
       document.querySelectorAll('.chip-filtro').forEach(function(c){ c.classList.remove('on'); });
@@ -1647,14 +1708,18 @@
     eanSheet.classList.add('open');
     // No le robamos el foco al input de escaneo: la pistola sigue funcionando detrás.
   }
-  function cerrarSheetEan(){
+  function cerrarSheetEan(mantenerFoco){
     eanVeil.classList.remove('open');
     eanSheet.classList.remove('open');
     eanActual = null;
-    scanInput.focus();
+    if(mantenerFoco !== false) scanInput.focus();
   }
-  eanVeil.addEventListener('click', cerrarSheetEan);
-  document.getElementById('ean-sheet-despues').addEventListener('click', cerrarSheetEan);
+  eanVeil.addEventListener('click', function(){
+    cerrarSheetEan(true);  // Mantener foco en scanInput al cerrar por veil/botón
+  });
+  document.getElementById('ean-sheet-despues').addEventListener('click', function(){
+    cerrarSheetEan(true);  // Mantener foco en scanInput
+  });
 
   eanSheetBuscar.addEventListener('input', debounce(function(){
     var q = eanSheetBuscar.value.trim();
@@ -1703,28 +1768,69 @@
   var conflictoEanNuevo = document.getElementById('conflicto-gtin-nuevo');
   var conflictoPendiente = null; // { ean, sku }
 
+  function abrirDialogoAccesible(veil, cerrar){
+    veil._focoPrevio = document.activeElement;
+    veil._cerrarConEsc = cerrar;
+    setTimeout(function(){
+      var primero = veil.querySelector('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]');
+      if(primero) primero.focus();
+    }, 0);
+  }
+  function cerrarDialogoAccesible(veil){
+    var previo = veil._focoPrevio;
+    veil._cerrarConEsc = null;
+    // Restaura foco solo si el elemento previo sigue conectado al DOM y es visible.
+    // Si no, fallback a scanInput para que la pistola HID siga escribiendo.
+    var visible = previo && previo.focus && previo.ownerDocument && document.contains(previo)
+      && (previo === document.body || previo.offsetParent !== null || previo.getClientRects().length > 0);
+    if(visible){
+      previo.focus();
+    } else if(scanInput && document.contains(scanInput)){
+      scanInput.focus();
+    }
+  }
+  document.addEventListener('keydown', function(e){
+    var abiertos = [document.getElementById('codigo-conflicto-veil'), document.getElementById('cierre-veil'), document.getElementById('confirm-veil')]
+      .filter(function(v){ return v && v.classList.contains('open'); });
+    var veil = abiertos[0];
+    if(!veil) return;
+    if(e.key === 'Escape' && veil._cerrarConEsc){ e.preventDefault(); veil._cerrarConEsc(); return; }
+    if(e.key !== 'Tab') return;
+    var focos = Array.prototype.slice.call(veil.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]'));
+    if(!focos.length) return;
+    var primero = focos[0], ultimo = focos[focos.length - 1];
+    if(e.shiftKey && document.activeElement === primero){ e.preventDefault(); ultimo.focus(); }
+    else if(!e.shiftKey && document.activeElement === ultimo){ e.preventDefault(); primero.focus(); }
+  });
+
   function abrirConflictoCodigo(ean, sku, gtinActual){
     conflictoPendiente = { ean: ean, sku: sku };
     conflictoEanActual.textContent = gtinActual || '—';
     conflictoEanNuevo.textContent = ean || '—';
     conflictoVeil.classList.add('open');
+    abrirDialogoAccesible(conflictoVeil, cerrarConflictoCodigo);
   }
   function cerrarConflictoCodigo(){
     conflictoVeil.classList.remove('open');
     conflictoPendiente = null;
+    cerrarDialogoAccesible(conflictoVeil);
   }
-  document.getElementById('btn-conflicto-dejar').addEventListener('click', cerrarConflictoCodigo);
+  document.getElementById('btn-conflicto-dejar').addEventListener('click', function(){
+    cerrarConflictoCodigo();
+  });
   document.getElementById('btn-conflicto-reemplazar').addEventListener('click', function(){
     var p = conflictoPendiente;
     cerrarConflictoCodigo();
     if(p) asociarEan(p.ean, p.sku, true);
   });
 
+  var asociarSeq = 0;
   function asociarEan(ean, sku, pisarCodigo){
     var id = sesionId();
     if(!id) return;
     if(asociarEnVuelo) return;   // esta request ahora incluye un PATCH a Woo: sin esto, el
     asociarEnVuelo = true;       // operario impaciente dispara varios PATCH del mismo código
+    var miSeq = ++asociarSeq;
     var body = { ean: ean, sku: sku };
     if(pisarCodigo) body.pisar_codigo = true;
     fetch('/api/inventario/sesiones/' + id + '/asociar', opcionesConCorte({
@@ -1742,17 +1848,21 @@
         if(c && c.estado === 'conflicto'){
           // No se tocó nada en el backend: la asociación local ya quedó hecha (item real),
           // pero el código en Woo sigue esperando la decisión del operario.
+          asociarEnVuelo = false;
+          // Primero cerrar la hoja sin devolver el foco al scanner; después abrir el
+          // diálogo. Así ni la hoja ni el refresco pueden dejar el modal detrás del foco.
+          cerrarSheetEan(false);
           abrirConflictoCodigo(ean, sku, c.gtin_actual);
         } else {
           tratarCodigoSubido(j);
+          cerrarSheetEan();
         }
-        cerrarSheetEan();
         if(vistaActivaNombre() === 'revision') return cargarRevision();
         return cargarConteo();
       }
     }).catch(function(){
       mostrarBannerEscaneo('No se pudo asociar el código (sin conexión). Probá de nuevo.');
-    }).then(function(){ asociarEnVuelo = false; });
+    }).then(function(){ if(miSeq === asociarSeq) asociarEnVuelo = false; });
   }
   var asociarEnVuelo = false;
 
@@ -1855,17 +1965,27 @@
     '</div>';
   }
 
-  function cargarRevision(){
+  function cargarRevision(propagarError){
     var id = sesionId();
     if(!id) return Promise.resolve();
     // Devuelve la promesa: quien acaba de escribir necesita esperar el refresco antes de
     // mostrar un resumen, o mostraría uno calculado sobre datos previos a su propia escritura.
     return fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
-      if(!j || !j.ok) return;
+      if(!j || !j.ok){
+        var errorSesion = new Error((j && j.error) || 'La sesión ya no está disponible.');
+        errorSesion.sesionInvalida = true;
+        throw errorSesion;
+      }
       state.sesion = j.sesion;
       revisionData.items = j.items || [];
       revisionData.pendientes = j.pendientes || [];
       renderRevision();
+      return true;
+    }).catch(function(err){
+      mostrarBannerEscaneo(err.message || 'No se pudo actualizar la revisión.');
+      if(err && err.sesionInvalida) mostrarVista('inicio');
+      if(propagarError) throw err;
+      return false;
     });
   }
 
@@ -1933,6 +2053,7 @@
     document.getElementById('confirm-subas').textContent = '+' + n(subas) + ' suben';
     document.getElementById('confirm-bajas').textContent = '−' + n(bajas) + ' bajan';
     confirmVeil.classList.add('open');
+    abrirDialogoAccesible(confirmVeil, cerrarModalConfirmacion);
   }
 
   function holdReset(){
@@ -1944,6 +2065,7 @@
     confirmVeil.classList.remove('open');
     if(holdTimer){ clearTimeout(holdTimer); holdTimer = null; }
     holdReset();
+    cerrarDialogoAccesible(confirmVeil);
   }
 
   function holdStart(e){
@@ -2015,10 +2137,12 @@
     });
     actualizarDisabledCierre();
     cierreVeil.classList.add('open');
+    abrirDialogoAccesible(cierreVeil, cerrarPantallaCierre);
   }
 
   function cerrarPantallaCierre(){
     cierreVeil.classList.remove('open');
+    cerrarDialogoAccesible(cierreVeil);
   }
 
   function skusNoTildadosCierre(){
@@ -2061,7 +2185,7 @@
       // Refrescar ANTES de abrir el modal: su resumen sale de revisionData, que todavía no
       // tiene los ceros recién creados. Sin esto el operario vería menos bajas de las que
       // realmente se van a escribir en Woo, justo en la pantalla que confirma la escritura.
-      return cargarRevision().then(function(){
+      return cargarRevision(true).then(function(){
         cerrarPantallaCierre();
         abrirModalConfirmacion();
       }).catch(function(){
@@ -2076,8 +2200,9 @@
     var skus = skusNoTildadosCierre();
     if(!skus.length){ cerrarPantallaCierre(); mostrarVista('conteo'); return; }
     btnCierreGuardar.disabled = true;
-    cerrarEnCero(skus).then(function(){
+    cerrarEnCero(skus).then(function(j){
       btnCierreGuardar.disabled = false;
+      if(!j || !j.ok) return;
       cerrarPantallaCierre();
       mostrarVista('conteo');
     });

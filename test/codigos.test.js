@@ -188,6 +188,51 @@ describe('POST /api/codigos/asignar', () => {
     db.close();
   });
 
+  it('SKU homónimo: resolver por sku con múltiples productos → 400 con codigo "sku_ambiguo", sin llamar Woo', async () => {
+    const db = openDb(TEST_DB);
+    // Dos productos con el mismo SKU (homónimos).
+    insertProducto(db, { id_woo: 100, sku: 'FB-AMBIGUO', tipo: 'simple', stock: 5 });
+    insertProducto(db, { id_woo: 101, sku: 'FB-AMBIGUO', tipo: 'simple', stock: 3 });
+
+    const app = buildApp(db);
+    const res = await request(app).post('/api/codigos/asignar').send({ sku: 'FB-AMBIGUO', gtin: '7791234500001' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.codigo).toBe('sku_ambiguo');
+    expect(res.body.error).toContain('FB-AMBIGUO');
+    expect(res.body.error).toContain('2 productos');
+    // Verificar que Woo NO fue llamado.
+    expect(axios.request).not.toHaveBeenCalled();
+    // Verificar que la DB no fue tocada.
+    expect(db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo IN (100,101)').all()).toEqual([
+      { gtin: null },
+      { gtin: null },
+    ]);
+
+    db.close();
+  });
+
+  it('SKU homónimo con id_woo explícito: resuelve el producto específico sin error', async () => {
+    const db = openDb(TEST_DB);
+    // Dos productos con el mismo SKU.
+    insertProducto(db, { id_woo: 100, sku: 'FB-AMBIGUO', tipo: 'simple', stock: 5 });
+    insertProducto(db, { id_woo: 101, sku: 'FB-AMBIGUO', tipo: 'simple', stock: 3 });
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+
+    const app = buildApp(db);
+    // Especificar id_woo desambigua.
+    const res = await request(app).post('/api/codigos/asignar').send({ id_woo: 101, gtin: '7791234500001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.id_woo).toBe(101);
+    // Verificar que Woo SÍ fue llamado (no fue rechazado antes).
+    expect(axios.request).toHaveBeenCalled();
+
+    db.close();
+  });
+
   it('sobrescritura: reasignar a un gtin nuevo borra la fila ean_sku del gtin viejo (no queda huérfana)', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 100, sku: 'FB-100', tipo: 'simple', stock: 5 });

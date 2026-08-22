@@ -203,6 +203,37 @@ export function inventarioRouter(db, wooCfg) {
 
   const catalogoContable = () => db.prepare(SQL_CATALOGO_CONTABLE).all();
 
+  // Fuente única de verdad para "pendiente": pertenece al snapshot de la sesión y no
+  // existe todavía un conteo con ese SKU. La pantalla, los cierres en cero y el gate de
+  // confirmación deben consultar exactamente este mismo universo.
+  function pendientesDeSesion(sesionId, bloque = null) {
+    return db.prepare(`
+      SELECT a.sku, a.nombre, a.bloque, a.stock_inicial, a.marca,
+             a.categoria_principal,
+             (SELECT c.stock FROM catalogo_cache c WHERE c.sku=a.sku LIMIT 1) AS stock_actual
+      FROM inventario_sesion_alcance a
+      WHERE a.sesion_id=?
+        AND NOT EXISTS (
+          SELECT 1 FROM inventario_conteos t
+          WHERE t.sesion_id=a.sesion_id AND t.sku=a.sku
+        )
+      ORDER BY CASE a.bloque WHEN 'con_stock' THEN 0 ELSE 1 END,
+               COALESCE(a.categoria_principal,'') COLLATE NOCASE,
+               COALESCE(a.marca,'') COLLATE NOCASE,
+               COALESCE(a.nombre,'') COLLATE NOCASE
+    `).all(sesionId)
+      .filter(p => bloque == null || p.bloque === bloque)
+      .map(p => ({
+        sku: p.sku,
+        nombre: p.nombre,
+        bloque: p.bloque,
+        marca: p.marca,
+        categoria_principal: p.categoria_principal,
+        stock_inicial: p.stock_inicial,
+        stock_woo: p.stock_actual ?? p.stock_inicial,
+      }));
+  }
+
   // Estado del código escaneado, para que el frontend muestre el aviso correcto:
   //   ok               → producto real dentro del alcance
   //   fuera_de_alcance → producto real, pero fuera del alcance elegido (solo aviso)
@@ -420,10 +451,14 @@ export function inventarioRouter(db, wooCfg) {
 
     // LEFT JOIN en una sola consulta: esta pantalla se refresca después de cada
     // escaneo, no conviene compilar y correr un SELECT por ítem contado.
+    // Resolución determinista (subselect LIMIT 1) para evitar duplicar ítems si
+    // hay SKU homónimos en catalogo_cache.
     const conteos = db.prepare(`
-      SELECT t.*, p.sku AS prod_sku, p.stock AS prod_stock, p.nombre AS prod_nombre
+      SELECT t.*,
+             (SELECT sku FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_sku,
+             (SELECT stock FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_stock,
+             (SELECT nombre FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_nombre
       FROM inventario_conteos t
-      LEFT JOIN catalogo_cache p ON p.sku = t.sku
       WHERE t.sesion_id = ?
       ORDER BY t.id
     `).all(sesion.id);
@@ -445,29 +480,9 @@ export function inventarioRouter(db, wooCfg) {
       };
     });
 
-    const skusContados = new Set(items.map(i => i.sku).filter(Boolean));
     // Orden: primero con stock, después por categoría → marca → nombre. El bloque
     // viene congelado del snapshot, no se recalcula contra el stock actual.
-    const pendientes = db.prepare(`
-      SELECT a.sku, a.nombre, a.bloque, a.stock_inicial, a.marca, a.categoria_principal, c.stock AS stock_actual
-      FROM inventario_sesion_alcance a
-      LEFT JOIN catalogo_cache c ON c.sku = a.sku
-      WHERE a.sesion_id = ?
-      ORDER BY CASE a.bloque WHEN 'con_stock' THEN 0 ELSE 1 END,
-               COALESCE(a.categoria_principal,'') COLLATE NOCASE,
-               COALESCE(a.marca,'') COLLATE NOCASE,
-               COALESCE(a.nombre,'') COLLATE NOCASE
-    `).all(sesion.id)
-      .filter(p => !skusContados.has(p.sku))
-      .map(p => ({
-        sku: p.sku,
-        nombre: p.nombre,
-        bloque: p.bloque,
-        marca: p.marca,
-        categoria_principal: p.categoria_principal,
-        stock_inicial: p.stock_inicial,
-        stock_woo: p.stock_actual ?? p.stock_inicial,
-      }));
+    const pendientes = pendientesDeSesion(sesion.id);
 
     res.json({
       ok: true,
@@ -645,12 +660,9 @@ export function inventarioRouter(db, wooCfg) {
 
   // Inserta filas de conteo en 0 para SKUs del alcance que todavía no se contaron.
   // `bloque` acota a qué mitad del alcance se aplica; devuelve cuántas filas creó.
-  function cerrarEnCero(sesionId, skusPedidos, bloque) {
-    const candidatos = db.prepare(`
-      SELECT a.sku FROM inventario_sesion_alcance a
-      WHERE a.sesion_id=? AND a.bloque=?
-        AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)
-    `).all(sesionId, bloque, sesionId).map(r => r.sku);
+  function cerrarEnCero(sesionId, skusPedidos, bloque, candidatosPrecalculados = null) {
+    const candidatos = candidatosPrecalculados
+      || pendientesDeSesion(sesionId, bloque).map(r => r.sku);
     const pedidosSet = new Set(skusPedidos);
     const aCerrar = candidatos.filter(s => pedidosSet.has(s));
     const insertar = db.prepare(`INSERT OR IGNORE INTO inventario_conteos
@@ -691,12 +703,12 @@ export function inventarioRouter(db, wooCfg) {
     }
 
     const aCerrarTodos = todos
-      ? db.prepare(`SELECT a.sku FROM inventario_sesion_alcance a
-           WHERE a.sesion_id=? AND a.bloque='sin_stock'
-             AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)`)
-          .all(sesion.id, sesion.id).map(r => r.sku)
+      ? pendientesDeSesion(sesion.id, 'sin_stock').map(r => r.sku)
       : pedidos;
-    res.json({ ok: true, ...cerrarEnCero(sesion.id, aCerrarTodos, 'sin_stock') });
+    res.json({
+      ok: true,
+      ...cerrarEnCero(sesion.id, aCerrarTodos, 'sin_stock', todos ? aCerrarTodos : null),
+    });
   });
 
   // Cierra en 0 productos que SÍ tenían stock ("lo busqué, no había ninguna"). A diferencia
@@ -708,6 +720,12 @@ export function inventarioRouter(db, wooCfg) {
     if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
     asegurarAlcance(sesion);
 
+    if (req.body?.todos === true) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Los productos con stock se cierran uno por uno: elegí cuáles pasar a 0.',
+      });
+    }
     const pedidos = parseLista(req.body?.skus);
     if (!pedidos.length) {
       return res.status(400).json({
@@ -766,14 +784,9 @@ export function inventarioRouter(db, wooCfg) {
     // está cerrada y sus pendientes no se pueden decidir nunca más: bloquearlo no protegería
     // nada —el stock de esos ya quedó sin tocar— y dejaría trabados para siempre los ajustes
     // que fallaron por un error de Woo. La sesión 5 de producción está justo así.
-    const pendientesConStock = sesion.estado !== 'abierta' ? [] : db.prepare(`
-      SELECT a.sku, a.nombre, COALESCE(c.stock, a.stock_inicial) AS stock_woo
-      FROM inventario_sesion_alcance a
-      LEFT JOIN catalogo_cache c ON c.sku = a.sku
-      WHERE a.sesion_id=? AND a.bloque='con_stock'
-        AND a.sku NOT IN (SELECT COALESCE(sku,'') FROM inventario_conteos WHERE sesion_id=?)
-      ORDER BY a.sku
-    `).all(sesion.id, sesion.id);
+    const pendientesConStock = sesion.estado !== 'abierta'
+      ? []
+      : pendientesDeSesion(sesion.id, 'con_stock');
     if (pendientesConStock.length) {
       return res.status(409).json({
         ok: false,
