@@ -1167,6 +1167,24 @@ en memoria del último refresh de `lib/mlClient.js`.
     (`GET /api/sync/ml-auth-url`, requiere permiso `config-ml`) — para que el banner enlace ahí.
   - Si `ml_oauth_token` no tiene fila (nunca se hizo bootstrap): `vencido:true`,
     `requiere_reautorizacion:true`, `expires_at`/`actualizado_en` en `null`.
+## Consulta de Precios: asociación y subida de GTIN (C2)
+
+`POST /api/consulta-precios/asociar` recibe `{ ean, sku, id_woo?, pisar_codigo? }`. Enseña el
+mapa local `ean_sku` y, si `ean` pasa la validación GS1 (8/12/13/14 dígitos con checksum),
+intenta escribir `global_unique_id` en Woo reutilizando `lib/gtinWoo.js`.
+
+- `codigo.estado = no_valido`: se conserva el mapa local; no se llama a Woo.
+- `sin_cambio`: el producto ya tenía ese GTIN; se conserva el mapa sin PATCH.
+- `conflicto`: el producto tiene otro GTIN; no se escribe nada hasta repetir con
+  `pisar_codigo: true`.
+- `subido`: Woo confirmó el PATCH y se actualizan `catalogo_cache.gtin` y `ean_sku`.
+- `fallo`: Woo rechazó o no respondió; el mapa local se conserva, pero el cache no afirma que
+  el GTIN haya sido subido. `motivo` contiene `woo` o el rechazo local.
+
+Un SKU homónimo responde 400 con `codigo: "sku_ambiguo"`; el cliente debe enviar `id_woo` para
+desambiguar. La asociación local es fail-open ante fallos remotos porque el trabajo de
+mostrador no debe perderse.
+
 ## Búsqueda con comodines SQL escapados (fix hallazgo E2E)
 
 `GET /api/codigos/buscar?q=`, `GET /api/sync/buscar-sku?q=` y
