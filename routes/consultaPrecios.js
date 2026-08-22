@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { precioContado } from '../lib/mlPrecios.js';
 import { armarLike } from '../lib/busqueda.js';
+import { looksLikeGtin, persistirGtinConfirmado, subirGtinAWoo } from '../lib/gtinWoo.js';
 
 const now = () => new Date().toISOString();
 
@@ -37,16 +38,34 @@ export function pareceEan(codigo) {
 function productoParaCard(row) {
   const p = productoDesdeFilaCatalogo(row);
   return {
-    sku: p.sku, nombre: p.nombre, marca: p.marca, categorias: p.categorias,
-    precio: precioContado(p.precio), stock: p.stock, tipo: p.tipo, img: p.img,
+    id_woo: p.id_woo, sku: p.sku, nombre: p.nombre, marca: p.marca, categorias: p.categorias,
+    precio: precioContado(p.precio), stock: p.stock, tipo: p.tipo, id_padre: p.id_padre,
+    gtin: p.gtin, img: p.img,
   };
 }
 
-export function consultaPreciosRouter(db) {
+export function consultaPreciosRouter(db, cfg = {}) {
   const router = Router();
 
   const porSku = db.prepare("SELECT * FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1");
+  const porId = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = ? LIMIT 1');
+  const contarPorSku = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku = ? AND sku <> ''");
   const eanRow = db.prepare('SELECT sku FROM ean_sku WHERE ean = ?');
+  const guardarEan = db.prepare(`
+    INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?, ?, ?)
+    ON CONFLICT(ean) DO UPDATE SET sku = excluded.sku, actualizado_en = excluded.actualizado_en
+  `);
+
+  function guardarMapa(ean, sku) {
+    guardarEan.run(ean, sku, now());
+  }
+
+  function resolverProducto({ sku, idWoo }) {
+    if (idWoo != null && idWoo !== '') return porId.get(Number(idWoo));
+    const cantidad = contarPorSku.get(sku);
+    if (cantidad.n > 1) return { ambiguo: cantidad.n };
+    return porSku.get(sku);
+  }
 
   // Búsqueda unificada: SKU exacto → EAN conocido → ¿parece EAN nuevo? → nada.
   router.get('/buscar', (req, res) => {
@@ -71,14 +90,73 @@ export function consultaPreciosRouter(db) {
   router.post('/ean', (req, res) => {
     const ean = String(req.body?.ean || '').trim();
     const sku = String(req.body?.sku || '').trim();
+    const idWoo = req.body?.id_woo;
     if (!ean || !sku) return res.status(400).json({ ok: false, error: 'ean y sku requeridos' });
-    const fila = porSku.get(sku);
+    const fila = resolverProducto({ sku, idWoo });
+    if (fila?.ambiguo) {
+      return res.status(400).json({
+        ok: false,
+        codigo: 'sku_ambiguo',
+        error: `El SKU '${sku}' es ambiguo: hay ${fila.ambiguo} productos. Especificá el id_woo.`,
+      });
+    }
     if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
-    db.prepare(`
-      INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?, ?, ?)
-      ON CONFLICT(ean) DO UPDATE SET sku = excluded.sku, actualizado_en = excluded.actualizado_en
-    `).run(ean, sku, now());
+    guardarMapa(ean, sku);
     res.json({ ok: true, producto: productoParaCard(fila) });
+  });
+
+  // Enseña el EAN y, si es válido, intenta dejarlo también en Woo. La asociación
+  // local es fail-open: el trabajo del mostrador no se pierde si Woo rechaza el código.
+  router.post('/asociar', async (req, res) => {
+    const ean = String(req.body?.ean || '').trim();
+    const sku = String(req.body?.sku || '').trim();
+    const idWoo = req.body?.id_woo;
+    const pisarCodigo = req.body?.pisar_codigo === true;
+    if (!ean || !sku) return res.status(400).json({ ok: false, error: 'ean y sku requeridos' });
+
+    const fila = resolverProducto({ sku, idWoo });
+    if (fila?.ambiguo) {
+      return res.status(400).json({
+        ok: false,
+        codigo: 'sku_ambiguo',
+        error: `El SKU '${sku}' es ambiguo: hay ${fila.ambiguo} productos. Especificá el id_woo.`,
+      });
+    }
+    if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+
+    const codigoBase = { gtin: ean };
+    if (!looksLikeGtin(ean)) {
+      guardarMapa(ean, fila.sku);
+      return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'no_valido' } });
+    }
+
+    const gtinActual = String(fila.gtin || '').trim();
+    if (gtinActual && gtinActual !== ean && !pisarCodigo) {
+      return res.json({
+        ok: true,
+        producto: productoParaCard(fila),
+        codigo: { ...codigoBase, estado: 'conflicto', gtin_actual: gtinActual },
+      });
+    }
+
+    if (gtinActual === ean) {
+      guardarMapa(ean, fila.sku);
+      return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'sin_cambio' } });
+    }
+
+    const woo = await subirGtinAWoo(cfg, fila, ean);
+    if (!woo.ok) {
+      guardarMapa(ean, fila.sku);
+      return res.json({
+        ok: true,
+        producto: productoParaCard(fila),
+        codigo: { ...codigoBase, estado: 'fallo', motivo: woo.motivo || 'woo', error: woo.error },
+      });
+    }
+
+    persistirGtinConfirmado(db, fila, ean, fila.sku);
+    const actualizado = porId.get(fila.id_woo) || fila;
+    return res.json({ ok: true, producto: productoParaCard(actualizado), codigo: { ...codigoBase, estado: 'subido' } });
   });
 
   // Sembrado en lote desde el mapa del Contador de inventario. No valida contra el catálogo.
@@ -102,7 +180,7 @@ export function consultaPreciosRouter(db) {
     if (!q) return res.json({ ok: true, data: [] });
     const like = armarLike(q);
     const rows = db.prepare(`
-      SELECT sku, nombre, stock, tipo FROM catalogo_cache
+      SELECT id_woo, sku, nombre, stock, tipo, id_padre FROM catalogo_cache
       WHERE (sku LIKE ? ESCAPE '\\' OR nombre LIKE ? ESCAPE '\\') AND sku <> ''
       ORDER BY nombre ASC LIMIT 20
     `).all(like, like);

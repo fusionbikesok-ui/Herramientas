@@ -37,6 +37,7 @@
   .b-ean{background:rgba(52,211,153,.14);color:var(--green);}
   .msg{margin-top:16px;padding:16px;border-radius:12px;border:1px solid var(--border);background:var(--panel);font-size:14px;}
   .msg.warn{border-color:rgba(251,191,36,.4);}
+  .msg.ok{border-color:rgba(52,211,153,.4);}
   .msg.err{border-color:rgba(248,113,113,.4);color:var(--red);}
   .learn{margin-top:10px;}
   .learn input{width:100%;font-size:15px;padding:10px 12px;border-radius:9px;border:1px solid var(--border2);background:var(--bg);color:var(--txt);outline:none;}
@@ -180,25 +181,41 @@ function mostrarAprender(ean, textoTitulo){
       var d = await r.json();
       if(!d.ok || !d.data.length){ sugs.style.display='none'; return; }
       sugs.innerHTML = d.data.map(function(row){
-        return '<div class="sug" data-sku="'+esc(row.sku)+'"><b>'+esc(row.sku)+'</b> — '+esc(row.nombre)+'</div>';
+        return '<div class="sug" data-sku="'+esc(row.sku)+'" data-id-woo="'+esc(row.id_woo == null ? '' : row.id_woo)+'"><b>'+esc(row.sku)+'</b> — '+esc(row.nombre)+'</div>';
       }).join('');
       sugs.style.display='block';
       Array.prototype.forEach.call(sugs.querySelectorAll('.sug'), function(el){
-        el.onclick = function(){ ensenarEan(ean, el.dataset.sku); };
+        el.onclick = function(){ ensenarEan(ean, el.dataset.sku, el.dataset.idWoo || null, false); };
       });
     }, 220);
   };
   input.focus();
 }
 
-async function ensenarEan(ean, sku){
-  var r = await fetch('/api/consulta-precios/ean', {
+function mostrarEstadoCodigo(codigo){
+  if(!codigo || codigo.estado === 'sin_cambio') return '';
+  var textos = {
+    subido: 'Código guardado en WooCommerce y asociado localmente.',
+    no_valido: 'Se guardó la asociación local. El código no tiene un formato GTIN válido y no se subió a WooCommerce.',
+    fallo: 'Se guardó la asociación local, pero WooCommerce no aceptó el código: ' + (codigo.error || 'error desconocido'),
+  };
+  if(codigo.estado === 'conflicto') return '<div class="msg warn" style="margin-top:10px">Este producto ya tiene el código <b>'+esc(codigo.gtin_actual)+'</b>. No se modificó Woo.<br><button class="btn sec" id="btn-pisar-ean" type="button" style="margin-top:10px">Reemplazarlo por '+esc(codigo.gtin)+'</button></div>';
+  var clase = codigo.estado === 'fallo' ? 'warn' : (codigo.estado === 'subido' ? 'ok' : '');
+  return '<div class="msg '+clase+'" style="margin-top:10px">'+esc(textos[codigo.estado] || '')+'</div>';
+}
+
+async function ensenarEan(ean, sku, idWoo, pisarCodigo){
+  var r = await fetch('/api/consulta-precios/asociar', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ ean: ean, sku: sku }),
+    body: JSON.stringify({ ean: ean, sku: sku, id_woo: idWoo || undefined, pisar_codigo: !!pisarCodigo }),
   });
   var d = await r.json();
   if(!d.ok){ resultEl.innerHTML = '<div class="msg err">'+esc(d.error||'No se pudo guardar')+'</div>'; return; }
   mostrarEncontrado(d.producto, 'ean');
+  var estado = mostrarEstadoCodigo(d.codigo);
+  if(estado){ resultEl.insertAdjacentHTML('beforeend', estado); }
+  var pisar = document.getElementById('btn-pisar-ean');
+  if(pisar) pisar.onclick = function(){ ensenarEan(ean, sku, idWoo, true); };
   focusInput();
 }
 

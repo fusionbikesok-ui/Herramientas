@@ -116,7 +116,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
     enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
   }));
   app.use('/preparacion', express.static(path.join(__dirname, 'public/preparacion')));
-  app.use('/api/consulta-precios', consultaPreciosRouter(db));
+  app.use('/api/consulta-precios', consultaPreciosRouter(db, wooCfg));
   app.use('/consulta-precios', express.static(path.join(__dirname, 'public/consulta-precios')));
   app.use('/api/codigos', codigosRouter(db, wooCfg));
   app.use('/codigos', express.static(path.join(__dirname, 'public/codigos')));

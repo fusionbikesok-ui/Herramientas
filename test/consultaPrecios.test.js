@@ -1,13 +1,18 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
+import axios from 'axios';
 import { openDb } from '../db/index.js';
 import { consultaPreciosRouter, pareceEan } from '../routes/consultaPrecios.js';
 
+vi.mock('axios');
+
 const TEST_DB = './test/tmp-consulta-precios.sqlite';
 
-function appConDatos() {
+const CFG = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+
+function appConDatos(cfg = {}) {
   const db = openDb(TEST_DB);
   const now = new Date().toISOString();
   db.prepare(
@@ -16,7 +21,7 @@ function appConDatos() {
   db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('7791234567890', 'FB-40', now);
   const app = express();
   app.use(express.json());
-  app.use('/api/consulta-precios', consultaPreciosRouter(db));
+  app.use('/api/consulta-precios', consultaPreciosRouter(db, cfg));
   return { app, db };
 }
 
@@ -108,7 +113,7 @@ describe('GET /api/consulta-precios/buscar', () => {
 });
 
 describe('POST /api/consulta-precios/ean', () => {
-  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.resetAllMocks(); });
 
   it('rechaza SKU inexistente con 400', async () => {
     const { app, db } = appConDatos();
@@ -136,6 +141,95 @@ describe('POST /api/consulta-precios/ean', () => {
     await request(app).post('/api/consulta-precios/ean').send({ ean: '7791234567890', sku: 'FB-99' });
     const guardado = db.prepare('SELECT sku FROM ean_sku WHERE ean = ?').get('7791234567890');
     expect(guardado.sku).toBe('FB-99');
+    db.close();
+  });
+
+  it('SKU homónimo: no elige una fila arbitraria al enseñar sin id_woo', async () => {
+    const { app, db } = appConDatos();
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otra variante', 'FB-40', 'simple', 1, 100, new Date().toISOString());
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000002', sku: 'FB-40' });
+    expect(res.status).toBe(400);
+    expect(res.body.codigo).toBe('sku_ambiguo');
+    expect(db.prepare('SELECT 1 FROM ean_sku WHERE ean=?').get('7000000000002')).toBeUndefined();
+    db.close();
+  });
+});
+
+describe('POST /api/consulta-precios/asociar — subida opcional a Woo', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.resetAllMocks(); });
+
+  it('GTIN válido sin código: sube a Woo, actualiza cache y conserva el mapa EAN', async () => {
+    const { app, db } = appConDatos(CFG);
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res.status).toBe(200);
+    expect(res.body.codigo).toMatchObject({ estado: 'subido', gtin: '7791234567898' });
+    expect(axios.request).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://fusionbikes.com.ar/wp-json/wc/v3/products/1', method: 'patch',
+      data: { global_unique_id: '7791234567898' },
+    }));
+    expect(db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo=1').get().gtin).toBe('7791234567898');
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234567898').sku).toBe('FB-40');
+    db.close();
+  });
+
+  it('código no válido: enseña localmente y nunca llama a Woo', async () => {
+    const { app, db } = appConDatos(CFG);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567890', sku: 'FB-40' });
+    expect(res.body.codigo.estado).toBe('no_valido');
+    expect(axios.request).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234567890').sku).toBe('FB-40');
+    db.close();
+  });
+
+  it('otro GTIN existente: devuelve conflicto sin escribir ni mapear', async () => {
+    const { app, db } = appConDatos(CFG);
+    db.prepare('UPDATE catalogo_cache SET gtin=? WHERE id_woo=1').run('7791234500001');
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res.body.codigo).toMatchObject({ estado: 'conflicto', gtin_actual: '7791234500001' });
+    expect(axios.request).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234567898')).toBeUndefined();
+    db.close();
+  });
+
+  it('pisar_codigo explícito: reemplaza en Woo y limpia el mapa del código anterior', async () => {
+    const { app, db } = appConDatos(CFG);
+    db.prepare('UPDATE catalogo_cache SET gtin=? WHERE id_woo=1').run('7791234500001');
+    db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('7791234500001', 'FB-40', new Date().toISOString());
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40', pisar_codigo: true });
+    expect(res.body.codigo.estado).toBe('subido');
+    expect(db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo=1').get().gtin).toBe('7791234567898');
+    expect(db.prepare('SELECT 1 FROM ean_sku WHERE ean=?').get('7791234500001')).toBeUndefined();
+    db.close();
+  });
+
+  it('Woo falla: conserva la asociación local y no finge actualizar el cache', async () => {
+    const { app, db } = appConDatos(CFG);
+    axios.request.mockRejectedValueOnce(new Error('ECONNRESET'));
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res.body.codigo).toMatchObject({ estado: 'fallo', motivo: 'woo' });
+    expect(db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo=1').get().gtin).toBeNull();
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234567898').sku).toBe('FB-40');
+    db.close();
+  });
+
+  it('SKU homónimo: exige id_woo y no llama a Woo', async () => {
+    const { app, db } = appConDatos(CFG);
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otra variante', 'FB-40', 'simple', 1, 100, new Date().toISOString());
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res.status).toBe(400);
+    expect(res.body.codigo).toBe('sku_ambiguo');
+    expect(axios.request).not.toHaveBeenCalled();
     db.close();
   });
 });
