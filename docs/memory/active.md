@@ -7,6 +7,11 @@ Actualizado: 2026-08-22.
 - C2 — Consulta de Precios: implementación congelada y publicada en GitHub (`0c4a445`); el
   plan y contrato de subida de GTIN están en `docs/superpowers/plans/2026-08-22-consulta-precios-gtin.md`.
   Falta el gate E2E/auditoría antes de reiniciar PM2.
+- C3 — Preparación de pedidos: implementación terminada y commit aislado `5ef0257` en
+  `.claude/worktrees/preparacion-gtin` (`c3-preparacion-gtin`), sin tocar C2. Un GTIN válido
+  desconocido devuelve candidatos y exige asociación explícita; hay conflicto de GTIN/mapa,
+  auditoría del escaneo, mapa local fail-open ante Woo caído y UI móvil con títulos largos.
+  Falta revisión formal/E2E antes de integrar a `conteo-confiable` y reiniciar PM2.
 - Entrega 2, conteo confiable + cierre seguro + subida de GTIN C1, en
   `.claude/worktrees/matcher-unificado` (`conteo-confiable-revisado`), integrada en `e4e8bbf`.
   Corrección post-revisión: render pendiente de cantidades, motivo visible del cierre,
@@ -29,8 +34,9 @@ Actualizado: 2026-08-22.
 
 ## Próximo paso
 
-- Ejecutar E2E/auditoría de C2 y pasar luego a C3 (Preparación). La revisión formal de
-  Claude para los dropdowns de C1 queda pendiente hasta que la cuota vuelva a responder.
+- Ejecutar E2E/auditoría de C2 y revisar/integrar C3 (Preparación). La revisión formal de
+  Claude para los dropdowns de C1 y el E2E de C3 quedan pendientes hasta que la cuota vuelva a
+  responder; no se reinicia PM2 con C3 mientras esos gates sigan abiertos.
 
 ## Evidencia reciente
 
@@ -39,6 +45,10 @@ Actualizado: 2026-08-22.
 - C2: Consulta de Precios 22/22; Códigos + permisos 36/36; Inventario 129/129. Suite global
   serial: 64 archivos verdes, 1332 tests aprobados y 1 skip; `matcherPush` aislado 28/28
   (el timeout de 20s bajo suite completa es intermitente y ya está documentado).
+- C3: tests dirigidos de candidatos, asociación local, subida Woo, conflicto de GTIN y
+  conflicto de mapa `ean_sku`: 5/5. La suite completa de Preparación se ejecutó serializada
+  fuera del sandbox; dentro del sandbox Supertest falla por `listen EPERM` y puede dejar falsos
+  errores de SQLite al borrar su DB temporal.
 
 ## Bloqueos conocidos
 
