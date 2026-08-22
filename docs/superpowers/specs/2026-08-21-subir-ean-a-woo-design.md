@@ -72,8 +72,9 @@ respuesta:
 - `conflicto` — el producto tiene otro código; **no se tocó nada**. La pantalla pregunta y, si
   el operario decide pisarlo, repite el POST con `pisar_codigo: true`.
 - `no_valido` — no es un GTIN; no se intentó subir.
-- `fallo` — se intentó y Woo lo rechazó o no respondió. `error` trae el motivo. **La
-  asociación local igual se hizo.**
+- `fallo` — no se pudo subir. `motivo='woo'` indica que Woo rechazó o no respondió;
+  `sku_ambiguo` y `no_endpoint` son bloqueos locales sin llamada remota. `error` trae el
+  detalle. **La asociación local igual se hizo.**
 
 ## Criterio de aceptación
 
