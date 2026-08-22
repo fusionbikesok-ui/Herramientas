@@ -1,7 +1,9 @@
 import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { setStockWc } from '../lib/wooStock.js';
-import { subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
+import { looksLikeGtin, subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
+
+export { looksLikeGtin as looksLikeEan } from '../lib/gtinWoo.js';
 
 const now = () => new Date().toISOString();
 
@@ -9,26 +11,8 @@ const now = () => new Date().toISOString();
 // muestra un aviso antes de abrir la sesión. Solo informativo, nunca bloquea.
 export const UMBRAL_ALCANCE_GRANDE = 300;
 
-// ─── Clasificación EAN/SKU por formato + dígito de control GS1 ───────────────
-// Portado tal cual de public/inventario/index.html (kindOf/gtinCheckOk actuales).
-function gtinCheckOk(code) {
-  const n = code.length;
-  let sum = 0;
-  for (let i = n - 2; i >= 0; i--) {
-    const d = code.charCodeAt(i) - 48;
-    const mult = ((n - 2 - i) % 2 === 0) ? 3 : 1;
-    sum += d * mult;
-  }
-  const check = (10 - (sum % 10)) % 10;
-  return check === (code.charCodeAt(n - 1) - 48);
-}
-
-export function looksLikeEan(code) {
-  if (!/^[0-9]+$/.test(code)) return false;
-  const n = code.length;
-  if (n !== 8 && n !== 12 && n !== 13 && n !== 14) return false;
-  return gtinCheckOk(code);
-}
+// Alias histórico: el contador expone `looksLikeEan` y mantiene ese contrato de tests.
+const looksLikeEan = looksLikeGtin;
 
 // ─── Alcance ─────────────────────────────────────────────────────────────────
 
