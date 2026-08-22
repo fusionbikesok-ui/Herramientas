@@ -1,13 +1,16 @@
 # Estado activo
 
-Actualizado: 2026-08-21.
+Actualizado: 2026-08-22.
 
 ## En curso
 
 - Entrega 2, conteo confiable + cierre seguro + subida de GTIN C1, en
-  `.claude/worktrees/matcher-unificado` (`conteo-confiable-revisado`), commit `448b679`.
-  El bloqueo de foco del conflicto GTIN, el reintento fail-closed y la guarda de SKU homónimo
-  fueron corregidos.
+  `.claude/worktrees/matcher-unificado` (`conteo-confiable-revisado`), integrada en `e4e8bbf`.
+  Corrección post-revisión: render pendiente de cantidades, motivo visible del cierre,
+  región accesible para la hoja EAN, token de color, mapeo `ean_sku` sin SKU homónimo, contrato
+  explícito del reintento `confirmada_con_errores` y dropdowns de asociación fluidos para títulos
+  largos en móvil y PC. El merge a `conteo-confiable` quedó preparado; faltan publicación y
+  reinicio operativo.
 - Coordinación Codex↔Claude configurada: Codex orquesta; matriz de modelos en
   `agents/model-routing.md` y router de skills en `agents/skill-routing.md`.
 - El controlador `npm run agent:claude` invoca Claude sin copiar/pegar y valida el handoff antes
@@ -23,10 +26,9 @@ Actualizado: 2026-08-21.
 
 ## Próximo paso
 
-- Entrega 2 integrada en `conteo-confiable` mediante merge `6cd89e7`, publicada en GitHub y
-  con PM2 `herramientas` reiniciado (PID 2334035, online). El endpoint local `/login/` respondió
-  200. El reintento del agente Claude quedó temporalmente bloqueado porque `claude -p` no
-  respondió en 30 s; no se inventó un handoff nuevo.
+- Publicar `conteo-confiable`, reiniciar PM2 y comprobar `/login/` después de la integración.
+  La revisión formal nueva de Claude para los dropdowns queda pendiente hasta que se renueve
+  su cuota; no se debe presentar como aprobada.
 
 ## Evidencia reciente
 
@@ -35,10 +37,9 @@ Actualizado: 2026-08-21.
 
 ## Bloqueos conocidos
 
-- Revisión formal nueva de Claude y auditoría independiente pendientes: el reintento del
-  2026-08-22 terminó por timeout controlado. Diagnóstico: autenticación Pro vigente, pero
-  `api.anthropic.com` devuelve `getaddrinfo ETIMEOUT`; el sandbox también bloquea escrituras
-  en `/root/.claude` con `EROFS`. No hay evidencia de cuota agotada.
+- La cuota de Claude devolvió HTTP 429 y anunció renovación a las 22:50 UTC; la revisión nueva
+  no pudo ejecutarse. La batería local sí quedó aprobada: 65 archivos, 1326 tests aprobados y
+  1 omitido, además de las pruebas dirigidas de inventario/códigos/stock.
 - Los logs de PM2 muestran 429 de ML y fallos de Woo ya existentes en crons; el proceso quedó
   online y el endpoint de login responde correctamente.
 - Las notas del E2E no bloquean Entrega 2; el auditor debe decidir si registra el prefijo
