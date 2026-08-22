@@ -94,15 +94,20 @@ body {
 .dropdown.open { display: block; }
 .dropdown-item {
   padding: .6rem 1rem; cursor: pointer; font-size: .85rem;
-  display: flex; align-items: center; justify-content: space-between;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start;
   gap: 1rem; transition: background .12s;
   border-bottom: 1px solid var(--border);
 }
 .dropdown-item:last-child { border-bottom: none; }
 .dropdown-item:hover { background: var(--surface); }
+.dropdown-item > span:first-child { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
 .dropdown-sku { font-family: monospace; font-size: .8rem; color: var(--accent); }
 .dropdown-stock { font-size: .78rem; color: var(--muted); }
 .dropdown-empty { padding: .75rem 1rem; color: var(--muted); font-size: .85rem; }
+@media (max-width: 30rem) {
+  .dropdown-item { grid-template-columns: 1fr; gap: .25rem; }
+  .dropdown-item > span:last-child { display: flex; flex-wrap: wrap; gap: .25rem .5rem; align-items: baseline; }
+}
 
 /* ── Config form (shown after SKU selection) ── */
 .config-form { display: none; margin-top: 1.25rem; }
