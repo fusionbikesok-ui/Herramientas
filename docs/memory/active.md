@@ -9,8 +9,8 @@ Actualizado: 2026-08-22.
   Corrección post-revisión: render pendiente de cantidades, motivo visible del cierre,
   región accesible para la hoja EAN, token de color, mapeo `ean_sku` sin SKU homónimo, contrato
   explícito del reintento `confirmada_con_errores` y dropdowns de asociación fluidos para títulos
-  largos en móvil y PC. El merge a `conteo-confiable` quedó preparado; faltan publicación y
-  reinicio operativo.
+  largos en móvil y PC. El merge a `conteo-confiable` quedó publicado en GitHub (`4a12a90`) y
+  PM2 `herramientas` fue reiniciado; `/login/` respondió HTTP 200.
 - Coordinación Codex↔Claude configurada: Codex orquesta; matriz de modelos en
   `agents/model-routing.md` y router de skills en `agents/skill-routing.md`.
 - El controlador `npm run agent:claude` invoca Claude sin copiar/pegar y valida el handoff antes
@@ -26,9 +26,8 @@ Actualizado: 2026-08-22.
 
 ## Próximo paso
 
-- Publicar `conteo-confiable`, reiniciar PM2 y comprobar `/login/` después de la integración.
-  La revisión formal nueva de Claude para los dropdowns queda pendiente hasta que se renueve
-  su cuota; no se debe presentar como aprobada.
+- Tras la renovación de cuota, ejecutar la revisión formal de Claude para los dropdowns y
+  registrar su resultado; no presentarla como aprobada antes de ejecutarla.
 
 ## Evidencia reciente
 
