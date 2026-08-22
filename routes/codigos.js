@@ -19,8 +19,6 @@ import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { armarLike } from '../lib/busqueda.js';
 import { subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
-const now = () => new Date().toISOString();
-
 // WHERE compartido entre /faltantes y /firma: si se toca acá, se toca para las dos —
 // evita que la firma se desincronice de lo que realmente lista la cola (mismo patrón que
 // firmaCandidatos en routes/matcher.js, que separa firma barata de cómputo caro).

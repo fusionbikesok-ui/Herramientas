@@ -143,13 +143,21 @@ option { background:var(--dark3); }
   display:none;
 }
 .search-dropdown.open { display:block; }
-.search-opt { padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--border); line-height:1.4; white-space:normal; word-break:break-word; }
+.search-opt { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.2rem .5rem; align-items:start; padding:.6rem .75rem; font-size:.8125rem; cursor:pointer; border-bottom:1px solid var(--border); line-height:1.4; white-space:normal; overflow-wrap:anywhere; }
 .search-opt:last-child { border-bottom:none; }
 .search-opt:hover, .search-opt.active { background:var(--blue-bg); }
-.search-opt .opt-id { color:var(--gray2); font-size:11px; font-family:monospace; margin-right:6px; }
-.search-opt .opt-stock { color:var(--green); font-size:11px; font-weight:600; float:right; margin-left:8px; }
+.search-opt .opt-id { grid-column:1; grid-row:2; color:var(--gray2); font-size:.6875rem; font-family:monospace; margin-right:6px; }
+.search-opt .opt-name { grid-column:1; grid-row:1; min-width:0; overflow-wrap:anywhere; }
+.search-opt .opt-stock { grid-column:2; grid-row:1; color:var(--green); font-size:.6875rem; font-weight:600; margin-left:.5rem; white-space:nowrap; }
 .search-opt .opt-stock.zero { color:var(--gray2); }
 .search-opt-empty { padding:12px; font-size:13px; color:var(--gray2); text-align:center; }
+@media (max-width:30rem) {
+  .search-opt { grid-template-columns:1fr; gap:.2rem; }
+  .search-opt .opt-name,.search-opt .opt-id,.search-opt .opt-stock { grid-column:1; }
+  .search-opt .opt-name { grid-row:1; }
+  .search-opt .opt-id { grid-row:2; }
+  .search-opt .opt-stock { grid-row:3; margin-left:0; justify-self:start; }
+}
 
 /* Panel de producto nuevo */
 .nuevo-panel { background:var(--dark3); border:1px solid var(--orange-bd); border-radius:var(--radius); padding:14px; margin-top:10px; }
@@ -740,8 +748,9 @@ option { background:var(--dark3); }
         var stockCls = (p.stock>0) ? 'opt-stock' : 'opt-stock zero';
         var idEsc = esc(p.id).replace(/'/g,"\\'");
         return '<div class="search-opt" onmousedown="seleccionarDelDropdown('+id+', \''+idEsc+'\')">'
+          +'<span class="opt-name">'+esc(p.nombre)+'</span>'
+          +'<span class="opt-id">'+esc(p.id)+'</span>'
           +'<span class="'+stockCls+'">stock: '+p.stock+'</span>'
-          +'<span class="opt-id">'+esc(p.id)+'</span>'+esc(p.nombre)
           +'</div>';
       }).join('');
     }

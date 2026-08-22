@@ -59,6 +59,13 @@ que ya existe unas líneas más arriba:
 El bloque `sin_stock` **no** entra al gate: esos ya están en 0 en Woo, ajustarlos a 0 es un
 no-op. Su botón "cerrar en 0" sigue como está.
 
+#### Excepción explícita para reintentos
+
+Una sesión en estado `confirmada_con_errores` ya pasó el gate de pendientes cuando se cerró
+por primera vez. El endpoint de reintento saltea ese gate y procesa únicamente los ítems que
+todavía tienen `ajustado_en IS NULL`; volver a exigir que se cuente el universo completo
+impediría reparar fallos transitorios de Woo sin repetir trabajo ya ajustado.
+
 ### 2. Cerrar en 0 productos **con** stock
 
 Hoy `POST /sesiones/:id/cerrar-sin-stock` filtra `bloque='sin_stock'` a propósito. Se necesita

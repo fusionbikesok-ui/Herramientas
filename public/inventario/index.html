@@ -37,6 +37,7 @@
   .btn.secondary{background:var(--panel2);}
   .btn.danger{background:var(--danger-bg);border-color:var(--danger-bd);color:var(--danger)}
   .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
   .btn + .btn{margin-top:10px}
 
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px;}
@@ -152,6 +153,10 @@
        border:1px solid var(--warning-bd);background:var(--warning-bg);color:var(--warning);}
   .banner-escaneo.on{display:block;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:50;width:min(680px,calc(100% - 24px));pointer-events:none;}
   .control-reintento{position:fixed;top:58px;left:50%;transform:translateX(-50%);z-index:51;width:min(680px,calc(100% - 24px));padding:10px;text-align:center;background:var(--warning-bg);border:1px solid var(--warning-bd);border-radius:10px;}
+  @media(max-width:480px){
+    .banner-escaneo.on{top:76px;}
+    .control-reintento{top:122px;}
+  }
   .bloque-titulo{font-size:13px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px;}
   .collapse{border:1px solid var(--border);border-radius:12px;background:var(--surface);margin-top:14px;}
   .collapse.llamador{border-color:var(--accent);background:var(--accent-dim);}
@@ -244,7 +249,7 @@
   .cantidad-ctrl{display:flex;align-items:center;gap:6px;}
   .cantidad-ctrl .qty-btn{min-width:38px;min-height:38px;border-radius:9px;border:1px solid var(--line);
        background:var(--panel2);color:var(--txt);font-weight:800;font-size:18px;line-height:1;cursor:pointer;}
-  .cantidad-ctrl .qty-plus{background:var(--azul);border-color:var(--azul);color:#06131C;}
+  .cantidad-ctrl .qty-plus{background:var(--azul);border-color:var(--azul);color:var(--black);}
   .cantidad-ctrl .qty-btn[disabled]{opacity:.35;cursor:not-allowed;}
   .cantidad-ctrl .qty-input{width:52px;min-height:38px;font-size:16px;font-weight:800;text-align:center;
        border-radius:9px;border:1px solid var(--line);background:var(--surface2);color:var(--txt);
@@ -272,10 +277,10 @@
   .sheet h3{margin:0 0 4px;font-size:15px;}
   .sheet .ean-grande{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:24px;font-weight:800;
        color:var(--azul);margin-bottom:14px;letter-spacing:1px;}
-  .resultado-buscar{min-height:52px;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;
+  .resultado-buscar{min-height:52px;display:flex;align-items:flex-start;gap:.6rem;padding:.65rem .75rem;border-radius:10px;
        border:1px solid var(--line);background:var(--panel2);margin-bottom:8px;cursor:pointer;width:100%;text-align:left;color:var(--txt);}
-  .resultado-buscar .sku{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;color:var(--sku);font-size:13px;}
-  .resultado-buscar .nombre{font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .resultado-buscar .sku{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;color:var(--sku);font-size:.8125rem;flex:0 0 auto;}
+  .resultado-buscar .nombre{font-size:.8125rem;line-height:1.35;flex:1 1 0;min-width:0;overflow-wrap:anywhere;white-space:normal;}
 
   /* ----- Modal cámara (portado tal cual del index.html previo a la Task 6) ----- */
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:50;padding:16px;}
@@ -336,6 +341,13 @@
   .fila-cierre .cierre-stock{font-size:12px;color:var(--muted);white-space:nowrap;}
   .fila-cierre .cierre-marca{font-size:11px;font-weight:700;color:var(--danger);white-space:nowrap;visibility:hidden;}
   .fila-cierre input[type=checkbox]:checked ~ .cierre-marca{visibility:visible;}
+  @media (max-width:480px){
+    .fila-cierre{flex-wrap:wrap;gap:7px;}
+    .fila-cierre .cierre-nombre{flex:1 1 calc(100% - 34px);min-width:calc(100% - 34px);
+      white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.25;}
+    .fila-cierre .cierre-stock{margin-left:29px;}
+    .fila-cierre .cierre-marca{margin-left:auto;}
+  }
 
   /* ----- Vista Resultado ----- */
   .resultado-num{display:flex;gap:10px;margin-bottom:14px;}
@@ -537,7 +549,8 @@
       tildá "no lo revisé" si no lo verificaste, o dejalo sin tildar si ya buscaste y no había ninguna
       unidad (se pasa a 0).</p>
     <div class="cierre-lista" id="cierre-lista"></div>
-    <button type="button" class="btn danger" id="btn-cierre-confirmar">Pasar a 0 y confirmar</button>
+    <button type="button" class="btn danger" id="btn-cierre-confirmar" aria-disabled="false" aria-describedby="btn-cierre-motivo">Pasar a 0 y confirmar</button>
+    <div id="btn-cierre-motivo" class="dim-ayuda" role="status" hidden>Destildá los que marcaste como "no lo revisé" para poder confirmar, o usá "Guardar lo decidido y seguir después".</div>
     <button type="button" class="btn secondary" id="btn-cierre-guardar">Guardar lo decidido y seguir después</button>
     <button type="button" class="btn secondary" id="btn-cierre-cancelar">Volver</button>
   </div>
@@ -560,8 +573,8 @@
 
 <!-- Sheet: EAN nuevo (se abre sobre la vista Conteo, sin bloquear el input de escaneo) -->
 <div class="sheet-veil" id="ean-veil"></div>
-<div class="sheet" id="ean-sheet" aria-label="Asociar EAN nuevo">
-  <h3>EAN sin asociar</h3>
+<div class="sheet" id="ean-sheet" role="region" aria-labelledby="ean-sheet-titulo">
+  <h3 id="ean-sheet-titulo">EAN sin asociar</h3>
   <div class="ean-grande" id="ean-sheet-codigo">—</div>
   <label for="ean-sheet-buscar">Buscar producto por SKU o nombre</label>
   <input type="text" id="ean-sheet-buscar" placeholder="Escribí para buscar…" autocomplete="off">
@@ -1166,6 +1179,10 @@
     actualizarSeleccionUi();
   }
 
+  function consumirRenderPendiente(){
+    if(renderPendiente && !hayInputCantidadEnfocado()) renderConteo();
+  }
+
   function actualizarSeleccionUi(){
     var contados = conteoData.items;
     var n = seleccionConteo.size;
@@ -1352,11 +1369,13 @@
             mostrarBannerEscaneo('Cantidad demasiado alta (¿se leyó un código de barras en el campo de cantidad?). Se mantuvo ' + decision.valorMostrar + '.');
           }
           scanInput.focus(); // la pistola HID tiene que volver a apuntar al campo de escaneo
+          consumirRenderPendiente();
           return;
         }
         if(decision.negativa) mostrarBannerEscaneo('No se puede contar en negativo. Se guardó 0.');
         enviarCantidad(itemId, decision.valorEnviar, inp, decision.truncada);
         scanInput.focus();
+        consumirRenderPendiente();
       });
     });
     var head = document.getElementById('collapse-sinstock-head');
@@ -1444,6 +1463,7 @@
     var item = obtenerItemConteo(itemId);
     var valor = item ? item.cantidad : 0;
     if(inp && conteoLista.contains(inp)) inp.value = valor;
+    consumirRenderPendiente();
     // Se DEVUELVE el refresco: quien llama está dentro de una escritura encolada, y si la
     // cola se libera antes de que conteoData esté al día, la escritura siguiente calcula su
     // base contra datos viejos — el mismo subconteo que la cola vino a evitar, entrando por
@@ -1542,8 +1562,14 @@
   }
 
   function ocultarControlReintento(){
+    var camara = document.getElementById('btn-camara');
     controlReintento.hidden = true;
     estadoReintentoPendiente = false;
+    // Toda carga confirmada recupera el escáner, aunque el usuario haya llegado a ella
+    // desde otra acción (por ejemplo +1 o volver a la vista), no solo desde Reintentar.
+    scanInput.disabled = false;
+    camara.disabled = false;
+    document.getElementById('btn-reintentar-escaneo').disabled = false;
   }
 
   function escanear(codigo){
@@ -1610,8 +1636,6 @@
     // Reintenta cargarConteo: si recupera, rehabilita controles y enfoca scanner
     cargarConteo(true).then(function(){
       ocultarControlReintento();
-      scanInput.disabled = false;
-      document.getElementById('btn-camara').disabled = false;
       scanInput.focus();
       mostrarBannerEscaneo('Sesión recuperada. Podés continuar escaneando.');
     }).catch(function(){
@@ -2118,16 +2142,21 @@
   // Habilitado SOLO si ningún checkbox está tildado: "pasar a 0 y confirmar" no puede
   // dejar pendientes sin decidir, para eso está "guardar y seguir después".
   function actualizarDisabledCierre(){
-    // (el title se fija abajo, junto con el disabled: un botón gris sin motivo visible es
-    // el mismo problema que ya se resolvió con title en btn-confirmar-ajuste)
+    var motivoDiv = document.getElementById('btn-cierre-motivo');
+    var procesando = btnCierreConfirmar.getAttribute('data-procesando') === 'true';
     var algunoTildado = Array.prototype.some.call(
       cierreLista.querySelectorAll('input[type=checkbox]'),
       function(c){ return c.checked; }
     );
-    btnCierreConfirmar.disabled = algunoTildado;
-    btnCierreConfirmar.title = algunoTildado
-      ? 'Destildá los que marcaste como "no lo revisé" para poder confirmar, o usá "Guardar lo decidido y seguir después".'
-      : '';
+    btnCierreConfirmar.disabled = procesando;
+    btnCierreConfirmar.setAttribute('aria-disabled', algunoTildado || procesando ? 'true' : 'false');
+    if(algunoTildado){
+      btnCierreConfirmar.title = 'Destildá los que marcaste como "no lo revisé" para poder confirmar.';
+      motivoDiv.hidden = false;
+    } else {
+      btnCierreConfirmar.title = '';
+      motivoDiv.hidden = true;
+    }
   }
 
   function abrirPantallaCierre(pendConStock){
@@ -2177,11 +2206,12 @@
   btnCierreCancelar.addEventListener('click', cerrarPantallaCierre);
 
   btnCierreConfirmar.addEventListener('click', function(){
-    if(btnCierreConfirmar.disabled) return;
+    if(btnCierreConfirmar.disabled || btnCierreConfirmar.getAttribute('aria-disabled') === 'true') return;
     var skus = skusNoTildadosCierre();
+    btnCierreConfirmar.setAttribute('data-procesando', 'true');
     btnCierreConfirmar.disabled = true;
     cerrarEnCero(skus).then(function(j){
-      if(!j || !j.ok){ btnCierreConfirmar.disabled = false; return; }
+      if(!j || !j.ok){ btnCierreConfirmar.removeAttribute('data-procesando'); actualizarDisabledCierre(); return; }
       // Refrescar ANTES de abrir el modal: su resumen sale de revisionData, que todavía no
       // tiene los ceros recién creados. Sin esto el operario vería menos bajas de las que
       // realmente se van a escribir en Woo, justo en la pantalla que confirma la escritura.
@@ -2192,7 +2222,7 @@
         // Los ceros YA se escribieron; lo que falló es el refresco. Sin esto el botón
         // quedaba gris con el veil abierto y la única salida era recargar la página.
         mostrarBannerEscaneo('Se guardaron los ceros, pero no se pudo actualizar la pantalla. Probá de nuevo.');
-      }).then(function(){ btnCierreConfirmar.disabled = false; });
+      }).then(function(){ btnCierreConfirmar.removeAttribute('data-procesando'); actualizarDisabledCierre(); });
     });
   });
 
