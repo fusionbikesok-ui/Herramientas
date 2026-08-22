@@ -1063,10 +1063,12 @@ Respuesta: `{ ok, item, codigo }`. `codigo.estado`:
 | `conflicto` | el producto tiene **otro** código en Woo; no se pisó; trae `gtin_actual` | ninguna |
 | `fallo` | no se pudo subir; trae `error` y `motivo` | depende de `motivo` |
 
-La asociación local del ítem (`item.sku`, `ean_sku`) se hace **siempre**, incluso en
-`fallo` — excepción deliberada al fail-closed del resto del sistema: el trabajo físico
-del operario no se descarta por un error de Woo. En `conflicto`, la pantalla pregunta y,
-si el operario confirma pisar, repite el POST con `pisar_codigo: true`. Esta subida se
+La asociación local del ítem (`item.sku`) se hace **siempre**, incluso en `fallo` — excepción
+deliberada al fail-closed del resto del sistema: el trabajo físico del operario no se
+descarta por un error de Woo. El mapeo global `ean_sku` se siembra cuando el SKU es
+inequívoco; si hay homónimos (`motivo='sku_ambiguo'`), el ítem conserva su `sku` pero no se
+escribe `ean_sku` para no apuntar arbitrariamente a un producto. En `conflicto`, la pantalla
+pregunta y, si el operario confirma pisar, repite el POST con `pisar_codigo: true`. Esta subida se
 extrajo a `lib/gtinWoo.js`, compartida con `POST /api/codigos/asignar` (mismo comportamiento,
 no cambia), porque `inventario` y `codigos` son permisos distintos.
 `motivo='woo'` indica que hubo un intento remoto fallido; `sku_ambiguo` y `no_endpoint`

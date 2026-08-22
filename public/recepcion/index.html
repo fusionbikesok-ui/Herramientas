@@ -100,11 +100,19 @@ input[type=file] { display:none; }
 .wc-search-input { width:100%; font-size:12px; padding:6px 10px; }
 .wc-dropdown { position:absolute; top:calc(100% + 3px); left:0; right:0; background:var(--dark2); border:1px solid var(--border2); border-radius:var(--radius); max-height:220px; overflow-y:auto; z-index:50; box-shadow:0 8px 24px rgba(0,0,0,.4); display:none; }
 .wc-dropdown.open { display:block; }
-.wc-opt { padding:8px 10px; font-size:12px; cursor:pointer; border-bottom:1px solid var(--border); line-height:1.4; }
+.wc-opt { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.2rem .5rem; align-items:start; padding:.6rem .7rem; font-size:.75rem; cursor:pointer; border-bottom:1px solid var(--border); line-height:1.4; overflow-wrap:anywhere; }
 .wc-opt:last-child { border-bottom:none; }
 .wc-opt:hover { background:var(--blue-bg); }
-.wc-opt-sku { color:var(--gray2); font-size:11px; font-family:monospace; margin-right:6px; }
-.wc-opt-stock { color:var(--green); font-size:11px; float:right; }
+.wc-opt-name { grid-column:1; grid-row:1; min-width:0; overflow-wrap:anywhere; }
+.wc-opt-sku { grid-column:1; grid-row:2; color:var(--gray2); font-size:.6875rem; font-family:monospace; margin-right:6px; }
+.wc-opt-stock { grid-column:2; grid-row:1; color:var(--green); font-size:.6875rem; white-space:nowrap; }
+@media (max-width:30rem) {
+  .wc-opt { grid-template-columns:1fr; gap:.2rem; }
+  .wc-opt-name,.wc-opt-sku,.wc-opt-stock { grid-column:1; }
+  .wc-opt-name { grid-row:1; }
+  .wc-opt-sku { grid-row:2; }
+  .wc-opt-stock { grid-row:3; }
+}
 
 .qty-input { width:60px; text-align:center; padding:5px 6px; font-size:13px; font-weight:700; }
 
@@ -734,7 +742,8 @@ function buscarWC(inp, itemId) {
   dd.innerHTML = resultados.map(function(p){
     // Solo pasamos itemId e idWoo — seleccionarWC busca los demás datos en catalogo[]
     return '<div class="wc-opt" onmousedown="seleccionarWC(event,\'' + itemId + '\',' + p.id_woo + ')">'
-      + '<span class="wc-opt-sku">' + esc(p.sku||'—') + '</span>' + esc(p.nombre)
+      + '<span class="wc-opt-name">' + esc(p.nombre) + '</span>'
+      + '<span class="wc-opt-sku">' + esc(p.sku||'—') + '</span>'
       + '<span class="wc-opt-stock">' + (p.stock||0) + '</span>'
       + '</div>';
   }).join('');
