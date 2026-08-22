@@ -18,6 +18,9 @@
   }
   *{box-sizing:border-box;}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;margin:0;background:var(--oscuro);color:var(--text);}
+  a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--azul);outline-offset:2px;}
+  .skip-link{position:absolute;left:12px;top:-48px;z-index:100;background:var(--azul);color:#06131C;border-radius:6px;padding:9px 12px;font-weight:700;text-decoration:none;}
+  .skip-link:focus-visible{top:12px;}
   .wrap{max-width:1150px;margin:0 auto;padding:20px 22px 80px;}
   a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;margin-bottom:12px;}
   a.back:hover{color:var(--azul);}
@@ -57,7 +60,7 @@
   .seg-chip.mut{border-color:var(--border2);color:var(--muted);background:var(--surface2);cursor:pointer;}
   .seg-chip.mut:hover{background:var(--border2);}
   .seg-search{width:100%;padding:10px 13px;border-radius:10px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:16px;}
-  .seg-search:focus{outline:none;border-color:var(--azul);}
+  .seg-search:focus-visible{border-color:var(--azul);}
   .seg-section h2{font-size:1.05rem;margin:0 0 4px;}
   .seg-section .sub{margin:0 0 12px;}
   .seg-ok{border-radius:10px;padding:14px 16px;font-size:14px;font-weight:700;color:var(--green);background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);}
@@ -88,7 +91,8 @@
   .ped-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
   .ped-num{font-weight:800;font-size:15px;}
   .ped-cli{font-size:12.5px;color:var(--muted);}
-  .ped-items{font-size:11.5px;color:var(--muted2);margin-top:8px;line-height:1.5;}
+  /* Texto operativo: --muted mantiene contraste AA sobre las tarjetas oscuras. */
+  .ped-items{font-size:11.5px;color:var(--muted);margin-top:8px;line-height:1.5;}
   .ped-foot{display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;}
 
   /* detalle */
@@ -102,7 +106,7 @@
 
   .scanbar{display:flex;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:6px;flex-wrap:wrap;}
   .scanbar input{flex:1;min-width:160px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:9px 12px;font-size:14px;font-family:'Courier New',monospace;}
-  .scanbar input:focus{outline:none;border-color:var(--azul);}
+  .scanbar input:focus-visible{border-color:var(--azul);}
   .aviso{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;background:rgba(45,184,232,.15);color:var(--azul);}
   .flash{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;}
   .flash.ok{display:block;background:rgba(52,211,153,.15);color:var(--green);}
@@ -218,7 +222,8 @@
 </style>
 </head>
 <body>
-<div class="wrap">
+<a class="skip-link" href="#contenido-principal">Saltar al contenido principal</a>
+<main class="wrap" id="contenido-principal" tabindex="-1">
   <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
   <h1>Preparación de <em>pedidos</em></h1>
   <p class="sub">Cola de despacho <b>web (Andreani)</b> + <b>MercadoLibre</b> (Flex/colecta listos para despachar).
@@ -237,7 +242,7 @@
 
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
   <div id="foto-live" class="sr-only" role="status" aria-live="polite"></div>
-</div>
+</main>
 
 <div class="modal" id="cam-modal">
   <div class="modal-box" role="dialog" aria-modal="true" aria-label="Escanear código de barras">
@@ -1652,6 +1657,38 @@ async function refrescarCargadosHoy(){
     if(r.body.ok&&SEG.data)SEG.data.cargados_hoy=(r.body.data&&r.body.data.cargados_hoy)||0;
   }catch(e){/* si falla, se queda con el valor anterior — no bloquea la carga que sí funcionó */}
 }
+// El backend pagina `a_medias` (máximo 100 por request). Esta vista no puede dejar una
+// página siguiente escondida: reúne todas antes de mostrar el chip y reutiliza el mismo
+// camino después de resolver una tarjeta para que el siguiente lote entre a la grilla.
+async function obtenerSeguimientosCompletos(){
+  var r=await api('/seguimientos?a_medias_limit=100&a_medias_offset=0');
+  if(!r.body.ok)throw new Error(r.body.error||'error');
+  var d=r.body.data||{}, filas=d.a_medias||[];
+  var vistos={};
+  filas.forEach(function(f){vistos[f.wc_order_id]=true;});
+  var offset=(d.a_medias_offset||0)+filas.length;
+  while(d.a_medias_has_more){
+    var pagina=await api('/seguimientos?a_medias_limit=100&a_medias_offset='+offset);
+    if(!pagina.body.ok)throw new Error(pagina.body.error||'error');
+    var pd=pagina.body.data||{}, nuevas=pd.a_medias||[];
+    if(!nuevas.length)throw new Error('No se pudo completar la lista de pedidos a medias.');
+    nuevas.forEach(function(f){if(!vistos[f.wc_order_id]){vistos[f.wc_order_id]=true;filas.push(f);}});
+    offset=(pd.a_medias_offset||offset)+nuevas.length;
+    d.a_medias_has_more=pd.a_medias_has_more;
+    d.a_medias_limit=pd.a_medias_limit;
+  }
+  d.a_medias=filas;
+  d.a_medias_offset=0;
+  d.a_medias_has_more=false;
+  return d;
+}
+async function refrescarSeguimientosCompletos(){
+  try{
+    SEG.data=await obtenerSeguimientosCompletos();
+    if(VISTA==='seguimientos')renderSeguimientos();
+    return true;
+  }catch(e){return false;}
+}
 async function cargarSeguimientos(){
   var c=document.getElementById('cuerpo');
   c.innerHTML='<div class="loading">Cargando…</div>';
@@ -1661,9 +1698,7 @@ async function cargarSeguimientos(){
   // defensa contra el error de foco de "ya está pasando", no un chequeo contra el backend.
   SEG={data:null,guardadosSesion:{},extraOpen:null,despachadosList:null,filtro:''};
   try{
-    var r=await api('/seguimientos');
-    if(!r.body.ok)throw new Error(r.body.error||'error');
-    SEG.data=r.body.data||{};
+    SEG.data=await obtenerSeguimientosCompletos();
     renderSeguimientos();
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
@@ -1720,7 +1755,7 @@ function cardSeguimiento(f,seccion){
       // irreversible con mail al cliente de por medio, y muchos lectores de código de
       // barras tipo wedge (o un Enter accidental) lo mandarían solos. Defensa deliberada,
       // no un olvido — el guardado exige el clic explícito en "Guardar".
-      +'<input type="text" inputmode="numeric" autocomplete="off" placeholder="N° de seguimiento Andreani" class="trk-input" id="trk-'+f.wc_order_id+'" aria-label="Número de seguimiento para '+esc(nombre)+'" oninput="onTrkInput('+f.wc_order_id+')">'
+    +'<input type="text" name="tracking" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="N° de seguimiento Andreani" class="trk-input" id="trk-'+f.wc_order_id+'" aria-label="Número de seguimiento para '+esc(nombre)+'" oninput="onTrkInput('+f.wc_order_id+')">'
       +'<button type="button" class="seg-cam-btn" id="cam-btn-'+f.wc_order_id+'" title="Escanear código de la etiqueta de '+esc(nombre)+'" aria-label="Escanear código de la etiqueta de '+esc(nombre)+'" onclick="abrirCamaraSeg('+f.wc_order_id+')">📷</button>'
     +'</div>'
     +'<p class="seg-hint" id="trk-hint-'+f.wc_order_id+'">Ej: 360003042094910</p>'
@@ -1833,6 +1868,16 @@ async function guardarTracking(wcId,forzado){
       if(VISTA==='seguimientos')quitarTarjetaPorId('seg-'+wcId,{alDiaFallback:true});
       return;
     }
+    if(r.status===502&&r.body.colgado&&r.body.incierto){
+      // La respuesta se perdió durante el PUT 1: no sabemos si Woo guardó el tracking ni
+      // si disparó el mail. Refrescamos para que la tarjeta persistida quede explícitamente
+      // marcada como incierta, incluso después de recargar la página.
+      input.readOnly=true;
+      btn.dataset.colgado='1';btn.disabled=false;btn.textContent='Verificar de nuevo';
+      await refrescarSeguimientosCompletos();
+      toastSeg('No se pudo confirmar si el tracking se guardó o si salió el mail. Verificá el pedido antes de volver a intentar.','warn');
+      return;
+    }
     if(r.status===502&&r.body.colgado){
       // Paso 1 sí (mail ya salió), paso 2 no. No se pide retipear: el backend acepta el
       // mismo tracking sin reenviar el mail (colgadoCompletado en routes/preparacion.js).
@@ -1887,8 +1932,9 @@ async function confirmarCorreccion(wcOrderId,nuevo){
   }catch(e){alert('No se pudo corregir: '+e.message);}
 }
 
-// ── "A medias de verdad" (woo_paso2_pendiente=1): el tracking YA está guardado y el mail
-// YA salió, solo falta reintentar el paso interno. Universo aparte de lpaandreani.
+// ── "A medias de verdad" (woo_paso2_pendiente=1). Un resultado incierto del PUT 1 no
+// permite afirmar que el tracking ni el mail se hayan confirmado; el resto sí espera el
+// paso interno final. Universo aparte de lpaandreani.
 function cardAMedias(f){
   // f.envio ya NO viene de Woo (antes: GET puntual por fila, podía dar null si fallaba).
   // Ahora es SIEMPRE un objeto armado con datos locales guardados en el mismo INSERT que
@@ -1900,18 +1946,21 @@ function cardAMedias(f){
   var e=f.envio||{pedido:f.wc_order_id};
   var nombre=nombreDe(e)||('#'+(e.pedido||f.wc_order_id));
   var busq=(String(e.pedido||f.wc_order_id)+' '+nombre+' '+(e.localidad||'')).toLowerCase();
+  var incierto=!!f.incierto;
   return '<div class="ped static" id="amedias-'+f.wc_order_id+'" data-search="'+esc(busq)+'">'
-    +'<div class="ped-top"><span class="ped-num">#'+esc(e.pedido||f.wc_order_id)+'</span><span class="badge b-warn">a medias</span></div>'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(e.pedido||f.wc_order_id)+'</span><span class="badge '+(incierto?'b-red':'b-warn')+'">'+(incierto?'requiere verificación':'a medias')+'</span></div>'
     +'<div class="ped-cli">'+esc(nombre)+(e.localidad?' — '+esc(e.localidad)+', '+esc(e.provincia):'')+'</div>'
     +(f.tracking
       // color:var(--muted), NO la clase .ped-items sola: --muted2 (heredado de .ped-items)
       // sobre --surface da 3.26:1, bajo el piso AA de 4.5:1 (mismo hallazgo del comentario
       // de .seg-hint más arriba, aplicado acá porque este contenido es nuevo).
-      ?'<div class="ped-items" style="color:var(--muted)">tracking guardado: <code>'+esc(f.tracking)+'</code> — el cliente ya recibió el mail</div>'
+      ?(incierto
+        ?'<div class="ped-items" style="color:var(--muted)">No se pudo confirmar el estado del tracking <code>'+esc(f.tracking)+'</code> ni del mail. Verificá el pedido antes de reintentar.</div>'
+        :'<div class="ped-items" style="color:var(--muted)">tracking guardado: <code>'+esc(f.tracking)+'</code> — el cliente ya recibió el mail</div>')
         // Sin tracking en el atributo onclick (nit del revisor: esc() no escapa comilla
         // simple, public/lib/format.js:16-20): reintentarAMedias saca el tracking de
         // segBuscarFila(wcId), que ya lo tiene en memoria — nada que escapar.
-        +'<div class="ped-foot"><button type="button" class="btn mini" style="min-height:44px" onclick="reintentarAMedias('+f.wc_order_id+')">Reintentar</button></div>'
+        +'<div class="ped-foot"><button type="button" class="btn mini" style="min-height:44px" onclick="reintentarAMedias('+f.wc_order_id+')">'+(incierto?'Verificar de nuevo':'Reintentar')+'</button></div>'
       // Fila previa a la migración que agregó preparaciones.tracking (sin el número guardado
       // localmente): no hay con qué reintentar en un click, se corrige a mano en Woo.
       :'<div class="ped-items" style="color:var(--muted)">Sin tracking registrado localmente — revisar en WooCommerce.</div>')
@@ -1925,15 +1974,10 @@ async function reintentarAMedias(wcId){
   try{
     var r=await api('/seguimientos/'+wcId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:tracking})});
     if(r.body.ok){
-      if(SEG.data){
-        SEG.data.a_medias=(SEG.data.a_medias||[]).filter(function(x){return x.wc_order_id!==wcId;});
-        // Decrementar el total real, no solo la lista topada en 20 (hallazgo I4 del
-        // revisor): si no, el chip sigue diciendo "1 a medias" con la sección vacía.
-        if(SEG.data.a_medias_total)SEG.data.a_medias_total--;
-      }
+      await refrescarSeguimientosCompletos();
       // e.envio acá es local (sin localidad real, ver cardAMedias): no se inventa "—" para
       // un dato que nunca se tuvo.
-      toastSeg('Guardado para '+nombre+'.','ok');
+      toastSeg((f&&f.incierto?'Se confirmó el tracking para ':'Guardado para ')+nombre+'.','ok');
       // Acá SÍ se puede repintar entero (a diferencia de quitarTarjetaPorId, pensado para
       // no perder lo tipeado en OTRAS tarjetas): la vista de a_medias no tiene inputs, así
       // que renderSeguimientos() recalcula bien el "Mostrando N de M" y no deja la pantalla
@@ -1941,12 +1985,14 @@ async function reintentarAMedias(wcId){
       if(VISTA==='seguimientos')renderSeguimientos();
       return;
     }
+    if(r.status===502&&r.body.colgado&&r.body.incierto){
+      await refrescarSeguimientosCompletos();
+      toastSeg('No se pudo confirmar si el tracking se guardó o si salió el mail. Verificá el pedido antes de volver a intentar.','warn');
+      return;
+    }
     if(r.status===502&&r.body.colgado){toastSeg('El tracking se guardó y el cliente ya recibió el mail. Falta un paso interno, se reintenta solo.','warn');return;}
     if(r.status===409){
-      if(SEG.data){
-        SEG.data.a_medias=(SEG.data.a_medias||[]).filter(function(x){return x.wc_order_id!==wcId;});
-        if(SEG.data.a_medias_total)SEG.data.a_medias_total--;
-      }
+      await refrescarSeguimientosCompletos();
       toastSeg(r.body.error?('No se pudo cargar: '+r.body.error+'.'):'Este pedido ya no está disponible para cargar tracking.','bad');
       if(VISTA==='seguimientos')renderSeguimientos();
       return;
@@ -1993,9 +2039,8 @@ function renderSeguimientos(){
   }
 
   html+='<div class="seg-strip">'
-    // El chip usa el TOTAL real (`a_medias_total`), no aMedias.length (la lista viene topada
-    // en 20): si hubiera 25 "a medias" y el chip dijera "20 a medias", ya estaría ocultando
-    // 5 antes de que el operario llegue a abrir la sección.
+  // El chip usa el TOTAL real (`a_medias_total`) y la carga anterior reunió todas las páginas:
+  // nunca hay una segunda tanda de "a medias" escondida detrás del límite del backend.
     +(aMediasTotal
       ?'<button type="button" class="seg-chip on" onclick="toggleSegExtra(\'amedias\')">'+aMediasTotal+' a medias</button>'
       :'<span class="seg-chip">0 a medias</span>')
@@ -2004,7 +2049,7 @@ function renderSeguimientos(){
       :'<span class="seg-chip">0 despachados sin verificar</span>')
     +'</div>';
 
-  html+='<input type="search" class="seg-search" id="seg-buscador" placeholder="Buscar por pedido o nombre…" value="'+esc(SEG.filtro||'')+'" oninput="filtrarSeg()" aria-label="Buscar pedido por número o nombre">';
+  html+='<input type="search" name="buscar-seguimientos" autocomplete="off" class="seg-search" id="seg-buscador" placeholder="Buscar por pedido o nombre…" value="'+esc(SEG.filtro||'')+'" oninput="filtrarSeg()" aria-label="Buscar pedido por número o nombre">';
 
   // El <button> "‹ Volver" fuera del <h2> (hallazgo del revisor: adentro, el nombre
   // accesible del encabezado quedaba "A medias de verdad (1) ‹ Volver").
@@ -2017,12 +2062,7 @@ function renderSeguimientos(){
       // filtro pisaba el "27" recién puesto acá con un "20" que solo cuenta lo mostrado.
       +'<h2 style="margin:0">A medias (<span class="seg-count" data-total="'+aMediasTotal+'">'+aMediasTotal+'</span>)</h2>'
       +'<button type="button" class="btn mini sec" onclick="toggleSegExtra(\'amedias\')">‹ Volver</button></div>'
-      +'<p class="sub">La herramienta ya cargó el tracking y el mail ya salió; falta reintentar el paso interno final.</p>'
-      // La lista viene con LIMIT 20 (`a_medias`); `a_medias_total` es el conteo real del
-      // universo woo_paso2_pendiente=1. Si hay más de las que se muestran, decirlo: ocultar
-      // filas en silencio es el peor fallo posible en esta pantalla (mismo criterio que el
-      // buscador con su contador de visibles).
-      +(aMediasTotal>aMedias.length?'<p class="sub" style="color:var(--amber)">Mostrando '+aMedias.length+' de '+aMediasTotal+'.</p>':'')
+      +'<p class="sub">Los casos confirmados esperan el paso interno final. Si una tarjeta dice “requiere verificación”, no se confirmó el tracking ni el mail.</p>'
       // Al reintentar la última fila la sección se queda sin tarjetas: una grilla vacía sin
       // texto deja al operario sin saber si se resolvió o si algo falló (probador-e2e).
       +(aMedias.length?'<div class="ped-grid">'+aMedias.map(cardAMedias).join('')+'</div>'

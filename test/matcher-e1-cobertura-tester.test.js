@@ -194,7 +194,7 @@ describe('Matcher unificado, entrega 1 — reasignar: concurrencia optimista y o
     seedProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Otro' });
     const app = appComo(db, { id: 1, username: 'ana', is_admin: 0 });
 
-    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-2' });
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-2', expected_sku: null });
     expect(res.status).toBe(200);
     const row = db.prepare("SELECT sku, origen, accion, confirmado_por FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get();
     expect(row.sku).toBe('FB-2');
@@ -217,11 +217,11 @@ describe('Matcher unificado, entrega 1 — reasignar: concurrencia optimista y o
     const appJoaco = appComo(db, { id: 2, username: 'joaco', is_admin: 0 });
 
     // Ana reasigna primero, a FB-2.
-    const resAna = await request(appAna).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-2' });
+    const resAna = await request(appAna).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-2', expected_sku: null });
     expect(resAna.status).toBe(200);
 
     // Joaco, sin saberlo, intenta reasignar la MISMA clave a otro SKU distinto (FB-3).
-    const resJoaco = await request(appJoaco).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-3' });
+    const resJoaco = await request(appJoaco).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-3', expected_sku: null });
     expect(resJoaco.status).toBe(409);
     expect(resJoaco.body.ya_resuelto).toBe(true);
     expect(resJoaco.body.resuelto_por).toBe('ana');
@@ -236,16 +236,45 @@ describe('Matcher unificado, entrega 1 — reasignar: concurrencia optimista y o
     seedProducto(db, { id_woo: 3, sku: 'FB-3', nombre: 'Tercero' });
     const app = appComo(db, { id: 1, username: 'ana', is_admin: 0 });
 
-    const res1 = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-2' });
+    const res1 = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-2', expected_sku: null });
     expect(res1.status).toBe(200);
     // Ana, en otra pestaña, intenta reasignar de nuevo la misma clave: mismo autor, pero la
     // revalidación sigue aplicando — 409 con propio:true (distingue "fuiste vos" de "fue
     // otro", igual que confirmarDecisionCobertura), no un pisado silencioso.
-    const res2 = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-3' });
+    const res2 = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-3', expected_sku: null });
     expect(res2.status).toBe(409);
     expect(res2.body.propio).toBe(true);
     expect(res2.body.resuelto_por).toBe('ana');
     // No se pisó: sigue en FB-2.
     expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-2');
+  });
+
+  it('reasignar permite cambiar deliberadamente una decisión moderna si expected_sku coincide', async () => {
+    sembrarVinculo(db, { clave: 'MLA1|10', sku: 'FB-1' });
+    seedProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Otro' });
+    db.prepare(`INSERT INTO sku_matcher_decisiones
+      (clave, sku, wc_nombre, accion, origen, confirmado_por, actualizado_en)
+      VALUES ('MLA1|10','FB-1','Original','confirmar','cobertura','ana',?)`).run(new Date().toISOString());
+    const app = appComo(db, { id: 1, username: 'ana', is_admin: 0 });
+
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar')
+      .send({ clave: 'MLA1|10', sku: 'FB-2', expected_sku: 'FB-1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, clave: 'MLA1|10', sku_anterior: 'FB-1', sku: 'FB-2' });
+    expect(db.prepare("SELECT sku, confirmado_por FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get())
+      .toEqual({ sku: 'FB-2', confirmado_por: 'ana' });
+  });
+
+  it('reasignar exige expected_sku para no convertir una lectura vieja en un pisado ciego', async () => {
+    sembrarVinculo(db, { clave: 'MLA1|10', sku: 'FB-1' });
+    seedProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Otro' });
+    const app = appComo(db, { id: 1, username: 'ana', is_admin: 0 });
+
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar')
+      .send({ clave: 'MLA1|10', sku: 'FB-2' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('expected_sku');
   });
 });

@@ -1,0 +1,16 @@
+-- El numero visible de una venta agrupada de MercadoLibre no siempre coincide con el id
+-- de la orden. pedidos_cache necesita conservarlo para que Preparacion e Historial puedan
+-- encontrar el pedido por el numero que ve el vendedor.
+--
+-- Se usa 019 porque la rama Matcher Entrega 2 ya reserva 015-018.
+--
+-- ORDEN DE DESPLIEGUE PARA UNA BASE EXISTENTE:
+-- 1. Con la aplicacion detenida, comprobar la columna con:
+--      PRAGMA table_info(pedidos_cache);
+-- 2. Solo si falta pack_id, aplicar este archivo ANTES de arrancar el codigo nuevo.
+-- 3. Si ya existe porque staging ejecuto una version anterior que la agregaba al arrancar,
+--    NO ejecutar el ALTER: registrar 019 como ya aplicada en el procedimiento operativo.
+--    SQLite no soporta ADD COLUMN IF NOT EXISTS y repetirla abortaria el script.
+--
+-- Las bases nuevas no ejecutan 019: ensureTables incluye pack_id en el CREATE TABLE.
+ALTER TABLE pedidos_cache ADD COLUMN pack_id TEXT;

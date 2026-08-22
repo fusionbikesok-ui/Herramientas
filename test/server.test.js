@@ -52,6 +52,37 @@ describe('server', () => {
     expect(scanner.status).toBe(200);
   });
 
+  it('keeps the login controls in a semantic form and the matcher exposes its horizontal scroll cue', () => {
+    const loginHtml = fs.readFileSync('./public/login/index.html', 'utf8');
+    const matcherHtml = fs.readFileSync('./public/matcher/index.html', 'utf8');
+
+    expect(loginHtml).toMatch(/<link rel="icon" href="logo\.png" type="image\/png">/);
+    expect(loginHtml).toMatch(/<form class="form-card" id="login-form" novalidate>/);
+    expect(loginHtml).toMatch(/<input type="text" id="user" name="username" autocomplete="username" spellcheck="false"/);
+    expect(loginHtml).toMatch(/<input type="password" id="pass" name="password" autocomplete="current-password"/);
+    expect(loginHtml).toMatch(/getElementById\('login-form'\)\.addEventListener\('submit'/);
+    expect(matcherHtml).toMatch(/id="chips-tira" role="group" aria-label="Secciones" aria-describedby="chips-scroll-hint"/);
+    expect(matcherHtml).toContain('Deslizá horizontalmente para ver más secciones');
+    expect(matcherHtml).toMatch(/\.chips-tira > \* \{ scroll-snap-align:start; \}/);
+    expect(matcherHtml).toMatch(/getElementById\('chips-tira'\)\.addEventListener\('focusin'/);
+    expect(matcherHtml).toContain("tira.scrollTo({ left: inicio, behavior: 'auto' })");
+  });
+
+  it('keeps the frontend contracts fail-closed for tracking and concurrent vínculo changes', () => {
+    const matcherHtml = fs.readFileSync('./public/matcher/index.html', 'utf8');
+    const preparacionHtml = fs.readFileSync('./public/preparacion/index.html', 'utf8');
+
+    expect(matcherHtml).toMatch(/id="dir-ml-wc"[^>]*disabled/);
+    expect(matcherHtml).toContain("o2.solo_ml || 0");
+    expect(matcherHtml).toContain('expected_sku: expectedSku');
+    expect(matcherHtml).toContain("data-expected-sku=\"' + esc(pub.decision_sku || '')");
+    expect(matcherHtml).toContain('function toastColisionVinculo');
+    expect(preparacionHtml).toContain('function obtenerSeguimientosCompletos');
+    expect(preparacionHtml).toContain('r.body.colgado&&r.body.incierto');
+    expect(preparacionHtml).toContain('No se pudo confirmar si el tracking se guardó o si salió el mail.');
+    expect(preparacionHtml).toContain('Saltar al contenido principal');
+  });
+
   it('redirects the root (/) to /herramientas/home/', async () => {
     const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;

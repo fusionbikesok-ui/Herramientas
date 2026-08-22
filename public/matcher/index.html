@@ -11,6 +11,8 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 a { color:inherit; }
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
 .hidden{display:none!important;}
+.skip-link{position:absolute;left:12px;top:-48px;z-index:100;background:var(--accent);color:var(--bg);border-radius:6px;padding:9px 12px;font-weight:700;text-decoration:none;}
+.skip-link:focus-visible{top:12px;}
 
 /* ── Foco visible global (piso WCAG) ───────────────────────────────── */
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
@@ -39,13 +41,19 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 
 /* ── Tira de chips de secciones (persistente, NO sticky) ───────────── */
 .chips-tira-wrap { max-width:960px; margin:0 auto; padding:.6rem .75rem 0; }
-.chips-tira { display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px; }
+.chips-tira { display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; scroll-snap-type:x proximity; scroll-padding-inline:1px; touch-action:pan-x; padding-bottom:2px; }
 .chip-sec { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; min-height:var(--tap-min); padding:0 12px; border-radius:var(--radius-pill); font-size:.76rem; font-weight:600; white-space:nowrap; background:var(--chip-bg); border:1px solid var(--chip-bd); color:var(--chip-txt); font-family:inherit; cursor:pointer; text-decoration:none; }
+.chips-tira > * { scroll-snap-align:start; }
 .chip-sec:hover, .chip-sec:focus-visible { border-color:var(--accent); }
 .chip-sec.accionable { background:var(--chip-alert-bg); border-color:var(--chip-alert-bd); color:var(--chip-alert-txt); }
 .chip-sec[aria-disabled="true"] { cursor:not-allowed; opacity:.65; }
 .chip-sec .n { font-variant-numeric:tabular-nums; }
 .chip-mas-panel { display:flex; gap:6px; flex-wrap:wrap; padding:6px 0 0; }
+.chips-scroll-hint { display:none; }
+@media (max-width:599px) {
+  .chips-scroll-hint { display:flex; align-items:center; justify-content:flex-end; gap:4px; max-width:960px; margin:0 auto; padding:.3rem .75rem 0; color:var(--muted); font-size:.72rem; }
+  .chips-scroll-hint span { color:var(--accent); font-size:.9rem; line-height:1; }
+}
 
 /* ── Línea calma del push de SKUs (mismo renglón que "actualizado hace X") ── */
 .refresco-bar { max-width:960px; margin:0 auto; padding:.4rem .75rem 0; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:.75rem; color:var(--muted); }
@@ -174,8 +182,8 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
 .buscar-manual { margin-top:14px; }
 .buscar-manual summary { cursor:pointer; color:var(--accent); font-weight:600; font-size:.82rem; padding:8px 0; }
 .buscar-manual-box { margin-top:8px; }
-.buscar-manual input { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.85rem; font-family:inherit; outline:none; margin-bottom:8px; min-height:var(--tap-min); }
-.buscar-manual input:focus { border-color:var(--accent); }
+.buscar-manual input { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.85rem; font-family:inherit; margin-bottom:8px; min-height:var(--tap-min); }
+.buscar-manual input:focus-visible { border-color:var(--accent); }
 
 .sin-candidato-box { text-align:center; padding:1.5rem 1rem; color:var(--muted); font-size:.85rem; border:1px dashed var(--border); border-radius:10px; margin-bottom:14px; }
 
@@ -199,8 +207,8 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
 
 /* ── Listas de gestión ──────────────────────────────────────────────── */
 .filtros-panel { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem; }
-.filtro-control { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text); font-size:.82rem; font-family:inherit; outline:none; min-height:var(--tap-min); }
-.filtro-control:focus { border-color:var(--accent); }
+.filtro-control { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text); font-size:.82rem; font-family:inherit; min-height:var(--tap-min); }
+.filtro-control:focus-visible { border-color:var(--accent); }
 .filtro-control.grow { flex:1; min-width:150px; }
 
 .gestion-lista { display:flex; flex-direction:column; gap:8px; }
@@ -244,8 +252,8 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
 .search-panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; max-width:600px; width:100%; padding:1.25rem; }
 .search-panel-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
 .search-panel-head button { background:none; border:0; color:var(--muted); font-size:1.1rem; cursor:pointer; min-height:var(--tap-min); min-width:var(--tap-min); }
-.search-box { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.9rem; font-family:inherit; outline:none; min-height:var(--tap-min); }
-.search-box:focus { border-color:var(--accent); }
+.search-box { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.9rem; font-family:inherit; min-height:var(--tap-min); }
+.search-box:focus-visible { border-color:var(--accent); }
 .ac-opt { display:block; width:100%; text-align:left; background:none; border:none; border-bottom:1px solid var(--border); color:var(--text); padding:9px 12px; font-size:.82rem; font-family:inherit; cursor:pointer; min-height:var(--tap-min); }
 .ac-opt:last-child { border-bottom:none; }
 .ac-opt:hover, .ac-opt:focus-visible { background:var(--surface2); }
@@ -317,6 +325,8 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
 </head>
 <body>
 
+<a class="skip-link" href="#contenido-principal">Saltar al contenido principal</a>
+
 <header class="topbar">
   <a class="back-link" href="/herramientas/home/">&larr; Inicio</a>
   <div class="topbar-title">Matcher</div>
@@ -350,17 +360,18 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
 <div class="subheader">
   <div class="dir-selector" role="group" aria-label="Dirección de trabajo">
     <button type="button" class="dir-pill active" id="dir-wc-ml" data-dir="wc_ml" aria-current="true">Sin publicación <span class="dir-n" id="dir-wc-ml-n">…</span></button>
-    <button type="button" class="dir-pill" id="dir-ml-wc" data-dir="ml_wc" aria-current="false">Sin producto<span class="dir-proximamente">Próximamente</span></button>
+    <button type="button" class="dir-pill" id="dir-ml-wc" data-dir="ml_wc" aria-current="false" disabled aria-disabled="true" title="La dirección Sin producto estará disponible próximamente">Sin producto <span class="dir-n" id="dir-ml-wc-n">…</span><span class="dir-proximamente">Próximamente</span></button>
   </div>
 </div>
 
 <div class="chips-tira-wrap">
-  <div class="chips-tira" id="chips-tira" role="group" aria-label="Secciones"></div>
+  <div class="chips-tira" id="chips-tira" role="group" aria-label="Secciones" aria-describedby="chips-scroll-hint"></div>
 </div>
+<p class="chips-scroll-hint" id="chips-scroll-hint">Deslizá horizontalmente para ver más secciones <span aria-hidden="true">→</span></p>
 
 <div class="refresco-bar" id="refresco-bar">Cargando estado de sincronización…</div>
 
-<main class="main">
+<main class="main" id="contenido-principal" tabindex="-1">
 
   <!-- ══════════════ VISTA: ENTRADA ══════════════ -->
   <section class="view" id="view-entrada" data-view="entrada">
@@ -405,7 +416,7 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
     <h1 class="page-title">Historial</h1>
     <p class="page-sub">Vínculos y descartes recientes. Deshacer disponible en cada uno.</p>
     <div class="filtros-panel">
-      <input class="filtro-control grow" type="search" id="hist-buscar" placeholder="Buscar por producto o SKU…" aria-label="Buscar por producto o SKU">
+      <input class="filtro-control grow" type="search" name="buscar-historial" autocomplete="off" id="hist-buscar" placeholder="Buscar por producto o SKU…" aria-label="Buscar por producto o SKU">
     </div>
     <div id="hist-lista"></div>
   </section>
@@ -435,7 +446,7 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
     <h1 class="page-title">Solo ML <em>— sin SKU</em></h1>
     <p class="page-sub">Publicaciones que no tienen un producto web vinculado. Zona de consulta y limpieza puntual: filtrá o buscá, no se recorre de a una.</p>
     <div class="filtros-panel">
-      <input class="filtro-control grow" type="search" id="soloml-buscar" placeholder="Buscar por título…" aria-label="Buscar publicación de ML por título">
+      <input class="filtro-control grow" type="search" name="buscar-solo-ml" autocomplete="off" id="soloml-buscar" placeholder="Buscar por título…" aria-label="Buscar publicación de ML por título">
     </div>
     <div id="soloml-lista"></div>
   </section>
@@ -496,7 +507,7 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
       <button type="button" id="search-overlay-cerrar" aria-label="Cerrar buscador">✕</button>
     </div>
     <label class="sr-only" for="buscar-topbar-input">Buscar producto por SKU o nombre</label>
-    <input class="search-box" type="text" id="buscar-topbar-input" placeholder="SKU o nombre del producto" autocomplete="off">
+    <input class="search-box" type="text" name="buscar-catalogo" id="buscar-topbar-input" placeholder="SKU o nombre del producto" autocomplete="off" spellcheck="false">
     <div id="buscar-topbar-results" style="margin-top:8px;"></div>
     <div id="buscar-topbar-detalle" style="margin-top:12px;"></div>
   </div>
@@ -579,6 +590,34 @@ function toast(mensaje, tipo, onDeshacer) {
   wrap.appendChild(el);
   announce(mensaje);
   window.setTimeout(function () { if (el.parentNode) el.remove(); }, onDeshacer ? 8000 : 4500);
+}
+
+// Colisión optimista: otra pestaña/persona resolvió primero. No es un error técnico: se
+// avanza, pero queda una salida directa para ver el snapshot ganador y, solo para su autor o
+// un administrador, deshacerlo. Nunca se ofrece Deshacer sobre trabajo ajeno.
+function toastColisionVinculo(data, clave) {
+  var propio = !!data.propio;
+  var puedeDeshacer = propio || esAdmin;
+  var por = propio ? 'Ya lo vinculaste vos en otra pestaña' : ('Ya lo resolvió ' + (data.resuelto_por || 'otra persona'));
+  var mensaje = por + ': vinculado a ' + (data.sku || 'otro SKU') + '.';
+  var wrap = document.getElementById('toast-wrap');
+  var el = document.createElement('div');
+  el.className = 'toast neutro';
+  el.setAttribute('role', 'status');
+  el.innerHTML = '<span class="toast-txt"><span aria-hidden="true">ℹ</span>' + esc(mensaje) + '</span>';
+  var ver = document.createElement('button');
+  ver.type = 'button'; ver.textContent = 'Ver';
+  ver.addEventListener('click', function () { abrirBuscador(data.sku); el.remove(); });
+  el.appendChild(ver);
+  if (puedeDeshacer) {
+    var deshacer = document.createElement('button');
+    deshacer.type = 'button'; deshacer.textContent = 'Deshacer';
+    deshacer.addEventListener('click', function () { deshacerVinculo(clave); el.remove(); });
+    el.appendChild(deshacer);
+  }
+  wrap.appendChild(el);
+  announce(mensaje);
+  window.setTimeout(function () { if (el.parentNode) el.remove(); }, 8000);
 }
 
 /* Botón admin-only: si no es admin, queda disabled + candado visible al lado (nunca oculto). */
@@ -665,9 +704,6 @@ window.addEventListener('hashchange', router);
  * Selector de dirección (solo Sin publicación funciona en esta entrega)
  * ═══════════════════════════════════════════════════════════════════════ */
 
-document.getElementById('dir-ml-wc').addEventListener('click', function () {
-  window.location.hash = '#/ml-wc';
-});
 document.getElementById('dir-wc-ml').addEventListener('click', function () {
   if (window.location.hash.replace(/^#\/?/, '').split('/')[0] === 'ml-wc' || !window.location.hash || window.location.hash === '#/') {
     window.location.hash = '#/';
@@ -710,6 +746,19 @@ function renderChipsTira(counts) {
   cont.innerHTML = html;
 }
 
+// Cuando un chip recortado recibe foco por Tab, lo llevamos a la vista. El navegador no
+// lo hace de forma consistente para contenedores con scroll horizontal.
+document.getElementById('chips-tira').addEventListener('focusin', function (e) {
+  if (e.target.classList.contains('chip-sec')) {
+    var tira = e.currentTarget;
+    var inicio = e.target.offsetLeft;
+    var fin = inicio + e.target.offsetWidth;
+    if (inicio < tira.scrollLeft || fin > tira.scrollLeft + tira.clientWidth) {
+      tira.scrollTo({ left: inicio, behavior: 'auto' });
+    }
+  }
+});
+
 function actualizarChipsActivo(vistaActual) {
   document.querySelectorAll('.chip-sec').forEach(function (el) {
     var key = el.getAttribute('data-chip');
@@ -736,6 +785,9 @@ function cargarChips() {
     counts.multipub = o2.multi_publicacion || 0;
     counts['sin-stock'] = o2.sin_stock || 0;
     document.getElementById('dir-wc-ml-n').textContent = '(' + n(res.data.total_pendientes) + ')';
+    // La dirección inversa sigue deshabilitada, pero el resumen ya expone su universo
+    // (`solo_ml`): mostrar ambos conteos evita hacer invisible trabajo del otro lado.
+    document.getElementById('dir-ml-wc-n').textContent = '(' + n(o2.solo_ml || 0) + ')';
   });
   Promise.all([pSospechosos, pResumen]).then(function () { renderChipsTira(counts); actualizarChipsActivo(vistaActualNombre()); });
 }
@@ -1019,8 +1071,8 @@ function tarjetaHtml(prod, cand, opts) {
     '<div class="match-card" id="tarjeta-principal">' +
     '<div class="conf-badge ' + cand.confianza + '"><span aria-hidden="true">' + conf.icono + '</span>' + conf.texto + '</div>' +
     '<div class="fotos-row">' +
-    '<div class="foto-col anchor"><span class="rol-pill anchor">Punto de partida</span><div class="foto-box">' + (prod.img ? '<img src="' + esc(prod.img) + '" alt="Foto del producto web: ' + esc(prod.nombre) + '">' : '<span class="sinfoto">Sin foto</span>') + '</div></div>' +
-    '<div class="foto-col candidate"><span class="rol-pill candidate">Candidato</span><div class="foto-box">' + (cand.ml_img ? '<img src="' + esc(cand.ml_img) + '" alt="Foto de la publicación de ML: ' + esc(cand.ml_titulo) + '">' : '<span class="sinfoto">Sin foto</span>') + '</div></div>' +
+    '<div class="foto-col anchor"><span class="rol-pill anchor">Punto de partida</span><div class="foto-box">' + (prod.img ? '<img src="' + esc(prod.img) + '" alt="Foto del producto web: ' + esc(prod.nombre) + '" width="180" height="180">' : '<span class="sinfoto">Sin foto</span>') + '</div></div>' +
+    '<div class="foto-col candidate"><span class="rol-pill candidate">Candidato</span><div class="foto-box">' + (cand.ml_img ? '<img src="' + esc(cand.ml_img) + '" alt="Foto de la publicación de ML: ' + esc(cand.ml_titulo) + '" width="180" height="180">' : '<span class="sinfoto">Sin foto</span>') + '</div></div>' +
     '</div>' +
     '<div class="titulos-stack">' +
     '<div><div class="titulo-fuente-label">Web</div><div class="title-diff">' + wcHtml + '</div></div>' +
@@ -1048,7 +1100,7 @@ function candidatoCompactoHtml(prod, cand, idx, numeroVisible) {
   var conf = nivelConfianzaTexto(cand.confianza);
   return (
     '<button type="button" class="match-card--compact" data-idx="' + idx + '">' +
-    (cand.ml_img ? '<img class="mc-thumb" src="' + esc(cand.ml_img) + '" alt="">' : '<div class="mc-thumb"></div>') +
+    (cand.ml_img ? '<img class="mc-thumb" src="' + esc(cand.ml_img) + '" alt="" width="40" height="40" loading="lazy">' : '<div class="mc-thumb"></div>') +
     '<div class="mc-info"><span class="mc-num">#' + numeroVisible + '</span> <div class="conf-badge ' + cand.confianza + '" style="margin-bottom:4px;"><span aria-hidden="true">' + conf.icono + '</span>' + conf.texto + '</div>' +
     '<div class="title-diff">' + mlHtml + '</div></div>' +
     '</button>'
@@ -1081,7 +1133,7 @@ function renderTarjeta(prod) {
 
   html += '<details class="buscar-manual"><summary>Buscar manualmente</summary>' +
     '<div class="buscar-manual-box">' +
-    '<input type="search" id="buscar-manual-input" placeholder="Escribí parte del título…" aria-label="Buscar publicación de ML manualmente">' +
+    '<input type="search" id="buscar-manual-input" name="buscar-publicacion-ml" autocomplete="off" spellcheck="false" placeholder="Escribí parte del título…" aria-label="Buscar publicación de ML manualmente">' +
     '<div id="buscar-manual-resultados"></div>' +
     '</div></details>';
 
@@ -1177,11 +1229,7 @@ function ligarAccionesTarjeta(prod, cand) {
         // así que es el caso más común): `propio` distingue "lo resolvió otro" de "fuiste
         // vos mismo en otra pestaña" — avanzar sola en los dos casos, no es un error, pero
         // el mensaje tiene que decir la verdad.
-        if (res.data.propio) {
-          toast('Ya lo vinculaste vos (en otra pestaña) a ' + res.data.sku, 'neutro');
-        } else {
-          toast('Ya lo resolvió ' + res.data.resuelto_por + ': vinculado a ' + res.data.sku, 'neutro');
-        }
+        toastColisionVinculo(res.data, cand.ml_clave);
         avanzarSiguiente();
         return;
       }
@@ -1465,7 +1513,7 @@ function cargarSoloMl() {
     cont.innerHTML = '<p class="page-sub">' + n(res.data.total) + ' publicaciones sin SKU en total.' + avisoParcial + '</p>' +
       '<div class="gestion-lista">' + data.map(function (r) {
         return '<div class="solo-ml-row">' +
-          (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="">' : '<div class="mc-thumb"></div>') +
+          (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="" width="40" height="40" loading="lazy">' : '<div class="mc-thumb"></div>') +
           '<div class="flex1">' + esc(r.titulo) + '<div class="meta" style="color:var(--muted);font-size:.72rem;">' + esc(r.clave) + ' · ' + money(r.precio) + ' · Stock ' + n(r.available_quantity) + '</div></div>' +
           '<div class="pub-acciones">' +
           '<button type="button" class="mini-btn" data-mc="' + esc(r.clave) + '">' + (r.marcada_correcta ? '✓ Correcta' : 'Marcar correcta') + '</button>' +
@@ -1473,7 +1521,7 @@ function cargarSoloMl() {
           '<button type="button" class="mini-btn" data-vincular-toggle="' + esc(r.clave) + '">Vincular a producto</button>' +
           '</div>' +
           '<div class="buscador-inline" hidden data-vincular-box="' + esc(r.clave) + '">' +
-          '<input type="text" placeholder="Buscar producto web por nombre o SKU…" aria-label="Buscar producto web para vincular a ' + esc(r.titulo) + '" data-vincular-input="' + esc(r.clave) + '">' +
+          '<input type="text" name="buscar-producto-web" autocomplete="off" spellcheck="false" placeholder="Buscar producto web por nombre o SKU…" aria-label="Buscar producto web para vincular a ' + esc(r.titulo) + '" data-vincular-input="' + esc(r.clave) + '">' +
           '<div data-vincular-resultados="' + esc(r.clave) + '"></div>' +
           '</div>' +
           '</div>';
@@ -1546,11 +1594,7 @@ function vincularSoloMl(clave, idWoo, resultados) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id_woo: idWoo }),
   }).then(function (res2) {
     if (res2.status === 409 && res2.data && res2.data.ya_resuelto) {
-      if (res2.data.propio) {
-        toast('Ya lo vinculaste vos (en otra pestaña) a ' + res2.data.sku, 'neutro');
-      } else {
-        toast('Ya lo resolvió ' + res2.data.resuelto_por + ': vinculado a ' + res2.data.sku, 'neutro');
-      }
+      toastColisionVinculo(res2.data, clave);
       cargarSoloMl();
       return;
     }
@@ -1666,7 +1710,7 @@ function renderSospechosoRow(row) {
 
   return '<div class="pub-card" data-clave="' + esc(row.clave) + '" data-wc-nombre="' + esc(row.wc_nombre || '') + '">' +
     '<div class="pub-head">' +
-    (row.thumbnail ? '<img src="' + esc(row.thumbnail) + '" alt="Foto de la publicación en ML">' : '') +
+    (row.thumbnail ? '<img src="' + esc(row.thumbnail) + '" alt="Foto de la publicación en ML" width="64" height="64" loading="lazy">' : '') +
     '<div class="pub-titulos">' +
     '<button type="button" class="pub-titulo-ml" data-abrir-sku="' + esc(row.sku) + '" style="background:none;border:none;color:var(--text);text-align:left;cursor:pointer;padding:0;font:inherit">' + esc(row.titulo || row.item_id) + '</button>' +
     '<div class="pub-nombre-wc">WC: ' + esc(row.wc_nombre || '—') + ' · SKU ' + esc(row.sku) + '</div>' +
@@ -1678,7 +1722,7 @@ function renderSospechosoRow(row) {
     chipsHtml +
     '<div class="pub-acciones">' +
     (row.permalink ? '<a class="btn" href="' + esc(row.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
-    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(row.clave) + '">Reasignar a otro SKU</button>' +
+    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(row.clave) + '" data-expected-sku="' + esc(row.sku || '') + '">Reasignar a otro SKU</button>' +
     botonAdminHtml('btn danger', 'data-accion="desvincular" data-clave="' + esc(row.clave) + '"', 'Desvincular') +
     '</div>' +
     '<div class="pub-flash" data-flash></div>' +
@@ -1784,13 +1828,16 @@ function abrirModalDesvincular(btn, onExito) {
 }
 function abrirModalReasignar(btn, onExito) {
   var clave = btn.getAttribute('data-clave');
+  // Snapshot observado al abrir la tarjeta: el backend lo compara antes de escribir para
+  // que otra pestaña/persona no quede pisada en silencio.
+  var expectedSku = btn.getAttribute('data-expected-sku') || null;
   var pubCard = btn.closest('.pub-card');
   var nombreActual = (pubCard && pubCard.getAttribute('data-wc-nombre')) || 'el producto actual';
   abrirModal(
     '<div class="modal-title" id="modal-title">Reasignar a otro SKU</div>' +
     '<div class="modal-body">Buscá el producto al que querés que esta publicación sincronice stock.' +
     '<label class="sr-only" for="modal-sku-input">Buscar por SKU o nombre</label>' +
-    '<input class="search-box" type="text" id="modal-sku-input" placeholder="SKU o nombre" autocomplete="off" style="margin-top:10px;">' +
+    '<input class="search-box" type="text" name="reasignar-sku" id="modal-sku-input" placeholder="SKU o nombre" autocomplete="off" spellcheck="false" style="margin-top:10px;">' +
     '<div class="modal-search-results hidden" id="modal-sku-results"></div>' +
     '<div id="modal-resumen"></div></div>' +
     '<div class="modal-actions"><button type="button" class="btn" id="modal-cancelar">Cancelar</button><button type="button" class="btn primary" id="modal-confirmar" disabled>Reasignar</button></div>'
@@ -1833,8 +1880,14 @@ function abrirModalReasignar(btn, onExito) {
     if (!skuElegido) return;
     confirmarBtn.disabled = true; confirmarBtn.textContent = 'Reasignando…';
     jsonFetch('/api/cobertura/vinculos/reasignar', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clave: clave, sku: skuElegido }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clave: clave, sku: skuElegido, expected_sku: expectedSku }),
     }).then(function (res) {
+      if (res.status === 409 && res.data && Object.prototype.hasOwnProperty.call(res.data, 'sku_actual')) {
+        cerrarModal();
+        toast('El vínculo cambió mientras lo revisabas; ahora apunta a ' + (res.data.sku_actual || 'ningún SKU') + '. Se actualizó el detalle.', 'neutro');
+        if (onExito) onExito();
+        return;
+      }
       if (!res.ok || !res.data || !res.data.ok) {
         confirmarBtn.disabled = false; confirmarBtn.textContent = 'Reasignar';
         mostrarErrorModal((res.data && res.data.error) || 'No se pudo reasignar.');
@@ -1939,7 +1992,7 @@ function mostrarDetalleProducto(sku) {
 }
 function renderDetalleProducto(producto, publicaciones) {
   var html = '<div class="producto-card">' +
-    (producto.img ? '<img src="' + esc(producto.img) + '" alt="Foto de ' + esc(producto.nombre || producto.sku) + '">' : '') +
+    (producto.img ? '<img src="' + esc(producto.img) + '" alt="Foto de ' + esc(producto.nombre || producto.sku) + '" width="72" height="72" loading="lazy">' : '') +
     '<div class="producto-info"><div class="producto-nombre">' + esc(producto.nombre || '(sin nombre)') + '</div>' +
     '<div class="producto-meta"><span class="pill-sku">' + esc(producto.sku) + '</span><span>Stock: ' + n(producto.stock) + '</span>' +
     '<span>Lista: ' + money(producto.precio_lista) + '</span><span class="contado">Contado: ' + money(producto.precio_contado) + '</span></div></div></div>';
@@ -1967,7 +2020,7 @@ function renderPubCardDetalle(pub, wcNombre) {
         '<button type="button" class="chip-revisar" data-clave="' + esc(pub.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button></span>';
     }).join('') + '</div>';
   return '<div class="pub-card" data-clave="' + esc(pub.clave) + '" data-wc-nombre="' + esc(wcNombre || '') + '">' +
-    '<div class="pub-head">' + (pub.thumbnail ? '<img src="' + esc(pub.thumbnail) + '" alt="">' : '') +
+    '<div class="pub-head">' + (pub.thumbnail ? '<img src="' + esc(pub.thumbnail) + '" alt="" width="64" height="64" loading="lazy">' : '') +
     '<div class="pub-titulos"><div class="pub-titulo-ml">' + esc(pub.titulo || pub.item_id) + '</div><div class="pub-nombre-wc">WC: ' + esc(wcNombre || '—') + '</div></div></div>' +
     '<div class="pub-grid">' +
     '<div class="pub-dato"><span class="k">SKU en ML</span><span class="v">' + esc(pub.seller_sku || '—') + '</span></div>' +
@@ -1977,7 +2030,7 @@ function renderPubCardDetalle(pub, wcNombre) {
     '</div>' + chipsHtml +
     '<div class="pub-acciones">' +
     (pub.permalink ? '<a class="btn" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
-    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(pub.clave) + '">Reasignar a otro SKU</button>' +
+    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(pub.clave) + '" data-expected-sku="' + esc(pub.decision_sku || '') + '">Reasignar a otro SKU</button>' +
     botonAdminHtml('btn danger', 'data-accion="desvincular" data-clave="' + esc(pub.clave) + '"', 'Desvincular') +
     '</div><div class="pub-flash" data-flash></div></div>';
 }

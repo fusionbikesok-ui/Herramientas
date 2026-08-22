@@ -224,7 +224,7 @@ describe('Cobertura — hallazgos del revisor (2ª ronda)', () => {
   it('vinculos/:clave/deshacer: si la desvinculación post-delete FALLA (4xx de ML), se restaura la decisión local (no miente que está libre)', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     seedMl(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'X' }); // snapshot inicial: sin seller_sku
-    db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, actualizado_en) VALUES ('MLA1|', 'FB-1', 'X', 'confirmar', 'cobertura', ?)").run(new Date().toISOString());
+    db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, confirmado_por, actualizado_en) VALUES ('MLA1|', 'FB-1', 'X', 'confirmar', 'cobertura', 'tester', ?)").run(new Date().toISOString());
     mlFetch.mockResolvedValue({ status: 500, data: { message: 'ML caído' } });
     simularCarreraDePushEnDelete(db, 'MLA1|', 'FB-1');
 
@@ -236,6 +236,7 @@ describe('Cobertura — hallazgos del revisor (2ª ronda)', () => {
     expect(decision).toBeTruthy();
     expect(decision.accion).toBe('confirmar');
     expect(decision.sku).toBe('FB-1');
+    expect(decision.confirmado_por).toBe('tester');
 
     // Mutation testing manual: quité el bloque de restauración (el INSERT dentro del `if
     // (!resultado.ok)`) y corrí este test — la decisión quedaba `undefined` (local "libre"

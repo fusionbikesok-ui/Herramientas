@@ -345,7 +345,8 @@ con `accion` en `asignar`/`confirmar`).
 - Request: sin body. `:sku` en la URL.
 - Response 200: `{ "ok": true, "producto": { "sku", "nombre", "stock", "img", "precio_lista",
   "precio_contado" }, "publicaciones": [{ "clave", "item_id", "variation_id", "titulo",
-  "status", "sub_status", "color", "talle", "variations_texto", "seller_sku", "thumbnail",
+  "status", "sub_status", "color", "talle", "variations_texto", "seller_sku",
+  "decision_sku", "thumbnail",
   "permalink", "precio_ml", "precio_actualizado_en", "stock_ml", "stock_sincronizado",
   "senales": [{ "senal", "peso", "detalle", "valor" }] }] }`.
   `senales` ya viene filtrada de las que el usuario descartó con el mismo valor concreto
@@ -353,6 +354,9 @@ con `accion` en `asignar`/`confirmar`).
   `catalogo_cache.regular_price` (precio de LISTA), nunca de `precio` (VIGENTE) — ver el
   porqué en el comentario de `precioWebClave()` en `lib/mlPrecios.js`. Ambos son `null` si
   `regular_price` es NULL.
+  `decision_sku` es el SKU de la decisión local vigente y funciona como snapshot para la
+  reasignación optimista; puede diferir de `seller_sku` mientras el cambio todavía no se
+  publicó o no fue observado en MercadoLibre.
 - Response 400: `{ "ok": false, "error": "sku requerido" }`.
 - Response 404: `{ "ok": false, "error": "SKU no encontrado en el catálogo" }`.
 
@@ -390,14 +394,23 @@ clave en la MISMA transacción que la reasignación: valían para el vínculo an
 nuevo, y si el borrado quedara fuera de la transacción un fallo a mitad de camino dejaría
 descartes viejos tapando señales legítimas del vínculo nuevo.
 
-- Request: `{ "clave", "sku" }` — ambos strings no vacíos.
-- Response 200: `{ "ok": true }`.
+- Request: `{ "clave", "sku", "expected_sku" }`. `clave` y `sku` son strings no vacíos;
+  `expected_sku` es el SKU que el cliente leyó antes de abrir/confirmar la edición, o
+  `null` si en ese snapshot no había decisión. El campo es obligatorio: una reasignación
+  deliberada de una decisión moderna se acepta cuando coincide con el valor actual.
+- Response 200: `{ "ok": true, "clave", "sku_anterior", "sku" }`.
 - Response 400: `{ "ok": false, "error": "clave requerida" }`,
   `{ "ok": false, "error": "sku requerido" }`,
+  `{ "ok": false, "error": "expected_sku requerido (string o null)" }`,
   `{ "ok": false, "error": "La clave no existe en el caché de publicaciones" }` (evita crear un
   vínculo fantasma en `sku_matcher_decisiones` que no aparece en ningún listado pero ensucia
   el contador de "necesitan atención" del home), o
   `{ "ok": false, "error": "El SKU no existe en el catálogo" }`.
+- Response 409: el vínculo ya no coincide con el snapshot del cliente; no escribe nada.
+  `{ "ok": false, "ya_resuelto": true, "expected_sku", "sku_actual", "sku",
+  "resuelto_por", "propio", "accion", "wc_nombre", "error" }`. El frontend debe
+  refrescar el vínculo y pedir confirmación otra vez; para una corrección deliberada nueva,
+  reenviar el `sku_actual` recién leído como el próximo `expected_sku`.
 
 ### POST /api/cobertura/vinculos/:clave/desvincular (nuevo, **ADMIN-ONLY**)
 Borra el mapeo (`sku_matcher_decisiones` + descartes de `ml_vinculos_revisados`) para que la
@@ -527,6 +540,22 @@ por "todo lo que matchea el filtro actual".
   re-previsualizar y reintentar.
 - Permiso: `anyOf: ['config-ml']`, nivel `write` (regla `^\/sync\/config-ml(\/|$)` de
   `lib/permisos.js`, ya existente — el POST cae ahí igual que el alta unitaria).
+
+## Preparación de pedidos — cola e historial
+
+### GET /api/preparacion/pendientes
+
+Las filas de canal `ml` incluyen ambos identificadores: `ml_order_id` (id técnico de la
+orden) y `pack_id` (id del pack que MercadoLibre muestra al vendedor; `null` si la orden no
+pertenece a un pack). No deben suponerse iguales. Ejemplo real cubierto:
+`pack_id:"2000014544268249"` con `ml_order_id:"2000017948004320"`. El buscador del cliente
+debe contemplar ambos. Las filas `web` no tienen `pack_id`.
+
+### GET /api/preparacion/historial
+
+Cada preparación de canal `ml` expone `pack_id` además de `ml_order_id`. Las preparaciones
+anteriores al soporte del campo se completan desde `pedidos_cache` mediante la migración
+022 y en cada sincronización/alta idempotente posterior; hasta entonces puede ser `null`.
 
 ## Preparación de pedidos — perfiles de foto por SKU
 
@@ -837,8 +866,11 @@ Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es da
   { "ok": true, "data": {
     "esperando":       [{ "wc_order_id", "envio", "preparacion_id", "estado_preparacion" }],
     "sin_preparacion": [{ "wc_order_id", "envio", "preparacion_id", "estado_preparacion" }],
-    "a_medias":        [{ "wc_order_id", "envio", "preparacion_id", "tracking" }],
+    "a_medias":        [{ "wc_order_id", "envio", "preparacion_id", "tracking", "incierto" }],
     "a_medias_total": 1,
+    "a_medias_limit": 20,
+    "a_medias_offset": 0,
+    "a_medias_has_more": false,
     "despachados_sin_verificar": 3,
     "cargados_hoy": 5,
     "truncado": false
@@ -853,8 +885,11 @@ Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es da
   excluyen los `en_preparacion`: marcar "etiqueta lista" (`POST /etiquetas/:wcOrderId/lista`)
   ya crea una preparación en ese estado sin trabajo real — excluirlos escondería justo los
   pedidos por despacharse, y un pedido que no aparece manda al operario de vuelta a Woo.
-- **`a_medias`**: `woo_paso2_pendiente=1` — paso 1 confirmado en Woo (tracking guardado,
-  mail ya mandado) pero el paso 2 (status final `enviadoandreani`) todavía no. El `tracking`
+- **`a_medias`**: `woo_paso2_pendiente=1` — requiere reconciliar/terminar el flujo. En el
+  caso normal, el paso 1 quedó confirmado en Woo y falta el status final; cuando
+  `incierto:true`, el PUT 1 no tuvo respuesta concluyente y el backend todavía **no** afirma
+  que Woo haya guardado el tracking ni mandado el mail. El cron consulta Woo y no manda el
+  PUT 2 hasta confirmar estado `completed` + el mismo tracking (fail-closed). El `tracking`
   sale de la columna local `preparaciones.tracking` (guardada en el mismo INSERT que pone
   `woo_paso2_pendiente=1`, ver más abajo) — de solo lectura, no se le vuelve a pedir a Woo.
   **`envio` también sale entero de datos locales** (`preparaciones.numero_pedido`/`comprador`/
@@ -866,9 +901,11 @@ Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es da
   local es más pobre (sin dirección exacta) pero alcanza para identificar al comprador — no
   hace falta reimprimir la etiqueta desde acá. `pedido` es **`order.number`** (numeración
   custom de esta tienda en Woo), nunca `wc_order_id`: son valores distintos, y el operario
-  busca por el primero. La lista viene con **`LIMIT 20`** (`ORDER BY id`); `a_medias_total` es
-  el conteo real del universo `woo_paso2_pendiente=1`, para que el frontend pueda decir
-  "mostrando 20 de N".
+  busca por el primero. La lista acepta query `a_medias_limit` (default 20, mínimo 1, máximo
+  100) y `a_medias_offset` (default 0). `a_medias_total` cuenta el universo entero y
+  `a_medias_has_more` indica si quedan filas. El frontend debe paginar/cargar más mientras
+  `a_medias_has_more` sea `true`, o volver a pedir offset 0 después de cada reintento; no debe
+  asumir que las primeras 20 son la lista completa.
 - **`despachados_sin_verificar`**: solo el número (`COUNT(*)` de preparaciones `canal='web'`
   en ese estado — esta pantalla es exclusivamente Andreani/web, y hoy nada del flujo `ml` deja
   preparaciones en este estado). **Sin ventana temporal, a propósito**: `despachada_sin_verificar`
@@ -898,8 +935,8 @@ El fail-closed por estado, el salteo del paso 1 en el reintento (para no reenvia
 
 - **I1 — CAMBIO DE CONTRATO, avisar al frontend**: el evento `tipo:'tracking_cargado'` en
   `preparacion_eventos` (`detalle: { tracking }`, fuente de `GET /seguimientos.data.cargados_hoy`)
-  ahora se registra **inmediatamente después del INSERT local del paso 1** (antes de intentar
-  el paso 2), no solo "en el camino de éxito" como decía esta misma sección hasta la ronda
+  ahora se registra **inmediatamente después de que Woo confirma el PUT del paso 1** (antes
+  de intentar el paso 2), no solo "en el camino de éxito" como decía esta misma sección hasta la ronda
   anterior. Motivo: el paso 1 (Woo en `completed`, tracking guardado, mail nativo ya
   mandado) es el momento real en que el tracking "quedó cargado" — si el paso 2 falla
   (`502`/`colgado:true`) el pedido ya salió igual, y antes ese caso no sumaba a
@@ -921,6 +958,15 @@ El fail-closed por estado, el salteo del paso 1 en el reintento (para no reenvia
   esta tienda), así que el operario no podía ubicar en Woo el único pedido que está trabado.
   `localidad` sale de `shipping.city` con fallback a `billing.city` (mismo criterio que
   `normalizarEnvio`).
+- **Resultado incierto del PUT 1 — fail-closed y visible:** la fila local con
+  `woo_paso2_pendiente=1`, `woo_paso1_incierto=1` y el tracking se persiste antes de enviar
+  el PUT. Si Woo devuelve
+  timeout/error, responde `502` con
+  `{ "ok": false, "colgado": true, "incierto": true, "error": "..." }`, registra
+  `tracking_paso1_incierto` y no intenta el PUT 2. `GET /seguimientos` lo expone como
+  `a_medias[].incierto:true`. No registra `tracking_cargado` hasta que
+  Woo haya confirmado el paso 1. Así el pedido permanece en `a_medias` aunque Woo haya
+  aplicado la escritura pero la respuesta se haya perdido.
 
 ### POST /api/preparacion/seguimientos/:wcOrderId/corregir-tracking (ajuste menor)
 Ahora también actualiza `preparaciones.tracking` (el mismo espejo local de arriba) al tracking
@@ -942,6 +988,18 @@ permanente (el chip la contaba todos los días, y "Reintentar" nunca podía reso
 - **Cualquier otro error sigue fail-closed** (5xx, timeout, red): no se toca la bandera, se
   reintenta en la corrida siguiente — no hay forma de distinguir ahí "temporal" de
   "permanente".
+- Antes de enviar el PUT 2, el cron hace `GET /orders/{id}`. Si Woo ya está en el estado
+  final, solo cierra la fila local si `_andreani_tracking` coincide con
+  `preparaciones.tracking`; si está en `completed`, exige la misma coincidencia antes del
+  PUT 2. La única compatibilidad legacy es una fila cuyo tracking local sea `NULL`: su
+  bandera conserva la semántica anterior de "paso 1 confirmado". En cualquier otro estado
+  o ante un tracking diferente/ausente deja la bandera activa y no escribe.
+- Cuando el GET confirma el mismo tracking en `completed` o en el estado final, registra
+  `tracking_cargado` mediante un INSERT idempotente por preparación. En `completed` ocurre
+  antes del PUT 2; si ese PUT falla y el cron vuelve a pasar, el contador `cargados_hoy`
+  sigue sumando uno. Si Woo ya estaba en el estado final no repite el PUT 2, pero registra
+  igualmente `tracking_cargado` y conserva el evento separado `tracking_recuperado` al
+  cerrar la fila local.
 
 ## Contador de Inventario (`/api/inventario`)
 
@@ -1494,6 +1552,8 @@ efectivizó en ML, revierte local sin llamar a ML.
   ya está puesto, se dispara `desvincularSkuEnMl` fail-closed; si esa desvinculación falla,
   **se restaura la decisión local** (vuelve a coincidir con la realidad de ML) y responde
   `502 { fail_closed:true }` — nunca queda local diciendo "libre" mientras ML sigue con el SKU.
+  La restauración conserva también `confirmado_por`; no degrada una decisión moderna a una
+  fila legacy sin autoría.
 
 **🟡 corregido (revisor, ronda 3) — `mlFetch` LANZA ante fallo de transporte, no siempre
 devuelve `{ ok:false }`** (`lib/mlClient.js`: `throw e` tras un error de red/timeout/DNS, a
@@ -1665,12 +1725,11 @@ documento decía que `deshacer` no era la misma acción que "desvincular" porque
 la publicación en vivo. Era falso: cuando el vínculo ya se efectivizó, `deshacer` llama al
 mismo `desvincularSkuEnMl` y escribe en ML igual. Hallazgo del revisor.)*
 
-**`POST /api/cobertura/vinculos/reasignar` no es admin-only**, pero desde la entrega 1 pasa
-por la **misma revalidación** que confirmar: si la clave ya la resolvió otra persona con otro
-SKU, devuelve `409 { ya_resuelto, resuelto_por, propio, sku, wc_nombre }` en vez de pisarla en
-silencio. Antes vivía bajo el permiso `sync-ml` (otra herramienta, otro perfil de usuario) y
-esa diferencia era defendible; al mudarla a la superficie del Matcher quedan las dos
-escrituras a un click de distancia y tienen que jugar con la misma regla.
+**`POST /api/cobertura/vinculos/reasignar` no es admin-only** y permite una corrección
+deliberada, pero exige `expected_sku` (string o `null`). Si coincide con la decisión actual,
+la cambia; si el vínculo cambió desde que el cliente lo leyó, devuelve `409 { ya_resuelto,
+expected_sku, sku_actual, resuelto_por, propio, sku, wc_nombre }` sin escribir. El frontend
+debe refrescar y volver a pedir confirmación con el nuevo snapshot.
 
 **Límite real del gate de "desvincular", para que no diga lo que no es:** es admin-only *en
 la superficie del Matcher*. Quien además tenga `sync-ml` con nivel `write` puede desvincular

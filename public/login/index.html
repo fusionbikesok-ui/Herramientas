@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Fusion Bikes — Acceso</title>
+  <link rel="icon" href="logo.png" type="image/png">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -335,31 +336,31 @@
   </div>
 
   <div class="form-side">
-    <div class="form-card">
+    <form class="form-card" id="login-form" novalidate>
       <div class="form-eyebrow">Equipo Fusion Bikes</div>
       <h2 class="form-title">Ingresá al panel</h2>
       <p class="form-sub">Usá tus credenciales de equipo para continuar.</p>
 
-      <div class="error-msg" id="error-msg">Usuario o contraseña incorrectos.</div>
+      <div class="error-msg" id="error-msg" role="alert">Usuario o contraseña incorrectos.</div>
 
       <div class="field">
         <label for="user">Usuario</label>
-        <input type="text" id="user" autocomplete="username" autofocus placeholder="tu usuario">
+        <input type="text" id="user" name="username" autocomplete="username" spellcheck="false" autofocus placeholder="tu usuario">
       </div>
 
       <div class="field">
         <label for="pass">Contraseña</label>
-        <input type="password" id="pass" autocomplete="current-password" placeholder="••••••••">
+        <input type="password" id="pass" name="password" autocomplete="current-password" placeholder="••••••••">
       </div>
 
       <div style="text-align:right;margin-bottom:14px;margin-top:-6px">
         <a href="/herramientas/reset-password/" style="font-size:.78rem;color:var(--muted);text-decoration:none">¿Olvidaste tu contraseña?</a>
       </div>
-      <button class="btn-submit" id="btn">
+      <button class="btn-submit" id="btn" type="submit">
         <span id="btn-text">Entrar</span>
         <span class="btn-spinner" id="btn-spinner"></span>
       </button>
-    </div>
+    </form>
   </div>
 
   <script>
@@ -422,12 +423,15 @@
       }
     }
 
-    document.getElementById('btn').addEventListener('click', login);
-    document.getElementById('pass').addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') login();
+    document.getElementById('login-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      login();
     });
     document.getElementById('user').addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') document.getElementById('pass').focus();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('pass').focus();
+      }
     });
   </script>
 </body>

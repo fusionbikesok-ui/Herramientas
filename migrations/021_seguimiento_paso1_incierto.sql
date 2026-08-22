@@ -1,0 +1,13 @@
+-- Estado durable del primer PUT de Seguimientos.
+--
+-- La bandera se escribe ANTES de mandar tracking + status=completed a Woo. Solo se limpia
+-- cuando Woo responde o una reconciliacion posterior confirma el mismo tracking. Por eso un
+-- timeout o una caida del proceso no puede ocultar que el resultado fue incierto.
+--
+-- ORDEN DE DESPLIEGUE PARA UNA BASE EXISTENTE:
+-- 1. Con la aplicacion detenida, comprobar la columna con:
+--      PRAGMA table_info(preparaciones);
+-- 2. Solo si falta woo_paso1_incierto, aplicar este archivo antes de arrancar el codigo.
+--
+-- Las bases nuevas no ejecutan 021: ensureTables incluye la columna en el alta idempotente.
+ALTER TABLE preparaciones ADD COLUMN woo_paso1_incierto INTEGER NOT NULL DEFAULT 0;
