@@ -23,9 +23,10 @@ Actualizado: 2026-08-21.
 
 ## Próximo paso
 
-- Integrar `448b679` sobre `conteo-confiable`, publicar y reiniciar PM2 después de cerrar la
-  auditoría. El reintento del agente Claude quedó temporalmente bloqueado porque `claude -p`
-  no respondió en 30 s; no se inventó un handoff nuevo.
+- Entrega 2 integrada en `conteo-confiable` mediante merge `6cd89e7`, publicada en GitHub y
+  con PM2 `herramientas` reiniciado (PID 2334035, online). El endpoint local `/login/` respondió
+  200. El reintento del agente Claude quedó temporalmente bloqueado porque `claude -p` no
+  respondió en 30 s; no se inventó un handoff nuevo.
 
 ## Evidencia reciente
 
@@ -34,8 +35,10 @@ Actualizado: 2026-08-21.
 
 ## Bloqueos conocidos
 
-- Entrega 2 debe integrarse sobre `conteo-confiable` (`19e1f9e`) sin revertir Entrega 1; esa
-  integración requiere repetir `git diff --check` y la salud de PM2.
+- Revisión formal nueva de Claude y auditoría independiente pendientes por indisponibilidad
+  temporal del ejecutable Claude; la revisión local, suite global y E2E previo están aprobados.
+- Los logs de PM2 muestran 429 de ML y fallos de Woo ya existentes en crons; el proceso quedó
+  online y el endpoint de login responde correctamente.
 - Las notas del E2E no bloquean Entrega 2; el auditor debe decidir si registra el prefijo
   `/herramientas/` y el mensaje de permisos como backlog separado.
 
