@@ -36,8 +36,9 @@ Actualizado: 2026-08-21.
 ## Bloqueos conocidos
 
 - Revisión formal nueva de Claude y auditoría independiente pendientes: el reintento del
-  2026-08-22 terminó por timeout controlado a los 60 s, sin procesos ni cambios. La revisión
-  local, suite global y E2E previo están aprobados.
+  2026-08-22 terminó por timeout controlado. Diagnóstico: autenticación Pro vigente, pero
+  `api.anthropic.com` devuelve `getaddrinfo ETIMEOUT`; el sandbox también bloquea escrituras
+  en `/root/.claude` con `EROFS`. No hay evidencia de cuota agotada.
 - Los logs de PM2 muestran 429 de ML y fallos de Woo ya existentes en crons; el proceso quedó
   online y el endpoint de login responde correctamente.
 - Las notas del E2E no bloquean Entrega 2; el auditor debe decidir si registra el prefijo
