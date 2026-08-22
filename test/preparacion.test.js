@@ -1667,6 +1667,61 @@ describe('syncPedidosCache', () => {
   });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
+  it('backfillea pack_id en una preparación ML existente cuando el pack real difiere del ml_order_id', async () => {
+    const mlOrderId = '2000017948004320';
+    const packId = '2000014544268249';
+    crearPreparacion(db, {
+      canal: 'ml', mlOrderId, numeroPedido: mlOrderId, comprador: 'Comprador ML', items: [],
+    });
+    expect(db.prepare('SELECT pack_id FROM preparaciones WHERE clave=?').get(`ml:${mlOrderId}`).pack_id).toBeNull();
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { results: [{
+          id: Number(mlOrderId), pack_id: Number(packId), status: 'paid',
+          date_created: new Date().toISOString(), buyer: { nickname: 'comprador_ml' },
+          shipping: { id: 987 }, order_items: [],
+        }] },
+      })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } });
+
+    await syncPedidosCache(db, CFG);
+
+    const cache = db.prepare('SELECT ml_order_id, pack_id FROM pedidos_cache WHERE clave=?').get(`ml:${mlOrderId}`);
+    const prep = db.prepare('SELECT ml_order_id, pack_id FROM preparaciones WHERE clave=?').get(`ml:${mlOrderId}`);
+    expect(cache).toEqual({ ml_order_id: mlOrderId, pack_id: packId });
+    expect(prep).toEqual({ ml_order_id: mlOrderId, pack_id: packId });
+    expect(prep.pack_id).not.toBe(prep.ml_order_id);
+  });
+
+  it('backfillea pack_id de una preparación completada antes de saltearla, sin pedir su shipment', async () => {
+    const mlOrderId = '2000017948004320';
+    const packId = '2000014544268249';
+    const prepId = crearPreparacion(db, {
+      canal: 'ml', mlOrderId, numeroPedido: mlOrderId, comprador: 'Comprador ML', items: [],
+    });
+    db.prepare("UPDATE preparaciones SET estado='completada', completado_en=? WHERE id=?")
+      .run(new Date().toISOString(), prepId);
+
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({
+      status: 200,
+      data: { results: [{
+        id: Number(mlOrderId), pack_id: Number(packId), status: 'paid',
+        date_created: new Date().toISOString(), buyer: { nickname: 'comprador_ml' },
+        shipping: { id: 987 }, order_items: [],
+      }] },
+    });
+
+    await syncPedidosCache(db, CFG);
+
+    expect(mlFetch).toHaveBeenCalledTimes(1); // /orders/search; shipment se ahorra por completada
+    expect(db.prepare('SELECT estado, pack_id FROM preparaciones WHERE id=?').get(prepId))
+      .toEqual({ estado: 'completada', pack_id: packId });
+  });
+
   it('guarda en pedidos_cache un pedido web pendiente (lpaandreani) con estado_envio=pendiente', async () => {
     const orderPend = {
       id: 900, number: '900', status: 'lpaandreani', date_created: '2026-07-01T00:00:00Z',

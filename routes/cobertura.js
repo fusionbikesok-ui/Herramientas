@@ -699,10 +699,13 @@ export function coberturaRouter(db, cfg) {
       }
       if (!resultado.ok) {
         db.prepare(`
-          INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, actualizado_en)
-          VALUES (?, ?, ?, 'confirmar', 'cobertura', ?)
-          ON CONFLICT(clave) DO UPDATE SET sku=excluded.sku, wc_nombre=excluded.wc_nombre, accion=excluded.accion, origen=excluded.origen, actualizado_en=excluded.actualizado_en
-        `).run(clave, decision.sku, decision.wc_nombre, now());
+          INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, confirmado_por, actualizado_en)
+          VALUES (?, ?, ?, 'confirmar', 'cobertura', ?, ?)
+          ON CONFLICT(clave) DO UPDATE SET
+            sku=excluded.sku, wc_nombre=excluded.wc_nombre, accion=excluded.accion,
+            origen=excluded.origen, confirmado_por=excluded.confirmado_por,
+            actualizado_en=excluded.actualizado_en
+        `).run(clave, decision.sku, decision.wc_nombre, decision.confirmado_por, now());
         return res.status(502).json({ ok: false, error: resultado.error || 'ML no confirmó la desvinculación', fail_closed: true });
       }
     }
@@ -736,7 +739,8 @@ export function coberturaRouter(db, cfg) {
       clave: f.clave, item_id: f.item_id, variation_id: f.variation_id,
       titulo: f.titulo, status: f.status, sub_status: f.sub_status,
       color: f.color, talle: f.talle, variations_texto: f.variations_texto,
-      seller_sku: f.seller_sku, thumbnail: f.thumbnail, permalink: f.permalink,
+      seller_sku: f.seller_sku, decision_sku: f.sku,
+      thumbnail: f.thumbnail, permalink: f.permalink,
       precio_ml: f.precio, precio_actualizado_en: f.precio_actualizado_en,
       stock_ml: f.available_quantity, stock_sincronizado: f.cantidad_ml,
       senales: senalesVigentes(f, descartes),
@@ -799,43 +803,30 @@ export function coberturaRouter(db, cfg) {
   // NO es admin-only (a diferencia de desvincular): reasignar corrige un vínculo equivocado
   // asignándolo al SKU correcto, es trabajo normal de la cola, no una acción destructiva.
   router.post('/vinculos/reasignar', (req, res) => {
-    const { clave, sku } = req.body || {};
+    const body = req.body || {};
+    const { clave, sku } = body;
     if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
     if (!sku || typeof sku !== 'string') return res.status(400).json({ ok: false, error: 'sku requerido' });
+    if (!Object.prototype.hasOwnProperty.call(body, 'expected_sku')) {
+      return res.status(400).json({ ok: false, error: 'expected_sku requerido (string o null)' });
+    }
+    const expectedSku = body.expected_sku == null ? null : String(body.expected_sku).trim();
+    if (body.expected_sku != null && !expectedSku) {
+      return res.status(400).json({ ok: false, error: 'expected_sku debe ser un string no vacío o null' });
+    }
     const pub = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
     if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
     const prod = db.prepare("SELECT nombre FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1").get(sku);
     if (!prod) return res.status(400).json({ ok: false, error: 'El SKU no existe en el catálogo' });
 
-    // Misma revalidación que confirmarDecisionCobertura (hallazgo del revisor): antes esto
-    // pisaba en silencio la decisión de otra persona con un ON CONFLICT DO UPDATE que no leía
-    // nada. Es el escenario exacto que la concurrencia optimista vino a evitar, pero entrando
-    // por otra puerta: Ana confirma MLA1→FB-1 desde la cola, Joaco reasigna MLA1→FB-2 desde
-    // Sospechosos, Ana nunca se entera y el push manda FB-2 a ML. Antes vivía bajo el permiso
-    // `sync-ml` (otra herramienta, otro perfil); al mudarlo a la superficie del Matcher quedan
-    // las dos escrituras a un click de distancia y tienen que jugar con la misma regla.
-    const existente = db.prepare("SELECT sku, confirmado_por, wc_nombre FROM sku_matcher_decisiones WHERE clave = ? AND accion = 'confirmar'").get(clave);
-    if (existente && existente.sku !== sku) {
-      const propio = existente.confirmado_por && existente.confirmado_por === req.user?.username;
-      return res.status(409).json({
-        ok: false,
-        ya_resuelto: true,
-        resuelto_por: existente.confirmado_por || null,
-        propio: !!propio,
-        accion: 'confirmar',
-        sku: existente.sku,
-        wc_nombre: existente.wc_nombre,
-        error: propio
-          ? `ya lo resolviste en otra pestaña: vinculado a ${existente.sku}`
-          : `ya lo resolvió ${existente.confirmado_por || 'otra persona'}: vinculado a ${existente.sku}`,
-      });
-    }
+    // Control optimista explícito: expected_sku es el snapshot que vio el cliente (null si
+    // no había decisión). Una decisión moderna SÍ puede cambiar deliberadamente cuando el
+    // snapshot coincide; si otra pestaña/persona ganó antes, devuelve 409 y no pisa nada.
+    const resultado = db.transaction(() => {
+      const existente = db.prepare('SELECT sku, confirmado_por, wc_nombre, accion FROM sku_matcher_decisiones WHERE clave = ?').get(clave);
+      const skuActual = existente?.sku || null;
+      if (skuActual !== expectedSku) return { conflicto: true, existente, skuActual };
 
-    db.transaction(() => {
-      // origen='cobertura' y accion='confirmar' (hallazgo del revisor): con 'asignar' y sin
-      // origen, el vínculo resultante no se podía deshacer desde el Matcher —`deshacer` filtra
-      // por accion='confirmar' AND origen='cobertura'—, no contaba en el progreso y no aparecía
-      // en el historial. Un callejón sin salida dentro de la misma herramienta.
       db.prepare(`
         INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, confirmado_por, actualizado_en)
         VALUES (?, ?, ?, 'confirmar', 'cobertura', ?, ?)
@@ -846,9 +837,31 @@ export function coberturaRouter(db, cfg) {
       `).run(clave, sku, prod.nombre, req.user?.username ?? null, now());
       // Los descartes valían para el vínculo anterior, no para el nuevo.
       db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+      return { conflicto: false, skuAnterior: skuActual };
     })();
+
+    if (resultado.conflicto) {
+      const existente = resultado.existente || {};
+      const propio = existente.confirmado_por && existente.confirmado_por === req.user?.username;
+      return res.status(409).json({
+        ok: false,
+        ya_resuelto: true,
+        resuelto_por: existente.confirmado_por || null,
+        propio: !!propio,
+        accion: existente.accion || null,
+        expected_sku: expectedSku,
+        sku_actual: resultado.skuActual,
+        sku: resultado.skuActual,
+        wc_nombre: existente.wc_nombre,
+        error: propio
+          ? `el vínculo cambió en otra pestaña: ahora apunta a ${resultado.skuActual}`
+          : existente.confirmado_por
+            ? `el vínculo cambió; ${existente.confirmado_por} lo dejó en ${resultado.skuActual}`
+            : `el vínculo cambió: ahora apunta a ${resultado.skuActual}`,
+      });
+    }
     logSync(db, { direccion: 'wc_ml', clave, sku, estado: 'remapeo_requerido', error: 'reasignada manualmente desde el Matcher (Vínculos)' });
-    res.json({ ok: true });
+    res.json({ ok: true, clave, sku_anterior: resultado.skuAnterior, sku });
   });
 
   // ADMIN-ONLY (permiso único `matcher`, entrega 1): desvincular (borrar el mapeo para que

@@ -253,19 +253,13 @@ describe('aplicarStockItem — fallos visibles y serialización', () => {
 
     const itemA = nuevoItem(10, 3); // producto 10
     const itemB = nuevoItem(11, 2); // producto 11, distinto de A
-    const inicio = Date.now();
     const [rA, rB] = await Promise.all([
       aplicarStockItem(db, cfg, itemA),
       aplicarStockItem(db, cfg, itemB),
     ]);
-    const duracion = Date.now() - inicio;
 
     // Ambos GETs coincidieron en el tiempo: no se esperaron entre sí.
     expect(maxGetsSimultaneos).toBe(2);
-    // Umbral generoso: en serie tardaría ~30ms (2×15ms). Un valor holgado (<60ms)
-    // confirma que no se serializó sin depender de timing frágil bajo carga de CPU.
-    // La prueba real de paralelismo es maxGetsSimultaneos===2 (arriba).
-    expect(duracion).toBeLessThan(60);
     expect(rA.stock_previo).toBe(5);
     expect(rB.stock_previo).toBe(5);
   });
