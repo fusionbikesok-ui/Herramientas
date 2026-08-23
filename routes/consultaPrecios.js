@@ -31,7 +31,7 @@ function parsearIdWoo(valor) {
     return { ok: true, idWoo: null }; // opcional
   }
   if (typeof valor === 'number') {
-    if (!Number.isInteger(valor)) {
+    if (!Number.isSafeInteger(valor) || valor <= 0) {
       return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
     }
     return { ok: true, idWoo: valor };
@@ -40,7 +40,11 @@ function parsearIdWoo(valor) {
     if (!/^[0-9]+$/.test(valor.trim())) {
       return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
     }
-    return { ok: true, idWoo: Number(valor) };
+    const idWoo = Number(valor);
+    if (!Number.isSafeInteger(idWoo) || idWoo <= 0) {
+      return { ok: false, error: `id_woo fuera de rango seguro, recibido: ${valor}` };
+    }
+    return { ok: true, idWoo };
   }
   // boolean, array, object, etc.
   return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
