@@ -153,9 +153,12 @@ function pushHistorial(p, tipo){
   });
 }
 
-function mostrarEncontrado(p, tipo){
+function mostrarEncontrado(p, tipo, estado){
   resultEl.innerHTML = cardHtml(p, tipo);
-  pushHistorial(p, tipo);
+  // No agregar al historial si el estado es 'conflicto' (operación no cerrada)
+  if(!estado || estado.estado !== 'conflicto') {
+    pushHistorial(p, tipo);
+  }
 }
 
 // ---- Flujo EAN nuevo / huérfano: pedir el SKU ----
@@ -211,7 +214,7 @@ async function ensenarEan(ean, sku, idWoo, pisarCodigo){
   });
   var d = await r.json();
   if(!d.ok){ resultEl.innerHTML = '<div class="msg err">'+esc(d.error||'No se pudo guardar')+'</div>'; return; }
-  mostrarEncontrado(d.producto, 'ean');
+  mostrarEncontrado(d.producto, 'ean', d.codigo);
   var estado = mostrarEstadoCodigo(d.codigo);
   if(estado){ resultEl.insertAdjacentHTML('beforeend', estado); }
   var pisar = document.getElementById('btn-pisar-ean');
