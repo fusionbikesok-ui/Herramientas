@@ -434,6 +434,35 @@ describe('preparacion flujo', () => {
     expect(db.prepare('SELECT cantidad_escaneada FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1').cantidad_escaneada).toBe(0);
   });
 
+  it('escanear: GTIN presente en catalogo_cache con un único SKU dueño cuenta automáticamente (sin pasar por ean_sku)', async () => {
+    const id = nuevaPrep();
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,gtin,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(200, 'Bicicleta Trek Marlin 7', 'BICI-1', 'simple', 2, '4006381333931', new Date().toISOString());
+    const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '4006381333931' });
+    expect(r.body).toMatchObject({ ok: true, resultado: 'match' });
+    expect(r.body.item.sku).toBe('BICI-1');
+    expect(r.body.item.cantidad_escaneada).toBe(1);
+    expect(r.body.codigo).toMatchObject({ gtin: '4006381333931', estado: 'sin_cambio', origen: 'ean' });
+  });
+
+  it('escanear: GTIN ambiguo (mismo gtin en catalogo_cache para dos SKUs distintos) no cuenta nada y pide asociación explícita', async () => {
+    const id = nuevaPrep();
+    const ts = new Date().toISOString();
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,gtin,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(201, 'Bicicleta Trek Marlin 7', 'BICI-1', 'simple', 2, '4006381333931', ts);
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,gtin,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(202, 'Cubierta Maxxis', 'CUB-1', 'simple', 5, '4006381333931', ts);
+    const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '4006381333931' });
+    expect(r.body).toMatchObject({ ok: true, resultado: 'necesita_asociacion', codigo: '4006381333931' });
+    expect(r.body.candidatos).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sku: 'BICI-1', restante: 1 }),
+      expect.objectContaining({ sku: 'CUB-1', restante: 2 }),
+    ]));
+    expect(db.prepare('SELECT cantidad_escaneada FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1').cantidad_escaneada).toBe(0);
+    expect(db.prepare('SELECT cantidad_escaneada FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'CUB-1').cantidad_escaneada).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM ean_sku WHERE ean=?').get('4006381333931').n).toBe(0);
+  });
+
   it('asociar-codigo cuenta el artículo y conserva el mapa local aunque Woo no esté configurado', async () => {
     const id = nuevaPrep();
     db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (?,?,?,?,?,?)')
