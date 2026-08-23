@@ -14,6 +14,9 @@ import { armarLike } from '../lib/busqueda.js';
 import { looksLikeGtin, persistirGtinConfirmado, subirGtinAWoo } from '../lib/gtinWoo.js';
 
 const now = () => new Date().toISOString();
+// Serializa por EAN el tramo remoto + persistencia local para evitar que dos
+// solicitudes concurrentes validen el mismo mapa y luego lo pisen.
+const eanEnCurso = new Set();
 
 /** ¿El código parece un EAN? Sólo dígitos, largo 8/12/13/14 (EAN-8, UPC-A, EAN-13, GTIN-14). */
 export function pareceEan(codigo) {
@@ -261,10 +264,19 @@ export function consultaPreciosRouter(db, cfg = {}) {
       return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'sin_cambio' } });
     }
 
+    if (eanEnCurso.has(ean)) {
+      return res.json({
+        ok: true,
+        producto: productoParaCard(fila),
+        codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: 'operacion_en_curso' },
+      });
+    }
+    eanEnCurso.add(ean);
     const woo = await subirGtinAWoo(cfg, fila, ean);
     if (!woo.ok) {
       // Fail-open: guardar mapa localmente aunque Woo falló (el conflicto ya fue validado arriba)
       guardarMapa(ean, fila.sku, pisarMapa);
+      eanEnCurso.delete(ean);
       return res.json({
         ok: true,
         producto: productoParaCard(fila),
@@ -275,6 +287,7 @@ export function consultaPreciosRouter(db, cfg = {}) {
     // Woo OK: persistir GTIN confirmado y guardar mapa localmente
     persistirGtinConfirmado(db, fila, ean, fila.sku);
     guardarMapa(ean, fila.sku, pisarMapa);
+    eanEnCurso.delete(ean);
     const actualizado = porId.get(fila.id_woo) || fila;
     return res.json({ ok: true, producto: productoParaCard(actualizado), codigo: { ...codigoBase, estado: 'subido' } });
   });
