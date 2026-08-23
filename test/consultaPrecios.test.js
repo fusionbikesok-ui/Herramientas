@@ -442,6 +442,27 @@ describe('POST /api/consulta-precios/asociar — subida opcional a Woo', () => {
     expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234500009').sku).toBe('FB-99');
     db.close();
   });
+
+  it('HIGH FIX: conflicto_mapa con Woo exitoso — no pisa el mapa sin pisar_mapa:true', async () => {
+    const { app, db } = appConDatos(CFG);
+    const now = new Date().toISOString();
+    // Segundo producto
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    // Primer mapeo: EAN → FB-99
+    db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('7791234567898', 'FB-99', now);
+    // Intentar asociar ese EAN (GTIN válido) a FB-40 (que sube bien a Woo)
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res.status).toBe(200);
+    // El conflicto de mapa debe detectarse ANTES de Woo, así que no lo llamamos
+    expect(axios.request).not.toHaveBeenCalled();
+    expect(res.body.codigo).toMatchObject({ estado: 'conflicto_mapa', sku_actual: 'FB-99' });
+    // Verificar que el mapa NO cambió
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234567898').sku).toBe('FB-99');
+    db.close();
+  });
 });
 
 describe('POST /api/consulta-precios/importar', () => {

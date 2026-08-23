@@ -463,6 +463,21 @@ describe('preparacion flujo', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM ean_sku WHERE ean=?').get('4006381333931').n).toBe(0);
   });
 
+  it('MEDIUM FIX: escanear: SKU resuelto pero ajeno a la preparación → no_coincide', async () => {
+    const id = nuevaPrep();
+    const ts = new Date().toISOString();
+    // Producto que está en catálogo pero NO en esta preparación
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,gtin,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(203, 'Producto Ajeno', 'AJENO-1', 'simple', 2, '4006381333931', ts);
+    // Mapa previo: GTIN válido (mismo que el catálogo) → AJENO-1
+    db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('4006381333931', 'AJENO-1', ts);
+    // Escanear: debería resolver a AJENO-1 desde ean_sku y notar que no está en la preparación
+    const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '4006381333931' });
+    expect(r.body).toMatchObject({ ok: true, resultado: 'no_coincide', codigo: '4006381333931' });
+    expect(r.body.sku).toBe('AJENO-1');
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'AJENO-1').n).toBe(0);
+  });
+
   it('asociar-codigo cuenta el artículo y conserva el mapa local aunque Woo no esté configurado', async () => {
     const id = nuevaPrep();
     db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (?,?,?,?,?,?)')
