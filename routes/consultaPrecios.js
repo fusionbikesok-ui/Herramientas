@@ -242,7 +242,6 @@ export function consultaPreciosRouter(db, cfg = {}) {
 
     // HIGH FIX: validar conflicto de mapa ANTES de cualquier operación remota
     const existenteEan = eanRow.get(ean);
-    const mapaInicial = existenteEan?.sku || null;
     if (existenteEan && existenteEan.sku !== fila.sku && !pisarMapa) {
       return res.json({
         ok: true,
@@ -283,11 +282,6 @@ export function consultaPreciosRouter(db, cfg = {}) {
     const woo = await subirGtinAWoo(cfg, fila, ean);
     if (!woo.ok) {
       // Fail-open: guardar mapa localmente aunque Woo falló (el conflicto ya fue validado arriba)
-      const mapaDuranteWoo = eanRow.get(ean)?.sku || null;
-      if (mapaDuranteWoo !== mapaInicial && mapaDuranteWoo !== fila.sku) {
-        eanEnCurso.delete(ean);
-        return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapaDuranteWoo } });
-      }
       guardarMapa(ean, fila.sku, pisarMapa);
       eanEnCurso.delete(ean);
       return res.json({
@@ -298,11 +292,6 @@ export function consultaPreciosRouter(db, cfg = {}) {
     }
 
     // Woo OK: persistir GTIN confirmado y guardar mapa localmente
-    const mapaDuranteWoo = eanRow.get(ean)?.sku || null;
-    if (mapaDuranteWoo !== mapaInicial && mapaDuranteWoo !== fila.sku) {
-      eanEnCurso.delete(ean);
-      return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapaDuranteWoo } });
-    }
     persistirGtinConfirmado(db, fila, ean, fila.sku);
     guardarMapa(ean, fila.sku, pisarMapa);
     eanEnCurso.delete(ean);
