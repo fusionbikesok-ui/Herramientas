@@ -1222,14 +1222,20 @@ perderse. Un SKU sin precio en el catálogo no impide la asociación.
 Alias de `/asociar` sin subida a Woo. Mismo validación de `id_woo` y `sku` que `/asociar`.
 - Request: `{ "ean", "sku", "id_woo"?, "pisar_mapa"? }`.
   - Mismas validaciones que `/asociar` para `id_woo` (número entero exacto, rechaza tipos).
-- Response: mismo shape que `/asociar`, pero sin intentar Woo — `codigo.estado` puede ser
-  `no_valido`, `conflicto_mapa`, pero nunca `conflicto` (GTIN), `fallo` o `subido`. Si el
-  mapa se guardó exitosamente, no hay clave `estado`, solo `ok: true` + `producto`.
+- Response 200:
+  - Si hay conflicto de mapa: `{ "ok": true, "producto": {...}, "codigo": { "estado": "conflicto_mapa", "sku_actual": "...", "ean": "..." } }`
+  - Si el mapa se guardó sin conflicto: `{ "ok": true, "producto": {...} }` — **sin incluir la clave `codigo`**.
+  - Los únicos estados posibles son `conflicto_mapa` (si el EAN ya estaba mapeado a otro SKU); nunca aparecen `conflicto` (GTIN), `fallo`, `subido`, ni `no_valido` (porque no intenta validación GS1 ni subida a Woo).
 
 **Limitación conocida (C2):** `ean_sku` guarda solo el SKU, no el `id_woo`. Con un SKU
 repetido en `catalogo_cache` (múltiples productos Woo con el mismo SKU), `/buscar` devolverá
 una fila arbitraria. Esto se resolverá en una entrega separada (migración `.sql` + persistencia
 de `id_woo` en `ean_sku`).
+
+**Ampliación de permisos (C2):** a partir de esta entrega, el permiso `write` del nivel
+`'consulta-precios'` (antes solo permitía leer precios y mapear EANs localmente) ahora incluye
+la capacidad de escribir `global_unique_id` en WooCommerce mediante POST `/api/consulta-precios/asociar`.
+Usuarios con este permiso pueden modificar códigos GTIN de productos en Woo, no solo guardarlos localmente.
 
 ## Búsqueda con comodines SQL escapados (fix hallazgo E2E)
 

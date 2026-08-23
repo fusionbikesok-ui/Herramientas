@@ -219,7 +219,12 @@ async function ensenarEan(ean, sku, idWoo, pisarCodigo){
   if(estado){ resultEl.insertAdjacentHTML('beforeend', estado); }
   var pisar = document.getElementById('btn-pisar-ean');
   if(pisar) pisar.onclick = function(){ ensenarEan(ean, sku, idWoo, true); };
-  focusInput();
+  // Enfocar el botón de confirmación si hay conflicto; de otro modo, enfocar el input de búsqueda
+  if(d.codigo && (d.codigo.estado === 'conflicto' || d.codigo.estado === 'conflicto_mapa') && pisar) {
+    pisar.focus();
+  } else {
+    focusInput();
+  }
 }
 
 // ---- Búsqueda ----
