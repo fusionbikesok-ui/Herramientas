@@ -1,8 +1,13 @@
 # Estado activo
 
-Actualizado: 2026-08-22.
+Actualizado: 2026-08-23.
 
 ## En curso
+
+- C3 — Preparación de pedidos: integrada localmente en `master` hasta `0daa77f` tras rebase,
+  revisión, auditoría y E2E. GTIN desconocido devuelve candidatos, evita SKU arbitrario y el
+  panel móvil queda usable en 390/768/1440 px. Suite global: 1357 tests pasados, 1 omitido.
+  No se hizo push ni restart de PM2.
 
 - C2 — Consulta de Precios: implementación congelada y publicada en GitHub (`0c4a445`); el
   plan y contrato de subida de GTIN están en `docs/superpowers/plans/2026-08-22-consulta-precios-gtin.md`.
@@ -29,8 +34,8 @@ Actualizado: 2026-08-22.
 
 ## Próximo paso
 
-- Ejecutar E2E/auditoría de C2 y pasar luego a C3 (Preparación). La revisión formal de
-  Claude para los dropdowns de C1 queda pendiente hasta que la cuota vuelva a responder.
+- Decidir push de `master` (59 commits por delante de `origin/master`) y coordinar despliegue
+  manual. PM2 sigue en `conteo-confiable`; para servir C3 hay que moverlo a `master` y reiniciar.
 
 ## Evidencia reciente
 
