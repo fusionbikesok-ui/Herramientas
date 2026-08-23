@@ -589,8 +589,8 @@ export function preparacionRouter(db, cfg) {
   const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
 
-  const eanPorSku = db.prepare('SELECT sku FROM ean_sku WHERE ean=?');
-  const skuPorGtin = db.prepare("SELECT sku FROM catalogo_cache WHERE gtin=? AND sku IS NOT NULL AND sku <> '' LIMIT 1");
+  const skuPorEan = db.prepare('SELECT sku FROM ean_sku WHERE ean=?');
+  const skusPorGtin = db.prepare("SELECT DISTINCT sku FROM catalogo_cache WHERE gtin=? AND sku IS NOT NULL AND sku <> ''");
 
   function incrementarItem(item, codigo, origen, usuario) {
     const nuevaCant = item.cantidad_escaneada + 1;
@@ -1306,12 +1306,20 @@ export function preparacionRouter(db, cfg) {
     if (!items.length && looksLikeGtin(codigo)) {
       // Un EAN que ya aprendimos en Consulta de Precios o que viene del catálogo se
       // puede usar sin volver a interrumpir al operario: solo si apunta a un SKU que
-      // realmente está en esta preparación.
-      const mapeo = eanPorSku.get(codigo) || skuPorGtin.get(codigo);
-      if (mapeo?.sku) {
+      // realmente está en esta preparación y sea inequívoco.
+      let sku = skuPorEan.get(codigo)?.sku;
+      if (!sku) {
+        // Si no hay mapa en ean_sku, intentar resolver desde catalogo_cache.
+        // Si el GTIN apunta a múltiples SKUs, caer a necesita_asociacion.
+        const skusCandidatos = skusPorGtin.all(codigo);
+        if (skusCandidatos.length === 1) {
+          sku = skusCandidatos[0].sku;
+        }
+      }
+      if (sku) {
         const mapeados = db.prepare(
           "SELECT * FROM preparacion_items WHERE preparacion_id=? AND UPPER(TRIM(sku))=? AND estado_item <> 'exento'"
-        ).all(prep.id, String(mapeo.sku).trim().toUpperCase());
+        ).all(prep.id, String(sku).trim().toUpperCase());
         const itemMapeado = mapeados.find(i => i.cantidad_escaneada < i.cantidad_esperada);
         if (itemMapeado) {
           const actualizado = incrementarItem(itemMapeado, codigo, 'ean', req.user?.username);
@@ -1323,9 +1331,9 @@ export function preparacionRouter(db, cfg) {
         if (mapeados.length) return res.json({ ok: true, resultado: 'sobrante', codigo });
       }
 
-      // EAN válido pero sin relación conocida: no se elige un producto por proximidad
-      // ni se cuenta en silencio. La pantalla recibe candidatos acotados a esta orden y
-      // el operario confirma explícitamente cuál es.
+      // EAN válido pero sin relación conocida o ambigua: no se elige un producto por
+      // proximidad ni se cuenta en silencio. La pantalla recibe candidatos acotados a esta
+      // orden y el operario confirma explícitamente cuál es.
       const candidatos = db.prepare(`
         SELECT id, sku, nombre, cantidad_esperada, cantidad_escaneada
         FROM preparacion_items
@@ -1374,11 +1382,11 @@ export function preparacionRouter(db, cfg) {
     }
 
     const filasCatalogo = item.sku
-      ? db.prepare('SELECT * FROM catalogo_cache WHERE sku=? AND sku <> \'\'').all(item.sku)
+      ? db.prepare('SELECT * FROM catalogo_cache WHERE UPPER(TRIM(sku))=? AND sku <> \'\'').all(String(item.sku).trim().toUpperCase())
       : [];
     const fila = filasCatalogo.length === 1 ? filasCatalogo[0] : null;
     const codigoBase = { gtin: codigo };
-    const mapaActual = eanPorSku.get(codigo);
+    const mapaActual = skuPorEan.get(codigo);
     const conflictoMapa = mapaActual?.sku
       && String(mapaActual.sku).trim().toUpperCase() !== String(item.sku || '').trim().toUpperCase();
     const gtinActual = fila?.gtin ? String(fila.gtin).trim() : '';
@@ -1398,6 +1406,7 @@ export function preparacionRouter(db, cfg) {
     }
 
     let codigoEstado;
+    let wooCfueSub = false; // Indica si persistirGtinConfirmado ya sembró ean_sku
     if (filasCatalogo.length > 1) {
       codigoEstado = {
         ...codigoBase, estado: 'fallo', motivo: 'sku_ambiguo',
@@ -1413,15 +1422,17 @@ export function preparacionRouter(db, cfg) {
       const woo = await subirGtinAWoo(cfg.woo, fila, codigo);
       if (woo.ok) {
         persistirGtinConfirmado(db, fila, codigo, item.sku);
+        wooCfueSub = true; // persistirGtinConfirmado ya sembró ean_sku
         codigoEstado = { ...codigoBase, estado: 'subido' };
       } else {
         codigoEstado = { ...codigoBase, estado: 'fallo', motivo: woo.motivo || 'woo', error: woo.error };
       }
     }
 
-    // El mapa local solo se siembra cuando el SKU es inequívoco. Aun con Woo caído,
-    // queda disponible para el próximo escaneo y el trabajo físico no se pierde.
-    if (item.sku && filasCatalogo.length === 1) {
+    // El mapa local solo se siembra cuando el SKU es inequívoco Y no lo hizo
+    // persistirGtinConfirmado. Aun con Woo caído, queda disponible para el próximo
+    // escaneo y el trabajo físico no se pierde.
+    if (item.sku && filasCatalogo.length === 1 && !wooCfueSub) {
       db.prepare(`
         INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
         ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
