@@ -676,35 +676,35 @@ function renderAsociacionEan(){
     var msg='', btn1='', btn2='';
     if(conf.tipo==='mapa'){
       msg='El código '+esc(conf.codigo)+' ya está mapeado al SKU '+esc(cd.sku_actual)+'. ¿Querés mover el mapa a este artículo?';
-      btn1='<button type=”button” class=”btn” onclick=”confirmarPisarGtin(\'pisar_mapa\')”>Sí, mover el mapa</button>';
+      btn1='<button type="button" class="btn" onclick="confirmarPisarGtin(\'pisar_mapa\')">Sí, mover el mapa</button>';
     }else if(conf.tipo==='woo'){
       msg='El artículo ya tiene el código '+esc(cd.gtin_actual)+' en WooCommerce. ¿Querés reemplazarlo por '+esc(conf.codigo)+'?';
-      btn1='<button type=”button” class=”btn” onclick=”confirmarPisarGtin(\'pisar_woo\')”>Sí, reemplazar</button>';
+      btn1='<button type="button" class="btn" onclick="confirmarPisarGtin(\'pisar_woo\')">Sí, reemplazar</button>';
     }
-    btn2='<button type=”button” class=”btn sec” onclick=”confirmarPisarGtin(\'cancelar\')”>Cancelar</button>';
-    return '<section class=”ean-assoc” aria-labelledby=”ean-conflict-title”>'
-      +'<h2 id=”ean-conflict-title”>⚠ Conflicto de código</h2>'
+    btn2='<button type="button" class="btn sec" onclick="confirmarPisarGtin(\'cancelar\')">Cancelar</button>';
+    return '<section class="ean-assoc" aria-labelledby="ean-conflict-title">'
+      +'<h2 id="ean-conflict-title">⚠ Conflicto de código</h2>'
       +'<p>'+msg+'</p>'
-      +'<div style=”display:flex;gap:8px;justify-content:flex-end;”>'+btn1+btn2+'</div>'
+      +'<div style="display:flex;gap:8px;justify-content:flex-end;">'+btn1+btn2+'</div>'
       +'</section>';
   }
 
   // Panel de candidatos vacío
   if(!p.candidatos||!p.candidatos.length){
-    return '<div class=”ean-assoc” role=”status”><h2>EAN '+esc(p.codigo)+' sin asociación</h2><p>No hay artículos con SKU disponible y unidades pendientes para asociar. Revisá la etiqueta o usá “Confirmar sin código…” con el motivo correspondiente.</p>'
-      +'<button type=”button” class=”btn sec” onclick=”descartarAsociacion()”>Descartar</button></div>';
+    return '<div class="ean-assoc" role="status"><h2>EAN '+esc(p.codigo)+' sin asociación</h2><p>No hay artículos con SKU disponible y unidades pendientes para asociar. Revisá la etiqueta o usá "Confirmar sin código…" con el motivo correspondiente.</p>'
+      +'<button type="button" class="btn sec" onclick="descartarAsociacion()">Descartar</button></div>';
   }
 
   // Panel de candidatos normal
-  return '<section class=”ean-assoc” aria-labelledby=”ean-assoc-title”>'
-    +'<h2 id=”ean-assoc-title”>Código '+esc(p.codigo)+' no reconocido</h2>'
+  return '<section class="ean-assoc" aria-labelledby="ean-assoc-title">'
+    +'<h2 id="ean-assoc-title">Código '+esc(p.codigo)+' no reconocido</h2>'
     +'<p>Elegí explícitamente el artículo al que pertenece. El sistema no lo asigna automáticamente porque podría contar otro producto.</p>'
-    +'<div class=”ean-candidates”>'+p.candidatos.map(function(c){
-      return '<button type=”button” class=”ean-candidate” onclick=”asociarCodigoAItem('+Number(c.id)+')”>'
+    +'<div class="ean-candidates">'+p.candidatos.map(function(c){
+      return '<button type="button" class="ean-candidate" onclick="asociarCodigoAItem('+Number(c.id)+')">'
         +'<strong>'+esc(c.nombre||c.sku||'Artículo')+' · '+esc(String(c.restante))+' pendiente(s)</strong>'
         +'<small>SKU '+esc(c.sku)+'</small></button>';
     }).join('')+'</div>'
-    +'<button type=”button” class=”btn sec” style=”width:100%;margin-top:8px;” onclick=”descartarAsociacion()”>Descartar</button>'
+    +'<button type="button" class="btn sec" style="width:100%;margin-top:8px;" onclick="descartarAsociacion()">Descartar</button>'
     +'</section>';
 }
 
@@ -996,6 +996,13 @@ async function asociarCodigoAItem(itemId,opciones){
   var r=await api('/'+PREP.id+'/asociar-codigo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({codigo:p.codigo,item_id:itemId,pisar_codigo:!!opciones.pisarCodigo,pisar_mapa:!!opciones.pisarMapa})});
   var b=r.body||{};
   if(b.resultado==='conflicto'||b.codigo&&b.codigo.estado==='conflicto'){
+    if(!b.codigo){
+      flash('bad','Error inesperado en la asociación (sin datos de conflicto). Retryá.');
+      ASOCIACION_PENDIENTE=null;
+      CONFLICTO_GTIN_PENDIENTE=null;
+      renderDetalle();
+      return;
+    }
     var conflictos=b.codigo.conflictos||[];
     if(conflictos.indexOf('mapa')>=0&&!opciones.pisarMapa){
       // Guardar el conflicto pendiente de confirmación inline (no confirm() nativo que se auto-acepta con Enter)
@@ -1670,6 +1677,11 @@ async function escanearCamara(codigo){
     if(navigator.vibrate)navigator.vibrate([80,60,80]);
     cerrarCamara();
     flash('warn','Elegí en la pantalla el artículo para asociar '+(b.codigo||codigo));
+  }else if(b.resultado==='asociacion_pendiente'){
+    beep('warn');
+    if(navigator.vibrate)navigator.vibrate([80,60,80]);
+    cerrarCamara();
+    flash('warn','Terminá la asociación de '+ASOCIACION_PENDIENTE.codigo+' antes de escanear otro código.');
   }else{
     setCamProgress(b.error||'No se pudo escanear');
   }
