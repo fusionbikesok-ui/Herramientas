@@ -224,7 +224,9 @@ async function ensenarEan(ean, sku, idWoo, pisarCodigo, pisarMapa){
       if(d.codigo.estado === 'conflicto_mapa') {
         ensenarEan(ean, sku, idWoo, false, true);
       } else {
-        ensenarEan(ean, sku, idWoo, true, false);
+        // Conservar pisar_mapa tras confirmar el primer conflicto evita un bucle
+        // cuando también existe conflicto de GTIN en Woo.
+        ensenarEan(ean, sku, idWoo, true, true);
       }
     };
   }
