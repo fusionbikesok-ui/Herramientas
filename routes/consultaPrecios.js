@@ -177,13 +177,6 @@ export function consultaPreciosRouter(db, cfg = {}) {
       }
       return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
     }
-    if (eanEnCurso.has(ean)) {
-      return res.json({
-        ok: true,
-        producto: productoParaCard(fila),
-        codigo: { estado: 'conflicto_mapa', sku_actual: 'operacion_en_curso', ean },
-      });
-    }
     // Fix 3: manejar conflicto de mapa
     const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
     if (mapResult.conflicto && !pisarMapa) {
