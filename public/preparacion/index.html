@@ -294,7 +294,7 @@
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
 <script>
-var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null, ASOCIACION_PENDIENTE=null;
+var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null, ASOCIACION_PENDIENTE=null, CONFLICTO_GTIN_PENDIENTE=null;
 // fotoId (o id temporal mientras sube) -> object URL local. Vive fuera de PREP a propósito:
 // sobrevive a los refrescos completos de PREP (refrescarDetalle) mientras el servidor todavía
 // no tiene la versión liviana lista, así la miniatura no parpadea a una URL rota en el medio.
@@ -312,7 +312,7 @@ function ir(v){
   detenerHeartbeat();
   detenerPollFotos();
   if(v!=='pendientes')detenerPollingPendientes();
-  VISTA=v; PREP=null; ASOCIACION_PENDIENTE=null;
+  VISTA=v; PREP=null; ASOCIACION_PENDIENTE=null; CONFLICTO_GTIN_PENDIENTE=null;
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
   if(v==='pendientes'){cargarPendientes();iniciarPollingPendientes();}
   else if(v==='etiquetas')cargarEtiquetas();
@@ -434,6 +434,7 @@ async function abrirDetalle(id){
   ACT_TOPE=30;
   NUEVOS_ACUMULADOS=0;
   ASOCIACION_PENDIENTE=null;
+  CONFLICTO_GTIN_PENDIENTE=null;
   var r=await api('/'+id);
   if(!r.body.ok){document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>';return;}
   PREP=r.body.data;
@@ -647,21 +648,64 @@ function renderDetalle(){
   html+='</div>';
 
   document.getElementById('cuerpo').innerHTML=html;
-  var si=document.getElementById('scan-in');
-  if(si){si.focus();si.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();escanearManual();}});}
+
+  // Si hay asociación pendiente, enfocar el panel de candidatos/conflicto, no el input bloqueado
+  if(ASOCIACION_PENDIENTE){
+    var section=document.querySelector('.ean-assoc');
+    if(section){
+      section.tabIndex=-1;
+      section.focus();
+      // Encontrar el primer botón enfocable en el panel
+      var btn=section.querySelector('button');
+      if(btn)btn.focus();
+    }
+  }else{
+    // Input de escaneo disponible: enfocar y permitir Enter para escanear
+    var si=document.getElementById('scan-in');
+    if(si){si.focus();si.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();escanearManual();}});}
+  }
 }
 
 function renderAsociacionEan(){
   var p=ASOCIACION_PENDIENTE;
-  if(!p||!p.candidatos||!p.candidatos.length)return p?'<div class="ean-assoc" role="status"><h2>EAN '+esc(p.codigo)+' sin asociación</h2><p>No hay artículos con SKU disponible y unidades pendientes para asociar. Revisá la etiqueta o usá “Confirmar sin código…” con el motivo correspondiente.</p></div>':'';
-  return '<section class="ean-assoc" aria-labelledby="ean-assoc-title">'
-    +'<h2 id="ean-assoc-title">Código '+esc(p.codigo)+' no reconocido</h2>'
+  if(!p)return '';
+
+  // Si hay un conflicto de GTIN pendiente de confirmación inline (no confirm() nativo)
+  if(CONFLICTO_GTIN_PENDIENTE){
+    var conf=CONFLICTO_GTIN_PENDIENTE, cd=conf.codigoData||{};
+    var msg='', btn1='', btn2='';
+    if(conf.tipo==='mapa'){
+      msg='El código '+esc(conf.codigo)+' ya está mapeado al SKU '+esc(cd.sku_actual)+'. ¿Querés mover el mapa a este artículo?';
+      btn1='<button type=”button” class=”btn” onclick=”confirmarPisarGtin(\'pisar_mapa\')”>Sí, mover el mapa</button>';
+    }else if(conf.tipo==='woo'){
+      msg='El artículo ya tiene el código '+esc(cd.gtin_actual)+' en WooCommerce. ¿Querés reemplazarlo por '+esc(conf.codigo)+'?';
+      btn1='<button type=”button” class=”btn” onclick=”confirmarPisarGtin(\'pisar_woo\')”>Sí, reemplazar</button>';
+    }
+    btn2='<button type=”button” class=”btn sec” onclick=”confirmarPisarGtin(\'cancelar\')”>Cancelar</button>';
+    return '<section class=”ean-assoc” aria-labelledby=”ean-conflict-title”>'
+      +'<h2 id=”ean-conflict-title”>⚠ Conflicto de código</h2>'
+      +'<p>'+msg+'</p>'
+      +'<div style=”display:flex;gap:8px;justify-content:flex-end;”>'+btn1+btn2+'</div>'
+      +'</section>';
+  }
+
+  // Panel de candidatos vacío
+  if(!p.candidatos||!p.candidatos.length){
+    return '<div class=”ean-assoc” role=”status”><h2>EAN '+esc(p.codigo)+' sin asociación</h2><p>No hay artículos con SKU disponible y unidades pendientes para asociar. Revisá la etiqueta o usá “Confirmar sin código…” con el motivo correspondiente.</p>'
+      +'<button type=”button” class=”btn sec” onclick=”descartarAsociacion()”>Descartar</button></div>';
+  }
+
+  // Panel de candidatos normal
+  return '<section class=”ean-assoc” aria-labelledby=”ean-assoc-title”>'
+    +'<h2 id=”ean-assoc-title”>Código '+esc(p.codigo)+' no reconocido</h2>'
     +'<p>Elegí explícitamente el artículo al que pertenece. El sistema no lo asigna automáticamente porque podría contar otro producto.</p>'
-    +'<div class="ean-candidates">'+p.candidatos.map(function(c){
-      return '<button type="button" class="ean-candidate" onclick="asociarCodigoAItem('+Number(c.id)+')">'
+    +'<div class=”ean-candidates”>'+p.candidatos.map(function(c){
+      return '<button type=”button” class=”ean-candidate” onclick=”asociarCodigoAItem('+Number(c.id)+')”>'
         +'<strong>'+esc(c.nombre||c.sku||'Artículo')+' · '+esc(String(c.restante))+' pendiente(s)</strong>'
         +'<small>SKU '+esc(c.sku)+'</small></button>';
-    }).join('')+'</div></section>';
+    }).join('')+'</div>'
+    +'<button type=”button” class=”btn sec” style=”width:100%;margin-top:8px;” onclick=”descartarAsociacion()”>Descartar</button>'
+    +'</section>';
 }
 
 function itemHtml(it){
@@ -954,22 +998,24 @@ async function asociarCodigoAItem(itemId,opciones){
   if(b.resultado==='conflicto'||b.codigo&&b.codigo.estado==='conflicto'){
     var conflictos=b.codigo.conflictos||[];
     if(conflictos.indexOf('mapa')>=0&&!opciones.pisarMapa){
-      if(confirm('El código ya está asociado al SKU '+b.codigo.sku_actual+'. ¿Querés mover el mapa local a este artículo?')){
-        return asociarCodigoAItem(itemId,{pisarMapa:true,pisarCodigo:!!opciones.pisarCodigo});
-      }
+      // Guardar el conflicto pendiente de confirmación inline (no confirm() nativo que se auto-acepta con Enter)
+      CONFLICTO_GTIN_PENDIENTE={tipo:'mapa',itemId:itemId,codigoData:b.codigo,pisarCodigo:!!opciones.pisarCodigo,pisarMapa:false,codigo:p.codigo};
+      renderDetalle();
       return;
     }
     if(conflictos.indexOf('woo')>=0&&!opciones.pisarCodigo){
-      if(confirm('El artículo ya tiene el código '+b.codigo.gtin_actual+' en WooCommerce. ¿Querés reemplazarlo por '+p.codigo+'?')){
-        return asociarCodigoAItem(itemId,{pisarMapa:!!opciones.pisarMapa,pisarCodigo:true});
-      }
+      // Guardar el conflicto pendiente de confirmación inline
+      CONFLICTO_GTIN_PENDIENTE={tipo:'woo',itemId:itemId,codigoData:b.codigo,pisarCodigo:false,pisarMapa:!!opciones.pisarMapa,codigo:p.codigo};
+      renderDetalle();
       return;
     }
     flash('bad',b.codigo.error||'Hay un conflicto de códigos');
+    CONFLICTO_GTIN_PENDIENTE=null;
     return;
   }
   if(b.resultado==='match'&&b.item){
     ASOCIACION_PENDIENTE=null;
+    CONFLICTO_GTIN_PENDIENTE=null;
     mergeItemLocal(b.item);
     renderDetalle();
     refrescarSoloActividad();
@@ -980,6 +1026,30 @@ async function asociarCodigoAItem(itemId,opciones){
     return;
   }
   flash('bad',b.error||'No se pudo asociar el código');
+  CONFLICTO_GTIN_PENDIENTE=null;
+}
+
+// Confirmación inline para conflictos de GTIN: no usar confirm() nativo que se auto-acepta
+// con un Enter del lector wedge. Llamado desde botones en el panel de conflicto.
+async function confirmarPisarGtin(accion){
+  if(!CONFLICTO_GTIN_PENDIENTE)return;
+  var c=CONFLICTO_GTIN_PENDIENTE;
+  CONFLICTO_GTIN_PENDIENTE=null;
+  if(accion==='pisar_mapa'){
+    return asociarCodigoAItem(c.itemId,{pisarMapa:true,pisarCodigo:c.pisarCodigo});
+  }else if(accion==='pisar_woo'){
+    return asociarCodigoAItem(c.itemId,{pisarCodigo:true,pisarMapa:c.pisarMapa});
+  }
+  // 'cancelar': solo limpiar el conflicto y volver al panel de asociación
+  renderDetalle();
+}
+
+function descartarAsociacion(){
+  ASOCIACION_PENDIENTE=null;
+  CONFLICTO_GTIN_PENDIENTE=null;
+  renderDetalle();
+  var si=document.getElementById('scan-in');
+  if(si)si.focus();
 }
 
 function escanearManual(){
