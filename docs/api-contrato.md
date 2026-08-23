@@ -699,6 +699,10 @@ mapa `ean_sku`/`catalogo_cache.gtin` aplicable a esta preparación, responde 200
 El frontend debe mostrar los candidatos y pedir una elección explícita. Para confirmar esa
 elección existe `POST /api/preparacion/:id/asociar-codigo`:
 
+Si el GTIN ya resuelve a un SKU conocido pero ese SKU no pertenece a la preparación actual,
+responde `resultado:"no_coincide"` (incluye `sku`) y no ofrece asociación, para evitar mover
+un mapa global correcto al pedido equivocado.
+
 ```json
 { "codigo": "4006381333931", "item_id": 12, "pisar_codigo": false, "pisar_mapa": false }
 ```
