@@ -155,8 +155,8 @@ function pushHistorial(p, tipo){
 
 function mostrarEncontrado(p, tipo, estado){
   resultEl.innerHTML = cardHtml(p, tipo);
-  // No agregar al historial si el estado es 'conflicto' (operación no cerrada)
-  if(!estado || estado.estado !== 'conflicto') {
+  // No agregar al historial si el estado es 'conflicto' o 'conflicto_mapa' (operación no cerrada)
+  if(!estado || (estado.estado !== 'conflicto' && estado.estado !== 'conflicto_mapa')) {
     pushHistorial(p, tipo);
   }
 }
@@ -202,15 +202,16 @@ function mostrarEstadoCodigo(codigo){
     no_valido: 'Se guardó la asociación local. El código no tiene un formato GTIN válido y no se subió a WooCommerce.',
     fallo: 'Se guardó la asociación local, pero ' + (codigo.error || 'WooCommerce no aceptó el código'),
   };
+  if(codigo.estado === 'conflicto_mapa') return '<div class="msg warn" style="margin-top:10px">Este código ya está asignado a <b>'+esc(codigo.sku_actual)+'</b>. Para moverlo a este producto:<br><button class="btn sec" id="btn-pisar-ean" type="button" style="margin-top:10px">Mover el código a este producto</button></div>';
   if(codigo.estado === 'conflicto') return '<div class="msg warn" style="margin-top:10px">Este producto ya tiene el código <b>'+esc(codigo.gtin_actual)+'</b>. No se modificó Woo.<br><button class="btn sec" id="btn-pisar-ean" type="button" style="margin-top:10px">Reemplazarlo por '+esc(codigo.gtin)+'</button></div>';
   var clase = codigo.estado === 'fallo' ? 'warn' : (codigo.estado === 'subido' ? 'ok' : '');
   return '<div class="msg '+clase+'" style="margin-top:10px">'+esc(textos[codigo.estado] || '')+'</div>';
 }
 
-async function ensenarEan(ean, sku, idWoo, pisarCodigo){
+async function ensenarEan(ean, sku, idWoo, pisarCodigo, pisarMapa){
   var r = await fetch('/api/consulta-precios/asociar', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ ean: ean, sku: sku, id_woo: idWoo || undefined, pisar_codigo: !!pisarCodigo }),
+    body: JSON.stringify({ ean: ean, sku: sku, id_woo: idWoo || undefined, pisar_codigo: !!pisarCodigo, pisar_mapa: !!pisarMapa }),
   });
   var d = await r.json();
   if(!d.ok){ resultEl.innerHTML = '<div class="msg err">'+esc(d.error||'No se pudo guardar')+'</div>'; return; }
@@ -218,7 +219,15 @@ async function ensenarEan(ean, sku, idWoo, pisarCodigo){
   var estado = mostrarEstadoCodigo(d.codigo);
   if(estado){ resultEl.insertAdjacentHTML('beforeend', estado); }
   var pisar = document.getElementById('btn-pisar-ean');
-  if(pisar) pisar.onclick = function(){ ensenarEan(ean, sku, idWoo, true); };
+  if(pisar) {
+    pisar.onclick = function(){
+      if(d.codigo.estado === 'conflicto_mapa') {
+        ensenarEan(ean, sku, idWoo, false, true);
+      } else {
+        ensenarEan(ean, sku, idWoo, true, false);
+      }
+    };
+  }
   // Enfocar el botón de confirmación si hay conflicto; de otro modo, enfocar el input de búsqueda
   if(d.codigo && (d.codigo.estado === 'conflicto' || d.codigo.estado === 'conflicto_mapa') && pisar) {
     pisar.focus();

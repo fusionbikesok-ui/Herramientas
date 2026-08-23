@@ -1681,11 +1681,21 @@ async function escanearCamara(codigo){
     beep('warn');
     if(navigator.vibrate)navigator.vibrate([80,60,80]);
     cerrarCamara();
+    // Re-enfocar el primer botón del panel de asociación DESPUÉS de cerrar cámara
+    setTimeout(function(){
+      var btn=document.querySelector('.ean-assoc .ean-candidate');
+      if(btn)btn.focus();
+    },0);
     flash('warn','Elegí en la pantalla el artículo para asociar '+(b.codigo||codigo));
   }else if(b.resultado==='asociacion_pendiente'){
     beep('warn');
     if(navigator.vibrate)navigator.vibrate([80,60,80]);
     cerrarCamara();
+    // Re-enfocar el primer botón del panel de asociación DESPUÉS de cerrar cámara
+    setTimeout(function(){
+      var btn=document.querySelector('.ean-assoc .ean-candidate');
+      if(btn)btn.focus();
+    },0);
     flash('warn','Terminá la asociación de '+ASOCIACION_PENDIENTE.codigo+' antes de escanear otro código.');
   }else{
     setCamProgress(b.error||'No se pudo escanear');
