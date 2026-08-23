@@ -704,13 +704,14 @@ elección existe `POST /api/preparacion/:id/asociar-codigo`:
 ```
 
 La respuesta exitosa cuenta una unidad y devuelve `resultado:"match"`, el `item` actualizado
-y `codigo.estado` (`subido`, `sin_cambio`, `fallo`). Si el SKU tiene un GTIN diferente, devuelve
-`resultado:"conflicto"` sin contar ni escribir; `pisar_codigo:true` confirma únicamente el
-reemplazo en WooCommerce y `pisar_mapa:true` confirma únicamente mover un mapa `ean_sku` que
-apuntaba a otro SKU. Si ambos conflictos existen, hacen falta ambas confirmaciones. Un fallo o ausencia de WooCommerce conserva el conteo y el mapa local cuando el
-SKU es inequívoco, pero informa `codigo.estado:"fallo"` para que pueda reintentarse.
-Si ya existe un mapa `ean_sku` hacia otro SKU, aplica el mismo freno (`conflicto`, con
-`sku_actual`) antes de moverlo.
+y `codigo.estado` (`subido`, `sin_cambio`, `fallo`).
+
+Comportamiento ante conflictos:
+- Si el SKU tiene un GTIN diferente, devuelve `resultado:"conflicto"` sin contar ni escribir; `pisar_codigo:true` confirma únicamente el reemplazo en WooCommerce.
+- Si ya existe un mapa `ean_sku` hacia otro SKU, devuelve `resultado:"conflicto"` con `sku_actual`; `pisar_mapa:true` confirma únicamente mover ese mapa.
+- Si ambos conflictos existen, hacen falta ambas confirmaciones.
+
+Un fallo o ausencia de WooCommerce conserva el conteo y el mapa local cuando el SKU es inequívoco, pero informa `codigo.estado:"fallo"` para que pueda reintentarse.
 
 Los códigos no válidos siguen el flujo anterior (`no_coincide`); no se aceptan en el endpoint
 de asociación. Los candidatos se limitan a ítems pendientes de esta preparación y nunca se

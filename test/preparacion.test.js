@@ -526,6 +526,27 @@ describe('preparacion flujo', () => {
     requestMock.mockRestore();
   });
 
+  it('asociar-codigo con SKU ambiguo (dos filas de catálogo con el mismo SKU) → estado fallo sku_ambiguo, sin escribir Woo ni ean_sku', async () => {
+    const requestMock = vi.spyOn(axios, 'request');
+    const id = nuevaPrep();
+    // Insertar dos productos distintos (id_woo distintos) con el mismo SKU
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (?,?,?,?,?,?)')
+      .run(200, 'Producto A con BICI-1', 'BICI-1', 'simple', 1, new Date().toISOString());
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (?,?,?,?,?,?)')
+      .run(201, 'Producto B con BICI-1', 'BICI-1', 'simple', 2, new Date().toISOString());
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
+    const appWoo = buildTestAppConCfg(db, { woo: { url: 'https://woo.test', ck: 'ck', cs: 'cs' } });
+    const r = await request(appWoo).post(`/api/preparacion/${id}/asociar-codigo`)
+      .send({ codigo: '4006381333931', item_id: item.id });
+
+    expect(r.body).toMatchObject({ ok: true, resultado: 'match' });
+    expect(r.body.codigo).toMatchObject({ estado: 'fallo', motivo: 'sku_ambiguo' });
+    expect(r.body.item.cantidad_escaneada).toBe(1);
+    expect(requestMock).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT COUNT(*) n FROM ean_sku WHERE ean=?').get('4006381333931').n).toBe(0);
+    requestMock.mockRestore();
+  });
+
   it('confirmar-manual verifica ítems sin código, con motivo válido', async () => {
     const id = nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
