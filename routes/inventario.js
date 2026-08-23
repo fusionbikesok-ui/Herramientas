@@ -4,6 +4,7 @@ import { setStockWc } from '../lib/wooStock.js';
 import { looksLikeGtin, subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
 export { looksLikeGtin as looksLikeEan } from '../lib/gtinWoo.js';
+const looksLikeEan = looksLikeGtin;
 
 const now = () => new Date().toISOString();
 
