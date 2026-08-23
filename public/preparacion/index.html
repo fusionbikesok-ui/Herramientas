@@ -1683,7 +1683,7 @@ async function escanearCamara(codigo){
     cerrarCamara();
     // Re-enfocar el primer botón del panel de asociación DESPUÉS de cerrar cámara
     setTimeout(function(){
-      var btn=document.querySelector('.ean-assoc .ean-candidate');
+      var btn=document.querySelector('.ean-assoc button');
       if(btn)btn.focus();
     },0);
     flash('warn','Elegí en la pantalla el artículo para asociar '+(b.codigo||codigo));
@@ -1693,7 +1693,7 @@ async function escanearCamara(codigo){
     cerrarCamara();
     // Re-enfocar el primer botón del panel de asociación DESPUÉS de cerrar cámara
     setTimeout(function(){
-      var btn=document.querySelector('.ean-assoc .ean-candidate');
+      var btn=document.querySelector('.ean-assoc button');
       if(btn)btn.focus();
     },0);
     flash('warn','Terminá la asociación de '+ASOCIACION_PENDIENTE.codigo+' antes de escanear otro código.');
