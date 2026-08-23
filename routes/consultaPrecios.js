@@ -22,6 +22,31 @@ export function pareceEan(codigo) {
 }
 
 /**
+ * Valida y normaliza id_woo. Rechaza booleano, array, objeto, NaN, string con decimales.
+ * Acepta: número entero exacto, string con solo dígitos.
+ * Devuelve: { ok: true, idWoo: <number> } si es válido, o { ok: false, error: <string> } si no.
+ */
+function parsearIdWoo(valor) {
+  if (valor == null || valor === '') {
+    return { ok: true, idWoo: null }; // opcional
+  }
+  if (typeof valor === 'number') {
+    if (!Number.isInteger(valor)) {
+      return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
+    }
+    return { ok: true, idWoo: valor };
+  }
+  if (typeof valor === 'string') {
+    if (!/^[0-9]+$/.test(valor.trim())) {
+      return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
+    }
+    return { ok: true, idWoo: Number(valor) };
+  }
+  // boolean, array, object, etc.
+  return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
+}
+
+/**
  * Fila de catalogo_cache → objeto liviano para la card de resultado.
  * `precio` es el precio de CONTADO/Transferencia (2/3 del de lista, ver precioContado),
  * no el precio de lista guardado en catalogo_cache. Se mantiene el nombre `precio`
@@ -67,18 +92,12 @@ export function consultaPreciosRouter(db, cfg = {}) {
   }
 
   function resolverProducto({ sku, idWoo }) {
-    if (idWoo != null && idWoo !== '') {
-      // Fix 2: validación mejorada de id_woo sin coerción peligrosa
-      if (typeof idWoo === 'number') {
-        if (!Number.isInteger(idWoo)) return null; // id_woo no es entero
-      } else if (typeof idWoo === 'string') {
-        // Aceptar solo strings que sean dígitos puros (sin decimales)
-        if (!/^[0-9]+$/.test(idWoo.trim())) return null;
-      } else {
-        // Rechazar boolean, array, object, etc
-        return null;
-      }
-      const fila = porId.get(Number(idWoo));
+    const parsed = parsearIdWoo(idWoo);
+    if (!parsed.ok) {
+      return { error: parsed.error }; // será manejado por el handler
+    }
+    if (parsed.idWoo != null) {
+      const fila = porId.get(parsed.idWoo);
       if (!fila || !fila.sku) return null; // fila sin sku no es válida
       // Fix 1: validar coherencia sku↔id_woo si vienen ambos
       if (sku && fila.sku !== sku) {
@@ -120,23 +139,16 @@ export function consultaPreciosRouter(db, cfg = {}) {
     const pisarMapa = req.body?.pisar_mapa === true;
     if (!ean || !sku) return res.status(400).json({ ok: false, error: 'ean y sku requeridos' });
 
-    // Validar id_woo si viene (Fix 2: rechazar tipos peligrosos)
-    if (idWoo != null && idWoo !== '') {
-      if (typeof idWoo === 'number') {
-        if (!Number.isInteger(idWoo)) {
-          return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
-        }
-      } else if (typeof idWoo === 'string') {
-        if (!/^[0-9]+$/.test(idWoo.trim())) {
-          return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
-        }
-      } else {
-        // Rechazar boolean, array, object, etc
-        return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
-      }
+    // Validar id_woo si viene
+    const parsed = parsearIdWoo(idWoo);
+    if (!parsed.ok) {
+      return res.status(400).json({ ok: false, error: parsed.error });
     }
 
-    const fila = resolverProducto({ sku, idWoo });
+    const fila = resolverProducto({ sku, idWoo: parsed.idWoo });
+    if (fila?.error) {
+      return res.status(400).json({ ok: false, error: fila.error });
+    }
     if (fila?.ambiguo) {
       return res.status(400).json({
         ok: false,
@@ -149,12 +161,12 @@ export function consultaPreciosRouter(db, cfg = {}) {
       return res.status(400).json({
         ok: false,
         codigo: 'sku_id_woo_incoherente',
-        error: `El id_woo ${idWoo} tiene SKU '${fila.skuEncontrado}', pero pediste '${sku}'. No coinciden.`,
+        error: `El id_woo ${parsed.idWoo} tiene SKU '${fila.skuEncontrado}', pero pediste '${sku}'. No coinciden.`,
       });
     }
     if (!fila) {
-      if (idWoo != null && idWoo !== '') {
-        return res.status(400).json({ ok: false, error: `id_woo ${idWoo} no existe o no tiene SKU asignado` });
+      if (parsed.idWoo != null) {
+        return res.status(400).json({ ok: false, error: `id_woo ${parsed.idWoo} no existe o no tiene SKU asignado` });
       }
       return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
     }
@@ -180,23 +192,16 @@ export function consultaPreciosRouter(db, cfg = {}) {
     const pisarMapa = req.body?.pisar_mapa === true;
     if (!ean || !sku) return res.status(400).json({ ok: false, error: 'ean y sku requeridos' });
 
-    // Validar id_woo si viene (Fix 2: rechazar tipos peligrosos)
-    if (idWoo != null && idWoo !== '') {
-      if (typeof idWoo === 'number') {
-        if (!Number.isInteger(idWoo)) {
-          return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
-        }
-      } else if (typeof idWoo === 'string') {
-        if (!/^[0-9]+$/.test(idWoo.trim())) {
-          return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
-        }
-      } else {
-        // Rechazar boolean, array, object, etc
-        return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
-      }
+    // Validar id_woo si viene
+    const parsed = parsearIdWoo(idWoo);
+    if (!parsed.ok) {
+      return res.status(400).json({ ok: false, error: parsed.error });
     }
 
-    const fila = resolverProducto({ sku, idWoo });
+    const fila = resolverProducto({ sku, idWoo: parsed.idWoo });
+    if (fila?.error) {
+      return res.status(400).json({ ok: false, error: fila.error });
+    }
     if (fila?.ambiguo) {
       return res.status(400).json({
         ok: false,
@@ -209,26 +214,31 @@ export function consultaPreciosRouter(db, cfg = {}) {
       return res.status(400).json({
         ok: false,
         codigo: 'sku_id_woo_incoherente',
-        error: `El id_woo ${idWoo} tiene SKU '${fila.skuEncontrado}', pero pediste '${sku}'. No coinciden.`,
+        error: `El id_woo ${parsed.idWoo} tiene SKU '${fila.skuEncontrado}', pero pediste '${sku}'. No coinciden.`,
       });
     }
     if (!fila) {
-      if (idWoo != null && idWoo !== '') {
-        return res.status(400).json({ ok: false, error: `id_woo ${idWoo} no existe o no tiene SKU asignado` });
+      if (parsed.idWoo != null) {
+        return res.status(400).json({ ok: false, error: `id_woo ${parsed.idWoo} no existe o no tiene SKU asignado` });
       }
       return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
     }
 
     const codigoBase = { gtin: ean };
+
+    // HIGH FIX: validar conflicto de mapa ANTES de cualquier operación remota
+    const existenteEan = eanRow.get(ean);
+    if (existenteEan && existenteEan.sku !== fila.sku && !pisarMapa) {
+      return res.json({
+        ok: true,
+        producto: productoParaCard(fila),
+        codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: existenteEan.sku },
+      });
+    }
+
     if (!looksLikeGtin(ean)) {
-      const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
-      if (mapResult.conflicto && !pisarMapa) {
-        return res.json({
-          ok: true,
-          producto: productoParaCard(fila),
-          codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
-        });
-      }
+      // EAN no es GTIN válido: guardar mapa localmente (el conflicto ya fue validado arriba)
+      guardarMapa(ean, fila.sku, pisarMapa);
       return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'no_valido' } });
     }
 
@@ -242,27 +252,15 @@ export function consultaPreciosRouter(db, cfg = {}) {
     }
 
     if (gtinActual === ean) {
-      const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
-      if (mapResult.conflicto && !pisarMapa) {
-        return res.json({
-          ok: true,
-          producto: productoParaCard(fila),
-          codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
-        });
-      }
+      // Ya tiene el GTIN: guardar mapa localmente (el conflicto ya fue validado arriba)
+      guardarMapa(ean, fila.sku, pisarMapa);
       return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'sin_cambio' } });
     }
 
     const woo = await subirGtinAWoo(cfg, fila, ean);
     if (!woo.ok) {
-      const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
-      if (mapResult.conflicto && !pisarMapa) {
-        return res.json({
-          ok: true,
-          producto: productoParaCard(fila),
-          codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
-        });
-      }
+      // Fail-open: guardar mapa localmente aunque Woo falló (el conflicto ya fue validado arriba)
+      guardarMapa(ean, fila.sku, pisarMapa);
       return res.json({
         ok: true,
         producto: productoParaCard(fila),
@@ -270,16 +268,9 @@ export function consultaPreciosRouter(db, cfg = {}) {
       });
     }
 
+    // Woo OK: persistir GTIN confirmado y guardar mapa localmente
     persistirGtinConfirmado(db, fila, ean, fila.sku);
-    const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
-    if (mapResult.conflicto && !pisarMapa) {
-      const actualizado = porId.get(fila.id_woo) || fila;
-      return res.json({
-        ok: true,
-        producto: productoParaCard(actualizado),
-        codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
-      });
-    }
+    guardarMapa(ean, fila.sku, pisarMapa);
     const actualizado = porId.get(fila.id_woo) || fila;
     return res.json({ ok: true, producto: productoParaCard(actualizado), codigo: { ...codigoBase, estado: 'subido' } });
   });

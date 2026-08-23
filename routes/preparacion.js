@@ -1329,6 +1329,8 @@ export function preparacionRouter(db, cfg) {
           });
         }
         if (mapeados.length) return res.json({ ok: true, resultado: 'sobrante', codigo });
+        // MEDIUM FIX: SKU resuelto pero no pertenece a esta preparación
+        return res.json({ ok: true, resultado: 'no_coincide', codigo, sku });
       }
 
       // EAN válido pero sin relación conocida o ambigua: no se elige un producto por
@@ -1406,7 +1408,7 @@ export function preparacionRouter(db, cfg) {
     }
 
     let codigoEstado;
-    let wooCfueSub = false; // Indica si persistirGtinConfirmado ya sembró ean_sku
+    let mapaYaSembrado = false; // Indica si persistirGtinConfirmado ya sembró ean_sku
     if (filasCatalogo.length > 1) {
       codigoEstado = {
         ...codigoBase, estado: 'fallo', motivo: 'sku_ambiguo',
@@ -1422,7 +1424,7 @@ export function preparacionRouter(db, cfg) {
       const woo = await subirGtinAWoo(cfg.woo, fila, codigo);
       if (woo.ok) {
         persistirGtinConfirmado(db, fila, codigo, item.sku);
-        wooCfueSub = true; // persistirGtinConfirmado ya sembró ean_sku
+        mapaYaSembrado = true; // persistirGtinConfirmado ya sembró ean_sku
         codigoEstado = { ...codigoBase, estado: 'subido' };
       } else {
         codigoEstado = { ...codigoBase, estado: 'fallo', motivo: woo.motivo || 'woo', error: woo.error };
@@ -1432,7 +1434,7 @@ export function preparacionRouter(db, cfg) {
     // El mapa local solo se siembra cuando el SKU es inequívoco Y no lo hizo
     // persistirGtinConfirmado. Aun con Woo caído, queda disponible para el próximo
     // escaneo y el trabajo físico no se pierde.
-    if (item.sku && filasCatalogo.length === 1 && !wooCfueSub) {
+    if (item.sku && filasCatalogo.length === 1 && !mapaYaSembrado) {
       db.prepare(`
         INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)
         ON CONFLICT(ean) DO UPDATE SET sku=excluded.sku, actualizado_en=excluded.actualizado_en
