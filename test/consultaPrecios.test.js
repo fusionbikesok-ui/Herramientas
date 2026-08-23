@@ -155,6 +155,37 @@ describe('POST /api/consulta-precios/ean', () => {
     expect(db.prepare('SELECT 1 FROM ean_sku WHERE ean=?').get('7000000000002')).toBeUndefined();
     db.close();
   });
+
+  it('rechaza id_woo no entero con 400', async () => {
+    const { app, db } = appConDatos();
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000002', sku: 'FB-40', id_woo: 'abc' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo debe ser un número entero');
+    db.close();
+  });
+
+  it('rechaza id_woo inexistente con 400 específico', async () => {
+    const { app, db } = appConDatos();
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000003', sku: 'FB-40', id_woo: 999 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo 999 no existe');
+    db.close();
+  });
+
+  it('rechaza fila con sku vacío resolvida por id_woo con 400', async () => {
+    const { app, db } = appConDatos();
+    const now = new Date().toISOString();
+    // Insertar fila con SKU vacío (caso real del hallazgo)
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(99, 'Producto sin SKU', '', 'simple', 1, 100, now);
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000004', sku: 'FB-40', id_woo: 99 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo 99 no existe o no tiene SKU asignado');
+    db.close();
+  });
 });
 
 describe('POST /api/consulta-precios/asociar — subida opcional a Woo', () => {
@@ -229,6 +260,40 @@ describe('POST /api/consulta-precios/asociar — subida opcional a Woo', () => {
       .send({ ean: '7791234567898', sku: 'FB-40' });
     expect(res.status).toBe(400);
     expect(res.body.codigo).toBe('sku_ambiguo');
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('rechaza id_woo no entero con 400', async () => {
+    const { app, db } = appConDatos(CFG);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40', id_woo: '1.5' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo debe ser un número entero');
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('rechaza id_woo inexistente con 400 específico', async () => {
+    const { app, db } = appConDatos(CFG);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40', id_woo: 999 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo 999 no existe');
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('rechaza fila con sku vacío resolvida por id_woo con 400', async () => {
+    const { app, db } = appConDatos(CFG);
+    const now = new Date().toISOString();
+    // Insertar fila con SKU vacío (caso real del hallazgo)
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(99, 'Producto sin SKU', '', 'simple', 1, 100, now);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40', id_woo: 99 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo 99 no existe o no tiene SKU asignado');
     expect(axios.request).not.toHaveBeenCalled();
     db.close();
   });

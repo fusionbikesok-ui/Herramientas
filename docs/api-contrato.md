@@ -1263,21 +1263,53 @@ en memoria del último refresh de `lib/mlClient.js`.
     `requiere_reautorizacion:true`, `expires_at`/`actualizado_en` en `null`.
 ## Consulta de Precios: asociación y subida de GTIN (C2)
 
-`POST /api/consulta-precios/asociar` recibe `{ ean, sku, id_woo?, pisar_codigo? }`. Enseña el
-mapa local `ean_sku` y, si `ean` pasa la validación GS1 (8/12/13/14 dígitos con checksum),
-intenta escribir `global_unique_id` en Woo reutilizando `lib/gtinWoo.js`.
+### GET /api/consulta-precios/buscar
+- Query param: `q` (string, búsqueda por SKU o EAN conocido).
+- Response 200: `{ "ok": true, "found": true, "tipo": "sku"|"ean", "producto": {...} }`
+  - `producto` incluye: `id_woo`, `sku`, `nombre`, `marca`, `categorias`, `precio` (contado),
+    `stock`, `tipo`, `id_padre`, `gtin`, `img`. Los campos `id_woo`, `id_padre` y `gtin` se
+    agregaron en C2; no asumir otra forma de respuesta.
 
-- `codigo.estado = no_valido`: se conserva el mapa local; no se llama a Woo.
-- `sin_cambio`: el producto ya tenía ese GTIN; se conserva el mapa sin PATCH.
-- `conflicto`: el producto tiene otro GTIN; no se escribe nada hasta repetir con
-  `pisar_codigo: true`.
-- `subido`: Woo confirmó el PATCH y se actualizan `catalogo_cache.gtin` y `ean_sku`.
-- `fallo`: Woo rechazó o no respondió; el mapa local se conserva, pero el cache no afirma que
-  el GTIN haya sido subido. `motivo` contiene `woo` o el rechazo local.
+### GET /api/consulta-precios/buscar-sku
+- Query param: `q` (string, autocomplete).
+- Response 200: `{ "ok": true, "data": [ { "id_woo", "sku", "nombre", "stock", "tipo", "id_padre" }, ... ] }`
+  - Incluye `id_woo` e `id_padre` desde C2.
 
-Un SKU homónimo responde 400 con `codigo: "sku_ambiguo"`; el cliente debe enviar `id_woo` para
-desambiguar. La asociación local es fail-open ante fallos remotos porque el trabajo de
-mostrador no debe perderse.
+### POST /api/consulta-precios/asociar
+Enseña el mapa local `ean_sku` y, si `ean` pasa la validación GS1 (8/12/13/14 dígitos con
+checksum), intenta escribir `global_unique_id` en Woo reutilizando `lib/gtinWoo.js`.
+
+- Request: `{ "ean", "sku", "id_woo"?, "pisar_codigo"? }`.
+  - `id_woo` es opcional; si viene, debe ser un número entero (400 si no).
+  - `pisar_codigo: true` ignora un GTIN conflictante y lo reemplaza en Woo.
+- Response 200: `{ "ok": true, "producto": {...}, "codigo": { "gtin", "estado", ... } }`.
+  - `producto` mismo shape que `/buscar` (incluye `id_woo`, `id_padre`, `gtin`).
+  - `codigo.estado`:
+    - `no_valido`: EAN no pasa checksum; se conserva el mapa local, no se llama a Woo.
+    - `sin_cambio`: producto ya tenía ese GTIN; se conserva sin PATCH.
+    - `conflicto`: producto tiene otro GTIN; requiere `pisar_codigo: true` para sobrescribir.
+    - `subido`: Woo confirmó el PATCH; `catalogo_cache.gtin` y `ean_sku` se actualizan.
+    - `fallo`: Woo rechazó o no respondió; mapa local se conserva, cache no se afirma subido.
+      `motivo` contiene `woo` o el rechazo local.
+- Response 400:
+  - SKU homónimo: `{ "ok": false, "codigo": "sku_ambiguo", "error": "..." }` — cliente debe
+    enviar `id_woo` para desambiguar.
+  - id_woo no entero o inexistente: `{ "ok": false, "error": "id_woo debe ser un número entero..." }`
+    o `{ "ok": false, "error": "id_woo XXX no existe o no tiene SKU asignado" }`.
+  - SKU inexistente o sin SKU en la fila resuelta: `{ "ok": false, "error": "..." }`.
+
+La asociación local es fail-open ante fallos remotos porque el trabajo de mostrador no debe
+perderse. Un SKU sin precio en el catálogo no impide la asociación.
+
+### POST /api/consulta-precios/ean (endpoint legado, en desuso)
+Alias de `/asociar` sin subida a Woo. Mismo validación de `id_woo` y `sku` que `/asociar`.
+- Request: `{ "ean", "sku", "id_woo"? }`.
+- Response: mismo shape que `/asociar`, pero sin intentar Woo — siempre `codigo: null`.
+
+**Limitación conocida (C2):** `ean_sku` guarda solo el SKU, no el `id_woo`. Con un SKU
+repetido en `catalogo_cache` (múltiples productos Woo con el mismo SKU), `/buscar` devolverá
+una fila arbitraria. Esto se resolverá en una entrega separada (migración `.sql` + persistencia
+de `id_woo` en `ean_sku`).
 
 ## Búsqueda con comodines SQL escapados (fix hallazgo E2E)
 

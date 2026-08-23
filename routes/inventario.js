@@ -11,9 +11,6 @@ const now = () => new Date().toISOString();
 // muestra un aviso antes de abrir la sesión. Solo informativo, nunca bloquea.
 export const UMBRAL_ALCANCE_GRANDE = 300;
 
-// Alias histórico: el contador expone `looksLikeEan` y mantiene ese contrato de tests.
-const looksLikeEan = looksLikeGtin;
-
 // ─── Alcance ─────────────────────────────────────────────────────────────────
 
 // Normaliza cualquier forma de selección (array, string legado, null) a un array
