@@ -463,6 +463,41 @@ describe('POST /api/consulta-precios/asociar — subida opcional a Woo', () => {
     expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234567898').sku).toBe('FB-99');
     db.close();
   });
+
+  it('HIGH-1/HIGH-2/MEDIUM-3: dos requests concurrentes con el mismo EAN — la segunda recibe en_curso mientras la primera no resolvió, y el mutex se libera después', { timeout: 15000 }, async () => {
+    const { app, db } = appConDatos(CFG);
+    let resolverWoo;
+    axios.request.mockImplementationOnce(() => new Promise((resolve) => { resolverWoo = resolve; }));
+
+    // supertest es "perezoso": la request real no sale hasta que se llama .then()/.end().
+    // Encadenar .then() acá dispara el envío ya mismo, en vez de recién al hacer `await p1`.
+    const p1 = request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' })
+      .then((res) => res);
+
+    // Dejar que la primera request llegue hasta el await de Woo (que quedó pendiente)
+    // antes de disparar la segunda para el mismo EAN.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const res2 = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res2.status).toBe(200);
+    expect(res2.body.codigo).toMatchObject({ estado: 'en_curso' });
+    expect(res2.body.codigo.sku_actual).toBeUndefined();
+    expect(res2.body.codigo.mensaje).toBeTruthy();
+
+    // Resolver Woo y dejar que la primera request termine.
+    resolverWoo({ status: 200, data: {}, headers: {} });
+    const res1 = await p1;
+    expect(res1.status).toBe(200);
+    expect(res1.body.codigo.estado).toBe('subido');
+
+    // Mutex liberado: una tercera request para el mismo EAN ya no ve en_curso.
+    const res3 = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res3.body.codigo.estado).toBe('sin_cambio');
+    db.close();
+  });
 });
 
 describe('POST /api/consulta-precios/importar', () => {

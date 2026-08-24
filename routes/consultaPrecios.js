@@ -14,9 +14,6 @@ import { armarLike } from '../lib/busqueda.js';
 import { looksLikeGtin, persistirGtinConfirmado, subirGtinAWoo } from '../lib/gtinWoo.js';
 
 const now = () => new Date().toISOString();
-// Serializa por EAN el tramo remoto + persistencia local para evitar que dos
-// solicitudes concurrentes validen el mismo mapa y luego lo pisen.
-const eanEnCurso = new Set();
 
 /** ¿El código parece un EAN? Sólo dígitos, largo 8/12/13/14 (EAN-8, UPC-A, EAN-13, GTIN-14). */
 export function pareceEan(codigo) {
@@ -78,6 +75,13 @@ function productoParaCard(row) {
 
 export function consultaPreciosRouter(db, cfg = {}) {
   const router = Router();
+
+  // Serializa por EAN el tramo de escritura de /asociar (no_valido, sin_cambio y el camino
+  // con Woo) para evitar que dos solicitudes concurrentes con el mismo EAN pisen el mapa
+  // ean_sku entre sí. De módulo sería compartido entre todas las instancias del router
+  // (incluidos los `app` de test); en producción hay un router por proceso así que la
+  // semántica no cambia, pero como closure evita fuga de estado entre tests (MEDIUM-4).
+  const eanEnCurso = new Set();
 
   const porSku = db.prepare("SELECT * FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1");
   const porId = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = ? LIMIT 1');
@@ -243,53 +247,73 @@ export function consultaPreciosRouter(db, cfg = {}) {
       });
     }
 
-    if (!looksLikeGtin(ean)) {
-      // EAN no es GTIN válido: guardar mapa localmente (el conflicto ya fue validado arriba)
-      guardarMapa(ean, fila.sku, pisarMapa);
-      return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'no_valido' } });
-    }
-
-    const gtinActual = String(fila.gtin || '').trim();
-    if (gtinActual && gtinActual !== ean && !pisarCodigo) {
-      return res.json({
-        ok: true,
-        producto: productoParaCard(fila),
-        codigo: { ...codigoBase, estado: 'conflicto', gtin_actual: gtinActual },
-      });
-    }
-
-    if (gtinActual === ean) {
-      // Ya tiene el GTIN: guardar mapa localmente (el conflicto ya fue validado arriba)
-      guardarMapa(ean, fila.sku, pisarMapa);
-      return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'sin_cambio' } });
-    }
-
+    // MEDIUM-3: el guard/mutex sube acá, antes de las tres ramas de escritura (no_valido,
+    // sin_cambio y el camino con Woo) para que ninguna pise el mapa mientras otra request
+    // para el mismo EAN está en curso. HIGH-1: estado propio 'en_curso', sin sku_actual —
+    // no es un valor real de mapa y el frontend no debe ofrecer "mover código" acá (ver
+    // docs/api-contrato.md). Cambio de contrato: nuevo estado 'en_curso' en /asociar.
     if (eanEnCurso.has(ean)) {
       return res.json({
         ok: true,
         producto: productoParaCard(fila),
-        codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: 'operacion_en_curso' },
+        codigo: { ...codigoBase, estado: 'en_curso', mensaje: 'Otro puesto está subiendo este código, reintentá en unos segundos.' },
       });
     }
     eanEnCurso.add(ean);
-    const woo = await subirGtinAWoo(cfg, fila, ean);
-    if (!woo.ok) {
-      // Fail-open: guardar mapa localmente aunque Woo falló (el conflicto ya fue validado arriba)
-      guardarMapa(ean, fila.sku, pisarMapa);
-      eanEnCurso.delete(ean);
-      return res.json({
-        ok: true,
-        producto: productoParaCard(fila),
-        codigo: { ...codigoBase, estado: 'fallo', motivo: woo.motivo || 'woo', error: woo.error },
-      });
-    }
+    // HIGH-2: try/finally asegura liberar el mutex aunque falle una escritura sqlite
+    // (ej. SQLITE_BUSY) entre el add y los returns; antes quedaba trabado hasta reiniciar.
+    try {
+      if (!looksLikeGtin(ean)) {
+        // EAN no es GTIN válido: guardar mapa localmente (el conflicto ya fue validado arriba)
+        guardarMapa(ean, fila.sku, pisarMapa);
+        return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'no_valido' } });
+      }
 
-    // Woo OK: persistir GTIN confirmado y guardar mapa localmente
-    persistirGtinConfirmado(db, fila, ean, fila.sku);
-    guardarMapa(ean, fila.sku, pisarMapa);
-    eanEnCurso.delete(ean);
-    const actualizado = porId.get(fila.id_woo) || fila;
-    return res.json({ ok: true, producto: productoParaCard(actualizado), codigo: { ...codigoBase, estado: 'subido' } });
+      const gtinActual = String(fila.gtin || '').trim();
+      if (gtinActual && gtinActual !== ean && !pisarCodigo) {
+        return res.json({
+          ok: true,
+          producto: productoParaCard(fila),
+          codigo: { ...codigoBase, estado: 'conflicto', gtin_actual: gtinActual },
+        });
+      }
+
+      if (gtinActual === ean) {
+        // Ya tiene el GTIN: guardar mapa localmente (el conflicto ya fue validado arriba)
+        guardarMapa(ean, fila.sku, pisarMapa);
+        return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'sin_cambio' } });
+      }
+
+      const woo = await subirGtinAWoo(cfg, fila, ean);
+      if (!woo.ok) {
+        // Fail-open: guardar mapa localmente aunque Woo falló. MEDIUM-1: el mapa pudo cambiar
+        // durante el await a Woo (única ventana real de conflicto), así que hay que chequear
+        // el resultado en vez de asumir que se escribió.
+        const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
+        if (mapResult.conflicto) {
+          return res.json({
+            ok: true,
+            producto: productoParaCard(fila),
+            codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
+          });
+        }
+        return res.json({
+          ok: true,
+          producto: productoParaCard(fila),
+          codigo: { ...codigoBase, estado: 'fallo', motivo: woo.motivo || 'woo', error: woo.error },
+        });
+      }
+
+      // Woo OK: persistir GTIN confirmado. MEDIUM-2: NO llamamos a guardarMapa acá — sería
+      // una escritura redundante después de persistirGtinConfirmado, que ya hace
+      // INSERT ... ON CONFLICT DO UPDATE sobre ean_sku incondicionalmente. En el camino de
+      // éxito Woo es la fuente de verdad y el mapa se pisa a propósito (decisión explícita).
+      persistirGtinConfirmado(db, fila, ean, fila.sku);
+      const actualizado = porId.get(fila.id_woo) || fila;
+      return res.json({ ok: true, producto: productoParaCard(actualizado), codigo: { ...codigoBase, estado: 'subido' } });
+    } finally {
+      eanEnCurso.delete(ean);
+    }
   });
 
   // Sembrado en lote desde el mapa del Contador de inventario. No valida contra el catálogo.

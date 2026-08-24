@@ -1299,6 +1299,11 @@ checksum), intenta escribir `global_unique_id` en Woo reutilizando `lib/gtinWoo.
     - `conflicto`: producto tiene otro GTIN; requiere `pisar_codigo: true` para sobrescribir.
     - `conflicto_mapa`: EAN ya estaba mapeado en `ean_sku` a otro SKU; requiere `pisar_mapa: true`
       para reemplazarlo. `sku_actual` contiene el SKU anterior. No se toca Woo ni `catalogo_cache`.
+    - `en_curso`: otra request para el mismo EAN está en el tramo remoto (Woo) + persistencia
+      local ahora mismo (mutex por EAN, un solo proceso). **No incluye `sku_actual`** — no es
+      un conflicto de mapa real, así que el frontend no debe ofrecer "mover código" para este
+      estado; incluye `mensaje` con el texto a mostrar. El cliente puede reintentar la misma
+      request en unos segundos sin cambiar ningún flag.
     - `subido`: Woo confirmó el PATCH; `catalogo_cache.gtin` y `ean_sku` se actualizan.
     - `fallo`: Woo rechazó o no respondió; mapa local se conserva, cache no se afirma subido.
       `motivo` contiene `woo` o el rechazo local.
