@@ -2056,7 +2056,7 @@ export async function syncPedidosCache(db, cfg) {
       // continuamos con el resto (nunca abortamos el sync completo por un error puntual).
       for (const order of [...(wcCompleted.data || []), ...(wcEnviado.data || [])]) {
         const clave = `web:${order.id}`;
-        const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=? AND estado=?')
+        const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=? AND estado=? AND woo_paso2_pendiente=0')
           .get(clave, 'en_preparacion');
         if (prep) {
           try {
