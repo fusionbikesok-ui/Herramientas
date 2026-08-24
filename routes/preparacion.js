@@ -2046,6 +2046,27 @@ export async function syncPedidosCache(db, cfg) {
       for (const order of wcPend.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'pendiente'));
       for (const order of wcCompleted.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'enviado'));
       for (const order of wcEnviado.data || []) upsertPedidoCache(db, filaWebDesdeOrder(db, order, 'enviado'));
+
+      // FIX PREPARACIONES HUÉRFANAS: cuando un pedido web pasa a estado_envio='enviado',
+      // verificar si existe una preparación local en estado 'en_preparacion' y cerrarla
+      // correctamente. Esto cierra automáticamente las preparaciones que se volvieron
+      // huérfanas porque su pedido Woo pasó a completado/enviadoandreani por cualquier
+      // camino (cambio manual en admin Woo, otra causa, etc.) sin que la app local lo
+      // supiera. Fail-open por pedido: si marcarPreparacionEnviada falla para uno,
+      // continuamos con el resto (nunca abortamos el sync completo por un error puntual).
+      for (const order of [...(wcCompleted.data || []), ...(wcEnviado.data || [])]) {
+        const clave = `web:${order.id}`;
+        const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=? AND estado=?')
+          .get(clave, 'en_preparacion');
+        if (prep) {
+          try {
+            marcarPreparacionEnviada(db, clave, { usuario: null });
+          } catch (e) {
+            console.error(`syncPedidosCache: error al cerrar preparación huérfana ${clave}:`, e.message);
+          }
+        }
+      }
+
       // Limpieza: el sync solo hace upsert, nunca borra — sin esto, una fila "enviado" que
       // ya cayó fuera de la ventana de 60 días quedaría para siempre en la caché.
       db.prepare("DELETE FROM pedidos_cache WHERE estado_envio='enviado' AND fecha < ?").run(hace60Dias);
