@@ -132,13 +132,14 @@ describe('POST /api/consulta-precios/ean', () => {
     db.close();
   });
 
-  it('re-enseñar el mismo EAN sobreescribe el SKU (upsert)', async () => {
+  it('re-enseñar el mismo EAN con pisar_mapa=true sobreescribe el SKU (upsert)', async () => {
     const { app, db } = appConDatos();
     const now = new Date().toISOString();
     // segundo producto para reasignar
     db.prepare('INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en) VALUES (?,?,?,?,?,?,?)')
       .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
-    await request(app).post('/api/consulta-precios/ean').send({ ean: '7791234567890', sku: 'FB-99' });
+    // Reasignar EAN 7791234567890 de FB-40 a FB-99 con pisar_mapa=true
+    await request(app).post('/api/consulta-precios/ean').send({ ean: '7791234567890', sku: 'FB-99', pisar_mapa: true });
     const guardado = db.prepare('SELECT sku FROM ean_sku WHERE ean = ?').get('7791234567890');
     expect(guardado.sku).toBe('FB-99');
     db.close();
@@ -153,6 +154,108 @@ describe('POST /api/consulta-precios/ean', () => {
     expect(res.status).toBe(400);
     expect(res.body.codigo).toBe('sku_ambiguo');
     expect(db.prepare('SELECT 1 FROM ean_sku WHERE ean=?').get('7000000000002')).toBeUndefined();
+    db.close();
+  });
+
+  it('rechaza id_woo no entero con 400', async () => {
+    const { app, db } = appConDatos();
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000002', sku: 'FB-40', id_woo: 'abc' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo debe ser un número entero');
+    db.close();
+  });
+
+  it('rechaza id_woo inexistente con 400 específico', async () => {
+    const { app, db } = appConDatos();
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000003', sku: 'FB-40', id_woo: 999 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo 999 no existe');
+    db.close();
+  });
+
+  it('rechaza fila con sku vacío resolvida por id_woo con 400', async () => {
+    const { app, db } = appConDatos();
+    const now = new Date().toISOString();
+    // Insertar fila con SKU vacío (caso real del hallazgo)
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(99, 'Producto sin SKU', '', 'simple', 1, 100, now);
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000004', sku: 'FB-40', id_woo: 99 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo 99 no existe o no tiene SKU asignado');
+    db.close();
+  });
+
+  it('Fix 1: rechaza sku↔id_woo incoherentes con 400 sku_id_woo_incoherente', async () => {
+    const { app, db } = appConDatos();
+    const now = new Date().toISOString();
+    // Crear segundo producto con SKU distinto
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    // Intentar enseñar EAN con sku=FB-40 pero id_woo=2 (que tiene sku=FB-99)
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000005', sku: 'FB-40', id_woo: 2 });
+    expect(res.status).toBe(400);
+    expect(res.body.codigo).toBe('sku_id_woo_incoherente');
+    expect(res.body.error).toContain('No coinciden');
+    // Verificar que NO se guardó nada
+    expect(db.prepare('SELECT 1 FROM ean_sku WHERE ean=?').get('7000000000005')).toBeUndefined();
+    db.close();
+  });
+
+  it('Fix 2: rechaza id_woo boolean con 400', async () => {
+    const { app, db } = appConDatos();
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000006', sku: 'FB-40', id_woo: true });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo debe ser un número entero');
+    db.close();
+  });
+
+  it('Fix 2: rechaza id_woo array con 400', async () => {
+    const { app, db } = appConDatos();
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000007', sku: 'FB-40', id_woo: [1] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo debe ser un número entero');
+    db.close();
+  });
+
+  it('Fix 3: conflicto_mapa cuando EAN ya estaba mapeado a otro SKU', async () => {
+    const { app, db } = appConDatos();
+    const now = new Date().toISOString();
+    // Segundo producto
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    // Primer mapeo: EAN → FB-40
+    db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('7000000000008', 'FB-40', now);
+    // Intentar reasignar el mismo EAN a FB-99 sin pisar_mapa
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000008', sku: 'FB-99' });
+    expect(res.status).toBe(200);
+    expect(res.body.codigo).toMatchObject({ estado: 'conflicto_mapa', sku_actual: 'FB-40' });
+    // Verificar que NO se cambió el mapa
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7000000000008').sku).toBe('FB-40');
+    db.close();
+  });
+
+  it('Fix 3: pisar_mapa=true reemplaza el mapa antiguo', async () => {
+    const { app, db } = appConDatos();
+    const now = new Date().toISOString();
+    // Segundo producto
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    // Primer mapeo: EAN → FB-40
+    db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('7000000000009', 'FB-40', now);
+    // Reasignar con pisar_mapa=true
+    const res = await request(app).post('/api/consulta-precios/ean')
+      .send({ ean: '7000000000009', sku: 'FB-99', pisar_mapa: true });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    // Verificar que SÍ cambió el mapa
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7000000000009').sku).toBe('FB-99');
     db.close();
   });
 });
@@ -230,6 +333,169 @@ describe('POST /api/consulta-precios/asociar — subida opcional a Woo', () => {
     expect(res.status).toBe(400);
     expect(res.body.codigo).toBe('sku_ambiguo');
     expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('rechaza id_woo no entero con 400', async () => {
+    const { app, db } = appConDatos(CFG);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40', id_woo: '1.5' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo debe ser un número entero');
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('rechaza id_woo inexistente con 400 específico', async () => {
+    const { app, db } = appConDatos(CFG);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40', id_woo: 999 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo 999 no existe');
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('rechaza fila con sku vacío resolvida por id_woo con 400', async () => {
+    const { app, db } = appConDatos(CFG);
+    const now = new Date().toISOString();
+    // Insertar fila con SKU vacío (caso real del hallazgo)
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(99, 'Producto sin SKU', '', 'simple', 1, 100, now);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40', id_woo: 99 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo 99 no existe o no tiene SKU asignado');
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('Fix 1: rechaza sku↔id_woo incoherentes en /asociar con 400 sku_id_woo_incoherente', async () => {
+    const { app, db } = appConDatos(CFG);
+    const now = new Date().toISOString();
+    // Crear segundo producto con SKU distinto
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    // Intentar asociar GTIN con sku=FB-40 pero id_woo=2 (que tiene sku=FB-99)
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567800', sku: 'FB-40', id_woo: 2 });
+    expect(res.status).toBe(400);
+    expect(res.body.codigo).toBe('sku_id_woo_incoherente');
+    expect(res.body.error).toContain('No coinciden');
+    expect(axios.request).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT 1 FROM ean_sku WHERE ean=?').get('7791234567800')).toBeUndefined();
+    db.close();
+  });
+
+  it('Fix 2: rechaza id_woo boolean en /asociar con 400', async () => {
+    const { app, db } = appConDatos(CFG);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567801', sku: 'FB-40', id_woo: false });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo debe ser un número entero');
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('Fix 2: rechaza id_woo array en /asociar con 400', async () => {
+    const { app, db } = appConDatos(CFG);
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567802', sku: 'FB-40', id_woo: [99] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('id_woo debe ser un número entero');
+    expect(axios.request).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('Fix 3: conflicto_mapa en /asociar cuando GTIN es no-válido y EAN estaba mapeado a otro SKU', async () => {
+    const { app, db } = appConDatos(CFG);
+    const now = new Date().toISOString();
+    // Segundo producto
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    // Primer mapeo: EAN no-válido → FB-40
+    db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('7791234500010', 'FB-40', now);
+    // Intentar reasignar a FB-99 sin pisar_mapa
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234500010', sku: 'FB-99' });
+    expect(res.status).toBe(200);
+    expect(res.body.codigo).toMatchObject({ estado: 'conflicto_mapa', sku_actual: 'FB-40' });
+    expect(axios.request).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234500010').sku).toBe('FB-40');
+    db.close();
+  });
+
+  it('Fix 3: pisar_mapa=true en /asociar reemplaza el mapa antiguo', async () => {
+    const { app, db } = appConDatos(CFG);
+    const now = new Date().toISOString();
+    // Segundo producto
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    // Primer mapeo: EAN no-válido → FB-40
+    db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('7791234500009', 'FB-40', now);
+    // Reasignar con pisar_mapa=true
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234500009', sku: 'FB-99', pisar_mapa: true });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(axios.request).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234500009').sku).toBe('FB-99');
+    db.close();
+  });
+
+  it('HIGH FIX: conflicto_mapa con Woo exitoso — no pisa el mapa sin pisar_mapa:true', async () => {
+    const { app, db } = appConDatos(CFG);
+    const now = new Date().toISOString();
+    // Segundo producto
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(2, 'Otro producto', 'FB-99', 'simple', 1, 100, now);
+    // Primer mapeo: EAN → FB-99
+    db.prepare('INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run('7791234567898', 'FB-99', now);
+    // Intentar asociar ese EAN (GTIN válido) a FB-40 (que sube bien a Woo)
+    axios.request.mockResolvedValueOnce({ status: 200, data: {}, headers: {} });
+    const res = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res.status).toBe(200);
+    // El conflicto de mapa debe detectarse ANTES de Woo, así que no lo llamamos
+    expect(axios.request).not.toHaveBeenCalled();
+    expect(res.body.codigo).toMatchObject({ estado: 'conflicto_mapa', sku_actual: 'FB-99' });
+    // Verificar que el mapa NO cambió
+    expect(db.prepare('SELECT sku FROM ean_sku WHERE ean=?').get('7791234567898').sku).toBe('FB-99');
+    db.close();
+  });
+
+  it('HIGH-1/HIGH-2/MEDIUM-3: dos requests concurrentes con el mismo EAN — la segunda recibe en_curso mientras la primera no resolvió, y el mutex se libera después', { timeout: 15000 }, async () => {
+    const { app, db } = appConDatos(CFG);
+    let resolverWoo;
+    axios.request.mockImplementationOnce(() => new Promise((resolve) => { resolverWoo = resolve; }));
+
+    // supertest es "perezoso": la request real no sale hasta que se llama .then()/.end().
+    // Encadenar .then() acá dispara el envío ya mismo, en vez de recién al hacer `await p1`.
+    const p1 = request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' })
+      .then((res) => res);
+
+    // Dejar que la primera request llegue hasta el await de Woo (que quedó pendiente)
+    // antes de disparar la segunda para el mismo EAN.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const res2 = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res2.status).toBe(200);
+    expect(res2.body.codigo).toMatchObject({ estado: 'en_curso' });
+    expect(res2.body.codigo.sku_actual).toBeUndefined();
+    expect(res2.body.codigo.mensaje).toBeTruthy();
+
+    // Resolver Woo y dejar que la primera request termine.
+    resolverWoo({ status: 200, data: {}, headers: {} });
+    const res1 = await p1;
+    expect(res1.status).toBe(200);
+    expect(res1.body.codigo.estado).toBe('subido');
+
+    // Mutex liberado: una tercera request para el mismo EAN ya no ve en_curso.
+    const res3 = await request(app).post('/api/consulta-precios/asociar')
+      .send({ ean: '7791234567898', sku: 'FB-40' });
+    expect(res3.body.codigo.estado).toBe('sin_cambio');
     db.close();
   });
 });

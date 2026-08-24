@@ -4,15 +4,13 @@ import { setStockWc } from '../lib/wooStock.js';
 import { looksLikeGtin, subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
 export { looksLikeGtin as looksLikeEan } from '../lib/gtinWoo.js';
+const looksLikeEan = looksLikeGtin;
 
 const now = () => new Date().toISOString();
 
 // Umbral de "alcance grande" (decisión de producto): por encima de esto el frontend
 // muestra un aviso antes de abrir la sesión. Solo informativo, nunca bloquea.
 export const UMBRAL_ALCANCE_GRANDE = 300;
-
-// Alias histórico: el contador expone `looksLikeEan` y mantiene ese contrato de tests.
-const looksLikeEan = looksLikeGtin;
 
 // ─── Alcance ─────────────────────────────────────────────────────────────────
 
