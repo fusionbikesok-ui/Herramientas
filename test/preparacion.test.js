@@ -2451,4 +2451,108 @@ describe('syncPedidosCache', () => {
     expect(r.body.data.find(p => p.ml_order_id === '4444')).toBeTruthy();
     expect(r.body.data.find(p => p.ml_order_id === '5555')).toBeTruthy();
   });
+
+  it('syncPedidosCache cierra una preparación web en_preparacion cuando su pedido Woo pasa a completed (bug huérfano)', async () => {
+    buildTestApp(db);
+    // Crear preparación en en_preparacion con ítems simples (sin escaneos verificados)
+    const prepId = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 9999, numeroPedido: '9999', comprador: 'Huérfano', items: [],
+    });
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    expect(prep.estado).toBe('en_preparacion');
+    expect(prep.clave).toBe('web:9999');
+
+    // Mock: pedido web 9999 ahora está completed en Woo
+    const orderCompleted = {
+      id: 9999, number: '9999', status: 'completed', date_created: '2026-07-01T00:00:00Z',
+      billing: { first_name: 'Cliente', last_name: 'Huérfano' }, meta_data: [],
+      line_items: [],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [] })            // status=lpaandreani
+      .mockResolvedValueOnce({ data: [orderCompleted] })    // status=completed — acá aparece
+      .mockResolvedValueOnce({ data: [] });           // status=enviadoandreani
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } }); // pendientesMl
+
+    await syncPedidosCache(db, CFG);
+
+    // Verificación: la preparación debe cambiar de estado
+    const prepActualizada = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    // Sin items verificados, termina en 'despachada_sin_verificar' (nunca 'completada')
+    expect(prepActualizada.estado).toBe('despachada_sin_verificar');
+    // El pedido_cache debe estar en 'enviado'
+    const cache = db.prepare('SELECT * FROM pedidos_cache WHERE clave=?').get('web:9999');
+    expect(cache.estado_envio).toBe('enviado');
+  });
+
+  it('syncPedidosCache cierra una preparación web verificada a completada cuando su pedido pasa a completed', async () => {
+    buildTestApp(db);
+    // Crear preparación con un ítem que será marcado verificado
+    const prepId = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 8888, numeroPedido: '8888', comprador: 'Verificado',
+      items: [{ line_item_id: 1, product_id: 50, sku: 'TEST-1', nombre: 'Test', categoria: 'TEST', cantidad: 1 }],
+    });
+    // Marcar el ítem como verificado
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=?').get(prepId);
+    db.prepare('UPDATE preparacion_items SET estado_item=?, cantidad_escaneada=? WHERE id=?')
+      .run('verificado', 1, item.id);
+
+    // Insertar fotos requeridas (foto de artículo + fotos de paquete)
+    const now = new Date().toISOString();
+    const insFoto = db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)');
+    insFoto.run(prepId, item.id, 'articulo', '/uploads/articulo.jpg', now);
+    insFoto.run(prepId, null, 'paquete_abierto', '/uploads/paquete-abierto.jpg', now);
+    insFoto.run(prepId, null, 'paquete_cerrado', '/uploads/paquete-cerrado.jpg', now);
+
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    expect(prep.estado).toBe('en_preparacion');
+
+    // Mock: pedido 8888 completado en Woo
+    const orderCompleted = {
+      id: 8888, number: '8888', status: 'completed', date_created: '2026-07-01T00:00:00Z',
+      billing: { first_name: 'Cliente', last_name: 'Verificado' }, meta_data: [],
+      line_items: [],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [orderCompleted] })
+      .mockResolvedValueOnce({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    // Con items verificados y fotos completas, termina en 'completada'
+    const prepActualizada = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    expect(prepActualizada.estado).toBe('completada');
+  });
+
+  it('syncPedidosCache NO pisa una preparación cerrada_sin_evidencia cuando su pedido pasa a enviado', async () => {
+    buildTestApp(db);
+    // Crear preparación en cerrada_sin_evidencia
+    const prepId = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 7777, numeroPedido: '7777', comprador: 'Sin Evidencia', items: [],
+    });
+    db.prepare("UPDATE preparaciones SET estado='cerrada_sin_evidencia' WHERE id=?").run(prepId);
+
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    expect(prep.estado).toBe('cerrada_sin_evidencia');
+
+    // Mock: pedido 7777 pasa a enviadoandreani
+    const orderEnviado = {
+      id: 7777, number: '7777', status: 'enviadoandreani', date_created: '2026-07-01T00:00:00Z',
+      billing: { first_name: 'Cliente', last_name: 'Sin Evidencia' }, meta_data: [],
+      line_items: [],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [orderEnviado] }); // status=enviadoandreani
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    // Verificación: la preparación debe PERMANECER en cerrada_sin_evidencia (no pisada)
+    const prepNoAlterada = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    expect(prepNoAlterada.estado).toBe('cerrada_sin_evidencia');
+  });
 });
