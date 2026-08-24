@@ -2555,4 +2555,88 @@ describe('syncPedidosCache', () => {
     const prepNoAlterada = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
     expect(prepNoAlterada.estado).toBe('cerrada_sin_evidencia');
   });
+
+  it('syncPedidosCache NO toca una preparación en_preparacion si woo_paso2_pendiente=1', async () => {
+    buildTestApp(db);
+    // Crear preparación en en_preparacion con woo_paso2_pendiente=1
+    // (caso: paso 1 de Woo completado, paso 2 aún pendiente)
+    const prepId = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 6666, numeroPedido: '6666', comprador: 'Paso2Pendiente', items: [],
+    });
+    // Marcar que el paso 2 de Woo está pendiente
+    db.prepare('UPDATE preparaciones SET woo_paso2_pendiente=1 WHERE id=?').run(prepId);
+
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    expect(prep.estado).toBe('en_preparacion');
+    expect(prep.woo_paso2_pendiente).toBe(1);
+
+    // Mock: pedido 6666 aparece en wcCompleted
+    const orderCompleted = {
+      id: 6666, number: '6666', status: 'completed', date_created: '2026-07-01T00:00:00Z',
+      billing: { first_name: 'Cliente', last_name: 'Paso2Pendiente' }, meta_data: [],
+      line_items: [],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [orderCompleted] })    // wcCompleted
+      .mockResolvedValueOnce({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    // Verificación: la preparación debe PERMANECER en en_preparacion (NO tocada por el fix)
+    // porque woo_paso2_pendiente=1 la excluye del SELECT que busca huérfanas
+    const prepNoTocada = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
+    expect(prepNoTocada.estado).toBe('en_preparacion');
+    expect(prepNoTocada.woo_paso2_pendiente).toBe(1);
+  });
+
+  it('syncPedidosCache cierra múltiples preparaciones huérfanas en la misma ejecución (fail-open del loop)', async () => {
+    buildTestApp(db);
+    // Crear dos preparaciones en en_preparacion
+    const prepId1 = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 5555, numeroPedido: '5555', comprador: 'Huérfano1', items: [],
+    });
+    const prepId2 = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 4444, numeroPedido: '4444', comprador: 'Huérfano2', items: [],
+    });
+
+    const prep1 = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId1);
+    const prep2 = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId2);
+    expect(prep1.estado).toBe('en_preparacion');
+    expect(prep2.estado).toBe('en_preparacion');
+
+    // Mock: ambos pedidos completos en Woo (aparecen en wcCompleted)
+    const order1 = {
+      id: 5555, number: '5555', status: 'completed', date_created: '2026-07-01T00:00:00Z',
+      billing: { first_name: 'Cliente', last_name: 'Huérfano1' }, meta_data: [],
+      line_items: [],
+    };
+    const order2 = {
+      id: 4444, number: '4444', status: 'completed', date_created: '2026-07-01T00:00:00Z',
+      billing: { first_name: 'Cliente', last_name: 'Huérfano2' }, meta_data: [],
+      line_items: [],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [order1, order2] })    // wcCompleted con ambos
+      .mockResolvedValueOnce({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, CFG);
+
+    // Ambas preparaciones deben haberse cerrado
+    const prepCerrada1 = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId1);
+    expect(prepCerrada1.estado).toBe('despachada_sin_verificar');
+
+    const prepCerrada2 = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId2);
+    expect(prepCerrada2.estado).toBe('despachada_sin_verificar');
+
+    // Ambos pedidos deben estar en estado_envio='enviado' en la caché
+    const cache1 = db.prepare('SELECT * FROM pedidos_cache WHERE clave=?').get('web:5555');
+    expect(cache1.estado_envio).toBe('enviado');
+
+    const cache2 = db.prepare('SELECT * FROM pedidos_cache WHERE clave=?').get('web:4444');
+    expect(cache2.estado_envio).toBe('enviado');
+  });
 });
