@@ -22,6 +22,35 @@ export function pareceEan(codigo) {
 }
 
 /**
+ * Valida y normaliza id_woo. Rechaza booleano, array, objeto, NaN, string con decimales.
+ * Acepta: número entero exacto, string con solo dígitos.
+ * Devuelve: { ok: true, idWoo: <number> } si es válido, o { ok: false, error: <string> } si no.
+ */
+function parsearIdWoo(valor) {
+  if (valor == null || valor === '') {
+    return { ok: true, idWoo: null }; // opcional
+  }
+  if (typeof valor === 'number') {
+    if (!Number.isSafeInteger(valor) || valor <= 0) {
+      return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
+    }
+    return { ok: true, idWoo: valor };
+  }
+  if (typeof valor === 'string') {
+    if (!/^[0-9]+$/.test(valor.trim())) {
+      return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
+    }
+    const idWoo = Number(valor);
+    if (!Number.isSafeInteger(idWoo) || idWoo <= 0) {
+      return { ok: false, error: `id_woo fuera de rango seguro, recibido: ${valor}` };
+    }
+    return { ok: true, idWoo };
+  }
+  // boolean, array, object, etc.
+  return { ok: false, error: `id_woo debe ser un número entero, recibido: ${valor}` };
+}
+
+/**
  * Fila de catalogo_cache → objeto liviano para la card de resultado.
  * `precio` es el precio de CONTADO/Transferencia (2/3 del de lista, ver precioContado),
  * no el precio de lista guardado en catalogo_cache. Se mantiene el nombre `precio`
@@ -47,6 +76,13 @@ function productoParaCard(row) {
 export function consultaPreciosRouter(db, cfg = {}) {
   const router = Router();
 
+  // Serializa por EAN el tramo de escritura de /asociar (no_valido, sin_cambio y el camino
+  // con Woo) para evitar que dos solicitudes concurrentes con el mismo EAN pisen el mapa
+  // ean_sku entre sí. De módulo sería compartido entre todas las instancias del router
+  // (incluidos los `app` de test); en producción hay un router por proceso así que la
+  // semántica no cambia, pero como closure evita fuga de estado entre tests (MEDIUM-4).
+  const eanEnCurso = new Set();
+
   const porSku = db.prepare("SELECT * FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1");
   const porId = db.prepare('SELECT * FROM catalogo_cache WHERE id_woo = ? LIMIT 1');
   const contarPorSku = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku = ? AND sku <> ''");
@@ -56,15 +92,35 @@ export function consultaPreciosRouter(db, cfg = {}) {
     ON CONFLICT(ean) DO UPDATE SET sku = excluded.sku, actualizado_en = excluded.actualizado_en
   `);
 
-  function guardarMapa(ean, sku) {
+  function guardarMapa(ean, sku, pisarMapa = false) {
+    // Fix 3: validar conflicto de mapa antes de escribir
+    const existente = eanRow.get(ean);
+    if (existente && existente.sku !== sku && !pisarMapa) {
+      return { conflicto: true, skuActual: existente.sku };
+    }
     guardarEan.run(ean, sku, now());
+    return { ok: true };
   }
 
   function resolverProducto({ sku, idWoo }) {
-    if (idWoo != null && idWoo !== '') return porId.get(Number(idWoo));
+    const parsed = parsearIdWoo(idWoo);
+    if (!parsed.ok) {
+      return { error: parsed.error }; // será manejado por el handler
+    }
+    if (parsed.idWoo != null) {
+      const fila = porId.get(parsed.idWoo);
+      if (!fila || !fila.sku) return null; // fila sin sku no es válida
+      // Fix 1: validar coherencia sku↔id_woo si vienen ambos
+      if (sku && fila.sku !== sku) {
+        return { incoherente: true, skuEncontrado: fila.sku };
+      }
+      return fila;
+    }
     const cantidad = contarPorSku.get(sku);
     if (cantidad.n > 1) return { ambiguo: cantidad.n };
-    return porSku.get(sku);
+    const fila = porSku.get(sku);
+    if (fila && !fila.sku) return null; // fila sin sku no es válida
+    return fila;
   }
 
   // Búsqueda unificada: SKU exacto → EAN conocido → ¿parece EAN nuevo? → nada.
@@ -91,8 +147,19 @@ export function consultaPreciosRouter(db, cfg = {}) {
     const ean = String(req.body?.ean || '').trim();
     const sku = String(req.body?.sku || '').trim();
     const idWoo = req.body?.id_woo;
+    const pisarMapa = req.body?.pisar_mapa === true;
     if (!ean || !sku) return res.status(400).json({ ok: false, error: 'ean y sku requeridos' });
-    const fila = resolverProducto({ sku, idWoo });
+
+    // Validar id_woo si viene
+    const parsed = parsearIdWoo(idWoo);
+    if (!parsed.ok) {
+      return res.status(400).json({ ok: false, error: parsed.error });
+    }
+
+    const fila = resolverProducto({ sku, idWoo: parsed.idWoo });
+    if (fila?.error) {
+      return res.status(400).json({ ok: false, error: fila.error });
+    }
     if (fila?.ambiguo) {
       return res.status(400).json({
         ok: false,
@@ -100,8 +167,29 @@ export function consultaPreciosRouter(db, cfg = {}) {
         error: `El SKU '${sku}' es ambiguo: hay ${fila.ambiguo} productos. Especificá el id_woo.`,
       });
     }
-    if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
-    guardarMapa(ean, sku);
+    // Fix 1: validar incoherencia sku↔id_woo
+    if (fila?.incoherente) {
+      return res.status(400).json({
+        ok: false,
+        codigo: 'sku_id_woo_incoherente',
+        error: `El id_woo ${parsed.idWoo} tiene SKU '${fila.skuEncontrado}', pero pediste '${sku}'. No coinciden.`,
+      });
+    }
+    if (!fila) {
+      if (parsed.idWoo != null) {
+        return res.status(400).json({ ok: false, error: `id_woo ${parsed.idWoo} no existe o no tiene SKU asignado` });
+      }
+      return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    }
+    // Fix 3: manejar conflicto de mapa
+    const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
+    if (mapResult.conflicto && !pisarMapa) {
+      return res.json({
+        ok: true,
+        producto: productoParaCard(fila),
+        codigo: { estado: 'conflicto_mapa', sku_actual: mapResult.skuActual, ean },
+      });
+    }
     res.json({ ok: true, producto: productoParaCard(fila) });
   });
 
@@ -112,9 +200,19 @@ export function consultaPreciosRouter(db, cfg = {}) {
     const sku = String(req.body?.sku || '').trim();
     const idWoo = req.body?.id_woo;
     const pisarCodigo = req.body?.pisar_codigo === true;
+    const pisarMapa = req.body?.pisar_mapa === true;
     if (!ean || !sku) return res.status(400).json({ ok: false, error: 'ean y sku requeridos' });
 
-    const fila = resolverProducto({ sku, idWoo });
+    // Validar id_woo si viene
+    const parsed = parsearIdWoo(idWoo);
+    if (!parsed.ok) {
+      return res.status(400).json({ ok: false, error: parsed.error });
+    }
+
+    const fila = resolverProducto({ sku, idWoo: parsed.idWoo });
+    if (fila?.error) {
+      return res.status(400).json({ ok: false, error: fila.error });
+    }
     if (fila?.ambiguo) {
       return res.status(400).json({
         ok: false,
@@ -122,41 +220,100 @@ export function consultaPreciosRouter(db, cfg = {}) {
         error: `El SKU '${sku}' es ambiguo: hay ${fila.ambiguo} productos. Especificá el id_woo.`,
       });
     }
-    if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    // Fix 1: validar incoherencia sku↔id_woo
+    if (fila?.incoherente) {
+      return res.status(400).json({
+        ok: false,
+        codigo: 'sku_id_woo_incoherente',
+        error: `El id_woo ${parsed.idWoo} tiene SKU '${fila.skuEncontrado}', pero pediste '${sku}'. No coinciden.`,
+      });
+    }
+    if (!fila) {
+      if (parsed.idWoo != null) {
+        return res.status(400).json({ ok: false, error: `id_woo ${parsed.idWoo} no existe o no tiene SKU asignado` });
+      }
+      return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    }
 
     const codigoBase = { gtin: ean };
-    if (!looksLikeGtin(ean)) {
-      guardarMapa(ean, fila.sku);
-      return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'no_valido' } });
-    }
 
-    const gtinActual = String(fila.gtin || '').trim();
-    if (gtinActual && gtinActual !== ean && !pisarCodigo) {
+    // HIGH FIX: validar conflicto de mapa ANTES de cualquier operación remota
+    const existenteEan = eanRow.get(ean);
+    if (existenteEan && existenteEan.sku !== fila.sku && !pisarMapa) {
       return res.json({
         ok: true,
         producto: productoParaCard(fila),
-        codigo: { ...codigoBase, estado: 'conflicto', gtin_actual: gtinActual },
+        codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: existenteEan.sku },
       });
     }
 
-    if (gtinActual === ean) {
-      guardarMapa(ean, fila.sku);
-      return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'sin_cambio' } });
-    }
-
-    const woo = await subirGtinAWoo(cfg, fila, ean);
-    if (!woo.ok) {
-      guardarMapa(ean, fila.sku);
+    // MEDIUM-3: el guard/mutex sube acá, antes de las tres ramas de escritura (no_valido,
+    // sin_cambio y el camino con Woo) para que ninguna pise el mapa mientras otra request
+    // para el mismo EAN está en curso. HIGH-1: estado propio 'en_curso', sin sku_actual —
+    // no es un valor real de mapa y el frontend no debe ofrecer "mover código" acá (ver
+    // docs/api-contrato.md). Cambio de contrato: nuevo estado 'en_curso' en /asociar.
+    if (eanEnCurso.has(ean)) {
       return res.json({
         ok: true,
         producto: productoParaCard(fila),
-        codigo: { ...codigoBase, estado: 'fallo', motivo: woo.motivo || 'woo', error: woo.error },
+        codigo: { ...codigoBase, estado: 'en_curso', mensaje: 'Otro puesto está subiendo este código, reintentá en unos segundos.' },
       });
     }
+    eanEnCurso.add(ean);
+    // HIGH-2: try/finally asegura liberar el mutex aunque falle una escritura sqlite
+    // (ej. SQLITE_BUSY) entre el add y los returns; antes quedaba trabado hasta reiniciar.
+    try {
+      if (!looksLikeGtin(ean)) {
+        // EAN no es GTIN válido: guardar mapa localmente (el conflicto ya fue validado arriba)
+        guardarMapa(ean, fila.sku, pisarMapa);
+        return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'no_valido' } });
+      }
 
-    persistirGtinConfirmado(db, fila, ean, fila.sku);
-    const actualizado = porId.get(fila.id_woo) || fila;
-    return res.json({ ok: true, producto: productoParaCard(actualizado), codigo: { ...codigoBase, estado: 'subido' } });
+      const gtinActual = String(fila.gtin || '').trim();
+      if (gtinActual && gtinActual !== ean && !pisarCodigo) {
+        return res.json({
+          ok: true,
+          producto: productoParaCard(fila),
+          codigo: { ...codigoBase, estado: 'conflicto', gtin_actual: gtinActual },
+        });
+      }
+
+      if (gtinActual === ean) {
+        // Ya tiene el GTIN: guardar mapa localmente (el conflicto ya fue validado arriba)
+        guardarMapa(ean, fila.sku, pisarMapa);
+        return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'sin_cambio' } });
+      }
+
+      const woo = await subirGtinAWoo(cfg, fila, ean);
+      if (!woo.ok) {
+        // Fail-open: guardar mapa localmente aunque Woo falló. MEDIUM-1: el mapa pudo cambiar
+        // durante el await a Woo (única ventana real de conflicto), así que hay que chequear
+        // el resultado en vez de asumir que se escribió.
+        const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
+        if (mapResult.conflicto) {
+          return res.json({
+            ok: true,
+            producto: productoParaCard(fila),
+            codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
+          });
+        }
+        return res.json({
+          ok: true,
+          producto: productoParaCard(fila),
+          codigo: { ...codigoBase, estado: 'fallo', motivo: woo.motivo || 'woo', error: woo.error },
+        });
+      }
+
+      // Woo OK: persistir GTIN confirmado. MEDIUM-2: NO llamamos a guardarMapa acá — sería
+      // una escritura redundante después de persistirGtinConfirmado, que ya hace
+      // INSERT ... ON CONFLICT DO UPDATE sobre ean_sku incondicionalmente. En el camino de
+      // éxito Woo es la fuente de verdad y el mapa se pisa a propósito (decisión explícita).
+      persistirGtinConfirmado(db, fila, ean, fila.sku);
+      const actualizado = porId.get(fila.id_woo) || fila;
+      return res.json({ ok: true, producto: productoParaCard(actualizado), codigo: { ...codigoBase, estado: 'subido' } });
+    } finally {
+      eanEnCurso.delete(ean);
+    }
   });
 
   // Sembrado en lote desde el mapa del Contador de inventario. No valida contra el catálogo.
