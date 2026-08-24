@@ -202,6 +202,7 @@ function mostrarEstadoCodigo(codigo){
     no_valido: 'Se guardó la asociación local. El código no tiene un formato GTIN válido y no se subió a WooCommerce.',
     fallo: 'Se guardó la asociación local, pero ' + (codigo.error || 'WooCommerce no aceptó el código'),
   };
+  if(codigo.estado === 'en_curso') return '<div class="msg warn" style="margin-top:10px">'+esc(codigo.mensaje || 'Otro puesto está subiendo este código, reintentá en unos segundos.')+'</div>';
   if(codigo.estado === 'conflicto_mapa') return '<div class="msg warn" style="margin-top:10px">Este código ya está asignado a <b>'+esc(codigo.sku_actual)+'</b>. Para moverlo a este producto:<br><button class="btn sec" id="btn-pisar-ean" type="button" style="margin-top:10px">Mover el código a este producto</button></div>';
   if(codigo.estado === 'conflicto') return '<div class="msg warn" style="margin-top:10px">Este producto ya tiene el código <b>'+esc(codigo.gtin_actual)+'</b>. No se modificó Woo.<br><button class="btn sec" id="btn-pisar-ean" type="button" style="margin-top:10px">Reemplazarlo por '+esc(codigo.gtin)+'</button></div>';
   var clase = codigo.estado === 'fallo' ? 'warn' : (codigo.estado === 'subido' ? 'ok' : '');
