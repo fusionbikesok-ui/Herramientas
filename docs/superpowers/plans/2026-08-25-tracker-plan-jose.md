@@ -25,7 +25,7 @@ el estado de ejecución fase por fase para no perder contexto entre sesiones.
 
 ## Pedido de José (2026-08-25) — pendiente de encarar
 
-- **Buscador en el Contador de inventario.** Cuando el alcance de la sesión es amplio (ej. todas las categorías de bicicleta), la lista de pendientes/contados es larga y hace falta bajar mucho para encontrar un producto puntual. Falta un campo de búsqueda por SKU/nombre que filtre la lista en pantalla (cliente, sin ida y vuelta al servidor — la lista ya está cargada). No es parte de ninguna fase del plan original; se agrega acá como pedido directo.
+- **Buscador en el Contador de inventario.** ✅ **Desplegado** (`buscador-contador` → mergeado a `conteo-confiable`). Filtro de texto en cliente por SKU/nombre sobre la lista ya cargada, sin ida y vuelta al servidor. Revisor: 1 hallazgo importante corregido (la búsqueda no se limpiaba al cambiar de sesión). Los contadores de arriba (Contados/Pendientes/Con diferencia) siguen mostrando el total real, nunca lo filtrado. Sin cambios de backend, archivo estático — no requirió reiniciar PM2.
 
 ## Regla operativa para retomar
 
