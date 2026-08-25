@@ -4,26 +4,21 @@ Actualizado: 2026-08-24.
 
 ## En curso
 
-- **Entrega A — matcher de ingreso de mercadería** (lo único abierto). Worktree
-  `.claude/worktrees/ingreso-matcher`, rama `entrega-a-ingreso-matcher`, base `master` (`e8ce5bb`),
-  HEAD `1076380` (3 commits: `20b89da` matcher, `89ca0a0` correcciones, `1076380` limpieza).
-  Estado: **`REVISION_APROBADA`**, en el gate del `tester`.
-  - El `revisor` hizo dos pasadas. En la primera devolvió NO aprobado con 2 🔴: (1) para productos
-    **sin `atributos_json`** el fallback `extraerAtributosWC(nombre)` mete *todos* los tokens del
-    título en `talles`, generando contradicciones falsas que descartaban el match correcto —
-    rompía el caso mayoritario, porque accesorios y repuestos son la mayor parte de un remito;
-    (2) dos productos **distintos** con título idéntico empataban sin marcar `ambiguo`, o sea la
-    misma clase de bug que la entrega viene a cerrar. Ambos corregidos y reverificados.
-  - Verificado contra el catálogo real: **21 SKUs duplicados en 5112 filas** — el hallazgo de
-    apareo por SKU no era teórico.
-  - Gate no negociable: test de 4 líneas S/M/L/XL → 4 `id_woo` distintos. En verde.
-  - Pruebas: 18/18 propias + 71/71 del motor compartido (89 en total).
-  - `construirWC`, `diffTokens` y `confianzaDesdeScore` **no cambian de comportamiento** — solo se
-    agregan funciones. Los usan `routes/matcher.js`, `lib/matcherResolver.js`, `lib/coberturaCola.js`.
-  - **Requisito para la entrega del endpoint (hallazgo N1 del revisor):** la regla de empate se
-    apoya en que `id_woo` venga poblado. Si la query que arma el índice no lo selecciona, todos
-    quedan `null`, la comparación da `false` y **la protección se apaga en silencio**. La query
-    del endpoint de ingreso DEBE traer `id_woo`. Anotado también en el código.
+- **Ingreso de Mercadería — Entrega B** (lo próximo a implementar). Plan aprobado: matching
+  primero (hecho, ver abajo), después unificación. Falta:
+  - Migración `proveedor_alias` con PK compuesta `(proveedor_norm, codigo_norm)` — el mismo código
+    significa cosas distintas según el proveedor, y `mapeo_fusion.clave_normalizada` es PK global.
+  - `lib/ingresoResolver.js` con la jerarquía: EAN (validado con `looksLikeGtin`) → alias aprendido
+    → SKU exacto → `mapeo_fusion` → motor. Contar homónimos en cada nivel: `catalogo_cache.sku`
+    **no es único** (21 duplicados verificados sobre 5112 filas).
+  - Endpoints `POST /api/recepciones/resolver-items` (stateless, lo reusa la absorción de `/stock/`)
+    y `POST /:id/items/:itemId/resolver` (con aprendizaje). Guardarraíl: dos ítems de la misma
+    recepción apuntando al mismo `id_woo` → 409, y bloqueo en `confirmar` antes de tocar Woo.
+  - UI de candidatos en `/recepcion/`, borrando `matchItem`/`fuzzyMatchItem` del frontend.
+    Confirmación del 100% de las líneas al principio (decisión del usuario), midiendo correcciones.
+  - **REQUISITO CRÍTICO (hallazgo N1 del revisor):** la query que arma el índice **DEBE traer
+    `id_woo`**. La regla de empate se apoya en él; si viene `null`, la comparación da `false` y la
+    protección contra elegir por orden de array **se apaga en silencio**. Anotado en el código.
 
 - Plan aprobado de Ingreso de Mercadería (matching primero, unificación después). Entregas B/C/D
   pendientes: UI de candidatos + aprendizaje por proveedor (`proveedor_alias`, PK compuesta por
@@ -41,13 +36,23 @@ Actualizado: 2026-08-24.
   pedido pasa a `enviado` en Woo por fuera del flujo de Seguimientos. Excluye
   `woo_paso2_pendiente=1` para no pisar el flujo `a_medias`. **Autosana los 13 casos reales**
   (14/08–22/08) en la primera corrida del cron post-restart.
+- `0181d02` — **Entrega A del matcher de ingreso** (auditada 🟢). `lib/ingresoMatcher.js` +
+  `construirWCIndex`/`contradiccionAtributo` en el motor. Corrige la corrupción de stock por
+  colapso de variantes (remito con talles 41/43/45 → los tres a la variación "42"). Dos reglas
+  propias del ingreso: la contradicción de atributo fuerza confianza baja (antes era solo
+  desempate, por eso el motor tal cual también colapsaba), y el empate marca ambiguo → nunca
+  elige solo. El revisor hizo dos pasadas y cerró 2 hallazgos 🔴: contradicciones falsas en
+  productos sin `atributos_json` (rompía el caso mayoritario) y empate entre productos distintos
+  con título idéntico. **Es lógica pura todavía sin conectar**: el único consumidor es su test,
+  así que el merge no cambia producción ni requiere restart.
 
 ## Próximo paso
 
-1. Cerrar Entrega A: corrección de los 🔴 → re-revisión → tester → auditor.
-2. **`pm2 restart herramientas`**: hasta que ocurra, el fix de preparaciones huérfanas no está
-   activo (vive en el cron, en memoria) y los 13 pedidos siguen invisibles en la cola.
-3. Decidir push de `master` (21 commits por delante de `origin/master`).
+1. **`pm2 restart herramientas`**: hasta que ocurra, el fix de preparaciones huérfanas no está
+   activo (vive en el cron, en memoria) y los 13 pedidos siguen invisibles en la cola. Es lo único
+   pendiente que afecta a producción hoy.
+2. Decidir push de `master` (**28 commits** por delante de `origin/master`).
+3. Implementar Entrega B (ver arriba), en worktree nuevo desde `master`.
 
 ## Evidencia reciente
 
