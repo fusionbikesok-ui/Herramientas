@@ -88,8 +88,12 @@ export function etiquetasRouter(db) {
 
   router.delete('/cola/:id', (req, res) => {
     const id = parseInt(req.params.id, 10);
-    const info = db.prepare('DELETE FROM etiquetas_cola WHERE id=?').run(id);
-    if (!info.changes) return res.status(404).json({ ok: false, error: 'no encontrado' });
+    const item = db.prepare('SELECT * FROM etiquetas_cola WHERE id=?').get(id);
+    if (!item) return res.status(404).json({ ok: false, error: 'no encontrado' });
+    if (item.estado !== 'pendiente') {
+      return res.status(400).json({ ok: false, error: 'solo se puede descartar un ítem pendiente (una impresa no se borra, queda como registro)' });
+    }
+    db.prepare('DELETE FROM etiquetas_cola WHERE id=?').run(id);
     res.json({ ok: true });
   });
 
