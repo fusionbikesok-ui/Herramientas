@@ -2085,3 +2085,60 @@ no se borra). 404 si no existe.
 Sin llamadas a ML/Woo — no aplica fail-open/fail-closed. Sin cambios al renderer 50×25mm
 existente: estos endpoints son solo la fuente de datos, la pestaña "Cola de conteo" del
 frontend (próximo despacho) consume el mismo renderer sin tocarlo.
+
+## Ubicaciones — alcance por ubicación física (Fase 2 del plan de control de stock, 2026-08-25)
+
+Zona+estante como alcance alternativo de sesión (barrido completo de un lugar físico),
+mutuamente excluyente con categoría/marca. Habilita el cierre en cero seguro (Rupturas 3 y 6
+del plan): un SKU con unidades registradas en más de una ubicación, o sin ninguna ubicación
+registrada, nunca se cierra en cero automáticamente.
+
+### GET /api/inventario/ubicaciones
+Lista las ubicaciones activas con cuántos SKUs tienen asociados.
+
+- Response 200: `{ "ok": true, "ubicaciones": [ { id, zona, estante, estado, activa,
+  creado_en, skus_registrados } ] }`. `estado`: `bootstrap` | `mapeada`.
+
+### POST /api/inventario/ubicaciones (admin)
+Crea una ubicación nueva.
+
+- Request: `{ zona, estante }`, ambos no vacíos.
+- Response 200: `{ "ok": true, "ubicacion": {...} }` (`estado` arranca en `bootstrap`).
+- Response 409: ya existe esa zona+estante.
+
+### POST /api/inventario/ubicaciones/:id/mapear (admin)
+Marca la ubicación como recorrida y completa. Es el único estado que habilita el cierre en
+cero automático masivo sobre esa ubicación — nunca se infiere solo, es una decisión
+explícita de quien la mapeó.
+
+- Response 200: `{ "ok": true, "ubicacion": {...} }` (`estado: "mapeada"`).
+- Response 404: no existe o está inactiva.
+
+### POST /api/inventario/sesiones (extendido)
+Ahora acepta `ubicacion_id` como alternativa a `categorias`/`marcas` — no se pueden combinar
+en la misma sesión (400 si vienen ambos). El alcance de una sesión por ubicación arranca
+vacío (bootstrap: todavía no hay nada asociado a esa ubicación) y se va poblando solo a
+medida que se escanea — ver "Captura automática" abajo.
+
+- Request: `{ ubicacion_id }` en vez de `{ categorias, marcas }`.
+- Response 400: `ubicacion_id` inexistente/inactiva, o viene junto con categorías/marcas.
+- El anti-solape entre sesiones (409 "El alcance se cruza con la sesión de X") ahora también
+  cubre ubicación: dos sesiones se cruzan si comparten al menos un SKU real, sin importar si
+  una es por ubicación y la otra por categoría/marca.
+
+### Captura automática durante el conteo
+Si la sesión activa tiene `ubicacion_id`, todo SKU que se escanea (`POST
+.../sesiones/:id/escanear`) o se asocia (`POST .../sesiones/:id/asociar`) se asocia SOLO a
+esa ubicación en `producto_ubicacion` (INSERT OR IGNORE — re-escanear el mismo SKU no
+duplica ni pisa la fecha de la primera asociación). Sin acción manual del operario.
+
+### POST /api/inventario/sesiones/:id/cerrar-sin-stock (reglas nuevas cuando la sesión es por ubicación)
+- 400 si la ubicación de la sesión todavía NO está `mapeada` — el cierre en cero automático
+  no es seguro hasta recorrerla entera.
+- Si está mapeada: de los SKUs a cerrar, se **excluyen** (no fallan, se filtran) los que
+  tengan unidades registradas en OTRA ubicación además de esta (overflow) — nunca se
+  auto-cierran. Un SKU sin ninguna ubicación registrada tampoco puede ser candidato en una
+  sesión por ubicación (el alcance se construye solo desde `producto_ubicacion`).
+- Response 200 agrega `excluidos_por_ubicacion: [sku, ...]` cuando hubo alguno filtrado
+  (el campo no aparece si no hubo exclusiones).
+- Comportamiento de una sesión por categoría/marca (sin `ubicacion_id`): sin cambios.
