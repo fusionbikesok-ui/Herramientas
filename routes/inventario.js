@@ -813,7 +813,8 @@ export function inventarioRouter(db, wooCfg) {
         if (resultado.huboVentaDurante) {
           ventasDuranteConteo.push({
             sku: item.sku,
-            stock_inicial: resultado.stockLive,
+            stock_al_abrir_sesion: stockInicial,
+            stock_al_confirmar: resultado.stockLive,
             stock_final: resultado.stockFinal,
           });
         }

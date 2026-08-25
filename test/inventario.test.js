@@ -1932,7 +1932,8 @@ describe('POST /api/inventario/sesiones/:id/confirmar — ajuste por delta (setS
     expect(r.body.ventasDuranteConteo).toBeDefined();
     expect(r.body.ventasDuranteConteo).toHaveLength(1);
     expect(r.body.ventasDuranteConteo[0].sku).toBe('FB-1');
-    expect(r.body.ventasDuranteConteo[0].stock_inicial).toBe(4);
+    expect(r.body.ventasDuranteConteo[0].stock_al_abrir_sesion).toBe(5);
+    expect(r.body.ventasDuranteConteo[0].stock_al_confirmar).toBe(4);
     expect(r.body.ventasDuranteConteo[0].stock_final).toBe(4);
   });
 
