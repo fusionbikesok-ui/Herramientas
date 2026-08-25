@@ -1185,6 +1185,12 @@
   function resetEstadoBloqueSinStock(){
     sinStockAbierto = false;
     autoAbiertoSinStock = false;
+    // Hallazgo del revisor: sin esto, el texto buscado en una sesión quedaba filtrando
+    // la lista de la SIGUIENTE sesión que se abre/retoma — con un alcance distinto,
+    // podía mostrarse vacía o parcial sin que hubiera nada realmente mal.
+    filtroBusqueda = '';
+    filtroBusquedaTexto = '';
+    if (conteoBuscar) conteoBuscar.value = '';
   }
   var ordenPorDiferencia = false;
   var ultimoItemFlash = null; // id del ítem que acaba de escanearse, para el refuerzo visual del +1
