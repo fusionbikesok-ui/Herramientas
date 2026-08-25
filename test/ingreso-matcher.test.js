@@ -160,3 +160,68 @@ describe('contradiccionAtributo · omisión ≠ contradicción', () => {
     expect(norm('Negro')).toBe('negro');
   });
 });
+
+describe('Hallazgos del revisor · nuevos tests', () => {
+  it('10 · Producto simple SIN atributos_json + doc con talle → no descarta por contradicción falsa', () => {
+    // Hallazgo 1: un producto simple sin atributos_json no debe falsar contradicción
+    const idx = construirWCIndex([
+      { id_woo: 11, sku: 'H-1', tipo: 'simple', nombre: 'Casco Bell Draft Negro' },
+      ...relleno(),
+    ]);
+    const res = candidatosParaDoc({ descripcion: 'Casco Bell Draft Negro', talle: 'M' }, idx);
+    expect(res.candidatos[0].sku).toBe('H-1');
+    expect(res.candidatos[0].confianza).toBe('alta');
+    expect(res.candidatos[0].contradiccion_atributo).toBe(false);
+    expect(autoAplicable(res)).toBe(true);
+  });
+
+  it('11 · Doc "Cadena Shimano Hg500 116 Eslabones" con distractor "116" → producto correcto primero', () => {
+    // Hallazgo 1: talleToks del fallback no debe interferir en matching
+    const idx = construirWCIndex([
+      { id_woo: 12, sku: 'CA-1', tipo: 'simple', nombre: 'Cadena Shimano Hg500 Eslabones' },
+      { id_woo: 13, sku: 'CU-1', tipo: 'simple', nombre: 'Cubierta Maxxis Ardent 116 Rodado 29 Bicicleta' },
+      ...relleno(),
+    ]);
+    const res = candidatosParaDoc({ descripcion: 'Cadena Shimano Hg500 116 Eslabones' }, idx);
+    expect(res.candidatos[0].sku).toBe('CA-1');
+    expect(res.candidatos[0].score).toBeGreaterThan(res.candidatos[1].score);
+  });
+
+  it('12 · Dos productos DISTINTOS con título idéntico → ambiguo y nunca auto', () => {
+    // Hallazgo 2: dos id_woo distintos con mismo título deben marcar ambiguo
+    const idx = construirWCIndex([
+      { id_woo: 14, id_padre: null, sku: 'P-1', tipo: 'simple', nombre: 'Producto Generico Titulo' },
+      { id_woo: 15, id_padre: null, sku: 'P-2', tipo: 'simple', nombre: 'Producto Generico Titulo' },
+      ...relleno(),
+    ]);
+    const res = candidatosParaDoc({ descripcion: 'Producto Generico Titulo' }, idx);
+    expect(res.ambiguo).toBe(true);
+    expect(autoAplicable(res)).toBe(false);
+  });
+
+  it('13 · Dos filas con mismo SKU → cada wcItem recibe su propio id_woo por índice', () => {
+    // Hallazgo 4: recorrer por índice, no por SKU (SKU no es único)
+    const items = [
+      { id_woo: 16, id_padre: 100, sku: 'SHARED', tipo: 'variation', nombre: 'Producto Primer — Negro / S', atributos_json: JSON.stringify([{ name: 'Color', option: 'Negro' }, { name: 'Talle', option: 'S' }]) },
+      { id_woo: 17, id_padre: 100, sku: 'SHARED', tipo: 'variation', nombre: 'Producto Primer — Negro / M', atributos_json: JSON.stringify([{ name: 'Color', option: 'Negro' }, { name: 'Talle', option: 'M' }]) },
+      ...relleno(),
+    ];
+    const idx = construirWCIndex(items);
+    const [wcS, wcM] = idx.wcItems.slice(0, 2);
+    expect(wcS.id_woo).toBe(16);
+    expect(wcM.id_woo).toBe(17);
+    expect(wcS.id_woo).not.toBe(wcM.id_woo);
+  });
+
+  it('14 · Dos hermanos con scores 0.98/0.96 → ambiguo (sin epsilon entre hermanos)', () => {
+    // Hallazgo 5: entre hermanos, siempre ambiguo sin epsilon
+    // Necesitamos un caso donde dos hermanos queden con scores que empaten (diferencia 0.02)
+    const idx = construirWCIndex([...variaciones(['S', 'M']), ...relleno()]);
+    // "Zapatillas Serfas Switchback Mtb Hombre" sin talle declara → empatarán los dos hermanos
+    const res = candidatosParaDoc({ descripcion: BASE }, idx);
+    expect(res.ambiguo).toBe(true);
+    expect(res.candidatos[0].id_padre).not.toBeNull();
+    expect(res.candidatos[1]?.id_padre).toBe(res.candidatos[0].id_padre);
+    expect(autoAplicable(res)).toBe(false);
+  });
+});
