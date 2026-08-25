@@ -21,7 +21,23 @@ en ninguna rama**) quedó registrado en **`e1896ad`**, sin cambiar lo que produc
 iteración anterior del trabajo de GTIN que `master` ya integró mejor (`master` extrajo la
 validación a `parsearIdWoo()`; el WIP la tiene escrita a mano y duplicada). No pasó por ningún gate.
 
-### Plan de integración (worktree ya creado y limpio)
+### Estado: conflictos RESUELTOS, en el pipeline
+
+Merge hecho en `aa0b21f`, worktree `.claude/worktrees/integracion`, rama
+`integracion-master-conteo`. **Todavía no mergeado a `master`** — esperando los gates.
+
+Verificado que sobrevivió el trabajo de **ambos** lados: cierre seguro del conteo y gate de
+sobreventa (`pendientesConStock`) de `conteo-confiable`; fix de huérfanas, GTIN y matcher de
+ingreso de `master`. Tests dirigidos: **356/356** en `consultaPrecios`, `inventario`,
+`preparacion` e `ingreso-matcher`.
+
+**Defecto del automerge que hay que conocer:** git fusionó sin marcar conflicto dos declaraciones
+idénticas de `skuPorEan`/`skusPorGtin` (una por rama) y `routes/preparacion.js` dejaba de cargar
+(`SyntaxError: Identifier 'skuPorEan' has already been declared`). **Lo detectaron los tests, no
+el merge.** Corregido a mano. Es el recordatorio de que en un merge de este tamaño el "sin
+conflictos" de git no significa que el resultado funcione.
+
+### Plan de integración (referencia de cómo se resolvió)
 
 Worktree `.claude/worktrees/integracion`, rama `integracion-master-conteo`, base `master`.
 El simulacro de merge (`git merge --no-commit --no-ff conteo-confiable`, luego abortado) dio
