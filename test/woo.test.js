@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { wooFetch, refrescarCatalogo, getCatalogo, wooRouter } from '../routes/woo.js';
+import { wooFetch, refrescarCatalogo, getCatalogo, wooRouter, registrarAlertasStockNegativo } from '../routes/woo.js';
 import axios from 'axios';
 import express from 'express';
 import request from 'supertest';
@@ -738,5 +738,64 @@ describe('POST /stock/aplicar', () => {
     expect(r.body).toMatchObject({ ok: false, aplicados: 0, errores: 1 });
     expect(r.body.resultados[0].error).toMatch(/catalogo_cache/);
     expect(axios.request).not.toHaveBeenCalled();
+  });
+});
+
+// Fase 0 (higiene), Tarea 3: alertas de stock negativo abiertas/cerradas en cada refresco.
+describe('registrarAlertasStockNegativo', () => {
+  const DB_ALERTAS = './test/tmp-woo-alertas.sqlite';
+  afterEach(() => {
+    if (fs.existsSync(DB_ALERTAS)) fs.unlinkSync(DB_ALERTAS);
+  });
+
+  it('un SKU nuevo en negativo genera una fila de alerta abierta', () => {
+    const db = openDb(DB_ALERTAS);
+    db.prepare(
+      "INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, actualizado_en) VALUES (1,'Prod','FB-1','simple',-3,?)"
+    ).run(new Date().toISOString());
+
+    registrarAlertasStockNegativo(db, '2026-08-25T10:00:00.000Z');
+
+    const abiertas = db.prepare('SELECT * FROM stock_negativo_alertas WHERE resuelto_en IS NULL').all();
+    expect(abiertas).toHaveLength(1);
+    expect(abiertas[0]).toMatchObject({ sku: 'FB-1', stock: -3 });
+    db.close();
+  });
+
+  it('no duplica fila para el mismo SKU en refrescos sucesivos mientras siga negativo', () => {
+    const db = openDb(DB_ALERTAS);
+    db.prepare(
+      "INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, actualizado_en) VALUES (1,'Prod','FB-1','simple',-3,?)"
+    ).run(new Date().toISOString());
+
+    registrarAlertasStockNegativo(db, '2026-08-25T10:00:00.000Z');
+    registrarAlertasStockNegativo(db, '2026-08-25T10:15:00.000Z');
+    registrarAlertasStockNegativo(db, '2026-08-25T10:30:00.000Z');
+
+    const abiertas = db.prepare('SELECT * FROM stock_negativo_alertas WHERE resuelto_en IS NULL').all();
+    expect(abiertas).toHaveLength(1);
+    db.close();
+  });
+
+  it('un SKU que deja de estar en negativo cierra su alerta abierta con resuelto_en', () => {
+    const db = openDb(DB_ALERTAS);
+    db.prepare(
+      "INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, actualizado_en) VALUES (1,'Prod','FB-1','simple',-3,?)"
+    ).run(new Date().toISOString());
+    registrarAlertasStockNegativo(db, '2026-08-25T10:00:00.000Z');
+
+    db.prepare('UPDATE catalogo_cache SET stock=5 WHERE id_woo=1').run();
+    registrarAlertasStockNegativo(db, '2026-08-25T11:00:00.000Z');
+
+    const fila = db.prepare('SELECT * FROM stock_negativo_alertas WHERE sku=?').get('FB-1');
+    expect(fila.resuelto_en).toBe('2026-08-25T11:00:00.000Z');
+
+    // Si vuelve a caer en negativo después, abre una fila NUEVA (la vieja ya está resuelta).
+    db.prepare('UPDATE catalogo_cache SET stock=-1 WHERE id_woo=1').run();
+    registrarAlertasStockNegativo(db, '2026-08-25T12:00:00.000Z');
+    const abiertas = db.prepare('SELECT * FROM stock_negativo_alertas WHERE resuelto_en IS NULL').all();
+    expect(abiertas).toHaveLength(1);
+    expect(abiertas[0].detectado_en).toBe('2026-08-25T12:00:00.000Z');
+    db.close();
   });
 });
