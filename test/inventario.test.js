@@ -2153,3 +2153,125 @@ describe('Hallazgo #3 — solapamiento bloquea sesiones en confirmada_con_errore
     expect(crear2.body.ocupada_por).toBe('juan');
   });
 });
+
+describe('Hallazgo A — Corrección: sesión en confirmada_con_errores puede descartarse y permitir crear nueva', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('usuario con sesión en confirmada_con_errores puede crear una nueva sesión en distinto alcance', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Continental', stock: 3 });
+
+    // Juan crea una sesión con marca Bell
+    const crear1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id1 = crear1.body.sesion.id;
+
+    // Escanea un ítem y confirma con error (mockeamos para que falle)
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id1}/escanear`).send({ codigo: 'FB-1' });
+    setStockWcDelta.mockRejectedValue(new Error('Woo error'));
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id1}/confirmar`);
+    expect(conf.body.fallidos).toBe(1);
+    const sesion1 = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id1);
+    expect(sesion1.estado).toBe('confirmada_con_errores');
+
+    // Juan intenta crear una sesión nueva con otra marca (Continental, que NO solapa) → DEBE FUNCIONAR
+    // (la restricción "sesión propia" solo aplica a 'abierta', no a 'confirmada_con_errores')
+    const crear2 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Continental'] });
+    expect(crear2.status).toBe(200);
+    expect(crear2.body.sesion.id).not.toBe(id1);
+    expect(crear2.body.sesion.marcas).toEqual(['Continental']);
+  });
+
+  it('usuario puede descartar una sesión en confirmada_con_errores', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+
+    // Juan crea una sesión y la deja en confirmada_con_errores
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    setStockWcDelta.mockRejectedValue(new Error('Woo error'));
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('confirmada_con_errores');
+
+    // Descartar DEBE funcionar (status 200, no 400)
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/descartar`);
+    expect(r.status).toBe(200);
+    const sesionDescartada = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesionDescartada.estado).toBe('descartada');
+  });
+});
+
+describe('Hallazgo C — Ítem fuera de alcance borrado no bloquea confirm', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('borrar un ítem fuera de alcance también borra su fila en inventario_sesion_alcance', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Continental', stock: 3 });
+
+    // Juan crea una sesión con alcance Bell (FB-1 entra, FB-2 no)
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const idSesion = crear.body.sesion.id;
+
+    // Escanea FB-1 (en alcance, para tener un ítem contado real)
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-1' });
+
+    // Escanea FB-2 (fuera de alcance) → debe crear fila en inventario_sesion_alcance
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-2' });
+    expect(escanear.body.item.fuera_de_alcance).toBe(true);
+    const itemId = escanear.body.item.id;
+
+    // Verificar que SÍ se creó la fila en inventario_sesion_alcance para FB-2
+    let alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(idSesion, 'FB-2');
+    expect(alcance.n).toBe(1);
+
+    // Borrar el ítem fuera de alcance (FB-2)
+    const del = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${idSesion}/items/${itemId}`);
+    expect(del.status).toBe(200);
+
+    // Verificar que la fila de inventario_sesion_alcance se borró también
+    alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(idSesion, 'FB-2');
+    expect(alcance.n).toBe(0);
+
+    // Confirmar NO debe dar 409 por pendientes (FB-2 no bloquea porque su fila se borró)
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/confirmar`);
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(1); // Solo FB-1 se ajusta
+    expect(conf.body.fallidos).toBe(0);
+  });
+});
+
+describe('Hallazgo D — Producto variable padre no crea fila de alcance', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('escanear SKU de producto tipo=variable (padre) fuera de alcance NO crea fila de alcance, fail-closed con stockInicial', async () => {
+    const db = openDb(TEST_DB);
+    // FB-1: producto simple en alcance
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', tipo: 'simple', marca: 'Bell', stock: 5 });
+    // FB-VAR: producto variable (padre) fuera de alcance, stock=NULL como es típico en padres variables
+    insertProducto(db, { id_woo: 2, sku: 'FB-VAR', tipo: 'variable', id_padre: null, marca: 'Continental', stock: null });
+
+    // Juan crea sesión con alcance Bell (FB-1 entra, FB-VAR no porque es Continental)
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const idSesion = crear.body.sesion.id;
+
+    // Escanea FB-VAR (fuera de alcance, tipo variable)
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-VAR' });
+    expect(escanear.body.item.fuera_de_alcance).toBe(true);
+    expect(escanear.body.item.sku).toBe('FB-VAR');
+
+    // Verificar que NO se creó fila en inventario_sesion_alcance (porque tipo='variable')
+    const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(idSesion, 'FB-VAR');
+    expect(alcance.n).toBe(0);
+
+    // Al confirmar, debe dar 409 fail-closed con "stockInicial requerido" (no un PUT a Woo sobre el padre)
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/confirmar`);
+    expect(conf.status).toBe(409);
+    expect(conf.body.error).toMatch(/sin contar|sin asociar|stockInicial/i);
+    // Verificar que nunca se llamó a setStockWcDelta (fail-closed, no toca Woo)
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+  });
+});

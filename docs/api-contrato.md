@@ -995,9 +995,9 @@ Respuesta 200: `{ ok, sesion }` con `sesion.categorias` / `sesion.marcas` como a
 Al crearse se **congela** el alcance (qué SKUs entran y en qué bloque `con_stock` /
 `sin_stock`) en `inventario_sesion_alcance`.
 - `400` sin categorías ni marcas.
-- `409` si el usuario ya tiene una sesión abierta.
-- `409` si el alcance se cruza con la sesión abierta de otro usuario:
-  `{ ok:false, error, ocupada_por, categorias, marcas }`.
+- `409` si el usuario ya tiene una sesión en estado `abierta` (no puede abrir otra hasta retomar o descartar la actual).
+- `409` si el alcance se cruza con una sesión de otro usuario en estado `abierta` o `confirmada_con_errores`:
+  `{ ok:false, error, ocupada_por, categorias, marcas }`. El solapamiento se checkea con ambos estados porque una sesión en `confirmada_con_errores` sigue siendo reintentable y sus ajustes seguirían siendo válidos.
 
 ### GET /api/inventario/sesion-activa
 `{ ok, sesion|null }` — la sesión abierta propia, con arrays.
@@ -1120,7 +1120,7 @@ a Woo y cae en fallidos para revisión manual.
 - `ventasDuranteConteo`: array (opcional, solo presente si hubo al menos una venta detectada).
   Cada entrada contiene:
   - `sku`: el SKU donde se detectó la venta.
-  - `stock_al_abrir_sesion`: el `stock_inicial` congelado al crear la sesión.
+  - `stock_al_abrir_sesion`: el `stock_inicial` congelado (al crear la sesión para ítems en alcance, o al momento del escaneo para ítems fuera de alcance que se agregaron después).
   - `stock_al_confirmar`: el `stockLive` leído de WC al momento de ajustar.
   - `stock_final`: el stock que se escribió en Woo tras aplicar el delta.
 

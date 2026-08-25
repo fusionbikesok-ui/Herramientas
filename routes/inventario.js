@@ -398,7 +398,7 @@ export function inventarioRouter(db, wooCfg) {
       return res.status(400).json({ ok: false, error: 'Elegí categoría y/o marca para el alcance.' });
     }
 
-    const propia = db.prepare("SELECT id FROM inventario_sesiones WHERE usuario=? AND estado IN ('abierta','confirmada_con_errores')").get(usuario);
+    const propia = db.prepare("SELECT id FROM inventario_sesiones WHERE usuario=? AND estado='abierta'").get(usuario);
     if (propia) {
       return res.status(409).json({ ok: false, error: 'Ya tenés una sesión abierta. Retomala o descartala antes de crear otra.' });
     }
@@ -519,10 +519,10 @@ export function inventarioRouter(db, wooCfg) {
     // Hallazgo fuera de alcance: se registra y se avisa, pero NO se descarta el
     // escaneo ni se bloquea el flujo (y no cambia nada de la escritura a Woo).
     // Se congela al momento del escaneo, igual que el bloque.
-    const enAlcance = sku
+    let enAlcance = sku
       ? db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku)
       : null;
-    const fueraDeAlcance = sku && !enAlcance ? 1 : 0;
+    let fueraDeAlcance = sku && !enAlcance ? 1 : 0;
 
     // Hallazgo #1: Si el ítem es REAL (SKU existe) pero NO está en el alcance original,
     // inserta una fila ahora en inventario_sesion_alcance con el stock actual congelado.
@@ -530,7 +530,7 @@ export function inventarioRouter(db, wooCfg) {
     // Lee el stock desde catalogo_cache (misma fuente que congelarAlcance al abrir sesión).
     if (fueraDeAlcance && sku && !codigoDesconocido) {
       const prod = db.prepare(
-        'SELECT nombre, marca, categorias_json, stock FROM catalogo_cache WHERE sku=? LIMIT 1'
+        'SELECT nombre, marca, categorias_json, stock FROM catalogo_cache WHERE sku=? AND COALESCE(tipo,\'\')<>\'variable\' LIMIT 1'
       ).get(sku);
       if (prod) {
         const stock = prod.stock || 0;
@@ -540,6 +540,8 @@ export function inventarioRouter(db, wooCfg) {
           parseCategorias(prod.categorias_json)[0] || null,
           stock, bloque
         );
+        // Re-leer enAlcance después del insert, para que bloque no quede null en el conteo.
+        enAlcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
       }
     }
 
@@ -645,7 +647,18 @@ export function inventarioRouter(db, wooCfg) {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
     if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+
+    // Leer el item antes de borrarlo para saber si tenía fuera_de_alcance=1 y su SKU.
+    const item = db.prepare('SELECT sku, fuera_de_alcance FROM inventario_conteos WHERE id=? AND sesion_id=?').get(req.params.itemId, sesion.id);
+
     db.prepare('DELETE FROM inventario_conteos WHERE id=? AND sesion_id=?').run(req.params.itemId, sesion.id);
+
+    // Si el ítem borrado tenía fuera_de_alcance=1, borrar también su fila de inventario_sesion_alcance
+    // (fue creada por la corrección anterior solo para permitir el ajuste de ese ítem puntual).
+    if (item && item.fuera_de_alcance && item.sku) {
+      db.prepare('DELETE FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').run(sesion.id, item.sku);
+    }
+
     res.json({ ok: true });
   });
 
@@ -749,7 +762,9 @@ export function inventarioRouter(db, wooCfg) {
   router.post('/sesiones/:id/descartar', (req, res) => {
     const sesion = getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
-    if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
+    if (sesion.estado !== 'abierta' && sesion.estado !== 'confirmada_con_errores') {
+      return res.status(400).json({ ok: false, error: 'La sesión no puede descartarse en su estado actual' });
+    }
     db.prepare("UPDATE inventario_sesiones SET estado='descartada' WHERE id=?").run(sesion.id);
     res.json({ ok: true });
   });
