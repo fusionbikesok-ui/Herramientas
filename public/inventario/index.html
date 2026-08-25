@@ -1298,6 +1298,7 @@
           '<input type="number" class="qty-input" inputmode="numeric" min="0" max="' + ConteoCantidad.TOPE_CANTIDAD_DEFECTO + '" step="1" value="' + esc(i.cantidad) + '" data-accion="cantidad" aria-label="Cantidad contada de ' + etiqueta + '">' +
           '<button type="button" class="qty-btn qty-plus" data-accion="plus" title="Sumar 1" aria-label="Sumar 1">+</button>' +
         '</div>' +
+        (sinAsociar ? '' : '<button class="etq" data-accion="etiqueta" title="Necesita etiqueta" aria-label="Necesita etiqueta ' + etiqueta + '">🏷️</button>') +
         '<button class="del" data-accion="del" title="Eliminar" aria-label="Eliminar ' + etiqueta + '">✕</button>' +
       '</div>' +
     '</div>';
@@ -1346,6 +1347,10 @@
           }, fila.querySelector('[data-accion="cantidad"]'));
         } else if(accion === 'del'){
           eliminarItem(itemId);
+        } else if(accion === 'etiqueta'){
+          var inpCant = fila.querySelector('[data-accion="cantidad"]');
+          var cantidadActual = inpCant ? (parseInt(inpCant.value, 10) || 0) : 0;
+          pedirEtiqueta(sku || ean, cantidadActual);
         }
       });
     });
@@ -1404,6 +1409,28 @@
         escanear(sku);
       });
     });
+  }
+
+  // Fase 1 (etiquetas persistentes): manda el ítem a la cola de impresión del backend
+  // (routes/etiquetas.js) en vez de perderlo si se cierra la pestaña. No bloquea el conteo:
+  // un fallo de red solo avisa por el banner existente, nunca corta el flujo.
+  function pedirEtiqueta(sku, cantidad){
+    if(!sku || !(cantidad > 0)){
+      mostrarBannerEscaneo('Necesita una cantidad contada mayor a 0 para pedir etiqueta.');
+      return;
+    }
+    var id = sesionId();
+    fetch('/api/etiquetas/cola', opcionesConCorte({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku: sku, cantidad: cantidad, origen: 'conteo', sesion_id: id || undefined }),
+    }))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j && j.ok) mostrarBannerEscaneo('Etiqueta pedida: ' + sku + ' × ' + cantidad + '.');
+        else mostrarBannerEscaneo('No se pudo pedir la etiqueta: ' + ((j && j.error) || 'error desconocido') + '.');
+      })
+      .catch(function(){ mostrarBannerEscaneo('No se pudo pedir la etiqueta (sin conexión).'); });
   }
 
   function eliminarItem(itemId){
