@@ -2009,6 +2009,30 @@ describe('Código escaneado que no existe en el catálogo', () => {
     expect(r.body.item.sku).toBe('FB-9'); // sí se ajusta en Woo, es un producto real
   });
 
+  it('escanear el mismo producto por su GTIN y despues por su SKU (dos codigos distintos) NO crea dos filas', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: '1234567890128', stock: 5 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+
+    // Primer escaneo por el GTIN de fábrica.
+    const r1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: '1234567890128' });
+    expect(r1.body.item.sku).toBe('FB-1');
+    expect(r1.body.item.cantidad).toBe(1);
+
+    // Segundo escaneo del MISMO producto, esta vez por su etiqueta de SKU (código distinto).
+    const r2 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-1' });
+    expect(r2.body.item.sku).toBe('FB-1');
+    // Bug corregido: debe ser la MISMA fila (cantidad acumulada 2), no una fila nueva con cantidad 1.
+    expect(r2.body.item.id).toBe(r1.body.item.id);
+    expect(r2.body.item.cantidad).toBe(2);
+
+    const sesionVista = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
+    const filasFB1 = sesionVista.body.items.filter(i => i.sku === 'FB-1');
+    expect(filasFB1).toHaveLength(1); // una sola fila para el producto, no dos
+    expect(filasFB1[0].cantidad).toBe(2);
+  });
+
   it('el código desconocido aparece en P3 sin nombre ni diferencia inventada', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionBell(db);
@@ -2633,18 +2657,23 @@ describe('ALTO 2: /diferencias/:id/rechazar borra el conteo de inventario_conteo
 
   it('dos EANs distintos para el mismo SKU: rechazar el sobrante NO borra la fila que ya se ajustó a Woo', async () => {
     const db = openDb(TEST_DB);
-    // FB-1 con gtin propio (primer EAN) — el segundo EAN se mapea vía ean_sku.
-    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000, gtin: '7791234567898' });
-    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
-    db.prepare("INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES ('96385074','FB-1',?)").run(now());
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
 
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
 
-    // Dos escaneos de FB-1 por EANs distintos → dos filas en inventario_conteos
-    // (UNIQUE(sesion_id, ean), no UNIQUE(sesion_id, sku)).
-    const e1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '7791234567898' });
-    const e2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '96385074' });
+    // Dos filas para el MISMO sku via /asociar (no via /escanear: el fix del 2026-08-25
+    // dedupea por sku cuando ya se conoce, así que dos códigos que YA resuelven al mismo
+    // producto se funden en una sola fila — ver el test de arriba "escanear el mismo
+    // producto..."). Este camino sigue abierto a propósito: dos códigos DESCONOCIDOS
+    // (sku=null) no tienen sku contra el que deduplicar, y cada uno puede asociarse a
+    // mano al mismo SKU real por separado — UNIQUE(sesion_id, ean), no UNIQUE(sesion_id, sku).
+    const e1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'XX-DESCONOCIDO-1' });
+    const e2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'XX-DESCONOCIDO-2' });
+    expect(e1.body.item.sku).toBeNull();
+    expect(e2.body.item.sku).toBeNull();
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: 'XX-DESCONOCIDO-1', sku: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`).send({ ean: 'XX-DESCONOCIDO-2', sku: 'FB-1' });
     await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${e1.body.item.id}`).send({ cantidad: 3 });
     await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${e2.body.item.id}`).send({ cantidad: 21 });
 

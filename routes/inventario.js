@@ -748,7 +748,19 @@ export function inventarioRouter(db, wooCfg) {
       }
     }
 
-    const existente = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
+    // Dedup por SKU, no por el código literal escaneado (fix 2026-08-25): un mismo
+    // producto puede tener más de un código que resuelve al mismo SKU (su GTIN de fábrica
+    // Y una etiqueta de SKU impresa por la herramienta de Etiquetas, ver Fase 1). Buscar
+    // solo por `ean` dejaba crear DOS filas para el mismo producto físico si se lo
+    // escaneaba una vez por cada código — y en /confirmar cada fila dispara su propio
+    // setStockWcDelta con el MISMO stock_inicial congelado: la segunda escritura relee el
+    // stock ya modificado por la primera y aplica el delta de nuevo sobre eso, pisando el
+    // ajuste real (ver docs/api-contrato.md). Cuando el SKU ya se resolvió, "¿ya lo conté?"
+    // se responde por SKU; si el código sigue sin resolver (código desconocido, sku=null)
+    // no hay SKU contra el que deduplicar y se sigue usando el código literal, igual que antes.
+    const existente = sku
+      ? db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(sesion.id, sku)
+      : db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
     let itemId;
     if (existente) {
       // Volver a escanear una fila que se había cerrado en 0 por omisión la
