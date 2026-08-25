@@ -93,6 +93,40 @@ function guardarMarca(db, clave, valorIso) {
 // carga contra Woo justo cuando ya viene lento.
 let _refrescarCatalogoEnCurso = false;
 
+// Fase 0 (higiene), Tarea 3: abre/cierra alertas de stock negativo en cada refresco de
+// catálogo (cada 15 min). No duplica fila para el mismo SKU mientras siga en negativo
+// entre refrescos sucesivos: solo abre una si no hay ya una fila abierta (resuelto_en IS
+// NULL) para ese SKU, y cierra (resuelto_en=now) las abiertas que dejaron de estar en
+// negativo. `sku <> ''` porque un producto variable padre no tiene SKU propio.
+export function registrarAlertasStockNegativo(db, ahora = new Date().toISOString()) {
+  const negativos = db.prepare(
+    "SELECT sku, stock FROM catalogo_cache WHERE stock < 0 AND COALESCE(sku,'')<>''"
+  ).all();
+  const skusNegativos = new Set(negativos.map(r => r.sku));
+
+  const abiertas = db.prepare(
+    'SELECT id, sku FROM stock_negativo_alertas WHERE resuelto_en IS NULL'
+  ).all();
+  const skusConAlertaAbierta = new Set(abiertas.map(r => r.sku));
+
+  const insertar = db.prepare(
+    'INSERT INTO stock_negativo_alertas (sku, stock, detectado_en) VALUES (?,?,?)'
+  );
+  const resolver = db.prepare(
+    'UPDATE stock_negativo_alertas SET resuelto_en=? WHERE id=?'
+  );
+
+  const tx = db.transaction(() => {
+    for (const row of negativos) {
+      if (!skusConAlertaAbierta.has(row.sku)) insertar.run(row.sku, row.stock, ahora);
+    }
+    for (const fila of abiertas) {
+      if (!skusNegativos.has(fila.sku)) resolver.run(ahora, fila.id);
+    }
+  });
+  tx();
+}
+
 // options.forzarCompleto: true fuerza un barrido completo (usado por el botón manual
 // POST /catalogo/recargar, que siempre debe traer y podar TODO, sin depender del cron).
 export async function refrescarCatalogo(db, cfg, opts = {}) {
@@ -248,6 +282,7 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
   // ensucian el sync/matcher. Los productos 'variable' (padres) no tienen SKU a propósito,
   // se excluyen del conteo de SKU vacío.
   const negs = db.prepare('SELECT COUNT(*) n FROM catalogo_cache WHERE stock<0').get().n;
+  registrarAlertasStockNegativo(db);
   const sinSku = db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE tipo<>'variable' AND COALESCE(sku,'')=''").get().n;
   // Un SKU repetido en más de un producto/variación no debería pasar nunca en WooCommerce
   // (SKU es único ahí) — si aparece acá es señal de un residuo de borrado que la limpieza de
