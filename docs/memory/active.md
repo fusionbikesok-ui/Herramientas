@@ -37,6 +37,13 @@ Consulta de Precios y Preparación **completas**, no el delta del merge.
 el mismo resultado en las dos ramas y en el merge. Habrían pasado igual con una rama descartada
 entera. No usarlas como prueba de que no se perdió trabajo.
 
+**Cómo comparar contra producción sin engañarse**: la forma correcta de dimensionar el riesgo es
+correr la suite en el merge y en la rama que sirve producción, y contrastar. Pero **las dos suites
+no pueden correr en paralelo**: el repo ya documenta que la suite completa no convive con otra
+corrida y que bajo carga produce fallos con forma de aserción real, indistinguibles de una
+regresión. Correrlas juntas invalida la comparación. Van **secuenciales**, y todo archivo en rojo
+se re-corre aislado en ambas ramas antes de creerle.
+
 **Migraciones** (verificado contra la base real): producción está en 014, el merge trae 019-022.
 `pack_id` ya está aplicada; `woo_paso1_incierto` falta pero `routes/preparacion.js:224-228` hace el
 `ALTER TABLE` idempotente en `ensureTables` y se autorepara al arrancar; el backfill 022 es no-op
