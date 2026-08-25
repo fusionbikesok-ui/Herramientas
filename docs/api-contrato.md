@@ -2189,3 +2189,58 @@ marcar categorías nuevas o para diagnosticar un canal caído.
   ml: {ordenes, insertados} | {error} } }`.
 - Response 502: excepción no controlada (no debería pasar — `backfillVentas` ya atrapa los
   errores de cada canal por separado; esto cubre un fallo fuera de esa función).
+
+## Planificador de ciclos — plan del día y conteo dirigido (Fase 4 del plan de control de stock, 2026-08-25)
+
+### Siembra automática: sku_ultimo_conteo
+Al confirmar (o reintentar) una sesión, `sembrarUltimoConteo` graba en `sku_ultimo_conteo`
+(sku, contado_en, sesion_id, por_omision, diferencia_ultima) cada SKU de
+`inventario_conteos` de esa sesión — **nunca** desde `inventario_sesion_alcance`
+(Ruptura 9: eso infla la cobertura con SKUs que quedaron pendientes, no contados de
+verdad). Un cierre en cero por omisión también siembra (con `por_omision=1`, evidencia
+más débil). Protegido contra pisar un conteo más reciente del mismo SKU hecho por otra
+sesión mientras esta estaba `confirmando`.
+
+### GET /api/inventario/plan-hoy
+Propone UNA sesión para hoy.
+
+- Si hay al menos una ubicación `mapeada` con productos asociados: propone la más urgente
+  (mayor `dias_sin_contar` entre sus SKUs) como barrido completo, `cierre_en_cero_habilitado:
+  true` (las reglas de seguridad de Fase 2 siguen aplicando al cerrar).
+- Si no hay ninguna ubicación mapeada todavía (Ruptura 6, ciclo 0): propone bootstrap por
+  categoría — la que tenga más SKUs nunca contados —, `cierre_en_cero_habilitado: false`.
+- `capacidad_estimada_2h` sale del ritmo del usuario (percentil 25 de sus últimas sesiones,
+  mismo cálculo que `GET /ritmo`; sin usuario en la sesión usa el fallback 20/h). No separa
+  ritmo por condición escaneado/manual (Ruptura 8) todavía — esa granularidad requiere
+  trackear qué ítems se escanearon vs se tipearon a mano, dato que hoy no se registra por
+  separado; queda para un despacho futuro si hace falta.
+- `queda_afuera` es una estimación (`productos - capacidad_estimada_2h`), no una lista.
+
+Response 200:
+```
+{ ok, propuesta: { tipo: 'ubicacion'|'categoria_bootstrap', ...,
+    cierre_en_cero_habilitado, capacidad_estimada_2h, queda_afuera } | null,
+  ritmo: { ritmo, estimado, muestras },
+  cobertura: { total_contable, con_conteo_registrado, porcentaje, vencidos_20_dias },
+  ubicaciones: { mapeadas, totales } }
+```
+
+### GET /api/inventario/dirigido?limit=20
+Lista informativa de los SKUs más urgentes (mayor días sin contar, nunca contados primero),
+para "apagar incendios" puntuales. **No crea sesiones ni habilita cierre en cero** — contar
+uno de estos SKUs se hace desde una sesión normal por categoría/marca/ubicación (Ruptura 5:
+el "conteo dirigido" como TIPO de sesión con su propio alcance de lista-de-SKUs queda fuera
+de este despacho — este endpoint es solo la lista de prioridades).
+
+- Response 200: `{ ok, dirigido: [ { sku, nombre, stock, dias_sin_contar, nunca_contado } ] }`.
+
+### Fuera de este despacho
+- Tabla `ciclos` (numeración de ciclos) — no se creó: nada en este despacho la necesita
+  todavía, `plan-hoy` trabaja directo sobre `dias_sin_contar`.
+- El "tablero" visual (% bajo régimen, deuda en días-SKU, proyección de recuperación,
+  cobertura de ubicación/etiquetas) — sin pantalla propia en este despacho; los números que
+  ya expone `plan-hoy` (`cobertura`, `ubicaciones`) son la base de datos que un tablero
+  futuro consumiría.
+- El tipo de sesión "conteo dirigido" (alcance = lista de SKUs sueltos) en `POST /sesiones`
+  — `GET /dirigido` da la lista, pero abrir una sesión sobre esa lista puntual todavía se
+  hace por categoría/marca/ubicación como cualquier otra.
