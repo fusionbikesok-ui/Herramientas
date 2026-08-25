@@ -2,6 +2,7 @@ import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { setStockWcDelta, buscarEnCache } from '../lib/wooStock.js';
 import { looksLikeGtin, subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
+import { requireAdmin } from '../lib/auth.js';
 
 export { looksLikeGtin as looksLikeEan } from '../lib/gtinWoo.js';
 
@@ -364,7 +365,7 @@ export function inventarioRouter(db, wooCfg) {
     return [...new Set(crudo.map(v => parseInt(v, 10)).filter(Number.isInteger))];
   }
 
-  router.post('/no-contables', (req, res) => {
+  router.post('/no-contables', requireAdmin, (req, res) => {
     const ids = parseIdsWoo(req.body?.ids_woo);
     if (!ids.length) {
       return res.status(400).json({ ok: false, error: 'Indicá `ids_woo` (array no vacío).' });
@@ -393,8 +394,8 @@ export function inventarioRouter(db, wooCfg) {
     const revertidos = tx(ids);
     res.json({ ok: true, revertidos });
   }
-  router.delete('/no-contables', revertirNoContables);
-  router.post('/no-contables/revertir', revertirNoContables);
+  router.delete('/no-contables', requireAdmin, revertirNoContables);
+  router.post('/no-contables/revertir', requireAdmin, revertirNoContables);
 
   // ─── Stock negativo (Fase 0, Tarea 3) ────────────────────────────────────────
   // Las filas las escribe routes/woo.js#refrescarCatalogo en cada barrido de catálogo;
@@ -1037,16 +1038,19 @@ export function inventarioRouter(db, wooCfg) {
       SELECT d.*, c.nombre, c.marca
       FROM inventario_diferencias d
       LEFT JOIN catalogo_cache c ON c.sku = d.sku
-      WHERE d.requiere_revision=1 AND d.revisado_en IS NULL
+      WHERE d.requiere_revision=1 AND d.revisado_en IS NULL AND d.tipo='sobrante'
       ORDER BY d.creado_en
     `).all();
     res.json({ ok: true, pendientes: rows });
   });
 
-  router.post('/diferencias/:id/aprobar', async (req, res) => {
+  router.post('/diferencias/:id/aprobar', requireAdmin, async (req, res) => {
     const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE id=?').get(req.params.id);
     if (!fila) return res.status(404).json({ ok: false, error: 'Diferencia no encontrada' });
     if (fila.revisado_en) return res.status(400).json({ ok: false, error: 'Esta diferencia ya fue revisada' });
+    if (fila.tipo !== 'sobrante') {
+      return res.status(400).json({ ok: false, error: 'Solo los sobrantes requieren aprobación; los faltantes ya se ajustaron automáticamente al confirmar la sesión' });
+    }
     try {
       // Reconstruye el mismo llamado que se hubiera hecho al confirmar, con los datos
       // que quedaron congelados en la fila (sesion_id, sku, cantidad_contada, stock_inicial_usado).
@@ -1066,13 +1070,20 @@ export function inventarioRouter(db, wooCfg) {
     }
   });
 
-  router.post('/diferencias/:id/rechazar', (req, res) => {
+  router.post('/diferencias/:id/rechazar', requireAdmin, (req, res) => {
     const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE id=?').get(req.params.id);
     if (!fila) return res.status(404).json({ ok: false, error: 'Diferencia no encontrada' });
     if (fila.revisado_en) return res.status(400).json({ ok: false, error: 'Esta diferencia ya fue revisada' });
-    // José decidió que el conteo estuvo mal: no se toca Woo ni el conteo original.
+    if (fila.tipo !== 'sobrante') {
+      return res.status(400).json({ ok: false, error: 'Solo los sobrantes requieren aprobación; los faltantes ya se ajustaron automáticamente al confirmar la sesión' });
+    }
+    // José decidió que el conteo estuvo mal: marca revisado en la diferencia y borra el conteo original.
+    // Esto cierra la decisión de rechazar — un reintento de /confirmar ya no vuelve a levantarlo
+    // porque la fila no existirá en inventario_conteos.
     db.prepare('UPDATE inventario_diferencias SET revisado_en=?, revisado_por=? WHERE id=?')
       .run(now(), req.user?.username || null, fila.id);
+    db.prepare('DELETE FROM inventario_conteos WHERE sesion_id=? AND sku=?')
+      .run(fila.sesion_id, fila.sku);
     res.json({ ok: true });
   });
 

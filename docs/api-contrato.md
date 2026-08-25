@@ -1159,6 +1159,96 @@ a Woo y cae en fallidos para revisión manual.
    ```
    `pendientes` viene ordenado: `bloque` con_stock primero (CASE WHEN='con_stock' THEN 0), después categoría → marca → nombre, todas COLLATE NOCASE.
 
+### GET /api/inventario/no-contables/sugerencias (Fase 0, Tarea 1)
+Devuelve productos candidatos a marcar como no-contables (sin marca o stock absurdo >500).
+Query params: ninguno.
+- Response 200: `{ "ok": true, "sugerencias": [ { "id_woo", "sku", "nombre", "stock", "marca" }, ... ] }`
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo lectura).
+
+### POST /api/inventario/no-contables (Fase 0, Tarea 1)
+Marca una o más productos como no-contables (excluidos del conteo automático).
+**Requiere admin.** Responde 403 si el usuario no es administrador.
+- Request: `{ "ids_woo": [1, 2, 3] }` (array no vacío de id_woo de productos).
+- Response 200: `{ "ok": true, "marcados": 3 }`.
+- Response 400: `{ "ok": false, "error": "Indicá `ids_woo` (array no vacío)." }`.
+
+### POST /api/inventario/no-contables/revertir (Fase 0, Tarea 1)
+Desmarca productos como no-contables, devolviéndolos al flujo de conteo normal.
+**Requiere admin.** Responde 403 si el usuario no es administrador.
+- Request: `{ "ids_woo": [1, 2, 3] }` (array no vacío de id_woo de productos).
+- Response 200: `{ "ok": true, "revertidos": 3 }`.
+- Response 400: `{ "ok": false, "error": "Indicá `ids_woo` (array no vacío)." }`.
+- También soportado como `DELETE /api/inventario/no-contables` con el mismo body.
+
+### GET /api/inventario/negativos (Fase 0, Tarea 3)
+Lee alertas abiertas de stock negativo detectado en el catálogo.
+- Request: sin body ni query.
+- Response 200: `{ "ok": true, "alertas": [ { "id", "sku", "stock_detectado", "detectado_en", "nombre", "marca", "stock_actual" }, ... ] }`
+  - Solo lista filas con `resuelto_en IS NULL` (alertas abiertas).
+  - `stock_detectado` es el valor negativo que se vio al detectar.
+  - `stock_actual` es el stock presente ahora en `catalogo_cache`.
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo lectura).
+
+### GET /api/inventario/diferencias/pendientes (Fase 0, Tarea 2)
+Devuelve **solo sobrantes pendientes de aprobación** (diferencias grandes que frenaron el ajuste).
+Los faltantes con `requiere_revision=1` siguen existiendo como alertas históricas para investigar,
+pero no aparecen en esta bandeja — son informativos, no accionables.
+- Request: sin body ni query.
+- Response 200: `{ "ok": true, "pendientes": [ { "id", "sku", "tipo", "cantidad_contada", "stock_inicial_usado", "diferencia", "nombre", "marca", "requiere_revision", "revisado_en", "creado_en", ... }, ... ] }`
+  - Solo filas con `tipo='sobrante'`, `requiere_revision=1`, `revisado_en IS NULL`.
+  - Ordenadas por `creado_en` (antiguas primero).
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo lectura).
+
+### POST /api/inventario/diferencias/:id/aprobar (Fase 0, Tarea 2)
+Aprueba un sobrante grande y aplica el ajuste a WooCommerce (ejecuta `setStockWcDelta`).
+**Requiere admin.** Responde 403 si el usuario no es administrador.
+**Defensa en profundidad:** devuelve 400 si se intenta aprobar una fila `tipo != 'sobrante'`.
+- Request: sin body.
+- Response 200: `{ "ok": true, "resultado": { ... } }` — resultado del ajuste a Woo.
+- Response 400:
+  - `{ "ok": false, "error": "Esta diferencia ya fue revisada" }` — si `revisado_en IS NOT NULL`.
+  - `{ "ok": false, "error": "Solo los sobrantes requieren aprobación; los faltantes ya se ajustaron automáticamente al confirmar la sesión" }` — si `tipo != 'sobrante'`.
+- Response 404: `{ "ok": false, "error": "Diferencia no encontrada" }`.
+- Response 502: `{ "ok": false, "error": "<mensaje>" }` — fallo en el ajuste a Woo; queda pendiente para reintentar.
+
+### POST /api/inventario/diferencias/:id/rechazar (Fase 0, Tarea 2)
+Rechaza un sobrante (decisión deliberada de no tocarlo en Woo). Marca la diferencia como revisada
+y **borra la fila de `inventario_conteos`** para ese ítem, cerrando la decisión.
+**Requiere admin.** Responde 403 si el usuario no es administrador.
+**Defensa en profundidad:** devuelve 400 si se intenta rechazar una fila `tipo != 'sobrante'`.
+- Request: sin body.
+- Response 200: `{ "ok": true }`.
+- Response 400:
+  - `{ "ok": false, "error": "Esta diferencia ya fue revisada" }` — si `revisado_en IS NOT NULL`.
+  - `{ "ok": false, "error": "Solo los sobrantes requieren aprobación; los faltantes ya se ajustaron automáticamente al confirmar la sesión" }` — si `tipo != 'sobrante'`.
+- Response 404: `{ "ok": false, "error": "Diferencia no encontrada" }`.
+
+### GET /api/inventario/ritmo (Fase 0, Tarea 4)
+Estima el ritmo promedio de conteo de un operario (ítems/minuto) basado en sus últimas 5 sesiones.
+- Request: query param `usuario` (obligatorio, username del operario).
+- Response 200:
+  ```json
+  {
+    "ok": true,
+    "usuario": "operario1",
+    "sesiones_validas": 3,
+    "items_contados": 42,
+    "segundos_totales": 900,
+    "estimado_items_por_minuto": 2.8,
+    "aplicable": true,
+    "motivo": null
+  }
+  ```
+  - `estimado_items_por_minuto`: número con decimales (puede ser menor a 1).
+  - `sesiones_validas`: cantidad de sesiones que entraron en el cálculo (mínimo 3 para ser aplicable).
+  - `aplicable`: `true` si hay suficientes datos (>= 3 sesiones válidas); `false` si no, en cuyo caso
+    se reporta un `motivo` ("Pocos datos históricos", "Sin sesiones", etc.).
+  - Usa el percentil 25 del ritmo observado (método PERCENTILE.INC, "linear").
+  - Filtra sesiones por `estado IN ('confirmada', 'confirmada_con_errores')` y rango de duración
+    (0 < segundos_activos <= 10800 = 3h).
+- Response 400: `{ "ok": false, "error": "Falta `usuario`" }`.
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo lectura).
+
 ## Estado del token ML (banner del Home)
 
 Incidente 2026-08: un 429 (rate limit) de ML al refrescar el token se trataba igual que
