@@ -2258,6 +2258,11 @@ describe('Hallazgo D — Producto variable padre no crea fila de alcance', () =>
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
     const idSesion = crear.body.sesion.id;
 
+    // Escanea FB-1 (en alcance, para que el gate de "pendientes con stock" no bloquee
+    // el confirm antes de llegar al ítem variable — si no, el 409 vendría de ahí y el
+    // test pasaría sin ejercer nunca el fail-closed de setStockWcDelta que dice probar).
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-1' });
+
     // Escanea FB-VAR (fuera de alcance, tipo variable)
     const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-VAR' });
     expect(escanear.body.item.fuera_de_alcance).toBe(true);
@@ -2267,11 +2272,31 @@ describe('Hallazgo D — Producto variable padre no crea fila de alcance', () =>
     const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(idSesion, 'FB-VAR');
     expect(alcance.n).toBe(0);
 
-    // Al confirmar, debe dar 409 fail-closed con "stockInicial requerido" (no un PUT a Woo sobre el padre)
+    // setStockWcDelta está mockeada a nivel de módulo: el mock por sí solo NO reproduce
+    // el fail-closed real de la función (que vive adentro de setStockWcDelta, no en el
+    // route). Si el mock resolviera siempre, este test "pasaría" para FB-VAR aunque el
+    // route le pasara stockInicial=undefined — exactamente el falso positivo que
+    // encontró el revisor. Por eso el mock imita acá el contrato real: rechaza cuando
+    // stockInicial es null/undefined, igual que lib/wooStock.js.
+    setStockWcDelta.mockImplementation(async (_cfg, _db, sku, _cantidad, stockInicial) => {
+      if (stockInicial === null || stockInicial === undefined) {
+        throw new Error(`stockInicial requerido para SKU "${sku}": no se puede calcular delta sin punto de referencia`);
+      }
+      return { stockFinal: 5, huboVentaDurante: false, stockLive: 5 };
+    });
+
+    // Al confirmar: FB-1 se ajusta bien, FB-VAR cae en fallidos por "stockInicial
+    // requerido" (fail-closed real, no el gate de pendientes) — respuesta 200, no 409.
     const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/confirmar`);
-    expect(conf.status).toBe(409);
-    expect(conf.body.error).toMatch(/sin contar|sin asociar|stockInicial/i);
-    // Verificar que nunca se llamó a setStockWcDelta (fail-closed, no toca Woo)
-    expect(setStockWcDelta).not.toHaveBeenCalled();
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(1);
+    expect(conf.body.fallidos).toBe(1);
+    expect(conf.body.errores[0].sku).toBe('FB-VAR');
+    expect(conf.body.errores[0].error).toMatch(/stockInicial/i);
+    // setStockWcDelta se llama para AMBOS ítems (el route no pre-filtra por
+    // stockInicial, delega el fail-closed a la función): una vez con stockInicial de
+    // FB-1 (resuelve bien) y otra con stockInicial=undefined para FB-VAR (rechaza).
+    expect(setStockWcDelta).toHaveBeenCalledTimes(2);
+    expect(setStockWcDelta).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'FB-VAR', expect.anything(), undefined);
   });
 });
