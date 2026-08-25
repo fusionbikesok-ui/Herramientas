@@ -21,6 +21,27 @@ en ninguna rama**) quedó registrado en **`e1896ad`**, sin cambiar lo que produc
 iteración anterior del trabajo de GTIN que `master` ya integró mejor (`master` extrajo la
 validación a `parsearIdWoo()`; el WIP la tiene escrita a mano y duplicada). No pasó por ningún gate.
 
+### ⚠️ El riesgo del despliegue NO es el merge — son los 76 commits sin desplegar
+
+Reencuadre del revisor, verificado: `git diff master aa0b21f` da **5 archivos, 52 inserciones**.
+Los 43 commits de `conteo-confiable` aportaron **solo** dos comentarios, el fix del `catch` de
+`reactivarItems` y dos alias en `orchestrate-claude.mjs`. `master` ya había reimplementado todo lo
+demás por su cuenta: `routes/inventario.js` es **byte-idéntico** a producción salvo un comentario.
+
+Entonces: **el merge es casi inocuo; lo que se despliega es `master` entero contra una producción
+que corre otra rama.** `routes/consultaPrecios.js` difiere **208 líneas** de lo que corre hoy y
+`routes/preparacion.js` **372**. El gate del tester y el E2E deben dimensionarse por eso — cubrir
+Consulta de Precios y Preparación **completas**, no el delta del merge.
+
+**Las greps de supervivencia (`cerrarEnCero`, `pendientesConStock`, etc.) NO son evidencia**: dan
+el mismo resultado en las dos ramas y en el merge. Habrían pasado igual con una rama descartada
+entera. No usarlas como prueba de que no se perdió trabajo.
+
+**Migraciones** (verificado contra la base real): producción está en 014, el merge trae 019-022.
+`pack_id` ya está aplicada; `woo_paso1_incierto` falta pero `routes/preparacion.js:224-228` hace el
+`ALTER TABLE` idempotente en `ensureTables` y se autorepara al arrancar; el backfill 022 es no-op
+(0 filas afectadas). **Sin pasos manuales pendientes.**
+
 ### Estado: conflictos RESUELTOS, en el pipeline
 
 Merge hecho en `aa0b21f`, worktree `.claude/worktrees/integracion`, rama
