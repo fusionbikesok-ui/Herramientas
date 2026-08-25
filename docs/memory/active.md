@@ -1,6 +1,58 @@
 # Estado activo
 
-Actualizado: 2026-08-24.
+Actualizado: 2026-08-25.
+
+## PRIORIDAD — producción sirve una rama que divergió de `master`
+
+**Nada de lo integrado en `master` está en producción, y no alcanza con `pm2 restart`.**
+pm2 corre desde `/opt/fusionbikes/herramientas`, que está en la rama **`conteo-confiable`**.
+El restart del 2026-08-25 reinició el proceso con el mismo código de siempre: el fix de
+preparaciones huérfanas **no se activó** y los 13 pedidos siguen invisibles.
+
+Las ramas divergieron:
+
+| | |
+|---|---|
+| `master` tiene y `conteo-confiable` no | **76 commits** (C2/C3 GTIN, nombre en mobile, huérfanas, matcher de ingreso) |
+| `conteo-confiable` tiene y `master` no | **42 commits** — no son docs: cierre seguro del conteo, asociación GTIN en inventario, serialización de escrituras, el incidente de sobreventa |
+
+El WIP que estaba sin commitear en ese checkout (y por lo tanto **vivo en producción sin figurar
+en ninguna rama**) quedó registrado en **`e1896ad`**, sin cambiar lo que produccion sirve. Era una
+iteración anterior del trabajo de GTIN que `master` ya integró mejor (`master` extrajo la
+validación a `parsearIdWoo()`; el WIP la tiene escrita a mano y duplicada). No pasó por ningún gate.
+
+### Plan de integración (worktree ya creado y limpio)
+
+Worktree `.claude/worktrees/integracion`, rama `integracion-master-conteo`, base `master`.
+El simulacro de merge (`git merge --no-commit --no-ff conteo-confiable`, luego abortado) dio
+**17 bloques de conflicto en 9 archivos**:
+
+| Archivo | Bloques | Criterio de resolución |
+|---|---:|---|
+| `routes/consultaPrecios.js` | 6 | **Tomar `master`**: misma función de GTIN, versión auditada |
+| `public/consulta-precios/index.html` | 4 | **Tomar `master`**: ídem |
+| `docs/api-contrato.md` | 1 | **Tomar `master`**: refleja la API auditada |
+| `test/consultaPrecios.test.js` | 1 | **Tomar `master`** |
+| `routes/inventario.js` | 1 | ⚠️ **CUIDADO** — `conteo-confiable` tiene trabajo que `master` NO |
+| `routes/preparacion.js` | 1 | ⚠️ **CUIDADO** — ídem, más el fix de huérfanas del lado `master` |
+| `public/matcher/index.html` | 1 | Revisar caso por caso |
+| `scripts/orchestrate-claude.mjs` | 1 | Revisar caso por caso |
+| `docs/memory/active.md` | 1 | Este archivo; resolver a mano al final |
+
+**El riesgo real está en los dos ⚠️**: `conteo-confiable` tiene ahí el cierre seguro del conteo y
+la corrección del incidente de sobreventa (`docs/incidentes/2026-08-21-sobreventa-por-no-contado.md`),
+que `master` no tiene; y `master` tiene encima el fix de huérfanas y el de GTIN en Preparación.
+Hay que conservar **ambos lados**, no elegir uno. Resolver esto a las apuradas es exactamente cómo
+se reintroduce un bug de la familia de la sobreventa.
+
+Según `docs/agent-coordination.md`, **los conflictos los resuelve el coordinador**, no un agente
+de entrega. Después de resolver: pipeline completo (revisor → tester → auditor) antes de mover pm2.
+
+### Al terminar la integración
+
+Recién ahí mover pm2 a `master` y reiniciar. Ese restart sí cambia lo que sirve producción, así
+que conviene hacerlo con la app a mano para verificar (`/login/` HTTP 200, y las pantallas de
+Preparación, Conteo y Consulta de Precios).
 
 ## En curso
 
@@ -48,9 +100,8 @@ Actualizado: 2026-08-24.
 
 ## Próximo paso
 
-1. **`pm2 restart herramientas`**: hasta que ocurra, el fix de preparaciones huérfanas no está
-   activo (vive en el cron, en memoria) y los 13 pedidos siguen invisibles en la cola. Es lo único
-   pendiente que afecta a producción hoy.
+1. **Integrar `conteo-confiable` en `master`** (ver el bloque de PRIORIDAD arriba). Es lo que
+   bloquea que cualquier cosa mergeada llegue a producción. Un `pm2 restart` solo NO alcanza.
 2. Decidir push de `master` (**28 commits** por delante de `origin/master`).
 3. Implementar Entrega B (ver arriba), en worktree nuevo desde `master`.
 
