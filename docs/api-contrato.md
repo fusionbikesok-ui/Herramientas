@@ -2075,9 +2075,12 @@ Marca varios ítems como impresos de una vez (después de imprimir el lote).
   (idempotente: reenviar los mismos ids no vuelve a marcarlos ni suma al conteo).
 
 ### DELETE /api/etiquetas/cola/:id
-Descarta un ítem sin imprimir (p.ej. se decidió que no hace falta etiqueta). 404 si no existe.
+Descarta un ítem **pendiente** (p.ej. se decidió que no hace falta etiqueta). 400 si ya
+está `impresa` (inmutable, igual criterio que PATCH — una vez impresa queda como registro,
+no se borra). 404 si no existe.
 
 - Response 200: `{ "ok": true }`.
+- Response 400: `{ "ok": false, "error": "solo se puede descartar un ítem pendiente..." }`.
 
 Sin llamadas a ML/Woo — no aplica fail-open/fail-closed. Sin cambios al renderer 50×25mm
 existente: estos endpoints son solo la fuente de datos, la pestaña "Cola de conteo" del

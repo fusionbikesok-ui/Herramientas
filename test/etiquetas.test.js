@@ -119,6 +119,20 @@ describe('etiquetas cola', () => {
     expect(lista.body.cola).toHaveLength(0);
   });
 
+  it('no permite borrar un ítem ya impreso (queda como registro)', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    const alta = await request(app).post('/api/etiquetas/cola').send({ sku: 'FB-8', cantidad: 1 });
+    const id = alta.body.item.id;
+    await request(app).post('/api/etiquetas/cola/marcar-impresas').send({ ids: [id] });
+
+    const borrar = await request(app).delete(`/api/etiquetas/cola/${id}`);
+    expect(borrar.status).toBe(400);
+
+    const lista = await request(app).get('/api/etiquetas/cola?estado=impresa');
+    expect(lista.body.cola).toHaveLength(1);
+  });
+
   it('404 al borrar/editar un id inexistente', async () => {
     const db = openDb(TEST_DB);
     const app = buildApp(db);
