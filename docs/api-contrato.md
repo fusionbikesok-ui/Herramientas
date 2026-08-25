@@ -2142,3 +2142,50 @@ duplica ni pisa la fecha de la primera asociación). Sin acción manual del oper
 - Response 200 agrega `excluidos_por_ubicacion: [sku, ...]` cuando hubo alguno filtrado
   (el campo no aparece si no hubo exclusiones).
 - Comportamiento de una sesión por categoría/marca (sin `ubicacion_id`): sin cambios.
+
+## Rotación y criticidad — historial de ventas + score compuesto (Fase 3 del plan de control de stock, 2026-08-25)
+
+Infraestructura para el planificador de ciclos (Fase 4): historial de ventas WC+ML
+(`ventas_historial`) y un score de criticidad calculado on-demand, no cacheado (ver
+`lib/criticidad.js`). Sin pantalla propia todavía — gateado bajo el permiso `inventario`.
+
+### Backfill / incremental
+`lib/criticidad.js#backfillVentas(db, cfg)` trae ventas de WooCommerce (`/orders`,
+status completed/processing) y MercadoLibre (`/orders/search`, status paid) de los últimos
+12 meses, con cursor incremental por canal (retoma desde la última fecha vista menos 1 día
+de margen). El SKU de MercadoLibre se resuelve con la MISMA lógica que `syncMlToWc`
+(`routes/sync.js`): vínculo confirmado en `sku_matcher_decisiones` primero, `seller_sku` de
+la publicación como fallback — no se reimplementa. Un canal caído no bloquea al otro
+(fail-open entre canales; cada uno reporta su propio error si falla). Corre solo por el cron
+diario (`0 5 * * *` en `server.js`) — no hace falta correrlo a mano.
+
+### GET /api/criticidad/top?limit=50
+Lista SKUs ordenados por score de criticidad descendente (score compuesto 0..1: ventas 12m
+40%, historial de diferencias de inventario 30%, categoría marcada crítica 20%, valor de
+stock actual 10%; cada dimensión normalizada contra el máximo del catálogo).
+
+- Response 200: `{ "ok": true, "criticidad": [ { sku, score, ventas_12m,
+  diferencias_historicas, categoria_critica, valor_stock } ] }`.
+
+### GET /api/criticidad/categorias-criticas
+Lista las categorías marcadas como críticas a mano.
+
+- Response 200: `{ "ok": true, "categorias": [ { categoria, marcado_por, marcado_en } ] }`.
+
+### POST /api/criticidad/categorias-criticas (admin)
+Marca una categoría como crítica (afecta el score de todo SKU que la tenga).
+
+- Request: `{ categoria }`. Idempotente (no falla si ya estaba marcada).
+- Response 200: `{ "ok": true }`.
+
+### DELETE /api/criticidad/categorias-criticas/:categoria (admin)
+Desmarca. 404 si no estaba marcada.
+
+### POST /api/criticidad/backfill (admin)
+Dispara manualmente el backfill/incremental (sin esperar al cron diario) — útil después de
+marcar categorías nuevas o para diagnosticar un canal caído.
+
+- Response 200: `{ "ok": true, "resultado": { woo: {ordenes, insertados} | {error},
+  ml: {ordenes, insertados} | {error} } }`.
+- Response 502: excepción no controlada (no debería pasar — `backfillVentas` ya atrapa los
+  errores de cada canal por separado; esto cubre un fallo fuera de esa función).
