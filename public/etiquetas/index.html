@@ -135,6 +135,7 @@
     <button type="button" class="tab activa" role="tab" aria-selected="true" onclick="mostrarTab('catalogo', this)">Buscar en catálogo</button>
     <button type="button" class="tab" role="tab" aria-selected="false" onclick="mostrarTab('categoria', this)">Por categoría</button>
     <button type="button" class="tab" role="tab" aria-selected="false" onclick="mostrarTab('inventario', this); actualizarVistaInventario()">Desde inventario</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" onclick="mostrarTab('cola', this); actualizarVistaCola()">Cola de conteo</button>
     <button type="button" class="tab" role="tab" aria-selected="false" onclick="mostrarTab('marca', this)">Por marca</button>
     <button type="button" class="tab" role="tab" aria-selected="false" onclick="mostrarTab('pegar', this)">Pegar</button>
     <button type="button" class="tab" role="tab" aria-selected="false" onclick="mostrarTab('csv', this)">Subir CSV</button>
@@ -178,6 +179,19 @@
     </div>
     <div id="invEstado" style="font-size:12px;color:var(--muted2);margin-bottom:6px"></div>
     <div class="catRes" id="invList"><div class="catVacio">Hacé clic en "Actualizar" para ver la sesión de inventario.</div></div>
+  </div>
+
+  <div class="bloque oculto" id="bloque-cola">
+    <p>Pedidos de etiqueta hechos <b>desde el Contador de inventario</b> (botón 🏷️ en cada
+       producto contado). A diferencia de "Desde inventario", esta cola vive en el servidor:
+       no se pierde si cerrás la pestaña ni si es otra persona la que imprime.</p>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <button onclick="importarCola(false)">Importar al editor (agregar)</button>
+      <button class="sec" onclick="marcarColaImpresa()" id="btnColaImpresa" disabled>Marcar como impresas</button>
+      <button class="sec" style="margin-left:auto;font-size:12px;padding:6px 10px" onclick="actualizarVistaCola()">↻ Actualizar</button>
+    </div>
+    <div id="colaEstado" style="font-size:12px;color:var(--muted2);margin-bottom:6px"></div>
+    <div class="catRes" id="colaList"><div class="catVacio">Cargando…</div></div>
   </div>
 
   <div class="bloque oculto" id="bloque-marca">
@@ -813,6 +827,81 @@ function importarInventario(reemplazar) {
   });
   appendEditor(lineas, reemplazar);
   document.getElementById('error').textContent = 'Importados ' + rows.length + ' producto(s) desde el inventario.';
+}
+
+/* ----- Cola de conteo (persistente en el servidor, Fase 1) ----- */
+var _colaPendiente = []; // últimos ítems pendientes cargados desde /api/etiquetas/cola
+var _colaImportadaIds = []; // ids ya volcados al editor en esta visita, listos para marcar-impresas
+
+function actualizarVistaCola() {
+  var listEl   = document.getElementById('colaList');
+  var estadoEl = document.getElementById('colaEstado');
+  estadoEl.textContent = 'Cargando…';
+  fetch('/api/etiquetas/cola?estado=pendiente')
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (!j || !j.ok) { estadoEl.textContent = 'No se pudo cargar la cola.'; return; }
+      _colaPendiente = j.cola || [];
+      if (!_colaPendiente.length) {
+        estadoEl.textContent = 'No hay pedidos de etiqueta pendientes.';
+        listEl.innerHTML = '<div class="catVacio">Nadie pidió etiquetas desde el conteo todavía.</div>';
+        return;
+      }
+      var totalU = _colaPendiente.reduce(function(s,r){ return s + (r.cantidad || 0); }, 0);
+      estadoEl.textContent = _colaPendiente.length + ' pedido(s) · ' + totalU + ' unidades en total';
+      listEl.innerHTML = '';
+      _colaPendiente.forEach(function(r) {
+        var catProd = _catalogoBySku[(r.sku || '').toLowerCase()] || null;
+        var nombre  = catProd ? catProd.nombre : (r.sku || '');
+        var fila = document.createElement('div'); fila.className = 'catFila';
+        fila.innerHTML =
+          '<span class="csku">' + escHtml(r.sku) + '</span>' +
+          '<span class="cnom">' + escHtml(nombre) + '</span>' +
+          '<span class="cstock-ok">×' + (r.cantidad || 0) + '</span>';
+        listEl.appendChild(fila);
+      });
+    })
+    .catch(function(){ estadoEl.textContent = 'No se pudo cargar la cola (sin conexión).'; });
+}
+
+function importarCola(reemplazar) {
+  if (!_colaPendiente.length) {
+    document.getElementById('error').textContent = 'La cola está vacía. Actualizá primero.';
+    return;
+  }
+  var lineas = _colaPendiente.map(function(r) {
+    var catProd = _catalogoBySku[(r.sku || '').toLowerCase()] || null;
+    var nombre  = catProd ? catProd.nombre : '';
+    var catCat  = (catProd && catProd.categorias && catProd.categorias[0]) || '';
+    return [r.sku, nombre, catCat, r.cantidad || 0].join('\t');
+  });
+  appendEditor(lineas, reemplazar);
+  _colaImportadaIds = _colaPendiente.map(function(r){ return r.id; });
+  document.getElementById('btnColaImpresa').disabled = false;
+  document.getElementById('error').textContent = 'Importados ' + _colaPendiente.length + ' pedido(s) desde la cola.';
+}
+
+// Paso manual, separado de imprimir: el navegador no avisa cuándo terminó la impresión real
+// (ni si salió bien en la térmica), así que confirmarlo queda en manos de quien imprime.
+function marcarColaImpresa() {
+  if (!_colaImportadaIds.length) return;
+  fetch('/api/etiquetas/cola/marcar-impresas', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids: _colaImportadaIds }),
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (j && j.ok) {
+        document.getElementById('error').textContent = 'Marcadas ' + j.marcadas + ' etiqueta(s) como impresas.';
+        _colaImportadaIds = [];
+        document.getElementById('btnColaImpresa').disabled = true;
+        actualizarVistaCola();
+      } else {
+        document.getElementById('error').textContent = 'No se pudieron marcar como impresas.';
+      }
+    })
+    .catch(function(){ document.getElementById('error').textContent = 'No se pudo marcar como impresas (sin conexión).'; });
 }
 
 /* ----- Por marca ----- */
