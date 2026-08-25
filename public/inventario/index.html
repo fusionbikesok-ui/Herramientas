@@ -494,6 +494,11 @@
       <button class="btn-orden" id="btn-orden-diff">Por diferencia</button>
     </div>
 
+    <input type="text" id="conteo-buscar" aria-label="Buscar en la lista por SKU o nombre"
+           placeholder="Buscar en la lista por SKU o nombre…" autocomplete="off" autocorrect="off"
+           autocapitalize="off" spellcheck="false" style="margin:6px 0;">
+
+
     <div class="conteo-lista-header" id="conteo-lista-header" style="display:flex;align-items:center;gap:8px;padding:6px 4px;">
       <input type="checkbox" id="chk-todo-conteo" aria-label="Seleccionar todos los contados">
       <label for="chk-todo-conteo" style="font-size:13px;">Seleccionar todo</label>
@@ -1162,9 +1167,17 @@
   var contPendientes = document.getElementById('cont-pendientes');
   var contDiferencia = document.getElementById('cont-diferencia');
   var btnOrdenDiff = document.getElementById('btn-orden-diff');
+  var conteoBuscar = document.getElementById('conteo-buscar');
 
   var conteoData = { items: [], pendientes: [] };
   var filtroActivo = 'pendientes';
+  // Filtro de texto en cliente sobre la lista ya cargada (pedido de José: con un alcance
+  // amplio la lista es larga y hace falta encontrar un producto puntual sin bajar a mano).
+  // No pega al servidor — filtra lo que ya está en conteoData. `filtroBusqueda` es la
+  // versión en minúscula usada para comparar; `filtroBusquedaTexto` es la tal cual la
+  // tipeó el usuario, solo para mostrarla en el mensaje de "sin resultados".
+  var filtroBusqueda = '';
+  var filtroBusquedaTexto = '';
   var sinStockAbierto = false;
   var autoAbiertoSinStock = false;
   // El despliegue automático del bloque sin-stock es por sesión: sin esto, una segunda
@@ -1172,6 +1185,12 @@
   function resetEstadoBloqueSinStock(){
     sinStockAbierto = false;
     autoAbiertoSinStock = false;
+    // Hallazgo del revisor: sin esto, el texto buscado en una sesión quedaba filtrando
+    // la lista de la SIGUIENTE sesión que se abre/retoma — con un alcance distinto,
+    // podía mostrarse vacía o parcial sin que hubiera nada realmente mal.
+    filtroBusqueda = '';
+    filtroBusquedaTexto = '';
+    if (conteoBuscar) conteoBuscar.value = '';
   }
   var ordenPorDiferencia = false;
   var ultimoItemFlash = null; // id del ítem que acaba de escanearse, para el refuerzo visual del +1
@@ -1278,22 +1297,47 @@
     renderPendiente = false;
     var contados = conteoData.items;
     var pendientes = conteoData.pendientes;
+    // Los contadores de arriba (Contados/Pendientes/Con diferencia) siempre reflejan el
+    // total real de la sesión, nunca lo que queda visible después de buscar — buscar es
+    // solo para encontrar algo en la lista, no una re-acotación del alcance.
     contContados.textContent = n(contados.length);
     contPendientes.textContent = n(pendientes.length);
     contDiferencia.textContent = n(contados.filter(function(i){ return i.diferencia !== 0 && i.diferencia != null; }).length);
 
+    var q = filtroBusqueda;
+    var coincideBusqueda = function(item){
+      return (item.sku || '').toLowerCase().indexOf(q) !== -1 ||
+             (item.nombre || '').toLowerCase().indexOf(q) !== -1;
+    };
+
     var html = '';
+    var totalVisible = 0;
     if(filtroActivo !== 'contados'){
-      html += bloquesPendientesHtml(pendientes);
+      if(q){
+        // Ruta aparte, a propósito: bloquesPendientesHtml() separa con/sin-stock y dispara
+        // un aviso ("terminaste los con stock") cuando el bloque con-stock llega a 0 — si
+        // le pasáramos la lista ya filtrada por búsqueda, ese aviso se dispararía en falso
+        // cada vez que la búsqueda simplemente no tiene resultados en ese bloque.
+        var pendientesFiltrados = pendientes.filter(coincideBusqueda);
+        totalVisible += pendientesFiltrados.length;
+        html += '<h2 class="bloque-titulo">Pendientes que coinciden (' + n(pendientesFiltrados.length) + ')</h2>';
+        pendientesFiltrados.forEach(function(p){ html += filaPendienteHtml(p); });
+      } else {
+        html += bloquesPendientesHtml(pendientes);
+      }
     }
     if(filtroActivo !== 'pendientes'){
-      var lista = contados.slice();
+      var lista = (q ? contados.filter(coincideBusqueda) : contados).slice();
       if(ordenPorDiferencia){
         lista.sort(function(a, b){ return Math.abs(b.diferencia || 0) - Math.abs(a.diferencia || 0); });
       }
-      if(filtroActivo === 'todos') html += '<h2 class="bloque-titulo">Contados (' + n(lista.length) + ')</h2>';
-      if(!lista.length){ html += '<p class="empty">Todavía no contaste nada.</p>'; }
+      totalVisible += lista.length;
+      if(filtroActivo === 'todos' || q) html += '<h2 class="bloque-titulo">Contados (' + n(lista.length) + ')</h2>';
+      if(!lista.length && !q){ html += '<p class="empty">Todavía no contaste nada.</p>'; }
       lista.forEach(function(i){ html += filaItemHtml(i); });
+    }
+    if(q && totalVisible === 0){
+      html += '<p class="empty">Nada que coincida con "' + esc(filtroBusquedaTexto) + '".</p>';
     }
     conteoLista.innerHTML = html;
     bindFilaEventos();
@@ -1832,6 +1876,12 @@
   btnOrdenDiff.addEventListener('click', function(){
     ordenPorDiferencia = !ordenPorDiferencia;
     btnOrdenDiff.classList.toggle('on', ordenPorDiferencia);
+    renderConteo();
+  });
+
+  conteoBuscar.addEventListener('input', function(){
+    filtroBusquedaTexto = conteoBuscar.value.trim();
+    filtroBusqueda = filtroBusquedaTexto.toLowerCase();
     renderConteo();
   });
 
