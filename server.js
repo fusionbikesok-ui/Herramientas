@@ -27,6 +27,7 @@ import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
 import { inventarioRouter } from './routes/inventario.js';
+import { etiquetasRouter } from './routes/etiquetas.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 
@@ -127,6 +128,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   // routes/cobertura.js) — mismo criterio de redirect con aviso que /cobertura arriba.
   app.use('/vinculos', (req, res) => res.redirect('/herramientas/matcher/?aviso=unificado'));
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
+  app.use('/api/etiquetas', etiquetasRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
 
   // -- Error handler global (respaldo) ---------------------------------

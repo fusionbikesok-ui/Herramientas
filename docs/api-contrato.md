@@ -2038,3 +2038,47 @@ hermana `cerrar-sin-stock` sí acepta `todos:true`, porque esos productos ya est
 Los SKU pedidos se intersectan con el alcance de **esa** sesión y **ese** bloque: no se puede
 colar un SKU de otra sesión, fuera del alcance, ni del bloque `sin_stock`. 400 si la sesión no
 está abierta.
+
+## Etiquetas — cola persistente (Fase 1 del plan de control de stock, 2026-08-25)
+
+Hasta acá `public/etiquetas/index.html` guardaba la cola de impresión en `localStorage` del
+navegador (se perdía al cerrar la pestaña). Estos endpoints la reemplazan por una cola en la
+base (`etiquetas_cola`, creada por `routes/etiquetas.js`). Permiso: herramienta `etiquetas`
+(`niveles:false`, igual criterio que `inventario` — acceso total una vez adentro).
+
+### GET /api/etiquetas/cola
+Lista la cola. Opcionalmente filtra por `?estado=pendiente|impresa`.
+
+- Response 200: `{ "ok": true, "cola": [ { id, sku, cantidad, origen, sesion_id,
+  solicitado_por, nota, estado, creado_en, impreso_en } ] }`.
+
+### POST /api/etiquetas/cola
+Agrega un ítem a la cola.
+
+- Request: `{ sku, cantidad, origen?, sesion_id?, nota? }`. `sku` no vacío, `cantidad` entero
+  > 0 (400 si no). `solicitado_por` se toma de `req.user.username`, no del body.
+- Response 200: `{ "ok": true, "item": {...} }`.
+
+### PATCH /api/etiquetas/cola/:id
+Edita `cantidad` y/o `nota` de un ítem **pendiente**. 400 si el ítem ya está `impresa`
+(inmutable una vez impresa — evita reimprimir con datos distintos a los que salieron por la
+térmica). 404 si no existe.
+
+- Request: `{ cantidad?, nota? }`.
+- Response 200: `{ "ok": true, "item": {...} }`.
+
+### POST /api/etiquetas/cola/marcar-impresas
+Marca varios ítems como impresos de una vez (después de imprimir el lote).
+
+- Request: `{ ids: [1, 2, 3] }`. 400 si `ids` viene vacío.
+- Response 200: `{ "ok": true, "marcadas": <n> }`. Solo cuenta los que estaban `pendiente`
+  (idempotente: reenviar los mismos ids no vuelve a marcarlos ni suma al conteo).
+
+### DELETE /api/etiquetas/cola/:id
+Descarta un ítem sin imprimir (p.ej. se decidió que no hace falta etiqueta). 404 si no existe.
+
+- Response 200: `{ "ok": true }`.
+
+Sin llamadas a ML/Woo — no aplica fail-open/fail-closed. Sin cambios al renderer 50×25mm
+existente: estos endpoints son solo la fuente de datos, la pestaña "Cola de conteo" del
+frontend (próximo despacho) consume el mismo renderer sin tocarlo.
