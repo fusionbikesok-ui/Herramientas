@@ -181,6 +181,18 @@ export function ensureTables(db) {
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_producto_ubicacion_ubicacion ON producto_ubicacion(ubicacion_id)').run();
 
+  // Fase 4 — Planificador de ciclos. Sembrado SOLO desde inventario_conteos de sesiones que
+  // llegaron a confirmada/confirmada_con_errores (Ruptura 9 del plan) — nunca desde
+  // inventario_sesion_alcance, que infla la cobertura con SKUs todavía no contados de
+  // verdad. Ver el hook al final de POST /sesiones/:id/confirmar.
+  db.prepare(`CREATE TABLE IF NOT EXISTS sku_ultimo_conteo (
+    sku                TEXT PRIMARY KEY,
+    contado_en         TEXT NOT NULL,
+    sesion_id          INTEGER,
+    por_omision        INTEGER NOT NULL DEFAULT 0,
+    diferencia_ultima  INTEGER
+  )`).run();
+
   db.prepare(`CREATE TABLE IF NOT EXISTS inventario_conteos (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     sesion_id      INTEGER NOT NULL,
@@ -569,6 +581,36 @@ export function inventarioRouter(db, wooCfg) {
     (sku, ubicacion_id, principal, confirmado_en, confirmado_por) VALUES (?,?,0,?,?)`);
   function capturarUbicacion(ubicacionId, sku, usuario) {
     insertProductoUbicacion.run(sku, ubicacionId, now(), usuario || null);
+  }
+
+  // Fase 4 — siembra sku_ultimo_conteo al cerrar una sesión (confirmada o
+  // confirmada_con_errores: un reintento vuelve a llamar esto, es idempotente). Ruptura 9:
+  // se siembra desde inventario_conteos (lo que REALMENTE se contó), nunca desde
+  // inventario_sesion_alcance (lo que quedaba pendiente). El WHERE del UPDATE solo
+  // pisa si este conteo es MÁS RECIENTE que el que ya había — protege contra un reintento
+  // tardío de una sesión vieja pisando un conteo más nuevo de otra sesión sobre el mismo SKU.
+  const upsertUltimoConteo = db.prepare(`
+    INSERT INTO sku_ultimo_conteo (sku, contado_en, sesion_id, por_omision, diferencia_ultima)
+    VALUES (?,?,?,?,?)
+    ON CONFLICT(sku) DO UPDATE SET
+      contado_en=excluded.contado_en, sesion_id=excluded.sesion_id,
+      por_omision=excluded.por_omision, diferencia_ultima=excluded.diferencia_ultima
+    WHERE excluded.contado_en > sku_ultimo_conteo.contado_en
+  `);
+  function sembrarUltimoConteo(sesionId) {
+    const conteos = db.prepare(
+      'SELECT sku, actualizado_en, confirmado_por_omision FROM inventario_conteos WHERE sesion_id=? AND sku IS NOT NULL'
+    ).all(sesionId);
+    const diferencias = new Map(
+      db.prepare('SELECT sku, diferencia FROM inventario_diferencias WHERE sesion_id=?').all(sesionId)
+        .map(d => [d.sku, d.diferencia])
+    );
+    const tx = db.transaction((filas) => {
+      for (const c of filas) {
+        upsertUltimoConteo.run(c.sku, c.actualizado_en, sesionId, c.confirmado_por_omision ? 1 : 0, diferencias.get(c.sku) ?? null);
+      }
+    });
+    tx(conteos);
   }
 
   function asegurarAlcance(sesion) {
@@ -1185,6 +1227,8 @@ export function inventarioRouter(db, wooCfg) {
       WHERE id=? AND estado='confirmando'`)
       .run(estadoFinal, confirmadoEn, req.user?.username || null, itemsContados, segundosActivos, sesion.id);
 
+    sembrarUltimoConteo(sesion.id);
+
     const respuesta = { ok: true, ajustados, fallidos, errores };
     if (ventasDuranteConteo.length > 0) {
       respuesta.ventasDuranteConteo = ventasDuranteConteo;
@@ -1292,10 +1336,7 @@ export function inventarioRouter(db, wooCfg) {
     return ordenado[piso] + (ordenado[techo] - ordenado[piso]) * (rango - piso);
   }
 
-  router.get('/ritmo', (req, res) => {
-    const usuario = String(req.query?.usuario || '').trim();
-    if (!usuario) return res.status(400).json({ ok: false, error: 'Falta `usuario`' });
-
+  function calcularRitmo(usuario) {
     const sesiones = db.prepare(`
       SELECT items_contados, segundos_activos
       FROM inventario_sesiones
@@ -1309,9 +1350,134 @@ export function inventarioRouter(db, wooCfg) {
       .map(s => (s.items_contados / s.segundos_activos) * 3600);
 
     if (validas.length < RITMO_MIN_SESIONES) {
-      return res.json({ ok: true, ritmo: RITMO_ESTIMADO_FALLBACK, estimado: true, muestras: validas.length });
+      return { ritmo: RITMO_ESTIMADO_FALLBACK, estimado: true, muestras: validas.length };
     }
-    res.json({ ok: true, ritmo: percentil25(validas), estimado: false, muestras: validas.length });
+    return { ritmo: percentil25(validas), estimado: false, muestras: validas.length };
+  }
+
+  router.get('/ritmo', (req, res) => {
+    const usuario = String(req.query?.usuario || '').trim();
+    if (!usuario) return res.status(400).json({ ok: false, error: 'Falta `usuario`' });
+    res.json({ ok: true, ...calcularRitmo(usuario) });
+  });
+
+  // ─── Fase 4 — Planificador de ciclos ──────────────────────────────────────────
+  // Tope duro del plan: ningún SKU debería pasar más de 20 días sin contar.
+  const TOPE_DIAS_SIN_CONTAR = 20;
+  const MS_POR_DIA = 24 * 60 * 60 * 1000;
+
+  function diasSinContarPorSku() {
+    const ultimos = new Map(
+      db.prepare('SELECT sku, contado_en FROM sku_ultimo_conteo').all().map(r => [r.sku, r.contado_en])
+    );
+    const ahora = Date.now();
+    // Infinity representa "nunca contado" — se ordena siempre primero, sin necesidad de
+    // un sentinel numérico mágico que alguien podría confundir con un valor real.
+    return (sku) => {
+      const c = ultimos.get(sku);
+      return c ? (ahora - new Date(c).getTime()) / MS_POR_DIA : Infinity;
+    };
+  }
+
+  // Propone UNA sesión para hoy: si hay al menos una ubicación mapeada (régimen real),
+  // la más urgente (mayor días-sin-contar entre sus SKUs) gana — barrido completo, cierre
+  // en cero habilitado por las reglas de Fase 2. Si no hay ninguna mapeada todavía
+  // (Ruptura 6, ciclo 0), propone bootstrap por categoría: la que tenga más SKUs nunca
+  // contados, cierre en cero deshabilitado (una sesión por categoría no es un barrido de
+  // ubicación, no cumple la Regla 1 de Fase 2 — el propio endpoint de cierre ya lo bloquea).
+  router.get('/plan-hoy', (req, res) => {
+    const usuario = req.user?.username;
+    const diasSinContar = diasSinContarPorSku();
+    const contables = catalogoContable();
+
+    const ubicacionesMapeadas = db.prepare("SELECT * FROM ubicaciones WHERE estado='mapeada' AND activa=1").all();
+    let propuesta = null;
+    let mejorUrgencia = -Infinity;
+    for (const u of ubicacionesMapeadas) {
+      const skusU = db.prepare('SELECT sku FROM producto_ubicacion WHERE ubicacion_id=?').all(u.id).map(r => r.sku);
+      if (!skusU.length) continue;
+      const urgencia = Math.max(...skusU.map(diasSinContar));
+      if (urgencia > mejorUrgencia) {
+        mejorUrgencia = urgencia;
+        propuesta = {
+          tipo: 'ubicacion', ubicacion_id: u.id, zona: u.zona, estante: u.estante,
+          productos: skusU.length,
+          dias_sin_contar_max: Number.isFinite(urgencia) ? Math.round(urgencia) : null,
+          cierre_en_cero_habilitado: true,
+        };
+      }
+    }
+
+    if (!propuesta) {
+      const porCategoria = new Map();
+      for (const p of contables) {
+        const cat = (parseCategorias(p.categorias_json)[0]) || '(sin categoría)';
+        const d = diasSinContar(p.sku);
+        const acc = porCategoria.get(cat) || { categoria: cat, nunca_contados: 0, dias_max: 0, total: 0 };
+        acc.total++;
+        if (!Number.isFinite(d)) acc.nunca_contados++; else acc.dias_max = Math.max(acc.dias_max, d);
+        porCategoria.set(cat, acc);
+      }
+      const top = [...porCategoria.values()]
+        .sort((a, b) => (b.nunca_contados - a.nunca_contados) || (b.dias_max - a.dias_max))[0];
+      if (top) {
+        propuesta = {
+          tipo: 'categoria_bootstrap', categoria: top.categoria,
+          productos: top.total, nunca_contados: top.nunca_contados,
+          dias_sin_contar_max: Math.round(top.dias_max),
+          cierre_en_cero_habilitado: false,
+        };
+      }
+    }
+
+    const ritmo = usuario ? calcularRitmo(usuario) : { ritmo: RITMO_ESTIMADO_FALLBACK, estimado: true, muestras: 0 };
+    if (propuesta) {
+      // Dimensiona a ≤2h con el ritmo del usuario (percentil 25 de sus últimas sesiones).
+      propuesta.capacidad_estimada_2h = Math.max(1, Math.floor(ritmo.ritmo * 2));
+      propuesta.queda_afuera = Math.max(0, propuesta.productos - propuesta.capacidad_estimada_2h);
+    }
+
+    const conConteo = contables.filter(p => Number.isFinite(diasSinContar(p.sku))).length;
+    const vencidos = contables.filter(p => diasSinContar(p.sku) > TOPE_DIAS_SIN_CONTAR).length;
+
+    res.json({
+      ok: true,
+      propuesta,
+      ritmo,
+      cobertura: {
+        total_contable: contables.length,
+        con_conteo_registrado: conConteo,
+        porcentaje: contables.length ? Math.round((conConteo / contables.length) * 1000) / 10 : 0,
+        vencidos_20_dias: vencidos,
+      },
+      ubicaciones: {
+        mapeadas: ubicacionesMapeadas.length,
+        totales: db.prepare('SELECT COUNT(*) n FROM ubicaciones WHERE activa=1').get().n,
+      },
+    });
+  });
+
+  // Lista puntual de los SKUs más urgentes (mayor días-sin-contar), para "apagar
+  // incendios" sin abrir un barrido completo. Ruptura 5: es solo informativo — contar uno
+  // de estos SKUs se hace desde una sesión normal (categoría/marca/ubicación); este
+  // endpoint no crea sesiones ni habilita cierre en cero, es una lista de prioridades.
+  router.get('/dirigido', (req, res) => {
+    const limite = Math.min(parseInt(req.query?.limit, 10) || 20, 200);
+    const diasSinContar = diasSinContarPorSku();
+    const filas = catalogoContable().map(p => {
+      const d = diasSinContar(p.sku);
+      return {
+        sku: p.sku, nombre: p.nombre, stock: p.stock,
+        dias_sin_contar: Number.isFinite(d) ? Math.round(d) : null,
+        nunca_contado: !Number.isFinite(d),
+      };
+    });
+    filas.sort((a, b) => {
+      const diasA = a.dias_sin_contar == null ? Infinity : a.dias_sin_contar;
+      const diasB = b.dias_sin_contar == null ? Infinity : b.dias_sin_contar;
+      return diasB - diasA;
+    });
+    res.json({ ok: true, dirigido: filas.slice(0, limite) });
   });
 
   return router;
