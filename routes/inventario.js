@@ -1077,12 +1077,20 @@ export function inventarioRouter(db, wooCfg) {
     if (fila.tipo !== 'sobrante') {
       return res.status(400).json({ ok: false, error: 'Solo los sobrantes requieren aprobación; los faltantes ya se ajustaron automáticamente al confirmar la sesión' });
     }
-    // José decidió que el conteo estuvo mal: marca revisado en la diferencia y borra el conteo original.
-    // Esto cierra la decisión de rechazar — un reintento de /confirmar ya no vuelve a levantarlo
-    // porque la fila no existirá en inventario_conteos.
+    // José decidió que el conteo estuvo mal: marca revisado en la diferencia y borra el conteo
+    // original. Esto cierra la decisión de rechazar — un reintento de /confirmar ya no vuelve a
+    // levantarlo porque la fila no existirá en inventario_conteos.
+    //
+    // AND ajustado_en IS NULL es crítico acá (mismo guard que ya usa /aprobar arriba): si dos
+    // EANs distintos mapean al mismo SKU en esta sesión (UNIQUE(sesion_id, ean) permite dos
+    // filas), un confirm previo puede haber ajustado la primera con éxito a Woo y frenado la
+    // segunda como sobrante. Sin este filtro, el DELETE por sesion_id+sku borra AMBAS filas de
+    // un golpe — incluida la que ya se escribió en Woo — y no queda ningún rastro en la base de
+    // que esa escritura ocurrió. Con el filtro, solo se borra la fila sin ajustar; la que ya
+    // se aplicó a Woo permanece intacta.
     db.prepare('UPDATE inventario_diferencias SET revisado_en=?, revisado_por=? WHERE id=?')
       .run(now(), req.user?.username || null, fila.id);
-    db.prepare('DELETE FROM inventario_conteos WHERE sesion_id=? AND sku=?')
+    db.prepare('DELETE FROM inventario_conteos WHERE sesion_id=? AND sku=? AND ajustado_en IS NULL')
       .run(fila.sesion_id, fila.sku);
     res.json({ ok: true });
   });

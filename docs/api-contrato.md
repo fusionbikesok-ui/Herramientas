@@ -1224,30 +1224,35 @@ y **borra la fila de `inventario_conteos`** para ese ítem, cerrando la decisió
 - Response 404: `{ "ok": false, "error": "Diferencia no encontrada" }`.
 
 ### GET /api/inventario/ritmo (Fase 0, Tarea 4)
-Estima el ritmo promedio de conteo de un operario (ítems/minuto) basado en sus últimas 5 sesiones.
+Estima el ritmo de conteo de un operario, en **ítems por hora**, a partir de sus últimas 5
+sesiones confirmadas.
 - Request: query param `usuario` (obligatorio, username del operario).
-- Response 200:
+- Toma las últimas 5 sesiones de ese usuario con `estado IN ('confirmada',
+  'confirmada_con_errores')`, ordenadas por `confirmado_en DESC`. De esas, quedan como
+  "válidas" las que tienen `items_contados` no nulo y `0 < segundos_activos <= 10800` (3h) —
+  una sesión de más de 3 horas se descarta del cálculo (probablemente no fue continua). Para
+  cada válida calcula `(items_contados / segundos_activos) * 3600`.
+- Con **menos de 3 sesiones válidas**, no hay muestra suficiente: devuelve un valor fijo
+  conservador con `estimado: true`.
   ```json
-  {
-    "ok": true,
-    "usuario": "operario1",
-    "sesiones_validas": 3,
-    "items_contados": 42,
-    "segundos_totales": 900,
-    "estimado_items_por_minuto": 2.8,
-    "aplicable": true,
-    "motivo": null
-  }
+  { "ok": true, "ritmo": 20, "estimado": true, "muestras": 1 }
   ```
-  - `estimado_items_por_minuto`: número con decimales (puede ser menor a 1).
-  - `sesiones_validas`: cantidad de sesiones que entraron en el cálculo (mínimo 3 para ser aplicable).
-  - `aplicable`: `true` si hay suficientes datos (>= 3 sesiones válidas); `false` si no, en cuyo caso
-    se reporta un `motivo` ("Pocos datos históricos", "Sin sesiones", etc.).
-  - Usa el percentil 25 del ritmo observado (método PERCENTILE.INC, "linear").
-  - Filtra sesiones por `estado IN ('confirmada', 'confirmada_con_errores')` y rango de duración
-    (0 < segundos_activos <= 10800 = 3h).
+- Con **3 o más sesiones válidas**, calcula el **percentil 25** (interpolación lineal, método
+  PERCENTILE.INC de Excel) del ritmo observado — no el promedio, para no sobreestimar con
+  una sesión atípicamente rápida.
+  ```json
+  { "ok": true, "ritmo": 28.4, "estimado": false, "muestras": 4 }
+  ```
+  - `ritmo`: ítems por hora (número, puede tener decimales).
+  - `estimado`: `true` si `ritmo` es el valor fijo de respaldo (pocos datos), `false` si es
+    el percentil 25 calculado sobre datos reales.
+  - `muestras`: cantidad de sesiones que efectivamente entraron en el cálculo (después de
+    excluir las de más de 3 horas).
 - Response 400: `{ "ok": false, "error": "Falta `usuario`" }`.
-- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo lectura).
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo
+  lectura). Nota: esto expone la métrica de productividad de cualquier operario a cualquier
+  otro con el mismo permiso — decisión de producto, no un descuido, pero vale saberlo si se
+  quiere acotar más adelante.
 
 ## Estado del token ML (banner del Home)
 
