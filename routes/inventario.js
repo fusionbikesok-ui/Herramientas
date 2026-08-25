@@ -152,7 +152,34 @@ export function ensureTables(db) {
   try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN iniciado_en TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN segundos_activos INTEGER'); } catch (_) {}
   try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN items_contados INTEGER'); } catch (_) {}
+  // Fase 2 — Ubicaciones: alcance alternativo por ubicación (barrido completo), en vez de
+  // categoria/marca. Mutuamente excluyente con categorias/marcas (ver POST /sesiones).
+  try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN ubicacion_id INTEGER'); } catch (_) {}
   db.prepare('CREATE INDEX IF NOT EXISTS idx_inv_sesiones_estado ON inventario_sesiones(estado)').run();
+
+  // Fase 2 — Ubicaciones (Ruptura 3): muchos-a-muchos porque un SKU puede tener overflow
+  // (unidades en más de un lugar). `estado`: 'bootstrap' (recién creada, todavía no
+  // recorrida entera) | 'mapeada' (José la marcó como completa) — solo una ubicación
+  // 'mapeada' habilita el cierre en cero automático (ver cerrarEnCero).
+  db.prepare(`CREATE TABLE IF NOT EXISTS ubicaciones (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    zona      TEXT NOT NULL,
+    estante   TEXT NOT NULL,
+    estado    TEXT NOT NULL DEFAULT 'bootstrap',
+    activa    INTEGER NOT NULL DEFAULT 1,
+    creado_en TEXT NOT NULL
+  )`).run();
+  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_ubicaciones_zona_estante ON ubicaciones(zona, estante)').run();
+
+  db.prepare(`CREATE TABLE IF NOT EXISTS producto_ubicacion (
+    sku            TEXT NOT NULL,
+    ubicacion_id   INTEGER NOT NULL,
+    principal      INTEGER NOT NULL DEFAULT 0,
+    confirmado_en  TEXT NOT NULL,
+    confirmado_por TEXT,
+    PRIMARY KEY (sku, ubicacion_id)
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_producto_ubicacion_ubicacion ON producto_ubicacion(ubicacion_id)').run();
 
   db.prepare(`CREATE TABLE IF NOT EXISTS inventario_conteos (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -344,6 +371,51 @@ export function inventarioRouter(db, wooCfg) {
     });
   });
 
+  // ─── Ubicaciones (Fase 2) ─────────────────────────────────────────────────────
+  // Zona+estante, para el alcance por ubicación (barrido completo, ver POST /sesiones)
+  // y para la captura durante el conteo (ver capturarUbicacion).
+
+  router.get('/ubicaciones', (req, res) => {
+    const rows = db.prepare(`
+      SELECT u.*, COUNT(pu.sku) AS skus_registrados
+      FROM ubicaciones u
+      LEFT JOIN producto_ubicacion pu ON pu.ubicacion_id = u.id
+      WHERE u.activa = 1
+      GROUP BY u.id
+      ORDER BY u.zona, u.estante
+    `).all();
+    res.json({ ok: true, ubicaciones: rows });
+  });
+
+  router.post('/ubicaciones', requireAdmin, (req, res) => {
+    const zona = String(req.body?.zona || '').trim();
+    const estante = String(req.body?.estante || '').trim();
+    if (!zona || !estante) {
+      return res.status(400).json({ ok: false, error: 'zona y estante son requeridos' });
+    }
+    try {
+      const info = db.prepare(
+        'INSERT INTO ubicaciones (zona, estante, estado, activa, creado_en) VALUES (?,?,\'bootstrap\',1,?)'
+      ).run(zona, estante, now());
+      const ubicacion = db.prepare('SELECT * FROM ubicaciones WHERE id=?').get(info.lastInsertRowid);
+      res.json({ ok: true, ubicacion });
+    } catch (e) {
+      if (String(e.message).includes('UNIQUE')) {
+        return res.status(409).json({ ok: false, error: `Ya existe la ubicación ${zona} / ${estante}.` });
+      }
+      throw e;
+    }
+  });
+
+  // Marca una ubicación como recorrida y completa: recién ahí el cierre en cero masivo
+  // de una sesión sobre esta ubicación deja de estar bloqueado (Ruptura 3/6 del plan).
+  // Es una decisión explícita de José/Joaco, nunca automática.
+  router.post('/ubicaciones/:id/mapear', requireAdmin, (req, res) => {
+    const info = db.prepare("UPDATE ubicaciones SET estado='mapeada' WHERE id=? AND activa=1").run(req.params.id);
+    if (!info.changes) return res.status(404).json({ ok: false, error: 'Ubicación no encontrada' });
+    res.json({ ok: true, ubicacion: db.prepare('SELECT * FROM ubicaciones WHERE id=?').get(req.params.id) });
+  });
+
   // ─── No contables (Fase 0, Tarea 1) ──────────────────────────────────────────
   // Productos que NO son mercadería física real (servicios, cargos, gift cards):
   // stock absurdo (>500, típico de "stock infinito" cargado a mano) o sin marca
@@ -420,25 +492,46 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true, sesion: sesionOut(sesion) });
   });
 
+  // SKUs asociados a una ubicación (Fase 2), intersecados con el catálogo contable —
+  // un SKU dado de baja o marcado no_contable no debe seguir "ocupando" la ubicación.
+  function skusDeUbicacion(ubicacionId) {
+    if (!ubicacionId) return new Set();
+    const skusContables = new Set(catalogoContable().map(p => p.sku));
+    const rows = db.prepare('SELECT sku FROM producto_ubicacion WHERE ubicacion_id=?').all(ubicacionId);
+    return new Set(rows.map(r => r.sku).filter(sku => skusContables.has(sku)));
+  }
+
   // SKUs que entran en un alcance dado con la semántica OR — SOLO para anti-solape.
-  function skusDeAlcanceOr(categorias, marcas) {
+  // `ubicacionId` se UNE (no reemplaza) al resultado de categorias/marcas: en la práctica
+  // un alcance real es uno u otro (ver POST /sesiones, son mutuamente excluyentes), pero
+  // la función acepta ambos para no tener dos caminos de anti-solape distintos.
+  function skusDeAlcanceOr(categorias, marcas, ubicacionId) {
     const catalogo = db.prepare("SELECT sku, categorias_json, marca FROM catalogo_cache WHERE COALESCE(sku,'')<>''").all();
-    return new Set(
+    const set = new Set(
       catalogo
         .filter(p => productoEnAlcanceOr(parseCategorias(p.categorias_json), p.marca, categorias, marcas))
         .map(p => p.sku)
     );
+    for (const sku of skusDeUbicacion(ubicacionId)) set.add(sku);
+    return set;
   }
 
   // Dos alcances se solapan si existe AL MENOS UN producto real que entra en ambos —
   // no alcanza con comparar categoría-con-categoría/marca-con-marca de forma literal,
   // porque una sesión "categoria=Cascos" y otra "marca=Bell" pueden compartir productos
-  // (ej. "Casco Bell") sin que ningún campo coincida literalmente entre las dos.
+  // (ej. "Casco Bell") sin que ningún campo coincida literalmente entre las dos. Mismo
+  // criterio aplica a ubicación: una sesión por ubicación y otra por marca pueden compartir
+  // SKUs sin que ningún campo coincida literalmente.
   // Semántica OR intencional (conservadora): se mantiene sin cambios.
   function sesionesSolapan(a, b) {
-    const skusA = skusDeAlcanceOr(a.categorias, a.marcas);
+    // Fase 2 (hallazgo del revisor): una ubicación recién creada, todavía sin ningún SKU
+    // asociado (bootstrap), da skusDeUbicacion vacío — el chequeo por SKU de abajo no
+    // detectaría que dos personas abrieron sesión sobre la MISMA ubicación física. El
+    // solape por ubicación se decide por el id, no solo por los SKUs que ya tiene.
+    if (a.ubicacion_id != null && a.ubicacion_id === b.ubicacion_id) return true;
+    const skusA = skusDeAlcanceOr(a.categorias, a.marcas, a.ubicacion_id);
     if (!skusA.size) return false;
-    for (const sku of skusDeAlcanceOr(b.categorias, b.marcas)) {
+    for (const sku of skusDeAlcanceOr(b.categorias, b.marcas, b.ubicacion_id)) {
       if (skusA.has(sku)) return true;
     }
     return false;
@@ -450,9 +543,10 @@ export function inventarioRouter(db, wooCfg) {
   // Congela el alcance de la sesión (qué SKUs y en qué bloque). Se llama al crear
   // la sesión; también de forma perezosa al leer una sesión abierta creada antes
   // de esta versión (o migrada desde el esquema string), para no romperlas.
-  function congelarAlcance(sesionId, categorias, marcas) {
-    const enAlcance = catalogoContable()
-      .filter(p => productoEnAlcance(parseCategorias(p.categorias_json), p.marca, categorias, marcas));
+  function congelarAlcance(sesionId, categorias, marcas, ubicacionId) {
+    const enAlcance = ubicacionId
+      ? (() => { const set = skusDeUbicacion(ubicacionId); return catalogoContable().filter(p => set.has(p.sku)); })()
+      : catalogoContable().filter(p => productoEnAlcance(parseCategorias(p.categorias_json), p.marca, categorias, marcas));
     const escribir = db.transaction(filas => {
       for (const p of filas) {
         const stock = p.stock || 0;
@@ -467,9 +561,19 @@ export function inventarioRouter(db, wooCfg) {
     return enAlcance.length;
   }
 
+  // Fase 2 — captura durante el conteo: si la sesión tiene una ubicación activa, todo SKU
+  // escaneado (o asociado) se asocia solo, sin trabajo extra del operario. INSERT OR IGNORE
+  // porque re-escanear el mismo SKU en la misma ubicación no debe pisar `confirmado_en`
+  // original ni fallar por la PK compuesta.
+  const insertProductoUbicacion = db.prepare(`INSERT OR IGNORE INTO producto_ubicacion
+    (sku, ubicacion_id, principal, confirmado_en, confirmado_por) VALUES (?,?,0,?,?)`);
+  function capturarUbicacion(ubicacionId, sku, usuario) {
+    insertProductoUbicacion.run(sku, ubicacionId, now(), usuario || null);
+  }
+
   function asegurarAlcance(sesion) {
     const n = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=?').get(sesion.id).n;
-    if (n === 0) congelarAlcance(sesion.id, parseLista(sesion.categorias), parseLista(sesion.marcas));
+    if (n === 0) congelarAlcance(sesion.id, parseLista(sesion.categorias), parseLista(sesion.marcas), sesion.ubicacion_id);
   }
 
   router.post('/sesiones', (req, res) => {
@@ -477,8 +581,23 @@ export function inventarioRouter(db, wooCfg) {
     // Acepta el formato nuevo (arrays) y el viejo (string suelto) por compatibilidad.
     const categorias = parseLista(req.body?.categorias ?? req.body?.categoria);
     const marcas = parseLista(req.body?.marcas ?? req.body?.marca);
-    if (!categorias.length && !marcas.length) {
-      return res.status(400).json({ ok: false, error: 'Elegí categoría y/o marca para el alcance.' });
+    const ubicacionId = req.body?.ubicacion_id != null ? parseInt(req.body.ubicacion_id, 10) : null;
+
+    // Fase 2: ubicación es un tipo de alcance alternativo (barrido completo de un lugar
+    // físico), no una tercera dimensión que se combine con categoria/marca — mezclarlas
+    // exigiría definir semántica AND/OR nueva que el plan no especifica todavía (queda
+    // para el planificador de ciclos, Fase 4). Por ahora es uno u otro.
+    if (ubicacionId != null && (categorias.length || marcas.length)) {
+      return res.status(400).json({ ok: false, error: 'Elegí categoría/marca O ubicación, no ambas.' });
+    }
+    if (ubicacionId == null && !categorias.length && !marcas.length) {
+      return res.status(400).json({ ok: false, error: 'Elegí categoría, marca o ubicación para el alcance.' });
+    }
+    if (ubicacionId != null) {
+      const ubicacion = db.prepare('SELECT * FROM ubicaciones WHERE id=?').get(ubicacionId);
+      if (!ubicacion || !ubicacion.activa) {
+        return res.status(400).json({ ok: false, error: 'Esa ubicación no existe o está inactiva.' });
+      }
     }
 
     const propia = db.prepare("SELECT id FROM inventario_sesiones WHERE usuario=? AND estado='abierta'").get(usuario);
@@ -490,8 +609,8 @@ export function inventarioRouter(db, wooCfg) {
     // 'confirmada_con_errores' (falló el ajuste, sigue siendo reintentable después).
     // Una sesión en confirmada_con_errores aún puede reintentarse, así que bloquea
     // que otro usuario cuente el mismo alcance (el reintento pisaría stock_inicial viejo).
-    const abiertas = db.prepare("SELECT usuario, categorias, marcas FROM inventario_sesiones WHERE estado IN ('abierta','confirmada_con_errores')").all();
-    const nueva = { categorias, marcas };
+    const abiertas = db.prepare("SELECT usuario, categorias, marcas, ubicacion_id FROM inventario_sesiones WHERE estado IN ('abierta','confirmada_con_errores')").all();
+    const nueva = { categorias, marcas, ubicacion_id: ubicacionId };
     const choque = abiertas.find(s => sesionesSolapan(s, nueva));
     if (choque) {
       return res.status(409).json({
@@ -505,9 +624,9 @@ export function inventarioRouter(db, wooCfg) {
 
     const creadoEn = now();
     const id = db.prepare(
-      "INSERT INTO inventario_sesiones (usuario, categorias, marcas, estado, creado_en, iniciado_en) VALUES (?,?,?,'abierta',?,?)"
-    ).run(usuario, JSON.stringify(categorias), JSON.stringify(marcas), creadoEn, creadoEn).lastInsertRowid;
-    congelarAlcance(id, categorias, marcas);
+      "INSERT INTO inventario_sesiones (usuario, categorias, marcas, ubicacion_id, estado, creado_en, iniciado_en) VALUES (?,?,?,?,'abierta',?,?)"
+    ).run(usuario, JSON.stringify(categorias), JSON.stringify(marcas), ubicacionId, creadoEn, creadoEn).lastInsertRowid;
+    congelarAlcance(id, categorias, marcas, ubicacionId);
     const sesion = db.prepare('SELECT * FROM inventario_sesiones WHERE id=?').get(id);
     res.json({ ok: true, sesion: sesionOut(sesion) });
   });
@@ -642,6 +761,7 @@ export function inventarioRouter(db, wooCfg) {
         'INSERT INTO inventario_conteos (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, codigo_desconocido, actualizado_en) VALUES (?,?,?,1,?,?,?,?)'
       ).run(sesion.id, ean, sku, enAlcance?.bloque || null, fueraDeAlcance, codigoDesconocido, now()).lastInsertRowid;
     }
+    if (sku && sesion.ubicacion_id) capturarUbicacion(sesion.ubicacion_id, sku, req.user?.username);
     const item = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(itemId);
     res.json({ ok: true, item: itemOut(item), aviso: avisoDeCodigo(item) });
   });
@@ -681,6 +801,7 @@ export function inventarioRouter(db, wooCfg) {
     if (cambio.changes === 0) {
       return res.status(404).json({ ok: false, error: 'No hay ningún ítem escaneado con ese EAN en esta sesión' });
     }
+    if (sesion.ubicacion_id) capturarUbicacion(sesion.ubicacion_id, sku, req.user?.username);
 
     // Un SKU homónimo sí queda asociado al ítem de esta sesión (el operario ya identificó
     // físicamente el conteo), pero NO se siembra ean_sku: ese mapeo global no puede apuntar
@@ -809,12 +930,39 @@ export function inventarioRouter(db, wooCfg) {
       });
     }
 
-    const aCerrarTodos = todos
+    let aCerrarTodos = todos
       ? pendientesDeSesion(sesion.id, 'sin_stock').map(r => r.sku)
       : pedidos;
+
+    // Fase 2 (Rupturas 3 y 6): en una sesión por ubicación, el cierre en cero automático
+    // solo es seguro si la ubicación ya está mapeada Y el SKU no tiene overflow (unidades
+    // registradas en OTRA ubicación además de esta) ni queda sin ubicación registrada.
+    // Se filtra, no se bloquea toda la operación: el resto del barrido sigue funcionando.
+    let excluidosPorUbicacion = [];
+    if (sesion.ubicacion_id) {
+      const ubicacion = db.prepare('SELECT * FROM ubicaciones WHERE id=?').get(sesion.ubicacion_id);
+      if (!ubicacion || ubicacion.estado !== 'mapeada') {
+        return res.status(400).json({
+          ok: false,
+          error: 'Esta ubicación todavía no está marcada como mapeada: el cierre en cero automático no es seguro hasta que la hayas recorrido entera.',
+        });
+      }
+      const seguros = [];
+      for (const sku of aCerrarTodos) {
+        const ubicacionesDelSku = db.prepare('SELECT ubicacion_id FROM producto_ubicacion WHERE sku=?').all(sku).map(r => r.ubicacion_id);
+        if (!ubicacionesDelSku.length || ubicacionesDelSku.some(id => id !== sesion.ubicacion_id)) {
+          excluidosPorUbicacion.push(sku);
+        } else {
+          seguros.push(sku);
+        }
+      }
+      aCerrarTodos = seguros;
+    }
+
     res.json({
       ok: true,
       ...cerrarEnCero(sesion.id, aCerrarTodos, 'sin_stock', todos ? aCerrarTodos : null),
+      ...(excluidosPorUbicacion.length ? { excluidos_por_ubicacion: excluidosPorUbicacion } : {}),
     });
   });
 
