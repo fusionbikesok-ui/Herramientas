@@ -28,10 +28,10 @@ const TEST_DB = './test/tmp-inventario.sqlite';
 const CFG = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
 const now = () => new Date().toISOString();
 
-function buildApp(db, usuario = 'operario1') {
+function buildApp(db, usuario = 'operario1', isAdmin = false) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.user = { username: usuario, is_admin: 0 }; next(); });
+  app.use((req, _res, next) => { req.user = { username: usuario, is_admin: isAdmin ? 1 : 0 }; next(); });
   app.use('/api/inventario', inventarioRouter(db, CFG));
   return app;
 }
@@ -2328,7 +2328,7 @@ describe('Fase 0 — no_contable: sugerencias, confirmación y filtrado del alca
     let opciones = await request(buildApp(db)).get('/api/inventario/alcance-opciones');
     expect(opciones.body.marcas.find(m => m.nombre === 'Fusion Bikes').productos).toBe(2);
 
-    const marcar = await request(buildApp(db)).post('/api/inventario/no-contables').send({ ids_woo: [1] });
+    const marcar = await request(buildApp(db, 'admin', true)).post('/api/inventario/no-contables').send({ ids_woo: [1] });
     expect(marcar.status).toBe(200);
     expect(marcar.body.marcados).toBe(1);
     expect(db.prepare('SELECT no_contable FROM catalogo_cache WHERE id_woo=1').get().no_contable).toBe(1);
@@ -2339,7 +2339,7 @@ describe('Fase 0 — no_contable: sugerencias, confirmación y filtrado del alca
     const preview = await request(buildApp(db)).post('/api/inventario/alcance-preview').send({ marcas: ['Fusion Bikes'] });
     expect(preview.body.productos).toBe(1);
 
-    const revertir = await request(buildApp(db)).post('/api/inventario/no-contables/revertir').send({ ids_woo: [1] });
+    const revertir = await request(buildApp(db, 'admin', true)).post('/api/inventario/no-contables/revertir').send({ ids_woo: [1] });
     expect(revertir.status).toBe(200);
     expect(revertir.body.revertidos).toBe(1);
     expect(db.prepare('SELECT no_contable FROM catalogo_cache WHERE id_woo=1').get().no_contable).toBe(0);
@@ -2353,7 +2353,7 @@ describe('Fase 0 — no_contable: sugerencias, confirmación y filtrado del alca
     insertProducto(db, { id_woo: 1, sku: 'FB-1', stock: 600, marca: 'Fusion Bikes' });
     db.prepare('UPDATE catalogo_cache SET no_contable=1 WHERE id_woo=1').run();
 
-    const res = await request(buildApp(db)).delete('/api/inventario/no-contables').send({ ids_woo: [1] });
+    const res = await request(buildApp(db, 'admin', true)).delete('/api/inventario/no-contables').send({ ids_woo: [1] });
     expect(res.status).toBe(200);
     expect(db.prepare('SELECT no_contable FROM catalogo_cache WHERE id_woo=1').get().no_contable).toBe(0);
   });
@@ -2420,7 +2420,7 @@ describe('Fase 0 — diferencias al confirmar: faltante nunca frena, sobrante gr
     expect(pendientes.body.pendientes[0].id).toBe(fila.id);
 
     setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
-    const aprobar = await request(buildApp(db, 'jose')).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    const aprobar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
     expect(aprobar.status).toBe(200);
     expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 21, 10);
 
@@ -2443,7 +2443,7 @@ describe('Fase 0 — diferencias al confirmar: faltante nunca frena, sobrante gr
     const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
     vi.clearAllMocks();
 
-    const rechazar = await request(buildApp(db, 'jose')).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+    const rechazar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
     expect(rechazar.status).toBe(200);
     expect(setStockWcDelta).not.toHaveBeenCalled();
 
@@ -2530,5 +2530,166 @@ describe('Fase 0 — GET /api/inventario/ritmo', () => {
     expect(res.body.muestras).toBe(3);
     expect(res.body.estimado).toBe(false);
     expect(res.body.ritmo).toBeCloseTo(40, 5);
+  });
+});
+
+// ─── Fase 0 (higiene) — Correcciones del revisor ───────────────────────────────
+describe('ALTO 1: /diferencias/pendientes solo devuelve sobrantes, no faltantes', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('GET /diferencias/pendientes filtra solo tipo=sobrante; un faltante con requiere_revision=1 no aparece', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 1000, precio: 200 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 0, huboVentaDurante: false, stockLive: 1000 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    // Escanear FB-1 con cantidad 0 → faltante grande
+    const esc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc1.body.item.id}`).send({ cantidad: 0 });
+
+    // Escanear FB-2 con cantidad 21 → sobrante grande
+    const esc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc2.body.item.id}`).send({ cantidad: 21 });
+
+    setStockWcDelta.mockResolvedValue({ stockFinal: 0, huboVentaDurante: false, stockLive: 1000 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const pendientes = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/pendientes');
+    expect(pendientes.status).toBe(200);
+    expect(pendientes.body.pendientes).toHaveLength(1);
+    expect(pendientes.body.pendientes[0].tipo).toBe('sobrante');
+    expect(pendientes.body.pendientes[0].sku).toBe('FB-2');
+  });
+});
+
+describe('ALTO 1: /diferencias/:id/aprobar rechaza faltantes con 400', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('intentar aprobar un faltante responde 400 sin tocar Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 1000, precio: 200 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 0, huboVentaDurante: false, stockLive: 1000 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 0 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    vi.clearAllMocks();
+
+    const aprobar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    expect(aprobar.status).toBe(400);
+    expect(aprobar.body.error).toMatch(/Solo los sobrantes/);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+  });
+});
+
+describe('ALTO 2: /diferencias/:id/rechazar borra el conteo de inventario_conteos', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('rechazar un sobrante borra su fila de inventario_conteos; reintentar /confirmar no re-inserta diferencia', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    const conteoBefore = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(conteoBefore).toBeTruthy();
+
+    const rechazar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+    expect(rechazar.status).toBe(200);
+
+    // Verifica que la fila de conteo fue borrada
+    const conteoAfter = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(conteoAfter).toBeUndefined();
+
+    // Reintentar /confirmar ahora debería cerrar la sesión sin volver a crear una diferencia
+    vi.clearAllMocks();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 10, huboVentaDurante: false, stockLive: 10 });
+    const reconf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(reconf.status).toBe(200);
+    expect(reconf.body.ajustados).toBe(0);
+    expect(reconf.body.fallidos).toBe(0);
+
+    // Verifica que no hay una segunda fila de diferencia
+    const difAfterReconf = db.prepare('SELECT COUNT(*) as cnt FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(difAfterReconf.cnt).toBe(1); // Solo la original, revisada
+
+    // Verifica que la sesión llegó a confirmada
+    const sesionFinal = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesionFinal.estado).toBe('confirmada');
+  });
+});
+
+describe('MEDIO 3: /diferencias/:id/aprobar, /rechazar, /no-contables requieren admin', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('POST /diferencias/:id/aprobar sin admin responde 403', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    vi.clearAllMocks();
+
+    // Sin ser admin
+    const aprobar = await request(buildApp(db, 'operario2', false)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    expect(aprobar.status).toBe(403);
+    expect(aprobar.body.error).toMatch(/Requiere administrador/);
+  });
+
+  it('POST /diferencias/:id/rechazar sin admin responde 403', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    vi.clearAllMocks();
+
+    // Sin ser admin
+    const rechazar = await request(buildApp(db, 'operario2', false)).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+    expect(rechazar.status).toBe(403);
+    expect(rechazar.body.error).toMatch(/Requiere administrador/);
+  });
+
+  it('POST /no-contables sin admin responde 403', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Producto', stock: 600 });
+
+    const res = await request(buildApp(db, 'operario1', false)).post('/api/inventario/no-contables').send({ ids_woo: [1] });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Requiere administrador/);
+  });
+
+  it('POST /no-contables/revertir sin admin responde 403', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Producto', stock: 600, no_contable: 1 });
+
+    const res = await request(buildApp(db, 'operario1', false)).post('/api/inventario/no-contables/revertir').send({ ids_woo: [1] });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Requiere administrador/);
   });
 });
