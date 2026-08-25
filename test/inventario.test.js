@@ -2081,3 +2081,75 @@ describe('Código escaneado que no existe en el catálogo', () => {
     expect(r.body.item.sin_asociar).toBe(true);
   });
 });
+
+describe('Hallazgo #1 — ítem fuera de alcance real no falla al confirmar', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('sesión con alcance de marca X: escanear SKU en alcance + SKU real fuera de alcance → ambos se ajustan sin error', async () => {
+    const db = openDb(TEST_DB);
+    // Productos: FB-1 marca Bell (en alcance), FB-9 marca Giro (fuera de alcance)
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-9', marca: 'Giro', stock: 3 });
+
+    // Crear sesión con alcance de marca Bell
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const idSesion = crear.body.sesion.id;
+
+    // Escanear FB-1 (en alcance)
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-1' });
+
+    // Escanear FB-9 (producto real pero fuera de alcance)
+    const escan = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-9' });
+    expect(escan.status).toBe(200);
+    expect(escan.body.item.fuera_de_alcance).toBe(true);
+    expect(escan.body.item.sku).toBe('FB-9');
+
+    // Al confirmar, ambos ítems deben ajustarse sin error.
+    // El FB-9 ya debe tener una fila en inventario_sesion_alcance (insertada en el escaneo)
+    // con stock_inicial=3, así que setStockWcDelta no falla.
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/confirmar`);
+
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(2);
+    expect(conf.body.fallidos).toBe(0);
+    // Verificar que setStockWcDelta fue llamado con stock_inicial para FB-9 (que es 3)
+    const llamadaFB9 = Array.from({ length: setStockWcDelta.mock.calls.length })
+      .map((_, i) => setStockWcDelta.mock.calls[i])
+      .find(call => call[2] === 'FB-9');
+    expect(llamadaFB9).toBeDefined();
+    expect(llamadaFB9[4]).toBe(3); // stock_inicial debe ser 3
+  });
+});
+
+describe('Hallazgo #3 — solapamiento bloquea sesiones en confirmada_con_errores', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('no se puede crear sesión si hay otra en confirmada_con_errores que solapa el alcance', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+
+    // Juan crea una sesión con marca Bell y la deja en confirmada_con_errores
+    const crear1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id1 = crear1.body.sesion.id;
+
+    // Escanear un ítem
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id1}/escanear`).send({ codigo: 'FB-1' });
+
+    // Confirmar con error (mockeamos para que falle)
+    setStockWcDelta.mockRejectedValue(new Error('Woo error'));
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id1}/confirmar`);
+    expect(conf.status).toBe(200);
+    expect(conf.body.fallidos).toBe(1);
+
+    // Verificar que la sesión quedó en confirmada_con_errores
+    const sesion1 = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id1);
+    expect(sesion1.estado).toBe('confirmada_con_errores');
+
+    // Otro usuario (o el mismo) intenta crear una sesión que solapa con marca Bell → debe devolver 409
+    const crear2 = await request(buildApp(db, 'maria')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    expect(crear2.status).toBe(409);
+    expect(crear2.body.error).toMatch(/se cruza/i);
+    expect(crear2.body.ocupada_por).toBe('juan');
+  });
+});

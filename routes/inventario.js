@@ -1,6 +1,6 @@
 import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { setStockWc, setStockWcDelta } from '../lib/wooStock.js';
+import { setStockWcDelta } from '../lib/wooStock.js';
 import { looksLikeGtin, subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
 export { looksLikeGtin as looksLikeEan } from '../lib/gtinWoo.js';
@@ -398,12 +398,16 @@ export function inventarioRouter(db, wooCfg) {
       return res.status(400).json({ ok: false, error: 'Elegí categoría y/o marca para el alcance.' });
     }
 
-    const propia = db.prepare("SELECT id FROM inventario_sesiones WHERE usuario=? AND estado='abierta'").get(usuario);
+    const propia = db.prepare("SELECT id FROM inventario_sesiones WHERE usuario=? AND estado IN ('abierta','confirmada_con_errores')").get(usuario);
     if (propia) {
       return res.status(409).json({ ok: false, error: 'Ya tenés una sesión abierta. Retomala o descartala antes de crear otra.' });
     }
 
-    const abiertas = db.prepare("SELECT usuario, categorias, marcas FROM inventario_sesiones WHERE estado='abierta'").all();
+    // El chequeo de solapamiento incluye ambos estados: 'abierta' (en curso) y
+    // 'confirmada_con_errores' (falló el ajuste, sigue siendo reintentable después).
+    // Una sesión en confirmada_con_errores aún puede reintentarse, así que bloquea
+    // que otro usuario cuente el mismo alcance (el reintento pisaría stock_inicial viejo).
+    const abiertas = db.prepare("SELECT usuario, categorias, marcas FROM inventario_sesiones WHERE estado IN ('abierta','confirmada_con_errores')").all();
     const nueva = { categorias, marcas };
     const choque = abiertas.find(s => sesionesSolapan(s, nueva));
     if (choque) {
@@ -519,6 +523,25 @@ export function inventarioRouter(db, wooCfg) {
       ? db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku)
       : null;
     const fueraDeAlcance = sku && !enAlcance ? 1 : 0;
+
+    // Hallazgo #1: Si el ítem es REAL (SKU existe) pero NO está en el alcance original,
+    // inserta una fila ahora en inventario_sesion_alcance con el stock actual congelado.
+    // Esto evita que setStockWcDelta falle con "stockInicial requerido" al confirmar.
+    // Lee el stock desde catalogo_cache (misma fuente que congelarAlcance al abrir sesión).
+    if (fueraDeAlcance && sku && !codigoDesconocido) {
+      const prod = db.prepare(
+        'SELECT nombre, marca, categorias_json, stock FROM catalogo_cache WHERE sku=? LIMIT 1'
+      ).get(sku);
+      if (prod) {
+        const stock = prod.stock || 0;
+        const bloque = stock > 0 ? 'con_stock' : 'sin_stock';
+        insertAlcance.run(
+          sesion.id, sku, prod.nombre, prod.marca,
+          parseCategorias(prod.categorias_json)[0] || null,
+          stock, bloque
+        );
+      }
+    }
 
     const existente = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
     let itemId;
