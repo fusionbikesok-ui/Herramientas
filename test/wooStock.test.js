@@ -214,5 +214,44 @@ describe('wooStock', () => {
       const row = db.prepare('SELECT stock FROM catalogo_cache WHERE id_woo = 100').get();
       expect(row.stock).toBe(3);
     });
+
+    it('lanza error fail-closed cuando stockLive > stockInicial (ingreso durante conteo)', async () => {
+      // stock_inicial=5, stock_live=8 (se recibieron 3 unidades), cantidad_contada=8
+      // El aumento de stock no es una venta, es un ingreso externo. No hacemos PUT.
+      wooFetch.mockResolvedValue({ status: 200, data: { stock_quantity: 8 } });
+      await expect(setStockWcDelta(WOO_CFG, db, 'BIKE-001', 8, 5))
+        .rejects.toThrow('Stock aumentó durante el conteo');
+      // Solo se hizo el GET para leer stock_live, pero NO el PUT
+      expect(wooFetch).toHaveBeenCalledTimes(1);
+      expect(wooFetch).toHaveBeenCalledWith(WOO_CFG, '/products/100');
+    });
+
+    it('permite sobrante sin cambio de stockLive: stockInicial=5, stockLive=5, contada=8', async () => {
+      // Sin cambio de stock_live, no hay señal de ingreso externo. Es un sobrante puro de conteo.
+      // delta = 8 - 5 = 3, stockFinal = 5 + 3 = 8. Debe funcionar normalmente.
+      wooFetch.mockResolvedValue({ status: 200, data: { stock_quantity: 5 } });
+      const resultado = await setStockWcDelta(WOO_CFG, db, 'BIKE-001', 8, 5);
+
+      expect(resultado.stockFinal).toBe(8);
+      expect(resultado.huboVentaDurante).toBe(false);
+      expect(wooFetch).toHaveBeenCalledWith(
+        WOO_CFG, '/products/100', 'put',
+        { stock_quantity: 8, manage_stock: true }
+      );
+    });
+
+    it('venta normal sigue funcionando igual: stockLive < stockInicial', async () => {
+      // stock_inicial=10, stock_live=8 (se vendieron 2), cantidad_contada=7
+      // delta = 7 - 10 = -3, stockFinal = 8 + (-3) = 5. Venta detectada.
+      wooFetch.mockResolvedValue({ status: 200, data: { stock_quantity: 8 } });
+      const resultado = await setStockWcDelta(WOO_CFG, db, 'BIKE-001', 7, 10);
+
+      expect(resultado.stockFinal).toBe(5);
+      expect(resultado.huboVentaDurante).toBe(true);
+      expect(wooFetch).toHaveBeenCalledWith(
+        WOO_CFG, '/products/100', 'put',
+        { stock_quantity: 5, manage_stock: true }
+      );
+    });
   });
 });

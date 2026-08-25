@@ -1087,9 +1087,42 @@ la cantidad a mano). Nunca pisa un conteo hecho a mano (`INSERT OR
 IGNORE`) ni toca el bloque con-stock. `400` si la sesión no está abierta.
 
 ### POST /api/inventario/sesiones/:id/confirmar
-Sin cambios en la lógica: claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
+**Ajuste por delta contra stock live (no absoluto):** cada ítem ajusta su stock en Woo
+aplicando un delta: `delta = cantidadContada - stockInicial`, luego `stockFinal = stockLive + delta`.
+Esto preserva las ventas que ocurrieron durante el conteo y evita sobre-publicar stock.
+Claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
 **fail-closed por ítem** al escribir a Woo (un PUT fallido no aborta el resto; la sesión
 queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
+**Fail-closed adicional:** si `stockLive > stockInicial` durante el conteo (detección de
+ingreso externo de mercadería o error de medición inicial), el ítem se rechaza sin PUT
+a Woo y cae en fallidos para revisión manual.
+
+**Respuesta 200:**
+```json
+{
+  "ok": true,
+  "ajustados": 5,
+  "fallidos": 0,
+  "errores": [],
+  "ventasDuranteConteo": [
+    {
+      "sku": "FB-1",
+      "stock_al_abrir_sesion": 10,
+      "stock_al_confirmar": 8,
+      "stock_final": 7
+    }
+  ]
+}
+```
+- `ajustados`: cantidad de ítems ajustados exitosamente en Woo.
+- `fallidos`: cantidad de ítems que fallaron (quedan en `inventario_conteos.ajustado_en = NULL`).
+- `errores`: array de `{ sku, error }` para cada ítem fallido.
+- `ventasDuranteConteo`: array (opcional, solo presente si hubo al menos una venta detectada).
+  Cada entrada contiene:
+  - `sku`: el SKU donde se detectó la venta.
+  - `stock_al_abrir_sesion`: el `stock_inicial` congelado al crear la sesión.
+  - `stock_al_confirmar`: el `stockLive` leído de WC al momento de ajustar.
+  - `stock_final`: el stock que se escribió en Woo tras aplicar el delta.
 
 **Respuesta 409:** corta **antes** de tocar Woo. Dos escenarios:
 
