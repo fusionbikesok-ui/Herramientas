@@ -78,13 +78,13 @@
 
   <div class="scanrow">
     <input id="q" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-           placeholder="Escaneá o tipeá SKU / EAN…">
+           placeholder="Escaneá o tipeá SKU / EAN…" aria-label="Ingresá SKU o EAN para buscar">
     <button class="btn" id="btn-buscar">Buscar</button>
-    <button class="btn sec" id="btn-cam">📷</button>
+    <button class="btn sec" id="btn-cam" aria-label="Abrir cámara para escanear código">📷</button>
   </div>
   <div class="hint">Escaneá con el lector, tipeá con el teclado o usá la cámara 📷. Después de cada consulta la caja se vacía para el próximo código.</div>
 
-  <div id="result" class="result"></div>
+  <div id="result" class="result" role="status" aria-live="polite"></div>
 
   <div class="hist" id="hist" style="display:none">
     <div class="hist-h">Consultas recientes</div>
@@ -124,7 +124,7 @@ var historial = [];
 function focusInput(){ if(document.getElementById('cam-modal').classList.contains('open')) return; try{ qEl.focus(); qEl.select(); }catch(e){} }
 
 function cardHtml(p, tipo){
-  var img = p.img ? '<img src="'+esc(p.img)+'" alt="">' : '<div class="noimg">sin foto</div>';
+  var img = p.img ? '<img src="'+esc(p.img)+'" alt="'+esc(p.nombre)+'">' : '<div class="noimg">sin foto</div>';
   var cat = (p.categorias && p.categorias.length) ? esc(p.categorias.join(' · ')) : '';
   var badge = tipo === 'ean' ? '<span class="badge b-ean">por EAN</span>' : '<span class="badge b-sku">por SKU</span>';
   return '<div class="card">' + img +
@@ -153,9 +153,12 @@ function pushHistorial(p, tipo){
   });
 }
 
-function mostrarEncontrado(p, tipo){
+function mostrarEncontrado(p, tipo, estado){
   resultEl.innerHTML = cardHtml(p, tipo);
-  pushHistorial(p, tipo);
+  // No agregar al historial si el estado es 'conflicto' (operación no cerrada)
+  if(!estado || estado.estado !== 'conflicto') {
+    pushHistorial(p, tipo);
+  }
 }
 
 // ---- Flujo EAN nuevo / huérfano: pedir el SKU ----
@@ -165,7 +168,7 @@ function mostrarAprender(ean, textoTitulo){
       '<div>'+esc(textoTitulo)+'</div>' +
       '<div style="font-size:12px;color:var(--muted);margin-top:4px">EAN: '+esc(ean)+'</div>' +
       '<div class="learn">' +
-        '<input id="sku-input" placeholder="Buscá el SKU o nombre del producto…" autocomplete="off">' +
+        '<input id="sku-input" placeholder="Buscá el SKU o nombre del producto…" autocomplete="off" aria-label="Buscar SKU o nombre del producto">' +
         '<div class="sugs" id="sugs" style="display:none"></div>' +
       '</div>' +
     '</div>';
@@ -197,7 +200,7 @@ function mostrarEstadoCodigo(codigo){
   var textos = {
     subido: 'Código guardado en WooCommerce y asociado localmente.',
     no_valido: 'Se guardó la asociación local. El código no tiene un formato GTIN válido y no se subió a WooCommerce.',
-    fallo: 'Se guardó la asociación local, pero WooCommerce no aceptó el código: ' + (codigo.error || 'error desconocido'),
+    fallo: 'Se guardó la asociación local, pero ' + (codigo.error || 'WooCommerce no aceptó el código'),
   };
   if(codigo.estado === 'conflicto') return '<div class="msg warn" style="margin-top:10px">Este producto ya tiene el código <b>'+esc(codigo.gtin_actual)+'</b>. No se modificó Woo.<br><button class="btn sec" id="btn-pisar-ean" type="button" style="margin-top:10px">Reemplazarlo por '+esc(codigo.gtin)+'</button></div>';
   var clase = codigo.estado === 'fallo' ? 'warn' : (codigo.estado === 'subido' ? 'ok' : '');
@@ -211,12 +214,17 @@ async function ensenarEan(ean, sku, idWoo, pisarCodigo){
   });
   var d = await r.json();
   if(!d.ok){ resultEl.innerHTML = '<div class="msg err">'+esc(d.error||'No se pudo guardar')+'</div>'; return; }
-  mostrarEncontrado(d.producto, 'ean');
+  mostrarEncontrado(d.producto, 'ean', d.codigo);
   var estado = mostrarEstadoCodigo(d.codigo);
   if(estado){ resultEl.insertAdjacentHTML('beforeend', estado); }
   var pisar = document.getElementById('btn-pisar-ean');
   if(pisar) pisar.onclick = function(){ ensenarEan(ean, sku, idWoo, true); };
-  focusInput();
+  // Enfocar el botón de confirmación si hay conflicto; de otro modo, enfocar el input de búsqueda
+  if(d.codigo && (d.codigo.estado === 'conflicto' || d.codigo.estado === 'conflicto_mapa') && pisar) {
+    pisar.focus();
+  } else {
+    focusInput();
+  }
 }
 
 // ---- Búsqueda ----

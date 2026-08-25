@@ -56,15 +56,41 @@ export function consultaPreciosRouter(db, cfg = {}) {
     ON CONFLICT(ean) DO UPDATE SET sku = excluded.sku, actualizado_en = excluded.actualizado_en
   `);
 
-  function guardarMapa(ean, sku) {
+  function guardarMapa(ean, sku, pisarMapa = false) {
+    // Fix 3: validar conflicto de mapa antes de escribir
+    const existente = eanRow.get(ean);
+    if (existente && existente.sku !== sku && !pisarMapa) {
+      return { conflicto: true, skuActual: existente.sku };
+    }
     guardarEan.run(ean, sku, now());
+    return { ok: true };
   }
 
   function resolverProducto({ sku, idWoo }) {
-    if (idWoo != null && idWoo !== '') return porId.get(Number(idWoo));
+    if (idWoo != null && idWoo !== '') {
+      // Fix 2: validación mejorada de id_woo sin coerción peligrosa
+      if (typeof idWoo === 'number') {
+        if (!Number.isInteger(idWoo)) return null; // id_woo no es entero
+      } else if (typeof idWoo === 'string') {
+        // Aceptar solo strings que sean dígitos puros (sin decimales)
+        if (!/^[0-9]+$/.test(idWoo.trim())) return null;
+      } else {
+        // Rechazar boolean, array, object, etc
+        return null;
+      }
+      const fila = porId.get(Number(idWoo));
+      if (!fila || !fila.sku) return null; // fila sin sku no es válida
+      // Fix 1: validar coherencia sku↔id_woo si vienen ambos
+      if (sku && fila.sku !== sku) {
+        return { incoherente: true, skuEncontrado: fila.sku };
+      }
+      return fila;
+    }
     const cantidad = contarPorSku.get(sku);
     if (cantidad.n > 1) return { ambiguo: cantidad.n };
-    return porSku.get(sku);
+    const fila = porSku.get(sku);
+    if (fila && !fila.sku) return null; // fila sin sku no es válida
+    return fila;
   }
 
   // Búsqueda unificada: SKU exacto → EAN conocido → ¿parece EAN nuevo? → nada.
@@ -91,7 +117,25 @@ export function consultaPreciosRouter(db, cfg = {}) {
     const ean = String(req.body?.ean || '').trim();
     const sku = String(req.body?.sku || '').trim();
     const idWoo = req.body?.id_woo;
+    const pisarMapa = req.body?.pisar_mapa === true;
     if (!ean || !sku) return res.status(400).json({ ok: false, error: 'ean y sku requeridos' });
+
+    // Validar id_woo si viene (Fix 2: rechazar tipos peligrosos)
+    if (idWoo != null && idWoo !== '') {
+      if (typeof idWoo === 'number') {
+        if (!Number.isInteger(idWoo)) {
+          return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
+        }
+      } else if (typeof idWoo === 'string') {
+        if (!/^[0-9]+$/.test(idWoo.trim())) {
+          return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
+        }
+      } else {
+        // Rechazar boolean, array, object, etc
+        return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
+      }
+    }
+
     const fila = resolverProducto({ sku, idWoo });
     if (fila?.ambiguo) {
       return res.status(400).json({
@@ -100,8 +144,29 @@ export function consultaPreciosRouter(db, cfg = {}) {
         error: `El SKU '${sku}' es ambiguo: hay ${fila.ambiguo} productos. Especificá el id_woo.`,
       });
     }
-    if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
-    guardarMapa(ean, sku);
+    // Fix 1: validar incoherencia sku↔id_woo
+    if (fila?.incoherente) {
+      return res.status(400).json({
+        ok: false,
+        codigo: 'sku_id_woo_incoherente',
+        error: `El id_woo ${idWoo} tiene SKU '${fila.skuEncontrado}', pero pediste '${sku}'. No coinciden.`,
+      });
+    }
+    if (!fila) {
+      if (idWoo != null && idWoo !== '') {
+        return res.status(400).json({ ok: false, error: `id_woo ${idWoo} no existe o no tiene SKU asignado` });
+      }
+      return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    }
+    // Fix 3: manejar conflicto de mapa
+    const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
+    if (mapResult.conflicto && !pisarMapa) {
+      return res.json({
+        ok: true,
+        producto: productoParaCard(fila),
+        codigo: { estado: 'conflicto_mapa', sku_actual: mapResult.skuActual, ean },
+      });
+    }
     res.json({ ok: true, producto: productoParaCard(fila) });
   });
 
@@ -112,7 +177,24 @@ export function consultaPreciosRouter(db, cfg = {}) {
     const sku = String(req.body?.sku || '').trim();
     const idWoo = req.body?.id_woo;
     const pisarCodigo = req.body?.pisar_codigo === true;
+    const pisarMapa = req.body?.pisar_mapa === true;
     if (!ean || !sku) return res.status(400).json({ ok: false, error: 'ean y sku requeridos' });
+
+    // Validar id_woo si viene (Fix 2: rechazar tipos peligrosos)
+    if (idWoo != null && idWoo !== '') {
+      if (typeof idWoo === 'number') {
+        if (!Number.isInteger(idWoo)) {
+          return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
+        }
+      } else if (typeof idWoo === 'string') {
+        if (!/^[0-9]+$/.test(idWoo.trim())) {
+          return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
+        }
+      } else {
+        // Rechazar boolean, array, object, etc
+        return res.status(400).json({ ok: false, error: `id_woo debe ser un número entero, recibido: ${idWoo}` });
+      }
+    }
 
     const fila = resolverProducto({ sku, idWoo });
     if (fila?.ambiguo) {
@@ -122,11 +204,31 @@ export function consultaPreciosRouter(db, cfg = {}) {
         error: `El SKU '${sku}' es ambiguo: hay ${fila.ambiguo} productos. Especificá el id_woo.`,
       });
     }
-    if (!fila) return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    // Fix 1: validar incoherencia sku↔id_woo
+    if (fila?.incoherente) {
+      return res.status(400).json({
+        ok: false,
+        codigo: 'sku_id_woo_incoherente',
+        error: `El id_woo ${idWoo} tiene SKU '${fila.skuEncontrado}', pero pediste '${sku}'. No coinciden.`,
+      });
+    }
+    if (!fila) {
+      if (idWoo != null && idWoo !== '') {
+        return res.status(400).json({ ok: false, error: `id_woo ${idWoo} no existe o no tiene SKU asignado` });
+      }
+      return res.status(400).json({ ok: false, error: `SKU "${sku}" no está en el catálogo` });
+    }
 
     const codigoBase = { gtin: ean };
     if (!looksLikeGtin(ean)) {
-      guardarMapa(ean, fila.sku);
+      const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
+      if (mapResult.conflicto && !pisarMapa) {
+        return res.json({
+          ok: true,
+          producto: productoParaCard(fila),
+          codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
+        });
+      }
       return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'no_valido' } });
     }
 
@@ -140,13 +242,27 @@ export function consultaPreciosRouter(db, cfg = {}) {
     }
 
     if (gtinActual === ean) {
-      guardarMapa(ean, fila.sku);
+      const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
+      if (mapResult.conflicto && !pisarMapa) {
+        return res.json({
+          ok: true,
+          producto: productoParaCard(fila),
+          codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
+        });
+      }
       return res.json({ ok: true, producto: productoParaCard(fila), codigo: { ...codigoBase, estado: 'sin_cambio' } });
     }
 
     const woo = await subirGtinAWoo(cfg, fila, ean);
     if (!woo.ok) {
-      guardarMapa(ean, fila.sku);
+      const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
+      if (mapResult.conflicto && !pisarMapa) {
+        return res.json({
+          ok: true,
+          producto: productoParaCard(fila),
+          codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
+        });
+      }
       return res.json({
         ok: true,
         producto: productoParaCard(fila),
@@ -155,6 +271,15 @@ export function consultaPreciosRouter(db, cfg = {}) {
     }
 
     persistirGtinConfirmado(db, fila, ean, fila.sku);
+    const mapResult = guardarMapa(ean, fila.sku, pisarMapa);
+    if (mapResult.conflicto && !pisarMapa) {
+      const actualizado = porId.get(fila.id_woo) || fila;
+      return res.json({
+        ok: true,
+        producto: productoParaCard(actualizado),
+        codigo: { ...codigoBase, estado: 'conflicto_mapa', sku_actual: mapResult.skuActual },
+      });
+    }
     const actualizado = porId.get(fila.id_woo) || fila;
     return res.json({ ok: true, producto: productoParaCard(actualizado), codigo: { ...codigoBase, estado: 'subido' } });
   });
