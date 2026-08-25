@@ -140,6 +140,32 @@ describe('Fase 4 — GET /api/inventario/plan-hoy', () => {
     expect(res.body.propuesta.dias_sin_contar_max).toBeNull(); // FB-1 nunca contado -> Infinity -> null en la respuesta... ver nota abajo
   });
 
+  it('un SKU no_contable asociado a una ubicación no domina su urgencia ni infla productos (hallazgo del revisor)', async () => {
+    const db = openDb(TEST_DB);
+    // FB-1 real, contado hace 2 días (fresco). FB-DESCONTINUADO: no_contable=1, nunca
+    // contado — sin el filtro contra catalogoContable(), su Infinity ganaría la urgencia
+    // y esta ubicación quedaría propuesta para siempre aunque FB-1 esté al día.
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'MarcaX', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-DESCONTINUADO', marca: 'MarcaX', stock: 0 });
+    db.prepare("UPDATE catalogo_cache SET no_contable=1 WHERE sku='FB-DESCONTINUADO'").run();
+    const app = buildApp(db, 'jose');
+    const ubic = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'A', estante: '1' });
+    const id = ubic.body.ubicacion.id;
+    db.prepare('INSERT INTO producto_ubicacion (sku, ubicacion_id, principal, confirmado_en, confirmado_por) VALUES (?,?,0,?,?)')
+      .run('FB-1', id, now(), 'jose');
+    db.prepare('INSERT INTO producto_ubicacion (sku, ubicacion_id, principal, confirmado_en, confirmado_por) VALUES (?,?,0,?,?)')
+      .run('FB-DESCONTINUADO', id, now(), 'jose');
+    await request(app).post(`/api/inventario/ubicaciones/${id}/mapear`);
+    const hace2dias = new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString();
+    db.prepare(`INSERT INTO sku_ultimo_conteo (sku, contado_en, sesion_id, por_omision) VALUES ('FB-1', ?, 1, 0)`).run(hace2dias);
+
+    const res = await request(app).get('/api/inventario/plan-hoy');
+    expect(res.body.propuesta.tipo).toBe('ubicacion');
+    expect(res.body.propuesta.productos).toBe(1); // solo FB-1, no_contable queda afuera
+    expect(res.body.propuesta.dias_sin_contar_max).toBe(2); // no Infinity/null por el descontinuado
+  });
+
+
   it('dimensiona la propuesta con el ritmo (fallback 20/h sin historial -> 40 en 2h)', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', categorias_json: '["CASCOS"]', stock: 5 });

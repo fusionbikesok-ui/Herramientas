@@ -1391,12 +1391,18 @@ export function inventarioRouter(db, wooCfg) {
     const contables = catalogoContable();
 
     const ubicacionesMapeadas = db.prepare("SELECT * FROM ubicaciones WHERE estado='mapeada' AND activa=1").all();
+    // Hallazgo del revisor: producto_ubicacion puede tener SKUs descontinuados o marcados
+    // no_contable (nada los poda al día de hoy). Sin filtrar contra el catálogo contable,
+    // un SKU muerto con dias_sin_contar=Infinity fijaba la urgencia de su ubicación para
+    // siempre, aunque el resto de sus productos reales estuviera al día.
+    const skusContablesSet = new Set(contables.map(p => p.sku));
     let propuesta = null;
     let mejorUrgencia = -Infinity;
     for (const u of ubicacionesMapeadas) {
-      const skusU = db.prepare('SELECT sku FROM producto_ubicacion WHERE ubicacion_id=?').all(u.id).map(r => r.sku);
+      const skusU = db.prepare('SELECT sku FROM producto_ubicacion WHERE ubicacion_id=?').all(u.id)
+        .map(r => r.sku).filter(sku => skusContablesSet.has(sku));
       if (!skusU.length) continue;
-      const urgencia = Math.max(...skusU.map(diasSinContar));
+      const urgencia = skusU.reduce((max, sku) => Math.max(max, diasSinContar(sku)), -Infinity);
       if (urgencia > mejorUrgencia) {
         mejorUrgencia = urgencia;
         propuesta = {
