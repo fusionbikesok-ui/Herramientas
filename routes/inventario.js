@@ -1,6 +1,6 @@
 import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { setStockWc } from '../lib/wooStock.js';
+import { setStockWc, setStockWcDelta } from '../lib/wooStock.js';
 import { looksLikeGtin, subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
 export { looksLikeGtin as looksLikeEan } from '../lib/gtinWoo.js';
@@ -798,9 +798,26 @@ export function inventarioRouter(db, wooCfg) {
     const pendientesDeAjustar = todos.filter(i => !i.ajustado_en);
     let ajustados = 0, fallidos = 0;
     const errores = [];
+    const ventasDuranteConteo = [];
     for (const item of pendientesDeAjustar) {
       try {
-        await setStockWc(wooCfg, db, item.sku, item.cantidad);
+        // Lee el stock_inicial de la sesión (congelado al crear la sesión).
+        const alcance = db.prepare(
+          'SELECT stock_inicial FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?'
+        ).get(sesion.id, item.sku);
+        const stockInicial = alcance?.stock_inicial;
+
+        // Ajusta por delta contra el stock que se leyó al inicio del conteo.
+        // Si hubo venta durante el conteo, lo registra para visibilidad en la respuesta.
+        const resultado = await setStockWcDelta(wooCfg, db, item.sku, item.cantidad, stockInicial);
+        if (resultado.huboVentaDurante) {
+          ventasDuranteConteo.push({
+            sku: item.sku,
+            stock_inicial: resultado.stockLive,
+            stock_final: resultado.stockFinal,
+          });
+        }
+
         db.prepare('UPDATE inventario_conteos SET ajustado_en=? WHERE id=?').run(now(), item.id);
         ajustados++;
       } catch (e) {
@@ -815,7 +832,11 @@ export function inventarioRouter(db, wooCfg) {
     db.prepare("UPDATE inventario_sesiones SET estado=?, confirmado_en=?, confirmado_por=? WHERE id=? AND estado='confirmando'")
       .run(estadoFinal, now(), req.user?.username || null, sesion.id);
 
-    res.json({ ok: true, ajustados, fallidos, errores });
+    const respuesta = { ok: true, ajustados, fallidos, errores };
+    if (ventasDuranteConteo.length > 0) {
+      respuesta.ventasDuranteConteo = ventasDuranteConteo;
+    }
+    res.json(respuesta);
   });
 
   router.get('/sesiones', (req, res) => {
