@@ -524,6 +524,11 @@ export function inventarioRouter(db, wooCfg) {
   // SKUs sin que ningún campo coincida literalmente.
   // Semántica OR intencional (conservadora): se mantiene sin cambios.
   function sesionesSolapan(a, b) {
+    // Fase 2 (hallazgo del revisor): una ubicación recién creada, todavía sin ningún SKU
+    // asociado (bootstrap), da skusDeUbicacion vacío — el chequeo por SKU de abajo no
+    // detectaría que dos personas abrieron sesión sobre la MISMA ubicación física. El
+    // solape por ubicación se decide por el id, no solo por los SKUs que ya tiene.
+    if (a.ubicacion_id != null && a.ubicacion_id === b.ubicacion_id) return true;
     const skusA = skusDeAlcanceOr(a.categorias, a.marcas, a.ubicacion_id);
     if (!skusA.size) return false;
     for (const sku of skusDeAlcanceOr(b.categorias, b.marcas, b.ubicacion_id)) {

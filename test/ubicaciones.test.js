@@ -104,6 +104,23 @@ describe('sesión con alcance por ubicación', () => {
     expect(res.status).toBe(400);
   });
 
+  it('dos sesiones sobre la MISMA ubicación recién creada (sin ningún SKU todavía) se rechazan', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    const ubic = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'A', estante: '1' });
+    const ubicacionId = ubic.body.ubicacion.id;
+
+    const s1 = await request(buildApp(db, 'jose')).post('/api/inventario/sesiones').send({ ubicacion_id: ubicacionId });
+    expect(s1.status).toBe(200);
+
+    // Ubicación todavía sin ningún SKU asociado (bootstrap): el chequeo por SKU
+    // compartido no alcanzaría a detectar el choque, así que hace falta comparar
+    // el id de ubicación directamente (hallazgo del revisor, 2026-08-25).
+    const s2 = await request(buildApp(db, 'joaco')).post('/api/inventario/sesiones').send({ ubicacion_id: ubicacionId });
+    expect(s2.status).toBe(409);
+    expect(s2.body.ocupada_por).toBe('jose');
+  });
+
   it('captura automática: escanear un SKU dentro de la sesión lo asocia solo a la ubicación activa', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', stock: 5, no_contable: 0 });

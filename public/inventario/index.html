@@ -1041,6 +1041,10 @@
       buscarCategorias.value = '';
       buscarMarcas.value = '';
     }
+    // Hallazgo del revisor: sin esto, el aviso "alcance grande" de una selección anterior
+    // por categoría/marca quedaba pegado en pantalla mostrando un número que ya no
+    // corresponde a la ubicación elegida.
+    previewActual = null;
     renderInfoUbicacion();
     renderAlcance();
   });
