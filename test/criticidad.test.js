@@ -61,6 +61,26 @@ describe('ensureVentasHistorialTables', () => {
 });
 
 describe('backfillVentas — WooCommerce', () => {
+  it('el mismo SKU en dos line_items de una misma orden se SUMA, no se pierde uno de los dos', async () => {
+    const db = openDb(TEST_DB);
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [] } });
+    wooFetch.mockResolvedValueOnce({
+      headers: { 'x-wp-totalpages': '1' },
+      data: [{
+        id: 200, date_created: '2026-08-01T00:00:00',
+        line_items: [
+          { sku: 'FB-1', quantity: 2, price: 500, total: '1000' },
+          { sku: 'FB-1', quantity: 3, price: 500, total: '1500' }, // mismo SKU, otra línea
+        ],
+      }],
+    });
+    const r = await backfillVentas(db, CFG);
+    expect(r.woo.insertados).toBe(1); // una sola fila por (canal, orden, sku)
+    const rows = db.prepare('SELECT * FROM ventas_historial WHERE canal=?').all('woo');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cantidad).toBe(5); // 2 + 3, no se perdió la segunda línea
+  });
+
   it('inserta ventas de line_items con sku, ignora los que no tienen', async () => {
     const db = openDb(TEST_DB);
     mlFetch.mockResolvedValue({ status: 200, data: { results: [] } });
