@@ -295,5 +295,46 @@ export function openDb(dbPath) {
     `);
   } catch (_) {}
 
+  // Fase 0 (higiene) — Tarea 1: productos "no contables" (servicios, cargos, gift cards)
+  // que ensucian el universo de inventario físico. Nunca se borran ni se excluyen del
+  // catálogo en general: solo se sacan del alcance de una sesión de conteo.
+  try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN no_contable INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+
+  // Fase 0 — Tarea 2: auditoría de diferencias detectadas al confirmar una sesión de
+  // inventario, y freno explícito para sobrantes grandes (ver routes/inventario.js
+  // /sesiones/:id/confirmar y /diferencias/*). stock_inicial_usado permite reconstruir
+  // el llamado a setStockWcDelta al aprobar un sobrante frenado, sin volver a leer nada.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS inventario_diferencias (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sesion_id INTEGER NOT NULL,
+    sku TEXT NOT NULL,
+    cantidad_esperada INTEGER NOT NULL,
+    cantidad_contada INTEGER NOT NULL,
+    diferencia INTEGER NOT NULL,
+    valor_diferencia REAL,
+    tipo TEXT NOT NULL,
+    requiere_revision INTEGER NOT NULL DEFAULT 0,
+    revisado_en TEXT,
+    revisado_por TEXT,
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec('ALTER TABLE inventario_diferencias ADD COLUMN stock_inicial_usado INTEGER'); } catch (_) {}
+
+  // Fase 0 — Tarea 3: alertas de stock negativo detectadas en cada refresco de catálogo
+  // (ver routes/woo.js refrescarCatalogo, log "[woo] calidad catálogo"). Una fila abierta
+  // (resuelto_en IS NULL) por SKU mientras siga en negativo entre refrescos sucesivos.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS stock_negativo_alertas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sku TEXT NOT NULL,
+    stock INTEGER NOT NULL,
+    detectado_en TEXT NOT NULL,
+    resuelto_en TEXT
+  )`); } catch (_) {}
+
+  // Fase 0 — Tarea 4 (medición de ritmo): las columnas nuevas de inventario_sesiones se
+  // agregan en routes/inventario.js#ensureTables, NO acá — esa tabla la crea ese módulo
+  // (ver migrarSesionesAlcanceMulti), no db/schema.sql, así que un ALTER acá correría antes
+  // de que la tabla exista en una base nueva y se lo comería el catch mudo para siempre.
+
   return db;
 }

@@ -1,6 +1,6 @@
 import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { setStockWcDelta } from '../lib/wooStock.js';
+import { setStockWcDelta, buscarEnCache } from '../lib/wooStock.js';
 import { looksLikeGtin, subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 
 export { looksLikeGtin as looksLikeEan } from '../lib/gtinWoo.js';
@@ -15,6 +15,12 @@ const now = () => new Date().toISOString();
 // Umbral de "alcance grande" (decisión de producto): por encima de esto el frontend
 // muestra un aviso antes de abrir la sesión. Solo informativo, nunca bloquea.
 export const UMBRAL_ALCANCE_GRANDE = 300;
+
+// Umbrales de la Fase 0 / Tarea 2 (freno por sobrante). Un FALTANTE nunca frena el
+// ajuste (bajar stock es la acción segura); un SOBRANTE grande sí, porque publicar
+// stock que quizás no existe es la acción riesgosa (ver nota de diseño en el plan).
+export const UMBRAL_VALOR_DIFERENCIA = 100000;
+export const UMBRAL_PORCENTAJE_SOBRANTE = 0.5;
 
 // ─── Alcance ─────────────────────────────────────────────────────────────────
 
@@ -139,6 +145,12 @@ export function ensureTables(db) {
   migrarSesionesAlcanceMulti(db);
   // Migración 002: quién confirmó/reintentó el ajuste (historial de sesiones cerradas).
   try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN confirmado_por TEXT'); } catch (_) {}
+  // Fase 0 — Tarea 4: medición de ritmo. `iniciado_en` se aproxima a `creado_en` (todavía
+  // no distinguimos "creada" de "empezada a contar de verdad"); `segundos_activos` e
+  // `items_contados` se completan recién al confirmar (ver /sesiones/:id/confirmar).
+  try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN iniciado_en TEXT'); } catch (_) {}
+  try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN segundos_activos INTEGER'); } catch (_) {}
+  try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN items_contados INTEGER'); } catch (_) {}
   db.prepare('CREATE INDEX IF NOT EXISTS idx_inv_sesiones_estado ON inventario_sesiones(estado)').run();
 
   db.prepare(`CREATE TABLE IF NOT EXISTS inventario_conteos (
@@ -184,8 +196,10 @@ export function inventarioRouter(db, wooCfg) {
 
   // Base de catálogo contable: mismo criterio en opciones, preview, snapshot y
   // pendientes — así el preview coincide exactamente con lo que se abre después.
+  // no_contable=1 (Fase 0, Tarea 1: servicios, cargos, gift cards) queda afuera del
+  // universo elegible para una sesión de inventario físico.
   const SQL_CATALOGO_CONTABLE =
-    "SELECT sku, nombre, stock, categorias_json, marca FROM catalogo_cache WHERE COALESCE(sku,'')<>'' AND COALESCE(tipo,'')<>'variable'";
+    "SELECT sku, nombre, stock, categorias_json, marca FROM catalogo_cache WHERE COALESCE(sku,'')<>'' AND COALESCE(tipo,'')<>'variable' AND COALESCE(no_contable,0)=0";
 
   const catalogoContable = () => db.prepare(SQL_CATALOGO_CONTABLE).all();
 
@@ -329,6 +343,74 @@ export function inventarioRouter(db, wooCfg) {
     });
   });
 
+  // ─── No contables (Fase 0, Tarea 1) ──────────────────────────────────────────
+  // Productos que NO son mercadería física real (servicios, cargos, gift cards):
+  // stock absurdo (>500, típico de "stock infinito" cargado a mano) o sin marca
+  // (típico de servicios/cargos). Nunca es una decisión silenciosa ni definitiva:
+  // José confirma cada uno a mano y puede revertirlo después.
+  router.get('/no-contables/sugerencias', (req, res) => {
+    const rows = db.prepare(`
+      SELECT id_woo, sku, nombre, stock, marca
+      FROM catalogo_cache
+      WHERE COALESCE(no_contable,0)=0
+        AND (stock > 500 OR COALESCE(marca,'')='')
+      ORDER BY nombre COLLATE NOCASE
+    `).all();
+    res.json({ ok: true, sugerencias: rows });
+  });
+
+  function parseIdsWoo(valor) {
+    const crudo = Array.isArray(valor) ? valor : [];
+    return [...new Set(crudo.map(v => parseInt(v, 10)).filter(Number.isInteger))];
+  }
+
+  router.post('/no-contables', (req, res) => {
+    const ids = parseIdsWoo(req.body?.ids_woo);
+    if (!ids.length) {
+      return res.status(400).json({ ok: false, error: 'Indicá `ids_woo` (array no vacío).' });
+    }
+    const marcar = db.prepare('UPDATE catalogo_cache SET no_contable=1 WHERE id_woo=?');
+    const tx = db.transaction(lista => {
+      let n = 0;
+      for (const id of lista) n += marcar.run(id).changes;
+      return n;
+    });
+    const marcados = tx(ids);
+    res.json({ ok: true, marcados });
+  });
+
+  function revertirNoContables(req, res) {
+    const ids = parseIdsWoo(req.body?.ids_woo);
+    if (!ids.length) {
+      return res.status(400).json({ ok: false, error: 'Indicá `ids_woo` (array no vacío).' });
+    }
+    const desmarcar = db.prepare('UPDATE catalogo_cache SET no_contable=0 WHERE id_woo=?');
+    const tx = db.transaction(lista => {
+      let n = 0;
+      for (const id of lista) n += desmarcar.run(id).changes;
+      return n;
+    });
+    const revertidos = tx(ids);
+    res.json({ ok: true, revertidos });
+  }
+  router.delete('/no-contables', revertirNoContables);
+  router.post('/no-contables/revertir', revertirNoContables);
+
+  // ─── Stock negativo (Fase 0, Tarea 3) ────────────────────────────────────────
+  // Las filas las escribe routes/woo.js#refrescarCatalogo en cada barrido de catálogo;
+  // acá solo se leen las alertas abiertas (resuelto_en IS NULL).
+  router.get('/negativos', (req, res) => {
+    const rows = db.prepare(`
+      SELECT a.id, a.sku, a.stock AS stock_detectado, a.detectado_en,
+             c.nombre, c.marca, c.stock AS stock_actual
+      FROM stock_negativo_alertas a
+      LEFT JOIN catalogo_cache c ON c.sku = a.sku
+      WHERE a.resuelto_en IS NULL
+      ORDER BY a.detectado_en
+    `).all();
+    res.json({ ok: true, alertas: rows });
+  });
+
   router.get('/sesion-activa', (req, res) => {
     const usuario = req.user?.username;
     const sesion = db.prepare(
@@ -420,9 +502,10 @@ export function inventarioRouter(db, wooCfg) {
       });
     }
 
+    const creadoEn = now();
     const id = db.prepare(
-      "INSERT INTO inventario_sesiones (usuario, categorias, marcas, estado, creado_en) VALUES (?,?,?,'abierta',?)"
-    ).run(usuario, JSON.stringify(categorias), JSON.stringify(marcas), now()).lastInsertRowid;
+      "INSERT INTO inventario_sesiones (usuario, categorias, marcas, estado, creado_en, iniciado_en) VALUES (?,?,?,'abierta',?,?)"
+    ).run(usuario, JSON.stringify(categorias), JSON.stringify(marcas), creadoEn, creadoEn).lastInsertRowid;
     congelarAlcance(id, categorias, marcas);
     const sesion = db.prepare('SELECT * FROM inventario_sesiones WHERE id=?').get(id);
     res.json({ ok: true, sesion: sesionOut(sesion) });
@@ -831,6 +914,15 @@ export function inventarioRouter(db, wooCfg) {
       return res.status(409).json({ ok: false, error: 'La sesión ya se está confirmando o no admite reintento ahora' });
     }
 
+    const insertDiferencia = db.prepare(`INSERT INTO inventario_diferencias
+      (sesion_id, sku, cantidad_esperada, cantidad_contada, diferencia, valor_diferencia,
+       tipo, requiere_revision, stock_inicial_usado, creado_en)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    const diferenciaSobrantePendiente = db.prepare(`
+      SELECT id, valor_diferencia FROM inventario_diferencias
+      WHERE sesion_id=? AND sku=? AND tipo='sobrante' AND requiere_revision=1 AND revisado_en IS NULL
+    `);
+
     // Solo se procesan los ítems que TODAVÍA no se ajustaron con éxito — así un reintento
     // nunca vuelve a tocar (ni a arriesgar) los que ya se confirmaron bien en un intento anterior.
     const pendientesDeAjustar = todos.filter(i => !i.ajustado_en);
@@ -844,6 +936,56 @@ export function inventarioRouter(db, wooCfg) {
           'SELECT stock_inicial FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?'
         ).get(sesion.id, item.sku);
         const stockInicial = alcance?.stock_inicial;
+
+        // Ya está frenado por una diferencia anterior sin resolver (reintento de una sesión
+        // confirmada_con_errores): no recalcular ni insertar de nuevo, sigue esperando la
+        // aprobación/rechazo de José vía /diferencias/:id.
+        const pendiente = (stockInicial !== null && stockInicial !== undefined)
+          ? diferenciaSobrantePendiente.get(sesion.id, item.sku)
+          : null;
+        if (pendiente) {
+          fallidos++;
+          errores.push({
+            sku: item.sku,
+            error: `Sobrante grande ($${pendiente.valor_diferencia}): requiere confirmación manual antes de publicar stock nuevo`,
+          });
+          continue;
+        }
+
+        // Fase 0 — Tarea 2: registrar la diferencia ANTES de decidir si se ajusta, para
+        // poder frenar el sobrante. Un faltante (contó menos) SIEMPRE se ajusta — bajar
+        // stock es la acción segura y evita dejar el producto publicado con stock fantasma.
+        // Un sobrante grande NO se ajusta acá: espera aprobación explícita.
+        let frenarSobrante = false;
+        if (stockInicial !== null && stockInicial !== undefined) {
+          const diferencia = item.cantidad - stockInicial;
+          if (diferencia !== 0) {
+            const prod = buscarEnCache(db, item.sku);
+            const precio = prod?.precio || 0;
+            const valorDiferencia = Math.abs(diferencia) * precio;
+            const tipo = diferencia < 0 ? 'faltante' : 'sobrante';
+            let requiereRevision = 0;
+            if (tipo === 'faltante') {
+              requiereRevision = valorDiferencia > UMBRAL_VALOR_DIFERENCIA ? 1 : 0;
+            } else if (valorDiferencia > UMBRAL_VALOR_DIFERENCIA
+                || Math.abs(diferencia) > stockInicial * UMBRAL_PORCENTAJE_SOBRANTE) {
+              requiereRevision = 1;
+              frenarSobrante = true;
+            }
+            insertDiferencia.run(
+              sesion.id, item.sku, stockInicial, item.cantidad, diferencia, valorDiferencia,
+              tipo, requiereRevision, stockInicial, now()
+            );
+            if (frenarSobrante) {
+              fallidos++;
+              errores.push({
+                sku: item.sku,
+                error: `Sobrante grande ($${valorDiferencia}): requiere confirmación manual antes de publicar stock nuevo`,
+              });
+              continue;
+            }
+          }
+        }
 
         // Ajusta por delta contra el stock que se leyó al inicio del conteo.
         // Si hubo venta durante el conteo, lo registra para visibilidad en la respuesta.
@@ -867,15 +1009,71 @@ export function inventarioRouter(db, wooCfg) {
 
     const quedanFallidos = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND ajustado_en IS NULL').get(sesion.id).n;
     const estadoFinal = quedanFallidos > 0 ? 'confirmada_con_errores' : 'confirmada';
+    const confirmadoEn = now();
+    // Fase 0 — Tarea 4 (medición de ritmo): items_contados excluye los cerrados en cero por
+    // omisión (mismo criterio ya usado para no inflar cobertura con conteos falsos).
+    // segundos_activos guarda el dato CRUDO siempre (confirmado_en - creado_en); la
+    // exclusión de sesiones de más de 3h es solo al calcular el ritmo (GET /ritmo), no acá.
+    const itemsContados = db.prepare(
+      'SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND confirmado_por_omision=0'
+    ).get(sesion.id).n;
+    const segundosActivos = Math.max(0, Math.round((new Date(confirmadoEn) - new Date(sesion.creado_en)) / 1000));
     // confirmado_por queda con el último que confirmó/reintentó (no acumula historial de reintentos previos).
-    db.prepare("UPDATE inventario_sesiones SET estado=?, confirmado_en=?, confirmado_por=? WHERE id=? AND estado='confirmando'")
-      .run(estadoFinal, now(), req.user?.username || null, sesion.id);
+    db.prepare(`UPDATE inventario_sesiones
+      SET estado=?, confirmado_en=?, confirmado_por=?, items_contados=?, segundos_activos=?
+      WHERE id=? AND estado='confirmando'`)
+      .run(estadoFinal, confirmadoEn, req.user?.username || null, itemsContados, segundosActivos, sesion.id);
 
     const respuesta = { ok: true, ajustados, fallidos, errores };
     if (ventasDuranteConteo.length > 0) {
       respuesta.ventasDuranteConteo = ventasDuranteConteo;
     }
     res.json(respuesta);
+  });
+
+  // ─── Diferencias (Fase 0, Tarea 2) — freno por sobrante ──────────────────────
+  router.get('/diferencias/pendientes', (req, res) => {
+    const rows = db.prepare(`
+      SELECT d.*, c.nombre, c.marca
+      FROM inventario_diferencias d
+      LEFT JOIN catalogo_cache c ON c.sku = d.sku
+      WHERE d.requiere_revision=1 AND d.revisado_en IS NULL
+      ORDER BY d.creado_en
+    `).all();
+    res.json({ ok: true, pendientes: rows });
+  });
+
+  router.post('/diferencias/:id/aprobar', async (req, res) => {
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE id=?').get(req.params.id);
+    if (!fila) return res.status(404).json({ ok: false, error: 'Diferencia no encontrada' });
+    if (fila.revisado_en) return res.status(400).json({ ok: false, error: 'Esta diferencia ya fue revisada' });
+    try {
+      // Reconstruye el mismo llamado que se hubiera hecho al confirmar, con los datos
+      // que quedaron congelados en la fila (sesion_id, sku, cantidad_contada, stock_inicial_usado).
+      const resultado = await setStockWcDelta(wooCfg, db, fila.sku, fila.cantidad_contada, fila.stock_inicial_usado);
+      db.prepare('UPDATE inventario_diferencias SET revisado_en=?, revisado_por=? WHERE id=?')
+        .run(now(), req.user?.username || null, fila.id);
+      // El conteo original queda ajustado — un reintento de /confirmar de esa sesión ya no
+      // lo vuelve a tocar.
+      db.prepare(`UPDATE inventario_conteos SET ajustado_en=?
+        WHERE sesion_id=? AND sku=? AND ajustado_en IS NULL`)
+        .run(now(), fila.sesion_id, fila.sku);
+      res.json({ ok: true, resultado });
+    } catch (e) {
+      // Fail-closed, igual criterio que el resto del módulo: si el ajuste real a Woo falla,
+      // NO se marca revisado_en — queda pendiente para reintentar la aprobación.
+      res.status(502).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.post('/diferencias/:id/rechazar', (req, res) => {
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE id=?').get(req.params.id);
+    if (!fila) return res.status(404).json({ ok: false, error: 'Diferencia no encontrada' });
+    if (fila.revisado_en) return res.status(400).json({ ok: false, error: 'Esta diferencia ya fue revisada' });
+    // José decidió que el conteo estuvo mal: no se toca Woo ni el conteo original.
+    db.prepare('UPDATE inventario_diferencias SET revisado_en=?, revisado_por=? WHERE id=?')
+      .run(now(), req.user?.username || null, fila.id);
+    res.json({ ok: true });
   });
 
   router.get('/sesiones', (req, res) => {
@@ -892,6 +1090,49 @@ export function inventarioRouter(db, wooCfg) {
       ORDER BY COALESCE(s.confirmado_en, s.creado_en) DESC LIMIT 100
     `).all(usuario);
     res.json({ ok: true, data: rows.map(sesionOut) });
+  });
+
+  // ─── Ritmo (Fase 0, Tarea 4) ──────────────────────────────────────────────────
+  // Duración máxima (segundos) para que una sesión cuente en el cálculo de ritmo —
+  // por encima probablemente quedó abierta sin actividad continua (mismo umbral que
+  // se usa para decidir qué segundos_activos son confiables).
+  const RITMO_MAX_SEGUNDOS = 3 * 60 * 60;
+  const RITMO_MIN_SESIONES = 3;
+  const RITMO_ESTIMADO_FALLBACK = 20;
+
+  // Percentil 25 por interpolación lineal (método PERCENTILE.INC de Excel/numpy
+  // "linear"): estándar y determinista, sin depender de una librería de stats para
+  // un solo cálculo.
+  function percentil25(valores) {
+    const ordenado = [...valores].sort((a, b) => a - b);
+    const n = ordenado.length;
+    if (!n) return null;
+    const rango = 0.25 * (n - 1);
+    const piso = Math.floor(rango), techo = Math.ceil(rango);
+    if (piso === techo) return ordenado[piso];
+    return ordenado[piso] + (ordenado[techo] - ordenado[piso]) * (rango - piso);
+  }
+
+  router.get('/ritmo', (req, res) => {
+    const usuario = String(req.query?.usuario || '').trim();
+    if (!usuario) return res.status(400).json({ ok: false, error: 'Falta `usuario`' });
+
+    const sesiones = db.prepare(`
+      SELECT items_contados, segundos_activos
+      FROM inventario_sesiones
+      WHERE usuario=? AND estado IN ('confirmada','confirmada_con_errores')
+      ORDER BY confirmado_en DESC LIMIT 5
+    `).all(usuario);
+
+    const validas = sesiones
+      .filter(s => s.segundos_activos != null && s.segundos_activos > 0 && s.segundos_activos <= RITMO_MAX_SEGUNDOS
+        && s.items_contados != null)
+      .map(s => (s.items_contados / s.segundos_activos) * 3600);
+
+    if (validas.length < RITMO_MIN_SESIONES) {
+      return res.json({ ok: true, ritmo: RITMO_ESTIMADO_FALLBACK, estimado: true, muestras: validas.length });
+    }
+    res.json({ ok: true, ritmo: percentil25(validas), estimado: false, muestras: validas.length });
   });
 
   return router;
