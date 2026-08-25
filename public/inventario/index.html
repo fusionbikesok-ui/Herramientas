@@ -427,6 +427,27 @@
           <p class="dim-ayuda" id="ayuda-marcas">Las marcas con «×0» no tienen productos al combinarlas con el resto del alcance elegido, por eso no se pueden seleccionar.</p>
         </div>
 
+        <div class="card">
+          <label for="select-ubicacion">Ubicación (barrido completo)</label>
+          <p class="dim-ayuda" style="margin:0 0 8px;">Alternativa a categoría/marca: contás
+             todo lo que hay en una zona física. No se puede combinar con categoría/marca.</p>
+          <select id="select-ubicacion">
+            <option value="">— Elegir alcance por categoría/marca en cambio —</option>
+          </select>
+          <div id="ubicacion-info" style="font-size:12px;color:var(--muted);margin-top:6px;"></div>
+          <button type="button" class="btn secondary" id="btn-mapear-ubicacion" style="margin-top:6px;display:none;">
+            Marcar ubicación como mapeada (recorrida entera)
+          </button>
+          <details style="margin-top:10px;">
+            <summary style="font-size:12px;color:var(--muted);cursor:pointer;">+ Nueva ubicación</summary>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+              <input type="text" id="nueva-ubicacion-zona" placeholder="Zona" style="flex:1;min-width:0;">
+              <input type="text" id="nueva-ubicacion-estante" placeholder="Estante" style="flex:1;min-width:0;">
+              <button type="button" class="btn secondary" id="btn-crear-ubicacion">Crear</button>
+            </div>
+          </details>
+        </div>
+
         <div id="alcance-aviso"></div>
         <button class="btn secondary" id="alcance-cancelar">Cancelar</button>
       </div>
@@ -766,6 +787,11 @@
   var opciones = { categorias: [], marcas: [] };
   var selCategorias = [];
   var selMarcas = [];
+  // Fase 2: alcance alternativo por ubicación (barrido completo), mutuamente excluyente
+  // con categoría/marca. `selUbicacion` es el objeto entero (id/zona/estante/estado/
+  // skus_registrados), no solo el id, para no tener que re-pedir la lista al mostrar info.
+  var selUbicacion = null;
+  var ubicacionesDisponibles = [];
   var previewActual = null;
   // Contadores de secuencia: con dos toggles rápidos, la respuesta del fetch viejo puede
   // llegar después de la del nuevo. Se descarta toda respuesta que no sea la última pedida.
@@ -813,6 +839,8 @@
         // aria-disabled no bloquea el click como `disabled`: hay que ignorarlo a mano.
         if(btn.getAttribute('aria-disabled') === 'true') return;
         toggleSeleccion(seleccion, btn.getAttribute('data-valor'));
+        // Mutuamente excluyente con ubicación (ver POST /sesiones en el backend).
+        if(selUbicacion){ selUbicacion = null; document.getElementById('select-ubicacion').value = ''; renderInfoUbicacion(); }
         renderAlcance();
         refrescarOpciones();
         pedirPreview();
@@ -833,6 +861,19 @@
   }
 
   function actualizarCta(){
+    if(selUbicacion){
+      // No hay alcance-preview para ubicación (el alcance se construye solo, a medida que
+      // se escanea — ver docs/api-contrato.md). El único número que hay de antemano es
+      // cuántos SKUs ya están asociados a esa ubicación de sesiones anteriores.
+      prevProductos.textContent = n(selUbicacion.skus_registrados || 0);
+      prevUnidades.textContent = '—';
+      prevCon.textContent = '—';
+      prevSin.textContent = '—';
+      alcanceEmpezar.textContent = 'Empezar a contar ' + esc(selUbicacion.zona) + ' / ' + esc(selUbicacion.estante) + ' →';
+      alcanceEmpezar.disabled = false;
+      renderAvisoAlcanceGrande();
+      return;
+    }
     var haySeleccion = selCategorias.length > 0 || selMarcas.length > 0;
     if(previewActual){
       prevProductos.textContent = n(previewActual.productos);
@@ -948,9 +989,97 @@
         opciones.marcas = normOpciones(j.marcas);
         renderAlcance();
       }).catch(function(){ renderAlcance(); });
+    cargarUbicaciones();
     renderAlcance();
     pedirPreview();
   }
+
+  /* ----- Fase 2: alcance por ubicación ----- */
+  var selectUbicacion = document.getElementById('select-ubicacion');
+  var ubicacionInfo = document.getElementById('ubicacion-info');
+  var btnMapearUbicacion = document.getElementById('btn-mapear-ubicacion');
+
+  function cargarUbicaciones(){
+    fetch('/api/inventario/ubicaciones')
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok) return;
+        ubicacionesDisponibles = j.ubicaciones || [];
+        var actualId = selUbicacion ? selUbicacion.id : null;
+        selectUbicacion.innerHTML = '<option value="">— Elegir alcance por categoría/marca en cambio —</option>' +
+          ubicacionesDisponibles.map(function(u){
+            return '<option value="' + u.id + '">' + esc(u.zona) + ' / ' + esc(u.estante) +
+              ' (' + n(u.skus_registrados) + (u.estado === 'mapeada' ? ', mapeada' : ', bootstrap') + ')</option>';
+          }).join('');
+        if(actualId){
+          selUbicacion = ubicacionesDisponibles.find(function(u){ return u.id === actualId; }) || null;
+          selectUbicacion.value = selUbicacion ? String(selUbicacion.id) : '';
+        }
+        renderInfoUbicacion();
+      }).catch(function(){});
+  }
+
+  function renderInfoUbicacion(){
+    if(!selUbicacion){
+      ubicacionInfo.textContent = '';
+      btnMapearUbicacion.style.display = 'none';
+      return;
+    }
+    ubicacionInfo.textContent = selUbicacion.skus_registrados +
+      plural(selUbicacion.skus_registrados, ' producto ya asociado', ' productos ya asociados') +
+      ' a esta ubicación' + (selUbicacion.estado === 'mapeada' ? ' · ya está mapeada' : ' · todavía en bootstrap (sin recorrer entera)') + '.';
+    btnMapearUbicacion.style.display = selUbicacion.estado === 'mapeada' ? 'none' : 'inline-block';
+  }
+
+  selectUbicacion.addEventListener('change', function(){
+    var id = parseInt(selectUbicacion.value, 10);
+    selUbicacion = id ? (ubicacionesDisponibles.find(function(u){ return u.id === id; }) || null) : null;
+    if(selUbicacion){
+      // Mutuamente excluyente con categoría/marca.
+      selCategorias = [];
+      selMarcas = [];
+      buscarCategorias.value = '';
+      buscarMarcas.value = '';
+    }
+    renderInfoUbicacion();
+    renderAlcance();
+  });
+
+  btnMapearUbicacion.addEventListener('click', function(){
+    if(!selUbicacion) return;
+    btnMapearUbicacion.disabled = true;
+    fetch('/api/inventario/ubicaciones/' + selUbicacion.id + '/mapear', { method: 'POST' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        btnMapearUbicacion.disabled = false;
+        if(j && j.ok) cargarUbicaciones();
+      }).catch(function(){ btnMapearUbicacion.disabled = false; });
+  });
+
+  document.getElementById('btn-crear-ubicacion').addEventListener('click', function(){
+    var zona = document.getElementById('nueva-ubicacion-zona').value.trim();
+    var estante = document.getElementById('nueva-ubicacion-estante').value.trim();
+    if(!zona || !estante){
+      alcanceAviso.innerHTML = '<div class="aviso">Indicá zona y estante para crear la ubicación.</div>';
+      return;
+    }
+    fetch('/api/inventario/ubicaciones', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zona: zona, estante: estante })
+    }).then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+      .then(function(res){
+        if(res.status === 200 && res.body.ok){
+          document.getElementById('nueva-ubicacion-zona').value = '';
+          document.getElementById('nueva-ubicacion-estante').value = '';
+          cargarUbicaciones();
+        } else {
+          alcanceAviso.innerHTML = '<div class="aviso">' + esc(res.body.error || 'No se pudo crear la ubicación.') + '</div>';
+        }
+      }).catch(function(){
+        alcanceAviso.innerHTML = '<div class="aviso">No se pudo crear la ubicación (sin conexión).</div>';
+      });
+  });
 
   function limpiarAlcanceForm(){
     seqOpciones++; seqPreview++;   // invalida respuestas en vuelo de la selección anterior
@@ -958,6 +1087,9 @@
     selMarcas = [];
     buscarCategorias.value = '';
     buscarMarcas.value = '';
+    selUbicacion = null;
+    selectUbicacion.value = '';
+    renderInfoUbicacion();
     previewActual = null;
     alcanceAviso.innerHTML = '';
     renderAlcance();
@@ -986,7 +1118,8 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // categoria/marca van también en singular por compatibilidad con la forma vieja.
-      body: JSON.stringify({
+      // ubicacion_id manda solo si hay una elegida — mutuamente excluyente con categoria/marca.
+      body: JSON.stringify(selUbicacion ? { ubicacion_id: selUbicacion.id } : {
         categorias: selCategorias,
         marcas: selMarcas,
         categoria: selCategorias[0] || '',
@@ -1563,7 +1696,17 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ todos: true })
       })).then(function(r){ return r.json(); }).then(function(j){
-        if(j && j.ok){ setGuardado(true); return cargarConteo(); }
+        if(j && j.ok){
+          setGuardado(true);
+          // Fase 2: en una sesión por ubicación, algunos SKUs pueden quedar afuera del
+          // cierre automático (overflow en otra ubicación) — avisar, no es un error.
+          if(j.excluidos_por_ubicacion && j.excluidos_por_ubicacion.length){
+            mostrarBannerEscaneo(j.excluidos_por_ubicacion.length +
+              ' producto(s) NO se cerraron en 0 porque tienen stock registrado en otra ubicación también: ' +
+              j.excluidos_por_ubicacion.join(', '));
+          }
+          return cargarConteo();
+        }
         mostrarBannerEscaneo((j && j.error) || 'No se pudieron cerrar los productos sin stock.');
       }).catch(function(){ mostrarBannerEscaneo('No se pudieron cerrar los productos sin stock (sin conexión).'); });
     });
