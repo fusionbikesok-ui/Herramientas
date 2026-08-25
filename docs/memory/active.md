@@ -6,18 +6,24 @@ Actualizado: 2026-08-24.
 
 - **Entrega A — matcher de ingreso de mercadería** (lo único abierto). Worktree
   `.claude/worktrees/ingreso-matcher`, rama `entrega-a-ingreso-matcher`, base `master` (`e8ce5bb`),
-  HEAD `20b89da`. Estado: `CONGELADO_PARA_REVISION` → el `revisor` devolvió **NO aprobado** con
-  2 hallazgos 🔴 y 3 🟡; la corrección está en curso con `hard-worker-backend`.
-  - 🔴 1: para productos **sin `atributos_json`**, `construirWC` cae al fallback
-    `extraerAtributosWC(nombre)` que mete *todos* los tokens del título en `talles`
-    (`'Cadena Shimano Hg500 Eslabones'` → `talleToks:['cadena','shimano','hg500','eslabones']`).
-    Genera contradicciones falsas masivas y descarta el match correcto. Rompe el caso mayoritario
-    (accesorios/repuestos son la mayor parte de un remito).
-  - 🔴 2: dos productos **distintos** con título idéntico empatan sin marcar `ambiguo` → se aplica
-    el primero del array. Misma clase de bug que la entrega viene a cerrar.
-  - Gate no negociable: test de 4 líneas S/M/L/XL → 4 `id_woo` distintos (hoy pasa, no debe romperse).
+  HEAD `1076380` (3 commits: `20b89da` matcher, `89ca0a0` correcciones, `1076380` limpieza).
+  Estado: **`REVISION_APROBADA`**, en el gate del `tester`.
+  - El `revisor` hizo dos pasadas. En la primera devolvió NO aprobado con 2 🔴: (1) para productos
+    **sin `atributos_json`** el fallback `extraerAtributosWC(nombre)` mete *todos* los tokens del
+    título en `talles`, generando contradicciones falsas que descartaban el match correcto —
+    rompía el caso mayoritario, porque accesorios y repuestos son la mayor parte de un remito;
+    (2) dos productos **distintos** con título idéntico empataban sin marcar `ambiguo`, o sea la
+    misma clase de bug que la entrega viene a cerrar. Ambos corregidos y reverificados.
+  - Verificado contra el catálogo real: **21 SKUs duplicados en 5112 filas** — el hallazgo de
+    apareo por SKU no era teórico.
+  - Gate no negociable: test de 4 líneas S/M/L/XL → 4 `id_woo` distintos. En verde.
+  - Pruebas: 18/18 propias + 71/71 del motor compartido (89 en total).
   - `construirWC`, `diffTokens` y `confianzaDesdeScore` **no cambian de comportamiento** — solo se
     agregan funciones. Los usan `routes/matcher.js`, `lib/matcherResolver.js`, `lib/coberturaCola.js`.
+  - **Requisito para la entrega del endpoint (hallazgo N1 del revisor):** la regla de empate se
+    apoya en que `id_woo` venga poblado. Si la query que arma el índice no lo selecciona, todos
+    quedan `null`, la comparación da `false` y **la protección se apaga en silencio**. La query
+    del endpoint de ingreso DEBE traer `id_woo`. Anotado también en el código.
 
 - Plan aprobado de Ingreso de Mercadería (matching primero, unificación después). Entregas B/C/D
   pendientes: UI de candidatos + aprendizaje por proveedor (`proveedor_alias`, PK compuesta por
