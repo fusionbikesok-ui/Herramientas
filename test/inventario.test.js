@@ -2630,6 +2630,55 @@ describe('ALTO 2: /diferencias/:id/rechazar borra el conteo de inventario_conteo
     const sesionFinal = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesionFinal.estado).toBe('confirmada');
   });
+
+  it('dos EANs distintos para el mismo SKU: rechazar el sobrante NO borra la fila que ya se ajustó a Woo', async () => {
+    const db = openDb(TEST_DB);
+    // FB-1 con gtin propio (primer EAN) — el segundo EAN se mapea vía ean_sku.
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000, gtin: '7791234567898' });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    db.prepare("INSERT INTO ean_sku (ean, sku, actualizado_en) VALUES ('96385074','FB-1',?)").run(now());
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    // Dos escaneos de FB-1 por EANs distintos → dos filas en inventario_conteos
+    // (UNIQUE(sesion_id, ean), no UNIQUE(sesion_id, sku)).
+    const e1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '7791234567898' });
+    const e2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '96385074' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${e1.body.item.id}`).send({ cantidad: 3 });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${e2.body.item.id}`).send({ cantidad: 21 });
+
+    const filasAntes = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-1').n;
+    expect(filasAntes).toBe(2);
+
+    // Confirm: una fila queda como faltante (se ajusta siempre) y la otra como sobrante
+    // grande (se frena). Cuál es cuál depende del orden de lectura, no importa para este
+    // test — lo que importa es que UNA se ajustó a Woo y la otra no.
+    setStockWcDelta.mockResolvedValue({ stockFinal: 3, huboVentaDurante: false, stockLive: 10 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const conteosPostConfirm = db.prepare('SELECT ean, ajustado_en FROM inventario_conteos WHERE sesion_id=? AND sku=?').all(id, 'FB-1');
+    expect(conteosPostConfirm).toHaveLength(2);
+    const yaAjustada = conteosPostConfirm.find(c => c.ajustado_en !== null);
+    const sinAjustar = conteosPostConfirm.find(c => c.ajustado_en === null);
+    expect(yaAjustada).toBeTruthy(); // el faltante ya se escribió a Woo
+    expect(sinAjustar).toBeTruthy(); // el sobrante quedó frenado
+
+    const filaSobrante = db.prepare(
+      "SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=? AND tipo='sobrante'"
+    ).get(id, 'FB-1');
+    expect(filaSobrante).toBeTruthy();
+
+    // Rechazar el sobrante: debe borrar SOLO la fila sin ajustar, nunca la que ya se
+    // escribió en Woo — sin eso, se pierde el único registro de que esa escritura ocurrió.
+    const rechazar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${filaSobrante.id}/rechazar`);
+    expect(rechazar.status).toBe(200);
+
+    const conteosPostRechazo = db.prepare('SELECT ean, ajustado_en FROM inventario_conteos WHERE sesion_id=? AND sku=?').all(id, 'FB-1');
+    expect(conteosPostRechazo).toHaveLength(1);
+    expect(conteosPostRechazo[0].ean).toBe(yaAjustada.ean);
+    expect(conteosPostRechazo[0].ajustado_en).not.toBeNull();
+  });
 });
 
 describe('MEDIO 3: /diferencias/:id/aprobar, /rechazar, /no-contables requieren admin', () => {
