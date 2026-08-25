@@ -1998,7 +1998,15 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
       return { item_id: itemId, ok: true, variaciones: variaciones.length };
     } catch (e) {
       const error = e.message;
-      logSync(db, { direccion: 'wc_ml', clave: itemId, estado: 'error', error: `reactivar: ${error}`.slice(0, 500) });
+      // Una fila por variación con la clave CANÓNICA (item_id|variation_id), igual que el
+      // camino de éxito de arriba. Loguear con `itemId` pelado (sin el pipe) era un bug: la
+      // clave no matcheaba ml_stock_estado, así que el filtro de auto-curado del dashboard
+      // ("ya sincronizó después → dejá de mostrarlo") nunca la limpiaba y el error quedaba
+      // pegado para siempre; tampoco joineaba ml_publicaciones_cache, así que aparecía sin
+      // título ni miniatura. 34 publicaciones cayeron en esto entre julio y agosto 2026.
+      for (const v of variaciones) {
+        logSync(db, { direccion: 'wc_ml', clave: v.clave, sku: v.sku, estado: 'error', error: `reactivar: ${error}`.slice(0, 500) });
+      }
       return { item_id: itemId, ok: false, error };
     }
   });

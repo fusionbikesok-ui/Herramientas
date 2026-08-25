@@ -14,6 +14,7 @@ import {
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
+import { looksLikeGtin } from '../lib/gtinWoo.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -553,6 +554,10 @@ export function preparacionRouter(db, cfg) {
   const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
   const TRACKING_META_KEY = '_andreani_tracking';
+
+  // Queries para resolución de GTIN/EAN en escanear
+  const skuPorEan = db.prepare('SELECT sku FROM ean_sku WHERE ean=?');
+  const skusPorGtin = db.prepare("SELECT DISTINCT sku FROM catalogo_cache WHERE gtin=? AND sku IS NOT NULL AND sku <> ''");
 
   // Disparo inmediato de la cola de fotos tras cada subida/reintento (además del cron de
   // barrido en server.js). Default ON en producción; los tests lo apagan (cfg.colaFotos.
