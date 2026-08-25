@@ -7,9 +7,15 @@ import { inventarioRouter, looksLikeEan, productoEnAlcance, productoEnAlcanceOr,
 
 vi.mock('../lib/wooStock.js', async () => {
   const actual = await vi.importActual('../lib/wooStock.js');
-  return { ...actual, setStockWc: vi.fn() };
+  return { ...actual, setStockWc: vi.fn(), setStockWcDelta: vi.fn() };
 });
-import { setStockWc } from '../lib/wooStock.js';
+import { setStockWc, setStockWcDelta } from '../lib/wooStock.js';
+
+// Para tests que usen setStockWcDelta de verdad (no mockeado)
+vi.mock('../routes/woo.js', () => ({
+  wooFetch: vi.fn()
+}));
+import { wooFetch } from '../routes/woo.js';
 
 // Ninguna llamada real a Woo en los tests: mockeamos axios, igual que codigos.test.js.
 // Los tests de /asociar que NO configuran un mock explícito reciben el automock
@@ -585,7 +591,7 @@ describe('POST /api/inventario/sesiones/:id/descartar', () => {
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/descartar`);
 
     expect(r.status).toBe(200);
-    expect(setStockWc).not.toHaveBeenCalled();
+    expect(setStockWcDelta).not.toHaveBeenCalled();
     const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesion.estado).toBe('descartada');
   });
@@ -603,14 +609,14 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
 
     expect(r.status).toBe(409);
-    expect(setStockWc).not.toHaveBeenCalled();
+    expect(setStockWcDelta).not.toHaveBeenCalled();
   });
 
   it('ajusta stock por cada ítem contado y marca la sesión confirmada', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -620,7 +626,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
 
     expect(r.status).toBe(200);
     expect(r.body.ajustados).toBe(2);
-    expect(setStockWc).toHaveBeenCalledTimes(2);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(2);
     const sesion = db.prepare('SELECT estado, confirmado_en FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesion.estado).toBe('confirmada');
     expect(sesion.confirmado_en).toBeTruthy();
@@ -630,7 +636,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -641,13 +647,13 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     expect(r.status).toBe(200);
     expect(r.body.ajustados).toBe(1);
     expect(r.body.fallidos).toBe(1);
-    expect(setStockWc).toHaveBeenCalledTimes(2);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(2);
   });
 
   it('rechaza confirmar una sesión ya confirmada (evita doble ajuste)', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -657,14 +663,14 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
 
     expect(r.status).toBe(400);
-    expect(setStockWc).not.toHaveBeenCalled();
+    expect(setStockWcDelta).not.toHaveBeenCalled();
   });
 
   it('evita doble ajuste ante dos /confirmar simultáneos sobre la misma sesión (carrera real)', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockImplementation(() => new Promise(r => setTimeout(r, 50)));
+    setStockWcDelta.mockImplementation(() => new Promise(r => setTimeout(r, 50)).then(() => ({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 })));
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -676,7 +682,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
       request(app).post(`/api/inventario/sesiones/${id}/confirmar`),
     ]);
 
-    expect(setStockWc).toHaveBeenCalledTimes(2); // N ítems, no 2N
+    expect(setStockWcDelta).toHaveBeenCalledTimes(2); // N ítems, no 2N
     // El request que pierde la carrera puede recibir 409 (perdió el claim atómico)
     // o 400 (llegó después y encontró la sesión ya en 'confirmando', no 'abierta',
     // en el chequeo temprano) — ambos indican que fue bloqueado correctamente.
@@ -705,11 +711,11 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     // Se la deja como quedó una sesión vieja: cerrada con errores y con FB-2 nunca contado.
     db.prepare("UPDATE inventario_sesiones SET estado='confirmada_con_errores' WHERE id=?").run(id);
 
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
 
     expect(r.status).toBe(200);
-    expect(setStockWc).toHaveBeenCalledTimes(1);   // reintenta el que quedó sin ajustar
+    expect(setStockWcDelta).toHaveBeenCalledTimes(1);   // reintenta el que quedó sin ajustar
   });
 
   it('no confirma si quedan productos CON STOCK sin contar, y no toca Woo', async () => {
@@ -725,13 +731,13 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     expect(r.status).toBe(409);
     expect(r.body.pendientes_con_stock).toBe(1);
     expect(r.body.pendientes[0].sku).toBe('FB-2');
-    expect(setStockWc).not.toHaveBeenCalled();          // NI UNA llamada a Woo
+    expect(setStockWcDelta).not.toHaveBeenCalled();          // NI UNA llamada a Woo
     // el reclamo atómico no se ejecutó: la sesión sigue reintentable
     expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('abierta');
   });
 
   it('confirma normalmente cuando el pendiente con stock se cerró en 0', async () => {
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
@@ -746,7 +752,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
   });
 
   it('un pendiente SIN stock no bloquea: ajustarlo a 0 seria un no-op', async () => {
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
     insertProducto(db, { id_woo: 9, sku: 'FB-9', marca: 'Bell', stock: 0 });   // bloque sin_stock
@@ -764,7 +770,7 @@ describe('GET /api/inventario/sesiones (historial)', () => {
 
   it('devuelve solo sesiones cerradas del usuario, no las abiertas ni las de otro', async () => {
     const db = openDb(TEST_DB);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const c1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${c1.body.sesion.id}/descartar`);
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Continental' }); // queda abierta
@@ -817,7 +823,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar — reintento real tras fa
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -830,13 +836,13 @@ describe('POST /api/inventario/sesiones/:id/confirmar — reintento real tras fa
     const sesionTrasR1 = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesionTrasR1.estado).toBe('confirmada_con_errores');
 
-    setStockWc.mockResolvedValueOnce(); // el reintento ahora sí resuelve
+    setStockWcDelta.mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 }); // el reintento ahora sí resuelve
     const r2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
 
     expect(r2.status).toBe(200);
     expect(r2.body.ajustados).toBe(1); // solo el que faltaba
     expect(r2.body.fallidos).toBe(0);
-    expect(setStockWc).toHaveBeenCalledTimes(3); // 2 del primer intento + 1 del reintento, nunca re-ajusta el que ya salió bien
+    expect(setStockWcDelta).toHaveBeenCalledTimes(3); // 2 del primer intento + 1 del reintento, nunca re-ajusta el que ya salió bien
     const sesionFinal = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesionFinal.estado).toBe('confirmada');
   });
@@ -844,7 +850,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar — reintento real tras fa
   it('marca confirmada (sin _con_errores) cuando no hay fallos', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -863,7 +869,7 @@ describe('GET /api/inventario/sesiones (historial) — incluye confirmada_con_er
   it('lista sesiones en confirmada_con_errores junto con confirmada/descartada', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
-    setStockWc.mockRejectedValue(new Error('Woo caído'));
+    setStockWcDelta.mockRejectedValue(new Error('Woo caído'));
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1345,7 +1351,7 @@ describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
   it('los ítems cerrados por omisión se ajustan en Woo como 0 al confirmar', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionConSinStock(db);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
 
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
     // CON-1 tiene stock y nunca se contó/cerró: antes de este cambio confirmar lo dejaba
@@ -1355,7 +1361,7 @@ describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
     const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
 
     expect(r.body.ajustados).toBe(3);
-    expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'SIN-1', 0);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'SIN-1', 0, 0);
   });
 
   it('rechaza cerrar sobre una sesión que no está abierta', async () => {
@@ -1628,7 +1634,7 @@ describe('Casos borde adicionales — cobertura de tester', () => {
       const id = crear.body.sesion.id;
       if (estadoFinal === 'confirmada') {
         await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'CON-1' });
-        setStockWc.mockResolvedValue();
+        setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
         await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
         const confirmar = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
         expect(confirmar.body.ok).toBe(true);
@@ -1819,7 +1825,7 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1837,7 +1843,7 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1857,7 +1863,7 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
   it('POST /confirmar deja confirmado_por con el username que hizo la request', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1872,7 +1878,7 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1880,11 +1886,89 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`); // FB-1 falla, FB-2 ajusta ok
     vi.clearAllMocks();
 
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`); // reintento
 
-    expect(setStockWc).toHaveBeenCalledTimes(1);
-    expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'FB-1', 1);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(1);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 1, 5);
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/confirmar — ajuste por delta (setStockWcDelta)', () => {
+  // En estos tests, setStockWcDelta es REAL (no mockeado), y mockeamos wooFetch
+  // para simular el comportamiento de WC sin hacer llamadas reales.
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('confirma con setStockWcDelta sin error cuando hay datos básicos', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 3, huboVentaDurante: false, stockLive: 5 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.ajustados).toBe(1);
+    expect(r.body.fallidos).toBe(0);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(1);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 1, 5);
+  });
+
+  it('registra ventasDuranteConteo cuando huboVentaDurante es true', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 4, huboVentaDurante: true, stockLive: 4 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.ventasDuranteConteo).toBeDefined();
+    expect(r.body.ventasDuranteConteo).toHaveLength(1);
+    expect(r.body.ventasDuranteConteo[0].sku).toBe('FB-1');
+    expect(r.body.ventasDuranteConteo[0].stock_inicial).toBe(4);
+    expect(r.body.ventasDuranteConteo[0].stock_final).toBe(4);
+  });
+
+  it('no incluye ventasDuranteConteo si no hubo ventas', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 5 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.ventasDuranteConteo).toBeUndefined();
+  });
+
+  it('fail-closed: si setStockWcDelta falla, el ítem va a errores y la sesión en confirmada_con_errores', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    setStockWcDelta.mockRejectedValue(new Error('stockInicial requerido'));
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.fallidos).toBe(1);
+    expect(r.body.errores).toHaveLength(1);
+    expect(r.body.errores[0].sku).toBe('FB-1');
+    expect(r.body.errores[0].error).toMatch(/requerido/i);
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('confirmada_con_errores');
   });
 });
 
@@ -1940,7 +2024,7 @@ describe('Código escaneado que no existe en el catálogo', () => {
   it('fail-closed: no se confirma nada en Woo mientras haya un código desconocido', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionBell(db);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-1' });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'XX-NO-EXISTE-999' });
 
@@ -1949,7 +2033,7 @@ describe('Código escaneado que no existe en el catálogo', () => {
     expect(r.status).toBe(409);
     expect(r.body.codigos_desconocidos).toBe(1);
     expect(r.body.codigos).toEqual(['XX-NO-EXISTE-999']);
-    expect(setStockWc).not.toHaveBeenCalled(); // ni siquiera el ítem sano se ajusta
+    expect(setStockWcDelta).not.toHaveBeenCalled(); // ni siquiera el ítem sano se ajusta
     const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesion.estado).toBe('abierta');
   });
@@ -1957,7 +2041,7 @@ describe('Código escaneado que no existe en el catálogo', () => {
   it('se resuelve asociándolo a un SKU real: deja de ser desconocido y ya se puede confirmar', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionBell(db);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'XX-NO-EXISTE-999' });
 
     const asoc = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/asociar')
@@ -1968,13 +2052,13 @@ describe('Código escaneado que no existe en el catálogo', () => {
 
     const conf = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
     expect(conf.status).toBe(200);
-    expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'FB-1', 1);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 1, 5);
   });
 
   it('también se resuelve borrando el ítem: la sesión vuelve a poder confirmarse', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionBell(db);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-1' });
     const malo = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'XX-NO-EXISTE-999' });
 
