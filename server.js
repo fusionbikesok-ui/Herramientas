@@ -28,6 +28,8 @@ import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
 import { inventarioRouter } from './routes/inventario.js';
 import { etiquetasRouter } from './routes/etiquetas.js';
+import { criticidadRouter } from './routes/criticidad.js';
+import { backfillVentas } from './lib/criticidad.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 
@@ -129,6 +131,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/vinculos', (req, res) => res.redirect('/herramientas/matcher/?aviso=unificado'));
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
   app.use('/api/etiquetas', etiquetasRouter(db));
+  app.use('/api/criticidad', criticidadRouter(db, syncCfg));
   app.use('/api/ml', mlEstadoRouter(db));
 
   // -- Error handler global (respaldo) ---------------------------------
@@ -253,6 +256,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           const n = purgarFotosBorradas(app._db);
           if (n) console.log(`Purgadas ${n} fotos de preparación (borrado_en > 60 días)`);
         } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
+      });
+
+      // Fase 3 (rotación y criticidad): backfill/incremental diario de ventas_historial.
+      // Horario de baja actividad, corrido de los otros crons diarios para no competir por
+      // el rate-limit de ML.
+      cron.schedule('0 5 * * *', () => {
+        backfillVentas(app._db, syncCfg)
+          .then(r => console.log('backfillVentas:', JSON.stringify(r)))
+          .catch(err => console.error('Error en backfillVentas:', err.message));
       });
 
       // Cola de procesamiento de fotos de preparación (plan 2026-08-12-fotos-preparacion.md):
