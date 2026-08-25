@@ -199,8 +199,11 @@ describe('Hallazgos del revisor · nuevos tests', () => {
     expect(autoAplicable(res)).toBe(false);
   });
 
-  it('13 · Dos filas con mismo SKU → cada wcItem recibe su propio id_woo por índice', () => {
-    // Hallazgo 4: recorrer por índice, no por SKU (SKU no es único)
+  it('13 · Dos filas con mismo SKU → cada wcItem recibe su propio id_woo por índice, y el matching de punta a punta no las colapsa', () => {
+    // Hallazgo 4: recorrer por índice, no por SKU (SKU no es único). El catálogo real de
+    // producción tiene 21 SKUs duplicados sobre 5112 filas, así que el caso no es teórico:
+    // sin esta corrección, dos líneas de remito con el mismo SKU de proveedor podrían
+    // aparearse al mismo id_woo y sumar todo el stock a una sola variación.
     const items = [
       { id_woo: 16, id_padre: 100, sku: 'SHARED', tipo: 'variation', nombre: 'Producto Primer — Negro / S', atributos_json: JSON.stringify([{ name: 'Color', option: 'Negro' }, { name: 'Talle', option: 'S' }]) },
       { id_woo: 17, id_padre: 100, sku: 'SHARED', tipo: 'variation', nombre: 'Producto Primer — Negro / M', atributos_json: JSON.stringify([{ name: 'Color', option: 'Negro' }, { name: 'Talle', option: 'M' }]) },
@@ -211,17 +214,39 @@ describe('Hallazgos del revisor · nuevos tests', () => {
     expect(wcS.id_woo).toBe(16);
     expect(wcM.id_woo).toBe(17);
     expect(wcS.id_woo).not.toBe(wcM.id_woo);
+
+    // Punta a punta: dos líneas de remito, mismo SKU de proveedor, distinto talle declarado.
+    // Cada una debe matchear a SU variación, no colapsar ambas al mismo id_woo.
+    const resS = candidatosParaDoc({ descripcion: 'Producto Primer Negro Talle S', sku_proveedor: 'SHARED' }, idx);
+    const resM = candidatosParaDoc({ descripcion: 'Producto Primer Negro Talle M', sku_proveedor: 'SHARED' }, idx);
+    expect(resS.candidatos[0].id_woo).toBe(16);
+    expect(resM.candidatos[0].id_woo).toBe(17);
+    expect(resS.candidatos[0].id_woo).not.toBe(resM.candidatos[0].id_woo);
   });
 
-  it('14 · Dos hermanos con scores 0.98/0.96 → ambiguo (sin epsilon entre hermanos)', () => {
-    // Hallazgo 5: entre hermanos, siempre ambiguo sin epsilon
-    // Necesitamos un caso donde dos hermanos queden con scores que empaten (diferencia 0.02)
-    const idx = construirWCIndex([...variaciones(['S', 'M']), ...relleno()]);
-    // "Zapatillas Serfas Switchback Mtb Hombre" sin talle declara → empatarán los dos hermanos
-    const res = candidatosParaDoc({ descripcion: BASE }, idx);
+  it('14 · Dos hermanos con scores 1.0/0.978 (fuera del epsilon) → igual ambiguo, porque entre hermanos no hay epsilon', () => {
+    // Hallazgo 5: entre hermanos, SIEMPRE ambiguo, sin importar cuánto difieran los scores.
+    //
+    // Por qué este fixture y no variaciones(['S','M']): con atributos_json completo los dos
+    // hermanos empatan en score exacto (1.0/1.0), un caso que "se auto-cumple" — pasaría igual
+    // con la regla vieja (empate por epsilon), porque una diferencia de 0 siempre cae dentro de
+    // cualquier epsilon > 0. Acá se arman dos hermanos SIN atributos_json (para no disparar la
+    // regla de contradicción de atributo) con nombres que producen scores 1.0 y 0.978 — una
+    // diferencia de 0.022, que es MAYOR a EPSILON_EMPATE (0.02). Con la regla vieja (tratar
+    // hermanos igual que no-hermanos) este caso NO calificaría como empate y candidatosParaDoc
+    // devolvería ambiguo=false — ver la prueba de reversión en el reporte del tester.
+    const idx = construirWCIndex([
+      { id_woo: 101, id_padre: 100, sku: 'SW-S', tipo: 'variation', nombre: `${BASE} — Negro / S` },
+      { id_woo: 102, id_padre: 100, sku: 'SW-M', tipo: 'variation', nombre: `${BASE} — Negro / M Extra` },
+      ...relleno(),
+    ]);
+    const res = candidatosParaDoc({ descripcion: `${BASE} — Negro / S` }, idx);
+    expect(res.candidatos[0].score).toBe(1);
+    expect(res.candidatos[1].score).toBe(0.978);
+    expect(res.candidatos[0].score - res.candidatos[1].score).toBeGreaterThan(0.02); // fuera del epsilon
+    expect(res.candidatos[0].id_padre).toBe(100);
+    expect(res.candidatos[1].id_padre).toBe(100); // son hermanos
     expect(res.ambiguo).toBe(true);
-    expect(res.candidatos[0].id_padre).not.toBeNull();
-    expect(res.candidatos[1]?.id_padre).toBe(res.candidatos[0].id_padre);
     expect(autoAplicable(res)).toBe(false);
   });
 });
