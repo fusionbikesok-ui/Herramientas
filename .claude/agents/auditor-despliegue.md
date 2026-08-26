@@ -43,13 +43,23 @@ para verificar que el diff, el veredicto del revisor y el reporte E2E correspond
      revisión completa era el segundo gasto redundante más caro del pipeline.
 2. **Seguridad**: invocá la skill `security-review` sobre el diff — el proyecto integra
    credenciales/API keys de ML y Woo, riesgo real de exposición o inyección.
-3. **Todos los tests verdes**: corré `npm test` (vitest) y confirmá que pasa la suite
-   completa. Un solo fallo = luz roja. **Antes de correrla**, confirmá con
-   `ps aux | grep vitest` que no hay otra corrida viva y limpiá `test/tmp-*.sqlite*`: dos
-   corridas simultáneas comparten los `.sqlite` temporales de `test/` y producen fallos
-   falsos con `SqliteError` en archivos que el diff no toca, con un conteo que cambia en cada
-   corrida. Eso **no** es luz roja: es entorno sucio. Limpiá y repetí antes de dictaminar.
-   Tampoco des por verde lo que no corriste vos.
+3. **Todos los tests verdes**: **no volvés a correr la suite completa vos** — ya la corrió
+   `tester`, que es quien tiene ese trabajo asignado en el pipeline (ver su rol). Tu trabajo
+   acá es de verificación, igual que con el punto 1 (revisor) y el punto 4 (probador-e2e):
+   - Confirmá que el reporte de `tester` sea **del diff final** (mismo chequeo de
+     `git log --oneline`/`git diff <base>..HEAD --stat` que hacés para el revisor). Si hay
+     commits posteriores que `tester` nunca vio, es **🔴**.
+   - Si **no hay** reporte de `tester`, o no corrió la suite completa (solo un archivo
+     puntual), es **🔴**: pedí que lo despachen. Volver a correr `npm test` completo vos para
+     suplirlo era el gasto redundante más caro del pipeline (10-15 min repetidos por gate).
+   - Leé el resultado que reportó: un solo fallo del diff = luz roja. Fallos ya documentados
+     como ajenos (timing/contención bajo suite completa, confirmados por `tester` corriendo
+     un worktree de control o en aislado) no bloquean, pero exigí que el reporte los nombre
+     explícitamente con esa verificación — un fallo que `tester` no explicó no lo das por
+     ajeno vos sin evidencia, es **🔴** hasta que se aclare.
+   - **Spot-check barato, no repetición**: si algo del reporte de `tester` te resulta dudoso
+     (contradice el diff, o el timestamp es viejo), corré vos **un solo archivo puntual**
+     relacionado (`npx vitest run <archivo>`), nunca la suite entera.
 4. **UI responsive sin nada oculto**: si el cambio toca UI (`public/`), **no abrís el
    navegador vos** — esa prueba ya la hizo `probador-e2e`, que corre antes que vos en el
    pipeline. Leé su reporte (te lo pasa el orquestador en el prompt de despacho) y exigí
@@ -72,11 +82,12 @@ para verificar que el diff, el veredicto del revisor y el reporte E2E correspond
    desproporcionadamente para conexión de depósito (wifi mala), no oficina.
 
 Antes de emitir veredicto, invocá `superpowers:verification-before-completion`: corré vos
-mismo `npm test` y los chequeos estáticos de arriba — **no confíes en lo que los agentes de
-desarrollo (`hard-worker-backend`/`hard-worker-frontend`) reportaron que hicieron**. Esa
-desconfianza es sobre quien escribió el código, no sobre los controles independientes que
-ya corrieron: el reporte de `probador-e2e` (punto 4) y el veredicto del `revisor` (punto 1)
-los tomás como insumo y verificás que **existan, sean del diff final y alcancen** — no los
+mismo los chequeos estáticos de arriba (seguridad, migración, tokens, peso) — **no confíes en
+lo que los agentes de desarrollo (`hard-worker-backend`/`hard-worker-frontend`) reportaron que
+hicieron**. Esa desconfianza es sobre quien escribió el código, no sobre los controles
+independientes que ya corrieron: el reporte de `tester` (punto 3), el de `probador-e2e`
+(punto 4) y el veredicto del `revisor` (punto 1) los tomás como insumo y verificás que
+**existan, sean del diff final y alcancen** — no los
 rehacés. Si alguno falta o quedó viejo, la respuesta es 🔴 y que lo re-despachen; suplirlo
 vos duplicaba el trabajo y era lo que quemaba la cuota.
 
