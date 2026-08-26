@@ -30,14 +30,14 @@ function insertProducto(db, extra) {
   const base = {
     id_woo: 1, nombre: 'Producto', sku: 'FB-1', tipo: 'simple', id_padre: null,
     stock: 5, categorias_json: null, img: null, precio: null, atributos_json: null,
-    marca: null, gtin: null, actualizado_en: now(),
+    marca: null, gtin: null, no_contable: 0, actualizado_en: now(),
   };
   const row = { ...base, ...extra };
   db.prepare(`
     INSERT INTO catalogo_cache
-      (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, atributos_json, marca, gtin, actualizado_en)
+      (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, atributos_json, marca, gtin, no_contable, actualizado_en)
     VALUES
-      (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @atributos_json, @marca, @gtin, @actualizado_en)
+      (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @atributos_json, @marca, @gtin, @no_contable, @actualizado_en)
   `).run(row);
 }
 
