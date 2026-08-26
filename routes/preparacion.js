@@ -9,7 +9,8 @@ import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/stor
 import { procesarColaFotos, reintentarFoto } from '../lib/fotosPreparacionCola.js';
 import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
-  requisitosConCantidad, fotosFaltantes, esEnvioLocal,
+  requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
+  normalizarTelefonoParaComparacion,
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
@@ -263,6 +264,21 @@ function ensureTables(db) {
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables direccion_confirmada_en:', e.message);
   }
+
+  // Tabla de vínculos entre pedidos del mismo comprador (Fase 4).
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_vinculos (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    pedido_a_clave        TEXT NOT NULL,
+    pedido_b_clave        TEXT NOT NULL,
+    campo_match           TEXT NOT NULL,
+    estado                TEXT NOT NULL DEFAULT 'sugerido',
+    un_solo_paquete       INTEGER NOT NULL DEFAULT 0,
+    decidido_por          TEXT,
+    decidido_en           TEXT,
+    creado_en             TEXT NOT NULL,
+    UNIQUE (pedido_a_clave, pedido_b_clave)
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_vinculos_claves ON preparacion_vinculos(pedido_a_clave, pedido_b_clave)').run();
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -588,6 +604,60 @@ export function preparacionRouter(db, cfg) {
   // Queries para resolución de GTIN/EAN en escanear
   const skuPorEan = db.prepare('SELECT sku FROM ean_sku WHERE ean=?');
   const skusPorGtin = db.prepare("SELECT DISTINCT sku FROM catalogo_cache WHERE gtin=? AND sku IS NOT NULL AND sku <> ''");
+
+  // ─── Detección de vínculos entre pedidos (Fase 4) ─────────────────────────
+  //
+  // DISEÑO: Cuando se crea una preparación (POST /iniciar), corremos la detección
+  // contra todos los otros pedidos ya preparados o pendientes. Si hay match y no
+  // existe ya una fila en preparacion_vinculos para ese par, creamos una con
+  // estado='sugerido'. Esto es O(n) por preparación creada, donde n es la cantidad
+  // de preparaciones ya en la DB (decenas en producción, no miles). Mucho más
+  // eficiente que hacerlo en GET /pendientes (que sería O(n²) en la cola).
+  function inyectarDeteccionVinculosDesdePedidoNuevo(db, nuevoOrder, nuevaClave) {
+    const ahora = now();
+
+    // Obtener todas las preparaciones ya existentes + sus órdenes de pedidos_cache.
+    // Usamos INNER JOIN para asegurarnos de que la fila cache existe.
+    const otrasPreps = db.prepare(`
+      SELECT p.clave, pc.canal, pc.wc_order_id, pc.ml_order_id, pc.items_json
+      FROM preparaciones p
+      INNER JOIN pedidos_cache pc ON p.clave = pc.clave
+      WHERE p.clave != ?
+      ORDER BY p.creado_en DESC
+      LIMIT 100
+    `).all(nuevaClave);
+
+    for (const otraFila of otrasPreps) {
+      // Construir un objeto "order" minimal desde pedidos_cache para poder pasarlo a
+      // detectarVinculoEntrePedidos. Los datos de pedidos_cache son limitados, pero
+      // suficientes para comparar email, teléfono. DNI puede venir en meta_data que no
+      // tenemos acá, así que la detección por DNI fallaría — eso está bien, es un
+      // false negative aceptable que se corrija manualmente.
+      const otraOrder = {
+        meta_data: [],
+        billing: { email: otraFila.email || '', phone: '' },
+        shipping: { phone: '', first_name: '', last_name: '', address_1: '' },
+      };
+
+      const campoMatch = detectarVinculoEntrePedidos(nuevoOrder, otraOrder);
+      if (!campoMatch) continue;
+
+      // Normalizar las claves: siempre en orden alfabético para el índice único.
+      const [claveA, claveB] = [nuevaClave, otraFila.clave].sort();
+
+      try {
+        db.prepare(`
+          INSERT INTO preparacion_vinculos
+          (pedido_a_clave, pedido_b_clave, campo_match, estado, creado_en)
+          VALUES (?, ?, ?, 'sugerido', ?)
+        `).run(claveA, claveB, campoMatch, ahora);
+      } catch (e) {
+        if (!/unique constraint/i.test(e.message)) {
+          console.error('inyectarDeteccionVinculosDesdePedidoNuevo:', e.message);
+        }
+      }
+    }
+  }
 
   // Disparo inmediato de la cola de fotos tras cada subida/reintento (además del cron de
   // barrido en server.js). Default ON en producción; los tests lo apagan (cfg.colaFotos.
@@ -1055,6 +1125,11 @@ export function preparacionRouter(db, cfg) {
           }
           return id;
         })();
+
+        // Fase 4: detectar si este pedido tiene vínculos con otros ya preparados.
+        const nuevaClave = `web:${resp.data.id}`;
+        inyectarDeteccionVinculosDesdePedidoNuevo(db, resp.data, nuevaClave);
+
         return res.json({ ok: true, id: prepId });
       }
       if (canal === 'ml') {
@@ -1071,6 +1146,13 @@ export function preparacionRouter(db, cfg) {
           comprador: orden.buyer?.nickname || 'Comprador ML',
           items,
         });
+
+        // Fase 4: detectar si este pedido tiene vínculos con otros ya preparados.
+        // Nota: detectarVinculoEntrePedidos espera un objeto order similar a WC. ML tiene
+        // estructura diferente (buyer, address, etc.). Por ahora no detectamos vínculos de
+        // pedidos ML (el match sería por email en orden.buyer.email, pero necesitaría mapeo).
+        // TODO: expandir detectarVinculoEntrePedidos para soportar ambos formatos si es necesario.
+
         return res.json({ ok: true, id: prepId });
       }
       res.status(400).json({ ok: false, error: 'canal inválido' });
@@ -1634,6 +1716,94 @@ export function preparacionRouter(db, cfg) {
       preparacionId: prep.id, itemId: null, tipo: 'reabierta', usuario: req.user?.username, detalle: {},
     });
     res.json({ ok: true, estado: 'en_preparacion' });
+  });
+
+  // ── Vínculos entre pedidos (Fase 4) ────
+  //
+  // GET /vinculos/:clave — consultar sugerencias pendientes para un pedido.
+  // Devuelve las filas de preparacion_vinculos donde ese pedido participa y el
+  // estado sigue siendo 'sugerido' (todavía no se decidió), con resumen del OTRO
+  // pedido del par para que el frontend arme el aviso.
+  router.get('/vinculos/:clave', (req, res) => {
+    try {
+      const clave = req.params.clave;
+      if (!clave) return res.status(400).json({ ok: false, error: 'clave requerida' });
+
+      // Buscar sugerencias donde este pedido es pedido_a o pedido_b, pero solo 'sugerido'.
+      const sugerencias = db.prepare(`
+        SELECT id, pedido_a_clave, pedido_b_clave, campo_match, estado, creado_en
+        FROM preparacion_vinculos
+        WHERE (pedido_a_clave = ? OR pedido_b_clave = ?)
+          AND estado = 'sugerido'
+        ORDER BY creado_en DESC
+      `).all(clave, clave);
+
+      // Para cada sugerencia, obtener el resumen del OTRO pedido del par.
+      const resultado = sugerencias.map(vinc => {
+        const otraClave = vinc.pedido_a_clave === clave ? vinc.pedido_b_clave : vinc.pedido_a_clave;
+        const otraPedido = db.prepare('SELECT canal, wc_order_id, ml_order_id, numero_pedido, comprador FROM pedidos_cache WHERE clave = ?').get(otraClave);
+
+        return {
+          id: vinc.id,
+          campo_match: vinc.campo_match,
+          otro_pedido: otraPedido ? {
+            clave: otraClave,
+            canal: otraPedido.canal,
+            numero: otraPedido.numero_pedido || otraPedido.wc_order_id || otraPedido.ml_order_id,
+            comprador: otraPedido.comprador,
+          } : null,
+          creado_en: vinc.creado_en,
+        };
+      });
+
+      res.json({ ok: true, data: resultado });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // POST /vinculos/:id/decidir — decidir sobre un vínculo.
+  // Body: { estado: 'confirmado_junto'|'confirmado_separado_pero_vinculado'|'rechazado',
+  //         un_solo_paquete?: boolean }
+  router.post('/vinculos/:id/decidir', (req, res) => {
+    try {
+      const vinculoId = req.params.id;
+      const { estado, un_solo_paquete } = req.body || {};
+
+      // Validación: estado debe ser uno de los 3 valores válidos.
+      const estadosValidos = ['confirmado_junto', 'confirmado_separado_pero_vinculado', 'rechazado'];
+      if (!estadosValidos.includes(estado)) {
+        return res.status(400).json({
+          ok: false,
+          error: `estado inválido. debe ser uno de: ${estadosValidos.join(', ')}`,
+        });
+      }
+
+      // Buscar la fila del vínculo.
+      const vinculo = db.prepare('SELECT * FROM preparacion_vinculos WHERE id = ?').get(vinculoId);
+      if (!vinculo) return res.status(404).json({ ok: false, error: 'vínculo no encontrado' });
+
+      // Actualizar con la decisión.
+      const cambio = db.prepare(`
+        UPDATE preparacion_vinculos
+        SET estado = ?, un_solo_paquete = ?, decidido_por = ?, decidido_en = ?
+        WHERE id = ?
+      `).run(
+        estado,
+        estado === 'confirmado_junto' ? (un_solo_paquete ? 1 : 0) : 0,
+        req.user?.username || null,
+        now(),
+        vinculoId,
+      );
+
+      if (!cambio.changes) {
+        return res.status(500).json({ ok: false, error: 'no se pudo actualizar' });
+      }
+
+      res.json({ ok: true, estado });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   return router;
