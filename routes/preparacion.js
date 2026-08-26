@@ -2184,3 +2184,82 @@ export async function syncPedidosCache(db, cfg) {
     _pedidosCacheEnCurso = false;
   }
 }
+
+// ─── Camino rápido por webhook: un solo pedido, sin esperar al cron de 10 min ────
+//
+// A.1 (2026-08-26): syncPedidosCache de arriba sigue siendo la única fuente de verdad y el
+// respaldo — corre igual cada 10 min sin cambios. Estas dos funciones son un atajo puntual
+// que reusa exactamente el mismo upsert/mapeo (filaWebDesdeOrder/upsertPedidoCache,
+// ON CONFLICT(clave) por clave) para que la fila aparezca en pedidos_cache apenas llega la
+// notificación, en vez de esperar hasta 10 min.
+//
+// Fail-open explícito en ambas: si la llamada puntual falla (red, Woo/ML caído, error de
+// parseo), el error se loguea y se descarta acá — el pedido NO se pierde porque el cron
+// siguiente lo va a traer igual por su barrido normal de 3 llamadas por estado (Woo) o de
+// pendientesMl (ML). El caller (server.js) ya llama a esto con .catch(), fire-and-forget,
+// igual que ya hace con syncWcToMl/syncMlToWc para el mismo webhook.
+
+// Trae SOLO la orden `wcOrderId` de Woo y hace upsert inmediato en pedidos_cache si su
+// estado es uno de los 3 que syncPedidosCache ya trackea (lpaandreani/completed/enviadoandreani).
+// Cualquier otro estado (pending, cancelled, etc.) se ignora en silencio: no es un estado
+// relevante para la cola de preparación, igual que el barrido del cron nunca lo trae.
+export async function syncPedidoWebPuntual(db, cfg, wcOrderId) {
+  ensureTables(db);
+  const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
+  const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
+  const resp = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
+  const order = resp.data;
+  if (!order) return;
+  let estadoEnvio = null;
+  if (order.status === andreaniStatus) estadoEnvio = 'pendiente';
+  else if (order.status === 'completed' || order.status === enviadoAndreaniStatus) estadoEnvio = 'enviado';
+  if (!estadoEnvio) return;
+  upsertPedidoCache(db, filaWebDesdeOrder(db, order, estadoEnvio));
+}
+
+// Trae SOLO la orden `mlOrderId` de ML y hace upsert inmediato en pedidos_cache si sigue
+// paid + ready_to_ship + envío local (mismos 3 filtros que pendientesMl aplica en el barrido
+// del cron). Si no cumple alguno (todavía no está paga, ya se despachó, es envío por
+// colecta/agencia), se ignora en silencio -- no correspondería estar en la cola igual.
+export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
+  ensureTables(db);
+  if (!mlCfg?.clientId || !mlCfg?.userId) return;
+  const ordenResp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
+  if (ordenResp.status !== 200) return;
+  const orden = ordenResp.data;
+  if (orden.status !== 'paid') return;
+  const shipmentId = orden.shipping?.id;
+  if (!shipmentId) return;
+
+  const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
+  if (shipResp.status !== 200) return;
+  const envio = shipResp.data;
+  if (!envio?.status) return;
+  db.prepare(`
+    INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
+  `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
+  if (envio.status !== 'ready_to_ship') return;
+  if (!esEnvioLocal(envio.logistic_type)) return;
+
+  const ov = normalizarOrdenMl(orden);
+  const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
+  upsertPedidoCache(db, {
+    clave: `ml:${ov.ml_order_id}`,
+    canal: 'ml',
+    wc_order_id: vinculo?.wc_order_id || null,
+    ml_order_id: ov.ml_order_id,
+    pack_id: ov.pack_id || null,
+    numero_pedido: ov.numero,
+    comprador: ov.comprador.nickname || 'Comprador ML',
+    fecha: ov.fecha,
+    estado_envio: 'pendiente',
+    estado_wc: null,
+    espejo_ml: 0,
+    logistic_type: envio.logistic_type,
+    substatus: envio.substatus || null,
+    items_json: JSON.stringify(itemsDesdeOrdenMl(db, orden)),
+    actualizado_en: now(),
+  });
+}

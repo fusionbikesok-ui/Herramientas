@@ -23,7 +23,7 @@ import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { preciosRouter } from './routes/precios.js';
-import { preparacionRouter, syncPedidosCache, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
+import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
 import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
@@ -69,6 +69,19 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
 
       // Responder antes de procesar — WC no espera más de 5s
       res.json({ ok: true });
+
+      // A.1 (2026-08-26): camino rápido a la cola de Preparación. Va ANTES del filtro
+      // ESTADOS_CON_STOCK de abajo a propósito: ese filtro es para relevancia de stock/precio
+      // ML (syncWcToMl), pero el estado que de verdad importa para la cola de preparación es
+      // el de Andreani (lpaandreani/completed/enviadoandreani), que no está en esa lista. La
+      // función puntual ya descarta en silencio cualquier estado que no sea uno de esos 3.
+      // Fail-open: si esto falla, syncPedidosCache (cron cada 10 min) igual va a traer el
+      // pedido en su próxima corrida -- no se pierde, solo tarda más en aparecer.
+      syncPedidoWebPuntual(app._db, {
+        woo: wooCfg,
+        andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
+        enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
+      }, order.id).catch(err => console.error('[webhook-woo] syncPedidoWebPuntual error:', err.message));
 
       const ESTADOS_CON_STOCK = ['processing', 'completed', 'on-hold'];
       if (!ESTADOS_CON_STOCK.includes(order.status)) return;
@@ -137,11 +150,13 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   // ML espera 200 en < 500ms — respondemos antes de procesar cualquier topic.
   // Docs: https://developers.mercadolibre.com.ar/es_ar/recibir-notificaciones
   //
-  // Topics soportados hoy: 'orders' (sync inmediato a WC, ya existía), 'questions' y
-  // 'messages' (preguntas/mensajes sin responder, guardados para el aviso del Home — ver
-  // routes/notificacionesMl.js). El resto de los topics que ML manda (orders_v2, shipments,
-  // claims, orders_feedback, items, invoices) se reciben y se descartan en silencio hasta
-  // que se sume su función acá, mismo patrón que 'orders' tenía antes de este cambio.
+  // Topics soportados hoy: 'orders' (sync inmediato a WC + camino puntual a pedidos_cache,
+  // A.1), 'orders_v2' (solo camino puntual a pedidos_cache — no dispara syncMlToWc, mismo
+  // comportamiento preexistente de 'orders' respecto de eso), 'questions' y 'messages'
+  // (preguntas/mensajes sin responder, guardados para el aviso del Home — ver
+  // routes/notificacionesMl.js). El resto de los topics que ML manda (shipments, claims,
+  // orders_feedback, items, invoices) se reciben y se descartan en silencio hasta que se sume
+  // su función acá, mismo patrón que 'orders' tenía antes de este cambio.
   app.post('/api/ml/notificacion', express.json({ limit: '64kb' }), (req, res) => {
     res.json({ ok: true }); // responder inmediatamente antes de procesar
 
@@ -151,10 +166,24 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
     const mlUserId = process.env.ML_USER_ID;
     if (mlUserId && String(user_id) !== String(mlUserId)) return;
 
-    if (topic === 'orders') {
+    if (topic === 'orders' || topic === 'orders_v2') {
       console.log(`[notif-ml] topic=${topic} resource=${resource} → syncMlToWc`);
-      syncMlToWc(app._db, syncCfg)
-        .catch(err => console.error('[notif-ml] syncMlToWc error:', err.message));
+      // syncMlToWc solo se dispara para 'orders' (comportamiento preexistente, sin tocar).
+      if (topic === 'orders') {
+        syncMlToWc(app._db, syncCfg)
+          .catch(err => console.error('[notif-ml] syncMlToWc error:', err.message));
+      }
+
+      // A.1 (2026-08-26): camino rápido a la cola de Preparación, para 'orders' y 'orders_v2'
+      // por igual. `resource` viene como "/orders/{id}" -- se toma el último segmento.
+      // Fail-open: si falla o el order id no se puede extraer, no se pierde nada -- el pedido
+      // igual va a aparecer en la próxima corrida de syncPedidosCache (cron cada 10 min) vía
+      // pendientesMl, que no depende de este camino puntual.
+      const mlOrderId = String(resource || '').split('/').filter(Boolean).pop();
+      if (mlOrderId) {
+        syncPedidoMlPuntual(app._db, mlCfg, mlOrderId)
+          .catch(err => console.error('[notif-ml] syncPedidoMlPuntual error:', err.message));
+      }
       return;
     }
 
