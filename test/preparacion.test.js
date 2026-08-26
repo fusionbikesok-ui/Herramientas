@@ -158,20 +158,40 @@ describe('registrarEvento', () => {
 
 describe('splitDireccion', () => {
   it('separa calle y numeración cuando el número va al final', () => {
-    expect(splitDireccion('Av. Siempreviva 742')).toEqual({ calle: 'Av. Siempreviva', numeracion: '742' });
+    expect(splitDireccion('Av. Siempreviva 742')).toEqual({ calle: 'Av. Siempreviva', numeracion: '742', referencia: '' });
   });
 
   it('tolera dirección sin número', () => {
-    expect(splitDireccion('Camino de los Remeros s/n')).toEqual({ calle: 'Camino de los Remeros s/n', numeracion: '' });
+    expect(splitDireccion('Camino de los Remeros s/n')).toEqual({ calle: 'Camino de los Remeros s/n', numeracion: '', referencia: '' });
   });
 
   it('no confunde calles numeradas: el último número es la numeración', () => {
-    expect(splitDireccion('Calle 50 1234')).toEqual({ calle: 'Calle 50', numeracion: '1234' });
+    expect(splitDireccion('Calle 50 1234')).toEqual({ calle: 'Calle 50', numeracion: '1234', referencia: '' });
+  });
+
+  // Bug real de producción: "4405, parque industrial pesquero" no termina en
+  // dígito, así que sin cortar la coma el regex no matcheaba nunca y el
+  // número de calle se perdía por completo (quedaba en la dirección entera
+  // sin numeración). El texto después de la coma se guarda como referencia,
+  // no se descarta.
+  it('no pierde el número cuando hay texto después de una coma', () => {
+    expect(splitDireccion('Jose Florio 4405, parque industrial pesquero')).toEqual({
+      calle: 'Jose Florio', numeracion: '4405', referencia: 'parque industrial pesquero',
+    });
+  });
+
+  // Otro bug real: "Escalada 45 depto 9" terminaba en dígito (el 9 del depto)
+  // y el regex viejo lo tomaba como numeración de calle, comiéndose "45" y
+  // la palabra "depto" adentro de `calle`.
+  it('separa un sufijo de depto/piso/casa en vez de comerse el número real', () => {
+    expect(splitDireccion('Escalada 45 depto 9')).toEqual({
+      calle: 'Escalada', numeracion: '45', referencia: 'depto 9',
+    });
   });
 
   it('tolera vacío/null', () => {
-    expect(splitDireccion('')).toEqual({ calle: '', numeracion: '' });
-    expect(splitDireccion(null)).toEqual({ calle: '', numeracion: '' });
+    expect(splitDireccion('')).toEqual({ calle: '', numeracion: '', referencia: '' });
+    expect(splitDireccion(null)).toEqual({ calle: '', numeracion: '', referencia: '' });
   });
 });
 
