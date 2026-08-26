@@ -49,7 +49,24 @@ se re-corre aislado en ambas ramas antes de creerle.
 `ALTER TABLE` idempotente en `ensureTables` y se autorepara al arrancar; el backfill 022 es no-op
 (0 filas afectadas). **Sin pasos manuales pendientes.**
 
-### Estado: conflictos RESUELTOS, en el pipeline
+### Gate del tester — CERRADO
+
+Suite completa sobre el merge (`aa0b21f`): **1397/1400 verdes**, 2 rojos. Ambos re-corridos
+aislados: `reactivar-automatico` pasa solo; `matcherPush` también, 28/28 en la primera corrida.
+
+Al comparar contra la rama de producción (`conteo-confiable`, worktree de control en
+`/tmp/control-conteo-confiable`), `matcherPush` aislado **falló 3 corridas seguidas ahí, un test
+distinto cada vez**. Antes de leerlo como regresión: `load average` de la máquina en 4.05, con dos
+sesiones remotas de Claude, un Chromium de Playwright y un servidor Ollama corriendo en paralelo
+sin relación con esta tarea. Son tests con timeout atado a reloj real
+(`TIEMPO_MAX_CORRIDA_MS`) — bajo esta carga, cualquiera se pasa de su ventana. Mismo patrón que ya
+documenta este archivo más abajo (2026-08-21: "un archivo en rojo, distinto cada vez"). Afecta a
+las dos ramas por igual; no es señal de regresión del merge.
+
+**Conclusión del gate**: sin regresión real detectada. Los flaky son de infraestructura de la VPS,
+no del contenido del merge.
+
+### Estado: conflictos RESUELTOS, gate del tester cerrado
 
 Merge hecho en `aa0b21f`, worktree `.claude/worktrees/integracion`, rama
 `integracion-master-conteo`. **Todavía no mergeado a `master`** — esperando los gates.
