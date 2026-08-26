@@ -278,6 +278,24 @@
   </div>
 </div>
 
+<div class="modal" id="direccion-modal">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="direccion-modal-title">
+    <h2 id="direccion-modal-title" style="margin:0 0 4px;font-size:15px">Envío y facturación no coinciden</h2>
+    <p class="sub" style="margin:0 0 12px">Elegí a qué dirección se envía este pedido antes de seguir.</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button type="button" class="motivo-btn" style="text-align:left" onclick="elegirDireccion('shipping')">
+        <strong>Dirección de envío</strong><br>
+        <span id="direccion-modal-envio" style="font-size:13px;opacity:.85"></span>
+      </button>
+      <button type="button" class="motivo-btn" style="text-align:left" onclick="elegirDireccion('billing')">
+        <strong>Dirección de facturación</strong><br>
+        <span id="direccion-modal-facturacion" style="font-size:13px;opacity:.85"></span>
+      </button>
+    </div>
+    <button class="btn sec" style="margin-top:12px;width:100%" onclick="cerrarDireccionModal()">Cancelar</button>
+  </div>
+</div>
+
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
 <script>
@@ -398,16 +416,57 @@ function cardPendiente(p,ix){
     +'</div>';
 }
 
+var DIRECCION_MODAL_CTX=null;
+
 async function preparar(ix){
   var p=PEND_CACHE[ix];
   var c=document.getElementById('cuerpo');
   c.innerHTML='<div class="loading">Iniciando preparación…</div>';
+  await iniciarPreparacion(p.canal,p.canal==='web'?p.wc_order_id:p.ml_order_id,null);
+}
+
+async function iniciarPreparacion(canal,id,direccionElegida){
+  var c=document.getElementById('cuerpo');
   try{
-    var r=await api('/iniciar',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({canal:p.canal,id:p.canal==='web'?p.wc_order_id:p.ml_order_id})});
+    var body={canal:canal,id:id};
+    if(direccionElegida)body.direccion_elegida=direccionElegida;
+    var r=await api('/iniciar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.status===409&&r.body.direcciones_difieren){
+      abrirDireccionModal(canal,id,r.body);
+      return;
+    }
     if(!r.body.ok)throw new Error(r.body.error||'error');
+    DIRECCION_MODAL_CTX=null;
     abrirDetalle(r.body.id);
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+}
+
+function direccionResumen(d){
+  var linea1=(d.calle||'')+' '+(d.numeracion||'')+(d.piso_depto?' — '+d.piso_depto:'');
+  var linea2=(d.localidad||'')+', '+(d.provincia||'')+' ('+(d.cp||'s/CP')+')';
+  return esc((d.nombre||'')+' '+(d.apellido||''))+'<br>'+esc(linea1.trim())+'<br>'+esc(linea2);
+}
+
+function abrirDireccionModal(canal,id,resp){
+  DIRECCION_MODAL_CTX={canal:canal,id:id};
+  document.getElementById('direccion-modal-envio').innerHTML=direccionResumen(resp.envio);
+  document.getElementById('direccion-modal-facturacion').innerHTML=direccionResumen(resp.facturacion);
+  document.getElementById('direccion-modal').classList.add('open');
+}
+
+function cerrarDireccionModal(){
+  document.getElementById('direccion-modal').classList.remove('open');
+  DIRECCION_MODAL_CTX=null;
+  ir('pendientes');
+}
+
+async function elegirDireccion(fuente){
+  var ctx=DIRECCION_MODAL_CTX;
+  document.getElementById('direccion-modal').classList.remove('open');
+  if(!ctx)return;
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Iniciando preparación…</div>';
+  await iniciarPreparacion(ctx.canal,ctx.id,fuente);
 }
 
 // ─── Detalle / preparación ────────────────────────────────────────────────────
@@ -2238,12 +2297,7 @@ function cardEnviadoSinPreparar(p){
 async function completarAhora(canal,id){
   var c=document.getElementById('cuerpo');
   c.innerHTML='<div class="loading">Iniciando preparación…</div>';
-  try{
-    var r=await api('/iniciar',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({canal:canal,id:id})});
-    if(!r.body.ok)throw new Error(r.body.error||'error');
-    abrirDetalle(r.body.id);
-  }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+  await iniciarPreparacion(canal,id,null);
 }
 
 // ─── Cerradas sin evidencia ─────────────────────────────────────────────────

@@ -5,7 +5,7 @@ import request from 'supertest';
 import sharp from 'sharp';
 import { openDb } from '../db/index.js';
 import {
-  splitDireccion, splitTelefonoAr, normalizarEnvio, nombreProvincia,
+  splitDireccion, splitTelefonoAr, normalizarEnvio, nombreProvincia, direccionesDifieren,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
@@ -283,6 +283,44 @@ describe('normalizarEnvio', () => {
     expect(e.localidad).toBe('CABA');
     expect(e.caracteristica).toBe('11');
     expect(e.telefono).toBe('55556666');
+  });
+
+  it('con fuenteForzada usa esa fuente sin importar la regla automática', () => {
+    expect(normalizarEnvio(base, 'billing').calle).toBe('Otra');
+    expect(normalizarEnvio(base, 'shipping').calle).toBe('Belgrano');
+  });
+});
+
+describe('direccionesDifieren', () => {
+  const mismo = {
+    shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567' },
+    billing: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567' },
+  };
+
+  it('no difieren si son la misma dirección', () => {
+    expect(direccionesDifieren(mismo)).toEqual({ difieren: false, campos: [] });
+  });
+
+  it('no difieren por acentos, mayúsculas o espacios de más', () => {
+    const variante = { ...mismo, shipping: { ...mismo.shipping, address_1: '  belgrano   123 ', city: 'CORDOBA' } };
+    expect(direccionesDifieren(variante).difieren).toBe(false);
+  });
+
+  it('difieren si la calle es distinta', () => {
+    const distinta = { ...mismo, billing: { ...mismo.billing, address_1: 'Otra calle 999' } };
+    const r = direccionesDifieren(distinta);
+    expect(r.difieren).toBe(true);
+    expect(r.campos).toContain('calle');
+  });
+
+  it('difieren si el nombre del destinatario es distinto', () => {
+    const distinto = { ...mismo, billing: { ...mismo.billing, first_name: 'Otro' } };
+    expect(direccionesDifieren(distinto).campos).toContain('nombre');
+  });
+
+  it('no difieren si billing no tiene dirección propia (vacía)', () => {
+    const sinBilling = { ...mismo, billing: { address_1: '' } };
+    expect(direccionesDifieren(sinBilling)).toEqual({ difieren: false, campos: [] });
   });
 });
 
@@ -1702,6 +1740,73 @@ describe('preparacion flujo', () => {
 import { wooFetch } from '../routes/woo.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { syncPedidosCache } from '../routes/preparacion.js';
+
+describe('POST /iniciar — confirmación de envío vs. facturación', () => {
+  let db;
+  const orderBase = (overrides = {}) => ({
+    id: 950, number: '950', meta_data: [],
+    shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567' },
+    billing: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567', email: 'ana@mail.com' },
+    line_items: [],
+    ...overrides,
+  });
+
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('no molesta cuando envío y facturación son la misma dirección', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase() });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+  });
+
+  it('bloquea con 409 cuando difieren de verdad, sin crear la preparación', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({
+      billing: { first_name: 'Otro', last_name: 'Nombre', address_1: 'Otra calle 999', city: 'Rosario', state: 'S', phone: '3419999999', email: 'ana@mail.com' },
+    }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r.status).toBe(409);
+    expect(r.body.direcciones_difieren).toBe(true);
+    expect(r.body.campos_distintos).toEqual(expect.arrayContaining(['calle', 'localidad_provincia', 'nombre']));
+    expect(r.body.envio.calle).toBe('Belgrano');
+    expect(r.body.facturacion.calle).toBe('Otra calle');
+    expect(db.prepare('SELECT id FROM preparaciones WHERE clave=?').get('web:950')).toBeUndefined();
+  });
+
+  it('no molesta por acentos/mayúsculas distintas, solo por diferencias reales', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({
+      shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'belgrano 123', city: 'CORDOBA', state: 'X', phone: '3511234567' },
+    }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r.status).toBe(200);
+  });
+
+  it('con direccion_elegida crea la preparación y guarda la decisión', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({
+      billing: { first_name: 'Otro', last_name: 'Nombre', address_1: 'Otra calle 999', city: 'Rosario', state: 'S', phone: '3419999999', email: 'ana@mail.com' },
+    }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950, direccion_elegida: 'billing' });
+    expect(r.status).toBe(200);
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get('web:950');
+    expect(prep.direccion_confirmada_fuente).toBe('billing');
+    expect(prep.direccion_confirmada_por).toBe('tester');
+    expect(prep.direccion_confirmada_en).toBeTruthy();
+  });
+
+  it('una segunda llamada a /iniciar no vuelve a preguntar si ya se confirmó', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({
+      billing: { first_name: 'Otro', last_name: 'Nombre', address_1: 'Otra calle 999', city: 'Rosario', state: 'S', phone: '3419999999', email: 'ana@mail.com' },
+    }) });
+    await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950, direccion_elegida: 'shipping' });
+
+    wooFetch.mockResolvedValueOnce({ data: orderBase({
+      billing: { first_name: 'Otro', last_name: 'Nombre', address_1: 'Otra calle 999', city: 'Rosario', state: 'S', phone: '3419999999', email: 'ana@mail.com' },
+    }) });
+    const r2 = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r2.status).toBe(200);
+  });
+});
 
 describe('syncPedidosCache', () => {
   let db;
