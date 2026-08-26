@@ -14,8 +14,8 @@ el estado de ejecución fase por fase para no perder contexto entre sesiones.
 | Fase 1 — Etiquetas persistentes | 🟡 Integrada, PM2 sin reiniciar | `fase1-etiquetas-persistentes` → mergeada a `conteo-confiable` (`198d1ff`) | 2026-08-25. Cola persistente `etiquetas_cola` + `routes/etiquetas.js` + botón "Necesita etiqueta" en el conteo + pestaña "Cola de conteo" en Etiquetas. Revisor: 1 hallazgo importante (DELETE borraba ítems ya impresos) corregido en `29847e3`. 11/11 tests dirigidos + suite completa verde (matcherPush.test.js timeout intermitente ya documentado, no relacionado). **Falta un chequeo manual en navegador antes de reiniciar PM2** — no hubo Playwright disponible en el despacho, así que no se verificó visualmente. |
 | Fase 2 — Ubicaciones | ✅ **Desplegado** | `fase2-ubicaciones` → mergeada a `conteo-confiable` (merge commit) | 2026-08-25. Tablas `ubicaciones` + `producto_ubicacion`, alcance de sesión por ubicación (mutuamente excluyente con categoría/marca), captura automática al escanear/asociar, cierre en cero seguro (Rupturas 3 y 6: exige ubicación mapeada, excluye SKUs con overflow o sin ubicación registrada). Revisor: 2 hallazgos importantes corregidos (colisión entre sesiones sobre la misma ubicación vacía; banner de alcance grande pegado al cambiar de categoría a ubicación). 169/169 tests + suite completa verde (matcherPush.test.js timeout intermitente ya documentado). PM2 reiniciado, health OK. Pendiente: alguien pruebe una vez en el navegador el flujo real (crear ubicación, escanear, mapear, cerrar en cero) — sin Playwright disponible en el despacho. |
 | Fase 3 — Rotación y criticidad | ✅ **Desplegado** | `fase3-rotacion-criticidad` → mergeada a `conteo-confiable` (merge commit) | 2026-08-25. `ventas_historial` (backfill diario WC+ML, cron `0 5 * * *`) + `calcularCriticidad()` (score 0..1: ventas 12m 40%, diferencias 30%, categoría crítica 20%, valor de stock 10%, calculado on-demand sin tabla cacheada). Revisor: 2 hallazgos corregidos (subconteo por SKU repetido en un mismo pedido de Woo, `.trim()` faltante en fallback `seller_sku` de ML). Sin pantalla propia — infraestructura para el planificador de Fase 4. 15/15 tests + suite completa verde. |
-| Fase 4 — Planificador de ciclos | ⬜ Pendiente | — | Depende de Fases 2 y 3. Incluye el aviso de Home (plan aparte: `2026-08-24-aviso-control-stock-home.md`, en cola). |
-| Fase 5 — Auditoría de calidad de publicación | ⬜ Pendiente | — | Depende de Fase 4. |
+| Fase 4 — Planificador de ciclos | ✅ **Desplegado** | `fase4-planificador-ciclos` → mergeado a `conteo-confiable` (5fba5fb) | 2026-08-25. `sku_ultimo_conteo` sembrado automáticamente al confirmar (Ruptura 9). GET /api/inventario/plan-hoy (propone la sesión del día: ubicación mapeada más urgente o bootstrap por categoría) + GET /api/inventario/dirigido (lista SKUs más urgentes, solo informativo). Revisor: filtrar `producto_ubicacion` contra catálogo contable (SKU descontinuado no infla urgencia). 10/10 tests + 38/38 tests de Fases 1-3 sin regresiones. PM2 reiniciado, health OK. Sin frontend propio: los datos que expone son la base para un tablero futuro. |
+| Fase 5 — Auditoría de calidad de publicación | ✅ **Desplegado** | `fase5-auditoria-calidad` → mergeado a `conteo-confiable` | 2026-08-26. `auditoria_publicacion` (health, fotos, video). Barrido automático cada 15 min via ML multiget (chunks de 20). Cola priorizada por problemas + frontend en /auditoria/. PATCH estado-clip por publicación. 13/13 tests verdes. PM2 reiniciado, health OK. Ver pendientes abajo. |
 
 
 ## Bug crítico corregido fuera de plan (2026-08-25)
@@ -62,3 +62,24 @@ De la Fase 0 original del plan, lo que falta (Ruptura 1 ya está hecha):
 
 FUERA de este despacho: FB-65576 (duplicado, corrección en WooCommerce, no es código de la
 app — avisar a José aparte); Fases 1-5.
+
+
+## Sobreventa FB-67289 (2026-08-26) — incidente resuelto + medidas
+
+**Causa raíz:** `ml_publicaciones_cache` tenía `MLA1957482833` con `seller_sku=FB-67289` desde el 2026-08-19, pero `sku_matcher_decisiones` no tenía entrada → `syncWcToMl` nunca controló su stock → ML vendió con WC stock=0.
+
+**Medidas tomadas:**
+1. Script `fix_huerfanas.mjs` corrido manualmente → 55 publicaciones huérfanas activas incorporadas al matcher con `accion='confirmar'`.
+2. **Cron cada 30 min** en `server.js` que auto-confirma publicaciones huérfanas nuevas (activas, con seller_sku válido en catálogo, sin entrada en matcher) — cierra el agujero permanentemente.
+3. **Webhook WC → sync inmediato a ML** (`POST /api/woo/webhook/order`): cuando WC registra una venta (processing/completed/on-hold), dispara `syncWcToMl` en segundos en lugar de esperar hasta 10 min del cron. Configurado en WooCommerce apuntando a `herramientas.fusionbikes.com.ar/api/woo/webhook/order`.
+4. **Endpoint ML notifications** (`POST /api/ml/notificacion`): cuando ML registra una orden, dispara `syncMlToWc` inmediatamente. Endpoint deployado y operativo.
+
+## Pendiente de configurar (no bloqueante para operación diaria)
+
+| Ítem | Responsable | Detalle |
+|---|---|---|
+| Configurar notificaciones ML en ML Developers | José | App ID 4179977906546572 → Notificaciones → URL: `https://herramientas.fusionbikes.com.ar/api/ml/notificacion`, topic: `orders`. Endpoint ya deployado y operativo — solo falta activarlo en el panel. |
+| Completar `WOO_WEBHOOK_SECRET` en `.env` del VPS | José | Obtener el secreto desde WooCommerce → Ajustes → Avanzado → Webhooks → editar el webhook → copiar el secreto. Luego en VPS: `echo 'WOO_WEBHOOK_SECRET=<valor>' >> /opt/fusionbikes/herramientas/.env && pm2 restart herramientas`. Sin esto el webhook acepta cualquier payload (no valida firma HMAC). |
+| Switch `conteo-confiable` → `master` en producción | José + dev | Una vez todas las fases terminadas y validadas, mover el PM2 a servir desde `master`. |
+| Fase 5: fixes menores del revisor | Dev (próxima sesión) | (1) Métrica `sin_clip` en `/resumen` es semánticamente ambigua — renombrar a `sin_video_en_ml` o filtrar por `estado_clip`. (2) Loguear errores en `ensureAuditoriaTable` en vez de suprimirlos. (3) Test de rotación de cursor no aserta el valor correcto. |
+| Chequeo visual Fase 1 en navegador | José | Fase 1 (etiquetas) está integrada pero no se verificó visualmente con Playwright — hacer una prueba manual en `herramientas.fusionbikes.com.ar` antes de confirmar como lista. |
