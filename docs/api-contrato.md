@@ -1044,9 +1044,10 @@ para responder ahí — esta herramienta no responde nada por API.
 
 La app de ML tiene **todos los topics** seleccionados en el panel de developers; el filtro de
 qué procesar vive en `POST /api/ml/notificacion` (`server.js`), no en el panel. Hoy procesa
-`orders` (ya existía, sync a WC), `questions` y `messages`; el resto de los topics
-(`orders_v2`, `shipments`, `claims`, `orders_feedback`, `items`, `invoices`) se reciben y se
-descartan en silencio hasta que se sume su función.
+`orders` (ya existía, sync a WC), `orders_v2` (desde A.1: camino puntual a `pedidos_cache`,
+igual que `orders`, pero **no** dispara `syncMlToWc` — eso sigue siendo solo para `orders`),
+`questions` y `messages`; el resto de los topics (`shipments`, `claims`, `orders_feedback`,
+`items`, `invoices`) se reciben y se descartan en silencio hasta que se sume su función.
 
 ### GET /api/notificaciones-ml/pendientes
 Response 200: `{ ok:true, preguntas:[...], mensajes:[...], total:number }`.

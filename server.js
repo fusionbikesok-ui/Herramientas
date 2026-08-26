@@ -167,7 +167,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
     if (mlUserId && String(user_id) !== String(mlUserId)) return;
 
     if (topic === 'orders' || topic === 'orders_v2') {
-      console.log(`[notif-ml] topic=${topic} resource=${resource} → syncMlToWc`);
+      console.log(`[notif-ml] topic=${topic} resource=${resource} → ${topic === 'orders' ? 'syncMlToWc' : 'syncPedidoMlPuntual'}`);
       // syncMlToWc solo se dispara para 'orders' (comportamiento preexistente, sin tocar).
       if (topic === 'orders') {
         syncMlToWc(app._db, syncCfg)
@@ -201,8 +201,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
       return;
     }
 
-    // Topic sin función todavía (orders_v2, shipments, claims, orders_feedback, items,
-    // invoices) — se descarta en silencio, a propósito.
+    // Topic sin función todavía (shipments, claims, orders_feedback, items, invoices) —
+    // se descarta en silencio, a propósito. (orders_v2 sí tiene función: ver más arriba,
+    // camino puntual vía syncPedidoMlPuntual.)
   });
 
   app.use('/api', authGuard, scopeCheck);
