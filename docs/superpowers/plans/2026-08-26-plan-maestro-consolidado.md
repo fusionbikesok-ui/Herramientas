@@ -190,6 +190,15 @@ imprimir → desaparece de la cola.
 - Corregir el resultado de `/confirmar` (pantalla de Inventario): los sobrantes pendientes se
   muestran en rojo como si fueran errores. Deben verse en naranja (distinguirlos de un fallo
   real) y el mensaje debe aclarar explícitamente qué falta hacer para aplicarlos.
+- `routes/inventario.js` — dos filas de `inventario_conteos` pueden compartir el mismo `sku`
+  (la unicidad es por `sesion_id+ean`, no por sku): si eso pasa (ej. se escanea el GTIN de
+  fábrica de un producto fuera de alcance y después se asocia una etiqueta desconocida
+  distinta al mismo SKU) y se borra una de las dos filas, el `DELETE` de limpieza de
+  `inventario_sesion_alcance` (agregado en el fix de `f765068`) puede borrar el alcance de la
+  fila que sigue viva, dejándola sin `stock_inicial` y rompiendo `/confirmar` con
+  "stockInicial requerido". Preexistente, pero ahora alcanzable desde `/asociar`. Fix
+  sugerido por el revisor: condicionar el DELETE a `AND NOT EXISTS (SELECT 1 FROM
+  inventario_conteos WHERE sesion_id=? AND sku=?)`.
 
 ---
 
