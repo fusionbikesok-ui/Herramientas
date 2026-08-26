@@ -45,6 +45,12 @@ function ensureTables(db) {
 // Fail-open a propósito: si ML no responde, la notificación no se reintenta ni bloquea nada
 // más del webhook — la próxima notificación de esa pregunta (respondida, o si el primer
 // intento simplemente falló) la va a corregir.
+// Limitación conocida (hallazgo del revisor): no se serializa por id. Si dos notificaciones
+// del mismo recurso llegan cerca en el tiempo (ML no garantiza orden), los dos GET a ML
+// pueden resolver fuera de orden y el más viejo pisar el estado más fresco. Solo importa si
+// no vuelve a llegar OTRA notificación que corrija — como esto es un aviso, no una fuente de
+// verdad transaccional, el impacto es acotado; si algún día se necesita exactitud fuerte acá,
+// serializar por id (ej. una cola/lock simple) antes de confiar ciegamente.
 export async function ingerirPregunta(db, mlCfg, resource) {
   ensureTables(db);
   const m = String(resource || '').match(/\/questions\/(\d+)/);
