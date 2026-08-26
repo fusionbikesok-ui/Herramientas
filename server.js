@@ -302,6 +302,29 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // Fase 3 (rotación y criticidad): backfill/incremental diario de ventas_historial.
       // Horario de baja actividad, corrido de los otros crons diarios para no competir por
       // el rate-limit de ML.
+      // Auto-confirmar publicaciones ML con seller_sku válido que no tienen entrada
+      // en sku_matcher_decisiones (el agujero que causó la sobreventa de FB-67289 el
+      // 2026-08-26). Corre cada 30 min — las publicaciones nuevas entran al cache de ML
+      // via syncMlToWc (cada 10 min) y en la siguiente corrida quedan bajo control de stock.
+      cron.schedule('*/30 * * * *', () => {
+        try {
+          const insert = app._db.prepare(
+            "INSERT OR IGNORE INTO sku_matcher_decisiones (clave, sku, accion) " +
+            "SELECT p.clave, p.seller_sku, 'confirmar' " +
+            "FROM ml_publicaciones_cache p " +
+            "WHERE p.seller_sku IS NOT NULL AND p.seller_sku != '' " +
+            "  AND p.status = 'active' " +
+            "  AND EXISTS (SELECT 1 FROM catalogo_cache c WHERE c.sku = p.seller_sku) " +
+            "  AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave)"
+          );
+          const r = insert.run();
+          if (r.changes > 0)
+            console.log(`[auto-confirm-huerfanas] ${r.changes} publicaciones activas agregadas al matcher`);
+        } catch (err) {
+          console.error('[auto-confirm-huerfanas] error:', err.message);
+        }
+      });
+
       cron.schedule('0 5 * * *', () => {
         backfillVentas(app._db, syncCfg)
           .then(r => console.log('backfillVentas:', JSON.stringify(r)))
