@@ -211,3 +211,39 @@ Preparación, Conteo y Consulta de Precios).
 
 Este archivo debe permanecer breve. Reemplazá estados cerrados u obsoletos; no acumules una
 cronología de sesiones.
+
+## PAUSADO 2026-08-26 — hay otra sesión trabajando en vivo sobre `conteo-confiable`
+
+**No seguir con la integración hasta que esta sección se borre a mano.**
+
+Mientras armaba el merge de integración (`aa0b21f`, worktree `.claude/worktrees/integracion`),
+detecté una sesión de Claude activa en un terminal real (no background), trabajando directo sobre
+`conteo-confiable` — la rama que sirve producción. Evidencia: proceso `claude` con TTY `pts/3`,
+arrancado a las 12:51 del 26/08; commit mergeado a las 12:53, 3 minutos después de la detección.
+
+**37 commits nuevos en `conteo-confiable`** desde que se armó la rama de integración (`aa0b21f`
+se construyó sobre `master` en `2fcfcbf`, antes de esta racha). Los más recientes:
+`Fase 4 (planificador de ciclos)`, `Fase 5 (auditoría de calidad de publicaciones ML)`,
+`hotfix: webhook WC→syncWcToMl inmediato + auto-confirmar publicaciones ML huérfanas`,
+`fix: mover webhook WC antes de express.json()`. Todo esto entró en horas.
+
+**El disparador de esto**: el auditor marcó como bloqueante que el merge elimina
+`routes/etiquetas.js`/`lib/criticidad.js` (la cola de etiquetas pendientes deja de existir).
+Al investigar por qué, encontré que `conteo-confiable` tiene un commit de HOY
+(`298ba47`, "Fase 1 (backend): cola persistente de etiquetas") que es justo **lo contrario** de
+lo que yo asumía: no es que `master` haya decidido eliminar algo ya terminado — es que
+`conteo-confiable` está construyendo esa funcionalidad ahora mismo, **con el frontend todavía
+sin hacer** ("es el siguiente despacho", dice el propio mensaje del commit). Es trabajo en curso,
+no una decisión de producto asentada.
+
+**Qué queda pendiente cuando se retome:**
+1. Confirmar que la otra sesión terminó (sin commits nuevos en `conteo-confiable` por un rato).
+2. Re-armar la rama de integración desde cero (`git worktree add` nuevo, `master` actualizado,
+   merge de `conteo-confiable` actualizado) — la actual (`aa0b21f`) quedó obsoleta.
+3. Repetir el pipeline completo: los 37 commits nuevos no pasaron por ningún gate de esta
+   integración. No asumir que lo ya auditado sigue siendo válido.
+4. Re-evaluar el hallazgo de etiquetas con el estado real: puede que para entonces la Fase 1
+   (backend) + el frontend pendiente ya estén completos en `conteo-confiable`, y el merge los
+   traiga solos sin necesitar recuperación manual.
+
+**No se tocó pm2 ni producción en ningún momento de esta sesión.**
