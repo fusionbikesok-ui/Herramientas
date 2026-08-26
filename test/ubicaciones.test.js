@@ -144,6 +144,44 @@ describe('sesión con alcance por ubicación', () => {
     expect(asociados[0].confirmado_por).toBe('jose');
   });
 
+  it('fila de alcance CONGELADA por ubicación (ad_hoc=0) nunca se borra al asociar/borrar un ítem del mismo SKU', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', stock: 5, no_contable: 0 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+    const app = buildApp(db);
+    const ubic = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'A', estante: '1' });
+    const ubicacionId = ubic.body.ubicacion.id;
+
+    // FB-1 ya está registrado en esta ubicación ANTES de abrir la sesión (simula un
+    // escaneo de un ciclo anterior) → congelarAlcance lo incluye con ad_hoc=0.
+    db.prepare('INSERT INTO producto_ubicacion (sku, ubicacion_id, principal, confirmado_en, confirmado_por) VALUES (?,?,1,?,?)')
+      .run('FB-1', ubicacionId, now(), 'jose');
+
+    const crear = await request(app).post('/api/inventario/sesiones').send({ ubicacion_id: ubicacionId });
+    const idSesion = crear.body.sesion.id;
+
+    const alcanceInicial = db.prepare('SELECT ad_hoc FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(idSesion, 'FB-1');
+    expect(alcanceInicial.ad_hoc).toBe(0);
+
+    // Escanear un código desconocido y asociarlo a FB-1 (SKU que SÍ está en el alcance
+    // congelado de esta sesión por ubicación) — este es el camino que la ronda 2 del fix
+    // había roto: recalcular contra productoEnAlcance() da siempre false en sesiones por
+    // ubicación (categorias=[] y marcas=[]), marcando el ítem como fuera_de_alcance=1 y
+    // arriesgando que el DELETE borrara esta fila congelada.
+    const esc = await request(app).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: '1234567890128' });
+    const itemId = esc.body.item.id;
+    const asc = await request(app).post(`/api/inventario/sesiones/${idSesion}/asociar`).send({ ean: '1234567890128', sku: 'FB-1' });
+    expect(asc.status).toBe(200);
+
+    const del = await request(app).delete(`/api/inventario/sesiones/${idSesion}/items/${itemId}`);
+    expect(del.status).toBe(200);
+
+    const alcanceFinal = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(idSesion, 'FB-1');
+    expect(alcanceFinal.n).toBe(1);
+  });
+
   it('no duplica la fila si el mismo SKU se escanea dos veces en la misma ubicación', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', stock: 5 });

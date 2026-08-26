@@ -224,8 +224,16 @@ export function ensureTables(db) {
     categoria_principal TEXT,
     stock_inicial       INTEGER NOT NULL DEFAULT 0,
     bloque              TEXT NOT NULL,
+    ad_hoc              INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (sesion_id, sku)
   )`).run();
+  // migrations/018_inventario_sesion_alcance_ad_hoc.sql — distingue la fila congelada al
+  // abrir la sesión (ad_hoc=0, nunca se borra mientras la sesión esté abierta) de la creada
+  // al vuelo por /escanear o /asociar para un SKU fuera del alcance original (ad_hoc=1, se
+  // borra si ningún conteo vivo sigue referenciando ese SKU). No usar fuera_de_alcance del
+  // ítem para esa decisión: dos EANs asociados al mismo SKU ad hoc pueden divergir en esa
+  // bandera entre sí sin que eso cambie si la fila de alcance es o no borrable.
+  try { db.exec('ALTER TABLE inventario_sesion_alcance ADD COLUMN ad_hoc INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -550,7 +558,7 @@ export function inventarioRouter(db, wooCfg) {
   }
 
   const insertAlcance = db.prepare(`INSERT OR IGNORE INTO inventario_sesion_alcance
-    (sesion_id, sku, nombre, marca, categoria_principal, stock_inicial, bloque) VALUES (?,?,?,?,?,?,?)`);
+    (sesion_id, sku, nombre, marca, categoria_principal, stock_inicial, bloque, ad_hoc) VALUES (?,?,?,?,?,?,?,?)`);
 
   // Congela el alcance de la sesión (qué SKUs y en qué bloque). Se llama al crear
   // la sesión; también de forma perezosa al leer una sesión abierta creada antes
@@ -565,7 +573,7 @@ export function inventarioRouter(db, wooCfg) {
         insertAlcance.run(
           sesionId, p.sku, p.nombre, p.marca,
           parseCategorias(p.categorias_json)[0] || null,
-          stock, stock > 0 ? 'con_stock' : 'sin_stock'
+          stock, stock > 0 ? 'con_stock' : 'sin_stock', 0
         );
       }
     });
@@ -783,7 +791,7 @@ export function inventarioRouter(db, wooCfg) {
         insertAlcance.run(
           sesion.id, sku, prod.nombre, prod.marca,
           parseCategorias(prod.categorias_json)[0] || null,
-          stock, bloque
+          stock, bloque, 1
         );
         // Re-leer enAlcance después del insert, para que bloque no quede null en el conteo.
         enAlcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
@@ -885,11 +893,10 @@ export function inventarioRouter(db, wooCfg) {
       insertAlcance.run(
         sesion.id, sku, prodParaAlcance.nombre, prodParaAlcance.marca,
         parseCategorias(prodParaAlcance.categorias_json)[0] || null,
-        stock, bloque
+        stock, bloque, 1
       );
       alcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
       // Si el bloque cambió respecto del que usamos en el UPDATE, corregirlo ahora.
-      // Mantener fuera_de_alcance=1 porque la limpieza al borrar el ítem se basa en eso.
       if (alcance?.bloque) {
         db.prepare('UPDATE inventario_conteos SET bloque=? WHERE sesion_id=? AND ean=?')
           .run(alcance.bloque, sesion.id, ean);
@@ -947,16 +954,22 @@ export function inventarioRouter(db, wooCfg) {
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
     if (sesion.estado !== 'abierta') return res.status(400).json({ ok: false, error: 'La sesión no está abierta' });
 
-    // Leer el item antes de borrarlo para saber si tenía fuera_de_alcance=1 y su SKU.
-    const item = db.prepare('SELECT sku, fuera_de_alcance FROM inventario_conteos WHERE id=? AND sesion_id=?').get(req.params.itemId, sesion.id);
+    // Leer el item antes de borrarlo para saber su SKU.
+    const item = db.prepare('SELECT sku FROM inventario_conteos WHERE id=? AND sesion_id=?').get(req.params.itemId, sesion.id);
 
     db.prepare('DELETE FROM inventario_conteos WHERE id=? AND sesion_id=?').run(req.params.itemId, sesion.id);
 
-    // Si el ítem borrado tenía fuera_de_alcance=1, borrar también su fila de inventario_sesion_alcance
-    // solo si no queda otro ítem vivo con el mismo SKU (dos EANs → mismo SKU ad hoc).
-    if (item && item.fuera_de_alcance && item.sku) {
+    // Borrar también la fila de inventario_sesion_alcance del SKU, pero SOLO si esa fila es
+    // ad_hoc=1 (la creó /escanear o /asociar al vuelo, no estaba en el alcance congelado al
+    // abrir la sesión) y ningún otro ítem vivo sigue referenciando el mismo SKU (dos EANs →
+    // mismo SKU ad hoc). No decidir por item.fuera_de_alcance: esa bandera puede divergir
+    // entre dos EANs del mismo SKU ad hoc (el segundo /asociar la deja en 0 al encontrar la
+    // fila que ya creó el primero) sin que eso cambie si la fila de alcance es borrable, y
+    // recalcularla contra el catálogo en vivo rompe la invariante de alcance CONGELADO en
+    // sesiones por ubicación o cuando el catálogo cambió después de abrir la sesión.
+    if (item && item.sku) {
       db.prepare(`
-        DELETE FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?
+        DELETE FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=? AND ad_hoc=1
           AND NOT EXISTS (SELECT 1 FROM inventario_conteos WHERE sesion_id=? AND sku=?)
       `).run(sesion.id, item.sku, sesion.id, item.sku);
     }

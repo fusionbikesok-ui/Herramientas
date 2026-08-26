@@ -700,6 +700,83 @@ describe('POST /api/inventario/sesiones/:id/asociar — alcance ad hoc para SKU 
 
     db.close();
   });
+
+  it('(e) Dos EANs distintos → mismo SKU fuera de alcance: borrar AMBOS elimina el alcance ad hoc (sin importar el orden)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-MAXXIS', marca: 'Maxxis', stock: 5 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    const esc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1111111111116' });
+    const esc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '2222222222223' });
+    const itemId1 = esc1.body.item.id;
+    const itemId2 = esc2.body.item.id;
+
+    const asc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1111111111116', sku: 'FB-MAXXIS' });
+    const asc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '2222222222223', sku: 'FB-MAXXIS' });
+
+    // El primer /asociar crea la fila de alcance ad hoc (fuera_de_alcance=1). El segundo
+    // la encuentra ya creada y queda con fuera_de_alcance=0 — esa divergencia entre los dos
+    // ítems es benigna ahora: la limpieza del DELETE ya no decide por esta bandera, decide
+    // por la columna ad_hoc de la fila de alcance (ver fix c136ce2 y el que le sigue).
+    expect(asc1.body.item.fuera_de_alcance).toBe(true);
+    expect(asc2.body.item.fuera_de_alcance).toBe(false);
+    const alcanceAdHoc = db.prepare('SELECT ad_hoc FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcanceAdHoc.ad_hoc).toBe(1);
+
+    // Borrar primero el ítem que quedó con fuera_de_alcance=0 (itemId2) — es el orden que
+    // rompía la limpieza cuando esta dependía de esa bandera en vez de la columna ad_hoc.
+    const del2 = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId2}`);
+    expect(del2.status).toBe(200);
+    // El alcance ad hoc debe seguir vivo: itemId1 (mismo SKU) todavía existe.
+    const alcanceTrasDel2 = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcanceTrasDel2.n).toBe(1);
+
+    const del1 = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId1}`);
+    expect(del1.status).toBe(200);
+
+    const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcance.n).toBe(0);
+
+    db.close();
+  });
+
+  it('(f) Fila de alcance CONGELADA al abrir la sesión (ad_hoc=0) nunca se borra al asociar/borrar un ítem del mismo SKU', async () => {
+    const db = openDb(TEST_DB);
+    // FB-BELL está en el alcance original (marca Bell) → congelarAlcance la inserta con ad_hoc=0.
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    const alcanceInicial = db.prepare('SELECT ad_hoc FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-BELL');
+    expect(alcanceInicial.ad_hoc).toBe(0);
+
+    // Escanear un código desconocido y asociarlo a FB-BELL (SKU que SÍ está en el alcance).
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1234567890128' });
+    const itemId = esc.body.item.id;
+    const asc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-BELL' });
+    expect(asc.status).toBe(200);
+
+    // Borrar el ítem: la fila de alcance CONGELADA (ad_hoc=0) no debe borrarse nunca,
+    // aunque no quede ningún conteo vivo con ese SKU — sigue siendo un pendiente real.
+    const del = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId}`);
+    expect(del.status).toBe(200);
+
+    const alcanceFinal = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-BELL');
+    expect(alcanceFinal.n).toBe(1);
+
+    db.close();
+  });
 });
 
 describe('DELETE /api/inventario/sesiones/:id/items/:itemId', () => {
