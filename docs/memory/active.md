@@ -66,6 +66,12 @@ las dos ramas por igual; no es señal de regresión del merge.
 **Conclusión del gate**: sin regresión real detectada. Los flaky son de infraestructura de la VPS,
 no del contenido del merge.
 
+### Gate del probador-e2e — EN CURSO
+
+Instancia aislada levantada en puerto 3197 (DB temporal, `DISABLE_CRONS=true`, sin credenciales
+ML/Woo). Acotado a Consulta de Precios y Preparación — las dos pantallas que más difieren de lo
+desplegado (208 y 372 líneas respectivamente).
+
 ### Estado: conflictos RESUELTOS, gate del tester cerrado
 
 Merge hecho en `aa0b21f`, worktree `.claude/worktrees/integracion`, rama
