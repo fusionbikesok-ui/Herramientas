@@ -187,6 +187,9 @@ imprimir → desaparece de la cola.
 - Completar `WOO_WEBHOOK_SECRET` en `.env` del VPS (tarea operativa del usuario, no de
   código: sin esto el webhook de Woo acepta cualquier payload sin validar firma HMAC —
   obtenerlo desde WooCommerce → Ajustes → Avanzado → Webhooks → editar → copiar secreto).
+- Corregir el resultado de `/confirmar` (pantalla de Inventario): los sobrantes pendientes se
+  muestran en rojo como si fueran errores. Deben verse en naranja (distinguirlos de un fallo
+  real) y el mensaje debe aclarar explícitamente qué falta hacer para aplicarlos.
 
 ---
 
