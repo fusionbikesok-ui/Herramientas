@@ -29,3 +29,29 @@ despacho de e2e.
 Todo cambio de código en este repo pasa por el pipeline `hard-worker → revisor →
 tester/probador-e2e → auditor-despliegue` antes de darse por cerrado. No autoevaluarse. Ver
 `agents/model-routing.md` y `.claude/agents/*.md` para la especificación de cada rol.
+
+## Actualización 2026-08-26 tarde — Notificaciones ML + reprioridad
+
+**Notificaciones ML (preguntas/mensajes)**: ✅ **Desplegado**. Rama
+`ml-notificaciones-preguntas-mensajes` → mergeada a `conteo-confiable` (`f1c113d`), pusheada
+a GitHub. Pipeline completo: revisor (3 hallazgos menores, corregidos), probador-e2e
+(simulación visual del banner del Home, 1440/390px sin hallazgos), auditor-despliegue
+(🟢, 7/7 puntos). **Falta**: asignar el permiso `notificaciones-ml` a quien corresponda desde
+Usuarios, verificar la URL del link a ML en el banner, y `pm2 restart` cuando se quiera
+activar en vivo.
+
+**Reprioridad pedida por el usuario** (ver plan de sesión completo,
+`/root/.claude/plans/busca-en-todas-las-mellow-pond.md`, para el detalle): 4 tareas nuevas de
+sync ML↔Woo reordenadas por urgencia real tras verificar el código existente:
+1. Venta confirmada → cola de Preparación al instante (único gap real de tiempo, hoy 10 min
+   por cron sin disparo inmediato). **Siguiente paso al retomar.**
+2. Stock desde las herramientas → push inmediato con feedback visual (ya sincroniza rápido,
+   falta el feedback).
+3. Cambio de stock por venta → sync puntual por orden en vez de barrido completo
+   (`syncMlToWc` ya es idempotente e inmediato, esto es optimización).
+4. Reclamos sumados a "Novedades ML" (extender lo ya desplegado con topic `claims`).
+
+**Pausado sin implementar** por pedido explícito del usuario ("guarda el plan... y no
+trabajes más a partir de allí"). Se creó `.claude/worktrees/prep-cola-instantanea` (rama
+`prep-cola-instantanea`) pero está vacío, sin código ni agente despachado — listo para
+retomar el punto 1.
