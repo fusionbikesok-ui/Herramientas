@@ -480,6 +480,9 @@ body {
   <!-- ESTADO DEL TOKEN ML — arriba de todo dentro de la zona de atención -->
   <div id="token-ml-banner"></div>
 
+  <!-- PREGUNTAS Y MENSAJES ML SIN RESPONDER -->
+  <div id="notif-ml-banner"></div>
+
   <!-- REQUIERE TU ATENCIÓN -->
   <section id="panel-atencion" style="display:none;margin-bottom:22px">
     <div class="attn-header">
@@ -955,6 +958,34 @@ fetch('/api/auth/me').then(function(r) {
     if (!t) return;
     renderTokenBanner(t);
   }).catch(function() { /* degradar en silencio: nunca mostrar un banner falso */ });
+
+  // ── Preguntas y mensajes de ML sin responder (aviso liviano, permiso 'notificaciones-ml') ──
+  // Alcance decidido con el usuario (2026-08-26): solo avisar cuánto hay pendiente y hace
+  // cuánto llegó lo más viejo — responder se hace en Mercado Libre, no acá. El link de abajo
+  // apunta a la sección de preguntas del panel de vendedor de ML; si no coincide con la URL
+  // real de la cuenta, ajustarla (no se pudo verificar en vivo contra el panel).
+  function renderNotifMlBanner(d) {
+    var host = document.getElementById('notif-ml-banner');
+    if (!d || !d.total) { host.innerHTML = ''; return; }
+    var partes = [];
+    if (d.preguntas) partes.push(d.preguntas + (d.preguntas === 1 ? ' pregunta' : ' preguntas'));
+    if (d.mensajes) partes.push(d.mensajes + (d.mensajes === 1 ? ' mensaje' : ' mensajes'));
+    var desc = partes.join(' y ') + ' sin responder en MercadoLibre.';
+    host.innerHTML = '<div class="token-banner warn" role="status">'
+      + '<svg class="token-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>'
+      + '<div class="token-banner-body">'
+      + '<div class="token-banner-title">Hay ' + esc(desc) + '</div>'
+      + '<div class="token-banner-actions">'
+      + '<a class="token-banner-btn" href="https://myaccount.mercadolibre.com.ar/questions/list" target="_blank" rel="noopener">Ver en MercadoLibre</a>'
+      + '</div></div></div>';
+  }
+
+  if (tienePermiso('notificaciones-ml')) {
+    fetch('/api/notificaciones-ml/count').then(function(r) { return r.json(); }).then(function(d) {
+      if (!d || !d.ok) return;
+      renderNotifMlBanner(d);
+    }).catch(function() { /* degradar en silencio */ });
+  }
 
   if (!tienePermiso('sync-ml') && tienePermiso('matcher')) {
     cargarPanelSoloMatcher();
