@@ -127,6 +127,32 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   }
   const syncCfg = { woo: wooCfg, ml: mlCfg };
 
+  // ── Notificaciones ML → sync inmediato a WC ─────────────────────────────────
+  // POST /api/ml/notificacion
+  // ML llama este endpoint cuando hay una orden nueva/actualizada.
+  // Body: { topic: "orders", resource: "/orders/2000018120802680", ... }
+  // ML no envía firma — la autenticidad se valida por:
+  //   1. El user_id del body debe coincidir con ML_USER_ID configurado
+  //   2. Solo procesamos topic "orders" (ignoramos "questions", "items", etc.)
+  // ML espera 200 en < 500ms — respondemos antes de procesar.
+  // Docs: https://developers.mercadolibre.com.ar/es_ar/recibir-notificaciones
+  app.post('/api/ml/notificacion', express.json({ limit: '64kb' }), (req, res) => {
+    res.json({ ok: true }); // responder inmediatamente antes de procesar
+
+    const { topic, user_id } = req.body || {};
+
+    // Validar que la notificación es para nuestra cuenta
+    const mlUserId = process.env.ML_USER_ID;
+    if (mlUserId && String(user_id) !== String(mlUserId)) return;
+
+    // Solo nos interesan órdenes (no preguntas, items, etc.)
+    if (topic !== 'orders') return;
+
+    console.log(`[notif-ml] topic=${topic} resource=${req.body?.resource} → syncMlToWc`);
+    syncMlToWc(app._db, syncCfg)
+      .catch(err => console.error('[notif-ml] syncMlToWc error:', err.message));
+  });
+
   app.use('/api', authGuard, scopeCheck);
 
   // Gestión de usuarios: solo admins.
