@@ -3,6 +3,7 @@ import session from 'express-session';
 import SqliteStoreFactory from 'better-sqlite3-session-store';
 import Database from 'better-sqlite3';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { openDb } from './db/index.js';
@@ -30,6 +31,8 @@ import { inventarioRouter } from './routes/inventario.js';
 import { etiquetasRouter } from './routes/etiquetas.js';
 import { criticidadRouter } from './routes/criticidad.js';
 import { backfillVentas } from './lib/criticidad.js';
+import { auditoriaRouter } from './routes/auditoria.js';
+import { barridoAuditoria } from './lib/auditoria.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 
@@ -93,6 +96,42 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
 
   const syncCfg = { woo: wooCfg, ml: mlCfg };
 
+  // ── Webhook WooCommerce → sync inmediato a ML ───────────────────────────────
+  // POST /api/woo/webhook/order
+  // WC lo llama con topic order.created y order.updated.
+  // Verifica HMAC-SHA256 (WOO_WEBHOOK_SECRET en .env) antes de procesar.
+  // Responde 200 inmediatamente y dispara syncWcToMl en background para no
+  // bloquear el reintento de WC (WC reintenta si no recibe 200 en < 5s).
+  app.post('/api/woo/webhook/order',
+    express.raw({ type: 'application/json', limit: '1mb' }),
+    (req, res) => {
+      const whSecret = process.env.WOO_WEBHOOK_SECRET || '';
+      if (whSecret) {
+        const sig = req.headers['x-wc-webhook-signature'];
+        if (!sig) return res.status(401).json({ ok: false, error: 'sin firma' });
+        const expected = crypto.createHmac('sha256', whSecret)
+          .update(req.body).digest('base64');
+        if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+          return res.status(401).json({ ok: false, error: 'firma inválida' });
+        }
+      }
+      let order;
+      try { order = JSON.parse(req.body.toString('utf8')); }
+      catch { return res.status(400).json({ ok: false, error: 'payload inválido' }); }
+
+      // Responder antes de procesar — WC no espera más de 5s
+      res.json({ ok: true });
+
+      const ESTADOS_CON_STOCK = ['processing', 'completed', 'on-hold'];
+      if (!ESTADOS_CON_STOCK.includes(order.status)) return;
+
+      const skus = (order.line_items || []).map(li => li.sku).filter(Boolean).join(', ');
+      console.log(`[webhook-woo] order #${order.id} status=${order.status} skus=${skus || '(sin sku)'} → syncWcToMl`);
+      syncWcToMl(app._db, syncCfg, { maxLlamadas: 30 })
+        .catch(err => console.error('[webhook-woo] syncWcToMl error:', err.message));
+    }
+  );
+
   app.use('/api/woo', wooRouter(db, wooCfg));
   app.use('/api/gemini', geminiRouter(geminiKey));
   app.use('/api/nuevos-productos', nuevosProductosRouter(geminiKey, db));
@@ -132,6 +171,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
   app.use('/api/etiquetas', etiquetasRouter(db));
   app.use('/api/criticidad', criticidadRouter(db, syncCfg));
+  app.use('/api/auditoria', auditoriaRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
 
   // -- Error handler global (respaldo) ---------------------------------
@@ -265,6 +305,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         backfillVentas(app._db, syncCfg)
           .then(r => console.log('backfillVentas:', JSON.stringify(r)))
           .catch(err => console.error('Error en backfillVentas:', err.message));
+      });
+
+      // Fase 5 (auditoría de publicaciones): barrido rotativo cada 15 min, cursor en sync_estado.
+      // 2 chunks de 20 por corrida → ~40 publicaciones por tick. Con ~4541 SKUs vinculados
+      // una vuelta completa tarda ~19 h. No compite con la reconciliación de stock (cada 10 min)
+      // ni con backfillVentas (diario) porque usa atributos distintos del multiget de ML.
+      cron.schedule('*/15 * * * *', () => {
+        barridoAuditoria(app._db, syncCfg)
+          .then(r => { if (r.auditados) console.log('barridoAuditoria:', JSON.stringify(r)); })
+          .catch(err => console.error('Error en barridoAuditoria:', err.message));
       });
 
       // Cola de procesamiento de fotos de preparación (plan 2026-08-12-fotos-preparacion.md):
