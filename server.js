@@ -3,6 +3,7 @@ import session from 'express-session';
 import SqliteStoreFactory from 'better-sqlite3-session-store';
 import Database from 'better-sqlite3';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { openDb } from './db/index.js';
@@ -94,6 +95,42 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/usuarios', requireAdmin, usuariosRouter(db));
 
   const syncCfg = { woo: wooCfg, ml: mlCfg };
+
+  // ── Webhook WooCommerce → sync inmediato a ML ───────────────────────────────
+  // POST /api/woo/webhook/order
+  // WC lo llama con topic order.created y order.updated.
+  // Verifica HMAC-SHA256 (WOO_WEBHOOK_SECRET en .env) antes de procesar.
+  // Responde 200 inmediatamente y dispara syncWcToMl en background para no
+  // bloquear el reintento de WC (WC reintenta si no recibe 200 en < 5s).
+  app.post('/api/woo/webhook/order',
+    express.raw({ type: 'application/json', limit: '1mb' }),
+    (req, res) => {
+      const whSecret = process.env.WOO_WEBHOOK_SECRET || '';
+      if (whSecret) {
+        const sig = req.headers['x-wc-webhook-signature'];
+        if (!sig) return res.status(401).json({ ok: false, error: 'sin firma' });
+        const expected = crypto.createHmac('sha256', whSecret)
+          .update(req.body).digest('base64');
+        if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+          return res.status(401).json({ ok: false, error: 'firma inválida' });
+        }
+      }
+      let order;
+      try { order = JSON.parse(req.body.toString('utf8')); }
+      catch { return res.status(400).json({ ok: false, error: 'payload inválido' }); }
+
+      // Responder antes de procesar — WC no espera más de 5s
+      res.json({ ok: true });
+
+      const ESTADOS_CON_STOCK = ['processing', 'completed', 'on-hold'];
+      if (!ESTADOS_CON_STOCK.includes(order.status)) return;
+
+      const skus = (order.line_items || []).map(li => li.sku).filter(Boolean).join(', ');
+      console.log(`[webhook-woo] order #${order.id} status=${order.status} skus=${skus || '(sin sku)'} → syncWcToMl`);
+      syncWcToMl(app._db, syncCfg, { maxLlamadas: 30 })
+        .catch(err => console.error('[webhook-woo] syncWcToMl error:', err.message));
+    }
+  );
 
   app.use('/api/woo', wooRouter(db, wooCfg));
   app.use('/api/gemini', geminiRouter(geminiKey));
