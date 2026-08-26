@@ -92,8 +92,8 @@ describe('contrato GET /pendientes', () => {
     const app = buildTestApp(db); // ensureTables corre acá; hace falta antes de sembrar pedidos_cache
     const itemsWeb = [{ line_item_id: 1, product_id: 501, variation_id: null, sku: 'BIKE-1', nombre: 'Bici Rodado', categoria: 'Bicicletas', cantidad: 2 }];
     db.prepare(`
-      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('web:900','web',900,NULL,'900','Juan Perez','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,?,?)
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note)
+      VALUES ('web:900','web',900,NULL,'900','Juan Perez','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,?,?,'tocar timbre, hay perro')
     `).run(JSON.stringify(itemsWeb), new Date().toISOString());
 
     const itemsMl = [{ line_item_id: null, product_id: 601, variation_id: null, sku: 'CASCO-9', nombre: 'Casco L', categoria: 'Cascos', cantidad: 1 }];
@@ -108,13 +108,17 @@ describe('contrato GET /pendientes', () => {
     expect(res.body.data).toHaveLength(2);
 
     const web = res.body.data.find(p => p.canal === 'web');
+    // 'notas': customer_note del pedido, cacheada en pedidos_cache (Fase 3 del plan de
+    // Preparación) — antes solo se veía en la pestaña Etiquetas Andreani. Solo en 'web':
+    // la API de orders de ML no expone un campo equivalente (confirmado 2026-08-26).
     expect(Object.keys(web).sort()).toEqual([
       'canal', 'comprador', 'espejo_ml', 'estado_preparacion', 'estado_wc', 'etiqueta_lista',
-      'fecha', 'items', 'numero_pedido', 'preparacion_id', 'wc_order_id',
+      'fecha', 'items', 'notas', 'numero_pedido', 'preparacion_id', 'wc_order_id',
     ].sort());
     expect(web.wc_order_id).toBe(900);
     expect(web.espejo_ml).toBe(false);
     expect(web.comprador).toBe('Juan Perez');
+    expect(web.notas).toBe('tocar timbre, hay perro');
     expect(Object.keys(web.items[0]).sort()).toEqual([
       'cantidad', 'categoria', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
     ].sort());

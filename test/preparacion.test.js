@@ -1761,6 +1761,14 @@ describe('POST /iniciar — confirmación de envío vs. facturación', () => {
     expect(r.body.ok).toBe(true);
   });
 
+  it('guarda la nota del pedido (customer_note) en la preparación creada', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({ customer_note: 'dejar con el portero' }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r.status).toBe(200);
+    const prep = db.prepare('SELECT notas FROM preparaciones WHERE id=?').get(r.body.id);
+    expect(prep.notas).toBe('dejar con el portero');
+  });
+
   it('bloquea con 409 cuando difieren de verdad, sin crear la preparación', async () => {
     wooFetch.mockResolvedValueOnce({ data: orderBase({
       billing: { first_name: 'Otro', last_name: 'Nombre', address_1: 'Otra calle 999', city: 'Rosario', state: 'S', phone: '3419999999', email: 'ana@mail.com' },
@@ -1827,6 +1835,7 @@ describe('syncPedidosCache', () => {
     const orderPend = {
       id: 900, number: '900', status: 'lpaandreani', date_created: '2026-07-01T00:00:00Z',
       billing: { first_name: 'Juan', last_name: 'Perez' }, meta_data: [],
+      customer_note: 'entregar después de las 18h',
       line_items: [{ id: 1, product_id: 501, variation_id: 0, sku: 'BIKE-1', name: 'Bici', quantity: 1 }],
     };
     wooFetch
@@ -1843,6 +1852,22 @@ describe('syncPedidosCache', () => {
     expect(row.canal).toBe('web');
     expect(row.numero_pedido).toBe('900');
     expect(JSON.parse(row.items_json)).toHaveLength(1);
+    expect(row.customer_note).toBe('entregar después de las 18h');
+  });
+
+  it('un pedido ML no tiene equivalente de nota — queda vacía, no inventada', async () => {
+    wooFetch.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [] });
+    mlFetch.mockResolvedValueOnce({
+      status: 200,
+      data: { results: [{ id: 'ORD-1', status: 'paid', date_created: '2026-07-01T00:00:00Z', buyer: { nickname: 'compradorml' }, order_items: [], shipping: { id: 555 } }] },
+    });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } });
+
+    await syncPedidosCache(db, CFG);
+
+    const row = db.prepare('SELECT * FROM pedidos_cache WHERE clave=?').get('ml:ORD-1');
+    expect(row).toBeTruthy();
+    expect(row.customer_note).toBe('');
   });
 
   it('guarda en pedidos_cache un pedido web ya enviado (completed) con estado_envio=enviado', async () => {
