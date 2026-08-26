@@ -40,14 +40,14 @@ function insertProducto(db, extra) {
   const base = {
     id_woo: 1, nombre: 'Producto', sku: 'FB-1', tipo: 'simple', id_padre: null,
     stock: 5, categorias_json: null, img: null, precio: null, atributos_json: null,
-    marca: null, gtin: null, actualizado_en: now(),
+    marca: null, gtin: null, no_contable: 0, actualizado_en: now(),
   };
   const row = { ...base, ...extra };
   db.prepare(`
     INSERT INTO catalogo_cache
-      (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, atributos_json, marca, gtin, actualizado_en)
+      (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, atributos_json, marca, gtin, no_contable, actualizado_en)
     VALUES
-      (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @atributos_json, @marca, @gtin, @actualizado_en)
+      (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @atributos_json, @marca, @gtin, @no_contable, @actualizado_en)
   `).run(row);
   return row;
 }
@@ -545,6 +545,130 @@ describe('POST /api/inventario/sesiones/:id/asociar — subida del código a Woo
     // Fail-open SOLO para la subida del código; no se persiste el gtin en catalogo_cache.
     const fila = db.prepare('SELECT gtin FROM catalogo_cache WHERE id_woo = ?').get(1);
     expect(fila.gtin).toBeNull();
+    db.close();
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/asociar — alcance ad hoc para SKU fuera de alcance (commit 1443c79)', () => {
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    vi.resetAllMocks();
+  });
+
+  it('(a) Asociar un código desconocido a un SKU fuera del alcance original → alcance ad hoc con stock_inicial congelado', async () => {
+    const db = openDb(TEST_DB);
+    // Crear sesión con alcance = marca 'Bell' (stock > 0)
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    // SKU fuera de alcance: marca 'Maxxis' NO está en la sesión
+    insertProducto(db, { id_woo: 2, sku: 'FB-MAXXIS', marca: 'Maxxis', stock: 5 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    // Escanear un código desconocido
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1234567890128' });
+    expect(esc.body.item.sin_asociar).toBe(true);
+
+    // Asociar a un SKU fuera del alcance original
+    const asc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-MAXXIS' });
+
+    expect(asc.status).toBe(200);
+    expect(asc.body.item.sku).toBe('FB-MAXXIS');
+    expect(asc.body.item.fuera_de_alcance).toBe(true);
+
+    // Verificar que se creó una fila en inventario_sesion_alcance con stock_inicial congelado
+    const alcance = db.prepare('SELECT stock_inicial, bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcance).toBeTruthy();
+    expect(alcance.stock_inicial).toBe(5);
+    expect(alcance.bloque).toBe('con_stock');
+
+    db.close();
+  });
+
+  it('(b) Asociar fuera de alcance y luego borrar el ítem → NO queda un pendiente huérfano bloqueando /confirmar', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-MAXXIS', marca: 'Maxxis', stock: 5 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    // Escanear, asociar a SKU fuera de alcance
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1234567890128' });
+    const itemId = esc.body.item.id;
+    const asc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-MAXXIS' });
+
+    // Borrar el ítem
+    const del = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId}`);
+    expect(del.status).toBe(200);
+
+    // Verificar que se borró también la fila de alcance ad hoc (esto era el bug: quedaba huérfana)
+    const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcance.n).toBe(0);
+
+    // Verificar que NO hay un pendiente huérfano específico para FB-MAXXIS
+    // (FB-BELL sigue siendo pendiente porque está en el alcance original y nunca se contó)
+    const pendientesMaxxis = db.prepare(`
+      SELECT COUNT(*) n FROM inventario_sesion_alcance a
+      WHERE a.sesion_id=? AND a.sku='FB-MAXXIS'
+        AND NOT EXISTS (SELECT 1 FROM inventario_conteos t WHERE t.sesion_id=a.sesion_id AND t.sku=a.sku)
+    `).get(sesionId);
+    expect(pendientesMaxxis.n).toBe(0);
+
+    db.close();
+  });
+
+  it('(c) Asociar a un SKU variable fuera del alcance → 400, sin efectos colaterales', async () => {
+    const db = openDb(TEST_DB);
+    // Sesión con alcance = marca 'Bell'
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    // Producto variable FUERA del alcance (marca Maxxis)
+    insertProducto(db, { id_woo: 2, sku: 'FB-VAR', marca: 'Maxxis', stock: 5, tipo: 'variable' });
+    // Producto no contable FUERA del alcance
+    insertProducto(db, { id_woo: 3, sku: 'FB-NOCOUNT', marca: 'Maxxis', stock: 5, no_contable: 1 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    // Escanear un código desconocido
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1234567890128' });
+    const itemId = esc.body.item.id;
+
+    // Intentar asociar a SKU variable fuera del alcance → debe fallar (no puede crear alcance ad hoc)
+    const asc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-VAR' });
+    expect(asc1.status).toBe(400);
+    expect(asc1.body.error).toMatch(/variable/i);
+
+    // Verificar que no se modificó el ítem
+    const item1 = db.prepare('SELECT sku, fuera_de_alcance FROM inventario_conteos WHERE id=?').get(itemId);
+    expect(item1.sku).toBeNull();
+    expect(item1.fuera_de_alcance).toBe(0);
+
+    // Verificar que no se creó alcance ad hoc
+    const alcance1 = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-VAR');
+    expect(alcance1.n).toBe(0);
+
+    // Intentar asociar a SKU no contable fuera del alcance → también debe fallar
+    const asc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-NOCOUNT' });
+    expect(asc2.status).toBe(400);
+    expect(asc2.body.error).toMatch(/variable|no contable/i);
+
+    // Verificar que no se modificó el ítem
+    const item2 = db.prepare('SELECT sku, fuera_de_alcance FROM inventario_conteos WHERE id=?').get(itemId);
+    expect(item2.sku).toBeNull();
+    expect(item2.fuera_de_alcance).toBe(0);
+
+    // Verificar que no se creó alcance ad hoc
+    const alcance2 = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-NOCOUNT');
+    expect(alcance2.n).toBe(0);
+
     db.close();
   });
 });

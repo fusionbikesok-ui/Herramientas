@@ -889,8 +889,9 @@ export function inventarioRouter(db, wooCfg) {
       );
       alcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
       // Si el bloque cambió respecto del que usamos en el UPDATE, corregirlo ahora.
+      // Mantener fuera_de_alcance=1 porque la limpieza al borrar el ítem se basa en eso.
       if (alcance?.bloque) {
-        db.prepare('UPDATE inventario_conteos SET bloque=?, fuera_de_alcance=0 WHERE sesion_id=? AND ean=?')
+        db.prepare('UPDATE inventario_conteos SET bloque=? WHERE sesion_id=? AND ean=?')
           .run(alcance.bloque, sesion.id, ean);
       }
     }
