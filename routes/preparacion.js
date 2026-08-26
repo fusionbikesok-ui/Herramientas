@@ -145,6 +145,15 @@ function ensureTables(db) {
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables pedidos_cache.pack_id:', e.message);
   }
+  // customer_note: antes solo se veía en la pestaña Etiquetas Andreani (que la pide en
+  // vivo a Woo); acá se cachea para que la pantalla de armado del pedido (GET /pendientes)
+  // la muestre sin ida y vuelta extra a Woo. ML no expone un campo equivalente en su API de
+  // orders (confirmado 2026-08-26) — queda '' para esas filas, no se inventa nada.
+  try {
+    db.prepare("ALTER TABLE pedidos_cache ADD COLUMN customer_note TEXT NOT NULL DEFAULT ''").run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables pedidos_cache.customer_note:', e.message);
+  }
 
   db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_vistas (
     preparacion_id INTEGER NOT NULL,
@@ -412,7 +421,7 @@ function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
 
 // Crea (o completa) una preparación con el snapshot de sus ítems.
 // Idempotente por clave: si ya existe con ítems, devuelve el id existente.
-export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null, packId = null, numeroPedido, comprador, items = [] }) {
+export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null, packId = null, numeroPedido, comprador, notas = null, items = [] }) {
   ensureTables(db);
   const clave = canal === 'web' ? `web:${wcOrderId}` : `ml:${mlOrderId}`;
 
@@ -422,9 +431,9 @@ export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null
   const tx = db.transaction(() => {
     if (!prepId) {
       prepId = db.prepare(`INSERT INTO preparaciones
-        (canal, clave, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, estado, creado_en)
-        VALUES (?,?,?,?,?,?,?, 'en_preparacion', ?)`)
-        .run(canal, clave, wcOrderId, mlOrderId, packId || null, numeroPedido || null, comprador || null, now()).lastInsertRowid;
+        (canal, clave, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, notas, estado, creado_en)
+        VALUES (?,?,?,?,?,?,?,?, 'en_preparacion', ?)`)
+        .run(canal, clave, wcOrderId, mlOrderId, packId || null, numeroPedido || null, comprador || null, notas || null, now()).lastInsertRowid;
     }
     const tieneItems = db.prepare('SELECT 1 FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(prepId);
     if (tieneItems) return;
@@ -626,6 +635,7 @@ export function preparacionRouter(db, cfg) {
             comprador: row.comprador,
             fecha: row.fecha,
             estado_wc: row.estado_wc,
+            notas: row.customer_note || '',
             items,
             preparacion_id: prep?.id || null,
             estado_preparacion: prep?.estado || null,
@@ -1030,6 +1040,7 @@ export function preparacionRouter(db, cfg) {
           canal: 'web', wcOrderId: resp.data.id,
           numeroPedido: String(resp.data.number || resp.data.id),
           comprador: `${resp.data.billing?.first_name || ''} ${resp.data.billing?.last_name || ''}`.trim(),
+          notas: p.notas,
           items: p.items,
         });
         if (direccion_elegida && ['shipping', 'billing'].includes(direccion_elegida)) {
@@ -1649,6 +1660,7 @@ function armarPendienteWeb(db, order) {
     comprador: `${ov.comprador.nombre} ${ov.comprador.apellido}`.trim(),
     fecha: ov.fecha,
     estado_wc: ov.estado,
+    notas: ov.notas,
     items,
     preparacion_id: prep?.id || null,
     estado_preparacion: prep?.estado || null,
@@ -1822,16 +1834,16 @@ function upsertPedidoCache(db, row) {
   db.prepare(`
     INSERT INTO pedidos_cache
       (clave, canal, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, fecha,
-       estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+       estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note)
     VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @pack_id, @numero_pedido, @comprador, @fecha,
-       @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en)
+       @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note)
     ON CONFLICT(clave) DO UPDATE SET
       pack_id=excluded.pack_id,
       numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
       estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
       logistic_type=excluded.logistic_type, substatus=excluded.substatus,
-      items_json=excluded.items_json, actualizado_en=excluded.actualizado_en
-  `).run(row);
+      items_json=excluded.items_json, actualizado_en=excluded.actualizado_en, customer_note=excluded.customer_note
+  `).run({ customer_note: '', ...row });
 }
 
 // Un pedido WC (de cualquiera de los 3 estados relevantes) → fila de pedidos_cache.
@@ -1853,6 +1865,7 @@ function filaWebDesdeOrder(db, order, estadoEnvio) {
     substatus: null,
     items_json: JSON.stringify(pend.items),
     actualizado_en: now(),
+    customer_note: pend.notas || '',
   };
 }
 

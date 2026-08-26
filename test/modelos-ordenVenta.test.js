@@ -70,6 +70,11 @@ describe('normalizarPedidoWc', () => {
   it('numero cae a id cuando no hay number', () => {
     expect(normalizarPedidoWc({ id: 902, line_items: [] }).numero).toBe('902');
   });
+
+  it('trae customer_note como notas, vacío si no hay', () => {
+    expect(normalizarPedidoWc({ id: 903, line_items: [], customer_note: 'dejar en portería' }).notas).toBe('dejar en portería');
+    expect(normalizarPedidoWc({ id: 904, line_items: [] }).notas).toBe('');
+  });
 });
 
 describe('billingWcDesdeOrdenMl', () => {
