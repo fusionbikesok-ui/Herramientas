@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auditoría de publicaciones — Fusion Bikes</title>
+<link rel="stylesheet" href="../lib/theme.css">
+<style>
+* { box-sizing: border-box; }
+body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif; margin:0; background:var(--oscuro); color:var(--text); }
+
+.page { max-width:1000px; margin:0 auto; padding:20px 20px 60px; }
+.page-head { margin-bottom:20px; }
+.page-eyebrow { font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--azul); margin-bottom:5px; }
+.page-title { font-size:1.6rem; font-weight:800; letter-spacing:-.03em; line-height:1.1; margin:0 0 6px; }
+.page-title em { font-style:normal; color:var(--azul); }
+.page-desc { font-size:13px; color:var(--muted); line-height:1.5; margin:0; }
+
+.filtros { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; align-items:center; }
+.filtros button { font-family:inherit; background:var(--surface2); color:var(--muted); border:1px solid var(--border2); border-radius:20px; padding:6px 14px; cursor:pointer; font-size:13px; transition:all .15s; }
+.filtros button.activo { background:rgba(45,184,232,.12); color:var(--azul); border-color:var(--azul); font-weight:700; }
+.filtros button:hover { border-color:var(--azul); color:var(--text); }
+.filtros label { font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; cursor:pointer; }
+.filtros input[type=checkbox] { accent-color:var(--azul); width:15px; height:15px; }
+
+.resumen-chips { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; }
+.chip { display:inline-flex; flex-direction:column; align-items:center; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:8px 16px; min-width:90px; }
+.chip-n { font-size:1.5rem; font-weight:800; line-height:1; }
+.chip-l { font-size:11px; color:var(--muted); margin-top:3px; text-align:center; }
+.chip.rojo .chip-n { color:var(--red); }
+.chip.amarillo .chip-n { color:var(--amber); }
+
+.loading { color:var(--muted); font-size:13px; padding:30px 0; text-align:center; }
+.empty { color:var(--muted); font-size:13px; padding:30px 0; text-align:center; }
+
+.grid { display:flex; flex-direction:column; gap:10px; }
+.item-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; display:grid; grid-template-columns:56px 1fr auto; gap:12px; align-items:start; }
+.item-card.con-problemas { border-color:rgba(239,68,68,.35); }
+.item-thumb { width:56px; height:56px; object-fit:contain; border-radius:6px; background:var(--surface2); }
+.item-thumb-ph { width:56px; height:56px; border-radius:6px; background:var(--surface2); display:flex; align-items:center; justify-content:center; font-size:22px; color:var(--muted2); }
+.item-body {}
+.item-titulo { font-size:13px; font-weight:600; line-height:1.35; margin-bottom:4px; overflow-wrap:anywhere; }
+.item-sku { font-size:11px; color:var(--muted); margin-bottom:6px; font-family:monospace; }
+.item-meta { display:flex; gap:10px; flex-wrap:wrap; align-items:center; font-size:12px; }
+.badge { display:inline-flex; align-items:center; gap:4px; border-radius:5px; padding:2px 8px; font-size:11px; font-weight:600; }
+.badge.ok { background:rgba(52,211,153,.12); color:var(--green); }
+.badge.warn { background:rgba(245,185,66,.12); color:var(--amber); }
+.badge.err { background:rgba(239,68,68,.12); color:var(--red); }
+.badge.neutral { background:var(--surface2); color:var(--muted); }
+.item-link { font-size:11px; color:var(--azul); text-decoration:none; }
+.item-link:hover { text-decoration:underline; }
+.item-acciones { display:flex; flex-direction:column; gap:6px; align-items:flex-end; }
+.clip-select { background:var(--surface2); color:var(--text); border:1px solid var(--border2); border-radius:6px; padding:4px 8px; font-size:12px; font-family:inherit; cursor:pointer; }
+.clip-select:focus { outline:none; border-color:var(--azul); }
+.auditado-en { font-size:10px; color:var(--muted2); }
+
+.paginacion { display:flex; gap:8px; justify-content:center; margin-top:20px; }
+.paginacion button { font-family:inherit; background:var(--surface2); color:var(--muted); border:1px solid var(--border2); border-radius:8px; padding:7px 18px; cursor:pointer; font-size:13px; }
+.paginacion button:hover { border-color:var(--azul); color:var(--text); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="page-head">
+    <div class="page-eyebrow">FusionBikes</div>
+    <h1 class="page-title">Auditoría de <em>publicaciones</em></h1>
+    <p class="page-desc">Calidad de publicaciones ML: health, fotos y clips. El cron barride ~40 publicaciones cada 15 min.</p>
+  </div>
+
+  <div class="resumen-chips" id="resumen-chips">
+    <div class="chip"><span class="chip-n" id="chip-total">—</span><span class="chip-l">Auditadas</span></div>
+    <div class="chip rojo"><span class="chip-n" id="chip-problemas">—</span><span class="chip-l">Con problemas</span></div>
+    <div class="chip amarillo"><span class="chip-n" id="chip-sin-clip">—</span><span class="chip-l">Sin video</span></div>
+  </div>
+
+  <div class="filtros">
+    <button id="btn-todos" class="activo" onclick="setFiltro(false)">Todas</button>
+    <button id="btn-problemas" onclick="setFiltro(true)">Solo con problemas</button>
+  </div>
+
+  <div class="grid" id="grid">
+    <div class="loading">Cargando...</div>
+  </div>
+
+  <div class="paginacion" id="paginacion" style="display:none">
+    <button id="btn-mas" onclick="cargarMas()">Cargar más</button>
+  </div>
+</div>
+
+<script>
+const LIMIT = 50;
+let offset = 0;
+let soloProblemas = false;
+let items = [];
+
+const CLIP_LABELS = {
+  sin_revisar: 'Sin revisar',
+  sin_clip: 'Sin clip',
+  grabado: 'Grabado',
+  subido_ml: 'Subido a ML',
+  subido_wc: 'Subido a WC',
+};
+
+async function api(path) {
+  const r = await fetch('/api' + path, { credentials: 'include' });
+  if (!r.ok) { if (r.status === 401) location.href = '/login'; throw new Error(r.status); }
+  return r.json();
+}
+
+async function cargarResumen() {
+  try {
+    const d = await api('/auditoria/resumen');
+    document.getElementById('chip-total').textContent = d.total;
+    document.getElementById('chip-problemas').textContent = d.con_problemas;
+    document.getElementById('chip-sin-clip').textContent = d.sin_clip;
+  } catch (_) {}
+}
+
+async function cargar(reset = true) {
+  if (reset) { offset = 0; items = []; }
+  const grid = document.getElementById('grid');
+  if (reset) grid.innerHTML = '<div class="loading">Cargando...</div>';
+
+  try {
+    const url = `/auditoria/cola?limit=${LIMIT}&solo_problemas=${soloProblemas ? 1 : 0}`;
+    const d = await api(url);
+    items = reset ? d.items : [...items, ...d.items];
+    renderGrid();
+    document.getElementById('paginacion').style.display = d.items.length >= LIMIT ? '' : 'none';
+  } catch (e) {
+    grid.innerHTML = `<div class="empty">Error al cargar (${e.message})</div>`;
+  }
+}
+
+async function cargarMas() {
+  offset += LIMIT;
+  await cargar(false);
+}
+
+function setFiltro(solo) {
+  soloProblemas = solo;
+  document.getElementById('btn-todos').classList.toggle('activo', !solo);
+  document.getElementById('btn-problemas').classList.toggle('activo', solo);
+  cargar();
+}
+
+function renderGrid() {
+  const grid = document.getElementById('grid');
+  if (!items.length) {
+    grid.innerHTML = '<div class="empty">No hay publicaciones auditadas todavía. El cron corre cada 15 min.</div>';
+    return;
+  }
+  grid.innerHTML = items.map(renderItem).join('');
+}
+
+function healthBadge(h) {
+  if (h == null) return '<span class="badge neutral">health —</span>';
+  const pct = Math.round(h * 100);
+  const cls = h >= 0.7 ? 'ok' : h >= 0.5 ? 'warn' : 'err';
+  return `<span class="badge ${cls}">health ${pct}%</span>`;
+}
+
+function fotosBadge(n) {
+  if (n == null) return '';
+  const cls = n >= 4 ? 'ok' : n >= 2 ? 'warn' : 'err';
+  return `<span class="badge ${cls}">${n} foto${n !== 1 ? 's' : ''}</span>`;
+}
+
+function clipBadge(tiene, estado) {
+  if (tiene) return '<span class="badge ok">Con video</span>';
+  return '<span class="badge neutral">Sin video</span>';
+}
+
+function renderItem(item) {
+  const tieneProblemas = item.problemas && item.problemas.length > 0;
+  const thumbHtml = item.thumbnail
+    ? `<img class="item-thumb" src="${item.thumbnail}" alt="" loading="lazy">`
+    : `<div class="item-thumb-ph">📦</div>`;
+
+  const clipOptions = Object.entries(CLIP_LABELS).map(([v, l]) =>
+    `<option value="${v}" ${item.estado_clip === v ? 'selected' : ''}>${l}</option>`
+  ).join('');
+
+  const auditado = item.auditado_en ? new Date(item.auditado_en).toLocaleDateString('es-AR') : '—';
+
+  return `
+  <div class="item-card ${tieneProblemas ? 'con-problemas' : ''}" data-clave="${esc(item.clave)}">
+    ${thumbHtml}
+    <div class="item-body">
+      <div class="item-titulo">${esc(item.titulo || item.wc_nombre || '—')}</div>
+      <div class="item-sku">${esc(item.sku || '')} · ${esc(item.clave || '')}</div>
+      <div class="item-meta">
+        ${healthBadge(item.health)}
+        ${fotosBadge(item.fotos_ml)}
+        ${clipBadge(item.tiene_video, item.estado_clip)}
+        ${item.permalink ? `<a class="item-link" href="${esc(item.permalink)}" target="_blank" rel="noopener">Ver en ML ↗</a>` : ''}
+      </div>
+    </div>
+    <div class="item-acciones">
+      <select class="clip-select" onchange="actualizarClip('${esc(item.clave)}', this.value)">
+        ${clipOptions}
+      </select>
+      <span class="auditado-en">Auditado ${auditado}</span>
+    </div>
+  </div>`;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function actualizarClip(clave, estado) {
+  try {
+    const r = await fetch(`/api/auditoria/item/${encodeURIComponent(clave)}/estado-clip`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ estado }),
+    });
+    if (!r.ok) console.error('Error actualizando clip:', r.status);
+  } catch (e) { console.error(e); }
+}
+
+cargarResumen();
+cargar();
+</script>
+</body>
+</html>
