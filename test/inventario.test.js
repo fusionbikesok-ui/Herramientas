@@ -671,6 +671,35 @@ describe('POST /api/inventario/sesiones/:id/asociar — alcance ad hoc para SKU 
 
     db.close();
   });
+
+  it('(d) Dos EANs distintos → mismo SKU fuera de alcance: borrar uno NO elimina el alcance ad hoc', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-MAXXIS', marca: 'Maxxis', stock: 5 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    // Escanear dos EANs desconocidos
+    const esc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1111111111116' });
+    const esc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '2222222222223' });
+    const itemId1 = esc1.body.item.id;
+
+    // Asociar ambos al mismo SKU fuera del alcance → crea alcance ad hoc
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1111111111116', sku: 'FB-MAXXIS' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '2222222222223', sku: 'FB-MAXXIS' });
+
+    // Borrar el primer ítem → el alcance ad hoc NO debe desaparecer (ítem2 sigue vivo)
+    const del = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId1}`);
+    expect(del.status).toBe(200);
+
+    const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcance.n).toBe(1);
+
+    db.close();
+  });
 });
 
 describe('DELETE /api/inventario/sesiones/:id/items/:itemId', () => {

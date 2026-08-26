@@ -953,9 +953,12 @@ export function inventarioRouter(db, wooCfg) {
     db.prepare('DELETE FROM inventario_conteos WHERE id=? AND sesion_id=?').run(req.params.itemId, sesion.id);
 
     // Si el ítem borrado tenía fuera_de_alcance=1, borrar también su fila de inventario_sesion_alcance
-    // (fue creada por la corrección anterior solo para permitir el ajuste de ese ítem puntual).
+    // solo si no queda otro ítem vivo con el mismo SKU (dos EANs → mismo SKU ad hoc).
     if (item && item.fuera_de_alcance && item.sku) {
-      db.prepare('DELETE FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').run(sesion.id, item.sku);
+      db.prepare(`
+        DELETE FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?
+          AND NOT EXISTS (SELECT 1 FROM inventario_conteos WHERE sesion_id=? AND sku=?)
+      `).run(sesion.id, item.sku, sesion.id, item.sku);
     }
 
     res.json({ ok: true });
