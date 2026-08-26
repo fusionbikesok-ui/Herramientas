@@ -972,6 +972,70 @@ preparación:
   preparación, en vez de la regla automática de `normalizarEnvio` (envío si tiene
   `address_1`, si no facturación).
 
+### GET /api/preparacion/vinculos/:clave (Fase 4: detección de pedidos del mismo comprador)
+Consulta sugerencias pendientes de vínculos para un pedido. Devuelve las filas de
+`preparacion_vinculos` donde ese pedido participa y el estado sigue siendo `'sugerido'`
+(todavía no se decidió por ese vínculo).
+
+- Request: `:clave` = `'web:<wc_order_id>'` o `'ml:<ml_order_id>'` (URL-encoded).
+- Response 200 (lista vacía si no hay sugerencias):
+  ```json
+  {
+    "ok": true,
+    "data": [
+      {
+        "id": 1,
+        "campo_match": "email|dni|telefono|nombre_direccion",
+        "otro_pedido": {
+          "clave": "web:123",
+          "canal": "web",
+          "numero": "123",
+          "comprador": "Juan Pérez"
+        },
+        "creado_en": "2026-08-26T10:30:00Z"
+      }
+    ]
+  }
+  ```
+- Response 400: `:clave` ausente o malformada.
+- Response 500: error interno.
+
+### POST /api/preparacion/vinculos/:id/decidir (Fase 4: confirmación del operario)
+Decide si dos pedidos del mismo comprador irán juntos, separados pero vinculados, o no
+vinculados. Actualiza el estado del vínculo y guarda quién y cuándo lo decidió.
+
+- Request:
+  ```json
+  {
+    "estado": "confirmado_junto|confirmado_separado_pero_vinculado|rechazado",
+    "un_solo_paquete": true|false
+  }
+  ```
+  - `estado`: obligatorio, uno de los 3 valores.
+  - `un_solo_paquete`: opcional, ignorado si `estado` no es `'confirmado_junto'`. Si es
+    `true`, ambos pedidos irán en una sola caja; si es `false` o ausente, cajas separadas
+    pero marcadas como vinculadas en la lista.
+
+- Response 200:
+  ```json
+  { "ok": true, "estado": "confirmado_junto" }
+  ```
+
+- Response 400: `estado` inválido.
+- Response 404: vínculo no encontrado.
+- Response 500: error al actualizar.
+
+**Notas de diseño:**
+- La detección de vínculos ocurre cuando se crea una preparación (`POST /iniciar`): para
+  cada pedido nuevo, buscamos otros en la DB que coincidan por DNI, email, teléfono o
+  nombre+dirección de envío (el primero que coincida en ese orden). Si hay match,
+  creamos una fila en `preparacion_vinculos` con `estado='sugerido'`.
+- El frontend consulta `GET /vinculos/:clave` al armarse la pantalla de preparación y
+  avisa al operario si hay sugerencias. El operario decide con `POST /decidir`.
+- La decisión NO toca WooCommerce (es 100% interna) — no envía notas de cliente, no
+  cambia estado del pedido, nada. Es solo para que el operario sepa que dos pedidos
+  vienen de la misma persona y puede organizarlos juntos si quiere.
+
 ## Contador de Inventario (`/api/inventario`)
 
 Todos los endpoints requieren sesión iniciada; las consultas de sesión están scopeadas
