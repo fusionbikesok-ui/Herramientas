@@ -5,7 +5,7 @@ import request from 'supertest';
 import sharp from 'sharp';
 import { openDb } from '../db/index.js';
 import {
-  splitDireccion, splitTelefonoAr, normalizarEnvio,
+  splitDireccion, splitTelefonoAr, normalizarEnvio, nombreProvincia,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
@@ -198,6 +198,23 @@ describe('splitTelefonoAr', () => {
   });
 });
 
+describe('nombreProvincia', () => {
+  it('mapea códigos cortos conocidos', () => {
+    expect(nombreProvincia('B')).toBe('Buenos Aires');
+    expect(nombreProvincia('c')).toBe('CABA');
+    expect(nombreProvincia('X')).toBe('Córdoba');
+  });
+
+  it('deja pasar un nombre completo sin tocarlo', () => {
+    expect(nombreProvincia('Buenos Aires')).toBe('Buenos Aires');
+  });
+
+  it('vacío da vacío, sin inventar nada', () => {
+    expect(nombreProvincia('')).toBe('');
+    expect(nombreProvincia(null)).toBe('');
+  });
+});
+
 describe('normalizarEnvio', () => {
   const base = {
     id: 77, number: '77',
@@ -221,6 +238,20 @@ describe('normalizarEnvio', () => {
     expect(e.email).toBe('ana@mail.com');
     expect(e.dni_cuit).toBe('30123456');
     expect(e.notas).toBe('tocar timbre');
+  });
+
+  it('mapea el código corto de provincia a nombre completo', () => {
+    const conCodigo = { ...base, shipping: { ...base.shipping, state: 'S' } };
+    expect(normalizarEnvio(conCodigo).provincia).toBe('Santa Fe');
+  });
+
+  it('conserva la provincia tal cual si ya viene como nombre completo', () => {
+    expect(normalizarEnvio(base).provincia).toBe('Córdoba');
+  });
+
+  it('conserva un valor de provincia desconocido en vez de vaciarlo', () => {
+    const raro = { ...base, shipping: { ...base.shipping, state: 'Zona Rara' } };
+    expect(normalizarEnvio(raro).provincia).toBe('Zona Rara');
   });
 
   it('cae a facturación si el envío está vacío', () => {
