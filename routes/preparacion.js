@@ -8,8 +8,8 @@ import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
 import { procesarColaFotos, reintentarFoto } from '../lib/fotosPreparacionCola.js';
 import {
-  normalizarEnvio, resolverPerfil, requisitosFoto, requisitosPaquete, requisitosConCantidad,
-  fotosFaltantes, esEnvioLocal,
+  normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
+  requisitosConCantidad, fotosFaltantes, esEnvioLocal,
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
@@ -232,6 +232,27 @@ function ensureTables(db) {
     db.prepare('ALTER TABLE preparaciones ADD COLUMN pack_id TEXT').run();
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables pack_id:', e.message);
+  }
+
+  // direccion_confirmada_fuente: cuando envío y facturación difieren de verdad
+  // (direccionesDifieren en lib/preparacion.js), el operario elige cuál usar
+  // antes de poder seguir con la preparación — se guarda acá para no volver a
+  // preguntar, y GET /etiquetas y /seguimientos la usan en vez de la regla
+  // automática de normalizarEnvio.
+  try {
+    db.prepare('ALTER TABLE preparaciones ADD COLUMN direccion_confirmada_fuente TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables direccion_confirmada_fuente:', e.message);
+  }
+  try {
+    db.prepare('ALTER TABLE preparaciones ADD COLUMN direccion_confirmada_por TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables direccion_confirmada_por:', e.message);
+  }
+  try {
+    db.prepare('ALTER TABLE preparaciones ADD COLUMN direccion_confirmada_en TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables direccion_confirmada_en:', e.message);
   }
 }
 
@@ -657,10 +678,12 @@ export function preparacionRouter(db, cfg) {
     try {
       const resp = await wooFetch(cfg.woo, `/orders?status=${encodeURIComponent(andreaniStatus)}&per_page=100`);
       const filas = (resp.data || []).map(order => {
-        const prep = db.prepare('SELECT id, etiqueta_lista, estado FROM preparaciones WHERE clave=?').get(`web:${order.id}`);
+        const prep = db.prepare(
+          'SELECT id, etiqueta_lista, estado, direccion_confirmada_fuente FROM preparaciones WHERE clave=?'
+        ).get(`web:${order.id}`);
         return {
           wc_order_id: order.id,
-          envio: normalizarEnvio(order),
+          envio: normalizarEnvio(order, prep?.direccion_confirmada_fuente || null),
           etiqueta_lista: prep?.etiqueta_lista || 0,
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
@@ -725,10 +748,12 @@ export function preparacionRouter(db, cfg) {
       const esperando = [];
       const sinPreparacion = [];
       for (const order of filasUniverso) {
-        const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(`web:${order.id}`);
+        const prep = db.prepare(
+          'SELECT id, estado, direccion_confirmada_fuente FROM preparaciones WHERE clave=?'
+        ).get(`web:${order.id}`);
         const fila = {
           wc_order_id: order.id,
-          envio: normalizarEnvio(order),
+          envio: normalizarEnvio(order, prep?.direccion_confirmada_fuente || null),
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
         };
@@ -972,10 +997,34 @@ export function preparacionRouter(db, cfg) {
 
   // ── Iniciar preparación (snapshot de ítems desde WC o ML) ──
   router.post('/iniciar', async (req, res) => {
-    const { canal, id } = req.body || {};
+    const { canal, id, direccion_elegida } = req.body || {};
     try {
       if (canal === 'web') {
         const resp = await wooFetch(cfg.woo, `/orders/${id}`);
+        const clave = `web:${resp.data.id}`;
+        const yaConfirmada = db.prepare(
+          'SELECT direccion_confirmada_fuente FROM preparaciones WHERE clave=?'
+        ).get(clave)?.direccion_confirmada_fuente;
+
+        // Envío y facturación difieren de verdad (no solo mayúsculas/acentos) y todavía
+        // nadie decidió cuál usar en ESTA preparación: frenar antes de crearla — pedirlo
+        // después dejaría una preparación ya armada con la dirección "adivinada" por la
+        // regla automática, y nadie vuelve a mirar eso una vez que el pedido ya se está
+        // preparando.
+        if (!yaConfirmada && !direccion_elegida) {
+          const chequeo = direccionesDifieren(resp.data);
+          if (chequeo.difieren) {
+            return res.status(409).json({
+              ok: false,
+              error: 'Los datos de envío y facturación difieren. Elegí a cuál se envía antes de seguir.',
+              direcciones_difieren: true,
+              campos_distintos: chequeo.campos,
+              envio: normalizarEnvio(resp.data, 'shipping'),
+              facturacion: normalizarEnvio(resp.data, 'billing'),
+            });
+          }
+        }
+
         const p = armarPendienteWeb(db, resp.data);
         const prepId = crearPreparacion(db, {
           canal: 'web', wcOrderId: resp.data.id,
@@ -983,6 +1032,11 @@ export function preparacionRouter(db, cfg) {
           comprador: `${resp.data.billing?.first_name || ''} ${resp.data.billing?.last_name || ''}`.trim(),
           items: p.items,
         });
+        if (direccion_elegida && ['shipping', 'billing'].includes(direccion_elegida)) {
+          db.prepare(`UPDATE preparaciones SET direccion_confirmada_fuente=?, direccion_confirmada_por=?,
+            direccion_confirmada_en=? WHERE id=?`)
+            .run(direccion_elegida, req.user?.username || null, now(), prepId);
+        }
         return res.json({ ok: true, id: prepId });
       }
       if (canal === 'ml') {
