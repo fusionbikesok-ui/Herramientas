@@ -1036,6 +1036,36 @@ vinculados. Actualiza el estado del vínculo y guarda quién y cuándo lo decidi
   cambia estado del pedido, nada. Es solo para que el operario sepa que dos pedidos
   vienen de la misma persona y puede organizarlos juntos si quiere.
 
+## Notificaciones ML: preguntas y mensajes sin responder (`/api/notificaciones-ml`)
+
+Permiso `notificaciones-ml` (binario, `niveles:false`, igual que `etiquetas`). Alcance
+decidido con el usuario (2026-08-26): solo listar con "hace cuánto" y link a Mercado Libre
+para responder ahí — esta herramienta no responde nada por API.
+
+La app de ML tiene **todos los topics** seleccionados en el panel de developers; el filtro de
+qué procesar vive en `POST /api/ml/notificacion` (`server.js`), no en el panel. Hoy procesa
+`orders` (ya existía, sync a WC), `questions` y `messages`; el resto de los topics
+(`orders_v2`, `shipments`, `claims`, `orders_feedback`, `items`, `invoices`) se reciben y se
+descartan en silencio hasta que se sume su función.
+
+### GET /api/notificaciones-ml/pendientes
+Response 200: `{ ok:true, preguntas:[...], mensajes:[...], total:number }`.
+- `preguntas`: filas de `ml_preguntas` con `estado='UNANSWERED'`, ordenadas por
+  `fecha_creacion ASC` (más vieja primero — la más urgente arriba).
+- `mensajes`: filas de `ml_mensajes` con `respondido_en IS NULL`, mismo orden.
+
+### GET /api/notificaciones-ml/count
+Conteo liviano para el aviso del Home (no trae las filas). Response 200:
+`{ ok:true, preguntas:number, mensajes:number, total:number }`.
+
+### Ingesta (interna, disparada por el webhook — no expuesta por HTTP)
+`ingerirPregunta(db, mlCfg, resource)` y `ingerirMensaje(db, mlCfg, resource)` en
+`routes/notificacionesMl.js`. Ambas son **fail-open**: si la llamada a ML falla, no se
+reintenta ni se bloquea nada más del webhook — la próxima notificación de ese mismo recurso
+corrige el estado. `ingerirMensaje` acepta tanto una respuesta en array como un objeto único
+de ML (el shape exacto de `resource` para `messages` no está confirmado en producción
+todavía — revisar contra la primera notificación real que llegue).
+
 ## Contador de Inventario (`/api/inventario`)
 
 Todos los endpoints requieren sesión iniciada; las consultas de sesión están scopeadas

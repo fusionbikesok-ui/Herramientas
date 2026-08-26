@@ -35,6 +35,7 @@ import { auditoriaRouter } from './routes/auditoria.js';
 import { barridoAuditoria } from './lib/auditoria.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
+import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje } from './routes/notificacionesMl.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -127,30 +128,52 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   }
   const syncCfg = { woo: wooCfg, ml: mlCfg };
 
-  // ── Notificaciones ML → sync inmediato a WC ─────────────────────────────────
+  // ── Notificaciones ML ────────────────────────────────────────────────────────
   // POST /api/ml/notificacion
-  // ML llama este endpoint cuando hay una orden nueva/actualizada.
-  // Body: { topic: "orders", resource: "/orders/2000018120802680", ... }
-  // ML no envía firma — la autenticidad se valida por:
-  //   1. El user_id del body debe coincidir con ML_USER_ID configurado
-  //   2. Solo procesamos topic "orders" (ignoramos "questions", "items", etc.)
-  // ML espera 200 en < 500ms — respondemos antes de procesar.
+  // La app tiene TODOS los topics seleccionados en el panel de ML Developers (decisión
+  // 2026-08-26: filtrar acá es más simple que ir y volver al panel cada vez que se suma una
+  // función nueva). Body: { topic, resource, user_id, ... }. ML no envía firma — la
+  // autenticidad se valida por: el user_id del body debe coincidir con ML_USER_ID.
+  // ML espera 200 en < 500ms — respondemos antes de procesar cualquier topic.
   // Docs: https://developers.mercadolibre.com.ar/es_ar/recibir-notificaciones
+  //
+  // Topics soportados hoy: 'orders' (sync inmediato a WC, ya existía), 'questions' y
+  // 'messages' (preguntas/mensajes sin responder, guardados para el aviso del Home — ver
+  // routes/notificacionesMl.js). El resto de los topics que ML manda (orders_v2, shipments,
+  // claims, orders_feedback, items, invoices) se reciben y se descartan en silencio hasta
+  // que se sume su función acá, mismo patrón que 'orders' tenía antes de este cambio.
   app.post('/api/ml/notificacion', express.json({ limit: '64kb' }), (req, res) => {
     res.json({ ok: true }); // responder inmediatamente antes de procesar
 
-    const { topic, user_id } = req.body || {};
+    const { topic, resource, user_id } = req.body || {};
 
     // Validar que la notificación es para nuestra cuenta
     const mlUserId = process.env.ML_USER_ID;
     if (mlUserId && String(user_id) !== String(mlUserId)) return;
 
-    // Solo nos interesan órdenes (no preguntas, items, etc.)
-    if (topic !== 'orders') return;
+    if (topic === 'orders') {
+      console.log(`[notif-ml] topic=${topic} resource=${resource} → syncMlToWc`);
+      syncMlToWc(app._db, syncCfg)
+        .catch(err => console.error('[notif-ml] syncMlToWc error:', err.message));
+      return;
+    }
 
-    console.log(`[notif-ml] topic=${topic} resource=${req.body?.resource} → syncMlToWc`);
-    syncMlToWc(app._db, syncCfg)
-      .catch(err => console.error('[notif-ml] syncMlToWc error:', err.message));
+    if (topic === 'questions') {
+      console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirPregunta`);
+      ingerirPregunta(app._db, mlCfg, resource)
+        .catch(err => console.error('[notif-ml] ingerirPregunta error:', err.message));
+      return;
+    }
+
+    if (topic === 'messages') {
+      console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirMensaje`);
+      ingerirMensaje(app._db, mlCfg, resource)
+        .catch(err => console.error('[notif-ml] ingerirMensaje error:', err.message));
+      return;
+    }
+
+    // Topic sin función todavía (orders_v2, shipments, claims, orders_feedback, items,
+    // invoices) — se descarta en silencio, a propósito.
   });
 
   app.use('/api', authGuard, scopeCheck);
@@ -200,6 +223,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/criticidad', criticidadRouter(db, syncCfg));
   app.use('/api/auditoria', auditoriaRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
+  app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
 
   // -- Error handler global (respaldo) ---------------------------------
   // Debe ir al final, con 4 argumentos para que Express lo reconozca. Cualquier
