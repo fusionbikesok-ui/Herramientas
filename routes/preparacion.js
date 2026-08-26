@@ -1036,18 +1036,25 @@ export function preparacionRouter(db, cfg) {
         }
 
         const p = armarPendienteWeb(db, resp.data);
-        const prepId = crearPreparacion(db, {
-          canal: 'web', wcOrderId: resp.data.id,
-          numeroPedido: String(resp.data.number || resp.data.id),
-          comprador: `${resp.data.billing?.first_name || ''} ${resp.data.billing?.last_name || ''}`.trim(),
-          notas: p.notas,
-          items: p.items,
-        });
-        if (direccion_elegida && ['shipping', 'billing'].includes(direccion_elegida)) {
-          db.prepare(`UPDATE preparaciones SET direccion_confirmada_fuente=?, direccion_confirmada_por=?,
-            direccion_confirmada_en=? WHERE id=?`)
-            .run(direccion_elegida, req.user?.username || null, now(), prepId);
-        }
+        // crearPreparacion + el UPDATE de la dirección elegida van en la misma transacción:
+        // si el proceso muere entre los dos statements, la preparación no puede quedar
+        // creada sin la decisión ya tomada (revertiría a la regla automática de
+        // normalizarEnvio, justo lo que este gate existe para evitar).
+        const prepId = db.transaction(() => {
+          const id = crearPreparacion(db, {
+            canal: 'web', wcOrderId: resp.data.id,
+            numeroPedido: String(resp.data.number || resp.data.id),
+            comprador: `${resp.data.billing?.first_name || ''} ${resp.data.billing?.last_name || ''}`.trim(),
+            notas: p.notas,
+            items: p.items,
+          });
+          if (direccion_elegida && ['shipping', 'billing'].includes(direccion_elegida)) {
+            db.prepare(`UPDATE preparaciones SET direccion_confirmada_fuente=?, direccion_confirmada_por=?,
+              direccion_confirmada_en=? WHERE id=?`)
+              .run(direccion_elegida, req.user?.username || null, now(), id);
+          }
+          return id;
+        })();
         return res.json({ ok: true, id: prepId });
       }
       if (canal === 'ml') {

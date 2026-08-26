@@ -420,6 +420,7 @@ function cardPendiente(p,ix){
 }
 
 var DIRECCION_MODAL_CTX=null;
+var DIRECCION_MODAL_TRIGGER_EL=null; // elemento con foco al abrir el modal, para devolvérselo al cerrar.
 
 async function preparar(ix){
   var p=PEND_CACHE[ix];
@@ -452,14 +453,19 @@ function direccionResumen(d){
 
 function abrirDireccionModal(canal,id,resp){
   DIRECCION_MODAL_CTX={canal:canal,id:id};
+  DIRECCION_MODAL_TRIGGER_EL=document.activeElement&&document.activeElement.tagName==='BUTTON'?document.activeElement:null;
   document.getElementById('direccion-modal-envio').innerHTML=direccionResumen(resp.envio);
   document.getElementById('direccion-modal-facturacion').innerHTML=direccionResumen(resp.facturacion);
   document.getElementById('direccion-modal').classList.add('open');
+  var first=document.querySelector('#direccion-modal .motivo-btn');
+  if(first)first.focus();
 }
 
 function cerrarDireccionModal(){
   document.getElementById('direccion-modal').classList.remove('open');
   DIRECCION_MODAL_CTX=null;
+  if(DIRECCION_MODAL_TRIGGER_EL&&document.contains(DIRECCION_MODAL_TRIGGER_EL))DIRECCION_MODAL_TRIGGER_EL.focus();
+  DIRECCION_MODAL_TRIGGER_EL=null;
   ir('pendientes');
 }
 
@@ -1064,6 +1070,8 @@ function atraparFoco(modalEl){
 }
 var _manualModalEl=document.getElementById('manual-modal');
 if(_manualModalEl)atraparFoco(_manualModalEl);
+var _direccionModalEl=document.getElementById('direccion-modal');
+if(_direccionModalEl)atraparFoco(_direccionModalEl);
 
 // Confirmar sin código exige motivo desde 2026-08-12 (el atajo gratuito dejó salir un
 // pedido de 5 unidades con 1 sola en la caja). El motivo tiene que quedar auditable, pero
@@ -1501,9 +1509,11 @@ window.addEventListener('keydown',function(e){
     var camModal=document.getElementById('cam-modal');
     var manModal=document.getElementById('manual-modal');
     var segCamModal=document.getElementById('seg-cam-modal');
+    var dirModal=document.getElementById('direccion-modal');
     if(camModal&&camModal.classList.contains('open')){cerrarCamara();return;}
     if(manModal&&manModal.classList.contains('open')){cerrarManualModal();return;}
     if(segCamModal&&segCamModal.classList.contains('open')){cerrarCamaraSeg();return;}
+    if(dirModal&&dirModal.classList.contains('open')){cerrarDireccionModal();return;}
   }
   if(!PREP||PREP.estado==='completada')return;
   var t=e.target;

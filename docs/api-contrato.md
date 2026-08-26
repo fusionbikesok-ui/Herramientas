@@ -943,6 +943,35 @@ permanente (el chip la contaba todos los días, y "Reintentar" nunca podía reso
   reintenta en la corrida siguiente — no hay forma de distinguir ahí "temporal" de
   "permanente".
 
+### GET /api/preparacion/pendientes (campo agregado: `notas`)
+Cada fila de `data` con `canal:'web'` suma `notas`: el `customer_note` del pedido en
+WooCommerce, cacheado en `pedidos_cache.customer_note` (poblada por `syncPedidosCache`), o
+`''` si el pedido no tiene nota. Los pedidos `canal:'ml'` **no** tienen esta clave — la API
+de orders de MercadoLibre no expone un campo equivalente (confirmado 2026-08-26), así que no
+se inventa un valor vacío ahí para no sugerir que existe la posibilidad.
+
+### POST /api/preparacion/iniciar (gate nuevo: envío vs. facturación)
+Antes de crear la preparación de un pedido `canal:'web'`, si los datos de envío y
+facturación del pedido difieren de verdad (`direccionesDifieren()` en `lib/preparacion.js`:
+compara calle+número, localidad+provincia, nombre del destinatario y teléfono, normalizado
+sin acentos/mayúsculas/espacios de más) y todavía no se registró una decisión para esa
+preparación:
+
+- Request: `{ canal:'web', id:<wc_order_id>, direccion_elegida?: 'shipping'|'billing' }`.
+- Response 409 (sin `direccion_elegida`, o primera vez que se detecta la diferencia):
+  `{ ok:false, error, direcciones_difieren:true, campos_distintos:[...], envio:{...},
+  facturacion:{...} }` — `envio`/`facturacion` son el objeto completo de `normalizarEnvio()`
+  para cada fuente. **No crea la preparación.**
+- Con `direccion_elegida` presente (`'shipping'` o `'billing'`): crea la preparación
+  normalmente y guarda la elección en `preparaciones.direccion_confirmada_fuente` (+
+  `_por`, `_en`). Una preparación que ya tiene `direccion_confirmada_fuente` no vuelve a
+  frenar en llamadas posteriores a `/iniciar` con el mismo pedido.
+- Si envío y facturación coinciden (caso común), se comporta igual que antes de este
+  cambio — sin 409, sin fricción.
+- La elección persistida es la que usan `GET /etiquetas` y `GET /seguimientos` para esa
+  preparación, en vez de la regla automática de `normalizarEnvio` (envío si tiene
+  `address_1`, si no facturación).
+
 ## Contador de Inventario (`/api/inventario`)
 
 Todos los endpoints requieren sesión iniciada; las consultas de sesión están scopeadas
