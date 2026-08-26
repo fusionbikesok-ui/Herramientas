@@ -847,13 +847,52 @@ export function inventarioRouter(db, wooCfg) {
     // sembramos ean_sku ni hacemos nada — "enseñar EAN sin ítem" es otro caso de uso,
     // no el de asociar dentro de un conteo. Chequeamos con el UPDATE mismo (.changes)
     // para evitar una carrera entre el SELECT previo y el UPDATE.
-    const alcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
+    let alcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
+
+    // Si el SKU no estaba en el alcance original (fue un código desconocido), necesitamos
+    // congelar su stock inicial — igual que hace /escanear al detectar un producto fuera de
+    // alcance (líneas 776-791). Sin esta fila, /confirmar no tiene stock_inicial y
+    // setStockWcDelta falla con "stockInicial requerido".
+    // Pero PRIMERO confirmamos que el ítem existe en la sesión (guard fail-closed abajo):
+    // insertar alcance antes del UPDATE crearía filas huérfanas si el EAN no existe.
+    let prodParaAlcance = null;
+    if (!alcance) {
+      prodParaAlcance = db.prepare(
+        "SELECT nombre, marca, categorias_json, stock FROM catalogo_cache WHERE sku=? AND COALESCE(tipo,'') <> 'variable' AND COALESCE(no_contable,0) = 0 LIMIT 1"
+      ).get(sku);
+      // SKU variable o no contable: no se puede congelar stock — fallar temprano con
+      // mensaje claro es mejor que dejar pasar y que /confirmar falle con "stockInicial requerido".
+      if (!prodParaAlcance) {
+        return res.status(400).json({
+          ok: false,
+          error: `El SKU "${sku}" es un producto variable o no contable y no puede ajustarse por conteo`,
+        });
+      }
+    }
+
     // El SKU ya se validó contra el catálogo más arriba, así que el ítem deja de
     // ser un "código desconocido" y pasa a ser un conteo real.
     const cambio = db.prepare('UPDATE inventario_conteos SET sku=?, bloque=?, fuera_de_alcance=?, codigo_desconocido=0, actualizado_en=? WHERE sesion_id=? AND ean=?')
       .run(sku, alcance?.bloque || null, alcance ? 0 : 1, now(), sesion.id, ean);
     if (cambio.changes === 0) {
       return res.status(404).json({ ok: false, error: 'No hay ningún ítem escaneado con ese EAN en esta sesión' });
+    }
+
+    // El ítem existe: ahora sí es seguro congelar el alcance si todavía no estaba.
+    if (!alcance && prodParaAlcance) {
+      const stock = prodParaAlcance.stock || 0;
+      const bloque = stock > 0 ? 'con_stock' : 'sin_stock';
+      insertAlcance.run(
+        sesion.id, sku, prodParaAlcance.nombre, prodParaAlcance.marca,
+        parseCategorias(prodParaAlcance.categorias_json)[0] || null,
+        stock, bloque
+      );
+      alcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
+      // Si el bloque cambió respecto del que usamos en el UPDATE, corregirlo ahora.
+      if (alcance?.bloque) {
+        db.prepare('UPDATE inventario_conteos SET bloque=?, fuera_de_alcance=0 WHERE sesion_id=? AND ean=?')
+          .run(alcance.bloque, sesion.id, ean);
+      }
     }
     if (sesion.ubicacion_id) capturarUbicacion(sesion.ubicacion_id, sku, req.user?.username);
 
