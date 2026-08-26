@@ -2474,6 +2474,29 @@ describe('syncPedidoWebPuntual', () => {
     // puntual haya hecho nada especial que lo impida.
     expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:904'").get()).toBeUndefined();
   });
+
+  it('tras fallar el camino puntual, la corrida de cron siguiente (syncPedidosCache) sí trae el pedido — no se pierde', async () => {
+    wooFetch.mockRejectedValueOnce(new Error('WC caído'));
+    await expect(syncPedidoWebPuntual(db, CFG, 905)).rejects.toThrow('WC caído');
+    expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:905'").get()).toBeUndefined();
+
+    // Corrida normal del cron de respaldo: mismo pedido, ahora vía el barrido de 3 estados.
+    const orderPend = {
+      id: 905, number: '905', status: 'lpaandreani', date_created: '2026-08-26T00:00:00Z',
+      billing: { first_name: 'Juan', last_name: 'Perez' }, meta_data: [], line_items: [],
+    };
+    wooFetch
+      .mockResolvedValueOnce({ data: [orderPend] }) // status=lpaandreani
+      .mockResolvedValueOnce({ data: [] })          // status=completed
+      .mockResolvedValueOnce({ data: [] });         // status=enviadoandreani
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+
+    await syncPedidosCache(db, { ...CFG, ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' } });
+
+    const row = db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:905'").get();
+    expect(row).toBeTruthy();
+    expect(row.estado_envio).toBe('pendiente');
+  });
 });
 
 describe('syncPedidoMlPuntual', () => {
@@ -2523,5 +2546,30 @@ describe('syncPedidoMlPuntual', () => {
 
     await expect(syncPedidoMlPuntual(db, MLCFG, 'ORD-12')).rejects.toThrow('ML caído');
     expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:ORD-12'").get()).toBeUndefined();
+  });
+
+  it('tras fallar el camino puntual, la corrida de cron siguiente (syncPedidosCache) sí trae el pedido ML — no se pierde', async () => {
+    mlFetch.mockRejectedValueOnce(new Error('ML caído'));
+    await expect(syncPedidoMlPuntual(db, MLCFG, 'ORD-13')).rejects.toThrow('ML caído');
+    expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:ORD-13'").get()).toBeUndefined();
+
+    const CFG = {
+      woo: { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' },
+      ml: MLCFG,
+      andreaniStatus: 'lpaandreani',
+      enviadoAndreaniStatus: 'enviadoandreani',
+    };
+    wooFetch.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [] });
+    mlFetch.mockResolvedValueOnce({
+      status: 200,
+      data: { results: [{ id: 'ORD-13', status: 'paid', date_created: '2026-08-26T00:00:00Z', buyer: { nickname: 'compradorml' }, order_items: [], shipping: { id: 780 } }] },
+    });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } });
+
+    await syncPedidosCache(db, CFG);
+
+    const row = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:ORD-13'").get();
+    expect(row).toBeTruthy();
+    expect(row.estado_envio).toBe('pendiente');
   });
 });
