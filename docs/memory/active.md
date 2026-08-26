@@ -73,7 +73,10 @@ mensajes claros ante los fallos esperados de Woo, responsive limpio en 1440/768/
 `en_curso` no verificable con Playwright de un solo hilo (ya sabido, no bloqueante). Instancia
 aislada apagada y limpiada; producción real (`:3001`) sin tocar.
 
-Falta: `auditor-despliegue`.
+### Gate del auditor-despliegue — EN CURSO
+
+Sin autorización de merge en este despacho: dado que se activan 76 commits nunca antes en
+producción, el merge y el `pm2 restart` los autoriza Matías explícitamente, no el pipeline solo.
 
 ### Estado: conflictos RESUELTOS, gate del tester cerrado
 
