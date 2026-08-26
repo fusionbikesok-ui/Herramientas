@@ -66,11 +66,14 @@ las dos ramas por igual; no es señal de regresión del merge.
 **Conclusión del gate**: sin regresión real detectada. Los flaky son de infraestructura de la VPS,
 no del contenido del merge.
 
-### Gate del probador-e2e — EN CURSO
+### Gate del probador-e2e — CERRADO, 🟢🟢
 
-Instancia aislada levantada en puerto 3197 (DB temporal, `DISABLE_CRONS=true`, sin credenciales
-ML/Woo). Acotado a Consulta de Precios y Preparación — las dos pantallas que más difieren de lo
-desplegado (208 y 372 líneas respectivamente).
+Consulta de Precios y Preparación (las dos que más difieren de lo desplegado): 0 errores JS reales,
+mensajes claros ante los fallos esperados de Woo, responsive limpio en 1440/768/390. Único ⚪:
+`en_curso` no verificable con Playwright de un solo hilo (ya sabido, no bloqueante). Instancia
+aislada apagada y limpiada; producción real (`:3001`) sin tocar.
+
+Falta: `auditor-despliegue`.
 
 ### Estado: conflictos RESUELTOS, gate del tester cerrado
 
