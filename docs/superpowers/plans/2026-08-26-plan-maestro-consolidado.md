@@ -212,6 +212,16 @@ imprimir → desaparece de la cola.
 - Corregir el resultado de `/confirmar` (pantalla de Inventario): los sobrantes pendientes se
   muestran en rojo como si fueran errores. Deben verse en naranja (distinguirlos de un fallo
   real) y el mensaje debe aclarar explícitamente qué falta hacer para aplicarlos.
+- `public/recepcion/index.html:196` — el input de "Proveedor / Distribuidor" solo llama a
+  `sincronizarImportador()` en su `oninput`, que no invoca `actualizarBotones()`. Si el
+  operario agrega un ítem manual ANTES de escribir el proveedor, los botones "Guardar
+  borrador"/"Registrar y actualizar stock" quedan deshabilitados aunque complete el proveedor
+  después, porque `actualizarBotones()` solo se re-evalúa cuando cambia la lista de ítems.
+  Encontrado por `probador-e2e` (2026-08-27) probando el frontend de A.2, no relacionado a ese
+  cambio. Fix sugerido: agregar `onblur="actualizarBotones()"` (o similar) al input.
+- `public/stock/index.html` — la tabla del modal de confirmación de stock
+  (`modal-push-tabla`) se ve recortada en 390px (solo 3 de 5 columnas visibles, sin scroll
+  horizontal evidente). Encontrado por `probador-e2e` (2026-08-27), no relacionado a A.2.
 - `routes/inventario.js` — dos filas de `inventario_conteos` pueden compartir el mismo `sku`
   (la unicidad es por `sesion_id+ean`, no por sku): si eso pasa (ej. se escanea el GTIN de
   fábrica de un producto fuera de alcance y después se asocia una etiqueta desconocida
