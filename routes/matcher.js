@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { mlFetch } from '../lib/mlClient.js';
+import { mlFetch, estadoCooldownMl } from '../lib/mlClient.js';
+import { registrarIncidente, resolverIncidente } from '../lib/incidentes.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
 import { aplanarItemMl } from '../lib/modelos/publicacionMl.js';
 import {
@@ -14,7 +15,10 @@ import { armarClaveMl } from '../lib/mlUtil.js';
 const STATUSES_A_TRAER = ['active', 'paused'];
 const MULTIGET_CHUNK = 20;   // ML permite hasta 20 ids por multiget
 const SEARCH_LIMIT = 100;    // máximo por página de items/search
-const CALL_DELAY_MS = 350;   // respeta rate limit (mlFetch ya tiene timeout)
+// Medido en producción: 350 ms producía 429 tras 2-3 multiget. Compartimos la cadencia
+// conservadora ya usada por la reconciliación de stock.
+const CALL_DELAY_MS = 1500;
+const ESPERA_MAX_COOLDOWN_CATALOGO_MS = 90_000;
 
 // Estado del refresco de publicaciones (async, no bloqueante). El scan completo tarda
 // 1-3 min y superaba el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de
@@ -76,8 +80,18 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
       }
       _refresco.resultado = r;
       _refresco.actualizado_en = now();
+      if (scopeNorm === 'all' && r?.total > 0) {
+        resolverIncidente(db, 'mercadolibre', 'catalogo');
+      }
     } catch (e) {
       _refresco.error = e.message;
+      if (scopeNorm === 'all') {
+        registrarIncidente(db, {
+          integracion: 'mercadolibre',
+          operacion: 'catalogo',
+          resumen: 'No se pudo actualizar el catálogo de MercadoLibre después de los reintentos.',
+        });
+      }
     } finally {
       _refresco.running = false;
       _refresco.phase = _refresco.error ? 'error' : 'listo';
@@ -89,6 +103,23 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+async function mlFetchCatalogoConRecuperacion(db, cfg, path) {
+  let resp = await mlFetch(db, cfg, 'get', path, null, { manual: true });
+  if (resp.status !== 429) return resp;
+
+  // El refresco corre en background: puede esperar un cooldown corto y reintentar el MISMO
+  // chunk. Un cooldown largo indica rechazo sostenido y se deja como incidente grave.
+  const cooldown = estadoCooldownMl();
+  if (!cooldown.activo || !cooldown.hasta) return resp;
+  const esperaMs = new Date(cooldown.hasta).getTime() - Date.now() + 500;
+  if (!Number.isFinite(esperaMs) || esperaMs <= 0 || esperaMs > ESPERA_MAX_COOLDOWN_CATALOGO_MS) {
+    return resp;
+  }
+  await sleep(esperaMs);
+  resp = await mlFetch(db, cfg, 'get', path, null, { manual: true });
+  return resp;
 }
 
 function now() {
@@ -115,10 +146,10 @@ async function listarItemIds(db, cfg, status) {
     // manual: true — este refresco lo dispara el usuario a mano desde el botón
     // "Refrescar ML" (POST /refrescar-ml), no un cron. No debe quedar bloqueado
     // por el cooldown global de los crons.
-    const resp = await mlFetch(
-      db, cfg, 'get',
-      `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`,
-      null, { manual: true }
+    const resp = await mlFetchCatalogoConRecuperacion(
+      db,
+      cfg,
+      `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`
     );
     // Fallo de API (429/500/etc.): abortar en vez de devolver una lista parcial
     // — el llamador reemplaza el cache de forma atómica y una lista incompleta
@@ -159,10 +190,10 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   for (let i = 0; i < allIds.length; i += MULTIGET_CHUNK) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
-    const resp = await mlFetch(
-      db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`,
-      null, { manual: true }
+    const resp = await mlFetchCatalogoConRecuperacion(
+      db,
+      cfg,
+      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
     // borraría publicaciones válidas sin aviso.
