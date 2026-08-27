@@ -297,12 +297,99 @@ async function _syncMlToWc(db, cfg) {
     }
   }
 
-  // Avanzar cursor
+  // Avanzar cursor. El WHERE del ON CONFLICT lo hace monótono en SQL (hallazgo del revisor,
+  // A.3): este barrido puede tardar minutos (paginado + Woo + shipments) leyendo `desde` al
+  // empezar; si mientras tanto syncOrdenMlPuntual ya avanzó el cursor a una orden más nueva
+  // (llegó por webhook durante la corrida), este UPDATE incondicional lo haría retroceder.
+  // Comparando contra el valor ACTUAL en la tabla (no contra `desde`, que es una copia vieja)
+  // nunca se pisa un valor más nuevo ya guardado por el otro camino.
   if (ultimaFecha > desde) {
     db.prepare(`
       INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
       ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+        WHERE excluded.valor > sync_estado.valor
     `).run(ultimaFecha, now());
+  }
+}
+
+/**
+ * A.3 — Procesa UNA orden ML puntual (por el `resource` de un webhook), sin el barrido
+ * paginado de `/orders/search`. `_procesarOrden` es agnóstico al origen del objeto orden
+ * (mismo shape venga de `/orders/search` o de un GET puntual a `/orders/{id}`), así que no
+ * hace falta tocar su firma ni su idempotencia — ver
+ * docs/superpowers/plans/tracker-operacion-tiempo-real.md, A.3.
+ *
+ * El barrido paginado completo (`syncMlToWc`, cron cada 10 min) queda como respaldo sin
+ * tocar: si este camino puntual falla o no llega, la orden igual se procesa en la corrida
+ * siguiente del cron. No toma el candado `_mlToWcEnCurso` — no compite por él a propósito:
+ * la idempotencia real está en `ordenes_ml_procesadas` (chequeada acá) y, sobre todo, en el
+ * `INSERT` de reserva contra la PK `ml_order_id` que hace `_procesarOrden` antes de escribir
+ * a Woo (más abajo en este archivo, no el `SELECT` de pre-chequeo que hay antes — ese es solo
+ * una optimización barata, no la garantía real). Ese `INSERT` es lo que de verdad impide que
+ * una corrida puntual y el barrido paginado dupliquen un pedido si coinciden en el tiempo
+ * (mismo criterio que `syncPedidoMlPuntual`/`syncPedidoWebPuntual` de A.1, que tampoco toman
+ * ningún candado).
+ *
+ * Fail-open: nunca tira, solo loguea — un error acá no debe tirar abajo el handler del
+ * webhook (que ya respondió 200 antes de llamar a esto).
+ */
+export async function syncOrdenMlPuntual(db, cfg, mlOrderId) {
+  const { ml: mlCfg, woo: wooCfg } = cfg;
+  if (!mlCfgOk(cfg)) return { omitido: true };
+  if (!mlOrderId) return { omitido: true, motivo: 'sin_order_id' };
+
+  const yaProc = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(mlOrderId));
+  if (yaProc) return { omitido: true, motivo: 'ya_procesada' };
+
+  try {
+    const resp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
+    if (resp.status !== 200) {
+      console.error(`syncOrdenMlPuntual: error API ML ${resp.status} para orden ${mlOrderId} — la retoma el cron`);
+      return { omitido: true, motivo: `http_${resp.status}` };
+    }
+    const orden = resp.data;
+    // Mismo filtro que el barrido paginado (`order.status=paid` en el query string de
+    // _syncMlToWc, línea ~271) y que el camino puntual hermano de A.1
+    // (syncPedidoMlPuntual, routes/preparacion.js:2229). El barrido lo aplicaba en el query
+    // string, así que nunca hacía falta chequearlo en _procesarOrden — al reemplazarlo por un
+    // GET puntual (que trae la orden sea cual sea su estado) hay que chequearlo acá. Sin
+    // esto, una orden en payment_required/payment_in_process (pago con ticket/transferencia
+    // pendiente de acreditar) crearía el pedido en Woo y descontaría stock de una venta que
+    // puede no concretarse nunca — y quedaría sellada en ordenes_ml_procesadas, así que el
+    // cron tampoco la reprocesaría cuando sí pase a 'paid'.
+    if (orden.status !== 'paid') {
+      return { omitido: true, motivo: `status_${orden.status}` };
+    }
+    await _procesarOrden(db, wooCfg, mlCfg, orden);
+    // Avanzar el cursor del barrido paginado (mismo campo que actualiza _syncMlToWc, línea
+    // ~301): sin esto, con el camino puntual sellando la mayoría de las órdenes recientes en
+    // ordenes_ml_procesadas antes de que corra el cron, `_syncMlToWc` nunca encuentra una
+    // orden "nueva" que hacer avanzar el cursor (su `continue` por yaProc corta ANTES de
+    // tocar ultimaFecha) — el barrido de respaldo terminaría re-paginando una ventana cada
+    // vez más vieja en cada corrida, sin límite.
+    //
+    // Solo si la orden quedó SELLADA en ordenes_ml_procesadas (hallazgo del revisor):
+    // _procesarOrden puede retornar sin sellar (reserva retenida fail-closed, o liberada para
+    // reintento — ver sus comentarios más abajo) cuando algo falló a mitad de camino. Avanzar
+    // el cursor igual sacaría esa orden de la ventana del barrido de respaldo apenas llegue
+    // una más nueva, perdiéndola en silencio en vez de dejar que el cron la reintente.
+    const sellada = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(mlOrderId));
+    if (sellada && orden.date_created) {
+      const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get();
+      if (!cursorRow || orden.date_created > cursorRow.valor) {
+        // El WHERE hace el avance monótono también en SQL (mismo criterio que _syncMlToWc):
+        // red de seguridad ante otra carrera con el barrido, no solo el chequeo de JS de arriba.
+        db.prepare(`
+          INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
+          ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+            WHERE excluded.valor > sync_estado.valor
+        `).run(orden.date_created, now());
+      }
+    }
+    return { omitido: false };
+  } catch (e) {
+    console.error(`syncOrdenMlPuntual: excepción procesando orden ${mlOrderId} — la retoma el cron:`, e.message);
+    return { omitido: true, motivo: 'excepcion' };
   }
 }
 
