@@ -18,7 +18,7 @@ import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
 import { matcherRouter } from './routes/matcher.js';
 import { pushSkusPendientes } from './lib/matcherPush.js';
-import { syncRouter, syncMlToWc, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
+import { syncRouter, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
@@ -150,9 +150,11 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   // ML espera 200 en < 500ms — respondemos antes de procesar cualquier topic.
   // Docs: https://developers.mercadolibre.com.ar/es_ar/recibir-notificaciones
   //
-  // Topics soportados hoy: 'orders' (sync inmediato a WC + camino puntual a pedidos_cache,
-  // A.1), 'orders_v2' (solo camino puntual a pedidos_cache — no dispara syncMlToWc, mismo
-  // comportamiento preexistente de 'orders' respecto de eso), 'questions' y 'messages'
+  // Topics soportados hoy: 'orders' (sync puntual a WC de ESA orden vía syncOrdenMlPuntual,
+  // A.3, + camino puntual a pedidos_cache, A.1 — el barrido paginado completo, syncMlToWc,
+  // ya no se dispara acá, queda solo como respaldo del cron), 'orders_v2' (solo camino
+  // puntual a pedidos_cache — no dispara syncOrdenMlPuntual, mismo comportamiento
+  // preexistente de 'orders' respecto de eso), 'questions' y 'messages'
   // (preguntas/mensajes sin responder, guardados para el aviso del Home — ver
   // routes/notificacionesMl.js). El resto de los topics que ML manda (shipments, claims,
   // orders_feedback, items, invoices) se reciben y se descartan en silencio hasta que se sume
@@ -167,19 +169,26 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
     if (mlUserId && String(user_id) !== String(mlUserId)) return;
 
     if (topic === 'orders' || topic === 'orders_v2') {
-      console.log(`[notif-ml] topic=${topic} resource=${resource} → ${topic === 'orders' ? 'syncMlToWc' : 'syncPedidoMlPuntual'}`);
-      // syncMlToWc solo se dispara para 'orders' (comportamiento preexistente, sin tocar).
-      if (topic === 'orders') {
-        syncMlToWc(app._db, syncCfg)
-          .catch(err => console.error('[notif-ml] syncMlToWc error:', err.message));
+      console.log(`[notif-ml] topic=${topic} resource=${resource} → ${topic === 'orders' ? 'syncOrdenMlPuntual' : 'syncPedidoMlPuntual'}`);
+      // `resource` viene como "/orders/{id}" -- se toma el último segmento.
+      const mlOrderId = String(resource || '').split('/').filter(Boolean).pop();
+
+      // A.3 (2026-08-27): syncMlToWc ya NO se dispara acá — hacía un barrido paginado
+      // completo de /orders/search por cada webhook, cuando el propio webhook ya trae el id
+      // puntual de la orden. syncOrdenMlPuntual procesa SOLO esa orden (GET /orders/{id}).
+      // El barrido paginado completo sigue de respaldo vía el cron ('3-59/10 * * * *', más
+      // abajo) — si esto falla o no llega, el cron la termina agarrando igual. Comportamiento
+      // preexistente (solo 'orders', no 'orders_v2') sin tocar: syncMlToWc/syncOrdenMlPuntual
+      // ajustan stock por venta, no aplica a 'orders_v2' hasta que se defina esa función.
+      if (topic === 'orders' && mlOrderId) {
+        syncOrdenMlPuntual(app._db, syncCfg, mlOrderId)
+          .catch(err => console.error('[notif-ml] syncOrdenMlPuntual error:', err.message));
       }
 
       // A.1 (2026-08-26): camino rápido a la cola de Preparación, para 'orders' y 'orders_v2'
-      // por igual. `resource` viene como "/orders/{id}" -- se toma el último segmento.
-      // Fail-open: si falla o el order id no se puede extraer, no se pierde nada -- el pedido
-      // igual va a aparecer en la próxima corrida de syncPedidosCache (cron cada 10 min) vía
-      // pendientesMl, que no depende de este camino puntual.
-      const mlOrderId = String(resource || '').split('/').filter(Boolean).pop();
+      // por igual. Fail-open: si falla o el order id no se puede extraer, no se pierde nada --
+      // el pedido igual va a aparecer en la próxima corrida de syncPedidosCache (cron cada 10
+      // min) vía pendientesMl, que no depende de este camino puntual.
       if (mlOrderId) {
         syncPedidoMlPuntual(app._db, mlCfg, mlOrderId)
           .catch(err => console.error('[notif-ml] syncPedidoMlPuntual error:', err.message));
