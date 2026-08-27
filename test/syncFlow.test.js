@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { syncMlToWc, syncWcToMl, procesarReintentos, limpiarVariacionesMuertas } from '../routes/sync.js';
+import { syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, limpiarVariacionesMuertas } from '../routes/sync.js';
 
 vi.mock('../lib/mlClient.js', () => ({
   mlFetch: vi.fn(),
@@ -2749,5 +2749,163 @@ describe('syncMlToWc — el cursor de ventas no avanza si ML no responde (cooldo
     await p;
 
     expect(leerCursor(db)).toBe(fechaOrden);
+  });
+});
+
+describe('syncOrdenMlPuntual (A.3)', () => {
+  let db;
+
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    seedMatcher(db);
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('happy path: GET /orders/{id} puntual (no /orders/search) crea el pedido en WC', async () => {
+    seedCatalogo(db, { precio: 300 });
+    const orden = {
+      id: 'ORD-PUNTUAL-1',
+      status: 'paid',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
+    };
+    mlFetch.mockImplementation(async (db_, mlCfg, method, path) => {
+      expect(path).toBe('/orders/ORD-PUNTUAL-1'); // nunca /orders/search
+      return { status: 200, data: orden };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 8001 } };
+      return { data: {} };
+    });
+
+    const p = syncOrdenMlPuntual(db, CFG, 'ORD-PUNTUAL-1');
+    await vi.runAllTimersAsync();
+    const result = await p;
+
+    expect(result.omitido).toBe(false);
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+    expect(db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id=?').get('ORD-PUNTUAL-1')).toBeTruthy();
+    const pedido = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get('ORD-PUNTUAL-1');
+    expect(pedido.wc_order_id).toBe(8001);
+  });
+
+  it('orden ya procesada: no llama a mlFetch, devuelve omitido', async () => {
+    db.prepare(
+      'INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?,?,?,?,?)'
+    ).run('ORD-YA-1', new Date().toISOString(), '[]', 'ok', new Date().toISOString());
+
+    const result = await syncOrdenMlPuntual(db, CFG, 'ORD-YA-1');
+
+    expect(result).toEqual({ omitido: true, motivo: 'ya_procesada' });
+    expect(mlFetch).not.toHaveBeenCalled();
+  });
+
+  it('GET de ML falla (500): omitido, no tira, el cron la retoma', async () => {
+    mlFetch.mockResolvedValue({ status: 500, data: null });
+
+    const result = await syncOrdenMlPuntual(db, CFG, 'ORD-FALLA-1');
+
+    expect(result).toEqual({ omitido: true, motivo: 'http_500' });
+    expect(db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id=?').get('ORD-FALLA-1')).toBeFalsy();
+  });
+
+  it('excepción de red: omitido, no tira hacia el caller (webhook ya respondió 200)', async () => {
+    mlFetch.mockRejectedValue(new Error('timeout'));
+
+    const result = await syncOrdenMlPuntual(db, CFG, 'ORD-EXC-1');
+
+    expect(result).toEqual({ omitido: true, motivo: 'excepcion' });
+  });
+
+  it('sin mlOrderId: omitido sin llamar a nada', async () => {
+    const result = await syncOrdenMlPuntual(db, CFG, '');
+    expect(result).toEqual({ omitido: true, motivo: 'sin_order_id' });
+    expect(mlFetch).not.toHaveBeenCalled();
+  });
+
+  it('orden NO pagada (payment_in_process): omitido, NO crea pedido en Woo ni descuenta stock', async () => {
+    seedCatalogo(db, { precio: 300 });
+    mlFetch.mockResolvedValue({
+      status: 200,
+      data: {
+        id: 'ORD-NOPAGA-1',
+        status: 'payment_in_process',
+        date_created: new Date().toISOString(),
+        order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
+      },
+    });
+    wooFetch.mockImplementation(async () => { throw new Error('no debería llamarse — la orden no está paga'); });
+
+    const result = await syncOrdenMlPuntual(db, CFG, 'ORD-NOPAGA-1');
+
+    expect(result).toEqual({ omitido: true, motivo: 'status_payment_in_process' });
+    // No queda sellada: cuando pase a 'paid' el cron (o un webhook posterior) la tiene que
+    // poder reprocesar con los datos definitivos, no saltearla por "ya procesada".
+    expect(db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id=?').get('ORD-NOPAGA-1')).toBeFalsy();
+    expect(wooFetch).not.toHaveBeenCalled();
+    // El cursor tampoco debe avanzar: sacaría esta orden de la ventana del barrido de
+    // respaldo antes de que exista una chance real de reprocesarla como 'paid'.
+    expect(db.prepare("SELECT valor FROM sync_estado WHERE clave='ultima_orden_ml'").get()).toBeFalsy();
+  });
+
+  it('avanza el cursor ultima_orden_ml al procesar OK, para que el barrido de respaldo no re-pagine una ventana cada vez más vieja', async () => {
+    seedCatalogo(db, { precio: 300 });
+    const fechaOrden = new Date().toISOString();
+    mlFetch.mockResolvedValue({
+      status: 200,
+      data: {
+        id: 'ORD-CURSOR-PUNTUAL-1',
+        status: 'paid',
+        date_created: fechaOrden,
+        order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
+      },
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 9101 } };
+      return { data: {} };
+    });
+
+    await syncOrdenMlPuntual(db, CFG, 'ORD-CURSOR-PUNTUAL-1');
+
+    const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave='ultima_orden_ml'").get();
+    expect(cursor?.valor).toBe(fechaOrden);
+  });
+
+  // Nota (hallazgo del revisor): este test es secuencial, no ejercita una carrera real entre
+  // el camino puntual y el barrido paginado — prueba que la idempotencia PREEXISTENTE de
+  // _procesarOrden (el INSERT de reserva contra la PK ml_order_id) sigue funcionando cuando
+  // la fila ya existe, no específicamente el interleaving async de un solapamiento real.
+  // Sirve como red de seguridad de regresión, no como prueba de concurrencia.
+  it('convive con syncMlToWc (barrido paginado) sin duplicar el pedido si ambos procesan la misma orden', async () => {
+    seedCatalogo(db, { precio: 300 });
+    const orden = {
+      id: 'ORD-CONVIVE-1',
+      date_created: new Date().toISOString(),
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
+    };
+    // El puntual ya reservó/creó el pedido (simulado insertando la fila que _procesarOrden
+    // dejaría) antes de que corra el barrido paginado con la misma orden en sus resultados.
+    db.prepare(
+      'INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, creado_en) VALUES (?,?,?)'
+    ).run('ORD-CONVIVE-1', 9001, new Date().toISOString());
+
+    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
+    wooFetch.mockImplementation(async () => { throw new Error('no debería llamarse — ya está reservada'); });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    // _procesarOrden corta temprano (línea ~514) al ver la reserva existente: no vuelve a
+    // postear a Woo ni duplica ordenes_ml_wc_pedidos.
+    const filas = db.prepare('SELECT COUNT(*) n FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get('ORD-CONVIVE-1');
+    expect(filas.n).toBe(1);
   });
 });
