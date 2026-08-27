@@ -10,7 +10,7 @@ import fs from 'fs';
 import express from 'express';
 
 vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn() }));
-vi.mock('../lib/mlRateLimiter.js', () => ({ reservarCupo: vi.fn().mockResolvedValue(undefined), _resetPresupuestoParaTests: vi.fn() }));
+vi.mock('../lib/mlRateLimiter.js', () => ({ reservarCupo: vi.fn().mockResolvedValue(true), _resetPresupuestoParaTests: vi.fn() }));
 import { mlFetch } from '../lib/mlClient.js';
 import { ensureAuditoriaTable, barridoAuditoria } from '../lib/auditoria.js';
 import { auditoriaRouter } from '../routes/auditoria.js';
