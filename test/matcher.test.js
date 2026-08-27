@@ -4,7 +4,7 @@ import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
-import { matcherRouter, refrescarPublicacionesMlAcotado, mlFetchConReintento, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
+import { matcherRouter, refrescarPublicacionesMl, refrescarPublicacionesMlAcotado, mlFetchConReintento, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
 import { _resetEstadoPushParaTests } from '../lib/matcherPush.js';
 import { _resetCooldownParaTests } from '../lib/mlClient.js';
 
@@ -297,6 +297,36 @@ describe('refrescarPublicacionesMlAcotado', () => {
   }, 10000);
 });
 
+describe('refrescarPublicacionesMl — test de CABLEADO (hallazgo del revisor, 2026-08-27)', () => {
+  // Las funciones del incidente real (6840 filas stancadas 8 días) son listarItemIds y
+  // refrescarPublicacionesMl, no refrescarPublicacionesMlAcotado (esa es la del refresco
+  // puntual por SKU). Si alguien revierte routes/matcher.js y el scroll de listarItemIds
+  // vuelve a llamar `mlFetch` a secas en vez de `mlFetchConReintento`, este test lo detecta:
+  // sin reintento, el 500 del primer chunk tira y refrescarPublicacionesMl rechaza en vez
+  // de terminar con total:0 (fail-closed correcto, pero solo tras agotar los reintentos).
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); seedToken(db); vi.clearAllMocks(); _resetCooldownParaTests(); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); _resetCooldownParaTests(); });
+
+  it('el scroll de items/search sobrevive a un 500 transitorio en el primer status y termina bien', async () => {
+    let llamadasSearch = 0;
+    axios.request.mockImplementation(async (opts) => {
+      if (String(opts?.url).includes('/items/search')) {
+        llamadasSearch += 1;
+        if (llamadasSearch === 1) return { status: 500, headers: {}, data: null };
+        return { status: 200, headers: {}, data: { results: [], scroll_id: null } };
+      }
+      return { status: 200, headers: {}, data: [] };
+    });
+
+    const r = await refrescarPublicacionesMl(db, ML_CFG);
+
+    expect(r.total).toBe(0); // sin ids devueltos por el scroll (mockeado vacío), pero SIN abortar
+    // STATUSES_A_TRAER = ['active','paused']: 1 falla + 1 éxito para 'active', 1 éxito para 'paused'.
+    expect(llamadasSearch).toBe(3);
+  }, 10000);
+});
+
 describe('mlFetchConReintento — resiliencia ante 5xx/429 transitorios (incidente 2026-08-27)', () => {
   let db;
   // El test de 429 activa el cooldown global de mlFetch (estado de módulo en
@@ -350,6 +380,31 @@ describe('mlFetchConReintento — resiliencia ante 5xx/429 transitorios (inciden
     const resp = await mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA-inexistente');
     expect(resp.status).toBe(404);
     expect(axios.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('NO reintenta un error fatal de credenciales (getAccessToken 401 al refrescar el token) — hallazgo del revisor: reintentar esto solo multiplica llamadas a /oauth/token con un refresh_token ya quemado', async () => {
+    // Token vencido: fuerza el refresh en la primera llamada.
+    db.prepare("UPDATE ml_oauth_token SET expires_at=? WHERE id=1").run(new Date(Date.now() - 60_000).toISOString());
+    axios.post.mockResolvedValue({ status: 401, headers: {}, data: null });
+    await expect(mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/Autenticación ML rechazada/);
+    expect(axios.post).toHaveBeenCalledTimes(1); // sin el filtro, hubiera sido 4 (1 + 3 reintentos)
+    expect(axios.request).not.toHaveBeenCalled(); // nunca llegó a pegarle a la API real
+  });
+
+  it('NO reintenta mientras el cooldown de OAuth está activo — un backoff de segundos no esquiva un cooldown de decenas de segundos', async () => {
+    db.prepare("UPDATE ml_oauth_token SET expires_at=? WHERE id=1").run(new Date(Date.now() - 60_000).toISOString());
+    // Primer 429 real del OAuth arma el cooldown global (lib/mlClient.js).
+    axios.post.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await expect(mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/rate limit/i);
+    expect(axios.post).toHaveBeenCalledTimes(1); // el 429 en sí tampoco se reintenta (ya cubierto arriba)
+
+    // Con el cooldown ya activo, una SEGUNDA llamada de mlFetchConReintento (token todavía
+    // vencido) recibe el 429 sintético de mlFetch (guard ANTES de llegar a getAccessToken)
+    // sin reintentar ni volver a pegarle a /oauth/token.
+    axios.post.mockClear();
+    const resp2 = await mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA2');
+    expect(resp2.status).toBe(429);
+    expect(axios.post).not.toHaveBeenCalled();
   });
 });
 

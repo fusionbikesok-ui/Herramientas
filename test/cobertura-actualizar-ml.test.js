@@ -24,7 +24,10 @@ function buildApp(db) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-async function esperarQueTermine(app, tries = 50) {
+// 400 tries × 20ms = 8s de presupuesto de polling: con CALL_DELAY_MS=1500ms (incidente
+// 2026-08-27, antes 350ms) un refresco de 2 statuses + 1 chunk de multiget ya suma ~4,5s
+// reales de sleeps propios, antes de contar reintentos ante error.
+async function esperarQueTermine(app, tries = 400) {
   for (let i = 0; i < tries; i++) {
     const r = await request(app).get('/api/cobertura/actualizar-ml/estado');
     if (!r.body.running) return r.body;
@@ -80,7 +83,7 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
     const row = db.prepare("SELECT * FROM ml_publicaciones_cache WHERE item_id = 'MLA1'").get();
     expect(row).toBeTruthy();
     expect(row.titulo).toBe('Pedales Shimano M520');
-  });
+  }, 10000);
 
   it('CANDADO: un segundo POST mientras el primero sigue en curso se omite (no dispara otro refresco)', async () => {
     let resolverPrimerLlamado;
@@ -112,7 +115,7 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
     // dispararRefrescoMl (routes/matcher.js) y corrí este test — con la guarda comentada,
     // res2.status daba 202 (arrancaba un segundo refresco) y `mlFetch` se llamaba 2 veces
     // antes de liberar la promesa pendiente. Restauré la guarda y el test vuelve a verde.
-  });
+  }, 10000);
 
   it('FAIL-CLOSED: si ML no responde, la caché NO se pisa con datos parciales y el error queda expuesto', async () => {
     // 10s: el multiget en 500 reintenta 3 veces con backoff real (mlFetchConReintento).
@@ -183,5 +186,5 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
       const opts = call[5];
       expect(opts?.manual).toBe(true);
     }
-  });
+  }, 10000);
 });

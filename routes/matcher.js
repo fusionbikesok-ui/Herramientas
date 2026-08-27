@@ -14,7 +14,11 @@ import { armarClaveMl } from '../lib/mlUtil.js';
 const STATUSES_A_TRAER = ['active', 'paused'];
 const MULTIGET_CHUNK = 20;   // ML permite hasta 20 ids por multiget
 const SEARCH_LIMIT = 100;    // máximo por página de items/search
-const CALL_DELAY_MS = 350;   // respeta rate limit (mlFetch ya tiene timeout)
+// MEDIDO el 2026-08-06 en routes/sync.js (RECONCILIACION_PAUSA_CHUNK_MS): ML empieza a
+// devolver 429 tras 2-3 multiget consecutivos con menos de ~1,5s de por medio. 350ms
+// (el valor previo acá) garantizaba 429 en cualquier refresco de más de un puñado de
+// chunks — root cause adicional del incidente 2026-08-27 además de la falta de retry.
+const CALL_DELAY_MS = 1500;
 
 // Estado del refresco de publicaciones (async, no bloqueante). El scan completo tarda
 // 1-3 min y superaba el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de
@@ -94,10 +98,27 @@ function sleep(ms) {
 // Backoff acotado a 3 reintentos (mismo patrón que wooFetchConReintento en routes/woo.js).
 const ML_RETRY_BACKOFF_MS = [500, 1500, 4000];
 
+// Excepciones NO transitorias que getAccessToken/mlFetch puede tirar (lib/mlClient.js):
+// credencial mal configurada, refresh_token quemado, cooldown de OAuth activo o
+// presupuesto de /oauth/token agotado. Reintentar estas 4 veces en ~6s no las arregla —
+// en el caso de "cooldown"/"Presupuesto" activa el MISMO martilleo del incidente
+// 2026-08-04 que el cooldown de mlClient.js existe para evitar; en el caso de
+// "Autenticación ML rechazada" son 4 POST de más a /oauth/token con un refresh_token
+// ya quemado. Mismo criterio que el filtro de wooFetchConReintento (routes/woo.js) para
+// el error de configuración "URL debe usar HTTPS".
+const ML_ERRORES_NO_TRANSITORIOS = [
+  'ML_CLIENT_ID no configurado',
+  'Token ML no inicializado',
+  'Autenticación ML rechazada',
+  'cooldown',
+  'Presupuesto de llamadas a /oauth/token agotado',
+];
+
 /**
- * mlFetch con reintento ante errores TRANSITORIOS (5xx, 429, excepción de red/timeout).
- * NO reintenta otros 4xx (401/403/404/etc.): esos no se arreglan reintentando la misma
- * request.
+ * mlFetch con reintento ante errores TRANSITORIOS (5xx, excepción de red/timeout).
+ * NO reintenta 4xx (401/403/404/429/etc.) ni las excepciones no transitorias de
+ * getAccessToken (credenciales, cooldown de OAuth, presupuesto agotado): esos no se
+ * arreglan reintentando la misma request.
  *
  * Motivo (incidente 2026-08-27, mismo patrón que refrescarCatalogo en routes/woo.js):
  * `ml_publicaciones_cache` quedó con TODAS sus 6840 filas en el mismo timestamp del
@@ -128,8 +149,10 @@ export async function mlFetchConReintento(db, cfg, method, path, body = null, op
       if (resp.status < 500) return resp; // 4xx (incluido 429): no reintentar.
       // 5xx: sí es transitorio, reintentar.
     } catch (e) {
+      const msg = e?.message ?? '';
+      if (ML_ERRORES_NO_TRANSITORIOS.some(patron => msg.includes(patron))) throw e;
       ultimoError = e;
-      // Excepción de red/timeout: reintentar.
+      // Excepción de red/timeout genuina (u otra no reconocida arriba): reintentar.
     }
   }
   if (ultimoResp) return ultimoResp; // agotados los reintentos: devolver el último status, que el caller ya sabe manejar (aborta fail-closed).

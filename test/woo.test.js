@@ -402,6 +402,9 @@ describe('woo route', () => {
       2: [{ id: 302, sku: 'BAD-2', stock_quantity: 1, attributes: [] }],
       3: [{ id: 303, sku: 'OK-3', stock_quantity: 1, attributes: [] }],
     };
+    // fallarId:2 falla SIEMPRE (no un único 500 transitorio): con wooFetchConReintento
+    // (incidente 2026-08-27) esa llamada agota sus 3 reintentos con backoff real
+    // ([500,1500,4000]ms ≈ 6s) antes de fallar-cerrado — de ahí el timeout extendido.
     mockCatalogoConVariables(variables, { fallarId: 2 });
     const db = openDb(TEST_DB);
     await expect(
@@ -410,7 +413,7 @@ describe('woo route', () => {
     // Como en el comportamiento serial anterior: si falla una llamada, no se persiste nada
     expect(getCatalogo(db)).toHaveLength(0);
     db.close();
-  });
+  }, 10000);
 
   it('openDb crea la tabla ean_sku', () => {
     const db = openDb(TEST_DB);
@@ -585,14 +588,17 @@ describe('refrescarCatalogo — modo incremental', () => {
       .mockResolvedValueOnce({ status: 200, headers: {}, data: [
         { id: 90, name: 'Padre', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 },
       ] })
-      .mockResolvedValueOnce({ status: 500, headers: {}, data: {} }); // falla la llamada de variaciones
+      // falla la llamada de variaciones SIEMPRE (no un único 500 transitorio): con
+      // wooFetchConReintento (incidente 2026-08-27) esa llamada agota sus 3 reintentos
+      // con backoff real (~6s) antes de fallar-cerrado — de ahí el timeout extendido.
+      .mockResolvedValue({ status: 500, headers: {}, data: {} });
 
     await expect(refrescarCatalogo(db, cfg)).rejects.toThrow(/WooCommerce API error 500/);
 
     const marcaNueva = db.prepare("SELECT valor FROM sync_estado WHERE clave='catalogo_ultimo_refresco'").get().valor;
     expect(marcaNueva).toBe(marcaVieja);
     db.close();
-  });
+  }, 10000);
 
   // Fallback de marca: si por algún motivo faltara catalogo_ultimo_refresco (no debería
   // pasar en operación normal: completo=false implica que ya hubo un barrido completo
