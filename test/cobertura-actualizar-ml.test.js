@@ -137,9 +137,11 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
     expect(res.status).toBe(202);
 
     // El multiget en 500 ahora reintenta (mlFetchConReintento, incidente 2026-08-27:
-    // resiliencia ante 5xx transitorios) antes de fallar-cerrado — 3 reintentos con
-    // backoff real [500,1500,4000]ms ≈ 6s de tiempo real hasta el último intento.
-    const final = await esperarQueTermine(app, 400);
+    // resiliencia ante 5xx transitorios) antes de fallar-cerrado — 2×CALL_DELAY_MS (3s,
+    // entre statuses) + backoff real [500,1500,4000]ms (6s) ≈ 9s de tiempo real hasta el
+    // último intento. Margen generoso en tries/timeout (hallazgo del revisor: 9,4s medidos
+    // contra un timeout de 10s dejaba apenas 5% de margen, flaky bajo la suite completa).
+    const final = await esperarQueTermine(app, 600);
     expect(final.error).toBeTruthy();
     expect(final.resultado).toBeNull(); // nunca se completó un resultado exitoso
 
@@ -158,7 +160,7 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
     // con la guarda apagada, el refresco "terminaba bien" (final.error volvía null en vez de
     // truthy) porque el multiget con 0 filas llegaba igual a la transacción de reemplazo
     // (DELETE + upsert), borrando MLA_VIEJA. Restauré la guarda y el test vuelve a verde.
-  }, 10000);
+  }, 20000);
 
   it('GET /resumen expone ultima_actualizacion_ml y refresco_ml_en_curso sin forzar ningún refresco', async () => {
     db.prepare(`
