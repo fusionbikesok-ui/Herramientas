@@ -110,21 +110,69 @@ describe('lib/incidentes', () => {
       }).toThrow(/UNIQUE constraint/);
     });
 
-    it('sanitiza el contexto: nunca persiste claves que parezcan secretos, aunque el llamador las pase por error', () => {
+    it('sanitiza el contexto: redacta el VALOR de claves que parezcan secretos, aunque el llamador las pase por error', () => {
       const r = abrirOActualizarIncidente(db, {
         ...BASE,
         contexto: { endpoint: '/items/search', status_http: 429, access_token: 'SECRETO', client_secret: 'MAS_SECRETO', Authorization: 'Bearer x' },
       });
       const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
       const contexto = JSON.parse(fila.contexto_json);
-      expect(contexto).toEqual({ endpoint: '/items/search', status_http: 429 });
+      expect(contexto).toEqual({
+        endpoint: '/items/search', status_http: 429,
+        access_token: '[redactado]', client_secret: '[redactado]', Authorization: '[redactado]',
+      });
       expect(fila.contexto_json).not.toMatch(/SECRETO/);
+    });
+
+    it('sanitiza secretos anidados en objetos y arrays, no solo el primer nivel', () => {
+      const r = abrirOActualizarIncidente(db, {
+        ...BASE,
+        contexto: {
+          request: { headers: { Authorization: 'Bearer x' } },
+          intentos: [{ ok: false, token: 'y' }],
+        },
+      });
+      const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
+      const contexto = JSON.parse(fila.contexto_json);
+      expect(contexto.request.headers.Authorization).toBe('[redactado]');
+      expect(contexto.intentos[0].token).toBe('[redactado]');
+      expect(contexto.intentos[0].ok).toBe(false);
+    });
+
+    it('redacta un secreto delatado por su FORMA aunque la clave sea inocente (ej. una URL con ?access_token=...)', () => {
+      const r = abrirOActualizarIncidente(db, {
+        ...BASE,
+        contexto: { url: 'https://api.mercadolibre.com/items?access_token=APP_USR-123' },
+      });
+      const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
+      expect(JSON.parse(fila.contexto_json).url).toBe('[redactado]');
     });
 
     it('sin contexto no rompe (contexto_json queda null)', () => {
       const r = abrirOActualizarIncidente(db, BASE);
       const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
       expect(fila.contexto_json).toBeNull();
+    });
+
+    it('una severidad desconocida (typo) cae a advertencia en vez de romper el INSERT o quedar invisible', () => {
+      const r = abrirOActualizarIncidente(db, { ...BASE, severidad: 'crítico' }); // con tilde, no matchea 'critico'
+      const fila = db.prepare('SELECT severidad FROM incidentes_operativos WHERE id = ?').get(r.id);
+      expect(fila.severidad).toBe('advertencia');
+    });
+
+    it('sin mensajeHumano usa un default en vez de violar NOT NULL', () => {
+      const { mensajeHumano, ...sinMensaje } = BASE;
+      const r = abrirOActualizarIncidente(db, sinMensaje);
+      expect(r.error).toBeUndefined();
+      const fila = db.prepare('SELECT mensaje_humano FROM incidentes_operativos WHERE id = ?').get(r.id);
+      expect(fila.mensaje_humano).toBeTruthy();
+    });
+
+    it('fail-open: un error de escritura (ej. NOT NULL por integracion faltante) no lanza, devuelve error:true', () => {
+      const { integracion, ...sinIntegracion } = BASE;
+      const r = abrirOActualizarIncidente(db, sinIntegracion);
+      expect(r.error).toBe(true);
+      expect(r.id).toBeNull();
     });
   });
 
@@ -149,11 +197,14 @@ describe('lib/incidentes', () => {
       expect(eventos).toEqual(['abierto', 'resuelto']);
     });
 
-    it('NUNCA resuelve por una sola llamada exitosa aislada — solo por confirmarCicloSano explícito', () => {
+    it('NUNCA resuelve por reincidencias repetidas — solo por confirmarCicloSano explícito', () => {
       const abierto = abrirOActualizarIncidente(db, BASE);
-      // Ninguna llamada a abrirOActualizarIncidente resuelve nada — solo confirmarCicloSano.
-      const fila = db.prepare('SELECT estado FROM incidentes_operativos WHERE id = ?').get(abierto.id);
+      // Varias llamadas más con la misma clave (lo único que existe para "registrar" algo
+      // sobre este incidente sin pasar por confirmarCicloSano): ninguna debe resolverlo.
+      for (let i = 0; i < 5; i++) abrirOActualizarIncidente(db, BASE);
+      const fila = db.prepare('SELECT estado, contador_repeticiones FROM incidentes_operativos WHERE id = ?').get(abierto.id);
       expect(fila.estado).toBe('activo');
+      expect(fila.contador_repeticiones).toBe(6);
     });
 
     it('con tipoError puntual, resuelve solo esa clase y deja otros incidentes activos de la misma integración/proceso', () => {
@@ -231,6 +282,13 @@ describe('lib/incidentes', () => {
       expect(r.page).toBe(1);
       expect(r.pageSize).toBe(20);
     });
+
+    it('acepta page/pageSize como STRING (hallazgo del revisor: así llegan siempre desde req.query de Express)', () => {
+      const r = listarIncidentes(db, { page: '2', pageSize: '1' });
+      expect(r.page).toBe(2);
+      expect(r.pageSize).toBe(1);
+      expect(r.items).toHaveLength(1);
+    });
   });
 
   describe('obtenerIncidente', () => {
@@ -250,11 +308,23 @@ describe('lib/incidentes', () => {
   });
 
   describe('idempotencia del esquema', () => {
-    it('abrir la misma DB dos veces (openDb) no falla', () => {
+    it('abrir la misma DB dos veces (openDb) no falla y preserva tablas e índices', () => {
+      abrirOActualizarIncidente(db, BASE); // dato previo, para confirmar que sobrevive
       const db2 = openDb(TEST_DB);
+
+      const tablas = db2.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'incidentes_operativos%'"
+      ).all().map(r => r.name).sort();
+      expect(tablas).toEqual(['incidentes_operativos', 'incidentes_operativos_historial']);
+
+      const indices = db2.prepare(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_incidentes%'"
+      ).all().map(r => r.name).sort();
+      expect(indices).toEqual(['idx_incidentes_dedupe_activo', 'idx_incidentes_estado_fecha', 'idx_incidentes_hist_incidente', 'idx_incidentes_integracion']);
+
+      expect(db2.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE clave_dedupe = ?")
+        .get('mercado_libre|refrescar_catalogo|rate_limit').n).toBe(1);
       db2.close();
-      // Si llegamos acá sin tirar, las CREATE TABLE/INDEX IF NOT EXISTS son idempotentes.
-      expect(true).toBe(true);
     });
   });
 });

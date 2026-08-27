@@ -368,7 +368,10 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_incidentes_dedupe_activo
     ON incidentes_operativos(clave_dedupe) WHERE estado = 'activo'`); } catch (_) {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_incidentes_estado ON incidentes_operativos(estado)'); } catch (_) {}
+  // Cubre la consulta más frecuente del panel (WHERE estado='activo' ORDER BY
+  // ultima_deteccion_en DESC) — hace redundante un índice simple sobre solo `estado`
+  // (columna de 2 valores, poco selectiva por sí sola).
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_incidentes_estado_fecha ON incidentes_operativos(estado, ultima_deteccion_en DESC)'); } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_incidentes_integracion ON incidentes_operativos(integracion, proceso)'); } catch (_) {}
 
   // Historial append-only de cada incidente (abierto/repetido/escalado/resuelto) — auditoría

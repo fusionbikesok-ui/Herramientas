@@ -25,5 +25,5 @@ CREATE TABLE IF NOT EXISTS incidentes_operativos (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_incidentes_dedupe_activo
   ON incidentes_operativos(clave_dedupe) WHERE estado = 'activo';
-CREATE INDEX IF NOT EXISTS idx_incidentes_estado ON incidentes_operativos(estado);
+CREATE INDEX IF NOT EXISTS idx_incidentes_estado_fecha ON incidentes_operativos(estado, ultima_deteccion_en DESC);
 CREATE INDEX IF NOT EXISTS idx_incidentes_integracion ON incidentes_operativos(integracion, proceso);
