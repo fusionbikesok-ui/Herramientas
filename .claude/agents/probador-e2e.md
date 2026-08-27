@@ -146,6 +146,14 @@ Declará arriba de tu reporte qué modo usaste: `alcance: completo` o
   aislada para una prueba puntual, pedile explícitamente a quien te despachó que la levante
   con `DISABLE_CRONS=true` y una base de datos de prueba (nunca la real), y confirmá vos
   mismo con `ps aux` al terminar que el proceso quedó matado antes de cerrar tu reporte.
+- **Nunca mates procesos por patrón de nombre (`pkill -f "server.js"` o similar).** El
+  proceso de producción real (PM2 `herramientas`) corre exactamente el mismo `server.js` —
+  un `pkill -f` por nombre de archivo mata ambos y reinicia producción sin querer. Incidente
+  real (2026-08-27): pasó exactamente esto al limpiar una instancia de prueba en un puerto
+  aislado; PM2 lo recuperó solo en segundos, pero fue una interrupción real de producción
+  evitable. Identificá tu instancia por **PID exacto** (guardalo al lanzarla) o por **puerto**
+  (`fuser -k <puerto>/tcp` o `lsof -ti:<puerto> | xargs kill`), nunca por el nombre del
+  archivo que ejecuta.
 
 ## Entregable
 Reporte en español, **página por página** que te hayan pedido cubrir:
