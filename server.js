@@ -36,6 +36,7 @@ import { barridoAuditoria } from './lib/auditoria.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje } from './routes/notificacionesMl.js';
+import { listarIncidentesAbiertos } from './lib/incidentes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -219,6 +220,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
 
   // Gestión de usuarios: solo admins.
   app.use('/api/usuarios', requireAdmin, usuariosRouter(db));
+
+  // Incidentes de integraciones: solo administradores y sin datos sensibles.\n  app.get('/api/incidentes', requireAdmin, (req, res) => res.json({ ok: true, incidentes: listarIncidentesAbiertos(db) }));
 
 
   app.use('/api/woo', wooRouter(db, wooCfg));
