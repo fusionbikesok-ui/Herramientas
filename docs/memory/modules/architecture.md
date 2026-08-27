@@ -15,3 +15,6 @@
 ## Cuándo actualizar
 
 Solo ante cambios de arquitectura, contratos, estructura canónica o decisiones transversales.
+
+
+## Incidentes de integraciones (2026-08-27)\nSe persisten incidentes agrupados por `integracion:operacion` en `integracion_incidentes`; el registro y resolución son fail-open mediante `lib/incidentes.js`. `GET /api/incidentes` es admin-only y omite datos sensibles.\n
