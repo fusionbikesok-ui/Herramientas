@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -137,6 +137,18 @@ input[type=file] { display:none; }
 
 .summary-mini { display:flex; gap:12px; font-size:12px; color:var(--gray); margin-top:4px; }
 .summary-mini span { display:flex; align-items:center; gap:4px; }
+
+/* Feedback visual de sincronización a MercadoLibre */
+.sync-ml-section { margin-top:16px; padding-top:16px; border-top:1px solid var(--border); }
+.sync-ml-title { font-size:12px; font-weight:700; color:var(--white); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:10px; }
+.sync-ml-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; }
+.sync-ml-chip { display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:6px; border:1px solid; font-size:12px; font-weight:500; }
+.sync-ml-chip.sincronizado { background:var(--green-bg); border-color:var(--green-bd); color:var(--green); }
+.sync-ml-chip.sin_cambios { background:var(--amber-bg); border-color:var(--amber-bd); color:var(--amber); }
+.sync-ml-chip.error { background:var(--red-bg); border-color:var(--red-bd); color:var(--red); }
+.sync-ml-chip.omitido { background:var(--dark3); border-color:var(--border); color:var(--white); }
+.sync-ml-icon { flex-shrink:0; font-size:14px; }
+.sync-ml-sku { font-family:monospace; font-size:11px; color:inherit; }
 
 .empty-state { text-align:center; padding:4rem 1rem; color:var(--gray2); }
 .empty-icon { font-size:40px; margin-bottom:12px; }
@@ -289,6 +301,7 @@ input[type=file] { display:none; }
       <button class="btn" id="btn-confirmar-solo" onclick="confirmarRecepcion()" disabled style="display:none;border-color:var(--amber-bd);color:var(--amber);background:var(--amber-bg);font-weight:600">✓ Registrar sin tocar stock</button>
       <span id="status-confirm" style="font-size:12px; color:var(--gray); margin-left:4px"></span>
     </div>
+    <div id="sync-ml-confirm" role="status" aria-live="polite"></div>
 
   </div>
 
@@ -878,6 +891,10 @@ function confirmarRecepcion() {
   document.getElementById('btn-borrador').disabled  = true;
   document.getElementById('btn-confirmar').disabled = true;
   mostrarStatus('status-confirm','loading','Guardando recepción...');
+  // Limpiar los chips de sync_ml de un intento anterior: si este reintento falla antes
+  // de llegar a /confirmar (o la red se corta), no deben quedar describiendo un estado
+  // de ML que ya no corresponde a nada.
+  renderSyncMl('sync-ml-confirm', null);
 
   var pasos = recepcionGuardadaId
     ? fetch('/api/recepciones/' + recepcionGuardadaId + '/actualizar', {
@@ -897,6 +914,11 @@ function confirmarRecepcion() {
       .then(function(r){ return r.json(); })
       .then(function(conf){
         document.getElementById('btn-borrador').disabled  = false;
+        // Feedback de sincronización a ML: independiente de conf.ok — si Woo falló para
+        // algún ítem, los SKUs que SÍ se aplicaron pueden igual tener resultado en sync_ml,
+        // y es justo el caso donde el operario más necesita verlo (no ocultarlo en la rama
+        // de error).
+        renderSyncMl('sync-ml-confirm', conf.sync_ml);
         if (conf.ok) {
           var msgOk = conf.solo_documento
             ? '✓ Documento registrado. Recepción #' + rid + ' confirmada sin cambios en stock.'
@@ -1094,6 +1116,31 @@ function mostrarStatus(id, tipo, msg) {
   el.className = cls[tipo] || 'status status-loading';
   el.innerHTML = (tipo==='loading' ? '<span class="spinner"></span>' : '') + '<span>' + esc(msg) + '</span>';
   el.style.display = '';
+}
+
+// Chips de feedback del array sync_ml (push puntual de stock a MercadoLibre, ver
+// docs/api-contrato.md). El contenedor debe ser un role="status" aria-live PREEXISTENTE
+// (no alcanza con ponerle el role al nodo recién insertado: una región viva que aparece
+// recién en el momento del cambio no dispara el anuncio del lector de pantalla).
+function renderSyncMl(containerId, syncMl) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  if (!syncMl || !syncMl.length) { el.innerHTML = ''; return; }
+  var iconos = { sincronizado: '✓', sin_cambios: '○', error: '⚠', omitido: '⏱' };
+  var html = '<div class="sync-ml-section">'
+    + '<div class="sync-ml-title">Sincronización con MercadoLibre</div>'
+    + '<div class="sync-ml-grid">';
+  syncMl.forEach(function(item) {
+    var det = esc(item.detalle);
+    var icon = iconos[item.estado] || '−';
+    html += '<div class="sync-ml-chip '+esc(item.estado)+'" title="'+det+'">'
+      + '<div class="sync-ml-icon">'+icon+'</div>'
+      + '<div><div class="sync-ml-sku">'+esc(item.sku)+'</div>'
+      + '<div style="font-size:11px;opacity:0.85">'+det.substring(0,40)+(det.length>40?'...':'')+'</div></div>'
+      + '</div>';
+  });
+  html += '</div></div>';
+  el.innerHTML = html;
 }
 </script>
 

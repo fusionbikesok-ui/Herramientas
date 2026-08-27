@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -115,6 +115,18 @@ input[type=file] { display:none; }
 .badge-warn   { background:var(--amber-bg);  color:var(--amber);  border-color:var(--amber-bd); }
 .badge-new    { background:var(--blue-bg);   color:var(--blue);   border-color:var(--blue-bd); }
 .badge-nuevo  { background:var(--orange-bg); color:var(--orange); border-color:var(--orange-bd); }
+
+/* Feedback visual de sincronización a MercadoLibre */
+.sync-ml-section { margin-top:16px; padding-top:16px; border-top:1px solid var(--border); }
+.sync-ml-title { font-size:12px; font-weight:700; color:var(--white); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:10px; }
+.sync-ml-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; }
+.sync-ml-chip { display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:6px; border:1px solid; font-size:12px; font-weight:500; }
+.sync-ml-chip.sincronizado { background:var(--green-bg); border-color:var(--green-bd); color:var(--green); }
+.sync-ml-chip.sin_cambios { background:var(--amber-bg); border-color:var(--amber-bd); color:var(--amber); }
+.sync-ml-chip.error { background:var(--red-bg); border-color:var(--red-bd); color:var(--red); }
+.sync-ml-chip.omitido { background:var(--dark3); border-color:var(--border); color:var(--white); }
+.sync-ml-icon { flex-shrink:0; font-size:14px; }
+.sync-ml-sku { font-family:monospace; font-size:11px; color:inherit; }
 
 .item-divider { border:none; border-top:1px solid var(--border); margin:10px 0; }
 
@@ -332,7 +344,7 @@ option { background:var(--dark3); }
       <div id="modal-push-log" style="font-size:12px;color:var(--gray);max-height:80px;overflow-y:auto;margin-top:4px"></div>
     </div>
 
-    <div id="modal-push-resultado" style="display:none;margin-bottom:16px"></div>
+    <div id="modal-push-resultado" role="status" aria-live="polite" style="display:none;margin-bottom:16px"></div>
 
     <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
       <button class="btn" id="modal-btn-cancelar" onclick="cerrarModalPush()">Cancelar</button>
@@ -1207,10 +1219,13 @@ option { background:var(--dark3); }
           });
         }
 
-        // Resultado final
+        // Resultado final. #modal-push-resultado es role="status" aria-live: se compone
+        // el HTML completo en una sola asignación (no dos mutaciones seguidas) para que el
+        // lector de pantalla anuncie un solo cambio coherente, no dos parciales.
         resEl.style.display = 'block';
+        var statusHtml;
         if (data.ok) {
-          resEl.innerHTML = '<div class="status status-ok">✓ '+ok+' producto'+(ok!==1?'s':'')+' actualizados correctamente en WooCommerce.</div>';
+          statusHtml = '<div class="status status-ok">✓ '+ok+' producto'+(ok!==1?'s':'')+' actualizados correctamente en WooCommerce.</div>';
           // Actualizar stock local en catálogo para reflejar el nuevo estado
           updates.forEach(function(u){
             var p = catalogo.find(function(c){ return c.id === u.id_woo; });
@@ -1220,9 +1235,13 @@ option { background:var(--dark3); }
           // Deshabilitar los botones de aplicar/csv (ya se aplicó)
           document.getElementById('btn-aplicar-wc').textContent = '✓ Stock aplicado';
         } else {
-          resEl.innerHTML = '<div class="status status-err">⚠ '+ok+' aplicados · '+errores+' error'+(errores!==1?'es':'')+'. Revisá el detalle arriba.</div>';
+          statusHtml = '<div class="status status-err">⚠ '+ok+' aplicados · '+errores+' error'+(errores!==1?'es':'')+'. Revisá el detalle arriba.</div>';
           mostrarStatus('status-review','err',errores+' error(s) al aplicar stock.');
         }
+        // Feedback de sync a ML: independiente del if de arriba — si Woo falló para algún
+        // SKU, los que SÍ se aplicaron pueden igual tener resultado en sync_ml, y es justo
+        // el caso donde el operario más necesita verlo (no ocultarlo en la rama de error).
+        resEl.innerHTML = statusHtml + buildSyncMlHtml(data.sync_ml);
 
         btnCanc.disabled  = false;
         btnCanc.textContent = 'Cerrar';
@@ -1330,6 +1349,27 @@ option { background:var(--dark3); }
   }
 
   function hoy(){ return new Date().toISOString().slice(0,10); }
+
+  // Chips de feedback del array sync_ml (push puntual de stock a MercadoLibre, ver
+  // docs/api-contrato.md). Devuelve '' si no hay nada que mostrar.
+  function buildSyncMlHtml(syncMl) {
+    if (!syncMl || !syncMl.length) return '';
+    var iconos = { sincronizado: '✓', sin_cambios: '○', error: '⚠', omitido: '⏱' };
+    var html = '<div class="sync-ml-section">'
+      + '<div class="sync-ml-title">Sincronización con MercadoLibre</div>'
+      + '<div class="sync-ml-grid">';
+    syncMl.forEach(function(item) {
+      var det = esc(item.detalle);
+      var icon = iconos[item.estado] || '−';
+      html += '<div class="sync-ml-chip '+esc(item.estado)+'" title="'+det+'">'
+        + '<div class="sync-ml-icon">'+icon+'</div>'
+        + '<div><div class="sync-ml-sku">'+esc(item.sku)+'</div>'
+        + '<div style="font-size:11px;opacity:0.85">'+det.substring(0,40)+(det.length>40?'...':'')+'</div></div>'
+        + '</div>';
+    });
+    html += '</div></div>';
+    return html;
+  }
 
 </script>
 
