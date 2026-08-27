@@ -28,6 +28,7 @@ describe('db schema', () => {
       'incidentes_operativos_historial',
       'inventario_diferencias',
       'mapeo_fusion',
+      'metricas_ciclo_sync',
       'ml_oauth_token',
       'ml_precio_auditoria',
       'ml_precios_cache',
