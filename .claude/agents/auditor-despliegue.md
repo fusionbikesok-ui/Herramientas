@@ -43,7 +43,16 @@ para verificar que el diff, el veredicto del revisor y el reporte E2E correspond
      revisión completa era el segundo gasto redundante más caro del pipeline.
 2. **Seguridad**: invocá la skill `security-review` sobre el diff — el proyecto integra
    credenciales/API keys de ML y Woo, riesgo real de exposición o inyección.
-3. **Todos los tests verdes**: **no volvés a correr la suite completa vos** por defecto. La
+3. **Todos los tests verdes**: **NUNCA corras `npm test` ni `npx vitest run` sin argumentos**
+   — ese comando corre la suite ENTERA, 10-15 min, y quien te despachó ya la corrió. Esto
+   aplica también si "querés confirmar por las dudas" o "verificar algo que no cierra": la
+   respuesta a esa duda es el spot-check de UN archivo puntual (ver más abajo), nunca la
+   suite completa — volver a correrla entera "para estar seguro" es exactamente el gasto que
+   esta regla existe para eliminar, y ya pasó más de una vez en este proyecto pese a que la
+   regla estaba escrita. Si dudás si tu chequeo va a terminar corriendo todo, no lo corras:
+   preguntate primero "¿el comando que estoy por tipear tiene un nombre de archivo después de
+   `run`?" — si no lo tiene, es la suite entera. **No volvés a correr la suite completa vos**
+   por defecto. La
    corrida de referencia puede venir de `tester` (cuando lo despacharon) **o del propio
    orquestador**, si él mismo implementó/corrigió el cambio y te pasa en el prompt de
    despacho el resultado real de una corrida que ya hizo (con número de tests y comando
