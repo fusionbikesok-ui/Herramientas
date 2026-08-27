@@ -20,10 +20,13 @@ const SEARCH_LIMIT = 100;    // máximo por página de items/search
 // chunks — root cause adicional del incidente 2026-08-27 además de la falta de retry.
 const CALL_DELAY_MS = 1500;
 
-// Estado del refresco de publicaciones (async, no bloqueante). El scan completo tarda
-// 1-3 min y superaba el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de
-// error que el frontend no podía parsear. Ahora el POST arranca el trabajo y devuelve 202
-// al toque; el frontend sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+// Estado del refresco de publicaciones (async, no bloqueante). El scan completo superaba
+// el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de error que el frontend
+// no podía parsear. Ahora el POST arranca el trabajo y devuelve 202 al toque; el frontend
+// sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+// Duración: con CALL_DELAY_MS=1500ms (pacing seguro contra el 429 de ML, incidente
+// 2026-08-27) y ~6840 publicaciones, un refresco completo son ~10-15 min reales (antes,
+// con 350ms sin ese resguardo, "1-3 min" — pero eso mismo garantizaba el 429).
 //
 // Candado COMPARTIDO a nivel de módulo (no solo dentro de matcherRouter): el botón
 // "Actualizar desde ML" de Cobertura (routes/cobertura.js) pega exactamente al mismo

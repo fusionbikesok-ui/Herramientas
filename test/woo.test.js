@@ -415,6 +415,46 @@ describe('woo route', () => {
     db.close();
   }, 10000);
 
+  // Test de CABLEADO (hallazgo del revisor, 2026-08-27): los tests de wooFetchConReintento
+  // aislada no detectan si el loop de variaciones deja de usarla. Si alguien revierte
+  // routes/woo.js y ese loop vuelve a llamar `wooFetch` a secas, este test lo detecta —
+  // el 500 transitorio (una sola vez) abortaría todo el refresco en vez de recuperarse.
+  it('refrescarCatalogo sobrevive a un 500 transitorio en /products/{id}/variations y persiste el catálogo completo', async () => {
+    vi.useFakeTimers();
+    try {
+      let llamadaVar = 0;
+      axios.request.mockImplementation(async ({ url }) => {
+        if (/\/products\?per_page=100&page=(\d+)/.test(url)) {
+          const page = Number(url.match(/[?&]page=(\d+)/)[1]);
+          return {
+            status: 200, headers: {},
+            data: page === 1 ? [{ id: 40, name: 'Padre', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 }] : [],
+          };
+        }
+        if (/\/products\/40\/variations/.test(url)) {
+          llamadaVar += 1;
+          if (llamadaVar === 1) return { status: 500, headers: {}, data: {} };
+          return {
+            status: 200, headers: {},
+            data: [{ id: 41, sku: 'RES-VAR-1', stock_quantity: 2, attributes: [] }],
+          };
+        }
+        return { status: 200, headers: {}, data: [] };
+      });
+      const db = openDb(TEST_DB);
+      const p = refrescarCatalogo(db, { url: 'https://fusionbikes.com.ar', ck: 'x', cs: 'y' });
+      await vi.runAllTimersAsync();
+      await p;
+
+      const fila = db.prepare('SELECT sku FROM catalogo_cache WHERE id_woo=?').get(41);
+      expect(fila?.sku).toBe('RES-VAR-1'); // antes del fix, el 500 abortaba el ciclo entero
+      expect(llamadaVar).toBe(2); // 1 falla + 1 reintento exitoso
+      db.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('openDb crea la tabla ean_sku', () => {
     const db = openDb(TEST_DB);
     const t = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ean_sku'").get();

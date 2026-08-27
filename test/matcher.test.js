@@ -325,6 +325,40 @@ describe('refrescarPublicacionesMl — test de CABLEADO (hallazgo del revisor, 2
     // STATUSES_A_TRAER = ['active','paused']: 1 falla + 1 éxito para 'active', 1 éxito para 'paused'.
     expect(llamadasSearch).toBe(3);
   }, 10000);
+
+  // Cubre la OTRA línea cambiada en refrescarPublicacionesMl (el multiget, no el scroll):
+  // si alguien revierte solo esa línea a `mlFetch` a secas, el test de arriba sigue en
+  // verde igual (no ejercita el multiget con ids reales) — este lo detecta.
+  it('el multiget sobrevive a un 500 transitorio en el primer chunk y persiste la publicación', async () => {
+    let llamadaMultiget = 0;
+    axios.request.mockImplementation(async (opts) => {
+      const url = String(opts?.url);
+      if (url.includes('/items/search')) {
+        return { status: 200, headers: {}, data: { results: ['MLA200'], scroll_id: null } };
+      }
+      if (url.includes('/items?ids=')) {
+        llamadaMultiget += 1;
+        if (llamadaMultiget === 1) return { status: 500, headers: {}, data: null };
+        return {
+          status: 200, headers: {},
+          data: [{
+            code: 200,
+            body: {
+              id: 'MLA200', title: 'Recuperado por multiget', status: 'active', sub_status: [],
+              attributes: [{ id: 'SELLER_SKU', value_name: 'FB-200' }], variations: [],
+            },
+          }],
+        };
+      }
+      return { status: 200, headers: {}, data: [] };
+    });
+
+    const r = await refrescarPublicacionesMl(db, ML_CFG);
+
+    expect(r.total).toBe(1);
+    const fila = db.prepare('SELECT titulo FROM ml_publicaciones_cache WHERE clave = ?').get('MLA200|');
+    expect(fila?.titulo).toBe('Recuperado por multiget'); // antes del fix, el 500 abortaba todo
+  }, 10000);
 });
 
 describe('mlFetchConReintento — resiliencia ante 5xx/429 transitorios (incidente 2026-08-27)', () => {
