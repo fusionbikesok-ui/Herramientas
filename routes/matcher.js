@@ -14,7 +14,7 @@ import { armarClaveMl } from '../lib/mlUtil.js';
 const STATUSES_A_TRAER = ['active', 'paused'];
 const MULTIGET_CHUNK = 20;   // ML permite hasta 20 ids por multiget
 const SEARCH_LIMIT = 100;    // máximo por página de items/search
-// MEDIDO el 2026-08-06 en routes/sync.js (RECONCILIACION_PAUSA_CHUNK_MS): ML empieza a
+// MEDIDO el 2026-08-07 en routes/sync.js (RECONCILIACION_PAUSA_CHUNK_MS): ML empieza a
 // devolver 429 tras 2-3 multiget consecutivos con menos de ~1,5s de por medio. 350ms
 // (el valor previo acá) garantizaba 429 en cualquier refresco de más de un puñado de
 // chunks — root cause adicional del incidente 2026-08-27 además de la falta de retry.
