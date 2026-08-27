@@ -1,0 +1,621 @@
+openapi: 3.0.3
+info:
+  title: FusionBikes — API móvil v1
+  version: 1.0.0
+  description: |
+    Contrato congelado para la app móvil (React Native). Fuente de verdad para ambos lados
+    (app y backend) — ver docs/superpowers/plans/plan-api-mobile-v1.md para el plan completo.
+    No implementado todavía: este archivo se escribe ANTES del código real (contract-first),
+    para que la app pueda generar su cliente TypeScript y trabajar contra mocks/fixtures
+    derivados de acá sin esperar al backend.
+
+    Convenciones:
+    - Todas las fechas en ISO 8601 UTC.
+    - Todos los IDs de recurso son string (aunque el backend interno use INTEGER autoincrement).
+    - El shape de error es uniforme en todos los endpoints (ver `Error` en components/schemas).
+    - Paginación por cursor en listados (`cursor`/`next_cursor`), no por offset.
+
+servers:
+  - url: https://herramientas.fusionbikes.com.ar/api/v1
+    description: Producción (cuando exista)
+  - url: http://localhost:3001/api/v1
+    description: Local (DISABLE_CRONS=true, nunca contra data/fusion.sqlite real)
+
+tags:
+  - name: auth
+  - name: devices
+  - name: stock
+  - name: orders
+  - name: today
+  - name: notifications
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Login con usuario/contraseña existentes (reusa la tabla `users`)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, example: "juan" }
+                password: { type: string, format: password, example: "••••••••" }
+      responses:
+        '200':
+          description: Login exitoso
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokens' }
+              example:
+                access_token: "eyJhbGciOi..."
+                refresh_token: "8f14e45f-ceea-467e-..."
+                expires_in: 900
+                user: { id: "12", username: "juan", roles: ["deposito"] }
+        '401':
+          description: Credenciales inválidas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: { code: "credenciales_invalidas", message: "Usuario o contraseña incorrectos" } }
+        '422':
+          description: Body inválido (falta username o password)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Renueva el access_token usando un refresh_token vigente
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: Tokens renovados
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokens' }
+        '401':
+          description: refresh_token inválido, expirado o revocado (ej. dispositivo eliminado)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: { code: "refresh_revocado", message: "La sesión de este dispositivo fue revocada" } }
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoca el refresh_token actual (logout de este dispositivo, no de todos)
+      responses:
+        '200':
+          description: Logout exitoso
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean, example: true } } }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /me:
+    get:
+      tags: [auth]
+      summary: Perfil y permisos del usuario autenticado
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+              example:
+                id: "12"
+                username: "juan"
+                roles: ["deposito"]
+                permisos: ["stock.editar", "pedidos.ver", "pedidos.preparar"]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /devices:
+    post:
+      tags: [devices]
+      summary: Registra este dispositivo (necesario para push y para revocación por dispositivo)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, push_token]
+              properties:
+                platform: { type: string, enum: [ios, android] }
+                push_token: { type: string, description: "Token APNs o FCM" }
+                device_name: { type: string, example: "iPhone de Juan" }
+      responses:
+        '200':
+          description: Dispositivo registrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Device' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Falta platform o push_token, o platform no es ios/android
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /devices/{id}:
+    delete:
+      tags: [devices]
+      summary: Elimina/revoca un dispositivo (invalida su refresh_token)
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: Revocado
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean, example: true } } }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: El dispositivo no pertenece al usuario autenticado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /products/lookup:
+    get:
+      tags: [stock]
+      summary: Busca un producto por SKU o código de barras (EAN/UPC)
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+          example: "7791234567890"
+      responses:
+        '200':
+          description: Encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+              example:
+                sku: "FB-1234"
+                nombre: "Casco Bell Rally"
+                marca: "Bell"
+                stock: 5
+                precio: 45000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Código no matchea ningún producto (ni por SKU ni por EAN mapeado)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: { code: "producto_no_encontrado", message: "Código '7791234567890' no está en el catálogo" } }
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /stock/adjustments:
+    post:
+      tags: [stock]
+      summary: Ajusta el stock de un SKU de forma idempotente y con control de concurrencia
+      description: |
+        Ver plan-api-mobile-v1.md, Bloque 6, para el flujo completo (idempotencia por
+        client_request_id, optimistic lock con expected_stock, syncSkuPuntual hacia ML,
+        operation_id para seguimiento asincrónico).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StockAdjustmentRequest' }
+            example:
+              client_request_id: "550e8400-e29b-41d4-a716-446655440000"
+              sku: "FB-1234"
+              expected_stock: 5
+              requested_stock: 7
+              reason: "ajuste_manual"
+      responses:
+        '200':
+          description: |
+            Aceptado y aplicado en WooCommerce (el sync a ML puede seguir en curso — ver
+            `operation_id` y `ml_status`, nunca asumir sincronizado por este 200).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockAdjustmentResult' }
+              example:
+                operation_id: "op_9f8c3e"
+                sku: "FB-1234"
+                woo_status: "aplicado"
+                stock_nuevo: 7
+                ml_status: "sincronizando"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: SKU no existe en el catálogo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: expected_stock no coincide con el stock real actual (alguien más lo cambió)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: "stock_desactualizado"
+                  message: "El stock real es 6, no 5 — recargá el producto antes de reintentar"
+                  stock_actual: 6
+        '422':
+          description: Falta un campo requerido, o requested_stock es negativo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /operations/{id}:
+    get:
+      tags: [stock]
+      summary: Consulta el resultado (posiblemente asincrónico) de una operación de stock
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+              example:
+                id: "op_9f8c3e"
+                tipo: "stock_adjustment"
+                woo_status: "aplicado"
+                ml_status: "sincronizado"
+                detalle_ml: "Stock actualizado: 7"
+                creado_en: "2026-08-27T10:00:00Z"
+                actualizado_en: "2026-08-27T10:00:03Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /orders:
+    get:
+      tags: [orders]
+      summary: Lista pedidos (solo lectura sobre pedidos_cache — ver plan-api-mobile-v1.md Bloque 7)
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [new, preparing, done] }
+        - name: channel
+          in: query
+          schema: { type: string, enum: [ml, web] }
+        - name: assigned_to
+          in: query
+          schema: { type: string, example: "me" }
+        - name: updated_after
+          in: query
+          schema: { type: string, format: date-time }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/OrderSummary' } }
+                  next_cursor: { type: string, nullable: true }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Valor de filtro inválido (ej. status fuera del enum)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /orders/{id}:
+    get:
+      tags: [orders]
+      summary: Detalle de un pedido
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: El usuario no tiene permiso para ver pedidos de este canal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /today:
+    get:
+      tags: [today]
+      summary: Agregado para la pantalla "Hoy" (pedidos + stock + mensajes + preguntas + reclamos + tareas)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TodaySummary' }
+              example:
+                pedidos_nuevos: 4
+                pedidos_preparando: 2
+                stock_con_error_ml: 1
+                preguntas_sin_responder: 3
+                mensajes_sin_responder: 0
+                reclamos_abiertos: 0
+                tareas_pendientes: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /notifications:
+    get:
+      tags: [notifications]
+      summary: Lista de notificaciones del usuario/dispositivo
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+                  next_cursor: { type: string, nullable: true }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /notifications/{id}/read:
+    post:
+      tags: [notifications]
+      summary: Marca una notificación como leída
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean, example: true } } }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PathId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Sin token, token expirado, o inválido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { code: "no_autenticado", message: "Token inválido o expirado" } }
+    Forbidden:
+      description: Autenticado pero sin permiso para esta acción/recurso
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { code: "sin_permiso", message: "Tu usuario no tiene permiso para esta acción" } }
+    NotFound:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { code: "no_encontrado", message: "El recurso solicitado no existe" } }
+    ServerError:
+      description: Error interno no esperado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { code: "error_interno", message: "Ocurrió un error inesperado, reintentá" } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, description: "Identificador estable, no cambia entre versiones" }
+            message: { type: string, description: "Texto legible, en español, para mostrar o loguear" }
+
+    AuthTokens:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer, description: "Segundos de vida del access_token" }
+        user: { $ref: '#/components/schemas/Me' }
+
+    Me:
+      type: object
+      properties:
+        id: { type: string }
+        username: { type: string }
+        roles: { type: array, items: { type: string } }
+        permisos: { type: array, items: { type: string } }
+
+    Device:
+      type: object
+      properties:
+        id: { type: string }
+        platform: { type: string, enum: [ios, android] }
+        device_name: { type: string }
+        creado_en: { type: string, format: date-time }
+
+    Product:
+      type: object
+      properties:
+        sku: { type: string }
+        nombre: { type: string }
+        marca: { type: string, nullable: true }
+        stock: { type: integer }
+        precio: { type: number, nullable: true }
+
+    StockAdjustmentRequest:
+      type: object
+      required: [client_request_id, sku, expected_stock, requested_stock, reason]
+      properties:
+        client_request_id:
+          type: string
+          format: uuid
+          description: Generado por la app, único por intento — permite reintentar sin duplicar.
+        sku: { type: string }
+        expected_stock:
+          type: integer
+          description: Lo que la app cree que es el stock actual (leído en el lookup previo).
+        requested_stock:
+          type: integer
+          minimum: 0
+        reason: { type: string, example: "ajuste_manual" }
+
+    StockAdjustmentResult:
+      type: object
+      properties:
+        operation_id: { type: string }
+        sku: { type: string }
+        woo_status: { type: string, enum: [aplicado, error] }
+        stock_nuevo: { type: integer }
+        ml_status:
+          type: string
+          enum: [sincronizando, sincronizado, sin_cambios, error, omitido]
+          description: Estado inicial — puede seguir cambiando, consultar GET /operations/{id}.
+
+    Operation:
+      type: object
+      properties:
+        id: { type: string }
+        tipo: { type: string, example: "stock_adjustment" }
+        woo_status: { type: string }
+        ml_status:
+          type: string
+          enum: [sincronizando, sincronizado, sin_cambios, error, omitido]
+        detalle_ml: { type: string, nullable: true }
+        creado_en: { type: string, format: date-time }
+        actualizado_en: { type: string, format: date-time }
+
+    OrderSummary:
+      type: object
+      properties:
+        id: { type: string }
+        canal: { type: string, enum: [ml, web] }
+        estado: { type: string, enum: [new, preparing, done] }
+        cliente: { type: string }
+        total: { type: number }
+        actualizado_en: { type: string, format: date-time }
+
+    OrderDetail:
+      allOf:
+        - $ref: '#/components/schemas/OrderSummary'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  sku: { type: string }
+                  nombre: { type: string }
+                  cantidad: { type: integer }
+            direccion_envio: { type: string, nullable: true }
+            nota: { type: string, nullable: true }
+
+    TodaySummary:
+      type: object
+      properties:
+        pedidos_nuevos: { type: integer }
+        pedidos_preparando: { type: integer }
+        stock_con_error_ml: { type: integer }
+        preguntas_sin_responder: { type: integer }
+        mensajes_sin_responder: { type: integer }
+        reclamos_abiertos: { type: integer }
+        tareas_pendientes: { type: integer }
+
+    Notification:
+      type: object
+      properties:
+        id: { type: string }
+        tipo:
+          type: string
+          enum: [pregunta_nueva, mensaje_postventa, reclamo, pedido_nuevo, error_stock_ml]
+        titulo: { type: string }
+        cuerpo: { type: string }
+        deep_link: { type: string, description: "Ruta interna de la app, ej. orders/123" }
+        leida: { type: boolean }
+        creado_en: { type: string, format: date-time }
