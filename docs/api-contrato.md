@@ -2446,3 +2446,9 @@ tampoco emite entrada si el ítem no tenía `sku`.
 - El tipo de sesión "conteo dirigido" (alcance = lista de SKUs sueltos) en `POST /sesiones`
   — `GET /dirigido` da la lista, pero abrir una sesión sobre esa lista puntual todavía se
   hace por categoría/marca/ubicación como cualquier otra.
+
+
+## Incidentes de integraciones
+
+### GET /api/incidentes (admin-only)
+Devuelve incidentes abiertos agrupados por `integracion:operacion`: `{ ok: true, incidentes: [{ clave, integracion, operacion, gravedad, resumen, ocurrencias, primer_fallo_en, ultimo_fallo_en }] }`. Requiere sesión administradora; no expone credenciales ni cuerpos de respuesta.
