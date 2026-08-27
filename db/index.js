@@ -336,5 +336,5 @@ export function openDb(dbPath) {
   // (ver migrarSesionesAlcanceMulti), no db/schema.sql, así que un ALTER acá correría antes
   // de que la tabla exista en una base nueva y se lo comería el catch mudo para siempre.
 
-  return db;
+  try { db.exec(`CREATE TABLE IF NOT EXISTS integracion_incidentes (clave TEXT PRIMARY KEY, integracion TEXT NOT NULL, operacion TEXT NOT NULL, gravedad TEXT NOT NULL DEFAULT 'grave', resumen TEXT NOT NULL, ocurrencias INTEGER NOT NULL DEFAULT 1, primer_fallo_en TEXT NOT NULL, ultimo_fallo_en TEXT NOT NULL, estado TEXT NOT NULL DEFAULT 'abierto', recuperado_en TEXT)`); } catch (_) {}\n\n  return db;
 }
