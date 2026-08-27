@@ -132,6 +132,54 @@ describe('autoVincularPorSellerSku (incidente 2026-08-27, FB-68055)', () => {
     expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA-NUEVA|'").get()).toBeUndefined();
   });
 
+  it('NO vincula si la clave ya tiene decisión "omitir" (hallazgo del revisor: es una decisión humana explícita, no un hueco)', () => {
+    seedCatalogo(db, { sku: 'FB-OMITIDO', stock: 5 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-OMITIDO' });
+    seedDecision(db, { clave: 'MLA1|', sku: null, accion: 'omitir' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    const decision = db.prepare("SELECT accion FROM sku_matcher_decisiones WHERE clave='MLA1|'").get();
+    expect(decision.accion).toBe('omitir'); // no se pisa ni se reintenta
+  });
+
+  it('NO revincula una clave descartada a propósito (errores_descartados)', () => {
+    seedCatalogo(db, { sku: 'FB-MUERTO', stock: 5 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-MUERTO' });
+    db.prepare('INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES (?,?,?)')
+      .run('MLA1|', 'variación muerta', now());
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA1|'").get()).toBeUndefined();
+  });
+
+  it('NO vincula ninguna si dos publicaciones de la MISMA corrida comparten seller_sku (hallazgo del revisor: nunca "una al azar")', () => {
+    seedCatalogo(db, { sku: 'FB-MULTI', stock: 5 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-MULTI' });
+    seedCache(db, { clave: 'MLA2|', itemId: 'MLA2', sellerSku: 'FB-MULTI' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave IN ('MLA1|','MLA2|')").all()).toHaveLength(0);
+  });
+
+  it('una candidata no elegible (omitir) no frena a las demás elegibles de la misma corrida', () => {
+    seedCatalogo(db, { sku: 'FB-OK', stock: 5 });
+    seedCatalogo(db, { sku: 'FB-BLOQ', stock: 5 });
+    seedCache(db, { clave: 'MLA-OK|', itemId: 'MLA-OK', sellerSku: 'FB-OK' });
+    seedCache(db, { clave: 'MLA-BLOQ|', itemId: 'MLA-BLOQ', sellerSku: 'FB-BLOQ' });
+    seedDecision(db, { clave: 'MLA-BLOQ|', sku: null, accion: 'omitir' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(1);
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA-OK|'").get().sku).toBe('FB-OK');
+  });
+
   it('NO vincula si el seller_sku no existe en catalogo_cache', () => {
     seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-INEXISTENTE' });
 
