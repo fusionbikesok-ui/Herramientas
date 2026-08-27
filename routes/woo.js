@@ -33,6 +33,52 @@ export async function wooFetch(cfg, path, method = 'get', body = null) {
   return resp;
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Backoff acotado a 3 reintentos (mismo patrón que VERIF_WC_BACKOFF_MS en routes/sync.js).
+const WOO_RETRY_BACKOFF_MS = [500, 1500, 4000];
+
+/**
+ * wooFetch con reintento ante errores TRANSITORIOS (5xx de Woo, timeout, error de red).
+ * NO reintenta 4xx (401/403/404/422/etc.): esos no se arreglan reintentando la misma request.
+ *
+ * Motivo (incidente 2026-08-27): `_refrescarCatalogo` pagina decenas de páginas de
+ * `/products` sin ningún try/catch; un solo 500/503 transitorio de Woo en cualquier página
+ * abortaba TODO el ciclo (la excepción de `wooFetch` se propaga sin capturar) y descartaba
+ * todo lo ya traído — con Woo devolviendo 500/503 de forma intermitente, ciclos enteros de
+ * refresco (cada 5 min) fallaban seguido, dejando `catalogo_cache` sin actualizar por horas
+ * hasta que un ciclo lograba completar las ~decenas de páginas sin ningún hiccup en el medio.
+ * Reintentar la página que falló, en vez de descartar el ciclo entero, resuelve la enorme
+ * mayoría de esos casos sin tocar la semántica de "todo o nada" del ciclo completo (que sigue
+ * siendo necesaria: escribir un catálogo parcial en modo `completo` haría que la poda de
+ * productos borrados de más abajo borre por error todo lo que no se llegó a pedir).
+ */
+export async function wooFetchConReintento(cfg, path, method = 'get', body = null) {
+  let ultimoError;
+  for (let intento = 0; intento <= WOO_RETRY_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(WOO_RETRY_BACKOFF_MS[intento - 1]);
+    try {
+      return await wooFetch(cfg, path, method, body);
+    } catch (e) {
+      ultimoError = e;
+      const msg = e?.message ?? '';
+      // Error de configuración (URL sin HTTPS): nunca es transitorio, reintentarlo repite el
+      // mismo fallo 4 veces por nada.
+      if (msg.includes('WooCommerce URL debe usar HTTPS')) throw e;
+      const m = /WooCommerce API error (\d+)/.exec(msg);
+      const status = m ? Number(m[1]) : null;
+      // 429 (rate-limit) SÍ se reintenta pese a ser 4xx: es transitorio por definición, y
+      // routes/sync.js:415-417 ya documenta el mismo criterio para Woo ("timeouts / errores
+      // de red / 5xx / 429 dejan dudas" — un 4xx normal significa que Woo rechazó la
+      // request, pero 429 significa que ni la evaluó). Sin esta excepción, un rate-limit del
+      // hosting bajo carga abortaría el ciclo entero por la misma puerta que este fix vino a
+      // cerrar.
+      if (status !== null && status < 500 && status !== 429) throw e;
+    }
+  }
+  throw ultimoError;
+}
+
 // Claves en sync_estado que gobiernan el modo incremental (ver plan
 // 2026-08-10-codigos-frescura-y-catalogo-incremental.md, Paso 2):
 // - CLAVE_ULTIMO_REFRESCO: marca de tiempo de la ÚLTIMA corrida exitosa, sea completa o
@@ -166,7 +212,7 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
   const crudos = [];
   let page = 1;
   while (page <= MAX_PAGES) {
-    const resp = await wooFetch(cfg, `/products?per_page=100&page=${page}&status=any${modifiedAfterQS}`);
+    const resp = await wooFetchConReintento(cfg, `/products?per_page=100&page=${page}&status=any${modifiedAfterQS}`);
     if (!resp.data.length) break;
     crudos.push(...resp.data);
     if (resp.data.length < 100) break;
@@ -195,6 +241,11 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
     try {
       let vpage = 1;
       while (vpage <= 20) {
+        // Sin reintento a propósito (a diferencia del loop de productos de más arriba): acá
+        // un fallo ya está aislado por producto padre (mapConLimite + try/catch, comentario
+        // de arriba) y el fail-closed de "si una variación falla, no se persiste nada" es
+        // una decisión explícita ya aceptada — agregar reintento acá solo demoraría ese
+        // fail-closed sin cambiar el resultado final.
         const vresp = await wooFetch(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`);
         if (!vresp.data.length) break;
         for (const v of vresp.data) {
