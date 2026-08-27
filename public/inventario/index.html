@@ -702,11 +702,32 @@
             '<div class="titulo">' + esc(alcanceTexto(j.sesion)) + '</div>' +
             '<div class="meta">Sesión abierta ' + esc(fechaRelativa(j.sesion.creado_en)) + '</div>' +
             '<button class="btn primary" id="btn-retomar">Retomar</button>' +
+            '<button class="btn secondary" id="btn-descartar-bloqueo" style="margin-top:8px;">Descartar sesión</button>' +
           '</div>' +
           '<button class="btn secondary" id="btn-nueva" disabled title="Ya tenés una sesión abierta — retomala o descartala">Nueva sesión</button>';
         document.getElementById('btn-retomar').addEventListener('click', function(){
           resetEstadoBloqueSinStock();
           mostrarVista('conteo');
+        });
+        // Descartar la sesión bloqueante sin necesidad de retomarla primero
+        // (pedido explícito 2026-08-27: liberar "Nueva sesión" sin pasar por el flujo de conteo).
+        document.getElementById('btn-descartar-bloqueo').addEventListener('click', function(){
+          var btn = document.getElementById('btn-descartar-bloqueo');
+          btn.disabled = true;
+          fetch('/api/inventario/sesiones/' + j.sesion.id + '/descartar', { method: 'POST' })
+            .then(function(r){ return r.json(); })
+            .then(function(res){
+              if(res && res.ok){
+                historialCargado = false;
+                cargarInicio();
+              } else {
+                alert(res && res.error ? res.error : 'No se pudo descartar la sesión.');
+                btn.disabled = false;
+              }
+            }).catch(function(){
+              alert('No se pudo descartar la sesión (sin conexión).');
+              btn.disabled = false;
+            });
         });
       } else {
         cont.innerHTML = '<button class="btn primary" id="btn-nueva">Nueva sesión</button>';
