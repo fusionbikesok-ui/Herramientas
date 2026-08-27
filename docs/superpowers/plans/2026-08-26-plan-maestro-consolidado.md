@@ -181,6 +181,15 @@ imprimir → desaparece de la cola.
 - Reintento de `/confirmar` puede duplicar fila de alerta para un faltante que falló en Woo.
 - `FB-1419` no lo captura la heurística de sugerencias de `no_contable` — marcar a mano por
   ahora, o mejorar la heurística.
+- **`test/auditoria.test.js` tiene un fallo FUNCIONAL preexistente en `conteo-confiable`** (no
+  de timing): "ML responde 200 con datos, graba health, fotos y video" espera `auditados=1` y
+  recibe `0`. Confirmado por `auditor-despliegue` (2026-08-27) reproduciéndolo tanto con como
+  sin el fix de `766fd7f` — no lo causó ningún cambio de esta sesión, pero `barridoAuditoria`
+  puede no estar grabando lo esperado en producción. Investigar antes que los dos de abajo
+  (son de timing, este es de lógica).
+- `test/recepciones.test.js` tiene un assert de timing frágil (`duracion < 60ms`, vino
+  fallando con 63-73ms bajo suite completa) — mismo tipo de problema que `matcherPush.test.js`
+  de abajo, subir el umbral o aislar mejor el test.
 - `test/matcherPush.test.js` tiene un timeout intermitente bajo suite completa, documentado y
   confirmado no relacionado con ningún cambio — no es urgente, pero si molesta seguido
   conviene aumentar el timeout o aislar mejor el test.
