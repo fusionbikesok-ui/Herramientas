@@ -26,6 +26,10 @@ Revisá el diff contra el punto de partida que te indiquen (o `git diff` del bra
 - **Convenciones del repo**: seguí y exigí los patrones existentes.
 - **Diseño**: responsabilidades claras, límites bien definidos, archivos que no crezcan de más.
 - **Tests**: ¿el cambio está cubierto? ¿los tests prueban lo que importa?
+- **Higiene del diff**: sin secretos/credenciales/tokens, sin `console.log` de depuración
+  olvidado, sin archivos generados (`.sqlite` de prueba, `node_modules`, artefactos de build),
+  sin cambios fuera del alcance del hito que te despacharon. Si ves algo de esto, es un
+  hallazgo aunque el resto del diff esté perfecto.
 
 ## Checklist específico por área
 

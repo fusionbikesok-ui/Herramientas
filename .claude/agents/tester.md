@@ -45,6 +45,9 @@ para respetar la serialización de la suite y el handoff del orquestador.
   el resto no agrega información y llena el contexto de quien te lee.
 - Antes de reportar "suite verde", invocá `superpowers:verification-before-completion` —
   corré los comandos vos mismo, no repitas lo que el agente de desarrollo dijo que pasó.
+- Si algo quedó sin validar (por tiempo, por alcance, por falta de acceso a staging), decilo
+  explícito en el reporte — "no lo verifiqué" es información válida para quien te despachó,
+  omitirlo no lo es.
 
 ## Cómo trabajás (seguí estas skills, leelas con Read)
 - Para sintaxis/API de vitest o axe-core que no recordás con certeza, usá `context7`

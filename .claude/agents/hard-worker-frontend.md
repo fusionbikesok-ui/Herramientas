@@ -20,6 +20,10 @@ rutas que el orquestador te asigne; no tomes ownership de archivos de otro agent
 - VPS staging; a producción se pasa a mano. No despliegues.
 - Git local sin remoto. No toques `.env`, `data/`, `uploads/`, `*.db`, `*.sqlite`.
 - No tocás rutas Express, `lib/` ni el esquema sqlite — eso es `hard-worker-backend`.
+- Trabajá por el hito funcional completo que te despachan, no lo cortes en confirmaciones
+  parciales por tu cuenta — commitear/pushear es decisión del orquestador, no tuya. En tu
+  entregable no incluyas archivos generados, logs de depuración, ni cambios fuera del
+  alcance del hito.
 
 ## Metodologías que aplicás
 1. **Mobile-first con presupuesto de peso explícito.** Para conexión de depósito (puede ser

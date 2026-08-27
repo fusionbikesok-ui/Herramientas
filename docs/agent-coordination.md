@@ -15,6 +15,23 @@ pipeline `feature` siguen siendo normativos; este documento define la coordinaci
 - Los revisores, testers E2E y auditores trabajan en modo solo lectura, salvo que el rol de
   Tester agregue exclusivamente tests.
 
+## La suite completa flakea por contención, no por el diff (confirmado repetidas veces)
+
+Corriendo `npm test` (vitest, ~1560 tests, ~11-12 min) con la suite entera en paralelo
+(73 archivos), aparecen 1-3 fallas que rotan entre corridas idénticas del MISMO diff —
+nunca las mismas dos veces seguidas — y cada archivo pasa 100% verde corriendo solo
+(`npx vitest run test/<archivo>.test.js`). Confirmado en la sesión del 2026-08-27 sobre el
+mismo diff, en 4 corridas completas distintas: `test/matcherPush.test.js`,
+`test/reactivar-automatico.test.js` y `test/preparacion.test.js` aparecieron y desaparecieron
+sin que nadie tocara esos archivos ni su lógica. `test/auditoria.test.js` es la única falla
+que aparece SIEMPRE — esa sí es real y preexistente (ver `plan-maestro-v2.md`), no confundirla
+con las de contención.
+
+**Antes de investigar una falla nueva en la suite completa como regresión real**: corré ese
+archivo solo. Si pasa aislado, es contención — anotalo en el reporte como tal (con el nombre
+del archivo y que pasó 100% solo) y seguí; no persigas el fantasma de nuevo cada vez que
+cambia cuál archivo rota. Si vuelve a fallar aislado, ahí sí es del diff.
+
 ## Coordinación Codex ↔ Claude
 
 - El coordinador mantiene el registro activo y asigna a cada agente una tarea con rutas

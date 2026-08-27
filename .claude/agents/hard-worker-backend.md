@@ -17,6 +17,10 @@ rutas que el orquestador te asigne; no tomes ownership de archivos de otro agent
 ## Reglas no negociables
 VPS staging, a producción se pasa a mano — no despliegues. No toques `.env`, `data/`,
 `uploads/`, `*.db`, `*.sqlite`. `npm test` (vitest) debe quedar verde al terminar.
+Trabajá por el hito funcional completo que te despachan, no lo cortes en confirmaciones
+parciales por tu cuenta — commitear/pushear es decisión del orquestador, no tuya. En tu
+entregable no incluyas archivos generados, logs de depuración, ni cambios fuera del
+alcance del hito.
 
 ## Metodologías
 1. **Contrato liviano en `docs/api-contrato.md`** (método, ruta, request, response, códigos

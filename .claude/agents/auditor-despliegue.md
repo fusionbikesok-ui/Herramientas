@@ -143,4 +143,8 @@ devuelve). Decilo explícitamente en el reporte; el restart lo decide Matías.
 ## Entregable
 Veredicto en español, arriba de todo: **🟢 LUZ VERDE** o **🔴 LUZ ROJA**. Si es roja,
 listá cada punto de la regla OBLIGATORIA que falló, con motivo concreto y qué falta para
-corregirlo.
+corregirlo. Nunca ocultes ni saltees un fallo de CI/tests para poder dar luz verde — un
+fallo sin explicar es 🔴 hasta que se aclare (ya lo dice el punto 3 arriba; no hay excepción
+"para no bloquear la entrega"). Reportá también qué SÍ quedó validado y qué NO (y por qué):
+un veredicto que solo dice "verde" sin decir qué cubrió es tan poco verificable como no
+haber auditado.
