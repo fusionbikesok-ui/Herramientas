@@ -4,8 +4,9 @@ import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
-import { matcherRouter, refrescarPublicacionesMlAcotado, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
+import { matcherRouter, refrescarPublicacionesMlAcotado, mlFetchConReintento, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
 import { _resetEstadoPushParaTests } from '../lib/matcherPush.js';
+import { _resetCooldownParaTests } from '../lib/mlClient.js';
 
 // Mock axios para evitar llamadas reales a ML
 vi.mock('axios', async () => {
@@ -268,6 +269,87 @@ describe('refrescarPublicacionesMlAcotado', () => {
     // La vieja SIGUE presente (no se borró todo el cache)
     const vieja = db.prepare('SELECT titulo FROM ml_publicaciones_cache WHERE clave = ?').get('MLA999|');
     expect(vieja).toMatchObject({ titulo: 'Vieja' });
+  });
+
+  it('sobrevive a un 500 transitorio en un chunk del multiget y persiste igual (incidente 2026-08-27)', async () => {
+    let llamada = 0;
+    axios.request.mockImplementation(async () => {
+      llamada += 1;
+      if (llamada === 1) return { status: 500, headers: {}, data: null };
+      return {
+        status: 200,
+        headers: {},
+        data: [{
+          code: 200,
+          body: {
+            id: 'MLA101', title: 'Recuperado', status: 'active', sub_status: [],
+            attributes: [{ id: 'SELLER_SKU', value_name: 'FB-101' }], variations: [],
+          },
+        }],
+      };
+    });
+
+    const r = await refrescarPublicacionesMlAcotado(db, ML_CFG, ['MLA101']);
+
+    expect(r.total).toBe(1);
+    const fila = db.prepare('SELECT titulo FROM ml_publicaciones_cache WHERE clave = ?').get('MLA101|');
+    expect(fila?.titulo).toBe('Recuperado'); // antes del fix, el 500 abortaba el refresco entero
+  }, 10000);
+});
+
+describe('mlFetchConReintento — resiliencia ante 5xx/429 transitorios (incidente 2026-08-27)', () => {
+  let db;
+  // El test de 429 activa el cooldown global de mlFetch (estado de módulo en
+  // lib/mlClient.js) — sin resetearlo, contamina los tests siguientes de este archivo
+  // con un cooldown que nunca pidieron (ver doc de _resetCooldownParaTests).
+  beforeEach(() => { db = openDb(TEST_DB); seedToken(db); vi.clearAllMocks(); _resetCooldownParaTests(); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); _resetCooldownParaTests(); });
+
+  it('reintenta ante 500 y devuelve OK si un intento posterior tiene éxito', async () => {
+    vi.useFakeTimers();
+    try {
+      let llamada = 0;
+      axios.request.mockImplementation(async () => {
+        llamada += 1;
+        if (llamada < 3) return { status: 500, headers: {}, data: null };
+        return { status: 200, headers: {}, data: { ok: true } };
+      });
+      const p = mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1');
+      await vi.runAllTimersAsync();
+      const resp = await p;
+      expect(resp.status).toBe(200);
+      expect(llamada).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('NO reintenta un 429 — mlFetch ya tiene su propio cooldown global, un backoff corto no lo esquiva', async () => {
+    axios.request.mockResolvedValue({ status: 429, headers: {}, data: null });
+    const resp = await mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1');
+    expect(resp.status).toBe(429);
+    expect(axios.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('agota los reintentos y devuelve el último status (no cuelga para siempre)', async () => {
+    vi.useFakeTimers();
+    try {
+      axios.request.mockResolvedValue({ status: 503, headers: {}, data: null });
+      const p = mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1');
+      await vi.runAllTimersAsync();
+      const resp = await p;
+      expect(resp.status).toBe(503);
+      expect(axios.request).toHaveBeenCalledTimes(4); // 1 intento + 3 reintentos
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('NO reintenta un 404 — devuelve en el primer intento (no es un error transitorio)', async () => {
+    axios.request.mockResolvedValue({ status: 404, headers: {}, data: null });
+    const resp = await mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA-inexistente');
+    expect(resp.status).toBe(404);
+    expect(axios.request).toHaveBeenCalledTimes(1);
   });
 });
 

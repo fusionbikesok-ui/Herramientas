@@ -115,6 +115,7 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
   });
 
   it('FAIL-CLOSED: si ML no responde, la caché NO se pisa con datos parciales y el error queda expuesto', async () => {
+    // 10s: el multiget en 500 reintenta 3 veces con backoff real (mlFetchConReintento).
     // Sembramos una publicación previa "buena" que un refresco fallido NO debe borrar.
     db.prepare(`
       INSERT INTO ml_publicaciones_cache (clave, item_id, titulo, status, seller_sku, actualizado_en)
@@ -132,7 +133,10 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
     const res = await request(app).post('/api/cobertura/actualizar-ml');
     expect(res.status).toBe(202);
 
-    const final = await esperarQueTermine(app);
+    // El multiget en 500 ahora reintenta (mlFetchConReintento, incidente 2026-08-27:
+    // resiliencia ante 5xx transitorios) antes de fallar-cerrado — 3 reintentos con
+    // backoff real [500,1500,4000]ms ≈ 6s de tiempo real hasta el último intento.
+    const final = await esperarQueTermine(app, 400);
     expect(final.error).toBeTruthy();
     expect(final.resultado).toBeNull(); // nunca se completó un resultado exitoso
 
@@ -151,7 +155,7 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
     // con la guarda apagada, el refresco "terminaba bien" (final.error volvía null en vez de
     // truthy) porque el multiget con 0 filas llegaba igual a la transacción de reemplazo
     // (DELETE + upsert), borrando MLA_VIEJA. Restauré la guarda y el test vuelve a verde.
-  });
+  }, 10000);
 
   it('GET /resumen expone ultima_actualizacion_ml y refresco_ml_en_curso sin forzar ningún refresco', async () => {
     db.prepare(`

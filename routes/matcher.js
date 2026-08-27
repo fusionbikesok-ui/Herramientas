@@ -91,6 +91,51 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// Backoff acotado a 3 reintentos (mismo patrón que wooFetchConReintento en routes/woo.js).
+const ML_RETRY_BACKOFF_MS = [500, 1500, 4000];
+
+/**
+ * mlFetch con reintento ante errores TRANSITORIOS (5xx, 429, excepción de red/timeout).
+ * NO reintenta otros 4xx (401/403/404/etc.): esos no se arreglan reintentando la misma
+ * request.
+ *
+ * Motivo (incidente 2026-08-27, mismo patrón que refrescarCatalogo en routes/woo.js):
+ * `ml_publicaciones_cache` quedó con TODAS sus 6840 filas en el mismo timestamp del
+ * 2026-08-19 — el refresco completo (`refrescarPublicacionesMl`) no había terminado con
+ * éxito ni una sola vez en 8 días. La causa: `listarItemIds` pagina por scroll (hasta 200
+ * páginas por status) y el multiget de acá abajo pagina en chunks de 20 (para ~6840
+ * publicaciones, ~342 llamadas secuenciales) — cualquiera de esas llamadas que devuelva un
+ * error transitorio aborta TODO el refresco (fail-closed a propósito: nunca se pisa el
+ * cache con datos parciales). Con cientos de llamadas secuenciales sin ningún reintento, la
+ * probabilidad de que el refresco completo termine bien tiende a cero. Reintentar cada
+ * llamada individual, en vez de todo el refresco, resuelve la enorme mayoría de esos casos
+ * sin tocar la semántica fail-closed (que sigue siendo necesaria y no cambia acá).
+ */
+export async function mlFetchConReintento(db, cfg, method, path, body = null, opts = {}) {
+  let ultimoResp, ultimoError;
+  for (let intento = 0; intento <= ML_RETRY_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(ML_RETRY_BACKOFF_MS[intento - 1]);
+    try {
+      const resp = await mlFetch(db, cfg, method, path, body, opts);
+      if (resp.status === 200) return resp;
+      ultimoResp = resp;
+      // 429 (real o sintético por cooldown/cupo) NO se reintenta acá a propósito, a
+      // diferencia de wooFetchConReintento: mlFetch ya tiene su PROPIO cooldown global
+      // (_cooldownActivo(), lib/mlClient.js) que dura decenas de segundos — un backoff
+      // corto (hasta 4s) no lo va a esquivar, así que reintentar acá solo demoraría sin
+      // chance real de éxito. El caller ya recibe el 429 y decide (abortar fail-closed,
+      // como hace hoy `refrescarPublicacionesMl`/`listarItemIds`).
+      if (resp.status < 500) return resp; // 4xx (incluido 429): no reintentar.
+      // 5xx: sí es transitorio, reintentar.
+    } catch (e) {
+      ultimoError = e;
+      // Excepción de red/timeout: reintentar.
+    }
+  }
+  if (ultimoResp) return ultimoResp; // agotados los reintentos: devolver el último status, que el caller ya sabe manejar (aborta fail-closed).
+  throw ultimoError;
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -115,7 +160,7 @@ async function listarItemIds(db, cfg, status) {
     // manual: true — este refresco lo dispara el usuario a mano desde el botón
     // "Refrescar ML" (POST /refrescar-ml), no un cron. No debe quedar bloqueado
     // por el cooldown global de los crons.
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`,
       null, { manual: true }
@@ -159,7 +204,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   for (let i = 0; i < allIds.length; i += MULTIGET_CHUNK) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`,
       null, { manual: true }
@@ -223,7 +268,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
   const filas = [];
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
     );
