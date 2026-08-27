@@ -241,12 +241,14 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
     try {
       let vpage = 1;
       while (vpage <= 20) {
-        // Sin reintento a propósito (a diferencia del loop de productos de más arriba): acá
-        // un fallo ya está aislado por producto padre (mapConLimite + try/catch, comentario
-        // de arriba) y el fail-closed de "si una variación falla, no se persiste nada" es
-        // una decisión explícita ya aceptada — agregar reintento acá solo demoraría ese
-        // fail-closed sin cambiar el resultado final.
-        const vresp = await wooFetch(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`);
+        // Mismo reintento que el loop de /products de más arriba (incidente 2026-08-27):
+        // acá hay cientos de llamadas de variaciones, con hasta WOO_CONCURRENCIA_MAX en
+        // paralelo — un único 500/503/429 transitorio en cualquiera de ellas abortaba TODO
+        // el refresco (fail-closed sí sigue vigente, solo que ahora tolera un blip pasajero
+        // antes de rendirse). El aislamiento por producto padre (mapConLimite + try/catch)
+        // sigue igual: esto solo reduce la chance de llegar a ese catch por una falla que
+        // se hubiera resuelto sola.
+        const vresp = await wooFetchConReintento(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`);
         if (!vresp.data.length) break;
         for (const v of vresp.data) {
           if (!v.sku) continue;

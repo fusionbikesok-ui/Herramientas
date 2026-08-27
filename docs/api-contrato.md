@@ -1778,11 +1778,13 @@ pesaba 1 MB, es justo lo que este contrato reemplaza para la pantalla de entrada
 Botón "Actualizar desde ML" (plan de flujo §1 y §9): fuerza el refresco de **todo** el
 universo de publicaciones ML (`ml_publicaciones_cache` completo, no solo las que están sin
 `seller_sku`) que alimenta el matcher inverso. Reusa el mismo motor de refresco que
-`POST /api/matcher/refrescar-ml` (`refrescarPublicacionesMl`, `lib/mlClient.js#mlFetch`) —
-no es un camino nuevo hacia ML.
+`POST /api/matcher/refrescar-ml` (`refrescarPublicacionesMl`, `routes/matcher.js#mlFetchConReintento`
+sobre `lib/mlClient.js#mlFetch`) — no es un camino nuevo hacia ML.
 - Request: sin body.
 - Response 202: `{ ok:true, running:true, scope:'all' }` — arrancó en background (el scan +
-  multiget completo tarda 1-3 min, más que el timeout de nginx; el frontend sondea el estado).
+  multiget completo son ~10-15 min reales con ~6840 publicaciones: cada llamada va espaciada
+  1,5s, el pacing mínimo medido para no gatillar el 429 de ML — más que el timeout de nginx;
+  el frontend sondea el estado con presupuesto acorde, no solo un par de minutos).
 - Response 409 (**candado anti-reentrada, COMPARTIDO con el Matcher**): `{ ok:false,
   running:true, error:'Ya hay un refresco en curso', scope }` — si ya había un refresco
   corriendo (disparado desde Cobertura O desde el Matcher, da igual: es el mismo recurso),
@@ -1790,8 +1792,12 @@ no es un camino nuevo hacia ML.
 - **Presupuesto**: las llamadas usan `manual:true` (mismo trato que el resto de refrescos
   manuales del repo) — eso saltea el *cooldown* de 429, **nunca** el presupuesto de
   `lib/mlLimites.js` (`reservarCupo` se llama siempre dentro de `mlFetch`, con o sin `manual`).
-- **Fail-closed**: si el scan o el multiget de ML fallan, `refrescarPublicacionesMl` aborta
-  ANTES de tocar la caché (el reemplazo es una transacción atómica al final) — ninguna
+- **Reintento por llamada** (incidente 2026-08-27): cada llamada individual del scan/multiget
+  tolera hasta 3 reintentos con backoff ante un 5xx transitorio (`mlFetchConReintento`) antes
+  de rendirse — un 429 o un 4xx normal no se reintenta. Si el estado sondeado tarda, puede ser
+  esto: no es necesariamente que el refresco esté colgado.
+- **Fail-closed**: si el scan o el multiget de ML fallan (agotados los reintentos), `refrescarPublicacionesMl`
+  aborta ANTES de tocar la caché (el reemplazo es una transacción atómica al final) — ninguna
   publicación válida se pierde ni queda a mitad de camino. El error queda expuesto en el
   estado sondeable, `ultima_actualizacion_ml` NO avanza.
 

@@ -14,12 +14,19 @@ import { armarClaveMl } from '../lib/mlUtil.js';
 const STATUSES_A_TRAER = ['active', 'paused'];
 const MULTIGET_CHUNK = 20;   // ML permite hasta 20 ids por multiget
 const SEARCH_LIMIT = 100;    // máximo por página de items/search
-const CALL_DELAY_MS = 350;   // respeta rate limit (mlFetch ya tiene timeout)
+// MEDIDO el 2026-08-07 en routes/sync.js (RECONCILIACION_PAUSA_CHUNK_MS): ML empieza a
+// devolver 429 tras 2-3 multiget consecutivos con menos de ~1,5s de por medio. 350ms
+// (el valor previo acá) garantizaba 429 en cualquier refresco de más de un puñado de
+// chunks — root cause adicional del incidente 2026-08-27 además de la falta de retry.
+const CALL_DELAY_MS = 1500;
 
-// Estado del refresco de publicaciones (async, no bloqueante). El scan completo tarda
-// 1-3 min y superaba el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de
-// error que el frontend no podía parsear. Ahora el POST arranca el trabajo y devuelve 202
-// al toque; el frontend sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+// Estado del refresco de publicaciones (async, no bloqueante). El scan completo superaba
+// el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de error que el frontend
+// no podía parsear. Ahora el POST arranca el trabajo y devuelve 202 al toque; el frontend
+// sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+// Duración: con CALL_DELAY_MS=1500ms (pacing seguro contra el 429 de ML, incidente
+// 2026-08-27) y ~6840 publicaciones, un refresco completo son ~10-15 min reales (antes,
+// con 350ms sin ese resguardo, "1-3 min" — pero eso mismo garantizaba el 429).
 //
 // Candado COMPARTIDO a nivel de módulo (no solo dentro de matcherRouter): el botón
 // "Actualizar desde ML" de Cobertura (routes/cobertura.js) pega exactamente al mismo
@@ -91,6 +98,70 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// Backoff acotado a 3 reintentos (mismo patrón que wooFetchConReintento en routes/woo.js).
+const ML_RETRY_BACKOFF_MS = [500, 1500, 4000];
+
+// Excepciones NO transitorias que getAccessToken/mlFetch puede tirar (lib/mlClient.js):
+// credencial mal configurada, refresh_token quemado, cooldown de OAuth activo o
+// presupuesto de /oauth/token agotado. Reintentar estas 4 veces en ~6s no las arregla —
+// en el caso de "cooldown"/"Presupuesto" activa el MISMO martilleo del incidente
+// 2026-08-04 que el cooldown de mlClient.js existe para evitar; en el caso de
+// "Autenticación ML rechazada" son 4 POST de más a /oauth/token con un refresh_token
+// ya quemado. Mismo criterio que el filtro de wooFetchConReintento (routes/woo.js) para
+// el error de configuración "URL debe usar HTTPS".
+const ML_ERRORES_NO_TRANSITORIOS = [
+  'ML_CLIENT_ID no configurado',
+  'Token ML no inicializado',
+  'Autenticación ML rechazada',
+  'cooldown',
+  'Presupuesto de llamadas a /oauth/token agotado',
+];
+
+/**
+ * mlFetch con reintento ante errores TRANSITORIOS (5xx, excepción de red/timeout).
+ * NO reintenta 4xx (401/403/404/429/etc.) ni las excepciones no transitorias de
+ * getAccessToken (credenciales, cooldown de OAuth, presupuesto agotado): esos no se
+ * arreglan reintentando la misma request.
+ *
+ * Motivo (incidente 2026-08-27, mismo patrón que refrescarCatalogo en routes/woo.js):
+ * `ml_publicaciones_cache` quedó con TODAS sus 6840 filas en el mismo timestamp del
+ * 2026-08-19 — el refresco completo (`refrescarPublicacionesMl`) no había terminado con
+ * éxito ni una sola vez en 8 días. La causa: `listarItemIds` pagina por scroll (hasta 200
+ * páginas por status) y el multiget de acá abajo pagina en chunks de 20 (para ~6840
+ * publicaciones, ~342 llamadas secuenciales) — cualquiera de esas llamadas que devuelva un
+ * error transitorio aborta TODO el refresco (fail-closed a propósito: nunca se pisa el
+ * cache con datos parciales). Con cientos de llamadas secuenciales sin ningún reintento, la
+ * probabilidad de que el refresco completo termine bien tiende a cero. Reintentar cada
+ * llamada individual, en vez de todo el refresco, resuelve la enorme mayoría de esos casos
+ * sin tocar la semántica fail-closed (que sigue siendo necesaria y no cambia acá).
+ */
+export async function mlFetchConReintento(db, cfg, method, path, body = null, opts = {}) {
+  let ultimoResp, ultimoError;
+  for (let intento = 0; intento <= ML_RETRY_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(ML_RETRY_BACKOFF_MS[intento - 1]);
+    try {
+      const resp = await mlFetch(db, cfg, method, path, body, opts);
+      if (resp.status === 200) return resp;
+      ultimoResp = resp;
+      // 429 (real o sintético por cooldown/cupo) NO se reintenta acá a propósito, a
+      // diferencia de wooFetchConReintento: mlFetch ya tiene su PROPIO cooldown global
+      // (_cooldownActivo(), lib/mlClient.js) que dura decenas de segundos — un backoff
+      // corto (hasta 4s) no lo va a esquivar, así que reintentar acá solo demoraría sin
+      // chance real de éxito. El caller ya recibe el 429 y decide (abortar fail-closed,
+      // como hace hoy `refrescarPublicacionesMl`/`listarItemIds`).
+      if (resp.status < 500) return resp; // 4xx (incluido 429): no reintentar.
+      // 5xx: sí es transitorio, reintentar.
+    } catch (e) {
+      const msg = e?.message ?? '';
+      if (ML_ERRORES_NO_TRANSITORIOS.some(patron => msg.includes(patron))) throw e;
+      ultimoError = e;
+      // Excepción de red/timeout genuina (u otra no reconocida arriba): reintentar.
+    }
+  }
+  if (ultimoResp) return ultimoResp; // agotados los reintentos: devolver el último status, que el caller ya sabe manejar (aborta fail-closed).
+  throw ultimoError;
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -115,7 +186,7 @@ async function listarItemIds(db, cfg, status) {
     // manual: true — este refresco lo dispara el usuario a mano desde el botón
     // "Refrescar ML" (POST /refrescar-ml), no un cron. No debe quedar bloqueado
     // por el cooldown global de los crons.
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`,
       null, { manual: true }
@@ -159,7 +230,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   for (let i = 0; i < allIds.length; i += MULTIGET_CHUNK) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`,
       null, { manual: true }
@@ -223,7 +294,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
   const filas = [];
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
     );

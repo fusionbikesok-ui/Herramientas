@@ -402,6 +402,9 @@ describe('woo route', () => {
       2: [{ id: 302, sku: 'BAD-2', stock_quantity: 1, attributes: [] }],
       3: [{ id: 303, sku: 'OK-3', stock_quantity: 1, attributes: [] }],
     };
+    // fallarId:2 falla SIEMPRE (no un único 500 transitorio): con wooFetchConReintento
+    // (incidente 2026-08-27) esa llamada agota sus 3 reintentos con backoff real
+    // ([500,1500,4000]ms ≈ 6s) antes de fallar-cerrado — de ahí el timeout extendido.
     mockCatalogoConVariables(variables, { fallarId: 2 });
     const db = openDb(TEST_DB);
     await expect(
@@ -410,6 +413,46 @@ describe('woo route', () => {
     // Como en el comportamiento serial anterior: si falla una llamada, no se persiste nada
     expect(getCatalogo(db)).toHaveLength(0);
     db.close();
+  }, 10000);
+
+  // Test de CABLEADO (hallazgo del revisor, 2026-08-27): los tests de wooFetchConReintento
+  // aislada no detectan si el loop de variaciones deja de usarla. Si alguien revierte
+  // routes/woo.js y ese loop vuelve a llamar `wooFetch` a secas, este test lo detecta —
+  // el 500 transitorio (una sola vez) abortaría todo el refresco en vez de recuperarse.
+  it('refrescarCatalogo sobrevive a un 500 transitorio en /products/{id}/variations y persiste el catálogo completo', async () => {
+    vi.useFakeTimers();
+    try {
+      let llamadaVar = 0;
+      axios.request.mockImplementation(async ({ url }) => {
+        if (/\/products\?per_page=100&page=(\d+)/.test(url)) {
+          const page = Number(url.match(/[?&]page=(\d+)/)[1]);
+          return {
+            status: 200, headers: {},
+            data: page === 1 ? [{ id: 40, name: 'Padre', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 }] : [],
+          };
+        }
+        if (/\/products\/40\/variations/.test(url)) {
+          llamadaVar += 1;
+          if (llamadaVar === 1) return { status: 500, headers: {}, data: {} };
+          return {
+            status: 200, headers: {},
+            data: [{ id: 41, sku: 'RES-VAR-1', stock_quantity: 2, attributes: [] }],
+          };
+        }
+        return { status: 200, headers: {}, data: [] };
+      });
+      const db = openDb(TEST_DB);
+      const p = refrescarCatalogo(db, { url: 'https://fusionbikes.com.ar', ck: 'x', cs: 'y' });
+      await vi.runAllTimersAsync();
+      await p;
+
+      const fila = db.prepare('SELECT sku FROM catalogo_cache WHERE id_woo=?').get(41);
+      expect(fila?.sku).toBe('RES-VAR-1'); // antes del fix, el 500 abortaba el ciclo entero
+      expect(llamadaVar).toBe(2); // 1 falla + 1 reintento exitoso
+      db.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('openDb crea la tabla ean_sku', () => {
@@ -585,14 +628,17 @@ describe('refrescarCatalogo — modo incremental', () => {
       .mockResolvedValueOnce({ status: 200, headers: {}, data: [
         { id: 90, name: 'Padre', sku: '', type: 'variable', parent_id: 0, stock_quantity: 0 },
       ] })
-      .mockResolvedValueOnce({ status: 500, headers: {}, data: {} }); // falla la llamada de variaciones
+      // falla la llamada de variaciones SIEMPRE (no un único 500 transitorio): con
+      // wooFetchConReintento (incidente 2026-08-27) esa llamada agota sus 3 reintentos
+      // con backoff real (~6s) antes de fallar-cerrado — de ahí el timeout extendido.
+      .mockResolvedValue({ status: 500, headers: {}, data: {} });
 
     await expect(refrescarCatalogo(db, cfg)).rejects.toThrow(/WooCommerce API error 500/);
 
     const marcaNueva = db.prepare("SELECT valor FROM sync_estado WHERE clave='catalogo_ultimo_refresco'").get().valor;
     expect(marcaNueva).toBe(marcaVieja);
     db.close();
-  });
+  }, 10000);
 
   // Fallback de marca: si por algún motivo faltara catalogo_ultimo_refresco (no debería
   // pasar en operación normal: completo=false implica que ya hubo un barrido completo
