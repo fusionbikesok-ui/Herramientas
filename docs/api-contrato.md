@@ -2358,6 +2358,82 @@ de este despacho — este endpoint es solo la lista de prioridades).
 
 - Response 200: `{ ok, dirigido: [ { sku, nombre, stock, dias_sin_contar, nunca_contado } ] }`.
 
+## Actualización de stock — push inmediato a MercadoLibre
+
+Dos endpoints que aplican stock a WooCommerce disparan, para cada SKU que se aplicó CON ÉXITO
+en WC, un push puntual de ese SKU a ML (`syncSkuPuntual`). Si aplicar a WC falló para un SKU,
+NO se intenta el push — `catalogo_cache` sigue con el stock viejo en ese caso, así que empujar
+igual pushearía a ML un valor sin relación con el cambio pedido. El campo `sync_ml` en la
+respuesta confirma si el push fue exitoso, quedó pendiente/omitido, o falló (fail-open: si
+falla, el error se reporta pero no bloquea; el cron periódico de `syncWcToMl` retoma como
+respaldo).
+
+**`sync_ml` NO está alineado por índice con `resultados`**: solo trae una entrada por cada SKU
+que sí se aplicó en WC (los que fallaron en `resultados` no tienen contraparte en `sync_ml`), y
+tampoco emite entrada si el ítem no tenía `sku`.
+
+### POST /api/recepciones/:id/confirmar (campo agregado: `sync_ml`)
+- Response 200 (agrega campo):
+  ```
+  {
+    "ok": true,
+    "aplicados": 5,
+    "errores": 0,
+    "sin_match": 2,
+    "resultados": [...],
+    "pendientes": [...],
+    "confirmado_en": "2026-08-26T15:30:00.000Z",
+    "solo_documento": false,
+    "sync_ml": [
+      { "sku": "FB-1234", "estado": "sincronizado", "detalle": "1/1 publicaciones actualizadas" },
+      { "sku": "FB-5678", "estado": "sin_cambios", "detalle": "Sin cambios pendientes en ML" },
+      { "sku": "FB-9999", "estado": "error", "detalle": "Fallo tras reintento: ..." }
+    ]
+  }
+  ```
+
+### POST /api/woo/stock/aplicar (campo agregado: `sync_ml`)
+- Mismo shape que `POST /api/recepciones/:id/confirmar`, agregado a la respuesta existente
+  (`ok`, `aplicados`, `errores`, `resultados`).
+
+### Shape de cada elemento de `sync_ml`
+- `sku`: identificador del producto.
+- `estado`:
+  - `'sincronizado'`: al menos una publicación de ese SKU se actualizó en ML con éxito, y
+    ninguna falló (si alguna falló, el agregado es `'error'` aunque otra sí se haya
+    sincronizado — no se reporta éxito parcial como si fuera total).
+  - `'sin_cambios'`: sin diff pendiente en ML, o ninguna publicación del SKU estaba activa.
+  - `'error'`: al menos una publicación falló tras el reintento (error real de ML, no 429).
+  - `'omitido'`: no se intentó nada — ML no está configurado, el sync general (`syncWcToMl`)
+    ya está corriendo y va a cubrir este SKU en la misma corrida, o ML devolvió 429
+    (cooldown de cuota) en TODAS las publicaciones del SKU: no es un fallo de este SKU en
+    particular, es la cuenta entera limitada, y el cron lo retoma solo.
+- `detalle`: cadena descriptiva (cantidad de publicaciones actualizadas, motivo del skip,
+  error específico). Solo aparece una entrada por SKU aunque el lote lo repita (deduplicado).
+
+### Comportamiento de `syncSkuPuntual` (función interna, reusada por ambos endpoints)
+- Busca **todas** las publicaciones/variaciones mapeadas a ese SKU con diff pendiente contra
+  ML (un SKU puede tener más de una) y empuja cada una por separado.
+- Si el sync general `syncWcToMl` está en curso (candado `_wcToMlEnCurso`), no hace nada:
+  devuelve `'omitido'` porque esa corrida ya va a cubrir el mismo diff. Si el cron arranca
+  DESPUÉS de que el push puntual ya empezó, se acepta la ventana de carrera (el PUT de stock
+  a ML es idempotente).
+- Por publicación: lee el status de `ml_publicaciones_cache` primero (mismo patrón que el
+  cron `syncWcToMl`) y solo hace un GET a ML como fallback si no está cacheada — evita una
+  llamada + 500ms de espera por publicación en el caso común. Si no está activa, o no se
+  pudo confirmar el status, no se toca (no es error, se retoma en el próximo ciclo del
+  cron). Si está activa, hace el PUT de stock.
+- Ante un 429 (cooldown de cuota) en cualquiera de los dos pasos, **no reintenta** — corta
+  de una con `estado: 'omitido'` (no `'error'`: el cooldown es de la cuenta entera, no de
+  esta publicación), mismo criterio que el cron `syncWcToMl`. Otros errores HTTP sí
+  reintentan, pero **un solo reintento** (backoff de 800ms, no el 500/1500/4000ms del resto
+  del repo): esto corre síncrono dentro del request HTTP del operario, no en un cron de
+  fondo, así que la latencia por SKU está acotada a propósito.
+- Fail-open real: cualquier fallo termina en `estado: 'error'` para esa publicación sin tirar
+  una excepción hacia el endpoint que la llama — el stock en WC ya quedó aplicado igual, y el
+  cron `syncWcToMl` reintenta ese mismo diff en su próxima corrida. Los dos endpoints además
+  envuelven la llamada en su propio try/catch por si `syncSkuPuntual` tirara algo inesperado.
+
 ### Fuera de este despacho
 - Tabla `ciclos` (numeración de ciclos) — no se creó: nada en este despacho la necesita
   todavía, `plan-hoy` trabaja directo sobre `dias_sin_contar`.

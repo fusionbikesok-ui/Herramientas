@@ -7,6 +7,13 @@ import express from 'express';
 import request from 'supertest';
 
 vi.mock('axios');
+vi.mock('../routes/sync.js', async () => {
+  const actual = await vi.importActual('../routes/sync.js');
+  return {
+    ...actual,
+    syncSkuPuntual: vi.fn(),
+  };
+});
 
 const TEST_DB = './test/tmp-woo.sqlite';
 
@@ -738,6 +745,100 @@ describe('POST /stock/aplicar', () => {
     expect(r.body).toMatchObject({ ok: false, aplicados: 0, errores: 1 });
     expect(r.body.resultados[0].error).toMatch(/catalogo_cache/);
     expect(axios.request).not.toHaveBeenCalled();
+  });
+
+  it('incluye sync_ml en la respuesta al aplicar stock', async () => {
+    const { syncSkuPuntual } = await import('../routes/sync.js');
+
+    // Mock syncSkuPuntual
+    syncSkuPuntual.mockImplementation(async (db, cfg, sku) => {
+      if (sku === 'FB-29985') {
+        return { sku: 'FB-29985', estado: 'sincronizado', detalle: 'Stock actualizado: 4' };
+      }
+      if (sku === 'FB-1001') {
+        return { sku: 'FB-1001', estado: 'sin_cambios', detalle: 'Sin cambios pendientes en ML' };
+      }
+      return { sku, estado: 'error', detalle: 'Unknown SKU' };
+    });
+
+    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+
+    const r = await request(app()).post('/api/woo/stock/aplicar')
+      .send({
+        updates: [
+          { sku: 'FB-29985', id_woo: 29985, stock_nuevo: 4 },
+          { sku: 'FB-1001', id_woo: 1001, stock_nuevo: 7 }
+        ]
+      });
+
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.sync_ml).toBeDefined();
+    expect(Array.isArray(r.body.sync_ml)).toBe(true);
+    expect(r.body.sync_ml).toHaveLength(2);
+
+    // Verificar el contenido de sync_ml
+    const sku1 = r.body.sync_ml.find(s => s.sku === 'FB-29985');
+    expect(sku1).toBeTruthy();
+    expect(sku1.estado).toBe('sincronizado');
+    expect(sku1.detalle).toContain('Stock actualizado');
+
+    const sku2 = r.body.sync_ml.find(s => s.sku === 'FB-1001');
+    expect(sku2).toBeTruthy();
+    expect(sku2.estado).toBe('sin_cambios');
+
+    // syncSkuPuntual debe haber sido llamado para ambos SKUs
+    expect(syncSkuPuntual).toHaveBeenCalledTimes(2);
+  });
+
+  it('fail-open: si syncSkuPuntual rechaza, el stock igual quedó aplicado en WC y la respuesta sigue en 200', async () => {
+    const { syncSkuPuntual } = await import('../routes/sync.js');
+    syncSkuPuntual.mockRejectedValue(new Error('ML caído'));
+    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+
+    const r = await request(app()).post('/api/woo/stock/aplicar')
+      .send({ updates: [{ sku: 'FB-29985', id_woo: 29985, stock_nuevo: 4 }] });
+
+    // El endpoint no debe tirar abajo la respuesta por un fallo de ML: el PATCH a WC
+    // ya se hizo, eso es lo que importa para el status 200/ok.
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.resultados[0].ok).toBe(true);
+  });
+
+  it('SKU repetido en el mismo lote: un solo push a ML, con el stock FINAL (no el del primer renglón)', async () => {
+    const { syncSkuPuntual } = await import('../routes/sync.js');
+    syncSkuPuntual.mockClear();
+    syncSkuPuntual.mockResolvedValue({ sku: 'FB-29985', estado: 'sincronizado', detalle: 'ok' });
+    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+
+    // Mismo id_woo dos veces con distinto stock_nuevo: el segundo renglón es el que
+    // manda (última escritura gana), y el dedup no debe pushear el valor intermedio.
+    const r = await request(app()).post('/api/woo/stock/aplicar')
+      .send({
+        updates: [
+          { sku: 'FB-29985', id_woo: 29985, stock_nuevo: 4 },
+          { sku: 'FB-29985', id_woo: 29985, stock_nuevo: 9 },
+        ]
+      });
+
+    expect(r.status).toBe(200);
+    expect(db.prepare('SELECT stock FROM catalogo_cache WHERE id_woo=?').get(29985).stock).toBe(9);
+    expect(syncSkuPuntual).toHaveBeenCalledTimes(1);
+    expect(syncSkuPuntual).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'FB-29985');
+    expect(r.body.sync_ml).toHaveLength(1);
+  });
+
+  it('NO llama a syncSkuPuntual cuando aplicar a WC falló para ese SKU', async () => {
+    const { syncSkuPuntual } = await import('../routes/sync.js');
+    syncSkuPuntual.mockClear();
+    axios.request.mockResolvedValue({ status: 500, data: {}, headers: {} });
+
+    const r = await request(app()).post('/api/woo/stock/aplicar')
+      .send({ updates: [{ sku: 'FB-29985', id_woo: 29985, stock_nuevo: 4 }] });
+
+    expect(r.body.resultados[0].ok).toBe(false);
+    expect(syncSkuPuntual).not.toHaveBeenCalled();
   });
 });
 

@@ -6,8 +6,16 @@ import Database from 'better-sqlite3';
 import axios from 'axios';
 import { openDb } from '../db/index.js';
 import { recepcionesRouter, aplicarStockItem } from '../routes/recepciones.js';
+import * as syncModule from '../routes/sync.js';
 
 vi.mock('axios');
+vi.mock('../routes/sync.js', async () => {
+  const actual = await vi.importActual('../routes/sync.js');
+  return {
+    ...actual,
+    syncSkuPuntual: vi.fn(),
+  };
+});
 
 const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck', cs: 'cs' };
 
@@ -268,6 +276,152 @@ describe('aplicarStockItem — fallos visibles y serialización', () => {
     expect(duracion).toBeLessThan(60);
     expect(rA.stock_previo).toBe(5);
     expect(rB.stock_previo).toBe(5);
+  });
+});
+
+describe('recepciones — confirmar con sync_ml', () => {
+  const DB = './test/tmp-recep-sync-ml.sqlite';
+  let db;
+  let app;
+
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+    app = makeApp(db);
+    mockWooOk();
+
+    // Catálogo
+    const insCat = db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (?,?,?,?,?,?,?)'
+    );
+    insCat.run(10, 'Producto A', 'SKU-A', 'simple', null, 5, 'x');
+    insCat.run(20, 'Producto B', 'SKU-B', 'simple', null, 5, 'x');
+
+    // Matcher: vincular SKUs a ML
+    const insMatcher = db.prepare(
+      'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?,?,?,?,?)'
+    );
+    insMatcher.run('MLA100|', 'SKU-A', 'Producto A', 'confirmar', 'x');
+    insMatcher.run('MLA200|', 'SKU-B', 'Producto B', 'confirmar', 'x');
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    vi.clearAllMocks();
+  });
+
+  it('incluye sync_ml en la respuesta al confirmar recepción', async () => {
+    const { syncSkuPuntual } = await import('../routes/sync.js');
+
+    // Mock syncSkuPuntual para devolver resultados predefinidos
+    syncSkuPuntual.mockImplementation(async (db, cfg, sku) => {
+      if (sku === 'SKU-A') {
+        return { sku: 'SKU-A', estado: 'sincronizado', detalle: 'Stock actualizado: 10' };
+      }
+      if (sku === 'SKU-B') {
+        return { sku: 'SKU-B', estado: 'sin_cambios', detalle: 'Sin cambios pendientes en ML' };
+      }
+      return { sku, estado: 'error', detalle: 'Unknown SKU' };
+    });
+
+    // Crear recepción con 2 ítems
+    const insRec = db.prepare(
+      'INSERT INTO recepciones (pedido_id, importador, proveedor, numero_pedido, fecha, solo_documento, estado, creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    );
+    const recId = insRec.run(null, 'Test', 'Provider', '001', '2026-08-26', 0, 'borrador', 'x').lastInsertRowid;
+
+    const insItem = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id, id_woo, sku, nombre_doc, codigo_proveedor, cantidad, recibido, creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    );
+    insItem.run(recId, 10, 'SKU-A', 'Producto A', 'PROV-001', 5, 1, 'x');
+    insItem.run(recId, 20, 'SKU-B', 'Producto B', 'PROV-002', 3, 1, 'x');
+
+    const res = await request(app).post(`/api/recepciones/${recId}/confirmar`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.sync_ml).toBeDefined();
+    expect(Array.isArray(res.body.sync_ml)).toBe(true);
+    expect(res.body.sync_ml).toHaveLength(2);
+
+    // Verificar el contenido de sync_ml
+    const skuA = res.body.sync_ml.find(s => s.sku === 'SKU-A');
+    expect(skuA).toBeTruthy();
+    expect(skuA.estado).toBe('sincronizado');
+    expect(skuA.detalle).toContain('Stock actualizado');
+
+    const skuB = res.body.sync_ml.find(s => s.sku === 'SKU-B');
+    expect(skuB).toBeTruthy();
+    expect(skuB.estado).toBe('sin_cambios');
+
+    // syncSkuPuntual debe haber sido llamado para ambos SKUs
+    expect(syncSkuPuntual).toHaveBeenCalledTimes(2);
+  });
+
+  it('fail-open: si syncSkuPuntual rechaza, la recepción igual se confirma en 200', async () => {
+    const { syncSkuPuntual } = await import('../routes/sync.js');
+    syncSkuPuntual.mockRejectedValue(new Error('ML caído'));
+
+    const insRec = db.prepare(
+      'INSERT INTO recepciones (pedido_id, importador, proveedor, numero_pedido, fecha, solo_documento, estado, creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    );
+    const recId = insRec.run(null, 'Test', 'Provider', '001', '2026-08-26', 0, 'borrador', 'x').lastInsertRowid;
+    const insItem = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id, id_woo, sku, nombre_doc, codigo_proveedor, cantidad, recibido, creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    );
+    insItem.run(recId, 10, 'SKU-A', 'Producto A', 'PROV-001', 5, 1, 'x');
+
+    const res = await request(app).post(`/api/recepciones/${recId}/confirmar`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.resultados[0].ok).toBe(true);
+  });
+
+  it('dos ítems con el mismo SKU en la recepción: un solo push a ML (no uno por ítem)', async () => {
+    const { syncSkuPuntual } = await import('../routes/sync.js');
+    syncSkuPuntual.mockClear();
+    syncSkuPuntual.mockResolvedValue({ sku: 'SKU-A', estado: 'sincronizado', detalle: 'ok' });
+
+    const insRec = db.prepare(
+      'INSERT INTO recepciones (pedido_id, importador, proveedor, numero_pedido, fecha, solo_documento, estado, creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    );
+    const recId = insRec.run(null, 'Test', 'Provider', '001', '2026-08-26', 0, 'borrador', 'x').lastInsertRowid;
+    const insItem = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id, id_woo, sku, nombre_doc, codigo_proveedor, cantidad, recibido, creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    );
+    // Dos renglones del documento apuntan al mismo producto (id_woo=10, SKU-A) — pasa
+    // seguido cuando el remito lista el mismo artículo en dos líneas distintas.
+    insItem.run(recId, 10, 'SKU-A', 'Producto A', 'PROV-001', 3, 1, 'x');
+    insItem.run(recId, 10, 'SKU-A', 'Producto A', 'PROV-001b', 2, 1, 'x');
+
+    const res = await request(app).post(`/api/recepciones/${recId}/confirmar`);
+
+    expect(res.status).toBe(200);
+    expect(syncSkuPuntual).toHaveBeenCalledTimes(1);
+    expect(res.body.sync_ml).toHaveLength(1);
+  });
+
+  it('NO llama a syncSkuPuntual para un ítem cuyo aplicarStockItem falló', async () => {
+    const { syncSkuPuntual } = await import('../routes/sync.js');
+    syncSkuPuntual.mockClear();
+    // Forzar fallo de Woo: sin mockWooOk activo, wooFetch real intentará pegarle a axios sin mock -> rechaza
+    axios.request.mockRejectedValue(new Error('WC caído'));
+
+    const insRec = db.prepare(
+      'INSERT INTO recepciones (pedido_id, importador, proveedor, numero_pedido, fecha, solo_documento, estado, creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    );
+    const recId = insRec.run(null, 'Test', 'Provider', '001', '2026-08-26', 0, 'borrador', 'x').lastInsertRowid;
+    const insItem = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id, id_woo, sku, nombre_doc, codigo_proveedor, cantidad, recibido, creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    );
+    insItem.run(recId, 10, 'SKU-A', 'Producto A', 'PROV-001', 5, 1, 'x');
+
+    const res = await request(app).post(`/api/recepciones/${recId}/confirmar`);
+
+    expect(res.body.resultados[0].ok).toBe(false);
+    expect(syncSkuPuntual).not.toHaveBeenCalled();
   });
 });
 
