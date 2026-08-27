@@ -659,7 +659,7 @@ export function inventarioRouter(db, wooCfg) {
     // 'confirmada_con_errores' (falló el ajuste, sigue siendo reintentable después).
     // Una sesión en confirmada_con_errores aún puede reintentarse, así que bloquea
     // que otro usuario cuente el mismo alcance (el reintento pisaría stock_inicial viejo).
-    const abiertas = db.prepare("SELECT usuario, categorias, marcas, ubicacion_id FROM inventario_sesiones WHERE estado IN ('abierta','confirmada_con_errores')").all();
+    const abiertas = db.prepare("SELECT id, usuario, categorias, marcas, ubicacion_id, estado FROM inventario_sesiones WHERE estado IN ('abierta','confirmada_con_errores')").all();
     const nueva = { categorias, marcas, ubicacion_id: ubicacionId };
     const choque = abiertas.find(s => sesionesSolapan(s, nueva));
     if (choque) {
@@ -667,6 +667,8 @@ export function inventarioRouter(db, wooCfg) {
         ok: false,
         error: `El alcance se cruza con la sesión de ${choque.usuario}.`,
         ocupada_por: choque.usuario,
+        ocupada_por_sesion_id: choque.id,
+        ocupada_por_estado: choque.estado,
         categorias: parseLista(choque.categorias),
         marcas: parseLista(choque.marcas),
       });
@@ -1311,6 +1313,24 @@ export function inventarioRouter(db, wooCfg) {
     res.json({ ok: true, pendientes: rows });
   });
 
+  // Una sesión cae en 'confirmada_con_errores' cuando al confirmar quedó al menos un ítem
+  // sin ajustar — típicamente frenado por un sobrante grande que espera aprobación. Resolver
+  // esa diferencia (aprobar o rechazar) puede sacar el último bloqueo, pero antes nadie
+  // recalculaba el estado: la sesión quedaba trabada en 'confirmada_con_errores' con 0 ítems
+  // sin ajustar, y como el anti-solape de POST /sesiones incluye ese estado, bloqueaba para
+  // siempre cualquier alcance que se cruzara (incidente ZAPATILLAS, sesión 21, 2026-08-27).
+  // Mismo criterio que usa /confirmar: sin conteos pendientes de ajuste, la sesión está cerrada.
+  function recomputarEstadoSesion(sesionId) {
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(sesionId);
+    if (!sesion || sesion.estado !== 'confirmada_con_errores') return;
+    const quedanFallidos = db.prepare(
+      'SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND ajustado_en IS NULL'
+    ).get(sesionId).n;
+    if (quedanFallidos > 0) return;
+    db.prepare("UPDATE inventario_sesiones SET estado='confirmada' WHERE id=? AND estado='confirmada_con_errores'")
+      .run(sesionId);
+  }
+
   // TEMPORAL (pedido explícito del usuario, 2026-08-27): sin requireAdmin mientras termina
   // el ciclo de conteo en curso — sacar el requireAdmin de estas dos rutas apenas termine.
   router.post('/diferencias/:id/aprobar', /* requireAdmin, */ async (req, res) => {
@@ -1331,6 +1351,7 @@ export function inventarioRouter(db, wooCfg) {
       db.prepare(`UPDATE inventario_conteos SET ajustado_en=?
         WHERE sesion_id=? AND sku=? AND ajustado_en IS NULL`)
         .run(now(), fila.sesion_id, fila.sku);
+      recomputarEstadoSesion(fila.sesion_id);
       res.json({ ok: true, resultado });
     } catch (e) {
       // Fail-closed, igual criterio que el resto del módulo: si el ajuste real a Woo falla,
@@ -1361,6 +1382,8 @@ export function inventarioRouter(db, wooCfg) {
       .run(now(), req.user?.username || null, fila.id);
     db.prepare('DELETE FROM inventario_conteos WHERE sesion_id=? AND sku=? AND ajustado_en IS NULL')
       .run(fila.sesion_id, fila.sku);
+    // Nota: no llamamos recomputarEstadoSesion acá — el flujo de rechazar cierra la sesión
+    // vía /confirmar (que sí la promueve), preservando la confirmación explícita del usuario.
     res.json({ ok: true });
   });
 
