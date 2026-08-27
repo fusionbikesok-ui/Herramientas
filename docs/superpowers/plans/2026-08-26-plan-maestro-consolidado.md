@@ -120,6 +120,19 @@ creado desde `conteo-confiable`, vacío — usar ese, no crear otro.
   que tiene que revisar).
 - Decidir con el `hard-worker-backend`/`hard-worker-frontend` si conviene una función puntual
   nueva (`syncSkuPuntual`) o alcanza con acotar `syncWcToMl` a un solo SKU vía parámetro.
+- **Backend cerrado** (commit `7910412`, rama `stock-push-feedback`): `syncSkuPuntual` creada
+  en `routes/sync.js`, disparada desde `POST /api/recepciones/:id/confirmar` y
+  `POST /api/woo/stock/aplicar`. Falta el frontend (estado visual `sincronizando →
+  sincronizado/error`). Seguimientos BAJO no bloqueantes que dejó el revisor en la 5ta ronda:
+  - `routes/recepciones.js` pushea el `sku` de `recepcion_items.sku` (puede quedar stale si el
+    SKU cambió en Woo después del match), a diferencia de `routes/woo.js` que ya lo corrigió
+    para leerlo de `catalogo_cache`. Alinear ambos: agregar `sku` al `SELECT` que ya hace
+    `aplicarStockItemInterno` por `id_woo`.
+  - Test de fail-open de recepciones no ancla que `estado='confirmada'` quede escrito ANTES
+    del push a ML (el invariante que motivó moverlo) — agregar el assert contra la DB.
+  - `docs/api-contrato.md` no documenta que `resultados[].sku` en `/api/woo/stock/aplicar`
+    ahora sale de `catalogo_cache` (puede ser `''` si el producto no tiene sku ahí) en vez del
+    valor crudo que mandó el cliente.
 
 ### A.3 — Cambio de stock por venta → sync puntual por orden (PRIORIDAD 3, optimización)
 
