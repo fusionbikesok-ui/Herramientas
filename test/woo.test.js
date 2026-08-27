@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { wooFetch, refrescarCatalogo, getCatalogo, wooRouter, registrarAlertasStockNegativo } from '../routes/woo.js';
+import { wooFetch, wooFetchConReintento, refrescarCatalogo, getCatalogo, wooRouter, registrarAlertasStockNegativo } from '../routes/woo.js';
 import axios from 'axios';
 import express from 'express';
 import request from 'supertest';
@@ -33,6 +33,85 @@ describe('woo route', () => {
       auth: { username: 'ck_x', password: 'cs_x' }
     }));
   });
+
+  describe('wooFetchConReintento — resiliencia ante 5xx transitorios (incidente 2026-08-27)', () => {
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+
+    it('reintenta ante 500 y devuelve OK si un intento posterior tiene éxito', async () => {
+      vi.useFakeTimers();
+      try {
+        let llamada = 0;
+        axios.request.mockImplementation(async () => {
+          llamada += 1;
+          if (llamada < 3) return { status: 500, data: null, headers: {} };
+          return { status: 200, data: [{ id: 1 }], headers: {} };
+        });
+        const p = wooFetchConReintento(cfg, '/products?per_page=1');
+        await vi.runAllTimersAsync();
+        const resp = await p;
+        expect(resp.status).toBe(200);
+        expect(llamada).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('agota los reintentos y tira si el 500/503 persiste (no cuelga para siempre)', async () => {
+      vi.useFakeTimers();
+      try {
+        axios.request.mockResolvedValue({ status: 503, data: null, headers: {} });
+        // Enganchar el matcher de rechazo ANTES de avanzar los timers falsos: si el
+        // rechazo real ocurre durante runAllTimersAsync sin que nada esté "escuchando"
+        // todavía la promesa, Node lo marca como unhandled rejection (contamina otros
+        // tests del archivo, aunque este test en sí pase).
+        const esperado = expect(wooFetchConReintento(cfg, '/products?per_page=1'))
+          .rejects.toThrow('WooCommerce API error 503');
+        await vi.runAllTimersAsync();
+        await esperado;
+        expect(axios.request).toHaveBeenCalledTimes(4); // 1 intento + 3 reintentos
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('NO reintenta un 404 — falla en el primer intento (no es un error transitorio)', async () => {
+      axios.request.mockResolvedValue({ status: 404, data: null, headers: {} });
+      await expect(wooFetchConReintento(cfg, '/products/999')).rejects.toThrow('WooCommerce API error 404');
+      expect(axios.request).toHaveBeenCalledTimes(1);
+    });
+
+    // Test de CABLEADO (hallazgo del revisor): los tests de arriba prueban wooFetchConReintento
+    // aislada — este prueba que _refrescarCatalogo de verdad la usa en el loop de /products.
+    // Si alguien revierte routes/woo.js:205 a wooFetch a secas, este test detecta la
+    // regresión; los de arriba no la detectarían.
+    it('refrescarCatalogo sobrevive a un 500 transitorio en /products y persiste el catálogo completo', async () => {
+      vi.useFakeTimers();
+      try {
+        let llamada = 0;
+        axios.request.mockImplementation(async () => {
+          llamada += 1;
+          if (llamada === 1) return { status: 500, data: null, headers: {} };
+          return {
+            status: 200,
+            headers: {},
+            data: [{ id: 20, name: 'Producto resiliente', sku: 'RES-1', type: 'simple', parent_id: 0, stock_quantity: 3 }],
+          };
+        });
+        const db = openDb(TEST_DB);
+        const p = refrescarCatalogo(db, cfg);
+        await vi.runAllTimersAsync();
+        await p;
+
+        const fila = db.prepare('SELECT sku FROM catalogo_cache WHERE id_woo=?').get(20);
+        expect(fila?.sku).toBe('RES-1'); // antes del fix, el 500 abortaba el ciclo y esto quedaba undefined
+        expect(llamada).toBe(2); // 1 falla + 1 reintento exitoso, sin agotar el backoff completo
+        db.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
 
   it('refrescarCatalogo writes fetched products into catalogo_cache', async () => {
     axios.request.mockResolvedValue({
