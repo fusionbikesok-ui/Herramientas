@@ -24,6 +24,8 @@ describe('db schema', () => {
       'cobertura_sesion',
       'ean_sku',
       'errores_descartados',
+      'incidentes_operativos',
+      'incidentes_operativos_historial',
       'inventario_diferencias',
       'mapeo_fusion',
       'ml_oauth_token',

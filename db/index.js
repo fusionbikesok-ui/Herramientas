@@ -336,5 +336,51 @@ export function openDb(dbPath) {
   // (ver migrarSesionesAlcanceMulti), no db/schema.sql, así que un ALTER acá correría antes
   // de que la tabla exista en una base nueva y se lo comería el catch mudo para siempre.
 
+  // Sistema de incidentes operativos (2026-08-27): un administrador podía tardar horas en
+  // enterarse de que ML o Woo llevaban tiempo fallando — no había ningún registro persistente
+  // de fallos de integración, solo logs de PM2 que nadie mira en vivo. Ver lib/incidentes.js
+  // para la lógica de apertura/dedupe/resolución; acá solo el esquema.
+  //
+  // clave_dedupe = `${integracion}|${proceso}|${tipo_error}` — agrupa lo suficiente sin
+  // perder distinción entre causas raíz distintas (un rate-limit y un error de auth en el
+  // mismo proceso son incidentes separados, no deben pisarse el mensaje entre sí). El índice
+  // único es PARCIAL (solo sobre estado='activo'): solo puede haber UN incidente activo por
+  // clave de dedupe a la vez, pero múltiples episodios históricos resueltos con la misma
+  // clave a lo largo del tiempo (reincidencias reales tras confirmarse recuperación antes).
+  try { db.exec(`CREATE TABLE IF NOT EXISTS incidentes_operativos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    integracion TEXT NOT NULL,
+    proceso TEXT NOT NULL,
+    tipo_error TEXT NOT NULL,
+    clave_dedupe TEXT NOT NULL,
+    severidad TEXT NOT NULL,
+    estado TEXT NOT NULL,
+    mensaje_tecnico TEXT,
+    mensaje_humano TEXT NOT NULL,
+    contexto_json TEXT,
+    contador_repeticiones INTEGER NOT NULL DEFAULT 1,
+    primera_deteccion_en TEXT NOT NULL,
+    ultima_deteccion_en TEXT NOT NULL,
+    ultima_recuperacion_en TEXT,
+    resuelto_en TEXT,
+    creado_en TEXT NOT NULL,
+    actualizado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_incidentes_dedupe_activo
+    ON incidentes_operativos(clave_dedupe) WHERE estado = 'activo'`); } catch (_) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_incidentes_estado ON incidentes_operativos(estado)'); } catch (_) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_incidentes_integracion ON incidentes_operativos(integracion, proceso)'); } catch (_) {}
+
+  // Historial append-only de cada incidente (abierto/repetido/escalado/resuelto) — auditoría
+  // de qué pasó y cuándo, separado de la fila "viva" de arriba que se pisa en cada update.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS incidentes_operativos_historial (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    incidente_id INTEGER NOT NULL REFERENCES incidentes_operativos(id),
+    evento TEXT NOT NULL,
+    detalle_json TEXT,
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_incidentes_hist_incidente ON incidentes_operativos_historial(incidente_id)'); } catch (_) {}
+
   return db;
 }
