@@ -4,6 +4,7 @@ import { normalizarProductoWc, normalizarVariacionWc, filaCatalogo } from '../li
 import { mapConLimite } from '../lib/concurrencia.js';
 import { buildWooPath } from '../lib/wooStock.js';
 import { syncSkuPuntual } from './sync.js';
+import { registrarIncidente, resolverIncidente } from '../lib/incidentes.js';
 
 const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refresco
 
@@ -28,7 +29,10 @@ export async function wooFetch(cfg, path, method = 'get', body = null) {
     validateStatus: () => true
   });
   if (resp.status < 200 || resp.status >= 300) {
-    throw new Error(`WooCommerce API error ${resp.status}`);
+    const error = new Error(`WooCommerce API error ${resp.status}`);
+    error.status = resp.status;
+    error.retryAfter = resp.headers?.['retry-after'] ?? null;
+    throw error;
   }
   return resp;
 }
@@ -55,25 +59,26 @@ const WOO_RETRY_BACKOFF_MS = [500, 1500, 4000];
  */
 export async function wooFetchConReintento(cfg, path, method = 'get', body = null) {
   let ultimoError;
+  let esperaMs = 0;
   for (let intento = 0; intento <= WOO_RETRY_BACKOFF_MS.length; intento++) {
-    if (intento > 0) await sleep(WOO_RETRY_BACKOFF_MS[intento - 1]);
+    if (esperaMs > 0) await sleep(esperaMs);
     try {
       return await wooFetch(cfg, path, method, body);
     } catch (e) {
       ultimoError = e;
       const msg = e?.message ?? '';
-      // Error de configuración (URL sin HTTPS): nunca es transitorio, reintentarlo repite el
-      // mismo fallo 4 veces por nada.
       if (msg.includes('WooCommerce URL debe usar HTTPS')) throw e;
-      const m = /WooCommerce API error (\d+)/.exec(msg);
-      const status = m ? Number(m[1]) : null;
-      // 429 (rate-limit) SÍ se reintenta pese a ser 4xx: es transitorio por definición, y
-      // routes/sync.js:415-417 ya documenta el mismo criterio para Woo ("timeouts / errores
-      // de red / 5xx / 429 dejan dudas" — un 4xx normal significa que Woo rechazó la
-      // request, pero 429 significa que ni la evaluó). Sin esta excepción, un rate-limit del
-      // hosting bajo carga abortaría el ciclo entero por la misma puerta que este fix vino a
-      // cerrar.
-      if (status !== null && status < 500 && status !== 429) throw e;
+      const status = Number.isFinite(e?.status)
+        ? Number(e.status)
+        : Number(/WooCommerce API error (\d+)/.exec(msg)?.[1] || NaN);
+      if (Number.isFinite(status) && status < 500 && status !== 429) throw e;
+      if (intento >= WOO_RETRY_BACKOFF_MS.length) break;
+
+      const backoff = WOO_RETRY_BACKOFF_MS[intento];
+      const retryAfterSeg = Number.parseInt(e?.retryAfter || '0', 10);
+      esperaMs = status === 429 && Number.isFinite(retryAfterSeg) && retryAfterSeg > 0
+        ? Math.min(Math.max(backoff, retryAfterSeg * 1000), 20_000)
+        : backoff;
     }
   }
   throw ultimoError;
@@ -180,7 +185,18 @@ export async function refrescarCatalogo(db, cfg, opts = {}) {
   if (_refrescarCatalogoEnCurso) return { omitido: true, motivo: 'en_curso' };
   _refrescarCatalogoEnCurso = true;
   try {
-    return await _refrescarCatalogo(db, cfg, opts);
+    const resultado = await _refrescarCatalogo(db, cfg, opts);
+    if (typeof resultado === 'number' && resultado > 0) {
+      resolverIncidente(db, 'woocommerce', 'catalogo');
+    }
+    return resultado;
+  } catch (error) {
+    registrarIncidente(db, {
+      integracion: 'woocommerce',
+      operacion: 'catalogo',
+      resumen: 'No se pudo actualizar el catálogo de WooCommerce después de los reintentos.',
+    });
+    throw error;
   } finally {
     _refrescarCatalogoEnCurso = false;
   }
@@ -235,18 +251,18 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
   // corte es fail-closed de la ESCRITURA, no de las llamadas HTTP: recién se aborta antes de la
   // transacción de persistencia (más abajo), no de las requests a WC. Aceptado por simplicidad.
   const variableProds = crudos.filter(p => p.type === 'variable');
+  let errorVariaciones = null;
   const resultadosVar = await mapConLimite(variableProds, WOO_CONCURRENCIA_MAX, async (vp) => {
+    if (errorVariaciones) return { variaciones: [], omitido: true };
     const padre = normalizarProductoWc(vp);
     const variaciones = [];
     try {
       let vpage = 1;
       while (vpage <= 20) {
-        // Sin reintento a propósito (a diferencia del loop de productos de más arriba): acá
-        // un fallo ya está aislado por producto padre (mapConLimite + try/catch, comentario
-        // de arriba) y el fail-closed de "si una variación falla, no se persiste nada" es
-        // una decisión explícita ya aceptada — agregar reintento acá solo demoraría ese
-        // fail-closed sin cambiar el resultado final.
-        const vresp = await wooFetch(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`);
+        const vresp = await wooFetchConReintento(
+          cfg,
+          `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`
+        );
         if (!vresp.data.length) break;
         for (const v of vresp.data) {
           if (!v.sku) continue;
@@ -257,12 +273,13 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
       }
       return { variaciones };
     } catch (e) {
+      if (!errorVariaciones) errorVariaciones = e;
       return { variaciones, error: e };
     }
   });
 
   const errorVar = resultadosVar.find(r => r.error);
-  if (errorVar) throw errorVar.error;
+  if (errorVariaciones || errorVar) throw (errorVariaciones || errorVar.error);
   for (const r of resultadosVar) {
     for (const v of r.variaciones) productos.push(v);
   }
