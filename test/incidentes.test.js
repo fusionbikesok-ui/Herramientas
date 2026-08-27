@@ -124,12 +124,15 @@ describe('lib/incidentes', () => {
       expect(fila.contexto_json).not.toMatch(/SECRETO/);
     });
 
-    it('sanitiza secretos anidados en objetos y arrays, no solo el primer nivel', () => {
+    it('sanitiza secretos anidados en objetos y arrays por NOMBRE DE CLAVE, no solo el primer nivel', () => {
+      // Valores neutros ('x') a propósito: aísla que la redacción viene de la CLAVE
+      // (Authorization/token), no de que el valor matchee el patrón de forma (ver el test
+      // de "por FORMA" más abajo para esa otra vía).
       const r = abrirOActualizarIncidente(db, {
         ...BASE,
         contexto: {
-          request: { headers: { Authorization: 'Bearer x' } },
-          intentos: [{ ok: false, token: 'y' }],
+          request: { headers: { Authorization: 'x' } },
+          intentos: [{ ok: false, token: 'x' }],
         },
       });
       const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
@@ -139,19 +142,77 @@ describe('lib/incidentes', () => {
       expect(contexto.intentos[0].ok).toBe(false);
     });
 
-    it('redacta un secreto delatado por su FORMA aunque la clave sea inocente (ej. una URL con ?access_token=...)', () => {
+    it('redacta SOLO la región sospechosa de un valor cuya clave es inocente (URL con ?access_token=...), preservando el resto', () => {
       const r = abrirOActualizarIncidente(db, {
         ...BASE,
-        contexto: { url: 'https://api.mercadolibre.com/items?access_token=APP_USR-123' },
+        contexto: { url: 'https://api.mercadolibre.com/items?access_token=APP_USR-123&limit=20' },
       });
       const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
-      expect(JSON.parse(fila.contexto_json).url).toBe('[redactado]');
+      const url = JSON.parse(fila.contexto_json).url;
+      expect(url).toBe('https://api.mercadolibre.com/items?access_token=[redactado]&limit=20');
     });
 
     it('sin contexto no rompe (contexto_json queda null)', () => {
       const r = abrirOActualizarIncidente(db, BASE);
       const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
       expect(fila.contexto_json).toBeNull();
+    });
+
+    it('un Error nativo en el contexto se serializa como {name, message} sanitizado, no como {}', () => {
+      const r = abrirOActualizarIncidente(db, {
+        ...BASE,
+        contexto: { err: new Error('Bearer abc123 rechazado') },
+      });
+      const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
+      const err = JSON.parse(fila.contexto_json).err;
+      expect(err.name).toBe('Error');
+      expect(err.message).toBe('[redactado] rechazado');
+    });
+
+    it('no nulifica un mensaje entero solo porque MENCIONA la palabra access_token sin ser un secreto real', () => {
+      const r = abrirOActualizarIncidente(db, {
+        ...BASE,
+        contexto: { detalle: 'invalid access_token for user' },
+      });
+      const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
+      // Sin "=" ni ":" después, no matchea el patrón de key=value — se conserva el mensaje.
+      expect(JSON.parse(fila.contexto_json).detalle).toBe('invalid access_token for user');
+    });
+
+    it('redacta por nombre de clave: apiKey, cookie, credential y clave (no solo token/secret/password/authorization)', () => {
+      const r = abrirOActualizarIncidente(db, {
+        ...BASE,
+        contexto: { apiKey: 'x', cookie: 'x', credential: 'x', clave: 'x', normal: 'x' },
+      });
+      const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
+      const c = JSON.parse(fila.contexto_json);
+      expect(c.apiKey).toBe('[redactado]');
+      expect(c.cookie).toBe('[redactado]');
+      expect(c.credential).toBe('[redactado]');
+      expect(c.clave).toBe('[redactado]');
+      expect(c.normal).toBe('x');
+    });
+
+    it('redacta un refresh_token de ML por su prefijo TG- aunque la clave sea inocente', () => {
+      const r = abrirOActualizarIncidente(db, {
+        ...BASE,
+        contexto: { detalle: 'refresh usado: TG-abc123def456' },
+      });
+      const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
+      expect(JSON.parse(fila.contexto_json).detalle).toBe('refresh usado: [redactado]');
+    });
+
+    it('trunca un contexto anormalmente grande (string largo y array largo) en vez de guardarlo entero', () => {
+      const r = abrirOActualizarIncidente(db, {
+        ...BASE,
+        contexto: { body: 'x'.repeat(5000), intentos: Array.from({ length: 200 }, (_, i) => i) },
+      });
+      const fila = db.prepare('SELECT contexto_json FROM incidentes_operativos WHERE id = ?').get(r.id);
+      const c = JSON.parse(fila.contexto_json);
+      expect(c.body.length).toBeLessThan(2100);
+      expect(c.body).toMatch(/…\[truncado\]$/);
+      expect(c.intentos.length).toBe(51); // 50 + la marca de truncado
+      expect(c.intentos.at(-1)).toMatch(/más, truncado/);
     });
 
     it('una severidad desconocida (typo) cae a advertencia en vez de romper el INSERT o quedar invisible', () => {
@@ -173,6 +234,20 @@ describe('lib/incidentes', () => {
       const r = abrirOActualizarIncidente(db, sinIntegracion);
       expect(r.error).toBe(true);
       expect(r.id).toBeNull();
+    });
+
+    it('el evento "abierto" del historial también guarda mensaje_tecnico y contexto (no solo severidad/mensajeHumano)', () => {
+      const abierto = abrirOActualizarIncidente(db, {
+        ...BASE,
+        mensajeTecnico: 'HTTP 429 detalle',
+        contexto: { endpoint: '/items/search' },
+      });
+      const evento = db.prepare(
+        "SELECT detalle_json FROM incidentes_operativos_historial WHERE incidente_id = ? AND evento = 'abierto'"
+      ).get(abierto.id);
+      const detalle = JSON.parse(evento.detalle_json);
+      expect(detalle.mensajeTecnico).toBe('HTTP 429 detalle');
+      expect(detalle.contexto).toEqual({ endpoint: '/items/search' });
     });
   });
 
@@ -240,6 +315,15 @@ describe('lib/incidentes', () => {
         .get('mercado_libre|refrescar_catalogo|rate_limit').n;
       expect(total).toBe(2); // uno resuelto (histórico) + uno activo (episodio nuevo)
     });
+
+    it('fail-open: un error al resolver (DB cerrada) no lanza, devuelve error:true en vez de tumbar un ciclo sano', () => {
+      abrirOActualizarIncidente(db, BASE);
+      db.close();
+      expect(() => confirmarCicloSano(db, { integracion: BASE.integracion, proceso: BASE.proceso })).not.toThrow();
+      const r = confirmarCicloSano(db, { integracion: BASE.integracion, proceso: BASE.proceso });
+      expect(r.error).toBe(true);
+      db = openDb(TEST_DB); // para que afterEach pueda cerrarla de nuevo sin doble-close
+    });
   });
 
   describe('listarIncidentes', () => {
@@ -288,6 +372,21 @@ describe('lib/incidentes', () => {
       expect(r.page).toBe(2);
       expect(r.pageSize).toBe(1);
       expect(r.items).toHaveLength(1);
+    });
+
+    it('un page absurdamente grande (fuera de Number.isSafeInteger) no rompe la query (hallazgo del revisor)', () => {
+      // 1e21 falla Number.isSafeInteger: cae al default (page 1) en vez de intentar bindear
+      // un OFFSET no representable — antes tiraba SqliteError "datatype mismatch".
+      expect(() => listarIncidentes(db, { page: '999999999999999999999' })).not.toThrow();
+      const r = listarIncidentes(db, { page: '999999999999999999999' });
+      expect(r.page).toBe(1);
+      expect(r.items.length).toBeGreaterThan(0);
+    });
+
+    it('un page grande pero SEGURO (dentro de Number.isSafeInteger) se acota a PAGE_MAX y no rompe la query', () => {
+      const r = listarIncidentes(db, { page: 5_000_000 });
+      expect(r.page).toBe(1_000_000);
+      expect(r.items).toEqual([]); // muy lejos de cualquier dato real, offset gigante pero válido
     });
   });
 
