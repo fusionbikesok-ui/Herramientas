@@ -3,6 +3,7 @@ import express from 'express';
 import { normalizarProductoWc, normalizarVariacionWc, filaCatalogo } from '../lib/modelos/producto.js';
 import { mapConLimite } from '../lib/concurrencia.js';
 import { buildWooPath } from '../lib/wooStock.js';
+import { syncSkuPuntual } from './sync.js';
 
 const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refresco
 
@@ -377,7 +378,10 @@ export function wooRouter(db, cfg) {
         // El path depende de si es variación (/products/{padre}/variations/{id}) o simple.
         // Sin la fila del cache no se puede saber: fail-closed en vez de pegarle a
         // /products/{id}, que para una variación devuelve 404.
-        const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(u.id_woo);
+        // El sku sale de ESTA fila (no de u.sku, que viene del body del cliente sin validar
+        // contra el producto real) — si el cliente manda un sku stale o de otro renglón,
+        // el push a ML de más abajo terminaría sincronizando el SKU equivocado.
+        const prod = db.prepare('SELECT id_woo, id_padre, tipo, sku FROM catalogo_cache WHERE id_woo=?').get(u.id_woo);
         if (!prod) {
           throw new Error(`No se encontró el producto id_woo=${u.id_woo} en catalogo_cache; no se puede determinar si es variación o simple`);
         }
@@ -388,13 +392,32 @@ export function wooRouter(db, cfg) {
         if (resp.status && resp.status !== 200) throw new Error(`WC status ${resp.status}`);
         db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?')
           .run(u.stock_nuevo, new Date().toISOString(), u.id_woo);
-        resultados.push({ sku: u.sku, ok: true, stock_nuevo: u.stock_nuevo });
+        resultados.push({ sku: prod.sku, ok: true, stock_nuevo: u.stock_nuevo });
       } catch (e) {
         resultados.push({ sku: u.sku, ok: false, error: e.message });
       }
     }
+
+    // Sincronizar a ML DESPUÉS de aplicar todo el lote, un solo push por SKU (no por
+    // renglón): si el lote repite un SKU, aplicar el push renglón a renglón terminaría
+    // pusheando el valor intermedio si el dedup se queda con la primera aparición — acá
+    // se lee el stock FINAL de catalogo_cache (ya actualizado arriba), así que el orden
+    // de los renglones no importa. Solo para SKUs que sí se aplicaron con éxito: si Woo
+    // falló, catalogo_cache sigue con el stock viejo y no hay nada correcto que empujar.
+    const skusAplicados = [...new Set(resultados.filter(r => r.ok && r.sku).map(r => r.sku))];
+    const sync_ml = [];
+    for (const sku of skusAplicados) {
+      try {
+        sync_ml.push(await syncSkuPuntual(db, cfg, sku));
+      } catch (eSync) {
+        // syncSkuPuntual no debería tirar (devuelve {estado:'error'} internamente), pero
+        // un fallo acá nunca debe tocar `resultados` — la escritura a Woo ya está hecha.
+        sync_ml.push({ sku, estado: 'error', detalle: `Excepción inesperada: ${eSync.message}` });
+      }
+    }
+
     const errores = resultados.filter(r => !r.ok).length;
-    res.json({ ok: errores === 0, aplicados: resultados.filter(r => r.ok).length, errores, resultados });
+    res.json({ ok: errores === 0, aplicados: resultados.filter(r => r.ok).length, errores, resultados, sync_ml });
   });
 
   return router;

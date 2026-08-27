@@ -1,6 +1,7 @@
 import express from 'express';
 import { wooFetch } from './woo.js';
 import { buildWooPath } from '../lib/wooStock.js';
+import { syncSkuPuntual } from './sync.js';
 
 // Lock en memoria por id_woo para serializar el patrón GET→calcular→PATCH.
 // Es un solo proceso Node, así que un Map<id_woo, Promise> a nivel de módulo
@@ -250,6 +251,7 @@ export function recepcionesRouter(db, cfg) {
 
     const recMeta = db.prepare('SELECT pedido_id, solo_documento FROM recepciones WHERE id=?').get(id);
     const resultados = [];
+    const sync_ml = [];
 
     // Solo actualiza WC si no es "solo documento"
     if (!recMeta?.solo_documento) {
@@ -264,6 +266,7 @@ export function recepcionesRouter(db, cfg) {
           resultados.push({ sku: it.sku, nombre: it.nombre_doc, ok: false, error: e.message });
         }
       }
+
       // Marcar explícitamente los ítems que NO se aplicaron — nada se pierde en silencio.
       // (los 'pendiente_creacion' ya marcados se conservan; los 'error' ya tienen id_woo y no matchean el WHERE de sin_match)
       db.prepare(`UPDATE recepcion_items SET estado_item='sin_match'
@@ -283,6 +286,25 @@ export function recepcionesRouter(db, cfg) {
     const now = new Date().toISOString();
     db.prepare("UPDATE recepciones SET estado='confirmada', confirmado_en=? WHERE id=?").run(now, id);
 
+    // Sincronizar a ML DESPUÉS de confirmar la recepción (no antes): esto son llamadas de
+    // red que pueden tardar decenas de segundos con un lote grande, y no tienen que dejar
+    // la recepción en 'procesando' sin salida si el proceso muere en el medio (el lock de
+    // la línea ~242 solo acepta reabrir desde 'borrador', no hay recuperación de
+    // 'procesando' hoy). Un solo push por SKU (no por ítem): si dos ítems son el mismo
+    // SKU, se lee el stock FINAL de catalogo_cache (ya actualizado arriba), el orden no
+    // importa. Solo para SKUs que sí se aplicaron con éxito — si aplicarStockItem falló,
+    // catalogo_cache sigue con el stock viejo y no hay nada correcto que empujar.
+    const skusAplicados = [...new Set(resultados.filter(r => r.ok && r.sku).map(r => r.sku))];
+    for (const sku of skusAplicados) {
+      try {
+        sync_ml.push(await syncSkuPuntual(db, cfg, sku));
+      } catch (eSync) {
+        // syncSkuPuntual no debería tirar, pero un fallo acá nunca debe tocar `resultados`
+        // ni el estado de la recepción — la escritura a Woo y la confirmación ya se hicieron.
+        sync_ml.push({ sku, estado: 'error', detalle: `Excepción inesperada: ${eSync.message}` });
+      }
+    }
+
     const errores = resultados.filter(r => !r.ok).length;
     const aplicados = resultados.filter(r => r.ok).length;
     const soloDoc = recMeta?.solo_documento === 1;
@@ -296,7 +318,7 @@ export function recepcionesRouter(db, cfg) {
     `).all(id);
     const sin_match = pendientes.filter(p => p.estado_item === 'sin_match').length;
 
-    res.json({ ok: true, aplicados, errores, sin_match, resultados, pendientes, confirmado_en: now, solo_documento: soloDoc });
+    res.json({ ok: true, aplicados, errores, sin_match, resultados, pendientes, confirmado_en: now, solo_documento: soloDoc, sync_ml });
   });
 
   return router;

@@ -902,6 +902,167 @@ export async function procesarCancelacionesMl(db, cfg) {
   }
 }
 
+// ─── syncSkuPuntual ──────────────────────────────────────────────────────────
+
+// Backoff acotado a UN reintento (no 3 como el resto del repo): esta función corre
+// síncrona dentro de un request HTTP de edición manual de stock (A.2), no en un cron
+// de fondo — un reintento agresivo por SKU en un lote de 40 puede colgar la request
+// minutos. Si falla tras el reintento, el cron periódico de syncWcToMl retoma (fail-open).
+const SYNC_SKU_PUNTUAL_BACKOFF_MS = [800];
+
+/**
+ * Empuja a ML el diff de UNA clave (item+variación) puntual. No reintenta ante 429:
+ * el cooldown es global por cuenta (mismo motivo por el que _syncWcToMl corta la
+ * corrida entera ante 429, ver más abajo) — reintentar ahí solo quema el backoff sin
+ * chance de éxito. Tampoco reintenta si no se pudo confirmar el status de la
+ * publicación (igual que _syncWcToMl: se loguea y se sigue, no es recuperable
+ * reintentando el mismo GET).
+ */
+async function _empujarClaveMl(db, mlCfg, sku, diff) {
+  const { clave, stock_disponible_ml, cantidad_ml } = diff;
+  const { itemId, variationId } = partirClaveMl(clave);
+  const cantidad = Math.max(0, Math.round(stock_disponible_ml));
+
+  let ultimoError = null;
+  for (let intento = 0; intento <= SYNC_SKU_PUNTUAL_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(SYNC_SKU_PUNTUAL_BACKOFF_MS[intento - 1]);
+    try {
+      // Mismo patrón que _syncWcToMl: leer el status del cache primero (poblado por el
+      // matcher) y solo hacer el GET a ML como fallback si no está cacheado. En el caso
+      // común esto ahorra una llamada + el sleep(ML_CALL_DELAY_MS) por clave — con un
+      // lote de 40 SKUs la diferencia es la request HTTP colgada minutos vs. segundos.
+      let status;
+      const cacheado = db.prepare('SELECT status FROM ml_publicaciones_cache WHERE item_id = ?').get(itemId);
+      if (cacheado?.status) {
+        status = cacheado.status;
+      } else {
+        const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
+        if (est.status === 429) {
+          // Cooldown global por cuenta: no es un error de este push, es que ML está
+          // limitando la cuenta entera — mismo criterio que _syncWcToMl (cortadoPor429):
+          // no se intentó nada, se retoma solo en el próximo ciclo del cron.
+          return { clave, estado: 'omitido', detalle: 'Cooldown activo en ML (429), lo retoma el cron' };
+        }
+        status = est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido';
+        await sleep(ML_CALL_DELAY_MS);
+      }
+      if (status === 'desconocido') {
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: 'No se pudo consultar el status de la publicación en ML' });
+        return { clave, estado: 'error', detalle: 'No se pudo consultar el status de la publicación' };
+      }
+      if (status !== 'active') {
+        return { clave, estado: 'sin_cambios', detalle: `Publicación ${status}, no se sincroniza` };
+      }
+
+      const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
+      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+
+      if (resp.status === 429) {
+        return { clave, estado: 'omitido', detalle: 'Cooldown activo en ML (429) durante PUT, lo retoma el cron' };
+      }
+      if (resp.status === 200) {
+        upsertMlStockEstado(db, clave, sku, cantidad);
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'ok' });
+        return { clave, estado: 'sincronizado', detalle: `Stock actualizado: ${cantidad}` };
+      }
+
+      const causa = extraerErrorMl(resp, resp.data?.error || JSON.stringify(resp.data ?? {}));
+      if (/doesn'?t have a variation/i.test(causa)) {
+        descartarVariacionMuerta(db, clave, `Variación inexistente en ML: ${causa}`.slice(0, 200));
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'remapeo_requerido', error: causa.slice(0, 500) });
+        return { clave, estado: 'error', detalle: `Remapeo requerido: ${causa}` };
+      }
+      if (/cannot exceeds? \d+ pictures/i.test(causa)) {
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'requiere_atencion_ml', error: causa.slice(0, 500) });
+        return { clave, estado: 'error', detalle: `Publicación bloqueada en ML: ${causa}` };
+      }
+      // No se reintenta un HTTP de respuesta (4xx/5xx que ML SÍ contestó): no es un fallo
+      // transitorio de red, es un rechazo — mismo criterio que _syncWcToMl, que loguea y
+      // sigue sin reintentar. El caso típico es status stale en ml_publicaciones_cache
+      // (activa en cache, pausada de verdad en ML): reintentar el mismo PUT repite el
+      // mismo 400 sin chance de éxito, solo suma 800ms de latencia al operario. El único
+      // reintento real es para excepciones de red/timeout (catch de abajo).
+      ultimoError = `HTTP ${resp.status}: ${causa}`;
+      logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: ultimoError.slice(0, 500) });
+      return { clave, estado: 'error', detalle: ultimoError };
+    } catch (e) {
+      ultimoError = e.message;
+      if (intento < SYNC_SKU_PUNTUAL_BACKOFF_MS.length) continue;
+      logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: e.message });
+      return { clave, estado: 'error', detalle: `Fallo tras reintento: ${e.message}` };
+    }
+  }
+  return { clave, estado: 'error', detalle: ultimoError || 'Error desconocido' };
+}
+
+/**
+ * Sincroniza el stock de un SKU puntual a MercadoLibre, disparado al guardar una
+ * edición manual de stock (A.2 del plan). Busca TODOS los diffs pendientes de ese
+ * SKU contra ML (un SKU puede tener más de una publicación/variación mapeada — un
+ * `LIMIT 1` acá reportaría "sincronizado" habiendo dejado otra publicación con el
+ * stock viejo) y empuja cada uno con `_empujarClaveMl`. Fail-open: no reemplaza al
+ * cron `syncWcToMl`, que sigue de respaldo si esto falla.
+ *
+ * Lee `_wcToMlEnCurso` pero no lo toma (no se pone en `true` a sí mismo): si el cron
+ * general YA está en curso al momento de esta llamada, el push puntual se omite (el
+ * cron va a cubrir el mismo diff en su misma corrida, no hace falta duplicar la
+ * llamada a ML). Si el cron arranca DESPUÉS de que este push ya empezó, se acepta la
+ * ventana de carrera — el PUT de stock a ML es idempotente, así que el peor caso es
+ * una llamada de más, no una escritura incorrecta.
+ *
+ * @returns {Promise<{sku, estado: 'sincronizado'|'sin_cambios'|'error'|'omitido', detalle}>}
+ */
+export async function syncSkuPuntual(db, cfg, sku) {
+  const { ml: mlCfg } = cfg;
+
+  if (!sku || typeof sku !== 'string') {
+    return { sku, estado: 'error', detalle: 'SKU inválido' };
+  }
+  if (!mlCfgOk(cfg)) {
+    return { sku, estado: 'omitido', detalle: 'ML no configurado' };
+  }
+  if (_wcToMlEnCurso) {
+    return { sku, estado: 'omitido', detalle: 'Sync general de ML en curso, este SKU se cubre en esa corrida' };
+  }
+
+  const diffs = db.prepare(`
+    ${COMPUTED_STOCK_CTE}
+    SELECT * FROM computed
+    WHERE sku = ?
+      AND (cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml)
+  `).all(sku);
+
+  if (diffs.length === 0) {
+    return { sku, estado: 'sin_cambios', detalle: 'Sin cambios pendientes en ML' };
+  }
+
+  const resultados = [];
+  for (const diff of diffs) {
+    resultados.push(await _empujarClaveMl(db, mlCfg, sku, diff));
+  }
+
+  const errores = resultados.filter(r => r.estado === 'error');
+  if (errores.length > 0) {
+    return { sku, estado: 'error', detalle: errores.map(r => r.detalle).join('; ').slice(0, 400) };
+  }
+  const sincronizadas = resultados.filter(r => r.estado === 'sincronizado').length;
+  if (sincronizadas === 0) {
+    const omitidas = resultados.filter(r => r.estado === 'omitido').length;
+    if (omitidas > 0) {
+      // Al menos una quedó SIN INTENTAR (cooldown 429): no es "confirmado sin diff", es
+      // "no se sabe todavía" — aunque otra clave del mismo SKU sí estuviera sin_cambios
+      // de verdad, mezclarlo bajo 'sin_cambios' mentiría (ese estado significa "sin diff
+      // pendiente en ML", y acá sigue habiendo un diff que ni se tocó).
+      return { sku, estado: 'omitido', detalle: `${omitidas} publicación(es) pospuestas por cooldown de ML, las retoma el cron` };
+    }
+    const detalle = resultados.length > 1
+      ? `${resultados.length} publicaciones sin cambios (${resultados.map(r => r.detalle).join('; ')})`.slice(0, 400)
+      : resultados[0]?.detalle || 'Ninguna publicación activa para este SKU';
+    return { sku, estado: 'sin_cambios', detalle };
+  }
+  return { sku, estado: 'sincronizado', detalle: `${sincronizadas}/${resultados.length} publicaciones actualizadas` };
+}
+
 // ─── syncWcToMl ──────────────────────────────────────────────────────────────
 
 // Candado para evitar corridas concurrentes de WC→ML (cron + disparo manual +
