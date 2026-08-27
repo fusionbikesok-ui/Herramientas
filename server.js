@@ -36,6 +36,7 @@ import { barridoAuditoria } from './lib/auditoria.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje } from './routes/notificacionesMl.js';
+import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -476,6 +477,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // en su próxima corrida por su camino ya probado. Minuto propio (:09, libre — ver el
       // comentario de arriba con los minutos ya ocupados) para no sumar ráfaga a los demás.
       cron.schedule('9-59/10 * * * *', () => {          // ML
+        // Auto-vincula publicaciones con seller_sku ya cargado y sin ambigüedad (incidente
+        // 2026-08-27, FB-68055 y otras 83 quedaban invisibles al sync sin esto) — corre acá
+        // para no depender de que alguien abra el Matcher; síncrono y barato (solo SELECTs
+        // indexados + un INSERT por vinculación, nada de red).
+        try {
+          const vinculadas = autoVincularPorSellerSku(app._db);
+          if (vinculadas > 0) console.log(`auto-vinculación por seller_sku: ${vinculadas} publicaciones`);
+        } catch (err) {
+          console.error('auto-vinculación por seller_sku error:', err.message);
+        }
         reconciliarStockMl(app._db, syncCfg)
           .catch(err => console.error('reconciliación de stock ML error:', err.message));
       });

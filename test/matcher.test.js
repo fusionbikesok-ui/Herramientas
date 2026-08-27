@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
+import { clavesNecesitanAtencion, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { matcherRouter, refrescarPublicacionesMl, refrescarPublicacionesMlAcotado, mlFetchConReintento, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
 import { _resetEstadoPushParaTests } from '../lib/matcherPush.js';
 import { _resetCooldownParaTests } from '../lib/mlClient.js';
@@ -79,6 +79,82 @@ describe('clavesNecesitanAtencion', () => {
 
     const claves = clavesNecesitanAtencion(db).sort();
     expect(claves).toEqual(['MLA1|', 'MLA3|55']);
+  });
+});
+
+describe('autoVincularPorSellerSku (incidente 2026-08-27, FB-68055)', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('vincula una publicación con seller_sku exacto y único en catalogo_cache', () => {
+    seedCatalogo(db, { sku: 'FB-68055', stock: 2 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-68055' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(1);
+    const decision = db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA1|'").get();
+    expect(decision).toMatchObject({ sku: 'FB-68055', accion: 'asignar', origen: 'auto_seller_sku' });
+  });
+
+  it('NO vincula si ya hay una decisión activa para esa clave (nunca pisa una decisión humana)', () => {
+    seedCatalogo(db, { sku: 'FB-1', stock: 5 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-1' });
+    seedDecision(db, { clave: 'MLA1|', sku: 'FB-DISTINTO', accion: 'confirmar' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    const decision = db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|'").get();
+    expect(decision.sku).toBe('FB-DISTINTO'); // la decisión humana previa queda intacta
+  });
+
+  it('NO vincula si el SKU está duplicado en catalogo_cache (ambigüedad, requiere revisión humana)', () => {
+    seedCatalogo(db, { sku: 'FB-DUP', stock: 3 });
+    seedCatalogo(db, { sku: 'FB-DUP', stock: 7 }); // fila fantasma / duplicado real
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-DUP' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA1|'").get()).toBeUndefined();
+  });
+
+  it('NO vincula si ese SKU ya está vinculado a OTRA publicación (ambigüedad SKU-a-múltiples-claves)', () => {
+    seedCatalogo(db, { sku: 'FB-COMPARTIDO', stock: 4 });
+    seedDecision(db, { clave: 'MLA-VIEJA|', sku: 'FB-COMPARTIDO', accion: 'asignar' });
+    seedCache(db, { clave: 'MLA-NUEVA|', itemId: 'MLA-NUEVA', sellerSku: 'FB-COMPARTIDO' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA-NUEVA|'").get()).toBeUndefined();
+  });
+
+  it('NO vincula si el seller_sku no existe en catalogo_cache', () => {
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-INEXISTENTE' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+  });
+
+  it('ignora publicaciones sin seller_sku', () => {
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: '' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+  });
+
+  it('vincula varias publicaciones elegibles en una sola corrida (caso real: 84 pendientes)', () => {
+    for (let i = 1; i <= 5; i++) {
+      seedCatalogo(db, { sku: `FB-${i}`, stock: i });
+      seedCache(db, { clave: `MLA${i}|`, itemId: `MLA${i}`, sellerSku: `FB-${i}` });
+    }
+    const n = autoVincularPorSellerSku(db);
+    expect(n).toBe(5);
   });
 });
 
