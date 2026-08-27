@@ -1126,20 +1126,47 @@
     refrescarOpciones();
   }
 
-  function mostrarAvisoAlcance(mensaje, ocupadoPor, categoria, marca){
+  function mostrarAvisoAlcance(mensaje, ocupadoPor, categoria, marca, sesionId, sesionEstado){
     var detalle = listaAlcance(categoria).concat(listaAlcance(marca)).join(', ');
     var texto = ocupadoPor
       ? 'El alcance se cruza con la sesión de <b>' + esc(ocupadoPor) + '</b>' + (detalle ? ' (' + esc(detalle) + ').' : '.')
       : esc(mensaje || 'No se pudo crear la sesión.');
+    // Botón de descarte directo cuando la sesión que choca quedó trabada en
+    // confirmada_con_errores (falló el ajuste de stock): sin esto no había forma
+    // de destrabarla desde la pantalla, porque /sesion-activa solo detecta 'abierta'.
+    var btnDescartar = sesionId
+      ? '<button class="btn secondary" id="aviso-descartar">Descartar sesión de ' + esc(ocupadoPor) + '</button>'
+      : '';
     alcanceAviso.innerHTML =
       '<div class="aviso">' + texto +
         '<div style="margin-top:10px;">' +
           '<button class="btn secondary" id="aviso-cambiar">Cambiar alcance</button>' +
           '<button class="btn secondary" id="aviso-cancelar">Cancelar</button>' +
+          btnDescartar +
         '</div>' +
       '</div>';
     document.getElementById('aviso-cambiar').addEventListener('click', limpiarAlcanceForm);
     document.getElementById('aviso-cancelar').addEventListener('click', function(){ mostrarVista('inicio'); });
+    if (sesionId) {
+      document.getElementById('aviso-descartar').addEventListener('click', function(){
+        var btn = document.getElementById('aviso-descartar');
+        btn.disabled = true;
+        fetch('/api/inventario/sesiones/' + sesionId + '/descartar', { method: 'POST' })
+          .then(function(r){ return r.json(); })
+          .then(function(res){
+            if (res && res.ok) {
+              alcanceAviso.innerHTML = '';
+              alcanceEmpezar.click();
+            } else {
+              alert(res && res.error ? res.error : 'No se pudo descartar la sesión.');
+              btn.disabled = false;
+            }
+          }).catch(function(){
+            alert('No se pudo descartar la sesión (sin conexión).');
+            btn.disabled = false;
+          });
+      });
+    }
   }
 
   alcanceEmpezar.addEventListener('click', function(){
@@ -1164,7 +1191,8 @@
         } else if(res.status === 409){
           mostrarAvisoAlcance(res.body.error, res.body.ocupada_por,
             res.body.categorias != null ? res.body.categorias : res.body.categoria,
-            res.body.marcas != null ? res.body.marcas : res.body.marca);
+            res.body.marcas != null ? res.body.marcas : res.body.marca,
+            res.body.ocupada_por_sesion_id, res.body.ocupada_por_estado);
         } else {
           mostrarAvisoAlcance(res.body && res.body.error);
         }
