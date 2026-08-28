@@ -1211,7 +1211,9 @@ fetch('/api/auth/me').then(function(r) {
 
       fetch('/api/incidentes?estado=activo&pageSize=100').then(function(r) {
         if (r.status === 401 || r.status === 403) {
-          throw new Error('No autorizado');
+          var errAuth = new Error('No autorizado');
+          errAuth.noAutorizado = true;
+          throw errAuth;
         }
         return r.json();
       }).then(function(d) {
@@ -1230,6 +1232,20 @@ fetch('/api/auth/me').then(function(r) {
           ultimaFirmaIncidentes = null;
         }
       }).catch(function(err) {
+        // 4ta pasada del revisor (MEDIO 1): un 401/403 (sesión de admin vencida con la
+        // pestaña abierta todo el día, el uso típico de este dashboard) NUNCA se arregla
+        // reintentando — el copy genérico de abajo ("se reintenta solo") le mentía al
+        // operador, y el polling seguía golpeando el endpoint cada 90s para siempre. Corta
+        // el intervalo y muestra un mensaje que describe la acción real disponible.
+        if (err && err.noAutorizado) {
+          clearInterval(incidentesPollInterval);
+          incidentesHost.innerHTML = '<div class="incidentes-container">'
+            + '<div class="incidentes-error incidentes-error--info"><span aria-hidden="true">⊛</span> Tu sesión venció. Volvé a iniciar sesión para ver los incidentes activos.</div>'
+            + '</div>';
+          yaCargoUnaVez = true;
+          ultimaFirmaIncidentes = null;
+          return;
+        }
         // ALTO 1 + MEDIO 7 (1ra pasada) + MEDIO 1/3 (2da pasada): error visible pero
         // distinto de un incidente crítico real; ícono con aria-hidden (mismo criterio que
         // el ícono de severidad); copy en voseo (convención del resto de public/) sin filtrar
