@@ -163,7 +163,7 @@ describe('routes/devices', () => {
       db.close();
     });
 
-    it('permite re-registrar un token revocado', async () => {
+    it('permite re-registrar un token revocado (crea fila nueva, no reutiliza la vieja)', async () => {
       const db = openDb(TEST_DB);
       seedUser(db);
       const now = new Date().toISOString();
@@ -176,7 +176,8 @@ describe('routes/devices', () => {
 
       const app = buildApp(db, 1);
 
-      // Re-registrar el mismo token (debería limpiar revocado_en)
+      // Re-registrar el mismo token
+      // ALTO 1 fix: ahora crea una fila NUEVA en vez de reutilizar la vieja
       const res = await request(app).post('/api/devices').send({
         platform: 'ios',
         push_token: 'token-xyz',
@@ -184,9 +185,109 @@ describe('routes/devices', () => {
 
       expect(res.status).toBe(200);
 
-      // Verificar que revocado_en está NULL
-      const device = db.prepare('SELECT * FROM device_tokens WHERE token = ?').get('token-xyz');
-      expect(device.revocado_en).toBeNull();
+      // Verificar que hay UNA fila activa (revocado_en IS NULL)
+      const deviceActivo = db.prepare('SELECT * FROM device_tokens WHERE token = ? AND revocado_en IS NULL').get('token-xyz');
+      expect(deviceActivo).toBeDefined();
+      expect(deviceActivo.user_id).toBe(1);
+
+      // Verificar que la fila VIEJA sigue revocada
+      const deviceRevocado = db.prepare('SELECT * FROM device_tokens WHERE token = ? AND revocado_en IS NOT NULL').get('token-xyz');
+      expect(deviceRevocado).toBeDefined();
+
+      db.close();
+    });
+
+    it('reasignación ida y vuelta: usuario1 → usuario2 → usuario1 (ALTO 1)', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db, { id: 1, username: 'user1' });
+      seedUser(db, { id: 2, username: 'user2' });
+
+      const now = new Date().toISOString();
+
+      // Usuario1 registra el token
+      let app = buildApp(db, 1);
+      let res = await request(app).post('/api/devices').send({
+        platform: 'ios',
+        push_token: 'ida-vuelta-token',
+        device_name: 'usuario1_device',
+      });
+      expect(res.status).toBe(200);
+      const device1_id = res.body.id;
+
+      // Usuario2 reasigna el token
+      app = buildApp(db, 2);
+      res = await request(app).post('/api/devices').send({
+        platform: 'ios',
+        push_token: 'ida-vuelta-token',
+        device_name: 'usuario2_device',
+      });
+      expect(res.status).toBe(200);
+      const device2_id = res.body.id;
+      expect(device2_id).not.toBe(device1_id); // Nueva fila
+
+      // Usuario1 VUELVE A REGISTRAR el mismo token (reasignación de vuelta)
+      // ALTO 1: Esto debe funcionar (200), no dar 500
+      app = buildApp(db, 1);
+      res = await request(app).post('/api/devices').send({
+        platform: 'ios',
+        push_token: 'ida-vuelta-token',
+        device_name: 'usuario1_device_v2',
+      });
+      expect(res.status).toBe(200); // CRÍTICO: no debe ser 500
+      const device1_nuevo_id = res.body.id;
+      expect(device1_nuevo_id).not.toBe(device2_id); // Nueva fila, no la de usuario2
+
+      // Verificar que usuario1 tiene el token activo
+      const activoParaUser1 = db.prepare('SELECT * FROM device_tokens WHERE token = ? AND user_id = 1 AND revocado_en IS NULL').get('ida-vuelta-token');
+      expect(activoParaUser1).toBeDefined();
+
+      // Verificar que usuario2 ya NO tiene el token activo
+      const noActivoParaUser2 = db.prepare('SELECT * FROM device_tokens WHERE token = ? AND user_id = 2 AND revocado_en IS NULL').get('ida-vuelta-token');
+      expect(noActivoParaUser2).toBeUndefined();
+
+      db.close();
+    });
+
+    it('usuario2 puede re-registrarse con el mismo token que ya tiene activo (es un UPDATE, no error 500)', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db, { id: 1, username: 'user1' });
+      seedUser(db, { id: 2, username: 'user2' });
+
+      const now = new Date().toISOString();
+
+      // Usuario1 registra el token
+      let app = buildApp(db, 1);
+      let res = await request(app).post('/api/devices').send({
+        platform: 'ios',
+        push_token: 'token-legit',
+        device_name: 'user1_device',
+      });
+      expect(res.status).toBe(200);
+
+      // Usuario2 lo reasigna
+      app = buildApp(db, 2);
+      res = await request(app).post('/api/devices').send({
+        platform: 'ios',
+        push_token: 'token-legit',
+        device_name: 'user2_device',
+      });
+      expect(res.status).toBe(200);
+
+      // Usuario2 VUELVE A REGISTRAR EL MISMO TOKEN (que ya tiene activo)
+      // Esto es lo que hace cualquier app en cada arranque
+      // ALTO 1 CRÍTICO: debe funcionar (200), no dar 500
+      res = await request(app).post('/api/devices').send({
+        platform: 'ios',
+        push_token: 'token-legit',
+        device_name: 'user2_device_refreshed',
+      });
+      expect(res.status).toBe(200); // CRÍTICO: no debe ser 500
+      expect(res.body.device_name).toBe('user2_device_refreshed'); // Actualizado
+
+      // Verificar que sigue siendo UNA sola fila activa para usuario2
+      const activasParaUser2 = db.prepare('SELECT COUNT(*) as c FROM device_tokens WHERE token = ? AND user_id = 2 AND revocado_en IS NULL').get('token-legit').c;
+      expect(activasParaUser2).toBe(1);
+
       db.close();
     });
 

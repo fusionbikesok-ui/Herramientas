@@ -74,9 +74,11 @@ export function devicesRouter(db) {
 
       const ts = now();
 
-      // Buscar si el token existe (para cualquier usuario)
+      // ALTO 1 fix (7ª pasada revisor): Buscar solo la fila ACTIVA del token
+      // (revocado_en IS NULL). Puede haber N filas revocadas del mismo token
+      // (historial de reasignaciones), pero solo importa la activa.
       const existente = db
-        .prepare('SELECT id, user_id FROM device_tokens WHERE token = ?')
+        .prepare('SELECT id, user_id FROM device_tokens WHERE token = ? AND revocado_en IS NULL')
         .get(push_token);
 
       if (existente) {

@@ -2637,7 +2637,7 @@ Notas:
 - Cada usuario es dueño de sus propios dispositivos; no puede ver ni modificar los de otros.
 - Si el mismo `push_token` se re-registra para el mismo usuario, se actualiza (limpia `revocado_en`).
 - Un usuario puede tener múltiples dispositivos simultáneamente (ej. iPhone + iPad).
-- El `push_token` es único en la tabla — un token de APNs/FCM no puede pertenecer a dos usuarios.
+- **Reasignación de tokens (ALTO 1, 7ª pasada revisor):** a lo sumo puede haber una fila ACTIVA (`revocado_en IS NULL`) por token; registrar un `push_token` que otro usuario tiene activo lo REASIGNA: se revoca la fila del usuario anterior y se crea una fila NUEVA para el usuario actual. **Consecuencia para el usuario anterior:** deja de recibir notificaciones push en silencio (su dispositivo queda activo en la app, pero el token es inválido en el backend). Las filas revocadas persisten como historial puro — un token revocado que se re-registra crea una fila nueva, no reutiliza la vieja.
 
 ### DELETE /api/devices/{id}
 Revoca/elimina un dispositivo, deteniendo futuras notificaciones hacia ese token.
