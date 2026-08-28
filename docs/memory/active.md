@@ -25,6 +25,10 @@ Actualizado: 2026-08-22.
   los roles y gates del pipeline, sin depender de despachos ni handoffs de Claude, hasta nuevo
   aviso. Los resultados se documentan con evidencia reproducible y solo se actualizan hechos
   durables en esta memoria.
+- Bloque 4 de API móvil: JWT HS256 de acceso (15 min), refresh opaco rotativo (90 días),
+  asociación obligatoria del refresh al dispositivo en `/api/v1/devices` y revocación de su
+  familia al eliminarlo. Requiere configurar `MOBILE_JWT_SECRET` (mínimo 32 caracteres) en
+  cada entorno; el valor real no se versiona.
 - El controlador `npm run agent:claude` invoca Claude sin copiar/pegar y valida el handoff antes
   de aceptar el siguiente gate.
 - `npm run agent:e2e` prepara la instancia aislada (DB temporal sin token ML, crons

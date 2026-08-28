@@ -77,6 +77,11 @@ notificaciones simuladas, manejo de errores/offline/conflictos.
 
 ## Bloque 4 — Trabajo del backend (después de A.2/A.3)
 
+Estado: implementación backend completada en `conteo-confiable`; pruebas dirigidas verdes.
+La app registra cada dispositivo con su refresh token vigente y eliminarlo revoca la familia
+de refresh tokens asociada. Pendiente únicamente el gate operativo de despliegue/configuración
+del secreto en el entorno que vaya a ejecutar la API móvil.
+
 ### Decisión de autenticación (2026-08-28)
 
 Para la app móvil se implementará JWT con access token de vida corta y refresh token

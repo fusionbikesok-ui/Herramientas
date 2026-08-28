@@ -2603,7 +2603,7 @@ Infraestructura backend para enviar notificaciones push a dispositivos móviles 
 Contrato con `openapi/mobile-v1.yaml` (contract-first, la app ya tiene el cliente TypeScript
 generado). Los endpoints en esta sección son parte de la API móvil (rotas bajo `/api/`).
 
-### POST /api/devices
+### POST /api/devices (web) / POST /api/v1/devices (móvil)
 Registra un dispositivo para recibir notificaciones push.
 
 - Request:
@@ -2611,7 +2611,8 @@ Registra un dispositivo para recibir notificaciones push.
   {
     "platform": "ios" | "android" | "web",
     "push_token": "string (token del proveedor APNs/FCM)",
-    "device_name": "string (opcional, ej. 'iPhone de Juan' o 'Navegador')"
+    "device_name": "string (opcional, ej. 'iPhone de Juan' o 'Navegador')",
+    "refresh_token": "string (obligatorio en /api/v1; refresh vigente de la sesión móvil)"
   }
   ```
 
@@ -2655,7 +2656,7 @@ Revoca/elimina un dispositivo, deteniendo futuras notificaciones hacia ese token
 Notas:
 - Revoca seteando la columna `revocado_en` (soft-delete, registro persiste para auditoría).
 - El token queda inactivo y no recibe más notificaciones.
-- (Futuro) Opcional: invalidar refresh_tokens emitidos desde ese dispositivo.
+- En `/api/v1`, también revoca los refresh tokens asociados a ese dispositivo y su familia de rotación.
 
 ### GET /api/notifications
 Lista notificaciones del usuario autenticado, paginadas por cursor.

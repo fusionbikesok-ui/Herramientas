@@ -7,7 +7,7 @@
 
 import express from 'express';
 import { requireAuth } from '../lib/auth.js';
-import { requireMobileAuth } from '../lib/mobileAuth.js';
+import { requireMobileAuth, validarRefreshToken, asociarRefreshConDispositivo, revocarRefreshPorDispositivo } from '../lib/mobileAuth.js';
 import { tokenValido } from '../lib/notificacionesPush.js';
 
 const now = () => new Date().toISOString();
@@ -53,8 +53,12 @@ export function devicesRouter(db, options = {}) {
    */
   router.post('/', auth, (req, res) => {
     try {
-      const { platform, push_token, device_name } = req.body;
+      const { platform, push_token, device_name, refresh_token } = req.body;
       const userId = req.user.id;
+
+      if (options.mobile && (!refresh_token || !validarRefreshToken(db, refresh_token, userId))) {
+        return res.status(422).json({ error: { code: 'refresh_token_invalido', message: 'refresh_token vigente requerido para registrar el dispositivo' } });
+      }
 
       // Validación
       if (!platform || !platformaValida(platform)) {
@@ -93,6 +97,7 @@ export function devicesRouter(db, options = {}) {
           `).run(ts, device_name || null, existente.id);
 
           const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(existente.id);
+          if (options.mobile) asociarRefreshConDispositivo(db, refresh_token, userId, device.id);
           return res.json(deviceAPublico(device));
         } else {
           // ALTO 1 fix (6ª pasada revisor): el token pertenece a OTRO usuario.
@@ -123,6 +128,7 @@ export function devicesRouter(db, options = {}) {
             .run(userId, push_token, platform, device_name || null, ts, ts);
 
           const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(info.lastInsertRowid);
+          if (options.mobile) asociarRefreshConDispositivo(db, refresh_token, userId, device.id);
           return res.json(deviceAPublico(device));
         }
       }
@@ -138,6 +144,7 @@ export function devicesRouter(db, options = {}) {
           .run(userId, push_token, platform, device_name || null, ts, ts);
 
         const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(info.lastInsertRowid);
+        if (options.mobile) asociarRefreshConDispositivo(db, refresh_token, userId, device.id);
         return res.json(deviceAPublico(device));
       } catch (insertErr) {
         // Esto no debería pasar (ya verificamos arriba), pero por si acaso
@@ -213,9 +220,7 @@ export function devicesRouter(db, options = {}) {
         device.id
       );
 
-      // TODO (opcional): invalidar refresh_tokens emitidos desde este dispositivo
-      // (requeriría una tabla device_refresh_tokens para asociar tokens a dispositivos)
-      // Por ahora, el frontend cierra sesión explícitamente cuando revoca un dispositivo.
+      if (options.mobile) revocarRefreshPorDispositivo(db, device.id, userId);
 
       return res.json({ ok: true });
     } catch (err) {

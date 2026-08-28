@@ -145,11 +145,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [platform, push_token]
+              required: [platform, push_token, refresh_token]
               properties:
                 platform: { type: string, enum: [ios, android, web] }
                 push_token: { type: string, description: "Token APNs o FCM" }
                 device_name: { type: string, example: "iPhone de Juan" }
+                refresh_token: { type: string, description: "Refresh token vigente de esta sesión móvil; se vincula al dispositivo" }
       responses:
         '200':
           description: Dispositivo registrado
@@ -159,7 +160,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
-          description: Falta platform o push_token, o platform no es ios/android/web
+          description: Falta platform, push_token o refresh_token vigente, o platform no es ios/android/web
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
