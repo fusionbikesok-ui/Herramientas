@@ -449,7 +449,15 @@ option { background:var(--dark3); }
     if (forzar) {
       fetch('/api/woo/catalogo/recargar', { method: 'POST' })
         .then(function(r){ return r.json(); })
-        .then(function(data){ if (data.ok) fetchCatalogo(); else onCatalogoErr({ message: data.error }); })
+        .then(function(data){
+          if (data.ok && data.sospechoso) {
+            onCatalogoErr({ message: 'WooCommerce devolvió el catálogo vacío — se mantiene el catálogo anterior sin cambios.' });
+          } else if (data.ok) {
+            fetchCatalogo();
+          } else {
+            onCatalogoErr({ message: data.error });
+          }
+        })
         .catch(function(err){ onCatalogoErr({ message: err.message }); });
     } else {
       fetchCatalogo();

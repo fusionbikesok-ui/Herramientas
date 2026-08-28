@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { wooFetch, wooFetchConReintento, refrescarCatalogo, getCatalogo, wooRouter, registrarAlertasStockNegativo } from '../routes/woo.js';
+import {
+  wooFetch, wooFetchConReintento, wooFetchConCircuito, categorizarErrorWoo, circuitoWooAbierto,
+  _resetCircuitoWooParaTests, refrescarCatalogo, getCatalogo, wooRouter, registrarAlertasStockNegativo,
+} from '../routes/woo.js';
 import axios from 'axios';
 import express from 'express';
 import request from 'supertest';
@@ -112,6 +115,507 @@ describe('woo route', () => {
     });
   });
 
+
+  describe('Hito 3 — Retry-After, categorización, circuit breaker, métricas e incidentes (2026-08-27)', () => {
+    const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
+    let db;
+    beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); _resetCircuitoWooParaTests(); });
+    afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); _resetCircuitoWooParaTests(); });
+
+    describe('Retry-After', () => {
+      it('respeta Retry-After en segundos en vez del backoff fijo', async () => {
+        vi.useFakeTimers();
+        try {
+          let llamada = 0;
+          axios.request.mockImplementation(async () => {
+            llamada += 1;
+            if (llamada === 1) return { status: 429, data: null, headers: { 'retry-after': '2' } };
+            return { status: 200, data: [], headers: {} };
+          });
+          const p = wooFetchConReintento(cfg, '/products?per_page=1');
+          await vi.advanceTimersByTimeAsync(1999);
+          expect(llamada).toBe(1); // todavía no pasaron los 2s pedidos
+          await vi.advanceTimersByTimeAsync(2);
+          await p;
+          expect(llamada).toBe(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('un Retry-After más largo que el techo razonable aborta en vez de bloquear el ciclo', async () => {
+        axios.request.mockResolvedValue({ status: 429, data: null, headers: { 'retry-after': '120' } }); // > RETRY_AFTER_MAX_MS (60s)
+        await expect(wooFetchConReintento(cfg, '/products?per_page=1')).rejects.toThrow('WooCommerce API error 429');
+        expect(axios.request).toHaveBeenCalledTimes(1); // ni siquiera intenta un reintento
+      });
+
+      it('sin header Retry-After, sigue usando el backoff fijo (comportamiento previo intacto)', async () => {
+        vi.useFakeTimers();
+        try {
+          let llamada = 0;
+          axios.request.mockImplementation(async () => {
+            llamada += 1;
+            if (llamada === 1) return { status: 429, data: null, headers: {} };
+            return { status: 200, data: [], headers: {} };
+          });
+          const p = wooFetchConReintento(cfg, '/products?per_page=1');
+          await vi.runAllTimersAsync();
+          await p;
+          expect(llamada).toBe(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      // Hallazgo BLOQUEANTE del revisor (B2): Number('') / Number('  ') / Number([]) dan 0
+      // (no NaN), así que un header vacío o malformado pasaba el `>= 0` y devolvía 0ms — con
+      // eso, el reintento dormía 0ms en vez del backoff, disparando 3 reintentos casi
+      // inmediatos justo contra un Woo que pidió frenar.
+      it('un Retry-After vacío o malformado NO dispara reintentos inmediatos (cae al backoff fijo)', async () => {
+        vi.useFakeTimers();
+        try {
+          for (const valorMalformado of ['', '   ', '-5', 'no-es-una-fecha']) {
+            let llamada = 0;
+            const inicios = [];
+            axios.request.mockImplementation(async () => {
+              llamada += 1;
+              inicios.push(Date.now());
+              if (llamada === 1) return { status: 429, data: null, headers: { 'retry-after': valorMalformado } };
+              return { status: 200, data: [], headers: {} };
+            });
+            const p = wooFetchConReintento(cfg, '/products?per_page=1');
+            await vi.runAllTimersAsync();
+            await p;
+            expect(llamada).toBe(2);
+            // Con fake timers, si hubiera dormido 0ms el segundo intento ocurriría en el mismo
+            // tick — el backoff fijo (500ms el primer intento) garantiza una diferencia real.
+            expect(inicios[1] - inicios[0]).toBeGreaterThanOrEqual(500);
+          }
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('un Retry-After:"0" (legal, "reintentá ya") respeta igual el piso del backoff normal', async () => {
+        vi.useFakeTimers();
+        try {
+          let llamada = 0;
+          const inicios = [];
+          axios.request.mockImplementation(async () => {
+            llamada += 1;
+            inicios.push(Date.now());
+            if (llamada === 1) return { status: 429, data: null, headers: { 'retry-after': '0' } };
+            return { status: 200, data: [], headers: {} };
+          });
+          const p = wooFetchConReintento(cfg, '/products?per_page=1');
+          await vi.runAllTimersAsync();
+          await p;
+          expect(inicios[1] - inicios[0]).toBeGreaterThanOrEqual(500);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
+    describe('categorizarErrorWoo', () => {
+      it('clasifica 429 como rate_limit, 401/403 como auth, 5xx como transitorio, 400/404 como datos', async () => {
+        const casos = [
+          [429, 'rate_limit'], [401, 'auth'], [403, 'auth'],
+          [500, 'transitorio'], [503, 'transitorio'],
+          [400, 'datos'], [404, 'datos'], [422, 'datos'],
+        ];
+        for (const [status, esperado] of casos) {
+          axios.request.mockResolvedValue({ status, data: null, headers: {} });
+          try { await wooFetch(cfg, '/x'); } catch (e) {
+            expect(categorizarErrorWoo(e)).toBe(esperado);
+          }
+        }
+      });
+
+      it('una excepción sin status HTTP (red/timeout) se clasifica como transitorio', () => {
+        expect(categorizarErrorWoo(new Error('ECONNRESET'))).toBe('transitorio');
+      });
+
+      it('sigue funcionando con errores viejos que no tienen .status (solo el mensaje con el número)', () => {
+        // Compatibilidad hacia atrás: mocks existentes en otros archivos de test construyen
+        // `new Error('WooCommerce API error 500')` a mano, sin `.status`.
+        expect(categorizarErrorWoo(new Error('WooCommerce API error 500'))).toBe('transitorio');
+        expect(categorizarErrorWoo(new Error('WooCommerce API error 404'))).toBe('datos');
+      });
+
+      // Hallazgo del revisor (A5): un error con `.categoria` ya calculada (ej. el circuito
+      // abierto, que sintetiza un error propio sin `.status` real) se respeta tal cual en vez
+      // de inferirla — más precisa que cualquier heurística por status/mensaje.
+      it('respeta e.categoria si ya viene calculada, sin importar el status/mensaje', () => {
+        const err = new Error('Circuito de WooCommerce abierto...');
+        err.categoria = 'rate_limit';
+        expect(categorizarErrorWoo(err)).toBe('rate_limit');
+      });
+    });
+
+    describe('circuit breaker (wooFetchConCircuito)', () => {
+      // Un 500 dispara el backoff completo de wooFetchConReintento ([500,1500,4000]ms reales
+      // por llamada) — con fake timers, cada "llamada que falla" de este describe se resuelve
+      // en microsegundos en vez de ~6s reales × N llamadas.
+      async function fallaTransitoria() {
+        const p = wooFetchConCircuito(cfg, '/x').catch(e => e);
+        await vi.runAllTimersAsync();
+        const err = await p;
+        expect(err).toBeInstanceOf(Error);
+      }
+
+      // Hallazgo del revisor (MEDIO-2, 4ta pasada): el mecanismo de generación (M6+MEDIO-2)
+      // llevaba 3 pasadas sin un test que protegiera específicamente el caso M6 — revertir
+      // `_circuitoWoo.abiertoHasta = 0` a incondicional (deshaciendo el guard de generación)
+      // dejaba el resto de la suite en verde igual.
+      it('un éxito tardío de un worker que arrancó ANTES de la apertura no cierra el circuito', async () => {
+        vi.useFakeTimers();
+        try {
+          let resolverLlamadaVieja;
+          const llamadaVieja = new Promise((resolve) => { resolverLlamadaVieja = resolve; });
+          // Worker "viejo": arranca con el circuito cerrado (generación 0), pero su respuesta
+          // queda pendiente — simula una llamada en vuelo cuando otros workers abren el circuito.
+          axios.request.mockImplementationOnce(() => llamadaVieja);
+          const pViejo = wooFetchConCircuito(cfg, '/x').catch(e => e);
+
+          // Otros 5 workers fallan y abren el circuito (nueva generación) mientras el viejo sigue en vuelo.
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) await fallaTransitoria();
+          expect(circuitoWooAbierto()).toBe(true);
+
+          // Ahora el worker viejo por fin responde 200 — de una generación ya vieja.
+          resolverLlamadaVieja({ status: 200, data: [], headers: {} });
+          await vi.runAllTimersAsync();
+          await pViejo;
+
+          expect(circuitoWooAbierto()).toBe(true); // NO debe haberse cerrado por el éxito tardío
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('tras 5 fallos transitorios consecutivos, la siguiente llamada NO sale a la red', async () => {
+        vi.useFakeTimers();
+        try {
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) await fallaTransitoria();
+
+          axios.request.mockClear();
+          await expect(wooFetchConCircuito(cfg, '/x')).rejects.toThrow(/[Cc]ircuito/);
+          expect(axios.request).not.toHaveBeenCalled(); // el circuito cortó antes de la red
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('manual:true saltea el circuito abierto (un admin que aprieta "recargar" no espera al sistema)', async () => {
+        vi.useFakeTimers();
+        try {
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) await fallaTransitoria();
+
+          axios.request.mockClear();
+          axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+          const resp = await wooFetchConCircuito(cfg, '/x', 'get', null, { manual: true });
+          expect(resp.status).toBe(200);
+          expect(axios.request).toHaveBeenCalledTimes(1); // sí salió a la red pese al circuito abierto
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      // Hallazgo del revisor (MEDIO-2, 3ra pasada): la primera versión de M6 solo comparaba
+      // contra `Date.now() >= abiertoHasta`, así que un éxito DELIBERADO de una prueba manual
+      // (mientras el circuito seguía abierto) quedaba indistinguible de un éxito TARDÍO de un
+      // worker paralelo — ninguno cerraba el circuito hasta que el cooldown venciera solo,
+      // pese a tener en la mano la prueba de que Woo ya respondía bien.
+      it('un éxito manual mientras el circuito está abierto SÍ lo cierra (no solo lo saltea)', async () => {
+        vi.useFakeTimers();
+        try {
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) await fallaTransitoria();
+          expect(circuitoWooAbierto()).toBe(true);
+
+          axios.request.mockClear();
+          axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+          await wooFetchConCircuito(cfg, '/x', 'get', null, { manual: true });
+
+          // El circuito ya no debe seguir abierto: un solo fallo aislado después no debería
+          // reabrirlo de entrada (fallosConsecutivos quedó en 0, no en el umbral - 1).
+          expect(circuitoWooAbierto()).toBe(false);
+          axios.request.mockClear();
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          await fallaTransitoria();
+          expect(circuitoWooAbierto()).toBe(false); // 1 solo fallo no alcanza para reabrir
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('un éxito resetea el contador de fallos consecutivos', async () => {
+        vi.useFakeTimers();
+        try {
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 4; i++) await fallaTransitoria(); // 4, uno menos que el umbral
+
+          axios.request.mockReset();
+          axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+          await wooFetchConCircuito(cfg, '/x'); // éxito: resetea
+
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 4; i++) await fallaTransitoria(); // otros 4 — sin el reset, esto abriría el circuito
+
+          axios.request.mockClear();
+          axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+          const resp = await wooFetchConCircuito(cfg, '/x'); // si el circuito estuviera abierto, esto rechazaría sin red
+          expect(resp.status).toBe(200);
+          expect(axios.request).toHaveBeenCalledTimes(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('errores de "datos" (4xx normales) NO cuentan para abrir el circuito', async () => {
+        axios.request.mockResolvedValue({ status: 404, data: null, headers: {} });
+        for (let i = 0; i < 10; i++) { // muchos más que el umbral de 5
+          await expect(wooFetchConCircuito(cfg, '/x')).rejects.toThrow();
+        }
+        axios.request.mockClear();
+        axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+        const resp = await wooFetchConCircuito(cfg, '/x');
+        expect(resp.status).toBe(200);
+        expect(axios.request).toHaveBeenCalledTimes(1); // el circuito nunca se abrió
+      });
+    });
+
+    describe('métricas de ciclo + incidentes', () => {
+      it('un ciclo exitoso escribe una fila en metricas_ciclo_sync con procesados>0 y fallidos=0', async () => {
+        axios.request.mockResolvedValue({
+          status: 200, headers: {},
+          data: [{ id: 30, name: 'Prod', sku: 'FB-30', type: 'simple', parent_id: 0, stock_quantity: 1 }],
+        });
+        await refrescarCatalogo(db, cfg);
+
+        const fila = db.prepare("SELECT * FROM metricas_ciclo_sync WHERE integracion='woocommerce' ORDER BY id DESC LIMIT 1").get();
+        expect(fila).toBeTruthy();
+        expect(fila.proceso).toBe('refrescar_catalogo');
+        expect(fila.procesados).toBeGreaterThan(0);
+        expect(fila.fallidos).toBe(0);
+        expect(fila.duracion_ms).toBeGreaterThanOrEqual(0);
+      });
+
+      it('un ciclo fallido escribe fallidos=1 y ABRE un incidente clasificado', async () => {
+        axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+        await expect(refrescarCatalogo(db, cfg)).rejects.toThrow();
+
+        const metrica = db.prepare("SELECT * FROM metricas_ciclo_sync WHERE integracion='woocommerce' ORDER BY id DESC LIMIT 1").get();
+        expect(metrica.fallidos).toBe(1);
+
+        const incidente = db.prepare(
+          "SELECT * FROM incidentes_operativos WHERE integracion='woocommerce' AND proceso='refrescar_catalogo' AND estado='activo'"
+        ).get();
+        expect(incidente).toBeTruthy();
+        expect(incidente.tipo_error).toBe('transitorio');
+      }, 10000);
+
+      it('un ciclo sano DESPUÉS de uno fallido resuelve el incidente activo', async () => {
+        axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+        await expect(refrescarCatalogo(db, cfg)).rejects.toThrow();
+        expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
+
+        axios.request.mockReset();
+        axios.request.mockResolvedValue({
+          status: 200, headers: {},
+          data: [{ id: 31, name: 'Prod', sku: 'FB-31', type: 'simple', parent_id: 0, stock_quantity: 1 }],
+        });
+        await refrescarCatalogo(db, cfg);
+
+        expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('resuelto');
+      }, 20000);
+
+      it('reincidir con el mismo tipo de error incrementa el contador en vez de duplicar el incidente', async () => {
+        axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+        await expect(refrescarCatalogo(db, cfg)).rejects.toThrow();
+        await expect(refrescarCatalogo(db, cfg)).rejects.toThrow();
+
+        const total = db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE integracion='woocommerce'").get().n;
+        expect(total).toBe(1);
+        const fila = db.prepare("SELECT contador_repeticiones FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        expect(fila.contador_repeticiones).toBe(2);
+      }, 20000);
+
+      // Hallazgo BLOQUEANTE del revisor (B1): un barrido COMPLETO con 0 productos (el guard
+      // fail-closed) caía en la rama de ÉXITO y resolvía cualquier incidente activo en
+      // silencio — justo el caso ("Woo fallando en silencio") que este sistema existe para
+      // detectar quedaba marcado como "recuperado" sin haberse recuperado.
+      it('un ciclo COMPLETO con 0 productos (guard sospechoso) NO resuelve un incidente activo', async () => {
+        // Primero, un fallo real que abre un incidente.
+        axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+        await expect(refrescarCatalogo(db, cfg, { forzarCompleto: true })).rejects.toThrow();
+        expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
+
+        // Ahora Woo "responde" 200 pero con el catálogo vacío (el caso sospechoso).
+        axios.request.mockReset();
+        axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+        const resultado = await refrescarCatalogo(db, cfg, { forzarCompleto: true });
+
+        expect(resultado).toMatchObject({ total: 0, sospechoso: true });
+        // El incidente del 500 real sigue activo — NO se confirmó ciclo sano por esto.
+        expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
+      }, 20000);
+
+      // Hallazgo del revisor (M2, BAJO-5 en la 3ra pasada): el fix de M2 no tenía test propio
+      // — un revert accidental a tipoError:'datos' (el bug original que este fix cerró)
+      // pasaba en verde igual, porque el test de arriba solo verifica la forma del resultado.
+      it('el incidente de catálogo vacío usa la clave de dedupe catalogo_vacio, no datos', async () => {
+        axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+        const resultado = await refrescarCatalogo(db, cfg, { forzarCompleto: true });
+        expect(resultado).toMatchObject({ total: 0, sospechoso: true });
+        const incidente = db.prepare("SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        expect(incidente.tipo_error).toBe('catalogo_vacio');
+      });
+
+      // Hallazgo del revisor (M5, 2da pasada): un incremental con 0 productos es tan
+      // ambiguo como el caso completo de B1 (¿nada cambió, o Woo está degradado en
+      // silencio?) — confirmar ciclo sano en ese caso resolvía en silencio un incidente
+      // `transitorio` real que seguía activo, con Woo simplemente pasando de tirar 500s a
+      // responder 200 con lista vacía en vez de recuperarse de verdad.
+      it('un incremental con 0 productos tampoco resuelve un incidente activo', async () => {
+        vi.useFakeTimers();
+        try {
+          // Simula que ya corrió un completo hace instantes para forzar el camino incremental.
+          const ahora = new Date().toISOString();
+          for (const clave of ['catalogo_ultimo_completo', 'catalogo_ultimo_refresco']) {
+            db.prepare(`INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)
+              ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en`)
+              .run(clave, ahora, ahora);
+          }
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          await fallaRefresco();
+          expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
+
+          axios.request.mockResolvedValue({ status: 200, headers: {}, data: [] });
+          const total = await refrescarCatalogo(db, cfg);
+          expect(total).toBe(0);
+          expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
+        } finally {
+          vi.useRealTimers();
+        }
+      }, 20000);
+
+      // Hallazgo del revisor (A3): categorizarErrorWoo nunca devuelve 'interno' por sí sola —
+      // sin esta distinción en refrescarCatalogo, un bug PROPIO (no un error de Woo) se
+      // reportaba como "WooCommerce no responde", mandando al operador a mirar el lugar
+      // equivocado.
+      it('un bug propio (no un error de Woo) se clasifica como interno, no transitorio', async () => {
+        // status 200 (no pasa por el throw de wooFetch) pero data=null: `resp.data.length`
+        // explota con un TypeError propio, no un error HTTP de Woo.
+        axios.request.mockResolvedValue({ status: 200, headers: {}, data: null });
+        await expect(refrescarCatalogo(db, cfg)).rejects.toThrow(TypeError);
+
+        const incidente = db.prepare("SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        // Si esto da 'transitorio', la excepción SÍ tenía forma de error HTTP de Woo — el test
+        // no estaría probando el camino 'interno'. Documentado como guía de mantenimiento.
+        expect(incidente.tipo_error).toBe('interno');
+      });
+
+      // Hallazgo del revisor (A1, 2da pasada — regresión introducida por el fix de A3):
+      // la primera versión de A3 usaba una allowlist ("¿tiene status/circuitoAbierto/matchea
+      // el mensaje de Woo?") para decidir 'interno' — pero un timeout real de axios (o un
+      // ECONNRESET) no tiene `.status` (axios solo lo setea si hubo respuesta HTTP) y no
+      // matchea "WooCommerce API error N", así que el outage más común de Woo (la red, no un
+      // status code) terminaba reportado como 'interno' ("bug propio") en vez de
+      // 'transitorio' — justo el diagnóstico que este hito existe para acertar.
+      it('un timeout de red real (sin status) se clasifica como transitorio, no interno', async () => {
+        const timeoutErr = Object.assign(new Error('timeout of 20000ms exceeded'), { code: 'ECONNABORTED' });
+        axios.request.mockRejectedValue(timeoutErr);
+        await expect(refrescarCatalogo(db, cfg)).rejects.toThrow('timeout of 20000ms exceeded');
+
+        const incidente = db.prepare("SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        expect(incidente.tipo_error).toBe('transitorio');
+      }, 20000);
+
+      // Hallazgo del revisor (MEDIO-1, 3ra pasada, sin test propio hasta la 4ta): un WOO_URL
+      // sin HTTPS (típico tras un deploy con .env mal cargado) es un error de configuración
+      // permanente, no un problema de Woo — debe reportarse distinto de 'transitorio'/'interno'
+      // y nunca debe abrir el circuit breaker (no dice nada sobre la salud del servicio).
+      it('un WOO_URL sin HTTPS se clasifica como config, crítico, y no abre el circuito', async () => {
+        const cfgInvalida = { ...cfg, url: 'http://fusionbikes.com.ar' };
+        axios.request.mockResolvedValue({ status: 200, data: [], headers: {} }); // no debería ni llegar a llamarse
+        await expect(refrescarCatalogo(db, cfgInvalida)).rejects.toThrow('WooCommerce URL debe usar HTTPS');
+
+        const incidente = db.prepare("SELECT tipo_error, severidad FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        expect(incidente.tipo_error).toBe('config');
+        expect(incidente.severidad).toBe('critico');
+        expect(circuitoWooAbierto()).toBe(false);
+      });
+
+      // Hallazgo del revisor (A4): test de CABLEADO — si alguien revierte los 2 call sites
+      // internos de wooFetchConCircuito a wooFetchConReintento a secas, el circuito queda
+      // desconectado en silencio y toda la suite anterior de "circuit breaker" (que llama
+      // wooFetchConCircuito directo) sigue en verde igual. Este test pasa por refrescarCatalogo
+      // de punta a punta para detectar esa regresión.
+      async function fallaRefresco(opts) {
+        const p = refrescarCatalogo(db, cfg, opts).catch(e => e);
+        await vi.runAllTimersAsync();
+        return p;
+      }
+
+      it('CABLEADO: refrescarCatalogo abre el circuito tras fallos sostenidos y bloquea sin salir a red', async () => {
+        vi.useFakeTimers();
+        try {
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) expect(await fallaRefresco()).toBeInstanceOf(Error);
+
+          axios.request.mockClear();
+          const err = await fallaRefresco();
+          expect(err.message).toMatch(/[Cc]ircuito/);
+          expect(axios.request).not.toHaveBeenCalled(); // si no estuviera cableado, esto saldría a la red
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('CABLEADO: forzarCompleto:true saltea el circuito abierto (el botón manual sí sale a la red)', async () => {
+        vi.useFakeTimers();
+        try {
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) expect(await fallaRefresco()).toBeInstanceOf(Error);
+
+          axios.request.mockClear();
+          axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+          const p = refrescarCatalogo(db, cfg, { forzarCompleto: true });
+          await vi.runAllTimersAsync();
+          await p;
+          expect(axios.request).toHaveBeenCalled(); // sí salió a la red pese al circuito abierto
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      // Hallazgo del revisor (A5): con el circuito abierto por rate_limit sostenido, el
+      // incidente reportado debía decir 'rate_limit', no 'transitorio' (el error sintético del
+      // circuito no tiene .status real).
+      it('CABLEADO: el incidente abierto por el circuito conserva la categoría real (rate_limit), no "transitorio" genérico', async () => {
+        vi.useFakeTimers();
+        try {
+          axios.request.mockResolvedValue({ status: 429, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) expect(await fallaRefresco()).toBeInstanceOf(Error);
+
+          axios.request.mockClear();
+          const err = await fallaRefresco();
+          expect(err.message).toMatch(/[Cc]ircuito/);
+
+          const incidente = db.prepare(
+            "SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce' ORDER BY id DESC LIMIT 1"
+          ).get();
+          expect(incidente.tipo_error).toBe('rate_limit');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+  });
 
   it('refrescarCatalogo writes fetched products into catalogo_cache', async () => {
     axios.request.mockResolvedValue({

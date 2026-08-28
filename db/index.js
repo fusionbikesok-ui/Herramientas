@@ -385,5 +385,26 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_incidentes_hist_incidente ON incidentes_operativos_historial(incidente_id)'); } catch (_) {}
 
+  // Métricas de ciclo de sync (Hito 3/4 del plan de confiabilidad, 2026-08-27): una fila por
+  // corrida de un ciclo de sync completo (refresco de catálogo Woo, refresco de publicaciones
+  // ML, etc.), complementa — no reemplaza — el estado en memoria que cada módulo ya trackea
+  // para "hay una corrida en curso ahora" (`_refrescarCatalogoEnCurso` en routes/woo.js,
+  // `_refresco` en routes/matcher.js). Esto es historia persistida para poder ver tendencias
+  // (¿empeoró esta semana?), no el candado de concurrencia.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS metricas_ciclo_sync (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    integracion TEXT NOT NULL,
+    proceso TEXT NOT NULL,
+    iniciado_en TEXT NOT NULL,
+    finalizado_en TEXT,
+    duracion_ms INTEGER,
+    procesados INTEGER NOT NULL DEFAULT 0,
+    fallidos INTEGER NOT NULL DEFAULT 0,
+    reintentados INTEGER NOT NULL DEFAULT 0,
+    circuito_abierto INTEGER NOT NULL DEFAULT 0,
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_metricas_ciclo_integracion ON metricas_ciclo_sync(integracion, proceso, iniciado_en)'); } catch (_) {}
+
   return db;
 }

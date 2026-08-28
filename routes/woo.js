@@ -4,6 +4,7 @@ import { normalizarProductoWc, normalizarVariacionWc, filaCatalogo } from '../li
 import { mapConLimite } from '../lib/concurrencia.js';
 import { buildWooPath } from '../lib/wooStock.js';
 import { syncSkuPuntual } from './sync.js';
+import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 
 const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refresco
 
@@ -14,9 +15,35 @@ const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refres
 // no dispararlas todas de golpe y evitar rate-limits/carga en WooCommerce.
 const WOO_CONCURRENCIA_MAX = 4;
 
+// `Retry-After` puede venir en segundos (entero) o como fecha HTTP (RFC 7231) — Woo/el
+// hosting delante no documentan cuál eligen, así que se soportan los dos.
+//
+// Hallazgo del revisor: `Number('')`, `Number('  ')` y `Number([])` dan `0` (no `NaN`), así
+// que un header vacío/malformado pasaba el `>= 0` y devolvía 0ms — con eso, wooFetchConReintento
+// dormía 0ms en vez del backoff, disparando 3 reintentos inmediatos justo contra un Woo que
+// pidió frenar. Se exige explícitamente un string no vacío antes de intentar parsear.
+function parseRetryAfterMs(valorHeader) {
+  if (typeof valorHeader !== 'string' || !valorHeader.trim()) return null;
+  const texto = valorHeader.trim();
+  // Solo dígitos (RFC 7231: la forma "delay-seconds" es un entero no negativo tal cual, sin
+  // signo). Un "-5" NO debe caer a Date.parse('-5') — eso resuelve a una fecha real (año 2001,
+  // "2001-05" corto) muy en el pasado, que Math.max(0,...) clampeaba a 0ms sin avisar.
+  if (/^\d+$/.test(texto)) return Number(texto) * 1000;
+  const fechaMs = Date.parse(texto);
+  return Number.isNaN(fechaMs) ? null : Math.max(0, fechaMs - Date.now());
+}
+
 export async function wooFetch(cfg, path, method = 'get', body = null) {
   if (!cfg.url.startsWith('https://')) {
-    throw new Error('WooCommerce URL debe usar HTTPS');
+    // Hallazgo del revisor (MEDIO-1, 3ra pasada): sin `.categoria`, categorizarErrorWoo caía a
+    // 'transitorio' (sin status, sin match con el mensaje de Woo) — un WOO_URL mal configurado
+    // en el .env tras un deploy generaba un incidente recurrente de "WooCommerce no responde"
+    // cada 5 minutos, mandando al operador a revisar hosting/red/firewall por un problema que
+    // es una variable de entorno y nunca se autoresuelve solo. Mismo mecanismo que A5 (el
+    // circuito abierto) para fijar la categoría en el origen.
+    const err = new Error('WooCommerce URL debe usar HTTPS');
+    err.categoria = 'config';
+    throw err;
   }
   const url = cfg.url.replace(/\/$/, '') + '/wp-json/wc/v3' + path;
   const resp = await axios.request({
@@ -28,7 +55,13 @@ export async function wooFetch(cfg, path, method = 'get', body = null) {
     validateStatus: () => true
   });
   if (resp.status < 200 || resp.status >= 300) {
-    throw new Error(`WooCommerce API error ${resp.status}`);
+    const err = new Error(`WooCommerce API error ${resp.status}`);
+    // .status/.retryAfterMs: propiedades nuevas, no rompen los `new Error('WooCommerce API
+    // error 500')` que ya usan los tests existentes (quedan undefined ahí, wooFetchConReintento
+    // cae al parseo del mensaje como antes — ver parseStatusDelMensaje).
+    err.status = resp.status;
+    err.retryAfterMs = parseRetryAfterMs(resp.headers?.['retry-after']);
+    throw err;
   }
   return resp;
 }
@@ -37,10 +70,43 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Backoff acotado a 3 reintentos (mismo patrón que VERIF_WC_BACKOFF_MS en routes/sync.js).
 const WOO_RETRY_BACKOFF_MS = [500, 1500, 4000];
+// Techo de espera si Woo manda Retry-After: por encima de esto no tiene sentido bloquear el
+// ciclo actual esperando — mejor abortar (fail-closed, como ya hace el resto de la función) y
+// que la próxima corrida del cron lo reintente fresco.
+const RETRY_AFTER_MAX_MS = 60_000;
+
+function parseStatusDelMensaje(msg) {
+  const m = /WooCommerce API error (\d+)/.exec(msg ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Clasifica un error de Woo en una de 5 categorías reportables (incidente 2026-08-27, plan de
+ * confiabilidad operativa): `rate_limit` (429), `auth` (401/403 — credencial revocada o mal
+ * configurada, no se arregla reintentando ni con backoff), `transitorio` (5xx, timeout, error
+ * de red — el único caso donde reintentar tiene sentido más allá del rate-limit),
+ * `datos` (400/404/422 — Woo rechazó la request en sí, un producto/payload puntual, no debe
+ * frenar el resto del lote ni activar el circuit breaker), `interno` (excepción no-HTTP:
+ * bug propio, parseo, etc.).
+ */
+export function categorizarErrorWoo(e) {
+  // Si algo ya calculó la categoría de antemano (ej. el circuito abierto, que sintetiza un
+  // error propio sin `.status` real — ver wooFetchConCircuito) se respeta tal cual: es más
+  // precisa que cualquier inferencia por status/mensaje.
+  if (e?.categoria) return e.categoria;
+  const status = e?.status ?? parseStatusDelMensaje(e?.message);
+  if (status === 429) return 'rate_limit';
+  if (status === 401 || status === 403) return 'auth';
+  if (status != null && status >= 500) return 'transitorio';
+  if (status != null) return 'datos'; // cualquier otro 4xx: Woo evaluó y rechazó
+  return 'transitorio'; // sin status HTTP: timeout/ECONNRESET/DNS — mismo trato que 5xx
+}
 
 /**
  * wooFetch con reintento ante errores TRANSITORIOS (5xx de Woo, timeout, error de red).
  * NO reintenta 4xx (401/403/404/422/etc.): esos no se arreglan reintentando la misma request.
+ * 429 es la excepción: SÍ se reintenta, respetando `Retry-After` si Woo lo manda (en vez del
+ * backoff fijo) — por encima de `RETRY_AFTER_MAX_MS` se aborta en vez de bloquear el ciclo.
  *
  * Motivo (incidente 2026-08-27): `_refrescarCatalogo` pagina decenas de páginas de
  * `/products` sin ningún try/catch; un solo 500/503 transitorio de Woo en cualquier página
@@ -56,7 +122,16 @@ const WOO_RETRY_BACKOFF_MS = [500, 1500, 4000];
 export async function wooFetchConReintento(cfg, path, method = 'get', body = null) {
   let ultimoError;
   for (let intento = 0; intento <= WOO_RETRY_BACKOFF_MS.length; intento++) {
-    if (intento > 0) await sleep(WOO_RETRY_BACKOFF_MS[intento - 1]);
+    if (intento > 0) {
+      // Piso = el backoff normal de este intento: un Retry-After:0 (legal, "reintentá ya")
+      // no debe bajar por debajo de lo que ya considerábamos seguro (hallazgo del revisor:
+      // sin este piso, un header en 0 o casi disparaba 3 reintentos casi inmediatos contra
+      // un Woo que recién pidió frenar).
+      const esperaMs = (ultimoError?.status === 429 && ultimoError?.retryAfterMs != null)
+        ? Math.max(ultimoError.retryAfterMs, WOO_RETRY_BACKOFF_MS[intento - 1])
+        : WOO_RETRY_BACKOFF_MS[intento - 1];
+      await sleep(esperaMs);
+    }
     try {
       return await wooFetch(cfg, path, method, body);
     } catch (e) {
@@ -65,8 +140,10 @@ export async function wooFetchConReintento(cfg, path, method = 'get', body = nul
       // Error de configuración (URL sin HTTPS): nunca es transitorio, reintentarlo repite el
       // mismo fallo 4 veces por nada.
       if (msg.includes('WooCommerce URL debe usar HTTPS')) throw e;
-      const m = /WooCommerce API error (\d+)/.exec(msg);
-      const status = m ? Number(m[1]) : null;
+      const status = e.status ?? parseStatusDelMensaje(msg);
+      // 429 con Retry-After más largo de lo razonable: abortar ahora en vez de bloquear todo
+      // el ciclo esperando — la próxima corrida (5-10 min) lo reintenta fresco.
+      if (status === 429 && e.retryAfterMs != null && e.retryAfterMs > RETRY_AFTER_MAX_MS) throw e;
       // 429 (rate-limit) SÍ se reintenta pese a ser 4xx: es transitorio por definición, y
       // routes/sync.js:415-417 ya documenta el mismo criterio para Woo ("timeouts / errores
       // de red / 5xx / 429 dejan dudas" — un 4xx normal significa que Woo rechazó la
@@ -77,6 +154,105 @@ export async function wooFetchConReintento(cfg, path, method = 'get', body = nul
     }
   }
   throw ultimoError;
+}
+
+// ── Circuit breaker (incidente 2026-08-27, plan de confiabilidad) ─────────────────────────
+// Mismo patrón de candado en memoria que _refrescarCatalogoEnCurso (más abajo) y el cooldown
+// de lib/mlClient.js, pero para una noción distinta: no es "hay una corrida en vuelo", es
+// "Woo viene fallando de forma sostenida, no vale la pena seguir golpeándolo". Sin esto, un
+// Woo caído de verdad (no un blip transitorio) sigue recibiendo el ciclo completo de
+// reintentos en CADA página de CADA corrida del cron — una tormenta de requests contra un
+// servicio que ya está mal, justo cuando menos lo puede soportar.
+const CIRCUITO_UMBRAL_FALLOS = 5;
+const CIRCUITO_COOLDOWN_MS = 5 * 60 * 1000;
+// `generacion` (hallazgo del revisor, MEDIO-2): identifica cada episodio de apertura del
+// circuito para distinguir un éxito TARDÍO de un worker paralelo (M6, no debe cerrar) de un
+// éxito DELIBERADO de una prueba manual (`manual:true`) mientras el circuito sigue abierto
+// (sí debe cerrar). `Date.now()` solo no alcanza para distinguirlos: los dos ocurren mientras
+// `abiertoHasta` sigue en el futuro. Se incrementa únicamente cuando el circuito ABRE de
+// verdad (no en el medio-abierto de M7, que es el mismo episodio continuando).
+let _circuitoWoo = { fallosConsecutivos: 0, abiertoHasta: 0, ultimaCategoria: null, generacion: 0 };
+
+export function circuitoWooAbierto() {
+  if (Date.now() < _circuitoWoo.abiertoHasta) return true;
+  // Medio-abierto (hallazgo del revisor, M7): al vencer el cooldown sin esto, el PRIMER
+  // fallo post-cooldown reabría otros 5 min completos porque `fallosConsecutivos` seguía en
+  // el umbral — un solo blip aislado bastaba para repetir el castigo entero aunque Woo ya
+  // esté sano. Al detectar que el cooldown venció, se deja pasar UNA prueba (se resta 1 al
+  // contador) en vez de resetear a 0 de golpe: si esa prueba también falla, alcanza para
+  // reabrir con un solo fallo más, sin volver a esperar 5 fallos limpios desde cero.
+  if (_circuitoWoo.abiertoHasta !== 0) {
+    _circuitoWoo.abiertoHasta = 0;
+    _circuitoWoo.fallosConsecutivos = CIRCUITO_UMBRAL_FALLOS - 1;
+  }
+  return false;
+}
+
+// Exportado solo para tests — mismo criterio que _resetCooldownParaTests en lib/mlClient.js.
+export function _resetCircuitoWooParaTests() {
+  _circuitoWoo = { fallosConsecutivos: 0, abiertoHasta: 0, ultimaCategoria: null, generacion: 0 };
+}
+
+function circuitoWooRegistrarResultado(categoria, generacionAlLlamar) {
+  // Un error de `datos` (Woo rechazó ESE producto puntual), `auth` o `config` (URL sin
+  // HTTPS — MEDIO-1: ni siquiera llega a salir a red) no dice nada sobre la salud general
+  // del servicio — no debe abrir el circuito, y tampoco debe resetear una racha de fallos
+  // transitorios en curso (ver más abajo, se ignora en ambos sentidos).
+  if (categoria === 'datos' || categoria === 'auth' || categoria === 'config') return;
+  if (categoria === null) { // éxito
+    _circuitoWoo.fallosConsecutivos = 0;
+    // Hallazgo del revisor (M6, corregido en MEDIO-2 de la 3ra pasada): NO pisar un
+    // `abiertoHasta` que sigue en el futuro salvo que este éxito sea de la MISMA generación
+    // que vio el circuito abierto (o ya haya vencido solo). Con solo `Date.now()`, un éxito
+    // TARDÍO de un worker paralelo que arrancó antes de que otros abrieran el circuito era
+    // indistinguible de un éxito DELIBERADO de una prueba manual (`manual:true`, salteando el
+    // circuito) hecha para verificar si Woo ya se recuperó — la primera versión de este fix
+    // dejaba el segundo caso sin poder cerrar nunca el circuito hasta que venciera el cooldown
+    // solo, pese a tener la prueba de que Woo respondía bien en la mano.
+    if (Date.now() >= _circuitoWoo.abiertoHasta || generacionAlLlamar === _circuitoWoo.generacion) {
+      _circuitoWoo.abiertoHasta = 0;
+    }
+    return;
+  }
+  _circuitoWoo.ultimaCategoria = categoria;
+  _circuitoWoo.fallosConsecutivos++;
+  if (_circuitoWoo.fallosConsecutivos >= CIRCUITO_UMBRAL_FALLOS) {
+    _circuitoWoo.abiertoHasta = Date.now() + CIRCUITO_COOLDOWN_MS;
+    _circuitoWoo.generacion++;
+  }
+}
+
+/**
+ * `wooFetchConReintento` con el circuit breaker por delante: si el circuito está abierto,
+ * falla YA (sin salir a red) salvo `manual:true` (mismo criterio que las llamadas manuales de
+ * ML saltean su cooldown — un admin que aprieta "recargar" a mano quiere intentarlo de nuevo
+ * ahora, no que el sistema decida por él). Actualiza el estado del circuito según el
+ * resultado real de cada llamada.
+ */
+export async function wooFetchConCircuito(cfg, path, method = 'get', body = null, { manual = false } = {}) {
+  // Capturado ANTES de intentar la llamada (MEDIO-2): identifica el episodio de apertura que
+  // esta llamada "vio" al arrancar, para que circuitoWooRegistrarResultado distinga un éxito
+  // de esta misma generación (cierra) de un éxito tardío de una generación ya vieja (no cierra).
+  const generacionAlLlamar = _circuitoWoo.generacion;
+  if (!manual && circuitoWooAbierto()) {
+    // Hallazgo del revisor (A5): sin `.categoria`, categorizarErrorWoo caía siempre a
+    // 'transitorio' para este error sintético (no tiene `.status` real) — si lo que abrió el
+    // circuito fue en realidad un rate-limit sostenido, el incidente reportado decía
+    // "no responde" en vez de "está limitando la frecuencia", justo el diagnóstico que más
+    // importa acertar en el caso sostenido que amerita acción humana.
+    const err = new Error('Circuito de WooCommerce abierto por fallos sostenidos — se pospone hasta que se recupere');
+    err.circuitoAbierto = true;
+    err.categoria = _circuitoWoo.ultimaCategoria ?? 'transitorio';
+    throw err;
+  }
+  try {
+    const resp = await wooFetchConReintento(cfg, path, method, body);
+    circuitoWooRegistrarResultado(null, generacionAlLlamar);
+    return resp;
+  } catch (e) {
+    if (!e.circuitoAbierto) circuitoWooRegistrarResultado(categorizarErrorWoo(e), generacionAlLlamar);
+    throw e;
+  }
 }
 
 // Claves en sync_estado que gobiernan el modo incremental (ver plan
@@ -174,13 +350,106 @@ export function registrarAlertasStockNegativo(db, ahora = new Date().toISOString
   tx();
 }
 
+const INTEGRACION_WOO = 'woocommerce';
+const PROCESO_REFRESCAR_CATALOGO = 'refrescar_catalogo';
+
+const MENSAJE_HUMANO_POR_CATEGORIA = {
+  rate_limit: 'WooCommerce está limitando la frecuencia de refrescos del catálogo (429).',
+  auth: 'WooCommerce rechazó las credenciales del catálogo — revisar Consumer Key/Secret.',
+  transitorio: 'WooCommerce no responde de forma sostenida al refrescar el catálogo.',
+  datos: 'WooCommerce rechazó una solicitud puntual al refrescar el catálogo.',
+  interno: 'Error interno al refrescar el catálogo de WooCommerce.',
+  config: 'Configuración inválida de WooCommerce (URL sin HTTPS) — revisar variables de entorno, no la conexión.',
+};
+
+function registrarMetricaCiclo(db, { integracion, proceso, iniciadoEn, inicioMonotonico, procesados, fallidos, circuitoAbierto }) {
+  try {
+    const finalizadoEn = new Date().toISOString();
+    // performance.now() (reloj monotónico) para la DURACIÓN, no Date.now()/los ISO strings:
+    // un ajuste de reloj del sistema (NTP) durante el ciclo podía dar una duración negativa
+    // con el reloj de pared (hallazgo del revisor, mismo tipo de problema ya visto en otro
+    // hito de este plan). Los timestamps ISO quedan igual, son solo para mostrar/ordenar.
+    const duracionMs = Math.round(performance.now() - inicioMonotonico);
+    db.prepare(`
+      INSERT INTO metricas_ciclo_sync
+        (integracion, proceso, iniciado_en, finalizado_en, duracion_ms, procesados, fallidos, reintentados, circuito_abierto, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(integracion, proceso, iniciadoEn, finalizadoEn, duracionMs, procesados, fallidos, circuitoAbierto ? 1 : 0, finalizadoEn);
+  } catch (e) {
+    // Telemetría, nunca debe tumbar el ciclo real que la dispara.
+    console.error('[woo] error registrando métrica de ciclo (no afecta el refresco):', e.message);
+  }
+}
+
 // options.forzarCompleto: true fuerza un barrido completo (usado por el botón manual
-// POST /catalogo/recargar, que siempre debe traer y podar TODO, sin depender del cron).
+// POST /catalogo/recargar, que siempre debe traer y podar TODO, sin depender del cron) — y
+// además saltea el circuit breaker (ver wooFetchConCircuito): un admin que aprieta "recargar"
+// a mano quiere intentarlo ahora, no que el sistema decida por él.
 export async function refrescarCatalogo(db, cfg, opts = {}) {
   if (_refrescarCatalogoEnCurso) return { omitido: true, motivo: 'en_curso' };
   _refrescarCatalogoEnCurso = true;
+  const inicioMetrica = new Date().toISOString();
+  const inicioMonotonico = performance.now();
   try {
-    return await _refrescarCatalogo(db, cfg, opts);
+    const resultado = await _refrescarCatalogo(db, cfg, opts);
+    const sospechoso = resultado && typeof resultado === 'object' && resultado.sospechoso;
+    registrarMetricaCiclo(db, {
+      integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO, iniciadoEn: inicioMetrica, inicioMonotonico,
+      procesados: typeof resultado === 'number' ? resultado : 0, fallidos: sospechoso ? 1 : 0,
+    });
+    if (sospechoso) {
+      // Hallazgo BLOQUEANTE del revisor (B1): NO se confirma ciclo sano acá — un catálogo
+      // completo con 0 productos es siempre sospechoso (ver _refrescarCatalogo), y confirmar
+      // resolvería en silencio cualquier incidente `transitorio` real que siga activo.
+      // Hallazgo del revisor (M2): usar 'datos' acá compartía la misma clave de dedupe
+      // (integracion|proceso|tipoError) que el catch genérico de más abajo, que también usa
+      // 'datos' para un 4xx puntual — un 404 aislado en la corrida siguiente pisaba este
+      // incidente de "catálogo vacío" con "WooCommerce rechazó una solicitud puntual",
+      // perdiendo la señal original. 'catalogo_vacio' es su propia clave.
+      abrirOActualizarIncidente(db, {
+        integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO, tipoError: 'catalogo_vacio',
+        severidad: 'advertencia',
+        mensajeTecnico: 'Barrido completo devolvió 0 productos — poda omitida por seguridad',
+        mensajeHumano: 'WooCommerce devolvió el catálogo vacío en un barrido completo — revisar antes de confiar en el catálogo local.',
+        contexto: { forzarCompleto: !!opts.forzarCompleto },
+      });
+      return resultado;
+    }
+    // Hallazgo del revisor (M5): un incremental con 0 productos es ambiguo por diseño — el
+    // propio _refrescarCatalogo documenta que puede ser "nada cambió" o "Woo degradado en
+    // silencio" y por eso NO avanza la marca de frescura. Confirmar ciclo sano acá igual
+    // resolvía cualquier incidente `transitorio` activo con la misma ambigüedad que el caso
+    // B1 ya cerró para el completo — un Woo que pasó de tirar 500s a responder 200 vacío
+    // "se veía" recuperado sin que el catálogo realmente lo esté. Solo se confirma cuando el
+    // ciclo trajo productos de verdad (señal inequívoca de que Woo respondió con datos).
+    if (typeof resultado === 'number' && resultado === 0) return resultado;
+    confirmarCicloSano(db, { integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO });
+    return resultado;
+  } catch (e) {
+    // Hallazgo del revisor (A3, corregido tras regresión detectada en la 2da pasada): la
+    // primera versión usaba una allowlist ("¿vino de HTTP?") para decidir 'interno' — pero un
+    // timeout de axios o un ECONNRESET real NO tienen `.status` (axios solo lo setea si hubo
+    // respuesta) y tampoco matchean el mensaje "WooCommerce API error N", así que cualquier
+    // falla de red genuina — el outage más común y justo lo que este hito existe para
+    // detectar — se reportaba como 'interno' ("bug propio") en vez de 'transitorio'.
+    // Ahora se usa una denylist: solo se clasifica como bug propio un error de un tipo que
+    // categorizarErrorWoo no podría producir (TypeError/RangeError de nuestro código,
+    // SqliteError de la persistencia) — cualquier otra cosa (incluido "sin status, sin
+    // match") sigue el criterio ya correcto de categorizarErrorWoo (sin status → transitorio).
+    const esBugPropio = e instanceof TypeError || e instanceof RangeError || e?.name === 'SqliteError';
+    const categoria = esBugPropio ? 'interno' : categorizarErrorWoo(e);
+    registrarMetricaCiclo(db, {
+      integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO, iniciadoEn: inicioMetrica, inicioMonotonico,
+      procesados: 0, fallidos: 1, circuitoAbierto: !!e.circuitoAbierto,
+    });
+    abrirOActualizarIncidente(db, {
+      integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO, tipoError: categoria,
+      severidad: (categoria === 'auth' || categoria === 'config') ? 'critico' : (categoria === 'datos' ? 'info' : 'advertencia'),
+      mensajeTecnico: e.message,
+      mensajeHumano: MENSAJE_HUMANO_POR_CATEGORIA[categoria] ?? MENSAJE_HUMANO_POR_CATEGORIA.interno,
+      contexto: { forzarCompleto: !!opts.forzarCompleto, circuitoAbierto: !!e.circuitoAbierto },
+    });
+    throw e; // el comportamiento ante el caller (cron/endpoint) no cambia — solo se agrega telemetría.
   } finally {
     _refrescarCatalogoEnCurso = false;
   }
@@ -212,7 +481,7 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
   const crudos = [];
   let page = 1;
   while (page <= MAX_PAGES) {
-    const resp = await wooFetchConReintento(cfg, `/products?per_page=100&page=${page}&status=any${modifiedAfterQS}`);
+    const resp = await wooFetchConCircuito(cfg, `/products?per_page=100&page=${page}&status=any${modifiedAfterQS}`, 'get', null, { manual: forzarCompleto });
     if (!resp.data.length) break;
     crudos.push(...resp.data);
     if (resp.data.length < 100) break;
@@ -248,7 +517,7 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
         // antes de rendirse). El aislamiento por producto padre (mapConLimite + try/catch)
         // sigue igual: esto solo reduce la chance de llegar a ese catch por una falla que
         // se hubiera resuelto sola.
-        const vresp = await wooFetchConReintento(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`);
+        const vresp = await wooFetchConCircuito(cfg, `/products/${vp.id}/variations?per_page=100&page=${vpage}&status=any`, 'get', null, { manual: forzarCompleto });
         if (!vresp.data.length) break;
         for (const v of vresp.data) {
           if (!v.sku) continue;
@@ -311,7 +580,20 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
     // se trae completo y correcto — sin ventana ciega ni log de sospecha en el camino feliz.
     if (completo) {
       console.warn('[woo] refrescarCatalogo: WooCommerce devolvió 0 productos, se omite la poda de catalogo_cache por seguridad (posible corte/permiso, no un catálogo real vacío).');
+      // Hallazgo BLOQUEANTE del revisor (B1): un `return 0` acá caía en la rama de ÉXITO de
+      // `refrescarCatalogo` y llamaba `confirmarCicloSano`, resolviendo cualquier incidente
+      // `transitorio` que ya estuviera activo — justo el caso ("Woo fallando en silencio") que
+      // este sistema de incidentes existe para detectar quedaba marcado como "recuperado" sin
+      // haberse recuperado. En COMPLETO, 0 productos SIEMPRE es sospechoso (nunca es un
+      // catálogo real vacío, ver comentario de arriba) — se marca explícito para que el
+      // wrapper abra/actualice un incidente en vez de confirmar el ciclo como sano.
+      return { total: 0, sospechoso: true };
     }
+    // En INCREMENTAL, 0 es el camino feliz más común (nada cambió desde la marca) — no se
+    // marca sospechoso ni abre incidente por esto solo. Pero (hallazgo del revisor, MEDIO-3
+    // tras el fix de M5) TAMPOCO confirma ciclo sano: sigue siendo ambiguo entre "nada
+    // cambió de verdad" y "Woo degradado en silencio", ver el wrapper `refrescarCatalogo`
+    // (retorna temprano sin confirmar cuando el resultado numérico es 0).
     return 0;
   }
   // La poda (detectar y borrar productos ya no vigentes en Woo) SOLO corre en el barrido
@@ -407,6 +689,9 @@ export function wooRouter(db, cfg) {
       // catálogo estuviera realmente vacío.
       if (resultado && typeof resultado === 'object' && resultado.omitido) {
         return res.json({ ok: true, omitido: true, motivo: resultado.motivo });
+      }
+      if (resultado && typeof resultado === 'object' && resultado.sospechoso) {
+        return res.json({ ok: true, total: 0, sospechoso: true });
       }
       res.json({ ok: true, total: resultado });
     } catch (e) {
