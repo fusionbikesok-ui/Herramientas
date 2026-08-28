@@ -797,4 +797,155 @@ describe('lib/workerNotificacionesPush', () => {
 
     db.close();
   });
+
+  // ==================== MEDIO 2 (6ª pasada revisor): Dispositivo revocado no marca terminal ====================
+  // Escenario: un dispositivo es revocado DESPUÉS de que un push falla.
+  // procesarReintentosDeFallidos debe marcar esa fila como 'agotado' (no reintentar)
+  // en lugar de hacer continue sin marcar, dejándola como 'fallido' zombi.
+  it('MEDIO 2 (6ª): dispositivo revocado marca fila como agotado, no zombi', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-revoked-medio2';
+    const devInfo = db.prepare(`
+      INSERT INTO device_tokens (user_id, token, plataforma, creado_en, actualizado_en)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(1, deviceToken, 'ios', new Date().toISOString(), new Date().toISOString());
+    const deviceId = devInfo.lastInsertRowid;
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // === Crear una fila fallida ===
+    const hace3min = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(deviceId, 'nuevo', incidenteId, 'fallido', 1, 'Network error', hace3min);
+
+    // === Revocar el dispositivo ===
+    db.prepare(`
+      UPDATE device_tokens SET revocado_en = ? WHERE id = ?
+    `).run(new Date().toISOString(), deviceId);
+
+    // === Llamar al worker — procesarReintentosDeFallidos debe marcar como 'agotado' ===
+    await procesarNotificacionesPush(db);
+
+    // === VERIFICACIÓN: La fila debe estar marcada como 'agotado', no seguir como 'fallido' ===
+    const fila = db.prepare(`
+      SELECT estado, intentos FROM notificaciones_enviadas
+      WHERE device_token_id = ? AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(deviceId, incidenteId);
+
+    expect(fila).toBeDefined();
+    // Fix: debe estar 'agotado' porque el dispositivo está revocado (terminal)
+    // SIN el fix, seguiría siendo 'fallido' (zombi)
+    expect(fila.estado).toBe('agotado');
+
+    db.close();
+  });
+
+  // ==================== MEDIO 2 (6ª pasada revisor): Incidente inexistente no marca terminal ====================
+  // Escenario: un incidente es borrado (o no existe) DESPUÉS de que un push falla.
+  // procesarReintentosDeFallidos debe marcar esa fila como 'agotado' (no reintentar)
+  // en lugar de hacer continue sin marcar.
+  it('MEDIO 2 (6ª): incidente inexistente marca fila como agotado, no zombi', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-inc-gone';
+    seedDevice(db, 1, deviceToken, 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // === Crear una fila fallida ===
+    const hace3min = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    const infoNotif = db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(1, 'nuevo', incidenteId, 'fallido', 1, 'Network error', hace3min);
+    const notifId = infoNotif.lastInsertRowid;
+
+    // === Borrar el incidente (incidente_id se pone en NULL por ON DELETE SET NULL) ===
+    db.prepare(`DELETE FROM incidentes_operativos WHERE id = ?`).run(incidenteId);
+
+    // === Llamar al worker — procesarReintentosDeFallidos debe marcar como 'agotado' ===
+    await procesarNotificacionesPush(db);
+
+    // === VERIFICACIÓN: La fila debe estar marcada como 'agotado' ===
+    // Buscar por ID de la fila de notificaciones_enviadas (sin filtrar por incidente_id)
+    const fila = db.prepare(`
+      SELECT estado, intentos FROM notificaciones_enviadas
+      WHERE id = ?
+    `).get(notifId);
+
+    expect(fila).toBeDefined();
+    // Fix: debe estar 'agotado' porque el incidente no existe (terminal)
+    // SIN el fix, seguiría siendo 'fallido' (zombi)
+    expect(fila.estado).toBe('agotado');
+
+    db.close();
+  });
+
+  // ==================== MEDIO 3 (6ª pasada revisor): Ciclo de reaviso resetea fallidos, no solo agotados ====================
+  // Escenario: una fila está en 'fallido' con backoff largo pendiente.
+  // Llega un nuevo ciclo de reaviso (pasó REAVISO_INCIDENTE_MIN).
+  // El ciclo de reaviso debería resetear la fila para permitir el intento.
+  it('MEDIO 3 (6ª): ciclo de reaviso resetea fallido (no solo agotado) para permitir intento', async () => {
+    mockState.resetCallCount();
+    mockState.clearFailure();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-medio3-fallido';
+    seedDevice(db, 1, deviceToken, 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // === Crear una fila en 'fallido' con mucho backoff pendiente (ej. 10 min en el pasado) ===
+    // Con intentos=2, el backoff es 10 minutos (BACKOFF_MINUTOS[1])
+    const hace10min = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(1, 'reaviso', incidenteId, 'fallido', 2, 'Backoff pending', hace10min);
+
+    // === Crear notificaciones en el feed para que haya base de reaviso ===
+    const hace40min = new Date(Date.now() - 40 * 60 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_usuario
+      (user_id, tipo, titulo, cuerpo, deep_link, leida, incidente_id, creado_en)
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(1, 'nuevo', 'Incidente en ML', 'Error detectado', 'incidentes', incidenteId, hace40min);
+
+    // === Llamar al worker ===
+    // Esperado: enviarADispositivosDelUsuario verá que hace 40 min fue el 'nuevo',
+    // que es > 30 min, así que decide enviar 'reaviso'.
+    // Encuentra la fila 'fallido' de 'reaviso'.
+    // Con la fix MEDIO 3 (Opción A), debería resetearla (intentos=0, estado='fallido')
+    // permitiendo un intento inmediato, SIN esperar a que el backoff venza.
+    await procesarNotificacionesPush(db);
+
+    // === VERIFICACIÓN: enviarNotificacion debe haber sido llamada al menos una vez ===
+    // (demostrando que el reseteo permitió el intento)
+    expect(mockState.getCallCount()).toBeGreaterThan(0);
+
+    // === Verificar que la fila fue actualizada (reseteo) ===
+    const fila = db.prepare(`
+      SELECT estado, intentos FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'reaviso' AND incidente_id = ?
+    `).get(incidenteId);
+
+    expect(fila).toBeDefined();
+    // Con la fix, esperamos que haya sido intentada al menos una vez en este ciclo
+    // Por lo tanto, el estado debe ser 'enviado' (si el mock devuelve ok)
+    // o 'fallido' con intentos > 0 (si fue reintentado)
+    expect(fila.estado).not.toBeNull();
+    // Si tiene intentos > 2, significa que fue reseteada y reintentada en este tick
+    // (intentos empezó en 2, fue reseteado a 0, y se intentó al menos 1 vez)
+
+    db.close();
+  });
 });

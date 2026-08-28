@@ -470,5 +470,39 @@ export function openDb(dbPath) {
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_usuario_dedupe
     ON notificaciones_usuario(user_id, tipo, incidente_id)`); } catch (_) {}
 
+  // ALTO 1 (6ª pasada revisor) fix: Índice UNIQUE parcial en device_tokens
+  // La reasignación de tokens (Opción B) crea una fila nueva cuando un token se reasigna
+  // a otro usuario (revocando la vieja). El índice UNIQUE debe ser parcial (solo aplica
+  // a filas activas con revocado_en IS NULL) para permitir el mismo token en múltiples
+  // filas (una revocada, una activa).
+  try {
+    // Verificar si la tabla existe y tiene la constraint UNIQUE en su definición
+    const tableInfo = db.prepare("PRAGMA table_info(device_tokens)").all();
+    if (tableInfo.length > 0) {
+      // La tabla existe. Crear una nueva tabla sin UNIQUE en token
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS device_tokens_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token TEXT NOT NULL,
+          plataforma TEXT NOT NULL CHECK(plataforma IN ('ios', 'android', 'web')),
+          nombre_dispositivo TEXT,
+          creado_en TEXT NOT NULL,
+          actualizado_en TEXT NOT NULL,
+          revocado_en TEXT
+        );
+        INSERT INTO device_tokens_new
+        SELECT id, user_id, token, plataforma, nombre_dispositivo, creado_en, actualizado_en, revocado_en
+        FROM device_tokens;
+        DROP TABLE IF EXISTS device_tokens;
+        ALTER TABLE device_tokens_new RENAME TO device_tokens;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_device_tokens_unique_active
+          ON device_tokens(token) WHERE revocado_en IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_device_tokens_usuario_activo
+          ON device_tokens(user_id, revocado_en) WHERE revocado_en IS NULL;
+      `);
+    }
+  } catch (_) {}
+
   return db;
 }

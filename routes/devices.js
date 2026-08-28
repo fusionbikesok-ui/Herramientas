@@ -91,15 +91,34 @@ export function devicesRouter(db) {
           const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(existente.id);
           return res.json(deviceAPublico(device));
         } else {
-          // MEDIO 7 fix: el token pertenece a OTRO usuario — reasignarlo al usuario actual.
+          // ALTO 1 fix (6ª pasada revisor): el token pertenece a OTRO usuario.
           // Escenario real: mismo teléfono con otra cuenta, o FCM recicla tokens.
+          //
+          // Opción B elegida: en lugar de reasignar (UPDATE) la fila existente,
+          // revocar la fila vieja y crear una NUEVA fila con el mismo token pero nuevo usuario.
+          // Razón: la fila vieja representa la relación usuario_viejo↔dispositivo↔token,
+          // incluyendo su historial de notificaciones_enviadas (que tienen device_token_id).
+          // Si reasignamos (UPDATE), el nuevo usuario hereda el historial agotado del anterior,
+          // quedando silenciado para ese incidente. Con una fila nueva, el nuevo usuario
+          // tiene device_token_id nuevo, empezando sin historial heredado.
+
+          // Paso 1: Revocar la fila vieja
           db.prepare(`
             UPDATE device_tokens
-            SET user_id = ?, actualizado_en = ?, revocado_en = NULL, nombre_dispositivo = ?
+            SET revocado_en = ?, actualizado_en = ?
             WHERE id = ?
-          `).run(userId, ts, device_name || null, existente.id);
+          `).run(ts, ts, existente.id);
 
-          const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(existente.id);
+          // Paso 2: Crear una NUEVA fila con el mismo token pero para el nuevo usuario
+          const info = db
+            .prepare(`
+              INSERT INTO device_tokens
+              (user_id, token, plataforma, nombre_dispositivo, creado_en, actualizado_en)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `)
+            .run(userId, push_token, platform, device_name || null, ts, ts);
+
+          const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(info.lastInsertRowid);
           return res.json(deviceAPublico(device));
         }
       }
