@@ -31,6 +31,7 @@ describe('horarios de despacho', () => {
   it('usa solo el límite de preparación del shipment, no la fecha de entrega', () => {
     expect(fechaEstimadaShipment({ date_estimated_delivery: '2026-09-03' })).toBeNull();
     expect(fechaEstimadaShipment({ shipping_option: { estimated_handling_limit: { date: '2026-08-31T12:00:00Z' } } })).toBe('2026-08-31');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-09-01T23:59:59-03:00' } })).toBe('2026-09-01');
   });
 
   it('expone y actualiza los siete días mediante el router', async () => {
