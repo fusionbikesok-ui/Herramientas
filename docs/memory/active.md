@@ -35,8 +35,10 @@ Actualizado: 2026-08-22.
 ## Próximo paso
 
 - Fase 5 de Preparación — horarios de corte y `fecha_despacho`: implementación aislada en
-  `prep-horarios-corte`, commits `0122c00` y `b5d92ec`; pruebas dirigidas 4/4 y caché Woo/ML
-  39/39. Pendientes revisión formal, E2E y auditoría; no integrada ni desplegada.
+  `prep-horarios-corte`, HEAD `55d6e26`; revisión intermedia encontró y se corrigieron los
+  fallos críticos de cálculo ML, fallback y estabilidad. Pruebas dirigidas 6/6, contrato
+  Preparación 35/35 y caché Woo/ML 39/39. Pendientes revisión final, E2E y auditoría; no
+  integrada ni desplegada.
 
 - Ejecutar E2E/auditoría de C2 y revisar/integrar C3 (Preparación). La revisión formal de
   Claude para los dropdowns de C1 y el E2E de C3 quedan pendientes hasta que la cuota vuelva a
