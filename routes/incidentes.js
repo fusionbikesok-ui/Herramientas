@@ -5,8 +5,25 @@
  */
 
 import express from 'express';
-import { listarIncidentes, obtenerIncidente } from '../lib/incidentes.js';
+import { listarIncidentes, obtenerIncidente, enteroValido } from '../lib/incidentes.js';
 import { requireAdmin } from '../lib/auth.js';
+
+/**
+ * Filtra un incidente para exponer solo los campos públicos de la API.
+ * Excluye `clave_dedupe` (detalle interno del mecanismo de dedupe).
+ */
+function incidenteAPublico(inc) {
+  if (!inc) return null;
+  const { clave_dedupe, ...publico } = inc;
+  return publico;
+}
+
+/**
+ * Filtra un historial de incidente.
+ */
+function historialAPublico(historial) {
+  return historial ? historial.map(incidenteAPublico) : [];
+}
 
 export function incidentesRouter(db, _cfg) {
   const router = express.Router();
@@ -16,7 +33,7 @@ export function incidentesRouter(db, _cfg) {
    *
    * Query params:
    *  - estado: filtrar por 'activo' o 'resuelto'
-   *  - integracion: filtrar por nombre de integración (ej. 'ml', 'woo')
+   *  - integracion: filtrar por nombre de integración (ej. 'mercadolibre', 'woocommerce')
    *  - severidad: filtrar por severidad ('info', 'advertencia', 'critico')
    *  - page: número de página (1-based, default 1)
    *  - pageSize: elementos por página (1-100, default 20)
@@ -27,11 +44,19 @@ export function incidentesRouter(db, _cfg) {
   router.get('/', requireAdmin, (req, res) => {
     try {
       // Extraer y validar parámetros de query
-      const { estado, integracion, severidad, page, pageSize } = req.query;
+      let { estado, integracion, severidad, page, pageSize } = req.query;
+
+      // Normalizar query params repetidos (Express devuelve arrays si hay duplicados).
+      // Tomamos el último valor si hay array (ej. ?estado=activo&estado=resuelto → usamos 'resuelto').
+      if (Array.isArray(estado)) estado = estado[estado.length - 1];
+      if (Array.isArray(integracion)) integracion = integracion[integracion.length - 1];
+      if (Array.isArray(severidad)) severidad = severidad[severidad.length - 1];
+      if (Array.isArray(page)) page = page[page.length - 1];
+      if (Array.isArray(pageSize)) pageSize = pageSize[pageSize.length - 1];
 
       // Validar y convertir page y pageSize a números seguros
-      const pageNum = validarEntero(page, 1);
-      const pageSizeNum = validarEntero(pageSize, 20, 100);
+      const pageNum = enteroValido(page, 1);
+      const pageSizeNum = enteroValido(pageSize, 20, 100);
 
       // Delegar a lib/incidentes.js
       const resultado = listarIncidentes(db, {
@@ -42,10 +67,10 @@ export function incidentesRouter(db, _cfg) {
         pageSize: pageSizeNum,
       });
 
-      // No expongas nada más que lo que ya sanitizó lib/incidentes.js
+      // Filtra los campos públicos (excluye clave_dedupe, detalle interno)
       res.json({
         ok: true,
-        data: resultado.items,
+        data: resultado.items.map(incidenteAPublico),
         page: resultado.page,
         pageSize: resultado.pageSize,
         total: resultado.total,
@@ -75,8 +100,12 @@ export function incidentesRouter(db, _cfg) {
         return res.status(404).json({ ok: false, error: 'no encontrado' });
       }
 
-      // No expongas nada más que lo que ya sanitizó lib/incidentes.js
-      res.json({ ok: true, data: incidente });
+      // Filtra los campos públicos (excluye clave_dedupe del incidente y del historial)
+      const publicoConHistorial = {
+        ...incidenteAPublico(incidente),
+        historial: historialAPublico(incidente.historial),
+      };
+      res.json({ ok: true, data: publicoConHistorial });
     } catch (e) {
       console.error('[incidentes-api] error obteniendo incidente:', e.message);
       res.status(500).json({ ok: false, error: 'Error interno al obtener incidente' });
@@ -84,20 +113,4 @@ export function incidentesRouter(db, _cfg) {
   });
 
   return router;
-}
-
-/**
- * Valida y convierte un valor a entero positivo de forma segura.
- * - Acepta string o number (req.query siempre da strings)
- * - Rechaza valores no finitos, muy grandes o negativos
- * - Retorna el valor entre 1 y máximo, o el default si está fuera de rango
- *
- * @param {string|number} valor - Entrada potencialmente no segura
- * @param {number} porDefecto - Valor si la entrada es inválida
- * @param {number} maximo - Tope superior (clamping)
- * @returns {number} Entero válido
- */
-function validarEntero(valor, porDefecto, maximo = Number.MAX_SAFE_INTEGER) {
-  const n = typeof valor === 'string' ? Number.parseInt(valor, 10) : valor;
-  return Number.isSafeInteger(n) && n > 0 ? Math.min(n, maximo) : porDefecto;
 }

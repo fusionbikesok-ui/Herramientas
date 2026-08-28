@@ -2470,7 +2470,7 @@ Lista incidentes operativos con filtros opcionales y paginación.
 
 - Query parameters (todos opcionales):
   - `estado`: filtrar por `'activo'` o `'resuelto'`.
-  - `integracion`: filtrar por nombre (ej. `'ml'`, `'woo'`).
+  - `integracion`: filtrar por nombre (ej. `'mercadolibre'`, `'woocommerce'`).
   - `severidad`: filtrar por `'info'`, `'advertencia'`, o `'critico'`.
   - `page`: número de página (1-based, default 1); valores ≤0 o no numéricos → default.
   - `pageSize`: elementos por página (1-100, default 20); valores ≤0 o no numéricos →
@@ -2483,10 +2483,9 @@ Lista incidentes operativos con filtros opcionales y paginación.
     "data": [
       {
         "id": 1,
-        "integracion": "ml",
-        "proceso": "sync_precios",
+        "integracion": "mercadolibre",
+        "proceso": "refrescar_publicaciones",
         "tipo_error": "rate_limit",
-        "clave_dedupe": "ml|sync_precios|rate_limit",
         "severidad": "advertencia",
         "estado": "activo",
         "mensaje_tecnico": "HTTP 429",
@@ -2511,11 +2510,15 @@ Lista incidentes operativos con filtros opcionales y paginación.
 - Response 500: `{ "ok": false, "error": "<mensaje>" }` — error interno.
 
 Notas:
-- `contexto_json` ya está sanitizado por `lib/incidentes.js` (secretos redactados).
+- `contexto_json` y `mensaje_tecnico` ya están sanitizados por `lib/incidentes.js` (secretos
+  redactados, strings truncados).
+- `clave_dedupe` es un detalle interno de dedupe y no se expone en la API.
 - Ordenado por `ultima_deteccion_en DESC, id DESC` (incidentes más recientes primero).
 - `pageSize` tiene un tope duro de 100 para evitar respuestas gigantes.
 - Valores inválidos de `page`/`pageSize` (strings no numéricos, negativos, muy grandes) no
   rompen el endpoint — se comportan con gracefully (default/clamping).
+- Query params repetidos (ej. `?estado=activo&estado=resuelto`) se normalizan tomando el
+  último valor; no se devuelve error.
 
 ### GET /api/incidentes/:id
 Detalle de un incidente específico, incluyendo su historial completo.
@@ -2529,10 +2532,9 @@ Detalle de un incidente específico, incluyendo su historial completo.
     "ok": true,
     "data": {
       "id": 1,
-      "integracion": "ml",
-      "proceso": "sync_precios",
+      "integracion": "mercadolibre",
+      "proceso": "refrescar_publicaciones",
       "tipo_error": "rate_limit",
-      "clave_dedupe": "ml|sync_precios|rate_limit",
       "severidad": "advertencia",
       "estado": "activo",
       "mensaje_tecnico": "HTTP 429",
@@ -2585,10 +2587,10 @@ Notas:
   mande `pageSize=abc` obtiene `pageSize=20`, no un error. La validación de segundo nivel en
   `lib/incidentes.js` garantiza cotas aún si alguien bypassea `routes/incidentes.js`.
 
-### Decisión fail-closed: el registro de incidentes nunca bloquea la integración
+### Decisión fail-open: el registro de incidentes nunca bloquea la integración
 Si `abrirOActualizarIncidente` falla (disco lleno, DB bloqueada), devuelve `{ error: true }` sin
-lanzar una excepción. La integración que disparo el incidente (ML/Woo) continúa: el incidente
-no se registró, pero tampoco cortó la sincronización. El admin verá un hueco en la línea de
+lanzar una excepción. La integración que disparó el incidente (ML/Woo) continúa: el incidente
+no se registró, pero tampoco cortó la sincronización (comentario explícito en `lib/incidentes.js` línea 137-140: "FAIL-OPEN a propósito"). El admin verá un hueco en la línea de
 tiempo (falta un evento), pero el sistema de integraciones no colapsa. Mismo criterio para
 `confirmarCicloSano` — si el registro de la resolución falla, devuelve `{ error: true }` sin
 interrumpir el ciclo exitoso que la llamó.
