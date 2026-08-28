@@ -1,7 +1,37 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { procesarNotificacionesPush } from '../lib/workerNotificacionesPush.js';
+
+// Estado global para controlar si enviarNotificacion debe fallar en pruebas específicas
+const mockState = vi.hoisted(() => {
+  let shouldFailOnDevice = null; // null = no falla, string deviceToken = falla para ese device
+  let failureCount = 0;
+  return {
+    setShouldFailOnDevice: (deviceToken) => { shouldFailOnDevice = deviceToken; },
+    clearFailure: () => { shouldFailOnDevice = null; failureCount = 0; },
+    getShouldFailOnDevice: () => shouldFailOnDevice,
+    incrementFailureCount: () => ++failureCount,
+    getFailureCount: () => failureCount,
+  };
+});
+
+// Mock de notificacionesPush para controlar cuándo falla
+vi.mock('../lib/notificacionesPush.js', async () => {
+  const actual = await vi.importActual('../lib/notificacionesPush.js');
+  return {
+    enviarNotificacion: async (deviceToken, payload) => {
+      const deviceToFail = mockState.getShouldFailOnDevice();
+      if (deviceToFail && deviceToken === deviceToFail) {
+        mockState.incrementFailureCount();
+        return { ok: false, error: 'Simulated network failure' };
+      }
+      return { ok: true };
+    },
+    tokenValido: actual.tokenValido,
+    tipoNotificacionValido: actual.tipoNotificacionValido,
+  };
+});
 
 const TEST_DB = './test/tmp-worker-push.sqlite';
 
@@ -481,6 +511,71 @@ describe('lib/workerNotificacionesPush', () => {
     `).get(incidenteId).c;
 
     expect(reavisos).toBeGreaterThan(0);
+
+    db.close();
+  });
+
+  // ==================== BLOQUEANTE 1: Test de ciclo completo ====================
+  // Este test reproduce el bug: en Tick 1, el push falla → se crea feed
+  // En Tick 2, el reintento con backoff debería ocurrir pero NO ocurre
+  // porque procesarIncidente ve que ya hay notificación en el feed y no despacha.
+  // DESPUÉS del fix, debería ejecutarse el reintento correctamente.
+  it('BLOQUEANTE 1: ciclo completo - tick 1 falla, tick 2 reintenta tras backoff (BLOQUEANTE)', async () => {
+    mockState.clearFailure();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-bloqueante-1';
+    seedDevice(db, 1, deviceToken, 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // === TICK 1: Push falla ===
+    mockState.setShouldFailOnDevice(deviceToken); // Configurar mock para que falle
+    await procesarNotificacionesPush(db);
+    mockState.clearFailure(); // Ahora no fallará más
+
+    // Verificar que se insertó fila fallida en notificaciones_enviadas
+    const fallida = db.prepare(`
+      SELECT * FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'nuevo' AND incidente_id = ? AND estado = 'fallido'
+    `).get(incidenteId);
+    expect(fallida).toBeDefined();
+    expect(fallida.intentos).toBe(1);
+    const createdInTick1 = fallida.creado_en;
+
+    // Verificar que SÍ se creó en el feed (notificaciones_usuario)
+    const notifEnFeed = db.prepare(`
+      SELECT * FROM notificaciones_usuario
+      WHERE user_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+    expect(notifEnFeed).toBeDefined();
+
+    // === TICK 2: Avanzar el reloj más allá del backoff (2 minutos) ===
+    // Simular que pasó el tiempo avanzando la fecha del intento fallido
+    const hace3min = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    db.prepare(`
+      UPDATE notificaciones_enviadas
+      SET creado_en = ?
+      WHERE id = ?
+    `).run(hace3min, fallida.id);
+
+    // === Llamar al worker de nuevo (sin cambios en el código) ===
+    // El mock ahora devuelve ok=true (no falló la configuración de failure)
+    await procesarNotificacionesPush(db);
+
+    // === VERIFICACIÓN: El reintento debería haberse ejecutado ===
+    // Después del fix (separar loops), la fila debe mostrar intentos=2
+    const reintentada = db.prepare(`
+      SELECT * FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+
+    expect(reintentada).toBeDefined();
+    // Esperamos que intentos haya subido a 2 (fue reintentado)
+    expect(reintentada.intentos).toBe(2);
+    expect(reintentada.estado).toBe('enviado'); // El mock retorna ok, así que se marca como enviado
+    expect(reintentada.creado_en).not.toBe(createdInTick1); // La fecha se actualizó
 
     db.close();
   });

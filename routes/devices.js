@@ -59,7 +59,7 @@ export function devicesRouter(db) {
         return res.status(422).json({
           error: {
             code: 'platform_invalido',
-            message: "platform debe ser 'ios' o 'android'",
+            message: "platform debe ser 'ios', 'android' o 'web'",
           },
         });
       }

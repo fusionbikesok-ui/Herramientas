@@ -149,7 +149,7 @@ paths:
               type: object
               required: [platform, push_token]
               properties:
-                platform: { type: string, enum: [ios, android] }
+                platform: { type: string, enum: [ios, android, web] }
                 push_token: { type: string, description: "Token APNs o FCM" }
                 device_name: { type: string, example: "iPhone de Juan" }
       responses:
@@ -161,7 +161,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
-          description: Falta platform o push_token, o platform no es ios/android
+          description: Falta platform o push_token, o platform no es ios/android/web
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -515,7 +515,7 @@ components:
       type: object
       properties:
         id: { type: string }
-        platform: { type: string, enum: [ios, android] }
+        platform: { type: string, enum: [ios, android, web] }
         device_name: { type: string }
         creado_en: { type: string, format: date-time }
 

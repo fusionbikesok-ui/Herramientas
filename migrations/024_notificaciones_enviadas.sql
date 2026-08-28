@@ -9,7 +9,8 @@
 -- - tipo: categoría de notificación ('nuevo', 'reaviso', 'resuelto', etc.)
 -- - incidente_id: referencia al incidente que generó esta notificación (nullable,
 --   para futuros tipos de notificación no ligadas a incidentes)
--- - estado: 'enviado' (éxito en el proveedor), 'fallido' (error al intentar), 'pendiente' (en cola)
+-- - estado: 'enviado' (éxito en el proveedor), 'fallido' (error al intentar),
+--   'pendiente' (en cola), 'agotado' (superó reintentos, no se volverá a intentar)
 -- - intentos: número de reintentos ejecutados (para backoff creciente)
 -- - error: mensaje de error si estado='fallido', null si enviado
 -- - creado_en: timestamp de creación del registro
@@ -19,12 +20,14 @@
 --   → evita dos notificaciones 'nuevo' para el mismo incidente
 --   → permite múltiples 'reaviso' (que son excepciones intencionales)
 -- - Búsqueda de pendientes/fallidos para reintentos: device_token_id, estado, creado_en
+--   (excluye 'agotado', que es terminal)
 CREATE TABLE IF NOT EXISTS notificaciones_enviadas (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   device_token_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
   tipo TEXT NOT NULL,
   incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
-  estado TEXT NOT NULL CHECK(estado IN ('pendiente', 'enviado', 'fallido')),
+  estado TEXT NOT NULL,
+  -- Estados válidos: 'pendiente', 'enviado', 'fallido', 'agotado' (terminal)
   intentos INTEGER NOT NULL DEFAULT 1,
   error TEXT,
   creado_en TEXT NOT NULL
@@ -37,6 +40,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_dedupe
   WHERE tipo IN ('nuevo', 'resuelto');
 
 -- Búsqueda rápida de notificaciones pendientes/fallidas para reintentos
+-- Excluye 'agotado' (terminal), incluye solo estados que pueden reintentarse
 CREATE INDEX IF NOT EXISTS idx_notificaciones_pendientes
   ON notificaciones_enviadas(device_token_id, estado, creado_en)
   WHERE estado IN ('pendiente', 'fallido');

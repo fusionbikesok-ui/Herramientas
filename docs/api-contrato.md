@@ -2732,19 +2732,28 @@ aunque no le llegara el push en el dispositivo.
 
 ### Worker: `procesarNotificacionesPush`
 
-Cron cada 2 minutos (configuración en `server.js`, línea del `setInterval`).
+Cron cada 2 minutos (configuración en `server.js` con `cron.schedule('*/2 * * * *')`).
 
-**Lógica:**
-1. Busca incidentes en estado 'activo' sin notificación 'nuevo' en el feed → envía 'nuevo'.
-2. Busca incidentes en estado 'activo' con última notificación en el feed > intervalo de reaviso → envía 'reaviso'.
-   - Intervalo de reaviso: configurable via `REAVISO_INCIDENTE_MIN` (default 30 min).
-3. Busca incidentes en estado 'resuelto' sin notificación 'resuelto' en el feed → envía 'resuelto'.
+**Lógica (dos pasos independientes):**
 
-**Backoff en reintentos:**
-- Debeintento 1 falla: reintentar después de 2 min.
+1. **Paso FEED** — por cada incidente:
+   - Busca incidentes en estado 'activo' sin notificación 'nuevo' en el feed → envía 'nuevo'.
+   - Busca incidentes en estado 'activo' con última notificación en el feed > intervalo de reaviso → envía 'reaviso'.
+     - Intervalo de reaviso: configurable via `REAVISO_INCIDENTE_MIN` (default 30 min).
+   - Busca incidentes en estado 'resuelto' sin notificación 'resuelto' en el feed → envía 'resuelto'.
+
+2. **Paso REINTENTOS** — independiente del feed, busca filas de `notificaciones_enviadas` con:
+   - `estado = 'fallido'` cuyo backoff ha vencido.
+   - Reintentar el envío físico a cada dispositivo, sin importar si el feed ya tiene la notificación creada.
+
+**Backoff creciente en reintentos de push:**
+- Si intento 1 falla: reintentar después de 2 min.
 - Si intento 2 falla: reintentar después de 10 min.
 - Si intento 3 falla: reintentar después de 30 min.
 - Si intento 4 falla: marcar dispositivo como 'agotado', no reintentar más.
+
+**Estado terminal 'agotado':**
+Cuando un dispositivo supera los 3 reintentos, se marca como `estado = 'agotado'` en `notificaciones_enviadas`. Una vez agotado, el dispositivo NO se reintenta más para ese incidente/tipo, incluso si el feed se actualiza con nuevos reavisos.
 
 **Destinatarios:** usuarios con `preferencias_notificacion.incidentes_criticos = 1`
 (default 1, opt-out, no opt-in).
@@ -2764,7 +2773,7 @@ El worker es un **cron periódico que escanea** `incidentes_operativos` (no requ
 
 Las otras opciones consideradas:
 - (a) Wrapper en los callers (`routes/woo.js`, `routes/matcher.js`) → requería modificar rutas
-  ya estables y multado de revisión.
+  ya estables y rechazado en revisión por acoplamiento innecesario.
 - (b) Callback opcional → parámetro nuevo en firmas de funciones, mayor complejidad, sin
   beneficio claro vs. (c).
 
