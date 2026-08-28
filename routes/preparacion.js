@@ -2010,6 +2010,7 @@ async function pendientesMl(db, mlCfg) {
       numero_pedido: ov.numero,
       comprador: ov.comprador.nickname || 'Comprador ML',
       fecha: ov.fecha,
+      fecha_despacho: fechaEstimadaShipment(envio) || calcularFechaDespacho(leerHorarios(db)),
       logistic_type: envio.logistic_type,
       substatus: envio.substatus || null,
       items: itemsDesdeOrdenMl(db, orden),
@@ -2052,7 +2053,7 @@ function upsertPedidoCache(db, row) {
       estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
       logistic_type=excluded.logistic_type, substatus=excluded.substatus,
       items_json=excluded.items_json, actualizado_en=excluded.actualizado_en, customer_note=excluded.customer_note
-  `).run({ customer_note: '', fecha_despacho: calcularFechaDespacho(leerHorarios(db)), ...row });
+  `).run({ ...row, customer_note: row.customer_note ?? '', fecha_despacho: row.fecha_despacho ?? calcularFechaDespacho(leerHorarios(db)) });
 }
 
 // Un pedido WC (de cualquiera de los 3 estados relevantes) → fila de pedidos_cache.
@@ -2138,6 +2139,7 @@ export async function syncPedidosCache(db, cfg) {
             numero_pedido: p.numero_pedido,
             comprador: p.comprador,
             fecha: p.fecha,
+            fecha_despacho: p.fecha_despacho,
             estado_envio: 'pendiente',
             estado_wc: null,
             espejo_ml: 0,
@@ -2286,7 +2288,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     numero_pedido: ov.numero,
     comprador: ov.comprador.nickname || 'Comprador ML',
     fecha: ov.fecha,
-    fecha_despacho: fechaEstimadaShipment(envio),
+    fecha_despacho: fechaEstimadaShipment(envio) || calcularFechaDespacho(leerHorarios(db)),
     estado_envio: 'pendiente',
     estado_wc: null,
     espejo_ml: 0,
