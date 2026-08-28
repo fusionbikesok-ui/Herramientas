@@ -2457,3 +2457,138 @@ tampoco emite entrada si el ítem no tenía `sku`.
 - El tipo de sesión "conteo dirigido" (alcance = lista de SKUs sueltos) en `POST /sesiones`
   — `GET /dirigido` da la lista, pero abrir una sesión sobre esa lista puntual todavía se
   hace por categoría/marca/ubicación como cualquier otra.
+
+## API Administrativa de Incidentes Operativos (Hito 5)
+
+Sistema de detección y visualización de fallos de integración (ML/WooCommerce) sin depender
+de que un administrador mire logs de PM2 en vivo. Los incidentes son creados por `routes/ml.js`
+y `routes/woo.js` via `lib/incidentes.js` cuando una integración falla de forma clasificable.
+Estos endpoints son **lectura exclusivamente** — solo para visualización por parte de admins.
+
+### GET /api/incidentes
+Lista incidentes operativos con filtros opcionales y paginación.
+
+- Query parameters (todos opcionales):
+  - `estado`: filtrar por `'activo'` o `'resuelto'`.
+  - `integracion`: filtrar por nombre (ej. `'ml'`, `'woo'`).
+  - `severidad`: filtrar por `'info'`, `'advertencia'`, o `'critico'`.
+  - `page`: número de página (1-based, default 1); valores ≤0 o no numéricos → default.
+  - `pageSize`: elementos por página (1-100, default 20); valores ≤0 o no numéricos →
+    default; >100 → clampea a 100.
+
+- Response 200 (require admin):
+  ```json
+  {
+    "ok": true,
+    "data": [
+      {
+        "id": 1,
+        "integracion": "ml",
+        "proceso": "sync_precios",
+        "tipo_error": "rate_limit",
+        "clave_dedupe": "ml|sync_precios|rate_limit",
+        "severidad": "advertencia",
+        "estado": "activo",
+        "mensaje_tecnico": "HTTP 429",
+        "mensaje_humano": "Rate limit de ML alcanzado",
+        "contexto_json": "{\"status\":429,...}",
+        "contador_repeticiones": 3,
+        "primera_deteccion_en": "2026-08-28T10:00:00.000Z",
+        "ultima_deteccion_en": "2026-08-28T10:15:00.000Z",
+        "ultima_recuperacion_en": null,
+        "resuelto_en": null,
+        "creado_en": "2026-08-28T10:00:00.000Z",
+        "actualizado_en": "2026-08-28T10:15:00.000Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 42
+  }
+  ```
+
+- Response 403: `{ "ok": false, "error": "Requiere administrador" }` — no autenticado o no admin.
+- Response 500: `{ "ok": false, "error": "<mensaje>" }` — error interno.
+
+Notas:
+- `contexto_json` ya está sanitizado por `lib/incidentes.js` (secretos redactados).
+- Ordenado por `ultima_deteccion_en DESC, id DESC` (incidentes más recientes primero).
+- `pageSize` tiene un tope duro de 100 para evitar respuestas gigantes.
+- Valores inválidos de `page`/`pageSize` (strings no numéricos, negativos, muy grandes) no
+  rompen el endpoint — se comportan con gracefully (default/clamping).
+
+### GET /api/incidentes/:id
+Detalle de un incidente específico, incluyendo su historial completo.
+
+- Path parameter:
+  - `id`: entero positivo, identificador del incidente.
+
+- Response 200 (require admin):
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "id": 1,
+      "integracion": "ml",
+      "proceso": "sync_precios",
+      "tipo_error": "rate_limit",
+      "clave_dedupe": "ml|sync_precios|rate_limit",
+      "severidad": "advertencia",
+      "estado": "activo",
+      "mensaje_tecnico": "HTTP 429",
+      "mensaje_humano": "Rate limit de ML alcanzado",
+      "contexto_json": "{\"status\":429,...}",
+      "contador_repeticiones": 3,
+      "primera_deteccion_en": "2026-08-28T10:00:00.000Z",
+      "ultima_deteccion_en": "2026-08-28T10:15:00.000Z",
+      "ultima_recuperacion_en": null,
+      "resuelto_en": null,
+      "creado_en": "2026-08-28T10:00:00.000Z",
+      "actualizado_en": "2026-08-28T10:15:00.000Z",
+      "historial": [
+        {
+          "id": 1,
+          "incidente_id": 1,
+          "evento": "abierto",
+          "detalle_json": "{\"severidad\":\"advertencia\",...}",
+          "creado_en": "2026-08-28T10:00:00.000Z"
+        },
+        {
+          "id": 2,
+          "incidente_id": 1,
+          "evento": "repetido",
+          "detalle_json": "{\"repeticiones\":2,...}",
+          "creado_en": "2026-08-28T10:05:00.000Z"
+        }
+      ]
+    }
+  }
+  ```
+
+- Response 400: `{ "ok": false, "error": "ID inválido" }` — `id` no es un entero positivo.
+- Response 403: `{ "ok": false, "error": "Requiere administrador" }` — no admin.
+- Response 404: `{ "ok": false, "error": "no encontrado" }` — incidente con ese `id` no existe.
+- Response 500: `{ "ok": false, "error": "<mensaje>" }` — error interno.
+
+Notas:
+- `historial` está ordenado cronológicamente (más antiguo primero).
+- `evento` puede ser: `'abierto'` (creación), `'repetido'` (falló de nuevo sin cambio de
+  severidad), `'escalado'` (severidad aumentó), `'resuelto'` (ciclo sano de la integración).
+- `detalle_json` puede ser `null` (ej. en eventos de resolución).
+
+### Diseño de paginación y validación
+- `page` y `pageSize` llegan como **strings** desde `req.query` (Express siempre stringifica
+  query params); se validan con `Number.isSafeInteger` (no `Number.isInteger`) antes de usarse
+  como OFFSET/LIMIT en SQL, rechazando valores muy grandes (1e21) que causarían datatype
+  mismatch en sqlite.
+- Comportamiento fallido → graceful degradation (default/clamping), **no 400** — un cliente que
+  mande `pageSize=abc` obtiene `pageSize=20`, no un error. La validación de segundo nivel en
+  `lib/incidentes.js` garantiza cotas aún si alguien bypassea `routes/incidentes.js`.
+
+### Decisión fail-closed: el registro de incidentes nunca bloquea la integración
+Si `abrirOActualizarIncidente` falla (disco lleno, DB bloqueada), devuelve `{ error: true }` sin
+lanzar una excepción. La integración que disparo el incidente (ML/Woo) continúa: el incidente
+no se registró, pero tampoco cortó la sincronización. El admin verá un hueco en la línea de
+tiempo (falta un evento), pero el sistema de integraciones no colapsa. Mismo criterio para
+`confirmarCicloSano` — si el registro de la resolución falla, devuelve `{ error: true }` sin
+interrumpir el ciclo exitoso que la llamó.

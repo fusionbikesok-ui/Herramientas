@@ -33,6 +33,7 @@ import { criticidadRouter } from './routes/criticidad.js';
 import { backfillVentas } from './lib/criticidad.js';
 import { auditoriaRouter } from './routes/auditoria.js';
 import { barridoAuditoria } from './lib/auditoria.js';
+import { incidentesRouter } from './routes/incidentes.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje } from './routes/notificacionesMl.js';
@@ -262,6 +263,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/etiquetas', etiquetasRouter(db));
   app.use('/api/criticidad', criticidadRouter(db, syncCfg));
   app.use('/api/auditoria', auditoriaRouter(db));
+  app.use('/api/incidentes', incidentesRouter(db, syncCfg));
   app.use('/api/ml', mlEstadoRouter(db));
   app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
 
