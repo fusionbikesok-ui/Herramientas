@@ -1,7 +1,7 @@
 import express from 'express';
 import { mlFetch } from '../lib/mlClient.js';
 
-// Notificaciones ML (webhooks): preguntas y mensajes sin responder.
+// Notificaciones ML (webhooks): preguntas, mensajes y reclamos sin resolver.
 // Ver docs/superpowers/plans (sesión 2026-08-26) — la app de ML tiene TODOS los topics
 // seleccionados en el panel; POST /api/ml/notificacion (server.js) filtra por topic y solo
 // procesa los que ya tienen función acá (`questions`, `messages` hoy). Sumar un topic nuevo
@@ -36,6 +36,12 @@ function ensureTables(db) {
       actualizado_en    TEXT NOT NULL
     )`).run();
     db.prepare('CREATE INDEX IF NOT EXISTS idx_ml_mensajes_respondido ON ml_mensajes(respondido_en)').run();
+
+    db.prepare(`CREATE TABLE IF NOT EXISTS ml_reclamos (
+      id TEXT PRIMARY KEY, recurso TEXT, estado TEXT NOT NULL, titulo TEXT,
+      detalle TEXT, fecha_creacion TEXT, cerrado_en TEXT, actualizado_en TEXT NOT NULL
+    )`).run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_ml_reclamos_pendientes ON ml_reclamos(cerrado_en, fecha_creacion)').run();
   } catch (_) { /* ya existen */ }
 }
 
@@ -101,6 +107,37 @@ export async function ingerirMensaje(db, mlCfg, resource) {
   }
 }
 
+// GET /claims/{id}. Fail-open: un fallo de ML no debe impedir el 200 del webhook.
+export async function ingerirReclamo(db, mlCfg, resource) {
+  ensureTables(db);
+  const m = String(resource || '').match(/^\/claims\/([^/]+)\/?$/);
+  if (!m) return;
+  let resp;
+  try {
+    resp = await mlFetch(db, mlCfg, 'get', `/claims/${m[1]}`);
+  } catch (_) {
+    return;
+  }
+  if (resp.status !== 200 || !resp.data?.id) return;
+  const c = resp.data;
+  const estado = String(c.status || c.stage || 'UNKNOWN');
+  const cerrado = ['CLOSED', 'RESOLVED', 'CANCELED', 'CANCELLED'].includes(estado.toUpperCase());
+  db.prepare(`
+    INSERT INTO ml_reclamos (id, recurso, estado, titulo, detalle, fecha_creacion, cerrado_en, actualizado_en)
+    VALUES (@id, @recurso, @estado, @titulo, @detalle, @fecha_creacion, @cerrado_en, @actualizado_en)
+    ON CONFLICT(id) DO UPDATE SET recurso=excluded.recurso, estado=excluded.estado,
+      titulo=excluded.titulo, detalle=excluded.detalle, cerrado_en=excluded.cerrado_en,
+      actualizado_en=excluded.actualizado_en
+  `).run({
+    id: String(c.id), recurso: `/claims/${m[1]}`, estado,
+    titulo: c.title || c.reason || 'Reclamo de MercadoLibre',
+    detalle: c.description || c.message || '',
+    fecha_creacion: c.date_created || c.created_at || null,
+    cerrado_en: cerrado ? (c.date_closed || now()) : null,
+    actualizado_en: now(),
+  });
+}
+
 // ── Router: lectura para la pantalla / aviso del Home ──
 
 export function notificacionesMlRouter(db) {
@@ -114,11 +151,15 @@ export function notificacionesMlRouter(db) {
     const mensajes = db.prepare(
       "SELECT * FROM ml_mensajes WHERE respondido_en IS NULL ORDER BY fecha_creacion ASC"
     ).all();
+    const reclamos = db.prepare(
+      'SELECT * FROM ml_reclamos WHERE cerrado_en IS NULL ORDER BY fecha_creacion ASC'
+    ).all();
     res.json({
       ok: true,
       preguntas,
       mensajes,
-      total: preguntas.length + mensajes.length,
+      reclamos,
+      total: preguntas.length + mensajes.length + reclamos.length,
     });
   });
 
@@ -127,7 +168,8 @@ export function notificacionesMlRouter(db) {
   router.get('/count', (req, res) => {
     const preguntas = db.prepare("SELECT COUNT(*) n FROM ml_preguntas WHERE estado='UNANSWERED'").get().n;
     const mensajes = db.prepare('SELECT COUNT(*) n FROM ml_mensajes WHERE respondido_en IS NULL').get().n;
-    res.json({ ok: true, preguntas, mensajes, total: preguntas + mensajes });
+    const reclamos = db.prepare('SELECT COUNT(*) n FROM ml_reclamos WHERE cerrado_en IS NULL').get().n;
+    res.json({ ok: true, preguntas, mensajes, reclamos, total: preguntas + mensajes + reclamos });
   });
 
   return router;

@@ -36,7 +36,7 @@ import { barridoAuditoria } from './lib/auditoria.js';
 import { incidentesRouter } from './routes/incidentes.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
-import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje } from './routes/notificacionesMl.js';
+import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje, ingerirReclamo } from './routes/notificacionesMl.js';
 import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -212,7 +212,14 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
       return;
     }
 
-    // Topic sin función todavía (shipments, claims, orders_feedback, items, invoices) —
+    if (topic === 'claims') {
+      console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirReclamo`);
+      ingerirReclamo(app._db, mlCfg, resource)
+        .catch(err => console.error('[notif-ml] ingerirReclamo error:', err.message));
+      return;
+    }
+
+    // Topic sin función todavía (shipments, orders_feedback, items, invoices) —
     // se descarta en silencio, a propósito. (orders_v2 sí tiene función: ver más arriba,
     // camino puntual vía syncPedidoMlPuntual.)
   });

@@ -11,7 +11,7 @@ import express from 'express';
 
 vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn() }));
 import { mlFetch } from '../lib/mlClient.js';
-import { ingerirPregunta, ingerirMensaje, notificacionesMlRouter } from '../routes/notificacionesMl.js';
+import { ingerirPregunta, ingerirMensaje, ingerirReclamo, notificacionesMlRouter } from '../routes/notificacionesMl.js';
 
 function tmpDb() {
   const f = path.join(os.tmpdir(), `notif_ml_test_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
@@ -112,6 +112,33 @@ describe('ingerirMensaje', () => {
   });
 });
 
+describe('ingerirReclamo', () => {
+  let db;
+  beforeEach(() => { db = tmpDb(); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); fs.unlinkSync(db._tmpFile); });
+
+  it('guarda un reclamo abierto y lo actualiza sin duplicar', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'c1', status: 'opened', title: 'Faltante', date_created: '2026-08-26T09:00:00.000Z' } });
+    await ingerirReclamo(db, {}, '/claims/c1');
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'c1', status: 'CLOSED', title: 'Faltante resuelto' } });
+    await ingerirReclamo(db, {}, '/claims/c1');
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE id='c1'").get().n).toBe(1);
+    expect(db.prepare("SELECT cerrado_en FROM ml_reclamos WHERE id='c1'").get().cerrado_en).toBeTruthy();
+  });
+
+  it('fail-open si MercadoLibre falla', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 503, data: null });
+    await expect(ingerirReclamo(db, {}, '/claims/c2')).resolves.not.toThrow();
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE id='c2'").get().n).toBe(0);
+  });
+
+  it('fail-open si la llamada a MercadoLibre lanza una excepción', async () => {
+    mlFetch.mockRejectedValueOnce(new Error('timeout'));
+    await expect(ingerirReclamo(db, {}, '/claims/c3')).resolves.not.toThrow();
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE id='c3'").get().n).toBe(0);
+  });
+});
+
 describe('GET /api/notificaciones-ml/pendientes y /count', () => {
   let db, app;
   beforeEach(() => {
@@ -123,6 +150,8 @@ describe('GET /api/notificaciones-ml/pendientes y /count', () => {
       VALUES (2, 'MLA2', 'ya respondida', 'ANSWERED', '2026-08-19T00:00:00.000Z', '2026-08-19T01:00:00.000Z', '2026-08-19T01:00:00.000Z')`).run();
     db.prepare(`INSERT INTO ml_mensajes (id, pack_id, texto, de_quien, fecha_creacion, actualizado_en)
       VALUES ('m1', '999', 'hola', '111', '2026-08-21T00:00:00.000Z', '2026-08-21T00:00:00.000Z')`).run();
+    db.prepare(`INSERT INTO ml_reclamos (id, recurso, estado, titulo, fecha_creacion, actualizado_en)
+      VALUES ('c1', '/claims/c1', 'opened', 'faltante', '2026-08-22T00:00:00.000Z', '2026-08-22T00:00:00.000Z')`).run();
   });
   afterEach(() => { db.close(); fs.unlinkSync(db._tmpFile); });
 
@@ -132,12 +161,13 @@ describe('GET /api/notificaciones-ml/pendientes y /count', () => {
     expect(r.body.preguntas).toHaveLength(1);
     expect(r.body.preguntas[0].id).toBe(1);
     expect(r.body.mensajes).toHaveLength(1);
-    expect(r.body.total).toBe(2);
+    expect(r.body.reclamos).toHaveLength(1);
+    expect(r.body.total).toBe(3);
   });
 
   it('/count devuelve los mismos totales sin traer las filas', async () => {
     const r = await request(app).get('/api/notificaciones-ml/count');
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ ok: true, preguntas: 1, mensajes: 1, total: 2 });
+    expect(r.body).toMatchObject({ ok: true, preguntas: 1, mensajes: 1, reclamos: 1, total: 3 });
   });
 });

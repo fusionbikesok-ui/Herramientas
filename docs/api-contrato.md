@@ -1048,7 +1048,7 @@ qué procesar vive en `POST /api/ml/notificacion` (`server.js`), no en el panel.
 `/orders/{id}`, no el barrido paginado `/orders/search`, que queda solo en el cron cada 10 min
 como respaldo), `orders_v2` (desde A.1: camino puntual a `pedidos_cache`, igual que `orders`,
 pero **no** dispara `syncOrdenMlPuntual` — eso sigue siendo solo para `orders`), `questions` y
-`messages`; el resto de los topics (`shipments`, `claims`, `orders_feedback`, `items`,
+`messages` y `claims`; el resto de los topics (`shipments`, `orders_feedback`, `items`,
 `invoices`) se reciben y se descartan en silencio hasta que se sume su función.
 
 ### GET /api/notificaciones-ml/pendientes
