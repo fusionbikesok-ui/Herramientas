@@ -66,6 +66,16 @@ para verificar que el diff, el veredicto del revisor y el reporte E2E correspond
      despacho no menciona ningún resultado real de tests — es **🔴**: pedí que corran la
      suite antes de auditar. Volver a correr `npm test` completo vos para suplir esa
      ausencia era el gasto redundante más caro del pipeline (10-15 min repetidos por gate).
+   - **Excepción explícita — sin esto, esta regla se termina saltando "para estar seguro"
+     de nuevo**: si el despacho te dice que el diff **no tiene tests automatizados posibles**
+     (ej. JS embebido en un `.html` sin arnés que lo alcance, ya documentado como limitación
+     conocida de esa clase de cambio) y no hay ningún archivo `test/*` que ejercite el código
+     tocado, **eso NO es "ausencia de evidencia"** — es un diff sin superficie de tests, y la
+     regla de arriba no aplica. No corras `npm test` para "verificar igual", no pidas que se
+     invente cobertura que no existe, y no marques 🔴 por esto. Anotalo en tu veredicto como
+     limitación aceptada y seguí con el resto de los puntos. La duda de "¿pero cómo sé que no
+     rompí nada?" se resuelve leyendo el diff (¿toca algún archivo que SÍ tiene tests? si no,
+     no hay nada que romper que un test pudiera atrapar), no ejecutando la suite entera.
    - Leé el resultado reportado: un solo fallo del diff = luz roja. Fallos ya documentados
      como ajenos (timing/contención bajo suite completa, o el fallo funcional preexistente
      de `test/auditoria.test.js` ya registrado en `docs/superpowers/plans/plan-maestro-v2.md`)
