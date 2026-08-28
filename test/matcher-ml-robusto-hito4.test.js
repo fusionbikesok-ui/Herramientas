@@ -286,10 +286,13 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
       data: null,
     });
 
-    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    // El .catch(e=>e) se adjunta EN EL MISMO TICK que se crea la promesa — no después de
+    // vi.runAllTimersAsync() — para que Node no la vea "sin manejador" en el instante en que
+    // se rechaza (patrón ya usado en test/woo.test.js/fallaRefresco).
+    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG).catch(e => e);
     await vi.runAllTimersAsync();
-
-    await expect(promise).rejects.toThrow();
+    const err = await promise;
+    expect(err).toBeInstanceOf(Error);
 
     // Verificar que se creó un incidente con tipo_error='auth' y severidad='critico'
     const incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE integracion = ? AND proceso = ?')
@@ -310,9 +313,9 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
       data: null,
     });
 
-    const promise1 = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    const promise1 = refrescarPublicacionesMlConMetricas(db, ML_CFG).catch(e => e);
     await vi.runAllTimersAsync();
-    await expect(promise1).rejects.toThrow();
+    expect(await promise1).toBeInstanceOf(Error);
 
     // Verificar que el incidente está activo
     let incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE estado = ? AND tipo_error = ?')
@@ -331,9 +334,9 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
       data: null,
     });
 
-    const promise2 = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    const promise2 = refrescarPublicacionesMlConMetricas(db, ML_CFG).catch(e => e);
     await vi.runAllTimersAsync();
-    await expect(promise2).rejects.toThrow();
+    expect(await promise2).toBeInstanceOf(Error);
 
     // El incidente debe estar ACTIVO todavía (no confirmado)
     incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE id = ? AND estado = ?')
@@ -362,17 +365,12 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
 
     // Intentar refrescar publicaciones, lo cual dispara getAccessToken,
     // que intenta refresh y falla con 401
-    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG).catch(e => e);
     await vi.runAllTimersAsync();
 
     // Debería rechazar con un error que tenga .status = 401
-    let thrownErr;
-    try {
-      await promise;
-    } catch (e) {
-      thrownErr = e;
-    }
-    expect(thrownErr).toBeDefined();
+    const thrownErr = await promise;
+    expect(thrownErr).toBeInstanceOf(Error);
     expect(thrownErr.status).toBe(401); // ALTO 1: verificar que .status está seteado
     expect(categorizarErrorMl(thrownErr)).toBe('auth');
 

@@ -342,22 +342,8 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
  * silenciosa), pero tampoco se abre incidente crítico (podría ser legítimo). Se registra
  * como `fallidos=0` (no es un error HTTP) y se deja la investigación para el operador si
  * ve que el cache quedó vacío de repente tras días con miles de items.
- *
- * NOTA (Hito 4): En tests con vitest + timers falsos, la promesa puede rechazarse antes de que
- * el caller agregue un manejador (e.g., await expect().rejects.toThrow()). Esto causa un
- * "PromiseRejectionHandledWarning" temporal. Para evitarlo, agregamos un .catch() no-op
- * inmediatamente después de crear la promesa interna, que no interfiere con el flujo normal
- * porque el error sigue propagándose a través de la promesa devuelta.
  */
-export function refrescarPublicacionesMlConMetricas(db, cfg, onProgress) {
-  const promise = _refrescarPublicacionesMlConMetricasInternal(db, cfg, onProgress);
-  // Agregar catch handler vacío para evitar "Unhandled Rejection" en vitest cuando hay
-  // promesas que se rechazan sin manejador inmediato. Esto no interfiere con el flujo normal.
-  promise.catch(() => {});
-  return promise;
-}
-
-async function _refrescarPublicacionesMlConMetricasInternal(db, cfg, onProgress) {
+export async function refrescarPublicacionesMlConMetricas(db, cfg, onProgress) {
   const iniciadoEn = new Date().toISOString();
   const inicioMonotonico = performance.now();
   try {
