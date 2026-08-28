@@ -616,4 +616,185 @@ describe('lib/workerNotificacionesPush', () => {
 
     db.close();
   });
+
+  // ==================== ALTO 1 (5ª pasada revisor): 'agotado' NO es terminal para 'reaviso' ====================
+  // Escenario: un 'reaviso' en 'agotado' para un incidente que SIGUE activo se reseteea
+  // cuando corresponde un nuevo ciclo de reaviso (pasó REAVISO_INCIDENTE_MIN desde el último)
+  it('ALTO 1 (5ª): reaviso agotado se reseteea en nuevo ciclo de incidente activo', async () => {
+    mockState.resetCallCount();
+    mockState.clearFailure();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-reaviso-agotado';
+    seedDevice(db, 1, deviceToken, 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // === Simular: 'reaviso' llegó a 'agotado' en ciclos anteriores ===
+    const hace40min = new Date(Date.now() - 40 * 60 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(1, 'reaviso', incidenteId, 'agotado', 4, 'Provider down', hace40min);
+
+    // === Crear la notificación en el feed como base para el siguiente reaviso ===
+    // Simular que hubo un 'nuevo' hace 40 min
+    db.prepare(`
+      INSERT INTO notificaciones_usuario
+      (user_id, tipo, titulo, cuerpo, deep_link, leida, incidente_id, creado_en)
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(1, 'nuevo', 'Incidente en ML', 'Error detectado', 'incidentes', incidenteId, hace40min);
+
+    // === Llamar al worker — debe resetear el 'agotado' de 'reaviso' para incidente activo ===
+    // Después del fix, enviarNotificacion debería ser llamada para este dispositivo
+    await procesarNotificacionesPush(db);
+
+    // === VERIFICACIÓN: El 'reaviso' debe haber sido reintentado (callCount > 0) ===
+    // La lógica es: el FEED ve que hace 40 min fue el último 'nuevo', que es > 30 min,
+    // así que decide enviar 'reaviso'. En enviarADispositivosDelUsuario, encuentra
+    // el 'agotado' de 'reaviso', lo reseteea, y lo intenta.
+    expect(mockState.getCallCount()).toBeGreaterThan(0);
+
+    // === Verificar que la fila fue reseteada (no sigue siendo 'agotado') ===
+    const fila = db.prepare(`
+      SELECT estado, intentos FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'reaviso' AND incidente_id = ?
+    `).get(incidenteId);
+
+    // Después del fix, debe ser 'enviado' con intentos=1 (reseteada)
+    // o 'fallido' si queremos otro ciclo de reintento
+    expect(fila).toBeDefined();
+    expect(fila.estado).not.toBe('agotado'); // Debe haber salido de 'agotado'
+    expect(fila.intentos).toBeGreaterThanOrEqual(1);
+
+    db.close();
+  });
+
+  // ==================== ALTO 1 (5ª): 'agotado' SÍ es terminal para 'nuevo'/'resuelto' ====================
+  // Verificar que el fix de ALTO 1 no reabre 'agotado' para 'nuevo'/'resuelto' (que sí deben ser terminales)
+  it('ALTO 1 (5ª): agotado sigue siendo terminal para nuevo/resuelto', async () => {
+    mockState.resetCallCount();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-nuevo-agotado';
+    seedDevice(db, 1, deviceToken, 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // === Crear una fila 'agotado' de tipo 'nuevo' ===
+    const ahora = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(1, 'nuevo', incidenteId, 'agotado', 4, 'Device permanently offline', ahora);
+
+    // === Llamar al worker ===
+    await procesarNotificacionesPush(db);
+
+    // === VERIFICACIÓN: enviarNotificacion NO debe ser llamada para 'nuevo' agotado ===
+    // (no debería resetearse, porque es un evento único por incidente)
+    expect(mockState.getCallCount()).toBe(0);
+
+    // === Verificar que sigue siendo 'agotado' ===
+    const fila = db.prepare(`
+      SELECT estado FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+
+    expect(fila).toBeDefined();
+    expect(fila.estado).toBe('agotado'); // Debe seguir siendo terminal
+
+    db.close();
+  });
+
+  // ==================== MEDIO 2 (5ª pasada revisor): No revalida usuario en reintentos ====================
+  // Escenario: usuario se desactiva (o desactiva preferencia) DESPUÉS de que un push falla.
+  // El reintento no debería llegar (fail-closed).
+  it('MEDIO 2 (5ª): reintentos respetan usuario activo', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1, username: 'user-to-deactivate' });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-medio2';
+    seedDevice(db, 1, deviceToken, 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // === Crear una fila fallida (simula que el primer envío falló) ===
+    const hace3min = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(1, 'nuevo', incidenteId, 'fallido', 1, 'Network error', hace3min);
+
+    // === Desactivar el usuario ===
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE users SET activo = 0, actualizado_en = ? WHERE id = 1
+    `).run(now);
+
+    // === Llamar al worker — procesarReintentosDeFallidos debe chequear usuario activo ===
+    await procesarNotificacionesPush(db);
+
+    // === VERIFICACIÓN: La fila debe estar marcada como 'agotado' (obsoleta), no reintentada ===
+    const fila = db.prepare(`
+      SELECT estado, intentos FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+
+    expect(fila).toBeDefined();
+    // Debe estar 'agotado' porque el usuario no está activo (no se reintentar)
+    expect(fila.estado).toBe('agotado');
+    // El contador debe seguir siendo 1 (no se incrementó porque no se intentó)
+    expect(fila.intentos).toBe(1);
+
+    db.close();
+  });
+
+  // ==================== MEDIO 2 (5ª): Preferencia desactivada bloquea reintentos ====================
+  // Escenario: usuario desactiva preferencia de notificaciones DESPUÉS de que un push falla.
+  it('MEDIO 2 (5ª): reintentos respetan preferencia de notificaciones desactivada', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1); // Inicialmente activa
+    const deviceToken = 'device-medio2-pref';
+    seedDevice(db, 1, deviceToken, 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // === Crear una fila fallida ===
+    const hace3min = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(1, 'nuevo', incidenteId, 'fallido', 1, 'Network error', hace3min);
+
+    // === Desactivar la preferencia de incidentes críticos ===
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE preferencias_notificacion SET incidentes_criticos = 0, actualizado_en = ?
+      WHERE user_id = 1
+    `).run(now);
+
+    // === Llamar al worker ===
+    await procesarNotificacionesPush(db);
+
+    // === VERIFICACIÓN: La fila debe estar marcada como 'agotado' ===
+    const fila = db.prepare(`
+      SELECT estado, intentos FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+
+    expect(fila).toBeDefined();
+    // Debe estar 'agotado' porque el usuario no quiere notificaciones
+    expect(fila.estado).toBe('agotado');
+    expect(fila.intentos).toBe(1); // No se reintentó
+
+    db.close();
+  });
 });
