@@ -264,6 +264,36 @@ describe('woo route', () => {
         expect(err).toBeInstanceOf(Error);
       }
 
+      // Hallazgo del revisor (MEDIO-2, 4ta pasada): el mecanismo de generación (M6+MEDIO-2)
+      // llevaba 3 pasadas sin un test que protegiera específicamente el caso M6 — revertir
+      // `_circuitoWoo.abiertoHasta = 0` a incondicional (deshaciendo el guard de generación)
+      // dejaba el resto de la suite en verde igual.
+      it('un éxito tardío de un worker que arrancó ANTES de la apertura no cierra el circuito', async () => {
+        vi.useFakeTimers();
+        try {
+          let resolverLlamadaVieja;
+          const llamadaVieja = new Promise((resolve) => { resolverLlamadaVieja = resolve; });
+          // Worker "viejo": arranca con el circuito cerrado (generación 0), pero su respuesta
+          // queda pendiente — simula una llamada en vuelo cuando otros workers abren el circuito.
+          axios.request.mockImplementationOnce(() => llamadaVieja);
+          const pViejo = wooFetchConCircuito(cfg, '/x').catch(e => e);
+
+          // Otros 5 workers fallan y abren el circuito (nueva generación) mientras el viejo sigue en vuelo.
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) await fallaTransitoria();
+          expect(circuitoWooAbierto()).toBe(true);
+
+          // Ahora el worker viejo por fin responde 200 — de una generación ya vieja.
+          resolverLlamadaVieja({ status: 200, data: [], headers: {} });
+          await vi.runAllTimersAsync();
+          await pViejo;
+
+          expect(circuitoWooAbierto()).toBe(true); // NO debe haberse cerrado por el éxito tardío
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
       it('tras 5 fallos transitorios consecutivos, la siguiente llamada NO sale a la red', async () => {
         vi.useFakeTimers();
         try {
@@ -445,14 +475,6 @@ describe('woo route', () => {
         expect(incidente.tipo_error).toBe('catalogo_vacio');
       });
 
-      it('el incidente de catálogo vacío usa la clave de dedupe catalogo_vacio, no datos', async () => {
-        axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
-        const resultado = await refrescarCatalogo(db, cfg, { forzarCompleto: true });
-        expect(resultado).toMatchObject({ total: 0, sospechoso: true });
-        const incidente = db.prepare("SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce'").get();
-        expect(incidente.tipo_error).toBe('catalogo_vacio');
-      });
-
       // Hallazgo del revisor (M5, 2da pasada): un incremental con 0 productos es tan
       // ambiguo como el caso completo de B1 (¿nada cambió, o Woo está degradado en
       // silencio?) — confirmar ciclo sano en ese caso resolvía en silencio un incidente
@@ -512,6 +534,21 @@ describe('woo route', () => {
         const incidente = db.prepare("SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce'").get();
         expect(incidente.tipo_error).toBe('transitorio');
       }, 20000);
+
+      // Hallazgo del revisor (MEDIO-1, 3ra pasada, sin test propio hasta la 4ta): un WOO_URL
+      // sin HTTPS (típico tras un deploy con .env mal cargado) es un error de configuración
+      // permanente, no un problema de Woo — debe reportarse distinto de 'transitorio'/'interno'
+      // y nunca debe abrir el circuit breaker (no dice nada sobre la salud del servicio).
+      it('un WOO_URL sin HTTPS se clasifica como config, crítico, y no abre el circuito', async () => {
+        const cfgInvalida = { ...cfg, url: 'http://fusionbikes.com.ar' };
+        axios.request.mockResolvedValue({ status: 200, data: [], headers: {} }); // no debería ni llegar a llamarse
+        await expect(refrescarCatalogo(db, cfgInvalida)).rejects.toThrow('WooCommerce URL debe usar HTTPS');
+
+        const incidente = db.prepare("SELECT tipo_error, severidad FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        expect(incidente.tipo_error).toBe('config');
+        expect(incidente.severidad).toBe('critico');
+        expect(circuitoWooAbierto()).toBe(false);
+      });
 
       // Hallazgo del revisor (A4): test de CABLEADO — si alguien revierte los 2 call sites
       // internos de wooFetchConCircuito a wooFetchConReintento a secas, el circuito queda
