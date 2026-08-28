@@ -1059,6 +1059,11 @@ fetch('/api/auth/me').then(function(r) {
     function renderIncidentes(data) {
       if (!data || !data.data || data.data.length === 0) {
         incidentesHost.innerHTML = '';
+        // El caso "sin incidentes activos" es el camino feliz más común (0 incidentes la
+        // mayoría del tiempo) — sin este seteo, el spinner de la primera carga (ALTO 2)
+        // seguía parpadeando en CADA poll siguiente porque `yaCargoUnaVez` nunca llegaba
+        // a ponerse en true por este return temprano.
+        yaCargoUnaVez = true;
         return;
       }
 
