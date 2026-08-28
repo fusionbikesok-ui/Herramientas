@@ -5,9 +5,7 @@ info:
   description: |
     Contrato congelado para la app móvil (React Native). Fuente de verdad para ambos lados
     (app y backend) — ver docs/superpowers/plans/plan-api-mobile-v1.md para el plan completo.
-    No implementado todavía: este archivo se escribe ANTES del código real (contract-first),
-    para que la app pueda generar su cliente TypeScript y trabajar contra mocks/fixtures
-    derivados de acá sin esperar al backend.
+    Los endpoints de dispositivos y notificaciones están implementados en el backend.
 
     Convenciones:
     - Todas las fechas en ISO 8601 UTC.
@@ -16,9 +14,9 @@ info:
     - Paginación por cursor en listados (`cursor`/`next_cursor`), no por offset.
 
 servers:
-  - url: https://herramientas.fusionbikes.com.ar/api/v1
+  - url: https://herramientas.fusionbikes.com.ar/api
     description: Producción (cuando exista)
-  - url: http://localhost:3001/api/v1
+  - url: http://localhost:3001/api
     description: Local (DISABLE_CRONS=true, nunca contra data/fusion.sqlite real)
 
 tags:
@@ -30,7 +28,7 @@ tags:
   - name: notifications
 
 security:
-  - bearerAuth: []
+  - cookieAuth: []
 
 paths:
   /auth/login:
@@ -445,10 +443,10 @@ paths:
 
 components:
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: connect.sid
 
   parameters:
     PathId:
@@ -459,11 +457,11 @@ components:
 
   responses:
     Unauthorized:
-      description: Sin token, token expirado, o inválido
+      description: Sin sesión válida o sesión expirada
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
-          example: { error: { code: "no_autenticado", message: "Token inválido o expirado" } }
+          example: { ok: false, error: "No autenticado" }
     Forbidden:
       description: Autenticado pero sin permiso para esta acción/recurso
       content:
@@ -613,7 +611,7 @@ components:
         id: { type: string }
         tipo:
           type: string
-          enum: [pregunta_nueva, mensaje_postventa, reclamo, pedido_nuevo, error_stock_ml]
+          enum: [nuevo, reaviso, resuelto]
         titulo: { type: string }
         cuerpo: { type: string }
         deep_link: { type: string, description: "Ruta interna de la app, ej. orders/123" }

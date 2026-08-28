@@ -276,6 +276,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/incidentes', incidentesRouter(db, syncCfg));
   app.use('/api/devices', devicesRouter(db));
   app.use('/api/notifications', notificationsRouter(db));
+  // Compatibilidad con el contrato móvil v1: conserva /api para clientes existentes.
+  app.use('/api/v1/devices', devicesRouter(db));
+  app.use('/api/v1/notifications', notificationsRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
   app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
 
