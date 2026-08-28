@@ -971,6 +971,10 @@ preparación:
 - La elección persistida es la que usan `GET /etiquetas` y `GET /seguimientos` para esa
   preparación, en vez de la regla automática de `normalizarEnvio` (envío si tiene
   `address_1`, si no facturación).
+- Para `canal:'ml'`, `/iniciar` verifica orden `paid`, shipment `ready_to_ship` y logística
+  local antes de crear. Si una respuesta 200 confirma cualquier condición no elegible,
+  responde 409 y no crea preparación; errores o respuestas no concluyentes conservan el
+  comportamiento fail-open de error del endpoint y no crean una preparación parcialmente.
 
 ### GET /api/preparacion/vinculos/:clave (Fase 4: detección de pedidos del mismo comprador)
 Consulta sugerencias pendientes de vínculos para un pedido. Devuelve las filas de
@@ -1066,6 +1070,27 @@ reintenta ni se bloquea nada más del webhook — la próxima notificación de e
 corrige el estado. `ingerirMensaje` acepta tanto una respuesta en array como un objeto único
 de ML (el shape exacto de `resource` para `messages` no está confirmado en producción
 todavía — revisar contra la primera notificación real que llegue).
+
+## Webhooks de sincronización rápida A.1
+
+### POST `/api/woo/webhook/order`
+
+WooCommerce envía el pedido JSON con `id` y `status` para `order.created` u
+`order.updated`; con `WOO_WEBHOOK_SECRET` configurado exige `x-wc-webhook-signature`
+HMAC-SHA256. Responde `{ ok:true }` inmediatamente. En segundo plano, `lpaandreani`
+queda como `estado_envio='pendiente'`, y `completed`/`enviadoandreani` como `enviado` en
+`pedidos_cache`. Otro estado marca una fila pendiente previa como `no_elegible`: no aparece
+en la cola ni permite iniciar preparación, sin borrar preparaciones o auditoría. Es
+fail-open: un error se registra y el cron vuelve a intentarlo.
+
+### POST `/api/ml/notificacion`
+
+ML envía `{ topic, resource, user_id }`. En `orders` y `orders_v2`, `user_id` debe coincidir
+con `ML_USER_ID` cuando está configurado y `resource` debe contener `/orders/{id}`. Responde
+`{ ok:true }` inmediatamente; `orders` además dispara ML→WC y ambos topics ejecutan la
+consulta puntual. Solo una orden `paid`, con envío `ready_to_ship` y logística local se
+guarda como `pendiente` en `pedidos_cache`; las demás no se agregan. Usuario ajeno, recurso
+inválido y errores de fondo son fail-open: se descartan o registran y el cron recupera.
 
 ## Contador de Inventario (`/api/inventario`)
 

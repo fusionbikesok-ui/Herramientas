@@ -1081,6 +1081,14 @@ export function preparacionRouter(db, cfg) {
     try {
       if (canal === 'web') {
         const resp = await wooFetch(cfg.woo, `/orders/${id}`);
+        const estadosElegibles = [cfg.andreaniStatus || 'lpaandreani', 'completed', cfg.enviadoAndreaniStatus || 'enviadoandreani'];
+        if (!estadosElegibles.includes(resp.data?.status)) {
+          // Fail-closed para iniciar: una confirmación puntual de estado no elegible
+          // invalida la fila cacheada, pero no borra preparaciones ni su auditoría.
+          db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+            .run(resp.data?.status || null, now(), `web:${resp.data?.id || id}`);
+          return res.status(409).json({ ok: false, error: 'El pedido ya no está habilitado para preparación.' });
+        }
         const clave = `web:${resp.data.id}`;
         const yaConfirmada = db.prepare(
           'SELECT direccion_confirmada_fuente FROM preparaciones WHERE clave=?'
@@ -1137,6 +1145,21 @@ export function preparacionRouter(db, cfg) {
         const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${id}`, null, { manual: true });
         if (resp.status !== 200) throw new Error(`ML order ${resp.status}`);
         const orden = resp.data;
+        if (orden.status !== 'paid') {
+          invalidarCacheMlNoElegible(db, orden.id || id, orden.status);
+          return res.status(409).json({ ok: false, error: 'La orden ML no está paga y no está habilitada para preparación.' });
+        }
+        const shipmentId = orden.shipping?.id;
+        if (!shipmentId) {
+          return res.status(409).json({ ok: false, error: 'La orden ML no tiene un envío verificable para preparación.' });
+        }
+        const envioResp = await mlFetch(db, cfg.ml, 'get', `/shipments/${shipmentId}`, null, { manual: true });
+        if (envioResp.status !== 200) throw new Error(`ML shipment ${envioResp.status}`);
+        const envio = envioResp.data;
+        if (envio.status !== 'ready_to_ship' || !esEnvioLocal(envio.logistic_type)) {
+          invalidarCacheMlNoElegible(db, orden.id || id, orden.status, envio.status, envio.logistic_type);
+          return res.status(409).json({ ok: false, error: 'El envío ML no está listo o no corresponde a logística local.' });
+        }
         const items = itemsDesdeOrdenMl(db, orden);
         const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(String(orden.id));
         const prepId = crearPreparacion(db, {
@@ -2199,6 +2222,12 @@ export async function syncPedidosCache(db, cfg) {
 // pendientesMl (ML). El caller (server.js) ya llama a esto con .catch(), fire-and-forget,
 // igual que ya hace con syncWcToMl/syncMlToWc para el mismo webhook.
 
+function invalidarCacheMlNoElegible(db, mlOrderId, estadoOrden, estadoEnvio = null, logisticType = null) {
+  const detalle = estadoEnvio ? `${estadoOrden}/${estadoEnvio}/${logisticType || 'sin-logistica'}` : estadoOrden;
+  db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, logistic_type=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+    .run(detalle || null, logisticType, now(), `ml:${mlOrderId}`);
+}
+
 // Trae SOLO la orden `wcOrderId` de Woo y hace upsert inmediato en pedidos_cache si su
 // estado es uno de los 3 que syncPedidosCache ya trackea (lpaandreani/completed/enviadoandreani).
 // Cualquier otro estado (pending, cancelled, etc.) se ignora en silencio: no es un estado
@@ -2213,7 +2242,14 @@ export async function syncPedidoWebPuntual(db, cfg, wcOrderId) {
   let estadoEnvio = null;
   if (order.status === andreaniStatus) estadoEnvio = 'pendiente';
   else if (order.status === 'completed' || order.status === enviadoAndreaniStatus) estadoEnvio = 'enviado';
-  if (!estadoEnvio) return;
+  if (!estadoEnvio) {
+    // No borrar: preparaciones y auditoría pueden seguir apuntando a esta clave.
+    // `no_elegible` la saca de la cola y evita que una fila pendiente vieja vuelva a
+    // habilitar el inicio hasta que Woo confirme un estado elegible nuevamente.
+    db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+      .run(order.status || null, now(), `web:${order.id || wcOrderId}`);
+    return;
+  }
   upsertPedidoCache(db, filaWebDesdeOrder(db, order, estadoEnvio));
 }
 
@@ -2227,7 +2263,10 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
   const ordenResp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
   if (ordenResp.status !== 200) return;
   const orden = ordenResp.data;
-  if (orden.status !== 'paid') return;
+  if (orden.status !== 'paid') {
+    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status);
+    return;
+  }
   const shipmentId = orden.shipping?.id;
   if (!shipmentId) return;
 
@@ -2240,8 +2279,10 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     VALUES (?, ?, ?, ?)
     ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
   `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
-  if (envio.status !== 'ready_to_ship') return;
-  if (!esEnvioLocal(envio.logistic_type)) return;
+  if (envio.status !== 'ready_to_ship' || !esEnvioLocal(envio.logistic_type)) {
+    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio.status, envio.logistic_type);
+    return;
+  }
 
   const ov = normalizarOrdenMl(orden);
   const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);

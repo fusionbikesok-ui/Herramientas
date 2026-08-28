@@ -179,7 +179,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
       // Fail-open: si falla o el order id no se puede extraer, no se pierde nada -- el pedido
       // igual va a aparecer en la próxima corrida de syncPedidosCache (cron cada 10 min) vía
       // pendientesMl, que no depende de este camino puntual.
-      const mlOrderId = String(resource || '').split('/').filter(Boolean).pop();
+      const recursoPedido = String(resource || '').match(/^\/orders\/([^/]+)\/?$/);
+      const mlOrderId = recursoPedido?.[1];
       if (mlOrderId) {
         syncPedidoMlPuntual(app._db, mlCfg, mlOrderId)
           .catch(err => console.error('[notif-ml] syncPedidoMlPuntual error:', err.message));

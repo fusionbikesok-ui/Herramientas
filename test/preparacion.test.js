@@ -1744,7 +1744,7 @@ import { syncPedidosCache } from '../routes/preparacion.js';
 describe('POST /iniciar — confirmación de envío vs. facturación', () => {
   let db;
   const orderBase = (overrides = {}) => ({
-    id: 950, number: '950', meta_data: [],
+    id: 950, number: '950', status: 'lpaandreani', meta_data: [],
     shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567' },
     billing: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567', email: 'ana@mail.com' },
     line_items: [],
@@ -1788,6 +1788,13 @@ describe('POST /iniciar — confirmación de envío vs. facturación', () => {
     }) });
     const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
     expect(r.status).toBe(200);
+  });
+
+  it('POST /iniciar Woo devuelve 409 y no crea preparación si el estado no es elegible', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({ status: 'cancelled' }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r.status).toBe(409);
+    expect(db.prepare("SELECT * FROM preparaciones WHERE clave='web:950'").get()).toBeUndefined();
   });
 
   it('con direccion_elegida crea la preparación y guarda la decisión', async () => {
@@ -2464,6 +2471,24 @@ describe('syncPedidoWebPuntual', () => {
     expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:903'").get()).toBeUndefined();
   });
 
+  it('invalida una fila pendiente cacheada al confirmar un estado no elegible, sin borrar la preparación', async () => {
+    buildTestApp(db); // inicializa las tablas de preparación/cache antes de sembrar la transición
+    db.prepare(`INSERT INTO pedidos_cache
+      (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
+      VALUES ('web:906', 'web', 906, '906', 'Juan', ?, 'pendiente', '[]', ?)`)
+      .run(new Date().toISOString(), new Date().toISOString());
+    db.prepare(`INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en)
+      VALUES ('web', 'web:906', 'en_preparacion', 0, ?)`)
+      .run(new Date().toISOString());
+    wooFetch.mockResolvedValueOnce({ data: { id: 906, status: 'cancelled', billing: {}, line_items: [] } });
+
+    await syncPedidoWebPuntual(db, CFG, 906);
+
+    expect(db.prepare("SELECT estado_envio, estado_wc FROM pedidos_cache WHERE clave='web:906'").get())
+      .toMatchObject({ estado_envio: 'no_elegible', estado_wc: 'cancelled' });
+    expect(db.prepare("SELECT estado FROM preparaciones WHERE clave='web:906'").get().estado).toBe('en_preparacion');
+  });
+
   it('fail-open: si el webhook falla (wooFetch rechaza), no revienta y el pedido queda para el cron siguiente', async () => {
     wooFetch.mockRejectedValueOnce(new Error('WC caído'));
 
@@ -2505,6 +2530,14 @@ describe('syncPedidoMlPuntual', () => {
 
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('POST /iniciar ML devuelve 409 y no crea preparación si el envío no es elegible', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-14', status: 'paid', shipping: { id: 814 }, buyer: { nickname: 'x' } } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'shipped', logistic_type: 'self_service' } });
+    const res = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'ml', id: 'ORD-14' });
+    expect(res.status).toBe(409);
+    expect(db.prepare("SELECT * FROM preparaciones WHERE clave='ml:ORD-14'").get()).toBeUndefined();
+  });
 
   it('trae SOLO la orden pedida (paid + ready_to_ship + envío local) y hace upsert inmediato', async () => {
     mlFetch
