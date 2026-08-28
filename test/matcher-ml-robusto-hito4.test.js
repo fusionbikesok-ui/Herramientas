@@ -249,6 +249,28 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     expect(incidentes[0].estado).toBe('activo');
   });
 
+  // 3ra pasada del revisor (MEDIO 4): el test de arriba solo verificaba el incidente, no que
+  // las publicaciones YA cacheadas sobrevivan — un futuro refactor del guard `filas.length > 0`
+  // podía volver a borrar el cache completo ante 0 resultados y seguir pasando en verde.
+  it('ALTO 4: con 0 publicaciones, el cache existente NO se borra (fail-closed real, no solo el incidente)', async () => {
+    const ts = new Date().toISOString();
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, actualizado_en) VALUES (?, ?, ?)`)
+      .run('MLA1|', 'MLA1', ts);
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, actualizado_en) VALUES (?, ?, ?)`)
+      .run('MLA2|', 'MLA2', ts);
+
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: { results: [], scroll_id: null } });
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: { results: [], scroll_id: null } });
+
+    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    await vi.runAllTimersAsync();
+    const resultado = await promise;
+    expect(resultado.total).toBe(0);
+
+    const filasSobrevivientes = db.prepare('SELECT COUNT(*) n FROM ml_publicaciones_cache').get().n;
+    expect(filasSobrevivientes).toBe(2); // el cache viejo sigue intacto, no se pisó con 0 filas
+  });
+
   it('registra duración en métrica (performance.now monotónico)', async () => {
     // Refresco mínimo (vacío)
     axios.request.mockResolvedValueOnce({
@@ -381,5 +403,68 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     const incidente = incidentes[incidentes.length - 1];
     expect(incidente.tipo_error).toBe('auth');
     expect(incidente.severidad).toBe('critico');
+  });
+
+  // 3ra pasada del revisor (ALTO 1): el 401 de arriba ya pasaba, pero el escenario real que
+  // motivó el hito (refresh_token quemado / invalid_grant) es un 400 según OAuth 2.0 (RFC
+  // 6749), no un 401 — y ese caso caía en categorizarErrorMl como 'datos' (severidad 'info')
+  // en vez de 'auth' (severidad 'critico'), porque el throw original solo seteaba .status,
+  // no .categoria.
+  it('ALTO 1: refresh de token con 400 (invalid_grant) también se categoriza como auth, no datos', async () => {
+    const ahora = Date.now();
+    const vencidoHace1Min = new Date(ahora - 60 * 1000).toISOString();
+    db.prepare('UPDATE ml_oauth_token SET expires_at = ?, refresh_token = ? WHERE id = 1')
+      .run(vencidoHace1Min, 'refresh_token_quemado');
+
+    vi.mocked(axios).post = vi.fn().mockResolvedValue({
+      status: 400,
+      headers: {},
+      data: null,
+    });
+
+    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG).catch(e => e);
+    await vi.runAllTimersAsync();
+
+    const thrownErr = await promise;
+    expect(thrownErr).toBeInstanceOf(Error);
+    expect(thrownErr.status).toBe(400);
+    expect(categorizarErrorMl(thrownErr)).toBe('auth'); // no 'datos'
+
+    const incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE integracion = ? AND proceso = ?')
+      .all('mercadolibre', 'refrescar_publicaciones');
+    expect(incidentes.length).toBeGreaterThan(0);
+    const incidente = incidentes[incidentes.length - 1];
+    expect(incidente.tipo_error).toBe('auth');
+    expect(incidente.severidad).toBe('critico'); // no 'info'
+  });
+
+  // 3ra pasada del revisor (ALTO 2): el cooldown propio del refresh de OAuth (_cooldownActivo()
+  // en getAccessToken) seteaba status=429 pero no el flag sintético — indistinguible de un
+  // 429 real de ML, y pisando la clave de dedupe del 429 real que originó el cooldown.
+  it('ALTO 2: el cooldown propio de OAuth se distingue de un 429 real (tipoError rate_limit_propio)', async () => {
+    // Forzar refresh y activar el cooldown de OAuth con un 429 real primero.
+    const ahora = Date.now();
+    const vencidoHace1Min = new Date(ahora - 60 * 1000).toISOString();
+    db.prepare('UPDATE ml_oauth_token SET expires_at = ?, refresh_token = ? WHERE id = 1')
+      .run(vencidoHace1Min, 'refresh_token_quemado');
+    vi.mocked(axios).post = vi.fn().mockResolvedValue({ status: 429, headers: {}, data: null });
+
+    const promise1 = refrescarPublicacionesMlConMetricas(db, ML_CFG).catch(e => e);
+    await vi.runAllTimersAsync();
+    const err1 = await promise1;
+    expect(err1).toBeInstanceOf(Error);
+
+    // Segundo ciclo: el cooldown que el 429 real activó sigue vigente — getAccessToken corta
+    // ANTES de llamar a axios.post de nuevo. Ese segundo error debe venir marcado como
+    // sintético (rate_limit_propio), no pisar el incidente 'rate_limit' del 429 real.
+    db.prepare('UPDATE ml_oauth_token SET expires_at = ? WHERE id = 1').run(vencidoHace1Min);
+    const promise2 = refrescarPublicacionesMlConMetricas(db, ML_CFG).catch(e => e);
+    await vi.runAllTimersAsync();
+    const err2 = await promise2;
+    expect(err2).toBeInstanceOf(Error);
+    expect(err2.__cooldownSintetico).toBe(true);
+
+    const incidentesReales = db.prepare("SELECT * FROM incidentes_operativos WHERE tipo_error = 'rate_limit'").all();
+    expect(incidentesReales.length).toBeGreaterThan(0); // el 429 real conservó su propia clave
   });
 });

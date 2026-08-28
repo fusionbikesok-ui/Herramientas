@@ -14,3 +14,4 @@ uploads/
 # se colaron una vez en un commit por un `git add -A` (73.394 líneas de ruido).
 .playwright-mcp/
 /*.png
+/*.log
