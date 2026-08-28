@@ -7,6 +7,7 @@
 
 import express from 'express';
 import { requireAuth } from '../lib/auth.js';
+import { requireMobileAuth } from '../lib/mobileAuth.js';
 import { tokenValido } from '../lib/notificacionesPush.js';
 
 const now = () => new Date().toISOString();
@@ -32,8 +33,9 @@ function deviceAPublico(row) {
   };
 }
 
-export function devicesRouter(db) {
+export function devicesRouter(db, options = {}) {
   const router = express.Router();
+  const auth = options.mobile ? requireMobileAuth(db) : requireAuth(db);
 
   /**
    * POST /devices
@@ -49,7 +51,7 @@ export function devicesRouter(db) {
    * Response 422: Falta platform/push_token o valores inválidos
    * Response 500: Error interno
    */
-  router.post('/', requireAuth(db), (req, res) => {
+  router.post('/', auth, (req, res) => {
     try {
       const { platform, push_token, device_name } = req.body;
       const userId = req.user.id;
@@ -170,7 +172,7 @@ export function devicesRouter(db) {
    * Response 404: Dispositivo no encontrado
    * Response 500: Error interno
    */
-  router.delete('/:id', requireAuth(db), (req, res) => {
+  router.delete('/:id', auth, (req, res) => {
     try {
       const deviceId = req.params.id;
       const userId = req.user.id;

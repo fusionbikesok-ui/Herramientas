@@ -28,7 +28,7 @@ tags:
   - name: notifications
 
 security:
-  - cookieAuth: []
+  - bearerAuth: []
 
 paths:
   /auth/login:
@@ -443,10 +443,10 @@ paths:
 
 components:
   securitySchemes:
-    cookieAuth:
-      type: apiKey
-      in: cookie
-      name: connect.sid
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
 
   parameters:
     PathId:

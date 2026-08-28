@@ -2811,17 +2811,17 @@ enum, el parseo se rompe cuando recibe un tipo no esperado.
 
 ### 3. Autenticación: cookie vs. JWT, respuesta error no normalizada
 
-**En el YAML:** Declara `cookieAuth` sobre la cookie de sesión `connect.sid`.
+**En el YAML:** Declara `bearerAuth` para la app móvil (`Authorization: Bearer <access_token>`).
 
-**En el código (lib/auth.js, requireAuth):** Las rutas usan sesión por cookie (`req.session.userId`)
-y un middleware `requireAuth` que chequea sesión, no JWT.
+**En el código:** las rutas móviles `/api/v1` usan JWT; el panel web y los aliases históricos
+`/api` continúan usando sesión por cookie.
 
 **Respuesta:** los 401 reflejan la respuesta real de `requireAuth` (`{ ok:false, error:string }`).
 
-**Resolución:** JWT queda fuera de este backend hasta que exista una decisión y un contrato de
-refresh/revocación correspondiente; el cliente usa la sesión HTTP creada por el login.
+**Resolución:** Bloque 4 implementa access tokens JWT cortos y refresh tokens opacos rotativos,
+revocables por familia y dispositivo. El panel web conserva `express-session`.
 
 ---
 
-**Nota para el equipo de la app:** puede consumir estos endpoints bajo `/api/v1` o los aliases
-históricos `/api`, usando la sesión HTTP del login.
+**Nota para el equipo de la app:** debe consumir estos endpoints bajo `/api/v1` enviando
+`Authorization: Bearer <access_token>`; el refresh token se envía solo a `/api/v1/auth/refresh`.

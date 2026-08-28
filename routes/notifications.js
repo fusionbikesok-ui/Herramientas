@@ -7,6 +7,7 @@
 
 import express from 'express';
 import { requireAuth } from '../lib/auth.js';
+import { requireMobileAuth } from '../lib/mobileAuth.js';
 
 const now = () => new Date().toISOString();
 
@@ -63,8 +64,9 @@ function notificacionAPublico(row) {
   };
 }
 
-export function notificationsRouter(db) {
+export function notificationsRouter(db, options = {}) {
   const router = express.Router();
+  const auth = options.mobile ? requireMobileAuth(db) : requireAuth(db);
 
   /**
    * GET /notifications
@@ -77,7 +79,7 @@ export function notificationsRouter(db) {
    * Response 401: No autenticado
    * Response 500: Error interno
    */
-  router.get('/', requireAuth(db), (req, res) => {
+  router.get('/', auth, (req, res) => {
     try {
       const userId = req.user.id;
       const { cursor } = req.query;
@@ -152,7 +154,7 @@ export function notificationsRouter(db) {
    * Response 404: Notificación no encontrada o no pertenece al usuario
    * Response 500: Error interno
    */
-  router.post('/:id/read', requireAuth(db), (req, res) => {
+  router.post('/:id/read', auth, (req, res) => {
     try {
       const notifId = parseInt(req.params.id, 10);
       const userId = req.user.id;

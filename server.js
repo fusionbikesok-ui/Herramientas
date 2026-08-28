@@ -10,6 +10,7 @@ import { openDb } from './db/index.js';
 import { requireAuth, requireAdmin } from './lib/auth.js';
 import { resolvePermiso, permiteAcceso } from './lib/permisos.js';
 import { authRouter } from './routes/auth.js';
+import { mobileAuthRouter } from './routes/mobileAuth.js';
 import { usuariosRouter } from './routes/usuarios.js';
 import { wooRouter, refrescarCatalogo } from './routes/woo.js';
 import { geminiRouter } from './routes/gemini.js';
@@ -277,8 +278,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/devices', devicesRouter(db));
   app.use('/api/notifications', notificationsRouter(db));
   // Compatibilidad con el contrato móvil v1: conserva /api para clientes existentes.
-  app.use('/api/v1/devices', devicesRouter(db));
-  app.use('/api/v1/notifications', notificationsRouter(db));
+  app.use('/api/v1/devices', devicesRouter(db, { mobile: true }));
+  app.use('/api/v1/notifications', notificationsRouter(db, { mobile: true }));
+  app.use('/api/v1/auth', mobileAuthRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
   app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
 
