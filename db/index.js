@@ -406,5 +406,65 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_metricas_ciclo_integracion ON metricas_ciclo_sync(integracion, proceso, iniciado_en)'); } catch (_) {}
 
+  // Hito 7: Infraestructura backend de notificaciones push (iOS, Android, web).
+  // Tabla de dispositivos registrados para push.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS device_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token TEXT NOT NULL,
+    plataforma TEXT NOT NULL CHECK(plataforma IN ('ios', 'android', 'web')),
+    nombre_dispositivo TEXT,
+    creado_en TEXT NOT NULL,
+    actualizado_en TEXT NOT NULL,
+    revocado_en TEXT,
+    UNIQUE(token)
+  )`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_device_tokens_usuario_activo
+    ON device_tokens(user_id, revocado_en) WHERE revocado_en IS NULL`); } catch (_) {}
+
+  // Preferencias de notificación por usuario (extensible a futuro).
+  try { db.exec(`CREATE TABLE IF NOT EXISTS preferencias_notificacion (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    incidentes_criticos INTEGER NOT NULL DEFAULT 1,
+    actualizado_en TEXT NOT NULL
+  )`); } catch (_) {}
+
+  // Log de notificaciones enviadas — tracking y deduplicación.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS notificaciones_enviadas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_token_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
+    tipo TEXT NOT NULL,
+    incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
+    estado TEXT NOT NULL CHECK(estado IN ('pendiente', 'enviado', 'fallido')),
+    intentos INTEGER NOT NULL DEFAULT 1,
+    error TEXT,
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_dedupe
+    ON notificaciones_enviadas(device_token_id, tipo, incidente_id)
+    WHERE tipo IN ('nuevo', 'resuelto')`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_pendientes
+    ON notificaciones_enviadas(device_token_id, estado, creado_en)
+    WHERE estado IN ('pendiente', 'fallido')`); } catch (_) {}
+
+  // Notificaciones visibles al usuario (lo que ve en la app).
+  // Separado del log de envíos: este es "qué notificaciones tiene el usuario",
+  // el otro es "qué intentos de envío se hicieron". Una notificación puede no haberse
+  // enviado (estado='fallido' en notificaciones_enviadas) pero seguir existiendo acá
+  // para que el usuario la vea y sepa que pasó algo.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS notificaciones_usuario (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tipo TEXT NOT NULL,
+    titulo TEXT NOT NULL,
+    cuerpo TEXT NOT NULL,
+    deep_link TEXT,
+    leida INTEGER NOT NULL DEFAULT 0,
+    incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
+    creado_en TEXT NOT NULL
+  )`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_no_leidas
+    ON notificaciones_usuario(user_id, leida, creado_en DESC)`); } catch (_) {}
+
   return db;
 }

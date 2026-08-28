@@ -2596,3 +2596,167 @@ no se registró, pero tampoco cortó la sincronización (comentario explícito e
 tiempo (falta un evento), pero el sistema de integraciones no colapsa. Mismo criterio para
 `confirmarCicloSano` — si el registro de la resolución falla, devuelve `{ error: true }` sin
 interrumpir el ciclo exitoso que la llamó.
+
+## Hito 7: Notificaciones Push (iOS, Android, Web)
+
+Infraestructura backend para enviar notificaciones push a dispositivos móviles registrados.
+Contrato con `openapi/mobile-v1.yaml` (contract-first, la app ya tiene el cliente TypeScript
+generado). Los endpoints en esta sección son parte de la API móvil (rotas bajo `/api/`).
+
+### POST /api/devices
+Registra un dispositivo para recibir notificaciones push.
+
+- Request:
+  ```json
+  {
+    "platform": "ios" | "android",
+    "push_token": "string (token del proveedor APNs/FCM)",
+    "device_name": "string (opcional, ej. 'iPhone de Juan')"
+  }
+  ```
+
+- Response 200:
+  ```json
+  {
+    "id": "1",
+    "platform": "ios",
+    "device_name": "iPhone de Juan",
+    "creado_en": "2026-08-28T15:30:00Z"
+  }
+  ```
+
+- Response 401: No autenticado (sin sesión válida).
+- Response 422:
+  - `{ "error": { "code": "platform_invalido", "message": "..." } }` — `platform` no es 'ios' ni 'android'.
+  - `{ "error": { "code": "push_token_invalido", "message": "..." } }` — `push_token` vacío o no string.
+  - `{ "error": { "code": "token_ya_registrado", "message": "..." } }` — el token ya pertenece a otro usuario.
+- Response 500: Error interno.
+
+Notas:
+- Solo usuarios autenticados pueden registrar dispositivos (sesión HTTP válida).
+- Cada usuario es dueño de sus propios dispositivos; no puede ver ni modificar los de otros.
+- Si el mismo `push_token` se re-registra para el mismo usuario, se actualiza (limpia `revocado_en`).
+- Un usuario puede tener múltiples dispositivos simultáneamente (ej. iPhone + iPad).
+- El `push_token` es único en la tabla — un token de APNs/FCM no puede pertenecer a dos usuarios.
+
+### DELETE /api/devices/{id}
+Revoca/elimina un dispositivo, deteniendo futuras notificaciones hacia ese token.
+
+- Path parameter: `id` (string, ID del dispositivo a revocar).
+- Request: sin body.
+
+- Response 200: `{ "ok": true }`
+
+- Response 401: No autenticado.
+- Response 403: `{ "error": { "code": "sin_permiso", "message": "..." } }` — el dispositivo no pertenece al usuario autenticado.
+- Response 404: `{ "error": { "code": "no_encontrado", "message": "..." } }` — el dispositivo con ese ID no existe.
+- Response 500: Error interno.
+
+Notas:
+- Revoca seteando la columna `revocado_en` (soft-delete, registro persiste para auditoría).
+- El token queda inactivo y no recibe más notificaciones.
+- (Futuro) Opcional: invalidar refresh_tokens emitidos desde ese dispositivo.
+
+### GET /api/notifications
+Lista notificaciones del usuario autenticado, paginadas por cursor.
+
+- Query params:
+  - `cursor` (opcional): cursor de paginación (opaco, devuelto en `next_cursor` de respuesta anterior).
+
+- Response 200:
+  ```json
+  {
+    "items": [
+      {
+        "id": "1",
+        "tipo": "nuevo",
+        "titulo": "⚠️ Incidente en ML",
+        "cuerpo": "Un error fue detectado en la integración.",
+        "deep_link": "incidentes",
+        "leida": false,
+        "creado_en": "2026-08-28T15:00:00Z"
+      }
+    ],
+    "next_cursor": "base64-cursor-or-null"
+  }
+  ```
+
+- Response 401: No autenticado.
+- Response 500: Error interno.
+
+Notas:
+- Solo el usuario autenticado ve sus propias notificaciones.
+- Paginación por cursor (no offset), más eficiente en bases de datos.
+- Ordenadas por `creado_en DESC` (más recientes primero).
+- Cada notificación tiene un `deep_link` opaco (ej. "incidentes") que la app usa para navegar al detalle.
+- `leida` es un booleano (no entero).
+- Si no hay más resultados, `next_cursor` es `null`.
+
+### POST /api/notifications/{id}/read
+Marca una notificación como leída.
+
+- Path parameter: `id` (string, ID de la notificación).
+- Request: sin body.
+
+- Response 200: `{ "ok": true }`
+
+- Response 401: No autenticado.
+- Response 404: `{ "error": { "code": "no_encontrado", "message": "..." } }` — la notificación no existe o no pertenece al usuario.
+- Response 500: Error interno.
+
+Notas:
+- Idempotente: marcar leída una notificación ya leída no es error, devuelve 200 igual.
+- Solo el propietario de la notificación puede marcarla como leída.
+
+### Arquitectura: Desacoplamiento entre envío y visualización
+
+Las notificaciones son **dos tablas separadas**:
+
+1. **`notificaciones_enviadas`** (log de intentos de delivery):
+   - Registra cada intento de envío a cada dispositivo.
+   - Estados: `'pendiente'`, `'enviado'`, `'fallido'`.
+   - Tiene reintentos y backoff (futuro, cuando se implemente FCM real).
+   - Contiene deduplicación: tipos 'nuevo' y 'resuelto' tienen constraint UNIQUE por incidente,
+     pero 'reaviso' es repetible.
+
+2. **`notificaciones_usuario`** (lo que ve el usuario en la app):
+   - Registra notificaciones VISIBLES para el usuario.
+   - Independiente del delivery: aunque un `notificaciones_enviadas` tenga estado='fallido',
+     la notificación sigue en `notificaciones_usuario`.
+   - Campo `leida` para tracking de lo que el usuario vio.
+
+**Separación consciente:** un error de delivery a FCM (proveedor caído, token inválido) no borra
+la notificación de la vista del usuario. El usuario sigue siendo consciente de que algo pasó,
+aunque no le llegara el push en el dispositivo.
+
+### Worker: `procesarNotificacionesPush`
+
+Cron cada 2 minutos (configurable via `REAVISO_INCIDENTE_MIN`, default 30 min para reintentos).
+
+**Lógica:**
+1. Busca incidentes en estado 'activo' sin notificación 'nuevo' enviada → envía 'nuevo'.
+2. Busca incidentes en estado 'activo' con último envío > 30 min → envía 'reaviso'.
+3. Busca incidentes en estado 'resuelto' sin notificación 'resuelto' enviada → envía 'resuelto'.
+
+**Destinatarios:** usuarios con `preferencias_notificacion.incidentes_criticos = 1`
+(default 1, opt-out, no opt-in).
+
+**FAIL-OPEN:** cualquier error en el envío del worker (proveedor caído, DB busy) nunca lanza
+una excepción. El worker continúa procesando otros incidentes. Errores se loguean en consola.
+
+### Decisión de diseño: Opción (c) preferida
+
+El worker es un **cron periódico que escanea** `incidentes_operativos` (no requiere tocar
+`abrirOActualizarIncidente`/`confirmarCicloSano`). Esto permite:
+- **Desacoplamiento total:** el ciclo de sync ML/Woo + incidentes nunca aguarda al worker de push.
+- **Independencia de errores:** un fallo del proveedor push (FCM timeout) no bloquea nada.
+- **Simplicidad:** sin callbacks, sin wiring, sin threads adicionales (el cron es async, mismo
+  hilo que Express).
+- **Compatibilidad:** cero cambios en `lib/incidentes.js`, la librería productiva.
+
+Las otras opciones consideradas:
+- (a) Wrapper en los callers (`routes/woo.js`, `routes/matcher.js`) → requería modificar rutas
+  ya estables y multado de revisión.
+- (b) Callback opcional → parámetro nuevo en firmas de funciones, mayor complejidad, sin
+  beneficio claro vs. (c).
+

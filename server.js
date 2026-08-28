@@ -34,6 +34,9 @@ import { backfillVentas } from './lib/criticidad.js';
 import { auditoriaRouter } from './routes/auditoria.js';
 import { barridoAuditoria } from './lib/auditoria.js';
 import { incidentesRouter } from './routes/incidentes.js';
+import { devicesRouter } from './routes/devices.js';
+import { notificationsRouter } from './routes/notifications.js';
+import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje, ingerirReclamo } from './routes/notificacionesMl.js';
@@ -271,6 +274,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/criticidad', criticidadRouter(db, syncCfg));
   app.use('/api/auditoria', auditoriaRouter(db));
   app.use('/api/incidentes', incidentesRouter(db, syncCfg));
+  app.use('/api/devices', devicesRouter(db));
+  app.use('/api/notifications', notificationsRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
   app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
 
@@ -498,6 +503,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         }
         reconciliarStockMl(app._db, syncCfg)
           .catch(err => console.error('reconciliación de stock ML error:', err.message));
+      });
+
+      // Hito 7: Worker de notificaciones push — escanea incidentes activos/resueltos
+      // y envía notificaciones a dispositivos registrados. Corre cada 2 minutos.
+      cron.schedule('*/2 * * * *', () => {
+        procesarNotificacionesPush(app._db)
+          .catch(err => console.error('Error en procesarNotificacionesPush:', err.message));
       });
     }
 
