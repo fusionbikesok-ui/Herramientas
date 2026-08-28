@@ -24,6 +24,10 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 
 ## Cuándo actualizar
 
+ML distingue `elegible`, `no_elegible` e `inconcluso`: faltan `shipping.id` o
+`logistic_type` son inconclusos/fail-open; solo logística externa explícita permite
+invalidar/podar. El cron poda ausencias únicamente con listado confiable.
+
 Solo con decisiones verificadas que cambien contratos, invariantes, fuentes de datos o rutas
 canónicas de esta integración. No dupliques reglas normativas: enlazalas a su única fuente.
 

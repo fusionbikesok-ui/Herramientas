@@ -7,6 +7,7 @@ import { openDb } from '../db/index.js';
 import {
   splitDireccion, splitTelefonoAr, normalizarEnvio, nombreProvincia, direccionesDifieren,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
+  clasificarElegibilidadMl,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
 import { rutaAbsoluta } from '../utils/storage.js';
@@ -2527,6 +2528,20 @@ describe('syncPedidoWebPuntual', () => {
 describe('syncPedidoMlPuntual', () => {
   let db;
   const MLCFG = { clientId: 'cid', clientSecret: 'cs', userId: '99999' };
+
+  it('clasifica evidencia ML como elegible, no elegible o inconclusa sin cerrar de más', () => {
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship', logistic_type: 'self_service' }).estado).toBe('elegible');
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship', logistic_type: 'fulfillment' }).estado).toBe('no_elegible');
+    expect(clasificarElegibilidadMl({ status: 'paid' }, null).estado).toBe('inconcluso');
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship' }).estado).toBe('inconcluso');
+  });
+
+  it('sync puntual conserva como pendiente una orden paga sin shipping.id (inconclusa)', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-INCONCLUSA', status: 'paid', buyer: { nickname: 'x' }, order_items: [] } });
+    await syncPedidoMlPuntual(db, MLCFG, 'ORD-INCONCLUSA');
+    expect(db.prepare("SELECT estado_envio, logistic_type FROM pedidos_cache WHERE clave='ml:ORD-INCONCLUSA'").get())
+      .toMatchObject({ estado_envio: 'pendiente', logistic_type: null });
+  });
 
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });

@@ -1092,6 +1092,11 @@ consulta puntual. Solo una orden `paid`, con envío `ready_to_ship` y logística
 guarda como `pendiente` en `pedidos_cache`; las demás no se agregan. Usuario ajeno, recurso
 inválido y errores de fondo son fail-open: se descartan o registran y el cron recupera.
 
+En preparación ML, la evidencia se clasifica como `elegible`, `no_elegible` o `inconcluso`.
+Una orden paga sin `shipping.id`, o un envío `ready_to_ship` sin `logistic_type`, es
+`inconcluso` y fail-open: no responde 409 ni se poda una fila existente. Logística externa
+explícita es `no_elegible`; `self_service`, `cross_docking`, `drop_off` y `xd_drop_off` son locales.
+
 ## Contador de Inventario (`/api/inventario`)
 
 Todos los endpoints requieren sesión iniciada; las consultas de sesión están scopeadas
