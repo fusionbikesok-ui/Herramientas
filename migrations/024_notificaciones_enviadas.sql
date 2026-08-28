@@ -39,8 +39,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_dedupe
   ON notificaciones_enviadas(device_token_id, tipo, incidente_id)
   WHERE tipo IN ('nuevo', 'resuelto');
 
--- Búsqueda rápida de notificaciones pendientes/fallidas para reintentos
--- Excluye 'agotado' (terminal), incluye solo estados que pueden reintentarse
+-- Búsqueda rápida de notificaciones pendientes/fallidas/agotadas — el filtro real de
+-- "esto ya no se reintenta" lo aplica la consulta en código (excluye 'agotado' ahí),
+-- este índice solo acelera el acceso por device_token_id/estado.
 CREATE INDEX IF NOT EXISTS idx_notificaciones_pendientes
   ON notificaciones_enviadas(device_token_id, estado, creado_en)
-  WHERE estado IN ('pendiente', 'fallido');
+  WHERE estado IN ('pendiente', 'fallido', 'agotado');
