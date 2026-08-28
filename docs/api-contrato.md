@@ -2760,3 +2760,57 @@ Las otras opciones consideradas:
 - (b) Callback opcional → parámetro nuevo en firmas de funciones, mayor complejidad, sin
   beneficio claro vs. (c).
 
+## Limitaciones conocidas (Hito 7) — Desalineaciones pendientes de resolver
+
+La implementación actual del backend de notificaciones push tiene 3 desalineaciones con
+`openapi/mobile-v1.yaml` que requieren decisiones arquitectónicas fuera del alcance de este
+hito. Se documentan como limitaciones conocidas para evitar la falsa impresión de
+conformidad:
+
+### 1. Enum de tipos de notificación no coincide
+
+**En el YAML:** `Notification.tipo` es un enum cerrado:
+`['pregunta_nueva', 'mensaje_postventa', 'reclamo', 'pedido_nuevo', 'error_stock_ml']`
+
+**En el código (workerNotificacionesPush.js):** Los tipos emitidos son:
+`['nuevo', 'reaviso', 'resuelto']`
+
+**Impacto:** Si la app generó un cliente desde el YAML y hace type-checking estricto sobre el
+enum, el parseo se rompe cuando recibe un tipo no esperado.
+
+**Resolución pendiente:** Alinear enum en YAML con tipos reales, o renombrar tipos en el código.
+Requiere decisión de producto (semántica: ¿qué significa cada tipo del YAML hoy?).
+
+### 2. Rutas montadas sin prefijo `/v1`
+
+**En el YAML:** `servers.url = ".../api/v1"` — rutas esperadas bajo ese prefijo.
+
+**En el código (server.js):** Las rutas están montadas directamente:
+- `POST /api/devices` (no `/api/v1/devices`)
+- `GET /api/notifications` (no `/api/v1/notifications`)
+
+**Impacto:** Clientes que respeten estrictamente el YAML fallarán al conectar.
+
+**Resolución pendiente:** Mover rutas bajo `/api/v1/...` o actualizar YAML. Requiere
+coordinación de frontend si hay clientes en vivo.
+
+### 3. Autenticación: cookie vs. JWT, respuesta error no normalizada
+
+**En el YAML:** Declara `bearerAuth` (JWT en header `Authorization: Bearer <token>`).
+
+**En el código (lib/auth.js, requireAuth):** Las rutas usan sesión por cookie (`req.session.userId`)
+y un middleware `requireAuth` que chequea sesión, no JWT.
+
+**Impacto adicional:** Los 401 devueltos por `requireAuth` no respetan el schema `Error`
+documentado. Retornan una respuesta diferente, lo que rompe parseo de clientes estrictos.
+
+**Resolución pendiente:** Implementar autenticación JWT completa en las rutas de notificaciones
+y dispositivos, o actualizar YAML y clientes a sesión por cookie. Decisión de arquitectura
+de autenticación que excede este hito.
+
+---
+
+**Nota para el equipo de la app:** Estas 3 limitaciones deben resolverse antes de pasar la
+app a producción. El backend funciona correctamente internamente; la desalineación es
+documental y de contrato, no de lógica.
+

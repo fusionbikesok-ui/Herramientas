@@ -168,7 +168,7 @@ describe('routes/devices', () => {
       db.close();
     });
 
-    it('rechaza token ya registrado para otro usuario', async () => {
+    it('reasigna token de otro usuario al usuario actual (MEDIO 7)', async () => {
       const db = openDb(TEST_DB);
       seedUser(db, { id: 1, username: 'user1' });
       seedUser(db, { id: 2, username: 'user2' });
@@ -184,10 +184,17 @@ describe('routes/devices', () => {
       const res = await request(app).post('/api/devices').send({
         platform: 'ios',
         push_token: 'shared-token',
+        device_name: 'iPhone reasignado',
       });
 
-      expect(res.status).toBe(422);
-      expect(res.body.error.code).toBe('token_ya_registrado');
+      // MEDIO 7: Ahora es exitoso (200) — el token se reasignó de user 2 a user 1
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBeDefined();
+      expect(res.body.platform).toBe('ios');
+
+      // Verificar en DB que el token ahora pertenece a user 1
+      const device = db.prepare('SELECT * FROM device_tokens WHERE token = ?').get('shared-token');
+      expect(device.user_id).toBe(1);
       db.close();
     });
   });

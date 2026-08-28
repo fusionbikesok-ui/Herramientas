@@ -234,4 +234,77 @@ describe('lib/workerNotificacionesPush', () => {
     expect(notifUsuario.leida).toBe(0);
     db.close();
   });
+
+  // BLOQUEANTE 1: Verificar que 'nuevo' y 'reaviso' nunca salen juntos en el mismo tick
+  it('nunca envía "nuevo" y "reaviso" juntos en el mismo tick (BLOQUEANTE 1)', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    seedDevice(db, 1);
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // Primer tick — debe enviar solo 'nuevo'
+    await procesarNotificacionesPush(db);
+
+    const tiposEnPrimerTick = db.prepare(`
+      SELECT DISTINCT tipo FROM notificaciones_enviadas
+      WHERE incidente_id = ? AND estado = 'enviado'
+      ORDER BY creado_en ASC
+    `).all(incidenteId);
+
+    // Después del primer tick, solo debe haber 'nuevo'
+    expect(tiposEnPrimerTick.length).toBe(1);
+    expect(tiposEnPrimerTick[0].tipo).toBe('nuevo');
+
+    // Segundo tick en el mismo segundo — no debería agregar 'reaviso' junto a 'nuevo'
+    await procesarNotificacionesPush(db);
+
+    const tiposEnSegundoTick = db.prepare(`
+      SELECT DISTINCT tipo FROM notificaciones_enviadas
+      WHERE incidente_id = ? AND estado = 'enviado'
+      ORDER BY creado_en ASC
+    `).all(incidenteId);
+
+    // Sigue siendo solo 'nuevo' — sin 'reaviso' agregado en el mismo procesamiento
+    expect(tiposEnSegundoTick.length).toBe(1);
+    expect(tiposEnSegundoTick[0].tipo).toBe('nuevo');
+
+    db.close();
+  });
+
+  // BLOQUEANTE 2: Verificar que 2 dispositivos del mismo usuario generan 1 sola fila en
+  // notificaciones_usuario, no una por dispositivo
+  it('genera 1 notificacion_usuario por (usuario,tipo,incidente), no una por dispositivo (BLOQUEANTE 2)', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+
+    // Registrar 2 dispositivos para el MISMO usuario
+    seedDevice(db, 1, 'device-token-ios', 'ios');
+    seedDevice(db, 1, 'device-token-android', 'android');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    await procesarNotificacionesPush(db);
+
+    // Contar filas en notificaciones_usuario para este usuario + tipo + incidente
+    const notificacionesDeUsuario = db.prepare(`
+      SELECT COUNT(*) as c FROM notificaciones_usuario
+      WHERE user_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId).c;
+
+    // Debe ser exactamente 1, NO 2 (una por dispositivo)
+    expect(notificacionesDeUsuario).toBe(1);
+
+    // Verificar que sí hay 2 intentos de envío (uno por dispositivo)
+    const enviosDeDevices = db.prepare(`
+      SELECT COUNT(*) as c FROM notificaciones_enviadas
+      WHERE incidente_id = ? AND tipo = 'nuevo' AND estado = 'enviado'
+    `).get(incidenteId).c;
+
+    expect(enviosDeDevices).toBe(2); // 2 dispositivos, 2 intentos de envío
+
+    db.close();
+  });
 });

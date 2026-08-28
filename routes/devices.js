@@ -73,26 +73,37 @@ export function devicesRouter(db) {
 
       const ts = now();
 
-      // INSERT o UPDATE si el token ya existía pero fue revocado
+      // Buscar si el token existe (para cualquier usuario)
       const existente = db
-        .prepare('SELECT id FROM device_tokens WHERE token = ? AND user_id = ?')
-        .get(push_token, userId);
+        .prepare('SELECT id, user_id FROM device_tokens WHERE token = ?')
+        .get(push_token);
 
       if (existente) {
-        // El dispositivo ya existe para este usuario — actualizar
-        db.prepare(`
-          UPDATE device_tokens
-          SET actualizado_en = ?, revocado_en = NULL, nombre_dispositivo = ?
-          WHERE id = ?
-        `).run(ts, device_name || null, existente.id);
+        if (existente.user_id === userId) {
+          // El dispositivo ya existe para ESTE usuario — actualizar
+          db.prepare(`
+            UPDATE device_tokens
+            SET actualizado_en = ?, revocado_en = NULL, nombre_dispositivo = ?
+            WHERE id = ?
+          `).run(ts, device_name || null, existente.id);
 
-        const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(existente.id);
-        return res.json(deviceAPublico(device));
+          const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(existente.id);
+          return res.json(deviceAPublico(device));
+        } else {
+          // MEDIO 7 fix: el token pertenece a OTRO usuario — reasignarlo al usuario actual.
+          // Escenario real: mismo teléfono con otra cuenta, o FCM recicla tokens.
+          db.prepare(`
+            UPDATE device_tokens
+            SET user_id = ?, actualizado_en = ?, revocado_en = NULL, nombre_dispositivo = ?
+            WHERE id = ?
+          `).run(userId, ts, device_name || null, existente.id);
+
+          const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(existente.id);
+          return res.json(deviceAPublico(device));
+        }
       }
 
-      // INSERT nuevo dispositivo
-      // Si el token ya existe para OTRO usuario, SQLite lo rechazará (UNIQUE(token))
-      // — es un error, no se puede reregistrar un token de otro usuario.
+      // Token no existe — INSERT nuevo dispositivo
       try {
         const info = db
           .prepare(`
@@ -105,12 +116,12 @@ export function devicesRouter(db) {
         const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(info.lastInsertRowid);
         return res.json(deviceAPublico(device));
       } catch (insertErr) {
-        // UNIQUE constraint violated: el token ya existe para otro usuario
+        // Esto no debería pasar (ya verificamos arriba), pero por si acaso
         if (insertErr.message.includes('UNIQUE')) {
           return res.status(422).json({
             error: {
               code: 'token_ya_registrado',
-              message: 'Este token ya está registrado para otro usuario',
+              message: 'Este token ya está registrado',
             },
           });
         }

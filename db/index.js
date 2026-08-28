@@ -465,6 +465,10 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_no_leidas
     ON notificaciones_usuario(user_id, leida, creado_en DESC)`); } catch (_) {}
+  // BLOQUEANTE 2 fix: índice único para deduplicación de notificaciones_usuario.
+  // Un usuario solo debe ver UNA notificación por (tipo, incidente), no una por dispositivo.
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_usuario_dedupe
+    ON notificaciones_usuario(user_id, tipo, incidente_id)`); } catch (_) {}
 
   return db;
 }

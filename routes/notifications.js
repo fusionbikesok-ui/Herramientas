@@ -11,15 +11,32 @@ import { requireAuth } from '../lib/auth.js';
 const now = () => new Date().toISOString();
 
 /**
- * Cursor-based paginación: base64(creado_en:id).
+ * Cursor-based paginación: base64url(creado_en:id).
  * Permite pivotar por timestamp y luego por ID como desempate.
+ *
+ * MEDIO 8 fix: usar base64url (no base64) para que el cursor sea URL-safe.
+ * base64 emite '+' y '/' que se corrompen en query params.
+ * base64url usa '-' y '_' en su lugar.
  */
 function decodeCursor(cursor) {
   if (!cursor) return null;
   try {
-    const decoded = Buffer.from(cursor, 'base64').toString('utf8');
-    const [createdAt, id] = decoded.split(':');
-    return { createdAt, id: parseInt(id, 10) };
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const [createdAt, idStr] = decoded.split(':');
+
+    // MEDIO 8 fix: validar que el cursor tiene la forma esperada
+    // Si el decodificado no es "ISO_DATE:INTEGER", rechazar explícitamente
+    if (!createdAt || !idStr) return null;
+
+    const id = parseInt(idStr, 10);
+    if (!Number.isInteger(id)) return null;
+
+    // Validar que createdAt es una fecha ISO válida (simple check: contiene 'T' y 'Z')
+    if (typeof createdAt !== 'string' || !createdAt.includes('T') || !createdAt.includes('Z')) {
+      return null;
+    }
+
+    return { createdAt, id };
   } catch (_) {
     return null;
   }
@@ -27,7 +44,7 @@ function decodeCursor(cursor) {
 
 function encodeCursor(row) {
   const payload = `${row.creado_en}:${row.id}`;
-  return Buffer.from(payload).toString('base64');
+  return Buffer.from(payload).toString('base64url');
 }
 
 /**
@@ -65,6 +82,19 @@ export function notificationsRouter(db) {
       const userId = req.user.id;
       const { cursor } = req.query;
       const PAGE_SIZE = 20;
+
+      // MEDIO 8 fix: validar cursor si lo hay
+      if (cursor) {
+        const cursorData = decodeCursor(cursor);
+        if (!cursorData) {
+          return res.status(422).json({
+            error: {
+              code: 'cursor_invalido',
+              message: 'El cursor de paginación es inválido o ha sido corrompido',
+            },
+          });
+        }
+      }
 
       const cursorData = decodeCursor(cursor);
 
