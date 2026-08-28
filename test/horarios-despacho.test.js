@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import fs from 'fs';
+import { openDb } from '../db/index.js';
+import { preparacionRouter } from '../routes/preparacion.js';
 import { calcularFechaDespacho, horaValida, normalizarHorarios } from '../lib/horariosDespacho.js';
 
 const laborables = normalizarHorarios([]);
@@ -17,5 +22,23 @@ describe('horarios de despacho', () => {
 
   it('salta fines de semana deshabilitados', () => {
     expect(calcularFechaDespacho(laborables, new Date('2026-08-29T14:00:00Z'))).toBe('2026-08-31');
+  });
+
+  it('expone y actualiza los siete días mediante el router', async () => {
+    const file = './test/tmp-horarios-despacho.sqlite';
+    const db = openDb(file);
+    const app = express(); app.use(express.json());
+    app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    const inicial = await request(app).get('/api/preparacion/horarios-despacho');
+    expect(inicial.status).toBe(200);
+    expect(inicial.body.data).toHaveLength(7);
+    const horarios = inicial.body.data.map((h) => ({ ...h, habilitado: h.dia === 6, hora_corte: '15:30' }));
+    const guardado = await request(app).put('/api/preparacion/horarios-despacho').send({ horarios });
+    expect(guardado.status).toBe(200);
+    expect(guardado.body.data.find((h) => h.dia === 6)).toMatchObject({ habilitado: true, hora_corte: '15:30' });
+    const invalido = await request(app).put('/api/preparacion/horarios-despacho').send({ horarios: horarios.slice(0, 6) });
+    expect(invalido.status).toBe(422);
+    db.close();
+    try { fs.unlinkSync(file); } catch {}
   });
 });
