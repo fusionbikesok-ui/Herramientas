@@ -238,6 +238,10 @@ stock ni resuelve trabajo offline sin idempotency key y control de versión.
 
 Ya están integradas las fases de provincia, dirección, nota y vínculos de comprador.
 
+- Cerrar revisión formal, tests dirigidos, E2E móvil y auditoría del flujo para asociar un
+  GTIN/EAN válido desconocido durante la preparación antes de integrarlo o desplegarlo. Verificar
+  candidatos pendientes, conflicto y reemplazo explícito del código, conservación local cuando
+  Woo falla, reintento operativo y títulos largos en 390 px.
 - Cerrar auditoría/E2E pendiente de las fases desplegadas, incluida dirección con campos largos en
   390 px y flujo real de vínculos.
 - Integrar **Horarios de corte y fecha de despacho** desde `prep-horarios-corte` solo después de
