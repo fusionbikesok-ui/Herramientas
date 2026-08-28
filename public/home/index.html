@@ -468,7 +468,7 @@ body {
 .incidente-body { flex:1; min-width:0; }
 .incidente-msg { font-size:.82rem; color:var(--text); line-height:1.4; margin-bottom:4px; overflow-wrap:anywhere; word-break:break-word; }
 .incidente-meta { font-size:.72rem; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
-.incidente-severity { font-weight:700; text-transform:capitalize; }
+.incidente-severity { font-weight:700; text-transform:capitalize; color:var(--text); }
 .incidente-rep { display:inline-flex; align-items:center; gap:4px; }
 
 /* Estados de carga/error/vacío */
@@ -477,7 +477,7 @@ body {
 @keyframes spin { to { transform:rotate(360deg); } }
 
 .incidentes-error { background:var(--critical-bg); border:1px solid var(--critical-bd); border-radius:10px; padding:10px 14px; font-size:.85rem; color:var(--critical); }
-.incidentes-error--info { background:var(--muted2); border:1px solid var(--border); color:var(--muted); }
+.incidentes-error--info { background:var(--surface2); border:1px solid var(--border); color:var(--text); }
 
 .incidentes-empty { background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px 14px; font-size:.85rem; color:var(--muted); text-align:center; }
 
@@ -1046,6 +1046,12 @@ fetch('/api/auth/me').then(function(r) {
     var incidentesHost = document.getElementById('incidentes-alertas');
     var incidentesPollInterval = null;
     var yaCargoUnaVez = false; // Bandera para mostrar spinner solo en la primera carga
+    // 2da pasada del revisor (ALTO 3): con incidentes activos (que duran horas), cada poll
+    // de 90s reescribía el contenedor `aria-live` aunque los datos fueran IDÉNTICOS, porque
+    // el HTML incluía el timestamp "actualizado HH:MM" — un lector de pantalla reanunciaba
+    // el bloque completo cada 90s sin que nada relevante hubiera cambiado. Se guarda una
+    // firma de los datos (sin el timestamp) y solo se toca el DOM si la firma cambió.
+    var ultimaFirmaIncidentes = null;
 
     // Mapas de traducción para integraciones y procesos (MEDIO 3)
     var labelIntegracion = Object.create(null);
@@ -1058,7 +1064,10 @@ fetch('/api/auth/me').then(function(r) {
 
     function renderIncidentes(data) {
       if (!data || !data.data || data.data.length === 0) {
-        incidentesHost.innerHTML = '';
+        // Solo tocar el DOM (y disparar el anuncio de aria-live) si de verdad se pasó de
+        // "con incidentes" a "sin incidentes" — no en cada poll vacío repetido.
+        if (ultimaFirmaIncidentes !== '') incidentesHost.innerHTML = '';
+        ultimaFirmaIncidentes = '';
         // El caso "sin incidentes activos" es el camino feliz más común (0 incidentes la
         // mayoría del tiempo) — sin este seteo, el spinner de la primera carga (ALTO 2)
         // seguía parpadeando en CADA poll siguiente porque `yaCargoUnaVez` nunca llegaba
@@ -1079,9 +1088,17 @@ fetch('/api/auth/me').then(function(r) {
 
       // Ordenar severidades: critico → advertencia → info (MEDIO 2)
       var severidadOrder = Object.assign(Object.create(null), { 'critico': 0, 'advertencia': 1, 'info': 2 });
+      // 2da pasada del revisor (ALTO 1): `severidadOrder[sev] || 3` invertía el orden —
+      // 'critico' vale 0, y `0 || 3` da 3 (0 es falsy en JS), así que lo más urgente
+      // terminaba ordenado ÚLTIMO tanto dentro de cada grupo como en qué grupo se muestra
+      // primero. Hace falta un chequeo explícito de "¿existe la clave?", no un `||`.
+      function ordenSeveridad(sev) {
+        var v = severidadOrder[sev];
+        return typeof v === 'number' ? v : 3;
+      }
       Object.keys(porIntegracion).forEach(function(k) {
         porIntegracion[k].sort(function(a, b) {
-          return (severidadOrder[a.severidad] || 3) - (severidadOrder[b.severidad] || 3);
+          return ordenSeveridad(a.severidad) - ordenSeveridad(b.severidad);
         });
       });
 
@@ -1091,7 +1108,7 @@ fetch('/api/auth/me').then(function(r) {
         var incs = porIntegracion[integ];
         var maxSev = 3; // default si no hay incidentes
         incs.forEach(function(inc) {
-          maxSev = Math.min(maxSev, severidadOrder[inc.severidad] || 3);
+          maxSev = Math.min(maxSev, ordenSeveridad(inc.severidad));
         });
         severidadMaxPorIntegracion[integ] = maxSev;
       });
@@ -1103,6 +1120,19 @@ fetch('/api/auth/me').then(function(r) {
         if (sevA !== sevB) return sevA - sevB; // crítico primero (0 < 1 < 2)
         return a.localeCompare(b); // desempate alfabético
       });
+
+      // Firma determinística de los datos (ALTO 3): si es idéntica a la del poll anterior,
+      // no se toca el DOM — evita reanunciar aria-live cada 90s por un timestamp que cambia
+      // solo. Ordenada por id para que el resultado no dependa del orden de llegada.
+      var firma = incidentes
+        .map(function(inc) { return inc.id + '|' + inc.estado + '|' + inc.severidad + '|' + inc.contador_repeticiones; })
+        .sort()
+        .join(',');
+      if (firma === ultimaFirmaIncidentes) {
+        yaCargoUnaVez = true;
+        return;
+      }
+      ultimaFirmaIncidentes = firma;
 
       var html = '<div class="incidentes-container">'
         + '<div class="attn-header">'
@@ -1178,16 +1208,27 @@ fetch('/api/auth/me').then(function(r) {
         } else {
           // ALTO 1: mostrar error en vez de vaciar si d.ok === false
           incidentesHost.innerHTML = '<div class="incidentes-container">'
-            + '<div class="incidentes-error incidentes-error--info">⊛ No se pudo consultar el estado de incidentes. Por favor, intenta nuevamente en unos segundos.</div>'
+            + '<div class="incidentes-error incidentes-error--info"><span aria-hidden="true">⊛</span> No se pudo consultar el estado de incidentes. Se reintenta solo en un momento.</div>'
             + '</div>';
           yaCargoUnaVez = true;
+          // El DOM ya no refleja la última firma "buena" — sin este reset, si el próximo
+          // poll exitoso trae EXACTAMENTE los mismos incidentes de antes del error, el
+          // chequeo de firma del ALTO 3 los daría por "sin cambios" y dejaría el mensaje
+          // de error pegado en pantalla para siempre en vez de recuperarse.
+          ultimaFirmaIncidentes = null;
         }
       }).catch(function(err) {
-        // ALTO 1 + MEDIO 7: error visible pero distinto de un incidente crítico real
+        // ALTO 1 + MEDIO 7 (1ra pasada) + MEDIO 1/3 (2da pasada): error visible pero
+        // distinto de un incidente crítico real; ícono con aria-hidden (mismo criterio que
+        // el ícono de severidad); copy en voseo (convención del resto de public/) sin filtrar
+        // err.message crudo del navegador a un mensaje pensado para el operador — el detalle
+        // técnico va a la consola, no a la UI.
+        console.warn('[incidentes] no se pudo consultar el estado:', err.message);
         incidentesHost.innerHTML = '<div class="incidentes-container">'
-          + '<div class="incidentes-error incidentes-error--info">⊛ No se pudo consultar el estado de incidentes (' + esc(err.message) + '). Por favor, intenta nuevamente en unos segundos.</div>'
+          + '<div class="incidentes-error incidentes-error--info"><span aria-hidden="true">⊛</span> No se pudo consultar el estado de incidentes. Se reintenta solo en un momento.</div>'
           + '</div>';
         yaCargoUnaVez = true;
+        ultimaFirmaIncidentes = null; // mismo motivo que arriba: forzar el repintado al recuperarse
       });
     }
 
