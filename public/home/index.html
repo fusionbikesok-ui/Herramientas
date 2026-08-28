@@ -449,9 +449,6 @@ body {
 
 /* ── Bloque de alertas de incidentes ── */
 .incidentes-container { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; margin-bottom:14px; }
-.incidentes-header { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:12px; }
-.incidentes-title { font-size:.95rem; font-weight:800; letter-spacing:-.01em; color:var(--text); }
-.incidentes-updated { font-size:.7rem; color:var(--muted); }
 
 .incidentes-group { margin-bottom:14px; }
 .incidentes-group:last-child { margin-bottom:0; }
@@ -461,7 +458,7 @@ body {
 .incidente-item:last-child { margin-bottom:0; }
 .incidente-item.crit { border-color:var(--critical-bd); background:var(--critical-bg); }
 .incidente-item.warn { border-color:var(--warning-bd); background:var(--warning-bg); }
-.incidente-item.info { border-color:rgba(52,211,153,.35); background:rgba(52,211,153,.08); }
+.incidente-item.info { border-color:var(--success-bd); background:var(--success-bg); }
 
 .incidente-icon { flex-shrink:0; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
 .incidente-item.crit .incidente-icon { color:var(--critical); }
@@ -469,8 +466,9 @@ body {
 .incidente-item.info .incidente-icon { color:var(--success); }
 
 .incidente-body { flex:1; min-width:0; }
-.incidente-msg { font-size:.82rem; color:var(--text); line-height:1.4; margin-bottom:4px; }
+.incidente-msg { font-size:.82rem; color:var(--text); line-height:1.4; margin-bottom:4px; overflow-wrap:anywhere; word-break:break-word; }
 .incidente-meta { font-size:.72rem; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+.incidente-severity { font-weight:700; text-transform:capitalize; }
 .incidente-rep { display:inline-flex; align-items:center; gap:4px; }
 
 /* Estados de carga/error/vacío */
@@ -479,6 +477,7 @@ body {
 @keyframes spin { to { transform:rotate(360deg); } }
 
 .incidentes-error { background:var(--critical-bg); border:1px solid var(--critical-bd); border-radius:10px; padding:10px 14px; font-size:.85rem; color:var(--critical); }
+.incidentes-error--info { background:var(--muted2); border:1px solid var(--border); color:var(--muted); }
 
 .incidentes-empty { background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px 14px; font-size:.85rem; color:var(--muted); text-align:center; }
 
@@ -521,7 +520,7 @@ body {
   <div id="notif-ml-banner"></div>
 
   <!-- ALERTAS DE INCIDENTES ACTIVOS — solo admins -->
-  <div id="incidentes-alertas" aria-live="polite" aria-label="Alertas de incidentes activos del sistema"></div>
+  <div id="incidentes-alertas" role="region" aria-live="polite" aria-label="Alertas de incidentes activos del sistema"></div>
 
   <!-- REQUIERE TU ATENCIÓN -->
   <section id="panel-atencion" style="display:none;margin-bottom:22px">
@@ -1046,7 +1045,16 @@ fetch('/api/auth/me').then(function(r) {
   if (isAdmin) {
     var incidentesHost = document.getElementById('incidentes-alertas');
     var incidentesPollInterval = null;
-    var lastIncidentsTimestamp = null;
+    var yaCargoUnaVez = false; // Bandera para mostrar spinner solo en la primera carga
+
+    // Mapas de traducción para integraciones y procesos (MEDIO 3)
+    var labelIntegracion = Object.create(null);
+    labelIntegracion['mercadolibre'] = 'MercadoLibre';
+    labelIntegracion['woocommerce'] = 'WooCommerce';
+
+    var labelProceso = Object.create(null);
+    labelProceso['refrescar_publicaciones'] = 'Refresco de publicaciones';
+    labelProceso['refrescar_catalogo'] = 'Refresco de catálogo';
 
     function renderIncidentes(data) {
       if (!data || !data.data || data.data.length === 0) {
@@ -1056,20 +1064,39 @@ fetch('/api/auth/me').then(function(r) {
 
       var incidentes = data.data;
 
-      // Agrupar por integración
-      var porIntegracion = {};
+      // Agrupar por integración, usando Object.create(null) para evitar colisión (MEDIO 2)
+      var porIntegracion = Object.create(null);
       incidentes.forEach(function(inc) {
         var integ = inc.integracion || 'desconocida';
         if (!porIntegracion[integ]) porIntegracion[integ] = [];
         porIntegracion[integ].push(inc);
       });
 
-      // Ordenar severidades: critico → advertencia → info
-      var severidadOrder = { 'critico': 0, 'advertencia': 1, 'info': 2 };
+      // Ordenar severidades: critico → advertencia → info (MEDIO 2)
+      var severidadOrder = Object.assign(Object.create(null), { 'critico': 0, 'advertencia': 1, 'info': 2 });
       Object.keys(porIntegracion).forEach(function(k) {
         porIntegracion[k].sort(function(a, b) {
           return (severidadOrder[a.severidad] || 3) - (severidadOrder[b.severidad] || 3);
         });
+      });
+
+      // Calcular severidad máxima por integración (MEDIO 1)
+      var severidadMaxPorIntegracion = Object.create(null);
+      Object.keys(porIntegracion).forEach(function(integ) {
+        var incs = porIntegracion[integ];
+        var maxSev = 3; // default si no hay incidentes
+        incs.forEach(function(inc) {
+          maxSev = Math.min(maxSev, severidadOrder[inc.severidad] || 3);
+        });
+        severidadMaxPorIntegracion[integ] = maxSev;
+      });
+
+      // Ordenar integraciones por severidad máxima, luego alfabético (MEDIO 1)
+      var integOrdenadas = Object.keys(porIntegracion).sort(function(a, b) {
+        var sevA = severidadMaxPorIntegracion[a];
+        var sevB = severidadMaxPorIntegracion[b];
+        if (sevA !== sevB) return sevA - sevB; // crítico primero (0 < 1 < 2)
+        return a.localeCompare(b); // desempate alfabético
       });
 
       var html = '<div class="incidentes-container">'
@@ -1078,10 +1105,10 @@ fetch('/api/auth/me').then(function(r) {
         + '<span class="attn-updated">actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) + '</span>'
         + '</div>';
 
-      // Mostrar cada integración con sus incidentes
-      Object.keys(porIntegracion).sort().forEach(function(integ) {
+      // Mostrar cada integración con sus incidentes (en orden de severidad)
+      integOrdenadas.forEach(function(integ) {
         var incs = porIntegracion[integ];
-        var label = integ.charAt(0).toUpperCase() + integ.slice(1);
+        var label = labelIntegracion[integ] || integ.charAt(0).toUpperCase() + integ.slice(1);
         html += '<div class="incidentes-group">'
           + '<div class="incidentes-glabel">' + esc(label) + '</div>';
 
@@ -1089,16 +1116,21 @@ fetch('/api/auth/me').then(function(r) {
           var severidad = inc.severidad || 'info';
           var severidadClass = severidad === 'critico' ? 'crit' : (severidad === 'advertencia' ? 'warn' : 'info');
           var icon = severidad === 'critico' ? '⚠' : (severidad === 'advertencia' ? '◔' : 'ℹ');
+          var severidadTexto = severidad === 'critico' ? 'Crítico' : (severidad === 'advertencia' ? 'Advertencia' : 'Info');
+
+          var proceso = inc.proceso || 'proceso desconocido';
+          var procesoLabel = labelProceso[proceso] || proceso;
 
           html += '<div class="incidente-item ' + severidadClass + '">'
-            + '<div class="incidente-icon">' + icon + '</div>'
+            + '<div class="incidente-icon" aria-hidden="true">' + icon + '</div>'
             + '<div class="incidente-body">'
             + '<div class="incidente-msg">' + esc(inc.mensaje_humano || 'Incidente sin descripción') + '</div>'
             + '<div class="incidente-meta">'
-            + '<span>' + esc(inc.proceso || 'proceso desconocido') + '</span>';
+            + '<span class="incidente-severity">' + severidadTexto + '</span>'
+            + '<span>' + esc(procesoLabel) + '</span>';
 
-          if (inc.contador_repeticiones && inc.contador_repeticiones > 1) {
-            html += '<span class="incidente-rep">×' + inc.contador_repeticiones + '</span>';
+          if (inc.contador_repeticiones && Number(inc.contador_repeticiones) > 1) {
+            html += '<span class="incidente-rep">×' + Number(inc.contador_repeticiones) + '</span>';
           }
 
           html += '</div></div></div>';
@@ -1111,21 +1143,24 @@ fetch('/api/auth/me').then(function(r) {
         html += '</div>';
       });
 
-      if (data.total && data.total > data.pageSize) {
-        html += '<div class="incidentes-overflow">Total: ' + data.total + ' incidentes activos (mostrando ' + data.pageSize + ')</div>';
+      if (data.total && Number(data.total) > Number(data.pageSize)) {
+        html += '<div class="incidentes-overflow">Total: ' + Number(data.total) + ' incidentes activos (mostrando ' + Number(data.pageSize) + ')</div>';
       }
 
       html += '</div>';
       incidentesHost.innerHTML = html;
-      lastIncidentsTimestamp = new Date();
+      yaCargoUnaVez = true; // Marcar que ya cargó una vez (ALTO 2)
     }
 
     function cargarIncidentes() {
-      incidentesHost.innerHTML = '<div class="incidentes-container">'
-        + '<div class="incidentes-loading">'
-        + '<div class="incidentes-spinner"></div>'
-        + '<span>Cargando incidentes…</span>'
-        + '</div></div>';
+      // ALTO 2: mostrar spinner solo en la primera carga
+      if (!yaCargoUnaVez) {
+        incidentesHost.innerHTML = '<div class="incidentes-container">'
+          + '<div class="incidentes-loading">'
+          + '<div class="incidentes-spinner"></div>'
+          + '<span>Cargando incidentes…</span>'
+          + '</div></div>';
+      }
 
       fetch('/api/incidentes?estado=activo&pageSize=100').then(function(r) {
         if (r.status === 401 || r.status === 403) {
@@ -1136,12 +1171,18 @@ fetch('/api/auth/me').then(function(r) {
         if (d && d.ok) {
           renderIncidentes(d);
         } else {
-          incidentesHost.innerHTML = '';
+          // ALTO 1: mostrar error en vez de vaciar si d.ok === false
+          incidentesHost.innerHTML = '<div class="incidentes-container">'
+            + '<div class="incidentes-error incidentes-error--info">⊛ No se pudo consultar el estado de incidentes. Por favor, intenta nuevamente en unos segundos.</div>'
+            + '</div>';
+          yaCargoUnaVez = true;
         }
       }).catch(function(err) {
+        // ALTO 1 + MEDIO 7: error visible pero distinto de un incidente crítico real
         incidentesHost.innerHTML = '<div class="incidentes-container">'
-          + '<div class="incidentes-error">✗ No se pudo cargar incidentes: ' + esc(err.message) + '</div>'
+          + '<div class="incidentes-error incidentes-error--info">⊛ No se pudo consultar el estado de incidentes (' + esc(err.message) + '). Por favor, intenta nuevamente en unos segundos.</div>'
           + '</div>';
+        yaCargoUnaVez = true;
       });
     }
 
