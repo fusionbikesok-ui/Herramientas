@@ -4,7 +4,7 @@ import request from 'supertest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { preparacionRouter } from '../routes/preparacion.js';
-import { calcularFechaDespacho, horaValida, normalizarHorarios } from '../lib/horariosDespacho.js';
+import { calcularFechaDespacho, fechaEstimadaShipment, horaValida, normalizarHorarios } from '../lib/horariosDespacho.js';
 
 const laborables = normalizarHorarios([]);
 
@@ -26,6 +26,11 @@ describe('horarios de despacho', () => {
 
   it('no rompe el sync si no hay días habilitados', () => {
     expect(calcularFechaDespacho(laborables.map((h) => ({ ...h, habilitado: false })), new Date())).toBeNull();
+  });
+
+  it('usa solo el límite de preparación del shipment, no la fecha de entrega', () => {
+    expect(fechaEstimadaShipment({ date_estimated_delivery: '2026-09-03' })).toBeNull();
+    expect(fechaEstimadaShipment({ shipping_option: { estimated_handling_limit: { date: '2026-08-31T12:00:00Z' } } })).toBe('2026-08-31');
   });
 
   it('expone y actualiza los siete días mediante el router', async () => {
