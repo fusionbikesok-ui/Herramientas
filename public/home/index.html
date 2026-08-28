@@ -998,7 +998,7 @@ fetch('/api/auth/me').then(function(r) {
     renderTokenBanner(t);
   }).catch(function() { /* degradar en silencio: nunca mostrar un banner falso */ });
 
-  // ── Preguntas y mensajes de ML sin responder (aviso liviano, permiso 'notificaciones-ml') ──
+  // ── Novedades ML pendientes (aviso liviano, permiso 'notificaciones-ml') ──
   // Alcance decidido con el usuario (2026-08-26): solo avisar cuánto hay pendiente y hace
   // cuánto llegó lo más viejo — responder se hace en Mercado Libre, no acá. El link de abajo
   // apunta a la sección de preguntas del panel de vendedor de ML; si no coincide con la URL

@@ -4,7 +4,7 @@ import { mlFetch } from '../lib/mlClient.js';
 // Notificaciones ML (webhooks): preguntas, mensajes y reclamos sin resolver.
 // Ver docs/superpowers/plans (sesión 2026-08-26) — la app de ML tiene TODOS los topics
 // seleccionados en el panel; POST /api/ml/notificacion (server.js) filtra por topic y solo
-// procesa los que ya tienen función acá (`questions`, `messages` hoy). Sumar un topic nuevo
+// procesa los que ya tienen función acá (`questions`, `messages`, `claims`). Sumar un topic nuevo
 // es: función acá + un `if (topic===...)` en server.js, sin volver a tocar el panel de ML.
 //
 // Alcance decidido con el usuario: solo LISTAR con "hace cuánto" y link directo a

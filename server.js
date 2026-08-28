@@ -157,8 +157,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   // ya no se dispara acá, queda solo como respaldo del cron), 'orders_v2' (solo camino
   // puntual a pedidos_cache — no dispara syncOrdenMlPuntual, mismo comportamiento
   // preexistente de 'orders' respecto de eso), 'questions' y 'messages'
-  // (preguntas/mensajes sin responder, guardados para el aviso del Home — ver
-  // routes/notificacionesMl.js). El resto de los topics que ML manda (shipments, claims,
+  // (preguntas/mensajes sin responder y reclamos sin resolver, guardados para el aviso del Home — ver
+  // routes/notificacionesMl.js). El resto de los topics que ML manda (shipments,
   // orders_feedback, items, invoices) se reciben y se descartan en silencio hasta que se sume
   // su función acá, mismo patrón que 'orders' tenía antes de este cambio.
   app.post('/api/ml/notificacion', express.json({ limit: '64kb' }), (req, res) => {
