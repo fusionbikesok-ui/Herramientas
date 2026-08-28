@@ -21,6 +21,10 @@ Actualizado: 2026-08-22.
   PM2 `herramientas` fue reiniciado; `/login/` respondió HTTP 200.
 - Coordinación Codex↔Claude configurada: Codex orquesta; matriz de modelos en
   `agents/model-routing.md` y router de skills en `agents/skill-routing.md`.
+- Política operativa vigente solicitada por el usuario (2026-08-28): Codex ejecuta directamente
+  los roles y gates del pipeline, sin depender de despachos ni handoffs de Claude, hasta nuevo
+  aviso. Los resultados se documentan con evidencia reproducible y solo se actualizan hechos
+  durables en esta memoria.
 - El controlador `npm run agent:claude` invoca Claude sin copiar/pegar y valida el handoff antes
   de aceptar el siguiente gate.
 - `npm run agent:e2e` prepara la instancia aislada (DB temporal sin token ML, crons
