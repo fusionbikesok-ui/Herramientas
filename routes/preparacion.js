@@ -16,6 +16,7 @@ import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
+import { calcularFechaDespacho, leerHorarios, sembrarHorarios, horaValida, DIAS_SEMANA } from '../lib/horariosDespacho.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -138,6 +139,13 @@ function ensureTables(db) {
     actualizado_en  TEXT NOT NULL
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
+  try { db.prepare('ALTER TABLE pedidos_cache ADD COLUMN fecha_despacho TEXT').run(); } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables pedidos_cache.fecha_despacho:', e.message);
+  }
+  try { db.prepare(`CREATE TABLE IF NOT EXISTS despacho_horarios (
+    dia INTEGER PRIMARY KEY, habilitado INTEGER NOT NULL DEFAULT 0,
+    hora_corte TEXT NOT NULL DEFAULT '16:00', actualizado_en TEXT NOT NULL
+  )`).run(); sembrarHorarios(db); } catch (e) { console.error('ensureTables despacho_horarios:', e.message); }
   // pack_id acá también: pedidos_cache es lo que alimenta tanto "A preparar" como el
   // Historial, así que es el único lugar donde ponerlo hace que el número que se lee en ML
   // sea encontrable en las dos pantallas (ver el comentario de preparaciones.pack_id).
@@ -704,6 +712,7 @@ export function preparacionRouter(db, cfg) {
             numero_pedido: row.numero_pedido,
             comprador: row.comprador,
             fecha: row.fecha,
+            fecha_despacho: row.fecha_despacho,
             estado_wc: row.estado_wc,
             notas: row.customer_note || '',
             items,
@@ -720,6 +729,7 @@ export function preparacionRouter(db, cfg) {
           numero_pedido: row.numero_pedido,
           comprador: row.comprador,
           fecha: row.fecha,
+          fecha_despacho: row.fecha_despacho,
           logistic_type: row.logistic_type,
           substatus: row.substatus,
           items,
@@ -739,6 +749,26 @@ export function preparacionRouter(db, cfg) {
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
+  });
+
+  router.get('/horarios-despacho', (req, res) => {
+    try { return res.json({ ok: true, data: leerHorarios(db) }); }
+    catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  });
+
+  router.put('/horarios-despacho', (req, res) => {
+    try {
+      const horarios = req.body?.horarios;
+      if (!Array.isArray(horarios) || horarios.length !== 7
+        || new Set(horarios.map((h) => Number(h.dia))).size !== 7
+        || horarios.some((h) => !DIAS_SEMANA.includes(Number(h.dia)) || !horaValida(h.hora_corte))) {
+        return res.status(422).json({ ok: false, error: 'horarios inválidos' });
+      }
+      const update = db.prepare('UPDATE despacho_horarios SET habilitado=?, hora_corte=?, actualizado_en=? WHERE dia=?');
+      const tx = db.transaction(() => horarios.forEach((h) => update.run(h.habilitado ? 1 : 0, h.hora_corte, now(), Number(h.dia))));
+      tx();
+      return res.json({ ok: true, data: leerHorarios(db) });
+    } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   });
 
   // ── Estados de pedido vistos en WC (respaldo para confirmar el slug) ──
@@ -2011,16 +2041,17 @@ function upsertPedidoCache(db, row) {
   db.prepare(`
     INSERT INTO pedidos_cache
       (clave, canal, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, fecha,
-       estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note)
+       fecha_despacho, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note)
     VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @pack_id, @numero_pedido, @comprador, @fecha,
-       @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note)
+       @fecha_despacho, @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note)
     ON CONFLICT(clave) DO UPDATE SET
       pack_id=excluded.pack_id,
+      fecha_despacho=excluded.fecha_despacho,
       numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
       estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
       logistic_type=excluded.logistic_type, substatus=excluded.substatus,
       items_json=excluded.items_json, actualizado_en=excluded.actualizado_en, customer_note=excluded.customer_note
-  `).run({ customer_note: '', ...row });
+  `).run({ customer_note: '', fecha_despacho: calcularFechaDespacho(leerHorarios(db)), ...row });
 }
 
 // Un pedido WC (de cualquiera de los 3 estados relevantes) → fila de pedidos_cache.

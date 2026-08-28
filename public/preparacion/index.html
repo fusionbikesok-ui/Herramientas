@@ -234,6 +234,7 @@
     <button class="tab" data-v="cerradas" onclick="ir('cerradas')">Cerradas sin evidencia</button>
     <button class="tab" data-v="despachadas" onclick="ir('despachadas')">Despachadas sin verificar</button>
     <button class="tab" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
+    <button class="tab" data-v="horarios" onclick="ir('horarios')">Horarios de despacho</button>
   </div>
 
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
@@ -327,6 +328,7 @@ function ir(v){
   else if(v==='cerradas')cargarCerradas();
   else if(v==='despachadas')cargarDespachadas();
   else if(v==='perfiles')cargarPerfiles();
+  else if(v==='horarios')cargarHorarios();
 }
 
 async function api(path,opts){
@@ -410,13 +412,32 @@ function cardPendiente(p,ix){
   if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
+  var despacho=p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(p.fecha_despacho)+'</b></div>':'';
   return '<div class="ped" onclick="preparar('+ix+')">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
-    +nota
+    +nota+despacho
     +'<div class="ped-foot">'+estado+'<button class="btn mini" style="margin-left:auto">Preparar →</button></div>'
     +'</div>';
+}
+
+async function cargarHorarios(){
+  var c=document.getElementById('cuerpo'); c.innerHTML='<div class="loading">Cargando horarios…</div>';
+  try{
+    var r=await api('/horarios-despacho'); if(!r.body.ok)throw new Error(r.body.error||'error');
+    var dias=['','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+    c.innerHTML='<div class="card"><h2>Horarios de corte</h2><p class="sub">Los pedidos nuevos reciben como fecha sugerida el próximo día habilitado. Esto no bloquea el despacho manual.</p>'
+      +'<form id="horarios-form">'+r.body.data.map(function(h){return '<label style="display:flex;align-items:center;gap:10px;margin:10px 0"><input type="checkbox" data-dia="'+h.dia+'" '+(h.habilitado?'checked':'')+'> <b style="min-width:90px">'+dias[h.dia]+'</b><input type="time" data-hora="'+h.dia+'" value="'+esc(h.hora_corte)+'"></label>';}).join('')
+      +'<button class="btn" type="submit">Guardar horarios</button><span id="horarios-msg" role="status" style="margin-left:10px"></span></form></div>';
+    document.getElementById('horarios-form').onsubmit=guardarHorarios;
+  }catch(e){c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
+}
+async function guardarHorarios(ev){
+  ev.preventDefault();
+  var horarios=[].slice.call(document.querySelectorAll('#horarios-form input[data-dia]')).map(function(cb){return {dia:Number(cb.dataset.dia),habilitado:cb.checked,hora_corte:document.querySelector('input[data-hora="'+cb.dataset.dia+'"]').value};});
+  var r=await api('/horarios-despacho',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({horarios:horarios})});
+  document.getElementById('horarios-msg').textContent=r.body.ok?'Guardado':'Error: '+(r.body.error||'no se pudo guardar');
 }
 
 var DIRECCION_MODAL_CTX=null;

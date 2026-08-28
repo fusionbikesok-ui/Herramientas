@@ -2457,3 +2457,11 @@ tampoco emite entrada si el ítem no tenía `sku`.
 - El tipo de sesión "conteo dirigido" (alcance = lista de SKUs sueltos) en `POST /sesiones`
   — `GET /dirigido` da la lista, pero abrir una sesión sobre esa lista puntual todavía se
   hace por categoría/marca/ubicación como cualquier otra.
+### GET /api/preparacion/horarios-despacho
+Devuelve la configuración semanal de cortes usada para calcular `fecha_despacho`.
+Cada fila contiene `dia` (1 lunes a 7 domingo), `habilitado` y `hora_corte` (`HH:MM`).
+
+### PUT /api/preparacion/horarios-despacho
+Actualiza los siete días en una sola operación. Request: `{ horarios: [{ dia, habilitado,
+hora_corte }] }`. Devuelve 200 con la configuración normalizada; devuelve 422 si falta un
+día, hay duplicados o una hora inválida. La fecha sugerida no bloquea el despacho manual.
