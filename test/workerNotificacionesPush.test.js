@@ -7,12 +7,16 @@ import { procesarNotificacionesPush } from '../lib/workerNotificacionesPush.js';
 const mockState = vi.hoisted(() => {
   let shouldFailOnDevice = null; // null = no falla, string deviceToken = falla para ese device
   let failureCount = 0;
+  let callCount = 0; // Contar total de llamadas a enviarNotificacion
   return {
     setShouldFailOnDevice: (deviceToken) => { shouldFailOnDevice = deviceToken; },
     clearFailure: () => { shouldFailOnDevice = null; failureCount = 0; },
     getShouldFailOnDevice: () => shouldFailOnDevice,
     incrementFailureCount: () => ++failureCount,
     getFailureCount: () => failureCount,
+    incrementCallCount: () => ++callCount,
+    getCallCount: () => callCount,
+    resetCallCount: () => { callCount = 0; },
   };
 });
 
@@ -21,6 +25,7 @@ vi.mock('../lib/notificacionesPush.js', async () => {
   const actual = await vi.importActual('../lib/notificacionesPush.js');
   return {
     enviarNotificacion: async (deviceToken, payload) => {
+      mockState.incrementCallCount(); // Contar cada llamada
       const deviceToFail = mockState.getShouldFailOnDevice();
       if (deviceToFail && deviceToken === deviceToFail) {
         mockState.incrementFailureCount();
@@ -409,6 +414,38 @@ describe('lib/workerNotificacionesPush', () => {
     expect(fila).toBeDefined();
     expect(fila.intentos).toBe(4);
     expect(fila.estado).toBe('agotado');
+
+    db.close();
+  });
+
+  // ALTO 1: Dispositivo agotado NO debe llamar enviarNotificacion (guard pre-envío)
+  it('NO llama enviarNotificacion para dispositivo agotado (ALTO 1)', async () => {
+    mockState.resetCallCount(); // Limpiar contador antes del test
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    seedDevice(db, 1, 'device-agotado', 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // Crear una fila 'agotado' para este dispositivo
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      1, 'nuevo', incidenteId, 'agotado', 4,
+      'Device exhausted',
+      now
+    );
+
+    // Llamar al worker
+    await procesarNotificacionesPush(db);
+
+    // VERIFICACIÓN: enviarNotificacion NO debe haber sido llamada en absoluto
+    // (el mock está configurado para contar llamadas globales)
+    expect(mockState.getCallCount()).toBe(0);
 
     db.close();
   });
