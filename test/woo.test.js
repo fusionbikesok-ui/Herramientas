@@ -406,6 +406,34 @@ describe('woo route', () => {
         expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
       }, 20000);
 
+      // Hallazgo del revisor (M5, 2da pasada): un incremental con 0 productos es tan
+      // ambiguo como el caso completo de B1 (¿nada cambió, o Woo está degradado en
+      // silencio?) — confirmar ciclo sano en ese caso resolvía en silencio un incidente
+      // `transitorio` real que seguía activo, con Woo simplemente pasando de tirar 500s a
+      // responder 200 con lista vacía en vez de recuperarse de verdad.
+      it('un incremental con 0 productos tampoco resuelve un incidente activo', async () => {
+        vi.useFakeTimers();
+        try {
+          // Simula que ya corrió un completo hace instantes para forzar el camino incremental.
+          const ahora = new Date().toISOString();
+          for (const clave of ['catalogo_ultimo_completo', 'catalogo_ultimo_refresco']) {
+            db.prepare(`INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)
+              ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en`)
+              .run(clave, ahora, ahora);
+          }
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          await fallaRefresco();
+          expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
+
+          axios.request.mockResolvedValue({ status: 200, headers: {}, data: [] });
+          const total = await refrescarCatalogo(db, cfg);
+          expect(total).toBe(0);
+          expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
+        } finally {
+          vi.useRealTimers();
+        }
+      }, 20000);
+
       // Hallazgo del revisor (A3): categorizarErrorWoo nunca devuelve 'interno' por sí sola —
       // sin esta distinción en refrescarCatalogo, un bug PROPIO (no un error de Woo) se
       // reportaba como "WooCommerce no responde", mandando al operador a mirar el lugar
@@ -421,6 +449,22 @@ describe('woo route', () => {
         // no estaría probando el camino 'interno'. Documentado como guía de mantenimiento.
         expect(incidente.tipo_error).toBe('interno');
       });
+
+      // Hallazgo del revisor (A1, 2da pasada — regresión introducida por el fix de A3):
+      // la primera versión de A3 usaba una allowlist ("¿tiene status/circuitoAbierto/matchea
+      // el mensaje de Woo?") para decidir 'interno' — pero un timeout real de axios (o un
+      // ECONNRESET) no tiene `.status` (axios solo lo setea si hubo respuesta HTTP) y no
+      // matchea "WooCommerce API error N", así que el outage más común de Woo (la red, no un
+      // status code) terminaba reportado como 'interno' ("bug propio") en vez de
+      // 'transitorio' — justo el diagnóstico que este hito existe para acertar.
+      it('un timeout de red real (sin status) se clasifica como transitorio, no interno', async () => {
+        const timeoutErr = Object.assign(new Error('timeout of 20000ms exceeded'), { code: 'ECONNABORTED' });
+        axios.request.mockRejectedValue(timeoutErr);
+        await expect(refrescarCatalogo(db, cfg)).rejects.toThrow('timeout of 20000ms exceeded');
+
+        const incidente = db.prepare("SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        expect(incidente.tipo_error).toBe('transitorio');
+      }, 20000);
 
       // Hallazgo del revisor (A4): test de CABLEADO — si alguien revierte los 2 call sites
       // internos de wooFetchConCircuito a wooFetchConReintento a secas, el circuito queda

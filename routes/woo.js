@@ -374,8 +374,13 @@ export async function refrescarCatalogo(db, cfg, opts = {}) {
       // Hallazgo BLOQUEANTE del revisor (B1): NO se confirma ciclo sano acá — un catálogo
       // completo con 0 productos es siempre sospechoso (ver _refrescarCatalogo), y confirmar
       // resolvería en silencio cualquier incidente `transitorio` real que siga activo.
+      // Hallazgo del revisor (M2): usar 'datos' acá compartía la misma clave de dedupe
+      // (integracion|proceso|tipoError) que el catch genérico de más abajo, que también usa
+      // 'datos' para un 4xx puntual — un 404 aislado en la corrida siguiente pisaba este
+      // incidente de "catálogo vacío" con "WooCommerce rechazó una solicitud puntual",
+      // perdiendo la señal original. 'catalogo_vacio' es su propia clave.
       abrirOActualizarIncidente(db, {
-        integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO, tipoError: 'datos',
+        integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO, tipoError: 'catalogo_vacio',
         severidad: 'advertencia',
         mensajeTecnico: 'Barrido completo devolvió 0 productos — poda omitida por seguridad',
         mensajeHumano: 'WooCommerce devolvió el catálogo vacío en un barrido completo — revisar antes de confiar en el catálogo local.',
@@ -383,21 +388,29 @@ export async function refrescarCatalogo(db, cfg, opts = {}) {
       });
       return resultado;
     }
-    // Solo confirma ciclo sano si de verdad corrió y no fue el caso sospechoso de arriba (no
-    // si el candado lo omitió antes de llegar acá — pero eso ya retornó arriba, así que si
-    // llegamos hasta acá sí corrió).
+    // Hallazgo del revisor (M5): un incremental con 0 productos es ambiguo por diseño — el
+    // propio _refrescarCatalogo documenta que puede ser "nada cambió" o "Woo degradado en
+    // silencio" y por eso NO avanza la marca de frescura. Confirmar ciclo sano acá igual
+    // resolvía cualquier incidente `transitorio` activo con la misma ambigüedad que el caso
+    // B1 ya cerró para el completo — un Woo que pasó de tirar 500s a responder 200 vacío
+    // "se veía" recuperado sin que el catálogo realmente lo esté. Solo se confirma cuando el
+    // ciclo trajo productos de verdad (señal inequívoca de que Woo respondió con datos).
+    if (typeof resultado === 'number' && resultado === 0) return resultado;
     confirmarCicloSano(db, { integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO });
     return resultado;
   } catch (e) {
-    // Hallazgo del revisor (A3): categorizarErrorWoo nunca devuelve 'interno' (sin status HTTP
-    // siempre cae a 'transitorio', a propósito para timeouts/ECONNRESET reales de la capa de
-    // red). Acá, con más contexto que esa función no tiene, se distingue un bug PROPIO (una
-    // excepción que no vino de wooFetch/el circuito: sin `.status`, sin match en el mensaje,
-    // sin `.circuitoAbierto`) — sin esto, un TypeError en normalizarProductoWc o un
-    // SqliteError de la transacción se reportaba como "WooCommerce no responde", mandando al
-    // operador a mirar Woo mientras el bug está en el propio código.
-    const vieneDeHttp = e.status != null || e.circuitoAbierto || /WooCommerce API error \d+/.test(e.message ?? '');
-    const categoria = vieneDeHttp ? categorizarErrorWoo(e) : 'interno';
+    // Hallazgo del revisor (A3, corregido tras regresión detectada en la 2da pasada): la
+    // primera versión usaba una allowlist ("¿vino de HTTP?") para decidir 'interno' — pero un
+    // timeout de axios o un ECONNRESET real NO tienen `.status` (axios solo lo setea si hubo
+    // respuesta) y tampoco matchean el mensaje "WooCommerce API error N", así que cualquier
+    // falla de red genuina — el outage más común y justo lo que este hito existe para
+    // detectar — se reportaba como 'interno' ("bug propio") en vez de 'transitorio'.
+    // Ahora se usa una denylist: solo se clasifica como bug propio un error de un tipo que
+    // categorizarErrorWoo no podría producir (TypeError/RangeError de nuestro código,
+    // SqliteError de la persistencia) — cualquier otra cosa (incluido "sin status, sin
+    // match") sigue el criterio ya correcto de categorizarErrorWoo (sin status → transitorio).
+    const esBugPropio = e instanceof TypeError || e instanceof RangeError || e?.name === 'SqliteError';
+    const categoria = esBugPropio ? 'interno' : categorizarErrorWoo(e);
     registrarMetricaCiclo(db, {
       integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO, iniciadoEn: inicioMetrica, inicioMonotonico,
       procesados: 0, fallidos: 1, circuitoAbierto: !!e.circuitoAbierto,

@@ -1706,8 +1706,13 @@ barata en SQL, separada del payload completo.
 La forma de request/response de los endpoints no cambia (`GET /api/woo/catalogo`:
 `{ ok:true, data:[...] }`), salvo `POST /api/woo/catalogo/recargar` que ahora puede devolver
 `{ ok:true, omitido:true, motivo:'en_curso' }` en vez de `{ ok:true, total }` — ver candado
-más abajo. El resto es comportamiento interno de `refrescarCatalogo`, que igual vale dejar
-escrito porque es contrato operativo, no solo de código.
+más abajo — o, desde el frente de confiabilidad operativa (Hito 3), `{ ok:true, total:0,
+sospechoso:true }` cuando el barrido completo forzado por este mismo endpoint devuelve 0
+productos: `ok:true` porque la llamada en sí no falló, pero `total` NO refleja el catálogo
+real (se omitió la poda por seguridad, ver más abajo) — cualquier cliente de este endpoint
+debe tratar `sospechoso:true` como una falla operativa, no como "0 productos actualizados".
+El resto es comportamiento interno de `refrescarCatalogo`, que igual vale dejar escrito
+porque es contrato operativo, no solo de código.
 
 - Cada corrida es **incremental** salvo que corresponda un barrido **completo**: primera vez
   (sin marca previa), pasó ≥1h desde el último completo (`sync_estado.catalogo_ultimo_completo`,

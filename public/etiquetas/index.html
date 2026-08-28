@@ -551,6 +551,12 @@ function recargarCatalogo(){
   estado.textContent = 'Actualizando catálogo desde WooCommerce (puede tardar unos segundos)…';
   fetch('/api/woo/catalogo/recargar', { method: 'POST' }).then(function(r){ return r.json(); }).then(function(j){
     if(!j || !j.ok) throw new Error(j && j.error ? j.error : 'error del servidor');
+    if(j.sospechoso){
+      estado.innerHTML = '<span style="color:#F87171">⚠ WooCommerce devolvió el catálogo vacío — no se actualizó nada, se mantiene el catálogo anterior. Revisar la conexión con WooCommerce.</span>';
+      btn.textContent = '↻ Recargar';
+      btn.disabled = false;
+      return;
+    }
     estado.textContent = '✓ Catálogo actualizado: ' + j.total + ' productos. Recargando…';
     btn.textContent = '↻ Recargar';
     btn.disabled = false;
