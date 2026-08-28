@@ -6,8 +6,11 @@
 -- La columna `revocado_en` es NULL mientras el dispositivo esté activo;
 -- cuando se revoca, se setea a ahora() y el token deja de usarse.
 --
--- Índice único en `token`: un token del proveedor (APNs/FCM) no puede
--- registrarse dos veces — el proveedor garantiza unicidad.
+-- Unicidad de `token`: NO es una constraint de columna — ver migración 026. Un token puede
+-- reasignarse a otro usuario (mismo teléfono con otra cuenta, o el proveedor reciclando el
+-- token tras una reinstalación): la fila vieja se revoca y se crea una nueva con el mismo
+-- token, así que el mismo valor puede existir en más de una fila mientras a lo sumo una esté
+-- activa. Eso lo impone el índice único parcial de la migración 026, no esta tabla.
 CREATE TABLE IF NOT EXISTS device_tokens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -16,8 +19,7 @@ CREATE TABLE IF NOT EXISTS device_tokens (
   nombre_dispositivo TEXT,
   creado_en TEXT NOT NULL,
   actualizado_en TEXT NOT NULL,
-  revocado_en TEXT,
-  UNIQUE(token)
+  revocado_en TEXT
 );
 
 -- Índice para queries "dame todos los tokens activos de este usuario"

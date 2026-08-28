@@ -1,47 +1,13 @@
--- Hito 7: Ajuste del índice UNIQUE en device_tokens
+-- Hito 7: índice único parcial en device_tokens (en vez de UNIQUE(token) sobre toda la
+-- columna), para soportar la reasignación de un token a otro usuario (routes/devices.js):
+-- la fila vieja se revoca (revocado_en = now) y se crea una fila nueva con el mismo token
+-- para el nuevo usuario, así que el mismo valor de `token` puede existir en más de una fila
+-- siempre que a lo sumo una esté activa (revocado_en IS NULL).
 --
--- La Opción B del fix ALTO 1 (6ª pasada revisor) reasigna tokens creando una nueva fila
--- revocando la vieja. Esto requiere que el índice UNIQUE sea parcial, aplicando solo
--- a filas ACTIVAS (revocado_en IS NULL), permitiendo reasignaciones.
---
--- Cambio:
--- - Antes: UNIQUE(token) — impide duplicados sin restricción
--- - Después: UNIQUE(token) WHERE revocado_en IS NULL — permite duplicados si una fila está revocada
-
--- Drop el índice viejo
-DROP INDEX IF EXISTS sqlite_autoindex_device_tokens_1;
-
--- Recrear la tabla sin el UNIQUE genérico en token (la usaremos en el índice parcial)
--- SQLite no soporta ALTER COLUMN ni DROP COLUMN directo, así que:
--- 1. Crear tabla temporal
--- 2. Copiar datos
--- 3. Dropear tabla original
--- 4. Renombrar temporal a original
--- 5. Recrear índices
-
-CREATE TABLE device_tokens_new (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token TEXT NOT NULL,
-  plataforma TEXT NOT NULL CHECK(plataforma IN ('ios', 'android', 'web')),
-  nombre_dispositivo TEXT,
-  creado_en TEXT NOT NULL,
-  actualizado_en TEXT NOT NULL,
-  revocado_en TEXT
-);
-
-INSERT INTO device_tokens_new
-SELECT id, user_id, token, plataforma, nombre_dispositivo, creado_en, actualizado_en, revocado_en
-FROM device_tokens;
-
-DROP TABLE device_tokens;
-
-ALTER TABLE device_tokens_new RENAME TO device_tokens;
-
--- Crear índice UNIQUE parcial: solo aplica a filas activas (revocado_en IS NULL)
-CREATE UNIQUE INDEX idx_device_tokens_unique_active
+-- Documentación humana: este .sql NO se ejecuta en runtime. El mecanismo real es el bloque
+-- try/exec de db/index.js, que define la tabla sin UNIQUE(token) inline desde el principio
+-- (esta tabla nunca llegó a desplegarse a producción con la constraint vieja, así que no
+-- hizo falta ningún baile de rename/recrear tabla — a diferencia de una migración real sobre
+-- datos existentes).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_device_tokens_unique_active
   ON device_tokens(token) WHERE revocado_en IS NULL;
-
--- Recrear índice de búsqueda rápida por usuario activo
-CREATE INDEX idx_device_tokens_usuario_activo
-  ON device_tokens(user_id, revocado_en) WHERE revocado_en IS NULL;
