@@ -134,25 +134,26 @@ creado desde `conteo-confiable`, vacío — usar ese, no crear otro.
     ahora sale de `catalogo_cache` (puede ser `''` si el producto no tiene sku ahí) en vez del
     valor crudo que mandó el cliente.
 
-### A.3 — Cambio de stock por venta → sync puntual por orden (PRIORIDAD 3, optimización)
+### A.3 — Cambio de stock por venta → sync puntual por orden — ✅ DESPLEGADO
 
-- Cambiar `syncMlToWc` para que, cuando lo dispare una notificación con `resource` puntual,
-  procese solo esa orden (`mlFetch(db, mlCfg, 'get', resource)` en vez de la búsqueda
-  paginada completa `/orders/search`). La búsqueda paginada completa queda como respaldo del
-  cron (mismo criterio que A.1: no quitar el barrido, solo dejar de depender de él para el
-  camino rápido).
-- Idempotencia y demás lógica de `_procesarOrden` no cambian — solo la fuente de la lista de
-  órdenes a procesar.
+**Corrección 2026-08-28**: este bloque estaba marcado como pendiente por error — ya está
+implementado y en producción desde el 2026-08-27 (`sync-orden-puntual` → `90a9edc`, merge
+`c4d5042`). `syncOrdenMlPuntual` (`routes/sync.js:336`) se dispara desde el webhook de ML
+(`server.js:178`) y procesa solo la orden puntual del `resource`, exactamente como describía
+este ítem. La búsqueda paginada completa quedó de respaldo del cron. Verificado activo en
+logs de producción y por lectura de código, sin regresiones de merges posteriores (Hitos 3-6
+del frente de confiabilidad).
 
-### A.4 — Reclamos sumados a "Novedades ML" (PRIORIDAD 4)
+### A.4 — Reclamos sumados a "Novedades ML" (PRIORIDAD 4) — sigue sin empezar
 
 - Extender `routes/notificacionesMl.js` (ya existe, desplegado) con el topic `claims` —
   mismo patrón que `questions`/`messages`: tabla nueva (`ml_reclamos` o similar), función
   `ingerirReclamo(db, mlCfg, resource)` fail-open, sumar al conteo de `/count` y a la lista de
   `/pendientes`, sumar al aviso del Home.
 - Agregar el `if (topic === 'claims')` en el handler de `server.js`.
-- Migración `.sql` nueva (018, siguiente número libre — confirmar cuál es el último antes de
-  numerar).
+- **Migración `.sql` nueva — la `019` YA NO está disponible** (se usó para
+  `incidentes_operativos` del frente de confiabilidad operativa, 2026-08-27/28). Confirmar
+  cuál es el último número libre en `migrations/` al momento de implementar A.4.
 
 ---
 
@@ -194,12 +195,10 @@ imprimir → desaparece de la cola.
 - Reintento de `/confirmar` puede duplicar fila de alerta para un faltante que falló en Woo.
 - `FB-1419` no lo captura la heurística de sugerencias de `no_contable` — marcar a mano por
   ahora, o mejorar la heurística.
-- **`test/auditoria.test.js` tiene un fallo FUNCIONAL preexistente en `conteo-confiable`** (no
-  de timing): "ML responde 200 con datos, graba health, fotos y video" espera `auditados=1` y
-  recibe `0`. Confirmado por `auditor-despliegue` (2026-08-27) reproduciéndolo tanto con como
-  sin el fix de `766fd7f` — no lo causó ningún cambio de esta sesión, pero `barridoAuditoria`
-  puede no estar grabando lo esperado en producción. Investigar antes que los dos de abajo
-  (son de timing, este es de lógica).
+- ~~**`test/auditoria.test.js` tiene un fallo FUNCIONAL preexistente**~~ — ✅ **corregido**
+  (2026-08-27, commit `be2baf9`): la causa raíz era `reservarCupo('lectura', {})` pasando un
+  string donde se esperaba un array (`recursos.every is not a function`) — `barridoAuditoria`
+  nunca auditaba nada en producción pese a correr en horario. Ya no es una falla conocida.
 - `test/recepciones.test.js` tiene un assert de timing frágil (`duracion < 60ms`, vino
   fallando con 63-73ms bajo suite completa) — mismo tipo de problema que `matcherPush.test.js`
   de abajo, subir el umbral o aislar mejor el test.
@@ -391,8 +390,11 @@ mergeados para cuando se llegue a este paso.
 ### Paso 4 — Suite completa, una sola vez, sin nada más corriendo
 
 `pgrep -af "vitest|node.*server"` limpio antes de correr. `npx vitest run` completo. Meta:
-verde total, salvo los fallos ya documentados y confirmados ajenos (`test/auditoria.test.js`,
-timeout intermitente de `matcherPush.test.js` bajo carga). Commitear el merge recién con la
+verde total, salvo los fallos ya documentados y confirmados ajenos — **actualizado
+2026-08-28**: `test/auditoria.test.js` ya no es uno de ellos (corregido, ver arriba); los
+reales hoy son `test/recepciones.test.js` (assert de timing frágil) y `test/sync.test.js`
+(falla reproducida incluso aislado sobre `conteo-confiable` limpio), más el timeout
+intermitente de `test/matcherPush.test.js` bajo carga. Commitear el merge recién con la
 suite en verde.
 
 ### Paso 5 — Rescatar del matcher unificado v2 solo lo que sirve

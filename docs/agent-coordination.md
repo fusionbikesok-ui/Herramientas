@@ -23,9 +23,15 @@ nunca las mismas dos veces seguidas — y cada archivo pasa 100% verde corriendo
 (`npx vitest run test/<archivo>.test.js`). Confirmado en la sesión del 2026-08-27 sobre el
 mismo diff, en 4 corridas completas distintas: `test/matcherPush.test.js`,
 `test/reactivar-automatico.test.js` y `test/preparacion.test.js` aparecieron y desaparecieron
-sin que nadie tocara esos archivos ni su lógica. `test/auditoria.test.js` es la única falla
-que aparece SIEMPRE — esa sí es real y preexistente (ver `plan-maestro-v2.md`), no confundirla
-con las de contención.
+sin que nadie tocara esos archivos ni su lógica.
+
+**Actualizado 2026-08-28**: `test/auditoria.test.js` YA NO es una falla conocida — se corrigió
+(commit `be2baf9`, `reservarCupo` recibía un string en vez de un array). Si vuelve a fallar,
+tratalo como regresión real, no lo descartes por este párrafo. Las fallas reales confirmadas
+hoy (reproducidas también en aislado y sobre `conteo-confiable` limpio, auditoría del Hito 6
+de confiabilidad) son `test/recepciones.test.js` (assert de timing frágil, `duracion < 60ms`)
+y `test/sync.test.js` (`atencion/:cat: total es el COUNT real...`) — ver `plan-maestro-v2.md`
+para el detalle. No confundir ninguna de las dos con contención.
 
 **Antes de investigar una falla nueva en la suite completa como regresión real**: corré ese
 archivo solo. Si pasa aislado, es contención — anotalo en el reporte como tal (con el nombre

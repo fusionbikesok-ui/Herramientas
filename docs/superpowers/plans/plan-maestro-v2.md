@@ -35,7 +35,9 @@ sí lo tiene. Reemplaza a `2026-08-26-plan-maestro-consolidado.md` como punto de
 
 ## Cola de prioridad (orden general)
 
-1. **A.2 y A.3 cerradas** (backend Herramientas) — A.2 ✅ desplegado, A.3 sin empezar. Ver
+1. ~~**A.2 y A.3 cerradas** (backend Herramientas)~~ — ✅ **ambas desplegadas** (corrección
+   2026-08-28: A.3 estaba marcada "sin empezar" por un doc desactualizado; ya estaba
+   implementada desde el 2026-08-27 y se confirmó activa en producción). Ver
    `tracker-operacion-tiempo-real.md`.
 2. **En paralelo a lo anterior**: crear el repo de la app y el contrato OpenAPI inicial
    (`openapi/mobile-v1.yaml`). La app arranca contra mocks/fixtures derivados de ese contrato
@@ -80,11 +82,19 @@ un ítem si el usuario lo pide.
 - Completar `WOO_WEBHOOK_SECRET` en el `.env` del VPS (tarea operativa del usuario: sin esto
   el webhook de Woo acepta cualquier payload sin validar firma HMAC — obtenerlo desde
   WooCommerce → Ajustes → Avanzado → Webhooks → editar → copiar secreto).
-- **`test/auditoria.test.js` tiene un fallo FUNCIONAL preexistente en `conteo-confiable`** (no
-  de timing): `barridoAuditoria` espera `auditados=1` y recibe `0`. Confirmado reproduciéndolo
-  con y sin cambios recientes — no lo causó ningún trabajo de esta sesión, pero puede no estar
-  grabando lo esperado en producción. Priorizar antes que los dos de abajo (son de timing,
-  este es de lógica).
+- ~~**`test/auditoria.test.js` tiene un fallo FUNCIONAL preexistente**~~ — ✅ **corregido**
+  (2026-08-27, commit `be2baf9`): la causa raíz era `reservarCupo('lectura', {})` pasando un
+  string donde `lib/mlRateLimiter.js` esperaba un array (`recursos.every is not a function`),
+  lo que hacía que `barridoAuditoria` nunca auditara nada en producción pese a correr en
+  horario. Fixeado a `reservarCupo(['lectura'], {})`, test corregido, PM2 reiniciado. Este
+  archivo ya no es una falla conocida — si vuelve a fallar, es una regresión real, no lo
+  descartes como preexistente sin investigar.
+- **Fallas de suite completa reales, distintas de las de arriba** (auditoría de despliegue del
+  Hito 6, 2026-08-28): `test/recepciones.test.js` (`NO serializa productos distintos...`) y
+  `test/sync.test.js` (`atencion/:cat: total es el COUNT real...`) fallan también aislados y
+  también sobre `conteo-confiable` limpio — son las fallas preexistentes reales hoy, no
+  `test/auditoria.test.js`. Actualizar también `docs/agent-coordination.md`, que todavía
+  nombra a `auditoria.test.js` como la única falla que "aparece SIEMPRE".
 - Timeout intermitente de `test/matcherPush.test.js` bajo suite completa — aumentar timeout o
   aislar mejor si sigue molestando.
 - Asignar el permiso `notificaciones-ml` a quien corresponda desde la pantalla de Usuarios
