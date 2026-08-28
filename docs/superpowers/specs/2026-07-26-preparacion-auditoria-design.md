@@ -3,7 +3,7 @@
 ## Contexto
 
 Sexto de los 6 ciclos de mejora acordados para Preparación de Pedidos (ver
-`docs/superpowers/plans/2026-07-24-cache-pedidos-preparacion-design.md` y memoria del
+la implementación vigente y la memoria del
 proyecto). Ciclos 1 (caché de pedidos) y 2 (concurrencia + refresh automático) ya están en
 `master`. Este es el ciclo 3.
 

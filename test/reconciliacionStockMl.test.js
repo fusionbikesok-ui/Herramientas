@@ -2,7 +2,7 @@
  * Tests para reconciliarStockMl: reconciliación incremental del stock recordado
  * (ml_stock_estado.cantidad_ml) contra el stock REAL de ML (multiget /items?ids=).
  *
- * Caso real que motivó esto (ver docs/superpowers/plans/2026-08-06-reconciliacion-stock-ml.md):
+ * Caso real que motivó esto:
  * MLA1117110786| (SKU FB-4501) quedó con cantidad_ml=0 desde el 2026-07-17 mientras ML tenía
  * 1 unidad activa y vendible — syncWcToMl nunca lo detectó porque comparaba deseado (0)
  * contra recordado (0), ambos iguales.

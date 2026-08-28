@@ -390,7 +390,7 @@ export function coberturaRouter(db, cfg) {
   // ═══════════════════════════════════════════════════════════════════════════════════
   // Cobertura accionable (matcher inverso WC → ML) — pantalla de entrada, cola por marca,
   // acciones sobre un producto, búsqueda manual, historial/deshacer, multi-publicación,
-  // solo ML, hay que publicarlo y sin stock. Ver docs/superpowers/plans/2026-08-10-*.
+  // solo ML, hay que publicarlo y sin stock.
   // ═══════════════════════════════════════════════════════════════════════════════════
 
   function getProducto(id_woo) {

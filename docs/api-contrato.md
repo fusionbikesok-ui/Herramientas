@@ -811,7 +811,7 @@ del frontend (fuera de este archivo).
 
 ## Seguimientos: 3 secciones locales, ya no se infiere desde Woo (2026-08-13)
 
-Medido en el plan `docs/superpowers/plans/2026-08-13-seguimientos.md`: la pantalla mostraba
+La medición histórica (conservada en Git) mostró que la pantalla presentaba
 **70 pedidos** como "colgados" (a medias) que en realidad nunca pasaron por esta herramienta
 — el usuario carga el tracking a mano en WooCommerce por costumbre, y la versión vieja de
 `GET /seguimientos` infería "a medias" mirando la meta `_andreani_tracking` en pedidos
@@ -1751,8 +1751,7 @@ porque es contrato operativo, no solo de código.
 
 Reemplaza el flujo de "informe" de Cobertura por una herramienta de trabajo: cola priorizada
 por marca, tarjeta de confirmación con candidatos + diff estructurado, multi-publicación y
-solo-ML accionables. Ver `docs/superpowers/plans/2026-08-10-cobertura-accionable.md` y
-`2026-08-10-cobertura-flujo-ux.md`. El motor de matching (candidatos + diff) vive en
+solo-ML accionables. El motor de matching (candidatos + diff) vive en
 `lib/matcherEngine.js` (`construirML`, `candidatosDeWC`, `candidatosParaWC`, `diffTokens`);
 las rutas y la persistencia son este contrato.
 
@@ -2002,8 +2001,7 @@ Permiso único, sesión por usuario, concurrencia optimista, Vínculos absorbido
 Fusiona `cobertura` (WC→ML, `/api/cobertura`), `matcher` (ML→WC, `/api/matcher`) y `vinculos`
 (`public/vinculos/index.html`) en una sola herramienta llamada **Matcher**. **Solo backend en
 esta entrega** — el frontend único (una pantalla, dos direcciones, dirección ML→WC
-deshabilitada como "próximamente") es un despacho aparte contra este contrato. Ver
-`docs/superpowers/plans/2026-08-11-matcher-unificado.md`, sección "Las dos entregas". El
+deshabilitada como "próximamente") es un despacho aparte contra este contrato. El
 motor de matching **no se tocó** (`lib/matcherEngine.js` sigue como estaba — eso es la
 entrega 2).
 

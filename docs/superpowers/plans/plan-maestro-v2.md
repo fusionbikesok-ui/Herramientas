@@ -1,112 +1,296 @@
-# Plan maestro v2 — FusionBikes (Herramientas + App móvil)
+# Plan maestro vigente — FusionBikes Herramientas + App operativa
 
-Índice y tablero de estado. No repite detalle histórico — cada bloque linkea al documento que
-sí lo tiene. Reemplaza a `2026-08-26-plan-maestro-consolidado.md` como punto de entrada
-(ese archivo queda como referencia histórica de cómo se llegó hasta acá, no se borra).
+Actualizado: 2026-08-28.
 
-## Contexto
+Este es el **único plan activo** del repositorio. Reemplaza planes, trackers y documentos de
+implementación anteriores. Git conserva la historia; este archivo conserva solamente el estado
+actual, las decisiones vigentes y el trabajo pendiente.
 
-- **Backend**: `fusionbikesok-ui/Herramientas` (Node/Express ESM, better-sqlite3, vitest).
-  Rama de producción real: `conteo-confiable` (no `master` — líneas divergentes, ver
-  `plan-consolidacion-ramas.md`).
-- **App móvil**: `fusionbikesok-ui/FusionBikes-App` (React Native + TypeScript, Expo).
-  Repo separado, arranca en paralelo al backend usando un contrato OpenAPI congelado — no
-  espera a que existan endpoints reales.
-- **Regla operativa no negociable**: todo cambio de código del backend pasa por el pipeline
-  `hard-worker → revisor → tester/probador-e2e → auditor-despliegue` antes de mergear a
-  `conteo-confiable`. La app móvil tiene su propio ciclo (ver `tracker-app-mobile.md`), pero
-  cualquier cambio que sí toque `Herramientas` (el contrato OpenAPI, los endpoints reales de
-  `/api/v1`) sigue el mismo pipeline.
-- **Dos personas en paralelo**: una en la app móvil, otra en los endpoints del backend. El
-  punto de sincronización entre ambas es el contrato OpenAPI
-  (`openapi/mobile-v1.yaml`, ver `plan-api-mobile-v1.md`) — no se coordinan por Slack sobre la
-  forma de cada respuesta, se coordinan editando ese archivo.
+## Fuente de verdad y reglas operativas
 
-## Documentos del plan
+- Producción sirve la rama `conteo-confiable`; `master` todavía es una línea distinta.
+- Todo cambio se desarrolla en un worktree aislado y pasa por `hard-worker → revisor → tester →
+  probador-e2e` cuando haya UI → `auditor-despliegue`.
+- No se despliega, reinicia PM2 ni modifica configuración real automáticamente.
+- No se ejecutan suites globales concurrentes ni servidores contra `data/fusion.sqlite`.
+- El contrato HTTP vive en `docs/api-contrato.md`; el contrato móvil en
+  `openapi/mobile-v1.yaml`.
+- `docs/memory/` conserva hechos durables, no planes paralelos ni cronologías.
 
-| Documento | Qué cubre |
-|---|---|
-| `tracker-operacion-tiempo-real.md` | A.1–A.4: sync ML↔Woo en tiempo real (venta→Preparación, stock→ML, reclamos). |
-| `plan-api-mobile-v1.md` | Contrato OpenAPI, seguridad, extracción de servicios, ajuste de stock idempotente, pedidos, eventos durables — lado backend de la app móvil. |
-| `tracker-app-mobile.md` | Entregas verticales de la app (pantallas, builds, TestFlight, riesgos de Expo/nativo). |
-| `plan-consolidacion-ramas.md` | Unificar `master` y `conteo-confiable` en una sola línea. |
-| `tracker-plan-jose.md` | Conteo programado / control de stock por ciclos (ya existía, sin cambios de este reorden). |
-| `tracker-plan-preparacion.md` | Preparación de envíos: provincia, direcciones, notas, vínculos, despacho (ya existía, sin cambios de este reorden). |
+## Base ya disponible
 
-## Cola de prioridad (orden general)
+No reimplementar estos bloques salvo bug comprobado:
 
-1. ~~**A.2 y A.3 cerradas** (backend Herramientas)~~ — ✅ **ambas desplegadas** (corrección
-   2026-08-28: A.3 estaba marcada "sin empezar" por un doc desactualizado; ya estaba
-   implementada desde el 2026-08-27 y se confirmó activa en producción). Ver
-   `tracker-operacion-tiempo-real.md`.
-2. **En paralelo a lo anterior**: crear el repo de la app y el contrato OpenAPI inicial
-   (`openapi/mobile-v1.yaml`). La app arranca contra mocks/fixtures derivados de ese contrato
-   sin esperar al punto 1.
-3. Tras cerrar A.2/A.3: crear `feature/mobile-api-v1` desde el último `conteo-confiable`
-   estable.
-4. Implementar autenticación y dispositivos (Entrega 1 de `tracker-app-mobile.md` +
-   Bloque 4 de `plan-api-mobile-v1.md`). Primera integración real app↔API.
-5. Implementar stock idempotente con control de concurrencia (Entrega 2 + Bloque 6).
-6. Implementar pedidos de solo lectura sobre `pedidos_cache` (Entrega 3 + Bloque 7).
-7. Pantalla "Hoy" (Entrega 4).
-8. Eventos durables (`integration_events` + worker) y notificaciones push (Entrega 5 +
-   Bloque 8).
-9. **A.4** (reclamos ML) y el resto de `tracker-plan-jose.md`/`tracker-plan-preparacion.md`
-   continúan en paralelo, sin depender de la app móvil — son trabajo del mismo backend pero de
-   otro dominio (conteo, preparación) y ya tienen sus propios trackers y prioridad interna.
-10. **Consolidación `master`/`conteo-confiable`** — proyecto independiente, se ejecuta cuando
-    no haya sesiones trabajando en vivo sobre esas ramas (repetir la verificación del Paso 0
-    de `plan-consolidacion-ramas.md` cuando se retome, no asumir que sigue vigente).
+- Conteo confiable: ajuste por delta, cierre seguro, GTIN/EAN, ubicaciones, etiquetas, rotación,
+  criticidad, planificador de ciclos, diferencias y auditoría de publicaciones.
+- Preparación: provincia/dirección, nota del pedido, auditoría, concurrencia, GTIN y vínculos entre
+  pedidos del mismo comprador.
+- Sync ML↔Woo: cola inmediata de Preparación, push puntual de stock con feedback, sync puntual por
+  orden y reconciliación de respaldo.
+- Novedades ML: preguntas, mensajes y reclamos en la bandeja web.
+- Hito 7 base: dispositivos, preferencias, notificaciones por usuario, intentos push, JWT de acceso,
+  refresh rotativo y revocación asociada al dispositivo.
+- Incidentes operativos, métricas de ciclos y dashboard de alertas.
 
-No hay que completar todo en ese orden estricto — es la prioridad relativa. Puede adelantarse
-un ítem si el usuario lo pide.
+La presencia del código no sustituye los gates pendientes que se enumeran abajo.
 
-## Reglas de convivencia entre las dos personas (app / backend)
+## Prioridad 0 — Cerrar riesgos operativos antes de ampliar
 
-- **El desarrollador móvil no toca**: `routes/`, `lib/`, SQLite, ML/Woo, webhooks, ni ninguno
-  de los archivos de `tracker-operacion-tiempo-real.md`/`tracker-plan-jose.md`/
-  `tracker-plan-preparacion.md`/`plan-consolidacion-ramas.md`. Su único punto de contacto con
-  el repo `Herramientas` es `openapi/mobile-v1.yaml` (proponer cambios, no aplicarlos sin
-  acuerdo) y, más adelante, código dentro de `feature/mobile-api-v1` una vez que esa rama
-  exista.
-- **El desarrollador de backend no bloquea a la app** esperando para definir el contrato — el
-  OpenAPI se escribe con ejemplos realistas ANTES de implementar, y se ajusta si al
-  implementar aparece algo que el contrato no prevé (avisando al lado móvil, no cambiando en
-  silencio).
-- **Ningún lado dedujo el estado del otro** — este documento y sus trackers son la fuente de
-  verdad del estado, no lo que cada uno recuerda de la última conversación.
+### P0.1 Claims de MercadoLibre reales
 
-## Deuda operativa dispersa (no bloqueante, hacer cuando haya hueco)
+El código integrado todavía reconoce solamente `topic='claims'`, recurso `/claims/{id}` y consulta
+ese mismo endpoint. Antes de dar A.4 por cerrada se debe verificar contra notificaciones reales y
+soportar los envelopes vigentes:
 
-- Rotar `WOO_CS` (quedó expuesto en `/tmp` el 2026-08-10).
-- Completar `WOO_WEBHOOK_SECRET` en el `.env` del VPS (tarea operativa del usuario: sin esto
-  el webhook de Woo acepta cualquier payload sin validar firma HMAC — obtenerlo desde
-  WooCommerce → Ajustes → Avanzado → Webhooks → editar → copiar secreto).
-- ~~**`test/auditoria.test.js` tiene un fallo FUNCIONAL preexistente**~~ — ✅ **corregido**
-  (2026-08-27, commit `be2baf9`): la causa raíz era `reservarCupo('lectura', {})` pasando un
-  string donde `lib/mlRateLimiter.js` esperaba un array (`recursos.every is not a function`),
-  lo que hacía que `barridoAuditoria` nunca auditara nada en producción pese a correr en
-  horario. Fixeado a `reservarCupo(['lectura'], {})`, test corregido, PM2 reiniciado. Este
-  archivo ya no es una falla conocida — si vuelve a fallar, es una regresión real, no lo
-  descartes como preexistente sin investigar.
-- **Fallas de suite completa reales, distintas de las de arriba** (auditoría de despliegue del
-  Hito 6, 2026-08-28): `test/recepciones.test.js` (`NO serializa productos distintos...`) y
-  `test/sync.test.js` (`atencion/:cat: total es el COUNT real...`) fallan también aislados y
-  también sobre `conteo-confiable` limpio — son las fallas preexistentes reales hoy, no
-  `test/auditoria.test.js`. Actualizar también `docs/agent-coordination.md`, que todavía
-  nombra a `auditoria.test.js` como la única falla que "aparece SIEMPRE".
-- Timeout intermitente de `test/matcherPush.test.js` bajo suite completa — aumentar timeout o
-  aislar mejor si sigue molestando.
-- Asignar el permiso `notificaciones-ml` a quien corresponda desde la pantalla de Usuarios
-  (nadie lo tiene todavía, el aviso del Home no se le muestra a nadie hasta asignarlo).
-- Confirmar la URL real del link "Ver en MercadoLibre" en el aviso del Home
-  (`https://myaccount.mercadolibre.com.ar/questions/list` — no se pudo verificar en vivo
-  contra el panel real, bajo impacto si está mal).
+- topic legado `claims` y, si la cuenta lo entrega, `post_purchase` con acción `claims`;
+- recursos `/v1/claims/{id}` y `/post-purchase/v1/claims/{id}`;
+- GET autoritativo `/post-purchase/v1/claims/{id}`;
+- estados reales `opened`/`closed`; `stage` no reemplaza a `status`;
+- persistir campos reales (`type`, `reason_id`, `resource_id`) y obtener `/detail` solo si aporta
+  datos necesarios, siempre fail-open después de conservar el aviso durable.
 
-## Historial
+Aceptación: tests del handler HTTP con payloads representativos, assert del path enviado a ML,
+duplicado idempotente, actualización `opened→closed`, ML caído y recurso desconocido.
 
-Este plan reorganiza `2026-08-26-plan-maestro-consolidado.md` para separar el trabajo de la
-API móvil (proyecto nuevo, contract-first, repo separado) del trabajo operativo del backend
-que ya venía en curso. El archivo viejo no se borra — queda como registro de cómo se llegó a
-este punto, incluido el detalle completo de A.1 y A.2 antes de que se movieran a
-`tracker-operacion-tiempo-real.md`.
+### P0.2 Configuración y permisos
+
+- Configurar `MOBILE_JWT_SECRET` distinto por entorno, mínimo 32 caracteres; nunca versionarlo.
+- Configurar y verificar `WOO_WEBHOOK_SECRET` para validar HMAC.
+- Confirmar topics y URL de notificaciones en ML Developers.
+- Asignar `notificaciones-ml` únicamente a usuarios que deban ver ese trabajo.
+- Definir proveedor push real y credenciales mediante configuración segura; mantenerlo detrás de
+  feature flag hasta completar la entrega vertical.
+
+### P0.3 Evidencia operativa
+
+- Verificar PM2, health y migraciones aplicadas después de cada deploy manual.
+- No usar como aprobación global suites previas con fallos en inventario, sync, matcher,
+  reactivación o reconciliación: aislar la causa y obtener una suite final verde sin concurrencia.
+- Mantener trazabilidad entre commit, revisión, tests, E2E y auditoría.
+
+## Prioridad 1 — Columna vertebral de la app operativa
+
+La app nunca consume ni interpreta payloads directos de ML, Woo o chat. Cada canal entra por un
+adaptador, se convierte en un evento canónico durable y proyecta modelos internos estables. La
+bandeja es la fuente de verdad; el push es solo una señal.
+
+### P1.1 Modelo interno
+
+- `integration_events`: evento canónico, durable, inmutable e idempotente.
+- `integration_jobs`: cola persistente de procesamiento y reintentos.
+- `integration_event_history`: etapas, transiciones y decisiones auditables.
+- `inbox_items`: trabajo visible para usuario/equipo; lectura, asignación y resolución.
+- `conversations` y `conversation_messages`: canales conversacionales.
+- `user_notifications`: notificación lógica por usuario.
+- `notification_deliveries`: intento push por dispositivo y proveedor.
+
+El evento y su primer job se insertan en la misma transacción. Un fallo de push nunca revierte ni
+oculta el evento, la conversación o el inbox.
+
+### P1.2 Evento canónico
+
+Campos mínimos:
+
+```text
+event_id
+event_type
+channel
+source
+external_event_id
+resource_id
+thread_id
+actor_id
+payload_version
+occurred_at
+received_at
+correlation_id
+dedupe_key
+priority
+metadata
+status
+```
+
+La clave de deduplicación combina proveedor, tipo, identificador externo y versión/acción. No se
+deduplica solo por recurso porque una orden o conversación puede cambiar varias veces.
+
+### P1.3 Autenticidad y ACK
+
+Orden obligatorio: validar envelope y cuenta/firma → normalizar identificadores mínimos → insertar
+evento y job en una transacción → responder.
+
+- Woo: validar HMAC.
+- Chat: validar firma o secreto acordado.
+- ML: validar `user_id`/cuenta y consultar el recurso con el token propio; el webhook es aviso, no
+  fuente completa del contenido.
+- App: JWT corto, refresh revocable y permisos resueltos en servidor.
+
+Respuestas: `202` para evento nuevo durable y encolado, `200` para duplicado conocido, `400` para
+payload inválido, `401/403` para autenticidad/cuenta incorrecta y `503` si no se pudo conservar el
+evento y se necesita reintento. Nunca confirmar éxito antes de persistir.
+
+### P1.4 Estados y diagnóstico
+
+- Evento: `pending`, `processing`, `completed`, `failed`, `dead_lettered`.
+- Inbox: `unread`, `read`, `resolved`, `archived`.
+- Push: `pending`, `sent`, `failed`, `expired`.
+- Conversación: `open`, `assigned`, `resolved`, `archived`.
+
+Las etapas técnicas viven en el historial como `stage`: `webhook.validate`, `event.normalize`,
+`event.persist`, `inbox.project`, `notification.create`, `push.dispatch`. Duplicados o eventos viejos
+se registran como `ignored_duplicate`/`ignored_stale` sin repetir efectos.
+
+Cada fallo registra únicamente información segura:
+
+```text
+error_code
+source
+stage
+resource_id
+correlation_id
+retryable
+attempts
+first_failed_at
+last_failed_at
+next_retry_at
+safe_message
+event_id
+user_id
+device_id
+provider_status
+```
+
+Los últimos cuatro pueden ser nulos. Nunca guardar tokens, secretos ni texto privado en errores.
+
+### P1.5 Cola SQLite, orden y DLQ
+
+La cola usa `available_at`, `locked_at`, `locked_by`, lease con vencimiento, `attempts` y lotes
+pequeños. No usar `worker_threads` para trabajo de red. Un lease abandonado vuelve a estar
+disponible. Los reintentos usan backoff creciente y límite explícito; al agotarse terminan en DLQ
+con reproceso manual.
+
+Eventos fuera de orden se conservan, se comparan por `occurred_at`/versión y nunca retroceden un
+estado confirmado. Si no se puede decidir, quedan pendientes de reconciliación.
+
+### P1.6 Destinatarios, privacidad y deep links
+
+- Resolver destinatario por usuario asignado, equipo, rol o permiso; nunca enviar a todos por
+  defecto.
+- Definir retención por tipo de contenido y PII antes de implementar cada adaptador.
+- Revocar tokens inválidos y auditar accesos.
+- Los deep links usan IDs internos y vuelven a validar permisos en el backend.
+
+### P1.7 API de lectura operativa
+
+- `GET /api/v1/inbox?status=&channel=&cursor=`.
+- `GET /api/v1/inbox/:id`.
+- `POST /api/v1/inbox/:id/read`.
+- `POST /api/v1/inbox/:id/resolve` con control de versión y `409`.
+- `GET /api/v1/conversations/:id`.
+- `POST /api/v1/conversations/:id/read`.
+- `GET /api/v1/notifications` paginado.
+- `GET /api/v1/operations/:correlation_id` con etapas seguras según permisos.
+
+### P1.8 Primera entrega vertical
+
+Implementar primero un único flujo completo:
+
+```text
+ML question → evento durable → inbox → notificación por usuario → push simulado
+→ deep link interno → lectura/resolución → auditoría
+```
+
+Debe cubrir duplicados, replay, evento desordenado, usuario sin permiso, caída de push, lease
+abandonado, DLQ y reconciliación. Luego incorporar adaptadores separados para claims, messages,
+órdenes ML y órdenes Woo. Implementar conversaciones antes del chat; integrar chat inicialmente en
+modo solo lectura. Activar push real al final, detrás de feature flag.
+
+## Prioridad 2 — App móvil por entregas verticales
+
+El backend base de acceso y dispositivos ya existe; el cliente móvil sigue pendiente.
+
+1. **Setup:** repo de app, Expo/TypeScript, navegación, sistema visual, cliente generado desde
+   OpenAPI, mock server y fixtures.
+2. **Acceso:** login, refresh, logout, `/me`, almacenamiento seguro, biometría y estados offline.
+3. **Stock:** escáner SKU/EAN, búsqueda, detalle, ajuste idempotente con `expected_stock`, operación
+   consultable y conflicto `409`.
+4. **Pedidos:** lectura paginada de `pedidos_cache`, filtros, permisos e indicador de novedad.
+5. **Hoy:** agregador de pedidos, stock, inbox y tareas priorizadas.
+6. **Notificaciones:** preferencias, registro/revocación de dispositivo, push real y deep links.
+
+Validar temprano cámara, biometría, background y push en dispositivos reales. La app no modifica
+stock ni resuelve trabajo offline sin idempotency key y control de versión.
+
+## Prioridad 3 — Conteo e inventario pendiente
+
+- Implementar el aviso Home de control diario usando `/api/inventario/plan-hoy`, con estimación de
+  tiempo honesta y estado vacío.
+- Corregir auditoría de publicaciones: nombre/semántica de `sin_clip`, logging de errores en
+  `ensureAuditoriaTable` y assert real de rotación de cursor.
+- E2E de etiquetas: marcar → cola → imprimir → desaparecer.
+- E2E de ubicaciones: crear → mapear → escanear → cerrar en cero seguro.
+- Agregar acción “descartar” en UI del historial de diferencias.
+- Corregir `/aprobar` dual-EAN que marca `ajustado_en` de más.
+- Evitar alerta duplicada al reintentar `/confirmar` después de fallo Woo.
+- Revisar manualmente `FB-1419` como `no_contable` o mejorar la sugerencia sin hardcode riesgoso.
+- Mostrar sobrantes pendientes en naranja con instrucción clara, no como error rojo.
+
+## Prioridad 4 — Preparación pendiente
+
+Ya están integradas las fases de provincia, dirección, nota y vínculos de comprador.
+
+- Cerrar auditoría/E2E pendiente de las fases desplegadas, incluida dirección con campos largos en
+  390 px y flujo real de vínculos.
+- Integrar **Horarios de corte y fecha de despacho** desde `prep-horarios-corte` solo después de
+  repetir revisor, tests, E2E y auditoría sobre la base actual.
+- Después implementar **Etiqueta interna 50×25 mm + Control de despacho**, usando
+  `fecha_despacho` y vínculos; incluir escaneo, agrupación, estados y auditoría.
+- Corregir en Recepción el proveedor completado después de agregar ítems, que hoy puede dejar los
+  botones deshabilitados.
+- Verificar responsive de la tabla/modal de stock en 390 px.
+
+## Prioridad 5 — Deuda de sync y pruebas
+
+- En Recepciones, obtener el SKU vigente desde `catalogo_cache` antes del push puntual a ML.
+- Anclar con test que la recepción queda `confirmada` antes del push fail-open.
+- Documentar que `/api/woo/stock/aplicar` devuelve el SKU de `catalogo_cache`.
+- Extraer el componente visual de estado ML cuando exista un tercer consumidor.
+- Eliminar asserts de timing frágiles en `recepciones.test.js` y el timeout intermitente de
+  `matcherPush.test.js` mediante pruebas deterministas, no subiendo límites sin diagnóstico.
+
+## Prioridad 6 — Consolidar `master` y `conteo-confiable`
+
+Objetivo: una sola línea de desarrollo y producción, sin perder funciones exclusivas.
+
+1. Confirmar que no haya agentes, worktrees o despliegues activos sobre ambas ramas.
+2. Congelar una base y respaldar referencias remotas.
+3. Integrar `conteo-confiable` en `master`, resolviendo contratos y migraciones explícitamente.
+4. Verificar rutas, permisos, crons, migraciones, frontend y funciones exclusivas.
+5. Ejecutar una única suite global serial y tests dirigidos de módulos críticos.
+6. E2E en instancia aislada: login, Home, inventario, Preparación, Matcher, auditoría y API móvil.
+7. Auditoría final y corte manual de PM2.
+8. Mantener rollback al commit anterior; no borrar ramas hasta comprobar operación real.
+
+Este proyecto no bloquea la API/app, pero debe ejecutarse cuando no haya sesiones trabajando en
+vivo. Tras consolidar, `master` será la única rama permanente y este plan seguirá siendo la única
+fuente de trabajo pendiente.
+
+## Criterios globales de aceptación
+
+- Contrato y migración numerada para todo cambio de esquema/API.
+- Permisos y aislamiento por usuario cubiertos.
+- Ningún webhook confirma éxito antes de persistencia durable.
+- Ningún fallo de push pierde inbox/evento.
+- Replays no producen efectos funcionales duplicados.
+- Errores identifican canal, etapa, recurso y correlación sin exponer PII o secretos.
+- Tests dirigidos y suite global final verdes, sin procesos ni DB temporales abandonados.
+- UI responsive y accesible cuando corresponda.
+- Revisor sin hallazgos bloqueantes y auditor con luz verde.
+- Deploy manual con health, logs, migraciones y rollback verificados.
+
+## Fuera de alcance hasta decisión explícita
+
+- Respuestas automáticas o IA sobre mensajes/reclamos.
+- Chat bidireccional antes de validar lectura, permisos y conversaciones.
+- CRM, taller, compras o analítica avanzada dentro del bloque móvil.
+- Credenciales reales versionadas.
+- Deploy automático a producción.

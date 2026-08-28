@@ -316,8 +316,7 @@ async function _syncMlToWc(db, cfg) {
  * A.3 — Procesa UNA orden ML puntual (por el `resource` de un webhook), sin el barrido
  * paginado de `/orders/search`. `_procesarOrden` es agnóstico al origen del objeto orden
  * (mismo shape venga de `/orders/search` o de un GET puntual a `/orders/{id}`), así que no
- * hace falta tocar su firma ni su idempotencia — ver
- * docs/superpowers/plans/tracker-operacion-tiempo-real.md, A.3.
+ * hace falta tocar su firma ni su idempotencia.
  *
  * El barrido paginado completo (`syncMlToWc`, cron cada 10 min) queda como respaldo sin
  * tocar: si este camino puntual falla o no llega, la orden igual se procesa en la corrida

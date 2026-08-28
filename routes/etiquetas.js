@@ -1,7 +1,6 @@
 import express from 'express';
 
-// Fase 1 (Etiquetas persistentes) del plan de control de stock de José — ver
-// docs/superpowers/plans/2026-08-plan-jose-control-stock-ciclos.md. Reemplaza el
+// Etiquetas persistentes del control cíclico de stock. Reemplaza el
 // localStorage de public/etiquetas/index.html, que se pierde al cerrar el navegador, por
 // una cola persistente en la base. No toca el renderer 50×25mm existente: esta es
 // exclusivamente la fuente de datos.

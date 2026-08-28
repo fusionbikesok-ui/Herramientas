@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: |
     Contrato congelado para la app móvil (React Native). Fuente de verdad para ambos lados
-    (app y backend) — ver docs/superpowers/plans/plan-api-mobile-v1.md para el plan completo.
+    (app y backend) — ver docs/superpowers/plans/plan-maestro-v2.md para el plan vigente.
     Los endpoints de dispositivos y notificaciones están implementados en el backend.
 
     Convenciones:

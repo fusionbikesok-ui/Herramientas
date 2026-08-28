@@ -1,12 +1,11 @@
 # Estado activo
 
-Actualizado: 2026-08-22.
+Actualizado: 2026-08-28.
 
 ## En curso
 
-- C2 — Consulta de Precios: implementación congelada y publicada en GitHub (`0c4a445`); el
-  plan y contrato de subida de GTIN están en `docs/superpowers/plans/2026-08-22-consulta-precios-gtin.md`.
-  Falta el gate E2E/auditoría antes de reiniciar PM2.
+- El único plan activo está en `docs/superpowers/plans/plan-maestro-v2.md`; los planes y trackers
+  anteriores fueron consolidados y su historia permanece en Git.
 - C3 — Preparación de pedidos: implementación terminada y commit aislado `5ef0257` en
   `.claude/worktrees/preparacion-gtin` (`c3-preparacion-gtin`), sin tocar C2. Un GTIN válido
   desconocido devuelve candidatos y exige asociación explícita; hay conflicto de GTIN/mapa,
