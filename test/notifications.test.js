@@ -102,6 +102,19 @@ describe('routes/notifications', () => {
       db.close();
     });
 
+    it('rechaza cursor inválido (MEDIO 6)', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db);
+      const app = buildApp(db, 1);
+
+      // Cursor corrupto (base64 inválido)
+      const res = await request(app).get('/api/notifications?cursor=!!!invalid!!!');
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('cursor_invalido');
+      db.close();
+    });
+
     it('respeta el campo leida', async () => {
       const db = openDb(TEST_DB);
       seedUser(db, { id: 1 });

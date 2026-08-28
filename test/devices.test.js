@@ -141,6 +141,28 @@ describe('routes/devices', () => {
       db.close();
     });
 
+    it('registra un dispositivo Web (ALTO 3)', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db);
+      const app = buildApp(db, 1);
+
+      const res = await request(app).post('/api/devices').send({
+        platform: 'web',
+        push_token: 'fcm-token-web-123',
+        device_name: 'Navegador Firefox',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.platform).toBe('web');
+      expect(res.body.device_name).toBe('Navegador Firefox');
+
+      // Verificar en DB
+      const device = db.prepare('SELECT * FROM device_tokens WHERE token = ?').get('fcm-token-web-123');
+      expect(device).toBeDefined();
+      expect(device.plataforma).toBe('web');
+      db.close();
+    });
+
     it('permite re-registrar un token revocado', async () => {
       const db = openDb(TEST_DB);
       seedUser(db);

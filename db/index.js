@@ -435,7 +435,7 @@ export function openDb(dbPath) {
     device_token_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
     tipo TEXT NOT NULL,
     incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
-    estado TEXT NOT NULL CHECK(estado IN ('pendiente', 'enviado', 'fallido')),
+    estado TEXT NOT NULL,
     intentos INTEGER NOT NULL DEFAULT 1,
     error TEXT,
     creado_en TEXT NOT NULL
@@ -445,7 +445,7 @@ export function openDb(dbPath) {
     WHERE tipo IN ('nuevo', 'resuelto')`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_pendientes
     ON notificaciones_enviadas(device_token_id, estado, creado_en)
-    WHERE estado IN ('pendiente', 'fallido')`); } catch (_) {}
+    WHERE estado IN ('pendiente', 'fallido', 'agotado')`); } catch (_) {}
 
   // Notificaciones visibles al usuario (lo que ve en la app).
   // Separado del log de envíos: este es "qué notificaciones tiene el usuario",

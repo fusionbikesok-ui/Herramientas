@@ -13,9 +13,10 @@ const now = () => new Date().toISOString();
 
 /**
  * Valida que `platform` sea uno de los valores permitidos.
+ * ALTO 3 fix: incluir 'web' además de iOS/Android (FCM soporta las 3 plataformas).
  */
 function platformaValida(plat) {
-  return ['ios', 'android'].includes(plat);
+  return ['ios', 'android', 'web'].includes(plat);
 }
 
 /**
@@ -39,9 +40,9 @@ export function devicesRouter(db) {
    * Registra un dispositivo para recibir notificaciones push.
    *
    * Body:
-   *  - platform: 'ios' | 'android'
+   *  - platform: 'ios' | 'android' | 'web'
    *  - push_token: string (token del proveedor)
-   *  - device_name?: string (descripción humana, ej. "iPhone de Juan")
+   *  - device_name?: string (descripción humana, ej. "iPhone de Juan" o "Navegador")
    *
    * Response 200: { id, platform, device_name, creado_en }
    * Response 401: No autenticado

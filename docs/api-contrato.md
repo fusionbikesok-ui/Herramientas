@@ -2609,9 +2609,9 @@ Registra un dispositivo para recibir notificaciones push.
 - Request:
   ```json
   {
-    "platform": "ios" | "android",
+    "platform": "ios" | "android" | "web",
     "push_token": "string (token del proveedor APNs/FCM)",
-    "device_name": "string (opcional, ej. 'iPhone de Juan')"
+    "device_name": "string (opcional, ej. 'iPhone de Juan' o 'Navegador')"
   }
   ```
 
@@ -2627,9 +2627,9 @@ Registra un dispositivo para recibir notificaciones push.
 
 - Response 401: No autenticado (sin sesión válida).
 - Response 422:
-  - `{ "error": { "code": "platform_invalido", "message": "..." } }` — `platform` no es 'ios' ni 'android'.
+  - `{ "error": { "code": "platform_invalido", "message": "..." } }` — `platform` no es uno de: 'ios', 'android', 'web'.
   - `{ "error": { "code": "push_token_invalido", "message": "..." } }` — `push_token` vacío o no string.
-  - `{ "error": { "code": "token_ya_registrado", "message": "..." } }` — el token ya pertenece a otro usuario.
+  - `{ "error": { "code": "cursor_invalido", "message": "..." } }` — (en `GET /notifications`) cursor corrupto o mal formado.
 - Response 500: Error interno.
 
 Notas:
@@ -2714,10 +2714,11 @@ Las notificaciones son **dos tablas separadas**:
 
 1. **`notificaciones_enviadas`** (log de intentos de delivery):
    - Registra cada intento de envío a cada dispositivo.
-   - Estados: `'pendiente'`, `'enviado'`, `'fallido'`.
-   - Tiene reintentos y backoff (futuro, cuando se implemente FCM real).
+   - Estados: `'pendiente'`, `'enviado'`, `'fallido'`, `'agotado'` (supera reintentos).
+   - Reintentos con backoff creciente (2 min, 10 min, 30 min; máx. 3 reintentos por dispositivo).
+   - Si se agotan los reintentos, marcado como `'agotado'` para evitar re-procesamiento.
    - Contiene deduplicación: tipos 'nuevo' y 'resuelto' tienen constraint UNIQUE por incidente,
-     pero 'reaviso' es repetible.
+     pero 'reaviso' es repetible (intencional).
 
 2. **`notificaciones_usuario`** (lo que ve el usuario en la app):
    - Registra notificaciones VISIBLES para el usuario.
@@ -2731,12 +2732,19 @@ aunque no le llegara el push en el dispositivo.
 
 ### Worker: `procesarNotificacionesPush`
 
-Cron cada 2 minutos (configurable via `REAVISO_INCIDENTE_MIN`, default 30 min para reintentos).
+Cron cada 2 minutos (configuración en `server.js`, línea del `setInterval`).
 
 **Lógica:**
-1. Busca incidentes en estado 'activo' sin notificación 'nuevo' enviada → envía 'nuevo'.
-2. Busca incidentes en estado 'activo' con último envío > 30 min → envía 'reaviso'.
-3. Busca incidentes en estado 'resuelto' sin notificación 'resuelto' enviada → envía 'resuelto'.
+1. Busca incidentes en estado 'activo' sin notificación 'nuevo' en el feed → envía 'nuevo'.
+2. Busca incidentes en estado 'activo' con última notificación en el feed > intervalo de reaviso → envía 'reaviso'.
+   - Intervalo de reaviso: configurable via `REAVISO_INCIDENTE_MIN` (default 30 min).
+3. Busca incidentes en estado 'resuelto' sin notificación 'resuelto' en el feed → envía 'resuelto'.
+
+**Backoff en reintentos:**
+- Debeintento 1 falla: reintentar después de 2 min.
+- Si intento 2 falla: reintentar después de 10 min.
+- Si intento 3 falla: reintentar después de 30 min.
+- Si intento 4 falla: marcar dispositivo como 'agotado', no reintentar más.
 
 **Destinatarios:** usuarios con `preferencias_notificacion.incidentes_criticos = 1`
 (default 1, opt-out, no opt-in).

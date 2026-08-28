@@ -124,25 +124,25 @@ describe('lib/workerNotificacionesPush', () => {
     // Primera corrida
     await procesarNotificacionesPush(db);
 
-    // Marcar última notificación como muy antigua
-    const ultimas = db.prepare(`
-      SELECT * FROM notificaciones_enviadas
-      WHERE incidente_id = ? AND estado = 'enviado'
+    // Marcar última notificación en el FEED (notificaciones_usuario) como muy antigua
+    const notifNuevo = db.prepare(`
+      SELECT * FROM notificaciones_usuario
+      WHERE incidente_id = ? AND tipo = 'nuevo'
       ORDER BY creado_en DESC LIMIT 1
     `).get(incidenteId);
 
-    if (ultimas) {
+    if (notifNuevo) {
       const fechaVencida = new Date(Date.now() - 40 * 60 * 1000).toISOString();
       db.prepare(`
-        UPDATE notificaciones_enviadas SET creado_en = ? WHERE id = ?
-      `).run(fechaVencida, ultimas.id);
+        UPDATE notificaciones_usuario SET creado_en = ? WHERE id = ?
+      `).run(fechaVencida, notifNuevo.id);
     }
 
-    // Segunda corrida — debería permitir reaviso
+    // Segunda corrida — debería permitir reaviso (> 30 min vencidos, MEDIO 5)
     await procesarNotificacionesPush(db);
 
     const reavisos = db.prepare(`
-      SELECT COUNT(*) as c FROM notificaciones_enviadas
+      SELECT COUNT(*) as c FROM notificaciones_usuario
       WHERE incidente_id = ? AND tipo = 'reaviso'
     `).get(incidenteId).c;
 
@@ -304,6 +304,183 @@ describe('lib/workerNotificacionesPush', () => {
     `).get(incidenteId).c;
 
     expect(enviosDeDevices).toBe(2); // 2 dispositivos, 2 intentos de envío
+
+    db.close();
+  });
+
+  // ALTO 1: Backoff escalante — verificar que el contador incrementa en reintentos
+  it('incrementa intentos en reintentos fallidos (ALTO 1)', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    seedDevice(db, 1, 'device-reintento', 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // Crear una fila fallida con intentos=1, creada hace 100 min (backoff de 2 min ya vencido)
+    const hace100min = new Date(Date.now() - 100 * 60 * 1000).toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      1, 'nuevo', incidenteId, 'fallido', 1,
+      'Network error',
+      hace100min
+    );
+
+    // Llamar al worker — debe verla, pasar el backoff, y hacer UPDATE incrementando a 2
+    // (el mock retorna ok, así que registrarIntentoDeSend la marca como enviado=2)
+    await procesarNotificacionesPush(db);
+
+    const filaActualizada = db.prepare(`
+      SELECT intentos, estado FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+
+    expect(filaActualizada).toBeDefined();
+    // El mock retorna ok, así que actualizó a enviado con intentos=2
+    expect(filaActualizada.intentos).toBe(2);
+    expect(filaActualizada.estado).toBe('enviado');
+
+    db.close();
+  });
+
+  // ALTO 2: Marcar como 'agotado' cuando se supera el tope de reintentos
+  it('marca dispositivo como "agotado" tras superar reintentos (ALTO 2)', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    seedDevice(db, 1, 'device-exhausted', 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // Crear una fila con intentos=4 (ya superó el tope de 3) y estado='fallido'
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, error, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      1, 'nuevo', incidenteId, 'fallido', 4,
+      'Repeated network failure',
+      now
+    );
+
+    // Llamar al worker
+    await procesarNotificacionesPush(db);
+
+    // Verificar que la fila fue marcada como 'agotado'
+    const fila = db.prepare(`
+      SELECT intentos, estado FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+
+    expect(fila).toBeDefined();
+    expect(fila.intentos).toBe(4);
+    expect(fila.estado).toBe('agotado');
+
+    db.close();
+  });
+
+  // ALTO 4: Reavisos múltiples consolidan en una sola fila de notificaciones_usuario
+  it('consolida múltiples reavisos en 1 fila notificaciones_usuario (ALTO 4)', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    seedDevice(db, 1, 'device-reaviso', 'ios');
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // Primer tick: envía 'nuevo'
+    await procesarNotificacionesPush(db);
+
+    // Verificar que existe fila 'nuevo' en notificaciones_usuario
+    const notifNuevo = db.prepare(`
+      SELECT creado_en FROM notificaciones_usuario
+      WHERE user_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+    expect(notifNuevo).toBeDefined();
+    const fechaNuevo = notifNuevo.creado_en;
+
+    // Simular que vencimiento de reaviso — marcar notificación 'nuevo' como antigua (> 30 min)
+    const ahora = Date.now();
+    const hace35min = new Date(ahora - 35 * 60 * 1000).toISOString();
+
+    db.prepare(`
+      UPDATE notificaciones_usuario
+      SET creado_en = ?
+      WHERE user_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).run(hace35min, incidenteId);
+
+    // Segundo tick: debe detectar que vencimiento > 30 min (MEDIO 5: consulta notificaciones_usuario)
+    // y enviar 'reaviso'
+    await procesarNotificacionesPush(db);
+
+    const reaviso1 = db.prepare(`
+      SELECT COUNT(*) as c FROM notificaciones_usuario
+      WHERE user_id = 1 AND tipo = 'reaviso' AND incidente_id = ?
+    `).get(incidenteId);
+
+    // Debería haber creado el primer 'reaviso'
+    expect(reaviso1.c).toBeGreaterThan(0);
+
+    // Tercer tick: otro reaviso — debe marcar 'nuevo' como vencido nuevamente
+    const hace40min = new Date(ahora - 40 * 60 * 1000).toISOString();
+    db.prepare(`
+      UPDATE notificaciones_usuario
+      SET creado_en = ?
+      WHERE user_id = 1 AND tipo = 'reaviso' AND incidente_id = ?
+    `).run(hace40min, incidenteId);
+
+    await procesarNotificacionesPush(db);
+
+    const reaviso2 = db.prepare(`
+      SELECT COUNT(*) as c FROM notificaciones_usuario
+      WHERE user_id = 1 AND tipo = 'reaviso' AND incidente_id = ?
+    `).get(incidenteId);
+
+    // ALTO 4: Debe seguir siendo 1 fila (UPDATE la existente, no INSERT nuevo)
+    expect(reaviso2.c).toBe(reaviso1.c);
+
+    db.close();
+  });
+
+  // MEDIO 5: Sin dispositivos, el incidente pasa a 'reaviso' (consulta mira notificaciones_usuario)
+  it('reavisos funcionan incluso sin dispositivos (MEDIO 5)', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    // NO crear dispositivo — usuario sin app
+
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    // Primer tick: envía 'nuevo' al feed (sin dispositivos, solo crea notificaciones_usuario)
+    await procesarNotificacionesPush(db);
+
+    const notifNuevo = db.prepare(`
+      SELECT * FROM notificaciones_usuario
+      WHERE user_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+    expect(notifNuevo).toBeDefined();
+
+    // Marcar como vencido
+    const hace35min = new Date(Date.now() - 35 * 60 * 1000).toISOString();
+    db.prepare(`
+      UPDATE notificaciones_usuario
+      SET creado_en = ?
+      WHERE user_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).run(hace35min, incidenteId);
+
+    // Segundo tick: debería generar 'reaviso' (el worker busca en notificaciones_usuario, no en notificaciones_enviadas)
+    await procesarNotificacionesPush(db);
+
+    const reavisos = db.prepare(`
+      SELECT COUNT(*) as c FROM notificaciones_usuario
+      WHERE user_id = 1 AND tipo = 'reaviso' AND incidente_id = ?
+    `).get(incidenteId).c;
+
+    expect(reavisos).toBeGreaterThan(0);
 
     db.close();
   });
