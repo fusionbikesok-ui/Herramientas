@@ -77,6 +77,14 @@ notificaciones simuladas, manejo de errores/offline/conflictos.
 
 ## Bloque 4 — Trabajo del backend (después de A.2/A.3)
 
+### Decisión de autenticación (2026-08-28)
+
+Para la app móvil se implementará JWT con access token de vida corta y refresh token
+revocable por dispositivo. El panel web conserva `express-session` por cookie. No se agrega
+JWT al backend de Hito 7 de forma aislada: se implementará junto con login, refresh, logout,
+revocación y sus pruebas del Bloque 4, reutilizando `users`/`user_permisos` y la tabla de
+dispositivos ya creada por Hito 7.
+
 - Prefijo `/api/v1`, autenticación por access token + refresh token (JWT o equivalente),
   **separada** del `express-session` de cookies que ya usa el panel web — no migrar el panel a
   tokens, son dos mecanismos de auth coexistiendo sobre las mismas tablas de usuario.

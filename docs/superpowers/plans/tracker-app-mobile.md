@@ -15,6 +15,9 @@ vez — el riesgo de integración se reparte entrega por entrega.
 
 ## Estado
 
+Decisión vigente: la app móvil usará access tokens JWT cortos y refresh tokens revocables por
+dispositivo. El panel web seguirá usando cookies de sesión; ambos mecanismos coexistirán.
+
 | Entrega | App | Backend | Estado |
 |---|---|---|---|
 | **0 — Setup** | Repo creado, Expo + TS, navegación base, sistema visual, cliente TS generado desde `openapi/mobile-v1.yaml`, mock server/fixtures funcionando | `openapi/mobile-v1.yaml` congelado (v1 inicial) | ⬜ Sin empezar |
@@ -22,7 +25,7 @@ vez — el riesgo de integración se reparte entrega por entrega.
 | **2 — Stock** | Escáner SKU/EAN, búsqueda manual, detalle de producto, edición de stock, estados (enviando/sincronizando ML/sincronizado/error), manejo de conflicto 409 | `products/lookup`, `stock/adjustments` idempotente con `expected_stock`, `operations/:id` | ⬜ Sin empezar |
 | **3 — Pedidos** | Lista, filtros (`status`/`channel`/`assigned_to`/`updated_after`), detalle, indicador de pedido nuevo | Adaptador de solo lectura sobre `pedidos_cache`, filtros, permisos, paginación | ⬜ Sin empezar |
 | **4 — Hoy** | Tarjetas por prioridad, contadores, accesos directos | Agregador de pedidos + stock + mensajes + preguntas + reclamos + tareas | ⬜ Sin empezar |
-| **5 — Notificaciones** | Registro push, preferencias, deep links a la pantalla exacta | Dispositivos, integración APNs/FCM, reglas de envío, registro de entrega y errores | ⬜ Sin empezar (depende de Bloque 8 del plan API: `integration_events` + worker) |
+| **5 — Notificaciones** | Registro push, preferencias, deep links a la pantalla exacta | Dispositivos, integración APNs/FCM, reglas de envío, registro de entrega y errores | 🟡 Backend Hito 7 implementado; app e integración APNs/FCM pendientes |
 
 ## Fuera de alcance de este tracker (ya cubierto en otro lado)
 
