@@ -24,6 +24,10 @@ describe('horarios de despacho', () => {
     expect(calcularFechaDespacho(laborables, new Date('2026-08-29T14:00:00Z'))).toBe('2026-08-31');
   });
 
+  it('no rompe el sync si no hay días habilitados', () => {
+    expect(calcularFechaDespacho(laborables.map((h) => ({ ...h, habilitado: false })), new Date())).toBeNull();
+  });
+
   it('expone y actualiza los siete días mediante el router', async () => {
     const file = './test/tmp-horarios-despacho.sqlite';
     const db = openDb(file);
@@ -38,6 +42,8 @@ describe('horarios de despacho', () => {
     expect(guardado.body.data.find((h) => h.dia === 6)).toMatchObject({ habilitado: true, hora_corte: '15:30' });
     const invalido = await request(app).put('/api/preparacion/horarios-despacho').send({ horarios: horarios.slice(0, 6) });
     expect(invalido.status).toBe(422);
+    const ninguno = await request(app).put('/api/preparacion/horarios-despacho').send({ horarios: horarios.map((h) => ({ ...h, habilitado: false })) });
+    expect(ninguno.status).toBe(422);
     db.close();
     try { fs.unlinkSync(file); } catch {}
   });

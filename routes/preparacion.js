@@ -16,7 +16,7 @@ import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
-import { calcularFechaDespacho, leerHorarios, sembrarHorarios, horaValida, DIAS_SEMANA } from '../lib/horariosDespacho.js';
+import { calcularFechaDespacho, leerHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment } from '../lib/horariosDespacho.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -143,7 +143,7 @@ function ensureTables(db) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables pedidos_cache.fecha_despacho:', e.message);
   }
   try { db.prepare(`CREATE TABLE IF NOT EXISTS despacho_horarios (
-    dia INTEGER PRIMARY KEY, habilitado INTEGER NOT NULL DEFAULT 0,
+    dia INTEGER PRIMARY KEY CHECK (dia BETWEEN 1 AND 7), habilitado INTEGER NOT NULL DEFAULT 0 CHECK (habilitado IN (0,1)),
     hora_corte TEXT NOT NULL DEFAULT '16:00', actualizado_en TEXT NOT NULL
   )`).run(); sembrarHorarios(db); } catch (e) { console.error('ensureTables despacho_horarios:', e.message); }
   // pack_id acá también: pedidos_cache es lo que alimenta tanto "A preparar" como el
@@ -761,7 +761,8 @@ export function preparacionRouter(db, cfg) {
       const horarios = req.body?.horarios;
       if (!Array.isArray(horarios) || horarios.length !== 7
         || new Set(horarios.map((h) => Number(h.dia))).size !== 7
-        || horarios.some((h) => !DIAS_SEMANA.includes(Number(h.dia)) || !horaValida(h.hora_corte))) {
+        || horarios.some((h) => !DIAS_SEMANA.includes(Number(h.dia)) || typeof h.habilitado !== 'boolean' || !horaValida(h.hora_corte))
+        || !horarios.some((h) => h.habilitado === true)) {
         return res.status(422).json({ ok: false, error: 'horarios inválidos' });
       }
       const update = db.prepare('UPDATE despacho_horarios SET habilitado=?, hora_corte=?, actualizado_en=? WHERE dia=?');
@@ -2046,7 +2047,7 @@ function upsertPedidoCache(db, row) {
        @fecha_despacho, @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note)
     ON CONFLICT(clave) DO UPDATE SET
       pack_id=excluded.pack_id,
-      fecha_despacho=excluded.fecha_despacho,
+      fecha_despacho=COALESCE(pedidos_cache.fecha_despacho, excluded.fecha_despacho),
       numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
       estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
       logistic_type=excluded.logistic_type, substatus=excluded.substatus,
@@ -2285,6 +2286,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     numero_pedido: ov.numero,
     comprador: ov.comprador.nickname || 'Comprador ML',
     fecha: ov.fecha,
+    fecha_despacho: fechaEstimadaShipment(envio),
     estado_envio: 'pendiente',
     estado_wc: null,
     espejo_ml: 0,
