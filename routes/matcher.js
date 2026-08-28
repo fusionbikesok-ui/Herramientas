@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { mlFetch } from '../lib/mlClient.js';
+import { mlFetch, categorizarErrorMl } from '../lib/mlClient.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
 import { aplanarItemMl } from '../lib/modelos/publicacionMl.js';
 import {
@@ -9,6 +9,7 @@ import {
   escribirSkuEnMl, contarPendientes, pushSkusPendientes, getEstadoPush,
 } from '../lib/matcherPush.js';
 import { armarClaveMl } from '../lib/mlUtil.js';
+import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -79,7 +80,8 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
         const itemIds = [...new Set(clavesNecesitanAtencion(db).map(c => String(c).split('|')[0]))];
         r = await refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress);
       } else {
-        r = await refrescarPublicacionesMl(db, cfg, onProgress);
+        // Refresco TOTAL con métricas e integración de incidentes (Hito 4)
+        r = await refrescarPublicacionesMlConMetricas(db, cfg, onProgress);
       }
       _refresco.resultado = r;
       _refresco.actualizado_en = now();
@@ -168,6 +170,36 @@ function now() {
 
 function mlCfgOk(cfg) {
   return cfg?.clientId && cfg?.clientSecret && cfg?.userId;
+}
+
+// ── Integración con sistema de incidentes y métricas (Hito 4) ───────────────────────────
+
+const INTEGRACION_ML = 'mercadolibre';
+const PROCESO_REFRESCAR_PUBLICACIONES = 'refrescar_publicaciones';
+
+const MENSAJE_HUMANO_POR_CATEGORIA = {
+  rate_limit: 'MercadoLibre está limitando la frecuencia de refrescos de publicaciones (429).',
+  auth: 'MercadoLibre rechazó las credenciales del refresco — revisar Client ID/Secret.',
+  transitorio: 'MercadoLibre no responde de forma sostenida al refrescar publicaciones.',
+  datos: 'MercadoLibre rechazó una solicitud puntual al refrescar publicaciones.',
+  interno: 'Error interno al refrescar publicaciones de MercadoLibre.',
+};
+
+function registrarMetricaCicloMl(db, { iniciadoEn, inicioMonotonico, procesados, fallidos, circuitoAbierto }) {
+  try {
+    const finalizadoEn = new Date().toISOString();
+    // performance.now() (reloj monotónico) para DURACIÓN, nunca Date.now() o timestamps ISO:
+    // un ajuste de reloj del sistema durante el ciclo podía dar duración negativa.
+    const duracionMs = Math.round(performance.now() - inicioMonotonico);
+    db.prepare(`
+      INSERT INTO metricas_ciclo_sync
+        (integracion, proceso, iniciado_en, finalizado_en, duracion_ms, procesados, fallidos, reintentados, circuito_abierto, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(INTEGRACION_ML, PROCESO_REFRESCAR_PUBLICACIONES, iniciadoEn, finalizadoEn, duracionMs, procesados, fallidos, circuitoAbierto ? 1 : 0, finalizadoEn);
+  } catch (e) {
+    // Telemetría: nunca debe tumbar el ciclo real que la dispara.
+    console.error('[ML] error registrando métrica de ciclo (no afecta el refresco):', e.message);
+  }
 }
 
 /**
@@ -262,6 +294,74 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
   return { total: filas.length, items: allIds.length, variaciones };
+}
+
+/**
+ * Wrapper de `refrescarPublicacionesMl` que registra métricas, conecta el cooldown al
+ * sistema de incidentes, y confirma ciclo sano. Patrón análogo al de `refrescarCatalogo`
+ * en routes/woo.js (Hito 3).
+ *
+ * Sobre "0 publicaciones": a diferencia de Woo (donde un catálogo vacío es SIEMPRE sospechoso
+ * porque la tienda tiene miles de productos), ML puede devolver legítimamente 0 si:
+ * - El vendedor pausó todos los items (1 solo status = 'paused', 0 'active')
+ * - El seller acaba de empezar (aún sin publicaciones)
+ *
+ * Sin embargo, un REFRESCO COMPLETO que devuelve 0 items cuando el anterior devolvió miles
+ * ES sospechoso (la API degradada en silencio o respondiendo 200 pero vacío). Como no
+ * tenemos la historia entre refrescos aquí, usamos un criterio conservador: 0 publicaciones
+ * en refresco total es AMBIGUO — no se confirma ciclo sano (por si acaso es degradación
+ * silenciosa), pero tampoco se abre incidente crítico (podría ser legítimo). Se registra
+ * como `fallidos=0` (no es un error HTTP) y se deja la investigación para el operador si
+ * ve que el cache quedó vacío de repente tras días con miles de items.
+ */
+export async function refrescarPublicacionesMlConMetricas(db, cfg, onProgress) {
+  const iniciadoEn = new Date().toISOString();
+  const inicioMonotonico = performance.now();
+  try {
+    const resultado = await refrescarPublicacionesMl(db, cfg, onProgress);
+    const totalPublicaciones = resultado?.total ?? 0;
+
+    // Registrar métrica exitosa
+    registrarMetricaCicloMl(db, {
+      iniciadoEn, inicioMonotonico,
+      procesados: totalPublicaciones,
+      fallidos: 0,
+      circuitoAbierto: false,
+    });
+
+    // Criterio de "0 sospechoso" para ML: NO confirmamos ciclo sano si vino 0,
+    // porque es ambiguo (podría ser degradación silenciosa). Confirmamos solo
+    // si trajo publicaciones de verdad (señal inequívoca de que ML respondió con datos).
+    if (totalPublicaciones > 0) {
+      confirmarCicloSano(db, { integracion: INTEGRACION_ML, proceso: PROCESO_REFRESCAR_PUBLICACIONES });
+    }
+
+    return resultado;
+  } catch (e) {
+    // Clasificar el error y registrar métrica + incidente
+    const esBugPropio = e instanceof TypeError || e instanceof RangeError || e?.name === 'SqliteError';
+    const categoria = esBugPropio ? 'interno' : categorizarErrorMl(e);
+
+    registrarMetricaCicloMl(db, {
+      iniciadoEn, inicioMonotonico,
+      procesados: 0,
+      fallidos: 1,
+      circuitoAbierto: !!e.circuitoAbierto,
+    });
+
+    abrirOActualizarIncidente(db, {
+      integracion: INTEGRACION_ML,
+      proceso: PROCESO_REFRESCAR_PUBLICACIONES,
+      tipoError: categoria,
+      severidad: (categoria === 'auth') ? 'critico' : (categoria === 'datos' ? 'info' : 'advertencia'),
+      mensajeTecnico: e.message,
+      mensajeHumano: MENSAJE_HUMANO_POR_CATEGORIA[categoria] ?? MENSAJE_HUMANO_POR_CATEGORIA.interno,
+      contexto: { circuitoAbierto: !!e.circuitoAbierto },
+    });
+
+    // Re-lanzar: el comportamiento ante el caller (cron/endpoint) no cambia — solo se agrega telemetría.
+    throw e;
+  }
 }
 
 /** Statement de upsert al cache de publicaciones (compartido entre refresco total y acotado). */
