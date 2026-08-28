@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import {
-  wooFetch, wooFetchConReintento, wooFetchConCircuito, categorizarErrorWoo,
+  wooFetch, wooFetchConReintento, wooFetchConCircuito, categorizarErrorWoo, circuitoWooAbierto,
   _resetCircuitoWooParaTests, refrescarCatalogo, getCatalogo, wooRouter, registrarAlertasStockNegativo,
 } from '../routes/woo.js';
 import axios from 'axios';
@@ -294,6 +294,34 @@ describe('woo route', () => {
         }
       });
 
+      // Hallazgo del revisor (MEDIO-2, 3ra pasada): la primera versión de M6 solo comparaba
+      // contra `Date.now() >= abiertoHasta`, así que un éxito DELIBERADO de una prueba manual
+      // (mientras el circuito seguía abierto) quedaba indistinguible de un éxito TARDÍO de un
+      // worker paralelo — ninguno cerraba el circuito hasta que el cooldown venciera solo,
+      // pese a tener en la mano la prueba de que Woo ya respondía bien.
+      it('un éxito manual mientras el circuito está abierto SÍ lo cierra (no solo lo saltea)', async () => {
+        vi.useFakeTimers();
+        try {
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          for (let i = 0; i < 5; i++) await fallaTransitoria();
+          expect(circuitoWooAbierto()).toBe(true);
+
+          axios.request.mockClear();
+          axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+          await wooFetchConCircuito(cfg, '/x', 'get', null, { manual: true });
+
+          // El circuito ya no debe seguir abierto: un solo fallo aislado después no debería
+          // reabrirlo de entrada (fallosConsecutivos quedó en 0, no en el umbral - 1).
+          expect(circuitoWooAbierto()).toBe(false);
+          axios.request.mockClear();
+          axios.request.mockResolvedValue({ status: 500, data: null, headers: {} });
+          await fallaTransitoria();
+          expect(circuitoWooAbierto()).toBe(false); // 1 solo fallo no alcanza para reabrir
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
       it('un éxito resetea el contador de fallos consecutivos', async () => {
         vi.useFakeTimers();
         try {
@@ -405,6 +433,25 @@ describe('woo route', () => {
         // El incidente del 500 real sigue activo — NO se confirmó ciclo sano por esto.
         expect(db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='woocommerce'").get().estado).toBe('activo');
       }, 20000);
+
+      // Hallazgo del revisor (M2, BAJO-5 en la 3ra pasada): el fix de M2 no tenía test propio
+      // — un revert accidental a tipoError:'datos' (el bug original que este fix cerró)
+      // pasaba en verde igual, porque el test de arriba solo verifica la forma del resultado.
+      it('el incidente de catálogo vacío usa la clave de dedupe catalogo_vacio, no datos', async () => {
+        axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+        const resultado = await refrescarCatalogo(db, cfg, { forzarCompleto: true });
+        expect(resultado).toMatchObject({ total: 0, sospechoso: true });
+        const incidente = db.prepare("SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        expect(incidente.tipo_error).toBe('catalogo_vacio');
+      });
+
+      it('el incidente de catálogo vacío usa la clave de dedupe catalogo_vacio, no datos', async () => {
+        axios.request.mockResolvedValue({ status: 200, data: [], headers: {} });
+        const resultado = await refrescarCatalogo(db, cfg, { forzarCompleto: true });
+        expect(resultado).toMatchObject({ total: 0, sospechoso: true });
+        const incidente = db.prepare("SELECT tipo_error FROM incidentes_operativos WHERE integracion='woocommerce'").get();
+        expect(incidente.tipo_error).toBe('catalogo_vacio');
+      });
 
       // Hallazgo del revisor (M5, 2da pasada): un incremental con 0 productos es tan
       // ambiguo como el caso completo de B1 (¿nada cambió, o Woo está degradado en

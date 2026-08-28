@@ -35,7 +35,15 @@ function parseRetryAfterMs(valorHeader) {
 
 export async function wooFetch(cfg, path, method = 'get', body = null) {
   if (!cfg.url.startsWith('https://')) {
-    throw new Error('WooCommerce URL debe usar HTTPS');
+    // Hallazgo del revisor (MEDIO-1, 3ra pasada): sin `.categoria`, categorizarErrorWoo caía a
+    // 'transitorio' (sin status, sin match con el mensaje de Woo) — un WOO_URL mal configurado
+    // en el .env tras un deploy generaba un incidente recurrente de "WooCommerce no responde"
+    // cada 5 minutos, mandando al operador a revisar hosting/red/firewall por un problema que
+    // es una variable de entorno y nunca se autoresuelve solo. Mismo mecanismo que A5 (el
+    // circuito abierto) para fijar la categoría en el origen.
+    const err = new Error('WooCommerce URL debe usar HTTPS');
+    err.categoria = 'config';
+    throw err;
   }
   const url = cfg.url.replace(/\/$/, '') + '/wp-json/wc/v3' + path;
   const resp = await axios.request({
@@ -157,7 +165,13 @@ export async function wooFetchConReintento(cfg, path, method = 'get', body = nul
 // servicio que ya está mal, justo cuando menos lo puede soportar.
 const CIRCUITO_UMBRAL_FALLOS = 5;
 const CIRCUITO_COOLDOWN_MS = 5 * 60 * 1000;
-let _circuitoWoo = { fallosConsecutivos: 0, abiertoHasta: 0, ultimaCategoria: null };
+// `generacion` (hallazgo del revisor, MEDIO-2): identifica cada episodio de apertura del
+// circuito para distinguir un éxito TARDÍO de un worker paralelo (M6, no debe cerrar) de un
+// éxito DELIBERADO de una prueba manual (`manual:true`) mientras el circuito sigue abierto
+// (sí debe cerrar). `Date.now()` solo no alcanza para distinguirlos: los dos ocurren mientras
+// `abiertoHasta` sigue en el futuro. Se incrementa únicamente cuando el circuito ABRE de
+// verdad (no en el medio-abierto de M7, que es el mismo episodio continuando).
+let _circuitoWoo = { fallosConsecutivos: 0, abiertoHasta: 0, ultimaCategoria: null, generacion: 0 };
 
 export function circuitoWooAbierto() {
   if (Date.now() < _circuitoWoo.abiertoHasta) return true;
@@ -176,27 +190,35 @@ export function circuitoWooAbierto() {
 
 // Exportado solo para tests — mismo criterio que _resetCooldownParaTests en lib/mlClient.js.
 export function _resetCircuitoWooParaTests() {
-  _circuitoWoo = { fallosConsecutivos: 0, abiertoHasta: 0, ultimaCategoria: null };
+  _circuitoWoo = { fallosConsecutivos: 0, abiertoHasta: 0, ultimaCategoria: null, generacion: 0 };
 }
 
-function circuitoWooRegistrarResultado(categoria) {
-  // Un error de `datos` (Woo rechazó ESE producto puntual) o `auth` no dice nada sobre la
-  // salud general del servicio — no debe abrir el circuito, y tampoco debe resetear una
-  // racha de fallos transitorios en curso (ver más abajo, se ignora en ambos sentidos).
-  if (categoria === 'datos' || categoria === 'auth') return;
+function circuitoWooRegistrarResultado(categoria, generacionAlLlamar) {
+  // Un error de `datos` (Woo rechazó ESE producto puntual), `auth` o `config` (URL sin
+  // HTTPS — MEDIO-1: ni siquiera llega a salir a red) no dice nada sobre la salud general
+  // del servicio — no debe abrir el circuito, y tampoco debe resetear una racha de fallos
+  // transitorios en curso (ver más abajo, se ignora en ambos sentidos).
+  if (categoria === 'datos' || categoria === 'auth' || categoria === 'config') return;
   if (categoria === null) { // éxito
     _circuitoWoo.fallosConsecutivos = 0;
-    // Hallazgo del revisor (M6): NO pisar un `abiertoHasta` que sigue en el futuro. Con
-    // WOO_CONCURRENCIA_MAX workers en paralelo, uno que arrancó ANTES de que otros abrieran
-    // el circuito puede terminar bien 200ms después — sin este chequeo, ese único éxito
-    // tardío cerraba el circuito que los demás acababan de abrir por fallos reales.
-    if (Date.now() >= _circuitoWoo.abiertoHasta) _circuitoWoo.abiertoHasta = 0;
+    // Hallazgo del revisor (M6, corregido en MEDIO-2 de la 3ra pasada): NO pisar un
+    // `abiertoHasta` que sigue en el futuro salvo que este éxito sea de la MISMA generación
+    // que vio el circuito abierto (o ya haya vencido solo). Con solo `Date.now()`, un éxito
+    // TARDÍO de un worker paralelo que arrancó antes de que otros abrieran el circuito era
+    // indistinguible de un éxito DELIBERADO de una prueba manual (`manual:true`, salteando el
+    // circuito) hecha para verificar si Woo ya se recuperó — la primera versión de este fix
+    // dejaba el segundo caso sin poder cerrar nunca el circuito hasta que venciera el cooldown
+    // solo, pese a tener la prueba de que Woo respondía bien en la mano.
+    if (Date.now() >= _circuitoWoo.abiertoHasta || generacionAlLlamar === _circuitoWoo.generacion) {
+      _circuitoWoo.abiertoHasta = 0;
+    }
     return;
   }
   _circuitoWoo.ultimaCategoria = categoria;
   _circuitoWoo.fallosConsecutivos++;
   if (_circuitoWoo.fallosConsecutivos >= CIRCUITO_UMBRAL_FALLOS) {
     _circuitoWoo.abiertoHasta = Date.now() + CIRCUITO_COOLDOWN_MS;
+    _circuitoWoo.generacion++;
   }
 }
 
@@ -208,6 +230,10 @@ function circuitoWooRegistrarResultado(categoria) {
  * resultado real de cada llamada.
  */
 export async function wooFetchConCircuito(cfg, path, method = 'get', body = null, { manual = false } = {}) {
+  // Capturado ANTES de intentar la llamada (MEDIO-2): identifica el episodio de apertura que
+  // esta llamada "vio" al arrancar, para que circuitoWooRegistrarResultado distinga un éxito
+  // de esta misma generación (cierra) de un éxito tardío de una generación ya vieja (no cierra).
+  const generacionAlLlamar = _circuitoWoo.generacion;
   if (!manual && circuitoWooAbierto()) {
     // Hallazgo del revisor (A5): sin `.categoria`, categorizarErrorWoo caía siempre a
     // 'transitorio' para este error sintético (no tiene `.status` real) — si lo que abrió el
@@ -221,10 +247,10 @@ export async function wooFetchConCircuito(cfg, path, method = 'get', body = null
   }
   try {
     const resp = await wooFetchConReintento(cfg, path, method, body);
-    circuitoWooRegistrarResultado(null);
+    circuitoWooRegistrarResultado(null, generacionAlLlamar);
     return resp;
   } catch (e) {
-    if (!e.circuitoAbierto) circuitoWooRegistrarResultado(categorizarErrorWoo(e));
+    if (!e.circuitoAbierto) circuitoWooRegistrarResultado(categorizarErrorWoo(e), generacionAlLlamar);
     throw e;
   }
 }
@@ -333,6 +359,7 @@ const MENSAJE_HUMANO_POR_CATEGORIA = {
   transitorio: 'WooCommerce no responde de forma sostenida al refrescar el catálogo.',
   datos: 'WooCommerce rechazó una solicitud puntual al refrescar el catálogo.',
   interno: 'Error interno al refrescar el catálogo de WooCommerce.',
+  config: 'Configuración inválida de WooCommerce (URL sin HTTPS) — revisar variables de entorno, no la conexión.',
 };
 
 function registrarMetricaCiclo(db, { integracion, proceso, iniciadoEn, inicioMonotonico, procesados, fallidos, circuitoAbierto }) {
@@ -417,7 +444,7 @@ export async function refrescarCatalogo(db, cfg, opts = {}) {
     });
     abrirOActualizarIncidente(db, {
       integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO, tipoError: categoria,
-      severidad: categoria === 'auth' ? 'critico' : (categoria === 'datos' ? 'info' : 'advertencia'),
+      severidad: (categoria === 'auth' || categoria === 'config') ? 'critico' : (categoria === 'datos' ? 'info' : 'advertencia'),
       mensajeTecnico: e.message,
       mensajeHumano: MENSAJE_HUMANO_POR_CATEGORIA[categoria] ?? MENSAJE_HUMANO_POR_CATEGORIA.interno,
       contexto: { forzarCompleto: !!opts.forzarCompleto, circuitoAbierto: !!e.circuitoAbierto },
@@ -563,8 +590,10 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
       return { total: 0, sospechoso: true };
     }
     // En INCREMENTAL, 0 es el camino feliz más común (nada cambió desde la marca) — no se
-    // marca sospechoso ni abre incidente por esto solo (ver comentario de arriba sobre por
-    // qué acá SÍ se confirma ciclo sano, a diferencia del caso completo).
+    // marca sospechoso ni abre incidente por esto solo. Pero (hallazgo del revisor, MEDIO-3
+    // tras el fix de M5) TAMPOCO confirma ciclo sano: sigue siendo ambiguo entre "nada
+    // cambió de verdad" y "Woo degradado en silencio", ver el wrapper `refrescarCatalogo`
+    // (retorna temprano sin confirmar cuando el resultado numérico es 0).
     return 0;
   }
   // La poda (detectar y borrar productos ya no vigentes en Woo) SOLO corre en el barrido
