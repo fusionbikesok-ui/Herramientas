@@ -1124,11 +1124,23 @@ fetch('/api/auth/me').then(function(r) {
       // Firma determinística de los datos (ALTO 3): si es idéntica a la del poll anterior,
       // no se toca el DOM — evita reanunciar aria-live cada 90s por un timestamp que cambia
       // solo. Ordenada por id para que el resultado no dependa del orden de llegada.
+      // 3ra pasada del revisor (MEDIO 2): `total`/`pageSize` se muestran en el pie ("Total: X
+      // incidentes activos, mostrando Y") pero no entraban en la firma — si un incidente FUERA
+      // de la página 1 se resolvía, el total real bajaba pero los 100 mostrados no cambiaban,
+      // y el pie quedaba mintiendo indefinidamente. Se agrega al final de la firma.
       var firma = incidentes
         .map(function(inc) { return inc.id + '|' + inc.estado + '|' + inc.severidad + '|' + inc.contador_repeticiones; })
         .sort()
-        .join(',');
-      if (firma === ultimaFirmaIncidentes) {
+        .join(',') + '#' + data.total + '/' + data.pageSize;
+      var huboCambio = firma !== ultimaFirmaIncidentes;
+      if (!huboCambio) {
+        // 3ra pasada del revisor (MEDIO 1): aunque los datos no cambiaron, el timestamp
+        // "actualizado HH:MM" sí debe reflejar que el poll siguió corriendo — sin esto, un
+        // incidente crítico activo por horas sin repetirse deja el timestamp congelado en la
+        // hora del primer render, y el operador puede leer eso como "el dashboard se colgó".
+        // Actualizado por textContent (no reescribe el resto del DOM, no dispara aria-live).
+        var elTs = document.getElementById('incidentes-updated');
+        if (elTs) elTs.textContent = 'actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
         yaCargoUnaVez = true;
         return;
       }
@@ -1137,7 +1149,7 @@ fetch('/api/auth/me').then(function(r) {
       var html = '<div class="incidentes-container">'
         + '<div class="attn-header">'
         + '<span class="attn-title">Alertas de incidentes activos</span>'
-        + '<span class="attn-updated">actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) + '</span>'
+        + '<span class="attn-updated" id="incidentes-updated" aria-hidden="true">actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) + '</span>'
         + '</div>';
 
       // Mostrar cada integración con sus incidentes (en orden de severidad)
