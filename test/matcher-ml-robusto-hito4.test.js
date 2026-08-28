@@ -199,18 +199,19 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     await vi.runAllTimersAsync();
 
     const resultado = await promise;
-    expect(resultado.total).toBeGreaterThanOrEqual(0);
+    expect(resultado).toBeDefined();
+    expect(resultado.total).toBeGreaterThan(0); // debe traer publicaciones
 
     // Verificar métrica registrada
     const metricas = db.prepare('SELECT * FROM metricas_ciclo_sync WHERE integracion = ? AND proceso = ?')
       .all('mercadolibre', 'refrescar_publicaciones');
     expect(metricas.length).toBe(1);
-    expect(metricas[0].procesados).toBeGreaterThanOrEqual(0);
+    expect(metricas[0].procesados).toBeGreaterThan(0); // debe haber procesado las publicaciones
     expect(metricas[0].fallidos).toBe(0);
     expect(metricas[0].finalizado_en).toBeTruthy();
   });
 
-  it('no confirma ciclo sano si resultado es 0 publicaciones (ambiguo)', async () => {
+  it('MEDIO 6: abre incidente de info cuando resultado es 0 publicaciones, pero NO confirma ciclo sano', async () => {
     // Refresco que devuelve 0 items en ambos status
     axios.request.mockResolvedValueOnce({
       status: 200,
@@ -229,10 +230,12 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     const resultado = await promise;
     expect(resultado.total).toBe(0);
 
-    // NO debe confirmar ciclo sano (sin incidente, pero sin confirmación)
-    const incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE estado = ?')
-      .all('activo');
-    expect(incidentes.length).toBe(0);
+    // Debe abrir incidente de info 'publicaciones_vacias' (dedupe visible sin ser crítica)
+    const incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE integracion = ? AND tipo_error = ?')
+      .all('mercadolibre', 'publicaciones_vacias');
+    expect(incidentes.length).toBe(1);
+    expect(incidentes[0].severidad).toBe('info');
+    expect(incidentes[0].estado).toBe('activo');
   });
 
   it('registra duración en métrica (performance.now monotónico)', async () => {
@@ -257,7 +260,69 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     expect(metricas.length).toBe(1);
     const duracionRegistrada = metricas[0].duracion_ms;
 
-    // La duración debe registrarse (aunque sea con fake timers, el reloj monotónico se incrementa)
+    // La duración debe registrarse (aunque sea con fake timers)
     expect(duracionRegistrada).toBeGreaterThanOrEqual(0);
+    expect(metricas[0].finalizado_en).toBeTruthy();
+  });
+
+  it('MEDIO 5: integración end-to-end — un 401 real genera incidente tipo_error=auth, severidad=critico', async () => {
+    // Mock: primer scan devuelve 401 (credenciales revocadas)
+    axios.request.mockResolvedValueOnce({
+      status: 401,
+      headers: {},
+      data: null,
+    });
+
+    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    await vi.runAllTimersAsync();
+
+    await expect(promise).rejects.toThrow();
+
+    // Verificar que se creó un incidente con tipo_error='auth' y severidad='critico'
+    const incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE integracion = ? AND proceso = ?')
+      .all('mercadolibre', 'refrescar_publicaciones');
+    expect(incidentes.length).toBeGreaterThan(0);
+    const incidente = incidentes[0];
+    expect(incidente.tipo_error).toBe('auth');
+    expect(incidente.severidad).toBe('critico');
+    expect(incidente.estado).toBe('activo');
+  });
+
+  it('MEDIO 5: el incidente de un fallo real sigue activo — NO se confirma ciclo sano con 0 publicaciones', async () => {
+    // Primer ciclo: simular un 401, genera incidente
+    axios.request.mockResolvedValueOnce({
+      status: 401,
+      headers: {},
+      data: null,
+    });
+
+    const promise1 = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    await vi.runAllTimersAsync();
+    await expect(promise1).rejects.toThrow();
+
+    // Verificar que el incidente está activo
+    let incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE estado = ? AND tipo_error = ?')
+      .all('activo', 'auth');
+    expect(incidentes.length).toBe(1);
+    const incidenteId = incidentes[0].id;
+
+    // Resetear mocks para el segundo ciclo
+    axios.request.mockReset();
+
+    // Segundo ciclo: mismo 401, el incidente debe SEGUIR activo (no resolverse)
+    axios.request.mockResolvedValueOnce({
+      status: 401,
+      headers: {},
+      data: null,
+    });
+
+    const promise2 = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    await vi.runAllTimersAsync();
+    await expect(promise2).rejects.toThrow();
+
+    // El incidente debe estar ACTIVO todavía (no confirmado)
+    incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE id = ? AND estado = ?')
+      .all(incidenteId, 'activo');
+    expect(incidentes.length).toBe(1);
   });
 });
