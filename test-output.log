@@ -1,0 +1,100 @@
+
+ RUN  v4.1.9 /opt/fusionbikes/herramientas/.claude/worktrees/hito4-ml-robusto
+
+(node:1101773) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 1)
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:1101773) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 2)
+(node:1101773) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1101773) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 5)
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 4 unhandled errors during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+Error: ML scan falló (status 401) para status=active
+ ❯ listarItemIds routes/matcher.js:237:19
+    235|     if (resp.status !== 200) {
+    236|       // BLOQUEANTE 1: setear status para que categorizarErrorMl lo re…
+    237|       const err = new Error(`ML scan falló (status ${resp.status}) par…
+       |                   ^
+    238|       err.status = resp.status;
+    239|       // Si el status viene marcado como sintético por nuestro propio …
+ ❯ refrescarPublicacionesMl routes/matcher.js:272:17
+ ❯ Module.refrescarPublicacionesMlConMetricas routes/matcher.js:350:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 401 }
+This error originated in "test/matcher-ml-robusto-hito4.test.js" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "MEDIO 5: integración end-to-end — un 401 real genera incidente tipo_error=auth, severidad=critico". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+Error: ML scan falló (status 401) para status=active
+ ❯ listarItemIds routes/matcher.js:237:19
+    235|     if (resp.status !== 200) {
+    236|       // BLOQUEANTE 1: setear status para que categorizarErrorMl lo re…
+    237|       const err = new Error(`ML scan falló (status ${resp.status}) par…
+       |                   ^
+    238|       err.status = resp.status;
+    239|       // Si el status viene marcado como sintético por nuestro propio …
+ ❯ refrescarPublicacionesMl routes/matcher.js:272:17
+ ❯ Module.refrescarPublicacionesMlConMetricas routes/matcher.js:350:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 401 }
+This error originated in "test/matcher-ml-robusto-hito4.test.js" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "MEDIO 5: el incidente de un fallo real sigue activo — NO se confirma ciclo sano con 0 publicaciones". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+Error: ML scan falló (status 401) para status=active
+ ❯ listarItemIds routes/matcher.js:237:19
+    235|     if (resp.status !== 200) {
+    236|       // BLOQUEANTE 1: setear status para que categorizarErrorMl lo re…
+    237|       const err = new Error(`ML scan falló (status ${resp.status}) par…
+       |                   ^
+    238|       err.status = resp.status;
+    239|       // Si el status viene marcado como sintético por nuestro propio …
+ ❯ refrescarPublicacionesMl routes/matcher.js:272:17
+ ❯ Module.refrescarPublicacionesMlConMetricas routes/matcher.js:350:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 401 }
+This error originated in "test/matcher-ml-robusto-hito4.test.js" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "MEDIO 5: el incidente de un fallo real sigue activo — NO se confirma ciclo sano con 0 publicaciones". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+Error: Autenticación ML rechazada (401) — revisar client_secret o rehacer la autorización OAuth
+ ❯ _doRefresh lib/mlClient.js:529:19
+    527|       _registrarErrorMl('post', '/oauth/token', resp.status);
+    528|       _registrarFalloRefresh('fatal', msg, expiresAtMs);
+    529|       const err = new Error(msg);
+       |                   ^
+    530|       err.status = resp.status;
+    531|       throw err;
+ ❯ mlFetch lib/mlClient.js:627:17
+ ❯ mlFetchConReintento routes/matcher.js:151:20
+ ❯ listarItemIds routes/matcher.js:227:18
+ ❯ refrescarPublicacionesMl routes/matcher.js:272:17
+ ❯ Module.refrescarPublicacionesMlConMetricas routes/matcher.js:350:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { status: 401 }
+This error originated in "test/matcher-ml-robusto-hito4.test.js" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "ALTO 1: refresh de token con 401 se categoriza como auth y tiene .status seteado". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+
+ Test Files  4 passed (4)
+      Tests  99 passed (99)
+     Errors  4 errors
+   Start at  02:21:34
+   Duration  37.17s (transform 948ms, setup 0ms, import 1.61s, tests 34.85s, environment 1ms)
+

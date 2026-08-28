@@ -160,6 +160,17 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     vi.resetModules();
     vi.useFakeTimers();
     axios.request.mockReset();
+    // IMPORTANTE: También resetear axios.post para evitar que mocks de tests anteriores
+    // contaminen los tests posteriores. El mock de axios.post se configura con
+    // mockResolvedValue en algunos tests. Si existehow un mock previo, lo reseteamos;
+    // si no, la creamos como un vi.fn() vacío.
+    const axiosMocked = vi.mocked(axios);
+    if (typeof axiosMocked?.post?.mockReset === 'function') {
+      axiosMocked.post.mockReset();
+    } else {
+      // Si no existe o no tiene mockReset, crear un nuevo mock vacío
+      axiosMocked.post = vi.fn();
+    }
     db = makeDb();
     _resetCooldownParaTests();
     _resetPresupuestoParaTests();
@@ -266,8 +277,10 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
   });
 
   it('MEDIO 5: integración end-to-end — un 401 real genera incidente tipo_error=auth, severidad=critico', async () => {
-    // Mock: primer scan devuelve 401 (credenciales revocadas)
-    axios.request.mockResolvedValueOnce({
+    // Mock: scan devuelve 401 (credenciales revocadas)
+    // Nota: usamos mockResolvedValue (no ValueOnce) para que TODAS las llamadas a axios.request
+    // devuelvan 401, evitando TypeErrors cuando hay múltiples iteraciones del retry logic.
+    axios.request.mockResolvedValue({
       status: 401,
       headers: {},
       data: null,
@@ -290,7 +303,8 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
 
   it('MEDIO 5: el incidente de un fallo real sigue activo — NO se confirma ciclo sano con 0 publicaciones', async () => {
     // Primer ciclo: simular un 401, genera incidente
-    axios.request.mockResolvedValueOnce({
+    // Nota: usamos mockResolvedValue (no ValueOnce) para que TODAS las llamadas devuelvan 401.
+    axios.request.mockResolvedValue({
       status: 401,
       headers: {},
       data: null,
@@ -310,7 +324,8 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     axios.request.mockReset();
 
     // Segundo ciclo: mismo 401, el incidente debe SEGUIR activo (no resolverse)
-    axios.request.mockResolvedValueOnce({
+    // Nota: usamos mockResolvedValue (no ValueOnce) para que TODAS las llamadas devuelvan 401.
+    axios.request.mockResolvedValue({
       status: 401,
       headers: {},
       data: null,
@@ -335,7 +350,11 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
 
     // Mockear axios.post (el endpoint de OAuth) para devolver 401
     // (axios.request es para las llamadas API, axios.post es para OAuth)
-    vi.mocked(axios).post = vi.fn().mockResolvedValueOnce({
+    // Nota: usamos mockResolvedValue (no ValueOnce) para que TODAS las llamadas a axios.post
+    // devuelvan 401. Si hay múltiples intentos de refresh (e.g., debido a que getAccessToken
+    // se llama desde múltiples lugares en paralelo antes del lock), todas recibirán 401
+    // en lugar de undefined, evitando TypeErrors no atrapados.
+    vi.mocked(axios).post = vi.fn().mockResolvedValue({
       status: 401,
       headers: {},
       data: null,
