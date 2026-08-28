@@ -738,8 +738,8 @@ export function preparacionRouter(db, cfg) {
   // Antes (versión vieja, retirada): "a medias" se INFERÍA mirando la meta _andreani_tracking
   // en pedidos 'completed' de Woo. Esa inferencia daba falso positivo en cualquier pedido con
   // el tracking cargado A MANO en WooCommerce (el hábito real del usuario, confirmado por él),
-  // así que mostraba ~70 pedidos "colgados" que nunca pasaron por esta herramienta — ver
-  // docs/superpowers/plans/2026-08-13-seguimientos.md. Ahora "a medias" es EXCLUSIVAMENTE
+  // así que mostraba ~70 pedidos "colgados" que nunca pasaron por esta herramienta. Ahora
+  // "a medias" es EXCLUSIVAMENTE
   // el dato local `woo_paso2_pendiente=1`, que esta misma herramienta pone en 1 al hacer el
   // paso 1 y limpia al confirmar el paso 2 (o al reintentar) — nunca se infiere de Woo.
   //

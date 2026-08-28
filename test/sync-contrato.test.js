@@ -5,8 +5,7 @@
  * 2026-08-03: el precio de línea cambió de forma intencional (decisión del usuario) —
  * ya no es el unit_price de la venta ML, es el precio de CONTADO del catálogo propio
  * (precioContado() sobre catalogo_cache.precio). El payload también suma meta_data
- * informativa (precio pagado en ML, envío) y customer_note. Ver
- * docs/superpowers/plans/2026-08-03-venta-ml-precio-contado-y-datos.md.
+ * informativa (precio pagado en ML, envío) y customer_note.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

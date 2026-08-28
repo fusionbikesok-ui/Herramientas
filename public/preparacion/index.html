@@ -1802,7 +1802,7 @@ async function marcarEtiqueta(wcId,lista,numero){
 }
 
 // ─── Cargar seguimientos ────────────────────────────────────────────────────
-// Rediseño 2026-08-13 (docs/superpowers/plans/2026-08-13-seguimientos.md): la pantalla
+// La pantalla de seguimientos
 // tiene que ser MÁS CÓMODA que cargar el tracking a mano en Woo, o el operario sigue ahí
 // por costumbre. El pedido se elige SIEMPRE primero (tarjeta con nombre+localidad visibles
 // sin scroll); pegar o escanear pasan por esa tarjeta, nunca por un campo/cámara sueltos
@@ -2321,7 +2321,7 @@ function filtrarSeg(){
 }
 
 // Toast no bloqueante con Deshacer opcional. Mismo patrón que public/cobertura/index.html
-// (docs/superpowers/plans/2026-08-10-cobertura-flujo-ux.md), paleta propia de esta página.
+// de Cobertura, con paleta propia de esta página.
 function toastSeg(mensaje,tipo,onDeshacer){
   var wrap=document.getElementById('seg-toast-wrap');
   var el=document.createElement('div');
