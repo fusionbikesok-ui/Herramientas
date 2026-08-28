@@ -211,7 +211,7 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     expect(metricas[0].finalizado_en).toBeTruthy();
   });
 
-  it('MEDIO 6: abre incidente de info cuando resultado es 0 publicaciones, pero NO confirma ciclo sano', async () => {
+  it('ALTO 4: abre incidente de advertencia cuando resultado es 0 publicaciones (antes era info)', async () => {
     // Refresco que devuelve 0 items en ambos status
     axios.request.mockResolvedValueOnce({
       status: 200,
@@ -230,11 +230,11 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     const resultado = await promise;
     expect(resultado.total).toBe(0);
 
-    // Debe abrir incidente de info 'publicaciones_vacias' (dedupe visible sin ser crítica)
+    // ALTO 4: severidad sube a 'advertencia' ahora que evitamos pisar el cache
     const incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE integracion = ? AND tipo_error = ?')
       .all('mercadolibre', 'publicaciones_vacias');
     expect(incidentes.length).toBe(1);
-    expect(incidentes[0].severidad).toBe('info');
+    expect(incidentes[0].severidad).toBe('advertencia');
     expect(incidentes[0].estado).toBe('activo');
   });
 
@@ -324,5 +324,45 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE id = ? AND estado = ?')
       .all(incidenteId, 'activo');
     expect(incidentes.length).toBe(1);
+  });
+
+  it('ALTO 1: refresh de token con 401 se categoriza como auth y tiene .status seteado', async () => {
+    // Preparar: crear un token que está VENCIDO (para forzar refresh)
+    const ahora = Date.now();
+    const vencidoHace1Min = new Date(ahora - 60 * 1000).toISOString();
+    db.prepare('UPDATE ml_oauth_token SET expires_at = ?, refresh_token = ? WHERE id = 1')
+      .run(vencidoHace1Min, 'refresh_token_quemado');
+
+    // Mockear axios.post (el endpoint de OAuth) para devolver 401
+    // (axios.request es para las llamadas API, axios.post es para OAuth)
+    vi.mocked(axios).post = vi.fn().mockResolvedValueOnce({
+      status: 401,
+      headers: {},
+      data: null,
+    });
+
+    // Intentar refrescar publicaciones, lo cual dispara getAccessToken,
+    // que intenta refresh y falla con 401
+    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG);
+    await vi.runAllTimersAsync();
+
+    // Debería rechazar con un error que tenga .status = 401
+    let thrownErr;
+    try {
+      await promise;
+    } catch (e) {
+      thrownErr = e;
+    }
+    expect(thrownErr).toBeDefined();
+    expect(thrownErr.status).toBe(401); // ALTO 1: verificar que .status está seteado
+    expect(categorizarErrorMl(thrownErr)).toBe('auth');
+
+    // Verificar que se registró un incidente con categoría 'auth' y severidad 'critico'
+    const incidentes = db.prepare('SELECT * FROM incidentes_operativos WHERE integracion = ? AND proceso = ?')
+      .all('mercadolibre', 'refrescar_publicaciones');
+    expect(incidentes.length).toBeGreaterThan(0);
+    const incidente = incidentes[incidentes.length - 1];
+    expect(incidente.tipo_error).toBe('auth');
+    expect(incidente.severidad).toBe('critico');
   });
 });

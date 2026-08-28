@@ -238,6 +238,8 @@ async function listarItemIds(db, cfg, status) {
       err.status = resp.status;
       // Si el status viene marcado como sintético por nuestro propio cooldown, anotarlo
       if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      // ALTO 2: también propagar flag de "sin cupo" para distinguir 429s sintéticos
+      if (resp.__sinCupo) err.__sinCupo = true;
       throw err;
     }
     const results = resp.data.results ?? [];
@@ -291,6 +293,8 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
       err.status = resp.status;
       // Si el status viene marcado como sintético por nuestro propio cooldown, anotarlo
       if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      // ALTO 2: también propagar flag de "sin cupo" para distinguir 429s sintéticos
+      if (resp.__sinCupo) err.__sinCupo = true;
       throw err;
     }
     for (const entry of resp.data) {
@@ -304,14 +308,18 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   }
 
   // 3) Reemplazar el cache de forma atómica
-  const upsert = prepararUpsertCache(db);
-  const ts = now();
-  const tx = db.transaction((rows) => {
-    // Limpiar publicaciones que ya no están activas/pausadas
-    db.prepare('DELETE FROM ml_publicaciones_cache').run();
-    for (const f of rows) upsert.run({ ...f, actualizado_en: ts });
-  });
-  tx(filas);
+  // ALTO 4: si filas es vacío, NO borrar el cache existente (mismo criterio que Woo)
+  // — una lista 0 es ambigua (podría ser legítimo o degradación) y no debe pisar datos válidos.
+  if (filas.length > 0) {
+    const upsert = prepararUpsertCache(db);
+    const ts = now();
+    const tx = db.transaction((rows) => {
+      // Limpiar publicaciones que ya no están activas/pausadas
+      db.prepare('DELETE FROM ml_publicaciones_cache').run();
+      for (const f of rows) upsert.run({ ...f, actualizado_en: ts });
+    });
+    tx(filas);
+  }
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
   return { total: filas.length, items: allIds.length, variaciones };
@@ -360,11 +368,13 @@ export async function refrescarPublicacionesMlConMetricas(db, cfg, onProgress) {
       // ambiguo. No es error, pero sí es info que merece visibilidad sin ser crítica.
       // La dedupe se autoresuelve: en el próximo ciclo con datos reales, confirmarCicloSano
       // resuelve todos los incidentes activos del proceso.
+      // ALTO 4: subir severidad a 'advertencia' ahora que evitamos pisar el cache
+      // (antes era 'info' porque era ambiguo; ahora hay un daño real que se previene).
       abrirOActualizarIncidente(db, {
         integracion: INTEGRACION_ML,
         proceso: PROCESO_REFRESCAR_PUBLICACIONES,
         tipoError: 'publicaciones_vacias',
-        severidad: 'info',
+        severidad: 'advertencia',
         mensajeTecnico: 'Refresco devolvió 0 publicaciones',
         mensajeHumano: 'MercadoLibre devolvió 0 publicaciones — podría ser legítimo (vendedor nuevo, todo pausado) o degradación silenciosa.',
         contexto: { circuitoAbierto: false },
@@ -377,26 +387,35 @@ export async function refrescarPublicacionesMlConMetricas(db, cfg, onProgress) {
     // TypeError/RangeError/SqliteError como 'interno'. Llamar directo sin denylist duplicada.
     const categoria = categorizarErrorMl(e);
 
+    // ALTO 3: consultar cooldown ANTES de registrar métrica para que ambas usen el mismo
+    // estado (la métrica y el incidente deben ser consistentes en circuitoAbierto)
+    const cd = estadoCooldownMl();
+
     // BAJO 8: optional chaining para evitar excepción si e es null/undefined
     registrarMetricaCicloMl(db, {
       iniciadoEn, inicioMonotonico,
       procesados: 0,
       fallidos: 1,
-      circuitoAbierto: !!e?.circuitoAbierto,
+      circuitoAbierto: cd?.activo ?? !!e?.circuitoAbierto,
     });
 
-    // ALTO 3: consultar cooldown para poblar circuitoAbierto correctamente
-    const cd = estadoCooldownMl();
+    // MEDIO 5: si es un 429 sintético (por cooldown propio o cupo agotado), usar un
+    // tipoError distinto para no pisar incidentes de 429s reales. La dedupe es por
+    // integracion|proceso|tipo_error, así que esto abre un incidente separado.
+    let tipoError = categoria;
+    if (categoria === 'rate_limit' && (e?.__cooldownSintetico || e?.__sinCupo)) {
+      tipoError = 'rate_limit_propio';
+    }
 
     // BAJO 8: optional chaining en accesos a propiedades de e
     abrirOActualizarIncidente(db, {
       integracion: INTEGRACION_ML,
       proceso: PROCESO_REFRESCAR_PUBLICACIONES,
-      tipoError: categoria,
+      tipoError,
       severidad: (categoria === 'auth' || categoria === 'config') ? 'critico' : (categoria === 'datos' ? 'info' : 'advertencia'),
       mensajeTecnico: e?.message ?? 'Error desconocido',
       mensajeHumano: MENSAJE_HUMANO_POR_CATEGORIA[categoria] ?? MENSAJE_HUMANO_POR_CATEGORIA.interno,
-      contexto: { circuitoAbierto: cd?.activo ?? false, esErrorSinteticoCooldown: !!e?.__cooldownSintetico },
+      contexto: { circuitoAbierto: cd?.activo ?? !!e?.circuitoAbierto, esErrorSinteticoCooldown: !!e?.__cooldownSintetico, esErrorSinCupo: !!e?.__sinCupo },
     });
 
     // Re-lanzar: el comportamiento ante el caller (cron/endpoint) no cambia — solo se agrega telemetría.
