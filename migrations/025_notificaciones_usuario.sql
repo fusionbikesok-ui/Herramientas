@@ -20,3 +20,7 @@ CREATE TABLE IF NOT EXISTS notificaciones_usuario (
 );
 CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_no_leidas
   ON notificaciones_usuario(user_id, leida, creado_en DESC);
+-- BLOQUEANTE 2 (revisión Hito 7): índice único de deduplicación — sin esto, un usuario con
+-- varios dispositivos veía el mismo incidente repetido en su feed una vez por dispositivo.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_usuario_dedupe
+  ON notificaciones_usuario(user_id, tipo, incidente_id);
