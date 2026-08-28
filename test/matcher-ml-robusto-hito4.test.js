@@ -467,4 +467,44 @@ describe('Hito 4: ML robusto — refrescarPublicacionesMlConMetricas', () => {
     const incidentesReales = db.prepare("SELECT * FROM incidentes_operativos WHERE tipo_error = 'rate_limit'").all();
     expect(incidentesReales.length).toBeGreaterThan(0); // el 429 real conservó su propia clave
   });
+
+  // 4ta pasada del revisor (ALTO 1): si falla la escritura en sqlite tras rotar el
+  // refresh_token, el error CRÍTICO original no debía matchear ningún patrón de
+  // ML_ERRORES_NO_TRANSITORIOS — se reintentaba con el refresh_token YA QUEMADO, generando
+  // un 400 invalid_grant que enmascaraba el problema real (DB, no credenciales).
+  it('ALTO 1: fallo al persistir el refresh_token rotado NO se reintenta con el token quemado', async () => {
+    const ahora = Date.now();
+    const vencidoHace1Min = new Date(ahora - 60 * 1000).toISOString();
+    db.prepare('UPDATE ml_oauth_token SET expires_at = ?, refresh_token = ? WHERE id = 1')
+      .run(vencidoHace1Min, 'refresh_token_vigente');
+
+    // OAuth responde bien (200, token nuevo) — la falla es nuestra, al persistir.
+    vi.mocked(axios).post = vi.fn().mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: { access_token: 'nuevo_token', refresh_token: 'nuevo_refresh', expires_in: 21600 },
+    });
+    const prepareOriginal = db.prepare.bind(db);
+    const prepareSpy = vi.spyOn(db, 'prepare').mockImplementation((sql) => {
+      if (sql.includes('ON CONFLICT(id) DO UPDATE')) {
+        throw new Error('SQLITE_READONLY: attempt to write a readonly database');
+      }
+      return prepareOriginal(sql);
+    });
+
+    const promise = refrescarPublicacionesMlConMetricas(db, ML_CFG).catch(e => e);
+    await vi.runAllTimersAsync();
+    const err = await promise;
+
+    prepareSpy.mockRestore();
+
+    expect(err).toBeInstanceOf(Error);
+    // Si esto dice "Autenticación ML rechazada", el error se perdió en un reintento con el
+    // token quemado y el mensaje CRÍTICO original nunca llegó al caller.
+    expect(err.message).toMatch(/no se pudo persistir en sqlite/);
+    expect(err.message).toMatch(/CRÍTICO/);
+
+    // El axios.post de OAuth se llamó UNA sola vez — no se reintentó con el token quemado.
+    expect(vi.mocked(axios).post).toHaveBeenCalledTimes(1);
+  });
 });

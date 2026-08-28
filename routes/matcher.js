@@ -123,6 +123,13 @@ const ML_ERRORES_NO_TRANSITORIOS = [
   'Autenticación ML rechazada',
   'cooldown',
   'Presupuesto de llamadas a /oauth/token agotado',
+  // 4ta pasada del revisor (ALTO 1): sin este patrón, un fallo de ESCRITURA en sqlite tras
+  // rotar el refresh_token (disco lleno, DB en readonly, lock) no matcheaba nada de la lista
+  // de arriba → se reintentaba con el refresh_token YA QUEMADO por ML → el 400 invalid_grant
+  // resultante SÍ matcheaba 'Autenticación ML rechazada' y llegaba al incidente en vez del
+  // mensaje CRÍTICO original, mandando al operador a revisar client_secret cuando el problema
+  // real es la base de datos local.
+  'no se pudo persistir en sqlite',
 ];
 
 /**
@@ -450,7 +457,16 @@ function prepararUpsertCache(db) {
  * El refresco total usa `refrescarPublicacionesMlConMetricas` que sí registra telemetría.
  */
 export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress) {
-  if (!mlCfgOk(cfg)) throw new Error('Configuración de MercadoLibre incompleta');
+  if (!mlCfgOk(cfg)) {
+    // 4ta pasada del revisor (MEDIO 2): mismo estilo que el camino total (BLOQUEANTE 2) —
+    // hoy este ciclo no está envuelto en métricas+incidentes (ver BAJO 9 arriba), pero dejar
+    // el throw sin categoría es la trampa que ya se pisó 3 veces: el día que alguien lo
+    // envuelva, un problema de config abriría incidente 'transitorio'/'advertencia' en vez
+    // de 'config'/'critico'.
+    const err = new Error('Configuración de MercadoLibre incompleta');
+    err.categoria = 'config';
+    throw err;
+  }
   const ids = [...new Set((itemIds || []).map(String).filter(Boolean))];
   if (ids.length === 0) return { total: 0, items: 0, variaciones: 0 };
 
@@ -462,7 +478,14 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
       `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
-      throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      // Mismo criterio que BLOQUEANTE 1 en el camino total: .status explícito para que
+      // categorizarErrorMl no caiga a 'transitorio' por default, más los flags sintéticos
+      // para distinguir un freno propio de un rechazo real de ML.
+      const err = new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      err.status = resp.status;
+      if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      if (resp.__sinCupo) err.__sinCupo = true;
+      throw err;
     }
     for (const entry of resp.data) {
       if (entry.code !== 200 || !entry.body) continue;
