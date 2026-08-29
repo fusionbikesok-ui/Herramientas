@@ -43,7 +43,7 @@ function now() { return new Date().toISOString(); }
 function seedToken(db) {
   const expiresAt = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
   db.prepare(
-    `INSERT OR REPLACE INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
+    `INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
      VALUES (1, 'tok', 'ref', ?, ?)`
   ).run(expiresAt, now());
 }
