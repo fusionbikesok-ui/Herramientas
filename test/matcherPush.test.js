@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'fs';
+import { createHash } from 'node:crypto';
 import { openDb } from '../db/index.js';
 import {
   seleccionarPendientes, contarPendientes, pushSkusPendientes,
@@ -36,6 +37,15 @@ vi.mock('../lib/mlClient.js', async () => {
 });
 
 const TEST_DB = './test/tmp-matcher-push.sqlite';
+let currentTestId = 'setup';
+const TEST_DB_PATHS = new Set();
+beforeEach((ctx) => { currentTestId = ctx.task.id; });
+function openTestDb() {
+  const hash = createHash('sha256').update(currentTestId).digest('hex').slice(0, 16);
+  const ruta = `${TEST_DB}.${process.pid}.${hash}.sqlite`;
+  TEST_DB_PATHS.add(ruta);
+  return openDb(ruta);
+}
 const ML_CFG = { clientId: 'client123', clientSecret: 'secret456', userId: '99999' };
 
 function now() { return new Date().toISOString(); }
@@ -80,7 +90,7 @@ function resp400(msg = 'no se pudo') {
 describe('lib/matcherPush', () => {
   let db;
   beforeEach(async () => {
-    db = openDb(TEST_DB);
+    db = openTestDb();
     seedToken(db);
     vi.clearAllMocks();
     // mlFetch es un mock que por default reenvía a la implementación real (vi.fn(actual));
@@ -100,6 +110,9 @@ describe('lib/matcherPush', () => {
   afterEach(() => {
     db.close();
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+  afterAll(() => {
+    for (const ruta of TEST_DB_PATHS) if (fs.existsSync(ruta)) fs.unlinkSync(ruta);
   });
 
   it('seleccionarPendientes prioriza activas sobre pausadas', () => {

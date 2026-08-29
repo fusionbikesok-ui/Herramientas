@@ -17,7 +17,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
-import { openDb } from '../db/index.js';
+import { createHash } from 'node:crypto';
+import { openDb as openDbOriginal } from '../db/index.js';
 import { syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, limpiarVariacionesMuertas } from '../routes/sync.js';
 
 vi.mock('../lib/mlClient.js', () => ({
@@ -35,6 +36,16 @@ import { mlFetch } from '../lib/mlClient.js';
 import { wooFetch } from '../routes/woo.js';
 
 const TEST_DB = './test/tmp-syncflow.sqlite';
+let currentTestId = 'setup';
+const TEST_DB_PATHS = new Set();
+beforeEach((ctx) => { currentTestId = ctx.task.id; });
+function openTestDb() {
+  const hash = createHash('sha256').update(currentTestId).digest('hex').slice(0, 16);
+  const ruta = `${TEST_DB}.${process.pid}.${hash}.sqlite`;
+  TEST_DB_PATHS.add(ruta);
+  return openDb(ruta);
+}
+function openDb(ruta) { return ruta === TEST_DB ? openTestDb() : openDbOriginal(ruta); }
 
 const CFG = {
   ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' },
