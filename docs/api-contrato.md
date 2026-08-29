@@ -1052,24 +1052,69 @@ pero **no** dispara `syncOrdenMlPuntual` — eso sigue siendo solo para `orders`
 `invoices`) se reciben y se descartan en silencio hasta que se sume su función.
 
 ### GET /api/notificaciones-ml/pendientes
-Response 200: `{ ok:true, preguntas:[...], mensajes:[...], reclamos:[...], total:number }`.
+Response 200: `{ ok:true, preguntas:[...], mensajes:[...], reclamos:[...], reclamos_sin_confirmar:[...], total:number }`.
 - `preguntas`: filas de `ml_preguntas` con `estado='UNANSWERED'`, ordenadas por
   `fecha_creacion ASC` (más vieja primero — la más urgente arriba).
 - `mensajes`: filas de `ml_mensajes` con `respondido_en IS NULL`, mismo orden.
-- `reclamos`: filas de `ml_reclamos` con `cerrado_en IS NULL`, mismo orden.
+- `reclamos`: filas de `ml_reclamos` con `cerrado_en IS NULL` y `consultado_en_ml = 1`,
+  mismo orden. Un estado `unknown` puede aparecer si ML respondió 200 sin `status`; las filas
+  `sin_consultar` creadas por fail-open solo aparecen en `reclamos_sin_confirmar`.
 
 ### GET /api/notificaciones-ml/count
 Conteo liviano para el aviso del Home (no trae las filas). Response 200:
-`{ ok:true, preguntas:number, mensajes:number, reclamos:number, total:number }`.
+`{ ok:true, preguntas:number, mensajes:number, reclamos:number, reclamos_sin_confirmar:number, total:number }`.
 
 ### Ingesta (interna, disparada por el webhook — no expuesta por HTTP)
 `ingerirPregunta(db, mlCfg, resource)`, `ingerirMensaje(db, mlCfg, resource)` e
-`ingerirReclamo(db, mlCfg, resource)` en
-`routes/notificacionesMl.js`. Ambas son **fail-open**: si la llamada a ML falla, no se
-reintenta ni se bloquea nada más del webhook — la próxima notificación de ese mismo recurso
-corrige el estado. `ingerirMensaje` acepta tanto una respuesta en array como un objeto único
-de ML (el shape exacto de `resource` para `messages` no está confirmado en producción
-todavía — revisar contra la primera notificación real que llegue).
+`ingerirReclamo(db, mlCfg, resource, originalResource)` en `routes/notificacionesMl.js`.
+
+#### P0.1: Reclamos reales de MercadoLibre (2026-08-28)
+
+**Topics soportados**: `topic='claims'` (legado) y `topic='post_purchase'` con `action='claims'`.
+
+**Recursos soportados** (extracto de la URL del webhook o del envelope):
+- `/claims/{id}` (legado)
+- `/v1/claims/{id}` (intermedio)
+- `/post-purchase/v1/claims/{id}` (recurso del topic `post_purchase`; el envelope usa
+  `actions: ['claims']`)
+
+Independientemente del path de entrada, el backend siempre consulta el **endpoint vigente**
+`GET /post-purchase/v1/claims/{id}` de ML para obtener el dato fresco.
+
+**Estados reales**: `status` toma valores `'opened'` (reclamo abierto) o `'closed'` (resuelto).
+No se usa `stage` como fallback. Estados desconocidos se conservan tal cual — un reclamo no se
+marca como `cerrado_en` a menos que `status === 'closed'` explícitamente.
+
+**Campos persistidos**: `type`, `reason_id`, `resource_id` (nuevos en esta ronda) si ML los
+proporciona; `null` en caso contrario.
+
+**Idempotencia**: si un reclamo ya está cerrado (`cerrado_en IS NOT NULL`) y llega un evento
+retrasado, el GET autoritativo de ML determina el estado vigente; un `opened` fresco puede
+reabrir un reclamo realmente reabierto. El upsert por `id` evita duplicados y la transición
+`opened→closed` conserva una sola fila.
+
+**Fail-open**: si ML no responde con 200, falla de conexión, recurso no encontrado (404) o
+cualquier otro error, el webhook no se bloquea. Se conserva una fila mínima con
+estado `sin_consultar` para conservar el reclamo para diagnóstico. Las filas sin consultar se
+devuelven siempre en `reclamos_sin_confirmar`, separadas de `reclamos` y `total`, hasta que una
+consulta posterior las confirme. Un cron de recuperación las reintenta cada diez minutos.
+Se deja un warning seguro
+con claim id y status/error (`[notif-ml] ...`) para trazabilidad.
+
+En `post_purchase` se procesa el shape documentado por MercadoLibre (`resource` con
+`/post-purchase/v1/claims/{id}` y `actions: ['claims']`). También se aceptan como compatibilidad
+`envelope.claim_id`, `claim_id` del body y un `resource` que contenga `/claims/{id}`. Si no se
+puede extraer un id, se registra un warning sin guardar payload privado.
+
+Los elementos de `reclamos` en `/pendientes` incluyen, además de las columnas históricas,
+`type`, `reason_id`, `resource_id` y `consultado_en_ml`; pueden ser `null` cuando ML no los proporciona.
+`recurso`
+conserva el recurso original del webhook, mientras `resource_id` es el identificador que entrega
+ML dentro del reclamo.
+
+`reclamos_sin_confirmar` contiene filas durables creadas cuando falló la consulta a ML; no se
+mezclan con `reclamos` ni con `total`, pero se muestran en una línea diagnóstica separada del
+aviso operativo del Home.
 
 ## Contador de Inventario (`/api/inventario`)
 

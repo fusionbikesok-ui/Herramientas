@@ -40,7 +40,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
-import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje, ingerirReclamo } from './routes/notificacionesMl.js';
+import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje, ingerirReclamo, extraerClaimId, reintentarReclamosSinConsultar } from './routes/notificacionesMl.js';
 import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -160,8 +160,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   // A.3, + camino puntual a pedidos_cache, A.1 — el barrido paginado completo, syncMlToWc,
   // ya no se dispara acá, queda solo como respaldo del cron), 'orders_v2' (solo camino
   // puntual a pedidos_cache — no dispara syncOrdenMlPuntual, mismo comportamiento
-  // preexistente de 'orders' respecto de eso), 'questions' y 'messages'
-  // (preguntas/mensajes sin responder y reclamos sin resolver, guardados para el aviso del Home — ver
+  // preexistente de 'orders' respecto de eso), 'questions', 'messages', 'claims' y
+  // 'post_purchase' con acción 'claims'
+  // (preguntas/mensajes/reclamos sin resolver, guardados para el aviso del Home — ver
   // routes/notificacionesMl.js). El resto de los topics que ML manda (shipments,
   // orders_feedback, items, invoices) se reciben y se descartan en silencio hasta que se sume
   // su función acá, mismo patrón que 'orders' tenía antes de este cambio.
@@ -220,6 +221,34 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
       console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirReclamo`);
       ingerirReclamo(app._db, mlCfg, resource)
         .catch(err => console.error('[notif-ml] ingerirReclamo error:', err.message));
+      return;
+    }
+
+    // Topic post_purchase con acción 'claims' — envelope oficial de ML: el resource
+    // ya contiene /post-purchase/v1/claims/{id}. Se conservan fallbacks para variantes
+    // antiguas o no confirmadas del envelope.
+    if (topic === 'post_purchase') {
+      const action = req.body?.action;
+      const actions = Array.isArray(req.body?.actions) ? req.body.actions : [];
+      const resourceClaimId = extraerClaimId(resource);
+      const claimId = resourceClaimId
+          || req.body?.envelope?.claim_id
+          || req.body?.claim_id;
+      if (action === 'claims' || actions.includes('claims') || resourceClaimId) {
+        if (claimId) {
+          const pseudoResource = `/post-purchase/v1/claims/${claimId}`;
+          console.log(`[notif-ml] topic=${topic} action=${action || actions.join(',') || 'none'} claim_id=${claimId} → ingerirReclamo`);
+          ingerirReclamo(app._db, mlCfg, pseudoResource, resource)
+            .catch(err => console.error('[notif-ml] ingerirReclamo (post_purchase) error:', err.message));
+        } else {
+          console.warn(`[notif-ml] topic=${topic} action=${action}: no se pudo extraer claim_id; `
+            + `envelope=${Boolean(req.body?.envelope)} resource=${Boolean(resource)} body_claim_id=${Boolean(req.body?.claim_id)}`);
+        }
+      } else if (action || actions.length) {
+        console.warn(`[notif-ml] topic=${topic} action=${action}: acción no soportada`);
+      } else {
+        console.warn(`[notif-ml] topic=${topic}: envelope sin action/actions ni claim resource`);
+      }
       return;
     }
 
@@ -365,6 +394,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('4-59/10 * * * *', () => {          // ML
         procesarReintentos(app._db, syncCfg)
           .catch(err => console.error('reintentos error:', err.message));
+      });
+
+      cron.schedule('6-59/10 * * * *', () => {          // ML: recuperar fail-open de claims
+        reintentarReclamosSinConsultar(app._db, mlCfg)
+          .catch(err => console.error('reintentos claims ML error:', err.message));
       });
 
       cron.schedule('6 1-23/2 * * *', () => {          // ML — cada 2h (bajado del 15 min, ver plan ahorro-llamadas-ml)

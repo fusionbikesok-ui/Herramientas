@@ -38,9 +38,9 @@ La presencia del código no sustituye los gates pendientes que se enumeran abajo
 
 ### P0.1 Claims de MercadoLibre reales
 
-El código integrado todavía reconoce solamente `topic='claims'`, recurso `/claims/{id}` y consulta
-ese mismo endpoint. Antes de dar A.4 por cerrada se debe verificar contra notificaciones reales y
-soportar los envelopes vigentes:
+El bloque P0.1 debe mantener soporte para `topic='claims'` y agregar el envelope vigente
+`post_purchase`. Antes de dar A.4 por cerrada se debe verificar contra notificaciones reales y
+conservar estos contratos:
 
 - topic legado `claims` y, si la cuenta lo entrega, `post_purchase` con acción `claims`;
 - recursos `/v1/claims/{id}` y `/post-purchase/v1/claims/{id}`;

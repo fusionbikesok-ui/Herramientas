@@ -1005,16 +1005,19 @@ fetch('/api/auth/me').then(function(r) {
   // real de la cuenta, ajustarla (no se pudo verificar en vivo contra el panel).
   function renderNotifMlBanner(d) {
     var host = document.getElementById('notif-ml-banner');
-    if (!d || !d.total) { host.innerHTML = ''; return; }
+    if (!d || (!d.total && !d.reclamos_sin_confirmar)) { host.innerHTML = ''; return; }
     var partes = [];
     if (d.preguntas) partes.push(d.preguntas + (d.preguntas === 1 ? ' pregunta' : ' preguntas'));
     if (d.mensajes) partes.push(d.mensajes + (d.mensajes === 1 ? ' mensaje' : ' mensajes'));
     if (d.reclamos) partes.push(d.reclamos + (d.reclamos === 1 ? ' reclamo' : ' reclamos'));
-    var desc = partes.join(' y ') + (d.total === 1 ? ' pendiente' : ' pendientes') + ' en MercadoLibre.';
+    var desc = d.total ? 'Hay ' + partes.join(' y ') + (d.total === 1 ? ' pendiente' : ' pendientes') + ' en MercadoLibre.' : '';
+    if (d.reclamos_sin_confirmar) desc += (desc ? ' ' : '') + 'No se pudieron consultar '
+      + d.reclamos_sin_confirmar + (d.reclamos_sin_confirmar === 1 ? ' reclamo' : ' reclamos')
+      + ' en MercadoLibre; se reintentará automáticamente.';
     host.innerHTML = '<div class="token-banner warn" role="status">'
       + '<svg class="token-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>'
       + '<div class="token-banner-body">'
-      + '<div class="token-banner-title">Hay ' + esc(desc) + '</div>'
+      + '<div class="token-banner-title">' + esc(desc) + '</div>'
       + '<div class="token-banner-actions">'
       + '<a class="token-banner-btn" href="https://myaccount.mercadolibre.com.ar/questions/list" target="_blank" rel="noopener">Ver en MercadoLibre</a>'
       + '</div></div></div>';

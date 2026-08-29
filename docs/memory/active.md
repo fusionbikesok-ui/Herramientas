@@ -12,7 +12,9 @@ Actualizado: 2026-08-28.
 
 ## En curso
 
-- Cerrar los bloqueos P0 de Claims, configuración y evidencia operativa.
+- P0.1 Claims reales: el webhook acepta `claims` y `post_purchase` con paths vigentes y
+  consulta siempre `GET /post-purchase/v1/claims/{id}`; persiste datos completos o fail-open.
+- Mantener abiertos los bloqueos P0 restantes de configuración y evidencia operativa.
 - Construir el backbone de eventos, trabajos, bandeja, conversaciones y notificaciones que
   alimentará la aplicación operativa.
 - El backend móvil de autenticación y dispositivos ya existe en `conteo-confiable`; el cliente

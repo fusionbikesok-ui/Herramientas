@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { migrateMlClaims } from '../migrations/028_ml_reclamos_campos_tipo_razon.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,6 +13,9 @@ export function openDb(dbPath) {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
   // Incremental migrations — safe to run every startup
+  // Reclamos ML: las bases existentes ya tienen ml_reclamos sin estos campos; el
+  // CREATE TABLE IF NOT EXISTS del router no puede ampliar una tabla existente.
+  migrateMlClaims(db);
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
