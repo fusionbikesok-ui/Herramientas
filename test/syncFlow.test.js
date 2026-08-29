@@ -44,11 +44,15 @@ const CFG = {
 function seedMatcher(db) {
   const now = new Date().toISOString();
   db.prepare(
-    'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
   ).run('MLA100|', 'BIKE-001', 'Bicicleta Simple', 'confirmar', now);
+  db.prepare('UPDATE sku_matcher_decisiones SET sku = ?, wc_nombre = ?, accion = ?, actualizado_en = ? WHERE clave = ?')
+    .run('BIKE-001', 'Bicicleta Simple', 'confirmar', now, 'MLA100|');
   db.prepare(
-    'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
   ).run('MLA200|987', 'CASCO-L', 'Casco L', 'asignar', now);
+  db.prepare('UPDATE sku_matcher_decisiones SET sku = ?, wc_nombre = ?, accion = ?, actualizado_en = ? WHERE clave = ?')
+    .run('CASCO-L', 'Casco L', 'asignar', now, 'MLA200|987');
 }
 
 // Por default, regularPrice = precio (sin oferta: LISTA y vigente coinciden), salvo que un
@@ -57,8 +61,10 @@ function seedCatalogo(db, { precio = 300, regularPrice } = {}) {
   const now = new Date().toISOString();
   const rp = regularPrice !== undefined ? regularPrice : precio;
   db.prepare(
-    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, precio, rp, now);
+  db.prepare('UPDATE catalogo_cache SET nombre = ?, sku = ?, tipo = ?, id_padre = ?, stock = ?, precio = ?, regular_price = ?, actualizado_en = ? WHERE id_woo = ?')
+    .run('Bicicleta Simple', 'BIKE-001', 'simple', null, 5, precio, rp, now, 100);
 }
 
 // Publicación ML en cache — syncWcToMl solo empuja stock a publicaciones activas.

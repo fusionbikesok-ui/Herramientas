@@ -43,9 +43,11 @@ function now() { return new Date().toISOString(); }
 function seedToken(db) {
   const expiresAt = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
   db.prepare(
-    `INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
+    `INSERT OR IGNORE INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
      VALUES (1, 'tok', 'ref', ?, ?)`
   ).run(expiresAt, now());
+  db.prepare('UPDATE ml_oauth_token SET access_token = ?, refresh_token = ?, expires_at = ?, actualizado_en = ? WHERE id = 1')
+    .run('tok', 'ref', expiresAt, now());
 }
 
 function seedDecision(db, { clave, sku, accion = 'asignar' }) {
@@ -56,10 +58,13 @@ function seedDecision(db, { clave, sku, accion = 'asignar' }) {
 
 function seedCache(db, { clave, itemId, variationId = '', titulo = 'Pub', status = 'active', sellerSku = '' }) {
   db.prepare(
-    `INSERT INTO ml_publicaciones_cache
+    `INSERT OR IGNORE INTO ml_publicaciones_cache
        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en)
      VALUES (?, ?, ?, ?, ?, '', 0, '', '', ?, '', ?)`
   ).run(clave, itemId, variationId, titulo, status, sellerSku, now());
+  db.prepare(
+    `UPDATE ml_publicaciones_cache SET item_id = ?, variation_id = ?, titulo = ?, status = ?, seller_sku = ?, actualizado_en = ? WHERE clave = ?`
+  ).run(itemId, variationId, titulo, status, sellerSku, now(), clave);
 }
 
 function respOk() {
