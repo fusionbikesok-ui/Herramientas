@@ -11,7 +11,7 @@ actual, las decisiones vigentes y el trabajo pendiente.
 - Producción sirve la rama `conteo-confiable`; `master` todavía es una línea distinta.
 - Todo cambio se desarrolla en un worktree aislado y pasa por `hard-worker → revisor → tester →
   probador-e2e` cuando haya UI → `auditor-despliegue`.
-- No se despliega, reinicia PM2 ni modifica configuración real automáticamente.
+- No se despliega, reinicia PM2 ni modifica configuración real automáticamente sin haber aprobado todo el pipeline, si está todo ok se despliega, git push y reinicia pm2 segun sea necesario.
 - No se ejecutan suites globales concurrentes ni servidores contra `data/fusion.sqlite`.
 - El contrato HTTP vive en `docs/api-contrato.md`; el contrato móvil en
   `openapi/mobile-v1.yaml`.
@@ -219,6 +219,38 @@ El backend base de acceso y dispositivos ya existe; el cliente móvil sigue pend
 
 Validar temprano cámara, biometría, background y push en dispositivos reales. La app no modifica
 stock ni resuelve trabajo offline sin idempotency key y control de versión.
+
+### Ruta específica Claims P0.1 → P2
+
+Esta ruta desglosa el objetivo de Claims sin ampliar el alcance de Hito 7 ni autorizar
+despliegues. P0.1 está implementado; P1 y P2 quedan pendientes y no se consideran cerrados por
+la mera existencia de endpoints o tablas parciales.
+
+1. **P0.1 — Ingesta real y fail-open:** conservar el webhook legado y `post_purchase`, validar
+   cuenta, consultar el recurso autoritativo, persistir `opened`/`closed`, deduplicar y dejar
+   diagnóstico durable cuando ML falle. Gate: contrato HTTP, migración, 27 tests Claims, suite
+   global verde y auditoría.
+2. **P1 — Backbone durable para Claims:** crear `integration_events`, `integration_jobs`,
+   `integration_event_history`, `inbox_items`, `conversations`, `conversation_messages`,
+   `user_notifications` y `notification_deliveries` con migraciones idempotentes. Adaptar Claims
+   para insertar evento y primer job en una transacción, proyectar un inbox interno y registrar
+   cada etapa/error con `correlation_id`, lease, backoff, DLQ y orden de eventos. Gate: replay,
+   duplicado, evento fuera de orden, cuenta no autorizada, caída de push, lease vencido y
+   reconciliación.
+3. **P1 — API operativa:** exponer lectura paginada de inbox, detalle, marcar leído, resolver con
+   control de versión, conversación de solo lectura, notificaciones y operación por correlación.
+   Todos los endpoints deben revalidar permisos y usar IDs internos en deep links. Gate: contrato
+   OpenAPI/API, aislamiento por usuario/equipo, `409` por versión vieja y auditoría segura.
+4. **P1 — Entrega vertical Claims:** `claim webhook → evento → inbox → notificación lógica →
+   push simulado → deep link → lectura/resolución → auditoría`, incluyendo fail-open y DLQ. No
+   activar proveedor push real en esta fase.
+5. **P2 — Cliente móvil Claims:** incorporar el cliente móvil existente o crear su setup solo si
+   no existe, generar cliente desde OpenAPI, autenticación segura, inbox paginado, detalle de
+   Claim, marcar leído/resolver, estados offline y deep links con permisos. Validar push y
+   background en dispositivo real antes de activar proveedor.
+6. **P2 — Gate final:** revisor independiente, suite completa serial sin DB abandonadas, E2E
+   web/móvil según superficie tocada, auditoría final y rollback documentado. El deploy queda
+   manual; nunca tocar Hito 7 ni reiniciar procesos durante esta ruta.
 
 ## Prioridad 3 — Conteo e inventario pendiente
 
