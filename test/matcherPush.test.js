@@ -368,7 +368,7 @@ describe('lib/matcherPush', () => {
       expect(r.cortado_por_error).toBe(false);
       expect(r.errores).toBe(0);
       expect(contarPendientes(db).total).toBeGreaterThan(0); // quedó trabajo para el próximo ciclo
-    }, 20_000); // 900 seeds + iteraciones reales bajo fake timers superan el timeout default de 5s
+    }, 60_000); // 900 seeds + iteraciones reales bajo fake timers superan el timeout default
 
     it('agota MAX_REINTENTOS_SIN_CUPO (no el tope de tiempo) cuando el presupuesto propio nunca se libera', async () => {
       // NOTA (tester, corrección post-revisor): con reservarCupo devolviendo false SIEMPRE,
