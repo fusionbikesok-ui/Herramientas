@@ -44,10 +44,10 @@ const CFG = {
 function seedMatcher(db) {
   const now = new Date().toISOString();
   db.prepare(
-    'INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
   ).run('MLA100|', 'BIKE-001', 'Bicicleta Simple', 'confirmar', now);
   db.prepare(
-    'INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
   ).run('MLA200|987', 'CASCO-L', 'Casco L', 'asignar', now);
 }
 
