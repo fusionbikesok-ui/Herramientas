@@ -7,9 +7,15 @@
 
 import express from 'express';
 import { requireAuth } from '../lib/auth.js';
-import { requireMobileAuth } from '../lib/mobileAuth.js';
 
 const now = () => new Date().toISOString();
+
+function idPositivoSeguro(value) {
+  const text = String(value);
+  if (!/^\d+$/.test(text)) return null;
+  const id = Number(text);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
 
 /**
  * Cursor-based paginación: base64url(creado_en:id).
@@ -23,17 +29,20 @@ function decodeCursor(cursor) {
   if (!cursor) return null;
   try {
     const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-    const [createdAt, idStr] = decoded.split(':');
+    const separator = decoded.lastIndexOf(':');
+    const createdAt = separator > 0 ? decoded.slice(0, separator) : '';
+    const idStr = separator > 0 ? decoded.slice(separator + 1) : '';
 
     // MEDIO 8 fix: validar que el cursor tiene la forma esperada
     // Si el decodificado no es "ISO_DATE:INTEGER", rechazar explícitamente
     if (!createdAt || !idStr) return null;
 
-    const id = parseInt(idStr, 10);
-    if (!Number.isInteger(id)) return null;
+    const id = idPositivoSeguro(idStr);
+    if (id == null) return null;
 
     // Validar que createdAt es una fecha ISO válida (simple check: contiene 'T' y 'Z')
-    if (typeof createdAt !== 'string' || !createdAt.includes('T') || !createdAt.includes('Z')) {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(createdAt)
+      || Number.isNaN(Date.parse(createdAt)) || String(id) !== idStr) {
       return null;
     }
 
@@ -64,9 +73,8 @@ function notificacionAPublico(row) {
   };
 }
 
-export function notificationsRouter(db, options = {}) {
+export function notificationsRouter(db, authMiddleware = requireAuth(db)) {
   const router = express.Router();
-  const auth = options.mobile ? requireMobileAuth(db) : requireAuth(db);
 
   /**
    * GET /notifications
@@ -79,7 +87,7 @@ export function notificationsRouter(db, options = {}) {
    * Response 401: No autenticado
    * Response 500: Error interno
    */
-  router.get('/', auth, (req, res) => {
+  router.get('/', authMiddleware, (req, res) => {
     try {
       const userId = req.user.id;
       const { cursor } = req.query;
@@ -154,9 +162,14 @@ export function notificationsRouter(db, options = {}) {
    * Response 404: Notificación no encontrada o no pertenece al usuario
    * Response 500: Error interno
    */
-  router.post('/:id/read', auth, (req, res) => {
+  router.post('/:id/read', authMiddleware, (req, res) => {
     try {
-      const notifId = parseInt(req.params.id, 10);
+      const notifId = idPositivoSeguro(req.params.id);
+      if (notifId == null) {
+        return res.status(422).json({
+          error: { code: 'id_invalido', message: 'El id de la notificación debe ser un entero positivo' },
+        });
+      }
       const userId = req.user.id;
 
       // Verificar que la notificación existe y pertenece al usuario autenticado
@@ -186,6 +199,26 @@ export function notificationsRouter(db, options = {}) {
         },
       });
     }
+  });
+
+  // Preferencias compartidas por el feed web y la app móvil.
+  router.get('/preferences', authMiddleware, (req, res) => {
+    const row = db.prepare('SELECT incidentes_criticos FROM preferencias_notificacion WHERE user_id = ?')
+      .get(req.user.id);
+    res.json({ incidentes_criticos: row ? !!row.incidentes_criticos : true });
+  });
+
+  router.patch('/preferences', authMiddleware, (req, res) => {
+    if (typeof req.body?.incidentes_criticos !== 'boolean') {
+      return res.status(422).json({ error: { code: 'body_invalido', message: 'incidentes_criticos debe ser boolean' } });
+    }
+    db.prepare(`
+      INSERT INTO preferencias_notificacion (user_id, incidentes_criticos, actualizado_en)
+      VALUES (?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET incidentes_criticos = excluded.incidentes_criticos,
+        actualizado_en = excluded.actualizado_en
+    `).run(req.user.id, req.body.incidentes_criticos ? 1 : 0, now());
+    return res.json({ incidentes_criticos: req.body.incidentes_criticos });
   });
 
   return router;

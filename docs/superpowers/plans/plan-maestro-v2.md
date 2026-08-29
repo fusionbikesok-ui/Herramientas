@@ -1,6 +1,6 @@
 # Plan maestro vigente — FusionBikes Herramientas + App operativa
 
-Actualizado: 2026-08-28.
+Actualizado: 2026-08-29.
 
 Este es el **único plan activo** del repositorio. Reemplaza planes, trackers y documentos de
 implementación anteriores. Git conserva la historia; este archivo conserva solamente el estado
@@ -168,6 +168,10 @@ pequeños. No usar `worker_threads` para trabajo de red. Un lease abandonado vue
 disponible. Los reintentos usan backoff creciente y límite explícito; al agotarse terminan en DLQ
 con reproceso manual.
 
+Estado implementado para Claims: `integration_jobs` ya tiene worker durable con lease/backoff/DLQ;
+`notification_deliveries` tiene worker separado con lease, backoff y límite de cinco intentos.
+El worker de entregas no comparte candado ni estado con el worker legacy de incidentes.
+
 Eventos fuera de orden se conservan, se comparan por `occurred_at`/versión y nunca retroceden un
 estado confirmado. Si no se puede decidir, quedan pendientes de reconciliación.
 
@@ -175,6 +179,9 @@ estado confirmado. Si no se puede decidir, quedan pendientes de reconciliación.
 
 - Resolver destinatario por usuario asignado, equipo, rol o permiso; nunca enviar a todos por
   defecto.
+- Estado implementado: la API móvil exige el permiso `notificaciones-ml` y vuelve a comprobar la
+  asignación antes de leer o modificar un ítem. La toma manual crea entregas solo para dispositivos
+  activos del usuario que tomó el trabajo. La resolución automática por equipo/rol sigue pendiente.
 - Definir retención por tipo de contenido y PII antes de implementar cada adaptador.
 - Revocar tokens inválidos y auditar accesos.
 - Los deep links usan IDs internos y vuelven a validar permisos en el backend.
@@ -187,10 +194,19 @@ estado confirmado. Si no se puede decidir, quedan pendientes de reconciliación.
 - `POST /api/v1/inbox/:id/resolve` con control de versión y `409`.
 - `GET /api/v1/conversations/:id`.
 - `POST /api/v1/conversations/:id/read`.
-- `GET /api/v1/notifications` paginado.
+- `GET /api/v1/integration-notifications` paginado para notificaciones lógicas del backbone;
+  `/api/v1/notifications` queda reservado al feed Hito 7.
 - `GET /api/v1/operations/:correlation_id` con etapas seguras según permisos.
 
+Estado implementado: las rutas anteriores están montadas y cubiertas por pruebas dirigidas; el
+contrato vigente está en `openapi/mobile-v1.yaml`.
+
 ### P1.8 Primera entrega vertical
+
+Estado backend implementado para Claims: webhook → persistencia legacy y evento durable atómicos →
+inbox → toma manual → notificación lógica → entrega push durable → deep link → lectura/resolución.
+La prueba E2E de navegador cubre Home y la API dirigida cubre autenticación, deduplicación, fallos,
+reintentos y aislamiento. Falta completar el cliente móvil y la prueba en dispositivo real.
 
 Implementar primero un único flujo completo:
 

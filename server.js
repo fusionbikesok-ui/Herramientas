@@ -7,10 +7,16 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { openDb } from './db/index.js';
-import { requireAuth, requireAdmin } from './lib/auth.js';
+import {
+  requireAuth,
+  requireAdmin,
+  mobileAuthMiddleware,
+  mobileRequirePermission,
+  validarMobileJwtSecret,
+} from './lib/auth.js';
 import { resolvePermiso, permiteAcceso } from './lib/permisos.js';
 import { authRouter } from './routes/auth.js';
-import { mobileAuthRouter } from './routes/mobileAuth.js';
+import { mobileAuthRouter, mobileMeHandler } from './routes/mobileAuth.js';
 import { usuariosRouter } from './routes/usuarios.js';
 import { wooRouter, refrescarCatalogo } from './routes/woo.js';
 import { geminiRouter } from './routes/gemini.js';
@@ -38,14 +44,20 @@ import { incidentesRouter } from './routes/incidentes.js';
 import { devicesRouter } from './routes/devices.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
+import { validarConfiguracionPush } from './lib/notificacionesPush.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje, ingerirReclamo, extraerClaimId, reintentarReclamosSinConsultar } from './routes/notificacionesMl.js';
+import { inboxClaimsRouter } from './routes/inboxClaims.js';
+import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
+export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobileJwtSecret }) {
+  const mobileSecret = mobileJwtSecret ?? process.env.MOBILE_JWT_SECRET;
+  validarMobileJwtSecret(mobileSecret);
+  validarConfiguracionPush(process.env);
   const db = openDb(dbPath);
   const app = express();
 
@@ -136,6 +148,17 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
 
   // Auth: público (login) + endpoints de sesión. NO pasa por requireAuth.
   app.use('/api/auth', authRouter(db));
+
+  // API móvil: mecanismo independiente de la sesión web, con Bearer JWT y refresh
+  // revocable por dispositivo. Se monta antes del guard del panel /api.
+  const mobileAuth = mobileAuthMiddleware(db, mobileSecret);
+  const mobileNotificationsAuth = [mobileAuth, mobileRequirePermission('notificaciones-ml')];
+  app.use('/api/v1/auth', mobileAuthRouter(db, mobileSecret));
+  app.get('/api/v1/me', mobileAuth, mobileMeHandler(db));
+  app.use('/api/v1/devices', devicesRouter(db, mobileAuth));
+  app.use('/api/v1/notifications', notificationsRouter(db, mobileNotificationsAuth));
+  app.use('/api/v1/inbox', inboxClaimsRouter(db, mobileNotificationsAuth));
+  app.use('/api/v1', operacionesMobileRouter(db, mobileNotificationsAuth));
 
   // A partir de acá, todo /api exige sesión válida + permiso por herramienta.
   const authGuard = requireAuth(db);
@@ -306,10 +329,6 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/incidentes', incidentesRouter(db, syncCfg));
   app.use('/api/devices', devicesRouter(db));
   app.use('/api/notifications', notificationsRouter(db));
-  // Compatibilidad con el contrato móvil v1: conserva /api para clientes existentes.
-  app.use('/api/v1/devices', devicesRouter(db, { mobile: true }));
-  app.use('/api/v1/notifications', notificationsRouter(db, { mobile: true }));
-  app.use('/api/v1/auth', mobileAuthRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
   app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
 
@@ -345,6 +364,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const app = buildApp({
       dbPath: process.env.DB_PATH,
       sessionSecret: process.env.SESSION_SECRET,
+      mobileJwtSecret: process.env.MOBILE_JWT_SECRET,
       wooCfg,
       geminiKey: process.env.GEMINI_KEY,
       mlCfg,
@@ -549,6 +569,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('*/2 * * * *', () => {
         procesarNotificacionesPush(app._db)
           .catch(err => console.error('Error en procesarNotificacionesPush:', err.message));
+      });
+
+      // P1 Claims: entregas durables aisladas del worker legacy de incidentes.
+      cron.schedule('*/1 * * * *', () => {
+        import('./lib/workerIntegrationNotifications.js').then(({ procesarEntregasPush }) =>
+          procesarEntregasPush(app._db)
+        ).catch(err => console.error('Error en entregas push de integraciones:', err.message));
       });
     }
 

@@ -7,10 +7,17 @@ import { procesarNotificacionesPush } from '../lib/workerNotificacionesPush.js';
 const mockState = vi.hoisted(() => {
   let shouldFailOnDevice = null; // null = no falla, string deviceToken = falla para ese device
   let failureCount = 0;
+  let failureResult = { ok: false, error: 'Simulated network failure', reintentable: true };
   let callCount = 0; // Contar total de llamadas a enviarNotificacion
   return {
     setShouldFailOnDevice: (deviceToken) => { shouldFailOnDevice = deviceToken; },
-    clearFailure: () => { shouldFailOnDevice = null; failureCount = 0; },
+    clearFailure: () => {
+      shouldFailOnDevice = null;
+      failureCount = 0;
+      failureResult = { ok: false, error: 'Simulated network failure', reintentable: true };
+    },
+    setFailureResult: (result) => { failureResult = result; },
+    getFailureResult: () => failureResult,
     getShouldFailOnDevice: () => shouldFailOnDevice,
     incrementFailureCount: () => ++failureCount,
     getFailureCount: () => failureCount,
@@ -29,7 +36,7 @@ vi.mock('../lib/notificacionesPush.js', async () => {
       const deviceToFail = mockState.getShouldFailOnDevice();
       if (deviceToFail && deviceToken === deviceToFail) {
         mockState.incrementFailureCount();
-        return { ok: false, error: 'Simulated network failure' };
+        return mockState.getFailureResult();
       }
       return { ok: true };
     },
@@ -48,6 +55,8 @@ function seedUser(db, { id = 1, username = 'tester' } = {}) {
       VALUES (?, ?, ?, 0, 1, ?, ?)
     `).run(id, username, 'hash', now, now);
   } catch (_) {}
+  db.prepare(`INSERT OR IGNORE INTO user_permisos (user_id, herramienta, nivel)
+    VALUES (?, 'notificaciones-ml', 'read')`).run(id);
 }
 
 function seedPreferencias(db, userId) {
@@ -99,6 +108,45 @@ describe('lib/workerNotificacionesPush', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
+  it('no entrega a usuarios sin permiso notificaciones-ml aunque tengan preferencia', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    db.prepare("DELETE FROM user_permisos WHERE user_id = 1 AND herramienta = 'notificaciones-ml'").run();
+    seedPreferencias(db, 1);
+    seedDevice(db, 1);
+    const incidenteId = seedIncidente(db);
+
+    await procesarNotificacionesPush(db);
+
+    expect(db.prepare('SELECT 1 FROM notificaciones_usuario WHERE user_id = 1 AND incidente_id = ?').get(incidenteId)).toBeUndefined();
+    expect(db.prepare('SELECT 1 FROM notificaciones_enviadas WHERE incidente_id = ?').get(incidenteId)).toBeUndefined();
+    db.close();
+  });
+
+  it('no duplica un push cuando queda una reserva pendiente durable', async () => {
+    mockState.resetCallCount();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    seedDevice(db, 1, 'device-pending');
+    const incidenteId = seedIncidente(db);
+    const version = new Date().toISOString();
+    db.prepare(`INSERT INTO notificaciones_usuario
+      (user_id, tipo, titulo, cuerpo, deep_link, leida, incidente_id, creado_en)
+      VALUES (1, 'nuevo', 'Incidente', 'Error', 'incidentes', 0, ?, ?)`)
+      .run(incidenteId, version);
+    db.prepare(`INSERT INTO notificaciones_enviadas
+      (device_token_id, tipo, incidente_id, estado, intentos, creado_en, idempotencia)
+      VALUES (1, 'nuevo', ?, 'pendiente', 0, ?, ?)`)
+      .run(incidenteId, version, `1:${incidenteId}:nuevo:${version}:1`);
+
+    await procesarNotificacionesPush(db);
+
+    expect(mockState.getCallCount()).toBe(0);
+    expect(db.prepare("SELECT estado FROM notificaciones_enviadas WHERE estado = 'pendiente'").get()).toBeTruthy();
+    db.close();
+  });
+
   it('procesa un incidente crítico activo nuevo (sin notificaciones previas)', async () => {
     const db = openDb(TEST_DB);
     seedUser(db, { id: 1 });
@@ -117,6 +165,25 @@ describe('lib/workerNotificacionesPush', () => {
 
     expect(notif).toBeDefined();
     expect(notif.estado).toBe('enviado'); // mock siempre retorna ok
+    db.close();
+  });
+
+  it('genera deep_link al detalle exacto del incidente e incluye correlation_id cuando existe', async () => {
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    seedDevice(db, 1, 'device-deep-link');
+    const incidenteId = seedIncidente(db);
+    db.prepare('UPDATE incidentes_operativos SET contexto_json = ? WHERE id = ?')
+      .run(JSON.stringify({ correlation_id: 'sync-abc-123' }), incidenteId);
+
+    await procesarNotificacionesPush(db);
+
+    const notification = db.prepare(`
+      SELECT deep_link FROM notificaciones_usuario
+      WHERE user_id = 1 AND incidente_id = ? AND tipo = 'nuevo'
+    `).get(incidenteId);
+    expect(notification.deep_link).toBe(`incidentes/${incidenteId}?correlation_id=sync-abc-123`);
     db.close();
   });
 
@@ -510,6 +577,23 @@ describe('lib/workerNotificacionesPush', () => {
     // ALTO 4: Debe seguir siendo 1 fila (UPDATE la existente, no INSERT nuevo)
     expect(reaviso2.c).toBe(reaviso1.c);
 
+    const correlationId = 'reaviso-actualizado';
+    db.prepare('UPDATE incidentes_operativos SET contexto_json = ? WHERE id = ?')
+      .run(JSON.stringify({ correlation_id: correlationId }), incidenteId);
+    db.prepare(`
+      UPDATE notificaciones_usuario
+      SET creado_en = ?
+      WHERE user_id = 1 AND tipo = 'reaviso' AND incidente_id = ?
+    `).run(new Date(Date.now() - 40 * 60 * 1000).toISOString(), incidenteId);
+
+    await procesarNotificacionesPush(db);
+
+    const reavisoActualizado = db.prepare(`
+      SELECT deep_link FROM notificaciones_usuario
+      WHERE user_id = 1 AND tipo = 'reaviso' AND incidente_id = ?
+    `).get(incidenteId);
+    expect(reavisoActualizado.deep_link).toBe(`incidentes/${incidenteId}?correlation_id=${correlationId}`);
+
     db.close();
   });
 
@@ -614,6 +698,41 @@ describe('lib/workerNotificacionesPush', () => {
     expect(reintentada.estado).toBe('enviado'); // El mock retorna ok, así que se marca como enviado
     expect(reintentada.creado_en).not.toBe(createdInTick1); // La fecha se actualizó
 
+    db.close();
+  });
+
+  it('no reintenta un error OAuth no reintentable y lo deja terminal', async () => {
+    mockState.resetCallCount();
+    mockState.clearFailure();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-oauth-credentials';
+    seedDevice(db, 1, deviceToken, 'ios');
+    const incidenteId = seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    mockState.setShouldFailOnDevice(deviceToken);
+    mockState.setFailureResult({
+      ok: false,
+      error: 'OAuth FCM rechazó la autenticación (HTTP 401)',
+      reintentable: false,
+    });
+    await procesarNotificacionesPush(db);
+
+    const fila = db.prepare(`
+      SELECT estado, intentos, error FROM notificaciones_enviadas
+      WHERE device_token_id = 1 AND tipo = 'nuevo' AND incidente_id = ?
+    `).get(incidenteId);
+    expect(fila).toMatchObject({
+      estado: 'agotado',
+      intentos: 1,
+      error: 'OAuth FCM rechazó la autenticación (HTTP 401)',
+    });
+
+    await procesarNotificacionesPush(db);
+    expect(mockState.getCallCount()).toBe(1);
+    expect(db.prepare('SELECT estado FROM notificaciones_enviadas WHERE device_token_id = 1').get().estado)
+      .toBe('agotado');
     db.close();
   });
 

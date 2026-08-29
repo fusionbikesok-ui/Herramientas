@@ -2643,10 +2643,51 @@ interrumpir el ciclo exitoso que la llamó.
 ## Hito 7: Notificaciones Push (iOS, Android, Web)
 
 Infraestructura backend para enviar notificaciones push a dispositivos móviles registrados.
-Contrato con `openapi/mobile-v1.yaml` (contract-first, la app ya tiene el cliente TypeScript
-generado). Los endpoints en esta sección son parte de la API móvil (rotas bajo `/api/`).
+Contrato con `openapi/mobile-v1.yaml`. Los endpoints móviles implementados se sirven bajo
+`/api/v1/` con `Authorization: Bearer <JWT>`; las rutas `/api/` legacy del panel conservan
+sesión por cookie. El inbox y la lectura operativa de Claims comparten el mismo middleware
+móvil y el permiso `notificaciones-ml`.
 
-### POST /api/devices (web) / POST /api/v1/devices (móvil)
+### POST /api/v1/auth/login
+Inicia una sesión móvil y liga el refresh token a un dispositivo. El request debe incluir un
+`device_id` vigente del usuario o `platform` + `push_token` para registrar/asociar el dispositivo
+durante el primer login; nunca se emite un refresh token sin dispositivo.
+
+- Request: `{ "username": "juan", "password": "...", "device_id": "12" }` o
+  `{ "username": "juan", "password": "...", "platform": "android", "push_token": "...", "device_name": "..." }`.
+- Response 200: `{ "access_token": "...", "refresh_token": "...", "expires_in": 900, "device_id": "12", "user": { ... } }`.
+- Response 401: credenciales inválidas.
+- Response 422: body inválido o dispositivo ausente/no perteneciente al usuario.
+- Response 429: demasiados intentos fallidos para usuario + IP, o límite agregado de la IP;
+  incluye `Retry-After`. El límite agregado permite 30 fallos entre usuarios antes de aplicar
+  el backoff, para no bloquear a una oficina/NAT por errores legítimos aislados.
+- Response 500: error interno.
+
+La emisión de dispositivo, refresh token y access token se valida y persiste como una sola
+operación: si falla el alta del refresh, no queda un dispositivo parcialmente registrado.
+`device_id` y `platform`/`push_token`/`device_name` son alternativas mutuamente excluyentes;
+combinarlos responde 422 con `error.code = "body_invalido"`.
+
+### POST /api/v1/auth/refresh
+Rota un refresh token vigente y devuelve un nuevo access/refresh token ligado al mismo dispositivo.
+
+- Request: `{ "refresh_token": "..." }`.
+- Response 200: tokens renovados, incluyendo `device_id`.
+- Response 401: refresh token inválido, expirado o revocado (incluye logout y revocación del dispositivo).
+- Response 422: `{ "error": { "code": "body_invalido", "message": "refresh_token es requerido" } }` — falta `refresh_token`.
+- Response 500: error interno.
+
+### POST /api/v1/auth/logout
+Revoca la sesión móvil actual. Requiere Bearer access token y el refresh token correspondiente
+en el body; ambos deben pertenecer a la misma sesión.
+
+- Request: `{ "refresh_token": "..." }`.
+- Response 200: `{ "ok": true }`.
+- Response 401: access/refresh token inválido, no correspondiente o ya revocado.
+- Response 422: falta `refresh_token`.
+- Response 500: error interno.
+
+### POST /api/v1/devices
 Registra un dispositivo para recibir notificaciones push.
 
 - Request:
@@ -2654,8 +2695,7 @@ Registra un dispositivo para recibir notificaciones push.
   {
     "platform": "ios" | "android" | "web",
     "push_token": "string (token del proveedor APNs/FCM)",
-    "device_name": "string (opcional, ej. 'iPhone de Juan' o 'Navegador')",
-    "refresh_token": "string (obligatorio en /api/v1; refresh vigente de la sesión móvil)"
+    "device_name": "string (opcional, ej. 'iPhone de Juan' o 'Navegador')"
   }
   ```
 
@@ -2669,21 +2709,22 @@ Registra un dispositivo para recibir notificaciones push.
   }
   ```
 
-- Response 401: No autenticado (sin sesión válida).
+- Response 401: No autenticado (sin Bearer JWT válido).
 - Response 422:
   - `{ "error": { "code": "platform_invalido", "message": "..." } }` — `platform` no es uno de: 'ios', 'android', 'web'.
   - `{ "error": { "code": "push_token_invalido", "message": "..." } }` — `push_token` vacío o no string.
-  - `{ "error": { "code": "cursor_invalido", "message": "..." } }` — (en `GET /notifications`) cursor corrupto o mal formado.
 - Response 500: Error interno.
 
 Notas:
-- Solo usuarios autenticados pueden registrar dispositivos (sesión HTTP válida).
+- Solo usuarios autenticados pueden registrar dispositivos (Bearer JWT válido).
 - Cada usuario es dueño de sus propios dispositivos; no puede ver ni modificar los de otros.
-- Si el mismo `push_token` se re-registra para el mismo usuario, se actualiza (limpia `revocado_en`).
+- Si el mismo `push_token` ya está activo para el mismo usuario, se actualiza su fila activa;
+  si la fila anterior está revocada, el re-registro crea una fila activa nueva y conserva el
+  historial revocado.
 - Un usuario puede tener múltiples dispositivos simultáneamente (ej. iPhone + iPad).
 - **Reasignación de tokens (ALTO 1, 7ª pasada revisor):** a lo sumo puede haber una fila ACTIVA (`revocado_en IS NULL`) por token; registrar un `push_token` que otro usuario tiene activo lo REASIGNA: se revoca la fila del usuario anterior y se crea una fila NUEVA para el usuario actual. **Consecuencia para el usuario anterior:** deja de recibir notificaciones push en silencio (su dispositivo queda activo en la app, pero el token es inválido en el backend). Las filas revocadas persisten como historial puro — un token revocado que se re-registra crea una fila nueva, no reutiliza la vieja.
 
-### DELETE /api/devices/{id}
+### DELETE /api/v1/devices/{id}
 Revoca/elimina un dispositivo, deteniendo futuras notificaciones hacia ese token.
 
 - Path parameter: `id` (string, ID del dispositivo a revocar).
@@ -2693,15 +2734,16 @@ Revoca/elimina un dispositivo, deteniendo futuras notificaciones hacia ese token
 
 - Response 401: No autenticado.
 - Response 403: `{ "error": { "code": "sin_permiso", "message": "..." } }` — el dispositivo no pertenece al usuario autenticado.
+- Response 422: `{ "error": { "code": "id_invalido", "message": "El ID del dispositivo debe ser un entero positivo" } }` — el path no contiene un ID entero completo.
 - Response 404: `{ "error": { "code": "no_encontrado", "message": "..." } }` — el dispositivo con ese ID no existe.
 - Response 500: Error interno.
 
 Notas:
 - Revoca seteando la columna `revocado_en` (soft-delete, registro persiste para auditoría).
 - El token queda inactivo y no recibe más notificaciones.
-- En `/api/v1`, también revoca los refresh tokens asociados a ese dispositivo y su familia de rotación.
+- Todos los refresh tokens ligados al dispositivo se revocan en la misma transacción.
 
-### GET /api/notifications
+### GET /api/v1/notifications
 Lista notificaciones del usuario autenticado, paginadas por cursor.
 
 - Query params:
@@ -2716,27 +2758,29 @@ Lista notificaciones del usuario autenticado, paginadas por cursor.
         "tipo": "nuevo",
         "titulo": "⚠️ Incidente en ML",
         "cuerpo": "Un error fue detectado en la integración.",
-        "deep_link": "incidentes",
+        "deep_link": "incidentes/123",
         "leida": false,
         "creado_en": "2026-08-28T15:00:00Z"
       }
     ],
-    "next_cursor": "base64-cursor-or-null"
+    "next_cursor": "base64url(ISO_TIMESTAMP:id)-or-null"
   }
   ```
 
 - Response 401: No autenticado.
+- Response 403: Sin permiso `notificaciones-ml`.
+- Response 422: Cursor inválido o mal formado.
 - Response 500: Error interno.
 
 Notas:
 - Solo el usuario autenticado ve sus propias notificaciones.
 - Paginación por cursor (no offset), más eficiente en bases de datos.
 - Ordenadas por `creado_en DESC` (más recientes primero).
-- Cada notificación tiene un `deep_link` opaco (ej. "incidentes") que la app usa para navegar al detalle.
+- Cada notificación tiene un `deep_link` a un detalle exacto (para incidentes: `incidentes/{id}`); si el contexto trae `correlation_id`, se agrega como query string (`?correlation_id=...`).
 - `leida` es un booleano (no entero).
 - Si no hay más resultados, `next_cursor` es `null`.
 
-### POST /api/notifications/{id}/read
+### POST /api/v1/notifications/{id}/read
 Marca una notificación como leída.
 
 - Path parameter: `id` (string, ID de la notificación).
@@ -2745,6 +2789,8 @@ Marca una notificación como leída.
 - Response 200: `{ "ok": true }`
 
 - Response 401: No autenticado.
+- Response 403: Sin permiso `notificaciones-ml`.
+- Response 422: `{ "error": { "code": "id_invalido", "message": "El id de la notificación debe ser un entero positivo" } }` — el path no contiene un ID entero completo.
 - Response 404: `{ "error": { "code": "no_encontrado", "message": "..." } }` — la notificación no existe o no pertenece al usuario.
 - Response 500: Error interno.
 
@@ -2758,11 +2804,12 @@ Las notificaciones son **dos tablas separadas**:
 
 1. **`notificaciones_enviadas`** (log de intentos de delivery):
    - Registra cada intento de envío a cada dispositivo.
-   - Estados: `'pendiente'`, `'enviado'`, `'fallido'`, `'agotado'` (supera reintentos).
+   - Estados: `'pendiente'`, `'enviado'`, `'simulado'`, `'fallido'`, `'agotado'` (supera reintentos).
    - Reintentos con backoff creciente (2 min, 10 min, 30 min; máx. 3 reintentos por dispositivo).
    - Si se agotan los reintentos, marcado como `'agotado'` para evitar re-procesamiento.
-   - Contiene deduplicación: tipos 'nuevo' y 'resuelto' tienen constraint UNIQUE por incidente,
-     pero 'reaviso' es repetible (intencional).
+   - Contiene deduplicación: tipos 'nuevo' y 'resuelto' tienen una fila única por dispositivo e incidente;
+     'reaviso' crea una fila por ciclo exitoso, y reutiliza la fila fallida/agotada del ciclo anterior
+     cuando corresponde un nuevo intervalo.
 
 2. **`notificaciones_usuario`** (lo que ve el usuario en la app):
    - Registra notificaciones VISIBLES para el usuario.
@@ -2796,11 +2843,27 @@ Cron cada 2 minutos (configuración en `server.js` con `cron.schedule('*/2 * * *
 - Si intento 3 falla: reintentar después de 30 min.
 - Si intento 4 falla: marcar dispositivo como 'agotado', no reintentar más.
 
-**Estado terminal 'agotado':**
-Cuando un dispositivo supera los 3 reintentos, se marca como `estado = 'agotado'` en `notificaciones_enviadas`. Una vez agotado, el dispositivo NO se reintenta más para ese incidente/tipo, incluso si el feed se actualiza con nuevos reavisos.
+**Semántica de 'agotado':**
+El primer envío y hasta tres reintentos son cuatro intentos físicos como máximo. Si el cuarto
+intento falla, la fila queda con `intentos = 4`; en el siguiente barrido se marca
+`estado = 'agotado'` sin otro envío. Es terminal para los tipos de ciclo único `nuevo` y
+`resuelto`. Para `reaviso`, cada intervalo vencido inicia un ciclo nuevo: el worker puede
+reutilizar una fila `fallido`/`agotado`, ponerla en `pendiente` y volver a intentar; un
+`agotado` de un ciclo anterior no bloquea el próximo reaviso. El feed mantiene una sola fila
+visible por usuario, tipo e incidente y actualiza su fecha/cuerpo.
 
-**Destinatarios:** usuarios con `preferencias_notificacion.incidentes_criticos = 1`
-(default 1, opt-out, no opt-in).
+**Destinatarios:** usuarios activos con permiso `notificaciones-ml` y
+`preferencias_notificacion.incidentes_criticos = 1` (ausencia de fila equivale a habilitado).
+La app consulta/actualiza esa preferencia en `GET/PATCH /api/v1/notifications/preferences`.
+
+**Proveedor y dispositivo:** `PUSH_PROVIDER=mock` es solo desarrollo y persiste `simulado`;
+nunca se presenta como entrega enviada. `PUSH_PROVIDER=fcm` usa FCM HTTP v1 y requiere
+credenciales seguras de entorno. Tokens y payloads no se escriben en logs. Cada delivery se
+reserva antes del side effect mediante una clave de idempotencia; una reserva `pendiente` queda
+en estado incierto y no se reenvía automáticamente si no se pudo persistir el resultado. Cada
+dispositivo activo pertenece a un usuario y tiene un token activo único; reasignar ese token
+revoca la fila anterior y sus refresh tokens, mientras DELETE revoca el dispositivo y todos sus
+refresh tokens en una única transacción.
 
 **FAIL-OPEN:** cualquier error en el envío del worker (proveedor caído, DB busy) nunca lanza
 una excepción. El worker continúa procesando otros incidentes. Errores se loguean en consola.
@@ -2821,51 +2884,27 @@ Las otras opciones consideradas:
 - (b) Callback opcional → parámetro nuevo en firmas de funciones, mayor complejidad, sin
   beneficio claro vs. (c).
 
-## Compatibilidad del contrato móvil (Hito 7)
+## Estado de conformidad Hito 7
 
-El contrato OpenAPI y el backend quedan alineados en los tres puntos que afectan a estos
-endpoints:
+Las rutas móviles implementadas, su autenticación y sus tipos de notificación quedan alineados
+con `openapi/mobile-v1.yaml`. El panel web conserva su contrato legacy y sus cookies.
 
-### 1. Enum de tipos de notificación no coincide
+### Contrato implementado
 
-**En el YAML:** `Notification.tipo` es un enum cerrado:
-`['pregunta_nueva', 'mensaje_postventa', 'reclamo', 'pedido_nuevo', 'error_stock_ml']`
+`Notification.tipo` usa `nuevo`, `reaviso` y `resuelto`, igual que el worker y el OpenAPI.
+Los paths implementados son `/api/v1/devices`, `/api/v1/notifications` y sus subrutas,
+protegidos por Bearer JWT. Los paths restantes del OpenAPI son contratos de entregas posteriores.
 
-**En el código (workerNotificacionesPush.js):** Los tipos emitidos son:
-`['nuevo', 'reaviso', 'resuelto']`
+### Refresh y revocación
 
-**Impacto:** Si la app generó un cliente desde el YAML y hace type-checking estricto sobre el
-enum, el parseo se rompe cuando recibe un tipo no esperado.
+`mobile_refresh_tokens` guarda solo hashes, rota el token en una transacción y lo liga al
+dispositivo. DELETE revoca dispositivo y refresh tokens asociados atómicamente.
 
-**Resolución:** el enum OpenAPI refleja los tipos que emite el worker: `nuevo`, `reaviso` y
-`resuelto`.
+### Configuración
 
-### 2. Rutas montadas sin prefijo `/v1`
+La API móvil usa JWT de acceso con 15 minutos de vida y errores `{error:{code,message}}`.
+La producción debe aportar `MOBILE_JWT_SECRET` (mínimo 32 caracteres) y credenciales FCM fuera
+del repositorio. `PUSH_PROVIDER=mock` solo registra `simulado`, nunca una entrega enviada.
 
-**En el YAML:** `servers.url = ".../api/v1"` — rutas esperadas bajo ese prefijo.
-
-**En el código (server.js):** Las rutas están montadas directamente:
-- `POST /api/devices` (no `/api/v1/devices`)
-- `GET /api/notifications` (no `/api/v1/notifications`)
-
-**Impacto:** Clientes que respeten estrictamente el YAML fallarán al conectar.
-
-**Resolución:** se agregaron aliases `/api/v1/devices` y `/api/v1/notifications`; las rutas
-`/api/...` existentes se conservan por compatibilidad.
-
-### 3. Autenticación: cookie vs. JWT, respuesta error no normalizada
-
-**En el YAML:** Declara `bearerAuth` para la app móvil (`Authorization: Bearer <access_token>`).
-
-**En el código:** las rutas móviles `/api/v1` usan JWT; el panel web y los aliases históricos
-`/api` continúan usando sesión por cookie.
-
-**Respuesta:** los 401 reflejan la respuesta real de `requireAuth` (`{ ok:false, error:string }`).
-
-**Resolución:** Bloque 4 implementa access tokens JWT cortos y refresh tokens opacos rotativos,
-revocables por familia y dispositivo. El panel web conserva `express-session`.
-
----
-
-**Nota para el equipo de la app:** debe consumir estos endpoints bajo `/api/v1` enviando
-`Authorization: Bearer <access_token>`; el refresh token se envía solo a `/api/v1/auth/refresh`.
+La app debe consumir `/api/v1` con `Authorization: Bearer <access_token>`; el refresh token
+solo se envía a `/api/v1/auth/refresh` y `/api/v1/auth/logout`.

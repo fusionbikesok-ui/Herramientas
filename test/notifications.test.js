@@ -85,6 +85,34 @@ describe('routes/notifications', () => {
       db.close();
     });
 
+    it('hace round-trip del cursor ISO_TIMESTAMP:id y devuelve la página siguiente real', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db, { id: 1 });
+      const insert = db.prepare(`INSERT INTO notificaciones_usuario
+        (user_id, tipo, titulo, cuerpo, deep_link, leida, creado_en)
+        VALUES (1, 'nuevo', ?, 'body', 'incidentes', 0, ?)`);
+      const base = Date.parse('2026-08-28T15:00:00.000Z');
+      for (let i = 0; i < 21; i++) {
+        insert.run(`Notif ${i + 1}`, new Date(base + i * 1000).toISOString());
+      }
+      const app = buildApp(db, 1);
+
+      const first = await request(app).get('/api/notifications');
+      expect(first.status).toBe(200);
+      expect(first.body.items).toHaveLength(20);
+      expect(first.body.next_cursor).toBeTruthy();
+      const decoded = Buffer.from(first.body.next_cursor, 'base64url').toString('utf8');
+      expect(decoded).toMatch(/^2026-08-28T15:00:01\.000Z:\d+$/);
+
+      const second = await request(app).get('/api/notifications')
+        .query({ cursor: first.body.next_cursor });
+      expect(second.status).toBe(200);
+      expect(second.body.items).toHaveLength(1);
+      expect(second.body.items[0].titulo).toBe('Notif 1');
+      expect(second.body.next_cursor).toBeNull();
+      db.close();
+    });
+
     it('filtra notificaciones solo del usuario autenticado', async () => {
       const db = openDb(TEST_DB);
       seedUser(db, { id: 1, username: 'user1' });
@@ -109,6 +137,19 @@ describe('routes/notifications', () => {
 
       // Cursor corrupto (base64 inválido)
       const res = await request(app).get('/api/notifications?cursor=!!!invalid!!!');
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('cursor_invalido');
+      db.close();
+    });
+
+    it('rechaza un cursor con ID fuera de Number.isSafeInteger', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db);
+      const cursor = Buffer.from('2026-08-28T15:00:00.000Z:9007199254740992').toString('base64url');
+      const app = buildApp(db, 1);
+
+      const res = await request(app).get('/api/notifications').query({ cursor });
 
       expect(res.status).toBe(422);
       expect(res.body.error.code).toBe('cursor_invalido');
@@ -188,6 +229,18 @@ describe('routes/notifications', () => {
 
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('no_encontrado');
+      db.close();
+    });
+
+    it('rechaza un ID fuera de Number.isSafeInteger', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db, { id: 1 });
+      const app = buildApp(db, 1);
+
+      const res = await request(app).post('/api/notifications/9007199254740992/read');
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('id_invalido');
       db.close();
     });
 

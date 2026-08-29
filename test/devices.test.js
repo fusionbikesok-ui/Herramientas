@@ -57,6 +57,18 @@ describe('routes/devices', () => {
       db.close();
     });
 
+    it('rechaza POST sin body con 422 y no con 500', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db);
+      const app = buildApp(db, 1);
+
+      const res = await request(app).post('/api/devices');
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('platform_invalido');
+      db.close();
+    });
+
     it('rechaza request sin platform (422)', async () => {
       const db = openDb(TEST_DB);
       seedUser(db);
@@ -297,10 +309,14 @@ describe('routes/devices', () => {
       seedUser(db, { id: 2, username: 'user2' });
 
       const now = new Date().toISOString();
-      db.prepare(`
+      const oldInfo = db.prepare(`
         INSERT INTO device_tokens (user_id, token, plataforma, creado_en, actualizado_en)
         VALUES (?, ?, ?, ?, ?)
       `).run(2, 'shared-token', 'ios', now, now);
+      db.prepare(`INSERT INTO mobile_refresh_tokens
+        (token_hash, user_id, device_id, expires_at, creado_en)
+        VALUES ('old-refresh-hash', 2, ?, ?, ?)`)
+        .run(oldInfo.lastInsertRowid, new Date(Date.now() + 86400000).toISOString(), now);
 
       const app = buildApp(db, 1);
 
@@ -322,6 +338,8 @@ describe('routes/devices', () => {
       // Verificar que la vieja fila está revocada (ALTO 1 fix)
       const oldDevice = db.prepare('SELECT * FROM device_tokens WHERE token = ? AND user_id = 2').get('shared-token');
       expect(oldDevice.revocado_en).not.toBeNull();
+      const oldRefresh = db.prepare("SELECT revocado_en FROM mobile_refresh_tokens WHERE token_hash = 'old-refresh-hash'").get();
+      expect(oldRefresh.revocado_en).toBeTruthy();
 
       db.close();
     });
@@ -413,6 +431,25 @@ describe('routes/devices', () => {
 
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('no_encontrado');
+      db.close();
+    });
+
+    it('rechaza IDs parciales y no revoca el prefijo numérico', async () => {
+      const db = openDb(TEST_DB);
+      seedUser(db);
+      const ts = new Date().toISOString();
+      const info = db.prepare(`
+        INSERT INTO device_tokens (user_id, token, plataforma, creado_en, actualizado_en)
+        VALUES (1, 'strict-id-token', 'ios', ?, ?)
+      `).run(ts, ts);
+      const app = buildApp(db, 1);
+
+      const res = await request(app).delete(`/api/devices/${info.lastInsertRowid}abc`);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('id_invalido');
+      expect(db.prepare('SELECT revocado_en FROM device_tokens WHERE id = ?').get(info.lastInsertRowid).revocado_en)
+        .toBeNull();
       db.close();
     });
 

@@ -361,6 +361,7 @@ describe('GET /api/notificaciones-ml/pendientes y /count', () => {
 });
 
 describe('Webhook HTTP: topic post_purchase con acción claims', () => {
+  const mobileJwtSecret = 'claims-http-test-mobile-secret-32-chars';
   let app;
   beforeEach(() => { vi.clearAllMocks(); vi.stubEnv('ML_USER_ID', '123'); });
   afterEach(() => {
@@ -384,7 +385,7 @@ describe('Webhook HTTP: topic post_purchase con acción claims', () => {
     });
 
     const file = path.join(os.tmpdir(), `notif_ml_http_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
-    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', wooCfg: {}, geminiKey: '', mlCfg: {} });
+    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
     app._tmpFile = file;
     const r = await request(app).post('/api/ml/notificacion').send({
       topic: 'post_purchase', actions: ['claims'], user_id: '123',
@@ -402,7 +403,7 @@ describe('Webhook HTTP: topic post_purchase con acción claims', () => {
 
   it('usa claim_id del body o resource y descarta action distinta/sin id', async () => {
     const file = path.join(os.tmpdir(), `notif_ml_http_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
-    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', wooCfg: {}, geminiKey: '', mlCfg: {} });
+    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
     app._tmpFile = file;
     mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'body_id', status: 'opened' } });
     await request(app).post('/api/ml/notificacion').send({
@@ -421,7 +422,7 @@ describe('Webhook HTTP: topic post_purchase con acción claims', () => {
 
   it('procesa el topic legado claims por HTTP real', async () => {
     const file = path.join(os.tmpdir(), `notif_ml_http_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
-    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', wooCfg: {}, geminiKey: '', mlCfg: {} });
+    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
     app._tmpFile = file;
     mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'legacy_http', status: 'opened' } });
     const r = await request(app).post('/api/ml/notificacion').send({
@@ -435,7 +436,7 @@ describe('Webhook HTTP: topic post_purchase con acción claims', () => {
 
   it('rechaza una cuenta ML distinta sin llamar a ML', async () => {
     const file = path.join(os.tmpdir(), `notif_ml_http_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
-    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', wooCfg: {}, geminiKey: '', mlCfg: {} });
+    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
     app._tmpFile = file;
     const r = await request(app).post('/api/ml/notificacion').send({
       topic: 'post_purchase', actions: ['claims'], user_id: 'otro',

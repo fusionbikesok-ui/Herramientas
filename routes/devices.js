@@ -7,7 +7,6 @@
 
 import express from 'express';
 import { requireAuth } from '../lib/auth.js';
-import { requireMobileAuth, validarRefreshToken, asociarRefreshConDispositivo, revocarRefreshPorDispositivo } from '../lib/mobileAuth.js';
 import { tokenValido } from '../lib/notificacionesPush.js';
 
 const now = () => new Date().toISOString();
@@ -33,9 +32,8 @@ function deviceAPublico(row) {
   };
 }
 
-export function devicesRouter(db, options = {}) {
+export function devicesRouter(db, authMiddleware = requireAuth(db)) {
   const router = express.Router();
-  const auth = options.mobile ? requireMobileAuth(db) : requireAuth(db);
 
   /**
    * POST /devices
@@ -51,14 +49,10 @@ export function devicesRouter(db, options = {}) {
    * Response 422: Falta platform/push_token o valores inválidos
    * Response 500: Error interno
    */
-  router.post('/', auth, (req, res) => {
+  router.post('/', authMiddleware, (req, res) => {
     try {
-      const { platform, push_token, device_name, refresh_token } = req.body;
+      const { platform, push_token, device_name } = req.body || {};
       const userId = req.user.id;
-
-      if (options.mobile && (!refresh_token || !validarRefreshToken(db, refresh_token, userId))) {
-        return res.status(422).json({ error: { code: 'refresh_token_invalido', message: 'refresh_token vigente requerido para registrar el dispositivo' } });
-      }
 
       // Validación
       if (!platform || !platformaValida(platform)) {
@@ -97,7 +91,6 @@ export function devicesRouter(db, options = {}) {
           `).run(ts, device_name || null, existente.id);
 
           const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(existente.id);
-          if (options.mobile) asociarRefreshConDispositivo(db, refresh_token, userId, device.id);
           return res.json(deviceAPublico(device));
         } else {
           // ALTO 1 fix (6ª pasada revisor): el token pertenece a OTRO usuario.
@@ -111,24 +104,23 @@ export function devicesRouter(db, options = {}) {
           // quedando silenciado para ese incidente. Con una fila nueva, el nuevo usuario
           // tiene device_token_id nuevo, empezando sin historial heredado.
 
-          // Paso 1: Revocar la fila vieja
-          db.prepare(`
-            UPDATE device_tokens
-            SET revocado_en = ?, actualizado_en = ?
-            WHERE id = ?
-          `).run(ts, ts, existente.id);
-
-          // Paso 2: Crear una NUEVA fila con el mismo token pero para el nuevo usuario
-          const info = db
-            .prepare(`
+          // Revocación + alta forman una sola unidad para evitar estados parciales.
+          const info = db.transaction(() => {
+            db.prepare(`
+              UPDATE device_tokens
+              SET revocado_en = ?, actualizado_en = ?
+              WHERE id = ?
+            `).run(ts, ts, existente.id);
+            db.prepare('UPDATE mobile_refresh_tokens SET revocado_en = ? WHERE device_id = ? AND revocado_en IS NULL')
+              .run(ts, existente.id);
+            return db.prepare(`
               INSERT INTO device_tokens
               (user_id, token, plataforma, nombre_dispositivo, creado_en, actualizado_en)
               VALUES (?, ?, ?, ?, ?, ?)
-            `)
-            .run(userId, push_token, platform, device_name || null, ts, ts);
+            `).run(userId, push_token, platform, device_name || null, ts, ts);
+          })();
 
           const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(info.lastInsertRowid);
-          if (options.mobile) asociarRefreshConDispositivo(db, refresh_token, userId, device.id);
           return res.json(deviceAPublico(device));
         }
       }
@@ -144,7 +136,6 @@ export function devicesRouter(db, options = {}) {
           .run(userId, push_token, platform, device_name || null, ts, ts);
 
         const device = db.prepare('SELECT * FROM device_tokens WHERE id = ?').get(info.lastInsertRowid);
-        if (options.mobile) asociarRefreshConDispositivo(db, refresh_token, userId, device.id);
         return res.json(deviceAPublico(device));
       } catch (insertErr) {
         // Esto no debería pasar (ya verificamos arriba), pero por si acaso
@@ -179,21 +170,33 @@ export function devicesRouter(db, options = {}) {
    * Response 404: Dispositivo no encontrado
    * Response 500: Error interno
    */
-  router.delete('/:id', auth, (req, res) => {
+  router.delete('/:id', authMiddleware, (req, res) => {
     try {
       const deviceId = req.params.id;
       const userId = req.user.id;
 
+      // El ID debe validarse completo: parseInt('12-basura', 10) devuelve 12 y
+      // permitiría revocar un dispositivo distinto del que pidió el cliente.
+      if (!/^\d+$/.test(deviceId) || !Number.isSafeInteger(Number(deviceId)) || Number(deviceId) <= 0) {
+        return res.status(422).json({
+          error: {
+            code: 'id_invalido',
+            message: 'El ID del dispositivo debe ser un entero positivo',
+          },
+        });
+      }
+      const numericDeviceId = Number(deviceId);
+
       // Verificar que el dispositivo existe y pertenece al usuario autenticado
       const device = db
         .prepare('SELECT * FROM device_tokens WHERE id = ? AND user_id = ?')
-        .get(parseInt(deviceId, 10), userId);
+        .get(numericDeviceId, userId);
 
       if (!device) {
         // Podría no existir (404) o existir pero ser de otro usuario (403)
         const existeParaOtro = db
           .prepare('SELECT id FROM device_tokens WHERE id = ?')
-          .get(parseInt(deviceId, 10));
+          .get(numericDeviceId);
 
         if (existeParaOtro) {
           return res.status(403).json({
@@ -212,15 +215,13 @@ export function devicesRouter(db, options = {}) {
         });
       }
 
-      // Revocar: marcar con revocado_en = ahora()
+      // Revocar el dispositivo y sus refresh tokens en una sola transacción.
       const ts = now();
-      db.prepare('UPDATE device_tokens SET revocado_en = ?, actualizado_en = ? WHERE id = ?').run(
-        ts,
-        ts,
-        device.id
-      );
-
-      if (options.mobile) revocarRefreshPorDispositivo(db, device.id, userId);
+      db.transaction(() => {
+        db.prepare('UPDATE device_tokens SET revocado_en = ?, actualizado_en = ? WHERE id = ?').run(ts, ts, device.id);
+        db.prepare('UPDATE mobile_refresh_tokens SET revocado_en = ? WHERE device_id = ? AND revocado_en IS NULL')
+          .run(ts, device.id);
+      })();
 
       return res.json({ ok: true });
     } catch (err) {

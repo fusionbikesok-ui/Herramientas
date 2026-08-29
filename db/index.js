@@ -3,8 +3,134 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { migrateMlClaims } from '../migrations/028_ml_reclamos_campos_tipo_razon.mjs';
+import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function aplicarMigracionHito7(db) {
+  try {
+    db.transaction(() => {
+      // Todo el esquema Hito 7, incluidos sus índices, se aplica como una unidad. Un
+      // conflicto de unicidad o cualquier otro error hace rollback y deja user_version
+      // en la versión anterior.
+      db.exec(`CREATE TABLE IF NOT EXISTS device_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token TEXT NOT NULL,
+        plataforma TEXT NOT NULL CHECK(plataforma IN ('ios', 'android', 'web')),
+        nombre_dispositivo TEXT,
+        creado_en TEXT NOT NULL,
+        actualizado_en TEXT NOT NULL,
+        revocado_en TEXT
+      )`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_device_tokens_unique_active
+        ON device_tokens(token) WHERE revocado_en IS NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_device_tokens_usuario_activo
+        ON device_tokens(user_id, revocado_en) WHERE revocado_en IS NULL`);
+
+      db.exec(`CREATE TABLE IF NOT EXISTS preferencias_notificacion (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        incidentes_criticos INTEGER NOT NULL DEFAULT 1,
+        actualizado_en TEXT NOT NULL
+      )`);
+
+      db.exec(`CREATE TABLE IF NOT EXISTS notificaciones_enviadas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_token_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
+        tipo TEXT NOT NULL,
+        incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
+        estado TEXT NOT NULL,
+        intentos INTEGER NOT NULL DEFAULT 1,
+        error TEXT,
+        creado_en TEXT NOT NULL
+      )`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_dedupe
+        ON notificaciones_enviadas(device_token_id, tipo, incidente_id)
+        WHERE tipo IN ('nuevo', 'resuelto')`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_pendientes
+        ON notificaciones_enviadas(device_token_id, estado, creado_en)
+        WHERE estado IN ('pendiente', 'fallido', 'agotado')`);
+
+      db.exec(`CREATE TABLE IF NOT EXISTS notificaciones_usuario (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tipo TEXT NOT NULL,
+        titulo TEXT NOT NULL,
+        cuerpo TEXT NOT NULL,
+        deep_link TEXT,
+        leida INTEGER NOT NULL DEFAULT 0,
+        incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
+        creado_en TEXT NOT NULL
+      )`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_no_leidas
+        ON notificaciones_usuario(user_id, leida, creado_en DESC)`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_usuario_dedupe
+        ON notificaciones_usuario(user_id, tipo, incidente_id)`);
+
+      // Una base de una versión anterior puede tener esta tabla con device_id nullable.
+      // Se reconstruye dentro de esta misma transacción; ningún huérfano se descarta.
+      db.exec(`CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash TEXT NOT NULL UNIQUE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
+        expires_at TEXT NOT NULL,
+        revocado_en TEXT,
+        reemplazado_por TEXT,
+        creado_en TEXT NOT NULL
+      )`);
+      let refreshColumns = db.prepare('PRAGMA table_info(mobile_refresh_tokens)').all();
+      if (!refreshColumns.some((column) => column.name === 'reemplazado_por')) {
+        db.exec('ALTER TABLE mobile_refresh_tokens ADD COLUMN reemplazado_por TEXT');
+        refreshColumns = db.prepare('PRAGMA table_info(mobile_refresh_tokens)').all();
+      }
+      const refreshDevice = refreshColumns.find((column) => column.name === 'device_id');
+      if (!refreshDevice || refreshDevice.notnull !== 1) {
+        const orphaned = db.prepare(
+          'SELECT COUNT(*) AS count FROM mobile_refresh_tokens WHERE device_id IS NULL'
+        ).get().count;
+        if (orphaned > 0) {
+          throw new Error(`hay ${orphaned} refresh token(s) huérfano(s); no se puede aplicar NOT NULL`);
+        }
+        db.exec(`
+          DROP INDEX IF EXISTS idx_mobile_refresh_device;
+          DROP TABLE IF EXISTS mobile_refresh_tokens_nueva;
+          CREATE TABLE mobile_refresh_tokens_nueva (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            device_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
+            expires_at TEXT NOT NULL,
+            revocado_en TEXT,
+            reemplazado_por TEXT,
+            creado_en TEXT NOT NULL
+          );
+          INSERT INTO mobile_refresh_tokens_nueva
+            (id, token_hash, user_id, device_id, expires_at, revocado_en, reemplazado_por, creado_en)
+          SELECT id, token_hash, user_id, device_id, expires_at, revocado_en, reemplazado_por, creado_en
+            FROM mobile_refresh_tokens;
+          DROP TABLE mobile_refresh_tokens;
+          ALTER TABLE mobile_refresh_tokens_nueva RENAME TO mobile_refresh_tokens;
+        `);
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mobile_refresh_device
+        ON mobile_refresh_tokens(device_id, revocado_en)`);
+
+      const sentColumns = db.prepare('PRAGMA table_info(notificaciones_enviadas)').all()
+        .map((column) => column.name);
+      if (!sentColumns.includes('idempotencia')) {
+        db.exec('ALTER TABLE notificaciones_enviadas ADD COLUMN idempotencia TEXT');
+      }
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_idempotencia
+        ON notificaciones_enviadas(idempotencia) WHERE idempotencia IS NOT NULL`);
+
+      // Solo se alcanza después de aplicar tablas, reconstrucción y todos los índices.
+      db.pragma('user_version = 30');
+    })();
+  } catch (err) {
+    throw new Error(`Migración 030 no aplicada: ${err.message}`, { cause: err });
+  }
+}
 
 export function openDb(dbPath) {
   const dir = path.dirname(dbPath);
@@ -16,6 +142,7 @@ export function openDb(dbPath) {
   // Reclamos ML: las bases existentes ya tienen ml_reclamos sin estos campos; el
   // CREATE TABLE IF NOT EXISTS del router no puede ampliar una tabla existente.
   migrateMlClaims(db);
+  migrateClaimsBackbone(db);
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
@@ -410,73 +537,17 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_metricas_ciclo_integracion ON metricas_ciclo_sync(integracion, proceso, iniciado_en)'); } catch (_) {}
 
-  // Hito 7: Infraestructura backend de notificaciones push (iOS, Android, web).
-  // Tabla de dispositivos registrados para push. Sin UNIQUE(token) inline: la reasignación
-  // de un token a otro usuario (ver routes/devices.js) revoca la fila vieja y crea una nueva
-  // con el mismo token, así que la unicidad real es "un token, a lo sumo una fila activa" —
-  // eso lo impone el índice único parcial de abajo, no una constraint de columna.
-  try { db.exec(`CREATE TABLE IF NOT EXISTS device_tokens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token TEXT NOT NULL,
-    plataforma TEXT NOT NULL CHECK(plataforma IN ('ios', 'android', 'web')),
-    nombre_dispositivo TEXT,
-    creado_en TEXT NOT NULL,
-    actualizado_en TEXT NOT NULL,
-    revocado_en TEXT
-  )`); } catch (_) {}
-  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_device_tokens_unique_active
-    ON device_tokens(token) WHERE revocado_en IS NULL`); } catch (_) {}
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_device_tokens_usuario_activo
-    ON device_tokens(user_id, revocado_en) WHERE revocado_en IS NULL`); } catch (_) {}
-
-  // Preferencias de notificación por usuario (extensible a futuro).
-  try { db.exec(`CREATE TABLE IF NOT EXISTS preferencias_notificacion (
-    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    incidentes_criticos INTEGER NOT NULL DEFAULT 1,
-    actualizado_en TEXT NOT NULL
-  )`); } catch (_) {}
-
-  // Log de notificaciones enviadas — tracking y deduplicación.
-  try { db.exec(`CREATE TABLE IF NOT EXISTS notificaciones_enviadas (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_token_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
-    tipo TEXT NOT NULL,
-    incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
-    estado TEXT NOT NULL,
-    intentos INTEGER NOT NULL DEFAULT 1,
-    error TEXT,
-    creado_en TEXT NOT NULL
-  )`); } catch (_) {}
-  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_dedupe
-    ON notificaciones_enviadas(device_token_id, tipo, incidente_id)
-    WHERE tipo IN ('nuevo', 'resuelto')`); } catch (_) {}
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_pendientes
-    ON notificaciones_enviadas(device_token_id, estado, creado_en)
-    WHERE estado IN ('pendiente', 'fallido', 'agotado')`); } catch (_) {}
-
-  // Notificaciones visibles al usuario (lo que ve en la app).
-  // Separado del log de envíos: este es "qué notificaciones tiene el usuario",
-  // el otro es "qué intentos de envío se hicieron". Una notificación puede no haberse
-  // enviado (estado='fallido' en notificaciones_enviadas) pero seguir existiendo acá
-  // para que el usuario la vea y sepa que pasó algo.
-  try { db.exec(`CREATE TABLE IF NOT EXISTS notificaciones_usuario (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    tipo TEXT NOT NULL,
-    titulo TEXT NOT NULL,
-    cuerpo TEXT NOT NULL,
-    deep_link TEXT,
-    leida INTEGER NOT NULL DEFAULT 0,
-    incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
-    creado_en TEXT NOT NULL
-  )`); } catch (_) {}
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_no_leidas
-    ON notificaciones_usuario(user_id, leida, creado_en DESC)`); } catch (_) {}
-  // BLOQUEANTE 2 fix: índice único para deduplicación de notificaciones_usuario.
-  // Un usuario solo debe ver UNA notificación por (tipo, incidente), no una por dispositivo.
-  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_usuario_dedupe
-    ON notificaciones_usuario(user_id, tipo, incidente_id)`); } catch (_) {}
+  // Hito 7: la migración completa es atómica y no silencia errores. Esto cubre tanto una
+  // base pre-Hito7 como una instalación que ya tenía el refresh legacy con device_id nullable.
+  // `user_version` solo cambia después de que tablas, reconstrucción e índices terminaron.
+  if (db.pragma('user_version', { simple: true }) < 30) {
+    try {
+      aplicarMigracionHito7(db);
+    } catch (err) {
+      db.close();
+      throw err;
+    }
+  }
 
   return db;
 }

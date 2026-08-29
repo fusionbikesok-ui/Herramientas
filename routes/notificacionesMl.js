@@ -1,5 +1,6 @@
 import express from 'express';
 import { mlFetch } from '../lib/mlClient.js';
+import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs';
 
 // Notificaciones ML (webhooks): preguntas, mensajes y reclamos sin resolver.
 // Ver docs/superpowers/plans (sesión 2026-08-26) — la app de ML tiene TODOS los topics
@@ -12,6 +13,37 @@ import { mlFetch } from '../lib/mlClient.js';
 
 const now = () => new Date().toISOString();
 
+function proyectarClaimEnBackbone(db, { claimId, estado, titulo, detalle, ocurridoEn }, txDb = null) {
+  const target = txDb || db;
+  const recibidoEn = now();
+  const dedupeKey = `ml:claim:${claimId}:${estado}`;
+  const eventId = `ml-claim-${claimId}-${estado}`;
+  const correlationId = `ml-claim-${claimId}`;
+  const guardar = () => {
+    target.prepare(`INSERT OR IGNORE INTO integration_events
+      (event_id,event_type,channel,source,external_event_id,resource_id,payload_version,
+       occurred_at,received_at,correlation_id,dedupe_key,metadata_json,status)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      eventId, 'claim.received', 'ml', 'mercadolibre', claimId, claimId, 'v1',
+      ocurridoEn || recibidoEn, recibidoEn, correlationId, dedupeKey,
+      JSON.stringify({ estado, titulo: titulo || null }), 'pending'
+    );
+    const evento = target.prepare('SELECT event_id FROM integration_events WHERE dedupe_key = ?').get(dedupeKey);
+    if (!evento) return;
+    target.prepare(`INSERT OR IGNORE INTO integration_jobs
+      (event_id,job_type,available_at) VALUES (?,?,?)`).run(evento.event_id, 'claim.project', recibidoEn);
+    target.prepare(`INSERT OR IGNORE INTO integration_event_history
+      (event_id,stage,to_status,resource_id,correlation_id,safe_message,created_at)
+      VALUES (?,?,?,?,?,?,?)`).run(evento.event_id, 'event.persist', 'pending', claimId,
+      correlationId, 'claim durable recibido', recibidoEn);
+    target.prepare(`INSERT OR IGNORE INTO inbox_items
+      (event_id,channel,resource_id,title,preview,status,version,created_at,updated_at)
+      VALUES (?,?,?,?,?,'unread',1,?,?)`).run(evento.event_id, 'ml', claimId,
+      titulo || `Reclamo ${claimId}`, detalle || null, recibidoEn, recibidoEn);
+  };
+  (txDb ? guardar : db.transaction(guardar))();
+}
+
 export function extraerClaimId(resource) {
   return String(resource || '').match(/\/claims\/([A-Za-z0-9_-]+)(?:[\/?#]|$)/)?.[1] || null;
 }
@@ -21,6 +53,7 @@ function guardarReclamoMinimo(db, id, recurso) {
   const existente = db.prepare('SELECT intentos FROM ml_reclamos WHERE id = ?').get(id);
   const minutos = Math.min(1440, 10 * (2 ** Math.min(existente?.intentos || 0, 7)));
   const proximo = new Date(Date.now() + minutos * 60 * 1000).toISOString();
+  db.transaction(() => {
   db.prepare(`
     INSERT INTO ml_reclamos (id, recurso, estado, actualizado_en, consultado_en_ml, ultimo_error_en, intentos, proximo_intento_en)
     VALUES (@id, @recurso, 'sin_consultar', @actualizado_en, 0, @actualizado_en, 1, @proximo_intento_en)
@@ -32,6 +65,8 @@ function guardarReclamoMinimo(db, id, recurso) {
       intentos=ml_reclamos.intentos + 1,
       proximo_intento_en=excluded.proximo_intento_en
   `).run({ id, recurso: recurso || null, actualizado_en: falladoEn, proximo_intento_en: proximo });
+  proyectarClaimEnBackbone(db, { claimId: id, estado: 'sin_consultar', ocurridoEn: falladoEn }, db);
+  })();
 }
 
 function ensureTables(db) {
@@ -67,6 +102,9 @@ function ensureTables(db) {
     )`).run();
     db.prepare('CREATE INDEX IF NOT EXISTS idx_ml_reclamos_pendientes ON ml_reclamos(cerrado_en, fecha_creacion)').run();
   } catch (_) { /* ya existen */ }
+  // Algunas integraciones invocan este router con una DB desnuda (tests y workers aislados);
+  // asegurar también el backbone mantiene el contrato sin depender del bootstrap del servidor.
+  migrateClaimsBackbone(db);
 }
 
 // ── Ingesta desde el webhook (llamadas por server.js al recibir la notificación) ──
@@ -184,6 +222,7 @@ export async function ingerirReclamo(db, mlCfg, resource, originalResource = res
   const ahora_cerrado = estado.toLowerCase() === 'closed';
 
   // Persistir: incluir type, reason_id, resource_id si vienen en el payload.
+  db.transaction(() => {
   db.prepare(`
     INSERT INTO ml_reclamos (
     id, recurso, estado, titulo, detalle, fecha_creacion, cerrado_en, actualizado_en,
@@ -226,6 +265,14 @@ export async function ingerirReclamo(db, mlCfg, resource, originalResource = res
     resource_id: c.resource_id || null,
     consultado_en_ml: 1,
   });
+  proyectarClaimEnBackbone(db, {
+    claimId: canonicalId,
+    estado,
+    titulo: c.title || c.reason,
+    detalle: c.description || c.message,
+    ocurridoEn: c.date_created || c.created_at,
+  }, db);
+  })();
 }
 
 export async function reintentarReclamosSinConsultar(db, mlCfg, limite = 10) {

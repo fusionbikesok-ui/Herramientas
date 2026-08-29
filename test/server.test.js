@@ -5,6 +5,7 @@ import { buildApp } from '../server.js';
 import { hashPassword } from '../lib/auth.js';
 
 const TEST_DB = './test/tmp-server.sqlite';
+const MOBILE_SECRET = 'mobile-secret-for-tests-at-least-32-chars';
 let currentApp;
 
 // La app usa sesión (cookie, /api/auth/login) — no HTTP Basic Auth. Sembrar un
@@ -32,7 +33,7 @@ describe('server', () => {
   });
 
   it('serves static pages without credentials (auth is on /api only)', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const stock = await request(app).get('/stock/');
     const etiquetas = await request(app).get('/etiquetas/');
@@ -53,7 +54,7 @@ describe('server', () => {
   });
 
   it('redirects the root (/) to /herramientas/home/', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const res = await request(app).get('/').redirects(0);
     expect(res.status).toBe(302);
@@ -61,14 +62,14 @@ describe('server', () => {
   });
 
   it('rejects API requests without sesión', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const res = await request(app).get('/api/woo/catalogo');
     expect(res.status).toBe(401);
   });
 
   it('mounts the woo, gemini, nuevos-productos, mapeo, csv, matcher and sync API routers', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const agent = await loginComoAdmin(app);
 
@@ -86,7 +87,7 @@ describe('server', () => {
   });
 
   it('GET /api/ml/token-estado: accesible por cualquier autenticado, fail-closed sin token', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const agent = await loginComoAdmin(app);
 
@@ -102,7 +103,7 @@ describe('server', () => {
   });
 
   it('GET /api/ml/token-estado: token vigente reporta ok:true', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const now = new Date().toISOString();
     const vence = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
@@ -116,5 +117,84 @@ describe('server', () => {
     expect(res.body.vencido).toBe(false);
     expect(res.body.requiere_reautorizacion).toBe(false);
     expect(res.body.minutos_restantes).toBeGreaterThan(0);
+  });
+
+  it('rechaza construir la app sin MOBILE_JWT_SECRET válido', () => {
+    expect(() => buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' }))
+      .toThrow(/MOBILE_JWT_SECRET/);
+  });
+
+  it('API móvil real: login, Bearer JWT, permisos, refresh y revocación atómica del dispositivo', async () => {
+    const app = buildApp({
+      dbPath: TEST_DB,
+      sessionSecret: 's',
+      mobileJwtSecret: 'mobile-secret-for-tests-at-least-32-chars',
+      wooCfg: {},
+      geminiKey: 'k',
+    });
+    currentApp = app;
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, 0, 1, ?, ?)`).run('mobile', hashPassword('correcta123'), now, now);
+    app._db.prepare(`INSERT INTO user_permisos (user_id, herramienta, nivel)
+      SELECT id, 'notificaciones-ml', 'read' FROM users WHERE username = 'mobile'`).run();
+
+    const login = await request(app).post('/api/v1/auth/login').send({
+      username: 'mobile', password: 'correcta123', platform: 'android', push_token: 'mobile-token',
+    });
+    expect(login.status).toBe(200);
+    expect(login.body.access_token).toBeTruthy();
+    expect(login.body.device_id).toBeTruthy();
+    const auth = { Authorization: `Bearer ${login.body.access_token}` };
+
+    const secondLogin = await request(app).post('/api/v1/auth/login').send({
+      username: 'mobile', password: 'correcta123', device_id: login.body.device_id,
+    });
+    expect(secondLogin.status).toBe(200);
+
+    expect((await request(app).get('/api/v1/me').set(auth)).status).toBe(200);
+    expect((await request(app).get('/api/v1/notifications').set(auth)).status).toBe(200);
+    expect((await request(app).get('/api/v1/notifications/preferences').set(auth)).body)
+      .toEqual({ incidentes_criticos: true });
+    const preference = await request(app).patch('/api/v1/notifications/preferences').set(auth)
+      .send({ incidentes_criticos: false });
+    expect(preference.status).toBe(200);
+    expect(preference.body).toEqual({ incidentes_criticos: false });
+    expect((await request(app).get('/api/v1/devices')).status).toBe(401);
+
+    const deleted = await request(app).delete(`/api/v1/devices/${login.body.device_id}`).set(auth);
+    expect(deleted.status).toBe(200);
+    const refresh = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: login.body.refresh_token });
+    expect(refresh.status).toBe(401);
+    const refresh2 = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: secondLogin.body.refresh_token });
+    expect(refresh2.status).toBe(401);
+    const revoked = app._db.prepare('SELECT revocado_en FROM mobile_refresh_tokens WHERE device_id = ?')
+      .get(Number(login.body.device_id));
+    expect(revoked.revocado_en).toBeTruthy();
+  });
+
+  it('declara y aplica 403 para notificaciones sin permiso, y 422 para read inválido', async () => {
+    const app = buildApp({
+      dbPath: TEST_DB,
+      sessionSecret: 's',
+      mobileJwtSecret: MOBILE_SECRET,
+      wooCfg: {},
+      geminiKey: 'k',
+    });
+    currentApp = app;
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, 0, 1, ?, ?)`).run('sin-permiso', hashPassword('correcta123'), now, now);
+    const login = await request(app).post('/api/v1/auth/login').send({
+      username: 'sin-permiso', password: 'correcta123', platform: 'android', push_token: 'token-sin-permiso',
+    });
+    const auth = { Authorization: `Bearer ${login.body.access_token}` };
+    expect((await request(app).get('/api/v1/notifications').set(auth)).status).toBe(403);
+    expect((await request(app).post('/api/v1/notifications/abc/read').set(auth)).status).toBe(403);
+    expect((await request(app).get('/api/v1/notifications/preferences').set(auth)).status).toBe(403);
+
+    app._db.prepare(`INSERT INTO user_permisos (user_id, herramienta, nivel)
+      SELECT id, 'notificaciones-ml', 'read' FROM users WHERE username = 'sin-permiso'`).run();
+    expect((await request(app).post('/api/v1/notifications/abc/read').set(auth)).status).toBe(422);
   });
 });

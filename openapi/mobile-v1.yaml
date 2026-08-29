@@ -5,7 +5,8 @@ info:
   description: |
     Contrato congelado para la app móvil (React Native). Fuente de verdad para ambos lados
     (app y backend) — ver docs/superpowers/plans/plan-maestro-v2.md para el plan vigente.
-    Los endpoints de dispositivos y notificaciones están implementados en el backend.
+    La autenticación, dispositivos, notificaciones e inbox operativo de Claims están
+    implementados bajo /api/v1. Los demás paths se incorporan por entregas verticales.
 
     Convenciones:
     - Todas las fechas en ISO 8601 UTC.
@@ -26,6 +27,7 @@ tags:
   - name: orders
   - name: today
   - name: notifications
+  - name: inbox
 
 security:
   - bearerAuth: []
@@ -43,9 +45,24 @@ paths:
             schema:
               type: object
               required: [username, password]
+              description: Se debe enviar device_id o, en el primer registro, platform y push_token. device_id no puede combinarse con platform, push_token ni device_name.
+              oneOf:
+                - required: [device_id]
+                  not:
+                    anyOf:
+                      - required: [platform]
+                      - required: [push_token]
+                      - required: [device_name]
+                - required: [platform, push_token]
+                  not:
+                    required: [device_id]
               properties:
                 username: { type: string, example: "juan" }
                 password: { type: string, format: password, example: "••••••••" }
+                device_id: { type: string, description: "ID de dispositivo ya registrado" }
+                platform: { type: string, enum: [ios, android, web], description: "Usar junto con push_token en el primer login" }
+                push_token: { type: string, description: "Token APNs/FCM para registrar el dispositivo en el primer login" }
+                device_name: { type: string }
       responses:
         '200':
           description: Login exitoso
@@ -56,6 +73,7 @@ paths:
                 access_token: "eyJhbGciOi..."
                 refresh_token: "8f14e45f-ceea-467e-..."
                 expires_in: 900
+                device_id: "12"
                 user: { id: "12", username: "juan", roles: ["deposito"] }
         '401':
           description: Credenciales inválidas
@@ -64,7 +82,15 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: { code: "credenciales_invalidas", message: "Usuario o contraseña incorrectos" } }
         '422':
-          description: Body inválido (falta username o password)
+          description: Body inválido o dispositivo ausente/no perteneciente al usuario
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: Demasiados intentos fallidos desde este usuario/IP
+          headers:
+            Retry-After:
+              schema: { type: integer }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -97,6 +123,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: { code: "refresh_revocado", message: "La sesión de este dispositivo fue revocada" } }
+        '422':
+          description: Falta refresh_token en el body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '500':
           $ref: '#/components/responses/ServerError'
 
@@ -104,6 +135,15 @@ paths:
     post:
       tags: [auth]
       summary: Revoca el refresh_token actual (logout de este dispositivo, no de todos)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
       responses:
         '200':
           description: Logout exitoso
@@ -112,6 +152,8 @@ paths:
               schema: { type: object, properties: { ok: { type: boolean, example: true } } }
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '500':
           $ref: '#/components/responses/ServerError'
 
@@ -139,18 +181,18 @@ paths:
     post:
       tags: [devices]
       summary: Registra este dispositivo (necesario para push y para revocación por dispositivo)
+      description: Requiere un Bearer JWT válido. El usuario solo puede registrar su propio dispositivo.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [platform, push_token, refresh_token]
+              required: [platform, push_token]
               properties:
                 platform: { type: string, enum: [ios, android, web] }
                 push_token: { type: string, description: "Token APNs o FCM" }
                 device_name: { type: string, example: "iPhone de Juan" }
-                refresh_token: { type: string, description: "Refresh token vigente de esta sesión móvil; se vincula al dispositivo" }
       responses:
         '200':
           description: Dispositivo registrado
@@ -160,7 +202,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
-          description: Falta platform, push_token o refresh_token vigente, o platform no es ios/android/web
+          description: Falta platform o push_token, o platform no es ios/android/web
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -171,6 +213,7 @@ paths:
     delete:
       tags: [devices]
       summary: Elimina/revoca un dispositivo (invalida su refresh_token)
+      description: Requiere un Bearer JWT válido y revoca dispositivo y refresh tokens asociados en una transacción.
       parameters:
         - $ref: '#/components/parameters/PathId'
       responses:
@@ -183,6 +226,11 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: El dispositivo no pertenece al usuario autenticado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: El id del dispositivo no es un entero positivo completo
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -404,6 +452,7 @@ paths:
     get:
       tags: [notifications]
       summary: Lista de notificaciones del usuario/dispositivo
+      description: Requiere el permiso notificaciones-ml; solo devuelve notificaciones del usuario autenticado.
       parameters:
         - name: cursor
           in: query
@@ -420,8 +469,116 @@ paths:
                   next_cursor: { type: string, nullable: true }
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: Cursor inválido o mal formado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '500':
           $ref: '#/components/responses/ServerError'
+
+  /integration-notifications:
+    get:
+      tags: [inbox]
+      summary: Lista notificaciones lógicas del backbone de integraciones
+      description: Requiere el permiso notificaciones-ml y solo devuelve filas del usuario autenticado.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: Notificaciones lógicas y cursor siguiente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/IntegrationNotification' } }
+                  next_cursor: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /inbox:
+    get:
+      tags: [inbox]
+      summary: Lista trabajo operativo visible para el usuario
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [unread, read, resolved, archived] }
+        - name: channel
+          in: query
+          schema: { type: string, example: ml }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: Ítems de inbox
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/InboxItem' } }
+                  next_cursor: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /inbox/{id}:
+    get:
+      tags: [inbox]
+      summary: Obtiene un ítem de inbox
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200':
+          description: Ítem
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboxItem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /inbox/{id}/read:
+    post:
+      tags: [inbox]
+      summary: Marca un ítem como leído
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200': { description: Ítem actualizado, content: { application/json: { schema: { $ref: '#/components/schemas/InboxItem' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /inbox/{id}/resolve:
+    post:
+      tags: [inbox]
+      summary: Resuelve un ítem con control optimista de versión
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties: { version: { type: integer, minimum: 1 } }
+      responses:
+        '200': { description: Ítem resuelto, content: { application/json: { schema: { $ref: '#/components/schemas/InboxItem' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Conflicto de versión }
+
+  /inbox/{id}/claim:
+    post:
+      tags: [inbox]
+      summary: Toma el ítem y crea una notificación lógica para el usuario
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200': { description: Ítem asignado, content: { application/json: { schema: { $ref: '#/components/schemas/InboxItem' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: El ítem ya está asignado a otro usuario }
 
   /notifications/{id}/read:
     post:
@@ -437,10 +594,103 @@ paths:
               schema: { type: object, properties: { ok: { type: boolean, example: true } } }
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: El id de la notificación no es un entero positivo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ServerError'
+
+  /conversations/{id}:
+    get:
+      tags: [inbox]
+      summary: Lee una conversación visible y sus mensajes
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200':
+          description: Conversación y mensajes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /conversations/{id}/read:
+    post:
+      tags: [inbox]
+      summary: Marca como leídos los ítems de una conversación
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200':
+          description: Resultado de la actualización
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, updated]
+                properties:
+                  ok: { type: boolean }
+                  updated: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /operations/{correlationId}:
+    get:
+      tags: [inbox]
+      summary: Consulta etapas seguras de un evento por correlation_id
+      parameters:
+        - name: correlationId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Evento y trazabilidad operativa
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationOperation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notifications/preferences:
+    get:
+      tags: [notifications]
+      summary: Consulta preferencias de notificación del usuario autenticado
+      responses:
+        '200':
+          description: Preferencias actuales (ausencia equivale a habilitado)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPreferences' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    patch:
+      tags: [notifications]
+      summary: Actualiza preferencias de notificación del usuario autenticado
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationPreferences' }
+      responses:
+        '200':
+          description: Preferencias actualizadas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPreferences' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
 
 components:
   securitySchemes:
@@ -475,6 +725,11 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
           example: { error: { code: "no_encontrado", message: "El recurso solicitado no existe" } }
+    UnprocessableEntity:
+      description: Request inválido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
     ServerError:
       description: Error interno no esperado
       content:
@@ -496,10 +751,12 @@ components:
 
     AuthTokens:
       type: object
+      required: [access_token, refresh_token, expires_in, device_id, user]
       properties:
         access_token: { type: string }
         refresh_token: { type: string }
         expires_in: { type: integer, description: "Segundos de vida del access_token" }
+        device_id: { type: string, description: "Dispositivo al que queda ligada la sesión" }
         user: { $ref: '#/components/schemas/Me' }
 
     Me:
@@ -606,6 +863,21 @@ components:
         reclamos_abiertos: { type: integer }
         tareas_pendientes: { type: integer }
 
+    InboxItem:
+      type: object
+      required: [id, event_id, channel, status, version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        event_id: { type: string }
+        channel: { type: string }
+        resource_id: { type: string, nullable: true }
+        title: { type: string }
+        preview: { type: string, nullable: true }
+        status: { type: string, enum: [unread, read, resolved, archived] }
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
     Notification:
       type: object
       properties:
@@ -615,6 +887,68 @@ components:
           enum: [nuevo, reaviso, resuelto]
         titulo: { type: string }
         cuerpo: { type: string }
-        deep_link: { type: string, description: "Ruta interna de la app, ej. orders/123" }
+        deep_link: { type: string, description: "Ruta interna al detalle exacto del recurso; incidentes usa incidentes/{id} y agrega ?correlation_id=... cuando existe" }
         leida: { type: boolean }
         creado_en: { type: string, format: date-time }
+
+    NotificationPreferences:
+      type: object
+      required: [incidentes_criticos]
+      properties:
+        incidentes_criticos: { type: boolean, description: "Recibir incidentes críticos de integraciones" }
+
+    IntegrationNotification:
+      type: object
+      required: [notification_id, user_id, title, status, created_at]
+      properties:
+        notification_id: { type: integer }
+        event_id: { type: string, nullable: true }
+        inbox_id: { type: integer, nullable: true }
+        user_id: { type: integer }
+        title: { type: string }
+        body: { type: string, nullable: true }
+        deep_link: { type: string, nullable: true }
+        status: { type: string, enum: [pending, sent, failed, expired] }
+        created_at: { type: string, format: date-time }
+        read_at: { type: string, format: date-time, nullable: true }
+
+    ConversationView:
+      type: object
+      required: [conversation, messages]
+      properties:
+        conversation: { type: object, description: Registro interno de conversación visible al usuario }
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              message_id: { type: integer }
+              event_id: { type: string, nullable: true }
+              direction: { type: string, enum: [inbound, outbound] }
+              external_message_id: { type: string, nullable: true }
+              body: { type: string, nullable: true }
+              body_redacted: { type: integer, enum: [0, 1] }
+              occurred_at: { type: string, format: date-time, nullable: true }
+              created_at: { type: string, format: date-time }
+
+    IntegrationOperation:
+      type: object
+      required: [correlation_id, event, history]
+      properties:
+        correlation_id: { type: string }
+        event: { type: object, description: Evento canónico sin secretos ni payload privado }
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              stage: { type: string }
+              from_status: { type: string, nullable: true }
+              to_status: { type: string, nullable: true }
+              error_code: { type: string, nullable: true }
+              resource_id: { type: string, nullable: true }
+              correlation_id: { type: string }
+              retryable: { type: integer, enum: [0, 1], nullable: true }
+              attempts: { type: integer, nullable: true }
+              safe_message: { type: string, nullable: true }
+              created_at: { type: string, format: date-time }
