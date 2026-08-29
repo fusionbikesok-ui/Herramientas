@@ -143,6 +143,27 @@ export function openDb(dbPath) {
   // CREATE TABLE IF NOT EXISTS del router no puede ampliar una tabla existente.
   migrateMlClaims(db);
   migrateClaimsBackbone(db);
+  // Horarios de despacho: migración independiente para bases que ya alcanzaron user_version=30.
+  const horarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_horarios_032'").get();
+  if (!horarioMigration) {
+    const aplicarHorarios = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '032_despacho_horarios.sql'), 'utf8'));
+      const columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
+      if (columnas.length && !columnas.includes('fecha_despacho')) db.exec('ALTER TABLE pedidos_cache ADD COLUMN fecha_despacho TEXT');
+      db.exec(`CREATE TABLE IF NOT EXISTS despacho_horarios_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 1, actualizado_en TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS despacho_horarios_auditoria (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, usuario TEXT, valores_anteriores_json TEXT NOT NULL,
+        valores_nuevos_json TEXT NOT NULL, version_anterior INTEGER NOT NULL, version_nueva INTEGER NOT NULL,
+        creado_en TEXT NOT NULL
+      );
+      INSERT OR IGNORE INTO despacho_horarios_meta (id, version, actualizado_en)
+        VALUES (1, 1, CURRENT_TIMESTAMP);`);
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_horarios_032')").run();
+    });
+    aplicarHorarios();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

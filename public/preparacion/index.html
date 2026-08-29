@@ -234,6 +234,7 @@
     <button class="tab" data-v="cerradas" onclick="ir('cerradas')">Cerradas sin evidencia</button>
     <button class="tab" data-v="despachadas" onclick="ir('despachadas')">Despachadas sin verificar</button>
     <button class="tab" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
+    <button class="tab" data-v="horarios" onclick="ir('horarios')">Horarios de despacho</button>
   </div>
 
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
@@ -327,6 +328,7 @@ function ir(v){
   else if(v==='cerradas')cargarCerradas();
   else if(v==='despachadas')cargarDespachadas();
   else if(v==='perfiles')cargarPerfiles();
+  else if(v==='horarios')cargarHorarios();
 }
 
 async function api(path,opts){
@@ -410,13 +412,39 @@ function cardPendiente(p,ix){
   if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
+  var despacho=p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(fecha(p.fecha_despacho))+'</b></div>':'';
   return '<div class="ped" onclick="preparar('+ix+')">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span>'+canal+'</div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
-    +nota
+    +nota+despacho
     +'<div class="ped-foot">'+estado+'<button class="btn mini" style="margin-left:auto">Preparar →</button></div>'
     +'</div>';
+}
+
+async function cargarHorarios(){
+  var c=document.getElementById('cuerpo'); c.innerHTML='<div class="loading">Cargando horarios…</div>';
+  try{
+    var r=await api('/horarios-despacho'); if(!r.body.ok)throw new Error(r.body.error||'error');
+    var dias=['','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+    c.innerHTML='<div class="ped"><h2>Horarios de corte</h2><p class="sub">Los pedidos nuevos reciben como fecha sugerida el próximo día habilitado. Esto no bloquea el despacho manual.</p>'
+      +'<form id="horarios-form">'+r.body.data.map(function(h){return '<div style="display:flex;align-items:center;gap:10px;margin:10px 0"><input type="checkbox" id="habilitado-'+h.dia+'" data-dia="'+h.dia+'" '+(h.habilitado?'checked':'')+'><label for="habilitado-'+h.dia+'"><b>'+dias[h.dia]+'</b></label><label for="hora-'+h.dia+'" class="sr-only">Hora de corte del '+dias[h.dia]+'</label><input id="hora-'+h.dia+'" type="time" data-hora="'+h.dia+'" aria-label="Hora de corte del '+dias[h.dia]+'" value="'+esc(h.hora_corte)+'"></div>';}).join('')
+      +'<button class="btn" type="submit">Guardar horarios</button><span id="horarios-msg" role="status" style="margin-left:10px"></span></form></div>';
+    document.getElementById('horarios-form').dataset.version=String(r.body.version);
+    document.getElementById('horarios-form').onsubmit=guardarHorarios;
+  }catch(e){c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
+}
+async function guardarHorarios(ev){
+  ev.preventDefault();
+  var btn=ev.target.querySelector('button[type="submit"]'); btn.disabled=true;
+  try{
+    var horarios=[].slice.call(document.querySelectorAll('#horarios-form input[data-dia]')).map(function(cb){return {dia:Number(cb.dataset.dia),habilitado:cb.checked,hora_corte:document.querySelector('input[data-hora="'+cb.dataset.dia+'"]').value};});
+    var version=Number(document.getElementById('horarios-form').dataset.version);
+    var r=await api('/horarios-despacho',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({horarios:horarios,expected_version:version})});
+    if(r.body.ok) document.getElementById('horarios-form').dataset.version=String(r.body.version);
+    document.getElementById('horarios-msg').textContent=r.body.ok?'Guardado':'Error: '+(r.body.error||'no se pudo guardar');
+  }catch(e){ document.getElementById('horarios-msg').textContent='Error: '+e.message; }
+  finally{ btn.disabled=false; }
 }
 
 var DIRECCION_MODAL_CTX=null;
@@ -1698,7 +1726,7 @@ async function marcarEtiqueta(wcId,lista,numero){
 }
 
 // ─── Cargar seguimientos ────────────────────────────────────────────────────
-// La pantalla de seguimientos
+// Rediseño 2026-08-13 (docs/superpowers/plans/2026-08-13-seguimientos.md): la pantalla
 // tiene que ser MÁS CÓMODA que cargar el tracking a mano en Woo, o el operario sigue ahí
 // por costumbre. El pedido se elige SIEMPRE primero (tarjeta con nombre+localidad visibles
 // sin scroll); pegar o escanear pasan por esa tarjeta, nunca por un campo/cámara sueltos
@@ -2182,7 +2210,7 @@ function filtrarSeg(){
 }
 
 // Toast no bloqueante con Deshacer opcional. Mismo patrón que public/cobertura/index.html
-// de Cobertura, con paleta propia de esta página.
+// (docs/superpowers/plans/2026-08-10-cobertura-flujo-ux.md), paleta propia de esta página.
 function toastSeg(mensaje,tipo,onDeshacer){
   var wrap=document.getElementById('seg-toast-wrap');
   var el=document.createElement('div');

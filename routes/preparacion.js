@@ -16,6 +16,7 @@ import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
+import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment } from '../lib/horariosDespacho.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -138,6 +139,10 @@ function ensureTables(db) {
     actualizado_en  TEXT NOT NULL
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
+  try { asegurarEsquemaHorarios(db); db.prepare(`CREATE TABLE IF NOT EXISTS despacho_horarios (
+    dia INTEGER PRIMARY KEY CHECK (dia BETWEEN 1 AND 7), habilitado INTEGER NOT NULL DEFAULT 0 CHECK (habilitado IN (0,1)),
+    hora_corte TEXT NOT NULL DEFAULT '16:00', actualizado_en TEXT NOT NULL
+  )`).run(); sembrarHorarios(db); } catch (e) { console.error('ensureTables despacho_horarios:', e.message); }
   // pack_id acá también: pedidos_cache es lo que alimenta tanto "A preparar" como el
   // Historial, así que es el único lugar donde ponerlo hace que el número que se lee en ML
   // sea encontrable en las dos pantallas (ver el comentario de preparaciones.pack_id).
@@ -770,6 +775,7 @@ export function preparacionRouter(db, cfg) {
             numero_pedido: row.numero_pedido,
             comprador: row.comprador,
             fecha: row.fecha,
+            fecha_despacho: row.fecha_despacho,
             estado_wc: row.estado_wc,
             notas: row.customer_note || '',
             items,
@@ -786,6 +792,7 @@ export function preparacionRouter(db, cfg) {
           numero_pedido: row.numero_pedido,
           comprador: row.comprador,
           fecha: row.fecha,
+          fecha_despacho: row.fecha_despacho,
           logistic_type: row.logistic_type,
           substatus: row.substatus,
           items,
@@ -804,6 +811,52 @@ export function preparacionRouter(db, cfg) {
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/horarios-despacho', (req, res) => {
+    try { return res.json({ ok: true, version: leerVersionHorarios(db), data: leerHorarios(db) }); }
+    catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  });
+
+  router.put('/horarios-despacho', (req, res) => {
+    try {
+      const horarios = req.body?.horarios;
+      if (!Array.isArray(horarios) || horarios.length !== 7
+        || new Set(horarios.map((h) => Number(h.dia))).size !== 7
+        || horarios.some((h) => !DIAS_SEMANA.includes(Number(h.dia)) || typeof h.habilitado !== 'boolean' || !horaValida(h.hora_corte))
+        || !horarios.some((h) => h.habilitado === true)) {
+        return res.status(422).json({ ok: false, error: 'horarios inválidos' });
+      }
+      const expectedVersion = Number(req.body?.expected_version);
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+        return res.status(422).json({ ok: false, error: 'expected_version inválida' });
+      }
+      const versionActual = leerVersionHorarios(db);
+      if (expectedVersion !== versionActual) {
+        return res.status(409).json({ ok: false, error: 'conflicto de versión', code: 'VERSION_CONFLICT', current_version: versionActual, version: versionActual });
+      }
+      const anteriores = leerHorarios(db);
+      const usuario = req.user?.username ?? req.session?.username ?? null;
+      const siguienteVersion = versionActual + 1;
+      const update = db.prepare('UPDATE despacho_horarios SET habilitado=?, hora_corte=?, actualizado_en=? WHERE dia=?');
+      const tx = db.transaction(() => {
+        horarios.forEach((h) => update.run(h.habilitado ? 1 : 0, h.hora_corte, now(), Number(h.dia)));
+        const cambiado = db.prepare('UPDATE despacho_horarios_meta SET version=?, actualizado_en=? WHERE id=1 AND version=?')
+          .run(siguienteVersion, now(), expectedVersion);
+        if (cambiado.changes !== 1) throw Object.assign(new Error('conflicto de versión'), { code: 'VERSION_CONFLICT' });
+        db.prepare(`INSERT INTO despacho_horarios_auditoria
+          (usuario, valores_anteriores_json, valores_nuevos_json, version_anterior, version_nueva, creado_en)
+          VALUES (?, ?, ?, ?, ?, ?)`)
+          .run(usuario, JSON.stringify(anteriores), JSON.stringify(leerHorarios(db)), expectedVersion, siguienteVersion, now());
+      });
+      tx();
+      return res.json({ ok: true, version: siguienteVersion, data: leerHorarios(db) });
+    } catch (e) {
+      if (e.code === 'VERSION_CONFLICT' || e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
+        return res.status(409).json({ ok: false, error: 'conflicto de versión', code: 'VERSION_CONFLICT', current_version: leerVersionHorarios(db) });
+      }
+      return res.status(500).json({ ok: false, error: e.message });
     }
   });
 
@@ -881,8 +934,8 @@ export function preparacionRouter(db, cfg) {
   // Antes (versión vieja, retirada): "a medias" se INFERÍA mirando la meta _andreani_tracking
   // en pedidos 'completed' de Woo. Esa inferencia daba falso positivo en cualquier pedido con
   // el tracking cargado A MANO en WooCommerce (el hábito real del usuario, confirmado por él),
-  // así que mostraba ~70 pedidos "colgados" que nunca pasaron por esta herramienta. Ahora
-  // "a medias" es EXCLUSIVAMENTE
+  // así que mostraba ~70 pedidos "colgados" que nunca pasaron por esta herramienta — ver
+  // docs/superpowers/plans/2026-08-13-seguimientos.md. Ahora "a medias" es EXCLUSIVAMENTE
   // el dato local `woo_paso2_pendiente=1`, que esta misma herramienta pone en 1 al hacer el
   // paso 1 y limpia al confirmar el paso 2 (o al reintentar) — nunca se infiere de Woo.
   //
@@ -2165,6 +2218,7 @@ async function pendientesMl(db, mlCfg) {
       numero_pedido: ov.numero,
       comprador: ov.comprador.nickname || 'Comprador ML',
       fecha: ov.fecha,
+      fecha_despacho: fechaEstimadaShipment(envio) || calcularFechaDespacho(leerHorarios(db)),
       logistic_type: envio.logistic_type,
       substatus: envio.substatus || null,
       items: itemsDesdeOrdenMl(db, orden),
@@ -2197,16 +2251,17 @@ function upsertPedidoCache(db, row) {
   db.prepare(`
     INSERT INTO pedidos_cache
       (clave, canal, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, fecha,
-       estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note)
+       fecha_despacho, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note)
     VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @pack_id, @numero_pedido, @comprador, @fecha,
-       @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note)
+       @fecha_despacho, @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note)
     ON CONFLICT(clave) DO UPDATE SET
       pack_id=excluded.pack_id,
+      fecha_despacho=COALESCE(pedidos_cache.fecha_despacho, excluded.fecha_despacho),
       numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
       estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
       logistic_type=excluded.logistic_type, substatus=excluded.substatus,
       items_json=excluded.items_json, actualizado_en=excluded.actualizado_en, customer_note=excluded.customer_note
-  `).run({ customer_note: '', ...row });
+  `).run({ ...row, customer_note: row.customer_note ?? '', fecha_despacho: row.fecha_despacho ?? calcularFechaDespacho(leerHorarios(db)) });
 }
 
 // Un pedido WC (de cualquiera de los 3 estados relevantes) → fila de pedidos_cache.
@@ -2292,6 +2347,7 @@ export async function syncPedidosCache(db, cfg) {
             numero_pedido: p.numero_pedido,
             comprador: p.comprador,
             fecha: p.fecha,
+            fecha_despacho: p.fecha_despacho,
             estado_envio: 'pendiente',
             estado_wc: null,
             espejo_ml: 0,
@@ -2440,6 +2496,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     numero_pedido: ov.numero,
     comprador: ov.comprador.nickname || 'Comprador ML',
     fecha: ov.fecha,
+    fecha_despacho: fechaEstimadaShipment(envio) || calcularFechaDespacho(leerHorarios(db)),
     estado_envio: 'pendiente',
     estado_wc: null,
     espejo_ml: 0,
