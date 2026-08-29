@@ -2908,3 +2908,140 @@ del repositorio. `PUSH_PROVIDER=mock` solo registra `simulado`, nunca una entreg
 
 La app debe consumir `/api/v1` con `Authorization: Bearer <access_token>`; el refresh token
 solo se envía a `/api/v1/auth/refresh` y `/api/v1/auth/logout`.
+
+## U0.C — Contrato móvil congelado para Inventario y Preparación
+
+Esta sección define el contrato versionado que consumirán App 1 (Preparación) y App 2
+(Inventario). La especificación formal está en `openapi/mobile-v1.yaml`. Las rutas móviles
+se sirven bajo `/api/v1` cuando exista el adaptador correspondiente; mientras tanto, el
+backend vigente continúa exponiendo las rutas legacy indicadas en cada fila.
+
+### Estado de implementación y mapa de adaptadores
+
+| Recurso móvil | Contrato `/api/v1` | Implementación actual | Estado |
+| --- | --- | --- | --- |
+| Plan, sesiones, detalle y escaneos de Inventario | `/inventory/today`, `/inventory/sessions`, `/inventory/sessions/{id}`, `/inventory/sessions/{id}/scans` | `/api/inventario/plan-hoy`, `/api/inventario/sesiones`, `/api/inventario/sesiones/:id`, `/api/inventario/sesiones/:id/escanear` | Adaptador pendiente |
+| Cierre, corrección y diferencias de Inventario | `/inventory/sessions/{id}/close`, `/inventory/sessions/{id}/items/{itemId}`, `/inventory/differences`, `/inventory/differences/{id}/history` | `/api/inventario/sesiones/:id/confirmar`, `/cerrar-sin-stock`, `/api/inventario/sesiones/:id/items/:itemId`, `/api/inventario/diferencias/*` | Adaptador pendiente |
+| Ubicaciones y trabajos de etiquetas | `/inventory/locations`, `/inventory/label-jobs` | `/api/inventario/ubicaciones`; `/api/preparacion/etiquetas` (`routes/preparacion.js:757`) | Adaptador pendiente |
+| Cola y detalle de Preparación | `/preparation/queue`, `/preparation/{id}` | `/api/preparacion/pendientes`, `/api/preparacion/:id` | Adaptador pendiente |
+| Toma, escaneo, confirmación manual y evidencia | `/preparation/{id}/take`, `/preparation/{id}/scans`, `/preparation/{id}/items/{itemId}/confirm-manual`, `/preparation/{id}/evidence` | No hay toma móvil exclusiva; `/api/preparacion/:id/escanear`, `/item/:itemId/confirmar-manual` y `/api/preparacion/:id/foto` | Adaptador pendiente |
+| Finalización, despacho e incidencias | `/preparation/{id}/complete`, `/preparation/{id}/dispatch` | `/api/preparacion/:id/completar`, `/api/preparacion/seguimientos/:wcOrderId`; el despacho/incidencia unificado aún no existe | Adaptador pendiente |
+| Trabajos de etiquetas de Preparación | `/preparation/label-jobs` | `/api/preparacion/etiquetas` (`routes/preparacion.js:757`) | Adaptador pendiente |
+
+La base URL del contrato es `/api/v1`; por eso los paths relativos `/inventory/*` y
+`/preparation/*` se sirven como `/api/v1/inventory/*` y `/api/v1/preparation/*`. No se deben interpretar
+como
+rutas ya disponibles: `x-implementation-status: adapter-pending` en OpenAPI es obligatorio
+hasta que un adaptador real sea implementado y sus gates vuelvan a ejecutarse. La app no
+debe llamar las rutas legacy directamente como solución permanente.
+
+Los contratos móviles heredados que también aparecen en OpenAPI están marcados explícitamente
+como `x-implementation-status: adapter-pending`: `/products/lookup` no tiene hoy un buscador
+legacy equivalente (el único endpoint parecido es `/api/cobertura/productos/:id_woo/buscar-ml`,
+que requiere otro identificador y finalidad), por lo que debe implementarse un adaptador de
+catálogo; `/stock/adjustments` no tiene una ruta legacy única y se compone actualmente de
+`POST /api/inventario/sesiones/:id/confirmar` y `POST /api/inventario/diferencias/:id/aprobar`,
+por lo que también requiere un adaptador explícito; `/orders` se alimenta del endpoint legacy de pedidos y `/today` sigue siendo un agregado
+pendiente sobre sus fuentes legacy. Estos mapeos son informativos y no habilitan el consumo
+directo de rutas legacy desde la app.
+El detalle móvil de pedidos (`GET /api/v1/orders/{id}`) también permanece pendiente:
+se adapta temporalmente desde `GET /api/pedidos/:id` según `routes/pedidos.js`. Hasta
+que exista ese adaptador, no debe considerarse una ruta móvil operativa.
+
+### Convenciones comunes
+
+- Autenticación: `Authorization: Bearer <access_token>` y permiso mínimo del módulo. El
+  servidor debe volver a comprobar el permiso en cada request; nunca confiar solo en la
+  visibilidad de la pantalla.
+- Errores: `{ "error": { "code": "...", "message": "...", "details": {} } }`. `message`
+  es seguro para mostrar; `details` puede incluir datos de recuperación, pero nunca secretos,
+  tokens ni payloads completos de MercadoLibre/WooCommerce.
+- Mutaciones reintentables: header obligatorio `Idempotency-Key` con UUID v4. El mismo UUID
+  y la misma intención devuelve el resultado original; reutilizarlo con otra intención es
+  error `409` (`idempotency_key_reused`).
+- Concurrencia: toda edición que parte de una lectura incluye `expected_version` en el body.
+  Una versión vieja devuelve `409` (`version_conflict`) con la versión actual y no sobrescribe
+  datos. La app debe recargar y mostrar el conflicto, nunca aplicar last-write-wins silencioso.
+- Listados: `cursor` es opaco, `limit` queda entre 1 y 100 (por defecto 20) y la respuesta
+  siempre tiene `{ "items": [], "next_cursor": null }` cuando no quedan resultados. No se
+  usa `offset` en el contrato móvil.
+- Conectividad: Preparación puede cachearse para lectura, pero todas sus mutaciones requieren
+  red. Inventario puede conservar una cola offline cifrada y acotada por siete días; solo se
+  reintentan mutaciones idempotentes y el servidor decide los conflictos.
+
+### Inventario — reglas verificables
+
+`POST /api/v1/inventory/sessions` recibe una o más categorías, una o más marcas, o
+`ubicacion_id`; puede combinar categorías y marcas, pero no combina ubicación con filtros ni
+acepta un alcance vacío.
+Al abrir, el alcance queda congelado. La respuesta expone `estado`, `categorias`, `marcas` y
+la ubicación, y un `409` informa si el alcance se solapa con otra sesión.
+
+`GET /api/v1/inventory/sessions/{id}` devuelve `items`, `pendientes` y `resumen`. Cada ítem
+conserva `estado_codigo`: `ok`, `fuera_de_alcance`, `sin_asociar` o `desconocido`. Un código
+desconocido o sin asociar bloquea el cierre hasta asociarlo o quitarlo; estar fuera de alcance
+es un aviso y no descarta el conteo.
+
+`POST /api/v1/inventory/sessions/{id}/scans` unifica escaneo y asociación, pero el adaptador
+debe conservar la semántica real de `/escanear` y `/asociar`, incluido el conflicto explícito
+al reemplazar un GTIN existente. `close` debe conservar el ajuste por delta contra stock
+live, el aislamiento de fallos por ítem y los resultados `ajustados`/`fallidos`; nunca debe
+declarar éxito global si hay ítems sin ajustar.
+
+`GET /api/v1/inventory/differences/{id}/history` devuelve el historial completo paginado de
+creación, cambios, decisiones y ajustes de una diferencia.
+
+Las ubicaciones se consultan con `cursor` y `limit`, y siempre devuelven `items` y `next_cursor`.
+El mismo recurso permite crear una ubicación nueva o mapear SKUs a una existente; ambas mutaciones
+requieren `Idempotency-Key` y permiso de administrador.
+
+El descarte de una sesión requiere enviar `expected_version` en el body, además de
+`Idempotency-Key`; una versión obsoleta devuelve `409` sin sobrescribir la sesión.
+
+Las decisiones sobre diferencias (`approve`, `reject`, `discard`) requieren permiso de
+administrador cuando impliquen aprobar un sobrante grande. La app debe mostrar claramente
+los estados vacío, error recuperable, reintento, conflicto `409`, código desconocido,
+pendientes de stock y sesión ya cerrada.
+
+### Preparación — reglas verificables
+
+La cola usa la fuente local de pedidos y debe conservar `canal`, `pack_id` cuando exista,
+estado, comprador y datos de envío sin inventar información ausente. `take` es un contrato
+futuro de toma exclusiva; mientras no haya adaptador, no se debe simular una asignación en el
+cliente.
+
+El recurso resumido de Preparación expone `id`, `canal`, `estado`, `pack_id` (nullable cuando
+no existe, como en pedidos web) y `envio`. `envio` conserva el shape normalizado de la ruta
+legacy (`pedido`, destinatario, dirección, localidad/provincia, CP, teléfono, email, DNI/CUIT
+y notas); los valores faltantes llegan vacíos y no se inventan. Los campos estructurales del
+recurso son obligatorios en el contrato, aunque sus valores puedan ser vacíos o `null` cuando
+la fuente no los proporciona.
+
+Los escaneos devuelven `match`, `no_coincide` o `sobrante`. La confirmación manual móvil se
+expone como `POST /api/v1/preparation/{id}/items/{itemId}/confirm-manual` y exige un
+motivo (`codigo_ilegible`, `sin_etiqueta` u `otro`; cuando es `otro`, `detalle_texto` es
+obligatorio). La
+evidencia se acepta como multipart y conserva estados de cola (`pendiente`, `procesando`,
+`listo`, `error`) para permitir reintento visible.
+
+`complete` debe respetar faltantes, fotos requeridas, delegación a depósito y los estados
+`pendiente_deposito`, `completada`, `despachada_sin_verificar` y
+`cerrada_sin_evidencia`. `dispatch` recibe obligatoriamente `expected_version` y un discriminador
+`tipo` (`tracking` o `incidencia`); debe distinguir seguimiento de incidencia y nunca afirmar
+un tracking confirmado si la respuesta de Woo es incierta. Todos los estados de carga, vacío,
+sin red, permiso insuficiente, conflicto y reintento forman parte del handoff de App 1.
+
+### Permisos y handoff a App 1/App 2
+
+| Capacidad | Inventario | Preparación | Notas |
+| --- | --- | --- | --- |
+| Consultar cola/plan/detalle | permiso de inventario | permiso de preparación | Revalidar en backend |
+| Mutar sesión, escanear, evidencias | permiso de inventario | permiso de preparación | UUID de idempotencia |
+| Aprobar/rechazar diferencias | administrador | no aplica | El cliente no puede elevar permisos |
+| Crear/mapear ubicaciones | administrador | no aplica | Backend actual limita ambas operaciones |
+| Tomar, completar y despachar | no aplica | permiso de preparación | `expected_version` y `409` |
+
+App 1 debe generar su cliente TypeScript desde OpenAPI y probar conexión obligatoria para
+mutaciones. App 2 debe generar el mismo cliente, implementar la cola offline cifrada de siete
+días y hacer visible la resolución de conflictos. Fixtures, estados y criterios E2E deben
+derivarse de los schemas, no de respuestas inventadas por cada pantalla.

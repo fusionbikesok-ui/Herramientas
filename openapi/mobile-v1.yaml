@@ -15,9 +15,9 @@ info:
     - Paginación por cursor en listados (`cursor`/`next_cursor`), no por offset.
 
 servers:
-  - url: https://herramientas.fusionbikes.com.ar/api
+  - url: https://herramientas.fusionbikes.com.ar/api/v1
     description: Producción (cuando exista)
-  - url: http://localhost:3001/api
+  - url: http://localhost:3001/api/v1
     description: Local (DISABLE_CRONS=true, nunca contra data/fusion.sqlite real)
 
 tags:
@@ -28,6 +28,8 @@ tags:
   - name: today
   - name: notifications
   - name: inbox
+  - name: inventory
+  - name: preparation
 
 security:
   - bearerAuth: []
@@ -243,6 +245,12 @@ paths:
     get:
       tags: [stock]
       summary: Busca un producto por SKU o código de barras (EAN/UPC)
+      description: >-
+        Adaptador móvil pendiente. No existe hoy un buscador legacy por SKU/EAN
+        equivalente. El runtime expone `GET /api/cobertura/productos/:id_woo/buscar-ml`,
+        que no acepta este contrato ni debe usarse como sustituto; se requiere
+        implementar el adaptador/catálogo antes de habilitar esta ruta.
+      x-implementation-status: adapter-pending
       parameters:
         - name: code
           in: query
@@ -279,9 +287,14 @@ paths:
       tags: [stock]
       summary: Ajusta el stock de un SKU de forma idempotente y con control de concurrencia
       description: |
+        Adaptador móvil pendiente. No existe una ruta legacy única y equivalente:
+        el ajuste está acoplado al cierre de sesión (`POST /api/inventario/sesiones/:id/confirmar`)
+        y a aprobaciones de diferencias (`POST /api/inventario/diferencias/:id/aprobar`).
+        `/api/v1/stock/adjustments` aún no está servido y requiere un adaptador explícito.
         Ver plan-api-mobile-v1.md, Bloque 6, para el flujo completo (idempotencia por
         client_request_id, optimistic lock con expected_stock, syncSkuPuntual hacia ML,
         operation_id para seguimiento asincrónico).
+      x-implementation-status: adapter-pending
       requestBody:
         required: true
         content:
@@ -334,37 +347,14 @@ paths:
         '500':
           $ref: '#/components/responses/ServerError'
 
-  /operations/{id}:
-    get:
-      tags: [stock]
-      summary: Consulta el resultado (posiblemente asincrónico) de una operación de stock
-      parameters:
-        - $ref: '#/components/parameters/PathId'
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Operation' }
-              example:
-                id: "op_9f8c3e"
-                tipo: "stock_adjustment"
-                woo_status: "aplicado"
-                ml_status: "sincronizado"
-                detalle_ml: "Stock actualizado: 7"
-                creado_en: "2026-08-27T10:00:00Z"
-                actualizado_en: "2026-08-27T10:00:03Z"
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/ServerError'
-
   /orders:
     get:
       tags: [orders]
       summary: Lista pedidos (solo lectura sobre pedidos_cache — ver plan-api-mobile-v1.md Bloque 7)
+      description: >-
+        Adaptador móvil pendiente. Mapea al endpoint legacy de pedidos expuesto por
+        `routes/pedidos.js`; `/api/v1/orders` aún no está servido.
+      x-implementation-status: adapter-pending
       parameters:
         - name: status
           in: query
@@ -405,6 +395,12 @@ paths:
     get:
       tags: [orders]
       summary: Detalle de un pedido
+      description: >-
+        Adaptador móvil pendiente. El detalle aún no está servido bajo `/api/v1`.
+        Mapea temporalmente al endpoint legacy `GET /api/pedidos/:id` (o su ruta
+        equivalente expuesta por `routes/pedidos.js`); la app no debe llamar legacy
+        directamente como solución permanente.
+      x-implementation-status: adapter-pending
       parameters:
         - $ref: '#/components/parameters/PathId'
       responses:
@@ -429,6 +425,10 @@ paths:
     get:
       tags: [today]
       summary: Agregado para la pantalla "Hoy" (pedidos + stock + mensajes + preguntas + reclamos + tareas)
+      description: >-
+        Adaptador móvil pendiente. El agregado aún no tiene ruta equivalente; sus fuentes
+        permanecen en los endpoints legacy de pedidos, inventario y notificaciones.
+      x-implementation-status: adapter-pending
       responses:
         '200':
           description: OK
@@ -692,6 +692,361 @@ paths:
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
 
+  # U0.C — contratos móviles definidos antes del adaptador. Las rutas legacy reales
+  # siguen en /api/inventario y /api/preparacion; estas operaciones son el contrato
+  # versionado que App 1/2 consumirá cuando se implemente el adaptador.
+  /inventory/today:
+    get:
+      tags: [inventory]
+      summary: Plan diario de inventario
+      description: Adaptador pendiente; el backend actual ofrece GET /inventario/plan-hoy.
+      x-implementation-status: adapter-pending
+      responses:
+        '200': { description: Plan, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryToday' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /inventory/sessions:
+    get:
+      tags: [inventory]
+      summary: Historial paginado de sesiones de inventario
+      description: Adaptador pendiente; legacy GET /inventario/sesiones no usa cursor.
+      x-implementation-status: adapter-pending
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Sesiones, content: { application/json: { schema: { $ref: '#/components/schemas/CursorPageInventorySession' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+    post:
+      tags: [inventory]
+      summary: Abre una sesión de conteo
+      description: Adaptador pendiente; legacy POST /inventario/sesiones.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventorySessionCreate' } } } }
+      responses:
+        '201': { description: Sesión creada, content: { application/json: { schema: { $ref: '#/components/schemas/InventorySession' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /inventory/sessions/{id}:
+    get:
+      tags: [inventory]
+      summary: Detalle de sesión, ítems y pendientes
+      description: Adaptador pendiente; legacy GET /inventario/sesiones/:id.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200': { description: Sesión, content: { application/json: { schema: { $ref: '#/components/schemas/InventorySessionDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [inventory]
+      summary: Descarta una sesión abierta
+      description: Adaptador pendiente; legacy POST /inventario/sesiones/:id/descartar.
+      x-implementation-status: adapter-pending
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpectedVersionRequest' }
+      responses:
+        '200': { description: Sesión descartada, content: { application/json: { schema: { $ref: '#/components/schemas/Ok' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /inventory/sessions/{id}/scans:
+    post:
+      tags: [inventory]
+      summary: Registra un escaneo o asociación de código
+      description: Adaptador pendiente; legacy POST /inventario/sesiones/:id/escanear y /asociar.
+      x-implementation-status: adapter-pending
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryScanRequest' } } } }
+      responses:
+        '200': { description: Escaneo registrado, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryItem' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /inventory/sessions/{id}/close:
+    post:
+      tags: [inventory]
+      summary: Cierra o confirma una sesión
+      description: Adaptador pendiente; requiere intención explícita y no pisa cambios concurrentes.
+      x-implementation-status: adapter-pending
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCloseRequest' } } } }
+      responses:
+        '200': { description: Resultado del cierre, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCloseResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Versión o pendientes/conflicto de stock, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /inventory/sessions/{id}/items/{itemId}:
+    patch:
+      tags: [inventory]
+      summary: Corrige la cantidad de un ítem
+      description: Adaptador pendiente; requiere expected_version para evitar sobrescritura.
+      x-implementation-status: adapter-pending
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryItemPatch' } } } }
+      responses:
+        '200': { description: Ítem actualizado, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryItem' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /inventory/locations:
+    get:
+      tags: [inventory]
+      summary: Lista ubicaciones activas
+      description: Adaptador pendiente; legacy GET /inventario/ubicaciones.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { description: Ubicaciones, content: { application/json: { schema: { $ref: '#/components/schemas/CursorPageLocation' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [inventory]
+      summary: Crea o mapea una ubicación
+      description: Adaptador pendiente; crea una ubicación o asocia SKUs a una ubicación existente.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LocationMutation' } } } }
+      responses:
+        '200': { description: Ubicación mapeada, content: { application/json: { schema: { $ref: '#/components/schemas/Location' } } } }
+        '201': { description: Ubicación creada, content: { application/json: { schema: { $ref: '#/components/schemas/Location' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /inventory/differences:
+    get:
+      tags: [inventory]
+      summary: Lista diferencias pendientes de decisión
+      description: Adaptador pendiente; legacy GET /inventario/diferencias/pendientes.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { description: Diferencias, content: { application/json: { schema: { $ref: '#/components/schemas/CursorPageDifference' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [inventory]
+      summary: Decide aprobar, rechazar o descartar una diferencia
+      description: Adaptador pendiente; la aprobación/rechazo legacy usa rutas separadas y requiere admin.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DifferenceDecision' } } } }
+      responses:
+        '200': { description: Decisión aplicada, content: { application/json: { schema: { $ref: '#/components/schemas/Ok' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /inventory/differences/{id}/history:
+    get:
+      tags: [inventory]
+      summary: Historial completo de una diferencia
+      description: Adaptador pendiente; devuelve todos los cambios y decisiones de la diferencia.
+      x-implementation-status: adapter-pending
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Historial, content: { application/json: { schema: { $ref: '#/components/schemas/CursorPageDifferenceHistory' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /inventory/label-jobs:
+    get:
+      tags: [inventory]
+      summary: Lista trabajos de etiquetas
+      description: Adaptador pendiente; el backend actual tiene cola de etiquetas fuera de routes/inventario.js.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { description: Trabajos, content: { application/json: { schema: { $ref: '#/components/schemas/CursorPageLabelJob' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /preparation/queue:
+    get:
+      tags: [preparation]
+      summary: Cola paginada de preparaciones
+      description: Adaptador pendiente; legacy GET /preparacion/pendientes.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { description: Cola, content: { application/json: { schema: { $ref: '#/components/schemas/CursorPagePreparation' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /preparation/{id}:
+    get:
+      tags: [preparation]
+      summary: Detalle de preparación
+      description: Adaptador pendiente; legacy GET /preparacion/:id.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200': { description: Detalle, content: { application/json: { schema: { $ref: '#/components/schemas/PreparationDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /preparation/{id}/take:
+    post:
+      tags: [preparation]
+      summary: Toma exclusiva de una preparación
+      description: Adaptador pendiente; no existe una toma exclusiva móvil implementada en routes/preparacion.js.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '200': { description: Preparación tomada, content: { application/json: { schema: { $ref: '#/components/schemas/PreparationDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /preparation/{id}/scans:
+    post:
+      tags: [preparation]
+      summary: Registra escaneo de un ítem
+      description: Adaptador pendiente; legacy POST /preparacion/:id/escanear.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PreparationScanRequest' } } } }
+      responses:
+        '200': { description: Resultado, content: { application/json: { schema: { $ref: '#/components/schemas/ScanResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /preparation/{id}/items/{itemId}/confirm-manual:
+    post:
+      tags: [preparation]
+      summary: Confirma manualmente un ítem sin escaneo válido
+      description: Adaptador pendiente; conserva el motivo obligatorio del endpoint legacy confirmar-manual.
+      x-implementation-status: adapter-pending
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ManualConfirmationRequest' } } } }
+      responses:
+        '200': { description: Ítem confirmado, content: { application/json: { schema: { $ref: '#/components/schemas/PreparationDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /preparation/{id}/evidence:
+    post:
+      tags: [preparation]
+      summary: Carga evidencia fotográfica
+      description: Adaptador pendiente; legacy POST /preparacion/:id/foto usa multipart y cola de procesamiento.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { multipart/form-data: { schema: { $ref: '#/components/schemas/EvidenceUpload' } } } }
+      responses:
+        '202': { description: Evidencia aceptada para procesamiento, content: { application/json: { schema: { $ref: '#/components/schemas/Evidence' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { description: Archivo demasiado grande, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /preparation/{id}/complete:
+    post:
+      tags: [preparation]
+      summary: Finaliza una preparación
+      description: Adaptador pendiente; legacy POST /preparacion/:id/completar.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '200': { description: Preparación finalizada o delegada al depósito, content: { application/json: { schema: { $ref: '#/components/schemas/PreparationCompletion' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /preparation/{id}/dispatch:
+    post:
+      tags: [preparation]
+      summary: Despacha o registra incidencia de una preparación
+      description: Adaptador pendiente; legacy tracking e incidencias están separados y requieren normalización.
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DispatchRequest' } } } }
+      responses:
+        '200': { description: Despacho/incidencia registrado, content: { application/json: { schema: { $ref: '#/components/schemas/DispatchResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /preparation/label-jobs:
+    get:
+      tags: [preparation]
+      summary: Lista trabajos de etiquetas de preparación
+      description: Adaptador pendiente; se mapea al legacy GET /api/preparacion/etiquetas (routes/preparacion.js:757).
+      x-implementation-status: adapter-pending
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { description: Trabajos, content: { application/json: { schema: { $ref: '#/components/schemas/CursorPageLabelJob' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -705,8 +1060,31 @@ components:
       in: path
       required: true
       schema: { type: string }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+      description: Cursor opaco devuelto por la página anterior; no es un offset.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: UUID nuevo por intención de mutación; repetirlo devuelve el mismo resultado.
 
   responses:
+    Conflict:
+      description: Conflicto de versión, idempotencia o estado del recurso
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ConflictError' }
+          example: { error: { code: "version_conflict", message: "El recurso cambió; recargá antes de continuar", current_version: 3 } }
     Unauthorized:
       description: Sin sesión válida o sesión expirada
       content:
@@ -748,6 +1126,343 @@ components:
           properties:
             code: { type: string, description: "Identificador estable, no cambia entre versiones" }
             message: { type: string, description: "Texto legible, en español, para mostrar o loguear" }
+            details: { type: object, additionalProperties: true, nullable: true }
+
+    ConflictError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, current_version]
+          properties:
+            code: { type: string, enum: [version_conflict, idempotency_key_reused, invalid_state] }
+            message: { type: string }
+            current_version: { type: integer, minimum: 1, nullable: true }
+            details: { type: object, additionalProperties: true, nullable: true }
+
+    Ok:
+      type: object
+      required: [ok]
+      properties: { ok: { type: boolean, example: true } }
+
+    ExpectedVersionRequest:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version: { type: integer, minimum: 1 }
+
+    InventorySessionCreate:
+      description: El alcance usa una o más categorías, una o más marcas, o una ubicación, nunca ubicación junto con filtros.
+      oneOf:
+        - type: object
+          anyOf:
+            - required: [categorias]
+            - required: [marcas]
+          not: { required: [ubicacion_id] }
+          properties:
+            categorias: { type: array, items: { type: string }, minItems: 1, example: [Cascos] }
+            marcas: { type: array, items: { type: string }, minItems: 1, example: [Bell] }
+        - type: object
+          required: [ubicacion_id]
+          not: { anyOf: [{ required: [categorias] }, { required: [marcas] }] }
+          properties:
+            ubicacion_id: { type: string, minLength: 1, example: "4" }
+
+    InventorySession:
+      type: object
+      required: [id, estado, version]
+      properties:
+        id: { type: string }
+        estado: { type: string, enum: [abierta, confirmada, confirmada_con_errores, descartada] }
+        version: { type: integer, minimum: 1 }
+        usuario: { type: string }
+        categorias: { type: array, items: { type: string } }
+        marcas: { type: array, items: { type: string } }
+        ubicacion_id: { type: string, nullable: true }
+        creado_en: { type: string, format: date-time }
+        confirmado_en: { type: string, format: date-time, nullable: true }
+
+    InventoryItem:
+      type: object
+      required: [id, sku, cantidad, estado_codigo]
+      properties:
+        id: { type: string }
+        ean: { type: string, nullable: true }
+        sku: { type: string, nullable: true }
+        nombre: { type: string, nullable: true }
+        cantidad: { type: integer, minimum: 0 }
+        stock_woo: { type: integer, nullable: true }
+        diferencia: { type: integer, nullable: true }
+        estado_codigo: { type: string, enum: [ok, fuera_de_alcance, sin_asociar, desconocido] }
+        confirmado_por_omision: { type: boolean }
+        ajustado: { type: boolean }
+
+    InventorySessionDetail:
+      allOf:
+        - $ref: '#/components/schemas/InventorySession'
+        - type: object
+          required: [items, pendientes, resumen]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/InventoryItem' } }
+            pendientes: { type: array, items: { $ref: '#/components/schemas/InventoryItem' } }
+            resumen: { type: object, additionalProperties: true }
+
+    InventoryScanRequest:
+      type: object
+      required: [codigo]
+      properties:
+        codigo: { type: string, example: "7791234567890" }
+        ean: { type: string, nullable: true }
+        sku: { type: string, nullable: true }
+        pisar_codigo: { type: boolean, default: false }
+      oneOf:
+        - properties: { pisar_codigo: { enum: [false] } }
+        - required: [pisar_codigo, expected_version]
+          properties:
+            pisar_codigo: { enum: [true] }
+            expected_version: { type: integer, minimum: 1 }
+
+    InventoryItemPatch:
+      allOf:
+        - $ref: '#/components/schemas/ExpectedVersionRequest'
+        - type: object
+          required: [cantidad]
+          properties: { cantidad: { type: integer, minimum: 0 } }
+
+    InventoryCloseRequest:
+      allOf:
+        - $ref: '#/components/schemas/ExpectedVersionRequest'
+        - type: object
+          properties:
+            action: { type: string, enum: [confirm, close_zero, discard] }
+            skus: { type: array, items: { type: string } }
+            todos: { type: boolean }
+
+    InventoryCloseResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+        ajustados: { type: integer }
+        fallidos: { type: integer }
+        errores: { type: array, items: { type: object, additionalProperties: true } }
+        ventasDuranteConteo: { type: array, items: { type: object, additionalProperties: true } }
+
+    Location:
+      type: object
+      properties:
+        id: { type: string }
+        zona: { type: string }
+        estante: { type: string }
+        estado: { type: string, enum: [bootstrap, mapeada] }
+        skus_registrados: { type: integer }
+
+    LocationMutation:
+      oneOf:
+        - type: object
+          required: [zona, estante]
+          properties:
+            zona: { type: string, minLength: 1 }
+            estante: { type: string, minLength: 1 }
+        - type: object
+          required: [ubicacion_id, skus]
+          properties:
+            ubicacion_id: { type: string, minLength: 1 }
+            skus: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+
+    Difference:
+      type: object
+      required: [version]
+      properties:
+        version: { type: integer, minimum: 1 }
+        id: { type: string }
+        sku: { type: string }
+        tipo: { type: string, enum: [sobrante, faltante] }
+        cantidad_contada: { type: integer }
+        stock_inicial_usado: { type: integer }
+        diferencia: { type: integer }
+        revisado_en: { type: string, format: date-time, nullable: true }
+
+    DifferenceHistoryEntry:
+      type: object
+      required: [id, action, created_at]
+      properties:
+        id: { type: string }
+        action: { type: string, enum: [created, approved, rejected, discarded, adjusted] }
+        actor: { type: string, nullable: true }
+        from_status: { type: string, nullable: true }
+        to_status: { type: string, nullable: true }
+        details: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+
+    DifferenceDecision:
+      type: object
+      required: [id, decision, expected_version]
+      properties:
+        id: { type: string }
+        decision: { type: string, enum: [approve, reject, discard] }
+        expected_version: { type: integer, minimum: 1 }
+
+    LabelJob:
+      type: object
+      properties:
+        id: { type: string }
+        estado: { type: string, enum: [pendiente, procesando, lista, error, impresa] }
+        sku: { type: string }
+        creado_en: { type: string, format: date-time }
+
+    InventoryToday:
+      type: object
+      properties:
+        fecha: { type: string, format: date }
+        items: { type: array, items: { $ref: '#/components/schemas/InventoryItem' } }
+        total: { type: integer }
+
+    PreparationSummary:
+      type: object
+      required: [id, canal, estado, pack_id, envio]
+      properties:
+        id: { type: string }
+        canal: { type: string, enum: [ml, web] }
+        estado: { type: string, enum: [en_preparacion, pendiente_deposito, completada, despachada_sin_verificar, cerrada_sin_evidencia] }
+        pack_id: { type: string, nullable: true, description: "Identificador de pack de ML; null para pedidos sin pack o web" }
+        envio:
+          $ref: '#/components/schemas/ShippingData'
+        numero_pedido: { type: string, nullable: true }
+        comprador: { type: string, nullable: true }
+        actualizado_en: { type: string, format: date-time, nullable: true }
+
+    ShippingData:
+      type: object
+      required: [pedido, nombre, apellido, calle, numeracion, piso_depto, localidad, provincia, cp, caracteristica, telefono, email, dni_cuit, notas]
+      properties:
+        pedido: { type: string }
+        nombre: { type: string }
+        apellido: { type: string }
+        calle: { type: string }
+        numeracion: { type: string }
+        piso_depto: { type: string }
+        localidad: { type: string }
+        provincia: { type: string }
+        cp: { type: string }
+        caracteristica: { type: string }
+        telefono: { type: string }
+        email: { type: string }
+        dni_cuit: { type: string }
+        notas: { type: string }
+
+    PreparationDetail:
+      allOf:
+        - $ref: '#/components/schemas/PreparationSummary'
+        - type: object
+          properties:
+            items: { type: array, items: { type: object, additionalProperties: true } }
+            fotos: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+            eventos: { type: array, items: { type: object, additionalProperties: true } }
+            version: { type: integer, minimum: 1 }
+
+    PreparationScanRequest:
+      type: object
+      required: [codigo]
+      properties:
+        codigo: { type: string, example: "FB-1234" }
+        origen: { type: string, enum: [camara, lector_teclado] }
+
+    ManualConfirmationRequest:
+      allOf:
+        - $ref: '#/components/schemas/ExpectedVersionRequest'
+        - type: object
+          oneOf:
+            - type: object
+              required: [motivo]
+              properties:
+                motivo: { type: string, enum: [codigo_ilegible, sin_etiqueta] }
+                detalle_texto: { type: string, minLength: 1, nullable: true }
+            - type: object
+              required: [motivo, detalle_texto]
+              properties:
+                motivo: { type: string, enum: [otro] }
+                detalle_texto: { type: string, minLength: 1 }
+
+    ScanResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+        resultado: { type: string, enum: [match, no_coincide, sobrante] }
+        codigo: { type: string }
+        item: { type: object, additionalProperties: true, nullable: true }
+
+    EvidenceUpload:
+      type: object
+      required: [archivo]
+      properties:
+        archivo: { type: string, format: binary }
+        item_id: { type: string, nullable: true }
+        tipo: { type: string, example: paquete }
+
+    Evidence:
+      type: object
+      properties:
+        id: { type: string }
+        tipo: { type: string }
+        url: { type: string }
+        estado_proceso: { type: string, enum: [pendiente, procesando, listo, error] }
+
+    PreparationCompletion:
+      type: object
+      properties:
+        ok: { type: boolean }
+        estado: { type: string }
+        pendientes_deposito: { type: array, items: { type: object, additionalProperties: true } }
+
+    DispatchRequest:
+      oneOf:
+        - type: object
+          required: [tipo, tracking, expected_version]
+          properties:
+            tipo: { type: string, enum: [tracking] }
+            tracking: { type: string, minLength: 1 }
+            expected_version: { type: integer, minimum: 1 }
+        - type: object
+          required: [tipo, incidencia, expected_version]
+          properties:
+            tipo: { type: string, enum: [incidencia] }
+            incidencia: { type: string, minLength: 1 }
+            expected_version: { type: integer, minimum: 1 }
+      discriminator: { propertyName: tipo }
+
+    DispatchResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+        estado: { type: string }
+        tracking_anterior: { type: string, nullable: true }
+        tracking_nuevo: { type: string, nullable: true }
+
+    CursorPageInventorySession:
+      type: object
+      required: [items, next_cursor]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/InventorySession' } }, next_cursor: { type: string, nullable: true } }
+    CursorPageDifference:
+      type: object
+      required: [items, next_cursor]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Difference' } }, next_cursor: { type: string, nullable: true } }
+    CursorPageLabelJob:
+      type: object
+      required: [items, next_cursor]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/LabelJob' } }, next_cursor: { type: string, nullable: true } }
+    CursorPagePreparation:
+      type: object
+      required: [items, next_cursor]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/PreparationSummary' } }, next_cursor: { type: string, nullable: true } }
+    CursorPageLocation:
+      type: object
+      required: [items, next_cursor]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Location' } }, next_cursor: { type: string, nullable: true } }
+    CursorPageDifferenceHistory:
+      type: object
+      required: [items, next_cursor]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/DifferenceHistoryEntry' } }, next_cursor: { type: string, nullable: true } }
 
     AuthTokens:
       type: object
@@ -811,7 +1526,7 @@ components:
         ml_status:
           type: string
           enum: [sincronizando, sincronizado, sin_cambios, error, omitido]
-          description: Estado inicial — puede seguir cambiando, consultar GET /operations/{id}.
+          description: Estado inicial — puede seguir cambiando; consultar GET /operations/{correlationId}.
 
     Operation:
       type: object
