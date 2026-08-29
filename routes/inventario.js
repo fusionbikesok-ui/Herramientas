@@ -1333,7 +1333,7 @@ export function inventarioRouter(db, wooCfg) {
 
   // TEMPORAL (pedido explícito del usuario, 2026-08-27): sin requireAdmin mientras termina
   // el ciclo de conteo en curso — sacar el requireAdmin de estas dos rutas apenas termine.
-  router.post('/diferencias/:id/aprobar', /* requireAdmin, */ async (req, res) => {
+  router.post('/diferencias/:id/aprobar', requireAdmin, async (req, res) => {
     const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE id=?').get(req.params.id);
     if (!fila) return res.status(404).json({ ok: false, error: 'Diferencia no encontrada' });
     if (fila.revisado_en) return res.status(400).json({ ok: false, error: 'Esta diferencia ya fue revisada' });
@@ -1396,7 +1396,7 @@ export function inventarioRouter(db, wooCfg) {
       SELECT s.*, COUNT(CASE WHEN s.estado <> 'descartada' AND t.id IS NOT NULL AND t.ajustado_en IS NULL THEN 1 END) AS fallidos
       FROM inventario_sesiones s
       LEFT JOIN inventario_conteos t ON t.sesion_id = s.id AND s.estado <> 'descartada'
-      WHERE s.usuario=? AND s.estado IN ('confirmada','confirmada_con_errores','descartada','abierta')
+      WHERE s.usuario=? AND s.estado IN ('confirmada','confirmada_con_errores','descartada')
       GROUP BY s.id
       ORDER BY COALESCE(s.confirmado_en, s.creado_en) DESC LIMIT 100
     `).all(usuario);
