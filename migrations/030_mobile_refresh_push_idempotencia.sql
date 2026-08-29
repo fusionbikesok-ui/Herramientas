@@ -1,8 +1,7 @@
 -- Hito 7: esquema móvil y reserva durable de delivery.
--- ATENCIÓN: no ejecutar este SQL directamente sobre una base existente.
--- La vía soportada es `openDb()`/`aplicarMigracionHito7` en db/index.js, que
--- inspecciona el esquema legacy y ejecuta la reconstrucción de forma atómica.
--- Este archivo es referencia del contrato DDL y fixture de auditoría.
+-- DDL idempotente para instalaciones nuevas. La adaptación de esquemas legacy
+-- (incluida la reconstrucción NOT NULL) la realiza exclusivamente el runner
+-- transaccional `openDb()`/`aplicarMigracionHito7` en db/index.js.
 --
 -- La aplicación ejecutable está en `aplicarMigracionHito7` (db/index.js), porque SQLite no
 -- tiene un IF DDL para distinguir una tabla nueva de un refresh legacy nullable. Ese helper
@@ -41,6 +40,7 @@ CREATE TABLE IF NOT EXISTS notificaciones_enviadas (
   estado TEXT NOT NULL,
   intentos INTEGER NOT NULL DEFAULT 1,
   error TEXT,
+  idempotencia TEXT,
   creado_en TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_dedupe
@@ -66,9 +66,6 @@ CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_no_leidas
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_usuario_dedupe
   ON notificaciones_usuario(user_id, tipo, incidente_id);
 
--- Funciona para una base pre-Hito7 (tabla vacía recién creada) y para el refresh legacy
--- nullable. Si una fila tiene device_id NULL, el INSERT a la tabla NOT NULL falla y el
--- BEGIN completo revierte el cambio; no se pierde ni se filtra ninguna fila.
 CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_hash TEXT NOT NULL UNIQUE,
@@ -79,30 +76,11 @@ CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
   reemplazado_por TEXT,
   creado_en TEXT NOT NULL
 );
-DROP INDEX IF EXISTS idx_mobile_refresh_device;
-DROP TABLE IF EXISTS mobile_refresh_tokens_nueva;
-CREATE TABLE mobile_refresh_tokens_nueva (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  token_hash TEXT NOT NULL UNIQUE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  device_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
-  expires_at TEXT NOT NULL,
-  revocado_en TEXT,
-  reemplazado_por TEXT,
-  creado_en TEXT NOT NULL
-);
-INSERT INTO mobile_refresh_tokens_nueva
-  (id, token_hash, user_id, device_id, expires_at, revocado_en, reemplazado_por, creado_en)
-SELECT id, token_hash, user_id, device_id, expires_at, revocado_en, reemplazado_por, creado_en
-  FROM mobile_refresh_tokens;
-DROP TABLE mobile_refresh_tokens;
-ALTER TABLE mobile_refresh_tokens_nueva RENAME TO mobile_refresh_tokens;
-CREATE INDEX idx_mobile_refresh_device
+CREATE INDEX IF NOT EXISTS idx_mobile_refresh_device
   ON mobile_refresh_tokens(device_id, revocado_en);
 
-ALTER TABLE notificaciones_enviadas ADD COLUMN idempotencia TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_idempotencia
   ON notificaciones_enviadas(idempotencia) WHERE idempotencia IS NOT NULL;
 
-PRAGMA user_version = 30;
+-- La versión global la administra el runner JavaScript, nunca este SQL aislado.
 COMMIT;

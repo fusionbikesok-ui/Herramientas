@@ -131,4 +131,4 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
   UNIQUE(notification_id, device_id, provider)
 );
 
-PRAGMA user_version = 29;
+-- La versión global la administra el runner JavaScript, nunca este SQL aislado.
