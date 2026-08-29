@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function migrateClaimsBackbone(db) {
+  const versionAntes = db.pragma('user_version', { simple: true });
   // `user_version` es global: Hito 7 puede haberlo llevado a 30 antes de que
   // Claims P1 se instalara. El esquema real es la fuente de verdad.
   const tablasClaims = [
@@ -28,8 +29,8 @@ export function migrateClaimsBackbone(db) {
       }
     }
     // Nunca rebajar una versión escrita por otra migración (p.ej. Hito 7=30).
-    const version = db.pragma('user_version', { simple: true });
-    if (version < 29) db.pragma('user_version = 29');
+    const version = Math.max(versionAntes, 29);
+    db.pragma(`user_version = ${version}`);
   })();
   return true;
 }

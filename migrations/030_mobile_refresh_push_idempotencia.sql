@@ -1,4 +1,8 @@
 -- Hito 7: esquema móvil y reserva durable de delivery.
+-- ATENCIÓN: no ejecutar este SQL directamente sobre una base existente.
+-- La vía soportada es `openDb()`/`aplicarMigracionHito7` en db/index.js, que
+-- inspecciona el esquema legacy y ejecuta la reconstrucción de forma atómica.
+-- Este archivo es referencia del contrato DDL y fixture de auditoría.
 --
 -- La aplicación ejecutable está en `aplicarMigracionHito7` (db/index.js), porque SQLite no
 -- tiene un IF DDL para distinguir una tabla nueva de un refresh legacy nullable. Ese helper
