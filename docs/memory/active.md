@@ -22,8 +22,12 @@ Actualizado: 2026-08-29.
 - El proveedor push real y sus credenciales continúan pendientes de configuración segura;
   `mock` es solo para desarrollo y pruebas.
 
-## Próximo paso
+## Estado de cierre
 
-1. Cerrar los gates dirigidos de Claims + Hito 7, migración y OpenAPI sobre la integración.
-2. Completar la primera vertical móvil real y validar push/deep links en dispositivo.
-3. Consolidar ramas únicamente sin agentes activos, con suites secuenciales y auditoría.
+- P0.1 y P1 backend están integrados en `conteo-confiable` y tienen revisión, auditoría,
+  suite global y E2E web documentados.
+- P0.2 (secretos por entorno, HMAC Woo, topics/URL ML y proveedor push) requiere configuración
+  y evidencia manual; no se inventan valores ni se guardan secretos en el repositorio.
+- P0.3 requiere health, PM2 y migraciones verificados después del próximo deploy manual.
+- P2 cliente móvil se desarrolla en otro chat; el handoff UX es
+  `docs/superpowers/specs/claims-p2-mobile-ux.md` en el worktree de trabajo.

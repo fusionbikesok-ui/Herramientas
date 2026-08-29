@@ -239,8 +239,9 @@ stock ni resuelve trabajo offline sin idempotency key y control de versión.
 ### Ruta específica Claims P0.1 → P2
 
 Esta ruta desglosa el objetivo de Claims sin ampliar el alcance de Hito 7 ni autorizar
-despliegues. P0.1 está implementado; P1 y P2 quedan pendientes y no se consideran cerrados por
-la mera existencia de endpoints o tablas parciales.
+despliegues. Estado verificado al 2026-08-29: P0.1 y P1 backend están integrados; P0.2/P0.3
+requieren configuración y verificación manual del entorno; P2 móvil se implementa en otro
+chat sobre el handoff `docs/superpowers/specs/claims-p2-mobile-ux.md`.
 
 1. **P0.1 — Ingesta real y fail-open:** conservar el webhook legado y `post_purchase`, validar
    cuenta, consultar el recurso autoritativo, persistir `opened`/`closed`, deduplicar y dejar
@@ -260,13 +261,15 @@ la mera existencia de endpoints o tablas parciales.
 4. **P1 — Entrega vertical Claims:** `claim webhook → evento → inbox → notificación lógica →
    push simulado → deep link → lectura/resolución → auditoría`, incluyendo fail-open y DLQ. No
    activar proveedor push real en esta fase.
-5. **P2 — Cliente móvil Claims:** incorporar el cliente móvil existente o crear su setup solo si
-   no existe, generar cliente desde OpenAPI, autenticación segura, inbox paginado, detalle de
-   Claim, marcar leído/resolver, estados offline y deep links con permisos. Validar push y
-   background en dispositivo real antes de activar proveedor.
-6. **P2 — Gate final:** revisor independiente, suite completa serial sin DB abandonadas, E2E
-   web/móvil según superficie tocada, auditoría final y rollback documentado. El deploy queda
-   manual; nunca tocar Hito 7 ni reiniciar procesos durante esta ruta.
+5. **P2 — Cliente móvil Claims (otro chat):** incorporar el prototipo Expo existente o crear su
+   setup solo si no existe, generar cliente desde OpenAPI, autenticación segura, inbox paginado,
+   detalle de Claim, marcar leído/resolver, estados offline y deep links con permisos. Validar
+   push y background en dispositivo real antes de activar proveedor. No se declara cerrado desde
+   este repositorio hasta recibir commit, tests y E2E móvil del otro chat.
+6. **P2 — Gate final:** el otro chat entrega commit y E2E móvil; luego este repositorio ejecuta
+   revisor independiente, suite completa serial sin DB abandonadas, auditoría final y rollback
+   documentado. El deploy queda manual; nunca tocar Hito 7 ni reiniciar procesos durante esta
+   ruta.
 
 ## Prioridad 3 — Conteo e inventario pendiente
 
