@@ -174,6 +174,18 @@ function ensureTables(db) {
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_eventos_prep ON preparacion_eventos(preparacion_id, id)').run();
 
+  // Claim exclusivo de la preparación. Tabla separada para no cambiar el contrato ni
+  // reescribir filas históricas; la PK garantiza que dos operadores no puedan adquirirla
+  // simultáneamente. expires_at se compara como ISO-8601 UTC.
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_claims (
+    preparacion_id INTEGER PRIMARY KEY,
+    usuario        TEXT NOT NULL,
+    claimed_at     TEXT NOT NULL,
+    expires_at     TEXT NOT NULL,
+    renovado_en    TEXT NOT NULL
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_claims_expira ON preparacion_claims(expires_at)').run();
+
   // borrado_en: soft-delete de fotos (columna nueva, agregada con try/catch porque SQLite
   // no tiene "ADD COLUMN IF NOT EXISTS" — falla con "duplicate column" si ya existe, y eso
   // es justamente lo esperado en cada arranque salvo el primero).
@@ -466,6 +478,60 @@ export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null
   });
   tx();
   return prepId;
+}
+
+const CLAIM_TTL_DEFAULT_MS = 15 * 60 * 1000;
+
+function claimTtlMs(cfg) {
+  const configured = Number(cfg?.preparacionClaimTtlMs ?? process.env.PREPARACION_CLAIM_TTL_MS);
+  return Number.isFinite(configured) && configured >= 1000 ? Math.floor(configured) : CLAIM_TTL_DEFAULT_MS;
+}
+
+function claimPreparacion(db, preparacionId, usuario, cfg, timestamp = new Date(), alreadyInTransaction = false) {
+  if (!usuario) return { ok: false, code: 'AUTH_REQUIRED' };
+  const at = timestamp.toISOString();
+  const expires = new Date(timestamp.getTime() + claimTtlMs(cfg)).toISOString();
+  const operation = () => {
+    const actual = db.prepare('SELECT * FROM preparacion_claims WHERE preparacion_id=?').get(preparacionId);
+    if (!actual) {
+      db.prepare(`INSERT INTO preparacion_claims (preparacion_id, usuario, claimed_at, expires_at, renovado_en)
+        VALUES (?,?,?,?,?)`).run(preparacionId, usuario, at, expires, at);
+      return { ok: true, usuario, claimed_at: at, expires_at: expires };
+    }
+    if (actual.usuario !== usuario && actual.expires_at > at) {
+      return { ok: false, code: 'PREPARATION_CLAIMED', claim: actual };
+    }
+    // Mismo usuario: retry idempotente/renovación. Claim vencido de otro usuario también
+    // se puede reutilizar atómicamente; nunca se libera un claim vigente ajeno.
+    const claimedAt = actual.usuario === usuario ? actual.claimed_at : at;
+    db.prepare(`UPDATE preparacion_claims SET usuario=?, claimed_at=?, expires_at=?, renovado_en=?
+      WHERE preparacion_id=?`).run(usuario, claimedAt, expires, at, preparacionId);
+    return { ok: true, usuario, claimed_at: claimedAt, expires_at: expires };
+  };
+  return alreadyInTransaction ? operation() : db.transaction(operation)();
+}
+
+function claimConflict(res, claim) {
+  return res.status(409).json({ ok: false, error: 'La preparación está siendo trabajada por otro operador.', code: 'PREPARATION_CLAIMED', claim: {
+    usuario: claim.usuario, claimed_at: claim.claimed_at, expires_at: claim.expires_at,
+  }});
+}
+
+// Toda mutación operativa debe pertenecer al operador que tomó la preparación.
+// Las lecturas no llaman a este guard. Un claim vencido se puede reclamar de forma
+// explícita (/tomar), pero no habilita silenciosamente una escritura posterior.
+function exigirClaimVigente(db, prep, usuario, res) {
+  const claim = db.prepare('SELECT * FROM preparacion_claims WHERE preparacion_id=?').get(prep.id);
+  if (!usuario) {
+    res.status(409).json({ ok: false, error: 'La preparación requiere una toma vigente.', code: 'PREPARATION_CLAIMED' });
+    return false;
+  }
+  if (!claim || claim.usuario !== usuario || claim.expires_at <= now()) {
+    if (claim && claim.usuario !== usuario && claim.expires_at > now()) return claimConflict(res, claim), false;
+    res.status(409).json({ ok: false, error: 'La preparación no está tomada por este operador o la toma venció.', code: 'PREPARATION_CLAIMED' });
+    return false;
+  }
+  return true;
 }
 
 export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuario, detalle }) {
@@ -780,12 +846,34 @@ export function preparacionRouter(db, cfg) {
   router.post('/etiquetas/:wcOrderId/lista', (req, res) => {
     const wcOrderId = parseInt(req.params.wcOrderId);
     if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado' });
     const { lista = true, numero_pedido, comprador } = req.body || {};
     const clave = `web:${wcOrderId}`;
-    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, etiqueta_lista, estado, creado_en)
-      VALUES ('web', ?, ?, ?, ?, ?, 'en_preparacion', ?)
-      ON CONFLICT(clave) DO UPDATE SET etiqueta_lista=excluded.etiqueta_lista`)
-      .run(clave, wcOrderId, numero_pedido || String(wcOrderId), comprador || null, lista ? 1 : 0, now());
+    const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(clave);
+    if (existente && !exigirClaimVigente(db, existente, req.user.username, res)) return;
+    let claim;
+    try {
+      db.transaction(() => {
+        db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, etiqueta_lista, estado, creado_en)
+          VALUES ('web', ?, ?, ?, ?, ?, 'en_preparacion', ?)
+          ON CONFLICT(clave) DO UPDATE SET etiqueta_lista=excluded.etiqueta_lista`)
+          .run(clave, wcOrderId, numero_pedido || String(wcOrderId), comprador || null, lista ? 1 : 0, now());
+        const prep = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(clave);
+        claim = claimPreparacion(db, prep.id, req.user.username, cfg, new Date(), true);
+        if (!claim.ok) {
+          const error = new Error('PREPARATION_CLAIMED');
+          error.code = claim.code;
+          error.claim = claim.claim;
+          throw error;
+        }
+      })();
+    } catch (error) {
+      if (error.code === 'PREPARATION_CLAIMED') return claimConflict(res, error.claim);
+      throw error;
+    }
+    if (!claim.ok) return claim.code === 'AUTH_REQUIRED'
+      ? res.status(401).json({ ok: false, error: 'No autenticado' })
+      : claimConflict(res, claim.claim);
     res.json({ ok: true, etiqueta_lista: lista ? 1 : 0 });
   });
 
@@ -905,6 +993,9 @@ export function preparacionRouter(db, cfg) {
     if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
     const tracking = String(req.body?.tracking || '').trim();
     if (!tracking) return res.status(400).json({ ok: false, error: 'tracking requerido' });
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+    if (prepExistente && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
@@ -952,7 +1043,8 @@ export function preparacionRouter(db, cfg) {
       // operario quedaba sin forma de ubicar en Woo el único pedido que está trabado
       // (hallazgo del revisor). ON CONFLICT también los actualiza: si ya existía una fila
       // vieja con datos desactualizados (ej. el comprador cambió el pedido), se refresca.
-      db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, tracking)
+      const crearYTomar = db.transaction(() => {
+        db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, tracking)
         VALUES ('web', ?, ?, ?, ?, ?, 1, 'en_preparacion', ?, 1, ?)
         ON CONFLICT(clave) DO UPDATE SET numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, localidad=excluded.localidad, woo_paso2_pendiente=1, tracking=excluded.tracking`)
         .run(
@@ -962,6 +1054,15 @@ export function preparacionRouter(db, cfg) {
           actual.data.shipping?.city || actual.data.billing?.city || null,
           now(), tracking,
         );
+        const nueva = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+        if (!nueva) throw new Error('No se pudo crear la preparación');
+        if (!prepExistente) {
+          const claim = claimPreparacion(db, nueva.id, req.user.username, cfg, new Date(), true);
+          if (!claim.ok) throw Object.assign(new Error('No se pudo tomar la preparación'), { claim });
+        }
+        return nueva;
+      });
+      const preparacion = crearYTomar();
 
       // Evento para GET /seguimientos.data.cargados_hoy — se registra ACÁ, apenas el
       // tracking quedó cargado de verdad (Woo ya tiene el tracking guardado y el mail
@@ -975,7 +1076,7 @@ export function preparacionRouter(db, cfg) {
       // respuesta es 502/colgado, así que el frontend tiene que dejar de incrementarlo
       // localmente y refrescar desde GET /seguimientos (o incrementar también en la rama
       // colgado) para no quedar corrido en -1 el resto del día.
-      const prepId = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`).id;
+      const prepId = preparacion.id;
       registrarEvento(db, {
         preparacionId: prepId, itemId: null, tipo: 'tracking_cargado', usuario: req.user?.username,
         detalle: { tracking },
@@ -1032,6 +1133,8 @@ export function preparacionRouter(db, cfg) {
     if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
     const trackingNuevo = String(req.body?.tracking || '').trim();
     if (!trackingNuevo) return res.status(400).json({ ok: false, error: 'tracking requerido' });
+    const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+    if (prepExistente && !exigirClaimVigente(db, prepExistente, req.user?.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
@@ -1079,9 +1182,12 @@ export function preparacionRouter(db, cfg) {
   router.post('/iniciar', async (req, res) => {
     const { canal, id, direccion_elegida } = req.body || {};
     try {
+      if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
       if (canal === 'web') {
         const resp = await wooFetch(cfg.woo, `/orders/${id}`);
         const clave = `web:${resp.data.id}`;
+        const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(clave);
+        if (existente && !exigirClaimVigente(db, existente, req.user.username, res)) return;
         const yaConfirmada = db.prepare(
           'SELECT direccion_confirmada_fuente FROM preparaciones WHERE clave=?'
         ).get(clave)?.direccion_confirmada_fuente;
@@ -1110,7 +1216,7 @@ export function preparacionRouter(db, cfg) {
         // si el proceso muere entre los dos statements, la preparación no puede quedar
         // creada sin la decisión ya tomada (revertiría a la regla automática de
         // normalizarEnvio, justo lo que este gate existe para evitar).
-        const prepId = db.transaction(() => {
+        const resultado = db.transaction(() => {
           const id = crearPreparacion(db, {
             canal: 'web', wcOrderId: resp.data.id,
             numeroPedido: String(resp.data.number || resp.data.id),
@@ -1123,8 +1229,15 @@ export function preparacionRouter(db, cfg) {
               direccion_confirmada_en=? WHERE id=?`)
               .run(direccion_elegida, req.user?.username || null, now(), id);
           }
-          return id;
+          const claim = claimPreparacion(db, id, req.user.username, cfg, new Date(), true);
+          if (!claim.ok) {
+            const error = new Error(claim.code);
+            error.claimResult = claim;
+            throw error;
+          }
+          return { id, claim };
         })();
+        const prepId = resultado.id;
 
         // Fase 4: detectar si este pedido tiene vínculos con otros ya preparados.
         const nuevaClave = `web:${resp.data.id}`;
@@ -1137,15 +1250,27 @@ export function preparacionRouter(db, cfg) {
         const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${id}`, null, { manual: true });
         if (resp.status !== 200) throw new Error(`ML order ${resp.status}`);
         const orden = resp.data;
+        const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`ml:${orden.id}`);
+        if (existente && !exigirClaimVigente(db, existente, req.user.username, res)) return;
         const items = itemsDesdeOrdenMl(db, orden);
         const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(String(orden.id));
-        const prepId = crearPreparacion(db, {
-          canal: 'ml', mlOrderId: String(orden.id), wcOrderId: vinculo?.wc_order_id || null,
-          packId: orden.pack_id ? String(orden.pack_id) : null,
-          numeroPedido: String(orden.id),
-          comprador: orden.buyer?.nickname || 'Comprador ML',
-          items,
-        });
+        const resultado = db.transaction(() => {
+          const prepId = crearPreparacion(db, {
+            canal: 'ml', mlOrderId: String(orden.id), wcOrderId: vinculo?.wc_order_id || null,
+            packId: orden.pack_id ? String(orden.pack_id) : null,
+            numeroPedido: String(orden.id),
+            comprador: orden.buyer?.nickname || 'Comprador ML',
+            items,
+          });
+          const claim = claimPreparacion(db, prepId, req.user.username, cfg, new Date(), true);
+          if (!claim.ok) {
+            const error = new Error(claim.code);
+            error.claimResult = claim;
+            throw error;
+          }
+          return { id: prepId, claim };
+        })();
+        const prepId = resultado.id;
 
         // Fase 4: detectar si este pedido tiene vínculos con otros ya preparados.
         // Nota: detectarVinculoEntrePedidos espera un objeto order similar a WC. ML tiene
@@ -1157,6 +1282,12 @@ export function preparacionRouter(db, cfg) {
       }
       res.status(400).json({ ok: false, error: 'canal inválido' });
     } catch (e) {
+      if (e?.claimResult?.code === 'AUTH_REQUIRED') {
+        return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+      }
+      if (e?.claimResult?.code === 'PREPARATION_CLAIMED') {
+        return claimConflict(res, e.claimResult.claim);
+      }
       res.status(500).json({ ok: false, error: e.message });
     }
   });
@@ -1343,6 +1474,43 @@ export function preparacionRouter(db, cfg) {
     res.json({ ok: true, eventos });
   });
 
+  // ── Claim exclusivo de trabajo ──
+  // Las operaciones de preparación existentes siguen siendo compatibles; las pantallas
+  // nuevas pueden tomar explícitamente una preparación ya creada y renovar/liberar su claim.
+  router.post('/:id/tomar', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const claim = claimPreparacion(db, prep.id, req.user?.username, cfg);
+    if (!claim.ok) return claim.code === 'PREPARATION_CLAIMED'
+      ? claimConflict(res, claim.claim)
+      : res.status(401).json({ ok: false, error: 'Usuario requerido', code: claim.code });
+    res.json({ ok: true, claim: { usuario: claim.usuario, claimed_at: claim.claimed_at, expires_at: claim.expires_at } });
+  });
+
+  router.post('/:id/claim/renovar', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const claim = claimPreparacion(db, prep.id, req.user?.username, cfg);
+    if (!claim.ok) return claim.code === 'PREPARATION_CLAIMED'
+      ? claimConflict(res, claim.claim)
+      : res.status(401).json({ ok: false, error: 'Usuario requerido', code: claim.code });
+    res.json({ ok: true, claim: { usuario: claim.usuario, claimed_at: claim.claimed_at, expires_at: claim.expires_at } });
+  });
+
+  router.post('/:id/claim/liberar', (req, res) => {
+    const usuario = req.user?.username;
+    if (!usuario) return res.status(401).json({ ok: false, error: 'Usuario requerido', code: 'AUTH_REQUIRED' });
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const actual = db.prepare('SELECT * FROM preparacion_claims WHERE preparacion_id=?').get(prep.id);
+    if (!actual) return res.json({ ok: true, liberado: false });
+    if (actual.usuario !== usuario) return actual.expires_at > now()
+      ? claimConflict(res, actual)
+      : res.status(409).json({ ok: false, error: 'La toma vencida pertenece a otro operador.', code: 'PREPARATION_CLAIMED' });
+    db.prepare('DELETE FROM preparacion_claims WHERE preparacion_id=? AND usuario=?').run(prep.id, usuario);
+    res.json({ ok: true, liberado: true });
+  });
+
   // ── Heartbeat de presencia: "estoy viendo esta preparación ahora" ──
   // No bloquea nada — solo informa quién más la está viendo, para que los operarios
   // coordinen entre sí si se están por pisar. Sin limpieza explícita de filas viejas:
@@ -1373,6 +1541,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/escanear', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const bloqueo = bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
 
@@ -1411,6 +1580,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/item/:itemId/confirmar-manual', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const bloqueo = bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
@@ -1452,6 +1622,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/item/:itemId/embalaje', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
     if (!item) return res.status(404).json({ ok: false, error: 'ítem no encontrado' });
     if (item.perfil !== 'bici') return res.status(400).json({ ok: false, error: 'solo aplica a bicicletas' });
@@ -1474,6 +1645,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/item/:itemId/despacho', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
     if (!item) return res.status(404).json({ ok: false, error: 'ítem no encontrado' });
 
@@ -1515,6 +1687,7 @@ export function preparacionRouter(db, cfg) {
   }, (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const bloqueo = bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
@@ -1592,6 +1765,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/foto/:fotoId/reintentar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const fotoId = parseInt(req.params.fotoId);
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=?').get(fotoId, prep.id);
     if (!foto) return res.status(404).json({ ok: false, error: 'foto no encontrada' });
@@ -1606,6 +1780,7 @@ export function preparacionRouter(db, cfg) {
   router.delete('/:id/foto/:fotoId', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const fotoId = parseInt(req.params.fotoId);
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=? AND borrado_en IS NULL').get(fotoId, prep.id);
     if (!foto) return res.json({ ok: true, borradas: 0 });
@@ -1631,6 +1806,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/completar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     if (prep.estado === 'completada') return res.status(400).json({ ok: false, error: 'ya completada' });
     // Fail-closed: una 'cerrada_sin_evidencia' no se completa directamente — primero hay
     // que reabrirla (POST /:id/reabrir, ver docs/api-contrato.md), que deja registrado el
@@ -1699,6 +1875,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/reabrir', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     if (prep.estado !== 'cerrada_sin_evidencia') {
       return res.status(400).json({
         ok: false,
@@ -1782,6 +1959,15 @@ export function preparacionRouter(db, cfg) {
       // Buscar la fila del vínculo.
       const vinculo = db.prepare('SELECT * FROM preparacion_vinculos WHERE id = ?').get(vinculoId);
       if (!vinculo) return res.status(404).json({ ok: false, error: 'vínculo no encontrado' });
+      const prepVinculo = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(vinculo.preparacion_id);
+      if (prepVinculo && !exigirClaimVigente(db, prepVinculo, req.user?.username, res)) return;
+      const claves = [vinculo.pedido_a_clave, vinculo.pedido_b_clave];
+      const preparaciones = claves
+        .map((clave) => db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(clave))
+        .filter(Boolean);
+      for (const prep of preparaciones) {
+        if (prep.id !== prepVinculo?.id && !exigirClaimVigente(db, prep, req.user?.username, res)) return;
+      }
 
       // Actualizar con la decisión.
       const cambio = db.prepare(`

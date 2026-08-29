@@ -45,6 +45,11 @@ function buildTestApp(db) {
   return app;
 }
 
+async function tomarPorApi(app, id) {
+  const res = await request(app).post(`/api/preparacion/${id}/tomar`);
+  expect(res.status).toBe(200);
+}
+
 describe('contrato normalizarEnvio (planilla Andreani)', () => {
   it('expone exactamente las 14 claves que consume public/preparacion/index.html', () => {
     const order = {
@@ -408,7 +413,9 @@ describe('POST /seguimientos/:wcOrderId', () => {
       .mockResolvedValueOnce({ data: { id: 930, status: 'completed' } })
       .mockResolvedValueOnce({ data: { id: 930, status: 'enviadoandreani' } });
 
-    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/930').send({ tracking: 'AND777' });
+    const app = buildTestApp(db);
+    await tomarPorApi(app, prepId);
+    const res = await request(app).post('/api/preparacion/seguimientos/930').send({ tracking: 'AND777' });
     expect(res.status).toBe(200);
 
     const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
@@ -419,6 +426,8 @@ describe('POST /seguimientos/:wcOrderId', () => {
     const app = buildTestApp(db); // ensureTables corre acá; hace falta antes del INSERT
     db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en)
       VALUES ('web','web:940',940,1,'cerrada_sin_evidencia',?)`).run(new Date().toISOString());
+    const prepId = db.prepare('SELECT id FROM preparaciones WHERE wc_order_id=940').get().id;
+    await tomarPorApi(app, prepId);
 
     wooFetch
       .mockResolvedValueOnce({ data: { id: 940, status: 'lpaandreani', meta_data: [] } })
