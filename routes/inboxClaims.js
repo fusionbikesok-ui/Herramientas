@@ -17,11 +17,16 @@ export function inboxClaimsRouter(db, authMiddleware) {
 
   router.get('/', auth, (req, res) => {
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+    const cursor = req.query.cursor == null || req.query.cursor === '' ? null : Number(req.query.cursor);
+    if (cursor !== null && (!Number.isSafeInteger(cursor) || cursor < 1)) {
+      return res.status(422).json({ error: { code: 'cursor_invalido', message: 'cursor inválido' } });
+    }
     const status = req.query.status;
     const channel = req.query.channel;
     const params = [];
     let where = '(i.assigned_user_id IS NULL OR i.assigned_user_id = ?)';
     params.push(req.user.id);
+    if (cursor !== null) { where += ' AND i.inbox_id < ?'; params.push(cursor); }
     if (status) { where += ' AND i.status = ?'; params.push(status); }
     if (channel) { where += ' AND i.channel = ?'; params.push(channel); }
     const rows = db.prepare(`SELECT i.* FROM inbox_items i WHERE ${where}

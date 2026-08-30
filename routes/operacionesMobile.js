@@ -30,8 +30,14 @@ export function operacionesMobileRouter(db, authMiddleware) {
 
   router.get('/integration-notifications', auth, (req, res) => {
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+    const cursor = req.query.cursor == null || req.query.cursor === '' ? null : Number(req.query.cursor);
+    if (cursor !== null && (!Number.isSafeInteger(cursor) || cursor < 1)) {
+      return res.status(422).json({ error: { code: 'cursor_invalido', message: 'cursor inválido' } });
+    }
+    const where = cursor === null ? 'user_id = ?' : 'user_id = ? AND notification_id < ?';
+    const params = cursor === null ? [req.user.id] : [req.user.id, cursor];
     const rows = db.prepare(`SELECT notification_id,event_id,inbox_id,title,body,deep_link,status,created_at,read_at
-      FROM user_notifications WHERE user_id = ? ORDER BY notification_id DESC LIMIT ?`).all(req.user.id, limit + 1);
+      FROM user_notifications WHERE ${where} ORDER BY notification_id DESC LIMIT ?`).all(...params, limit + 1);
     return res.json({ items: rows.slice(0, limit), next_cursor: rows.length > limit ? String(rows[limit - 1].notification_id) : null });
   });
 

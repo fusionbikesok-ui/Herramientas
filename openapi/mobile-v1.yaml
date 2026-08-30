@@ -488,6 +488,9 @@ paths:
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: cursor
+          in: query
+          schema: { type: string, description: ID de la última fila recibida }
       responses:
         '200':
           description: Notificaciones lógicas y cursor siguiente
@@ -515,6 +518,9 @@ paths:
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: cursor
+          in: query
+          schema: { type: string, description: ID de la última fila recibida }
       responses:
         '200':
           description: Ítems de inbox

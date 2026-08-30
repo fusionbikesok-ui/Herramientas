@@ -171,6 +171,19 @@ describe('server', () => {
 
     expect((await request(app).get('/api/v1/me').set(auth)).status).toBe(200);
     expect((await request(app).get('/api/v1/notifications').set(auth)).status).toBe(200);
+    expect((await request(app).get('/api/v1/inbox?cursor=not-a-cursor').set(auth)).status).toBe(422);
+    expect((await request(app).get('/api/v1/integration-notifications?cursor=not-a-cursor').set(auth)).status).toBe(422);
+    const mobileUserId = app._db.prepare("SELECT id FROM users WHERE username='mobile'").get().id;
+    const ts = new Date().toISOString();
+    app._db.prepare(`INSERT INTO user_notifications (user_id,title,body,created_at)
+      VALUES (?, 'vieja', 'body', ?), (?, 'nueva', 'body', ?)`).run(mobileUserId, ts, mobileUserId, ts);
+    const firstPage = await request(app).get('/api/v1/integration-notifications?limit=1').set(auth);
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.items).toHaveLength(1);
+    expect(firstPage.body.next_cursor).toBeTruthy();
+    const secondPage = await request(app).get(`/api/v1/integration-notifications?limit=1&cursor=${firstPage.body.next_cursor}`).set(auth);
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.items).toHaveLength(1);
     expect((await request(app).get('/api/v1/notifications/preferences').set(auth)).body)
       .toEqual({ incidentes_criticos: true });
     const preference = await request(app).patch('/api/v1/notifications/preferences').set(auth)
