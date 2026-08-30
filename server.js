@@ -501,7 +501,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // una vuelta completa tarda ~19 h. No compite con la reconciliación de stock (cada 10 min)
       // ni con backfillVentas (diario) porque usa atributos distintos del multiget de ML.
       cron.schedule('*/15 * * * *', () => {
-        barridoAuditoria(app._db, syncCfg)
+        barridoAuditoria(app._db, mlCfg)
           .then(r => { if (r.auditados) console.log('barridoAuditoria:', JSON.stringify(r)); })
           .catch(err => console.error('Error en barridoAuditoria:', err.message));
       });
