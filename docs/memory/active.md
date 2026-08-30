@@ -138,5 +138,9 @@ contra la IP saliente de este VPS (`179.197.74.83`).
   (rama que sirve producción).
 - Dos worktrees vivos con trabajo real pendiente, no integrado: ver arriba.
 - No hay ningún otro worktree, rama local ni proceso de test corriendo en este momento.
+- La suite global completa tarda al menos **13 minutos** en el entorno actual. No debe detenerse
+  por parecer inactiva: ejecutarla en serie, esperar el resumen final y mantener actualizaciones
+  de estado aproximadamente cada 60–90 segundos. Si la terminal no permite una espera tan larga,
+  dejar el proceso persistente y consultar su salida; solo interrumpir ante un error inequívoco.
 - Ningún ítem de U0 está autorizado a desplegarse sin pipeline completo: cada cambio futuro
   conserva revisión, tests, E2E, auditoría y aprobación previa a modificar producción.
