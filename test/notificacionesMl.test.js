@@ -45,6 +45,10 @@ describe('ingerirPregunta', () => {
     expect(row.texto).toBe('¿Tiene stock?');
     expect(row.estado).toBe('UNANSWERED');
     expect(row.respondida_en).toBeNull();
+    expect(db.prepare("SELECT event_type, channel, resource_id, dedupe_key FROM integration_events WHERE resource_id='123'").get())
+      .toMatchObject({ event_type: 'question.received', channel: 'ml', resource_id: '123', dedupe_key: 'ml:question:123:UNANSWERED' });
+    expect(db.prepare("SELECT title, preview, status FROM inbox_items WHERE resource_id='123'").get())
+      .toMatchObject({ title: 'Pregunta ML · MLA1', preview: '¿Tiene stock?', status: 'unread' });
   });
 
   it('marca respondida_en cuando la pregunta ya está ANSWERED', async () => {

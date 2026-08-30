@@ -44,6 +44,37 @@ function proyectarClaimEnBackbone(db, { claimId, estado, titulo, detalle, ocurri
   (txDb ? guardar : db.transaction(guardar))();
 }
 
+function proyectarPreguntaEnBackbone(db, { preguntaId, estado, texto, itemId, ocurridoEn }, txDb = null) {
+  const target = txDb || db;
+  const recibidoEn = now();
+  const dedupeKey = `ml:question:${preguntaId}:${estado}`;
+  const eventId = `ml-question-${preguntaId}-${estado}`;
+  const correlationId = `ml-question-${preguntaId}`;
+  const guardar = () => {
+    target.prepare(`INSERT OR IGNORE INTO integration_events
+      (event_id,event_type,channel,source,external_event_id,resource_id,payload_version,
+       occurred_at,received_at,correlation_id,dedupe_key,metadata_json,status)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      eventId, 'question.received', 'ml', 'mercadolibre', String(preguntaId), String(preguntaId), 'v1',
+      ocurridoEn || recibidoEn, recibidoEn, correlationId, dedupeKey,
+      JSON.stringify({ estado, item_id: itemId || null }), 'pending'
+    );
+    const evento = target.prepare('SELECT event_id FROM integration_events WHERE dedupe_key = ?').get(dedupeKey);
+    if (!evento) return;
+    target.prepare(`INSERT OR IGNORE INTO integration_jobs
+      (event_id,job_type,available_at) VALUES (?,?,?)`).run(evento.event_id, 'question.project', recibidoEn);
+    target.prepare(`INSERT OR IGNORE INTO integration_event_history
+      (event_id,stage,to_status,resource_id,correlation_id,safe_message,created_at)
+      VALUES (?,?,?,?,?,?,?)`).run(evento.event_id, 'event.persist', 'pending', String(preguntaId),
+      correlationId, 'pregunta durable recibida', recibidoEn);
+    target.prepare(`INSERT OR IGNORE INTO inbox_items
+      (event_id,channel,resource_id,title,preview,status,version,created_at,updated_at)
+      VALUES (?,?,?,?,?,'unread',1,?,?)`).run(evento.event_id, 'ml', String(preguntaId),
+      `Pregunta ML${itemId ? ` · ${itemId}` : ''}`, texto || null, recibidoEn, recibidoEn);
+  };
+  (txDb ? guardar : db.transaction(guardar))();
+}
+
 export function extraerClaimId(resource) {
   return String(resource || '').match(/\/claims\/([A-Za-z0-9_-]+)(?:[\/?#]|$)/)?.[1] || null;
 }
@@ -126,18 +157,25 @@ export async function ingerirPregunta(db, mlCfg, resource) {
   const resp = await mlFetch(db, mlCfg, 'get', `/questions/${m[1]}`);
   if (resp.status !== 200 || !resp.data) return;
   const q = resp.data;
-  db.prepare(`
-    INSERT INTO ml_preguntas (id, item_id, texto, estado, fecha_creacion, respondida_en, actualizado_en)
-    VALUES (@id, @item_id, @texto, @estado, @fecha_creacion, @respondida_en, @actualizado_en)
-    ON CONFLICT(id) DO UPDATE SET
-      item_id=excluded.item_id, texto=excluded.texto, estado=excluded.estado,
-      respondida_en=excluded.respondida_en, actualizado_en=excluded.actualizado_en
-  `).run({
-    id: q.id, item_id: q.item_id || null, texto: q.text || '',
-    estado: q.status || 'UNKNOWN', fecha_creacion: q.date_created || null,
-    respondida_en: q.status === 'ANSWERED' ? (q.answer?.date_created || now()) : null,
-    actualizado_en: now(),
-  });
+  const estado = q.status || 'UNKNOWN';
+  const actualizadoEn = now();
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO ml_preguntas (id, item_id, texto, estado, fecha_creacion, respondida_en, actualizado_en)
+      VALUES (@id, @item_id, @texto, @estado, @fecha_creacion, @respondida_en, @actualizado_en)
+      ON CONFLICT(id) DO UPDATE SET
+        item_id=excluded.item_id, texto=excluded.texto, estado=excluded.estado,
+        respondida_en=excluded.respondida_en, actualizado_en=excluded.actualizado_en
+    `).run({
+      id: q.id, item_id: q.item_id || null, texto: q.text || '', estado,
+      fecha_creacion: q.date_created || null,
+      respondida_en: estado === 'ANSWERED' ? (q.answer?.date_created || actualizadoEn) : null,
+      actualizado_en: actualizadoEn,
+    });
+    proyectarPreguntaEnBackbone(db, {
+      preguntaId: q.id, estado, texto: q.text || '', itemId: q.item_id, ocurridoEn: q.date_created,
+    }, db);
+  })();
 }
 
 // GET <resource> de la notificación de messages — implementación mínima: guarda lo que
