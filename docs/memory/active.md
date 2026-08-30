@@ -104,6 +104,34 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
   como diferido a propósito ("Integrar `prep-horarios-corte` únicamente después de repetir todos
   los gates sobre la base productiva actual").
 
+## Incidente abierto: bloqueo de red contra WooCommerce (2026-08-30, pendiente para el usuario)
+
+**No es una caída de `fusionbikes.com.ar` ni un bug de este deploy.** Es un bloqueo específico
+contra la IP saliente de este VPS (`179.197.74.83`).
+
+- Síntoma reportado: la app muestra dos errores de sync (`Error refrescando catálogo` y
+  `Error sincronizando pedidos_cache`), ambos por no poder hablar con WooCommerce (timeouts de
+  20s, 503/521/508). El sistema de alertas lo tiene registrado como incidente activo
+  `incidentes_operativos` id 7 (`woocommerce | refrescar_catalogo`), primera detección
+  2026-08-30T19:31:07Z, 33+ repeticiones, sin resolver. El circuito de WooCommerce está abierto
+  (pausa reintentos para no insistir contra un origen que rechaza).
+- Diagnóstico verificado: desde este VPS, `https://fusionbikes.com.ar` da 503 (a veces
+  instantáneo, <0.1s — típico de un edge de Cloudflare devolviendo el error, no del origen
+  real) o timeout total; probado con curl normal y con User-Agent de navegador, mismo
+  resultado. En cambio Google y la API de MercadoLibre responden normal desde el mismo VPS
+  (internet del servidor está bien). El usuario confirmó que el sitio le carga bien desde su
+  propia conexión.
+- **Conclusión: muy probablemente Cloudflare (o un plugin de seguridad de WordPress, ej.
+  Wordfence) está bloqueando el rango de IPs de datacenter/hosting de este VPS específico**,
+  lo que corta también las llamadas legítimas de la integración ML↔Woo, no solo la navegación.
+- **Efecto colateral:** el pedido ML `2000018195106388` quedó con la reserva RETENIDA en
+  fail-closed porque no se pudo verificar contra Woo si ya existía — revisar manualmente en
+  cuanto se restablezca el acceso.
+- **Acción pendiente (usuario, no resoluble desde este repo):** entrar al panel de Cloudflare
+  de `fusionbikes.com.ar` (Security → Events) o al plugin de seguridad de WordPress, buscar
+  bloqueos contra `179.197.74.83`, y agregarla a la lista de permitidos. Es la IP fija de este
+  VPS — la usa constantemente la integración.
+
 ## Dónde se está trabajando
 
 - Único checkout activo de desarrollo: `/opt/fusionbikes/herramientas` sobre `conteo-confiable`
