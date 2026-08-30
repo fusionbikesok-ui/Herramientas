@@ -124,6 +124,23 @@ describe('server', () => {
       .toThrow(/MOBILE_JWT_SECRET/);
   });
 
+  it('rechaza con 401 una firma Woo inválida aunque tenga longitud incorrecta', async () => {
+    const anterior = process.env.WOO_WEBHOOK_SECRET;
+    process.env.WOO_WEBHOOK_SECRET = 'secret-de-prueba';
+    try {
+      const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+      currentApp = app;
+      const res = await request(app).post('/api/woo/webhook/order')
+        .set('x-wc-webhook-signature', 'invalid')
+        .send({ id: 123 });
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ ok: false, error: 'firma inválida' });
+    } finally {
+      if (anterior === undefined) delete process.env.WOO_WEBHOOK_SECRET;
+      else process.env.WOO_WEBHOOK_SECRET = anterior;
+    }
+  });
+
   it('API móvil real: login, Bearer JWT, permisos, refresh y revocación atómica del dispositivo', async () => {
     const app = buildApp({
       dbPath: TEST_DB,

@@ -77,7 +77,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
         if (!sig) return res.status(401).json({ ok: false, error: 'sin firma' });
         const expected = crypto.createHmac('sha256', whSecret)
           .update(req.body).digest('base64');
-        if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+        const received = Buffer.from(String(sig));
+        const expectedBuffer = Buffer.from(expected);
+        if (received.length !== expectedBuffer.length || !crypto.timingSafeEqual(received, expectedBuffer)) {
           return res.status(401).json({ ok: false, error: 'firma inválida' });
         }
       }
