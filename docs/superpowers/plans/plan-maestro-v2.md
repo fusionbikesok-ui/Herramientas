@@ -104,6 +104,10 @@ Pendientes concretos absorbidos por esta entrega:
   auditoría.
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
   ítems y verificar tabla/modal de stock a 390 px.
+- Integrar `prep-cola-instantanea` (rama viva, worktree en
+  `.claude/worktrees/prep-cola-instantanea`, no mergeada): marca visualmente "NUEVO" en la cola
+  de Preparación los pedidos recién llegados por webhook. Feature autocontenida, encontrada en
+  auditoría de ramas del 2026-08-30 sin registro previo en este plan.
 
 **Aceptación U0.B:** un pedido recorre cola → preparación → evidencia → etiqueta → despacho con
 trazabilidad completa y sin toma simultánea por dos operadores.
@@ -405,10 +409,11 @@ cifrado. Validar cámara, biometría, background y push en dispositivos reales d
 ### Ruta específica Claims P0.1 → App 3
 
 Esta ruta desglosa el objetivo de Claims sin ampliar el alcance de Hito 7 ni autorizar
-despliegues. Estado documental al 2026-08-30: P0.1 y P1 backend tienen un diff local pendiente
-de revisión final; sus conteos y auditorías previos no certifican este estado. P0.2 está
-configurado según la evidencia operativa disponible y P0.3 requiere repetir la verificación
-tras integrar este diff; el cliente móvil queda subordinado a App 3 sobre el handoff
+despliegues. Estado al 2026-08-30: P1.5 (lease/backoff/DLQ de `integration_jobs` y correcciones
+al webhook de ML) está **desplegado en producción** (commit `7d3b9f9` sobre `conteo-confiable`,
+pipeline completo verde, ver `docs/memory/active.md`). P0.2 está configurado según la evidencia
+operativa disponible; P0.3 requiere un nuevo barrido de evidencia sobre `7d3b9f9` (el anterior
+era sobre `d6a021a`). El cliente móvil queda subordinado a App 3 sobre el handoff
 `docs/superpowers/specs/claims-p2-mobile-ux.md` para no desplazar U0.
 
 1. **P0.1 — Ingesta real y fail-open:** conservar el webhook legado y `post_purchase`, validar
@@ -457,6 +462,16 @@ se actualizan únicamente dentro de U0 hasta el cierre del 2026-09-04.
 ## Prioridad 6 — Consolidar `master` y `conteo-confiable`
 
 Objetivo: una sola línea de desarrollo y producción, sin perder funciones exclusivas.
+
+**Higiene de ramas ya ejecutada (2026-08-30):** de 49 ramas locales quedan solo `conteo-confiable`,
+`master`, `prep-cola-instantanea` y `prep-horarios-corte` (las dos últimas: trabajo real
+pendiente, ver U0.B y `docs/memory/active.md`). Las demás se verificaron mergeadas
+(`git merge-base --is-ancestor`) o se archivaron como tag `archive/<nombre>` antes de borrarse
+por tener base de merge muy anterior (2026-08-19/25) y contenido ya superado. Detalle completo en
+`docs/memory/active.md`, sección "Higiene de ramas". **No re-auditar esas ramas**: si hace falta
+recuperar alguna, están en `git tag -l "archive/*"`. Esto reduce el trabajo del paso 1 de esta
+prioridad, pero la divergencia de contenido entre `master` y `conteo-confiable` (86 commits,
+conflicto en 23 archivos detectado por `auditor-despliegue` el 2026-08-30) sigue sin resolver.
 
 1. Confirmar que no haya agentes, worktrees o despliegues activos sobre ambas ramas.
 2. Congelar una base y respaldar referencias remotas.

@@ -34,16 +34,81 @@ Actualizado: 2026-08-30.
 
 ## Estado de cierre
 
-- P0.1 y P1 backend tienen cambios locales pendientes de revisión; los conteos y auditorías
-  anteriores quedan invalidados por este diff y no certifican el cierre.
+- **P1.5 (lease/backoff/DLQ de `integration_jobs`) desplegado en producción.** Commit `7d3b9f9`
+  sobre `conteo-confiable` (push a `origin/conteo-confiable` hecho), `pm2 restart` aplicado,
+  migración `035_integration_jobs_lease_token.sql` verificada aplicada (`lease_token` presente en
+  `integration_jobs`). Pasó pipeline completo (revisor → hard-worker → tester →
+  auditor-despliegue) en 6 rondas — incluyó cerrar `isClaim` sin gate de `action`, normalización
+  de `resource_id` de claims a forma canónica, ACK del webhook `/api/ml/notificacion` siempre
+  `200` (decisión explícita: ML documenta 200 como único ACK válido), cuenta ajena sin persistir,
+  gate `PUSH_REAL_ENABLED` fail-closed sin depender de `NODE_ENV`, y saneo anti log-injection en
+  los 4 logs de error. Suite global 1855/1855 verde antes del deploy. Verificado post-deploy con
+  PM2 `online` estable y prueba real del webhook (400 con log saneado).
+- **Incidente durante el pipeline (2026-08-30):** otro proceso/sesión trabajando en paralelo sobre
+  este mismo checkout reescribió partes de `server.js` (revirtió el ACK a `202`) y un agente
+  auditor con la sesión cortada modificó `vitest.config.js`/`package.json` sin autorización
+  (agregó `--no-file-parallelism`). Ambos se detectaron verificando código literal en vez de
+  confiar en resúmenes, y se revirtieron antes del deploy final. Lección: en este repo puede haber
+  más de un agente/sesión escribiendo sobre el mismo working tree a la vez — verificar el diff
+  real antes de cada gate, no solo el resumen del paso anterior.
+- Pendiente para el próximo ciclo (no bloqueante): rate limiting en `/api/ml/notificacion`
+  (endpoint público sin límite de tasa), y revisar si quedó backlog sin consumidor en
+  `ml_reclamos` tras dar de baja el cron legacy `reintentarReclamosSinConsultar`.
 - P0.2 tiene configuración local verificada para JWT, HMAC Woo, ML y FCM; la URL operativa de ML es
   `/api/ml/notificacion` bajo el dominio de producción y los topics fueron confirmados por el
-  responsable operativo.
-- P0.3 tiene evidencia histórica sobre `d6a021a`, pero requiere repetir verificación después de
-  integrar el diff actual; no se declara certificado por esta worktree.
+  responsable operativo. `PUSH_REAL_ENABLED=true` fue agregado al `.env` real del VPS (no
+  versionado) con autorización explícita del usuario, para que el nuevo gate fail-closed no
+  apagara las push reales al desplegar.
+- P0.3 requiere una nueva verificación operativa (PM2, health, migraciones, webhooks) sobre
+  `7d3b9f9`, ya que la evidencia anterior era sobre `d6a021a`. Verificación mínima ya hecha en el
+  deploy (arriba); falta el barrido completo de evidencia que documentaba P0.3 antes.
 - El cliente móvil Claims queda subordinado a App 3 para no desplazar U0; su handoff UX sigue en
   `docs/superpowers/specs/claims-p2-mobile-ux.md`.
 - App 0 y el cliente móvil pertenecen al otro chat/repositorio. Este repo conserva únicamente los
   contratos backend; no se atribuyen aquí builds, tests ni artefactos móviles.
-- Ningún ítem de U0 está autorizado a desplegarse por esta actualización documental: cada cambio
-  futuro conserva revisión, tests, E2E, auditoría y aprobación previa a modificar producción.
+
+## Higiene de ramas (2026-08-30)
+
+Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, `/tmp/fusion-*`,
+`/root/.claude/jobs/*`) comparando contenido real (no solo mensajes de commit) contra
+`conteo-confiable`. Resultado, para no repetir esta auditoría:
+
+- **Quedan 4 ramas locales:** `conteo-confiable` (producción), `master` (pendiente de
+  consolidación, Prioridad 6), `prep-cola-instantanea` y `prep-horarios-corte` (ver abajo).
+- **~38 ramas se borraron sin tag** (`git branch -d`): contenido 100% mergeado en
+  `conteo-confiable`, verificado por `git merge-base --is-ancestor`. Sin pérdida de historia.
+- **9 ramas viejas/reemplazadas se archivaron como tag `archive/<nombre>` antes de borrarse**
+  (`c3-preparacion-gtin`, `entrega-a-ingreso-matcher`, `fix-nombre-truncado-inventario`,
+  `fix-preparacion-huerfana`, `fase4-planificador-ciclos`, `integracion-master-conteo`,
+  `hito7-push-backend`, `worktree-matcher-unificado-v2`, `p0-claims-real`): tenían commits únicos
+  pero su base de merge era de 2026-08-19/25, muy anterior a la consolidación del plan maestro
+  actual, y su contenido ya está superado por `conteo-confiable`. Recuperables con
+  `git checkout -b <nombre> archive/<nombre>` si hiciera falta, pero no deberían revisarse de
+  nuevo salvo pedido explícito.
+- `codex/u0b-despacho` y `codex/u0b-despacho-fix` se borraron sin tag: su contenido resultó
+  byte-a-byte idéntico (`git diff` vacío) al ya mergeado en `conteo-confiable` bajo otro hash.
+- Se removieron ~29 worktrees redundantes (mismo contenido que arriba, incluidos varios con
+  cambios sin commitear que resultaron ser WIP ya superado o solo `node_modules`).
+- `p0-claims-real` (archivada) traía un esqueleto `mobile/` de 6 archivos (App.tsx, package.json)
+  que no está en `conteo-confiable`. Es un prototipo temprano de App 0 abandonado; no contradice
+  la regla de que este repo no declara artefactos móviles propios porque nunca se integró.
+
+### Pendiente real detectado (no documentado antes)
+
+- **`prep-cola-instantanea`** (rama viva, worktree en `.claude/worktrees/prep-cola-instantanea`):
+  feature autocontenida de U0.B — marca visualmente "NUEVO" los pedidos que llegan por webhook a
+  la cola de Preparación (`public/preparacion/index.html`, `test/preparacion-render.test.js`).
+  Confirmado que NO está en `conteo-confiable`. Falta decidir si se integra antes del cierre de
+  U0.B del 2026-09-04.
+- **`prep-horarios-corte`** (rama viva, worktree en `/tmp/fusion-prep-horarios`): ya documentado
+  como diferido a propósito ("Integrar `prep-horarios-corte` únicamente después de repetir todos
+  los gates sobre la base productiva actual").
+
+## Dónde se está trabajando
+
+- Único checkout activo de desarrollo: `/opt/fusionbikes/herramientas` sobre `conteo-confiable`
+  (rama que sirve producción).
+- Dos worktrees vivos con trabajo real pendiente, no integrado: ver arriba.
+- No hay ningún otro worktree, rama local ni proceso de test corriendo en este momento.
+- Ningún ítem de U0 está autorizado a desplegarse sin pipeline completo: cada cambio futuro
+  conserva revisión, tests, E2E, auditoría y aprobación previa a modificar producción.
