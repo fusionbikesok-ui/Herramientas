@@ -870,6 +870,10 @@ export function preparacionRouter(db, cfg) {
     const codigo = String(req.body?.codigo || '').trim().toUpperCase();
     const idempotencia = String(req.get('Idempotency-Key') || req.body?.idempotencia || '').trim();
     if (!codigo || !idempotencia) return res.status(400).json({ ok: false, error: 'codigo e idempotencia requeridos' });
+    const previoGlobal = db.prepare('SELECT * FROM despacho_escaneos WHERE idempotencia=?').get(idempotencia);
+    if (previoGlobal && previoGlobal.preparacion_id !== prep.id) {
+      return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
+    }
     const grupo = prep.pack_id || prep.clave;
     // Alias no permitido: el código esperado es exactamente pack_id o, si no existe, clave.
     if (codigo !== String(grupo).trim().toUpperCase()) {
@@ -877,7 +881,7 @@ export function preparacionRouter(db, cfg) {
     }
     const control = db.prepare('INSERT INTO despacho_controles (grupo_clave, creado_en, actualizado_en) VALUES (?,?,?) ON CONFLICT(grupo_clave) DO UPDATE SET actualizado_en=excluded.actualizado_en RETURNING *')
       .get(grupo, now(), now());
-    const previo = db.prepare('SELECT * FROM despacho_escaneos WHERE idempotencia=?').get(idempotencia);
+    const previo = previoGlobal || db.prepare('SELECT * FROM despacho_escaneos WHERE idempotencia=?').get(idempotencia);
     if (previo && (previo.control_id !== control.id || previo.preparacion_id !== prep.id || previo.codigo !== codigo)) {
       return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
     }

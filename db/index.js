@@ -175,7 +175,15 @@ export function openDb(dbPath) {
   const despachoIdempotenciaMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='control_despacho_idempotencia_034'").get();
   if (!despachoIdempotenciaMigration) {
     const aplicarDespachoIdempotencia = db.transaction(() => {
-      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '034_control_despacho_idempotencia.sql'), 'utf8'));
+      const sql = fs.readFileSync(path.join(__dirname, '..', 'migrations', '034_control_despacho_idempotencia.sql'), 'utf8');
+      for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) {
+        try { db.exec(statement); }
+        catch (error) {
+          // Una caída entre DDL y el marcador puede dejar una columna aplicada. En ese
+          // caso la migración se reanuda; cualquier otro error aborta toda la transacción.
+          if (!/ALTER TABLE .* ADD COLUMN/i.test(statement) || !/duplicate column name/i.test(error.message)) throw error;
+        }
+      }
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('control_despacho_idempotencia_034')").run();
     });
     aplicarDespachoIdempotencia();
