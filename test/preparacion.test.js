@@ -72,6 +72,43 @@ describe('guards U0.B: casos funcionales de claims y ML inconcluso', () => {
     expect(db.prepare('SELECT estado FROM preparacion_vinculos WHERE id=?').get(vinculo.id).estado).toBe('sugerido');
   });
 });
+
+describe('control de despacho U0.B', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  it('agrupa por pack, hace el escaneo idempotente y encola etiqueta 50x25 al confirmar', async () => {
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-50', packId: 'PACK-50', numeroPedido: '50', comprador: 'X', items: [] });
+    const app = buildTestApp(db);
+    await tomarPorApi(app, id);
+    const a = await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'k-1').send({ codigo: 'PACK-50' });
+    const b = await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'k-1').send({ codigo: 'PACK-50' });
+    expect(a.status).toBe(201); expect(b.body.repetido).toBe(true);
+    const c = await request(app).post(`/api/preparacion/despacho/${id}/confirmar`);
+    expect(c.status).toBe(200);
+    expect(db.prepare('SELECT grupo_clave, estado FROM despacho_controles').get()).toMatchObject({ grupo_clave: 'PACK-50', estado: 'confirmado' });
+    expect(db.prepare("SELECT nota FROM etiquetas_cola WHERE origen='despacho'").get().nota).toContain('50x25');
+  });
+  it('rechaza una Idempotency-Key reutilizada en otro grupo', async () => {
+    const a = crearPreparacion(db, { canal: 'ml', mlOrderId: 'A', packId: 'PA', numeroPedido: 'A', items: [] });
+    const b = crearPreparacion(db, { canal: 'ml', mlOrderId: 'B', packId: 'PB', numeroPedido: 'B', items: [] });
+    const app = buildTestApp(db); await tomarPorApi(app, a); await tomarPorApi(app, b);
+    await request(app).post(`/api/preparacion/despacho/${a}/escanear`).set('Idempotency-Key', 'global-1').send({ codigo: 'PA' });
+    const r = await request(app).post(`/api/preparacion/despacho/${b}/escanear`).set('Idempotency-Key', 'global-1').send({ codigo: 'PB' });
+    expect(r.status).toBe(409); expect(r.body.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+  it('confirma de forma atómica control, etiqueta y auditoría', async () => {
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'AT', packId: 'PAT', numeroPedido: 'AT', items: [] });
+    const app = buildTestApp(db); await tomarPorApi(app, id);
+    await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'atomic-1').send({ codigo: 'PAT' });
+    db.exec("CREATE TRIGGER test_despacho_auditoria BEFORE INSERT ON preparacion_eventos BEGIN SELECT RAISE(ABORT, 'auditoria caída'); END");
+    const r = await request(app).post(`/api/preparacion/despacho/${id}/confirmar`);
+    db.exec('DROP TRIGGER test_despacho_auditoria');
+    expect(r.status).toBe(500);
+    expect(db.prepare("SELECT estado FROM despacho_controles WHERE grupo_clave='PAT'").get().estado).toBe('escaneado');
+    expect(db.prepare("SELECT COUNT(*) n FROM etiquetas_cola WHERE origen='despacho'").get().n).toBe(0);
+  });
+});
 vi.mock('../lib/mlClient.js', () => ({
   mlFetch: vi.fn(),
   bootstrapToken: vi.fn(),

@@ -164,6 +164,14 @@ export function openDb(dbPath) {
     });
     aplicarHorarios();
   }
+  const despachoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='control_despacho_033'").get();
+  if (!despachoMigration) {
+    const aplicarDespacho = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '033_control_despacho.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('control_despacho_033')").run();
+    });
+    aplicarDespacho();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
