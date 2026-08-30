@@ -41,7 +41,7 @@ function seedBase(db) {
     clave TEXT NOT NULL, sku TEXT, accion TEXT
   )`).run();
   db.prepare(`CREATE TABLE IF NOT EXISTS sync_estado (
-    clave TEXT PRIMARY KEY, valor TEXT
+    clave TEXT PRIMARY KEY, valor TEXT, actualizado_en TEXT NOT NULL DEFAULT ''
   )`).run();
 }
 
@@ -125,7 +125,7 @@ describe('barridoAuditoria', () => {
   it('el cursor rota: al llegar al final vuelve al principio en la siguiente corrida', async () => {
     insertPub(db, { clave: 'MLA100|0', item_id: 'MLA100', sku: 'FB-A' });
     // Forzamos cursor al final del universo
-    db.prepare("INSERT OR REPLACE INTO sync_estado (clave, valor) VALUES ('cursor_auditoria', 'ZZZ999')").run();
+    db.prepare("INSERT OR REPLACE INTO sync_estado (clave, valor, actualizado_en) VALUES ('cursor_auditoria', 'ZZZ999', ?)").run(new Date().toISOString());
     try { await barridoAuditoria(db, {}); } catch (_) {}
     // Con cursor > todos los items, idx queda en 0 → lote = primer item → cursor = MLA100|0
     const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave='cursor_auditoria'").get();
