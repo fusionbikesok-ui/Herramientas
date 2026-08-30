@@ -222,6 +222,11 @@ fue confirmada operativamente por el responsable; la URL vigente es
   actualmente desplegado.
 - Los conteos de gates anteriores quedan invalidados por cambios posteriores. Deben regenerarse
   sobre el diff final actual mediante revisor, tester y auditor; no certifican cierre.
+- Barrido vigente adicional (2026-08-30, sin modificar datos): PM2 sigue `online`, Node escucha en
+  `*:3001`, las tablas del backbone están presentes y `integration_jobs` contiene `lease_token`.
+  `/api/v1/inbox` sin token devuelve `401`, el webhook público ML con `{}` devuelve `400` y Woo con
+  firma inválida devuelve `401`. Esto valida routing, autenticación básica y migración; no sustituye
+  una prueba autenticada de lectura ni el E2E móvil.
 - El backbone exige un único camino durable: el webhook persiste evento+job, el worker consulta ML
   con configuración obligatoria y proyecta sobre ese mismo evento; no se crean eventos derivados.
 - `PUSH_REAL_ENABLED` ausente o distinto de `true` pausa ambos workers sin incrementar intentos.
@@ -365,8 +370,10 @@ contrato vigente está en `openapi/mobile-v1.yaml`.
 
 El backend también proyecta preguntas de MercadoLibre al backbone durable: evento idempotente,
 job, historial e inbox se persisten junto con la pregunta. El push físico real y el cliente móvil
-siguen deliberadamente fuera de este cierre previo a P2; el flujo lógico se prueba con entregas
-simuladas y `PUSH_REAL_ENABLED` debe permanecer distinto de `true` hasta el gate posterior.
+siguen deliberadamente fuera de este cierre previo a P2. En producción, `PUSH_REAL_ENABLED=true`
+ya está configurado por decisión operativa; no cambiarlo sin aprobación. El gate móvil real
+(registro de dispositivo, entrega y background en dispositivo) sigue pendiente y no se declara
+aprobado por la sola presencia de la configuración.
 
 ### P1.8 Primera entrega vertical
 
