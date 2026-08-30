@@ -104,8 +104,33 @@ function seedIncidente(db, { integracion = 'mercadolibre', severidad = 'critico'
 }
 
 describe('lib/workerNotificacionesPush', () => {
+  let previousPushRealEnabled;
+
+  beforeEach(() => {
+    previousPushRealEnabled = process.env.PUSH_REAL_ENABLED;
+    process.env.PUSH_REAL_ENABLED = 'true';
+  });
+
   afterEach(() => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    process.env.PUSH_REAL_ENABLED = previousPushRealEnabled;
+  });
+
+  it('no procesa nada y devuelve {paused:true} cuando PUSH_REAL_ENABLED no es "true"', async () => {
+    delete process.env.PUSH_REAL_ENABLED;
+    mockState.resetCallCount();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    seedDevice(db, 1);
+    seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    const resultado = await procesarNotificacionesPush(db);
+
+    expect(resultado).toEqual({ paused: true });
+    expect(mockState.getCallCount()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) as c FROM notificaciones_enviadas').get().c).toBe(0);
+    db.close();
   });
 
   it('no entrega a usuarios sin permiso notificaciones-ml aunque tengan preferencia', async () => {

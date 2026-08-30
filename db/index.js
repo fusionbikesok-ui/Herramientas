@@ -188,6 +188,15 @@ export function openDb(dbPath) {
     });
     aplicarDespachoIdempotencia();
   }
+  const integrationLeaseMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='integration_jobs_lease_token_035'").get();
+  if (!integrationLeaseMigration) {
+    const aplicarLease = db.transaction(() => {
+      const hasColumn = db.prepare('PRAGMA table_info(integration_jobs)').all().some((c) => c.name === 'lease_token');
+      if (!hasColumn) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '035_integration_jobs_lease_token.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('integration_jobs_lease_token_035')").run();
+    });
+    aplicarLease();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

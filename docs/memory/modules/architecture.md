@@ -18,6 +18,14 @@
 - El delivery push usa `PUSH_PROVIDER=mock` solo para desarrollo (estado `simulado`) o FCM
   HTTP v1 real con credenciales fuera del repositorio. Las reservas de delivery se persisten
   antes del side effect mediante una clave de idempotencia durable.
+- El plan maestro integra la app por verticales: Base común → Preparación → Inventario →
+  Consolidación. Preparación e Inventario congelan juntos contrato y UX; la implementación móvil
+  es secuencial y no bloquea su cierre operativo previo en el VPS.
+- La API móvil de Preparación e Inventario vive bajo `/api/v1`, comparte servicios de negocio con
+  el panel y nunca reutiliza rutas web autenticadas por cookies. Toda mutación reintentable exige
+  idempotencia y toda edición concurrente, versión esperada con conflicto `409` sin sobrescritura.
+- Preparación exige conexión para mutar. Inventario admite cola offline cifrada y acotada, con
+  resolución de conflictos decidida por el servidor y sin last-write-wins silencioso.
 
 ## Decisiones vigentes
 

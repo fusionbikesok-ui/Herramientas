@@ -47,10 +47,12 @@ import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
 import { validarConfiguracionPush } from './lib/notificacionesPush.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
-import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje, ingerirReclamo, extraerClaimId, reintentarReclamosSinConsultar } from './routes/notificacionesMl.js';
+import { notificacionesMlRouter, extraerClaimId } from './routes/notificacionesMl.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
+import { registrarWebhookMl, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
+import { reprocesarJob } from './lib/integrationJobs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -178,7 +180,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   // 2026-08-26: filtrar acá es más simple que ir y volver al panel cada vez que se suma una
   // función nueva). Body: { topic, resource, user_id, ... }. ML no envía firma — la
   // autenticidad se valida por: el user_id del body debe coincidir con ML_USER_ID.
-  // ML espera 200 en < 500ms — respondemos antes de procesar cualquier topic.
+  // ML espera un ACK rápido — persistimos el evento+job en una transacción y respondemos siempre 200 (ver nota junto al res.status más abajo).
   // Docs: https://developers.mercadolibre.com.ar/es_ar/recibir-notificaciones
   //
   // Topics soportados hoy: 'orders' (sync puntual a WC de ESA orden vía syncOrdenMlPuntual,
@@ -192,13 +194,66 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   // orders_feedback, items, invoices) se reciben y se descartan en silencio hasta que se sume
   // su función acá, mismo patrón que 'orders' tenía antes de este cambio.
   app.post('/api/ml/notificacion', express.json({ limit: '64kb' }), (req, res) => {
-    res.json({ ok: true }); // responder inmediatamente antes de procesar
-
     const { topic, resource, user_id } = req.body || {};
+    // Helper para prevenir log injection: truncar y quitar saltos de línea.
+    const sanear = (v) => String(v ?? '').slice(0, 200).replace(/[\r\n]/g, ' ');
+    const legacyClaimEnvelope = topic === 'post_purchase'
+      && (typeof req.body?.claim_id === 'string' || typeof req.body?.envelope?.claim_id === 'string');
+    // Validar resource: puede contener query strings y puntos (ej. "/messages/packs/2000.../sellers/123?mark_as_read=false").
+    // Parseamos el pathname con URL (con host ficticio) y validamos que sea una ruta válida.
+    let validResource = false;
+    if (typeof resource === 'string') {
+      try {
+        const url = new URL(resource, 'http://x');
+        const pathname = url.pathname;
+        validResource = /^\/[A-Za-z0-9_.\-]+(?:\/[A-Za-z0-9_.\-]+)*$/.test(pathname);
+      } catch { /* URL inválida */ }
+    }
+    const validTopic = typeof topic === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/i.test(topic);
+    if (!validTopic || ((!validResource) && !legacyClaimEnvelope)) {
+      const timestamp = new Date().toISOString();
+      const motivo = !validTopic ? 'topic inválido' : 'resource inválido/faltante';
+      console.error(`[notif-ml-error] ${timestamp} 400 envelope-inválido | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: ${motivo}`);
+      return res.status(400).json({ ok: false, error: 'envelope inválido' });
+    }
+    if (user_id === undefined || user_id === null || String(user_id).trim() === '') {
+      const timestamp = new Date().toISOString();
+      console.error(`[notif-ml-error] ${timestamp} 400 user_id-faltante | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: user_id ausente, null o vacío`);
+      return res.status(400).json({ ok: false, error: 'user_id requerido' });
+    }
 
-    // Validar que la notificación es para nuestra cuenta
+    // Validar que la notificación es para nuestra cuenta.
+    // Persistir antes del ACK: si es de otra cuenta, respondemos 200 (no reintentable).
+    // Solo 503 si falta config y no se pudo persistir.
     const mlUserId = process.env.ML_USER_ID;
-    if (mlUserId && String(user_id) !== String(mlUserId)) return;
+    if (!mlUserId) {
+      // ML no está configurado: no se puede persistir. Fail-closed.
+      const timestamp = new Date().toISOString();
+      console.error(`[notif-ml-error] ${timestamp} 503 config-ml-ausente | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: ML_USER_ID no configurado`);
+      return res.status(503).json({ ok: false, error: 'integración ML no configurada' });
+    }
+    const esOtraCuenta = String(user_id) !== String(mlUserId);
+    if (esOtraCuenta) {
+      // Cuenta ajena: acepta el webhook (200, no reintentable), sin persistir nada.
+      // No aporta valor durable y un atacante podría saturar con user_id aleatorios.
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+
+    // Persistir el recibo antes del ACK. El procesamiento sigue siendo fail-open para
+    // conservar el contrato de orders y no bloquear los webhooks de ML por una llamada
+    // externa lenta; el evento durable permite auditar el recibo aunque falle el handler.
+    let persisted;
+    try { persisted = registrarWebhookMl(app._db, req.body); }
+    catch (err) {
+      const timestamp = new Date().toISOString();
+      console.error(`[notif-ml-error] ${timestamp} 503 persistencia-fallo | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: ${err.message}`);
+      return res.status(503).json({ ok: false, error: 'no se pudo persistir el evento' });
+    }
+    // ML solo documenta 200 como ACK válido de un webhook. Usar códigos distintos (202 para
+    // nuevo, 200 para duplicado) arriesga que ML trate el recibo como fallo y reintente
+    // indefinidamente hasta deshabilitar la URL de notificaciones. Por eso siempre 200:
+    // distinguimos nuevo/duplicado únicamente en el response body con { duplicate: boolean }.
+    res.status(200).json({ ok: true, duplicate: persisted.duplicate });
 
     if (topic === 'orders' || topic === 'orders_v2') {
       console.log(`[notif-ml] topic=${topic} resource=${resource} → ${topic === 'orders' ? 'syncOrdenMlPuntual' : 'syncPedidoMlPuntual'}`);
@@ -228,52 +283,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       return;
     }
 
-    if (topic === 'questions') {
-      console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirPregunta`);
-      ingerirPregunta(app._db, mlCfg, resource)
-        .catch(err => console.error('[notif-ml] ingerirPregunta error:', err.message));
-      return;
-    }
-
-    if (topic === 'messages') {
-      console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirMensaje`);
-      ingerirMensaje(app._db, mlCfg, resource)
-        .catch(err => console.error('[notif-ml] ingerirMensaje error:', err.message));
-      return;
-    }
-
-    if (topic === 'claims') {
-      console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirReclamo`);
-      ingerirReclamo(app._db, mlCfg, resource)
-        .catch(err => console.error('[notif-ml] ingerirReclamo error:', err.message));
-      return;
-    }
-
-    // Topic post_purchase con acción 'claims' — envelope oficial de ML: el resource
-    // ya contiene /post-purchase/v1/claims/{id}. Se conservan fallbacks para variantes
-    // antiguas o no confirmadas del envelope.
+    // Topic post_purchase: la proyección real vive en el worker (procesarIntegrationJobs).
+    // Aquí solo persistimos el evento; no hay logs informativos.
     if (topic === 'post_purchase') {
-      const action = req.body?.action;
-      const actions = Array.isArray(req.body?.actions) ? req.body.actions : [];
-      const resourceClaimId = extraerClaimId(resource);
-      const claimId = resourceClaimId
-          || req.body?.envelope?.claim_id
-          || req.body?.claim_id;
-      if (action === 'claims' || actions.includes('claims') || resourceClaimId) {
-        if (claimId) {
-          const pseudoResource = `/post-purchase/v1/claims/${claimId}`;
-          console.log(`[notif-ml] topic=${topic} action=${action || actions.join(',') || 'none'} claim_id=${claimId} → ingerirReclamo`);
-          ingerirReclamo(app._db, mlCfg, pseudoResource, resource)
-            .catch(err => console.error('[notif-ml] ingerirReclamo (post_purchase) error:', err.message));
-        } else {
-          console.warn(`[notif-ml] topic=${topic} action=${action}: no se pudo extraer claim_id; `
-            + `envelope=${Boolean(req.body?.envelope)} resource=${Boolean(resource)} body_claim_id=${Boolean(req.body?.claim_id)}`);
-        }
-      } else if (action || actions.length) {
-        console.warn(`[notif-ml] topic=${topic} action=${action}: acción no soportada`);
-      } else {
-        console.warn(`[notif-ml] topic=${topic}: envelope sin action/actions ni claim resource`);
-      }
       return;
     }
 
@@ -283,6 +295,12 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   });
 
   app.use('/api', authGuard, scopeCheck);
+
+  app.post('/api/admin/integration-jobs/:id/reprocess', requireAdmin, (req, res) => {
+    const ok = reprocesarJob(app._db, Number(req.params.id));
+    return ok ? res.status(202).json({ ok: true, reprocessed: true })
+      : res.status(404).json({ ok: false, error: 'job DLQ no encontrado' });
+  });
 
   // Gestión de usuarios: solo admins.
   app.use('/api/usuarios', requireAdmin, usuariosRouter(db));
@@ -418,10 +436,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           .catch(err => console.error('reintentos error:', err.message));
       });
 
-      cron.schedule('6-59/10 * * * *', () => {          // ML: recuperar fail-open de claims
-        reintentarReclamosSinConsultar(app._db, mlCfg)
-          .catch(err => console.error('reintentos claims ML error:', err.message));
-      });
 
       cron.schedule('6 1-23/2 * * *', () => {          // ML — cada 2h (bajado del 15 min, ver plan ahorro-llamadas-ml)
         procesarCancelacionesMl(app._db, syncCfg)
@@ -578,6 +592,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         import('./lib/workerIntegrationNotifications.js').then(({ procesarEntregasPush }) =>
           procesarEntregasPush(app._db)
         ).catch(err => console.error('Error en entregas push de integraciones:', err.message));
+      });
+
+      // P1: consumidor durable de integration_jobs. Es independiente del worker push.
+      cron.schedule('* * * * *', () => {
+        procesarIntegrationJobs(app._db, { mlCfg, wooCfg })
+          .catch(err => console.error('Error en jobs de integraciones:', err.message));
       });
     }
 

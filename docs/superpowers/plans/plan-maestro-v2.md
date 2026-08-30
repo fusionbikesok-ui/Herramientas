@@ -1,6 +1,6 @@
 # Plan maestro vigente — FusionBikes Herramientas + App operativa
 
-Actualizado: 2026-08-29.
+Actualizado: 2026-08-29. Reordenado para el compromiso operativo del 2026-09-04.
 
 Este es el **único plan activo** del repositorio. Reemplaza planes, trackers y documentos de
 implementación anteriores. Git conserva la historia; este archivo conserva solamente el estado
@@ -15,6 +15,9 @@ actual, las decisiones vigentes y el trabajo pendiente.
 - No se ejecutan suites globales concurrentes ni servidores contra `data/fusion.sqlite`.
 - El contrato HTTP vive en `docs/api-contrato.md`; el contrato móvil en
   `openapi/mobile-v1.yaml`.
+- Este archivo es canónico para este repositorio backend. La app móvil se desarrolla en otro chat
+  y su repositorio/plan propio es la fuente de verdad del cliente; no se afirma aquí que exista una
+  copia sincronizada local.
 - `docs/memory/` conserva hechos durables, no planes paralelos ni cronologías.
 
 ## Base ya disponible
@@ -33,6 +36,126 @@ No reimplementar estos bloques salvo bug comprobado:
 - Incidentes operativos, métricas de ciclos y dashboard de alertas.
 
 La presencia del código no sustituye los gates pendientes que se enumeran abajo.
+
+## Hito U0 — Cierre obligatorio de Inventario y Preparación
+
+**Fecha límite: viernes 4 de septiembre de 2026.** Este hito tiene precedencia sobre las
+prioridades numeradas posteriores. Claims, notificaciones y otros frentes pueden conservar su
+estado, pero no desplazan recursos ni amplían alcance hasta cerrar U0.
+
+“Cerrado esta semana” significa dos resultados simultáneos:
+
+1. Conteo de Inventario y Preparación de Pedidos operativos y validados de punta a punta en el
+   VPS.
+2. Contratos, pantallas, reglas, estados y entregas de ambos módulos definidos para la app. La
+   publicación de la app no bloquea el cierre del VPS.
+
+Esta replanificación es documental. No autoriza por sí sola despliegues, migraciones, reinicios,
+configuración ni cambios de código en producción.
+
+### U0.A — Conteo de Inventario en VPS
+
+Cerrar como una sola entrega usable:
+
+1. Plan diario y selección de ubicación.
+2. Lectura por EAN/GTIN y carga manual.
+3. Conteo, corrección y cierre seguro, incluido el cierre en cero.
+4. Detección de diferencias y sobrantes.
+5. Motivos estructurados, aprobación/rechazo y auditoría.
+6. Asociación controlada de códigos desconocidos, con aprobación elevada cuando corresponda.
+7. Ubicaciones, etiquetas, historial y descarte explícito de diferencias.
+8. Reintentos idempotentes: un fallo de WooCommerce no duplica ajustes, cierres ni alertas.
+
+Pendientes concretos absorbidos por esta entrega:
+
+- Home usa `/api/inventario/plan-hoy`, muestra estimación honesta y estado vacío.
+- Auditoría de publicaciones corrige `sin_clip`, registra fallos de `ensureAuditoriaTable` y
+  prueba la rotación real del cursor.
+- E2E de etiquetas: marcar → cola → imprimir → desaparecer.
+- E2E de ubicaciones: crear → mapear → escanear → cerrar en cero seguro.
+- Historial de diferencias permite descartar; `/aprobar` no marca otros dual-EAN como ajustados.
+- `/confirmar` no repite la alerta tras un fallo Woo; `FB-1419` se clasifica sin hardcode riesgoso.
+- Los sobrantes pendientes se muestran en naranja, con instrucción operativa clara.
+
+**Aceptación U0.A:** un operador puede comenzar, completar y auditar un conteo real sin
+inconsistencias, pérdida silenciosa de datos ni efectos duplicados.
+
+### U0.B — Preparación de Pedidos en VPS
+
+Cerrar como una sola entrega usable:
+
+1. Cola y toma exclusiva del pedido por un operador.
+2. Dirección, provincia, observaciones y vínculos del comprador.
+3. Escaneo y resolución explícita de EAN/GTIN desconocidos o conflictivos.
+4. Evidencias fotográficas y conservación local cuando WooCommerce falla.
+5. Finalización, etiqueta interna de 50×25 mm y estado de embalaje.
+6. Despacho, `fecha_despacho`, seguimiento e incidencias.
+7. Reintentos seguros, control de concurrencia y auditoría completa.
+8. Revisión, tests, E2E y auditoría de horarios de corte antes de habilitarlos.
+
+Pendientes concretos absorbidos por esta entrega:
+
+- Cerrar revisión, pruebas y E2E del alta de GTIN/EAN durante Preparación: candidatos,
+  conflicto, reemplazo explícito, conservación local, reintento y títulos largos a 390 px.
+- Completar E2E de dirección con campos largos y vínculos del comprador.
+- Integrar `prep-horarios-corte` únicamente después de repetir todos los gates sobre la base
+  productiva actual.
+- Implementar etiqueta interna y control de despacho con escaneo, agrupación, estados y
+  auditoría.
+- Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
+  ítems y verificar tabla/modal de stock a 390 px.
+
+**Aceptación U0.B:** un pedido recorre cola → preparación → evidencia → etiqueta → despacho con
+trazabilidad completa y sin toma simultánea por dos operadores.
+
+Quedan fuera de U0 pagos, reembolsos, cancelaciones y compras a proveedores.
+
+### U0.C — Definición congelada para la app
+
+Antes del cierre del 2026-09-04, `openapi/mobile-v1.yaml` debe definir recursos versionados
+`/api/v1` para:
+
+- **Inventario:** plan diario, sesiones, escaneos, ítems, cierre seguro, ubicaciones,
+  diferencias, aprobar/rechazar/descartar, historial y trabajos de etiquetas.
+- **Preparación:** cola, detalle, toma exclusiva, escaneos, evidencias, finalización, trabajos de
+  etiqueta, despacho, seguimiento e incidencias.
+
+Toda mutación reintentable declara UUID de idempotencia; toda edición concurrente declara
+`expected_version` y devuelve `409` sin sobrescribir. El contrato documenta permisos, paginación
+por cursor, auditoría, errores uniformes y ejemplos realistas. Web y `/api/v1` comparten servicios
+de negocio; la app no llama rutas web autenticadas por cookies.
+
+Pantallas mínimas congeladas:
+
+- Preparación: cola, detalle/toma, escaneo, evidencia, cierre/etiqueta y despacho/incidencia.
+- Inventario: Hoy/ubicación, sesión de conteo, diferencias, aprobación y historial/etiquetas.
+
+Inventario admite cola offline controlada durante siete días, con reanudación visible y
+resolución de conflictos sin sobrescribir al servidor. Preparación puede cachearse para consulta,
+pero todas sus mutaciones requieren conexión. Los borradores locales vencen a los siete días.
+
+**Gate U0.C:** OpenAPI validado, cliente TypeScript regenerable, fixtures derivados del contrato,
+mapa de permisos, estados vacío/error/reintento/conflicto y criterios E2E firmados para ambos
+módulos.
+
+### U0.D — Validación y secuencia segura
+
+La línea base dirigida verificada el 2026-08-29 queda como piso: Inventario principal 164/164,
+ConteoCantidad 24/24, scanner gate 4/4, ubicaciones 13/13, etiquetas 11/11, etiquetas por categoría
+10/10; Preparación principal 182/182, contrato 30/30, vínculos 13/13, fotos en cola 8/8 y cierre sin
+evidencia 10/10. Estos resultados no sustituyen los tests del diff futuro.
+
+Orden obligatorio de ejecución:
+
+1. Comparar cualquier rama/worktree candidato contra `conteo-confiable`; no integrar por nombre ni
+   antigüedad.
+2. Trabajar cada entrega usable en worktree aislado y con base SQLite de prueba.
+3. Ejecutar tests dirigidos, revisión, E2E real a 390 px y auditoría del diff final.
+4. Ejecutar la suite global una sola vez, en serie y sin servidores de prueba activos.
+5. Presentar al usuario impacto, rollback y evidencia antes de cualquier migración, deploy, push o
+   reinicio de PM2.
+6. Tras aprobación y despliegue manual, verificar health, logs, migraciones y el recorrido real sin
+   alterar datos fuera de la prueba acordada.
 
 ## Prioridad 0 — Cerrar riesgos operativos antes de ampliar
 
@@ -61,12 +184,36 @@ duplicado idempotente, actualización `opened→closed`, ML caído y recurso des
 - Definir proveedor push real y credenciales mediante configuración segura; mantenerlo detrás de
   feature flag hasta completar la entrega vertical.
 
+Verificación local de configuración 2026-08-30: `.env` de producción contiene las variables de
+JWT móvil, secreto HMAC de Woo, credenciales ML y FCM; `MOBILE_JWT_SECRET` tiene 64 caracteres.
+Los valores no se registran en documentación. La existencia de topics y URL en ML Developers
+fue confirmada operativamente por el responsable; la URL vigente es
+`https://herramientas.fusionbikes.com.ar/api/ml/notificacion`.
+
 ### P0.3 Evidencia operativa
 
 - Verificar PM2, health y migraciones aplicadas después de cada deploy manual.
 - No usar como aprobación global suites previas con fallos en inventario, sync, matcher,
   reactivación o reconciliación: aislar la causa y obtener una suite final verde sin concurrencia.
 - Mantener trazabilidad entre commit, revisión, tests, E2E y auditoría.
+- La reconciliación read-only del catálogo tuvo inicialmente un `403`; el acceso fue corregido y
+  `/system_status` y `/products?per_page=1` respondieron `200` el 2026-08-30. La consulta de los
+  20 stocks negativos coincidieron exactamente con Woo en la reconciliación read-only final; los
+  tres SKUs mapeados sin fila local devolvieron cero coincidencias. El `403`/`500` transitorio se
+  resolvió sin cambiar Nginx ni el código. No ejecutar `PUT`, `DELETE` ni correcciones SQLite para
+  esos registros: la evidencia confirma que son datos reales o mapeos ausentes en Woo.
+- Post-despliegue 2026-08-30: `conteo-confiable` quedó en `d6a021a` (incluye `37107af`), PM2 está
+  `online`, el webhook Woo rechaza firma inválida con `401` y el webhook ML responde `200`.
+  El ciclo real posterior al reinicio, ejecutado a las 12:30 UTC, completó `barridoAuditoria`
+  con `auditados:40` y persistió `sync_estado.cursor_auditoria.actualizado_en` en
+  `2026-08-30T12:30:00.807Z`; por tanto, los mensajes anteriores de `ML_CLIENT_ID` y de
+  `sync_estado.actualizado_en` quedan identificados como históricos, no como fallo del código
+  actualmente desplegado.
+- Los conteos de gates anteriores quedan invalidados por cambios posteriores. Deben regenerarse
+  sobre el diff final actual mediante revisor, tester y auditor; no certifican cierre.
+- El backbone exige un único camino durable: el webhook persiste evento+job, el worker consulta ML
+  con configuración obligatoria y proyecta sobre ese mismo evento; no se crean eventos derivados.
+- `PUSH_REAL_ENABLED` ausente o distinto de `true` pausa ambos workers sin incrementar intentos.
 
 ## Prioridad 1 — Columna vertebral de la app operativa
 
@@ -124,8 +271,9 @@ evento y job en una transacción → responder.
   fuente completa del contenido.
 - App: JWT corto, refresh revocable y permisos resueltos en servidor.
 
-Respuestas: `202` para evento nuevo durable y encolado, `200` para duplicado conocido, `400` para
-payload inválido, `401/403` para autenticidad/cuenta incorrecta y `503` si no se pudo conservar el
+Respuestas: `202` para evento nuevo durable y encolado, `200` para duplicado conocido o cuenta ML
+ajena descartada (`{ok:true, ignored:true}`; decisión explícita no reintentable), `400` para
+  payload inválido, `200 {ignored:true}` para cuenta ajena (descartada sin persistir) y `503` si no se pudo conservar el
 evento y se necesita reintento. Nunca confirmar éxito antes de persistir.
 
 ### P1.4 Estados y diagnóstico
@@ -177,11 +325,14 @@ estado confirmado. Si no se puede decidir, quedan pendientes de reconciliación.
 
 ### P1.6 Destinatarios, privacidad y deep links
 
-- Resolver destinatario por usuario asignado, equipo, rol o permiso; nunca enviar a todos por
-  defecto.
-- Estado implementado: la API móvil exige el permiso `notificaciones-ml` y vuelve a comprobar la
-  asignación antes de leer o modificar un ítem. La toma manual crea entregas solo para dispositivos
-  activos del usuario que tomó el trabajo. La resolución automática por equipo/rol sigue pendiente.
+- Resolver destinatario por usuario asignado o por la lista explícita de usuarios con permiso
+  `notificaciones-ml`; nunca enviar a todos por defecto. Los administradores gestionan esa lista
+  desde el gestor de usuarios.
+- Estado implementado para este corte: la API móvil exige `notificaciones-ml` y vuelve a comprobar
+  la asignación antes de leer o modificar un ítem. La toma manual crea entregas solo para dispositivos
+  activos del usuario que tomó el trabajo; no se afirma fan-out automático donde el código solo hace
+  asignación manual. Equipos/roles son una extensión posterior del modelo de autorización y no
+  constituyen un requisito para iniciar P2.
 - Definir retención por tipo de contenido y PII antes de implementar cada adaptador.
 - Revocar tokens inválidos y auditar accesos.
 - Los deep links usan IDs internos y vuelven a validar permisos en el backend.
@@ -201,10 +352,17 @@ estado confirmado. Si no se puede decidir, quedan pendientes de reconciliación.
 Estado implementado: las rutas anteriores están montadas y cubiertas por pruebas dirigidas; el
 contrato vigente está en `openapi/mobile-v1.yaml`.
 
+El backend también proyecta preguntas de MercadoLibre al backbone durable: evento idempotente,
+job, historial e inbox se persisten junto con la pregunta. El push físico real y el cliente móvil
+siguen deliberadamente fuera de este cierre previo a P2; el flujo lógico se prueba con entregas
+simuladas y `PUSH_REAL_ENABLED` debe permanecer distinto de `true` hasta el gate posterior.
+
 ### P1.8 Primera entrega vertical
 
-Estado backend implementado para Claims: webhook → persistencia legacy y evento durable atómicos →
-inbox → toma manual → notificación lógica → entrega push durable → deep link → lectura/resolución.
+Estado backend implementado para Claims: webhook → evento/job durable atómicos → consulta autoritativa
+ML → persistencia legacy e inbox idempotentes → toma manual → notificación lógica → entrega push
+durable → deep link → lectura/resolución. La persistencia legacy ocurre en el worker, no antes del
+ACK; un fallo conserva el evento/job para reintento.
 La prueba E2E de navegador cubre Home y la API dirigida cubre autenticación, deduplicación, fallos,
 reintentos y aislamiento. Falta completar el cliente móvil y la prueba en dispositivo real.
 
@@ -222,26 +380,36 @@ modo solo lectura. Activar push real al final, detrás de feature flag.
 
 ## Prioridad 2 — App móvil por entregas verticales
 
-El backend base de acceso y dispositivos ya existe; el cliente móvil sigue pendiente.
+El backend base de acceso y dispositivos ya existe; el cliente móvil sigue pendiente. El orden de
+ejecución queda subordinado a U0 y reemplaza el tracker anterior de Stock/Pedidos genéricos:
 
-1. **Setup:** repo de app, Expo/TypeScript, navegación, sistema visual, cliente generado desde
-   OpenAPI, mock server y fixtures.
-2. **Acceso:** login, refresh, logout, `/me`, almacenamiento seguro, biometría y estados offline.
-3. **Stock:** escáner SKU/EAN, búsqueda, detalle, ajuste idempotente con `expected_stock`, operación
-   consultable y conflicto `409`.
-4. **Pedidos:** lectura paginada de `pedidos_cache`, filtros, permisos e indicador de novedad.
-5. **Hoy:** agregador de pedidos, stock, inbox y tareas priorizadas.
-6. **Notificaciones:** preferencias, registro/revocación de dispositivo, push real y deep links.
+| Entrega | Resultado usable | Gate de salida |
+| --- | --- | --- |
+| **App 0 — Base común** | Expo SDK 57, TypeScript, Expo Router, sistema visual, auth, almacenamiento seguro, cliente OpenAPI y observabilidad | Login/refresh/logout/`/me`, bloqueo biométrico opcional, fixtures contractuales y build iOS instalable |
+| **App 1 — Preparación** | Cola, toma, detalle, escaneo, evidencia, cierre, etiqueta, despacho e incidencias | Integración real con `/api/v1`, concurrencia `409`, recuperación de red y E2E en iPhone |
+| **App 2 — Inventario** | Plan diario, ubicaciones, conteo, diferencias, aprobaciones, historial y etiquetas | Integración real, cola offline segura, conflicto sin sobrescritura y E2E en iPhone |
+| **App 3 — Consolidación** | Inbox, notificaciones, deep links, pantalla Hoy, soporte básico de iPad y posterior Android | Push real por feature flag, privacidad validada y piloto operativo aprobado |
 
-Validar temprano cámara, biometría, background y push en dispositivos reales. La app no modifica
-stock ni resuelve trabajo offline sin idempotency key y control de versión.
+Preparación se implementa primero por la solicitud operativa directa; Inventario comienza
+inmediatamente después sobre la misma base común. Los contratos y UX de ambos se congelan juntos
+en U0.C, por lo que el orden de implementación no posterga su definición.
 
-### Ruta específica Claims P0.1 → P2
+**Estado App 0:** pertenece al desarrollo móvil del otro chat. Este repositorio solo conserva los
+contratos backend y no declara como propio ningún shell, build, test o artefacto móvil.
+
+La app usa arquitectura modular por features (`auth`, `orders/preparation`, `inventory`, `inbox`,
+`notifications`, `settings` y `core`). TanStack Query conserva estado remoto; Zustand solo estado
+local transversal; tokens viven en SecureStore y el cache offline sensible usa almacenamiento
+cifrado. Validar cámara, biometría, background y push en dispositivos reales desde App 0.
+
+### Ruta específica Claims P0.1 → App 3
 
 Esta ruta desglosa el objetivo de Claims sin ampliar el alcance de Hito 7 ni autorizar
-despliegues. Estado verificado al 2026-08-29: P0.1 y P1 backend están integrados; P0.2/P0.3
-requieren configuración y verificación manual del entorno; P2 móvil se implementa en otro
-chat sobre el handoff `docs/superpowers/specs/claims-p2-mobile-ux.md`.
+despliegues. Estado documental al 2026-08-30: P0.1 y P1 backend tienen un diff local pendiente
+de revisión final; sus conteos y auditorías previos no certifican este estado. P0.2 está
+configurado según la evidencia operativa disponible y P0.3 requiere repetir la verificación
+tras integrar este diff; el cliente móvil queda subordinado a App 3 sobre el handoff
+`docs/superpowers/specs/claims-p2-mobile-ux.md` para no desplazar U0.
 
 1. **P0.1 — Ingesta real y fail-open:** conservar el webhook legado y `post_purchase`, validar
    cuenta, consultar el recurso autoritativo, persistir `opened`/`closed`, deduplicar y dejar
@@ -259,49 +427,23 @@ chat sobre el handoff `docs/superpowers/specs/claims-p2-mobile-ux.md`.
    Todos los endpoints deben revalidar permisos y usar IDs internos en deep links. Gate: contrato
    OpenAPI/API, aislamiento por usuario/equipo, `409` por versión vieja y auditoría segura.
 4. **P1 — Entrega vertical Claims:** `claim webhook → evento → inbox → notificación lógica →
-   push simulado → deep link → lectura/resolución → auditoría`, incluyendo fail-open y DLQ. No
-   activar proveedor push real en esta fase.
-5. **P2 — Cliente móvil Claims (otro chat):** incorporar el prototipo Expo existente o crear su
+   entrega push durable → deep link → lectura/resolución → auditoría`, incluyendo fail-open y DLQ.
+   El proveedor real se habilita mediante la decisión/configuración operativa de P0.2.
+5. **App 3 — Cliente móvil Claims:** incorporar el prototipo Expo existente o crear su
    setup solo si no existe, generar cliente desde OpenAPI, autenticación segura, inbox paginado,
    detalle de Claim, marcar leído/resolver, estados offline y deep links con permisos. Validar
    push y background en dispositivo real antes de activar proveedor. No se declara cerrado desde
    este repositorio hasta recibir commit, tests y E2E móvil del otro chat.
-6. **P2 — Gate final:** el otro chat entrega commit y E2E móvil; luego este repositorio ejecuta
+6. **App 3 — Gate final:** la app entrega commit y E2E móvil; luego este repositorio ejecuta
    revisor independiente, suite completa serial sin DB abandonadas, auditoría final y rollback
    documentado. El deploy queda manual; nunca tocar Hito 7 ni reiniciar procesos durante esta
    ruta.
 
-## Prioridad 3 — Conteo e inventario pendiente
+## Prioridades 3 y 4 — Absorbidas por U0
 
-- Implementar el aviso Home de control diario usando `/api/inventario/plan-hoy`, con estimación de
-  tiempo honesta y estado vacío.
-- Corregir auditoría de publicaciones: nombre/semántica de `sin_clip`, logging de errores en
-  `ensureAuditoriaTable` y assert real de rotación de cursor.
-- E2E de etiquetas: marcar → cola → imprimir → desaparecer.
-- E2E de ubicaciones: crear → mapear → escanear → cerrar en cero seguro.
-- Agregar acción “descartar” en UI del historial de diferencias.
-- Corregir `/aprobar` dual-EAN que marca `ajustado_en` de más.
-- Evitar alerta duplicada al reintentar `/confirmar` después de fallo Woo.
-- Revisar manualmente `FB-1419` como `no_contable` o mejorar la sugerencia sin hardcode riesgoso.
-- Mostrar sobrantes pendientes en naranja con instrucción clara, no como error rojo.
-
-## Prioridad 4 — Preparación pendiente
-
-Ya están integradas las fases de provincia, dirección, nota y vínculos de comprador.
-
-- Cerrar revisión formal, tests dirigidos, E2E móvil y auditoría del flujo para asociar un
-  GTIN/EAN válido desconocido durante la preparación antes de integrarlo o desplegarlo. Verificar
-  candidatos pendientes, conflicto y reemplazo explícito del código, conservación local cuando
-  Woo falla, reintento operativo y títulos largos en 390 px.
-- Cerrar auditoría/E2E pendiente de las fases desplegadas, incluida dirección con campos largos en
-  390 px y flujo real de vínculos.
-- Integrar **Horarios de corte y fecha de despacho** desde `prep-horarios-corte` solo después de
-  repetir revisor, tests, E2E y auditoría sobre la base actual.
-- Después implementar **Etiqueta interna 50×25 mm + Control de despacho**, usando
-  `fecha_despacho` y vínculos; incluir escaneo, agrupación, estados y auditoría.
-- Corregir en Recepción el proveedor completado después de agregar ítems, que hoy puede dejar los
-  botones deshabilitados.
-- Verificar responsive de la tabla/modal de stock en 390 px.
+Los backlogs anteriores de Conteo/Inventario y Preparación quedaron incorporados íntegramente en
+U0.A y U0.B. No mantener listas paralelas: el estado semanal, las evidencias y cualquier bloqueo
+se actualizan únicamente dentro de U0 hasta el cierre del 2026-09-04.
 
 ## Prioridad 5 — Deuda de sync y pruebas
 

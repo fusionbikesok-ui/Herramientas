@@ -1048,8 +1048,44 @@ qué procesar vive en `POST /api/ml/notificacion` (`server.js`), no en el panel.
 `/orders/{id}`, no el barrido paginado `/orders/search`, que queda solo en el cron cada 10 min
 como respaldo), `orders_v2` (desde A.1: camino puntual a `pedidos_cache`, igual que `orders`,
 pero **no** dispara `syncOrdenMlPuntual` — eso sigue siendo solo para `orders`), `questions` y
-`messages` y `claims`; el resto de los topics (`shipments`, `orders_feedback`, `items`,
-`invoices`) se reciben y se descartan en silencio hasta que se sume su función.
+`messages` y `claims`; cualquier topic válido no implementado (`shipments`, `orders_feedback`,
+`items`, `invoices` u otro futuro) se recibe como `audit-only` y nunca se registra como
+`projected`.
+
+### POST /api/ml/notificacion
+
+Webhook público de MercadoLibre. El envelope debe incluir `topic`, `resource` y `user_id`. La cuenta se valida contra
+`ML_USER_ID`; un envelope inválido responde `400`. Una cuenta distinta responde `200 {ok:true, ignored:true}` sin persistir nada (fail-safe: evita saturación de `integration_events`
+por tráfico de cuentas ajenas no autenticadas, y no es reintentable). Los envelopes aceptados
+persisten `integration_events` y su primer `integration_job` en la misma transacción antes del
+ACK: responden siempre `200` (ML documenta 200 como único ACK válido), distinguiendo eventos nuevos y duplicados únicamente en el body: `{ok:true, duplicate:false}` para eventos nuevos durables y encolados, `{ok:true, duplicate:true}` para duplicados conocidos. Responden `503` si no se pueden
+persistir. Un envelope válido exige `ML_USER_ID` configurado; sin él el endpoint responde `503`.
+La deduplicación incluye topic, acción, versión, recurso, cuenta ML e identificador de
+notificación (o un marcador explícito cuando ML no lo envía); la correlación es por evento y
+recurso.
+El procesamiento posterior conserva el comportamiento fail-open de `orders`: una falla de
+sincronización no cambia el ACK ni bloquea otros canales.
+
+Los jobs de `claim.project` y `question.project` son consumidos por el worker durable de
+`integration_jobs`, con lease, reintentos con backoff y `dead_lettered` al agotar intentos o
+ante tipos no soportados. Sus proyecciones consultan el recurso autoritativo de ML desde el
+worker usando `mlCfg`; si falla, el job es reintentable y el evento no se marca completado.
+`reprocesarJob(db, jobId)` reabre una fila DLQ para operación administrativa y actualiza job,
+evento e historial en una transacción. Cada reclamación usa un token de lease único además del
+worker.
+
+### POST /api/admin/integration-jobs/:id/reprocess (**ADMIN-ONLY**)
+Reintenta un job que se encuentra en Dead Letter Queue (DLQ), reabriendo la fila para que el
+worker lo procese nuevamente. Requiere `requireAdmin` (solo administradores).
+
+- Request: sin body. `:id` es el `job_id` numérico de `integration_jobs`.
+- Response 202 (éxito): `{ "ok": true, "reprocessed": true }` — el job fue reabierto y será
+  procesado en el próximo ciclo del worker.
+- Response 401 (sin sesión): `{ "ok": false, "error": "..." }` — la sesión no es válida o falta
+  autenticación.
+- Response 403 (no-admin): `{ "ok": false, "error": "Requiere administrador" }`.
+- Response 404 (no encontrado): `{ "ok": false, "error": "job DLQ no encontrado" }` — el
+  `:id` no corresponde a ningún job, o el job no está en DLQ (ya fue procesado o está activo).
 
 ### GET /api/notificaciones-ml/pendientes
 Response 200: `{ ok:true, preguntas:[...], mensajes:[...], reclamos:[...], reclamos_sin_confirmar:[...], total:number }`.
@@ -1070,7 +1106,9 @@ Conteo liviano para el aviso del Home (no trae las filas). Response 200:
 
 #### P0.1: Reclamos reales de MercadoLibre (2026-08-28)
 
-**Topics soportados**: `topic='claims'` (legado) y `topic='post_purchase'` con `action='claims'`.
+**Topics soportados**: `topic='claims'` (legado) y `topic='post_purchase'` con `action='claims'` y
+`resource` conteniendo `/claims/{id}`. El cron legacy `reintentarReclamosSinConsultar` ya no se
+ejecuta: los reintentos ocurren exclusivamente mediante `integration_jobs` durable.
 
 **Recursos soportados** (extracto de la URL del webhook o del envelope):
 - `/claims/{id}` (legado)
@@ -1097,14 +1135,14 @@ reabrir un reclamo realmente reabierto. El upsert por `id` evita duplicados y la
 cualquier otro error, el webhook no se bloquea. Se conserva una fila mínima con
 estado `sin_consultar` para conservar el reclamo para diagnóstico. Las filas sin consultar se
 devuelven siempre en `reclamos_sin_confirmar`, separadas de `reclamos` y `total`, hasta que una
-consulta posterior las confirme. Un cron de recuperación las reintenta cada diez minutos.
+consulta posterior las confirme. La recuperación ocurre mediante los jobs durables de
+`integration_jobs`, con reintentos y backoff; no existe un cron legacy productivo.
 Se deja un warning seguro
 con claim id y status/error (`[notif-ml] ...`) para trazabilidad.
 
-En `post_purchase` se procesa el shape documentado por MercadoLibre (`resource` con
-`/post-purchase/v1/claims/{id}` y `actions: ['claims']`). También se aceptan como compatibilidad
-`envelope.claim_id`, `claim_id` del body y un `resource` que contenga `/claims/{id}`. Si no se
-puede extraer un id, se registra un warning sin guardar payload privado.
+En `post_purchase` solo se proyecta el shape documentado por MercadoLibre: `resource` con
+`/post-purchase/v1/claims/{id}` y `actions: ['claims']` (o `action: 'claims'`). Otros envelopes
+válidos se conservan como `audit-only`, sin proyección.
 
 Los elementos de `reclamos` en `/pendientes` incluyen, además de las columnas históricas,
 `type`, `reason_id`, `resource_id` y `consultado_en_ml`; pueden ser `null` cuando ML no los proporciona.

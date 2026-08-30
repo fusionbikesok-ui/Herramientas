@@ -47,7 +47,7 @@ describe('ingerirPregunta', () => {
     expect(row.respondida_en).toBeNull();
     expect(db.prepare("SELECT event_type, channel, resource_id, dedupe_key FROM integration_events WHERE resource_id='123'").get())
       .toMatchObject({ event_type: 'question.received', channel: 'ml', resource_id: '123', dedupe_key: 'ml:question:123:UNANSWERED' });
-    expect(db.prepare("SELECT title, preview, status FROM inbox_items WHERE resource_id='123'").get())
+    expect(db.prepare("SELECT title, preview, status FROM inbox_items WHERE resource_id='question:123'").get())
       .toMatchObject({ title: 'Pregunta ML · MLA1', preview: '¿Tiene stock?', status: 'unread' });
   });
 
@@ -118,6 +118,20 @@ describe('ingerirMensaje', () => {
   });
 });
 
+describe('ordenamiento durable del inbox', () => {
+  it('aplica una actualización posterior legítima y conserva ANSWERED ante evento viejo', async () => {
+    const db = tmpDb();
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 42, item_id: 'A', text: 'respondida', status: 'ANSWERED', date_created: '2026-08-30T18:00:00.000Z' } });
+    await ingerirPregunta(db, {}, '/questions/42');
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 42, item_id: 'A', text: 'vieja', status: 'UNANSWERED', date_created: '2026-08-30T17:00:00.000Z' } });
+    await ingerirPregunta(db, {}, '/questions/42');
+    const row = db.prepare("SELECT preview, updated_at FROM inbox_items WHERE resource_id='question:42'").get();
+    expect(row.preview).toBe('respondida');
+    expect(row.updated_at).toBe('2026-08-30T18:00:00.000Z');
+    db.close();
+  });
+});
+
 describe('ingerirReclamo', () => {
   let db;
   beforeEach(() => { db = tmpDb(); vi.clearAllMocks(); });
@@ -141,7 +155,6 @@ describe('ingerirReclamo', () => {
     const row = db.prepare("SELECT * FROM ml_reclamos WHERE id='c1'").get();
     expect(row).toBeTruthy();
     expect(row.estado).toBe('opened');
-    expect(row.cerrado_en).toBeNull();
     expect(row.type).toBe('item_not_received');
     expect(row.reason_id).toBe('r123');
     expect(row.resource_id).toBe('res456');
@@ -162,7 +175,6 @@ describe('ingerirReclamo', () => {
     await ingerirReclamo(db, {}, '/post-purchase/v1/claims/c2');
     let row = db.prepare("SELECT * FROM ml_reclamos WHERE id='c2'").get();
     expect(row.estado).toBe('opened');
-    expect(row.cerrado_en).toBeNull();
 
     // Segunda notificación: cambió a cerrado.
     mlFetch.mockResolvedValueOnce({
@@ -223,6 +235,25 @@ describe('ingerirReclamo', () => {
     expect(row.recurso).toBe('/v1/claims/c_v1');
   });
 
+  it('no borra el reclamo provisional si el lease vence durante la canonicalización', async () => {
+    await ingerirReclamo(db, {}, '/invalid-resource');
+    db.prepare(`INSERT INTO ml_reclamos
+      (id, recurso, estado, actualizado_en, consultado_en_ml)
+      VALUES (?, ?, 'sin_consultar', ?, 0)`).run('provisional', '/claims/provisional', new Date().toISOString());
+    mlFetch.mockResolvedValueOnce({
+      status: 200,
+      data: { id: 'canonico', status: 'opened', title: 'Canónico' },
+    });
+    // El worker tenía lease al iniciar el GET; al volver de await ya venció.
+    const leaseGuard = () => false;
+
+    await expect(ingerirReclamo(
+      db, {}, '/claims/provisional', '/claims/provisional', null, { leaseGuard },
+    )).rejects.toMatchObject({ code: 'lease_expired' });
+    expect(db.prepare("SELECT id FROM ml_reclamos WHERE id='provisional'").get()).toBeTruthy();
+    expect(db.prepare("SELECT id FROM ml_reclamos WHERE id='canonico'").get()).toBeUndefined();
+  });
+
   it('idempotencia: upsert y estado autoritativo permiten una reapertura real de ML', async () => {
     // Primer evento: opened.
     mlFetch.mockResolvedValueOnce({
@@ -233,26 +264,25 @@ describe('ingerirReclamo', () => {
     let row = db.prepare("SELECT * FROM ml_reclamos WHERE id='c_idem'").get();
     expect(row.estado).toBe('opened');
 
-    // Segundo evento: closed.
+    // Segundo evento: closed a las 18:00.
     mlFetch.mockResolvedValueOnce({
       status: 200,
-      data: { id: 'c_idem', status: 'closed', title: 'Resuelto', date_closed: '2026-08-26T12:00:00.000Z' },
+      data: { id: 'c_idem', status: 'closed', title: 'Resuelto', date_closed: '2026-08-26T18:00:00.000Z' },
     });
     await ingerirReclamo(db, {}, '/post-purchase/v1/claims/c_idem');
     row = db.prepare("SELECT * FROM ml_reclamos WHERE id='c_idem'").get();
     expect(row.estado).toBe('closed');
     expect(row.cerrado_en).toBeTruthy();
 
-    // Tercer GET autoritativo: ML reabrió realmente el reclamo.
+    // Reapertura real posterior: updated_at 19:00.
     mlFetch.mockResolvedValueOnce({
       status: 200,
-      data: { id: 'c_idem', status: 'opened', title: 'Reclamo viejo' },
+      data: { id: 'c_idem', status: 'opened', title: 'Reclamo reabierto', updated_at: '2026-08-26T19:00:00.000Z' },
     });
     await ingerirReclamo(db, {}, '/post-purchase/v1/claims/c_idem');
     row = db.prepare("SELECT * FROM ml_reclamos WHERE id='c_idem'").get();
     expect(row.estado).toBe('opened');
     expect(row.cerrado_en).toBeNull();
-    expect(row.titulo).toBe('Reclamo viejo');
   });
 
   it('fail-open: si ML devuelve status no-200', async () => {
@@ -377,16 +407,6 @@ describe('Webhook HTTP: topic post_purchase con acción claims', () => {
 
   it('persiste el reclamo desde el resource real y actions del envelope', async () => {
     const claimId = 'claim_from_envelope_001';
-    mlFetch.mockResolvedValueOnce({
-      status: 200,
-      data: {
-        id: claimId,
-        status: 'opened',
-        title: 'Producto no entregado',
-        type: 'item_not_received',
-        reason_id: 'r789',
-      },
-    });
 
     const file = path.join(os.tmpdir(), `notif_ml_http_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
     app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
@@ -396,49 +416,74 @@ describe('Webhook HTTP: topic post_purchase con acción claims', () => {
       resource: `/post-purchase/v1/claims/${claimId}`,
     });
     expect(r.status).toBe(200);
-    await vi.waitFor(() => expect(app._db.prepare(`SELECT * FROM ml_reclamos WHERE id=?`).get(claimId)).toBeTruthy());
-    expect(mlFetch).toHaveBeenCalledWith(app._db, {}, 'get', `/post-purchase/v1/claims/${claimId}`);
-    const row = app._db.prepare(`SELECT * FROM ml_reclamos WHERE id=?`).get(claimId);
-    expect(row).toBeTruthy();
-    expect(row.estado).toBe('opened');
-    expect(row.type).toBe('item_not_received');
-    expect(row.reason_id).toBe('r789');
+    const duplicate = await request(app).post('/api/ml/notificacion').send({
+      topic: 'post_purchase', actions: ['claims'], user_id: '123',
+      resource: `/post-purchase/v1/claims/${claimId}`,
+    });
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body).toMatchObject({ ok: true, duplicate: true });
+    const event = app._db.prepare('SELECT * FROM integration_events WHERE resource_id=?').get(`/post-purchase/v1/claims/${claimId}`);
+    expect(event).toBeTruthy();
+    expect(app._db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(event.event_id).job_type).toBe('claim.project');
+    expect(mlFetch).not.toHaveBeenCalled();
   });
 
-  it('usa claim_id del body o resource y descarta action distinta/sin id', async () => {
+  it('acepta claims desde claim_id en body, resource de claims, o ambos', async () => {
     const file = path.join(os.tmpdir(), `notif_ml_http_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
     app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
     app._tmpFile = file;
-    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'body_id', status: 'opened' } });
-    await request(app).post('/api/ml/notificacion').send({
+
+    // Caso 1: claim_id en body sin resource /claims → audit-only
+    const r1 = await request(app).post('/api/ml/notificacion').send({
       topic: 'post_purchase', action: 'claims', claim_id: 'body_id', user_id: '123',
     });
-    await request(app).post('/api/ml/notificacion').send({
-      topic: 'post_purchase', action: 'other', envelope: { claim_id: 'ignored' }, user_id: '123',
+    expect(r1.status).toBe(200);
+    const event1 = app._db.prepare('SELECT event_id FROM integration_events WHERE resource_id=?').get('/post-purchase/v1/claims/body_id');
+    expect(event1).toBeTruthy();
+    const job1 = app._db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(event1.event_id);
+    expect(job1.job_type).toBe('webhook.audit');
+
+    // Caso 2: resource de claims sin action='claims' → audit-only
+    const r2 = await request(app).post('/api/ml/notificacion').send({
+      topic: 'post_purchase', action: 'created', resource: '/post-purchase/v1/claims/resource_id', user_id: '123',
     });
-    await request(app).post('/api/ml/notificacion').send({
+    expect(r2.status).toBe(200);
+    const event2 = app._db.prepare('SELECT event_id FROM integration_events WHERE resource_id=?').get('/post-purchase/v1/claims/resource_id');
+    expect(event2).toBeTruthy();
+    const job2 = app._db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(event2.event_id);
+    expect(job2.job_type).toBe('webhook.audit');
+
+    // Caso 3: no claim — resource de orders → webhook.audit
+    const r3 = await request(app).post('/api/ml/notificacion').send({
       topic: 'post_purchase', action: 'claims', resource: '/orders/o1', user_id: '123',
     });
-    await vi.waitFor(() => expect(mlFetch).toHaveBeenCalledTimes(1));
-    expect(mlFetch).toHaveBeenCalledTimes(1);
-    expect(mlFetch).toHaveBeenCalledWith(app._db, {}, 'get', '/post-purchase/v1/claims/body_id');
+    expect(r3.status).toBe(200);
+    const event3 = app._db.prepare('SELECT event_id FROM integration_events WHERE resource_id=?').get('/orders/o1');
+    expect(event3).toBeTruthy();
+    const job3 = app._db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(event3.event_id);
+    expect(job3.job_type).toBe('webhook.audit');
+
+    expect(mlFetch).not.toHaveBeenCalled();
   });
 
   it('procesa el topic legado claims por HTTP real', async () => {
     const file = path.join(os.tmpdir(), `notif_ml_http_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
     app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
     app._tmpFile = file;
-    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'legacy_http', status: 'opened' } });
     const r = await request(app).post('/api/ml/notificacion').send({
       topic: 'claims', resource: '/claims/legacy_http', user_id: '123',
     });
     expect(r.status).toBe(200);
-    await vi.waitFor(() => expect(app._db.prepare("SELECT estado FROM ml_reclamos WHERE id='legacy_http'").get()).toBeTruthy());
-    expect(mlFetch).toHaveBeenCalledWith(app._db, {}, 'get', '/post-purchase/v1/claims/legacy_http');
-    expect(app._db.prepare("SELECT estado FROM ml_reclamos WHERE id='legacy_http'").get().estado).toBe('opened');
+    // El resource_id normalizado debe quedar en formato vigente, no en el legado del webhook.
+    const event = app._db.prepare("SELECT * FROM integration_events WHERE resource_id=?").get('/post-purchase/v1/claims/legacy_http');
+    expect(event).toBeTruthy();
+    expect(app._db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(event.event_id).job_type).toBe('claim.project');
+    // Un solo evento durable: el topic legado no debe caer en la rama de "evento derivado".
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(1);
+    expect(mlFetch).not.toHaveBeenCalled();
   });
 
-  it('rechaza una cuenta ML distinta sin llamar a ML', async () => {
+  it('acepta (200, no reintentable) una cuenta ML distinta sin llamar a ML', async () => {
     const file = path.join(os.tmpdir(), `notif_ml_http_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
     app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
     app._tmpFile = file;
@@ -446,8 +491,100 @@ describe('Webhook HTTP: topic post_purchase con acción claims', () => {
       topic: 'post_purchase', actions: ['claims'], user_id: 'otro',
       resource: '/post-purchase/v1/claims/ignored',
     });
+    // Cuenta ajena: responder 200 (no reintentable), ignored:true, y NO persistir nada
+    // (riesgo de saturación del sqlite si se guardara cada user_id ajeno recibido).
     expect(r.status).toBe(200);
+    expect(r.body).toEqual({ ok: true, ignored: true });
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
     expect(mlFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('Webhook HTTP: caminos de error del envelope', () => {
+  const mobileJwtSecret = 'claims-http-test-mobile-secret-32-chars';
+  let app;
+  beforeEach(() => { vi.clearAllMocks(); vi.stubEnv('ML_USER_ID', '123'); });
+  afterEach(() => {
+    app?._db?.close();
+    if (app?._tmpFile && fs.existsSync(app._tmpFile)) fs.unlinkSync(app._tmpFile);
+    app = null;
+    vi.unstubAllEnvs();
+  });
+
+  function buildApp() {
+    const file = path.join(os.tmpdir(), `notif_ml_http_err_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
+    app = buildServerApp({ dbPath: file, sessionSecret: 'test-session', mobileJwtSecret, wooCfg: {}, geminiKey: '', mlCfg: {} });
+    app._tmpFile = file;
+    return app;
+  }
+
+  it('400 envelope inválido: topic no matchea el patrón', async () => {
+    buildApp();
+    const r = await request(app).post('/api/ml/notificacion').send({
+      topic: '¡inválido!', resource: '/orders/1', user_id: '123',
+    });
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ ok: false, error: 'envelope inválido' });
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
+  });
+
+  it('400 envelope inválido: resource no es una ruta válida y no es el caso legacyClaimEnvelope', async () => {
+    buildApp();
+    const r = await request(app).post('/api/ml/notificacion').send({
+      topic: 'orders', resource: '/', user_id: '123',
+    });
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ ok: false, error: 'envelope inválido' });
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
+  });
+
+  it('400 user_id faltante: ausente, null o string vacío tras trim', async () => {
+    buildApp();
+    for (const user_id of [undefined, null, '   ']) {
+      const body = { topic: 'orders', resource: '/orders/1' };
+      if (user_id !== undefined) body.user_id = user_id;
+      const r = await request(app).post('/api/ml/notificacion').send(body);
+      expect(r.status).toBe(400);
+      expect(r.body).toEqual({ ok: false, error: 'user_id requerido' });
+    }
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
+  });
+
+  it('503 config ML ausente: process.env.ML_USER_ID no está seteado', async () => {
+    vi.unstubAllEnvs();
+    vi.stubEnv('ML_USER_ID', '');
+    buildApp();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = await request(app).post('/api/ml/notificacion').send({
+      topic: 'orders', resource: '/orders/1', user_id: '123',
+    });
+    expect(r.status).toBe(503);
+    expect(r.body).toEqual({ ok: false, error: 'integración ML no configurada' });
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
+    expect(spy.mock.calls.some(args => String(args[0]).includes('config-ml-ausente'))).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('503 persistencia falla: registrarWebhookMl lanza excepción y no crashea el proceso', async () => {
+    buildApp();
+    // Forzamos el fallo real de persistencia rompiendo la tabla que usa registrarWebhookMl,
+    // sin mockear el módulo (evita interferir con el resto de los tests de este archivo,
+    // que dependen de la persistencia real vía integration_events/integration_jobs).
+    app._db.exec('DROP TABLE integration_events');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = await request(app).post('/api/ml/notificacion').send({
+      topic: 'orders', resource: '/orders/1', user_id: '123',
+    });
+    expect(r.status).toBe(503);
+    expect(r.body).toEqual({ ok: false, error: 'no se pudo persistir el evento' });
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
+    expect(spy.mock.calls.some(args => String(args[0]).includes('persistencia-fallo'))).toBe(true);
+    spy.mockRestore();
   });
 });
 

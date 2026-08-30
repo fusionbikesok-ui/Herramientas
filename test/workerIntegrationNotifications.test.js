@@ -12,7 +12,19 @@ function fixture() {
 }
 
 describe('worker durable de entregas push', () => {
+  it('con feature desactivada conserva delivery pendiente y no llama al proveedor', async () => {
+    const db = fixture(); const send = async () => { throw new Error('no debe enviarse'); };
+    const previous = process.env.PUSH_REAL_ENABLED;
+    process.env.PUSH_REAL_ENABLED = 'false';
+    await procesarEntregasPush(db, { send });
+    expect(db.prepare('SELECT status,last_error_code FROM notification_deliveries').get())
+      .toEqual({ status: 'pending', last_error_code: null });
+    process.env.PUSH_REAL_ENABLED = previous;
+    db.close();
+  });
+
   it('envía y marca delivery/notificación como sent', async () => {
+    process.env.PUSH_REAL_ENABLED = 'true';
     const db = fixture(); const calls = [];
     const result = await procesarEntregasPush(db, { send: async (...args) => { calls.push(args); return { ok: true, providerMessageId: 'm1' }; } });
     expect(result.processed).toBe(1); expect(calls[0][0]).toBe('tok');
@@ -21,6 +33,7 @@ describe('worker durable de entregas push', () => {
   });
 
   it('reintenta con backoff y termina en failed sin lanzar', async () => {
+    process.env.PUSH_REAL_ENABLED = 'true';
     const db = fixture();
     for (let i = 0; i < 5; i++) {
       await procesarEntregasPush(db, { send: async () => ({ ok: false, error: 'down' }) });

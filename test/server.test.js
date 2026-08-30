@@ -214,4 +214,62 @@ describe('server', () => {
       SELECT id, 'notificaciones-ml', 'read' FROM users WHERE username = 'sin-permiso'`).run();
     expect((await request(app).post('/api/v1/notifications/abc/read').set(auth)).status).toBe(422);
   });
+
+  it('POST /api/admin/integration-jobs/:id/reprocess: reintenta un job DLQ (202)', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+
+    // Crear un evento y un job en DLQ.
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO integration_events
+      (event_id, event_type, channel, source, received_at, correlation_id, dedupe_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run('test-event-1', 'webhook.received', 'ml', 'mercadolibre', now, 'test-corr', 'test-dedupe');
+    app._db.prepare(`INSERT INTO integration_jobs (event_id, job_type, available_at, status)
+      VALUES (?, ?, ?, ?)`)
+      .run('test-event-1', 'claim.project', now, 'dead_lettered');
+    const jobId = app._db.prepare('SELECT job_id FROM integration_jobs WHERE event_id = ?').get('test-event-1').job_id;
+
+    const res = await agent.post(`/api/admin/integration-jobs/${jobId}/reprocess`);
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true, reprocessed: true });
+    // Verificar que el job fue reabierto (status != 'dead_lettered').
+    const updatedJob = app._db.prepare('SELECT status FROM integration_jobs WHERE job_id = ?').get(jobId);
+    expect(updatedJob.status).not.toBe('dead_lettered');
+  });
+
+  it('POST /api/admin/integration-jobs/:id/reprocess: 404 si job no existe', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+
+    const res = await agent.post('/api/admin/integration-jobs/99999/reprocess');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ ok: false, error: 'job DLQ no encontrado' });
+  });
+
+  it('POST /api/admin/integration-jobs/:id/reprocess: 403 si no es admin', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, 0, 1, ?, ?)`)
+      .run('no-admin', hashPassword('test1234'), now, now);
+    const agent = request.agent(app);
+    const login = await agent.post('/api/auth/login').send({ username: 'no-admin', password: 'test1234' });
+    expect(login.status).toBe(200);
+
+    const res = await agent.post('/api/admin/integration-jobs/1/reprocess');
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /api/admin/integration-jobs/:id/reprocess: 401 sin sesión', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+
+    const agent = request.agent(app);
+    const res = await agent.post('/api/admin/integration-jobs/1/reprocess');
+    expect(res.status).toBe(401);
+  });
 });
