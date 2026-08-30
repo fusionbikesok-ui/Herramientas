@@ -156,8 +156,9 @@ Orden obligatorio de ejecución:
 2. Trabajar cada entrega usable en worktree aislado y con base SQLite de prueba.
 3. Ejecutar tests dirigidos, revisión, E2E real a 390 px y auditoría del diff final.
 4. Ejecutar la suite global una sola vez, en serie y sin servidores de prueba activos.
-   Esta corrida tarda como mínimo **13 minutos** en el entorno actual. Debe iniciarse con una
-   ventana de espera de al menos 15 minutos, no interrumpirse por falta de salida inmediata y
+   Esta corrida tarda como mínimo **13 minutos** en el entorno actual; la última ejecución completa
+   observada duró **1036,02 s (17 min 16 s)**. Debe iniciarse con una ventana de espera de al menos
+   20 minutos, no interrumpirse por falta de salida inmediata y
    dejarse terminar hasta el resumen final de Vitest. Durante la ejecución se debe informar el
    estado aproximadamente cada 60–90 segundos (inicio, progreso o duración transcurrida), sin
    matar ni relanzar el proceso salvo error inequívoco del runner. Si la sesión de terminal tiene
