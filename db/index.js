@@ -172,6 +172,14 @@ export function openDb(dbPath) {
     });
     aplicarDespacho();
   }
+  const despachoIdempotenciaMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='control_despacho_idempotencia_034'").get();
+  if (!despachoIdempotenciaMigration) {
+    const aplicarDespachoIdempotencia = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '034_control_despacho_idempotencia.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('control_despacho_idempotencia_034')").run();
+    });
+    aplicarDespachoIdempotencia();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

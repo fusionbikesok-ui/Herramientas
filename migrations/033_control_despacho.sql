@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS despacho_controles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   grupo_clave TEXT NOT NULL UNIQUE,
-  estado TEXT NOT NULL DEFAULT 'pendiente',
+  estado TEXT NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'escaneado', 'confirmado')),
   etiqueta_cola_id INTEGER,
   creado_en TEXT NOT NULL,
   actualizado_en TEXT NOT NULL,
@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS despacho_escaneos (
   codigo TEXT NOT NULL,
   idempotencia TEXT NOT NULL UNIQUE,
   usuario TEXT NOT NULL,
-  creado_en TEXT NOT NULL
+  creado_en TEXT NOT NULL,
+  CHECK (length(trim(codigo)) > 0)
 );
 CREATE INDEX IF NOT EXISTS idx_despacho_escaneos_control ON despacho_escaneos(control_id, id);
 CREATE TABLE IF NOT EXISTS etiquetas_cola (

@@ -182,12 +182,13 @@ function ensureTables(db) {
   db.prepare(`CREATE TABLE IF NOT EXISTS despacho_controles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     grupo_clave TEXT NOT NULL UNIQUE,
-    estado TEXT NOT NULL DEFAULT 'pendiente',
+    estado TEXT NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'escaneado', 'confirmado')),
     etiqueta_cola_id INTEGER,
     creado_en TEXT NOT NULL,
     actualizado_en TEXT NOT NULL,
     confirmado_por TEXT,
-    confirmado_en TEXT
+    confirmado_en TEXT,
+    confirmacion_idempotencia TEXT
   )`).run();
   db.prepare(`CREATE TABLE IF NOT EXISTS despacho_escaneos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -196,14 +197,25 @@ function ensureTables(db) {
     codigo TEXT NOT NULL,
     idempotencia TEXT NOT NULL UNIQUE,
     usuario TEXT NOT NULL,
-    creado_en TEXT NOT NULL
+    creado_en TEXT NOT NULL,
+    CHECK (length(trim(codigo)) > 0)
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_despacho_escaneos_control ON despacho_escaneos(control_id, id)').run();
   db.prepare(`CREATE TABLE IF NOT EXISTS etiquetas_cola (
     id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT NOT NULL, cantidad INTEGER NOT NULL,
     origen TEXT, sesion_id INTEGER, solicitado_por TEXT, nota TEXT,
-    estado TEXT NOT NULL DEFAULT 'pendiente', creado_en TEXT NOT NULL, impreso_en TEXT
+    estado TEXT NOT NULL DEFAULT 'pendiente', creado_en TEXT NOT NULL, impreso_en TEXT,
+    formato_ancho_mm INTEGER NOT NULL DEFAULT 50 CHECK (formato_ancho_mm > 0),
+    formato_alto_mm INTEGER NOT NULL DEFAULT 25 CHECK (formato_alto_mm > 0),
+    tipo_etiqueta TEXT NOT NULL DEFAULT 'interna'
   )`).run();
+  try { db.prepare('ALTER TABLE despacho_controles ADD COLUMN confirmacion_idempotencia TEXT').run(); } catch (_) {}
+  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_despacho_confirmacion_idempotencia ON despacho_controles(confirmacion_idempotencia) WHERE confirmacion_idempotencia IS NOT NULL').run();
+  for (const ddl of [
+    'ALTER TABLE etiquetas_cola ADD COLUMN formato_ancho_mm INTEGER NOT NULL DEFAULT 50',
+    'ALTER TABLE etiquetas_cola ADD COLUMN formato_alto_mm INTEGER NOT NULL DEFAULT 25',
+    "ALTER TABLE etiquetas_cola ADD COLUMN tipo_etiqueta TEXT NOT NULL DEFAULT 'interna'",
+  ]) { try { db.prepare(ddl).run(); } catch (_) {} }
 
   // Claim exclusivo de la preparación. Tabla separada para no cambiar el contrato ni
   // reescribir filas históricas; la PK garantiza que dos operadores no puedan adquirirla
@@ -565,7 +577,7 @@ function exigirClaimVigente(db, prep, usuario, res) {
   return true;
 }
 
-export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuario, detalle }) {
+export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuario, detalle, failClosed = false }) {
   // Fail-open a propósito: el historial de "Actividad" es auxiliar, nunca debe poder
   // frenar la acción real (escanear, subir foto, etc.) que el operario está haciendo.
   try {
@@ -575,6 +587,7 @@ export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuari
     `).run(preparacionId, itemId, tipo, usuario ?? null, JSON.stringify(detalle ?? {}), now());
   } catch (e) {
     console.error('registrarEvento: no se pudo registrar', tipo, e.message);
+    if (failClosed) throw e;
   }
 }
 
@@ -851,11 +864,17 @@ export function preparacionRouter(db, cfg) {
   router.post('/despacho/:id/escanear', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo, code: 'PREPARACION_CERRADA' });
     if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const codigo = String(req.body?.codigo || '').trim().toUpperCase();
     const idempotencia = String(req.get('Idempotency-Key') || req.body?.idempotencia || '').trim();
     if (!codigo || !idempotencia) return res.status(400).json({ ok: false, error: 'codigo e idempotencia requeridos' });
     const grupo = prep.pack_id || prep.clave;
+    // Alias no permitido: el código esperado es exactamente pack_id o, si no existe, clave.
+    if (codigo !== String(grupo).trim().toUpperCase()) {
+      return res.status(409).json({ ok: false, error: 'el código no coincide con el despacho', code: 'DESPACHO_NO_COINCIDE', match: 'no_coincide' });
+    }
     const control = db.prepare('INSERT INTO despacho_controles (grupo_clave, creado_en, actualizado_en) VALUES (?,?,?) ON CONFLICT(grupo_clave) DO UPDATE SET actualizado_en=excluded.actualizado_en RETURNING *')
       .get(grupo, now(), now());
     const previo = db.prepare('SELECT * FROM despacho_escaneos WHERE idempotencia=?').get(idempotencia);
@@ -868,7 +887,7 @@ export function preparacionRouter(db, cfg) {
       db.prepare('INSERT INTO despacho_escaneos (control_id, preparacion_id, codigo, idempotencia, usuario, creado_en) VALUES (?,?,?,?,?,?)')
         .run(control.id, prep.id, codigo, idempotencia, req.user.username, now());
       db.prepare("UPDATE despacho_controles SET estado='escaneado', actualizado_en=? WHERE id=? AND estado='pendiente'").run(now(), control.id);
-      registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_escaneo', usuario: req.user.username, detalle: { codigo, grupo_clave: grupo, idempotencia } });
+      registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_escaneo', usuario: req.user.username, detalle: { codigo, grupo_clave: grupo, idempotencia }, failClosed: true });
     })();
     res.status(201).json({ ok: true, repetido: false, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id) });
   });
@@ -876,23 +895,32 @@ export function preparacionRouter(db, cfg) {
   router.post('/despacho/:id/confirmar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo, code: 'PREPARACION_CERRADA' });
     if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+    const idempotencia = String(req.get('Idempotency-Key') || '').trim();
+    if (!idempotencia) return res.status(400).json({ ok: false, error: 'Idempotency-Key requerido', code: 'IDEMPOTENCY_KEY_REQUIRED' });
     const grupo = prep.pack_id || prep.clave;
     const control = db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo);
     if (!control) return res.status(409).json({ ok: false, error: 'el despacho requiere al menos un escaneo' });
     if (!['escaneado', 'confirmado'].includes(control.estado)) return res.status(409).json({ ok: false, error: 'estado de despacho inválido', code: 'DESPACHO_ESTADO_INVALIDO' });
+    const previo = db.prepare('SELECT * FROM despacho_controles WHERE confirmacion_idempotencia=?').get(idempotencia);
+    if (previo && previo.id !== control.id) return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
+    if (control.confirmacion_idempotencia && control.confirmacion_idempotencia !== idempotencia) return res.status(409).json({ ok: false, error: 'el despacho ya fue confirmado con otra idempotencia', code: 'IDEMPOTENCY_CONFLICT' });
     if (control.estado === 'confirmado') return res.json({ ok: true, repetido: true, control });
     const ts = now();
     const confirmar = db.transaction(() => {
-      const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=? WHERE id=? AND estado<>'confirmado'")
-        .run(req.user.username, ts, ts, control.id);
+      const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=?, confirmacion_idempotencia=? WHERE id=? AND estado='escaneado' AND (confirmacion_idempotencia IS NULL OR confirmacion_idempotencia=?)")
+        .run(req.user.username, ts, ts, idempotencia, control.id, idempotencia);
       if (!cambio.changes) return { repetido: true, etiquetaId: db.prepare('SELECT etiqueta_cola_id FROM despacho_controles WHERE id=?').get(control.id).etiqueta_cola_id };
-      const etiqueta = db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, origen, solicitado_por, nota, estado, creado_en)
-        VALUES (?,?,?,?,?,'pendiente',?)`).run(grupo, 1, 'despacho', req.user.username, 'Etiqueta interna 50x25 mm', ts);
+      const etiqueta = db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, origen, solicitado_por, nota, estado, creado_en, formato_ancho_mm, formato_alto_mm, tipo_etiqueta)
+        VALUES (?,?,?,?,?,'pendiente',?,50,25,'interna')`).run(grupo, 1, 'despacho', req.user.username, JSON.stringify({ formato: '50x25mm', grupo_clave: grupo }), ts);
       db.prepare('UPDATE despacho_controles SET etiqueta_cola_id=? WHERE id=?').run(etiqueta.lastInsertRowid, control.id);
       db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
         VALUES (?,?,?,?,?,?)`).run(prep.id, null, 'despacho_confirmado', req.user.username,
           JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: etiqueta.lastInsertRowid, formato: '50x25mm' }), ts);
+      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')")
+        .run(prep.id);
       return { repetido: false, etiquetaId: etiqueta.lastInsertRowid };
     })();
     if (confirmar.repetido) return res.json({ ok: true, repetido: true, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id) });
