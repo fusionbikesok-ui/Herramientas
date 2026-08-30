@@ -159,10 +159,11 @@ Orden obligatorio de ejecución:
    Esta corrida tarda como mínimo **13 minutos** en el entorno actual; la última ejecución completa
    observada duró **1036,02 s (17 min 16 s)**. Debe iniciarse con una ventana de espera de al menos
    20 minutos, no interrumpirse por falta de salida inmediata y
-   dejarse terminar hasta el resumen final de Vitest. Durante la ejecución se debe informar el
-   estado aproximadamente cada 60–90 segundos (inicio, progreso o duración transcurrida), sin
-   matar ni relanzar el proceso salvo error inequívoco del runner. Si la sesión de terminal tiene
-   un timeout menor, usar un proceso persistente y consultar su salida periódicamente.
+   dejarse terminar hasta el resumen final de Vitest. Para no consumir recursos consultando una
+   corrida silenciosa, basta comprobar la sesión aproximadamente un minuto antes de la duración
+   observada (a los 16 min 16 s) y luego al final; no consultar cada 60–90 segundos. No matar ni
+   relanzar el proceso salvo error inequívoco del runner. Si la sesión de terminal tiene un timeout
+   menor, usar un proceso persistente y hacer esas dos consultas.
 5. Presentar al usuario impacto, rollback y evidencia antes de cualquier migración, deploy, push o
    reinicio de PM2.
 6. Tras aprobación y despliegue manual, verificar health, logs, migraciones y el recorrido real sin
