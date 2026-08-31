@@ -59,9 +59,10 @@ Actualizado: 2026-08-31.
   responsable operativo. `PUSH_REAL_ENABLED=true` fue agregado al `.env` real del VPS (no
   versionado) con autorización explícita del usuario, para que el nuevo gate fail-closed no
   apagara las push reales al desplegar.
-- P0.3 fue verificado nuevamente sobre `73ce904`: PM2 online, Node en `*:3001`, user_version 30,
-  backbone/lease presentes, guards de API y webhooks correctos; el barrido completo queda pendiente
-  solo del gate global verde por un timeout aislado ajeno en Inventario.
+- P0.3 fue verificado nuevamente sobre `42ab97b`: la suite global serial pasó `89 archivos,
+  1859 tests y 1 omitido`, código 0, en `1119,29 s`; el fixture de Inventario y el margen del
+  test estático de servidor quedaron deterministas bajo carga. Falta la auditoría final y la
+  verificación post-despliegue.
 - Barrido vigente adicional: PM2 `online`, Node en `*:3001`, migraciones del backbone presentes
   (incluido `lease_token`), `/api/v1/inbox` sin token devuelve `401`, ML inválido devuelve `400`
   y Woo con firma inválida devuelve `401`. Esto valida routing, autenticación básica y esquema;
