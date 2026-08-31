@@ -41,6 +41,7 @@ describe('lib/incidentes', () => {
       confirmarCicloSano(db, { integracion: BASE.integracion, proceso: BASE.proceso });
       expect(db.prepare("SELECT estado FROM incidentes_email_outbox WHERE incidente_id=? AND tipo='recuperada'").get(r.id).estado).toMatch(/pendiente|enviando|fallido/);
     });
+
     it('abre un incidente nuevo con contador en 1 y estado activo', () => {
       const r = abrirOActualizarIncidente(db, BASE);
       expect(r.creado).toBe(true);
