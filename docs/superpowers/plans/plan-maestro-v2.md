@@ -493,7 +493,7 @@ Objetivo: una sola línea de desarrollo y producción, sin perder funciones excl
 
 **Higiene de ramas ya ejecutada (2026-08-30, actualizada 2026-08-31):** de 49 ramas locales
 quedan `conteo-confiable`, `master` y `prep-horarios-corte`; `prep-cola-instantanea` ya está
-integrada en el estado vigente `03b832f`. `prep-horarios-corte` sigue siendo trabajo
+integrada en `conteo-confiable`. `prep-horarios-corte` sigue siendo trabajo
 real pendiente, ver U0.B y `docs/memory/active.md`. Las demás se verificaron mergeadas
 (`git merge-base --is-ancestor`) o se archivaron como tag `archive/<nombre>` antes de borrarse
 por tener base de merge muy anterior (2026-08-19/25) y contenido ya superado. Detalle completo en
