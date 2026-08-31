@@ -1,6 +1,6 @@
 # Plan maestro vigente — FusionBikes Herramientas + App operativa
 
-Actualizado: 2026-08-29. Reordenado para el compromiso operativo del 2026-09-04.
+Actualizado: 2026-08-31. Reordenado para el compromiso operativo del 2026-09-04.
 
 Este es el **único plan activo** del repositorio. Reemplaza planes, trackers y documentos de
 implementación anteriores. Git conserva la historia; este archivo conserva solamente el estado
@@ -215,7 +215,7 @@ fue confirmada operativamente por el responsable; la URL vigente es
   tres SKUs mapeados sin fila local devolvieron cero coincidencias. El `403`/`500` transitorio se
   resolvió sin cambiar Nginx ni el código. No ejecutar `PUT`, `DELETE` ni correcciones SQLite para
   esos registros: la evidencia confirma que son datos reales o mapeos ausentes en Woo.
-- Post-despliegue verificado 2026-08-31: `conteo-confiable` quedó en `73ce904` (incluye la
+- Post-despliegue verificado 2026-08-31: `conteo-confiable` quedó en `741fdc0` (incluye el
   corrección de alertas anti-falsa-alarma y filtrado de errores históricos resueltos), PM2 está
   `online`, el webhook Woo rechaza firma inválida con `401` y el webhook ML responde `200`.
   El ciclo real posterior al reinicio, ejecutado a las 12:30 UTC, completó `barridoAuditoria`
@@ -230,13 +230,13 @@ fue confirmada operativamente por el responsable; la URL vigente es
   `/api/v1/inbox` sin token devuelve `401`, el webhook público ML con `{}` devuelve `400` y Woo con
   firma inválida devuelve `401`. Esto valida routing, autenticación básica y migración; no sustituye
   una prueba autenticada de lectura ni el E2E móvil.
-- Barrido P0.3 actualizado (2026-08-31): PM2 `online`, Node escucha en `*:3001`, SQLite reporta
+- Barrido P0.3 actualizado (2026-08-31): el commit final local es `741fdc0`; PM2 `online`, Node escucha en `*:3001`, SQLite reporta
   `user_version=30`, están presentes las tablas del backbone y `integration_jobs.lease_token`.
   `/api/v1/inbox` y `/api/v1/notifications` sin Bearer devuelven `401`; el webhook ML vacío devuelve
   `400`; las alertas SMTP Zoho validan autenticación. La pantalla de errores de sync ahora deja dos
-  reservas retenidas reales y oculta un pedido que ya terminó `ok`. La suite global del cambio quedó
-  en `1854 passed`, `1 skipped`, con un timeout aislado en `test/inventario.test.js` (sobrante grande),
-  pendiente de resolver antes de declarar el gate global verde.
+  reservas retenidas reales y oculta un pedido que ya terminó `ok`. Los tests dirigidos del cambio
+  pasan; la suite global debe repetirse sobre este commit y luego pasar revisión independiente y
+  auditoría antes de declarar el gate global verde.
 - El backbone exige un único camino durable: el webhook persiste evento+job, el worker consulta ML
   con configuración obligatoria y proyecta sobre ese mismo evento; no se crean eventos derivados.
 - `PUSH_REAL_ENABLED` ausente o distinto de `true` pausa ambos workers sin incrementar intentos.
