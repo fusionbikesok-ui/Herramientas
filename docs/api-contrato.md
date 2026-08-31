@@ -3120,6 +3120,19 @@ días y hacer visible la resolución de conflictos. Fixtures, estados y criterio
 derivarse de los schemas, no de respuestas inventadas por cada pantalla.
 ## Horarios de corte de despacho
 
+### Hoja de despachos
+
+`GET /api/preparacion/despacho/cola` requiere permiso `preparacion` de lectura. Acepta
+`fecha=YYYY-MM-DD|sin_fecha`, `estado=pendiente|escaneado|confirmado`, `canal` y `q`
+(búsqueda por grupo, clave o número de pedido). La jornada se resuelve por
+`pedidos_cache.fecha_despacho`, que es `fecha_despacho` o el SLA normalizado a
+`America/Argentina/Buenos_Aires`; si ambos faltan se clasifica como `sin_fecha`. No usa
+`creado_en` como sustituto. La respuesta incluye `jornada`, `resumen` con total y conteos
+por estado, y `data` con controles enriquecidos y confirmados incluidos.
+
+Las mutaciones de escaneo y confirmación requieren permiso `preparacion` de escritura, toma
+vigente y conservan los códigos `409` e idempotencia documentados en el contrato existente.
+
 `GET /api/preparacion/horarios-despacho` requiere permiso de lectura de Preparación;
 `PUT` requiere permiso de escritura (administradores pasan el guard global). El `PUT`
 recibe los siete días y `expected_version`; una versión desactualizada responde `409`

@@ -858,12 +858,51 @@ export function preparacionRouter(db, cfg) {
     }
   });
 
-  // Control de despacho: agrupa por pack de ML o por preparación, sin proveedor externo.
+  // Control de despacho: la jornada pertenece al pedido, no al momento en que se creó
+  // el control. `pedidos_cache.fecha_despacho` ya contiene la fecha de despacho explícita
+  // o el SLA normalizado a Buenos Aires; sin fila/fecha, el control queda en `sin_fecha`.
   router.get('/despacho/cola', (req, res) => {
-    const controles = db.prepare(`SELECT d.*, COUNT(e.id) AS escaneos
-      FROM despacho_controles d LEFT JOIN despacho_escaneos e ON e.control_id=d.id
-      WHERE d.estado <> 'confirmado' GROUP BY d.id ORDER BY d.creado_en`).all();
-    res.json({ ok: true, data: controles });
+    const fecha = req.query.fecha == null ? null : String(req.query.fecha);
+    if (fecha !== null && fecha !== 'sin_fecha' && !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      return res.status(400).json({ ok: false, error: 'fecha debe ser YYYY-MM-DD o sin_fecha', code: 'FECHA_INVALIDA' });
+    }
+    const estado = req.query.estado == null ? null : String(req.query.estado).trim();
+    const canal = req.query.canal == null ? null : String(req.query.canal).trim();
+    const q = req.query.q == null ? null : String(req.query.q).trim().toLowerCase();
+    const estadosValidos = new Set(['pendiente', 'escaneado', 'confirmado']);
+    if (estado && !estadosValidos.has(estado)) {
+      return res.status(400).json({ ok: false, error: 'estado inválido', code: 'ESTADO_INVALIDO' });
+    }
+    const params = [];
+    const where = [];
+    if (fecha === 'sin_fecha') where.push('jornada_fecha IS NULL');
+    else if (fecha) { where.push('jornada_fecha = ?'); params.push(fecha); }
+    if (estado) { where.push('d.estado = ?'); params.push(estado); }
+    if (canal) { where.push('p.canal = ?'); params.push(canal); }
+    if (q) {
+      where.push(`(lower(d.grupo_clave) LIKE ? OR lower(COALESCE(p.numero_pedido, '')) LIKE ?
+        OR lower(COALESCE(p.clave, '')) LIKE ?)`);
+      const term = `%${q}%`; params.push(term, term, term);
+    }
+    const base = `
+      SELECT d.*, COUNT(e.id) AS escaneos,
+        p.id AS preparacion_id, p.clave, p.canal, p.numero_pedido, p.estado AS estado_preparacion,
+        p.pack_id, pc.fecha_despacho AS jornada_fecha,
+        CASE WHEN pc.fecha_despacho IS NULL THEN 'sin_fecha' ELSE pc.fecha_despacho END AS jornada
+      FROM despacho_controles d
+      LEFT JOIN despacho_escaneos e ON e.control_id=d.id
+      LEFT JOIN preparaciones p ON (p.pack_id = d.grupo_clave OR p.clave = d.grupo_clave)
+      LEFT JOIN pedidos_cache pc ON pc.id = (SELECT pc2.id FROM pedidos_cache pc2
+        WHERE pc2.clave = p.clave OR (p.pack_id IS NOT NULL AND pc2.pack_id = p.pack_id)
+        ORDER BY pc2.id DESC LIMIT 1)
+      GROUP BY d.id`;
+    const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha, d.creado_en`).all(...params);
+    const jornada = fecha || 'sin_fecha';
+    const allParams = fecha === 'sin_fecha' ? [] : fecha ? [fecha] : [];
+    const summaryRows = db.prepare(`${base}${fecha === 'sin_fecha' ? ' HAVING jornada_fecha IS NULL' : fecha ? ' HAVING jornada_fecha = ?' : ''}`).all(...allParams);
+    const resumen = { total: summaryRows.length, pendientes: 0, escaneados: 0, confirmados: 0 };
+    for (const row of summaryRows) resumen[row.estado === 'pendiente' ? 'pendientes' : `${row.estado}s`] += 1;
+    return res.json({ ok: true, jornada: { fecha: jornada, zona_horaria: 'America/Argentina/Buenos_Aires' }, resumen, data: rows });
   });
 
   router.post('/despacho/:id/escanear', (req, res) => {
