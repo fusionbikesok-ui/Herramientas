@@ -112,6 +112,12 @@ Pendientes concretos absorbidos por esta entrega:
   (`GET /despacho/cola`, `POST /despacho/:id/escanear` y `POST /despacho/:id/confirmar`) y sus
   tests no sustituyen esa UI; debe diseñarse, implementarse y cubrirse con permisos, responsive
   390/768/1440, errores `409`, doble escaneo, jornada vacía y auditoría antes de cerrar U0.B.
+- Antes de implementarla debe cerrarse la semántica de “diaria”: hoy `despacho_controles` solo
+  persiste `creado_en/actualizado_en` y `GET /despacho/cola` no acepta fecha, estado ni paginación.
+  El diseño debe decidir y documentar si la jornada se determina por `fecha_despacho`/SLA de la
+  preparación o por la fecha de creación del control, cómo se muestran controles viejos y qué
+  zona horaria se usa (Buenos Aires); no se debe resolver con un filtro visual sobre datos
+  incompletos.
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
   ítems y verificar tabla/modal de stock a 390 px.
 - Integración de `prep-cola-instantanea` completada en `conteo-confiable`, estado vigente
