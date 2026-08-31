@@ -458,8 +458,17 @@ async function guardarHorarios(ev){
     var horarios=[].slice.call(document.querySelectorAll('#horarios-form input[data-dia]')).map(function(cb){return {dia:Number(cb.dataset.dia),habilitado:cb.checked,hora_corte:document.querySelector('input[data-hora="'+cb.dataset.dia+'"]').value};});
     var version=Number(document.getElementById('horarios-form').dataset.version);
     var r=await api('/horarios-despacho',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({horarios:horarios,expected_version:version})});
-    if(r.body.ok) document.getElementById('horarios-form').dataset.version=String(r.body.version);
-    document.getElementById('horarios-msg').textContent=r.body.ok?'Guardado':'Error: '+(r.body.error||'no se pudo guardar');
+    if(r.body.ok) {
+      document.getElementById('horarios-form').dataset.version=String(r.body.version);
+      document.getElementById('horarios-msg').textContent='Guardado';
+    } else if(r.status===409 && r.body.code==='VERSION_CONFLICT') {
+      var msg=document.getElementById('horarios-msg');
+      msg.textContent='Alguien actualizó estos horarios. Recargá la pantalla antes de guardar.';
+      var recargar=document.createElement('button'); recargar.type='button'; recargar.className='btn mini'; recargar.textContent='Recargar horarios';
+      recargar.onclick=cargarHorarios; msg.appendChild(document.createTextNode(' ')); msg.appendChild(recargar);
+    } else {
+      document.getElementById('horarios-msg').textContent='Error: '+(r.body.error||'no se pudo guardar');
+    }
   }catch(e){ document.getElementById('horarios-msg').textContent='Error: '+e.message; }
   finally{ btn.disabled=false; }
 }
