@@ -462,7 +462,10 @@ async function guardarHorarios(ev){
       document.getElementById('horarios-form').dataset.version=String(r.body.version);
       document.getElementById('horarios-msg').textContent='Guardado';
     } else if(r.status===409 && r.body.code==='VERSION_CONFLICT') {
-      document.getElementById('horarios-msg').textContent='Alguien actualizó estos horarios. Recargá la pantalla antes de guardar.';
+      var msg=document.getElementById('horarios-msg');
+      msg.textContent='Alguien actualizó estos horarios. Recargá la pantalla antes de guardar.';
+      var recargar=document.createElement('button'); recargar.type='button'; recargar.className='btn mini'; recargar.textContent='Recargar horarios';
+      recargar.onclick=cargarHorarios; msg.appendChild(document.createTextNode(' ')); msg.appendChild(recargar);
     } else {
       document.getElementById('horarios-msg').textContent='Error: '+(r.body.error||'no se pudo guardar');
     }

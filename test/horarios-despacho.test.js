@@ -6,7 +6,7 @@ import path from 'path';
 import { openDb } from '../db/index.js';
 import { preparacionRouter } from '../routes/preparacion.js';
 import { calcularFechaDespacho, fechaEstimadaShipment, horaValida, normalizarHorarios, asegurarEsquemaHorarios } from '../lib/horariosDespacho.js';
-import { requireAuth } from '../lib/auth.js';
+import { hashPassword, requireAuth } from '../lib/auth.js';
 import { permiteAcceso, resolvePermiso } from '../lib/permisos.js';
 
 const laborables = normalizarHorarios([]);
@@ -35,7 +35,9 @@ describe('horarios de despacho', () => {
     expect(fechaEstimadaShipment({ date_estimated_delivery: '2026-09-03' })).toBeNull();
     expect(fechaEstimadaShipment({ shipping_option: { estimated_handling_limit: { date: '2026-08-31T12:00:00Z' } } })).toBe('2026-08-31');
     expect(fechaEstimadaShipment({ sla: { expected_date: '2026-09-01T23:59:59-03:00' } })).toBe('2026-09-01');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-09-01T00:30:00Z' } })).toBe('2026-08-31');
     expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30' }, expected_date: '2026-09-02' })).toBe('2026-09-02');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30T00:30:00Z' }, expected_date: '2026-09-02' })).toBe('2026-09-02');
     expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30' }, date_estimated_delivery: '2026-09-03' })).toBeNull();
   });
 
@@ -99,9 +101,15 @@ describe('horarios de despacho', () => {
   it('aplica autorización HTTP real: sin permiso no lee ni actualiza', async () => {
     const file = path.join(process.cwd(), 'test/tmp-horarios-permiso-http.sqlite');
     const db = openDb(file);
+    db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, 0, 1, ?, ?)`).run('operador-sin-permiso', hashPassword('test'), new Date().toISOString(), new Date().toISOString());
     const app = express(); app.use(express.json());
     app.use((req, res, next) => {
-      req.user = { username: 'operador', permisos: [], is_admin: false };
+      req.session = { userId: 1 };
+      next();
+    });
+    app.use(requireAuth(db));
+    app.use((req, res, next) => {
       const permiso = resolvePermiso(req.method, req.path);
       if (!permiteAcceso(req.user.permisos, permiso)) return res.status(403).json({ ok: false, error: 'Acceso no autorizado' });
       return next();
