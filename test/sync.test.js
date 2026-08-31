@@ -851,6 +851,26 @@ describe('vista de detalle', () => {
     expect(res.body.data.map(r => r.clave)).toEqual(['MLA3|v3']);
   });
 
+  it('atencion/errores: muestra un error posterior a un estado ML antiguo', async () => {
+    const viejo = '2026-08-30T10:00:00.000Z';
+    const nuevo = '2026-08-30T11:00:00.000Z';
+    db.prepare("INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES ('MLA-VIEJO|','FB-V',1,?)").run(viejo);
+    db.prepare("INSERT INTO sync_log (direccion,clave,sku,estado,error,intentos,creado_en,actualizado_en) VALUES ('wc_ml','MLA-VIEJO|','FB-V','error','HTTP 500',1,?,?)").run(nuevo,nuevo);
+    const res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.body.data.map(r => r.clave)).toContain('MLA-VIEJO|');
+  });
+
+  it('atencion/errores: limpia error→ok con clave NULL y desempata por id', async () => {
+    const ts = '2026-08-30T12:00:00.000Z';
+    db.prepare("INSERT INTO sync_log (direccion,clave,estado,error,intentos,creado_en,actualizado_en) VALUES ('pedidos_cache',NULL,'error','timeout',1,?,?)").run(ts,ts);
+    db.prepare("INSERT INTO sync_log (direccion,clave,estado,error,intentos,creado_en,actualizado_en) VALUES ('pedidos_cache',NULL,'ok',NULL,0,?,?)").run(ts,ts);
+    let res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.body.data.some(r => r.clave === null)).toBe(false);
+    db.prepare("INSERT INTO sync_log (direccion,clave,estado,error,intentos,creado_en,actualizado_en) VALUES ('pedidos_cache',NULL,'error','nuevo',1,?,?)").run(ts,ts);
+    res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.body.data.some(r => r.clave === null && r.error === 'nuevo')).toBe(true);
+  });
+
   it('atencion: categoría inválida → 400', async () => {
     const res = await request(app).get('/api/sync/atencion/cualquiera');
     expect(res.status).toBe(400);

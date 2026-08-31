@@ -2818,18 +2818,13 @@ export function syncRouter(db, cfg) {
     const tieneClaveSync = db.prepare('PRAGMA table_info(sync_log)').all().some(c => c.name === 'clave');
     const errores = tieneClaveSync
       ? db.prepare(`
-          SELECT COUNT(*) as n FROM (
-            SELECT direccion, clave, MAX(creado_en) AS ultimo_error
-            FROM sync_log
-            WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
-            GROUP BY direccion, clave
-          ) pendientes
-          WHERE NOT EXISTS (
-            SELECT 1 FROM sync_log ok
-            WHERE ok.direccion = pendientes.direccion AND ok.clave = pendientes.clave
-              AND ok.estado IN ('ok','reactivada','reconciliado')
-              AND ok.creado_en > pendientes.ultimo_error
-          )
+          SELECT COUNT(*) as n FROM sync_log s
+          WHERE s.estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
+            AND NOT EXISTS (
+              SELECT 1 FROM sync_log newer
+              WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave
+                AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id))
+            )
         `).get()
       : db.prepare("SELECT COUNT(*) as n FROM sync_log WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')").get();
 
@@ -2980,15 +2975,15 @@ export function syncRouter(db, cfg) {
     ).get().n;
     const requiereAtencion = db.prepare(
       `SELECT COUNT(DISTINCT clave) n FROM sync_log
-       WHERE estado='requiere_atencion_ml' AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM ml_stock_estado)`
+       WHERE estado='requiere_atencion_ml'
+         AND NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = sync_log.clave AND m.actualizado_en >= sync_log.creado_en)`
     ).get().n;
     const erroresReales = db.prepare(
-      `SELECT COUNT(DISTINCT clave) n FROM sync_log
-       WHERE estado IN ('error','agotado') AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM ml_stock_estado)
-         AND clave NOT IN (SELECT clave FROM errores_descartados)
-         AND NOT EXISTS (SELECT 1 FROM sync_log ok WHERE ok.direccion = sync_log.direccion AND ok.clave = sync_log.clave AND ok.estado IN ('ok','reactivada','reconciliado') AND ok.creado_en > sync_log.creado_en)`
+      `SELECT COUNT(*) n FROM sync_log s
+       WHERE s.estado IN ('error','agotado')
+         AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave)
+         AND NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en)
+         AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))`
     ).get().n;
     const catMap = { sin_mapeo: sinMapeo, remapeo_requerido: remapeoReq, requiere_atencion_ml: requiereAtencion };
 
@@ -3196,35 +3191,38 @@ export function syncRouter(db, cfg) {
     },
     errores: {
       estados: "'error','agotado'",
-      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado) AND s.clave NOT IN (SELECT clave FROM errores_descartados) AND NOT EXISTS (SELECT 1 FROM sync_log ok WHERE ok.direccion = s.direccion AND ok.clave = s.clave AND ok.estado IN ('ok','reactivada','reconciliado') AND ok.creado_en > s.creado_en)",
+      exclude: "NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en) AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave) AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))",
     },
   };
 
   router.get('/atencion/:cat', async (req, res) => {
     const def = ATENCION_DEFS[req.params.cat];
     if (!def) return res.status(400).json({ ok: false, error: 'categoría inválida' });
+    const incluyeClaveNula = req.params.cat === 'errores';
+    const filtroClave = incluyeClaveNula ? '' : 'AND s.clave IS NOT NULL';
+    const agrupacion = incluyeClaveNula ? 's.direccion, s.clave' : 's.clave';
     // Total real (sin LIMIT), para no reportar el tope de la query como si fuera el total.
     const totalReal = db.prepare(`
       SELECT COUNT(*) n FROM (
         SELECT s.clave
         FROM sync_log s
         WHERE s.estado IN (${def.estados})
-          AND s.clave IS NOT NULL
+          ${filtroClave}
           AND ${def.exclude}
-        GROUP BY s.clave
+        GROUP BY ${agrupacion}
       )
     `).get().n;
     // GROUP BY clave con MAX(creado_en): SQLite toma sku/error de la fila más reciente.
     const rows = db.prepare(`
-      SELECT s.clave, s.sku, s.error, s.estado, MAX(s.creado_en) AS creado_en,
+      SELECT s.clave, s.sku, s.error, s.estado, s.creado_en,
              p.item_id, p.variation_id, p.titulo, p.variations_texto, p.status AS ml_status, p.thumbnail
       FROM sync_log s
       LEFT JOIN ml_publicaciones_cache p ON p.clave = s.clave
       WHERE s.estado IN (${def.estados})
-        AND s.clave IS NOT NULL
+        ${filtroClave}
         AND ${def.exclude}
-      GROUP BY s.clave
-      ORDER BY creado_en DESC
+      ${incluyeClaveNula ? '' : 'GROUP BY s.clave'}
+      ORDER BY s.creado_en DESC, s.id DESC
       LIMIT 500
     `).all();
 

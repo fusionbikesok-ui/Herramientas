@@ -41,6 +41,7 @@ import { backfillVentas } from './lib/criticidad.js';
 import { auditoriaRouter } from './routes/auditoria.js';
 import { barridoAuditoria } from './lib/auditoria.js';
 import { incidentesRouter } from './routes/incidentes.js';
+import { procesarAlertasEmailIncidentes } from './lib/incidentes.js';
 import { devicesRouter } from './routes/devices.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
@@ -585,6 +586,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('*/2 * * * *', () => {
         procesarNotificacionesPush(app._db)
           .catch(err => console.error('Error en procesarNotificacionesPush:', err.message));
+      });
+
+      // Outbox de alertas SMTP: persiste antes de enviar y reintenta fallos sin
+      // afectar ningún canal de sincronización.
+      cron.schedule('* * * * *', () => {
+        procesarAlertasEmailIncidentes(app._db);
       });
 
       // P1 Claims: entregas durables aisladas del worker legacy de incidentes.

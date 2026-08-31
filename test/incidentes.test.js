@@ -25,6 +25,22 @@ describe('lib/incidentes', () => {
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
   describe('abrirOActualizarIncidente', () => {
+    it('reserva una alerta solo tras tres fallos y la deduplica de forma durable', () => {
+      abrirOActualizarIncidente(db, BASE);
+      abrirOActualizarIncidente(db, BASE);
+      expect(db.prepare('SELECT COUNT(*) n FROM incidentes_email_outbox').get().n).toBe(0);
+      abrirOActualizarIncidente(db, BASE);
+      expect(db.prepare("SELECT tipo, estado, intentos FROM incidentes_email_outbox").get()).toMatchObject({ tipo: 'caida' });
+      abrirOActualizarIncidente(db, BASE);
+      expect(db.prepare('SELECT COUNT(*) n FROM incidentes_email_outbox').get().n).toBe(1);
+    });
+
+    it('la recuperación reserva email solo después de una caída enviada', () => {
+      const r = abrirOActualizarIncidente(db, { ...BASE, severidad: 'critico' });
+      db.prepare("UPDATE incidentes_email_outbox SET estado='enviado' WHERE incidente_id=? AND tipo='caida'").run(r.id);
+      confirmarCicloSano(db, { integracion: BASE.integracion, proceso: BASE.proceso });
+      expect(db.prepare("SELECT estado FROM incidentes_email_outbox WHERE incidente_id=? AND tipo='recuperada'").get(r.id).estado).toMatch(/pendiente|enviando|fallido/);
+    });
     it('abre un incidente nuevo con contador en 1 y estado activo', () => {
       const r = abrirOActualizarIncidente(db, BASE);
       expect(r.creado).toBe(true);
@@ -419,7 +435,7 @@ describe('lib/incidentes', () => {
       const indices = db2.prepare(
         "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_incidentes%'"
       ).all().map(r => r.name).sort();
-      expect(indices).toEqual(['idx_incidentes_dedupe_activo', 'idx_incidentes_estado_fecha', 'idx_incidentes_hist_incidente', 'idx_incidentes_integracion']);
+      expect(indices).toEqual(['idx_incidentes_dedupe_activo', 'idx_incidentes_email_outbox_pendiente', 'idx_incidentes_estado_fecha', 'idx_incidentes_hist_incidente', 'idx_incidentes_integracion']);
 
       expect(db2.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE clave_dedupe = ?")
         .get('mercado_libre|refrescar_catalogo|rate_limit').n).toBe(1);
