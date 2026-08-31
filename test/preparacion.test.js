@@ -80,11 +80,12 @@ describe('control de despacho U0.B', () => {
   afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
   it('devuelve jornada, resumen, confirmados, sin_fecha y filtros de la hoja', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-HOJA', packId: 'PACK-HOJA', numeroPedido: '700', comprador: 'X', items: [] });
+    crearPreparacion(db, { canal: 'web', wcOrderId: 701, numeroPedido: '701', comprador: 'Y', items: [] });
     db.prepare(`INSERT INTO pedidos_cache
       (clave, canal, ml_order_id, pack_id, numero_pedido, estado_envio, items_json, actualizado_en, fecha_despacho)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run('ml:ORD-HOJA', 'ml', 'ORD-HOJA', 'PACK-HOJA', '700', 'pendiente', '[]', new Date().toISOString(), '2026-09-01');
     db.prepare(`INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en)
-      VALUES (?, ?, ?, ?), (?, ?, ?, ?)`).run('PACK-HOJA', 'confirmado', '2026-08-30T10:00:00Z', '2026-08-30T10:00:00Z', 'SIN-FECHA', 'pendiente', '2026-08-30T11:00:00Z', '2026-08-30T11:00:00Z');
+      VALUES (?, ?, ?, ?), (?, ?, ?, ?)`).run('PACK-HOJA', 'confirmado', '2026-08-30T10:00:00Z', '2026-08-30T10:00:00Z', 'web:701', 'pendiente', '2026-08-30T11:00:00Z', '2026-08-30T11:00:00Z');
     const r = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola?fecha=2026-09-01&estado=confirmado&canal=ml&q=700');
     expect(r.status).toBe(200);
     expect(r.body.jornada).toEqual({ fecha: '2026-09-01', zona_horaria: 'America/Argentina/Buenos_Aires' });

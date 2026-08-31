@@ -858,6 +858,7 @@ export function preparacionRouter(db, cfg) {
   // el control. `pedidos_cache.fecha_despacho` ya contiene la fecha de despacho explícita
   // o el SLA normalizado a Buenos Aires; sin fila/fecha, el control queda en `sin_fecha`.
   router.get('/despacho/cola', (req, res) => {
+    try {
     const fecha = req.query.fecha == null ? null : String(req.query.fecha);
     if (fecha !== null && fecha !== 'sin_fecha' && !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
       return res.status(400).json({ ok: false, error: 'fecha debe ser YYYY-MM-DD o sin_fecha', code: 'FECHA_INVALIDA' });
@@ -881,17 +882,20 @@ export function preparacionRouter(db, cfg) {
       const term = `%${q}%`; params.push(term, term, term);
     }
     const base = `
-      SELECT d.*, COUNT(e.id) AS escaneos,
+      SELECT d.id, COALESCE(d.grupo_clave, p.pack_id, p.clave) AS grupo_clave,
+        COALESCE(d.estado, 'pendiente') AS estado, d.etiqueta_cola_id, d.creado_en,
+        d.actualizado_en, d.confirmado_por, d.confirmado_en, COUNT(e.id) AS escaneos,
         p.id AS preparacion_id, p.clave, p.canal, p.numero_pedido, p.estado AS estado_preparacion,
         p.pack_id, pc.fecha_despacho AS jornada_fecha,
         CASE WHEN pc.fecha_despacho IS NULL THEN 'sin_fecha' ELSE pc.fecha_despacho END AS jornada
-      FROM despacho_controles d
+      FROM preparaciones p
+      LEFT JOIN despacho_controles d ON d.grupo_clave = COALESCE(p.pack_id, p.clave)
       LEFT JOIN despacho_escaneos e ON e.control_id=d.id
-      LEFT JOIN preparaciones p ON (p.pack_id = d.grupo_clave OR p.clave = d.grupo_clave)
-      LEFT JOIN pedidos_cache pc ON pc.id = (SELECT pc2.id FROM pedidos_cache pc2
+      LEFT JOIN pedidos_cache pc ON pc.clave = (SELECT pc2.clave FROM pedidos_cache pc2
         WHERE pc2.clave = p.clave OR (p.pack_id IS NOT NULL AND pc2.pack_id = p.pack_id)
-        ORDER BY pc2.id DESC LIMIT 1)
-      GROUP BY d.id`;
+        ORDER BY rowid DESC LIMIT 1)
+      WHERE p.estado NOT IN ('cerrada_sin_evidencia')
+      GROUP BY p.id`;
     const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha, d.creado_en`).all(...params);
     const jornada = fecha || 'sin_fecha';
     const allParams = fecha === 'sin_fecha' ? [] : fecha ? [fecha] : [];
@@ -899,6 +903,7 @@ export function preparacionRouter(db, cfg) {
     const resumen = { total: summaryRows.length, pendientes: 0, escaneados: 0, confirmados: 0 };
     for (const row of summaryRows) resumen[row.estado === 'pendiente' ? 'pendientes' : `${row.estado}s`] += 1;
     return res.json({ ok: true, jornada: { fecha: jornada, zona_horaria: 'America/Argentina/Buenos_Aires' }, resumen, data: rows });
+    } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   });
 
   router.post('/despacho/:id/escanear', (req, res) => {
