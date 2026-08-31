@@ -180,6 +180,12 @@ Orden obligatorio de ejecución:
 
 ### P0.1 Claims de MercadoLibre reales
 
+Evidencia dirigida vigente (2026-08-31): `test/notificacionesMl.test.js`,
+`test/inboxClaims.test.js`, `test/claimsBackbone.test.js` y `test/notifications.test.js` pasan
+`51/51` pruebas. Cubren `claims`, `post_purchase`, paths autoritativos, estados `opened/closed`,
+deduplicación, reintentos y fail-open. Esta evidencia no sustituye la verificación con una
+notificación real de la cuenta ni la auditoría final.
+
 El bloque P0.1 debe mantener soporte para `topic='claims'` y agregar el envelope vigente
 `post_purchase`. Antes de dar A.4 por cerrada se debe verificar contra notificaciones reales y
 conservar estos contratos:

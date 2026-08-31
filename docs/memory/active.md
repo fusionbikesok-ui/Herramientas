@@ -62,6 +62,9 @@ Actualizado: 2026-08-31.
 - P0.3: la suite global serial sobre la base de ejecución `b7fb85c` pasó `91 archivos, 1872 tests y
   1 omitido`, código 0, en `1173,54 s` (19m33s). El gate dirigido de Preparación sobre esa base
   pasó `212/212`. Falta auditoría final y verificación post-despliegue.
+- P0.1 Claims: el 2026-08-31 pasaron `51/51` tests dirigidos en cuatro archivos, cubriendo
+  `claims`, `post_purchase`, paths autoritativos, `opened/closed`, deduplicación, reintentos y
+  fail-open. Sigue pendiente la verificación con una notificación real y la auditoría final.
 - Barrido vigente adicional: PM2 `online`, Node en `*:3001`, migraciones del backbone presentes
   (incluido `lease_token`), `/api/v1/inbox` sin token devuelve `401`, ML inválido devuelve `400`
   y Woo con firma inválida devuelve `401`. Esto valida routing, autenticación básica y esquema;
