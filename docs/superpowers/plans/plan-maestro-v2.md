@@ -157,11 +157,12 @@ Orden obligatorio de ejecución:
 3. Ejecutar tests dirigidos, revisión, E2E real a 390 px y auditoría del diff final.
 4. Ejecutar la suite global una sola vez, en serie y sin servidores de prueba activos.
    Esta corrida tarda como mínimo **13 minutos** en el entorno actual; la última ejecución completa
-   observada duró **1036,02 s (17 min 16 s)**. Debe iniciarse con una ventana de espera de al menos
+   observada (2026-08-31) pasó **89 archivos, 1855 tests y 1 omitido**, con código de salida 0, y
+   duró **939,41 s (15 min 39 s)**. Debe iniciarse con una ventana de espera de al menos
    20 minutos, no interrumpirse por falta de salida inmediata y
    dejarse terminar hasta el resumen final de Vitest. Para no consumir recursos consultando una
    corrida silenciosa, basta comprobar la sesión aproximadamente un minuto antes de la duración
-   observada (a los 16 min 16 s) y luego al final; no consultar cada 60–90 segundos. No matar ni
+   observada (a los 14 min 39 s) y luego al final; no consultar cada 60–90 segundos. No matar ni
    relanzar el proceso salvo error inequívoco del runner. Si la sesión de terminal tiene un timeout
    menor, usar un proceso persistente y hacer esas dos consultas.
 5. Presentar al usuario impacto, rollback y evidencia antes de cualquier migración, deploy, push o
