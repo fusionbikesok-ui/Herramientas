@@ -104,12 +104,11 @@ Pendientes concretos absorbidos por esta entrega:
   auditoría.
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
   ítems y verificar tabla/modal de stock a 390 px.
-- Integrar `prep-cola-instantanea` (rama viva, worktree en
-  `.claude/worktrees/prep-cola-instantanea`, no mergeada): marca visualmente "NUEVO" en la cola
-  de Preparación los pedidos recién llegados por webhook. Feature autocontenida, encontrada en
-  auditoría de ramas del 2026-08-30 sin registro previo en este plan. Gate actual (2026-08-31):
-  no integrar; sus tests dirigidos dieron `190/194` y fallaron cuatro casos de sincronización y
-  webhook. Requiere corrección en su propio worktree y repetir revisión.
+- Integración de `prep-cola-instantanea` completada en `conteo-confiable` mediante `a4bee2a`
+  (2026-08-31): la cola marca visualmente "NUEVO" los pedidos recién llegados por webhook y
+  las reglas de elegibilidad ML/Woo conservan los casos inconclusos sin podarlos. El gate
+  dirigido posterior a la integración pasó `3 archivos, 211/211 pruebas`; la suite global y la
+  revisión independiente siguen siendo gates pendientes antes del cierre de U0.
 
 **Aceptación U0.B:** un pedido recorre cola → preparación → evidencia → etiqueta → despacho con
 trazabilidad completa y sin toma simultánea por dos operadores.
@@ -491,9 +490,10 @@ se actualizan únicamente dentro de U0 hasta el cierre del 2026-09-04.
 
 Objetivo: una sola línea de desarrollo y producción, sin perder funciones exclusivas.
 
-**Higiene de ramas ya ejecutada (2026-08-30):** de 49 ramas locales quedan solo `conteo-confiable`,
-`master`, `prep-cola-instantanea` y `prep-horarios-corte` (las dos últimas: trabajo real
-pendiente, ver U0.B y `docs/memory/active.md`). Las demás se verificaron mergeadas
+**Higiene de ramas ya ejecutada (2026-08-30, actualizada 2026-08-31):** de 49 ramas locales
+quedan `conteo-confiable`, `master` y `prep-horarios-corte`; `prep-cola-instantanea` ya fue
+integrada en `conteo-confiable` mediante `a4bee2a`. `prep-horarios-corte` sigue siendo trabajo
+real pendiente, ver U0.B y `docs/memory/active.md`. Las demás se verificaron mergeadas
 (`git merge-base --is-ancestor`) o se archivaron como tag `archive/<nombre>` antes de borrarse
 por tener base de merge muy anterior (2026-08-19/25) y contenido ya superado. Detalle completo en
 `docs/memory/active.md`, sección "Higiene de ramas". **No re-auditar esas ramas**: si hace falta
@@ -526,6 +526,36 @@ fuente de trabajo pendiente.
 - UI responsive y accesible cuando corresponda.
 - Revisor sin hallazgos bloqueantes y auditor con luz verde.
 - Deploy manual con health, logs, migraciones y rollback verificados.
+
+## Sin clasificar
+
+**Urgencia: sin clasificar.**
+
+- **Bug — badge de notificaciones ML muestra preguntas ya respondidas como pendientes.** El
+  conteo depende 100% de webhooks (`routes/notificacionesMl.js:435` cuenta
+  `estado='UNANSWERED'` sobre `ml_preguntas`, actualizado solo por `ingerirPregunta()` en
+  `routes/notificacionesMl.js:192-222` vía el cron de `server.js:605-608`). Si ML no reenvía
+  el webhook de cambio de estado tras responder la pregunta, la fila local queda
+  `UNANSWERED` indefinidamente y el badge en `public/home/index.html:1027` sobrecuenta.
+  Solución propuesta: cron adicional que sincronice periódicamente contra
+  `GET /questions/search?status=UNANSWERED` en ML en lugar de depender solo del webhook.
+  Pendiente de priorizar y de pasar por el pipeline (`hard-worker-backend` → `revisor` →
+  `tester` → `auditor-despliegue`).
+
+- **Bug — mensajes ML sin reconciliación periódica.** Mismo patrón que preguntas:
+  `ingerirMensaje` (`routes/notificacionesMl.js:108-132`) solo actualiza `ml_mensajes` vía
+  webhook + cola `integration_jobs` (`server.js:606`, cada minuto). Si ML no reenvía el
+  webhook de respuesta, el mensaje local nunca marca `respondido_en` aunque ya se haya
+  respondido en ML. Sin cron de reconciliación de respaldo.
+
+- **Bug — reclamos/claims ML sin reconciliación periódica.** `ingerirReclamo`
+  (`routes/notificacionesMl.js:138-229`) tiene el mismo defecto: un reclamo cerrado en ML
+  puede quedar con `estado='opened'` en `ml_reclamos` para siempre si falta el webhook de
+  cierre (`notificacionesMl.js:267-350`). `docs/memory/active.md:56` documenta que existió
+  un cron `reintentarReclamosSinConsultar` que fue eliminado sin reemplazo, dejando ya
+  advertido el riesgo de backlog sin consumidor. `barridoAuditoria` (`server.js:519`, cada
+  15 min) no cubre este caso: solo reconcilia atributos de publicaciones, no claims ni
+  mensajes.
 
 ## Fuera de alcance hasta decisión explícita
 

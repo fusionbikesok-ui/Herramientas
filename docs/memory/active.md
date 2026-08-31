@@ -87,8 +87,9 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
 `/root/.claude/jobs/*`) comparando contenido real (no solo mensajes de commit) contra
 `conteo-confiable`. Resultado, para no repetir esta auditoría:
 
-- **Quedan 4 ramas locales:** `conteo-confiable` (producción), `master` (pendiente de
-  consolidación, Prioridad 6), `prep-cola-instantanea` y `prep-horarios-corte` (ver abajo).
+- **Quedan 3 ramas locales:** `conteo-confiable` (producción), `master` (pendiente de
+  consolidación, Prioridad 6) y `prep-horarios-corte` (ver abajo). `prep-cola-instantanea` fue
+  integrada en `conteo-confiable` mediante `a4bee2a` el 2026-08-31.
 - **~38 ramas se borraron sin tag** (`git branch -d`): contenido 100% mergeado en
   `conteo-confiable`, verificado por `git merge-base --is-ancestor`. Sin pérdida de historia.
 - **9 ramas viejas/reemplazadas se archivaron como tag `archive/<nombre>` antes de borrarse**
@@ -107,14 +108,12 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
   que no está en `conteo-confiable`. Es un prototipo temprano de App 0 abandonado; no contradice
   la regla de que este repo no declara artefactos móviles propios porque nunca se integró.
 
-### Pendiente real detectado (no documentado antes)
+### Pendiente real detectado (actualizado 2026-08-31)
 
-- **`prep-cola-instantanea`** (rama viva, worktree en `.claude/worktrees/prep-cola-instantanea`):
-  feature autocontenida de U0.B — marca visualmente "NUEVO" los pedidos que llegan por webhook a
-  la cola de Preparación (`public/preparacion/index.html`, `test/preparacion-render.test.js`).
-  Confirmado que NO está en `conteo-confiable`. Falta decidir si se integra antes del cierre de
-  U0.B del 2026-09-04. Gate dirigido 2026-08-31: `190/194`, con cuatro fallos en sincronización
-  de pedidos y webhook; no integrar hasta corregirlos en su worktree.
+- La feature `prep-cola-instantanea` ya no está pendiente: fue integrada en
+  `conteo-confiable` mediante `a4bee2a`. El gate dirigido posterior pasó `211/211` pruebas en
+  tres archivos. Sus reglas de elegibilidad y conservación de casos inconclusos quedaron dentro
+  de la integración.
 - **`prep-horarios-corte`** (rama viva, worktree en `/tmp/fusion-prep-horarios`): ya documentado
   como diferido a propósito ("Integrar `prep-horarios-corte` únicamente después de repetir todos
   los gates sobre la base productiva actual").
