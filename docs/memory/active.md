@@ -94,9 +94,9 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
 `/root/.claude/jobs/*`) comparando contenido real (no solo mensajes de commit) contra
 `conteo-confiable`. Resultado, para no repetir esta auditoría:
 
-- **Quedan 3 ramas locales:** `conteo-confiable` (producción), `master` (pendiente de
-  consolidación, Prioridad 6) y `prep-horarios-corte` (ver abajo). `prep-cola-instantanea` está
-  integrada en la base de ejecución verificada `b7fb85c` desde el 2026-08-31.
+- **Quedan 2 ramas locales:** `conteo-confiable` (producción) y `master` (pendiente de
+  consolidación, Prioridad 6). `prep-cola-instantanea` y `prep-horarios-corte` están integradas
+  en `conteo-confiable`.
 - **~38 ramas se borraron sin tag** (`git branch -d`): contenido 100% mergeado en
   `conteo-confiable`, verificado por `git merge-base --is-ancestor`. Sin pérdida de historia.
 - **9 ramas viejas/reemplazadas se archivaron como tag `archive/<nombre>` antes de borrarse**
@@ -117,14 +117,10 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
 
 ### Pendiente real detectado (actualizado 2026-08-31)
 
-- La feature `prep-cola-instantanea` ya no está pendiente: está integrada en el estado vigente
-  `b7fb85c`. El gate dirigido posterior pasó `212/212` pruebas en
-  tres archivos. Sus reglas de elegibilidad y conservación de casos inconclusos quedaron dentro
-  de la integración.
-- **`prep-horarios-corte`** (rama viva, sin worktree temporal activo): no integrable en su estado
-  actual. La revisión aislada del 2026-08-31 encontró migración `022` duplicada frente a `032`, UI
-  sin `expected_version/409`, contrato SLA ML incompleto, cobertura HTTP/E2E insuficiente y tests
-  no reproducibles desde un checkout limpio. Debe corregirse y repetir gates sobre la base actual.
+- La feature `prep-cola-instantanea` está integrada; su gate dirigido pasó `212/212` pruebas.
+- `prep-horarios-corte` fue reconstruida sobre la base actual e integrada con gate dirigido
+  `16/16` en 2 archivos. Conserva `032`, auditoría, `expected_version/409`, permisos reales y
+  recarga UI. Queda pendiente validar con payloads reales de ML los campos SLA por modalidad.
 
 ## Incidente abierto: bloqueo de red contra WooCommerce (2026-08-30, pendiente para el usuario)
 

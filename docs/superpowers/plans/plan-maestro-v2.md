@@ -98,11 +98,11 @@ Pendientes concretos absorbidos por esta entrega:
 - Cerrar revisión, pruebas y E2E del alta de GTIN/EAN durante Preparación: candidatos,
   conflicto, reemplazo explícito, conservación local, reintento y títulos largos a 390 px.
 - Completar E2E de dirección con campos largos y vínculos del comprador.
-- `prep-horarios-corte` no se integra en su estado actual: la revisión aislada del 2026-08-31
-  encontró migración `022` duplicada frente a `032`, UI sin `expected_version/409`, contrato SLA
-  ML sin precedencia normativa, cobertura HTTP/E2E insuficiente y tests no reproducibles desde un
-  checkout limpio. Debe corregirse en su rama y repetir todos los gates sobre la base productiva
-  actual antes de considerar su integración.
+- `prep-horarios-corte` integrado tras reconstrucción sobre la base actual mediante el merge de
+  `ce160d7` (2026-08-31): conserva migración `032`, auditoría y `expected_version`, maneja
+  `VERSION_CONFLICT` con recarga explícita, valida permisos reales y normaliza SLA a Buenos Aires.
+  El gate dirigido posterior al merge pasó `16/16` en 2 archivos. Queda pendiente únicamente
+  confirmar con payloads reales de Mercado Libre qué campo SLA corresponde a cada modalidad.
 - Implementar etiqueta interna y control de despacho con escaneo, agrupación, estados y
   auditoría.
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
@@ -508,9 +508,8 @@ se actualizan únicamente dentro de U0 hasta el cierre del 2026-09-04.
 Objetivo: una sola línea de desarrollo y producción, sin perder funciones exclusivas.
 
 **Higiene de ramas ya ejecutada (2026-08-30, actualizada 2026-08-31):** de 49 ramas locales
-quedan `conteo-confiable`, `master` y `prep-horarios-corte`; `prep-cola-instantanea` ya está
-integrada en `conteo-confiable`. `prep-horarios-corte` sigue siendo trabajo
-real pendiente, ver U0.B y `docs/memory/active.md`. Las demás se verificaron mergeadas
+quedan `conteo-confiable` y `master`; `prep-cola-instantanea` y `prep-horarios-corte` ya están
+integradas en `conteo-confiable`. Las demás se verificaron mergeadas
 (`git merge-base --is-ancestor`) o se archivaron como tag `archive/<nombre>` antes de borrarse
 por tener base de merge muy anterior (2026-08-19/25) y contenido ya superado. Detalle completo en
 `docs/memory/active.md`, sección "Higiene de ramas". **No re-auditar esas ramas**: si hace falta
