@@ -7,6 +7,7 @@ import { openDb } from '../db/index.js';
 import { preparacionRouter } from '../routes/preparacion.js';
 import { calcularFechaDespacho, fechaEstimadaShipment, horaValida, normalizarHorarios, asegurarEsquemaHorarios } from '../lib/horariosDespacho.js';
 import { hashPassword, requireAuth } from '../lib/auth.js';
+import { buildApp } from '../server.js';
 import { permiteAcceso, resolvePermiso } from '../lib/permisos.js';
 
 const laborables = normalizarHorarios([]);
@@ -136,6 +137,31 @@ describe('horarios de despacho', () => {
     expect(JSON.parse(evento.valores_anteriores_json)).toHaveLength(7);
     expect(JSON.parse(evento.valores_nuevos_json)).toHaveLength(7);
     db.close(); try { fs.unlinkSync(file); } catch {}
+  });
+
+  it('aplica permisos con buildApp real para usuario limitado y administrador', async () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-buildapp.sqlite');
+    const db = openDb(file);
+    const ts = new Date().toISOString();
+    const pass = hashPassword('secreto-test');
+    db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, ?, 1, ?, ?), (?, ?, ?, 1, ?, ?)`).run(
+      'horarios-limitado', pass, 0, ts, ts, 'horarios-admin', pass, 1, ts, ts,
+    );
+    db.close();
+    const app = buildApp({ dbPath: file, sessionSecret: 'session-test', mobileJwtSecret: 'x'.repeat(32), wooCfg: {}, mlCfg: {}, geminiKey: '' });
+    const limitado = request.agent(app);
+    const admin = request.agent(app);
+    expect((await limitado.post('/api/auth/login').send({ username: 'horarios-limitado', password: 'secreto-test' })).status).toBe(200);
+    expect((await admin.post('/api/auth/login').send({ username: 'horarios-admin', password: 'secreto-test' })).status).toBe(200);
+    expect((await limitado.get('/api/preparacion/horarios-despacho')).status).toBe(403);
+    const lectura = await admin.get('/api/preparacion/horarios-despacho');
+    expect(lectura.status).toBe(200);
+    const horarios = lectura.body.data.map((h) => ({ ...h, habilitado: h.dia === 1, hora_corte: '14:00' }));
+    expect((await admin.put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: lectura.body.version })).status).toBe(200);
+    expect((await limitado.put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: 2 })).status).toBe(403);
+    try { fs.unlinkSync(file); } catch {}
+    try { fs.unlinkSync(path.join(process.cwd(), 'test/sessions.sqlite')); } catch {}
   });
 
   it('resuelve dos actualizaciones concurrentes determinísticamente sin devolver 500', async () => {

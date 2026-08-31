@@ -48,6 +48,12 @@ beforeEach(() => {
 });
 
 describe('preparacion/index.html — render de pedidos nuevos', () => {
+  it('ofrece recarga explícita cuando guardar horarios recibe VERSION_CONFLICT', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain("r.status===409 && r.body.code==='VERSION_CONFLICT'");
+    expect(html).toContain("recargar.textContent='Recargar horarios'");
+    expect(html).toContain('recargar.onclick=cargarHorarios');
+  });
   it('no marca la carga inicial y marca un pedido aparecido en el polling con tiempo transcurrido', () => {
     const pedido = { canal: 'web', wc_order_id: 901, numero_pedido: '901', comprador: 'Ana', fecha: '2026-08-28T12:00:00Z', items: [] };
     ctx.registrarPendientesNuevos([pedido], false);
