@@ -218,6 +218,27 @@
   .chip-jump.oculto{display:none}
   .chip-jump .dot{width:7px;height:7px;border-radius:50%;background:transparent}
   .chip-jump.nuevo .dot{background:var(--azul)}
+
+  /* Hoja de despachos: mobile first, sin depender de estilos de otras pantallas. */
+  .desp-toolbar,.desp-filtros{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+  .desp-toolbar select,.desp-toolbar input,.desp-filtros select,.desp-filtros input{min-height:44px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px}
+  .desp-toolbar input{flex:1;min-width:150px;font-family:monospace}
+  .desp-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}
+  .desp-stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:11px;text-align:left;color:var(--muted);cursor:pointer;min-height:62px}
+  .desp-stat strong{display:block;color:var(--text);font-size:20px;font-variant-numeric:tabular-nums}
+  .desp-stat.on{border-color:var(--azul);color:var(--azul)}
+  .desp-list{display:grid;grid-template-columns:1fr;gap:10px}
+  .desp-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px}
+  .desp-card h3{font-size:15px;margin:0 0 5px;overflow-wrap:anywhere}
+  .desp-meta{font-size:12px;color:var(--muted);line-height:1.55}
+  .desp-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
+  .desp-scan{display:flex;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:12px}
+  .desp-scan input{flex:1;min-width:0;min-height:52px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:10px;font:16px monospace}
+  .desp-scan input:focus{outline:2px solid var(--azul);outline-offset:1px}
+  .desp-empty{padding:24px;text-align:center;color:var(--muted);border:1px dashed var(--border);border-radius:12px}
+  .desp-table-wrap{display:none;overflow-x:auto}.desp-table{width:100%;border-collapse:collapse;font-size:12px}.desp-table th,.desp-table td{padding:10px 8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}.desp-table th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  @media(min-width:640px){.desp-summary{grid-template-columns:repeat(4,1fr)}.desp-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(min-width:1100px){.desp-list{display:none}.desp-table-wrap{display:block}.desp-toolbar select{min-width:145px}}
 </style>
 </head>
 <body>
@@ -237,6 +258,7 @@
     <button class="tab" data-v="despachadas" onclick="ir('despachadas')">Despachadas sin verificar</button>
     <button class="tab" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
     <button class="tab" data-v="horarios" onclick="ir('horarios')">Horarios de despacho</button>
+    <button class="tab" data-v="hoja-despachos" onclick="ir('hoja-despachos')">Hoja de despachos</button>
   </div>
 
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
@@ -325,6 +347,7 @@ function ir(v){
   VISTA=v; PREP=null;
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
   if(v==='pendientes'){cargarPendientes();iniciarPollingPendientes();}
+  else if(v==='hoja-despachos')cargarHojaDespachos();
   else if(v==='etiquetas')cargarEtiquetas();
   else if(v==='seguimientos')cargarSeguimientos();
   else if(v==='historial')cargarHistorial();
@@ -340,6 +363,49 @@ async function api(path,opts){
   if(r.status===401){location.href='/herramientas/login/';throw new Error('sesión vencida');}
   return {status:r.status,body:d};
 }
+
+var DESP={fecha:null,estado:'',canal:'',q:'',data:[],resumen:{},puedeEscribir:false,cargando:false};
+function fechaBA(d){var x=d?new Date(d):new Date();return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Argentina/Buenos_Aires'}).format(x);}
+function fechaLegible(v){if(!v)return 'sin fecha';if(v==='sin_fecha')return 'Sin jornada asignada';var p=v.split('-');return p.length===3?p[2]+'/'+p[1]+'/'+p[0]:v;}
+function despPermisoEscritura(){
+  if(!USERNAME)return false;
+  if(window.__PREP_AUTH&&window.__PREP_AUTH.is_admin)return true;
+  var ps=window.__PREP_AUTH&&window.__PREP_AUTH.permisos||[];
+  return ps.some(function(p){return p.herramienta==='preparacion'&&(p.nivel==='write'||p.permiso==='write'||p.accion==='write'||p.escritura===true);});
+}
+function despEscaneoClave(){return (crypto&&crypto.randomUUID)?crypto.randomUUID():'desp-'+Date.now()+'-'+Math.random().toString(16).slice(2);}
+function despAviso(msg,tipo){var el=document.getElementById('desp-live');if(el){el.textContent=msg;el.className='flash '+(tipo||'');el.style.display='block';}}
+function despQuery(){var p=new URLSearchParams();if(DESP.fecha)p.set('fecha',DESP.fecha);if(DESP.estado)p.set('estado',DESP.estado);if(DESP.canal)p.set('canal',DESP.canal);if(DESP.q)p.set('q',DESP.q);return p.toString();}
+async function cargarHojaDespachos(){
+  if(!DESP.fecha)DESP.fecha=fechaBA();
+  DESP.puedeEscribir=despPermisoEscritura();
+  var c=document.getElementById('cuerpo'); if(!DESP.data.length)c.innerHTML='<div class="loading">Cargando hoja de despachos…</div>';
+  DESP.cargando=true;
+  try{var r=await api('/despacho/cola?'+despQuery());if(!r.body.ok)throw new Error(r.body.error||'error');DESP.data=r.body.data||[];DESP.resumen=r.body.resumen||{};DESP.fecha=r.body.jornada&&r.body.jornada.fecha||DESP.fecha;renderHojaDespachos();despAviso('Hoja actualizada','ok');}
+  catch(e){if(DESP.data.length){renderHojaDespachos();despAviso('No se pudo actualizar la hoja. Se conserva la última lista.','warn');}else c.innerHTML='<div class="loading err" role="alert">No se pudo cargar la hoja: '+esc(e.message)+'</div>';}
+  finally{DESP.cargando=false;}
+}
+function despCambiarFecha(delta){if(DESP.fecha==='sin_fecha')DESP.fecha=fechaBA();else{var d=new Date(DESP.fecha+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+delta);DESP.fecha=d.toISOString().slice(0,10);}cargarHojaDespachos();}
+function despAplicarFiltro(k,v){DESP[k]=v;cargarHojaDespachos();}
+function despEstadoBadge(s){return '<span class="badge '+(s==='confirmado'?'b-ok':s==='escaneado'?'b-warn':'b-mut')+'">'+esc(s==='confirmado'?'Verificado para despacho':s==='escaneado'?'Escaneado':'Pendiente de verificación')+'</span>';}
+function despFila(row){
+  var grupo=row.grupo_clave||row.pack_id||row.clave||'—', sinFecha=!row.jornada_fecha, bloqueado=sinFecha||row.estado==='confirmado'||!row.preparacion_id||!DESP.puedeEscribir;
+  return '<article class="desp-card"><h3>'+esc(grupo)+' '+despEstadoBadge(row.estado)+'</h3><div class="desp-meta">Pedido: '+esc(row.numero_pedido||'—')+' · '+esc(row.canal||'—')+'<br>Jornada: '+esc(fechaLegible(row.jornada||row.jornada_fecha))+' · Escaneos: '+esc(String(row.escaneos||0))+(row.confirmado_por?'<br>Confirmado por: '+esc(row.confirmado_por):'')+'</div>'
+    +(sinFecha?'<p class="desp-meta"><b>Resolver fecha de despacho antes de operar.</b></p>':'')
+    +'<div class="desp-actions">'+(bloqueado?'':'<button class="btn sec" data-desp-scan="'+esc(row.preparacion_id)+'" data-code="'+esc(grupo)+'">Escanear código</button>')+(row.estado==='escaneado'&&DESP.puedeEscribir?'<button class="btn" data-desp-confirm="'+esc(row.preparacion_id)+'">Confirmar verificación</button>':'')+'</div></article>';
+}
+function renderHojaDespachos(){
+  var c=document.getElementById('cuerpo'),s=DESP.resumen||{}, rows=DESP.data||[];
+  var h='<div class="desp-toolbar"><button class="btn sec" onclick="despCambiarFecha(-1)" aria-label="Jornada anterior">‹</button><label>Jornada <input type="date" value="'+esc(DESP.fecha==='sin_fecha'?'':DESP.fecha)+'" onchange="despAplicarFiltro(\'fecha\',this.value)"></label><button class="btn sec" onclick="despCambiarFecha(1)" aria-label="Jornada siguiente">›</button><button class="btn sec" onclick="DESP.fecha=fechaBA();cargarHojaDespachos()">Hoy</button><button class="btn sec" onclick="cargarHojaDespachos()">Recargar</button></div>'
+    +'<p class="sub">Jornada '+esc(fechaLegible(DESP.fecha))+' · Buenos Aires</p><div id="desp-live" class="flash" role="status" aria-live="polite"></div>'
+    +'<div class="desp-summary">'+[['','Total',s.total],['pendiente','Pendientes',s.pendientes],['escaneado','Escaneados',s.escaneados],['confirmado','Confirmados',s.confirmados]].map(function(x){return '<button class="desp-stat '+(DESP.estado===x[0]?'on':'')+'" onclick="despAplicarFiltro(\'estado\',\''+x[0]+'\')">'+esc(x[1])+'<strong>'+Number(x[2]||0)+'</strong></button>';}).join('')+'</div>'
+    +'<div class="desp-filtros"><label for="desp-q">Buscar</label><input id="desp-q" value="'+esc(DESP.q)+'" placeholder="pack, clave o pedido" onkeydown="if(event.key===\'Enter\')despAplicarFiltro(\'q\',this.value.trim())"><label for="desp-canal">Canal</label><select id="desp-canal" onchange="despAplicarFiltro(\'canal\',this.value)"><option value="">Todos</option><option value="web" '+(DESP.canal==='web'?'selected':'')+'>Web</option><option value="ml" '+(DESP.canal==='ml'?'selected':'')+'>MercadoLibre</option></select></div>'
+    +'<div class="desp-scan"><label for="desp-scan-input">Escaneo exacto</label><input id="desp-scan-input" placeholder="pack_id o clave" autocomplete="off" onkeydown="if(event.key===\'Enter\')despEscaneoGlobal(this.value)"><button class="btn" '+(DESP.puedeEscribir?'':'disabled')+' onclick="despEscaneoGlobal(document.getElementById(\'desp-scan-input\').value)">Escanear</button></div>'
+    +(rows.length?'<div class="desp-list">'+rows.map(despFila).join('')+'</div>':'<div class="desp-empty">No hay despachos para esta jornada.</div>');
+  c.innerHTML=h;c.querySelectorAll('[data-desp-scan]').forEach(function(b){b.onclick=function(){despMutar('escanear',b.dataset.despScan,b.dataset.code);};});c.querySelectorAll('[data-desp-confirm]').forEach(function(b){b.onclick=function(){despMutar('confirmar',b.dataset.despConfirm);};});
+}
+async function despEscaneoGlobal(codigo){codigo=(codigo||'').trim().toUpperCase();var row=DESP.data.find(function(r){return String(r.grupo_clave||r.pack_id||r.clave||'').toUpperCase()===codigo;});if(!row){despAviso('Este código no corresponde a este despacho. Revisá el paquete o buscá el pedido correcto.','bad');return;}await despMutar('escanear',row.preparacion_id,codigo);}
+async function despMutar(op,id,codigo){if(!DESP.puedeEscribir){despAviso('Tu usuario puede consultar esta hoja, pero no puede operar despachos. Pedí acceso a un supervisor.','bad');return;}var headers={'Content-Type':'application/json','Idempotency-Key':despEscaneoClave()};var body=op==='escanear'?JSON.stringify({codigo:codigo}):undefined;try{var r=await api('/despacho/'+encodeURIComponent(id)+'/'+op,{method:'POST',headers:headers,body:body});if(r.status===409){var m={DESPACHO_NO_COINCIDE:'Este código no corresponde a este despacho. Revisá el paquete o buscá el pedido correcto.',DESPACHO_CONFIRMADO:'Este despacho ya fue verificado. No se generó otra etiqueta.',IDEMPOTENCY_CONFLICT:'Esta acción ya se usó en otro despacho. Volvé a cargar la hoja antes de reintentar.'};despAviso(m[r.body.code]||r.body.error||'Otra persona actualizó este despacho. Se cargó el estado actual; revisalo antes de continuar.','bad');await cargarHojaDespachos();return;}if(!r.body.ok)throw new Error(r.body.error||'error');despAviso(op==='escanear'?'Código validado. Ahora podés confirmar la verificación.':'Despacho verificado y etiqueta interna generada.','ok');await cargarHojaDespachos();}catch(e){despAviso('No pudimos completar la acción. Verificá el estado y reintentá.','bad');}}
 
 // ─── Cola de pendientes ───────────────────────────────────────────────────────
 
@@ -2604,6 +2670,7 @@ async function agregarPerfilSku(){
 // inline por cada request — inconsistente con el resto.
 Api.requirePermiso('preparacion').then(function(d){
   if (!d) return;
+  window.__PREP_AUTH=d;
   if (d.user) USERNAME = d.user;
   cargarPendientes();
   iniciarPollingPendientes();
