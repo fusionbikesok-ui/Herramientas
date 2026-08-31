@@ -1943,11 +1943,20 @@ export function preparacionRouter(db, cfg) {
       return res.status(500).json({ ok: false, error: 'no se pudo guardar la foto' });
     }
 
-    const fotoId = db.prepare(`
-      INSERT INTO preparacion_fotos
-        (preparacion_id, item_id, tipo, url, nombre_archivo, creado_en, estado_proceso, es_heic, upload_id)
-      VALUES (?,?,?,?,?,?, 'pendiente', ?, ?)
-    `).run(prep.id, item_id ? parseInt(item_id) : null, tipo, saved.url, saved.filename, now(), esHeic ? 1 : 0, uploadKey).lastInsertRowid;
+    let fotoId;
+    try {
+      fotoId = db.prepare(`
+        INSERT INTO preparacion_fotos
+          (preparacion_id, item_id, tipo, url, nombre_archivo, creado_en, estado_proceso, es_heic, upload_id)
+        VALUES (?,?,?,?,?,?, 'pendiente', ?, ?)
+      `).run(prep.id, item_id ? parseInt(item_id) : null, tipo, saved.url, saved.filename, now(), esHeic ? 1 : 0, uploadKey).lastInsertRowid;
+    } catch (e) {
+      if (uploadKey && /constraint/i.test(e.message)) {
+        const existente = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND upload_id=? AND borrado_en IS NULL').get(prep.id, uploadKey);
+        if (existente) return res.json({ ok: true, foto: existente, idempotente: true });
+      }
+      throw e;
+    }
 
     const itemRef = item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(parseInt(item_id)) : null;
     registrarEvento(db, {
