@@ -3115,3 +3115,20 @@ App 1 debe generar su cliente TypeScript desde OpenAPI y probar conexión obliga
 mutaciones. App 2 debe generar el mismo cliente, implementar la cola offline cifrada de siete
 días y hacer visible la resolución de conflictos. Fixtures, estados y criterios E2E deben
 derivarse de los schemas, no de respuestas inventadas por cada pantalla.
+## Horarios de corte de despacho
+
+`GET /api/preparacion/horarios-despacho` requiere permiso de lectura de Preparación;
+`PUT` requiere permiso de escritura (administradores pasan el guard global). El `PUT`
+recibe los siete días y `expected_version`; una versión desactualizada responde `409`
+con `code: VERSION_CONFLICT` y no aplica cambios. La pantalla debe recargar antes de
+reintentar para no sobrescribir una edición concurrente.
+
+La fecha SLA de ML usada como sugerencia es solo el límite de preparación, nunca la fecha
+estimada de entrega (`date_estimated_delivery`). La precedencia implementada es:
+`shipment.sla.expected_date`, `shipment.expected_date`,
+`shipment.shipping_option.estimated_handling_limit.date`,
+`shipment.estimated_handling_limit.date`, `shipment.handling_limit.date` y
+`shipment.buffering.date`; se usa el primer valor ISO válido (`YYYY-MM-DD` o timestamp
+ISO) y se normaliza a fecha local de calendario. Esta precedencia queda cubierta por tests
+de unidad, pero la confirmación de qué campo entrega ML en cada modalidad requiere payloads
+reales representativos y queda pendiente de verificación operativa.

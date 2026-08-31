@@ -35,6 +35,8 @@ describe('horarios de despacho', () => {
     expect(fechaEstimadaShipment({ date_estimated_delivery: '2026-09-03' })).toBeNull();
     expect(fechaEstimadaShipment({ shipping_option: { estimated_handling_limit: { date: '2026-08-31T12:00:00Z' } } })).toBe('2026-08-31');
     expect(fechaEstimadaShipment({ sla: { expected_date: '2026-09-01T23:59:59-03:00' } })).toBe('2026-09-01');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30' }, expected_date: '2026-09-02' })).toBe('2026-09-02');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30' }, date_estimated_delivery: '2026-09-03' })).toBeNull();
   });
 
   it('expone y actualiza los siete días mediante el router', async () => {
@@ -92,6 +94,22 @@ describe('horarios de despacho', () => {
     expect(permiteAcceso([], requisito)).toBe(false);
     expect(permiteAcceso([{ herramienta: 'preparacion', nivel: 'read' }], requisito)).toBe(false);
     expect(permiteAcceso([{ herramienta: 'preparacion', nivel: 'write' }], requisito)).toBe(true);
+  });
+
+  it('aplica autorización HTTP real: sin permiso no lee ni actualiza', async () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-permiso-http.sqlite');
+    const db = openDb(file);
+    const app = express(); app.use(express.json());
+    app.use((req, res, next) => {
+      req.user = { username: 'operador', permisos: [], is_admin: false };
+      const permiso = resolvePermiso(req.method, req.path);
+      if (!permiteAcceso(req.user.permisos, permiso)) return res.status(403).json({ ok: false, error: 'Acceso no autorizado' });
+      return next();
+    });
+    app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    expect((await request(app).get('/api/preparacion/horarios-despacho')).status).toBe(403);
+    expect((await request(app).put('/api/preparacion/horarios-despacho').send({ horarios: [], expected_version: 1 })).status).toBe(403);
+    db.close(); try { fs.unlinkSync(file); } catch {}
   });
 
   it('registra usuario, versión y valores anterior/nuevo en auditoría', async () => {
