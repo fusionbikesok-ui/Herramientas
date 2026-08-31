@@ -59,9 +59,9 @@ Actualizado: 2026-08-30.
   responsable operativo. `PUSH_REAL_ENABLED=true` fue agregado al `.env` real del VPS (no
   versionado) con autorización explícita del usuario, para que el nuevo gate fail-closed no
   apagara las push reales al desplegar.
-- P0.3 requiere una nueva verificación operativa (PM2, health, migraciones, webhooks) sobre
-  `7d3b9f9`, ya que la evidencia anterior era sobre `d6a021a`. Verificación mínima ya hecha en el
-  deploy (arriba); falta el barrido completo de evidencia que documentaba P0.3 antes.
+- P0.3 fue verificado nuevamente sobre `73ce904`: PM2 online, Node en `*:3001`, user_version 30,
+  backbone/lease presentes, guards de API y webhooks correctos; el barrido completo queda pendiente
+  solo del gate global verde por un timeout aislado ajeno en Inventario.
 - Barrido vigente adicional: PM2 `online`, Node en `*:3001`, migraciones del backbone presentes
   (incluido `lease_token`), `/api/v1/inbox` sin token devuelve `401`, ML inválido devuelve `400`
   y Woo con firma inválida devuelve `401`. Esto valida routing, autenticación básica y esquema;
