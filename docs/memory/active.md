@@ -68,6 +68,8 @@ Actualizado: 2026-08-31.
 - P0.2/P1.6: el 2026-08-31 pasaron `61/61` tests dirigidos en cinco archivos para auth móvil,
   dispositivos, binding y notificaciones push lógica. Sigue pendiente FCM real y background en
   dispositivo.
+- Higiene post-suite (2026-08-31): sin runners activos, se eliminaron 1703 bases `test/tmp-*.sqlite*`
+  y el `test/sessions.sqlite` no versionado; no quedó ninguna base SQLite temporal en `test/`.
 - Barrido vigente adicional: PM2 `online`, Node en `*:3001`, migraciones del backbone presentes
   (incluido `lease_token`), `/api/v1/inbox` sin token devuelve `401`, ML inválido devuelve `400`
   y Woo con firma inválida devuelve `401`. Esto valida routing, autenticación básica y esquema;
