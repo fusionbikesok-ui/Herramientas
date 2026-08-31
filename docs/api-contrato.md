@@ -636,7 +636,9 @@ corriendo en línea).
   cuando falla la conversión (fail-open en la subida, fail-closed en el procesamiento: nunca
   se muestra `'listo'` con datos basura, nunca desaparece en silencio).
 - Response 200: `{ "ok": true, "foto": { ...id, url, url_liviana:null, estado_proceso:
-  'pendiente', es_heic, ... } }` — inmediato, sin esperar la conversión.
+  'pendiente', es_heic, upload_id, ... } }` — inmediato, sin esperar la conversión. `upload_id`
+  es opcional y garantiza idempotencia por preparación: un reintento con el mismo valor devuelve
+  la foto existente y no inserta otra.
 
 ### POST /api/preparacion/:id/foto/:fotoId/reintentar (nuevo)
 Reintento manual de una foto que agotó sus 3 intentos automáticos (backoff 500/1500/4000ms,
