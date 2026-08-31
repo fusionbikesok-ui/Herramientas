@@ -118,6 +118,34 @@ Pendientes concretos absorbidos por esta entrega:
   preparación o por la fecha de creación del control, cómo se muestran controles viejos y qué
   zona horaria se usa (Buenos Aires); no se debe resolver con un filtro visual sobre datos
   incompletos.
+
+### Especificación UX pendiente — Hoja de despachos
+
+El diseño UX validado el 2026-08-31 define una entrada `Hoja de despachos` dentro de Preparación,
+con selector de jornada, resumen operativo, filtros/búsqueda y listado agrupado. La fecha debe
+ser explícita, en `America/Argentina/Buenos_Aires`, con anterior/siguiente, Hoy, recarga y última
+actualización. El resumen muestra total, pendientes, escaneados y confirmados, y cada contador
+actúa como filtro; los estados no dependen solo del color.
+
+Cada fila/tarjeta muestra `pack_id` o `clave`, canal, modalidad si existe, pedido, escaneos,
+estado, creación, actualización, operador y etiqueta interna. Los filtros mínimos son fecha,
+estado, canal y búsqueda por código/pedido, conservados al recargar. En 390 px se usa tarjeta de
+una columna y escáner casi a pantalla completa; en 768 px dos columnas; en 1440 px tabla/lista
+densa. El flujo es jornada → escaneo exacto (`pack_id` o `clave`) → `escaneado` → confirmación
+con `Idempotency-Key` → `confirmado` y una etiqueta interna `50×25 mm`.
+
+La UI debe cubrir jornada vacía, carga, error de lectura conservando la última lista, sesión
+vencida, permisos, código incorrecto (`409 DESPACHO_NO_COINCIDE`), confirmado
+(`409 DESPACHO_CONFIRMADO`), falta de escaneo, clave reutilizada (`409 IDEMPOTENCY_CONFLICT`),
+timeout y conflictos de toma. Debe anunciar cambios con `aria-live`, mantener foco, ser usable
+por teclado y pasar axe sin violaciones graves. No simular confirmación offline ni crear
+despachos manuales sin política explícita.
+
+Siguen abiertas antes de implementar: campo que define la jornada (`fecha_despacho/SLA` frente a
+`creado_en`), destino de despachos sin fecha, visibilidad de confirmados, separación de permisos
+lectura/escaneo/confirmación/reapertura, confirmación por otro operador, semántica de
+“despachado” frente a “verificado”, reversión y actualización en tiempo real. El handoff UX
+respalda esta especificación, pero no constituye decisiones aprobadas por producto.
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
   ítems y verificar tabla/modal de stock a 390 px.
 - Integración de `prep-cola-instantanea` completada en `conteo-confiable`, estado vigente

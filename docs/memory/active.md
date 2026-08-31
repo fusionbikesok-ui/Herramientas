@@ -157,6 +157,9 @@ contra la IP saliente de este VPS (`179.197.74.83`).
   (rama que sirve producción).
 - El único trabajo de rama pendiente registrado es `prep-horarios-corte`; la cola instantánea ya
   está integrada en la base de ejecución `b7fb85c`.
+- Preparación tiene backend de control de despacho (cola, escaneo y confirmación idempotente),
+  pero todavía no la hoja/página diaria operativa. El plan maestro documenta su especificación UX
+  y las decisiones de jornada/permisos previas a implementarla; esos endpoints no cierran U0.B.
 - No hay ningún otro worktree, rama local ni proceso de test corriendo en este momento.
 - La suite global completa tarda al menos **13 minutos** en el entorno actual; la última corrida
   completa (2026-08-31: 89 archivos, 1859 aprobados, 1 omitido, código 0) duró **1119,29 s
