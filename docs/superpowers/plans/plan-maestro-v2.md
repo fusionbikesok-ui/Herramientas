@@ -202,6 +202,11 @@ duplicado idempotente, actualización `opened→closed`, ML caído y recurso des
 
 ### P0.2 Configuración y permisos
 
+Evidencia dirigida vigente (2026-08-31): `devices`, `mobileAuth`, `mobileDeviceBinding`,
+`notificacionesPush` y `notifications` pasan `61/61` tests. Cubre sesiones JWT, refresh/revocación,
+asociación de dispositivo, permisos y entrega push lógica. No cierra la prueba con FCM real ni la
+validación de background en dispositivo.
+
 - Configurar `MOBILE_JWT_SECRET` distinto por entorno, mínimo 32 caracteres; nunca versionarlo.
 - Configurar y verificar `WOO_WEBHOOK_SECRET` para validar HMAC.
 - Confirmar topics y URL de notificaciones en ML Developers.
