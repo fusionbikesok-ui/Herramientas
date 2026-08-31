@@ -2,8 +2,135 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { migrateMlClaims } from '../migrations/028_ml_reclamos_campos_tipo_razon.mjs';
+import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function aplicarMigracionHito7(db) {
+  try {
+    db.transaction(() => {
+      // Todo el esquema Hito 7, incluidos sus índices, se aplica como una unidad. Un
+      // conflicto de unicidad o cualquier otro error hace rollback y deja user_version
+      // en la versión anterior.
+      db.exec(`CREATE TABLE IF NOT EXISTS device_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token TEXT NOT NULL,
+        plataforma TEXT NOT NULL CHECK(plataforma IN ('ios', 'android', 'web')),
+        nombre_dispositivo TEXT,
+        creado_en TEXT NOT NULL,
+        actualizado_en TEXT NOT NULL,
+        revocado_en TEXT
+      )`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_device_tokens_unique_active
+        ON device_tokens(token) WHERE revocado_en IS NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_device_tokens_usuario_activo
+        ON device_tokens(user_id, revocado_en) WHERE revocado_en IS NULL`);
+
+      db.exec(`CREATE TABLE IF NOT EXISTS preferencias_notificacion (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        incidentes_criticos INTEGER NOT NULL DEFAULT 1,
+        actualizado_en TEXT NOT NULL
+      )`);
+
+      db.exec(`CREATE TABLE IF NOT EXISTS notificaciones_enviadas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_token_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
+        tipo TEXT NOT NULL,
+        incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
+        estado TEXT NOT NULL,
+        intentos INTEGER NOT NULL DEFAULT 1,
+        error TEXT,
+        creado_en TEXT NOT NULL
+      )`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_dedupe
+        ON notificaciones_enviadas(device_token_id, tipo, incidente_id)
+        WHERE tipo IN ('nuevo', 'resuelto')`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_pendientes
+        ON notificaciones_enviadas(device_token_id, estado, creado_en)
+        WHERE estado IN ('pendiente', 'fallido', 'agotado')`);
+
+      db.exec(`CREATE TABLE IF NOT EXISTS notificaciones_usuario (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tipo TEXT NOT NULL,
+        titulo TEXT NOT NULL,
+        cuerpo TEXT NOT NULL,
+        deep_link TEXT,
+        leida INTEGER NOT NULL DEFAULT 0,
+        incidente_id INTEGER REFERENCES incidentes_operativos(id) ON DELETE SET NULL,
+        creado_en TEXT NOT NULL
+      )`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_no_leidas
+        ON notificaciones_usuario(user_id, leida, creado_en DESC)`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_usuario_dedupe
+        ON notificaciones_usuario(user_id, tipo, incidente_id)`);
+
+      // Una base de una versión anterior puede tener esta tabla con device_id nullable.
+      // Se reconstruye dentro de esta misma transacción; ningún huérfano se descarta.
+      db.exec(`CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash TEXT NOT NULL UNIQUE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
+        expires_at TEXT NOT NULL,
+        revocado_en TEXT,
+        reemplazado_por TEXT,
+        creado_en TEXT NOT NULL
+      )`);
+      let refreshColumns = db.prepare('PRAGMA table_info(mobile_refresh_tokens)').all();
+      if (!refreshColumns.some((column) => column.name === 'reemplazado_por')) {
+        db.exec('ALTER TABLE mobile_refresh_tokens ADD COLUMN reemplazado_por TEXT');
+        refreshColumns = db.prepare('PRAGMA table_info(mobile_refresh_tokens)').all();
+      }
+      const refreshDevice = refreshColumns.find((column) => column.name === 'device_id');
+      if (!refreshDevice || refreshDevice.notnull !== 1) {
+        const orphaned = db.prepare(
+          'SELECT COUNT(*) AS count FROM mobile_refresh_tokens WHERE device_id IS NULL'
+        ).get().count;
+        if (orphaned > 0) {
+          throw new Error(`hay ${orphaned} refresh token(s) huérfano(s); no se puede aplicar NOT NULL`);
+        }
+        db.exec(`
+          DROP INDEX IF EXISTS idx_mobile_refresh_device;
+          DROP TABLE IF EXISTS mobile_refresh_tokens_nueva;
+          CREATE TABLE mobile_refresh_tokens_nueva (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            device_id INTEGER NOT NULL REFERENCES device_tokens(id) ON DELETE CASCADE,
+            expires_at TEXT NOT NULL,
+            revocado_en TEXT,
+            reemplazado_por TEXT,
+            creado_en TEXT NOT NULL
+          );
+          INSERT INTO mobile_refresh_tokens_nueva
+            (id, token_hash, user_id, device_id, expires_at, revocado_en, reemplazado_por, creado_en)
+          SELECT id, token_hash, user_id, device_id, expires_at, revocado_en, reemplazado_por, creado_en
+            FROM mobile_refresh_tokens;
+          DROP TABLE mobile_refresh_tokens;
+          ALTER TABLE mobile_refresh_tokens_nueva RENAME TO mobile_refresh_tokens;
+        `);
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mobile_refresh_device
+        ON mobile_refresh_tokens(device_id, revocado_en)`);
+
+      const sentColumns = db.prepare('PRAGMA table_info(notificaciones_enviadas)').all()
+        .map((column) => column.name);
+      if (!sentColumns.includes('idempotencia')) {
+        db.exec('ALTER TABLE notificaciones_enviadas ADD COLUMN idempotencia TEXT');
+      }
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_idempotencia
+        ON notificaciones_enviadas(idempotencia) WHERE idempotencia IS NOT NULL`);
+
+      // Solo se alcanza después de aplicar tablas, reconstrucción y todos los índices.
+      db.pragma('user_version = 30');
+    })();
+  } catch (err) {
+    throw new Error(`Migración 030 no aplicada: ${err.message}`, { cause: err });
+  }
+}
 
 export function openDb(dbPath) {
   const dir = path.dirname(dbPath);
@@ -12,6 +139,81 @@ export function openDb(dbPath) {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
   // Incremental migrations — safe to run every startup
+  // Reclamos ML: las bases existentes ya tienen ml_reclamos sin estos campos; el
+  // CREATE TABLE IF NOT EXISTS del router no puede ampliar una tabla existente.
+  migrateMlClaims(db);
+  migrateClaimsBackbone(db);
+  // Horarios de despacho: migración independiente para bases que ya alcanzaron user_version=30.
+  const horarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_horarios_032'").get();
+  if (!horarioMigration) {
+    const aplicarHorarios = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '032_despacho_horarios.sql'), 'utf8'));
+      const columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
+      if (columnas.length && !columnas.includes('fecha_despacho')) db.exec('ALTER TABLE pedidos_cache ADD COLUMN fecha_despacho TEXT');
+      db.exec(`CREATE TABLE IF NOT EXISTS despacho_horarios_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 1, actualizado_en TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS despacho_horarios_auditoria (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, usuario TEXT, valores_anteriores_json TEXT NOT NULL,
+        valores_nuevos_json TEXT NOT NULL, version_anterior INTEGER NOT NULL, version_nueva INTEGER NOT NULL,
+        creado_en TEXT NOT NULL
+      );
+      INSERT OR IGNORE INTO despacho_horarios_meta (id, version, actualizado_en)
+        VALUES (1, 1, CURRENT_TIMESTAMP);`);
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_horarios_032')").run();
+    });
+    aplicarHorarios();
+  }
+  const despachoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='control_despacho_033'").get();
+  if (!despachoMigration) {
+    const aplicarDespacho = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '033_control_despacho.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('control_despacho_033')").run();
+    });
+    aplicarDespacho();
+  }
+  const despachoIdempotenciaMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='control_despacho_idempotencia_034'").get();
+  if (!despachoIdempotenciaMigration) {
+    const aplicarDespachoIdempotencia = db.transaction(() => {
+      const sql = fs.readFileSync(path.join(__dirname, '..', 'migrations', '034_control_despacho_idempotencia.sql'), 'utf8');
+      for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) {
+        try { db.exec(statement); }
+        catch (error) {
+          // Una caída entre DDL y el marcador puede dejar una columna aplicada. En ese
+          // caso la migración se reanuda; cualquier otro error aborta toda la transacción.
+          if (!/ALTER TABLE .* ADD COLUMN/i.test(statement) || !/duplicate column name/i.test(error.message)) throw error;
+        }
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('control_despacho_idempotencia_034')").run();
+    });
+    aplicarDespachoIdempotencia();
+  }
+  const integrationLeaseMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='integration_jobs_lease_token_035'").get();
+  if (!integrationLeaseMigration) {
+    const aplicarLease = db.transaction(() => {
+      const hasColumn = db.prepare('PRAGMA table_info(integration_jobs)').all().some((c) => c.name === 'lease_token');
+      if (!hasColumn) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '035_integration_jobs_lease_token.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('integration_jobs_lease_token_035')").run();
+    });
+    aplicarLease();
+  }
+  const incidentEmailOutboxMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='incidentes_email_outbox_036'").get();
+  if (!incidentEmailOutboxMigration) {
+    const aplicarIncidentEmailOutbox = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '036_incidentes_email_outbox.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('incidentes_email_outbox_036')").run();
+    });
+    aplicarIncidentEmailOutbox();
+  }
+  const incidentEmailDlqMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='incidentes_email_outbox_dlq_037'").get();
+  if (!incidentEmailDlqMigration) {
+    const aplicarIncidentEmailDlq = db.transaction(() => {
+      const tieneDlq = db.prepare('PRAGMA table_info(incidentes_email_outbox)').all().some((c) => c.name === 'dlq');
+      if (!tieneDlq) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '037_incidentes_email_outbox_dlq.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('incidentes_email_outbox_dlq_037')").run();
+    });
+    aplicarIncidentEmailDlq();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
@@ -405,6 +607,18 @@ export function openDb(dbPath) {
     creado_en TEXT NOT NULL
   )`); } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_metricas_ciclo_integracion ON metricas_ciclo_sync(integracion, proceso, iniciado_en)'); } catch (_) {}
+
+  // Hito 7: la migración completa es atómica y no silencia errores. Esto cubre tanto una
+  // base pre-Hito7 como una instalación que ya tenía el refresh legacy con device_id nullable.
+  // `user_version` solo cambia después de que tablas, reconstrucción e índices terminaron.
+  if (db.pragma('user_version', { simple: true }) < 30) {
+    try {
+      aplicarMigracionHito7(db);
+    } catch (err) {
+      db.close();
+      throw err;
+    }
+  }
 
   return db;
 }

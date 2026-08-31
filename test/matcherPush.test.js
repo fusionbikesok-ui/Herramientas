@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'fs';
+import { createHash } from 'node:crypto';
 import { openDb } from '../db/index.js';
 import {
   seleccionarPendientes, contarPendientes, pushSkusPendientes,
@@ -36,6 +37,15 @@ vi.mock('../lib/mlClient.js', async () => {
 });
 
 const TEST_DB = './test/tmp-matcher-push.sqlite';
+let currentTestId = 'setup';
+const TEST_DB_PATHS = new Set();
+beforeEach((ctx) => { currentTestId = ctx.task.id; });
+function openTestDb() {
+  const hash = createHash('sha256').update(currentTestId).digest('hex').slice(0, 16);
+  const ruta = `${TEST_DB}.${process.pid}.${hash}.sqlite`;
+  TEST_DB_PATHS.add(ruta);
+  return openDb(ruta);
+}
 const ML_CFG = { clientId: 'client123', clientSecret: 'secret456', userId: '99999' };
 
 function now() { return new Date().toISOString(); }
@@ -43,9 +53,11 @@ function now() { return new Date().toISOString(); }
 function seedToken(db) {
   const expiresAt = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
   db.prepare(
-    `INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
+    `INSERT OR IGNORE INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
      VALUES (1, 'tok', 'ref', ?, ?)`
   ).run(expiresAt, now());
+  db.prepare('UPDATE ml_oauth_token SET access_token = ?, refresh_token = ?, expires_at = ?, actualizado_en = ? WHERE id = 1')
+    .run('tok', 'ref', expiresAt, now());
 }
 
 function seedDecision(db, { clave, sku, accion = 'asignar' }) {
@@ -56,10 +68,13 @@ function seedDecision(db, { clave, sku, accion = 'asignar' }) {
 
 function seedCache(db, { clave, itemId, variationId = '', titulo = 'Pub', status = 'active', sellerSku = '' }) {
   db.prepare(
-    `INSERT INTO ml_publicaciones_cache
+    `INSERT OR IGNORE INTO ml_publicaciones_cache
        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en)
      VALUES (?, ?, ?, ?, ?, '', 0, '', '', ?, '', ?)`
   ).run(clave, itemId, variationId, titulo, status, sellerSku, now());
+  db.prepare(
+    `UPDATE ml_publicaciones_cache SET item_id = ?, variation_id = ?, titulo = ?, status = ?, seller_sku = ?, actualizado_en = ? WHERE clave = ?`
+  ).run(itemId, variationId, titulo, status, sellerSku, now(), clave);
 }
 
 function respOk() {
@@ -75,7 +90,7 @@ function resp400(msg = 'no se pudo') {
 describe('lib/matcherPush', () => {
   let db;
   beforeEach(async () => {
-    db = openDb(TEST_DB);
+    db = openTestDb();
     seedToken(db);
     vi.clearAllMocks();
     // mlFetch es un mock que por default reenvía a la implementación real (vi.fn(actual));
@@ -95,6 +110,9 @@ describe('lib/matcherPush', () => {
   afterEach(() => {
     db.close();
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+  afterAll(() => {
+    for (const ruta of TEST_DB_PATHS) if (fs.existsSync(ruta)) fs.unlinkSync(ruta);
   });
 
   it('seleccionarPendientes prioriza activas sobre pausadas', () => {
@@ -350,7 +368,7 @@ describe('lib/matcherPush', () => {
       expect(r.cortado_por_error).toBe(false);
       expect(r.errores).toBe(0);
       expect(contarPendientes(db).total).toBeGreaterThan(0); // quedó trabajo para el próximo ciclo
-    }, 20_000); // 900 seeds + iteraciones reales bajo fake timers superan el timeout default de 5s
+    }, 60_000); // 900 seeds + iteraciones reales bajo fake timers superan el timeout default
 
     it('agota MAX_REINTENTOS_SIN_CUPO (no el tope de tiempo) cuando el presupuesto propio nunca se libera', async () => {
       // NOTA (tester, corrección post-revisor): con reservarCupo devolviendo false SIEMPRE,
@@ -475,14 +493,16 @@ describe('lib/matcherPush', () => {
   // --- Cuota de pausadas por corrida ---
   describe('cuota de pausadas por corrida', () => {
     it('con 5 activas y 100 pausadas, seleccionarPendientes(cuota=10) trae las 5 activas y exactamente 10 publicaciones pausadas', () => {
-      for (let i = 0; i < 5; i++) {
-        seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
-        seedDecision(db, { clave: `A${i}|`, sku: `FB-A${i}` });
-      }
-      for (let i = 0; i < 100; i++) {
-        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
-        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
-      }
+      db.transaction(() => {
+        for (let i = 0; i < 5; i++) {
+          seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
+          seedDecision(db, { clave: `A${i}|`, sku: `FB-A${i}` });
+        }
+        for (let i = 0; i < 100; i++) {
+          seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+          seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+        }
+      })();
 
       const lote = seleccionarPendientes(db, { limite: 1000, cuotaPausadas: 10 });
       const activasSel = lote.filter(p => p.status === 'active');

@@ -7,9 +7,16 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import { openDb } from './db/index.js';
-import { requireAuth, requireAdmin } from './lib/auth.js';
+import {
+  requireAuth,
+  requireAdmin,
+  mobileAuthMiddleware,
+  mobileRequirePermission,
+  validarMobileJwtSecret,
+} from './lib/auth.js';
 import { resolvePermiso, permiteAcceso } from './lib/permisos.js';
 import { authRouter } from './routes/auth.js';
+import { mobileAuthRouter, mobileMeHandler } from './routes/mobileAuth.js';
 import { usuariosRouter } from './routes/usuarios.js';
 import { wooRouter, refrescarCatalogo } from './routes/woo.js';
 import { geminiRouter } from './routes/gemini.js';
@@ -33,14 +40,27 @@ import { criticidadRouter } from './routes/criticidad.js';
 import { backfillVentas } from './lib/criticidad.js';
 import { auditoriaRouter } from './routes/auditoria.js';
 import { barridoAuditoria } from './lib/auditoria.js';
+import { incidentesRouter } from './routes/incidentes.js';
+import { procesarAlertasEmailIncidentes } from './lib/incidentes.js';
+import { devicesRouter } from './routes/devices.js';
+import { notificationsRouter } from './routes/notifications.js';
+import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
+import { validarConfiguracionPush } from './lib/notificacionesPush.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
-import { notificacionesMlRouter, ingerirPregunta, ingerirMensaje } from './routes/notificacionesMl.js';
+import { notificacionesMlRouter, extraerClaimId } from './routes/notificacionesMl.js';
+import { inboxClaimsRouter } from './routes/inboxClaims.js';
+import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
+import { registrarWebhookMl, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
+import { reprocesarJob } from './lib/integrationJobs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
+export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobileJwtSecret }) {
+  const mobileSecret = mobileJwtSecret ?? process.env.MOBILE_JWT_SECRET;
+  validarMobileJwtSecret(mobileSecret);
+  validarConfiguracionPush(process.env);
   const db = openDb(dbPath);
   const app = express();
 
@@ -60,7 +80,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
         if (!sig) return res.status(401).json({ ok: false, error: 'sin firma' });
         const expected = crypto.createHmac('sha256', whSecret)
           .update(req.body).digest('base64');
-        if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+        const received = Buffer.from(String(sig));
+        const expectedBuffer = Buffer.from(expected);
+        if (received.length !== expectedBuffer.length || !crypto.timingSafeEqual(received, expectedBuffer)) {
           return res.status(401).json({ ok: false, error: 'firma inválida' });
         }
       }
@@ -132,6 +154,17 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   // Auth: público (login) + endpoints de sesión. NO pasa por requireAuth.
   app.use('/api/auth', authRouter(db));
 
+  // API móvil: mecanismo independiente de la sesión web, con Bearer JWT y refresh
+  // revocable por dispositivo. Se monta antes del guard del panel /api.
+  const mobileAuth = mobileAuthMiddleware(db, mobileSecret);
+  const mobileNotificationsAuth = [mobileAuth, mobileRequirePermission('notificaciones-ml')];
+  app.use('/api/v1/auth', mobileAuthRouter(db, mobileSecret));
+  app.get('/api/v1/me', mobileAuth, mobileMeHandler(db));
+  app.use('/api/v1/devices', devicesRouter(db, mobileAuth));
+  app.use('/api/v1/notifications', notificationsRouter(db, mobileNotificationsAuth));
+  app.use('/api/v1/inbox', inboxClaimsRouter(db, mobileNotificationsAuth));
+  app.use('/api/v1', operacionesMobileRouter(db, mobileNotificationsAuth));
+
   // A partir de acá, todo /api exige sesión válida + permiso por herramienta.
   const authGuard = requireAuth(db);
   function scopeCheck(req, res, next) {
@@ -148,31 +181,86 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   // 2026-08-26: filtrar acá es más simple que ir y volver al panel cada vez que se suma una
   // función nueva). Body: { topic, resource, user_id, ... }. ML no envía firma — la
   // autenticidad se valida por: el user_id del body debe coincidir con ML_USER_ID.
-  // ML espera 200 en < 500ms — respondemos antes de procesar cualquier topic.
+  // ML espera un ACK rápido — persistimos el evento+job en una transacción y respondemos siempre 200 (ver nota junto al res.status más abajo).
   // Docs: https://developers.mercadolibre.com.ar/es_ar/recibir-notificaciones
   //
   // Topics soportados hoy: 'orders' (sync puntual a WC de ESA orden vía syncOrdenMlPuntual,
   // A.3, + camino puntual a pedidos_cache, A.1 — el barrido paginado completo, syncMlToWc,
   // ya no se dispara acá, queda solo como respaldo del cron), 'orders_v2' (solo camino
   // puntual a pedidos_cache — no dispara syncOrdenMlPuntual, mismo comportamiento
-  // preexistente de 'orders' respecto de eso), 'questions' y 'messages'
-  // (preguntas/mensajes sin responder, guardados para el aviso del Home — ver
-  // routes/notificacionesMl.js). El resto de los topics que ML manda (shipments, claims,
+  // preexistente de 'orders' respecto de eso), 'questions', 'messages', 'claims' y
+  // 'post_purchase' con acción 'claims'
+  // (preguntas/mensajes/reclamos sin resolver, guardados para el aviso del Home — ver
+  // routes/notificacionesMl.js). El resto de los topics que ML manda (shipments,
   // orders_feedback, items, invoices) se reciben y se descartan en silencio hasta que se sume
   // su función acá, mismo patrón que 'orders' tenía antes de este cambio.
   app.post('/api/ml/notificacion', express.json({ limit: '64kb' }), (req, res) => {
-    res.json({ ok: true }); // responder inmediatamente antes de procesar
-
     const { topic, resource, user_id } = req.body || {};
+    // Helper para prevenir log injection: truncar y quitar saltos de línea.
+    const sanear = (v) => String(v ?? '').slice(0, 200).replace(/[\r\n]/g, ' ');
+    const legacyClaimEnvelope = topic === 'post_purchase'
+      && (typeof req.body?.claim_id === 'string' || typeof req.body?.envelope?.claim_id === 'string');
+    // Validar resource: puede contener query strings y puntos (ej. "/messages/packs/2000.../sellers/123?mark_as_read=false").
+    // Parseamos el pathname con URL (con host ficticio) y validamos que sea una ruta válida.
+    let validResource = false;
+    if (typeof resource === 'string') {
+      try {
+        const url = new URL(resource, 'http://x');
+        const pathname = url.pathname;
+        validResource = /^\/[A-Za-z0-9_.\-]+(?:\/[A-Za-z0-9_.\-]+)*$/.test(pathname);
+      } catch { /* URL inválida */ }
+    }
+    const validTopic = typeof topic === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/i.test(topic);
+    if (!validTopic || ((!validResource) && !legacyClaimEnvelope)) {
+      const timestamp = new Date().toISOString();
+      const motivo = !validTopic ? 'topic inválido' : 'resource inválido/faltante';
+      console.error(`[notif-ml-error] ${timestamp} 400 envelope-inválido | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: ${motivo}`);
+      return res.status(400).json({ ok: false, error: 'envelope inválido' });
+    }
+    if (user_id === undefined || user_id === null || String(user_id).trim() === '') {
+      const timestamp = new Date().toISOString();
+      console.error(`[notif-ml-error] ${timestamp} 400 user_id-faltante | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: user_id ausente, null o vacío`);
+      return res.status(400).json({ ok: false, error: 'user_id requerido' });
+    }
 
-    // Validar que la notificación es para nuestra cuenta
+    // Validar que la notificación es para nuestra cuenta.
+    // Persistir antes del ACK: si es de otra cuenta, respondemos 200 (no reintentable).
+    // Solo 503 si falta config y no se pudo persistir.
     const mlUserId = process.env.ML_USER_ID;
-    if (mlUserId && String(user_id) !== String(mlUserId)) return;
+    if (!mlUserId) {
+      // ML no está configurado: no se puede persistir. Fail-closed.
+      const timestamp = new Date().toISOString();
+      console.error(`[notif-ml-error] ${timestamp} 503 config-ml-ausente | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: ML_USER_ID no configurado`);
+      return res.status(503).json({ ok: false, error: 'integración ML no configurada' });
+    }
+    const esOtraCuenta = String(user_id) !== String(mlUserId);
+    if (esOtraCuenta) {
+      // Cuenta ajena: acepta el webhook (200, no reintentable), sin persistir nada.
+      // No aporta valor durable y un atacante podría saturar con user_id aleatorios.
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+
+    // Persistir el recibo antes del ACK. El procesamiento sigue siendo fail-open para
+    // conservar el contrato de orders y no bloquear los webhooks de ML por una llamada
+    // externa lenta; el evento durable permite auditar el recibo aunque falle el handler.
+    let persisted;
+    try { persisted = registrarWebhookMl(app._db, req.body); }
+    catch (err) {
+      const timestamp = new Date().toISOString();
+      console.error(`[notif-ml-error] ${timestamp} 503 persistencia-fallo | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: ${err.message}`);
+      return res.status(503).json({ ok: false, error: 'no se pudo persistir el evento' });
+    }
+    // ML solo documenta 200 como ACK válido de un webhook. Usar códigos distintos (202 para
+    // nuevo, 200 para duplicado) arriesga que ML trate el recibo como fallo y reintente
+    // indefinidamente hasta deshabilitar la URL de notificaciones. Por eso siempre 200:
+    // distinguimos nuevo/duplicado únicamente en el response body con { duplicate: boolean }.
+    res.status(200).json({ ok: true, duplicate: persisted.duplicate });
 
     if (topic === 'orders' || topic === 'orders_v2') {
       console.log(`[notif-ml] topic=${topic} resource=${resource} → ${topic === 'orders' ? 'syncOrdenMlPuntual' : 'syncPedidoMlPuntual'}`);
       // `resource` viene como "/orders/{id}" -- se toma el último segmento.
-      const mlOrderId = String(resource || '').split('/').filter(Boolean).pop();
+      const recursoPedido = String(resource || '').match(/^\/orders\/([^/]+)\/?$/);
+      const mlOrderId = recursoPedido?.[1];
 
       // A.3 (2026-08-27): syncMlToWc ya NO se dispara acá — hacía un barrido paginado
       // completo de /orders/search por cada webhook, cuando el propio webhook ya trae el id
@@ -197,26 +285,24 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
       return;
     }
 
-    if (topic === 'questions') {
-      console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirPregunta`);
-      ingerirPregunta(app._db, mlCfg, resource)
-        .catch(err => console.error('[notif-ml] ingerirPregunta error:', err.message));
+    // Topic post_purchase: la proyección real vive en el worker (procesarIntegrationJobs).
+    // Aquí solo persistimos el evento; no hay logs informativos.
+    if (topic === 'post_purchase') {
       return;
     }
 
-    if (topic === 'messages') {
-      console.log(`[notif-ml] topic=${topic} resource=${resource} → ingerirMensaje`);
-      ingerirMensaje(app._db, mlCfg, resource)
-        .catch(err => console.error('[notif-ml] ingerirMensaje error:', err.message));
-      return;
-    }
-
-    // Topic sin función todavía (shipments, claims, orders_feedback, items, invoices) —
+    // Topic sin función todavía (shipments, orders_feedback, items, invoices) —
     // se descarta en silencio, a propósito. (orders_v2 sí tiene función: ver más arriba,
     // camino puntual vía syncPedidoMlPuntual.)
   });
 
   app.use('/api', authGuard, scopeCheck);
+
+  app.post('/api/admin/integration-jobs/:id/reprocess', requireAdmin, (req, res) => {
+    const ok = reprocesarJob(app._db, Number(req.params.id));
+    return ok ? res.status(202).json({ ok: true, reprocessed: true })
+      : res.status(404).json({ ok: false, error: 'job DLQ no encontrado' });
+  });
 
   // Gestión de usuarios: solo admins.
   app.use('/api/usuarios', requireAdmin, usuariosRouter(db));
@@ -262,6 +348,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg }) {
   app.use('/api/etiquetas', etiquetasRouter(db));
   app.use('/api/criticidad', criticidadRouter(db, syncCfg));
   app.use('/api/auditoria', auditoriaRouter(db));
+  app.use('/api/incidentes', incidentesRouter(db, syncCfg));
+  app.use('/api/devices', devicesRouter(db));
+  app.use('/api/notifications', notificationsRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
   app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
 
@@ -297,6 +386,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const app = buildApp({
       dbPath: process.env.DB_PATH,
       sessionSecret: process.env.SESSION_SECRET,
+      mobileJwtSecret: process.env.MOBILE_JWT_SECRET,
       wooCfg,
       geminiKey: process.env.GEMINI_KEY,
       mlCfg,
@@ -347,6 +437,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         procesarReintentos(app._db, syncCfg)
           .catch(err => console.error('reintentos error:', err.message));
       });
+
 
       cron.schedule('6 1-23/2 * * *', () => {          // ML — cada 2h (bajado del 15 min, ver plan ahorro-llamadas-ml)
         procesarCancelacionesMl(app._db, syncCfg)
@@ -426,7 +517,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // una vuelta completa tarda ~19 h. No compite con la reconciliación de stock (cada 10 min)
       // ni con backfillVentas (diario) porque usa atributos distintos del multiget de ML.
       cron.schedule('*/15 * * * *', () => {
-        barridoAuditoria(app._db, syncCfg)
+        barridoAuditoria(app._db, mlCfg)
           .then(r => { if (r.auditados) console.log('barridoAuditoria:', JSON.stringify(r)); })
           .catch(err => console.error('Error en barridoAuditoria:', err.message));
       });
@@ -489,6 +580,32 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         }
         reconciliarStockMl(app._db, syncCfg)
           .catch(err => console.error('reconciliación de stock ML error:', err.message));
+      });
+
+      // Hito 7: Worker de notificaciones push — escanea incidentes activos/resueltos
+      // y envía notificaciones a dispositivos registrados. Corre cada 2 minutos.
+      cron.schedule('*/2 * * * *', () => {
+        procesarNotificacionesPush(app._db)
+          .catch(err => console.error('Error en procesarNotificacionesPush:', err.message));
+      });
+
+      // Outbox de alertas SMTP: persiste antes de enviar y reintenta fallos sin
+      // afectar ningún canal de sincronización.
+      cron.schedule('* * * * *', () => {
+        procesarAlertasEmailIncidentes(app._db);
+      });
+
+      // P1 Claims: entregas durables aisladas del worker legacy de incidentes.
+      cron.schedule('*/1 * * * *', () => {
+        import('./lib/workerIntegrationNotifications.js').then(({ procesarEntregasPush }) =>
+          procesarEntregasPush(app._db)
+        ).catch(err => console.error('Error en entregas push de integraciones:', err.message));
+      });
+
+      // P1: consumidor durable de integration_jobs. Es independiente del worker push.
+      cron.schedule('* * * * *', () => {
+        procesarIntegrationJobs(app._db, { mlCfg, wooCfg })
+          .catch(err => console.error('Error en jobs de integraciones:', err.message));
       });
     }
 

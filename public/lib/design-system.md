@@ -98,9 +98,7 @@ Estos 5 tokens deben replicarse con el mismo nombre y valor en su `:root` local.
 ## Cobertura de Catálogo (rediseño accionable)
 
 Reemplaza el informe de 5 pestañas por una herramienta de trabajo: cola de a una, matcher
-inverso WC→ML, multi-publicación y "Solo ML" accionables. Ver
-`docs/superpowers/plans/2026-08-10-cobertura-accionable.md` (decisiones) y
-`docs/superpowers/plans/2026-08-10-cobertura-flujo-ux.md` (flujo). Este bloque define el
+inverso WC→ML, multi-publicación y "Solo ML" accionables. Este bloque define el
 sistema visual; **no** hay lógica de negocio ni JS acá — eso lo escribe `hard-worker-frontend`.
 
 Atomic Design liviano: 3 componentes nuevos que se repiten entre pantallas —
@@ -306,9 +304,8 @@ sigue siendo oscuro). Verificación puntual de los pares nuevos:
 enlaza `theme.css` sin overrides locales — igual que el Matcher viejo y Vínculos, así que
 no hay conflicto de tokens que resolver al fusionar (los tres ya comparten paleta). Lo que
 sí hay que resolver es cómo ese sistema absorbe dos pantallas más sin que la tarjeta de
-trabajo (`.match-card`) pierda protagonismo. Ver
-`docs/superpowers/plans/2026-08-11-matcher-unificado.md` (plan + flujo cerrado 2026-08-14)
-para las decisiones de producto — acá solo el sistema visual.
+trabajo (`.match-card`) pierda protagonismo. Acá vive solo el sistema visual; las decisiones
+pendientes se consolidan en `docs/superpowers/plans/plan-maestro-v2.md`.
 
 **No se retiran `.chip`, `.pub-card`, `.pill-tabs` de Vínculos ni `.match-card`/`.conf-badge`
 de Cobertura como conceptos**: la sección Problemas (que absorbe Sospechosos) reusa

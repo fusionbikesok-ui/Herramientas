@@ -3,6 +3,7 @@ data/
 uploads/
 .env
 *.sqlite
+*.sqlite-journal
 *.db
 *.bak
 *.bak.*
@@ -13,4 +14,7 @@ uploads/
 # ni evidencia que valga versionar — algunos snapshots pasan las 12.000 líneas y ya
 # se colaron una vez en un commit por un `git add -A` (73.394 líneas de ruido).
 .playwright-mcp/
+/.playwright-cli/
+/output/
 /*.png
+/*.log

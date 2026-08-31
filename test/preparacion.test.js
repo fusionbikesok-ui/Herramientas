@@ -7,6 +7,7 @@ import { openDb } from '../db/index.js';
 import {
   splitDireccion, splitTelefonoAr, normalizarEnvio, nombreProvincia, direccionesDifieren,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
+  clasificarElegibilidadMl,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
 import { rutaAbsoluta } from '../utils/storage.js';
@@ -16,6 +17,115 @@ vi.mock('heic-convert', () => ({ default: vi.fn() }));
 vi.mock('../routes/woo.js', async () => {
   const actual = await vi.importActual('../routes/woo.js');
   return { ...actual, wooFetch: vi.fn() };
+});
+
+describe('guards U0.B: casos funcionales de claims y ML inconcluso', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('/iniciar devuelve 401 si no hay usuario y claimPreparacion no tiene claim', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: {}, colaFotos: { disparoInmediato: false } }));
+    const r = await request(app).post('/api/preparacion/iniciar').send({ canal: 'ml', id: 'ORD-AUTH' });
+    expect(r.status).toBe(401);
+    expect(r.body.error).toMatch(/autenticado/i);
+    expect(db.prepare("SELECT id FROM preparaciones WHERE clave='ml:ORD-AUTH'").get()).toBeUndefined();
+  });
+
+  it('seguimiento sin autenticación devuelve 401 y no crea una preparación huérfana', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/preparacion', preparacionRouter(db, { woo: {}, ml: {}, colaFotos: { disparoInmediato: false } }));
+    const r = await request(app).post('/api/preparacion/seguimientos/991').send({ tracking: 'AND991' });
+    expect(r.status).toBe(401);
+    expect(r.body.code).toBe('AUTH_REQUIRED');
+    expect(db.prepare("SELECT id FROM preparaciones WHERE clave='web:991'").get()).toBeUndefined();
+  });
+
+  it('liberar sin autenticación devuelve 401 y no simula una liberación', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 992, numeroPedido: '992', comprador: 'X', items: [] });
+    db.prepare('INSERT INTO preparacion_claims (preparacion_id, usuario, claimed_at, expires_at, renovado_en) VALUES (?,?,?,?,?)')
+      .run(id, 'juan', new Date().toISOString(), new Date(Date.now() + 600000).toISOString(), new Date().toISOString());
+    const app = express();
+    app.use(express.json());
+    app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    const r = await request(app).post(`/api/preparacion/${id}/claim/liberar`);
+    expect(r.status).toBe(401);
+    expect(r.body.code).toBe('AUTH_REQUIRED');
+    expect(db.prepare('SELECT usuario FROM preparacion_claims WHERE preparacion_id=?').get(id).usuario).toBe('juan');
+  });
+
+  it('decidir vínculo exige claims vigentes para ambas preparaciones', async () => {
+    const a = crearPreparacion(db, { canal: 'web', wcOrderId: 910, numeroPedido: '910', comprador: 'X', items: [] });
+    const b = crearPreparacion(db, { canal: 'web', wcOrderId: 911, numeroPedido: '911', comprador: 'X', items: [] });
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO preparacion_claims (preparacion_id, usuario, claimed_at, expires_at, renovado_en) VALUES (?,?,?,?,?)')
+      .run(a, 'tester', now, new Date(Date.now() + 600000).toISOString(), now);
+    db.prepare('INSERT INTO preparacion_vinculos (pedido_a_clave, pedido_b_clave, campo_match, creado_en) VALUES (?,?,?,?)')
+      .run('web:910', 'web:911', 'comprador', now);
+    const vinculo = db.prepare('SELECT id FROM preparacion_vinculos').get();
+    const r = await request(buildTestApp(db)).post(`/api/preparacion/vinculos/${vinculo.id}/decidir`)
+      .send({ estado: 'rechazado' });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('PREPARATION_CLAIMED');
+    expect(db.prepare('SELECT estado FROM preparacion_vinculos WHERE id=?').get(vinculo.id).estado).toBe('sugerido');
+  });
+});
+
+describe('control de despacho U0.B', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  it('agrupa por pack, hace el escaneo idempotente y encola etiqueta 50x25 al confirmar', async () => {
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-50', packId: 'PACK-50', numeroPedido: '50', comprador: 'X', items: [] });
+    const app = buildTestApp(db);
+    await tomarPorApi(app, id);
+    const a = await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'k-1').send({ codigo: 'PACK-50' });
+    const b = await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'k-1').send({ codigo: 'PACK-50' });
+    expect(a.status).toBe(201); expect(b.body.repetido).toBe(true);
+    const c = await request(app).post(`/api/preparacion/despacho/${id}/confirmar`).set('Idempotency-Key', 'confirm-50');
+    expect(c.status).toBe(200);
+    expect(db.prepare('SELECT grupo_clave, estado FROM despacho_controles').get()).toMatchObject({ grupo_clave: 'PACK-50', estado: 'confirmado' });
+    expect(db.prepare("SELECT nota, formato_ancho_mm, formato_alto_mm, tipo_etiqueta FROM etiquetas_cola WHERE origen='despacho'").get()).toMatchObject({ formato_ancho_mm: 50, formato_alto_mm: 25, tipo_etiqueta: 'interna' });
+  });
+  it('exige idempotencia al confirmar, deduplica la misma intención y rechaza otra', async () => {
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ID', packId: 'PID', numeroPedido: 'ID', items: [] });
+    const app = buildTestApp(db); await tomarPorApi(app, id);
+    await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'scan-id').send({ codigo: 'pid' });
+    expect((await request(app).post(`/api/preparacion/despacho/${id}/confirmar`)).status).toBe(400);
+    const first = await request(app).post(`/api/preparacion/despacho/${id}/confirmar`).set('Idempotency-Key', 'confirm-id');
+    const repeat = await request(app).post(`/api/preparacion/despacho/${id}/confirmar`).set('Idempotency-Key', 'confirm-id');
+    expect(first.body.repetido).toBe(false); expect(repeat.body.repetido).toBe(true);
+    expect((await request(app).post(`/api/preparacion/despacho/${id}/confirmar`).set('Idempotency-Key', 'other-id')).status).toBe(409);
+  });
+  it('rechaza código ajeno y no crea control', async () => {
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'BAD', packId: 'P-BAD', numeroPedido: 'BAD', items: [] });
+    const app = buildTestApp(db); await tomarPorApi(app, id);
+    const r = await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'bad-code').send({ codigo: 'otro' });
+    expect(r.status).toBe(409); expect(r.body.match).toBe('no_coincide');
+    expect(db.prepare('SELECT COUNT(*) n FROM despacho_controles').get().n).toBe(0);
+  });
+  it('rechaza una Idempotency-Key reutilizada en otro grupo', async () => {
+    const a = crearPreparacion(db, { canal: 'ml', mlOrderId: 'A', packId: 'PA', numeroPedido: 'A', items: [] });
+    const b = crearPreparacion(db, { canal: 'ml', mlOrderId: 'B', packId: 'PB', numeroPedido: 'B', items: [] });
+    const app = buildTestApp(db); await tomarPorApi(app, a); await tomarPorApi(app, b);
+    await request(app).post(`/api/preparacion/despacho/${a}/escanear`).set('Idempotency-Key', 'global-1').send({ codigo: 'PA' });
+    const r = await request(app).post(`/api/preparacion/despacho/${b}/escanear`).set('Idempotency-Key', 'global-1').send({ codigo: 'PB' });
+    expect(r.status).toBe(409); expect(r.body.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+  it('confirma de forma atómica control, etiqueta y auditoría', async () => {
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'AT', packId: 'PAT', numeroPedido: 'AT', items: [] });
+    const app = buildTestApp(db); await tomarPorApi(app, id);
+    await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'atomic-1').send({ codigo: 'PAT' });
+    db.exec("CREATE TRIGGER test_despacho_auditoria BEFORE INSERT ON preparacion_eventos BEGIN SELECT RAISE(ABORT, 'auditoria caída'); END");
+    const r = await request(app).post(`/api/preparacion/despacho/${id}/confirmar`).set('Idempotency-Key', 'atomic-confirm');
+    db.exec('DROP TRIGGER test_despacho_auditoria');
+    expect(r.status).toBe(500);
+    expect(db.prepare("SELECT estado FROM despacho_controles WHERE grupo_clave='PAT'").get().estado).toBe('escaneado');
+    expect(db.prepare("SELECT COUNT(*) n FROM etiquetas_cola WHERE origen='despacho'").get().n).toBe(0);
+  });
 });
 vi.mock('../lib/mlClient.js', () => ({
   mlFetch: vi.fn(),
@@ -34,7 +144,10 @@ function buildTestApp(db) {
   const app = express();
   app.use(express.json());
   // simular usuario autenticado (el server real lo inyecta requireAuth)
-  app.use((req, _res, next) => { req.user = { username: 'tester', is_admin: 1 }; next(); });
+  app.use((req, _res, next) => {
+    req.user = { username: 'tester', is_admin: 1 };
+    next();
+  });
   app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani', colaFotos: { disparoInmediato: false } }));
   return app;
 }
@@ -42,9 +155,18 @@ function buildTestApp(db) {
 function buildTestAppComo(db, usuario) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.user = { username: usuario, is_admin: 0 }; next(); });
+  app.use((req, _res, next) => {
+    req.user = { username: usuario, is_admin: 0 };
+    next();
+  });
   app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, andreaniStatus: 'lpaandreani', colaFotos: { disparoInmediato: false } }));
   return app;
+}
+
+async function tomarPorApi(app, id) {
+  const res = await request(app).post(`/api/preparacion/${id}/tomar`);
+  expect(res.status).toBe(200);
+  return res;
 }
 
 describe('POST /:id/heartbeat', () => {
@@ -128,6 +250,67 @@ describe('POST /:id/heartbeat', () => {
     // hay dos filas distintas para juan (una por cada preparación), no una sola pisada.
     const filasJuan = db.prepare('SELECT * FROM preparacion_vistas WHERE usuario=?').all('juan');
     expect(filasJuan).toHaveLength(2);
+  });
+});
+
+describe('claim exclusivo de preparación', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} } });
+
+  it('solo permite tomarla al primer usuario mientras el claim está vigente', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 920, numeroPedido: '920', comprador: 'X', items: [] });
+    const [juan, ana] = await Promise.all([
+      request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${id}/tomar`),
+      request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${id}/tomar`),
+    ]);
+    expect([juan.status, ana.status].sort()).toEqual([200, 409]);
+    const rechazado = juan.status === 409 ? juan : ana;
+    const aceptado = juan.status === 200 ? juan : ana;
+    expect(rechazado.body.code).toBe('PREPARATION_CLAIMED');
+    expect(rechazado.body.claim.usuario).toBe(aceptado.body.claim.usuario);
+  });
+
+  it('permite reintento y renovación del mismo usuario sin duplicar el claim', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 921, numeroPedido: '921', comprador: 'X', items: [] });
+    const app = buildTestAppComo(db, 'juan');
+    const primero = await request(app).post(`/api/preparacion/${id}/tomar`);
+    const segundo = await request(app).post(`/api/preparacion/${id}/tomar`);
+    const renovado = await request(app).post(`/api/preparacion/${id}/claim/renovar`);
+    expect(primero.status).toBe(200);
+    expect(segundo.status).toBe(200);
+    expect(renovado.status).toBe(200);
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_claims WHERE preparacion_id=?').get(id).n).toBe(1);
+    expect(db.prepare('SELECT usuario FROM preparacion_claims WHERE preparacion_id=?').get(id).usuario).toBe('juan');
+  });
+
+  it('permite tomar un claim vencido y rechaza liberar el claim vigente de otro usuario', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 922, numeroPedido: '922', comprador: 'X', items: [] });
+    db.prepare(`INSERT INTO preparacion_claims (preparacion_id, usuario, claimed_at, expires_at, renovado_en)
+      VALUES (?,?,?,?,?)`).run(id, 'juan', '2020-01-01T00:00:00.000Z', '2020-01-01T00:01:00.000Z', '2020-01-01T00:00:00.000Z');
+    const tomado = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${id}/tomar`);
+    expect(tomado.status).toBe(200);
+    const otroId = crearPreparacion(db, { canal: 'web', wcOrderId: 923, numeroPedido: '923', comprador: 'X', items: [] });
+    await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${otroId}/tomar`);
+    const liberaAjeno = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${otroId}/claim/liberar`);
+    expect(liberaAjeno.status).toBe(409);
+  });
+
+  it('rechaza una mutación sin toma explícita', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 924, numeroPedido: '924', comprador: 'X', items: [] });
+    const res = await request(buildTestAppComo(db, 'juan')).post(`/api/preparacion/${id}/completar`);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PREPARATION_CLAIMED');
+  });
+
+  it('rechaza una mutación cuando la toma pertenece a otro usuario', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 925, numeroPedido: '925', comprador: 'X', items: [] });
+    const appJuan = buildTestAppComo(db, 'juan');
+    await tomarPorApi(appJuan, id);
+    const res = await request(buildTestAppComo(db, 'ana')).post(`/api/preparacion/${id}/completar`);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PREPARATION_CLAIMED');
+    expect(res.body.claim.usuario).toBe('juan');
   });
 });
 
@@ -461,10 +644,12 @@ describe('preparacion flujo', () => {
     for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} }
   });
 
-  function nuevaPrep() {
-    return crearPreparacion(db, {
+  async function nuevaPrep() {
+    const id = crearPreparacion(db, {
       canal: 'web', wcOrderId: 500, numeroPedido: '500', comprador: 'Ana Gomez', items: ITEMS,
     });
+    await tomarPorApi(app, id);
+    return id;
   }
 
   // Las dos fotos generales del paquete (contenido a la vista + cerrado con etiqueta) son
@@ -477,9 +662,9 @@ describe('preparacion flujo', () => {
     ins.run(prepId, 'paquete_cerrado', '/uploads/paquete-cerrado.jpg', now);
   }
 
-  it('crearPreparacion es idempotente por clave', () => {
-    const id1 = nuevaPrep();
-    const id2 = nuevaPrep();
+  it('crearPreparacion es idempotente por clave', async () => {
+    const id1 = await nuevaPrep();
+    const id2 = await nuevaPrep();
     expect(id2).toBe(id1);
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(id1);
     expect(items).toHaveLength(3);
@@ -488,7 +673,7 @@ describe('preparacion flujo', () => {
   });
 
   it('escanear: match sube cantidad y verifica al completar', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     let r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     expect(r.body.resultado).toBe('match');
     expect(r.body.item.cantidad_escaneada).toBe(1);
@@ -500,7 +685,7 @@ describe('preparacion flujo', () => {
   });
 
   it('escanear: código ajeno → no_coincide; de más → sobrante', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     let r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'NO-EXISTE' });
     expect(r.body.resultado).toBe('no_coincide');
 
@@ -510,7 +695,7 @@ describe('preparacion flujo', () => {
   });
 
   it('confirmar-manual verifica ítems sin código, con motivo válido', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
     const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
     expect(r.body.ok).toBe(true);
@@ -520,7 +705,7 @@ describe('preparacion flujo', () => {
   });
 
   it('confirmar-manual sin motivo → 400, no toca el ítem (MUTATION: si se saca el chequeo de motivo, este test se pone en rojo)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
     const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({});
     expect(r.status).toBe(400);
@@ -531,7 +716,7 @@ describe('preparacion flujo', () => {
   });
 
   it('confirmar-manual con motivo inválido (fuera de la lista corta) → 400', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
     const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'porque_si' });
     expect(r.status).toBe(400);
@@ -540,7 +725,7 @@ describe('preparacion flujo', () => {
   });
 
   it('confirmar-manual con motivo "otro" sin detalle_texto → 400', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
     const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'otro' });
     expect(r.status).toBe(400);
@@ -549,7 +734,7 @@ describe('preparacion flujo', () => {
   });
 
   it('confirmar-manual con motivo "otro" y detalle_texto verifica y registra el texto libre', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
     const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`)
       .send({ motivo: 'otro', detalle_texto: 'llegó sin caja, el vendedor lo confirmó por teléfono' });
@@ -561,7 +746,7 @@ describe('preparacion flujo', () => {
   });
 
   it('completar exige ítems verificados, fotos por artículo Y las dos fotos de paquete', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     // nada verificado → 400 con detalle
     let r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
     expect(r.status).toBe(400);
@@ -618,6 +803,7 @@ describe('preparacion flujo', () => {
       canal: 'web', wcOrderId: 701, numeroPedido: '701', comprador: 'Caso incidente',
       items: [{ line_item_id: 1, product_id: 20, sku: 'CUB-1', nombre: 'Cubierta Maxxis', categoria: 'CUBIERTAS', cantidad: 5 }],
     });
+    await tomarPorApi(app, id);
     const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
     expect(item.cantidad_esperada).toBe(5);
     expect(item.cantidad_escaneada).toBe(0);
@@ -644,6 +830,7 @@ describe('preparacion flujo', () => {
       canal: 'web', wcOrderId: 702, numeroPedido: '702', comprador: 'Caso incidente parcial',
       items: [{ line_item_id: 1, product_id: 20, sku: 'CUB-1', nombre: 'Cubierta Maxxis', categoria: 'CUBIERTAS', cantidad: 5 }],
     });
+    await tomarPorApi(app, id);
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
@@ -666,7 +853,7 @@ describe('preparacion flujo', () => {
   });
 
   it('el requisito de foto de un ítem con cantidad_esperada>1 pide explícitamente que se vean las N unidades (nota humana, no validación)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const cub = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id); // cantidad 2
     const r = await request(app).get(`/api/preparacion/${id}`);
     const itemDetalle = r.body.data.items.find(i => i.id === cub.id);
@@ -678,7 +865,7 @@ describe('preparacion flujo', () => {
   });
 
   it('despacho deposito_relajado exime escaneo y fotos', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const bici = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
     const r = await request(app).post(`/api/preparacion/${id}/item/${bici.id}/despacho`)
       .send({ modo: 'deposito_relajado', motivo: 'caja en depósito' });
@@ -704,7 +891,7 @@ describe('preparacion flujo', () => {
   });
 
   it('despacho deposito_delegado deja la orden pendiente_deposito y luego se completa', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const bici = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
     await request(app).post(`/api/preparacion/${id}/item/${bici.id}/despacho`).send({ modo: 'deposito_delegado' });
 
@@ -737,7 +924,7 @@ describe('preparacion flujo', () => {
   });
 
   it('embalaje y despacho registran valor_anterior -> valor_nuevo en preparacion_eventos', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const bici = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'BICI-1');
 
     await request(app).post(`/api/preparacion/${id}/item/${bici.id}/embalaje`).send({ estado_embalaje: 'abierta' });
@@ -754,7 +941,7 @@ describe('preparacion flujo', () => {
   });
 
   it('completar registra un evento tipo completado', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'BICI-1' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
@@ -779,17 +966,26 @@ describe('preparacion flujo', () => {
     expect(r.body.ok).toBe(true);
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:900'").get();
     expect(prep.etiqueta_lista).toBe(1);
+    expect(db.prepare('SELECT usuario FROM preparacion_claims WHERE preparacion_id=?').get(prep.id).usuario).toBe('tester');
+  });
+
+  it('etiqueta_lista exige el claim de otro operador si la preparación ya existe', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 901, numeroPedido: '901', comprador: 'X', items: [] });
+    await tomarPorApi(buildTestAppComo(db, 'ana'), id);
+    const r = await request(app).post('/api/preparacion/etiquetas/901/lista').send({ lista: true });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('PREPARATION_CLAIMED');
   });
 
   describe('cerrada_sin_evidencia / reabrir', () => {
-    function nuevaPrepCerrada() {
-      const id = nuevaPrep();
+    async function nuevaPrepCerrada() {
+      const id = await nuevaPrep();
       db.prepare("UPDATE preparaciones SET estado='cerrada_sin_evidencia' WHERE id=?").run(id);
       return id;
     }
 
     it('GET /cerradas-sin-evidencia lista solo las cerradas sin evidencia, no las completadas', async () => {
-      const cerrada = nuevaPrepCerrada();
+      const cerrada = await nuevaPrepCerrada();
       const otraCompletada = crearPreparacion(db, { canal: 'web', wcOrderId: 600, numeroPedido: '600', comprador: 'Beto', items: [] });
       db.prepare("UPDATE preparaciones SET estado='completada', completado_en=? WHERE id=?").run(new Date().toISOString(), otraCompletada);
 
@@ -801,13 +997,13 @@ describe('preparacion flujo', () => {
     });
 
     it('GET /historial NO mezcla cerradas sin evidencia con las completadas (sección propia, no compartida)', async () => {
-      const cerrada = nuevaPrepCerrada();
+      const cerrada = await nuevaPrepCerrada();
       const r = await request(app).get('/api/preparacion/historial');
       expect(r.body.data.some(p => p.id === cerrada)).toBe(false);
     });
 
     it('GET /pendientes no muestra una preparación cerrada sin evidencia como trabajo pendiente', async () => {
-      const id = nuevaPrepCerrada();
+      const id = await nuevaPrepCerrada();
       const prep = db.prepare('SELECT clave FROM preparaciones WHERE id=?').get(id);
       const iso = new Date().toISOString();
       db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
@@ -818,7 +1014,7 @@ describe('preparacion flujo', () => {
     });
 
     it('POST /:id/reabrir vuelve a en_preparacion y registra el evento reabierta con usuario', async () => {
-      const id = nuevaPrepCerrada();
+      const id = await nuevaPrepCerrada();
       const r = await request(app).post(`/api/preparacion/${id}/reabrir`);
       expect(r.status).toBe(200);
       expect(r.body.estado).toBe('en_preparacion');
@@ -832,7 +1028,7 @@ describe('preparacion flujo', () => {
     });
 
     it('POST /:id/reabrir sobre una preparación que NO está cerrada_sin_evidencia → 400 (MUTATION: sacando el chequeo de estado, este test se pone en rojo)', async () => {
-      const id = nuevaPrep(); // en_preparacion normal
+      const id = await nuevaPrep(); // en_preparacion normal
       const r = await request(app).post(`/api/preparacion/${id}/reabrir`);
       expect(r.status).toBe(400);
       const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(id);
@@ -847,6 +1043,7 @@ describe('preparacion flujo', () => {
       const id = crearPreparacion(db, { canal: 'web', wcOrderId: 610, numeroPedido: '610', comprador: 'X', items: [] });
       db.prepare("UPDATE preparaciones SET estado='cerrada_sin_evidencia' WHERE id=?").run(id);
       insertarFotosPaquete(id);
+      await tomarPorApi(app, id);
 
       const r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
       expect(r.status).toBe(400);
@@ -855,7 +1052,7 @@ describe('preparacion flujo', () => {
     });
 
     it('escanear/confirmar-manual/subir foto sobre una cerrada_sin_evidencia → 400, no tocan nada (hallazgo del revisor: se podía trabajar encima sin reabrir)', async () => {
-      const id = nuevaPrepCerrada();
+      const id = await nuevaPrepCerrada();
       const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
 
       const rEscanear = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: item.sku || 'CUB-1' });
@@ -876,7 +1073,7 @@ describe('preparacion flujo', () => {
     });
 
     it('escanear sobre una cerrada_sin_evidencia → 400 (MUTATION: sin el guard de estado, escanearía igual sin reabrir)', async () => {
-      const id = nuevaPrepCerrada();
+      const id = await nuevaPrepCerrada();
       const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
       const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: item.sku });
       expect(r.status).toBe(400);
@@ -885,7 +1082,7 @@ describe('preparacion flujo', () => {
     });
 
     it('confirmar-manual sobre una cerrada_sin_evidencia → 400 (MUTATION: sin el guard de estado, confirmaría igual sin reabrir)', async () => {
-      const id = nuevaPrepCerrada();
+      const id = await nuevaPrepCerrada();
       const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
       const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
       expect(r.status).toBe(400);
@@ -894,7 +1091,7 @@ describe('preparacion flujo', () => {
     });
 
     it('confirmar-manual sobre una preparación completada → 400, no se puede confirmar un ítem después del cierre', async () => {
-      const id = nuevaPrep();
+      const id = await nuevaPrep();
       db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
       const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
       const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
@@ -902,7 +1099,7 @@ describe('preparacion flujo', () => {
     });
 
     it('reabrir una preparación completada (no aplica) → 400, no la reabre', async () => {
-      const id = nuevaPrep();
+      const id = await nuevaPrep();
       db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
       const r = await request(app).post(`/api/preparacion/${id}/reabrir`);
       expect(r.status).toBe(400);
@@ -915,15 +1112,15 @@ describe('preparacion flujo', () => {
   // sirve para nada (hallazgo del revisor — el frontend ya construyó la pestaña esperando
   // GET /despachadas-sin-verificar, mismo patrón que /cerradas-sin-evidencia).
   describe('despachada_sin_verificar', () => {
-    function nuevaPrepDespachadaSinVerificar() {
-      const id = nuevaPrep();
+    async function nuevaPrepDespachadaSinVerificar() {
+      const id = await nuevaPrep();
       db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar', completado_en=? WHERE id=?")
         .run(new Date().toISOString(), id);
       return id;
     }
 
     it('GET /despachadas-sin-verificar lista solo ese estado, no las completadas ni las cerradas sin evidencia', async () => {
-      const despachada = nuevaPrepDespachadaSinVerificar();
+      const despachada = await nuevaPrepDespachadaSinVerificar();
       const completada = crearPreparacion(db, { canal: 'web', wcOrderId: 620, numeroPedido: '620', comprador: 'Beto', items: [] });
       db.prepare("UPDATE preparaciones SET estado='completada', completado_en=? WHERE id=?").run(new Date().toISOString(), completada);
       const cerrada = crearPreparacion(db, { canal: 'web', wcOrderId: 621, numeroPedido: '621', comprador: 'Caro', items: [] });
@@ -938,7 +1135,7 @@ describe('preparacion flujo', () => {
     });
 
     it('GET /despachadas-sin-verificar devuelve total_items y total_fotos, mismo shape que /cerradas-sin-evidencia', async () => {
-      const id = nuevaPrepDespachadaSinVerificar();
+      const id = await nuevaPrepDespachadaSinVerificar();
       const r = await request(app).get('/api/preparacion/despachadas-sin-verificar');
       const fila = r.body.data.find(p => p.id === id);
       expect(fila).toMatchObject({ estado: 'despachada_sin_verificar', total_items: 3, total_fotos: 0 });
@@ -986,13 +1183,13 @@ describe('preparacion flujo', () => {
     });
 
     it('GET /historial NO mezcla despachadas sin verificar con las completadas (MUTATION: si se agregara ese estado al IN de /historial, este test se pone en rojo)', async () => {
-      const id = nuevaPrepDespachadaSinVerificar();
+      const id = await nuevaPrepDespachadaSinVerificar();
       const r = await request(app).get('/api/preparacion/historial');
       expect(r.body.data.some(p => p.id === id)).toBe(false);
     });
 
     it('GET /pendientes no muestra una preparación despachada sin verificar como trabajo pendiente (ya salió, no es "por hacer") (MUTATION: sin el estado en RESUELTAS, este test se pone en rojo)', async () => {
-      const id = nuevaPrepDespachadaSinVerificar();
+      const id = await nuevaPrepDespachadaSinVerificar();
       const prep = db.prepare('SELECT clave FROM preparaciones WHERE id=?').get(id);
       const iso = new Date().toISOString();
       db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
@@ -1009,7 +1206,7 @@ describe('preparacion flujo', () => {
   // archivo) — acá solo se verifica lo que hace el endpoint mismo.
 
   it('POST /:id/foto guarda el archivo TAL COMO LLEGÓ (sin convertir) y responde al instante', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const png = await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 255, g: 0, b: 0 } } })
       .png()
       .toBuffer();
@@ -1035,7 +1232,7 @@ describe('preparacion flujo', () => {
   });
 
   it('POST /:id/foto NO valida que el buffer sea una imagen real: lo guarda igual (fail-open acá; la cola lo marca error después)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const buffer = Buffer.from('esto no es una imagen');
 
     const r = await request(app)
@@ -1055,7 +1252,7 @@ describe('preparacion flujo', () => {
   });
 
   it('POST /:id/foto detecta HEIC por mimetype y marca es_heic=1, sin decodificar nada en el request', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const heicBuffer = Buffer.from('ftypheic no es una imagen que sharp entienda');
     const r = await request(app)
       .post(`/api/preparacion/${id}/foto`)
@@ -1071,7 +1268,7 @@ describe('preparacion flujo', () => {
   });
 
   it('POST /:id/foto detecta HEIC por extensión aunque el mimetype llegue vacío/octet-stream (iPhone al compartir)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     // iPhone al compartir manda el .heic con application/octet-stream (no arranca con image/):
     // el guard temprano NO debe cortarlo, la detección por extensión lo acepta igual.
     const heicBuffer = Buffer.from('ftypheic compartido desde iPhone');
@@ -1085,7 +1282,7 @@ describe('preparacion flujo', () => {
   });
 
   it('POST /:id/foto rechaza un archivo que no es imagen ni HEIC (mimetype no-image y sin extensión heic/heif)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const r = await request(app)
       .post(`/api/preparacion/${id}/foto`)
       .attach('archivo', Buffer.from('contenido pdf'), { filename: 'factura.pdf', contentType: 'application/pdf' });
@@ -1096,7 +1293,7 @@ describe('preparacion flujo', () => {
   });
 
   it('POST /:id/foto/:fotoId/reintentar reinicia una foto en error a pendiente y dispara la cola', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const buf = await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).jpeg().toBuffer();
     const subida = await request(app).post(`/api/preparacion/${id}/foto`).attach('archivo', buf, 'a.jpg');
     const fotoId = subida.body.foto.id;
@@ -1110,7 +1307,7 @@ describe('preparacion flujo', () => {
   });
 
   it('POST /:id/foto/:fotoId/reintentar responde 400 si la foto no está en estado de error', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const buf = await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).jpeg().toBuffer();
     const subida = await request(app).post(`/api/preparacion/${id}/foto`).attach('archivo', buf, 'a.jpg');
     const fotoId = subida.body.foto.id; // recién subida: estado_proceso='pendiente', no 'error'
@@ -1122,13 +1319,13 @@ describe('preparacion flujo', () => {
   });
 
   it('POST /:id/foto/:fotoId/reintentar responde 404 si la foto no existe', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const r = await request(app).post(`/api/preparacion/${id}/foto/999999/reintentar`);
     expect(r.status).toBe(404);
   });
 
   it('POST /:id/foto responde 400 JSON (no 500 HTML) cuando la foto supera el límite de multer', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     // Buffer de 16MB: supera el límite de 15MB de multer (fotos de cámara nativa
     // de iPhones modernos). Antes esto propagaba un MulterError sin error-handler
     // y el frontend recibía HTML → flash genérico. Ahora es 400 con JSON claro.
@@ -1162,6 +1359,7 @@ describe('preparacion flujo', () => {
       canal: 'web', wcOrderId: 950, numeroPedido: '950', comprador: 'Full',
       items: [{ line_item_id: 1, product_id: 20, sku: 'CUB-1', nombre: 'Cubierta Maxxis', categoria: 'CUBIERTAS', cantidad: 1 }],
     });
+    await tomarPorApi(app, id);
     const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').get(id);
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     db.prepare('INSERT INTO preparacion_fotos (preparacion_id, item_id, tipo, url, creado_en) VALUES (?,?,?,?,?)')
@@ -1186,6 +1384,7 @@ describe('preparacion flujo', () => {
       canal: 'web', wcOrderId: 951, numeroPedido: '951', comprador: 'Sin verificar',
       items: [{ line_item_id: 1, product_id: 20, sku: 'CUB-1', nombre: 'Cubierta Maxxis', categoria: 'CUBIERTAS', cantidad: 5 }],
     });
+    await tomarPorApi(app, id);
     // No se escanea nada: el ítem queda 'pendiente'.
 
     wooFetch
@@ -1255,6 +1454,7 @@ describe('preparacion flujo', () => {
       }})
       .mockResolvedValueOnce({ data: {} });
 
+    await tomarPorApi(app, db.prepare("SELECT id FROM preparaciones WHERE clave='web:905'").get().id);
     const llamadasAntes = wooFetch.mock.calls.length;
     const r = await request(app).post('/api/preparacion/seguimientos/905/corregir-tracking').send({ tracking: 'AND999' });
     expect(r.body).toMatchObject({ ok: true, tracking_anterior: 'AND111', tracking_nuevo: 'AND999' });
@@ -1280,6 +1480,7 @@ describe('preparacion flujo', () => {
       }})
       .mockResolvedValueOnce({ data: {} });
 
+    await tomarPorApi(app, db.prepare("SELECT id FROM preparaciones WHERE clave='web:907'").get().id);
     const r = await request(app).post('/api/preparacion/seguimientos/907/corregir-tracking').send({ tracking: 'AND999' });
     expect(r.status).toBe(200);
 
@@ -1300,7 +1501,7 @@ describe('preparacion flujo', () => {
   });
 
   it('GET /:id devuelve detalle con items, fotos y requisitos', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const r = await request(app).get(`/api/preparacion/${id}`);
     expect(r.status).toBe(200);
     expect(r.body.data.items).toHaveLength(3);
@@ -1308,7 +1509,7 @@ describe('preparacion flujo', () => {
   });
 
   it('GET /:id incluye eventos (más reciente primero)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     const r = await request(app).get(`/api/preparacion/${id}`);
@@ -1317,7 +1518,7 @@ describe('preparacion flujo', () => {
   });
 
   it('GET /:id/eventos devuelve solo los eventos, sin items ni fotos', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     const r = await request(app).get(`/api/preparacion/${id}/eventos`);
     expect(r.body.ok).toBe(true);
@@ -1326,7 +1527,7 @@ describe('preparacion flujo', () => {
   });
 
   it('GET /:id y GET /:id/eventos no rompen si un evento tiene detalle_json inválido', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     db.prepare("UPDATE preparacion_eventos SET detalle_json='{rota' WHERE preparacion_id=?").run(id);
 
@@ -1342,7 +1543,7 @@ describe('preparacion flujo', () => {
   it('GET /:id y GET /:id/eventos devuelven detalle:{} si detalle_json es el string literal "null"', async () => {
     // JSON.parse('null') no lanza excepción, devuelve `null` (no un objeto): caso aparte
     // del JSON inválido de arriba, que sí dispara el catch.
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     db.prepare("UPDATE preparacion_eventos SET detalle_json='null' WHERE preparacion_id=?").run(id);
 
@@ -1356,7 +1557,7 @@ describe('preparacion flujo', () => {
   });
 
   it('GET /:id/eventos?desde=N devuelve solo eventos con id>N', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
     const primeros = db.prepare("SELECT id FROM preparacion_eventos WHERE preparacion_id=?").all(id);
     const ultimoId = Math.max(...primeros.map(e => e.id));
@@ -1370,7 +1571,7 @@ describe('preparacion flujo', () => {
   });
 
   it('heartbeat informa el id del último evento', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     let r = await request(app).post(`/api/preparacion/${id}/heartbeat`);
     expect(r.body.ultimo_evento_id).toBe(0);
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
@@ -1379,7 +1580,7 @@ describe('preparacion flujo', () => {
   });
 
   it('escanear con match registra un evento tipo escaneo; no_coincide y sobrante no registran nada', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1', origen: 'camara' });
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'NOEXISTE' }); // no_coincide
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' }); // match, sin origen -> default lector_teclado
@@ -1395,7 +1596,7 @@ describe('preparacion flujo', () => {
   });
 
   it('escanear con origen fuera de la whitelist cae al default lector_teclado (no se puede simplificar a ||)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1', origen: 'inyectado' });
 
     const evento = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
@@ -1403,7 +1604,7 @@ describe('preparacion flujo', () => {
   });
 
   it('confirmar-manual registra un evento tipo escaneo con origen manual, motivo y detalle_texto', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
     await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'codigo_ilegible' });
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo'").get(id);
@@ -1415,7 +1616,7 @@ describe('preparacion flujo', () => {
   });
 
   it('confirmar-manual dos veces seguidas sobre el mismo ítem no duplica el evento (re-confirmación es no-op)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=''").get(id);
 
     await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'codigo_ilegible' });
@@ -1429,7 +1630,7 @@ describe('preparacion flujo', () => {
   });
 
   it('subir foto registra un evento foto_subida', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
     const r = await request(app).post(`/api/preparacion/${id}/foto`)
@@ -1439,7 +1640,7 @@ describe('preparacion flujo', () => {
   });
 
   it('purgarFotosBorradas borra archivo y fila si borrado_en tiene más de 60 días; conserva las más recientes', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
 
@@ -1462,7 +1663,7 @@ describe('preparacion flujo', () => {
   });
 
   it('purgarFotosBorradas NO borra archivo ni fila si la url resuelta cae fuera de uploads/ (defensa en profundidad)', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const hace70dias = new Date(Date.now() - 70 * 24 * 3600 * 1000).toISOString();
     // Fila insertada directamente en la tabla (sin pasar por guardarArchivo/sanitize),
     // simulando el caso hipotético de una url maliciosa que llegara por otra vía.
@@ -1477,7 +1678,7 @@ describe('preparacion flujo', () => {
   });
 
   it('borrar foto NO borra la fila (soft-delete), registra evento foto_borrada, y deja de contar para /completar', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
     const subida = await request(app).post(`/api/preparacion/${id}/foto`)
@@ -1499,7 +1700,7 @@ describe('preparacion flujo', () => {
   });
 
   it('borrar la misma foto dos veces seguidas: la segunda es no-op y no duplica el evento foto_borrada', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
     const subida = await request(app).post(`/api/preparacion/${id}/foto`)
@@ -1519,7 +1720,7 @@ describe('preparacion flujo', () => {
   });
 
   it('borrar una foto sin evento foto_subida previo (foto preexistente) responde ok y subida_por queda null', async () => {
-    const id = nuevaPrep();
+    const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
     const subida = await request(app).post(`/api/preparacion/${id}/foto`)
@@ -1555,6 +1756,7 @@ describe('preparacion flujo', () => {
     it('el request responde con estado_proceso=pendiente al instante, y la foto pasa a listo en segundo plano', async () => {
       const appCola = buildTestAppConCola(db);
       const id = crearPreparacion(db, { canal: 'web', wcOrderId: 950, numeroPedido: '950', comprador: 'Ana', items: [] });
+      await tomarPorApi(appCola, id);
       const buf = await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).jpeg().toBuffer();
 
       const r = await request(appCola).post(`/api/preparacion/${id}/foto`).attach('archivo', buf, 'a.jpg');
@@ -1744,7 +1946,7 @@ import { syncPedidosCache } from '../routes/preparacion.js';
 describe('POST /iniciar — confirmación de envío vs. facturación', () => {
   let db;
   const orderBase = (overrides = {}) => ({
-    id: 950, number: '950', meta_data: [],
+    id: 950, number: '950', status: 'lpaandreani', meta_data: [],
     shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567' },
     billing: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567', email: 'ana@mail.com' },
     line_items: [],
@@ -1790,6 +1992,13 @@ describe('POST /iniciar — confirmación de envío vs. facturación', () => {
     expect(r.status).toBe(200);
   });
 
+  it('POST /iniciar Woo devuelve 409 y no crea preparación si el estado no es elegible', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({ status: 'cancelled' }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r.status).toBe(409);
+    expect(db.prepare("SELECT * FROM preparaciones WHERE clave='web:950'").get()).toBeUndefined();
+  });
+
   it('con direccion_elegida crea la preparación y guarda la decisión', async () => {
     wooFetch.mockResolvedValueOnce({ data: orderBase({
       billing: { first_name: 'Otro', last_name: 'Nombre', address_1: 'Otra calle 999', city: 'Rosario', state: 'S', phone: '3419999999', email: 'ana@mail.com' },
@@ -1813,6 +2022,55 @@ describe('POST /iniciar — confirmación de envío vs. facturación', () => {
     }) });
     const r2 = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
     expect(r2.status).toBe(200);
+  });
+
+  it('conflicto de claim web no persiste cambios de la preparación', async () => {
+    const id = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 951, numeroPedido: '951', comprador: 'Original', items: [],
+    });
+    db.prepare('UPDATE preparaciones SET direccion_confirmada_fuente=NULL, direccion_confirmada_por=NULL WHERE id=?').run(id);
+    const claimedAt = new Date().toISOString();
+    db.prepare(`INSERT INTO preparacion_claims
+      (preparacion_id, usuario, claimed_at, expires_at, renovado_en) VALUES (?,?,?,?,?)`)
+      .run(id, 'ana', claimedAt, new Date(Date.now() + 600000).toISOString(), claimedAt);
+
+    wooFetch.mockResolvedValueOnce({ data: orderBase({ id: 951, number: '951',
+      billing: { first_name: 'Nueva', last_name: 'Persona', address_1: 'Otra calle 9', city: 'Rosario', state: 'S', phone: '3419999999', email: 'nueva@mail.com' },
+    }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar')
+      .send({ canal: 'web', id: 951, direccion_elegida: 'billing' });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('PREPARATION_CLAIMED');
+    const after = db.prepare('SELECT comprador, direccion_confirmada_fuente, direccion_confirmada_por FROM preparaciones WHERE id=?').get(id);
+    expect(after).toEqual({ comprador: 'Original', direccion_confirmada_fuente: null, direccion_confirmada_por: null });
+  });
+});
+
+describe('POST /iniciar — atomicidad del claim ML', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('conflicto de claim ML no persiste una preparación nueva ni sus ítems', async () => {
+    const id = crearPreparacion(db, {
+      canal: 'ml', mlOrderId: 'ML-951', numeroPedido: 'ML-951', comprador: 'Original', items: [],
+    });
+    const claimedAt = new Date().toISOString();
+    db.prepare(`INSERT INTO preparacion_claims
+      (preparacion_id, usuario, claimed_at, expires_at, renovado_en) VALUES (?,?,?,?,?)`)
+      .run(id, 'ana', claimedAt, new Date(Date.now() + 600000).toISOString(), claimedAt);
+    mlFetch.mockResolvedValueOnce({ status: 200, data: {
+      id: 'ML-951', buyer: { nickname: 'Nuevo comprador' }, order_items: [
+        { item: { id: 'SKU-951', title: 'Producto nuevo' }, quantity: 2 },
+      ],
+    } });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar')
+      .send({ canal: 'ml', id: 'ML-951' });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('PREPARATION_CLAIMED');
+    expect(db.prepare('SELECT comprador FROM preparaciones WHERE id=?').get(id).comprador).toBe('Original');
+    expect(db.prepare('SELECT COUNT(*) AS n FROM preparacion_items WHERE preparacion_id=?').get(id).n).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM preparaciones WHERE clave=?').get('ml:ML-951').n).toBe(1);
   });
 });
 
@@ -1982,7 +2240,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/555
 
     await syncPedidosCache(db, CFG);
@@ -2106,7 +2364,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 4444, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 888 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 4444, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 888 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/888 -- SE repregunta
 
     await syncPedidosCache(db, CFG);
@@ -2169,7 +2427,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 7777, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 222 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 7777, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 222 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/222 -- reintento de visita, ahora está pendiente de nuevo
 
     await syncPedidosCache(db, CFG);
@@ -2464,6 +2722,24 @@ describe('syncPedidoWebPuntual', () => {
     expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:903'").get()).toBeUndefined();
   });
 
+  it('invalida una fila pendiente cacheada al confirmar un estado no elegible, sin borrar la preparación', async () => {
+    buildTestApp(db); // inicializa las tablas de preparación/cache antes de sembrar la transición
+    db.prepare(`INSERT INTO pedidos_cache
+      (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
+      VALUES ('web:906', 'web', 906, '906', 'Juan', ?, 'pendiente', '[]', ?)`)
+      .run(new Date().toISOString(), new Date().toISOString());
+    db.prepare(`INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en)
+      VALUES ('web', 'web:906', 'en_preparacion', 0, ?)`)
+      .run(new Date().toISOString());
+    wooFetch.mockResolvedValueOnce({ data: { id: 906, status: 'cancelled', billing: {}, line_items: [] } });
+
+    await syncPedidoWebPuntual(db, CFG, 906);
+
+    expect(db.prepare("SELECT estado_envio, estado_wc FROM pedidos_cache WHERE clave='web:906'").get())
+      .toMatchObject({ estado_envio: 'no_elegible', estado_wc: 'cancelled' });
+    expect(db.prepare("SELECT estado FROM preparaciones WHERE clave='web:906'").get().estado).toBe('en_preparacion');
+  });
+
   it('fail-open: si el webhook falla (wooFetch rechaza), no revienta y el pedido queda para el cron siguiente', async () => {
     wooFetch.mockRejectedValueOnce(new Error('WC caído'));
 
@@ -2503,8 +2779,38 @@ describe('syncPedidoMlPuntual', () => {
   let db;
   const MLCFG = { clientId: 'cid', clientSecret: 'cs', userId: '99999' };
 
+  it('clasifica evidencia ML como elegible, no elegible o inconclusa sin cerrar de más', () => {
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship', logistic_type: 'self_service' }).estado).toBe('elegible');
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship', logistic_type: 'fulfillment' }).estado).toBe('no_elegible');
+    expect(clasificarElegibilidadMl({ status: 'paid' }, null).estado).toBe('inconcluso');
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship' }).estado).toBe('inconcluso');
+  });
+
+  it('sync puntual conserva como pendiente una orden paga sin shipping.id (inconclusa)', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-INCONCLUSA', status: 'paid', buyer: { nickname: 'x' }, order_items: [] } });
+    await syncPedidoMlPuntual(db, MLCFG, 'ORD-INCONCLUSA');
+    expect(db.prepare("SELECT estado_envio, logistic_type FROM pedidos_cache WHERE clave='ml:ORD-INCONCLUSA'").get())
+      .toMatchObject({ estado_envio: 'pendiente', logistic_type: null });
+  });
+
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('POST /iniciar ML devuelve 409 y no crea preparación si el envío no es elegible', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-14', status: 'paid', shipping: { id: 814 }, buyer: { nickname: 'x' } } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'shipped', logistic_type: 'self_service' } });
+    const res = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'ml', id: 'ORD-14' });
+    expect(res.status).toBe(409);
+    expect(db.prepare("SELECT * FROM preparaciones WHERE clave='ml:ORD-14'").get()).toBeUndefined();
+  });
+
+  it('POST /iniciar ML bloquea evidencia inconclusa y no crea preparación', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-INCONCLUSA-2', status: 'paid', buyer: { nickname: 'x' } } });
+    const res = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'ml', id: 'ORD-INCONCLUSA-2' });
+    expect(res.status).toBe(409);
+    expect(res.body.estado_elegibilidad).toBe('inconcluso');
+    expect(db.prepare("SELECT * FROM preparaciones WHERE clave='ml:ORD-INCONCLUSA-2'").get()).toBeUndefined();
+  });
 
   it('trae SOLO la orden pedida (paid + ready_to_ship + envío local) y hace upsert inmediato', async () => {
     mlFetch

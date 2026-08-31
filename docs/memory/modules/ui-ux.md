@@ -24,6 +24,12 @@
 - Los resultados de asociación SKU/EAN/UPC muestran el identificador siempre visible y dejan
   que el nombre/variante haga wrap en móvil; los dropdowns usan columnas fluidas y metadata en
   segunda línea en anchos estrechos, sin elipsis que oculte la variante.
+- La primera UX móvil operativa se ordena como Base común → Preparación → Inventario. Preparación
+  cubre cola, toma, escaneo, evidencia, cierre/etiqueta y despacho/incidencia; Inventario cubre
+  Hoy/ubicación, conteo, diferencias, aprobación e historial/etiquetas.
+- Ambos verticales deben diseñar estados vacío, cargando, sin permiso, error, reintento y conflicto.
+  Las validaciones web de U0 incluyen 390 px; cada vertical móvil cierra además con E2E en iPhone
+  contra una API real aislada.
 
 ## Cuándo actualizar
 

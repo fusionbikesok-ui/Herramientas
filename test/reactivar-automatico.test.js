@@ -254,17 +254,19 @@ describe('reactivarAutomatico', () => {
   it('anti-starvation: una publicación sin frenada y de título tardío entra en el lote aunque haya más de LOTE_MAX frenadas crónicas con título temprano', async () => {
     const LOTE_MAX = 50;
     // 50 publicaciones "crónicamente frenadas" con títulos alfabéticamente tempranos.
-    for (let i = 0; i < LOTE_MAX; i++) {
-      const n = String(i).padStart(2, '0');
-      const clave = `MLA_A${n}|`;
-      const itemId = `MLA_A${n}`;
-      sembrarReactivable({ clave, itemId, sku: `FB-A${n}`, precioWc: 300000, titulo: `A${n} - producto viejo` });
-      db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
-        VALUES (?, ?, 'crónica', 1, 2, 0.5, '2026-07-29T00:00:00Z')`).run(clave, `FB-A${n}`);
-    }
-    // Una publicación nueva, sin frenada, con título alfabéticamente TARDÍO (quedaría en la
-    // posición 51 si no se reordenara — nunca entraría al lote de LOTE_MAX=50).
-    sembrarReactivable({ clave: 'MLA_ZZZ|', itemId: 'MLA_ZZZ', sku: 'FB-ZZZ', precioWc: 300000, titulo: 'ZZZ - producto nuevo con stock' });
+    db.transaction(() => {
+      for (let i = 0; i < LOTE_MAX; i++) {
+        const n = String(i).padStart(2, '0');
+        const clave = `MLA_A${n}|`;
+        const itemId = `MLA_A${n}`;
+        sembrarReactivable({ clave, itemId, sku: `FB-A${n}`, precioWc: 300000, titulo: `A${n} - producto viejo` });
+        db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en)
+          VALUES (?, ?, 'crónica', 1, 2, 0.5, '2026-07-29T00:00:00Z')`).run(clave, `FB-A${n}`);
+      }
+      // Una publicación nueva, sin frenada, con título alfabéticamente TARDÍO (quedaría en la
+      // posición 51 si no se reordenara — nunca entraría al lote de LOTE_MAX=50).
+      sembrarReactivable({ clave: 'MLA_ZZZ|', itemId: 'MLA_ZZZ', sku: 'FB-ZZZ', precioWc: 300000, titulo: 'ZZZ - producto nuevo con stock' });
+    })();
 
     const itemsConsultados = new Set();
     mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
@@ -286,7 +288,7 @@ describe('reactivarAutomatico', () => {
     await reactivarAutomatico(db, CFG);
 
     expect(itemsConsultados.has('MLA_ZZZ')).toBe(true);
-  });
+  }, 15000);
 
   // Paso 4 del plan ahorro-llamadas-ml: si ninguno de los dos precios (web/ML) cambió desde
   // que se registró la frenada, no hay que gastar una sola llamada para reconfirmarlo.

@@ -17,7 +17,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
-import { openDb } from '../db/index.js';
+import { createHash } from 'node:crypto';
+import { openDb as openDbOriginal } from '../db/index.js';
 import { syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, limpiarVariacionesMuertas } from '../routes/sync.js';
 
 vi.mock('../lib/mlClient.js', () => ({
@@ -35,6 +36,16 @@ import { mlFetch } from '../lib/mlClient.js';
 import { wooFetch } from '../routes/woo.js';
 
 const TEST_DB = './test/tmp-syncflow.sqlite';
+let currentTestId = 'setup';
+const TEST_DB_PATHS = new Set();
+beforeEach((ctx) => { currentTestId = ctx.task.id; });
+function openTestDb() {
+  const hash = createHash('sha256').update(currentTestId).digest('hex').slice(0, 16);
+  const ruta = `${TEST_DB}.${process.pid}.${hash}.sqlite`;
+  TEST_DB_PATHS.add(ruta);
+  return openDb(ruta);
+}
+function openDb(ruta) { return ruta === TEST_DB ? openTestDb() : openDbOriginal(ruta); }
 
 const CFG = {
   ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' },
@@ -44,11 +55,15 @@ const CFG = {
 function seedMatcher(db) {
   const now = new Date().toISOString();
   db.prepare(
-    'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
   ).run('MLA100|', 'BIKE-001', 'Bicicleta Simple', 'confirmar', now);
+  db.prepare('UPDATE sku_matcher_decisiones SET sku = ?, wc_nombre = ?, accion = ?, actualizado_en = ? WHERE clave = ?')
+    .run('BIKE-001', 'Bicicleta Simple', 'confirmar', now, 'MLA100|');
   db.prepare(
-    'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
   ).run('MLA200|987', 'CASCO-L', 'Casco L', 'asignar', now);
+  db.prepare('UPDATE sku_matcher_decisiones SET sku = ?, wc_nombre = ?, accion = ?, actualizado_en = ? WHERE clave = ?')
+    .run('CASCO-L', 'Casco L', 'asignar', now, 'MLA200|987');
 }
 
 // Por default, regularPrice = precio (sin oferta: LISTA y vigente coinciden), salvo que un
@@ -57,8 +72,10 @@ function seedCatalogo(db, { precio = 300, regularPrice } = {}) {
   const now = new Date().toISOString();
   const rp = regularPrice !== undefined ? regularPrice : precio;
   db.prepare(
-    'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, precio, rp, now);
+  db.prepare('UPDATE catalogo_cache SET nombre = ?, sku = ?, tipo = ?, id_padre = ?, stock = ?, precio = ?, regular_price = ?, actualizado_en = ? WHERE id_woo = ?')
+    .run('Bicicleta Simple', 'BIKE-001', 'simple', null, 5, precio, rp, now, 100);
 }
 
 // Publicación ML en cache — syncWcToMl solo empuja stock a publicaciones activas.

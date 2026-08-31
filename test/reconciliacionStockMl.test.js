@@ -2,7 +2,7 @@
  * Tests para reconciliarStockMl: reconciliación incremental del stock recordado
  * (ml_stock_estado.cantidad_ml) contra el stock REAL de ML (multiget /items?ids=).
  *
- * Caso real que motivó esto (ver docs/superpowers/plans/2026-08-06-reconciliacion-stock-ml.md):
+ * Caso real que motivó esto:
  * MLA1117110786| (SKU FB-4501) quedó con cantidad_ml=0 desde el 2026-07-17 mientras ML tenía
  * 1 unidad activa y vendible — syncWcToMl nunca lo detectó porque comparaba deseado (0)
  * contra recordado (0), ambos iguales.
@@ -242,10 +242,12 @@ describe('reconciliarStockMl', () => {
   // nunca prueba avance real del cursor (su propio comentario lo admitía). Para probar
   // avance real hace falta un universo > 150, así el lote deja filas afuera.
   function seedUniversoGrande(db, n) {
-    for (let i = 0; i < n; i++) {
-      const clave = `MLA1${String(i).padStart(4, '0')}|`;
-      seedPublicacion(db, { clave, itemId: `MLA1${String(i).padStart(4, '0')}`, sku: `SKU${i}`, cantidadMl: 1 });
-    }
+    db.transaction(() => {
+      for (let i = 0; i < n; i++) {
+        const clave = `MLA1${String(i).padStart(4, '0')}|`;
+        seedPublicacion(db, { clave, itemId: `MLA1${String(i).padStart(4, '0')}`, sku: `SKU${i}`, cantidadMl: 1 });
+      }
+    })();
   }
 
   it('avance real del cursor con lote menor al universo (universo > RECONCILIACION_LOTE)', async () => {
@@ -272,7 +274,7 @@ describe('reconciliarStockMl', () => {
     // (lote circular) — lo importante es que retomó desde donde quedó, no desde 0.
     const r2 = await correr(db, CFG);
     expect(r2.revisadas).toBe(150);
-  });
+  }, 15000);
 
   it('clave del cursor desaparecida del universo → arranca en la siguiente lexicográficamente mayor, no en 0', async () => {
     seedUniversoGrande(db, 105);

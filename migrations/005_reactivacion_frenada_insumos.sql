@@ -4,8 +4,8 @@
 -- frenada: precio_ml_evaluado y precio_web_evaluado (además de detectado_en, que ya
 -- existía). Permiten a reactivarAutomatico decidir LOCALMENTE, sin pegarle a ML, si una
 -- publicación frenada sigue frenada: si ninguno de los dos precios cambió desde la última
--- evaluación, se saltea sin llamada (plan docs/superpowers/plans/2026-08-05-ahorro-llamadas-ml.md,
--- paso 4). Red de seguridad: igual se re-evalúa contra ML si pasaron más de 24h desde
+-- evaluación, se saltea sin llamada. Red de seguridad: igual se re-evalúa contra ML si pasaron
+-- más de 24h desde
 -- detectado_en, por si cambió algo que no está en estas dos columnas (comisión, envío).
 --
 -- Aplicación: igual convención que 001_*.sql — este proyecto no usa runner de migraciones ni

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
+import Database from 'better-sqlite3';
 import { openDb } from '../db/index.js';
 
 const TEST_DB = './test/tmp-fusion.sqlite';
@@ -22,10 +23,24 @@ describe('db schema', () => {
       'cobertura_marcados_correcto',
       'cobertura_salteados',
       'cobertura_sesion',
+      'conversation_messages',
+      'conversations',
+      'despacho_controles',
+      'despacho_escaneos',
+      'despacho_horarios',
+      'despacho_horarios_auditoria',
+      'despacho_horarios_meta',
+      'device_tokens',
       'ean_sku',
       'errores_descartados',
+      'etiquetas_cola',
+      'inbox_items',
+      'incidentes_email_outbox',
       'incidentes_operativos',
       'incidentes_operativos_historial',
+      'integration_event_history',
+      'integration_events',
+      'integration_jobs',
       'inventario_diferencias',
       'mapeo_fusion',
       'metricas_ciclo_sync',
@@ -38,11 +53,16 @@ describe('db schema', () => {
       'ml_sku_push_fallos',
       'ml_stock_estado',
       'ml_vinculos_revisados',
+      'mobile_refresh_tokens',
+      'notificaciones_enviadas',
+      'notificaciones_usuario',
+      'notification_deliveries',
       'ordenes_ml_procesadas',
       'ordenes_ml_wc_pedidos',
       'password_reset_tokens',
       'pedidos',
       'pendientes_mapeo',
+      'preferencias_notificacion',
       'recepcion_documentos',
       'recepcion_items',
       'recepciones',
@@ -51,9 +71,14 @@ describe('db schema', () => {
       'stock_negativo_alertas',
       'sync_estado',
       'sync_log',
+      'user_notifications',
       'user_permisos',
       'users',
     ]);
+    expect(db.pragma('user_version', { simple: true })).toBe(30);
+    const refreshDevice = db.prepare('PRAGMA table_info(mobile_refresh_tokens)').all()
+      .find((column) => column.name === 'device_id');
+    expect(refreshDevice.notnull).toBe(1);
     db.close();
   });
 
@@ -78,6 +103,134 @@ describe('db schema', () => {
     ins.run('MLA1|', 'seller_sku', 'FB-9', 'auditor', '2026-07-30T10:00:00Z');
     expect(db.prepare('SELECT COUNT(*) n FROM ml_vinculos_revisados').get().n).toBe(2);
     db.close();
+  });
+
+  it('030 migra una base pre-Hito7 con refresh legacy no nulo y conserva sus filas', () => {
+    const legacyDb = new Database(TEST_DB);
+    legacyDb.exec(fs.readFileSync('./db/schema.sql', 'utf8'));
+    legacyDb.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        pass_hash TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        activo INTEGER NOT NULL DEFAULT 1,
+        email TEXT,
+        creado_en TEXT NOT NULL,
+        actualizado_en TEXT NOT NULL
+      );
+      INSERT INTO users (id, username, pass_hash, creado_en, actualizado_en)
+      VALUES (1, 'legacy-user', 'hash', '2026-08-29T00:00:00.000Z', '2026-08-29T00:00:00.000Z');
+      CREATE TABLE device_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token TEXT NOT NULL,
+        plataforma TEXT NOT NULL,
+        creado_en TEXT NOT NULL,
+        actualizado_en TEXT NOT NULL,
+        revocado_en TEXT
+      );
+      INSERT INTO device_tokens (id, user_id, token, plataforma, creado_en, actualizado_en)
+      VALUES (7, 1, 'legacy-token', 'android', '2026-08-29T00:00:00.000Z', '2026-08-29T00:00:00.000Z');
+      CREATE TABLE mobile_refresh_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        device_id INTEGER REFERENCES device_tokens(id),
+        token_hash TEXT NOT NULL UNIQUE,
+        family_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        usado_en TEXT,
+        revocado_en TEXT,
+        creado_en TEXT NOT NULL
+      );
+      INSERT INTO mobile_refresh_tokens
+        (token_hash, user_id, device_id, family_id, expires_at, creado_en)
+      VALUES ('legacy-refresh', 1, 7, 'legacy-family', '2099-01-01T00:00:00.000Z', '2026-08-29T00:00:00.000Z');
+    `);
+    legacyDb.close();
+
+    const db = openDb(TEST_DB);
+    const refreshDevice = db.prepare('PRAGMA table_info(mobile_refresh_tokens)').all()
+      .find((column) => column.name === 'device_id');
+    expect(refreshDevice.notnull).toBe(1);
+    expect(db.prepare('SELECT device_id FROM mobile_refresh_tokens WHERE token_hash = ?')
+      .get('legacy-refresh').device_id).toBe(7);
+    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_device_tokens_unique_active'").get())
+      .toBeTruthy();
+    expect(db.pragma('user_version', { simple: true })).toBe(30);
+    db.close();
+  });
+
+  it('030 hace rollback si falla el índice único y conserva user_version=29 de Claims', () => {
+    const legacyDb = new Database(TEST_DB);
+    legacyDb.exec(fs.readFileSync('./db/schema.sql', 'utf8'));
+    legacyDb.exec(`
+      CREATE TABLE device_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token TEXT NOT NULL,
+        plataforma TEXT NOT NULL,
+        creado_en TEXT NOT NULL,
+        actualizado_en TEXT NOT NULL,
+        revocado_en TEXT
+      );
+      INSERT INTO device_tokens (user_id, token, plataforma, creado_en, actualizado_en)
+      VALUES
+        (1, 'duplicate-active-token', 'ios', '2026-08-29T00:00:00.000Z', '2026-08-29T00:00:00.000Z'),
+        (2, 'duplicate-active-token', 'ios', '2026-08-29T00:00:01.000Z', '2026-08-29T00:00:01.000Z');
+    `);
+    legacyDb.close();
+
+    expect(() => openDb(TEST_DB)).toThrow(/Migración 030 no aplicada|UNIQUE/);
+
+    const afterFailure = new Database(TEST_DB);
+    expect(afterFailure.pragma('user_version', { simple: true })).toBe(29);
+    expect(afterFailure.prepare('SELECT COUNT(*) AS count FROM device_tokens').get().count).toBe(2);
+    expect(afterFailure.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_device_tokens_unique_active'").get())
+      .toBeUndefined();
+    expect(afterFailure.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'preferencias_notificacion'").get())
+      .toBeUndefined();
+    afterFailure.close();
+  });
+
+  it('030 aborta ante refresh huérfano, conserva la tabla y deja user_version=29', () => {
+    const legacyDb = new Database(TEST_DB);
+    legacyDb.exec(fs.readFileSync('./db/schema.sql', 'utf8'));
+    legacyDb.exec(`
+      CREATE TABLE device_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token TEXT NOT NULL,
+        plataforma TEXT NOT NULL,
+        creado_en TEXT NOT NULL,
+        actualizado_en TEXT NOT NULL,
+        revocado_en TEXT
+      );
+      CREATE TABLE mobile_refresh_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash TEXT NOT NULL UNIQUE,
+        user_id INTEGER NOT NULL,
+        device_id INTEGER REFERENCES device_tokens(id),
+        expires_at TEXT NOT NULL,
+        revocado_en TEXT,
+        reemplazado_por TEXT,
+        creado_en TEXT NOT NULL
+      );
+      INSERT INTO mobile_refresh_tokens
+        (token_hash, user_id, device_id, expires_at, creado_en)
+      VALUES ('orphan-hash', 1, NULL, '2099-01-01T00:00:00.000Z', '2026-08-29T00:00:00.000Z');
+    `);
+    legacyDb.close();
+
+    expect(() => openDb(TEST_DB)).toThrow(/Migración 030 no aplicada|huérfano/);
+
+    const afterFailure = new Database(TEST_DB);
+    const refreshDevice = afterFailure.prepare('PRAGMA table_info(mobile_refresh_tokens)').all()
+      .find((column) => column.name === 'device_id');
+    expect(refreshDevice.notnull).toBe(0);
+    expect(afterFailure.prepare('SELECT device_id FROM mobile_refresh_tokens').get().device_id).toBeNull();
+    expect(afterFailure.pragma('user_version', { simple: true })).toBe(29);
+    afterFailure.close();
   });
 });
 

@@ -811,7 +811,7 @@ del frontend (fuera de este archivo).
 
 ## Seguimientos: 3 secciones locales, ya no se infiere desde Woo (2026-08-13)
 
-Medido en el plan `docs/superpowers/plans/2026-08-13-seguimientos.md`: la pantalla mostraba
+La medición histórica (conservada en Git) mostró que la pantalla presentaba
 **70 pedidos** como "colgados" (a medias) que en realidad nunca pasaron por esta herramienta
 — el usuario carga el tracking a mano en WooCommerce por costumbre, y la versión vieja de
 `GET /seguimientos` infería "a medias" mirando la meta `_andreani_tracking` en pedidos
@@ -971,6 +971,10 @@ preparación:
 - La elección persistida es la que usan `GET /etiquetas` y `GET /seguimientos` para esa
   preparación, en vez de la regla automática de `normalizarEnvio` (envío si tiene
   `address_1`, si no facturación).
+- Para `canal:'ml'`, `/iniciar` verifica orden `paid`, shipment `ready_to_ship` y logística
+  local antes de crear. Si una respuesta 200 confirma cualquier condición no elegible,
+  responde 409 y no crea preparación; errores o respuestas no concluyentes conservan el
+  comportamiento fail-open de error del endpoint y no crean una preparación parcialmente.
 
 ### GET /api/preparacion/vinculos/:clave (Fase 4: detección de pedidos del mismo comprador)
 Consulta sugerencias pendientes de vínculos para un pedido. Devuelve las filas de
@@ -1036,7 +1040,7 @@ vinculados. Actualiza el estado del vínculo y guarda quién y cuándo lo decidi
   cambia estado del pedido, nada. Es solo para que el operario sepa que dos pedidos
   vienen de la misma persona y puede organizarlos juntos si quiere.
 
-## Notificaciones ML: preguntas y mensajes sin responder (`/api/notificaciones-ml`)
+## Notificaciones ML: preguntas, mensajes y reclamos pendientes (`/api/notificaciones-ml`)
 
 Permiso `notificaciones-ml` (binario, `niveles:false`, igual que `etiquetas`). Alcance
 decidido con el usuario (2026-08-26): solo listar con "hace cuánto" y link a Mercado Libre
@@ -1048,26 +1052,139 @@ qué procesar vive en `POST /api/ml/notificacion` (`server.js`), no en el panel.
 `/orders/{id}`, no el barrido paginado `/orders/search`, que queda solo en el cron cada 10 min
 como respaldo), `orders_v2` (desde A.1: camino puntual a `pedidos_cache`, igual que `orders`,
 pero **no** dispara `syncOrdenMlPuntual` — eso sigue siendo solo para `orders`), `questions` y
-`messages`; el resto de los topics (`shipments`, `claims`, `orders_feedback`, `items`,
-`invoices`) se reciben y se descartan en silencio hasta que se sume su función.
+`messages` y `claims`; cualquier topic válido no implementado (`shipments`, `orders_feedback`,
+`items`, `invoices` u otro futuro) se recibe como `audit-only` y nunca se registra como
+`projected`.
+
+### POST /api/ml/notificacion
+
+Webhook público de MercadoLibre. El envelope debe incluir `topic`, `resource` y `user_id`. La cuenta se valida contra
+`ML_USER_ID`; un envelope inválido responde `400`. Una cuenta distinta responde `200 {ok:true, ignored:true}` sin persistir nada (fail-safe: evita saturación de `integration_events`
+por tráfico de cuentas ajenas no autenticadas, y no es reintentable). Los envelopes aceptados
+persisten `integration_events` y su primer `integration_job` en la misma transacción antes del
+ACK: responden siempre `200` (ML documenta 200 como único ACK válido), distinguiendo eventos nuevos y duplicados únicamente en el body: `{ok:true, duplicate:false}` para eventos nuevos durables y encolados, `{ok:true, duplicate:true}` para duplicados conocidos. Responden `503` si no se pueden
+persistir. Un envelope válido exige `ML_USER_ID` configurado; sin él el endpoint responde `503`.
+La deduplicación incluye topic, acción, versión, recurso, cuenta ML e identificador de
+notificación (o un marcador explícito cuando ML no lo envía); la correlación es por evento y
+recurso.
+El procesamiento posterior conserva el comportamiento fail-open de `orders`: una falla de
+sincronización no cambia el ACK ni bloquea otros canales.
+
+Los jobs de `claim.project` y `question.project` son consumidos por el worker durable de
+`integration_jobs`, con lease, reintentos con backoff y `dead_lettered` al agotar intentos o
+ante tipos no soportados. Sus proyecciones consultan el recurso autoritativo de ML desde el
+worker usando `mlCfg`; si falla, el job es reintentable y el evento no se marca completado.
+`reprocesarJob(db, jobId)` reabre una fila DLQ para operación administrativa y actualiza job,
+evento e historial en una transacción. Cada reclamación usa un token de lease único además del
+worker.
+
+### POST /api/admin/integration-jobs/:id/reprocess (**ADMIN-ONLY**)
+Reintenta un job que se encuentra en Dead Letter Queue (DLQ), reabriendo la fila para que el
+worker lo procese nuevamente. Requiere `requireAdmin` (solo administradores).
+
+- Request: sin body. `:id` es el `job_id` numérico de `integration_jobs`.
+- Response 202 (éxito): `{ "ok": true, "reprocessed": true }` — el job fue reabierto y será
+  procesado en el próximo ciclo del worker.
+- Response 401 (sin sesión): `{ "ok": false, "error": "..." }` — la sesión no es válida o falta
+  autenticación.
+- Response 403 (no-admin): `{ "ok": false, "error": "Requiere administrador" }`.
+- Response 404 (no encontrado): `{ "ok": false, "error": "job DLQ no encontrado" }` — el
+  `:id` no corresponde a ningún job, o el job no está en DLQ (ya fue procesado o está activo).
 
 ### GET /api/notificaciones-ml/pendientes
-Response 200: `{ ok:true, preguntas:[...], mensajes:[...], total:number }`.
+Response 200: `{ ok:true, preguntas:[...], mensajes:[...], reclamos:[...], reclamos_sin_confirmar:[...], total:number }`.
 - `preguntas`: filas de `ml_preguntas` con `estado='UNANSWERED'`, ordenadas por
   `fecha_creacion ASC` (más vieja primero — la más urgente arriba).
 - `mensajes`: filas de `ml_mensajes` con `respondido_en IS NULL`, mismo orden.
+- `reclamos`: filas de `ml_reclamos` con `cerrado_en IS NULL` y `consultado_en_ml = 1`,
+  mismo orden. Un estado `unknown` puede aparecer si ML respondió 200 sin `status`; las filas
+  `sin_consultar` creadas por fail-open solo aparecen en `reclamos_sin_confirmar`.
 
 ### GET /api/notificaciones-ml/count
 Conteo liviano para el aviso del Home (no trae las filas). Response 200:
-`{ ok:true, preguntas:number, mensajes:number, total:number }`.
+`{ ok:true, preguntas:number, mensajes:number, reclamos:number, reclamos_sin_confirmar:number, total:number }`.
 
 ### Ingesta (interna, disparada por el webhook — no expuesta por HTTP)
-`ingerirPregunta(db, mlCfg, resource)` y `ingerirMensaje(db, mlCfg, resource)` en
-`routes/notificacionesMl.js`. Ambas son **fail-open**: si la llamada a ML falla, no se
-reintenta ni se bloquea nada más del webhook — la próxima notificación de ese mismo recurso
-corrige el estado. `ingerirMensaje` acepta tanto una respuesta en array como un objeto único
-de ML (el shape exacto de `resource` para `messages` no está confirmado en producción
-todavía — revisar contra la primera notificación real que llegue).
+`ingerirPregunta(db, mlCfg, resource)`, `ingerirMensaje(db, mlCfg, resource)` e
+`ingerirReclamo(db, mlCfg, resource, originalResource)` en `routes/notificacionesMl.js`.
+
+#### P0.1: Reclamos reales de MercadoLibre (2026-08-28)
+
+**Topics soportados**: `topic='claims'` (legado) y `topic='post_purchase'` con `action='claims'` y
+`resource` conteniendo `/claims/{id}`. El cron legacy `reintentarReclamosSinConsultar` ya no se
+ejecuta: los reintentos ocurren exclusivamente mediante `integration_jobs` durable.
+
+**Recursos soportados** (extracto de la URL del webhook o del envelope):
+- `/claims/{id}` (legado)
+- `/v1/claims/{id}` (intermedio)
+- `/post-purchase/v1/claims/{id}` (recurso del topic `post_purchase`; el envelope usa
+  `actions: ['claims']`)
+
+Independientemente del path de entrada, el backend siempre consulta el **endpoint vigente**
+`GET /post-purchase/v1/claims/{id}` de ML para obtener el dato fresco.
+
+**Estados reales**: `status` toma valores `'opened'` (reclamo abierto) o `'closed'` (resuelto).
+No se usa `stage` como fallback. Estados desconocidos se conservan tal cual — un reclamo no se
+marca como `cerrado_en` a menos que `status === 'closed'` explícitamente.
+
+**Campos persistidos**: `type`, `reason_id`, `resource_id` (nuevos en esta ronda) si ML los
+proporciona; `null` en caso contrario.
+
+**Idempotencia**: si un reclamo ya está cerrado (`cerrado_en IS NOT NULL`) y llega un evento
+retrasado, el GET autoritativo de ML determina el estado vigente; un `opened` fresco puede
+reabrir un reclamo realmente reabierto. El upsert por `id` evita duplicados y la transición
+`opened→closed` conserva una sola fila.
+
+**Fail-open**: si ML no responde con 200, falla de conexión, recurso no encontrado (404) o
+cualquier otro error, el webhook no se bloquea. Se conserva una fila mínima con
+estado `sin_consultar` para conservar el reclamo para diagnóstico. Las filas sin consultar se
+devuelven siempre en `reclamos_sin_confirmar`, separadas de `reclamos` y `total`, hasta que una
+consulta posterior las confirme. La recuperación ocurre mediante los jobs durables de
+`integration_jobs`, con reintentos y backoff; no existe un cron legacy productivo.
+Se deja un warning seguro
+con claim id y status/error (`[notif-ml] ...`) para trazabilidad.
+
+En `post_purchase` solo se proyecta el shape documentado por MercadoLibre: `resource` con
+`/post-purchase/v1/claims/{id}` y `actions: ['claims']` (o `action: 'claims'`). Otros envelopes
+válidos se conservan como `audit-only`, sin proyección.
+
+Los elementos de `reclamos` en `/pendientes` incluyen, además de las columnas históricas,
+`type`, `reason_id`, `resource_id` y `consultado_en_ml`; pueden ser `null` cuando ML no los proporciona.
+`recurso`
+conserva el recurso original del webhook, mientras `resource_id` es el identificador que entrega
+ML dentro del reclamo.
+
+`reclamos_sin_confirmar` contiene filas durables creadas cuando falló la consulta a ML; no se
+mezclan con `reclamos` ni con `total`, pero se muestran en una línea diagnóstica separada del
+aviso operativo del Home.
+
+## Webhooks de sincronización rápida A.1
+
+### POST `/api/woo/webhook/order`
+
+WooCommerce envía el pedido JSON con `id` y `status` para `order.created` u
+`order.updated`; con `WOO_WEBHOOK_SECRET` configurado exige `x-wc-webhook-signature`
+HMAC-SHA256. Responde `{ ok:true }` inmediatamente. En segundo plano, `lpaandreani`
+queda como `estado_envio='pendiente'`, y `completed`/`enviadoandreani` como `enviado` en
+`pedidos_cache`. Otro estado marca una fila pendiente previa como `no_elegible`: no aparece
+en la cola ni permite iniciar preparación, sin borrar preparaciones o auditoría. Es
+fail-open: un error se registra y el cron vuelve a intentarlo.
+
+### POST `/api/ml/notificacion`
+
+ML envía `{ topic, resource, user_id }`. En `orders` y `orders_v2`, `user_id` debe coincidir
+con `ML_USER_ID` cuando está configurado y `resource` debe contener `/orders/{id}`. Responde
+`{ ok:true }` inmediatamente; `orders` además dispara ML→WC y ambos topics ejecutan la
+consulta puntual. Solo una orden `paid`, con envío `ready_to_ship` y logística local se
+guarda como `pendiente` en `pedidos_cache`; las demás no se agregan. Usuario ajeno, recurso
+inválido y errores de fondo son fail-open: se descartan o registran y el cron recupera.
+
+En preparación ML, la evidencia se clasifica como `elegible`, `no_elegible` o `inconcluso`.
+Una orden paga sin `shipping.id`, o un envío `ready_to_ship` sin `logistic_type`, es
+`inconcluso`: el webhook/sync puntual es fail-open y conserva la fila pendiente para el cron,
+pero `POST /api/preparacion/iniciar` responde 409 y no crea una preparación manual hasta contar
+con evidencia suficiente. Logística externa explícita es `no_elegible`; `self_service`,
+`cross_docking`, `drop_off` y `xd_drop_off` son locales.
 
 ## Contador de Inventario (`/api/inventario`)
 
@@ -1749,8 +1866,7 @@ porque es contrato operativo, no solo de código.
 
 Reemplaza el flujo de "informe" de Cobertura por una herramienta de trabajo: cola priorizada
 por marca, tarjeta de confirmación con candidatos + diff estructurado, multi-publicación y
-solo-ML accionables. Ver `docs/superpowers/plans/2026-08-10-cobertura-accionable.md` y
-`2026-08-10-cobertura-flujo-ux.md`. El motor de matching (candidatos + diff) vive en
+solo-ML accionables. El motor de matching (candidatos + diff) vive en
 `lib/matcherEngine.js` (`construirML`, `candidatosDeWC`, `candidatosParaWC`, `diffTokens`);
 las rutas y la persistencia son este contrato.
 
@@ -2000,8 +2116,7 @@ Permiso único, sesión por usuario, concurrencia optimista, Vínculos absorbido
 Fusiona `cobertura` (WC→ML, `/api/cobertura`), `matcher` (ML→WC, `/api/matcher`) y `vinculos`
 (`public/vinculos/index.html`) en una sola herramienta llamada **Matcher**. **Solo backend en
 esta entrega** — el frontend único (una pantalla, dos direcciones, dirección ML→WC
-deshabilitada como "próximamente") es un despacho aparte contra este contrato. Ver
-`docs/superpowers/plans/2026-08-11-matcher-unificado.md`, sección "Las dos entregas". El
+deshabilitada como "próximamente") es un despacho aparte contra este contrato. El
 motor de matching **no se tocó** (`lib/matcherEngine.js` sigue como estaba — eso es la
 entrega 2).
 
@@ -2458,13 +2573,545 @@ tampoco emite entrada si el ítem no tenía `sku`.
   — `GET /dirigido` da la lista, pero abrir una sesión sobre esa lista puntual todavía se
   hace por categoría/marca/ubicación como cualquier otra.
 
-### GET /api/preparacion/horarios-despacho
-Devuelve la configuración semanal de cortes usada para calcular `fecha_despacho`.
-Respuesta 200: `{ ok: true, data: [{ dia, habilitado, hora_corte }] }`, donde `dia` es 1
-(lunes) a 7 (domingo). Respuesta 500: `{ ok: false, error }`.
+## API Administrativa de Incidentes Operativos (Hito 5)
 
-### PUT /api/preparacion/horarios-despacho
-Actualiza los siete días en una sola operación. Request: `{ horarios: [{ dia, habilitado,
-hora_corte }] }`. Devuelve 200 con la configuración normalizada; devuelve 422 si falta un
-día, hay duplicados, una hora inválida o se deshabilitan todos los días. La fecha sugerida no
-bloquea el despacho manual. Las fechas ML usan la estimación del shipment cuando está disponible.
+Sistema de detección y visualización de fallos de integración (ML/WooCommerce) sin depender
+de que un administrador mire logs de PM2 en vivo. Los incidentes son creados por `routes/ml.js`
+y `routes/woo.js` via `lib/incidentes.js` cuando una integración falla de forma clasificable.
+Estos endpoints son **lectura exclusivamente** — solo para visualización por parte de admins.
+
+### GET /api/incidentes
+Lista incidentes operativos con filtros opcionales y paginación.
+
+- Query parameters (todos opcionales):
+  - `estado`: filtrar por `'activo'` o `'resuelto'`.
+  - `integracion`: filtrar por nombre (ej. `'mercadolibre'`, `'woocommerce'`).
+  - `severidad`: filtrar por `'info'`, `'advertencia'`, o `'critico'`.
+  - `page`: número de página (1-based, default 1); valores ≤0 o no numéricos → default.
+  - `pageSize`: elementos por página (1-100, default 20); valores ≤0 o no numéricos →
+    default; >100 → clampea a 100.
+
+- Response 200 (require admin):
+  ```json
+  {
+    "ok": true,
+    "data": [
+      {
+        "id": 1,
+        "integracion": "mercadolibre",
+        "proceso": "refrescar_publicaciones",
+        "tipo_error": "rate_limit",
+        "severidad": "advertencia",
+        "estado": "activo",
+        "mensaje_tecnico": "HTTP 429",
+        "mensaje_humano": "Rate limit de ML alcanzado",
+        "contexto_json": "{\"status\":429,...}",
+        "contador_repeticiones": 3,
+        "primera_deteccion_en": "2026-08-28T10:00:00.000Z",
+        "ultima_deteccion_en": "2026-08-28T10:15:00.000Z",
+        "ultima_recuperacion_en": null,
+        "resuelto_en": null,
+        "creado_en": "2026-08-28T10:00:00.000Z",
+        "actualizado_en": "2026-08-28T10:15:00.000Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 42
+  }
+  ```
+
+- Response 403: `{ "ok": false, "error": "Requiere administrador" }` — no autenticado o no admin.
+- Response 500: `{ "ok": false, "error": "<mensaje>" }` — error interno.
+
+Notas:
+- `contexto_json` y `mensaje_tecnico` ya están sanitizados por `lib/incidentes.js` (secretos
+  redactados, strings truncados).
+- `clave_dedupe` es un detalle interno de dedupe y no se expone en la API.
+- Ordenado por `ultima_deteccion_en DESC, id DESC` (incidentes más recientes primero).
+- `pageSize` tiene un tope duro de 100 para evitar respuestas gigantes.
+- Valores inválidos de `page`/`pageSize` (strings no numéricos, negativos, muy grandes) no
+  rompen el endpoint — se comportan con gracefully (default/clamping).
+- Query params repetidos (ej. `?estado=activo&estado=resuelto`) se normalizan tomando el
+  último valor; no se devuelve error.
+
+### GET /api/incidentes/:id
+Detalle de un incidente específico, incluyendo su historial completo.
+
+- Path parameter:
+  - `id`: entero positivo, identificador del incidente.
+
+- Response 200 (require admin):
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "id": 1,
+      "integracion": "mercadolibre",
+      "proceso": "refrescar_publicaciones",
+      "tipo_error": "rate_limit",
+      "severidad": "advertencia",
+      "estado": "activo",
+      "mensaje_tecnico": "HTTP 429",
+      "mensaje_humano": "Rate limit de ML alcanzado",
+      "contexto_json": "{\"status\":429,...}",
+      "contador_repeticiones": 3,
+      "primera_deteccion_en": "2026-08-28T10:00:00.000Z",
+      "ultima_deteccion_en": "2026-08-28T10:15:00.000Z",
+      "ultima_recuperacion_en": null,
+      "resuelto_en": null,
+      "creado_en": "2026-08-28T10:00:00.000Z",
+      "actualizado_en": "2026-08-28T10:15:00.000Z",
+      "historial": [
+        {
+          "id": 1,
+          "incidente_id": 1,
+          "evento": "abierto",
+          "detalle_json": "{\"severidad\":\"advertencia\",...}",
+          "creado_en": "2026-08-28T10:00:00.000Z"
+        },
+        {
+          "id": 2,
+          "incidente_id": 1,
+          "evento": "repetido",
+          "detalle_json": "{\"repeticiones\":2,...}",
+          "creado_en": "2026-08-28T10:05:00.000Z"
+        }
+      ]
+    }
+  }
+  ```
+
+- Response 400: `{ "ok": false, "error": "ID inválido" }` — `id` no es un entero positivo.
+- Response 403: `{ "ok": false, "error": "Requiere administrador" }` — no admin.
+- Response 404: `{ "ok": false, "error": "no encontrado" }` — incidente con ese `id` no existe.
+- Response 500: `{ "ok": false, "error": "<mensaje>" }` — error interno.
+
+Notas:
+- `historial` está ordenado cronológicamente (más antiguo primero).
+- `evento` puede ser: `'abierto'` (creación), `'repetido'` (falló de nuevo sin cambio de
+  severidad), `'escalado'` (severidad aumentó), `'resuelto'` (ciclo sano de la integración).
+- `detalle_json` puede ser `null` (ej. en eventos de resolución).
+
+### Diseño de paginación y validación
+- `page` y `pageSize` llegan como **strings** desde `req.query` (Express siempre stringifica
+  query params); se validan con `Number.isSafeInteger` (no `Number.isInteger`) antes de usarse
+  como OFFSET/LIMIT en SQL, rechazando valores muy grandes (1e21) que causarían datatype
+  mismatch en sqlite.
+- Comportamiento fallido → graceful degradation (default/clamping), **no 400** — un cliente que
+  mande `pageSize=abc` obtiene `pageSize=20`, no un error. La validación de segundo nivel en
+  `lib/incidentes.js` garantiza cotas aún si alguien bypassea `routes/incidentes.js`.
+
+### Decisión fail-open: el registro de incidentes nunca bloquea la integración
+Si `abrirOActualizarIncidente` falla (disco lleno, DB bloqueada), devuelve `{ error: true }` sin
+lanzar una excepción. La integración que disparó el incidente (ML/Woo) continúa: el incidente
+no se registró, pero tampoco cortó la sincronización (comentario explícito en `lib/incidentes.js` línea 137-140: "FAIL-OPEN a propósito"). El admin verá un hueco en la línea de
+tiempo (falta un evento), pero el sistema de integraciones no colapsa. Mismo criterio para
+`confirmarCicloSano` — si el registro de la resolución falla, devuelve `{ error: true }` sin
+interrumpir el ciclo exitoso que la llamó.
+
+## Hito 7: Notificaciones Push (iOS, Android, Web)
+
+Infraestructura backend para enviar notificaciones push a dispositivos móviles registrados.
+Contrato con `openapi/mobile-v1.yaml`. Los endpoints móviles implementados se sirven bajo
+`/api/v1/` con `Authorization: Bearer <JWT>`; las rutas `/api/` legacy del panel conservan
+sesión por cookie. El inbox y la lectura operativa de Claims comparten el mismo middleware
+móvil y el permiso `notificaciones-ml`.
+
+### POST /api/v1/auth/login
+Inicia una sesión móvil y liga el refresh token a un dispositivo. El request debe incluir un
+`device_id` vigente del usuario o `platform` + `push_token` para registrar/asociar el dispositivo
+durante el primer login; nunca se emite un refresh token sin dispositivo.
+
+- Request: `{ "username": "juan", "password": "...", "device_id": "12" }` o
+  `{ "username": "juan", "password": "...", "platform": "android", "push_token": "...", "device_name": "..." }`.
+- Response 200: `{ "access_token": "...", "refresh_token": "...", "expires_in": 900, "device_id": "12", "user": { ... } }`.
+- Response 401: credenciales inválidas.
+- Response 422: body inválido o dispositivo ausente/no perteneciente al usuario.
+- Response 429: demasiados intentos fallidos para usuario + IP, o límite agregado de la IP;
+  incluye `Retry-After`. El límite agregado permite 30 fallos entre usuarios antes de aplicar
+  el backoff, para no bloquear a una oficina/NAT por errores legítimos aislados.
+- Response 500: error interno.
+
+La emisión de dispositivo, refresh token y access token se valida y persiste como una sola
+operación: si falla el alta del refresh, no queda un dispositivo parcialmente registrado.
+`device_id` y `platform`/`push_token`/`device_name` son alternativas mutuamente excluyentes;
+combinarlos responde 422 con `error.code = "body_invalido"`.
+
+### POST /api/v1/auth/refresh
+Rota un refresh token vigente y devuelve un nuevo access/refresh token ligado al mismo dispositivo.
+
+- Request: `{ "refresh_token": "..." }`.
+- Response 200: tokens renovados, incluyendo `device_id`.
+- Response 401: refresh token inválido, expirado o revocado (incluye logout y revocación del dispositivo).
+- Response 422: `{ "error": { "code": "body_invalido", "message": "refresh_token es requerido" } }` — falta `refresh_token`.
+- Response 500: error interno.
+
+### POST /api/v1/auth/logout
+Revoca la sesión móvil actual. Requiere Bearer access token y el refresh token correspondiente
+en el body; ambos deben pertenecer a la misma sesión.
+
+- Request: `{ "refresh_token": "..." }`.
+- Response 200: `{ "ok": true }`.
+- Response 401: access/refresh token inválido, no correspondiente o ya revocado.
+- Response 422: falta `refresh_token`.
+- Response 500: error interno.
+
+### POST /api/v1/devices
+Registra un dispositivo para recibir notificaciones push.
+
+- Request:
+  ```json
+  {
+    "platform": "ios" | "android" | "web",
+    "push_token": "string (token del proveedor APNs/FCM)",
+    "device_name": "string (opcional, ej. 'iPhone de Juan' o 'Navegador')"
+  }
+  ```
+
+- Response 200:
+  ```json
+  {
+    "id": "1",
+    "platform": "ios",
+    "device_name": "iPhone de Juan",
+    "creado_en": "2026-08-28T15:30:00Z"
+  }
+  ```
+
+- Response 401: No autenticado (sin Bearer JWT válido).
+- Response 422:
+  - `{ "error": { "code": "platform_invalido", "message": "..." } }` — `platform` no es uno de: 'ios', 'android', 'web'.
+  - `{ "error": { "code": "push_token_invalido", "message": "..." } }` — `push_token` vacío o no string.
+- Response 500: Error interno.
+
+Notas:
+- Solo usuarios autenticados pueden registrar dispositivos (Bearer JWT válido).
+- Cada usuario es dueño de sus propios dispositivos; no puede ver ni modificar los de otros.
+- Si el mismo `push_token` ya está activo para el mismo usuario, se actualiza su fila activa;
+  si la fila anterior está revocada, el re-registro crea una fila activa nueva y conserva el
+  historial revocado.
+- Un usuario puede tener múltiples dispositivos simultáneamente (ej. iPhone + iPad).
+- **Reasignación de tokens (ALTO 1, 7ª pasada revisor):** a lo sumo puede haber una fila ACTIVA (`revocado_en IS NULL`) por token; registrar un `push_token` que otro usuario tiene activo lo REASIGNA: se revoca la fila del usuario anterior y se crea una fila NUEVA para el usuario actual. **Consecuencia para el usuario anterior:** deja de recibir notificaciones push en silencio (su dispositivo queda activo en la app, pero el token es inválido en el backend). Las filas revocadas persisten como historial puro — un token revocado que se re-registra crea una fila nueva, no reutiliza la vieja.
+
+### DELETE /api/v1/devices/{id}
+Revoca/elimina un dispositivo, deteniendo futuras notificaciones hacia ese token.
+
+- Path parameter: `id` (string, ID del dispositivo a revocar).
+- Request: sin body.
+
+- Response 200: `{ "ok": true }`
+
+- Response 401: No autenticado.
+- Response 403: `{ "error": { "code": "sin_permiso", "message": "..." } }` — el dispositivo no pertenece al usuario autenticado.
+- Response 422: `{ "error": { "code": "id_invalido", "message": "El ID del dispositivo debe ser un entero positivo" } }` — el path no contiene un ID entero completo.
+- Response 404: `{ "error": { "code": "no_encontrado", "message": "..." } }` — el dispositivo con ese ID no existe.
+- Response 500: Error interno.
+
+Notas:
+- Revoca seteando la columna `revocado_en` (soft-delete, registro persiste para auditoría).
+- El token queda inactivo y no recibe más notificaciones.
+- Todos los refresh tokens ligados al dispositivo se revocan en la misma transacción.
+
+### GET /api/v1/notifications
+Lista notificaciones del usuario autenticado, paginadas por cursor.
+
+- Query params:
+  - `cursor` (opcional): cursor de paginación (opaco, devuelto en `next_cursor` de respuesta anterior).
+
+- Response 200:
+  ```json
+  {
+    "items": [
+      {
+        "id": "1",
+        "tipo": "nuevo",
+        "titulo": "⚠️ Incidente en ML",
+        "cuerpo": "Un error fue detectado en la integración.",
+        "deep_link": "incidentes/123",
+        "leida": false,
+        "creado_en": "2026-08-28T15:00:00Z"
+      }
+    ],
+    "next_cursor": "base64url(ISO_TIMESTAMP:id)-or-null"
+  }
+  ```
+
+- Response 401: No autenticado.
+- Response 403: Sin permiso `notificaciones-ml`.
+- Response 422: Cursor inválido o mal formado.
+- Response 500: Error interno.
+
+Notas:
+- Solo el usuario autenticado ve sus propias notificaciones.
+- Paginación por cursor (no offset), más eficiente en bases de datos.
+- Ordenadas por `creado_en DESC` (más recientes primero).
+- Cada notificación tiene un `deep_link` a un detalle exacto (para incidentes: `incidentes/{id}`); si el contexto trae `correlation_id`, se agrega como query string (`?correlation_id=...`).
+- `leida` es un booleano (no entero).
+- Si no hay más resultados, `next_cursor` es `null`.
+
+### POST /api/v1/notifications/{id}/read
+Marca una notificación como leída.
+
+- Path parameter: `id` (string, ID de la notificación).
+- Request: sin body.
+
+- Response 200: `{ "ok": true }`
+
+- Response 401: No autenticado.
+- Response 403: Sin permiso `notificaciones-ml`.
+- Response 422: `{ "error": { "code": "id_invalido", "message": "El id de la notificación debe ser un entero positivo" } }` — el path no contiene un ID entero completo.
+- Response 404: `{ "error": { "code": "no_encontrado", "message": "..." } }` — la notificación no existe o no pertenece al usuario.
+- Response 500: Error interno.
+
+Notas:
+- Idempotente: marcar leída una notificación ya leída no es error, devuelve 200 igual.
+- Solo el propietario de la notificación puede marcarla como leída.
+
+### Arquitectura: Desacoplamiento entre envío y visualización
+
+Las notificaciones son **dos tablas separadas**:
+
+1. **`notificaciones_enviadas`** (log de intentos de delivery):
+   - Registra cada intento de envío a cada dispositivo.
+   - Estados: `'pendiente'`, `'enviado'`, `'simulado'`, `'fallido'`, `'agotado'` (supera reintentos).
+   - Reintentos con backoff creciente (2 min, 10 min, 30 min; máx. 3 reintentos por dispositivo).
+   - Si se agotan los reintentos, marcado como `'agotado'` para evitar re-procesamiento.
+   - Contiene deduplicación: tipos 'nuevo' y 'resuelto' tienen una fila única por dispositivo e incidente;
+     'reaviso' crea una fila por ciclo exitoso, y reutiliza la fila fallida/agotada del ciclo anterior
+     cuando corresponde un nuevo intervalo.
+
+2. **`notificaciones_usuario`** (lo que ve el usuario en la app):
+   - Registra notificaciones VISIBLES para el usuario.
+   - Independiente del delivery: aunque un `notificaciones_enviadas` tenga estado='fallido',
+     la notificación sigue en `notificaciones_usuario`.
+   - Campo `leida` para tracking de lo que el usuario vio.
+
+**Separación consciente:** un error de delivery a FCM (proveedor caído, token inválido) no borra
+la notificación de la vista del usuario. El usuario sigue siendo consciente de que algo pasó,
+aunque no le llegara el push en el dispositivo.
+
+### Worker: `procesarNotificacionesPush`
+
+Cron cada 2 minutos (configuración en `server.js` con `cron.schedule('*/2 * * * *')`).
+
+**Lógica (dos pasos independientes):**
+
+1. **Paso FEED** — por cada incidente:
+   - Busca incidentes en estado 'activo' sin notificación 'nuevo' en el feed → envía 'nuevo'.
+   - Busca incidentes en estado 'activo' con última notificación en el feed > intervalo de reaviso → envía 'reaviso'.
+     - Intervalo de reaviso: configurable via `REAVISO_INCIDENTE_MIN` (default 30 min).
+   - Busca incidentes en estado 'resuelto' sin notificación 'resuelto' en el feed → envía 'resuelto'.
+
+2. **Paso REINTENTOS** — independiente del feed, busca filas de `notificaciones_enviadas` con:
+   - `estado = 'fallido'` cuyo backoff ha vencido.
+   - Reintentar el envío físico a cada dispositivo, sin importar si el feed ya tiene la notificación creada.
+
+**Backoff creciente en reintentos de push:**
+- Si intento 1 falla: reintentar después de 2 min.
+- Si intento 2 falla: reintentar después de 10 min.
+- Si intento 3 falla: reintentar después de 30 min.
+- Si intento 4 falla: marcar dispositivo como 'agotado', no reintentar más.
+
+**Semántica de 'agotado':**
+El primer envío y hasta tres reintentos son cuatro intentos físicos como máximo. Si el cuarto
+intento falla, la fila queda con `intentos = 4`; en el siguiente barrido se marca
+`estado = 'agotado'` sin otro envío. Es terminal para los tipos de ciclo único `nuevo` y
+`resuelto`. Para `reaviso`, cada intervalo vencido inicia un ciclo nuevo: el worker puede
+reutilizar una fila `fallido`/`agotado`, ponerla en `pendiente` y volver a intentar; un
+`agotado` de un ciclo anterior no bloquea el próximo reaviso. El feed mantiene una sola fila
+visible por usuario, tipo e incidente y actualiza su fecha/cuerpo.
+
+**Destinatarios:** usuarios activos con permiso `notificaciones-ml` y
+`preferencias_notificacion.incidentes_criticos = 1` (ausencia de fila equivale a habilitado).
+La app consulta/actualiza esa preferencia en `GET/PATCH /api/v1/notifications/preferences`.
+
+**Proveedor y dispositivo:** `PUSH_PROVIDER=mock` es solo desarrollo y persiste `simulado`;
+nunca se presenta como entrega enviada. `PUSH_PROVIDER=fcm` usa FCM HTTP v1 y requiere
+credenciales seguras de entorno. Tokens y payloads no se escriben en logs. Cada delivery se
+reserva antes del side effect mediante una clave de idempotencia; una reserva `pendiente` queda
+en estado incierto y no se reenvía automáticamente si no se pudo persistir el resultado. Cada
+dispositivo activo pertenece a un usuario y tiene un token activo único; reasignar ese token
+revoca la fila anterior y sus refresh tokens, mientras DELETE revoca el dispositivo y todos sus
+refresh tokens en una única transacción.
+
+**FAIL-OPEN:** cualquier error en el envío del worker (proveedor caído, DB busy) nunca lanza
+una excepción. El worker continúa procesando otros incidentes. Errores se loguean en consola.
+
+### Decisión de diseño: Opción (c) preferida
+
+El worker es un **cron periódico que escanea** `incidentes_operativos` (no requiere tocar
+`abrirOActualizarIncidente`/`confirmarCicloSano`). Esto permite:
+- **Desacoplamiento total:** el ciclo de sync ML/Woo + incidentes nunca aguarda al worker de push.
+- **Independencia de errores:** un fallo del proveedor push (FCM timeout) no bloquea nada.
+- **Simplicidad:** sin callbacks, sin wiring, sin threads adicionales (el cron es async, mismo
+  hilo que Express).
+- **Compatibilidad:** cero cambios en `lib/incidentes.js`, la librería productiva.
+
+Las otras opciones consideradas:
+- (a) Wrapper en los callers (`routes/woo.js`, `routes/matcher.js`) → requería modificar rutas
+  ya estables y rechazado en revisión por acoplamiento innecesario.
+- (b) Callback opcional → parámetro nuevo en firmas de funciones, mayor complejidad, sin
+  beneficio claro vs. (c).
+
+## Estado de conformidad Hito 7
+
+Las rutas móviles implementadas, su autenticación y sus tipos de notificación quedan alineados
+con `openapi/mobile-v1.yaml`. El panel web conserva su contrato legacy y sus cookies.
+
+### Contrato implementado
+
+`Notification.tipo` usa `nuevo`, `reaviso` y `resuelto`, igual que el worker y el OpenAPI.
+Los paths implementados son `/api/v1/devices`, `/api/v1/notifications` y sus subrutas,
+protegidos por Bearer JWT. Los paths restantes del OpenAPI son contratos de entregas posteriores.
+
+### Refresh y revocación
+
+`mobile_refresh_tokens` guarda solo hashes, rota el token en una transacción y lo liga al
+dispositivo. DELETE revoca dispositivo y refresh tokens asociados atómicamente.
+
+### Configuración
+
+La API móvil usa JWT de acceso con 15 minutos de vida y errores `{error:{code,message}}`.
+La producción debe aportar `MOBILE_JWT_SECRET` (mínimo 32 caracteres) y credenciales FCM fuera
+del repositorio. `PUSH_PROVIDER=mock` solo registra `simulado`, nunca una entrega enviada.
+
+La app debe consumir `/api/v1` con `Authorization: Bearer <access_token>`; el refresh token
+solo se envía a `/api/v1/auth/refresh` y `/api/v1/auth/logout`.
+
+## U0.C — Contrato móvil congelado para Inventario y Preparación
+
+Esta sección define el contrato versionado que consumirán App 1 (Preparación) y App 2
+(Inventario). La especificación formal está en `openapi/mobile-v1.yaml`. Las rutas móviles
+se sirven bajo `/api/v1` cuando exista el adaptador correspondiente; mientras tanto, el
+backend vigente continúa exponiendo las rutas legacy indicadas en cada fila.
+
+### Estado de implementación y mapa de adaptadores
+
+| Recurso móvil | Contrato `/api/v1` | Implementación actual | Estado |
+| --- | --- | --- | --- |
+| Plan, sesiones, detalle y escaneos de Inventario | `/inventory/today`, `/inventory/sessions`, `/inventory/sessions/{id}`, `/inventory/sessions/{id}/scans` | `/api/inventario/plan-hoy`, `/api/inventario/sesiones`, `/api/inventario/sesiones/:id`, `/api/inventario/sesiones/:id/escanear` | Adaptador pendiente |
+| Cierre, corrección y diferencias de Inventario | `/inventory/sessions/{id}/close`, `/inventory/sessions/{id}/items/{itemId}`, `/inventory/differences`, `/inventory/differences/{id}/history` | `/api/inventario/sesiones/:id/confirmar`, `/cerrar-sin-stock`, `/api/inventario/sesiones/:id/items/:itemId`, `/api/inventario/diferencias/*` | Adaptador pendiente |
+| Ubicaciones y trabajos de etiquetas | `/inventory/locations`, `/inventory/label-jobs` | `/api/inventario/ubicaciones`; `/api/preparacion/etiquetas` (`routes/preparacion.js:757`) | Adaptador pendiente |
+| Cola y detalle de Preparación | `/preparation/queue`, `/preparation/{id}` | `/api/preparacion/pendientes`, `/api/preparacion/:id` | Adaptador pendiente |
+| Toma, escaneo, confirmación manual y evidencia | `/preparation/{id}/take`, `/preparation/{id}/scans`, `/preparation/{id}/items/{itemId}/confirm-manual`, `/preparation/{id}/evidence` | No hay toma móvil exclusiva; `/api/preparacion/:id/escanear`, `/item/:itemId/confirmar-manual` y `/api/preparacion/:id/foto` | Adaptador pendiente |
+| Finalización, despacho e incidencias | `/preparation/{id}/complete`, `/preparation/{id}/dispatch` | `/api/preparacion/:id/completar`, `/api/preparacion/seguimientos/:wcOrderId`; el despacho/incidencia unificado aún no existe | Adaptador pendiente |
+| Trabajos de etiquetas de Preparación | `/preparation/label-jobs` | `/api/preparacion/etiquetas` (`routes/preparacion.js:757`) | Adaptador pendiente |
+
+La base URL del contrato es `/api/v1`; por eso los paths relativos `/inventory/*` y
+`/preparation/*` se sirven como `/api/v1/inventory/*` y `/api/v1/preparation/*`. No se deben interpretar
+como
+rutas ya disponibles: `x-implementation-status: adapter-pending` en OpenAPI es obligatorio
+hasta que un adaptador real sea implementado y sus gates vuelvan a ejecutarse. La app no
+debe llamar las rutas legacy directamente como solución permanente.
+
+Los contratos móviles heredados que también aparecen en OpenAPI están marcados explícitamente
+como `x-implementation-status: adapter-pending`: `/products/lookup` no tiene hoy un buscador
+legacy equivalente (el único endpoint parecido es `/api/cobertura/productos/:id_woo/buscar-ml`,
+que requiere otro identificador y finalidad), por lo que debe implementarse un adaptador de
+catálogo; `/stock/adjustments` no tiene una ruta legacy única y se compone actualmente de
+`POST /api/inventario/sesiones/:id/confirmar` y `POST /api/inventario/diferencias/:id/aprobar`,
+por lo que también requiere un adaptador explícito; `/orders` se alimenta del endpoint legacy de pedidos y `/today` sigue siendo un agregado
+pendiente sobre sus fuentes legacy. Estos mapeos son informativos y no habilitan el consumo
+directo de rutas legacy desde la app.
+El detalle móvil de pedidos (`GET /api/v1/orders/{id}`) también permanece pendiente:
+se adapta temporalmente desde `GET /api/pedidos/:id` según `routes/pedidos.js`. Hasta
+que exista ese adaptador, no debe considerarse una ruta móvil operativa.
+
+### Convenciones comunes
+
+- Autenticación: `Authorization: Bearer <access_token>` y permiso mínimo del módulo. El
+  servidor debe volver a comprobar el permiso en cada request; nunca confiar solo en la
+  visibilidad de la pantalla.
+- Errores: `{ "error": { "code": "...", "message": "...", "details": {} } }`. `message`
+  es seguro para mostrar; `details` puede incluir datos de recuperación, pero nunca secretos,
+  tokens ni payloads completos de MercadoLibre/WooCommerce.
+- Mutaciones reintentables: header obligatorio `Idempotency-Key` con UUID v4. El mismo UUID
+  y la misma intención devuelve el resultado original; reutilizarlo con otra intención es
+  error `409` (`idempotency_key_reused`).
+- Concurrencia: toda edición que parte de una lectura incluye `expected_version` en el body.
+  Una versión vieja devuelve `409` (`version_conflict`) con la versión actual y no sobrescribe
+  datos. La app debe recargar y mostrar el conflicto, nunca aplicar last-write-wins silencioso.
+- Listados: `cursor` es opaco, `limit` queda entre 1 y 100 (por defecto 20) y la respuesta
+  siempre tiene `{ "items": [], "next_cursor": null }` cuando no quedan resultados. No se
+  usa `offset` en el contrato móvil.
+- Conectividad: Preparación puede cachearse para lectura, pero todas sus mutaciones requieren
+  red. Inventario puede conservar una cola offline cifrada y acotada por siete días; solo se
+  reintentan mutaciones idempotentes y el servidor decide los conflictos.
+
+### Inventario — reglas verificables
+
+`POST /api/v1/inventory/sessions` recibe una o más categorías, una o más marcas, o
+`ubicacion_id`; puede combinar categorías y marcas, pero no combina ubicación con filtros ni
+acepta un alcance vacío.
+Al abrir, el alcance queda congelado. La respuesta expone `estado`, `categorias`, `marcas` y
+la ubicación, y un `409` informa si el alcance se solapa con otra sesión.
+
+`GET /api/v1/inventory/sessions/{id}` devuelve `items`, `pendientes` y `resumen`. Cada ítem
+conserva `estado_codigo`: `ok`, `fuera_de_alcance`, `sin_asociar` o `desconocido`. Un código
+desconocido o sin asociar bloquea el cierre hasta asociarlo o quitarlo; estar fuera de alcance
+es un aviso y no descarta el conteo.
+
+`POST /api/v1/inventory/sessions/{id}/scans` unifica escaneo y asociación, pero el adaptador
+debe conservar la semántica real de `/escanear` y `/asociar`, incluido el conflicto explícito
+al reemplazar un GTIN existente. `close` debe conservar el ajuste por delta contra stock
+live, el aislamiento de fallos por ítem y los resultados `ajustados`/`fallidos`; nunca debe
+declarar éxito global si hay ítems sin ajustar.
+
+`GET /api/v1/inventory/differences/{id}/history` devuelve el historial completo paginado de
+creación, cambios, decisiones y ajustes de una diferencia.
+
+Las ubicaciones se consultan con `cursor` y `limit`, y siempre devuelven `items` y `next_cursor`.
+El mismo recurso permite crear una ubicación nueva o mapear SKUs a una existente; ambas mutaciones
+requieren `Idempotency-Key` y permiso de administrador.
+
+El descarte de una sesión requiere enviar `expected_version` en el body, además de
+`Idempotency-Key`; una versión obsoleta devuelve `409` sin sobrescribir la sesión.
+
+Las decisiones sobre diferencias (`approve`, `reject`, `discard`) requieren permiso de
+administrador cuando impliquen aprobar un sobrante grande. La app debe mostrar claramente
+los estados vacío, error recuperable, reintento, conflicto `409`, código desconocido,
+pendientes de stock y sesión ya cerrada.
+
+### Preparación — reglas verificables
+
+La cola usa la fuente local de pedidos y debe conservar `canal`, `pack_id` cuando exista,
+estado, comprador y datos de envío sin inventar información ausente. `take` es un contrato
+futuro de toma exclusiva; mientras no haya adaptador, no se debe simular una asignación en el
+cliente.
+
+El recurso resumido de Preparación expone `id`, `canal`, `estado`, `pack_id` (nullable cuando
+no existe, como en pedidos web) y `envio`. `envio` conserva el shape normalizado de la ruta
+legacy (`pedido`, destinatario, dirección, localidad/provincia, CP, teléfono, email, DNI/CUIT
+y notas); los valores faltantes llegan vacíos y no se inventan. Los campos estructurales del
+recurso son obligatorios en el contrato, aunque sus valores puedan ser vacíos o `null` cuando
+la fuente no los proporciona.
+
+Los escaneos devuelven `match`, `no_coincide` o `sobrante`. La confirmación manual móvil se
+expone como `POST /api/v1/preparation/{id}/items/{itemId}/confirm-manual` y exige un
+motivo (`codigo_ilegible`, `sin_etiqueta` u `otro`; cuando es `otro`, `detalle_texto` es
+obligatorio). La
+evidencia se acepta como multipart y conserva estados de cola (`pendiente`, `procesando`,
+`listo`, `error`) para permitir reintento visible.
+
+`complete` debe respetar faltantes, fotos requeridas, delegación a depósito y los estados
+`pendiente_deposito`, `completada`, `despachada_sin_verificar` y
+`cerrada_sin_evidencia`. `dispatch` recibe obligatoriamente `expected_version` y un discriminador
+`tipo` (`tracking` o `incidencia`); debe distinguir seguimiento de incidencia y nunca afirmar
+un tracking confirmado si la respuesta de Woo es incierta. Todos los estados de carga, vacío,
+sin red, permiso insuficiente, conflicto y reintento forman parte del handoff de App 1.
+
+### Permisos y handoff a App 1/App 2
+
+| Capacidad | Inventario | Preparación | Notas |
+| --- | --- | --- | --- |
+| Consultar cola/plan/detalle | permiso de inventario | permiso de preparación | Revalidar en backend |
+| Mutar sesión, escanear, evidencias | permiso de inventario | permiso de preparación | UUID de idempotencia |
+| Aprobar/rechazar diferencias | administrador | no aplica | El cliente no puede elevar permisos |
+| Crear/mapear ubicaciones | administrador | no aplica | Backend actual limita ambas operaciones |
+| Tomar, completar y despachar | no aplica | permiso de preparación | `expected_version` y `409` |
+
+App 1 debe generar su cliente TypeScript desde OpenAPI y probar conexión obligatoria para
+mutaciones. App 2 debe generar el mismo cliente, implementar la cola offline cifrada de siete
+días y hacer visible la resolución de conflictos. Fixtures, estados y criterios E2E deben
+derivarse de los schemas, no de respuestas inventadas por cada pantalla.

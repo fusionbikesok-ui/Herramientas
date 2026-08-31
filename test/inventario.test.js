@@ -102,6 +102,7 @@ describe('GET /api/inventario/alcance-opciones', () => {
     insertProducto(db, { id_woo: 3, sku: 'FB-3', marca: 'Continental', categorias_json: '["Cubiertas"]' });
 
     const res = await request(buildApp(db)).get('/api/inventario/alcance-opciones');
+    db.close();
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);

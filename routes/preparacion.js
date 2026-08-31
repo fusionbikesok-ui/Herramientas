@@ -11,12 +11,13 @@ import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
+  clasificarElegibilidadMl,
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
-import { calcularFechaDespacho, leerHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment } from '../lib/horariosDespacho.js';
+import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment } from '../lib/horariosDespacho.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -139,10 +140,7 @@ function ensureTables(db) {
     actualizado_en  TEXT NOT NULL
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
-  try { db.prepare('ALTER TABLE pedidos_cache ADD COLUMN fecha_despacho TEXT').run(); } catch (e) {
-    if (!/duplicate column/i.test(e.message)) console.error('ensureTables pedidos_cache.fecha_despacho:', e.message);
-  }
-  try { db.prepare(`CREATE TABLE IF NOT EXISTS despacho_horarios (
+  try { asegurarEsquemaHorarios(db); db.prepare(`CREATE TABLE IF NOT EXISTS despacho_horarios (
     dia INTEGER PRIMARY KEY CHECK (dia BETWEEN 1 AND 7), habilitado INTEGER NOT NULL DEFAULT 0 CHECK (habilitado IN (0,1)),
     hora_corte TEXT NOT NULL DEFAULT '16:00', actualizado_en TEXT NOT NULL
   )`).run(); sembrarHorarios(db); } catch (e) { console.error('ensureTables despacho_horarios:', e.message); }
@@ -181,6 +179,56 @@ function ensureTables(db) {
     creado_en      TEXT NOT NULL
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_eventos_prep ON preparacion_eventos(preparacion_id, id)').run();
+
+  db.prepare(`CREATE TABLE IF NOT EXISTS despacho_controles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    grupo_clave TEXT NOT NULL UNIQUE,
+    estado TEXT NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'escaneado', 'confirmado')),
+    etiqueta_cola_id INTEGER,
+    creado_en TEXT NOT NULL,
+    actualizado_en TEXT NOT NULL,
+    confirmado_por TEXT,
+    confirmado_en TEXT,
+    confirmacion_idempotencia TEXT
+  )`).run();
+  db.prepare(`CREATE TABLE IF NOT EXISTS despacho_escaneos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    control_id INTEGER NOT NULL,
+    preparacion_id INTEGER NOT NULL,
+    codigo TEXT NOT NULL,
+    idempotencia TEXT NOT NULL UNIQUE,
+    usuario TEXT NOT NULL,
+    creado_en TEXT NOT NULL,
+    CHECK (length(trim(codigo)) > 0)
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_despacho_escaneos_control ON despacho_escaneos(control_id, id)').run();
+  db.prepare(`CREATE TABLE IF NOT EXISTS etiquetas_cola (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT NOT NULL, cantidad INTEGER NOT NULL,
+    origen TEXT, sesion_id INTEGER, solicitado_por TEXT, nota TEXT,
+    estado TEXT NOT NULL DEFAULT 'pendiente', creado_en TEXT NOT NULL, impreso_en TEXT,
+    formato_ancho_mm INTEGER NOT NULL DEFAULT 50 CHECK (formato_ancho_mm > 0),
+    formato_alto_mm INTEGER NOT NULL DEFAULT 25 CHECK (formato_alto_mm > 0),
+    tipo_etiqueta TEXT NOT NULL DEFAULT 'interna'
+  )`).run();
+  try { db.prepare('ALTER TABLE despacho_controles ADD COLUMN confirmacion_idempotencia TEXT').run(); } catch (_) {}
+  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_despacho_confirmacion_idempotencia ON despacho_controles(confirmacion_idempotencia) WHERE confirmacion_idempotencia IS NOT NULL').run();
+  for (const ddl of [
+    'ALTER TABLE etiquetas_cola ADD COLUMN formato_ancho_mm INTEGER NOT NULL DEFAULT 50',
+    'ALTER TABLE etiquetas_cola ADD COLUMN formato_alto_mm INTEGER NOT NULL DEFAULT 25',
+    "ALTER TABLE etiquetas_cola ADD COLUMN tipo_etiqueta TEXT NOT NULL DEFAULT 'interna'",
+  ]) { try { db.prepare(ddl).run(); } catch (_) {} }
+
+  // Claim exclusivo de la preparación. Tabla separada para no cambiar el contrato ni
+  // reescribir filas históricas; la PK garantiza que dos operadores no puedan adquirirla
+  // simultáneamente. expires_at se compara como ISO-8601 UTC.
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_claims (
+    preparacion_id INTEGER PRIMARY KEY,
+    usuario        TEXT NOT NULL,
+    claimed_at     TEXT NOT NULL,
+    expires_at     TEXT NOT NULL,
+    renovado_en    TEXT NOT NULL
+  )`).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_claims_expira ON preparacion_claims(expires_at)').run();
 
   // borrado_en: soft-delete de fotos (columna nueva, agregada con try/catch porque SQLite
   // no tiene "ADD COLUMN IF NOT EXISTS" — falla con "duplicate column" si ya existe, y eso
@@ -476,7 +524,61 @@ export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null
   return prepId;
 }
 
-export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuario, detalle }) {
+const CLAIM_TTL_DEFAULT_MS = 15 * 60 * 1000;
+
+function claimTtlMs(cfg) {
+  const configured = Number(cfg?.preparacionClaimTtlMs ?? process.env.PREPARACION_CLAIM_TTL_MS);
+  return Number.isFinite(configured) && configured >= 1000 ? Math.floor(configured) : CLAIM_TTL_DEFAULT_MS;
+}
+
+function claimPreparacion(db, preparacionId, usuario, cfg, timestamp = new Date(), alreadyInTransaction = false) {
+  if (!usuario) return { ok: false, code: 'AUTH_REQUIRED' };
+  const at = timestamp.toISOString();
+  const expires = new Date(timestamp.getTime() + claimTtlMs(cfg)).toISOString();
+  const operation = () => {
+    const actual = db.prepare('SELECT * FROM preparacion_claims WHERE preparacion_id=?').get(preparacionId);
+    if (!actual) {
+      db.prepare(`INSERT INTO preparacion_claims (preparacion_id, usuario, claimed_at, expires_at, renovado_en)
+        VALUES (?,?,?,?,?)`).run(preparacionId, usuario, at, expires, at);
+      return { ok: true, usuario, claimed_at: at, expires_at: expires };
+    }
+    if (actual.usuario !== usuario && actual.expires_at > at) {
+      return { ok: false, code: 'PREPARATION_CLAIMED', claim: actual };
+    }
+    // Mismo usuario: retry idempotente/renovación. Claim vencido de otro usuario también
+    // se puede reutilizar atómicamente; nunca se libera un claim vigente ajeno.
+    const claimedAt = actual.usuario === usuario ? actual.claimed_at : at;
+    db.prepare(`UPDATE preparacion_claims SET usuario=?, claimed_at=?, expires_at=?, renovado_en=?
+      WHERE preparacion_id=?`).run(usuario, claimedAt, expires, at, preparacionId);
+    return { ok: true, usuario, claimed_at: claimedAt, expires_at: expires };
+  };
+  return alreadyInTransaction ? operation() : db.transaction(operation)();
+}
+
+function claimConflict(res, claim) {
+  return res.status(409).json({ ok: false, error: 'La preparación está siendo trabajada por otro operador.', code: 'PREPARATION_CLAIMED', claim: {
+    usuario: claim.usuario, claimed_at: claim.claimed_at, expires_at: claim.expires_at,
+  }});
+}
+
+// Toda mutación operativa debe pertenecer al operador que tomó la preparación.
+// Las lecturas no llaman a este guard. Un claim vencido se puede reclamar de forma
+// explícita (/tomar), pero no habilita silenciosamente una escritura posterior.
+function exigirClaimVigente(db, prep, usuario, res) {
+  const claim = db.prepare('SELECT * FROM preparacion_claims WHERE preparacion_id=?').get(prep.id);
+  if (!usuario) {
+    res.status(409).json({ ok: false, error: 'La preparación requiere una toma vigente.', code: 'PREPARATION_CLAIMED' });
+    return false;
+  }
+  if (!claim || claim.usuario !== usuario || claim.expires_at <= now()) {
+    if (claim && claim.usuario !== usuario && claim.expires_at > now()) return claimConflict(res, claim), false;
+    res.status(409).json({ ok: false, error: 'La preparación no está tomada por este operador o la toma venció.', code: 'PREPARATION_CLAIMED' });
+    return false;
+  }
+  return true;
+}
+
+export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuario, detalle, failClosed = false }) {
   // Fail-open a propósito: el historial de "Actividad" es auxiliar, nunca debe poder
   // frenar la acción real (escanear, subir foto, etc.) que el operario está haciendo.
   try {
@@ -486,6 +588,7 @@ export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuari
     `).run(preparacionId, itemId, tipo, usuario ?? null, JSON.stringify(detalle ?? {}), now());
   } catch (e) {
     console.error('registrarEvento: no se pudo registrar', tipo, e.message);
+    if (failClosed) throw e;
   }
 }
 
@@ -751,8 +854,86 @@ export function preparacionRouter(db, cfg) {
     }
   });
 
+  // Control de despacho: agrupa por pack de ML o por preparación, sin proveedor externo.
+  router.get('/despacho/cola', (req, res) => {
+    const controles = db.prepare(`SELECT d.*, COUNT(e.id) AS escaneos
+      FROM despacho_controles d LEFT JOIN despacho_escaneos e ON e.control_id=d.id
+      WHERE d.estado <> 'confirmado' GROUP BY d.id ORDER BY d.creado_en`).all();
+    res.json({ ok: true, data: controles });
+  });
+
+  router.post('/despacho/:id/escanear', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo, code: 'PREPARACION_CERRADA' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+    const codigo = String(req.body?.codigo || '').trim().toUpperCase();
+    const idempotencia = String(req.get('Idempotency-Key') || req.body?.idempotencia || '').trim();
+    if (!codigo || !idempotencia) return res.status(400).json({ ok: false, error: 'codigo e idempotencia requeridos' });
+    const previoGlobal = db.prepare('SELECT * FROM despacho_escaneos WHERE idempotencia=?').get(idempotencia);
+    if (previoGlobal && previoGlobal.preparacion_id !== prep.id) {
+      return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
+    }
+    const grupo = prep.pack_id || prep.clave;
+    // Alias no permitido: el código esperado es exactamente pack_id o, si no existe, clave.
+    if (codigo !== String(grupo).trim().toUpperCase()) {
+      return res.status(409).json({ ok: false, error: 'el código no coincide con el despacho', code: 'DESPACHO_NO_COINCIDE', match: 'no_coincide' });
+    }
+    const control = db.prepare('INSERT INTO despacho_controles (grupo_clave, creado_en, actualizado_en) VALUES (?,?,?) ON CONFLICT(grupo_clave) DO UPDATE SET actualizado_en=excluded.actualizado_en RETURNING *')
+      .get(grupo, now(), now());
+    const previo = previoGlobal || db.prepare('SELECT * FROM despacho_escaneos WHERE idempotencia=?').get(idempotencia);
+    if (previo && (previo.control_id !== control.id || previo.preparacion_id !== prep.id || previo.codigo !== codigo)) {
+      return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
+    }
+    if (control.estado === 'confirmado') return res.status(409).json({ ok: false, error: 'el despacho ya fue confirmado', code: 'DESPACHO_CONFIRMADO' });
+    if (previo) return res.json({ ok: true, repetido: true, control });
+    db.transaction(() => {
+      db.prepare('INSERT INTO despacho_escaneos (control_id, preparacion_id, codigo, idempotencia, usuario, creado_en) VALUES (?,?,?,?,?,?)')
+        .run(control.id, prep.id, codigo, idempotencia, req.user.username, now());
+      db.prepare("UPDATE despacho_controles SET estado='escaneado', actualizado_en=? WHERE id=? AND estado='pendiente'").run(now(), control.id);
+      registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_escaneo', usuario: req.user.username, detalle: { codigo, grupo_clave: grupo, idempotencia }, failClosed: true });
+    })();
+    res.status(201).json({ ok: true, repetido: false, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id) });
+  });
+
+  router.post('/despacho/:id/confirmar', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo, code: 'PREPARACION_CERRADA' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+    const idempotencia = String(req.get('Idempotency-Key') || '').trim();
+    if (!idempotencia) return res.status(400).json({ ok: false, error: 'Idempotency-Key requerido', code: 'IDEMPOTENCY_KEY_REQUIRED' });
+    const grupo = prep.pack_id || prep.clave;
+    const control = db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo);
+    if (!control) return res.status(409).json({ ok: false, error: 'el despacho requiere al menos un escaneo' });
+    if (!['escaneado', 'confirmado'].includes(control.estado)) return res.status(409).json({ ok: false, error: 'estado de despacho inválido', code: 'DESPACHO_ESTADO_INVALIDO' });
+    const previo = db.prepare('SELECT * FROM despacho_controles WHERE confirmacion_idempotencia=?').get(idempotencia);
+    if (previo && previo.id !== control.id) return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
+    if (control.confirmacion_idempotencia && control.confirmacion_idempotencia !== idempotencia) return res.status(409).json({ ok: false, error: 'el despacho ya fue confirmado con otra idempotencia', code: 'IDEMPOTENCY_CONFLICT' });
+    if (control.estado === 'confirmado') return res.json({ ok: true, repetido: true, control });
+    const ts = now();
+    const confirmar = db.transaction(() => {
+      const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=?, confirmacion_idempotencia=? WHERE id=? AND estado='escaneado' AND (confirmacion_idempotencia IS NULL OR confirmacion_idempotencia=?)")
+        .run(req.user.username, ts, ts, idempotencia, control.id, idempotencia);
+      if (!cambio.changes) return { repetido: true, etiquetaId: db.prepare('SELECT etiqueta_cola_id FROM despacho_controles WHERE id=?').get(control.id).etiqueta_cola_id };
+      const etiqueta = db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, origen, solicitado_por, nota, estado, creado_en, formato_ancho_mm, formato_alto_mm, tipo_etiqueta)
+        VALUES (?,?,?,?,?,'pendiente',?,50,25,'interna')`).run(grupo, 1, 'despacho', req.user.username, JSON.stringify({ formato: '50x25mm', grupo_clave: grupo }), ts);
+      db.prepare('UPDATE despacho_controles SET etiqueta_cola_id=? WHERE id=?').run(etiqueta.lastInsertRowid, control.id);
+      db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
+        VALUES (?,?,?,?,?,?)`).run(prep.id, null, 'despacho_confirmado', req.user.username,
+          JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: etiqueta.lastInsertRowid, formato: '50x25mm' }), ts);
+      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')")
+        .run(prep.id);
+      return { repetido: false, etiquetaId: etiqueta.lastInsertRowid };
+    })();
+    if (confirmar.repetido) return res.json({ ok: true, repetido: true, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id) });
+    res.json({ ok: true, repetido: false, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id), etiqueta_cola_id: confirmar.etiquetaId });
+  });
+
   router.get('/horarios-despacho', (req, res) => {
-    try { return res.json({ ok: true, data: leerHorarios(db) }); }
+    try { return res.json({ ok: true, version: leerVersionHorarios(db), data: leerHorarios(db) }); }
     catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   });
 
@@ -765,11 +946,36 @@ export function preparacionRouter(db, cfg) {
         || !horarios.some((h) => h.habilitado === true)) {
         return res.status(422).json({ ok: false, error: 'horarios inválidos' });
       }
+      const expectedVersion = Number(req.body?.expected_version);
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+        return res.status(422).json({ ok: false, error: 'expected_version inválida' });
+      }
+      const versionActual = leerVersionHorarios(db);
+      if (expectedVersion !== versionActual) {
+        return res.status(409).json({ ok: false, error: 'conflicto de versión', code: 'VERSION_CONFLICT', current_version: versionActual, version: versionActual });
+      }
+      const anteriores = leerHorarios(db);
+      const usuario = req.user?.username ?? req.session?.username ?? null;
+      const siguienteVersion = versionActual + 1;
       const update = db.prepare('UPDATE despacho_horarios SET habilitado=?, hora_corte=?, actualizado_en=? WHERE dia=?');
-      const tx = db.transaction(() => horarios.forEach((h) => update.run(h.habilitado ? 1 : 0, h.hora_corte, now(), Number(h.dia))));
+      const tx = db.transaction(() => {
+        horarios.forEach((h) => update.run(h.habilitado ? 1 : 0, h.hora_corte, now(), Number(h.dia)));
+        const cambiado = db.prepare('UPDATE despacho_horarios_meta SET version=?, actualizado_en=? WHERE id=1 AND version=?')
+          .run(siguienteVersion, now(), expectedVersion);
+        if (cambiado.changes !== 1) throw Object.assign(new Error('conflicto de versión'), { code: 'VERSION_CONFLICT' });
+        db.prepare(`INSERT INTO despacho_horarios_auditoria
+          (usuario, valores_anteriores_json, valores_nuevos_json, version_anterior, version_nueva, creado_en)
+          VALUES (?, ?, ?, ?, ?, ?)`)
+          .run(usuario, JSON.stringify(anteriores), JSON.stringify(leerHorarios(db)), expectedVersion, siguienteVersion, now());
+      });
       tx();
-      return res.json({ ok: true, data: leerHorarios(db) });
-    } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+      return res.json({ ok: true, version: siguienteVersion, data: leerHorarios(db) });
+    } catch (e) {
+      if (e.code === 'VERSION_CONFLICT' || e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED') {
+        return res.status(409).json({ ok: false, error: 'conflicto de versión', code: 'VERSION_CONFLICT', current_version: leerVersionHorarios(db) });
+      }
+      return res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   // ── Estados de pedido vistos en WC (respaldo para confirmar el slug) ──
@@ -811,12 +1017,34 @@ export function preparacionRouter(db, cfg) {
   router.post('/etiquetas/:wcOrderId/lista', (req, res) => {
     const wcOrderId = parseInt(req.params.wcOrderId);
     if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado' });
     const { lista = true, numero_pedido, comprador } = req.body || {};
     const clave = `web:${wcOrderId}`;
-    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, etiqueta_lista, estado, creado_en)
-      VALUES ('web', ?, ?, ?, ?, ?, 'en_preparacion', ?)
-      ON CONFLICT(clave) DO UPDATE SET etiqueta_lista=excluded.etiqueta_lista`)
-      .run(clave, wcOrderId, numero_pedido || String(wcOrderId), comprador || null, lista ? 1 : 0, now());
+    const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(clave);
+    if (existente && !exigirClaimVigente(db, existente, req.user.username, res)) return;
+    let claim;
+    try {
+      db.transaction(() => {
+        db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, etiqueta_lista, estado, creado_en)
+          VALUES ('web', ?, ?, ?, ?, ?, 'en_preparacion', ?)
+          ON CONFLICT(clave) DO UPDATE SET etiqueta_lista=excluded.etiqueta_lista`)
+          .run(clave, wcOrderId, numero_pedido || String(wcOrderId), comprador || null, lista ? 1 : 0, now());
+        const prep = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(clave);
+        claim = claimPreparacion(db, prep.id, req.user.username, cfg, new Date(), true);
+        if (!claim.ok) {
+          const error = new Error('PREPARATION_CLAIMED');
+          error.code = claim.code;
+          error.claim = claim.claim;
+          throw error;
+        }
+      })();
+    } catch (error) {
+      if (error.code === 'PREPARATION_CLAIMED') return claimConflict(res, error.claim);
+      throw error;
+    }
+    if (!claim.ok) return claim.code === 'AUTH_REQUIRED'
+      ? res.status(401).json({ ok: false, error: 'No autenticado' })
+      : claimConflict(res, claim.claim);
     res.json({ ok: true, etiqueta_lista: lista ? 1 : 0 });
   });
 
@@ -936,6 +1164,9 @@ export function preparacionRouter(db, cfg) {
     if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
     const tracking = String(req.body?.tracking || '').trim();
     if (!tracking) return res.status(400).json({ ok: false, error: 'tracking requerido' });
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+    if (prepExistente && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
@@ -983,7 +1214,8 @@ export function preparacionRouter(db, cfg) {
       // operario quedaba sin forma de ubicar en Woo el único pedido que está trabado
       // (hallazgo del revisor). ON CONFLICT también los actualiza: si ya existía una fila
       // vieja con datos desactualizados (ej. el comprador cambió el pedido), se refresca.
-      db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, tracking)
+      const crearYTomar = db.transaction(() => {
+        db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, tracking)
         VALUES ('web', ?, ?, ?, ?, ?, 1, 'en_preparacion', ?, 1, ?)
         ON CONFLICT(clave) DO UPDATE SET numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, localidad=excluded.localidad, woo_paso2_pendiente=1, tracking=excluded.tracking`)
         .run(
@@ -993,6 +1225,15 @@ export function preparacionRouter(db, cfg) {
           actual.data.shipping?.city || actual.data.billing?.city || null,
           now(), tracking,
         );
+        const nueva = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+        if (!nueva) throw new Error('No se pudo crear la preparación');
+        if (!prepExistente) {
+          const claim = claimPreparacion(db, nueva.id, req.user.username, cfg, new Date(), true);
+          if (!claim.ok) throw Object.assign(new Error('No se pudo tomar la preparación'), { claim });
+        }
+        return nueva;
+      });
+      const preparacion = crearYTomar();
 
       // Evento para GET /seguimientos.data.cargados_hoy — se registra ACÁ, apenas el
       // tracking quedó cargado de verdad (Woo ya tiene el tracking guardado y el mail
@@ -1006,7 +1247,7 @@ export function preparacionRouter(db, cfg) {
       // respuesta es 502/colgado, así que el frontend tiene que dejar de incrementarlo
       // localmente y refrescar desde GET /seguimientos (o incrementar también en la rama
       // colgado) para no quedar corrido en -1 el resto del día.
-      const prepId = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`).id;
+      const prepId = preparacion.id;
       registrarEvento(db, {
         preparacionId: prepId, itemId: null, tipo: 'tracking_cargado', usuario: req.user?.username,
         detalle: { tracking },
@@ -1063,6 +1304,8 @@ export function preparacionRouter(db, cfg) {
     if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
     const trackingNuevo = String(req.body?.tracking || '').trim();
     if (!trackingNuevo) return res.status(400).json({ ok: false, error: 'tracking requerido' });
+    const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+    if (prepExistente && !exigirClaimVigente(db, prepExistente, req.user?.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
@@ -1110,9 +1353,18 @@ export function preparacionRouter(db, cfg) {
   router.post('/iniciar', async (req, res) => {
     const { canal, id, direccion_elegida } = req.body || {};
     try {
+      if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
       if (canal === 'web') {
         const resp = await wooFetch(cfg.woo, `/orders/${id}`);
+        const estadosElegibles = [cfg.andreaniStatus || 'lpaandreani', 'completed', cfg.enviadoAndreaniStatus || 'enviadoandreani'];
+        if (!estadosElegibles.includes(resp.data?.status)) {
+          db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+            .run(resp.data?.status || null, now(), `web:${resp.data?.id || id}`);
+          return res.status(409).json({ ok: false, error: 'El pedido ya no está habilitado para preparación.' });
+        }
         const clave = `web:${resp.data.id}`;
+        const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(clave);
+        if (existente && !exigirClaimVigente(db, existente, req.user.username, res)) return;
         const yaConfirmada = db.prepare(
           'SELECT direccion_confirmada_fuente FROM preparaciones WHERE clave=?'
         ).get(clave)?.direccion_confirmada_fuente;
@@ -1141,7 +1393,7 @@ export function preparacionRouter(db, cfg) {
         // si el proceso muere entre los dos statements, la preparación no puede quedar
         // creada sin la decisión ya tomada (revertiría a la regla automática de
         // normalizarEnvio, justo lo que este gate existe para evitar).
-        const prepId = db.transaction(() => {
+        const resultado = db.transaction(() => {
           const id = crearPreparacion(db, {
             canal: 'web', wcOrderId: resp.data.id,
             numeroPedido: String(resp.data.number || resp.data.id),
@@ -1154,8 +1406,15 @@ export function preparacionRouter(db, cfg) {
               direccion_confirmada_en=? WHERE id=?`)
               .run(direccion_elegida, req.user?.username || null, now(), id);
           }
-          return id;
+          const claim = claimPreparacion(db, id, req.user.username, cfg, new Date(), true);
+          if (!claim.ok) {
+            const error = new Error(claim.code);
+            error.claimResult = claim;
+            throw error;
+          }
+          return { id, claim };
         })();
+        const prepId = resultado.id;
 
         // Fase 4: detectar si este pedido tiene vínculos con otros ya preparados.
         const nuevaClave = `web:${resp.data.id}`;
@@ -1168,15 +1427,45 @@ export function preparacionRouter(db, cfg) {
         const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${id}`, null, { manual: true });
         if (resp.status !== 200) throw new Error(`ML order ${resp.status}`);
         const orden = resp.data;
+        const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`ml:${orden.id || id}`);
+        if (existente && !exigirClaimVigente(db, existente, req.user.username, res)) return;
+        if (orden.status !== 'paid') {
+          invalidarCacheMlNoElegible(db, orden.id || id, orden.status);
+          return res.status(409).json({ ok: false, error: 'La orden ML no está paga y no está habilitada para preparación.' });
+        }
+        const shipmentId = orden.shipping?.id;
+        let envio = null;
+        if (shipmentId) {
+          const envioResp = await mlFetch(db, cfg.ml, 'get', `/shipments/${shipmentId}`, null, { manual: true });
+          if (envioResp.status !== 200) throw new Error(`ML shipment ${envioResp.status}`);
+          envio = envioResp.data;
+        }
+        const elegibilidad = clasificarElegibilidadMl(orden, envio);
+        if (elegibilidad.estado !== 'elegible') {
+          if (elegibilidad.estado === 'no_elegible') {
+            invalidarCacheMlNoElegible(db, orden.id || id, orden.status, envio?.status, envio?.logistic_type);
+          }
+          return res.status(409).json({ ok: false, error: 'No hay evidencia suficiente de que el envío ML esté habilitado para preparación.', estado_elegibilidad: elegibilidad.estado, motivo_elegibilidad: elegibilidad.motivo });
+        }
         const items = itemsDesdeOrdenMl(db, orden);
         const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(String(orden.id));
-        const prepId = crearPreparacion(db, {
-          canal: 'ml', mlOrderId: String(orden.id), wcOrderId: vinculo?.wc_order_id || null,
-          packId: orden.pack_id ? String(orden.pack_id) : null,
-          numeroPedido: String(orden.id),
-          comprador: orden.buyer?.nickname || 'Comprador ML',
-          items,
-        });
+        const resultado = db.transaction(() => {
+          const prepId = crearPreparacion(db, {
+            canal: 'ml', mlOrderId: String(orden.id), wcOrderId: vinculo?.wc_order_id || null,
+            packId: orden.pack_id ? String(orden.pack_id) : null,
+            numeroPedido: String(orden.id),
+            comprador: orden.buyer?.nickname || 'Comprador ML',
+            items,
+          });
+          const claim = claimPreparacion(db, prepId, req.user.username, cfg, new Date(), true);
+          if (!claim.ok) {
+            const error = new Error(claim.code);
+            error.claimResult = claim;
+            throw error;
+          }
+          return { id: prepId, claim };
+        })();
+        const prepId = resultado.id;
 
         // Fase 4: detectar si este pedido tiene vínculos con otros ya preparados.
         // Nota: detectarVinculoEntrePedidos espera un objeto order similar a WC. ML tiene
@@ -1184,10 +1473,16 @@ export function preparacionRouter(db, cfg) {
         // pedidos ML (el match sería por email en orden.buyer.email, pero necesitaría mapeo).
         // TODO: expandir detectarVinculoEntrePedidos para soportar ambos formatos si es necesario.
 
-        return res.json({ ok: true, id: prepId });
+        return res.json({ ok: true, id: prepId, estado_elegibilidad: elegibilidad.estado, motivo_elegibilidad: elegibilidad.motivo });
       }
       res.status(400).json({ ok: false, error: 'canal inválido' });
     } catch (e) {
+      if (e?.claimResult?.code === 'AUTH_REQUIRED') {
+        return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+      }
+      if (e?.claimResult?.code === 'PREPARATION_CLAIMED') {
+        return claimConflict(res, e.claimResult.claim);
+      }
       res.status(500).json({ ok: false, error: e.message });
     }
   });
@@ -1374,6 +1669,43 @@ export function preparacionRouter(db, cfg) {
     res.json({ ok: true, eventos });
   });
 
+  // ── Claim exclusivo de trabajo ──
+  // Las operaciones de preparación existentes siguen siendo compatibles; las pantallas
+  // nuevas pueden tomar explícitamente una preparación ya creada y renovar/liberar su claim.
+  router.post('/:id/tomar', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const claim = claimPreparacion(db, prep.id, req.user?.username, cfg);
+    if (!claim.ok) return claim.code === 'PREPARATION_CLAIMED'
+      ? claimConflict(res, claim.claim)
+      : res.status(401).json({ ok: false, error: 'Usuario requerido', code: claim.code });
+    res.json({ ok: true, claim: { usuario: claim.usuario, claimed_at: claim.claimed_at, expires_at: claim.expires_at } });
+  });
+
+  router.post('/:id/claim/renovar', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const claim = claimPreparacion(db, prep.id, req.user?.username, cfg);
+    if (!claim.ok) return claim.code === 'PREPARATION_CLAIMED'
+      ? claimConflict(res, claim.claim)
+      : res.status(401).json({ ok: false, error: 'Usuario requerido', code: claim.code });
+    res.json({ ok: true, claim: { usuario: claim.usuario, claimed_at: claim.claimed_at, expires_at: claim.expires_at } });
+  });
+
+  router.post('/:id/claim/liberar', (req, res) => {
+    const usuario = req.user?.username;
+    if (!usuario) return res.status(401).json({ ok: false, error: 'Usuario requerido', code: 'AUTH_REQUIRED' });
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const actual = db.prepare('SELECT * FROM preparacion_claims WHERE preparacion_id=?').get(prep.id);
+    if (!actual) return res.json({ ok: true, liberado: false });
+    if (actual.usuario !== usuario) return actual.expires_at > now()
+      ? claimConflict(res, actual)
+      : res.status(409).json({ ok: false, error: 'La toma vencida pertenece a otro operador.', code: 'PREPARATION_CLAIMED' });
+    db.prepare('DELETE FROM preparacion_claims WHERE preparacion_id=? AND usuario=?').run(prep.id, usuario);
+    res.json({ ok: true, liberado: true });
+  });
+
   // ── Heartbeat de presencia: "estoy viendo esta preparación ahora" ──
   // No bloquea nada — solo informa quién más la está viendo, para que los operarios
   // coordinen entre sí si se están por pisar. Sin limpieza explícita de filas viejas:
@@ -1404,6 +1736,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/escanear', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const bloqueo = bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
 
@@ -1442,6 +1775,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/item/:itemId/confirmar-manual', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const bloqueo = bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
@@ -1483,6 +1817,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/item/:itemId/embalaje', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
     if (!item) return res.status(404).json({ ok: false, error: 'ítem no encontrado' });
     if (item.perfil !== 'bici') return res.status(400).json({ ok: false, error: 'solo aplica a bicicletas' });
@@ -1505,6 +1840,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/item/:itemId/despacho', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const item = db.prepare('SELECT * FROM preparacion_items WHERE id=? AND preparacion_id=?').get(parseInt(req.params.itemId), prep.id);
     if (!item) return res.status(404).json({ ok: false, error: 'ítem no encontrado' });
 
@@ -1546,6 +1882,7 @@ export function preparacionRouter(db, cfg) {
   }, (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const bloqueo = bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
@@ -1623,6 +1960,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/foto/:fotoId/reintentar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const fotoId = parseInt(req.params.fotoId);
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=?').get(fotoId, prep.id);
     if (!foto) return res.status(404).json({ ok: false, error: 'foto no encontrada' });
@@ -1637,6 +1975,7 @@ export function preparacionRouter(db, cfg) {
   router.delete('/:id/foto/:fotoId', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const fotoId = parseInt(req.params.fotoId);
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=? AND borrado_en IS NULL').get(fotoId, prep.id);
     if (!foto) return res.json({ ok: true, borradas: 0 });
@@ -1662,6 +2001,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/completar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     if (prep.estado === 'completada') return res.status(400).json({ ok: false, error: 'ya completada' });
     // Fail-closed: una 'cerrada_sin_evidencia' no se completa directamente — primero hay
     // que reabrirla (POST /:id/reabrir, ver docs/api-contrato.md), que deja registrado el
@@ -1730,6 +2070,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/reabrir', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     if (prep.estado !== 'cerrada_sin_evidencia') {
       return res.status(400).json({
         ok: false,
@@ -1813,6 +2154,15 @@ export function preparacionRouter(db, cfg) {
       // Buscar la fila del vínculo.
       const vinculo = db.prepare('SELECT * FROM preparacion_vinculos WHERE id = ?').get(vinculoId);
       if (!vinculo) return res.status(404).json({ ok: false, error: 'vínculo no encontrado' });
+      const prepVinculo = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(vinculo.preparacion_id);
+      if (prepVinculo && !exigirClaimVigente(db, prepVinculo, req.user?.username, res)) return;
+      const claves = [vinculo.pedido_a_clave, vinculo.pedido_b_clave];
+      const preparaciones = claves
+        .map((clave) => db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(clave))
+        .filter(Boolean);
+      for (const prep of preparaciones) {
+        if (prep.id !== prepVinculo?.id && !exigirClaimVigente(db, prep, req.user?.username, res)) return;
+      }
 
       // Actualizar con la decisión.
       const cambio = db.prepare(`
@@ -1956,9 +2306,10 @@ async function pendientesMl(db, mlCfg) {
 
   let fallosShipment = 0;
   const out = [];
+  const clavesInconclusas = new Set();
   for (const orden of resultados) {
     const shipmentId = orden.shipping?.id;
-    if (!shipmentId) continue;
+    if (!shipmentId) { clavesInconclusas.add(`ml:${orden.id}`); continue; }
 
     // Saltar las ya completadas sin gastar un GET de shipment. No cuenta como fallo (la
     // preparación ya está confirmada del lado local) y esas filas se excluyen de la poda
@@ -1996,7 +2347,11 @@ async function pendientesMl(db, mlCfg) {
       ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
     `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
     if (envio.status !== 'ready_to_ship') continue;
-    if (!esEnvioLocal(envio.logistic_type)) continue;
+    const elegibilidad = clasificarElegibilidadMl(orden, envio);
+    if (elegibilidad.estado !== 'elegible') {
+      if (elegibilidad.estado === 'inconcluso') clavesInconclusas.add(`ml:${orden.id}`);
+      continue;
+    }
 
     const ov = normalizarOrdenMl(orden);
     const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
@@ -2023,7 +2378,7 @@ async function pendientesMl(db, mlCfg) {
   if (!confiable && fallosShipment > 0) {
     console.warn(`pendientesMl: ${fallosShipment} fallo(s) de /shipments al listar pendientes ML`);
   }
-  return { pendientes: out, confiable };
+  return { pendientes: out, confiable, clavesInconclusas };
 }
 
 // ─── Caché local de pedidos (para GET /pendientes y GET /historial) ──────────
@@ -2126,7 +2481,7 @@ export async function syncPedidosCache(db, cfg) {
       // de abajo solo puede confiar en la ausencia de una fila si esa fila estaba dentro del
       // rango que la consulta a ML pudo haber visto.
       const desdeMl = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-      const { pendientes: mlPend, confiable: mlConfiable } = await pendientesMl(db, cfg.ml);
+      const { pendientes: mlPend, confiable: mlConfiable, clavesInconclusas } = await pendientesMl(db, cfg.ml);
       const clavesVigentesMl = new Set(mlPend.map((p) => `ml:${p.ml_order_id}`));
       const txMl = db.transaction(() => {
         for (const p of mlPend) {
@@ -2178,7 +2533,7 @@ export async function syncPedidosCache(db, cfg) {
             // despacho real siga sin confirmarse. No es candidata a poda por ausencia; solo
             // se poda lo que se confirmó activamente que ya no es ready_to_ship.
             if (r.estado_prep === 'completada') continue;
-            if (!clavesVigentesMl.has(r.clave)) borrar.run(r.clave);
+            if (!clavesVigentesMl.has(r.clave) && !clavesInconclusas.has(r.clave)) borrar.run(r.clave);
           }
         } else {
           console.warn('syncPedidosCache: listado ML no confiable esta corrida (truncado o fallos de shipment), se omite la poda');
@@ -2233,6 +2588,12 @@ export async function syncPedidosCache(db, cfg) {
 // pendientesMl (ML). El caller (server.js) ya llama a esto con .catch(), fire-and-forget,
 // igual que ya hace con syncWcToMl/syncMlToWc para el mismo webhook.
 
+function invalidarCacheMlNoElegible(db, mlOrderId, estadoOrden, estadoEnvio = null, logisticType = null) {
+  const detalle = estadoEnvio ? `${estadoOrden}/${estadoEnvio}/${logisticType || 'sin-logistica'}` : estadoOrden;
+  db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, logistic_type=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+    .run(detalle || null, logisticType, now(), `ml:${mlOrderId}`);
+}
+
 // Trae SOLO la orden `wcOrderId` de Woo y hace upsert inmediato en pedidos_cache si su
 // estado es uno de los 3 que syncPedidosCache ya trackea (lpaandreani/completed/enviadoandreani).
 // Cualquier otro estado (pending, cancelled, etc.) se ignora en silencio: no es un estado
@@ -2247,7 +2608,11 @@ export async function syncPedidoWebPuntual(db, cfg, wcOrderId) {
   let estadoEnvio = null;
   if (order.status === andreaniStatus) estadoEnvio = 'pendiente';
   else if (order.status === 'completed' || order.status === enviadoAndreaniStatus) estadoEnvio = 'enviado';
-  if (!estadoEnvio) return;
+  if (!estadoEnvio) {
+    db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+      .run(order.status || null, now(), `web:${order.id || wcOrderId}`);
+    return;
+  }
   upsertPedidoCache(db, filaWebDesdeOrder(db, order, estadoEnvio));
 }
 
@@ -2261,21 +2626,27 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
   const ordenResp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
   if (ordenResp.status !== 200) return;
   const orden = ordenResp.data;
-  if (orden.status !== 'paid') return;
+  if (orden.status !== 'paid') {
+    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status);
+    return;
+  }
   const shipmentId = orden.shipping?.id;
-  if (!shipmentId) return;
-
-  const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
-  if (shipResp.status !== 200) return;
-  const envio = shipResp.data;
-  if (!envio?.status) return;
-  db.prepare(`
+  let envio = null;
+  if (shipmentId) {
+    const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
+    if (shipResp.status !== 200) return;
+    envio = shipResp.data;
+  }
+  const elegibilidad = clasificarElegibilidadMl(orden, envio);
+  if (shipmentId && envio?.status) db.prepare(`
     INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
   `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
-  if (envio.status !== 'ready_to_ship') return;
-  if (!esEnvioLocal(envio.logistic_type)) return;
+  if (elegibilidad.estado === 'no_elegible') {
+    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, envio?.logistic_type);
+    return;
+  }
 
   const ov = normalizarOrdenMl(orden);
   const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
@@ -2292,8 +2663,8 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     estado_envio: 'pendiente',
     estado_wc: null,
     espejo_ml: 0,
-    logistic_type: envio.logistic_type,
-    substatus: envio.substatus || null,
+    logistic_type: envio?.logistic_type || null,
+    substatus: envio?.substatus || null,
     items_json: JSON.stringify(itemsDesdeOrdenMl(db, orden)),
     actualizado_en: now(),
   });
