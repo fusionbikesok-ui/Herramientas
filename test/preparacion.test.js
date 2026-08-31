@@ -1990,7 +1990,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/555
 
     await syncPedidosCache(db, CFG);
@@ -2114,7 +2114,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 4444, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 888 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 4444, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 888 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/888 -- SE repregunta
 
     await syncPedidosCache(db, CFG);
@@ -2177,7 +2177,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 7777, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 222 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 7777, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 222 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/222 -- reintento de visita, ahora está pendiente de nuevo
 
     await syncPedidosCache(db, CFG);

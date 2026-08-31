@@ -2307,7 +2307,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     estado_wc: null,
     espejo_ml: 0,
     logistic_type: envio?.logistic_type || null,
-    substatus: envio.substatus || null,
+    substatus: envio?.substatus || null,
     items_json: JSON.stringify(itemsDesdeOrdenMl(db, orden)),
     actualizado_en: now(),
   });
