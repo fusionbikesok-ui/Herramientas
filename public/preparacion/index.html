@@ -1342,6 +1342,7 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
   // leería como un item_id truthy no numérico (parseInt('null') = NaN) en vez de vacío.
   fd.append('item_id',itemId==null?'':itemId);
   fd.append('tipo',tipo);
+  fd.append('upload_id',tempId);
   try{
     // No dejar una previsualización "subiendo" indefinidamente: en depósito una red
     // intermitente puede dejar fetch pendiente sin disparar catch, y el operario cree que
@@ -1383,8 +1384,35 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
     // Cortó la red a mitad de la subida (el caso real del depósito): la foto NO se pierde
     // ni se descarta en silencio — sigue en pantalla, marcada como fallida, con el mismo
     // archivo listo para reintentar con un toque (no hay que volver a sacarla).
+    if(e && e.name === 'AbortError'){
+      var reconciliada=await reconciliarSubida(tempId);
+      if(reconciliada)return;
+    }
     marcarSubidaFallida(tempId, e && e.name === 'AbortError' ? 'La subida tardó demasiado y no fue confirmada por el servidor.' : null);
   }
+}
+
+// Un timeout solo significa que se perdió la respuesta: el servidor pudo haber
+// guardado la foto. Consultamos el evento durable identificado por upload_id antes
+// de permitir reintentar, evitando duplicados por doble POST.
+async function reconciliarSubida(uploadId){
+  try{
+    var r=await api('/'+PREP.id);
+    if(!r.body||!r.body.ok)return false;
+    var eventos=r.body.data&&r.body.data.eventos||[];
+    var ev=eventos.find(function(x){return x.detalle&&x.detalle.upload_id===uploadId;});
+    if(!ev)return false;
+    var fotos=[];(r.body.data.items||[]).forEach(function(it){fotos=fotos.concat(it.fotos||[]);});
+    fotos=fotos.concat(r.body.data.fotos_generales||[]);
+    var foto=fotos.find(function(x){return x.id===ev.detalle.foto_id;});
+    if(!foto)return false;
+    delete FOTO_PREVIEWS[uploadId];delete SUBIDAS_PENDIENTES[uploadId];
+    if(foto.item_id){var item=(PREP.items||[]).find(function(it){return it.id===foto.item_id;});if(item){item.fotos=item.fotos||[];item.fotos.push(foto);}}
+    else {PREP.fotos_generales=PREP.fotos_generales||[];PREP.fotos_generales.push(foto);}
+    var el=document.querySelector('.thumb[data-foto-id="'+uploadId+'"]');if(el)el.remove();
+    renderDetalle();iniciarPollFotos();anunciarFoto('La foto se guardó en el servidor aunque la respuesta tardó.');
+    return true;
+  }catch(_){return false;}
 }
 
 function marcarSubidaFallida(tempId,detalle){

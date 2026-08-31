@@ -1937,7 +1937,7 @@ export function preparacionRouter(db, cfg) {
       return res.status(400).json({ ok: false, error: 'solo imágenes' });
     }
 
-    const { item_id = null, tipo = 'extra' } = req.body || {};
+    const { item_id = null, tipo = 'extra', upload_id: uploadId = null } = req.body || {};
 
     // GUARDAR Y RESPONDER AL INSTANTE, sin conversión sincrónica (plan 2026-08-12-fotos-
     // preparacion.md): heic-convert es JS puro y bloquea el único hilo de Node 3-7s enteros
@@ -1982,7 +1982,7 @@ export function preparacionRouter(db, cfg) {
     const itemRef = item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(parseInt(item_id)) : null;
     registrarEvento(db, {
       preparacionId: prep.id, itemId: item_id ? parseInt(item_id) : null, tipo: 'foto_subida', usuario: req.user?.username,
-      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: tipo, nombre_archivo: saved.filename, foto_id: fotoId },
+      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: tipo, nombre_archivo: saved.filename, foto_id: fotoId, upload_id: uploadId ? String(uploadId) : null },
     });
 
     res.json({ ok: true, foto: db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId) });
