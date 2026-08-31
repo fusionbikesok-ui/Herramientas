@@ -80,6 +80,7 @@ describe('control de despacho U0.B', () => {
   afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
   it('devuelve jornada, resumen, confirmados, sin_fecha y filtros de la hoja', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-HOJA', packId: 'PACK-HOJA', numeroPedido: '700', comprador: 'X', items: [] });
+    crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-HOJA-2', packId: 'PACK-HOJA', numeroPedido: '701', comprador: 'X', items: [] });
     crearPreparacion(db, { canal: 'web', wcOrderId: 701, numeroPedido: '701', comprador: 'Y', items: [] });
     db.prepare(`INSERT INTO pedidos_cache
       (clave, canal, ml_order_id, pack_id, numero_pedido, estado_envio, items_json, actualizado_en, fecha_despacho)
@@ -91,9 +92,12 @@ describe('control de despacho U0.B', () => {
     expect(r.body.jornada).toEqual({ fecha: '2026-09-01', zona_horaria: 'America/Argentina/Buenos_Aires' });
     expect(r.body.resumen).toMatchObject({ total: 1, confirmados: 1, pendientes: 0, escaneados: 0 });
     expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].estado).toBe('confirmado');
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
     const sinFecha = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola?fecha=sin_fecha');
-    expect(sinFecha.body.data).toHaveLength(1);
-    expect(sinFecha.body.data[0].jornada).toBe('sin_fecha');
+    expect(sinFecha.body.data.some((row) => row.grupo_clave === 'web:701' && row.jornada === 'sin_fecha')).toBe(true);
+    const pendientes = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola?fecha=sin_fecha&estado=pendiente');
+    expect(pendientes.body.data.some((row) => row.grupo_clave === 'web:701' && row.estado === 'pendiente')).toBe(true);
   });
   it('agrupa por pack, hace el escaneo idempotente y encola etiqueta 50x25 al confirmar', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-50', packId: 'PACK-50', numeroPedido: '50', comprador: 'X', items: [] });

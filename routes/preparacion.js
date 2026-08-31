@@ -874,28 +874,34 @@ export function preparacionRouter(db, cfg) {
     const where = [];
     if (fecha === 'sin_fecha') where.push('jornada_fecha IS NULL');
     else if (fecha) { where.push('jornada_fecha = ?'); params.push(fecha); }
-    if (estado) { where.push('d.estado = ?'); params.push(estado); }
+    if (estado) { where.push("COALESCE(d.estado, 'pendiente') = ?"); params.push(estado); }
     if (canal) { where.push('p.canal = ?'); params.push(canal); }
     if (q) {
-      where.push(`(lower(d.grupo_clave) LIKE ? OR lower(COALESCE(p.numero_pedido, '')) LIKE ?
+      where.push(`(lower(COALESCE(d.grupo_clave, p.pack_id, p.clave)) LIKE ? OR lower(COALESCE(p.numero_pedido, '')) LIKE ?
         OR lower(COALESCE(p.clave, '')) LIKE ?)`);
       const term = `%${q}%`; params.push(term, term, term);
     }
     const base = `
-      SELECT d.id, COALESCE(d.grupo_clave, p.pack_id, p.clave) AS grupo_clave,
-        COALESCE(d.estado, 'pendiente') AS estado, d.etiqueta_cola_id, d.creado_en,
-        d.actualizado_en, d.confirmado_por, d.confirmado_en, COUNT(e.id) AS escaneos,
+      WITH grupos AS (
+        SELECT COALESCE(pack_id, clave) AS grupo_clave FROM preparaciones
+        WHERE estado NOT IN ('cerrada_sin_evidencia')
+        UNION SELECT grupo_clave FROM despacho_controles
+      )
+      SELECT d.id, g.grupo_clave, COALESCE(d.estado, 'pendiente') AS estado,
+        d.etiqueta_cola_id, d.creado_en, d.actualizado_en, d.confirmado_por, d.confirmado_en,
+        (SELECT COUNT(*) FROM despacho_escaneos es WHERE es.control_id=d.id) AS escaneos,
         p.id AS preparacion_id, p.clave, p.canal, p.numero_pedido, p.estado AS estado_preparacion,
         p.pack_id, pc.fecha_despacho AS jornada_fecha,
         CASE WHEN pc.fecha_despacho IS NULL THEN 'sin_fecha' ELSE pc.fecha_despacho END AS jornada
-      FROM preparaciones p
-      LEFT JOIN despacho_controles d ON d.grupo_clave = COALESCE(p.pack_id, p.clave)
-      LEFT JOIN despacho_escaneos e ON e.control_id=d.id
+      FROM grupos g
+      LEFT JOIN despacho_controles d ON d.grupo_clave = g.grupo_clave
+      LEFT JOIN preparaciones p ON p.id = (SELECT MIN(p2.id) FROM preparaciones p2
+        WHERE COALESCE(p2.pack_id, p2.clave) = g.grupo_clave
+          AND p2.estado NOT IN ('cerrada_sin_evidencia'))
       LEFT JOIN pedidos_cache pc ON pc.clave = (SELECT pc2.clave FROM pedidos_cache pc2
         WHERE pc2.clave = p.clave OR (p.pack_id IS NOT NULL AND pc2.pack_id = p.pack_id)
         ORDER BY rowid DESC LIMIT 1)
-      WHERE p.estado NOT IN ('cerrada_sin_evidencia')
-      GROUP BY p.id`;
+      GROUP BY g.grupo_clave`;
     const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha, d.creado_en`).all(...params);
     const jornada = fecha || 'sin_fecha';
     const allParams = fecha === 'sin_fecha' ? [] : fecha ? [fecha] : [];
@@ -968,8 +974,6 @@ export function preparacionRouter(db, cfg) {
       db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
         VALUES (?,?,?,?,?,?)`).run(prep.id, null, 'despacho_confirmado', req.user.username,
           JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: etiqueta.lastInsertRowid, formato: '50x25mm' }), ts);
-      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')")
-        .run(prep.id);
       return { repetido: false, etiquetaId: etiqueta.lastInsertRowid };
     })();
     if (confirmar.repetido) return res.json({ ok: true, repetido: true, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id) });
