@@ -205,6 +205,15 @@ export function openDb(dbPath) {
     });
     aplicarIncidentEmailOutbox();
   }
+  const incidentEmailDlqMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='incidentes_email_outbox_dlq_037'").get();
+  if (!incidentEmailDlqMigration) {
+    const aplicarIncidentEmailDlq = db.transaction(() => {
+      const tieneDlq = db.prepare('PRAGMA table_info(incidentes_email_outbox)').all().some((c) => c.name === 'dlq');
+      if (!tieneDlq) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '037_incidentes_email_outbox_dlq.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('incidentes_email_outbox_dlq_037')").run();
+    });
+    aplicarIncidentEmailDlq();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

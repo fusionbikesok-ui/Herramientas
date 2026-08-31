@@ -2899,9 +2899,14 @@ export function syncRouter(db, cfg) {
   router.get('/errores', (req, res) => {
     const rows = db.prepare(`
       SELECT id, direccion, clave, sku, cant_anterior, cant_nueva, estado, intentos, error, creado_en, actualizado_en
-      FROM sync_log
-      WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
-      ORDER BY creado_en DESC LIMIT 200
+      FROM sync_log s
+      WHERE s.estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_log newer
+          WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave
+            AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id))
+        )
+      ORDER BY s.creado_en DESC, s.id DESC LIMIT 200
     `).all();
     res.json({ ok: true, data: rows });
   });
@@ -3187,7 +3192,7 @@ export function syncRouter(db, cfg) {
     },
     requiere_atencion_ml: {
       estados: "'requiere_atencion_ml'",
-      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado)",
+      exclude: "NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave IS s.clave AND m.actualizado_en >= s.creado_en) AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))",
     },
     errores: {
       estados: "'error','agotado'",
