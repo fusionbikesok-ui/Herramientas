@@ -2815,9 +2815,23 @@ export function syncRouter(db, cfg) {
     const ultimosOk = db.prepare(
       "SELECT direccion, MAX(creado_en) as ultima FROM sync_log WHERE estado='ok' GROUP BY direccion"
     ).all();
-    const errores = db.prepare(
-      "SELECT COUNT(*) as n FROM sync_log WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')"
-    ).get();
+    const tieneClaveSync = db.prepare('PRAGMA table_info(sync_log)').all().some(c => c.name === 'clave');
+    const errores = tieneClaveSync
+      ? db.prepare(`
+          SELECT COUNT(*) as n FROM (
+            SELECT direccion, clave, MAX(creado_en) AS ultimo_error
+            FROM sync_log
+            WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
+            GROUP BY direccion, clave
+          ) pendientes
+          WHERE NOT EXISTS (
+            SELECT 1 FROM sync_log ok
+            WHERE ok.direccion = pendientes.direccion AND ok.clave = pendientes.clave
+              AND ok.estado IN ('ok','reactivada','reconciliado')
+              AND ok.creado_en > pendientes.ultimo_error
+          )
+        `).get()
+      : db.prepare("SELECT COUNT(*) as n FROM sync_log WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')").get();
 
     res.json({
       ok: true,
@@ -2973,7 +2987,8 @@ export function syncRouter(db, cfg) {
       `SELECT COUNT(DISTINCT clave) n FROM sync_log
        WHERE estado IN ('error','agotado') AND clave IS NOT NULL
          AND clave NOT IN (SELECT clave FROM ml_stock_estado)
-         AND clave NOT IN (SELECT clave FROM errores_descartados)`
+         AND clave NOT IN (SELECT clave FROM errores_descartados)
+         AND NOT EXISTS (SELECT 1 FROM sync_log ok WHERE ok.direccion = sync_log.direccion AND ok.clave = sync_log.clave AND ok.estado IN ('ok','reactivada','reconciliado') AND ok.creado_en > sync_log.creado_en)`
     ).get().n;
     const catMap = { sin_mapeo: sinMapeo, remapeo_requerido: remapeoReq, requiere_atencion_ml: requiereAtencion };
 
@@ -3181,7 +3196,7 @@ export function syncRouter(db, cfg) {
     },
     errores: {
       estados: "'error','agotado'",
-      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado) AND s.clave NOT IN (SELECT clave FROM errores_descartados)",
+      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado) AND s.clave NOT IN (SELECT clave FROM errores_descartados) AND NOT EXISTS (SELECT 1 FROM sync_log ok WHERE ok.direccion = s.direccion AND ok.clave = s.clave AND ok.estado IN ('ok','reactivada','reconciliado') AND ok.creado_en > s.creado_en)",
     },
   };
 

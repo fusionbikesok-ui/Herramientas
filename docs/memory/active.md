@@ -66,6 +66,13 @@ Actualizado: 2026-08-30.
   (incluido `lease_token`), `/api/v1/inbox` sin token devuelve `401`, ML inválido devuelve `400`
   y Woo con firma inválida devuelve `401`. Esto valida routing, autenticación básica y esquema;
   aún no prueba lectura autenticada ni E2E móvil.
+- Alertas de conexión ML/Woo: el incidente se persiste desde el primer fallo, pero el email solo
+  se envía cuando el circuito confirma una caída sostenida (o ante severidad crítica), una vez por
+  episodio; la recuperación solo se notifica si se envió previamente la caída. SMTP Zoho y los dos
+  destinatarios operativos viven únicamente en `.env` de producción.
+- La vista/contador de errores de sync filtra el historial append-only: un error queda fuera si
+  existe un resultado posterior `ok`, `reactivada` o `reconciliado` para la misma dirección y clave;
+  las reservas ML→Woo retenidas (`wc_order_id=0`, `retenido_en` no nulo) permanecen visibles.
 - El cliente móvil Claims queda subordinado a App 3 para no desplazar U0; su handoff UX sigue en
   `docs/superpowers/specs/claims-p2-mobile-ux.md`.
 - App 0 y el cliente móvil pertenecen al otro chat/repositorio. Este repo conserva únicamente los
