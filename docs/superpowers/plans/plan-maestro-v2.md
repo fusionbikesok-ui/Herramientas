@@ -105,6 +105,13 @@ Pendientes concretos absorbidos por esta entrega:
   confirmar con payloads reales de Mercado Libre qué campo SLA corresponde a cada modalidad.
 - Implementar etiqueta interna y control de despacho con escaneo, agrupación, estados y
   auditoría.
+- Falta la superficie operativa diaria de ese control: la Preparación no tiene actualmente una
+  pestaña/página de “Hoja de control de despachos” que liste la jornada, agrupe los despachos,
+  muestre pendientes/escaneados/confirmados, permita abrir el detalle, escanear y confirmar con
+  feedback de idempotencia, y conserve filtros/estado tras recarga. El backend existente
+  (`GET /despacho/cola`, `POST /despacho/:id/escanear` y `POST /despacho/:id/confirmar`) y sus
+  tests no sustituyen esa UI; debe diseñarse, implementarse y cubrirse con permisos, responsive
+  390/768/1440, errores `409`, doble escaneo, jornada vacía y auditoría antes de cerrar U0.B.
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
   ítems y verificar tabla/modal de stock a 390 px.
 - Integración de `prep-cola-instantanea` completada en `conteo-confiable`, estado vigente
