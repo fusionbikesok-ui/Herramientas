@@ -59,9 +59,10 @@ Actualizado: 2026-08-31.
   responsable operativo. `PUSH_REAL_ENABLED=true` fue agregado al `.env` real del VPS (no
   versionado) con autorización explícita del usuario, para que el nuevo gate fail-closed no
   apagara las push reales al desplegar.
-- P0.3: la suite global serial sobre la base de ejecución `b7fb85c` pasó `91 archivos, 1872 tests y
-  1 omitido`, código 0, en `1173,54 s` (19m33s). El gate dirigido de Preparación sobre esa base
-  pasó `212/212`. Falta auditoría final y verificación post-despliegue.
+- P0.3: la suite global serial sobre `b7fb85c` pasó `91 archivos, 1872 tests y 1 omitido`, código
+  0, en `1173,54 s` (19m33s). Como después se integraron horarios de corte en `74bb6b8`, esa
+  evidencia no certifica el HEAD actual; el gate dirigido actual es `212/212` más `16/16` de
+  horarios. Falta E2E y repetir la suite global sobre el HEAD actual.
 - P0.1 Claims: el 2026-08-31 pasaron `51/51` tests dirigidos en cuatro archivos, cubriendo
   `claims`, `post_purchase`, paths autoritativos, `opened/closed`, deduplicación, reintentos y
   fail-open. Sigue pendiente la verificación con una notificación real y la auditoría final.
