@@ -435,7 +435,7 @@ describe('lib/incidentes', () => {
       const indices = db2.prepare(
         "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_incidentes%'"
       ).all().map(r => r.name).sort();
-      expect(indices).toEqual(['idx_incidentes_dedupe_activo', 'idx_incidentes_email_outbox_pendiente', 'idx_incidentes_estado_fecha', 'idx_incidentes_hist_incidente', 'idx_incidentes_integracion']);
+      expect(indices).toEqual(['idx_incidentes_dedupe_activo', 'idx_incidentes_email_outbox_dlq', 'idx_incidentes_email_outbox_pendiente', 'idx_incidentes_estado_fecha', 'idx_incidentes_hist_incidente', 'idx_incidentes_integracion']);
 
       expect(db2.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE clave_dedupe = ?")
         .get('mercado_libre|refrescar_catalogo|rate_limit').n).toBe(1);
