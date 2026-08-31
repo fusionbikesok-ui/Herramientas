@@ -493,14 +493,16 @@ describe('lib/matcherPush', () => {
   // --- Cuota de pausadas por corrida ---
   describe('cuota de pausadas por corrida', () => {
     it('con 5 activas y 100 pausadas, seleccionarPendientes(cuota=10) trae las 5 activas y exactamente 10 publicaciones pausadas', () => {
-      for (let i = 0; i < 5; i++) {
-        seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
-        seedDecision(db, { clave: `A${i}|`, sku: `FB-A${i}` });
-      }
-      for (let i = 0; i < 100; i++) {
-        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
-        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
-      }
+      db.transaction(() => {
+        for (let i = 0; i < 5; i++) {
+          seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
+          seedDecision(db, { clave: `A${i}|`, sku: `FB-A${i}` });
+        }
+        for (let i = 0; i < 100; i++) {
+          seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+          seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+        }
+      })();
 
       const lote = seleccionarPendientes(db, { limite: 1000, cuotaPausadas: 10 });
       const activasSel = lote.filter(p => p.status === 'active');
