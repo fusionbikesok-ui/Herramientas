@@ -141,7 +141,9 @@ pero todas sus mutaciones requieren conexión. Los borradores locales vencen a l
 
 **Gate U0.C:** OpenAPI validado, cliente TypeScript regenerable, fixtures derivados del contrato,
 mapa de permisos, estados vacío/error/reintento/conflicto y criterios E2E firmados para ambos
-módulos.
+módulos. Verificación estática realizada el 2026-08-31 sobre `openapi/mobile-v1.yaml`: parseo
+OpenAPI 3.0.3 correcto, 42 paths, 52 schemas y todos los recursos mínimos de Inventario y
+Preparación presentes. Esta evidencia no cierra los adaptadores ni el cliente móvil pendientes.
 
 ### U0.D — Validación y secuencia segura
 
