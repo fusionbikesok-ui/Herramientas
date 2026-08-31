@@ -105,7 +105,7 @@ Pendientes concretos absorbidos por esta entrega:
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
   ítems y verificar tabla/modal de stock a 390 px.
 - Integración de `prep-cola-instantanea` completada en `conteo-confiable`, estado vigente
-  `698aa01` (2026-08-31): la cola marca visualmente "NUEVO" los pedidos recién llegados por webhook y
+  `03b832f` (2026-08-31): la cola marca visualmente "NUEVO" los pedidos recién llegados por webhook y
   las reglas de elegibilidad ML/Woo conservan los casos inconclusos sin podarlos. El gate
   dirigido sobre esta base pasó `3 archivos, 212/212 pruebas`; la suite global y la
   revisión independiente siguen siendo gates pendientes antes del cierre de U0.
@@ -217,7 +217,7 @@ fue confirmada operativamente por el responsable; la URL vigente es
   resolvió sin cambiar Nginx ni el código. No ejecutar `PUT`, `DELETE` ni correcciones SQLite para
   esos registros: la evidencia confirma que son datos reales o mapeos ausentes en Woo.
 - Post-despliegue histórico verificado 2026-08-31: producción seguía en `73ce904`; el candidato
-  actual `42ab97b` añade correcciones de alertas y filtrado de errores históricos, pero todavía no
+  actual `03b832f` incluye las correcciones de alertas, filtrado de errores históricos y Preparación; todavía no
   está desplegado. La evidencia histórica confirma PM2 `online`, webhook Woo `401` ante firma
   inválida y webhook ML `200`.
   El ciclo real posterior al reinicio, ejecutado a las 12:30 UTC, completó `barridoAuditoria`
@@ -232,14 +232,14 @@ fue confirmada operativamente por el responsable; la URL vigente es
   `/api/v1/inbox` sin token devuelve `401`, el webhook público ML con `{}` devuelve `400` y Woo con
   firma inválida devuelve `401`. Esto valida routing, autenticación básica y migración; no sustituye
   una prueba autenticada de lectura ni el E2E móvil.
-- Barrido P0.3 actualizado (2026-08-31): la base local actual es `098d848` (incluye la integración
+- Barrido P0.3 actualizado (2026-08-31): la base local actual es `03b832f` (incluye la integración
   de cola instantánea y el bloqueo de inicio ML inconcluso); PM2 `online`, Node escucha en `*:3001`, SQLite reporta
   `user_version=30`, están presentes las tablas del backbone y `integration_jobs.lease_token`.
   `/api/v1/inbox` y `/api/v1/notifications` sin Bearer devuelven `401`; el webhook ML vacío devuelve
   `400`; las alertas SMTP Zoho validan autenticación. La pantalla de errores de sync ahora deja dos
   reservas retenidas reales y oculta un pedido que ya terminó `ok`. Los tests dirigidos de la base
   actual pasan `212/212`; la suite global documentada de `89 archivos, 1859 tests y 1 omitido`
-  corresponde a `42ab97b` y queda invalidada para certificar `098d848`. Falta repetirla sobre la
+  corresponde a una base histórica y queda invalidada para certificar `03b832f`. Falta repetirla sobre la
   base actual, además de auditoría final del diff y verificación operativa post-despliegue.
 - El backbone exige un único camino durable: el webhook persiste evento+job, el worker consulta ML
   con configuración obligatoria y proyecta sobre ese mismo evento; no se crean eventos derivados.
@@ -493,7 +493,7 @@ Objetivo: una sola línea de desarrollo y producción, sin perder funciones excl
 
 **Higiene de ramas ya ejecutada (2026-08-30, actualizada 2026-08-31):** de 49 ramas locales
 quedan `conteo-confiable`, `master` y `prep-horarios-corte`; `prep-cola-instantanea` ya está
-integrada en el estado vigente `698aa01`. `prep-horarios-corte` sigue siendo trabajo
+integrada en el estado vigente `03b832f`. `prep-horarios-corte` sigue siendo trabajo
 real pendiente, ver U0.B y `docs/memory/active.md`. Las demás se verificaron mergeadas
 (`git merge-base --is-ancestor`) o se archivaron como tag `archive/<nombre>` antes de borrarse
 por tener base de merge muy anterior (2026-08-19/25) y contenido ya superado. Detalle completo en

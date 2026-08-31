@@ -60,7 +60,7 @@ Actualizado: 2026-08-31.
   versionado) con autorización explícita del usuario, para que el nuevo gate fail-closed no
   apagara las push reales al desplegar.
 - P0.3: la evidencia global anterior (`89 archivos, 1859 tests y 1 omitido`, código 0, `1119,29 s`)
-  corresponde a `42ab97b` y no certifica la base actual `098d848`, que agrega correcciones de
+  corresponde a una base histórica y no certifica la base actual `03b832f`, que agrega correcciones de
   Preparación. La base actual sí tiene gate dirigido `212/212`; falta repetir la suite global,
   auditoría final y verificación post-despliegue.
 - Barrido vigente adicional: PM2 `online`, Node en `*:3001`, migraciones del backbone presentes
@@ -89,7 +89,7 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
 
 - **Quedan 3 ramas locales:** `conteo-confiable` (producción), `master` (pendiente de
   consolidación, Prioridad 6) y `prep-horarios-corte` (ver abajo). `prep-cola-instantanea` está
-  integrada en el estado vigente `698aa01` desde el 2026-08-31.
+  integrada en el estado vigente `03b832f` desde el 2026-08-31.
 - **~38 ramas se borraron sin tag** (`git branch -d`): contenido 100% mergeado en
   `conteo-confiable`, verificado por `git merge-base --is-ancestor`. Sin pérdida de historia.
 - **9 ramas viejas/reemplazadas se archivaron como tag `archive/<nombre>` antes de borrarse**
@@ -111,7 +111,7 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
 ### Pendiente real detectado (actualizado 2026-08-31)
 
 - La feature `prep-cola-instantanea` ya no está pendiente: está integrada en el estado vigente
-  `698aa01`. El gate dirigido posterior pasó `212/212` pruebas en
+  `03b832f`. El gate dirigido posterior pasó `212/212` pruebas en
   tres archivos. Sus reglas de elegibilidad y conservación de casos inconclusos quedaron dentro
   de la integración.
 - **`prep-horarios-corte`** (rama viva, worktree en `/tmp/fusion-prep-horarios`): ya documentado
@@ -151,7 +151,7 @@ contra la IP saliente de este VPS (`179.197.74.83`).
 - Único checkout activo de desarrollo: `/opt/fusionbikes/herramientas` sobre `conteo-confiable`
   (rama que sirve producción).
 - El único trabajo de rama pendiente registrado es `prep-horarios-corte`; la cola instantánea ya
-  está integrada en `098d848`.
+  está integrada en `03b832f`.
 - No hay ningún otro worktree, rama local ni proceso de test corriendo en este momento.
 - La suite global completa tarda al menos **13 minutos** en el entorno actual; la última corrida
   completa (2026-08-31: 89 archivos, 1859 aprobados, 1 omitido, código 0) duró **1119,29 s
