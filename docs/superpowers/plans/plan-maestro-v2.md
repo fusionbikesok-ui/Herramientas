@@ -258,7 +258,15 @@ fue confirmada operativamente por el responsable; la URL vigente es
   reservas retenidas reales y oculta un pedido que ya terminó `ok`. Los tests dirigidos de la base
   actual pasan `212/212` más `16/16` de horarios; la suite global histórica pasó `91 archivos,
   1872 tests y 1 omitido`, código de salida 0, en `1173,54 s` (19m33s), pero debe repetirse sobre
-  `74bb6b8` después del E2E. Falta auditoría final del diff y verificación operativa post-despliegue.
+  `74bb6b8` después del E2E. El E2E aislado de Preparación/horarios generó handoff válido en
+  `NO_APROBADO` por un bloqueo parcial del servidor aislado: el login redirigió a
+  `/herramientas/home/`, ruta que ese proceso standalone no monta sin nginx; no es un fallo de
+  staging. La verificación read-only contra staging el 2026-08-31 confirmó 200 en
+  `/herramientas/login/`, `/herramientas/home/` y `/herramientas/preparacion/`, y login de
+  `auditor` + `/api/auth/me` en 200. En el entorno aislado sí cargaron Preparación y Horarios a
+  390 px sin errores funcionales. Falta repetir E2E completo en nginx/staging o instancia aislada
+  con el prefijo correctamente montado, además de auditoría final del diff y verificación operativa
+  post-despliegue.
 - El backbone exige un único camino durable: el webhook persiste evento+job, el worker consulta ML
   con configuración obligatoria y proyecta sobre ese mismo evento; no se crean eventos derivados.
 - `PUSH_REAL_ENABLED` ausente o distinto de `true` pausa ambos workers sin incrementar intentos.
