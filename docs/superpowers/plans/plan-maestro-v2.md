@@ -141,11 +141,29 @@ timeout y conflictos de toma. Debe anunciar cambios con `aria-live`, mantener fo
 por teclado y pasar axe sin violaciones graves. No simular confirmación offline ni crear
 despachos manuales sin política explícita.
 
-Siguen abiertas antes de implementar: campo que define la jornada (`fecha_despacho/SLA` frente a
-`creado_en`), destino de despachos sin fecha, visibilidad de confirmados, separación de permisos
-lectura/escaneo/confirmación/reapertura, confirmación por otro operador, semántica de
-“despachado” frente a “verificado”, reversión y actualización en tiempo real. El handoff UX
-respalda esta especificación, pero no constituye decisiones aprobadas por producto.
+#### Decisiones de producto cerradas para la implementación (2026-08-31)
+
+- La jornada se determina por `fecha_despacho` de la preparación; si falta, se usa el SLA
+  normalizado a `America/Argentina/Buenos_Aires` (fecha local resultante). Nunca se usa
+  `creado_en` como sustituto silencioso: si faltan ambos campos, el despacho queda en la jornada
+  especial `sin_fecha` y aparece solo al activar ese filtro.
+- La fecha y todos los límites de jornada se calculan en `America/Argentina/Buenos_Aires`.
+  La API recibe `fecha=YYYY-MM-DD` o `sin_fecha`, devuelve la jornada resuelta y filtra en
+  servidor. Los controles viejos se muestran si su preparación pertenece a la jornada elegida;
+  no se ocultan por antigüedad.
+- Los confirmados son visibles por defecto en el total y en el listado, con filtro explícito
+  `confirmado`; no se pueden volver a escanear ni confirmar. No habrá reversión/reapertura en
+  esta entrega: requiere un permiso y política posterior, por lo que la UI no ofrece ese botón.
+- `preparacion` nivel `read` permite consultar la hoja; `write` permite escanear y confirmar.
+  La API devuelve `403` para mutaciones sin `write`; no se agrega un permiso paralelo. La toma
+  exclusiva vigente sigue siendo requisito para mutar. Un supervisor distinto puede confirmar
+  solo si tiene la toma vigente; no se permite confirmar por otro operador sin transferirla.
+- “Despachado” significa control físico confirmado y auditado; “verificado” sigue siendo el
+  estado de preparación/evidencia y no se modifica por la hoja. Confirmar genera la etiqueta
+  interna `50×25 mm` y el evento de auditoría en una transacción idempotente.
+- No habrá tiempo real ni confirmación offline en P0: recarga manual conserva filtros y la
+  última lista durante errores de lectura; la actualización en tiempo real queda para una
+  entrega posterior.
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
   ítems y verificar tabla/modal de stock a 390 px.
 - Integración de `prep-cola-instantanea` completada en `conteo-confiable`, estado vigente
