@@ -113,9 +113,10 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
   `b7fb85c`. El gate dirigido posterior pasó `212/212` pruebas en
   tres archivos. Sus reglas de elegibilidad y conservación de casos inconclusos quedaron dentro
   de la integración.
-- **`prep-horarios-corte`** (rama viva, worktree en `/tmp/fusion-prep-horarios`): ya documentado
-  como diferido a propósito ("Integrar `prep-horarios-corte` únicamente después de repetir todos
-  los gates sobre la base productiva actual").
+- **`prep-horarios-corte`** (rama viva, sin worktree temporal activo): no integrable en su estado
+  actual. La revisión aislada del 2026-08-31 encontró migración `022` duplicada frente a `032`, UI
+  sin `expected_version/409`, contrato SLA ML incompleto, cobertura HTTP/E2E insuficiente y tests
+  no reproducibles desde un checkout limpio. Debe corregirse y repetir gates sobre la base actual.
 
 ## Incidente abierto: bloqueo de red contra WooCommerce (2026-08-30, pendiente para el usuario)
 

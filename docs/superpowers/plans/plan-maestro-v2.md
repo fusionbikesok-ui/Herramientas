@@ -98,8 +98,11 @@ Pendientes concretos absorbidos por esta entrega:
 - Cerrar revisión, pruebas y E2E del alta de GTIN/EAN durante Preparación: candidatos,
   conflicto, reemplazo explícito, conservación local, reintento y títulos largos a 390 px.
 - Completar E2E de dirección con campos largos y vínculos del comprador.
-- Integrar `prep-horarios-corte` únicamente después de repetir todos los gates sobre la base
-  productiva actual.
+- `prep-horarios-corte` no se integra en su estado actual: la revisión aislada del 2026-08-31
+  encontró migración `022` duplicada frente a `032`, UI sin `expected_version/409`, contrato SLA
+  ML sin precedencia normativa, cobertura HTTP/E2E insuficiente y tests no reproducibles desde un
+  checkout limpio. Debe corregirse en su rama y repetir todos los gates sobre la base productiva
+  actual antes de considerar su integración.
 - Implementar etiqueta interna y control de despacho con escaneo, agrupación, estados y
   auditoría.
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
