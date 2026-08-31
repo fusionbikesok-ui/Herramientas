@@ -232,14 +232,15 @@ fue confirmada operativamente por el responsable; la URL vigente es
   `/api/v1/inbox` sin token devuelve `401`, el webhook público ML con `{}` devuelve `400` y Woo con
   firma inválida devuelve `401`. Esto valida routing, autenticación básica y migración; no sustituye
   una prueba autenticada de lectura ni el E2E móvil.
-- Barrido P0.3 actualizado (2026-08-31): el commit final local es `42ab97b`; PM2 `online`, Node escucha en `*:3001`, SQLite reporta
+- Barrido P0.3 actualizado (2026-08-31): la base local actual es `098d848` (incluye la integración
+  de cola instantánea y el bloqueo de inicio ML inconcluso); PM2 `online`, Node escucha en `*:3001`, SQLite reporta
   `user_version=30`, están presentes las tablas del backbone y `integration_jobs.lease_token`.
   `/api/v1/inbox` y `/api/v1/notifications` sin Bearer devuelven `401`; el webhook ML vacío devuelve
   `400`; las alertas SMTP Zoho validan autenticación. La pantalla de errores de sync ahora deja dos
-  reservas retenidas reales y oculta un pedido que ya terminó `ok`. Los tests dirigidos del cambio
-  pasan; la suite global serial sobre este commit pasó `89 archivos, 1859 tests y 1 omitido`,
-  código de salida 0, en `1119,29 s` (18m39s). El gate de tester global queda verde; aún falta
-  auditoría final del diff y verificación operativa post-despliegue.
+  reservas retenidas reales y oculta un pedido que ya terminó `ok`. Los tests dirigidos de la base
+  actual pasan `212/212`; la suite global documentada de `89 archivos, 1859 tests y 1 omitido`
+  corresponde a `42ab97b` y queda invalidada para certificar `098d848`. Falta repetirla sobre la
+  base actual, además de auditoría final del diff y verificación operativa post-despliegue.
 - El backbone exige un único camino durable: el webhook persiste evento+job, el worker consulta ML
   con configuración obligatoria y proyecta sobre ese mismo evento; no se crean eventos derivados.
 - `PUSH_REAL_ENABLED` ausente o distinto de `true` pausa ambos workers sin incrementar intentos.

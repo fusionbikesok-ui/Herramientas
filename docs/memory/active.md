@@ -59,10 +59,10 @@ Actualizado: 2026-08-31.
   responsable operativo. `PUSH_REAL_ENABLED=true` fue agregado al `.env` real del VPS (no
   versionado) con autorización explícita del usuario, para que el nuevo gate fail-closed no
   apagara las push reales al desplegar.
-- P0.3 fue verificado nuevamente sobre `42ab97b`: la suite global serial pasó `89 archivos,
-  1859 tests y 1 omitido`, código 0, en `1119,29 s`; el fixture de Inventario y el margen del
-  test estático de servidor quedaron deterministas bajo carga. Falta la auditoría final y la
-  verificación post-despliegue.
+- P0.3: la evidencia global anterior (`89 archivos, 1859 tests y 1 omitido`, código 0, `1119,29 s`)
+  corresponde a `42ab97b` y no certifica la base actual `098d848`, que agrega correcciones de
+  Preparación. La base actual sí tiene gate dirigido `212/212`; falta repetir la suite global,
+  auditoría final y verificación post-despliegue.
 - Barrido vigente adicional: PM2 `online`, Node en `*:3001`, migraciones del backbone presentes
   (incluido `lease_token`), `/api/v1/inbox` sin token devuelve `401`, ML inválido devuelve `400`
   y Woo con firma inválida devuelve `401`. Esto valida routing, autenticación básica y esquema;
@@ -150,7 +150,8 @@ contra la IP saliente de este VPS (`179.197.74.83`).
 
 - Único checkout activo de desarrollo: `/opt/fusionbikes/herramientas` sobre `conteo-confiable`
   (rama que sirve producción).
-- Dos worktrees vivos con trabajo real pendiente, no integrado: ver arriba.
+- El único trabajo de rama pendiente registrado es `prep-horarios-corte`; la cola instantánea ya
+  está integrada en `098d848`.
 - No hay ningún otro worktree, rama local ni proceso de test corriendo en este momento.
 - La suite global completa tarda al menos **13 minutos** en el entorno actual; la última corrida
   completa (2026-08-31: 89 archivos, 1859 aprobados, 1 omitido, código 0) duró **1119,29 s
