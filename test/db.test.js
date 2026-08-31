@@ -35,6 +35,7 @@ describe('db schema', () => {
       'errores_descartados',
       'etiquetas_cola',
       'inbox_items',
+      'incidentes_email_outbox',
       'incidentes_operativos',
       'incidentes_operativos_historial',
       'integration_event_history',
