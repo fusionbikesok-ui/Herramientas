@@ -1181,8 +1181,10 @@ inválido y errores de fondo son fail-open: se descartan o registran y el cron r
 
 En preparación ML, la evidencia se clasifica como `elegible`, `no_elegible` o `inconcluso`.
 Una orden paga sin `shipping.id`, o un envío `ready_to_ship` sin `logistic_type`, es
-`inconcluso` y fail-open: no responde 409 ni se poda una fila existente. Logística externa
-explícita es `no_elegible`; `self_service`, `cross_docking`, `drop_off` y `xd_drop_off` son locales.
+`inconcluso`: el webhook/sync puntual es fail-open y conserva la fila pendiente para el cron,
+pero `POST /api/preparacion/iniciar` responde 409 y no crea una preparación manual hasta contar
+con evidencia suficiente. Logística externa explícita es `no_elegible`; `self_service`,
+`cross_docking`, `drop_off` y `xd_drop_off` son locales.
 
 ## Contador de Inventario (`/api/inventario`)
 

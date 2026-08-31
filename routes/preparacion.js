@@ -1441,9 +1441,11 @@ export function preparacionRouter(db, cfg) {
           envio = envioResp.data;
         }
         const elegibilidad = clasificarElegibilidadMl(orden, envio);
-        if (elegibilidad.estado === 'no_elegible') {
-          invalidarCacheMlNoElegible(db, orden.id || id, orden.status, envio?.status, envio?.logistic_type);
-          return res.status(409).json({ ok: false, error: 'El envío ML no está listo o no corresponde a logística local.' });
+        if (elegibilidad.estado !== 'elegible') {
+          if (elegibilidad.estado === 'no_elegible') {
+            invalidarCacheMlNoElegible(db, orden.id || id, orden.status, envio?.status, envio?.logistic_type);
+          }
+          return res.status(409).json({ ok: false, error: 'No hay evidencia suficiente de que el envío ML esté habilitado para preparación.', estado_elegibilidad: elegibilidad.estado, motivo_elegibilidad: elegibilidad.motivo });
         }
         const items = itemsDesdeOrdenMl(db, orden);
         const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(String(orden.id));

@@ -2804,6 +2804,14 @@ describe('syncPedidoMlPuntual', () => {
     expect(db.prepare("SELECT * FROM preparaciones WHERE clave='ml:ORD-14'").get()).toBeUndefined();
   });
 
+  it('POST /iniciar ML bloquea evidencia inconclusa y no crea preparación', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-INCONCLUSA-2', status: 'paid', buyer: { nickname: 'x' } } });
+    const res = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'ml', id: 'ORD-INCONCLUSA-2' });
+    expect(res.status).toBe(409);
+    expect(res.body.estado_elegibilidad).toBe('inconcluso');
+    expect(db.prepare("SELECT * FROM preparaciones WHERE clave='ml:ORD-INCONCLUSA-2'").get()).toBeUndefined();
+  });
+
   it('trae SOLO la orden pedida (paid + ready_to_ship + envío local) y hace upsert inmediato', async () => {
     mlFetch
       .mockResolvedValueOnce({ status: 200, data: { id: 'ORD-9', status: 'paid', date_created: '2026-08-26T00:00:00Z', buyer: { nickname: 'compradorml' }, order_items: [], shipping: { id: 777 } } })
