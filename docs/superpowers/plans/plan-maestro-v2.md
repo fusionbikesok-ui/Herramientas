@@ -157,8 +157,8 @@ Orden obligatorio de ejecución:
 3. Ejecutar tests dirigidos, revisión, E2E real a 390 px y auditoría del diff final.
 4. Ejecutar la suite global una sola vez, en serie y sin servidores de prueba activos.
    Esta corrida tarda como mínimo **13 minutos** en el entorno actual; la última ejecución completa
-   observada (2026-08-31) pasó **89 archivos, 1855 tests y 1 omitido**, con código de salida 0, y
-   duró **939,41 s (15 min 39 s)**. Debe iniciarse con una ventana de espera de al menos
+   observada (2026-08-31) pasó **89 archivos, 1859 tests y 1 omitido**, con código de salida 0, y
+   duró **1119,29 s (18 min 39 s)**. Debe iniciarse con una ventana de espera de al menos
    20 minutos, no interrumpirse por falta de salida inmediata y
    dejarse terminar hasta el resumen final de Vitest. Para no consumir recursos consultando una
    corrida silenciosa, basta comprobar la sesión aproximadamente un minuto antes de la duración
@@ -215,9 +215,10 @@ fue confirmada operativamente por el responsable; la URL vigente es
   tres SKUs mapeados sin fila local devolvieron cero coincidencias. El `403`/`500` transitorio se
   resolvió sin cambiar Nginx ni el código. No ejecutar `PUT`, `DELETE` ni correcciones SQLite para
   esos registros: la evidencia confirma que son datos reales o mapeos ausentes en Woo.
-- Post-despliegue verificado 2026-08-31: `conteo-confiable` quedó en `741fdc0` (incluye el
-  corrección de alertas anti-falsa-alarma y filtrado de errores históricos resueltos), PM2 está
-  `online`, el webhook Woo rechaza firma inválida con `401` y el webhook ML responde `200`.
+- Post-despliegue histórico verificado 2026-08-31: producción seguía en `73ce904`; el candidato
+  actual `42ab97b` añade correcciones de alertas y filtrado de errores históricos, pero todavía no
+  está desplegado. La evidencia histórica confirma PM2 `online`, webhook Woo `401` ante firma
+  inválida y webhook ML `200`.
   El ciclo real posterior al reinicio, ejecutado a las 12:30 UTC, completó `barridoAuditoria`
   con `auditados:40` y persistió `sync_estado.cursor_auditoria.actualizado_en` en
   `2026-08-30T12:30:00.807Z`; por tanto, los mensajes anteriores de `ML_CLIENT_ID` y de

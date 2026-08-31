@@ -153,8 +153,8 @@ contra la IP saliente de este VPS (`179.197.74.83`).
 - Dos worktrees vivos con trabajo real pendiente, no integrado: ver arriba.
 - No hay ningún otro worktree, rama local ni proceso de test corriendo en este momento.
 - La suite global completa tarda al menos **13 minutos** en el entorno actual; la última corrida
-  completa (2026-08-31: 89 archivos, 1855 aprobados, 1 omitido, código 0) duró **939,41 s
-  (15 min 39 s)**. No debe
+  completa (2026-08-31: 89 archivos, 1859 aprobados, 1 omitido, código 0) duró **1119,29 s
+  (18 min 39 s)**. No debe
   detenerse por parecer inactiva: reservar una ventana de al menos 20 minutos y esperar el resumen
   final. Para una corrida silenciosa, consultar la sesión una vez aproximadamente un minuto antes
   de la duración observada (14 min 39 s) y otra vez al final, no cada 60–90 segundos. Si la terminal
