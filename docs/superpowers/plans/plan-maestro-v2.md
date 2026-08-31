@@ -105,9 +105,9 @@ Pendientes concretos absorbidos por esta entrega:
 - Corregir el bloqueo de botones cuando se completa el proveedor de Recepción después de agregar
   ítems y verificar tabla/modal de stock a 390 px.
 - Integración de `prep-cola-instantanea` completada en `conteo-confiable`, estado vigente
-  `d18e175` (2026-08-31): la cola marca visualmente "NUEVO" los pedidos recién llegados por webhook y
+  `698aa01` (2026-08-31): la cola marca visualmente "NUEVO" los pedidos recién llegados por webhook y
   las reglas de elegibilidad ML/Woo conservan los casos inconclusos sin podarlos. El gate
-  dirigido posterior a la integración pasó `3 archivos, 212/212 pruebas`; la suite global y la
+  dirigido sobre esta base pasó `3 archivos, 212/212 pruebas`; la suite global y la
   revisión independiente siguen siendo gates pendientes antes del cierre de U0.
 
 **Aceptación U0.B:** un pedido recorre cola → preparación → evidencia → etiqueta → despacho con
@@ -493,7 +493,7 @@ Objetivo: una sola línea de desarrollo y producción, sin perder funciones excl
 
 **Higiene de ramas ya ejecutada (2026-08-30, actualizada 2026-08-31):** de 49 ramas locales
 quedan `conteo-confiable`, `master` y `prep-horarios-corte`; `prep-cola-instantanea` ya está
-integrada en el estado vigente `d18e175`. `prep-horarios-corte` sigue siendo trabajo
+integrada en el estado vigente `698aa01`. `prep-horarios-corte` sigue siendo trabajo
 real pendiente, ver U0.B y `docs/memory/active.md`. Las demás se verificaron mergeadas
 (`git merge-base --is-ancestor`) o se archivaron como tag `archive/<nombre>` antes de borrarse
 por tener base de merge muy anterior (2026-08-19/25) y contenido ya superado. Detalle completo en

@@ -89,7 +89,7 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
 
 - **Quedan 3 ramas locales:** `conteo-confiable` (producción), `master` (pendiente de
   consolidación, Prioridad 6) y `prep-horarios-corte` (ver abajo). `prep-cola-instantanea` está
-  integrada en el estado vigente `d18e175` desde el 2026-08-31.
+  integrada en el estado vigente `698aa01` desde el 2026-08-31.
 - **~38 ramas se borraron sin tag** (`git branch -d`): contenido 100% mergeado en
   `conteo-confiable`, verificado por `git merge-base --is-ancestor`. Sin pérdida de historia.
 - **9 ramas viejas/reemplazadas se archivaron como tag `archive/<nombre>` antes de borrarse**
@@ -111,7 +111,7 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
 ### Pendiente real detectado (actualizado 2026-08-31)
 
 - La feature `prep-cola-instantanea` ya no está pendiente: está integrada en el estado vigente
-  `d18e175`. El gate dirigido posterior pasó `212/212` pruebas en
+  `698aa01`. El gate dirigido posterior pasó `212/212` pruebas en
   tres archivos. Sus reglas de elegibilidad y conservación de casos inconclusos quedaron dentro
   de la integración.
 - **`prep-horarios-corte`** (rama viva, worktree en `/tmp/fusion-prep-horarios`): ya documentado
