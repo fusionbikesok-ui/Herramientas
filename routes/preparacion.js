@@ -99,6 +99,10 @@ function ensureTables(db) {
     nombre_archivo TEXT,
     creado_en      TEXT NOT NULL
   )`).run();
+  try { db.prepare('ALTER TABLE preparacion_fotos ADD COLUMN upload_id TEXT').run(); } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables upload_id:', e.message);
+  }
+  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_preparacion_fotos_upload ON preparacion_fotos(preparacion_id, upload_id) WHERE upload_id IS NOT NULL').run();
 
   db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_perfiles (
     categoria       TEXT PRIMARY KEY,
