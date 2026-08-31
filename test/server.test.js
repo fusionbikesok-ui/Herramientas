@@ -32,6 +32,9 @@ describe('server', () => {
     } catch { /* Windows may briefly retain the handle; safe to ignore in cleanup */ }
   });
 
+  // En la suite global este caso compite con fixtures SQLite y llamadas mockeadas de los
+  // módulos anteriores; aislado tarda ~1 s. El margen evita que la contención del runner
+  // convierta un test de archivos estáticos en un falso fallo de disponibilidad.
   it('serves static pages without credentials (auth is on /api only)', async () => {
     const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
@@ -51,7 +54,7 @@ describe('server', () => {
     expect(vendorZxing.status).toBe(200);
     expect(scannerGate.status).toBe(200);
     expect(scanner.status).toBe(200);
-  });
+  }, 30000);
 
   it('redirects the root (/) to /herramientas/home/', async () => {
     const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
