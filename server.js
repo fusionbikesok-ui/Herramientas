@@ -259,7 +259,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     if (topic === 'orders' || topic === 'orders_v2') {
       console.log(`[notif-ml] topic=${topic} resource=${resource} → ${topic === 'orders' ? 'syncOrdenMlPuntual' : 'syncPedidoMlPuntual'}`);
       // `resource` viene como "/orders/{id}" -- se toma el último segmento.
-      const mlOrderId = String(resource || '').split('/').filter(Boolean).pop();
+      const recursoPedido = String(resource || '').match(/^\/orders\/([^/]+)\/?$/);
+      const mlOrderId = recursoPedido?.[1];
 
       // A.3 (2026-08-27): syncMlToWc ya NO se dispara acá — hacía un barrido paginado
       // completo de /orders/search por cada webhook, cuando el propio webhook ya trae el id

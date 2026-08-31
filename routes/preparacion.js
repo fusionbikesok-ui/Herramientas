@@ -11,6 +11,7 @@ import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
+  clasificarElegibilidadMl,
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
@@ -1355,6 +1356,12 @@ export function preparacionRouter(db, cfg) {
       if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
       if (canal === 'web') {
         const resp = await wooFetch(cfg.woo, `/orders/${id}`);
+        const estadosElegibles = [cfg.andreaniStatus || 'lpaandreani', 'completed', cfg.enviadoAndreaniStatus || 'enviadoandreani'];
+        if (!estadosElegibles.includes(resp.data?.status)) {
+          db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+            .run(resp.data?.status || null, now(), `web:${resp.data?.id || id}`);
+          return res.status(409).json({ ok: false, error: 'El pedido ya no está habilitado para preparación.' });
+        }
         const clave = `web:${resp.data.id}`;
         const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(clave);
         if (existente && !exigirClaimVigente(db, existente, req.user.username, res)) return;
@@ -1420,8 +1427,24 @@ export function preparacionRouter(db, cfg) {
         const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${id}`, null, { manual: true });
         if (resp.status !== 200) throw new Error(`ML order ${resp.status}`);
         const orden = resp.data;
-        const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`ml:${orden.id}`);
+        const existente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`ml:${orden.id || id}`);
         if (existente && !exigirClaimVigente(db, existente, req.user.username, res)) return;
+        if (orden.status !== 'paid') {
+          invalidarCacheMlNoElegible(db, orden.id || id, orden.status);
+          return res.status(409).json({ ok: false, error: 'La orden ML no está paga y no está habilitada para preparación.' });
+        }
+        const shipmentId = orden.shipping?.id;
+        let envio = null;
+        if (shipmentId) {
+          const envioResp = await mlFetch(db, cfg.ml, 'get', `/shipments/${shipmentId}`, null, { manual: true });
+          if (envioResp.status !== 200) throw new Error(`ML shipment ${envioResp.status}`);
+          envio = envioResp.data;
+        }
+        const elegibilidad = clasificarElegibilidadMl(orden, envio);
+        if (elegibilidad.estado === 'no_elegible') {
+          invalidarCacheMlNoElegible(db, orden.id || id, orden.status, envio?.status, envio?.logistic_type);
+          return res.status(409).json({ ok: false, error: 'El envío ML no está listo o no corresponde a logística local.' });
+        }
         const items = itemsDesdeOrdenMl(db, orden);
         const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(String(orden.id));
         const resultado = db.transaction(() => {
@@ -1448,7 +1471,7 @@ export function preparacionRouter(db, cfg) {
         // pedidos ML (el match sería por email en orden.buyer.email, pero necesitaría mapeo).
         // TODO: expandir detectarVinculoEntrePedidos para soportar ambos formatos si es necesario.
 
-        return res.json({ ok: true, id: prepId });
+        return res.json({ ok: true, id: prepId, estado_elegibilidad: elegibilidad.estado, motivo_elegibilidad: elegibilidad.motivo });
       }
       res.status(400).json({ ok: false, error: 'canal inválido' });
     } catch (e) {
@@ -2281,9 +2304,10 @@ async function pendientesMl(db, mlCfg) {
 
   let fallosShipment = 0;
   const out = [];
+  const clavesInconclusas = new Set();
   for (const orden of resultados) {
     const shipmentId = orden.shipping?.id;
-    if (!shipmentId) continue;
+    if (!shipmentId) { clavesInconclusas.add(`ml:${orden.id}`); continue; }
 
     // Saltar las ya completadas sin gastar un GET de shipment. No cuenta como fallo (la
     // preparación ya está confirmada del lado local) y esas filas se excluyen de la poda
@@ -2321,7 +2345,11 @@ async function pendientesMl(db, mlCfg) {
       ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
     `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
     if (envio.status !== 'ready_to_ship') continue;
-    if (!esEnvioLocal(envio.logistic_type)) continue;
+    const elegibilidad = clasificarElegibilidadMl(orden, envio);
+    if (elegibilidad.estado !== 'elegible') {
+      if (elegibilidad.estado === 'inconcluso') clavesInconclusas.add(`ml:${orden.id}`);
+      continue;
+    }
 
     const ov = normalizarOrdenMl(orden);
     const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
@@ -2348,7 +2376,7 @@ async function pendientesMl(db, mlCfg) {
   if (!confiable && fallosShipment > 0) {
     console.warn(`pendientesMl: ${fallosShipment} fallo(s) de /shipments al listar pendientes ML`);
   }
-  return { pendientes: out, confiable };
+  return { pendientes: out, confiable, clavesInconclusas };
 }
 
 // ─── Caché local de pedidos (para GET /pendientes y GET /historial) ──────────
@@ -2451,7 +2479,7 @@ export async function syncPedidosCache(db, cfg) {
       // de abajo solo puede confiar en la ausencia de una fila si esa fila estaba dentro del
       // rango que la consulta a ML pudo haber visto.
       const desdeMl = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-      const { pendientes: mlPend, confiable: mlConfiable } = await pendientesMl(db, cfg.ml);
+      const { pendientes: mlPend, confiable: mlConfiable, clavesInconclusas } = await pendientesMl(db, cfg.ml);
       const clavesVigentesMl = new Set(mlPend.map((p) => `ml:${p.ml_order_id}`));
       const txMl = db.transaction(() => {
         for (const p of mlPend) {
@@ -2503,7 +2531,7 @@ export async function syncPedidosCache(db, cfg) {
             // despacho real siga sin confirmarse. No es candidata a poda por ausencia; solo
             // se poda lo que se confirmó activamente que ya no es ready_to_ship.
             if (r.estado_prep === 'completada') continue;
-            if (!clavesVigentesMl.has(r.clave)) borrar.run(r.clave);
+            if (!clavesVigentesMl.has(r.clave) && !clavesInconclusas.has(r.clave)) borrar.run(r.clave);
           }
         } else {
           console.warn('syncPedidosCache: listado ML no confiable esta corrida (truncado o fallos de shipment), se omite la poda');
@@ -2558,6 +2586,12 @@ export async function syncPedidosCache(db, cfg) {
 // pendientesMl (ML). El caller (server.js) ya llama a esto con .catch(), fire-and-forget,
 // igual que ya hace con syncWcToMl/syncMlToWc para el mismo webhook.
 
+function invalidarCacheMlNoElegible(db, mlOrderId, estadoOrden, estadoEnvio = null, logisticType = null) {
+  const detalle = estadoEnvio ? `${estadoOrden}/${estadoEnvio}/${logisticType || 'sin-logistica'}` : estadoOrden;
+  db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, logistic_type=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+    .run(detalle || null, logisticType, now(), `ml:${mlOrderId}`);
+}
+
 // Trae SOLO la orden `wcOrderId` de Woo y hace upsert inmediato en pedidos_cache si su
 // estado es uno de los 3 que syncPedidosCache ya trackea (lpaandreani/completed/enviadoandreani).
 // Cualquier otro estado (pending, cancelled, etc.) se ignora en silencio: no es un estado
@@ -2572,7 +2606,11 @@ export async function syncPedidoWebPuntual(db, cfg, wcOrderId) {
   let estadoEnvio = null;
   if (order.status === andreaniStatus) estadoEnvio = 'pendiente';
   else if (order.status === 'completed' || order.status === enviadoAndreaniStatus) estadoEnvio = 'enviado';
-  if (!estadoEnvio) return;
+  if (!estadoEnvio) {
+    db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
+      .run(order.status || null, now(), `web:${order.id || wcOrderId}`);
+    return;
+  }
   upsertPedidoCache(db, filaWebDesdeOrder(db, order, estadoEnvio));
 }
 
@@ -2586,21 +2624,27 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
   const ordenResp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
   if (ordenResp.status !== 200) return;
   const orden = ordenResp.data;
-  if (orden.status !== 'paid') return;
+  if (orden.status !== 'paid') {
+    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status);
+    return;
+  }
   const shipmentId = orden.shipping?.id;
-  if (!shipmentId) return;
-
-  const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
-  if (shipResp.status !== 200) return;
-  const envio = shipResp.data;
-  if (!envio?.status) return;
-  db.prepare(`
+  let envio = null;
+  if (shipmentId) {
+    const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
+    if (shipResp.status !== 200) return;
+    envio = shipResp.data;
+  }
+  const elegibilidad = clasificarElegibilidadMl(orden, envio);
+  if (shipmentId && envio?.status) db.prepare(`
     INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
   `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
-  if (envio.status !== 'ready_to_ship') return;
-  if (!esEnvioLocal(envio.logistic_type)) return;
+  if (elegibilidad.estado === 'no_elegible') {
+    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, envio?.logistic_type);
+    return;
+  }
 
   const ov = normalizarOrdenMl(orden);
   const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
@@ -2617,8 +2661,8 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     estado_envio: 'pendiente',
     estado_wc: null,
     espejo_ml: 0,
-    logistic_type: envio.logistic_type,
-    substatus: envio.substatus || null,
+    logistic_type: envio?.logistic_type || null,
+    substatus: envio?.substatus || null,
     items_json: JSON.stringify(itemsDesdeOrdenMl(db, orden)),
     actualizado_en: now(),
   });

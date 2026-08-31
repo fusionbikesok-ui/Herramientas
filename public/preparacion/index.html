@@ -83,6 +83,8 @@
   /* cards de la cola */
   .ped-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
   .ped{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;cursor:pointer;transition:border-color .15s;}
+  .ped.nuevo{border-color:var(--azul);box-shadow:inset 3px 0 0 var(--azul);background:rgba(45,184,232,.08);}
+  .ped-nuevo{font-size:10.5px;font-weight:800;letter-spacing:.04em;color:var(--azul);white-space:nowrap;}
   .ped.static{cursor:default;}
   .ped:hover{border-color:var(--azul);}
   .ped-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
@@ -302,6 +304,7 @@
 <script src="../lib/api.js"></script>
 <script>
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
+var PEND_BASELINE_LISTA=false, PEND_NUEVOS={};
 // fotoId (o id temporal mientras sube) -> object URL local. Vive fuera de PREP a propósito:
 // sobrevive a los refrescos completos de PREP (refrescarDetalle) mientras el servidor todavía
 // no tiene la versión liviana lista, así la miniatura no parpadea a una URL rota en el medio.
@@ -354,10 +357,22 @@ async function cargarPendientes(){
   try{
     var r=await api('/pendientes');
     if(!r.body.ok)throw new Error(r.body.error||'error');
-    PEND_CACHE=r.body.data||[];
+    var pedidos=r.body.data||[];
+    registrarPendientesNuevos(pedidos, false);
+    PEND_CACHE=pedidos;
     PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error};
     renderPendientes();
   }catch(e){c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
+}
+
+function clavePendiente(p){ return p.canal==='web'?'web:'+p.wc_order_id:'ml:'+(p.ml_order_id||p.pack_id||p.numero_pedido); }
+function registrarPendientesNuevos(pedidos, detectarNuevos){
+  if(detectarNuevos && PEND_BASELINE_LISTA){
+    var actuales={}; pedidos.forEach(function(p){actuales[clavePendiente(p)]=true;});
+    pedidos.forEach(function(p){ var clave=clavePendiente(p); if(!PEND_NUEVOS[clave] && !PEND_CACHE.some(function(v){return clavePendiente(v)===clave;})) PEND_NUEVOS[clave]=Date.now(); });
+    Object.keys(PEND_NUEVOS).forEach(function(clave){if(!actuales[clave])delete PEND_NUEVOS[clave];});
+  }
+  PEND_BASELINE_LISTA=true;
 }
 
 var PEND_META={};
@@ -392,7 +407,7 @@ async function cargarPendientesSilencioso(){
   pendientesEnVuelo=true;
   try{
     var r=await api('/pendientes');
-    if(r.body.ok){ PEND_CACHE=r.body.data||[]; PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error}; renderPendientes(); }
+    if(r.body.ok){ var pedidos=r.body.data||[]; registrarPendientesNuevos(pedidos, true); PEND_CACHE=pedidos; PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error}; renderPendientes(); }
   }catch(e){/* silencioso: un fallo de refresh en background no debe interrumpir al usuario */}
   finally{ pendientesEnVuelo=false; }
 }
@@ -406,6 +421,8 @@ async function cargarPendientesSilencioso(){
 function numMostrar(p){ return p && p.pack_id ? p.pack_id : (p ? p.numero_pedido : ''); }
 
 function cardPendiente(p,ix){
+  var nuevoDesde=PEND_NUEVOS[clavePendiente(p)];
+  var marcaNuevo=nuevoDesde ? '<span class="ped-nuevo" aria-label="Pedido nuevo, ingresado '+(haceMin(new Date(nuevoDesde).toISOString())||'recién')+'">NUEVO · hace '+(haceMin(new Date(nuevoDesde).toISOString())||'menos de 1 min')+'</span>' : '';
   var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">ML · '+esc(p.logistic_type==='self_service'?'Flex':'Colecta')+'</span>';
   var estado='';
   if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
@@ -413,8 +430,8 @@ function cardPendiente(p,ix){
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
   var despacho=p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(fecha(p.fecha_despacho))+'</b></div>':'';
-  return '<div class="ped" onclick="preparar('+ix+')">'
-    +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span>'+canal+'</div>'
+  return '<div class="ped'+(marcaNuevo?' nuevo':'')+'" onclick="preparar('+ix+')">'
+    +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span><span style="display:flex;align-items:center;gap:6px">'+marcaNuevo+canal+'</span></div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
     +nota+despacho

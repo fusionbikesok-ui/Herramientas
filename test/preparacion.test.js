@@ -7,6 +7,7 @@ import { openDb } from '../db/index.js';
 import {
   splitDireccion, splitTelefonoAr, normalizarEnvio, nombreProvincia, direccionesDifieren,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
+  clasificarElegibilidadMl,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
 import { rutaAbsoluta } from '../utils/storage.js';
@@ -1945,7 +1946,7 @@ import { syncPedidosCache } from '../routes/preparacion.js';
 describe('POST /iniciar — confirmación de envío vs. facturación', () => {
   let db;
   const orderBase = (overrides = {}) => ({
-    id: 950, number: '950', meta_data: [],
+    id: 950, number: '950', status: 'lpaandreani', meta_data: [],
     shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567' },
     billing: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567', email: 'ana@mail.com' },
     line_items: [],
@@ -1989,6 +1990,13 @@ describe('POST /iniciar — confirmación de envío vs. facturación', () => {
     }) });
     const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
     expect(r.status).toBe(200);
+  });
+
+  it('POST /iniciar Woo devuelve 409 y no crea preparación si el estado no es elegible', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({ status: 'cancelled' }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r.status).toBe(409);
+    expect(db.prepare("SELECT * FROM preparaciones WHERE clave='web:950'").get()).toBeUndefined();
   });
 
   it('con direccion_elegida crea la preparación y guarda la decisión', async () => {
@@ -2232,7 +2240,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 2222, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'compradorNuevo' }, shipping: { id: 555 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/555
 
     await syncPedidosCache(db, CFG);
@@ -2356,7 +2364,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 4444, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 888 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 4444, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 888 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/888 -- SE repregunta
 
     await syncPedidosCache(db, CFG);
@@ -2419,7 +2427,7 @@ describe('syncPedidosCache', () => {
 
     wooFetch.mockResolvedValue({ data: [] });
     mlFetch
-      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 7777, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 222 }, order_items: [] }] } }) // orders/search
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 7777, status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 222 }, order_items: [] }] } }) // orders/search
       .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', logistic_type: 'self_service' } }); // shipments/222 -- reintento de visita, ahora está pendiente de nuevo
 
     await syncPedidosCache(db, CFG);
@@ -2714,6 +2722,24 @@ describe('syncPedidoWebPuntual', () => {
     expect(db.prepare("SELECT * FROM pedidos_cache WHERE clave='web:903'").get()).toBeUndefined();
   });
 
+  it('invalida una fila pendiente cacheada al confirmar un estado no elegible, sin borrar la preparación', async () => {
+    buildTestApp(db); // inicializa las tablas de preparación/cache antes de sembrar la transición
+    db.prepare(`INSERT INTO pedidos_cache
+      (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
+      VALUES ('web:906', 'web', 906, '906', 'Juan', ?, 'pendiente', '[]', ?)`)
+      .run(new Date().toISOString(), new Date().toISOString());
+    db.prepare(`INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en)
+      VALUES ('web', 'web:906', 'en_preparacion', 0, ?)`)
+      .run(new Date().toISOString());
+    wooFetch.mockResolvedValueOnce({ data: { id: 906, status: 'cancelled', billing: {}, line_items: [] } });
+
+    await syncPedidoWebPuntual(db, CFG, 906);
+
+    expect(db.prepare("SELECT estado_envio, estado_wc FROM pedidos_cache WHERE clave='web:906'").get())
+      .toMatchObject({ estado_envio: 'no_elegible', estado_wc: 'cancelled' });
+    expect(db.prepare("SELECT estado FROM preparaciones WHERE clave='web:906'").get().estado).toBe('en_preparacion');
+  });
+
   it('fail-open: si el webhook falla (wooFetch rechaza), no revienta y el pedido queda para el cron siguiente', async () => {
     wooFetch.mockRejectedValueOnce(new Error('WC caído'));
 
@@ -2753,8 +2779,30 @@ describe('syncPedidoMlPuntual', () => {
   let db;
   const MLCFG = { clientId: 'cid', clientSecret: 'cs', userId: '99999' };
 
+  it('clasifica evidencia ML como elegible, no elegible o inconclusa sin cerrar de más', () => {
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship', logistic_type: 'self_service' }).estado).toBe('elegible');
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship', logistic_type: 'fulfillment' }).estado).toBe('no_elegible');
+    expect(clasificarElegibilidadMl({ status: 'paid' }, null).estado).toBe('inconcluso');
+    expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship' }).estado).toBe('inconcluso');
+  });
+
+  it('sync puntual conserva como pendiente una orden paga sin shipping.id (inconclusa)', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-INCONCLUSA', status: 'paid', buyer: { nickname: 'x' }, order_items: [] } });
+    await syncPedidoMlPuntual(db, MLCFG, 'ORD-INCONCLUSA');
+    expect(db.prepare("SELECT estado_envio, logistic_type FROM pedidos_cache WHERE clave='ml:ORD-INCONCLUSA'").get())
+      .toMatchObject({ estado_envio: 'pendiente', logistic_type: null });
+  });
+
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('POST /iniciar ML devuelve 409 y no crea preparación si el envío no es elegible', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-14', status: 'paid', shipping: { id: 814 }, buyer: { nickname: 'x' } } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'shipped', logistic_type: 'self_service' } });
+    const res = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'ml', id: 'ORD-14' });
+    expect(res.status).toBe(409);
+    expect(db.prepare("SELECT * FROM preparaciones WHERE clave='ml:ORD-14'").get()).toBeUndefined();
+  });
 
   it('trae SOLO la orden pedida (paid + ready_to_ship + envío local) y hace upsert inmediato', async () => {
     mlFetch
