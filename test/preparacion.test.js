@@ -78,6 +78,22 @@ describe('control de despacho U0.B', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); });
   afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  it('devuelve jornada, resumen, confirmados, sin_fecha y filtros de la hoja', async () => {
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-HOJA', packId: 'PACK-HOJA', numeroPedido: '700', comprador: 'X', items: [] });
+    db.prepare(`INSERT INTO pedidos_cache
+      (clave, canal, ml_order_id, pack_id, numero_pedido, estado_envio, items_json, actualizado_en, fecha_despacho)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run('ml:ORD-HOJA', 'ml', 'ORD-HOJA', 'PACK-HOJA', '700', 'pendiente', '[]', new Date().toISOString(), '2026-09-01');
+    db.prepare(`INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en)
+      VALUES (?, ?, ?, ?), (?, ?, ?, ?)`).run('PACK-HOJA', 'confirmado', '2026-08-30T10:00:00Z', '2026-08-30T10:00:00Z', 'SIN-FECHA', 'pendiente', '2026-08-30T11:00:00Z', '2026-08-30T11:00:00Z');
+    const r = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola?fecha=2026-09-01&estado=confirmado&canal=ml&q=700');
+    expect(r.status).toBe(200);
+    expect(r.body.jornada).toEqual({ fecha: '2026-09-01', zona_horaria: 'America/Argentina/Buenos_Aires' });
+    expect(r.body.resumen).toMatchObject({ total: 1, confirmados: 1, pendientes: 0, escaneados: 0 });
+    expect(r.body.data).toHaveLength(1);
+    const sinFecha = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola?fecha=sin_fecha');
+    expect(sinFecha.body.data).toHaveLength(1);
+    expect(sinFecha.body.data[0].jornada).toBe('sin_fecha');
+  });
   it('agrupa por pack, hace el escaneo idempotente y encola etiqueta 50x25 al confirmar', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-50', packId: 'PACK-50', numeroPedido: '50', comprador: 'X', items: [] });
     const app = buildTestApp(db);
