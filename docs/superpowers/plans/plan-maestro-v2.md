@@ -216,8 +216,8 @@ fue confirmada operativamente por el responsable; la URL vigente es
   tres SKUs mapeados sin fila local devolvieron cero coincidencias. El `403`/`500` transitorio se
   resolvió sin cambiar Nginx ni el código. No ejecutar `PUT`, `DELETE` ni correcciones SQLite para
   esos registros: la evidencia confirma que son datos reales o mapeos ausentes en Woo.
-- Post-despliegue histórico verificado 2026-08-31: producción seguía en `73ce904`; el candidato
-  actual `03b832f` incluye las correcciones de alertas, filtrado de errores históricos y Preparación; todavía no
+- Último estado operativo observado: producción seguía en `73ce904`; la base de ejecución verificada
+  `b7fb85c` incluye las correcciones de alertas, filtrado de errores históricos y Preparación; todavía no
   está desplegado. La evidencia histórica confirma PM2 `online`, webhook Woo `401` ante firma
   inválida y webhook ML `200`.
   El ciclo real posterior al reinicio, ejecutado a las 12:30 UTC, completó `barridoAuditoria`
@@ -437,11 +437,11 @@ cifrado. Validar cámara, biometría, background y push en dispositivos reales d
 ### Ruta específica Claims P0.1 → App 3
 
 Esta ruta desglosa el objetivo de Claims sin ampliar el alcance de Hito 7 ni autorizar
-despliegues. Estado al 2026-08-30: P1.5 (lease/backoff/DLQ de `integration_jobs` y correcciones
-al webhook de ML) está **desplegado en producción** (commit `7d3b9f9` sobre `conteo-confiable`,
-pipeline completo verde, ver `docs/memory/active.md`). P0.2 está configurado según la evidencia
-operativa disponible; P0.3 requiere un nuevo barrido de evidencia sobre `7d3b9f9` (el anterior
-era sobre `d6a021a`). El cliente móvil queda subordinado a App 3 sobre el handoff
+despliegues. Estado vigente: P1.5 (lease/backoff/DLQ de `integration_jobs` y correcciones al
+webhook de ML) está cubierto por el código candidato actual, pero el despliegue de los commits
+recientes sigue siendo manual y pendiente de aprobación. P0.2 está configurado según la evidencia
+operativa disponible; P0.3 tiene suite global verde sobre la base de ejecución `b7fb85c` y requiere
+auditoría final y verificación operativa. El cliente móvil queda subordinado a App 3 sobre el handoff
 `docs/superpowers/specs/claims-p2-mobile-ux.md` para no desplazar U0.
 
 1. **P0.1 — Ingesta real y fail-open:** conservar el webhook legado y `post_purchase`, validar
