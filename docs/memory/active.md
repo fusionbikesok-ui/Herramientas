@@ -113,7 +113,8 @@ Se auditaron las 49 ramas locales y todos los worktrees (`.claude/worktrees/*`, 
   feature autocontenida de U0.B — marca visualmente "NUEVO" los pedidos que llegan por webhook a
   la cola de Preparación (`public/preparacion/index.html`, `test/preparacion-render.test.js`).
   Confirmado que NO está en `conteo-confiable`. Falta decidir si se integra antes del cierre de
-  U0.B del 2026-09-04.
+  U0.B del 2026-09-04. Gate dirigido 2026-08-31: `190/194`, con cuatro fallos en sincronización
+  de pedidos y webhook; no integrar hasta corregirlos en su worktree.
 - **`prep-horarios-corte`** (rama viva, worktree en `/tmp/fusion-prep-horarios`): ya documentado
   como diferido a propósito ("Integrar `prep-horarios-corte` únicamente después de repetir todos
   los gates sobre la base productiva actual").

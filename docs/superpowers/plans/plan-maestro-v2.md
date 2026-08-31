@@ -107,7 +107,9 @@ Pendientes concretos absorbidos por esta entrega:
 - Integrar `prep-cola-instantanea` (rama viva, worktree en
   `.claude/worktrees/prep-cola-instantanea`, no mergeada): marca visualmente "NUEVO" en la cola
   de Preparación los pedidos recién llegados por webhook. Feature autocontenida, encontrada en
-  auditoría de ramas del 2026-08-30 sin registro previo en este plan.
+  auditoría de ramas del 2026-08-30 sin registro previo en este plan. Gate actual (2026-08-31):
+  no integrar; sus tests dirigidos dieron `190/194` y fallaron cuatro casos de sincronización y
+  webhook. Requiere corrección en su propio worktree y repetir revisión.
 
 **Aceptación U0.B:** un pedido recorre cola → preparación → evidencia → etiqueta → despacho con
 trazabilidad completa y sin toma simultánea por dos operadores.
