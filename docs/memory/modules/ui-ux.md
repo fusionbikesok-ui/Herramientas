@@ -31,6 +31,12 @@
   Las validaciones web de U0 incluyen 390 px; cada vertical móvil cierra además con E2E en iPhone
   contra una API real aislada.
 
+- La vista rápida de stock es una búsqueda global por SKU, EAN o nombre y muestra disponible,
+  físico por ubicación, comprometido, no disponible, entrante, canales, frescura e incidentes.
+  Una ubicación sin línea base se muestra como tal, nunca como cero inventado.
+- La App móvil debe validarse en iPhone y Android desde el comienzo; el stock móvil usa tareas,
+  movimientos y conteos, no edición absoluta directa.
+
 ## Cuándo actualizar
 
 Ante cambios durables de navegación, sistema visual, accesibilidad, breakpoints o estrategia
