@@ -873,6 +873,14 @@ export function preparacionRouter(db, cfg) {
     if (estado && !estadosValidos.has(estado)) {
       return res.status(400).json({ ok: false, error: 'estado inválido', code: 'ESTADO_INVALIDO' });
     }
+    // Una preparación aprobada entra en la hoja aunque todavía nadie haya escaneado
+    // el paquete. INSERT OR IGNORE hace que la primera lectura sea operable y conserva
+    // los controles huérfanos históricos para poder auditarlos.
+    db.prepare(`INSERT OR IGNORE INTO despacho_controles
+      (grupo_clave, estado, creado_en, actualizado_en)
+      SELECT COALESCE(pack_id, clave), 'pendiente', creado_en, creado_en
+      FROM preparaciones
+      WHERE estado='completada'`).run();
     const params = [];
     const where = [];
     if (fecha === 'sin_fecha') where.push('jornada_fecha IS NULL');
@@ -892,9 +900,9 @@ export function preparacionRouter(db, cfg) {
       FROM despacho_controles d
       LEFT JOIN despacho_escaneos e ON e.control_id=d.id
       LEFT JOIN preparaciones p ON (p.pack_id = d.grupo_clave OR p.clave = d.grupo_clave)
-      LEFT JOIN pedidos_cache pc ON pc.id = (SELECT pc2.id FROM pedidos_cache pc2
+      LEFT JOIN pedidos_cache pc ON pc.clave = (SELECT pc2.clave FROM pedidos_cache pc2
         WHERE pc2.clave = p.clave OR (p.pack_id IS NOT NULL AND pc2.pack_id = p.pack_id)
-        ORDER BY pc2.id DESC LIMIT 1)
+        ORDER BY pc2.actualizado_en DESC, pc2.clave DESC LIMIT 1)
       GROUP BY d.id`;
     const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha, d.creado_en`).all(...params);
     const jornada = fecha || 'sin_fecha';
@@ -908,8 +916,10 @@ export function preparacionRouter(db, cfg) {
   router.post('/despacho/:id/escanear', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    const bloqueo = bloqueoPorEstado(prep);
+    const bloqueo = prep.estado === 'completada' ? null : bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo, code: 'PREPARACION_CERRADA' });
+    const cache = db.prepare('SELECT fecha_despacho FROM pedidos_cache WHERE clave=? OR (pack_id IS NOT NULL AND pack_id=?) ORDER BY actualizado_en DESC, clave DESC LIMIT 1').get(prep.clave, prep.pack_id || null);
+    if (!cache?.fecha_despacho) return res.status(409).json({ ok: false, error: 'el pedido no tiene jornada de despacho asignada', code: 'DESPACHO_SIN_FECHA' });
     if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const codigo = String(req.body?.codigo || '').trim().toUpperCase();
     const idempotencia = String(req.get('Idempotency-Key') || req.body?.idempotencia || '').trim();
