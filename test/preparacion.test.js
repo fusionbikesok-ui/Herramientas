@@ -96,6 +96,7 @@ describe('control de despacho U0.B', () => {
   });
   it('agrupa por pack, hace el escaneo idempotente y encola etiqueta 50x25 al confirmar', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-50', packId: 'PACK-50', numeroPedido: '50', comprador: 'X', items: [] });
+    asignarJornadaDespacho(db, 'ml:ORD-50', 'PACK-50');
     const app = buildTestApp(db);
     await tomarPorApi(app, id);
     const a = await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'k-1').send({ codigo: 'PACK-50' });
@@ -108,6 +109,7 @@ describe('control de despacho U0.B', () => {
   });
   it('exige idempotencia al confirmar, deduplica la misma intención y rechaza otra', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ID', packId: 'PID', numeroPedido: 'ID', items: [] });
+    asignarJornadaDespacho(db, 'ml:ID', 'PID');
     const app = buildTestApp(db); await tomarPorApi(app, id);
     await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'scan-id').send({ codigo: 'pid' });
     expect((await request(app).post(`/api/preparacion/despacho/${id}/confirmar`)).status).toBe(400);
@@ -118,6 +120,7 @@ describe('control de despacho U0.B', () => {
   });
   it('rechaza código ajeno y no crea control', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'BAD', packId: 'P-BAD', numeroPedido: 'BAD', items: [] });
+    asignarJornadaDespacho(db, 'ml:BAD', 'P-BAD');
     const app = buildTestApp(db); await tomarPorApi(app, id);
     const r = await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'bad-code').send({ codigo: 'otro' });
     expect(r.status).toBe(409); expect(r.body.match).toBe('no_coincide');
@@ -126,6 +129,7 @@ describe('control de despacho U0.B', () => {
   it('rechaza una Idempotency-Key reutilizada en otro grupo', async () => {
     const a = crearPreparacion(db, { canal: 'ml', mlOrderId: 'A', packId: 'PA', numeroPedido: 'A', items: [] });
     const b = crearPreparacion(db, { canal: 'ml', mlOrderId: 'B', packId: 'PB', numeroPedido: 'B', items: [] });
+    asignarJornadaDespacho(db, 'ml:A', 'PA'); asignarJornadaDespacho(db, 'ml:B', 'PB');
     const app = buildTestApp(db); await tomarPorApi(app, a); await tomarPorApi(app, b);
     await request(app).post(`/api/preparacion/despacho/${a}/escanear`).set('Idempotency-Key', 'global-1').send({ codigo: 'PA' });
     const r = await request(app).post(`/api/preparacion/despacho/${b}/escanear`).set('Idempotency-Key', 'global-1').send({ codigo: 'PB' });
@@ -133,6 +137,7 @@ describe('control de despacho U0.B', () => {
   });
   it('confirma de forma atómica control, etiqueta y auditoría', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'AT', packId: 'PAT', numeroPedido: 'AT', items: [] });
+    asignarJornadaDespacho(db, 'ml:AT', 'PAT');
     const app = buildTestApp(db); await tomarPorApi(app, id);
     await request(app).post(`/api/preparacion/despacho/${id}/escanear`).set('Idempotency-Key', 'atomic-1').send({ codigo: 'PAT' });
     db.exec("CREATE TRIGGER test_despacho_auditoria BEFORE INSERT ON preparacion_eventos BEGIN SELECT RAISE(ABORT, 'auditoria caída'); END");
@@ -183,6 +188,15 @@ async function tomarPorApi(app, id) {
   const res = await request(app).post(`/api/preparacion/${id}/tomar`);
   expect(res.status).toBe(200);
   return res;
+}
+
+function asignarJornadaDespacho(db, clave, packId = null, fecha = '2026-09-01') {
+  db.prepare(`INSERT INTO pedidos_cache
+    (clave, canal, ml_order_id, pack_id, numero_pedido, estado_envio, items_json, actualizado_en, fecha_despacho)
+    VALUES (?, 'ml', ?, ?, ?, 'pendiente', '[]', ?, ?)
+    ON CONFLICT(clave) DO UPDATE SET fecha_despacho=excluded.fecha_despacho, pack_id=excluded.pack_id`).run(
+    clave, clave.replace(/^ml:/, ''), packId, clave.replace(/^ml:/, ''), new Date().toISOString(), fecha
+  );
 }
 
 describe('POST /:id/heartbeat', () => {
