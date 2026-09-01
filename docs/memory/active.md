@@ -26,6 +26,9 @@ Actualizado: 2026-09-01.
   y la validación en iPhone/Android todavía requieren el gate de la App. En la rama remota
   `fusionbikesok-ui/FusionBikes-App:feature/stock-flow-ui` se fijó modo HTTP por defecto y se eliminó
   el fallback silencioso a datos simulados cuando falla el backend (commits `44a0264a` y `2038beeb`).
+- E4: notificaciones, inbox y operaciones móviles del backend pasan 17/17 tests. La App remota
+  ahora carga la bandeja desde `/api/v1/notifications` cuando está en modo HTTP (commit `b2755b56`);
+  la lectura y deep links todavía requieren prueba en dispositivos.
 - Inventario tiene conteos y cierre seguro, pero todavía no tiene el libro de movimientos y saldos
   físicos por ubicación definido en el programa de stock.
 - La App usa `feature/stock-flow-ui` como base. Su prototipo de stock con edición absoluta debe
