@@ -50,7 +50,7 @@ export function ensureTablesJornada(db) {
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pick_wave_claims_expira ON pick_wave_claims(expires_at)').run();
 }
 
-import { abrirJornada, jornadaDeHoy, reclamarOla } from '../lib/jornada.js';
+import { abrirJornada, jornadaDeHoy, reclamarOla, sincronizarMiniOlas } from '../lib/jornada.js';
 
 export function jornadaRouter(db, cfg) {
   ensureTablesJornada(db);
@@ -78,6 +78,18 @@ export function jornadaRouter(db, cfg) {
       return res.status(status).json({ ok: false, code: r.code, claim: r.claim || null });
     }
     res.json({ ok: true, claim: r.claim, olaCongelada: r.olaCongelada, olaNueva: r.olaNueva });
+  });
+
+  router.get('/olas', (req, res) => {
+    sincronizarMiniOlas(db);
+    const jornada = jornadaDeHoy(db);
+    if (!jornada) return res.json({ ok: true, jornada: null, olas: [] });
+    const olas = db.prepare('SELECT * FROM pick_waves WHERE operational_day_id=? ORDER BY id').all(jornada.id)
+      .map(ola => ({
+        ...ola,
+        items: db.prepare('SELECT pedido_clave, agregado_en FROM pick_wave_items WHERE pick_wave_id=?').all(ola.id),
+      }));
+    res.json({ ok: true, jornada, olas });
   });
 
   return router;

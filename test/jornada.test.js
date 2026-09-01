@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { ensureTablesJornada } from '../routes/jornada.js';
-import { fechaLocalHoy, abrirJornada, jornadaDeHoy, anotarVencimiento, reclamarOla } from '../lib/jornada.js';
+import { fechaLocalHoy, abrirJornada, jornadaDeHoy, anotarVencimiento, reclamarOla, sincronizarMiniOlas } from '../lib/jornada.js';
 
 const TEST_DB = 'test/jornada.test.sqlite';
 
@@ -181,6 +181,17 @@ describe('rutas /api/jornada', () => {
     expect(r.status).toBe(200);
     expect(r.body.claim).toHaveProperty('por_vencer');
   });
+
+  it('GET /olas sincroniza y devuelve las olas del día con sus items', async () => {
+    const app = appConUsuario('tester');
+    await request(app).post('/api/jornada/abrir').send({});
+    db.prepare(`INSERT INTO pedidos_cache (clave, canal, numero_pedido, comprador, fecha, estado_envio, espejo_ml, items_json, actualizado_en)
+      VALUES ('web:9','web','9','Cliente',?,'pendiente',0,'[]',?)`).run(new Date().toISOString(), new Date().toISOString());
+    const r = await request(app).get('/api/jornada/olas');
+    expect(r.status).toBe(200);
+    const mini = r.body.olas.find(o => o.tipo === 'mini');
+    expect(mini.items.map(i => i.pedido_clave)).toEqual(['web:9']);
+  });
 });
 
 describe('anotarVencimiento', () => {
@@ -255,5 +266,87 @@ describe('reclamarOla', () => {
     const r = reclamarOla(db, waveId, 'op1', {}, new Date('2026-09-01T12:00:00Z'));
     expect(r.claim).toHaveProperty('por_vencer', false);
     expect(r.claim).toHaveProperty('segundos_restantes', 900);
+  });
+});
+
+describe('sincronizarMiniOlas', () => {
+  let db;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    ensureTablesJornada(db);
+    db.prepare(`CREATE TABLE IF NOT EXISTS pedidos_cache (
+      clave TEXT PRIMARY KEY, canal TEXT NOT NULL, wc_order_id INTEGER, ml_order_id TEXT,
+      numero_pedido TEXT, comprador TEXT, fecha TEXT, fecha_despacho TEXT, estado_envio TEXT NOT NULL,
+      estado_wc TEXT, espejo_ml INTEGER NOT NULL DEFAULT 0, logistic_type TEXT,
+      substatus TEXT, items_json TEXT NOT NULL, actualizado_en TEXT NOT NULL
+    )`).run();
+  });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  function insertarPedido(clave, canal, { espejo_ml = 0, fecha_despacho = null } = {}) {
+    db.prepare(`INSERT INTO pedidos_cache (clave, canal, numero_pedido, comprador, fecha, fecha_despacho, estado_envio, espejo_ml, items_json, actualizado_en)
+      VALUES (?,?,?,?,?,?,'pendiente',?,'[]',?)`)
+      .run(clave, canal, clave, 'Cliente', new Date().toISOString(), fecha_despacho, espejo_ml, new Date().toISOString());
+  }
+
+  it('sin jornada abierta hoy, no hace nada', () => {
+    const r = sincronizarMiniOlas(db, new Date('2026-09-01T12:00:00Z'));
+    expect(r).toEqual({ ok: true, agregados: 0, motivo: 'sin_jornada_abierta' });
+  });
+
+  it('agrega pedidos web/ml no urgentes a una única mini-ola abierta', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    abrirJornada(db, { usuario: 'tester' }, now);
+    insertarPedido('web:1', 'web');
+    insertarPedido('web:2', 'web');
+    const r = sincronizarMiniOlas(db, now);
+    expect(r.agregados).toBe(2);
+    const minis = db.prepare("SELECT * FROM pick_waves WHERE tipo='mini' AND estado='abierta'").all();
+    expect(minis).toHaveLength(1);
+    const items = db.prepare('SELECT pedido_clave FROM pick_wave_items WHERE pick_wave_id=?').all(minis[0].id);
+    expect(items.map(i => i.pedido_clave).sort()).toEqual(['web:1', 'web:2']);
+  });
+
+  it('un pedido ML con fecha_despacho de hoy crea su propia mini-ola ml_urgente congelada', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    abrirJornada(db, { usuario: 'tester' }, now);
+    insertarPedido('ml:1', 'ml', { fecha_despacho: fechaLocalHoy(now) });
+    sincronizarMiniOlas(db, now);
+    const urgente = db.prepare("SELECT * FROM pick_waves WHERE tipo='ml_urgente'").get();
+    expect(urgente).toBeTruthy();
+    expect(urgente.estado).toBe('congelada');
+    const items = db.prepare('SELECT pedido_clave FROM pick_wave_items WHERE pick_wave_id=?').all(urgente.id);
+    expect(items.map(i => i.pedido_clave)).toEqual(['ml:1']);
+  });
+
+  it('un pedido ML con fecha_despacho de mañana NO es urgente, cae en la mini-ola acumulativa', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    abrirJornada(db, { usuario: 'tester' }, now);
+    insertarPedido('ml:2', 'ml', { fecha_despacho: '2026-09-02' });
+    sincronizarMiniOlas(db, now);
+    const urgente = db.prepare("SELECT * FROM pick_waves WHERE tipo='ml_urgente'").get();
+    expect(urgente).toBeUndefined();
+    const mini = db.prepare("SELECT * FROM pick_waves WHERE tipo='mini' AND estado='abierta'").get();
+    const items = db.prepare('SELECT pedido_clave FROM pick_wave_items WHERE pick_wave_id=?').all(mini.id);
+    expect(items.map(i => i.pedido_clave)).toEqual(['ml:2']);
+  });
+
+  it('llamar dos veces seguidas no duplica items (idempotente)', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    abrirJornada(db, { usuario: 'tester' }, now);
+    insertarPedido('web:1', 'web');
+    sincronizarMiniOlas(db, now);
+    const r2 = sincronizarMiniOlas(db, now);
+    expect(r2.agregados).toBe(0);
+    const total = db.prepare('SELECT COUNT(*) c FROM pick_wave_items').get().c;
+    expect(total).toBe(1);
+  });
+
+  it('un pedido ya incluido en la ola inicial no se vuelve a agregar a la mini-ola', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    insertarPedido('web:1', 'web');
+    abrirJornada(db, { usuario: 'tester' }, now); // web:1 entra en la inicial
+    const r = sincronizarMiniOlas(db, now);
+    expect(r.agregados).toBe(0);
   });
 });
