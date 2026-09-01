@@ -12,7 +12,7 @@
 
 Este documento reúne la especificación funcional acumulativa para Herramientas y App. No es un changelog ni prueba por sí mismo que exista una función. Recupera el contenido útil del plan histórico, incorpora las decisiones del descubrimiento operativo y separa con precisión presente, brecha y objetivo.
 
-La copia literal de `ce5c3cb` está en `/opt/fusionbikes/herramientas/docs/superpowers/archive/plan-maestro-v2-ce5c3cb.md`. El registro de decisiones está en `/opt/fusionbikes/herramientas/docs/superpowers/decisions/plan-maestro-decisions.md`; progreso y evidencia viven en `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E00–E24.
+La copia literal de `ce5c3cb` está en `/opt/fusionbikes/herramientas/docs/superpowers/archive/plan-maestro-v2-ce5c3cb.md`. El registro de decisiones está en `/opt/fusionbikes/herramientas/docs/superpowers/decisions/plan-maestro-decisions.md`; progreso y evidencia viven en `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E24.
 
 ### 1.1 Vocabulario de estado
 
@@ -1051,19 +1051,19 @@ Precios, matcher, catálogo, consulta de precios, códigos universales, variacio
 | E2 | VPS/web móvil | Evidencia, perfiles, paquetes y aprobación confiable | Entrega operativa anterior |
 | E3 | VPS/Windows | Etiqueta interna automática 50×25 y agente validado | Entrega operativa anterior |
 | E4 | VPS | Lotes ML/Andreani, tracking y despacho reconciliado | Entrega operativa anterior |
-| E5 | VPS/App | App iPhone base, autenticación, dispositivos y contrato | E5 y servicios backend |
-| E6 | VPS/App | Bandeja ML/operativa, alertas, escalamiento y deep links | E5 y servicios backend |
-| E7 | VPS/App | Turnos, áreas y reemplazos | E5 y servicios backend |
-| E8 | VPS | Consulta rápida unificada de stock | Identidad/movimientos |
-| E9 | VPS | Familias, identidad, ubicaciones, línea base y rollout | Identidad/movimientos |
-| E10 | VPS | Libro inmutable, transferencias, ajustes y reposición interna | Identidad/movimientos |
-| E11 | VPS | Compromisos Woo, sync puntual/global y política ML | Identidad/movimientos |
-| E12 | VPS/App | Picking integrado, faltantes y reasignación automática | Identidad/movimientos |
-| E13 | App/VPS | Infraestructura común de piso y offline | E13 y modelo físico |
-| E14 | VPS | Recepción trazable | E13 y modelo físico |
-| E15 | App | Recepción iPhone y offline | E13 y modelo físico |
-| E16 | VPS | Conteos ciegos y ajustes controlados | E13 y modelo físico |
-| E17 | App | Conteos iPhone y offline | E13 y modelo físico |
+| E5 | VPS/App | App iPhone base, autenticación, dispositivos y contrato | E0 y backend `/api/v1` existente |
+| E6 | VPS/App | Bandeja ML/operativa, alertas, escalamiento y deep links | E5 |
+| E7 | VPS/App | Turnos, áreas y reemplazos | E6 |
+| E8 | VPS | Consulta rápida unificada de stock | E0 y fuentes Woo/ML existentes |
+| E9 | VPS | Familias, identidad, ubicaciones, línea base y rollout | E8 |
+| E10 | VPS | Libro inmutable, transferencias, ajustes y reposición interna | E9 |
+| E11 | VPS | Compromisos Woo, sync puntual/global y política ML | E10 |
+| E12 | VPS/App | Picking integrado, faltantes y reasignación automática | E1–E2 y E11 |
+| E13 | App/VPS | Infraestructura común de piso y offline | E5 y tipos/tareas de E12 |
+| E14 | VPS | Recepción trazable | E9–E11 |
+| E15 | App | Recepción iPhone y offline | E13–E14 |
+| E16 | VPS | Conteos ciegos y ajustes controlados | E9–E11 |
+| E17 | App | Conteos iPhone y offline | E13 y E16 |
 | E18 | Ambos | Cancelaciones, devoluciones, daños, proveedor y descarte | Stock/tareas previas |
 | E19 | Ambos | Garantías y posventa | Stock/tareas previas |
 | E20 | VPS | Taller web y venta Woo de services | Stock/tareas previas |
@@ -1118,20 +1118,20 @@ La cobertura se controla por decisiones, procesos, estados, errores, permisos, i
 
 | Proceso | Especificación | Decisiones | Patrón/referencia | Ficha de progreso | SOP previsto |
 | --- | --- | --- | --- | --- | --- |
-| Preparación, picking y paquetes | §4 | registro PM | WMS aplicable | E00–E24 | índice SOP |
-| Evidencia fotográfica y aprobación | §5 | registro PM | reglas propias | E00–E24 | índice SOP |
-| Impresión interna, transporte y despacho | §6 | registro PM | reglas propias | E00–E24 | índice SOP |
-| Stock, identidad, familias, ubicaciones y movimientos | §7 | registro PM | WMS aplicable | E00–E24 | índice SOP |
-| Recepción y putaway | §8 | registro PM | WMS aplicable | E00–E24 | índice SOP |
-| Conteos y ajustes | §9 | registro PM | WMS aplicable | E00–E24 | índice SOP |
-| Cancelaciones, devoluciones, daños y proveedor | §10 | registro PM | reglas propias | E00–E24 | índice SOP |
-| Garantías y posventa | §11 | registro PM | reglas propias | E00–E24 | índice SOP |
-| Taller | §12 | registro PM | reglas propias | E00–E24 | índice SOP |
-| App iPhone, dispositivos y offline | §13 | registro PM | WMS aplicable | E00–E24 | índice SOP |
-| Bandeja, alertas, reclamos ML y turnos | §14 | registro PM | reglas propias | E00–E24 | índice SOP |
-| Integraciones WooCommerce, MercadoLibre y Andreani | §15 | registro PM | reglas propias | E00–E24 | índice SOP |
-| Métricas, reposición, entrante y preventa | §16 | registro PM | reglas propias | E00–E24 | índice SOP |
-| Operación, diagnóstico, seguridad y recuperación | §17 | registro PM | reglas propias | E00–E24 | índice SOP |
+| Preparación, picking y paquetes | §4 | registro PM | WMS aplicable | E0–E24 | índice SOP |
+| Evidencia fotográfica y aprobación | §5 | registro PM | reglas propias | E0–E24 | índice SOP |
+| Impresión interna, transporte y despacho | §6 | registro PM | reglas propias | E0–E24 | índice SOP |
+| Stock, identidad, familias, ubicaciones y movimientos | §7 | registro PM | WMS aplicable | E0–E24 | índice SOP |
+| Recepción y putaway | §8 | registro PM | WMS aplicable | E0–E24 | índice SOP |
+| Conteos y ajustes | §9 | registro PM | WMS aplicable | E0–E24 | índice SOP |
+| Cancelaciones, devoluciones, daños y proveedor | §10 | registro PM | reglas propias | E0–E24 | índice SOP |
+| Garantías y posventa | §11 | registro PM | reglas propias | E0–E24 | índice SOP |
+| Taller | §12 | registro PM | reglas propias | E0–E24 | índice SOP |
+| App iPhone, dispositivos y offline | §13 | registro PM | WMS aplicable | E0–E24 | índice SOP |
+| Bandeja, alertas, reclamos ML y turnos | §14 | registro PM | reglas propias | E0–E24 | índice SOP |
+| Integraciones WooCommerce, MercadoLibre y Andreani | §15 | registro PM | reglas propias | E0–E24 | índice SOP |
+| Métricas, reposición, entrante y preventa | §16 | registro PM | reglas propias | E0–E24 | índice SOP |
+| Operación, diagnóstico, seguridad y recuperación | §17 | registro PM | reglas propias | E0–E24 | índice SOP |
 
 ## 23. Pendientes explícitos y límites de alcance
 

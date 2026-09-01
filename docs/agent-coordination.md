@@ -183,7 +183,7 @@ artefactos existentes e incluye:
 - siguiente acción exacta, con comando o archivo inicial;
 - skills sugeridas para continuar.
 
-El handoff transitorio se guarda en `/tmp`; la ficha E00–E24 conserva checkpoint reproducible y
+El handoff transitorio se guarda en `/tmp`; la ficha E0–E24 conserva checkpoint reproducible y
 las decisiones durables van al módulo de `docs/memory/` correspondiente. Usar
 `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/CHECKPOINT-TEMPLATE.md`. Nunca se
 guardan secretos, credenciales, cookies, tokens, transcripciones ni logs extensos.
