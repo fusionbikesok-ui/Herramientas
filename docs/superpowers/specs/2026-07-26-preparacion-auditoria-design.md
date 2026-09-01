@@ -66,7 +66,7 @@ de `disenador-ux`).
 
 - **`escaneo`**: `{ sku, nombre, cantidad_nueva, cantidad_esperada, origen }` — `origen` ∈
   `'camara' | 'lector_teclado' | 'manual'` (confirmación sin código = `'manual'`).
-- **`foto_subida`**: `{ sku, nombre, tipo_foto, nombre_archivo, foto_id, upload_id? }`.
+- **`foto_subida`**: `{ sku, nombre, tipo_foto, nombre_archivo, foto_id }`.
 - **`foto_borrada`**: `{ sku, nombre, tipo_foto, nombre_archivo, foto_id, subida_por }` —
   `subida_por` para poder decir "la foto que había subido Fulano".
 - **`embalaje`** / **`despacho`**: `{ sku, nombre, valor_anterior, valor_nuevo }`.

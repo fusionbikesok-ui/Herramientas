@@ -1384,8 +1384,10 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
     // Cortó la red a mitad de la subida (el caso real del depósito): la foto NO se pierde
     // ni se descarta en silencio — sigue en pantalla, marcada como fallida, con el mismo
     // archivo listo para reintentar con un toque (no hay que volver a sacarla).
-    var reconciliada=await reconciliarSubida(tempId);
-    if(reconciliada)return;
+    if(e && e.name === 'AbortError'){
+      var reconciliada=await reconciliarSubida(tempId);
+      if(reconciliada)return;
+    }
     marcarSubidaFallida(tempId, e && e.name === 'AbortError' ? 'La subida tardó demasiado y no fue confirmada por el servidor.' : null);
   }
 }
