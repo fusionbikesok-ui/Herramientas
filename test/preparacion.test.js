@@ -2722,6 +2722,60 @@ describe('syncPedidosCache', () => {
     expect(r.status).toBe(200);
     expect(r.body.data.map(p => p.canal)).toEqual(['ml', 'web']);
   });
+
+  it('GET /pendientes respeta orden por antigüedad DENTRO del grupo ML cuando hay 2+ pedidos ML', async () => {
+    const app = buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:8001','ml',NULL,'8001','8001','Cliente ML 1','2026-08-03T10:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-08-03T10:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:8002','ml',NULL,'8002','8002','Cliente ML 2','2026-08-03T09:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-08-03T09:00:00Z')
+    `).run();
+
+    const r = await request(app).get('/api/preparacion/pendientes');
+
+    expect(r.status).toBe(200);
+    const mlPedidos = r.body.data.filter(p => p.canal === 'ml');
+    expect(mlPedidos.map(p => p.ml_order_id)).toEqual(['8002', '8001']);
+  });
+
+  it('GET /pendientes respeta orden por antigüedad DENTRO del grupo web cuando hay 2+ pedidos web', async () => {
+    const app = buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:9001','web',9001,NULL,'9001','Cliente Web 1','2026-08-04T10:00:00Z','pendiente','processing',0,NULL,NULL,'[]','2026-08-04T10:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:9002','web',9002,NULL,'9002','Cliente Web 2','2026-08-04T09:00:00Z','pendiente','processing',0,NULL,NULL,'[]','2026-08-04T09:00:00Z')
+    `).run();
+
+    const r = await request(app).get('/api/preparacion/pendientes');
+
+    expect(r.status).toBe(200);
+    const webPedidos = r.body.data.filter(p => p.canal === 'web');
+    expect(webPedidos.map(p => p.wc_order_id)).toEqual([9002, 9001]);
+  });
+
+  it('GET /pendientes prioriza pedido con espejo_ml=1 igual que pedido con canal=ml', async () => {
+    const app = buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:1001','web',1001,NULL,'1001','Cliente Web (espejo ML)','2026-08-05T09:00:00Z','pendiente','processing',1,NULL,NULL,'[]','2026-08-05T09:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:1002','web',1002,NULL,'1002','Cliente Web Normal','2026-08-05T08:00:00Z','pendiente','processing',0,NULL,NULL,'[]','2026-08-05T08:00:00Z')
+    `).run();
+
+    const r = await request(app).get('/api/preparacion/pendientes');
+
+    expect(r.status).toBe(200);
+    const webPedidos = r.body.data.filter(p => p.canal === 'web');
+    expect(webPedidos.map(p => p.wc_order_id)).toEqual([1001, 1002]);
+  });
 });
 
 // ─── A.1: camino rápido por webhook (sin esperar al cron de 10 min) ─────────────

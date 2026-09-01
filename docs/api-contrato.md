@@ -953,6 +953,8 @@ WooCommerce, cacheado en `pedidos_cache.customer_note` (poblada por `syncPedidos
 de orders de MercadoLibre no expone un campo equivalente (confirmado 2026-08-26), así que no
 se inventa un valor vacío ahí para no sugerir que existe la posibilidad.
 
+**Orden de `data`:** la lista viene ordenada por prioridad de canal (MercadoLibre y espejo_ml=1 primero, web después) y por antigüedad (fecha ASC) dentro de cada grupo. Esta es la prioridad definitiva para el operario — ningún consumidor debe reordenar `data`.
+
 ### POST /api/preparacion/iniciar (gate nuevo: envío vs. facturación)
 Antes de crear la preparación de un pedido `canal:'web'`, si los datos de envío y
 facturación del pedido difieren de verdad (`direccionesDifieren()` en `lib/preparacion.js`:
