@@ -50,7 +50,7 @@ export function ensureTablesJornada(db) {
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pick_wave_claims_expira ON pick_wave_claims(expires_at)').run();
 }
 
-import { abrirJornada, jornadaDeHoy, reclamarOla, sincronizarMiniOlas } from '../lib/jornada.js';
+import { abrirJornada, jornadaDeHoy, reclamarOla, sincronizarMiniOlas, cerrarJornada } from '../lib/jornada.js';
 
 export function jornadaRouter(db, cfg) {
   ensureTablesJornada(db);
@@ -90,6 +90,14 @@ export function jornadaRouter(db, cfg) {
         items: db.prepare('SELECT pedido_clave, agregado_en FROM pick_wave_items WHERE pick_wave_id=?').all(ola.id),
       }));
     res.json({ ok: true, jornada, olas });
+  });
+
+  router.post('/cerrar', (req, res) => {
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    if (!req.user.is_admin) return res.status(403).json({ ok: false, error: 'Requiere permiso de supervisor/despacho', code: 'FORBIDDEN' });
+    const r = cerrarJornada(db, req.user.username);
+    if (!r.ok) return res.status(409).json({ ok: false, code: r.code });
+    res.json({ ok: true, jornada: r.jornada });
   });
 
   return router;

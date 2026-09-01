@@ -955,6 +955,26 @@ se inventa un valor vacío ahí para no sugerir que existe la posibilidad.
 
 **Orden de `data`:** la lista viene ordenada por prioridad de canal (MercadoLibre y espejo_ml=1 primero, web después) y por antigüedad (fecha ASC) dentro de cada grupo. Ningún consumidor debe reordenar `data` en cliente — eso es contrato estable. El criterio de prioridad en sí es provisional (ver docs/superpowers/deliveries/E1.md): cuando exista la ola con mini-olas por urgencia, este criterio cambia y el contrato se actualiza junto con él.
 
+### GET/POST /api/jornada/* (E1: apertura, ola y mini-olas)
+
+- `POST /api/jornada/abrir` — requiere sesión. 200 con `{jornada, olaInicial}`; 409
+  `OPERATIONAL_DAY_EXISTS` con `{jornada}` si ya se abrió hoy (fecha local Buenos Aires).
+- `GET /api/jornada/hoy` — `{jornada: null}` si no se abrió.
+- `GET /api/jornada/olas` — sincroniza mini-olas y devuelve `{jornada, olas: [{...pick_wave, items}]}`.
+- `POST /api/jornada/ola/:id/reclamar` — requiere sesión. Congela la ola (si estaba
+  `abierta`) y abre una mini-ola nueva si correspondía. 200 con `{claim, olaCongelada,
+  olaNueva}`; `claim` incluye `por_vencer`/`segundos_restantes`. 409 `WAVE_CLAIMED` si otro
+  usuario la tiene tomada.
+- `POST /api/jornada/cerrar` — requiere `is_admin`. No exige olas completadas (maestro §2.2:
+  "pendientes se arrastran con alerta"). 200 con `{jornada}` (`estado:'cerrada'`); 401 sin
+  sesión; 403 sin `is_admin`; 409 `NO_OPEN_DAY` si no hay jornada abierta hoy.
+
+`GET /api/preparacion/pendientes` ahora suma `pick_wave_id`/`pick_wave_tipo` (`null` si
+todavía no hay jornada abierta hoy, o si la mini-ola aún no fue sincronizada para ese pedido)
+a cada fila de `data`, sin alterar el orden ya documentado arriba — esta anotación es
+metadata auxiliar fail-open: un error al sincronizar mini-olas o al leer las tablas de
+jornada no rompe la respuesta de `/pendientes`, solo deja esos dos campos en `null`.
+
 ### POST /api/preparacion/iniciar (gate nuevo: envío vs. facturación)
 Antes de crear la preparación de un pedido `canal:'web'`, si los datos de envío y
 facturación del pedido difieren de verdad (`direccionesDifieren()` en `lib/preparacion.js`:

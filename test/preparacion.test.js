@@ -10,6 +10,7 @@ import {
   clasificarElegibilidadMl, pedidosElegiblesOrdenados,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
+import { jornadaRouter } from '../routes/jornada.js';
 import { rutaAbsoluta } from '../utils/storage.js';
 import heicConvert from 'heic-convert';
 
@@ -2667,6 +2668,22 @@ describe('syncPedidosCache', () => {
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
     expect(r.body.data.find(p => p.ml_order_id === '2000017571249972')).toBeUndefined();
+  });
+
+  it('/pendientes incluye pick_wave_id y pick_wave_tipo cuando hay jornada abierta', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.user = { username: 'tester', is_admin: 1 }; next(); });
+    app.use('/api/jornada', jornadaRouter(db, {}));
+    app.use('/api/preparacion', preparacionRouter(db, { woo: {}, ml: {}, colaFotos: { disparoInmediato: false } }));
+    await request(app).post('/api/jornada/abrir').send({});
+    const ts = new Date().toISOString();
+    db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, espejo_ml, items_json, actualizado_en)
+      VALUES ('web:77', 'web', 77, '77', 'Cliente', ?, 'pendiente', 0, '[]', ?)`).run(ts, ts);
+    const r = await request(app).get('/api/preparacion/pendientes');
+    const fila = r.body.data.find(d => d.wc_order_id === 77);
+    expect(fila.pick_wave_tipo).toBe('mini');
+    expect(fila.pick_wave_id).toEqual(expect.any(Number));
   });
 
   it('GET /pendientes no muestra una fila con preparación en pendiente_deposito (tiene pantalla propia en Historial)', async () => {

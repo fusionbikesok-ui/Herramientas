@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { ensureTablesJornada } from '../routes/jornada.js';
-import { fechaLocalHoy, abrirJornada, jornadaDeHoy, anotarVencimiento, reclamarOla, sincronizarMiniOlas } from '../lib/jornada.js';
+import { fechaLocalHoy, abrirJornada, jornadaDeHoy, anotarVencimiento, reclamarOla, sincronizarMiniOlas, cerrarJornada } from '../lib/jornada.js';
 
 const TEST_DB = 'test/jornada.test.sqlite';
 
@@ -192,6 +192,21 @@ describe('rutas /api/jornada', () => {
     const mini = r.body.olas.find(o => o.tipo === 'mini');
     expect(mini.items.map(i => i.pedido_clave)).toEqual(['web:9']);
   });
+
+  it('POST /cerrar requiere is_admin y cierra la jornada', async () => {
+    const appNoAdmin = express();
+    appNoAdmin.use(express.json());
+    appNoAdmin.use((req, _res, next) => { req.user = { username: 'op1', is_admin: 0 }; next(); });
+    appNoAdmin.use('/api/jornada', jornadaRouter(db, {}));
+    const noPermitido = await request(appNoAdmin).post('/api/jornada/cerrar').send({});
+    expect(noPermitido.status).toBe(403);
+
+    const appAdmin = appConUsuario('supervisor');
+    await request(appAdmin).post('/api/jornada/abrir').send({});
+    const r = await request(appAdmin).post('/api/jornada/cerrar').send({});
+    expect(r.status).toBe(200);
+    expect(r.body.jornada.estado).toBe('cerrada');
+  });
 });
 
 describe('anotarVencimiento', () => {
@@ -348,5 +363,35 @@ describe('sincronizarMiniOlas', () => {
     abrirJornada(db, { usuario: 'tester' }, now); // web:1 entra en la inicial
     const r = sincronizarMiniOlas(db, now);
     expect(r.agregados).toBe(0);
+  });
+});
+
+describe('cerrarJornada', () => {
+  let db;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    ensureTablesJornada(db);
+    db.prepare(`CREATE TABLE IF NOT EXISTS pedidos_cache (
+      clave TEXT PRIMARY KEY, canal TEXT NOT NULL, wc_order_id INTEGER, ml_order_id TEXT,
+      numero_pedido TEXT, comprador TEXT, fecha TEXT, fecha_despacho TEXT, estado_envio TEXT NOT NULL,
+      estado_wc TEXT, espejo_ml INTEGER NOT NULL DEFAULT 0, logistic_type TEXT,
+      substatus TEXT, items_json TEXT NOT NULL, actualizado_en TEXT NOT NULL
+    )`).run();
+  });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('cierra la jornada abierta y no exige olas completadas', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    abrirJornada(db, { usuario: 'tester' }, now);
+    const r = cerrarJornada(db, 'supervisor', now);
+    expect(r.ok).toBe(true);
+    expect(r.jornada.estado).toBe('cerrada');
+    expect(r.jornada.cerrada_por).toBe('supervisor');
+  });
+
+  it('sin jornada abierta hoy responde NO_OPEN_DAY', () => {
+    const r = cerrarJornada(db, 'supervisor', new Date('2026-09-01T12:00:00Z'));
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('NO_OPEN_DAY');
   });
 });

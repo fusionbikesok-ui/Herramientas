@@ -18,6 +18,7 @@ import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
 import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment } from '../lib/horariosDespacho.js';
+import { sincronizarMiniOlas } from '../lib/jornada.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -801,6 +802,7 @@ export function preparacionRouter(db, cfg) {
   // ── Pendientes: lee de pedidos_cache (sincronizada por cron cada 5 min) ──
   router.get('/pendientes', (req, res) => {
     try {
+      try { sincronizarMiniOlas(db); } catch (e) { console.error('[preparacion] error sincronizando mini-olas:', e.message); }
       const rows = pedidosElegiblesOrdenados(db);
       // Filtramos filas cuya preparación local ya está resuelta (completada, o en flujo de
       // depósito con pantalla propia en Historial). El sync de ML nunca marca estado_envio
@@ -825,6 +827,10 @@ export function preparacionRouter(db, cfg) {
         .filter(({ prep }) => !prep || !RESUELTAS.includes(prep.estado))
         .map(({ row, prep }) => {
           const items = JSON.parse(row.items_json);
+          let waveItem = null;
+          try {
+            waveItem = db.prepare(`SELECT pw.id, pw.tipo FROM pick_wave_items pi JOIN pick_waves pw ON pw.id = pi.pick_wave_id WHERE pi.pedido_clave = ?`).get(row.clave);
+          } catch (e) { /* fail-open: metadata auxiliar de jornada, no debe romper /pendientes */ }
         if (row.canal === 'web') {
           return {
             canal: 'web',
@@ -840,6 +846,8 @@ export function preparacionRouter(db, cfg) {
             preparacion_id: prep?.id || null,
             estado_preparacion: prep?.estado || null,
             etiqueta_lista: prep?.etiqueta_lista || 0,
+            pick_wave_id: waveItem?.id || null,
+            pick_wave_tipo: waveItem?.tipo || null,
           };
         }
         return {
@@ -856,6 +864,8 @@ export function preparacionRouter(db, cfg) {
           items,
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
+          pick_wave_id: waveItem?.id || null,
+          pick_wave_tipo: waveItem?.tipo || null,
         };
       });
       const ultimoLog = db.prepare(
