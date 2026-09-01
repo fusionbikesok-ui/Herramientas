@@ -3153,3 +3153,10 @@ estimada de entrega (`date_estimated_delivery`). La precedencia implementada es:
 ISO) y se normaliza a fecha local de calendario. Esta precedencia queda cubierta por tests
 de unidad, pero la confirmación de qué campo entrega ML en cada modalidad requiere payloads
 reales representativos y queda pendiente de verificación operativa.
+## Jornada operativa y olas E1
+
+- `GET /api/preparacion/jornada?fecha=YYYY-MM-DD`: jornada o `404 JORNADA_NOT_FOUND`.
+- `POST /api/preparacion/jornada/abrir`: `{fecha?, ml_cutoff, web_cutoff, expected_version?}`; horarios `HH:MM`, idempotente por fecha, `409 VERSION_CONFLICT`, y `validaciones.integracion_ml` informativa.
+- `POST /api/preparacion/olas`: `{fecha?, tipo?}` (`inicial|mini|prioritaria`), snapshot atómico de pendientes elegibles, ML primero; `409` si jornada cerrada o sin pedidos.
+- `GET /api/preparacion/olas?fecha=YYYY-MM-DD`: resumen y miembros congelados.
+- `POST /api/preparacion/olas/:id/cerrar`: cierra sin borrar miembros; repetible.

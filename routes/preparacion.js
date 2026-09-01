@@ -730,6 +730,55 @@ export function preparacionRouter(db, cfg) {
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
   const TRACKING_META_KEY = '_andreani_tracking';
 
+  const BA = 'America/Argentina/Buenos_Aires';
+  const fechaValida = f => typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f);
+  const horaValida = h => typeof h === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(h);
+  const fechaLocalBA = () => new Intl.DateTimeFormat('en-CA', { timeZone: BA, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const jornada = fecha => db.prepare('SELECT * FROM operational_days WHERE fecha=?').get(fecha);
+  const olaJson = id => {
+    const wave = db.prepare('SELECT * FROM pick_waves WHERE id=?').get(id);
+    return { ...wave, items: db.prepare('SELECT * FROM pick_wave_items WHERE wave_id=? ORDER BY prioridad DESC, fecha_pedido ASC, clave ASC').all(id) };
+  };
+
+  router.get('/jornada', (req, res) => {
+    const fecha = String(req.query.fecha || '');
+    if (!fechaValida(fecha)) return res.status(400).json({ ok: false, error: 'fecha debe ser YYYY-MM-DD', code: 'FECHA_INVALIDA' });
+    const row = jornada(fecha);
+    if (!row) return res.status(404).json({ ok: false, error: 'jornada inexistente', code: 'JORNADA_NOT_FOUND' });
+    return res.json({ ok: true, jornada: row });
+  });
+
+  router.post('/jornada/abrir', (req, res) => {
+    const b = req.body || {}; const fecha = b.fecha || fechaLocalBA();
+    if (!fechaValida(fecha)) return res.status(400).json({ ok: false, error: 'fecha debe ser YYYY-MM-DD', code: 'FECHA_INVALIDA' });
+    const ml = b.ml_cutoff || cfg?.mlCutoff || cfg?.ml?.cutoff;
+    const web = b.web_cutoff;
+    if (!horaValida(ml) || !horaValida(web)) return res.status(400).json({ ok: false, error: 'ml_cutoff y web_cutoff deben ser HH:MM; no hay SLA ML inventado', code: 'CUTOFF_INVALIDO' });
+    const actual = jornada(fecha);
+    if (actual && b.expected_version != null && Number(b.expected_version) !== actual.version) return res.status(409).json({ ok: false, error: 'versión de jornada en conflicto', code: 'VERSION_CONFLICT', jornada: actual });
+    if (actual) return res.status(200).json({ ok: true, idempotente: true, validaciones: { integracion_ml: Boolean(cfg?.ml?.clientId && cfg?.ml?.userId) }, jornada: actual });
+    const openedAt = new Date().toISOString();
+    db.prepare(`INSERT INTO operational_days (fecha,zona_horaria,estado,opened_by,opened_at,ml_cutoff,web_cutoff,version) VALUES (?,?,?,?,?,?,?,1)`).run(fecha, BA, 'abierta', req.user?.username || null, openedAt, ml, web);
+    return res.status(201).json({ ok: true, validaciones: { integracion_ml: Boolean(cfg?.ml?.clientId && cfg?.ml?.userId) }, jornada: jornada(fecha) });
+  });
+
+  router.post('/olas', (req, res) => {
+    const b = req.body || {}; const fecha = b.fecha || fechaLocalBA(); const tipo = b.tipo || 'inicial';
+    if (!fechaValida(fecha) || !['inicial', 'mini', 'prioritaria'].includes(tipo)) return res.status(400).json({ ok: false, error: 'fecha o tipo inválido', code: 'PARAMETROS_INVALIDOS' });
+    const day = jornada(fecha); if (!day) return res.status(409).json({ ok: false, error: 'la jornada no está abierta', code: 'JORNADA_CERRADA' });
+    if (day.estado !== 'abierta') return res.status(409).json({ ok: false, error: 'la jornada está cerrada', code: 'JORNADA_CERRADA' });
+    const prev = tipo === 'inicial' && db.prepare("SELECT id FROM pick_waves WHERE fecha=? AND tipo='inicial'").get(fecha);
+    if (prev) return res.status(200).json({ ok: true, idempotente: true, ola: olaJson(prev.id) });
+    const usados = db.prepare("SELECT i.clave FROM pick_wave_items i JOIN pick_waves w ON w.id=i.wave_id WHERE w.fecha=? AND w.estado='activa'").all(fecha).map(x => x.clave);
+    const excluded = new Set(usados); const rows = db.prepare(`SELECT pc.* FROM pedidos_cache pc LEFT JOIN preparaciones p ON p.clave=pc.clave WHERE pc.estado_envio='pendiente' AND (p.id IS NULL OR p.estado NOT IN ('completada','pendiente_deposito','cerrada_sin_evidencia','despachada_sin_verificar')) AND pc.clave NOT IN (${usados.length ? usados.map(() => '?').join(',') : "'__none__'"}) ORDER BY CASE WHEN pc.canal='ml' THEN 0 ELSE 1 END, pc.fecha ASC, pc.clave ASC`).all(...usados);
+    if (!rows.length) return res.status(409).json({ ok: false, error: 'no hay pedidos pendientes elegibles para la ola', code: 'OLA_SIN_PEDIDOS' });
+    const now = new Date().toISOString(); const create = db.transaction(() => { const info = db.prepare('INSERT INTO pick_waves (fecha,tipo,estado,created_at,frozen_at,created_by) VALUES (?,?,?,?,?,?)').run(fecha, tipo, 'activa', now, now, req.user?.username || null); const ins = db.prepare('INSERT INTO pick_wave_items (wave_id,clave,canal,fecha_pedido,prioridad,agregado_en) VALUES (?,?,?,?,?,?)'); rows.forEach(r => ins.run(info.lastInsertRowid, r.clave, r.canal, r.fecha, r.canal === 'ml' ? 1 : 0, now)); return info.lastInsertRowid; });
+    return res.status(201).json({ ok: true, ola: olaJson(create()) });
+  });
+
+  router.get('/olas', (req, res) => { const fecha = String(req.query.fecha || ''); if (!fechaValida(fecha)) return res.status(400).json({ ok: false, error: 'fecha debe ser YYYY-MM-DD', code: 'FECHA_INVALIDA' }); const waves = db.prepare('SELECT id FROM pick_waves WHERE fecha=? ORDER BY id').all(fecha).map(w => olaJson(w.id)); return res.json({ ok: true, fecha, resumen: { total: waves.length, pedidos: waves.reduce((n, w) => n + w.items.length, 0) }, olas: waves }); });
+  router.post('/olas/:id/cerrar', (req, res) => { const wave = db.prepare('SELECT * FROM pick_waves WHERE id=?').get(req.params.id); if (!wave) return res.status(404).json({ ok: false, error: 'ola inexistente', code: 'OLA_NOT_FOUND' }); if (wave.estado === 'cerrada') return res.json({ ok: true, repetido: true, ola: olaJson(wave.id) }); db.prepare("UPDATE pick_waves SET estado='cerrada' WHERE id=?").run(wave.id); return res.json({ ok: true, repetido: false, ola: olaJson(wave.id) }); });
+
   // Queries para resolución de GTIN/EAN en escanear
   const skuPorEan = db.prepare('SELECT sku FROM ean_sku WHERE ean=?');
   const skusPorGtin = db.prepare("SELECT DISTINCT sku FROM catalogo_cache WHERE gtin=? AND sku IS NOT NULL AND sku <> ''");
