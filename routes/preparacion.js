@@ -19,6 +19,7 @@ import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
 import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment } from '../lib/horariosDespacho.js';
 import { sincronizarMiniOlas } from '../lib/jornada.js';
+import { ensureTablesJornada } from './jornada.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -67,6 +68,10 @@ function bloqueoPorEstado(prep) {
 // ─── Tablas (idempotente, patrón de routes/pedidos.js) ───────────────────────
 
 function ensureTables(db) {
+  // pick_wave_items/pick_waves/operational_days son de jornadaRouter, pero /pendientes
+  // las lee (sincronizarMiniOlas, join en el listado) sin importar si jornadaRouter
+  // está montado en esta instancia de Express — aseguramos su existencia acá también.
+  ensureTablesJornada(db);
   db.prepare(`CREATE TABLE IF NOT EXISTS preparaciones (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     canal           TEXT NOT NULL,
