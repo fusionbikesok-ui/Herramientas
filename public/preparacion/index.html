@@ -1357,8 +1357,6 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
     var d=await r.json().catch(function(){return{ok:false};});
     var elAhora=document.querySelector('.thumb[data-foto-id="'+tempId+'"]');
     if(!d.ok){
-      var reconciliada=await reconciliarSubida(tempId);
-      if(reconciliada)return;
       // Rechazo explícito del servidor (mimetype, tamaño, etc.): reintentar con el MISMO
       // archivo va a fallar igual, así que acá sí se descarta — el operario necesita elegir
       // otra foto, no volver a mandar la misma.

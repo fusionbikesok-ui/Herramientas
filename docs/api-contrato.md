@@ -626,8 +626,7 @@ corriendo en línea).
 
 ### POST /api/preparacion/:id/foto (comportamiento cambiado)
 - Sigue aceptando `multipart/form-data` con campo `archivo` (límite 15MB), `item_id` y `tipo`
-  opcionales en el body. `upload_id` también es opcional y debe ser estable durante los reintentos
-  de una misma intención de subida.
+  opcionales en el body.
 - El guard de "solo imágenes" (mimetype `image/*` o extensión `.heic`/`.heif`) sigue siendo
   sincrónico y sigue devolviendo 400 `{ ok: false, error: 'solo imágenes' }` si no matchea.
 - **Ya no valida que el contenido sea una imagen real decodificable** (antes lo hacía sharp
