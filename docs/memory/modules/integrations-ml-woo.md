@@ -34,3 +34,14 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
 - Las confirmaciones puntuales no elegibles de Woo o ML conservan la fila de `pedidos_cache`
   como `no_elegible` para no romper preparaciones/auditoría, pero la excluyen de la cola y
   del inicio; ML requiere `paid`, `ready_to_ship` y logística local.
+
+## Stock y preparación: decisiones programadas para E5–E14
+
+- WooCommerce es la autoridad de stock disponible para venta. Fusion mantiene físico por ubicación,
+  comprometido, no disponible y entrante, y no descuenta físicamente dos veces una venta.
+- El físico sale al entregar al transportista. Cancelaciones, cambios y devoluciones deben
+  reconciliarse con Woo antes de volver a publicar disponibilidad.
+- ML conserva una reserva de canal configurable. Se acepta como excepción vigente que publicaciones
+  independientes anuncien el stock completo; una sobreventa abre incidente y requiere decisión de
+  Admin/Ventas.
+- Si Woo no responde, aumentos no se publican y los cambios pendientes quedan durables e idempotentes.
