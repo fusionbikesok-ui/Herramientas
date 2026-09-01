@@ -2126,16 +2126,20 @@ export function preparacionRouter(db, cfg) {
     // debería poder pisar una preparación que se cerró sin evidencia justo en el medio.
     // `changes` en 0 significa que alguien más la cambió de estado antes: se lo decimos
     // al cliente en vez de mentir con un 200.
-    const cambio = db.prepare(
-      "UPDATE preparaciones SET estado='completada', completado_en=?, preparado_por=? WHERE id=? AND estado<>'cerrada_sin_evidencia'"
-    ).run(now(), req.user?.username || null, prep.id);
-    if (!cambio.changes) {
+    const completada = db.transaction(() => {
+      const cambio = db.prepare(
+        "UPDATE preparaciones SET estado='completada', completado_en=?, preparado_por=? WHERE id=? AND estado<>'cerrada_sin_evidencia'"
+      ).run(now(), req.user?.username || null, prep.id);
+      if (!cambio.changes) return false;
+      registrarEvento(db, {
+        preparacionId: prep.id, itemId: null, tipo: 'completado', usuario: req.user?.username, detalle: {},
+      });
+      encolarEtiquetaInterna(db, prep, req.user?.username);
+      return true;
+    })();
+    if (!completada) {
       return res.status(409).json({ ok: false, error: 'la preparación cambió de estado mientras se completaba, volvé a intentarlo' });
     }
-    registrarEvento(db, {
-      preparacionId: prep.id, itemId: null, tipo: 'completado', usuario: req.user?.username, detalle: {},
-    });
-    encolarEtiquetaInterna(db, prep, req.user?.username);
     res.json({ ok: true, estado: 'completada' });
   });
 
