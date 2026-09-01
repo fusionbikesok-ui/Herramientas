@@ -7,7 +7,7 @@ import { openDb } from '../db/index.js';
 import {
   splitDireccion, splitTelefonoAr, normalizarEnvio, nombreProvincia, direccionesDifieren,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
-  clasificarElegibilidadMl,
+  clasificarElegibilidadMl, pedidosElegiblesOrdenados,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
 import { rutaAbsoluta } from '../utils/storage.js';
@@ -2775,6 +2775,43 @@ describe('syncPedidosCache', () => {
     expect(r.status).toBe(200);
     const webPedidos = r.body.data.filter(p => p.canal === 'web');
     expect(webPedidos.map(p => p.wc_order_id)).toEqual([1001, 1002]);
+  });
+});
+
+describe('pedidosElegiblesOrdenados', () => {
+  let db;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    // Crear la tabla pedidos_cache para el test unitario
+    db.prepare(`CREATE TABLE IF NOT EXISTS pedidos_cache (
+      clave           TEXT PRIMARY KEY,
+      canal           TEXT NOT NULL,
+      wc_order_id     INTEGER,
+      ml_order_id     TEXT,
+      numero_pedido   TEXT,
+      comprador       TEXT,
+      fecha           TEXT,
+      estado_envio    TEXT NOT NULL,
+      estado_wc       TEXT,
+      espejo_ml       INTEGER NOT NULL DEFAULT 0,
+      logistic_type   TEXT,
+      substatus       TEXT,
+      items_json      TEXT NOT NULL,
+      actualizado_en  TEXT NOT NULL
+    )`).run();
+  });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('pedidosElegiblesOrdenados prioriza ml/espejo_ml sobre web y antigüedad dentro de cada grupo', () => {
+    const ts = new Date().toISOString();
+    const ins = db.prepare(`INSERT INTO pedidos_cache
+      (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, espejo_ml, items_json, actualizado_en)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    ins.run('web:1', 'web', 1, '1', 'A', '2026-09-01T10:00:00Z', 'pendiente', 0, '[]', ts);
+    ins.run('ml:1', 'ml', null, '2', 'B', '2026-09-01T11:00:00Z', 'pendiente', 0, '[]', ts);
+    ins.run('web:2', 'web', 2, '3', 'C', '2026-09-01T09:00:00Z', 'pendiente', 1, '[]', ts); // espejo_ml
+    const rows = pedidosElegiblesOrdenados(db);
+    expect(rows.map(r => r.clave)).toEqual(['ml:1', 'web:2', 'web:1']);
   });
 });
 

@@ -11,7 +11,7 @@ import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
-  clasificarElegibilidadMl,
+  clasificarElegibilidadMl, pedidosElegiblesOrdenados,
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
@@ -801,7 +801,7 @@ export function preparacionRouter(db, cfg) {
   // ── Pendientes: lee de pedidos_cache (sincronizada por cron cada 5 min) ──
   router.get('/pendientes', (req, res) => {
     try {
-      const rows = db.prepare("SELECT * FROM pedidos_cache WHERE estado_envio='pendiente' ORDER BY CASE WHEN canal='ml' OR espejo_ml=1 THEN 0 ELSE 1 END, fecha ASC").all();
+      const rows = pedidosElegiblesOrdenados(db);
       // Filtramos filas cuya preparación local ya está resuelta (completada, o en flujo de
       // depósito con pantalla propia en Historial). El sync de ML nunca marca estado_envio
       // como "enviado" en la caché (diseño existente, fuera de alcance acá) y la poda de
