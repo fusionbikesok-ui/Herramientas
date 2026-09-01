@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'node:crypto';
 
 // Etiquetas persistentes del control cíclico de stock. Reemplaza el
 // localStorage de public/etiquetas/index.html, que se pierde al cerrar el navegador, por
@@ -21,6 +22,14 @@ export function etiquetasRouter(db) {
       impreso_en      TEXT
     )`).run();
     db.prepare('CREATE INDEX IF NOT EXISTS idx_etiquetas_cola_estado ON etiquetas_cola(estado)').run();
+    for (const ddl of [
+      'ALTER TABLE etiquetas_cola ADD COLUMN agente_id TEXT',
+      'ALTER TABLE etiquetas_cola ADD COLUMN claim_token TEXT',
+      'ALTER TABLE etiquetas_cola ADD COLUMN claim_hasta TEXT',
+      'ALTER TABLE etiquetas_cola ADD COLUMN ultimo_error TEXT',
+      'ALTER TABLE etiquetas_cola ADD COLUMN error_en TEXT',
+    ]) { try { db.prepare(ddl).run(); } catch (_) {} }
+    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_claim_token ON etiquetas_cola(claim_token) WHERE claim_token IS NOT NULL').run();
   } catch (_) { /* ya existe */ }
 
   const now = () => new Date().toISOString();
@@ -31,6 +40,49 @@ export function etiquetasRouter(db) {
       ? db.prepare('SELECT * FROM etiquetas_cola WHERE estado=? ORDER BY creado_en').all(estado)
       : db.prepare('SELECT * FROM etiquetas_cola ORDER BY creado_en').all();
     res.json({ ok: true, cola: rows });
+  });
+
+  // Agente local: una sola computadora puede reclamar un trabajo a la vez. El lease
+  // permite recuperar trabajos si Windows se reinicia o se pierde la red.
+  router.post('/cola/reclamar', (req, res) => {
+    const agente = String(req.body?.agente_id || '').trim();
+    if (!agente) return res.status(400).json({ ok: false, error: 'agente_id requerido' });
+    const token = `${agente}:${crypto.randomUUID()}`;
+    const hasta = new Date(Date.now() + 60_000).toISOString();
+    const trabajo = db.transaction(() => {
+      const row = db.prepare(`SELECT id FROM etiquetas_cola
+        WHERE estado IN ('pendiente','reintentar') OR (estado='imprimiendo' AND claim_hasta < ?)
+        ORDER BY creado_en, id LIMIT 1`).get(now());
+      if (!row) return null;
+      const updated = db.prepare(`UPDATE etiquetas_cola SET estado='imprimiendo', agente_id=?, claim_token=?, claim_hasta=?
+        WHERE id=? AND (estado IN ('pendiente','reintentar') OR (estado='imprimiendo' AND claim_hasta < ?))`)
+        .run(agente, token, hasta, row.id, now());
+      return updated.changes ? db.prepare('SELECT * FROM etiquetas_cola WHERE id=?').get(row.id) : null;
+    })();
+    res.json({ ok: true, trabajo });
+  });
+
+  router.post('/cola/:id/resultado', (req, res) => {
+    const id = Number.parseInt(req.params.id, 10);
+    const token = String(req.body?.claim_token || '').trim();
+    const ok = req.body?.ok === true;
+    if (!Number.isInteger(id) || !token) return res.status(400).json({ ok: false, error: 'id y claim_token requeridos' });
+    const estado = ok ? 'impresa' : 'error';
+    const ts = now();
+    const error = ok ? null : String(req.body?.error || 'fallo de impresión').slice(0, 1000);
+    const info = db.prepare(`UPDATE etiquetas_cola SET estado=?, impreso_en=CASE WHEN ?='impresa' THEN ? ELSE impreso_en END,
+      ultimo_error=?, error_en=CASE WHEN ?='error' THEN ? ELSE error_en END, claim_token=NULL, claim_hasta=NULL
+      WHERE id=? AND claim_token=? AND estado='imprimiendo'`).run(estado, estado, ts, error, estado, ts, id, token);
+    if (!info.changes) return res.status(409).json({ ok: false, error: 'trabajo no reclamado o lease vencido', code: 'PRINT_CLAIM_INVALID' });
+    res.json({ ok: true, estado });
+  });
+
+  router.post('/cola/:id/reintentar', (req, res) => {
+    const id = Number.parseInt(req.params.id, 10);
+    const info = db.prepare(`UPDATE etiquetas_cola SET estado='reintentar', claim_token=NULL, claim_hasta=NULL
+      WHERE id=? AND estado='error'`).run(id);
+    if (!info.changes) return res.status(409).json({ ok: false, error: 'solo se puede reintentar un trabajo fallido' });
+    res.json({ ok: true });
   });
 
   router.post('/cola', (req, res) => {

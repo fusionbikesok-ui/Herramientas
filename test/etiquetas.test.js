@@ -95,6 +95,32 @@ describe('etiquetas cola', () => {
     expect(impresas.body.cola).toHaveLength(2);
   });
 
+  it('reclama atómicamente, confirma impresión y no permite confirmar con otro agente', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    const alta = await request(app).post('/api/etiquetas/cola').send({ sku: 'FB-PRINT', cantidad: 1 });
+    const claim = await request(app).post('/api/etiquetas/cola/reclamar').send({ agente_id: 'deposito-pc' });
+    expect(claim.body.trabajo.id).toBe(alta.body.item.id);
+    const bad = await request(app).post(`/api/etiquetas/cola/${alta.body.item.id}/resultado`)
+      .send({ claim_token: 'otro', ok: true });
+    expect(bad.status).toBe(409);
+    const ok = await request(app).post(`/api/etiquetas/cola/${alta.body.item.id}/resultado`)
+      .send({ claim_token: claim.body.trabajo.claim_token, ok: true });
+    expect(ok.body.estado).toBe('impresa');
+  });
+
+  it('puede reintentar un error sin duplicar el trabajo', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    const alta = await request(app).post('/api/etiquetas/cola').send({ sku: 'FB-RETRY', cantidad: 1 });
+    const claim = await request(app).post('/api/etiquetas/cola/reclamar').send({ agente_id: 'deposito-pc' });
+    await request(app).post(`/api/etiquetas/cola/${alta.body.item.id}/resultado`)
+      .send({ claim_token: claim.body.trabajo.claim_token, ok: false, error: 'sin papel' });
+    expect((await request(app).post(`/api/etiquetas/cola/${alta.body.item.id}/reintentar`)).body.ok).toBe(true);
+    const siguiente = await request(app).post('/api/etiquetas/cola/reclamar').send({ agente_id: 'deposito-pc' });
+    expect(siguiente.body.trabajo.id).toBe(alta.body.item.id);
+  });
+
   it('no permite editar un ítem ya impreso', async () => {
     const db = openDb(TEST_DB);
     const app = buildApp(db);
