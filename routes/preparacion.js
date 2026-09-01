@@ -2002,7 +2002,10 @@ export function preparacionRouter(db, cfg) {
     } catch (e) {
       if (uploadKey && /constraint/i.test(e.message)) {
         const existente = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND upload_id=? AND borrado_en IS NULL').get(prep.id, uploadKey);
-        if (existente) return res.json({ ok: true, foto: existente, idempotente: true });
+        if (existente) {
+          try { fs.unlinkSync(rutaAbsoluta(saved.url)); } catch (_) {}
+          return res.json({ ok: true, foto: existente, idempotente: true });
+        }
       }
       throw e;
     }
