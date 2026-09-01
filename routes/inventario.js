@@ -264,12 +264,13 @@ export function inventarioRouter(db, wooCfg) {
   router.get('/movimientos-stock', (req, res) => {
     const sku = String(req.query?.sku || '').trim();
     if (!sku) return res.status(400).json({ ok: false, error: 'sku requerido' });
-    const rows = db.prepare(`SELECT m.*, o.codigo AS origen_codigo, d.codigo AS destino_codigo
-      FROM stock_movements m LEFT JOIN warehouse_locations o ON o.id=m.origen_id
-      LEFT JOIN warehouse_locations d ON d.id=m.destino_id WHERE m.sku=? ORDER BY m.id DESC LIMIT 200`).all(sku);
+    const rows = db.prepare(`SELECT m.*, o.zona AS origen_zona, o.estante AS origen_estante,
+      d.zona AS destino_zona, d.estante AS destino_estante
+      FROM stock_movements m LEFT JOIN ubicaciones o ON o.id=m.origen_id
+      LEFT JOIN ubicaciones d ON d.id=m.destino_id WHERE m.sku=? ORDER BY m.id DESC LIMIT 200`).all(sku);
     const balances = db.prepare(`SELECT l.id, l.zona, l.estante, COALESCE(SUM(CASE
       WHEN m.destino_id=l.id THEN m.cantidad WHEN m.origen_id=l.id THEN -m.cantidad ELSE 0 END),0) AS cantidad
-      FROM warehouse_locations l LEFT JOIN stock_movements m ON m.sku=? GROUP BY l.id ORDER BY l.codigo`).all(sku);
+      FROM ubicaciones l LEFT JOIN stock_movements m ON m.sku=? WHERE l.activa=1 GROUP BY l.id ORDER BY l.zona, l.estante`).all(sku);
     res.json({ ok: true, sku, balances, data: rows });
   });
 
@@ -282,7 +283,8 @@ export function inventarioRouter(db, wooCfg) {
     if (!sku || !Number.isInteger(cantidad) || cantidad <= 0 || !Number.isInteger(origen) || !Number.isInteger(destino) || origen === destino || !idempotencia) {
       return res.status(400).json({ ok: false, error: 'sku, cantidad, origen_id, destino_id e idempotencia válidos son obligatorios' });
     }
-    const result = db.transaction(() => {
+    let result;
+    try { result = db.transaction(() => {
       const previo = db.prepare('SELECT * FROM stock_movements WHERE idempotencia=?').get(idempotencia);
       if (previo) return { repetido: true, movimiento: previo };
       if (!db.prepare('SELECT 1 FROM ubicaciones WHERE id=? AND activa=1').get(origen) || !db.prepare('SELECT 1 FROM ubicaciones WHERE id=? AND activa=1').get(destino)) throw Object.assign(new Error('ubicación inexistente'), { code: 'LOCATION_NOT_FOUND' });
@@ -292,8 +294,13 @@ export function inventarioRouter(db, wooCfg) {
       const info = db.prepare(`INSERT INTO stock_movements (sku,cantidad,tipo,origen_id,destino_id,motivo,idempotencia,usuario,creado_en)
         VALUES (?,?,'transferencia',?,?,? ,?,?,?)`).run(sku, cantidad, origen, destino, String(req.body?.motivo || 'transferencia autorizada'), idempotencia, req.user?.username || null, ts);
       return { repetido: false, movimiento: db.prepare('SELECT * FROM stock_movements WHERE id=?').get(info.lastInsertRowid) };
-    });
-    res.status(result.repetido ? 200 : 201).json({ ok: true, ...result });
+    })();
+      res.status(result.repetido ? 200 : 201).json({ ok: true, ...result });
+    } catch (error) {
+      if (error?.code === 'INSUFFICIENT_STOCK') return res.status(409).json({ ok: false, code: error.code, error: error.message });
+      if (error?.code === 'LOCATION_NOT_FOUND') return res.status(404).json({ ok: false, code: error.code, error: error.message });
+      throw error;
+    }
   });
 
   // E5: consulta rápida, solo lectura. Las ubicaciones no relevadas no se inventan:

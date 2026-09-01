@@ -25,6 +25,8 @@ vi.mock('axios');
 import axios from 'axios';
 
 const TEST_DB = './test/tmp-inventario.sqlite';
+const E6_DB = './test/tmp-inventario-e6.sqlite';
+const E6_DB_2 = './test/tmp-inventario-e6-2.sqlite';
 const CFG = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
 const now = () => new Date().toISOString();
 
@@ -61,6 +63,40 @@ describe('consulta rápida de stock E5', () => {
     const r = await request(buildApp(db)).get('/api/inventario/consulta-rapida?q=7791234567890');
     expect(r.status).toBe(200);
     expect(r.body.data[0]).toMatchObject({ sku: 'FB-RAPIDA', disponible_comercial: 7, stock_ml: 6, fisico_conocido: null, entrante: null });
+    db.close();
+  });
+});
+
+describe('libro de movimientos E6', () => {
+  it('transfiere con saldo suficiente y hace idempotente el reintento', async () => {
+    const db = openDb(E6_DB);
+    const app = buildApp(db, 'supervisor', true);
+    const a = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'A', estante: '1' });
+    const b = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'B', estante: '1' });
+    const origen = a.body.ubicacion.id, destino = b.body.ubicacion.id;
+    db.prepare(`INSERT INTO stock_movements (sku,cantidad,tipo,destino_id,motivo,idempotencia,usuario,creado_en)
+      VALUES (?,?,'entrada',?,?,?, ?,?)`).run('FB-MOV', 5, origen, 'saldo inicial', 'seed-e6', 'test', now());
+    const body = { sku: 'FB-MOV', cantidad: 2, origen_id: origen, destino_id: destino, motivo: 'reubicación' };
+    const first = await request(app).post('/api/inventario/movimientos-stock/transferir').set('Idempotency-Key', 'move-1').send(body);
+    const repeat = await request(app).post('/api/inventario/movimientos-stock/transferir').set('Idempotency-Key', 'move-1').send(body);
+    expect(first.status).toBe(201); expect(repeat.status).toBe(200); expect(repeat.body.repetido).toBe(true);
+    const view = await request(app).get('/api/inventario/movimientos-stock?sku=FB-MOV');
+    expect(view.body.balances.find(x => x.id === origen).cantidad).toBe(3);
+    expect(view.body.balances.find(x => x.id === destino).cantidad).toBe(2);
+    db.close();
+  });
+
+  it('rechaza transferir más unidades que las disponibles', async () => {
+    const db = openDb(E6_DB_2);
+    const app = buildApp(db, 'supervisor', true);
+    const a = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'C', estante: '1' });
+    const b = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'D', estante: '1' });
+    db.prepare(`INSERT INTO stock_movements (sku,cantidad,tipo,destino_id,motivo,idempotencia,usuario,creado_en) VALUES (?,?,'entrada',?,?,?, ?,?)`)
+      .run('FB-MOV-2', 1, a.body.ubicacion.id, 'saldo inicial', 'seed-e6-2', 'test', now());
+    const r = await request(app).post('/api/inventario/movimientos-stock/transferir').set('Idempotency-Key', 'move-2')
+      .send({ sku: 'FB-MOV-2', cantidad: 2, origen_id: a.body.ubicacion.id, destino_id: b.body.ubicacion.id, motivo: 'exceso' });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatch(/insuficiente/i);
     db.close();
   });
 });
