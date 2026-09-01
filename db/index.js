@@ -214,6 +214,18 @@ export function openDb(dbPath) {
     });
     aplicarIncidentEmailDlq();
   }
+  const fotosUploadMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_fotos_upload_id_038'").get();
+  if (!fotosUploadMigration) {
+    const aplicarFotosUpload = db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='preparacion_fotos'").get();
+      if (!table) return;
+      const hasColumn = db.prepare('PRAGMA table_info(preparacion_fotos)').all().some((c) => c.name === 'upload_id');
+      if (!hasColumn) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '038_preparacion_fotos_upload_id.sql'), 'utf8'));
+      else db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_preparacion_fotos_upload ON preparacion_fotos(preparacion_id, upload_id) WHERE upload_id IS NOT NULL');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_fotos_upload_id_038')").run();
+    });
+    aplicarFotosUpload();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
