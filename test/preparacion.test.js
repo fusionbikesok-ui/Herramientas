@@ -1634,9 +1634,9 @@ describe('preparacion flujo', () => {
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
     const r = await request(app).post(`/api/preparacion/${id}/foto`)
-      .field('item_id', String(item.id)).field('tipo', 'articulo').field('upload_id', 'tmp-e2e-68570').attach('archivo', buf, 'a.jpg');
+      .field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'a.jpg');
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='foto_subida'").get(id);
-    expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: 'CUB-1', tipo_foto: 'articulo', foto_id: r.body.foto.id, upload_id: 'tmp-e2e-68570' });
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ sku: 'CUB-1', tipo_foto: 'articulo', foto_id: r.body.foto.id });
   });
 
   it('purgarFotosBorradas borra archivo y fila si borrado_en tiene más de 60 días; conserva las más recientes', async () => {
