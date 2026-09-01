@@ -953,7 +953,7 @@ export function preparacionRouter(db, cfg) {
   router.post('/despacho/:id/confirmar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    const bloqueo = bloqueoPorEstado(prep);
+    const bloqueo = prep.estado === 'completada' ? null : bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo, code: 'PREPARACION_CERRADA' });
     if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const idempotencia = String(req.get('Idempotency-Key') || '').trim();
