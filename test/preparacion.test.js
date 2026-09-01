@@ -2705,6 +2705,23 @@ describe('syncPedidosCache', () => {
     expect(r.body.data.find(p => p.ml_order_id === '4444')).toBeTruthy();
     expect(r.body.data.find(p => p.ml_order_id === '5555')).toBeTruthy();
   });
+
+  it('GET /pendientes prioriza MercadoLibre aunque la fila web sea más antigua', async () => {
+    const app = buildTestApp(db);
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('web:6000','web',6000,NULL,'6000','Cliente Web','2026-08-01T00:00:00Z','pendiente','processing',0,NULL,NULL,'[]','2026-08-01T00:00:00Z')
+    `).run();
+    db.prepare(`
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
+      VALUES ('ml:7000','ml',NULL,'7000','7000','Cliente ML','2026-08-02T00:00:00Z','pendiente',NULL,0,'self_service',NULL,'[]','2026-08-02T00:00:00Z')
+    `).run();
+
+    const r = await request(app).get('/api/preparacion/pendientes');
+
+    expect(r.status).toBe(200);
+    expect(r.body.data.map(p => p.canal)).toEqual(['ml', 'web']);
+  });
 });
 
 // ─── A.1: camino rápido por webhook (sin esperar al cron de 10 min) ─────────────
