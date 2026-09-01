@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { ensureTablesJornada } from '../routes/jornada.js';
-import { fechaLocalHoy, abrirJornada, jornadaDeHoy } from '../lib/jornada.js';
+import { fechaLocalHoy, abrirJornada, jornadaDeHoy, anotarVencimiento, reclamarOla } from '../lib/jornada.js';
 
 const TEST_DB = 'test/jornada.test.sqlite';
 
@@ -171,5 +171,89 @@ describe('rutas /api/jornada', () => {
     await request(app).post('/api/jornada/abrir').send({});
     const despues = await request(app).get('/api/jornada/hoy');
     expect(despues.body.jornada.estado).toBe('abierta');
+  });
+
+  it('POST /ola/:id/reclamar congela y devuelve olaNueva', async () => {
+    const app = appConUsuario('op1');
+    const abrir = await request(app).post('/api/jornada/abrir').send({});
+    const waveId = abrir.body.olaInicial.id;
+    const r = await request(app).post(`/api/jornada/ola/${waveId}/reclamar`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.claim).toHaveProperty('por_vencer');
+  });
+});
+
+describe('anotarVencimiento', () => {
+  it('por_vencer es false lejos del vencimiento y true dentro de los 10 minutos', () => {
+    const claim = { expires_at: new Date('2026-09-01T12:15:00Z').toISOString() };
+    const lejos = anotarVencimiento(claim, new Date('2026-09-01T12:00:00Z'));
+    expect(lejos.por_vencer).toBe(false);
+    expect(lejos.segundos_restantes).toBe(900);
+    const cerca = anotarVencimiento(claim, new Date('2026-09-01T12:06:00Z'));
+    expect(cerca.por_vencer).toBe(true);
+    expect(cerca.segundos_restantes).toBe(540);
+  });
+
+  it('segundos_restantes nunca es negativo si ya venció', () => {
+    const claim = { expires_at: new Date('2026-09-01T12:00:00Z').toISOString() };
+    const r = anotarVencimiento(claim, new Date('2026-09-01T12:05:00Z'));
+    expect(r.segundos_restantes).toBe(0);
+    expect(r.por_vencer).toBe(true);
+  });
+});
+
+describe('reclamarOla', () => {
+  let db, dayId, waveId;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    ensureTablesJornada(db);
+    const ts = new Date().toISOString();
+    dayId = db.prepare(`INSERT INTO operational_days (fecha, estado, abierta_por, abierta_en) VALUES (?,?,?,?)`)
+      .run('2026-09-01', 'abierta', 'tester', ts).lastInsertRowid;
+    waveId = db.prepare(`INSERT INTO pick_waves (operational_day_id, tipo, estado, creada_en) VALUES (?,'mini','abierta',?)`)
+      .run(dayId, ts).lastInsertRowid;
+    db.prepare(`INSERT INTO pick_wave_items (pick_wave_id, pedido_clave, agregado_en) VALUES (?,?,?)`).run(waveId, 'ml:1', ts);
+  });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  it('congela la ola con exactamente sus items y abre una mini-ola nueva vacía', () => {
+    const r = reclamarOla(db, waveId, 'op1');
+    expect(r.ok).toBe(true);
+    expect(r.olaCongelada.estado).toBe('en_picking');
+    expect(r.olaNueva.tipo).toBe('mini');
+    expect(r.olaNueva.estado).toBe('abierta');
+    const itemsCongelados = db.prepare('SELECT pedido_clave FROM pick_wave_items WHERE pick_wave_id=?').all(r.olaCongelada.id);
+    expect(itemsCongelados.map(i => i.pedido_clave)).toEqual(['ml:1']);
+  });
+
+  it('un pedido agregado después del claim cae en la ola nueva, no en la congelada', () => {
+    const r = reclamarOla(db, waveId, 'op1');
+    const ts = new Date().toISOString();
+    db.prepare(`INSERT INTO pick_wave_items (pick_wave_id, pedido_clave, agregado_en) VALUES (?,?,?)`).run(r.olaNueva.id, 'web:2', ts);
+    const enCongelada = db.prepare('SELECT COUNT(*) c FROM pick_wave_items WHERE pick_wave_id=? AND pedido_clave=?').get(r.olaCongelada.id, 'web:2').c;
+    expect(enCongelada).toBe(0);
+  });
+
+  it('un segundo claim del mismo usuario mientras el primero sigue vigente no crea una segunda ola nueva', () => {
+    const r1 = reclamarOla(db, waveId, 'op1');
+    const r2 = reclamarOla(db, r1.olaCongelada.id, 'op1');
+    expect(r2.ok).toBe(true);
+    const totalOlas = db.prepare('SELECT COUNT(*) c FROM pick_waves WHERE operational_day_id=?').get(dayId).c;
+    expect(totalOlas).toBe(2); // la congelada original + la nueva abierta por el primer claim, sin una tercera
+  });
+
+  it('claim de otro usuario mientras está vigente responde WAVE_CLAIMED', () => {
+    reclamarOla(db, waveId, 'op1');
+    const r2 = reclamarOla(db, waveId, 'op2');
+    // la ola ya no está en estado 'abierta' tras el primer claim; el segundo reclamo sobre
+    // la MISMA ola original ahora es sobre una ola en_picking tomada por op1.
+    expect(r2.ok).toBe(false);
+    expect(r2.code).toBe('WAVE_CLAIMED');
+  });
+
+  it('anota por_vencer/segundos_restantes en el claim devuelto', () => {
+    const r = reclamarOla(db, waveId, 'op1', {}, new Date('2026-09-01T12:00:00Z'));
+    expect(r.claim).toHaveProperty('por_vencer', false);
+    expect(r.claim).toHaveProperty('segundos_restantes', 900);
   });
 });

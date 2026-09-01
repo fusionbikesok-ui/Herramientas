@@ -50,7 +50,7 @@ export function ensureTablesJornada(db) {
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pick_wave_claims_expira ON pick_wave_claims(expires_at)').run();
 }
 
-import { abrirJornada, jornadaDeHoy } from '../lib/jornada.js';
+import { abrirJornada, jornadaDeHoy, reclamarOla } from '../lib/jornada.js';
 
 export function jornadaRouter(db, cfg) {
   ensureTablesJornada(db);
@@ -66,6 +66,18 @@ export function jornadaRouter(db, cfg) {
 
   router.get('/hoy', (req, res) => {
     res.json({ ok: true, jornada: jornadaDeHoy(db) });
+  });
+
+  router.post('/ola/:id/reclamar', (req, res) => {
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'id inválido' });
+    const r = reclamarOla(db, id, req.user.username);
+    if (!r.ok) {
+      const status = r.code === 'WAVE_NOT_FOUND' ? 404 : 409;
+      return res.status(status).json({ ok: false, code: r.code, claim: r.claim || null });
+    }
+    res.json({ ok: true, claim: r.claim, olaCongelada: r.olaCongelada, olaNueva: r.olaNueva });
   });
 
   return router;
