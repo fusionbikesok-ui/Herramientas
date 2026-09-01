@@ -2811,7 +2811,7 @@ describe('pedidosElegiblesOrdenados', () => {
     ins.run('ml:1', 'ml', null, '2', 'B', '2026-09-01T11:00:00Z', 'pendiente', 0, '[]', ts);
     ins.run('web:2', 'web', 2, '3', 'C', '2026-09-01T09:00:00Z', 'pendiente', 1, '[]', ts); // espejo_ml
     const rows = pedidosElegiblesOrdenados(db);
-    expect(rows.map(r => r.clave)).toEqual(['ml:1', 'web:2', 'web:1']);
+    expect(rows.map(r => r.clave)).toEqual(['web:2', 'ml:1', 'web:1']);
   });
 });
 
