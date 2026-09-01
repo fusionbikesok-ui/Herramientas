@@ -8,6 +8,7 @@
     "start": "node server.js",
     "test": "vitest run",
     "verify:agents": "node scripts/verify-agent-pipeline.mjs",
+    "verify:mobile-contract": "node scripts/verify-mobile-contract.mjs",
     "agent:claude": "node scripts/orchestrate-claude.mjs",
     "agent:e2e": "node scripts/run-isolated-claude-e2e.mjs",
     "audit": "node scripts/audit-matcher.mjs",
