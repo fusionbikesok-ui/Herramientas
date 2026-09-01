@@ -1343,16 +1343,7 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
   fd.append('item_id',itemId==null?'':itemId);
   fd.append('tipo',tipo);
   try{
-    // No dejar una previsualización "subiendo" indefinidamente: en depósito una red
-    // intermitente puede dejar fetch pendiente sin disparar catch, y el operario cree que
-    // la foto quedó guardada aunque nunca llegó a SQLite. El mismo archivo queda disponible
-    // para reintentar con la misma intención desde marcarSubidaFallida().
-    var ctl=new AbortController();
-    var timeout=setTimeout(function(){ctl.abort();},30000);
-    var r;
-    try {
-      r=await fetch('/api/preparacion/'+PREP.id+'/foto',{method:'POST',body:fd,signal:ctl.signal});
-    } finally { clearTimeout(timeout); }
+    var r=await fetch('/api/preparacion/'+PREP.id+'/foto',{method:'POST',body:fd});
     var d=await r.json().catch(function(){return{ok:false};});
     var elAhora=document.querySelector('.thumb[data-foto-id="'+tempId+'"]');
     if(!d.ok){
@@ -1383,14 +1374,13 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
     // Cortó la red a mitad de la subida (el caso real del depósito): la foto NO se pierde
     // ni se descarta en silencio — sigue en pantalla, marcada como fallida, con el mismo
     // archivo listo para reintentar con un toque (no hay que volver a sacarla).
-    marcarSubidaFallida(tempId, e && e.name === 'AbortError' ? 'La subida tardó demasiado y no fue confirmada por el servidor.' : null);
+    marcarSubidaFallida(tempId);
   }
 }
 
-function marcarSubidaFallida(tempId,detalle){
-  var texto=detalle||'No se pudo confirmar la subida por un problema de red.';
-  flash('bad',texto+' La foto no quedó guardada en el servidor. Reintentá cuando tengas señal.');
-  anunciarFoto(texto+' La foto sigue disponible en pantalla para reintentar.');
+function marcarSubidaFallida(tempId){
+  flash('bad','No se pudo subir la foto (sin conexión). Quedó guardada acá — reintentá cuando tengas señal.');
+  anunciarFoto('Una foto no se pudo subir por un problema de red. Sigue disponible en pantalla para reintentar.');
   var el=document.querySelector('.thumb[data-foto-id="'+tempId+'"]');
   if(!el)return;
   el.classList.add('err');
