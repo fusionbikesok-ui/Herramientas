@@ -242,6 +242,34 @@ export function inventarioRouter(db, wooCfg) {
   ensureTables(db);
   const router = express.Router();
 
+  // E5: consulta rápida, solo lectura. Las ubicaciones no relevadas no se inventan:
+  // físico/entrante quedan explícitamente sin línea base hasta E6/E9.
+  router.get('/consulta-rapida', (req, res) => {
+    const q = String(req.query?.q || '').trim();
+    if (q.length < 2) return res.status(400).json({ ok: false, error: 'q debe tener al menos 2 caracteres' });
+    const limit = Math.min(Math.max(Number.parseInt(req.query?.limit || '50', 10) || 50, 1), 100);
+    const term = `%${q.toLowerCase()}%`;
+    const tienePreparaciones = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='preparacion_items'").get();
+    const comprometidoSql = tienePreparaciones
+      ? `(SELECT COUNT(*) FROM preparacion_items pi JOIN preparaciones p ON p.id=pi.preparacion_id
+          WHERE pi.sku=c.sku AND p.estado NOT IN ('completada','despachada_sin_verificar','cerrada_sin_evidencia'))`
+      : '0';
+    const rows = db.prepare(`SELECT c.id_woo, c.sku, c.gtin, c.nombre, c.marca, c.stock AS disponible_comercial,
+        c.actualizado_en AS woo_actualizado_en,
+        (SELECT SUM(s.cantidad_ml) FROM ml_stock_estado s WHERE s.sku=c.sku) AS stock_ml,
+        (SELECT MAX(s.actualizado_en) FROM ml_stock_estado s WHERE s.sku=c.sku) AS ml_actualizado_en,
+        ${comprometidoSql} AS comprometido
+      FROM catalogo_cache c
+      WHERE lower(COALESCE(c.sku,'')) LIKE ? OR lower(COALESCE(c.gtin,'')) LIKE ? OR lower(COALESCE(c.nombre,'')) LIKE ?
+      ORDER BY CASE WHEN lower(COALESCE(c.sku,'')) = lower(?) THEN 0 ELSE 1 END, c.nombre
+      LIMIT ?`).all(term, term, term, q, limit);
+    res.json({ ok: true, actualizado_en: new Date().toISOString(), data: rows.map(row => ({
+      ...row, fisico_conocido: null, no_disponible: null, entrante: null,
+      stock_publicado_woo: row.disponible_comercial,
+      frescura: { woo: row.woo_actualizado_en, ml: row.ml_actualizado_en },
+    })) });
+  });
+
   // Base de catálogo contable: mismo criterio en opciones, preview, snapshot y
   // pendientes — así el preview coincide exactamente con lo que se abre después.
   // no_contable=1 (Fase 0, Tarea 1: servicios, cargos, gift cards) queda afuera del

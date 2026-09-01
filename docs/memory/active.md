@@ -29,6 +29,9 @@ Actualizado: 2026-09-01.
 - E4: notificaciones, inbox y operaciones móviles del backend pasan 17/17 tests. La App remota
   ahora carga la bandeja desde `/api/v1/notifications` cuando está en modo HTTP (commit `b2755b56`);
   la lectura y deep links todavía requieren prueba en dispositivos.
+- E5 comenzó con `/api/inventario/consulta-rapida`: búsqueda de solo lectura por SKU/EAN/nombre,
+  stock comercial Woo, stock ML cacheado, compromisos conocidos y campos físicos/entrantes nulos
+  cuando todavía no existe línea base de ubicaciones. Su prueba específica pasa 1/1.
 - Inventario tiene conteos y cierre seguro, pero todavía no tiene el libro de movimientos y saldos
   físicos por ubicación definido en el programa de stock.
 - La App usa `feature/stock-flow-ui` como base. Su prototipo de stock con edición absoluta debe
