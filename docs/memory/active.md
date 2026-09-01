@@ -7,13 +7,13 @@ Actualizado: 2026-09-01.
 - Especificación vigente: `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`.
 - Índice de planificación: `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.
 - Progreso verificable: `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E24.
-- E0 está en `desarrollo` dentro del worktree `/tmp/fusion-plan-maestro-e0`; todavía no está publicada, observada ni aceptada.
+- E0 está `candidata` e integrada localmente en `conteo-confiable` hasta `89c8f7a`; todavía no fue pusheada, publicada ni aceptada.
 - La App remota `feature/stock-flow-ui` alineó `README.md` y `docs/backend-sync/README.md` en `ac4c48f` y `380640f`; no se publicó build móvil.
 - El VPS `/opt/fusionbikes/herramientas` es producción real y sirve `conteo-confiable`.
 
 ## Base y cambios preservados
 
-La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3`. En el checkout productivo existen cambios ajenos no confirmados en `db/index.js`, `routes/inventario.js`, `test/inventario.test.js` y `migrations/041_stock_rollout_skus.sql`; E0 se desarrolla aislada y no debe modificarlos.
+La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se integró por fast-forward. Los cambios ajenos no confirmados en `db/index.js`, `routes/inventario.js`, `test/inventario.test.js` y `migrations/041_stock_rollout_skus.sql` conservaron exactamente sus hashes antes/después.
 
 ## Estado funcional verificado, no aceptación
 
@@ -25,7 +25,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3`. En el 
 
 ## Próxima acción
 
-Completar E0: sincronizar documentos vivos, validar cobertura/enlaces/contradicciones, revisión independiente, tests documentales y auditoría. Integrar solo el cambio documental; no desplegar runtime.
+Validar/aceptar E0 documental y comenzar el relevamiento bloqueante de E1: campo SLA ML real, calendario/horarios y secuencia física inicial. No desplegar runtime por esta entrega documental.
 
 ## Reglas inmediatas
 
