@@ -32,6 +32,9 @@ Actualizado: 2026-09-01.
 - E5 comenzó con `/api/inventario/consulta-rapida`: búsqueda de solo lectura por SKU/EAN/nombre,
   stock comercial Woo, stock ML cacheado, compromisos conocidos y campos físicos/entrantes nulos
   cuando todavía no existe línea base de ubicaciones. Su prueba específica pasa 1/1.
+- E6 comenzó con el libro `stock_movements` y las ubicaciones existentes de inventario; las
+  transferencias exigen origen, destino, saldo suficiente, motivo e idempotencia. La implementación
+  está local y aún requiere ampliar pruebas y revisión antes de considerarse integrada.
 - Inventario tiene conteos y cierre seguro, pero todavía no tiene el libro de movimientos y saldos
   físicos por ubicación definido en el programa de stock.
 - La App usa `feature/stock-flow-ui` como base. Su prototipo de stock con edición absoluta debe

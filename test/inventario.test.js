@@ -55,7 +55,7 @@ function insertProducto(db, extra) {
 describe('consulta rápida de stock E5', () => {
   it('busca por SKU/EAN/nombre y no inventa saldos físicos ni entrantes', async () => {
     const db = openDb(TEST_DB);
-    insertProducto(db, { sku: 'FB-RAPIDA', nombre: 'Casco rápido', stock: 7, gtin: '7791234567890' });
+    insertProducto(db, { id_woo: 9999, sku: 'FB-RAPIDA', nombre: 'Casco rápido', stock: 7, gtin: '7791234567890' });
     db.prepare('INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES (?,?,?,?)')
       .run('ml:rapida', 'FB-RAPIDA', 6, now());
     const r = await request(buildApp(db)).get('/api/inventario/consulta-rapida?q=7791234567890');

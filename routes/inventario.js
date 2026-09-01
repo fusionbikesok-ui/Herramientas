@@ -242,6 +242,60 @@ export function inventarioRouter(db, wooCfg) {
   ensureTables(db);
   const router = express.Router();
 
+  try {
+    db.prepare(`CREATE TABLE IF NOT EXISTS stock_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT NOT NULL, cantidad INTEGER NOT NULL CHECK(cantidad <> 0),
+      tipo TEXT NOT NULL CHECK(tipo IN ('entrada','salida','transferencia')), origen_id INTEGER,
+      destino_id INTEGER, motivo TEXT NOT NULL, idempotencia TEXT NOT NULL UNIQUE,
+      usuario TEXT, creado_en TEXT NOT NULL, FOREIGN KEY(origen_id) REFERENCES ubicaciones(id),
+      FOREIGN KEY(destino_id) REFERENCES ubicaciones(id)
+    )`).run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_stock_movements_sku ON stock_movements(sku, creado_en)').run();
+    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_movements_idempotencia ON stock_movements(idempotencia)').run();
+  } catch (_) {}
+
+  router.get('/ubicaciones-stock', (_req, res) => {
+    const rows = db.prepare(`SELECT u.*, COUNT(pu.sku) AS skus_registrados
+      FROM ubicaciones u LEFT JOIN producto_ubicacion pu ON pu.ubicacion_id=u.id
+      WHERE u.activa=1 GROUP BY u.id ORDER BY u.zona, u.estante`).all();
+    res.json({ ok: true, data: rows });
+  });
+
+  router.get('/movimientos-stock', (req, res) => {
+    const sku = String(req.query?.sku || '').trim();
+    if (!sku) return res.status(400).json({ ok: false, error: 'sku requerido' });
+    const rows = db.prepare(`SELECT m.*, o.codigo AS origen_codigo, d.codigo AS destino_codigo
+      FROM stock_movements m LEFT JOIN warehouse_locations o ON o.id=m.origen_id
+      LEFT JOIN warehouse_locations d ON d.id=m.destino_id WHERE m.sku=? ORDER BY m.id DESC LIMIT 200`).all(sku);
+    const balances = db.prepare(`SELECT l.id, l.zona, l.estante, COALESCE(SUM(CASE
+      WHEN m.destino_id=l.id THEN m.cantidad WHEN m.origen_id=l.id THEN -m.cantidad ELSE 0 END),0) AS cantidad
+      FROM warehouse_locations l LEFT JOIN stock_movements m ON m.sku=? GROUP BY l.id ORDER BY l.codigo`).all(sku);
+    res.json({ ok: true, sku, balances, data: rows });
+  });
+
+  router.post('/movimientos-stock/transferir', (req, res) => {
+    const sku = String(req.body?.sku || '').trim();
+    const cantidad = Number.parseInt(req.body?.cantidad, 10);
+    const origen = Number.parseInt(req.body?.origen_id, 10);
+    const destino = Number.parseInt(req.body?.destino_id, 10);
+    const idempotencia = String(req.get('Idempotency-Key') || req.body?.idempotencia || '').trim();
+    if (!sku || !Number.isInteger(cantidad) || cantidad <= 0 || !Number.isInteger(origen) || !Number.isInteger(destino) || origen === destino || !idempotencia) {
+      return res.status(400).json({ ok: false, error: 'sku, cantidad, origen_id, destino_id e idempotencia válidos son obligatorios' });
+    }
+    const result = db.transaction(() => {
+      const previo = db.prepare('SELECT * FROM stock_movements WHERE idempotencia=?').get(idempotencia);
+      if (previo) return { repetido: true, movimiento: previo };
+      if (!db.prepare('SELECT 1 FROM ubicaciones WHERE id=? AND activa=1').get(origen) || !db.prepare('SELECT 1 FROM ubicaciones WHERE id=? AND activa=1').get(destino)) throw Object.assign(new Error('ubicación inexistente'), { code: 'LOCATION_NOT_FOUND' });
+      const balance = db.prepare(`SELECT COALESCE(SUM(CASE WHEN destino_id=? THEN cantidad WHEN origen_id=? THEN -cantidad ELSE 0 END),0) AS cantidad FROM stock_movements WHERE sku=?`).get(origen, origen, sku).cantidad;
+      if (balance < cantidad) throw Object.assign(new Error('stock insuficiente en origen'), { code: 'INSUFFICIENT_STOCK' });
+      const ts = new Date().toISOString();
+      const info = db.prepare(`INSERT INTO stock_movements (sku,cantidad,tipo,origen_id,destino_id,motivo,idempotencia,usuario,creado_en)
+        VALUES (?,?,'transferencia',?,?,? ,?,?,?)`).run(sku, cantidad, origen, destino, String(req.body?.motivo || 'transferencia autorizada'), idempotencia, req.user?.username || null, ts);
+      return { repetido: false, movimiento: db.prepare('SELECT * FROM stock_movements WHERE id=?').get(info.lastInsertRowid) };
+    });
+    res.status(result.repetido ? 200 : 201).json({ ok: true, ...result });
+  });
+
   // E5: consulta rápida, solo lectura. Las ubicaciones no relevadas no se inventan:
   // físico/entrante quedan explícitamente sin línea base hasta E6/E9.
   router.get('/consulta-rapida', (req, res) => {

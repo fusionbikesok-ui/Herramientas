@@ -238,6 +238,14 @@ export function openDb(dbPath) {
     });
     aplicarEtiquetasIdempotencia();
   }
+  const stockMovementMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='stock_movements_locations_040'").get();
+  if (!stockMovementMigration) {
+    const aplicarStockMovements = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '040_stock_movements_locations.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('stock_movements_locations_040')").run();
+    });
+    aplicarStockMovements();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
