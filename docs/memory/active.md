@@ -12,7 +12,7 @@ Actualizado: 2026-09-01.
 
 - La base funcional previa a E0 está en `334d48d`; E0 quedó documentada e integrada en el commit
   `b8e289d`.
-- E0 quedó integrada localmente en `conteo-confiable` mediante `b8e289d`: plan por entregas,
+- El contenido de E0 quedó integrado localmente en `conteo-confiable` mediante `b8e289d` (checkout actual `4ec4458`): plan por entregas,
   memoria de operaciones y App, corrección de contexto y rutas absolutas. No se hizo push ni deploy.
 - Preparación tiene cola continua, toma exclusiva, fotos, evidencia, estados y control de despacho
   idempotente. La hoja operativa y varias mejoras de fotos/horarios siguen en worktrees aislados.
