@@ -10,8 +10,10 @@ Actualizado: 2026-09-01.
 
 ## Estado actual
 
-- La base funcional previa a E0 está en `334d48d`; el commit de integración de E0 debe reemplazar
-  este valor antes de marcar la entrega completa.
+- La base funcional previa a E0 está en `334d48d`; E0 quedó documentada e integrada en el commit
+  `b8e289d`.
+- E0 quedó integrada localmente en `conteo-confiable` mediante `b8e289d`: plan por entregas,
+  memoria de operaciones y App, corrección de contexto y rutas absolutas. No se hizo push ni deploy.
 - Preparación tiene cola continua, toma exclusiva, fotos, evidencia, estados y control de despacho
   idempotente. La hoja operativa y varias mejoras de fotos/horarios siguen en worktrees aislados.
 - El control actual encola una etiqueta interna 50×25, pero todavía no imprime silenciosamente ni
