@@ -28,8 +28,9 @@ Actualizado: 2026-09-01.
   `fusionbikesok-ui/FusionBikes-App:feature/stock-flow-ui` se fijó modo HTTP por defecto y se eliminó
   el fallback silencioso a datos simulados cuando falla el backend (commits `44a0264a` y `2038beeb`).
 - E4: notificaciones, inbox y operaciones móviles del backend pasan 17/17 tests. La App remota
-  ahora carga la bandeja desde `/api/v1/notifications` cuando está en modo HTTP (commit `b2755b56`);
-  la lectura y deep links todavía requieren prueba en dispositivos.
+  carga la bandeja desde `/api/v1/notifications` y marca lecturas contra el backend en modo HTTP
+  (commits `b2755b56` y `216433ed`); deep links y validación en dispositivos todavía requieren
+  prueba física.
 - E5 tiene `/api/inventario/consulta-rapida`: búsqueda de solo lectura por SKU/EAN/nombre,
   stock comercial Woo, stock ML cacheado, compromisos conocidos y campos físicos/entrantes nulos
   cuando todavía no existe línea base de ubicaciones. Su prueba específica pasa 1/1.
