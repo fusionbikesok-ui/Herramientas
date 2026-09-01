@@ -1,10 +1,14 @@
 # Traspaso a Claude — plan consolidado
 
+> **Handoff histórico sustituido.** No usar su orden ni commits como estado vigente. Continuar desde
+> `/opt/fusionbikes/herramientas/docs/memory/active.md`, el maestro E0–E24 y la ficha de entrega en
+> `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/`.
+
 Actualizado: 2026-08-28.
 
 ## Fuente de verdad
 
-La única fuente de trabajo pendiente es:
+La fuente que era vigente al redactar este handoff fue:
 
 `docs/superpowers/plans/plan-maestro-v2.md`
 

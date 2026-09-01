@@ -1,372 +1,1155 @@
-# Plan maestro por entregas verticales: VPS y App
+# Plan Maestro de FusionBikes: operación, VPS y App
 
-**Estado:** plan único vigente
-**Actualizado:** 2026-09-01
-**Backend canónico:** `/opt/fusionbikes/herramientas`, rama productiva `conteo-confiable`
-**Base verificada al redactar:** `334d48d`
-**App:** repositorio privado `fusionbikesok-ui/FusionBikes-App`, base `feature/stock-flow-ui`
-**Despliegue:** siempre manual, después de revisión, pruebas, E2E y auditoría
+**Estado:** especificación canónica vigente
+**Versión documental:** 2026-09-01 / programa E0–E24
+**Backend canónico:** `/opt/fusionbikes/herramientas`
+**Rama productiva observada:** `conteo-confiable`
+**Base verificada de esta reconstrucción:** `bc13898f9faeffcde00f49616ce6cb858eff03a3`
+**App:** `fusionbikesok-ui/FusionBikes-App`, base aprobada `feature/stock-flow-ui`
+**Zona operativa:** `America/Argentina/Buenos_Aires`
 
-## 1. Cómo leer este plan
+## 1. Propósito, alcance y reglas de lectura
 
-Este documento distingue cuatro estados y no los mezcla:
+Este documento reúne la especificación funcional acumulativa para Herramientas y App. No es un changelog ni prueba por sí mismo que exista una función. Recupera el contenido útil del plan histórico, incorpora las decisiones del descubrimiento operativo y separa con precisión presente, brecha y objetivo.
 
-- **Integrado:** el cambio es ancestro de la rama indicada y está disponible en su código.
-- **Terminado sin integrar:** existe en una rama o worktree, pero todavía debe rebasarse, revisarse
-  e integrarse.
-- **Programado:** decisión aprobada para una entrega futura; no describe comportamiento actual.
-- **Pendiente de decisión:** no debe ser resuelto por un implementador sin volver al responsable
-  operativo.
+La copia literal de `ce5c3cb` está en `/opt/fusionbikes/herramientas/docs/superpowers/archive/plan-maestro-v2-ce5c3cb.md`. El registro de decisiones está en `/opt/fusionbikes/herramientas/docs/superpowers/decisions/plan-maestro-decisions.md`; progreso y evidencia viven en `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E00–E24.
 
-Cada entrega dura idealmente 3–5 días, deja un resultado demostrable y reversible, y actualiza
-este plan y `/opt/fusionbikes/herramientas/docs/memory/`. Una entrega que afecte un flujo ya usado
-se observa durante al menos una jornada operativa antes de ampliar ese mismo flujo.
+### 1.1 Vocabulario de estado
 
-## 2. Estado real de partida
+- **Verificado actual:** observado en código, contrato, pruebas o infraestructura identificable en la base indicada.
+- **Brecha:** comportamiento faltante, parcial o todavía no aceptado.
+- **Modelo objetivo:** decisión funcional aprobada que una entrega debe implementar.
+- **Histórico:** evidencia de una fecha; no instrucción vigente.
+- **Candidato:** código o commit existente que aún debe revisar ancestry, diff y gates.
+- **Aceptado:** entrega publicada, observada una jornada y firmada por el responsable operativo.
 
-### 2.1 Backend integrado en `conteo-confiable`
+Una numeración antigua, un commit o una prueba focalizada no convierten una entrega en aceptada. Las fichas usan exclusivamente `planificada → desarrollo → candidata → publicada → observada → aceptada`.
 
-- Preparación tiene cola continua, toma exclusiva mediante claim técnico, escaneo, requisitos de
-  evidencia, fotos por ítem y paquete, estados auditados y control de despacho idempotente.
-- El control de despacho ya puede crear una tarea interna de etiqueta 50×25 en
-  `etiquetas_cola`, pero la impresión sigue requiriendo el flujo manual del navegador y el
-  disparador actual ocurre demasiado tarde, durante la confirmación de despacho.
-- Existe configuración de horarios de corte, notificaciones, autenticación móvil, inbox,
-  dispositivos, preferencias y entrega push bajo `/api/v1`.
-- Inventario dispone de sesiones de conteo, alcance por categorías, marcas o ubicación,
-  asociación de códigos y cierre seguro. No es todavía el libro de movimientos definido en
-  este plan.
-- Recepción, pedidos, sincronización Woo/ML y etiquetas existen como herramientas separadas.
-  Todavía no comparten el modelo físico/comprometido/no disponible/entrante de las entregas de
-  stock.
+### 1.2 Precedencia y continuidad
 
-### 2.2 Trabajo terminado pero no integrado
+Ante contradicciones, el código y contrato ejecutable verifican el presente; este maestro fija el objetivo; decisiones explican por qué; fichas demuestran avance; memoria resume; Git preserva historia. La documentación local es fuente canónica. Un Codebase Memory MCP puede espejarla, nunca reemplazarla ni contener decisiones que no estén aquí.
 
-Antes de E1 se debe comprobar nuevamente ancestry y diff real. Al 2026-09-01 existen:
+Todo agente inicia leyendo `/opt/fusionbikes/herramientas/CLAUDE.md`, `/opt/fusionbikes/herramientas/docs/memory/INDEX.md`, `/opt/fusionbikes/herramientas/docs/memory/active.md`, módulos pertinentes, este maestro y la ficha de entrega. Termina dejando checkpoint reproducible, sin secretos ni PII.
 
-| Tema | Rama / worktree | Punta observada | Estado |
-| --- | --- | --- | --- |
-| Carga idempotente y timeouts de fotos | `fix-fotos-upload-timeout` / `/tmp/fusion-fotos-upload-20260831` | `3fe7437` | Terminado sin integrar |
-| Hoja diaria operativa de despachos | `hoja-despachos-u0` / `/tmp/fusion-hoja-despachos-20260831` | `6b68902` | Terminado sin integrar |
-| SLA y fecha de despacho por modalidad | `prep-horarios-corte` / `/tmp/fusion-prep-horarios-fix-20260831` | `8fd920d` | Terminado sin integrar |
+## 2. Contexto operativo y jornada
 
-No se hará merge ciego de estas ramas: cada una se rebasa sobre la base vigente, se inspeccionan
-los conflictos semánticos y se repiten sus gates.
+### 2.1 Escala, canales y personas
 
-### 2.3 Estado real de la App
+- Volumen normal: 31–100 pedidos diarios, mayormente de una línea.
+- Canales iniciales: MercadoLibre y Woo/web. Las ventas presenciales también se registran en Woo.
+- Una persona normalmente busca, prepara, fotografía y aprueba. Otra realiza despacho físico.
+- Roles base: Admin, supervisor, operario, despacho y ventas, más excepciones explícitas por usuario.
+- Dispositivos personales y compartidos son válidos; los compartidos sincronizan y purgan caché sensible al cerrar.
 
-- `main` es un scaffold inicial; `feature/app-foundation` y `feature/stock-flow-ui` divergieron.
-- `feature/stock-flow-ui` es la base elegida. Contiene prototipos, mocks, auth/biometría/push
-  parcial y una UI monolítica de stock con edición absoluta que no representa el modelo final.
-- El trabajo exclusivo útil de `feature/app-foundation` se porta selectivamente; no se mezcla la
-  rama completa.
-- La copia del OpenAPI de la App estaba desactualizada respecto de
-  `/opt/fusionbikes/herramientas/openapi/mobile-v1.yaml`.
-- La App consume únicamente `/api/v1`; nunca habla directamente con WooCommerce,
-  MercadoLibre ni servicios internos del VPS.
-- Se valida iPhone y Android desde los primeros verticales. No existe una etapa “iPhone primero,
-  Android después”.
+### 2.2 Apertura, horarios y cierre
 
-## 3. Estrategia de entregas
+El primer operario abre la jornada, confirma fecha local y horarios, revisa integraciones, agente/impresora y pendientes. Una falla bloquea solo operaciones afectadas. La web tiene máximo normal de preparación 15:00 con excepciones por calendario. ML obtiene el máximo por API y requiere confirmación humana; si hay varias ventanas se usa la más temprana.
 
-| Entrega | Superficie | Resultado tangible |
+Un diferido registra fecha, motivo, nota, origen de instrucción y auditoría. Supervisor o despacho cierra la jornada. Pendientes se arrastran con alerta; no se exige reconciliación física completa de staging al cierre.
+
+## 3. Modelo de dominio y lenguaje común
+
+
+| Tipo | Responsabilidad |
+| --- | --- |
+| `OperationalDay` | fecha local, horarios confirmados, salud, pendientes y cierre |
+| `PickWave` | conjunto congelado de necesidades de picking |
+| `Preparation` | asignación de producto/pedido y estado de preparación |
+| `Package` | contenido físico y ciclo evidencia→despacho |
+| `PhotoEvidence` | archivo, requisito, perfil/versionado y procesamiento |
+| `InternalLabelJob` | impresión 50×25 idempotente por paquete |
+| `ShippingBatch` | miembros congelados y reconciliación de transporte |
+| `DispatchConfirmation` | salida física y actualización comercial durable |
+| `StockBalance` | proyección de cantidades por ubicación/condición |
+| `StockMovement` | hecho inmutable que explica el balance |
+| `WarehouseLocation` | depósito→zona→estante y sectores operativos |
+| `StockCommitment` | reserva operativa derivada de Woo |
+| `InventoryTask` | trabajo reclamable, versionado y sincronizable |
+| `Receipt` | documento, líneas, entrada y putaway |
+| `CountSession` | snapshot, captura ciega, riesgo y ajuste |
+| `StockIncident` | faltante, divergencia, daño o sobreventa |
+| `WarrantyCase` | caso, timeline, producto y resolución |
+| `WorkshopJob` | equipo, servicio, repuestos, aprobación y entrega |
+| `ShiftPlan` | horarios, áreas y reemplazos informativos |
+
+### 3.1 Reglas técnicas transversales
+
+- Un único servicio de negocio por proceso; web legacy y `/api/v1` no duplican reglas.
+- Cada vertical reemplaza consumidor y endpoint juntos. App Store admite una ventana corta de compatibilidad y actualización obligatoria.
+- Toda mutación reintentable usa clave idempotente; concurrencia usa `expected_version`.
+- Envelope offline: `operation_id`, dispositivo, usuario, lease, versión base, hora real y payload. Respuesta: aceptado, repetición idempotente o conflicto explícito.
+- Auditoría legacy se conserva y proyecta. Movimientos/auditoría tienen retención indefinida.
+- PII solo cuando la tarea la necesita. Capturas de pantalla: advertencia y capacitación, no promesa de bloqueo.
+
+## 4. Preparación, picking y paquetes
+
+### Propósito y resultado esperado
+
+Convertir pedidos elegibles en paquetes correctos, identificables y listos para evidencia, sin ocultar pedidos entrantes ni perder trabajo confirmado.
+
+### Actores, permisos y dispositivos
+
+Operario de depósito prepara y puede aprobar; supervisor resuelve reaperturas y salidas parciales; Ventas mantiene instrucciones comerciales; despacho recibe paquetes aprobados. Web móvil es el dispositivo actual y la App iPhone será el principal dispositivo de piso.
+
+### Disparadores y fuentes de datos
+
+Pedidos ML elegibles, pedidos Woo en “listo para enviar Andreani”, cambios, cancelaciones, horarios de la jornada, compromisos Woo, ubicaciones activas y alertas de integración.
+
+### Estado actual verificado
+
+La preparación integrada posee cola continua, claims técnicos, escaneo, requisitos de evidencia, fotos por ítem/paquete, auditoría y confirmación de despacho idempotente. Existen ramas históricas para hoja diaria, fechas/SLA y resiliencia de fotos; su ancestry y diff deben verificarse antes de reutilizarlas. No están verificadas como operación aceptada bajo este modelo.
+
+### Brecha existente
+
+No existe todavía apertura diaria formal, ola congelada con mini-olas, picking consolidado por SKU/ruta, reasignación automática de última unidad ni una aceptación operativa completa E1–E2.
+
+### Flujo normal paso a paso
+
+1. Abrir la jornada y confirmar fecha local, hora de corte web, ventanas ML, salud de integraciones, impresora y pendientes arrastrados.
+2. Crear la ola inicial con pedidos elegibles; agrupar cantidades por SKU y ordenar por secuencia física de ubicaciones.
+3. Congelar miembros y cantidades de la ola. Cada pedido nuevo crea o se agrega a una mini-ola; un ML urgente crea una mini-ola prioritaria.
+4. El operario reclama una tarea, escanea producto y confirma cada cantidad; la confirmación se persiste inmediatamente.
+5. En preparación, cada unidad consolidada se asigna a un pedido. Se elige agrupación o división de paquetes y se registra contenido.
+6. El pedido multipaquete se mantiene unido para salida, salvo autorización de supervisor o despacho.
+7. Completar evidencia, revisar el resumen y aprobar. El paquete pasa al sector real “listo para despacho”.
+
+### Estados y transiciones
+
+pedido retenido → elegible → en ola → picking → en preparación → evidencia pendiente → aprobado → listo para despacho. Pausa conserva claim hasta aviso a 10 minutos; a los 15 se libera. Un retenido permanece visible con motivo pero no es pickeable.
+
+### Excepciones, concurrencia e idempotencia
+
+Doble escaneo técnico no duplica una mutación; un escaneo acumulativo legítimo sí aumenta cantidad. Reintentos llevan idempotency key. Cambios de línea invalidan solo contenido y evidencia afectados. ML puede tomar la última unidad antes de salida física; si estaba en web aprobado, se reabre, invalida evidencia/etiquetas afectadas y alerta. No se permiten cantidades negativas ni asignación simultánea de una unidad.
+
+### Comportamiento online y offline
+
+La web actual requiere conexión para confirmar. Mantiene borradores visuales mientras la página siga abierta. La App futura permite capturar eventos/fotos sobre tareas descargadas, pero aprobación final y reasignaciones esperan servidor. Un lease vencido impide acciones nuevas.
+
+### UX web, App y vista rápida
+
+Inicio con trabajo urgente de hoy, ola y mini-olas claramente separadas, contador de nuevos pedidos, prioridad ML visible sin depender solo de color, ruta física y progreso por SKU/pedido. Vista rápida debe mostrar qué quedó guardado, qué está pendiente y quién posee cada tarea.
+
+### Auditoría y retención
+
+Guardar actor, dispositivo, operación, pedido, paquete, producto, cantidad, origen/destino, versión esperada, fecha real y fecha del servidor. Movimientos y auditoría indefinidos; borradores locales se purgan después de sincronizar.
+
+### Métricas y objetivos
+
+Tiempo activo de picking, recorrido aproximado, espera, pausas, faltantes, reaperturas, pedidos tardíos y porcentaje de mini-olas. Primer mes crea línea base; no se publican rankings personales.
+
+### Escenarios de aceptación
+
+Pedido nuevo durante ola; ML urgente; última unidad web aprobada; doble toque; recarga; claim vencido; pedido retenido; pedido multipaquete; salida parcial autorizada; cambio/cancelación concurrente.
+
+### Entregas que lo implementan
+
+E1 define jornada/olas/picking; E2 evidencia/paquetes; E12 integra compromisos, faltantes y reasignación; E13 incorpora captura móvil/offline.
+
+### Decisiones pendientes, responsable e impacto
+
+Confirmar campo SLA ML real y secuencia física inicial de ubicaciones. Responsables: integración/operación y depósito. Afecta aceptación E1/E4.
+
+## 5. Evidencia fotográfica y aprobación
+
+### Propósito y resultado esperado
+
+Probar que producto, cantidad, condición y paquete fueron preparados correctamente, con una experiencia recuperable ante redes lentas.
+
+### Actores, permisos y dispositivos
+
+Operario captura, sustituye y aprueba; supervisor reabre; posventa/auditoría puede aplicar hold. Web móvil es actual; iPhone será futuro.
+
+### Disparadores y fuentes de datos
+
+Contenido de paquete confirmado, perfil versionado por SKU/categoría/paquete, incidentes y reaperturas.
+
+### Estado actual verificado
+
+Hay captura web, requisitos de evidencia, fotos por ítem y paquete y procesamiento de servidor. Se integraron correcciones idempotentes parciales, pero no existe evidencia de una jornada aceptada contra todos los escenarios ni perfiles completos versionados por catálogo.
+
+### Brecha existente
+
+Faltan catálogo de perfiles seguro, congelamiento de versión, recuperación explícita, retención automatizada con holds y flujo móvil offline.
+
+### Flujo normal paso a paso
+
+1. Al iniciar preparación se fija la versión del perfil aplicable. Si falta, se usa perfil seguro y se crea tarea de clasificación.
+2. La cámara muestra preview inmediata; comprime sin impedir inspección y conserva original local hasta confirmación.
+3. Cliente sube con operation_id. Servidor guarda, valida tipo/tamaño, procesa y responde identidad/estado.
+4. Solo una respuesta confirmada cuenta para completar el requisito. La UI distingue subiendo, procesando, confirmado y error recuperable.
+5. El operario puede sustituir antes de aprobar. Aprobar preparación valida contenido y requisitos en servidor.
+6. Después de aprobar, cualquier cambio exige reapertura auditada y vuelve a evaluar evidencia/etiquetas.
+
+### Estados y transiciones
+
+local → subiendo → recibido → procesando → válido|rechazado. Preparación: evidencia pendiente → lista para aprobar → aprobada → reabierta. Una respuesta tardía se reconcilia por operation_id.
+
+### Excepciones, concurrencia e idempotencia
+
+Timeout consulta estado antes de repetir; doble toque produce una sola evidencia lógica; pérdida de respuesta no duplica; recarga avisa si hay archivo solo local; fallo parcial preserva previews. Archivo corrupto, tipo inválido o procesamiento fallido ofrecen acción concreta y código de incidente.
+
+### Comportamiento online y offline
+
+Web conserva archivos/previews solo mientras la página siga abierta y debe advertir antes de recargar. App guarda cifrado hasta siete días para tarea válida y sincroniza ordenadamente. La aprobación final requiere aceptación del servidor.
+
+### UX web, App y vista rápida
+
+Progreso inmediato, objetivo de confirmación menor a 10 segundos, miniaturas con requisito asociado, recaptura clara, resumen previo a “Aprobar preparación” y estado persistente. Controles de una mano y mínimo 44 px.
+
+### Auditoría y retención
+
+Retención normal 180 días desde cierre. Reclamo, incidente, garantía o auditoría activa suspende purga. Registrar hash, perfil/version, requisito, actor, paquete y sustituciones; limitar PII.
+
+### Métricas y objetivos
+
+Tiempo preview→confirmación, reintentos, rechazos, fotos sustituidas, preparaciones reabiertas y purgas retenidas.
+
+### Escenarios de aceptación
+
+Foto lenta, timeout, respuesta tardía, doble toque, red caída, recarga, archivo inválido, una de varias fotos fallida, perfil ausente, reapertura y hold.
+
+### Entregas que lo implementan
+
+E2 web/servidor; E13 infraestructura offline; E15/E17/E21 reutilizan el patrón móvil.
+
+### Decisiones pendientes, responsable e impacto
+
+Definir perfiles iniciales por categorías reales y calidad mínima sin elevar tiempos innecesarios. Responsable: depósito/Administración.
+
+## 6. Impresión interna, transporte y despacho
+
+### Propósito y resultado esperado
+
+Identificar cada paquete, generar lotes de transporte reconciliables y confirmar salida física sin confundir aprobación con despacho.
+
+### Actores, permisos y dispositivos
+
+Operario aprueba/reimprime con motivo; agente Windows imprime; despacho crea y reconcilia lotes; supervisor autoriza excepciones. ML y Andreani generan etiquetas externas.
+
+### Disparadores y fuentes de datos
+
+Aprobación atómica de paquete, inicio de lote, tracking escaneado, retiro físico y errores de impresora/integración.
+
+### Estado actual verificado
+
+Existe `etiquetas_cola`, encolado interno y endpoints de claim/lease/resultado/reintento; hay un agente configurable en `tools/windows-label-agent/`. Su hardware real no fue relevado ni aceptado. Control de despacho y tabla Andreani existen, pero no conforman aún el lote congelado objetivo.
+
+### Brecha existente
+
+Faltan validación física del agente, semántica completa de paquete, lotes congelados, reconciliación de tracking/salida y contingencia offline autorizada.
+
+### Flujo normal paso a paso
+
+1. Al aprobar evidencia, una transacción registra aprobación/auditoría y crea exactamente un InternalLabelJob por paquete.
+2. Agente autenticado reclama atómicamente, imprime 50×25 sin diálogo y confirma éxito/fallo. El paquete sigue aprobado aunque falle.
+3. Paquetes aprobados se acumulan. Despacho inicia lote y congela miembros.
+4. ML se etiqueta en MercadoLibre. Andreani recibe tabla/TSV actual; operador confirma por lote que allí se generaron etiquetas.
+5. Al pegar etiqueta de transporte se escanean código interno y tracking; discrepancia bloquea.
+6. En retiro, despacho escanea internos y compara esperados, escaneados, faltantes, duplicados y ajenos.
+7. Confirmación física cambia Woo a enviado mediante operación durable/idempotente y guarda actor, hora, lote y adjunto opcional.
+
+### Estados y transiciones
+
+label queued → claimed → printed|failed → retry. Package approved → batched → carrier-labelled → reconciled → dispatched. Batch draft → frozen → reconciled → closed|exception.
+
+### Excepciones, concurrencia e idempotencia
+
+PC apagada, Windows reiniciado, impresora sin papel, USB/red caídos, confirmación perdida y reimpresión. Elemento erróneo se anula con motivo y pasa a nuevo lote. Tracking incorrecto o paquete ajeno bloquean. Woo caído conserva evento y reintenta. Envío sin tracking exige permiso, motivo y tarea urgente.
+
+### Comportamiento online y offline
+
+Agente recupera cola al volver. Despacho offline solo con permiso específico y lote previamente descargado; guarda escaneos cifrados y salida queda provisional hasta servidor.
+
+### UX web, App y vista rápida
+
+Panel separa etiqueta interna, transporte y salida; muestra cola, último error y acción autorizada. Conciliación presenta esperados/escaneados/faltantes/duplicados/ajenos en una sola vista rápida.
+
+### Auditoría y retención
+
+Jobs, intentos, reimpresiones, lotes, anulaciones, tracking y salidas se conservan indefinidamente. QR interno usa identificador opaco sin PII; código corto permite entrada manual con motivo.
+
+### Métricas y objetivos
+
+Tiempo aprobación→impresión, fallas/reimpresiones, lotes con diferencia, tracking incorrecto, tiempo de cierre y actualizaciones Woo demoradas.
+
+### Escenarios de aceptación
+
+Impresora apagada/sin papel; USB, Windows o red caídos; respuesta perdida; reimpresión; lote congelado; paquete tardío; anulación; tracking incorrecto; duplicado/ajeno; Woo caído; contingencia offline.
+
+### Entregas que lo implementan
+
+E3 impresión; E4 lotes/tracking/despacho; E23 robustez y recuperación.
+
+### Decisiones pendientes, responsable e impacto
+
+Modelo, driver, lenguaje y puerto físicos bloquean publicación E3. SLA/modalidad ML bloquea aceptación E4.
+
+## 7. Stock, identidad, familias, ubicaciones y movimientos
+
+### Propósito y resultado esperado
+
+Explicar y controlar stock físico y comercial sin inventar líneas base ni producir doble descuento.
+
+### Actores, permisos y dispositivos
+
+Operario consulta/mueve; supervisor ajusta y activa rollout; Administración versiona familias/tolerancias; Ventas gestiona disponibilidad; integraciones reflejan Woo/ML.
+
+### Disparadores y fuentes de datos
+
+Venta/reserva Woo, recepción ubicada, picking, despacho, transferencia, daño, devolución, conteo, ajuste y sincronización.
+
+### Estado actual verificado
+
+Existe consulta rápida de solo lectura, ubicaciones heredadas, inventario/conteos y un libro/transferencias inicial en commits locales. No se considera aceptado ni desplegado bajo E8–E12; campos físicos pueden estar sin línea base.
+
+### Brecha existente
+
+Faltan identidad rígida, familias, activación por SKU, saldos derivados completos, compatibilidad con todos los consumidores y política operativa ML.
+
+### Flujo normal paso a paso
+
+1. Buscar SKU/EAN/nombre y mostrar físico, disponible comercial, comprometido, no disponible, condicionado, entrante, Woo, ML, frescura e incidentes.
+2. Clasificar SKU en una familia principal Fusion; confirmar ubicación base y overflow.
+3. Ejecutar conteo base aprobado y reconciliar Woo. Activar SKU por flag; desde entonces todas sus mutaciones pasan por movimientos.
+4. Registrar movimientos inmutables por evento. Derivar balances por SKU/ubicación/condición.
+5. Picking mueve a preparación por pedido; aprobación a listo para despacho; salida física reduce físico.
+6. Transferencia cercana registra salida/entrada inmediata y versión esperada. Reposición interna se sugiere por umbral.
+7. Ajuste por saldo final calcula delta; si supera tolerancia bloquea y abre conteo.
+
+### Estados y transiciones
+
+SKU legacy → preparado para rollout → activo → archivado. Identidad provisional → revisada → fusionada/archivada. Balance separado por ubicación y condición; nunca negativo.
+
+### Excepciones, concurrencia e idempotencia
+
+EAN asociado a varios SKU bloquea. SKU inexistente en Woo puede recibirse provisional no vendible. SKU eliminado con saldo se archiva y conserva historia. “Solo local” permanece. Divergencia ordinaria alerta/reconcilia, no publica cero. Sobreventa confirmada bloquea ventas en ambos canales. Condicionado puede vender Woo/web/local pero se excluye ML con autorización y fotos.
+
+### Comportamiento online y offline
+
+Consulta puede usar snapshot con frescura visible. Movimientos offline son provisionales, solo para tareas descargadas y sin permitir confirmar saldo negativo. Conflicto detiene replay y exige verificación.
+
+### UX web, App y vista rápida
+
+Vista rápida global sin entrar a recepción/inventario/sync. “Sin línea base” es distinto de cero. Escaneo duplicado de identidad bloquea con opciones seguras. Historial explica por qué cambió cada saldo.
+
+### Auditoría y retención
+
+Movimientos, identidades, activaciones y ajustes indefinidos. Todo cambio registra motivo, referencia, idempotencia, expected_version y actor/dispositivo.
+
+### Métricas y objetivos
+
+Exactitud, divergencia Woo/Fusion/ML, stock sin ubicación/familia, negativos bloqueados, ajustes, faltantes y frescura.
+
+### Escenarios de aceptación
+
+Múltiples ubicaciones; último artículo; EAN duplicado; provisional; SKU eliminado; solo local; condicionado; Woo caído; transferencia concurrente; ajuste alto; no ubicación; activación/rollback por flag.
+
+### Entregas que lo implementan
+
+E8 consulta; E9 identidad/familias/ubicaciones/línea base; E10 libro/transferencias/ajustes; E11 compromisos/sync; E12 picking/faltantes.
+
+### Decisiones pendientes, responsable e impacto
+
+Relevar familias y ubicaciones físicas, tolerancias iniciales y política exacta de publicación ML. Responsables: depósito, Administración e integración.
+
+## 8. Recepción y putaway
+
+### Propósito y resultado esperado
+
+Registrar mercadería parcial y ubicarla con condición conocida antes de aumentar disponibilidad comercial.
+
+### Actores, permisos y dispositivos
+
+Hasta dos operarios reciben; supervisor resuelve conflictos/diferencias; Catálogo revisa provisionales; Administración conserva documentos.
+
+### Disparadores y fuentes de datos
+
+Aviso manual de entrante, documento de proveedor antes/durante/después, llegada física, línea esperada o SKU desconocido.
+
+### Estado actual verificado
+
+Existe una herramienta de recepción separada, pero no está verificada contra el libro objetivo, dos pasos, documentos múltiples, concurrencia ni offline.
+
+### Brecha existente
+
+Falta modelo Receipt/line versions, OCR asistido, entrada→putaway, movimientos/condiciones, documentos y clientes web/iPhone.
+
+### Flujo normal paso a paso
+
+1. Crear recepción desde aviso o llegada, adjuntar imagen/PDF/CSV/XLSX/XML cuando esté disponible.
+2. OCR/IA propone cabecera y líneas con confianza; ninguna sugerencia impacta stock sin confirmación.
+3. Operario elige cantidad directa, escaneo acumulado o unitario y confirma identidad, cantidad y condición por línea.
+4. Daño, diferencia o identidad dudosa exige foto. Documento original no se reescribe.
+5. Entrada confirmada queda en zona de recepción como disponible/no disponible/pendiente, todavía sin aumentar Woo.
+6. Sistema sugiere base/overflow; operario confirma o cambia y ejecuta putaway.
+7. Solo putaway disponible aumenta Woo. En cierre parcial se decide si remanente sigue esperado, cancelado o en disputa.
+
+### Estados y transiciones
+
+draft → receiving → partially received → awaiting putaway → put away → closed|disputed. Línea usa expected_version y condición available|unavailable|pending.
+
+### Excepciones, concurrencia e idempotencia
+
+Documento tardío, baja confianza, línea cambiada por segundo operador, SKU provisional, exceso/faltante, unidad dañada, carga de foto fallida y corrección posterior inversa.
+
+### Comportamiento online y offline
+
+iPhone guarda tarea reclamada, líneas, escaneos, notas y fotos cifrados; toda confirmación es provisional. Conflicto de versión detiene la línea y no confirma silenciosamente.
+
+### UX web, App y vista rápida
+
+Web controla documentos/resumen; iPhone trabaja en descarga con pasos claros. Mostrar recibido, ubicado, remanente y conflicto por línea. Claim avisa a 20 minutos y libera a 30 online.
+
+### Auditoría y retención
+
+Documentos de proveedor indefinidos. Fotos 180 días salvo hold. Guardar sugerencia original, decisión humana, versiones, condición, movimiento y correcciones.
+
+### Métricas y objetivos
+
+Tiempo llegada→entrada→ubicación, líneas por hora, diferencias, provisionales, conflictos y recepción parcial.
+
+### Escenarios de aceptación
+
+20–100 líneas; documento antes/después; parcial; dos operadores; baja confianza; provisional; foto fallida; remanente esperado/cancelado/disputa; corrección.
+
+### Entregas que lo implementan
+
+E14 VPS; E15 iPhone/offline; E9–E11 proveen identidad, ubicación y movimientos.
+
+### Decisiones pendientes, responsable e impacto
+
+Definir documentos reales por proveedor, zona física de entrada y reglas iniciales de sugerencia. Responsable: depósito/Administración.
+
+## 9. Conteos y ajustes
+
+### Propósito y resultado esperado
+
+Medir stock ciegamente, reconciliar movimientos concurrentes y ajustar con control proporcional al riesgo.
+
+### Actores, permisos y dispositivos
+
+Operario cuenta; segundo operario preferido reconfirma; supervisor autoriza alto riesgo; Administración versiona tolerancias.
+
+### Disparadores y fuentes de datos
+
+Ciclo diario por riesgo/incidente, conteo general mensual, faltante, ajuste alto, divergencia o activación de SKU.
+
+### Estado actual verificado
+
+Inventario posee sesiones, alcance y cierre seguro. No está probado como snapshot + ledger, riesgo compuesto, autoajuste versionado ni offline ordenado.
+
+### Brecha existente
+
+Falta separar asignación/captura/revisión, reconciliar posteriores al snapshot y migrar ajustes a movimientos idempotentes.
+
+### Flujo normal paso a paso
+
+1. Crear sesión con alcance y snapshot lógico del ledger.
+2. Asignar tarea ciega sin cantidad esperada; claim avisa a 20 y libera a 30.
+3. Capturar cantidades enteras por ubicación/SKU, notas y evidencia cuando corresponda.
+4. Reconciliar movimientos ocurridos después del snapshot antes de calcular diferencia.
+5. Calcular riesgo por unidades, porcentaje, precio de venta, historial y criticidad de familia.
+6. Autoajustar bajo riesgo dentro de tolerancia versionada. Alto riesgo exige reconteo, motivo y confirmación reforzada.
+7. Antes de llevar un esperado no contado a cero, pedir confirmación explícita. Aplicar deltas idempotentes.
+
+### Estados y transiciones
+
+planned → claimed → counting → submitted → reconciling → review|required recount → adjusted → closed. Mismo operario reconfirma solo si no hay otro y queda marcado.
+
+### Excepciones, concurrencia e idempotencia
+
+Movimiento posterior, escaneo repetido, ubicación omitida, dispositivo perdido, offline prolongado, tolerancia cambiada, producto no encontrado y conflicto de replay.
+
+### Comportamiento online y offline
+
+Cola cifrada siete días, ordenada por operation_id. Lease máximo 12 horas; vencido bloquea nuevas capturas. Dispositivo revocado invalida pendientes y crea tarea física.
+
+### UX web, App y vista rápida
+
+Conteo verdaderamente ciego; feedback de escaneo menor a 500 ms; diferencia aparece recién en revisión. Vista de alto riesgo explica factores y autoridad necesaria.
+
+### Auditoría y retención
+
+Sesiones, snapshots, capturas, reconciliación, aprobaciones y movimientos indefinidos; fotos 180 días salvo hold.
+
+### Métricas y objetivos
+
+Exactitud, diferencia valorizada a precio venta, reconteos, autoajustes, tiempo activo/bloqueado y diferencias repetidas.
+
+### Escenarios de aceptación
+
+Movimiento posterior; bajo/alto riesgo; cero explícito; mismo/otro operador; offline siete días; lease vencido; dispositivo perdido; doble aprobación.
+
+### Entregas que lo implementan
+
+E16 VPS; E17 iPhone/offline; E23 recuperación.
+
+### Decisiones pendientes, responsable e impacto
+
+Tolerancias por familia se fijan tras línea base y deben tener dueño/versión. Responsable: Administración.
+
+## 10. Cancelaciones, devoluciones, daños y proveedor
+
+### Propósito y resultado esperado
+
+Resolver excepciones físicas y comerciales sin ediciones manuales opacas ni reposición prematura.
+
+### Actores, permisos y dispositivos
+
+Ventas/posventa inicia; depósito ejecuta; supervisor aprueba excepciones; despacho informa salida; Administración autoriza descarte.
+
+### Disparadores y fuentes de datos
+
+Cambio/cancelación, devolución recibida, daño interno, rechazo proveedor, descarte y estado de transporte.
+
+### Estado actual verificado
+
+Hay auditoría y herramientas separadas, pero no un flujo unificado con tareas, condiciones, movimientos y retención objetivo.
+
+### Brecha existente
+
+Faltan estados, permisos, inspección, retorno a ubicación, outbound proveedor y baja irreversible.
+
+### Flujo normal paso a paso
+
+1. Antes de despacho, cancelación libera disponibilidad según Woo y crea tarea física para desempaquetar/devolver.
+2. Después de despacho no repone: crea retorno esperado. Al recibir se identifica pedido/producto por escaneo y queda no disponible.
+3. Inspección decide disponible, condicionado, reparación, proveedor o descarte y genera movimiento.
+4. Daño interno mueve inmediatamente a no disponible, reduce Woo, exige motivo/foto y abre revisión.
+5. Devolución a proveedor registra documento, preparación, salida, tracking, espera y resolución.
+6. Descarte requiere permiso elevado, motivo/evidencia y movimiento irreversible de baja.
+
+### Estados y transiciones
+
+case open → awaiting item|physical task → received/unavailable → inspecting → disposition → resolved. Proveedor: prepared → shipped → awaiting supplier → returned|credited|closed.
+
+### Excepciones, concurrencia e idempotencia
+
+Cambio de una línea invalida solo paquete afectado; devolución sin pedido; cantidad diferente; tracking perdido; artículo condicionado; proveedor rechaza; descarte equivocado no se borra y requiere movimiento compensatorio autorizado.
+
+### Comportamiento online y offline
+
+Captura física puede ser provisional en tarea descargada; liberación comercial, disposición final y descarte esperan servidor.
+
+### UX web, App y vista rápida
+
+Timeline único vincula pedido, paquete, producto, fotos, tareas y movimientos. Acciones peligrosas muestran efecto comercial/físico antes de confirmar.
+
+### Auditoría y retención
+
+Movimientos y decisiones indefinidos; fotos 180 días salvo hold; documentos proveedor indefinidos.
+
+### Métricas y objetivos
+
+Tiempo cancelación→reposición física, retornos sin inspeccionar, daños, recuperación proveedor y descartes valorizados.
+
+### Escenarios de aceptación
+
+Cancelación antes/después; cambio parcial; devolución dañada; sin pedido; proveedor; condicionado; descarte; Woo caído.
+
+### Entregas que lo implementan
+
+E18, apoyada en E10–E13.
+
+### Decisiones pendientes, responsable e impacto
+
+Definir motivos normalizados y quién puede autorizar saldo condicionado/descarte. Responsable: Administración/operación.
+
+## 11. Garantías y posventa
+
+### Propósito y resultado esperado
+
+Dar seguimiento completo al reclamo desde apertura hasta resolución, incluso antes de recibir el producto.
+
+### Actores, permisos y dispositivos
+
+Posventa/Ventas es dueño; depósito inspecciona; taller repara; supervisor aprueba reemplazo; proveedor puede ser contraparte.
+
+### Disparadores y fuentes de datos
+
+Pedido/producto/evidencia, comunicación del cliente, recepción, dictamen, reemplazo, reembolso o proveedor.
+
+### Estado actual verificado
+
+No existe un módulo integral verificado. Hay datos de pedidos y herramientas de comunicación que deben integrarse sin duplicar reglas.
+
+### Brecha existente
+
+Falta WarrantyCase, timeline, tareas físicas/comerciales, relación con taller/proveedor y política de retención.
+
+### Flujo normal paso a paso
+
+1. Abrir por pedido y producto con evidencia; permitir estado esperando producto.
+2. Registrar comunicaciones con canal, fecha, actor y próxima acción manual.
+3. Al recibir, mover a no disponible e inspeccionar.
+4. Resolver como reparar, reemplazar, reembolso o rechazar. Reemplazo compromete stock al aprobarse.
+5. Si va a proveedor, registrar salida/tracking/espera/retorno. Reparado vuelve a inspección.
+6. Reembolso se registra y deriva a Woo/proceso humano; Fusion no mueve dinero.
+
+### Estados y transiciones
+
+open → waiting product → received → diagnosing → waiting customer|supplier → approved repair|replacement|refund|rejected → resolved.
+
+### Excepciones, concurrencia e idempotencia
+
+Caso sin recepción, evidencia incompleta, reemplazo sin stock, producto no coincide, proveedor demora, reapertura y comunicaciones concurrentes.
+
+### Comportamiento online y offline
+
+Notas, fotos y eventos de tarea descargada pueden capturarse provisionalmente; decisión final, compromiso y cierre requieren servidor.
+
+### UX web, App y vista rápida
+
+Orden por antigüedad y próxima acción, no SLA inventado. Timeline muestra cliente, movimiento físico y decisiones sin exponer PII innecesaria.
+
+### Auditoría y retención
+
+Ficha/timeline indefinidos; fotos 180 días desde cierre con hold. Guardar versión de decisión y autoridad.
+
+### Métricas y objetivos
+
+Antigüedad, espera por producto/cliente/proveedor, resultado y reaperturas; sin SLA automático hasta decisión futura.
+
+### Escenarios de aceptación
+
+Apertura previa a recepción; reparar; reemplazar sin stock; reembolso; rechazo; proveedor; retorno reparado; hold.
+
+### Entregas que lo implementan
+
+E19; integra E18 y E20.
+
+### Decisiones pendientes, responsable e impacto
+
+Motivos de rechazo, plantillas de comunicación y autoridades por resultado. Responsable: Posventa/Administración.
+
+## 12. Taller
+
+### Propósito y resultado esperado
+
+Gestionar trabajos de cliente, armado interno y garantías con trazabilidad de equipo, mano de obra, repuestos, aprobación y entrega.
+
+### Actores, permisos y dispositivos
+
+Ventas registra; técnico diagnostica/ejecuta; cliente aprueba por canal registrado; supervisor autoriza saldo; depósito mueve repuestos.
+
+### Disparadores y fuentes de datos
+
+Turno o ingreso espontáneo, armado interno, garantía, diagnóstico, presupuesto, repuesto, finalización y entrega.
+
+### Estado actual verificado
+
+No existe flujo integral verificado bajo este plan. Woo ya es el sistema de venta/pago que deberá recibir cada service.
+
+### Brecha existente
+
+Faltan WorkshopJob, ficha/timeline, integración Woo de mano de obra/repuestos, checklist, App y offline.
+
+### Flujo normal paso a paso
+
+1. Registrar bicicleta/equipo, estado, fotos y código de trabajo; no inventariar accesorios entregados.
+2. Crear/aceptar venta Woo con mano de obra estándar o diagnóstico/presupuesto complejo.
+3. Registrar aprobación del cliente con canal, fecha y versión. Técnico puede agregar trabajo por criterio, documentándolo.
+4. Repuesto Woo se compromete, picking lo mueve a mesa/orden y la instalación consume físico.
+5. Repuesto no usado se quita de Woo y retorna mediante inverso. Repuesto del cliente queda fuera de inventario.
+6. Completar checklist según servicio, avisar al cliente y registrar resultado del aviso.
+7. Entregar con código, estado Woo, entregador/receptor; saldo pendiente exige autorización.
+
+### Estados y transiciones
+
+pendiente → en trabajo → listo → entregado/cerrado. Bloqueos secundarios: diagnóstico, aprobación, repuesto, proveedor. No hay límite automático de capacidad; técnico elige siguiente.
+
+### Excepciones, concurrencia e idempotencia
+
+Sin turno, presupuesto rechazado/cambiado, repuesto no usado, repuesto cliente, garantía, offline, saldo pendiente, trabajo adicional y reapertura.
+
+### Comportamiento online y offline
+
+App permite tarea descargada, notas, fotos y eventos provisionales. Venta Woo, compromisos, cambios comerciales y entrega final esperan servidor.
+
+### UX web, App y vista rápida
+
+Web para control/configuración; iPhone para piso. Código de trabajo visible, timeline, bloqueos y próxima acción. Sin portal de cliente inicial.
+
+### Auditoría y retención
+
+Ficha y timeline indefinidos; fotos 180 días desde cierre salvo hold. Woo conserva pago; señas son nota, Fusion no procesa dinero.
+
+### Métricas y objetivos
+
+Tiempo activo, espera por aprobación/repuesto/proveedor, trabajos reabiertos, repuestos usados/no usados y tiempo listo→entrega.
+
+### Escenarios de aceptación
+
+Servicio estándar; diagnóstico/presupuesto; aprobación por canal; repuesto usado/no usado; garantía; offline; saldo; checklist fallido.
+
+### Entregas que lo implementan
+
+E20 web/Woo; E21 iPhone/offline.
+
+### Decisiones pendientes, responsable e impacto
+
+Catálogo inicial de servicios/tarifas, checklists y permisos de saldo. Responsable: Taller/Ventas/Administración.
+
+## 13. App iPhone, dispositivos y offline
+
+### Propósito y resultado esperado
+
+Dar una herramienta de piso rápida, segura y recuperable, manteniendo web para control y contingencia.
+
+### Actores, permisos y dispositivos
+
+Operarios con dispositivos personales/compartidos; supervisor administra tareas; Admin revoca; CI fija contrato. iPhone primero.
+
+### Disparadores y fuentes de datos
+
+Login, registro/revocación de dispositivo, tarea reclamada, pérdida de red, push/deep link, actualización obligatoria.
+
+### Estado actual verificado
+
+Backend `/api/v1` dispone de auth, refresh/logout, dispositivos, permisos, notificaciones e inbox con tests focalizados. La rama remota `feature/stock-flow-ui` consume parte real y eliminó fallback silencioso, pero no hay validación física final ni base offline común aceptada.
+
+### Brecha existente
+
+Falta contrato generado/fijado por commit de punta a punta, iPhone real, deep links, almacenamiento cifrado y replay común.
+
+### Flujo normal paso a paso
+
+1. Autenticar, registrar dispositivo y descargar permisos/compatibilidad.
+2. Inicio muestra trabajo urgente de hoy; usuario reclama y descarga datos mínimos de tarea.
+3. Cada mutación online usa idempotencia y expected_version.
+4. Sin red, guardar envelope cifrado con operation_id, dispositivo, usuario, lease, base_version, occurred_at y payload.
+5. Al recuperar, reproducir en orden. Servidor responde aceptado, repetición idempotente o conflicto explícito.
+6. Conflicto incompatible detiene dependencia y pide revisión; jamás sobrescribe por última escritura.
+7. En equipo compartido, sincronizar antes de cerrar y purgar caché sensible.
+
+### Estados y transiciones
+
+device pending → active → revoked/lost. Operation local pending → syncing → accepted|duplicate|conflict|invalidated. Lease máximo 12 horas; cola siete días.
+
+### Excepciones, concurrencia e idempotencia
+
+Token vencido, refresh revocado, contrato incompatible, actualización obligatoria, dispositivo perdido, lease vencido, cola dependiente y almacenamiento lleno.
+
+### Comportamiento online y offline
+
+Toda operación de depósito puede capturarse provisionalmente solo sobre tareas reclamadas/descargadas. Aprobaciones comerciales/finales esperan servidor; despacho exige contingencia autorizada.
+
+### UX web, App y vista rápida
+
+Cámara como escáner principal, feedback <500 ms, controles de una mano, estados de sincronización comprensibles y acción de recuperación. No depender solo de color/sonido.
+
+### Auditoría y retención
+
+Registrar dispositivo/usuario/versión app, operación y resultado sin secretos. Advertir capturas de pantalla; no prometer bloqueo técnico.
+
+### Métricas y objetivos
+
+Éxito login/refresh, sesiones revocadas, tiempo de sync, duplicados, conflictos, leases vencidos, crashes y versión instalada.
+
+### Escenarios de aceptación
+
+iPhone real; token vencido; revocación; push/deep link; pérdida de red; siete días; conflicto; lease; dispositivo perdido; actualización obligatoria.
+
+### Entregas que lo implementan
+
+E5 base; E6 bandeja; E13 offline común; E15/E17/E21 verticales.
+
+### Decisiones pendientes, responsable e impacto
+
+Modelo/iOS exactos y canal de distribución de pruebas. Responsable: equipo móvil; publicación App Store requiere autorización.
+
+## 14. Bandeja, alertas, reclamos ML y turnos
+
+### Propósito y resultado esperado
+
+Concentrar excepciones y trabajo urgente, con responsabilidad clara, escalamiento durable y contexto de turno.
+
+### Actores, permisos y dispositivos
+
+Admin, supervisor, operario, despacho y ventas con excepciones por usuario; turnos asignan áreas/reemplazos, no asistencia.
+
+### Disparadores y fuentes de datos
+
+Pedido nuevo, integración caída, etiqueta fallida, faltante, sobreventa, reclamo/pregunta ML, tarea vencida o ausencia.
+
+### Estado actual verificado
+
+Backend y App remota implementan lectura/marcado de algunas notificaciones; no están verificados claims/resolución/deep links/escalamiento completo ni turnos.
+
+### Brecha existente
+
+Faltan severidades, routing, take/reassign/resolve, durable fallback, reclamos ML completos y ShiftPlan.
+
+### Flujo normal paso a paso
+
+1. Crear alerta durable con severidad, área, entidad, acción requerida y dedupe key.
+2. Entregar por App, panel y sonido; inbox sigue disponible si push falla.
+3. Usuario reconoce o toma. Reconocer no resuelve.
+4. Urgente repite cada 2 minutos, escala supervisor a los 5 y repite cada 5 hasta reconocimiento.
+5. Alta tiene objetivo de reconocimiento de 15 minutos. Normal sigue orden de trabajo.
+6. Permisos permiten reasignar y resolver con evidencia. Turno/ausencia propone reemplazo.
+7. Preguntas, mensajes y reclamos ML usan el mismo inbox con deep link al contexto.
+
+### Estados y transiciones
+
+open → acknowledged/claimed → in progress → resolved|dismissed autorizado. Reassignment conserva historia. Turno planned → active → covered/absent.
+
+### Excepciones, concurrencia e idempotencia
+
+Push perdido, sonido deshabilitado, dos usuarios toman, área sin persona, turno ausente, reclamo duplicado e integración ML caída.
+
+### Comportamiento online y offline
+
+Inbox descargado se consulta; reconocer/resolver queda provisional y se reconcilia. Una acción comercial ML no se asume enviada hasta confirmación servidor.
+
+### UX web, App y vista rápida
+
+Vista rápida por urgencia/área, contador durable, acción primaria clara, tiempo desde creación y diferencia visual/textual entre reconocido y resuelto.
+
+### Auditoría y retención
+
+Historial de entrega, reconocimiento, claims, reasignación, resolución y payload sanitizado. No guardar credenciales ni PII innecesaria.
+
+### Métricas y objetivos
+
+Tiempo de reconocimiento/resolución por severidad/proceso, escaladas, alertas repetidas y push fallido; no ranking público.
+
+### Escenarios de aceptación
+
+Push fallido; doble claim; urgente sin respuesta; ausencia; deep link; permiso insuficiente; ML caído; replay offline.
+
+### Entregas que lo implementan
+
+E6 bandeja/ML; E7 turnos; verticales posteriores producen tareas.
+
+### Decisiones pendientes, responsable e impacto
+
+Áreas, calendario y reemplazos reales. Responsable: supervisión.
+
+## 15. Integraciones WooCommerce, MercadoLibre y Andreani
+
+### Propósito y resultado esperado
+
+Mantener contratos externos observables, idempotentes y reconciliables sin esconder caídas ni mezclar autoridades.
+
+### Actores, permisos y dispositivos
+
+Servicios backend; Ventas/Admin resuelve conflictos; depósito consume elegibilidad; despacho usa ML/Andreani.
+
+### Disparadores y fuentes de datos
+
+Pedidos/webhooks/polling, stock/precio, preguntas/reclamos, etiquetas, tracking, salida y reconciliación.
+
+### Estado actual verificado
+
+Existen integraciones Woo/ML, sincronizaciones, herramientas Andreani y módulos de atención. El comportamiento está fragmentado y no todo usa el modelo de compromisos/movimientos.
+
+### Brecha existente
+
+Falta servicio de negocio compartido por proceso, política ML, cola durable uniforme, frescura, staging aislado y reconciliación integral.
+
+### Flujo normal paso a paso
+
+1. Woo mantiene catálogo, ventas, pagos y disponible comercial; ventas presenciales también se registran allí.
+2. Fusion ingiere cambios idempotentemente y crea compromisos según la reserva/reducción que Woo mantenga.
+3. ML aporta pedidos, ventanas, publicaciones, preguntas/reclamos y etiquetas en su herramienta.
+4. Andreani conserva tabla editable/TSV; Fusion congela lote y audita confirmación/tracking.
+5. Toda falla externa conserva intención durable, reintenta con idempotencia y expone frescura/incidente.
+6. Reconciliación puntual y global compara autoridades sin publicar cero por divergencia ordinaria.
+7. Sobreventa real confirmada bloquea nuevas ventas en ambos canales y escala.
+
+### Estados y transiciones
+
+sync pending → processing → applied|retryable|conflict|manual review. Freshness healthy → delayed → stale → incident.
+
+### Excepciones, concurrencia e idempotencia
+
+Webhook duplicado/fuera de orden, timeout con respuesta tardía, Woo/ML caído, token revocado, stock divergente, tracking inválido y publicación sin vínculo.
+
+### Comportamiento online y offline
+
+Usuarios pueden ver último snapshot con frescura; operaciones comerciales finales no se confirman offline.
+
+### UX web, App y vista rápida
+
+Estado por integración y entidad, último éxito, siguiente reintento, impacto y acción. Evitar mensajes genéricos.
+
+### Auditoría y retención
+
+Eventos externos, payload mínimo sanitizado, correlación, intentos, resultado y decisiones indefinidas según operación; secretos nunca en docs/logs.
+
+### Métricas y objetivos
+
+Latencia/frescura, reintentos, conflictos, pedidos demorados, sobreventas y tiempo de recuperación.
+
+### Escenarios de aceptación
+
+Woo/ML caídos; duplicado; fuera de orden; timeout tardío; reconciliación; sobreventa; Andreani sin tracking; credencial revocada.
+
+### Entregas que lo implementan
+
+E1/E4 horarios/transporte; E6 reclamos; E11 compromisos/sync; E22 entrante/preventa; E23 staging.
+
+### Decisiones pendientes, responsable e impacto
+
+Campo SLA ML y garantía comercial posible con política actual de stock completo publicado. Responsable: integración/operación.
+
+## 16. Métricas, reposición, entrante y preventa
+
+### Propósito y resultado esperado
+
+Decidir control y compra con datos explicables, evitando metas inventadas y automatización prematura.
+
+### Actores, permisos y dispositivos
+
+Administración/Ventas analiza; depósito confirma entrantes; supervisores revisan procesos; App/panel/exportación distribuyen.
+
+### Disparadores y fuentes de datos
+
+Movimientos, tareas, tiempos, ventas 12 meses, estacionalidad, días sin stock, lead time, entrantes y compromisos.
+
+### Estado actual verificado
+
+Hay datos parciales de ventas, stock y operación, pero no línea base unificada ni sugerencia objetivo.
+
+### Brecha existente
+
+Falta instrumentación consistente, separación de tiempos, calidad de datos y reportes.
+
+### Flujo normal paso a paso
+
+1. Instrumentar desde entregas previas tiempo activo, pausa, dependencia y bloqueo.
+2. Construir un mes de línea base antes de fijar metas.
+3. Emitir excepciones diarias, reposición semanal y exactitud/cobertura/valor mensual.
+4. Calcular reposición sugerida con 12 meses, estacionalidad, días sin stock, cobertura, lead time, entrante y compromisos.
+5. Registrar entrante mediante aviso manual y recepciones parciales.
+6. Permitir preventa solo en Woo y con autorización; no automatizar órdenes de compra.
+7. Distribuir en App, panel y exportación según permisos.
+
+### Estados y transiciones
+
+metric provisional → baseline → comparable. Suggestion draft → reviewed → accepted/rejected manual. Incoming announced → partial → received/closed.
+
+### Excepciones, concurrencia e idempotencia
+
+Datos incompletos, días sin stock, producto nuevo, estacionalidad anómala, entrante demorado, preventa sin autorización y exportación sensible.
+
+### Comportamiento online y offline
+
+Snapshots de informes pueden consultarse; decisiones de preventa/entrante requieren servidor.
+
+### UX web, App y vista rápida
+
+Explicar fórmula, período, frescura y faltantes de datos. No exhibir ranking público de personas.
+
+### Auditoría y retención
+
+Parámetros, versiones, aceptación/rechazo y exportaciones. Movimientos fuente indefinidos.
+
+### Métricas y objetivos
+
+Exactitud, cobertura, faltantes, lead time observado, recepción parcial y calidad de sugerencia.
+
+### Escenarios de aceptación
+
+Producto nuevo; 12 meses incompletos; OOS; estacional; entrante parcial; preventa; exportación por rol.
+
+### Entregas que lo implementan
+
+E22, alimentada por E8–E21.
+
+### Decisiones pendientes, responsable e impacto
+
+Metas se deciden tras línea base; lead times iniciales y responsables de revisión. Responsable: Administración.
+
+## 17. Operación, diagnóstico, seguridad y recuperación
+
+### Propósito y resultado esperado
+
+Publicar cambios reversibles, diagnosticar incidentes y recuperar servicio/datos sin comprometer producción.
+
+### Actores, permisos y dispositivos
+
+Agente implementador, revisor, tester, auditor de despliegue, operaciones y responsable funcional.
+
+### Disparadores y fuentes de datos
+
+Entrega candidata, migración, incidente, health/smoke fallido, backup/restore y cambio de infraestructura.
+
+### Estado actual verificado
+
+El VPS `/opt/fusionbikes/herramientas` es producción real y sirve `conteo-confiable`; hay PM2, health, tests y reglas de coordinación. No existe staging integral sanitizado ni RTO/RPO medidos.
+
+### Brecha existente
+
+Faltan pipeline automático completo, entorno aislado reproducible, restore probado periódico, runbooks y métricas DR.
+
+### Flujo normal paso a paso
+
+1. Desarrollar en worktree aislado, con migraciones aditivas/idempotentes y flag.
+2. Revisión independiente; resolver críticos/altos y aceptar medios con responsable/fecha.
+3. Ejecutar tests focalizados, integración/contrato y suite global serial una vez sobre diff final.
+4. Probar E2E/hardware/dispositivo según superficie; preparar backup y rollback que conserve eventos posteriores.
+5. Pipeline verde puede publicar backend/web, migrar compatible, verificar PM2/health/smoke.
+6. Health/smoke fallido ejecuta rollback automático. Windows/App Store esperan autorización.
+7. Observar piloto acotado una jornada; aceptar con responsable o apagar flag y documentar.
+
+### Estados y transiciones
+
+planificada → desarrollo → candidata → publicada → observada → aceptada. Fallo vuelve a desarrollo o rollback; código existente no equivale a entrega terminada.
+
+### Excepciones, concurrencia e idempotencia
+
+Worktree sucio, suite concurrente, migración parcial, health falso positivo, eventos nuevos tras deploy, rollback incompatible, backup corrupto y falta de autoridad.
+
+### Comportamiento online y offline
+
+Runbooks y SOP imprimibles deben permitir contingencia. Staging usa snapshot sanitizado bajo demanda y jamás credenciales reales de escritura.
+
+### UX web, App y vista rápida
+
+Errores indican acción, qué se preservó y código de incidente. Reportar problema adjunta contexto seguro y correlación; soporte puede rastrear sin PII innecesaria.
+
+### Auditoría y retención
+
+Commits, gates, migraciones, despliegue, rollback, observación y aceptación. Backups cifrados; acceso mínimo; auditoría/movimientos indefinidos.
+
+### Métricas y objetivos
+
+Lead time de entrega, fallos, rollback, MTTR, backup/restore, RTO/RPO medidos y defectos escapados.
+
+### Escenarios de aceptación
+
+Migración repetida; backup/restore; health fallido; rollback con eventos nuevos; staging sin credenciales; incidente trazable; permisos/PII.
+
+### Entregas que lo implementan
+
+E23 robustez; E24 consolidación; gates aplican E0–E24.
+
+### Decisiones pendientes, responsable e impacto
+
+Infraestructura/sanitización de staging y RTO/RPO tras medición. Responsable: operaciones.
+
+## 18. Módulos existentes fuera del rediseño actual
+
+Precios, matcher, catálogo, consulta de precios, códigos universales, variaciones muertas y herramientas auxiliares siguen dentro del producto, pero no se rediseñan sin descubrimiento equivalente. E0 debe inventariar propósito, estado verificable, dependencias, riesgos y preguntas; una entrega futura solo entra al programa mediante decisión explícita.
+
+| Módulo | Estado documental | Riesgo/pregunta antes de modificar |
 | --- | --- | --- |
-| E0 | Ambos repos | Plan, memoria y contrato documental alineados |
-| E1 | VPS | Preparación y hoja de despachos confiables |
-| E2 | VPS + PC depósito | Etiqueta interna 50×25 automática |
-| E3 | VPS + App | App conectada con autenticación y contrato vigente |
-| E4 | App | Bandeja operativa y alertas reales |
-| E5 | VPS | Vista rápida unificada de stock |
-| E6 | VPS | Movimientos, ubicaciones y transferencias |
-| E7 | VPS + App | Compromisos, picking y faltantes urgentes |
-| E8 | App | Tareas de depósito y consulta móvil de stock |
-| E9 | VPS | Recepción de mercadería por movimientos |
-| E10 | App | Recepción móvil asistida |
-| E11 | VPS | Conteos ciegos y ajustes controlados |
-| E12 | App | Conteo móvil offline |
-| E13 | VPS + App | Cancelaciones, devoluciones y daños |
-| E14 | VPS + App | Métricas, reposición sugerida y cierre operativo |
-| E15 | VPS | Reconciliación periódica ML/Woo y deuda operativa heredada |
-| E16 | VPS + App | Consolidación controlada de `master` y `conteo-confiable` |
+| Precios | Existente, integración Woo/ML relevante | Autoridad, redondeo, permisos y efectos de sincronización |
+| Matcher/vínculos ML | Existente con specs históricas | Ambigüedad, reversión y efecto en publicaciones |
+| Catálogo/EAN | Existente; identidad impacta stock | Duplicados, SKU eliminado, provisional y solo local |
+| Consulta de precios | Existente con diseño histórico | Frescura, fuente y UX móvil |
+| Herramientas auxiliares | Inventario pendiente por tarea | Dueño operativo, uso real y deuda antes de rediseñar |
 
-## 4. Entregas detalladas
+## 19. Secuencia de entregas E0–E24
 
-### E0: Contexto canónico de ambos repositorios
+| Entrega | Superficie | Resultado tangible | Dependencia dominante |
+| --- | --- | --- | --- |
+| E0 | Ambos | Maestro, memoria, archivo, decisiones, patrones, fichas y handoffs reconstruidos | Ninguna |
+| E1 | VPS | Apertura diaria, horarios, olas y picking consolidado | Entrega operativa anterior |
+| E2 | VPS/web móvil | Evidencia, perfiles, paquetes y aprobación confiable | Entrega operativa anterior |
+| E3 | VPS/Windows | Etiqueta interna automática 50×25 y agente validado | Entrega operativa anterior |
+| E4 | VPS | Lotes ML/Andreani, tracking y despacho reconciliado | Entrega operativa anterior |
+| E5 | VPS/App | App iPhone base, autenticación, dispositivos y contrato | E5 y servicios backend |
+| E6 | VPS/App | Bandeja ML/operativa, alertas, escalamiento y deep links | E5 y servicios backend |
+| E7 | VPS/App | Turnos, áreas y reemplazos | E5 y servicios backend |
+| E8 | VPS | Consulta rápida unificada de stock | Identidad/movimientos |
+| E9 | VPS | Familias, identidad, ubicaciones, línea base y rollout | Identidad/movimientos |
+| E10 | VPS | Libro inmutable, transferencias, ajustes y reposición interna | Identidad/movimientos |
+| E11 | VPS | Compromisos Woo, sync puntual/global y política ML | Identidad/movimientos |
+| E12 | VPS/App | Picking integrado, faltantes y reasignación automática | Identidad/movimientos |
+| E13 | App/VPS | Infraestructura común de piso y offline | E13 y modelo físico |
+| E14 | VPS | Recepción trazable | E13 y modelo físico |
+| E15 | App | Recepción iPhone y offline | E13 y modelo físico |
+| E16 | VPS | Conteos ciegos y ajustes controlados | E13 y modelo físico |
+| E17 | App | Conteos iPhone y offline | E13 y modelo físico |
+| E18 | Ambos | Cancelaciones, devoluciones, daños, proveedor y descarte | Stock/tareas previas |
+| E19 | Ambos | Garantías y posventa | Stock/tareas previas |
+| E20 | VPS | Taller web y venta Woo de services | Stock/tareas previas |
+| E21 | App | Taller iPhone y offline | Stock/tareas previas |
+| E22 | Ambos | Métricas, reposición, entrante y preventa | Datos E1–E21 |
+| E23 | VPS | Staging, diagnóstico, backups, restauración y robustez | Todas las superficies |
+| E24 | Repositorios | Consolidación final de ramas hacia master | E0–E23 aceptadas |
 
-**Resultado:** cualquier persona o agente distingue el estado real y las decisiones sin depender
-de chats ni copias históricas.
+Cada entrega dura idealmente 3–5 días, es reversible/apagable por flag, actualiza maestro/memoria/ficha/SOP, se demuestra, pilota acotadamente y observa al menos una jornada. La ficha individual es la única fuente de progreso.
 
-- Reestructurar este plan y crear memoria durable específica para operaciones de depósito y App.
-- Corregir toda referencia que trate el VPS como staging: `/opt/fusionbikes/herramientas` es
-  producción real y sirve `conteo-confiable`.
-- Depurar las copias históricas de planes en la App. Conservar un índice breve, la decisión de
-  arquitectura y un OpenAPI fijado a un commit de origen.
-- La memoria local en `/opt/fusionbikes/herramientas/docs/memory/` es la fuente canónica de
-  contexto. Si se conecta un Codebase Memory MCP, deberá espejar estos hechos y no reemplazarlos.
+## 20. Gates de calidad, pruebas y publicación
 
-### E1: Preparación confiable en VPS
+### Gate técnico obligatorio
 
-**Resultado:** el depósito prepara pedidos durante toda la jornada sin perder fotos ni ocultar
-estados.
+- Revisión independiente; críticos y altos resueltos; medios aceptados con responsable y fecha.
+- Unitarios, integración y contrato; suite global serial una vez sobre diff final.
+- E2E web en 390/768/1440 cuando cambia UI; iPhone real para móvil; hardware real para impresora.
+- Axe/accesibilidad, operación a una mano, listas/filtros ≤2 s, feedback escaneo <500 ms y progreso de foto inmediato con objetivo 10 s.
+- Fallas externas con dobles y staging aislado; no usar producción para inducirlas.
+- Backup íntegro, restauración probada, migraciones aditivas/idempotentes/compatibles y rollback que conserve eventos nuevos.
 
-- Preservar y validar la cola continua ya integrada; rebasar e integrar únicamente lo que falte de
-  fotos, hoja diaria y SLA/horarios.
-- Mantener pedidos nuevos continuamente, con aviso visual y sonoro al área correspondiente.
-- Ordenar primero MercadoLibre y después por antigüedad dentro de la misma prioridad.
-- Mostrar carga, procesamiento, error recuperable, reintento y evidencia faltante sin borrar la
-  previsualización local durante una falla de red.
-- Validar: pedido → picking → fotos → evidencia completa → aprobado → pendiente de despacho.
-- La mañana puede empezar con picking consolidado; los pedidos que entren después forman parte de
-  la misma jornada y no esperan una segunda tanda fija.
+### Gate operativo obligatorio
 
-### E2: Impresión automática 50×25
+- SOP digital e imprimible, demo y práctica guiada.
+- Piloto con pedidos reales acotados por flag.
+- Una jornada observada y aceptación del responsable del proceso.
+- Ficha actualizada con comandos/resultados exactos, incidentes y próxima acción reproducible.
 
-**Resultado:** cuando el servidor acepta toda la evidencia, la etiqueta interna sale sola en la
-impresora del depósito.
+### Política de despliegue
 
-- Mover el disparador de la etiqueta interna desde confirmación de despacho a evidencia completa.
-- Encolar exactamente un trabajo por preparación/paquete mediante clave idempotente durable.
-- Instalar un agente local en la computadora Windows del depósito, conectado a la impresora USB.
-- El agente inicia con Windows, reclama trabajos atómicamente, imprime sin diálogo, confirma éxito
-  o fallo y recupera pendientes luego de reinicio o pérdida de red.
-- Una falla no revierte la aprobación ni obliga a repetir fotos: deja alerta persistente y permite
-  reimpresión manual autorizada.
-- La etiqueta interna y las etiquetas masivas de transporte son colas y momentos distintos.
+Pipeline verde puede publicar automáticamente backend/web VPS: push, migración compatible, deploy, PM2/health y smoke. Fallo de health/smoke dispara rollback automático. Instalar agente Windows, tocar hardware y enviar App Store requieren autorización explícita. La App pública agrupa hitos estables.
 
-### E3: App conectada y contrato estable
+## 21. Matriz maestra de escenarios
 
-**Resultado:** la App deja de depender de mocks para autenticación y CI detecta divergencias.
+| Área | Escenarios mínimos | Entregas |
+| --- | --- | --- |
+| Jornada/picking | Pedido nuevo durante ola; ML urgente; reasignación última unidad; hold; multipaquete | E1,E12 |
+| Fotos | Lenta; timeout; tardía; doble toque; recarga; parcial; perfil faltante | E2 |
+| Impresión | Apagada; sin papel; USB/red/Windows; confirmación perdida; reimpresión | E3 |
+| Despacho | Lote congelado; anulado; tardío; tracking incorrecto; duplicado/ajeno; offline | E4 |
+| App | Token vencido; dispositivo revocado/perdido; deep link; contrato incompatible; update | E5,E6,E13 |
+| Stock | Ubicaciones; último artículo; SKU/EAN duplicado; Woo caído; condicionado; sobreventa | E8–E12 |
+| Recepción | Parcial; documento tardío; dos operadores; provisional; foto fallida; disputa | E14,E15 |
+| Conteo | Ciego; movimiento posterior; autoajuste; alto riesgo; zero; offline; lease | E16,E17 |
+| Excepciones | Cancelación pre/post; devolución dañada; proveedor; descarte; garantía | E18,E19 |
+| Taller | Repuesto usado/no usado; presupuesto; offline; saldo; garantía | E20,E21 |
+| Operación | Migración repetida; restore; health fallido; rollback con eventos nuevos | E23,E24 |
 
-- Portar selectivamente el trabajo útil de `feature/app-foundation` a `feature/stock-flow-ui`.
-- Publicar desde backend un artefacto OpenAPI/cliente por commit; la App fija una versión y CI
-  verifica compatibilidad. La copia manual deja de ser el proceso definitivo.
-- Conectar login, refresh, logout, asociación/revocación de dispositivo y permisos reales.
-- Secretos y refresh tokens viven en SecureStore. TanStack Query posee el estado remoto; Zustand
-  queda limitado a estado local transversal.
-- Probar un iPhone y un Android reales antes de cerrar la entrega.
+## 22. Cobertura documental
 
-### E4: Bandeja operativa móvil
+La cobertura se controla por decisiones, procesos, estados, errores, permisos, interfaces, pruebas, entrega y evidencia; nunca por cantidad de líneas.
 
-**Resultado:** el responsable atiende excepciones desde el teléfono sin recorrer varias pantallas.
+| Proceso | Especificación | Decisiones | Patrón/referencia | Ficha de progreso | SOP previsto |
+| --- | --- | --- | --- | --- | --- |
+| Preparación, picking y paquetes | §4 | registro PM | WMS aplicable | E00–E24 | índice SOP |
+| Evidencia fotográfica y aprobación | §5 | registro PM | reglas propias | E00–E24 | índice SOP |
+| Impresión interna, transporte y despacho | §6 | registro PM | reglas propias | E00–E24 | índice SOP |
+| Stock, identidad, familias, ubicaciones y movimientos | §7 | registro PM | WMS aplicable | E00–E24 | índice SOP |
+| Recepción y putaway | §8 | registro PM | WMS aplicable | E00–E24 | índice SOP |
+| Conteos y ajustes | §9 | registro PM | WMS aplicable | E00–E24 | índice SOP |
+| Cancelaciones, devoluciones, daños y proveedor | §10 | registro PM | reglas propias | E00–E24 | índice SOP |
+| Garantías y posventa | §11 | registro PM | reglas propias | E00–E24 | índice SOP |
+| Taller | §12 | registro PM | reglas propias | E00–E24 | índice SOP |
+| App iPhone, dispositivos y offline | §13 | registro PM | WMS aplicable | E00–E24 | índice SOP |
+| Bandeja, alertas, reclamos ML y turnos | §14 | registro PM | reglas propias | E00–E24 | índice SOP |
+| Integraciones WooCommerce, MercadoLibre y Andreani | §15 | registro PM | reglas propias | E00–E24 | índice SOP |
+| Métricas, reposición, entrante y preventa | §16 | registro PM | reglas propias | E00–E24 | índice SOP |
+| Operación, diagnóstico, seguridad y recuperación | §17 | registro PM | reglas propias | E00–E24 | índice SOP |
 
-- Conectar notificaciones, inbox, lectura, toma exclusiva, resolución, reasignación y deep links.
-- Mostrar pedidos nuevos, fallos de integración, etiquetas no impresas y tareas urgentes.
-- Repetir y escalar alertas hasta reconocimiento o resolución.
-- Preparación muta solamente online; esta entrega no promete carga offline de evidencia.
+## 23. Pendientes explícitos y límites de alcance
 
-### E5: Vista rápida unificada de stock
+### Bloqueos concretos
 
-**Resultado:** una búsqueda global muestra la situación completa de un producto.
+- Impresora: modelo, driver, lenguaje y puerto — depósito — bloquea publicación E3.
+- iPhone: modelo/iOS exactos — equipo móvil — bloquea matriz final E5.
+- SLA ML por modalidad — integración/operación — bloquea aceptación E1/E4.
+- Staging y sanitización — operaciones — bloquea fallos integrales y despliegue automático.
+- RTO/RPO — operaciones — se fijan tras medir backup/restauración en E23.
 
-- Buscar por SKU, EAN equivalente o nombre.
-- Mostrar físico por ubicación, disponible, comprometido, no disponible, entrante, Woo, ML,
-  incidentes, historial y frescura.
-- No inventar la distribución inicial. Una ubicación sin conteo base se muestra como “sin línea
-  base”, no como cero.
-- Woo sigue siendo la autoridad de lo comercialmente disponible; Fusion modela y explica sus
-  componentes operativos.
+### Fuera de esta etapa
 
-### E6: Libro de movimientos y ubicaciones
+- MercadoLibre Full; Android hasta demanda concreta; serialización; lotes y vencimientos; kits/combos; consignación.
+- Órdenes de compra automáticas; inventario de embalaje; peso/dimensiones/balanza en Fusion.
+- Retiros web/locales dentro de despacho; portal cliente de taller; asistencia/liquidación; ranking público.
+- Reembolsos automáticos y garantía de cero sobreventa mientras cada publicación ML anuncie stock completo.
 
-**Resultado:** el equipo mueve unidades entre ubicaciones con trazabilidad completa.
+## 24. Definición de cierre del programa
 
-- Derivar saldos físicos de movimientos inmutables con cantidades enteras.
-- Mantener depósitos físicos múltiples, ubicación base por SKU y overflow.
-- Confirmar transferencias locales al llegar al destino; por la cercanía actual no se modela
-  tránsito intermedio.
-- Corregir errores mediante movimiento inverso, nunca reescribiendo historia.
-- Habilitar el modelo nuevo por familia o SKU; un SKU no puede mezclar escrituras legacy y nuevas.
-- La familia operativa pertenece a Fusion y cada SKU tiene una familia principal.
-
-### E7: Compromisos, picking y faltantes
-
-**Resultado:** pedido, preparación y stock comparten una reserva operativa auditable.
-
-- Reflejar el compromiso cuando Woo reduce stock, sin aplicar una segunda reducción.
-- Los pendientes de pago se reflejan mientras Woo retenga stock y se liberan cuando Woo lo restaura.
-- Al encontrar el producto, moverlo a una ubicación lógica de preparación vinculada al pedido.
-- Un faltante permite compromiso parcial, abre incidente urgente y dispara conteo escalonado:
-  SKU en todas las ubicaciones y luego ubicación/familia si no se resuelve.
-- Un cambio de línea invalida la preparación y evidencia afectadas.
-- Una cancelación antes del despacho libera Woo y crea tarea urgente de desempaque/reposición.
-- Admin o Ventas puede reasignar la última unidad a un ML urgente, incluso desde un paquete web,
-  invalidando aprobación, evidencia y etiquetas del pedido desplazado.
-- Meta operativa: reconocer un faltante urgente en menos de cinco minutos.
-
-### E8: Stock y tareas en la App
-
-**Resultado:** el operario consulta y ejecuta tareas de stock desde el celular.
-
-- Reemplazar el ajuste absoluto del prototipo por consulta, movimientos autorizados,
-  transferencias, faltantes, tareas, historial y frescura.
-- Proteger escaneos contra rebote y bloquear códigos asignados a más de un SKU.
-- Usar selección manual jerárquica de ubicación; no se requieren etiquetas QR en ubicaciones.
-
-### E9: Recepción trazable en VPS
-
-**Resultado:** una recepción de 20–100 líneas puede procesarse parcialmente sin perder contexto.
-
-- Aceptar documentos antes, durante o después de la mercadería y confirmar por línea.
-- Exigir identidad, cantidad y condición visible.
-- Permitir cantidad directa, escaneo acumulado o escaneo unitario, sugerido según riesgo pero
-  modificable por el operario.
-- Enviar líneas a disponible, no disponible o pendiente.
-- Un SKU inexistente en Woo crea existencia física provisional no vendible hasta catalogación.
-- Una corrección posterior usa movimiento inverso.
-
-### E10: Recepción móvil
-
-**Resultado:** la mercadería se controla desde el punto de descarga.
-
-- Elegir recepción, escanear, contar, registrar condición, tomar fotos y elegir destino.
-- Soportar uno o dos operadores concurrentes con versión esperada y conflicto explícito.
-- Nunca confirmar silenciosamente una línea que otro operador modificó.
-
-### E11: Conteos y ajustes controlados
-
-**Resultado:** conteos parciales y generales ajustan Woo con control de riesgo.
-
-- Primer conteo ciego y reconciliación de movimientos posteriores al snapshot.
-- Riesgo combinado por unidades, porcentaje, costo de reposición, historial y criticidad.
-- Usar último costo de compra; si falta, usar precio de venta como fallback visible.
-- Diferencias de bajo riesgo dentro de tolerancia configurable pueden autoajustarse.
-- Alto riesgo exige foto, motivo estructurado y segunda aprobación; nadie se autoaprueba.
-- Confirmación explícita antes de llevar a cero SKUs esperados pero no contados.
-- Plan diario por riesgo/incidentes con presupuesto en minutos y conteo general mensual, aunque
-  abarque varios días.
-- CSV masivo solo con preview y doble aprobación.
-
-### E12: Conteo móvil offline
-
-**Resultado:** una conexión inestable no pierde ni duplica el conteo.
-
-- Cola cifrada con vigencia máxima de siete días.
-- Reproducir deltas en orden; detener conflictos incompatibles y pedir recuento.
-- No usar last-write-wins.
-- Invalidar pendientes de un teléfono perdido o revocado y reconstruir mediante recuento.
-- Si una foto falla, conservar cantidad, motivo y archivo local, pero bloquear aprobación hasta
-  subir la evidencia.
-
-### E13: Cancelaciones, devoluciones y daños
-
-**Resultado:** los casos excepcionales dejan de resolverse con ediciones manuales.
-
-- Cancelación antes del despacho: Woo recupera disponibilidad y se crea tarea urgente para
-  devolver físicamente la unidad.
-- Cancelación después del despacho: reponer solo después de devolución, inspección y aprobación.
-- Identificar devoluciones por pedido y escaneo; entran a inspección/no disponible.
-- Un daño interno mueve inmediatamente a no disponible, reduce Woo y abre revisión con foto.
-- No disponible es un saldo agregado con motivo y nota, no subinventarios rígidos.
-- Fotos se conservan dos años; movimientos y auditoría, indefinidamente.
-
-### E14: Métricas y reposición
-
-**Resultado:** compras y control se basan en demanda y riesgo medidos.
-
-- Medir exactitud, diferencias repetidas, recepción, faltantes y tiempos de reconocimiento.
-- Construir un mes de línea base antes de fijar objetivos de exactitud o velocidad no medidos.
-- Sugerir reposición, sin crear órdenes de compra, mediante demanda ponderada de 12 meses,
-  estacionalidad, días sin stock, cobertura y lead time manual.
-- Productos nuevos usan referencia de familia e indicador de baja confianza.
-- Entrante comienza con aviso/pedido manual, cantidad y ETA; una recepción parcial decide si
-  conserva o cierra el remanente.
-- La preventa autorizada solo publica en Woo, limitada al entrante neto de compromisos y seguridad.
-  No se habilita preventa en ML inicialmente.
-- Informes móviles: excepciones diarias, reposición semanal y cierre/cobertura/valor mensual.
-
-### E15: Reconciliación ML/Woo y deuda heredada
-
-**Resultado:** los estados derivados de webhooks se comparan periódicamente y los pendientes
-heredados dejan de depender de una única notificación.
-
-- Reconciliar preguntas, mensajes, reclamos ML y pedidos con sus recursos autoritativos.
-- Mantener los webhooks como vía rápida, pero usar reconciliación periódica como respaldo.
-- Resolver la deuda conocida de recepción, SKU vigente antes del push, estados fail-open y
-  documentación de respuestas de `/opt/fusionbikes/herramientas/docs/api-contrato.md`.
-- Mantener rate limiting y backlog de reclamos como deuda explícita hasta resolverlos con tests.
-
-### E16: Consolidación controlada de ramas
-
-**Resultado:** queda una línea permanente de desarrollo y producción sin perder trabajo exclusivo.
-
-- Comparar `master` y `conteo-confiable` con ancestry y diff completo antes de integrar.
-- Congelar agentes, worktrees, migraciones y despliegues activos.
-- Resolver contratos, migraciones, permisos, crons y funciones exclusivas explícitamente.
-- Ejecutar suite global serial, E2E aislado de login, Home, inventario, preparación, matcher,
-  auditoría y API móvil.
-- Auditar rollback; el merge local no implica push, deploy ni reinicio de PM2.
-
-## 5. Invariantes de stock e integraciones
-
-- Conceptos separados: físico, disponible, comprometido, no disponible y entrante.
-- El físico baja al entregar al transportista, no al crear el pedido.
-- Todas las ventas de productos publicados terminan registradas en Woo.
-- El stock de un producto no publicado puede estar físicamente disponible, pero el canal queda
-  bloqueado.
-- No se elimina ni desvincula un producto con saldo físico, comprometido o entrante.
-- SKU duplicado en Woo o código compartido entre SKUs bloquea movimientos y abre incidente.
-- Bicicletas registran presentación física: caja, armada o exhibición. Exhibición sigue vendible;
-  la preparación refleja el trabajo adicional.
-- ML conserva una reserva de canal configurable separada del físico.
-- La sincronización objetivo tiene dos velocidades: SKU tocado en menos de un minuto y
-  reconciliación global más lenta.
-- Si Woo cae, los decrementos se guardan como pendientes urgentes e idempotentes; no se publican
-  aumentos hasta recuperar y reconciliar.
-- Ante negativo o divergencia se bloquea selectivamente el SKU, se publica cero cuando corresponda
-  y se abre reconciliación; no se sobreescribe automáticamente el modelo interno.
-- Decisión comercial explícita: cada publicación independiente de ML anuncia el stock completo.
-  Esto acepta riesgo de sobreventa; una colisión abre incidente urgente, bloquea SKU/canales,
-  obliga a buscar en todas las ubicaciones y Admin/Ventas decide qué pedido cumplir.
-
-## 6. Interfaces y contrato
-
-- E0 no modifica interfaces de ejecución.
-- E2 amplía la cola de etiquetas con toma exclusiva, confirmación, fallo, reintento y autenticación del
-  agente Windows.
-- E3 establece el artefacto OpenAPI versionado como contrato obligatorio entre repositorios.
-- E5–E13 incorporan gradualmente `StockBalance`, `StockMovement`, `WarehouseLocation`,
-  `InventoryTask`, `StockCommitment`, `Receipt`, `CountSession` y `StockIncident`.
-- Un endpoint móvil entra primero en `/opt/fusionbikes/herramientas/openapi/mobile-v1.yaml`, luego
-  en el backend y finalmente en la App.
-- Mutaciones reintentables usan idempotencia; escrituras concurrentes usan versión esperada y
-  conflicto `409`, nunca sobrescritura silenciosa.
-
-## 7. Escenarios obligatorios de aceptación
-
-- Preparación: pedido nuevo durante el picking, prioridad ML, foto lenta, timeout, respuesta tardía,
-  doble toque, recarga, evidencia faltante, cancelación, cambio de línea, faltante y reasignación.
-- Impresión: impresora apagada, sin papel, Windows reiniciado, USB desconectado, red caída,
-  confirmación perdida, trabajo repetido y reimpresión autorizada sin duplicar.
-- App: token vencido, refresh revocado, dispositivo perdido, permisos insuficientes, deep link,
-  push fallido, estado vacío, error recuperable y contrato incompatible.
-- Stock: dos ubicaciones, última unidad, SKU duplicado, código duplicado, Woo caído, saldo negativo,
-  divergencia selectiva, publicación ML independiente y decisión de sobreventa.
-- Recepción: documento tardío, recepción parcial, dos operadores, modo de conteo cambiado, SKU
-  provisional, condición dañada y foto fallida.
-- Conteo: conteo ciego, movimiento posterior al snapshot, diferencia de bajo y alto riesgo,
-  cero explícito, doble aprobación, offline de siete días, conflicto y dispositivo revocado.
-- Excepciones: cancelación antes/después del despacho, devolución aprobada, devolución dañada,
-  daño interno y reposición bloqueada hasta inspección.
-
-## 8. Gates comunes
-
-- Cada entrega usa rama y worktree propios.
-- Revisar diff final, incluida memoria, con un revisor independiente.
-- Ejecutar pruebas dirigidas y una única suite completa sin otros Vitest o servidores aislados.
-- Todo cambio de `/opt/fusionbikes/herramientas/public/` requiere E2E real y validación responsive.
-- Probar fallos proporcionales a la entrega: red, timeout, reintento, doble acción, recarga,
-  concurrencia, permisos y recuperación.
-- Auditoría final obligatoria antes de declarar `PUBLICABLE_LOCAL`.
-- Publicar, desplegar, reiniciar PM2, instalar el agente Windows o distribuir builds móviles son
-  acciones manuales y requieren autorización separada.
-
-## 9. Fuera de estas entregas
-
-- MercadoLibre Full o depósitos externos.
-- Lotes y vencimientos.
-- Serialización por unidad.
-- Consignación.
-- Kits.
-- Órdenes de compra automáticas.
-- Garantía de cero sobreventa mientras siga vigente la decisión de anunciar stock completo en
-  publicaciones ML independientes.
+E24 solo puede aceptarse cuando E0–E23 tienen evidencia o exclusión explícita aprobada, ramas y migraciones están consolidadas sin perder historia, contratos App/backend están fijados, recuperación fue probada y los responsables operativos aceptaron sus procesos. El cierre no elimina fichas ni archivos: deja un producto operable y una cadena de evidencia reproducible.

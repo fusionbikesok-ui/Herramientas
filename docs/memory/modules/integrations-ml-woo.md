@@ -35,13 +35,11 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   como `no_elegible` para no romper preparaciones/auditoría, pero la excluyen de la cola y
   del inicio; ML requiere `paid`, `ready_to_ship` y logística local.
 
-## Stock y preparación: decisiones programadas para E5–E14
+## Stock y preparación: decisiones programadas para E8–E22
 
 - WooCommerce es la autoridad de stock disponible para venta. Fusion mantiene físico por ubicación,
   comprometido, no disponible y entrante, y no descuenta físicamente dos veces una venta.
 - El físico sale al entregar al transportista. Cancelaciones, cambios y devoluciones deben
   reconciliarse con Woo antes de volver a publicar disponibilidad.
-- ML conserva una reserva de canal configurable. Se acepta como excepción vigente que publicaciones
-  independientes anuncien el stock completo; una sobreventa abre incidente y requiere decisión de
-  Admin/Ventas.
+- La política exacta de publicación ML se define en E11. Mientras publicaciones independientes anuncien el stock completo no se promete cero sobreventa; una sobreventa real bloquea nuevas ventas en ambos canales y escala.
 - Si Woo no responde, aumentos no se publican y los cambios pendientes quedan durables e idempotentes.

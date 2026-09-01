@@ -24,18 +24,16 @@
 - Los resultados de asociación SKU/EAN/UPC muestran el identificador siempre visible y dejan
   que el nombre/variante haga wrap en móvil; los dropdowns usan columnas fluidas y metadata en
   segunda línea en anchos estrechos, sin elipsis que oculte la variante.
-- La primera UX móvil operativa se ordena como Base común → Preparación → Inventario. Preparación
-  cubre cola, toma, escaneo, evidencia, cierre/etiqueta y despacho/incidencia; Inventario cubre
-  Hoy/ubicación, conteo, diferencias, aprobación e historial/etiquetas.
+- La App es herramienta de piso y la web conserva control, lotes, configuración, informes y contingencia. El inicio iPhone se ordena como “Trabajo urgente de hoy”.
 - Ambos verticales deben diseñar estados vacío, cargando, sin permiso, error, reintento y conflicto.
-  Las validaciones web de U0 incluyen 390 px; cada vertical móvil cierra además con E2E en iPhone
+  Las validaciones web usan 390/768/1440 px; cada vertical móvil cierra además con E2E en iPhone
   contra una API real aislada.
 
 - La vista rápida de stock es una búsqueda global por SKU, EAN o nombre y muestra disponible,
   físico por ubicación, comprometido, no disponible, entrante, canales, frescura e incidentes.
   Una ubicación sin línea base se muestra como tal, nunca como cero inventado.
-- La App móvil debe validarse en iPhone y Android desde el comienzo; el stock móvil usa tareas,
-  movimientos y conteos, no edición absoluta directa.
+- La App móvil se valida primero en iPhone; Android queda fuera hasta demanda concreta. Stock móvil usa tareas, movimientos y conteos, no edición absoluta directa.
+- Objetivos medibles: listas/filtros ≤2 s, feedback de escaneo <500 ms, preview/progreso de foto inmediato y confirmación objetivo ≤10 s; controles principales de una mano y al menos 44 px.
 
 ## Cuándo actualizar
 

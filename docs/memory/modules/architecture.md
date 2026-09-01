@@ -18,19 +18,17 @@
 - El delivery push usa `PUSH_PROVIDER=mock` solo para desarrollo (estado `simulado`) o FCM
   HTTP v1 real con credenciales fuera del repositorio. Las reservas de delivery se persisten
   antes del side effect mediante una clave de idempotencia durable.
-- El plan maestro integra la app por verticales: Base común → Preparación → Inventario →
-  Consolidación. Preparación e Inventario congelan juntos contrato y UX; la implementación móvil
-  es secuencial y no bloquea su cierre operativo previo en el VPS.
+- El programa canónico usa E0–E24 y está en `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`; las fichas separadas prueban progreso.
 - La API móvil de Preparación e Inventario vive bajo `/api/v1`, comparte servicios de negocio con
   el panel y nunca reutiliza rutas web autenticadas por cookies. Toda mutación reintentable exige
   idempotencia y toda edición concurrente, versión esperada con conflicto `409` sin sobrescritura.
-- Preparación exige conexión para mutar. Inventario admite cola offline cifrada y acotada, con
-  resolución de conflictos decidida por el servidor y sin last-write-wins silencioso.
+- El objetivo E13 permite captura provisional offline de operaciones de piso sobre tareas descargadas. El envelope incluye operación, dispositivo, usuario, lease, versión base y hora real; el servidor acepta, reconoce repetición idempotente o devuelve conflicto explícito, sin `last-write-wins`.
 
 ## Decisiones vigentes
 
 - Los planes de cambios normales o grandes viven en `docs/superpowers/plans/`.
 - Las especificaciones de diseño viven en `docs/superpowers/specs/`.
+- Vigencia, archivos, decisiones y progreso se enrutan desde `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.
 
 ## Cuándo actualizar
 

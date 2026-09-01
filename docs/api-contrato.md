@@ -2982,7 +2982,12 @@ del repositorio. `PUSH_PROVIDER=mock` solo registra `simulado`, nunca una entreg
 La app debe consumir `/api/v1` con `Authorization: Bearer <access_token>`; el refresh token
 solo se envía a `/api/v1/auth/refresh` y `/api/v1/auth/logout`.
 
-## U0.C — Contrato móvil congelado para Inventario y Preparación
+## Contrato móvil heredado U0.C — Inventario y Preparación
+
+> La etiqueta U0.C es histórica y fue sustituida por el programa E0–E24. Esta sección conserva el
+> contrato ejecutable/heredado y sus estados de implementación; la planificación vigente está en
+> `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`. Renombrar la entrega no
+> convierte adaptadores pendientes en implementados.
 
 Esta sección define el contrato versionado que consumirán App 1 (Preparación) y App 2
 (Inventario). La especificación formal está en `openapi/mobile-v1.yaml`. Las rutas móviles

@@ -14,28 +14,27 @@
   `feature/stock-flow-ui` agrega prototipos, mocks y auth/biometría/push parcial.
 - El prototipo de stock con edición absoluta no es el diseño aprobado; debe reemplazarse por
   movimientos, ubicaciones, tareas, conteos y recepción.
-- La App debe validar iPhone y Android desde los primeros verticales.
-- Preparación requiere conexión para mutar; inventario puede usar cola offline cifrada y acotada.
+- La App se diseña y valida primero para iPhone. Android queda fuera hasta que exista demanda concreta.
+- Toda operación de piso puede capturarse offline sobre tareas reclamadas y descargadas, pero queda provisional hasta aceptación del servidor; decisiones comerciales y confirmaciones finales esperan conexión.
 
 ## Contrato y arquitectura
 
 - `/opt/fusionbikes/herramientas/openapi/mobile-v1.yaml` es la fuente de verdad del contrato.
-- El objetivo es publicar un artefacto generado por CI por commit de backend, fijarlo desde la App
+- El objetivo E5 es publicar un artefacto generado por CI por commit de backend, fijarlo desde la App
   y verificar divergencias automáticamente. Las copias manuales son transitorias.
 - Expo SDK 57, TypeScript, Expo Router, TanStack Query, Zustand limitado a estado local,
   SecureStore y cliente HTTP compartido son la arquitectura prevista.
 - Refresh tokens y secretos permanecen en almacenamiento seguro; permisos e idempotencia se
   resuelven en backend.
 
-## Orden de verticales
+## Orden E0–E24 relevante para App
 
-1. Autenticación, dispositivos, permisos y contrato real.
-2. Bandeja, notificaciones, reclamos ML, deep links y tareas urgentes.
-3. Consulta rápida de stock.
-4. Movimientos, transferencias, picking y faltantes.
-5. Recepción.
-6. Conteos offline.
-7. Devoluciones, daños, métricas y reposición.
+1. E5: autenticación, dispositivos, permisos y contrato real en iPhone.
+2. E6–E7: bandeja, reclamos ML, alertas, deep links y turnos.
+3. E12–E13: tareas de stock y base offline común.
+4. E15 y E17: recepción y conteos iPhone/offline.
+5. E18–E19: excepciones y garantías.
+6. E21: taller iPhone/offline.
+7. E22: métricas, reposición, entrante y preventa.
 
-Cada vertical móvil debe incluir estados vacío, cargando, sin permiso, error, reintento y conflicto,
-además de E2E en iPhone y Android cuando sea posible.
+Cada vertical móvil incluye vacío, carga, sin permiso, error, reintento, conflicto y sincronización. Cierra con E2E en un iPhone real. El lease offline máximo es 12 horas y la cola cifrada se conserva hasta siete días, sin `last-write-wins`.

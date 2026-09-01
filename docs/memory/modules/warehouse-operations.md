@@ -15,18 +15,18 @@ implementadas como un único libro de stock.
   preparación antes del despacho.
 - La evidencia incluye requisitos por ítem y fotos del paquete cuando corresponda. Un error de
   red conserva el borrador/previsualización y ofrece reintento idempotente.
-- Objetivo E2: al completar evidencia, generar una única etiqueta interna 50×25 y enviarla a una
+- Objetivo E3: al aprobar evidencia, generar una única etiqueta interna 50×25 y enviarla a una
   computadora Windows del depósito con impresora USB y agente local.
-- Objetivo E2: si la impresión falla, conservar la aprobación, dejar alerta persistente y permitir
+- Objetivo E3: si la impresión falla, conservar la aprobación, dejar alerta persistente y permitir
   reimpresión manual autorizada sin repetir fotos.
-- Objetivo E2: generar etiquetas masivas de transporte después de que los paquetes aprobados estén listos.
+- Objetivo E4: generar/reconciliar lotes de transporte después de que los paquetes aprobados estén listos.
 - El horario de MercadoLibre es máximo de despacho; el horario interno es máximo de preparación.
 - Cancelaciones o cambios que afectan un pedido preparado invalidan evidencia y etiquetas; una
   unidad reasignada a un ML urgente puede exigir rehacer la preparación web desplazada.
 - Un faltante es incidente urgente y dispara búsqueda/conteo escalonado; no se oculta como pedido
   simplemente pendiente.
 
-## Modelo físico y comercial: objetivo E5–E13
+## Modelo físico y comercial: objetivo E8–E18
 
 - Fusion mantiene físico por ubicación y libro inmutable de movimientos.
 - WooCommerce es autoridad de disponible comercial; Fusion separa físico, disponible,
@@ -40,7 +40,7 @@ implementadas como un único libro de stock.
 - Productos no publicados pueden tener físico interno, pero el canal comercial permanece bloqueado.
 - No se elimina/desvincula un producto con físico, compromiso o entrante.
 
-## Recepción, devoluciones y conteos: objetivo E9–E12
+## Recepción, devoluciones y conteos: objetivo E14–E18
 
 - La recepción se procesa por línea; documentos pueden llegar antes, durante o después de la
   mercadería.
@@ -49,26 +49,24 @@ implementadas como un único libro de stock.
 - Devoluciones entran a inspección/no disponible y solo pasan a vendible tras aprobación.
 - Daño interno mueve a no disponible, reduce Woo y abre revisión con foto.
 - El primer conteo es ciego. Movimientos posteriores al snapshot se reconcilian, no se pierden.
-- Diferencias de alto riesgo requieren motivo, foto y segundo aprobador; no existe autoaprobación.
+- Diferencias de alto riesgo requieren reconteo, motivo y confirmación reforzada; se prefiere otro operario, pero la misma persona puede repetir si no hay reemplazo y queda marcado.
 - No se lleva a cero lo no contado sin confirmación explícita.
-- Objetivo E12: el conteo offline conservará eventos cifrados hasta siete días, reproducirá en orden
+- Objetivo E17: el conteo offline conservará eventos cifrados hasta siete días, reproducirá en orden
   y se detendrá ante conflictos incompatibles; no usará last-write-wins.
 
-## Integraciones y excepciones: objetivo E7–E14
+## Integraciones y excepciones: objetivo E11–E22
 
 - Si Woo está caído, los cambios pendientes son durables e idempotentes; no se publican aumentos
   hasta reconciliar.
 - Divergencias o negativos bloquean selectivamente el SKU y abren incidente; no se sobreescribe
   automáticamente el modelo interno.
-- ML mantiene reserva de canal configurable. Se acepta explícitamente que publicaciones ML
-  independientes anuncien el stock completo; una sobreventa abre incidente urgente y requiere
-  decisión de Admin/Ventas.
+- No se presupone una reserva fija de canal ML. Mientras publicaciones independientes anuncien stock completo no se garantiza cero sobreventa; una sobreventa real bloquea ventas en ambos canales y abre incidente urgente.
 - MercadoLibre Full, lotes, vencimientos, serialización, consignación, kits y órdenes de compra
   automáticas quedan fuera del primer programa.
 
 ## Retención y alertas
 
 - Movimientos y auditoría se conservan indefinidamente.
-- Fotos operativas se conservan dos años.
-- Las alertas se muestran en panel y sonido, se reintentan hasta reconocimiento/resolución y
+- Fotos operativas se conservan 180 días; reclamos, incidentes, garantías o auditorías activas suspenden la purga.
+- Las alertas se muestran en App, panel y sonido, distinguen reconocimiento de resolución y
   pueden transferirse a otro usuario autorizado.

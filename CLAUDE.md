@@ -1,7 +1,8 @@
 # Proyecto FusionBikes — herramientas
 
-App Node/Express (ESM, better-sqlite3, vitest) en VPS de **producción real**; el despliegue se
-hace **a mano**. Remoto en GitHub (`git@github.com:fusionbikesok-ui/Herramientas.git`, privado, vía
+App Node/Express (ESM, better-sqlite3, vitest) en VPS de **producción real**. La operación vigente
+continúa manual hasta que E23 implemente el pipeline objetivo; luego backend/web podrán publicarse
+automáticamente con gates y rollback. Windows, hardware y App Store siempre requieren autorización. Remoto en GitHub (`git@github.com:fusionbikesok-ui/Herramientas.git`, privado, vía
 deploy key con acceso de escritura). Integración MercadoLibre ↔ WooCommerce. Responder en
 español.
 
@@ -12,6 +13,10 @@ La memoria compartida del proyecto vive en `docs/memory/`. Antes de explorar el 
 1. Leé completos `docs/memory/INDEX.md` y `docs/memory/active.md`.
 2. Usá la tabla de rutas del índice para abrir **solo** los módulos relacionados con la tarea.
 3. No cargues todos los módulos ni planes históricos por defecto.
+
+El programa canónico E0–E24 vive en `docs/superpowers/plans/plan-maestro-v2.md`; su índice,
+decisiones, archivo y fichas están en `docs/superpowers/INDEX.md`. El maestro especifica el
+objetivo y las fichas prueban el progreso: no inferir una entrega terminada por commits o numeración.
 
 En cualquier cambio del repositorio o del VPS, actualizá la memoria afectada después de
 actuar y antes de revisar o reportar el resultado. En cambios de código, repetí esa
@@ -141,7 +146,9 @@ todos los despachos siguientes, en vez de que cada agente repita la búsqueda.
    saca la auditoría de código y la evidencia de responsive/peso; él verifica que sean del
    diff final y agrega lo que solo hace él (seguridad, `npm test`, migraciones, tokens,
    peso). Si falta alguno de los dos insumos, es 🔴 automático — no los suple él.
-9. Reportar al usuario. **El deploy a prod lo hace el usuario a mano.**
+9. Reportar al usuario. La política vigente de publicación se consulta en
+   `docs/memory/modules/operations-vps.md`: hasta E23 es manual; el objetivo posterior permite
+   backend/web automático solo con pipeline verde y rollback. Windows/App Store siguen manuales.
 
 **Inicio forzado:** el comando `/feature` dispara este mismo pipeline explícitamente.
 

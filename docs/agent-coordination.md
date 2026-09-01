@@ -2,7 +2,8 @@
 
 Este protocolo permite que varios agentes trabajen en paralelo sin compartir archivos ni
 dar por vigente una revisión hecha sobre un diff anterior. `AGENTS.md`, `CLAUDE.md` y el
-pipeline `feature` siguen siendo normativos; este documento define la coordinación diaria.
+pipeline `feature` siguen siendo normativos; este documento define la coordinación diaria. El
+programa y las fichas se enrutan desde `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.
 
 ## Una tarea, una rama, un worktree
 
@@ -62,9 +63,9 @@ cambia cuál archivo rota. Si vuelve a fallar aislado, ahí sí es del diff.
   tiene una capacidad equivalente, conserva el criterio verificable y lo marca como no
   ejecutado; no inventa resultados de una skill ausente.
 
-## Estados y gates
+## Estados técnicos y estados de entrega
 
-Una tarea avanza solamente en este orden:
+Los gates técnicos internos avanzan en este orden:
 
 1. `DIAGNOSTICO` o `DISENO`
 2. `IMPLEMENTANDO`
@@ -76,7 +77,7 @@ Una tarea avanza solamente en este orden:
 8. `PUBLICABLE_LOCAL`
 9. `INTEGRADO_LOCAL`
 
-`PUBLICADO` y `DESPLEGADO` son estados manuales y nunca se infieren de un commit o merge.
+La ficha operativa usa otro ciclo: `planificada → desarrollo → candidata → publicada → observada → aceptada`. Ninguno se infiere de un commit. En la operación vigente la publicación es manual hasta E23; el objetivo futuro automatiza solo backend/web con pipeline verde y rollback. Windows, hardware y App Store requieren autorización explícita.
 
 ### Bloqueos y reanudación
 
@@ -182,9 +183,10 @@ artefactos existentes e incluye:
 - siguiente acción exacta, con comando o archivo inicial;
 - skills sugeridas para continuar.
 
-El handoff transitorio se guarda en `/tmp`; las decisiones durables van al módulo de
-`docs/memory/` correspondiente. Nunca se guardan secretos, credenciales, cookies, tokens,
-transcripciones ni logs extensos.
+El handoff transitorio se guarda en `/tmp`; la ficha E00–E24 conserva checkpoint reproducible y
+las decisiones durables van al módulo de `docs/memory/` correspondiente. Usar
+`/opt/fusionbikes/herramientas/docs/superpowers/deliveries/CHECKPOINT-TEMPLATE.md`. Nunca se
+guardan secretos, credenciales, cookies, tokens, transcripciones ni logs extensos.
 
 ## Evitar colisiones de pruebas y servidores
 
@@ -204,7 +206,8 @@ transcripciones ni logs extensos.
   commits de otra.
 - Artefactos (`output/`, `.playwright-cli/`, enlaces `node_modules`, SQLite temporales) nunca
   entran al commit de producto.
-- No hay push, deploy, reinicio de pm2 ni migración productiva sin autorización explícita.
+- No hay push, deploy, reinicio de PM2 ni migración productiva por la mera existencia de un commit.
+  Aplicar la política vigente/objetivo registrada en `docs/memory/modules/operations-vps.md`.
 
 ## Plantilla mínima del registro activo
 
