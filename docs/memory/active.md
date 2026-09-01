@@ -18,8 +18,9 @@ Actualizado: 2026-09-01.
   idempotente. E1 quedó integrada localmente en `conteo-confiable` (último commit `c28456d`), con
   hoja por jornada, alta inicial de pendientes, bloqueo sin fecha, reconciliación de fotos limitada
   y limpieza de archivos en carreras idempotentes. No se hizo push, deploy ni reinicio.
-- El control actual encola una etiqueta interna 50×25, pero todavía no imprime silenciosamente ni
-  se dispara al completar evidencia; eso corresponde a E2.
+- E2 ya encola la etiqueta interna 50×25 al completar evidencia y expone claim/lease/resultado/
+  reintento en la cola. El agente configurable está en `/opt/fusionbikes/herramientas/tools/windows-label-agent/`;
+  falta validar el adaptador con el modelo de impresora real antes de instalarlo.
 - Inventario tiene conteos y cierre seguro, pero todavía no tiene el libro de movimientos y saldos
   físicos por ubicación definido en el programa de stock.
 - La App usa `feature/stock-flow-ui` como base. Su prototipo de stock con edición absoluta debe
@@ -29,7 +30,7 @@ Actualizado: 2026-09-01.
 
 ## Pendientes inmediatos
 
-1. E2: agente Windows para impresión automática 50×25 por USB.
+1. E2: validar adaptador, instalación automática y escenarios con impresora real.
 2. E3: contrato OpenAPI versionado por CI y conexión real de la App.
 3. Continuar E4–E14 según el plan maestro.
 
