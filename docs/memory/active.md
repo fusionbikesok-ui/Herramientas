@@ -21,6 +21,9 @@ Actualizado: 2026-09-01.
 - E2 ya encola la etiqueta interna 50×25 al completar evidencia y expone claim/lease/resultado/
   reintento en la cola. El agente configurable está en `/opt/fusionbikes/herramientas/tools/windows-label-agent/`;
   falta validar el adaptador con el modelo de impresora real antes de instalarlo.
+- E3 tiene autenticación móvil, refresh/logout, dispositivos y contrato OpenAPI verificable por CI;
+  las pruebas locales de auth/dispositivo/servidor pasan 27/27. La conexión de la App a producción
+  y la validación en iPhone/Android todavía requieren el gate de la App.
 - Inventario tiene conteos y cierre seguro, pero todavía no tiene el libro de movimientos y saldos
   físicos por ubicación definido en el programa de stock.
 - La App usa `feature/stock-flow-ui` como base. Su prototipo de stock con edición absoluta debe
@@ -31,8 +34,9 @@ Actualizado: 2026-09-01.
 ## Pendientes inmediatos
 
 1. E2: validar adaptador, instalación automática y escenarios con impresora real.
-2. E3: contrato OpenAPI versionado por CI y conexión real de la App.
-3. Continuar E4–E14 según el plan maestro.
+2. E3: fijar el contrato y conectar/validar la App en iPhone y Android.
+3. E4: bandeja operativa móvil y alertas reales.
+4. Continuar E5–E14 según el plan maestro.
 
 ## Reglas de operación
 
