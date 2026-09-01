@@ -1463,8 +1463,9 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
 // guardado la foto. Consultamos el evento durable identificado por upload_id antes
 // de permitir reintentar, evitando duplicados por doble POST.
 async function reconciliarSubida(uploadId){
+  var ctl=new AbortController(), reloj=setTimeout(function(){ctl.abort();},10000);
   try{
-    var r=await api('/'+PREP.id);
+    var r=await api('/'+PREP.id,{signal:ctl.signal});
     if(!r.body||!r.body.ok)return false;
     var eventos=r.body.data&&r.body.data.eventos||[];
     var ev=eventos.find(function(x){return x.detalle&&x.detalle.upload_id===uploadId;});
@@ -1480,6 +1481,7 @@ async function reconciliarSubida(uploadId){
     renderDetalle();iniciarPollFotos();anunciarFoto('La foto se guardó en el servidor aunque la respuesta tardó.');
     return true;
   }catch(_){return false;}
+  finally{clearTimeout(reloj);}
 }
 
 function marcarSubidaFallida(tempId,detalle){
