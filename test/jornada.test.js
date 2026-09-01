@@ -114,3 +114,62 @@ describe('abrirJornada', () => {
     expect(jornadaDeHoy(db, now).fecha).toBe(fechaLocalHoy(now));
   });
 });
+
+import express from 'express';
+import request from 'supertest';
+import { jornadaRouter } from '../routes/jornada.js';
+
+describe('rutas /api/jornada', () => {
+  let db;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    db.prepare(`CREATE TABLE IF NOT EXISTS pedidos_cache (
+      clave TEXT PRIMARY KEY, canal TEXT NOT NULL, wc_order_id INTEGER, ml_order_id TEXT,
+      numero_pedido TEXT, comprador TEXT, fecha TEXT, estado_envio TEXT NOT NULL,
+      estado_wc TEXT, espejo_ml INTEGER NOT NULL DEFAULT 0, logistic_type TEXT,
+      substatus TEXT, items_json TEXT NOT NULL, actualizado_en TEXT NOT NULL
+    )`).run();
+  });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  function appConUsuario(usuario) {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.user = { username: usuario, is_admin: 1 }; next(); });
+    app.use('/api/jornada', jornadaRouter(db, {}));
+    return app;
+  }
+
+  it('POST /abrir crea la jornada y responde la ola inicial', async () => {
+    const r = await request(appConUsuario('tester')).post('/api/jornada/abrir').send({});
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.jornada.estado).toBe('abierta');
+    expect(r.body.olaInicial.tipo).toBe('inicial');
+  });
+
+  it('POST /abrir sin usuario autenticado responde 401', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/jornada', jornadaRouter(db, {}));
+    const r = await request(app).post('/api/jornada/abrir').send({});
+    expect(r.status).toBe(401);
+  });
+
+  it('doble POST /abrir el mismo día responde 409 OPERATIONAL_DAY_EXISTS', async () => {
+    const app = appConUsuario('tester');
+    await request(app).post('/api/jornada/abrir').send({});
+    const r2 = await request(app).post('/api/jornada/abrir').send({});
+    expect(r2.status).toBe(409);
+    expect(r2.body.code).toBe('OPERATIONAL_DAY_EXISTS');
+  });
+
+  it('GET /hoy devuelve null antes de abrir y la jornada después', async () => {
+    const app = appConUsuario('tester');
+    const antes = await request(app).get('/api/jornada/hoy');
+    expect(antes.body.jornada).toBeNull();
+    await request(app).post('/api/jornada/abrir').send({});
+    const despues = await request(app).get('/api/jornada/hoy');
+    expect(despues.body.jornada.estado).toBe('abierta');
+  });
+});

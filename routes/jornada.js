@@ -50,8 +50,23 @@ export function ensureTablesJornada(db) {
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pick_wave_claims_expira ON pick_wave_claims(expires_at)').run();
 }
 
+import { abrirJornada, jornadaDeHoy } from '../lib/jornada.js';
+
 export function jornadaRouter(db, cfg) {
   ensureTablesJornada(db);
   const router = express.Router();
+
+  router.post('/abrir', (req, res) => {
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const { horaCorteWeb = null, ventanaMlJson = null } = req.body || {};
+    const r = abrirJornada(db, { usuario: req.user.username, horaCorteWeb, ventanaMlJson });
+    if (!r.ok) return res.status(409).json({ ok: false, code: r.code, jornada: r.jornada });
+    res.json({ ok: true, jornada: r.jornada, olaInicial: r.olaInicial });
+  });
+
+  router.get('/hoy', (req, res) => {
+    res.json({ ok: true, jornada: jornadaDeHoy(db) });
+  });
+
   return router;
 }
