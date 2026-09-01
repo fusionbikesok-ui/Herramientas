@@ -28,8 +28,10 @@ export function etiquetasRouter(db) {
       'ALTER TABLE etiquetas_cola ADD COLUMN claim_hasta TEXT',
       'ALTER TABLE etiquetas_cola ADD COLUMN ultimo_error TEXT',
       'ALTER TABLE etiquetas_cola ADD COLUMN error_en TEXT',
+      'ALTER TABLE etiquetas_cola ADD COLUMN idempotencia TEXT',
     ]) { try { db.prepare(ddl).run(); } catch (_) {} }
     db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_claim_token ON etiquetas_cola(claim_token) WHERE claim_token IS NOT NULL').run();
+    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_idempotencia ON etiquetas_cola(idempotencia) WHERE idempotencia IS NOT NULL').run();
   } catch (_) { /* ya existe */ }
 
   const now = () => new Date().toISOString();

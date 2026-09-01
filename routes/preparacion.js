@@ -41,6 +41,17 @@ const MOTIVOS_CONFIRMACION_MANUAL = ['codigo_ilegible', 'sin_etiqueta', 'otro'];
 // 'completada' si se verifica todo; la segunda, para que el depósito termine su parte).
 const ESTADOS_BLOQUEADOS_PARA_TRABAJAR = new Set(['completada', 'cerrada_sin_evidencia']);
 
+function encolarEtiquetaInterna(db, prep, usuario) {
+  const grupo = prep.pack_id || prep.clave;
+  const clave = `preparacion:${prep.id}:${grupo}`;
+  const ts = new Date().toISOString();
+  const result = db.prepare(`INSERT OR IGNORE INTO etiquetas_cola
+    (sku, cantidad, origen, solicitado_por, nota, estado, creado_en, formato_ancho_mm, formato_alto_mm, tipo_etiqueta, idempotencia)
+    VALUES (?, 1, 'preparacion', ?, ?, 'pendiente', ?, 50, 25, 'interna', ?)`)
+    .run(grupo, usuario || null, JSON.stringify({ formato: '50x25mm', grupo_clave: grupo, preparacion_id: prep.id }), ts, clave);
+  return db.prepare('SELECT id FROM etiquetas_cola WHERE idempotencia=?').get(clave)?.id || result.lastInsertRowid;
+}
+
 // Mensaje genérico para la pantalla del operario — el detalle de qué endpoint usar para
 // desbloquear (/reabrir) es del contrato/log, no de una pantalla de alguien embalando
 // cajas (hallazgo del revisor).
@@ -212,7 +223,8 @@ function ensureTables(db) {
     estado TEXT NOT NULL DEFAULT 'pendiente', creado_en TEXT NOT NULL, impreso_en TEXT,
     formato_ancho_mm INTEGER NOT NULL DEFAULT 50 CHECK (formato_ancho_mm > 0),
     formato_alto_mm INTEGER NOT NULL DEFAULT 25 CHECK (formato_alto_mm > 0),
-    tipo_etiqueta TEXT NOT NULL DEFAULT 'interna'
+    tipo_etiqueta TEXT NOT NULL DEFAULT 'interna',
+    idempotencia TEXT
   )`).run();
   try { db.prepare('ALTER TABLE despacho_controles ADD COLUMN confirmacion_idempotencia TEXT').run(); } catch (_) {}
   db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_despacho_confirmacion_idempotencia ON despacho_controles(confirmacion_idempotencia) WHERE confirmacion_idempotencia IS NOT NULL').run();
@@ -220,7 +232,9 @@ function ensureTables(db) {
     'ALTER TABLE etiquetas_cola ADD COLUMN formato_ancho_mm INTEGER NOT NULL DEFAULT 50',
     'ALTER TABLE etiquetas_cola ADD COLUMN formato_alto_mm INTEGER NOT NULL DEFAULT 25',
     "ALTER TABLE etiquetas_cola ADD COLUMN tipo_etiqueta TEXT NOT NULL DEFAULT 'interna'",
+    'ALTER TABLE etiquetas_cola ADD COLUMN idempotencia TEXT',
   ]) { try { db.prepare(ddl).run(); } catch (_) {} }
+  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_idempotencia ON etiquetas_cola(idempotencia) WHERE idempotencia IS NOT NULL').run();
 
   // Claim exclusivo de la preparación. Tabla separada para no cambiar el contrato ni
   // reescribir filas históricas; la PK garantiza que dos operadores no puedan adquirirla
@@ -971,15 +985,12 @@ export function preparacionRouter(db, cfg) {
       const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=?, confirmacion_idempotencia=? WHERE id=? AND estado='escaneado' AND (confirmacion_idempotencia IS NULL OR confirmacion_idempotencia=?)")
         .run(req.user.username, ts, ts, idempotencia, control.id, idempotencia);
       if (!cambio.changes) return { repetido: true, etiquetaId: db.prepare('SELECT etiqueta_cola_id FROM despacho_controles WHERE id=?').get(control.id).etiqueta_cola_id };
-      const etiqueta = db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, origen, solicitado_por, nota, estado, creado_en, formato_ancho_mm, formato_alto_mm, tipo_etiqueta)
-        VALUES (?,?,?,?,?,'pendiente',?,50,25,'interna')`).run(grupo, 1, 'despacho', req.user.username, JSON.stringify({ formato: '50x25mm', grupo_clave: grupo }), ts);
-      db.prepare('UPDATE despacho_controles SET etiqueta_cola_id=? WHERE id=?').run(etiqueta.lastInsertRowid, control.id);
       db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
         VALUES (?,?,?,?,?,?)`).run(prep.id, null, 'despacho_confirmado', req.user.username,
           JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: etiqueta.lastInsertRowid, formato: '50x25mm' }), ts);
       db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')")
         .run(prep.id);
-      return { repetido: false, etiquetaId: etiqueta.lastInsertRowid };
+      return { repetido: false, etiquetaId: null };
     })();
     if (confirmar.repetido) return res.json({ ok: true, repetido: true, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id) });
     res.json({ ok: true, repetido: false, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id), etiqueta_cola_id: confirmar.etiquetaId });
@@ -2124,6 +2135,7 @@ export function preparacionRouter(db, cfg) {
     registrarEvento(db, {
       preparacionId: prep.id, itemId: null, tipo: 'completado', usuario: req.user?.username, detalle: {},
     });
+    encolarEtiquetaInterna(db, prep, req.user?.username);
     res.json({ ok: true, estado: 'completada' });
   });
 

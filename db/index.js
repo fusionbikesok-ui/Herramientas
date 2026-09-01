@@ -226,6 +226,18 @@ export function openDb(dbPath) {
     });
     aplicarFotosUpload();
   }
+  const etiquetasIdempotenciaMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='etiquetas_idempotencia_039'").get();
+  if (!etiquetasIdempotenciaMigration) {
+    const aplicarEtiquetasIdempotencia = db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='etiquetas_cola'").get();
+      if (!table) return;
+      const hasColumn = db.prepare('PRAGMA table_info(etiquetas_cola)').all().some((c) => c.name === 'idempotencia');
+      if (!hasColumn) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '039_etiquetas_idempotencia.sql'), 'utf8'));
+      else db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_idempotencia ON etiquetas_cola(idempotencia) WHERE idempotencia IS NOT NULL');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('etiquetas_idempotencia_039')").run();
+    });
+    aplicarEtiquetasIdempotencia();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
