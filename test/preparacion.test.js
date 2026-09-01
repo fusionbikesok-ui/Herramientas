@@ -94,7 +94,7 @@ describe('control de despacho U0.B', () => {
     expect(sinFecha.body.data).toHaveLength(1);
     expect(sinFecha.body.data[0].jornada).toBe('sin_fecha');
   });
-  it('agrupa por pack, hace el escaneo idempotente y encola etiqueta 50x25 al confirmar', async () => {
+  it('agrupa por pack y hace el escaneo idempotente sin encolar etiqueta al confirmar despacho', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-50', packId: 'PACK-50', numeroPedido: '50', comprador: 'X', items: [] });
     asignarJornadaDespacho(db, 'ml:ORD-50', 'PACK-50');
     const app = buildTestApp(db);
@@ -105,7 +105,7 @@ describe('control de despacho U0.B', () => {
     const c = await request(app).post(`/api/preparacion/despacho/${id}/confirmar`).set('Idempotency-Key', 'confirm-50');
     expect(c.status).toBe(200);
     expect(db.prepare('SELECT grupo_clave, estado FROM despacho_controles').get()).toMatchObject({ grupo_clave: 'PACK-50', estado: 'confirmado' });
-    expect(db.prepare("SELECT nota, formato_ancho_mm, formato_alto_mm, tipo_etiqueta FROM etiquetas_cola WHERE origen='despacho'").get()).toMatchObject({ formato_ancho_mm: 50, formato_alto_mm: 25, tipo_etiqueta: 'interna' });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM etiquetas_cola WHERE origen='despacho'").get().n).toBe(0);
   });
   it('exige idempotencia al confirmar, deduplica la misma intención y rechaza otra', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ID', packId: 'PID', numeroPedido: 'ID', items: [] });
@@ -988,6 +988,8 @@ describe('preparacion flujo', () => {
     expect(r.body.estado).toBe('completada');
     const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='completado'").get(id);
     expect(ev).toBeTruthy();
+    const etiqueta = db.prepare("SELECT * FROM etiquetas_cola WHERE origen='preparacion' AND idempotencia LIKE ?").get(`preparacion:${id}:%`);
+    expect(etiqueta).toMatchObject({ formato_ancho_mm: 50, formato_alto_mm: 25, tipo_etiqueta: 'interna', estado: 'pendiente' });
     expect(ev.usuario).toBe('tester');
   });
 

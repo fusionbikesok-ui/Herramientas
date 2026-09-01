@@ -987,7 +987,7 @@ export function preparacionRouter(db, cfg) {
       if (!cambio.changes) return { repetido: true, etiquetaId: db.prepare('SELECT etiqueta_cola_id FROM despacho_controles WHERE id=?').get(control.id).etiqueta_cola_id };
       db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
         VALUES (?,?,?,?,?,?)`).run(prep.id, null, 'despacho_confirmado', req.user.username,
-          JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: etiqueta.lastInsertRowid, formato: '50x25mm' }), ts);
+          JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: null, formato: '50x25mm', etiqueta_momento: 'evidencia_completa' }), ts);
       db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')")
         .run(prep.id);
       return { repetido: false, etiquetaId: null };
