@@ -23,7 +23,9 @@ Actualizado: 2026-09-01.
   falta validar el adaptador con el modelo de impresora real antes de instalarlo.
 - E3 tiene autenticación móvil, refresh/logout, dispositivos y contrato OpenAPI verificable por CI;
   las pruebas locales de auth/dispositivo/servidor pasan 27/27. La conexión de la App a producción
-  y la validación en iPhone/Android todavía requieren el gate de la App.
+  y la validación en iPhone/Android todavía requieren el gate de la App. En la rama remota
+  `fusionbikesok-ui/FusionBikes-App:feature/stock-flow-ui` se fijó modo HTTP por defecto y se eliminó
+  el fallback silencioso a datos simulados cuando falla el backend (commits `44a0264a` y `2038beeb`).
 - Inventario tiene conteos y cierre seguro, pero todavía no tiene el libro de movimientos y saldos
   físicos por ubicación definido en el programa de stock.
 - La App usa `feature/stock-flow-ui` como base. Su prototipo de stock con edición absoluta debe
