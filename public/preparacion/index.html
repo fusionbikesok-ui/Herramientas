@@ -109,6 +109,7 @@
   .ola-card h3{font-size:13px;margin:0 0 5px;display:flex;justify-content:space-between;gap:8px;}
   .ola-meta{font-size:12px;color:var(--muted);line-height:1.5;}
   .ola-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;}
+  .jornada-panel .btn{min-height:44px;}
   @media(max-width:600px){.jornada-form{grid-template-columns:1fr 1fr}.jornada-form .btn{grid-column:1/-1;width:100%;min-height:44px}.olas-grid{grid-template-columns:1fr}}
 
   /* detalle */
@@ -344,7 +345,8 @@
 <script src="../lib/api.js"></script>
 <script>
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
-var JORNADA={estado:'idle',jornada:null,olas:[],error:null};
+var JORNADA={estado:'idle',jornada:null,olas:[],error:null,busy:false,claims:{}};
+var PEND_WAVE_FILTER=null;
 var PEND_BASELINE_LISTA=false, PEND_NUEVOS={};
 // fotoId (o id temporal mientras sube) -> object URL local. Vive fuera de PREP a propósito:
 // sobrevive a los refrescos completos de PREP (refrescarDetalle) mientras el servidor todavía
@@ -453,6 +455,7 @@ async function cargarPendientes(){
 
 async function cargarJornada(){
   JORNADA.estado='loading';JORNADA.error=null;
+  if(VISTA==='pendientes'&&PEND_CACHE)renderPendientes();
   try{
     var h=await fetch('/api/jornada/hoy'); var hd=await h.json();
     if(!hd.ok)throw new Error(hd.error||'No se pudo consultar la jornada');
@@ -467,23 +470,27 @@ function jornadaFecha(){return fechaBA();}
 function jornadaEstadoTexto(ola){return {abierta:'Disponible para reclamar',en_picking:'En picking',congelada:'Congelada',cerrada:'Cerrada'}[ola.estado]||('Estado: '+(ola.estado||'sin informar'));}
 function jornadaTipoTexto(tipo){return {ml_urgente:'ML urgente',inicial:'Ola inicial',mini:'Mini-ola'}[tipo]||'Ola';}
 function jornadaCard(ola){
-  var claim=ola.claim;
-  var claimText=claim?(claim.usuario===USERNAME?'Reclamada por vos':('Reclamada por '+claim.usuario)):'Claim no informado por la API';
-  var puede=!claim&&ola.estado==='abierta';
+  var claim=ola.claim||JORNADA.claims[ola.id];
+  var claimText=claim?(claim.usuario===USERNAME?'Reclamada por vos':('Reclamada por '+claim.usuario)):'Responsable no informado';
+  var puede=!claim&&(ola.estado==='abierta'||ola.estado==='congelada')&&ola.tipo!=='cerrada';
   return '<article class="ola-card"><h3>'+esc(jornadaTipoTexto(ola.tipo))+' <span class="badge '+(ola.tipo==='ml_urgente'?'b-ml':'b-mut')+'">'+esc(jornadaEstadoTexto(ola))+'</span></h3>'
     +'<div class="ola-meta"><strong>'+String((ola.items||[]).length)+'</strong> pedidos · '+esc(claimText)+'</div>'
-    +'<div class="ola-actions">'+(puede?'<button class="btn mini" onclick="reclamarOla('+Number(ola.id)+')">Reclamar</button>':'')
-    +'<button class="btn sec mini" onclick="ir(\'pendientes\')">Ver pedidos</button></div></article>';
+    +'<div class="ola-actions">'+(puede?'<button class="btn mini" '+(JORNADA.busy?'disabled ':'')+'onclick="reclamarOla('+Number(ola.id)+')">Reclamar</button>':'')
+    +'<button class="btn sec mini" onclick="verPedidosOla('+Number(ola.id)+')">Ver pedidos</button></div></article>';
 }
 function renderJornada(){
+  if(JORNADA.estado==='loading')return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy</h2><div class="jornada-meta">Consultando estado y olas…</div></div></div><p class="jornada-note" role="status" aria-live="polite">La cola de pedidos sigue disponible mientras se actualiza la jornada.</p></section>';
   if(JORNADA.estado==='error')return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy</h2><div class="jornada-meta">No se pudo consultar el estado de la jornada.</div></div><button class="btn sec mini" onclick="cargarJornada()">Actualizar</button></div><p class="jornada-note" role="alert">'+esc(JORNADA.error||'Revisá la conexión y actualizá. La cola de pedidos sigue disponible.')+'</p></section>';
   var j=JORNADA.jornada;
-  if(!j)return '<section class="jornada-panel" aria-labelledby="jornada-title"><h2 id="jornada-title">Jornada de hoy</h2><div class="jornada-meta">'+esc(fechaLegible(jornadaFecha()))+' · Buenos Aires</div><p class="jornada-note">Todavía no hay jornada abierta. Confirmala para ordenar el trabajo; si la salud de jornada no responde, la cola sigue disponible.</p><form class="jornada-form" onsubmit="abrirJornada(event)"><label for="jornada-hora">Hora web registrada<input id="jornada-hora" type="time" aria-describedby="jornada-ventana-hint"></label><label for="jornada-ventana">Ventana ML <span id="jornada-ventana-hint">Opcional · Sin ventana confirmada</span><input id="jornada-ventana" type="text" placeholder="Sin ventana confirmada"></label><button class="btn" type="submit">Confirmar y abrir jornada</button></form></section>';
-  return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy · <span class="badge '+(j.estado==='abierta'?'b-ok':'b-mut')+'">'+esc(j.estado||'sin estado')+'</span></h2><div class="jornada-meta">'+esc(fechaLegible(j.fecha))+' · Hora web: '+esc(j.hora_corte_web||'no registrada')+' · Ventana ML: '+esc(j.ventana_ml_json||'Sin ventana confirmada')+'</div></div><div class="ola-actions"><button class="btn sec mini" onclick="cargarJornada()">Actualizar</button>'+(window.__PREP_AUTH&&window.__PREP_AUTH.is_admin&&j.estado==='abierta'?'<button class="btn danger mini" onclick="cerrarJornada()">Cerrar jornada</button>':'')+'</div></div><div class="olas-grid">'+(JORNADA.olas.length?JORNADA.olas.map(jornadaCard).join(''):'<p class="jornada-note">No hay olas todavía. Actualizá para consultar nuevos pedidos.</p>')+'</div></section>';
+  if(!j)return '<section class="jornada-panel" aria-labelledby="jornada-title"><h2 id="jornada-title">Jornada de hoy</h2><div class="jornada-meta">'+esc(fechaLegible(jornadaFecha()))+' · Buenos Aires</div><p class="jornada-note">Todavía no hay jornada abierta. Confirmala para ordenar el trabajo; la cola sigue disponible.</p><form class="jornada-form" onsubmit="abrirJornada(event)"><label for="jornada-hora">Hora web registrada<input id="jornada-hora" type="time" required></label><label for="jornada-ventana">Ventana ML <span>Opcional · Sin ventana confirmada</span><input id="jornada-ventana" type="text" placeholder="Sin ventana confirmada"></label><button class="btn" type="submit" '+(JORNADA.busy?'disabled ':'')+'>Confirmar y abrir jornada</button></form></section>';
+  var olas=JORNADA.olas.slice().sort(function(a,b){return (a.tipo==='ml_urgente'?0:1)-(b.tipo==='ml_urgente'?0:1)||Number(a.id)-Number(b.id);});
+  return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy · <span class="badge '+(j.estado==='abierta'?'b-ok':'b-mut')+'">'+esc(j.estado||'sin estado')+'</span></h2><div class="jornada-meta">'+esc(fechaLegible(j.fecha))+' · Hora web: '+esc(j.hora_corte_web||'no registrada')+' · Ventana ML: '+esc(j.ventana_ml_json||'sin ventana confirmada')+'</div></div><div class="ola-actions"><button class="btn sec mini" onclick="cargarJornada()">Actualizar</button>'+(window.__PREP_AUTH&&window.__PREP_AUTH.is_admin&&j.estado==='abierta'?'<button class="btn danger mini" '+(JORNADA.busy?'disabled ':'')+'onclick="cerrarJornada()">Cerrar jornada</button>':'')+'</div></div><div id="jornada-live" class="sr-only" role="status" aria-live="polite"></div><div class="olas-grid">'+(olas.length?olas.map(jornadaCard).join(''):'<p class="jornada-note">No hay olas todavía. Actualizá para consultar nuevos pedidos.</p>')+'</div></section>';
 }
-async function abrirJornada(ev){ev.preventDefault();var hora=document.getElementById('jornada-hora').value||null,ventana=document.getElementById('jornada-ventana').value.trim()||null;try{var r=await fetch('/api/jornada/abrir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({horaCorteWeb:hora,ventanaMlJson:ventana})});var d=await r.json();if(!d.ok)throw new Error(d.error||'No se pudo abrir');await cargarJornada();}catch(e){JORNADA.estado='error';JORNADA.error=e.message;renderPendientes();}}
-async function reclamarOla(id){try{var r=await fetch('/api/jornada/ola/'+id+'/reclamar',{method:'POST'});var d=await r.json();if(!d.ok)throw new Error(d.error||'Otra persona la reclamó');await cargarJornada();}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();}}
-async function cerrarJornada(){if(!confirm('¿Cerrar la jornada de hoy?'))return;try{var r=await fetch('/api/jornada/cerrar',{method:'POST'}),d=await r.json();if(!d.ok)throw new Error(d.error||'No se pudo cerrar');await cargarJornada();}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();}}
+async function abrirJornada(ev){ev.preventDefault();var hora=document.getElementById('jornada-hora').value,ventana=document.getElementById('jornada-ventana').value.trim()||'sin ventana confirmada';if(!hora){document.getElementById('jornada-hora').focus();return;}JORNADA.busy=true;renderPendientes();try{var r=await fetch('/api/jornada/abrir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({horaCorteWeb:hora,ventanaMlJson:ventana})});var d=await r.json();if(!d.ok)throw new Error(d.error||'No se pudo abrir');await cargarJornada();}catch(e){JORNADA.estado='error';JORNADA.error=e.message;renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
+async function reclamarOla(id){if(JORNADA.busy)return;JORNADA.busy=true;var live=document.getElementById('jornada-live');if(live)live.textContent='Reclamando ola…';renderPendientes();try{var r=await fetch('/api/jornada/ola/'+id+'/reclamar',{method:'POST'});var d=await r.json();if(!d.ok)throw new Error(d.error||'Otra persona la reclamó');if(d.claim)JORNADA.claims[id]=d.claim;await cargarJornada();}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
+async function cerrarJornada(){if(JORNADA.busy||!confirm('¿Cerrar la jornada de hoy?'))return;JORNADA.busy=true;try{var r=await fetch('/api/jornada/cerrar',{method:'POST'}),d=await r.json();if(!d.ok)throw new Error(d.error||'No se pudo cerrar');await cargarJornada();}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
+function verPedidosOla(id){PEND_WAVE_FILTER=id;renderPendientes();}
+function quitarFiltroOla(){PEND_WAVE_FILTER=null;renderPendientes();}
 
 function clavePendiente(p){ return p.canal==='web'?'web:'+p.wc_order_id:'ml:'+(p.ml_order_id||p.pack_id||p.numero_pedido); }
 function registrarPendientesNuevos(pedidos, detectarNuevos){
@@ -499,6 +506,8 @@ var PEND_META={};
 function renderPendientes(){
   var c=document.getElementById('cuerpo');
   var html=renderJornada();
+  var visibles=PEND_WAVE_FILTER===null?PEND_CACHE:PEND_CACHE.filter(function(p){return Number(p.pick_wave_id)===Number(PEND_WAVE_FILTER);});
+  if(PEND_WAVE_FILTER!==null)html+='<div class="jornada-note">Mostrando solo pedidos de la ola seleccionada. <button class="btn sec mini" onclick="quitarFiltroOla()">Quitar filtro</button></div>';
   var hm=haceMin(PEND_META.actualizado_en);
   if(PEND_META.sync_error){
     html+='<div class="flash warn" style="display:block">⚠ El último sync de pedidos falló: '+esc(PEND_META.sync_error)
@@ -506,8 +515,8 @@ function renderPendientes(){
   }else if(hm){
     html+='<div style="font-size:12px;color:var(--muted,#888);margin:4px 0 8px">actualizado hace '+hm+'</div>';
   }
-  if(!PEND_CACHE.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
-  else html+='<div class="ped-grid">'+PEND_CACHE.map(cardPendiente).join('')+'</div>';
+  if(!visibles.length)html+='<div class="loading">'+(PEND_WAVE_FILTER===null?'No hay pedidos para preparar 🎉':'No hay pedidos visibles para esta ola.')+'</div>';
+  else html+='<div class="ped-grid">'+visibles.map(cardPendiente).join('')+'</div>';
   c.innerHTML=html;
 }
 
