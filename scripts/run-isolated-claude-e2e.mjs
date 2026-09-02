@@ -130,6 +130,7 @@ async function main() {
     DISABLE_CRONS: 'true',
     PORT: String(port),
     SESSION_SECRET: `claude-e2e-${suffix}`,
+    MOBILE_JWT_SECRET: `claude-e2e-mobile-${suffix}-0123456789abcdef`,
     DOTENV_CONFIG_PATH: '/dev/null',
     WOO_URL: '', WOO_CK: '', WOO_CS: '', GEMINI_KEY: '',
     ML_CLIENT_ID: '', ML_CLIENT_SECRET: '', ML_USER_ID: '',
