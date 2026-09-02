@@ -118,7 +118,8 @@ describe('contrato GET /pendientes', () => {
     // la API de orders de ML no expone un campo equivalente (confirmado 2026-08-26).
     expect(Object.keys(web).sort()).toEqual([
       'canal', 'comprador', 'espejo_ml', 'estado_preparacion', 'estado_wc', 'etiqueta_lista',
-      'fecha', 'fecha_despacho', 'items', 'notas', 'numero_pedido', 'preparacion_id', 'wc_order_id',
+      'fecha', 'fecha_despacho', 'items', 'notas', 'numero_pedido', 'pick_wave_id', 'pick_wave_tipo',
+      'preparacion_id', 'wc_order_id',
     ].sort());
     expect(web.wc_order_id).toBe(900);
     expect(web.espejo_ml).toBe(false);
@@ -135,7 +136,8 @@ describe('contrato GET /pendientes', () => {
       // pack_id: el número que ML le muestra al vendedor cuando la compra agrupa varios
       // ítems. Va en el contrato porque es el que el operario tiene delante al buscar
       // (2026-08-18: 37 de las 50 ventas más recientes tienen un pack distinto del order id).
-      'ml_order_id', 'pack_id', 'numero_pedido', 'preparacion_id', 'substatus', 'wc_order_id',
+      'ml_order_id', 'pack_id', 'numero_pedido', 'pick_wave_id', 'pick_wave_tipo', 'preparacion_id',
+      'substatus', 'wc_order_id',
     ].sort());
     expect(ml.ml_order_id).toBe('ORD-ML-1');
     expect(ml.comprador).toBe('comprador_ml');
