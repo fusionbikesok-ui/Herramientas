@@ -1,13 +1,13 @@
 # Estado activo
 
-Actualizado: 2026-09-01.
+Actualizado: 2026-09-02.
 
 ## Fuente de verdad
 
 - Especificación vigente: `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`.
 - Índice de planificación: `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.
 - Progreso verificable: `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E24.
-- E0 está `candidata` e integrada localmente en `conteo-confiable` hasta `89c8f7a`; todavía no fue pusheada, publicada ni aceptada.
+- E0 fue aprobada por el usuario el 2026-09-02; permanece `candidata` hasta registrar publicación efectiva y cierre formal del ciclo documental.
 - La App remota `feature/stock-flow-ui` alineó `README.md` y `docs/backend-sync/README.md` en `ac4c48f` y `380640f`; no se publicó build móvil.
 - El VPS `/opt/fusionbikes/herramientas` es producción real y sirve `conteo-confiable`.
 
