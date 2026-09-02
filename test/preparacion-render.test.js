@@ -93,4 +93,14 @@ describe('preparacion/index.html — render de pedidos nuevos', () => {
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain('min-height:44px');
   });
+  it('descarta claims locales expirados y permite reclamar olas en picking', () => {
+    ctx.JORNADA = { estado: 'abierta', jornada: { id: 1 }, olas: [{ id: 7, tipo: 'inicial', estado: 'en_picking', items: [] }], error: null, busy: false, claims: { 7: { usuario: 'tester', expires_at: '2020-01-01T00:00:00Z' } } };
+    const html = ctx.jornadaCard();
+    expect(ctx.JORNADA.claims[7]).toBeUndefined();
+    expect(html).toContain('Reclamar ola');
+  });
+  it('anuncia cambios en la región live persistente', () => {
+    ctx.anunciarJornada('Ola reclamada.');
+    expect(ctx.document.getElementById('foto-live').textContent).toBe('Ola reclamada.');
+  });
 });

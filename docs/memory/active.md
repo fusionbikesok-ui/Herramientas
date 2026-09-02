@@ -25,7 +25,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Próxima acción
 
-Completar gates de E1: revisar el candidato UI `9203e16` en `/tmp/fusion-e1-preparacion-ui`, ejecutar E2E responsive/axe, resolver o aceptar explícitamente la ausencia de claims en `GET /api/jornada/olas`, y realizar piloto/jornada observada. No desplegar runtime mientras E1 siga en desarrollo.
+Completar gates de E1: revisar el candidato UI `5cae733` en `/tmp/fusion-e1-preparacion-ui`, ejecutar E2E responsive/axe, resolver o aceptar explícitamente la ausencia de claims en `GET /api/jornada/olas`, y realizar piloto/jornada observada. No desplegar runtime mientras E1 siga en desarrollo.
 
 ## Reglas inmediatas
 
