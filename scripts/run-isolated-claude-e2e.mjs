@@ -29,6 +29,7 @@ Opciones:
   --task-file <archivo>      Tarea base, con Tarea, Rama y Worktree.
   --handoff-file <archivo>  Salida (default: /tmp/claude-to-codex-handoff.json).
   --port <puerto>            Puerto aislado (default: 3199).
+  --empty-db                 Usar una base SQLite temporal vacía.
   --playwright-session <id>  Sesión Playwright (default: entrega2e2e).
   --permission-mode <modo>   Permisos Claude (default: acceptEdits; la tarea prohíbe editar).
   --help                     Mostrar esta ayuda.`);
@@ -96,6 +97,7 @@ async function main() {
   if (!taskFile || !fs.existsSync(taskFile)) throw new Error('--task-file inexistente');
   const handoffFile = argValue(argv, '--handoff-file', '/tmp/claude-to-codex-handoff.json');
   const port = Number(argValue(argv, '--port', '3199'));
+  const emptyDb = argv.includes('--empty-db');
   const playwrightSession = argValue(argv, '--playwright-session', 'entrega2e2e');
   const permissionMode = argValue(argv, '--permission-mode', 'acceptEdits');
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('--port inválido');
@@ -106,13 +108,14 @@ async function main() {
   const worktree = field(task, 'Worktree');
   if (!worktree || !path.isAbsolute(worktree) || !fs.existsSync(worktree)) throw new Error('Worktree absoluto e inexistente');
   const sourceDb = path.join(root, 'data', 'fusion.sqlite');
-  if (!fs.existsSync(sourceDb)) throw new Error('no existe la base fuente');
+  if (!emptyDb && !fs.existsSync(sourceDb)) throw new Error('no existe la base fuente');
   const suffix = `${process.pid}-${Date.now()}`;
   tempDir = path.join('/tmp', `fusion-claude-e2e-${suffix}`);
   fs.mkdirSync(tempDir, { recursive: true, mode: 0o700 });
   dbCopy = path.join(tempDir, 'fusion.sqlite');
   logFile = path.join(tempDir, 'server.log');
-  fs.copyFileSync(sourceDb, dbCopy);
+  if (emptyDb) fs.closeSync(fs.openSync(dbCopy, 'w', 0o600));
+  else fs.copyFileSync(sourceDb, dbCopy);
   const db = new Database(dbCopy);
   if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_oauth_token'").get()) {
     db.prepare('DELETE FROM ml_oauth_token').run();
