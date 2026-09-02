@@ -246,6 +246,13 @@ export function openDb(dbPath) {
     });
     aplicarStockMovements();
   }
+  const stockRolloutMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='stock_rollout_skus_041'").get();
+  if (!stockRolloutMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '041_stock_rollout_skus.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('stock_rollout_skus_041')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

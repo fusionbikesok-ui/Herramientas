@@ -252,6 +252,10 @@ export function inventarioRouter(db, wooCfg) {
     )`).run();
     db.prepare('CREATE INDEX IF NOT EXISTS idx_stock_movements_sku ON stock_movements(sku, creado_en)').run();
     db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_movements_idempotencia ON stock_movements(idempotencia)').run();
+    db.prepare(`CREATE TABLE IF NOT EXISTS stock_rollout_skus (
+      sku TEXT PRIMARY KEY, habilitado INTEGER NOT NULL DEFAULT 0,
+      habilitado_por TEXT, habilitado_en TEXT
+    )`).run();
   } catch (_) {}
 
   router.get('/ubicaciones-stock', (_req, res) => {
@@ -287,6 +291,9 @@ export function inventarioRouter(db, wooCfg) {
     try { result = db.transaction(() => {
       const previo = db.prepare('SELECT * FROM stock_movements WHERE idempotencia=?').get(idempotencia);
       if (previo) return { repetido: true, movimiento: previo };
+      if (!db.prepare('SELECT 1 FROM stock_rollout_skus WHERE sku=? AND habilitado=1').get(sku)) {
+        throw Object.assign(new Error('SKU no habilitado para movimientos nuevos'), { code: 'ROLLOUT_NOT_ENABLED' });
+      }
       if (!db.prepare('SELECT 1 FROM ubicaciones WHERE id=? AND activa=1').get(origen) || !db.prepare('SELECT 1 FROM ubicaciones WHERE id=? AND activa=1').get(destino)) throw Object.assign(new Error('ubicación inexistente'), { code: 'LOCATION_NOT_FOUND' });
       const balance = db.prepare(`SELECT COALESCE(SUM(CASE WHEN destino_id=? THEN cantidad WHEN origen_id=? THEN -cantidad ELSE 0 END),0) AS cantidad FROM stock_movements WHERE sku=?`).get(origen, origen, sku).cantidad;
       if (balance < cantidad) throw Object.assign(new Error('stock insuficiente en origen'), { code: 'INSUFFICIENT_STOCK' });
@@ -297,10 +304,20 @@ export function inventarioRouter(db, wooCfg) {
     })();
       res.status(result.repetido ? 200 : 201).json({ ok: true, ...result });
     } catch (error) {
+      if (error?.code === 'ROLLOUT_NOT_ENABLED') return res.status(409).json({ ok: false, code: error.code, error: error.message });
       if (error?.code === 'INSUFFICIENT_STOCK') return res.status(409).json({ ok: false, code: error.code, error: error.message });
       if (error?.code === 'LOCATION_NOT_FOUND') return res.status(404).json({ ok: false, code: error.code, error: error.message });
       throw error;
     }
+  });
+
+  router.post('/movimientos-stock/habilitar', requireAdmin, (req, res) => {
+    const sku = String(req.body?.sku || '').trim();
+    if (!sku) return res.status(400).json({ ok: false, error: 'sku requerido' });
+    db.prepare(`INSERT INTO stock_rollout_skus (sku, habilitado, habilitado_por, habilitado_en)
+      VALUES (?,1,?,?) ON CONFLICT(sku) DO UPDATE SET habilitado=1, habilitado_por=excluded.habilitado_por, habilitado_en=excluded.habilitado_en`)
+      .run(sku, req.user?.username || null, now());
+    res.json({ ok: true, sku, habilitado: true });
   });
 
   // E5: consulta rápida, solo lectura. Las ubicaciones no relevadas no se inventan:

@@ -74,6 +74,7 @@ describe('libro de movimientos E6', () => {
     const a = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'A', estante: '1' });
     const b = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'B', estante: '1' });
     const origen = a.body.ubicacion.id, destino = b.body.ubicacion.id;
+    await request(app).post('/api/inventario/movimientos-stock/habilitar').send({ sku: 'FB-MOV' });
     db.prepare(`INSERT INTO stock_movements (sku,cantidad,tipo,destino_id,motivo,idempotencia,usuario,creado_en)
       VALUES (?,?,'entrada',?,?,?, ?,?)`).run('FB-MOV', 5, origen, 'saldo inicial', 'seed-e6', 'test', now());
     const body = { sku: 'FB-MOV', cantidad: 2, origen_id: origen, destino_id: destino, motivo: 'reubicación' };
@@ -91,6 +92,7 @@ describe('libro de movimientos E6', () => {
     const app = buildApp(db, 'supervisor', true);
     const a = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'C', estante: '1' });
     const b = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'D', estante: '1' });
+    await request(app).post('/api/inventario/movimientos-stock/habilitar').send({ sku: 'FB-MOV-2' });
     db.prepare(`INSERT INTO stock_movements (sku,cantidad,tipo,destino_id,motivo,idempotencia,usuario,creado_en) VALUES (?,?,'entrada',?,?,?, ?,?)`)
       .run('FB-MOV-2', 1, a.body.ubicacion.id, 'saldo inicial', 'seed-e6-2', 'test', now());
     const r = await request(app).post('/api/inventario/movimientos-stock/transferir').set('Idempotency-Key', 'move-2')
