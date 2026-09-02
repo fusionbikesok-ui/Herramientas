@@ -627,6 +627,7 @@
   Api.installAuth();
 (function(){
   "use strict";
+  function usuarioEsAdmin(){ return !!window.__inventarioEsAdmin; }
 
   // ----- Estado global de la SPA (compartido con las próximas tareas vía window.InvApp) -----
   var state = {
@@ -1137,17 +1138,39 @@
     var btnDescartar = sesionId
       ? '<button class="btn secondary" id="aviso-descartar">Descartar sesión de ' + esc(ocupadoPor) + '</button>'
       : '';
+    var btnConfirmarAdmin = sesionId && usuarioEsAdmin()
+      ? '<button class="btn primary" id="aviso-confirmar-admin">Confirmar ajuste como administrador</button>'
+      : '';
     alcanceAviso.innerHTML =
       '<div class="aviso">' + texto +
         '<div style="margin-top:10px;">' +
           '<button class="btn secondary" id="aviso-cambiar">Cambiar alcance</button>' +
           '<button class="btn secondary" id="aviso-cancelar">Cancelar</button>' +
+          btnConfirmarAdmin +
           btnDescartar +
         '</div>' +
       '</div>';
     document.getElementById('aviso-cambiar').addEventListener('click', limpiarAlcanceForm);
     document.getElementById('aviso-cancelar').addEventListener('click', function(){ mostrarVista('inicio'); });
     if (sesionId) {
+      if (usuarioEsAdmin()) {
+        document.getElementById('aviso-confirmar-admin').addEventListener('click', function(){
+          if (!confirm('¿Confirmar el ajuste de stock de la sesión de ' + (ocupadoPor || 'otro usuario') + '? Se aplicarán los conteos a WooCommerce.')) return;
+          var btn = document.getElementById('aviso-confirmar-admin');
+          btn.disabled = true;
+          fetch('/api/inventario/sesiones/' + sesionId + '/confirmar', { method: 'POST' })
+            .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+            .then(function(result){
+              if (result.status === 200 && result.body && result.body.ok) {
+                alcanceAviso.innerHTML = '<div class="aviso">Ajuste confirmado por administrador. Ya podés abrir una nueva sesión.</div>';
+                setTimeout(function(){ mostrarVista('inicio'); }, 900);
+              } else {
+                alert(result.body && result.body.error ? result.body.error : 'No se pudo confirmar el ajuste.');
+                btn.disabled = false;
+              }
+            }).catch(function(){ alert('No se pudo confirmar el ajuste (sin conexión).'); btn.disabled = false; });
+        });
+      }
       document.getElementById('aviso-descartar').addEventListener('click', function(){
         var btn = document.getElementById('aviso-descartar');
         btn.disabled = true;
@@ -2721,6 +2744,7 @@
   }).then(function(d){
     if (!d || !d.ok) return;
     var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+    window.__inventarioEsAdmin = isAdmin;
     if (isAdmin || !tool) return;
     var ok = (d.permisos||[]).some(function(p){ return p.herramienta === tool; });
     if (!ok) location.href = '/herramientas/home/';

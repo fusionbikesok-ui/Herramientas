@@ -796,7 +796,9 @@ export function inventarioRouter(db, wooCfg) {
   }
 
   router.get('/sesiones/:id', (req, res) => {
-    const sesion = getSesion(req.params.id, req.user?.username);
+    const sesion = req.user?.is_admin
+      ? db.prepare('SELECT * FROM inventario_sesiones WHERE id=?').get(req.params.id)
+      : getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
     asegurarAlcance(sesion);
 
@@ -1232,7 +1234,9 @@ export function inventarioRouter(db, wooCfg) {
   // sesión completa se bloquea ANTES de tocar Woo (409) si hay ítems sin asociar,
   // porque sin SKU no hay a qué producto ajustarle el stock.
   router.post('/sesiones/:id/confirmar', async (req, res) => {
-    const sesion = getSesion(req.params.id, req.user?.username);
+    const sesion = req.user?.is_admin
+      ? db.prepare('SELECT * FROM inventario_sesiones WHERE id=?').get(req.params.id)
+      : getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
     if (sesion.estado !== 'abierta' && sesion.estado !== 'confirmada_con_errores') {
       return res.status(400).json({ ok: false, error: 'La sesión no admite confirmar/reintentar en su estado actual' });
