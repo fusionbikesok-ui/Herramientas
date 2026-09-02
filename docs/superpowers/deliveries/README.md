@@ -5,7 +5,7 @@ Actualizado: 2026-09-01. Estas fichas registran realidad; el plan maestro especi
 | Entrega | Nombre | Estado | Ficha |
 | --- | --- | --- | --- |
 | E0 | Maestro y continuidad documental | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E0.md` |
-| E1 | Apertura, horarios, olas y picking | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E1.md` |
+| E1 | Apertura, horarios, olas y picking | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E1.md` |
 | E2 | Evidencia, perfiles, paquetes y aprobación | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E2.md` |
 | E3 | Etiqueta interna 50×25 | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E3.md` |
 | E4 | Lotes, tracking y despacho | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E4.md` |

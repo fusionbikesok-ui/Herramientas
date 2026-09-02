@@ -21,6 +21,7 @@ implementadas como un único libro de stock.
   reimpresión manual autorizada sin repetir fotos.
 - Objetivo E4: generar/reconciliar lotes de transporte después de que los paquetes aprobados estén listos.
 - El horario de MercadoLibre es máximo de despacho; el horario interno es máximo de preparación.
+- E1 tiene backend local para apertura de jornada, ola inicial congelada, mini-olas acumulativas, mini-ola ML urgente, claims con vencimiento y cierre (`routes/jornada.js`, `lib/jornada.js`); continúa sin aceptación operativa ni UI completa.
 - Cancelaciones o cambios que afectan un pedido preparado invalidan evidencia y etiquetas; una
   unidad reasignada a un ML urgente puede exigir rehacer la preparación web desplazada.
 - Un faltante es incidente urgente y dispara búsqueda/conteo escalonado; no se oculta como pedido

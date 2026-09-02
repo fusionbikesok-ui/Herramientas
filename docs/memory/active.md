@@ -25,7 +25,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Próxima acción
 
-Validar/aceptar E0 documental y comenzar el relevamiento bloqueante de E1: campo SLA ML real, calendario/horarios y secuencia física inicial. No desplegar runtime por esta entrega documental.
+Completar gates de E1 sobre el checkout actual `2fbbfb3`: revisión del diff exacto, migración versionada de jornada/olas, UI operativa, piloto y jornada observada. No desplegar runtime mientras E1 siga en desarrollo.
 
 ## Reglas inmediatas
 

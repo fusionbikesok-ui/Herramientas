@@ -101,7 +101,7 @@ La preparación integrada posee cola continua, claims técnicos, escaneo, requis
 
 ### Brecha existente
 
-No existe todavía apertura diaria formal, ola congelada con mini-olas, picking consolidado por SKU/ruta, reasignación automática de última unidad ni una aceptación operativa completa E1–E2.
+El backend ya implementa apertura diaria, ola inicial congelada, mini-olas acumulativas, mini-ola ML urgente, claim con vencimiento y cierre de jornada en `routes/jornada.js` y `lib/jornada.js`. Todavía no existe aceptación operativa completa E1–E2: la UI no presenta aún toda la jornada/ola como vista operativa, el picking no está consolidado por SKU/ruta física y la reasignación automática de última unidad pertenece a E12.
 
 ### Flujo normal paso a paso
 

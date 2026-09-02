@@ -253,6 +253,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('stock_rollout_skus_041')").run();
     })();
   }
+  const operationalWavesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='operational_day_waves_042'").get();
+  if (!operationalWavesMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '042_operational_day_waves.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('operational_day_waves_042')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
