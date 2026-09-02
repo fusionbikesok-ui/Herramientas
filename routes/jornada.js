@@ -84,9 +84,12 @@ export function jornadaRouter(db, cfg) {
     sincronizarMiniOlas(db);
     const jornada = jornadaDeHoy(db);
     if (!jornada) return res.json({ ok: true, jornada: null, olas: [] });
-    const olas = db.prepare('SELECT * FROM pick_waves WHERE operational_day_id=? ORDER BY id').all(jornada.id)
+    const olas = db.prepare(`SELECT pw.*, pc.usuario AS claim_usuario, pc.claimed_at, pc.expires_at, pc.renovado_en
+      FROM pick_waves pw LEFT JOIN pick_wave_claims pc ON pc.pick_wave_id=pw.id
+      WHERE pw.operational_day_id=? ORDER BY pw.id`).all(jornada.id)
       .map(ola => ({
         ...ola,
+        claim: ola.claim_usuario ? { usuario: ola.claim_usuario, claimed_at: ola.claimed_at, expires_at: ola.expires_at, renovado_en: ola.renovado_en } : null,
         items: db.prepare('SELECT pedido_clave, agregado_en FROM pick_wave_items WHERE pick_wave_id=?').all(ola.id),
       }));
     res.json({ ok: true, jornada, olas });

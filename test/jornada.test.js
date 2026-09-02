@@ -193,6 +193,16 @@ describe('rutas /api/jornada', () => {
     expect(mini.items.map(i => i.pedido_clave)).toEqual(['web:9']);
   });
 
+  it('GET /olas devuelve el claim vigente de cada ola', async () => {
+    const app = appConUsuario('operario');
+    const abrir = await request(app).post('/api/jornada/abrir').send({});
+    const ola = abrir.body.olaInicial;
+    await request(app).post(`/api/jornada/ola/${ola.id}/reclamar`).send({});
+    const r = await request(app).get('/api/jornada/olas');
+    expect(r.status).toBe(200);
+    expect(r.body.olas.find((item) => item.id === ola.id).claim.usuario).toBe('operario');
+  });
+
   it('POST /cerrar requiere is_admin y cierra la jornada', async () => {
     const appNoAdmin = express();
     appNoAdmin.use(express.json());
