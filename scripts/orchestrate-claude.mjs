@@ -146,6 +146,8 @@ function validateHandoff(handoff, role) {
     'no aprobado': 'NO_APROBADO',
     rechazado: 'NO_APROBADO',
     bloqueado: 'BLOQUEADO',
+    bloqueado_parcial: 'BLOQUEADO',
+    'bloqueado parcial': 'BLOQUEADO',
     esperando: 'WAITING_FOR_ORCHESTRATOR',
   };
   if (typeof handoff.estado === 'string') {
