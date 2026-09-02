@@ -78,4 +78,19 @@ describe('preparacion/index.html — render de pedidos nuevos', () => {
     ctx.registrarPendientesNuevos([], true);
     expect(ctx.PEND_NUEVOS['ml:ML-1']).toBeUndefined();
   });
+  it('mantiene error visible y ofrece reintento en vez de presentar cola vacía', () => {
+    ctx.PEND_STATUS = 'error';
+    ctx.PEND_CACHE = [];
+    ctx.renderPendientes();
+    const html = ctx.document.getElementById('cuerpo').innerHTML;
+    expect(html).toContain('No se pudo cargar la cola');
+    expect(html).toContain('cargarPendientes()');
+  });
+  it('abre por clave estable y conserva controles de accesibilidad de la jornada', () => {
+    const pedido = { canal: 'ml', ml_order_id: 'ML-9', numero_pedido: 'ML-9', items: [] };
+    expect(ctx.cardPendiente(pedido)).toContain("prepararClave('ml:ML-9')");
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('min-height:44px');
+  });
 });

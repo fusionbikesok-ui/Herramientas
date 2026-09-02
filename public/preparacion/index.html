@@ -521,6 +521,7 @@ function renderPendientes(){
     html+='<div style="font-size:12px;color:var(--muted,#888);margin:4px 0 8px">actualizado hace '+hm+'</div>';
   }
   if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
+  else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini" style="min-height:44px" onclick="cargarPendientes()">Reintentar</button></div>';
   else if(!visibles.length)html+='<div class="loading">'+(PEND_WAVE_FILTER===null?'No hay pedidos para preparar 🎉':'No hay pedidos visibles para esta ola.')+'</div>';
   else html+='<div class="ped-grid">'+visibles.map(cardPendiente).join('')+'</div>';
   c.innerHTML=html;
