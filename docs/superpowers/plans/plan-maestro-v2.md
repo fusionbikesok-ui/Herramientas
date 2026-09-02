@@ -43,7 +43,7 @@ Todo agente inicia leyendo `/opt/fusionbikes/herramientas/CLAUDE.md`, `/opt/fusi
 
 ### 2.2 Apertura, horarios y cierre
 
-El primer operario abre la jornada, confirma fecha local y horarios, revisa integraciones, agente/impresora y pendientes. Una falla bloquea solo operaciones afectadas. La web tiene máximo normal de preparación 15:00 con excepciones por calendario. ML obtiene el máximo por API y requiere confirmación humana; si hay varias ventanas se usa la más temprana.
+El primer operario abre la jornada, confirma fecha local y horarios, revisa integraciones, agente/impresora y pendientes. Una falla bloquea solo operaciones afectadas. La web tiene máximo normal de preparación 15:00 con excepciones por calendario. ML Full queda fuera. El mismo transporte retira MercadoEnvíos, Andreani y Flex: ML/Andreani deben estar listos con 30 minutos de margen y Flex debe salir como máximo a las 17:00 para que el transporte regrese antes del cierre de las 19:00. MercadoEnvíos no tiene una hora fija: puede variar por paquete y se usa la hora máxima de entrega al centro de acopio.
 
 Un diferido registra fecha, motivo, nota, origen de instrucción y auditoría. Supervisor o despacho cierra la jornada. Pendientes se arrastran con alerta; no se exige reconciliación física completa de staging al cierre.
 
@@ -848,6 +848,40 @@ Existen integraciones Woo/ML, sincronizaciones, herramientas Andreani y módulos
 
 Falta servicio de negocio compartido por proceso, política ML, cola durable uniforme, frescura, staging aislado y reconciliación integral.
 
+#### Incidente abierto: auditoría y sincronización de todos los webhooks
+
+El sistema tiene dos entradas públicas: WooCommerce `POST /api/woo/webhook/order` y
+MercadoLibre `POST /api/ml/notificacion`. Su comportamiento no es uniforme. Woo valida HMAC
+cuando está configurado y dispara sincronizaciones puntuales/en segundo plano, pero responde
+el ACK antes de persistir una intención durable. MercadoLibre persiste evento y job antes del
+ACK, con deduplicación, pero mezcla proyecciones reales con topics `audit-only`.
+
+La matriz verificada queda así:
+
+| Origen/topic | Estado actual | Brecha a corregir |
+| --- | --- | --- |
+| Woo `order.created`/`order.updated` | Sync puntual a pedidos/preparación; stock ML por sync de fondo | Persistencia durable antes del ACK, idempotencia por webhook, reintentos y reconciliación de pedidos/stock |
+| ML `orders` | Sync puntual ML→Woo y preparación | Unificar job durable, estado/frescura y recuperación de timeout o caída |
+| ML `orders_v2` | Sync puntual de preparación; no actualiza el flujo ML→Woo | Definir autoridad y paridad funcional con `orders` |
+| ML `questions`/`messages` | Proyección a tablas locales/inbox | Reconciliar contra ML aunque no llegue otro webhook; retirar avisos obsoletos |
+| ML `claims`/`post_purchase:claims` | Job durable y proyección de reclamos/inbox | Reconciliación, reapertura vigente y separación de no confirmado vs cerrado |
+| ML `shipments`, `items`, `invoices`, `orders_feedback` y topics futuros | `audit-only`: se recibe y registra, sin proyección | Decidir por topic si requiere sincronización, descartarlo explícitamente o mantenerlo auditado con alarma de cobertura |
+
+La corrección queda incorporada a E6/E11 y debe incluir:
+
+- contrato común para validar, persistir, deduplicar, hacer ACK, procesar, reintentar y
+  reconciliar todos los webhooks;
+- cola durable también para Woo, con idempotencia por evento/pedido y recuperación si el
+  proceso cae después del ACK;
+- reconciliación incremental y periódica contra Woo/ML, con cursor, límite, backoff, último
+  éxito, frescura y estado visible por integración y entidad;
+- estados idempotentes de preguntas, mensajes, reclamos, pedidos, envíos y stock, sin marcar
+  como resuelto un dato solo porque el proveedor no respondió;
+- inventario explícito de topics `audit-only`, alerta por cobertura desconocida y decisión
+  documentada antes de activar una nueva proyección;
+- pruebas de duplicado, fuera de orden, timeout con respuesta tardía, caída, credencial
+  revocada, payload inválido, cuenta ML ajena, ACK seguido de crash y datos locales obsoletos.
+
 ### Flujo normal paso a paso
 
 1. Woo mantiene catálogo, ventas, pagos y disponible comercial; ventas presenciales también se registran allí.
@@ -884,7 +918,9 @@ Latencia/frescura, reintentos, conflictos, pedidos demorados, sobreventas y tiem
 
 ### Escenarios de aceptación
 
-Woo/ML caídos; duplicado; fuera de orden; timeout tardío; reconciliación; sobreventa; Andreani sin tracking; credencial revocada.
+Woo/ML caídos; duplicado; fuera de orden; timeout tardío; ACK seguido de crash; reconciliación;
+aviso con pregunta respondida o reclamo cerrado en ML; pedido ausente; recurso inexistente;
+topic audit-only; sobreventa; Andreani sin tracking; credencial revocada.
 
 ### Entregas que lo implementan
 

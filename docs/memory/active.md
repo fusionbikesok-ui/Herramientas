@@ -17,7 +17,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Estado funcional verificado, no aceptación
 
-- Preparación posee cola, claims, escaneo, fotos/evidencia y despacho idempotente. Candidatos históricos de fotos, hoja diaria y SLA requieren ancestry/diff y gates antes de integración.
+- Preparación posee cola, claims, escaneo, fotos/evidencia y despacho idempotente. E1 tiene correcciones locales para arrastre entre jornadas, elegibilidad efectiva, transición/polling de claims, aviso de vencimiento y compatibilidad 042→043; quedan gates externos y documentación final.
 - Etiquetas posee cola interna y endpoints/agente candidato; falta relevamiento y validación con impresora real.
 - Backend móvil posee auth, dispositivos, notificaciones/inbox y contrato `/api/v1` parcial. La App remota tiene conexión real parcial; falta iPhone físico, contrato generado definitivo y offline común.
 - Consulta rápida y movimientos/transferencias tienen implementaciones candidatas locales, pero no equivalen a E8–E10 aceptadas.
@@ -25,7 +25,11 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Próxima acción
 
-Completar gates de E1: revisar el candidato UI rebased `6830eaf` en `/tmp/fusion-e1-preparacion-ui`, ejecutar E2E responsive/axe, resolver o aceptar explícitamente la ausencia de claims en `GET /api/jornada/olas`, y realizar piloto/jornada observada. No desplegar runtime mientras E1 siga en desarrollo.
+Completar E1: cerrar documentación, implementar las ventanas confirmadas (ML/Andreani -30 min, Flex salida 17:00, Web 15:00), ejecutar E2E funcional responsive/axe, realizar piloto/jornada observada y obtener auditoría/aceptación. No desplegar runtime mientras E1 siga en desarrollo.
+
+## Hallazgo agregado
+
+- Auditoría de webhooks: Woo `/api/woo/webhook/order` y ML `/api/ml/notificacion` tienen garantías distintas; Woo dispara trabajo en background sin intención durable previa al ACK y ML deja varios topics en `audit-only`. El plan maestro incorpora en E6/E11 un contrato común, cola durable, reconciliación por entidad, matriz de cobertura y pruebas de crash/duplicado/fuera de orden.
 
 ## Reglas inmediatas
 
