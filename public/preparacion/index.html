@@ -110,6 +110,7 @@
   .ola-meta{font-size:12px;color:var(--muted);line-height:1.5;}
   .ola-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;}
   .jornada-panel .btn{min-height:44px;}
+  .jornada-panel input{min-height:44px;}
   @media(max-width:600px){.jornada-form{grid-template-columns:1fr 1fr}.jornada-form .btn{grid-column:1/-1;width:100%;min-height:44px}.olas-grid{grid-template-columns:1fr}}
 
   /* detalle */
@@ -346,7 +347,7 @@
 <script>
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
 var JORNADA={estado:'idle',jornada:null,olas:[],error:null,busy:false,claims:{}};
-var PEND_WAVE_FILTER=null;
+var PEND_WAVE_FILTER=null, PEND_STATUS='idle';
 var PEND_BASELINE_LISTA=false, PEND_NUEVOS={};
 // fotoId (o id temporal mientras sube) -> object URL local. Vive fuera de PREP a propósito:
 // sobrevive a los refrescos completos de PREP (refrescarDetalle) mientras el servidor todavía
@@ -440,6 +441,7 @@ function haceMin(iso){
 
 async function cargarPendientes(){
   var c=document.getElementById('cuerpo');
+  PEND_STATUS='loading';
   c.innerHTML='<div class="loading">Cargando pedidos…</div>';
   cargarJornada();
   try{
@@ -449,8 +451,9 @@ async function cargarPendientes(){
     registrarPendientesNuevos(pedidos, false);
     PEND_CACHE=pedidos;
     PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error};
+    PEND_STATUS='ready';
     renderPendientes();
-  }catch(e){c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
+  }catch(e){PEND_STATUS='error';c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
 }
 
 async function cargarJornada(){
@@ -471,8 +474,9 @@ function jornadaEstadoTexto(ola){return {abierta:'Disponible para reclamar',en_p
 function jornadaTipoTexto(tipo){return {ml_urgente:'ML urgente',inicial:'Ola inicial',mini:'Mini-ola'}[tipo]||'Ola';}
 function jornadaCard(ola){
   var claim=ola.claim||JORNADA.claims[ola.id];
+  if(claim&&claim.expires_at&&new Date(claim.expires_at).getTime()<=Date.now()){delete JORNADA.claims[ola.id];claim=null;}
   var claimText=claim?(claim.usuario===USERNAME?'Reclamada por vos':('Reclamada por '+claim.usuario)):'Responsable no informado';
-  var puede=!claim&&(ola.estado==='abierta'||ola.estado==='congelada')&&ola.tipo!=='cerrada';
+  var puede=!claim&&(ola.estado==='abierta'||ola.estado==='congelada'||ola.estado==='en_picking')&&ola.tipo!=='cerrada';
   return '<article class="ola-card"><h3>'+esc(jornadaTipoTexto(ola.tipo))+' <span class="badge '+(ola.tipo==='ml_urgente'?'b-ml':'b-mut')+'">'+esc(jornadaEstadoTexto(ola))+'</span></h3>'
     +'<div class="ola-meta"><strong>'+String((ola.items||[]).length)+'</strong> pedidos · '+esc(claimText)+'</div>'
     +'<div class="ola-actions">'+(puede?'<button class="btn mini" '+(JORNADA.busy?'disabled ':'')+'onclick="reclamarOla('+Number(ola.id)+')">Reclamar</button>':'')
@@ -487,10 +491,11 @@ function renderJornada(){
   return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy · <span class="badge '+(j.estado==='abierta'?'b-ok':'b-mut')+'">'+esc(j.estado||'sin estado')+'</span></h2><div class="jornada-meta">'+esc(fechaLegible(j.fecha))+' · Hora web: '+esc(j.hora_corte_web||'no registrada')+' · Ventana ML: '+esc(j.ventana_ml_json||'sin ventana confirmada')+'</div></div><div class="ola-actions"><button class="btn sec mini" onclick="cargarJornada()">Actualizar</button>'+(window.__PREP_AUTH&&window.__PREP_AUTH.is_admin&&j.estado==='abierta'?'<button class="btn danger mini" '+(JORNADA.busy?'disabled ':'')+'onclick="cerrarJornada()">Cerrar jornada</button>':'')+'</div></div><div id="jornada-live" class="sr-only" role="status" aria-live="polite"></div><div class="olas-grid">'+(olas.length?olas.map(jornadaCard).join(''):'<p class="jornada-note">No hay olas todavía. Actualizá para consultar nuevos pedidos.</p>')+'</div></section>';
 }
 async function abrirJornada(ev){ev.preventDefault();var hora=document.getElementById('jornada-hora').value,ventana=document.getElementById('jornada-ventana').value.trim()||'sin ventana confirmada';if(!hora){document.getElementById('jornada-hora').focus();return;}JORNADA.busy=true;renderPendientes();try{var r=await fetch('/api/jornada/abrir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({horaCorteWeb:hora,ventanaMlJson:ventana})});var d=await r.json();if(!d.ok)throw new Error(d.error||'No se pudo abrir');await cargarJornada();}catch(e){JORNADA.estado='error';JORNADA.error=e.message;renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
-async function reclamarOla(id){if(JORNADA.busy)return;JORNADA.busy=true;var live=document.getElementById('jornada-live');if(live)live.textContent='Reclamando ola…';renderPendientes();try{var r=await fetch('/api/jornada/ola/'+id+'/reclamar',{method:'POST'});var d=await r.json();if(!d.ok)throw new Error(d.error||'Otra persona la reclamó');if(d.claim)JORNADA.claims[id]=d.claim;await cargarJornada();}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
+async function reclamarOla(id){if(JORNADA.busy)return;JORNADA.busy=true;anunciarJornada('Reclamando ola…');renderPendientes();try{var r=await fetch('/api/jornada/ola/'+id+'/reclamar',{method:'POST'});var d=await r.json();if(!d.ok)throw new Error(d.error||'Otra persona la reclamó');if(d.claim)JORNADA.claims[id]=d.claim;await cargarJornada();anunciarJornada('Ola reclamada.');}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();anunciarJornada('No se pudo reclamar la ola.');}finally{JORNADA.busy=false;renderPendientes();}}
 async function cerrarJornada(){if(JORNADA.busy||!confirm('¿Cerrar la jornada de hoy?'))return;JORNADA.busy=true;try{var r=await fetch('/api/jornada/cerrar',{method:'POST'}),d=await r.json();if(!d.ok)throw new Error(d.error||'No se pudo cerrar');await cargarJornada();}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
 function verPedidosOla(id){PEND_WAVE_FILTER=id;renderPendientes();}
 function quitarFiltroOla(){PEND_WAVE_FILTER=null;renderPendientes();}
+function anunciarJornada(msg){var live=document.getElementById('foto-live');if(live)live.textContent=msg;}
 
 function clavePendiente(p){ return p.canal==='web'?'web:'+p.wc_order_id:'ml:'+(p.ml_order_id||p.pack_id||p.numero_pedido); }
 function registrarPendientesNuevos(pedidos, detectarNuevos){
@@ -507,7 +512,7 @@ function renderPendientes(){
   var c=document.getElementById('cuerpo');
   var html=renderJornada();
   var visibles=PEND_WAVE_FILTER===null?PEND_CACHE:PEND_CACHE.filter(function(p){return Number(p.pick_wave_id)===Number(PEND_WAVE_FILTER);});
-  if(PEND_WAVE_FILTER!==null)html+='<div class="jornada-note">Mostrando solo pedidos de la ola seleccionada. <button class="btn sec mini" onclick="quitarFiltroOla()">Quitar filtro</button></div>';
+  if(PEND_WAVE_FILTER!==null)html+='<div class="jornada-note">Mostrando solo pedidos de la ola seleccionada. <button class="btn sec mini" style="min-height:44px" onclick="quitarFiltroOla()">Quitar filtro</button></div>';
   var hm=haceMin(PEND_META.actualizado_en);
   if(PEND_META.sync_error){
     html+='<div class="flash warn" style="display:block">⚠ El último sync de pedidos falló: '+esc(PEND_META.sync_error)
@@ -515,7 +520,8 @@ function renderPendientes(){
   }else if(hm){
     html+='<div style="font-size:12px;color:var(--muted,#888);margin:4px 0 8px">actualizado hace '+hm+'</div>';
   }
-  if(!visibles.length)html+='<div class="loading">'+(PEND_WAVE_FILTER===null?'No hay pedidos para preparar 🎉':'No hay pedidos visibles para esta ola.')+'</div>';
+  if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
+  else if(!visibles.length)html+='<div class="loading">'+(PEND_WAVE_FILTER===null?'No hay pedidos para preparar 🎉':'No hay pedidos visibles para esta ola.')+'</div>';
   else html+='<div class="ped-grid">'+visibles.map(cardPendiente).join('')+'</div>';
   c.innerHTML=html;
 }
@@ -549,7 +555,7 @@ async function cargarPendientesSilencioso(){
 // vivía como 2000017948004320 y ya estaba preparada.
 function numMostrar(p){ return p && p.pack_id ? p.pack_id : (p ? p.numero_pedido : ''); }
 
-function cardPendiente(p,ix){
+function cardPendiente(p){
   var nuevoDesde=PEND_NUEVOS[clavePendiente(p)];
   var marcaNuevo=nuevoDesde ? '<span class="ped-nuevo" aria-label="Pedido nuevo, ingresado '+(haceMin(new Date(nuevoDesde).toISOString())||'recién')+'">NUEVO · hace '+(haceMin(new Date(nuevoDesde).toISOString())||'menos de 1 min')+'</span>' : '';
   var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">ML · '+esc(p.logistic_type==='self_service'?'Flex':'Colecta')+'</span>';
@@ -559,7 +565,7 @@ function cardPendiente(p,ix){
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
   var despacho=p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(fecha(p.fecha_despacho))+'</b></div>':'';
-  return '<div class="ped'+(marcaNuevo?' nuevo':'')+'" onclick="preparar('+ix+')">'
+  return '<div class="ped'+(marcaNuevo?' nuevo':'')+'" onclick="prepararClave(\''+esc(clavePendiente(p)).replace(/'/g,'&#39;')+'\')">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span><span style="display:flex;align-items:center;gap:6px">'+marcaNuevo+canal+'</span></div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
@@ -605,12 +611,14 @@ async function guardarHorarios(ev){
 var DIRECCION_MODAL_CTX=null;
 var DIRECCION_MODAL_TRIGGER_EL=null; // elemento con foco al abrir el modal, para devolvérselo al cerrar.
 
-async function preparar(ix){
-  var p=PEND_CACHE[ix];
+async function prepararClave(clave){
+  var p=PEND_CACHE.find(function(v){return clavePendiente(v)===clave;});
+  if(!p)return;
   var c=document.getElementById('cuerpo');
   c.innerHTML='<div class="loading">Iniciando preparación…</div>';
   await iniciarPreparacion(p.canal,p.canal==='web'?p.wc_order_id:p.ml_order_id,null);
 }
+async function preparar(ix){var p=PEND_CACHE[ix];if(p)await prepararClave(clavePendiente(p));}
 
 async function iniciarPreparacion(canal,id,direccionElegida){
   var c=document.getElementById('cuerpo');
