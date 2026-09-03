@@ -266,6 +266,20 @@ export function coberturaRouter(db, cfg) {
 
   function now() { return new Date().toISOString(); }
 
+  // UM1 convierte Cobertura en consulta histórica. Sus botones anteriores podían
+  // escribir decisiones, seller_sku o pausas sin caso, responsable, operación durable
+  // ni retención de ventas. Incluso el refresco manual se mueve a Guardia/cron: una
+  // pantalla retirada no debe poder consumir presupuesto de ML ni crear estados nuevos.
+  router.use((req, res, next) => {
+    const esLectura = ['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+    if (esLectura) return next();
+    return res.status(410).json({
+      ok: false,
+      error: 'Cobertura legacy quedó en modo consulta para evitar vínculos fuera de Guardia ML',
+      migracion: 'Abrí Guardia ML, tomá el caso y resolvelo desde la comparación MercadoLibre ↔ WooCommerce.',
+    });
+  });
+
   // Cruce WC × ML ya procesado para todas las pestañas de Cobertura (fuente "API de ML").
   // Un solo round-trip y un snapshot consistente de los caches; reemplaza el cruce que
   // el cliente hacía a mano con /api/woo/catalogo + /api/matcher/publicaciones.
@@ -655,6 +669,10 @@ export function coberturaRouter(db, cfg) {
         resultado = { ok: false, error: e.message };
       }
       if (!resultado.ok) {
+        // Detectar bloqueo de Guardia y devolver 409 (migración requerida)
+        if (resultado.bloqueado_por_guardia) {
+          return res.status(409).json({ ok: false, error: resultado.error, bloqueado_por_guardia: true });
+        }
         return res.status(502).json({ ok: false, error: resultado.error || 'ML no confirmó la desvinculación', fail_closed: true });
       }
       db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
@@ -698,6 +716,7 @@ export function coberturaRouter(db, cfg) {
         resultado = { ok: false, error: e.message };
       }
       if (!resultado.ok) {
+        // Restaurar la decisión ya borrada (para mantener sincronía con ML)
         db.prepare(`
           INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, confirmado_por, actualizado_en)
           VALUES (?, ?, ?, 'confirmar', 'cobertura', ?, ?)
@@ -706,6 +725,10 @@ export function coberturaRouter(db, cfg) {
             origen=excluded.origen, confirmado_por=excluded.confirmado_por,
             actualizado_en=excluded.actualizado_en
         `).run(clave, decision.sku, decision.wc_nombre, decision.confirmado_por, now());
+        // Detectar bloqueo de Guardia y devolver 409 (migración requerida)
+        if (resultado.bloqueado_por_guardia) {
+          return res.status(409).json({ ok: false, error: resultado.error, bloqueado_por_guardia: true });
+        }
         return res.status(502).json({ ok: false, error: resultado.error || 'ML no confirmó la desvinculación', fail_closed: true });
       }
     }
@@ -1002,7 +1025,13 @@ export function coberturaRouter(db, cfg) {
     } catch (e) {
       resultado = { ok: false, error: e.message };
     }
-    if (!resultado.ok) return res.status(502).json({ ok: false, error: resultado.error, fail_closed: true });
+    if (!resultado.ok) {
+      // Detectar bloqueo de Guardia y devolver 409 (migración requerida)
+      if (resultado.bloqueado_por_guardia) {
+        return res.status(409).json({ ok: false, error: resultado.error, bloqueado_por_guardia: true });
+      }
+      return res.status(502).json({ ok: false, error: resultado.error, fail_closed: true });
+    }
     db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(req.params.clave);
     res.json({ ok: true });
   });
@@ -1070,6 +1099,10 @@ export function coberturaRouter(db, cfg) {
       resultado = await escribirSkuEnMl(db, mlCfg, clave, sku, { manual: true });
     } catch (e) {
       resultado = { ok: false, status: 0, error: e.message };
+    }
+    // Detectar bloqueo de Guardia y devolver 409 (migración requerida)
+    if (!resultado.ok && resultado.bloqueado_por_guardia) {
+      return res.status(409).json({ ok: false, error: resultado.error, bloqueado_por_guardia: true });
     }
     res.json({ ok: true, estado: resultado.ok ? 'vinculado' : 'pendiente_sync', clave, sku });
   });

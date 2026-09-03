@@ -24,7 +24,6 @@ import { nuevosProductosRouter } from './routes/nuevosProductos.js';
 import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
 import { matcherRouter, dispararRefrescoMl } from './routes/matcher.js';
-import { pushSkusPendientes } from './lib/matcherPush.js';
 import { syncRouter, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
@@ -58,7 +57,6 @@ import { workshopRouter } from './routes/workshop.js';
 import { mobileWorkshopRouter } from './routes/mobileWorkshop.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
-import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
 import { registrarWebhookMl, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
 
@@ -152,7 +150,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/inventario', express.static(path.join(__dirname, 'public/inventario')));
   app.use('/home', express.static(path.join(__dirname, 'public/home')));
   app.use('/login', express.static(path.join(__dirname, 'public/login')));
-  app.use('/matcher', express.static(path.join(__dirname, 'public/matcher')));
+  app.use('/matcher', (req, res) => res.redirect('/herramientas/guardia-ml/'));
   app.use('/usuarios', express.static(path.join(__dirname, 'public/usuarios')));
   app.use('/reset-password', express.static(path.join(__dirname, 'public/reset-password')));
   app.use('/vendor', express.static(path.join(__dirname, 'public/vendor')));
@@ -459,7 +457,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // compartido de matcher evita solapamientos; el refresco es fail-closed y no toca
       // publicaciones remotas, solo actualiza el cache local que la Guardia inspecciona.
       cron.schedule('*/15 * * * *', () => {
-        const r = dispararRefrescoMl(app._db, syncCfg, 'all');
+        const r = dispararRefrescoMl(app._db, syncCfg.ml, 'all');
         if (!r.ok && !r.running) console.error('Guardia ML: no se pudo iniciar lectura:', r.error);
       });
       cron.schedule('*/5 * * * *', () => {
@@ -518,37 +516,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
       });
 
-      // Fase 3 (rotación y criticidad): backfill/incremental diario de ventas_historial.
-      // Horario de baja actividad, corrido de los otros crons diarios para no competir por
-      // el rate-limit de ML.
-      // Auto-confirmar publicaciones ML con seller_sku válido que no tienen entrada
-      // en sku_matcher_decisiones (el agujero que causó la sobreventa de FB-67289 el
-      // 2026-08-26). Corre cada 30 min — las publicaciones nuevas entran al cache de ML
-      // via syncMlToWc (cada 10 min) y en la siguiente corrida quedan bajo control de stock.
-      cron.schedule('*/30 * * * *', () => {
-        try {
-          const insert = app._db.prepare(
-            "INSERT OR IGNORE INTO sku_matcher_decisiones (clave, sku, accion) " +
-            "SELECT p.clave, p.seller_sku, 'confirmar' " +
-            "FROM ml_publicaciones_cache p " +
-            "WHERE p.seller_sku IS NOT NULL AND p.seller_sku != '' " +
-            "  AND p.status = 'active' " +
-            "  AND EXISTS (SELECT 1 FROM catalogo_cache c WHERE c.sku = p.seller_sku) " +
-            "  AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave)" +
-            "  AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d2 WHERE d2.sku = p.seller_sku AND d2.accion IN ('asignar','confirmar'))" +
-            // UM1: la autocorrección no puede saltear Guardia, auditoría ni la
-            // confirmación de stock compartido. Queda suspendida hasta que la
-            // operación durable de Guardia sea la única vía de vinculación.
-            "  AND 1 = 0"
-          );
-          const r = insert.run();
-          if (r.changes > 0)
-            console.log(`[auto-confirm-huerfanas] ${r.changes} publicaciones activas agregadas al matcher`);
-        } catch (err) {
-          console.error('[auto-confirm-huerfanas] error:', err.message);
-        }
-      });
-
       cron.schedule('0 5 * * *', () => {
         backfillVentas(app._db, syncCfg)
           .then(r => console.log('backfillVentas:', JSON.stringify(r)))
@@ -591,17 +558,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('*/30 * * * *', () => {
         getAccessToken(app._db, mlCfg)
           .catch(err => console.error('Error renovando token ML (cron dedicado):', err.message));
-      });
-
-      // Push automático matcher → ML: escribe los SKU de decisiones pendientes (activas y
-      // pausadas; activas primero) directo en las publicaciones, sin depender de que alguien
-      // tenga la pestaña del matcher abierta. Comparte el mismo motor/mutex que el botón
-      // manual (POST /api/matcher/push-skus-pendientes) — nunca corren dos a la vez DENTRO
-      // de este proceso (el mutex es una variable en memoria, no cubre dos procesos node en
-      // paralelo contra la misma base; ver incidente de pedidos duplicados del 2026-07-25).
-      cron.schedule('*/10 * * * *', () => {
-        pushSkusPendientes(app._db, syncCfg)
-          .catch(err => console.error('push SKUs matcher error:', err.message));
       });
 
       // Reconciliación incremental de stock contra ML real (plan 2026-08-06, caso real:

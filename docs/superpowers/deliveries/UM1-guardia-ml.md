@@ -27,7 +27,7 @@ Evitar que una variación activa sin SKU exacto venda y llegue a preparación si
 ## Evidencia actual
 
 - Migración, escaneo exacto, estado degradado, cola de operaciones y API/UI inicial implementados localmente.
-- Prueba aislada: `npx vitest run test/guardia-ml.test.js` — 10/10 aprobadas.
+- Prueba aislada: `npx vitest run test/guardia-ml.test.js` — 16/16 aprobadas, incluyendo SKU duplicado y ordenamiento por aprendizaje.
 - Con esquema: `npx vitest run test/guardia-ml.test.js test/db.test.js` — 19/19 aprobadas.
 - Regresión de servidor: `npx vitest run test/server.test.js` — 15/15 aprobadas.
 - Sintaxis backend y frontend verificada; no se ejecutó E2E ni escaneo contra producción.
@@ -45,10 +45,13 @@ Evitar que una variación activa sin SKU exacto venda y llegue a preparación si
 - La pantalla de detalle ahora muestra un comparador ML ↔ Woo: imagen, variante, SKU, stock y enlace de la publicación; búsqueda de candidatos Woo únicos con nombre, imagen, SKU y stock. `GET /casos/:id/opciones` mantiene la selección separada de la escritura remota.
 - E2E responsive ampliado: `npm run e2e:um1:responsive` — `ok:true` en 390, 768 y 1440; verificó comparación visible y una opción Woo seleccionable con datos sintéticos aislados.
 - Comando equivalente registrado en el proyecto: `npm run e2e:um1:responsive`.
+- Cobertura sintética serial: `npx vitest run test/guardia-ml.test.js test/um1-coverage-matrix.test.js test/cobertura-legacy-410.test.js test/matcherPush.test.js --no-file-parallelism` — 4 archivos, 78/78 pruebas aprobadas; la matriz contiene 137 escenarios.
+- Legacy bloqueado: decisiones directas, push masivo, desvinculación, acciones de Cobertura y refresco manual responden 410 con migración a Guardia; las consultas GET permanecen disponibles.
+- Aprendizaje: `guardia_ml_aprendizajes` registra confirmaciones humanas por perfil normalizado ML→SKU y solo reordena candidatos; no auto-confirma coincidencias ambiguas.
 
 ## Próxima acción reproducible
 
-Completar la vista de lectura de excepciones, stock compartido y retenciones, y ejecutar el escaneo solo en entorno aislado para la revisión del Administrador designado. La vinculación permanece bloqueada mientras el modo sea `lectura`.
+Completar la revisión independiente y la auditoría de despliegue; luego ejecutar el escaneo solo en entorno aislado para la revisión del Administrador designado. La vinculación permanece bloqueada mientras el modo sea `lectura`.
 
 ## Riesgos observados en la auditoría local
 

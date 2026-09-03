@@ -625,7 +625,7 @@ describe('GET /matcher/push-skus-pendientes/list', () => {
   });
 });
 
-describe('POST /matcher/push-skus-pendientes y estado (background)', () => {
+describe('Legacy push y estado', () => {
   let db, app;
   beforeEach(() => {
     db = openDb(TEST_DB);
@@ -637,17 +637,12 @@ describe('POST /matcher/push-skus-pendientes y estado (background)', () => {
   });
   afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
 
-  it('devuelve 202 y arranca en background; 409 si ya hay una corrida en curso', async () => {
+  it('rechaza el push legacy y deriva a Guardia ML', async () => {
     seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', status: 'active', sellerSku: '' });
     seedDecision(db, { clave: 'MLA1|', sku: 'FB-100', accion: 'asignar' });
-    axios.request.mockImplementation(() => new Promise(() => {})); // nunca resuelve
-
     const r1 = await request(app).post('/matcher/push-skus-pendientes');
-    expect(r1.status).toBe(202);
-    expect(r1.body).toMatchObject({ ok: true, running: true });
-
-    const r2 = await request(app).post('/matcher/push-skus-pendientes');
-    expect(r2.status).toBe(409);
+    expect(r1.status).toBe(410);
+    expect(r1.body.migracion).toContain('/api/guardia-ml');
   });
 
   it('GET /estado refleja el estado sondeable', async () => {
@@ -667,13 +662,14 @@ describe('GET /matcher/push-skus-pendientes/count', () => {
   });
   afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
 
-  it('incluye pausadas y las separa de activas', async () => {
+  it('informa que el contador legacy fue retirado', async () => {
     seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active', sellerSku: '' });
     seedDecision(db, { clave: 'A1|', sku: 'FB-1', accion: 'asignar' });
     seedCache(db, { clave: 'P1|', itemId: 'P1', status: 'paused', sellerSku: '' });
     seedDecision(db, { clave: 'P1|', sku: 'FB-2', accion: 'asignar' });
 
     const r = await request(app).get('/matcher/push-skus-pendientes/count');
-    expect(r.body).toMatchObject({ ok: true, pendientes: 2, activas: 1, pausadas: 1, en_espera: 0 });
+    expect(r.status).toBe(410);
+    expect(r.body).toMatchObject({ ok: false, migracion: 'GET /api/guardia-ml/casos' });
   });
 });

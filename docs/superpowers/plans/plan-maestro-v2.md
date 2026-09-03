@@ -1095,6 +1095,7 @@ La unidad de cobertura es siempre `publicación + variación`. Una decisión his
 
 - Escaneo al abrir y cada 15 minutos. Más de 30 minutos sin escaneo completo, o error ML, deja Guardia `degradada`; conserva el último resultado y nunca declara el control sano.
 - Guardia es `sana` solo con refresco vigente, cero variantes vendibles sin cobertura y ninguna operación remota crítica pendiente. Casos sin stock permanecen en Corrección normal.
+- Cada confirmación humana exitosa registra un perfil normalizado de título/variación → SKU Woo y su contador histórico. Ese aprendizaje solo ordena sugerencias futuras y muestra cuántas confirmaciones lo respaldan; jamás sustituye SKU único, confirmación humana ni verificación remota.
 - Casos: `abierto → tomado → resolviendo → pendiente_ml → resuelto`; excepción hasta vencimiento. Cada corrección agrega eventos, nunca reescribe historia. Alertas reavisan cada 5 minutos y escalan a los 15; excepciones vencen al cierre y reaparecen urgentes con el mismo responsable.
 
 ### Tres superficies claras

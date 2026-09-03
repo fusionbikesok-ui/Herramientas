@@ -612,6 +612,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('workshop_evidence_080')").run();
     })();
   }
+  const guardiaMlLearningMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='guardia_ml_aprendizajes_081'").get();
+  if (!guardiaMlLearningMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '081_guardia_ml_aprendizajes.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('guardia_ml_aprendizajes_081')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

@@ -3243,3 +3243,34 @@ completa de publicaciones y registra casos locales idempotentes.
 La API nunca considera `omitir` o una marca histórica como cobertura. Las escrituras remotas de
 vínculo, stock o pausa pertenecerán a una segunda fase durable y permanecerán bloqueadas durante
 el primer rollout de UM1.
+
+### Bloqueo de claves detectadas y sincronización de ventas retenidas (2026-09-03)
+
+**Fail-closed:** antes de cualquier escritura remota en ML (escritura de SKU, desvinculación,
+pausa de publicación), se verifica si la clave está bloqueada por un caso abierto de Guardia.
+Si lo está, la operación es rechazada localmente sin intentar contactar ML.
+
+- `lib/matcherPush.js::escribirSkuEnMl()` → rechaza si clave bloqueada (status 0, error explícito).
+- `lib/matcherPush.js::desvincularSkuEnMl()` → rechaza si clave bloqueada (status 0, error explícito).
+- `lib/matcherPush.js::pausarPublicacionMl()` → rechaza si cualquier variación del item está bloqueada (status 0).
+- `routes/sync.js::_syncMlToWc()` → retiene cualquier pedido que contenga claves bloqueadas, con registro de evento en `logSync`.
+
+**Ruta legacy bloqueada:** `POST /api/matcher/decisiones` ahora devuelve `409 CONFLICT` con
+guía de migración. Las decisiones de vínculo deben hacerse vía `/api/guardia-ml/casos/:id/vincular`
+(requiere modo `acciones` habilitado por Admin). El cambio es obligatorio: no hay mutación
+directa de `sku_matcher_decisiones` fuera del servicio Guardia.
+
+### Superficies legacy retiradas de escritura (2026-09-03)
+
+Las rutas mutables de Cobertura y Sync responden `410 Gone` con `ok:false`, `error` y
+`migracion`. Las consultas `GET` siguen disponibles para historia y diagnóstico. También
+responden `410`:
+
+- `POST /api/matcher/push-sku`
+- `POST /api/matcher/push-skus-pendientes`
+- `POST /api/sync/desvincular`
+- Toda mutación de `/api/cobertura`, incluido su refresco manual.
+
+La única vía de escritura de vínculo o pausa es una operación encolada desde Guardia ML;
+el cron legacy de push fue retirado. La detección periódica queda a cargo del cron de Guardia
+y de `POST /api/guardia-ml/escanear` para Admin.

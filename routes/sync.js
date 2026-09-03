@@ -20,7 +20,7 @@ import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVe
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { retenerPedidoMl, pedidoMlRetenido } from '../lib/guardiaMl.js';
+import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta } from '../lib/guardiaMl.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -652,13 +652,19 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
 
   const ov = normalizarOrdenMl(orden);
   const clavesSinCobertura = [];
+  const clavesBloqueadas = [];
   for (const item of ov.items) {
     const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
-    if (!skuVinculado || !buscarEnCache(db, skuVinculado)) clavesSinCobertura.push(item.clave);
+    if (!skuVinculado || !buscarEnCache(db, skuVinculado) || !esClaveCubierta(db, item.clave)) clavesSinCobertura.push(item.clave);
+    // GUARDIA: verificar también si la clave está bloqueada (seller_sku divergente o sin resolver)
+    if (claveBloqueadaGuardia(db, item.clave)) clavesBloqueadas.push(item.clave);
   }
-  if (clavesSinCobertura.length) {
-    retenerPedidoMl(db, { orderId, items, claves: [...new Set(clavesSinCobertura)] });
-    logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'retenido_guardia_ml', error: 'pedido ML sin vínculo exacto válido' });
+  if (clavesSinCobertura.length || clavesBloqueadas.length) {
+    retenerPedidoMl(db, { orderId, items, claves: [...new Set([...clavesSinCobertura, ...clavesBloqueadas])] });
+    const motivos = [];
+    if (clavesSinCobertura.length) motivos.push(`sin vínculo exacto (${clavesSinCobertura.join(', ')})`);
+    if (clavesBloqueadas.length) motivos.push(`bloqueada por Guardia (${clavesBloqueadas.join(', ')})`);
+    logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'retenido_guardia_ml', error: motivos.join('; ') });
     return;
   }
   const lineItems = [];
@@ -3281,19 +3287,11 @@ export function syncRouter(db, cfg) {
   // Desvincula una clave (borra su mapeo) para que el Matcher la vuelva a linkear a la
   // variación/publicación correcta. Para el caso "la variación mapeada ya no existe".
   router.post('/desvincular', (req, res) => {
-    const { clave } = req.body || {};
-    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
-    // Atómico: si el borrado de descartes fallara a mitad de camino, la clave quedaría
-    // reasignable pero con descartes del vínculo anterior todavía vivos, tapando en silencio
-    // señales legítimas del vínculo que la remapee después.
-    const info = db.transaction(() => {
-      const r = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
-      // Los descartes de sospechosos valían para el vínculo anterior, no para el que le toque después.
-      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
-      return r;
-    })();
-    logSync(db, { direccion: 'wc_ml', clave, estado: 'remapeo_requerido', error: 'desvinculada manualmente para re-mapear' });
-    res.json({ ok: true, borradas: info.changes });
+    return res.status(410).json({
+      ok: false,
+      error: 'Desvinculación legacy bloqueada: Guardia ML debe conservar el caso y la auditoría',
+      migracion: 'Abrí Guardia ML y resolvé la variante desde el caso correspondiente.',
+    });
   });
 
   // GET /vinculos/:sku, GET /vinculos-sospechosos, POST /vinculos/revisado y
