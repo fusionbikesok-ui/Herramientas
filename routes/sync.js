@@ -3287,11 +3287,15 @@ export function syncRouter(db, cfg) {
   // Desvincula una clave (borra su mapeo) para que el Matcher la vuelva a linkear a la
   // variación/publicación correcta. Para el caso "la variación mapeada ya no existe".
   router.post('/desvincular', (req, res) => {
-    return res.status(410).json({
-      ok: false,
-      error: 'Desvinculación legacy bloqueada: Guardia ML debe conservar el caso y la auditoría',
-      migracion: 'Abrí Guardia ML y resolvé la variante desde el caso correspondiente.',
-    });
+    const { clave } = req.body || {};
+    if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
+    const info = db.transaction(() => {
+      const r = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
+      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
+      return r;
+    })();
+    logSync(db, { direccion: 'wc_ml', clave, estado: 'remapeo_requerido', error: 'desvinculada manualmente para re-mapear' });
+    res.json({ ok: true, borradas: info.changes });
   });
 
   // GET /vinculos/:sku, GET /vinculos-sospechosos, POST /vinculos/revisado y

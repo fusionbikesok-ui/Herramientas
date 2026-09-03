@@ -272,7 +272,9 @@ export function coberturaRouter(db, cfg) {
   // pantalla retirada no debe poder consumir presupuesto de ML ni crear estados nuevos.
   router.use((req, res, next) => {
     const esLectura = ['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-    if (esLectura) return next();
+    // El refresco manual es la misma lectura completa que usa Guardia ML; se conserva
+    // como alias compatible, sin habilitar vínculos, pausas ni decisiones legacy.
+    if (esLectura || (req.method === 'POST' && req.path === '/actualizar-ml')) return next();
     return res.status(410).json({
       ok: false,
       error: 'Cobertura legacy quedó en modo consulta para evitar vínculos fuera de Guardia ML',
