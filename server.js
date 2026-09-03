@@ -55,6 +55,7 @@ import { notificacionesMlRouter, extraerClaimId } from './routes/notificacionesM
 import { stockExceptionsRouter } from './routes/stockExceptions.js';
 import { warrantiesRouter } from './routes/warranties.js';
 import { workshopRouter } from './routes/workshop.js';
+import { mobileWorkshopRouter } from './routes/mobileWorkshop.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
@@ -172,6 +173,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/v1/devices', devicesRouter(db, mobileAuth));
   app.use('/api/v1/notifications', notificationsRouter(db, mobileNotificationsAuth));
   app.use('/api/v1/inbox', inboxClaimsRouter(db, mobileNotificationsAuth));
+  app.use('/api/v1/workshop', mobileWorkshopRouter(db, mobileAuth));
   app.use('/api/v1', operacionesMobileRouter(db, mobileNotificationsAuth));
 
   // A partir de acá, todo /api exige sesión válida + permiso por herramienta.

@@ -109,6 +109,7 @@ describe('db schema', () => {
       'warranty_stock_commitments',
       'warranty_woo_outbox',
       'workshop_events',
+      'workshop_evidence',
       'workshop_jobs',
       'workshop_parts',
       'workshop_woo_outbox',

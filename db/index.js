@@ -605,6 +605,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('workshop_woo_outbox_079')").run();
     })();
   }
+  const workshopEvidenceMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='workshop_evidence_080'").get();
+  if (!workshopEvidenceMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '080_workshop_evidence.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('workshop_evidence_080')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
