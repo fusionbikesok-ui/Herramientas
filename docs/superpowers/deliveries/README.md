@@ -23,7 +23,7 @@ Actualizado: 2026-09-03. Estas fichas registran realidad; el plan maestro especi
 | E16 | Conteos controlados VPS | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E16.md` |
 | E17 | Conteos iPhone | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E17.md` |
 | E18 | Excepciones físicas y proveedor | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E18.md` |
-| E19 | Garantías y posventa | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E19.md` |
+| E19 | Garantías y posventa | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E19.md` |
 | E20 | Taller web y Woo | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E20.md` |
 | E21 | Taller iPhone | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E21.md` |
 | E22 | Métricas y reposición | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E22.md` |
