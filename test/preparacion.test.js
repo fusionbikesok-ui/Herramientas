@@ -1315,6 +1315,14 @@ describe('preparacion flujo', () => {
     expect(r.status).toBe(409);
   });
 
+  it('POST /corregir-tracking: exige administrador antes de consultar Woo', async () => {
+    const r = await request(buildTestAppComo(db, 'operario'))
+      .post('/api/preparacion/seguimientos/905/corregir-tracking').send({ tracking: 'AND222' });
+    expect(r.status).toBe(403);
+    expect(r.body.code).toBe('FORBIDDEN');
+    expect(wooFetch).not.toHaveBeenCalled();
+  });
+
   it('POST /corregir-tracking: mismo valor es no-op, no llama PUT', async () => {
     wooFetch.mockResolvedValueOnce({ data: {
       status: 'enviadoandreani',
