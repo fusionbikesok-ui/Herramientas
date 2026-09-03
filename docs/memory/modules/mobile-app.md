@@ -41,6 +41,6 @@ Cada vertical móvil incluye vacío, carga, sin permiso, error, reintento, confl
 ## Estado E21
 
 E21 está en desarrollo en `/opt/fusionbikes/FusionBikes-App`, rama `feature/stock-flow-ui`.
-El commit `36a1d28` agrega el cliente tipado de taller, operaciones con `expected_version` y
-metadatos para la futura cola offline. No hay build publicada; falta conectar pantallas y validar
-el contrato real `/api/v1` en un iPhone.
+Los commits `36a1d28` y `514605e` agregan el cliente tipado y la pantalla móvil inicial de taller,
+con operaciones versionadas y metadatos para la futura cola offline. No hay build publicada; falta
+validar el contrato real `/api/v1` en un iPhone y completar captura offline.
