@@ -89,6 +89,7 @@ describe('db schema', () => {
       'sku_matcher_decisiones',
       'skus_config_ml',
       'stock_exception_events',
+      'stock_exception_woo_outbox',
       'stock_incidents',
       'stock_movements',
       'stock_negativo_alertas',

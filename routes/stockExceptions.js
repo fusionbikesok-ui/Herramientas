@@ -3,6 +3,7 @@ import {
   crearIncidente, listarIncidentes, resolverIncidente, listarEventosExcepcion,
   crearTarea, listarTareas, tomarTarea, completarTarea,
   recibirDevolucion, clasificarDevolucion, marcarDanoDevolucion,
+  listarWooOutbox,
 } from '../lib/stockExceptions.js';
 
 function actor(req) { return req.user?.username || 'desconocido'; }
@@ -21,6 +22,7 @@ export function stockExceptionsRouter(db) {
   router.post('/incidentes', (req, res) => reply(res, crearIncidente(db, { ...req.body, creado_por: actor(req) }), 'incidente'));
   router.post('/incidentes/:id/resolver', (req, res) => reply(res, resolverIncidente(db, req.params.id, { ...req.body, resuelto_por: actor(req) }), 'incidente'));
   router.get('/incidentes/:id/eventos', (req, res) => res.json({ ok: true, data: listarEventosExcepcion(db, 'incidente', req.params.id) }));
+  router.get('/woo-outbox', (req, res) => res.json({ ok: true, data: listarWooOutbox(db, req.query) }));
   router.post('/devoluciones/:id/recibir', (req, res) => reply(res, recibirDevolucion(db, req.params.id, { ...req.body, recibido_por: actor(req) }), 'incidente'));
   router.post('/devoluciones/:id/clasificar', (req, res) => reply(res, clasificarDevolucion(db, req.params.id, { ...req.body, clasificado_por: actor(req) }), 'incidente'));
   router.post('/devoluciones/:id/dano', (req, res) => reply(res, marcarDanoDevolucion(db, req.params.id, { ...req.body, marcado_por: actor(req) }), 'incidente'));

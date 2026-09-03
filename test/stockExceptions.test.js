@@ -101,6 +101,15 @@ describe('E18 — excepciones físicas', () => {
     expect(done.ok).toBe(true); expect(done.incidente.clasificacion).toBe('condicionado');
   });
 
+  it('encola el efecto comercial de una devolución disponible con idempotencia', () => {
+    const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', cantidad: 2, motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-woo' });
+    const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-woo' });
+    const one = clasificarDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, clasificacion: 'disponible', clasificado_por: 'ana', operation_id: 'class-woo' });
+    const two = clasificarDevolucion(db, incident.incidente.id, { expected_version: one.incidente.expected_version, clasificacion: 'disponible', clasificado_por: 'ana', operation_id: 'class-woo' });
+    expect(one.woo.delta).toBe(2); expect(two.repetido).toBe(true);
+    expect(db.prepare('SELECT COUNT(*) n FROM stock_exception_woo_outbox').get().n).toBe(1);
+  });
+
   it('marca devolución dañada, crea incidente urgente y tarea de revisión', () => {
     const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-3' });
     const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-3' });

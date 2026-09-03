@@ -508,6 +508,14 @@ export function openDb(dbPath) {
     });
     aplicarStockReturns();
   }
+  const stockExceptionWooOutboxMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='stock_exception_woo_outbox_068'").get();
+  if (!stockExceptionWooOutboxMigration) {
+    const aplicarStockExceptionWooOutbox = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '068_stock_exception_woo_outbox.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('stock_exception_woo_outbox_068')").run();
+    });
+    aplicarStockExceptionWooOutbox();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
