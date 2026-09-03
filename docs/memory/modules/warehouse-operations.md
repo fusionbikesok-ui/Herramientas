@@ -90,7 +90,7 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
 
 - E19 inició su núcleo durable en `warranty_cases`/`warranty_events`: alta idempotente,
   estados versionados y timeline mediante `/api/warranties`. Continúa en desarrollo; faltan
-  inspección, adjuntos, reemplazo, Woo, UI y E2E.
+  inspección y referencias de evidencia; faltan carga real de adjuntos, reemplazo, Woo, UI y E2E.
 
 - Si Woo está caído, los cambios pendientes son durables e idempotentes; no se publican aumentos
   hasta reconciliar.
