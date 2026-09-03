@@ -493,6 +493,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_pack_062_065')").run();
     })();
   }
+  const stockExceptionsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='stock_exceptions_066'").get();
+  if (!stockExceptionsMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '066_stock_exceptions.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('stock_exceptions_066')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
