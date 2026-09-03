@@ -3,8 +3,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import express from 'express';
+import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { ensureTablesJornada } from '../routes/jornada.js';
+import { ensureTablesJornada, jornadaRouter } from '../routes/jornada.js';
 import {
   iniciarBusqueda, pasarAMesa, asignarUnidadMesa, registrarFaltante, completarRetorno,
   resolverFaltante, cerrarOla, reclamarOla, configurarZona, pedirAyudaZona, recibirAyudaZona, pausarOla, reanudarOla, sincronizarMiniOlas, preflightApertura,
@@ -23,9 +25,13 @@ try {
   if (partialPreflight.integraciones.mercadolibre.estado !== 'error' || partialPreflight.integraciones.woocommerce.estado !== 'ok' || partialPreflight.agente_impresora.verificacion !== 'no_requerido_e1') throw new Error('partial preflight did not isolate the failed integration');
   db.exec('CREATE TABLE pedidos_cache (clave TEXT PRIMARY KEY, items_json TEXT, estado_envio TEXT, canal TEXT, espejo_ml INTEGER DEFAULT 0, fecha TEXT, fecha_despacho TEXT, fecha_despacho_limite TEXT, estado_despacho TEXT DEFAULT \'activo\')');
   db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,fecha) VALUES (?,?,?,?,?)').run('web:demo-1', JSON.stringify([{ sku: 'SKU-DEMO', cantidad: 1 }]), 'pendiente', 'web', now.toISOString());
-  const day = db.prepare('INSERT INTO operational_days (fecha,estado,abierta_por,abierta_en) VALUES (?,?,?,?)').run('2026-09-03','abierta','demo',now.toISOString()).lastInsertRowid;
-  const wave = db.prepare("INSERT INTO pick_waves (operational_day_id,tipo,estado,estado_operativo,creada_en) VALUES (?,'inicial','congelada','disponible',?)").run(day, now.toISOString()).lastInsertRowid;
-  db.prepare('INSERT INTO pick_wave_items (pick_wave_id,pedido_clave,agregado_en) VALUES (?,?,?)').run(wave, 'web:demo-1', now.toISOString());
+  const app = express(); app.use(express.json());
+  app.use((req, _res, next) => { req.user = { username:'demo', is_admin:1, rol:'supervisor' }; next(); });
+  app.use('/api/jornada', jornadaRouter(db, {}));
+  const opened = await request(app).post('/api/jornada/abrir').send({});
+  if (opened.status !== 200 || !opened.body.ok || opened.body.preflight.integraciones.mercadolibre.estado !== 'error') throw new Error('HTTP opening did not expose the partial preflight');
+  const day = opened.body.jornada.id;
+  const wave = opened.body.olaInicial.id;
   const claim = reclamarOla(db, wave, 'demo', { operationId:'demo-claim', expectedVersion:1 }, now);
   if (!claim.ok) throw new Error(`claim: ${claim.code}`);
   const paused = pausarOla(db, wave, 'demo', { operationId:'demo-pause', expectedVersion:claim.olaCongelada.expected_version, motivo:'reorganización de mesa' }, now);
