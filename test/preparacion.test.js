@@ -1372,6 +1372,19 @@ describe('preparacion flujo', () => {
     expect(fs.existsSync(rutaAbsoluta(fotos[0].url))).toBe(true);
   });
 
+  it('POST /:id/foto limpia el archivo si falla el registro de auditoría', async () => {
+    const id = await nuevaPrep();
+    const buf = Buffer.from([255, 216, 255, 217]);
+    db.exec("CREATE TRIGGER test_foto_auditoria BEFORE INSERT ON preparacion_eventos WHEN NEW.tipo='foto_subida' BEGIN SELECT RAISE(ABORT, 'auditoria caída'); END");
+    const r = await request(app).post(`/api/preparacion/${id}/foto`).attach('archivo', buf, { filename:'huérfana.jpg', contentType:'image/jpeg' });
+    db.exec('DROP TRIGGER test_foto_auditoria');
+    expect(r.status).toBe(500);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM preparacion_fotos WHERE preparacion_id=?').get(id).n).toBe(0);
+    const dir = rutaAbsoluta('/uploads/preparacion/' + id);
+    const archivos = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+    expect(archivos).toHaveLength(0);
+  });
+
   it('POST /:id/foto NO valida que el buffer sea una imagen real: lo guarda igual (fail-open acá; la cola lo marca error después)', async () => {
     const id = await nuevaPrep();
     const buffer = Buffer.from('esto no es una imagen');
