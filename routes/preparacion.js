@@ -780,10 +780,26 @@ export async function reintentarColgadosTracking(db, cfg) {
   let resueltos = 0;
   for (const prep of pendientes) {
     try {
-      await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', { status: cfg.enviadoAndreaniStatus || 'enviadoandreani' });
+      const actual = await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`);
+      const status = actual.data?.status;
+      const meta = (actual.data?.meta_data || []).find((m) => m.key === TRACKING_META_KEY);
+      const trackingGuardado = String(meta?.value || '').trim();
+      const trackingEsperado = String(prep.tracking || '').trim();
+      const mismoTracking = trackingEsperado && trackingGuardado === trackingEsperado;
+      // Preparaciones legacy pueden no tener tracking local; un estado terminal de Woo
+      // alcanza para recuperar el flag. En preparaciones modernas exigimos coincidencia.
+      const yaSalio = status === (cfg.enviadoAndreaniStatus || 'enviadoandreani') && (!trackingEsperado || mismoTracking);
+      const inciertoSinConfirmar = prep.woo_paso1_incierto && !(status === 'completed' && mismoTracking);
+      if (inciertoSinConfirmar || (!yaSalio && !(status === 'completed' && mismoTracking))) continue;
+      if (!yaSalio) {
+        await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', { status: cfg.enviadoAndreaniStatus || 'enviadoandreani' });
+      }
+      if (prep.woo_paso1_incierto) db.prepare('UPDATE preparaciones SET woo_paso1_incierto=0 WHERE id=?').run(prep.id);
       // Mismo criterio que /seguimientos/:wcOrderId: 'completada' solo si de verdad está
       // verificada, y nunca pisa una 'cerrada_sin_evidencia' — ver marcarPreparacionEnviada.
       marcarPreparacionEnviada(db, prep.clave, { usuario: null });
+      const yaRegistrado = db.prepare("SELECT 1 FROM preparacion_eventos WHERE preparacion_id=? AND tipo='tracking_cargado' LIMIT 1").get(prep.id);
+      if (!yaRegistrado) registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_cargado', usuario: null, detalle: { tracking: trackingEsperado } });
       registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_recuperado', usuario: null, detalle: {} });
       resueltos++;
     } catch (e) {
