@@ -7,7 +7,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { taskField, validateTask, authoritativeGitState } from './agent-pipeline-policy.mjs';
+import { validateTask, authoritativeGitState } from './agent-pipeline-policy.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const controller = path.join(root, 'scripts', 'orchestrate-claude.mjs');
@@ -87,6 +87,13 @@ function logTail() {
   return lines.slice(-12).join('\n');
 }
 
+function enrichTask(task, fields) {
+  const labels = Object.keys(fields); const matcher = new RegExp(`^(?:${labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}):`, 'i');
+  const kept = task.split(/\r?\n/).filter((line) => !matcher.test(line));
+  return `${kept.join('\n').trim()}\n\n${Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join('\n')}\n`;
+}
+function safeEnv(suffix, port) { return { PATH: process.env.PATH || '/usr/bin:/bin', NODE_PATH: process.env.NODE_PATH || '', LANG: process.env.LANG || 'C.UTF-8', TZ: process.env.TZ || 'UTC', TMPDIR: process.env.TMPDIR || '/tmp', DB_PATH: dbCopy, DISABLE_CRONS: 'true', PORT: String(port), SESSION_SECRET: `claude-e2e-${suffix}`, MOBILE_JWT_SECRET: `claude-e2e-mobile-${suffix}-0123456789abcdef`, DOTENV_CONFIG_PATH: '/dev/null', WOO_URL: '', WOO_CK: '', WOO_CS: '', GEMINI_KEY: '', ML_CLIENT_ID: '', ML_CLIENT_SECRET: '', ML_USER_ID: '' }; }
+
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.includes('--help')) return usage();
@@ -102,8 +109,9 @@ async function main() {
   await assertPortFree(port);
 
   const task = fs.readFileSync(taskFile, 'utf8');
-  const { worktree, base: taskBase, head: taskHead } = validateTask(task);
+  const { worktree, base: taskBase, head: taskHead } = validateTask(task, { role: 'probador-e2e' });
   if (!path.isAbsolute(worktree) || !fs.existsSync(worktree)) throw new Error('Worktree absoluto e inexistente');
+  if (!taskBase || !taskHead) throw new Error('E2E requiere Base y HEAD solicitados');
   const sourceDb = path.join(root, 'data', 'fusion.sqlite');
   if (!emptyDb && !fs.existsSync(sourceDb)) throw new Error('no existe la base fuente');
   const suffix = `${process.pid}-${Date.now()}`;
@@ -121,24 +129,16 @@ async function main() {
 
   const gitState = authoritativeGitState(worktree, { base: taskBase, head: taskHead });
   const { head, base } = gitState;
-  const env = {
-    ...process.env,
-    DB_PATH: dbCopy,
-    DISABLE_CRONS: 'true',
-    PORT: String(port),
-    SESSION_SECRET: `claude-e2e-${suffix}`,
-    MOBILE_JWT_SECRET: `claude-e2e-mobile-${suffix}-0123456789abcdef`,
-    DOTENV_CONFIG_PATH: '/dev/null',
-    WOO_URL: '', WOO_CK: '', WOO_CS: '', GEMINI_KEY: '',
-    ML_CLIENT_ID: '', ML_CLIENT_SECRET: '', ML_USER_ID: '',
-  };
+  const currentHead = git(['rev-parse', '--verify', 'HEAD'], worktree);
+  if (currentHead !== head) throw new Error('HEAD actual no coincide con el HEAD solicitado');
+  const env = safeEnv(suffix, port);
   server = spawn('node', ['server.js'], { cwd: worktree, env, stdio: ['ignore', 'pipe', 'pipe'] });
   logStream = fs.createWriteStream(logFile, { mode: 0o600 });
   server.stdout.pipe(logStream);
   server.stderr.pipe(logStream);
   await waitForHttp(`http://127.0.0.1:${port}/login/`, 15_000);
 
-  const enrichedTask = `${task.trim()}\n\nEntorno: local-aislado\nURL exacta: http://127.0.0.1:${port}/login/\nRama/worktree servido: ${worktree}\nBase: ${base}\nHEAD: ${head}\nDB temporal: ${dbCopy}\nDISABLE_CRONS=true: sí\nPuerto: ${port}\nSesión Playwright: ${playwrightSession}\nDirectorio de artefactos: ${path.join(root, 'output', 'playwright')}\nPID/sesión del servidor: ${server.pid}\nAcciones autorizadas: solo lectura y datos de prueba aislados\n`;
+  const enrichedTask = enrichTask(task, { Entorno: 'local-aislado', 'URL exacta': `http://127.0.0.1:${port}/login/`, 'Rama/worktree servido': worktree, Base: base, HEAD: head, 'DB temporal': dbCopy, 'DISABLE_CRONS=true': 'sí', Puerto: port, 'Sesión Playwright': playwrightSession, 'Directorio de artefactos': path.join(root, 'output', 'playwright'), 'PID/sesión del servidor': server.pid, 'Acciones autorizadas': 'solo lectura y datos de prueba aislados' });
   const enrichedFile = `/tmp/codex-to-claude-e2e-${suffix}.md`;
   fs.writeFileSync(enrichedFile, `${enrichedTask}\n`, { mode: 0o600 });
 

@@ -2,9 +2,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROLES as allowedRoles, taskField, validateTask, validateHandoff, authoritativeGitState } from './agent-pipeline-policy.mjs';
+import { ROLES as allowedRoles, canonicalRole, validateTask, validateHandoff, authoritativeGitState } from './agent-pipeline-policy.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -16,6 +16,7 @@ Opciones:
   --handoff-file <archivo>       Salida JSON (default: /tmp/claude-to-codex-handoff.json)
   --timeout-ms <ms>              Tope de la ejecución (default: 1200000)
   --permission-mode <modo>       dontAsk (default), plan o acceptEdits
+  --prior-handoff <rol=archivo>  Evidencia previa, repetible para el auditor
   --help                         Mostrar esta ayuda
 
 El task file debe contener al menos: Tarea, Rama y Worktree. Para probador-e2e también
@@ -32,6 +33,7 @@ function parseArgs(argv) {
     else if (arg === '--handoff-file') out.handoffFile = argv[++i];
     else if (arg === '--timeout-ms') out.timeoutMs = Number(argv[++i]);
     else if (arg === '--permission-mode') out.permissionMode = argv[++i];
+    else if (arg === '--prior-handoff') (out.priorHandoffs ??= []).push(argv[++i]);
     else throw new Error(`opción desconocida: ${arg}`);
   }
   return out;
@@ -104,6 +106,27 @@ function parseClaudeResult(raw) {
   return parseJsonText(result);
 }
 
+function requiresE2E(worktree, base, head) {
+  const run = (args) => { const result = spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }); if (result.status !== 0) throw new Error(`git ${args.join(' ')} falló`); return result.stdout; };
+  const names = `${run(['diff', '--name-only', base, head])}${run(['diff', '--name-only'])}${run(['diff', '--cached', '--name-only'])}${run(['ls-files', '--others', '--exclude-standard'])}`.split('\n');
+  return names.some((name) => name.startsWith('public/'));
+}
+
+function outputOutsideWorktree(output, worktree) {
+  const target = path.resolve(output); const root = fs.realpathSync(worktree);
+  if (target === root || target.startsWith(`${root}${path.sep}`)) throw new Error('--handoff-file no puede estar dentro del worktree');
+  const directory = path.dirname(target); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const realDirectory = fs.realpathSync(directory);
+  if (realDirectory === root || realDirectory.startsWith(`${root}${path.sep}`)) throw new Error('--handoff-file resuelve dentro del worktree');
+  return target;
+}
+function priorEvidence(entries, worktree, state, required) {
+  const evidence = {};
+  for (const entry of entries || []) { const [rawRole, file] = entry.split('=', 2); const role = canonicalRole(rawRole); if (!role || !file || !fs.existsSync(file)) throw new Error('--prior-handoff requiere rol=archivo existente'); const handoff = JSON.parse(fs.readFileSync(file, 'utf8')); validateHandoff(handoff, role, { cwd: worktree }); if (handoff.estado !== 'APROBADO' || handoff.base !== state.base || handoff.head !== state.head || handoff.diff_fingerprint !== state.diff_fingerprint) throw new Error(`evidencia previa ${role} no coincide con el diff congelado`); evidence[role] = handoff.diff_fingerprint; }
+  for (const role of required) if (evidence[role] !== state.diff_fingerprint) throw new Error(`falta --prior-handoff válido para ${role}`);
+  return evidence;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) return usage();
@@ -116,6 +139,8 @@ async function main() {
   let worktree; let taskRefs;
   try { ({ worktree, ...taskRefs } = validateTask(task, { e2e: args.role === 'probador-e2e', role: args.role })); } catch (error) { return fail(error.message); }
   if (!path.isAbsolute(worktree) || !fs.existsSync(worktree)) return fail('Worktree absoluto e inexistente');
+  let handoffPath;
+  try { handoffPath = outputOutsideWorktree(args.handoffFile, worktree); } catch (error) { return fail(error.message); }
 
   const gitState = authoritativeGitState(worktree, taskRefs);
   const inputFingerprint = gitState.diff_fingerprint;
@@ -123,6 +148,11 @@ async function main() {
   const model = readAgentModel(args.role, worktree);
   const tools = readAgentTools(args.role);
   validateWorktreeAgentConfig(args.role, model, worktree);
+  if (args.role === 'auditor-despliegue') {
+    const needsE2E = requiresE2E(worktree, gitState.base, gitState.head);
+    args.priorEvidence = priorEvidence(args.priorHandoffs, worktree, gitState, ['revisor', 'tester', ...(needsE2E ? ['probador-e2e'] : [])]);
+    args.requiresE2E = needsE2E;
+  }
   const prompt = [
     `Sos el rol ${args.role} dentro de un despacho coordinado por Codex.`,
     `Leé el task file completo en ${args.taskFile} antes de actuar.`,
@@ -169,6 +199,10 @@ async function main() {
   if ((handoff.base && handoff.base !== gitState.base) || (handoff.head && handoff.head !== gitState.head)) throw new Error('handoff Base/HEAD no coincide con el worktree congelado');
   if (['revisor', 'tester', 'probador-e2e', 'auditor-despliegue'].includes(args.role) && !returnedFingerprint) throw new Error('gate sin diff_fingerprint autoritativo');
   if (returnedFingerprint && returnedFingerprint !== gitState.diff_fingerprint) throw new Error('handoff diff_fingerprint no coincide con el worktree');
+  if (args.role === 'auditor-despliegue') {
+    if (handoff.referencias_evidencia && JSON.stringify(handoff.referencias_evidencia) !== JSON.stringify(args.priorEvidence)) throw new Error('auditor no puede autodeclarar referencias de evidencia');
+    handoff.referencias_evidencia = args.priorEvidence; handoff.requiere_e2e = args.requiresE2E;
+  }
   const outputState = authoritativeGitState(worktree, { base: gitState.base });
   const readOnly = ['revisor', 'probador-e2e', 'auditor-despliegue'].includes(args.role);
   if (readOnly && outputState.diff_fingerprint !== inputFingerprint) throw new Error('gate de solo lectura mutó el worktree; diff requiere re-freeze');
@@ -184,9 +218,10 @@ async function main() {
   handoff.modelo = model;
   handoff.task_file = path.resolve(args.taskFile);
   handoff.generado_en = new Date().toISOString();
-  fs.mkdirSync(path.dirname(path.resolve(args.handoffFile)), { recursive: true });
-  fs.writeFileSync(args.handoffFile, `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
-  console.log(`Handoff válido escrito en ${args.handoffFile}`);
+  fs.writeFileSync(handoffPath, `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
+  const persistedState = authoritativeGitState(worktree, { base: outputState.base, head: outputState.head });
+  if (persistedState.diff_fingerprint !== outputState.diff_fingerprint) throw new Error('escribir handoff alteró el worktree');
+  console.log(`Handoff válido escrito en ${handoffPath}`);
 }
 
 main().catch((error) => {

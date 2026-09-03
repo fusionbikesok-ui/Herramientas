@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterAll, describe, expect, it } from 'vitest';
-import { authoritativeGitState, canonicalFingerprint, canonicalRole, validateHandoff, validateTask } from '../scripts/agent-pipeline-policy.mjs';
+import { authoritativeGitState, canonicalFingerprint, canonicalRole, untrackedBytes, validateHandoff, validateTask } from '../scripts/agent-pipeline-policy.mjs';
 
 const fp = 'a'.repeat(64);
 const core = { estado: 'APROBADO', base: 'a', head: 'b', diff_fingerprint: fp };
@@ -17,6 +17,7 @@ describe('política de pipeline', () => {
   it('distingue unstaged binario', () => expect(canonicalFingerprint({ base: 'a', head: 'b', unstaged: Buffer.from([255]) })).not.toBe(canonicalFingerprint({ base: 'a', head: 'b', unstaged: Buffer.from([254]) })));
   it('distingue untracked binario', () => expect(canonicalFingerprint({ base: 'a', head: 'b', untracked: Buffer.from([0, 255]) })).not.toBe(canonicalFingerprint({ base: 'a', head: 'b', untracked: Buffer.from([0, 254]) })));
   it('captura staged, unstaged y untracked reales', () => { fs.writeFileSync(path.join(temp, 'tracked.txt'), 'unstaged\n'); fs.writeFileSync(path.join(temp, 'staged.bin'), Buffer.from([0, 255])); runGit('add', 'staged.bin'); fs.writeFileSync(path.join(temp, 'new.bin'), Buffer.from([1, 254])); const state = authoritativeGitState(temp, { base, head }); expect(state.staged.length).toBeGreaterThan(0); expect(state.unstaged.length).toBeGreaterThan(0); expect(state.untracked.length).toBeGreaterThan(0); });
+  it('no lee directorios y registra metadata de symlink no seguido', () => { fs.mkdirSync(path.join(temp, 'untracked-dir'), { recursive: true }); fs.writeFileSync(path.join(temp, 'untracked-dir', 'secret'), 'no leer'); fs.symlinkSync('untracked-dir', path.join(temp, 'link-dir')); expect(() => untrackedBytes(temp)).not.toThrow(); expect(untrackedBytes(temp).toString()).toContain('symlink\0link-dir\0untracked-dir'); });
   it('resuelve Base y HEAD a commits canónicos', () => { const state = authoritativeGitState(temp, { base, head }); expect(state.base).toBe(base); expect(state.head).toBe(head); });
   it('rechaza Base que no es ancestro de HEAD', () => expect(() => authoritativeGitState(temp, { base: head, head: base })).toThrow());
   it('acepta alias legacy de rol y campos tester', () => { const handoff = { ...core, status: 'approved', pruebas: 'OK' }; expect(validateHandoff(handoff, 'qa').resultado_suite).toBe('OK'); });
@@ -25,6 +26,7 @@ describe('política de pipeline', () => {
   it('exige siguiente acción para waiting', () => expect(() => validateHandoff({ ...core, estado: 'WAITING_FOR_ORCHESTRATOR' }, 'tester')).toThrow('siguiente_accion'));
   it('exige contrato completo para revisor aprobado', () => expect(() => validateHandoff({ ...core, veredicto: 'OK' }, 'revisor')).toThrow('hallazgos'));
   it('exige contrato completo para E2E aprobado', () => expect(() => validateHandoff({ ...core, evidencia: {} }, 'e2e')).toThrow('anchos_riesgos'));
+  it('exige evidencia, anchos y código válido para E2E bloqueado', () => { expect(() => validateHandoff({ ...core, estado: 'BLOQUEADO', codigo_bloqueo: 'OTRO', siguiente_accion: 'x', evidencia: {}, anchos_riesgos: [] }, 'e2e')).toThrow('codigo_bloqueo válido'); expect(() => validateHandoff({ ...core, estado: 'BLOQUEADO', codigo_bloqueo: 'FALTA_ENTORNO', siguiente_accion: 'x' }, 'e2e')).toThrow('E2E bloqueado'); });
   it('requiere referencias del auditor por rol y misma huella', () => expect(() => validateHandoff({ ...core, referencias: { revisor: fp, tester: 'b'.repeat(64) } }, 'auditor')).toThrow('tester'));
   it('requiere E2E en auditor solo si la UI lo exige', () => { expect(() => validateHandoff({ ...core, requiereE2E: true, referencias: { revisor: fp, tester: fp } }, 'auditor')).toThrow('probador-e2e'); expect(() => validateHandoff({ ...core, requiere_e2e: true, referencias: { revisor: fp, tester: fp, 'probador-e2e': fp } }, 'auditor')).not.toThrow(); });
   it('rechaza task E2E incompleta', () => expect(() => validateTask(`Tarea: probar\nRama: x\nWorktree: ${temp}`, { e2e: true, role: 'e2e' })).toThrow('URL exacta'));

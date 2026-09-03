@@ -46,7 +46,8 @@ cambia cuál archivo rota. Si vuelve a fallar aislado, ahí sí es del diff.
 La secuencia obligatoria es: desarrollo → revisor → tester → probador-e2e (si UI) → auditor.
 El revisor produce `veredicto/hallazgos`; tester `resultado_suite`; E2E `evidencia/anchos_riesgos`
 (también en BLOQUEADO); auditor consume referencias por rol: siempre `revisor` y `tester`, y
-`probador-e2e` solo si el despacho declara UI; produce `referencias_evidencia` indexadas por rol.
+`probador-e2e` solo si el controlador detecta cambios en `public/`; el auditor recibe los
+handoffs previos por archivo y el controlador deriva `referencias_evidencia` indexadas por rol.
 Todo gate lleva `base`, `head` y la misma `diff_fingerprint` SHA-256 autoritativa. Workers y
 explorador solo requieren el núcleo normalizado (`estado/base/head/fingerprint`), sin campos de gate.
 Cada entrega, despacho y reintento se registra en el checkpoint/handoff con timestamp, rol,
@@ -154,7 +155,8 @@ npm run agent:claude -- \
 
 `scripts/orchestrate-claude.mjs` valida el rol, el worktree, el entorno E2E y el modelo antes
 de llamar a `claude -p`. Le pasa el task file, conserva la política de permisos seleccionada
-y rechaza cualquier respuesta que no tenga el esquema mínimo de handoff. Codex lee luego el
+y rechaza cualquier respuesta que no tenga el esquema mínimo de handoff. Para auditor recibe
+`--prior-handoff rol=archivo` por cada gate previo; no acepta referencias autodeclaradas. Codex lee luego el
 archivo estructurado y decide el gate siguiente.
 
 Para E2E, el lanzador prepara todo el entorno de forma reproducible y aislada:

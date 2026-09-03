@@ -119,7 +119,8 @@ todos los despachos siguientes, en vez de que cada agente repita la búsqueda.
 ### El pipeline
 
 Secuencia normativa: desarrollo → revisor (veredicto/hallazgos) → tester (resultado_suite) →
-probador-e2e si corresponde (evidencia/anchos_riesgos) → auditor (referencias_evidencia). Todos
+probador-e2e si el diff toca `public/` (evidencia/anchos_riesgos) → auditor (referencias_evidencia
+derivadas por el controlador desde handoffs previos). Todos
 los contratos usan la huella autoritativa, base y HEAD del mismo diff; el auditor consume los
 tres gates y no repite sus pruebas. Entregas, despachos y reintentos quedan registrados en el
 checkpoint/handoff; tareas doc-only pueden usar registro liviano.

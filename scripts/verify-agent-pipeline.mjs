@@ -80,8 +80,8 @@ try {
 } catch (error) { errors.push(`política rechazó handoff válido: ${error.message}`); }
 const controller = fs.readFileSync(path.join(root, 'scripts', 'orchestrate-claude.mjs'), 'utf8');
 const e2e = fs.readFileSync(path.join(root, 'scripts', 'run-isolated-claude-e2e.mjs'), 'utf8');
-for (const marker of ['validateHandoff(handoff, args.role, { cwd: worktree })', 'inputFingerprint', 'outputState', 'REFRESH_REVIEW', 'handoff diff_fingerprint no coincide', 'handoff Base/HEAD no coincide']) if (!controller.includes(marker)) errors.push(`controlador no aplica protección semántica '${marker}'`);
-if (!e2e.includes('authoritativeGitState') || e2e.includes('HEAD/base:') || !e2e.includes('Base: ${base}') || !e2e.includes('HEAD: ${head}')) errors.push('lanzador E2E no entrega Base/HEAD coherentes');
+for (const marker of ['validateHandoff(handoff, args.role, { cwd: worktree })', 'inputFingerprint', 'outputState', 'REFRESH_REVIEW', 'handoff diff_fingerprint no coincide', 'handoff Base/HEAD no coincide', 'priorEvidence', 'outputOutsideWorktree', 'persistedState']) if (!controller.includes(marker)) errors.push(`controlador no aplica protección semántica '${marker}'`);
+if (!e2e.includes('authoritativeGitState') || e2e.includes('HEAD/base:') || !e2e.includes('enrichTask') || !e2e.includes('safeEnv') || !e2e.includes('HEAD actual no coincide')) errors.push('lanzador E2E no aísla campos, entorno y HEAD');
 for (const file of ['revisor.md','tester.md','probador-e2e.md','auditor-despliegue.md']) {
   const text = fs.readFileSync(path.join(agentsDir,file),'utf8');
   if (!text.includes('Contrato v2') || !text.includes('diff_fingerprint')) errors.push(`${file} no declara contrato v2`);
