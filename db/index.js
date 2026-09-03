@@ -524,6 +524,23 @@ export function openDb(dbPath) {
     });
     aplicarSupplierReturns();
   }
+  const supplierReturnLifecycleMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='supplier_return_lifecycle_070'").get();
+  if (!supplierReturnLifecycleMigration) {
+    const aplicarSupplierReturnLifecycle = db.transaction(() => {
+      const cols = new Set(db.prepare('PRAGMA table_info(stock_supplier_returns)').all().map((c) => c.name));
+      if (!cols.has('expected_version')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '070_supplier_return_lifecycle.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('supplier_return_lifecycle_070')").run();
+    });
+    aplicarSupplierReturnLifecycle();
+  }
+  const supplierReturnEventsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='supplier_return_events_071'").get();
+  if (!supplierReturnEventsMigration) {
+    const aplicarSupplierReturnEvents = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '071_supplier_return_events.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('supplier_return_events_071')").run();
+    });
+    aplicarSupplierReturnEvents();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

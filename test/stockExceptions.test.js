@@ -9,6 +9,7 @@ import {
   recibirDevolucion, clasificarDevolucion, marcarDanoDevolucion,
   procesarWooOutbox,
   crearDevolucionProveedor, listarDevolucionesProveedor, descartarIncidente,
+  cambiarEstadoDevolucionProveedor, listarEventosDevolucionProveedor,
 } from '../lib/stockExceptions.js';
 import { stockExceptionsRouter } from '../routes/stockExceptions.js';
 
@@ -139,6 +140,15 @@ describe('E18 — excepciones físicas', () => {
     const discarded = descartarIncidente(db, incident.incidente.id, { expected_version: 1, motivo: 'Sin reparación', descartado_por: 'ana', operation_id: 'discard-1' });
     expect(discarded.ok).toBe(true); expect(discarded.incidente.estado).toBe('resuelto');
     expect(descartarIncidente(db, incident.incidente.id, { expected_version: 2, motivo: 'otra', descartado_por: 'ana', operation_id: 'discard-1' }).repetido).toBe(true);
+  });
+
+  it('avanza la devolución a proveedor con estados válidos, versión y auditoría propia', () => {
+    const created = crearDevolucionProveedor(db, { sku: 'FB-X', cantidad: 1, proveedor: 'Proveedor X', motivo: 'Garantía', creado_por: 'ana', operation_id: 'supplier-life' });
+    const prepared = cambiarEstadoDevolucionProveedor(db, created.devolucion.id, { expected_version: 1, estado: 'preparada', motivo: 'Paquete listo', cambiado_por: 'ana', operation_id: 'supplier-life-1' });
+    expect(prepared.ok).toBe(true); expect(prepared.devolucion.expected_version).toBe(2);
+    expect(cambiarEstadoDevolucionProveedor(db, created.devolucion.id, { expected_version: 1, estado: 'enviada', motivo: 'salida', cambiado_por: 'ana', operation_id: 'supplier-life-bad' }).code).toBe('VERSION_CONFLICT');
+    const sent = cambiarEstadoDevolucionProveedor(db, created.devolucion.id, { expected_version: 2, estado: 'enviada', motivo: 'Retiro proveedor', cambiado_por: 'ana', operation_id: 'supplier-life-2' });
+    expect(sent.devolucion.estado).toBe('enviada'); expect(listarEventosDevolucionProveedor(db, created.devolucion.id)).toHaveLength(2);
   });
 
   it('REST rechaza mutaciones sin permiso de stock', async () => {
