@@ -1517,10 +1517,12 @@ export function preparacionRouter(db, cfg) {
       const totalAMedias = db.prepare(
         "SELECT COUNT(*) n FROM preparaciones WHERE canal='web' AND woo_paso2_pendiente=1"
       ).get().n;
+      const aMediasOffset = Math.max(0, Number.parseInt(req.query.a_medias_offset || '0', 10) || 0);
+      const aMediasLimit = Math.min(100, Math.max(1, Number.parseInt(req.query.a_medias_limit || '20', 10) || 20));
       const pendientesPaso2 = db.prepare(
-        `SELECT id, wc_order_id, tracking, numero_pedido, comprador, localidad FROM preparaciones
-         WHERE canal='web' AND woo_paso2_pendiente=1 ORDER BY id LIMIT 20`
-      ).all();
+        `SELECT id, wc_order_id, tracking, numero_pedido, comprador, localidad, woo_paso1_incierto FROM preparaciones
+         WHERE canal='web' AND woo_paso2_pendiente=1 ORDER BY id LIMIT ? OFFSET ?`
+      ).all(aMediasLimit, aMediasOffset);
       const aMedias = pendientesPaso2.map((row) => ({
         wc_order_id: row.wc_order_id,
         envio: {
@@ -1532,6 +1534,7 @@ export function preparacionRouter(db, cfg) {
         },
         preparacion_id: row.id,
         tracking: row.tracking || null,
+        incierto: !!row.woo_paso1_incierto,
       }));
 
       // Solo canal='web': esta pantalla trabaja exclusivamente el universo lpaandreani/
@@ -1562,6 +1565,9 @@ export function preparacionRouter(db, cfg) {
           sin_preparacion: sinPreparacion,
           a_medias: aMedias,
           a_medias_total: totalAMedias,
+          a_medias_offset: aMediasOffset,
+          a_medias_limit: aMediasLimit,
+          a_medias_has_more: aMediasOffset + aMedias.length < totalAMedias,
           despachados_sin_verificar: despachadosSinVerificar,
           cargados_hoy: cargadosHoy,
           truncado,
