@@ -806,7 +806,7 @@ export async function reintentarColgadosTracking(db, cfg) {
       if (prep.woo_paso1_incierto === 2 && status === (cfg.andreaniStatus || 'lpaandreani') && trackingEsperado) {
         await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', {
           status: 'completed',
-          meta_data: [{ key: TRACKING_META_KEY, value: trackingEsperado }],
+          meta_data: [meta?.id ? { id: meta.id, key: TRACKING_META_KEY, value: trackingEsperado } : { key: TRACKING_META_KEY, value: trackingEsperado }],
         });
         db.prepare('UPDATE preparaciones SET woo_paso1_incierto=1 WHERE id=?').run(prep.id);
         intencionRecuperada = true;
@@ -1668,7 +1668,10 @@ export function preparacionRouter(db, cfg) {
         );
         const row = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
         if (!row) throw new Error('No se pudo persistir la intención de tracking');
-        if (!prepExistente) claimPreparacion(db, row.id, req.user.username, cfg, new Date(), true);
+        if (!prepExistente) {
+          const claim = claimPreparacion(db, row.id, req.user.username, cfg, new Date(), true);
+          if (!claim.ok) throw Object.assign(new Error('No se pudo tomar la preparación'), { claim });
+        }
         return row;
       });
       persistirIntencion();
@@ -1699,7 +1702,10 @@ export function preparacionRouter(db, cfg) {
             );
             const row = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
             if (!row) throw new Error('No se pudo persistir el tracking incierto');
-            if (!prepExistente) claimPreparacion(db, row.id, req.user.username, cfg, new Date(), true);
+            if (!prepExistente) {
+              const claim = claimPreparacion(db, row.id, req.user.username, cfg, new Date(), true);
+              if (!claim.ok) throw Object.assign(new Error('No se pudo tomar la preparación'), { claim });
+            }
             return row;
           })();
           registrarEvento(db, { preparacionId: incierta.id, itemId: null, tipo: 'tracking_paso1_incierto', usuario: req.user?.username, detalle: { error: e.message, tracking } });
