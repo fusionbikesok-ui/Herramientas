@@ -2861,7 +2861,7 @@ async function pendientesMl(db, mlCfg) {
       if (elegibilidad.estado === 'inconcluso') clavesInconclusas.add(`ml:${orden.id}`);
       continue;
     }
-    const sla = calcularSlaPreparacion({ canal: 'ml', logisticType: envio.logistic_type, shipment: envio, ahora: new Date() });
+    const sla = calcularSlaPreparacion({ canal: 'ml', logisticType: envio.logistic_type, shipment: envio, horarios: leerHorarios(db), ahora: new Date() });
     if (sla.estado === 'excluido') continue;
 
     const ov = normalizarOrdenMl(orden);
@@ -2911,7 +2911,7 @@ function logSyncPedidos(db, estado, error) {
 }
 
 function upsertPedidoCache(db, row) {
-  const sla = row.sla || calcularSlaPreparacion({ canal: row.canal, logisticType: row.logistic_type, shipment: row.shipment, ahora: new Date() });
+  const sla = row.sla || calcularSlaPreparacion({ canal: row.canal, logisticType: row.logistic_type, shipment: row.shipment, horarios: leerHorarios(db), ahora: new Date() });
   const fechaDespacho = sla.fecha_local ?? null;
   const limiteDespacho = sla.limite ?? null;
   const estadoDespacho = sla.estado ?? null;
@@ -3174,7 +3174,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, envio?.logistic_type);
     return;
   }
-  const sla = calcularSlaPreparacion({ canal: 'ml', logisticType: envio?.logistic_type, shipment: envio, ahora: new Date() });
+  const sla = calcularSlaPreparacion({ canal: 'ml', logisticType: envio?.logistic_type, shipment: envio, horarios: leerHorarios(db), ahora: new Date() });
   if (sla.estado === 'excluido') return;
 
   const ov = normalizarOrdenMl(orden);

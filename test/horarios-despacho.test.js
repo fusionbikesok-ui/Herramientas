@@ -1,0 +1,226 @@
+import { describe, expect, it } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import fs from 'fs';
+import path from 'path';
+import { openDb } from '../db/index.js';
+import { preparacionRouter } from '../routes/preparacion.js';
+import { calcularFechaDespacho, fechaEstimadaShipment, fechaHoraEstimadaShipment, calcularSlaPreparacion, horaValida, normalizarHorarios, asegurarEsquemaHorarios } from '../lib/horariosDespacho.js';
+import { hashPassword, requireAuth } from '../lib/auth.js';
+import { buildApp } from '../server.js';
+import { permiteAcceso, resolvePermiso } from '../lib/permisos.js';
+
+const laborables = normalizarHorarios([]);
+
+describe('horarios de despacho', () => {
+  it('valida cortes HH:MM', () => {
+    expect(horaValida('16:00')).toBe(true);
+    expect(horaValida('24:00')).toBe(false);
+    expect(horaValida('4:00')).toBe(false);
+  });
+
+  it('propone el mismo día antes del corte y el siguiente después', () => {
+    expect(calcularFechaDespacho(laborables, new Date('2026-08-28T17:00:00Z'))).toBe('2026-08-28');
+    expect(calcularFechaDespacho(laborables, new Date('2026-08-28T20:30:00Z'))).toBe('2026-08-31');
+  });
+
+  it('salta fines de semana deshabilitados', () => {
+    expect(calcularFechaDespacho(laborables, new Date('2026-08-29T14:00:00Z'))).toBe('2026-08-31');
+  });
+
+  it('no rompe el sync si no hay días habilitados', () => {
+    expect(calcularFechaDespacho(laborables.map((h) => ({ ...h, habilitado: false })), new Date())).toBeNull();
+  });
+
+  it('usa solo el límite de preparación del shipment, no la fecha de entrega', () => {
+    expect(fechaEstimadaShipment({ date_estimated_delivery: '2026-09-03' })).toBeNull();
+    expect(fechaEstimadaShipment({ shipping_option: { estimated_handling_limit: { date: '2026-08-31T12:00:00Z' } } })).toBe('2026-08-31');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-09-01T23:59:59-03:00' } })).toBe('2026-09-01');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-09-01T00:30:00Z' } })).toBe('2026-08-31');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30' }, expected_date: '2026-09-02' })).toBe('2026-09-02');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30T00:30:00Z' }, expected_date: '2026-09-02' })).toBe('2026-09-02');
+    expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30' }, date_estimated_delivery: '2026-09-03' })).toBeNull();
+  });
+
+  it('conserva el timestamp del deadline de llegada y calcula 30 minutos de margen interno', () => {
+    const shipment = { sla: { expected_date: '2026-09-02T18:30:00.000Z' } };
+    expect(fechaHoraEstimadaShipment(shipment)).toMatchObject({ original: '2026-09-02T18:30:00.000Z', tieneHora: true });
+    expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'cross_docking', shipment, ahora: new Date('2026-09-02T14:00:00Z') })).toMatchObject({
+      limite: '2026-09-02T18:00:00.000Z', estado: 'activo', fuente: 'shipment_menos_30_min',
+    });
+  });
+
+  it('rechaza timestamp sin zona y calendario inválido', () => {
+    expect(fechaHoraEstimadaShipment({ sla: { expected_date: '2026-09-02T18:30:00' } })).toBeNull();
+    expect(fechaHoraEstimadaShipment({ sla: { expected_date: '2026-02-30T18:30:00Z' } })).toBeNull();
+    expect(fechaHoraEstimadaShipment({ sla: { expected_date: '2026-02-30' } })).toBeNull();
+  });
+
+  it('aplica bordes operativos de Flex y web, y falla cerrado sin SLA', () => {
+    expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'self_service', ahora: new Date('2026-09-02T20:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'FLEX_SALIDA_17:00_SUPERADA' });
+    expect(calcularSlaPreparacion({ canal: 'web', ahora: new Date('2026-09-02T18:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'WEB_CORTE_15:00_SUPERADO' });
+    expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'cross_docking', shipment: {}, ahora: new Date('2026-09-02T14:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'SLA_SHIPMENT_HORA_FALTANTE' });
+    expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'cross_docking', shipment: { sla: { expected_date: '2026-09-02' } }, ahora: new Date('2026-09-02T14:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'SLA_SHIPMENT_HORA_FALTANTE', limite: null });
+  });
+
+  it('expone y actualiza los siete días mediante el router', async () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-despacho.sqlite');
+    const db = openDb(file);
+    const app = express(); app.use(express.json());
+    app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    const inicial = await request(app).get('/api/preparacion/horarios-despacho');
+    expect(inicial.status).toBe(200);
+    expect(inicial.body.data).toHaveLength(7);
+    expect(inicial.body.version).toBe(1);
+    const horarios = inicial.body.data.map((h) => ({ ...h, habilitado: h.dia === 6, hora_corte: '15:30' }));
+    const guardado = await request(app).put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: inicial.body.version });
+    expect(guardado.status).toBe(200);
+    expect(guardado.body.version).toBe(2);
+    expect(guardado.body.data.find((h) => h.dia === 6)).toMatchObject({ habilitado: true, hora_corte: '15:30' });
+    const invalido = await request(app).put('/api/preparacion/horarios-despacho').send({ horarios: horarios.slice(0, 6), expected_version: 2 });
+    expect(invalido.status).toBe(422);
+    const ninguno = await request(app).put('/api/preparacion/horarios-despacho').send({ horarios: horarios.map((h) => ({ ...h, habilitado: false })), expected_version: 2 });
+    expect(ninguno.status).toBe(422);
+    const conflicto = await request(app).put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: 1 });
+    expect(conflicto.status).toBe(409);
+    db.close();
+    try { fs.unlinkSync(file); } catch {}
+  });
+
+  it('repite la migración 022 y asegura una base existente sin duplicar columnas', () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-migracion.sqlite');
+    const db = openDb(file);
+    db.exec('DROP TABLE IF EXISTS despacho_horarios; DROP TABLE IF EXISTS despacho_horarios_meta;');
+    db.exec(`CREATE TABLE pedidos_cache (clave TEXT PRIMARY KEY, estado_envio TEXT NOT NULL, items_json TEXT NOT NULL, actualizado_en TEXT NOT NULL)`);
+    db.exec(fs.readFileSync('migrations/032_despacho_horarios.sql', 'utf8'));
+    db.exec(fs.readFileSync('migrations/032_despacho_horarios.sql', 'utf8'));
+    asegurarEsquemaHorarios(db);
+    asegurarEsquemaHorarios(db);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM despacho_horarios").get().n).toBe(7);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('pedidos_cache') WHERE name='fecha_despacho'").get().n).toBe(1);
+    db.close(); try { fs.unlinkSync(file); } catch {}
+  });
+
+  it('inicia una base vacía sin alterar pedidos_cache inexistente y conserva idempotencia', () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-db-vacia.sqlite');
+    const primera = openDb(file);
+    expect(primera.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='pedidos_cache'").get().n).toBe(0);
+    primera.close();
+
+    const segunda = openDb(file);
+    expect(segunda.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='pedidos_cache'").get().n).toBe(0);
+    segunda.close();
+    try { fs.unlinkSync(file); } catch {}
+  });
+
+  it('rechaza una petición sin autenticación cuando se monta con el middleware real', async () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-auth.sqlite');
+    const db = openDb(file);
+    const app = express(); app.use(express.json());
+    app.use(requireAuth(db));
+    app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    const res = await request(app).get('/api/preparacion/horarios-despacho');
+    expect(res.status).toBe(401);
+    db.close(); try { fs.unlinkSync(file); } catch {}
+  });
+
+  it('exige permiso de escritura de Preparación para actualizar horarios', () => {
+    const requisito = resolvePermiso('PUT', '/preparacion/horarios-despacho');
+    expect(requisito).toMatchObject({ anyOf: ['preparacion'], nivel: 'write' });
+    expect(permiteAcceso([], requisito)).toBe(false);
+    expect(permiteAcceso([{ herramienta: 'preparacion', nivel: 'read' }], requisito)).toBe(false);
+    expect(permiteAcceso([{ herramienta: 'preparacion', nivel: 'write' }], requisito)).toBe(true);
+  });
+
+  it('aplica autorización HTTP real: sin permiso no lee ni actualiza', async () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-permiso-http.sqlite');
+    const db = openDb(file);
+    db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, 0, 1, ?, ?)`).run('operador-sin-permiso', hashPassword('test'), new Date().toISOString(), new Date().toISOString());
+    const app = express(); app.use(express.json());
+    app.use((req, res, next) => {
+      req.session = { userId: 1 };
+      next();
+    });
+    app.use(requireAuth(db));
+    app.use((req, res, next) => {
+      const permiso = resolvePermiso(req.method, req.path);
+      if (!permiteAcceso(req.user.permisos, permiso)) return res.status(403).json({ ok: false, error: 'Acceso no autorizado' });
+      return next();
+    });
+    app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    expect((await request(app).get('/api/preparacion/horarios-despacho')).status).toBe(403);
+    expect((await request(app).put('/api/preparacion/horarios-despacho').send({ horarios: [], expected_version: 1 })).status).toBe(403);
+    db.close(); try { fs.unlinkSync(file); } catch {}
+  });
+
+  it('registra usuario, versión y valores anterior/nuevo en auditoría', async () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-auditoria.sqlite');
+    const db = openDb(file);
+    const app = express(); app.use(express.json());
+    app.use((req, _res, next) => { req.user = { username: 'admin-prueba' }; next(); });
+    app.use('/api/preparacion', preparacionRouter(db, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    const inicial = await request(app).get('/api/preparacion/horarios-despacho');
+    const horarios = inicial.body.data.map((h) => ({ ...h, habilitado: h.dia === 1 ? true : h.habilitado, hora_corte: '15:00' }));
+    expect((await request(app).put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: 1 })).status).toBe(200);
+    const evento = db.prepare('SELECT * FROM despacho_horarios_auditoria ORDER BY id DESC LIMIT 1').get();
+    expect(evento.usuario).toBe('admin-prueba');
+    expect(evento.version_anterior).toBe(1);
+    expect(evento.version_nueva).toBe(2);
+    expect(JSON.parse(evento.valores_anteriores_json)).toHaveLength(7);
+    expect(JSON.parse(evento.valores_nuevos_json)).toHaveLength(7);
+    db.close(); try { fs.unlinkSync(file); } catch {}
+  });
+
+  it('aplica permisos con buildApp real para usuario limitado y administrador', async () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-buildapp.sqlite');
+    // Una ejecución interrumpida no debe contaminar la siguiente.
+    try { fs.unlinkSync(file); } catch {}
+    try { fs.unlinkSync(path.join(process.cwd(), 'test/sessions.sqlite')); } catch {}
+    const db = openDb(file);
+    const ts = new Date().toISOString();
+    const pass = hashPassword('secreto-test');
+    db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, ?, 1, ?, ?), (?, ?, ?, 1, ?, ?)`).run(
+      'horarios-limitado', pass, 0, ts, ts, 'horarios-admin', pass, 1, ts, ts,
+    );
+    db.close();
+    const app = buildApp({ dbPath: file, sessionSecret: 'session-test', mobileJwtSecret: 'x'.repeat(32), wooCfg: {}, mlCfg: {}, geminiKey: '' });
+    const limitado = request.agent(app);
+    const admin = request.agent(app);
+    expect((await limitado.post('/api/auth/login').send({ username: 'horarios-limitado', password: 'secreto-test' })).status).toBe(200);
+    expect((await admin.post('/api/auth/login').send({ username: 'horarios-admin', password: 'secreto-test' })).status).toBe(200);
+    expect((await limitado.get('/api/preparacion/horarios-despacho')).status).toBe(403);
+    const lectura = await admin.get('/api/preparacion/horarios-despacho');
+    expect(lectura.status).toBe(200);
+    const horarios = lectura.body.data.map((h) => ({ ...h, habilitado: h.dia === 1, hora_corte: '14:00' }));
+    expect((await admin.put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: lectura.body.version })).status).toBe(200);
+    expect((await limitado.put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: 2 })).status).toBe(403);
+    try { fs.unlinkSync(file); } catch {}
+    try { fs.unlinkSync(path.join(process.cwd(), 'test/sessions.sqlite')); } catch {}
+  });
+
+  it('resuelve dos actualizaciones concurrentes determinísticamente sin devolver 500', async () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-concurrencia.sqlite');
+    const dbA = openDb(file);
+    const dbB = openDb(file);
+    // Mantiene la prueba acotada: la contención debe resolverse como conflicto,
+    // no quedar esperando indefinidamente por el timeout global de SQLite.
+    dbA.pragma('busy_timeout = 100');
+    dbB.pragma('busy_timeout = 100');
+    const appA = express(); appA.use(express.json());
+    const appB = express(); appB.use(express.json());
+    appA.use('/api/preparacion', preparacionRouter(dbA, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    appB.use('/api/preparacion', preparacionRouter(dbB, { woo: null, ml: null, colaFotos: { disparoInmediato: false } }));
+    const horarios = (await request(appA).get('/api/preparacion/horarios-despacho')).body.data
+      .map((h) => ({ ...h, habilitado: h.dia === 1, hora_corte: '14:00' }));
+    const [a, b] = await Promise.all([
+      request(appA).put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: 1 }),
+      request(appB).put('/api/preparacion/horarios-despacho').send({ horarios, expected_version: 1 }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect([a, b].find((res) => res.status === 409).body.code).toBe('VERSION_CONFLICT');
+    expect(dbA.prepare('SELECT version FROM despacho_horarios_meta WHERE id=1').get().version).toBe(2);
+    dbA.close(); dbB.close(); try { fs.unlinkSync(file); } catch {}
+  });
+});
