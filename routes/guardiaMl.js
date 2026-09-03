@@ -2,6 +2,7 @@ import express from 'express';
 import { escanearGuardiaMl, estadoGuardiaMl, listarGuardiaMl, registrarEventoGuardia, encolarOperacionGuardia } from '../lib/guardiaMl.js';
 import { requireAdmin } from '../lib/auth.js';
 import { pausarPublicacionMl } from '../lib/matcherPush.js';
+import { perfilPublicacionMl } from '../lib/guardiaMlAprendizaje.js';
 function actor(req) { return req.user?.username || 'desconocido'; }
 function puedeResolver(req) {
   // El modelo vigente no persiste un rol nominal; la autorización efectiva es
@@ -16,7 +17,7 @@ export function guardiaMlRouter(db, cfg) {
   router.get('/casos', (req, res) => res.json({ ok:true, modo:estadoGuardiaMl(db).modo, data:listarGuardiaMl(db, { soloUrgentes:req.query.urgentes==='1' }) }));
   router.get('/casos/:id/opciones', (req, res) => {
     const caso = db.prepare(`SELECT g.id,g.clave,p.item_id,p.variation_id,p.titulo,p.variations_texto,p.seller_sku,
-      p.available_quantity,p.status,p.thumbnail,p.permalink
+      p.available_quantity,p.status,p.sub_status,p.color,p.talle,p.precio,p.precio_actualizado_en,p.catalogo,p.thumbnail,p.permalink
       FROM guardia_ml_casos g JOIN ml_publicaciones_cache p ON p.clave=g.clave
       WHERE g.id=?`).get(Number(req.params.id));
     if (!caso) return res.status(404).json({ ok:false, error:'caso no encontrado' });
@@ -32,13 +33,17 @@ export function guardiaMlRouter(db, cfg) {
       for (const token of tokens) { condiciones.push('LOWER(c.nombre) LIKE ?'); params.push(`%${token}%`); }
     }
     const filtro = condiciones.length ? `AND ${condiciones.join(' AND ')}` : '';
-    const opciones = db.prepare(`SELECT c.id_woo,c.sku,c.nombre,c.stock,c.img,c.marca,c.gtin,
-      CASE WHEN LOWER(COALESCE(c.sku,''))=LOWER(?) THEN 0 ELSE 1 END AS prioridad
+    const perfil = perfilPublicacionMl(caso);
+    const opciones = db.prepare(`SELECT c.id_woo,c.sku,c.nombre,c.stock,c.img,c.marca,c.gtin,c.tipo,
+      CASE WHEN LOWER(COALESCE(c.sku,''))=LOWER(?) THEN 0
+           WHEN EXISTS (SELECT 1 FROM guardia_ml_aprendizajes a WHERE a.perfil=? AND a.sku=c.sku) THEN 1
+           ELSE 2 END AS prioridad,
+      COALESCE((SELECT MAX(a.confirmaciones) FROM guardia_ml_aprendizajes a WHERE a.perfil=? AND a.sku=c.sku),0) AS confirmaciones_aprendizaje
       FROM catalogo_cache c
       WHERE trim(COALESCE(c.sku,''))<>''
         AND (SELECT COUNT(*) FROM catalogo_cache c2 WHERE c2.sku=c.sku)=1
         ${filtro}
-      ORDER BY prioridad ASC, c.nombre COLLATE NOCASE ASC LIMIT 30`).all(caso.seller_sku || '', ...params);
+      ORDER BY prioridad ASC, confirmaciones_aprendizaje DESC, c.nombre COLLATE NOCASE ASC LIMIT 30`).all(caso.seller_sku || '', perfil, perfil, ...params);
     res.json({ ok:true, data:{ publicacion:caso, opciones, busqueda: q || tokens.join(' ') } });
   });
   router.get('/casos/:id/eventos', (req, res) => {

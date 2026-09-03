@@ -51,16 +51,34 @@ try {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   const width = Number(process.env.UM1_VIEWPORT_WIDTH || 390);
   const page = await browser.newPage({ viewport: { width, height: width === 390 ? 844 : 900 } });
+  page.on('pageerror', (error) => console.error(`[browser-pageerror] ${error.message}`));
+  page.on('response', async (response) => {
+    if (response.url().includes('/api/guardia-ml') && response.status() >= 400) {
+      console.error(`[browser-api] ${response.status()} ${response.url()}`);
+    }
+  });
   await page.goto(`http://127.0.0.1:${port}/login/`);
   await page.locator('#user').fill('um1-e2-admin');
   await page.locator('#pass').fill('UM1-browser-only-123!');
   await page.locator('#btn').click();
-  await page.waitForURL(/herramientas\/home/);
+  // El servidor aislado escucha en raíz; el prefijo /herramientas/ lo agrega nginx
+  // únicamente en producción.
+  await page.waitForURL(/\/home\//);
   await page.goto(`http://127.0.0.1:${port}/guardia-ml/`);
   await page.waitForSelector('text=Guardia ML');
-  await page.getByText('Publicación de MercadoLibre').waitFor();
-  await page.getByLabel('Buscar producto Woo').waitFor();
+  await page.locator('button[data-view="resolver"]').waitFor();
+  await page.getByText('MercadoLibre · fuente', { exact: true }).waitFor();
+  await page.getByLabel('Buscar en Woo').waitFor();
   await page.getByText('Producto sin cobertura', { exact: true }).last().waitFor();
+  for (const [tab, title] of [
+    ['Investigar', 'Investigar antes de cambiar'],
+    ['Corregir catálogo', 'Corregir catálogo'],
+    ['Auditar cobertura', 'Auditar cobertura'],
+    ['Decisiones previas', 'Ventas retenidas'],
+  ]) {
+    await page.locator(`button[data-view="${tab === 'Corregir catálogo' ? 'catalogo' : tab === 'Auditar cobertura' ? 'cobertura' : tab === 'Decisiones previas' ? 'historial' : 'investigar'}"]`).click();
+    await page.getByRole('heading', { name: title, exact: true }).waitFor();
+  }
   const state = await page.evaluate(async (id) => ({
     casos: (await (await fetch('/api/guardia-ml/casos')).json()).data.length,
     retenidos: (await (await fetch('/api/guardia-ml/pedidos-retenidos')).json()).data.length,

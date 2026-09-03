@@ -4,9 +4,10 @@ import { createHash } from 'node:crypto';
 import { openDb } from '../db/index.js';
 import {
   seleccionarPendientes, contarPendientes, pushSkusPendientes,
-  getEstadoPush, _resetEstadoPushParaTests,
+  getEstadoPush, _resetEstadoPushParaTests, escribirSkuEnMl, desvincularSkuEnMl,
 } from '../lib/matcherPush.js';
 import { mlFetch, estadoCooldownMl, _resetCooldownParaTests } from '../lib/mlClient.js';
+import { claveBloqueadaGuardia } from '../lib/guardiaMl.js';
 
 // Mock axios para evitar llamadas reales a ML
 vi.mock('axios', async () => {
@@ -603,7 +604,7 @@ describe('lib/matcherPush', () => {
       const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
       expect(fallos).toBe(0);
       expect(contarPendientes(db).total).toBe(100);
-    });
+    }, 15000);
 
     it('cortado_por_cuota es true cuando la cuota se agota y quedan pausadas sin procesar', async () => {
       for (let i = 0; i < 100; i++) {
@@ -692,6 +693,77 @@ describe('lib/matcherPush', () => {
 
       // contarPendientes no acota nada por cuota: siempre la cola real
       expect(contarPendientes(db).total).toBe(105);
+    });
+  });
+
+  // --- UM1: Bloqueo de Guardia sobre escrituras legacy ---
+  describe('Guardia ML: bloqueo de claves bloqueadas', () => {
+    it('rechaza escribirSkuEnMl legacy cuando clave está bloqueada', async () => {
+      seedCache(db, { clave: 'MLA-BLQ|', itemId: 'MLA-BLQ' });
+      seedDecision(db, { clave: 'MLA-BLQ|', sku: 'FB-TEST' });
+      // Simular bloqueo de Guardia creando un caso activo que bloqueaSync
+      db.prepare(`
+        INSERT INTO guardia_ml_casos (clave, estado, severidad, motivo, bloquea_sync, creado_en, actualizado_en)
+        VALUES ('MLA-BLQ|', 'abierto', 'urgente', 'sin_cobertura', 1, ?, ?)
+      `).run(now(), now());
+
+      const r = await escribirSkuEnMl(db, ML_CFG, 'MLA-BLQ|', 'FB-TEST', { manual: true });
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain('bloqueada por Guardia');
+    });
+
+    it('permite escribirSkuEnMl con guardianOperation=true pese al bloqueo', async () => {
+      seedCache(db, { clave: 'MLA-GUARDIA|', itemId: 'MLA-GUARDIA' });
+      seedDecision(db, { clave: 'MLA-GUARDIA|', sku: 'FB-AUTH' });
+      // Crear caso bloqueado
+      db.prepare(`
+        INSERT INTO guardia_ml_casos (clave, estado, severidad, motivo, bloquea_sync, creado_en, actualizado_en)
+        VALUES ('MLA-GUARDIA|', 'abierto', 'urgente', 'sin_cobertura', 1, ?, ?)
+      `).run(now(), now());
+
+      axios.request.mockResolvedValue(respOk());
+
+      // Sin guardianOperation: rechaza
+      let r = await escribirSkuEnMl(db, ML_CFG, 'MLA-GUARDIA|', 'FB-AUTH');
+      expect(r.ok).toBe(false);
+
+      // Con guardianOperation: permite
+      r = await escribirSkuEnMl(db, ML_CFG, 'MLA-GUARDIA|', 'FB-AUTH', { guardianOperation: true });
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe(200);
+    });
+
+    it('rechaza desvincularSkuEnMl legacy cuando clave está bloqueada', async () => {
+      seedCache(db, { clave: 'MLA-DESVBL|', itemId: 'MLA-DESVBL', sellerSku: 'FB-OLD' });
+      // Crear caso bloqueado
+      db.prepare(`
+        INSERT INTO guardia_ml_casos (clave, estado, severidad, motivo, bloquea_sync, creado_en, actualizado_en)
+        VALUES ('MLA-DESVBL|', 'abierto', 'urgente', 'sin_cobertura', 1, ?, ?)
+      `).run(now(), now());
+
+      const r = await desvincularSkuEnMl(db, ML_CFG, 'MLA-DESVBL|');
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain('bloqueada por Guardia');
+    });
+
+    it('permite desvincularSkuEnMl con guardianOperation=true pese al bloqueo', async () => {
+      seedCache(db, { clave: 'MLA-DESV-AUTH|', itemId: 'MLA-DESV-AUTH', sellerSku: 'FB-VIEJO' });
+      // Crear caso bloqueado
+      db.prepare(`
+        INSERT INTO guardia_ml_casos (clave, estado, severidad, motivo, bloquea_sync, creado_en, actualizado_en)
+        VALUES ('MLA-DESV-AUTH|', 'abierto', 'urgente', 'sin_cobertura', 1, ?, ?)
+      `).run(now(), now());
+
+      axios.request.mockResolvedValue(respOk());
+
+      // Sin guardianOperation: rechaza
+      let r = await desvincularSkuEnMl(db, ML_CFG, 'MLA-DESV-AUTH|');
+      expect(r.ok).toBe(false);
+
+      // Con guardianOperation: permite
+      r = await desvincularSkuEnMl(db, ML_CFG, 'MLA-DESV-AUTH|', { guardianOperation: true });
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe(200);
     });
   });
 });

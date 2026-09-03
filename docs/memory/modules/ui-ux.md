@@ -34,6 +34,7 @@
   Una ubicación sin línea base se muestra como tal, nunca como cero inventado.
 - La App móvil se valida primero en iPhone; Android queda fuera hasta demanda concreta. Stock móvil usa tareas, movimientos y conteos, no edición absoluta directa.
 - Objetivos medibles: listas/filtros ≤2 s, feedback de escaneo <500 ms, preview/progreso de foto inmediato y confirmación objetivo ≤10 s; controles principales de una mano y al menos 44 px.
+- Guardia ML presenta intenciones separadas para resolver urgencias, investigar, corregir catálogo, auditar cobertura y revisar decisiones previas. La comparación muestra la ficha ML y candidatos Woo en paralelo, con estados de lectura y acciones diferenciados; no presupone que toda visita sea una vinculación.
 
 ## Cuándo actualizar
 

@@ -6,7 +6,7 @@ import {
   construirWC, construirMLdesdeApi, candidatosDeItem, derivarEstadoApi,
 } from '../lib/matcherResolver.js';
 import {
-  escribirSkuEnMl, contarPendientes, pushSkusPendientes, getEstadoPush,
+  contarPendientes, getEstadoPush,
 } from '../lib/matcherPush.js';
 import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
@@ -740,22 +740,20 @@ export function matcherRouter(db, cfg) {
     res.json({ ok: true, data });
   });
 
-  router.post('/decisiones', (req, res) => {
-    const { decisiones } = req.body;
-    if (!decisiones || typeof decisiones !== 'object') {
-      return res.status(400).json({ ok: false, error: 'decisiones requeridas' });
-    }
-    const now = new Date().toISOString();
-    const stmt = db.prepare(
-      'INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
-    );
-    const upsertAll = db.transaction((entries) => {
-      for (const [clave, d] of entries) {
-        if (d && d.accion) stmt.run(clave, d.sku || null, d.wc_nombre || null, d.accion, now);
+  router.post('/decisiones', (_req, res) => {
+    // UM1: esta ruta legacy de mutación directa está bloqueada. Todas las escrituras de
+    // vínculo, pausa y seller_sku deben pasar por el servicio Guardia para mantener la
+    // auditoría y la coherencia del estado de cobertura.
+    return res.status(410).json({
+      ok: false,
+      error: 'Ruta de mutación legacy bloqueada para UM1 (cobertura única)',
+      migracion: 'Las decisiones de vínculo deben hacerse vía /api/guardia-ml/casos/:id/vincular (requiere Guardia habilitada)',
+      detalles: {
+        old_endpoint: 'POST /api/matcher/decisiones',
+        new_flow: 'Accedé a Guardia ML en el frontend → localizá el caso urgente → seleccioná "Vincular" → indicá el SKU Woo',
+        direct_api: 'POST /api/guardia-ml/casos/{casoId}/vincular con {sku} en body'
       }
     });
-    upsertAll(Object.entries(decisiones));
-    res.json({ ok: true });
   });
 
   // Arranca el refresco de publicaciones y devuelve 202 sin bloquear (evita el timeout de
@@ -786,17 +784,11 @@ export function matcherRouter(db, cfg) {
 
   // Escribe el SKU de UNA decisión en la publicación de ML (usado al confirmar)
   router.post('/push-sku', async (req, res) => {
-    const { clave, sku } = req.body || {};
-    if (!clave || !sku || !/^FB-\d+$/.test(String(sku))) {
-      return res.status(400).json({ ok: false, error: 'clave y sku (FB-xxx) requeridos' });
-    }
-    try {
-      // manual: true — escritura disparada por el usuario al confirmar un match.
-      const r = await escribirSkuEnMl(db, mlCfg, clave, sku, { manual: true });
-      res.json({ ok: r.ok, ...r });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
+    return res.status(410).json({
+      ok: false,
+      error: 'Push legacy bloqueado: toda escritura de seller_sku debe originarse en una operación durable de Guardia ML',
+      migracion: 'POST /api/guardia-ml/casos/:id/vincular',
+    });
   });
 
   // Arranca la escritura en ML de las decisiones mapeadas pendientes en background (mismo
@@ -810,12 +802,11 @@ export function matcherRouter(db, cfg) {
   // manual IGNORA la cuota de pausadas (cuotaPausadas: null) porque el usuario disparó la
   // acción a propósito y está esperando el resultado completo.
   router.post('/push-skus-pendientes', (req, res) => {
-    if (getEstadoPush().running) {
-      return res.status(409).json({ ok: false, running: true, error: 'Ya hay un push en curso' });
-    }
-    pushSkusPendientes(db, mlCfg, { cuotaPausadas: null })
-      .catch(err => console.error('push SKUs matcher error:', err.message));
-    res.status(202).json({ ok: true, running: true, cuota_pausadas_ignorada: true });
+    return res.status(410).json({
+      ok: false,
+      error: 'Push masivo legacy bloqueado: Guardia procesa únicamente operaciones encoladas y auditadas',
+      migracion: 'POST /api/guardia-ml/casos/:id/vincular',
+    });
   });
 
   // Estado del push (para sondeo del frontend, y para ver el resultado del último ciclo
@@ -827,8 +818,11 @@ export function matcherRouter(db, cfg) {
   // Cuántas decisiones tienen SKU pendiente de escribir en ML. Incluye activas Y pausadas
   // (las pausadas también se escriben; las activas van primero en la cola de push).
   router.get('/push-skus-pendientes/count', (req, res) => {
-    const { total, activas, pausadas, enEspera } = contarPendientes(db);
-    res.json({ ok: true, pendientes: total, activas, pausadas, en_espera: enEspera });
+    res.status(410).json({
+      ok: false,
+      error: 'La cola de push legacy fue retirada; consultar y accionar desde Guardia ML',
+      migracion: 'GET /api/guardia-ml/casos',
+    });
   });
 
   // Listado (solo lectura) de las decisiones pendientes de escribir en ML — mismo filtro
