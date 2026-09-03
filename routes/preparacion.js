@@ -1603,7 +1603,11 @@ export function preparacionRouter(db, cfg) {
     if (!tracking) return res.status(400).json({ ok: false, error: 'tracking requerido' });
     if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
-    if (prepExistente && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
+    // Cargar tracking es una acción de despacho: Administración (y el rol de
+    // despacho cuando está habilitado por el middleware) puede resolverla aunque
+    // no haya tomado la preparación. Un operario de preparación sigue necesitando
+    // su claim vigente para no usurpar la tarea de otro.
+    if (prepExistente && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
@@ -1634,10 +1638,32 @@ export function preparacionRouter(db, cfg) {
       // así no se reenvía el mail al cliente.
       const yaCompletadoMismoTracking = statusActual === 'completed' && trackingGuardado === tracking;
       if (!yaCompletadoMismoTracking) {
-        await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
-          status: 'completed',
-          meta_data: [metaEntry],
-        });
+        try {
+          await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
+            status: 'completed',
+            meta_data: [metaEntry],
+          });
+        } catch (e) {
+          // La respuesta del PUT es incierta: Woo puede haber guardado el
+          // tracking aunque la conexión haya vencido. Persistimos la fila local
+          // como pendiente/incerta y evitamos el PUT2 hasta reconciliar por GET.
+          const incierta = db.transaction(() => {
+            db.prepare(`INSERT INTO preparaciones
+              (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, woo_paso1_incierto, tracking)
+              VALUES ('web', ?, ?, ?, ?, ?, 1, 'en_preparacion', ?, 1, 1, ?)
+              ON CONFLICT(clave) DO UPDATE SET woo_paso2_pendiente=1, woo_paso1_incierto=1, tracking=excluded.tracking`).run(
+              `web:${wcOrderId}`, wcOrderId, String(actual.data.number ?? wcOrderId),
+              `${actual.data.billing?.first_name || ''} ${actual.data.billing?.last_name || ''}`.trim() || null,
+              actual.data.shipping?.city || actual.data.billing?.city || null, now(), tracking,
+            );
+            const row = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+            if (!row) throw new Error('No se pudo persistir el tracking incierto');
+            if (!prepExistente) claimPreparacion(db, row.id, req.user.username, cfg, new Date(), true);
+            return row;
+          })();
+          registrarEvento(db, { preparacionId: incierta.id, itemId: null, tipo: 'tracking_paso1_incierto', usuario: req.user?.username, detalle: { error: e.message, tracking } });
+          return res.status(502).json({ ok: false, colgado: true, incierto: true, error: 'no se pudo confirmar si Woo guardó el tracking; queda pendiente de reconciliación' });
+        }
       }
       // Registro local ANTES del paso 2: si el paso 2 falla, igual queda constancia de
       // que el pedido llegó a 'completed' con tracking guardado — sin esto, la única
