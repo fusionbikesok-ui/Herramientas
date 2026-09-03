@@ -53,6 +53,21 @@ Completar la vista de lectura de excepciones, stock compartido y retenciones, ag
 
 `npm run audit` (sin escrituras externas) informó 4 decisiones activas con SKU inexistente en Woo, 82 publicaciones activas sin `seller_sku`, 20 saldos negativos en catálogo y 511 SKUs presentes en más de una publicación. Son hallazgos para Guardia/Corrección; no constituyen confirmación ni deben corregirse masivamente sin revisión humana.
 
+## Matriz de alcance del worktree aislado
+
+El worktree de validación contiene un corte vertical de integración. La revisión debe
+clasificar sus archivos para no confundir soporte compartido con resultado UM1:
+
+| Grupo | Alcance | Motivo | Gate |
+| --- | --- | --- | --- |
+| Núcleo UM1 | `lib/guardiaMl.js`, `routes/guardiaMl.js`, migraciones 059–061 | Cobertura, retención, claims y operaciones ML | UM1 |
+| Integración necesaria | `db/index.js`, `server.js`, `lib/mlClient.js`, `lib/mlMapeo.js`, `routes/matcher.js`, `routes/sync.js` | Bootstrap, contratos ML/Woo y bloqueo de sync | UM1 + E11 |
+| Aceptación UM1 | `public/guardia-ml/index.html`, `scripts/um1-*`, `test/guardia-ml.test.js` | UI y pruebas reproducibles | UM1 |
+| Fuera de aceptación | E1–E4, móvil, etiquetas y notificaciones | Dependencias preexistentes del checkout | Entregas respectivas |
+
+La existencia de este corte no autoriza merge: primero debe congelarse la base común y
+verificarse que los grupos fuera de aceptación no cambien contratos accidentalmente.
+
 ## Checkpoint para el próximo agente
 
 Base: checkout `/opt/fusionbikes/herramientas`, sin despliegue. Reproducir con `npm run um1:demo`, `npm run e2e:um1:responsive` y `npx vitest run test/guardia-ml.test.js`. Próximos pasos: probar autorización con usuarios reales del modelo `user_permisos`, completar la revisión de los 4/82/20/511 hallazgos, y solicitar autorización del Administrador designado antes de cambiar `guardia_ml_config.modo` a `acciones`. No usar la base `data/fusion.sqlite` para demos ni ejecutar escrituras hacia ML durante el gate.
