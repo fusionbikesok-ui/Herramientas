@@ -92,7 +92,8 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
   trabajos, diagnóstico/presupuesto y repuestos con estados versionados. La bandeja `/taller/`
   permite consultar, cargar diagnóstico/presupuesto y avanzar estados con `expected_version` e
   idempotencia. E20 registra consumo instalado como salida contable y devolución como entrada
-  inversa desde ubicación, enlazados al repuesto e idempotentes; faltan venta Woo, tarifas,
+  inversa desde ubicación, enlazados al repuesto e idempotentes. La venta del service ya tiene
+  outbox durable idempotente para Woo, pero aún falta el worker/adaptador remoto, tarifas,
   checklists y piloto.
 
 - E19 inició su núcleo durable en `warranty_cases`/`warranty_events`: alta idempotente,
