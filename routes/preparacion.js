@@ -2443,6 +2443,9 @@ export function preparacionRouter(db, cfg) {
           return res.json({ ok: true, foto: existente, idempotente: true });
         }
       }
+      // La transacción puede fallar después de escribir el archivo (por ejemplo,
+      // si falla la auditoría). No dejar un original sin fila rastreable.
+      try { fs.unlinkSync(rutaAbsoluta(saved.url)); } catch (_) {}
       throw e;
     }
 
