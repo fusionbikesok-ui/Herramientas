@@ -16,7 +16,7 @@ Actualizado: 2026-09-03. Estas fichas registran realidad; el plan maestro especi
 | E9 | Familias, identidad y rollout | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E9.md` |
 | E10 | Libro, transferencias y ajustes | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E10.md` |
 | E11 | Compromisos y sincronización | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E11.md` |
-| E12 | Picking, faltantes y reasignación | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E12.md` |
+| E12 | Picking, faltantes y reasignación | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E12.md` |
 | E13 | Infraestructura de piso offline | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E13.md` |
 | E14 | Recepción trazable VPS | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E14.md` |
 | E15 | Recepción iPhone | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E15.md` |
