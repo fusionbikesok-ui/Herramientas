@@ -598,6 +598,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('workshop_stock_movements_078')").run();
     })();
   }
+  const workshopWooMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='workshop_woo_outbox_079'").get();
+  if (!workshopWooMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '079_workshop_woo_outbox.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('workshop_woo_outbox_079')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
