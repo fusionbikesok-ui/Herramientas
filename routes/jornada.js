@@ -255,7 +255,7 @@ export function jornadaRouter(db, cfg) {
   router.post('/ola/:id/faltante', (req,res) => { const u=usuario(req,res); if(!u)return; responder(res,registrarFaltante(db,Number(req.params.id),req.body||{},u,bodyOptions(req))); });
   router.post('/faltante/:id/resolver', (req,res) => { const u=usuario(req,res); if(!u)return; if(!puedeSupervisar(req))return res.status(403).json({ok:false,code:'FORBIDDEN',error:'Requiere permiso de supervisor'}); responder(res,resolverFaltante(db,Number(req.params.id),u,{...bodyOptions(req),allowWithoutClaim:true,resolucion:req.body?.resolucion,nota:req.body?.nota})); });
   router.post('/retorno/:id/completar', (req,res) => { const u=usuario(req,res); if(!u)return; responder(res,completarRetorno(db,Number(req.params.id),u,bodyOptions(req))); });
-  router.post('/ola/:id/cerrar', (req,res) => { const u=usuario(req,res); if(!u)return; responder(res,cerrarOla(db,Number(req.params.id),u,{...bodyOptions(req),derivados:req.body?.derivados||[]})); });
+  router.post('/ola/:id/cerrar', (req,res) => { const u=usuario(req,res); if(!u)return; if(!puedeSupervisar(req))return res.status(403).json({ok:false,code:'FORBIDDEN',error:'Requiere permiso de supervisor o despacho'}); responder(res,cerrarOla(db,Number(req.params.id),u,{...bodyOptions(req),derivados:req.body?.derivados||[]})); });
   router.get('/ola/:id/eventos', (req,res) => { if (!req.user?.username) return res.status(401).json({ok:false,code:'AUTH_REQUIRED'}); if (!puedeAuditar(req)) return res.status(403).json({ok:false,code:'FORBIDDEN'}); res.json({ ok:true, eventos:eventosJornada(db,Number(req.params.id)) }); });
 
   router.get('/olas', (req, res) => {
