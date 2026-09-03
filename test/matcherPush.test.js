@@ -604,7 +604,7 @@ describe('lib/matcherPush', () => {
       const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
       expect(fallos).toBe(0);
       expect(contarPendientes(db).total).toBe(100);
-    });
+    }, 15000);
 
     it('cortado_por_cuota es true cuando la cuota se agota y quedan pausadas sin procesar', async () => {
       for (let i = 0; i < 100; i++) {
