@@ -224,6 +224,10 @@ function ensureTables(db) {
     dia INTEGER PRIMARY KEY CHECK (dia BETWEEN 1 AND 7), habilitado INTEGER NOT NULL DEFAULT 0 CHECK (habilitado IN (0,1)),
     hora_corte TEXT NOT NULL DEFAULT '16:00', actualizado_en TEXT NOT NULL
   )`).run(); sembrarHorarios(db); } catch (e) { console.error('ensureTables despacho_horarios:', e.message); }
+  // La migración histórica puede ejecutarse antes de que exista la tabla en una base
+  // nueva; garantizar aquí la columna evita que el contrato de resultado incierto
+  // dependa del orden de inicialización.
+  try { db.prepare('ALTER TABLE preparaciones ADD COLUMN woo_paso1_incierto INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { if (!/duplicate column/i.test(e.message)) console.error('ensureTables woo_paso1_incierto:', e.message); }
   // pack_id acá también: pedidos_cache es lo que alimenta tanto "A preparar" como el
   // Historial, así que es el único lugar donde ponerlo hace que el número que se lee en ML
   // sea encontrable en las dos pantallas (ver el comentario de preparaciones.pack_id).
