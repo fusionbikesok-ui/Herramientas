@@ -368,6 +368,7 @@ describe('preparacion flujo', () => {
     for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} }
     db = openDb(TEST_DB);
     app = buildTestApp(db);
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -1324,6 +1325,8 @@ describe('preparacion flujo', () => {
   });
 
   it('POST /corregir-tracking: mismo valor es no-op, no llama PUT', async () => {
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en)
+      VALUES ('web','web:904',904,1,'completada',?)`).run(new Date().toISOString());
     wooFetch.mockResolvedValueOnce({ data: {
       status: 'enviadoandreani',
       meta_data: [{ id: 5, key: '_andreani_tracking', value: 'AND111' }],
