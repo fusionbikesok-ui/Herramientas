@@ -56,6 +56,8 @@ try {
   const zone = configurarZona(db, { nombre:'Zona demo' }, 'demo2', { operationId:'demo-zone' }, now);
   const help = pedirAyudaZona(db, wave2, { zonaId:zone.zona.id, ayudante:'ayudante-demo' }, 'demo2', { operationId:'demo-help', expectedVersion:shortageClaim.olaCongelada.expected_version }, now);
   if (!help.ok) throw new Error(`help request: ${help.code}`);
+  const unauthorizedHelp = recibirAyudaZona(db, help.ayuda.id, 'intruso', { operationId:'demo-help-unauthorized', expectedVersion:help.ola.expected_version, entrega:[{ sku:'SKU-FALTANTE', cantidad:1 }] }, now);
+  if (unauthorizedHelp.ok || !['CLAIM_REQUIRED','WAVE_CLAIM_REQUIRED','FORBIDDEN'].includes(unauthorizedHelp.code)) throw new Error('unauthorized helper was accepted');
   const received = recibirAyudaZona(db, help.ayuda.id, 'demo2', { operationId:'demo-help-receive', expectedVersion:help.ola.expected_version, entrega:[{ sku:'SKU-FALTANTE', cantidad:1 }] }, now);
   if (!received.ok) throw new Error(`help receive: ${received.code}`);
   if (!iniciarBusqueda(db, wave2, 'demo2', { operationId:'demo-shortage-search' }, now).ok) throw new Error('shortage search failed');
@@ -87,7 +89,7 @@ try {
   const stalePause = pausarOla(db, wave2, 'demo2', { operationId:'demo-stale-pause', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave2).expected_version, motivo:'claim vencido' }, now);
   if (!oldClaim || !recovered.ok || stalePause.code !== 'CLAIM_REQUIRED') throw new Error('expired claim was not recovered safely');
   const eventCount = db.prepare('SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=?').get(wave).n;
-  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, mini_ola_normal_separada:true, claim_vencido_recuperado:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, cierre_incompleto_rechazado:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, sustitucion_resuelta:true, cancelacion_resuelta:true, replay_faltante:true, eventos:eventCount }));
+  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, mini_ola_normal_separada:true, claim_vencido_recuperado:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, cierre_incompleto_rechazado:true, replay_cierre:true, ayuda_no_autorizada_rechazada:true, ayuda_recibida:true, faltante_resuelto:true, sustitucion_resuelta:true, cancelacion_resuelta:true, replay_faltante:true, eventos:eventCount }));
 } finally {
   db.close();
   fs.rmSync(dir, { recursive:true, force:true });
