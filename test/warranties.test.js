@@ -1,0 +1,8 @@
+import { describe,it,expect,afterEach } from 'vitest';
+import fs from 'fs';
+import { openDb } from '../db/index.js';
+import { crearGarantia,listarGarantias,cambiarGarantia,agregarEventoGarantia,listarEventosGarantia } from '../lib/warranties.js';
+const FILE='./test/tmp-warranties.sqlite';
+describe('E19 — garantías',()=>{let db;afterEach(()=>{try{db.close()}catch{};for(const f of [FILE,`${FILE}-shm`,`${FILE}-wal`])if(fs.existsSync(f))fs.unlinkSync(f)})
+it('crea caso, timeline y cambios versionados',()=>{db=openDb(FILE);const c=crearGarantia(db,{pedido_id:'P-1',sku:'FB-X',motivo:'No funciona',responsable:'ventas',creado_por:'ana',operation_id:'w-1'});expect(c.ok).toBe(true);expect(crearGarantia(db,{motivo:'x',responsable:'ventas',creado_por:'ana',operation_id:'w-1'}).repetido).toBe(true);const e=agregarEventoGarantia(db,c.caso.id,{tipo:'mensaje',nota:'Cliente contactado',actor:'ana',operation_id:'we-1'});expect(e.ok).toBe(true);const s=cambiarGarantia(db,c.caso.id,{expected_version:1,estado:'esperando_producto',nota:'Esperar ingreso',actor:'ana',operation_id:'ws-1'});expect(s.caso.estado).toBe('esperando_producto');expect(cambiarGarantia(db,c.caso.id,{expected_version:1,estado:'cerrado',nota:'vieja',actor:'ana',operation_id:'ws-bad'}).code).toBe('VERSION_CONFLICT');expect(listarGarantias(db)).toHaveLength(1);expect(listarEventosGarantia(db,c.caso.id)).toHaveLength(2)})
+});
