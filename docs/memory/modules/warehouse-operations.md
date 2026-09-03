@@ -92,7 +92,8 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
   estados versionados y timeline mediante `/api/warranties`. Continúa en desarrollo; faltan
   inspección, referencias de evidencia y compromisos de reemplazo separados del stock; faltan
   consumo/liberación en el ledger, carga real de adjuntos, Woo, UI y E2E; consumir un compromiso
-  ya crea un outbox Woo durable con delta negativo, sin llamada remota dentro de la transacción.
+  ya crea un outbox Woo durable con delta negativo, sin llamada remota dentro de la transacción;
+  `procesarWooOutboxGarantia` lo reclama, reintenta y confirma/falla con un adaptador aislable.
 
 - Si Woo está caído, los cambios pendientes son durables e idempotentes; no se publican aumentos
   hasta reconciliar.
