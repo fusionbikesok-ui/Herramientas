@@ -14,7 +14,7 @@ Actualizado: 2026-09-03. Estas fichas registran realidad; el plan maestro especi
 | E7 | Turnos y reemplazos | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E7.md` |
 | E8 | Consulta rápida de stock | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E8.md` |
 | E9 | Familias, identidad y rollout | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E9.md` |
-| E10 | Libro, transferencias y ajustes | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E10.md` |
+| E10 | Libro, transferencias y ajustes | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E10.md` |
 | E11 | Compromisos y sincronización | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E11.md` |
 | E12 | Picking, faltantes y reasignación | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E12.md` |
 | E13 | Infraestructura de piso offline | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E13.md` |
