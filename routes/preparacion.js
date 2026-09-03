@@ -1643,6 +1643,27 @@ export function preparacionRouter(db, cfg) {
         ? { id: metaExistente.id, key: TRACKING_META_KEY, value: tracking }
         : { key: TRACKING_META_KEY, value: tracking };
 
+      // Registrar la intención antes del primer PUT deja un ancla durable para
+      // reconciliar incluso si Woo acepta la escritura y el proceso cae antes de
+      // completar la persistencia posterior. Si esta escritura local falla, no se
+      // toca Woo: es preferible no iniciar el efecto remoto sin una recuperación.
+      const persistirIntencion = db.transaction(() => {
+        db.prepare(`INSERT INTO preparaciones
+          (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, tracking)
+          VALUES ('web', ?, ?, ?, ?, ?, 1, 'en_preparacion', ?, 1, ?)
+          ON CONFLICT(clave) DO UPDATE SET woo_paso2_pendiente=1, tracking=excluded.tracking,
+            numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, localidad=excluded.localidad`).run(
+          `web:${wcOrderId}`, wcOrderId, String(actual.data.number ?? wcOrderId),
+          `${actual.data.billing?.first_name || ''} ${actual.data.billing?.last_name || ''}`.trim() || null,
+          actual.data.shipping?.city || actual.data.billing?.city || null, now(), tracking,
+        );
+        const row = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+        if (!row) throw new Error('No se pudo persistir la intención de tracking');
+        if (!prepExistente) claimPreparacion(db, row.id, req.user.username, cfg, new Date(), true);
+        return row;
+      });
+      persistirIntencion();
+
       // Paso 1: guarda el tracking y pasa a 'completed' (dispara el mail nativo de WooCommerce).
       // Se saltea cuando el pedido ya está en 'completed' con el mismo tracking (reintento):
       // así no se reenvía el mail al cliente.
