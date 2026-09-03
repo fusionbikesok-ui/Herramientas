@@ -1,0 +1,443 @@
+import express from 'express';
+import { mlFetch } from '../lib/mlClient.js';
+import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs';
+
+// Notificaciones ML (webhooks): preguntas, mensajes y reclamos sin resolver.
+// Ver docs/superpowers/plans (sesión 2026-08-26) — la app de ML tiene TODOS los topics
+// seleccionados en el panel; POST /api/ml/notificacion (server.js) filtra por topic y solo
+// procesa los que ya tienen función acá (`questions`, `messages`, `claims`, `post_purchase`). Sumar un topic nuevo
+// es: función acá + un `if (topic===...)` en server.js, sin volver a tocar el panel de ML.
+//
+// Alcance decidido con el usuario: solo LISTAR con "hace cuánto" y link directo a
+// Mercado Libre para responder ahí — no se responde desde esta herramienta.
+
+const now = () => new Date().toISOString();
+
+function upsertInboxUnico(db, { eventId, resourceId, title, preview, at, occurredAt = at, payloadVersion = 'v1', leaseGuard = null }) {
+  if (leaseGuard && !leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+  const existente = db.prepare("SELECT inbox_id, event_id, status, version, updated_at FROM inbox_items WHERE channel='ml' AND resource_id=? ORDER BY inbox_id LIMIT 1").get(String(resourceId));
+  if (existente) {
+    const anterior = db.prepare('SELECT occurred_at, payload_version FROM integration_events WHERE event_id=?').get(existente.event_id);
+    const incomingVersion = Number.parseInt(String(payloadVersion).replace(/\D/g, ''), 10) || 1;
+    const previousVersion = Number.parseInt(String(anterior?.payload_version || 'v1').replace(/\D/g, ''), 10) || 1;
+    const newer = incomingVersion > previousVersion
+      || (incomingVersion === previousVersion && String(occurredAt || '') > String(anterior?.occurred_at || ''));
+    if (!newer) return existente.event_id;
+    if (leaseGuard && !leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+    db.prepare(`UPDATE inbox_items SET event_id=?, title=?, preview=?, version=version+1, updated_at=? WHERE inbox_id=?`)
+      .run(eventId, title, preview || null, at, existente.inbox_id);
+    return existente.inbox_id;
+  }
+  if (leaseGuard && !leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+  return db.prepare(`INSERT OR IGNORE INTO inbox_items
+    (event_id,channel,resource_id,title,preview,status,version,created_at,updated_at)
+    VALUES (?,?,?,?,?,'unread',1,?,?)`).run(eventId, 'ml', String(resourceId), title, preview || null, at, at).lastInsertRowid;
+}
+
+function proyectarClaimEnBackbone(db, { claimId, estado, titulo, detalle, ocurridoEn, backboneEvent = null }, txDb = null) {
+  const target = txDb || db;
+  const recibidoEn = now();
+  const dedupeKey = `ml:claim:${claimId}:${estado}`;
+  const eventId = `ml-claim-${claimId}-${estado}`;
+  const correlationId = `ml-claim-${claimId}`;
+  const guardar = () => {
+    if (backboneEvent) {
+      upsertInboxUnico(target, { eventId: backboneEvent.event_id, resourceId: `claim:${claimId}`,
+        title: titulo || `Reclamo ${claimId}`, preview: detalle, at: backboneEvent.occurred_at || ocurridoEn || recibidoEn,
+        occurredAt: backboneEvent.occurred_at || ocurridoEn || recibidoEn, payloadVersion: backboneEvent.payload_version || 'v1' });
+      return;
+    }
+    target.prepare(`INSERT OR IGNORE INTO integration_events
+      (event_id,event_type,channel,source,external_event_id,resource_id,payload_version,
+       occurred_at,received_at,correlation_id,dedupe_key,metadata_json,status)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      eventId, 'claim.received', 'ml', 'mercadolibre', claimId, claimId, 'v1',
+      ocurridoEn || recibidoEn, recibidoEn, correlationId, dedupeKey,
+      JSON.stringify({ estado, titulo: titulo || null }), 'pending'
+    );
+    const evento = backboneEvent
+      ? target.prepare('SELECT event_id FROM integration_events WHERE event_id = ?').get(backboneEvent.event_id)
+      : target.prepare('SELECT event_id FROM integration_events WHERE dedupe_key = ?').get(dedupeKey);
+    if (!evento) return;
+    target.prepare(`INSERT OR IGNORE INTO integration_jobs
+      (event_id,job_type,available_at) VALUES (?,?,?)`).run(evento.event_id, 'claim.project', recibidoEn);
+    target.prepare(`INSERT OR IGNORE INTO integration_event_history
+      (event_id,stage,to_status,resource_id,correlation_id,safe_message,created_at)
+      VALUES (?,?,?,?,?,?,?)`).run(evento.event_id, 'event.persist', 'pending', claimId,
+      correlationId, 'claim durable recibido', recibidoEn);
+    upsertInboxUnico(target, { eventId: evento.event_id, resourceId: `claim:${claimId}`,
+      title: titulo || `Reclamo ${claimId}`, preview: detalle, at: ocurridoEn || recibidoEn, occurredAt: ocurridoEn || recibidoEn, payloadVersion: 'v1' });
+  };
+  (txDb ? guardar : db.transaction(guardar))();
+}
+
+function proyectarPreguntaEnBackbone(db, { preguntaId, estado, texto, itemId, ocurridoEn, backboneEvent = null }, txDb = null) {
+  const target = txDb || db;
+  const recibidoEn = now();
+  const dedupeKey = `ml:question:${preguntaId}:${estado}`;
+  const eventId = `ml-question-${preguntaId}-${estado}`;
+  const correlationId = `ml-question-${preguntaId}`;
+  const guardar = () => {
+    if (backboneEvent) {
+      upsertInboxUnico(target, { eventId: backboneEvent.event_id, resourceId: `question:${preguntaId}`,
+        title: `Pregunta ML${itemId ? ` · ${itemId}` : ''}`, preview: texto, at: backboneEvent.occurred_at || ocurridoEn || recibidoEn,
+        occurredAt: backboneEvent.occurred_at || ocurridoEn || recibidoEn, payloadVersion: backboneEvent.payload_version || 'v1' });
+      return;
+    }
+    target.prepare(`INSERT OR IGNORE INTO integration_events
+      (event_id,event_type,channel,source,external_event_id,resource_id,payload_version,
+       occurred_at,received_at,correlation_id,dedupe_key,metadata_json,status)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      eventId, 'question.received', 'ml', 'mercadolibre', String(preguntaId), String(preguntaId), 'v1',
+      ocurridoEn || recibidoEn, recibidoEn, correlationId, dedupeKey,
+      JSON.stringify({ estado, item_id: itemId || null }), 'pending'
+    );
+    const evento = backboneEvent
+      ? target.prepare('SELECT event_id FROM integration_events WHERE event_id = ?').get(backboneEvent.event_id)
+      : target.prepare('SELECT event_id FROM integration_events WHERE dedupe_key = ?').get(dedupeKey);
+    if (!evento) return;
+    target.prepare(`INSERT OR IGNORE INTO integration_jobs
+      (event_id,job_type,available_at) VALUES (?,?,?)`).run(evento.event_id, 'question.project', recibidoEn);
+    target.prepare(`INSERT OR IGNORE INTO integration_event_history
+      (event_id,stage,to_status,resource_id,correlation_id,safe_message,created_at)
+      VALUES (?,?,?,?,?,?,?)`).run(evento.event_id, 'event.persist', 'pending', String(preguntaId),
+      correlationId, 'pregunta durable recibida', recibidoEn);
+    upsertInboxUnico(target, { eventId: evento.event_id, resourceId: `question:${preguntaId}`,
+      title: `Pregunta ML${itemId ? ` · ${itemId}` : ''}`, preview: texto, at: ocurridoEn || recibidoEn, occurredAt: ocurridoEn || recibidoEn, payloadVersion: 'v1' });
+  };
+  (txDb ? guardar : db.transaction(guardar))();
+}
+
+export function extraerClaimId(resource) {
+  return String(resource || '').match(/\/claims\/([A-Za-z0-9_-]+)(?:[\/?#]|$)/)?.[1] || null;
+}
+
+function guardarReclamoMinimo(db, id, recurso, backboneEvent = null, leaseGuard = null) {
+  const falladoEn = now();
+  const existente = db.prepare('SELECT intentos FROM ml_reclamos WHERE id = ?').get(id);
+  const minutos = Math.min(1440, 10 * (2 ** Math.min(existente?.intentos || 0, 7)));
+  const proximo = new Date(Date.now() + minutos * 60 * 1000).toISOString();
+  db.transaction(() => {
+  if (leaseGuard && !leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+  db.prepare(`
+    INSERT INTO ml_reclamos (id, recurso, estado, actualizado_en, consultado_en_ml, ultimo_error_en, intentos, proximo_intento_en)
+    VALUES (@id, @recurso, 'sin_consultar', @actualizado_en, 0, @actualizado_en, 1, @proximo_intento_en)
+    ON CONFLICT(id) DO UPDATE SET
+      recurso=COALESCE(ml_reclamos.recurso, excluded.recurso),
+      estado=CASE WHEN ml_reclamos.consultado_en_ml=1 THEN ml_reclamos.estado ELSE excluded.estado END,
+      actualizado_en=excluded.actualizado_en,
+      ultimo_error_en=excluded.ultimo_error_en,
+      intentos=ml_reclamos.intentos + 1,
+      proximo_intento_en=excluded.proximo_intento_en
+  `).run({ id, recurso: recurso || null, actualizado_en: falladoEn, proximo_intento_en: proximo });
+  // El webhook ya creó el único evento/job durable. Solo enriquecemos su metadata;
+  // nunca creamos un evento derivado cuando la consulta a ML falla.
+  if (backboneEvent) {
+    db.prepare(`UPDATE integration_events SET metadata_json=?, status='pending' WHERE event_id=?`)
+      .run(JSON.stringify({ ...(JSON.parse(backboneEvent.metadata_json || '{}')), claim_id: String(id), claim_status: 'sin_consultar', last_error: 'ml_fetch_failed' }), backboneEvent.event_id);
+  }
+  })();
+}
+
+function ensureTables(db) {
+  try {
+    db.prepare(`CREATE TABLE IF NOT EXISTS ml_preguntas (
+      id                INTEGER PRIMARY KEY,
+      item_id           TEXT,
+      texto             TEXT,
+      estado            TEXT NOT NULL,
+      fecha_creacion    TEXT,
+      respondida_en     TEXT,
+      actualizado_en    TEXT NOT NULL
+    )`).run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_ml_preguntas_estado ON ml_preguntas(estado)').run();
+
+    db.prepare(`CREATE TABLE IF NOT EXISTS ml_mensajes (
+      id                TEXT PRIMARY KEY,
+      pack_id           TEXT,
+      order_id          TEXT,
+      texto             TEXT,
+      de_quien          TEXT,
+      fecha_creacion    TEXT,
+      respondido_en     TEXT,
+      actualizado_en    TEXT NOT NULL
+    )`).run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_ml_mensajes_respondido ON ml_mensajes(respondido_en)').run();
+
+    db.prepare(`CREATE TABLE IF NOT EXISTS ml_reclamos (
+      id TEXT PRIMARY KEY, recurso TEXT, estado TEXT NOT NULL, titulo TEXT,
+      detalle TEXT, fecha_creacion TEXT, cerrado_en TEXT, actualizado_en TEXT NOT NULL,
+      type TEXT, reason_id TEXT, resource_id TEXT, consultado_en_ml INTEGER NOT NULL DEFAULT 1,
+      ultimo_error_en TEXT, intentos INTEGER NOT NULL DEFAULT 0, proximo_intento_en TEXT
+    )`).run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_ml_reclamos_pendientes ON ml_reclamos(cerrado_en, fecha_creacion)').run();
+  } catch (_) { /* ya existen */ }
+  // Algunas integraciones invocan este router con una DB desnuda (tests y workers aislados);
+  // asegurar también el backbone mantiene el contrato sin depender del bootstrap del servidor.
+  migrateClaimsBackbone(db);
+}
+
+// ── Ingesta desde el webhook (llamadas por server.js al recibir la notificación) ──
+
+// GET /questions/{id} — trae la pregunta y la guarda/actualiza local.
+// Fail-open a propósito: si ML no responde, la notificación no se reintenta ni bloquea nada
+// más del webhook — la próxima notificación de esa pregunta (respondida, o si el primer
+// intento simplemente falló) la va a corregir.
+// Limitación conocida (hallazgo del revisor): no se serializa por id. Si dos notificaciones
+// del mismo recurso llegan cerca en el tiempo (ML no garantiza orden), los dos GET a ML
+// pueden resolver fuera de orden y el más viejo pisar el estado más fresco. Solo importa si
+// no vuelve a llegar OTRA notificación que corrija — como esto es un aviso, no una fuente de
+// verdad transaccional, el impacto es acotado; si algún día se necesita exactitud fuerte acá,
+// serializar por id (ej. una cola/lock simple) antes de confiar ciegamente.
+export async function ingerirPregunta(db, mlCfg, resource, backboneEvent = null, options = {}) {
+  ensureTables(db);
+  const m = String(resource || '').match(/\/questions\/(\d+)/);
+  if (!m) return false;
+  const resp = await mlFetch(db, mlCfg, 'get', `/questions/${m[1]}`);
+  if (resp.status !== 200 || !resp.data) return false;
+  const q = resp.data;
+  const estado = q.status || 'UNKNOWN';
+  const actualizadoEn = now();
+  db.transaction(() => {
+    if (options.leaseGuard && !options.leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+    db.prepare(`
+      INSERT INTO ml_preguntas (id, item_id, texto, estado, fecha_creacion, respondida_en, actualizado_en)
+      VALUES (@id, @item_id, @texto, @estado, @fecha_creacion, @respondida_en, @actualizado_en)
+      ON CONFLICT(id) DO UPDATE SET
+        item_id=excluded.item_id, texto=excluded.texto, estado=excluded.estado,
+        respondida_en=excluded.respondida_en, actualizado_en=excluded.actualizado_en
+      WHERE excluded.actualizado_en >= ml_preguntas.actualizado_en
+        AND NOT (ml_preguntas.estado = 'ANSWERED' AND excluded.estado <> 'ANSWERED')
+    `).run({
+      id: q.id, item_id: q.item_id || null, texto: q.text || '', estado,
+      fecha_creacion: q.date_created || null,
+      respondida_en: estado === 'ANSWERED' ? (q.answer?.date_created || actualizadoEn) : null,
+      actualizado_en: actualizadoEn,
+    });
+    proyectarPreguntaEnBackbone(db, {
+      preguntaId: q.id, estado, texto: q.text || '', itemId: q.item_id, ocurridoEn: q.date_created, backboneEvent,
+    }, db);
+  })();
+  return true;
+}
+
+// GET <resource> de la notificación de messages — implementación mínima: guarda lo que
+// venga, sin asumir de más el shape hasta ver notificaciones reales en producción (el
+// contrato exacto de `resource` para `messages` varía según sea venta simple o pack).
+export async function ingerirMensaje(db, mlCfg, resource, options = {}) {
+  ensureTables(db);
+  if (!resource) return false;
+  const resp = await mlFetch(db, mlCfg, 'get', resource);
+  if (resp.status !== 200 || !resp.data) return false;
+  if (options.leaseGuard && !options.leaseGuard()) return false;
+  const msgs = Array.isArray(resp.data) ? resp.data : (resp.data.messages || [resp.data]);
+  db.transaction(() => {
+  if (options.leaseGuard && !options.leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+  for (const msg of msgs) {
+    if (!msg?.id) continue;
+    db.prepare(`
+      INSERT INTO ml_mensajes (id, pack_id, order_id, texto, de_quien, fecha_creacion, respondido_en, actualizado_en)
+      VALUES (@id, @pack_id, @order_id, @texto, @de_quien, @fecha_creacion, @respondido_en, @actualizado_en)
+      ON CONFLICT(id) DO UPDATE SET
+        texto=excluded.texto, de_quien=excluded.de_quien,
+        respondido_en=excluded.respondido_en, actualizado_en=excluded.actualizado_en
+      WHERE excluded.actualizado_en >= ml_mensajes.actualizado_en
+    `).run({
+      id: String(msg.id), pack_id: msg.pack_id ? String(msg.pack_id) : null,
+      order_id: msg.order_id ? String(msg.order_id) : null,
+      texto: msg.text?.plain || msg.text || '',
+      de_quien: msg.from?.user_id ? String(msg.from.user_id) : null,
+      fecha_creacion: msg.message_date?.created || msg.date_created || null,
+      respondido_en: msg.status === 'read' ? (msg.message_date?.available || null) : null,
+      actualizado_en: now(),
+    });
+    if (options.leaseGuard && !options.leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+    if (options.eventId) upsertInboxUnico(db, { eventId: options.eventId,
+      resourceId: `message:${msg.pack_id || msg.order_id || msg.id}`, title: 'Mensaje ML',
+      preview: msg.text?.plain || msg.text || '', at: now(), occurredAt: msg.message_date?.created || msg.date_created || now(), leaseGuard: options.leaseGuard });
+  }
+  })();
+  return true;
+}
+
+// GET /post-purchase/v1/claims/{id} (endpoint vigente). Soporta topics legacy y post_purchase.
+// Fail-open: un fallo de ML no debe impedir el 200 del webhook.
+// Idempotencia: el upsert evita duplicados; el estado del GET autoritativo de ML gana,
+// incluso si ML reabre realmente un reclamo cerrado.
+export async function ingerirReclamo(db, mlCfg, resource, originalResource = resource, backboneEvent = null, options = {}) {
+  ensureTables(db);
+
+  // Extraer claim_id: soporta /claims/{id}, /v1/claims/{id}, /post-purchase/v1/claims/{id}.
+  // El patrón captura cualquier camino que termine con un id numérico/alfanumérico.
+  const claimId = extraerClaimId(resource);
+  if (!claimId) {
+    console.warn('[notif-ml] claim resource sin claim_id');
+    return false;
+  }
+
+  // Consultar el endpoint vigente: /post-purchase/v1/claims/{id}.
+  // Fail-open si no existe o la consulta falla.
+  let resp;
+  try {
+    resp = await mlFetch(db, mlCfg, 'get', `/post-purchase/v1/claims/${claimId}`);
+  } catch (err) {
+    // Fail-open: el ACK ya fue respondido; registrar solo diagnóstico seguro.
+    console.warn(`[notif-ml] claim ${claimId}: error consultando ML: ${err?.message || 'error_controlado'}`);
+    guardarReclamoMinimo(db, claimId, originalResource, backboneEvent, options.leaseGuard);
+    return false;
+  }
+
+  if (resp.status !== 200) {
+    console.warn(`[notif-ml] claim ${claimId}: ML respondió status ${resp.status}`);
+    guardarReclamoMinimo(db, claimId, originalResource, backboneEvent, options.leaseGuard);
+    return false;
+  }
+  if (!resp.data?.id) {
+    console.warn(`[notif-ml] claim ${claimId}: respuesta de ML sin id`);
+    guardarReclamoMinimo(db, claimId, originalResource, backboneEvent, options.leaseGuard);
+    return false;
+  }
+
+  const c = resp.data;
+  const canonicalId = String(c.id);
+  if (canonicalId !== claimId) {
+    console.warn(`[notif-ml] claim ${claimId}: ML devolvió id canónico ${canonicalId}`);
+  }
+
+  // Estados reales: 'opened' y 'closed'. Cualquier otro se conserva tal cual.
+  const estado = String(c.status || 'unknown').toLowerCase();
+
+  // Un reclamo está cerrado si el estado es explícitamente 'closed'.
+  // No usamos 'stage' como fallback ni mapeamos otros valores a cerrado.
+  const ahora_cerrado = estado.toLowerCase() === 'closed';
+  const proveedorEn = c.updated_at || c.date_created || c.created_at || null;
+  const previo = db.prepare('SELECT estado, cerrado_en FROM ml_reclamos WHERE id=?').get(canonicalId);
+  if (previo?.estado === 'closed' && !ahora_cerrado
+      && (!proveedorEn || !previo.cerrado_en || String(proveedorEn) <= String(previo.cerrado_en))) {
+    if (backboneEvent) {
+      if (options.leaseGuard && !options.leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+      db.prepare("UPDATE integration_events SET metadata_json=json_set(metadata_json,'$.projection','ignored_stale') WHERE event_id=?").run(backboneEvent.event_id);
+    }
+    return true;
+  }
+
+  // Persistir: incluir type, reason_id, resource_id si vienen en el payload.
+  db.transaction(() => {
+  if (options.leaseGuard && !options.leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+  // La fila provisional se elimina dentro de la misma transacción y después de
+  // validar el lease. Si vence durante el GET/canonicalización, el rollback conserva
+  // la fila original para que otro intento pueda procesarla.
+  if (canonicalId !== claimId) {
+    db.prepare('DELETE FROM ml_reclamos WHERE id = ? AND consultado_en_ml = 0').run(claimId);
+  }
+  db.prepare(`
+    INSERT INTO ml_reclamos (
+    id, recurso, estado, titulo, detalle, fecha_creacion, cerrado_en, actualizado_en,
+      type, reason_id, resource_id, consultado_en_ml
+    )
+    VALUES (
+      @id, @recurso, @estado, @titulo, @detalle, @fecha_creacion, @cerrado_en, @actualizado_en,
+      @type, @reason_id, @resource_id, @consultado_en_ml
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      recurso=COALESCE(ml_reclamos.recurso, excluded.recurso),
+      estado=excluded.estado,
+      titulo=COALESCE(excluded.titulo, ml_reclamos.titulo),
+      detalle=COALESCE(excluded.detalle, ml_reclamos.detalle),
+      cerrado_en=CASE
+        WHEN excluded.cerrado_en IS NULL THEN NULL
+        WHEN ml_reclamos.cerrado_en IS NOT NULL THEN ml_reclamos.cerrado_en
+        ELSE excluded.cerrado_en
+      END,
+      actualizado_en=excluded.actualizado_en,
+      type=COALESCE(excluded.type, ml_reclamos.type),
+      reason_id=COALESCE(excluded.reason_id, ml_reclamos.reason_id),
+      resource_id=COALESCE(excluded.resource_id, ml_reclamos.resource_id),
+      fecha_creacion=COALESCE(ml_reclamos.fecha_creacion, excluded.fecha_creacion),
+      consultado_en_ml=excluded.consultado_en_ml,
+      ultimo_error_en=NULL,
+      intentos=0,
+      proximo_intento_en=NULL
+    WHERE excluded.actualizado_en >= ml_reclamos.actualizado_en
+  `).run({
+    id: canonicalId,
+    recurso: originalResource, // Conservar el recurso original del webhook.
+    estado,
+    titulo: c.title || c.reason || null,
+    detalle: c.description || c.message || null,
+    fecha_creacion: c.date_created || c.created_at || null,
+    cerrado_en: ahora_cerrado ? (c.date_closed || now()) : null,
+    actualizado_en: now(),
+    type: c.type || null,
+    reason_id: c.reason_id || null,
+    resource_id: c.resource_id || null,
+    consultado_en_ml: 1,
+  });
+  proyectarClaimEnBackbone(db, {
+    claimId: canonicalId, backboneEvent,
+    estado,
+    titulo: c.title || c.reason,
+    detalle: c.description || c.message,
+    ocurridoEn: c.date_created || c.created_at,
+  }, db);
+  })();
+  return true;
+}
+
+export async function reintentarReclamosSinConsultar(db, mlCfg, limite = 10) {
+  ensureTables(db);
+  const filas = db.prepare("SELECT id, recurso FROM ml_reclamos WHERE ultimo_error_en IS NOT NULL AND (proximo_intento_en IS NULL OR proximo_intento_en <= ?) ORDER BY proximo_intento_en ASC LIMIT ?").all(now(), limite);
+  for (const fila of filas) {
+    // Buscar evento por recurso normalizado: siempre guardamos /post-purchase/v1/claims/{id}.
+    const claimResourceNormalized = `/post-purchase/v1/claims/${fila.id}`;
+    const evento = db.prepare(`
+      SELECT * FROM integration_events
+      WHERE resource_id = ?
+      ORDER BY received_at DESC LIMIT 1
+    `).get(claimResourceNormalized);
+    await ingerirReclamo(db, mlCfg, fila.recurso || `/claims/${fila.id}`, fila.recurso || `/claims/${fila.id}`, evento || null);
+  }
+  return filas.length;
+}
+
+// ── Router: lectura para la pantalla / aviso del Home ──
+
+export function notificacionesMlRouter(db) {
+  const router = express.Router();
+  ensureTables(db);
+
+  router.get('/pendientes', (req, res) => {
+    const preguntas = db.prepare(
+      "SELECT * FROM ml_preguntas WHERE estado='UNANSWERED' ORDER BY fecha_creacion ASC"
+    ).all();
+    const mensajes = db.prepare(
+      "SELECT * FROM ml_mensajes WHERE respondido_en IS NULL ORDER BY fecha_creacion ASC"
+    ).all();
+    const reclamos = db.prepare(
+      "SELECT * FROM ml_reclamos WHERE cerrado_en IS NULL AND consultado_en_ml = 1 ORDER BY fecha_creacion ASC"
+    ).all();
+    const reclamosSinConfirmar = db.prepare(
+      "SELECT * FROM ml_reclamos WHERE consultado_en_ml = 0 ORDER BY actualizado_en ASC"
+    ).all();
+    res.json({
+      ok: true,
+      preguntas,
+      mensajes,
+      reclamos,
+      reclamos_sin_confirmar: reclamosSinConfirmar,
+      total: preguntas.length + mensajes.length + reclamos.length,
+    });
+  });
+
+  // Conteo liviano — pensado para el aviso del Home (mismo patrón que otros contadores
+  // livianos del proyecto, ej. push-skus-pendientes/count).
+  router.get('/count', (req, res) => {
+    const preguntas = db.prepare("SELECT COUNT(*) n FROM ml_preguntas WHERE estado='UNANSWERED'").get().n;
+    const mensajes = db.prepare('SELECT COUNT(*) n FROM ml_mensajes WHERE respondido_en IS NULL').get().n;
+    const reclamos = db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE cerrado_en IS NULL AND consultado_en_ml = 1").get().n;
+    const reclamosSinConfirmar = db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE consultado_en_ml = 0").get().n;
+    res.json({ ok: true, preguntas, mensajes, reclamos, reclamos_sin_confirmar: reclamosSinConfirmar, total: preguntas + mensajes + reclamos });
+  });
+
+  return router;
+}
