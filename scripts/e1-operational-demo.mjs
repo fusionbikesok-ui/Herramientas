@@ -61,8 +61,17 @@ try {
   if (!resolved.ok) throw new Error(`shortage resolve: ${resolved.code}`);
   const replayShortage = registrarFaltante(db, wave2, { pedidoClave:'web:demo-shortage', sku:'SKU-FALTANTE', motivo:'otro' }, 'demo', { operationId:'demo-shortage', expectedVersion:1 }, now);
   if (!replayShortage.ok || !replayShortage.repetido) throw new Error('shortage replay failed');
+  db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,fecha) VALUES (?,?,?,?,?)').run('web:demo-change', JSON.stringify([{ sku:'SKU-ORIGINAL', cantidad:1 }]), 'pendiente', 'web', now.toISOString());
+  const wave3 = db.prepare("INSERT INTO pick_waves (operational_day_id,tipo,estado,estado_operativo,creada_en) VALUES (?,'mini','en_picking','en_mesa',?)").run(day, now.toISOString()).lastInsertRowid;
+  db.prepare('INSERT INTO pick_wave_items (pick_wave_id,pedido_clave,agregado_en,items_json_snapshot,estado_operativo) VALUES (?,?,?,?,?)').run(wave3, 'web:demo-change', now.toISOString(), JSON.stringify([{sku:'SKU-ORIGINAL',cantidad:1}]), 'en_mesa');
+  db.prepare('INSERT INTO pick_wave_assignments (pick_wave_id,pedido_clave,sku,cantidad,asignado_por,operation_id,creado_en) VALUES (?,?,?,?,?,?,?)').run(wave3, 'web:demo-change', 'SKU-ORIGINAL', 1, 'demo', 'demo-change-assignment', now.toISOString());
+  db.prepare('UPDATE pedidos_cache SET items_json=? WHERE clave=?').run(JSON.stringify([{sku:'SKU-MODIFICADO',cantidad:1}]), 'web:demo-change');
+  const externalChange = sincronizarMiniOlas(db, now);
+  const changedItem = db.prepare('SELECT estado_operativo,bloqueo_motivo FROM pick_wave_items WHERE pick_wave_id=?').get(wave3);
+  const pendingReturn = db.prepare("SELECT 1 FROM pick_wave_returns WHERE pick_wave_id=? AND estado='pendiente'").get(wave3);
+  if (!externalChange.ok || changedItem.estado_operativo !== 'bloqueado_cambio_externo' || !pendingReturn) throw new Error('external change was not blocked with a return');
   const eventCount = db.prepare('SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=?').get(wave).n;
-  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, codigo_desconocido_bloqueado:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
+  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
 } finally {
   db.close();
   fs.rmSync(dir, { recursive:true, force:true });
