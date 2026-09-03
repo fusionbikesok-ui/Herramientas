@@ -1806,8 +1806,8 @@ export function preparacionRouter(db, cfg) {
     if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
     const trackingNuevo = String(req.body?.tracking || '').trim();
     if (!trackingNuevo) return res.status(400).json({ ok: false, error: 'tracking requerido' });
+    if (!req.user?.is_admin) return res.status(403).json({ ok: false, error: 'corregir tracking requiere administrador', code: 'FORBIDDEN' });
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
-    if (prepExistente && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user?.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
