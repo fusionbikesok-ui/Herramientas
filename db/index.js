@@ -500,6 +500,14 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('stock_exceptions_066')").run();
     })();
   }
+  const stockReturnsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='stock_exception_returns_067'").get();
+  if (!stockReturnsMigration) {
+    const aplicarStockReturns = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '067_stock_exception_returns.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('stock_exception_returns_067')").run();
+    });
+    aplicarStockReturns();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

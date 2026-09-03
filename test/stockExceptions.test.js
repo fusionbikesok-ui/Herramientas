@@ -6,15 +6,16 @@ import { openDb } from '../db/index.js';
 import {
   crearIncidente, listarIncidentes, resolverIncidente,
   crearTarea, listarTareas, tomarTarea, completarTarea,
+  recibirDevolucion, clasificarDevolucion, marcarDanoDevolucion,
 } from '../lib/stockExceptions.js';
 import { stockExceptionsRouter } from '../routes/stockExceptions.js';
 
 const FILE = './test/tmp-stock-exceptions.sqlite';
 const clean = () => { if (fs.existsSync(FILE)) fs.unlinkSync(FILE); if (fs.existsSync(`${FILE}-shm`)) fs.unlinkSync(`${FILE}-shm`); if (fs.existsSync(`${FILE}-wal`)) fs.unlinkSync(`${FILE}-wal`); };
 
-function appFor(db, user = 'operario') {
+function appFor(db, user = 'operario', permisos = [{ herramienta: 'stock-exceptions', nivel: 'write' }]) {
   const app = express(); app.use(express.json());
-  app.use((req, _res, next) => { req.user = { username: user }; next(); });
+  app.use((req, _res, next) => { req.user = { username: user, permisos }; next(); });
   app.use('/api/stock-exceptions', stockExceptionsRouter(db)); return app;
 }
 
@@ -75,5 +76,38 @@ describe('E18 — excepciones físicas', () => {
     const task = crearTarea(db, { tipo: 'verificar', creado_por: 'ana', operation_id: 'task-2' });
     tomarTarea(db, task.tarea.id, { expected_version: 1, asignado_a: 'luis', operation_id: 'take-2' });
     expect(completarTarea(db, task.tarea.id, { expected_version: 2, completada_por: 'ana', resultado: 'ok', operation_id: 'complete-2' }).code).toBe('TASK_NOT_OWNED');
+  });
+
+  it('recibe una devolución una sola vez y crea inspección sin stock comercial', () => {
+    const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', cantidad: 1, motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-1' });
+    const input = { expected_version: 1, producto_estado: 'recibido', recibido_por: 'ana', operation_id: 'receive-1' };
+    const one = recibirDevolucion(db, incident.incidente.id, input);
+    const two = recibirDevolucion(db, incident.incidente.id, input);
+    expect(one.ok).toBe(true); expect(two.repetido).toBe(true);
+    expect(one.tarea.tipo).toBe('inspeccionar');
+    expect(db.prepare('SELECT COUNT(*) n FROM stock_tasks').get().n).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n).toBe(0);
+  });
+
+  it('clasifica con conflicto de versión y permite disponible/no disponible/condicionado', () => {
+    const incident = crearIncidente(db, { tipo: 'otro', motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-2' });
+    const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-2' });
+    expect(clasificarDevolucion(db, incident.incidente.id, { expected_version: 1, clasificacion: 'disponible', clasificado_por: 'ana', operation_id: 'class-bad' }).code).toBe('VERSION_CONFLICT');
+    const done = clasificarDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, clasificacion: 'condicionado', clasificado_por: 'ana', operation_id: 'class-2' });
+    expect(done.ok).toBe(true); expect(done.incidente.clasificacion).toBe('condicionado');
+  });
+
+  it('marca devolución dañada, crea incidente urgente y tarea de revisión', () => {
+    const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-3' });
+    const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-3' });
+    const damaged = marcarDanoDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, motivo: 'Marco roto', marcado_por: 'ana', operation_id: 'damage-3' });
+    expect(damaged.ok).toBe(true); expect(damaged.incidente.severidad).toBe('urgente'); expect(damaged.incidente.clasificacion).toBe('no_disponible');
+    expect(damaged.tarea.tipo).toBe('verificar');
+  });
+
+  it('REST rechaza mutaciones sin permiso de stock', async () => {
+    const app = appFor(db, 'sin-permiso', []);
+    const response = await request(app).post('/api/stock-exceptions/devoluciones/1/recibir').send({ expected_version: 1, operation_id: 'forbidden-1' });
+    expect(response.status).toBe(403); expect(response.body.code).toBe('FORBIDDEN');
   });
 });
