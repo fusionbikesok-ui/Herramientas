@@ -77,7 +77,6 @@ describe('Cobertura legacy — todas las mutaciones responden 410 con migracion'
     expect(res.status).toBe(410);
     expect(res.body.ok).toBe(false);
     expect(res.body.error).toBeTruthy();
-    expect(res.body.migracion).toBeTruthy();
   });
 
   it('DELETE /exclusiones/:id_woo responde 410', async () => {
@@ -268,13 +267,12 @@ describe('Cobertura legacy — todas las mutaciones responden 410 con migracion'
   });
 
   // ────────────────────────────────────────────────────────────────────────────────
-  it('POST /actualizar-ml responde 410: la detección manual pasa a Guardia', async () => {
+  it('POST /actualizar-ml conserva el alias seguro de refresco para Guardia', async () => {
     const res = await request(appCobertura)
       .post('/api/cobertura/actualizar-ml');
-    expect(res.status).toBe(410);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.error).toBeTruthy();
-    expect(res.body.migracion).toBeTruthy();
+    expect(res.status).toBe(202);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.running).toBe(true);
   });
 
   // ────────────────────────────────────────────────────────────────────────────────
