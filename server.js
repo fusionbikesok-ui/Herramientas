@@ -142,6 +142,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
 
   app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
   app.use('/stock', express.static(path.join(__dirname, 'public/stock')));
+  app.use('/excepciones', express.static(path.join(__dirname, 'public/excepciones')));
   app.use('/etiquetas', express.static(path.join(__dirname, 'public/etiquetas')));
   app.use('/inventario', express.static(path.join(__dirname, 'public/inventario')));
   app.use('/home', express.static(path.join(__dirname, 'public/home')));

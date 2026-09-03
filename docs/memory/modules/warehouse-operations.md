@@ -71,7 +71,8 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
   tras PUT exitoso; falta resolver concurrencia previa al PUT. `migrations/069_supplier_returns_disposals.sql` y su API registran
   devoluciones a proveedor y descartes irreversibles con idempotencia/auditoría; falta completar
   estados de seguimiento versionados hasta recibida/cancelada y eventos propios de proveedor;
-  falta completar recepción/inspección, UI y E2E, por lo que E18 continúa en desarrollo.
+  falta completar recepción/inspección, acciones UI y E2E; `/excepciones/` es una vista rápida de
+  solo lectura, por lo que E18 continúa en desarrollo.
 
 - La recepción se procesa por línea; documentos pueden llegar antes, durante o después de la
   mercadería.
