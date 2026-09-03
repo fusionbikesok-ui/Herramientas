@@ -711,4 +711,15 @@ describe('E1 operativo: búsqueda, ayuda y mesa', () => {
     expect(pausarOla(db, waveId, 'op1', { expectedVersion:claimed.olaCongelada.expected_version, motivo:'intento tardío' }, now).code).toBe('CLAIM_EXPIRED');
     expect(reanudarOla(db, waveId, 'op1', { expectedVersion:claimed.olaCongelada.expected_version }, now).code).toBe('CLAIM_EXPIRED');
   });
+
+  it('permite reanudar al nuevo responsable después de recuperar un claim vencido', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    const first = reclamarOla(db, waveId, 'op1', { operationId:'reassign-claim', expectedVersion:1 }, now);
+    const paused = pausarOla(db, waveId, 'op1', { operationId:'reassign-pause', expectedVersion:first.olaCongelada.expected_version, motivo:'pausa previa' }, now);
+    db.prepare("UPDATE pick_wave_claims SET expires_at=? WHERE pick_wave_id=?").run('2026-09-01T11:59:00.000Z', waveId);
+    const recovered = reclamarOla(db, waveId, 'op2', { operationId:'reassign-recover', expectedVersion:paused.ola.expected_version }, now);
+    expect(recovered.ok).toBe(true);
+    expect(reanudarOla(db, waveId, 'op1', { expectedVersion:recovered.olaCongelada.expected_version }, now).code).toBe('CLAIM_REQUIRED');
+    expect(reanudarOla(db, waveId, 'op2', { expectedVersion:recovered.olaCongelada.expected_version }, now).ok).toBe(true);
+  });
 });
