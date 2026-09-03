@@ -230,6 +230,7 @@ function ensureTables(db) {
   // nueva; garantizar aquí la columna evita que el contrato de resultado incierto
   // dependa del orden de inicialización.
   try { db.prepare('ALTER TABLE preparaciones ADD COLUMN woo_paso1_incierto INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { if (!/duplicate column/i.test(e.message)) console.error('ensureTables woo_paso1_incierto:', e.message); }
+  try { db.prepare('ALTER TABLE preparaciones ADD COLUMN tracking_correccion_pendiente TEXT').run(); } catch (e) { if (!/duplicate column/i.test(e.message)) console.error('ensureTables tracking_correccion_pendiente:', e.message); }
   // pack_id acá también: pedidos_cache es lo que alimenta tanto "A preparar" como el
   // Historial, así que es el único lugar donde ponerlo hace que el número que se lee en ML
   // sea encontrable en las dos pantallas (ver el comentario de preparaciones.pack_id).
@@ -843,6 +844,20 @@ export async function reintentarColgadosTracking(db, cfg) {
         continue;
       }
       console.error(`reintentarColgadosTracking: sigue colgado wc_order_id=${prep.wc_order_id}:`, e.message);
+    }
+  }
+  // Reconciliación de correcciones administrativas que llegaron a Woo pero no
+  // alcanzaron a actualizar el espejo local.
+  const correcciones = db.prepare("SELECT id, wc_order_id, clave, tracking_correccion_pendiente FROM preparaciones WHERE tracking_correccion_pendiente IS NOT NULL AND tracking_correccion_pendiente <> ''").all();
+  for (const prep of correcciones) {
+    try {
+      const actual = await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`);
+      const meta = (actual.data?.meta_data || []).find((m) => m.key === TRACKING_META_KEY);
+      if (String(meta?.value || '').trim() !== String(prep.tracking_correccion_pendiente).trim()) continue;
+      db.prepare('UPDATE preparaciones SET tracking=?, tracking_correccion_pendiente=NULL WHERE id=?').run(prep.tracking_correccion_pendiente, prep.id);
+      registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_corregido_reconciliado', usuario: null, detalle: { tracking_nuevo: prep.tracking_correccion_pendiente } });
+    } catch (e) {
+      console.error(`reconciliar corrección tracking wc_order_id=${prep.wc_order_id}:`, e.message);
     }
   }
   return resueltos;
@@ -1830,17 +1845,21 @@ export function preparacionRouter(db, cfg) {
         // Aun sin cambio en Woo, `preparaciones.tracking` (espejo local, columna nueva) puede
         // estar desincronizada si nunca pasó por acá — corregirla igual (hallazgo del revisor:
         // antes esta ruta no la tocaba, y un Deshacer siguiente comparaba contra un valor viejo).
-        db.prepare("UPDATE preparaciones SET tracking=? WHERE clave=?").run(trackingNuevo, `web:${wcOrderId}`);
+        db.prepare("UPDATE preparaciones SET tracking=?, tracking_correccion_pendiente=NULL WHERE clave=?").run(trackingNuevo, `web:${wcOrderId}`);
         return res.json({ ok: true, tracking_anterior: trackingAnterior, tracking_nuevo: trackingNuevo });
       }
 
+      // La corrección queda marcada antes del efecto remoto; si Fusion cae después
+      // del PUT, el proceso de reconciliación puede identificarla sin confiar en el
+      // espejo anterior.
+      if (prepExistente) db.prepare('UPDATE preparaciones SET tracking_correccion_pendiente=? WHERE clave=?').run(trackingNuevo, `web:${wcOrderId}`);
       await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
         meta_data: [{ id: metaExistente.id, key: TRACKING_META_KEY, value: trackingNuevo }],
       });
       // Espejo local: preparaciones.tracking es lo que lee `a_medias` para reintentar sin
       // volver a preguntarle a Woo — si no se actualiza acá, un Deshacer deja esa columna
       // apuntando al tracking viejo (hallazgo del revisor).
-      db.prepare("UPDATE preparaciones SET tracking=? WHERE clave=?").run(trackingNuevo, `web:${wcOrderId}`);
+      db.prepare("UPDATE preparaciones SET tracking=?, tracking_correccion_pendiente=NULL WHERE clave=?").run(trackingNuevo, `web:${wcOrderId}`);
 
       const prep = db.prepare('SELECT id FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
       if (prep) {

@@ -493,6 +493,16 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_pack_062_065')").run();
     })();
   }
+  const trackingCorrectionMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='tracking_correccion_066'").get();
+  if (!trackingCorrectionMigration) {
+    db.transaction(() => {
+      const existePreparaciones = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='preparaciones'").get();
+      if (existePreparaciones && !db.prepare('PRAGMA table_info(preparaciones)').all().some((c) => c.name === 'tracking_correccion_pendiente')) {
+        db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '066_tracking_correccion_pendiente.sql'), 'utf8'));
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('tracking_correccion_066')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
