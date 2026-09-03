@@ -4,6 +4,17 @@ Código: PILOTO-E1 · Versión: 0.1 · Estado: pendiente de ejecución
 
 Esta checklist prepara una jornada controlada. No sustituye la aceptación del responsable ni autoriza despliegue.
 
+## Prevalidación sintética reproducible
+
+Ejecutar desde `/opt/fusionbikes/herramientas`, sin cargar credenciales ni datos reales:
+
+```bash
+npm run e1:demo
+npx vitest run test/jornada.test.js test/preparacion-render.test.js --reporter=dot --no-file-parallelism --testTimeout=30000
+```
+
+Registrar la salida completa sanitizada. La prevalidación solo habilita la práctica guiada; no cambia el estado de la entrega. Debe informar `ok:true` en la demo y **74/74** en la suite dirigida, o dejar asentada la diferencia antes de continuar.
+
 ## Preparación
 
 - Fecha y turno: ____________________
