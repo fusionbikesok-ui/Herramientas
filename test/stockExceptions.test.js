@@ -8,6 +8,7 @@ import {
   crearTarea, listarTareas, tomarTarea, completarTarea,
   recibirDevolucion, clasificarDevolucion, marcarDanoDevolucion,
   procesarWooOutbox,
+  crearDevolucionProveedor, listarDevolucionesProveedor, descartarIncidente,
 } from '../lib/stockExceptions.js';
 import { stockExceptionsRouter } from '../routes/stockExceptions.js';
 
@@ -128,6 +129,16 @@ describe('E18 — excepciones físicas', () => {
     const done = await procesarWooOutbox(db, async (row) => ({ sku: row.sku, delta: row.delta }));
     expect(done.ok).toBe(true); expect(done.fila.estado).toBe('enviado'); expect(done.fila.intentos).toBe(2);
     expect((await procesarWooOutbox(db, async () => null)).procesado).toBe(false);
+  });
+
+  it('registra devolución a proveedor y descarte con auditoría e idempotencia', () => {
+    const incident = crearIncidente(db, { tipo: 'daño', sku: 'FB-X', cantidad: 1, motivo: 'Rotura', creado_por: 'ana', operation_id: 'supplier-incident' });
+    const supplier = crearDevolucionProveedor(db, { incident_id: incident.incidente.id, sku: 'FB-X', cantidad: 1, proveedor: 'Proveedor X', motivo: 'Garantía', creado_por: 'ana', operation_id: 'supplier-1' });
+    expect(supplier.ok).toBe(true); expect(crearDevolucionProveedor(db, { sku: 'FB-X', cantidad: 1, proveedor: 'Proveedor X', motivo: 'Garantía', creado_por: 'ana', operation_id: 'supplier-1' }).repetido).toBe(true);
+    expect(listarDevolucionesProveedor(db)).toHaveLength(1);
+    const discarded = descartarIncidente(db, incident.incidente.id, { expected_version: 1, motivo: 'Sin reparación', descartado_por: 'ana', operation_id: 'discard-1' });
+    expect(discarded.ok).toBe(true); expect(discarded.incidente.estado).toBe('resuelto');
+    expect(descartarIncidente(db, incident.incidente.id, { expected_version: 2, motivo: 'otra', descartado_por: 'ana', operation_id: 'discard-1' }).repetido).toBe(true);
   });
 
   it('REST rechaza mutaciones sin permiso de stock', async () => {

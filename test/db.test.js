@@ -94,6 +94,7 @@ describe('db schema', () => {
       'stock_movements',
       'stock_negativo_alertas',
       'stock_rollout_skus',
+      'stock_supplier_returns',
       'stock_tasks',
       'sync_estado',
       'sync_log',

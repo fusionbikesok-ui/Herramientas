@@ -516,6 +516,14 @@ export function openDb(dbPath) {
     });
     aplicarStockExceptionWooOutbox();
   }
+  const supplierReturnsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='supplier_returns_disposals_069'").get();
+  if (!supplierReturnsMigration) {
+    const aplicarSupplierReturns = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '069_supplier_returns_disposals.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('supplier_returns_disposals_069')").run();
+    });
+    aplicarSupplierReturns();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
