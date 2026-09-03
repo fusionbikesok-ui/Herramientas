@@ -549,6 +549,15 @@ export function openDb(dbPath) {
     });
     aplicarWarranty();
   }
+  const warrantyEvidenceMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='warranty_inspection_evidence_073'").get();
+  if (!warrantyEvidenceMigration) {
+    const aplicarWarrantyEvidence = db.transaction(() => {
+      const cols = new Set(db.prepare('PRAGMA table_info(warranty_cases)').all().map((c) => c.name));
+      if (!cols.has('inspeccion_resultado')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '073_warranty_inspection_evidence.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('warranty_inspection_evidence_073')").run();
+    });
+    aplicarWarrantyEvidence();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

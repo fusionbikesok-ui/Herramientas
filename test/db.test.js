@@ -103,6 +103,7 @@ describe('db schema', () => {
       'user_permisos',
       'users',
       'warehouse_pick_zones',
+      'warranty_attachments',
       'warranty_cases',
       'warranty_events',
     ]);
