@@ -54,6 +54,7 @@ import { getAccessToken } from './lib/mlClient.js';
 import { notificacionesMlRouter, extraerClaimId } from './routes/notificacionesMl.js';
 import { stockExceptionsRouter } from './routes/stockExceptions.js';
 import { warrantiesRouter } from './routes/warranties.js';
+import { workshopRouter } from './routes/workshop.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
@@ -371,6 +372,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/incidentes', incidentesRouter(db, syncCfg));
   app.use('/api/stock-exceptions', stockExceptionsRouter(db));
   app.use('/api/warranties', warrantiesRouter(db));
+  app.use('/api/workshop', workshopRouter(db));
   app.use('/api/devices', devicesRouter(db));
   app.use('/api/notifications', notificationsRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));

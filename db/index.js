@@ -574,6 +574,14 @@ export function openDb(dbPath) {
     });
     aplicarWarrantyWooOutbox();
   }
+  const workshopMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='workshop_jobs_076'").get();
+  if (!workshopMigration) {
+    const aplicarWorkshop = db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '076_workshop_jobs.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('workshop_jobs_076')").run();
+    });
+    aplicarWorkshop();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
