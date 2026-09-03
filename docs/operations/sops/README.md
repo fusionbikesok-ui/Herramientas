@@ -4,11 +4,12 @@ Los SOP se crean y validan dentro de la entrega que habilita el proceso. E0 defi
 
 | Proceso | Entrega de primer SOP | Digital | Imprimible | Estado |
 | --- | --- | --- | --- | --- |
-| Apertura, olas y picking | E1 | pendiente | pendiente | planificado |
-| Fotos, paquetes y aprobación | E2 | pendiente | pendiente | planificado |
+| Apertura, olas y picking | E1 | [borrador](SOP-E1-apertura-preparacion.md) | [borrador](SOP-E1-apertura-preparacion.md) | borrador, pendiente de práctica |
+| Fotos, paquetes y aprobación | E2 | [PILOTO-E2-fotos-checklist.md](PILOTO-E2-fotos-checklist.md) | [PILOTO-E2-fotos-checklist.md](PILOTO-E2-fotos-checklist.md) | preparado, no ejecutado |
 | Agente e impresión interna | E3 | pendiente | pendiente | planificado |
-| Lotes, tracking y despacho | E4 | pendiente | pendiente | planificado |
+| Lotes, tracking y despacho | E4 | [PILOTO-E4-checklist.md](PILOTO-E4-checklist.md) | [PILOTO-E4-checklist.md](PILOTO-E4-checklist.md) | preparado, no ejecutado |
 | App, dispositivos y alertas | E5–E7 | pendiente | pendiente | planificado |
+| Guardia ML y cobertura | UM1 urgente | pendiente | pendiente | especificado, pendiente de piloto |
 | Stock, ubicaciones y movimientos | E8–E12 | pendiente | pendiente | planificado |
 | Recepción y putaway | E14–E15 | pendiente | pendiente | planificado |
 | Conteos y ajustes | E16–E17 | pendiente | pendiente | planificado |

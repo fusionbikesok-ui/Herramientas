@@ -10,6 +10,7 @@ import {
 } from '../lib/matcherPush.js';
 import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
+import { escanearGuardiaMl } from '../lib/guardiaMl.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -55,11 +56,9 @@ export function estadoRefrescoMl() {
  * de routes/sync.js. Devuelve `{ ok:false, running:true, error, scope }` si estaba en curso
  * (para responder 409), o `{ ok:true, running:true, scope }` si lo arrancó (para responder 202).
  *
- * MEDIO 4: HOY solo se llama desde 2 endpoints HTTP manuales (POST /refrescar-ml, y desde
- * routes/cobertura.js), NUNCA desde un cron. Esto significa que un incidente de ML queda pegado
- * hasta que un humano apriete el botón de refresco. No es un bug sino una limitación consciente:
- * agregar un cron requeriría coordinación con el cupo global y los cooldowns, posiblemente
- * futuro trabajo. Por ahora, los incidentes de ML se resuelven manualmente.
+ * UM1: además de los endpoints HTTP manuales, server.js lo programa cada 15 minutos para
+ * mantener la Guardia actualizada. El mismo candado y los cooldowns globales aplican a ambos
+ * caminos; un refresco fallido no avanza la frescura ni borra el último resultado válido.
  */
 export function dispararRefrescoMl(db, cfg, scope = 'all') {
   if (_refresco.running) {
@@ -91,8 +90,15 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
       }
       _refresco.resultado = r;
       _refresco.actualizado_en = now();
+      // UM1: solo genera/actualiza casos locales; nunca escribe seller_sku, stock ni estados
+      // remotos. Si el refresco fue completo, la lectura de Guardia tiene una base confiable.
+      escanearGuardiaMl(db, 'sistema', { lecturaMlConfirmada: true });
     } catch (e) {
       _refresco.error = e.message;
+      try {
+        db.prepare('UPDATE guardia_ml_config SET ultimo_scan_error=?, actualizado_en=? WHERE id=1')
+          .run(e.message.slice(0, 500), now());
+      } catch (_) { /* la lectura de Guardia no debe ocultar el error original del refresco */ }
     } finally {
       _refresco.running = false;
       _refresco.phase = _refresco.error ? 'error' : 'listo';

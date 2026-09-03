@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { openDb } from '../db/index.js';
 import { preparacionRouter } from '../routes/preparacion.js';
-import { calcularFechaDespacho, fechaEstimadaShipment, horaValida, normalizarHorarios, asegurarEsquemaHorarios } from '../lib/horariosDespacho.js';
+import { calcularFechaDespacho, fechaEstimadaShipment, fechaHoraEstimadaShipment, calcularSlaPreparacion, horaValida, normalizarHorarios, asegurarEsquemaHorarios } from '../lib/horariosDespacho.js';
 import { hashPassword, requireAuth } from '../lib/auth.js';
 import { buildApp } from '../server.js';
 import { permiteAcceso, resolvePermiso } from '../lib/permisos.js';
@@ -40,6 +40,27 @@ describe('horarios de despacho', () => {
     expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30' }, expected_date: '2026-09-02' })).toBe('2026-09-02');
     expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30T00:30:00Z' }, expected_date: '2026-09-02' })).toBe('2026-09-02');
     expect(fechaEstimadaShipment({ sla: { expected_date: '2026-02-30' }, date_estimated_delivery: '2026-09-03' })).toBeNull();
+  });
+
+  it('conserva el timestamp del deadline de llegada y calcula 30 minutos de margen interno', () => {
+    const shipment = { sla: { expected_date: '2026-09-02T18:30:00.000Z' } };
+    expect(fechaHoraEstimadaShipment(shipment)).toMatchObject({ original: '2026-09-02T18:30:00.000Z', tieneHora: true });
+    expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'cross_docking', shipment, ahora: new Date('2026-09-02T14:00:00Z') })).toMatchObject({
+      limite: '2026-09-02T18:00:00.000Z', estado: 'activo', fuente: 'shipment_menos_30_min',
+    });
+  });
+
+  it('rechaza timestamp sin zona y calendario inválido', () => {
+    expect(fechaHoraEstimadaShipment({ sla: { expected_date: '2026-09-02T18:30:00' } })).toBeNull();
+    expect(fechaHoraEstimadaShipment({ sla: { expected_date: '2026-02-30T18:30:00Z' } })).toBeNull();
+    expect(fechaHoraEstimadaShipment({ sla: { expected_date: '2026-02-30' } })).toBeNull();
+  });
+
+  it('aplica bordes operativos de Flex y web, y falla cerrado sin SLA', () => {
+    expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'self_service', ahora: new Date('2026-09-02T20:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'FLEX_SALIDA_17:00_SUPERADA' });
+    expect(calcularSlaPreparacion({ canal: 'web', ahora: new Date('2026-09-02T18:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'WEB_CORTE_15:00_SUPERADO' });
+    expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'cross_docking', shipment: {}, ahora: new Date('2026-09-02T14:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'SLA_SHIPMENT_HORA_FALTANTE' });
+    expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'cross_docking', shipment: { sla: { expected_date: '2026-09-02' } }, ahora: new Date('2026-09-02T14:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'SLA_SHIPMENT_HORA_FALTANTE', limite: null });
   });
 
   it('expone y actualiza los siete días mediante el router', async () => {
@@ -78,6 +99,18 @@ describe('horarios de despacho', () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM despacho_horarios").get().n).toBe(7);
     expect(db.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('pedidos_cache') WHERE name='fecha_despacho'").get().n).toBe(1);
     db.close(); try { fs.unlinkSync(file); } catch {}
+  });
+
+  it('inicia una base vacía sin alterar pedidos_cache inexistente y conserva idempotencia', () => {
+    const file = path.join(process.cwd(), 'test/tmp-horarios-db-vacia.sqlite');
+    const primera = openDb(file);
+    expect(primera.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='pedidos_cache'").get().n).toBe(0);
+    primera.close();
+
+    const segunda = openDb(file);
+    expect(segunda.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='pedidos_cache'").get().n).toBe(0);
+    segunda.close();
+    try { fs.unlinkSync(file); } catch {}
   });
 
   it('rechaza una petición sin autenticación cuando se monta con el middleware real', async () => {
@@ -141,6 +174,9 @@ describe('horarios de despacho', () => {
 
   it('aplica permisos con buildApp real para usuario limitado y administrador', async () => {
     const file = path.join(process.cwd(), 'test/tmp-horarios-buildapp.sqlite');
+    // Una ejecución interrumpida no debe contaminar la siguiente.
+    try { fs.unlinkSync(file); } catch {}
+    try { fs.unlinkSync(path.join(process.cwd(), 'test/sessions.sqlite')); } catch {}
     const db = openDb(file);
     const ts = new Date().toISOString();
     const pass = hashPassword('secreto-test');

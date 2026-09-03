@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS pick_wave_items (
   pedido_clave TEXT NOT NULL,
   agregado_en TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_pick_wave_items_pedido
-  ON pick_wave_items(pedido_clave);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pick_wave_items_wave_pedido
+  ON pick_wave_items(pick_wave_id, pedido_clave);
 
 CREATE TABLE IF NOT EXISTS pick_wave_claims (
   pick_wave_id INTEGER PRIMARY KEY,

@@ -107,6 +107,20 @@ describe('etiquetas cola', () => {
     const ok = await request(app).post(`/api/etiquetas/cola/${alta.body.item.id}/resultado`)
       .send({ claim_token: claim.body.trabajo.claim_token, ok: true });
     expect(ok.body.estado).toBe('impresa');
+    const replay = await request(app).post(`/api/etiquetas/cola/${alta.body.item.id}/resultado`)
+      .send({ claim_token: claim.body.trabajo.claim_token, ok: true });
+    expect(replay.body).toMatchObject({ ok: true, estado: 'impresa', idempotente: true });
+  });
+
+  it('recupera un trabajo cuyo lease venció', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    const alta = await request(app).post('/api/etiquetas/cola').send({ sku: 'FB-LEASE', cantidad: 1 });
+    const primero = await request(app).post('/api/etiquetas/cola/reclamar').send({ agente_id: 'pc-caida' });
+    db.prepare("UPDATE etiquetas_cola SET claim_hasta='2000-01-01T00:00:00.000Z' WHERE id=?").run(alta.body.item.id);
+    const recuperado = await request(app).post('/api/etiquetas/cola/reclamar').send({ agente_id: 'pc-nueva' });
+    expect(recuperado.body.trabajo.id).toBe(alta.body.item.id);
+    expect(recuperado.body.trabajo.claim_token).not.toBe(primero.body.trabajo.claim_token);
   });
 
   it('puede reintentar un error sin duplicar el trabajo', async () => {

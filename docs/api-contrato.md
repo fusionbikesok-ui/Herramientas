@@ -957,14 +957,23 @@ se inventa un valor vacío ahí para no sugerir que existe la posibilidad.
 
 ### GET/POST /api/jornada/* (E1: apertura, ola y mini-olas)
 
-- `POST /api/jornada/abrir` — requiere sesión. 200 con `{jornada, olaInicial}`; 409
+- `POST /api/jornada/abrir` — requiere sesión. El body no acepta horarios ni una ventana ML
+  global: se ignoran/rechazan esos conceptos y las reglas son canónicas (`America/Argentina/Buenos_Aires`):
+  Web 15:00, ML/Andreani por pedido con deadline de llegada al centro menos 30 minutos, Flex
+  `self_service` hasta 17:00 y Full excluido. Responde 200 con `{jornada, olaInicial, reglas,
+  preflight}`. `preflight` expone estado explícito por integración y agente/impresora
+  (`desconocido`/`no_verificado` cuando no hay fuente real) y es fail-open: no bloquea operaciones
+  no afectadas. 409
   `OPERATIONAL_DAY_EXISTS` con `{jornada}` si ya se abrió hoy (fecha local Buenos Aires).
 - `GET /api/jornada/hoy` — `{jornada: null}` si no se abrió.
 - `GET /api/jornada/olas` — sincroniza mini-olas y devuelve `{jornada, olas: [{...pick_wave, items}]}`.
+  Cada `claim` no nulo incluye `usuario`, `claimed_at`, `expires_at`, `por_vencer` y
+  `segundos_restantes`, calculados con una única referencia temporal por respuesta.
 - `POST /api/jornada/ola/:id/reclamar` — requiere sesión. Congela la ola (si estaba
   `abierta`) y abre una mini-ola nueva si correspondía. 200 con `{claim, olaCongelada,
   olaNueva}`; `claim` incluye `por_vencer`/`segundos_restantes`. 409 `WAVE_CLAIMED` si otro
-  usuario la tiene tomada.
+  usuario la tiene tomada; 409 `WAVE_NOT_CLAIMABLE` si la ola está completada o en otro
+  estado terminal.
 - `POST /api/jornada/cerrar` — requiere `is_admin`. No exige olas completadas (maestro §2.2:
   "pendientes se arrastran con alerta"). 200 con `{jornada}` (`estado:'cerrada'`); 401 sin
   sesión; 403 sin `is_admin`; 409 `NO_OPEN_DAY` si no hay jornada abierta hoy.
@@ -3166,6 +3175,16 @@ recibe los siete días y `expected_version`; una versión desactualizada respond
 con `code: VERSION_CONFLICT` y no aplica cambios. La pantalla debe recargar antes de
 reintentar para no sobrescribir una edición concurrente.
 
+`GET /api/preparacion/pendientes` devuelve también `fecha_despacho_limite` (timestamp ISO
+del límite interno), `estado_despacho` (`activo`, `diferido` o `excluido`),
+`despacho_motivo` y `shipment_limite_original` (timestamp original de ML, cuando existe).
+Un SLA de ML/Andreani sin hora exacta queda `diferido` con razón
+`SLA_SHIPMENT_HORA_FALTANTE`; no se transforma en un horario artificial.
+`fecha_despacho` se deriva del límite interno en zona `America/Argentina/Buenos_Aires`;
+no se obtiene cortando el texto UTC. ML y Andreani aplican 30 minutos de margen cuando
+existe un timestamp confirmado. Web sin timestamp externo usa explícitamente el corte
+operativo fijo de preparación de 15:00 (no se inventa un SLA de transporte).
+
 La fecha SLA de ML usada como sugerencia es solo el límite de preparación, nunca la fecha
 estimada de entrega (`date_estimated_delivery`). La precedencia implementada es:
 `shipment.sla.expected_date`, `shipment.expected_date`,
@@ -3175,3 +3194,49 @@ estimada de entrega (`date_estimated_delivery`). La precedencia implementada es:
 ISO) y se normaliza a fecha local de calendario. Esta precedencia queda cubierta por tests
 de unidad, pero la confirmación de qué campo entrega ML en cada modalidad requiere payloads
 reales representativos y queda pendiente de verificación operativa.
+## E1 — jornada, olas y picking de mesa
+
+Las rutas `/api/jornada` son compatibles con las tablas legacy de E1. Las respuestas nuevas
+exponen `estado_operativo` (`disponible`, `en_busqueda`, `en_mesa`, `cerrada`) sin eliminar
+`estado` (`congelada`, `en_picking`, `completada`). Las mutaciones aceptan `operation_id` para
+repetición idempotente y `expected_version`; una versión desactualizada responde `409
+WAVE_VERSION_CONFLICT`. E1 no cambia evidencia, aprobación ni stock.
+
+- `GET /api/jornada/zonas` → `{ ok, zonas }`.
+- `POST /api/jornada/zonas` body `{ nombre, verificada? }` → crea/repite `{ ok, zona }`.
+- `POST /api/jornada/ola/:id/iniciar-busqueda` body `{ expected_version?, operation_id? }`.
+- `POST /api/jornada/ola/:id/pedir-ayuda` body `{ zonaId, ayudante, expected_version?, operation_id? }`.
+- `POST /api/jornada/ayuda/:id/recibir` body `{ expected_version?, operation_id? }`. El ayudante
+  queda identificado; no modifica cantidades ni pedidos.
+- `POST /api/jornada/ola/:id/pasar-a-mesa` body `{ expected_version?, operation_id? }`.
+- `POST /api/jornada/ola/:id/mesa/asignar` body `{ pedidoClave, sku, cantidad?, zonaId?, expected_version?, operation_id? }`.
+- `POST /api/jornada/ola/:id/faltante` body `{ pedidoClave, sku, motivo, nota?, expected_version?, operation_id? }`.
+- `POST /api/jornada/ola/:id/cerrar` body `{ derivados: ['asignado'|'devuelto'|'faltante_bloqueado'|'resguardo'], expected_version?, operation_id? }`.
+- `GET /api/jornada/ola/:id/eventos` → eventos auditables de la ola.
+
+El contrato de asignación devuelve solo pedido/SKU/cantidad/zona y no inventa disponibilidad ni
+ubicaciones: el stock físico queda fuera de E1. La apertura sigue creando la ola inicial con los
+pedidos elegibles y la sincronización crea mini-olas normales o `ml_urgente`.
+
+## UM1 — Guardia ML y cobertura
+
+La Guardia usa la clave exacta `publicación|variación`. En modo inicial `lectura` no escribe en
+MercadoLibre, WooCommerce ni pedidos: solo inspecciona el cache local después de una lectura
+completa de publicaciones y registra casos locales idempotentes.
+
+- `GET /api/guardia-ml/estado` → estado de frescura, modo, cantidad urgente, `degradado` y `sano`.
+- `GET /api/guardia-ml/casos?urgentes=1` → casos abiertos ordenados por severidad y exposición.
+- `GET /api/guardia-ml/casos/:id/eventos` → historial append-only del caso.
+- `POST /api/guardia-ml/escanear` → fuerza lectura local de cobertura (Admin).
+- `POST /api/guardia-ml/habilitar-acciones` → habilita el modo posterior a la validación (Admin designado).
+- `POST /api/guardia-ml/casos/:id/tomar` body `{ motivo? }` → toma o releva, con conflicto si el caso pertenece a otro y no se informa motivo.
+- `POST /api/guardia-ml/casos/:id/excepcion` body `{ motivo, nota }` → excepción hasta el cierre operativo, con categoría y nota obligatorias.
+- `POST /api/guardia-ml/casos/:id/vincular` body `{ sku }` → requiere modo `acciones`; escribe el SKU en ML y confirma localmente solo después de respuesta 200.
+- `POST /api/guardia-ml/casos/:id/pausar` body `{ confirmado? }` → requiere modo `acciones`; si hay hermanas devuelve `409` con cantidad afectada hasta recibir confirmación explícita.
+- `GET /api/guardia-ml/pedidos-retenidos` → lista ventas ML retenidas por falta de cobertura exacta.
+- `POST /api/guardia-ml/pedidos-retenidos/:orderId/liberar|cancelar` body `{ motivo }` → salida humana auditada; liberar permite reprocesar la venta y cancelar cierra su retención.
+- `GET /api/guardia-ml/stock-compartido` y `POST /api/guardia-ml/stock-compartido/:sku/confirmar` body `{ motivo }` → consulta y confirmación explícita del stock completo compartido entre claves ML.
+
+La API nunca considera `omitir` o una marca histórica como cobertura. Las escrituras remotas de
+vínculo, stock o pausa pertenecerán a una segunda fase durable y permanecerán bloqueadas durante
+el primer rollout de UM1.

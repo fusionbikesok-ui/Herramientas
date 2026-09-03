@@ -95,6 +95,90 @@ describe('control de despacho U0.B', () => {
     expect(sinFecha.body.data).toHaveLength(1);
     expect(sinFecha.body.data[0].jornada).toBe('sin_fecha');
   });
+  it('mantiene Web sin evidencia aunque Woo diga enviado y separa el filtro ML', async () => {
+    const web = crearPreparacion(db, { canal: 'web', wcOrderId: 68638, numeroPedido: '68638', comprador: 'X', items: [] });
+    const ml = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ML-HOJA', packId: 'PACK-ML-HOJA', numeroPedido: 'ML-HOJA', comprador: 'X', items: [] });
+    db.prepare("UPDATE preparaciones SET estado='completada' WHERE id IN (?, ?)").run(web, ml);
+    db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, estado_envio, estado_wc, items_json, actualizado_en, fecha_despacho)
+      VALUES (?, 'web', ?, ?, 'enviado', 'enviadoandreani', '[]', ?, ?), (?, 'ml', NULL, ?, 'pendiente', NULL, '[]', ?, ?)`)
+      .run('web:68638', 68638, '68638', new Date().toISOString(), '2026-09-02', 'ml:ML-HOJA', 'ML-HOJA', new Date().toISOString(), '2026-09-02');
+    const app = buildTestApp(db);
+    const webRows = await request(app).get('/api/preparacion/despacho/cola?fecha=2026-09-02&canal=web');
+    const mlRows = await request(app).get('/api/preparacion/despacho/cola?fecha=2026-09-02&canal=ml');
+    expect(webRows.status).toBe(200); expect(webRows.body.data.map(r => r.numero_pedido)).toContain('68638');
+    expect(mlRows.status).toBe(200); expect(mlRows.body.data.map(r => r.numero_pedido)).not.toContain('68638');
+    expect(mlRows.body.data.map(r => r.numero_pedido)).toContain('ML-HOJA');
+    expect(web).toBeTruthy(); expect(ml).toBeTruthy();
+  });
+  it('crea lote separado, congela miembros, escanea idempotente y cierra', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 8701, numeroPedido: '8701', comprador: 'X', items: [] });
+    db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
+    db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, estado_envio, items_json, actualizado_en, fecha_despacho)
+      VALUES ('web:8701', 'web', 8701, '8701', 'pendiente', '[]', ?, '2026-09-03')`).run(new Date().toISOString());
+    db.prepare(`INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en) VALUES ('web:8701', 'pendiente', ?, ?)`).run(new Date().toISOString(), new Date().toISOString());
+    const control = db.prepare("SELECT id FROM despacho_controles WHERE grupo_clave='web:8701'").get();
+    const app = buildTestApp(db);
+    const creado = await request(app).post('/api/preparacion/despacho/lotes').set('Idempotency-Key', 'lote-1')
+      .send({ canal: 'web', fecha_jornada: '2026-09-03', control_ids: [control.id] });
+    expect(creado.status).toBe(201); expect(creado.body.items).toHaveLength(1);
+    expect(db.prepare("SELECT tipo FROM despacho_lote_eventos WHERE lote_id=? ORDER BY id").all(creado.body.lote.id).map(r => r.tipo)).toContain('lote_creado');
+    const eventos = await request(app).get(`/api/preparacion/despacho/lotes/${creado.body.lote.id}/eventos`);
+    expect(eventos.status).toBe(200); expect(eventos.body.eventos[0].tipo).toBe('lote_creado');
+    const operador = await request(buildTestAppComo(db, 'operador-e4')).get(`/api/preparacion/despacho/lotes/${creado.body.lote.id}/eventos`);
+    expect(operador.status).toBe(403); expect(operador.body.code).toBe('FORBIDDEN');
+    const duplicado = await request(app).post('/api/preparacion/despacho/lotes').set('Idempotency-Key', 'lote-duplicado')
+      .send({ canal: 'web', fecha_jornada: '2026-09-03', control_ids: [control.id] });
+    expect(duplicado.status).toBe(409); expect(duplicado.body.code).toBe('LOTE_MIEMBRO_DUPLICADO');
+    const listado = await request(app).get('/api/preparacion/despacho/lotes?fecha_jornada=2026-09-03&canal=web');
+    expect(listado.status).toBe(200); expect(listado.body.lotes[0]).toMatchObject({ id: creado.body.lote.id, canal: 'web', miembros: 1 });
+    const repetido = await request(app).post('/api/preparacion/despacho/lotes').set('Idempotency-Key', 'lote-1')
+      .send({ canal: 'web', fecha_jornada: '2026-09-03', control_ids: [control.id] });
+    expect(repetido.body.repetido).toBe(true);
+    const loteId = creado.body.lote.id;
+    const tracking = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/tracking`)
+      .send({ control_id: control.id, tracking: 'AND-8701' });
+    expect(tracking.status).toBe(200); expect(tracking.body.item.tracking).toBe('AND-8701');
+    const trackingRepeat = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/tracking`)
+      .send({ control_id: control.id, tracking: 'AND-8701' });
+    expect(trackingRepeat.body.repetido).toBe(true);
+    const trackingConflict = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/tracking`)
+      .send({ control_id: control.id, tracking: 'OTRO-8701' });
+    expect(trackingConflict.status).toBe(409); expect(trackingConflict.body.code).toBe('TRACKING_CONFLICTO');
+    expect((await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/iniciar`)).status).toBe(200);
+    const incompleto = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/cerrar`);
+    expect(incompleto.status).toBe(409); expect(incompleto.body.code).toBe('LOTE_INCOMPLETO');
+    const ajeno = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/escanear`).set('Idempotency-Key', 'scan-x').send({ codigo: 'otro' });
+    expect(ajeno.status).toBe(409); expect(ajeno.body.code).toBe('LOTE_PAQUETE_AJENO');
+    const scan = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/escanear`).set('Idempotency-Key', 'scan-1').send({ codigo: 'web:8701' });
+    expect(scan.status).toBe(201);
+    expect(db.prepare("SELECT tipo FROM despacho_lote_eventos WHERE lote_id=? ORDER BY id").all(loteId).map(r => r.tipo)).toContain('paquete_escaneado');
+    expect((await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/escanear`).set('Idempotency-Key', 'scan-1').send({ codigo: 'web:8701' })).body.repetido).toBe(true);
+    const cerrado = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/cerrar`);
+    expect(cerrado.status).toBe(200); expect(cerrado.body.lote.estado).toBe('cerrado');
+    expect(db.prepare("SELECT tipo FROM despacho_lote_eventos WHERE lote_id=?").all(loteId).map(r => r.tipo)).toContain('lote_cerrado');
+    const salida = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/salida`).set('Idempotency-Key', 'salida-1');
+    expect(salida.status).toBe(200); expect(salida.body.lote.salida_confirmada_por).toBeTruthy();
+    expect(db.prepare("SELECT job_type FROM integration_jobs WHERE event_id=?").get(`dispatch-lote-${loteId}`).job_type).toBe('dispatch.woo');
+    expect(db.prepare("SELECT tipo FROM despacho_lote_eventos WHERE lote_id=?").all(loteId).map(r => r.tipo)).toContain('salida_confirmada');
+    const salidaRepeat = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/salida`).set('Idempotency-Key', 'salida-1');
+    expect(salidaRepeat.body.repetido).toBe(true);
+  });
+  it('anula un lote abierto con motivo y conserva la auditoría', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 8702, numeroPedido: '8702', comprador: 'X', items: [] });
+    db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
+    db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, estado_envio, items_json, actualizado_en, fecha_despacho)
+      VALUES ('web:8702', 'web', 8702, '8702', 'pendiente', '[]', ?, '2026-09-03')`).run(new Date().toISOString());
+    db.prepare(`INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en) VALUES ('web:8702', 'pendiente', ?, ?)`).run(new Date().toISOString(), new Date().toISOString());
+    const control = db.prepare("SELECT id FROM despacho_controles WHERE grupo_clave='web:8702'").get();
+    const app = buildTestApp(db);
+    const creado = await request(app).post('/api/preparacion/despacho/lotes').set('Idempotency-Key', 'lote-anular-1')
+      .send({ canal: 'web', fecha_jornada: '2026-09-03', control_ids: [control.id] });
+    const anulado = await request(app).post(`/api/preparacion/despacho/lotes/${creado.body.lote.id}/anular`).send({ motivo: 'paquete no encontrado en staging' });
+    expect(anulado.status).toBe(200); expect(anulado.body.lote.estado).toBe('anulado');
+    const eventos = db.prepare("SELECT tipo, detalle_json FROM despacho_lote_eventos WHERE lote_id=? ORDER BY id").all(creado.body.lote.id);
+    expect(eventos.map((evento) => evento.tipo)).toEqual(['lote_creado', 'lote_anulado']);
+    expect(JSON.parse(eventos[1].detalle_json).motivo).toBe('paquete no encontrado en staging');
+  });
   it('agrupa por pack y hace el escaneo idempotente sin encolar etiqueta al confirmar despacho', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-50', packId: 'PACK-50', numeroPedido: '50', comprador: 'X', items: [] });
     asignarJornadaDespacho(db, 'ml:ORD-50', 'PACK-50');
@@ -135,6 +219,30 @@ describe('control de despacho U0.B', () => {
     await request(app).post(`/api/preparacion/despacho/${a}/escanear`).set('Idempotency-Key', 'global-1').send({ codigo: 'PA' });
     const r = await request(app).post(`/api/preparacion/despacho/${b}/escanear`).set('Idempotency-Key', 'global-1').send({ codigo: 'PB' });
     expect(r.status).toBe(409); expect(r.body.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+  it('resuelve manualmente un paquete ya despachado sin código, con motivo e idempotencia', async () => {
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'MAN', packId: 'P-MAN', numeroPedido: 'MAN', comprador: 'X', items: [] });
+    asignarJornadaDespacho(db, 'ml:MAN', 'P-MAN');
+    const app = buildTestApp(db); await tomarPorApi(app, id);
+    const r = await request(app).post(`/api/preparacion/despacho/${id}/confirmar-manual`).set('Idempotency-Key', 'manual-1')
+      .send({ motivo: 'ya_despachado_sin_codigo', nota: 'entregado antes de activar el escaneo' });
+    expect(r.status).toBe(200); expect(r.body.repetido).toBe(false); expect(r.body.control.estado).toBe('confirmado');
+    expect(db.prepare("SELECT tipo, detalle_json FROM preparacion_eventos WHERE tipo='despacho_confirmado_manual'").get()).toBeTruthy();
+    const repeat = await request(app).post(`/api/preparacion/despacho/${id}/confirmar-manual`).set('Idempotency-Key', 'manual-1')
+      .send({ motivo: 'ya_despachado_sin_codigo' });
+    expect(repeat.body.repetido).toBe(true);
+    expect((await request(app).post(`/api/preparacion/despacho/${id}/confirmar-manual`).set('Idempotency-Key', 'manual-2').send({})).status).toBe(400);
+  });
+  it('regulariza una jornada histórica sin evidencia solo para administrador', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 68639, numeroPedido: '68639', comprador: 'X', items: [] });
+    db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
+    db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, estado_envio, estado_wc, items_json, actualizado_en, fecha_despacho)
+      VALUES ('web:68639','web',68639,'68639','enviado','enviadoandreani','[]',?,?)`).run(new Date().toISOString(), '2026-09-01');
+    const app = buildTestApp(db);
+    const r = await request(app).post('/api/preparacion/despacho/regularizar-jornada-sin-evidencia')
+      .send({ fecha: '2026-09-01', motivo: 'despachado_sin_evidencia_herramienta_inhabilitada' });
+    expect(r.status).toBe(200); expect(r.body.regularizadas).toBe(1);
+    expect(db.prepare('SELECT estado FROM despacho_controles WHERE grupo_clave=?').get('web:68639').estado).toBe('confirmado');
   });
   it('confirma de forma atómica control, etiqueta y auditoría', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'AT', packId: 'PAT', numeroPedido: 'AT', items: [] });
@@ -1681,7 +1789,7 @@ describe('preparacion flujo', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM preparacion_fotos WHERE preparacion_id=?').get(id).n).toBe(1);
   });
 
-  it('purgarFotosBorradas borra archivo y fila si borrado_en tiene más de 60 días; conserva las más recientes', async () => {
+  it('purgarFotosBorradas borra archivo y fila si borrado_en tiene más de 180 días; conserva las más recientes', async () => {
     const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
@@ -1689,8 +1797,8 @@ describe('preparacion flujo', () => {
     const vieja = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'vieja.jpg');
     const reciente = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'reciente.jpg');
 
-    const hace70dias = new Date(Date.now() - 70 * 24 * 3600 * 1000).toISOString();
-    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(hace70dias, vieja.body.foto.id);
+    const hace190dias = new Date(Date.now() - 190 * 24 * 3600 * 1000).toISOString();
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(hace190dias, vieja.body.foto.id);
     db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(new Date().toISOString(), reciente.body.foto.id);
 
     const rutaVieja = rutaAbsoluta(vieja.body.foto.url);
@@ -1702,6 +1810,17 @@ describe('preparacion flujo', () => {
     expect(fs.existsSync(rutaVieja)).toBe(false);
     expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(vieja.body.foto.id)).toBeUndefined();
     expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(reciente.body.foto.id)).toBeTruthy();
+  });
+  it('purgarFotosBorradas conserva fotos vencidas cuando la preparación tiene un hold activo', async () => {
+    const id = await nuevaPrep();
+    const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'blue' } }).jpeg().toBuffer();
+    const subida = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'hold.jpg');
+    const fotoId = subida.body.foto.id;
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(new Date(Date.now() - 190 * 24 * 3600 * 1000).toISOString(), fotoId);
+    db.prepare('INSERT INTO preparacion_fotos_holds (preparacion_id,motivo,creado_por,creado_en) VALUES (?,?,?,?)').run(id, 'reclamo', 'tester', new Date().toISOString());
+    expect(purgarFotosBorradas(db)).toBe(0);
+    expect(db.prepare('SELECT id FROM preparacion_fotos WHERE id=?').get(fotoId)).toBeTruthy();
   });
 
   it('purgarFotosBorradas NO borra archivo ni fila si la url resuelta cae fuera de uploads/ (defensa en profundidad)', async () => {
@@ -1717,6 +1836,50 @@ describe('preparacion flujo', () => {
 
     expect(purgadas).toBe(0);
     expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId)).toBeTruthy();
+  });
+
+  it('fotos-hold exige administrador, valida motivo y permite actualizar/quitar el hold', async () => {
+    const id = await nuevaPrep();
+    const noAdmin = await request(buildTestAppComo(db, 'operario1')).put(`/api/preparacion/${id}/fotos-hold`).send({ motivo: 'reclamo' });
+    expect(noAdmin.status).toBe(403);
+    const invalido = await request(app).put(`/api/preparacion/${id}/fotos-hold`).send({ motivo: 'otro' });
+    expect(invalido.status).toBe(400);
+    expect(invalido.body.code).toBe('MOTIVO_REQUERIDO');
+    const creado = await request(app).put(`/api/preparacion/${id}/fotos-hold`).send({ motivo: 'reclamo' });
+    expect(creado.status).toBe(200);
+    expect(creado.body.hold).toMatchObject({ preparacion_id: id, motivo: 'reclamo', creado_por: 'tester' });
+    const actualizado = await request(app).put(`/api/preparacion/${id}/fotos-hold`).send({ motivo: 'auditoria' });
+    expect(actualizado.body.hold.motivo).toBe('auditoria');
+    const quitado = await request(app).delete(`/api/preparacion/${id}/fotos-hold`);
+    expect(quitado.status).toBe(200);
+    expect(db.prepare('SELECT 1 FROM preparacion_fotos_holds WHERE preparacion_id=?').get(id)).toBeUndefined();
+    const eventos = db.prepare("SELECT tipo, detalle_json FROM preparacion_eventos WHERE preparacion_id=? AND tipo LIKE 'foto_hold_%' ORDER BY id").all(id);
+    expect(eventos.map((evento) => evento.tipo)).toEqual(['foto_hold_creado', 'foto_hold_actualizado', 'foto_hold_eliminado']);
+    expect(JSON.parse(eventos[1].detalle_json)).toMatchObject({ motivo_anterior: 'reclamo', motivo_nuevo: 'auditoria' });
+  });
+
+  it('foto rechaza item_id perteneciente a otra preparación', async () => {
+    const primera = await nuevaPrep();
+    const segunda = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 501, numeroPedido: '501', comprador: 'Otra preparación', items: ITEMS,
+    });
+    await tomarPorApi(app, segunda);
+    const itemAjeno = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(segunda).id;
+    const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'purple' } }).jpeg().toBuffer();
+    const r = await request(app).post(`/api/preparacion/${primera}/foto`).field('item_id', String(itemAjeno)).field('tipo', 'articulo').attach('archivo', buf, 'ajena.jpg');
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('ITEM_PREPARACION_INVALIDO');
+  });
+
+  it('reintentar foto bloquea una preparación ya completada', async () => {
+    const id = await nuevaPrep();
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(id);
+    const foto = db.prepare(`INSERT INTO preparacion_fotos (preparacion_id,item_id,tipo,url,creado_en,estado_proceso) VALUES (?,?,?,?,?,?)`)
+      .run(id, item.id, 'articulo', '/uploads/error.jpg', new Date().toISOString(), 'error');
+    db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
+    const r = await request(app).post(`/api/preparacion/${id}/foto/${foto.lastInsertRowid}/reintentar`);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/completada/i);
   });
 
   it('borrar foto NO borra la fila (soft-delete), registra evento foto_borrada, y deja de contar para /completar', async () => {
@@ -2686,6 +2849,26 @@ describe('syncPedidosCache', () => {
     expect(fila.pick_wave_id).toEqual(expect.any(Number));
   });
 
+  it('/pendientes no devuelve la ola histórica si no hay jornada abierta hoy', async () => {
+    const app = buildTestApp(db);
+    const ts = new Date().toISOString();
+    const dayId = db.prepare(`INSERT INTO operational_days
+      (fecha, estado, abierta_por, abierta_en) VALUES ('2000-01-01', 'cerrada', 'tester', ?)`).run(ts).lastInsertRowid;
+    const waveId = db.prepare(`INSERT INTO pick_waves
+      (operational_day_id, tipo, estado, creada_en) VALUES (?, 'inicial', 'completada', ?)`).run(dayId, ts).lastInsertRowid;
+    db.prepare(`INSERT INTO pick_wave_items
+      (pick_wave_id, pedido_clave, agregado_en) VALUES (?, 'web:historico', ?)`).run(waveId, ts);
+    db.prepare(`INSERT INTO pedidos_cache
+      (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, espejo_ml, items_json, actualizado_en)
+      VALUES ('web:historico', 'web', 9901, '9901', 'Cliente', ?, 'pendiente', 0, '[]', ?)`).run(ts, ts);
+
+    const r = await request(app).get('/api/preparacion/pendientes');
+    const fila = r.body.data.find((item) => item.wc_order_id === 9901);
+    expect(r.status).toBe(200);
+    expect(fila.pick_wave_id).toBeNull();
+    expect(fila.pick_wave_tipo).toBeNull();
+  });
+
   it('GET /pendientes no muestra una fila con preparación en pendiente_deposito (tiene pantalla propia en Historial)', async () => {
     const app = buildTestApp(db);
     db.prepare(`
@@ -2961,6 +3144,26 @@ describe('syncPedidoMlPuntual', () => {
 
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('sync ML con timestamp conserva fecha local y ambos límites en cache y pendientes', async () => {
+    const shipment = { status: 'ready_to_ship', logistic_type: 'cross_docking',
+      sla: { expected_date: '2026-09-02T18:30:00.000Z' } };
+    mlFetch.mockResolvedValueOnce({ status: 200, data: {
+      id: 'ORD-SLA-ANON', status: 'paid', date_created: '2026-09-02T12:00:00Z',
+      buyer: { nickname: 'Comprador anonimo' }, order_items: [], shipping: { id: 77001 },
+    }}).mockResolvedValueOnce({ status: 200, data: shipment });
+
+    await syncPedidoMlPuntual(db, MLCFG, 'ORD-SLA-ANON');
+    const app = buildTestApp(db);
+    const res = await request(app).get('/api/preparacion/pendientes');
+    expect(res.status).toBe(200);
+    expect(res.body.data.find((p) => p.ml_order_id === 'ORD-SLA-ANON')).toMatchObject({
+      fecha_despacho: '2026-09-02',
+      fecha_despacho_limite: '2026-09-02T18:00:00.000Z',
+    });
+    expect(db.prepare('SELECT fecha_despacho, fecha_despacho_limite FROM pedidos_cache WHERE clave=?').get('ml:ORD-SLA-ANON'))
+      .toEqual({ fecha_despacho: '2026-09-02', fecha_despacho_limite: '2026-09-02T18:00:00.000Z' });
+  });
 
   it('POST /iniciar ML devuelve 409 y no crea preparación si el envío no es elegible', async () => {
     mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-14', status: 'paid', shipping: { id: 814 }, buyer: { nickname: 'x' } } })

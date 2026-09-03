@@ -1,7 +1,7 @@
 # Plan Maestro de FusionBikes: operación, VPS y App
 
 **Estado:** especificación canónica vigente
-**Versión documental:** 2026-09-01 / programa E0–E24
+**Versión documental:** 2026-09-03 / programa E0–E24 + entrega urgente UM1
 **Backend canónico:** `/opt/fusionbikes/herramientas`
 **Rama productiva observada:** `conteo-confiable`
 **Base verificada de esta reconstrucción:** `bc13898f9faeffcde00f49616ce6cb858eff03a3`
@@ -12,7 +12,7 @@
 
 Este documento reúne la especificación funcional acumulativa para Herramientas y App. No es un changelog ni prueba por sí mismo que exista una función. Recupera el contenido útil del plan histórico, incorpora las decisiones del descubrimiento operativo y separa con precisión presente, brecha y objetivo.
 
-La copia literal de `ce5c3cb` está en `/opt/fusionbikes/herramientas/docs/superpowers/archive/plan-maestro-v2-ce5c3cb.md`. El registro de decisiones está en `/opt/fusionbikes/herramientas/docs/superpowers/decisions/plan-maestro-decisions.md`; progreso y evidencia viven en `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E24.
+La copia literal de `ce5c3cb` está en `/opt/fusionbikes/herramientas/docs/superpowers/archive/plan-maestro-v2-ce5c3cb.md`. El registro de decisiones está en `/opt/fusionbikes/herramientas/docs/superpowers/decisions/plan-maestro-decisions.md`; progreso y evidencia viven en `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E24/UM1.
 
 ### 1.1 Vocabulario de estado
 
@@ -43,7 +43,7 @@ Todo agente inicia leyendo `/opt/fusionbikes/herramientas/CLAUDE.md`, `/opt/fusi
 
 ### 2.2 Apertura, horarios y cierre
 
-El primer operario abre la jornada, confirma fecha local y horarios, revisa integraciones, agente/impresora y pendientes. Una falla bloquea solo operaciones afectadas. La web tiene máximo normal de preparación 15:00 con excepciones por calendario. ML Full queda fuera. El mismo transporte retira MercadoEnvíos, Andreani y Flex: ML/Andreani deben estar listos con 30 minutos de margen y Flex debe salir como máximo a las 17:00 para que el transporte regrese antes del cierre de las 19:00. MercadoEnvíos no tiene una hora fija: puede variar por paquete y se usa la hora máxima de entrega al centro de acopio.
+El primer operario ve un preflight automático y reintentable de ML/Woo, frescura de datos y pendientes, confirma los horarios importados y abre la jornada. La impresora figura como capacidad pendiente de E3 hasta que exista el agente Windows. Una falla bloquea solo las operaciones afectadas y explica la acción de recuperación. La web tiene máximo normal de preparación 15:00 con excepciones por calendario. ML Full queda fuera. El mismo transporte retira MercadoEnvíos, Andreani y Flex: ML/Andreani deben estar listos con 30 minutos de margen y Flex debe salir como máximo a las 17:00 para que el transporte regrese antes del cierre de las 19:00. MercadoEnvíos no tiene una hora fija: puede variar por paquete y se usa la hora máxima de entrega al centro de acopio.
 
 Un diferido registra fecha, motivo, nota, origen de instrucción y auditoría. Supervisor o despacho cierra la jornada. Pendientes se arrastran con alerta; no se exige reconciliación física completa de staging al cierre.
 
@@ -53,7 +53,7 @@ Un diferido registra fecha, motivo, nota, origen de instrucción y auditoría. S
 | Tipo | Responsabilidad |
 | --- | --- |
 | `OperationalDay` | fecha local, horarios confirmados, salud, pendientes y cierre |
-| `PickWave` | conjunto congelado de necesidades de picking |
+| `PickWave` | conjunto de necesidades de picking con guía de zona y estado de búsqueda/mesa |
 | `Preparation` | asignación de producto/pedido y estado de preparación |
 | `Package` | contenido físico y ciclo evidencia→despacho |
 | `PhotoEvidence` | archivo, requisito, perfil/versionado y procesamiento |
@@ -79,7 +79,7 @@ Un diferido registra fecha, motivo, nota, origen de instrucción y auditoría. S
 - Toda mutación reintentable usa clave idempotente; concurrencia usa `expected_version`.
 - Envelope offline: `operation_id`, dispositivo, usuario, lease, versión base, hora real y payload. Respuesta: aceptado, repetición idempotente o conflicto explícito.
 - Auditoría legacy se conserva y proyecta. Movimientos/auditoría tienen retención indefinida.
-- PII solo cuando la tarea la necesita. Capturas de pantalla: advertencia y capacitación, no promesa de bloqueo.
+- La PC puede abrir la ficha completa, pero el tablero común y las notificaciones no muestran PII. El celular respeta permisos de evidencia e historial; las capturas de pantalla reciben advertencia y capacitación.
 
 ## 4. Preparación, picking y paquetes
 
@@ -101,37 +101,37 @@ La preparación integrada posee cola continua, claims técnicos, escaneo, requis
 
 ### Brecha existente
 
-El backend ya implementa apertura diaria, ola inicial congelada, mini-olas acumulativas, mini-ola ML urgente, claim con vencimiento y cierre de jornada en `routes/jornada.js` y `lib/jornada.js`. Todavía no existe aceptación operativa completa E1–E2: la UI no presenta aún toda la jornada/ola como vista operativa, el picking no está consolidado por SKU/ruta física y la reasignación automática de última unidad pertenece a E12.
+El backend ya implementa apertura diaria, ola inicial, mini-olas, mini-ola ML urgente, claims con vencimiento y cierre en `routes/jornada.js` y `lib/jornada.js`. El comportamiento actual todavía congela la ola, ofrece escaneo durante el recorrido y no modela mesa, zonas, retorno obligatorio ni ayuda física registrada. La UI tampoco separa completamente estado de ola y estado de pedido. La reasignación automática de última unidad pertenece a E12. Esta especificación redefine el objetivo de E1; no declara implementado lo que aún no está en código.
 
 ### Flujo normal paso a paso
 
-1. Abrir la jornada y confirmar fecha local, hora de corte web, ventanas ML, salud de integraciones, impresora y pendientes arrastrados.
-2. Crear la ola inicial con pedidos elegibles; agrupar cantidades por SKU y ordenar por secuencia física de ubicaciones.
-3. Congelar miembros y cantidades de la ola. Cada pedido nuevo crea o se agrega a una mini-ola; un ML urgente crea una mini-ola prioritaria.
-4. El operario reclama una tarea, escanea producto y confirma cada cantidad; la confirmación se persiste inmediatamente.
-5. En preparación, cada unidad consolidada se asigna a un pedido. Se elige agrupación o división de paquetes y se registra contenido.
-6. El pedido multipaquete se mantiene unido para salida, salvo autorización de supervisor o despacho.
-7. Completar evidencia, revisar el resumen y aprobar. El paquete pasa al sector real “listo para despacho”.
+1. Ejecutar el preflight, mostrar causa/acción para cada fallo y confirmar fecha, límites, responsables y pendientes.
+2. Crear una ola inicial con todos los pedidos elegibles actuales. Los normales posteriores forman mini-olas; un ML urgente se incorpora a la ola activa.
+3. Recorrer la ola consolidada por zonas manuales. La búsqueda no escanea unidad por unidad; un segundo operario puede ayudar por zona sin modificar cantidades.
+4. Pasar a mesa. El responsable recibe la ayuda, identifica al ayudante y escanea cada unidad. El sistema sugiere pedido por prioridad y el responsable confirma la asignación.
+5. Si un urgente requiere una zona ya recorrida, crear retorno obligatorio. Un faltante bloquea solo el pedido afectado y crea incidencia.
+6. Dividir paquetes antes de E2. E2 continúa con control, fotos, sellado, aprobación y sector listo para despacho.
+7. Cerrar la ola cuando cada unidad quedó asignada, devuelta, resguardada o derivada con bloqueo explícito.
 
 ### Estados y transiciones
 
-pedido retenido → elegible → en ola → picking → en preparación → evidencia pendiente → aprobado → listo para despacho. Pausa conserva claim hasta aviso a 10 minutos; a los 15 se libera. Un retenido permanece visible con motivo pero no es pickeable.
+Jornada: pendiente → abierta → cerrada. Ola: disponible → en búsqueda → en mesa → cerrada. Pedido: retenido → elegible → en ola → armado individual → pausado|bloqueado → evidencia pendiente → aprobado → listo para despacho. La pausa conserva claim hasta aviso a 10 minutos; a los 15 se libera y queda disponible con aviso. Un retenido permanece visible con motivo pero no es pickeable.
 
 ### Excepciones, concurrencia e idempotencia
 
-Doble escaneo técnico no duplica una mutación; un escaneo acumulativo legítimo sí aumenta cantidad. Reintentos llevan idempotency key. Cambios de línea invalidan solo contenido y evidencia afectados. ML puede tomar la última unidad antes de salida física; si estaba en web aprobado, se reabre, invalida evidencia/etiquetas afectadas y alerta. No se permiten cantidades negativas ni asignación simultánea de una unidad.
+Doble escaneo técnico no duplica una mutación; el escaneo final unitario asigna una unidad a un pedido y nunca a dos. Toda mutación usa idempotency key y versión esperada. Claims identifican un responsable de ola; la ayuda física se registra como evento separado. Cambios externos bloquean el pedido afectado. Un faltante se clasifica, escala al supervisor y deja los productos separados en resguardo. Sustituciones transitorias requieren constancia de cliente, motivo y reflejo comercial; ML bloquea si no puede actualizarse.
 
 ### Comportamiento online y offline
 
-La web actual requiere conexión para confirmar. Mantiene borradores visuales mientras la página siga abierta. La App futura permite capturar eventos/fotos sobre tareas descargadas, pero aprobación final y reasignaciones esperan servidor. Un lease vencido impide acciones nuevas.
+La web actual requiere conexión para mutaciones de E1, pero conserva borrador y fotos mientras la página siga abierta. Recarga o sesión vencida devuelve a la misma tarea. PC y celular sincronizan el mismo estado. La App futura permite el flujo completo y captura provisional offline; aprobación final, sustituciones y reasignaciones esperan servidor. Un lease vencido impide acciones nuevas.
 
 ### UX web, App y vista rápida
 
-Inicio con trabajo urgente de hoy, ola y mini-olas claramente separadas, contador de nuevos pedidos, prioridad ML visible sin depender solo de color, ruta física y progreso por SKU/pedido. Vista rápida debe mostrar qué quedó guardado, qué está pendiente y quién posee cada tarea.
+PC inicia con tablero de operación: riesgos, ola activa, mini-olas, nuevos, vencimientos, bloqueos y tareas tomadas. Celular inicia en la tarea propia. La tablet futura será tablero común sin PII. Los estados de ola y pedido se muestran separados; los límites tienen hora, tiempo restante y severidad. Búsqueda incluye pedido, SKU, nombre y tracking; historial filtra por estado, fecha e incidencias.
 
 ### Auditoría y retención
 
-Guardar actor, dispositivo, operación, pedido, paquete, producto, cantidad, origen/destino, versión esperada, fecha real y fecha del servidor. Movimientos y auditoría indefinidos; borradores locales se purgan después de sincronizar.
+Guardar actor, dispositivo, operación, pedido, ola, zona, ayudante, producto, cantidad, origen/destino, versión esperada, fecha real y fecha del servidor. Registrar fallos operativos y técnicos relevantes, reintentos agrupados, antes/después y motivo. No borrar eventos: una corrección enlaza un nuevo evento. Movimientos y auditoría indefinidos; fotos 180 días según E2; borradores locales se purgan después de sincronizar.
 
 ### Métricas y objetivos
 
@@ -139,7 +139,7 @@ Tiempo activo de picking, recorrido aproximado, espera, pausas, faltantes, reape
 
 ### Escenarios de aceptación
 
-Pedido nuevo durante ola; ML urgente; última unidad web aprobada; doble toque; recarga; claim vencido; pedido retenido; pedido multipaquete; salida parcial autorizada; cambio/cancelación concurrente.
+Preflight con falla parcial; ola inicial; mini-ola normal; ML urgente que exige retorno; ayuda por zona; pausa y reanudación; escaneo unitario y asignación; código desconocido; faltante; cambio/cancelación concurrente; sustitución; diferimiento; recarga; claim vencido; sesión vencida; cierre con derivados; histórico sin evidencia.
 
 ### Entregas que lo implementan
 
@@ -147,7 +147,7 @@ E1 define jornada/olas/picking; E2 evidencia/paquetes; E12 integra compromisos, 
 
 ### Decisiones pendientes, responsable e impacto
 
-Confirmar campo SLA ML real y secuencia física inicial de ubicaciones. Responsables: integración/operación y depósito. Afecta aceptación E1/E4.
+Definir nombres iniciales de zonas manuales y responsables fijos de apertura; las zonas pueden ser editadas por cualquier operario, se aplican desde la próxima ola y quedan como sugerencias no verificadas. Responsable: depósito. Afecta la demo, no bloquea la documentación.
 
 ## 5. Evidencia fotográfica y aprobación
 
@@ -1078,10 +1078,61 @@ Precios, matcher, catálogo, consulta de precios, códigos universales, variacio
 | Consulta de precios | Existente con diseño histórico | Frescura, fuente y UX móvil |
 | Herramientas auxiliares | Inventario pendiente por tarea | Dueño operativo, uso real y deuda antes de rediseñar |
 
+## 18.1 Entrega urgente UM1 — Guardia ML y cobertura de publicaciones
+
+### Propósito, límite y prioridad
+
+UM1 corrige el hueco operativo por el que una variación activa de MercadoLibre sin SKU exacto pudo venderse y nunca entrar correctamente a preparación. Es transversal al programa: no renumera E0–E24, no adelanta E11 ni rediseña catálogo, stock físico o publicación masiva. Su resultado es una Guardia ML que detecta, hace visible y retiene el riesgo antes de que depósito reciba una tarea imposible.
+
+La unidad de cobertura es siempre `publicación + variación`. Una decisión histórica `omitir`, una marca “correcta”, un título parecido o una variación hermana vinculada no cubren otra clave. Una clave segura requiere decisión `asignar`/`confirmar` y SKU existente en Woo.
+
+### Actores, dispositivos y permisos
+
+- Ventas, Supervisor y Administración ven Guardia, reciben bandeja/push y pueden tomar casos desde PC o navegador móvil. Reconocer significa asumir responsabilidad; el dueño es visible y un relevo exige motivo.
+- Solo Supervisor o Administración puede cambiar la prioridad de sobreventa. Un Administrador designado habilita el paso de lectura a acciones reales sobre ML. Depósito ve pedidos retenidos como no preparables.
+
+### Detección, frescura y estados
+
+- Escaneo al abrir y cada 15 minutos. Más de 30 minutos sin escaneo completo, o error ML, deja Guardia `degradada`; conserva el último resultado y nunca declara el control sano.
+- Guardia es `sana` solo con refresco vigente, cero variantes vendibles sin cobertura y ninguna operación remota crítica pendiente. Casos sin stock permanecen en Corrección normal.
+- Casos: `abierto → tomado → resolviendo → pendiente_ml → resuelto`; excepción hasta vencimiento. Cada corrección agrega eventos, nunca reescribe historia. Alertas reavisan cada 5 minutos y escalan a los 15; excepciones vencen al cierre y reaparecen urgentes con el mismo responsable.
+
+### Tres superficies claras
+
+1. **Guardia ML:** cola priorizada y detalle con título/variante, stock ML, ventas ML de 30 días, pedido/plazo si existe, dueño, motivo, acción requerida y enlaces ML/Woo. Un pedido retenido encabeza por fecha máxima de despacho.
+2. **Corrección:** agrupada por publicación, con vínculo separado por variación. Ofrece búsqueda y sugerencias explicables; solo `seller_sku` idéntico y existente se auto-confirma auditadamente.
+3. **Consulta:** conserva historial y Matcher legacy con aviso de reemplazo. Nunca vuelve a ocultar cobertura por “marcar correcta”.
+
+### Vínculos, catálogo y ML remoto
+
+- Vínculo manual exige vista previa de publicación, variante, SKU, producto, stock Woo y efecto de sync. Lotes son parciales explícitos: cada operación queda auditada y una falla remota sigue urgente.
+- Al vincular, Fusion persiste operación remota idempotente para escribir `seller_sku`, reconciliar stock y revisar pedidos abiertos. No se resuelve hasta confirmación ML.
+- Con SKU correcto: desvincular y volver a vincular. Si falla el segundo paso, no restaura el SKU errado; queda urgente y reintentable. Sin SKU correcto: conserva temporalmente `seller_sku` remoto, bloquea sync y exige pausa o excepción. Pausa con hermanas exige doble confirmación informada.
+- Producto Woo sin SKU se corrige en Catálogo Woo; producto inexistente crea tarea de alta para Ventas y solo cierra con SKU, vínculo y sync validados. Motivos: sin SKU Woo, producto inexistente, vínculo dudoso, excepción comercial, incidencia ML u otro, todos con nota.
+- SKU Woo eliminado/inválido abre Guardia y encola stock cero. Cambio externo de `seller_sku` en ML bloquea sync y exige revisión; ninguna fuente pisa silenciosamente a la otra.
+
+### Pedidos retenidos, stock compartido y sobreventa
+
+- Orden ML sin cobertura se registra y retiene en Fusion sin cambiar estado ni nota de Woo; no llega a ola/preparación. Se libera explícitamente al resolver. Si cancela, se cierra la sub-tarea del pedido pero no la publicación riesgosa.
+- Un SKU puede estar en varias claves activas y cada clave publica el stock completo de Woo. El segundo vínculo requiere confirmación de stock compartido, motivo y auditoría; los grupos existentes se revisan en Corrección.
+- ML no reserva atómicamente entre claves: no se promete cero sobreventa. Si ventas simultáneas superan físico, se abre incidente crítico y retiene excedentes. Entre ML gana plazo y luego antigüedad; frente a web, ML gana la última unidad. Supervisor/Admin puede justificar override.
+
+### Auditoría, aceptación y rollout
+
+- Auditoría inmutable de scan, claim/relevo, vínculo, lote, pausa, excepción, expiración, operación remota, divergencia, tarea, retención/liberación/cancelación y override.
+- Objetivo: riesgo reconocido antes de 15 minutos y resuelto antes de otra venta. Backlog inicial priorizado y cerrado antes de declarar Guardia sana.
+- Primera publicación de **lectura**: crea/incorpora casos, sin escribir ML. Administrador designado valida total, prioridades y muestra por categoría; solo entonces habilita acciones.
+- Aceptación: variante sin SKU, `seller_sku` válido, vínculo/lote parcial, ML caído, scan vencido, pausa con hermanas, excepción vencida, SKU Woo eliminado, deriva ML, pedido retenido/cancelado/liberado, ventas simultáneas de stock compartido, operación repetida y rollback. Requiere revisión, tests, E2E 390/768/1440 y jornada observada.
+
+### Relación con E0–E24
+
+UM1 protege E1 (ningún pedido inválido llega a picking), E11 (política de publicación) y E12 (faltantes/reasignación). No habilita stock físico, offline, órdenes de compra ni App móvil. Su ficha es fuente de progreso y no adelanta E11.
+
 ## 19. Secuencia de entregas E0–E24
 
 | Entrega | Superficie | Resultado tangible | Dependencia dominante |
 | --- | --- | --- | --- |
+| UM1 urgente | VPS + web móvil | Guardia ML, cobertura exacta, retención de ventas sin SKU y corrección auditada | ML/Woo actuales; protege E1/E11/E12 |
 | E0 | Ambos | Maestro, memoria, archivo, decisiones, patrones, fichas y handoffs reconstruidos | Ninguna |
 | E1 | VPS | Apertura diaria, horarios, olas y picking consolidado | Entrega operativa anterior |
 | E2 | VPS/web móvil | Evidencia, perfiles, paquetes y aprobación confiable | Entrega operativa anterior |

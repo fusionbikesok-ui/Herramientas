@@ -1,6 +1,7 @@
 {
   "apiBase": "https://REEMPLAZAR/api/etiquetas",
   "agentId": "deposito-pc-01",
+  "apiToken": "REEMPLAZAR_TOKEN_DEL_AGENTE",
   "pollMs": 2000,
   "printCommand": "C:/FusionBikes/print-label.cmd"
 }

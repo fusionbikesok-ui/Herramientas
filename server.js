@@ -23,12 +23,14 @@ import { geminiRouter } from './routes/gemini.js';
 import { nuevosProductosRouter } from './routes/nuevosProductos.js';
 import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
-import { matcherRouter } from './routes/matcher.js';
+import { matcherRouter, dispararRefrescoMl } from './routes/matcher.js';
 import { pushSkusPendientes } from './lib/matcherPush.js';
 import { syncRouter, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
+import { guardiaMlRouter } from './routes/guardiaMl.js';
+import { procesarOperacionesGuardia } from './lib/guardiaMl.js';
 import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
 import { jornadaRouter } from './routes/jornada.js';
@@ -297,7 +299,17 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     // camino puntual vía syncPedidoMlPuntual.)
   });
 
-  app.use('/api', authGuard, scopeCheck);
+  // El agente Windows no dispone de sesión de navegador: cuando presenta Bearer
+  // se autentica con el mismo JWT revocable de dispositivos que usa la App. Las
+  // solicitudes sin Bearer siguen por la sesión web y sus permisos normales.
+  app.use('/api/etiquetas', (req, res, next) => {
+    if (!/^Bearer\s+/i.test(req.get('authorization') || '')) return next();
+    return mobileAuth(req, res, next);
+  });
+  app.use('/api', (req, res, next) => {
+    if (req.path.startsWith('/etiquetas') && req.user && /^Bearer\s+/i.test(req.get('authorization') || '')) return next();
+    return authGuard(req, res, next);
+  }, scopeCheck);
 
   app.post('/api/admin/integration-jobs/:id/reprocess', requireAdmin, (req, res) => {
     const ok = reprocesarJob(app._db, Number(req.params.id));
@@ -321,6 +333,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/pedidos', pedidosRouter(db));
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
   app.use('/api/cobertura', coberturaRouter(db, syncCfg));
+  app.use('/api/guardia-ml', guardiaMlRouter(db, syncCfg));
+  app.use('/guardia-ml', express.static(path.join(__dirname, 'public/guardia-ml')));
   // Matcher unificado, entrega 1 (2026-08-14): Cobertura dejó de ser una pantalla propia,
   // pasó a ser la dirección Woo→ML del Matcher. `/cobertura` no puede dar 404 (puede haber
   // accesos directos guardados) — redirige con `?aviso=unificado` para que el frontend del
@@ -430,6 +444,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           .catch(err => console.error('ML→WC error:', err.message));
       });
 
+      // UM1 — Guardia ML: refresco completo de publicaciones cada 15 min. El candado
+      // compartido de matcher evita solapamientos; el refresco es fail-closed y no toca
+      // publicaciones remotas, solo actualiza el cache local que la Guardia inspecciona.
+      cron.schedule('*/15 * * * *', () => {
+        const r = dispararRefrescoMl(app._db, syncCfg, 'all');
+        if (!r.ok && !r.running) console.error('Guardia ML: no se pudo iniciar lectura:', r.error);
+      });
+      cron.schedule('*/5 * * * *', () => {
+        procesarOperacionesGuardia(app._db, syncCfg).catch(err => console.error('Guardia ML operaciones:', err.message));
+      });
+
       cron.schedule('2-59/10 * * * *', () => {          // ML
         syncWcToMl(app._db, syncCfg)
           .catch(err => console.error('WC→ML error:', err.message));
@@ -498,7 +523,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             "WHERE p.seller_sku IS NOT NULL AND p.seller_sku != '' " +
             "  AND p.status = 'active' " +
             "  AND EXISTS (SELECT 1 FROM catalogo_cache c WHERE c.sku = p.seller_sku) " +
-            "  AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave)"
+            "  AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave)" +
+            "  AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d2 WHERE d2.sku = p.seller_sku AND d2.accion IN ('asignar','confirmar'))" +
+            // UM1: la autocorrección no puede saltear Guardia, auditoría ni la
+            // confirmación de stock compartido. Queda suspendida hasta que la
+            // operación durable de Guardia sea la única vía de vinculación.
+            "  AND 1 = 0"
           );
           const r = insert.run();
           if (r.changes > 0)
@@ -575,7 +605,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         // para no depender de que alguien abra el Matcher; síncrono y barato (solo SELECTs
         // indexados + un INSERT por vinculación, nada de red).
         try {
-          const vinculadas = autoVincularPorSellerSku(app._db);
+          // UM1: no escribir decisiones desde un cron legacy. La publicación
+          // debe ser detectada por Guardia y resuelta con dueño y auditoría.
+          const vinculadas = 0;
           if (vinculadas > 0) console.log(`auto-vinculación por seller_sku: ${vinculadas} publicaciones`);
         } catch (err) {
           console.error('auto-vinculación por seller_sku error:', err.message);

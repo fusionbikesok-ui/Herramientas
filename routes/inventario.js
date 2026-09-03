@@ -1321,7 +1321,7 @@ export function inventarioRouter(db, wooCfg) {
         const pendiente = (stockInicial !== null && stockInicial !== undefined)
           ? diferenciaSobrantePendiente.get(sesion.id, item.sku)
           : null;
-        if (pendiente) {
+        if (pendiente && !req.user?.is_admin) {
           fallidos++;
           errores.push({
             sku: item.sku,
@@ -1354,7 +1354,7 @@ export function inventarioRouter(db, wooCfg) {
               sesion.id, item.sku, stockInicial, item.cantidad, diferencia, valorDiferencia,
               tipo, requiereRevision, stockInicial, now()
             );
-            if (frenarSobrante) {
+            if (frenarSobrante && !req.user?.is_admin) {
               fallidos++;
               errores.push({
                 sku: item.sku,
@@ -1378,6 +1378,12 @@ export function inventarioRouter(db, wooCfg) {
         }
 
         db.prepare('UPDATE inventario_conteos SET ajustado_en=? WHERE id=?').run(now(), item.id);
+        if (req.user?.is_admin) {
+          db.prepare(`UPDATE inventario_diferencias
+            SET revisado_en=COALESCE(revisado_en,?), revisado_por=COALESCE(revisado_por,?)
+            WHERE sesion_id=? AND sku=? AND tipo='sobrante' AND requiere_revision=1 AND revisado_en IS NULL`)
+            .run(now(), req.user.username || null, sesion.id, item.sku);
+        }
         ajustados++;
       } catch (e) {
         fallidos++;
@@ -1499,6 +1505,7 @@ export function inventarioRouter(db, wooCfg) {
 
   router.get('/sesiones', (req, res) => {
     const usuario = req.user?.username;
+    const esAdmin = !!req.user?.is_admin;
     // Una sola consulta agregada (LEFT JOIN + COUNT condicional) en vez de un COUNT
     // por sesión en un loop: para 'descartada' el conteo de fallidos no aplica (0),
     // porque esas sesiones nunca llegaron a intentar el ajuste en Woo.
@@ -1506,10 +1513,10 @@ export function inventarioRouter(db, wooCfg) {
       SELECT s.*, COUNT(CASE WHEN s.estado <> 'descartada' AND t.id IS NOT NULL AND t.ajustado_en IS NULL THEN 1 END) AS fallidos
       FROM inventario_sesiones s
       LEFT JOIN inventario_conteos t ON t.sesion_id = s.id AND s.estado <> 'descartada'
-      WHERE s.usuario=? AND s.estado IN ('confirmada','confirmada_con_errores','descartada')
+      WHERE ${esAdmin ? "s.estado IN ('abierta','confirmando','confirmada','confirmada_con_errores','descartada')" : "s.usuario=? AND s.estado IN ('confirmada','confirmada_con_errores','descartada')"}
       GROUP BY s.id
       ORDER BY COALESCE(s.confirmado_en, s.creado_en) DESC LIMIT 100
-    `).all(usuario);
+    `).all(...(esAdmin ? [] : [usuario]));
     res.json({ ok: true, data: rows.map(sesionOut) });
   });
 

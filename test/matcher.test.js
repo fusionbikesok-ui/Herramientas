@@ -220,6 +220,7 @@ describe('GET /publicaciones?scope=atencion', () => {
     seedCache(db, { clave: 'MLA1|', itemId: 'MLA1' });
     seedCache(db, { clave: 'MLA3|55', itemId: 'MLA3', variationId: '55' });
     seedCache(db, { clave: 'MLA9|', itemId: 'MLA9' }); // no necesita atención
+    seedDecision(db, { clave: 'MLA9|', sku: null, accion: 'omitir' });
     seedSyncLog(db, { clave: 'MLA1|', estado: 'sin_mapeo' });
     seedSyncLog(db, { clave: 'MLA3|55', estado: 'remapeo_requerido' });
 
@@ -238,6 +239,7 @@ describe('GET /publicaciones?scope=atencion', () => {
 
   it('scope=atencion sin pendientes devuelve lista vacía sin error', async () => {
     seedCache(db, { clave: 'MLA9|', itemId: 'MLA9' });
+    seedDecision(db, { clave: 'MLA9|', sku: null, accion: 'omitir' });
     const r = await request(app).get('/api/matcher/publicaciones?scope=atencion');
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);

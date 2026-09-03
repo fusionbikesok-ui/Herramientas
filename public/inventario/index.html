@@ -742,6 +742,8 @@
   }
 
   function estadoHistorialTexto(s){
+    if(s.estado === 'abierta') return 'Abierta';
+    if(s.estado === 'confirmando') return 'Confirmando';
     if(s.estado === 'confirmada') return 'Confirmada';
     if(s.estado === 'confirmada_con_errores') return 'Confirmada con errores';
     return 'Descartada';
@@ -2685,8 +2687,10 @@
     }
     pintarItemsResultado(items, esDescartada);
     var totalFallidos = esDescartada ? 0 : items.filter(function(i){ return i.ajustado === false; }).length;
-    document.getElementById('btn-reintentar-fallidos').style.display =
-      (totalFallidos > 0 && !esDescartada) ? 'block' : 'none';
+    var puedeConfirmarAdmin = usuarioEsAdmin() && (sesion.estado === 'abierta' || sesion.estado === 'confirmada_con_errores');
+    var btnReintentar = document.getElementById('btn-reintentar-fallidos');
+    btnReintentar.textContent = puedeConfirmarAdmin ? 'Confirmar ajuste como administrador' : 'Reintentar fallidos';
+    btnReintentar.style.display = ((!esDescartada && totalFallidos > 0) || puedeConfirmarAdmin) ? 'block' : 'none';
     document.getElementById('btn-volver-inicio').textContent = 'Volver al historial';
   }
 

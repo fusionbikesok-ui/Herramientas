@@ -1,4 +1,5 @@
 import fs from 'fs';
+import crypto from 'crypto';
 import path from 'path';
 import express from 'express';
 import multer from 'multer';
@@ -17,13 +18,13 @@ import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
-import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment } from '../lib/horariosDespacho.js';
-import { sincronizarMiniOlas } from '../lib/jornada.js';
+import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment, calcularSlaPreparacion } from '../lib/horariosDespacho.js';
+import { sincronizarMiniOlas, jornadaDeHoy } from '../lib/jornada.js';
 import { ensureTablesJornada } from './jornada.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
-const now = () => new Date().toISOString();
+  const now = () => new Date().toISOString();
 
 // Perfiles de foto soportados (validación de los endpoints de perfiles por categoría y por SKU).
 const PERFILES_VALIDOS = ['bici', 'kit_transmision', 'sellado'];
@@ -31,6 +32,23 @@ const PERFILES_VALIDOS = ['bici', 'kit_transmision', 'sellado'];
 // Motivos válidos para confirmar-manual (atajo que salta el escaneo real). Lista corta a
 // propósito — el objetivo es dejar rastro auditable, no dar una excusa en blanco.
 const MOTIVOS_CONFIRMACION_MANUAL = ['codigo_ilegible', 'sin_etiqueta', 'otro'];
+const MOTIVOS_DESPACHO_MANUAL = ['ya_despachado_sin_codigo'];
+
+function encolarSalidaWoo(db, lote, usuario) {
+  const at = new Date().toISOString();
+  const eventId = `dispatch-lote-${lote.id}`;
+  const orders = db.prepare(`SELECT DISTINCT p.wc_order_id, p.canal FROM despacho_lote_items li
+    JOIN despacho_controles d ON d.id=li.control_id
+    JOIN preparaciones p ON (p.pack_id=d.grupo_clave OR p.clave=d.grupo_clave)
+    WHERE li.lote_id=? AND p.wc_order_id IS NOT NULL`).all(lote.id);
+  const metadata = JSON.stringify({ lote_id: lote.id, canal: lote.canal, orders, actor: usuario });
+  db.prepare(`INSERT OR IGNORE INTO integration_events
+    (event_id,event_type,channel,source,resource_id,payload_version,occurred_at,received_at,correlation_id,dedupe_key,metadata_json,status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending')`).run(eventId, 'dispatch.confirmed', lote.canal, 'fusionbikes', String(lote.id), 'v1', at, at, eventId, eventId, metadata);
+  const event = db.prepare('SELECT event_id FROM integration_events WHERE event_id=?').get(eventId);
+  if (event) db.prepare('INSERT OR IGNORE INTO integration_jobs (event_id,job_type,available_at) VALUES (?,?,?)').run(event.event_id, 'dispatch.woo', at);
+  return eventId;
+}
 
 // Estados en los que NO se puede seguir trabajando una preparación (escanear, confirmar
 // manual, subir fotos) — hallazgo del revisor: antes se podía escanear/fotografiar una
@@ -63,6 +81,21 @@ function bloqueoPorEstado(prep) {
     return 'esta preparación está cerrada — pedile a un compañero que la reabra antes de seguir';
   }
   return 'ya completada';
+}
+
+function rolUsuario(user) {
+  return String(user?.rol || user?.role || user?.perfil || '').toLowerCase();
+}
+
+function puedeAdministrarPerfiles(user) {
+  return !!user?.is_admin || ['supervisor', 'supervisor_deposito'].includes(rolUsuario(user));
+}
+
+function puedeVerDetallePreparacion(db, prep, user) {
+  if (!user?.username) return false;
+  if (user.is_admin || ['supervisor', 'supervisor_deposito', 'auditor', 'despacho'].includes(rolUsuario(user))) return true;
+  const claim = db.prepare("SELECT 1 FROM preparacion_claims WHERE preparacion_id=? AND usuario=? AND (expires_at IS NULL OR expires_at>datetime('now'))").get(prep.id, user.username);
+  return !!claim;
 }
 
 // ─── Tablas (idempotente, patrón de routes/pedidos.js) ───────────────────────
@@ -119,7 +152,17 @@ function ensureTables(db) {
   try { db.prepare('ALTER TABLE preparacion_fotos ADD COLUMN upload_id TEXT').run(); } catch (e) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables upload_id:', e.message);
   }
+  for (const ddl of [
+    'ALTER TABLE preparacion_fotos ADD COLUMN fingerprint TEXT',
+    'ALTER TABLE preparacion_fotos ADD COLUMN procesando_reclamada_en TEXT',
+  ]) { try { db.prepare(ddl).run(); } catch (_) {} }
   db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_preparacion_fotos_upload ON preparacion_fotos(preparacion_id, upload_id) WHERE upload_id IS NOT NULL').run();
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_fotos_holds (
+    preparacion_id INTEGER PRIMARY KEY,
+    motivo TEXT NOT NULL,
+    creado_por TEXT,
+    creado_en TEXT NOT NULL
+  )`).run();
 
   db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_perfiles (
     categoria       TEXT PRIMARY KEY,
@@ -136,6 +179,17 @@ function ensureTables(db) {
     requisitos_json TEXT,
     actualizado_en  TEXT NOT NULL
   )`).run();
+  db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_perfiles_eventos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alcance TEXT NOT NULL, clave TEXT NOT NULL, tipo TEXT NOT NULL,
+    usuario TEXT, detalle_json TEXT NOT NULL, creado_en TEXT NOT NULL
+  )`).run();
+  for (const ddl of [
+    'ALTER TABLE preparacion_perfiles ADD COLUMN version INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE preparacion_perfiles_sku ADD COLUMN version INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE preparacion_items ADD COLUMN perfil_version INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE preparacion_items ADD COLUMN requisitos_json_snapshot TEXT',
+  ]) { try { db.prepare(ddl).run(); } catch (_) {} }
 
   // Seed de perfiles por defecto (el usuario los edita desde la UI)
   const seed = db.prepare(
@@ -158,7 +212,12 @@ function ensureTables(db) {
     logistic_type   TEXT,
     substatus       TEXT,
     items_json      TEXT NOT NULL,
-    actualizado_en  TEXT NOT NULL
+    actualizado_en  TEXT NOT NULL,
+    fecha_despacho  TEXT,
+    fecha_despacho_limite TEXT,
+    estado_despacho TEXT NOT NULL DEFAULT 'activo',
+    despacho_motivo TEXT,
+    shipment_limite_original TEXT
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
   try { asegurarEsquemaHorarios(db); db.prepare(`CREATE TABLE IF NOT EXISTS despacho_horarios (
@@ -383,6 +442,21 @@ function perfilParaItem(db, { sku, categoria, nombre }) {
   return resolverPerfil({ categorias: categoria, nombre });
 }
 
+function versionPerfilParaItem(db, { sku, categoria }) {
+  const skuNorm = String(sku || '').trim().toUpperCase();
+  if (skuNorm) {
+    const reglaSku = db.prepare('SELECT version FROM preparacion_perfiles_sku WHERE sku=?').get(skuNorm);
+    if (reglaSku) return reglaSku.version || 1;
+  }
+  const cats = String(categoria || '').toUpperCase();
+  if (cats) {
+    const regla = db.prepare('SELECT version FROM preparacion_perfiles ORDER BY LENGTH(categoria) DESC').all()
+      .find(r => cats.includes(String(r.categoria).toUpperCase()));
+    if (regla) return regla.version || 1;
+  }
+  return 1;
+}
+
 // Requisitos de foto de un ítem, respetando requisitos_json custom: primero por SKU
 // exacto, después por categoría, y al final el default del perfil. Al final se le anota
 // la cantidad esperada a los slots "de artículo" (requisitosConCantidad) cuando el ítem
@@ -398,6 +472,16 @@ function requisitosParaItem(db, item) {
 }
 
 function requisitosBaseParaItem(db, item) {
+  if (item.requisitos_json_snapshot) {
+    try {
+      const snapshot = JSON.parse(item.requisitos_json_snapshot);
+      if (Array.isArray(snapshot) && snapshot.length) return snapshot; // formato legado
+      if (snapshot && typeof snapshot === 'object') {
+        const slots = snapshot[item.estado_embalaje || 'default'] || snapshot.default;
+        if (Array.isArray(slots) && slots.length) return slots;
+      }
+    } catch (_) {}
+  }
   const skuNorm = String(item.sku || '').trim().toUpperCase();
   if (skuNorm) {
     const reglaSku = db.prepare('SELECT requisitos_json FROM preparacion_perfiles_sku WHERE sku=?').get(skuNorm);
@@ -535,12 +619,21 @@ export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null
     if (tieneItems) return;
 
     const ins = db.prepare(`INSERT INTO preparacion_items
-      (preparacion_id, line_item_id, product_id, variation_id, sku, nombre, categoria, perfil, cantidad_esperada)
-      VALUES (?,?,?,?,?,?,?,?,?)`);
+      (preparacion_id, line_item_id, product_id, variation_id, sku, nombre, categoria, perfil, perfil_version, requisitos_json_snapshot, cantidad_esperada)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
     for (const it of items) {
       const perfil = perfilParaItem(db, { sku: it.sku, categoria: it.categoria, nombre: it.nombre });
+      const perfilVersion = versionPerfilParaItem(db, { sku: it.sku, categoria: it.categoria });
+      // Congelar la regla vigente sin congelar el estado operativo: una bici creada
+      // antes de re-embalarse debe seguir pudiendo exigir lado A/B y accesorios.
+      const requisitosSnapshot = {};
+      for (const estado_embalaje of ['default', 're_embalada']) {
+        requisitosSnapshot[estado_embalaje] = requisitosBaseParaItem(db, {
+          sku: it.sku, categoria: it.categoria, perfil, estado_embalaje, requisitos_json_snapshot: null,
+        });
+      }
       ins.run(prepId, it.line_item_id || null, it.product_id || null, it.variation_id || null,
-        it.sku || '', it.nombre || '', it.categoria || '', perfil,
+        it.sku || '', it.nombre || '', it.categoria || '', perfil, perfilVersion, JSON.stringify(requisitosSnapshot),
         Math.max(1, parseInt(it.cantidad) || 1));
     }
   });
@@ -616,11 +709,20 @@ export function registrarEvento(db, { preparacionId, itemId = null, tipo, usuari
   }
 }
 
-// Purga del disco y de la tabla las fotos con soft-delete de más de 60 días.
+function registrarPerfilEvento(db, { alcance, clave, tipo, usuario, detalle }) {
+  db.prepare(`INSERT INTO preparacion_perfiles_eventos
+    (alcance, clave, tipo, usuario, detalle_json, creado_en) VALUES (?,?,?,?,?,?)`)
+    .run(alcance, clave, tipo, usuario ?? null, JSON.stringify(detalle ?? {}), now());
+}
+
+// Purga del disco y de la tabla las fotos con soft-delete de más de 180 días,
+// excepto preparaciones con un hold activo por reclamo/incidente/garantía/auditoría.
 // Devuelve la cantidad purgada (para logging del cron).
 export function purgarFotosBorradas(db) {
-  const limite = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString();
-  const vencidas = db.prepare('SELECT id, url, url_liviana FROM preparacion_fotos WHERE borrado_en IS NOT NULL AND borrado_en < ?').all(limite);
+  const limite = new Date(Date.now() - 180 * 24 * 3600 * 1000).toISOString();
+  const vencidas = db.prepare(`SELECT f.id, f.url, f.url_liviana FROM preparacion_fotos f
+    WHERE f.borrado_en IS NOT NULL AND f.borrado_en < ?
+      AND NOT EXISTS (SELECT 1 FROM preparacion_fotos_holds h WHERE h.preparacion_id=f.preparacion_id)`).all(limite);
   let purgadas = 0;
   for (const f of vencidas) {
     // Contención (defensa en profundidad): si la ruta resuelta cae fuera de uploads/,
@@ -732,6 +834,16 @@ function usuarioQueSubio(db, fotoId, preparacionId) {
 export function preparacionRouter(db, cfg) {
   ensureTables(db);
   const router = express.Router();
+  const eventoLote = (loteId, tipo, usuario, detalle = {}) => db.prepare(
+    'INSERT INTO despacho_lote_eventos (lote_id, tipo, usuario, detalle_json, creado_en) VALUES (?,?,?,?,?)'
+  ).run(loteId, tipo, usuario ?? null, JSON.stringify(detalle), now());
+  try {
+    db.prepare(`CREATE TABLE IF NOT EXISTS despacho_lote_eventos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, lote_id INTEGER NOT NULL REFERENCES despacho_lotes(id),
+      tipo TEXT NOT NULL, usuario TEXT, detalle_json TEXT NOT NULL, creado_en TEXT NOT NULL
+    )`).run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_despacho_lote_eventos_lote ON despacho_lote_eventos(lote_id, id)').run();
+  } catch (error) { console.error('ensureTables despacho_lote_eventos:', error.message); }
   const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
   const TRACKING_META_KEY = '_andreani_tracking';
@@ -834,7 +946,12 @@ export function preparacionRouter(db, cfg) {
           const items = JSON.parse(row.items_json);
           let waveItem = null;
           try {
-            waveItem = db.prepare(`SELECT pw.id, pw.tipo FROM pick_wave_items pi JOIN pick_waves pw ON pw.id = pi.pick_wave_id WHERE pi.pedido_clave = ?`).get(row.clave);
+            const jornada = jornadaDeHoy(db);
+            waveItem = jornada
+              ? db.prepare(`SELECT pw.id, pw.tipo FROM pick_wave_items pi
+                JOIN pick_waves pw ON pw.id = pi.pick_wave_id
+                WHERE pi.pedido_clave = ? AND pw.operational_day_id = ?`).get(row.clave, jornada.id)
+              : null;
           } catch (e) { /* fail-open: metadata auxiliar de jornada, no debe romper /pendientes */ }
         if (row.canal === 'web') {
           return {
@@ -845,6 +962,10 @@ export function preparacionRouter(db, cfg) {
             comprador: row.comprador,
             fecha: row.fecha,
             fecha_despacho: row.fecha_despacho,
+            fecha_despacho_limite: row.fecha_despacho_limite || null,
+            estado_despacho: row.estado_despacho || null,
+            despacho_motivo: row.despacho_motivo || null,
+            shipment_limite_original: row.shipment_limite_original || null,
             estado_wc: row.estado_wc,
             notas: row.customer_note || '',
             items,
@@ -864,6 +985,10 @@ export function preparacionRouter(db, cfg) {
           comprador: row.comprador,
           fecha: row.fecha,
           fecha_despacho: row.fecha_despacho,
+          fecha_despacho_limite: row.fecha_despacho_limite || null,
+          estado_despacho: row.estado_despacho || null,
+          despacho_motivo: row.despacho_motivo || null,
+          shipment_limite_original: row.shipment_limite_original || null,
           logistic_type: row.logistic_type,
           substatus: row.substatus,
           items,
@@ -913,7 +1038,7 @@ export function preparacionRouter(db, cfg) {
     const params = [];
     const where = [];
     if (fecha === 'sin_fecha') where.push('jornada_fecha IS NULL');
-    else if (fecha) { where.push('jornada_fecha = ?'); params.push(fecha); }
+    else if (fecha) { where.push('(jornada_fecha = ? OR (p.canal = \'web\' AND jornada_fecha IS NULL))'); params.push(fecha); }
     if (estado) { where.push('d.estado = ?'); params.push(estado); }
     if (canal) { where.push('p.canal = ?'); params.push(canal); }
     if (q) {
@@ -936,10 +1061,170 @@ export function preparacionRouter(db, cfg) {
     const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha, d.creado_en`).all(...params);
     const jornada = fecha || 'sin_fecha';
     const allParams = fecha === 'sin_fecha' ? [] : fecha ? [fecha] : [];
-    const summaryRows = db.prepare(`${base}${fecha === 'sin_fecha' ? ' HAVING jornada_fecha IS NULL' : fecha ? ' HAVING jornada_fecha = ?' : ''}`).all(...allParams);
+    const summaryRows = db.prepare(`${base}${fecha === 'sin_fecha' ? ' HAVING jornada_fecha IS NULL' : fecha ? " HAVING (jornada_fecha = ? OR (p.canal = 'web' AND jornada_fecha IS NULL))" : ''}`).all(...allParams);
     const resumen = { total: summaryRows.length, pendientes: 0, escaneados: 0, confirmados: 0 };
     for (const row of summaryRows) resumen[row.estado === 'pendiente' ? 'pendientes' : `${row.estado}s`] += 1;
     return res.json({ ok: true, jornada: { fecha: jornada, zona_horaria: 'America/Argentina/Buenos_Aires' }, resumen, data: rows });
+  });
+
+  // E4: los lotes congelan una selección por canal; nunca se mezclan ML y Web/Andreani.
+  router.post('/despacho/lotes', (req, res) => {
+    const canal = String(req.body?.canal || '').trim();
+    const fecha = String(req.body?.fecha_jornada || '').trim();
+    const ids = [...new Set(Array.isArray(req.body?.control_ids)
+      ? req.body.control_ids.map(Number).filter(Number.isInteger) : [])];
+    const idem = String(req.get('Idempotency-Key') || '').trim();
+    if (!['ml', 'web'].includes(canal)) return res.status(400).json({ ok: false, error: 'canal debe ser ml o web', code: 'CANAL_INVALIDO' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ ok: false, error: 'fecha_jornada inválida', code: 'FECHA_INVALIDA' });
+    if (!ids.length) return res.status(400).json({ ok: false, error: 'control_ids no puede estar vacío', code: 'LOTE_SIN_MIEMBROS' });
+    if (!idem) return res.status(400).json({ ok: false, error: 'Idempotency-Key requerido', code: 'IDEMPOTENCIA_REQUERIDA' });
+    const existing = db.prepare('SELECT * FROM despacho_lotes WHERE idempotencia=?').get(idem);
+    if (existing) return res.json({ ok: true, repetido: true, lote: existing, items: db.prepare('SELECT * FROM despacho_lote_items WHERE lote_id=?').all(existing.id) });
+    try {
+      const lote = db.transaction(() => {
+        const valid = db.prepare(`SELECT d.id FROM despacho_controles d
+          JOIN preparaciones p ON (p.pack_id=d.grupo_clave OR p.clave=d.grupo_clave)
+          LEFT JOIN pedidos_cache pc ON pc.clave=p.clave
+          WHERE d.id IN (${ids.map(() => '?').join(',')}) AND d.estado!='confirmado'
+            AND p.canal=? AND pc.fecha_despacho=? AND p.estado='completada'
+          GROUP BY d.id`).all(...ids, canal, fecha).map(row => row.id);
+        if (valid.length !== ids.length) {
+          const error = new Error('uno o más controles no son elegibles para este lote'); error.code = 'LOTE_MIEMBRO_INVALIDO'; throw error;
+        }
+        const ts = now();
+        const created = db.prepare(`INSERT INTO despacho_lotes
+          (canal, fecha_jornada, estado, creado_por, creado_en, motivo_anulacion)
+          VALUES (?, ?, 'abierto', ?, ?, ?) RETURNING *`).get(canal, fecha, req.user.username, ts, null);
+        db.prepare('UPDATE despacho_lotes SET idempotencia=? WHERE id=?').run(idem, created.id);
+        const add = db.prepare(`INSERT INTO despacho_lote_items (lote_id, control_id, agregado_en) VALUES (?, ?, ?)`);
+        for (const id of valid) add.run(created.id, id, ts);
+        eventoLote(created.id, 'lote_creado', req.user.username, { canal, fecha_jornada: fecha, control_ids: valid, idempotencia: idem });
+        return created;
+      })();
+      res.status(201).json({ ok: true, repetido: false, lote, items: db.prepare('SELECT * FROM despacho_lote_items WHERE lote_id=?').all(lote.id) });
+    } catch (error) {
+      const conflicto = error.code === 'LOTE_MIEMBRO_INVALIDO' || /UNIQUE constraint failed: despacho_lote_items.control_id/.test(error.message);
+      res.status(conflicto ? 409 : 500).json({ ok: false, error: conflicto ? 'uno o más paquetes ya pertenecen a otro lote' : error.message, code: conflicto ? 'LOTE_MIEMBRO_DUPLICADO' : (error.code || 'LOTE_ERROR') });
+    }
+  });
+
+  router.get('/despacho/lotes', (req, res) => {
+    const fecha = req.query.fecha_jornada == null ? null : String(req.query.fecha_jornada).trim();
+    const canal = req.query.canal == null ? null : String(req.query.canal).trim();
+    if (fecha && !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ ok: false, error: 'fecha_jornada inválida', code: 'FECHA_INVALIDA' });
+    if (canal && !['ml', 'web'].includes(canal)) return res.status(400).json({ ok: false, error: 'canal inválido', code: 'CANAL_INVALIDO' });
+    const where = []; const params = [];
+    if (fecha) { where.push('l.fecha_jornada=?'); params.push(fecha); }
+    if (canal) { where.push('l.canal=?'); params.push(canal); }
+    const rows = db.prepare(`SELECT l.*, COUNT(li.id) AS miembros,
+      SUM(CASE WHEN li.estado='confirmado' THEN 1 ELSE 0 END) AS confirmados,
+      SUM(CASE WHEN li.tracking IS NOT NULL THEN 1 ELSE 0 END) AS con_tracking
+      FROM despacho_lotes l LEFT JOIN despacho_lote_items li ON li.lote_id=l.id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      GROUP BY l.id ORDER BY l.fecha_jornada, l.canal, l.id`).all(...params);
+    res.json({ ok: true, lotes: rows });
+  });
+
+  router.get('/despacho/lotes/:id', (req, res) => {
+    const lote = db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(Number(req.params.id));
+    if (!lote) return res.status(404).json({ ok: false, error: 'lote no encontrado' });
+    res.json({ ok: true, lote, items: db.prepare(`SELECT li.*, d.grupo_clave, d.estado AS estado_despacho
+      FROM despacho_lote_items li JOIN despacho_controles d ON d.id=li.control_id
+      WHERE li.lote_id=? ORDER BY li.id`).all(lote.id) });
+  });
+
+  router.get('/despacho/lotes/:id/eventos', (req, res) => {
+    const id = Number(req.params.id);
+    if (!req.user?.is_admin && !['supervisor', 'supervisor_deposito', 'auditor', 'despacho'].includes(rolUsuario(req.user))) {
+      return res.status(403).json({ ok: false, error: 'solo supervisor, auditor o despacho puede ver el historial del lote', code: 'FORBIDDEN' });
+    }
+    if (!db.prepare('SELECT id FROM despacho_lotes WHERE id=?').get(id)) return res.status(404).json({ ok: false, error: 'lote no encontrado' });
+    res.json({ ok: true, eventos: db.prepare('SELECT id, lote_id, tipo, usuario, detalle_json, creado_en FROM despacho_lote_eventos WHERE lote_id=? ORDER BY id').all(id) });
+  });
+
+  router.post('/despacho/lotes/:id/iniciar', (req, res) => {
+    const id = Number(req.params.id); const ts = now();
+    const info = db.prepare(`UPDATE despacho_lotes SET estado='en_preparacion', iniciado_en=COALESCE(iniciado_en, ?)
+      WHERE id=? AND estado='abierto'`).run(ts, id);
+    if (!info.changes) return res.status(409).json({ ok: false, error: 'el lote no está abierto', code: 'LOTE_ESTADO_INVALIDO' });
+    eventoLote(id, 'lote_iniciado', req.user.username);
+    res.json({ ok: true, lote: db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id) });
+  });
+
+  router.post('/despacho/lotes/:id/anular', (req, res) => {
+    const id = Number(req.params.id); const motivo = String(req.body?.motivo || '').trim();
+    if (!motivo) return res.status(400).json({ ok: false, error: 'motivo requerido', code: 'MOTIVO_REQUERIDO' });
+    const info = db.prepare(`UPDATE despacho_lotes SET estado='anulado', motivo_anulacion=? WHERE id=? AND estado IN ('abierto','en_preparacion')`).run(motivo, id);
+    if (!info.changes) return res.status(409).json({ ok: false, error: 'el lote no puede anularse', code: 'LOTE_ESTADO_INVALIDO' });
+    eventoLote(id, 'lote_anulado', req.user.username, { motivo });
+    res.json({ ok: true, lote: db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id) });
+  });
+
+  router.post('/despacho/lotes/:id/escanear', (req, res) => {
+    const loteId = Number(req.params.id);
+    const codigo = String(req.body?.codigo || '').trim();
+    const idem = String(req.get('Idempotency-Key') || '').trim();
+    if (!codigo || !idem) return res.status(400).json({ ok: false, error: 'codigo e Idempotency-Key requeridos', code: 'DATOS_REQUERIDOS' });
+    const lote = db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(loteId);
+    if (!lote || lote.estado !== 'en_preparacion') return res.status(409).json({ ok: false, error: 'el lote no está en preparación', code: 'LOTE_ESTADO_INVALIDO' });
+    const item = db.prepare(`SELECT li.*, d.grupo_clave FROM despacho_lote_items li
+      JOIN despacho_controles d ON d.id=li.control_id WHERE li.lote_id=? AND d.grupo_clave=?`).get(loteId, codigo);
+    if (!item) return res.status(409).json({ ok: false, error: 'el código no pertenece al lote', code: 'LOTE_PAQUETE_AJENO' });
+    if (item.ultima_idempotencia === idem) return res.json({ ok: true, repetido: true, item });
+    if (item.estado === 'confirmado' || item.estado === 'anulado') return res.status(409).json({ ok: false, error: 'el paquete no puede escanearse en su estado actual', code: 'LOTE_ITEM_NO_OPERABLE' });
+    const ts = now();
+    const info = db.prepare(`UPDATE despacho_lote_items SET estado='escaneado', escaneado_en=?, ultima_idempotencia=? WHERE id=? AND estado='esperado'`).run(ts, idem, item.id);
+    if (!info.changes) return res.status(409).json({ ok: false, error: 'otra operación actualizó el paquete', code: 'LOTE_CONFLICTO' });
+    eventoLote(loteId, 'paquete_escaneado', req.user.username, { control_id: item.control_id, codigo, idempotencia: idem });
+    res.status(201).json({ ok: true, repetido: false, item: db.prepare('SELECT * FROM despacho_lote_items WHERE id=?').get(item.id) });
+  });
+
+  router.post('/despacho/lotes/:id/tracking', (req, res) => {
+    const loteId = Number(req.params.id);
+    const controlId = Number(req.body?.control_id);
+    const tracking = String(req.body?.tracking || '').trim();
+    if (!Number.isInteger(controlId) || !tracking) return res.status(400).json({ ok: false, error: 'control_id y tracking requeridos', code: 'DATOS_REQUERIDOS' });
+    const lote = db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(loteId);
+    if (!lote || !['abierto', 'en_preparacion'].includes(lote.estado)) return res.status(409).json({ ok: false, error: 'el lote no admite tracking', code: 'LOTE_ESTADO_INVALIDO' });
+    const item = db.prepare('SELECT * FROM despacho_lote_items WHERE lote_id=? AND control_id=?').get(loteId, controlId);
+    if (!item) return res.status(404).json({ ok: false, error: 'el paquete no pertenece al lote', code: 'LOTE_PAQUETE_AJENO' });
+    if (item.tracking && item.tracking !== tracking) return res.status(409).json({ ok: false, error: 'el paquete ya tiene otro tracking', code: 'TRACKING_CONFLICTO' });
+    db.prepare('UPDATE despacho_lote_items SET tracking=? WHERE id=?').run(tracking, item.id);
+    eventoLote(loteId, item.tracking ? 'tracking_repetido' : 'tracking_asociado', req.user.username, { control_id: controlId, tracking });
+    res.json({ ok: true, repetido: !!item.tracking, item: db.prepare('SELECT * FROM despacho_lote_items WHERE id=?').get(item.id) });
+  });
+
+  router.post('/despacho/lotes/:id/cerrar', (req, res) => {
+    const loteId = Number(req.params.id); const motivo = String(req.body?.motivo || '').trim();
+    const lote = db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(loteId);
+    if (!lote || lote.estado !== 'en_preparacion') return res.status(409).json({ ok: false, error: 'el lote no está en preparación', code: 'LOTE_ESTADO_INVALIDO' });
+    const resumen = db.prepare(`SELECT estado, COUNT(*) AS cantidad FROM despacho_lote_items WHERE lote_id=? GROUP BY estado`).all(loteId);
+    const pendientes = resumen.filter(row => !['confirmado', 'escaneado'].includes(row.estado)).reduce((sum, row) => sum + row.cantidad, 0);
+    if (pendientes && !motivo) return res.status(409).json({ ok: false, error: 'hay miembros sin confirmar; indicá motivo para cierre excepcional', code: 'LOTE_INCOMPLETO', resumen });
+    const ts = now();
+    db.transaction(() => {
+      db.prepare(`UPDATE despacho_lote_items SET estado='confirmado', confirmado_en=? WHERE lote_id=? AND estado='escaneado'`).run(ts, loteId);
+      db.prepare(`UPDATE despacho_lotes SET estado='cerrado', cerrado_en=?, motivo_anulacion=? WHERE id=? AND estado='en_preparacion'`).run(ts, motivo || null, loteId);
+    })();
+    eventoLote(loteId, 'lote_cerrado', req.user.username, { motivo: motivo || null, resumen });
+    res.json({ ok: true, lote: db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(loteId), resumen });
+  });
+
+  router.post('/despacho/lotes/:id/salida', (req, res) => {
+    const id = Number(req.params.id); const idem = String(req.get('Idempotency-Key') || '').trim();
+    if (!idem) return res.status(400).json({ ok: false, error: 'Idempotency-Key requerido', code: 'IDEMPOTENCIA_REQUERIDA' });
+    const lote = db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id);
+    if (!lote) return res.status(404).json({ ok: false, error: 'lote no encontrado' });
+    if (lote.salida_idempotencia === idem) return res.json({ ok: true, repetido: true, lote });
+    if (lote.estado !== 'cerrado') return res.status(409).json({ ok: false, error: 'el lote debe estar cerrado antes de confirmar salida', code: 'LOTE_NO_CERRADO' });
+    if (lote.salida_idempotencia) return res.status(409).json({ ok: false, error: 'la salida ya fue confirmada con otra idempotencia', code: 'SALIDA_YA_CONFIRMADA' });
+    const ts = now();
+    const info = db.prepare(`UPDATE despacho_lotes SET salida_confirmada_por=?, salida_confirmada_en=?, salida_idempotencia=?
+      WHERE id=? AND estado='cerrado' AND salida_idempotencia IS NULL`).run(req.user.username, ts, idem, id);
+    if (!info.changes) return res.status(409).json({ ok: false, error: 'otra operación confirmó la salida', code: 'SALIDA_CONFLICTO' });
+    eventoLote(id, 'salida_confirmada', req.user.username, { idempotencia: idem });
+    const jobEventId = encolarSalidaWoo(db, db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id), req.user.username);
+    res.json({ ok: true, repetido: false, lote: db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id) });
   });
 
   router.post('/despacho/:id/escanear', (req, res) => {
@@ -984,7 +1269,6 @@ export function preparacionRouter(db, cfg) {
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     const bloqueo = prep.estado === 'completada' ? null : bloqueoPorEstado(prep);
     if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo, code: 'PREPARACION_CERRADA' });
-    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
     const idempotencia = String(req.get('Idempotency-Key') || '').trim();
     if (!idempotencia) return res.status(400).json({ ok: false, error: 'Idempotency-Key requerido', code: 'IDEMPOTENCY_KEY_REQUIRED' });
     const grupo = prep.pack_id || prep.clave;
@@ -1009,6 +1293,53 @@ export function preparacionRouter(db, cfg) {
     })();
     if (confirmar.repetido) return res.json({ ok: true, repetido: true, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id) });
     res.json({ ok: true, repetido: false, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id), etiqueta_cola_id: confirmar.etiquetaId });
+  });
+
+  router.post('/despacho/:id/confirmar-manual', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const motivo = String(req.body?.motivo || '').trim();
+    const nota = String(req.body?.nota || '').trim();
+    if (!MOTIVOS_DESPACHO_MANUAL.includes(motivo)) return res.status(400).json({ ok: false, error: 'motivo de despacho manual inválido', code: 'MOTIVO_REQUERIDO' });
+    if (nota.length > 500) return res.status(400).json({ ok: false, error: 'nota demasiado larga', code: 'NOTA_INVALIDA' });
+    const idempotencia = String(req.get('Idempotency-Key') || '').trim();
+    if (!idempotencia) return res.status(400).json({ ok: false, error: 'Idempotency-Key requerido', code: 'IDEMPOTENCY_KEY_REQUIRED' });
+    const grupo = prep.pack_id || prep.clave;
+    const existente = db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo);
+    const previo = db.prepare('SELECT * FROM despacho_controles WHERE confirmacion_idempotencia=?').get(idempotencia);
+    if (previo && previo.id !== existente?.id) return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
+    if (existente?.estado === 'confirmado') return res.json({ ok: true, repetido: true, control: existente });
+    const ts = now();
+    const resultado = db.transaction(() => {
+      const control = existente || db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en) VALUES (?, 'pendiente', ?, ?) RETURNING *").get(grupo, ts, ts);
+      const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=?, confirmacion_idempotencia=? WHERE id=? AND estado!='confirmado' AND (confirmacion_idempotencia IS NULL OR confirmacion_idempotencia=?)").run(req.user.username, ts, ts, idempotencia, control.id, idempotencia);
+      if (!cambio.changes) return { repetido: true };
+      registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_confirmado_manual', usuario: req.user.username, detalle: { grupo_clave: grupo, motivo, nota: nota || null, codigo_verificado: false }, failClosed: true });
+      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')").run(prep.id);
+      return { repetido: false };
+    })();
+    return res.json({ ok: true, ...resultado, control: db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo) });
+  });
+
+  router.post('/despacho/regularizar-jornada-sin-evidencia', (req, res) => {
+    if (!req.user?.is_admin) return res.status(403).json({ ok: false, error: 'la regularización masiva requiere administrador', code: 'FORBIDDEN' });
+    const fecha = String(req.body?.fecha || '').trim();
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ ok: false, error: 'fecha inválida', code: 'FECHA_INVALIDA' });
+    if (motivo !== 'despachado_sin_evidencia_herramienta_inhabilitada') return res.status(400).json({ ok: false, error: 'motivo de regularización inválido', code: 'MOTIVO_REQUERIDO' });
+    const ts = now();
+    const filas = db.prepare(`SELECT DISTINCT p.id, p.pack_id, p.clave FROM preparaciones p JOIN pedidos_cache pc
+      ON pc.clave=p.clave OR (p.pack_id IS NOT NULL AND pc.pack_id=p.pack_id)
+      LEFT JOIN despacho_controles dc ON dc.grupo_clave=COALESCE(p.pack_id,p.clave)
+      WHERE pc.fecha_despacho=? AND COALESCE(dc.estado, 'pendiente') <> 'confirmado'`).all(fecha);
+    const cantidad = db.transaction(() => filas.reduce((n, prep) => {
+      const grupo = prep.pack_id || prep.clave;
+      db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en, confirmado_por, confirmado_en, confirmacion_idempotencia) VALUES (?, 'confirmado', ?, ?, ?, ?, ?) ON CONFLICT(grupo_clave) DO UPDATE SET estado='confirmado', confirmado_por=excluded.confirmado_por, confirmado_en=excluded.confirmado_en, actualizado_en=excluded.actualizado_en, confirmacion_idempotencia=COALESCE(despacho_controles.confirmacion_idempotencia, excluded.confirmacion_idempotencia)").run(grupo, ts, ts, req.user.username, ts, `regularizacion:${fecha}:${grupo}`);
+      registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_regularizado_sin_evidencia', usuario: req.user.username, detalle: { grupo_clave: grupo, fecha, motivo, evidencia: 'no_disponible', herramienta_inhabilitada: true }, failClosed: true });
+      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')").run(prep.id);
+      return n + 1;
+    }, 0))();
+    res.json({ ok: true, fecha, regularizadas: cantidad });
   });
 
   router.get('/horarios-despacho', (req, res) => {
@@ -1665,49 +1996,106 @@ export function preparacionRouter(db, cfg) {
 
   // ── Perfiles de foto por categoría ──
   router.get('/perfiles', (req, res) => {
+    if (!puedeAdministrarPerfiles(req.user)) return res.status(403).json({ ok: false, error: 'requiere supervisor o administrador', code: 'FORBIDDEN' });
     const rows = db.prepare('SELECT * FROM preparacion_perfiles ORDER BY categoria').all();
     res.json({ ok: true, data: rows });
   });
 
+  router.put('/:id/fotos-hold', (req, res) => {
+    if (!req.user?.is_admin) return res.status(403).json({ ok: false, error: 'requiere administrador', code: 'FORBIDDEN' });
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!['reclamo', 'incidente', 'garantia', 'auditoria'].includes(motivo)) return res.status(400).json({ ok: false, error: 'motivo de hold inválido', code: 'MOTIVO_REQUERIDO' });
+    const anterior = db.prepare('SELECT * FROM preparacion_fotos_holds WHERE preparacion_id=?').get(prep.id);
+    db.transaction(() => {
+      db.prepare(`INSERT INTO preparacion_fotos_holds (preparacion_id,motivo,creado_por,creado_en) VALUES (?,?,?,?)
+        ON CONFLICT(preparacion_id) DO UPDATE SET motivo=excluded.motivo, creado_por=excluded.creado_por, creado_en=excluded.creado_en`).run(prep.id, motivo, req.user.username, now());
+      registrarEvento(db, { preparacionId: prep.id, tipo: anterior ? 'foto_hold_actualizado' : 'foto_hold_creado', usuario: req.user.username,
+        detalle: { motivo_anterior: anterior?.motivo || null, motivo_nuevo: motivo, operacion: anterior ? 'actualizar' : 'crear' }, failClosed: true });
+    })();
+    res.json({ ok: true, hold: db.prepare('SELECT * FROM preparacion_fotos_holds WHERE preparacion_id=?').get(prep.id) });
+  });
+
+  router.delete('/:id/fotos-hold', (req, res) => {
+    if (!req.user?.is_admin) return res.status(403).json({ ok: false, error: 'requiere administrador', code: 'FORBIDDEN' });
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const anterior = db.prepare('SELECT * FROM preparacion_fotos_holds WHERE preparacion_id=?').get(prep.id);
+    db.transaction(() => {
+      db.prepare('DELETE FROM preparacion_fotos_holds WHERE preparacion_id=?').run(prep.id);
+      if (anterior) registrarEvento(db, { preparacionId: prep.id, tipo: 'foto_hold_eliminado', usuario: req.user.username,
+        detalle: { motivo_anterior: anterior.motivo, operacion: 'eliminar' }, failClosed: true });
+    })();
+    res.json({ ok: true });
+  });
+
   router.put('/perfiles/:categoria', (req, res) => {
+    if (!puedeAdministrarPerfiles(req.user)) return res.status(403).json({ ok: false, error: 'requiere supervisor o administrador', code: 'FORBIDDEN' });
     const categoria = String(req.params.categoria || '').trim().toUpperCase();
     const { perfil, requisitos_json = null } = req.body || {};
     if (!categoria || !PERFILES_VALIDOS.includes(perfil)) {
       return res.status(400).json({ ok: false, error: 'categoria y perfil válidos requeridos' });
     }
-    db.prepare(`INSERT INTO preparacion_perfiles (categoria, perfil, requisitos_json, actualizado_en)
-      VALUES (?,?,?,?)
-      ON CONFLICT(categoria) DO UPDATE SET perfil=excluded.perfil, requisitos_json=excluded.requisitos_json, actualizado_en=excluded.actualizado_en`)
+    const anterior = db.prepare('SELECT * FROM preparacion_perfiles WHERE categoria=?').get(categoria);
+    db.transaction(() => {
+      db.prepare(`INSERT INTO preparacion_perfiles (categoria, perfil, requisitos_json, actualizado_en, version)
+      VALUES (?,?,?, ?, 1)
+      ON CONFLICT(categoria) DO UPDATE SET perfil=excluded.perfil, requisitos_json=excluded.requisitos_json, actualizado_en=excluded.actualizado_en, version=preparacion_perfiles.version+1`)
       .run(categoria, perfil, requisitos_json ? JSON.stringify(requisitos_json) : null, now());
+      registrarPerfilEvento(db, { alcance: 'categoria', clave: categoria, tipo: 'actualizado', usuario: req.user.username,
+        detalle: { anterior, perfil, requisitos_json } });
+    })();
     res.json({ ok: true });
   });
 
   router.delete('/perfiles/:categoria', (req, res) => {
-    db.prepare('DELETE FROM preparacion_perfiles WHERE categoria=?').run(String(req.params.categoria || '').trim().toUpperCase());
+    if (!puedeAdministrarPerfiles(req.user)) return res.status(403).json({ ok: false, error: 'requiere supervisor o administrador', code: 'FORBIDDEN' });
+    const categoria = String(req.params.categoria || '').trim().toUpperCase();
+    const anterior = db.prepare('SELECT * FROM preparacion_perfiles WHERE categoria=?').get(categoria);
+    db.transaction(() => {
+      db.prepare('DELETE FROM preparacion_perfiles WHERE categoria=?').run(categoria);
+      if (anterior) registrarPerfilEvento(db, { alcance: 'categoria', clave: categoria, tipo: 'eliminado', usuario: req.user.username,
+        detalle: { anterior } });
+    })();
     res.json({ ok: true });
   });
 
   // ── Perfiles de foto por SKU exacto (prioridad sobre los de categoría) ──
   router.get('/perfiles-sku', (req, res) => {
+    if (!puedeAdministrarPerfiles(req.user)) return res.status(403).json({ ok: false, error: 'requiere supervisor o administrador', code: 'FORBIDDEN' });
     const rows = db.prepare('SELECT * FROM preparacion_perfiles_sku ORDER BY sku').all();
     res.json({ ok: true, data: rows });
   });
 
   router.put('/perfiles-sku/:sku', (req, res) => {
+    if (!puedeAdministrarPerfiles(req.user)) return res.status(403).json({ ok: false, error: 'requiere supervisor o administrador', code: 'FORBIDDEN' });
     const sku = String(req.params.sku || '').trim().toUpperCase();
     const { perfil, requisitos_json = null } = req.body || {};
     if (!sku || !PERFILES_VALIDOS.includes(perfil)) {
       return res.status(400).json({ ok: false, error: 'sku y perfil válidos requeridos' });
     }
-    db.prepare(`INSERT INTO preparacion_perfiles_sku (sku, perfil, requisitos_json, actualizado_en)
-      VALUES (?,?,?,?)
-      ON CONFLICT(sku) DO UPDATE SET perfil=excluded.perfil, requisitos_json=excluded.requisitos_json, actualizado_en=excluded.actualizado_en`)
+    const anterior = db.prepare('SELECT * FROM preparacion_perfiles_sku WHERE sku=?').get(sku);
+    db.transaction(() => {
+      db.prepare(`INSERT INTO preparacion_perfiles_sku (sku, perfil, requisitos_json, actualizado_en, version)
+      VALUES (?,?,?, ?, 1)
+      ON CONFLICT(sku) DO UPDATE SET perfil=excluded.perfil, requisitos_json=excluded.requisitos_json, actualizado_en=excluded.actualizado_en, version=preparacion_perfiles_sku.version+1`)
       .run(sku, perfil, requisitos_json ? JSON.stringify(requisitos_json) : null, now());
+      registrarPerfilEvento(db, { alcance: 'sku', clave: sku, tipo: 'actualizado', usuario: req.user.username,
+        detalle: { anterior, perfil, requisitos_json } });
+    })();
     res.json({ ok: true });
   });
 
   router.delete('/perfiles-sku/:sku', (req, res) => {
-    db.prepare('DELETE FROM preparacion_perfiles_sku WHERE sku=?').run(String(req.params.sku || '').trim().toUpperCase());
+    if (!puedeAdministrarPerfiles(req.user)) return res.status(403).json({ ok: false, error: 'requiere supervisor o administrador', code: 'FORBIDDEN' });
+    const sku = String(req.params.sku || '').trim().toUpperCase();
+    const anterior = db.prepare('SELECT * FROM preparacion_perfiles_sku WHERE sku=?').get(sku);
+    db.transaction(() => {
+      db.prepare('DELETE FROM preparacion_perfiles_sku WHERE sku=?').run(sku);
+      if (anterior) registrarPerfilEvento(db, { alcance: 'sku', clave: sku, tipo: 'eliminado', usuario: req.user.username,
+        detalle: { anterior } });
+    })();
     res.json({ ok: true });
   });
 
@@ -1715,6 +2103,7 @@ export function preparacionRouter(db, cfg) {
   router.get('/:id', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!puedeVerDetallePreparacion(db, prep, req.user)) return res.status(403).json({ ok: false, error: 'no tenés acceso a esta preparación', code: 'FORBIDDEN' });
     const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? ORDER BY id').all(prep.id);
     const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL ORDER BY id').all(prep.id);
     const eventos = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
@@ -1978,10 +2367,21 @@ export function preparacionRouter(db, cfg) {
     }
 
     const { item_id = null, tipo = 'extra', upload_id: uploadId = null } = req.body || {};
-    const uploadKey = uploadId ? String(uploadId) : null;
-    if (uploadKey) {
-      const previa = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND upload_id=? AND borrado_en IS NULL').get(prep.id, uploadKey);
-      if (previa) return res.json({ ok: true, foto: previa, idempotente: true });
+    const itemId = item_id ? parseInt(item_id) : null;
+    if (item_id && (!Number.isInteger(itemId) || !db.prepare('SELECT 1 FROM preparacion_items WHERE id=? AND preparacion_id=?').get(itemId, prep.id))) {
+      return res.status(400).json({ ok: false, error: 'ítem no pertenece a esta preparación', code: 'ITEM_PREPARACION_INVALIDO' });
+    }
+    const fingerprint = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+    // Clientes antiguos pueden no mandar upload_id: se deriva una clave estable del
+    // contenido y del destino, manteniendo idempotencia sin romper compatibilidad.
+    const uploadKey = uploadId ? String(uploadId).trim()
+      : `auto:${itemId || 0}:${tipo}:${nombre}:${fingerprint}`;
+    const previa = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND upload_id=? AND borrado_en IS NULL').get(prep.id, uploadKey);
+    if (previa) {
+      if (Number(previa.item_id || 0) !== Number(itemId || 0) || previa.tipo !== tipo || (previa.fingerprint && previa.fingerprint !== fingerprint)) {
+        return res.status(409).json({ ok:false, error:'upload_id ya fue usado para otra foto', code:'IDEMPOTENCY_CONFLICT' });
+      }
+      return res.json({ ok: true, foto: previa, idempotente: true });
     }
 
     // GUARDAR Y RESPONDER AL INSTANTE, sin conversión sincrónica (plan 2026-08-12-fotos-
@@ -2018,13 +2418,22 @@ export function preparacionRouter(db, cfg) {
       return res.status(500).json({ ok: false, error: 'no se pudo guardar la foto' });
     }
 
+    const itemRef = itemId ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(itemId) : null;
     let fotoId;
     try {
-      fotoId = db.prepare(`
-        INSERT INTO preparacion_fotos
-          (preparacion_id, item_id, tipo, url, nombre_archivo, creado_en, estado_proceso, es_heic, upload_id)
-        VALUES (?,?,?,?,?,?, 'pendiente', ?, ?)
-      `).run(prep.id, item_id ? parseInt(item_id) : null, tipo, saved.url, saved.filename, now(), esHeic ? 1 : 0, uploadKey).lastInsertRowid;
+      fotoId = db.transaction(() => {
+        const id = db.prepare(`
+          INSERT INTO preparacion_fotos
+            (preparacion_id, item_id, tipo, url, nombre_archivo, creado_en, estado_proceso, es_heic, upload_id, fingerprint)
+          VALUES (?,?,?,?,?,?, 'pendiente', ?, ?, ?)
+        `).run(prep.id, itemId, tipo, saved.url, saved.filename, now(), esHeic ? 1 : 0, uploadKey, fingerprint).lastInsertRowid;
+        registrarEvento(db, {
+          preparacionId: prep.id, itemId, tipo: 'foto_subida', usuario: req.user?.username,
+          detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: tipo, nombre_archivo: saved.filename, foto_id: id, upload_id: uploadKey, fingerprint },
+          failClosed: true,
+        });
+        return id;
+      })();
     } catch (e) {
       if (uploadKey && /constraint/i.test(e.message)) {
         const existente = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND upload_id=? AND borrado_en IS NULL').get(prep.id, uploadKey);
@@ -2035,12 +2444,6 @@ export function preparacionRouter(db, cfg) {
       }
       throw e;
     }
-
-    const itemRef = item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(parseInt(item_id)) : null;
-    registrarEvento(db, {
-      preparacionId: prep.id, itemId: item_id ? parseInt(item_id) : null, tipo: 'foto_subida', usuario: req.user?.username,
-      detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: tipo, nombre_archivo: saved.filename, foto_id: fotoId, upload_id: uploadId ? String(uploadId) : null },
-    });
 
     res.json({ ok: true, foto: db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId) });
 
@@ -2057,6 +2460,8 @@ export function preparacionRouter(db, cfg) {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+    const bloqueo = bloqueoPorEstado(prep);
+    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     const fotoId = parseInt(req.params.fotoId);
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=?').get(fotoId, prep.id);
     if (!foto) return res.status(404).json({ ok: false, error: 'foto no encontrada' });
@@ -2072,6 +2477,9 @@ export function preparacionRouter(db, cfg) {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+    if (prep.estado === 'completada') {
+      return res.status(409).json({ ok: false, error: 'la preparación está aprobada; debe reabrirse mediante una acción auditada antes de modificar evidencia', code: 'REAPERTURA_REQUERIDA' });
+    }
     const fotoId = parseInt(req.params.fotoId);
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=? AND borrado_en IS NULL').get(fotoId, prep.id);
     if (!foto) return res.json({ ok: true, borradas: 0 });
@@ -2453,6 +2861,8 @@ async function pendientesMl(db, mlCfg) {
       if (elegibilidad.estado === 'inconcluso') clavesInconclusas.add(`ml:${orden.id}`);
       continue;
     }
+    const sla = calcularSlaPreparacion({ canal: 'ml', logisticType: envio.logistic_type, shipment: envio, ahora: new Date() });
+    if (sla.estado === 'excluido') continue;
 
     const ov = normalizarOrdenMl(orden);
     const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
@@ -2466,7 +2876,12 @@ async function pendientesMl(db, mlCfg) {
       numero_pedido: ov.numero,
       comprador: ov.comprador.nickname || 'Comprador ML',
       fecha: ov.fecha,
-      fecha_despacho: fechaEstimadaShipment(envio) || calcularFechaDespacho(leerHorarios(db)),
+      fecha_despacho: sla.fecha_local || null,
+      fecha_despacho_limite: sla.limite,
+      estado_despacho: sla.estado,
+      despacho_motivo: sla.razon,
+      shipment_limite_original: sla.shipment_original,
+      sla,
       logistic_type: envio.logistic_type,
       substatus: envio.substatus || null,
       items: itemsDesdeOrdenMl(db, orden),
@@ -2496,20 +2911,31 @@ function logSyncPedidos(db, estado, error) {
 }
 
 function upsertPedidoCache(db, row) {
+  const sla = row.sla || calcularSlaPreparacion({ canal: row.canal, logisticType: row.logistic_type, shipment: row.shipment, ahora: new Date() });
+  const fechaDespacho = sla.fecha_local ?? null;
+  const limiteDespacho = sla.limite ?? null;
+  const estadoDespacho = sla.estado ?? null;
+  const motivoDespacho = sla.razon ?? null;
+  const shipmentOriginal = sla.shipment_original ?? null;
   db.prepare(`
     INSERT INTO pedidos_cache
       (clave, canal, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, fecha,
-       fecha_despacho, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note)
+       fecha_despacho, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note,
+       fecha_despacho_limite, estado_despacho, despacho_motivo, shipment_limite_original)
     VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @pack_id, @numero_pedido, @comprador, @fecha,
-       @fecha_despacho, @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note)
+       @fecha_despacho, @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note,
+       @fecha_despacho_limite, @estado_despacho, @despacho_motivo, @shipment_limite_original)
     ON CONFLICT(clave) DO UPDATE SET
       pack_id=excluded.pack_id,
-      fecha_despacho=COALESCE(pedidos_cache.fecha_despacho, excluded.fecha_despacho),
+      fecha_despacho=excluded.fecha_despacho,
+      fecha_despacho_limite=excluded.fecha_despacho_limite,
+      estado_despacho=excluded.estado_despacho, despacho_motivo=excluded.despacho_motivo,
+      shipment_limite_original=excluded.shipment_limite_original,
       numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
       estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
       logistic_type=excluded.logistic_type, substatus=excluded.substatus,
       items_json=excluded.items_json, actualizado_en=excluded.actualizado_en, customer_note=excluded.customer_note
-  `).run({ ...row, customer_note: row.customer_note ?? '', fecha_despacho: row.fecha_despacho ?? calcularFechaDespacho(leerHorarios(db)) });
+  `).run({ ...row, customer_note: row.customer_note ?? '', fecha_despacho: fechaDespacho, fecha_despacho_limite: limiteDespacho, estado_despacho: estadoDespacho, despacho_motivo: motivoDespacho, shipment_limite_original: shipmentOriginal });
 }
 
 // Un pedido WC (de cualquiera de los 3 estados relevantes) → fila de pedidos_cache.
@@ -2595,7 +3021,7 @@ export async function syncPedidosCache(db, cfg) {
             numero_pedido: p.numero_pedido,
             comprador: p.comprador,
             fecha: p.fecha,
-            fecha_despacho: p.fecha_despacho,
+            sla: p.sla,
             estado_envio: 'pendiente',
             estado_wc: null,
             espejo_ml: 0,
@@ -2748,6 +3174,8 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, envio?.logistic_type);
     return;
   }
+  const sla = calcularSlaPreparacion({ canal: 'ml', logisticType: envio?.logistic_type, shipment: envio, ahora: new Date() });
+  if (sla.estado === 'excluido') return;
 
   const ov = normalizarOrdenMl(orden);
   const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
@@ -2760,7 +3188,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     numero_pedido: ov.numero,
     comprador: ov.comprador.nickname || 'Comprador ML',
     fecha: ov.fecha,
-    fecha_despacho: fechaEstimadaShipment(envio) || calcularFechaDespacho(leerHorarios(db)),
+    sla,
     estado_envio: 'pendiente',
     estado_wc: null,
     espejo_ml: 0,

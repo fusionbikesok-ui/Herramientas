@@ -30,10 +30,20 @@ describe('db schema', () => {
       'despacho_horarios',
       'despacho_horarios_auditoria',
       'despacho_horarios_meta',
+      'despacho_lote_eventos',
+      'despacho_lote_items',
+      'despacho_lotes',
       'device_tokens',
       'ean_sku',
       'errores_descartados',
       'etiquetas_cola',
+      'guardia_ml_casos',
+      'guardia_ml_config',
+      'guardia_ml_eventos',
+      'guardia_ml_operaciones',
+      'guardia_ml_pedidos_retenidos',
+      'guardia_ml_stock_compartido',
+      'guardia_ml_stock_compartido_eventos',
       'inbox_items',
       'incidentes_email_outbox',
       'incidentes_operativos',
@@ -57,29 +67,46 @@ describe('db schema', () => {
       'notificaciones_enviadas',
       'notificaciones_usuario',
       'notification_deliveries',
+      'operational_day_events',
+      'operational_days',
       'ordenes_ml_procesadas',
       'ordenes_ml_wc_pedidos',
       'password_reset_tokens',
       'pedidos',
       'pendientes_mapeo',
+      'pick_wave_assignments',
+      'pick_wave_claims',
+      'pick_wave_helpers',
+      'pick_wave_items',
+      'pick_wave_returns',
+      'pick_wave_shortages',
+      'pick_waves',
       'preferencias_notificacion',
+      'preparacion_fotos_holds',
       'recepcion_documentos',
       'recepcion_items',
       'recepciones',
       'sku_matcher_decisiones',
       'skus_config_ml',
+      'stock_movements',
       'stock_negativo_alertas',
+      'stock_rollout_skus',
       'sync_estado',
       'sync_log',
       'user_notifications',
       'user_permisos',
       'users',
+      'warehouse_pick_zones',
     ]);
     expect(db.pragma('user_version', { simple: true })).toBe(30);
     const refreshDevice = db.prepare('PRAGMA table_info(mobile_refresh_tokens)').all()
       .find((column) => column.name === 'device_id');
     expect(refreshDevice.notnull).toBe(1);
     db.close();
+    const reopened = openDb(TEST_DB);
+    expect(reopened.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='guardia_ml_operaciones'").get()).toBeTruthy();
+    expect(reopened.prepare('PRAGMA table_info(guardia_ml_operaciones)').all().some((c) => c.name === 'claim_hasta')).toBe(true);
+    reopened.close();
   });
 
   it('crea las columnas de precio en ml_publicaciones_cache y las tablas de vínculos', () => {

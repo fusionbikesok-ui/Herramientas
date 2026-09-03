@@ -6,12 +6,13 @@ import { spawn } from 'node:child_process';
 const arg = process.argv.indexOf('--config');
 const configPath = arg >= 0 ? process.argv[arg + 1] : './config.json';
 const cfg = JSON.parse(await fs.readFile(configPath, 'utf8'));
-if (!cfg.apiBase || !cfg.agentId || !cfg.printCommand) throw new Error('apiBase, agentId y printCommand son obligatorios');
+if (!cfg.apiBase || !cfg.agentId || !cfg.printCommand || !cfg.apiToken) throw new Error('apiBase, agentId, apiToken y printCommand son obligatorios');
 const api = cfg.apiBase.replace(/\/$/, '');
 const pausa = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function jsonFetch(url, options) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(15000) });
+  const headers = { ...(options?.headers || {}), authorization: `Bearer ${cfg.apiToken}` };
+  const response = await fetch(url, { ...options, headers, signal: AbortSignal.timeout(15000) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
   return body;
@@ -49,7 +50,17 @@ async function unaVez() {
   return true;
 }
 
-while (true) {
-  try { await unaVez(); } catch (error) { console.error(`[label-agent] ${error.message}`); }
-  await pausa(Number(cfg.pollMs) || 2000);
+if (process.argv.includes('--once')) {
+  try {
+    const huboTrabajo = await unaVez();
+    console.log(`[label-agent] diagnóstico completado; trabajo=${huboTrabajo ? 'reclamado' : 'sin pendientes'}`);
+  } catch (error) {
+    console.error(`[label-agent] diagnóstico fallido: ${error.message}`);
+    process.exitCode = 1;
+  }
+} else {
+  while (true) {
+    try { await unaVez(); } catch (error) { console.error(`[label-agent] ${error.message}`); }
+    await pausa(Number(cfg.pollMs) || 2000);
+  }
 }

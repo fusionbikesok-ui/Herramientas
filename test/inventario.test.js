@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
@@ -68,6 +68,19 @@ describe('consulta rápida de stock E5', () => {
 });
 
 describe('libro de movimientos E6', () => {
+  // Estos dos tests usan bases dedicadas porque crean el mismo bootstrap en cada
+  // ejecución. No deben depender de archivos que haya dejado una corrida anterior.
+  beforeEach(() => {
+    for (const file of [E6_DB, E6_DB_2]) {
+      try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
+    }
+  });
+  afterEach(() => {
+    for (const file of [E6_DB, E6_DB_2]) {
+      try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
+    }
+  });
+
   it('transfiere con saldo suficiente y hace idempotente el reintento', async () => {
     const db = openDb(E6_DB);
     const app = buildApp(db, 'supervisor', true);
@@ -144,6 +157,7 @@ describe('looksLikeEan', () => {
 });
 
 describe('GET /api/inventario/alcance-opciones', () => {
+  beforeEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
   afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
   it('devuelve categorías y marcas distintas de catalogo_cache, sin duplicados', async () => {

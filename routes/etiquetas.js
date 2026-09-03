@@ -29,6 +29,8 @@ export function etiquetasRouter(db) {
       'ALTER TABLE etiquetas_cola ADD COLUMN ultimo_error TEXT',
       'ALTER TABLE etiquetas_cola ADD COLUMN error_en TEXT',
       'ALTER TABLE etiquetas_cola ADD COLUMN idempotencia TEXT',
+      'ALTER TABLE etiquetas_cola ADD COLUMN ultimo_claim_token TEXT',
+      'ALTER TABLE etiquetas_cola ADD COLUMN ultimo_resultado TEXT',
     ]) { try { db.prepare(ddl).run(); } catch (_) {} }
     db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_claim_token ON etiquetas_cola(claim_token) WHERE claim_token IS NOT NULL').run();
     db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_idempotencia ON etiquetas_cola(idempotencia) WHERE idempotencia IS NOT NULL').run();
@@ -72,9 +74,14 @@ export function etiquetasRouter(db) {
     const estado = ok ? 'impresa' : 'error';
     const ts = now();
     const error = ok ? null : String(req.body?.error || 'fallo de impresión').slice(0, 1000);
+    const actual = db.prepare('SELECT * FROM etiquetas_cola WHERE id=?').get(id);
+    if (actual && actual.ultimo_claim_token === token && actual.ultimo_resultado === estado) {
+      return res.json({ ok: true, estado, idempotente: true });
+    }
     const info = db.prepare(`UPDATE etiquetas_cola SET estado=?, impreso_en=CASE WHEN ?='impresa' THEN ? ELSE impreso_en END,
-      ultimo_error=?, error_en=CASE WHEN ?='error' THEN ? ELSE error_en END, claim_token=NULL, claim_hasta=NULL
-      WHERE id=? AND claim_token=? AND estado='imprimiendo'`).run(estado, estado, ts, error, estado, ts, id, token);
+      ultimo_error=?, error_en=CASE WHEN ?='error' THEN ? ELSE error_en END,
+      ultimo_claim_token=?, ultimo_resultado=?, claim_token=NULL, claim_hasta=NULL
+      WHERE id=? AND claim_token=? AND estado='imprimiendo'`).run(estado, estado, ts, error, estado, ts, token, estado, id, token);
     if (!info.changes) return res.status(409).json({ ok: false, error: 'trabajo no reclamado o lease vencido', code: 'PRINT_CLAIM_INVALID' });
     res.json({ ok: true, estado });
   });

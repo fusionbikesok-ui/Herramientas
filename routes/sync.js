@@ -20,6 +20,7 @@ import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVe
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
+import { retenerPedidoMl, pedidoMlRetenido } from '../lib/guardiaMl.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -226,8 +227,9 @@ const COMPUTED_STOCK_CTE = `
     FROM sku_matcher_decisiones d
     JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
     LEFT JOIN ml_stock_estado e ON e.clave = d.clave
-    LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
-    WHERE d.accion IN ('asignar','confirmar')
+      LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
+      LEFT JOIN guardia_ml_casos gm ON gm.clave = d.clave AND gm.estado != 'resuelto' AND gm.bloquea_sync = 1
+      WHERE d.accion IN ('asignar','confirmar') AND gm.id IS NULL
       AND d.sku IS NOT NULL AND d.sku <> ''
   )`;
 
@@ -512,6 +514,9 @@ function requiereVerificacionWc(e) {
 async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const orderId = String(orden.id);
   const items = orden.order_items ?? [];
+  // La Guardia ya conserva esta venta; esperar una liberación humana evita
+  // reintentos, reservas o efectos laterales en Woo en cada ciclo.
+  if (pedidoMlRetenido(db, orderId)) return;
   let algunSinMapeo = false;
 
   // Reservas abandonadas (proceso murió entre reservar y confirmar/liberar, ej: kill -9)
@@ -646,6 +651,16 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   }
 
   const ov = normalizarOrdenMl(orden);
+  const clavesSinCobertura = [];
+  for (const item of ov.items) {
+    const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
+    if (!skuVinculado || !buscarEnCache(db, skuVinculado)) clavesSinCobertura.push(item.clave);
+  }
+  if (clavesSinCobertura.length) {
+    retenerPedidoMl(db, { orderId, items, claves: [...new Set(clavesSinCobertura)] });
+    logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'retenido_guardia_ml', error: 'pedido ML sin vínculo exacto válido' });
+    return;
+  }
   const lineItems = [];
   for (const item of ov.items) {
     const itemId = item.item_id_ml;

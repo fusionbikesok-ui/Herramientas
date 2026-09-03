@@ -43,3 +43,5 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   reconciliarse con Woo antes de volver a publicar disponibilidad.
 - La política exacta de publicación ML se define en E11. Mientras publicaciones independientes anuncien el stock completo no se promete cero sobreventa; una sobreventa real bloquea nuevas ventas en ambos canales y escala.
 - Si Woo no responde, aumentos no se publican y los cambios pendientes quedan durables e idempotentes.
+- UM1 inspecciona directamente cada publicación+variación activa: solo un vínculo exacto a SKU existente en Woo cubre la venta. La primera fase es lectura; no cambia ML/Woo. Los pedidos sin cobertura se retienen solo en Fusion y no cambian el estado ni las notas de Woo.
+- Un `seller_sku` externo divergente bloquea la sincronización hasta revisión. Los vínculos compartidos pueden publicar el stock completo en cada clave por decisión operativa, pero una sobreventa agregada abre incidente crítico y retiene excedentes; no se promete reserva atómica entre claves ML.

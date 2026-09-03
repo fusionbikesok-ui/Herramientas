@@ -1,14 +1,14 @@
-# Progreso y evidencia de entregas E0–E24
+# Progreso y evidencia de entregas E0–E24 y urgentes
 
-Actualizado: 2026-09-02. Estas fichas registran realidad; el plan maestro especifica el objetivo. Solo evidencia reproducible permite avanzar de estado.
+Actualizado: 2026-09-03. Estas fichas registran realidad; el plan maestro especifica el objetivo. Solo evidencia reproducible permite avanzar de estado.
 
 | Entrega | Nombre | Estado | Ficha |
 | --- | --- | --- | --- |
-| E0 | Maestro y continuidad documental | candidata | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E0.md` |
+| E0 | Maestro y continuidad documental | aceptada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E0.md` |
 | E1 | Apertura, horarios, olas y picking | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E1.md` |
-| E2 | Evidencia, perfiles, paquetes y aprobación | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E2.md` |
-| E3 | Etiqueta interna 50×25 | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E3.md` |
-| E4 | Lotes, tracking y despacho | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E4.md` |
+| E2 | Evidencia, perfiles, paquetes y aprobación | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E2.md` |
+| E3 | Etiqueta interna 50×25 | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E3.md` |
+| E4 | Lotes, tracking y despacho | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E4.md` |
 | E5 | App iPhone base | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E5.md` |
 | E6 | Bandeja operativa y ML | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E6.md` |
 | E7 | Turnos y reemplazos | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E7.md` |
@@ -29,6 +29,7 @@ Actualizado: 2026-09-02. Estas fichas registran realidad; el plan maestro especi
 | E22 | Métricas y reposición | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E22.md` |
 | E23 | Robustez, staging y recuperación | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E23.md` |
 | E24 | Consolidación final | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E24.md` |
+| UM1 urgente | Guardia ML y cobertura exacta | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1-guardia-ml.md` |
 
 Estados: `planificada → desarrollo → candidata → publicada → observada → aceptada`. Un estado no se infiere por código, número de commit o nombre de rama.
 

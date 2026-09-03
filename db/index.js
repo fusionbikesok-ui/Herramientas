@@ -148,8 +148,11 @@ export function openDb(dbPath) {
   if (!horarioMigration) {
     const aplicarHorarios = db.transaction(() => {
       db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '032_despacho_horarios.sql'), 'utf8'));
-      const columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
-      if (columnas.length && !columnas.includes('fecha_despacho')) db.exec('ALTER TABLE pedidos_cache ADD COLUMN fecha_despacho TEXT');
+      let columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
+      if (columnas.length && !columnas.includes('fecha_despacho')) {
+        db.exec('ALTER TABLE pedidos_cache ADD COLUMN fecha_despacho TEXT');
+        columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
+      }
       db.exec(`CREATE TABLE IF NOT EXISTS despacho_horarios_meta (
         id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 1, actualizado_en TEXT NOT NULL
       );
@@ -258,6 +261,217 @@ export function openDb(dbPath) {
     db.transaction(() => {
       db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '042_operational_day_waves.sql'), 'utf8'));
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('operational_day_waves_042')").run();
+    })();
+  }
+  const operationalWaveScopeMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='operational_day_wave_item_scope_043'").get();
+  if (!operationalWaveScopeMigration) {
+    db.transaction(() => {
+      const hasOperationalDayId = db.prepare('PRAGMA table_info(pick_wave_items)').all()
+        .some((column) => column.name === 'operational_day_id');
+      if (!hasOperationalDayId) {
+        db.exec('ALTER TABLE pick_wave_items ADD COLUMN operational_day_id INTEGER REFERENCES operational_days(id)');
+      }
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '043_operational_day_wave_item_scope.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('operational_day_wave_item_scope_043')").run();
+    })();
+  }
+  const slaOperativoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='sla_operativo_preparacion_044'").get();
+  if (!slaOperativoMigration) {
+    db.transaction(() => {
+      const columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
+      for (const [nombre, sql] of [
+        ['fecha_despacho_limite', 'ALTER TABLE pedidos_cache ADD COLUMN fecha_despacho_limite TEXT'],
+        ['estado_despacho', "ALTER TABLE pedidos_cache ADD COLUMN estado_despacho TEXT NOT NULL DEFAULT 'activo'"],
+        ['despacho_motivo', 'ALTER TABLE pedidos_cache ADD COLUMN despacho_motivo TEXT'],
+        ['shipment_limite_original', 'ALTER TABLE pedidos_cache ADD COLUMN shipment_limite_original TEXT'],
+      ]) {
+        if (columnas.length && !columnas.includes(nombre)) db.exec(sql);
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('sla_operativo_preparacion_044')").run();
+    })();
+  }
+  const perfilVersionMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_perfil_version_045'").get();
+  if (!perfilVersionMigration) {
+    db.transaction(() => {
+      const agregar = (tabla, columna) => {
+        const tablaExiste = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(tabla);
+        if (!tablaExiste) return;
+        const existe = db.prepare(`PRAGMA table_info(${tabla})`).all().some((c) => c.name === columna);
+        if (!existe) db.exec(`ALTER TABLE ${tabla} ADD COLUMN ${columna} ${tabla === 'preparacion_items' ? 'INTEGER NOT NULL DEFAULT 1' : 'INTEGER NOT NULL DEFAULT 1'}`);
+      };
+      agregar('preparacion_perfiles', 'version');
+      agregar('preparacion_perfiles_sku', 'version');
+      agregar('preparacion_items', 'perfil_version');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_perfil_version_045')").run();
+    })();
+  }
+  const requisitosSnapshotMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_requisitos_snapshot_046'").get();
+  if (!requisitosSnapshotMigration) {
+    db.transaction(() => {
+      const existe = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='preparacion_items'").get();
+      const columnas = existe ? db.prepare('PRAGMA table_info(preparacion_items)').all() : [];
+      if (existe && !columnas.some((c) => c.name === 'requisitos_json_snapshot')) db.exec('ALTER TABLE preparacion_items ADD COLUMN requisitos_json_snapshot TEXT');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_requisitos_snapshot_046')").run();
+    })();
+  }
+  const fotosHoldsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_fotos_holds_047'").get();
+  if (!fotosHoldsMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '047_preparacion_fotos_holds.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_fotos_holds_047')").run();
+    })();
+  }
+  const jornadaPickingMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='jornada_picking_operativo_048'").get();
+  if (!jornadaPickingMigration) {
+    db.transaction(() => {
+      const existePickWaves = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pick_waves'").get();
+      if (existePickWaves) {
+        const columnas = db.prepare('PRAGMA table_info(pick_waves)').all().map((c) => c.name);
+        if (!columnas.includes('estado_operativo')) db.exec("ALTER TABLE pick_waves ADD COLUMN estado_operativo TEXT NOT NULL DEFAULT 'disponible'");
+        if (!columnas.includes('expected_version')) db.exec("ALTER TABLE pick_waves ADD COLUMN expected_version INTEGER NOT NULL DEFAULT 1");
+      }
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '048_jornada_picking_operativo.sql'), 'utf8'));
+      try { db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '057_pick_wave_helper_entrega.sql'), 'utf8')); } catch (e) { if (!/duplicate column name/i.test(e.message)) throw e; }
+      const shortageColumns = db.prepare('PRAGMA table_info(pick_wave_shortages)').all().map((c) => c.name);
+      if (!shortageColumns.includes('estado')) db.exec("ALTER TABLE pick_wave_shortages ADD COLUMN estado TEXT NOT NULL DEFAULT 'pendiente'");
+      if (!shortageColumns.includes('resuelto_por')) db.exec('ALTER TABLE pick_wave_shortages ADD COLUMN resuelto_por TEXT');
+      if (!shortageColumns.includes('resuelto_en')) db.exec('ALTER TABLE pick_wave_shortages ADD COLUMN resuelto_en TEXT');
+      const waveItemColumns = db.prepare('PRAGMA table_info(pick_wave_items)').all().map((c) => c.name);
+      if (!waveItemColumns.includes('estado_operativo')) db.exec("ALTER TABLE pick_wave_items ADD COLUMN estado_operativo TEXT NOT NULL DEFAULT 'elegible'");
+      if (!waveItemColumns.includes('bloqueo_motivo')) db.exec('ALTER TABLE pick_wave_items ADD COLUMN bloqueo_motivo TEXT');
+      const assignmentColumns = db.prepare('PRAGMA table_info(pick_wave_assignments)').all().map((c) => c.name);
+      if (!assignmentColumns.includes('motivo')) db.exec('ALTER TABLE pick_wave_assignments ADD COLUMN motivo TEXT');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('jornada_picking_operativo_048')").run();
+    })();
+  }
+  const etiquetasAgenteMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='etiquetas_agente_claim_resultado_049'").get();
+  if (!etiquetasAgenteMigration) {
+    db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='etiquetas_cola'").get();
+      if (table) {
+        const columns = new Set(db.prepare('PRAGMA table_info(etiquetas_cola)').all().map(column => column.name));
+        const additions = [
+          ['agente_id', 'TEXT'],
+          ['claim_token', 'TEXT'],
+          ['claim_hasta', 'TEXT'],
+          ['ultimo_error', 'TEXT'],
+          ['error_en', 'TEXT'],
+          ['ultimo_claim_token', 'TEXT'],
+          ['ultimo_resultado', 'TEXT'],
+        ];
+        for (const [name, type] of additions) {
+          if (!columns.has(name)) db.exec(`ALTER TABLE etiquetas_cola ADD COLUMN ${name} ${type}`);
+        }
+        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_claim_token ON etiquetas_cola(claim_token) WHERE claim_token IS NOT NULL');
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('etiquetas_agente_claim_resultado_049')").run();
+    })();
+  }
+  const despachoLotesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_lotes_050'").get();
+  if (!despachoLotesMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '050_despacho_lotes.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_lotes_050')").run();
+    })();
+  }
+  const despachoLoteScanMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_lote_scan_idempotencia_051'").get();
+  if (!despachoLoteScanMigration) {
+    db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='despacho_lote_items'").get();
+      if (table && !db.prepare('PRAGMA table_info(despacho_lote_items)').all().some(column => column.name === 'ultima_idempotencia')) {
+        db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '051_despacho_lote_scan_idempotencia.sql'), 'utf8'));
+      } else if (table) db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_despacho_lote_item_idempotencia ON despacho_lote_items(lote_id, ultima_idempotencia) WHERE ultima_idempotencia IS NOT NULL');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_lote_scan_idempotencia_051')").run();
+    })();
+  }
+  const despachoLoteTrackingMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_lote_tracking_052'").get();
+  if (!despachoLoteTrackingMigration) {
+    db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='despacho_lote_items'").get();
+      if (table && !db.prepare('PRAGMA table_info(despacho_lote_items)').all().some(column => column.name === 'tracking')) {
+        db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '052_despacho_lote_tracking.sql'), 'utf8'));
+      } else if (table) db.exec('CREATE INDEX IF NOT EXISTS idx_despacho_lote_items_tracking ON despacho_lote_items(tracking) WHERE tracking IS NOT NULL');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_lote_tracking_052')").run();
+    })();
+  }
+  const despachoLoteSalidaMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_lote_salida_053'").get();
+  if (!despachoLoteSalidaMigration) {
+    db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='despacho_lotes'").get();
+      if (table) {
+        const columns = new Set(db.prepare('PRAGMA table_info(despacho_lotes)').all().map(column => column.name));
+        for (const name of ['salida_confirmada_por', 'salida_confirmada_en', 'salida_idempotencia']) {
+          if (!columns.has(name)) db.exec(`ALTER TABLE despacho_lotes ADD COLUMN ${name} TEXT`);
+        }
+        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_despacho_lote_salida_idem ON despacho_lotes(salida_idempotencia) WHERE salida_idempotencia IS NOT NULL');
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_lote_salida_053')").run();
+    })();
+  }
+  const despachoLoteIdemMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_lote_idempotencia_054'").get();
+  if (!despachoLoteIdemMigration) {
+    db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='despacho_lotes'").get();
+      if (table) {
+        const columns = new Set(db.prepare('PRAGMA table_info(despacho_lotes)').all().map(column => column.name));
+        if (!columns.has('idempotencia')) db.exec('ALTER TABLE despacho_lotes ADD COLUMN idempotencia TEXT');
+        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_despacho_lote_idempotencia ON despacho_lotes(idempotencia) WHERE idempotencia IS NOT NULL');
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_lote_idempotencia_054')").run();
+    })();
+  }
+  const despachoLoteControlMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_lote_control_unico_055'").get();
+  if (!despachoLoteControlMigration) {
+    db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='despacho_lote_items'").get();
+      if (table) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '055_despacho_lote_control_unico.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_lote_control_unico_055')").run();
+    })();
+  }
+  const despachoLoteEventosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_lote_eventos_056'").get();
+  if (!despachoLoteEventosMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '056_despacho_lote_eventos.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('despacho_lote_eventos_056')").run();
+    })();
+  }
+  const jornadaPausaMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='jornada_pausa_058'").get();
+  if (!jornadaPausaMigration) {
+    db.transaction(() => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pick_wave_claims'").get();
+      if (table) {
+        for (const ddl of ['ALTER TABLE pick_wave_claims ADD COLUMN pausada_en TEXT', 'ALTER TABLE pick_wave_claims ADD COLUMN pausada_por TEXT', 'ALTER TABLE pick_wave_claims ADD COLUMN motivo_pausa TEXT']) {
+          try { db.exec(ddl); } catch (error) { if (!/duplicate column name/i.test(error.message)) throw error; }
+        }
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('jornada_pausa_058')").run();
+    })();
+  }
+  const guardiaMlMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='guardia_ml_cobertura_059'").get();
+  if (!guardiaMlMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '059_guardia_ml_cobertura.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('guardia_ml_cobertura_059')").run();
+    })();
+  }
+  const guardiaMlPedidosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='guardia_ml_pedidos_060'").get();
+  if (!guardiaMlPedidosMigration) {
+    db.transaction(() => {
+      const columnasGuardia = db.prepare('PRAGMA table_info(guardia_ml_casos)').all().map((c) => c.name);
+      if (!columnasGuardia.includes('pedido_ml_order_id')) db.exec('ALTER TABLE guardia_ml_casos ADD COLUMN pedido_ml_order_id TEXT');
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '060_guardia_ml_pedidos.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('guardia_ml_pedidos_060')").run();
+    })();
+  }
+  const guardiaMlClaimMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='guardia_ml_claim_061'").get();
+  if (!guardiaMlClaimMigration) {
+    db.transaction(() => {
+      const columnasOperaciones = db.prepare('PRAGMA table_info(guardia_ml_operaciones)').all().map((c) => c.name);
+      if (!columnasOperaciones.includes('claim_hasta')) db.exec('ALTER TABLE guardia_ml_operaciones ADD COLUMN claim_hasta TEXT');
+      if (!columnasOperaciones.includes('operador')) db.exec('ALTER TABLE guardia_ml_operaciones ADD COLUMN operador TEXT');
+      if (!columnasOperaciones.includes('caso_version')) db.exec('ALTER TABLE guardia_ml_operaciones ADD COLUMN caso_version INTEGER');
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '061_guardia_ml_claim.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('guardia_ml_claim_061')").run();
     })();
   }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}

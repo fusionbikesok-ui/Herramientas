@@ -379,6 +379,7 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
 
     <div class="section-label">Otras formas de revisar</div>
     <div class="otras-lista">
+      <a class="otra-link" href="../guardia-ml/">Guardia ML — riesgos de venta y cobertura <span class="n">›</span></a>
       <a class="otra-link" href="#/solo-ml">Solo ML — publicaciones sin SKU <span class="n">›</span></a>
     </div>
   </section>
@@ -432,8 +433,8 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
   <!-- ══════════════ VISTA: SOLO ML ══════════════ -->
   <section class="view" id="view-solo-ml" data-view="solo-ml">
     <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Solo ML <em>— sin SKU</em></h1>
-    <p class="page-sub">Publicaciones que no tienen un producto web vinculado. Zona de consulta y limpieza puntual: filtrá o buscá, no se recorre de a una.</p>
+    <h1 class="page-title">Solo ML <em>— sin decisión válida</em></h1>
+    <p class="page-sub">Publicaciones activas sin una decisión exacta del matcher, incluyendo las que tienen stock vendible y deben corregirse antes de seguir sincronizando.</p>
     <div class="filtros-panel">
       <input class="filtro-control grow" type="search" id="soloml-buscar" placeholder="Buscar por título…" aria-label="Buscar publicación de ML por título">
     </div>
@@ -1462,7 +1463,7 @@ function cargarSoloMl() {
     if (!data.length) { cont.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
     var avisoParcial = data.length < res.data.total
       ? ' Mostrando ' + n(data.length) + ' de ' + n(res.data.total) + ' — afiná la búsqueda para acotar.' : '';
-    cont.innerHTML = '<p class="page-sub">' + n(res.data.total) + ' publicaciones sin SKU en total.' + avisoParcial + '</p>' +
+    cont.innerHTML = '<p class="page-sub">' + n(res.data.total) + ' publicaciones sin decisión válida.' + avisoParcial + '</p>' +
       '<div class="gestion-lista">' + data.map(function (r) {
         return '<div class="solo-ml-row">' +
           (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="">' : '<div class="mc-thumb"></div>') +

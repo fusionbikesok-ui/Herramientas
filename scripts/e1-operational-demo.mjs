@@ -1,0 +1,67 @@
+#!/usr/bin/env node
+// Demo E1 aislada: ejercita el contrato operativo sin tocar la base configurada ni la red.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { openDb } from '../db/index.js';
+import { ensureTablesJornada } from '../routes/jornada.js';
+import {
+  iniciarBusqueda, pasarAMesa, asignarUnidadMesa, registrarFaltante, completarRetorno,
+  resolverFaltante, cerrarOla, reclamarOla, configurarZona, pedirAyudaZona, recibirAyudaZona, pausarOla, reanudarOla, sincronizarMiniOlas,
+} from '../lib/jornada.js';
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-e1-demo-'));
+const dbPath = path.join(dir, 'demo.sqlite');
+const db = openDb(dbPath);
+const now = new Date('2026-09-03T12:00:00.000Z');
+try {
+  ensureTablesJornada(db);
+  db.exec('CREATE TABLE pedidos_cache (clave TEXT PRIMARY KEY, items_json TEXT, estado_envio TEXT, canal TEXT, espejo_ml INTEGER DEFAULT 0, fecha TEXT, fecha_despacho TEXT, fecha_despacho_limite TEXT, estado_despacho TEXT DEFAULT \'activo\')');
+  db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,fecha) VALUES (?,?,?,?,?)').run('web:demo-1', JSON.stringify([{ sku: 'SKU-DEMO', cantidad: 1 }]), 'pendiente', 'web', now.toISOString());
+  const day = db.prepare('INSERT INTO operational_days (fecha,estado,abierta_por,abierta_en) VALUES (?,?,?,?)').run('2026-09-03','abierta','demo',now.toISOString()).lastInsertRowid;
+  const wave = db.prepare("INSERT INTO pick_waves (operational_day_id,tipo,estado,estado_operativo,creada_en) VALUES (?,'inicial','congelada','disponible',?)").run(day, now.toISOString()).lastInsertRowid;
+  db.prepare('INSERT INTO pick_wave_items (pick_wave_id,pedido_clave,agregado_en) VALUES (?,?,?)').run(wave, 'web:demo-1', now.toISOString());
+  const claim = reclamarOla(db, wave, 'demo', { operationId:'demo-claim', expectedVersion:1 }, now);
+  if (!claim.ok) throw new Error(`claim: ${claim.code}`);
+  const paused = pausarOla(db, wave, 'demo', { operationId:'demo-pause', expectedVersion:claim.olaCongelada.expected_version, motivo:'reorganización de mesa' }, now);
+  if (!paused.ok) throw new Error(`pause: ${paused.code}`);
+  if (!reanudarOla(db, wave, 'demo', { operationId:'demo-resume', expectedVersion:paused.ola.expected_version }, now).ok) throw new Error('resume failed');
+  if (!iniciarBusqueda(db, wave, 'demo', { operationId:'demo-search' }, now).ok) throw new Error('search failed');
+  db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,espejo_ml,fecha,fecha_despacho,fecha_despacho_limite) VALUES (?,?,?,?,?,?,?,?)').run('ml:demo-urgent', JSON.stringify([{ sku:'SKU-URGENTE', cantidad:1 }]), 'pendiente', 'ml', 1, now.toISOString(), '2026-09-03', '2026-09-03T12:30:00.000Z');
+  const urgent = sincronizarMiniOlas(db, now);
+  if (urgent.agregados !== 1 || !db.prepare("SELECT 1 FROM pick_wave_items WHERE pick_wave_id=? AND pedido_clave='ml:demo-urgent'").get(wave)) throw new Error('urgent ML was not incorporated into active wave');
+  if (!pasarAMesa(db, wave, 'demo', { operationId:'demo-table' }, now).ok) throw new Error('table failed');
+  const assigned = asignarUnidadMesa(db, wave, { pedidoClave:'web:demo-1', sku:'SKU-DEMO', cantidad:1 }, 'demo', { operationId:'demo-assign' }, now);
+  if (!assigned.ok) throw new Error(`assignment: ${assigned.code}`);
+  const urgentAssigned = asignarUnidadMesa(db, wave, { pedidoClave:'ml:demo-urgent', sku:'SKU-URGENTE', cantidad:1 }, 'demo', { operationId:'demo-assign-urgent' }, now);
+  if (!urgentAssigned.ok) throw new Error(`urgent assignment: ${urgentAssigned.code}`);
+  const retorno = db.prepare("SELECT id FROM pick_wave_returns WHERE pick_wave_id=? AND estado='pendiente'").get(wave);
+  if (retorno && !completarRetorno(db, retorno.id, 'demo', { operationId:'demo-return-complete', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave).expected_version }, now).ok) throw new Error('urgent return failed');
+  const closed = cerrarOla(db, wave, 'demo', { operationId:'demo-close', derivados:['asignado'] }, now);
+  if (!closed.ok) throw new Error(`close: ${closed.code}`);
+  const replayClose = cerrarOla(db, wave, 'demo', { operationId:'demo-close', expectedVersion:1, derivados:['asignado'] }, now);
+  if (!replayClose.ok || !replayClose.repetido) throw new Error('close replay failed');
+  db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,fecha) VALUES (?,?,?,?,?)').run('web:demo-shortage', JSON.stringify([{ sku: 'SKU-FALTANTE', cantidad: 1 }]), 'pendiente', 'web', now.toISOString());
+  const wave2 = db.prepare("INSERT INTO pick_waves (operational_day_id,tipo,estado,estado_operativo,creada_en) VALUES (?,'mini','congelada','disponible',?)").run(day, now.toISOString()).lastInsertRowid;
+  db.prepare('INSERT INTO pick_wave_items (pick_wave_id,pedido_clave,agregado_en) VALUES (?,?,?)').run(wave2, 'web:demo-shortage', now.toISOString());
+  const shortageClaim = reclamarOla(db, wave2, 'demo2', { operationId:'demo-shortage-claim', expectedVersion:1 }, now);
+  if (!shortageClaim.ok) throw new Error(`shortage claim failed: ${shortageClaim.code}`);
+  const zone = configurarZona(db, { nombre:'Zona demo' }, 'demo2', { operationId:'demo-zone' }, now);
+  const help = pedirAyudaZona(db, wave2, { zonaId:zone.zona.id, ayudante:'ayudante-demo' }, 'demo2', { operationId:'demo-help', expectedVersion:shortageClaim.olaCongelada.expected_version }, now);
+  if (!help.ok) throw new Error(`help request: ${help.code}`);
+  const received = recibirAyudaZona(db, help.ayuda.id, 'demo2', { operationId:'demo-help-receive', expectedVersion:help.ola.expected_version, entrega:[{ sku:'SKU-FALTANTE', cantidad:1 }] }, now);
+  if (!received.ok) throw new Error(`help receive: ${received.code}`);
+  if (!iniciarBusqueda(db, wave2, 'demo2', { operationId:'demo-shortage-search' }, now).ok) throw new Error('shortage search failed');
+  if (!pasarAMesa(db, wave2, 'demo2', { operationId:'demo-shortage-table' }, now).ok) throw new Error('shortage table failed');
+  const shortage = registrarFaltante(db, wave2, { pedidoClave:'web:demo-shortage', sku:'SKU-FALTANTE', motivo:'no_encontrado', nota:'Demo' }, 'demo2', { operationId:'demo-shortage' }, now);
+  if (!shortage.ok) throw new Error(`shortage: ${shortage.code}`);
+  const resolved = resolverFaltante(db, shortage.faltante.id, 'demo', { operationId:'demo-shortage-resolve', allowWithoutClaim:true, resolucion:'diferimiento' }, now);
+  if (!resolved.ok) throw new Error(`shortage resolve: ${resolved.code}`);
+  const replayShortage = registrarFaltante(db, wave2, { pedidoClave:'web:demo-shortage', sku:'SKU-FALTANTE', motivo:'otro' }, 'demo', { operationId:'demo-shortage', expectedVersion:1 }, now);
+  if (!replayShortage.ok || !replayShortage.repetido) throw new Error('shortage replay failed');
+  const eventCount = db.prepare('SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=?').get(wave).n;
+  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
+} finally {
+  db.close();
+  fs.rmSync(dir, { recursive:true, force:true });
+}

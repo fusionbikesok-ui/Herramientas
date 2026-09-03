@@ -10,6 +10,7 @@
     --surface:#141A25;--surface2:#1B2235;--border:#24304A;--border2:#2E3B57;
     --text:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
     --green:#34D399;--amber:#F5B942;--red:#F87171;--violet:#A78BFA;
+    --focus-ring:#67e8f9;
     --tap-comfort:56px;
     --act-rail:rgba(36,48,74,.55);
     --act-new-hold:6s;
@@ -26,6 +27,7 @@
   .sub{font-size:12.5px;color:var(--muted);margin:0 0 18px;max-width:85ch;line-height:1.5;}
   .btn{background:var(--azul);color:#06131C;border:0;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer;transition:background .15s;}
   .btn:hover{background:var(--azul-dk);}
+  .btn:focus-visible,.tab:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px;}
   .btn:disabled{opacity:.45;cursor:default;}
   .btn.sec{background:var(--surface2);color:var(--text);font-weight:600;border:1px solid var(--border);}
   .btn.sec:hover{background:var(--border2);}
@@ -58,6 +60,7 @@
   .seg-chip.mut:hover{background:var(--border2);}
   .seg-search{width:100%;padding:10px 13px;border-radius:10px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-size:14px;margin-bottom:16px;}
   .seg-search:focus{outline:none;border-color:var(--azul);}
+  .seg-search:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px;}
   .seg-section h2{font-size:1.05rem;margin:0 0 4px;}
   .seg-section .sub{margin:0 0 12px;}
   .seg-ok{border-radius:10px;padding:14px 16px;font-size:14px;font-weight:700;color:var(--green);background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);}
@@ -90,12 +93,13 @@
   .ped-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
   .ped-num{font-weight:800;font-size:15px;}
   .ped-cli{font-size:12.5px;color:var(--muted);}
-  .ped-items{font-size:11.5px;color:var(--muted2);margin-top:8px;line-height:1.5;}
+  .ped-items{font-size:11.5px;color:var(--muted);margin-top:8px;line-height:1.5;}
   .ped-nota{font-size:11.5px;color:var(--text);background:var(--amber-bg);border-left:2px solid var(--amber);padding:4px 8px;margin-top:8px;border-radius:4px;}
   .ped-foot{display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;}
 
   /* Jornada operativa: componente local de esta pantalla, con los mismos tokens de la página. */
-  .jornada-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin:0 0 16px;}
+  .jornada-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin:0 0 16px;}
+  .jornada-title-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.jornada-status{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
   .jornada-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;}
   .jornada-head h2{font-size:1rem;margin:0 0 3px;}
   .jornada-meta{font-size:12px;color:var(--muted);line-height:1.5;}
@@ -103,7 +107,16 @@
   .jornada-form label{font-size:11.5px;color:var(--muted);display:flex;flex-direction:column;gap:5px;}
   .jornada-form input{min-height:40px;padding:8px 10px;border-radius:7px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font:inherit;}
   .jornada-form input:focus{outline:none;border-color:var(--azul);}
+  .jornada-form input:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px;}
+  .jornada-panel button:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px;}
   .jornada-note{font-size:12px;color:var(--muted);margin:10px 0 0;}
+  .jornada-section-title{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:16px 0 8px}
+  .jornada-rules,.jornada-preflight{border:1px solid var(--border);border-radius:9px;padding:11px 12px;margin-top:10px}
+  .jornada-rules{background:color-mix(in srgb,var(--surface) 88%,var(--accent) 12%)}
+  .jornada-rules h3,.jornada-preflight h3{font-size:13px;margin:0 0 7px}.jornada-rules ul{margin:0;padding-left:18px}.jornada-rules li{margin:4px 0;font-size:13px}
+  .jornada-overview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}.jornada-overview>div{min-width:0}
+  @media(max-width:600px){.jornada-overview{grid-template-columns:1fr}}
+  .claim-warning{margin-top:9px;padding:8px 10px;border:1px solid var(--amber);border-left:4px solid var(--amber);border-radius:7px;color:var(--text);background:rgba(245,185,66,.12);font-size:12px;font-weight:700;}
   .olas-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px;}
   .ola-card{border:1px solid var(--border);border-radius:9px;padding:12px;background:var(--surface2);}
   .ola-card h3{font-size:13px;margin:0 0 5px;display:flex;justify-content:space-between;gap:8px;}
@@ -112,6 +125,9 @@
   .jornada-panel .btn{min-height:44px;}
   .jornada-panel input{min-height:44px;}
   @media(max-width:600px){.jornada-form{grid-template-columns:1fr 1fr}.jornada-form .btn{grid-column:1/-1;width:100%;min-height:44px}.olas-grid{grid-template-columns:1fr}}
+  .ola-flow{display:flex;gap:5px;flex-wrap:wrap;margin:10px 0}.ola-flow .badge{padding:5px 9px}.ola-flow .current{outline:2px solid var(--azul);outline-offset:1px}
+  .pick-zone{border:1px solid var(--border);border-radius:9px;padding:11px;background:var(--surface2);margin:8px 0}.pick-zone h4{margin:0 0 6px;font-size:13px}.pick-zone ul{margin:0;padding-left:18px;color:var(--muted);font-size:12px;line-height:1.6}
+  .pick-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.pick-table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px}.pick-table th,.pick-table td{padding:8px;border-bottom:1px solid var(--border);text-align:left}.pick-table input{width:100%;min-height:40px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px}.pick-help{border-left:3px solid var(--amber);padding:8px 10px;background:rgba(245,185,66,.1);margin-top:8px;font-size:12px}.pick-error{color:var(--red);margin-top:8px}.pick-live{margin-top:8px}
 
   /* detalle */
   .stepper{display:flex;gap:8px;align-items:center;margin:14px 0;flex-wrap:wrap;}
@@ -258,15 +274,16 @@
   .desp-table-wrap{display:none;overflow-x:auto}.desp-table{width:100%;border-collapse:collapse;font-size:12px}.desp-table th,.desp-table td{padding:10px 8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}.desp-table th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
   @media(min-width:640px){.desp-summary{grid-template-columns:repeat(4,1fr)}.desp-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
   @media(min-width:1100px){.desp-list{display:grid}.desp-table-wrap{display:block}.desp-toolbar select{min-width:145px}}
-  .desp-stat:focus-visible,.desp-filtros input:focus-visible,.desp-filtros select:focus-visible,.desp-scan input:focus-visible,.desp-toolbar input:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
+  .desp-stat:focus-visible,.desp-filtros input:focus-visible,.desp-filtros select:focus-visible,.desp-scan input:focus-visible,.desp-toolbar input:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px}
 </style>
 </head>
 <body>
+<main aria-labelledby="preparacion-title">
 <div class="wrap">
   <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
-  <h1>Preparación de <em>pedidos</em></h1>
+  <h1 id="preparacion-title">Preparación de <em>pedidos</em></h1>
   <p class="sub">Cola de despacho <b>web (Andreani)</b> + <b>MercadoLibre</b> (Flex/colecta listos para despachar).
-    Escaneá cada producto para confirmar el contenido, sacá las fotos según el tipo de producto y
+    Buscá los productos por zona, confirmá cada unidad en mesa, sacá las fotos según el tipo de producto y
     armá las etiquetas de Andreani en lote.</p>
 
   <div class="tabs" id="tabs">
@@ -278,12 +295,16 @@
     <button class="tab" data-v="despachadas" onclick="ir('despachadas')">Despachadas sin verificar</button>
     <button class="tab" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
     <button class="tab" data-v="horarios" onclick="ir('horarios')">Horarios de despacho</button>
-    <button class="tab" data-v="hoja-despachos" onclick="ir('hoja-despachos')">Hoja de despachos</button>
+    <button class="tab" data-v="hoja-ml" onclick="ir('hoja-ml')">Hoja MercadoLibre</button>
+    <button class="tab" data-v="hoja-andreani" onclick="ir('hoja-andreani')">Hoja Andreani/Web</button>
+    <button class="tab" data-v="lotes" onclick="ir('lotes')">Lotes de despacho</button>
+    <button class="tab" data-v="regularizar-despachos" onclick="regularizarJornadaSeleccionada()">Regularizar sin evidencia</button>
   </div>
 
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
   <div id="foto-live" class="sr-only" role="status" aria-live="polite"></div>
 </div>
+</main>
 
 <div class="modal" id="cam-modal">
   <div class="modal-box" role="dialog" aria-modal="true" aria-label="Escanear código de barras">
@@ -346,7 +367,7 @@
 <script src="../lib/api.js"></script>
 <script>
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
-var JORNADA={estado:'idle',jornada:null,olas:[],error:null,busy:false,claims:{}};
+var JORNADA={estado:'idle',jornada:null,olas:[],zonas:[],error:null,busy:false,claims:{},reglas:null,preflight:null,detalle:null,ayudas:[]};
 var PEND_WAVE_FILTER=null, PEND_STATUS='idle';
 var PEND_BASELINE_LISTA=false, PEND_NUEVOS={};
 // fotoId (o id temporal mientras sube) -> object URL local. Vive fuera de PREP a propósito:
@@ -369,7 +390,9 @@ function ir(v){
   VISTA=v; PREP=null;
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
   if(v==='pendientes'){cargarPendientes();iniciarPollingPendientes();}
-  else if(v==='hoja-despachos')cargarHojaDespachos();
+  else if(v==='hoja-ml'){DESP.canal='ml';cargarHojaDespachos();}
+  else if(v==='hoja-andreani'){DESP.canal='web';cargarHojaDespachos();}
+  else if(v==='lotes')cargarLotes();
   else if(v==='etiquetas')cargarEtiquetas();
   else if(v==='seguimientos')cargarSeguimientos();
   else if(v==='historial')cargarHistorial();
@@ -378,6 +401,29 @@ function ir(v){
   else if(v==='perfiles')cargarPerfiles();
   else if(v==='horarios')cargarHorarios();
 }
+
+async function cargarLotes(){
+  var c=document.getElementById('cuerpo'); var fecha=fechaBA(); c.innerHTML='<div class="loading">Cargando lotes…</div>';
+  try{var r=await api('/despacho/lotes?fecha_jornada='+encodeURIComponent(fecha));if(!r.body.ok)throw new Error(r.body.error||'error');
+    var lotes=r.body.lotes||[]; c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">Recargar</button></div><p class="sub">Lotes de '+esc(fecha)+' · separados por canal</p>'+
+      (lotes.length?'<div class="desp-list">'+lotes.map(function(l){return '<article class="desp-card"><h3>'+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+' · lote '+esc(String(l.id))+'</h3><div class="desp-meta">Estado: '+esc(l.estado)+' · Miembros: '+Number(l.miembros||0)+' · Confirmados: '+Number(l.confirmados||0)+' · Con tracking: '+Number(l.con_tracking||0)+'</div><div class="desp-actions"><button class="btn sec" onclick="verDetalleLote('+Number(l.id)+')">Ver paquetes</button></div></article>';}).join('')+'</div>':'<div class="desp-empty">No hay lotes para esta jornada.</div>');
+  }catch(e){c.innerHTML='<div class="loading err" role="alert">No se pudieron cargar los lotes: '+esc(e.message)+'</div>';}
+}
+async function verDetalleLote(id){
+  var c=document.getElementById('cuerpo'); c.innerHTML='<div class="loading">Cargando paquetes…</div>';
+  try{var r=await api('/despacho/lotes/'+encodeURIComponent(id));if(!r.body.ok)throw new Error(r.body.error||'error');var l=r.body.lote,items=r.body.items||[];
+    c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">← Volver a lotes</button>'+(l.estado==='abierto'?'<button class="btn" onclick="accionLote('+l.id+',\'iniciar\')">Iniciar lote</button>':'')+(l.estado==='en_preparacion'?'<button class="btn danger" onclick="cerrarLote('+l.id+')">Cerrar lote</button>':'')+((l.estado==='abierto'||l.estado==='en_preparacion')?'<button class="btn danger" onclick="anularLote('+l.id+')">Anular lote</button>':'')+'</div><h2>Lote '+esc(String(l.id))+' · '+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+'</h2><p class="sub">Estado: '+esc(l.estado)+' · Jornada: '+esc(l.fecha_jornada)+'</p><div class="desp-scan"><label for="lote-codigo">Código del paquete</label><input id="lote-codigo" placeholder="pack o clave" autocomplete="off"><button class="btn" onclick="escanearLote('+l.id+')" '+(l.estado==='en_preparacion'?'':'disabled')+'>Escanear</button></div><div class="desp-list">'+(items.length?items.map(function(i){return '<article class="desp-card"><h3>'+esc(i.grupo_clave)+' <span class="badge '+(i.estado==='confirmado'?'b-ok':'b-mut')+'">'+esc(i.estado)+'</span></h3><div class="desp-meta">Tracking: '+esc(i.tracking||'pendiente')+'</div><div class="desp-actions">'+(l.estado!=='cerrado'&&l.estado!=='anulado'?'<button class="btn sec" onclick="trackingLote('+l.id+','+i.control_id+')">'+(i.tracking?'Cambiar tracking':'Cargar tracking')+'</button>':'')+'</div></article>';}).join(''):'<div class="desp-empty">Lote sin paquetes.</div>')+'</div>';
+    if(l.estado==='cerrado'&&!l.salida_confirmada_en){var toolbar=c.querySelector('.desp-toolbar');if(toolbar){var b=document.createElement('button');b.className='btn';b.textContent='Confirmar salida';b.onclick=function(){confirmarSalidaLote(l.id);};toolbar.appendChild(b);}}
+    if(window.__PREP_AUTH&&(window.__PREP_AUTH.is_admin||['supervisor','supervisor_deposito','auditor','despacho'].indexOf(String(window.__PREP_AUTH.rol||window.__PREP_AUTH.role||'').toLowerCase())>=0)){var tb=c.querySelector('.desp-toolbar');if(tb){var ev=document.createElement('button');ev.className='btn sec';ev.textContent='Ver auditoría';ev.onclick=function(){verEventosLote(l.id);};tb.appendChild(ev);}}
+  }catch(e){c.innerHTML='<div class="loading err" role="alert">No se pudo cargar el lote: '+esc(e.message)+'</div>';}
+}
+async function accionLote(id,op){var r=await api('/despacho/lotes/'+id+'/'+op,{method:'POST'});if(!r.body.ok)return despAviso(r.body.error||'No se pudo actualizar el lote','bad');verDetalleLote(id);}
+async function anularLote(id){var motivo=prompt('Motivo de anulación (obligatorio):');if(!motivo||!motivo.trim())return despAviso('La anulación requiere un motivo','bad');if(!confirm('¿Anular este lote? Sus eventos se conservarán.'))return;var r=await api('/despacho/lotes/'+id+'/anular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:motivo.trim()})});if(!r.body.ok)return despAviso(r.body.error||'No se pudo anular el lote','bad');verDetalleLote(id);}
+async function escanearLote(id){var el=document.getElementById('lote-codigo'),codigo=(el&&el.value||'').trim();if(!codigo)return despAviso('Ingresá el código del paquete','bad');var r=await api('/despacho/lotes/'+id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':despEscaneoClave()},body:JSON.stringify({codigo:codigo})});if(!r.body.ok)return despAviso(r.body.error||'No se pudo escanear','bad');verDetalleLote(id);}
+async function trackingLote(id,controlId){var tracking=prompt('Tracking del transportista:');if(!tracking)return;var r=await api('/despacho/lotes/'+id+'/tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({control_id:controlId,tracking:tracking.trim()})});if(!r.body.ok)return despAviso(r.body.error||'No se pudo guardar el tracking','bad');verDetalleLote(id);}
+async function cerrarLote(id){var r=await api('/despacho/lotes/'+id+'/cerrar',{method:'POST'});if(!r.body.ok){var motivo=prompt(r.body.error+' Motivo excepcional (opcional):');if(!motivo)return; r=await api('/despacho/lotes/'+id+'/cerrar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:motivo.trim()})});}if(!r.body.ok)return despAviso(r.body.error||'No se pudo cerrar','bad');verDetalleLote(id);}
+async function confirmarSalidaLote(id){if(!confirm('¿Confirmás que todo el lote fue entregado al transporte?'))return;var r=await api('/despacho/lotes/'+id+'/salida',{method:'POST',headers:{'Idempotency-Key':despEscaneoClave()}});if(!r.body.ok)return despAviso(r.body.error||'No se pudo confirmar la salida','bad');verDetalleLote(id);}
+async function verEventosLote(id){var r=await api('/despacho/lotes/'+id+'/eventos');if(!r.body.ok)return despAviso(r.body.error||'No se pudo cargar la auditoría','bad');var eventos=r.body.eventos||[];alert(eventos.map(function(e){return e.creado_en+' · '+e.usuario+' · '+e.tipo;}).join('\n')||'Sin eventos');}
 
 async function api(path,opts){
   var r=await fetch('/api/preparacion'+path,opts);
@@ -414,19 +460,22 @@ function despFila(row){
   var grupo=row.grupo_clave||row.pack_id||row.clave||'—', sinFecha=!row.jornada_fecha, bloqueado=sinFecha||row.estado==='confirmado'||!row.preparacion_id||!DESP.puedeEscribir;
   return '<article class="desp-card"><h3>'+esc(grupo)+' '+despEstadoBadge(row.estado)+'</h3><div class="desp-meta">Pedido: '+esc(row.numero_pedido||'—')+' · '+esc(row.canal||'—')+'<br>Jornada: '+esc(fechaLegible(row.jornada||row.jornada_fecha))+' · Escaneos: '+esc(String(row.escaneos||0))+(row.confirmado_por?'<br>Confirmado por: '+esc(row.confirmado_por):'')+'</div>'
     +(sinFecha?'<p class="desp-meta"><b>Resolver fecha de despacho antes de operar.</b></p>':'')
-    +'<div class="desp-actions">'+(bloqueado?'':'<button class="btn sec" data-desp-scan="'+esc(row.preparacion_id)+'" data-code="'+esc(grupo)+'">Escanear código</button>')+(row.estado==='escaneado'&&DESP.puedeEscribir?'<button class="btn" data-desp-confirm="'+esc(row.preparacion_id)+'">Confirmar verificación</button>':'')+'</div></article>';
+    +'<div class="desp-actions">'+(bloqueado?'':'<button class="btn sec" data-desp-scan="'+esc(row.preparacion_id)+'" data-code="'+esc(grupo)+'">Escanear código</button>')+(row.estado==='escaneado'&&DESP.puedeEscribir?'<button class="btn" data-desp-confirm="'+esc(row.preparacion_id)+'">Confirmar verificación</button>':'')+(row.estado==='pendiente'&&DESP.puedeEscribir?'<button class="btn danger" data-desp-manual="'+esc(row.preparacion_id)+'">Ya despachado / sin código</button>':'')+'</div></article>';
 }
 function renderHojaDespachos(){
   var c=document.getElementById('cuerpo'),s=DESP.resumen||{}, rows=DESP.data||[];
   var h='<div class="desp-toolbar"><button class="btn sec" onclick="despCambiarFecha(-1)" aria-label="Jornada anterior">‹</button><label>Jornada <input type="date" value="'+esc(DESP.fecha==='sin_fecha'?'':DESP.fecha)+'" onchange="despAplicarFiltro(\'fecha\',this.value)"></label><button class="btn sec" onclick="despCambiarFecha(1)" aria-label="Jornada siguiente">›</button><button class="btn sec" onclick="DESP.fecha=fechaBA();cargarHojaDespachos()">Hoy</button><button class="btn sec" onclick="cargarHojaDespachos()">Recargar</button></div>'
     +'<p class="sub">Jornada '+esc(fechaLegible(DESP.fecha))+' · Buenos Aires</p><div id="desp-live" class="flash" role="status" aria-live="polite"></div>'
     +'<div class="desp-summary">'+[['','Total',s.total],['pendiente','Pendientes',s.pendientes],['escaneado','Escaneados',s.escaneados],['confirmado','Confirmados',s.confirmados]].map(function(x){return '<button class="desp-stat '+(DESP.estado===x[0]?'on':'')+'" onclick="despAplicarFiltro(\'estado\',\''+x[0]+'\')">'+esc(x[1])+'<strong>'+Number(x[2]||0)+'</strong></button>';}).join('')+'</div>'
-    +'<div class="desp-filtros"><label for="desp-q">Buscar</label><input id="desp-q" value="'+esc(DESP.q)+'" placeholder="pack, clave o pedido" onkeydown="if(event.key===\'Enter\')despAplicarFiltro(\'q\',this.value.trim())"><label for="desp-canal">Canal</label><select id="desp-canal" onchange="despAplicarFiltro(\'canal\',this.value)"><option value="">Todos</option><option value="web" '+(DESP.canal==='web'?'selected':'')+'>Web</option><option value="ml" '+(DESP.canal==='ml'?'selected':'')+'>MercadoLibre</option></select></div>'
+    +'<div class="desp-filtros"><label for="desp-q">Buscar</label><input id="desp-q" value="'+esc(DESP.q)+'" placeholder="pack, clave o pedido" onkeydown="if(event.key===\'Enter\')despAplicarFiltro(\'q\',this.value.trim())"><span class="badge '+(DESP.canal==='ml'?'b-ml':'b-mut')+'">'+(DESP.canal==='ml'?'MercadoLibre':'Andreani/Web')+'</span></div>'
     +'<div class="desp-scan"><label for="desp-scan-input">Escaneo exacto</label><input id="desp-scan-input" placeholder="pack_id o clave" autocomplete="off" onkeydown="if(event.key===\'Enter\')despEscaneoGlobal(this.value)"><button class="btn" '+(DESP.puedeEscribir?'':'disabled')+' onclick="despEscaneoGlobal(document.getElementById(\'desp-scan-input\').value)">Escanear</button></div>'
     +(rows.length?'<div class="desp-list">'+rows.map(despFila).join('')+'</div>':'<div class="desp-empty">No hay despachos para esta jornada.</div>');
-  c.innerHTML=h;c.querySelectorAll('[data-desp-scan]').forEach(function(b){b.onclick=function(){despMutar('escanear',b.dataset.despScan,b.dataset.code);};});c.querySelectorAll('[data-desp-confirm]').forEach(function(b){b.onclick=function(){despMutar('confirmar',b.dataset.despConfirm);};});
+  c.innerHTML=h;c.querySelectorAll('[data-desp-scan]').forEach(function(b){b.onclick=function(){despMutar('escanear',b.dataset.despScan,b.dataset.code);};});c.querySelectorAll('[data-desp-confirm]').forEach(function(b){b.onclick=function(){despMutar('confirmar',b.dataset.despConfirm);};});c.querySelectorAll('[data-desp-manual]').forEach(function(b){b.onclick=function(){despConfirmarManual(b.dataset.despManual);};});
 }
+async function despConfirmarManual(id){if(!confirm('Confirmá que este paquete ya fue entregado al transporte y que no se puede recuperar su código.'))return;var nota=prompt('Nota obligatoria para auditoría (opcional):','');if(nota===null)return;await despMutarManual(id,nota);}
+async function despMutarManual(id,nota){if(!DESP.puedeEscribir)return;DESP.intenciones=DESP.intenciones||{};var k='confirmar-manual:'+id;var headers={'Content-Type':'application/json','Idempotency-Key':DESP.intenciones[k]||(DESP.intenciones[k]=despEscaneoClave())};try{var r=await api('/despacho/'+encodeURIComponent(id)+'/confirmar-manual',{method:'POST',headers:headers,body:JSON.stringify({motivo:'ya_despachado_sin_codigo',nota:nota})});if(!r.body.ok)throw new Error(r.body.error||'error');delete DESP.intenciones[k];despAviso('Despacho resuelto sin escaneo. Quedó auditado.','ok');await cargarHojaDespachos();}catch(e){despAviso('No se pudo resolver: '+(e.message||'error')+'. Verificá el estado y reintentá.','bad');}}
 async function despEscaneoGlobal(codigo){codigo=(codigo||'').trim().toUpperCase();var row=DESP.data.find(function(r){return String(r.grupo_clave||r.pack_id||r.clave||'').toUpperCase()===codigo;});if(!row){despAviso('Este código no corresponde a este despacho. Revisá el paquete o buscá el pedido correcto.','bad');return;}await despMutar('escanear',row.preparacion_id,codigo);}
+async function regularizarJornadaSeleccionada(){if(!DESP.fecha||DESP.fecha==='sin_fecha')return alert('Seleccioná una jornada con fecha.');if(!confirm('¿Confirmás que TODOS los despachos de '+fechaLegible(DESP.fecha)+' salieron sin evidencia porque la herramienta estuvo inhabilitada?'))return;var r=await api('/despacho/regularizar-jornada-sin-evidencia',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':'regularizacion:'+DESP.fecha},body:JSON.stringify({fecha:DESP.fecha,motivo:'despachado_sin_evidencia_herramienta_inhabilitada'})});if(!r.body.ok)return alert(r.body.error||'No se pudo regularizar');alert('Regularizados: '+r.body.regularizadas);cargarHojaDespachos();}
 async function despMutar(op,id,codigo){if(!DESP.puedeEscribir){despAviso('Tu usuario puede consultar esta hoja, pero no puede operar despachos. Pedí acceso a un supervisor.','bad');return;}DESP.intenciones=DESP.intenciones||{};var k=op+':'+id;var headers={'Content-Type':'application/json','Idempotency-Key':DESP.intenciones[k]||(DESP.intenciones[k]=despEscaneoClave())};var body=op==='escanear'?JSON.stringify({codigo:codigo}):undefined;try{var r=await api('/despacho/'+encodeURIComponent(id)+'/'+op,{method:'POST',headers:headers,body:body});if(r.status===409){var m={DESPACHO_NO_COINCIDE:'Este código no corresponde a este despacho. Revisá el paquete o buscá el pedido correcto.',DESPACHO_CONFIRMADO:'Este despacho ya fue verificado. No se generó otra etiqueta.',IDEMPOTENCY_CONFLICT:'Esta acción ya se usó en otro despacho. Volvé a cargar la hoja antes de reintentar.'};despAviso(m[r.body.code]||r.body.error||'Otra persona actualizó este despacho. Se cargó el estado actual; revisalo antes de continuar.','bad');await cargarHojaDespachos();return;}if(!r.body.ok)throw new Error(r.body.error||'error');delete DESP.intenciones[k];despAviso(op==='escanear'?'Código validado. Ahora podés confirmar la verificación.':'Despacho verificado y etiqueta interna generada.','ok');await cargarHojaDespachos();}catch(e){despAviso('No pudimos completar la acción. Verificá el estado y reintentá.','bad');}}
 
 // ─── Cola de pendientes ───────────────────────────────────────────────────────
@@ -463,37 +512,132 @@ async function cargarJornada(){
     var h=await fetch('/api/jornada/hoy'); var hd=await h.json();
     if(!hd.ok)throw new Error(hd.error||'No se pudo consultar la jornada');
     JORNADA.jornada=hd.jornada;
+    JORNADA.reglas=hd.reglas||JORNADA.reglas; JORNADA.preflight=hd.preflight||JORNADA.preflight;
     if(hd.jornada){var o=await fetch('/api/jornada/olas');var od=await o.json();if(!od.ok)throw new Error(od.error||'No se pudieron cargar las olas');JORNADA.olas=od.olas||[];}
     else JORNADA.olas=[];
+    var z=await fetch('/api/jornada/zonas');var zd=await z.json();if(zd.ok)JORNADA.zonas=zd.zonas||[];
     JORNADA.estado='ready';
   }catch(e){JORNADA.estado='error';JORNADA.error=e.message||'error';}
   if(VISTA==='pendientes'&&PEND_CACHE)renderPendientes();
 }
+function reglasAperturaUI(){return JORNADA.reglas||{zona_horaria:'America/Argentina/Buenos_Aires',web:{tipo:'preparacion_maxima',hora:'15:00'},ml_andreani:{tipo:'deadline_centro_menos',margen_minutos:30},flex:{tipo:'salida_maxima',hora:'17:00'},full:{estado:'excluido'}};}
+function estadoPreflightUI(){return JORNADA.preflight||{estado:'pendiente_de_verificacion',integraciones:{mercadolibre:{estado:'desconocido',verificacion:'no_verificado'},woocommerce:{estado:'desconocido',verificacion:'no_verificado'}},agente_impresora:{estado:'pendiente_e3',verificacion:'no_requerido_e1'}};}
+function etiquetaPreflight(v){var estado=v&&v.estado||'desconocido',ver=v&&v.verificacion||'no_verificado';return esc(estado)+' · '+esc(ver);}
+function bloqueReglasYPreflight(){var r=reglasAperturaUI(),p=estadoPreflightUI(),mi=p.integraciones||{};return '<div class="jornada-overview"><div><div class="jornada-section-title">Objetivos de hoy</div><div class="jornada-rules" aria-label="Reglas canónicas de apertura"><h3>Horarios límite</h3><ul><li>Web: preparar antes de <b>'+esc(r.web&&r.web.hora||'15:00')+'</b>.</li><li>ML/Andreani: entregar según el límite de cada paquete, con <b>'+(Number(r.ml_andreani&&r.ml_andreani.margen_minutos)||30)+' min</b> de margen.</li><li>Flex: salida máxima <b>'+esc(r.flex&&r.flex.hora||'17:00')+'</b>.</li><li>ML Full: <b>fuera del flujo</b>.</li></ul><p class="jornada-meta">Zona horaria: '+esc(r.zona_horaria||'America/Argentina/Buenos_Aires')+'</p></div></div><div><div class="jornada-section-title">Antes de operar</div><div class="jornada-preflight" aria-label="Preflight de apertura"><h3>Estado de conexiones y equipo</h3><p>MercadoLibre: <b>'+etiquetaPreflight(mi.mercadolibre)+'</b><br>WooCommerce: <b>'+etiquetaPreflight(mi.woocommerce)+'</b><br>Agente/impresora: <b>'+etiquetaPreflight(p.agente_impresora)+'</b></p><p class="jornada-meta">'+(p.estado==='pendiente_de_verificacion'?'Se verificará al abrir; lo no afectado puede continuar.':(p.operaciones_no_afectadas||'Las operaciones no afectadas continúan.'))+'</p></div></div></div>' ;}
 function jornadaFecha(){return fechaBA();}
-function jornadaEstadoTexto(ola){return {abierta:'Disponible para reclamar',en_picking:'En picking',congelada:'Congelada',cerrada:'Cerrada'}[ola.estado]||('Estado: '+(ola.estado||'sin informar'));}
+function jornadaEstado(ola){return ola.estado_operativo||({abierta:'disponible',congelada:'disponible',en_picking:'en_busqueda',completada:'cerrada'}[ola.estado]||'disponible');}
+function jornadaEstadoTexto(ola){return {disponible:'Disponible para tomar',en_busqueda:'Recorriendo zonas',en_mesa:'En mesa',cerrada:'Cerrada'}[jornadaEstado(ola)]||'Estado sin informar';}
 function jornadaTipoTexto(tipo){return {ml_urgente:'ML urgente',inicial:'Ola inicial',mini:'Mini-ola'}[tipo]||'Ola';}
 function jornadaCard(ola){
   var claim=ola.claim||JORNADA.claims[ola.id];
   if(claim&&claim.expires_at&&new Date(claim.expires_at).getTime()<=Date.now()){delete JORNADA.claims[ola.id];claim=null;}
   var claimText=claim?(claim.usuario===USERNAME?'Reclamada por vos':('Reclamada por '+claim.usuario)):'Responsable no informado';
-  var puede=!claim&&(ola.estado==='abierta'||ola.estado==='congelada'||ola.estado==='en_picking')&&ola.tipo!=='cerrada';
+  var claimSeconds=claim&&Number.isFinite(Number(claim.segundos_restantes))?Math.max(0,Number(claim.segundos_restantes)):null;
+  var claimPorVencer=!!(claim&&(claim.por_vencer===true||(claimSeconds!==null&&claimSeconds<=600)));
+  var claimWarning=claimPorVencer?'<div class="claim-warning" role="alert" aria-live="assertive">⚠ Aviso operativo: este claim vence en '+(claimSeconds===null?'menos de 10 minutos':(claimSeconds<60?claimSeconds+' s':Math.ceil(claimSeconds/60)+' min'))+'. Terminá o liberá la ola.</div>':'';
+  var estado=jornadaEstado(ola);
+  if(!claim&&estado==='en_busqueda')estado='disponible';
+  var puede=!claim&&estado==='disponible'&&ola.tipo!=='cerrada';
   return '<article class="ola-card"><h3>'+esc(jornadaTipoTexto(ola.tipo))+' <span class="badge '+(ola.tipo==='ml_urgente'?'b-ml':'b-mut')+'">'+esc(jornadaEstadoTexto(ola))+'</span></h3>'
     +'<div class="ola-meta"><strong>'+String((ola.items||[]).length)+'</strong> pedidos · '+esc(claimText)+'</div>'
-    +'<div class="ola-actions">'+(puede?'<button class="btn mini" '+(JORNADA.busy?'disabled ':'')+'onclick="reclamarOla('+Number(ola.id)+')">Reclamar</button>':'')
+    +claimWarning
+    +'<div class="ola-actions">'+(puede?'<button class="btn mini" '+(JORNADA.busy?'disabled ':'')+'onclick="reclamarOla('+Number(ola.id)+')">Tomar ola</button>':'')
     +'<button class="btn sec mini" onclick="verPedidosOla('+Number(ola.id)+')">Ver pedidos</button></div></article>';
 }
+function olaFlujo(ola){var actual=jornadaEstado(ola),estados=['disponible','en_busqueda','en_mesa','cerrada'];return '<div class="ola-flow" aria-label="Progreso de la ola">'+estados.map(function(e){return '<span class="badge '+(e===actual?'b-ok current':'b-mut')+'">'+esc({disponible:'Disponible',en_busqueda:'Búsqueda',en_mesa:'Mesa',cerrada:'Cerrada'}[e])+'</span>';}).join('')+'</div>';}
+function olaPedidoClave(i){return i.pedido_clave||i.clave||i.pedido||'—';}
+function renderDetalleOla(ola){
+  if(!ola)return '';
+  var estado=jornadaEstado(ola), claim=ola.claim, own=claim&&claim.usuario===USERNAME;
+  var items=ola.items||[], necesidades=ola.necesidades||[], zonas=JORNADA.zonas||[];
+  var zones=zonas.length?zonas.map(function(z){var lines=necesidades.filter(function(n){return Number(n.zona_id)===Number(z.id)||!n.zona_id;});return '<div class="pick-zone"><h4>'+esc(z.nombre)+(z.verificada?'':' · ubicación sugerida')+'</h4><ul><li class="sr-only">Usá esta zona para recorrer los SKU consolidados de la ola.</li>'+(lines.length?lines.map(function(n){return '<li><b>'+esc(n.sku)+'</b> · '+esc(String(n.cantidad))+' u.</li>';}).join(''):'<li>Sin SKU asignado a esta zona.</li>')+'</ul></div>';}).join(''):'<p class="jornada-note">No hay zonas configuradas. La búsqueda queda disponible, pero la ubicación debe confirmarse manualmente.</p>';
+  var ayuda=ola.ayudas||JORNADA.ayudas||[];
+  var ayudaHtml=ayuda.length?ayuda.map(function(a){return '<div class="pick-help">Ayuda: '+esc(a.ayudante||'ayudante')+' · '+esc(a.estado||'solicitada')+(a.estado!=='recibida'&&own?'<button class="btn sec mini" onclick="recibirAyuda('+Number(a.id)+')">Recibí en mesa</button>':'')+'</div>';}).join(''):'';
+  var rows=items.map(function(i){return '<tr><td>'+esc(olaPedidoClave(i))+'</td><td>'+esc(i.sku||'SKU a confirmar en mesa')+'</td><td>'+esc(String(i.cantidad||i.cantidad_esperada||'—'))+'</td></tr>';}).join('');
+  var actions='';
+  if(own&&estado==='disponible')actions+='<button class="btn" onclick="iniciarBusquedaOla('+ola.id+')">Iniciar búsqueda</button>';
+  if(own&&estado==='en_busqueda'&&!claim.pausada_en)actions+='<button class="btn" onclick="pasarAMesa('+ola.id+')">Pasar a mesa</button><button class="btn sec" onclick="pedirAyuda('+ola.id+')">Pedir ayuda por zona</button>';
+  if(own&&claim.pausada_en)actions+='<span class="badge b-warn">Pausada: '+esc(claim.motivo_pausa||'sin motivo')+'</span><button class="btn" onclick="reanudarOla('+ola.id+')">Reanudar</button>';
+  else if(own&&estado!=='cerrada')actions+='<button class="btn sec mini" onclick="pausarOla('+ola.id+')">Pausar</button>';
+  if(own&&estado==='en_mesa')actions+='<button class="btn" onclick="abrirCamaraMesa('+ola.id+')">Escanear unidad en mesa</button><button class="btn sec" onclick="buscarUnidadMesaManual('+ola.id+')">Buscar unidad manualmente</button><button class="btn sec" onclick="registrarFaltante('+ola.id+')">Registrar faltante</button><button class="btn" onclick="cerrarOla('+ola.id+')">Cerrar ola</button>';
+  var mesa=e1MesaHtml(ola);
+  return '<section class="jornada-panel" aria-labelledby="detalle-ola-title"><button class="btn sec mini" onclick="volverJornada()">← Volver al tablero</button><div class="jornada-head"><div><h2 id="detalle-ola-title">'+esc(jornadaTipoTexto(ola.tipo))+' <span class="badge b-ok">'+esc(jornadaEstadoTexto(ola))+'</span></h2><div class="jornada-meta">'+items.length+' pedidos · '+esc(own?'Tu responsabilidad':(claim?'Trabaja '+claim.usuario:'Sin responsable'))+'</div></div></div>'+olaFlujo(ola)+ '<div class="pick-actions">'+actions+'</div>'+ayudaHtml+'<h3>Recorrido por zonas</h3>'+zones+'<h3>Mesa de asignación</h3><p class="jornada-note">La búsqueda no escanea unidades. En mesa se escanea cada unidad y se confirma el pedido sugerido.</p>'+mesa+(rows?'<table class="pick-table"><thead><tr><th>Pedido</th><th>SKU</th><th>Cantidad</th></tr></thead><tbody>'+rows+'</tbody></table>':'<p class="jornada-note">No hay pedidos visibles en esta ola.</p>')+'<div id="ola-live" class="pick-live" role="status" aria-live="polite"></div></section>';
+}
+function operationId(){return (crypto&&crypto.randomUUID)?crypto.randomUUID():'e1-'+Date.now()+'-'+Math.random().toString(16).slice(2);}
+var E1_OPERATION_IDS={};
+var E1_MESA={waveId:null, codigo:'', sugerido:null, estado:'idle', mensaje:'', motivo:null};
+function olaActual(id){return JORNADA.olas.find(function(o){return Number(o.id)===Number(id);});}
+async function mutarOla(path,id,body,okMsg){
+  var ola=olaActual(id)||JORNADA.detalle;if(!ola)return;
+  JORNADA.busy=true;renderPendientes();
+  try{body=body||{};var opKey=id+path;body.operation_id=E1_OPERATION_IDS[opKey]||(E1_OPERATION_IDS[opKey]=operationId());body.expected_version=ola.expected_version||1;var r=await fetch('/api/jornada/ola/'+id+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json();if(!d.ok)throw new Error(d.error||d.code||'No se pudo completar la acción');delete E1_OPERATION_IDS[opKey];anunciarJornada(okMsg);await cargarJornada();if(JORNADA.detalle){JORNADA.detalle=olaActual(id)||d.ola;renderPendientes();}}
+  catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();anunciarJornada('No se pudo completar la acción. Verificá el estado y reintentá.');}
+  finally{JORNADA.busy=false;renderPendientes();}
+}
+function iniciarBusquedaOla(id){return mutarOla('/iniciar-busqueda',id,{},'Búsqueda iniciada.');}
+function pasarAMesa(id){return mutarOla('/pasar-a-mesa',id,{},'La ola está en mesa.');}
+function pedirAyuda(id){var zonas=JORNADA.zonas||[];if(!zonas.length)return anunciarJornada('No hay zonas configuradas para pedir ayuda.');var zona=prompt('ID de zona ('+zonas.map(function(z){return z.id+': '+z.nombre;}).join(', ')+')');if(!zona)return;var ayudante=prompt('Nombre del ayudante');if(!ayudante)return;return mutarOla('/pedir-ayuda',id,{zonaId:Number(zona),ayudante:ayudante.trim()},'Ayuda solicitada.');}
+function pausarOla(id){var motivo=prompt('Motivo de la pausa');if(!motivo||!motivo.trim())return anunciarJornada('La pausa requiere un motivo.');return mutarOla('/pausar',id,{motivo:motivo.trim()},'Ola pausada.');}
+function reanudarOla(id){return mutarOla('/reanudar',id,{},'Ola reanudada.');}
+async function recibirAyuda(id){var ayuda=(JORNADA.ayudas||[]).find(function(a){return Number(a.id)===Number(id);});var wave=JORNADA.detalle;if(!wave)return;JORNADA.busy=true;try{var key='help:'+id+'/recibir';var op=E1_OPERATION_IDS[key]||(E1_OPERATION_IDS[key]=operationId());var r=await fetch('/api/jornada/ayuda/'+id+'/recibir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operation_id:op,expected_version:wave.expected_version||1})}),d=await r.json();if(!d.ok)throw new Error(d.error||d.code||'No se pudo recibir la ayuda');delete E1_OPERATION_IDS[key];await cargarJornada();JORNADA.detalle=olaActual(wave.id);anunciarJornada('Ayuda recibida en mesa.');renderPendientes();}catch(e){anunciarJornada('No se pudo recibir la ayuda. Verificá el estado y reintentá.');}finally{JORNADA.busy=false;}}
+function e1MesaHtml(ola){
+  var m=E1_MESA.waveId===Number(ola.id)?E1_MESA:null;
+  if(!m||!m.codigo)return '<div class="pick-live" role="status" aria-live="polite">Todavía no hay una unidad leída. Usá “Escanear unidad en mesa”.</div>';
+  var sugerido=m.sugerido||'pedido sin sugerencia';
+  var estado=m.estado==='error'?'<p class="jornada-note" role="alert">'+esc(m.mensaje||'No se pudo asignar la unidad. Reintentá la lectura.')+'</p>':'<p class="jornada-note" role="status" aria-live="polite">Código leído: <b>'+esc(m.codigo)+'</b>. Pedido prioritario sugerido: <b>'+esc(sugerido)+'</b>. Confirmá la asignación o elegí otra búsqueda.</p>';
+  return '<div class="mesa-scan-card" aria-label="Asignación de unidad en mesa">'+estado+(m.estado!=='error'?'<div class="pick-actions"><button class="btn" onclick="confirmarMesa('+Number(ola.id)+')">Confirmar asignación</button><button class="btn sec" onclick="buscarUnidadMesaManual('+Number(ola.id)+')">Elegir pedido manualmente</button></div>':'<button class="btn sec" onclick="abrirCamaraMesa('+Number(ola.id)+')">Reintentar escaneo</button>')+'</div>';
+}
+function mesaPedidoSugerido(ola,codigo){
+  var necesidades=ola.necesidades||[];
+  var sku=String(codigo||'').trim().toUpperCase();
+  var candidatos=(ola.items||[]).filter(function(i){return !i.estado||i.estado!=='asignado';});
+  var n=necesidades.find(function(x){return String(x.sku||'').toUpperCase()===sku;});
+  var match=candidatos.find(function(i){return String(i.sku||'').toUpperCase()===sku;});
+  return (match&&olaPedidoClave(match))||(n&&n.pedido_clave)|| (candidatos[0]&&olaPedidoClave(candidatos[0]))||null;
+}
+function abrirCamaraMesa(id){
+  var ola=olaActual(id)||JORNADA.detalle;if(!ola)return;
+  if(!window.Scanner){anunciarJornada('No se pudo cargar el lector. Usá la búsqueda manual con motivo.');return buscarUnidadMesaManual(id);}
+  E1_MESA={waveId:Number(id),codigo:'',sugerido:null,estado:'scanning',mensaje:''};renderPendientes();
+  var modal=document.getElementById('cam-modal');if(!modal)return;
+  modal.classList.add('open');document.getElementById('cam-msg').textContent='Escaneá la unidad sobre la mesa. El código se usará para sugerir el pedido prioritario.';setCamProgress('Esperando código de la unidad…');
+  window.Scanner.open({video:document.getElementById('cam-video'),mode:'single',dropoutMs:500,onCode:function(v){mesaLectura(id,v);},onError:function(msg){setCamProgress(msg);}});
+  var closeBtn=document.getElementById('cam-close-btn');if(closeBtn)closeBtn.focus();
+}
+function mesaLectura(id,codigo){
+  var ola=olaActual(id)||JORNADA.detalle;if(!ola)return;
+  E1_MESA={waveId:Number(id),codigo:String(codigo||'').trim(),sugerido:mesaPedidoSugerido(ola,codigo),estado:'read',mensaje:'',motivo:null};
+  if(window.Scanner)window.Scanner.close();var modal=document.getElementById('cam-modal');if(modal)modal.classList.remove('open');
+  beep('ok');if(navigator.vibrate)navigator.vibrate(50);setCamProgress('Código leído. Confirmá el pedido sugerido en la mesa.');anunciarJornada('Unidad leída. Pedido prioritario sugerido: '+(E1_MESA.sugerido||'sin coincidencia'));renderPendientes();
+}
+function confirmarMesa(id){
+  var ola=olaActual(id)||JORNADA.detalle,m=E1_MESA;if(!ola||!m||m.waveId!==Number(id)||!m.codigo)return anunciarJornada('Primero escaneá una unidad en mesa.');
+  if(!m.sugerido){return buscarUnidadMesaManual(id);}
+  return mutarOla('/mesa/asignar',id,{pedidoClave:m.sugerido,sku:m.codigo,cantidad:1,motivo:m.motivo},'Unidad asignada al pedido sugerido.');
+}
+function buscarUnidadMesaManual(id){
+  var ola=olaActual(id)||JORNADA.detalle;if(!ola)return;
+  var motivo=prompt('Motivo de búsqueda manual (por ejemplo: código ilegible o lector sin cámara):','');if(motivo===null||!motivo.trim())return anunciarJornada('La búsqueda manual requiere un motivo.');
+  var pedido=prompt('Clave del pedido para asignar la unidad:','');if(!pedido||!pedido.trim())return anunciarJornada('No se indicó un pedido.');
+  var sku=E1_MESA.waveId===Number(id)&&E1_MESA.codigo?E1_MESA.codigo:prompt('Código/SKU identificado manualmente:','');if(!sku||!sku.trim())return anunciarJornada('No se indicó un código/SKU.');
+  E1_MESA={waveId:Number(id),codigo:sku.trim(),sugerido:pedido.trim(),estado:'manual',mensaje:'',motivo:motivo.trim()};anunciarJornada('Búsqueda manual registrada con motivo: '+motivo.trim()+'. Confirmá la asignación.');renderPendientes();
+}
+function registrarFaltante(id){var pedido=prompt('Clave del pedido afectado');if(!pedido)return;var sku=prompt('SKU faltante');if(!sku)return;var motivo=prompt('Motivo del faltante');if(!motivo)return;return mutarOla('/faltante',id,{pedidoClave:pedido.trim(),sku:sku.trim(),motivo:motivo.trim()},'Faltante registrado; el pedido queda visible para resolución.');}
+function cerrarOla(id){var derivados=prompt('Derivados separados por coma (asignado, devuelto, faltante_bloqueado, resguardo)','asignado');if(derivados===null)return;return mutarOla('/cerrar',id,{derivados:derivados.split(',').map(function(v){return v.trim();}).filter(Boolean)},'Ola cerrada.');}
+function verPedidosOla(id){PEND_WAVE_FILTER=id;JORNADA.detalle=olaActual(id);renderPendientes();}
+function volverJornada(){PEND_WAVE_FILTER=null;JORNADA.detalle=null;renderPendientes();}
 function renderJornada(){
   if(JORNADA.estado==='loading')return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy</h2><div class="jornada-meta">Consultando estado y olas…</div></div></div><p class="jornada-note" role="status" aria-live="polite">La cola de pedidos sigue disponible mientras se actualiza la jornada.</p></section>';
   if(JORNADA.estado==='error')return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy</h2><div class="jornada-meta">No se pudo consultar el estado de la jornada.</div></div><button class="btn sec mini" onclick="cargarJornada()">Actualizar</button></div><p class="jornada-note" role="alert">'+esc(JORNADA.error||'Revisá la conexión y actualizá. La cola de pedidos sigue disponible.')+'</p></section>';
   var j=JORNADA.jornada;
-  if(!j)return '<section class="jornada-panel" aria-labelledby="jornada-title"><h2 id="jornada-title">Jornada de hoy</h2><div class="jornada-meta">'+esc(fechaLegible(jornadaFecha()))+' · Buenos Aires</div><p class="jornada-note">Todavía no hay jornada abierta. Confirmala para ordenar el trabajo; la cola sigue disponible.</p><form class="jornada-form" onsubmit="abrirJornada(event)"><label for="jornada-hora">Hora web registrada<input id="jornada-hora" type="time" required></label><label for="jornada-ventana">Ventana ML <span>Opcional · Sin ventana confirmada</span><input id="jornada-ventana" type="text" placeholder="Sin ventana confirmada"></label><button class="btn" type="submit" '+(JORNADA.busy?'disabled ':'')+'>Confirmar y abrir jornada</button></form></section>';
+  if(!j)return '<section class="jornada-panel" aria-labelledby="jornada-title"><h2 id="jornada-title">Jornada de hoy</h2><div class="jornada-meta">'+esc(fechaLegible(jornadaFecha()))+' · Buenos Aires</div><p class="jornada-note">Todavía no hay jornada abierta. Las reglas vienen definidas por el servidor; la cola sigue disponible.</p>'+bloqueReglasYPreflight()+'<form class="jornada-form" onsubmit="abrirJornada(event)"><button class="btn" type="submit" '+(JORNADA.busy?'disabled ':'')+'>Confirmar y abrir jornada</button></form></section>';
   var olas=JORNADA.olas.slice().sort(function(a,b){return (a.tipo==='ml_urgente'?0:1)-(b.tipo==='ml_urgente'?0:1)||Number(a.id)-Number(b.id);});
-  return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy · <span class="badge '+(j.estado==='abierta'?'b-ok':'b-mut')+'">'+esc(j.estado||'sin estado')+'</span></h2><div class="jornada-meta">'+esc(fechaLegible(j.fecha))+' · Hora web: '+esc(j.hora_corte_web||'no registrada')+' · Ventana ML: '+esc(j.ventana_ml_json||'sin ventana confirmada')+'</div></div><div class="ola-actions"><button class="btn sec mini" onclick="cargarJornada()">Actualizar</button>'+(window.__PREP_AUTH&&window.__PREP_AUTH.is_admin&&j.estado==='abierta'?'<button class="btn danger mini" '+(JORNADA.busy?'disabled ':'')+'onclick="cerrarJornada()">Cerrar jornada</button>':'')+'</div></div><div id="jornada-live" class="sr-only" role="status" aria-live="polite"></div><div class="olas-grid">'+(olas.length?olas.map(jornadaCard).join(''):'<p class="jornada-note">No hay olas todavía. Actualizá para consultar nuevos pedidos.</p>')+'</div></section>';
+  return '<section class="jornada-panel" aria-labelledby="jornada-title"><div class="jornada-head"><div><h2 id="jornada-title">Jornada de hoy · <span class="badge '+(j.estado==='abierta'?'b-ok':'b-mut')+'">'+esc(j.estado||'sin estado')+'</span></h2><div class="jornada-meta">'+esc(fechaLegible(j.fecha))+' · Reglas vigentes del servidor</div></div><div class="ola-actions"><button class="btn sec mini" onclick="cargarJornada()">Actualizar</button>'+(window.__PREP_AUTH&&window.__PREP_AUTH.is_admin&&j.estado==='abierta'?'<button class="btn danger mini" '+(JORNADA.busy?'disabled ':'')+'onclick="cerrarJornada()">Cerrar jornada</button>':'')+'</div></div>'+bloqueReglasYPreflight()+'<div id="jornada-live" class="sr-only" role="status" aria-live="polite"></div>'+(JORNADA.claimsError?'<p class="jornada-note" role="status">No se pudieron actualizar los claims. Se conserva la última información; reintentando automáticamente.</p>':'')+'<div class="olas-grid">'+(olas.length?olas.map(jornadaCard).join(''):'<p class="jornada-note">No hay olas todavía. Actualizá para consultar nuevos pedidos.</p>')+'</div></section>';
 }
-async function abrirJornada(ev){ev.preventDefault();var hora=document.getElementById('jornada-hora').value,ventana=document.getElementById('jornada-ventana').value.trim()||'sin ventana confirmada';if(!hora){document.getElementById('jornada-hora').focus();return;}JORNADA.busy=true;renderPendientes();try{var r=await fetch('/api/jornada/abrir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({horaCorteWeb:hora,ventanaMlJson:ventana})});var d=await r.json();if(!d.ok)throw new Error(d.error||'No se pudo abrir');await cargarJornada();}catch(e){JORNADA.estado='error';JORNADA.error=e.message;renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
-async function reclamarOla(id){if(JORNADA.busy)return;JORNADA.busy=true;anunciarJornada('Reclamando ola…');renderPendientes();try{var r=await fetch('/api/jornada/ola/'+id+'/reclamar',{method:'POST'});var d=await r.json();if(!d.ok)throw new Error(d.error||'Otra persona la reclamó');if(d.claim)JORNADA.claims[id]=d.claim;await cargarJornada();anunciarJornada('Ola reclamada.');}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();anunciarJornada('No se pudo reclamar la ola.');}finally{JORNADA.busy=false;renderPendientes();}}
+async function abrirJornada(ev){ev.preventDefault();JORNADA.busy=true;renderPendientes();try{var r=await fetch('/api/jornada/abrir',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});var d=await r.json();if(r.status===400&&d.code==='OPENING_RULES_SERVER_CONTROLLED')throw new Error('Las reglas de apertura son canónicas y se calculan en el servidor. Actualizá la pantalla y reintentá.');if(!d.ok)throw new Error(d.error||'No se pudo abrir');JORNADA.reglas=d.reglas||JORNADA.reglas;JORNADA.preflight=d.preflight||JORNADA.preflight;await cargarJornada();}catch(e){JORNADA.estado='error';JORNADA.error=e.message;renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
+async function reclamarOla(id){if(JORNADA.busy)return;JORNADA.busy=true;anunciarJornada('Tomando ola…');renderPendientes();try{var ola=olaActual(id)||{},key='wave:'+id+'/reclamar';var op=E1_OPERATION_IDS[key]||(E1_OPERATION_IDS[key]=operationId());var r=await fetch('/api/jornada/ola/'+id+'/reclamar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operation_id:op,expected_version:ola.expected_version||1})});var d=await r.json();if(!d.ok)throw new Error(d.error||'Otra persona la reclamó');delete E1_OPERATION_IDS[key];if(d.claim)JORNADA.claims[id]=d.claim;await cargarJornada();anunciarJornada('Ola tomada.');}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();anunciarJornada('No se pudo tomar la ola. Verificá el estado y reintentá.');}finally{JORNADA.busy=false;renderPendientes();}}
 async function cerrarJornada(){if(JORNADA.busy||!confirm('¿Cerrar la jornada de hoy?'))return;JORNADA.busy=true;try{var r=await fetch('/api/jornada/cerrar',{method:'POST'}),d=await r.json();if(!d.ok)throw new Error(d.error||'No se pudo cerrar');await cargarJornada();}catch(e){JORNADA.error=e.message;JORNADA.estado='error';renderPendientes();}finally{JORNADA.busy=false;renderPendientes();}}
-function verPedidosOla(id){PEND_WAVE_FILTER=id;renderPendientes();}
+function verPedidosOla(id){PEND_WAVE_FILTER=id;JORNADA.detalle=olaActual(id);renderPendientes();}
 function quitarFiltroOla(){PEND_WAVE_FILTER=null;renderPendientes();}
 function anunciarJornada(msg){var live=document.getElementById('foto-live');if(live)live.textContent=msg;}
 
@@ -510,6 +654,7 @@ function registrarPendientesNuevos(pedidos, detectarNuevos){
 var PEND_META={};
 function renderPendientes(){
   var c=document.getElementById('cuerpo');
+  if(JORNADA.detalle){c.innerHTML=renderDetalleOla(JORNADA.detalle);return;}
   var html=renderJornada();
   var visibles=PEND_WAVE_FILTER===null?PEND_CACHE:PEND_CACHE.filter(function(p){return Number(p.pick_wave_id)===Number(PEND_WAVE_FILTER);});
   if(PEND_WAVE_FILTER!==null)html+='<div class="jornada-note">Mostrando solo pedidos de la ola seleccionada. <button class="btn sec mini" style="min-height:44px" onclick="quitarFiltroOla()">Quitar filtro</button></div>';
@@ -526,12 +671,32 @@ function renderPendientes(){
   else html+='<div class="ped-grid">'+visibles.map(cardPendiente).join('')+'</div>';
   c.innerHTML=html;
 }
+function renderPendientesSinInterrumpir(){
+  var activo=document.activeElement, seleccion=activo&&typeof activo.selectionStart==='number'?{inicio:activo.selectionStart,fin:activo.selectionEnd}:null;
+  if(!activo||activo===document.body){renderPendientes();return;}
+  var foco={id:activo.id||'',tag:(activo.tagName||'').toLowerCase(),name:activo.name||'',type:activo.type||'',index:0};
+  if(!foco.id&&foco.tag){
+    var equivalentes=document.querySelectorAll(foco.tag+(foco.name?'[name="'+CSS.escape(foco.name)+'"]':'')+(foco.type?'[type="'+CSS.escape(foco.type)+'"]':''));
+    for(var i=0;i<equivalentes.length;i++)if(equivalentes[i]===activo){foco.index=i;break;}
+  }
+  renderPendientes();
+  var restaurado=foco.id?document.getElementById(foco.id):null;
+  if(!restaurado&&foco.tag){
+    var equivalentesNuevos=document.querySelectorAll(foco.tag+(foco.name?'[name="'+CSS.escape(foco.name)+'"]':'')+(foco.type?'[type="'+CSS.escape(foco.type)+'"]':''));
+    restaurado=equivalentesNuevos[foco.index]||equivalentesNuevos[0];
+  }
+  if(restaurado){restaurado.focus();if(seleccion&&typeof restaurado.setSelectionRange==='function')restaurado.setSelectionRange(seleccion.inicio,seleccion.fin);}
+}
+function jornadaEdicionActiva(){
+  var activo=document.activeElement, formulario=document.querySelector('.jornada-form');
+  return !!(JORNADA.busy||(formulario&&activo&&formulario.contains(activo)));
+}
 
-var pendientesTimer=null, pendientesEnVuelo=false;
+var pendientesTimer=null, pendientesEnVuelo=false, jornadaPollEnVuelo=false;
 function iniciarPollingPendientes(){
   detenerPollingPendientes();
   pendientesTimer=setInterval(function(){
-    if(VISTA==='pendientes' && !pendientesEnVuelo) cargarPendientesSilencioso();
+    if(VISTA==='pendientes'&&!pendientesEnVuelo&&!jornadaPollEnVuelo)cargarDatosSilenciosos();
   }, 25000);
 }
 function detenerPollingPendientes(){
@@ -543,9 +708,43 @@ async function cargarPendientesSilencioso(){
   pendientesEnVuelo=true;
   try{
     var r=await api('/pendientes');
-    if(r.body.ok){ var pedidos=r.body.data||[]; registrarPendientesNuevos(pedidos, true); PEND_CACHE=pedidos; PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error}; renderPendientes(); }
+    if(r.body.ok){ var pedidos=r.body.data||[]; registrarPendientesNuevos(pedidos, true); PEND_CACHE=pedidos; PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error}; }
   }catch(e){/* silencioso: un fallo de refresh en background no debe interrumpir al usuario */}
   finally{ pendientesEnVuelo=false; }
+}
+async function cargarDatosSilenciosos(){
+  if(JORNADA.busy||jornadaEdicionActiva())return;
+  pendientesEnVuelo=true;jornadaPollEnVuelo=true;
+  try{
+    var resultados=await Promise.all([api('/pendientes'),fetch('/api/jornada/hoy')]);
+    var pr=resultados[0],hr=resultados[1],hd=await hr.json();
+    if(!pr.body.ok)throw new Error(pr.body.error||'No se pudo actualizar la cola');
+    if(!hd.ok)throw new Error(hd.error||'No se pudo actualizar la jornada');
+    var olas=[];
+    if(hd.jornada){var or=await fetch('/api/jornada/olas'),od=await or.json();if(!od.ok)throw new Error(od.error||'No se pudieron actualizar las olas');olas=od.olas||[];}
+    if(JORNADA.busy||jornadaEdicionActiva())return;
+    var pedidos=pr.body.data||[];
+    registrarPendientesNuevos(pedidos,true);PEND_CACHE=pedidos;PEND_META={actualizado_en:pr.body.actualizado_en,sync_error:pr.body.sync_error};
+    JORNADA.jornada=hd.jornada;JORNADA.olas=olas;JORNADA.claimsError=null;JORNADA.estado='ready';
+    renderPendientesSinInterrumpir();
+  }catch(e){
+    if(!JORNADA.busy&&!jornadaEdicionActiva()){JORNADA.claimsError=e.message||'error';renderPendientesSinInterrumpir();}
+  }finally{pendientesEnVuelo=false;jornadaPollEnVuelo=false;}
+}
+async function cargarJornadaSilenciosa(){
+  if(JORNADA.busy||jornadaPollEnVuelo)return;
+  jornadaPollEnVuelo=true;
+  try{
+    var h=await fetch('/api/jornada/hoy');var hd=await h.json();
+    if(!hd.ok)throw new Error(hd.error||'No se pudo actualizar la jornada');
+    var olas=[];
+    if(hd.jornada){var o=await fetch('/api/jornada/olas');var od=await o.json();if(!od.ok)throw new Error(od.error||'No se pudieron actualizar los claims');olas=od.olas||[];}
+    if(JORNADA.busy)return;
+    JORNADA.jornada=hd.jornada;JORNADA.olas=olas;JORNADA.claimsError=null;JORNADA.estado='ready';
+    if(!jornadaEdicionActiva())renderPendientesSinInterrumpir();
+  }catch(e){
+    if(!JORNADA.busy){JORNADA.claimsError=e.message||'error';if(!jornadaEdicionActiva())renderPendientesSinInterrumpir();}
+  }finally{jornadaPollEnVuelo=false;}
 }
 
 // El número que hay que mostrar es el que el operario tiene DELANTE en ML. Cuando la compra
@@ -556,6 +755,45 @@ async function cargarPendientesSilencioso(){
 // vivía como 2000017948004320 y ya estaba preparada.
 function numMostrar(p){ return p && p.pack_id ? p.pack_id : (p ? p.numero_pedido : ''); }
 
+function fechaSla(v){
+  if(!v)return '—';
+  try{return new Intl.DateTimeFormat('es-AR',{timeZone:'America/Argentina/Buenos_Aires',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(v));}
+  catch(e){return String(v);}
+}
+function motivoSla(motivo){
+  var mensajes={
+    SLA_SHIPMENT_HORA_FALTANTE:'MercadoLibre no informó una hora límite. Revisá el envío y dejalo para el siguiente día hasta confirmarlo.',
+    MARGEN_30_MIN_SUPERADO:'El margen operativo de 30 minutos ya fue superado. Preparalo si corresponde y dejalo para el siguiente día.',
+    'FLEX_SALIDA_17:00_SUPERADA':'Se superó la salida máxima de Flex de las 17:00. Preparalo y dejalo para el siguiente día.'
+  };
+  return mensajes[motivo]||'No se pudo determinar un horario operativo. Revisá el envío antes de despacharlo.';
+}
+function motivoSlaHtml(motivo){
+  if(!motivo)return '';
+  return '<div>'+esc(motivoSla(motivo))+'</div><details class="sla-diagnostico"><summary>Ver código para diagnóstico</summary><code>'+esc(motivo)+'</code></details>';
+}
+
+function despachoSla(p){
+  var estado=p.estado_despacho||'';
+  if(estado==='diferido'){
+    return '<div class="ped-nota despacho-sla despacho-diferido" role="status"><b>Despacho diferido</b>. '+motivoSlaHtml(p.despacho_motivo)+' Queda para el siguiente día.</div>';
+  }
+  if(estado==='excluido'){
+    return '<div class="ped-nota despacho-sla" role="status"><b>Despacho excluido</b>. '+motivoSlaHtml(p.despacho_motivo)+'</div>';
+  }
+  var lineas=[];
+  if(p.canal==='web'){
+    lineas.push('<b>Preparar antes de las 15:00</b>');
+  }else if(p.logistic_type==='self_service'){
+    lineas.push('<b>Salida máxima Flex: 17:00</b>');
+  }else{
+    if(p.shipment_limite_original)lineas.push('Entrega en acopio: <b>'+esc(fechaSla(p.shipment_limite_original))+'</b>');
+    if(p.fecha_despacho_limite)lineas.push('Límite interno: <b>'+esc(fechaSla(p.fecha_despacho_limite))+'</b>');
+  }
+  if(!lineas.length)return '';
+  return '<div class="ped-nota despacho-sla">'+lineas.join(' · ')+'</div>';
+}
+
 function cardPendiente(p){
   var nuevoDesde=PEND_NUEVOS[clavePendiente(p)];
   var marcaNuevo=nuevoDesde ? '<span class="ped-nuevo" aria-label="Pedido nuevo, ingresado '+(haceMin(new Date(nuevoDesde).toISOString())||'recién')+'">NUEVO · hace '+(haceMin(new Date(nuevoDesde).toISOString())||'menos de 1 min')+'</span>' : '';
@@ -565,7 +803,7 @@ function cardPendiente(p){
   if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
-  var despacho=p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(fecha(p.fecha_despacho))+'</b></div>':'';
+  var despacho=despachoSla(p)||(p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(fecha(p.fecha_despacho))+'</b></div>':'');
   return '<div class="ped'+(marcaNuevo?' nuevo':'')+'" onclick="prepararClave(\''+esc(clavePendiente(p)).replace(/'/g,'&#39;')+'\')">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span><span style="display:flex;align-items:center;gap:6px">'+marcaNuevo+canal+'</span></div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
@@ -957,7 +1195,7 @@ function itemHtml(it){
 function slotDomId(itemId,tipo){return 'thumbs-'+itemId+'-'+String(tipo).replace(/[^a-zA-Z0-9_-]/g,'_');}
 
 function thumbHtml(f){
-  var del=PREP.estado!=='completada'?'<button class="del" onclick="borrarFoto('+f.id+');event.stopPropagation()">✕</button>':'';
+  var del=PREP.estado!=='completada'?'<button class="del" type="button" aria-label="Descartar esta foto" title="Descartar esta foto" onclick="borrarFoto('+f.id+');event.stopPropagation()">✕</button>':'';
   var esError=f.estado_proceso==='error';
   var preview=FOTO_PREVIEWS[f.id];
   // Ya está lista del lado del servidor: si todavía teníamos el blob local (subida propia
@@ -968,7 +1206,7 @@ function thumbHtml(f){
   var estadoTxt=esError?'Foto con error de procesamiento':(f.estado_proceso==='listo'?'Foto lista':'Foto subida, acomodándose');
   var retry=esError?'<button class="retry" type="button" title="Reintentar procesar" aria-label="Reintentar procesar esta foto" onclick="reintentarFoto('+f.id+');event.stopPropagation()">↻</button>':'';
   return '<div class="thumb'+(esError?' err':'')+'" data-foto-id="'+f.id+'">'
-    +'<a href="'+esc(f.url)+'" target="_blank" aria-label="Ver foto original"><img src="'+esc(src)+'" loading="lazy" alt="'+esc(estadoTxt)+'"></a>'
+    +'<a href="'+esc(f.url)+'" target="_blank" aria-label="Ver foto original"><img src="'+esc(src)+'" loading="lazy" width="96" height="96" alt="'+esc(estadoTxt)+'"></a>'
     +retry+del+'</div>';
 }
 
@@ -1487,7 +1725,8 @@ async function intentarSubida(itemId,tipo,archivo,tempId){
     // la foto quedó guardada aunque nunca llegó a SQLite. El mismo archivo queda disponible
     // para reintentar con la misma intención desde marcarSubidaFallida().
     var ctl=new AbortController();
-    var timeout=setTimeout(function(){ctl.abort();},30000);
+    // Override solo para pruebas aisladas; producción conserva 30 s.
+    var timeout=setTimeout(function(){ctl.abort();},Number(window.FOTO_UPLOAD_TIMEOUT_MS)||30000);
     var r;
     try {
       r=await fetch('/api/preparacion/'+PREP.id+'/foto',{method:'POST',body:fd,signal:ctl.signal});

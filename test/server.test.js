@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import request from 'supertest';
 import { buildApp } from '../server.js';
-import { hashPassword } from '../lib/auth.js';
+import { hashPassword, crearAccessToken } from '../lib/auth.js';
 
 const TEST_DB = './test/tmp-server.sqlite';
 const MOBILE_SECRET = 'mobile-secret-for-tests-at-least-32-chars';
@@ -287,5 +287,32 @@ describe('server', () => {
     const agent = request.agent(app);
     const res = await agent.post('/api/admin/integration-jobs/1/reprocess');
     expect(res.status).toBe(401);
+  });
+
+  it('agente de etiquetas: Bearer JWT válido y permiso permiten reclamar', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO users (id, username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?,?,?,?,?,?,?)`).run(77, 'agente-test', hashPassword('x'), 0, 1, now, now);
+    app._db.prepare('INSERT INTO user_permisos (user_id, herramienta, nivel) VALUES (?,?,?)')
+      .run(77, 'etiquetas', 'read');
+    const device = app._db.prepare(`INSERT INTO device_tokens (user_id, token, plataforma, creado_en, actualizado_en)
+      VALUES (?,?,?,?,?)`).run(77, 'device-agent-test', 'web', now, now);
+    app._db.prepare(`INSERT INTO mobile_refresh_tokens (user_id, device_id, token_hash, expires_at, creado_en)
+      VALUES (?,?,?,?,?)`).run(77, device.lastInsertRowid, 'agent-session-test', '2099-01-01T00:00:00.000Z', now);
+    app._db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, estado, creado_en) VALUES (?,?,?,?)`)
+      .run('AGENT-1', 1, 'pendiente', now);
+    const token = crearAccessToken({ id: 77, username: 'agente-test' }, MOBILE_SECRET, undefined, 'agent-session-test');
+    const res = await request(app).post('/api/etiquetas/cola/reclamar')
+      .set('Authorization', `Bearer ${token}`).send({ agente_id: 'deposito-pc-test' });
+    expect(res.status).toBe(200);
+    expect(res.body.trabajo.sku).toBe('AGENT-1');
+    app._db.prepare("DELETE FROM user_permisos WHERE user_id=? AND herramienta='etiquetas'").run(77);
+    app._db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, estado, creado_en) VALUES (?,?,?,?)`)
+      .run('AGENT-2', 1, 'pendiente', now);
+    const denied = await request(app).post('/api/etiquetas/cola/reclamar')
+      .set('Authorization', `Bearer ${token}`).send({ agente_id: 'deposito-pc-test' });
+    expect(denied.status).toBe(403);
   });
 });
