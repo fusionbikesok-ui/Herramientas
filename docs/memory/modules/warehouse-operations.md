@@ -91,7 +91,8 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
 - E20 inició el núcleo de taller en `workshop_jobs`, `workshop_events` y `workshop_parts`:
   trabajos, diagnóstico/presupuesto y repuestos con estados versionados. La bandeja `/taller/`
   permite consultar, cargar diagnóstico/presupuesto y avanzar estados con `expected_version` e
-  idempotencia; aún no crea ventas Woo ni mueve stock y faltan tarifas, checklists, ledger y piloto.
+  idempotencia. E20 ya registra consumo instalado como salida contable desde ubicación, enlazada al
+  repuesto e idempotente; faltan devolución inversa, venta Woo, tarifas, checklists y piloto.
 
 - E19 inició su núcleo durable en `warranty_cases`/`warranty_events`: alta idempotente,
   estados versionados y timeline mediante `/api/warranties`. Continúa en desarrollo; faltan

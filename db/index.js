@@ -590,6 +590,14 @@ export function openDb(dbPath) {
     });
     aplicarWorkshopParts();
   }
+  const workshopStockMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='workshop_stock_movements_078'").get();
+  if (!workshopStockMigration) {
+    db.transaction(() => {
+      const cols = new Set(db.prepare('PRAGMA table_info(stock_movements)').all().map((c) => c.name));
+      if (!cols.has('referencia_tipo')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '078_workshop_stock_movements.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('workshop_stock_movements_078')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
