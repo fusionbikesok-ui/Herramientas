@@ -47,5 +47,6 @@ de taller con lease de 12 horas y replay detenido ante conflictos. `2e8416c` agr
 de evidencia fotográfica offline, `5016189` prepara cámara/permisos, `fac7975` la asocia al
 trabajo, `ecb401e` la encola en SecureStore y `17d4e28` prepara el replay multipart autenticado.
 El backend expone `/api/v1/workshop` desde `ca2d2c0`, `eddd245` fija las rutas en OpenAPI y
-`2d4ea96` envía el binario multipart de la URI local. Falta validarlo en dispositivo real.
+`2d4ea96` envía el binario multipart de la URI local y `76a6c4b` inicia el replay al abrir sesión.
+Falta validarlo en dispositivo real.
 No hay build publicada; falta conectar captura real y validar `/api/v1` en un iPhone.
