@@ -93,8 +93,8 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
   permite consultar, cargar diagnóstico/presupuesto y avanzar estados con `expected_version` e
   idempotencia. E20 registra consumo instalado como salida contable y devolución como entrada
   inversa desde ubicación, enlazados al repuesto e idempotentes. La venta del service ya tiene
-  outbox durable idempotente para Woo, pero aún falta el worker/adaptador remoto, tarifas,
-  checklists y piloto.
+  outbox durable idempotente y worker con recuperación/reintento para Woo, pero aún falta el
+  payload/adaptador de creación remota, tarifas, checklists y piloto.
 
 - E19 inició su núcleo durable en `warranty_cases`/`warranty_events`: alta idempotente,
   estados versionados y timeline mediante `/api/warranties`. Continúa en desarrollo; faltan
