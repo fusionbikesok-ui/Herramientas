@@ -41,6 +41,25 @@ cambia cuál archivo rota. Si vuelve a fallar aislado, ahí sí es del diff.
 
 ## Coordinación Codex ↔ Claude
 
+### Secuencia única y schema v2
+
+La secuencia obligatoria es: desarrollo → revisor → tester → probador-e2e (si UI) → auditor.
+El revisor produce `veredicto/hallazgos`; tester `resultado_suite`; E2E `evidencia/anchos_riesgos`
+(también en BLOQUEADO); auditor consume las tres referencias y produce `referencias_evidencia`.
+Todo gate lleva `base`, `head` y la misma `diff_fingerprint` SHA-256 autoritativa. Workers y
+explorador solo requieren el núcleo normalizado (`estado/base/head/fingerprint`), sin campos de gate.
+Cada entrega, despacho y reintento se registra en el checkpoint/handoff con timestamp, rol,
+huella, worktree, acción siguiente (solo si fue informada), estado y archivos; los cambios
+doc-only pueden usar el mismo registro liviano y no inventan acciones.
+
+### Política única de evidencia y handoff (v2)
+
+Cada validación costosa se ejecuta una sola vez por `diff_fingerprint` congelado y se
+reutiliza en los gates siguientes. Tester cubre la suite; E2E cubre navegador; revisor y
+auditor consumen esas evidencias sin repetirlas. El handoff mínimo es `estado` y
+`siguiente_accion`; los gates agregan `pruebas`, E2E `evidencia` y todo bloqueo
+`codigo_bloqueo`. La política canónica está en `scripts/agent-pipeline-policy.mjs`.
+
 - El coordinador mantiene el registro activo y asigna a cada agente una tarea con rutas
   exclusivas. Si Claude toma una ruta, Codex no la edita hasta recibir su handoff.
 - Cada handoff de Claude/Codex debe indicar rama, worktree, commit base, archivos tocados,

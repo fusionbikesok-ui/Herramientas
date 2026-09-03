@@ -4,31 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { ROLES as allowedRoles, taskField, validateTask, validateHandoff, authoritativeGitState } from './agent-pipeline-policy.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const allowedRoles = new Set([
-  'explorador',
-  'hard-worker-backend',
-  'hard-worker-frontend',
-  'disenador-ux',
-  'disenador-ui',
-  'revisor',
-  'tester',
-  'probador-e2e',
-  'auditor-despliegue',
-]);
-const requiredHandoffFields = [
-  'estado',
-  'tarea',
-  'rama',
-  'worktree',
-  'pruebas',
-  'hallazgos',
-  'decisiones_codex',
-  'siguiente_accion',
-  'procesos_activos',
-];
-const validStates = new Set(['APROBADO', 'NO_APROBADO', 'BLOQUEADO', 'WAITING_FOR_ORCHESTRATOR']);
 
 function usage() {
   console.log(`Uso:
@@ -57,11 +35,6 @@ function parseArgs(argv) {
     else throw new Error(`opción desconocida: ${arg}`);
   }
   return out;
-}
-
-function field(text, label) {
-  const match = text.match(new RegExp(`^${label}:\\s*(.+)$`, 'mi'));
-  return match?.[1]?.trim() || '';
 }
 
 function fail(message) {
@@ -131,40 +104,6 @@ function parseClaudeResult(raw) {
   return parseJsonText(result);
 }
 
-function validateHandoff(handoff, role) {
-  const stateAliases = {
-    aprobado: 'APROBADO',
-    aprobado_ok: 'APROBADO',
-    completado: 'APROBADO',
-    completada: 'APROBADO',
-    completado_con_hallazgo: 'NO_APROBADO',
-    completado_con_hallazgos: 'NO_APROBADO',
-    ok_con_hallazgo: 'NO_APROBADO',
-    ok_con_hallazgos: 'NO_APROBADO',
-    'completado con hallazgos': 'NO_APROBADO',
-    no_aprobado: 'NO_APROBADO',
-    'no aprobado': 'NO_APROBADO',
-    rechazado: 'NO_APROBADO',
-    bloqueado: 'BLOQUEADO',
-    bloqueado_parcial: 'BLOQUEADO',
-    'bloqueado parcial': 'BLOQUEADO',
-    esperando: 'WAITING_FOR_ORCHESTRATOR',
-  };
-  if (typeof handoff.estado === 'string') {
-    const normalizedState = handoff.estado.replace(/[^\p{L}_ ]/gu, '').trim().toLowerCase();
-    handoff.estado = stateAliases[normalizedState] || handoff.estado;
-  }
-  const missing = requiredHandoffFields.filter((key) => handoff[key] === undefined || handoff[key] === '');
-  if (missing.length) throw new Error(`handoff incompleto; faltan: ${missing.join(', ')}`);
-  if (!validStates.has(handoff.estado)) throw new Error(`estado inválido: ${handoff.estado}`);
-  if (handoff.estado === 'BLOQUEADO' && !handoff.codigo_bloqueo) {
-    throw new Error('un BLOQUEADO debe incluir codigo_bloqueo');
-  }
-  if (role === 'probador-e2e' && handoff.estado !== 'BLOQUEADO' && !handoff.evidencia) {
-    throw new Error('el handoff E2E aprobado o rechazado debe incluir evidencia');
-  }
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) return usage();
@@ -174,14 +113,15 @@ async function main() {
   if (!['dontAsk', 'plan', 'acceptEdits'].includes(args.permissionMode)) return fail('--permission-mode inválido');
 
   const task = fs.readFileSync(args.taskFile, 'utf8');
-  const worktree = field(task, 'Worktree');
-  if (!worktree || !path.isAbsolute(worktree) || !fs.existsSync(worktree)) return fail('Worktree absoluto e inexistente');
-  if (!field(task, 'Tarea') || !field(task, 'Rama')) return fail('el task file requiere Tarea y Rama');
-  if (args.role === 'probador-e2e') {
-    const missing = ['URL exacta', 'Puerto', 'HEAD/base', 'DB temporal', 'Sesión Playwright', 'PID/sesión del servidor']
-      .filter((label) => !field(task, label));
-    if (missing.length) return fail(`E2E sin entorno completo: faltan ${missing.join(', ')}`);
-  }
+  let worktree;
+  try { ({ worktree } = validateTask(task, { e2e: args.role === 'probador-e2e' })); } catch (error) { return fail(error.message); }
+  if (!path.isAbsolute(worktree) || !fs.existsSync(worktree)) return fail('Worktree absoluto e inexistente');
+
+  const gitState = authoritativeGitState(worktree, {
+    base: taskField(task, 'Base') || taskField(task, 'HEAD/base').split(' / ')[0],
+    head: taskField(task, 'HEAD') || taskField(task, 'HEAD/base').split(' / ').pop(),
+  });
+  const inputFingerprint = gitState.diff_fingerprint;
 
   const model = readAgentModel(args.role, worktree);
   const tools = readAgentTools(args.role);
@@ -192,7 +132,8 @@ async function main() {
     'No redescubras contexto que ya esté en ese archivo.',
     'Respetá estrictamente el worktree, ownership y permisos indicados.',
     'Al finalizar devolvé únicamente un objeto JSON válido con las claves:',
-    `${requiredHandoffFields.join(', ')}, codigo_bloqueo (si aplica), evidencia (si aplica).`,
+    'devolvé estado, base, head y diff_fingerprint; completá el contrato de tu rol (veredicto/hallazgos, resultado_suite, evidencia/anchos_riesgos o referencias_evidencia).',
+    `Valores autoritativos del worktree: base=${gitState.base}, head=${gitState.head}, diff_fingerprint=${gitState.diff_fingerprint}. Debés devolverlos exactamente; una huella distinta será rechazada.`,
     'No devuelvas Markdown, logs ni transcripciones.',
   ].join('\n');
 
@@ -226,6 +167,19 @@ async function main() {
   }
 
   const handoff = parseClaudeResult(stdout);
+  // Aprobaciones y evidencia quedan ligadas al diff congelado servido al agente.
+  const returnedFingerprint = handoff.diff_fingerprint;
+  if (['revisor', 'tester', 'probador-e2e', 'auditor-despliegue'].includes(args.role) && !returnedFingerprint) throw new Error('gate sin diff_fingerprint autoritativo');
+  if (returnedFingerprint && returnedFingerprint !== gitState.diff_fingerprint) throw new Error('handoff diff_fingerprint no coincide con el worktree');
+  const outputState = authoritativeGitState(worktree, { base: gitState.base, head: gitState.head });
+  const readOnly = ['revisor', 'probador-e2e', 'auditor-despliegue'].includes(args.role);
+  if (readOnly && outputState.diff_fingerprint !== inputFingerprint) throw new Error('gate de solo lectura mutó el worktree; diff requiere re-freeze');
+  if (args.role === 'tester' && outputState.diff_fingerprint !== inputFingerprint) {
+    handoff.estado = 'WAITING_FOR_ORCHESTRATOR';
+    handoff.siguiente_accion = 'REFREEZE_AND_REVIEW';
+  }
+  handoff.base = outputState.base; handoff.head = outputState.head; handoff.diff_fingerprint = outputState.diff_fingerprint;
+  // Alias legacy se conservan; no se inventan campos ausentes.
   validateHandoff(handoff, args.role);
   handoff.orquestador = 'codex';
   handoff.rol = args.role;

@@ -50,6 +50,11 @@ para respetar la serialización de la suite y el handoff del orquestador.
   omitirlo no lo es.
 
 ## Cómo trabajás (seguí estas skills, leelas con Read)
+
+## Contrato v2 (gate 2)
+Solo despachás después de revisor aprobado. El handoff JSON incluye `estado`, `base`, `head`,
+`diff_fingerprint` autoritativos y `resultado_suite`; resultados referencian la misma huella.
+No repetís revisión de código ni pruebas E2E/browser.
 - Para sintaxis/API de vitest o axe-core que no recordás con certeza, usá `context7`
   (`resolve-library-id` → `query-docs`) en vez de asumir.
 Leé **solo las que apliquen**, no las tres siempre:

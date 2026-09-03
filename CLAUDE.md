@@ -6,6 +6,10 @@ automáticamente con gates y rollback. Windows, hardware y App Store siempre req
 deploy key con acceso de escritura). Integración MercadoLibre ↔ WooCommerce. Responder en
 español.
 
+La política única de handoffs y evidencia está en `scripts/agent-pipeline-policy.mjs`:
+contrato compacto por rol/estado, bloqueos con código y evidencia ligada a `diff_fingerprint`.
+Los gates consumen evidencia congelada y no repiten validaciones.
+
 ## Memoria durable y carga selectiva
 
 La memoria compartida del proyecto vive en `docs/memory/`. Antes de explorar el repositorio:
@@ -113,6 +117,12 @@ Si necesitás ubicar algo vos, usá **`explorador`** una vez y reutilizá su res
 todos los despachos siguientes, en vez de que cada agente repita la búsqueda.
 
 ### El pipeline
+
+Secuencia normativa: desarrollo → revisor (veredicto/hallazgos) → tester (resultado_suite) →
+probador-e2e si corresponde (evidencia/anchos_riesgos) → auditor (referencias_evidencia). Todos
+los contratos usan la huella autoritativa, base y HEAD del mismo diff; el auditor consume los
+tres gates y no repite sus pruebas. Entregas, despachos y reintentos quedan registrados en el
+checkpoint/handoff; tareas doc-only pueden usar registro liviano.
 
 1. **Planear de verdad.** Invocá `superpowers:brainstorming` (que termina en
    `superpowers:writing-plans`) para producir un plan escrito en

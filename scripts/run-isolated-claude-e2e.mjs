@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import { taskField, validateTask, authoritativeGitState } from './agent-pipeline-policy.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const controller = path.join(root, 'scripts', 'orchestrate-claude.mjs');
@@ -33,10 +34,6 @@ Opciones:
   --playwright-session <id>  Sesión Playwright (default: entrega2e2e).
   --permission-mode <modo>   Permisos Claude (default: acceptEdits; la tarea prohíbe editar).
   --help                     Mostrar esta ayuda.`);
-}
-
-function field(text, label) {
-  return text.match(new RegExp(`^${label}:\\s*(.+)$`, 'mi'))?.[1]?.trim() || '';
 }
 
 function git(command, cwd) {
@@ -105,8 +102,8 @@ async function main() {
   await assertPortFree(port);
 
   const task = fs.readFileSync(taskFile, 'utf8');
-  const worktree = field(task, 'Worktree');
-  if (!worktree || !path.isAbsolute(worktree) || !fs.existsSync(worktree)) throw new Error('Worktree absoluto e inexistente');
+  const { worktree } = validateTask(task);
+  if (!path.isAbsolute(worktree) || !fs.existsSync(worktree)) throw new Error('Worktree absoluto e inexistente');
   const sourceDb = path.join(root, 'data', 'fusion.sqlite');
   if (!emptyDb && !fs.existsSync(sourceDb)) throw new Error('no existe la base fuente');
   const suffix = `${process.pid}-${Date.now()}`;
@@ -122,8 +119,11 @@ async function main() {
   }
   db.close();
 
-  const head = git(['rev-parse', 'HEAD'], worktree);
-  const base = git(['rev-parse', 'HEAD^'], worktree);
+  const gitState = authoritativeGitState(worktree, {
+    base: taskField(task, 'Base') || taskField(task, 'HEAD/base').split(' / ')[0],
+    head: taskField(task, 'HEAD') || taskField(task, 'HEAD/base').split(' / ').pop(),
+  });
+  const { head, base } = gitState;
   const env = {
     ...process.env,
     DB_PATH: dbCopy,

@@ -38,6 +38,7 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 ## Reglas inmediatas
 
 - No declarar terminada una entrega por existir código o numeración previa.
+- El pipeline de agentes usa `scripts/agent-pipeline-policy.mjs` como contrato ejecutable: cada gate conserva base, HEAD y una huella SHA-256 autoritativa del worktree; revisor, tester y E2E aportan evidencia única y el auditor solo consume evidencia de la misma huella. Un gate sin evidencia fresca queda bloqueado con la acción de recuperación, sin repetir validaciones costosas.
 - No iniciar `node server.js` contra la base real ni ejecutar suites concurrentes.
 - Backend/web solo podrán publicarse automáticamente cuando el pipeline definido por el maestro esté implementado y verde; hoy una tarea documental no autoriza push, migración, PM2 ni deploy.
 - Windows, hardware y App Store siempre exigen autorización explícita.
@@ -45,10 +46,10 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 ## UM1 — Guardia ML
 
-- UM1 urgente está en desarrollo. Guardia ML separa Resolver ahora, Investigar, Corregir catálogo, Auditar cobertura y Decisiones previas; la cobertura válida es publicación+variación con SKU Woo único y seller_sku remoto exacto.
+- UM1 urgente está en desarrollo. Separa Guardia ML, Corrección y Consulta; la cobertura válida es publicación+variación con SKU Woo exacto.
 - Gate auditoría 2026-09-03: 🔴. Tests y E2E están verdes, pero el checkout `conteo-confiable` está 1 commit detrás de `master`, contiene un diff acumulado de E1–E4/UM1 y no permite atribuir un diff final aislado; no hacer merge ni deploy hasta congelar/rebasar en un worktree seguro y repetir los gates.
 - El primer rollout es solo lectura, con escaneo al abrir/cada 15 minutos y frescura máxima de 30 minutos. Los casos activos con stock sin vínculo se crean como incidencias; el backlog inicial queda pendiente de validación del Administrador designado.
-- Los pedidos ML sin cobertura se retienen en Fusion sin alterar estado/notas de Woo. Los vínculos y pausas sólo pueden salir de operaciones durables de Guardia; Matcher, Cobertura y Sync legacy son consulta y sus mutaciones responden 410. El cron legacy de push está retirado.
+- Los pedidos ML sin cobertura se retienen en Fusion sin alterar estado/notas de Woo. Vínculos, pausas y stock remoto permanecen deshabilitados hasta el gate operativo.
 - La especificación completa está en la sección 18.1 del Maestro y la evidencia en `docs/superpowers/deliveries/UM1-guardia-ml.md`.
 
 ## Decisiones E1 incorporadas

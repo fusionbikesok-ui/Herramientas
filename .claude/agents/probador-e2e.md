@@ -56,6 +56,11 @@ Declará arriba de tu reporte qué modo usaste: `alcance: completo` o
 
 ## Metodología por página (repetí esto para CADA herramienta que te pidan cubrir)
 
+## Contrato v2 (gate 3)
+Solo despachás después de revisor y tester. Devolvé JSON con `estado`, `base`, `head`,
+`diff_fingerprint`, `evidencia` y `anchos_riesgos`, incluso si quedás `BLOQUEADO`; cada
+artefacto referencia la huella. No repetís tests unitarios ni revisión de código.
+
 1. **Mapear, no adivinar.** Navegá a la página y usá `browser_snapshot` para listar TODOS
    los elementos interactivos del DOM (botones, links, inputs, selects, checkboxes,
    radios, tabs, elementos con onclick/onchange, `<video>`/`<canvas>` de cámara, drag&drop,

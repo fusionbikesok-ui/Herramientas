@@ -40,7 +40,9 @@ Reglas operativas:
    solo ese gate.
 5. El orquestador no reenvía transcripciones completas: entrega commit base, diff resumido,
    rutas afectadas, tests ejecutados y bloqueos. La memoria activa sigue siendo el checkpoint.
-6. Para cada cambio: tests dirigidos una vez durante la implementación y suite completa una vez
+6. Cada evidencia se liga a `diff_fingerprint` (SHA-256 de base+HEAD+diff); los gates no
+   repiten validaciones para la misma huella.
+7. Para cada cambio: tests dirigidos una vez durante la implementación y suite completa una vez
    después del último commit. No se repiten suites por mensajes de progreso ni se sondea Claude
    hasta que responda.
 

@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateHandoff, canonicalFingerprint } from './agent-pipeline-policy.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const agentsDir = path.join(root, '.claude', 'agents');
+const policyFile = path.join(root, 'scripts', 'agent-pipeline-policy.mjs');
 
 const expectedModels = {
   'hard-worker-backend.md': 'haiku',
@@ -23,6 +25,7 @@ const requiredFiles = [
   path.join(root, 'docs', 'agent-coordination.md'),
   path.join(root, 'scripts', 'orchestrate-claude.mjs'),
   path.join(root, 'scripts', 'run-isolated-claude-e2e.mjs'),
+  policyFile,
 ];
 
 const errors = [];
@@ -57,6 +60,25 @@ for (const [file, marker] of ownershipChecks) {
 const coordination = fs.readFileSync(path.join(root, 'docs', 'agent-coordination.md'), 'utf8');
 for (const marker of ['Codex ↔ Claude', 'worktree', 'handoff', 'escritor']) {
   if (!coordination.includes(marker)) errors.push(`docs/agent-coordination.md no contiene '${marker}'`);
+}
+
+try {
+  validateHandoff({ estado: 'APROBADO', base: 'a', head: 'b', diff_fingerprint: '0'.repeat(64), resultado_suite: 'ok' }, 'tester');
+  try { validateHandoff({ estado: 'APROBADO', base: 'a', head: 'b', diff_fingerprint: 'bad', resultado_suite: 'ok' }, 'tester'); errors.push('política aceptó hash inválido'); } catch {}
+  const fp = '0'.repeat(64); const core = { estado:'APROBADO', base:'a', head:'b', diff_fingerprint:fp };
+  for (const [role, extra] of [['revisor',{veredicto:'OK',hallazgos:[]}],['tester',{resultado_suite:'OK'}],['probador-e2e',{evidencia:{fingerprint:fp},anchos_riesgos:[]}],['auditor-despliegue',{referencias_evidencia:[fp]}]]) {
+    const normalized = role === 'auditor-despliegue' ? {...core, referencias_evidencia:{revisor:fp,tester:fp}} : {...core,...extra};
+    try { validateHandoff(normalized, role); } catch (error) { errors.push(`contrato ${role} inválido: ${error.message}`); }
+  }
+  if (canonicalFingerprint({base:'a',head:'b'}) === canonicalFingerprint({base:'a',head:'b',untracked:'x'})) errors.push('huella no distingue untracked');
+} catch (error) { errors.push(`política rechazó handoff válido: ${error.message}`); }
+const controller = fs.readFileSync(path.join(root, 'scripts', 'orchestrate-claude.mjs'), 'utf8');
+const e2e = fs.readFileSync(path.join(root, 'scripts', 'run-isolated-claude-e2e.mjs'), 'utf8');
+if (!controller.includes('validateHandoff') || !controller.includes('authoritativeGitState') || !controller.includes('gate sin diff_fingerprint')) errors.push('controlador no aplica contrato v2');
+if (!e2e.includes('authoritativeGitState') || e2e.includes('HEAD^')) errors.push('lanzador E2E no usa base segura');
+for (const file of ['revisor.md','tester.md','probador-e2e.md','auditor-despliegue.md']) {
+  const text = fs.readFileSync(path.join(agentsDir,file),'utf8');
+  if (!text.includes('Contrato v2') || !text.includes('diff_fingerprint')) errors.push(`${file} no declara contrato v2`);
 }
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));

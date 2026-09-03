@@ -99,6 +99,11 @@ desarrollo correspondiente.
 
 ## Economía de la sesión (no negociable)
 
+## Contrato v2 (gate 1)
+Recibís un diff congelado con `base`, `head` y `diff_fingerprint` autoritativos. Devolvé JSON
+con esos valores, `estado`, `veredicto` y `hallazgos`; toda evidencia referencia la misma
+huella. Este gate ocurre antes de tester y E2E; no ejecutás sus suites ni navegador.
+
 - **No corras `npm test` completo.** La suite la corre el orquestador una sola vez, al final,
   sin nadie más trabajando. Dos corridas simultáneas sobre el mismo worktree comparten los
   `.sqlite` temporales de `test/` y se corrompen entre sí: fallan archivos que nadie tocó, con
