@@ -48,5 +48,5 @@ de evidencia fotográfica offline, `5016189` prepara cámara/permisos, `fac7975`
 trabajo, `ecb401e` la encola en SecureStore y `17d4e28` prepara el replay multipart autenticado.
 El backend expone `/api/v1/workshop` desde `ca2d2c0`, `eddd245` fija las rutas en OpenAPI y
 `2d4ea96` envía el binario multipart de la URI local y `76a6c4b` inicia el replay al abrir sesión.
-La ruta de evidencia exige `operation_id` y el smoke aislado de E21 verificó autenticación, multipart e idempotencia: 25 tests dirigidos aprobados el 2026-09-03. Falta validarlo en dispositivo real.
+La ruta de evidencia exige `operation_id`; las mutaciones tipadas incluyen identificador de dispositivo. El smoke aislado de E21 verificó autenticación, multipart e idempotencia: 25 tests dirigidos aprobados el 2026-09-03. Falta validarlo en dispositivo real.
 No hay build publicada; falta conectar captura real y validar `/api/v1` en un iPhone.
