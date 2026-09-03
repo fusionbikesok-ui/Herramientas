@@ -64,8 +64,9 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
   `lib/stockExceptions.js` persisten incidentes físicos, tareas, versiones, `operation_id` y
   auditoría append-only mediante `migrations/066_stock_exceptions.sql`; `migrations/067_stock_exception_returns.sql`
   agrega recepción idempotente de devoluciones, clasificación disponible/no disponible/condicionado
-  y daño urgente con tarea de inspección. E18 sigue en desarrollo: sync de Woo, proveedor y descarte
-  todavía no están implementados.
+  y daño urgente con tarea de inspección. La migración `migrations/068_stock_exception_woo_outbox.sql`
+  agrega una cola durable para deltas comerciales, aún sin worker remoto ni reconciliación. E18 sigue
+  en desarrollo: proveedor y descarte todavía no están implementados.
 
 - La recepción se procesa por línea; documentos pueden llegar antes, durante o después de la
   mercadería.
