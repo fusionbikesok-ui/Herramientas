@@ -104,6 +104,10 @@ async function main() {
       throw new Error(`flujo de evidencia inesperado: ${JSON.stringify(foto)}`);
     }
     console.log('E1 foto multipart + idempotencia + rechazo de evidencia incompleta: OK');
+    await login.reload({ waitUntil: 'domcontentloaded' });
+    const trasRecarga = await login.evaluate(async () => (await fetch('/api/preparacion/pendientes')).json());
+    if (!trasRecarga.ok || !trasRecarga.data.some((pedido) => pedido.numero_pedido === '900001')) throw new Error('la tarea no se recuperó después de recargar');
+    console.log('E1 recarga con tarea persistida: OK');
     await login.close();
     console.log('E1 HTTP protegido sin sesión: 401 OK');
   } finally {
