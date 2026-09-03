@@ -689,4 +689,12 @@ describe('E1 operativo: búsqueda, ayuda y mesa', () => {
     expect(reanudarOla(db, waveId, 'op1', { operationId:'resume-1', expectedVersion:paused.ola.expected_version }, new Date(now.getTime()+1000)).ok).toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=? AND tipo IN ('ola_pausada','ola_reanudada')").get(waveId).n).toBe(2);
   });
+
+  it('rechaza pausar o reanudar con claim vencido', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    const claimed = reclamarOla(db, waveId, 'op1', { operationId:'expired-claim', expectedVersion:1 }, now);
+    db.prepare("UPDATE pick_wave_claims SET expires_at=? WHERE pick_wave_id=?").run('2026-09-01T11:59:00.000Z', waveId);
+    expect(pausarOla(db, waveId, 'op1', { expectedVersion:claimed.olaCongelada.expected_version, motivo:'intento tardío' }, now).code).toBe('CLAIM_EXPIRED');
+    expect(reanudarOla(db, waveId, 'op1', { expectedVersion:claimed.olaCongelada.expected_version }, now).code).toBe('CLAIM_EXPIRED');
+  });
 });
