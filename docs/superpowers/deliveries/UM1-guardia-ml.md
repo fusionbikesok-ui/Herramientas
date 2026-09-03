@@ -27,7 +27,7 @@ Evitar que una variación activa sin SKU exacto venda y llegue a preparación si
 ## Evidencia actual
 
 - Migración, escaneo exacto, estado degradado, cola de operaciones y API/UI inicial implementados localmente.
-- Prueba aislada: `npx vitest run test/guardia-ml.test.js` — 10/10 aprobadas.
+- Prueba aislada: `npx vitest run test/guardia-ml.test.js test/db.test.js test/server.test.js` — 24/24 aprobadas en el worktree aislado `/opt/fusionbikes/herramientas-um1-audit`.
 - Con esquema: `npx vitest run test/guardia-ml.test.js test/db.test.js` — 19/19 aprobadas.
 - Regresión de servidor: `npx vitest run test/server.test.js` — 15/15 aprobadas.
 - Sintaxis backend y frontend verificada; no se ejecutó E2E ni escaneo contra producción.
@@ -43,6 +43,7 @@ Evitar que una variación activa sin SKU exacto venda y llegue a preparación si
 - Demo aislado: `npm run um1:demo` — `ok:true`; caso descubierto, excepción vencida reabierta, pedido liberado y 3 eventos auditados.
 - E2E browser aislado: `for width in 390 768 1440; do UM1_VIEWPORT_WIDTH=$width node scripts/um1-browser-smoke.mjs; done` — `ok:true` en los tres tamaños; login, cola de Guardia, pedido retenido e historial consultados.
 - Comando equivalente registrado en el proyecto: `npm run e2e:um1:responsive`.
+- La recuperación del tracking de despachos quedó corregida en el commit `5743341`; no se promueve E1 mientras el contrato completo de preparación siga sin una corrida reproducible y verde.
 
 ## Próxima acción reproducible
 
