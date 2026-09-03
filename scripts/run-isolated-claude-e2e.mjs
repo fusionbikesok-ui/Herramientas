@@ -102,7 +102,7 @@ async function main() {
   await assertPortFree(port);
 
   const task = fs.readFileSync(taskFile, 'utf8');
-  const { worktree } = validateTask(task);
+  const { worktree, base: taskBase, head: taskHead } = validateTask(task);
   if (!path.isAbsolute(worktree) || !fs.existsSync(worktree)) throw new Error('Worktree absoluto e inexistente');
   const sourceDb = path.join(root, 'data', 'fusion.sqlite');
   if (!emptyDb && !fs.existsSync(sourceDb)) throw new Error('no existe la base fuente');
@@ -119,10 +119,7 @@ async function main() {
   }
   db.close();
 
-  const gitState = authoritativeGitState(worktree, {
-    base: taskField(task, 'Base') || taskField(task, 'HEAD/base').split(' / ')[0],
-    head: taskField(task, 'HEAD') || taskField(task, 'HEAD/base').split(' / ').pop(),
-  });
+  const gitState = authoritativeGitState(worktree, { base: taskBase, head: taskHead });
   const { head, base } = gitState;
   const env = {
     ...process.env,
@@ -141,7 +138,7 @@ async function main() {
   server.stderr.pipe(logStream);
   await waitForHttp(`http://127.0.0.1:${port}/login/`, 15_000);
 
-  const enrichedTask = `${task.trim()}\n\nEntorno: local-aislado\nURL exacta: http://127.0.0.1:${port}/login/\nRama/worktree servido: ${worktree}\nHEAD/base: ${head} / ${base}\nDB temporal: ${dbCopy}\nDISABLE_CRONS=true: sí\nPuerto: ${port}\nSesión Playwright: ${playwrightSession}\nDirectorio de artefactos: ${path.join(root, 'output', 'playwright')}\nPID/sesión del servidor: ${server.pid}\nAcciones autorizadas: solo lectura y datos de prueba aislados\n`;
+  const enrichedTask = `${task.trim()}\n\nEntorno: local-aislado\nURL exacta: http://127.0.0.1:${port}/login/\nRama/worktree servido: ${worktree}\nBase: ${base}\nHEAD: ${head}\nDB temporal: ${dbCopy}\nDISABLE_CRONS=true: sí\nPuerto: ${port}\nSesión Playwright: ${playwrightSession}\nDirectorio de artefactos: ${path.join(root, 'output', 'playwright')}\nPID/sesión del servidor: ${server.pid}\nAcciones autorizadas: solo lectura y datos de prueba aislados\n`;
   const enrichedFile = `/tmp/codex-to-claude-e2e-${suffix}.md`;
   fs.writeFileSync(enrichedFile, `${enrichedTask}\n`, { mode: 0o600 });
 

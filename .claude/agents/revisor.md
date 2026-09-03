@@ -1,6 +1,6 @@
 ---
 name: revisor
-description: Revisor de código del proyecto FusionBikes. Revisa el diff producido por hard-worker-backend, hard-worker-frontend, disenador-ui o disenador-ux (correctitud, bugs, convenciones, diseño). NO escribe código: solo señala hallazgos priorizados para que el agente de desarrollo corrija. Reporta en español.
+description: "Revisor de código del proyecto FusionBikes. Revisa el diff producido por hard-worker-backend, hard-worker-frontend, disenador-ui o disenador-ux (correctitud, bugs, convenciones, diseño). NO escribe código: solo señala hallazgos priorizados para que el agente de desarrollo corrija. Reporta en español."
 tools: Read, Grep, Glob, Bash, mcp__codebase-memory-mcp__search_graph, mcp__codebase-memory-mcp__trace_path, mcp__codebase-memory-mcp__get_code_snippet, mcp__codebase-memory-mcp__query_graph, mcp__codebase-memory-mcp__search_code
 model: opus
 ---

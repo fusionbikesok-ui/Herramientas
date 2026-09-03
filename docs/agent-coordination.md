@@ -45,7 +45,8 @@ cambia cuál archivo rota. Si vuelve a fallar aislado, ahí sí es del diff.
 
 La secuencia obligatoria es: desarrollo → revisor → tester → probador-e2e (si UI) → auditor.
 El revisor produce `veredicto/hallazgos`; tester `resultado_suite`; E2E `evidencia/anchos_riesgos`
-(también en BLOQUEADO); auditor consume las tres referencias y produce `referencias_evidencia`.
+(también en BLOQUEADO); auditor consume referencias por rol: siempre `revisor` y `tester`, y
+`probador-e2e` solo si el despacho declara UI; produce `referencias_evidencia` indexadas por rol.
 Todo gate lleva `base`, `head` y la misma `diff_fingerprint` SHA-256 autoritativa. Workers y
 explorador solo requieren el núcleo normalizado (`estado/base/head/fingerprint`), sin campos de gate.
 Cada entrega, despacho y reintento se registra en el checkpoint/handoff con timestamp, rol,
@@ -118,7 +119,8 @@ Antes de despachar E2E, Codex debe entregar estos campos completos:
 Entorno: local-aislado | staging
 URL exacta:
 Rama/worktree servido:
-HEAD/base:
+Base:
+HEAD:
 DB temporal:
 DISABLE_CRONS=true:
 Puerto:
@@ -165,7 +167,7 @@ npm run agent:e2e -- \
 ```
 
 `agent:e2e` copia la base, elimina únicamente `ml_oauth_token`, arranca el worktree indicado
-con `DISABLE_CRONS=true`, espera la URL exacta, agrega PID/HEAD/base/DB/sesión al task y
+con `DISABLE_CRONS=true`, espera la URL exacta, agrega PID/Base/HEAD/DB/sesión al task y
 limpia servidor, SQLite y logs temporales al terminar. Usa `acceptEdits` para que el agente
 pueda usar navegador/Bash sin prompts interactivos; la tarea y el rol prohíben editar. El
 smoke local validó handoff y limpieza; requiere autorización de binding local en entornos que

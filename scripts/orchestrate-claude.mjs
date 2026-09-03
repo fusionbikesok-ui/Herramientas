@@ -113,14 +113,11 @@ async function main() {
   if (!['dontAsk', 'plan', 'acceptEdits'].includes(args.permissionMode)) return fail('--permission-mode inválido');
 
   const task = fs.readFileSync(args.taskFile, 'utf8');
-  let worktree;
-  try { ({ worktree } = validateTask(task, { e2e: args.role === 'probador-e2e' })); } catch (error) { return fail(error.message); }
+  let worktree; let taskRefs;
+  try { ({ worktree, ...taskRefs } = validateTask(task, { e2e: args.role === 'probador-e2e', role: args.role })); } catch (error) { return fail(error.message); }
   if (!path.isAbsolute(worktree) || !fs.existsSync(worktree)) return fail('Worktree absoluto e inexistente');
 
-  const gitState = authoritativeGitState(worktree, {
-    base: taskField(task, 'Base') || taskField(task, 'HEAD/base').split(' / ')[0],
-    head: taskField(task, 'HEAD') || taskField(task, 'HEAD/base').split(' / ').pop(),
-  });
+  const gitState = authoritativeGitState(worktree, taskRefs);
   const inputFingerprint = gitState.diff_fingerprint;
 
   const model = readAgentModel(args.role, worktree);
@@ -169,18 +166,19 @@ async function main() {
   const handoff = parseClaudeResult(stdout);
   // Aprobaciones y evidencia quedan ligadas al diff congelado servido al agente.
   const returnedFingerprint = handoff.diff_fingerprint;
+  if ((handoff.base && handoff.base !== gitState.base) || (handoff.head && handoff.head !== gitState.head)) throw new Error('handoff Base/HEAD no coincide con el worktree congelado');
   if (['revisor', 'tester', 'probador-e2e', 'auditor-despliegue'].includes(args.role) && !returnedFingerprint) throw new Error('gate sin diff_fingerprint autoritativo');
   if (returnedFingerprint && returnedFingerprint !== gitState.diff_fingerprint) throw new Error('handoff diff_fingerprint no coincide con el worktree');
-  const outputState = authoritativeGitState(worktree, { base: gitState.base, head: gitState.head });
+  const outputState = authoritativeGitState(worktree, { base: gitState.base });
   const readOnly = ['revisor', 'probador-e2e', 'auditor-despliegue'].includes(args.role);
   if (readOnly && outputState.diff_fingerprint !== inputFingerprint) throw new Error('gate de solo lectura mutó el worktree; diff requiere re-freeze');
-  if (args.role === 'tester' && outputState.diff_fingerprint !== inputFingerprint) {
+  if (!readOnly && outputState.diff_fingerprint !== inputFingerprint) {
     handoff.estado = 'WAITING_FOR_ORCHESTRATOR';
-    handoff.siguiente_accion = 'REFREEZE_AND_REVIEW';
+    handoff.siguiente_accion = 'REFRESH_REVIEW';
   }
   handoff.base = outputState.base; handoff.head = outputState.head; handoff.diff_fingerprint = outputState.diff_fingerprint;
   // Alias legacy se conservan; no se inventan campos ausentes.
-  validateHandoff(handoff, args.role);
+  validateHandoff(handoff, args.role, { cwd: worktree });
   handoff.orquestador = 'codex';
   handoff.rol = args.role;
   handoff.modelo = model;
