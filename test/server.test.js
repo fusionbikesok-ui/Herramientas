@@ -32,7 +32,7 @@ describe('server', () => {
   });
 
   it('serves static pages without credentials (auth is on /api only)', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: 'test-mobile-jwt-secret-0123456789abcdef', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const stock = await request(app).get('/stock/');
     const etiquetas = await request(app).get('/etiquetas/');
@@ -84,7 +84,7 @@ describe('server', () => {
   });
 
   it('redirects the root (/) to /herramientas/home/', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: 'test-mobile-jwt-secret-0123456789abcdef', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const res = await request(app).get('/').redirects(0);
     expect(res.status).toBe(302);
@@ -92,14 +92,14 @@ describe('server', () => {
   });
 
   it('rejects API requests without sesión', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: 'test-mobile-jwt-secret-0123456789abcdef', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const res = await request(app).get('/api/woo/catalogo');
     expect(res.status).toBe(401);
   });
 
   it('mounts the woo, gemini, nuevos-productos, mapeo, csv, matcher and sync API routers', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: 'test-mobile-jwt-secret-0123456789abcdef', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const agent = await loginComoAdmin(app);
 
@@ -117,7 +117,7 @@ describe('server', () => {
   });
 
   it('GET /api/ml/token-estado: accesible por cualquier autenticado, fail-closed sin token', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: 'test-mobile-jwt-secret-0123456789abcdef', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const agent = await loginComoAdmin(app);
 
@@ -133,7 +133,7 @@ describe('server', () => {
   });
 
   it('GET /api/ml/token-estado: token vigente reporta ok:true', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: 'test-mobile-jwt-secret-0123456789abcdef', wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const now = new Date().toISOString();
     const vence = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
