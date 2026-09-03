@@ -4,6 +4,7 @@ import {
   crearTarea, listarTareas, tomarTarea, completarTarea,
   recibirDevolucion, clasificarDevolucion, marcarDanoDevolucion,
   listarWooOutbox,
+  procesarWooOutbox,
 } from '../lib/stockExceptions.js';
 
 function actor(req) { return req.user?.username || 'desconocido'; }

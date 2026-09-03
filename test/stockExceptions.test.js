@@ -7,6 +7,7 @@ import {
   crearIncidente, listarIncidentes, resolverIncidente,
   crearTarea, listarTareas, tomarTarea, completarTarea,
   recibirDevolucion, clasificarDevolucion, marcarDanoDevolucion,
+  procesarWooOutbox,
 } from '../lib/stockExceptions.js';
 import { stockExceptionsRouter } from '../routes/stockExceptions.js';
 
@@ -116,6 +117,17 @@ describe('E18 — excepciones físicas', () => {
     const damaged = marcarDanoDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, motivo: 'Marco roto', marcado_por: 'ana', operation_id: 'damage-3' });
     expect(damaged.ok).toBe(true); expect(damaged.incidente.severidad).toBe('urgente'); expect(damaged.incidente.clasificacion).toBe('no_disponible');
     expect(damaged.tarea.tipo).toBe('verificar');
+  });
+
+  it('reintenta efectos Woo fallidos y confirma el éxito una sola vez', async () => {
+    const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', cantidad: 1, motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-worker' });
+    const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-worker' });
+    clasificarDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, clasificacion: 'disponible', clasificado_por: 'ana', operation_id: 'class-worker' });
+    const failed = await procesarWooOutbox(db, async () => { throw new Error('Woo caído'); });
+    expect(failed.ok).toBe(false); expect(failed.fila.estado).toBe('fallido'); expect(failed.fila.intentos).toBe(1);
+    const done = await procesarWooOutbox(db, async (row) => ({ sku: row.sku, delta: row.delta }));
+    expect(done.ok).toBe(true); expect(done.fila.estado).toBe('enviado'); expect(done.fila.intentos).toBe(2);
+    expect((await procesarWooOutbox(db, async () => null)).procesado).toBe(false);
   });
 
   it('REST rechaza mutaciones sin permiso de stock', async () => {
