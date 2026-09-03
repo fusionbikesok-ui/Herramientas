@@ -31,6 +31,8 @@ try {
   const urgent = sincronizarMiniOlas(db, now);
   if (urgent.agregados !== 1 || !db.prepare("SELECT 1 FROM pick_wave_items WHERE pick_wave_id=? AND pedido_clave='ml:demo-urgent'").get(wave)) throw new Error('urgent ML was not incorporated into active wave');
   if (!pasarAMesa(db, wave, 'demo', { operationId:'demo-table' }, now).ok) throw new Error('table failed');
+  const unknownCode = asignarUnidadMesa(db, wave, { pedidoClave:'web:demo-1', sku:'CODIGO-DESCONOCIDO', cantidad:1 }, 'demo', { operationId:'demo-unknown-code', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave).expected_version }, now);
+  if (unknownCode.ok || unknownCode.code !== 'PRODUCT_CODE_UNKNOWN') throw new Error('unknown product code was not blocked');
   const assigned = asignarUnidadMesa(db, wave, { pedidoClave:'web:demo-1', sku:'SKU-DEMO', cantidad:1 }, 'demo', { operationId:'demo-assign' }, now);
   if (!assigned.ok) throw new Error(`assignment: ${assigned.code}`);
   const urgentAssigned = asignarUnidadMesa(db, wave, { pedidoClave:'ml:demo-urgent', sku:'SKU-URGENTE', cantidad:1 }, 'demo', { operationId:'demo-assign-urgent' }, now);
@@ -60,7 +62,7 @@ try {
   const replayShortage = registrarFaltante(db, wave2, { pedidoClave:'web:demo-shortage', sku:'SKU-FALTANTE', motivo:'otro' }, 'demo', { operationId:'demo-shortage', expectedVersion:1 }, now);
   if (!replayShortage.ok || !replayShortage.repetido) throw new Error('shortage replay failed');
   const eventCount = db.prepare('SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=?').get(wave).n;
-  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
+  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, codigo_desconocido_bloqueado:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
 } finally {
   db.close();
   fs.rmSync(dir, { recursive:true, force:true });
