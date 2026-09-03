@@ -2129,6 +2129,7 @@ export function preparacionRouter(db, cfg) {
   router.get('/:id/eventos', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!puedeVerDetallePreparacion(db, prep, req.user)) return res.status(403).json({ ok: false, error: 'no tenés acceso a los eventos de esta preparación', code: 'FORBIDDEN' });
     const desde = parseInt(req.query.desde, 10);
     const eventos = (Number.isInteger(desde)
       ? db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND id>? ORDER BY id DESC').all(prep.id, desde)

@@ -1667,6 +1667,13 @@ describe('preparacion flujo', () => {
     expect(r.body.items).toBeUndefined();
   });
 
+  it('GET /:id/eventos rechaza a operario sin claim', async () => {
+    const id = await nuevaPrep();
+    const r = await request(buildTestAppComo(db, 'operador-sin-claim')).get(`/api/preparacion/${id}/eventos`);
+    expect(r.status).toBe(403);
+    expect(r.body.code).toBe('FORBIDDEN');
+  });
+
   it('GET /:id y GET /:id/eventos no rompen si un evento tiene detalle_json inválido', async () => {
     const id = await nuevaPrep();
     await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: 'CUB-1' });
