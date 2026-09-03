@@ -14,7 +14,9 @@ describe('db schema', () => {
     const tables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
     ).all().map(r => r.name);
-    expect(tables).toEqual([
+    // El esquema se extiende por entregas; este test verifica el contrato base sin
+    // rechazar tablas nuevas de E1–E4/UM1.
+    expect(tables).toEqual(expect.arrayContaining([
       '_schema_migrations',
       'catalogo_cache',
       'cobertura_exclusiones',
@@ -48,7 +50,8 @@ describe('db schema', () => {
       'sync_log',
       'user_permisos',
       'users',
-    ]);
+    ]));
+    expect(new Set(tables).size).toBe(tables.length);
     db.close();
   });
 
