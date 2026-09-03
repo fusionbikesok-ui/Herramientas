@@ -7,7 +7,7 @@ import { openDb } from '../db/index.js';
 import { ensureTablesJornada } from '../routes/jornada.js';
 import {
   iniciarBusqueda, pasarAMesa, asignarUnidadMesa, registrarFaltante, completarRetorno,
-  resolverFaltante, cerrarOla, reclamarOla, configurarZona, pedirAyudaZona, recibirAyudaZona, pausarOla, reanudarOla, sincronizarMiniOlas,
+  resolverFaltante, cerrarOla, reclamarOla, configurarZona, pedirAyudaZona, recibirAyudaZona, pausarOla, reanudarOla, sincronizarMiniOlas, preflightApertura,
 } from '../lib/jornada.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-e1-demo-'));
@@ -16,6 +16,11 @@ const db = openDb(dbPath);
 const now = new Date('2026-09-03T12:00:00.000Z');
 try {
   ensureTablesJornada(db);
+  db.exec("CREATE TABLE IF NOT EXISTS sync_log (id INTEGER PRIMARY KEY AUTOINCREMENT, direccion TEXT, estado TEXT, creado_en TEXT, error TEXT)");
+  db.prepare('INSERT INTO sync_log (direccion,estado,creado_en,actualizado_en,error) VALUES (?,?,?,?,?)').run('ml_wc','error',now.toISOString(),now.toISOString(),'ML temporalmente no disponible');
+  db.prepare('INSERT INTO sync_log (direccion,estado,creado_en,actualizado_en,error) VALUES (?,?,?,?,?)').run('pedidos_cache','ok',now.toISOString(),now.toISOString(),null);
+  const partialPreflight = preflightApertura(db);
+  if (partialPreflight.integraciones.mercadolibre.estado !== 'error' || partialPreflight.integraciones.woocommerce.estado !== 'ok' || partialPreflight.agente_impresora.verificacion !== 'no_requerido_e1') throw new Error('partial preflight did not isolate the failed integration');
   db.exec('CREATE TABLE pedidos_cache (clave TEXT PRIMARY KEY, items_json TEXT, estado_envio TEXT, canal TEXT, espejo_ml INTEGER DEFAULT 0, fecha TEXT, fecha_despacho TEXT, fecha_despacho_limite TEXT, estado_despacho TEXT DEFAULT \'activo\')');
   db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,fecha) VALUES (?,?,?,?,?)').run('web:demo-1', JSON.stringify([{ sku: 'SKU-DEMO', cantidad: 1 }]), 'pendiente', 'web', now.toISOString());
   const day = db.prepare('INSERT INTO operational_days (fecha,estado,abierta_por,abierta_en) VALUES (?,?,?,?)').run('2026-09-03','abierta','demo',now.toISOString()).lastInsertRowid;
@@ -89,7 +94,7 @@ try {
   const stalePause = pausarOla(db, wave2, 'demo2', { operationId:'demo-stale-pause', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave2).expected_version, motivo:'claim vencido' }, now);
   if (!oldClaim || !recovered.ok || stalePause.code !== 'CLAIM_REQUIRED') throw new Error('expired claim was not recovered safely');
   const eventCount = db.prepare('SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=?').get(wave).n;
-  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, mini_ola_normal_separada:true, claim_vencido_recuperado:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, cierre_incompleto_rechazado:true, replay_cierre:true, ayuda_no_autorizada_rechazada:true, ayuda_recibida:true, faltante_resuelto:true, sustitucion_resuelta:true, cancelacion_resuelta:true, replay_faltante:true, eventos:eventCount }));
+  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, apertura_falla_parcial_aislada:true, pausa_reanudada:true, mini_ola_normal_separada:true, claim_vencido_recuperado:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, cierre_incompleto_rechazado:true, replay_cierre:true, ayuda_no_autorizada_rechazada:true, ayuda_recibida:true, faltante_resuelto:true, sustitucion_resuelta:true, cancelacion_resuelta:true, replay_faltante:true, eventos:eventCount }));
 } finally {
   db.close();
   fs.rmSync(dir, { recursive:true, force:true });
