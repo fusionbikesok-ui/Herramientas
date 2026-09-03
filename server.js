@@ -52,6 +52,7 @@ import { validarConfiguracionPush } from './lib/notificacionesPush.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
 import { notificacionesMlRouter, extraerClaimId } from './routes/notificacionesMl.js';
+import { stockExceptionsRouter } from './routes/stockExceptions.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { autoVincularPorSellerSku } from './lib/mlMapeo.js';
@@ -365,6 +366,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/criticidad', criticidadRouter(db, syncCfg));
   app.use('/api/auditoria', auditoriaRouter(db));
   app.use('/api/incidentes', incidentesRouter(db, syncCfg));
+  app.use('/api/stock-exceptions', stockExceptionsRouter(db));
   app.use('/api/devices', devicesRouter(db));
   app.use('/api/notifications', notificationsRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
