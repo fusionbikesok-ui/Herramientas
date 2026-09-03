@@ -8,8 +8,15 @@
     "start": "node server.js",
     "test": "vitest run",
     "verify:agents": "node scripts/verify-agent-pipeline.mjs",
+    "verify:mobile-contract": "node scripts/verify-mobile-contract.mjs",
     "agent:claude": "node scripts/orchestrate-claude.mjs",
     "agent:e2e": "node scripts/run-isolated-claude-e2e.mjs",
+    "e2e:e2": "node scripts/e2-browser-smoke.mjs",
+    "e2e:e4": "node scripts/e4-browser-smoke.mjs",
+    "e1:demo": "node scripts/e1-operational-demo.mjs",
+    "um1:demo": "node scripts/um1-isolated-demo.mjs",
+    "e2e:um1": "node scripts/um1-browser-smoke.mjs",
+    "e2e:um1:responsive": "for width in 390 768 1440; do UM1_VIEWPORT_WIDTH=$width node scripts/um1-browser-smoke.mjs || exit 1; done",
     "audit": "node scripts/audit-matcher.mjs",
     "cerrar-preparaciones-sin-evidencia": "node scripts/cerrar-preparaciones-sin-evidencia.mjs"
   },
@@ -28,9 +35,12 @@
     "multer": "^2.2.0",
     "node-cron": "^4.5.0",
     "nodemailer": "^9.0.3",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "axe-core": "^4.13.0",
+    "playwright": "^1.62.1",
     "supertest": "^7.2.2",
     "vitest": "^4.1.9"
   }
