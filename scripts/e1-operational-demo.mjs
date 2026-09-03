@@ -75,8 +75,13 @@ try {
   const changedItem = db.prepare('SELECT estado_operativo,bloqueo_motivo FROM pick_wave_items WHERE pick_wave_id=?').get(wave3);
   const pendingReturn = db.prepare("SELECT 1 FROM pick_wave_returns WHERE pick_wave_id=? AND estado='pendiente'").get(wave3);
   if (!externalChange.ok || changedItem.estado_operativo !== 'bloqueado_cambio_externo' || !pendingReturn) throw new Error('external change was not blocked with a return');
+  const oldClaim = db.prepare('SELECT * FROM pick_wave_claims WHERE pick_wave_id=?').get(wave2);
+  db.prepare("UPDATE pick_wave_claims SET expires_at=? WHERE pick_wave_id=?").run('2026-09-03T11:59:00.000Z', wave2);
+  const recovered = reclamarOla(db, wave2, 'demo-new', { operationId:'demo-recover-claim', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave2).expected_version }, now);
+  const stalePause = pausarOla(db, wave2, 'demo2', { operationId:'demo-stale-pause', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave2).expected_version, motivo:'claim vencido' }, now);
+  if (!oldClaim || !recovered.ok || stalePause.code !== 'CLAIM_REQUIRED') throw new Error('expired claim was not recovered safely');
   const eventCount = db.prepare('SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=?').get(wave).n;
-  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, mini_ola_normal_separada:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
+  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, mini_ola_normal_separada:true, claim_vencido_recuperado:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
 } finally {
   db.close();
   fs.rmSync(dir, { recursive:true, force:true });
