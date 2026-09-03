@@ -196,6 +196,20 @@ describe('rutas /api/jornada', () => {
     expect(r.status).toBe(403); expect(r.body.code).toBe('FORBIDDEN');
   });
 
+  it('POST /ola/:id/cerrar exige supervisor o despacho', async () => {
+    const operario = express(); operario.use(express.json());
+    operario.use((req, _res, next) => { req.user = { username: 'operario', is_admin: 0, rol: 'operario' }; next(); });
+    operario.use('/api/jornada', jornadaRouter(db, {}));
+    const denied = await request(operario).post('/api/jornada/ola/999999/cerrar').send({ derivados:['asignado'] });
+    expect(denied.status).toBe(403); expect(denied.body.code).toBe('FORBIDDEN');
+
+    const supervisor = express(); supervisor.use(express.json());
+    supervisor.use((req, _res, next) => { req.user = { username: 'supervisor', is_admin: 0, rol: 'supervisor' }; next(); });
+    supervisor.use('/api/jornada', jornadaRouter(db, {}));
+    const reached = await request(supervisor).post('/api/jornada/ola/999999/cerrar').send({ derivados:['asignado'] });
+    expect(reached.status).toBe(404);
+  });
+
   it('GET /ayuda/:id rechaza a un operario que no es parte de la ayuda', async () => {
     const ts = new Date().toISOString();
     const day = db.prepare("INSERT INTO operational_days (fecha,estado,abierta_por,abierta_en) VALUES ('2026-09-03','abierta','op1',?)").run(ts).lastInsertRowid;
