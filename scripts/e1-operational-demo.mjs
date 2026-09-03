@@ -66,6 +66,10 @@ try {
   if (incompleteClose.ok || incompleteClose.code !== 'WAVE_INCOMPLETE') throw new Error('incomplete wave was closed');
   const resolved = resolverFaltante(db, shortage.faltante.id, 'demo', { operationId:'demo-shortage-resolve', allowWithoutClaim:true, resolucion:'diferimiento' }, now);
   if (!resolved.ok) throw new Error(`shortage resolve: ${resolved.code}`);
+  const substitution = registrarFaltante(db, wave2, { pedidoClave:'web:demo-shortage', sku:'SKU-FALTANTE', motivo:'sustitucion_requerida' }, 'demo2', { operationId:'demo-substitution-shortage', expectedVersion:resolved.ola.expected_version }, now);
+  if (!substitution.ok || !resolverFaltante(db, substitution.faltante.id, 'demo', { operationId:'demo-substitution-resolve', allowWithoutClaim:true, resolucion:'sustitucion' }, now).ok) throw new Error('substitution resolution failed');
+  const cancellation = registrarFaltante(db, wave2, { pedidoClave:'web:demo-shortage', sku:'SKU-FALTANTE', motivo:'cancelacion_requerida' }, 'demo2', { operationId:'demo-cancellation-shortage', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave2).expected_version }, now);
+  if (!cancellation.ok || !resolverFaltante(db, cancellation.faltante.id, 'demo', { operationId:'demo-cancellation-resolve', allowWithoutClaim:true, resolucion:'cancelacion' }, now).ok) throw new Error('cancellation resolution failed');
   const replayShortage = registrarFaltante(db, wave2, { pedidoClave:'web:demo-shortage', sku:'SKU-FALTANTE', motivo:'otro' }, 'demo', { operationId:'demo-shortage', expectedVersion:1 }, now);
   if (!replayShortage.ok || !replayShortage.repetido) throw new Error('shortage replay failed');
   db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,fecha) VALUES (?,?,?,?,?)').run('web:demo-change', JSON.stringify([{ sku:'SKU-ORIGINAL', cantidad:1 }]), 'pendiente', 'web', now.toISOString());
@@ -83,7 +87,7 @@ try {
   const stalePause = pausarOla(db, wave2, 'demo2', { operationId:'demo-stale-pause', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave2).expected_version, motivo:'claim vencido' }, now);
   if (!oldClaim || !recovered.ok || stalePause.code !== 'CLAIM_REQUIRED') throw new Error('expired claim was not recovered safely');
   const eventCount = db.prepare('SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=?').get(wave).n;
-  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, mini_ola_normal_separada:true, claim_vencido_recuperado:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, cierre_incompleto_rechazado:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
+  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, mini_ola_normal_separada:true, claim_vencido_recuperado:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, cierre_incompleto_rechazado:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, sustitucion_resuelta:true, cancelacion_resuelta:true, replay_faltante:true, eventos:eventCount }));
 } finally {
   db.close();
   fs.rmSync(dir, { recursive:true, force:true });
