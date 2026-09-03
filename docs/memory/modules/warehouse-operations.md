@@ -67,8 +67,8 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
   y daño urgente con tarea de inspección. La migración `migrations/068_stock_exception_woo_outbox.sql`
   agrega una cola durable para deltas comerciales y `procesarWooOutbox` implementa claim,
   reintento y confirmación/fallo con adaptador inyectable. `crearSenderWooExcepciones` usa el
-  cliente Woo existente con stock live y delta, actualizando cache solo tras PUT exitoso; faltan
-  reconciliación explícita. `migrations/069_supplier_returns_disposals.sql` y su API registran
+  cliente Woo existente con stock live, delta y verificación posterior, actualizando cache solo
+  tras PUT exitoso; falta resolver concurrencia previa al PUT. `migrations/069_supplier_returns_disposals.sql` y su API registran
   devoluciones a proveedor y descartes irreversibles con idempotencia/auditoría; falta completar
   estados de seguimiento, UI y E2E, por lo que E18 continúa en desarrollo.
 
