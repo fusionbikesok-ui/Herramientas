@@ -40,7 +40,7 @@
 Cada vertical móvil incluye vacío, carga, sin permiso, error, reintento, conflicto y sincronización. Cierra con E2E en un iPhone real. El lease offline máximo es 12 horas y la cola cifrada se conserva hasta siete días, sin `last-write-wins`.
 ## Estado E21
 
-E21 permanece planificada. El checkout `/opt/fusionbikes/FusionBikes-App` todavía no existe:
-el repositorio privado requiere autenticación de GitHub. No se debe inventar una App ni modificar
-el VPS para compensar esta ausencia. El inicio requiere acceso autorizado, verificación de la
-rama `feature/stock-flow-ui`, contrato `/api/v1` fijado y modelo de iPhone.
+E21 está en desarrollo en `/opt/fusionbikes/FusionBikes-App`, rama `feature/stock-flow-ui`.
+El commit `36a1d28` agrega el cliente tipado de taller, operaciones con `expected_version` y
+metadatos para la futura cola offline. No hay build publicada; falta conectar pantallas y validar
+el contrato real `/api/v1` en un iPhone.
