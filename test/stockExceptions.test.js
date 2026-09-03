@@ -156,4 +156,10 @@ describe('E18 — excepciones físicas', () => {
     const response = await request(app).post('/api/stock-exceptions/devoluciones/1/recibir').send({ expected_version: 1, operation_id: 'forbidden-1' });
     expect(response.status).toBe(403); expect(response.body.code).toBe('FORBIDDEN');
   });
+
+  it('REST reserva el descarte irreversible a supervisor/Admin', async () => {
+    const incident = crearIncidente(db, { tipo: 'daño', motivo: 'Rotura', creado_por: 'ana', operation_id: 'discard-auth' });
+    const response = await request(appFor(db, 'operario')).post(`/api/stock-exceptions/incidentes/${incident.incidente.id}/descarte`).send({ expected_version: 1, motivo: 'Baja', operation_id: 'discard-auth-op' });
+    expect(response.status).toBe(403);
+  });
 });

@@ -15,6 +15,11 @@ function requireMutationPermission(req, res, next) {
   if (req.user.is_admin || req.user.permisos.some((p) => (p.herramienta === 'stock-exceptions' || p.herramienta === 'stock') && p.nivel === 'write')) return next();
   return res.status(403).json({ ok: false, code: 'FORBIDDEN' });
 }
+function requireElevatedExceptionAction(req, res, next) {
+  const role = String(req.user?.rol || req.user?.role || req.user?.perfil || '').toLowerCase();
+  if (req.user?.is_admin || ['supervisor', 'supervisor_deposito'].includes(role)) return next();
+  return res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Requiere supervisor o Admin' });
+}
 function codeStatus(code) { return ({ NOT_FOUND: 404, VERSION_CONFLICT: 409, TASK_NOT_OWNED: 409, INVALID_INPUT: 422 })[code] || 400; }
 function reply(res, result, key) { return result.ok ? res.status(result.repetido ? 200 : 201).json(result) : res.status(codeStatus(result.code)).json(result); }
 
@@ -30,7 +35,7 @@ export function stockExceptionsRouter(db) {
   router.post('/proveedor/devoluciones', (req, res) => reply(res, crearDevolucionProveedor(db, { ...req.body, creado_por: actor(req) }), 'devolucion'));
   router.post('/proveedor/devoluciones/:id/estado', (req, res) => reply(res, cambiarEstadoDevolucionProveedor(db, req.params.id, { ...req.body, cambiado_por: actor(req) }), 'devolucion'));
   router.get('/proveedor/devoluciones/:id/eventos', (req, res) => res.json({ ok: true, data: listarEventosDevolucionProveedor(db, req.params.id) }));
-  router.post('/incidentes/:id/descarte', (req, res) => reply(res, descartarIncidente(db, req.params.id, { ...req.body, descartado_por: actor(req) }), 'incidente'));
+  router.post('/incidentes/:id/descarte', requireElevatedExceptionAction, (req, res) => reply(res, descartarIncidente(db, req.params.id, { ...req.body, descartado_por: actor(req) }), 'incidente'));
   router.post('/devoluciones/:id/recibir', (req, res) => reply(res, recibirDevolucion(db, req.params.id, { ...req.body, recibido_por: actor(req) }), 'incidente'));
   router.post('/devoluciones/:id/clasificar', (req, res) => reply(res, clasificarDevolucion(db, req.params.id, { ...req.body, clasificado_por: actor(req) }), 'incidente'));
   router.post('/devoluciones/:id/dano', (req, res) => reply(res, marcarDanoDevolucion(db, req.params.id, { ...req.body, marcado_por: actor(req) }), 'incidente'));
