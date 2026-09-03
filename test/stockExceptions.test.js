@@ -24,12 +24,16 @@ describe('E18 — excepciones físicas', () => {
   beforeEach(() => { clean(); db = openDb(FILE); });
   afterEach(() => { db.close(); clean(); });
 
-  it('crea las tablas 066 y la migración es idempotente', () => {
+  it('crea las tablas 066/067 y las migraciones son idempotentes', () => {
     const nombres = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'stock_%'").all().map(x => x.name);
     expect(nombres).toEqual(expect.arrayContaining(['stock_incidents', 'stock_tasks', 'stock_exception_events']));
     expect(db.prepare("SELECT COUNT(*) n FROM _schema_migrations WHERE key='stock_exceptions_066'").get().n).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM _schema_migrations WHERE key='stock_exception_returns_067'").get().n).toBe(1);
+    const columns = db.prepare('PRAGMA table_info(stock_incidents)').all().map(x => x.name);
+    expect(columns).toEqual(expect.arrayContaining(['clasificacion', 'recibido_por', 'recibido_en', 'producto_estado', 'inspeccion_task_id', 'dañado_en']));
     db.close(); db = openDb(FILE);
     expect(db.prepare("SELECT COUNT(*) n FROM _schema_migrations WHERE key='stock_exceptions_066'").get().n).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM _schema_migrations WHERE key='stock_exception_returns_067'").get().n).toBe(1);
   });
 
   it('crea y reintenta un incidente sin duplicarlo y audita', () => {
