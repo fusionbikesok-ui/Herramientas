@@ -10,7 +10,7 @@ Actualizado: 2026-09-03. Estas fichas registran realidad; el plan maestro especi
 | E3 | Etiqueta interna 50×25 | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E3.md` |
 | E4 | Lotes, tracking y despacho | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E4.md` |
 | E5 | App iPhone base | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E5.md` |
-| E6 | Bandeja operativa y ML | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E6.md` |
+| E6 | Bandeja operativa y ML | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E6.md` |
 | E7 | Turnos y reemplazos | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E7.md` |
 | E8 | Consulta rápida de stock | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E8.md` |
 | E9 | Familias, identidad y rollout | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E9.md` |
