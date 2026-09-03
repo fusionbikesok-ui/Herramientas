@@ -605,6 +605,17 @@ function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
   return estadoFinal;
 }
 
+function registrarTrackingCargadoUnaVez(db, preparacionId, usuario, tracking) {
+  const resultado = db.prepare(`
+    INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
+    SELECT ?, NULL, 'tracking_cargado', ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM preparacion_eventos WHERE preparacion_id=? AND tipo='tracking_cargado'
+    )
+  `).run(preparacionId, usuario ?? null, JSON.stringify({ tracking }), now(), preparacionId);
+  return resultado.changes > 0;
+}
+
 // Crea (o completa) una preparación con el snapshot de sus ítems.
 // Idempotente por clave: si ya existe con ítems, devuelve el id existente.
 export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null, packId = null, numeroPedido, comprador, notas = null, items = [] }) {
@@ -800,8 +811,7 @@ export async function reintentarColgadosTracking(db, cfg) {
       // Mismo criterio que /seguimientos/:wcOrderId: 'completada' solo si de verdad está
       // verificada, y nunca pisa una 'cerrada_sin_evidencia' — ver marcarPreparacionEnviada.
       marcarPreparacionEnviada(db, prep.clave, { usuario: null });
-      const yaRegistrado = db.prepare("SELECT 1 FROM preparacion_eventos WHERE preparacion_id=? AND tipo='tracking_cargado' LIMIT 1").get(prep.id);
-      if (!yaRegistrado) registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_cargado', usuario: null, detalle: { tracking: trackingEsperado } });
+      registrarTrackingCargadoUnaVez(db, prep.id, null, trackingEsperado);
       registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_recuperado', usuario: null, detalle: {} });
       resueltos++;
     } catch (e) {
@@ -1711,10 +1721,7 @@ export function preparacionRouter(db, cfg) {
       // localmente y refrescar desde GET /seguimientos (o incrementar también en la rama
       // colgado) para no quedar corrido en -1 el resto del día.
       const prepId = preparacion.id;
-      registrarEvento(db, {
-        preparacionId: prepId, itemId: null, tipo: 'tracking_cargado', usuario: req.user?.username,
-        detalle: { tracking },
-      });
+      registrarTrackingCargadoUnaVez(db, prepId, req.user?.username, tracking);
 
       // Paso 2: estado final custom, en una segunda escritura separada. Si falla, no se
       // relanza — queda "colgado" (woo_paso2_pendiente=1) para que reintentarColgadosTracking
@@ -1768,7 +1775,7 @@ export function preparacionRouter(db, cfg) {
     const trackingNuevo = String(req.body?.tracking || '').trim();
     if (!trackingNuevo) return res.status(400).json({ ok: false, error: 'tracking requerido' });
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
-    if (prepExistente && !exigirClaimVigente(db, prepExistente, req.user?.username, res)) return;
+    if (prepExistente && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user?.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
