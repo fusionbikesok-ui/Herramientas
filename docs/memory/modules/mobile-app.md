@@ -38,3 +38,9 @@
 7. E22: métricas, reposición, entrante y preventa.
 
 Cada vertical móvil incluye vacío, carga, sin permiso, error, reintento, conflicto y sincronización. Cierra con E2E en un iPhone real. El lease offline máximo es 12 horas y la cola cifrada se conserva hasta siete días, sin `last-write-wins`.
+## Estado E21
+
+E21 permanece planificada. El checkout `/opt/fusionbikes/FusionBikes-App` todavía no existe:
+el repositorio privado requiere autenticación de GitHub. No se debe inventar una App ni modificar
+el VPS para compensar esta ausencia. El inicio requiere acceso autorizado, verificación de la
+rama `feature/stock-flow-ui`, contrato `/api/v1` fijado y modelo de iPhone.
