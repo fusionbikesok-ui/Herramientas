@@ -20,6 +20,7 @@ import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVe
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
+import { retenerPedidoMl, pedidoMlRetenido } from '../lib/guardiaMl.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -226,8 +227,9 @@ const COMPUTED_STOCK_CTE = `
     FROM sku_matcher_decisiones d
     JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
     LEFT JOIN ml_stock_estado e ON e.clave = d.clave
-    LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
-    WHERE d.accion IN ('asignar','confirmar')
+      LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
+      LEFT JOIN guardia_ml_casos gm ON gm.clave = d.clave AND gm.estado != 'resuelto' AND gm.bloquea_sync = 1
+      WHERE d.accion IN ('asignar','confirmar') AND gm.id IS NULL
       AND d.sku IS NOT NULL AND d.sku <> ''
   )`;
 
@@ -297,12 +299,98 @@ async function _syncMlToWc(db, cfg) {
     }
   }
 
-  // Avanzar cursor
+  // Avanzar cursor. El WHERE del ON CONFLICT lo hace monótono en SQL (hallazgo del revisor,
+  // A.3): este barrido puede tardar minutos (paginado + Woo + shipments) leyendo `desde` al
+  // empezar; si mientras tanto syncOrdenMlPuntual ya avanzó el cursor a una orden más nueva
+  // (llegó por webhook durante la corrida), este UPDATE incondicional lo haría retroceder.
+  // Comparando contra el valor ACTUAL en la tabla (no contra `desde`, que es una copia vieja)
+  // nunca se pisa un valor más nuevo ya guardado por el otro camino.
   if (ultimaFecha > desde) {
     db.prepare(`
       INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
       ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+        WHERE excluded.valor > sync_estado.valor
     `).run(ultimaFecha, now());
+  }
+}
+
+/**
+ * A.3 — Procesa UNA orden ML puntual (por el `resource` de un webhook), sin el barrido
+ * paginado de `/orders/search`. `_procesarOrden` es agnóstico al origen del objeto orden
+ * (mismo shape venga de `/orders/search` o de un GET puntual a `/orders/{id}`), así que no
+ * hace falta tocar su firma ni su idempotencia.
+ *
+ * El barrido paginado completo (`syncMlToWc`, cron cada 10 min) queda como respaldo sin
+ * tocar: si este camino puntual falla o no llega, la orden igual se procesa en la corrida
+ * siguiente del cron. No toma el candado `_mlToWcEnCurso` — no compite por él a propósito:
+ * la idempotencia real está en `ordenes_ml_procesadas` (chequeada acá) y, sobre todo, en el
+ * `INSERT` de reserva contra la PK `ml_order_id` que hace `_procesarOrden` antes de escribir
+ * a Woo (más abajo en este archivo, no el `SELECT` de pre-chequeo que hay antes — ese es solo
+ * una optimización barata, no la garantía real). Ese `INSERT` es lo que de verdad impide que
+ * una corrida puntual y el barrido paginado dupliquen un pedido si coinciden en el tiempo
+ * (mismo criterio que `syncPedidoMlPuntual`/`syncPedidoWebPuntual` de A.1, que tampoco toman
+ * ningún candado).
+ *
+ * Fail-open: nunca tira, solo loguea — un error acá no debe tirar abajo el handler del
+ * webhook (que ya respondió 200 antes de llamar a esto).
+ */
+export async function syncOrdenMlPuntual(db, cfg, mlOrderId) {
+  const { ml: mlCfg, woo: wooCfg } = cfg;
+  if (!mlCfgOk(cfg)) return { omitido: true };
+  if (!mlOrderId) return { omitido: true, motivo: 'sin_order_id' };
+
+  const yaProc = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(mlOrderId));
+  if (yaProc) return { omitido: true, motivo: 'ya_procesada' };
+
+  try {
+    const resp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
+    if (resp.status !== 200) {
+      console.error(`syncOrdenMlPuntual: error API ML ${resp.status} para orden ${mlOrderId} — la retoma el cron`);
+      return { omitido: true, motivo: `http_${resp.status}` };
+    }
+    const orden = resp.data;
+    // Mismo filtro que el barrido paginado (`order.status=paid` en el query string de
+    // _syncMlToWc, línea ~271) y que el camino puntual hermano de A.1
+    // (syncPedidoMlPuntual, routes/preparacion.js:2229). El barrido lo aplicaba en el query
+    // string, así que nunca hacía falta chequearlo en _procesarOrden — al reemplazarlo por un
+    // GET puntual (que trae la orden sea cual sea su estado) hay que chequearlo acá. Sin
+    // esto, una orden en payment_required/payment_in_process (pago con ticket/transferencia
+    // pendiente de acreditar) crearía el pedido en Woo y descontaría stock de una venta que
+    // puede no concretarse nunca — y quedaría sellada en ordenes_ml_procesadas, así que el
+    // cron tampoco la reprocesaría cuando sí pase a 'paid'.
+    if (orden.status !== 'paid') {
+      return { omitido: true, motivo: `status_${orden.status}` };
+    }
+    await _procesarOrden(db, wooCfg, mlCfg, orden);
+    // Avanzar el cursor del barrido paginado (mismo campo que actualiza _syncMlToWc, línea
+    // ~301): sin esto, con el camino puntual sellando la mayoría de las órdenes recientes en
+    // ordenes_ml_procesadas antes de que corra el cron, `_syncMlToWc` nunca encuentra una
+    // orden "nueva" que hacer avanzar el cursor (su `continue` por yaProc corta ANTES de
+    // tocar ultimaFecha) — el barrido de respaldo terminaría re-paginando una ventana cada
+    // vez más vieja en cada corrida, sin límite.
+    //
+    // Solo si la orden quedó SELLADA en ordenes_ml_procesadas (hallazgo del revisor):
+    // _procesarOrden puede retornar sin sellar (reserva retenida fail-closed, o liberada para
+    // reintento — ver sus comentarios más abajo) cuando algo falló a mitad de camino. Avanzar
+    // el cursor igual sacaría esa orden de la ventana del barrido de respaldo apenas llegue
+    // una más nueva, perdiéndola en silencio en vez de dejar que el cron la reintente.
+    const sellada = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(mlOrderId));
+    if (sellada && orden.date_created) {
+      const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get();
+      if (!cursorRow || orden.date_created > cursorRow.valor) {
+        // El WHERE hace el avance monótono también en SQL (mismo criterio que _syncMlToWc):
+        // red de seguridad ante otra carrera con el barrido, no solo el chequeo de JS de arriba.
+        db.prepare(`
+          INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
+          ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+            WHERE excluded.valor > sync_estado.valor
+        `).run(orden.date_created, now());
+      }
+    }
+    return { omitido: false };
+  } catch (e) {
+    console.error(`syncOrdenMlPuntual: excepción procesando orden ${mlOrderId} — la retoma el cron:`, e.message);
+    return { omitido: true, motivo: 'excepcion' };
   }
 }
 
@@ -426,6 +514,9 @@ function requiereVerificacionWc(e) {
 async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const orderId = String(orden.id);
   const items = orden.order_items ?? [];
+  // La Guardia ya conserva esta venta; esperar una liberación humana evita
+  // reintentos, reservas o efectos laterales en Woo en cada ciclo.
+  if (pedidoMlRetenido(db, orderId)) return;
   let algunSinMapeo = false;
 
   // Reservas abandonadas (proceso murió entre reservar y confirmar/liberar, ej: kill -9)
@@ -560,6 +651,16 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   }
 
   const ov = normalizarOrdenMl(orden);
+  const clavesSinCobertura = [];
+  for (const item of ov.items) {
+    const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
+    if (!skuVinculado || !buscarEnCache(db, skuVinculado)) clavesSinCobertura.push(item.clave);
+  }
+  if (clavesSinCobertura.length) {
+    retenerPedidoMl(db, { orderId, items, claves: [...new Set(clavesSinCobertura)] });
+    logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'retenido_guardia_ml', error: 'pedido ML sin vínculo exacto válido' });
+    return;
+  }
   const lineItems = [];
   for (const item of ov.items) {
     const itemId = item.item_id_ml;
@@ -900,6 +1001,167 @@ export async function procesarCancelacionesMl(db, cfg) {
       }
     }
   }
+}
+
+// ─── syncSkuPuntual ──────────────────────────────────────────────────────────
+
+// Backoff acotado a UN reintento (no 3 como el resto del repo): esta función corre
+// síncrona dentro de un request HTTP de edición manual de stock (A.2), no en un cron
+// de fondo — un reintento agresivo por SKU en un lote de 40 puede colgar la request
+// minutos. Si falla tras el reintento, el cron periódico de syncWcToMl retoma (fail-open).
+const SYNC_SKU_PUNTUAL_BACKOFF_MS = [800];
+
+/**
+ * Empuja a ML el diff de UNA clave (item+variación) puntual. No reintenta ante 429:
+ * el cooldown es global por cuenta (mismo motivo por el que _syncWcToMl corta la
+ * corrida entera ante 429, ver más abajo) — reintentar ahí solo quema el backoff sin
+ * chance de éxito. Tampoco reintenta si no se pudo confirmar el status de la
+ * publicación (igual que _syncWcToMl: se loguea y se sigue, no es recuperable
+ * reintentando el mismo GET).
+ */
+async function _empujarClaveMl(db, mlCfg, sku, diff) {
+  const { clave, stock_disponible_ml, cantidad_ml } = diff;
+  const { itemId, variationId } = partirClaveMl(clave);
+  const cantidad = Math.max(0, Math.round(stock_disponible_ml));
+
+  let ultimoError = null;
+  for (let intento = 0; intento <= SYNC_SKU_PUNTUAL_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(SYNC_SKU_PUNTUAL_BACKOFF_MS[intento - 1]);
+    try {
+      // Mismo patrón que _syncWcToMl: leer el status del cache primero (poblado por el
+      // matcher) y solo hacer el GET a ML como fallback si no está cacheado. En el caso
+      // común esto ahorra una llamada + el sleep(ML_CALL_DELAY_MS) por clave — con un
+      // lote de 40 SKUs la diferencia es la request HTTP colgada minutos vs. segundos.
+      let status;
+      const cacheado = db.prepare('SELECT status FROM ml_publicaciones_cache WHERE item_id = ?').get(itemId);
+      if (cacheado?.status) {
+        status = cacheado.status;
+      } else {
+        const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
+        if (est.status === 429) {
+          // Cooldown global por cuenta: no es un error de este push, es que ML está
+          // limitando la cuenta entera — mismo criterio que _syncWcToMl (cortadoPor429):
+          // no se intentó nada, se retoma solo en el próximo ciclo del cron.
+          return { clave, estado: 'omitido', detalle: 'Cooldown activo en ML (429), lo retoma el cron' };
+        }
+        status = est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido';
+        await sleep(ML_CALL_DELAY_MS);
+      }
+      if (status === 'desconocido') {
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: 'No se pudo consultar el status de la publicación en ML' });
+        return { clave, estado: 'error', detalle: 'No se pudo consultar el status de la publicación' };
+      }
+      if (status !== 'active') {
+        return { clave, estado: 'sin_cambios', detalle: `Publicación ${status}, no se sincroniza` };
+      }
+
+      const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
+      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+
+      if (resp.status === 429) {
+        return { clave, estado: 'omitido', detalle: 'Cooldown activo en ML (429) durante PUT, lo retoma el cron' };
+      }
+      if (resp.status === 200) {
+        upsertMlStockEstado(db, clave, sku, cantidad);
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'ok' });
+        return { clave, estado: 'sincronizado', detalle: `Stock actualizado: ${cantidad}` };
+      }
+
+      const causa = extraerErrorMl(resp, resp.data?.error || JSON.stringify(resp.data ?? {}));
+      if (/doesn'?t have a variation/i.test(causa)) {
+        descartarVariacionMuerta(db, clave, `Variación inexistente en ML: ${causa}`.slice(0, 200));
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'remapeo_requerido', error: causa.slice(0, 500) });
+        return { clave, estado: 'error', detalle: `Remapeo requerido: ${causa}` };
+      }
+      if (/cannot exceeds? \d+ pictures/i.test(causa)) {
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'requiere_atencion_ml', error: causa.slice(0, 500) });
+        return { clave, estado: 'error', detalle: `Publicación bloqueada en ML: ${causa}` };
+      }
+      // No se reintenta un HTTP de respuesta (4xx/5xx que ML SÍ contestó): no es un fallo
+      // transitorio de red, es un rechazo — mismo criterio que _syncWcToMl, que loguea y
+      // sigue sin reintentar. El caso típico es status stale en ml_publicaciones_cache
+      // (activa en cache, pausada de verdad en ML): reintentar el mismo PUT repite el
+      // mismo 400 sin chance de éxito, solo suma 800ms de latencia al operario. El único
+      // reintento real es para excepciones de red/timeout (catch de abajo).
+      ultimoError = `HTTP ${resp.status}: ${causa}`;
+      logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: ultimoError.slice(0, 500) });
+      return { clave, estado: 'error', detalle: ultimoError };
+    } catch (e) {
+      ultimoError = e.message;
+      if (intento < SYNC_SKU_PUNTUAL_BACKOFF_MS.length) continue;
+      logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: e.message });
+      return { clave, estado: 'error', detalle: `Fallo tras reintento: ${e.message}` };
+    }
+  }
+  return { clave, estado: 'error', detalle: ultimoError || 'Error desconocido' };
+}
+
+/**
+ * Sincroniza el stock de un SKU puntual a MercadoLibre, disparado al guardar una
+ * edición manual de stock (A.2 del plan). Busca TODOS los diffs pendientes de ese
+ * SKU contra ML (un SKU puede tener más de una publicación/variación mapeada — un
+ * `LIMIT 1` acá reportaría "sincronizado" habiendo dejado otra publicación con el
+ * stock viejo) y empuja cada uno con `_empujarClaveMl`. Fail-open: no reemplaza al
+ * cron `syncWcToMl`, que sigue de respaldo si esto falla.
+ *
+ * Lee `_wcToMlEnCurso` pero no lo toma (no se pone en `true` a sí mismo): si el cron
+ * general YA está en curso al momento de esta llamada, el push puntual se omite (el
+ * cron va a cubrir el mismo diff en su misma corrida, no hace falta duplicar la
+ * llamada a ML). Si el cron arranca DESPUÉS de que este push ya empezó, se acepta la
+ * ventana de carrera — el PUT de stock a ML es idempotente, así que el peor caso es
+ * una llamada de más, no una escritura incorrecta.
+ *
+ * @returns {Promise<{sku, estado: 'sincronizado'|'sin_cambios'|'error'|'omitido', detalle}>}
+ */
+export async function syncSkuPuntual(db, cfg, sku) {
+  const { ml: mlCfg } = cfg;
+
+  if (!sku || typeof sku !== 'string') {
+    return { sku, estado: 'error', detalle: 'SKU inválido' };
+  }
+  if (!mlCfgOk(cfg)) {
+    return { sku, estado: 'omitido', detalle: 'ML no configurado' };
+  }
+  if (_wcToMlEnCurso) {
+    return { sku, estado: 'omitido', detalle: 'Sync general de ML en curso, este SKU se cubre en esa corrida' };
+  }
+
+  const diffs = db.prepare(`
+    ${COMPUTED_STOCK_CTE}
+    SELECT * FROM computed
+    WHERE sku = ?
+      AND (cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml)
+  `).all(sku);
+
+  if (diffs.length === 0) {
+    return { sku, estado: 'sin_cambios', detalle: 'Sin cambios pendientes en ML' };
+  }
+
+  const resultados = [];
+  for (const diff of diffs) {
+    resultados.push(await _empujarClaveMl(db, mlCfg, sku, diff));
+  }
+
+  const errores = resultados.filter(r => r.estado === 'error');
+  if (errores.length > 0) {
+    return { sku, estado: 'error', detalle: errores.map(r => r.detalle).join('; ').slice(0, 400) };
+  }
+  const sincronizadas = resultados.filter(r => r.estado === 'sincronizado').length;
+  if (sincronizadas === 0) {
+    const omitidas = resultados.filter(r => r.estado === 'omitido').length;
+    if (omitidas > 0) {
+      // Al menos una quedó SIN INTENTAR (cooldown 429): no es "confirmado sin diff", es
+      // "no se sabe todavía" — aunque otra clave del mismo SKU sí estuviera sin_cambios
+      // de verdad, mezclarlo bajo 'sin_cambios' mentiría (ese estado significa "sin diff
+      // pendiente en ML", y acá sigue habiendo un diff que ni se tocó).
+      return { sku, estado: 'omitido', detalle: `${omitidas} publicación(es) pospuestas por cooldown de ML, las retoma el cron` };
+    }
+    const detalle = resultados.length > 1
+      ? `${resultados.length} publicaciones sin cambios (${resultados.map(r => r.detalle).join('; ')})`.slice(0, 400)
+      : resultados[0]?.detalle || 'Ninguna publicación activa para este SKU';
+    return { sku, estado: 'sin_cambios', detalle };
+  }
+  return { sku, estado: 'sincronizado', detalle: `${sincronizadas}/${resultados.length} publicaciones actualizadas` };
 }
 
 // ─── syncWcToMl ──────────────────────────────────────────────────────────────
@@ -1998,7 +2260,15 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
       return { item_id: itemId, ok: true, variaciones: variaciones.length };
     } catch (e) {
       const error = e.message;
-      logSync(db, { direccion: 'wc_ml', clave: itemId, estado: 'error', error: `reactivar: ${error}`.slice(0, 500) });
+      // Una fila por variación con la clave CANÓNICA (item_id|variation_id), igual que el
+      // camino de éxito de arriba. Loguear con `itemId` pelado (sin el pipe) era un bug: la
+      // clave no matcheaba ml_stock_estado, así que el filtro de auto-curado del dashboard
+      // ("ya sincronizó después → dejá de mostrarlo") nunca la limpiaba y el error quedaba
+      // pegado para siempre; tampoco joineaba ml_publicaciones_cache, así que aparecía sin
+      // título ni miniatura. 34 publicaciones cayeron en esto entre julio y agosto 2026.
+      for (const v of variaciones) {
+        logSync(db, { direccion: 'wc_ml', clave: v.clave, sku: v.sku, estado: 'error', error: `reactivar: ${error}`.slice(0, 500) });
+      }
       return { item_id: itemId, ok: false, error };
     }
   });
@@ -2560,9 +2830,18 @@ export function syncRouter(db, cfg) {
     const ultimosOk = db.prepare(
       "SELECT direccion, MAX(creado_en) as ultima FROM sync_log WHERE estado='ok' GROUP BY direccion"
     ).all();
-    const errores = db.prepare(
-      "SELECT COUNT(*) as n FROM sync_log WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')"
-    ).get();
+    const tieneClaveSync = db.prepare('PRAGMA table_info(sync_log)').all().some(c => c.name === 'clave');
+    const errores = tieneClaveSync
+      ? db.prepare(`
+          SELECT COUNT(*) as n FROM sync_log s
+          WHERE s.estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
+            AND NOT EXISTS (
+              SELECT 1 FROM sync_log newer
+              WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave
+                AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id))
+            )
+        `).get()
+      : db.prepare("SELECT COUNT(*) as n FROM sync_log WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')").get();
 
     res.json({
       ok: true,
@@ -2635,9 +2914,14 @@ export function syncRouter(db, cfg) {
   router.get('/errores', (req, res) => {
     const rows = db.prepare(`
       SELECT id, direccion, clave, sku, cant_anterior, cant_nueva, estado, intentos, error, creado_en, actualizado_en
-      FROM sync_log
-      WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
-      ORDER BY creado_en DESC LIMIT 200
+      FROM sync_log s
+      WHERE s.estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_log newer
+          WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave
+            AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id))
+        )
+      ORDER BY s.creado_en DESC, s.id DESC LIMIT 200
     `).all();
     res.json({ ok: true, data: rows });
   });
@@ -2711,14 +2995,15 @@ export function syncRouter(db, cfg) {
     ).get().n;
     const requiereAtencion = db.prepare(
       `SELECT COUNT(DISTINCT clave) n FROM sync_log
-       WHERE estado='requiere_atencion_ml' AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM ml_stock_estado)`
+       WHERE estado='requiere_atencion_ml'
+         AND NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = sync_log.clave AND m.actualizado_en >= sync_log.creado_en)`
     ).get().n;
     const erroresReales = db.prepare(
-      `SELECT COUNT(DISTINCT clave) n FROM sync_log
-       WHERE estado IN ('error','agotado') AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM ml_stock_estado)
-         AND clave NOT IN (SELECT clave FROM errores_descartados)`
+      `SELECT COUNT(*) n FROM sync_log s
+       WHERE s.estado IN ('error','agotado')
+         AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave)
+         AND NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en)
+         AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))`
     ).get().n;
     const catMap = { sin_mapeo: sinMapeo, remapeo_requerido: remapeoReq, requiere_atencion_ml: requiereAtencion };
 
@@ -2922,39 +3207,42 @@ export function syncRouter(db, cfg) {
     },
     requiere_atencion_ml: {
       estados: "'requiere_atencion_ml'",
-      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado)",
+      exclude: "NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave IS s.clave AND m.actualizado_en >= s.creado_en) AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))",
     },
     errores: {
       estados: "'error','agotado'",
-      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado) AND s.clave NOT IN (SELECT clave FROM errores_descartados)",
+      exclude: "NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en) AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave) AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))",
     },
   };
 
   router.get('/atencion/:cat', async (req, res) => {
     const def = ATENCION_DEFS[req.params.cat];
     if (!def) return res.status(400).json({ ok: false, error: 'categoría inválida' });
+    const incluyeClaveNula = req.params.cat === 'errores';
+    const filtroClave = incluyeClaveNula ? '' : 'AND s.clave IS NOT NULL';
+    const agrupacion = incluyeClaveNula ? 's.direccion, s.clave' : 's.clave';
     // Total real (sin LIMIT), para no reportar el tope de la query como si fuera el total.
     const totalReal = db.prepare(`
       SELECT COUNT(*) n FROM (
         SELECT s.clave
         FROM sync_log s
         WHERE s.estado IN (${def.estados})
-          AND s.clave IS NOT NULL
+          ${filtroClave}
           AND ${def.exclude}
-        GROUP BY s.clave
+        GROUP BY ${agrupacion}
       )
     `).get().n;
     // GROUP BY clave con MAX(creado_en): SQLite toma sku/error de la fila más reciente.
     const rows = db.prepare(`
-      SELECT s.clave, s.sku, s.error, s.estado, MAX(s.creado_en) AS creado_en,
+      SELECT s.clave, s.sku, s.error, s.estado, s.creado_en,
              p.item_id, p.variation_id, p.titulo, p.variations_texto, p.status AS ml_status, p.thumbnail
       FROM sync_log s
       LEFT JOIN ml_publicaciones_cache p ON p.clave = s.clave
       WHERE s.estado IN (${def.estados})
-        AND s.clave IS NOT NULL
+        ${filtroClave}
         AND ${def.exclude}
-      GROUP BY s.clave
-      ORDER BY creado_en DESC
+      ${incluyeClaveNula ? '' : 'GROUP BY s.clave'}
+      ORDER BY s.creado_en DESC, s.id DESC
       LIMIT 500
     `).all();
 

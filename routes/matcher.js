@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { mlFetch } from '../lib/mlClient.js';
+import { mlFetch, categorizarErrorMl, estadoCooldownMl } from '../lib/mlClient.js';
 import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
 import { aplanarItemMl } from '../lib/modelos/publicacionMl.js';
 import {
@@ -9,17 +9,26 @@ import {
   escribirSkuEnMl, contarPendientes, pushSkusPendientes, getEstadoPush,
 } from '../lib/matcherPush.js';
 import { armarClaveMl } from '../lib/mlUtil.js';
+import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
+import { escanearGuardiaMl } from '../lib/guardiaMl.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
 const MULTIGET_CHUNK = 20;   // ML permite hasta 20 ids por multiget
 const SEARCH_LIMIT = 100;    // máximo por página de items/search
-const CALL_DELAY_MS = 350;   // respeta rate limit (mlFetch ya tiene timeout)
+// MEDIDO el 2026-08-07 en routes/sync.js (RECONCILIACION_PAUSA_CHUNK_MS): ML empieza a
+// devolver 429 tras 2-3 multiget consecutivos con menos de ~1,5s de por medio. 350ms
+// (el valor previo acá) garantizaba 429 en cualquier refresco de más de un puñado de
+// chunks — root cause adicional del incidente 2026-08-27 además de la falta de retry.
+const CALL_DELAY_MS = 1500;
 
-// Estado del refresco de publicaciones (async, no bloqueante). El scan completo tarda
-// 1-3 min y superaba el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de
-// error que el frontend no podía parsear. Ahora el POST arranca el trabajo y devuelve 202
-// al toque; el frontend sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+// Estado del refresco de publicaciones (async, no bloqueante). El scan completo superaba
+// el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de error que el frontend
+// no podía parsear. Ahora el POST arranca el trabajo y devuelve 202 al toque; el frontend
+// sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+// Duración: con CALL_DELAY_MS=1500ms (pacing seguro contra el 429 de ML, incidente
+// 2026-08-27) y ~6840 publicaciones, un refresco completo son ~10-15 min reales (antes,
+// con 350ms sin ese resguardo, "1-3 min" — pero eso mismo garantizaba el 429).
 //
 // Candado COMPARTIDO a nivel de módulo (no solo dentro de matcherRouter): el botón
 // "Actualizar desde ML" de Cobertura (routes/cobertura.js) pega exactamente al mismo
@@ -46,6 +55,10 @@ export function estadoRefrescoMl() {
  * paralelo. Mismo patrón que _wcToMlEnCurso/_reconciliarStockEnCurso/_refrescarCatalogoEnCurso
  * de routes/sync.js. Devuelve `{ ok:false, running:true, error, scope }` si estaba en curso
  * (para responder 409), o `{ ok:true, running:true, scope }` si lo arrancó (para responder 202).
+ *
+ * UM1: además de los endpoints HTTP manuales, server.js lo programa cada 15 minutos para
+ * mantener la Guardia actualizada. El mismo candado y los cooldowns globales aplican a ambos
+ * caminos; un refresco fallido no avanza la frescura ni borra el último resultado válido.
  */
 export function dispararRefrescoMl(db, cfg, scope = 'all') {
   if (_refresco.running) {
@@ -72,12 +85,20 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
         const itemIds = [...new Set(clavesNecesitanAtencion(db).map(c => String(c).split('|')[0]))];
         r = await refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress);
       } else {
-        r = await refrescarPublicacionesMl(db, cfg, onProgress);
+        // Refresco TOTAL con métricas e integración de incidentes (Hito 4)
+        r = await refrescarPublicacionesMlConMetricas(db, cfg, onProgress);
       }
       _refresco.resultado = r;
       _refresco.actualizado_en = now();
+      // UM1: solo genera/actualiza casos locales; nunca escribe seller_sku, stock ni estados
+      // remotos. Si el refresco fue completo, la lectura de Guardia tiene una base confiable.
+      escanearGuardiaMl(db, 'sistema', { lecturaMlConfirmada: true });
     } catch (e) {
       _refresco.error = e.message;
+      try {
+        db.prepare('UPDATE guardia_ml_config SET ultimo_scan_error=?, actualizado_en=? WHERE id=1')
+          .run(e.message.slice(0, 500), now());
+      } catch (_) { /* la lectura de Guardia no debe ocultar el error original del refresco */ }
     } finally {
       _refresco.running = false;
       _refresco.phase = _refresco.error ? 'error' : 'listo';
@@ -91,12 +112,113 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// Backoff acotado a 3 reintentos (mismo patrón que wooFetchConReintento en routes/woo.js).
+const ML_RETRY_BACKOFF_MS = [500, 1500, 4000];
+
+// Excepciones NO transitorias que getAccessToken/mlFetch puede tirar (lib/mlClient.js):
+// credencial mal configurada, refresh_token quemado, cooldown de OAuth activo o
+// presupuesto de /oauth/token agotado. Reintentar estas 4 veces en ~6s no las arregla —
+// en el caso de "cooldown"/"Presupuesto" activa el MISMO martilleo del incidente
+// 2026-08-04 que el cooldown de mlClient.js existe para evitar; en el caso de
+// "Autenticación ML rechazada" son 4 POST de más a /oauth/token con un refresh_token
+// ya quemado. Mismo criterio que el filtro de wooFetchConReintento (routes/woo.js) para
+// el error de configuración "URL debe usar HTTPS".
+const ML_ERRORES_NO_TRANSITORIOS = [
+  'ML_CLIENT_ID no configurado',
+  'Token ML no inicializado',
+  'Autenticación ML rechazada',
+  'cooldown',
+  'Presupuesto de llamadas a /oauth/token agotado',
+  // 4ta pasada del revisor (ALTO 1): sin este patrón, un fallo de ESCRITURA en sqlite tras
+  // rotar el refresh_token (disco lleno, DB en readonly, lock) no matcheaba nada de la lista
+  // de arriba → se reintentaba con el refresh_token YA QUEMADO por ML → el 400 invalid_grant
+  // resultante SÍ matcheaba 'Autenticación ML rechazada' y llegaba al incidente en vez del
+  // mensaje CRÍTICO original, mandando al operador a revisar client_secret cuando el problema
+  // real es la base de datos local.
+  'no se pudo persistir en sqlite',
+];
+
+/**
+ * mlFetch con reintento ante errores TRANSITORIOS (5xx, excepción de red/timeout).
+ * NO reintenta 4xx (401/403/404/429/etc.) ni las excepciones no transitorias de
+ * getAccessToken (credenciales, cooldown de OAuth, presupuesto agotado): esos no se
+ * arreglan reintentando la misma request.
+ *
+ * Motivo (incidente 2026-08-27, mismo patrón que refrescarCatalogo en routes/woo.js):
+ * `ml_publicaciones_cache` quedó con TODAS sus 6840 filas en el mismo timestamp del
+ * 2026-08-19 — el refresco completo (`refrescarPublicacionesMl`) no había terminado con
+ * éxito ni una sola vez en 8 días. La causa: `listarItemIds` pagina por scroll (hasta 200
+ * páginas por status) y el multiget de acá abajo pagina en chunks de 20 (para ~6840
+ * publicaciones, ~342 llamadas secuenciales) — cualquiera de esas llamadas que devuelva un
+ * error transitorio aborta TODO el refresco (fail-closed a propósito: nunca se pisa el
+ * cache con datos parciales). Con cientos de llamadas secuenciales sin ningún reintento, la
+ * probabilidad de que el refresco completo termine bien tiende a cero. Reintentar cada
+ * llamada individual, en vez de todo el refresco, resuelve la enorme mayoría de esos casos
+ * sin tocar la semántica fail-closed (que sigue siendo necesaria y no cambia acá).
+ */
+export async function mlFetchConReintento(db, cfg, method, path, body = null, opts = {}) {
+  let ultimoResp, ultimoError;
+  for (let intento = 0; intento <= ML_RETRY_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(ML_RETRY_BACKOFF_MS[intento - 1]);
+    try {
+      const resp = await mlFetch(db, cfg, method, path, body, opts);
+      if (resp.status === 200) return resp;
+      ultimoResp = resp;
+      // 429 (real o sintético por cooldown/cupo) NO se reintenta acá a propósito, a
+      // diferencia de wooFetchConReintento: mlFetch ya tiene su PROPIO cooldown global
+      // (_cooldownActivo(), lib/mlClient.js) que dura decenas de segundos — un backoff
+      // corto (hasta 4s) no lo va a esquivar, así que reintentar acá solo demoraría sin
+      // chance real de éxito. El caller ya recibe el 429 y decide (abortar fail-closed,
+      // como hace hoy `refrescarPublicacionesMl`/`listarItemIds`).
+      if (resp.status < 500) return resp; // 4xx (incluido 429): no reintentar.
+      // 5xx: sí es transitorio, reintentar.
+    } catch (e) {
+      const msg = e?.message ?? '';
+      if (ML_ERRORES_NO_TRANSITORIOS.some(patron => msg.includes(patron))) throw e;
+      ultimoError = e;
+      // Excepción de red/timeout genuina (u otra no reconocida arriba): reintentar.
+    }
+  }
+  if (ultimoResp) return ultimoResp; // agotados los reintentos: devolver el último status, que el caller ya sabe manejar (aborta fail-closed).
+  throw ultimoError;
+}
+
 function now() {
   return new Date().toISOString();
 }
 
 function mlCfgOk(cfg) {
   return cfg?.clientId && cfg?.clientSecret && cfg?.userId;
+}
+
+// ── Integración con sistema de incidentes y métricas (Hito 4) ───────────────────────────
+
+const INTEGRACION_ML = 'mercadolibre';
+const PROCESO_REFRESCAR_PUBLICACIONES = 'refrescar_publicaciones';
+
+const MENSAJE_HUMANO_POR_CATEGORIA = Object.create(null); // evita herencia indeseada del prototipo de Object (BAJO 8)
+MENSAJE_HUMANO_POR_CATEGORIA['rate_limit'] = 'MercadoLibre está limitando la frecuencia de refrescos de publicaciones (429).';
+MENSAJE_HUMANO_POR_CATEGORIA['auth'] = 'MercadoLibre rechazó las credenciales del refresco — revisar Client ID/Secret.';
+MENSAJE_HUMANO_POR_CATEGORIA['config'] = 'Configuración inválida de MercadoLibre (Client ID/Secret/User ID faltantes) — revisar variables de entorno, no la conexión.';
+MENSAJE_HUMANO_POR_CATEGORIA['transitorio'] = 'MercadoLibre no responde de forma sostenida al refrescar publicaciones.';
+MENSAJE_HUMANO_POR_CATEGORIA['datos'] = 'MercadoLibre rechazó una solicitud puntual al refrescar publicaciones.';
+MENSAJE_HUMANO_POR_CATEGORIA['interno'] = 'Error interno al refrescar publicaciones de MercadoLibre.';
+
+function registrarMetricaCicloMl(db, { iniciadoEn, inicioMonotonico, procesados, fallidos, circuitoAbierto }) {
+  try {
+    const finalizadoEn = new Date().toISOString();
+    // performance.now() (reloj monotónico) para DURACIÓN, nunca Date.now() o timestamps ISO:
+    // un ajuste de reloj del sistema durante el ciclo podía dar duración negativa.
+    const duracionMs = Math.round(performance.now() - inicioMonotonico);
+    db.prepare(`
+      INSERT INTO metricas_ciclo_sync
+        (integracion, proceso, iniciado_en, finalizado_en, duracion_ms, procesados, fallidos, reintentados, circuito_abierto, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(INTEGRACION_ML, PROCESO_REFRESCAR_PUBLICACIONES, iniciadoEn, finalizadoEn, duracionMs, procesados, fallidos, circuitoAbierto ? 1 : 0, finalizadoEn);
+  } catch (e) {
+    // Telemetría: nunca debe tumbar el ciclo real que la dispara.
+    console.error('[ML] error registrando métrica de ciclo (no afecta el refresco):', e.message);
+  }
 }
 
 /**
@@ -115,7 +237,7 @@ async function listarItemIds(db, cfg, status) {
     // manual: true — este refresco lo dispara el usuario a mano desde el botón
     // "Refrescar ML" (POST /refrescar-ml), no un cron. No debe quedar bloqueado
     // por el cooldown global de los crons.
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`,
       null, { manual: true }
@@ -124,7 +246,14 @@ async function listarItemIds(db, cfg, status) {
     // — el llamador reemplaza el cache de forma atómica y una lista incompleta
     // borraría publicaciones válidas del cache.
     if (resp.status !== 200) {
-      throw new Error(`ML scan falló (status ${resp.status}) para status=${status}`);
+      // BLOQUEANTE 1: setear status para que categorizarErrorMl lo reciba
+      const err = new Error(`ML scan falló (status ${resp.status}) para status=${status}`);
+      err.status = resp.status;
+      // Si el status viene marcado como sintético por nuestro propio cooldown, anotarlo
+      if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      // ALTO 2: también propagar flag de "sin cupo" para distinguir 429s sintéticos
+      if (resp.__sinCupo) err.__sinCupo = true;
+      throw err;
     }
     const results = resp.data.results ?? [];
     if (results.length === 0) break;
@@ -142,7 +271,12 @@ async function listarItemIds(db, cfg, status) {
  * Devuelve { total, items, variaciones }.
  */
 export async function refrescarPublicacionesMl(db, cfg, onProgress) {
-  if (!mlCfgOk(cfg)) throw new Error('Configuración de MercadoLibre incompleta');
+  if (!mlCfgOk(cfg)) {
+    // BLOQUEANTE 2: categoría 'config' para que incidente sea 'critico', no 'advertencia'
+    const err = new Error('Configuración de MercadoLibre incompleta');
+    err.categoria = 'config';
+    throw err;
+  }
 
   // 1) Reunir todos los item_id (activos + pausados), sin duplicados
   onProgress?.({ phase: 'listando', done: 0, total: 0 });
@@ -159,7 +293,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   for (let i = 0; i < allIds.length; i += MULTIGET_CHUNK) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`,
       null, { manual: true }
@@ -167,7 +301,14 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
     // borraría publicaciones válidas sin aviso.
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
-      throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      // BLOQUEANTE 1: setear status para que categorizarErrorMl lo reciba
+      const err = new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      err.status = resp.status;
+      // Si el status viene marcado como sintético por nuestro propio cooldown, anotarlo
+      if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      // ALTO 2: también propagar flag de "sin cupo" para distinguir 429s sintéticos
+      if (resp.__sinCupo) err.__sinCupo = true;
+      throw err;
     }
     for (const entry of resp.data) {
       // entry.code !== 200 por-ítem: ítem borrado/no accesible en ML — se excluye
@@ -180,17 +321,119 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   }
 
   // 3) Reemplazar el cache de forma atómica
-  const upsert = prepararUpsertCache(db);
-  const ts = now();
-  const tx = db.transaction((rows) => {
-    // Limpiar publicaciones que ya no están activas/pausadas
-    db.prepare('DELETE FROM ml_publicaciones_cache').run();
-    for (const f of rows) upsert.run({ ...f, actualizado_en: ts });
-  });
-  tx(filas);
+  // ALTO 4: si filas es vacío, NO borrar el cache existente (mismo criterio que Woo)
+  // — una lista 0 es ambigua (podría ser legítimo o degradación) y no debe pisar datos válidos.
+  if (filas.length > 0) {
+    const upsert = prepararUpsertCache(db);
+    const ts = now();
+    const tx = db.transaction((rows) => {
+      // Limpiar publicaciones que ya no están activas/pausadas
+      db.prepare('DELETE FROM ml_publicaciones_cache').run();
+      for (const f of rows) upsert.run({ ...f, actualizado_en: ts });
+    });
+    tx(filas);
+  }
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
   return { total: filas.length, items: allIds.length, variaciones };
+}
+
+/**
+ * Wrapper de `refrescarPublicacionesMl` que registra métricas, conecta el cooldown al
+ * sistema de incidentes, y confirma ciclo sano. Patrón análogo al de `refrescarCatalogo`
+ * en routes/woo.js (Hito 3).
+ *
+ * Sobre "0 publicaciones": a diferencia de Woo (donde un catálogo vacío es SIEMPRE sospechoso
+ * porque la tienda tiene miles de productos), ML puede devolver legítimamente 0 si:
+ * - El vendedor pausó todos los items (1 solo status = 'paused', 0 'active')
+ * - El seller acaba de empezar (aún sin publicaciones)
+ *
+ * Sin embargo, un REFRESCO COMPLETO que devuelve 0 items cuando el anterior devolvió miles
+ * ES sospechoso (la API degradada en silencio o respondiendo 200 pero vacío). Como no
+ * tenemos la historia entre refrescos aquí, usamos un criterio conservador: 0 publicaciones
+ * en refresco total es AMBIGUO — no se confirma ciclo sano (por si acaso es degradación
+ * silenciosa), pero tampoco se abre incidente crítico (podría ser legítimo). Se registra
+ * como `fallidos=0` (no es un error HTTP) y se deja la investigación para el operador si
+ * ve que el cache quedó vacío de repente tras días con miles de items.
+ */
+export async function refrescarPublicacionesMlConMetricas(db, cfg, onProgress) {
+  const iniciadoEn = new Date().toISOString();
+  const inicioMonotonico = performance.now();
+  try {
+    const resultado = await refrescarPublicacionesMl(db, cfg, onProgress);
+    const totalPublicaciones = resultado?.total ?? 0;
+
+    // Registrar métrica exitosa
+    registrarMetricaCicloMl(db, {
+      iniciadoEn, inicioMonotonico,
+      procesados: totalPublicaciones,
+      fallidos: 0,
+      circuitoAbierto: false,
+    });
+
+    // Criterio de "0 sospechoso" para ML: NO confirmamos ciclo sano si vino 0,
+    // porque es ambiguo (podría ser degradación silenciosa). Confirmamos solo
+    // si trajo publicaciones de verdad (señal inequívoca de que ML respondió con datos).
+    if (totalPublicaciones > 0) {
+      confirmarCicloSano(db, { integracion: INTEGRACION_ML, proceso: PROCESO_REFRESCAR_PUBLICACIONES });
+    } else {
+      // MEDIO 6: 0 publicaciones es legítimo en ML (vendedor nuevo o pausó todo), pero es
+      // ambiguo. No es error, pero sí es info que merece visibilidad sin ser crítica.
+      // La dedupe se autoresuelve: en el próximo ciclo con datos reales, confirmarCicloSano
+      // resuelve todos los incidentes activos del proceso.
+      // ALTO 4: subir severidad a 'advertencia' ahora que evitamos pisar el cache
+      // (antes era 'info' porque era ambiguo; ahora hay un daño real que se previene).
+      abrirOActualizarIncidente(db, {
+        integracion: INTEGRACION_ML,
+        proceso: PROCESO_REFRESCAR_PUBLICACIONES,
+        tipoError: 'publicaciones_vacias',
+        severidad: 'advertencia',
+        mensajeTecnico: 'Refresco devolvió 0 publicaciones',
+        mensajeHumano: 'MercadoLibre devolvió 0 publicaciones — podría ser legítimo (vendedor nuevo, todo pausado) o degradación silenciosa.',
+        contexto: { circuitoAbierto: false },
+      });
+    }
+
+    return resultado;
+  } catch (e) {
+    // MEDIO 7: `categorizarErrorMl` ya respeta `e.categoria` si está seteada, y clasifica
+    // TypeError/RangeError/SqliteError como 'interno'. Llamar directo sin denylist duplicada.
+    const categoria = categorizarErrorMl(e);
+
+    // ALTO 3: consultar cooldown ANTES de registrar métrica para que ambas usen el mismo
+    // estado (la métrica y el incidente deben ser consistentes en circuitoAbierto)
+    const cd = estadoCooldownMl();
+
+    // BAJO 8: optional chaining para evitar excepción si e es null/undefined
+    registrarMetricaCicloMl(db, {
+      iniciadoEn, inicioMonotonico,
+      procesados: 0,
+      fallidos: 1,
+      circuitoAbierto: cd?.activo ?? !!e?.circuitoAbierto,
+    });
+
+    // MEDIO 5: si es un 429 sintético (por cooldown propio o cupo agotado), usar un
+    // tipoError distinto para no pisar incidentes de 429s reales. La dedupe es por
+    // integracion|proceso|tipo_error, así que esto abre un incidente separado.
+    let tipoError = categoria;
+    if (categoria === 'rate_limit' && (e?.__cooldownSintetico || e?.__sinCupo)) {
+      tipoError = 'rate_limit_propio';
+    }
+
+    // BAJO 8: optional chaining en accesos a propiedades de e
+    abrirOActualizarIncidente(db, {
+      integracion: INTEGRACION_ML,
+      proceso: PROCESO_REFRESCAR_PUBLICACIONES,
+      tipoError,
+      severidad: (categoria === 'auth' || categoria === 'config') ? 'critico' : (categoria === 'datos' ? 'info' : 'advertencia'),
+      mensajeTecnico: e?.message ?? 'Error desconocido',
+      mensajeHumano: MENSAJE_HUMANO_POR_CATEGORIA[categoria] ?? MENSAJE_HUMANO_POR_CATEGORIA.interno,
+      contexto: { circuitoAbierto: cd?.activo ?? !!e?.circuitoAbierto, esErrorSinteticoCooldown: !!e?.__cooldownSintetico, esErrorSinCupo: !!e?.__sinCupo },
+    });
+
+    // Re-lanzar: el comportamiento ante el caller (cron/endpoint) no cambia — solo se agrega telemetría.
+    throw e;
+  }
 }
 
 /** Statement de upsert al cache de publicaciones (compartido entre refresco total y acotado). */
@@ -214,21 +457,41 @@ function prepararUpsertCache(db) {
  * scan del catálogo completo) y hace upsert. A diferencia del refresco total, NUNCA
  * borra el resto del cache — un subconjunto no puede saber si las demás publicaciones
  * siguen vigentes. Devuelve { total, items, variaciones }.
+ *
+ * BAJO 9: no se envuelve con métricas+incidentes porque es el ciclo parcial bajo demanda
+ * (disparado desde Cobertura con ?scope=atencion en POST /refrescar-ml), no el periódico.
+ * El refresco total usa `refrescarPublicacionesMlConMetricas` que sí registra telemetría.
  */
 export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress) {
-  if (!mlCfgOk(cfg)) throw new Error('Configuración de MercadoLibre incompleta');
+  if (!mlCfgOk(cfg)) {
+    // 4ta pasada del revisor (MEDIO 2): mismo estilo que el camino total (BLOQUEANTE 2) —
+    // hoy este ciclo no está envuelto en métricas+incidentes (ver BAJO 9 arriba), pero dejar
+    // el throw sin categoría es la trampa que ya se pisó 3 veces: el día que alguien lo
+    // envuelva, un problema de config abriría incidente 'transitorio'/'advertencia' en vez
+    // de 'config'/'critico'.
+    const err = new Error('Configuración de MercadoLibre incompleta');
+    err.categoria = 'config';
+    throw err;
+  }
   const ids = [...new Set((itemIds || []).map(String).filter(Boolean))];
   if (ids.length === 0) return { total: 0, items: 0, variaciones: 0 };
 
   const filas = [];
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
-      throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      // Mismo criterio que BLOQUEANTE 1 en el camino total: .status explícito para que
+      // categorizarErrorMl no caiga a 'transitorio' por default, más los flags sintéticos
+      // para distinguir un freno propio de un rechazo real de ML.
+      const err = new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      err.status = resp.status;
+      if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      if (resp.__sinCupo) err.__sinCupo = true;
+      throw err;
     }
     for (const entry of resp.data) {
       if (entry.code !== 200 || !entry.body) continue;
