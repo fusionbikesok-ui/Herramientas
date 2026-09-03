@@ -108,6 +108,10 @@ async function main() {
     const trasRecarga = await login.evaluate(async () => (await fetch('/api/preparacion/pendientes')).json());
     if (!trasRecarga.ok || !trasRecarga.data.some((pedido) => pedido.numero_pedido === '900001')) throw new Error('la tarea no se recuperó después de recargar');
     console.log('E1 recarga con tarea persistida: OK');
+    await context.clearCookies();
+    await login.goto(`http://127.0.0.1:${port}/preparacion/`, { waitUntil: 'domcontentloaded' });
+    if (!login.url().includes('/login/') || !login.url().includes('next=')) throw new Error(`la sesión vencida no conservó el retorno: ${login.url()}`);
+    console.log('E1 sesión vencida redirige a login con retorno: OK');
     await login.close();
     console.log('E1 HTTP protegido sin sesión: 401 OK');
   } finally {
