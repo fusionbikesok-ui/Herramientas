@@ -211,6 +211,16 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(res.body.publicaciones[0].senales).toEqual([]);
   });
 
+  it('expone como snapshot la decisión vigente aunque el seller_sku publicado todavía sea viejo', async () => {
+    sembrarVinculo({ sku: 'FB-NUEVO', sellerSku: 'FB-VIEJO' });
+    const res = await request(app).get('/api/cobertura/vinculos/FB-NUEVO');
+    expect(res.status).toBe(200);
+    expect(res.body.publicaciones[0]).toMatchObject({
+      decision_sku: 'FB-NUEVO',
+      seller_sku: 'FB-VIEJO',
+    });
+  });
+
   it('precio_lista y precio_contado se calculan sobre regular_price (LISTA), no sobre precio (vigente, en oferta)', async () => {
     // regular_price 1000 (lista), precio 800 (vigente, en oferta): precio_lista tiene que
     // mostrar la lista real (1000, no 800 — sería contradictorio con "Contado" calculado
@@ -336,7 +346,7 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     await request(app).post('/api/cobertura/vinculos/revisado')
       .send({ clave: 'MLA1|10', senal: 'seller_sku', valor: senal.valor });
 
-    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-9999' });
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'FB-9999', expected_sku: 'FB-6411' });
     expect(res.status).toBe(200);
     expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-9999');
     expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
@@ -387,7 +397,7 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
 
   it('reasignar con SKU inexistente responde 400 y no toca nada', async () => {
     sembrarVinculo();
-    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'NO-EXISTE' });
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'NO-EXISTE', expected_sku: 'FB-6411' });
     expect(res.status).toBe(400);
     expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-6411');
   });
@@ -397,7 +407,7 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     // borró de ML entre que se renderizó la pantalla y el click).
     db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
       VALUES (1, 'Producto', 'FB-1', 'simple', 2, 100000, '2026-07-30T00:00:00Z')`).run();
-    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA-NO-EXISTE|', sku: 'FB-1' });
+    const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA-NO-EXISTE|', sku: 'FB-1', expected_sku: null });
     expect(res.status).toBe(400);
     expect(db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE clave='MLA-NO-EXISTE|'").get().n).toBe(0);
   });
