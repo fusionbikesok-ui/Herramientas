@@ -1828,6 +1828,7 @@ export function preparacionRouter(db, cfg) {
     if (!trackingNuevo) return res.status(400).json({ ok: false, error: 'tracking requerido' });
     if (!req.user?.is_admin) return res.status(403).json({ ok: false, error: 'corregir tracking requiere administrador', code: 'FORBIDDEN' });
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+    if (!prepExistente) return res.status(409).json({ ok: false, error: 'la orden no tiene preparación local reconciliable', code: 'PREPARACION_REQUERIDA' });
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
@@ -1852,7 +1853,12 @@ export function preparacionRouter(db, cfg) {
       // La corrección queda marcada antes del efecto remoto; si Fusion cae después
       // del PUT, el proceso de reconciliación puede identificarla sin confiar en el
       // espejo anterior.
-      if (prepExistente) db.prepare('UPDATE preparaciones SET tracking_correccion_pendiente=? WHERE clave=?').run(trackingNuevo, `web:${wcOrderId}`);
+      const claimCorreccion = db.prepare(`UPDATE preparaciones
+        SET tracking_correccion_pendiente=?
+        WHERE clave=? AND (tracking_correccion_pendiente IS NULL OR tracking_correccion_pendiente='' OR tracking_correccion_pendiente=?)`).run(
+        trackingNuevo, `web:${wcOrderId}`, trackingNuevo,
+      );
+      if (!claimCorreccion.changes) return res.status(409).json({ ok: false, error: 'ya existe otra corrección de tracking pendiente', code: 'CORRECCION_CONCURRENTE' });
       await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
         meta_data: [{ id: metaExistente.id, key: TRACKING_META_KEY, value: trackingNuevo }],
       });

@@ -1369,7 +1369,7 @@ describe('preparacion flujo', () => {
     expect(prep.tracking).toBe('AND999');
   });
 
-  it('POST /corregir-tracking: si no existe fila en preparaciones, igual corrige el tracking (evento se saltea fail-open)', async () => {
+  it('POST /corregir-tracking: si no existe fila en preparaciones, rechaza para conservar reconciliación durable', async () => {
     wooFetch
       .mockResolvedValueOnce({ data: {
         status: 'completed',
@@ -1377,8 +1377,9 @@ describe('preparacion flujo', () => {
       }})
       .mockResolvedValueOnce({ data: {} });
     const r = await request(app).post('/api/preparacion/seguimientos/906/corregir-tracking').send({ tracking: 'AND222' });
-    expect(r.status).toBe(200);
-    expect(r.body.ok).toBe(true);
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('PREPARACION_REQUERIDA');
+    expect(wooFetch).toHaveBeenCalledTimes(0);
   });
 
   it('GET /:id devuelve detalle con items, fotos y requisitos', async () => {
