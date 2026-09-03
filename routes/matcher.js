@@ -191,6 +191,20 @@ function mlCfgOk(cfg) {
   return cfg?.clientId && cfg?.clientSecret && cfg?.userId;
 }
 
+/**
+ * Normaliza cfg para aceptar tanto la forma directa (usado localmente) como
+ * la forma anidada dentro de syncCfg (usado por crons que reciben { woo, ml }).
+ * Devuelve siempre un objeto con propiedades directas: clientId, clientSecret, userId.
+ * No imprime secretos.
+ */
+function normalizarMlCfg(cfg) {
+  if (!cfg) return cfg;
+  // Si cfg.ml existe, es la forma { ml: { clientId, clientSecret, userId } } — usa el anidado
+  if (cfg.ml && typeof cfg.ml === 'object') return cfg.ml;
+  // Si no, es la forma directa { clientId, clientSecret, userId } — deja como está
+  return cfg;
+}
+
 // ── Integración con sistema de incidentes y métricas (Hito 4) ───────────────────────────
 
 const INTEGRACION_ML = 'mercadolibre';
@@ -271,6 +285,7 @@ async function listarItemIds(db, cfg, status) {
  * Devuelve { total, items, variaciones }.
  */
 export async function refrescarPublicacionesMl(db, cfg, onProgress) {
+  cfg = normalizarMlCfg(cfg);
   if (!mlCfgOk(cfg)) {
     // BLOQUEANTE 2: categoría 'config' para que incidente sea 'critico', no 'advertencia'
     const err = new Error('Configuración de MercadoLibre incompleta');
@@ -463,6 +478,7 @@ function prepararUpsertCache(db) {
  * El refresco total usa `refrescarPublicacionesMlConMetricas` que sí registra telemetría.
  */
 export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress) {
+  cfg = normalizarMlCfg(cfg);
   if (!mlCfgOk(cfg)) {
     // 4ta pasada del revisor (MEDIO 2): mismo estilo que el camino total (BLOQUEANTE 2) —
     // hoy este ciclo no está envuelto en métricas+incidentes (ver BAJO 9 arriba), pero dejar
