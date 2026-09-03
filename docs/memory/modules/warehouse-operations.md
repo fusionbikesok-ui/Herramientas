@@ -60,6 +60,11 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
 
 ## Recepción, devoluciones y conteos: objetivo E14–E18
 
+- E18 fase 1 ya está integrada: `/api/stock-exceptions` y `lib/stockExceptions.js` persisten
+  incidentes físicos, tareas, versiones, `operation_id` y auditoría append-only mediante la
+  migración `migrations/066_stock_exceptions.sql`. E18 sigue en desarrollo: devolución completa,
+  daño con sync de Woo, proveedor y descarte todavía no están implementados.
+
 - La recepción se procesa por línea; documentos pueden llegar antes, durante o después de la
   mercadería.
 - Cada línea confirma identidad, cantidad y condición visible, con modo directo, acumulado o unitario.
