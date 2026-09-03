@@ -30,6 +30,11 @@ try {
   db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,espejo_ml,fecha,fecha_despacho,fecha_despacho_limite) VALUES (?,?,?,?,?,?,?,?)').run('ml:demo-urgent', JSON.stringify([{ sku:'SKU-URGENTE', cantidad:1 }]), 'pendiente', 'ml', 1, now.toISOString(), '2026-09-03', '2026-09-03T12:30:00.000Z');
   const urgent = sincronizarMiniOlas(db, now);
   if (urgent.agregados !== 1 || !db.prepare("SELECT 1 FROM pick_wave_items WHERE pick_wave_id=? AND pedido_clave='ml:demo-urgent'").get(wave)) throw new Error('urgent ML was not incorporated into active wave');
+  db.prepare('INSERT INTO pedidos_cache (clave,items_json,estado_envio,canal,fecha) VALUES (?,?,?,?,?)').run('web:demo-normal', JSON.stringify([{ sku:'SKU-NORMAL', cantidad:1 }]), 'pendiente', 'web', now.toISOString());
+  sincronizarMiniOlas(db, now);
+  const normalWave = db.prepare("SELECT id FROM pick_waves WHERE operational_day_id=? AND tipo='mini' AND id<>? AND estado_operativo='disponible'").get(day, wave);
+  if (!normalWave || !db.prepare("SELECT 1 FROM pick_wave_items WHERE pick_wave_id=? AND pedido_clave='web:demo-normal'").get(normalWave.id)) throw new Error('normal order was not isolated in a mini-wave');
+  db.prepare("UPDATE pick_waves SET estado='completada', estado_operativo='cerrada' WHERE id=?").run(normalWave.id);
   if (!pasarAMesa(db, wave, 'demo', { operationId:'demo-table' }, now).ok) throw new Error('table failed');
   const unknownCode = asignarUnidadMesa(db, wave, { pedidoClave:'web:demo-1', sku:'CODIGO-DESCONOCIDO', cantidad:1 }, 'demo', { operationId:'demo-unknown-code', expectedVersion:db.prepare('SELECT expected_version FROM pick_waves WHERE id=?').get(wave).expected_version }, now);
   if (unknownCode.ok || unknownCode.code !== 'PRODUCT_CODE_UNKNOWN') throw new Error('unknown product code was not blocked');
@@ -71,7 +76,7 @@ try {
   const pendingReturn = db.prepare("SELECT 1 FROM pick_wave_returns WHERE pick_wave_id=? AND estado='pendiente'").get(wave3);
   if (!externalChange.ok || changedItem.estado_operativo !== 'bloqueado_cambio_externo' || !pendingReturn) throw new Error('external change was not blocked with a return');
   const eventCount = db.prepare('SELECT COUNT(*) AS n FROM operational_day_events WHERE pick_wave_id=?').get(wave).n;
-  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
+  console.log(JSON.stringify({ ok:true, demo:'E1', jornada_id:day, ola_id:wave, estado:closed.ola.estado_operativo, pausa_reanudada:true, mini_ola_normal_separada:true, codigo_desconocido_bloqueado:true, cambio_externo_bloqueado:true, retorno_externo_pendiente:true, replay_cierre:true, ayuda_recibida:true, faltante_resuelto:true, replay_faltante:true, eventos:eventCount }));
 } finally {
   db.close();
   fs.rmSync(dir, { recursive:true, force:true });
