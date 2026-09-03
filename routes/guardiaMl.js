@@ -51,7 +51,7 @@ export function guardiaMlRouter(db, cfg) {
     const c=db.prepare("SELECT * FROM guardia_ml_casos WHERE id=? AND estado!='resuelto'").get(Number(req.params.id));
     if(!c)return res.status(404).json({ok:false,error:'caso no encontrado'});
     if((!c.responsable || c.responsable!==actor(req)) && !req.user?.is_admin)return res.status(409).json({ok:false,error:'Tomá el caso antes de ejecutar la acción; si pertenece a otro operador, solicitá un relevo explícito'});
-    const sku=String(req.body?.sku||'').trim(); const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? LIMIT 1').get(sku);
+    const sku=String(req.body?.sku||'').trim(); const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
     if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
     const yaCompartido=db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE sku=? AND accion IN ('asignar','confirmar') AND clave<>?").get(sku,c.clave).n;
     if(yaCompartido>0 && !db.prepare('SELECT 1 FROM guardia_ml_stock_compartido WHERE sku=?').get(sku)) {

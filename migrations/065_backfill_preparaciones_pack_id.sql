@@ -1,5 +1,5 @@
 -- Completa pack_id en preparaciones ya existentes usando el snapshot durable de
--- pedidos_cache. 019 y 020 deben haberse aplicado antes: esta migracion no agrega ni
+-- pedidos_cache. 062 y 063 deben haberse aplicado antes: esta migracion no agrega ni
 -- recrea columnas y no altera estado, items, fechas ni autoria de una preparacion.
 --
 -- COALESCE/NULLIF evita borrar un pack ya conocido cuando la cache vieja no tenia dato.

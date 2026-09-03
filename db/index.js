@@ -474,6 +474,25 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('guardia_ml_claim_061')").run();
     })();
   }
+  // Migraciones históricas de preparación usan una secuencia propia (062–065).
+  // 019–022 quedan reservadas para incidentes, métricas y dispositivos; no se
+  // reutilizan números aunque la base nueva ya cree estas columnas.
+  const preparacionPackMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_pack_062_065'").get();
+  if (!preparacionPackMigration) {
+    db.transaction(() => {
+      const existe = (tabla) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(tabla);
+      const columnas = (tabla) => new Set(db.prepare(`PRAGMA table_info(${tabla})`).all().map((c) => c.name));
+      if (existe('pedidos_cache') && existe('preparaciones')) {
+        const pedidos = columnas('pedidos_cache');
+        const preparaciones = columnas('preparaciones');
+        if (!pedidos.has('pack_id')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '062_preparacion_pedidos_cache_pack_id.sql'), 'utf8'));
+        if (!preparaciones.has('pack_id')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '063_preparacion_pack_id.sql'), 'utf8'));
+        if (!preparaciones.has('woo_paso1_incierto')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '064_seguimiento_paso1_incierto.sql'), 'utf8'));
+        db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '065_backfill_preparaciones_pack_id.sql'), 'utf8'));
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_pack_062_065')").run();
+    })();
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

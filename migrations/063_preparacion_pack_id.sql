@@ -6,8 +6,8 @@
 --      PRAGMA table_info(preparaciones);
 -- 2. Solo si falta pack_id, aplicar este archivo ANTES de arrancar el codigo nuevo.
 -- 3. Si ya existe porque staging ejecuto una version anterior que la agregaba al arrancar,
---    NO ejecutar el ALTER: registrar 020 como ya aplicada en el procedimiento operativo.
+--    NO ejecutar el ALTER: registrar 063 como ya aplicada en el procedimiento operativo.
 --    SQLite no soporta ADD COLUMN IF NOT EXISTS y repetirla abortaria el script.
 --
--- Las bases nuevas no ejecutan 020: ensureTables incluye pack_id en el CREATE TABLE.
+-- Las bases nuevas no ejecutan 063: ensureTables incluye pack_id en el CREATE TABLE.
 ALTER TABLE preparaciones ADD COLUMN pack_id TEXT;

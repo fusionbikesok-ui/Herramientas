@@ -9,5 +9,5 @@
 --      PRAGMA table_info(preparaciones);
 -- 2. Solo si falta woo_paso1_incierto, aplicar este archivo antes de arrancar el codigo.
 --
--- Las bases nuevas no ejecutan 021: ensureTables incluye la columna en el alta idempotente.
+-- Las bases nuevas no ejecutan 064: ensureTables incluye la columna en el alta idempotente.
 ALTER TABLE preparaciones ADD COLUMN woo_paso1_incierto INTEGER NOT NULL DEFAULT 0;
