@@ -68,7 +68,9 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
   agrega una cola durable para deltas comerciales y `procesarWooOutbox` implementa claim,
   reintento y confirmación/fallo con adaptador inyectable. `crearSenderWooExcepciones` usa el
   cliente Woo existente con stock live y delta, actualizando cache solo tras PUT exitoso; faltan
-  reconciliación explícita, proveedor y descarte, por lo que E18 continúa en desarrollo.
+  reconciliación explícita. `migrations/069_supplier_returns_disposals.sql` y su API registran
+  devoluciones a proveedor y descartes irreversibles con idempotencia/auditoría; falta completar
+  estados de seguimiento, UI y E2E, por lo que E18 continúa en desarrollo.
 
 - La recepción se procesa por línea; documentos pueden llegar antes, durante o después de la
   mercadería.
