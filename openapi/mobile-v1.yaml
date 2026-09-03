@@ -282,6 +282,66 @@ paths:
         '500':
           $ref: '#/components/responses/ServerError'
 
+  /workshop:
+    get:
+      tags: [workshop]
+      summary: Lista trabajos de taller para operación de piso
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Trabajos disponibles }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /workshop/{id}/parts:
+    get:
+      tags: [workshop]
+      summary: Lista repuestos del trabajo
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        '200': { description: Repuestos }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /workshop/{id}/state:
+    post:
+      tags: [workshop]
+      summary: Cambia el estado de un trabajo con control de versión
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkshopStateRequest' } } } }
+      responses:
+        '200': { description: Estado actualizado }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /workshop/{id}/diagnostic:
+    post:
+      tags: [workshop]
+      summary: Guarda diagnóstico y presupuesto
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkshopDiagnosticRequest' } } } }
+      responses:
+        '200': { description: Diagnóstico actualizado }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /workshop/{id}/evidence:
+    post:
+      tags: [workshop]
+      summary: Adjunta evidencia fotográfica del trabajo
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [archivo, operation_id]
+              properties:
+                archivo: { type: string, format: binary }
+                operation_id: { type: string }
+                device_id: { type: string }
+                captured_at: { type: string, format: date-time }
+                required_profile_version: { type: string }
+      responses:
+        '201': { description: Evidencia registrada }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /stock/adjustments:
     post:
       tags: [stock]
@@ -1146,6 +1206,36 @@ components:
             message: { type: string }
             current_version: { type: integer, minimum: 1, nullable: true }
             details: { type: object, additionalProperties: true, nullable: true }
+
+    WorkshopOperation:
+      type: object
+      required: [operation_id, device_id, base_version, captured_at]
+      properties:
+        operation_id: { type: string }
+        device_id: { type: string }
+        base_version: { type: integer, minimum: 1 }
+        captured_at: { type: string, format: date-time }
+        lease_until: { type: string, format: date-time, nullable: true }
+
+    WorkshopStateRequest:
+      allOf:
+        - $ref: '#/components/schemas/WorkshopOperation'
+        - type: object
+          required: [estado, nota]
+          properties:
+            estado: { type: string, enum: [pendiente, en_trabajo, listo, cerrado, bloqueado] }
+            expected_version: { type: integer, minimum: 1 }
+            nota: { type: string, minLength: 1 }
+
+    WorkshopDiagnosticRequest:
+      allOf:
+        - $ref: '#/components/schemas/WorkshopOperation'
+        - type: object
+          required: [diagnostico]
+          properties:
+            diagnostico: { type: string, minLength: 1 }
+            presupuesto: { type: number, nullable: true, minimum: 0 }
+            expected_version: { type: integer, minimum: 1 }
 
     Ok:
       type: object
