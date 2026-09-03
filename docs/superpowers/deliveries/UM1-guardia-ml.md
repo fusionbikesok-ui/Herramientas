@@ -42,11 +42,13 @@ Evitar que una variación activa sin SKU exacto venda y llegue a preparación si
 - Auditoría local del matcher ejecutada: detectó 4 decisiones con SKU inexistente, 82 publicaciones activas sin `seller_sku`, 20 saldos negativos y 511 SKUs en múltiples publicaciones; quedan pendientes de corrección humana.
 - Demo aislado: `npm run um1:demo` — `ok:true`; caso descubierto, excepción vencida reabierta, pedido liberado y 3 eventos auditados.
 - E2E browser aislado: `for width in 390 768 1440; do UM1_VIEWPORT_WIDTH=$width node scripts/um1-browser-smoke.mjs; done` — `ok:true` en los tres tamaños; login, cola de Guardia, pedido retenido e historial consultados.
+- La pantalla de detalle ahora muestra un comparador ML ↔ Woo: imagen, variante, SKU, stock y enlace de la publicación; búsqueda de candidatos Woo únicos con nombre, imagen, SKU y stock. `GET /casos/:id/opciones` mantiene la selección separada de la escritura remota.
+- E2E responsive ampliado: `npm run e2e:um1:responsive` — `ok:true` en 390, 768 y 1440; verificó comparación visible y una opción Woo seleccionable con datos sintéticos aislados.
 - Comando equivalente registrado en el proyecto: `npm run e2e:um1:responsive`.
 
 ## Próxima acción reproducible
 
-Completar la vista de lectura de excepciones, stock compartido y retenciones, agregar pruebas de API/cola y ejecutar el escaneo solo en entorno aislado para la revisión del Administrador designado.
+Completar la vista de lectura de excepciones, stock compartido y retenciones, y ejecutar el escaneo solo en entorno aislado para la revisión del Administrador designado. La vinculación permanece bloqueada mientras el modo sea `lectura`.
 
 ## Riesgos observados en la auditoría local
 

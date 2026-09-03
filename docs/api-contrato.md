@@ -3226,6 +3226,9 @@ completa de publicaciones y registra casos locales idempotentes.
 
 - `GET /api/guardia-ml/estado` → estado de frescura, modo, cantidad urgente, `degradado` y `sano`.
 - `GET /api/guardia-ml/casos?urgentes=1` → casos abiertos ordenados por severidad y exposición.
+- `GET /api/guardia-ml/casos/:id/opciones?q=...` → devuelve la publicación ML completa
+  (imagen, variante, SKU, stock y enlace) y hasta 30 productos Woo con SKU único,
+  nombre, imagen, stock y datos de identificación para la comparación manual.
 - `GET /api/guardia-ml/casos/:id/eventos` → historial append-only del caso.
 - `POST /api/guardia-ml/escanear` → fuerza lectura local de cobertura (Admin).
 - `POST /api/guardia-ml/habilitar-acciones` → habilita el modo posterior a la validación (Admin designado).

@@ -1099,7 +1099,7 @@ La unidad de cobertura es siempre `publicación + variación`. Una decisión his
 
 ### Tres superficies claras
 
-1. **Guardia ML:** cola priorizada y detalle con título/variante, stock ML, ventas ML de 30 días, pedido/plazo si existe, dueño, motivo, acción requerida y enlaces ML/Woo. Un pedido retenido encabeza por fecha máxima de despacho.
+1. **Guardia ML:** cola priorizada y detalle con título/variante, stock ML, ventas ML de 30 días, pedido/plazo si existe, dueño, motivo, acción requerida y enlaces ML/Woo. Al tomar un caso se abre un comparador: publicación ML con foto y datos a la izquierda; búsqueda de productos Woo con foto, SKU, stock y nombre a la derecha. Un pedido retenido encabeza por fecha máxima de despacho.
 2. **Corrección:** agrupada por publicación, con vínculo separado por variación. Ofrece búsqueda y sugerencias explicables; solo `seller_sku` idéntico y existente se auto-confirma auditadamente.
 3. **Consulta:** conserva historial y Matcher legacy con aviso de reemplazo. Nunca vuelve a ocultar cobertura por “marcar correcta”.
 

@@ -14,6 +14,33 @@ export function guardiaMlRouter(db, cfg) {
   const router = express.Router();
   router.get('/estado', (_req, res) => res.json({ ok:true, data:estadoGuardiaMl(db) }));
   router.get('/casos', (req, res) => res.json({ ok:true, modo:estadoGuardiaMl(db).modo, data:listarGuardiaMl(db, { soloUrgentes:req.query.urgentes==='1' }) }));
+  router.get('/casos/:id/opciones', (req, res) => {
+    const caso = db.prepare(`SELECT g.id,g.clave,p.item_id,p.variation_id,p.titulo,p.variations_texto,p.seller_sku,
+      p.available_quantity,p.status,p.thumbnail,p.permalink
+      FROM guardia_ml_casos g JOIN ml_publicaciones_cache p ON p.clave=g.clave
+      WHERE g.id=?`).get(Number(req.params.id));
+    if (!caso) return res.status(404).json({ ok:false, error:'caso no encontrado' });
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const tokens = (q || caso.titulo || '').split(/[^a-z0-9áéíóúüñ]+/i)
+      .map((token) => token.trim()).filter((token) => token.length >= 3).slice(0, 3);
+    const condiciones = [];
+    const params = [];
+    if (q) {
+      condiciones.push('(LOWER(COALESCE(c.sku,\'\')) LIKE ? OR LOWER(c.nombre) LIKE ?)');
+      params.push(`%${q}%`, `%${q}%`);
+    } else if (tokens.length) {
+      for (const token of tokens) { condiciones.push('LOWER(c.nombre) LIKE ?'); params.push(`%${token}%`); }
+    }
+    const filtro = condiciones.length ? `AND ${condiciones.join(' AND ')}` : '';
+    const opciones = db.prepare(`SELECT c.id_woo,c.sku,c.nombre,c.stock,c.img,c.marca,c.gtin,
+      CASE WHEN LOWER(COALESCE(c.sku,''))=LOWER(?) THEN 0 ELSE 1 END AS prioridad
+      FROM catalogo_cache c
+      WHERE trim(COALESCE(c.sku,''))<>''
+        AND (SELECT COUNT(*) FROM catalogo_cache c2 WHERE c2.sku=c.sku)=1
+        ${filtro}
+      ORDER BY prioridad ASC, c.nombre COLLATE NOCASE ASC LIMIT 30`).all(caso.seller_sku || '', ...params);
+    res.json({ ok:true, data:{ publicacion:caso, opciones, busqueda: q || tokens.join(' ') } });
+  });
   router.get('/casos/:id/eventos', (req, res) => {
     const caso=db.prepare('SELECT id FROM guardia_ml_casos WHERE id=?').get(Number(req.params.id));
     if(!caso)return res.status(404).json({ok:false,error:'caso no encontrado'});
