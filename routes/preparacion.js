@@ -802,8 +802,17 @@ export async function reintentarColgadosTracking(db, cfg) {
       // Preparaciones legacy pueden no tener tracking local; un estado terminal de Woo
       // alcanza para recuperar el flag. En preparaciones modernas exigimos coincidencia.
       const yaSalio = status === (cfg.enviadoAndreaniStatus || 'enviadoandreani') && (!trackingEsperado || mismoTracking);
-      const inciertoSinConfirmar = prep.woo_paso1_incierto && !(status === 'completed' && mismoTracking);
-      if (inciertoSinConfirmar || (!yaSalio && !(status === 'completed' && mismoTracking))) continue;
+      let intencionRecuperada = false;
+      if (prep.woo_paso1_incierto === 2 && status === (cfg.andreaniStatus || 'lpaandreani') && trackingEsperado) {
+        await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', {
+          status: 'completed',
+          meta_data: [{ key: TRACKING_META_KEY, value: trackingEsperado }],
+        });
+        db.prepare('UPDATE preparaciones SET woo_paso1_incierto=1 WHERE id=?').run(prep.id);
+        intencionRecuperada = true;
+      }
+      const inciertoSinConfirmar = prep.woo_paso1_incierto === 1 && !(status === 'completed' && mismoTracking);
+      if (!intencionRecuperada && (inciertoSinConfirmar || (!yaSalio && !(status === 'completed' && mismoTracking)))) continue;
       if (!yaSalio) {
         await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', { status: cfg.enviadoAndreaniStatus || 'enviadoandreani' });
       }
@@ -1663,6 +1672,7 @@ export function preparacionRouter(db, cfg) {
         return row;
       });
       persistirIntencion();
+      db.prepare('UPDATE preparaciones SET woo_paso1_incierto=2 WHERE clave=?').run(`web:${wcOrderId}`);
 
       // Paso 1: guarda el tracking y pasa a 'completed' (dispara el mail nativo de WooCommerce).
       // Se saltea cuando el pedido ya está en 'completed' con el mismo tracking (reintento):
@@ -1674,6 +1684,7 @@ export function preparacionRouter(db, cfg) {
             status: 'completed',
             meta_data: [metaEntry],
           });
+          db.prepare('UPDATE preparaciones SET woo_paso1_incierto=0 WHERE clave=?').run(`web:${wcOrderId}`);
         } catch (e) {
           // La respuesta del PUT es incierta: Woo puede haber guardado el
           // tracking aunque la conexión haya vencido. Persistimos la fila local
