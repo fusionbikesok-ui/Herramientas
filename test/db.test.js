@@ -107,6 +107,7 @@ describe('db schema', () => {
       'warranty_cases',
       'warranty_events',
       'warranty_stock_commitments',
+      'warranty_woo_outbox',
     ]);
     expect(db.pragma('user_version', { simple: true })).toBe(30);
     const refreshDevice = db.prepare('PRAGMA table_info(mobile_refresh_tokens)').all()
