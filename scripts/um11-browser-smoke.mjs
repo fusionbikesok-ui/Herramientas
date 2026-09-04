@@ -7,10 +7,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
+import { createRequire } from 'node:module';
 import Database from 'better-sqlite3';
 import { hashPassword } from '../lib/auth.js';
 import { auditarIdentidadProductos, bootstrapProductosFusion } from '../lib/identidadProductos.js';
 
+const require = createRequire(import.meta.url);
+const axePath = require.resolve('axe-core/axe.min.js');
 const root = path.resolve(new URL('..', import.meta.url).pathname);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-um11-browser-'));
 const dbPath = path.join(dir, 'demo.sqlite');
@@ -111,6 +114,27 @@ try {
   }, caso.id);
   if (nota.status !== 201 || nota.body.ok !== true) throw Error(`la nota no se guardó: ${JSON.stringify(nota)}`);
 
+  // Vínculo manual por el buscador real de la pantalla, no por la API.
+  await page.locator('#vincular').click();
+  await page.locator('#q-producto').waitFor();
+  await page.locator('#q-producto').fill('Cubierta');
+  await page.locator('#buscar').click();
+  await page.locator('[data-elegir]').first().waitFor();
+  await page.locator('[data-elegir]').first().click();
+  // Vista previa obligatoria antes de confirmar: SKU objetivo y stock a publicar.
+  await page.getByText('Vista previa del vínculo', { exact: true }).waitFor();
+  await page.getByText('FB-9101', { exact: false }).first().waitFor();
+  await page.locator('#confirmar-vinculo').click();
+  await page.waitForFunction(() => !document.querySelector('#confirmar-vinculo'));
+  const trasVinculo = await page.evaluate(async () => ({
+    ops: (await (await fetch('/api/identidad-productos/operaciones')).json()).data,
+    casos: (await (await fetch('/api/identidad-productos/casos')).json()).data,
+  }));
+  if (trasVinculo.ops.length !== 1) throw Error(`esperaba 1 operación encolada, hay ${trasVinculo.ops.length}`);
+  // En shadow la operación se persiste pero no se ejecuta contra ML.
+  if (trasVinculo.ops[0].estado !== 'shadow') throw Error(`en shadow la operación no debe salir a ML: ${trasVinculo.ops[0].estado}`);
+  if (trasVinculo.ops[0].sku_objetivo !== 'FB-9101') throw Error(`SKU objetivo inesperado: ${trasVinculo.ops[0].sku_objetivo}`);
+
   // Las otras tres secciones renderizan.
   for (const [vista, titulo] of [['productos', 'Productos Fusion'], ['operaciones', 'Operaciones'], ['historial', 'Historial']]) {
     await page.locator(`button[data-view="${vista}"]`).click();
@@ -119,13 +143,28 @@ try {
   await page.locator('button[data-view="historial"]').click();
   await page.getByText('nota_agregada', { exact: true }).first().waitFor();
 
+  // Accesibilidad sobre la pantalla real, en este ancho. WCAG 2.2 AA es estándar del proyecto.
+  // El caso sigue abierto desde el vínculo; en 390 la cola está oculta detrás del detalle,
+  // así que se vuelve a la pestaña y se audita el detalle tal como queda.
+  await page.locator('button[data-view="pendientes"]').click();
+  await page.getByRole('heading', { name: 'MLA-UM11|VAR-9' }).waitFor();
+  await page.addScriptTag({ path: axePath });
+  const axe = await page.evaluate(async () => {
+    const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
+    return r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length,
+      target: v.nodes[0]?.target?.join(' ') }));
+  });
+  const graves = axe.filter((v) => v.impact === 'critical' || v.impact === 'serious');
+  if (graves.length) throw Error(`axe: violaciones graves ${JSON.stringify(graves)}`);
+
   const resumen = await page.evaluate(async () => (await (await fetch('/api/identidad-productos/resumen')).json()).data);
   if (!resumen.conciliacion.exacta) throw Error(`conciliación inexacta: ${JSON.stringify(resumen.conciliacion)}`);
   if (errores.length) throw Error(`errores de navegador/API: ${errores.join(' | ')}`);
 
   console.log(JSON.stringify({ ok: true, e2e: 'UM1.1', viewport: width, caso: caso.id,
     conciliacion: resumen.conciliacion, aviso_shadow: avisoShadow, auxiliar_declarado: auxiliar,
-    cola_visible: colaVisible, nota: nota.status }));
+    cola_visible: colaVisible, nota: nota.status, vinculo_por_buscador: true, axe_violaciones: axe,
+    operacion: trasVinculo.ops[0].estado }));
   await page.close();
   await browser.close();
 } finally {

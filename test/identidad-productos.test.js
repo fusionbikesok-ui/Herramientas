@@ -6,6 +6,7 @@ import { openDb } from '../db/index.js';
 import {
   auditarIdentidadProductos,
   bootstrapProductosFusion,
+  buscarProductosFusion,
   decidirCasoIdentidad,
   esGtinValido,
   fingerprintEvidencia,
@@ -205,5 +206,82 @@ describe('UM1 identidad de productos', () => {
     expect((await request(app).post(`/api/identidad-productos/casos/${caso.id}/notas`).send(envelope)).status).toBe(201);
     expect((await request(app).post(`/api/identidad-productos/casos/${caso.id}/decisiones`).send({ ...envelope, tipo: 'investigar' })).status).toBe(403);
     expect(fingerprintEvidencia({ b: 2, a: 1 })).toBe(fingerprintEvidencia({ a: 1, b: 2 }));
+  });
+
+  describe('buscarProductosFusion', () => {
+    it('con búsqueda vacía devuelve todos los productos activos respetando el límite', () => {
+      woo(db, { id: 50, sku: 'FB-50', nombre: 'Bicicleta A' });
+      woo(db, { id: 51, sku: 'FB-51', nombre: 'Bicicleta B' });
+      woo(db, { id: 52, sku: 'FB-52', nombre: 'Bicicleta C' });
+      bootstrapProductosFusion(db);
+      expect(buscarProductosFusion(db, { q: '' }).length).toBe(3);
+      expect(buscarProductosFusion(db, { q: '', limite: 2 }).length).toBe(2);
+    });
+
+    it('trata % y _ literales en el texto de búsqueda sin matchear de más ni romper', () => {
+      woo(db, { id: 60, sku: 'FB-60', nombre: 'Combo 50% off_especial' });
+      woo(db, { id: 61, sku: 'FB-61', nombre: 'Producto normal' });
+      bootstrapProductosFusion(db);
+      const porPorcentaje = buscarProductosFusion(db, { q: '50%' });
+      expect(porPorcentaje.map((p) => p.primary_woo_id)).toEqual([60]);
+      const porGuionBajo = buscarProductosFusion(db, { q: 'off_especial' });
+      expect(porGuionBajo.map((p) => p.primary_woo_id)).toEqual([60]);
+      // Si % se tratara como wildcard, "50X" también matchearía "50% off..." de más.
+      expect(buscarProductosFusion(db, { q: '50X' }).length).toBe(0);
+    });
+
+    it('nunca devuelve productos no activos (provisional o archivado)', () => {
+      woo(db, { id: 70, sku: 'FB-70', nombre: 'Producto activo' });
+      woo(db, { id: 71, sku: 'FB-71', nombre: 'Producto provisional' });
+      woo(db, { id: 72, sku: 'FB-72', nombre: 'Producto archivado' });
+      bootstrapProductosFusion(db);
+      db.prepare("UPDATE productos_fusion SET estado='provisional' WHERE primary_woo_id=71").run();
+      db.prepare("UPDATE productos_fusion SET estado='archivado' WHERE primary_woo_id=72").run();
+      const resultados = buscarProductosFusion(db, { q: '' });
+      expect(resultados.map((p) => p.primary_woo_id)).toEqual([70]);
+      expect(buscarProductosFusion(db, { q: 'provisional' }).length).toBe(0);
+      expect(buscarProductosFusion(db, { q: 'archivado' }).length).toBe(0);
+    });
+
+    it('clampa limite a [1,50] con 0, negativo, mayor a 50 y valor no numérico', () => {
+      for (let i = 80; i < 90; i++) woo(db, { id: i, sku: `FB-${i}`, nombre: `Producto ${i}` });
+      bootstrapProductosFusion(db);
+      expect(buscarProductosFusion(db, { limite: 0 }).length).toBe(1);
+      expect(buscarProductosFusion(db, { limite: -5 }).length).toBe(1);
+      expect(buscarProductosFusion(db, { limite: 999 }).length).toBe(10);
+      expect(buscarProductosFusion(db, { limite: 'abc' }).length).toBe(10); // default 20 clampado por el fallback numérico
+    });
+
+    it('un producto activo sin fila en catalogo_cache aparece igual, con campos woo nulos', () => {
+      // productos_fusion referencia catalogo_cache por FK; para simular un LEFT JOIN sin match
+      // insertamos directo en catalogo_cache y luego borramos la fila de woo dejando el producto Fusion.
+      woo(db, { id: 90, sku: 'FB-90', nombre: 'Producto sin cache' });
+      bootstrapProductosFusion(db);
+      db.prepare('DELETE FROM catalogo_cache WHERE id_woo=90').run();
+      const resultados = buscarProductosFusion(db, { q: 'sin cache' });
+      expect(resultados.length).toBe(1);
+      expect(resultados[0]).toMatchObject({ sku_woo: null, stock_woo: null, gtin: null, primary_woo_id: 90 });
+    });
+
+    it('encuentra por SKU Woo y por GTIN, no solo por nombre', () => {
+      woo(db, { id: 100, sku: 'ABC-999', gtin: '4006381333931', nombre: 'Nombre irrelevante' });
+      bootstrapProductosFusion(db);
+      expect(buscarProductosFusion(db, { q: 'ABC-999' }).map((p) => p.primary_woo_id)).toEqual([100]);
+      expect(buscarProductosFusion(db, { q: '4006381333931' }).map((p) => p.primary_woo_id)).toEqual([100]);
+    });
+  });
+
+  describe('GET /productos/buscar', () => {
+    it('devuelve productos activos filtrados por texto vía HTTP', async () => {
+      woo(db, { id: 110, sku: 'FB-110', nombre: 'Rodado 29 Aro Naranja' });
+      woo(db, { id: 111, sku: 'FB-111', nombre: 'Rodado 26 Aro Verde' });
+      bootstrapProductosFusion(db);
+      const app = express(); app.use(express.json());
+      app.use((req, _res, next) => { req.user = { username: 'lector', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'read' }] }; next(); });
+      app.use('/api/identidad-productos', identidadProductosRouter(db));
+      const resp = await request(app).get('/api/identidad-productos/productos/buscar').query({ q: 'Naranja' });
+      expect(resp.status).toBe(200);
+      expect(resp.body.data.map((p) => p.primary_woo_id)).toEqual([110]);
+    });
   });
 });

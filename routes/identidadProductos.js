@@ -3,6 +3,7 @@ import {
   agregarNotaIdentidad,
   asignarCasoIdentidad,
   cambiarModoIdentidad,
+  buscarProductosFusion,
   crearTareaPublicacion,
   decidirCasoIdentidad,
   estadoIdentidadProductos,
@@ -57,6 +58,8 @@ export function identidadProductosRouter(db) {
     return data ? res.json({ ok: true, data }) : res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'caso no encontrado' });
   });
   router.get('/productos', exigir(), (_req, res) => res.json({ ok: true, data: listarProductosFusion(db) }));
+  // Búsqueda explícita para el vínculo manual; el candidato automático es UM1.4.
+  router.get('/productos/buscar', exigir(), (req, res) => res.json({ ok: true, data: buscarProductosFusion(db, req.query) }));
   router.get('/operaciones', exigir(), (_req, res) => res.json({ ok: true, data: listarOperacionesIdentidad(db) }));
   router.get('/operaciones/:id', exigir(), (req, res) => {
     const data = obtenerOperacionIdentidad(db, req.params.id);

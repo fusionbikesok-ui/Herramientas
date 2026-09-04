@@ -70,6 +70,24 @@ Actualizado: 2026-09-04, worktree `/opt/fusionbikes/worktrees/um1-identidad`, ra
   el sobre `operation_id` + `expected_version` + `evidence_fingerprint`, y el evento
   `nota_agregada` apareciendo en Historial. Falla si hay `pageerror` o respuesta ≥400.
 - El E2E detectó que el plan no definía el comportamiento en tablet: resuelto en PM-037.
+- Vínculo manual usable (PM-040): buscador por nombre, SKU Woo o GTIN
+  (`buscarProductosFusion` + `GET /productos/buscar`), con foto, SKU, stock y cantidad de
+  claves ML ya vinculadas, y **vista previa obligatoria** antes de confirmar. Reemplaza el
+  `prompt()` que pedía el ID a mano.
+- Revisión independiente ejecutada sobre `4adeee1..HEAD` + working tree: 🟡 aprobado con dos
+  hallazgos accionables, ambos corregidos:
+  (a) `public/home/index.html` y `package.json` se habían reescrito enteros por normalización
+  de CRLF/BOM — 2547 líneas de ruido para un cambio de 16. Restaurados desde `4adeee1` y
+  reeditados en binario preservando terminadores (PM-041).
+  (b) `buscarProductosFusion` no tenía test unitario. Cubierto.
+- El tester encontró un bug real al cubrirlo: `Number(limite) || 20` mandaba `limite: 0` al
+  default en vez de clamparlo a 1, porque `0` es falsy. Corregido con `Number.isFinite`.
+- Accesibilidad: axe-core corre dentro del E2E sobre la pantalla real en cada ancho, con
+  reglas wcag2a/2aa/21a/21aa/22aa. **Cero violaciones** en 390, 768 y 1440; el script falla
+  ante cualquier violación `critical` o `serious` (PM-042).
+- Tests: `npx vitest run test/identidad-productos.test.js test/db.test.js test/guardia-ml.test.js test/server.test.js test/modelos-publicacionMl.test.js --no-file-parallelism` — **5 archivos, 76/76**.
+- E2E final: `npm run e2e:um11:responsive` — `ok:true` en 390, 768 y 1440, con el vínculo
+  hecho por el buscador real de la pantalla y la operación quedando en estado `shadow`.
 - Auditoría del universo ML real: no ejecutada; requiere lectura contra ML y el modo sigue
   siendo `shadow`.
 - Canario, rollback real y jornada observada: pendientes externos.
@@ -89,12 +107,8 @@ Queda a medias, en orden de valor:
 
 1. **Auditoría contra el universo ML real** (gate 2). Hoy la conciliación solo se probó con
    datos sintéticos. Exige lectura remota; el modo sigue en `shadow`.
-2. **Vincular pide el ID del Producto Fusion por `prompt()`** en
-   `public/identidad-productos/index.html` (handler `#vincular`). Sirve para el E2E pero no
-   es usable en piso: falta el buscador Woo con nombre, foto, SKU y stock que describe el
-   plan. Es lo primero a construir si se sigue por la pantalla.
-3. **Revisión independiente**: no ejecutada sobre este diff.
-4. Gates externos: canario, rollback real y jornada observada.
+2. **Auditoría de despliegue**: pendiente sobre el diff final.
+3. Gates externos: canario, rollback real y jornada observada.
 
 Próxima acción reproducible: correr los dos comandos de arriba para confirmar la base, y
 después atacar (1) o (2) según prioridad operativa.

@@ -19,10 +19,10 @@
     "e1:demo": "node scripts/e1-operational-demo.mjs",
     "um1:demo": "node scripts/um1-isolated-demo.mjs",
     "e2e:um1": "node scripts/um1-browser-smoke.mjs",
+    "e2e:um11:responsive": "for width in 390 768 1440; do UM11_VIEWPORT_WIDTH=$width node scripts/um11-browser-smoke.mjs || exit 1; done",
     "e2e:um1:responsive": "for width in 390 768 1440; do UM1_VIEWPORT_WIDTH=$width node scripts/um1-browser-smoke.mjs || exit 1; done",
     "audit": "node scripts/audit-matcher.mjs",
-    "cerrar-preparaciones-sin-evidencia": "node scripts/cerrar-preparaciones-sin-evidencia.mjs",
-    "e2e:um11:responsive": "for width in 390 768 1440; do UM11_VIEWPORT_WIDTH=$width node scripts/um11-browser-smoke.mjs || exit 1; done"
+    "cerrar-preparaciones-sin-evidencia": "node scripts/cerrar-preparaciones-sin-evidencia.mjs"
   },
   "keywords": [],
   "author": "",
