@@ -34,7 +34,7 @@ if (!aplicar) { console.log('\nSIMULACIÓN. Nada se modificó. Volvé a correr c
 const ts = new Date().toISOString();
 const tx = db.transaction((ids) => {
   const upd = db.prepare("UPDATE identidad_casos SET estado='pendiente', ultima_deteccion_en=? WHERE id=?");
-  const hist = db.prepare(`INSERT INTO identidad_historial (entidad,entidad_id,evento,actor,detalle_json,creado_en)
+  const hist = db.prepare(`INSERT INTO identidad_historial (entidad_tipo,entidad_id,evento,actor,detalle_json,creado_en)
     VALUES ('caso',?,'estado_restaurado_tras_bug_huella','sistema',?,?)`);
   for (const id of ids) { upd.run(ts, id); hist.run(id, JSON.stringify({ motivo: 'la huella incluía observado_en y reseteaba casos decididos' }), ts); }
 });
