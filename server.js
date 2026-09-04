@@ -475,7 +475,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // Respeta además el canario designado y el tope de lote, para que habilitar el modo no
       // largue de una todas las operaciones ya encoladas (cada una pone el stock en 0 antes
       // de escribir el SKU).
-      cron.schedule('*/5 * * * *', () => {
+      // Cada minuto: la saga son ~8 pasos y con 5 minutos entre pasos una publicación pasaba
+      // ~30 minutos en stock 0. A 1 minuto esa ventana baja a ~8. El solapamiento entre
+      // corridas lo corta el filtro de `claim_hasta` del worker, no la frecuencia del cron.
+      cron.schedule('* * * * *', () => {
         procesarOperacionesIdentidad(app._db, adaptadorMlIdentidad(app._db, syncCfg.ml))
           .then((r) => {
             if (r?.procesadas) console.log(`identidad: ${r.procesadas} operación(es)${r.canario ? ` [canario ${r.canario}]` : ''}`);
