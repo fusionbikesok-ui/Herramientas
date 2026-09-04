@@ -23,6 +23,7 @@
     .stat{flex:1 1 130px;padding:.6rem .7rem;border:1px solid var(--border);border-radius:9px;background:var(--surface)}
     .stat b{display:block;font-size:1.28rem;line-height:1.25}
     .stat.exact{border-color:var(--green)}.stat.inexact{border-color:var(--red)}
+    .recon .notice{flex:1 1 100%}
     .tabs{display:flex;gap:.45rem;overflow:auto;padding-bottom:.6rem;margin-bottom:.5rem}
     .tab{white-space:nowrap;background:transparent}
     .tab[aria-selected="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
@@ -86,7 +87,7 @@
   </header>
   <main class="wrap">
     <section id="health" class="health" aria-live="polite"><strong>Cargando estado…</strong></section>
-    <section id="recon" class="recon" aria-label="Conciliación del universo ML"></section>
+    <section id="recon" class="recon" aria-live="polite" aria-label="Conciliación del universo ML"></section>
     <nav class="tabs" role="tablist" aria-label="Secciones">
       <button class="btn tab" role="tab" aria-selected="true" data-view="pendientes">Pendientes</button>
       <button class="btn tab" role="tab" aria-selected="false" data-view="productos">Productos Fusion</button>
@@ -143,12 +144,12 @@
     ];
     // Una observación anterior a la 082 no se puede clasificar. Se muestra aparte porque, si
     // se contara como urgente, fabricaría un backlog falso del tamaño del universo entero.
-    if (c.observacion_incompleta) filas.push(['Sin observar (requieren refresco ML)', c.observacion_incompleta, 'inexact']);
+    if (c.observacion_incompleta) filas.push(['Sin observar: requieren refresco ML', c.observacion_incompleta, 'inexact']);
     filas.push([c.exacta ? 'Universo conciliado' : 'Universo SIN conciliar', c.exacta ? '=' : '≠', c.exacta ? 'exact' : 'inexact']);
     $('#recon').innerHTML = filas
       .map(([t, v, k]) => '<div class="stat ' + k + '"><b>' + esc(v) + '</b><span class="muted">' + esc(t) + '</span></div>').join('')
-      + (c.observacion_incompleta ? '<p class="notice" style="flex:1 1 100%">Hay <b>' + esc(c.observacion_incompleta)
-        + '</b> clave(s) activas con stock cuya última observación es anterior al detalle de atributos actual. '
+      + (c.observacion_incompleta ? '<p class="notice">Hay <b>' + esc(c.observacion_incompleta)
+        + '</b> claves activas con stock cuya última observación es anterior al detalle de atributos actual. '
         + 'No se clasifican ni cuentan como urgencias: hasta un refresco ML completo, el universo no está conciliado.</p>' : '');
   }
 

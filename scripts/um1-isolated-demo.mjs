@@ -13,8 +13,8 @@ const db=openDb(path.join(dir,'demo.sqlite'));
 const ts=new Date().toISOString();
 try {
   db.prepare(`INSERT INTO ml_publicaciones_cache
-    (clave,item_id,variation_id,titulo,status,seller_sku,available_quantity,actualizado_en)
-    VALUES (?,?,?,?,?,?,?,?)`).run('MLA-DEMO|VAR-1','MLA-DEMO','VAR-1','Bicicleta demo','active','',1,ts);
+    (clave,item_id,variation_id,titulo,status,seller_sku,available_quantity,atributos_json,actualizado_en)
+    VALUES (?,?,?,?,?,?,?,'[]',?)`).run('MLA-DEMO|VAR-1','MLA-DEMO','VAR-1','Bicicleta demo','active','',1,ts);
   const scan=escanearGuardiaMl(db,'demo');
   if(scan.total!==1 || !estadoGuardiaMl(db).degradado) throw new Error('scan local no quedó degradado');
   retenerPedidoMl(db,{orderId:'ORDER-DEMO',items:[{item_id:'MLA-DEMO'}],claves:['MLA-DEMO|VAR-1']});

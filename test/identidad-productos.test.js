@@ -231,6 +231,26 @@ describe('UM1 identidad de productos', () => {
     expect(salud.degradado).toBe(true);
   });
 
+  it('no declara conciliado un universo vacio ni cuenta casos fuera del universo', () => {
+    // Universo vacio: la igualdad 0 === 0+0+0 se cumple sola. No alcanza.
+    const vacio = auditarIdentidadProductos(db, 'test', { lecturaConfiable: true });
+    expect(vacio.total).toBe(0);
+    expect(vacio.conciliado).toBe(false);
+
+    // Un caso urgente de una clave que despues se pausa no puede seguir contando: si contara,
+    // la igualdad del gate 2 quedaria inalcanzable para siempre.
+    woo(db, { id: 81, sku: 'NO-COINCIDE' });
+    ml(db, { clave: 'MLA81|', sku: 'INEXISTENTE-81' });
+    const antes = auditarIdentidadProductos(db, 'test', { lecturaConfiable: true });
+    expect(antes.total).toBe(1);
+    expect(antes.urgentes).toBe(1);
+    db.prepare("UPDATE ml_publicaciones_cache SET status='paused' WHERE clave='MLA81|'").run();
+    const despues = auditarIdentidadProductos(db, 'test', { lecturaConfiable: true });
+    expect(despues.total).toBe(0);
+    expect(despues.urgentes).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_casos WHERE ml_key='MLA81|'").get().n).toBe(1);
+  });
+
   describe('buscarProductosFusion', () => {
     it('con búsqueda vacía devuelve todos los productos activos respetando el límite', () => {
       woo(db, { id: 50, sku: 'FB-50', nombre: 'Bicicleta A' });
