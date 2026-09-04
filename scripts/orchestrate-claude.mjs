@@ -112,7 +112,7 @@ async function main() {
     needsE2E = requiresE2E(worktree, gitState.base, gitState.head);
     priorEvidenceMap = priorEvidence(args.priorHandoffs, worktree, gitState, ['revisor', 'tester', ...(needsE2E ? ['probador-e2e'] : [])]);
   }
-  const prompt = buildRolePrompt({ role: args.role, taskFile: args.taskFile, gitState, orquestador: 'Codex' });
+  const prompt = buildRolePrompt({ role: args.role, taskFile: args.taskFile, gitState, orquestador: 'Claude' });
 
   const child = spawn('claude', [
     '-p', prompt,
@@ -147,7 +147,7 @@ async function main() {
   const { handoff: finalHandoff, outputState } = freezeAndVerify({
     role: args.role, worktree, gitState, inputFingerprint, handoff, priorEvidenceMap, requiresE2E: needsE2E,
   });
-  finalHandoff.orquestador = 'codex';
+  finalHandoff.orquestador = 'claude'; // Pipeline invertido: la sesión Claude Opus orquesta siempre, corra el rol donde corra.
   finalHandoff.rol = args.role;
   finalHandoff.modelo = model;
   finalHandoff.task_file = path.resolve(args.taskFile);

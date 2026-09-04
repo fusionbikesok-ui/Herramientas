@@ -138,6 +138,11 @@ export function buildRolePrompt({ role, taskFile, gitState, orquestador }) {
     ...(addendum ? [addendum] : []),
     'Al finalizar devolvé únicamente un objeto JSON válido con las claves:',
     'devolvé estado, base, head y diff_fingerprint; completá el contrato de tu rol (veredicto/hallazgos, resultado_suite, evidencia/anchos_riesgos o referencias_evidencia).',
+    // Sin esto el camino de bloqueo es un callejón: el rol devuelve BLOQUEADO con una
+    // explicación en prosa, validateHandoff lo rechaza por contrato incompleto y se pierde el
+    // motivo real del bloqueo, que es justo la información que el orquestador necesita.
+    'Si NO podés completar la tarea, estado debe ser "BLOQUEADO" y ES OBLIGATORIO agregar codigo_bloqueo (exactamente uno de: FALTA_ENTORNO, FALTA_DATOS, FALTA_DECISION, PERMISO, FALLO_REPRODUCIBLE) y siguiente_accion (qué hace falta para desbloquearte, en una frase).',
+    'Un handoff BLOQUEADO sin esos dos campos se rechaza y tu trabajo se pierde. Si sos probador-e2e y quedás bloqueado, incluí igual evidencia y anchos_riesgos (pueden ir vacíos, pero deben existir).',
     `Valores autoritativos del worktree: base=${gitState.base}, head=${gitState.head}, diff_fingerprint=${gitState.diff_fingerprint}. Debés devolverlos exactamente; una huella distinta será rechazada.`,
     'No devuelvas Markdown, logs ni transcripciones.',
   ].join('\n');

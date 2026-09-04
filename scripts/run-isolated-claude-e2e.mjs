@@ -138,7 +138,9 @@ async function main() {
   server.stderr.pipe(logStream);
   await waitForHttp(`http://127.0.0.1:${port}/login/`, 15_000);
 
-  const enrichedTask = enrichTask(task, { Entorno: 'local-aislado', 'URL exacta': `http://127.0.0.1:${port}/login/`, 'Rama/worktree servido': worktree, Base: base, HEAD: head, 'DB temporal': dbCopy, 'DISABLE_CRONS=true': 'sí', Puerto: port, 'Sesión Playwright': playwrightSession, 'Directorio de artefactos': path.join(root, 'output', 'playwright'), 'PID/sesión del servidor': server.pid, 'Acciones autorizadas': 'solo lectura y datos de prueba aislados' });
+  const enrichedTask = enrichTask(task, { Entorno: 'local-aislado', 'URL exacta': `http://127.0.0.1:${port}/login/`, 'Rama/worktree servido': worktree, Base: base, HEAD: head, 'DB temporal': dbCopy, 'DISABLE_CRONS=true': 'sí', Puerto: port, 'Sesión Playwright': playwrightSession, // La etiqueta es 'PID/sesión' exacta: validateTask la busca con ^PID/sesión: y taskField
+// no hace match parcial, así que 'PID/sesión del servidor' hacía fallar SIEMPRE el E2E.
+'Directorio de artefactos': path.join(root, 'output', 'playwright'), 'PID/sesión': server.pid, 'Acciones autorizadas': 'solo lectura y datos de prueba aislados' });
   const enrichedFile = `/tmp/codex-to-claude-e2e-${suffix}.md`;
   fs.writeFileSync(enrichedFile, `${enrichedTask}\n`, { mode: 0o600 });
 
