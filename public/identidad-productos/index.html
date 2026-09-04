@@ -72,6 +72,9 @@
     .case .mini{width:44px;height:44px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:var(--surface2)}
     .case .mini.vacia{display:grid;place-items:center;color:var(--muted);font-size:.6rem}
     .enlace{display:inline-block;margin-top:.4rem;color:var(--accent)}
+    .attrs-bloque{margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--border);font-size:.86rem}
+    .attrs-bloque b{display:inline}
+    .attr{display:block;color:var(--accent);margin-top:.18rem}
     .aviso{margin-bottom:.85rem;padding:.7rem .85rem;border:1px solid var(--green-bd);border-radius:9px;background:var(--green-bg);color:var(--green)}
     @media(max-width:850px){.foto{width:84px;height:84px}}
     .search-row{display:flex;gap:.5rem}
@@ -228,6 +231,11 @@
       + 'GTIN: <b>' + esc(ml.gtin || 'sin GTIN') + '</b><br>Stock informado: <b>' + esc(ml.stock ?? 'sin dato') + '</b><br>'
       + 'Observado: <b>' + esc(ml.observado_en || 'sin dato') + '</b><br>'
       + '<span class="muted">seller_custom_field: ' + esc(ml.seller_custom_field || 'vacío') + ' — es evidencia auxiliar y nunca da cobertura.</span>'
+      + (pub.atributos?.length
+        ? '<div class="attrs-bloque"><b>Atributos en MercadoLibre</b>'
+          + pub.atributos.map((a) => '<span class="attr">' + esc(a.nombre) + ': <b>' + esc(a.valor) + '</b></span>').join('')
+          + '</div>'
+        : '<div class="attrs-bloque muted">La publicación no declara atributos útiles para identificar la variante.</div>')
       + (pub.permalink ? '<br><a class="enlace" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Abrir en MercadoLibre ↗</a>' : '')
       + '</div></div></section>'
       + '</div><div class="col-comp">'
@@ -238,7 +246,12 @@
           + 'Fusion SKU: <b>' + esc(prod.fusion_sku || 'provisional') + '</b><br>'
           + 'SKU Woo: <b>' + esc(prod.sku_woo || 'sin SKU') + '</b><br>'
           + 'GTIN: <b>' + esc(prod.gtin_woo || 'sin GTIN') + '</b><br>'
-          + 'Stock Woo: <b>' + esc(prod.stock_woo ?? 'sin dato') + '</b></div></div>'
+          + 'Stock Woo: <b>' + esc(prod.stock_woo ?? 'sin dato') + '</b>'
+          + (prod.es_padre ? '<div class="ambiguo" style="margin-top:.5rem">Este es el <b>producto padre</b> de una familia: no es una unidad vendible y no debería ser el destino del vínculo. Elegí una de sus variaciones.</div>' : '')
+          + (prod.atributos
+            ? '<div class="attrs-bloque"><b>Atributos en WooCommerce</b><span class="attr">' + esc(prod.atributos) + '</span></div>'
+            : '<div class="attrs-bloque muted">Este SKU no tiene atributos cargados en WooCommerce. Si comparte nombre con otras variaciones, no hay con qué distinguirlo: es una corrección de catálogo.</div>')
+          + '</div></div>'
         : '<div class="facts">' + (woo ? 'Producto Woo: <b>' + esc(woo.id_woo) + '</b><br>SKU: <b>' + esc(woo.sku) + '</b><br>Stock Woo: <b>' + esc(woo.stock ?? 'sin dato') + '</b>'
             : '<span class="muted">Sin identidad Woo única. Falta catálogo: no es una excepción, es una tarea de alta o corrección. Usá «Vincular a Producto Fusion» para buscar el producto por nombre, SKU o GTIN.</span>') + '</div>')
       + '</section>'
