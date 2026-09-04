@@ -87,8 +87,16 @@ try {
   // El caso está en la cola y se abre.
   await page.locator('[data-caso]').first().waitFor();
   await page.locator('[data-caso]').first().click();
-  await page.getByRole('heading', { name: 'MLA-UM11|VAR-9' }).waitFor();
+  // El encabezado muestra el título del producto, no la clave: con códigos no se puede comparar.
+  await page.getByRole('heading', { name: 'Cubierta 29 rodado test' }).waitFor();
   await page.getByText('sin atributo', { exact: true }).waitFor();
+  // La miniatura de ML llega en http:// y la herramienta se sirve por HTTPS: si no se
+  // normaliza, el navegador la bloquea por contenido mixto y la comparación es inútil.
+  const foto = page.locator('img.foto').first();
+  await foto.waitFor();
+  const src = await foto.getAttribute('src');
+  if (!src.startsWith('https://')) throw Error(`la foto de ML no se sirve por https: ${src}`);
+  const mini = await page.locator('.case img.mini').count();
   // seller_custom_field se muestra pero declarado como no-cobertura.
   const auxiliar = await page.getByText('nunca da cobertura', { exact: false }).isVisible();
   // El aviso de shadow tiene que estar presente en el detalle.
@@ -119,8 +127,10 @@ try {
   // Vínculo manual por el buscador real de la pantalla, no por la API.
   await page.locator('#vincular').click();
   await page.locator('#q-producto').waitFor();
-  await page.locator('#q-producto').fill('Cubierta');
-  await page.locator('#buscar').click();
+  // El buscador arranca con el título de la publicación y busca solo: sin eso, la persona
+  // no tiene con qué comparar y hay que adivinar la consulta.
+  const precargado = await page.locator('#q-producto').inputValue();
+  if (precargado !== 'Cubierta 29 rodado test') throw Error(`la busqueda no se precargo: "${precargado}"`);
   await page.locator('[data-elegir]').first().waitFor();
   await page.locator('[data-elegir]').first().click();
   // Vista previa obligatoria antes de confirmar: SKU objetivo y stock a publicar.
@@ -149,7 +159,7 @@ try {
   // El caso sigue abierto desde el vínculo; en 390 la cola está oculta detrás del detalle,
   // así que se vuelve a la pestaña y se audita el detalle tal como queda.
   await page.locator('button[data-view="pendientes"]').click();
-  await page.getByRole('heading', { name: 'MLA-UM11|VAR-9' }).waitFor();
+  await page.getByRole('heading', { name: 'Cubierta 29 rodado test' }).waitFor();
   await page.addScriptTag({ path: axePath });
   const axe = await page.evaluate(async () => {
     const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
@@ -166,6 +176,7 @@ try {
   console.log(JSON.stringify({ ok: true, e2e: 'UM1.1', viewport: width, caso: caso.id,
     conciliacion: resumen.conciliacion, aviso_shadow: avisoShadow, auxiliar_declarado: auxiliar,
     cola_visible: colaVisible, nota: nota.status, vinculo_por_buscador: true, axe_violaciones: axe,
+    foto_https: src.startsWith('https://'), miniaturas_cola: mini, busqueda_precargada: precargado,
     operacion: trasVinculo.ops[0].estado }));
   await page.close();
   await browser.close();

@@ -57,6 +57,14 @@
     input,select,textarea{width:100%;padding:.6rem;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit}
     .back{display:none}
     .buscador{margin-top:.6rem}
+    .producto{display:flex;gap:.85rem;align-items:flex-start}
+    .foto{width:104px;height:104px;flex:0 0 auto;object-fit:contain;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+    .foto.vacia{display:grid;place-items:center;color:var(--muted);font-size:.74rem;text-align:center}
+    .case{display:grid;grid-template-columns:44px 1fr;gap:.6rem;align-items:start}
+    .case .mini{width:44px;height:44px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:var(--surface2)}
+    .case .mini.vacia{display:grid;place-items:center;color:var(--muted);font-size:.6rem}
+    .enlace{display:inline-block;margin-top:.4rem;color:var(--accent)}
+    @media(max-width:850px){.foto{width:84px;height:84px}}
     .search-row{display:flex;gap:.5rem}
     .search-row input{flex:1;min-width:0}
     .opciones{max-height:340px;overflow:auto;margin-top:.6rem}
@@ -126,8 +134,8 @@
     el.innerHTML = '<div><strong>' + esc(titulo) + '</strong>'
       + '<span class="muted">Urgentes: ' + esc(s.urgentes ?? 0) + ' · Operaciones pendientes: ' + esc(s.operaciones_pendientes ?? 0)
       + ' · Última lectura confiable: ' + esc(s.ultimo_scan_confiable_en || 'sin lectura confiable') + '</span>'
-      + (s.ultimo_scan_error ? '<span class="muted error">Error de lectura: ' + esc(s.ultimo_scan_error) + '</span>' : '')
-      + '<span class="muted">Una lectura local no confirma MercadoLibre.</span></div>'
+      + (s.ultimo_scan_error ? '<br><span class="muted error">Error de lectura: ' + esc(s.ultimo_scan_error) + '</span>' : '')
+      + '<br><span class="muted">Una lectura local no confirma MercadoLibre.</span></div>'
       + '<span class="tag ' + (enShadow() ? '' : 'ok') + '">Modo ' + esc(s.modo || 'shadow') + '</span>';
   }
 
@@ -160,10 +168,13 @@
     return '<aside class="card side"><div class="card-head"><strong>Pendientes ML → Fusion</strong>'
       + '<span class="muted">' + casos.length + ' caso(s)</span></div>'
       + (casos.length ? casos.map((c) => '<button class="case" data-caso="' + c.id + '"'
-        + (state.actual === c.id ? ' aria-current="true"' : '') + '>' + sev(c)
+        + (state.actual === c.id ? ' aria-current="true"' : '') + '>'
+        + (c.thumbnail ? '<img class="mini" src="' + esc(c.thumbnail) + '" alt="" loading="lazy">' : '<span class="mini vacia">sin<br>foto</span>')
+        + '<span>' + sev(c)
         + '<strong>' + esc(c.titulo || c.ml_key) + '</strong><small>'
-        + esc(c.clasificacion) + ' · Stock ML ' + esc(c.available_quantity ?? 'sin dato')
-        + ' · ' + esc(c.estado) + (c.responsable ? ' · ' + esc(c.responsable) : '') + '</small></button>').join('')
+        + esc(c.variations_texto || 'sin variante') + ' · ' + esc(c.clasificacion)
+        + ' · Stock ML ' + esc(c.available_quantity ?? 'sin dato')
+        + ' · ' + esc(c.estado) + (c.responsable ? ' · ' + esc(c.responsable) : '') + '</small></span></button>').join('')
         : '<p class="muted empty">No hay casos pendientes.</p>') + '</aside>';
   }
 
@@ -173,10 +184,12 @@
     const d = state.detalle;
     if (!d) return '<section class="card detail detail-col"><p class="muted">Cargando caso…</p></section>';
     const ev = d.evidencia?.[d.evidencia.length - 1]?.contenido || {};
-    const ml = ev.ml || {}; const woo = ev.woo;
+    const ml = ev.ml || {}; const woo = ev.woo; const prod = d.producto;
+    const pub = d.publicacion || {};
     return '<section class="card detail detail-col">'
       + '<button class="btn back" id="volver">← Volver a la cola</button>'
-      + sev(d) + '<h2>' + esc(ml.clave || d.ml_key) + '</h2>'
+      + sev(d) + '<h2>' + esc(pub.titulo || ml.clave || d.ml_key) + '</h2>'
+      + '<span class="muted">' + esc(pub.variations_texto || 'sin variante') + ' · ' + esc(ml.clave || d.ml_key) + '</span><br>'
       + '<span class="muted">Caso ' + d.id + ' · ' + esc(d.estado) + ' · Responsable: ' + esc(d.responsable || 'sin asignar')
       + ' · versión ' + esc(d.expected_version) + '</span>'
       + (enShadow() ? '<div class="notice read" style="margin-top:.8rem">Modo <b>shadow</b>: se registran decisiones y se encolan operaciones, pero <b>no se escribe en MercadoLibre</b>.</div>' : '')
@@ -186,17 +199,27 @@
       + '<button class="btn danger" id="excepcion">Excepción solo_ml</button>'
       + '<button class="btn" id="nota">Agregar nota</button>'
       + '</div>'
-      + '<section class="panel"><h3>MercadoLibre · observado</h3><div class="facts">'
+      + '<section class="panel"><h3>MercadoLibre · observado</h3><div class="producto">'
+      + (pub.thumbnail ? '<img class="foto" src="' + esc(pub.thumbnail) + '" alt="Foto de la publicación en MercadoLibre">' : '<div class="foto vacia">Sin foto</div>')
+      + '<div class="facts"><b>' + esc(pub.titulo || 'sin título') + '</b><br>'
       + 'Publicación: <b>' + esc(ml.item_id || '—') + '</b><br>Variación: <b>' + esc(ml.variation_id || 'sin variación') + '</b><br>'
       + 'SELLER_SKU: <b>' + esc(ml.seller_sku || 'ausente') + '</b> ' + (ml.seller_sku_presente ? '' : '<span class="tag critica">sin atributo</span>') + '<br>'
       + 'GTIN: <b>' + esc(ml.gtin || 'sin GTIN') + '</b><br>Stock informado: <b>' + esc(ml.stock ?? 'sin dato') + '</b><br>'
       + 'Observado: <b>' + esc(ml.observado_en || 'sin dato') + '</b><br>'
       + '<span class="muted">seller_custom_field: ' + esc(ml.seller_custom_field || 'vacío') + ' — es evidencia auxiliar y nunca da cobertura.</span>'
-      + '</div></section>'
-      + '<section class="panel"><h3>WooCommerce · identidad candidata</h3><div class="facts">'
-      + (woo ? 'Producto Woo: <b>' + esc(woo.id_woo) + '</b><br>SKU: <b>' + esc(woo.sku) + '</b><br>GTIN: <b>' + esc(woo.gtin || 'sin GTIN') + '</b><br>Stock Woo: <b>' + esc(woo.stock ?? 'sin dato') + '</b>'
-        : '<span class="muted">Sin identidad Woo única. Falta catálogo: no es una excepción, es una tarea de alta o corrección.</span>')
-      + '</div></section>'
+      + (pub.permalink ? '<br><a class="enlace" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Abrir en MercadoLibre ↗</a>' : '')
+      + '</div></div></section>'
+      + '<section class="panel"><h3>WooCommerce · identidad candidata</h3>'
+      + (prod ? '<div class="producto">'
+          + (prod.img ? '<img class="foto" src="' + esc(prod.img) + '" alt="Foto del producto en WooCommerce">' : '<div class="foto vacia">Sin foto</div>')
+          + '<div class="facts"><b>' + esc(prod.nombre_woo || prod.nombre_canonico || 'sin nombre') + '</b><br>'
+          + 'Fusion SKU: <b>' + esc(prod.fusion_sku || 'provisional') + '</b><br>'
+          + 'SKU Woo: <b>' + esc(prod.sku_woo || 'sin SKU') + '</b><br>'
+          + 'GTIN: <b>' + esc(prod.gtin_woo || 'sin GTIN') + '</b><br>'
+          + 'Stock Woo: <b>' + esc(prod.stock_woo ?? 'sin dato') + '</b></div></div>'
+        : '<div class="facts">' + (woo ? 'Producto Woo: <b>' + esc(woo.id_woo) + '</b><br>SKU: <b>' + esc(woo.sku) + '</b><br>Stock Woo: <b>' + esc(woo.stock ?? 'sin dato') + '</b>'
+            : '<span class="muted">Sin identidad Woo única. Falta catálogo: no es una excepción, es una tarea de alta o corrección. Usá «Vincular a Producto Fusion» para buscar el producto por nombre, SKU o GTIN.</span>') + '</div>')
+      + '</section>'
       + panelVinculo(ml)
       + '<section class="panel"><h3>Clasificación</h3><div class="facts"><b>' + esc(d.clasificacion) + '</b>'
       + '<br><span class="muted">Huella de evidencia: ' + esc((d.evidencia_fingerprint || '').slice(0, 16)) + '…</span></div></section>'
@@ -359,8 +382,14 @@
       mutar('/casos/' + state.detalle.id + '/excepciones', { ...sobre(), motivo, expires_at: vence });
     };
     const vinc = $('#vincular'); if (vinc) vinc.onclick = () => {
-      state.buscando = true; state.candidatos = null; state.elegido = null; state.consulta = '';
-      render(); $('#q-producto')?.focus();
+      state.buscando = true; state.candidatos = null; state.elegido = null;
+      // Arranca con el título de la publicación ya cargado y busca solo: si la persona
+      // tiene que adivinar qué escribir, no hay con qué comparar. Sigue siendo búsqueda
+      // humana editable, no un candidato automático (eso es UM1.4).
+      state.consulta = state.detalle?.publicacion?.titulo || state.detalle?.publicacion?.seller_sku || '';
+      render();
+      $('#q-producto')?.focus();
+      if (state.consulta.trim()) buscarCandidatos();
     };
     const cancelar = $('#cancelar-vinculo'); if (cancelar) cancelar.onclick = () => {
       state.buscando = false; state.candidatos = null; state.elegido = null; render();

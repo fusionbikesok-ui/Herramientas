@@ -148,6 +148,26 @@ Autorizada explícitamente por el responsable operativo.
 
 El modo sigue siendo `shadow`: no hay escrituras a MercadoLibre.
 
+## Corrección reportada por el usuario: la pantalla no permitía comparar
+
+Reporte: «en la pantalla de identidad no tengo fotos, solo me aparecen códigos y no tengo
+cómo saber con qué producto comparar en WC». Confirmado y corregido; eran tres fallas mías.
+
+1. **El detalle se armaba solo con la instantánea de evidencia**, que guarda identificadores
+   y no título ni foto. `obtenerCasoIdentidad` ahora entrega también la publicación ML
+   (título, foto, permalink) y el producto Woo candidato (nombre, foto, SKU, stock); la cola
+   lleva miniatura y variante (PM-054).
+2. **Las 1113 miniaturas de ML son `http://`** y la herramienta se sirve por HTTPS: el
+   navegador las bloqueaba por contenido mixto. Se normalizan a `https` al entregarlas
+   (PM-053). El E2E falla si la foto no sale por https.
+3. **El buscador de vínculo obligaba a adivinar la consulta.** Ahora arranca precargado con
+   el título de la publicación y busca solo (PM-055).
+
+Verificado contra una copia de la base productiva, no solo con datos sintéticos: el caso
+«Casco Rembrandt Para Niños» muestra foto y título reales, y el buscador trae **5 candidatos
+Woo con foto** sin que nadie escriba nada. Comprobado además que las imágenes **cargan**
+(`naturalWidth > 0`), no solo que exista la etiqueta.
+
 ## Blindaje contra regresión silenciosa
 
 `test/invariantes-esquema.test.js` no prueba una feature: impide que vuelvan clases de bug
