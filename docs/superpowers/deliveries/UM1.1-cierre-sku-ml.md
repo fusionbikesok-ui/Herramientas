@@ -148,6 +148,30 @@ Autorizada explícitamente por el responsable operativo.
 
 El modo sigue siendo `shadow`: no hay escrituras a MercadoLibre.
 
+## Blindaje contra regresión silenciosa
+
+`test/invariantes-esquema.test.js` no prueba una feature: impide que vuelvan clases de bug
+que la suite **no detectaba**, porque fallaban en runtime solo al ejecutar esa rama o, peor,
+devolvían un resultado falso con todo en verde. Alcance: todo el repo (`lib/`, `routes/`,
+`db/`, `server.js`), no solo UM1.
+
+| Guard | Qué impide |
+| --- | --- |
+| Columnas = valores en todo `INSERT` | 261 INSERT analizados. Es el bug que rompió 7 pruebas de UM1.1 |
+| Ninguna migración escribe `user_version` > 30 | PM-034: saltearía Hito 7 y tiraría la auth móvil |
+| Ninguna ruta/`lib`/`server` pasa `allowRemoteWrites: true` | `shadow` deja de depender solo de una fila de config |
+| La 082 nace en `shadow`, escrituras en 0 y con fila 1 | Una base nueva no puede arrancar escribiendo en ML |
+
+Cada guard fue validado **reintroduciendo su bug a propósito** y confirmando que falla con
+archivo, línea y causa. Un guard que no se probó contra su propio bug no blinda nada (PM-047).
+
+Hallazgo del blindaje: hoy **ningún** código de producción invoca
+`procesarPasoOperacionIdentidad`. No hay worker que ejecute la saga remota, así que `shadow`
+está garantizado por estructura y no solo por bandera (PM-048).
+
+Verificado en producción tras el restart: `identidad_config` tiene la fila 1 con
+`modo='shadow'` y `escrituras_remotas_habilitadas=0`.
+
 ## Por qué sigue en `desarrollo` y no pasa a `candidata`
 
 La auditoría dio verde sobre el diff, pero el diff no es la entrega. Contra los gates propios
