@@ -312,6 +312,63 @@ describe('UM1 identidad de productos', () => {
       expect(buscarProductosFusion(db, { q: 'ABC-999' }).map((p) => p.primary_woo_id)).toEqual([100]);
       expect(buscarProductosFusion(db, { q: '4006381333931' }).map((p) => p.primary_woo_id)).toEqual([100]);
     });
+
+    it('encuentra sin tilde: "Casco Rembrandt Para Ninos" matchea "Casco Rembrandt Para Niños" (antes daba 0 por LIKE literal)', () => {
+      woo(db, { id: 200, sku: 'FB-200', nombre: 'Casco Rembrandt Para Niños' });
+      bootstrapProductosFusion(db);
+      expect(buscarProductosFusion(db, { q: 'Casco Rembrandt Para Ninos' }).map((p) => p.primary_woo_id)).toEqual([200]);
+    });
+
+    it('encuentra por tokens no contiguos: "casco ninos" matchea "Casco Rembrandt Para Niños" (antes daba 0 por LIKE de substring único)', () => {
+      woo(db, { id: 201, sku: 'FB-201', nombre: 'Casco Rembrandt Para Niños' });
+      bootstrapProductosFusion(db);
+      expect(buscarProductosFusion(db, { q: 'casco ninos' }).map((p) => p.primary_woo_id)).toEqual([201]);
+    });
+
+    it('encuentra con el orden de los tokens invertido: "rembrandt casco" matchea "Casco Rembrandt Para Niños" (antes daba 0 por orden fijo del LIKE)', () => {
+      woo(db, { id: 202, sku: 'FB-202', nombre: 'Casco Rembrandt Para Niños' });
+      bootstrapProductosFusion(db);
+      expect(buscarProductosFusion(db, { q: 'rembrandt casco' }).map((p) => p.primary_woo_id)).toEqual([202]);
+    });
+
+    it('prioriza coincidencia exacta de identificador sobre coincidencia solo por nombre', () => {
+      // La consulta es exactamente el SKU de un producto, pero también matchea por nombre en otro.
+      woo(db, { id: 210, sku: 'FB-210', nombre: 'Bicicleta Rodado Aro Especial' });
+      woo(db, { id: 211, sku: 'FB-210-DIST', nombre: 'FB-210' }); // nombre literal igual a la consulta
+      bootstrapProductosFusion(db);
+      const resultados = buscarProductosFusion(db, { q: 'FB-210' });
+      expect(resultados.map((p) => p.primary_woo_id)).toEqual([210, 211]);
+    });
+
+    it('ordena por similitud (tsr) descendente cuando ambos productos contienen todos los tokens', () => {
+      // Los dos matchean los 3 tokens de la consulta (el segundo por substring "aventuraa"
+      // que contiene "aventura"), pero el nombre exacto a la consulta debe salir primero:
+      // tsr('casco aventura rojo', 'casco aventura rojo') = 1 vs
+      // tsr('casco aventura rojo', 'casco aventuraa rojo deluxe edition') ≈ 0.70 (verificado a mano).
+      woo(db, { id: 220, sku: 'FB-220', nombre: 'Casco Aventura Rojo' });
+      woo(db, { id: 221, sku: 'FB-221', nombre: 'Casco Aventuraa Rojo Deluxe Edition' });
+      bootstrapProductosFusion(db);
+      const resultados = buscarProductosFusion(db, { q: 'Casco Aventura Rojo' });
+      expect(resultados.map((p) => p.primary_woo_id)).toEqual([220, 221]);
+    });
+
+    it('un producto sin fila en catalogo_cache sigue siendo buscable por nombre_canonico con la nueva búsqueda en JS', () => {
+      woo(db, { id: 230, sku: 'FB-230', nombre: 'Casco Aventura Sin Cache' });
+      bootstrapProductosFusion(db);
+      db.prepare('DELETE FROM catalogo_cache WHERE id_woo=230').run();
+      const resultados = buscarProductosFusion(db, { q: 'aventura sin cache' });
+      expect(resultados.map((p) => p.primary_woo_id)).toEqual([230]);
+      expect(resultados[0]).toMatchObject({ sku_woo: null, stock_woo: null, gtin: null });
+    });
+
+    it('nunca devuelve un producto provisional o archivado aunque coincida por texto libre (post reescritura)', () => {
+      woo(db, { id: 240, sku: 'FB-240', nombre: 'Casco Rembrandt Provisional' });
+      woo(db, { id: 241, sku: 'FB-241', nombre: 'Casco Rembrandt Archivado' });
+      bootstrapProductosFusion(db);
+      db.prepare("UPDATE productos_fusion SET estado='provisional' WHERE primary_woo_id=240").run();
+      db.prepare("UPDATE productos_fusion SET estado='archivado' WHERE primary_woo_id=241").run();
+      expect(buscarProductosFusion(db, { q: 'casco rembrandt' }).length).toBe(0);
+    });
   });
 
   describe('GET /productos/buscar', () => {
