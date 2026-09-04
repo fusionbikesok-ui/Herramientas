@@ -135,13 +135,21 @@
     if (!c) { $('#recon').innerHTML = ''; return; }
     // Gate 2 de UM1.1: total = verificadas + excepciones + urgentes. Se muestra el resultado
     // de la igualdad, no solo los números, para que un desvío no pase inadvertido.
-    $('#recon').innerHTML = [
+    const filas = [
       ['Claves ML activas con stock', c.total, ''],
       ['Verificadas', c.verificadas, ''],
       ['Excepciones solo_ml', c.excepciones, ''],
       ['Urgentes abiertas', c.urgentes, ''],
-      [c.exacta ? 'Universo conciliado' : 'Universo SIN conciliar', c.exacta ? '=' : '≠', c.exacta ? 'exact' : 'inexact'],
-    ].map(([t, v, k]) => '<div class="stat ' + k + '"><b>' + esc(v) + '</b><span class="muted">' + esc(t) + '</span></div>').join('');
+    ];
+    // Una observación anterior a la 082 no se puede clasificar. Se muestra aparte porque, si
+    // se contara como urgente, fabricaría un backlog falso del tamaño del universo entero.
+    if (c.observacion_incompleta) filas.push(['Sin observar (requieren refresco ML)', c.observacion_incompleta, 'inexact']);
+    filas.push([c.exacta ? 'Universo conciliado' : 'Universo SIN conciliar', c.exacta ? '=' : '≠', c.exacta ? 'exact' : 'inexact']);
+    $('#recon').innerHTML = filas
+      .map(([t, v, k]) => '<div class="stat ' + k + '"><b>' + esc(v) + '</b><span class="muted">' + esc(t) + '</span></div>').join('')
+      + (c.observacion_incompleta ? '<p class="notice" style="flex:1 1 100%">Hay <b>' + esc(c.observacion_incompleta)
+        + '</b> clave(s) activas con stock cuya última observación es anterior al detalle de atributos actual. '
+        + 'No se clasifican ni cuentan como urgencias: hasta un refresco ML completo, el universo no está conciliado.</p>' : '');
   }
 
   const sev = (c) => '<span class="tag ' + esc(c.severidad) + '">' + esc(c.severidad) + '</span>';

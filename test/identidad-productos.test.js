@@ -9,6 +9,7 @@ import {
   buscarProductosFusion,
   decidirCasoIdentidad,
   esGtinValido,
+  estadoIdentidadProductos,
   fingerprintEvidencia,
   listarColasIdentidad,
   procesarPasoOperacionIdentidad,
@@ -24,13 +25,15 @@ function woo(db, { id, sku, gtin = null, stock = 2, nombre = `Producto ${id}` })
     .run(id, nombre, sku, stock, gtin, ISO);
 }
 
-function ml(db, { clave, sku = null, presente = sku !== null, custom = null, gtin = null, stock = 2, itemId }) {
+// `atributos` distinto de null marca que la observación trae el detalle de la 082. Pasar
+// `atributos: null` simula una fila cacheada antes de esa migración, que no es clasificable.
+function ml(db, { clave, sku = null, presente = sku !== null, custom = null, gtin = null, stock = 2, itemId, atributos = '[]' }) {
   const [item, variation = ''] = clave.split('|');
   db.prepare(`INSERT INTO ml_publicaciones_cache
     (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,seller_custom_field,
-     gtin,available_quantity,actualizado_en)
-    VALUES (?,?,?,'Publicación','active',?,?,?,?,?,?)`).run(clave, itemId || item, variation, sku,
-      presente ? 1 : 0, custom, gtin, stock, ISO);
+     gtin,available_quantity,atributos_json,actualizado_en)
+    VALUES (?,?,?,'Publicación','active',?,?,?,?,?,?,?)`).run(clave, itemId || item, variation, sku,
+      presente ? 1 : 0, custom, gtin, stock, atributos, ISO);
 }
 
 describe('UM1 identidad de productos', () => {
@@ -206,6 +209,26 @@ describe('UM1 identidad de productos', () => {
     expect((await request(app).post(`/api/identidad-productos/casos/${caso.id}/notas`).send(envelope)).status).toBe(201);
     expect((await request(app).post(`/api/identidad-productos/casos/${caso.id}/decisiones`).send({ ...envelope, tipo: 'investigar' })).status).toBe(403);
     expect(fingerprintEvidencia({ b: 2, a: 1 })).toBe(fingerprintEvidencia({ a: 1, b: 2 }));
+  });
+
+  it('no clasifica una observacion anterior a la 082 y bloquea la conciliacion', () => {
+    woo(db, { id: 71, sku: 'FB-71' });
+    // Con SKU exacto: si se clasificara sobre el default de la migracion, saldria sku_ausente.
+    ml(db, { clave: 'MLA71|', sku: 'FB-71', atributos: null });
+    ml(db, { clave: 'MLA72|', sku: 'FB-71' });
+    const r = auditarIdentidadProductos(db, 'test', { lecturaConfiable: true });
+    expect(r.total).toBe(2);
+    expect(r.observacion_incompleta).toBe(1);
+    expect(r.auditadas).toBe(1);
+    // No se crea caso para la clave sin observar: contarla como urgente fabricaria backlog falso.
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_casos WHERE ml_key='MLA71|'").get().n).toBe(0);
+    // La igualdad sola se cumpliria; la conciliacion exige ademas cero incompletas.
+    expect(r.auditadas).toBe(r.verificadas + r.excepciones + r.urgentes);
+    expect(r.conciliado).toBe(false);
+    const salud = estadoIdentidadProductos(db);
+    expect(salud.observacion_incompleta).toBe(1);
+    expect(salud.sano).toBe(false);
+    expect(salud.degradado).toBe(true);
   });
 
   describe('buscarProductosFusion', () => {

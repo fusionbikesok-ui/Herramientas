@@ -49,11 +49,13 @@ try {
   // exacto que UM1.1 debe dejar visible como urgencia abierta.
   db.prepare('INSERT INTO catalogo_cache(id_woo,nombre,sku,tipo,stock,img,actualizado_en) VALUES(?,?,?,?,?,?,?)')
     .run(9101, 'Cubierta 29 rodado test', 'FB-9101', 'simple', 6, 'https://img.woo/x.jpg', now);
+  // `atributos_json` no nulo = observación tomada con el detalle de la 082. Sin eso la clave
+  // no es clasificable y la auditoría la cuenta aparte en vez de crear un caso.
   db.prepare(`INSERT INTO ml_publicaciones_cache
     (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,seller_custom_field,
-     available_quantity,thumbnail,actualizado_en)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
-    .run('MLA-UM11|VAR-9', 'MLA-UM11', 'VAR-9', 'Cubierta 29 rodado test', 'active', '', 0, 'LEGACY-CUSTOM', 5, 'https://img.ml/x.jpg', now);
+     available_quantity,thumbnail,atributos_json,actualizado_en)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('MLA-UM11|VAR-9', 'MLA-UM11', 'VAR-9', 'Cubierta 29 rodado test', 'active', '', 0, 'LEGACY-CUSTOM', 5, 'https://img.ml/x.jpg', '[]', now);
   bootstrapProductosFusion(db, 'e2e');
   auditarIdentidadProductos(db, 'e2e', { lecturaConfiable: true });
   const caso = db.prepare("SELECT id,estado FROM identidad_casos WHERE ml_key='MLA-UM11|VAR-9'").get();

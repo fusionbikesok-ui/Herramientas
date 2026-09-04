@@ -49,8 +49,11 @@ export function identidadProductosRouter(db) {
     const total = db.prepare("SELECT COUNT(*) n FROM ml_publicaciones_cache WHERE status='active' AND COALESCE(available_quantity,0)>0").get().n;
     const verificadas = db.prepare("SELECT COUNT(*) n FROM identidad_casos WHERE direccion='ml_fusion' AND estado='verificado'").get().n;
     const excepciones = db.prepare("SELECT COUNT(*) n FROM identidad_casos WHERE direccion='ml_fusion' AND estado='exceptuado'").get().n;
-    return res.json({ ok: true, data: { salud, conciliacion: { total, verificadas, excepciones, urgentes: salud.urgentes,
-      exacta: total === verificadas + excepciones + salud.urgentes }, colas: { ml_to_fusion: colas.ml_to_fusion.length, woo_to_ml: colas.woo_to_ml.length } } });
+    const incompletas = salud.observacion_incompleta || 0;
+    const auditadas = total - incompletas;
+    return res.json({ ok: true, data: { salud, conciliacion: { total, auditadas, observacion_incompleta: incompletas,
+      verificadas, excepciones, urgentes: salud.urgentes,
+      exacta: incompletas === 0 && auditadas === verificadas + excepciones + salud.urgentes }, colas: { ml_to_fusion: colas.ml_to_fusion.length, woo_to_ml: colas.woo_to_ml.length } } });
   });
   router.get('/casos', exigir(), (req, res) => res.json({ ok: true, data: listarCasosIdentidad(db, req.query) }));
   router.get('/casos/:id', exigir(), (req, res) => {

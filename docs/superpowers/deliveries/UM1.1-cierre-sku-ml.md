@@ -94,14 +94,49 @@ Actualizado: 2026-09-04, worktree `/opt/fusionbikes/worktrees/um1-identidad`, ra
   ventana con el front nuevo pegando contra rutas viejas. **No se mergeó**: la decisión es
   del responsable operativo.
 
+## Auditoría contra el universo ML real (2026-09-04)
+
+Ejecutada sobre **copias** de `data/fusion.sqlite` en `/tmp`, sin llamadas a ML y sin escribir
+en la base productiva, según pide la ficha matriz. Universo: 6893 publicaciones en cache, de
+las cuales **1201 son claves activas con stock**; catálogo Woo: 5139 productos.
+
+**El resultado del código no era utilizable, y ese es el hallazgo principal.** Devolvió
+`total: 1201, verificadas: 0, urgentes: 1201, conciliado: true`, con las 1201 clasificadas
+`sku_ausente`. Contando a mano contra el catálogo Woo sobre la misma copia, lo real es:
+
+| Clasificación | Claves |
+| --- | --- |
+| `sku_exacto` (cubiertas) | 907 |
+| `sku_vacío` o ausente | 217 |
+| `sku_inexistente` en Woo | 77 |
+| `sku_no_único` | 0 |
+
+A corregir: **294 de 1201**, no 1201.
+
+Causa (PM-044): la migración 082 agrega `seller_sku_presente` con `DEFAULT 0` y las filas del
+cache son anteriores. Verificado sobre la copia migrada: `seller_sku_presente=1` en **0** filas
+y `atributos_json` no nulo en **0**, pese a que 984 tienen `seller_sku` con valor.
+`clasificarClaveMl` evalúa `if (!presente) → 'sku_ausente'` antes de mirar el SKU.
+
+No se hizo backfill: sería incorrecto por PM-045.
+
+Endurecimiento aplicado (PM-043, PM-044): una clave sin observación completa ya no se
+clasifica, no genera caso, se cuenta como `observacion_incompleta`, impide la conciliación y
+degrada la salud. Verificado sobre el universo real: `auditadas: 0`,
+`observacion_incompleta: 1201`, `conciliado: false`, **0 casos creados** — en vez de 1201
+urgencias falsas.
+
+**Estas cifras son un diagnóstico sobre cache local, no evidencia del gate 2.** El gate exige
+un refresco ML completo previo, que todavía no se ejecutó.
+
 ## Por qué sigue en `desarrollo` y no pasa a `candidata`
 
 La auditoría dio verde sobre el diff, pero el diff no es la entrega. Contra los gates propios
 de UM1.1 quedan sin cumplir:
 
-- **Gate 2** — la conciliación `total = verificadas + excepciones + urgentes` solo se probó con
-  datos sintéticos. La auditoría fresca contra el universo ML real no se ejecutó y exige
-  lectura remota.
+- **Gate 2** — la auditoría contra el universo real se ejecutó (ver arriba) y demostró que el
+  cache no es clasificable sin un refresco ML completo previo. Ese refresco es la acción
+  pendiente; hasta entonces `conciliado` es `false` por diseño.
 - **Gate 3** — «ningún caso se resuelve antes de releer ML» está cubierto por tests, no por una
   verificación contra ML real.
 - **Gate 6** — canario designado y jornada observada son externos y no ocurrieron.
