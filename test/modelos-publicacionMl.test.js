@@ -17,8 +17,8 @@ describe('skuDesdeAtributosMl', () => {
     const attrs = [{ id: 'SELLER_SKU', value_name: ' ABC-1 ' }];
     expect(skuDesdeAtributosMl(attrs, 'OTRO')).toBe('ABC-1');
   });
-  it('cae a seller_custom_field cuando no hay SELLER_SKU', () => {
-    expect(skuDesdeAtributosMl([], ' CBX-9 ')).toBe('CBX-9');
+  it('no usa seller_custom_field como identidad cuando no hay SELLER_SKU', () => {
+    expect(skuDesdeAtributosMl([], ' CBX-9 ')).toBe('');
   });
   it('"" cuando no hay ninguno de los dos', () => {
     expect(skuDesdeAtributosMl([], null)).toBe('');
@@ -38,13 +38,18 @@ describe('aplanarItemMl', () => {
       sub_status: '', es_variante: 0, color: '', talle: '', seller_sku: 'CBL',
       variations_texto: '', thumbnail: 'https://x/t.jpg', permalink: 'https://ml/p', catalogo: 1,
       precio: null, available_quantity: null,
+      seller_sku_presente: 1, seller_custom_field: null,
+      atributos_json: JSON.stringify([{ id: 'SELLER_SKU', value_name: 'CBL' }]),
+      gtin: '', user_product_id: null,
     }]);
   });
 
-  it('item simple: SKU por fallback seller_custom_field', () => {
+  it('item simple: seller_custom_field queda como evidencia pero no como SKU', () => {
     const body = { id: 112, title: 'X', status: 'active', seller_custom_field: 'FB-9', attributes: [] };
     const [fila] = aplanarItemMl(body);
-    expect(fila.seller_sku).toBe('FB-9');
+    expect(fila.seller_sku).toBe('');
+    expect(fila.seller_sku_presente).toBe(0);
+    expect(fila.seller_custom_field).toBe('FB-9');
   });
 
   it('item con variaciones: color/talle y variations_texto por variación', () => {
@@ -71,7 +76,8 @@ describe('aplanarItemMl', () => {
     });
     expect(filas[1]).toMatchObject({
       clave: '200|2002', item_id: '200', variation_id: '2002', es_variante: 1,
-      color: 'Azul', talle: 'L', seller_sku: 'FB-2002', variations_texto: 'Azul / L',
+      color: 'Azul', talle: 'L', seller_sku: '', seller_sku_presente: 0,
+      seller_custom_field: 'FB-2002', variations_texto: 'Azul / L',
     });
   });
 

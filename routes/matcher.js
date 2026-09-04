@@ -11,6 +11,7 @@ import {
 import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { escanearGuardiaMl } from '../lib/guardiaMl.js';
+import { auditarIdentidadProductos } from '../lib/identidadProductos.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -93,10 +94,13 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
       // UM1: solo genera/actualiza casos locales; nunca escribe seller_sku, stock ni estados
       // remotos. Si el refresco fue completo, la lectura de Guardia tiene una base confiable.
       escanearGuardiaMl(db, 'sistema', { lecturaMlConfirmada: true });
+      auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: scopeNorm === 'all' });
     } catch (e) {
       _refresco.error = e.message;
       try {
         db.prepare('UPDATE guardia_ml_config SET ultimo_scan_error=?, actualizado_en=? WHERE id=1')
+          .run(e.message.slice(0, 500), now());
+        db.prepare('UPDATE identidad_config SET ultimo_scan_error=?, actualizado_en=? WHERE id=1')
           .run(e.message.slice(0, 500), now());
       } catch (_) { /* la lectura de Guardia no debe ocultar el error original del refresco */ }
     } finally {
@@ -295,7 +299,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`,
+      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity,user_product_id`,
       null, { manual: true }
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
@@ -440,12 +444,19 @@ export async function refrescarPublicacionesMlConMetricas(db, cfg, onProgress) {
 function prepararUpsertCache(db) {
   return db.prepare(`
     INSERT INTO ml_publicaciones_cache
-      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, permalink, catalogo, precio, available_quantity, precio_actualizado_en, actualizado_en)
-    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @permalink, @catalogo, @precio, @available_quantity, @actualizado_en, @actualizado_en)
+      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle,
+       seller_sku, seller_sku_presente, seller_custom_field, atributos_json, gtin, user_product_id,
+       variations_texto, thumbnail, permalink, catalogo, precio, available_quantity, precio_actualizado_en, actualizado_en)
+    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle,
+      @seller_sku, @seller_sku_presente, @seller_custom_field, @atributos_json, @gtin, @user_product_id,
+      @variations_texto, @thumbnail, @permalink, @catalogo, @precio, @available_quantity, @actualizado_en, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
       item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
       status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
-      talle=excluded.talle, seller_sku=excluded.seller_sku, variations_texto=excluded.variations_texto,
+      talle=excluded.talle, seller_sku=excluded.seller_sku,
+      seller_sku_presente=excluded.seller_sku_presente, seller_custom_field=excluded.seller_custom_field,
+      atributos_json=excluded.atributos_json, gtin=excluded.gtin, user_product_id=excluded.user_product_id,
+      variations_texto=excluded.variations_texto,
       thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo,
       precio=excluded.precio, available_quantity=excluded.available_quantity,
       precio_actualizado_en=excluded.precio_actualizado_en, actualizado_en=excluded.actualizado_en
@@ -481,7 +492,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
+      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity,user_product_id`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       // Mismo criterio que BLOQUEANTE 1 en el camino total: .status explícito para que

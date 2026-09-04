@@ -1,7 +1,7 @@
 # Plan Maestro de FusionBikes: operación, VPS y App
 
 **Estado:** especificación canónica vigente
-**Versión documental:** 2026-09-03 / programa E0–E24 + entrega urgente UM1
+**Versión documental:** 2026-09-04 / programa E0–E24 + programa urgente UM1
 **Backend canónico:** `/opt/fusionbikes/herramientas`
 **Rama productiva observada:** `conteo-confiable`
 **Base verificada de esta reconstrucción:** `bc13898f9faeffcde00f49616ce6cb858eff03a3`
@@ -1068,72 +1068,79 @@ Infraestructura/sanitización de staging y RTO/RPO tras medición. Responsable: 
 
 ## 18. Módulos existentes fuera del rediseño actual
 
-Precios, matcher, catálogo, consulta de precios, códigos universales, variaciones muertas y herramientas auxiliares siguen dentro del producto, pero no se rediseñan sin descubrimiento equivalente. E0 debe inventariar propósito, estado verificable, dependencias, riesgos y preguntas; una entrega futura solo entra al programa mediante decisión explícita.
+Precios, catálogo, consulta de precios, códigos universales, variaciones muertas y herramientas auxiliares siguen dentro del producto, pero no se rediseñan sin descubrimiento equivalente. Matcher/vínculos ML salió de esta lista por decisión explícita y pasa al programa urgente UM1. E0 debe inventariar los demás módulos antes de modificarlos.
 
 | Módulo | Estado documental | Riesgo/pregunta antes de modificar |
 | --- | --- | --- |
 | Precios | Existente, integración Woo/ML relevante | Autoridad, redondeo, permisos y efectos de sincronización |
-| Matcher/vínculos ML | Existente con specs históricas | Ambigüedad, reversión y efecto en publicaciones |
 | Catálogo/EAN | Existente; identidad impacta stock | Duplicados, SKU eliminado, provisional y solo local |
 | Consulta de precios | Existente con diseño histórico | Frescura, fuente y UX móvil |
 | Herramientas auxiliares | Inventario pendiente por tarea | Dueño operativo, uso real y deuda antes de rediseñar |
 
-## 18.1 Entrega urgente UM1 — Guardia ML y cobertura de publicaciones
+## 18.1 Programa urgente UM1 — Identidad de productos
 
-### Propósito, límite y prioridad
+### Propósito, prioridad e invariante
 
-UM1 corrige el hueco operativo por el que una variación activa de MercadoLibre sin SKU exacto pudo venderse y nunca entrar correctamente a preparación. Es transversal al programa: no renumera E0–E24, no adelanta E11 ni rediseña catálogo, stock físico o publicación masiva. Su resultado es una Guardia ML que detecta, hace visible y retiene el riesgo antes de que depósito reciba una tarea imposible.
+UM1 reemplaza Matcher, Cobertura y Guardia por una identidad bilateral ML↔Woo basada en `Producto Fusion`. Es transversal y no renumera E0–E24. Su primera subentrega, **UM1.1**, es bloqueante y tiene prioridad máxima: cerrar el universo actual de claves ML activas con stock cuyo `SELLER_SKU` esté ausente, vacío, no exista de forma única en Woo o contradiga un GTIN válido.
 
-La unidad de cobertura es siempre `publicación + variación`. Una decisión histórica `omitir`, una marca “correcta”, un título parecido o una variación hermana vinculada no cubren otra clave. Una clave segura requiere decisión `asignar`/`confirmar` y SKU existente en Woo.
+La unidad ML es siempre `item_id + variation_id`. Una clave solo está cubierta cuando su identidad y stock fueron verificados remotamente con observaciones confiables de menos de 60 minutos, o cuando posee una excepción explícita `solo_ml`. Una decisión histórica, similitud textual, `seller_custom_field` o una variación hermana nunca cubren la clave.
 
-### Actores, dispositivos y permisos
+Woo continúa como autoridad de stock. Producto Fusion es la identidad canónica: una unidad vendible, una identidad Woo activa como máximo y cero o más claves ML. Su SKU no es editable y cumple `FB-{id_woo}`; un producto provisional sin Woo no tiene SKU ni puede sincronizarse.
 
-- Ventas, Supervisor y Administración ven Guardia, reciben bandeja/push y pueden tomar casos desde PC o navegador móvil. Reconocer significa asumir responsabilidad; el dueño es visible y un relevo exige motivo.
-- Solo Supervisor o Administración puede cambiar la prioridad de sobreventa. Un Administrador designado habilita el paso de lectura a acciones reales sobre ML. Depósito ve pedidos retenidos como no preparables.
+### Subentregas ordenadas por valor operativo
 
-### Detección, frescura y estados
+| Entrega | Resultado tangible | Gate dominante |
+| --- | --- | --- |
+| **UM1.1 bloqueante** | Núcleo mínimo, auditoría fresca y cierre durable de toda clave ML activa con stock sin SKU válido | Universo conciliado; cero resolución sin verificar SKU y stock; canario y rollback |
+| UM1.2 | Eventos ML/Woo durables, scan de seguridad, salud, alertas, claims y recuperación | Eventos perdidos/duplicados/fuera de orden convergen tras reinicio |
+| UM1.3 | Producto Fusion completo, familias, atributos, archivo, reservas y bootstrap Woo | Bootstrap idempotente sin duplicar identidades |
+| UM1.4 | Colas ML→Fusion y Woo→ML, tareas de publicación y matching explicable | Calibración de 200 casos: ≥90% global y familias elegibles ≥80% |
+| UM1.5 | Herramienta unificada web/App, deep links y decisiones offline seguras | Paridad, accesibilidad, responsive e iPhone real |
+| UM1.6 | Migración de SKU canónico, corte estricto y retiro legacy | Canario, lotes de diez, 30 días de compatibilidad GET y rollback |
 
-- Escaneo al abrir y cada 15 minutos. Más de 30 minutos sin escaneo completo, o error ML, deja Guardia `degradada`; conserva el último resultado y nunca declara el control sano.
-- Guardia es `sana` solo con refresco vigente, cero variantes vendibles sin cobertura y ninguna operación remota crítica pendiente. Casos sin stock permanecen en Corrección normal.
-- Cada confirmación humana exitosa registra un perfil normalizado de título/variación → SKU Woo y su contador histórico. Ese aprendizaje solo ordena sugerencias futuras y muestra cuántas confirmaciones lo respaldan; jamás sustituye SKU único, confirmación humana ni verificación remota.
-- Casos: `abierto → tomado → resolviendo → pendiente_ml → resuelto`; excepción hasta vencimiento. Cada corrección agrega eventos, nunca reescribe historia. Alertas reavisan cada 5 minutos y escalan a los 15; excepciones vencen al cierre y reaparecen urgentes con el mismo responsable.
+### UM1.1: corrección segura
 
-### Tres superficies claras
+Toda corrección persiste caso, decisión y operación antes de efectos externos. Después ejecuta y verifica, en orden: stock cero de la clave afectada; limpieza de `SELLER_SKU`; escritura de `FB-{id_woo}`; restauración del stock Woo objetivo; activación local y reproceso de ventas retenidas. Si la API ML obliga a afectar variaciones hermanas, la operación muestra el impacto y espera confirmación.
 
-1. **Guardia ML:** cola priorizada y detalle con título/variante, stock ML, ventas ML de 30 días, pedido/plazo si existe, dueño, motivo, acción requerida y enlaces ML/Woo. Al tomar un caso se abre un comparador: publicación ML con foto y datos a la izquierda; búsqueda de productos Woo con foto, SKU, stock y nombre a la derecha. Un pedido retenido encabeza por fecha máxima de despacho.
-2. **Corrección:** agrupada por publicación, con vínculo separado por variación. Ofrece búsqueda y sugerencias explicables; solo `seller_sku` idéntico y existente se auto-confirma auditadamente.
-3. **Consulta:** conserva historial y Matcher legacy con aviso de reemplazo. Nunca vuelve a ocultar cobertura por “marcar correcta”.
+Los casos no vinculables deben recibir una excepción explícita `solo_ml` o permanecer urgentes. Nunca se cierran por `omitir`. El modo inicial es `shadow`; ninguna escritura real se habilita sin gates verdes, publicación canario designada y autorización operativa.
 
-### Vínculos, catálogo y ML remoto
+### Detección, estados y recuperación
 
-- Vínculo manual exige vista previa de publicación, variante, SKU, producto, stock Woo y efecto de sync. Lotes son parciales explícitos: cada operación queda auditada y una falla remota sigue urgente.
-- Al vincular, Fusion persiste operación remota idempotente para escribir `seller_sku`, reconciliar stock y revisar pedidos abiertos. No se resuelve hasta confirmación ML.
-- Con SKU correcto: desvincular y volver a vincular. Si falla el segundo paso, no restaura el SKU errado; queda urgente y reintentable. Sin SKU correcto: conserva temporalmente `seller_sku` remoto, bloquea sync y exige pausa o excepción. Pausa con hermanas exige doble confirmación informada.
-- Producto Woo sin SKU se corrige en Catálogo Woo; producto inexistente crea tarea de alta para Ventas y solo cierra con SKU, vínculo y sync validados. Motivos: sin SKU Woo, producto inexistente, vínculo dudoso, excepción comercial, incidencia ML u otro, todos con nota.
-- SKU Woo eliminado/inválido abre Guardia y encola stock cero. Cambio externo de `seller_sku` en ML bloquea sync y exige revisión; ninguna fuente pisa silenciosamente a la otra.
+- Los webhooks ML `items` y Woo de producto crean trabajo durable y releen el origen; un scan completo cada 15 minutos repara eventos perdidos.
+- Más de 60 minutos sin scan ML completo confiable degrada la salud. Evento crítico o venta retenida debe producir urgencia y primer intento de alerta en menos de dos minutos.
+- Caso: `detectado → disponible → tomado → operación_pendiente → resuelto|intervención`; excepción explícita reabre al vencer o invalidarse.
+- Claim avisa a los 20 minutos y vence/reabre a los 30 por inactividad. Otro usuario puede relevarlo con motivo.
+- Operación: `queued → zeroing → clearing → writing → restoring_stock → verifying → completed`; tres fallos o quince minutos llevan a intervención. Administración puede reintentar, restaurar el SKU previo verificado o dejar bloqueado.
 
-### Pedidos retenidos, stock compartido y sobreventa
+### Matching y cobertura bilateral
 
-- Orden ML sin cobertura se registra y retiene en Fusion sin cambiar estado ni nota de Woo; no llega a ola/preparación. Se libera explícitamente al resolver. Si cancela, se cierra la sub-tarea del pedido pero no la publicación riesgosa.
-- Un SKU puede estar en varias claves activas y cada clave publica el stock completo de Woo. El segundo vínculo requiere confirmación de stock compartido, motivo y auditoría; los grupos existentes se revisan en Corrección.
-- ML no reserva atómicamente entre claves: no se promete cero sobreventa. Si ventas simultáneas superan físico, se abre incidente crítico y retiene excedentes. Entre ML gana plazo y luego antigüedad; frente a web, ML gana la última unidad. Supervisor/Admin puede justificar override.
+- Auto-vínculo solo por `SELLER_SKU` textualmente exacto y único o GTIN-8/12/13/14 canónico, único y con dígito verificador válido.
+- Conflicto SKU↔GTIN bloquea; una excepción elige la identidad válida pero mantiene el otro identificador para corrección.
+- Matching aproximado determinista por familia, con un candidato, razones visibles y confirmación individual. Precio y fotos son contexto, no puntaje.
+- Mostrar porcentaje solo si existe calibración suficiente y es ≥60%; de lo contrario indicar evidencia insuficiente.
+- Woo→ML termina en vínculo, tarea de publicación con SLA de siete días o exclusión explícita.
 
-### Auditoría, aceptación y rollout
+### Superficies, permisos y alertas
 
-- Auditoría inmutable de scan, claim/relevo, vínculo, lote, pausa, excepción, expiración, operación remota, divergencia, tarea, retención/liberación/cancelación y override.
-- Objetivo: riesgo reconocido antes de 15 minutos y resuelto antes de otra venta. Backlog inicial priorizado y cerrado antes de declarar Guardia sana.
-- Primera publicación de **lectura**: crea/incorpora casos, sin escribir ML. Administrador designado valida total, prioridades y muestra por categoría; solo entonces habilita acciones.
-- Aceptación: variante sin SKU, `seller_sku` válido, vínculo/lote parcial, ML caído, scan vencido, pausa con hermanas, excepción vencida, SKU Woo eliminado, deriva ML, pedido retenido/cancelado/liberado, ventas simultáneas de stock compartido, operación repetida y rollback. Requiere revisión, tests, E2E 390/768/1440 y jornada observada.
+- Web: `/herramientas/identidad-productos/` y `/api/identidad-productos`.
+- App: `/api/v1/identidad-productos`; deep link `fusionbikes://identidad-productos/casos/{id}`.
+- Navegación: Pendientes, Productos Fusion, Operaciones e Historial, con salud/alertas persistentes.
+- Administradores y usuarios con `matcher:write` deciden; lectura puede consultar y agregar notas/evidencia. Familias y modo operativo son solo administrativos.
+- App y web tienen capacidad equivalente. La App entra desde Hoy y permite decisiones offline hasta 12 horas con versión/evidencia; un conflicto detiene el replay.
+- Alertas críticas llegan a todos los administradores por App, pantalla y push; recordatorio a los 15 minutos y nueva escalada a los 30. La bandeja persiste si push falla.
 
-### Relación con E0–E24
+### Rollout y retiro legacy
 
-UM1 protege E1 (ningún pedido inválido llega a picking), E11 (política de publicación) y E12 (faltantes/reasignación). No habilita stock físico, offline, órdenes de compra ni App móvil. Su ficha es fuente de progreso y no adelanta E11.
+Bootstrap en sombra desde cada unidad Woo actual; solo relaciones heredadas exactas, únicas y nuevamente verificadas migran automáticamente. Los SKU fuera de `FB-{id_woo}` se corrigen con un canario y lotes de diez. Las mutaciones legacy se deshabilitan al corte; GET permanecen 30 días con deprecación y métricas. El rollback vuelve el núcleo a sombra/read-only, conserva casos/evidencia y nunca reactiva motores anteriores ni deshace automáticamente efectos remotos confirmados.
+
+La especificación completa es `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-04-identidad-productos.md`; la ficha matriz es `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1-guardia-ml.md` y UM1.1–UM1.6 conservan evidencia independiente.
 
 ## 19. Secuencia de entregas E0–E24
 
 | Entrega | Superficie | Resultado tangible | Dependencia dominante |
 | --- | --- | --- | --- |
-| UM1 urgente | VPS + web móvil | Guardia ML, cobertura exacta, retención de ventas sin SKU y corrección auditada | ML/Woo actuales; protege E1/E11/E12 |
+| UM1.1 urgente | VPS + web móvil | Cierre de publicaciones ML activas con stock sin SKU válido | Bloqueante; protege E1/E11/E12 |
+| UM1.2–UM1.6 | VPS + web + App | Cobertura durable, Producto Fusion, matching bilateral, UX completa y retiro legacy | UM1.1 y gates progresivos |
 | E0 | Ambos | Maestro, memoria, archivo, decisiones, patrones, fichas y handoffs reconstruidos | Ninguna |
 | E1 | VPS | Apertura diaria, horarios, olas y picking consolidado | Entrega operativa anterior |
 | E2 | VPS/web móvil | Evidencia, perfiles, paquetes y aprobación confiable | Entrega operativa anterior |

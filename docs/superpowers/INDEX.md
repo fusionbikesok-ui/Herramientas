@@ -1,10 +1,11 @@
 # Índice canónico de planificación y operación
 
-Actualizado: 2026-09-01.
+Actualizado: 2026-09-04.
 
 ## Vigentes
 
 - Plan maestro: `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`.
+- Programa urgente UM1 — Identidad de productos: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-04-identidad-productos.md`.
 - Decisiones consolidadas: `/opt/fusionbikes/herramientas/docs/superpowers/decisions/plan-maestro-decisions.md`.
 - Patrones WMS evaluados: `/opt/fusionbikes/herramientas/docs/superpowers/references/wms-patterns.md`.
 - Progreso y evidencia E0–E24: `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md`.

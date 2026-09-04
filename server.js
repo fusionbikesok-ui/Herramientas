@@ -30,6 +30,7 @@ import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { guardiaMlRouter } from './routes/guardiaMl.js';
 import { procesarOperacionesGuardia } from './lib/guardiaMl.js';
+import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
 import { jornadaRouter } from './routes/jornada.js';
@@ -172,6 +173,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/v1/notifications', notificationsRouter(db, mobileNotificationsAuth));
   app.use('/api/v1/inbox', inboxClaimsRouter(db, mobileNotificationsAuth));
   app.use('/api/v1/workshop', mobileWorkshopRouter(db, mobileAuth));
+  app.use('/api/v1/identidad-productos', mobileAuth, identidadProductosRouter(db));
   app.use('/api/v1', operacionesMobileRouter(db, mobileNotificationsAuth));
 
   // A partir de acá, todo /api exige sesión válida + permiso por herramienta.
@@ -340,6 +342,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
   app.use('/api/cobertura', coberturaRouter(db, syncCfg));
   app.use('/api/guardia-ml', guardiaMlRouter(db, syncCfg));
+  app.use('/api/identidad-productos', identidadProductosRouter(db));
   app.use('/guardia-ml', express.static(path.join(__dirname, 'public/guardia-ml')));
   // Matcher unificado, entrega 1 (2026-08-14): Cobertura dejó de ser una pantalla propia,
   // pasó a ser la dirección Woo→ML del Matcher. `/cobertura` no puede dar 404 (puede haber

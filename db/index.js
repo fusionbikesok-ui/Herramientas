@@ -619,6 +619,26 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('guardia_ml_aprendizajes_081')").run();
     })();
   }
+  const identidadProductosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_productos_082'").get();
+  if (!identidadProductosMigration) {
+    db.transaction(() => {
+      // La observación ML conserva presencia/ausencia y evidencia auxiliar por separado.
+      // seller_custom_field nunca se copia a seller_sku: no constituye cobertura.
+      const cols = new Set(db.prepare('PRAGMA table_info(ml_publicaciones_cache)').all().map((c) => c.name));
+      if (!cols.has('seller_sku_presente')) db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN seller_sku_presente INTEGER NOT NULL DEFAULT 0');
+      if (!cols.has('seller_custom_field')) db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN seller_custom_field TEXT');
+      if (!cols.has('atributos_json')) db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN atributos_json TEXT');
+      if (!cols.has('gtin')) db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN gtin TEXT');
+      if (!cols.has('user_product_id')) db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN user_product_id TEXT');
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '082_identidad_productos.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_productos_082')").run();
+      db.pragma('user_version = 82');
+    })();
+  } else if (db.pragma('user_version', { simple: true }) < 82) {
+    // El marcador es la fuente de idempotencia; user_version deja visible la revisión de
+    // esquema efectiva para diagnósticos y bases actualizadas desde builds intermedios.
+    db.pragma('user_version = 82');
+  }
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}
