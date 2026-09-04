@@ -82,6 +82,7 @@
     .opcion .sinfoto{display:grid;place-items:center;color:var(--muted);font-size:.68rem;text-align:center}
     .opcion strong{display:block;overflow-wrap:anywhere;font-size:.92rem}
     .opcion small{color:var(--muted);font-size:.8rem}
+    .opcion small.attrs{display:block;color:var(--accent);font-size:.82rem;margin:.1rem 0}
     .senal{display:inline-block;margin-left:.4rem;padding:.08rem .4rem;border-radius:99px;font-size:.7rem;border:1px solid var(--border);background:var(--surface2);color:var(--muted)}
     .senal.gtin{background:var(--green-bg);color:var(--green);border-color:var(--green-bd)}
     .senal.sku{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-bd)}
@@ -272,11 +273,17 @@
           + (o.coincide_gtin ? '<span class="senal gtin">GTIN coincide</span>' : '')
           + (o.coincide_sku ? '<span class="senal sku">SELLER_SKU coincide</span>' : '')
           + (o.coincidencia_parcial ? '<span class="senal">coincidencia parcial</span>' : '')
-          + '</strong><small>' + esc(o.fusion_sku)
+          + (o.es_padre ? '<span class="senal">producto padre — no enlazable</span>' : '')
+          + (o.de_familia_gtin ? '<span class="senal gtin">de la familia del GTIN</span>' : '')
+          + '</strong>'
+          + (o.atributos ? '<small class="attrs">' + esc(o.atributos) + '</small>' : '')
+          + '<small>' + esc(o.fusion_sku)
           + ' · SKU Woo ' + esc(o.sku_woo || 'sin SKU') + ' · Stock Woo ' + esc(o.stock_woo ?? 'sin dato')
           + (o.gtin ? ' · GTIN ' + esc(o.gtin) : '')
           + (o.identidades_ml_activas ? ' · ya publicado en ' + esc(o.identidades_ml_activas) + ' clave(s) ML' : '')
-          + '</small></div><button class="btn" data-elegir="' + o.id + '">Elegir</button></article>').join('')
+          + '</small></div>'
+          + (o.es_padre ? '<span class="muted">variación requerida</span>'
+            : '<button class="btn" data-elegir="' + o.id + '">Elegir</button>') + '</article>').join('')
           : '<p class="muted">Sin resultados. Si el producto no existe en Woo, no es una excepción: es una tarea de alta de catálogo.</p>')
       + '</div>'
       // Vista previa obligatoria: qué se va a escribir y con qué stock, antes de confirmar.
@@ -291,28 +298,39 @@
       + '</section>';
   }
 
-  // Cuando el SELLER_SKU y el GTIN de la publicación apuntan a productos distintos, ese es
-  // EL dato que resuelve el caso. Una lista de nombres iguales no lo muestra.
+  // El GTIN puede coincidir con un producto PADRE (variable). Eso no es un conflicto: dice
+  // que la publicación pertenece a esa familia y que la respuesta es una de sus variaciones.
+  // Sólo hay conflicto real cuando SKU y GTIN apuntan a unidades vendibles distintas.
   function conflictoIdentidad(ml) {
     const c = state.candidatos;
     if (!Array.isArray(c) || !c.length) return '';
-    const porGtin = c.find((o) => o.coincide_gtin);
+    const porGtin = c.find((o) => o.coincide_gtin && !o.es_padre);
     const porSku = c.find((o) => o.coincide_sku);
+    const familia = c.find((o) => o.de_familia_gtin);
     let html = '';
     if (porGtin && porSku && porGtin.id !== porSku.id) {
-      html += '<div class="conflicto"><b>Conflicto de identidad.</b> El <b>SELLER_SKU</b> de la publicación'
-        + ' apunta a <b>' + esc(porSku.fusion_sku) + '</b>, pero el <b>GTIN</b> ' + esc(ml.gtin || '')
-        + ' coincide con <b>' + esc(porGtin.fusion_sku) + '</b>. Son productos distintos: hay que decidir'
-        + ' cuál identidad es la válida, y el identificador descartado queda para corregir en catálogo.</div>';
+      html += '<div class="conflicto"><b>Conflicto de identidad.</b> El <b>SELLER_SKU</b> apunta a <b>'
+        + esc(porSku.fusion_sku) + '</b>, pero el <b>GTIN</b> ' + esc(ml.gtin || '') + ' coincide con <b>'
+        + esc(porGtin.fusion_sku) + '</b>, que es otro producto vendible. Hay que decidir cuál identidad'
+        + ' vale; el identificador descartado queda para corregir en catálogo.</div>';
+    } else if (familia && familia.padre_gtin_sku) {
+      const concuerda = porSku && porSku.de_familia_gtin;
+      html += '<div class="conflicto" style="border-color:var(--green-bd);background:var(--green-bg)">'
+        + 'El <b>GTIN</b> ' + esc(ml.gtin || '') + ' coincide con el <b>producto padre</b> '
+        + esc(familia.padre_gtin_sku) + ', que no es una unidad vendible. La publicación pertenece a esa'
+        + ' familia: elegí una de sus <b>variaciones</b>, marcadas abajo.'
+        + (concuerda ? ' El SELLER_SKU apunta a <b>' + esc(porSku.fusion_sku) + '</b>, que es una de ellas:'
+          + ' SKU y GTIN concuerdan.' : '')
+        + '</div>';
     } else if (porGtin) {
       html += '<div class="conflicto" style="border-color:var(--green-bd);background:var(--green-bg)">'
-        + '<b>' + esc(porGtin.fusion_sku) + '</b> coincide por GTIN con la publicación. Es la señal más fuerte:'
-        + ' el GTIN es del fabricante y no depende de cómo esté cargado el catálogo.</div>';
+        + '<b>' + esc(porGtin.fusion_sku) + '</b> coincide por GTIN con la publicación. Es la señal más'
+        + ' fuerte: el GTIN es del fabricante y no depende de cómo esté cargado el catálogo.</div>';
     }
-    if (c.some((o) => o.nombre_ambiguo)) {
-      html += '<div class="ambiguo">Varios candidatos tienen <b>el mismo nombre en WooCommerce</b> y no se'
-        + ' distinguen por texto. Mirá GTIN, SKU y stock. Si la diferencia real (medida, largo, color) no está'
-        + ' en el nombre ni en los atributos de Woo, es una corrección de catálogo, no una decisión de esta pantalla.</div>';
+    if (c.some((o) => o.nombre_ambiguo && !o.atributos)) {
+      html += '<div class="ambiguo">Varios candidatos tienen <b>el mismo nombre y ningún atributo</b> en'
+        + ' WooCommerce, así que no hay con qué distinguirlos desde acá. La diferencia real (largo, medida)'
+        + ' existe en el título de MercadoLibre pero no está cargada en Woo: es una corrección de catálogo.</div>';
     }
     return html;
   }
