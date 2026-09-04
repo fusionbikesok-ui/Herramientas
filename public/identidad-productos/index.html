@@ -126,6 +126,11 @@
   <script>
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // MercadoLibre usa 99999 como centinela de stock ilimitado/atípico, no como cantidad real:
+  // mostrarlo crudo hace creer que hay 99.999 unidades. Hoy son 72 publicaciones.
+  const stockML = (n) => (Number(n) >= 99999
+    ? '<b>ilimitado / atípico</b> <span class="muted">(ML informa ' + esc(n) + ')</span>'
+    : '<b>' + esc(n ?? 'sin dato') + '</b>');
   const opId = () => (crypto.randomUUID ? crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2));
 
   const state = { view: 'pendientes', resumen: null, casos: [], colas: null, productos: [], operaciones: [],
@@ -195,7 +200,7 @@
         + '<span>' + sev(c)
         + '<strong>' + esc(c.titulo || c.ml_key) + '</strong><small>'
         + esc(c.variations_texto || 'sin variante') + ' · ' + esc(c.clasificacion)
-        + ' · Stock ML ' + esc(c.available_quantity ?? 'sin dato')
+        + ' · Stock ML ' + (Number(c.available_quantity) >= 99999 ? 'ilimitado' : esc(c.available_quantity ?? 'sin dato'))
         + ' · ' + esc(c.estado) + (c.responsable ? ' · ' + esc(c.responsable) : '') + '</small></span></button>').join('')
         : '<p class="muted empty">No hay casos pendientes.</p>') + '</aside>';
   }
@@ -228,7 +233,7 @@
       + '<div class="facts"><b>' + esc(pub.titulo || 'sin título') + '</b><br>'
       + 'Publicación: <b>' + esc(ml.item_id || '—') + '</b><br>Variación: <b>' + esc(ml.variation_id || 'sin variación') + '</b><br>'
       + 'SELLER_SKU: <b>' + esc(ml.seller_sku || 'ausente') + '</b> ' + (ml.seller_sku_presente ? '' : '<span class="tag critica">sin atributo</span>') + '<br>'
-      + 'GTIN: <b>' + esc(ml.gtin || 'sin GTIN') + '</b><br>Stock informado: <b>' + esc(ml.stock ?? 'sin dato') + '</b><br>'
+      + 'GTIN: <b>' + esc(ml.gtin || 'sin GTIN') + '</b><br>Stock informado: ' + stockML(ml.stock) + '<br>'
       + 'Observado: <b>' + esc(ml.observado_en || 'sin dato') + '</b><br>'
       + '<span class="muted">seller_custom_field: ' + esc(ml.seller_custom_field || 'vacío') + ' — es evidencia auxiliar y nunca da cobertura.</span>'
       + (pub.atributos?.length
@@ -236,7 +241,8 @@
           + pub.atributos.map((a) => '<span class="attr">' + esc(a.nombre) + ': <b>' + esc(a.valor) + '</b></span>').join('')
           + '</div>'
         : '<div class="attrs-bloque muted">La publicación no declara atributos útiles para identificar la variante.</div>')
-      + (pub.permalink ? '<br><a class="enlace" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Abrir en MercadoLibre ↗</a>' : '')
+      + (pub.permalink ? '<br><a class="enlace" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Abrir en MercadoLibre ↗</a>'
+        + '<br><span class="muted">Si MercadoLibre dice «Este artículo no existe», la publicación se dio de baja después de la última lectura: el caso quedó huérfano y corresponde excepción o esperar el próximo escaneo.</span>' : '')
       + '</div></div></section>'
       + '</div><div class="col-comp">'
       + '<section class="panel panel-woo"><h3>WooCommerce · identidad candidata</h3>'
