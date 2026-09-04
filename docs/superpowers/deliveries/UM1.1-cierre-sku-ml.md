@@ -88,6 +88,26 @@ Actualizado: 2026-09-04, worktree `/opt/fusionbikes/worktrees/um1-identidad`, ra
 - Tests: `npx vitest run test/identidad-productos.test.js test/db.test.js test/guardia-ml.test.js test/server.test.js test/modelos-publicacionMl.test.js --no-file-parallelism` — **5 archivos, 76/76**.
 - E2E final: `npm run e2e:um11:responsive` — `ok:true` en 390, 768 y 1440, con el vínculo
   hecho por el buscador real de la pantalla y la operación quedando en estado `shadow`.
+- Auditoría de despliegue sobre el diff final (`4adeee1..881cc1b`): 🟢, con la observación
+  operativa de que pm2 sirve estáticos desde `/opt/fusionbikes/herramientas` al instante
+  mientras el backend sigue en memoria hasta un `pm2 restart`, así que un merge abriría una
+  ventana con el front nuevo pegando contra rutas viejas. **No se mergeó**: la decisión es
+  del responsable operativo.
+
+## Por qué sigue en `desarrollo` y no pasa a `candidata`
+
+La auditoría dio verde sobre el diff, pero el diff no es la entrega. Contra los gates propios
+de UM1.1 quedan sin cumplir:
+
+- **Gate 2** — la conciliación `total = verificadas + excepciones + urgentes` solo se probó con
+  datos sintéticos. La auditoría fresca contra el universo ML real no se ejecutó y exige
+  lectura remota.
+- **Gate 3** — «ningún caso se resuelve antes de releer ML» está cubierto por tests, no por una
+  verificación contra ML real.
+- **Gate 6** — canario designado y jornada observada son externos y no ocurrieron.
+
+Un veredicto verde de auditoría de código no sustituye evidencia de gate. El estado no se
+infiere por tener el diff limpio y la suite verde.
 - Auditoría del universo ML real: no ejecutada; requiere lectura contra ML y el modo sigue
   siendo `shadow`.
 - Canario, rollback real y jornada observada: pendientes externos.
