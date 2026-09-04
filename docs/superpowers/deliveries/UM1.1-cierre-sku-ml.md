@@ -129,6 +129,25 @@ urgencias falsas.
 **Estas cifras son un diagnóstico sobre cache local, no evidencia del gate 2.** El gate exige
 un refresco ML completo previo, que todavía no se ejecutó.
 
+## Publicación en producción (2026-09-04)
+
+Autorizada explícitamente por el responsable operativo.
+
+- Merge fast-forward de `feature/um1-identidad-continuacion` a `conteo-confiable`, la rama
+  productiva. Punto de retorno: tag `pre-merge-um1-identidad-20260904` en `6949f02`.
+- Respaldo de la base antes de migrar:
+  `/tmp/.../fusion-pre-082-1833.sqlite` (41 MB).
+- `pm2 restart herramientas`. Verificado en el puerto real (3001, no 3000):
+  `/login/` 200, `/identidad-productos/` 200, `/api/identidad-productos/resumen` 401 sin sesión.
+- Base productiva tras el restart: migración 082 aplicada, `user_version` en **30** (la
+  compuerta de Hito 7 intacta, PM-034), `device_tokens` presente.
+- **0 casos creados y 0 productos_fusion**, con 1201 claves contadas como `observacion_incompleta`.
+  El endurecimiento de PM-044 funcionó en producción: sin él se habrían creado 1201 urgencias
+  falsas. El cron de refresco completo (cada 15 minutos) repuebla los atributos y recién
+  entonces la auditoría clasifica.
+
+El modo sigue siendo `shadow`: no hay escrituras a MercadoLibre.
+
 ## Por qué sigue en `desarrollo` y no pasa a `candidata`
 
 La auditoría dio verde sobre el diff, pero el diff no es la entrega. Contra los gates propios
