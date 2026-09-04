@@ -38,6 +38,8 @@ describe('aplanarItemMl', () => {
       sub_status: '', es_variante: 0, color: '', talle: '', seller_sku: 'CBL',
       variations_texto: '', thumbnail: 'https://x/t.jpg', permalink: 'https://ml/p', catalogo: 1,
       precio: null, available_quantity: null,
+      // 083: canal de la publicación. Sin `channels` en el payload, queda null.
+      canales_json: null,
       seller_sku_presente: 1, seller_custom_field: null,
       atributos_json: JSON.stringify([{ id: 'SELLER_SKU', value_name: 'CBL' }]),
       gtin: '', user_product_id: null,

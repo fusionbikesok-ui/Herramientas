@@ -199,6 +199,7 @@
         + (c.thumbnail ? '<img class="mini" src="' + esc(c.thumbnail) + '" alt="" loading="lazy">' : '<span class="mini vacia">sin<br>foto</span>')
         + '<span>' + sev(c)
         + '<strong>' + esc(c.titulo || c.ml_key) + '</strong><small>'
+        + (c.es_marketplace === false ? '<span class="senal">link de pago</span> ' : '')
         + esc(c.variations_texto || 'sin variante') + ' · ' + esc(c.clasificacion)
         + ' · Stock ML ' + (Number(c.available_quantity) >= 99999 ? 'ilimitado' : esc(c.available_quantity ?? 'sin dato'))
         + ' · ' + esc(c.estado) + (c.responsable ? ' · ' + esc(c.responsable) : '') + '</small></span></button>').join('')
@@ -219,6 +220,11 @@
       + '<span class="muted">' + esc(pub.variations_texto || 'sin variante') + ' · ' + esc(ml.clave || d.ml_key) + '</span><br>'
       + '<span class="muted">Caso ' + d.id + ' · ' + esc(d.estado) + ' · Responsable: ' + esc(d.responsable || 'sin asignar')
       + ' · versión ' + esc(d.expected_version) + '</span>'
+      + (pub.es_marketplace === false
+        ? '<div class="ambiguo" style="margin-top:.8rem"><b>Esta publicación no está en el marketplace.</b> Su canal es'
+          + ' Mercado Pago (link de pago): existe en la API y figura activa, pero no se encuentra buscando en'
+          + ' MercadoLibre y no vende por el marketplace. Revisá si corresponde exigirle identidad de catálogo.</div>'
+        : '')
       + (enShadow() ? '<div class="notice read" style="margin-top:.8rem">Modo <b>shadow</b>: se registran decisiones y se encolan operaciones, pero <b>no se escribe en MercadoLibre</b>.</div>' : '')
       + '<div class="actionbar">'
       + '<button class="btn" id="tomar">' + (d.responsable ? 'Relevar caso' : 'Tomar caso') + '</button>'
