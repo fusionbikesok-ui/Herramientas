@@ -24,11 +24,30 @@ export function loadRoutingFile() {
 // (sol/high), escalate=2 al segundo, que CAMBIA DE MOTOR: lo escribe Claude Opus. Solo tiene
 // efecto sobre roles engine=codex; los roles engine=claude (revisor, auditor-despliegue,
 // probador-e2e) no escalan por este mecanismo porque ya corren en el motor de mayor calidad.
-export function resolveRouting(role, { escalate = 0 } = {}) {
+// Gates que suben de sonnet a opus. `probador-e2e` queda afuera a propósito: está en Claude por
+// restricción de herramienta (el MCP de Playwright vive ahí), no por exigencia de razonamiento,
+// y manejar un navegador no mejora con un modelo más caro.
+const GATES_ESCALABLES = new Set(['revisor', 'auditor-despliegue']);
+
+export function resolveRouting(role, { escalate = 0, triggersHit = [] } = {}) {
   const config = loadRouting();
   const entry = config.roles[role];
   if (!entry) throw new Error(`rol sin ruteo: ${role}`);
   const routing = { ...entry };
+
+  // Gates en Claude: suben si el diff toca un trigger (automático, por paths) o si se pide a
+  // mano. El disparo automático es el punto: con presupuesto semanal, Opus tiene que gastarse
+  // donde el riesgo lo justifica, y eso no puede depender de que el orquestador se acuerde.
+  if (routing.engine === 'claude' && GATES_ESCALABLES.has(role)) {
+    const step = config.escalation?.ladder_gates?.[0];
+    if (step && (escalate > 0 || triggersHit.length)) {
+      routing.model = step.model;
+      routing.escalated = true;
+      routing.motivo_escalada = triggersHit.length ? `triggers: ${triggersHit.join(', ')}` : 'solicitado con --escalate';
+    }
+    return routing;
+  }
+
   if (routing.engine === 'codex' && escalate > 0) {
     const ladder = config.escalation?.ladder || [];
     const step = ladder[Math.min(escalate, ladder.length) - 1];

@@ -66,10 +66,36 @@ export function parseJsonText(text) {
   throw new Error('la respuesta del agente no es el JSON de handoff requerido');
 }
 
+// Todos los archivos que el diff toca (commiteados, staged, sin stagear y sin trackear).
+// -z es obligatorio, no cosmético: sin él git cita los paths no-ASCII (core.quotePath), así que
+// `public/café.js` sale como `"public/caf\303\251.js"` y deja de matchear el prefijo. En un
+// detector que decide si escalar a Opus, ese fallo escala DE MENOS — justo la dirección peligrosa.
+export function changedFiles(worktree, base, head) {
+  const run = (args) => {
+    const result = spawnSync('git', args, { cwd: worktree, encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(`git ${args.join(' ')} falló`);
+    return result.stdout.split('\0').filter(Boolean);
+  };
+  return [
+    ...run(['diff', '-z', '--name-only', base, head]),
+    ...run(['diff', '-z', '--name-only']),
+    ...run(['diff', '-z', '--cached', '--name-only']),
+    ...run(['ls-files', '-z', '--others', '--exclude-standard']),
+  ];
+}
+
 export function requiresE2E(worktree, base, head) {
-  const run = (args) => { const result = spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }); if (result.status !== 0) throw new Error(`git ${args.join(' ')} falló`); return result.stdout; };
-  const names = `${run(['diff', '--name-only', base, head])}${run(['diff', '--name-only'])}${run(['diff', '--cached', '--name-only'])}${run(['ls-files', '--others', '--exclude-standard'])}`.split('\n');
-  return names.some((name) => name.startsWith('public/'));
+  return changedFiles(worktree, base, head).some((name) => name.startsWith('public/'));
+}
+
+// Labels de los triggers de riesgo que toca el diff. Alimenta la escalada automática de los
+// gates (sonnet → opus): se dispara por paths y no por criterio del orquestador, para que no
+// dependa de que alguien se acuerde. Un trigger sin `paths` (concurrencia) nunca dispara solo.
+export function triggersTocados(worktree, base, head, triggers) {
+  const files = changedFiles(worktree, base, head);
+  return (triggers || [])
+    .filter((trigger) => (trigger.paths || []).some((prefix) => files.some((file) => file.startsWith(prefix))))
+    .map((trigger) => trigger.label);
 }
 
 export function outputOutsideWorktree(output, worktree) {

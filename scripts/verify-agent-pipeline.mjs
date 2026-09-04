@@ -9,17 +9,14 @@ const agentsDir = path.join(root, '.claude', 'agents');
 const policyFile = path.join(root, 'scripts', 'agent-pipeline-policy.mjs');
 const routingFile = path.join(root, 'agents', 'routing.json');
 
-const expectedModels = {
-  'hard-worker-backend.md': 'haiku',
-  'hard-worker-frontend.md': 'haiku',
-  'explorador.md': 'haiku',
-  'tester.md': 'sonnet',
-  'probador-e2e.md': 'sonnet',
-  'disenador-ux.md': 'sonnet',
-  'disenador-ui.md': 'sonnet',
-  'revisor.md': 'opus',
-  'auditor-despliegue.md': 'opus',
-};
+// Los modelos esperados NO se hardcodean acá: se derivan de agents/routing.json más abajo, que
+// es la única fuente de verdad del reparto. Este mapa existía cuando Codex orquestaba y quedó
+// stale tras la inversión (declaraba haiku para roles que hoy corren en Codex), que es
+// exactamente el problema que una segunda fuente de verdad produce.
+const AGENT_FILES = [
+  'hard-worker-backend.md', 'hard-worker-frontend.md', 'explorador.md', 'tester.md',
+  'probador-e2e.md', 'disenador-ux.md', 'disenador-ui.md', 'revisor.md', 'auditor-despliegue.md',
+];
 
 const requiredFiles = [
   path.join(root, 'agents', 'model-routing.md'),
@@ -39,7 +36,10 @@ for (const file of requiredFiles) {
   if (!fs.existsSync(file)) errors.push(`falta ${path.relative(root, file)}`);
 }
 
-for (const [file, expected] of Object.entries(expectedModels)) {
+// Estructura del frontmatter. La coherencia del modelo contra routing.json se valida más abajo,
+// y solo para roles engine=claude: en los roles que corren en Codex el frontmatter no gobierna
+// nada (el modelo sale de routing.json y lo aplica `codex exec -m`).
+for (const file of AGENT_FILES) {
   const full = path.join(agentsDir, file);
   if (!fs.existsSync(full)) {
     errors.push(`falta .claude/agents/${file}`);
@@ -48,10 +48,7 @@ for (const [file, expected] of Object.entries(expectedModels)) {
   const text = fs.readFileSync(full, 'utf8');
   const frontmatter = text.match(/^---\n([\s\S]*?)\n---/);
   try { if (!frontmatter || !parse(frontmatter[1])?.name) throw new Error('sin name'); } catch (error) { errors.push(`.claude/agents/${file}: frontmatter YAML inválido (${error.message})`); }
-  const actual = text.match(/^model:\s*(\S+)\s*$/m)?.[1];
-  if (actual !== expected) {
-    errors.push(`.claude/agents/${file}: modelo ${actual ?? '(ausente)'}, esperado ${expected}`);
-  }
+  if (!/^model:\s*(\S+)\s*$/m.test(text)) errors.push(`.claude/agents/${file}: sin campo model`);
 }
 
 const ownershipChecks = [
@@ -119,6 +116,26 @@ if (routing) {
   if (ladder.length && ladder[ladder.length - 1].engine !== 'claude') {
     errors.push('agents/routing.json: el último escalón de la escalera debe tener engine=claude (techo de riesgo: lo escribe Opus)');
   }
+
+  // Escalera de gates: revisor/auditor corren en sonnet por presupuesto, así que la subida a
+  // opus tiene que existir. Sin ella los gates se quedarían en sonnet incluso para diffs que
+  // tocan guardia_ml o el sync — exactamente el código que ya rompió producción.
+  const gates = routing.escalation?.ladder_gates || [];
+  if (!gates.length) errors.push('agents/routing.json: escalation.ladder_gates vacía (los gates en sonnet no tendrían a dónde escalar)');
+  if (gates.length && (gates[gates.length - 1].engine !== 'claude' || gates[gates.length - 1].model !== 'opus')) {
+    errors.push('agents/routing.json: el último escalón de ladder_gates debe ser engine=claude model=opus');
+  }
+
+  // Los triggers alimentan la escalada automática por paths: si quedan en formato viejo (strings)
+  // o sin paths, la detección devuelve vacío y ningún gate escala nunca, en silencio.
+  const triggers = routing.escalation?.triggers || [];
+  if (!triggers.length) errors.push('agents/routing.json: escalation.triggers vacío');
+  const conPaths = triggers.filter((t) => t && typeof t === 'object' && Array.isArray(t.paths) && t.paths.length);
+  for (const trigger of triggers) {
+    if (typeof trigger === 'string') errors.push(`agents/routing.json: trigger en formato viejo (string): ${trigger}; usá {label, paths}`);
+    else if (!trigger?.label) errors.push('agents/routing.json: hay un trigger sin label');
+  }
+  if (!conPaths.length) errors.push('agents/routing.json: ningún trigger declara paths, la escalada automática de gates nunca dispararía');
 }
 
 
@@ -177,5 +194,5 @@ if (errors.length) {
   for (const error of errors) console.error(`- ${error}`);
   process.exitCode = 1;
 } else {
-  console.log(`Configuración de agentes válida (${Object.keys(expectedModels).length} roles).`);
+  console.log(`Configuración de agentes válida (${AGENT_FILES.length} roles).`);
 }
