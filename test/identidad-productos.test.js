@@ -41,7 +41,12 @@ describe('UM1 identidad de productos', () => {
   });
 
   it('aplica 082 idempotente y deriva un fusion_sku ineditable de id_woo', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(82);
+    // La idempotencia de 082 la da su marcador, no `user_version`: en esta base
+    // `user_version` es la compuerta de la migración Hito 7 y debe quedar en 30, o
+    // esa migración se saltea y la base pierde device_tokens (auth móvil caída).
+    expect(db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_productos_082'").get()).toBeTruthy();
+    expect(db.pragma('user_version', { simple: true })).toBe(30);
+    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_tokens'").get()).toBeTruthy();
     woo(db, { id: 41, sku: 'LEGACY-41' });
     expect(bootstrapProductosFusion(db)).toEqual({ total: 1, creados: 1 });
     expect(bootstrapProductosFusion(db)).toEqual({ total: 1, creados: 0 });

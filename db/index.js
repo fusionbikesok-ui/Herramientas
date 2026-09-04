@@ -632,13 +632,12 @@ export function openDb(dbPath) {
       if (!cols.has('user_product_id')) db.exec('ALTER TABLE ml_publicaciones_cache ADD COLUMN user_product_id TEXT');
       db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '082_identidad_productos.sql'), 'utf8'));
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_productos_082')").run();
-      db.pragma('user_version = 82');
     })();
-  } else if (db.pragma('user_version', { simple: true }) < 82) {
-    // El marcador es la fuente de idempotencia; user_version deja visible la revisión de
-    // esquema efectiva para diagnósticos y bases actualizadas desde builds intermedios.
-    db.pragma('user_version = 82');
   }
+  // No se toca `user_version`: en esta base no numera migraciones, es la compuerta de la
+  // migración Hito 7 (`user_version < 30`, al final de openDb). Subirla a 82 saltea esa
+  // migración y deja la base sin device_tokens, rompiendo toda la auth móvil. La
+  // idempotencia de 082 la da su marcador en `_schema_migrations`.
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN categorias_json TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN img TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE catalogo_cache ADD COLUMN precio REAL'); } catch (_) {}

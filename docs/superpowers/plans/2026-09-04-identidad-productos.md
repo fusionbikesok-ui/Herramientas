@@ -86,6 +86,30 @@ Las operaciones son durables, idempotentes, reintentables y auditadas por paso. 
 
 La aceptación del programa exige cero publicaciones activas con stock sin decisión explícita, cero productos Woo con stock sin destino ML, scan sano y ninguna operación pendiente silenciosa.
 
+## Estado, handoff y evidencia en cada avance
+
+Esta regla es obligatoria y no depende de que la subentrega termine. **Cada vez que un agente
+avanza —aunque el avance sea parcial y aunque la sesión se corte— actualiza, en el mismo commit
+que el código:**
+
+1. **Estado**: la ficha de la subentrega en curso (`docs/superpowers/deliveries/UM1.N-*.md`) y,
+   si el estado cambió, la fila correspondiente en `docs/superpowers/deliveries/README.md`.
+   El estado se escribe con el vocabulario del maestro (`planificada → desarrollo → candidata →
+   publicada → observada → aceptada`); no se infiere por existir código, commit o rama.
+2. **Evidencia de dónde avanzó**: en la sección `Evidencia` de la ficha, con ubicación exacta —
+   worktree, rama, commit, archivos tocados— y el **comando reproducible junto a su resultado
+   copiado literalmente** (por ejemplo `npx vitest run test/identidad-productos.test.js — 15/15`).
+   Un gate que no se ejecutó se escribe `no ejecutado` con la razón; nunca se deja en blanco ni
+   se da por aprobado.
+3. **Handoff**: la sección `Checkpoint para el próximo agente` de la ficha, reescrita para que
+   otro agente pueda retomar sin leer esta conversación. Debe decir: base y worktree, qué quedó
+   funcionando y verificado, **qué quedó a medias y en qué archivo/línea**, y cuál es la próxima
+   acción reproducible.
+
+Un avance sin estado, evidencia y handoff actualizados se trata como trabajo no entregado: el
+siguiente agente lo re-verifica desde cero. Si una sesión se agota a mitad de una subentrega, el
+handoff es lo último que se escribe antes de soltar el trabajo.
+
 ## Límites
 
 - Woo continúa como autoridad de stock.

@@ -1135,6 +1135,8 @@ Bootstrap en sombra desde cada unidad Woo actual; solo relaciones heredadas exac
 
 La especificación completa es `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-04-identidad-productos.md`; la ficha matriz es `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1-guardia-ml.md` y UM1.1–UM1.6 conservan evidencia independiente.
 
+Cada avance sobre UM1, aunque sea parcial o quede a medias, actualiza en el mismo commit el estado de la ficha, la evidencia con ubicación exacta y comando/resultado copiado literalmente, y el handoff para el próximo agente. La regla completa está en la sección «Estado, handoff y evidencia en cada avance» de esa especificación. Un avance sin esos tres elementos se trata como trabajo no entregado y se re-verifica desde cero.
+
 ## 19. Secuencia de entregas E0–E24
 
 | Entrega | Superficie | Resultado tangible | Dependencia dominante |
