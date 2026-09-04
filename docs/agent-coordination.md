@@ -39,7 +39,15 @@ archivo solo. Si pasa aislado, es contención — anotalo en el reporte como tal
 del archivo y que pasó 100% solo) y seguí; no persigas el fantasma de nuevo cada vez que
 cambia cuál archivo rota. Si vuelve a fallar aislado, ahí sí es del diff.
 
-## Coordinación Codex ↔ Claude
+## Coordinación Claude ↔ Codex
+
+La sesión de Claude Opus es siempre el orquestador (antes era Codex; ver `agents/model-routing.md`
+para el reparto vigente). Los roles de implementación (`hard-worker-*`, `explorador`, `tester`,
+`disenador-*`) corren en Codex vía `npm run agent:codex`; los gates finales (`revisor`,
+`auditor-despliegue`) y `probador-e2e` corren en Claude vía `npm run agent:claude`. Los dos
+orquestadores comparten el mismo contrato de handoff (`scripts/agent-pipeline-policy.mjs`) y el
+mismo módulo de protecciones (`scripts/agent-dispatch-common.mjs`), así que un handoff de un
+motor es evidencia válida para un gate del otro sin traducción.
 
 ### Secuencia única y schema v2
 
@@ -144,20 +152,37 @@ orquestador cierra el servidor temporal y recién entonces avanza al gate siguie
 
 ## Controlador automático
 
-Para que el usuario no copie contexto entre sesiones, Codex invoca Claude con:
+Para que el usuario no copie contexto entre sesiones, el orquestador Claude despacha roles de
+implementación a Codex con:
+
+```bash
+npm run agent:codex -- \
+  --role hard-worker-backend \
+  --task-file /tmp/claude-to-codex-task.md \
+  --handoff-file /tmp/codex-to-claude-handoff.json
+```
+
+`scripts/orchestrate-codex.mjs` valida el rol contra `agents/routing.json` (rechaza despachar a
+Codex un rol ruteado a Claude salvo `--force-engine codex` explícito), resuelve modelo/esfuerzo/
+sandbox, y corre `codex exec` con `-s <sandbox>` y `-c model_reasoning_effort=<esfuerzo>`. Nunca
+pasa `--add-dir` apuntando al repo de producción con sandbox de escritura — valida que el
+worktree no sea el repo raíz antes de despachar. Rechaza cualquier respuesta que no tenga el
+esquema mínimo de handoff.
+
+Y despacha gates a Claude con el mismo contrato, invertido respecto al diseño original:
 
 ```bash
 npm run agent:claude -- \
   --role probador-e2e \
-  --task-file /tmp/codex-to-claude-task.md \
+  --task-file /tmp/claude-to-codex-task.md \
   --handoff-file /tmp/claude-to-codex-handoff.json
 ```
 
 `scripts/orchestrate-claude.mjs` valida el rol, el worktree, el entorno E2E y el modelo antes
 de llamar a `claude -p`. Le pasa el task file, conserva la política de permisos seleccionada
 y rechaza cualquier respuesta que no tenga el esquema mínimo de handoff. Para auditor recibe
-`--prior-handoff rol=archivo` por cada gate previo; no acepta referencias autodeclaradas. Codex lee luego el
-archivo estructurado y decide el gate siguiente.
+`--prior-handoff rol=archivo` por cada gate previo; no acepta referencias autodeclaradas. El
+orquestador lee luego el archivo estructurado y decide el gate siguiente.
 
 Para E2E, el lanzador prepara todo el entorno de forma reproducible y aislada:
 

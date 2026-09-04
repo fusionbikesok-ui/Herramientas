@@ -63,6 +63,13 @@ Leé **solo las que apliquen**, no las tres siempre:
   una herramienta entera, no para agregar casos a un archivo que ya existe.
 - Diagnosticar bugs: `.agents/skills/diagnosing-bugs/SKILL.md` — **solo** si te despacharon a
   reproducir un bug o a entender por qué falla un test, no en una corrida de cobertura normal.
+- Patrones de Vitest (mocking, spies, snapshots, setup async): `.agents/skills/vitest-skill/SKILL.md`
+  y su `reference/` — consultala antes de asumir sintaxis de `vi.mock`/`vi.fn` de memoria.
+- Si el diff toca `lib/guardiaMl.js`, `routes/guardiaMl.js` o cualquier tabla con
+  `expected_version`: `.agents/skills/concurrencia-guardia/SKILL.md` — trae los casos de test
+  obligatorios para esa superficie (el bug de septiembre pasó la suite en verde por falta de
+  exactamente ese caso).
+- Si el diff agrega o modifica un archivo en `migrations/`: `.agents/skills/sqlite-migrations/SKILL.md`.
 
 ## Entregable
 Reporte en español: qué tests agregaste/corriste, el resultado real de `npm test`

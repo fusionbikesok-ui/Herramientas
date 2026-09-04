@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "handoff-tester",
+  "type": "object",
+  "properties": {
+    "estado": {
+      "type": "string",
+      "enum": [
+        "APROBADO",
+        "BLOQUEADO",
+        "WAITING_FOR_ORCHESTRATOR"
+      ]
+    },
+    "base": {
+      "type": "string"
+    },
+    "head": {
+      "type": "string"
+    },
+    "diff_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "codigo_bloqueo": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "FALTA_ENTORNO",
+        "FALTA_DATOS",
+        "FALTA_DECISION",
+        "PERMISO",
+        "FALLO_REPRODUCIBLE",
+        null
+      ]
+    },
+    "siguiente_accion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "resultado_suite": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "estado",
+    "base",
+    "head",
+    "diff_fingerprint",
+    "codigo_bloqueo",
+    "siguiente_accion",
+    "resultado_suite"
+  ],
+  "additionalProperties": false
+}

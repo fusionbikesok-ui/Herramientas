@@ -32,19 +32,39 @@ creá uno nuevo únicamente cuando ningún módulo existente represente bien el 
 
 ## Equipo de subagentes — flujo de trabajo
 
-Hay un equipo de subagentes en `.claude/agents/`. En Claude Code autónomo, **la sesión
-principal es el orquestador**: planea con el usuario, despacha a los subagentes y los encadena
-(los subagentes no se llaman entre sí). Cuando participa Codex, Codex es el orquestador externo
-único y la sesión de Claude ejecuta únicamente las tareas que reciba en un handoff.
+Hay un equipo de subagentes en `.claude/agents/`. **La sesión de Claude Opus es siempre el
+orquestador**: planea con el usuario, despacha a los subagentes y los encadena (los subagentes
+no se llaman entre sí). Codex nunca orquesta — ejecuta un rol despachado vía `npm run agent:codex`
+y devuelve un handoff que valida `scripts/agent-pipeline-policy.mjs`, el mismo contrato que usa
+`npm run agent:claude` para los roles que corren en Claude.
 
-La coordinación Codex ↔ Claude usa `docs/agent-coordination.md` como contrato compartido.
-Codex es el orquestador externo: asigna worktrees, rutas y gates; Claude ejecuta tareas
-delimitadas y devuelve handoffs. La matriz de modelos está en `agents/model-routing.md` y el
-router de skills en `agents/skill-routing.md`; ambos deben leerse antes de despachar un rol.
-Los agentes de diseño deben informar qué skills aplicaron y cuáles quedaron fuera por riesgo.
-Para E2E, Codex prepara y verifica siempre el entorno aislado (URL, puerto, rama, base,
-`DISABLE_CRONS`, PID y sesión de Playwright) antes de despachar a `probador-e2e`. Si falta
-algún dato, el agente devuelve `BLOQUEADO (FALTA_ENTORNO)` y no elige staging ni otro puerto.
+La coordinación Claude ↔ Codex usa `docs/agent-coordination.md` como contrato compartido. El
+orquestador asigna worktrees, rutas y gates; cada rol (en Codex o en Claude, según
+`agents/routing.json`) ejecuta una tarea delimitada y devuelve un handoff. La matriz de
+motor/modelo está en `agents/model-routing.md` (documentación) y `agents/routing.json` (fuente
+ejecutable); el router de skills en `agents/skill-routing.md`; ambos deben leerse antes de
+despachar un rol. Los agentes de diseño deben informar qué skills aplicaron y cuáles quedaron
+fuera por riesgo. Para E2E, el orquestador prepara y verifica siempre el entorno aislado (URL,
+puerto, rama, base, `DISABLE_CRONS`, PID y sesión de Playwright) antes de despachar a
+`probador-e2e` (que corre en Claude sonnet, por el MCP de Playwright cableado ahí y no en
+Codex). Si falta algún dato, el agente devuelve `BLOQUEADO (FALTA_ENTORNO)` y no elige staging
+ni otro puerto.
+
+**Escalera por riesgo:** si el diff toca sync ML↔Woo, esquema sqlite, concurrencia o
+`guardia_ml_*` hay dos escaleras, y se disparan distinto a propósito (`agents/model-routing.md`):
+
+- **Implementación** (roles Codex, base `gpt-5.6-terra`/medium): escala a `gpt-5.6-sol`/high, y
+  si el revisor devuelve hallazgos de correctitud sube a un último escalón que **cambia de motor
+  y lo escribe Opus**. Sube por decisión explícita del orquestador (`--escalate`).
+- **Gates** (`revisor`, `auditor-despliegue`, base Claude `sonnet`): suben **solos** a `opus`
+  cuando el diff toca un path de riesgo. No depende de que el orquestador se acuerde.
+
+`gpt-5.6-luna`/low queda solo para `explorador`, el único rol que no escribe nada;
+`npm run verify:agents` rechaza que un rol que escribe baje a ese tramo. `concurrencia` no se
+detecta por path (no vive en un archivo): esa se escala a mano con `--escalate`.
+
+Motivo: un bug de concurrencia en el worker de Guardia rompió el 100% de las escrituras en
+producción con la suite en verde; ver `.agents/skills/concurrencia-guardia/SKILL.md`.
 
 **Disparador automático:** cuando el usuario pide **crear o cambiar una función/feature/fix
 de código**, seguí este pipeline sin esperar un comando.
@@ -155,8 +175,12 @@ checkpoint/handoff; tareas doc-only pueden usar registro liviano.
    re-revisa el código**: pegale en el prompt de despacho el **veredicto final del
    `revisor`** (paso 5) y, si corriste el paso 7, el **reporte de `probador-e2e`**. De ahí
    saca la auditoría de código y la evidencia de responsive/peso; él verifica que sean del
-   diff final y agrega lo que solo hace él (seguridad, `npm test`, migraciones, tokens,
-   peso). Si falta alguno de los dos insumos, es 🔴 automático — no los suple él.
+   diff final y agrega lo que solo hace él (seguridad, migraciones, tokens, peso). Corre en
+   Claude sonnet — u opus si el diff toca un trigger — con sandbox de solo lectura (a
+   diferencia de los hard-workers, no ejecuta `npm test`): el resultado de la suite se lo
+   pasa el orquestador, que la corrió una sola
+   vez al final (ver "Presupuesto de la sesión" arriba). Si falta alguno de los dos insumos
+   (veredicto del revisor, reporte de E2E si corresponde), es 🔴 automático — no los suple él.
 9. Reportar al usuario. La política vigente de publicación se consulta en
    `docs/memory/modules/operations-vps.md`: hasta E23 es manual; el objetivo posterior permite
    backend/web automático solo con pipeline verde y rollback. Windows/App Store siguen manuales.

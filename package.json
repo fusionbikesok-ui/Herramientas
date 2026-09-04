@@ -10,6 +10,7 @@
     "verify:agents": "node scripts/verify-agent-pipeline.mjs",
     "verify:mobile-contract": "node scripts/verify-mobile-contract.mjs",
     "agent:claude": "node scripts/orchestrate-claude.mjs",
+    "agent:codex": "node scripts/orchestrate-codex.mjs",
     "agent:e2e": "node scripts/run-isolated-claude-e2e.mjs",
     "e2e:e2": "node scripts/e2-browser-smoke.mjs",
     "e2e:e4": "node scripts/e4-browser-smoke.mjs",
