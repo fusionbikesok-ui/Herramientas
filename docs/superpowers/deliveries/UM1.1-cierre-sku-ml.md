@@ -172,6 +172,44 @@ está garantizado por estructura y no solo por bandera (PM-048).
 Verificado en producción tras el restart: `identidad_config` tiene la fila 1 con
 `modo='shadow'` y `escrituras_remotas_habilitadas=0`.
 
+## Gate 2 cumplido contra el universo ML real (2026-09-04 18:51)
+
+El cron de refresco completo repobló los atributos y la auditoría corrió sobre datos frescos
+de MercadoLibre. Resultado en la base productiva:
+
+| Clasificación | Claves |
+| --- | --- |
+| `sku_exacto` → **verificadas** | 1090 |
+| `sku_inexistente` | 80 |
+| `gtin_contradictorio` | 17 |
+| `sku_ausente` | 9 |
+| `stock_no_verificado` | 7 |
+
+`conciliacionIdentidad`: `total 1203 = verificadas 1090 + excepciones 0 + urgentes 113`,
+`observacion_incompleta: 0`, **`conciliado: true`**, con `ultimo_scan_confiable_en` fresco.
+Esta vez la igualdad significa algo, porque la clasificación es real.
+
+**El backlog real a corregir es 113**, no 1201 (lo que decía el código sin endurecer) ni 294
+(mi diagnóstico previo sobre cache viejo). La diferencia se explica sola: el refresco anterior
+no pedía `include_attributes=all`, así que ML no devolvía `SELLER_SKU` para buena parte del
+catálogo y el cache lo registraba como ausente.
+
+## Incidente de producción y su corrección
+
+Durante ese primer escaneo **la aplicación dejó de responder unos 3 minutos**: el proceso
+quedó en estado `D` (bloqueado en I/O) y `/login/` no contestaba.
+
+Causa: ni `auditarIdentidadProductos` ni `bootstrapProductosFusion` envolvían sus escrituras
+en una transacción. Con `journal_mode=delete` cada statement hace su propio `fsync`, y como
+`better-sqlite3` es síncrono, el cron bloqueaba el hilo que sirve HTTP. Medido sobre la base
+real: **158 s y 200 s por auditoría**, con el cron corriendo cada 900 s.
+
+Corregido envolviendo ambas en una sola `db.transaction()` (PM-049). Medido sobre copia de la
+misma base: **1890 ms y 1931 ms**, con resultados idénticos (`urgentes=113`,
+`verificadas=1090`, `conciliado=true`). Unas 100 veces más rápido.
+
+`journal_mode=WAL` queda evaluado y no adoptado (PM-050): merece su propia ventana.
+
 ## Por qué sigue en `desarrollo` y no pasa a `candidata`
 
 La auditoría dio verde sobre el diff, pero el diff no es la entrega. Contra los gates propios
