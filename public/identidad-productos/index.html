@@ -14,7 +14,7 @@
     .btn:disabled{cursor:not-allowed;opacity:.55}
     .btn.primary{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
     .btn.danger{border-color:var(--red-bd);background:var(--red-bg);color:var(--red)}
-    .wrap{max-width:1440px;margin:auto;padding:1rem}
+    .wrap{width:100%;margin:0;padding:1rem 1.25rem}
     .health{display:grid;grid-template-columns:1fr auto;align-items:center;gap:.8rem;padding:.8rem;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:.85rem}
     .health.bad{border-color:var(--red)}.health.warn{border-color:var(--amber)}.health.ok{border-color:var(--green)}
     .health strong{display:block}
@@ -27,10 +27,18 @@
     .tabs{display:flex;gap:.45rem;overflow:auto;padding-bottom:.6rem;margin-bottom:.5rem}
     .tab{white-space:nowrap;background:transparent}
     .tab[aria-selected="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
-    .view{display:grid;grid-template-columns:minmax(275px,32%) 1fr;gap:1rem;align-items:start}
+    .view{display:grid;grid-template-columns:minmax(280px,340px) 1fr;gap:1rem;align-items:start}
+    /* El ancho extra se gasta en poner ML y Woo lado a lado, que es la comparación que la
+       persona tiene que hacer, en vez de estirar una sola columna de texto. */
+    .comparador{display:grid;grid-template-columns:1fr;gap:.8rem;align-items:start}
+    .col-comp{display:flex;flex-direction:column;gap:.8rem;min-width:0}
+    .col-comp .panel{margin-bottom:0}
+    @media(min-width:1200px){ .comparador{grid-template-columns:1fr 1fr} }
+    @media(min-width:1800px){ .view{grid-template-columns:minmax(300px,380px) 1fr} }
     .card{background:var(--surface);border:1px solid var(--border);border-radius:10px}
     .side{max-height:72vh;overflow:auto}
     .card-head{padding:.75rem .85rem;border-bottom:1px solid var(--border)}
+    .card-head strong{display:block;margin-bottom:.2rem}
     .case{display:block;width:100%;padding:.75rem .85rem;border:0;border-bottom:1px solid var(--border);background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}
     .case:hover,.case[aria-current="true"]{background:var(--surface2)}
     .case strong{display:block;font-size:.92rem;overflow-wrap:anywhere}
@@ -203,7 +211,9 @@
       + '<button class="btn danger" id="excepcion">Excepción solo_ml</button>'
       + '<button class="btn" id="nota">Agregar nota</button>'
       + '</div>'
-      + '<section class="panel"><h3>MercadoLibre · observado</h3><div class="producto">'
+      + '<div class="comparador">'
+      + '<div class="col-comp">'
+      + '<section class="panel panel-ml"><h3>MercadoLibre · observado</h3><div class="producto">'
       + (pub.thumbnail ? '<img class="foto" src="' + esc(pub.thumbnail) + '" alt="Foto de la publicación en MercadoLibre">' : '<div class="foto vacia">Sin foto</div>')
       + '<div class="facts"><b>' + esc(pub.titulo || 'sin título') + '</b><br>'
       + 'Publicación: <b>' + esc(ml.item_id || '—') + '</b><br>Variación: <b>' + esc(ml.variation_id || 'sin variación') + '</b><br>'
@@ -213,7 +223,8 @@
       + '<span class="muted">seller_custom_field: ' + esc(ml.seller_custom_field || 'vacío') + ' — es evidencia auxiliar y nunca da cobertura.</span>'
       + (pub.permalink ? '<br><a class="enlace" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Abrir en MercadoLibre ↗</a>' : '')
       + '</div></div></section>'
-      + '<section class="panel"><h3>WooCommerce · identidad candidata</h3>'
+      + '</div><div class="col-comp">'
+      + '<section class="panel panel-woo"><h3>WooCommerce · identidad candidata</h3>'
       + (prod ? '<div class="producto">'
           + (prod.img ? '<img class="foto" src="' + esc(prod.img) + '" alt="Foto del producto en WooCommerce">' : '<div class="foto vacia">Sin foto</div>')
           + '<div class="facts"><b>' + esc(prod.nombre_woo || prod.nombre_canonico || 'sin nombre') + '</b><br>'
@@ -225,6 +236,7 @@
             : '<span class="muted">Sin identidad Woo única. Falta catálogo: no es una excepción, es una tarea de alta o corrección. Usá «Vincular a Producto Fusion» para buscar el producto por nombre, SKU o GTIN.</span>') + '</div>')
       + '</section>'
       + panelVinculo(ml)
+      + '</div></div>'
       + '<section class="panel"><h3>Clasificación</h3><div class="facts"><b>' + esc(d.clasificacion) + '</b>'
       + '<br><span class="muted">Huella de evidencia: ' + esc((d.evidencia_fingerprint || '').slice(0, 16)) + '…</span></div></section>'
       + (d.notas?.length ? '<section class="panel"><h3>Notas</h3>' + d.notas.map((n) => '<div class="facts">' + esc(n.creada_en) + ' · ' + esc(n.creada_por) + ': ' + esc(n.nota) + '</div>').join('') + '</section>' : '')
