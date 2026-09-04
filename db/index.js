@@ -1013,6 +1013,20 @@ export function openDb(dbPath) {
   )`); } catch (_) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_metricas_ciclo_integracion ON metricas_ciclo_sync(integracion, proceso, iniciado_en)'); } catch (_) {}
 
+  // Caché persistente de candidatos del matcher (ver routes/matcher.js, _cacheCandidatos):
+  // el cómputo completo del cruce ML↔Woo tarda ~70s y hasta ahora solo vivía en un Map() en
+  // memoria — cada reinicio de pm2 (deploys, crashes) lo borraba y forzaba a el primer usuario
+  // del día a esperar el minuto largo desde cero. La firma (hash de catálogo Woo + max(ml
+  // actualizado_en)) ya solo cambia con un refresco real de ML o Woo, nunca con los crons de
+  // status/precio (ver comentario en hashCatalogoMatching y firmaCandidatos) — lo único que
+  // faltaba era sobrevivir al restart, no la lógica de invalidación en sí.
+  try { db.exec(`CREATE TABLE IF NOT EXISTS matcher_candidatos_cache (
+    scope TEXT PRIMARY KEY,
+    firma TEXT NOT NULL,
+    resultado_json TEXT NOT NULL,
+    actualizado_en TEXT NOT NULL
+  )`); } catch (_) {}
+
   // Hito 7: la migración completa es atómica y no silencia errores. Esto cubre tanto una
   // base pre-Hito7 como una instalación que ya tenía el refresh legacy con device_id nullable.
   // `user_version` solo cambia después de que tablas, reconstrucción e índices terminaron.

@@ -1,2076 +1,715 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Matcher — Fusion Bikes</title>
-<link rel="stylesheet" href="../lib/theme.css">
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; }
-a { color:inherit; }
-.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
-.hidden{display:none!important;}
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Matcher — Fusion Bikes</title>
+  <link rel="stylesheet" href="../lib/theme.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+    a { color: inherit; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    .hidden { display: none !important; }
 
-/* ── Foco visible global (piso WCAG) ───────────────────────────────── */
-a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: 2px;
-}
+    /* ── Topbar ──────────────────────────────────────────────────────── */
+    .topbar { position: sticky; top: 0; z-index: 40; background: rgba(12,15,22,.92); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 .75rem; height: 54px; gap: 8px; }
+    .topbar-title { font-size: .9rem; font-weight: 700; flex: 1; text-align: center; }
+    .topbar-back { display: inline-flex; align-items: center; gap: 5px; font-size: .78rem; color: var(--muted); text-decoration: none; padding: 8px; white-space: nowrap; }
+    .topbar-back:hover, .topbar-back:focus-visible { color: var(--accent); }
 
-/* ── Topbar (sticky) ────────────────────────────────────────────────── */
-.topbar { position:sticky; top:0; z-index:30; background:rgba(12,15,22,.92); backdrop-filter:blur(14px); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 .75rem; height:54px; gap:8px; }
-.back-link { display:inline-flex; align-items:center; gap:5px; font-size:.78rem; color:var(--muted); text-decoration:none; padding:8px; white-space:nowrap; }
-.back-link:hover, .back-link:focus-visible { color:var(--accent); }
-.topbar-title { font-size:.85rem; font-weight:700; flex:1; text-align:center; }
-.topbar-right { display:flex; align-items:center; gap:6px; }
-.hbtn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:7px 10px; font-size:.75rem; cursor:pointer; font-family:inherit; text-decoration:none; transition:border-color .15s,color .15s; min-height:var(--tap-min); min-width:var(--tap-min); display:inline-flex; align-items:center; justify-content:center; gap:6px; }
-.hbtn:hover, .hbtn:focus-visible { border-color:var(--accent); color:var(--accent); }
-.hbtn.icon-only { padding:7px; font-size:1rem; }
+    /* ── Filtros y buscador (sticky) ──────────────────────────────────── */
+    .filtros-header { position: sticky; top: 54px; z-index: 35; background: var(--bg); border-bottom: 1px solid var(--border); padding: .6rem .75rem; }
+    .filtros-row { display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px; margin-bottom: .6rem; }
+    .chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; min-height: var(--tap-min); padding: 0 12px; border-radius: var(--radius-pill); font-size: .76rem; font-weight: 600; white-space: nowrap; background: var(--chip-bg); border: 1px solid var(--chip-bd); color: var(--chip-txt); font-family: inherit; cursor: pointer; text-decoration: none; transition: border-color .15s; }
+    .chip:hover, .chip:focus-visible { border-color: var(--accent); }
+    .chip.active { background: var(--chip-on-bg); border-color: var(--chip-on-bd); color: var(--chip-on-txt); }
+    .chip .badge { font-size: .7rem; color: var(--muted); margin-left: 3px; }
+    .chip.active .badge { color: var(--chip-on-txt); }
 
-/* ── Subheader: selector de dirección (sticky, debajo del topbar) ─────── */
-.subheader { position:sticky; top:54px; z-index:25; background:var(--bg); border-bottom:1px solid var(--border); padding:.4rem .75rem; }
-.dir-selector { display:flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; max-width:960px; margin:0 auto; }
-.dir-pill { flex:1; min-height:var(--tap-min); background:var(--surface); border:0; color:var(--muted); font-size:.78rem; font-weight:600; font-family:inherit; cursor:pointer; padding:6px 8px; text-align:center; }
-.dir-pill + .dir-pill { border-left:1px solid var(--border); }
-.dir-pill.active { background:var(--accent-dim); color:var(--accent); }
-.dir-pill:disabled { cursor:not-allowed; opacity:.6; }
-.dir-pill .dir-n { font-variant-numeric:tabular-nums; }
-.dir-pill .dir-proximamente { display:block; font-size:.65rem; font-weight:400; color:var(--muted); }
+    .search-box { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; color: var(--text); font-size: .85rem; font-family: inherit; outline: none; min-height: var(--tap-min); }
+    .search-box:focus { border-color: var(--accent); }
 
-/* ── Tira de chips de secciones (persistente, NO sticky) ───────────── */
-.chips-tira-wrap { max-width:960px; margin:0 auto; padding:.6rem .75rem 0; }
-.chips-tira { display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px; }
-.chip-sec { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; min-height:var(--tap-min); padding:0 12px; border-radius:var(--radius-pill); font-size:.76rem; font-weight:600; white-space:nowrap; background:var(--chip-bg); border:1px solid var(--chip-bd); color:var(--chip-txt); font-family:inherit; cursor:pointer; text-decoration:none; }
-.chip-sec:hover, .chip-sec:focus-visible { border-color:var(--accent); }
-.chip-sec.accionable { background:var(--chip-alert-bg); border-color:var(--chip-alert-bd); color:var(--chip-alert-txt); }
-.chip-sec[aria-disabled="true"] { cursor:not-allowed; opacity:.65; }
-.chip-sec .n { font-variant-numeric:tabular-nums; }
-.chip-mas-panel { display:flex; gap:6px; flex-wrap:wrap; padding:6px 0 0; }
+    /* ── Barra de progreso ──────────────────────────────────────── */
+    .progress-bar-wrap { background: var(--bg); border-bottom: 1px solid var(--border); padding: .5rem .75rem; font-size: .75rem; }
+    .progress-bar-track { height: 6px; background: var(--progress-track); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+    .progress-bar-fill { height: 100%; background: var(--progress-fill); transition: width .3s ease; }
+    .progress-stats { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); }
+    .progress-stat { font-variant-numeric: tabular-nums; }
+    .progress-stat .label { color: var(--muted); font-size: .7rem; text-transform: uppercase; }
 
-/* ── Línea calma del push de SKUs (mismo renglón que "actualizado hace X") ── */
-.refresco-bar { max-width:960px; margin:0 auto; padding:.4rem .75rem 0; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:.75rem; color:var(--muted); }
-.refresco-bar.trabado { color:var(--warning); font-weight:600; }
-.refresco-bar a { color:var(--accent); }
+    /* ── Contenedor de dos paneles ──────────────────────────────────────── */
+    .matcher-container { display: flex; gap: 0; min-height: calc(100vh - 54px); }
+    .panel-left { flex: 1; min-width: 280px; border-right: 1px solid var(--border); overflow-y: auto; background: var(--bg); }
+    .panel-right { flex: 1.2; min-width: 320px; overflow-y: auto; background: var(--surface); display: none; }
+    .panel-right.active { display: flex; flex-direction: column; }
 
-/* ── Aviso banner (unificación) y primera visita ───────────────────── */
-.banner-aviso { max-width:960px; margin:.75rem auto 0; padding:0 .75rem; }
-.banner-aviso-box { background:var(--accent-dim); border:1px solid var(--accent); border-radius:10px; padding:12px 14px; font-size:.82rem; display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
-.banner-aviso-box button { background:none; border:0; color:var(--muted); font-size:1rem; cursor:pointer; line-height:1; min-height:var(--tap-min); min-width:var(--tap-min); }
+    /* En mobile, mostrar solo un panel a la vez */
+    @media (max-width: 1024px) {
+      .matcher-container { flex-direction: column; }
+      .panel-left { min-width: auto; border-right: none; border-bottom: 1px solid var(--border); }
+      .panel-right { min-width: auto; border-bottom: none; }
+      .panel-right.active { display: flex; }
+    }
 
-.main { max-width:960px; margin:0 auto; padding:1rem 1rem 5rem; }
-.view { display:none; }
-.view.active { display:block; }
+    /* ── Lista de publicaciones (panel izquierdo) ──────────────────────────── */
+    .pub-list { display: flex; flex-direction: column; gap: 0; }
+    .pub-item { background: var(--surface); border-bottom: 1px solid var(--border); padding: .75rem; cursor: pointer; transition: background .15s; min-height: var(--tap-comfort); display: flex; flex-direction: column; justify-content: center; }
+    .pub-item:hover, .pub-item:focus-visible { background: var(--surface2); outline: none; }
+    .pub-item.active { background: var(--accent-dim); border-left: 3px solid var(--accent); padding-left: calc(.75rem - 3px); }
+    .pub-item-title { font-size: .9rem; font-weight: 600; margin-bottom: 4px; line-height: 1.3; }
+    .pub-item-meta { font-size: .75rem; color: var(--muted); margin-bottom: 4px; }
+    .pub-item-badge { display: inline-flex; align-items: center; gap: 4px; font-size: .7rem; padding: 2px 8px; border-radius: var(--radius-pill); background: var(--surface2); border: 1px solid var(--border); }
+    .pub-item-badge.score-high { background: rgba(52,211,153,.12); border-color: rgba(52,211,153,.35); color: var(--green); }
+    .pub-item-badge.score-med { background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.35); color: var(--amber); }
+    .pub-item-badge.score-low { background: rgba(248,113,113,.12); border-color: rgba(248,113,113,.35); color: var(--red); }
+    .pub-item-status { margin-left: auto; font-size: 1rem; }
 
-.page-title { font-size:1.5rem; font-weight:800; letter-spacing:-.04em; line-height:1.15; margin-bottom:4px; }
-.page-title em { font-style:normal; color:var(--accent); }
-.page-sub { font-size:.83rem; color:var(--muted); margin-bottom:1.25rem; }
+    /* ── Panel derecho: detalle ──────────────────────────────────────── */
+    .detail-panel { padding: 1rem; display: flex; flex-direction: column; }
+    .detail-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: .9rem; }
 
-/* ── Skeleton ───────────────────────────────────────────────────────── */
-.skel { background: linear-gradient(90deg, var(--skeleton-base) 25%, var(--skeleton-highlight) 37%, var(--skeleton-base) 63%); background-size: 400% 100%; animation: skel-sweep 1.4s ease infinite; border-radius:10px; }
-@keyframes skel-sweep { 0%{background-position:100% 50%;} 100%{background-position:0 50%;} }
-@media (prefers-reduced-motion: reduce) { .skel { animation:none; background:var(--skeleton-base); } }
-.skel-marca { height:64px; border:1px solid var(--border); }
+    .mode-badge { display: inline-flex; align-items: center; gap: 5px; font-size: .8rem; padding: 6px 12px; border-radius: 6px; background: var(--accent-dim); color: var(--accent); margin-bottom: 1rem; }
 
-/* ── Vacíos / próximamente ──────────────────────────────────────────── */
-.vacio { border:1px dashed var(--border); border-radius:10px; padding:1.5rem 1rem; text-align:center; color:var(--muted); font-size:.85rem; }
-.vacio strong { display:block; color:var(--text); font-size:1rem; margin-bottom:6px; }
-.vacio .vacio-links { margin-top:12px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+    .card-title { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .5rem; }
 
-/* ── Entrada: highlight "seguir donde quedé" / primera visita ─────────── */
-.highlight-card { display:block; width:100%; text-align:left; background:var(--chip-on-bg); border:1px solid var(--chip-on-bd); border-radius:12px; padding:16px; margin-bottom:1.25rem; cursor:pointer; font-family:inherit; color:var(--text); min-height:var(--tap-comfort); }
-.highlight-card:hover, .highlight-card:focus-visible { border-color:var(--accent); }
-.highlight-eyebrow { font-size:.68rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin-bottom:4px; }
-.highlight-title { font-size:1.05rem; font-weight:800; }
-.highlight-title b { color:var(--accent); }
-.highlight-card.static { cursor:default; }
-.highlight-close { float:right; background:none; border:0; color:var(--muted); font-size:1rem; cursor:pointer; min-height:var(--tap-min); min-width:var(--tap-min); }
+    .current-sku { display: flex; gap: 1rem; }
+    .sku-photo { width: 80px; height: 80px; flex-shrink: 0; border-radius: 8px; background: var(--surface2); border: 1px solid var(--border); object-fit: cover; }
+    .sku-info { flex: 1; min-width: 0; }
+    .sku-name { font-weight: 600; font-size: .95rem; margin-bottom: 4px; }
+    .sku-sku { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .8rem; color: var(--accent); margin-bottom: 6px; }
+    .sku-score { display: inline-flex; align-items: center; gap: 4px; font-size: .75rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
+    .sku-score.high { background: rgba(52,211,153,.12); color: var(--green); }
+    .sku-score.med { background: rgba(251,191,36,.12); color: var(--amber); }
+    .sku-score.low { background: rgba(248,113,113,.12); color: var(--red); }
 
-.resumen-top { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:1.25rem; }
-.resumen-num { font-size:1.7rem; font-weight:800; letter-spacing:-.04em; }
-.resumen-txt { font-size:.85rem; color:var(--muted); }
+    .ml-item { font-size: .85rem; }
+    .ml-item-title { font-weight: 600; margin-bottom: 6px; line-height: 1.35; }
+    .ml-item-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: .8rem; margin-bottom: 8px; }
+    .ml-item-meta dt { color: var(--muted); font-weight: 600; }
+    .ml-item-meta dd { color: var(--text); }
 
-.section-label { font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:1.25rem 0 .6rem; }
+    .candidatos-container { margin-top: 0; }
+    .candidatos-title { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .6rem; }
+    .candidatos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 1rem; }
+    .candidate-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px; cursor: pointer; transition: border-color .15s, background .15s; text-align: left; }
+    .candidate-card:hover, .candidate-card:focus-visible { border-color: var(--accent); background: var(--surface); outline: none; }
+    .candidate-card.is-current { border: 2px solid var(--accent); padding: 7px; }
 
-/* ── Tarjetas de marca ──────────────────────────────────────────────── */
-.marcas-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin-bottom:1rem; }
-.marca-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; text-align:left; cursor:pointer; font-family:inherit; color:var(--text); min-height:var(--tap-comfort); }
-.marca-card:hover, .marca-card:focus-visible { border-color:var(--accent); }
-.marca-nombre { font-weight:700; font-size:.9rem; margin-bottom:2px; }
-.marca-meta { font-size:.72rem; color:var(--muted); }
-.marca-valor { font-size:.78rem; color:var(--text); font-weight:600; margin-top:2px; }
-.btn-vertodas { background:none; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:8px 14px; font-size:.78rem; cursor:pointer; font-family:inherit; min-height:var(--tap-min); }
-.btn-vertodas:hover, .btn-vertodas:focus-visible { border-color:var(--accent); color:var(--accent); }
+    .candidate-photo { width: 100%; aspect-ratio: 1; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); object-fit: cover; margin-bottom: 6px; }
+    .candidate-score { font-size: .7rem; font-weight: 600; padding: 2px 6px; border-radius: 3px; display: inline-block; margin-bottom: 4px; }
+    .candidate-score.high { background: rgba(52,211,153,.12); color: var(--green); }
+    .candidate-score.med { background: rgba(251,191,36,.12); color: var(--amber); }
+    .candidate-score.low { background: rgba(248,113,113,.12); color: var(--red); }
+    .candidate-sku { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .7rem; color: var(--accent); margin-bottom: 4px; word-break: break-all; }
+    .candidate-name { font-size: .75rem; font-weight: 600; margin-bottom: 4px; }
+    .candidate-attrs { font-size: .65rem; color: var(--muted); margin-top: 4px; }
+    .attr-badge { display: inline-flex; align-items: center; gap: 2px; font-size: .65rem; padding: 1px 4px; border-radius: 3px; margin-top: 2px; }
+    .attr-badge.ok { background: rgba(52,211,153,.12); color: var(--green); }
+    .attr-badge.fail { background: rgba(248,113,113,.12); color: var(--red); }
+    .attr-badge.neutral { color: var(--muted); }
 
-.otras-lista { display:flex; flex-direction:column; gap:6px; }
-.otra-link { display:flex; align-items:center; justify-content:space-between; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 14px; text-decoration:none; color:var(--text); font-size:.85rem; min-height:var(--tap-comfort); }
-.otra-link:hover, .otra-link:focus-visible { border-color:var(--accent); }
-.otra-link .n { color:var(--muted); font-variant-numeric:tabular-nums; }
+    .manual-sku { margin-bottom: 1rem; }
+    .manual-sku-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; outline: none; min-height: var(--tap-min); }
+    .manual-sku-input:focus { border-color: var(--accent); }
+    .manual-sku-btn { width: 100%; background: var(--accent-dim); border: 1px solid var(--accent); color: var(--accent); border-radius: 8px; padding: 8px 12px; font-size: .8rem; font-weight: 600; cursor: pointer; font-family: inherit; min-height: var(--tap-min); margin-top: 6px; }
+    .manual-sku-btn:hover { background: var(--accent); color: #06131C; }
 
-/* ── Cola: progreso ─────────────────────────────────────────────────── */
-.cola-header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:.5rem; flex-wrap:wrap; }
-.progreso-bar-row { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
-.progreso-track { flex:1; height:8px; background:var(--progress-track); border-radius:6px; overflow:hidden; }
-.progreso-fill { height:100%; background:var(--progress-fill); border-radius:6px; transition:width .25s ease; }
-.progreso-frac { font-size:.85rem; font-weight:600; white-space:nowrap; }
-.progreso-secundaria { font-size:.72rem; color:var(--muted); margin-bottom:1rem; }
+    .actions-footer { display: flex; gap: 6px; margin-top: auto; }
+    .btn-action { flex: 1; padding: .6rem .75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); font-size: .8rem; font-weight: 600; cursor: pointer; font-family: inherit; min-height: var(--tap-min); transition: border-color .15s, color .15s; }
+    .btn-action:hover, .btn-action:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+    .btn-action.primary { background: var(--accent); color: #06131C; border-color: var(--accent); }
+    .btn-action.primary:hover { background: var(--accent-dk); border-color: var(--accent-dk); }
 
-/* ── Contexto de dirección (arriba de la tarjeta) ──────────────────────── */
-.contexto-direccion { font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:8px; }
+    /* ── Estados ──────────────────────────────────────────────────────── */
+    .status-loading { text-align: center; padding: 2rem 1rem; color: var(--muted); }
+    .status-error { background: var(--red-bg); border: 1px solid var(--red-bd); color: var(--red); border-radius: 10px; padding: 1rem; margin: 1rem; }
+    .status-empty { text-align: center; padding: 2rem 1rem; color: var(--muted); font-size: .9rem; }
 
-/* ── Match card ─────────────────────────────────────────────────────── */
-.match-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:16px; }
-.conf-badge { display:inline-flex; align-items:center; gap:5px; font-size:13px; font-weight:600; padding:3px 10px; border-radius:var(--radius-pill); margin-bottom:12px; }
-.conf-badge.alta { color:var(--conf-alta); background:var(--conf-alta-bg); border:1px solid var(--conf-alta-bd); }
-.conf-badge.revisar { color:var(--conf-revisar); background:var(--conf-revisar-bg); border:1px solid var(--conf-revisar-bd); }
-.conf-badge.baja { color:var(--conf-baja); background:var(--conf-baja-bg); border:1px solid var(--conf-baja-bd); }
+    /* ── Toast ──────────────────────────────────────────────────────── */
+    .toast-container { position: fixed; bottom: 1rem; left: 1rem; right: 1rem; z-index: 100; max-width: 400px; }
+    .toast { background: var(--surface2); border: 1px solid var(--border2); border-radius: 10px; padding: .75rem 1rem; font-size: .85rem; display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .toast.ok { border-color: var(--success-bd); }
+    .toast.error { border-color: var(--critical-bd); }
+    .toast.pending { border-color: var(--warning-bd); }
+    .toast-close { background: none; border: 0; color: var(--muted); font-size: 1rem; cursor: pointer; }
 
-.fotos-row { display:flex; gap:8px; margin-bottom:6px; }
-.foto-col { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
-.rol-pill { align-self:flex-start; font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:2px 8px; border-radius:var(--radius-pill); }
-.rol-pill.anchor { background:var(--role-anchor-bg); color:var(--role-anchor-txt); border:1px solid var(--role-anchor-bd); }
-.rol-pill.candidate { background:var(--role-candidate-bg); color:var(--role-candidate-txt); border:1px solid var(--role-candidate-bd); }
-.foto-box { aspect-ratio:1; border-radius:10px; overflow:hidden; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; }
-.foto-col.anchor .foto-box { background:var(--surface2); }
-.foto-col.candidate .foto-box { background:var(--surface); }
-.foto-box img { width:100%; height:100%; object-fit:cover; display:block; }
-.foto-box .sinfoto { font-size:.7rem; color:var(--muted); }
+    /* ── Carga ──────────────────────────────────────────────────────── */
+    .skel { background: linear-gradient(90deg, var(--skeleton-base) 25%, var(--skeleton-highlight) 37%, var(--skeleton-base) 63%); background-size: 400% 100%; animation: skel-sweep 1.4s ease infinite; }
+    @keyframes skel-sweep { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+    .skel-item { height: 80px; border-bottom: 1px solid var(--border); }
 
-.titulos-stack { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
-.titulo-fuente-label { font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:2px; }
-.title-diff { font-size:14px; line-height:1.35; }
-.tok { display:inline; }
-.tok-match { color:var(--tok-match-txt); }
-.tok-diff { color:var(--tok-diff-txt); background:var(--tok-diff-bg); border-bottom:1px dashed var(--tok-diff-bd); font-weight:600; padding:0 1px; }
-.tok-discriminant { color:var(--tok-discriminant-txt); background:var(--tok-discriminant-bg); border:1px solid var(--tok-discriminant-bd); border-radius:4px; font-weight:700; padding:0 3px; font-family:var(--tok-discriminant-font); }
+    /* ── Responsive ──────────────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .panel-left { min-width: auto; }
+      .panel-right { min-width: auto; }
+      .candidatos-grid { grid-template-columns: repeat(2, 1fr); }
+      .detail-panel { padding: .75rem; }
+    }
 
-.nivel2 { display:grid; grid-template-columns:1fr 1fr; gap:2px 14px; font-size:12px; margin-bottom:10px; }
-.nivel2 .n2-label { color:var(--muted); }
-.nivel2 .n2-val { color:var(--text); font-weight:600; }
-.nivel2 .n2-head { font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-top:4px; }
-
-details.atributos-toggle { margin-bottom:12px; font-size:12px; }
-details.atributos-toggle summary { cursor:pointer; color:var(--accent); font-weight:600; }
-details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
-
-.btn-confirmar { display:block; width:100%; background:var(--accent); color:#06131C; border:0; border-radius:10px; font-size:.95rem; font-weight:800; padding:0 14px; height:var(--tap-comfort); cursor:pointer; font-family:inherit; margin-bottom:10px; }
-.btn-confirmar:hover, .btn-confirmar:focus-visible { background:var(--accent-dk); }
-.btn-confirmar:disabled { opacity:.55; cursor:default; }
-
-.acciones-fila { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
-@media (max-width: 480px) { .acciones-fila { grid-template-columns:repeat(2,1fr); } }
-.accion-btn { background:none; border:1px solid var(--border); color:var(--muted); border-radius:8px; font-size:.72rem; font-weight:600; padding:6px 4px; min-height:var(--tap-min); cursor:pointer; font-family:inherit; text-align:center; text-decoration:none; display:flex; align-items:center; justify-content:center; gap:4px; }
-.accion-btn:hover, .accion-btn:focus-visible { border-color:var(--accent); color:var(--accent); }
-.accion-btn:disabled { opacity:.5; cursor:not-allowed; }
-.accion-btn-lock { font-size:.65rem; color:var(--muted); text-align:center; margin-top:2px; }
-
-.candidatos-lista { display:flex; flex-direction:column; gap:8px; margin:14px 0; }
-.match-card--compact { background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px; display:flex; gap:10px; align-items:center; cursor:pointer; text-align:left; font-family:inherit; color:var(--text); width:100%; min-height:var(--tap-comfort); }
-.match-card--compact:hover, .match-card--compact:focus-visible { border-color:var(--accent); }
-.mc-thumb { width:40px; height:40px; border-radius:6px; object-fit:cover; background:var(--surface); flex-shrink:0; border:1px solid var(--border); }
-.mc-info { min-width:0; flex:1; }
-.mc-info .title-diff { font-size:12.5px; }
-.mc-num { font-size:.65rem; font-weight:700; color:var(--role-candidate-txt); background:var(--role-candidate-bg); border-radius:var(--radius-pill); padding:1px 6px; margin-bottom:3px; display:inline-block; }
-
-.buscar-manual { margin-top:14px; }
-.buscar-manual summary { cursor:pointer; color:var(--accent); font-weight:600; font-size:.82rem; padding:8px 0; }
-.buscar-manual-box { margin-top:8px; }
-.buscar-manual input { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.85rem; font-family:inherit; outline:none; margin-bottom:8px; min-height:var(--tap-min); }
-.buscar-manual input:focus { border-color:var(--accent); }
-
-.sin-candidato-box { text-align:center; padding:1.5rem 1rem; color:var(--muted); font-size:.85rem; border:1px dashed var(--border); border-radius:10px; margin-bottom:14px; }
-
-.cola-fin { text-align:center; padding:2.5rem 1rem; }
-.cola-fin .icon { font-size:2rem; margin-bottom:.5rem; }
-.cola-fin-acciones { display:flex; gap:10px; justify-content:center; margin-top:1rem; flex-wrap:wrap; }
-
-.aviso-borrada { display:flex; align-items:center; gap:6px; color:var(--warning); font-size:.8rem; font-weight:600; padding:1rem; border:1px solid var(--warning-bd); background:var(--warning-bg); border-radius:10px; margin-bottom:12px; }
-
-/* Confirmación extra (fricción proporcional al riesgo) */
-.friccion-box { background:var(--conf-baja-bg); border:1px solid var(--conf-baja-bd); border-radius:8px; padding:10px 12px; font-size:.78rem; color:var(--text); margin-bottom:10px; display:flex; flex-direction:column; gap:6px; }
-
-/* ── Toast ──────────────────────────────────────────────────────────── */
-.toast-wrap { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:50; display:flex; flex-direction:column; gap:6px; align-items:center; width:calc(100% - 24px); max-width:420px; }
-.toast { background:var(--surface2); border:1px solid var(--border2); border-radius:10px; padding:10px 14px; font-size:.8rem; display:flex; align-items:center; gap:12px; box-shadow:0 8px 24px rgba(0,0,0,.35); width:100%; justify-content:space-between; }
-.toast.ok { border-color:var(--success-bd); }
-.toast.pendiente { border-color:var(--warning-bd); }
-.toast.error { border-color:var(--critical-bd); }
-.toast .toast-txt { display:flex; align-items:center; gap:6px; }
-.toast button { background:none; border:1px solid var(--border); color:var(--accent); border-radius:6px; padding:5px 10px; font-size:.75rem; cursor:pointer; font-family:inherit; }
-
-/* ── Listas de gestión ──────────────────────────────────────────────── */
-.filtros-panel { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem; }
-.filtro-control { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text); font-size:.82rem; font-family:inherit; outline:none; min-height:var(--tap-min); }
-.filtro-control:focus { border-color:var(--accent); }
-.filtro-control.grow { flex:1; min-width:150px; }
-
-.gestion-lista { display:flex; flex-direction:column; gap:8px; }
-.grupo-sku { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
-.grupo-sku-head { font-size:.85rem; font-weight:700; margin-bottom:8px; }
-.grupo-sku-head .sku-mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--accent); }
-.pub-row { display:flex; align-items:center; gap:10px; padding:8px 4px; border-top:1px solid var(--border); flex-wrap:wrap; }
-.pub-row:first-of-type { border-top:0; }
-.pub-row.sobreventa { background:var(--critical-bg); border-radius:6px; padding:8px; }
-.pub-row .pub-txt { flex:1; min-width:120px; font-size:.8rem; }
-.pub-row .pub-mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.72rem; color:var(--muted); }
-.pub-row .pub-acciones { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
-.mini-btn { background:none; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 10px; font-size:.72rem; cursor:pointer; font-family:inherit; min-height:var(--tap-min); }
-.mini-btn:hover, .mini-btn:focus-visible { border-color:var(--accent); color:var(--accent); }
-.mini-btn:disabled { opacity:.5; cursor:not-allowed; }
-.lock-nota { font-size:.65rem; color:var(--muted); white-space:nowrap; }
-.sobreventa-tag { color:var(--critical); font-size:.72rem; font-weight:700; display:inline-flex; align-items:center; gap:3px; }
-.aviso-info { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:.78rem; color:var(--muted); margin-bottom:1rem; }
-
-.item-row { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.75rem 1rem; display:flex; align-items:center; gap:12px; }
-.item-row .flex1 { flex:1; min-width:0; }
-.item-row .nombre { font-size:.85rem; font-weight:600; }
-.item-row .meta { font-size:.72rem; color:var(--muted); margin-top:2px; }
-.item-row input[type=checkbox] { width:20px; height:20px; accent-color:var(--accent); flex-shrink:0; }
-
-.solo-ml-row { display:flex; gap:10px; align-items:center; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; flex-wrap:wrap; }
-.solo-ml-row img { width:40px; height:40px; border-radius:6px; object-fit:cover; background:var(--surface2); flex-shrink:0; }
-.solo-ml-row .flex1 { flex:1; min-width:140px; font-size:.82rem; }
-.solo-ml-row .buscador-inline { display:flex; gap:6px; flex-wrap:wrap; align-items:center; width:100%; margin-top:8px; }
-.solo-ml-row .buscador-inline input { flex:1; min-width:140px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:6px 10px; color:var(--text); font-size:.78rem; font-family:inherit; }
-.resultado-vincular { display:flex; align-items:center; gap:8px; background:var(--surface2); border-radius:6px; padding:6px 10px; font-size:.78rem; }
-
-.hist-grupo-head { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--warning); margin:1rem 0 .4rem; }
-
-.estado-vinculado { display:inline-flex; align-items:center; gap:5px; color:var(--success); font-weight:600; font-size:.78rem; }
-.estado-pendiente { display:inline-flex; align-items:center; gap:5px; color:var(--warning); font-weight:600; font-size:.78rem; }
-.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-
-/* ── Buscador puntual (overlay desde el ícono de la topbar) ────────────── */
-.search-overlay { position:fixed; inset:0; z-index:60; background:var(--danger-veil, rgba(6,8,13,.92)); display:flex; align-items:flex-start; justify-content:center; padding:5vh 1rem 1rem; overflow-y:auto; }
-.search-panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; max-width:600px; width:100%; padding:1.25rem; }
-.search-panel-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
-.search-panel-head button { background:none; border:0; color:var(--muted); font-size:1.1rem; cursor:pointer; min-height:var(--tap-min); min-width:var(--tap-min); }
-.search-box { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; color:var(--text); font-size:.9rem; font-family:inherit; outline:none; min-height:var(--tap-min); }
-.search-box:focus { border-color:var(--accent); }
-.ac-opt { display:block; width:100%; text-align:left; background:none; border:none; border-bottom:1px solid var(--border); color:var(--text); padding:.6rem .75rem; font-size:.82rem; line-height:1.35; font-family:inherit; cursor:pointer; min-height:var(--tap-min); white-space:normal; overflow-wrap:anywhere; }
-.ac-opt:last-child { border-bottom:none; }
-.ac-opt:hover, .ac-opt:focus-visible { background:var(--surface2); }
-.ac-opt b { font-family:monospace; }
-.ac-empty { padding:10px 12px; font-size:.8rem; color:var(--muted); }
-
-/* Producto/publicación cards de Problemas y Buscar (absorbido de Vínculos) */
-.producto-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; display:flex; gap:14px; align-items:center; margin-bottom:1rem; }
-.producto-card img { width:56px; height:56px; object-fit:cover; border-radius:8px; background:var(--surface2); flex-shrink:0; }
-.producto-info { min-width:0; flex:1; }
-.producto-nombre { font-size:.98rem; font-weight:700; margin-bottom:4px; }
-.producto-meta { display:flex; flex-wrap:wrap; gap:10px; font-size:.78rem; color:var(--muted); }
-.producto-meta .contado { color:var(--success); font-weight:700; }
-.pill-sku { font-family:monospace; font-size:.72rem; padding:1px 7px; border-radius:4px; background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
-
-.pub-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; margin-bottom:12px; }
-.pub-head { display:flex; gap:12px; }
-.pub-head img { width:64px; height:64px; object-fit:cover; border-radius:8px; background:var(--surface2); flex-shrink:0; }
-.pub-titulos { min-width:0; flex:1; }
-.pub-titulo-ml { font-size:.9rem; font-weight:700; line-height:1.3; }
-.pub-nombre-wc { font-size:.75rem; color:var(--muted); margin-top:3px; }
-.pub-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; margin:12px 0; }
-.pub-dato { font-size:.78rem; }
-.pub-dato .k { color:var(--muted); display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:2px; }
-.pub-dato .v { color:var(--text); }
-.pub-dato .v.destacado { font-weight:700; }
-.chips-wrap { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
-.chip { display:inline-flex; align-items:center; gap:8px; border-radius:8px; padding:6px 10px; font-size:.76rem; border:1px solid; max-width:100%; }
-.chip.alta { background:var(--critical-bg); color:var(--critical); border-color:var(--critical-bd); }
-.chip.media { background:var(--warning-bg); color:var(--warning); border-color:var(--warning-bd); }
-.chip.ninguna { background:var(--success-bg); color:var(--success); border-color:var(--success-bd); }
-.chip-txt { flex:1; min-width:0; }
-.chip-revisar { background:none; border:1px solid currentColor; color:inherit; border-radius:5px; padding:2px 8px; font-size:.7rem; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap; }
-.pub-acciones { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
-.pub-flash { font-size:.76rem; margin-top:8px; }
-.pub-flash.ok { color:var(--success); }
-.pub-flash.err { color:var(--critical); }
-
-.btn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 14px; font-size:.78rem; font-weight:600; cursor:pointer; font-family:inherit; text-decoration:none; display:inline-block; transition:border-color .15s,color .15s; min-height:var(--tap-min); }
-.btn:hover { border-color:var(--accent); color:var(--accent); }
-.btn.primary { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); }
-.btn.danger { border-color:var(--critical-bd); color:var(--critical); }
-.btn.danger:hover { border-color:var(--critical); }
-.btn:disabled { opacity:.5; cursor:not-allowed; }
-
-/* ── Modal ── */
-.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:70; padding:1rem; }
-.modal-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1.5rem; max-width:440px; width:100%; max-height:85vh; overflow-y:auto; }
-.modal-title { font-size:1rem; font-weight:700; margin-bottom:10px; }
-.modal-body { font-size:.85rem; color:var(--text); line-height:1.5; margin-bottom:14px; }
-.modal-body .aviso { color:var(--warning); margin-top:6px; }
-.modal-actions { display:flex; justify-content:flex-end; gap:10px; }
-.modal-search-results { max-height:220px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; margin-top:8px; }
-.modal-resumen { background:var(--surface2); border-radius:8px; padding:10px 12px; font-size:.8rem; margin-top:10px; }
-
-@media (min-width: 760px) {
-  .main { max-width:1080px; padding:2rem 2rem 5rem; }
-  .fotos-row { max-width:620px; }
-  .foto-box { flex:0 0 180px; aspect-ratio:1; }
-  .titulos-stack { flex-direction:row; gap:20px; }
-  .titulos-stack > div { flex:1; }
-  .nivel2 { grid-template-columns:repeat(6,auto); gap:6px 22px; }
-  .btn-confirmar { width:auto; padding:0 28px; }
-  .acciones-fila { grid-template-columns:repeat(4,auto); }
-  .marcas-grid { grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); }
-  .pub-grid { grid-template-columns:repeat(4,1fr); }
-}
-</style>
+    @media (prefers-reduced-motion: reduce) {
+      .skel { animation: none; background: var(--skeleton-base); }
+      * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
 </head>
 <body>
+  <script src="../lib/api.js"></script>
+  <script src="../lib/format.js"></script>
 
-<header class="topbar">
-  <a class="back-link" href="/herramientas/home/">&larr; Inicio</a>
-  <div class="topbar-title">Matcher</div>
-  <div class="topbar-right">
-    <button type="button" class="hbtn icon-only" id="btn-buscar-topbar" aria-label="Buscar producto o publicación">🔍</button>
-    <button type="button" class="hbtn" id="btn-actualizar-ml">↻ <span id="btn-actualizar-txt">Actualizar</span></button>
+  <div class="topbar">
+    <a href="/herramientas/home/" class="topbar-back">← Home</a>
+    <div class="topbar-title">Matcher</div>
+    <div></div>
   </div>
-</header>
 
-<div class="banner-aviso hidden" id="banner-aviso">
-  <div class="banner-aviso-box">
-    <div>
-      <strong>Cobertura y Vínculos se unificaron acá.</strong> Todo lo que hacías en esas dos herramientas —confirmar vínculos, multi-publicación, Solo ML, Buscar producto, Sospechosos— ahora vive en el Matcher, en un solo lugar.
+  <div class="filtros-header">
+    <div class="filtros-row" id="filters-row" role="tablist">
+      <button class="chip active" data-filter="all" role="tab" aria-label="Todos (0)">
+        Todos <span class="badge" data-count="0">0</span>
+      </button>
+      <button class="chip" data-filter="asignar" role="tab" aria-label="Asignar SKU (0)">
+        Asignar SKU <span class="badge" data-count="0">0</span>
+      </button>
+      <button class="chip" data-filter="verificar" role="tab" aria-label="Verificar (0)">
+        Verificar <span class="badge" data-count="0">0</span>
+      </button>
+      <button class="chip" data-filter="conf-baja" role="tab" aria-label="Confianza baja (0)">
+        Conf. baja <span class="badge" data-count="0">0</span>
+      </button>
+      <button class="chip" data-filter="color-talle" role="tab" aria-label="Color y Talle correcto (0)">
+        Color+Talle ✓ <span class="badge" data-count="0">0</span>
+      </button>
     </div>
-    <button type="button" id="banner-aviso-cerrar" aria-label="Cerrar aviso">✕</button>
+    <input type="search" class="search-box" id="search-input" placeholder="Buscar por título o variaciones..." aria-label="Buscar publicaciones por título o variaciones">
   </div>
-</div>
 
-<div class="banner-aviso hidden" id="banner-bienvenida">
-  <div class="banner-aviso-box" style="background:var(--chip-on-bg);border-color:var(--chip-on-bd);">
-    <div>
-      <strong>Ya no subís ningún archivo.</strong> La cola de trabajo se arma sola a partir del catálogo y de ML — elegí una dirección abajo y empezá a resolver de a una.
+  <div class="progress-bar-wrap">
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
     </div>
-    <button type="button" id="banner-bienvenida-cerrar" aria-label="Cerrar aviso">✕</button>
+    <div class="progress-stats">
+      <span class="progress-stat"><span class="label">Asignados:</span> <span id="stat-asignados">0</span></span>
+      <span class="progress-stat"><span class="label">Confirmados:</span> <span id="stat-confirmados">0</span></span>
+      <span class="progress-stat"><span class="label">Omitidos:</span> <span id="stat-omitidos">0</span></span>
+      <span class="progress-stat"><span class="label">Pendientes:</span> <span id="stat-pendientes">0</span></span>
+    </div>
   </div>
-</div>
 
-<!-- Región viva para anunciar refrescos de contenido a lectores de pantalla -->
-<div id="aria-live" class="sr-only" role="status" aria-live="polite"></div>
+  <div class="matcher-container">
+    <!-- Panel izquierdo: lista -->
+    <div class="panel-left">
+      <div class="pub-list" id="pub-list">
+        <div class="status-empty">Cargando publicaciones...</div>
+      </div>
+    </div>
 
-<div class="subheader">
-  <div class="dir-selector" role="group" aria-label="Dirección de trabajo">
-    <button type="button" class="dir-pill active" id="dir-wc-ml" data-dir="wc_ml" aria-current="true">Sin publicación <span class="dir-n" id="dir-wc-ml-n">…</span></button>
-    <button type="button" class="dir-pill" id="dir-ml-wc" data-dir="ml_wc" aria-current="false">Sin producto<span class="dir-proximamente">Próximamente</span></button>
+    <!-- Panel derecho: detalle -->
+    <div class="panel-right" id="panel-right">
+      <div class="detail-panel" id="detail-content">
+        <div class="detail-empty">Selecciona una publicación</div>
+      </div>
+    </div>
   </div>
-</div>
 
-<div class="chips-tira-wrap">
-  <div class="chips-tira" id="chips-tira" role="group" aria-label="Secciones"></div>
-</div>
+  <!-- Toast de notificaciones -->
+  <div class="toast-container" id="toast-container"></div>
 
-<div class="refresco-bar" id="refresco-bar">Cargando estado de sincronización…</div>
+  <script>
+    'use strict';
 
-<main class="main">
+    // Estado global
+    const state = {
+      allItems: [],
+      filteredItems: [],
+      currentIndex: 0,
+      filter: 'all',
+      searchQuery: '',
+      decisions: {}, // clave -> { sku, accion }
+      computing: false
+    };
 
-  <!-- ══════════════ VISTA: ENTRADA ══════════════ -->
-  <section class="view" id="view-entrada" data-view="entrada">
-    <h1 class="page-title">Matcher de <em>catálogo</em></h1>
-    <div id="entrada-resumen" class="resumen-top">
-      <div class="skel skel-marca" style="width:100%;height:40px;"></div>
-    </div>
-
-    <div id="entrada-seguir"></div>
-
-    <div class="section-label">Elegí una marca para trabajar</div>
-    <div id="entrada-marcas" class="marcas-grid">
-      <div class="skel skel-marca"></div><div class="skel skel-marca"></div><div class="skel skel-marca"></div>
-    </div>
-    <button type="button" class="btn-vertodas" id="btn-ver-todas-marcas" hidden>Ver todas las marcas</button>
-
-    <div class="section-label">Otras formas de revisar</div>
-    <div class="otras-lista">
-      <a class="otra-link" href="../guardia-ml/">Guardia ML — riesgos de venta y cobertura <span class="n">›</span></a>
-      <a class="otra-link" href="#/solo-ml">Solo ML — publicaciones sin SKU <span class="n">›</span></a>
-    </div>
-  </section>
-
-  <!-- ══════════════ VISTA: COLA (tarjeta de a una) ══════════════ -->
-  <section class="view" id="view-cola" data-view="cola">
-    <h1 class="sr-only" id="cola-h1">Trabajando marca</h1>
-    <div class="cola-header">
-      <a href="#/" class="back-link">&larr; Elegir otra marca</a>
-      <a href="#/historial" class="back-link">Historial</a>
-    </div>
-    <div class="progreso-bar-row">
-      <div class="progreso-track"><div class="progreso-fill" id="cola-progreso-fill" style="width:0%"></div></div>
-      <div class="progreso-frac" id="cola-progreso-frac">—</div>
-    </div>
-    <div class="progreso-secundaria" id="cola-progreso-secundaria">Hoy resolviste 0 · desinmovilizaste $0</div>
-
-    <div id="cola-contenido"><div class="skel" style="height:340px;"></div></div>
-  </section>
-
-  <!-- ══════════════ VISTA: HISTORIAL ══════════════ -->
-  <section class="view" id="view-historial" data-view="historial">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Historial</h1>
-    <p class="page-sub">Vínculos y descartes recientes. Deshacer disponible en cada uno.</p>
-    <div class="filtros-panel">
-      <input class="filtro-control grow" type="search" id="hist-buscar" placeholder="Buscar por producto o SKU…" aria-label="Buscar por producto o SKU">
-    </div>
-    <div id="hist-lista"></div>
-  </section>
-
-  <!-- ══════════════ VISTA: HAY QUE PUBLICARLO ══════════════ -->
-  <section class="view" id="view-publicar" data-view="publicar">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Hay que <em>publicarlo</em></h1>
-    <p class="page-sub">Productos sin candidato usable en ML, ordenados por valor. No publica nada por vos — prepara los datos.</p>
-    <div class="filtros-panel">
-      <button type="button" class="hbtn" id="btn-export-csv">⬇ Exportar a Excel</button>
-    </div>
-    <div id="publicar-lista"></div>
-  </section>
-
-  <!-- ══════════════ VISTA: MULTI-PUBLICACIÓN ══════════════ -->
-  <section class="view" id="view-multipub" data-view="multipub">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Multi-<em>publicación</em></h1>
-    <div class="aviso-info">Un SKU con más de dos publicaciones suele ser <strong>intencional</strong> (condiciones de venta distintas). No se "arregla" desvinculando todo: marcá como correcta la que está bien, pausá o desvinculá solo la que corresponda.</div>
-    <div id="multipub-lista"></div>
-  </section>
-
-  <!-- ══════════════ VISTA: SOLO ML ══════════════ -->
-  <section class="view" id="view-solo-ml" data-view="solo-ml">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Solo ML <em>— sin decisión válida</em></h1>
-    <p class="page-sub">Publicaciones activas sin una decisión exacta del matcher, incluyendo las que tienen stock vendible y deben corregirse antes de seguir sincronizando.</p>
-    <div class="filtros-panel">
-      <input class="filtro-control grow" type="search" id="soloml-buscar" placeholder="Buscar por título…" aria-label="Buscar publicación de ML por título">
-    </div>
-    <div id="soloml-lista"></div>
-  </section>
-
-  <!-- ══════════════ VISTA: SIN STOCK ══════════════ -->
-  <section class="view" id="view-sin-stock" data-view="sin-stock">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Sin <em>stock</em></h1>
-    <p class="page-sub">Faltantes con stock 0. Aparte de la cola principal, por si reponen.</p>
-    <div id="sinstock-lista"></div>
-  </section>
-
-  <!-- ══════════════ VISTA: PROBLEMAS (absorbe Sospechosos de Vínculos) ══════════════ -->
-  <section class="view" id="view-problemas" data-view="problemas">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Problemas</h1>
-    <p class="page-sub">Cosas que el sistema marca como raras: publicaciones pausadas que siguen vinculadas, y señales de posible mal matcheo.</p>
-
-    <div class="section-label">Pausadas que siguen vinculadas a un producto</div>
-    <div class="filtros-panel">
-      <select class="filtro-control" id="prob-marca" aria-label="Filtrar por marca"><option value="">Todas las marcas</option></select>
-      <select class="filtro-control" id="prob-categoria" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option></select>
-    </div>
-    <div id="prob-lista"></div>
-
-    <div class="section-label">Señales de posible mal matcheo</div>
-    <div id="sospechosos-lista"></div>
-  </section>
-
-  <!-- ══════════════ VISTA: HUÉRFANOS (próximamente, entrega 2) ══════════════ -->
-  <section class="view" id="view-huerfanos" data-view="huerfanos">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Huérfanos</h1>
-    <div class="vacio"><strong>Próximamente.</strong>Decisiones que apuntan a publicaciones que ya no existen en ML. Se limpian solas y esta sección va a servir para revisarlas — llega con el motor unificado (dirección Sin producto).</div>
-  </section>
-
-  <!-- ══════════════ VISTA: OMITIDAS (próximamente, entrega 2) ══════════════ -->
-  <section class="view" id="view-omitidas" data-view="omitidas">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Omitidas</h1>
-    <div class="vacio"><strong>Próximamente.</strong>Publicaciones que se descartaron del trabajo normal, fuera de la cola. Llega con el motor unificado (dirección Sin producto).</div>
-  </section>
-
-  <!-- ══════════════ VISTA: SIN PRODUCTO (próximamente) ══════════════ -->
-  <section class="view" id="view-ml-wc" data-view="ml-wc">
-    <a href="#/" class="back-link">&larr; Volver</a>
-    <h1 class="page-title">Publicaciones sin <em>producto</em></h1>
-    <div class="vacio"><strong>Próximamente.</strong>Esta dirección (buscar el producto web para una publicación de ML sin vincular) llega con el motor unificado. Por ahora seguí usando "Sin publicación" — es la que ya funciona.</div>
-  </section>
-
-</main>
-
-<!-- ══════════════ Buscador puntual (overlay, alcanzable desde cualquier vista) ══════════════ -->
-<div class="search-overlay hidden" id="search-overlay" role="dialog" aria-modal="true" aria-labelledby="search-overlay-title">
-  <div class="search-panel">
-    <div class="search-panel-head">
-      <span id="search-overlay-title" style="font-weight:700;font-size:.95rem;">Buscar producto</span>
-      <button type="button" id="search-overlay-cerrar" aria-label="Cerrar buscador">✕</button>
-    </div>
-    <label class="sr-only" for="buscar-topbar-input">Buscar producto por SKU o nombre</label>
-    <input class="search-box" type="text" id="buscar-topbar-input" placeholder="SKU o nombre del producto" autocomplete="off">
-    <div id="buscar-topbar-results" style="margin-top:8px;"></div>
-    <div id="buscar-topbar-detalle" style="margin-top:12px;"></div>
-  </div>
-</div>
-
-<div id="modal-root"></div>
-
-<div class="toast-wrap" id="toast-wrap"></div>
-
-<script src="../lib/api.js"></script>
-<script src="../lib/format.js"></script>
-<script src="../lib/matcherPush.js"></script>
-<script>
-'use strict';
-Api.installAuth();
-Api.guardBfcache();
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Estado de sesión / permisos
- * ═══════════════════════════════════════════════════════════════════════ */
-var esAdmin = false;
-var push = MatcherPush.crear('/api/matcher/push-skus-pendientes');
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Utilidades generales
- * ═══════════════════════════════════════════════════════════════════════ */
-
-function announce(msg) {
-  var el = document.getElementById('aria-live');
-  el.textContent = '';
-  window.setTimeout(function () { el.textContent = msg; }, 30);
-}
-
-function parseCats(cj) {
-  if (Array.isArray(cj)) return cj;
-  if (typeof cj === 'string' && cj.trim()) { try { var a = JSON.parse(cj); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
-  return [];
-}
-function catsDe(p) { return parseCats(p.categorias_json).map(function (c) { return String(c).trim(); }).filter(Boolean); }
-
-function jsonFetch(url, opts) {
-  return fetch(url, opts).then(function (r) {
-    return r.text().then(function (txt) {
-      var data = null;
-      try { data = txt ? JSON.parse(txt) : null; } catch (e) { /* respuesta no-JSON */ }
-      return { ok: r.ok, status: r.status, data: data };
-    });
-  }).catch(function (err) {
-    return { ok: false, status: 0, data: null, error: (err && err.message) || 'Fallo de red' };
-  });
-}
-
-/* /api/cobertura/resumen se pide en simultáneo desde cargarChips/cargarRefrescoBar/
-   cargarEntrada al arrancar la pantalla — dedupe corto (ventana de 1.5s) para no pedirlo
-   3 veces por el mismo motivo, sin transformarlo en un caché de verdad. */
-var resumenPromiseCache = null;
-function fetchResumen() {
-  if (resumenPromiseCache) return resumenPromiseCache;
-  resumenPromiseCache = jsonFetch('/api/cobertura/resumen');
-  resumenPromiseCache.then(function () {
-    window.setTimeout(function () { resumenPromiseCache = null; }, 1500);
-  });
-  return resumenPromiseCache;
-}
-
-function toast(mensaje, tipo, onDeshacer) {
-  var wrap = document.getElementById('toast-wrap');
-  var el = document.createElement('div');
-  el.className = 'toast ' + (tipo || 'ok');
-  el.setAttribute('role', 'status');
-  var icono = tipo === 'error' ? '✕' : tipo === 'pendiente' ? '↻' : tipo === 'neutro' ? 'ℹ' : '✓';
-  el.innerHTML = '<span class="toast-txt"><span aria-hidden="true">' + icono + '</span>' + esc(mensaje) + '</span>';
-  if (onDeshacer) {
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = 'Deshacer';
-    btn.addEventListener('click', function () { onDeshacer(); el.remove(); });
-    el.appendChild(btn);
-  }
-  wrap.appendChild(el);
-  announce(mensaje);
-  window.setTimeout(function () { if (el.parentNode) el.remove(); }, onDeshacer ? 8000 : 4500);
-}
-
-/* Botón admin-only: si no es admin, queda disabled + candado visible al lado (nunca oculto). */
-function botonAdminHtml(clasesExtra, dataAttrs, texto) {
-  var disabled = esAdmin ? '' : 'disabled aria-disabled="true"';
-  var html = '<button type="button" class="' + clasesExtra + '" ' + dataAttrs + ' ' + disabled + '>' + esc(texto) + '</button>';
-  if (!esAdmin) html += '<span class="lock-nota">🔒 Solo administradores</span>';
-  return html;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Router por hash: #/, #/cola/MARCA, #/historial, #/publicar, #/multipub,
- * #/solo-ml, #/sin-stock, #/problemas, #/huerfanos, #/omitidas, #/ml-wc
- * ═══════════════════════════════════════════════════════════════════════ */
-
-var VISTAS = ['entrada', 'cola', 'historial', 'publicar', 'multipub', 'solo-ml', 'sin-stock', 'problemas', 'huerfanos', 'omitidas', 'ml-wc'];
-function mostrarVista(nombre) {
-  VISTAS.forEach(function (v) {
-    document.getElementById('view-' + v).classList.toggle('active', v === nombre);
-  });
-  actualizarChipsActivo(nombre);
-}
-
-function router() {
-  var hash = window.location.hash.replace(/^#\/?/, '');
-  var partes = hash.split('/').filter(Boolean);
-  if (!partes.length) { mostrarVista('entrada'); cargarEntrada(); return; }
-  var seccion = partes[0];
-  if (seccion === 'cola' && partes[1]) {
-    mostrarVista('cola');
-    cargarCola(decodeURIComponent(partes[1]));
-  } else if (seccion === 'historial') {
-    mostrarVista('historial'); cargarHistorial();
-  } else if (seccion === 'publicar') {
-    mostrarVista('publicar'); cargarPublicar();
-  } else if (seccion === 'multipub') {
-    mostrarVista('multipub'); cargarMultipub();
-  } else if (seccion === 'solo-ml') {
-    mostrarVista('solo-ml'); cargarSoloMl();
-  } else if (seccion === 'sin-stock') {
-    mostrarVista('sin-stock'); cargarSinStock();
-  } else if (seccion === 'problemas') {
-    mostrarVista('problemas'); cargarProblemas();
-  } else if (seccion === 'huerfanos') {
-    mostrarVista('huerfanos');
-  } else if (seccion === 'omitidas') {
-    mostrarVista('omitidas');
-  } else if (seccion === 'ml-wc') {
-    mostrarVista('ml-wc');
-  } else {
-    mostrarVista('entrada'); cargarEntrada();
-  }
-}
-window.addEventListener('hashchange', router);
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Avisos: unificación (?aviso=unificado) y primera visita (localStorage)
- * ═══════════════════════════════════════════════════════════════════════ */
-
-(function initAvisos() {
-  var params = new URLSearchParams(window.location.search);
-  if (params.get('aviso') === 'unificado') {
-    document.getElementById('banner-aviso').classList.remove('hidden');
-  }
-  document.getElementById('banner-aviso-cerrar').addEventListener('click', function () {
-    document.getElementById('banner-aviso').classList.add('hidden');
-    // Limpia el query param para que un refresh no lo vuelva a mostrar.
-    var url = new URL(window.location.href);
-    url.searchParams.delete('aviso');
-    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
-  });
-
-  var YA_VISTO = 'matcher_bienvenida_vista';
-  if (!window.localStorage.getItem(YA_VISTO)) {
-    document.getElementById('banner-bienvenida').classList.remove('hidden');
-  }
-  document.getElementById('banner-bienvenida-cerrar').addEventListener('click', function () {
-    document.getElementById('banner-bienvenida').classList.add('hidden');
-    window.localStorage.setItem(YA_VISTO, '1');
-  });
-})();
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Selector de dirección (solo Sin publicación funciona en esta entrega)
- * ═══════════════════════════════════════════════════════════════════════ */
-
-document.getElementById('dir-ml-wc').addEventListener('click', function () {
-  window.location.hash = '#/ml-wc';
-});
-document.getElementById('dir-wc-ml').addEventListener('click', function () {
-  if (window.location.hash.replace(/^#\/?/, '').split('/')[0] === 'ml-wc' || !window.location.hash || window.location.hash === '#/') {
-    window.location.hash = '#/';
-  }
-});
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Tira de chips de secciones (persistente, no sticky)
- * ═══════════════════════════════════════════════════════════════════════ */
-
-var CHIPS_FRECUENTES = [
-  { key: 'publicar', hash: '#/publicar', label: 'Hay que publicarlo', accionable: true },
-  { key: 'problemas', hash: '#/problemas', label: 'Problemas', accionable: true },
-  { key: 'multipub', hash: '#/multipub', label: 'Multi-publicación', accionable: false },
-  { key: 'sin-stock', hash: '#/sin-stock', label: 'Sin stock', accionable: false },
-];
-var CHIPS_RARAS = [
-  { key: 'huerfanos', hash: '#/huerfanos', label: 'Huérfanos', accionable: false, proximamente: true },
-  { key: 'omitidas', hash: '#/omitidas', label: 'Omitidas', accionable: false, proximamente: true },
-];
-
-function chipHtml(c, n) {
-  var accionableConContenido = c.accionable && n > 0;
-  var claseExtra = accionableConContenido ? ' accionable' : '';
-  var esBoton = n > 0 && !c.proximamente;
-  var etiqueta = esc(c.label) + ' <span class="n">' + (c.proximamente ? '—' : n) + '</span>';
-  if (esBoton) {
-    return '<a class="chip-sec' + claseExtra + '" data-chip="' + c.key + '" href="' + c.hash + '">' + etiqueta + '</a>';
-  }
-  // En 0 (o "próximamente"): no interactivo a propósito (ver design-system.md §8.2) — sin
-  // `tabindex`/`role`, para no tabular a algo que Enter no responde.
-  return '<span class="chip-sec' + claseExtra + '" data-chip="' + c.key + '" aria-disabled="true">' + etiqueta + '</span>';
-}
-
-function renderChipsTira(counts) {
-  var cont = document.getElementById('chips-tira');
-  var html = CHIPS_FRECUENTES.map(function (c) { return chipHtml(c, counts[c.key] || 0); }).join('');
-  html += '<details style="display:inline-flex;"><summary class="chip-sec" style="list-style:none;cursor:pointer;">Más ▾</summary>' +
-    '<div class="chip-mas-panel">' + CHIPS_RARAS.map(function (c) { return chipHtml(c, counts[c.key] || 0); }).join('') + '</div></details>';
-  cont.innerHTML = html;
-}
-
-function actualizarChipsActivo(vistaActual) {
-  document.querySelectorAll('.chip-sec').forEach(function (el) {
-    var key = el.getAttribute('data-chip');
-    var activo = (key === 'publicar' && vistaActual === 'publicar') ||
-      (key === 'problemas' && vistaActual === 'problemas') ||
-      (key === 'multipub' && vistaActual === 'multipub') ||
-      (key === 'sin-stock' && vistaActual === 'sin-stock') ||
-      (key === 'huerfanos' && vistaActual === 'huerfanos') ||
-      (key === 'omitidas' && vistaActual === 'omitidas');
-    el.style.borderColor = activo ? 'var(--accent)' : '';
-    if (activo) el.setAttribute('aria-current', 'true'); else el.removeAttribute('aria-current');
-  });
-}
-
-function cargarChips() {
-  var counts = {};
-  var pSospechosos = jsonFetch('/api/cobertura/vinculos-sospechosos').then(function (res) {
-    counts.problemas = (res.ok && res.data && res.data.ok) ? (res.data.data || []).length : 0;
-  });
-  var pResumen = fetchResumen().then(function (res) {
-    if (!res.ok || !res.data || !res.data.ok) return;
-    var o2 = res.data.otras_secciones || {};
-    counts.publicar = o2.hay_que_publicarlo || 0;
-    counts.multipub = o2.multi_publicacion || 0;
-    counts['sin-stock'] = o2.sin_stock || 0;
-    document.getElementById('dir-wc-ml-n').textContent = '(' + n(res.data.total_pendientes) + ')';
-  });
-  Promise.all([pSospechosos, pResumen]).then(function () { renderChipsTira(counts); actualizarChipsActivo(vistaActualNombre()); });
-}
-function vistaActualNombre() {
-  var hash = window.location.hash.replace(/^#\/?/, '');
-  return (hash.split('/').filter(Boolean)[0]) || 'entrada';
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Línea calma del push de SKUs (mismo renglón que "última actualización")
- * ═══════════════════════════════════════════════════════════════════════ */
-
-function antiguedadTexto(iso) {
-  if (!iso) return null;
-  var ms = Date.now() - new Date(iso).getTime();
-  if (!isFinite(ms) || ms < 0) return null;
-  var min = Math.floor(ms / 60000);
-  if (min < 1) return 'hace instantes';
-  if (min < 60) return 'hace ' + min + ' min';
-  var horas = Math.floor(min / 60);
-  if (horas < 24) return 'hace ' + horas + ' h';
-  var dias = Math.floor(horas / 24);
-  return 'hace ' + dias + ' d';
-}
-
-function cargarRefrescoBar() {
-  var bar = document.getElementById('refresco-bar');
-  Promise.all([
-    fetchResumen(),
-    push.contar().catch(function () { return null; }),
-  ]).then(function (results) {
-    var resumenRes = results[0];
-    var cont = results[1];
-    var actualizadoTxt = (resumenRes.ok && resumenRes.data && resumenRes.data.ok)
-      ? antiguedadTexto(resumenRes.data.ultima_actualizacion_ml) : null;
-    var actualizado = 'Actualizado ' + (actualizadoTxt || '—');
-
-    // "Trabado": hay pendientes en espera (backoff) desde hace rato, o pendientes altos sin moverse.
-    var trabado = cont && cont.ok && (cont.en_espera || 0) > 0;
-    if (trabado) {
-      bar.className = 'refresco-bar trabado';
-      bar.innerHTML = '<span><span aria-hidden="true">⚠</span> Push de SKUs trabado · ' + n(cont.en_espera) + ' pendientes en espera <a href="#/publicar">Ver</a></span><span>' + esc(actualizado) + '</span>';
-    } else if (!cont || !cont.ok) {
-      // No sabemos si están al día: el endpoint de contar falló. Nunca afirmar "al día" a
-      // ciegas — misma enfermedad que los bloqueantes de esta pantalla.
-      // `!cont.ok` y no solo `cont === null` (hallazgo del revisor, 2ª pasada): un 403 de
-      // scopeCheck devuelve JSON válido `{ok:false}`, así que la promesa RESUELVE y el
-      // `cont === null` de antes no lo agarraba. Ese es justamente el caso más probable —
-      // alguien sin permiso sobre /api/matcher/* veía "SKUs al día" con la cola trabada.
-      bar.className = 'refresco-bar';
-      bar.innerHTML = '<span>No se pudo confirmar el estado del push de SKUs.</span><span>' + esc(actualizado) + '</span>';
-    } else {
-      bar.className = 'refresco-bar';
-      bar.innerHTML = '<span>Sincroniza sola cada 10 min · SKUs al día</span><span>' + esc(actualizado) + '</span>';
-    }
-  });
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * VISTA: ENTRADA
- * ═══════════════════════════════════════════════════════════════════════ */
-
-function cargarEntrada() {
-  fetchResumen().then(function (res) {
-    var resumenEl = document.getElementById('entrada-resumen');
-    var seguirEl = document.getElementById('entrada-seguir');
-    var marcasEl = document.getElementById('entrada-marcas');
-    var btnTodas = document.getElementById('btn-ver-todas-marcas');
-
-    if (!res.ok || !res.data || !res.data.ok) {
-      resumenEl.innerHTML = '<div class="vacio">No se pudo cargar el resumen. <button type="button" class="hbtn" onclick="cargarEntrada()">Reintentar</button></div>';
-      seguirEl.innerHTML = ''; marcasEl.innerHTML = '';
-      return;
-    }
-    var d = res.data;
-
-    resumenEl.innerHTML =
-      '<span class="resumen-num">' + n(d.total_pendientes) + '</span>' +
-      '<span class="resumen-txt">faltantes · ' + money(d.total_valor) + ' sin publicar</span>';
-
-    if (d.seguir_donde_quede) {
-      var sq = d.seguir_donde_quede;
-      seguirEl.innerHTML =
-        '<button type="button" class="highlight-card" onclick="irACola(' + JSON.stringify(sq.marca).replace(/"/g, '&quot;') + ')">' +
-        '<div class="highlight-eyebrow">Seguir donde quedé</div>' +
-        '<div class="highlight-title">' + esc(sq.marca) + ' <b>(' + n(sq.pendientes) + ' pendientes)</b></div>' +
-        '<div style="font-size:.78rem;color:var(--muted);margin-top:4px;">Hoy resolviste ' + n((d.progreso_hoy || {}).resueltos_hoy) + ' · desinmovilizaste ' + money((d.progreso_hoy || {}).valor_desinmovilizado_hoy) + '</div>' +
-        '</button>';
-    } else {
-      seguirEl.innerHTML = '';
+    // ── Inicialización ──────────────────────────────────────────────────
+    async function init() {
+      await Api.requirePermiso('matcher');
+      Api.installAuth();
+      Api.guardBfcache();
+      attachEventListeners();
+      loadData();
     }
 
-    if (!d.marcas.length) {
-      marcasEl.innerHTML = '<div class="vacio" style="grid-column:1/-1;"><strong>No hay faltantes pendientes. Matcher al día.</strong>Puede que igual haya trabajo en Multi-publicación o Solo ML.<div class="vacio-links"><a class="hbtn" href="#/multipub">Multi-publicación</a><a class="hbtn" href="#/solo-ml">Solo ML</a></div></div>';
-      btnTodas.hidden = true;
-    } else {
-      marcasEl.innerHTML = d.marcas.map(function (m) {
-        return '<button type="button" class="marca-card" onclick="irACola(' + JSON.stringify(m.marca).replace(/"/g, '&quot;') + ')">' +
-          '<div class="marca-nombre">' + esc(m.marca) + '</div>' +
-          '<div class="marca-meta">' + n(m.conteo) + ' faltantes</div>' +
-          '<div class="marca-valor">' + money(m.valor) + '</div>' +
-          '</button>';
+    function attachEventListeners() {
+      // Filtros
+      document.querySelectorAll('[data-filter]').forEach(btn => {
+        btn.addEventListener('click', () => setFilter(btn.dataset.filter));
+      });
+
+      // Búsqueda
+      const searchInput = document.getElementById('search-input');
+      searchInput.addEventListener('input', debounce((e) => {
+        state.searchQuery = e.target.value.toLowerCase();
+        applyFiltersAndSearch();
+        selectItem(0);
+      }, 200));
+
+      // Navegación por teclado
+      document.addEventListener('keydown', handleKeyboard);
+
+      // Lista de publicaciones
+      document.getElementById('pub-list').addEventListener('click', (e) => {
+        const item = e.target.closest('.pub-item');
+        if (item) {
+          const idx = parseInt(item.dataset.idx, 10);
+          selectItem(idx);
+        }
+      });
+    }
+
+    // El cómputo completo tarda ~70s en frío y la caché es en memoria: se pierde en cada
+    // reinicio del server y cuando entra un refresco completo de publicaciones de ML.
+    const ESPERA_COMPUTO_MS = 180000;   // 3 min: el cómputo ronda los 70s, con margen
+    const SONDEO_MS = 3000;
+
+    async function pedirCandidatos({ peek }) {
+      // scope=atencion (no 'all'): excluye del lado del servidor las publicaciones que ya
+      // tienen una decisión guardada en sku_matcher_decisiones (misma función,
+      // clavesNecesitanAtencion, que ya usa el dashboard de sync). Sin esto, cada una de las
+      // 5 pestañas mostraba el catálogo entero sin filtrar — 6893 publicaciones incluyendo
+      // las ~5100 ya resueltas — porque ninguna pestaña filtraba por decisión y el estado de
+      // decisiones del cliente arranca vacío en cada carga. Las decisiones nunca se perdieron
+      // (siguen en la base), pero la lista no lo reflejaba.
+      const qs = new URLSearchParams({ scope: 'atencion' });
+      if (peek) qs.set('peek', '1');
+      const res = await fetch('/api/matcher/candidatos?' + qs.toString());
+      const data = await res.json().catch(() => ({ ok: false, error: 'respuesta ilegible del servidor' }));
+      if (!res.ok && !data.computing) throw new Error(data.error || ('HTTP ' + res.status));
+      return data;
+    }
+
+    // computarCandidatosApi() (routes/matcher.js) devuelve los campos de la publicación
+    // prefijados ml_* (ml_title, ml_item_id, ml_status, ml_variations) y sin ningún campo
+    // "clave" — el resto de este archivo (renderList/renderDetail, y todo lo que usa
+    // state.decisions[item.clave] para trackear decisiones) se escribió contra otros nombres.
+    // Sin este mapeo, item.titulo/item_id/status/clave llegan undefined: título vacío en cada
+    // fila, "undefined" en el aria-label, Item ID/Status en blanco en el detalle, y CADA
+    // decisión se guarda bajo la misma clave undefined en vez de una por publicación.
+    function normalizarItems(items) {
+      return items.map(it => {
+        let variationsTexto = '';
+        try {
+          const vars = it.ml_variations ? JSON.parse(it.ml_variations) : [];
+          variationsTexto = vars.length ? vars.map(v => v.attribute_name + ': ' + v.value_name).join(' • ') : '';
+        } catch (_) { /* variations mal formadas: sin texto, no rompemos el render */ }
+        return {
+          ...it,
+          clave: it.ml_item_id + (it.ml_variation_id ? '|' + it.ml_variation_id : ''),
+          titulo: it.ml_title,
+          item_id: it.ml_item_id,
+          status: it.ml_status,
+          variations_texto: variationsTexto,
+        };
+      });
+    }
+
+    async function loadData() {
+      try {
+        // peek nunca dispara el cómputo: si hay caché válida devuelve los datos al toque.
+        let data = await pedirCandidatos({ peek: true });
+
+        if (!data.cache) {
+          // MISS. El pedido sin peek arranca el cómputo y responde 202 al instante.
+          showStatus('Calculando candidatos… puede tardar hasta un minuto y medio', 'loading');
+          const arranque = await pedirCandidatos({ peek: false });
+          // Si justo terminó entre el peek y esta llamada, ya vienen los datos.
+          data = arranque.computing ? await esperarCandidatos() : arranque;
+        }
+
+        state.allItems = normalizarItems(data.data || []);
+        applyFiltersAndSearch();
+
+        if (state.filteredItems.length === 0) {
+          showStatus('Sin publicaciones pendientes', 'empty');
+        } else {
+          selectItem(0);
+        }
+      } catch (e) {
+        showStatus('Error: ' + e.message, 'error');
+      }
+    }
+
+    // Sondea hasta que la caché esté lista y DEVUELVE los datos.
+    // El bug anterior era esperar `!data.computing`: con peek=1 el endpoint nunca manda ese
+    // campo, así que la condición daba verdadera siempre y la espera cortaba a los 2 segundos,
+    // dejando a loadData en un bucle de reintentos contra una caché todavía vacía. La única
+    // señal válida en el camino de peek es `cache === true`.
+    async function esperarCandidatos() {
+      const limite = Date.now() + ESPERA_COMPUTO_MS;
+      while (Date.now() < limite) {
+        await new Promise(r => setTimeout(r, SONDEO_MS));
+        const data = await pedirCandidatos({ peek: true });   // un error del cómputo sale por acá
+        if (data.cache) return data;
+        const faltan = Math.round((limite - Date.now()) / 1000);
+        showStatus('Calculando candidatos… (' + faltan + 's antes de cortar)', 'loading');
+      }
+      throw new Error('el cálculo de candidatos no terminó a tiempo; probá recargar la página');
+    }
+
+    function setFilter(filter) {
+      state.filter = filter;
+      document.querySelectorAll('[data-filter]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === filter);
+      });
+      applyFiltersAndSearch();
+      selectItem(0);
+    }
+
+    function applyFiltersAndSearch() {
+      let items = state.allItems;
+
+      // Aplicar filtro
+      if (state.filter === 'asignar') {
+        items = items.filter(it => it.modo === 'asignar');
+      } else if (state.filter === 'verificar') {
+        items = items.filter(it => it.modo === 'verificar');
+      } else if (state.filter === 'conf-baja') {
+        items = items.filter(it => it.modo === 'verificar' && it.score_confianza < 0.7);
+      } else if (state.filter === 'color-talle') {
+        items = items.filter(it => it.candidatos[0]?.color_ok && it.candidatos[0]?.talle_ok);
+      }
+
+      // Aplicar búsqueda
+      if (state.searchQuery) {
+        items = items.filter(it => {
+          const text = (it.titulo + ' ' + (it.variations_texto || '')).toLowerCase();
+          return text.includes(state.searchQuery);
+        });
+      }
+
+      state.filteredItems = items;
+      updateCounters();
+      renderList();
+    }
+
+    function updateCounters() {
+      const all = state.allItems.length;
+      const asignar = state.allItems.filter(it => it.modo === 'asignar').length;
+      const verificar = state.allItems.filter(it => it.modo === 'verificar').length;
+      const confBaja = state.allItems.filter(it => it.modo === 'verificar' && it.score_confianza < 0.7).length;
+      const colorTalle = state.allItems.filter(it => it.candidatos[0]?.color_ok && it.candidatos[0]?.talle_ok).length;
+
+      document.querySelector('[data-filter="all"] .badge').textContent = all;
+      document.querySelector('[data-filter="asignar"] .badge').textContent = asignar;
+      document.querySelector('[data-filter="verificar"] .badge').textContent = verificar;
+      document.querySelector('[data-filter="conf-baja"] .badge').textContent = confBaja;
+      document.querySelector('[data-filter="color-talle"] .badge').textContent = colorTalle;
+
+      const progress = all > 0 ? (state.filteredItems.length / all) * 100 : 0;
+      document.getElementById('progress-fill').style.width = progress + '%';
+
+      document.getElementById('stat-pendientes').textContent = state.filteredItems.length;
+    }
+
+    function renderList() {
+      const list = document.getElementById('pub-list');
+      if (state.filteredItems.length === 0) {
+        list.innerHTML = '<div class="status-empty">Sin resultados en este filtro</div>';
+        return;
+      }
+
+      list.innerHTML = state.filteredItems.map((item, idx) => {
+        const scoreClass = item.score_confianza !== null
+          ? item.score_confianza >= 0.8 ? 'score-high' : item.score_confianza >= 0.5 ? 'score-med' : 'score-low'
+          : '';
+        const scoreText = item.score_confianza !== null ? Math.round(item.score_confianza * 100) + '%' : '—';
+        const statusIcon = state.decisions[item.clave]?.accion === 'asignar' ? '✓' :
+                          state.decisions[item.clave]?.accion === 'confirmar' ? '✓' :
+                          state.decisions[item.clave]?.accion === 'omitir' ? '○' : '';
+        const ariaLabel = `${item.titulo}. ${item.variations_texto ? item.variations_texto + '. ' : ''}${item.modo === 'verificar' ? 'Verificar' : 'Asignar'} SKU. Puntuación ${scoreText}`;
+
+        return `
+          <button class="pub-item ${state.currentIndex === idx ? 'active' : ''}" data-idx="${item.idx}" tabindex="${state.currentIndex === idx ? '0' : '-1'}" aria-label="${esc(ariaLabel)}">
+            <div class="pub-item-title">${esc(item.titulo)}</div>
+            ${item.variations_texto ? `<div class="pub-item-meta">${esc(item.variations_texto)}</div>` : ''}
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+              <span class="pub-item-badge ${scoreClass}">${item.modo === 'verificar' ? '🔍' : '✎'} ${scoreText}</span>
+              ${statusIcon ? `<span class="pub-item-status">${statusIcon}</span>` : ''}
+            </div>
+          </button>
+        `;
       }).join('');
-      btnTodas.hidden = d.total_marcas <= d.marcas.length;
+
+      // Actualizar índice local para esta vista filtrada
+      const firstIdx = state.filteredItems[0]?.idx;
+      if (firstIdx !== undefined) {
+        state.currentIndex = state.filteredItems.findIndex(it => it.idx === firstIdx);
+      }
     }
-  });
-}
 
-document.getElementById('btn-ver-todas-marcas').addEventListener('click', function () {
-  jsonFetch('/api/cobertura/marcas').then(function (res) {
-    if (!res.ok || !res.data || !res.data.ok) return;
-    var marcasEl = document.getElementById('entrada-marcas');
-    marcasEl.innerHTML = res.data.marcas.map(function (m) {
-      return '<button type="button" class="marca-card" onclick="irACola(' + JSON.stringify(m.marca).replace(/"/g, '&quot;') + ')">' +
-        '<div class="marca-nombre">' + esc(m.marca) + '</div>' +
-        '<div class="marca-meta">' + n(m.conteo) + ' faltantes</div>' +
-        '<div class="marca-valor">' + money(m.valor) + '</div>' +
-        '</button>';
-    }).join('');
-    document.getElementById('btn-ver-todas-marcas').hidden = true;
-  });
-});
+    function selectItem(filteredIndex) {
+      state.currentIndex = filteredIndex;
+      const item = state.filteredItems[filteredIndex];
+      if (!item) return;
 
-function irACola(marca) {
-  window.location.hash = '#/cola/' + encodeURIComponent(marca);
-}
+      // Mostrar panel derecho en mobile
+      document.getElementById('panel-right').classList.add('active');
 
-/* ═══════════════════════════════════════════════════════════════════════
- * VISTA: COLA — de a una, pantalla completa
- * ═══════════════════════════════════════════════════════════════════════ */
-
-var colaEstado = {
-  marca: null,
-  items: [],
-  offset: 0,
-  total: 0,
-  actual: null,
-  cargandoMas: false,
-  fallo: false,
-};
-
-function cargarCola(marca) {
-  colaEstado = { marca: marca, items: [], offset: 0, total: 0, actual: null, cargandoMas: false, fallo: false };
-  document.getElementById('cola-h1').textContent = 'Trabajando marca ' + marca;
-  document.getElementById('cola-contenido').innerHTML = '<div class="skel" style="height:340px;"></div>';
-  traerMasDeCola().then(function () {
-    avanzarSiguiente();
-  });
-}
-
-function traerMasDeCola() {
-  if (colaEstado.cargandoMas) return Promise.resolve();
-  colaEstado.cargandoMas = true;
-  return jsonFetch('/api/cobertura/marcas/' + encodeURIComponent(colaEstado.marca) + '/cola?limit=20&offset=' + colaEstado.offset)
-    .then(function (res) {
-      colaEstado.cargandoMas = false;
-      if (!res.ok || !res.data || !res.data.ok) { colaEstado.fallo = true; return; }
-      colaEstado.fallo = false;
-      colaEstado.total = res.data.total;
-      colaEstado.items = colaEstado.items.concat(res.data.data);
-      colaEstado.offset += res.data.data.length;
-    });
-}
-
-function actualizarProgreso() {
-  jsonFetch('/api/cobertura/marcas/' + encodeURIComponent(colaEstado.marca) + '/cola?limit=1&offset=0').then(function (res) {
-    if (!res.ok || !res.data || !res.data.ok) return;
-    var restante = res.data.total;
-    if (colaEstado.totalOriginal == null) colaEstado.totalOriginal = restante;
-    var resueltos = Math.max(colaEstado.totalOriginal - restante, 0);
-    var pct = colaEstado.totalOriginal ? Math.round((resueltos / colaEstado.totalOriginal) * 100) : 0;
-    document.getElementById('cola-progreso-fill').style.width = pct + '%';
-    document.getElementById('cola-progreso-frac').textContent = resueltos + '/' + colaEstado.totalOriginal;
-  });
-  jsonFetch('/api/cobertura/resumen').then(function (res) {
-    if (!res.ok || !res.data || !res.data.ok) return;
-    var p = res.data.progreso_hoy || { resueltos_hoy: 0, valor_desinmovilizado_hoy: 0 };
-    document.getElementById('cola-progreso-secundaria').textContent =
-      'Hoy resolviste ' + n(p.resueltos_hoy) + ' · desinmovilizaste ' + money(p.valor_desinmovilizado_hoy);
-  });
-}
-
-function avanzarSiguiente() {
-  window.scrollTo(0, 0);
-  var necesitaMas = colaEstado.items.length < 3 && colaEstado.offset < colaEstado.total;
-  var p = necesitaMas ? traerMasDeCola() : Promise.resolve();
-  p.then(function () {
-    if (colaEstado.totalOriginal == null) colaEstado.totalOriginal = colaEstado.total;
-    actualizarProgreso();
-    if (!colaEstado.items.length) {
-      if (colaEstado.fallo) { renderErrorCola(); return; }
-      renderFinDeTanda();
-      return;
+      renderDetail(item);
+      renderList(); // Actualizar highlight
     }
-    colaEstado.actual = colaEstado.items.shift();
-    renderTarjeta(colaEstado.actual);
-  });
-}
 
-/* No confundir "no pude traer más" con "no hay más" — festejar un fallo de red es la misma
-   enfermedad que los demás bloqueantes de esta pantalla. */
-function renderErrorCola() {
-  document.getElementById('cola-contenido').innerHTML =
-    '<div class="cola-fin"><div class="icon" aria-hidden="true">⚠</div>' +
-    '<strong>No se pudo traer más productos de ' + esc(colaEstado.marca) + '.</strong>' +
-    '<div class="page-sub">Puede ser la conexión o el servidor. No perdiste el trabajo que ya hiciste — reintentá.</div>' +
-    '<div class="cola-fin-acciones">' +
-    '<button type="button" class="hbtn" id="btn-reintentar-cola">Reintentar</button>' +
-    '<a class="hbtn" href="#/">Elegir otra marca</a>' +
-    '</div></div>';
-  announce('No se pudo traer más productos de ' + colaEstado.marca + '.');
-  document.getElementById('btn-reintentar-cola').addEventListener('click', function () {
-    colaEstado.fallo = false;
-    document.getElementById('cola-contenido').innerHTML = '<div class="skel" style="height:340px;"></div>';
-    traerMasDeCola().then(function () { avanzarSiguiente(); });
-  });
-}
+    function renderDetail(item) {
+      const detail = document.getElementById('detail-content');
 
-function renderFinDeTanda() {
-  document.getElementById('cola-contenido').innerHTML =
-    '<div class="cola-fin"><div class="icon" aria-hidden="true">🎉</div>' +
-    '<strong>Terminaste la tanda de ' + esc(colaEstado.marca) + '.</strong>' +
-    '<div class="cola-fin-acciones">' +
-    '<a class="hbtn" href="#/">Elegir otra marca</a>' +
-    '<a class="hbtn" href="/herramientas/home/">Volver al inicio</a>' +
-    '</div></div>';
-  announce('Terminaste la tanda de ' + colaEstado.marca + '.');
-}
+      let modesign = item.modo === 'verificar'
+        ? '🔍 Verificar SKU existente'
+        : '✎ Asignar SKU nuevo';
 
-function nivelConfianzaTexto(nivel) {
-  if (nivel === 'alta') return { texto: 'Coincidencia alta', icono: '✓' };
-  if (nivel === 'revisar') return { texto: 'Revisar bien', icono: '⚠' };
-  return { texto: 'Poco parecido', icono: '✕' };
-}
+      let wcActualHtml = '';
+      if (item.wc_actual) {
+        const confClass = item.score_confianza >= 0.9 ? 'high' : item.score_confianza >= 0.7 ? 'med' : 'low';
+        wcActualHtml = `
+          <div class="card">
+            <div class="card-title">SKU actual cargado en ML</div>
+            <div class="current-sku">
+              ${item.wc_actual.img ? `<img src="${esc(item.wc_actual.img)}" alt="Foto del SKU actual: ${esc(item.wc_actual.nombre)}" class="sku-photo">` : ''}
+              <div class="sku-info">
+                <div class="sku-name">${esc(item.wc_actual.nombre)}</div>
+                <div class="sku-sku">${esc(item.sku_actual || '—')}</div>
+                <span class="sku-score ${confClass}">${Math.round((item.score_confianza || 0) * 100)}%</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
 
-/* Ver comentario detallado en el motor (lib/matcherEngine.js#norm): la sub-tokenización acá
-   tiene que replicar el mismo criterio de separación que usa el motor, o los códigos con
-   guion/punto quedan mal clasificados. */
-function pintarTitleDiff(titulo, tokensCoincide, tokensSoloEsteLado, tokensDiscriminantes) {
-  var soloSet = new Set(tokensSoloEsteLado);
-  var discSet = new Set(tokensDiscriminantes);
-  var palabras = String(titulo).split(/(\s+)/);
-  return palabras.map(function (palabra) {
-    if (/^\s+$/.test(palabra) || !palabra) return esc(palabra);
-    var subtokens = palabra.match(/[a-z0-9]+|[^a-z0-9]+/gi) || [palabra];
-    return subtokens.map(function (parte) {
-      if (!/[a-z0-9]/i.test(parte)) return esc(parte);
-      var norma = parte.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-      var cls = 'tok-match';
-      if (soloSet.has(norma)) cls = discSet.has(norma) ? 'tok-discriminant' : 'tok-diff';
-      return '<span class="tok ' + cls + '">' + esc(parte) + '</span>';
-    }).join('');
-  }).join('');
-}
+      const candidatesHtml = item.candidatos.length > 0 ? `
+        <div class="candidatos-container">
+          <div class="candidatos-title">Candidatos</div>
+          <div class="candidatos-grid">
+            ${item.candidatos.slice(0, 8).map((cand, idx) => {
+              const isCurrent = cand.wc_sku === item.sku_actual;
+              const scoreClass = cand.score >= 0.8 ? 'high' : cand.score >= 0.5 ? 'med' : 'low';
+              return `
+                <button class="candidate-card ${isCurrent ? 'is-current' : ''}"
+                        data-sku="${esc(cand.wc_sku)}"
+                        title="${esc(cand.wc_nombre)}"
+                        aria-label="Seleccionar SKU ${esc(cand.wc_sku)}: ${esc(cand.wc_nombre)}"
+                        onclick="selectCandidate(event, '${esc(cand.wc_sku)}')">
+                  ${cand.wc_img ? `<img src="${esc(cand.wc_img)}" alt="Foto: ${esc(cand.wc_nombre)}" class="candidate-photo">` : `<div class="candidate-photo" style="display: flex; align-items: center; justify-content: center; color: var(--muted);">—</div>`}
+                  <div class="candidate-score ${scoreClass}">${Math.round(cand.score * 100)}%</div>
+                  <div class="candidate-sku">${esc(cand.wc_sku)}</div>
+                  <div class="candidate-name">${esc(cand.wc_nombre)}</div>
+                  ${cand.color_ok !== null || cand.talle_ok !== null ? `
+                    <div class="candidate-attrs">
+                      ${cand.color_ok === true ? '<span class="attr-badge ok">✓ Color</span>' : cand.color_ok === false ? '<span class="attr-badge fail">✗ Color</span>' : ''}
+                      ${cand.talle_ok === true ? '<span class="attr-badge ok">✓ Talle</span>' : cand.talle_ok === false ? '<span class="attr-badge fail">✗ Talle</span>' : ''}
+                    </div>
+                  ` : ''}
+                </button>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      ` : '<div class="status-empty">Sin candidatos</div>';
 
-function renderNivel2(prod, ml) {
-  var cats = catsDe(prod).join(', ') || '—';
-  return '<div class="nivel2">' +
-    '<div class="n2-head">Web</div><div class="n2-head">ML</div>' +
-    '<div class="n2-val">' + money(prod.precio) + '</div><div class="n2-val">' + money(ml.ml_precio) + '</div>' +
-    '<div class="n2-val">' + n(prod.stock) + ' unid.</div><div class="n2-val">' + n(ml.ml_stock) + ' unid.</div>' +
-    '<div class="n2-val">' + esc(cats) + '</div><div class="n2-val">—</div>' +
-    '</div>';
-}
+      const mlVars = item.ml_variations ? JSON.parse(item.ml_variations) : [];
+      const mlVarsText = mlVars.length > 0
+        ? mlVars.map(v => v.attribute_name + ': ' + v.value_name).join(' • ')
+        : '(sin variaciones)';
 
-/* La tarjeta NUNCA se espeja: Web siempre a la izquierda/arriba con el rol "Punto de
-   partida", ML siempre a la derecha/abajo con el rol "Candidato" — tres señales redundantes
-   (pill de rol, fondo de columna, frase de contexto), nunca solo la posición. En esta entrega
-   la dirección activa siempre es wc→ml, pero se deja explícita para cuando entre ml→wc. */
-function tarjetaHtml(prod, cand, opts) {
-  opts = opts || {};
-  var conf = nivelConfianzaTexto(cand.confianza);
-  var diff = cand.diff;
-  var wcHtml = pintarTitleDiff(prod.nombre, diff.coincide, diff.solo_wc, diff.discriminantes_conflicto);
-  var mlHtml = pintarTitleDiff(cand.ml_titulo, diff.coincide, diff.solo_ml, diff.discriminantes_conflicto);
-  var friccion = cand.confianza === 'baja'
-    ? '<div class="friccion-box" id="friccion-box"><label style="display:flex;gap:8px;align-items:flex-start;"><input type="checkbox" id="friccion-check" style="width:18px;height:18px;margin-top:2px;accent-color:var(--critical);"><span>¿Seguro? El sistema encontró poca coincidencia entre estos dos productos.</span></label></div>'
-    : '';
-  return (
-    '<div class="contexto-direccion">Producto de la Web sin publicación → buscando candidato en ML</div>' +
-    '<div class="match-card" id="tarjeta-principal">' +
-    '<div class="conf-badge ' + cand.confianza + '"><span aria-hidden="true">' + conf.icono + '</span>' + conf.texto + '</div>' +
-    '<div class="fotos-row">' +
-    '<div class="foto-col anchor"><span class="rol-pill anchor">Punto de partida</span><div class="foto-box">' + (prod.img ? '<img src="' + esc(prod.img) + '" alt="Foto del producto web: ' + esc(prod.nombre) + '">' : '<span class="sinfoto">Sin foto</span>') + '</div></div>' +
-    '<div class="foto-col candidate"><span class="rol-pill candidate">Candidato</span><div class="foto-box">' + (cand.ml_img ? '<img src="' + esc(cand.ml_img) + '" alt="Foto de la publicación de ML: ' + esc(cand.ml_titulo) + '">' : '<span class="sinfoto">Sin foto</span>') + '</div></div>' +
-    '</div>' +
-    '<div class="titulos-stack">' +
-    '<div><div class="titulo-fuente-label">Web</div><div class="title-diff">' + wcHtml + '</div></div>' +
-    '<div><div class="titulo-fuente-label">Mercado Libre</div><div class="title-diff">' + mlHtml + '</div></div>' +
-    '</div>' +
-    renderNivel2(prod, cand) +
-    '<details class="atributos-toggle"><summary>Ver atributos completos</summary>' +
-    '<div class="atr-body">SKU: ' + esc(prod.sku || '—') + ' · Clave ML: ' + esc(cand.ml_clave || '—') + ' · Estado ML: ' + esc(cand.ml_status || '—') + '</div>' +
-    '</details>' +
-    friccion +
-    '<button type="button" class="btn-confirmar" id="btn-confirmar-vinculo">Confirmar vínculo</button>' +
-    '<div class="acciones-fila">' +
-    '<a class="accion-btn" href="' + mlUrl(cand.ml_item_id) + '" target="_blank" rel="noopener" id="btn-abrir-ml">↗ Abrir en ML</a>' +
-    '<button type="button" class="accion-btn" id="btn-solo-local">Solo local</button>' +
-    '<button type="button" class="accion-btn" id="btn-hay-que-publicar">Hay que publicarlo</button>' +
-    '<button type="button" class="accion-btn" id="btn-saltear">Saltear</button>' +
-    '</div>' +
-    '</div>'
-  );
-}
+      detail.innerHTML = `
+        <div class="mode-badge">${modesign}</div>
 
-function candidatoCompactoHtml(prod, cand, idx, numeroVisible) {
-  var diff = cand.diff;
-  var mlHtml = pintarTitleDiff(cand.ml_titulo, diff.coincide, diff.solo_ml, diff.discriminantes_conflicto);
-  var conf = nivelConfianzaTexto(cand.confianza);
-  return (
-    '<button type="button" class="match-card--compact" data-idx="' + idx + '">' +
-    (cand.ml_img ? '<img class="mc-thumb" src="' + esc(cand.ml_img) + '" alt="">' : '<div class="mc-thumb"></div>') +
-    '<div class="mc-info"><span class="mc-num">#' + numeroVisible + '</span> <div class="conf-badge ' + cand.confianza + '" style="margin-bottom:4px;"><span aria-hidden="true">' + conf.icono + '</span>' + conf.texto + '</div>' +
-    '<div class="title-diff">' + mlHtml + '</div></div>' +
-    '</button>'
-  );
-}
+        ${wcActualHtml}
 
-function renderTarjeta(prod) {
-  var cont = document.getElementById('cola-contenido');
-  // 'baja' nunca es una propuesta automática usable (lib/matcherEngine.js#candidatosParaWC):
-  // el producto tiene que cruzar a "Hay que publicarlo", nunca mostrarse como si el peor
-  // candidato fuera una sugerencia. `sin_candidato` es la fuente de verdad del motor —
-  // se respeta aunque `candidatos` no esté vacío (puede traer solo candidatos 'baja').
-  var todos = prod.candidatos || [];
-  var usables = todos.filter(function (c) { return c.confianza !== 'baja'; });
-  var sinCandidato = !!prod.sin_candidato || !usables.length;
-  var candidatos = sinCandidato ? [] : usables.slice(0, 3);
-  var activoIdx = 0;
+        <div class="card">
+          <div class="card-title">Publicación ML</div>
+          <div class="ml-item">
+            <div class="ml-item-title">${esc(item.titulo)}</div>
+            <dl class="ml-item-meta">
+              <dt>Item ID:</dt>
+              <dd><a href="${esc(Fmt.mlUrl(item.item_id))}" target="_blank">${esc(item.item_id)}</a></dd>
+              <dt>Status:</dt>
+              <dd>${esc(item.status)}</dd>
+              <dt>Variaciones:</dt>
+              <dd>${esc(mlVarsText)}</dd>
+            </dl>
+          </div>
+        </div>
 
-  var html = '';
-  if (sinCandidato) {
-    html += '<div class="contexto-direccion">Producto de la Web sin publicación → buscando candidato en ML</div>';
-    html += '<div class="sin-candidato-box">No se encontró un candidato confiable en ML para <strong>' + esc(prod.nombre) + '</strong>.<br>Podés buscarlo a mano o mandarlo a "Hay que publicarlo".</div>';
-    html += '<div class="acciones-fila" style="grid-template-columns:1fr 1fr;">' +
-      '<button type="button" class="accion-btn" id="btn-hay-que-publicar-directo">Hay que publicarlo</button>' +
-      '<button type="button" class="accion-btn" id="btn-saltear-directo">Saltear</button>' +
-      '</div>';
-  } else {
-    html += '<div id="tarjeta-principal-wrap"></div><div class="candidatos-lista" id="candidatos-lista"></div>';
-  }
+        ${candidatesHtml}
 
-  html += '<details class="buscar-manual"><summary>Buscar manualmente</summary>' +
-    '<div class="buscar-manual-box">' +
-    '<input type="search" id="buscar-manual-input" placeholder="Escribí parte del título…" aria-label="Buscar publicación de ML manualmente">' +
-    '<div id="buscar-manual-resultados"></div>' +
-    '</div></details>';
+        <div class="manual-sku">
+          <input type="text" class="manual-sku-input" id="manual-sku-input" placeholder="O escribí un SKU manual..." aria-label="Ingresar SKU manual">
+          <button class="manual-sku-btn" onclick="selectManualSku()">Usar este SKU</button>
+        </div>
 
-  cont.innerHTML = html;
-  announce('Nueva tarjeta: ' + prod.nombre);
-
-  if (!sinCandidato) {
-    /* La tarjeta grande muestra `candidatos[activoIdx]`; la compacta muestra los DEMÁS,
-       numerados por su rango ORIGINAL (#2/#3 de design-system.md §8.1) — nunca duplica al
-       que ya se ve arriba, y la numeración se mantiene estable al cambiar de candidato. */
-    function pintarCandidatos() {
-      var activo = candidatos[activoIdx];
-      document.getElementById('tarjeta-principal-wrap').innerHTML = tarjetaHtml(prod, activo);
-      ligarAccionesTarjeta(prod, activo);
-      var listaEl = document.getElementById('candidatos-lista');
-      var resto = candidatos.map(function (c, i) { return { c: c, i: i }; }).filter(function (o) { return o.i !== activoIdx; });
-      listaEl.innerHTML = resto.map(function (o) { return candidatoCompactoHtml(prod, o.c, o.i, o.i + 1); }).join('');
-      resto.forEach(function (o) {
-        var btn = listaEl.querySelector('.match-card--compact[data-idx="' + o.i + '"]');
-        if (btn) btn.addEventListener('click', function () { activoIdx = o.i; pintarCandidatos(); });
-      });
+        <div class="actions-footer">
+          <button class="btn-action" onclick="previousItem()" aria-label="Ir a la publicación anterior (↑/k)">← Ant</button>
+          <button class="btn-action" onclick="skipItem()" aria-label="Omitir esta publicación (s)">Omitir</button>
+          <button class="btn-action primary" onclick="confirmItem()" aria-label="${item.modo === 'verificar' ? 'Confirmar SKU (Enter)' : 'Aprobar SKU (Enter)'}">${item.modo === 'verificar' ? '✓ Confirmar' : 'Aprobar: ' + (item.sku_actual || 'FB-?')} →</button>
+        </div>
+      `;
     }
-    pintarCandidatos();
-  } else {
-    document.getElementById('btn-hay-que-publicar-directo').addEventListener('click', function () {
-      accionProducto(prod, 'publicar').then(function (res) {
-        if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
-        toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente();
-      });
-    });
-    document.getElementById('btn-saltear-directo').addEventListener('click', function () {
-      accionProducto(prod, 'saltear').then(function (res) {
-        if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
-        toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente();
-      });
-    });
-  }
 
-  ligarBusquedaManual(prod);
-}
-
-function armarCand(m) {
-  return { ml_clave: m.ml_clave, ml_item_id: m.ml_item_id, ml_variation_id: m.ml_variation_id, ml_titulo: m.ml_titulo, ml_img: m.ml_img, ml_precio: m.ml_precio, ml_stock: m.ml_stock, ml_status: m.ml_status, diff: m.diff, confianza: m.confianza };
-}
-
-var buscarManualDebounce = null;
-function ligarBusquedaManual(prod) {
-  var input = document.getElementById('buscar-manual-input');
-  var resultados = document.getElementById('buscar-manual-resultados');
-  input.addEventListener('input', function () {
-    var q = input.value.trim();
-    window.clearTimeout(buscarManualDebounce);
-    if (q.length < 2) { resultados.innerHTML = ''; return; }
-    buscarManualDebounce = window.setTimeout(function () {
-      jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/buscar-ml?q=' + encodeURIComponent(q)).then(function (res) {
-        if (!res.ok || !res.data || !res.data.ok) { resultados.innerHTML = '<div class="vacio">No se pudo buscar.</div>'; return; }
-        var data = res.data.data || [];
-        if (!data.length) { resultados.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
-        // El backend ya tope a 20 (buscarMlManual, routes/cobertura.js); si llenó el tope no
-        // sabemos si hay más — avisamos en vez de mostrar 20 en silencio como si fueran todos.
-        var avisoTope = data.length === 20 ? '<div class="page-sub">Mostrando los 20 resultados más relevantes. Afiná la búsqueda si no está en la lista.</div>' : '';
-        resultados.innerHTML = avisoTope + '<div class="candidatos-lista">' + data.map(function (m, i) {
-          return candidatoCompactoHtml(prod, armarCand(m), 'm' + i, i + 1);
-        }).join('') + '</div>';
-        data.forEach(function (m, i) {
-          var cand = armarCand(m);
-          var btn = resultados.querySelector('.match-card--compact[data-idx="m' + i + '"]');
-          if (btn) btn.addEventListener('click', function () {
-            var cont = document.getElementById('cola-contenido');
-            var tarjetaVieja = cont.querySelector('#tarjeta-principal');
-            var htmlNuevo = tarjetaHtml(prod, cand);
-            if (tarjetaVieja) tarjetaVieja.outerHTML = htmlNuevo;
-            else cont.insertAdjacentHTML('afterbegin', htmlNuevo);
-            ligarAccionesTarjeta(prod, cand);
-          });
-        });
-      });
-    }, 300);
-  });
-}
-function ligarAccionesTarjeta(prod, cand) {
-  var btnConfirmar = document.getElementById('btn-confirmar-vinculo');
-  btnConfirmar.addEventListener('click', function () {
-    if (cand.confianza === 'baja') {
-      var chk = document.getElementById('friccion-check');
-      if (chk && !chk.checked) { chk.focus(); return; }
+    function selectCandidate(e, sku) {
+      e.preventDefault();
+      const input = document.getElementById('manual-sku-input');
+      input.value = sku;
+      input.focus();
     }
-    btnConfirmar.disabled = true;
-    confirmarVinculo(prod, cand.ml_clave).then(function (res) {
-      btnConfirmar.disabled = false;
-      if (res.status === 409 && res.data && res.data.ya_resuelto) {
-        // Colisión entre dos personas (o la misma en otra pestaña, la cola está priorizada
-        // así que es el caso más común): `propio` distingue "lo resolvió otro" de "fuiste
-        // vos mismo en otra pestaña" — avanzar sola en los dos casos, no es un error, pero
-        // el mensaje tiene que decir la verdad.
-        if (res.data.propio) {
-          toast('Ya lo vinculaste vos (en otra pestaña) a ' + res.data.sku, 'neutro');
-        } else {
-          toast('Ya lo resolvió ' + res.data.resuelto_por + ': vinculado a ' + res.data.sku, 'neutro');
-        }
-        avanzarSiguiente();
+
+    function selectManualSku() {
+      const sku = document.getElementById('manual-sku-input').value.trim().toUpperCase();
+      if (!sku) {
+        toast('Ingresá un SKU', 'error');
         return;
       }
-      if (res.status === 409) {
-        // Sin `ya_resuelto`: la clave ya tiene otra decisión viva no reversible acá (p.ej.
-        // accion='omitir' del Matcher ML→WC descartó la publicación). Reintentar nunca
-        // funciona — no es una falla técnica, es un rechazo definitivo para esta clave.
-        toast('Esta publicación ya no está disponible para vincular (fue descartada en otro lugar). Elegí otro candidato o buscá manualmente.', 'error');
+      confirmWithSku(sku);
+    }
+
+    async function confirmItem() {
+      const item = state.filteredItems[state.currentIndex];
+      if (!item) return;
+
+      const sku = item.sku_actual || document.getElementById('manual-sku-input').value.trim().toUpperCase();
+      if (!sku) {
+        toast('Seleccioná o ingresá un SKU', 'error');
         return;
       }
-      if (res.status === 403) { toast('No tenés permiso para confirmar vínculos.', 'error'); return; }
-      if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
-      if (res.data.estado === 'vinculado') {
-        toast('Vinculado a ' + res.data.sku + ' → ' + cand.ml_item_id, 'ok', function () { deshacerVinculo(cand.ml_clave); });
+
+      await confirmWithSku(sku);
+    }
+
+    async function confirmWithSku(sku) {
+      const item = state.filteredItems[state.currentIndex];
+      if (!item) return;
+
+      const accion = item.modo === 'verificar' ? 'confirmar' : 'asignar';
+      const anterior = state.decisions[item.clave];
+      // Optimista: marcamos y avanzamos sin esperar a ML, pero si la operación no
+      // llega a encolarse revertimos, para no dar por vinculado lo que no lo está.
+      state.decisions[item.clave] = { sku, accion, estado: 'pendiente' };
+      toast(`SKU registrado: ${sku}`, 'pending');
+      nextItem();
+
+      try {
+        await vincularSku(item.clave, sku);
+        state.decisions[item.clave] = { sku, accion, estado: 'encolado' };
+        toast(`✓ ${accion} · ${sku}`, 'ok');
+      } catch (e) {
+        if (anterior) state.decisions[item.clave] = anterior;
+        else delete state.decisions[item.clave];
+        toast(`No se pudo vincular ${sku}: ${e.message}`, 'error');
+      }
+      renderList();
+      updateCounters();
+    }
+
+    function skipItem() {
+      const item = state.filteredItems[state.currentIndex];
+      if (!item) return;
+      state.decisions[item.clave] = { accion: 'omitir' };
+      nextItem();
+    }
+
+    function previousItem() {
+      if (state.currentIndex > 0) {
+        selectItem(state.currentIndex - 1);
+      }
+    }
+
+    function nextItem() {
+      if (state.currentIndex < state.filteredItems.length - 1) {
+        selectItem(state.currentIndex + 1);
       } else {
-        toast('Guardado · se sincroniza con ML apenas se pueda', 'pendiente', function () { deshacerVinculo(cand.ml_clave); });
+        // Mostrar estado "filtro completo"
+        toast('✓ Filtro completado', 'ok');
+        document.getElementById('detail-content').innerHTML = '<div class="detail-empty">✓ Filtro completado<br><br><a href="#" onclick="setFilter(\'all\'); return false;">Ver todos</a></div>';
       }
-      avanzarSiguiente();
-    });
-  });
-
-  document.getElementById('btn-solo-local').addEventListener('click', function () {
-    accionProducto(prod, 'descartar').then(function (res) {
-      if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
-      toast('Marcado como "solo local".', 'ok'); avanzarSiguiente();
-    });
-  });
-  document.getElementById('btn-hay-que-publicar').addEventListener('click', function () {
-    accionProducto(prod, 'publicar').then(function (res) {
-      if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
-      toast('Guardado en "Hay que publicarlo".', 'ok'); avanzarSiguiente();
-    });
-  });
-  document.getElementById('btn-saltear').addEventListener('click', function () {
-    accionProducto(prod, 'saltear').then(function (res) {
-      if (!res.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
-      toast('Salteado, vuelve al final de la tanda.', 'ok'); colaEstado.items.push(prod); avanzarSiguiente();
-    });
-  });
-}
-
-/* Mensaje uniforme para las acciones simples de la cola (descartar/publicar/saltear):
-   distingue permiso (403) y red caída (status 0) del error genérico — nunca "reintentá"
-   para algo que no es reintentable, y nunca festejar sin haber mirado res.ok. */
-function mensajeErrorAccion(res) {
-  if (res.status === 403) return 'No tenés permiso para esta acción.';
-  if (res.status === 0) return 'No se pudo conectar con el servidor. La decisión NO se guardó — reintentá.';
-  return 'No se pudo guardar. Reintentá.';
-}
-
-function confirmarVinculo(prod, mlClave) {
-  return jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/confirmar', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ml_clave: mlClave }),
-  });
-}
-function accionProducto(prod, accion) {
-  return jsonFetch('/api/cobertura/productos/' + prod.id_woo + '/' + accion, { method: 'POST' });
-}
-function deshacerVinculo(clave) {
-  jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(clave) + '/deshacer', { method: 'POST' }).then(function (res) {
-    if (res.ok && res.data && res.data.ok) { toast('Vínculo deshecho.', 'ok'); return; }
-    if (res.status === 0) { toast('No se pudo conectar con el servidor. Reintentá.', 'error'); return; }
-    if (res.status === 404) { toast('El vínculo ya no existe (puede que se haya deshecho antes). No hace falta reintentar.', 'error'); return; }
-    if (res.status === 403) {
-      // No es una falla técnica: solo el autor (o un admin) puede deshacer este vínculo.
-      // El backend ya manda quién en `error` (ver routes/cobertura.js).
-      toast((res.data && res.data.error) || 'Solo el autor del vínculo (o un admin) puede deshacerlo.', 'error');
-      return;
     }
-    if (res.status === 409 && res.data && res.data.push_en_curso) { toast('Hay un push en curso. Reintentá en unos segundos.', 'error'); return; }
-    if (res.status === 502) { toast('ML no confirmó la desvinculación. No se cambió nada.', 'error'); return; }
-    toast('No se pudo deshacer. Reintentá.', 'error');
-  });
-}
 
-/* ═══════════════════════════════════════════════════════════════════════
- * VISTA: HISTORIAL
- * ═══════════════════════════════════════════════════════════════════════ */
-
-var histDebounce = null;
-document.getElementById('hist-buscar').addEventListener('input', function () {
-  window.clearTimeout(histDebounce);
-  histDebounce = window.setTimeout(cargarHistorial, 250);
-});
-
-function cargarHistorial() {
-  var q = document.getElementById('hist-buscar').value.trim();
-  jsonFetch('/api/cobertura/historial?q=' + encodeURIComponent(q)).then(function (res) {
-    var cont = document.getElementById('hist-lista');
-    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar el historial.</div>'; return; }
-    var data = res.data.data || [];
-    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin movimientos todavía.</div>'; return; }
-    var pendientes = data.filter(function (r) { return r.tipo === 'vinculo' && r.pendiente_sync; });
-    var resto = data.filter(function (r) { return !(r.tipo === 'vinculo' && r.pendiente_sync); });
-    var html = '';
-    if (pendientes.length) {
-      html += '<div class="hist-grupo-head">' + pendientes.length + ' pendientes de sincronizar</div>';
-      html += '<div class="gestion-lista">' + pendientes.map(histRowHtml).join('') + '</div>';
-    }
-    html += '<div class="gestion-lista" style="margin-top:10px;">' + resto.map(histRowHtml).join('') + '</div>';
-    cont.innerHTML = html;
-    data.forEach(function (r) {
-      var btn = cont.querySelector('[data-deshacer="' + r.tipo + '-' + (r.clave || r.id_woo) + '"]');
-      if (!btn) return;
-      btn.addEventListener('click', function () {
-        if (r.tipo === 'vinculo') {
-          jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(r.clave) + '/deshacer', { method: 'POST' }).then(function (res2) {
-            if (res2.ok && res2.data && res2.data.ok) { toast('Deshecho.', 'ok'); cargarHistorial(); return; }
-            if (res2.status === 403) { toast((res2.data && res2.data.error) || 'Solo el autor del vínculo (o un admin) puede deshacerlo.', 'error'); return; }
-            toast('No se pudo deshacer.', 'error');
-          });
-        } else {
-          jsonFetch('/api/cobertura/exclusiones/' + r.id_woo + '/revertir', { method: 'DELETE' }).then(function (res2) {
-            if (res2.ok && res2.data && res2.data.ok) { toast('Revertido.', 'ok'); cargarHistorial(); }
-            else toast('No se pudo revertir.', 'error');
-          });
-        }
-      });
-    });
-  });
-}
-function histRowHtml(r) {
-  var estado = r.tipo === 'vinculo'
-    ? (r.pendiente_sync
-      ? '<span class="estado-pendiente"><span aria-hidden="true">↻</span>Guardado · se sincroniza con ML apenas se pueda</span>'
-      : '<span class="estado-vinculado"><span aria-hidden="true">✓</span>Vinculado a <span class="mono">' + esc(r.clave) + '</span></span>')
-    : '<span style="color:var(--muted);">Solo local</span>';
-  return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(r.nombre) + '</div><div class="meta">' + fecha(r.fecha) + ' · ' + esc(r.sku || '—') + '</div>' + estado + '</div>' +
-    '<button type="button" class="mini-btn" data-deshacer="' + r.tipo + '-' + (r.clave || r.id_woo) + '">Deshacer</button></div>';
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * VISTA: HAY QUE PUBLICARLO
- * ═══════════════════════════════════════════════════════════════════════ */
-
-document.getElementById('btn-export-csv').addEventListener('click', function () {
-  window.location.href = '/api/cobertura/hay-que-publicar/export.csv';
-});
-
-function cargarPublicar() {
-  jsonFetch('/api/cobertura/hay-que-publicar').then(function (res) {
-    var cont = document.getElementById('publicar-lista');
-    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar la lista.</div>'; return; }
-    var data = res.data.data || [];
-    if (!data.length) { cont.innerHTML = '<div class="vacio">Nada pendiente de publicar.</div>'; return; }
-    cont.innerHTML = '<div class="gestion-lista">' + data.map(function (r) {
-      return '<div class="item-row">' +
-        '<input type="checkbox" ' + (r.tachado ? 'checked' : '') + ' data-tachar="' + r.id_woo + '" aria-label="Marcar como hecho: ' + esc(r.nombre) + '">' +
-        '<div class="flex1"><div class="nombre">' + esc(r.nombre) + '</div><div class="meta">' + esc(r.sku || '—') + ' · ' + esc(r.marca || '—') + ' · ' + money(r.valor) + '</div></div>' +
-        '<button type="button" class="mini-btn" data-copiar="' + r.id_woo + '">Copiar datos</button>' +
-        '</div>';
-    }).join('') + '</div>';
-    data.forEach(function (r) {
-      var chk = cont.querySelector('[data-tachar="' + r.id_woo + '"]');
-      chk.addEventListener('change', function () {
-        var valorPedido = chk.checked;
-        chk.disabled = true;
-        jsonFetch('/api/cobertura/hay-que-publicar/' + r.id_woo, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tachado: valorPedido }),
-        }).then(function (res) {
-          chk.disabled = false;
-          if (!res.ok || !res.data || !res.data.ok) {
-            chk.checked = !valorPedido; // no se guardó: no dejamos el tilde mintiendo
-            toast(mensajeErrorAccion(res), 'error');
-          }
-        });
-      });
-      var btnCopiar = cont.querySelector('[data-copiar="' + r.id_woo + '"]');
-      btnCopiar.addEventListener('click', function () {
-        var texto = [r.nombre, r.sku || '', money(r.valor).replace(/[^\d,.-]/g, ''), r.marca || ''].join('\t');
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(texto).then(function () { toast('Copiado.', 'ok'); }, function () { toast('No se pudo copiar.', 'error'); });
-        } else {
-          toast('Copiado no disponible en este navegador.', 'error');
-        }
-      });
-    });
-  });
-}
-
-/* Pausar puede pedir confirmación extra (ML no permite pausar solo una variación con
-   hermanas). Compartido por Multi-publicación y Solo ML. */
-function pausarConConfirmacion(url, onExito) {
-  jsonFetch(url, { method: 'POST' }).then(function (r) {
-    if (r.ok && r.data && r.data.ok) {
-      var extra = r.data.variaciones_afectadas ? ' (arrastró ' + n(r.data.variaciones_afectadas) + ' variación(es) más de la misma publicación).' : '.';
-      toast('Pausada' + extra, 'ok');
-      onExito();
-      return;
-    }
-    if (r.status === 403) { toast('Solo administradores pueden pausar publicaciones.', 'error'); return; }
-    if (r.status === 409 && r.data && r.data.requiere_confirmacion) {
-      var cant = r.data.variaciones_afectadas || 0;
-      var confirma = window.confirm('ML no permite pausar solo esta variación: esto pausa la publicación entera, incluidas ' + cant + ' variación(es) más. ¿Seguir?');
-      if (!confirma) return;
-      jsonFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmado: true }) }).then(function (r2) {
-        if (r2.ok && r2.data && r2.data.ok) {
-          var extra2 = r2.data.variaciones_afectadas ? ' (arrastró ' + n(r2.data.variaciones_afectadas) + ' variación(es) más).' : '.';
-          toast('Pausada' + extra2, 'ok');
-          onExito();
-        } else {
-          toast('ML no confirmó la pausa. No se cambió nada.', 'error');
-        }
-      });
-      return;
-    }
-    if (r.status === 0) { toast('No se pudo conectar con el servidor. No se cambió nada. Revisá tu conexión y reintentá.', 'error'); return; }
-    toast('ML no confirmó la pausa. No se cambió nada.', 'error');
-  });
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * VISTA: MULTI-PUBLICACIÓN
- * ═══════════════════════════════════════════════════════════════════════ */
-
-function cargarMultipub() {
-  jsonFetch('/api/cobertura/multi-publicacion').then(function (res) {
-    var cont = document.getElementById('multipub-lista');
-    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
-    var data = res.data.data || [];
-    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin casos de multi-publicación.</div>'; return; }
-    cont.innerHTML = data.map(function (p) {
-      return '<div class="grupo-sku"><div class="grupo-sku-head">' + esc(p.nombre) + ' — <span class="sku-mono">' + esc(p.sku) + '</span> <span style="color:var(--muted);font-weight:400;">(' + p.publicaciones.length + ' publicaciones)</span></div>' +
-        p.publicaciones.map(function (pub) {
-          return '<div class="pub-row' + (pub.sobreventa ? ' sobreventa' : '') + '">' +
-            '<div class="pub-txt"><span class="pub-mono">' + esc(pub.clave) + '</span> · Estado: ' + esc(pub.status) + ' · Stock ' + n(pub.stock) +
-            (pub.sin_stock_ml ? ' <span class="sobreventa-tag" style="color:var(--muted);">sin stock ML</span>' : '') +
-            (pub.sobreventa ? ' <span class="sobreventa-tag"><span aria-hidden="true">⚠</span>posible sobreventa</span>' : '') + '</div>' +
-            '<div class="pub-acciones">' +
-            '<button type="button" class="mini-btn" data-mc="' + esc(pub.clave) + '">' + (pub.marcada_correcta ? '✓ Correcta' : 'Marcar correcta') + '</button>' +
-            botonAdminHtml('mini-btn', 'data-pausar="' + esc(pub.clave) + '"', 'Pausar') +
-            botonAdminHtml('mini-btn', 'data-desvincular="' + esc(pub.clave) + '"', 'Desvincular') +
-            '</div></div>';
-        }).join('') + '</div>';
-    }).join('');
-    cont.querySelectorAll('[data-mc]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        jsonFetch('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function (res) {
-          if (!res.ok || !res.data || !res.data.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
-          toast('Marcada como correcta.', 'ok'); cargarMultipub();
-        });
-      });
-    });
-    cont.querySelectorAll('[data-pausar]:not(:disabled)').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        pausarConConfirmacion('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.pausar) + '/pausar', cargarMultipub);
-      });
-    });
-    cont.querySelectorAll('[data-desvincular]:not(:disabled)').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        if (!window.confirm('¿Desvincular esta publicación del SKU?')) return;
-        jsonFetch('/api/cobertura/multi-publicacion/' + encodeURIComponent(btn.dataset.desvincular) + '/desvincular', { method: 'POST' }).then(function (r) {
-          if (r.ok && r.data && r.data.ok) { toast('Desvinculada.', 'ok'); cargarMultipub(); }
-          else if (r.status === 403) { toast('Solo administradores pueden desvincular.', 'error'); }
-          else toast('ML no confirmó la desvinculación. No se cambió nada.', 'error');
-        });
-      });
-    });
-  });
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * VISTA: SOLO ML
- * ═══════════════════════════════════════════════════════════════════════ */
-
-var soloMlDebounce = null;
-document.getElementById('soloml-buscar').addEventListener('input', function () {
-  window.clearTimeout(soloMlDebounce);
-  soloMlDebounce = window.setTimeout(cargarSoloMl, 250);
-});
-
-function cargarSoloMl() {
-  var q = document.getElementById('soloml-buscar').value.trim();
-  jsonFetch('/api/cobertura/solo-ml?q=' + encodeURIComponent(q) + '&limit=50').then(function (res) {
-    var cont = document.getElementById('soloml-lista');
-    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
-    var data = res.data.data || [];
-    if (!data.length) { cont.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
-    var avisoParcial = data.length < res.data.total
-      ? ' Mostrando ' + n(data.length) + ' de ' + n(res.data.total) + ' — afiná la búsqueda para acotar.' : '';
-    cont.innerHTML = '<p class="page-sub">' + n(res.data.total) + ' publicaciones sin decisión válida.' + avisoParcial + '</p>' +
-      '<div class="gestion-lista">' + data.map(function (r) {
-        return '<div class="solo-ml-row">' +
-          (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="">' : '<div class="mc-thumb"></div>') +
-          '<div class="flex1">' + esc(r.titulo) + '<div class="meta" style="color:var(--muted);font-size:.72rem;">' + esc(r.clave) + ' · ' + money(r.precio) + ' · Stock ' + n(r.available_quantity) + '</div></div>' +
-          '<div class="pub-acciones">' +
-          '<button type="button" class="mini-btn" data-mc="' + esc(r.clave) + '">' + (r.marcada_correcta ? '✓ Correcta' : 'Marcar correcta') + '</button>' +
-          botonAdminHtml('mini-btn', 'data-pausar="' + esc(r.clave) + '"', 'Pausar') +
-          '<button type="button" class="mini-btn" data-vincular-toggle="' + esc(r.clave) + '">Vincular a producto</button>' +
-          '</div>' +
-          '<div class="buscador-inline" hidden data-vincular-box="' + esc(r.clave) + '">' +
-          '<input type="text" placeholder="Buscar producto web por nombre o SKU…" aria-label="Buscar producto web para vincular a ' + esc(r.titulo) + '" data-vincular-input="' + esc(r.clave) + '">' +
-          '<div data-vincular-resultados="' + esc(r.clave) + '"></div>' +
-          '</div>' +
-          '</div>';
-      }).join('') + '</div>';
-
-    cont.querySelectorAll('[data-mc]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        jsonFetch('/api/cobertura/solo-ml/' + encodeURIComponent(btn.dataset.mc) + '/marcar-correcta', { method: 'POST' }).then(function (res) {
-          if (!res.ok || !res.data || !res.data.ok) { toast(mensajeErrorAccion(res), 'error'); return; }
-          toast('Marcada como correcta.', 'ok'); cargarSoloMl();
-        });
-      });
-    });
-    cont.querySelectorAll('[data-pausar]:not(:disabled)').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        pausarConConfirmacion('/api/cobertura/solo-ml/' + encodeURIComponent(btn.dataset.pausar) + '/pausar', cargarSoloMl);
-      });
-    });
-    cont.querySelectorAll('[data-vincular-toggle]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var clave = btn.dataset.vincularToggle;
-        var box = cont.querySelector('[data-vincular-box="' + clave + '"]');
-        box.hidden = !box.hidden;
-      });
-    });
-    cont.querySelectorAll('[data-vincular-input]').forEach(function (input) {
-      var clave = input.dataset.vincularInput;
-      var resultados = cont.querySelector('[data-vincular-resultados="' + clave + '"]');
-      var deb = null;
-      input.addEventListener('input', function () {
-        window.clearTimeout(deb);
-        var q2 = input.value.trim();
-        if (q2.length < 2) { resultados.innerHTML = ''; return; }
-        deb = window.setTimeout(function () {
-          jsonFetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q2)).then(function (r) {
-            if (!r.ok || !r.data) { resultados.innerHTML = ''; return; }
-            var lista = (r.data.data || []).slice(0, 8);
-            resultados.innerHTML = lista.map(function (p) {
-              return '<div class="resultado-vincular"><span>' + esc(p.nombre || '') + ' (' + esc(p.sku || '—') + ')</span><button type="button" class="mini-btn" data-elegir="' + esc(p.sku) + '">Vincular</button></div>';
-            }).join('') || '<div class="meta">Sin resultados.</div>';
-            resultados.querySelectorAll('[data-elegir]').forEach(function (btn2) {
-              btn2.addEventListener('click', function () {
-                /* RIESGO CONOCIDO: no hay endpoint que resuelva SKU→id_woo directo, así que
-                   bajamos el catálogo entero por click y filtramos acá (pesado — reportado al
-                   orquestador). Con SKU duplicado en Woo (dato sucio conocido, ver CLAUDE.md)
-                   NO elegimos el primero en silencio: eso podría vincular al producto
-                   equivocado. Fail-closed: si hay más de un id_woo con el mismo SKU, avisamos
-                   y no vinculamos nada. */
-                jsonFetch('/api/woo/catalogo').then(function (rc) {
-                  var lista2 = (rc.data && (rc.data.data || rc.data)) || [];
-                  var coincidencias = lista2.filter(function (p) { return p.sku === btn2.dataset.elegir; });
-                  if (coincidencias.length > 1) {
-                    toast('Ese SKU está repetido en ' + coincidencias.length + ' productos de Woo — no se puede vincular automáticamente. Avisá a quien mantiene el catálogo.', 'error');
-                    return;
-                  }
-                  var idWoo = coincidencias.length ? coincidencias[0].id_woo : null;
-                  vincularSoloMl(clave, idWoo, resultados);
-                });
-              });
-            });
-          });
-        }, 300);
-      });
-    });
-  });
-}
-function vincularSoloMl(clave, idWoo, resultados) {
-  if (!idWoo) { toast('No se pudo resolver el producto elegido.', 'error'); return; }
-  jsonFetch('/api/cobertura/solo-ml/' + encodeURIComponent(clave) + '/vincular', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id_woo: idWoo }),
-  }).then(function (res2) {
-    if (res2.status === 409 && res2.data && res2.data.ya_resuelto) {
-      if (res2.data.propio) {
-        toast('Ya lo vinculaste vos (en otra pestaña) a ' + res2.data.sku, 'neutro');
-      } else {
-        toast('Ya lo resolvió ' + res2.data.resuelto_por + ': vinculado a ' + res2.data.sku, 'neutro');
-      }
-      cargarSoloMl();
-      return;
-    }
-    if (res2.status === 403) { toast('No tenés permiso para vincular.', 'error'); return; }
-    if (!res2.ok || !res2.data || !res2.data.ok) { toast('No se pudo vincular.', 'error'); return; }
-    toast(res2.data.estado === 'vinculado' ? 'Vinculado.' : 'Guardado · se sincroniza con ML apenas se pueda', res2.data.estado === 'vinculado' ? 'ok' : 'pendiente');
-    cargarSoloMl();
-  });
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * VISTA: SIN STOCK
- * ═══════════════════════════════════════════════════════════════════════ */
-
-function cargarSinStock() {
-  jsonFetch('/api/cobertura/sin-stock').then(function (res) {
-    var cont = document.getElementById('sinstock-lista');
-    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
-    var data = res.data.data || [];
-    if (!data.length) { cont.innerHTML = '<div class="vacio">Nada sin stock por ahora.</div>'; return; }
-    cont.innerHTML = '<div class="gestion-lista">' + data.map(function (p) {
-      return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(p.nombre) + '</div><div class="meta">' + esc(p.sku || '—') + ' · ' + esc(p.marca || '—') + '</div></div></div>';
-    }).join('') + '</div>';
-  });
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * VISTA: PROBLEMAS — pausadas-que-siguen-vinculadas + Sospechosos (absorbido de Vínculos)
- * ═══════════════════════════════════════════════════════════════════════ */
-
-var problemasCache = [];
-function cargarProblemas() {
-  jsonFetch('/api/cobertura/cruce').then(function (res) {
-    var cont = document.getElementById('prob-lista');
-    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
-    problemasCache = res.data.pausadas || [];
-    var marcas = Array.from(new Set(problemasCache.map(function (p) { return p.marca; }).filter(Boolean))).sort();
-    var selMarca = document.getElementById('prob-marca');
-    selMarca.innerHTML = '<option value="">Todas las marcas</option>' + marcas.map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('');
-    var cats = Array.from(new Set(problemasCache.flatMap(catsDe))).sort();
-    var selCat = document.getElementById('prob-categoria');
-    selCat.innerHTML = '<option value="">Todas las categorías</option>' + cats.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
-    renderProblemas();
-  });
-  cargarSospechosos();
-}
-document.getElementById('prob-marca').addEventListener('change', renderProblemas);
-document.getElementById('prob-categoria').addEventListener('change', renderProblemas);
-function renderProblemas() {
-  var marca = document.getElementById('prob-marca').value;
-  var categoria = document.getElementById('prob-categoria').value;
-  var cont = document.getElementById('prob-lista');
-  var filtrado = problemasCache.filter(function (p) {
-    if (marca && p.marca !== marca) return false;
-    if (categoria && catsDe(p).indexOf(categoria) === -1) return false;
-    return true;
-  });
-  // El verde con tilde solo cuando NO HAY problemas de verdad. Si hay y el filtro los dejó
-  // afuera, el mensaje es neutro y dice cuántos hay (hallazgo del revisor, 2ª pasada): antes
-  // filtrar por una marca sin coincidencias pintaba "✓ Sin pausadas-que-siguen-vinculadas"
-  // con 40 problemas reales debajo del filtro — la misma enfermedad que los bloqueantes.
-  if (!filtrado.length) {
-    cont.innerHTML = problemasCache.length
-      ? '<div class="vacio">Ninguna coincide con el filtro — hay ' + n(problemasCache.length) + ' en total. '
-        + '<button type="button" class="btn-link" data-limpiar-filtro>Ver todas</button></div>'
-      : '<div class="vacio" style="color:var(--success);">✓ Sin pausadas-que-siguen-vinculadas.</div>';
-    var btnLimpiar = cont.querySelector('[data-limpiar-filtro]');
-    if (btnLimpiar) btnLimpiar.addEventListener('click', function () {
-      document.getElementById('prob-marca').value = '';
-      document.getElementById('prob-categoria').value = '';
-      renderProblemas();
-    });
-    return;
-  }
-  var avisoFiltro = filtrado.length < problemasCache.length
-    ? '<p class="page-sub">Mostrando ' + n(filtrado.length) + ' de ' + n(problemasCache.length) + ' — el resto quedó afuera por el filtro.</p>' : '';
-  cont.innerHTML = avisoFiltro + '<div class="gestion-lista">' + filtrado.map(function (p) {
-    return '<div class="item-row"><div class="flex1"><div class="nombre">' + esc(p.nombre) + '</div><div class="meta">' + esc(p.sku || '—') + ' · ML: ' + esc(p.ml_status) + ' · <a href="' + mlUrl(p.ml_item_id) + '" target="_blank" rel="noopener">abrir en ML</a></div></div></div>';
-  }).join('') + '</div>';
-}
-
-/* Clase CSS del chip de señal según su peso. 'alta' → crítico, cualquier otro → 'media'. */
-function pesoLabel(peso) { return peso === 'alta' ? 'alta' : 'media'; }
-
-var sospechososCache = [];
-function cargarSospechosos() {
-  var cont = document.getElementById('sospechosos-lista');
-  cont.innerHTML = '<div class="skel" style="height:150px;"></div>';
-  jsonFetch('/api/cobertura/vinculos-sospechosos').then(function (res) {
-    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
-    sospechososCache = res.data.data || [];
-    renderSospechosos();
-  });
-}
-function renderSospechosos() {
-  var cont = document.getElementById('sospechosos-lista');
-  if (!sospechososCache.length) {
-    cont.innerHTML = '<div class="vacio" style="color:var(--success);">✓ Sin señales de mal matcheo pendientes.</div>';
-    return;
-  }
-  cont.innerHTML = sospechososCache.map(renderSospechosoRow).join('');
-  wireSospechosos();
-}
-function renderSospechosoRow(row) {
-  var senales = row.senales || [];
-  var chipsHtml = '<div class="chips-wrap">' + senales.map(function (s) {
-    var clase = pesoLabel(s.peso);
-    return '<span class="chip ' + clase + '" data-senal="' + esc(s.senal) + '">' +
-      '<span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
-      '<button type="button" class="chip-revisar" data-clave="' + esc(row.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button>' +
-      '</span>';
-  }).join('') + '</div>';
-
-  return '<div class="pub-card" data-clave="' + esc(row.clave) + '" data-wc-nombre="' + esc(row.wc_nombre || '') + '">' +
-    '<div class="pub-head">' +
-    (row.thumbnail ? '<img src="' + esc(row.thumbnail) + '" alt="Foto de la publicación en ML">' : '') +
-    '<div class="pub-titulos">' +
-    '<button type="button" class="pub-titulo-ml" data-abrir-sku="' + esc(row.sku) + '" style="background:none;border:none;color:var(--text);text-align:left;cursor:pointer;padding:0;font:inherit">' + esc(row.titulo || row.item_id) + '</button>' +
-    '<div class="pub-nombre-wc">WC: ' + esc(row.wc_nombre || '—') + ' · SKU ' + esc(row.sku) + '</div>' +
-    '</div></div>' +
-    '<div class="pub-grid">' +
-    '<div class="pub-dato"><span class="k">Precio ML</span><span class="v">' + money(row.precio_ml) + '</span></div>' +
-    '<div class="pub-dato"><span class="k">Precio WC</span><span class="v">' + money(row.precio_wc) + '</span></div>' +
-    '</div>' +
-    chipsHtml +
-    '<div class="pub-acciones">' +
-    (row.permalink ? '<a class="btn" href="' + esc(row.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
-    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(row.clave) + '">Reasignar a otro SKU</button>' +
-    botonAdminHtml('btn danger', 'data-accion="desvincular" data-clave="' + esc(row.clave) + '"', 'Desvincular') +
-    '</div>' +
-    '<div class="pub-flash" data-flash></div>' +
-    '</div>';
-}
-function wireSospechosos() {
-  var cont = document.getElementById('sospechosos-lista');
-  cont.querySelectorAll('.chip-revisar').forEach(function (btn) {
-    btn.addEventListener('click', function () { marcarRevisado(btn); });
-  });
-  cont.querySelectorAll('[data-accion="desvincular"]:not(:disabled)').forEach(function (btn) {
-    btn.addEventListener('click', function () { abrirModalDesvincular(btn, function () { sospechososCache = sospechososCache.filter(function (r) { return r.clave !== btn.dataset.clave; }); renderSospechosos(); }); });
-  });
-  cont.querySelectorAll('[data-accion="reasignar"]').forEach(function (btn) {
-    btn.addEventListener('click', function () { abrirModalReasignar(btn, function () { sospechososCache = sospechososCache.filter(function (r) { return r.clave !== btn.dataset.clave; }); renderSospechosos(); }); });
-  });
-  cont.querySelectorAll('[data-abrir-sku]').forEach(function (btn) {
-    btn.addEventListener('click', function () { abrirBuscador(btn.getAttribute('data-abrir-sku')); });
-  });
-}
-
-/* ── Revisado, está bien así (optimista) — reusado en Problemas y en el buscador puntual ── */
-function marcarRevisado(btn) {
-  var chip = btn.closest('.chip');
-  var clave = btn.getAttribute('data-clave');
-  var senal = btn.getAttribute('data-senal');
-  var valor = btn.getAttribute('data-valor');
-  var pubCard = btn.closest('.pub-card');
-  var flash = pubCard ? pubCard.querySelector('[data-flash]') : null;
-  var wrap = pubCard ? pubCard.querySelector('.chips-wrap') : null;
-
-  btn.disabled = true;
-  jsonFetch('/api/cobertura/vinculos/revisado', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clave: clave, senal: senal, valor: valor }),
-  }).then(function (res) {
-    if (!res.ok || !res.data || !res.data.ok) {
-      btn.disabled = false;
-      if (flash) { flash.className = 'pub-flash err'; flash.textContent = '✗ No se guardó: ' + (res.data && res.data.error || 'error') + ' — la señal sigue vigente.'; }
-      return;
-    }
-    if (chip) chip.remove();
-    if (wrap && !wrap.querySelector('.chip')) wrap.innerHTML = '<span class="chip ninguna"><span class="chip-txt">Sin señales</span></span>';
-    if (flash) { flash.className = 'pub-flash ok'; flash.textContent = '✓ Revisado.'; setTimeout(function () { flash.textContent = ''; }, 3000); }
-  });
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Modal genérico (desvincular / reasignar) — reusado por Problemas y Buscar
- * ═══════════════════════════════════════════════════════════════════════ */
-var modalRoot = document.getElementById('modal-root');
-var focoAntesDeModal = null;
-function cerrarModal() {
-  modalRoot.innerHTML = '';
-  document.removeEventListener('keydown', onModalKeydown);
-  if (focoAntesDeModal && document.contains(focoAntesDeModal)) focoAntesDeModal.focus();
-  focoAntesDeModal = null;
-}
-function onModalKeydown(ev) {
-  if (ev.key === 'Escape') { cerrarModal(); return; }
-  if (ev.key === 'Tab') {
-    var box = modalRoot.querySelector('.modal-box');
-    if (!box) return;
-    var focusables = Array.prototype.slice.call(box.querySelectorAll('button, input, a[href], [tabindex]:not([tabindex="-1"])')).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
-    if (!focusables.length) return;
-    var primero = focusables[0], ultimo = focusables[focusables.length - 1];
-    if (ev.shiftKey && document.activeElement === primero) { ev.preventDefault(); ultimo.focus(); }
-    else if (!ev.shiftKey && document.activeElement === ultimo) { ev.preventDefault(); primero.focus(); }
-    else if (!box.contains(document.activeElement)) { ev.preventDefault(); primero.focus(); }
-  }
-}
-function abrirModal(html) {
-  focoAntesDeModal = document.activeElement;
-  modalRoot.innerHTML = '<div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-box">' + html + '</div></div>';
-  document.addEventListener('keydown', onModalKeydown);
-  document.getElementById('modal-overlay').addEventListener('click', function (ev) { if (ev.target.id === 'modal-overlay') cerrarModal(); });
-  var focusable = modalRoot.querySelector('button, input');
-  if (focusable) focusable.focus();
-}
-function abrirModalDesvincular(btn, onExito) {
-  var clave = btn.getAttribute('data-clave');
-  var pubCard = btn.closest('.pub-card');
-  var nombreProducto = (pubCard && pubCard.getAttribute('data-wc-nombre')) || 'este producto';
-  abrirModal(
-    '<div class="modal-title" id="modal-title">Desvincular publicación</div>' +
-    '<div class="modal-body">Esta publicación va a dejar de sincronizar stock con <b>' + esc(nombreProducto) + '</b>. Vas a tener que volver a vincularla a mano.</div>' +
-    '<div class="modal-actions"><button type="button" class="btn" id="modal-cancelar">Cancelar</button><button type="button" class="btn danger" id="modal-confirmar">Desvincular</button></div>'
-  );
-  document.getElementById('modal-cancelar').addEventListener('click', cerrarModal);
-  document.getElementById('modal-confirmar').addEventListener('click', function () {
-    var confirmarBtn = document.getElementById('modal-confirmar');
-    confirmarBtn.disabled = true; confirmarBtn.textContent = 'Desvinculando…';
-    jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(clave) + '/desvincular', { method: 'POST' }).then(function (res) {
-      if (!res.ok || !res.data || !res.data.ok) {
-        confirmarBtn.disabled = false; confirmarBtn.textContent = 'Desvincular';
-        mostrarErrorModal(res.status === 403 ? 'Solo administradores pueden desvincular.' : (res.data && res.data.error) || 'No se pudo desvincular.');
+    function handleKeyboard(e) {
+      // No disparar si estamos escribiendo en un input o textarea
+      if (e.target.matches('input[type="text"], input[type="search"], textarea')) {
         return;
       }
-      cerrarModal();
-      toast('Publicación desvinculada.', 'ok');
-      if (onExito) onExito();
-    });
-  });
-}
-function abrirModalReasignar(btn, onExito) {
-  var clave = btn.getAttribute('data-clave');
-  var pubCard = btn.closest('.pub-card');
-  var nombreActual = (pubCard && pubCard.getAttribute('data-wc-nombre')) || 'el producto actual';
-  abrirModal(
-    '<div class="modal-title" id="modal-title">Reasignar a otro SKU</div>' +
-    '<div class="modal-body">Buscá el producto al que querés que esta publicación sincronice stock.' +
-    '<label class="sr-only" for="modal-sku-input">Buscar por SKU o nombre</label>' +
-    '<input class="search-box" type="text" id="modal-sku-input" placeholder="SKU o nombre" autocomplete="off" style="margin-top:10px;">' +
-    '<div class="modal-search-results hidden" id="modal-sku-results"></div>' +
-    '<div id="modal-resumen"></div></div>' +
-    '<div class="modal-actions"><button type="button" class="btn" id="modal-cancelar">Cancelar</button><button type="button" class="btn primary" id="modal-confirmar" disabled>Reasignar</button></div>'
-  );
-  document.getElementById('modal-cancelar').addEventListener('click', cerrarModal);
-  var input = document.getElementById('modal-sku-input');
-  var results = document.getElementById('modal-sku-results');
-  var resumen = document.getElementById('modal-resumen');
-  var confirmarBtn = document.getElementById('modal-confirmar');
-  var skuElegido = null, nombreElegido = null;
-  var deb = null;
-  input.addEventListener('input', function () {
-    window.clearTimeout(deb);
-    var q = input.value.trim();
-    if (q.length < 2) { results.classList.add('hidden'); results.innerHTML = ''; return; }
-    deb = window.setTimeout(function () {
-      jsonFetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q)).then(function (r) {
-        var data = (r.data && r.data.data) || [];
-        results.innerHTML = data.length
-          ? data.map(function (o) { return '<button type="button" class="ac-opt" data-sku="' + esc(o.sku) + '" data-nombre="' + esc(o.nombre || '') + '"><b>' + esc(o.sku) + '</b> — ' + esc(o.nombre || '') + '</button>'; }).join('')
-          : '<div class="ac-empty">No encontramos productos con ese término.</div>';
-        results.classList.remove('hidden');
+
+      switch (e.key.toLowerCase()) {
+        case 'arrowdown':
+        case 'j':
+          e.preventDefault();
+          nextItem();
+          break;
+        case 'arrowup':
+        case 'k':
+          e.preventDefault();
+          previousItem();
+          break;
+        case 'enter':
+          e.preventDefault();
+          confirmItem();
+          break;
+        case 's':
+          e.preventDefault();
+          skipItem();
+          break;
+      }
+    }
+
+    // ── API: vincularSku ──────────────────────────────────────────────────────
+    // Contrato: vincularSku(clave, sku) -> Promise<{caso_id}>
+    // Encola la vinculación en Guardia ML; el caso se crea al vuelo si no existía.
+    // Devuelve 202: la escritura en ML la hace el worker, no esta llamada.
+    async function vincularSku(clave, sku) {
+      const res = await fetch('/api/guardia-ml/vincular-clave', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clave, sku })
       });
-    }, 300);
-  });
-  results.addEventListener('click', function (ev) {
-    var opt = ev.target.closest('.ac-opt[data-sku]');
-    if (!opt) return;
-    skuElegido = opt.getAttribute('data-sku');
-    nombreElegido = opt.getAttribute('data-nombre');
-    input.value = skuElegido;
-    results.classList.add('hidden'); results.innerHTML = '';
-    resumen.innerHTML = '<div class="modal-resumen">Esta publicación va a sincronizar stock con <b>' + esc(nombreElegido || skuElegido) + '</b> en vez de con <b>' + esc(nombreActual) + '</b>.' +
-      '<div class="aviso">Nota: si esta publicación tenía revisiones "OK" guardadas, se van a borrar — valían para el vínculo anterior, no para el nuevo.</div></div>';
-    confirmarBtn.disabled = false;
-  });
-  var cerrarResultsModal = function (ev) { if (!ev.target.closest('#modal-sku-input, #modal-sku-results')) results.classList.add('hidden'); };
-  document.getElementById('modal-overlay').addEventListener('click', cerrarResultsModal);
-  confirmarBtn.addEventListener('click', function () {
-    if (!skuElegido) return;
-    confirmarBtn.disabled = true; confirmarBtn.textContent = 'Reasignando…';
-    jsonFetch('/api/cobertura/vinculos/reasignar', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clave: clave, sku: skuElegido }),
-    }).then(function (res) {
-      if (!res.ok || !res.data || !res.data.ok) {
-        confirmarBtn.disabled = false; confirmarBtn.textContent = 'Reasignar';
-        mostrarErrorModal((res.data && res.data.error) || 'No se pudo reasignar.');
-        return;
+      let data = null;
+      try { data = await res.json(); } catch { /* respuesta sin cuerpo */ }
+      if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
       }
-      cerrarModal();
-      toast('Vínculo reasignado a ' + skuElegido + '.', 'ok');
-      if (onExito) onExito();
-    });
-  });
-}
-function mostrarErrorModal(msg) {
-  var body = modalRoot.querySelector('.modal-body');
-  if (!body) return;
-  var previo = body.querySelector('[data-modal-error]');
-  if (previo) previo.remove(); // un reintento fallido no debe apilar sobre el anterior
-  var errEl = document.createElement('div');
-  errEl.setAttribute('data-modal-error', '1');
-  errEl.style.color = 'var(--critical)'; errEl.style.marginTop = '10px'; errEl.style.fontSize = '.8rem';
-  errEl.textContent = '✗ ' + msg;
-  body.appendChild(errEl);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- * Buscador puntual (ícono fijo en la topbar, alcanzable desde cualquier vista)
- * — absorbe "Buscar producto" de Vínculos.
- * ═══════════════════════════════════════════════════════════════════════ */
-
-var searchOverlay = document.getElementById('search-overlay');
-var buscarTopbarInput = document.getElementById('buscar-topbar-input');
-var buscarTopbarResults = document.getElementById('buscar-topbar-results');
-var buscarTopbarDetalle = document.getElementById('buscar-topbar-detalle');
-var buscarTopbarDebounce = null;
-
-var focoAntesDeBuscador = null;
-function onBuscadorKeydown(ev) {
-  if (ev.key === 'Escape') { cerrarBuscador(); return; }
-  if (ev.key !== 'Tab') return;
-  var panel = searchOverlay.querySelector('.search-panel');
-  if (!panel) return;
-  var focusables = Array.prototype.slice.call(panel.querySelectorAll('button, input, a[href], [tabindex]:not([tabindex="-1"])')).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
-  if (!focusables.length) return;
-  var primero = focusables[0], ultimo = focusables[focusables.length - 1];
-  if (ev.shiftKey && document.activeElement === primero) { ev.preventDefault(); ultimo.focus(); }
-  else if (!ev.shiftKey && document.activeElement === ultimo) { ev.preventDefault(); primero.focus(); }
-  else if (!panel.contains(document.activeElement)) { ev.preventDefault(); primero.focus(); }
-}
-function abrirBuscador(skuInicial) {
-  focoAntesDeBuscador = document.activeElement;
-  searchOverlay.classList.remove('hidden');
-  buscarTopbarResults.innerHTML = '';
-  buscarTopbarDetalle.innerHTML = '';
-  buscarTopbarInput.value = '';
-  if (skuInicial) { mostrarDetalleProducto(skuInicial); }
-  document.addEventListener('keydown', onBuscadorKeydown);
-  window.setTimeout(function () { buscarTopbarInput.focus(); }, 0);
-}
-function cerrarBuscador() {
-  searchOverlay.classList.add('hidden');
-  document.removeEventListener('keydown', onBuscadorKeydown);
-  if (focoAntesDeBuscador && document.contains(focoAntesDeBuscador)) focoAntesDeBuscador.focus();
-  focoAntesDeBuscador = null;
-}
-document.getElementById('btn-buscar-topbar').addEventListener('click', function () { abrirBuscador(); });
-document.getElementById('search-overlay-cerrar').addEventListener('click', cerrarBuscador);
-searchOverlay.addEventListener('click', function (ev) { if (ev.target === searchOverlay) cerrarBuscador(); });
-/* Escape y Tab (trampa de foco) los maneja onBuscadorKeydown, ligado/quitado en abrir/cerrar. */
-
-buscarTopbarInput.addEventListener('input', function () {
-  window.clearTimeout(buscarTopbarDebounce);
-  var q = buscarTopbarInput.value.trim();
-  if (q.length < 2) { buscarTopbarResults.innerHTML = ''; return; }
-  buscarTopbarDebounce = window.setTimeout(function () {
-    jsonFetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q)).then(function (res) {
-      var data = (res.data && res.data.data) || [];
-      if (!data.length) { buscarTopbarResults.innerHTML = '<div class="ac-empty">No encontramos productos con ese término. Revisá el SKU o el nombre.</div>'; return; }
-      buscarTopbarResults.innerHTML = data.map(function (o) {
-        return '<button type="button" class="ac-opt" data-sku="' + esc(o.sku) + '"><b>' + esc(o.sku) + '</b> — ' + esc(o.nombre || '') + ' <span style="color:var(--muted);">(stock ' + n(o.stock) + ')</span></button>';
-      }).join('');
-      buscarTopbarResults.querySelectorAll('[data-sku]').forEach(function (btn) {
-        btn.addEventListener('click', function () { mostrarDetalleProducto(btn.getAttribute('data-sku')); });
-      });
-    });
-  }, 300);
-});
-
-function mostrarDetalleProducto(sku) {
-  buscarTopbarResults.innerHTML = '';
-  buscarTopbarInput.value = sku;
-  buscarTopbarDetalle.innerHTML = '<div class="skel" style="height:120px;"></div>';
-  jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(sku)).then(function (res) {
-    if (!res.ok || !res.data || !res.data.ok) {
-      buscarTopbarDetalle.innerHTML = res.status === 404
-        ? '<div class="vacio">No encontramos "' + esc(sku) + '" en el catálogo.</div>'
-        : '<div class="vacio">No se pudo cargar el detalle. <button type="button" class="hbtn" id="retry-detalle">Reintentar</button></div>';
-      var retry = document.getElementById('retry-detalle');
-      if (retry) retry.addEventListener('click', function () { mostrarDetalleProducto(sku); });
-      return;
+      return data;
     }
-    renderDetalleProducto(res.data.producto, res.data.publicaciones);
-  });
-}
-function renderDetalleProducto(producto, publicaciones) {
-  var html = '<div class="producto-card">' +
-    (producto.img ? '<img src="' + esc(producto.img) + '" alt="Foto de ' + esc(producto.nombre || producto.sku) + '">' : '') +
-    '<div class="producto-info"><div class="producto-nombre">' + esc(producto.nombre || '(sin nombre)') + '</div>' +
-    '<div class="producto-meta"><span class="pill-sku">' + esc(producto.sku) + '</span><span>Stock: ' + n(producto.stock) + '</span>' +
-    '<span>Lista: ' + money(producto.precio_lista) + '</span><span class="contado">Contado: ' + money(producto.precio_contado) + '</span></div></div></div>';
-  if (!publicaciones.length) {
-    html += '<div class="vacio">Este producto no tiene ninguna publicación de ML vinculada. Si tiene que publicarse, usá la cola desde la entrada del Matcher.</div>';
-  } else {
-    html += publicaciones.map(function (pub) { return renderPubCardDetalle(pub, producto.nombre); }).join('');
-  }
-  buscarTopbarDetalle.innerHTML = html;
-  buscarTopbarDetalle.querySelectorAll('.chip-revisar').forEach(function (btn) { btn.addEventListener('click', function () { marcarRevisado(btn); }); });
-  buscarTopbarDetalle.querySelectorAll('[data-accion="desvincular"]:not(:disabled)').forEach(function (btn) {
-    btn.addEventListener('click', function () { abrirModalDesvincular(btn, function () { mostrarDetalleProducto(producto.sku); }); });
-  });
-  buscarTopbarDetalle.querySelectorAll('[data-accion="reasignar"]').forEach(function (btn) {
-    btn.addEventListener('click', function () { abrirModalReasignar(btn, function () { mostrarDetalleProducto(producto.sku); }); });
-  });
-}
-function renderPubCardDetalle(pub, wcNombre) {
-  var senales = pub.senales || [];
-  var chipsHtml = !senales.length
-    ? '<div class="chips-wrap"><span class="chip ninguna"><span class="chip-txt">Sin señales</span></span></div>'
-    : '<div class="chips-wrap">' + senales.map(function (s) {
-      var clase = pesoLabel(s.peso);
-      return '<span class="chip ' + clase + '"><span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
-        '<button type="button" class="chip-revisar" data-clave="' + esc(pub.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button></span>';
-    }).join('') + '</div>';
-  return '<div class="pub-card" data-clave="' + esc(pub.clave) + '" data-wc-nombre="' + esc(wcNombre || '') + '">' +
-    '<div class="pub-head">' + (pub.thumbnail ? '<img src="' + esc(pub.thumbnail) + '" alt="">' : '') +
-    '<div class="pub-titulos"><div class="pub-titulo-ml">' + esc(pub.titulo || pub.item_id) + '</div><div class="pub-nombre-wc">WC: ' + esc(wcNombre || '—') + '</div></div></div>' +
-    '<div class="pub-grid">' +
-    '<div class="pub-dato"><span class="k">SKU en ML</span><span class="v">' + esc(pub.seller_sku || '—') + '</span></div>' +
-    '<div class="pub-dato"><span class="k">Estado</span><span class="v">' + esc(pub.status || '—') + '</span></div>' +
-    '<div class="pub-dato"><span class="k">Stock ML / web</span><span class="v">' + n(pub.stock_ml) + ' / ' + n(pub.stock_sincronizado) + '</span></div>' +
-    '<div class="pub-dato"><span class="k">Precio ML</span><span class="v destacado">' + money(pub.precio_ml) + '</span></div>' +
-    '</div>' + chipsHtml +
-    '<div class="pub-acciones">' +
-    (pub.permalink ? '<a class="btn" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
-    '<button type="button" class="btn" data-accion="reasignar" data-clave="' + esc(pub.clave) + '">Reasignar a otro SKU</button>' +
-    botonAdminHtml('btn danger', 'data-accion="desvincular" data-clave="' + esc(pub.clave) + '"', 'Desvincular') +
-    '</div><div class="pub-flash" data-flash></div></div>';
-}
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Actualizar desde ML (botón del topbar)
- * ═══════════════════════════════════════════════════════════════════════ */
-
-/* POST /api/cobertura/actualizar-ml (202, arranca en background) + sondeo de
-   GET /api/cobertura/actualizar-ml/estado hasta que termine. El candado anti-reentrada es
-   COMPARTIDO con el Matcher: un 409 significa que YA hay un refresco corriendo (disparado
-   desde acá o desde otro lado) — no es un error, hay que sondear igual hasta que termine.
-   Nunca festejar sin haber confirmado `running:false` sin `error`. */
-function sondearActualizarMl(btn, txt) {
-  var intentos = 0;
-  // ~20 min a 2s (incidente 2026-08-27, hallazgo del revisor): con CALL_DELAY_MS=1500ms
-  // en routes/matcher.js (antes 350ms, medida de seguridad contra el 429 de ML) un
-  // refresco completo de ~6840 publicaciones son ~411 llamadas espaciadas 1,5s, ≈10-15min
-  // reales solo de sleeps — el viejo presupuesto de 3 min cortaba el sondeo y mostraba
-  // "tardando más de lo esperado" con el refresco corriendo bien en el fondo.
-  var maxIntentos = 600;
-  var poll = window.setInterval(function () {
-    intentos++;
-    jsonFetch('/api/cobertura/actualizar-ml/estado').then(function (res) {
-      if (!res.ok || !res.data || !res.data.ok) {
-        window.clearInterval(poll);
-        btn.disabled = false;
-        txt.textContent = 'Actualizar';
-        toast('No se pudo confirmar el estado de la actualización. Reintentá.', 'error');
-        return;
-      }
-      var st = res.data;
-      if (st.running) {
-        if (intentos >= maxIntentos) {
-          window.clearInterval(poll);
-          btn.disabled = false;
-          txt.textContent = 'Actualizar';
-          toast('La actualización está tardando más de lo esperado. Seguí más tarde desde acá.', 'error');
-        }
-        return;
-      }
-      window.clearInterval(poll);
-      btn.disabled = false;
-      txt.textContent = 'Actualizar';
-      if (st.error) {
-        toast('ML no confirmó la actualización: ' + st.error + '. No se perdió nada, quedó lo anterior.', 'error');
-        return;
-      }
-      router();
-      cargarChips();
-      cargarRefrescoBar();
-      toast('Datos actualizados desde ML.', 'ok');
-    });
-  }, 2000);
-}
-
-document.getElementById('btn-actualizar-ml').addEventListener('click', function () {
-  var btn = document.getElementById('btn-actualizar-ml');
-  var txt = document.getElementById('btn-actualizar-txt');
-  txt.textContent = 'Actualizando…';
-  btn.disabled = true;
-  jsonFetch('/api/cobertura/actualizar-ml', { method: 'POST' }).then(function (res) {
-    if (res.status === 202) { sondearActualizarMl(btn, txt); return; }
-    if (res.status === 409 && res.data && res.data.running) {
-      // Ya había un refresco en curso (desde acá o desde el Matcher ML→WC): sondeamos igual.
-      sondearActualizarMl(btn, txt);
-      return;
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function debounce(fn, ms) {
+      let timeout;
+      return function (...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => fn.apply(this, args), ms);
+      };
     }
-    if (res.status === 403) {
-      btn.disabled = false;
-      txt.textContent = 'Actualizar';
-      toast('No tenés permiso para actualizar desde ML.', 'error');
-      return;
+
+    function showStatus(msg, type) {
+      const list = document.getElementById('pub-list');
+      if (type === 'loading') {
+        list.innerHTML = '<div class="status-loading">' + esc(msg) + '</div>';
+      } else if (type === 'error') {
+        list.innerHTML = '<div class="status-error">' + esc(msg) + '</div>';
+      } else if (type === 'empty') {
+        list.innerHTML = '<div class="status-empty">' + esc(msg) + '</div>';
+      }
     }
-    btn.disabled = false;
-    txt.textContent = 'Actualizar';
-    toast('No se pudo iniciar la actualización. Reintentá.', 'error');
-  });
-});
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Arranque
- * ═══════════════════════════════════════════════════════════════════════ */
+    function toast(msg, type = 'ok') {
+      const container = document.getElementById('toast-container');
+      const el = document.createElement('div');
+      el.className = 'toast ' + type;
+      el.innerHTML = `
+        <span>${esc(msg)}</span>
+        <button class="toast-close" onclick="this.parentElement.remove()">✕</button>
+      `;
+      container.appendChild(el);
+      setTimeout(() => el.remove(), 3000);
+    }
 
-Api.requirePermiso('matcher').then(function (d) {
-  if (!d) return;
-  esAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
-  router();
-  cargarChips();
-  cargarRefrescoBar();
-  window.setInterval(cargarRefrescoBar, 60000);
-});
-</script>
+    // Iniciar
+    init();
+  </script>
 </body>
 </html>

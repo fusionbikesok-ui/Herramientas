@@ -635,6 +635,36 @@ export function computarCandidatosApi(db, scope) {
 // recalcula).
 const _cacheCandidatos = new Map(); // scope -> { firma, resultado }
 
+// Espejo en disco de _cacheCandidatos (tabla matcher_candidatos_cache, ver db/index.js). El
+// Map en memoria se pierde en cada reinicio de pm2; esto evita que el primer usuario del día
+// pague de nuevo el cruce completo (~70s) cuando la firma (catálogo Woo + últimas publicaciones
+// ML) no cambió desde la última corrida real.
+function obtenerCacheValida(db, scope, firma) {
+  const enMemoria = _cacheCandidatos.get(scope);
+  if (enMemoria && enMemoria.firma === firma) return enMemoria.resultado;
+  const fila = db.prepare('SELECT firma, resultado_json FROM matcher_candidatos_cache WHERE scope=?').get(scope);
+  if (fila && fila.firma === firma) {
+    try {
+      const resultado = JSON.parse(fila.resultado_json);
+      _cacheCandidatos.set(scope, { firma, resultado });
+      return resultado;
+    } catch (_) { /* JSON corrupto en disco: tratar como miss y recomputar */ }
+  }
+  return null;
+}
+
+function guardarCacheDisco(db, scope, firma, resultado) {
+  // La caché en disco es una optimización de arranque, nunca debe tumbar un cómputo que ya
+  // salió bien — cualquier fallo de escritura se ignora y el próximo restart recomputa.
+  try {
+    db.prepare(`
+      INSERT INTO matcher_candidatos_cache (scope, firma, resultado_json, actualizado_en)
+      VALUES (?,?,?,?)
+      ON CONFLICT(scope) DO UPDATE SET firma=excluded.firma, resultado_json=excluded.resultado_json, actualizado_en=excluded.actualizado_en
+    `).run(scope, firma, JSON.stringify(resultado), now());
+  } catch (_) {}
+}
+
 // Estado del cómputo de candidatos en background por scope. El cruce completo
 // (computarCandidatosApi: O(publicaciones × catálogo) con LCS) tarda decenas de segundos en
 // frío (tras un restart de pm2, con el cache de proceso vacío) y superaba el proxy_read_timeout
@@ -659,6 +689,7 @@ function lanzarComputoCandidatos(db, scope) {
       const firma = firmaCandidatos(db);
       const resultado = computarCandidatosApi(db, scope);
       _cacheCandidatos.set(scope, { firma, resultado });
+      guardarCacheDisco(db, scope, firma, resultado);
       _computoCandidatos.set(scope, { running: false, done: resultado.total, total: resultado.total, error: null, iniciado_en: nuevo.iniciado_en });
     } catch (e) {
       _computoCandidatos.set(scope, { running: false, done: 0, total: 0, error: e.message, iniciado_en: nuevo.iniciado_en });
@@ -712,14 +743,15 @@ function firmaCandidatos(db) {
 // retomar sin pagar el costo del cruce completo (objetivo: abrir el matcher nunca se traba).
 function candidatosApiCacheado(db, scope, { peek = false } = {}) {
   const firma = firmaCandidatos(db);
-  const hit = _cacheCandidatos.get(scope);
+  const cacheado = obtenerCacheValida(db, scope, firma);
   let out;
-  if (hit && hit.firma === firma) {
-    out = { ...hit.resultado, cache: true };
+  if (cacheado) {
+    out = { ...cacheado, cache: true };
   } else {
     if (peek) return { items: [], total: 0, cache: false };
     const resultado = computarCandidatosApi(db, scope);
     _cacheCandidatos.set(scope, { firma, resultado });
+    guardarCacheDisco(db, scope, firma, resultado);
     out = { ...resultado, cache: false };
   }
   // Recálculo de stock FUERA del bloque cacheado: la firma ignora el stock a propósito, así

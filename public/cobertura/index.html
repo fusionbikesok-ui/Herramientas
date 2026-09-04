@@ -184,6 +184,31 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
 .solo-ml-row .buscador-inline input { flex:1; min-width:140px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:6px 10px; color:var(--text); font-size:.78rem; font-family:inherit; }
 .resultado-vincular { display:flex; align-items:center; gap:8px; background:var(--surface2); border-radius:6px; padding:6px 10px; font-size:.78rem; }
 
+/* Verificar vínculos (sospechosos) — portado de public/vinculos/index.html, misma pantalla
+   funcional, apuntada al endpoint que reemplazó a la vieja (/api/sync/vinculos-sospechosos). */
+.pub-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem 1.25rem; margin-bottom:12px; }
+.pub-head { display:flex; gap:12px; }
+.pub-head img { width:64px; height:64px; object-fit:cover; border-radius:8px; background:var(--surface2); flex-shrink:0; }
+.pub-titulos { min-width:0; flex:1; }
+.pub-titulo-ml { font-size:.9rem; font-weight:700; line-height:1.3; }
+.pub-nombre-wc { font-size:.75rem; color:var(--muted); margin-top:3px; }
+.pub-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; margin:12px 0; }
+.pub-dato { font-size:.78rem; }
+.pub-dato .k { color:var(--muted); display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:2px; }
+.pub-dato .v { color:var(--text); }
+.chips-wrap { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.chip { display:inline-flex; align-items:center; gap:8px; border-radius:8px; padding:6px 10px; font-size:.76rem; border:1px solid; max-width:100%; }
+.chip.alta { background:var(--red-dim); color:var(--red); border-color:rgba(248,113,113,.35); }
+.chip.media { background:var(--amber-dim); color:var(--amber); border-color:rgba(251,191,36,.35); }
+.chip.ninguna { background:var(--green-dim); color:var(--green); border-color:rgba(52,211,153,.35); }
+.chip-txt { flex:1; min-width:0; }
+.chip-revisar { background:none; border:1px solid currentColor; color:inherit; border-radius:5px; padding:2px 8px; font-size:.7rem; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap; }
+.chip-revisar:hover { opacity:.8; }
+.chip.saliendo { opacity:0; transform:translateY(-4px); transition:opacity .2s,transform .2s; }
+.pub-flash { font-size:.76rem; margin-top:8px; min-height:1em; }
+.pub-flash.ok { color:var(--green); }
+.pub-flash.err { color:var(--red); }
+
 .hist-grupo-head { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--warning); margin:1rem 0 .4rem; }
 
 /* Estados vinculado / pendiente-sync (aplican en historial y toasts) */
@@ -296,6 +321,14 @@ details.atributos-toggle .atr-body { margin-top:6px; color:var(--muted); }
     <div id="soloml-lista"></div>
   </section>
 
+  <!-- ══════════════ VISTA: VERIFICAR VÍNCULOS (sospechosos) ══════════════ -->
+  <section class="view" id="view-sospechosos" data-view="sospechosos">
+    <a href="#/" class="back-link">&larr; Volver</a>
+    <h1 class="page-title">Verificar <em>vínculos</em></h1>
+    <p class="page-sub">Publicaciones ya vinculadas a un SKU donde el precio, stock o título ya no coinciden — revisá si el vínculo sigue siendo correcto.</p>
+    <div id="sospechosos-lista"></div>
+  </section>
+
   <!-- ══════════════ VISTA: SIN STOCK ══════════════ -->
   <section class="view" id="view-sin-stock" data-view="sin-stock">
     <a href="#/" class="back-link">&larr; Volver</a>
@@ -382,7 +415,7 @@ function toast(mensaje, tipo, onDeshacer) {
  * #/multipub, #/solo-ml, #/sin-stock, #/problemas
  * ═══════════════════════════════════════════════════════════════════════ */
 
-var VISTAS = ['entrada', 'cola', 'historial', 'publicar', 'multipub', 'solo-ml', 'sin-stock', 'problemas'];
+var VISTAS = ['entrada', 'cola', 'historial', 'publicar', 'multipub', 'solo-ml', 'sin-stock', 'problemas', 'sospechosos'];
 function mostrarVista(nombre) {
   VISTAS.forEach(function (v) {
     document.getElementById('view-' + v).classList.toggle('active', v === nombre);
@@ -405,6 +438,8 @@ function router() {
     mostrarVista('multipub'); cargarMultipub();
   } else if (seccion === 'solo-ml') {
     mostrarVista('solo-ml'); cargarSoloMl();
+  } else if (seccion === 'sospechosos') {
+    mostrarVista('sospechosos'); cargarSospechosos();
   } else if (seccion === 'sin-stock') {
     mostrarVista('sin-stock'); cargarSinStock();
   } else if (seccion === 'problemas') {
@@ -469,6 +504,7 @@ function cargarEntrada() {
       '<a class="otra-link" href="#/multipub">Multi-publicación <span class="n">' + n(o.multi_publicacion) + '</span></a>' +
       '<a class="otra-link" href="#/solo-ml">Solo ML — sin SKU <span class="n">' + n(o.solo_ml) + '</span></a>' +
       '<a class="otra-link" href="#/sin-stock">Sin stock <span class="n">' + n(o.sin_stock) + '</span></a>' +
+      '<a class="otra-link" href="#/sospechosos">Verificar vínculos <span class="n">' + n(o.sospechosos) + '</span></a>' +
       '<a class="otra-link" href="#/problemas">Problemas <span class="n">›</span></a>';
   });
 }
@@ -1012,7 +1048,9 @@ function cargarSoloMl() {
       '<div class="gestion-lista">' + data.map(function (r) {
         return '<div class="solo-ml-row">' +
           (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="">' : '<div class="mc-thumb"></div>') +
-          '<div class="flex1">' + esc(r.titulo) + '<div class="meta" style="color:var(--muted);font-size:.72rem;">' + esc(r.clave) + ' · ' + money(r.precio) + ' · Stock ' + n(r.available_quantity) + '</div></div>' +
+          '<div class="flex1">' + esc(r.titulo) + '<div class="meta" style="color:var(--muted);font-size:.72rem;">' +
+          '<span style="color:' + (r.status === 'active' ? 'var(--conf-alta,var(--green))' : 'inherit') + '">' + (r.status === 'active' ? '● Activa' : '○ Pausada') + '</span>' +
+          ' · ' + esc(r.clave) + ' · ' + money(r.precio) + ' · Stock ' + n(r.available_quantity) + '</div></div>' +
           '<div class="pub-acciones">' +
           '<button type="button" class="mini-btn" data-mc="' + r.clave + '">' + (r.marcada_correcta ? '✓ Correcta' : 'Marcar correcta') + '</button>' +
           '<button type="button" class="mini-btn" data-pausar="' + r.clave + '">Pausar</button>' +
@@ -1075,6 +1113,141 @@ function cargarSoloMl() {
         }, 300);
       });
     });
+  });
+}
+
+/* ── Verificar vínculos (sospechosos) — portado de public/vinculos/index.html ── */
+function pesoLabel(peso) { return peso === 'alta' ? 'alta' : 'media'; }
+
+function cargarSospechosos() {
+  jsonFetch('/api/cobertura/vinculos-sospechosos').then(function (res) {
+    var cont = document.getElementById('sospechosos-lista');
+    if (!res.ok || !res.data || !res.data.ok) { cont.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; return; }
+    var data = res.data.data || [];
+    if (!data.length) { cont.innerHTML = '<div class="vacio"><strong>Todos los vínculos están en orden.</strong> No hay señales de mal matcheo pendientes de revisar.</div>'; return; }
+    cont.innerHTML = '<p class="page-sub">' + n(data.length) + ' vínculos con alguna señal a revisar.</p>' +
+      '<div id="sosp-wrap">' + data.map(renderSospechosoRow).join('') + '</div>';
+    wireSospechosos(cont);
+  });
+}
+
+function renderSospechosoRow(row) {
+  var senales = row.senales || [];
+  var chipsHtml = senales.length
+    ? '<div class="chips-wrap">' + senales.map(function (s) {
+        return '<span class="chip ' + pesoLabel(s.peso) + '" data-senal="' + esc(s.senal) + '">' +
+          '<span class="chip-txt">' + esc(s.detalle || s.senal) + '</span>' +
+          '<button type="button" class="chip-revisar" data-clave="' + esc(row.clave) + '" data-senal="' + esc(s.senal) + '" data-valor="' + esc(s.valor) + '">Revisado, está bien así</button>' +
+          '</span>';
+      }).join('') + '</div>'
+    : '';
+  return '<div class="pub-card" data-clave="' + esc(row.clave) + '" data-sku="' + esc(row.sku) + '" data-wc-nombre="' + esc(row.wc_nombre || '') + '">' +
+    '<div class="pub-head">' +
+    (row.thumbnail ? '<img src="' + esc(row.thumbnail) + '" alt="">' : '') +
+    '<div class="pub-titulos">' +
+    '<div class="pub-titulo-ml">' + esc(row.titulo || row.item_id) + '</div>' +
+    '<div class="pub-nombre-wc">WC: ' + esc(row.wc_nombre || '—') + ' · SKU ' + esc(row.sku) + '</div>' +
+    '</div></div>' +
+    '<div class="pub-grid">' +
+    '<div class="pub-dato"><span class="k">Precio ML</span><span class="v">' + money(row.precio_ml) + '</span></div>' +
+    '<div class="pub-dato"><span class="k">Precio WC</span><span class="v">' + money(row.precio_wc) + '</span></div>' +
+    '</div>' +
+    chipsHtml +
+    '<div class="pub-acciones">' +
+    (row.permalink ? '<a class="mini-btn" href="' + esc(row.permalink) + '" target="_blank" rel="noopener">Ver en ML</a>' : '') +
+    '<button type="button" class="mini-btn" data-reasignar-toggle="' + esc(row.clave) + '">Reasignar a otro SKU</button>' +
+    '<button type="button" class="mini-btn" data-desvincular="' + esc(row.clave) + '">Desvincular</button>' +
+    '</div>' +
+    '<div class="buscador-inline" hidden data-reasignar-box="' + esc(row.clave) + '">' +
+    '<input type="text" placeholder="Buscar SKU o nombre…" aria-label="Buscar producto web para reasignar ' + esc(row.titulo) + '" data-reasignar-input="' + esc(row.clave) + '">' +
+    '<div data-reasignar-resultados="' + esc(row.clave) + '"></div>' +
+    '</div>' +
+    '<div class="pub-flash" data-flash></div>' +
+    '</div>';
+}
+
+function wireSospechosos(cont) {
+  cont.querySelectorAll('.chip-revisar').forEach(function (btn) {
+    btn.addEventListener('click', function () { marcarRevisadoCobertura(btn); });
+  });
+  cont.querySelectorAll('[data-desvincular]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var pubCard = btn.closest('.pub-card');
+      var nombre = pubCard.dataset.wcNombre || 'este producto';
+      if (!window.confirm('Esta publicación va a dejar de sincronizar stock con "' + nombre + '". Vas a tener que volver a vincularla a mano. ¿Desvincular?')) return;
+      var clave = btn.dataset.desvincular;
+      jsonFetch('/api/cobertura/vinculos/' + encodeURIComponent(clave) + '/desvincular', { method: 'POST' }).then(function (r) {
+        if (!r.ok || !r.data || !r.data.ok) { toast(r.data && r.data.error || 'No se pudo desvincular.', 'error'); return; }
+        toast('Desvinculada.', 'ok');
+        pubCard.remove();
+      });
+    });
+  });
+  cont.querySelectorAll('[data-reasignar-toggle]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var clave = btn.dataset.reasignarToggle;
+      var box = cont.querySelector('[data-reasignar-box="' + clave + '"]');
+      box.hidden = !box.hidden;
+    });
+  });
+  cont.querySelectorAll('[data-reasignar-input]').forEach(function (input) {
+    var clave = input.dataset.reasignarInput;
+    var resultados = cont.querySelector('[data-reasignar-resultados="' + clave + '"]');
+    var pubCard = cont.querySelector('.pub-card[data-clave="' + CSS.escape(clave) + '"]');
+    var skuActual = pubCard ? pubCard.dataset.sku : null;
+    var deb = null;
+    input.addEventListener('input', function () {
+      window.clearTimeout(deb);
+      var q2 = input.value.trim();
+      if (q2.length < 2) { resultados.innerHTML = ''; return; }
+      deb = window.setTimeout(function () {
+        jsonFetch('/api/sync/buscar-sku?tipo=all&q=' + encodeURIComponent(q2)).then(function (r) {
+          if (!r.ok || !r.data || !r.data.ok) { resultados.innerHTML = ''; return; }
+          var lista = r.data.data || [];
+          resultados.innerHTML = lista.map(function (p) {
+            return '<div class="resultado-vincular"><span>' + esc(p.nombre) + ' (' + esc(p.sku) + ')</span><button type="button" class="mini-btn" data-elegir-sku="' + esc(p.sku) + '">Reasignar</button></div>';
+          }).join('') || '<div class="meta">Sin resultados.</div>';
+          resultados.querySelectorAll('[data-elegir-sku]').forEach(function (btn2) {
+            btn2.addEventListener('click', function () {
+              var skuNuevo = btn2.dataset.elegirSku;
+              jsonFetch('/api/cobertura/vinculos/reasignar', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ clave: clave, sku: skuNuevo, expected_sku: skuActual }),
+              }).then(function (res2) {
+                if (!res2.ok || !res2.data || !res2.data.ok) {
+                  // 409 = el vínculo cambió en otra pestaña/otro operador entre que se cargó
+                  // la lista y este click — mismo caso que ya maneja el resto de Cobertura
+                  // (ver confirmarDecisionCobertura), no un error genérico.
+                  toast((res2.data && res2.data.error) || 'No se pudo reasignar.', 'error');
+                  return;
+                }
+                toast('Reasignado a ' + skuNuevo + '.', 'ok');
+                if (pubCard) pubCard.remove();
+              });
+            });
+          });
+        });
+      }, 300);
+    });
+  });
+}
+
+function marcarRevisadoCobertura(btn) {
+  var chip = btn.closest('.chip');
+  var clave = btn.getAttribute('data-clave');
+  var senal = btn.getAttribute('data-senal');
+  var valor = btn.getAttribute('data-valor');
+  btn.disabled = true;
+  jsonFetch('/api/cobertura/vinculos/revisado', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clave: clave, senal: senal, valor: valor }),
+  }).then(function (r) {
+    if (!r.ok || !r.data || !r.data.ok) {
+      btn.disabled = false;
+      toast((r.data && r.data.error) || 'No se pudo guardar la revisión.', 'error');
+      return;
+    }
+    chip.remove();
   });
 }
 

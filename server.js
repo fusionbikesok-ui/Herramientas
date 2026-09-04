@@ -150,7 +150,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/inventario', express.static(path.join(__dirname, 'public/inventario')));
   app.use('/home', express.static(path.join(__dirname, 'public/home')));
   app.use('/login', express.static(path.join(__dirname, 'public/login')));
-  app.use('/matcher', (req, res) => res.redirect('/herramientas/guardia-ml/'));
+  app.use('/matcher', express.static(path.join(__dirname, 'public/matcher')));
   app.use('/usuarios', express.static(path.join(__dirname, 'public/usuarios')));
   app.use('/reset-password', express.static(path.join(__dirname, 'public/reset-password')));
   app.use('/vendor', express.static(path.join(__dirname, 'public/vendor')));

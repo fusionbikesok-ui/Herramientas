@@ -77,41 +77,65 @@ export function guardiaMlRouter(db, cfg) {
     registrarEventoGuardia(db,c.id,'excepcion',actor(req),{motivo,nota,vence_en:vence.toISOString()});res.json({ok:true});
   });
   router.post('/casos/:id/vincular', async (req, res) => {
-    if (!puedeResolver(req)) return res.status(403).json({ok:false,error:'solo Ventas, Supervisor o Admin puede resolver Guardia ML'});
-    const config = estadoGuardiaMl(db);
-    if (config.modo !== 'acciones') return res.status(409).json({ ok:false, error:'Guardia en modo lectura; el Administrador debe habilitar acciones' });
-    const c=db.prepare("SELECT * FROM guardia_ml_casos WHERE id=? AND estado!='resuelto'").get(Number(req.params.id));
-    if(!c)return res.status(404).json({ok:false,error:'caso no encontrado'});
-    if((!c.responsable || c.responsable!==actor(req)) && !req.user?.is_admin)return res.status(409).json({ok:false,error:'Tomá el caso antes de ejecutar la acción; si pertenece a otro operador, solicitá un relevo explícito'});
-    const sku=String(req.body?.sku||'').trim(); const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
-    if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
-    const yaCompartido=db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE sku=? AND accion IN ('asignar','confirmar') AND clave<>?").get(sku,c.clave).n;
-    if(yaCompartido>0 && !db.prepare('SELECT 1 FROM guardia_ml_stock_compartido WHERE sku=?').get(sku)) {
-      return res.status(409).json({ok:false,requiere_stock_compartido:true,claves_adicionales:yaCompartido,error:'Este SKU ya está vinculado a otra publicación; confirmá primero stock compartido con motivo'});
-    }
-    // Corrección segura: cuando ya existe otro vínculo, primero se elimina en ML.
-    // Nunca se reemplaza directamente, porque un fallo del segundo paso no debe
-    // dejar la decisión local afirmando un vínculo que ML no confirmó.
-    const actualMl=db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave=?').get(c.clave)?.seller_sku||'';
-    const decisionAnterior=db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave=? AND accion IN ('asignar','confirmar') ORDER BY id DESC LIMIT 1").get(c.clave)?.sku||'';
-    if ((actualMl && actualMl!==sku) || (decisionAnterior && decisionAnterior!==sku)) {
-      // Persistir la intención antes de cualquier efecto remoto. El worker ejecuta
-      // ambos pasos y puede recuperar la operación después de un reinicio.
+    try {
+      if (!puedeResolver(req)) return res.status(403).json({ok:false,error:'solo Ventas, Supervisor o Admin puede resolver Guardia ML'});
+      const config = estadoGuardiaMl(db);
+      if (config.modo !== 'acciones') return res.status(409).json({ ok:false, error:'Guardia en modo lectura; el Administrador debe habilitar acciones' });
+      const c=db.prepare("SELECT * FROM guardia_ml_casos WHERE id=? AND estado!='resuelto'").get(Number(req.params.id));
+      if(!c)return res.status(404).json({ok:false,error:'caso no encontrado'});
+      if((!c.responsable || c.responsable!==actor(req)) && !req.user?.is_admin)return res.status(409).json({ok:false,error:'Tomá el caso antes de ejecutar la acción; si pertenece a otro operador, solicitá un relevo explícito'});
+      // Asignar responsable si no lo tiene o si es admin haciendo relevo implícito
+      const responsableAnterior = c.responsable;
+      if (!responsableAnterior || (responsableAnterior !== actor(req) && req.user?.is_admin)) {
+        const ts = new Date().toISOString();
+        db.prepare("UPDATE guardia_ml_casos SET responsable=?, actualizado_en=? WHERE id=?").run(actor(req), ts, c.id);
+        const evento = responsableAnterior ? 'relevo' : 'tomado';
+        registrarEventoGuardia(db, c.id, evento, actor(req), { motivo_implicito: true, accion: 'vincular' });
+      }
+      const sku=String(req.body?.sku||'').trim(); const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
+      if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
+      // Compartir SKU entre publicaciones es lo NORMAL del negocio (511 SKUs ya comparten entre
+      // 1.176 publicaciones). Se registra en guardia_ml_stock_compartido como dato informativo
+      // si no estaba, pero NO se bloquea la vinculación.
+      const yaCompartido=db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE sku=? AND accion IN ('asignar','confirmar') AND clave<>?").get(sku,c.clave).n;
+      if(yaCompartido>0 && !db.prepare('SELECT 1 FROM guardia_ml_stock_compartido WHERE sku=?').get(sku)) {
+        db.prepare('INSERT OR IGNORE INTO guardia_ml_stock_compartido (sku,confirmado_en) VALUES (?,?)').run(sku,new Date().toISOString());
+      }
+      // Corrección segura: cuando ya existe otro vínculo, primero se elimina en ML.
+      // Nunca se reemplaza directamente, porque un fallo del segundo paso no debe
+      // dejar la decisión local afirmando un vínculo que ML no confirmó.
+      const actualMl=db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave=?').get(c.clave)?.seller_sku||'';
+      const decisionAnterior=db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave=? AND accion IN ('asignar','confirmar')").get(c.clave)?.sku||'';
+      if ((actualMl && actualMl!==sku) || (decisionAnterior && decisionAnterior!==sku)) {
+        // Persistir la intención antes de cualquier efecto remoto. El worker ejecuta
+        // ambos pasos y puede recuperar la operación después de un reinicio.
+        encolarOperacionGuardia(db,{casoId:c.id,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion:c.expected_version});
+        registrarEventoGuardia(db,c.id,'correccion_encolada',actor(req),{sku_anterior:actualMl||decisionAnterior,sku_nuevo:sku});
+        return res.status(202).json({ok:true,estado:'pendiente_ml',mensaje:'Corrección encolada; se desvinculará y vinculará de forma ordenada'});
+      }
+      // Toda vinculación se persiste antes del efecto remoto. Así un reinicio no
+      // puede dejar ML actualizado y Fusion sin decisión local.
       encolarOperacionGuardia(db,{casoId:c.id,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion:c.expected_version});
-      registrarEventoGuardia(db,c.id,'correccion_encolada',actor(req),{sku_anterior:actualMl||decisionAnterior,sku_nuevo:sku});
-      return res.status(202).json({ok:true,estado:'pendiente_ml',mensaje:'Corrección encolada; se desvinculará y vinculará de forma ordenada'});
+      registrarEventoGuardia(db,c.id,'vinculacion_encolada',actor(req),{sku});
+      return res.status(202).json({ok:true,estado:'pendiente_ml',mensaje:'Vinculación encolada; se confirmará cuando ML responda'});
+    } catch (err) {
+      console.error('[guardiaMl] error en POST /casos/:id/vincular:', err);
+      return res.status(500).json({ok:false,error:err.message});
     }
-    // Toda vinculación se persiste antes del efecto remoto. Así un reinicio no
-    // puede dejar ML actualizado y Fusion sin decisión local.
-    encolarOperacionGuardia(db,{casoId:c.id,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion:c.expected_version});
-    registrarEventoGuardia(db,c.id,'vinculacion_encolada',actor(req),{sku});
-    return res.status(202).json({ok:true,estado:'pendiente_ml',mensaje:'Vinculación encolada; se confirmará cuando ML responda'});
   });
   router.post('/casos/:id/pausar', async (req, res) => {
     if (!puedeResolver(req)) return res.status(403).json({ok:false,error:'solo Ventas, Supervisor o Admin puede resolver Guardia ML'});
     const config=estadoGuardiaMl(db); if(config.modo!=='acciones')return res.status(409).json({ok:false,error:'Guardia en modo lectura; el Administrador debe habilitar acciones'});
     const c=db.prepare("SELECT * FROM guardia_ml_casos WHERE id=? AND estado!='resuelto'").get(Number(req.params.id)); if(!c)return res.status(404).json({ok:false,error:'caso no encontrado'});
     if(c.responsable && c.responsable!==actor(req) && !req.user?.is_admin)return res.status(409).json({ok:false,error:'El caso está tomado por otro operador; solicitá un relevo explícito'});
+    // Asignar responsable si no lo tiene o si es admin haciendo relevo implícito
+    const responsableAnterior = c.responsable;
+    if (!responsableAnterior || (responsableAnterior !== actor(req) && req.user?.is_admin)) {
+      const ts = new Date().toISOString();
+      db.prepare("UPDATE guardia_ml_casos SET responsable=?, actualizado_en=? WHERE id=?").run(actor(req), ts, c.id);
+      const evento = responsableAnterior ? 'relevo' : 'tomado';
+      registrarEventoGuardia(db, c.id, evento, actor(req), { motivo_implicito: true, accion: 'pausar' });
+    }
     const p=db.prepare('SELECT item_id,variation_id FROM ml_publicaciones_cache WHERE clave=?').get(c.clave); if(!p)return res.status(404).json({ok:false,error:'publicación no encontrada'});
     const hermanas=p.variation_id?db.prepare("SELECT COUNT(*) n FROM ml_publicaciones_cache WHERE item_id=? AND variation_id IS NOT NULL AND variation_id!=?").get(p.item_id,p.variation_id).n:0;
     if(hermanas>0 && req.body?.confirmado!==true)return res.status(409).json({ok:false,requiere_confirmacion:true,variaciones_afectadas:hermanas,error:'La pausa afecta toda la publicación y sus variantes hermanas'});
@@ -162,6 +186,60 @@ export function guardiaMlRouter(db, cfg) {
       ON CONFLICT(sku) DO UPDATE SET confirmado_por=excluded.confirmado_por,motivo=excluded.motivo,confirmado_en=excluded.confirmado_en`).run(sku,actor(req),motivo,ts);
     db.prepare('INSERT INTO guardia_ml_stock_compartido_eventos(sku,evento,actor,motivo,creado_en) VALUES(?,?,?,?,?)').run(sku,'confirmado',actor(req),motivo,ts);
     res.json({ok:true,sku,claves,confirmado_por:actor(req)});
+  });
+  router.post('/vincular-clave', async (req, res) => {
+    // Vincular un SKU a una publicación que NO tiene caso abierto en Guardia.
+    // Crea el caso al vuelo y encolma la vinculación con el mismo flujo durable.
+    // Requiere permisos de Ventas/Supervisor/Admin y modo 'acciones' habilitado.
+    try {
+      if (!puedeResolver(req)) return res.status(403).json({ok:false,error:'solo Ventas, Supervisor o Admin puede vincular'});
+      const config = estadoGuardiaMl(db);
+      if (config.modo !== 'acciones') return res.status(409).json({ ok:false, error:'Guardia en modo lectura; el Administrador debe habilitar acciones' });
+      const clave=String(req.body?.clave||'').trim(); const sku=String(req.body?.sku||'').trim();
+      if(!clave||!sku)return res.status(400).json({ok:false,error:'clave y sku obligatorios'});
+      const pub=db.prepare('SELECT clave,titulo,available_quantity FROM ml_publicaciones_cache WHERE clave=?').get(clave);
+      if(!pub)return res.status(404).json({ok:false,error:'publicación no encontrada en ML'});
+      const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
+      if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
+      // Crear o reusar el caso: si no existe, crearlo en estado 'abierto'.
+      const ts=new Date().toISOString();
+      const casoExistente=db.prepare("SELECT id,estado,expected_version FROM guardia_ml_casos WHERE clave=? AND estado!='resuelto'").get(clave);
+      let casoId,casoVersion;
+      if(casoExistente){
+        casoId=casoExistente.id;
+        casoVersion=casoExistente.expected_version;
+      }else{
+        // Crear caso nuevo: sin SKU decidido todavía, sin responsable, listo para vincular.
+        const insertado=db.prepare(`INSERT INTO guardia_ml_casos (clave,estado,severidad,motivo,bloquea_sync,creado_en,actualizado_en)
+          VALUES (?,'abierto','normal','vinculacion_manual',0,?,?)`).run(clave,ts,ts);
+        if(!insertado.changes)return res.status(500).json({ok:false,error:'No se pudo crear el caso'});
+        casoId=insertado.lastInsertRowid;
+        casoVersion=1; // guardia_ml_casos.expected_version DEFAULT 1 (migrations/059); 0 hace
+        // que encolarOperacionGuardia compare contra la versión real (1) y falle siempre para
+        // un caso recién creado — es el bug que rompía /vincular-clave en el 100% de los casos.
+        // Registrar evento de creación
+        registrarEventoGuardia(db,casoId,'caso_creado_auto_matcher',actor(req),{razon:'vinculacion_desde_matcher'});
+      }
+      // Asignar responsable si no lo tiene
+      const casoParaAct=db.prepare("SELECT responsable FROM guardia_ml_casos WHERE id=?").get(casoId);
+      if(!casoParaAct.responsable){
+        const tsAct=new Date().toISOString();
+        db.prepare("UPDATE guardia_ml_casos SET responsable=?, actualizado_en=? WHERE id=?").run(actor(req),tsAct,casoId);
+        registrarEventoGuardia(db,casoId,'tomado',actor(req),{motivo:'vinculacion_auto'});
+      }
+      // Registrar stock compartido si aplica (SKU ya vinculado a otra clave)
+      const yaCompartido=db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE sku=? AND accion IN ('asignar','confirmar')").get(sku).n;
+      if(yaCompartido>0 && !db.prepare('SELECT 1 FROM guardia_ml_stock_compartido WHERE sku=?').get(sku)) {
+        db.prepare('INSERT OR IGNORE INTO guardia_ml_stock_compartido (sku,confirmado_en) VALUES (?,?)').run(sku,ts);
+      }
+      // Encolar la vinculación exactamente como el endpoint POST /casos/:id/vincular
+      encolarOperacionGuardia(db,{casoId,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion});
+      registrarEventoGuardia(db,casoId,'vinculacion_encolada',actor(req),{sku});
+      return res.status(202).json({ok:true,estado:'pendiente_ml',caso_id:casoId,mensaje:'Vinculación encolada desde matcher; se confirmará cuando ML responda'});
+    } catch (err) {
+      console.error('[guardiaMl] error en POST /vincular-clave:', err);
+      return res.status(500).json({ok:false,error:err.message});
+    }
   });
   return router;
 }

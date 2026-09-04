@@ -3238,11 +3238,23 @@ completa de publicaciones y registra casos locales idempotentes.
 - `POST /api/guardia-ml/casos/:id/pausar` body `{ confirmado? }` → requiere modo `acciones`; si hay hermanas devuelve `409` con cantidad afectada hasta recibir confirmación explícita.
 - `GET /api/guardia-ml/pedidos-retenidos` → lista ventas ML retenidas por falta de cobertura exacta.
 - `POST /api/guardia-ml/pedidos-retenidos/:orderId/liberar|cancelar` body `{ motivo }` → salida humana auditada; liberar permite reprocesar la venta y cancelar cierra su retención.
-- `GET /api/guardia-ml/stock-compartido` y `POST /api/guardia-ml/stock-compartido/:sku/confirmar` body `{ motivo }` → consulta y confirmación explícita del stock completo compartido entre claves ML.
+- `GET /api/guardia-ml/stock-compartido` → consulta registro de SKUs compartidos entre múltiples publicaciones (histórico informativo, no bloquea escrituras).
+- `POST /api/guardia-ml/stock-compartido/:sku/confirmar` body `{ motivo }` → **DEPRECADO**: antes era obligatorio confirmar stock compartido para vincular. Ahora el compartir SKU es operación NORMAL: esta ruta queda como legado solo para auditoría y documentación de decisiones.
+- `POST /api/guardia-ml/vincular-clave` body `{ clave, sku }` → vincula un SKU a una publicación que NO tiene caso abierto (el matcher puede usarlo directamente sin pasar por Guardia). Crea el caso al vuelo, asigna responsable automático y encolma la vinculación con auditoría completa. Requiere modo `acciones` habilitado. La clave debe existir en ML y el SKU debe ser único en Woo. Responde 202 (operación encolada) o 4xx/5xx en caso de error.
 
 La API nunca considera `omitir` o una marca histórica como cobertura. Las escrituras remotas de
 vínculo, stock o pausa pertenecerán a una segunda fase durable y permanecerán bloqueadas durante
 el primer rollout de UM1.
+
+### Compartición de SKUs entre publicaciones (2026-09-03)
+
+**Decisión de negocio:** compartir un SKU entre múltiples publicaciones de ML es la operación
+NORMAL del negocio (511 SKUs compartidos entre 1.176 publicaciones). No hay excepción ni bloqueo.
+Cuando un SKU está en N publicaciones y Woo tiene X unidades:
+- **Todas las publicaciones muestran X** (decisión anterior).
+- **Cuando se vende en una, se re-sincroniza el stock de las hermanas inmediatamente** (nuevo en 2026-09-03): tras procesar la venta y crear el pedido en Woo, se dispara `syncSkuPuntual()` para cada SKU vendido, que actualiza ML con el stock disponible ACTUAL para TODAS las publicaciones que comparten ese SKU. Falla abierta (si ML rechaza, se registra en `sync_log` y el cron de 10 min lo retoma).
+
+El registro en `guardia_ml_stock_compartido` es ahora **informativo**: se guarda si se detecta compartición, pero **no bloquea** ninguna operación de vínculo, auto-vínculo o pausa.
 
 ### Bloqueo de claves detectadas y sincronización de ventas retenidas (2026-09-03)
 

@@ -444,6 +444,18 @@ export function coberturaRouter(db, cfg) {
       // descontaba cubiertos en ML, excluidos ni no-vendibles, así que mostraba un número
       // mayor al de la lista real (incoherencia señalada por el revisor).
       sin_stock: calcularSinStock(db).length,
+      // Mismo criterio EXACTO que GET /vinculos-sospechosos: vínculos ya hechos con al menos
+      // una señal vigente (precio/stock/título no coinciden) sin descartar. Antes vivía solo
+      // en /vinculos/, una pantalla huérfana que apuntaba a un endpoint ya migrado — no tenía
+      // ninguna entrada de navegación real.
+      sospechosos: (() => {
+        const descartes = cargarDescartes(db);
+        let n = 0;
+        for (const fila of filasDeVinculos(db, { ordenar: false })) {
+          if (senalesVigentes(fila, descartes).length > 0) n++;
+        }
+        return n;
+      })(),
     };
     res.json({
       ok: true,
@@ -1053,10 +1065,21 @@ export function coberturaRouter(db, cfg) {
         AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave)
         AND p.clave NOT IN (SELECT clave FROM cobertura_marcados_correcto WHERE seccion = 'solo_ml')`;
     const total = db.prepare(`SELECT COUNT(*) n ${FILTRO}`).get({ q }).n;
+    // Orden por urgencia real, no alfabético: activa+con stock vendible YA sin SKU (riesgo de
+    // sobreventa, es el motivo original de este cambio) primero; pausadas al final porque no
+    // están perdiendo ventas ahora mismo. Sin esto, con ~1500 pausadas y una decena de activas
+    // mezcladas alfabéticamente, un operador tiene que scrollear casi todo para encontrar lo
+    // que realmente urge.
     const rows = db.prepare(`
       SELECT p.clave, p.item_id, p.variation_id, p.titulo, p.status, p.thumbnail, p.precio, p.available_quantity
       ${FILTRO}
-      ORDER BY p.titulo LIMIT @limit OFFSET @offset
+      ORDER BY
+        CASE WHEN p.status = 'active' AND COALESCE(p.available_quantity, 0) > 0 THEN 0
+             WHEN p.status = 'active' THEN 1
+             ELSE 2 END,
+        p.available_quantity DESC,
+        p.titulo
+      LIMIT @limit OFFSET @offset
     `).all({ q, limit, offset });
     res.json({ ok: true, data: rows, total });
   });

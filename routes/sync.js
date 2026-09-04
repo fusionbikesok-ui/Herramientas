@@ -668,6 +668,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     return;
   }
   const lineItems = [];
+  const skusProcesados = new Set(); // Capturar SKUs para resincronizar hermanas después
   for (const item of ov.items) {
     const itemId = item.item_id_ml;
     const varId = item.variation_id_ml;
@@ -779,6 +780,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
         error: `SKU sin precio de LISTA en catalogo_cache (${motivo}) — línea creada con el precio registrado en WC, no con el de contado`,
       });
     }
+    skusProcesados.add(sku); // Registrar SKU para resincronizar hermanas después
     lineItems.push(li);
   }
 
@@ -875,6 +877,26 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       INSERT OR IGNORE INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en)
       VALUES (?, ?, ?, ?, ?)
     `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), algunSinMapeo ? 'parcial' : 'ok', now());
+
+    // Resincronizar stock de SKUs compartidos (hermanas): cuando se vende en una publicación,
+    // todas las hermanas que comparten el SKU reciben la actualización automáticamente.
+    // FAIL-OPEN: errores aquí NO bloquean la orden. Corren en background sin await.
+    for (const sku of skusProcesados) {
+      // Llamada asíncrona sin await (fire-and-forget) para no bloquear. Los errores se logean
+      // en sync_log por syncSkuPuntual. El cooldown de ML puede omitir el resync (estado='omitido'),
+      // que es normal — el cron siguiente lo retomará.
+      (async () => {
+        try {
+          await syncSkuPuntual(db, { ml: mlCfg }, sku);
+        } catch (eResync) {
+          console.error(`[sync] Error resincronizando SKU ${sku} tras venta ML ${orderId}:`, eResync.message);
+          logSync(db, {
+            direccion: 'wc_ml', sku, estado: 'error',
+            error: `Resync de hermanas tras venta: ${eResync.message}`.slice(0, 500),
+          });
+        }
+      })();
+    }
 
     // Nota PRIVADA del pedido (decisión del usuario, 2026-08-03): customer_note del POST de
     // creación la ve el cliente en la web y en los mails — se pasa a un recurso separado
