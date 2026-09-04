@@ -30,6 +30,8 @@ import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { guardiaMlRouter } from './routes/guardiaMl.js';
 import { procesarOperacionesGuardia } from './lib/guardiaMl.js';
+import { procesarOperacionesIdentidad } from './lib/identidadProductos.js';
+import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
@@ -466,6 +468,19 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       });
       cron.schedule('*/5 * * * *', () => {
         procesarOperacionesGuardia(app._db, syncCfg).catch(err => console.error('Guardia ML operaciones:', err.message));
+      });
+
+      // UM1 — único ejecutor de la saga remota de identidad. Fail-closed: si
+      // `identidad_config` no está en `enforced` con escrituras habilitadas, no hace nada.
+      // Respeta además el canario designado y el tope de lote, para que habilitar el modo no
+      // largue de una todas las operaciones ya encoladas (cada una pone el stock en 0 antes
+      // de escribir el SKU).
+      cron.schedule('*/5 * * * *', () => {
+        procesarOperacionesIdentidad(app._db, adaptadorMlIdentidad(app._db, syncCfg.ml))
+          .then((r) => {
+            if (r?.procesadas) console.log(`identidad: ${r.procesadas} operación(es)${r.canario ? ` [canario ${r.canario}]` : ''}`);
+          })
+          .catch(err => console.error('identidad operaciones:', err.message));
       });
 
       cron.schedule('2-59/10 * * * *', () => {          // ML
