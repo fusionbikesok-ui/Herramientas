@@ -269,6 +269,7 @@
         : '<div class="facts">' + (woo ? 'Producto Woo: <b>' + esc(woo.id_woo) + '</b><br>SKU: <b>' + esc(woo.sku) + '</b><br>Stock Woo: <b>' + esc(woo.stock ?? 'sin dato') + '</b>'
             : '<span class="muted">Sin identidad Woo única. Falta catálogo: no es una excepción, es una tarea de alta o corrección. Usá «Vincular a Producto Fusion» para buscar el producto por nombre, SKU o GTIN.</span>') + '</div>')
       + '</section>'
+      + triangulacion(d)
       + panelVinculo(ml)
       + '</div></div>'
       + '<section class="panel"><h3>Clasificación</h3><div class="facts"><b>' + esc(d.clasificacion) + '</b>'
@@ -303,6 +304,9 @@
           + (o.es_padre ? '<span class="senal">producto padre — no enlazable</span>' : '')
           + (o.de_familia_gtin ? '<span class="senal gtin">de la familia del GTIN</span>' : '')
           + '</strong>'
+          + (o.ml_con_su_gtin?.length
+            ? '<small class="attrs">En ML su GTIN aparece como: ' + esc(o.ml_con_su_gtin.join(' · ')) + '</small>'
+            : '')
           + (o.atributos ? '<small class="attrs">' + esc(o.atributos) + '</small>' : '')
           + '<small>' + esc(o.fusion_sku)
           + ' · SKU Woo ' + esc(o.sku_woo || 'sin SKU') + ' · Stock Woo ' + esc(o.stock_woo ?? 'sin dato')
@@ -360,6 +364,23 @@
         + ' existe en el título de MercadoLibre pero no está cargada en Woo: es una corrección de catálogo.</div>';
     }
     return html;
+  }
+
+  // Cuando el catálogo Woo no distingue dos variaciones, las OTRAS publicaciones de ML sí lo
+  // hacen: otra publicación con el mismo SELLER_SKU delata un duplicado, y las publicaciones
+  // que llevan el GTIN del producto candidato revelan a qué medida corresponde ese SKU.
+  function triangulacion(d) {
+    const h = d.hermanas_ml || [];
+    const g = d.ml_por_gtin_producto || [];
+    if (!h.length && !g.length) return '';
+    const lista = (items) => items.map((x) => '<span class="attr">' + esc(x.titulo)
+      + ' <span class="muted">(' + esc(x.item_id) + (x.gtin ? ' · GTIN ' + esc(x.gtin) : '') + ')</span></span>').join('');
+    return '<section class="panel"><h3>Otras publicaciones de la misma familia</h3><div class="facts">'
+      + (h.length ? '<b>Reclaman el mismo SELLER_SKU (' + esc(d.publicacion?.seller_sku || '') + '):</b>'
+        + lista(h) + '<span class="muted">Dos publicaciones con el mismo SKU son un duplicado o una medida mal asignada.</span>' : '')
+      + (g.length ? (h.length ? '<br>' : '') + '<b>Llevan el GTIN del producto Woo candidato:</b>' + lista(g)
+        + '<span class="muted">Esto identifica la medida real de ese SKU aunque el catálogo no la tenga cargada.</span>' : '')
+      + '</div></section>';
   }
 
   function vistaPendientes() {
