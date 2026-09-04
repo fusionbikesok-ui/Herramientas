@@ -239,8 +239,12 @@
       + '<div class="facts"><b>' + esc(pub.titulo || 'sin título') + '</b><br>'
       + 'Publicación: <b>' + esc(ml.item_id || '—') + '</b><br>Variación: <b>' + esc(ml.variation_id || 'sin variación') + '</b><br>'
       + 'SELLER_SKU: <b>' + esc(ml.seller_sku || 'ausente') + '</b> ' + (ml.seller_sku_presente ? '' : '<span class="tag critica">sin atributo</span>') + '<br>'
-      + 'GTIN: <b>' + esc(ml.gtin || 'sin GTIN') + '</b><br>Stock informado: ' + stockML(ml.stock) + '<br>'
-      + 'Observado: <b>' + esc(ml.observado_en || 'sin dato') + '</b><br>'
+      + 'GTIN: <b>' + esc(ml.gtin || pub.gtin || 'sin GTIN') + '</b><br>'
+      // Stock y hora de observación salen de la publicación vigente, no de la instantánea de
+      // evidencia: esa guarda identidad, y desde que se le quitaron los campos volátiles
+      // (para que un refresco no reseteara las decisiones) ya no los tiene.
+      + 'Stock informado: ' + stockML(pub.available_quantity ?? ml.stock) + '<br>'
+      + 'Observado: <b>' + esc(pub.actualizado_en || ml.observado_en || 'sin dato') + '</b><br>'
       + '<span class="muted">seller_custom_field: ' + esc(ml.seller_custom_field || 'vacío') + ' — es evidencia auxiliar y nunca da cobertura.</span>'
       + (pub.atributos?.length
         ? '<div class="attrs-bloque"><b>Atributos en MercadoLibre</b>'
@@ -377,7 +381,7 @@
       + ' <span class="muted">(' + esc(x.item_id) + (x.gtin ? ' · GTIN ' + esc(x.gtin) : '') + ')</span></span>').join('');
     return '<section class="panel"><h3>Otras publicaciones de la misma familia</h3><div class="facts">'
       + (h.length ? '<b>Reclaman el mismo SELLER_SKU (' + esc(d.publicacion?.seller_sku || '') + '):</b>'
-        + lista(h) + '<span class="muted">Dos publicaciones con el mismo SKU son un duplicado o una medida mal asignada.</span>' : '')
+        + lista(h) + '<span class="muted">Tener varias publicaciones para el mismo producto es normal: son opciones de compra distintas. Se listan como contexto, no como problema. Sí conviene mirarlas si sus títulos declaran medidas o variantes diferentes entre sí.</span>' : '')
       + (g.length ? (h.length ? '<br>' : '') + '<b>Llevan el GTIN del producto Woo candidato:</b>' + lista(g)
         + '<span class="muted">Esto identifica la medida real de ese SKU aunque el catálogo no la tenga cargada.</span>' : '')
       + '</div></section>';
