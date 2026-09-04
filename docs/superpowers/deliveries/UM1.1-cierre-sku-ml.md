@@ -168,6 +168,28 @@ Verificado contra una copia de la base productiva, no solo con datos sintéticos
 Woo con foto** sin que nadie escriba nada. Comprobado además que las imágenes **cargan**
 (`naturalWidth > 0`), no solo que exista la etiqueta.
 
+## Corrección reportada por el usuario: «¿se guardan las decisiones? me recarga siempre el mismo listado»
+
+**Se guardaban.** Verificado en la base productiva: una decisión `vincular` del operador
+`Jose` (2026-09-04 21:05:06) sobre el caso 24, con su operación encolada en `shadow`
+(`sku_objetivo FB-1732`), el caso en estado `pendiente` y el evento
+`decision_persistida_antes_de_efecto` en el historial.
+
+El fallo era de la pantalla, y tenía dos partes:
+
+1. La cola titulada «Pendientes» pedía **todos** los casos: 1203, de los que 1092 ya estaban
+   verificados. El trabajo real (110) quedaba enterrado.
+2. El orden es por severidad, no por estado, así que un caso recién decidido **no se movía de
+   lugar** y no había ninguna señal de que algo hubiera pasado. En modo `shadow` tampoco hay
+   efecto remoto que se note.
+
+Corregido: la cola lista sólo casos accionables (PM-056) y toda decisión confirma en pantalla
+y avanza al siguiente caso (PM-057). La cabecera informa las tres cifras para que nada quede
+oculto, y los casos con operación encolada siguen visibles en Operaciones.
+
+El E2E lo cubre: verifica el aviso «Decisión guardada», que el caso sale de la cola de trabajo
+(`accionables: 0`) y que **no desaparece del tablero** (`todos: 1`).
+
 ## Blindaje contra regresión silenciosa
 
 `test/invariantes-esquema.test.js` no prueba una feature: impide que vuelvan clases de bug

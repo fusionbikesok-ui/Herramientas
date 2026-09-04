@@ -64,6 +64,7 @@
     .case .mini{width:44px;height:44px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:var(--surface2)}
     .case .mini.vacia{display:grid;place-items:center;color:var(--muted);font-size:.6rem}
     .enlace{display:inline-block;margin-top:.4rem;color:var(--accent)}
+    .aviso{margin-bottom:.85rem;padding:.7rem .85rem;border:1px solid var(--green-bd);border-radius:9px;background:var(--green-bg);color:var(--green)}
     @media(max-width:850px){.foto{width:84px;height:84px}}
     .search-row{display:flex;gap:.5rem}
     .search-row input{flex:1;min-width:0}
@@ -111,7 +112,7 @@
 
   const state = { view: 'pendientes', resumen: null, casos: [], colas: null, productos: [], operaciones: [],
     historial: [], actual: null, detalle: null, error: null,
-    buscando: false, candidatos: null, elegido: null, consulta: '' };
+    buscando: false, candidatos: null, elegido: null, consulta: '', aviso: null };
 
   async function api(path, opt = {}) {
     const r = await fetch('/api/identidad-productos' + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
@@ -165,8 +166,11 @@
 
   function cola() {
     const casos = state.casos;
+    const verif = (state.resumen?.conciliacion?.verificadas ?? 0);
     return '<aside class="card side"><div class="card-head"><strong>Pendientes ML → Fusion</strong>'
-      + '<span class="muted">' + casos.length + ' caso(s)</span></div>'
+      + '<span class="muted">' + casos.length + ' por resolver · '
+      + (state.resumen?.conciliacion?.esperando_operacion ?? 0) + ' esperando operación · '
+      + verif + ' ya verificadas</span></div>'
       + (casos.length ? casos.map((c) => '<button class="case" data-caso="' + c.id + '"'
         + (state.actual === c.id ? ' aria-current="true"' : '') + '>'
         + (c.thumbnail ? '<img class="mini" src="' + esc(c.thumbnail) + '" alt="" loading="lazy">' : '<span class="mini vacia">sin<br>foto</span>')
@@ -307,14 +311,16 @@
     renderHealth(); renderRecon();
     document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.view === state.view)));
     const vistas = { pendientes: vistaPendientes, productos: vistaProductos, operaciones: vistaOperaciones, historial: vistaHistorial };
-    $('#app').innerHTML = (state.error ? '<p class="error">' + esc(state.error) + '</p>' : '') + vistas[state.view]();
+    $('#app').innerHTML = (state.error ? '<p class="error">' + esc(state.error) + '</p>' : '')
+      + (state.aviso ? '<div class="aviso" role="status">' + esc(state.aviso) + '</div>' : '')
+      + vistas[state.view]();
     bind();
   }
 
   async function cargar() {
     try {
       state.error = null;
-      const [resumen, casos] = await Promise.all([api('/resumen'), api('/casos')]);
+      const [resumen, casos] = await Promise.all([api('/resumen'), api('/casos?pendientes=1')]);
       state.resumen = resumen.data; state.casos = casos.data;
       if (state.view === 'productos') state.productos = (await api('/productos')).data;
       if (state.view === 'operaciones') state.operaciones = (await api('/operaciones')).data;
@@ -339,7 +345,11 @@
     try {
       await api(path, { method: opts.method || 'POST', body: JSON.stringify(body) });
       await cargar();
-      if (state.actual) await abrirCaso(state.actual);
+      if (opts.aviso) state.aviso = opts.aviso;
+      // Si el caso salió de la cola de pendientes, no tiene sentido volver a abrirlo.
+      const sigue = state.casos.some((c) => c.id === state.actual);
+      if (state.actual && sigue) await abrirCaso(state.actual);
+      else { state.actual = null; state.detalle = null; render(); }
     } catch (e) {
       if (e.code === 'VERSION_CONFLICT' || e.code === 'EVIDENCE_CONFLICT') {
         alert(e.message + '\n\nSe recarga el caso para que decidas sobre la evidencia actual.');
@@ -361,7 +371,7 @@
   }
 
   function bind() {
-    document.querySelectorAll('[data-caso]').forEach((b) => { b.onclick = () => abrirCaso(Number(b.dataset.caso)); });
+    document.querySelectorAll('[data-caso]').forEach((b) => { b.onclick = () => { state.aviso = null; abrirCaso(Number(b.dataset.caso)); }; });
     document.querySelectorAll('[data-reintentar]').forEach((b) => {
       b.onclick = () => mutar('/operaciones/' + b.dataset.reintentar + '/reintentar', { operation_id: opId() });
     });
@@ -379,7 +389,8 @@
     const exc = $('#excepcion'); if (exc) exc.onclick = () => {
       const motivo = prompt('Motivo de la excepción solo_ml (obligatorio):'); if (!motivo) return;
       const vence = prompt('Vence el (ISO, vacío = sin vencimiento):') || null;
-      mutar('/casos/' + state.detalle.id + '/excepciones', { ...sobre(), motivo, expires_at: vence });
+      mutar('/casos/' + state.detalle.id + '/excepciones', { ...sobre(), motivo, expires_at: vence },
+        { aviso: 'Excepción solo_ml registrada. El caso sale de la cola hasta que venza o se invalide.' });
     };
     const vinc = $('#vincular'); if (vinc) vinc.onclick = () => {
       state.buscando = true; state.candidatos = null; state.elegido = null;
@@ -419,13 +430,22 @@
           alert(e.message + '\n\nSe recarga el caso para que decidas sobre la evidencia actual.');
         } else { alert(e.message); return; }
       }
+      // El caso decidido sale de la cola de trabajo: dejar a la persona mirando el mismo caso
+      // hace parecer que no se guardó nada. Se avisa qué quedó registrado y se pasa al siguiente.
+      const nombre = state.elegido.nombre_canonico; const sku = state.elegido.fusion_sku;
+      const resuelto = state.actual;
       state.buscando = false; state.candidatos = null; state.elegido = null;
-      await cargar(); if (state.actual) await abrirCaso(state.actual);
+      await cargar();
+      const siguiente = state.casos.find((c) => c.id !== resuelto);
+      state.aviso = 'Decisión guardada: vinculado a ' + nombre + ' (' + sku + '). '
+        + (enShadow() ? 'La operación quedó encolada en modo shadow, sin escribir en MercadoLibre.' : 'La operación se está ejecutando.')
+        + (siguiente ? ' Pasamos al siguiente caso.' : '');
+      if (siguiente) await abrirCaso(siguiente.id); else { state.actual = null; state.detalle = null; render(); }
     };
   }
 
   document.querySelectorAll('.tab').forEach((t) => {
-    t.onclick = () => { state.view = t.dataset.view; cargar(); };
+    t.onclick = () => { state.view = t.dataset.view; state.aviso = null; cargar(); };
   });
   $('#reload').onclick = cargar;
   cargar();

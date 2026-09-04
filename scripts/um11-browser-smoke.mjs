@@ -124,6 +124,17 @@ try {
   }, caso.id);
   if (nota.status !== 201 || nota.body.ok !== true) throw Error(`la nota no se guardó: ${JSON.stringify(nota)}`);
 
+  // Accesibilidad sobre la pantalla real, en este ancho. WCAG 2.2 AA es estándar del proyecto.
+  // Se audita el detalle abierto, que es el estado más rico de la pantalla.
+  await page.addScriptTag({ path: axePath });
+  const axe = await page.evaluate(async () => {
+    const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
+    return r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length,
+      target: v.nodes[0]?.target?.join(' ') }));
+  });
+  const graves = axe.filter((v) => v.impact === 'critical' || v.impact === 'serious');
+  if (graves.length) throw Error(`axe: violaciones graves ${JSON.stringify(graves)}`);
+
   // Vínculo manual por el buscador real de la pantalla, no por la API.
   await page.locator('#vincular').click();
   await page.locator('#q-producto').waitFor();
@@ -146,6 +157,17 @@ try {
   // En shadow la operación se persiste pero no se ejecuta contra ML.
   if (trasVinculo.ops[0].estado !== 'shadow') throw Error(`en shadow la operación no debe salir a ML: ${trasVinculo.ops[0].estado}`);
   if (trasVinculo.ops[0].sku_objetivo !== 'FB-9101') throw Error(`SKU objetivo inesperado: ${trasVinculo.ops[0].sku_objetivo}`);
+  // La decisión se guarda Y se nota: el caso sale de la cola de trabajo y hay aviso explícito.
+  // Antes la cola devolvía todo, el caso decidido quedaba en el mismo lugar y parecía que no
+  // se había guardado nada.
+  const avisoTexto = await page.locator('.aviso').innerText();
+  if (!/Decisión guardada/.test(avisoTexto)) throw Error(`sin aviso de decisión guardada: ${avisoTexto}`);
+  const colaTrasDecidir = await page.evaluate(async () => ({
+    accionables: (await (await fetch('/api/identidad-productos/casos?pendientes=1')).json()).data.length,
+    todos: (await (await fetch('/api/identidad-productos/casos')).json()).data.length,
+  }));
+  if (colaTrasDecidir.accionables !== 0) throw Error(`el caso decidido sigue en la cola: ${JSON.stringify(colaTrasDecidir)}`);
+  if (colaTrasDecidir.todos !== 1) throw Error(`el caso no debe desaparecer del tablero: ${JSON.stringify(colaTrasDecidir)}`);
 
   // Las otras tres secciones renderizan.
   for (const [vista, titulo] of [['productos', 'Productos Fusion'], ['operaciones', 'Operaciones'], ['historial', 'Historial']]) {
@@ -155,20 +177,6 @@ try {
   await page.locator('button[data-view="historial"]').click();
   await page.getByText('nota_agregada', { exact: true }).first().waitFor();
 
-  // Accesibilidad sobre la pantalla real, en este ancho. WCAG 2.2 AA es estándar del proyecto.
-  // El caso sigue abierto desde el vínculo; en 390 la cola está oculta detrás del detalle,
-  // así que se vuelve a la pestaña y se audita el detalle tal como queda.
-  await page.locator('button[data-view="pendientes"]').click();
-  await page.getByRole('heading', { name: 'Cubierta 29 rodado test' }).waitFor();
-  await page.addScriptTag({ path: axePath });
-  const axe = await page.evaluate(async () => {
-    const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
-    return r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length,
-      target: v.nodes[0]?.target?.join(' ') }));
-  });
-  const graves = axe.filter((v) => v.impact === 'critical' || v.impact === 'serious');
-  if (graves.length) throw Error(`axe: violaciones graves ${JSON.stringify(graves)}`);
-
   const resumen = await page.evaluate(async () => (await (await fetch('/api/identidad-productos/resumen')).json()).data);
   if (!resumen.conciliacion.exacta) throw Error(`conciliación inexacta: ${JSON.stringify(resumen.conciliacion)}`);
   if (errores.length) throw Error(`errores de navegador/API: ${errores.join(' | ')}`);
@@ -176,7 +184,7 @@ try {
   console.log(JSON.stringify({ ok: true, e2e: 'UM1.1', viewport: width, caso: caso.id,
     conciliacion: resumen.conciliacion, aviso_shadow: avisoShadow, auxiliar_declarado: auxiliar,
     cola_visible: colaVisible, nota: nota.status, vinculo_por_buscador: true, axe_violaciones: axe,
-    foto_https: src.startsWith('https://'), miniaturas_cola: mini, busqueda_precargada: precargado,
+    foto_https: src.startsWith('https://'), miniaturas_cola: mini, busqueda_precargada: precargado, aviso: avisoTexto.slice(0, 60), cola_tras_decidir: colaTrasDecidir,
     operacion: trasVinculo.ops[0].estado }));
   await page.close();
   await browser.close();
