@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Identidad de productos — Fusion Bikes</title>
+  <link rel="stylesheet" href="../lib/theme.css">
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:.7rem;padding:.7rem 1rem;background:var(--surface);border-bottom:1px solid var(--border)}
+    .top h1{margin:0;font-size:1rem;flex:1}
+    .btn,.top a{display:inline-flex;align-items:center;justify-content:center;min-height:var(--tap-min,44px);padding:.52rem .7rem;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font:inherit;text-decoration:none;cursor:pointer}
+    .btn:disabled{cursor:not-allowed;opacity:.55}
+    .btn.primary{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+    .btn.danger{border-color:var(--red-bd);background:var(--red-bg);color:var(--red)}
+    .wrap{max-width:1440px;margin:auto;padding:1rem}
+    .health{display:grid;grid-template-columns:1fr auto;align-items:center;gap:.8rem;padding:.8rem;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:.85rem}
+    .health.bad{border-color:var(--red)}.health.warn{border-color:var(--amber)}.health.ok{border-color:var(--green)}
+    .health strong{display:block}
+    .muted{color:var(--muted);font-size:.88rem}
+    .recon{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.9rem}
+    .stat{flex:1 1 130px;padding:.6rem .7rem;border:1px solid var(--border);border-radius:9px;background:var(--surface)}
+    .stat b{display:block;font-size:1.28rem;line-height:1.25}
+    .stat.exact{border-color:var(--green)}.stat.inexact{border-color:var(--red)}
+    .tabs{display:flex;gap:.45rem;overflow:auto;padding-bottom:.6rem;margin-bottom:.5rem}
+    .tab{white-space:nowrap;background:transparent}
+    .tab[aria-selected="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+    .view{display:grid;grid-template-columns:minmax(275px,32%) 1fr;gap:1rem;align-items:start}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:10px}
+    .side{max-height:72vh;overflow:auto}
+    .card-head{padding:.75rem .85rem;border-bottom:1px solid var(--border)}
+    .case{display:block;width:100%;padding:.75rem .85rem;border:0;border-bottom:1px solid var(--border);background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}
+    .case:hover,.case[aria-current="true"]{background:var(--surface2)}
+    .case strong{display:block;font-size:.92rem;overflow-wrap:anywhere}
+    .case small{display:block;margin-top:.22rem;color:var(--muted)}
+    .tag{display:inline-block;padding:.12rem .45rem;border-radius:99px;background:var(--amber-bg);color:var(--amber);font-size:.72rem;border:1px solid var(--amber-bd)}
+    .tag.critica{background:var(--red-bg);color:var(--red);border-color:var(--red-bd)}
+    .tag.normal{background:var(--surface2);color:var(--muted);border-color:var(--border)}
+    .tag.ok{background:var(--green-bg);color:var(--green);border-color:var(--green-bd)}
+    .detail{padding:1rem;min-height:340px}
+    .detail h2{font-size:1.08rem;margin:.15rem 0 .35rem;overflow-wrap:anywhere}
+    .actionbar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.8rem 0}
+    .panel{padding:.85rem;border:1px solid var(--border);border-radius:9px;background:var(--surface2);margin-bottom:.8rem}
+    .panel h3{margin:.1rem 0 .6rem;font-size:.94rem}
+    .facts{font-size:.88rem;line-height:1.6;overflow-wrap:anywhere}
+    .facts b{color:var(--text)}
+    .notice{padding:.7rem;border-radius:8px;background:var(--amber-bg);border:1px solid var(--amber-bd);font-size:.88rem}
+    .notice.read{background:var(--blue-bg);border-color:var(--blue-bd)}
+    .tablewrap{overflow-x:auto}
+    .table{width:100%;border-collapse:collapse;font-size:.88rem;min-width:520px}
+    .table th,.table td{padding:.6rem;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}
+    .empty{padding:1rem}
+    .error{color:var(--red)}
+    label{display:block;margin:.7rem 0 .25rem;font-size:.88rem}
+    input,select,textarea{width:100%;padding:.6rem;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit}
+    .back{display:none}
+    @media(max-width:850px){
+      .health{grid-template-columns:1fr}
+      .view{grid-template-columns:1fr}
+      .side{max-height:none}
+      .top{padding:.55rem}.wrap{padding:.75rem}
+      /* Un caso a pantalla completa: la cola y el detalle no conviven en móvil. */
+      .view.has-detail .side{display:none}
+      .view:not(.has-detail) .detail-col{display:none}
+      .back{display:inline-flex}
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <a href="/herramientas/home/">← Herramientas</a>
+    <h1>Identidad de productos</h1>
+    <button class="btn" id="reload">Actualizar</button>
+  </header>
+  <main class="wrap">
+    <section id="health" class="health" aria-live="polite"><strong>Cargando estado…</strong></section>
+    <section id="recon" class="recon" aria-label="Conciliación del universo ML"></section>
+    <nav class="tabs" role="tablist" aria-label="Secciones">
+      <button class="btn tab" role="tab" aria-selected="true" data-view="pendientes">Pendientes</button>
+      <button class="btn tab" role="tab" aria-selected="false" data-view="productos">Productos Fusion</button>
+      <button class="btn tab" role="tab" aria-selected="false" data-view="operaciones">Operaciones</button>
+      <button class="btn tab" role="tab" aria-selected="false" data-view="historial">Historial</button>
+    </nav>
+    <section id="app" aria-live="polite"></section>
+  </main>
+  <script>
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const opId = () => (crypto.randomUUID ? crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+
+  const state = { view: 'pendientes', resumen: null, casos: [], colas: null, productos: [], operaciones: [],
+    historial: [], actual: null, detalle: null, error: null };
+
+  async function api(path, opt = {}) {
+    const r = await fetch('/api/identidad-productos' + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw Object.assign(new Error(d.error || 'No se pudo completar la acción'), { code: d.code });
+    return d;
+  }
+
+  // El modo `shadow` no es un detalle interno: decide qué puede hacer la persona, así que
+  // se muestra siempre y deshabilita las acciones que tocarían MercadoLibre.
+  const enShadow = () => (state.resumen?.salud?.modo || 'shadow') === 'shadow';
+
+  function renderHealth() {
+    const s = state.resumen?.salud;
+    const el = $('#health');
+    if (!s) { el.className = 'health'; el.innerHTML = '<strong>Sin estado disponible</strong>'; return; }
+    const clase = s.sano ? 'ok' : s.degradado ? 'warn' : 'bad';
+    const titulo = s.sano ? 'Identidad sana' : s.degradado ? 'Lectura degradada' : 'Requiere atención';
+    el.className = 'health ' + clase;
+    el.innerHTML = '<div><strong>' + esc(titulo) + '</strong>'
+      + '<span class="muted">Urgentes: ' + esc(s.urgentes ?? 0) + ' · Operaciones pendientes: ' + esc(s.operaciones_pendientes ?? 0)
+      + ' · Última lectura confiable: ' + esc(s.ultimo_scan_confiable_en || 'sin lectura confiable') + '</span>'
+      + (s.ultimo_scan_error ? '<span class="muted error">Error de lectura: ' + esc(s.ultimo_scan_error) + '</span>' : '')
+      + '<span class="muted">Una lectura local no confirma MercadoLibre.</span></div>'
+      + '<span class="tag ' + (enShadow() ? '' : 'ok') + '">Modo ' + esc(s.modo || 'shadow') + '</span>';
+  }
+
+  function renderRecon() {
+    const c = state.resumen?.conciliacion;
+    if (!c) { $('#recon').innerHTML = ''; return; }
+    // Gate 2 de UM1.1: total = verificadas + excepciones + urgentes. Se muestra el resultado
+    // de la igualdad, no solo los números, para que un desvío no pase inadvertido.
+    $('#recon').innerHTML = [
+      ['Claves ML activas con stock', c.total, ''],
+      ['Verificadas', c.verificadas, ''],
+      ['Excepciones solo_ml', c.excepciones, ''],
+      ['Urgentes abiertas', c.urgentes, ''],
+      [c.exacta ? 'Universo conciliado' : 'Universo SIN conciliar', c.exacta ? '=' : '≠', c.exacta ? 'exact' : 'inexact'],
+    ].map(([t, v, k]) => '<div class="stat ' + k + '"><b>' + esc(v) + '</b><span class="muted">' + esc(t) + '</span></div>').join('');
+  }
+
+  const sev = (c) => '<span class="tag ' + esc(c.severidad) + '">' + esc(c.severidad) + '</span>';
+
+  function cola() {
+    const casos = state.casos;
+    return '<aside class="card side"><div class="card-head"><strong>Pendientes ML → Fusion</strong>'
+      + '<span class="muted">' + casos.length + ' caso(s)</span></div>'
+      + (casos.length ? casos.map((c) => '<button class="case" data-caso="' + c.id + '"'
+        + (state.actual === c.id ? ' aria-current="true"' : '') + '>' + sev(c)
+        + '<strong>' + esc(c.titulo || c.ml_key) + '</strong><small>'
+        + esc(c.clasificacion) + ' · Stock ML ' + esc(c.available_quantity ?? 'sin dato')
+        + ' · ' + esc(c.estado) + (c.responsable ? ' · ' + esc(c.responsable) : '') + '</small></button>').join('')
+        : '<p class="muted empty">No hay casos pendientes.</p>') + '</aside>';
+  }
+
+  function detalle() {
+    if (!state.actual) return '<section class="card detail detail-col"><h2>Elegí un caso</h2>'
+      + '<p class="muted">Cada caso es una clave ML (publicación + variación). Solo se cubre con SKU y stock verificados contra MercadoLibre, o con una excepción explícita.</p></section>';
+    const d = state.detalle;
+    if (!d) return '<section class="card detail detail-col"><p class="muted">Cargando caso…</p></section>';
+    const ev = d.evidencia?.[d.evidencia.length - 1]?.contenido || {};
+    const ml = ev.ml || {}; const woo = ev.woo;
+    return '<section class="card detail detail-col">'
+      + '<button class="btn back" id="volver">← Volver a la cola</button>'
+      + sev(d) + '<h2>' + esc(ml.clave || d.ml_key) + '</h2>'
+      + '<span class="muted">Caso ' + d.id + ' · ' + esc(d.estado) + ' · Responsable: ' + esc(d.responsable || 'sin asignar')
+      + ' · versión ' + esc(d.expected_version) + '</span>'
+      + (enShadow() ? '<div class="notice read" style="margin-top:.8rem">Modo <b>shadow</b>: se registran decisiones y se encolan operaciones, pero <b>no se escribe en MercadoLibre</b>.</div>' : '')
+      + '<div class="actionbar">'
+      + '<button class="btn" id="tomar">' + (d.responsable ? 'Relevar caso' : 'Tomar caso') + '</button>'
+      + '<button class="btn primary" id="vincular">Vincular a Producto Fusion</button>'
+      + '<button class="btn danger" id="excepcion">Excepción solo_ml</button>'
+      + '<button class="btn" id="nota">Agregar nota</button>'
+      + '</div>'
+      + '<section class="panel"><h3>MercadoLibre · observado</h3><div class="facts">'
+      + 'Publicación: <b>' + esc(ml.item_id || '—') + '</b><br>Variación: <b>' + esc(ml.variation_id || 'sin variación') + '</b><br>'
+      + 'SELLER_SKU: <b>' + esc(ml.seller_sku || 'ausente') + '</b> ' + (ml.seller_sku_presente ? '' : '<span class="tag critica">sin atributo</span>') + '<br>'
+      + 'GTIN: <b>' + esc(ml.gtin || 'sin GTIN') + '</b><br>Stock informado: <b>' + esc(ml.stock ?? 'sin dato') + '</b><br>'
+      + 'Observado: <b>' + esc(ml.observado_en || 'sin dato') + '</b><br>'
+      + '<span class="muted">seller_custom_field: ' + esc(ml.seller_custom_field || 'vacío') + ' — es evidencia auxiliar y nunca da cobertura.</span>'
+      + '</div></section>'
+      + '<section class="panel"><h3>WooCommerce · identidad candidata</h3><div class="facts">'
+      + (woo ? 'Producto Woo: <b>' + esc(woo.id_woo) + '</b><br>SKU: <b>' + esc(woo.sku) + '</b><br>GTIN: <b>' + esc(woo.gtin || 'sin GTIN') + '</b><br>Stock Woo: <b>' + esc(woo.stock ?? 'sin dato') + '</b>'
+        : '<span class="muted">Sin identidad Woo única. Falta catálogo: no es una excepción, es una tarea de alta o corrección.</span>')
+      + '</div></section>'
+      + '<section class="panel"><h3>Clasificación</h3><div class="facts"><b>' + esc(d.clasificacion) + '</b>'
+      + '<br><span class="muted">Huella de evidencia: ' + esc((d.evidencia_fingerprint || '').slice(0, 16)) + '…</span></div></section>'
+      + (d.notas?.length ? '<section class="panel"><h3>Notas</h3>' + d.notas.map((n) => '<div class="facts">' + esc(n.creada_en) + ' · ' + esc(n.creada_por) + ': ' + esc(n.nota) + '</div>').join('') + '</section>' : '')
+      + (d.decisiones?.length ? '<section class="panel"><h3>Decisiones</h3>' + d.decisiones.map((x) => '<div class="facts">' + esc(x.decidida_en) + ' · ' + esc(x.tipo) + ' · ' + esc(x.decidida_por) + (x.explicacion ? ' — ' + esc(x.explicacion) : '') + '</div>').join('') + '</section>' : '')
+      + (d.excepciones?.length ? '<section class="panel"><h3>Excepciones</h3>' + d.excepciones.map((x) => '<div class="facts">' + esc(x.creada_en) + ' · ' + esc(x.motivo) + ' · vence: ' + esc(x.vence_en || 'sin vencimiento') + (x.activa ? '' : ' <span class="tag normal">invalidada</span>') + '</div>').join('') + '</section>' : '')
+      + '</section>';
+  }
+
+  function vistaPendientes() {
+    return '<div class="view' + (state.actual ? ' has-detail' : '') + '">' + cola() + detalle() + '</div>';
+  }
+
+  function vistaProductos() {
+    const p = state.productos;
+    return '<section class="card detail"><h2>Productos Fusion</h2>'
+      + '<p class="muted">Identidad canónica. El <code>fusion_sku</code> se deriva de Woo (<code>FB-{id_woo}</code>) y no se edita.</p>'
+      + (p.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>Fusion SKU</th><th>Nombre</th><th>Estado</th><th>Claves ML activas</th><th>Última verificación ML</th></tr></thead><tbody>'
+        + p.map((x) => '<tr><td><b>' + esc(x.fusion_sku || 'provisional') + '</b></td><td>' + esc(x.nombre_canonico || '—')
+        + '</td><td>' + esc(x.estado) + '</td><td>' + esc(x.identidades_ml_activas) + '</td><td>' + esc(x.ultima_verificacion_ml || 'nunca') + '</td></tr>').join('')
+        + '</tbody></table></div>' : '<p class="muted empty">Todavía no hay productos. El bootstrap desde Woo es parte de UM1.3.</p>')
+      + '</section>';
+  }
+
+  function vistaOperaciones() {
+    const o = state.operaciones;
+    return '<section class="card detail"><h2>Operaciones</h2>'
+      + '<p class="muted">Saga por pasos: stock cero → limpiar SKU → escribir SKU → restaurar stock → verificar. Cada paso se persiste antes del efecto remoto.</p>'
+      + (o.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>#</th><th>Clave ML</th><th>SKU objetivo</th><th>Estado</th><th>Paso</th><th>Intentos</th><th></th></tr></thead><tbody>'
+        + o.map((x) => '<tr><td>' + esc(x.id) + '</td><td>' + esc(x.ml_key) + '</td><td>' + esc(x.sku_objetivo) + '</td><td>'
+        + esc(x.estado) + (x.impacto_hermanas ? ' <span class="tag">hermanas: ' + esc(x.impacto_hermanas) + '</span>' : '')
+        + (x.ultimo_error ? '<br><span class="muted error">' + esc(x.ultimo_error) + '</span>' : '')
+        + '</td><td>' + esc(x.paso_actual) + '</td><td>' + esc(x.intentos) + '</td><td>'
+        + (x.estado === 'intervencion' ? '<button class="btn" data-reintentar="' + x.id + '">Reintentar</button>' : '')
+        + '</td></tr>').join('') + '</tbody></table></div>' : '<p class="muted empty">No hay operaciones registradas.</p>')
+      + '</section>';
+  }
+
+  function vistaHistorial() {
+    const h = state.historial;
+    return '<section class="card detail"><h2>Historial</h2>'
+      + '<p class="muted">Append-only: una corrección agrega eventos y nunca reescribe los anteriores.</p>'
+      + (h.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>Cuándo</th><th>Entidad</th><th>Evento</th><th>Actor</th></tr></thead><tbody>'
+        + h.map((x) => '<tr><td>' + esc(x.creado_en) + '</td><td>' + esc(x.entidad) + ' ' + esc(x.entidad_id) + '</td><td>' + esc(x.evento) + '</td><td>' + esc(x.actor || 'sistema') + '</td></tr>').join('')
+        + '</tbody></table></div>' : '<p class="muted empty">Sin eventos registrados.</p>')
+      + '</section>';
+  }
+
+  function render() {
+    renderHealth(); renderRecon();
+    document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.view === state.view)));
+    const vistas = { pendientes: vistaPendientes, productos: vistaProductos, operaciones: vistaOperaciones, historial: vistaHistorial };
+    $('#app').innerHTML = (state.error ? '<p class="error">' + esc(state.error) + '</p>' : '') + vistas[state.view]();
+    bind();
+  }
+
+  async function cargar() {
+    try {
+      state.error = null;
+      const [resumen, casos] = await Promise.all([api('/resumen'), api('/casos')]);
+      state.resumen = resumen.data; state.casos = casos.data;
+      if (state.view === 'productos') state.productos = (await api('/productos')).data;
+      if (state.view === 'operaciones') state.operaciones = (await api('/operaciones')).data;
+      if (state.view === 'historial') state.historial = (await api('/historial')).data;
+    } catch (e) { state.error = e.message; }
+    render();
+  }
+
+  async function abrirCaso(id) {
+    state.actual = id; state.detalle = null; render();
+    try { state.detalle = (await api('/casos/' + id)).data; } catch (e) { state.error = e.message; }
+    render();
+  }
+
+  // Toda mutación viaja con operation_id, expected_version y evidence_fingerprint: son
+  // obligatorios en el contrato y lo que hace segura la repetición.
+  function sobre() {
+    return { operation_id: opId(), expected_version: state.detalle.expected_version, evidence_fingerprint: state.detalle.evidencia_fingerprint };
+  }
+
+  async function mutar(path, body, opts = {}) {
+    try {
+      await api(path, { method: opts.method || 'POST', body: JSON.stringify(body) });
+      await cargar();
+      if (state.actual) await abrirCaso(state.actual);
+    } catch (e) {
+      if (e.code === 'VERSION_CONFLICT' || e.code === 'EVIDENCE_CONFLICT') {
+        alert(e.message + '\n\nSe recarga el caso para que decidas sobre la evidencia actual.');
+        await cargar(); if (state.actual) await abrirCaso(state.actual);
+        return;
+      }
+      alert(e.message);
+    }
+  }
+
+  function bind() {
+    document.querySelectorAll('[data-caso]').forEach((b) => { b.onclick = () => abrirCaso(Number(b.dataset.caso)); });
+    document.querySelectorAll('[data-reintentar]').forEach((b) => {
+      b.onclick = () => mutar('/operaciones/' + b.dataset.reintentar + '/reintentar', { operation_id: opId() });
+    });
+    const volver = $('#volver'); if (volver) volver.onclick = () => { state.actual = null; state.detalle = null; render(); };
+    const tomar = $('#tomar'); if (tomar) tomar.onclick = () => {
+      const relevo = !!state.detalle.responsable;
+      const motivo = relevo ? prompt('Motivo del relevo (obligatorio):') : '';
+      if (relevo && !motivo) return;
+      mutar('/casos/' + state.detalle.id + (relevo ? '/relevar' : '/tomar'), { ...sobre(), motivo });
+    };
+    const nota = $('#nota'); if (nota) nota.onclick = () => {
+      const texto = prompt('Nota (queda auditada):'); if (!texto) return;
+      mutar('/casos/' + state.detalle.id + '/notas', { operation_id: opId(), nota: texto, expected_version: state.detalle.expected_version, evidence_fingerprint: state.detalle.evidencia_fingerprint });
+    };
+    const exc = $('#excepcion'); if (exc) exc.onclick = () => {
+      const motivo = prompt('Motivo de la excepción solo_ml (obligatorio):'); if (!motivo) return;
+      const vence = prompt('Vence el (ISO, vacío = sin vencimiento):') || null;
+      mutar('/casos/' + state.detalle.id + '/excepciones', { ...sobre(), motivo, expires_at: vence });
+    };
+    const vinc = $('#vincular'); if (vinc) vinc.onclick = async () => {
+      const pid = prompt('ID del Producto Fusion a vincular:'); if (!pid) return;
+      const body = { ...sobre(), tipo: 'vincular', product_id: Number(pid) };
+      try {
+        await api('/casos/' + state.detalle.id + '/decisiones', { method: 'POST', body: JSON.stringify(body) });
+      } catch (e) {
+        // El impacto sobre variaciones hermanas nunca se asume: se muestra y se confirma.
+        if (e.code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED') {
+          if (!confirm('La corrección puede afectar variaciones hermanas de la misma publicación. ¿Confirmás el impacto?')) return;
+          return mutar('/casos/' + state.detalle.id + '/decisiones', { ...body, operation_id: opId(), confirm_sibling_impact: true });
+        }
+        alert(e.message); return;
+      }
+      await cargar(); if (state.actual) await abrirCaso(state.actual);
+    };
+  }
+
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.onclick = () => { state.view = t.dataset.view; cargar(); };
+  });
+  $('#reload').onclick = cargar;
+  cargar();
+  </script>
+</body>
+</html>

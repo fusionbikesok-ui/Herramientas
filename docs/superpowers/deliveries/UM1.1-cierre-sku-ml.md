@@ -57,7 +57,19 @@ Actualizado: 2026-09-04, worktree `/opt/fusionbikes/worktrees/um1-identidad`, ra
   que aparecieron en una corrida intermedia eran `attempt to write a readonly database`,
   contaminación entre corridas, y no se reproducen.
 - Revisión independiente: no ejecutada.
-- E2E 390/768/1440: no ejecutado; todavía no hay pantalla de la herramienta.
+- Superficie web construida: `public/identidad-productos/index.html`, servida en
+  `server.js` y enlazada desde `public/home/index.html`. Alcance UM1.1 (ver PM-036): salud,
+  conciliación, cola ML→Fusion, detalle del caso con evidencia, tomar/relevar, nota,
+  vincular, excepción `solo_ml`, operaciones e historial. `Productos Fusion` es lista de
+  solo lectura hasta UM1.3 y la cola Woo→ML queda para UM1.4.
+- E2E 390/768/1440: `npm run e2e:um11:responsive` — **`ok:true` en los tres anchos**
+  (`scripts/um11-browser-smoke.mjs`, entorno aislado con sqlite temporal y `DISABLE_CRONS`).
+  Verifica salud y modo visibles, conciliación exacta, caso en cola, detalle con
+  `SELLER_SKU` ausente marcado, `seller_custom_field` declarado como no-cobertura, aviso de
+  modo `shadow`, layout de una o dos columnas según ancho, una mutación real (nota, 201) con
+  el sobre `operation_id` + `expected_version` + `evidence_fingerprint`, y el evento
+  `nota_agregada` apareciendo en Historial. Falla si hay `pageerror` o respuesta ≥400.
+- El E2E detectó que el plan no definía el comportamiento en tablet: resuelto en PM-037.
 - Auditoría del universo ML real: no ejecutada; requiere lectura contra ML y el modo sigue
   siendo `shadow`.
 - Canario, rollback real y jornada observada: pendientes externos.
@@ -65,25 +77,24 @@ Actualizado: 2026-09-04, worktree `/opt/fusionbikes/worktrees/um1-identidad`, ra
 ## Checkpoint para el próximo agente
 
 Base: worktree `/opt/fusionbikes/worktrees/um1-identidad`, rama
-`feature/um1-identidad-continuacion`, sobre `6949f02`. `node_modules` es un symlink al del
-checkout principal. No desplegar, no migrar contra `data/fusion.sqlite`, no escribir en ML.
+`feature/um1-identidad-continuacion`. `node_modules` es un symlink al del checkout
+principal. No desplegar, no migrar contra `data/fusion.sqlite`, no escribir en ML.
 
-Verificado y funcionando: el núcleo de UM1.1 (productos, identidades, casos, evidencia,
-excepciones, operaciones) con `npx vitest run test/identidad-productos.test.js` en 15/15,
-incluida la saga zero → clear → write → restore y el pase a intervención al tercer fallo.
+Verificado y funcionando:
 
-Queda a medias:
+- Núcleo UM1.1 y pantalla web. `npx vitest run test/identidad-productos.test.js test/db.test.js test/guardia-ml.test.js test/server.test.js test/modelos-publicacionMl.test.js --no-file-parallelism` — 69/69.
+- `npm run e2e:um11:responsive` — `ok:true` en 390, 768 y 1440.
 
-- No hay superficie web: `routes/identidadProductos.js` expone la API pero falta
-  `/herramientas/identidad-productos/` en `public/`. Sin eso no se puede correr el E2E
-  390/768/1440 que pide el gate 6.
-- La conciliación del universo (gate 2: `total = verificadas + excepciones + urgentes
-  abiertas`) solo está probada con datos sintéticos; falta la auditoría contra el universo ML
-  real, que exige lectura remota.
-- Los gates 3, 4 y 5 tienen cobertura sintética en `test/identidad-productos.test.js` pero no
-  revisión independiente.
+Queda a medias, en orden de valor:
 
-Próxima acción reproducible: correr `npx vitest run test/identidad-productos.test.js`, después
-la regresión de lo tocado alrededor
-(`npx vitest run test/modelos-publicacionMl.test.js test/db.test.js test/guardia-ml.test.js test/server.test.js --no-file-parallelism`),
-y recién entonces construir la pantalla para habilitar el E2E.
+1. **Auditoría contra el universo ML real** (gate 2). Hoy la conciliación solo se probó con
+   datos sintéticos. Exige lectura remota; el modo sigue en `shadow`.
+2. **Vincular pide el ID del Producto Fusion por `prompt()`** en
+   `public/identidad-productos/index.html` (handler `#vincular`). Sirve para el E2E pero no
+   es usable en piso: falta el buscador Woo con nombre, foto, SKU y stock que describe el
+   plan. Es lo primero a construir si se sigue por la pantalla.
+3. **Revisión independiente**: no ejecutada sobre este diff.
+4. Gates externos: canario, rollback real y jornada observada.
+
+Próxima acción reproducible: correr los dos comandos de arriba para confirmar la base, y
+después atacar (1) o (2) según prioridad operativa.

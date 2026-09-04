@@ -1,6 +1,6 @@
 # Registro de decisiones del Plan Maestro
 
-Actualizado: 2026-09-01. Este registro resume decisiones aprobadas; el detalle operativo está en el maestro. Cambiar una decisión exige fecha, responsable, impacto y entregas afectadas.
+Actualizado: 2026-09-04. Este registro resume decisiones aprobadas; el detalle operativo está en el maestro. Cambiar una decisión exige fecha, responsable, impacto y entregas afectadas.
 
 | ID | Decisión vigente | Impacto principal |
 | --- | --- | --- |
@@ -9,8 +9,8 @@ Actualizado: 2026-09-01. Este registro resume decisiones aprobadas; el detalle o
 | PM-003 | Zona operativa `America/Argentina/Buenos_Aires`, formato 24 h y fecha explícita. | Jornada, SLA, auditoría |
 | PM-004 | ML tiene prioridad absoluta. Web tiene máximo normal de preparación 15:00 con calendario de excepciones. El transporte único retira ML, Andreani y Flex; ML/Andreani deben estar listos con 30 min de margen y Flex debe salir como máximo a las 17:00 para permitir el regreso antes del cierre de las 19:00. | E1, E4 |
 | PM-005 | La ola inicial conserva sus necesidades normales; pedidos normales posteriores forman mini-olas y ML urgente puede incorporarse a la ola activa. La reasignación automática de la última unidad queda en E12. | E1, E12 |
-| PM-029 | UM1 urgente separa Guardia ML, Corrección y Consulta. La cobertura válida es publicación+variación con SKU Woo exacto; decisiones históricas sin SKU no cubren. La primera publicación es solo lectura y no escribe ML. | UM1, E1, E11, E12 |
-| PM-030 | Un SKU puede publicar su stock completo en varias claves ML con confirmación de stock compartido. No se promete cero sobreventa: el exceso agregado abre incidente crítico y retiene pedidos según plazo ML, antigüedad y prioridad ML sobre web. | UM1, E11, E12 |
+| PM-029 | **Superada por PM-031 el 2026-09-04.** UM1 urgente separa Guardia ML, Corrección y Consulta. La cobertura válida es publicación+variación con SKU Woo exacto; decisiones históricas sin SKU no cubren. La primera publicación es solo lectura y no escribe ML. | UM1, E1, E11, E12 |
+| PM-030 | **Superada parcialmente por PM-032 el 2026-09-04:** cae la confirmación de stock compartido; el resto sigue vigente. Un SKU puede publicar su stock completo en varias claves ML con confirmación de stock compartido. No se promete cero sobreventa: el exceso agregado abre incidente crítico y retiene pedidos según plazo ML, antigüedad y prioridad ML sobre web. | UM1, E11, E12 |
 | PM-006 | La misma persona puede preparar, fotografiar y aprobar; despacho es otra responsabilidad. | Permisos y auditoría |
 | PM-007 | Una foto cuenta solo tras guardado, validación y procesamiento del servidor. Evidencia se retiene 180 días salvo hold. | E2 |
 | PM-008 | Aprobación, auditoría y encolado de etiqueta interna son atómicos; un job idempotente por paquete. | E2, E3 |
@@ -34,6 +34,15 @@ Actualizado: 2026-09-01. Este registro resume decisiones aprobadas; el detalle o
 | PM-026 | La ola tiene estados `disponible → en búsqueda → en mesa → cerrada`; el pedido tiene estados independientes y una ola cierra solo con unidades asignadas, devueltas, resguardadas o derivadas explícitamente. | E1 |
 | PM-027 | Errores relevantes, reintentos agrupados y correcciones se auditan con actor, hora, antes/después y motivo; los eventos no se borran. | E1, E2 |
 | PM-028 | Sustitución transitoria puede autorizarla el operario con constancia del cliente y motivo; Fusion actualiza el pedido comercial, ML bloquea si no puede reflejarlo y un flag de Admin habilita la transición futura a Ventas. | E1 |
+| PM-031 | UM1 deja de ser «Guardia ML» y pasa a ser el programa de Identidad de productos UM1.1–UM1.6: Matcher, Cobertura y Guardia se **reemplazan** por un núcleo bilateral ML↔Woo con `Producto Fusion` como identidad canónica y `fusion_sku = FB-{id_woo}` no editable. Supera PM-029. La unidad es `item_id + variation_id` y solo cubre con verificación remota de menos de 60 minutos o excepción explícita `solo_ml`. | UM1, E1, E11, E12 |
+| PM-032 | Compartir un SKU entre publicaciones es la operación **normal**, no una excepción: 511 SKUs ya comparten 1176 publicaciones. Cada clave vinculada publica el stock Woo completo y no se pide confirmación de stock compartido. Supera esa parte de PM-030; sigue vigente que no se promete cero sobreventa y que el exceso agregado abre incidente crítico. | UM1, E11, E12 |
+| PM-033 | `seller_custom_field` es evidencia auxiliar y **nunca** cobertura: solo `SELLER_SKU` tiene semántica de identidad. `skuDesdeAtributosMl` dejó de usarlo como fallback. Verificado contra las 21 pruebas de `test/guardia-ml.test.js`: el cambio no rompe Guardia. | UM1 |
+| PM-034 | En esta base `user_version` **no** numera migraciones: es la compuerta de la migración Hito 7 (`user_version < 30`, al final de `openDb`). Ninguna migración nueva puede escribirlo. Subirlo saltea Hito 7, deja la base sin `device_tokens` y tira toda la auth móvil. La idempotencia de cada migración la da su marcador en `_schema_migrations`. `test/identidad-productos.test.js` afirma `user_version === 30` y la presencia de `device_tokens` para que no se rompa en silencio otra vez. | Esquema, E5, E13, UM1 |
+| PM-035 | El trabajo sin commitear de un agente que se queda sin contexto se rescata en un commit propio, atribuido a él y declarado explícitamente como no verificado, antes de tocarlo. Separa lo recibido de lo corregido y permite medir la regresión contra una base limpia en un worktree aparte. | Gobierno, todas |
+| PM-036 | La pantalla de UM1.1 se construye **acotada a UM1.1** (salud, conciliación, cola ML→Fusion, detalle del caso, operaciones, historial) y no espera a la herramienta unificada de UM1.5. Motivo: el gate 6 de UM1.1 exige E2E 390/768/1440 y sin superficie no hay nada que probar. `Productos Fusion` queda como lista de solo lectura hasta UM1.3, y la cola Woo→ML hasta UM1.4. | UM1.1, UM1.3–UM1.5 |
+| PM-037 | Lista+detalle solo por encima de 850 px. En 390 **y 768** el caso ocupa la pantalla completa con botón de volver: a 768 la comparación ML↔Woo en dos columnas queda ilegible. Fija la ambigüedad del plan, que decía «PC lista+detalle, móvil pantalla completa» sin definir la tablet, y mantiene el mismo umbral que el resto de las pantallas de Herramientas. | UM1.1, UM1.5 |
+| PM-038 | El modo (`shadow`/`enforced`) se muestra siempre en pantalla y el detalle avisa explícitamente que no se escribe en ML. No es un detalle interno: decide qué puede hacer la persona, y ocultarlo llevaría a creer que una decisión ya tuvo efecto remoto. | UM1.1, UM1.6 |
+| PM-039 | La conciliación del gate 2 se muestra como **resultado de la igualdad** (`total = verificadas + excepciones + urgentes`), no solo como cuatro números sueltos, para que un desvío no pase inadvertido a simple vista. | UM1.1 |
 
 ## Pendientes que no deben suponerse
 

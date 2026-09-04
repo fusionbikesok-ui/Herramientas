@@ -344,6 +344,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/guardia-ml', guardiaMlRouter(db, syncCfg));
   app.use('/api/identidad-productos', identidadProductosRouter(db));
   app.use('/guardia-ml', express.static(path.join(__dirname, 'public/guardia-ml')));
+  app.use('/identidad-productos', express.static(path.join(__dirname, 'public/identidad-productos')));
   // Matcher unificado, entrega 1 (2026-08-14): Cobertura dejó de ser una pantalla propia,
   // pasó a ser la dirección Woo→ML del Matcher. `/cobertura` no puede dar 404 (puede haber
   // accesos directos guardados) — redirige con `?aviso=unificado` para que el frontend del

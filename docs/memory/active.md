@@ -35,6 +35,20 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 - Auditoría de webhooks: Woo `/api/woo/webhook/order` y ML `/api/ml/notificacion` tienen garantías distintas; Woo dispara trabajo en background sin intención durable previa al ACK y ML deja varios topics en `audit-only`. El plan maestro incorpora en E6/E11 un contrato común, cola durable, reconciliación por entidad, matriz de cobertura y pruebas de crash/duplicado/fuera de orden.
 
+## UM1 — Identidad de productos (2026-09-04)
+
+- UM1 dejó de ser «Guardia ML»: es el programa de Identidad de productos UM1.1–UM1.6 (PM-031).
+  Especificación en `docs/superpowers/plans/2026-09-04-identidad-productos.md`, sección 18.1 del
+  maestro y fichas UM1.1–UM1.6. Reemplaza Matcher/Cobertura/Guardia; no los arregla.
+- UM1.1 (bloqueante) está en `desarrollo` en el worktree
+  `/opt/fusionbikes/worktrees/um1-identidad`, rama `feature/um1-identidad-continuacion`.
+  Núcleo + pantalla web con 69/69 en tests y E2E 390/768/1440 verde. Modo `shadow`: no escribe ML.
+- Pendiente para candidata: auditoría contra el universo ML real, buscador Woo en la pantalla
+  (hoy el vínculo pide el ID por `prompt`), revisión independiente, canario y jornada observada.
+- `user_version` no numera migraciones: es la compuerta de Hito 7 (PM-034). Ninguna migración
+  nueva puede escribirlo o la base queda sin `device_tokens` y cae la auth móvil.
+- Cada avance sobre UM1 actualiza en el mismo commit estado, evidencia, handoff y decisiones.
+
 ## Reglas inmediatas
 
 - No declarar terminada una entrega por existir código o numeración previa.

@@ -105,6 +105,15 @@ que el código:**
    otro agente pueda retomar sin leer esta conversación. Debe decir: base y worktree, qué quedó
    funcionando y verificado, **qué quedó a medias y en qué archivo/línea**, y cuál es la próxima
    acción reproducible.
+4. **Decisiones**: toda decisión que otro agente podría revertir por no conocer su motivo se
+   registra en `/opt/fusionbikes/herramientas/docs/superpowers/decisions/plan-maestro-decisions.md`
+   con ID `PM-NNN`, decisión vigente e impacto. Entran tanto las decisiones de producto como las
+   técnicas no obvias: por qué una alternativa razonable quedó descartada, qué invariante protege
+   una línea que parece inofensiva, y qué decisión anterior queda superada. Si una decisión nueva
+   contradice una vigente, no se reescribe la vieja en silencio: se marca como superada, con fecha
+   y quién la superó. Una decisión que solo vive en un comentario de código o en el mensaje de un
+   commit **no** cuenta como registrada: el comentario explica el código, el registro explica el
+   programa.
 
 Un avance sin estado, evidencia y handoff actualizados se trata como trabajo no entregado: el
 siguiente agente lo re-verifica desde cero. Si una sesión se agota a mitad de una subentrega, el
