@@ -142,3 +142,40 @@ describe('worker durable de integration_jobs', () => {
     db.close();
   });
 });
+
+describe('proyección del topic `items` (§15 del plan: dejaba la decisión abierta)', () => {
+  it('un aviso de items crea un job que proyecta, no uno audit-only', () => {
+    const db = openDb(':memory:');
+    const r = registrarWebhookMl(db, { topic: 'items', resource: '/items/MLA123', user_id: '9', sent: '2026-09-05T18:00:00Z' });
+    expect(db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(r.eventId).job_type).toBe('item.project');
+    db.close();
+  });
+
+  it('un topic sin proyección definida sigue siendo audit-only', () => {
+    const db = openDb(':memory:');
+    const r = registrarWebhookMl(db, { topic: 'shipments', resource: '/shipments/1', user_id: '9', sent: '2026-09-05T18:00:00Z' });
+    expect(db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(r.eventId).job_type).toBe('webhook.audit');
+    db.close();
+  });
+
+  it('un resource de items malformado NO crea un job de proyección', () => {
+    const db = openDb(':memory:');
+    const r = registrarWebhookMl(db, { topic: 'items', resource: '/items/', user_id: '9', sent: '2026-09-05T18:00:00Z' });
+    expect(db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(r.eventId).job_type).toBe('webhook.audit');
+    db.close();
+  });
+
+  // La cuenta ya fue bloqueada una vez por exceso de llamadas: un aviso sobre un ítem que se
+  // acaba de refrescar no puede gastar otra. ML manda ~2,6 avisos por ítem (medido).
+  it('no llama a ML si el cache del ítem se refrescó recién', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en)
+      VALUES ('MLA9|','MLA9','','Fresco','active',?)`).run(new Date().toISOString());
+    const r = registrarWebhookMl(db, { topic: 'items', resource: '/items/MLA9', user_id: '9', sent: '2026-09-05T18:00:00Z' });
+    mlFetch.mockClear();
+    await procesarIntegrationJobs(db, { mlCfg: { clientId: 'c', clientSecret: 's', userId: '9' } });
+    expect(mlFetch).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT status FROM integration_jobs WHERE event_id=?').get(r.eventId).status).toBe('completed');
+    db.close();
+  });
+});
