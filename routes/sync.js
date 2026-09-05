@@ -157,10 +157,18 @@ export function titulosCompatibles(tituloMl, nombreWc) {
 }
 
 export function logSync(db, { direccion, clave, sku, cantAnterior, cantNueva, estado, error, intentos = 0 }) {
-  db.prepare(`
-    INSERT INTO sync_log (direccion, clave, sku, cant_anterior, cant_nueva, estado, error, intentos, creado_en, actualizado_en)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(direccion, clave ?? null, sku ?? null, cantAnterior ?? null, cantNueva ?? null, estado, error ?? null, intentos, now(), now());
+  try {
+    db.prepare(`
+      INSERT INTO sync_log (direccion, clave, sku, cant_anterior, cant_nueva, estado, error, intentos, creado_en, actualizado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(direccion, clave ?? null, sku ?? null, cantAnterior ?? null, cantNueva ?? null, estado, error ?? null, intentos, now(), now());
+  } catch (e) {
+    // Si la base está cerrada (ej: durante fire-and-forget tras terminar tests), ignorar el error.
+    // En producción, el DB estará abierto mientras la app corre.
+    if (!/not open|database is locked/i.test(e.message ?? '')) {
+      throw e;
+    }
+  }
 }
 
 function mlCfgOk(cfg) {

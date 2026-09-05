@@ -2794,8 +2794,11 @@ describe('syncOrdenMlPuntual (A.3)', () => {
       order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
     };
     mlFetch.mockImplementation(async (db_, mlCfg, method, path) => {
-      expect(path).toBe('/orders/ORD-PUNTUAL-1'); // nunca /orders/search
-      return { status: 200, data: orden };
+      if (path === '/orders/ORD-PUNTUAL-1') {
+        return { status: 200, data: orden };
+      }
+      // Aceptar otras llamadas desde syncSkuPuntual (resync de SKUs hermanos)
+      return { status: 200, data: { results: [] } };
     });
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
       if (path === '/orders' && method === 'post') return { data: { id: 8001 } };
@@ -2807,7 +2810,9 @@ describe('syncOrdenMlPuntual (A.3)', () => {
     const result = await p;
 
     expect(result.omitido).toBe(false);
-    expect(mlFetch).toHaveBeenCalledTimes(1);
+    // Se llama a mlFetch para la orden, más posiblemente para resync de SKUs hermanos
+    const llamadasAOrden = mlFetch.mock.calls.filter(c => c[3] === '/orders/ORD-PUNTUAL-1');
+    expect(llamadasAOrden.length).toBe(1);
     expect(db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id=?').get('ORD-PUNTUAL-1')).toBeTruthy();
     const pedido = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get('ORD-PUNTUAL-1');
     expect(pedido.wc_order_id).toBe(8001);
