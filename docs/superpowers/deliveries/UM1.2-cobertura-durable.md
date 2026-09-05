@@ -16,6 +16,15 @@ Impedir que reaparezca cobertura insegura mediante eventos durables ML/Woo, rele
 - Tras proyectar el catálogo se reaudita localmente la identidad para volver visible un SKU Woo
   que dejó de existir. No hay escrituras hacia Woo ni ML.
 
+### Despliegue y evidencia — 2026-09-05
+
+- PM2 reiniciado con `ac99f54`.
+- Webhooks Woo activos: `product.created` (id 8), `product.updated` (id 9) y
+  `product.deleted` (id 10), todos dirigidos a
+  `https://herramientas.fusionbikes.com.ar/api/woo/webhook/product`.
+- Entrega HMAC real `product.updated` del producto 1732: persistida antes de responder y
+  completada por `catalog.woo_product_sync`; releyó el padre y sus cuatro variaciones vigentes.
+
 ## Gates
 
 - Evento perdido, duplicado y fuera de orden convergen mediante scan.

@@ -44,7 +44,7 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - UM1 dejó de ser «Guardia ML»: es el programa de Identidad de productos UM1.1–UM1.6 (PM-031).
   Especificación en `docs/superpowers/plans/2026-09-04-identidad-productos.md`, sección 18.1 del
   maestro y fichas UM1.1–UM1.6. Reemplaza Matcher/Cobertura/Guardia; no los arregla.
-- Producción sirve `f2ddb22` (merge `a0a6b6d` más la actualización de canario); el camino directo
+- Producción sirve `ac99f54` (incluye el webhook durable de catálogo Woo); el camino directo
   sin cero está desplegado y observado.
 - El canario 1 completado no vuelve a la cola cuando únicamente aparece una contradicción de
   GTIN: conserva `verificado` si ML mantiene el mismo SKU y Producto Fusion; el conflicto queda
@@ -69,6 +69,9 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   En el primer tick se tomaron dos operaciones antiguas y ambas fueron a `intervencion` por el
   umbral de 15 minutos; no hubo fallo remoto. Backups: `data/fusion.sqlite.bak-um11-retirar-
   canario-20260905T010521Z` y `data/fusion.sqlite.bak-um11-habilitar-general-20260905T010721Z`.
+- Webhook durable de catálogo Woo desplegado y configurado el 2026-09-05: suscripciones activas
+  para crear, actualizar y borrar; una entrega firmada real para el producto 1732 completó el
+  job `catalog.woo_product_sync` y releyó padre + variaciones. No escribe Woo ni ML.
 - `user_version` no numera migraciones: es la compuerta de Hito 7 (PM-034). Ninguna migración
   nueva puede escribirlo o la base queda sin `device_tokens` y cae la auth móvil.
 - Cada avance sobre UM1 actualiza en el mismo commit estado, evidencia, handoff y decisiones.
