@@ -554,6 +554,9 @@ describe('UM1 identidad de productos', () => {
     app.use((req, _res, next) => { req.user = { username: 'lector', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'read' }] }; next(); });
     app.use('/api/identidad-productos', identidadProductosRouter(db));
     expect((await request(app).get('/api/identidad-productos/resumen')).body.data).toHaveProperty('salud.modo', 'shadow');
+    // El resumen expone los conflictos de bolsa compartida: es un riesgo persistente que hay
+    // que ver aunque hoy no dé síntoma, y no una tarea de la cola.
+    expect((await request(app).get('/api/identidad-productos/resumen')).body.data).toHaveProperty('conflictos_bolsa');
     expect((await request(app).get(`/api/identidad-productos/casos/${caso.id}`)).body.data).toHaveProperty('evidencia');
     const envelope = { operation_id: 'note-1', expected_version: caso.expected_version,
       evidence_fingerprint: caso.evidencia_fingerprint, nota: 'Revisar etiqueta física' };

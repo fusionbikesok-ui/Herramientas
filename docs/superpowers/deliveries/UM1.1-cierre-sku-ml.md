@@ -599,3 +599,26 @@ del detector: encuentra el conflicto latente, no sólo el que ya está fallando.
   decisión de Ventas: son productos distintos que ML agrupó.
 - El primer refresco tras desplegar poblará `user_product_id` de forma natural; no hace falta
   backfill.
+
+### El conflicto de bolsa compartida en la pantalla — 2026-09-05
+
+`GET /api/identidad-productos/resumen` expone `conflictos_bolsa`, y la pantalla lo muestra como
+aviso crítico debajo de la línea de conciliación — no en la cola. No es una tarea de identidad
+que se resuelva decidiendo: son dos artículos que ML agrupó como uno, y el aviso lo dice
+explícitamente («no se arregla desde acá»).
+
+Se muestra **aunque hoy no dé síntoma**, que es lo que lo hace útil: el par de mazas
+Boost 15×110 / estándar 15×100 tenía las cantidades coincidiendo por casualidad y por eso nunca
+apareció en ningún log, con una sola unidad real y las dos publicaciones ofreciéndola.
+
+Cubierto por el smoke: el fixture incluye un par que comparte `user_product_id` apuntando a
+productos distintos, y se afirma que el aviso nombra los dos SKU y la bolsa.
+
+```
+npm run e2e:um11:responsive → ok:true en 390/768/1440, "axe_violaciones":[] en los tres
+npx vitest run test/identidad-productos.test.js test/modelos-publicacionMl.test.js test/guardia-ml.test.js
+```
+
+De paso, una aserción del smoke que contaba el total de casos (`todos !== 1`) pasa a afirmar
+sobre **el caso decidido**: el total depende del tamaño del fixture y se rompía al agregar
+cualquier escenario nuevo, sin que hubiera cambiado el comportamiento que ese caso fija.

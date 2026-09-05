@@ -56,6 +56,24 @@ try {
      available_quantity,thumbnail,atributos_json,actualizado_en)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run('MLA-UM11|VAR-9', 'MLA-UM11', 'VAR-9', 'Cubierta 29 rodado test', 'active', '', 0, 'LEGACY-CUSTOM', 5, 'https://img.ml/x.jpg', '[]', now);
+  // Dos publicaciones que comparten una misma bolsa de stock de ML (`user_product_id`) pero
+  // apuntan a productos Woo distintos: ML las trata como un solo producto, así que hay una
+  // sola cantidad para las dos y el sync se la pisa en cada corrida. En producción resultaron
+  // ser artículos genuinamente diferentes (maza 28H vs 32H, cadena vs OEM, maza Boost vs
+  // estándar). Va en el fixture para que el aviso de la pantalla quede cubierto.
+  for (const [idWoo, sku, clave, item] of [
+    [9201, 'FB-9201', 'MLA-BOLSA-A|', 'MLA-BOLSA-A'],
+    [9202, 'FB-9202', 'MLA-BOLSA-B|', 'MLA-BOLSA-B'],
+  ]) {
+    db.prepare('INSERT INTO catalogo_cache(id_woo,nombre,sku,tipo,stock,img,actualizado_en) VALUES(?,?,?,?,?,?,?)')
+      .run(idWoo, 'Maza test ' + sku, sku, 'simple', 1, 'https://img.woo/m.jpg', now);
+    db.prepare(`INSERT INTO ml_publicaciones_cache
+      (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,seller_custom_field,
+       available_quantity,thumbnail,atributos_json,user_product_id,actualizado_en)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(clave, item, '', 'Maza test ' + sku, 'active', sku, 1, null, 1, 'https://img.ml/m.jpg', '[]', 'MLAU-BOLSA-COMPARTIDA', now);
+  }
+
   bootstrapProductosFusion(db, 'e2e');
   auditarIdentidadProductos(db, 'e2e', { lecturaConfiable: true });
   const caso = db.prepare("SELECT id,estado FROM identidad_casos WHERE ml_key='MLA-UM11|VAR-9'").get();
@@ -87,6 +105,15 @@ try {
   const lineaRecon = await page.locator('#recon .ui-resumen').innerText();
   for (const parte of ['activas con stock', 'verificadas', 'excepciones', 'urgentes']) {
     if (!lineaRecon.includes(parte)) throw Error(`el resumen de conciliación no dice "${parte}": ${lineaRecon}`);
+  }
+
+  // El aviso de bolsa compartida tiene que estar visible: es un riesgo persistente, no una
+  // tarea de la cola, y se muestra aunque las cantidades coincidan hoy.
+  const avisoBolsa = await page.locator('.ui-aviso--critico').filter({ hasText: 'bolsa de stock' }).first();
+  await avisoBolsa.waitFor();
+  const textoBolsa = await avisoBolsa.innerText();
+  for (const esperado of ['FB-9201', 'FB-9202', 'MLAU-BOLSA-COMPARTIDA']) {
+    if (!textoBolsa.includes(esperado)) throw Error(`el aviso de bolsa compartida no menciona ${esperado}: ${textoBolsa}`);
   }
 
   // El caso está en la cola y se abre.
@@ -167,12 +194,22 @@ try {
   // se había guardado nada.
   const avisoTexto = await page.locator('.aviso').innerText();
   if (!/Decisión guardada/.test(avisoTexto)) throw Error(`sin aviso de decisión guardada: ${avisoTexto}`);
-  const colaTrasDecidir = await page.evaluate(async () => ({
-    accionables: (await (await fetch('/api/identidad-productos/casos?pendientes=1')).json()).data.length,
-    todos: (await (await fetch('/api/identidad-productos/casos')).json()).data.length,
-  }));
-  if (colaTrasDecidir.accionables !== 0) throw Error(`el caso decidido sigue en la cola: ${JSON.stringify(colaTrasDecidir)}`);
-  if (colaTrasDecidir.todos !== 1) throw Error(`el caso no debe desaparecer del tablero: ${JSON.stringify(colaTrasDecidir)}`);
+  // Se afirma sobre EL caso decidido, no sobre el total: el total depende del tamaño del
+  // fixture y una aserción así se rompe cada vez que se agrega un escenario nuevo, sin que
+  // haya cambiado nada del comportamiento que este caso quiere fijar.
+  const colaTrasDecidir = await page.evaluate(async () => {
+    const accionables = (await (await fetch('/api/identidad-productos/casos?pendientes=1')).json()).data;
+    const todos = (await (await fetch('/api/identidad-productos/casos')).json()).data;
+    const clave = 'MLA-UM11|VAR-9';
+    return {
+      accionables: accionables.length,
+      decidido_sigue_accionable: accionables.some((c) => c.ml_key === clave),
+      decidido_en_tablero: todos.some((c) => c.ml_key === clave),
+      todos: todos.length,
+    };
+  });
+  if (colaTrasDecidir.decidido_sigue_accionable) throw Error(`el caso decidido sigue en la cola de trabajo: ${JSON.stringify(colaTrasDecidir)}`);
+  if (!colaTrasDecidir.decidido_en_tablero) throw Error(`el caso no debe desaparecer del tablero: ${JSON.stringify(colaTrasDecidir)}`);
 
   // Las otras tres secciones renderizan.
   for (const [vista, titulo] of [['productos', 'Productos Fusion'], ['operaciones', 'Operaciones'], ['historial', 'Historial']]) {
@@ -182,6 +219,7 @@ try {
   await page.locator('button[data-view="historial"]').click();
   await page.getByText('nota_agregada', { exact: true }).first().waitFor();
 
+  if (process.env.UM11_SHOT) await page.screenshot({ path: process.env.UM11_SHOT, fullPage: false });
   const resumen = await page.evaluate(async () => (await (await fetch('/api/identidad-productos/resumen')).json()).data);
   if (!resumen.conciliacion.exacta) throw Error(`conciliación inexacta: ${JSON.stringify(resumen.conciliacion)}`);
   if (errores.length) throw Error(`errores de navegador/API: ${errores.join(' | ')}`);

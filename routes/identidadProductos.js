@@ -17,6 +17,7 @@ import {
   obtenerOperacionIdentidad,
   confirmarImpactoIdentidad,
   reintentarOperacionIdentidad,
+  conflictosDeBolsaCompartida,
 } from '../lib/identidadProductos.js';
 
 const actor = (req) => req.user?.username || 'sistema';
@@ -50,7 +51,13 @@ export function identidadProductosRouter(db) {
     const colas = listarColasIdentidad(db);
     // Misma función que usa la auditoría: resumen y gate 2 no pueden divergir.
     const c = conciliacionIdentidad(db);
-    return res.json({ ok: true, data: { salud, conciliacion: { ...c, exacta: c.conciliado }, colas: { ml_to_fusion: colas.ml_to_fusion.length, woo_to_ml: colas.woo_to_ml.length } } });
+    // Dos publicaciones que comparten una bolsa de stock de ML apuntando a productos distintos
+    // se pisan la cantidad para siempre y una vende sin existencia. No es un caso de la cola:
+    // es un riesgo persistente que hay que ver aunque hoy no dé síntoma.
+    const conflictosBolsa = conflictosDeBolsaCompartida(db);
+    return res.json({ ok: true, data: { salud, conciliacion: { ...c, exacta: c.conciliado },
+      conflictos_bolsa: conflictosBolsa,
+      colas: { ml_to_fusion: colas.ml_to_fusion.length, woo_to_ml: colas.woo_to_ml.length } } });
   });
   router.get('/casos', exigir(), (req, res) => res.json({ ok: true, data: listarCasosIdentidad(db, req.query) }));
   router.get('/casos/:id', exigir(), (req, res) => {

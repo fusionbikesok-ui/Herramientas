@@ -164,6 +164,35 @@
       + '<span class="ui-chip ' + (enShadow() ? 'ui-chip--urgente' : 'ui-chip--ok') + '">Modo ' + esc(s.modo || 'shadow') + '</span>';
   }
 
+  /**
+   * Publicaciones que comparten una misma bolsa de stock de MercadoLibre apuntando a productos
+   * distintos. No va en la cola porque no es una tarea de identidad que se resuelva decidiendo:
+   * son dos artículos que ML agrupó como uno, y mientras siga así el sync les pisa la cantidad
+   * en cada corrida y una de las dos vende sin existencia.
+   *
+   * Se muestra aunque hoy no dé síntoma: el par de mazas Boost 15×110 / estándar 15×100 tenía
+   * las cantidades coincidiendo por casualidad y por eso nunca apareció en ningún log, con una
+   * sola unidad real y las dos publicaciones ofreciéndola.
+   */
+  function bloqueBolsaCompartida() {
+    const conflictos = state.resumen?.conflictos_bolsa || [];
+    if (!conflictos.length) return '';
+    const filas = conflictos.map(function (x) {
+      const skus = String(x.skus || '').split(',').filter(Boolean);
+      const claves = String(x.claves || '').split(',').filter(Boolean);
+      return '<li>' + skus.map(function (k) { return '<span class="ui-id">' + esc(k) + '</span>'; }).join(' y ')
+        + ' <span class="ui-label">comparten</span> <span class="ui-id">' + esc(x.user_product_id) + '</span>'
+        + '<br><span class="ui-label">' + esc(claves.join(' · ')) + '</span></li>';
+    }).join('');
+    return '<div class="ui-aviso ui-aviso--critico" style="margin-top:.6rem">'
+      + '<b>' + (conflictos.length === 1 ? '1 par de publicaciones comparte' : conflictos.length + ' pares de publicaciones comparten')
+      + ' una misma bolsa de stock en MercadoLibre apuntando a productos distintos.</b>'
+      + '<br>ML los trata como un solo producto, así que hay una sola cantidad para los dos: el sync se la pisa '
+      + 'en cada corrida y uno de los dos queda ofreciendo stock que no tiene. No se arregla desde acá — hay que '
+      + 'separarlos en MercadoLibre o corregir el vínculo del que esté mal.'
+      + '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' + filas + '</ul></div>';
+  }
+
   function renderRecon() {
     const c = state.resumen?.conciliacion;
     if (!c) { $('#recon').innerHTML = ''; return; }
@@ -181,6 +210,7 @@
     ];
     if (!c.exacta) partes.push('<b class="dato-critico">universo SIN conciliar</b>');
     $('#recon').innerHTML = '<span class="ui-resumen">' + partes.join(' · ') + '</span>'
+      + bloqueBolsaCompartida()
       // Una observación anterior a la 082 no se puede clasificar. Si se contara como urgente
       // fabricaría un backlog falso del tamaño del universo entero, así que va aparte y con
       // tratamiento fuerte: es lo único de este bloque que exige una acción.
