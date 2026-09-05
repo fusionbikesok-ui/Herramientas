@@ -191,6 +191,77 @@ describe('UM1 identidad de productos', () => {
     expect(tercer.operacion.intentos).toBe(3);
   });
 
+  it('no reabre una identidad completada si aparece un GTIN contradictorio, pero sí si desaparece el SKU verificado', async () => {
+    woo(db, { id: 111, sku: 'FB-111', gtin: '4006381333931', stock: 5 });
+    woo(db, { id: 112, sku: 'FB-112', gtin: '036000291452', stock: 5 });
+    ml(db, { clave: 'MLA111|', sku: null, gtin: '4006381333931', stock: 5 });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    let caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=111').get();
+    const creada = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'saga-gtin-posterior', expected_version: caso.expected_version,
+      evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+    const remoto = { seller_sku: '', stock: 5 };
+    const adapter = {
+      setStock: vi.fn(), clearSku: vi.fn(),
+      writeSku: vi.fn(async (_key, sku) => { remoto.seller_sku = sku; return { ok: true }; }),
+      read: vi.fn(async () => ({ ...remoto, observed_at: new Date().toISOString() })),
+    };
+    for (let i = 0; i < 5; i++) {
+      const r = await procesarPasoOperacionIdentidad(db, creada.operacion.id, adapter, { allowRemoteWrites: true });
+      expect(r.ok).toBe(true);
+      if (db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(creada.operacion.id).estado === 'completada') break;
+    }
+
+    // Simula el refresco posterior del canario: el SKU escrito sigue correcto, pero ML
+    // publica ahora un GTIN válido que pertenece inequívocamente a otro producto Woo.
+    db.prepare(`UPDATE ml_publicaciones_cache SET seller_sku='FB-111',seller_sku_presente=1,
+      gtin='036000291452',actualizado_en=? WHERE clave='MLA111|'`).run(ISO);
+    // Primero persiste la nueva clasificación/huella; después reproduce el estado exacto que
+    // dejó el bug ya desplegado: urgente con esa misma evidencia y sin evento de recuperación.
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    db.prepare("DELETE FROM identidad_historial WHERE entidad_tipo='caso' AND entidad_id=? AND evento='gtin_contradictorio_post_verificacion'").run(caso.id);
+    db.prepare("UPDATE identidad_casos SET estado='urgente' WHERE id=?").run(caso.id);
+    const versionUrgente = caso.expected_version;
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    expect(caso).toMatchObject({ estado: 'verificado', clasificacion: 'gtin_contradictorio', producto_id: producto.id });
+    expect(caso.expected_version).toBe(versionUrgente + 1);
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE entidad_tipo='caso' AND entidad_id=? AND evento='gtin_contradictorio_post_verificacion'").get(caso.id).n).toBe(1);
+    expect(listarColasIdentidad(db).ml_to_fusion.some((fila) => fila.id === caso.id)).toBe(false);
+
+    // El siguiente scan trae la misma evidencia y ya no entra por `cambio`; debe conservar
+    // igual el estado y no duplicar el evento de reclasificación.
+    const versionRecuperada = caso.expected_version;
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    expect(caso).toMatchObject({ estado: 'verificado', clasificacion: 'gtin_contradictorio' });
+    expect(caso.expected_version).toBe(versionRecuperada);
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE entidad_tipo='caso' AND entidad_id=? AND evento='gtin_contradictorio_post_verificacion'").get(caso.id).n).toBe(1);
+
+    // Una operación posterior manda: la completada histórica no puede pisar trabajo nuevo.
+    const opCompletada = db.prepare('SELECT * FROM identidad_operaciones WHERE id=?').get(creada.operacion.id);
+    const opPosterior = db.prepare(`INSERT INTO identidad_operaciones
+      (operation_id,caso_id,decision_id,producto_id,ml_key,sku_objetivo,stock_objetivo,
+       estado,paso_actual,iniciada_en,actualizada_en)
+      VALUES ('saga-posterior',?,?,?,?,?,?,'shadow','zero',?,?)`).run(caso.id,
+        opCompletada.decision_id, producto.id, 'MLA111|', 'FB-111', 5, ISO, ISO).lastInsertRowid;
+    db.prepare("UPDATE identidad_casos SET estado='pendiente' WHERE id=?").run(caso.id);
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    expect(db.prepare('SELECT estado FROM identidad_casos WHERE id=?').get(caso.id).estado).toBe('pendiente');
+    db.prepare('DELETE FROM identidad_operaciones WHERE id=?').run(opPosterior);
+    db.prepare("UPDATE identidad_casos SET estado='verificado' WHERE id=?").run(caso.id);
+
+    // La protección es estrecha: si el SELLER_SKU verificado desaparece, vuelve a ser una
+    // urgencia real aunque el GTIN todavía sugiera el mismo Producto Fusion.
+    db.prepare(`UPDATE ml_publicaciones_cache SET seller_sku=NULL,seller_sku_presente=0,
+      gtin='4006381333931',actualizado_en=? WHERE clave='MLA111|'`).run(ISO);
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    expect(caso).toMatchObject({ estado: 'urgente', clasificacion: 'sku_ausente', producto_id: producto.id });
+  });
+
   it('recorre el camino largo (zero/verify_zero/clear/verify_clear/write/verify_write/restore/verify_restore/activate/reprocess) cuando la operación debe dejar la publicación sin SKU', async () => {
     // `sku_objetivo` sale de `producto.fusion_sku`, generado siempre por la 082 a partir de
     // `primary_woo_id` y column UNIQUE NOT NULL: por el flujo público (decidirCasoIdentidad)

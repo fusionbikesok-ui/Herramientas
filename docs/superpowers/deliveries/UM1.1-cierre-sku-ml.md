@@ -289,20 +289,18 @@ camino directo: la rama tiene commits posteriores sin mergear a propósito (ver 
 - **Pasos encadenados en una corrida**: la saga completa pasó de ~8 minutos a 13,7 s.
 - **Camino directo sin cero** (en la rama, sin desplegar): si el destino es un SKU válido se
   sobrescribe de una, sin poner stock en 0 ni limpiar. Medido: 1 escritura en 6 s, stock
-  intacto. Tests 33/33.
+  intacto. Tests 34/34 tras agregar la regresión de estado PM-096.
 
-### DOS PROBLEMAS ABIERTOS, reportados por el usuario
+### Problemas de estado reportados por el usuario
 
 Casos que ya tenían decisión volvieron a la cola. **No son el bug de la huella** (ese está
-arreglado y verificado): son dos caminos distintos y ninguno está resuelto.
+arreglado y verificado): son dos caminos distintos.
 
-1. **Caso 105 (`MLA1320264343|`)** — el canario 1. Su operación está `completada` y la
-   identidad fue **escrita y verificada contra ML**, pero el caso volvió a `urgente` porque
-   la clasificación cambió de `sku_exacto` a `gtin_contradictorio`. `upsertCaso` trata
-   cualquier cambio de `clasificacion` como cambio de identidad y resetea el estado.
-   **Un caso cuya operación ya completó no debería volver a la cola por una reclasificación**:
-   la identidad ya se aplicó. Hay que decidir qué estado le corresponde (¿`verificado` con
-   aviso? ¿un caso nuevo para el conflicto de GTIN?) y por qué el GTIN pasó a contradecir.
+1. **Resuelto — caso 105 (`MLA1320264343|`)**: si la operación está `completada`, ML conserva
+   exactamente el `fusion_sku` y el Producto Fusion no cambió, una reclasificación
+   `gtin_contradictorio` mantiene el caso `verificado`. El conflicto queda en la clasificación
+   y en el evento `gtin_contradictorio_post_verificacion`; no vuelve a la cola ni repite la
+   escritura. Si el SKU desaparece o cambia, sí reabre urgente. Regresión dirigida: 34/34.
 2. **Caso 1018 (`MLA3588983126|`)** — `intervencion` con una operación en `shadow` que nunca
    corrió. Es el comportamiento que introduje en PM-084 (un `pendiente` que cambia va a
    `intervencion` en vez de volver a `urgente`). Es correcto en intención, pero con una
@@ -317,9 +315,8 @@ a producción mezcla variables. Producción sigue con la saga larga, que funcion
 
 ### Próxima acción reproducible
 
-1. `npx vitest run test/identidad-productos.test.js` (33/33) para confirmar la base.
-2. Resolver los dos problemas de estado de arriba **antes** de mergear el camino directo.
-3. Recién después: actualizar la sección 18.1 del maestro con el fundamento del camino directo
+1. Resolver el caso `shadow` enviado erróneamente a intervención.
+2. Recién después: actualizar la sección 18.1 del maestro con el fundamento del camino directo
    (la API no exige el cero; el cero pausa la publicación con `out_of_stock`), mergear y
    desplegar.
 
