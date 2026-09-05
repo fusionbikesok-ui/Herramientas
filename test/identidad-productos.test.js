@@ -427,10 +427,18 @@ describe('UM1 identidad de productos', () => {
     expect(caso).toBeTruthy();
     expect(caso.estado).not.toBe('resuelto');
     expect(caso.severidad).toBe('normal');
-    // Se nombra el problema real y apunta al producto decidido, no al que ML lleva por error.
     expect(caso.clasificacion).toBe('decision_no_aplicada');
-    const decidido = db.prepare('SELECT id FROM productos_fusion WHERE primary_woo_id=70').get();
-    expect(caso.producto_id).toBe(decidido.id);
+    // Apunta a lo que dice ML, NO a lo que dice la decisión vieja: `SELLER_SKU` es identidad y
+    // una decisión histórica no la reemplaza. Al revés proponía matches absurdos (ML decía una
+    // Zion Diablo Carbono y la decisión vieja una Zion Strix, otra bicicleta).
+    const segunMl = db.prepare('SELECT id FROM productos_fusion WHERE primary_woo_id=79').get();
+    expect(caso.producto_id).toBe(segunMl.id);
+    // Y tiene evidencia: sin ella la pantalla muestra huecos que se leen como datos.
+    const ev = db.prepare('SELECT contenido_json FROM identidad_evidencias WHERE caso_id=?').get(caso.id);
+    expect(ev).toBeTruthy();
+    const contenido = JSON.parse(ev.contenido_json);
+    expect(contenido.ml.seller_sku).toBe('FB-79');
+    expect(contenido.decision_divergente.sku).toBe('FB-70');
   });
 
   // El corte tiene que ser estrecho: marcar toda pausada sin SKU daba 4047 casos contra la
