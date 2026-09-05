@@ -49,7 +49,8 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   no admite reintento y libera el caso a `urgente`; una operación ya intentada conserva
   intervención. La sección 18.1 documenta el camino directo sin stock cero.
 - El rollout soporta hasta dos claves canario explícitas (separadas por coma) y dos operaciones
-  por corrida. El canario vigente usa exactamente dos claves y lote 2.
+  por corrida. El canario de dos publicaciones fue retirado; las escrituras quedaron
+  deshabilitadas en `shadow` hasta una autorización explícita de expansión.
 - Despliegue técnico del camino directo realizado el 2026-09-05: merge `a0a6b6d`, commit de
   actualización `f2ddb22`, PM2 reiniciado, marcador `identidad_sin_cero_085` presente y endpoint
   en `:3001` responde 401 sin sesión. Backup consistente:
@@ -59,6 +60,9 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   `sin_cero=1`, y la relectura autenticada confirmó `FB-10376`/stock 1 y
   `FB-50396`/stock 6, respectivamente. No se tocó una tercera publicación. Backup previo:
   `data/fusion.sqlite.bak-um11-canario2-20260905-010000`.
+- Retirada del canario el 2026-09-05 01:05 UTC: `canario_ml_key=''`, `modo='shadow'` y
+  `escrituras_remotas_habilitadas=0`; no se procesan operaciones adicionales. Backup:
+  `data/fusion.sqlite.bak-um11-retirar-canario-20260905T010521Z`.
 - `user_version` no numera migraciones: es la compuerta de Hito 7 (PM-034). Ninguna migración
   nueva puede escribirlo o la base queda sin `device_tokens` y cae la auth móvil.
 - Cada avance sobre UM1 actualiza en el mismo commit estado, evidencia, handoff y decisiones.

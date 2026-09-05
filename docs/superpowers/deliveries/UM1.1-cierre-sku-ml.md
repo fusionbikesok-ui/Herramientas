@@ -308,11 +308,16 @@ arreglado y verificado): son dos caminos distintos.
 
 ### Estado operativo actual
 
-Configuración: `modo=enforced`, `escrituras_remotas_habilitadas=1`,
+Configuración durante el canario: `modo=enforced`, `escrituras_remotas_habilitadas=1`,
 `canario_ml_key='MLA798189569|,MLA1541702013|'`, `lote_max=2`. Backups históricos:
 `fusion.sqlite.bak-antes-canario-20260904-232618`, `...-canario2-20260904-234431`,
 `fusion.sqlite.bak-um11-directo-20260905-005000` y
 `fusion.sqlite.bak-um11-canario2-20260905-010000`.
+
+Tras la observación, el canario fue retirado el 2026-09-05 01:05 UTC: configuración actual
+`modo=shadow`, `escrituras_remotas_habilitadas=0`, `canario_ml_key=''`, `lote_max=2`.
+El worker no puede efectuar nuevas escrituras hasta una autorización explícita. Backup:
+`data/fusion.sqlite.bak-um11-retirar-canario-20260905T010521Z`.
 
 ### Despliegue técnico — 2026-09-05
 
