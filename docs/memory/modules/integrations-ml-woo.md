@@ -44,6 +44,10 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
 - La política exacta de publicación ML se define en E11. Mientras publicaciones independientes anuncien el stock completo no se promete cero sobreventa; una sobreventa real bloquea nuevas ventas en ambos canales y escala.
 - Si Woo no responde, aumentos no se publican y los cambios pendientes quedan durables e idempotentes.
 - UM1 inspecciona directamente cada publicación+variación activa: solo un vínculo exacto a SKU existente en Woo cubre la venta. La primera fase es lectura; no cambia ML/Woo. Los pedidos sin cobertura se retienen solo en Fusion y no cambian el estado ni las notas de Woo.
+- Woo publica `product.created`, `product.updated` y `product.deleted` a
+  `/api/woo/webhook/product`. La entrada valida HMAC, persiste/deduplica antes del ACK y el
+  worker durable relee desde Woo el padre completo y sus variaciones. Una baja solo retira el
+  cache local; el cron de catálogo cada cinco minutos sigue siendo la reconciliación de respaldo.
 - Guardia expone `GET /api/guardia-ml/casos/:id/opciones`: publicación ML con imagen/detalle y candidatos Woo con SKU único, imagen y stock. La selección queda separada de la escritura; en modo lectura se puede comparar sin vincular.
 - Un `seller_sku` externo divergente bloquea la sincronización hasta revisión. Los vínculos compartidos pueden publicar el stock completo en cada clave por decisión operativa, pero una sobreventa agregada abre incidente crítico y retiene excedentes; no se promete reserva atómica entre claves ML.
 - UM1 es la única puerta de escritura para vínculos, `seller_sku` y pausas. Matcher, Cobertura y Sync legacy conservan consultas, pero sus mutaciones devuelven `410 Gone`; el cron legacy de push está retirado.

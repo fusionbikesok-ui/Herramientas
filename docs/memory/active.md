@@ -33,7 +33,11 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 ## Hallazgo agregado
 
-- Auditoría de webhooks: Woo `/api/woo/webhook/order` y ML `/api/ml/notificacion` tienen garantías distintas; Woo dispara trabajo en background sin intención durable previa al ACK y ML deja varios topics en `audit-only`. El plan maestro incorpora en E6/E11 un contrato común, cola durable, reconciliación por entidad, matriz de cobertura y pruebas de crash/duplicado/fuera de orden.
+- Woo ya tiene webhook durable de catálogo en `/api/woo/webhook/product`: persiste/deduplica
+  `product.created`, `product.updated` y `product.deleted` antes del ACK y relee desde Woo el
+  padre con sus variaciones. El cron completo cada cinco minutos mantiene la reconciliación.
+  El webhook histórico de pedidos conserva su camino background no durable; ML mantiene sus
+  propios eventos durables/audit-only.
 
 ## UM1 — Identidad de productos (2026-09-05)
 

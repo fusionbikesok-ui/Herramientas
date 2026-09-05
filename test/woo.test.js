@@ -3,7 +3,7 @@ import fs from 'fs';
 import { openDb } from '../db/index.js';
 import {
   wooFetch, wooFetchConReintento, wooFetchConCircuito, categorizarErrorWoo, circuitoWooAbierto,
-  _resetCircuitoWooParaTests, refrescarCatalogo, getCatalogo, wooRouter, registrarAlertasStockNegativo,
+  _resetCircuitoWooParaTests, refrescarCatalogo, refrescarProductoPuntual, getCatalogo, wooRouter, registrarAlertasStockNegativo,
 } from '../routes/woo.js';
 import axios from 'axios';
 import express from 'express';
@@ -1526,6 +1526,36 @@ describe('registrarAlertasStockNegativo', () => {
     const abiertas = db.prepare('SELECT * FROM stock_negativo_alertas WHERE resuelto_en IS NULL').all();
     expect(abiertas).toHaveLength(1);
     expect(abiertas[0].detectado_en).toBe('2026-08-25T12:00:00.000Z');
+    db.close();
+  });
+
+  it('relee un padre variable puntual y reemplaza solo sus variaciones locales', async () => {
+    const db = openDb(DB_ALERTAS);
+    db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (1732,'Viejo','FB-1732','variable',NULL,0,?)").run(new Date().toISOString());
+    db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (9999,'Hija vieja','FB-9999','variation',1732,1,?)").run(new Date().toISOString());
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: {
+      id: 1732, name: 'Casco Rembrandt Para Niños', sku: 'FB-1732', type: 'variable', stock_quantity: 0,
+      categories: [], attributes: [], images: [], brands: [],
+    } }).mockResolvedValueOnce({ status: 200, headers: {}, data: [{
+      id: 7247, sku: 'FB-7247', stock_quantity: 1, attributes: [{ name: 'Diseño', option: 'Halcón' }], image: null,
+    }] });
+    const r = await refrescarProductoPuntual(db, { url: 'https://fusionbikes.com.ar', ck: 'ck', cs: 'cs' }, { productoId: 1732 });
+    expect(r).toMatchObject({ producto_id: 1732, filas: 2 });
+    expect(db.prepare('SELECT sku FROM catalogo_cache WHERE id_woo=7247').get().sku).toBe('FB-7247');
+    expect(db.prepare('SELECT 1 FROM catalogo_cache WHERE id_woo=9999').get()).toBeUndefined();
+    db.close();
+  });
+
+  it('un webhook de variación borrada solo retira esa variación del cache', async () => {
+    const db = openDb(DB_ALERTAS);
+    const ts = new Date().toISOString();
+    db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (1732,'Padre','FB-1732','variable',NULL,0,?)").run(ts);
+    db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (7247,'Halcón','FB-7247','variation',1732,1,?)").run(ts);
+    db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (7248,'Hermana','FB-7248','variation',1732,1,?)").run(ts);
+    await refrescarProductoPuntual(db, { url: 'https://fusionbikes.com.ar', ck: 'ck', cs: 'cs' }, { productoId: 7247, parentId: 1732, eliminado: true });
+    expect(db.prepare('SELECT 1 FROM catalogo_cache WHERE id_woo=7247').get()).toBeUndefined();
+    expect(db.prepare('SELECT 1 FROM catalogo_cache WHERE id_woo=7248').get()).toBeTruthy();
+    expect(db.prepare('SELECT 1 FROM catalogo_cache WHERE id_woo=1732').get()).toBeTruthy();
     db.close();
   });
 });

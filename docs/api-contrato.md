@@ -1204,6 +1204,16 @@ queda como `estado_envio='pendiente'`, y `completed`/`enviadoandreani` como `env
 en la cola ni permite iniciar preparación, sin borrar preparaciones o auditoría. Es
 fail-open: un error se registra y el cron vuelve a intentarlo.
 
+### POST `/api/woo/webhook/product`
+
+WooCommerce envía `product.created`, `product.updated` y `product.deleted` a esta ruta. Exige
+`x-wc-webhook-topic` y, si `WOO_WEBHOOK_SECRET` está configurado,
+`x-wc-webhook-signature` HMAC-SHA256. La entrega se persiste y deduplica antes de devolver
+`200`; el worker durable relee el producto padre y todas sus variaciones desde Woo. Un evento
+de variación usa `parent_id` y refresca el padre entero. Un `product.deleted` solo elimina del
+cache local la entidad afectada (o sus hijas si es el padre): nunca escribe ni recrea nada en
+Woo. El cron completo continúa como reconciliación ante eventos perdidos.
+
 ### POST `/api/ml/notificacion`
 
 ML envía `{ topic, resource, user_id }`. En `orders` y `orders_v2`, `user_id` debe coincidir

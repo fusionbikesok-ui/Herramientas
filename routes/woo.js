@@ -455,6 +455,65 @@ export async function refrescarCatalogo(db, cfg, opts = {}) {
   }
 }
 
+/**
+ * Relee una sola entidad de Woo tras un webhook de producto. Las variaciones no son recursos
+ * independientes para el catálogo: ante un evento de una de ellas se relee su padre completo,
+ * lo que elimina del cache las hermanas que Woo ya no devuelve sin afectar otros productos.
+ *
+ * Esta función nunca escribe en Woo. Un `product.deleted` ya es una confirmación firmada del
+ * origen, por lo que retira únicamente la fila afectada (y sus hijas si era el padre).
+ */
+export async function refrescarProductoPuntual(db, cfg, { productoId, parentId = null, eliminado = false } = {}) {
+  const id = Number(productoId);
+  const parent = Number(parentId || productoId);
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(parent) || parent <= 0) {
+    throw Object.assign(new Error('webhook Woo de producto sin id válido'), { retryable: false, code: 'woo_product_invalid_id' });
+  }
+
+  if (eliminado) {
+    db.transaction(() => {
+      if (parentId) db.prepare('DELETE FROM catalogo_cache WHERE id_woo=?').run(id);
+      else db.prepare('DELETE FROM catalogo_cache WHERE id_woo=? OR id_padre=?').run(id, id);
+    })();
+    return { producto_id: id, parent_id: parentId ? parent : null, eliminado: true, filas: 0 };
+  }
+
+  const productoResp = await wooFetch(cfg, `/products/${parent}?context=view`);
+  const padre = normalizarProductoWc(productoResp.data);
+  const filas = [padre];
+  if (padre.tipo === 'variable') {
+    let page = 1;
+    while (page <= 20) {
+      const varsResp = await wooFetch(cfg, `/products/${parent}/variations?per_page=100&page=${page}&status=any`);
+      const variaciones = Array.isArray(varsResp.data) ? varsResp.data : [];
+      for (const variacion of variaciones) {
+        // Se conserva el contrato del refresco general: variaciones sin SKU no entran al
+        // catálogo vendible ni pueden convertirse en identidad Fusion.
+        if (variacion.sku) filas.push(normalizarVariacionWc(variacion, padre));
+      }
+      if (variaciones.length < 100) break;
+      page += 1;
+    }
+  }
+
+  const actualizadoEn = new Date().toISOString();
+  const upsert = db.prepare(`
+    INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, regular_price, atributos_json, marca, gtin, actualizado_en)
+    VALUES (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @regular_price, @atributos_json, @marca, @gtin, @actualizado_en)
+    ON CONFLICT(id_woo) DO UPDATE SET
+      nombre=excluded.nombre, sku=excluded.sku, tipo=excluded.tipo, id_padre=excluded.id_padre,
+      stock=excluded.stock, categorias_json=excluded.categorias_json, img=excluded.img,
+      precio=excluded.precio, regular_price=excluded.regular_price, atributos_json=excluded.atributos_json,
+      marca=excluded.marca, gtin=excluded.gtin, actualizado_en=excluded.actualizado_en
+  `);
+  db.transaction(() => {
+    // Si el padre dejó de ser variable, también se retiran las hijas que el origen ya no expone.
+    db.prepare('DELETE FROM catalogo_cache WHERE id_padre=?').run(parent);
+    for (const fila of filas) upsert.run(filaCatalogo(fila, actualizadoEn));
+  })();
+  return { producto_id: id, parent_id: parent, eliminado: false, filas: filas.length };
+}
+
 async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
   const inicio = new Date();
   const ultimoCompleto = leerMarca(db, CLAVE_ULTIMO_COMPLETO);

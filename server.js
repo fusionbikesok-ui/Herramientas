@@ -60,7 +60,7 @@ import { workshopRouter } from './routes/workshop.js';
 import { mobileWorkshopRouter } from './routes/mobileWorkshop.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
-import { registrarWebhookMl, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
+import { registrarWebhookMl, registrarWebhookWooProducto, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -121,6 +121,40 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       console.log(`[webhook-woo] order #${order.id} status=${order.status} skus=${skus || '(sin sku)'} → syncWcToMl`);
       syncWcToMl(app._db, syncCfg, { maxLlamadas: 30 })
         .catch(err => console.error('[webhook-woo] syncWcToMl error:', err.message));
+    }
+  );
+
+  // ── Webhook WooCommerce → catálogo puntual durable ──────────────────────────
+  // Configurar en Woo los topics product.created, product.updated y product.deleted hacia
+  // esta ruta. El ACK solo se emite tras persistir evento+job: un reinicio posterior no pierde
+  // el cambio y el worker relee Woo como fuente de verdad.
+  app.post('/api/woo/webhook/product',
+    express.raw({ type: 'application/json', limit: '1mb' }),
+    (req, res) => {
+      const whSecret = process.env.WOO_WEBHOOK_SECRET || '';
+      if (whSecret) {
+        const sig = req.headers['x-wc-webhook-signature'];
+        if (!sig) return res.status(401).json({ ok: false, error: 'sin firma' });
+        const expected = crypto.createHmac('sha256', whSecret).update(req.body).digest('base64');
+        const received = Buffer.from(String(sig));
+        const expectedBuffer = Buffer.from(expected);
+        if (received.length !== expectedBuffer.length || !crypto.timingSafeEqual(received, expectedBuffer)) {
+          return res.status(401).json({ ok: false, error: 'firma inválida' });
+        }
+      }
+      let producto;
+      try { producto = JSON.parse(req.body.toString('utf8')); }
+      catch { return res.status(400).json({ ok: false, error: 'payload inválido' }); }
+      try {
+        const persistido = registrarWebhookWooProducto(app._db, producto, {
+          topic: req.headers['x-wc-webhook-topic'],
+          deliveryId: req.headers['x-wc-webhook-delivery-id'],
+        });
+        return res.status(200).json({ ok: true, duplicate: persistido.duplicate, event_id: persistido.eventId });
+      } catch (err) {
+        const status = err.code === 'woo_product_topic_invalid' || err.code === 'woo_product_id_invalid' ? 400 : 503;
+        return res.status(status).json({ ok: false, error: err.message });
+      }
     }
   );
 

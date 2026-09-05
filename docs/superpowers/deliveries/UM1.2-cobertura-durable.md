@@ -1,10 +1,20 @@
 # UM1.2 — Detección y cobertura durable
 
-**Estado:** planificada. **Dependencia:** UM1.1 candidata. **Superficie:** VPS.
+**Estado:** en desarrollo. **Dependencia:** UM1.1 candidata. **Superficie:** VPS.
 
 ## Resultado
 
 Impedir que reaparezca cobertura insegura mediante eventos durables ML/Woo, relectura desde origen, scan completo cada 15 minutos, salud degradada a los 60 minutos, alertas en menos de dos minutos y operaciones recuperables tras reinicios.
+
+## Avance — webhook de catálogo Woo (2026-09-05)
+
+- Ruta pública `POST /api/woo/webhook/product`, con HMAC, persistencia y deduplicación antes
+  del ACK.
+- Topics configurables: `product.created`, `product.updated`, `product.deleted`.
+- Job durable `catalog.woo_product_sync`: relee el padre y todas sus variaciones; si la baja es
+  de una variación borra solo esa fila local, y si es del padre borra el árbol local.
+- Tras proyectar el catálogo se reaudita localmente la identidad para volver visible un SKU Woo
+  que dejó de existir. No hay escrituras hacia Woo ni ML.
 
 ## Gates
 

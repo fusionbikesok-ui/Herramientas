@@ -144,6 +144,35 @@ describe('server', () => {
     }
   });
 
+  it('persiste antes del ACK un webhook firmado de producto Woo y deduplica su entrega', async () => {
+    const anterior = process.env.WOO_WEBHOOK_SECRET;
+    process.env.WOO_WEBHOOK_SECRET = 'secret-producto';
+    try {
+      const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+      currentApp = app;
+      const payload = JSON.stringify({ id: 1732, type: 'variable', date_modified_gmt: '2026-09-05T01:00:00' });
+      const firma = (await import('crypto')).createHmac('sha256', process.env.WOO_WEBHOOK_SECRET).update(payload).digest('base64');
+      const enviar = () => request(app).post('/api/woo/webhook/product')
+        .set('content-type', 'application/json')
+        .set('x-wc-webhook-signature', firma)
+        .set('x-wc-webhook-topic', 'product.updated')
+        .set('x-wc-webhook-delivery-id', 'delivery-1732')
+        .send(payload);
+      const primero = await enviar();
+      const segundo = await enviar();
+      expect(primero.status).toBe(200);
+      expect(primero.body).toMatchObject({ ok: true, duplicate: false });
+      expect(segundo.body).toMatchObject({ ok: true, duplicate: true });
+      expect(app._db.prepare("SELECT channel, source, status FROM integration_events WHERE event_id=?").get(primero.body.event_id))
+        .toMatchObject({ channel: 'woo', source: 'woocommerce', status: 'pending' });
+      expect(app._db.prepare("SELECT job_type FROM integration_jobs WHERE event_id=?").get(primero.body.event_id).job_type)
+        .toBe('catalog.woo_product_sync');
+    } finally {
+      if (anterior === undefined) delete process.env.WOO_WEBHOOK_SECRET;
+      else process.env.WOO_WEBHOOK_SECRET = anterior;
+    }
+  });
+
   it('API móvil real: login, Bearer JWT, permisos, refresh y revocación atómica del dispositivo', async () => {
     const app = buildApp({
       dbPath: TEST_DB,

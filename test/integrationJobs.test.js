@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { openDb } from '../db/index.js';
 import { reclamarJobs, completarJob, fallarJob } from '../lib/integrationJobs.js';
-vi.mock('../routes/woo.js', () => ({ wooFetch: vi.fn() }));
-import { wooFetch } from '../routes/woo.js';
+vi.mock('../routes/woo.js', () => ({ wooFetch: vi.fn(), refrescarProductoPuntual: vi.fn() }));
+import { wooFetch, refrescarProductoPuntual } from '../routes/woo.js';
 import { procesarIntegrationJobs } from '../lib/workerIntegrationJobs.js';
 
 describe('integration jobs: lease, retry y DLQ', () => {
@@ -146,6 +146,23 @@ describe('integration jobs: lease, retry y DLQ', () => {
     db.prepare("UPDATE integration_jobs SET available_at='2020-01-01T00:00:00Z'").run();
     await procesarIntegrationJobs(db, { wooCfg: null });
     expect(db.prepare("SELECT status, attempts FROM integration_jobs WHERE event_id='dispatch-f'").get()).toMatchObject({ status: 'dead_lettered', attempts: 2 });
+    db.close();
+  });
+
+  it('proyecta un webhook Woo de catálogo con relectura puntual y auditoría local', async () => {
+    const db = openDb(':memory:');
+    refrescarProductoPuntual.mockResolvedValue({ producto_id: 1732, filas: 5 });
+    db.prepare(`INSERT INTO integration_events
+      (event_id,event_type,channel,source,received_at,correlation_id,dedupe_key,metadata_json)
+      VALUES ('woo-p','webhook.received','woo','woocommerce',?,'woo-p','woo-p',?)`)
+      .run(new Date().toISOString(), JSON.stringify({ producto_id: 1732, parent_id: null, eliminado: false }));
+    db.prepare("INSERT INTO integration_jobs (event_id,job_type,available_at) VALUES ('woo-p','catalog.woo_product_sync','2000-01-01T00:00:00Z')").run();
+    const result = await procesarIntegrationJobs(db, { wooCfg: { url: 'https://woo', ck: 'ck', cs: 'cs' } });
+    expect(result.processed).toBe(1);
+    expect(refrescarProductoPuntual).toHaveBeenCalledWith(db, expect.any(Object), {
+      productoId: 1732, parentId: null, eliminado: false,
+    });
+    expect(db.prepare("SELECT status FROM integration_jobs WHERE event_id='woo-p'").get().status).toBe('completed');
     db.close();
   });
 });
