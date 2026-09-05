@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Identidad de productos — Fusion Bikes</title>
   <link rel="stylesheet" href="../lib/theme.css">
+  <link rel="stylesheet" href="../lib/components.css">
   <style>
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -33,7 +34,9 @@
     .comparador{display:grid;grid-template-columns:1fr;gap:.8rem;align-items:start}
     .col-comp{display:flex;flex-direction:column;gap:.8rem;min-width:0}
     .col-comp .panel{margin-bottom:0}
-    @media(min-width:1200px){ .comparador{grid-template-columns:1fr 1fr} }
+    /* ML trae más campos que Woo aun con el resto colapsado: 55/45 reduce el vacío
+       sin fabricar contenido del lado Woo. */
+    @media(min-width:1200px){ .comparador{grid-template-columns:55fr 45fr} }
     @media(min-width:1800px){ .view{grid-template-columns:minmax(300px,380px) 1fr} }
     .card{background:var(--surface);border:1px solid var(--border);border-radius:10px}
     .side{max-height:72vh;overflow:auto}
@@ -43,12 +46,8 @@
     .case:hover,.case[aria-current="true"]{background:var(--surface2)}
     .case strong{display:block;font-size:.92rem;overflow-wrap:anywhere}
     .case small{display:block;margin-top:.22rem;color:var(--muted)}
-    .tag{display:inline-block;padding:.12rem .45rem;border-radius:99px;background:var(--amber-bg);color:var(--amber);font-size:.72rem;border:1px solid var(--amber-bd)}
-    .tag.critica{background:var(--red-bg);color:var(--red);border-color:var(--red-bd)}
-    .tag.normal{background:var(--surface2);color:var(--muted);border-color:var(--border)}
-    .tag.ok{background:var(--green-bg);color:var(--green);border-color:var(--green-bd)}
     .detail{padding:1rem;min-height:340px}
-    .detail h2{font-size:1.08rem;margin:.15rem 0 .35rem;overflow-wrap:anywhere}
+    .detail h2{font-size:var(--fs-titulo);margin:.15rem 0 .35rem;overflow-wrap:anywhere}
     .actionbar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.8rem 0}
     .panel{padding:.85rem;border:1px solid var(--border);border-radius:9px;background:var(--surface2);margin-bottom:.8rem}
     .panel h3{margin:.1rem 0 .6rem;font-size:.94rem}
@@ -72,9 +71,11 @@
     .case .mini{width:44px;height:44px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:var(--surface2)}
     .case .mini.vacia{display:grid;place-items:center;color:var(--muted);font-size:.6rem}
     .enlace{display:inline-block;margin-top:.4rem;color:var(--accent)}
+    .dato-urgente{color:var(--amber)}
+    .dato-critico{color:var(--red)}
     .attrs-bloque{margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--border);font-size:.86rem}
     .attrs-bloque b{display:inline}
-    .attr{display:block;color:var(--accent);margin-top:.18rem}
+    .attr{display:block;color:var(--txt);margin-top:.18rem}
     .aviso{margin-bottom:.85rem;padding:.7rem .85rem;border:1px solid var(--green-bd);border-radius:9px;background:var(--green-bg);color:var(--green)}
     @media(max-width:850px){.foto{width:84px;height:84px}}
     .search-row{display:flex;gap:.5rem}
@@ -85,7 +86,7 @@
     .opcion .sinfoto{display:grid;place-items:center;color:var(--muted);font-size:.68rem;text-align:center}
     .opcion strong{display:block;overflow-wrap:anywhere;font-size:.92rem}
     .opcion small{color:var(--muted);font-size:.8rem}
-    .opcion small.attrs{display:block;color:var(--accent);font-size:.82rem;margin:.1rem 0}
+    .opcion small.attrs{display:block;color:var(--txt);font-size:var(--fs-meta);margin:.1rem 0}
     .senal{display:inline-block;margin-left:.4rem;padding:.08rem .4rem;border-radius:99px;font-size:.7rem;border:1px solid var(--border);background:var(--surface2);color:var(--muted)}
     .senal.gtin{background:var(--green-bg);color:var(--green);border-color:var(--green-bd)}
     .senal.sku{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-bd)}
@@ -160,32 +161,39 @@
       + ' · Última lectura confiable: ' + esc(s.ultimo_scan_confiable_en || 'sin lectura confiable') + '</span>'
       + (s.ultimo_scan_error ? '<br><span class="muted error">Error de lectura: ' + esc(s.ultimo_scan_error) + '</span>' : '')
       + '<br><span class="muted">Una lectura local no confirma MercadoLibre.</span></div>'
-      + '<span class="tag ' + (enShadow() ? '' : 'ok') + '">Modo ' + esc(s.modo || 'shadow') + '</span>';
+      + '<span class="ui-chip ' + (enShadow() ? 'ui-chip--urgente' : 'ui-chip--ok') + '">Modo ' + esc(s.modo || 'shadow') + '</span>';
   }
 
   function renderRecon() {
     const c = state.resumen?.conciliacion;
     if (!c) { $('#recon').innerHTML = ''; return; }
-    // Gate 2 de UM1.1: total = verificadas + excepciones + urgentes. Se muestra el resultado
-    // de la igualdad, no solo los números, para que un desvío no pase inadvertido.
-    const filas = [
-      ['Claves ML activas con stock', c.total, ''],
-      ['Verificadas', c.verificadas, ''],
-      ['Excepciones solo_ml', c.excepciones, ''],
-      ['Urgentes abiertas', c.urgentes, ''],
+    // Telemetría en UNA línea, no en cinco tarjetas. Son números de contexto: la tarea es el
+    // caso, no el tablero. En 390px las tarjetas ocupaban la pantalla entera antes de mostrar
+    // nada accionable. Sólo lo que exige acción conserva peso visual.
+    const urg = Number(c.urgentes) || 0;
+    // Gate 2 de UM1.1: total = verificadas + excepciones + urgentes. Se sigue mostrando el
+    // RESULTADO de la igualdad, no sólo los números, para que un desvío no pase inadvertido.
+    const partes = [
+      esc(c.total) + ' activas con stock',
+      esc(c.verificadas) + ' verificadas',
+      esc(c.excepciones) + ' excepciones',
+      urg ? '<b class="dato-urgente">' + urg + ' urgentes</b>' : '0 urgentes',
     ];
-    // Una observación anterior a la 082 no se puede clasificar. Se muestra aparte porque, si
-    // se contara como urgente, fabricaría un backlog falso del tamaño del universo entero.
-    if (c.observacion_incompleta) filas.push(['Sin observar: requieren refresco ML', c.observacion_incompleta, 'inexact']);
-    filas.push([c.exacta ? 'Universo conciliado' : 'Universo SIN conciliar', c.exacta ? '=' : '≠', c.exacta ? 'exact' : 'inexact']);
-    $('#recon').innerHTML = filas
-      .map(([t, v, k]) => '<div class="stat ' + k + '"><b>' + esc(v) + '</b><span class="muted">' + esc(t) + '</span></div>').join('')
-      + (c.observacion_incompleta ? '<p class="notice">Hay <b>' + esc(c.observacion_incompleta)
-        + '</b> claves activas con stock cuya última observación es anterior al detalle de atributos actual. '
-        + 'No se clasifican ni cuentan como urgencias: hasta un refresco ML completo, el universo no está conciliado.</p>' : '');
+    if (!c.exacta) partes.push('<b class="dato-critico">universo SIN conciliar</b>');
+    $('#recon').innerHTML = '<span class="ui-resumen">' + partes.join(' · ') + '</span>'
+      // Una observación anterior a la 082 no se puede clasificar. Si se contara como urgente
+      // fabricaría un backlog falso del tamaño del universo entero, así que va aparte y con
+      // tratamiento fuerte: es lo único de este bloque que exige una acción.
+      + (c.observacion_incompleta
+        ? '<div class="ui-aviso ui-aviso--atencion" style="margin-top:.5rem"><b>' + esc(c.observacion_incompleta)
+          + '</b> claves activas con stock tienen su última observación anterior al detalle de atributos actual. '
+          + 'No se clasifican ni cuentan como urgencias: hasta un refresco ML completo, el universo no está conciliado.</div>'
+        : '');
   }
 
-  const sev = (c) => '<span class="tag ' + esc(c.severidad) + '">' + esc(c.severidad) + '</span>';
+  // `severidad` es normal|urgente|critica y mapea directo al chip: gris, ámbar, rojo.
+  const CHIP_SEV = { normal: '', urgente: 'ui-chip--urgente', critica: 'ui-chip--critico' };
+  const sev = (c) => '<span class="ui-chip ' + (CHIP_SEV[c.severidad] || 'ui-chip--urgente') + '">' + esc(c.severidad) + '</span>';
 
   function cola() {
     const casos = state.casos;
@@ -227,10 +235,10 @@
         : '')
       + (enShadow() ? '<div class="notice read" style="margin-top:.8rem">Modo <b>shadow</b>: se registran decisiones y se encolan operaciones, pero <b>no se escribe en MercadoLibre</b>.</div>' : '')
       + '<div class="actionbar">'
-      + '<button class="btn" id="tomar">' + (d.responsable ? 'Relevar caso' : 'Tomar caso') + '</button>'
-      + '<button class="btn primary" id="vincular">Vincular a Producto Fusion</button>'
-      + '<button class="btn danger" id="excepcion">Excepción solo_ml</button>'
-      + '<button class="btn" id="nota">Agregar nota</button>'
+      + '<button class="ui-btn ui-btn--primario" id="vincular">Vincular a Producto Fusion</button>'
+      + '<button class="ui-btn" id="tomar">' + (d.responsable ? 'Relevar caso' : 'Tomar caso') + '</button>'
+      + '<button class="ui-btn" id="nota">Agregar nota</button>'
+      + '<button class="ui-btn ui-btn--peligro" id="excepcion">Excepción solo_ml</button>'
       + '</div>'
       + '<div class="comparador">'
       + '<div class="col-comp">'
@@ -238,7 +246,7 @@
       + (pub.thumbnail ? '<img class="foto" src="' + esc(pub.thumbnail) + '" alt="Foto de la publicación en MercadoLibre">' : '<div class="foto vacia">Sin foto</div>')
       + '<div class="facts"><b>' + esc(pub.titulo || 'sin título') + '</b><br>'
       + 'Publicación: <b>' + esc(ml.item_id || '—') + '</b><br>Variación: <b>' + esc(ml.variation_id || 'sin variación') + '</b><br>'
-      + 'SELLER_SKU: <b>' + esc(ml.seller_sku || 'ausente') + '</b> ' + (ml.seller_sku_presente ? '' : '<span class="tag critica">sin atributo</span>') + '<br>'
+      + 'SELLER_SKU: <b>' + esc(ml.seller_sku || 'ausente') + '</b> ' + (ml.seller_sku_presente ? '' : '<span class="ui-chip ui-chip--critico">sin atributo</span>') + '<br>'
       + 'GTIN: <b>' + esc(ml.gtin || pub.gtin || 'sin GTIN') + '</b><br>'
       // Stock y hora de observación salen de la publicación vigente, no de la instantánea de
       // evidencia: esa guarda identidad, y desde que se le quitaron los campos volátiles
@@ -246,11 +254,7 @@
       + 'Stock informado: ' + stockML(pub.available_quantity ?? ml.stock) + '<br>'
       + 'Observado: <b>' + esc(pub.actualizado_en || ml.observado_en || 'sin dato') + '</b><br>'
       + '<span class="muted">seller_custom_field: ' + esc(ml.seller_custom_field || 'vacío') + ' — es evidencia auxiliar y nunca da cobertura.</span>'
-      + (pub.atributos?.length
-        ? '<div class="attrs-bloque"><b>Atributos en MercadoLibre</b>'
-          + pub.atributos.map((a) => '<span class="attr">' + esc(a.nombre) + ': <b>' + esc(a.valor) + '</b></span>').join('')
-          + '</div>'
-        : '<div class="attrs-bloque muted">La publicación no declara atributos útiles para identificar la variante.</div>')
+      + bloqueAtributosMl(pub.atributos)
       + (pub.permalink ? '<br><a class="enlace" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Abrir en MercadoLibre ↗</a>'
  : '')
       + '</div></div></section>'
@@ -280,12 +284,35 @@
       + '<br><span class="muted">Huella de evidencia: ' + esc((d.evidencia_fingerprint || '').slice(0, 16)) + '…</span></div></section>'
       + (d.notas?.length ? '<section class="panel"><h3>Notas</h3>' + d.notas.map((n) => '<div class="facts">' + esc(n.creada_en) + ' · ' + esc(n.creada_por) + ': ' + esc(n.nota) + '</div>').join('') + '</section>' : '')
       + (d.decisiones?.length ? '<section class="panel"><h3>Decisiones</h3>' + d.decisiones.map((x) => '<div class="facts">' + esc(x.decidida_en) + ' · ' + esc(x.tipo) + ' · ' + esc(x.decidida_por) + (x.explicacion ? ' — ' + esc(x.explicacion) : '') + '</div>').join('') + '</section>' : '')
-      + (d.excepciones?.length ? '<section class="panel"><h3>Excepciones</h3>' + d.excepciones.map((x) => '<div class="facts">' + esc(x.creada_en) + ' · ' + esc(x.motivo) + ' · vence: ' + esc(x.vence_en || 'sin vencimiento') + (x.activa ? '' : ' <span class="tag normal">invalidada</span>') + '</div>').join('') + '</section>' : '')
+      + (d.excepciones?.length ? '<section class="panel"><h3>Excepciones</h3>' + d.excepciones.map((x) => '<div class="facts">' + esc(x.creada_en) + ' · ' + esc(x.motivo) + ' · vence: ' + esc(x.vence_en || 'sin vencimiento') + (x.activa ? '' : ' <span class="ui-chip">invalidada</span>') + '</div>').join('') + '</section>' : '')
       + '</section>';
   }
 
   // Selector de identidad para el vínculo manual. Es búsqueda humana explícita: el candidato
   // aproximado por familia, con puntaje y explicación, es UM1.4 y todavía no existe.
+  // Un atributo discrimina identidad si habla de la MEDIDA o el modelo del producto. Todo lo
+  // demás ("Regalable", "Es marca TOM", "Género: Sin género") es contexto de categoría: no
+  // decide nada y, con 40 filas del mismo peso que el SKU, tapa lo que sí decide.
+  const DISCRIMINA = /(largo|medida|tama|talle|size|modelo|model|color|di[aá]metro|ancho|alto|peso|capacidad|volumen|rodado|material)/i;
+
+  function bloqueAtributosMl(attrs) {
+    if (!attrs?.length) {
+      return '<div class="attrs-bloque"><span class="ui-label">La publicación no declara atributos útiles para identificar la variante.</span></div>';
+    }
+    const fila = (a) => '<span class="attr"><span class="ui-label">' + esc(a.nombre) + '</span> <b>' + esc(a.valor) + '</b></span>';
+    const clave = attrs.filter((a) => DISCRIMINA.test(a.nombre));
+    const resto = attrs.filter((a) => !DISCRIMINA.test(a.nombre));
+    return '<div class="attrs-bloque">'
+      + (clave.length
+        ? '<span class="ui-label">Atributos que identifican la variante</span>' + clave.map(fila).join('')
+        : '<span class="ui-label">Ningún atributo declara medida ni modelo: no hay con qué distinguir la variante desde ML.</span>')
+      + (resto.length
+        ? '<details class="ui-mas"><summary>Ver los otros ' + resto.length + ' atributos de la publicación</summary>'
+          + resto.map(fila).join('') + '</details>'
+        : '')
+      + '</div>';
+  }
+
   function panelVinculo(ml) {
     if (!state.buscando) return '';
     const c = state.candidatos;
@@ -408,7 +435,7 @@
       + '<p class="muted">Saga por pasos: stock cero → limpiar SKU → escribir SKU → restaurar stock → verificar. Cada paso se persiste antes del efecto remoto.</p>'
       + (o.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>#</th><th>Clave ML</th><th>SKU objetivo</th><th>Estado</th><th>Paso</th><th>Intentos</th><th></th></tr></thead><tbody>'
         + o.map((x) => '<tr><td>' + esc(x.id) + '</td><td>' + esc(x.ml_key) + '</td><td>' + esc(x.sku_objetivo) + '</td><td>'
-        + esc(x.estado) + (x.impacto_hermanas ? ' <span class="tag">hermanas: ' + esc(x.impacto_hermanas) + '</span>' : '')
+        + esc(x.estado) + (x.impacto_hermanas ? ' <span class="ui-chip ui-chip--urgente">hermanas: ' + esc(x.impacto_hermanas) + '</span>' : '')
         + (x.ultimo_error ? '<br><span class="muted error">' + esc(x.ultimo_error) + '</span>' : '')
         + '</td><td>' + esc(x.paso_actual) + '</td><td>' + esc(x.intentos) + '</td><td>'
         + (x.estado === 'intervencion' ? '<button class="btn" data-reintentar="' + x.id + '">Reintentar</button>' : '')

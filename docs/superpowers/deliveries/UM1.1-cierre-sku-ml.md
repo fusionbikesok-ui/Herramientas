@@ -339,3 +339,43 @@ remoto. Backups: `data/fusion.sqlite.bak-um11-retirar-canario-20260905T010521Z` 
   `MLA1541702013|` quedó en `FB-50396`, stock 6. El stock permaneció intacto en ambos casos.
 - Este resultado cierra la observación del camino directo para el canario de dos publicaciones;
   cualquier ampliación requiere una nueva designación explícita.
+
+### Rediseño de la pantalla — 2026-09-05
+
+Motivo: la crítica visual completa (`visual-critique:critique-screen`) sobre las capturas
+`crit-desktop-detalle.png` y `crit-movil-detalle.png` marcó como P1 que en 390px la tarea no
+era visible sin scrollear y que `--accent` decoraba etiquetas que no se pueden tocar.
+
+Cambios:
+
+- **Nuevo** `public/lib/components.css`: capa de componentes compartida sobre los tokens de
+  `theme.css` (PM-104). Clases `ui-btn`, `ui-card`, `ui-panel`, `ui-chip`, `ui-id`, `ui-label`,
+  `ui-resumen`, `ui-mas`, `ui-tabs`, `ui-table`, `ui-aviso`, `ui-input`, más una escala
+  tipográfica real de cinco escalones (`--fs-titulo` 1.25rem … `--fs-label` 0.75rem); la escala
+  anterior comprimía todo en 0.28rem de rango.
+- `public/identidad-productos/index.html`: importa la capa; las cinco tarjetas de telemetría
+  pasan a una línea `.ui-resumen` (PM-105); los atributos de ML usan divulgación progresiva
+  (PM-106); las acciones se ordenan con la primaria primero; el comparador ML/Woo va a 55fr/45fr.
+- `scripts/um11-browser-smoke.mjs`: la aserción de conciliación deja de buscar las etiquetas de
+  las tarjetas viejas y verifica la línea `#recon .ui-resumen`.
+
+Contraste: el primario usa fondo `--accent-dim` + borde + texto de acento, no fondo sólido —
+texto claro sobre `#2DB8E8` sólido da ~1.9:1 y no pasa AA.
+
+Evidencia medida:
+
+- Blanco de toque: los 4 botones de acción a 44px (`min-height: var(--tap-min)` aplicado).
+- En 390px el detalle del caso arranca a **330px** del borde superior; antes quedaba fuera de la vista.
+- Atributos de ML: de 26 filas planas a **6 discriminantes + «Ver los otros 19»**.
+- `npx vitest run test/identidad-productos.test.js test/invariantes-esquema.test.js
+  --no-file-parallelism` → **2 archivos, 41 tests, todos verdes**.
+- `npm run e2e:um11:responsive` → verde en 390/768/1440, `"axe_violaciones":[]` en los tres.
+
+### Handoff
+
+- Rama: `feature/um1-identidad-continuacion` en `/opt/fusionbikes/worktrees/um1-identidad`.
+- `docs/superpowers/plans/plan-maestro-v2.md` §18.1: la máquina de estados de la operación ya
+  describe el camino directo (`pendiente → write → verify_write → activate → reprocess →
+  confirmado`) y deja el camino largo como excepción marcada con `sin_cero=0`.
+- Pendiente de definición del usuario: si la capa de componentes se extiende a las 27 pantallas
+  o queda por ahora en las de UM1.

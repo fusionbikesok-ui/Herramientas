@@ -81,8 +81,13 @@ try {
   await page.getByRole('heading', { name: 'Identidad de productos' }).waitFor();
   // Salud y conciliación visibles antes de tocar nada.
   await page.getByText('Modo shadow', { exact: true }).waitFor();
-  await page.getByText('Claves ML activas con stock', { exact: true }).waitFor();
-  await page.getByText('Urgentes abiertas', { exact: true }).waitFor();
+  // La telemetría es una línea de resumen, no cinco tarjetas: se verifica que la conciliación
+  // (total · verificadas · excepciones · urgentes) esté presente antes de tocar nada.
+  await page.locator('#recon .ui-resumen').waitFor();
+  const lineaRecon = await page.locator('#recon .ui-resumen').innerText();
+  for (const parte of ['activas con stock', 'verificadas', 'excepciones', 'urgentes']) {
+    if (!lineaRecon.includes(parte)) throw Error(`el resumen de conciliación no dice "${parte}": ${lineaRecon}`);
+  }
 
   // El caso está en la cola y se abre.
   await page.locator('[data-caso]').first().waitFor();

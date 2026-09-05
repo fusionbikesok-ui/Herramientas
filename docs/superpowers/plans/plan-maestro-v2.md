@@ -1116,7 +1116,7 @@ Los casos no vinculables deben recibir una excepción explícita `solo_ml` o per
 - Más de 60 minutos sin scan ML completo confiable degrada la salud. Evento crítico o venta retenida debe producir urgencia y primer intento de alerta en menos de dos minutos.
 - Caso: `detectado → disponible → tomado → operación_pendiente → resuelto|intervención`; excepción explícita reabre al vencer o invalidarse.
 - Claim avisa a los 20 minutos y vence/reabre a los 30 por inactividad. Otro usuario puede relevarlo con motivo.
-- Operación: `queued → zeroing → clearing → writing → restoring_stock → verifying → completed`; tres fallos o quince minutos llevan a intervención. Administración puede reintentar, restaurar el SKU previo verificado o dejar bloqueado.
+- Operación, camino directo (por defecto cuando hay `FB-{id_woo}` objetivo): `pendiente → write → verify_write → activate → reprocess → confirmado`. El camino largo (`zero → verify_zero → clear → verify_clear → write → …restore → verify_restore`) solo se recorre si el destino está vacío o ML rechaza la sobrescritura directa; se registra en la operación con `sin_cero=0`. Tres intentos o quince minutos desde el primer intento llevan a intervención. Administración puede reintentar, restaurar el SKU previo verificado o dejar bloqueado.
 
 ### Matching y cobertura bilateral
 

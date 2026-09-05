@@ -424,6 +424,26 @@ describe('UM1 identidad de productos', () => {
     expect(colas.woo_to_ml.some((p) => p.primary_woo_id === 21)).toBe(true);
   });
 
+  it('no deja la operación bloqueada si el impacto en hermanas se confirmó al decidir', () => {
+    // Regresión de la operación 104 en producción: nacía con `impacto_confirmado=1` y estado
+    // `bloqueada_impacto` a la vez, y quedaba trabada sin salida (nadie la desbloquea porque el
+    // impacto ya está confirmado; el worker no la toma porque el estado es terminal).
+    db.prepare("UPDATE identidad_config SET modo='enforced',escrituras_remotas_habilitadas=1 WHERE id=1").run();
+    woo(db, { id: 22, sku: 'FB-22', gtin: '4006381333948', stock: 1 });
+    ml(db, { clave: 'MLA22|a', itemId: 'MLA22', sku: null, gtin: '4006381333948', stock: 1 });
+    ml(db, { clave: 'MLA22|b', itemId: 'MLA22', sku: 'NO', stock: 1 });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA22|a'").get();
+    const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=22').get();
+    const r = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'siblings-confirmado-1', expected_version: caso.expected_version,
+      evidence_fingerprint: caso.evidencia_fingerprint, confirm_sibling_impact: true }, 'ana');
+    expect(r.ok).toBe(true);
+    expect(r.operacion.impacto_hermanas).toBeGreaterThan(0);
+    expect(r.operacion.impacto_confirmado).toBe(1);
+    expect(r.operacion.estado).toBe('pendiente');
+  });
+
   it('ofrece view model estable y permite notas a matcher:read, pero no decisiones', async () => {
     ml(db, { clave: 'MLA30|', sku: null, stock: 1 });
     auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });

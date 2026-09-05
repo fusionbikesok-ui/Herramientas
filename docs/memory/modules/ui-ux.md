@@ -2,7 +2,13 @@
 
 ## Fuentes normativas
 
-- Sistema visual existente: `public/lib/theme.css`.
+- Sistema visual existente: tokens en `public/lib/theme.css` y **capa de componentes compartida
+  en `public/lib/components.css`** (clases `ui-*`). La capa es la idea de shadcn/ui sin React ni
+  build; una pantalla la importa y la extiende, nunca redefine sus clases. Reglas: sólo tokens
+  (ningún color literal), `--accent` es exclusivamente interactivo —si algo es cian, se toca— y
+  el blanco de toque mínimo es 44px. Estrenada en Identidad de productos; las 27 pantallas
+  migran progresivamente. Antes de esa capa, `.btn` estaba redefinido en 13 pantallas, `.card`
+  en 11, `.modal` en 6 y `.tag` en 4.
 - Roles especializados: `.claude/agents/disenador-ux.md`,
   `.claude/agents/disenador-ui.md` y `.claude/agents/probador-e2e.md`.
 - El acceso de prueba se resuelve solo durante una ejecución E2E autorizada; no persistir ni
