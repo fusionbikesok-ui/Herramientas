@@ -3,6 +3,8 @@ import { escanearGuardiaMl, estadoGuardiaMl, listarGuardiaMl, registrarEventoGua
 import { requireAdmin } from '../lib/auth.js';
 import { pausarPublicacionMl } from '../lib/matcherPush.js';
 import { perfilPublicacionMl } from '../lib/guardiaMlAprendizaje.js';
+import { decidirCasoIdentidad } from '../lib/identidadProductos.js';
+import { randomUUID } from 'node:crypto';
 function actor(req) { return req.user?.username || 'desconocido'; }
 function puedeResolver(req) {
   // El modelo vigente no persiste un rol nominal; la autorización efectiva es
@@ -201,6 +203,40 @@ export function guardiaMlRouter(db, cfg) {
       if(!pub)return res.status(404).json({ok:false,error:'publicación no encontrada en ML'});
       const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
       if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
+
+      // ── Un solo escritor por clave (UM1.6) ─────────────────────────────────────
+      // Si Identidad de productos ya gobierna esta clave, la decisión se toma AHÍ y la
+      // escritura la hace su worker. Antes esta ruta encolaba una operación de Guardia y
+      // quedaban dos schedulers pudiendo tocar la misma publicación —uno cada minuto y otro
+      // cada cinco—; la colisión no era teórica: 26 operaciones de Guardia terminaron en
+      // `conflicto`, frenadas sólo por su control de versión.
+      //
+      // Se delega en vez de rechazar para no romper el botón del Matcher: el usuario hace lo
+      // mismo de siempre y la escritura sale por un único camino, con caso, decisión,
+      // operación durable, verificación por relectura e intervención ante fallo.
+      const casoUm1 = db.prepare("SELECT * FROM identidad_casos WHERE direccion='ml_fusion' AND ml_key=? AND estado<>'resuelto'").get(clave);
+      if (casoUm1) {
+        const productoFusion = db.prepare(`SELECT f.* FROM productos_fusion f
+          JOIN catalogo_cache c ON c.id_woo=f.primary_woo_id
+          WHERE c.sku=? AND f.estado='activo'`).get(sku);
+        if (!productoFusion) {
+          return res.status(400).json({ ok:false, error:`el SKU ${sku} no tiene un Producto Fusion activo`, code:'NO_FUSION_PRODUCT' });
+        }
+        const r = decidirCasoIdentidad(db, casoUm1.id, {
+          tipo: 'vincular', product_id: productoFusion.id, operation_id: randomUUID(),
+          expected_version: casoUm1.expected_version, evidence_fingerprint: casoUm1.evidencia_fingerprint,
+          explicacion: 'vinculación desde el Matcher',
+        }, actor(req));
+        if (!r.ok) {
+          // El freno por hermanas necesita ver cuántas son y sobre qué publicación antes de
+          // confirmar: eso sólo lo ofrece la pantalla de Identidad. Confirmar a ciegas desde
+          // acá vaciaría el freno.
+          const estado = r.code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED' ? 409 : (r.code === 'NOT_FOUND' ? 404 : 400);
+          return res.status(estado).json({ ...r, motor: 'identidad', migracion: 'Resolvelo en Identidad de productos: /herramientas/identidad-productos/' });
+        }
+        return res.status(202).json({ ok:true, motor:'identidad', estado:'pendiente_ml', caso_id:casoUm1.id,
+          mensaje:'Vinculación decidida en Identidad de productos; su worker la escribe y verifica en ML' });
+      }
       // Crear o reusar el caso: si no existe, crearlo en estado 'abierto'.
       const ts=new Date().toISOString();
       const casoExistente=db.prepare("SELECT id,estado,expected_version FROM guardia_ml_casos WHERE clave=? AND estado!='resuelto'").get(clave);

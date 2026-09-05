@@ -166,6 +166,39 @@ describe('Guardia ML: compartición normal de SKUs (2026-09-03)', () => {
     expect(compartido).toBeTruthy();
   });
 
+  // UM1.6 — un solo escritor por clave. Antes esta ruta encolaba SIEMPRE una operación de
+  // Guardia, así que quedaban dos schedulers pudiendo tocar la misma publicación (uno cada
+  // minuto, otro cada cinco). Ahora, si Identidad gobierna la clave, la decisión se toma ahí.
+  it('si Identidad gobierna la clave, el botón del Matcher delega y NO encola en Guardia', async () => {
+    catalogoItem(db, 'FB-DELEGA');
+    cachePubl(db, 'MLA-DEL|', '', 1);
+    const woo = db.prepare("SELECT id_woo FROM catalogo_cache WHERE sku='FB-DELEGA'").get();
+    // fusion_sku es columna generada (FB-{id_woo}); no se inserta.
+    db.prepare(`INSERT INTO productos_fusion (primary_woo_id,nombre_canonico,estado,creado_en,actualizado_en)
+      VALUES (?,?,'activo',?,?)`).run(woo.id_woo, 'Casco urbano negro', now(), now());
+    db.prepare(`INSERT INTO identidad_casos (direccion,ml_key,clasificacion,estado,severidad,evidencia_fingerprint,primera_deteccion_en,ultima_deteccion_en)
+      VALUES ('ml_fusion','MLA-DEL|','sku_ausente','urgente','urgente','v2:x',?,?)`).run(now(), now());
+
+    const res = await request(app(db)).post('/api/guardia-ml/vincular-clave').send({ clave: 'MLA-DEL|', sku: 'FB-DELEGA' });
+
+    expect(res.status).toBe(202);
+    expect(res.body.motor).toBe('identidad');
+    // Lo que importa: Guardia NO quedó con trabajo remoto sobre esta clave.
+    expect(db.prepare("SELECT COUNT(*) n FROM guardia_ml_casos WHERE clave='MLA-DEL|'").get().n).toBe(0);
+    // Y la decisión sí quedó del lado de Identidad.
+    const caso = db.prepare("SELECT id FROM identidad_casos WHERE ml_key='MLA-DEL|'").get();
+    expect(db.prepare('SELECT COUNT(*) n FROM identidad_decisiones WHERE caso_id=?').get(caso.id).n).toBe(1);
+  });
+
+  it('si Identidad NO gobierna la clave, el botón sigue funcionando por Guardia', async () => {
+    catalogoItem(db, 'FB-SINUM1');
+    cachePubl(db, 'MLA-SU|', '', 1);
+    const res = await request(app(db)).post('/api/guardia-ml/vincular-clave').send({ clave: 'MLA-SU|', sku: 'FB-SINUM1' });
+    expect(res.status).toBe(202);
+    expect(res.body.motor).toBeUndefined();
+    expect(db.prepare("SELECT COUNT(*) n FROM guardia_ml_casos WHERE clave='MLA-SU|'").get().n).toBe(1);
+  });
+
   it('vincula SKU desde matcher sin caso abierto (Trabajo 3)', async () => {
     catalogoItem(db, 'FB-MATCHER');
     cachePubl(db, 'MLA-E|', '', 1);
