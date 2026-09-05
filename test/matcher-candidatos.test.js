@@ -110,6 +110,10 @@ describe('computarCandidatosApi · cruce server-side', () => {
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: '' });
     seedCache(db, { clave: 'B|', itemId: 'B', titulo: 'Otra', seller_sku: '' });
     seedSyncLog(db, { clave: 'A|', estado: 'sin_mapeo' }); // solo A necesita atención
+    // `clavesNecesitanAtencion` tiene DOS ramas: la del sync_log y, agregada después, una
+    // publicación ACTIVA sin decisión. B| cae en la segunda, así que para que solo A
+    // necesite atención hay que decidir B| — antes alcanzaba con no loguearla.
+    seedDecision(db, { clave: 'B|', sku: 'FB-1', accion: 'confirmar' });
 
     const { items, total } = computarCandidatosApi(db, 'atencion');
     expect(total).toBe(1);
@@ -118,6 +122,10 @@ describe('computarCandidatosApi · cruce server-side', () => {
 
   it('scope=atencion sin pendientes devuelve vacío', () => {
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco', seller_sku: '' });
+    // Una publicación activa sin decisión YA cuenta como pendiente, así que para que no haya
+    // nada pendiente hay que decidirla.
+    seedProducto(db, { id_woo: 1, nombre: 'Casco', sku: 'FB-1' });
+    seedDecision(db, { clave: 'A|', sku: 'FB-1', accion: 'confirmar' });
     expect(computarCandidatosApi(db, 'atencion')).toEqual({ items: [], total: 0 });
   });
 
@@ -300,6 +308,10 @@ describe('GET /api/matcher/candidatos', () => {
     seedCache(db, { clave: 'A|', itemId: 'A', titulo: 'Casco Bell Negro', seller_sku: '' });
     seedCache(db, { clave: 'B|', itemId: 'B', titulo: 'Otra publicación', seller_sku: '' });
     seedSyncLog(db, { clave: 'A|', estado: 'sin_mapeo' }); // solo A necesita atención
+    // `clavesNecesitanAtencion` tiene DOS ramas: la del sync_log y, agregada después, una
+    // publicación ACTIVA sin decisión. B| cae en la segunda, así que para que solo A
+    // necesite atención hay que decidir B| — antes alcanzaba con no loguearla.
+    seedDecision(db, { clave: 'B|', sku: 'FB-1', accion: 'confirmar' });
 
     const atencion = await getCandidatos(app, '?scope=atencion');
     expect(atencion.status).toBe(200);

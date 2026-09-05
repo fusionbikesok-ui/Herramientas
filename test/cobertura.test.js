@@ -173,7 +173,14 @@ describe('coberturaRouter /exclusiones', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
-  it('POST crea, GET lista, DELETE borra; upsert no duplica', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST crea, GET lista, DELETE borra; upsert no duplica', async () => {
     const db = openDb(TEST_DB);
     const app = buildTestApp(db);
 
@@ -205,7 +212,14 @@ describe('coberturaRouter /exclusiones', () => {
     db.close();
   });
 
-  it('POST sin id_woo devuelve 400', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST sin id_woo devuelve 400', async () => {
     const db = openDb(TEST_DB);
     const app = buildTestApp(db);
     const res = await request(app)
