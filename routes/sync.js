@@ -2444,8 +2444,24 @@ export async function reactivarAutomatico(db, cfg) {
     // en masa y la comparación de abajo perdía sentido; con él, más la ventana de red de
     // seguridad bajada a 2h, el riesgo de frenada fantasma queda acotado.
     //
-    // ACOPLAMIENTO IMPLÍCITO A VIGILAR (hallazgo del revisor, MENOR, 2026-08-06): hoy la única
-    // vía que mantiene `ml_publicaciones_cache.precio` fresco es ese POST puntual. Si el día de
+    // ACOPLAMIENTO IMPLÍCITO A VIGILAR (hallazgo del revisor, MENOR, 2026-08-06). ACTUALIZADO
+    // 2026-09-05: ya NO es la única vía. El webhook de `items` de ML proyecta y refresca el
+    // cache —precio incluido— por multiget acotado (`item.project` en workerIntegrationJobs).
+    // Se evaluó contra este comentario antes de habilitarlo, que es lo que pedía:
+    //   · Refresca el caché, que es la mitad que importa para esta comparación. Un precio más
+    //     fresco hace que `necesitaRecheck` DETECTE la diferencia contra `precio_ml_evaluado`
+    //     y re-consulte, en vez de saltearla — o sea que fortalece esta red, no la degrada.
+    //   · No borra la frenada, y no hace falta: la fila se sobrescribe (ON CONFLICT DO UPDATE)
+    //     cuando la re-evaluación la vuelve a producir, y el recheck ya se disparó por el
+    //     precio distinto. Borrarla sería sólo un atajo para forzar la re-evaluación.
+    //   · No reactiva nada por su cuenta: `reactivarAutomatico` sigue con su propio cron y
+    //     `chequearNetoReactivar` revalida en vivo contra ML antes de escribir. Lo que cambia
+    //     es CUÁNDO se evalúa, no si se reactiva.
+    // Exposición medida el 2026-09-05: 7 frenadas vigentes y 12 filas realmente reactivables
+    // (de 4621 pausadas por out_of_stock, el resto sin stock en Woo), así que el costo en
+    // llamadas está acotado por esos 12 y no por el volumen de webhooks.
+    //
+    // Historia: hasta 2026-09-05 la única vía que mantenía el precio fresco era el POST puntual. Si el día de
     // mañana se agrega OTRA vía de cambio de precio de ML (push masivo, integración nueva,
     // script de carga), esa vía tiene que sumarle el mismo par
     // actualizar-caché/borrar-frenada que hoy tiene POST /actualizar-precio — si no, esta
