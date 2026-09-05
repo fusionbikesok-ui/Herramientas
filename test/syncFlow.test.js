@@ -52,7 +52,7 @@ const CFG = {
   woo: { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' },
 };
 
-function seedMatcher(db) {
+function seedMatcher(db, { conObservacionMl = false } = {}) {
   const now = new Date().toISOString();
   db.prepare(
     'INSERT OR IGNORE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
@@ -64,6 +64,28 @@ function seedMatcher(db) {
   ).run('MLA200|987', 'CASCO-L', 'Casco L', 'asignar', now);
   db.prepare('UPDATE sku_matcher_decisiones SET sku = ?, wc_nombre = ?, accion = ?, actualizado_en = ? WHERE clave = ?')
     .run('CASCO-L', 'Casco L', 'asignar', now, 'MLA200|987');
+  // La decisión local NO alcanza para que la clave esté cubierta: desde que Guardia ML
+  // custodia el alta de pedidos (routes/sync.js:658), `esClaveCubierta` exige además una
+  // observación remota en ml_publicaciones_cache cuyo seller_sku coincida exactamente con
+  // el SKU decidido. Sin esa fila, la orden se RETIENE y no se crea el pedido en WC — que
+  // es el comportamiento correcto, pero no el que estos casos quieren ejercitar. En
+  // producción la observación existe: el scan cachea las publicaciones activas.
+  if (conObservacionMl) {
+    seedObservacionMl(db, 'MLA100|', 'MLA100', '', 'BIKE-001');
+    seedObservacionMl(db, 'MLA200|987', 'MLA200', '987', 'CASCO-L');
+  }
+}
+
+/**
+ * Observación remota de una publicación con su seller_sku, que es lo que `esClaveCubierta`
+ * compara contra la decisión local. Para ejercitar la falta de cobertura, simplemente no se
+ * llama — o se llama con un seller_sku divergente.
+ */
+function seedObservacionMl(db, clave, itemId, variationId, sellerSku) {
+  db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, seller_sku, actualizado_en)
+    VALUES (?, ?, ?, 'active', ?, ?)
+    ON CONFLICT(clave) DO UPDATE SET seller_sku=excluded.seller_sku, status=excluded.status`)
+    .run(clave, itemId, variationId, sellerSku, new Date().toISOString());
 }
 
 // Por default, regularPrice = precio (sin oferta: LISTA y vigente coinciden), salvo que un
@@ -79,10 +101,10 @@ function seedCatalogo(db, { precio = 300, regularPrice } = {}) {
 }
 
 // Publicación ML en cache — syncWcToMl solo empuja stock a publicaciones activas.
-function seedPublicacion(db, { clave, itemId, variationId = '', status = 'active' }) {
+function seedPublicacion(db, { clave, itemId, variationId = '', status = 'active', sellerSku = null }) {
   db.prepare(
-    'INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, actualizado_en) VALUES (?, ?, ?, ?, ?)'
-  ).run(clave, itemId, variationId, status, new Date().toISOString());
+    'INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, seller_sku, actualizado_en) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(clave, itemId, variationId, status, sellerSku, new Date().toISOString());
 }
 
 describe('syncMlToWc', () => {
@@ -90,7 +112,7 @@ describe('syncMlToWc', () => {
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
@@ -447,6 +469,7 @@ describe('syncMlToWc', () => {
   it('vínculo propio manda aunque el título no se parezca', async () => {
     db.prepare("INSERT INTO catalogo_cache (id_woo, id_padre, sku, tipo, nombre, stock, precio, regular_price, actualizado_en) VALUES (6001, NULL, 'FB-6001', 'simple', 'Producto Con Nombre Totalmente Distinto', 3, 50000, 50000, ?)").run(new Date().toISOString());
     db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, accion, actualizado_en) VALUES ('MLA6001|', 'FB-6001', 'confirmar', ?)").run(new Date().toISOString());
+    seedObservacionMl(db, 'MLA6001|', 'MLA6001', '', 'FB-6001'); // el vínculo propio también se observa en ML
     const orden = {
       id: 'ORD-VINCULO-PROPIO',
       date_created: new Date().toISOString(),
@@ -504,7 +527,7 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     seedCatalogo(db, { precio: 300 }); // contado 200
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -1056,7 +1079,7 @@ describe('syncMlToWc — casos borde de cobertura (tester, 2026-08-03)', () => {
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
@@ -1781,7 +1804,7 @@ describe('syncMlToWc — timeout del POST /orders (verificacion anti-duplicado)'
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     seedCatalogo(db);
     vi.clearAllMocks();
   });
@@ -2064,7 +2087,7 @@ describe('syncMlToWc — reserva atomica entre procesos concurrentes (sin candad
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     seedCatalogo(db);
     vi.clearAllMocks();
   });
@@ -2156,7 +2179,7 @@ describe('syncMlToWc — recuperacion manual de una reserva retenida', () => {
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     seedCatalogo(db);
     vi.clearAllMocks();
   });
@@ -2260,7 +2283,7 @@ describe('syncMlToWc — verificacion en Woo pagina hasta encontrar el pedido en
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     seedCatalogo(db);
     vi.clearAllMocks();
   });
@@ -2329,7 +2352,7 @@ describe('syncMlToWc — verificacion anti-duplicado: dates_are_gmt y reverifica
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     seedCatalogo(db);
     vi.clearAllMocks();
   });
@@ -2679,7 +2702,7 @@ describe('syncMlToWc — el cursor de ventas no avanza si ML no responde (cooldo
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
@@ -2774,7 +2797,7 @@ describe('syncOrdenMlPuntual (A.3)', () => {
 
   beforeEach(() => {
     db = openDb(TEST_DB);
-    seedMatcher(db);
+    seedMatcher(db, { conObservacionMl: true });
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
@@ -2793,9 +2816,13 @@ describe('syncOrdenMlPuntual (A.3)', () => {
       date_created: new Date().toISOString(),
       order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }],
     };
+    // El resync de hermanas (fail-open, fire-and-forget) consulta ML por su cuenta después
+    // de crear el pedido, así que el mock no puede exigir un único path ni un único
+    // llamado: lo que este caso afirma es que la ORDEN se trae por GET puntual y nunca por
+    // /orders/search, que es el barrido paginado que este camino vino a reemplazar.
     mlFetch.mockImplementation(async (db_, mlCfg, method, path) => {
-      expect(path).toBe('/orders/ORD-PUNTUAL-1'); // nunca /orders/search
-      return { status: 200, data: orden };
+      if (path === '/orders/ORD-PUNTUAL-1') return { status: 200, data: orden };
+      return { status: 200, data: {} };
     });
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
       if (path === '/orders' && method === 'post') return { data: { id: 8001 } };
@@ -2807,7 +2834,9 @@ describe('syncOrdenMlPuntual (A.3)', () => {
     const result = await p;
 
     expect(result.omitido).toBe(false);
-    expect(mlFetch).toHaveBeenCalledTimes(1);
+    const pathsMl = mlFetch.mock.calls.map((c) => c[3]);
+    expect(pathsMl.filter((x) => x === '/orders/ORD-PUNTUAL-1')).toHaveLength(1);
+    expect(pathsMl.some((x) => String(x).startsWith('/orders/search'))).toBe(false);
     expect(db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id=?').get('ORD-PUNTUAL-1')).toBeTruthy();
     const pedido = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get('ORD-PUNTUAL-1');
     expect(pedido.wc_order_id).toBe(8001);

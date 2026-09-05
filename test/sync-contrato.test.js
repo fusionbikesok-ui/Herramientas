@@ -41,6 +41,17 @@ function seedMatcher(db) {
   db.prepare(
     'INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
   ).run('MLA200|987654321', 'CASCO-L', 'Casco Talla L', 'asignar', now);
+  // La decisión local no alcanza: desde que Guardia ML custodia el alta de pedidos
+  // (routes/sync.js:658), `esClaveCubierta` exige además la observación remota de la
+  // publicación con el seller_sku coincidente. Sin ella la orden se retiene y nunca se
+  // llega al POST /orders que este contrato describe.
+  for (const [clave, itemId, varId, sku] of [
+    ['MLA100|', 'MLA100', '', 'BIKE-001'],
+    ['MLA200|987654321', 'MLA200', '987654321', 'CASCO-L'],
+  ]) {
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, seller_sku, actualizado_en)
+      VALUES (?, ?, ?, 'active', ?, ?)`).run(clave, itemId, varId, sku, now);
+  }
 }
 
 function seedCatalogo(db) {
