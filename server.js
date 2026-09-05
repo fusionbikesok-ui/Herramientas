@@ -496,9 +496,30 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // UM1 — Guardia ML: refresco completo de publicaciones cada 15 min. El candado
       // compartido de matcher evita solapamientos; el refresco es fail-closed y no toca
       // publicaciones remotas, solo actualiza el cache local que la Guardia inspecciona.
-      cron.schedule('*/15 * * * *', () => {
+      // Tick fino: la cadencia real la decide el ramp (`lib/mlScanRamp.js`), no el cron. Empieza
+      // en 15 minutos y sólo se relaja cuando el webhook de `items` demuestra que cubre; ante un
+      // cambio que ningún webhook anunció, o si la proyección falla, vuelve atrás sola.
+      cron.schedule('*/5 * * * *', async () => {
+        const { tocaScan, evaluarRamp, medirCoberturaWebhook, proyeccionItemsRota, estadoRamp } =
+          await import('./lib/mlScanRamp.js');
+        if (!tocaScan(app._db)) return;
+        const desde = estadoRamp(app._db)?.ultimo_scan_en || null;
         const r = dispararRefrescoMl(app._db, syncCfg.ml, 'all');
-        if (!r.ok && !r.running) console.error('Guardia ML: no se pudo iniciar lectura:', r.error);
+        if (!r.ok && !r.running) { console.error('Guardia ML: no se pudo iniciar lectura:', r.error); return; }
+        if (r.running) return;
+        // La medición va DESPUÉS del refresco: compara la huella nueva contra la del scan
+        // anterior para saber qué cambió sin diffear en el camino caliente del scan.
+        try {
+          const cobertura = medirCoberturaWebhook(app._db, desde);
+          const paso = evaluarRamp(app._db, {
+            cambiosSinAviso: cobertura.cambiosSinAviso,
+            proyeccionRota: proyeccionItemsRota(app._db),
+          });
+          if (paso.accion !== 'sin_cambio') {
+            console.log(`[scan-ramp] ${paso.accion} → ${paso.intervalo_min}min/frescura ${paso.frescura_min}min` +
+              (paso.motivo ? ` — ${paso.motivo}` : '') + ` | cambios sin aviso: ${cobertura.cambiosSinAviso}/${cobertura.cambios}`);
+          }
+        } catch (e) { console.error('[scan-ramp] error evaluando cobertura:', e.message); }
       });
       cron.schedule('*/5 * * * *', () => {
         procesarOperacionesGuardia(app._db, syncCfg).catch(err => console.error('Guardia ML operaciones:', err.message));

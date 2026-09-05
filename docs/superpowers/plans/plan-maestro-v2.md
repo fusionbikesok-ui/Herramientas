@@ -865,7 +865,9 @@ La matriz verificada queda así:
 | ML `orders_v2` | Sync puntual de preparación; no actualiza el flujo ML→Woo | Definir autoridad y paridad funcional con `orders` |
 | ML `questions`/`messages` | Proyección a tablas locales/inbox | Reconciliar contra ML aunque no llegue otro webhook; retirar avisos obsoletos |
 | ML `claims`/`post_purchase:claims` | Job durable y proyección de reclamos/inbox | Reconciliación, reapertura vigente y separación de no confirmado vs cerrado |
-| ML `shipments`, `items`, `invoices`, `orders_feedback` y topics futuros | `audit-only`: se recibe y registra, sin proyección | Decidir por topic si requiere sincronización, descartarlo explícitamente o mantenerlo auditado con alarma de cobertura |
+| ML `items` | **RESUELTO (2026-09-05, PM-136)**: proyecta. Relee el ítem por multiget acotado, con coalescencia de ráfagas de 2 min y el limitador de cupo existente | Ninguna. Costo medido: entre +0,06% y +1,1% sobre las ~34.000 llamadas diarias del scan |
+| ML `messages` | **ROTO Y NO ARREGLABLE DESDE EL CÓDIGO (PM-137)**: 39 jobs `dead_lettered`, 0 completados, `ml_mensajes` en 0 filas. El webhook manda el `resource` como id pelado y el único endpoint que lo resuelve, `/marketplace/messages/{id}`, responde 403 `Invalid caller.id`: es del flujo de aplicaciones *marketplace*, no del de un vendedor común | Decidir entre descartar el topic explícitamente o alcanzar los mensajes por `/messages/packs/{pack}/sellers/{id}` desde el contexto de una orden |
+| ML `shipments`, `invoices`, `orders_feedback` y topics futuros | `audit-only`: se recibe y registra, sin proyección | Decidir por topic si requiere sincronización, descartarlo explícitamente o mantenerlo auditado con alarma de cobertura |
 
 La corrección queda incorporada a E6/E11 y debe incluir:
 
@@ -1083,7 +1085,7 @@ Precios, catálogo, consulta de precios, códigos universales, variaciones muert
 
 UM1 reemplaza Matcher, Cobertura y Guardia por una identidad bilateral ML↔Woo basada en `Producto Fusion`. Es transversal y no renumera E0–E24. Su primera subentrega, **UM1.1**, es bloqueante y tiene prioridad máxima: cerrar el universo actual de claves ML activas con stock cuyo `SELLER_SKU` esté ausente, vacío, no exista de forma única en Woo o contradiga un GTIN válido.
 
-La unidad ML es siempre `item_id + variation_id`. Una clave solo está cubierta cuando su identidad y stock fueron verificados remotamente con observaciones confiables de menos de 60 minutos, o cuando posee una excepción explícita `solo_ml`. Una decisión histórica, similitud textual, `seller_custom_field` o una variación hermana nunca cubren la clave.
+La unidad ML es siempre `item_id + variation_id`. Una clave solo está cubierta cuando su identidad y stock fueron verificados remotamente con observaciones confiables **dentro de la ventana de frescura vigente**, o cuando posee una excepción explícita `solo_ml`. Esa ventana **no es un parámetro suelto**: vale 60 minutos mientras el scan corre cada 15, y sólo llega a 120 cuando el ramp lleva el scan a 60 —los dos valores se mueven juntos y sólo con cobertura de webhook demostrada (PM-138)—. Relajarla es aceptar dar por verificada una clave observada hace más tiempo: se sostiene únicamente porque, con el webhook cubriendo, una observación vieja significa «nada cambió» y no «no miramos». Una decisión histórica, similitud textual, `seller_custom_field` o una variación hermana nunca cubren la clave.
 
 Woo continúa como autoridad de stock. Producto Fusion es la identidad canónica: una unidad vendible, una identidad Woo activa como máximo y cero o más claves ML. Su SKU no es editable y cumple `FB-{id_woo}`; un producto provisional sin Woo no tiene SKU ni puede sincronizarse.
 
@@ -1114,7 +1116,7 @@ Los casos no vinculables deben recibir una excepción explícita `solo_ml` o per
 
 ### Detección, estados y recuperación
 
-- Los webhooks ML `items` y Woo de producto crean trabajo durable y releen el origen; scans completos separados cada 15 minutos reparan eventos perdidos. Woo degrada salud a los 30 minutos y ML a los 60. Un cambio descubierto sin webhook genera alerta/métrica de cobertura.
+- Los webhooks ML `items` y Woo de producto crean trabajo durable y releen el origen; scans completos separados reparan eventos perdidos. **La cadencia del scan ML y su ventana de frescura son adaptativas y se mueven JUNTAS** (PM-138): arrancan en 15 min / 60 min y escalan por escalones —15/60, 20/60, 30/60 y 60/120— **sólo cuando el webhook demuestra que cubre**. Un scan de 60 minutos con frescura de 60 es la combinación rota: justo antes de cada corrida toda observación tendría ~60 minutos y nada verificaría. Un cambio descubierto sin webhook baja un escalón de inmediato; una proyección de `items` fallando congela el ramp y además lo baja. Woo degrada salud a los 30 minutos.
 - Una baja o cambio crítico Woo confirmado protege en cero todas las claves ML vinculadas y retiene pedidos. La recuperación válida verifica ambos canales, restaura stock y libera pedidos.
 - Una publicación ML pausada inválida conserva deuda no urgente; cerrada se archiva; reactivada con stock e identidad inválida se protege en cero y pasa a urgencia máxima.
 - Caso: `detectado → disponible → tomado → operación_pendiente → resuelto|intervención`; claim opcional, relevo por cualquier decisor con motivo y concurrencia por `expected_version`.
