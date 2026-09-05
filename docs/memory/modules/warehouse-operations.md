@@ -60,6 +60,11 @@ Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado resp
 
 ## Recepción, devoluciones y conteos: objetivo E14–E18
 
+Corrección operativa 2026-09-05: la sesión de conteo 31 (Santini) quedó confirmada después de
+ajustar únicamente sus fallidos. `FB-62881` se fijó en Woo a 2 unidades (dos filas del mismo
+SKU); `FB-65097`, `FB-65098` y `FB-65099` eran variaciones eliminadas y se descartaron como no
+aplicables, conservando sus diferencias históricas. La sesión quedó sin filas pendientes.
+
 - E18 tiene integrado el núcleo durable y una segunda fase: `/api/stock-exceptions` y
   `lib/stockExceptions.js` persisten incidentes físicos, tareas, versiones, `operation_id` y
   auditoría append-only mediante `migrations/066_stock_exceptions.sql`; `migrations/067_stock_exception_returns.sql`
