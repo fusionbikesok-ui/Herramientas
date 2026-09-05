@@ -15,6 +15,7 @@ import {
   listarProductosFusion,
   obtenerCasoIdentidad,
   obtenerOperacionIdentidad,
+  confirmarImpactoIdentidad,
   reintentarOperacionIdentidad,
 } from '../lib/identidadProductos.js';
 
@@ -82,6 +83,10 @@ export function identidadProductosRouter(db) {
     decidirCasoIdentidad(db, req.params.id, { ...req.body, tipo: 'solo_ml' }, actor(req)), true));
   router.post('/operaciones/:id/reintentar', exigir('write', true), (req, res) => responder(res,
     reintentarOperacionIdentidad(db, req.params.id, req.body || {}, actor(req))));
+  // Confirmar impacto en hermanas es una decisión humana con consecuencia remota: mismo
+  // nivel que reintentar, sólo Administración.
+  router.post('/operaciones/:id/confirmar-impacto', exigir('write', true), (req, res) => responder(res,
+    confirmarImpactoIdentidad(db, req.params.id, req.body || {}, actor(req))));
   router.post('/productos/:id/tareas-publicacion', exigir('write'), (req, res) => responder(res,
     crearTareaPublicacion(db, req.params.id, req.body || {}, actor(req)), true));
   router.put('/config/modo', exigir('write', true), (req, res) => responder(res,

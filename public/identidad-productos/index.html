@@ -412,6 +412,9 @@
         + (x.ultimo_error ? '<br><span class="muted error">' + esc(x.ultimo_error) + '</span>' : '')
         + '</td><td>' + esc(x.paso_actual) + '</td><td>' + esc(x.intentos) + '</td><td>'
         + (x.estado === 'intervencion' ? '<button class="btn" data-reintentar="' + x.id + '">Reintentar</button>' : '')
+        + (x.estado === 'bloqueada_impacto'
+          ? '<button class="btn danger" data-impacto="' + x.id + '" data-hermanas="' + esc(x.impacto_hermanas || 0) + '" data-clave="' + esc(x.ml_key) + '">Confirmar impacto</button>'
+          : '')
         + '</td></tr>').join('') + '</tbody></table></div>' : '<p class="muted empty">No hay operaciones registradas.</p>')
       + '</section>';
   }
@@ -496,6 +499,24 @@
 
   function bind() {
     document.querySelectorAll('[data-caso]').forEach((b) => { b.onclick = () => { state.aviso = null; abrirCaso(Number(b.dataset.caso)); }; });
+    document.querySelectorAll('[data-impacto]').forEach((b) => {
+      b.onclick = async () => {
+        // La confirmación tiene consecuencia remota sobre otras variaciones: se dice cuántas
+        // son y sobre qué publicación, antes de pedirla. Confirmar a ciegas vacía el freno.
+        const n = b.dataset.hermanas;
+        if (!confirm('Esta corrección puede afectar ' + n + ' variación(es) hermana(s) de la publicación '
+          + b.dataset.clave + '.\n\nSe escribirá el SKU y las hermanas pueden verse alteradas.'
+          + '\n\n¿Confirmás el impacto?')) return;
+        const motivo = prompt('Motivo de la confirmación (queda auditado):') || null;
+        try {
+          await api('/operaciones/' + b.dataset.impacto + '/confirmar-impacto', {
+            method: 'POST', body: JSON.stringify({ operation_id: opId(), motivo }),
+          });
+          state.aviso = 'Impacto confirmado. La operación vuelve a la cola y el worker la va a ejecutar.';
+          await cargar();
+        } catch (e) { alert(e.message); }
+      };
+    });
     document.querySelectorAll('[data-reintentar]').forEach((b) => {
       b.onclick = () => mutar('/operaciones/' + b.dataset.reintentar + '/reintentar', { operation_id: opId() });
     });
