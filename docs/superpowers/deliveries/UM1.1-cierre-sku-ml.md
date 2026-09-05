@@ -301,26 +301,25 @@ arreglado y verificado): son dos caminos distintos.
    `gtin_contradictorio` mantiene el caso `verificado`. El conflicto queda en la clasificación
    y en el evento `gtin_contradictorio_post_verificacion`; no vuelve a la cola ni repite la
    escritura. Si el SKU desaparece o cambia, sí reabre urgente. Regresión dirigida: 34/34.
-2. **Caso 1018 (`MLA3588983126|`)** — `intervencion` con una operación en `shadow` que nunca
-   corrió. Es el comportamiento que introduje en PM-084 (un `pendiente` que cambia va a
-   `intervencion` en vez de volver a `urgente`). Es correcto en intención, pero con una
-   operación que nunca se ejecutó le pide a la persona resolver algo que el sistema todavía
-   no intentó. Falta definir qué hacer con la operación encolada al pasar a `intervencion`.
+2. **Resuelto — caso 1018 (`MLA3588983126|`)**: si el cambio de identidad llega mientras la
+   última operación sigue `shadow`, tiene cero intentos y no registra pasos remotos, esa
+   operación queda inmovilizada como `obsoleta_por_cambio_identidad_antes_de_efecto_remoto`.
+   No se puede reintentar, el responsable se libera y el caso vuelve a `urgente` para una
+   decisión nueva. Una saga que ya empezó conserva `intervencion`, porque puede tener efectos
+   parciales. Regresión dirigida incluida.
 
 ### Por qué la rama no está mergeada
 
-El camino directo cambia la saga que fija la sección 18.1 del maestro y está verificado sólo
-con adaptador falso. Con dos problemas de estado abiertos, sumar un cambio de comportamiento
-a producción mezcla variables. Producción sigue con la saga larga, que funciona.
+El camino directo ya está reflejado en la sección 18.1 y está verificado con adaptador falso.
+Producción sigue con la saga larga hasta integrar y autorizar el despliegue manual.
 
 ### Próxima acción reproducible
 
-1. Resolver el caso `shadow` enviado erróneamente a intervención.
-2. Recién después: actualizar la sección 18.1 del maestro con el fundamento del camino directo
-   (la API no exige el cero; el cero pausa la publicación con `out_of_stock`), mergear y
-   desplegar.
+1. Verificar el diff final y decidir merge/despliegue manual.
+2. Designar explícitamente la segunda clave canario antes de configurarla.
 
 **Config productiva al momento de escribir esto**: `modo=enforced`,
-`escrituras_remotas_habilitadas=1`, `canario_ml_key='MLA1563030043|'`, `lote_max=1`. El
-canario sigue puesto, así que el worker **no puede tocar ninguna otra publicación**. Backups:
+`escrituras_remotas_habilitadas=1`, `canario_ml_key='MLA1563030043|'`, `lote_max=1`. La rama
+soporta hasta dos claves explícitas separadas por coma y `lote_max=2`, pero no altera esa
+configuración productiva ni designa una segunda publicación. Backups:
 `fusion.sqlite.bak-antes-canario-20260904-232618` y `...-canario2-20260904-234431`.

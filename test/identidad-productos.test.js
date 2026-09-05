@@ -12,7 +12,9 @@ import {
   estadoIdentidadProductos,
   fingerprintEvidencia,
   listarColasIdentidad,
+  procesarOperacionesIdentidad,
   procesarPasoOperacionIdentidad,
+  reintentarOperacionIdentidad,
 } from '../lib/identidadProductos.js';
 import { identidadProductosRouter } from '../routes/identidadProductos.js';
 
@@ -110,6 +112,61 @@ describe('UM1 identidad de productos', () => {
     expect(identity.sku_verificado_en).toBe(ISO);
     expect(identity.stock_verificado_en).toBe(ISO);
     expect(db.prepare("SELECT origen FROM sku_matcher_decisiones WHERE clave='MLA8|'").get().origen).toBe('identidad_productos');
+  });
+
+  it('devuelve a urgente una operación shadow obsoleta antes de cualquier efecto remoto', () => {
+    woo(db, { id: 51, sku: 'FB-51', stock: 2 });
+    ml(db, { clave: 'MLA51|', sku: null, stock: 2 });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    let caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA51|'").get();
+    const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=51').get();
+    const decision = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'shadow-obsoleta', expected_version: caso.expected_version,
+      evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+    expect(decision.operacion.estado).toBe('shadow');
+
+    // La identidad cambia antes de que la operación llegue al adaptador remoto.
+    db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='SKU-AJENO',seller_sku_presente=1 WHERE clave='MLA51|'").run();
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA51|'").get();
+    const operacion = db.prepare('SELECT * FROM identidad_operaciones WHERE id=?').get(decision.operacion.id);
+    expect(caso).toMatchObject({ estado: 'urgente', clasificacion: 'sku_inexistente', responsable: null, tomado_en: null });
+    expect(operacion).toMatchObject({ estado: 'intervencion', intentos: 0, ultimo_error: 'obsoleta_por_cambio_identidad_antes_de_efecto_remoto' });
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_operacion_pasos WHERE operacion_id=?").get(operacion.id).n).toBe(0);
+    const evento = db.prepare("SELECT detalle_json FROM identidad_historial WHERE entidad_tipo='operacion' AND entidad_id=? AND evento='operacion_shadow_obsoleta_por_cambio_identidad'").get(operacion.id);
+    expect(JSON.parse(evento.detalle_json)).toMatchObject({ decision_id: decision.decision.id, clasificacion_nueva: 'sku_inexistente' });
+    expect(reintentarOperacionIdentidad(db, operacion.id, { operation_id: 'no-reintentar', expected_version: caso.expected_version,
+      evidence_fingerprint: caso.evidencia_fingerprint }, 'ana')).toMatchObject({ ok: false, code: 'OBSOLETE_OPERATION' });
+  });
+
+  it('admite hasta dos claves de canario y nunca procesa más de dos operaciones por corrida', async () => {
+    for (const id of [61, 62, 63]) {
+      woo(db, { id, sku: `FB-${id}`, stock: 2 });
+      ml(db, { clave: `MLA${id}|`, sku: null, stock: 2 });
+    }
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    for (const id of [61, 62, 63]) {
+      const caso = db.prepare('SELECT * FROM identidad_casos WHERE ml_key=?').get(`MLA${id}|`);
+      const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=?').get(id);
+      decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id, operation_id: `canario-${id}`,
+        expected_version: caso.expected_version, evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+    }
+    // Aisla el selector del worker: `reprocess` es terminal y no introduce pausas entre pasos.
+    db.prepare("UPDATE identidad_operaciones SET paso_actual='reprocess' WHERE ml_key IN ('MLA61|','MLA62|','MLA63|')").run();
+    db.prepare("UPDATE identidad_config SET modo='enforced',escrituras_remotas_habilitadas=1,canario_ml_key='MLA61|, MLA62|',lote_max=9 WHERE id=1").run();
+    const remoto = new Map([[ 'MLA61|', { seller_sku: '', stock: 2 } ], [ 'MLA62|', { seller_sku: '', stock: 2 } ], [ 'MLA63|', { seller_sku: '', stock: 2 } ]]);
+    const adapter = {
+      setStock: vi.fn(async (key, stock) => { remoto.get(key).stock = stock; return { ok: true }; }),
+      clearSku: vi.fn(async (key) => { remoto.get(key).seller_sku = ''; return { ok: true }; }),
+      writeSku: vi.fn(async (key, sku) => { remoto.get(key).seller_sku = sku; return { ok: true }; }),
+      read: vi.fn(async (key) => ({ ...remoto.get(key), observed_at: new Date().toISOString() })),
+    };
+    const r = await procesarOperacionesIdentidad(db, adapter, { ahora: new Date() });
+    expect(r).toMatchObject({ ok: true, canario: ['MLA61|', 'MLA62|'], tope: 2 });
+    expect(db.prepare("SELECT estado FROM identidad_operaciones WHERE ml_key='MLA61|'").get().estado).toBe('completada');
+    expect(db.prepare("SELECT estado FROM identidad_operaciones WHERE ml_key='MLA62|'").get().estado).toBe('completada');
+    expect(db.prepare("SELECT estado FROM identidad_operaciones WHERE ml_key='MLA63|'").get().estado).toBe('shadow');
   });
 
   it('exige envelope concurrente, persiste solo_ml e invalida la excepción si cambia evidencia', () => {

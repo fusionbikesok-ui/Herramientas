@@ -46,8 +46,12 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - El canario 1 completado no vuelve a la cola cuando únicamente aparece una contradicción de
   GTIN: conserva `verificado` si ML mantiene el mismo SKU y Producto Fusion; el conflicto queda
   clasificado y auditado. Si el SKU cambia o desaparece, reabre urgente. Test dirigido 34/34.
-- Sigue pendiente corregir el caso `shadow` que pasa a `intervencion` sin haber sido intentado;
-  después corresponde actualizar la sección 18.1 y recién entonces evaluar merge/despliegue.
+- Una operación `shadow` que cambia de identidad antes de cualquier efecto remoto queda obsoleta,
+  no admite reintento y libera el caso a `urgente`; una operación ya intentada conserva
+  intervención. La sección 18.1 documenta el camino directo sin stock cero.
+- El rollout soporta hasta dos claves canario explícitas (separadas por coma) y dos operaciones
+  por corrida. Producción conserva su única clave actual hasta que se designe la segunda y se
+  autorice merge/despliegue.
 - `user_version` no numera migraciones: es la compuerta de Hito 7 (PM-034). Ninguna migración
   nueva puede escribirlo o la base queda sin `device_tokens` y cae la auth móvil.
 - Cada avance sobre UM1 actualiza en el mismo commit estado, evidencia, handoff y decisiones.

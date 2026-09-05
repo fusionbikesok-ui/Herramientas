@@ -1,6 +1,6 @@
 # Registro de decisiones del Plan Maestro
 
-Actualizado: 2026-09-04. Este registro resume decisiones aprobadas; el detalle operativo está en el maestro. Cambiar una decisión exige fecha, responsable, impacto y entregas afectadas.
+Actualizado: 2026-09-05. Este registro resume decisiones aprobadas; el detalle operativo está en el maestro. Cambiar una decisión exige fecha, responsable, impacto y entregas afectadas.
 
 | ID | Decisión vigente | Impacto principal |
 | --- | --- | --- |
@@ -100,6 +100,7 @@ Actualizado: 2026-09-04. Este registro resume decisiones aprobadas; el detalle o
 | PM-094 | **Primer canario ejecutado en producción (2026-09-04 23:30–23:40)**: `MLA1320264343`, SKU `FB-5965` ya correcto, stock 5. La saga leyó ML, aplicó el atajo, y completó `zero → activate → reprocess` con el caso en `verificado` y **cero escrituras**. Valida de punta a punta configuración → worker → adaptador → lectura autenticada → saga → auditoría por paso. La publicación quedó intacta. | UM1.1, UM1.6 |
 | PM-095 | **Poner el stock en 0 no es necesario para cambiar el SKU y tiene costo propio.** Verificado: `escribirSkuEnMl` de `lib/matcherPush.js` sobrescribe `SELLER_SKU` con un solo PUT y sin tocar stock, en producción desde hace meses. Y el cero sí cuesta: ML pausa la publicación con `sub_status: out_of_stock` — hay **4611 así** en la base. El cero existía para cubrir la ventana sin SKU que abre el paso de *limpiar*; sobrescribiendo directo esa ventana no existe. Camino directo implementado y probado (1 escritura, stock intacto), **no desplegado**: cambia la saga que fija la sección 18.1 y todavía queda el problema de una operación `shadow` enviada a intervención. | UM1.1, UM1.6 |
 | PM-096 | Una operación `completada` protege la identidad ya aplicada frente a una reclasificación posterior `gtin_contradictorio` cuando ML conserva exactamente el mismo `fusion_sku` y el caso sigue ligado al mismo Producto Fusion. El caso permanece `verificado`; la contradicción queda visible y auditada como `gtin_contradictorio_post_verificacion`, sin repetir la escritura. La protección es estrecha: si el `SELLER_SKU` cambia o desaparece, el caso vuelve a urgente. Resuelve la reaparición del canario 1 (`MLA1320264343`). | UM1.1 |
+| PM-097 | Si la identidad cambia mientras un caso está `pendiente` pero su última operación sigue `shadow`, con cero intentos y sin pasos remotos, esa operación queda inmovilizada como `obsoleta_por_cambio_identidad_antes_de_efecto_remoto`; no admite reintento. El caso libera responsable y vuelve a `urgente` para una decisión nueva. Una operación que sí empezó permanece en intervención porque puede tener efectos parciales. El canario puede contener hasta dos claves ML explícitas, separadas por coma, y procesa como máximo dos operaciones por corrida; no designa por sí mismo la segunda clave. | UM1.1, UM1.6 |
 
 ## Pendientes que no deben suponerse
 
