@@ -1144,7 +1144,7 @@ Bootstrap en sombra desde productos simples y variaciones Woo `publish|private`;
 
 Una línea insegura retiene el pedido completo. Se revisan pedidos abiertos/no conciliados desde la última evidencia confiable y se liberan cronológica e idempotentemente hasta agotar stock. “Observada” exige una jornada comercial completa; el auditor recomienda y sólo el usuario declara una subentrega `aceptada`.
 
-La especificación completa es `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-04-identidad-productos.md`; la ficha matriz es `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1-guardia-ml.md` y UM1.1–UM1.6 conservan evidencia independiente.
+La especificación completa es `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-04-identidad-productos.md`; la arquitectura de sistemas, estados, blueprint y handoff está en `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-05-arquitectura-um1.md`; la ficha matriz es `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1-guardia-ml.md` y UM1.1–UM1.6 conservan evidencia independiente.
 
 Cada avance sobre UM1, aunque sea parcial o quede a medias, actualiza en el mismo commit el estado de la ficha, la evidencia con ubicación exacta y comando/resultado copiado literalmente, y el handoff para el próximo agente. La regla completa está en la sección «Estado, handoff y evidencia en cada avance» de esa especificación. Un avance sin esos tres elementos se trata como trabajo no entregado y se re-verifica desde cero.
 
