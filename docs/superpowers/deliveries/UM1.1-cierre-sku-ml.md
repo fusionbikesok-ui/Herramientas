@@ -622,3 +622,24 @@ npx vitest run test/identidad-productos.test.js test/modelos-publicacionMl.test.
 De paso, una aserción del smoke que contaba el total de casos (`todos !== 1`) pasa a afirmar
 sobre **el caso decidido**: el total depende del tamaño del fixture y se rompía al agregar
 cualquier escenario nuevo, sin que hubiera cambiado el comportamiento que ese caso fija.
+
+### Verificado en producción tras el primer refresco — 2026-09-05 23:2x UTC
+
+El despliegue no puebla `user_product_id` por sí solo: lo hace el primer refresco completo de
+ML. Se esperó a ese refresco y se observó el resultado:
+
+```
+user_product_id poblados: 6894        (de 6894, el cache entero)
+CONFLICTOS DE BOLSA COMPARTIDA: 4
+   MLAU211855329  | FB-4746, FB-4501    horquilla Tapered vs Boost
+   MLAU3086754975 | FB-28334, FB-3789   maza 28H vs 32H
+   MLAU3210195462 | FB-1805, FB-32234   cadena vs OEM
+   MLAU402482129  | FB-21141, FB-21145  maza Boost 15×110 vs estándar 15×100
+```
+
+Son **cuatro**, no los tres medidos antes: la medición previa sólo cubría el universo activo y
+el par de horquillas está en publicaciones pausadas. Con el cache completo aparece.
+
+Los cuatro son pares de artículos genuinamente distintos que ML agrupó bajo un mismo
+`user_product`. Ninguno se resuelve desde la herramienta: hay que separarlos en MercadoLibre o
+corregir el vínculo del que esté mal. Decisión de Ventas.
