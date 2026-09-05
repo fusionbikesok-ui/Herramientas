@@ -35,6 +35,17 @@ function makeDb() {
       color TEXT,
       talle TEXT,
       seller_sku TEXT,
+      -- Este archivo escribe su propio mini-esquema a mano, así que hay que mantenerlo al día
+      -- con lo que prepararUpsertCache (routes/matcher.js) realmente inserta. Estas seis
+      -- columnas llegaron con la migración 082 y faltaban acá: el test venía pasando sólo
+      -- porque reusaba una base .sqlite vieja que sí las tenía, y falló apenas se limpiaron
+      -- los temporales huérfanos de test/.
+      seller_sku_presente INTEGER NOT NULL DEFAULT 0,
+      seller_custom_field TEXT,
+      atributos_json TEXT,
+      gtin TEXT,
+      user_product_id TEXT,
+      canales_json TEXT,
       variations_texto TEXT,
       thumbnail TEXT,
       permalink TEXT,
