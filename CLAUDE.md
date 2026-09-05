@@ -6,9 +6,10 @@ automáticamente con gates y rollback. Windows, hardware y App Store siempre req
 deploy key con acceso de escritura). Integración MercadoLibre ↔ WooCommerce. Responder en
 español.
 
-La política única de handoffs y evidencia está en `scripts/agent-pipeline-policy.mjs`:
-contrato compacto por rol/estado, bloqueos con código y evidencia ligada a `diff_fingerprint`.
-Los gates consumen evidencia congelada y no repiten validaciones.
+El pipeline de scripts (`scripts/agent-pipeline-policy.mjs`, `npm run agent:*`) queda fuera de
+uso: no hay handoffs formales ni evidencia congelada por `diff_fingerprint`. Los subagentes se
+invocan sueltos y el traspaso de evidencia entre ellos lo hace el orquestador, pegando el output
+de uno en el prompt del siguiente.
 
 ## Memoria durable y carga selectiva
 
@@ -30,63 +31,35 @@ operativo útil. No copies conversaciones, logs,
 resultados transitorios, secretos ni credenciales. Modificá solo los módulos afectados;
 creá uno nuevo únicamente cuando ningún módulo existente represente bien el tema.
 
-## Equipo de subagentes — flujo de trabajo
+## Equipo de subagentes — uso opt-in
 
-Hay un equipo de subagentes en `.claude/agents/`. **La sesión de Claude Opus es siempre el
-orquestador**: planea con el usuario, despacha a los subagentes y los encadena (los subagentes
-no se llaman entre sí). Codex nunca orquesta — ejecuta un rol despachado vía `npm run agent:codex`
-y devuelve un handoff que valida `scripts/agent-pipeline-policy.mjs`, el mismo contrato que usa
-`npm run agent:claude` para los roles que corren en Claude.
+Los agentes de `.claude/agents/` son especialistas disponibles, no un pipeline. La sesión
+principal resuelve por defecto y los invoca solo cuando su especialidad aporta evidencia o una
+perspectiva que no se obtiene mejor de forma directa. No tienen modelo, nivel de razonamiento,
+orden, gate ni encadenamiento prescrito.
 
-La coordinación Claude ↔ Codex usa `docs/agent-coordination.md` como contrato compartido. El
-orquestador asigna worktrees, rutas y gates; cada rol (en Codex o en Claude, según
-`agents/routing.json`) ejecuta una tarea delimitada y devuelve un handoff. La matriz de
-motor/modelo está en `agents/model-routing.md` (documentación) y `agents/routing.json` (fuente
-ejecutable); el router de skills en `agents/skill-routing.md`; ambos deben leerse antes de
-despachar un rol. Los agentes de diseño deben informar qué skills aplicaron y cuáles quedaron
-fuera por riesgo. Para E2E, el orquestador prepara y verifica siempre el entorno aislado (URL,
-puerto, rama, base, `DISABLE_CRONS`, PID y sesión de Playwright) antes de despachar a
-`probador-e2e` (que corre en Claude sonnet, por el MCP de Playwright cableado ahí y no en
-Codex). Si falta algún dato, el agente devuelve `BLOQUEADO (FALTA_ENTORNO)` y no elige staging
-ni otro puerto.
+| Si la tarea necesita… | Podés invocar |
+|---|---|
+| investigación separable para ubicar una parte incierta del repo | `explorador` |
+| diseñar o cambiar un flujo, sus estados, arquitectura de información o copy | `disenador-ux` |
+| diseñar o cambiar la presentación visual, tokens, componentes o responsive | `disenador-ui` |
+| delegar una implementación backend claramente acotada | `hard-worker-backend` |
+| delegar una implementación frontend claramente acotada | `hard-worker-frontend` |
+| una segunda revisión independiente ante complejidad o riesgo | `revisor` |
+| cobertura dedicada, reproducción de una regresión o pruebas que justifiquen especialización | `tester` |
+| interacción real, responsive o un recorrido completo en navegador | `probador-e2e` |
+| una decisión independiente antes de desplegar un cambio de riesgo relevante | `auditor-despliegue` |
 
-**Escalera por riesgo:** si el diff toca sync ML↔Woo, esquema sqlite, concurrencia o
-`guardia_ml_*` hay dos escaleras, y se disparan distinto a propósito (`agents/model-routing.md`):
+Un agente no se invoca solo porque exista. Un botón mal ubicado, una condición local o una
+corrección con ruta y prueba evidentes se resuelven directamente. Diseño se usa al diseñar;
+revisión, testing, E2E y auditoría se usan individualmente cuando su riesgo o incertidumbre lo
+ameritan. Nunca se encadenan por costumbre.
 
-- **Implementación** (roles Codex, base `gpt-5.6-terra`/medium): escala a `gpt-5.6-sol`/high, y
-  si el revisor devuelve hallazgos de correctitud sube a un último escalón que **cambia de motor
-  y lo escribe Opus**. Sube por decisión explícita del orquestador (`--escalate`).
-- **Gates** (`revisor`, `auditor-despliegue`, base Claude `sonnet`): suben **solos** a `opus`
-  cuando el diff toca un path de riesgo. No depende de que el orquestador se acuerde.
+### Calibrá el tamaño antes de invocar
 
-`gpt-5.6-luna`/low queda solo para `explorador`, el único rol que no escribe nada;
-`npm run verify:agents` rechaza que un rol que escribe baje a ese tramo. `concurrencia` no se
-detecta por path (no vive en un archivo): esa se escala a mano con `--escalate`.
-
-Motivo: un bug de concurrencia en el worker de Guardia rompió el 100% de las escrituras en
-producción con la suite en verde; ver `.agents/skills/concurrencia-guardia/SKILL.md`.
-
-**Disparador automático:** cuando el usuario pide **crear o cambiar una función/feature/fix
-de código**, seguí este pipeline sin esperar un comando.
-
-### Calibrá el tamaño antes de despachar
-
-El pipeline completo son 7-9 despachos y cada subagente arranca en frío. Correrlo entero
-para un cambio chico quema la cuota sin agregar señal. Antes de arrancar, clasificá:
-
-- **Cambio chico** — un archivo o dos, sin contrato de API nuevo, sin cambio de esquema
-  sqlite, sin pantalla ni flujo nuevo (ej.: ajustar una condición, un mensaje de error,
-  un fix de una función existente). → **Sin documento de plan** en `docs/superpowers/plans/`
-  y **sin `disenador-ux`/`disenador-ui`**. Despachá: hard-worker que corresponda → `revisor`
-  → `tester` → `auditor-despliegue`.
-- **Cambio normal/grande** — herramienta nueva, pantalla nueva, cambio de esquema, cambio
-  de contrato entre back y front, o cualquier cosa que toque el sync ML↔Woo. → **pipeline
-  completo, sin atajos.**
-
-Si dudás entre chico y normal, es normal — **pero un arreglo de una o dos líneas que sale
-directo de un hallazgo ya diagnosticado lo hace el orquestador**, sin despachar a nadie.
-Arrancar un agente en frío para cambiar un color o agregar un guard cuesta más que el
-arreglo.
+- **Cambio chico:** resolver y verificar directamente; no usar agentes por defecto.
+- **Cambio normal/grande:** escribir un plan cuando haga falta y sumar solo los especialistas
+  cuyo aporte concreto sea necesario.
 
 ### Cortá las entregas por valor, no por capa
 
@@ -123,7 +96,7 @@ entendimiento. Tampoco se recortan `revisor`, `tester` ni `auditor-despliegue`.
 ### Pasale contexto a los subagentes (no los hagas redescubrir)
 
 Cada subagente arranca sin tu contexto y, si no le decís nada, vuelve a explorar el repo
-desde cero — eso multiplica el costo por la cantidad de agentes del pipeline. En el prompt
+desde cero — eso multiplica el costo por cada agente que invoques. En el prompt
 de despacho incluí siempre lo que ya sabés resuelto:
 
 - **rutas de archivo concretas** que tiene que tocar o leer (no "buscá dónde está el
@@ -136,56 +109,20 @@ de despacho incluí siempre lo que ya sabés resuelto:
 Si necesitás ubicar algo vos, usá **`explorador`** una vez y reutilizá su respuesta en
 todos los despachos siguientes, en vez de que cada agente repita la búsqueda.
 
-### El pipeline
+### Planear antes de escribir código
 
-Secuencia normativa: desarrollo → revisor (veredicto/hallazgos) → tester (resultado_suite) →
-probador-e2e si el diff toca `public/` (evidencia/anchos_riesgos) → auditor (referencias_evidencia
-derivadas por el controlador desde handoffs previos). Todos
-los contratos usan la huella autoritativa, base y HEAD del mismo diff; el auditor consume los
-tres gates y no repite sus pruebas. Entregas, despachos y reintentos quedan registrados en el
-checkpoint/handoff; tareas doc-only pueden usar registro liviano.
+En cambios normales/grandes, invocá `superpowers:brainstorming` (que termina en
+`superpowers:writing-plans`) para producir un plan escrito en
+`docs/superpowers/plans/YYYY-MM-DD-<tema>.md`, con pasos numerados, archivos por paso y criterio
+de aceptación verificable. **No asumas nada, ni lo obvio**: antes de cerrar el plan, confirmá con
+el usuario quién ejecuta cada paso (manual a mano, o automático del sistema), qué dispara el
+flujo, qué pasa en cada caso de error/borde, y de dónde sale cada dato (ML, Woo, local). En
+cambios chicos salteá el documento escrito, pero **no las preguntas**: resolvelas en la
+conversación y arrancá.
 
-1. **Planear de verdad.** Invocá `superpowers:brainstorming` (que termina en
-   `superpowers:writing-plans`) para producir un plan escrito en
-   `docs/superpowers/plans/YYYY-MM-DD-<tema>.md`, con pasos numerados, archivos por paso y
-   criterio de aceptación verificable. **No asumas nada, ni lo obvio**: antes de cerrar el
-   plan, confirmá con el usuario quién ejecuta cada paso (manual a mano, o automático del
-   sistema), qué dispara el flujo, qué pasa en cada caso de error/borde, y de dónde sale
-   cada dato (ML, Woo, local). En **cambios chicos** (ver calibración arriba) salteá el
-   documento escrito, pero **no las preguntas**: resolvelas en la conversación y arrancá.
-2. Si el cambio toca UX/UI **y es normal/grande**, despachar **`disenador-ux`** (flujo, con
-   el documento de contexto de uso que le corresponde) y después **`disenador-ui`** (sistema
-   visual) antes de que se escriba código. Si solo hay flujo nuevo sin estética nueva (o al
-   revés), despachá **solo el que corresponda**: encadenar los dos por costumbre es gasto
-   al pedo. En cambios chicos sobre pantallas ya diseñadas, ninguno de los dos — los tokens
-   de `public/lib/theme.css` ya fijan la estética y el auditor verifica que se respeten.
-3. Despachar **`hard-worker-backend`** y/o **`hard-worker-frontend`** (según qué toque el
-   plan; en paralelo si son independientes) con el plan concreto → hacen el desarrollo.
-4. Despachar **`revisor`** sobre el diff → hallazgos priorizados (no escribe código).
-5. Si hay hallazgos, volver al agente de desarrollo correspondiente a corregir; repetir
-   hasta que el revisor dé OK.
-6. Despachar **`tester`** → asegura vitest verde y cobertura del cambio (incluye axe-core
-   si tocó frontend).
-7. Si el cambio toca UI (`public/`), despachar **`probador-e2e`** sobre la(s) página(s)
-   tocadas → prueba interactiva real en navegador (clicks, inputs, responsive), no solo
-   lectura de código. Ver credenciales de prueba abajo.
-8. Despachar **`auditor-despliegue`** → gate obligatorio (auditoría + seguridad + tests
-   verdes + UI responsive + conformidad de sistema visual + migración pendiente +
-   presupuesto de peso frontend). Devuelve 🟢/🔴. **El auditor no abre el navegador ni
-   re-revisa el código**: pegale en el prompt de despacho el **veredicto final del
-   `revisor`** (paso 5) y, si corriste el paso 7, el **reporte de `probador-e2e`**. De ahí
-   saca la auditoría de código y la evidencia de responsive/peso; él verifica que sean del
-   diff final y agrega lo que solo hace él (seguridad, migraciones, tokens, peso). Corre en
-   Claude sonnet — u opus si el diff toca un trigger — con sandbox de solo lectura (a
-   diferencia de los hard-workers, no ejecuta `npm test`): el resultado de la suite se lo
-   pasa el orquestador, que la corrió una sola
-   vez al final (ver "Presupuesto de la sesión" arriba). Si falta alguno de los dos insumos
-   (veredicto del revisor, reporte de E2E si corresponde), es 🔴 automático — no los suple él.
-9. Reportar al usuario. La política vigente de publicación se consulta en
-   `docs/memory/modules/operations-vps.md`: hasta E23 es manual; el objetivo posterior permite
-   backend/web automático solo con pipeline verde y rollback. Windows/App Store siguen manuales.
-
-**Inicio forzado:** el comando `/feature` dispara este mismo pipeline explícitamente.
+Al terminar, reportá al usuario. La política vigente de publicación se consulta en
+`docs/memory/modules/operations-vps.md`: hasta E23 es manual; el objetivo posterior permite
+backend/web automático solo con gates verdes y rollback. Windows/App Store siguen manuales.
 
 **Regla de despliegue OBLIGATORIA** (la aplica el auditor, pero vale siempre): antes de
 desplegar o dar por completo un cambio → auditoría de código + seguridad + todos los tests

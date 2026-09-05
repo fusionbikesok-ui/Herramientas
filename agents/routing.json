@@ -1,35 +1,16 @@
 {
-  "version": 4,
-  "_doc": "Fuente ejecutable del reparto motor/modelo/esfuerzo/sandbox por rol. agents/model-routing.md es la justificación en prosa; si divergen, gana este archivo y npm run verify:agents lo detecta. Para roles engine=claude, el campo model debe coincidir con el frontmatter model: de .claude/agents/<rol>.md — ese frontmatter es la FILA BASE; la escalera puede subirlo en tiempo de despacho.",
-  "_evidencia": "Reparto ajustado contra arXiv 2607.21656 (cross-model code review). Tres hallazgos gobiernan este archivo: (1) Codex escribe y Claude revisa da +18.1pp (71.6%->89.7%); la direccion inversa DANA (-8.6pp), por eso ningun gate se mueve a Codex. (2) Ese +18.1pp se midio con un escritor GPT-5.5 a esfuerzo high, no con el tramo chico: por eso los roles que escriben codigo o tests arrancan en terra/medium y no en luna/low. (3) El paper no hallo condicion revisada que le ganara a Opus trabajando solo, lo que fija el techo de la escalera de implementacion.",
-  "_incertidumbre_conocida": "v4 baja los gates (revisor, auditor-despliegue) de opus a sonnet como fila base, por presupuesto. ESTO NO ESTA MEDIDO: el +18.1pp del paper se obtuvo con Opus revisando, nadie publico Sonnet revisando Codex. La direccion del cross-review se mantiene (Sonnet sigue siendo proveedor distinto del que escribio), pero la magnitud de la ganancia es una apuesta. Mitigacion: todo diff que toca un trigger sube a Opus automaticamente por deteccion de paths, no por criterio del orquestador. Si aparecen bugs que Sonnet dejo pasar en diffs sin trigger, la correccion es volver revisor a opus en la fila base.",
-  "roles": {
-    "hard-worker-backend": { "engine": "codex", "model": "gpt-5.6-terra", "effort": "medium", "sandbox": "workspace-write" },
-    "hard-worker-frontend": { "engine": "codex", "model": "gpt-5.6-terra", "effort": "medium", "sandbox": "workspace-write" },
-    "explorador": { "engine": "codex", "model": "gpt-5.6-luna", "effort": "low", "sandbox": "read-only" },
-    "tester": { "engine": "codex", "model": "gpt-5.6-terra", "effort": "medium", "sandbox": "workspace-write" },
-    "disenador-ux": { "engine": "codex", "model": "gpt-5.6-terra", "effort": "medium", "sandbox": "read-only" },
-    "disenador-ui": { "engine": "codex", "model": "gpt-5.6-terra", "effort": "medium", "sandbox": "read-only" },
-    "revisor": { "engine": "claude", "model": "sonnet" },
-    "auditor-despliegue": { "engine": "claude", "model": "sonnet" },
-    "probador-e2e": { "engine": "claude", "model": "sonnet" }
-  },
-  "_doc_luna": "luna/low queda reservado para trabajo mecanico de solo lectura (explorador: buscar y sintetizar). Ningun rol que escriba codigo o tests corre en el tramo chico: la ganancia del cross-review no esta medida con escritores tan debiles, y cada ciclo de rework gasta una pasada de revisor, que es la parte cara.",
-  "_presupuesto": "Ambos motores son suscripciones de USD 20 y las ventanas de tokens tienen que durar la semana entera. El lado Claude es el cuello de botella: tiene TRES consumidores (la sesion orquestadora, que corre continua; revisor; auditor-despliegue) contra un Codex que solo implementa. Costo medido en este repo: una pasada de revisor consumio 56k y 100k tokens, y la Fase 0 de inventario necesito 3 rondas (~250k de Opus solo en revisiones, para una feature). De ahi las dos decisiones economicas: (a) subir a los escritores a terra/medium gasta mas Codex pero AHORRA Opus al reducir rondas de rework; (b) los gates corren en sonnet por defecto y suben a opus solo cuando el diff toca un trigger. Quedarse sin Opus a mitad de semana y no tener gate es peor que cualquier implementacion floja.",
-  "escalation": {
-    "_doc": "Dos escaleras distintas. `ladder` es para los roles que IMPLEMENTAN (codex): al tocar un trigger la implementacion no arranca en la fila base sino en el escalon 1 (sol/high), y si el revisor devuelve hallazgos de correctitud sube al escalon 2, que cambia de motor y lo escribe Opus. `ladder_gates` es para los roles que REVISAN (claude): suben de sonnet a opus. La diferencia clave es el disparo: los gates escalan SOLOS por deteccion de paths (triggersTocados en agent-dispatch-common.mjs), sin depender de que el orquestador se acuerde; la implementacion escala por decision explicita con --escalate.",
-    "triggers": [
-      { "label": "sync ML↔Woo", "paths": ["routes/sync.js", "routes/woo.js", "routes/cobertura.js", "routes/mlEstado.js", "routes/notificacionesMl.js", "lib/ml", "lib/woo", "lib/gtinWoo.js"] },
-      { "label": "esquema sqlite", "paths": ["db/schema.sql", "migrations/"] },
-      { "label": "guardia_ml_*", "paths": ["lib/guardia", "routes/guardiaMl.js"] },
-      { "label": "concurrencia", "paths": [], "_doc": "Sin deteccion automatica: la concurrencia no vive en un path, vive en el codigo (claims por lease, expected_version, transacciones). Si el orquestador ve un diff que toca invariantes de concurrencia, escala a mano con --escalate. Documentado como limitacion, no como olvido." }
-    ],
-    "ladder": [
-      { "engine": "codex", "model": "gpt-5.6-sol", "effort": "high" },
-      { "engine": "claude", "model": "opus" }
-    ],
-    "ladder_gates": [
-      { "engine": "claude", "model": "opus" }
-    ]
-  }
+  "version": 5,
+  "status": "retired",
+  "note": "El enrutamiento de motor, modelo, esfuerzo, sandbox, escaladas y pipelines fue retirado. Este archivo no es configuración ejecutable y los scripts agent:* no deben usarse para despachar trabajo nuevo.",
+  "roles": [
+    "explorador",
+    "disenador-ux",
+    "disenador-ui",
+    "hard-worker-backend",
+    "hard-worker-frontend",
+    "revisor",
+    "tester",
+    "probador-e2e",
+    "auditor-despliegue"
+  ]
 }

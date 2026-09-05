@@ -1,6 +1,6 @@
 # Estado activo
 
-Actualizado: 2026-09-03.
+Actualizado: 2026-09-05.
 
 ## Fuente de verdad
 
@@ -52,7 +52,10 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 ## Reglas inmediatas
 
 - No declarar terminada una entrega por existir código o numeración previa.
-- El pipeline de agentes usa `scripts/agent-pipeline-policy.mjs` como contrato ejecutable: cada gate conserva base, HEAD y una huella SHA-256 autoritativa del worktree; revisor, tester y E2E aportan evidencia única y el auditor solo consume evidencia de la misma huella. Un gate sin evidencia fresca queda bloqueado con la acción de recuperación, sin repetir validaciones costosas.
+- Los agentes son especialistas opt-in: no hay pipeline, handoff formal, modelo/esfuerzo prescrito
+  ni gates automáticos. Diseño se invoca al diseñar; revisión, testing, E2E y auditoría solo de
+  forma individual cuando el riesgo o incertidumbre lo justifica. Los scripts `agent:*` y su
+  configuración de enrutamiento quedaron retirados y no se usan para trabajo nuevo.
 - No iniciar `node server.js` contra la base real ni ejecutar suites concurrentes.
 - Backend/web solo podrán publicarse automáticamente cuando el pipeline definido por el maestro esté implementado y verde; hoy una tarea documental no autoriza push, migración, PM2 ni deploy.
 - Windows, hardware y App Store siempre exigen autorización explícita.
