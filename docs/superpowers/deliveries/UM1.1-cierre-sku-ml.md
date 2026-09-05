@@ -500,3 +500,37 @@ Un corte más ancho (toda pausada sin SKU) daba **4047 casos** y se descartó po
 - Sin desplegar. No se ejecutó ninguna escritura remota.
 - Pendiente de UM1.6: migrar `POST /api/guardia-ml/vincular-clave` a UM1 y recién después
   desagendar el worker de Guardia (PM-125). Hoy hay dos escritores de `SELLER_SKU`.
+
+### Despliegue de deuda dormida y permisos de despacho — 2026-09-05 18:41 UTC
+
+Commits desplegados: `d7fc2a0` (paso 1 incierto de Andreani), `b89c63d` (deuda dormida y
+`decision_no_aplicada`) y `e01fc1d` (permisos de despacho sobre el tracking).
+
+Gate de la suite global, comando y resultado literales:
+
+```
+npm test
+  Test Files  1 failed | 107 passed | 1 skipped (109)
+  Tests  1 failed | 2137 passed | 51 skipped (2189)
+
+npx vitest run test/inventario.test.js     # el único rojo, aislado
+  Test Files  1 passed (1)
+  Tests  167 passed (167)
+```
+
+El único fallo de la corrida completa es `inventario.test.js`, que pasa 167/167 aislado: es la
+interferencia entre archivos ya documentada, no una regresión. `preparacion-contrato` quedó
+verde en la corrida completa, cerrando los 11 rojos que venían del código faltante.
+
+Despliegue:
+
+- Producción tenía un cambio sin commitear de otra sesión (`docs/memory/modules/warehouse-operations.md`).
+  Se verificó que el rango no toca ese archivo y se confirmó intacto después del merge.
+- Backup consistente previo (`VACUUM INTO`): `data/fusion.sqlite.bak-um11-deuda-20260905T184122Z` (84,5 MB).
+- `--ff-only` a `e01fc1d`; `pm2 restart` → `online`; `GET /login/` 200 en 5,8 ms.
+- Estado posterior sin cambios: reservas retenidas 2, `wc_order_id=0` 3, 111 operaciones
+  completadas, 1124 casos verificados.
+
+**Pendiente de verificación**: al momento del despliegue el último scan confiable era de las
+18:36:46, o sea con el código anterior. La deuda dormida (`decision_no_aplicada`) aparece recién
+en el primer scan posterior. No se declara verificada hasta observarla.
