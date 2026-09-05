@@ -531,6 +531,17 @@ Despliegue:
 - Estado posterior sin cambios: reservas retenidas 2, `wc_order_id=0` 3, 111 operaciones
   completadas, 1124 casos verificados.
 
-**Pendiente de verificación**: al momento del despliegue el último scan confiable era de las
-18:36:46, o sea con el código anterior. La deuda dormida (`decision_no_aplicada`) aparece recién
-en el primer scan posterior. No se declara verificada hasta observarla.
+**Verificado en producción, 2026-09-05 18:51:46 UTC.** Al desplegar, el último scan confiable
+era de las 18:36:46 —código anterior—, así que la deuda no podía haber aparecido todavía. Se
+esperó al primer scan posterior con el código nuevo y se observó el resultado:
+
+```
+scan nuevo: 2026-09-05T18:51:46.467Z
+deuda dormida: MLA1401411650|180043410439, MLA1927478426|187049488547, MLA2000138388|192504429779
+               (las tres severidad 'normal', estado 'urgente')
+casos: verificado 1124, resuelto 79, urgente 5
+```
+
+Aparecieron exactamente las tres esperadas y ninguna más. Los 5 urgentes son los 2 previos más
+estas 3, que por severidad `normal` no cuentan como trabajo humano ni entran en la conciliación
+del universo activo.
