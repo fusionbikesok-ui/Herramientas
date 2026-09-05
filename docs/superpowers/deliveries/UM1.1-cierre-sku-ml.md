@@ -262,19 +262,18 @@ de UM1.1 quedan sin cumplir:
   pendiente; hasta entonces `conciliado` es `false` por diseño.
 - **Gate 3** — «ningún caso se resuelve antes de releer ML» está cubierto por tests, no por una
   verificación contra ML real.
-- **Gate 6** — canario designado y jornada observada son externos y no ocurrieron.
+- **Gate 6** — el canario directo de dos publicaciones ya fue designado, ejecutado y
+  observado; rollback y jornada operativa completa siguen siendo pendientes.
 
 Un veredicto verde de auditoría de código no sustituye evidencia de gate. El estado no se
 infiere por tener el diff limpio y la suite verde.
-- Auditoría del universo ML real: no ejecutada; requiere lectura contra ML y el modo sigue
-  siendo `shadow`.
-- Canario, rollback real y jornada observada: pendientes externos.
+- Auditoría del universo ML real y jornada operativa completa: pendientes; el modo productivo
+  está restringido al canario explícito.
 
 ## Checkpoint para el próximo agente
 
-Base: worktree `/opt/fusionbikes/worktrees/um1-identidad`, rama
-`feature/um1-identidad-continuacion`. **Producción está en `9b8882d`**, que NO incluye el
-camino directo: la rama tiene commits posteriores sin mergear a propósito (ver abajo).
+Base: producción en `/opt/fusionbikes/herramientas`, rama `conteo-confiable`, commit `f2ddb22`.
+El worktree `/opt/fusionbikes/worktrees/um1-identidad` conserva la rama de desarrollo.
 
 ### Lo que quedó funcionando y verificado
 
@@ -287,9 +286,8 @@ camino directo: la rama tiene commits posteriores sin mergear a propósito (ver 
   - `MLA1320264343` (SKU ya correcto): completó **sin ninguna escritura**.
   - `MLA1563030043`: corrigió `FB-FB-29140` → `FB-29140`, stock 1 → 0 → 1. Ventana en 0: ~6 min.
 - **Pasos encadenados en una corrida**: la saga completa pasó de ~8 minutos a 13,7 s.
-- **Camino directo sin cero** (en la rama, sin desplegar): si el destino es un SKU válido se
-  sobrescribe de una, sin poner stock en 0 ni limpiar. Medido: 1 escritura en 6 s, stock
-  intacto. Tests 34/34 tras agregar la regresión de estado PM-096.
+- **Camino directo sin cero**: si el destino es un SKU válido se sobrescribe de una, sin poner
+  stock en 0 ni limpiar. Medido: 1 escritura en 6 s, stock intacto. Tests 36/36.
 
 ### Problemas de estado reportados por el usuario
 
@@ -308,21 +306,13 @@ arreglado y verificado): son dos caminos distintos.
    decisión nueva. Una saga que ya empezó conserva `intervencion`, porque puede tener efectos
    parciales. Regresión dirigida incluida.
 
-### Por qué la rama no está mergeada
+### Estado operativo actual
 
-El camino directo ya está reflejado en la sección 18.1 y está verificado con adaptador falso.
-Producción sigue con la saga larga hasta integrar y autorizar el despliegue manual.
-
-### Próxima acción reproducible
-
-1. Verificar el diff final y decidir merge/despliegue manual.
-2. Designar explícitamente la segunda clave canario antes de configurarla.
-
-**Config productiva al momento de escribir esto**: `modo=enforced`,
-`escrituras_remotas_habilitadas=1`, `canario_ml_key='MLA1563030043|'`, `lote_max=1`. La rama
-soporta hasta dos claves explícitas separadas por coma y `lote_max=2`, pero no altera esa
-configuración productiva ni designa una segunda publicación. Backups:
-`fusion.sqlite.bak-antes-canario-20260904-232618` y `...-canario2-20260904-234431`.
+Configuración: `modo=enforced`, `escrituras_remotas_habilitadas=1`,
+`canario_ml_key='MLA798189569|,MLA1541702013|'`, `lote_max=2`. Backups históricos:
+`fusion.sqlite.bak-antes-canario-20260904-232618`, `...-canario2-20260904-234431`,
+`fusion.sqlite.bak-um11-directo-20260905-005000` y
+`fusion.sqlite.bak-um11-canario2-20260905-010000`.
 
 ### Despliegue técnico — 2026-09-05
 
@@ -330,6 +320,15 @@ configuración productiva ni designa una segunda publicación. Backups:
 - PM2 reiniciado; proceso online y servidor escuchando en `:3001`.
 - La migración `identidad_sin_cero_085` quedó aplicada sin tocar `user_version`.
 - Backup consistente previo: `data/fusion.sqlite.bak-um11-directo-20260905-005000`.
-- La configuración ML quedó restringida a `MLA1563030043|` y lote 1. Ese canario ya estaba
-  completado con la saga previa; falta designar una publicación nueva para observar en vivo el
-  camino directo y confirmar SKU escrito con stock intacto.
+- La configuración inicial quedó restringida a `MLA1563030043|` y lote 1 durante el arranque.
+
+### Canario directo de dos publicaciones — 2026-09-05
+
+- Backup consistente previo: `data/fusion.sqlite.bak-um11-canario2-20260905-010000`.
+- Se reencolaron únicamente `MLA798189569|` (operación 22) y `MLA1541702013|` (operación 13),
+  con `canario_ml_key` exacto de esas dos claves y `lote_max=2`.
+- El worker completó ambas operaciones con `sin_cero=1`; no hubo una tercera operación canario.
+- Relectura autenticada de ML a las 01:00 UTC: `MLA798189569|` quedó en `FB-10376`, stock 1;
+  `MLA1541702013|` quedó en `FB-50396`, stock 6. El stock permaneció intacto en ambos casos.
+- Este resultado cierra la observación del camino directo para el canario de dos publicaciones;
+  cualquier ampliación requiere una nueva designación explícita.

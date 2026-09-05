@@ -40,9 +40,8 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - UM1 dejó de ser «Guardia ML»: es el programa de Identidad de productos UM1.1–UM1.6 (PM-031).
   Especificación en `docs/superpowers/plans/2026-09-04-identidad-productos.md`, sección 18.1 del
   maestro y fichas UM1.1–UM1.6. Reemplaza Matcher/Cobertura/Guardia; no los arregla.
-- Producción sirve `9b8882d`; el camino directo sin cero está aislado en
-  `/opt/fusionbikes/worktrees/um1-identidad`, rama `feature/um1-identidad-continuacion`, desde
-  `33a3d43` y todavía no fue desplegado.
+- Producción sirve `f2ddb22` (merge `a0a6b6d` más la actualización de canario); el camino directo
+  sin cero está desplegado y observado.
 - El canario 1 completado no vuelve a la cola cuando únicamente aparece una contradicción de
   GTIN: conserva `verificado` si ML mantiene el mismo SKU y Producto Fusion; el conflicto queda
   clasificado y auditado. Si el SKU cambia o desaparece, reabre urgente. Test dirigido 34/34.
@@ -50,13 +49,16 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   no admite reintento y libera el caso a `urgente`; una operación ya intentada conserva
   intervención. La sección 18.1 documenta el camino directo sin stock cero.
 - El rollout soporta hasta dos claves canario explícitas (separadas por coma) y dos operaciones
-  por corrida. Producción conserva su única clave actual hasta que se designe la segunda y se
-  autorice merge/despliegue.
-- Despliegue técnico del camino directo realizado el 2026-09-05: merge `a0a6b6d`, PM2
-  reiniciado, marcador `identidad_sin_cero_085` presente y endpoint en `:3001` responde 401 sin
-  sesión. La configuración quedó sin cambios (`MLA1563030043|`, lote 1). Backup consistente:
-  `data/fusion.sqlite.bak-um11-directo-20260905-005000`. Falta un canario nuevo explícitamente
-  designado para observar una escritura directa real con stock intacto.
+  por corrida. El canario vigente usa exactamente dos claves y lote 2.
+- Despliegue técnico del camino directo realizado el 2026-09-05: merge `a0a6b6d`, commit de
+  actualización `f2ddb22`, PM2 reiniciado, marcador `identidad_sin_cero_085` presente y endpoint
+  en `:3001` responde 401 sin sesión. Backup consistente:
+  `data/fusion.sqlite.bak-um11-directo-20260905-005000`.
+- Canario directo de dos publicaciones completado el 2026-09-05 01:00 UTC con configuración
+  `MLA798189569|,MLA1541702013|`, lote 2. Ambas operaciones terminaron `completada`,
+  `sin_cero=1`, y la relectura autenticada confirmó `FB-10376`/stock 1 y
+  `FB-50396`/stock 6, respectivamente. No se tocó una tercera publicación. Backup previo:
+  `data/fusion.sqlite.bak-um11-canario2-20260905-010000`.
 - `user_version` no numera migraciones: es la compuerta de Hito 7 (PM-034). Ninguna migración
   nueva puede escribirlo o la base queda sin `device_tokens` y cae la auth móvil.
 - Cada avance sobre UM1 actualiza en el mismo commit estado, evidencia, handoff y decisiones.
