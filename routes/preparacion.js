@@ -698,6 +698,18 @@ function claimConflict(res, claim) {
 // Toda mutación operativa debe pertenecer al operador que tomó la preparación.
 // Las lecturas no llaman a este guard. Un claim vencido se puede reclamar de forma
 // explícita (/tomar), pero no habilita silenciosamente una escritura posterior.
+/**
+ * Quién puede resolver una acción de despacho sin haber tomado la preparación.
+ *
+ * Decisión del usuario (2026-09-05): cargar y corregir un tracking son acciones de despacho,
+ * no de preparación de la mercadería. Administración y quien tenga permiso de escritura en
+ * Preparación pueden resolverlas aunque la preparación esté tomada por otro — lo que importa
+ * es que quede registrado quién lo hizo, no que se turnen.
+ */
+function puedeDespachar(user) {
+  return !!user?.is_admin || !!user?.permisos?.some((p) => p.herramienta === 'preparacion' && p.nivel === 'write');
+}
+
 function exigirClaimVigente(db, prep, usuario, res) {
   const claim = db.prepare('SELECT * FROM preparacion_claims WHERE preparacion_id=?').get(prep.id);
   if (!usuario) {
@@ -1628,7 +1640,10 @@ export function preparacionRouter(db, cfg) {
     if (!tracking) return res.status(400).json({ ok: false, error: 'tracking requerido' });
     if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
-    if (prepExistente && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
+    // Cargar el tracking es una acción de despacho: Administración puede resolverla aunque no
+    // haya tomado la preparación. Un operario de preparación sigue necesitando su claim vigente
+    // para no usurpar la tarea de otro.
+    if (prepExistente && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
@@ -1808,8 +1823,13 @@ export function preparacionRouter(db, cfg) {
     if (!wcOrderId) return res.status(400).json({ ok: false, error: 'wcOrderId inválido' });
     const trackingNuevo = String(req.body?.tracking || '').trim();
     if (!trackingNuevo) return res.status(400).json({ ok: false, error: 'tracking requerido' });
+    // Corregir un tracking mal cargado no espera turno: lo resuelve quien tenga permiso de
+    // escritura en Preparación o Administración, esté tomada por quien esté. El control no es
+    // el claim sino la auditoría — el evento registra quién lo hizo (decisión del usuario).
+    if (!puedeDespachar(req.user)) {
+      return res.status(403).json({ ok: false, error: 'corregir el tracking requiere permiso de Preparación', code: 'FORBIDDEN' });
+    }
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
-    if (prepExistente && !exigirClaimVigente(db, prepExistente, req.user?.username, res)) return;
 
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);

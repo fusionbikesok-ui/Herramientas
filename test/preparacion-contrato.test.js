@@ -37,13 +37,17 @@ const CFG = {
   andreaniStatus: 'lpaandreani',
 };
 
-function buildTestApp(db) {
+function buildTestApp(db, usuario = { username: 'tester', is_admin: 1 }) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.user = { username: 'tester', is_admin: 1 }; next(); });
+  app.use((req, _res, next) => { req.user = usuario; next(); });
   app.use('/api/preparacion', preparacionRouter(db, CFG));
   return app;
 }
+
+// Usuarios para los permisos de despacho (decisión del usuario, 2026-09-05).
+const OPERARIO = { username: 'operario', is_admin: 0, permisos: [{ herramienta: 'preparacion', nivel: 'write' }] };
+const AJENO = { username: 'ajeno', is_admin: 0, permisos: [{ herramienta: 'precios', nivel: 'read' }] };
 
 async function tomarPorApi(app, id) {
   const res = await request(app).post(`/api/preparacion/${id}/tomar`);
@@ -621,6 +625,66 @@ describe('POST /seguimientos/:wcOrderId', () => {
     expect(res.body.ok).toBe(false);
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:906'").get();
     expect(prep).toBeUndefined();
+  });
+});
+
+describe('permisos de despacho sobre el tracking (decisión del usuario, 2026-09-05)', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => {
+    db?.close();
+    for (const f of [TEST_DB, `${TEST_DB}-journal`]) if (fs.existsSync(f)) fs.unlinkSync(f);
+  });
+
+  function pedidoTomadoPorOtro() {
+    const ts = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, etiqueta_lista, estado, creado_en)
+      VALUES ('web','web:940',940,'940','Ana',1,'en_preparacion',?)`).run(ts);
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:940'").get();
+    db.prepare('INSERT INTO preparacion_claims (preparacion_id, usuario, claimed_at, expires_at, renovado_en) VALUES (?,?,?,?,?)')
+      .run(prep.id, 'otra_persona', ts, new Date(Date.now() + 3600e3).toISOString(), ts);
+    return prep;
+  }
+
+  // La app se construye ANTES de sembrar: `ensureTables` corre dentro de `preparacionRouter`,
+  // así que hasta esa llamada la tabla `preparaciones` no existe.
+  it('un admin carga el tracking aunque la preparación esté tomada por otro', async () => {
+    const app = buildTestApp(db);
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: CFG.andreaniStatus, meta_data: [], billing: {}, shipping: {} } });
+    const res = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(res.status).not.toBe(409);
+  });
+
+  it('un operario de preparación SIN la toma sigue sin poder cargarlo', async () => {
+    const app = buildTestApp(db, OPERARIO);
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: 'processing', meta_data: [], billing: {}, shipping: {} } });
+    const res = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(res.status).toBe(409);
+    // El motivo importa: sin esto el test pasaría por la regla de negocio del estado del
+    // pedido en vez de por el permiso, que es lo que quiere fijar.
+    expect(res.body.code).toBe('PREPARATION_CLAIMED');
+  });
+
+  it('corregir el tracking no espera turno: lo hace quien tiene permiso de Preparación', async () => {
+    const app = buildTestApp(db, OPERARIO);
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: 'completed', meta_data: [{ id: 7, key: '_andreani_tracking', value: 'VIEJO' }] } });
+    const res = await request(app).post('/api/preparacion/seguimientos/940/corregir-tracking').send({ tracking: 'AND-NUEVO' });
+    expect(res.status).not.toBe(409);
+    expect(res.status).not.toBe(403);
+    // El control es la auditoría, no el claim: tiene que quedar quién lo hizo.
+    const ev = db.prepare("SELECT usuario FROM preparacion_eventos WHERE tipo='tracking_corregido'").get();
+    expect(ev?.usuario).toBe('operario');
+  });
+
+  it('sin permiso de Preparación, corregir el tracking responde 403', async () => {
+    const app = buildTestApp(db, AJENO);
+    pedidoTomadoPorOtro();
+    const res = await request(app).post('/api/preparacion/seguimientos/940/corregir-tracking').send({ tracking: 'AND-NUEVO' });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FORBIDDEN');
   });
 });
 
