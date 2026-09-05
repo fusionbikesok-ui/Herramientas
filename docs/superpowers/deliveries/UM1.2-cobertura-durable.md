@@ -13,8 +13,8 @@ Impedir que reaparezca cobertura insegura mediante eventos durables ML/Woo, rele
 - Topics configurables: `product.created`, `product.updated`, `product.deleted`.
 - Job durable `catalog.woo_product_sync`: relee el padre y todas sus variaciones; si la baja es
   de una variación borra solo esa fila local, y si es del padre borra el árbol local.
-- Tras proyectar el catálogo se reaudita localmente la identidad para volver visible un SKU Woo
-  que dejó de existir. No hay escrituras hacia Woo ni ML.
+- No hay escrituras hacia Woo ni ML. La reconciliación de identidad global queda reservada al
+  scan ML completo confiable; una relectura Woo puntual no puede degradar casos ajenos.
 
 ### Despliegue y evidencia — 2026-09-05
 
@@ -24,6 +24,9 @@ Impedir que reaparezca cobertura insegura mediante eventos durables ML/Woo, rele
   `https://herramientas.fusionbikes.com.ar/api/woo/webhook/product`.
 - Entrega HMAC real `product.updated` del producto 1732: persistida antes de responder y
   completada por `catalog.woo_product_sync`; releyó el padre y sus cuatro variaciones vigentes.
+- Incidente detectado en la primera entrega: la auditoría global posterior usó evidencia ML no
+  confiable y reabrió 1056 casos. Se eliminó ese llamado global y se restauraron los estados
+  desde el scan ML completo confiable de las 01:21 UTC.
 
 ## Gates
 

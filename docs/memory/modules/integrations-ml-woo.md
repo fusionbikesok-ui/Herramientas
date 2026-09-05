@@ -47,7 +47,9 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
 - Woo publica `product.created`, `product.updated` y `product.deleted` a
   `/api/woo/webhook/product`. La entrada valida HMAC, persiste/deduplica antes del ACK y el
   worker durable relee desde Woo el padre completo y sus variaciones. Una baja solo retira el
-  cache local; el cron de catálogo cada cinco minutos sigue siendo la reconciliación de respaldo.
+  cache local; el cron de catálogo cada cinco minutos y el scan ML confiable siguen siendo la
+  reconciliación de respaldo. El webhook puntual nunca dispara una auditoría global de identidad
+  con evidencia ML no confiable.
 - Guardia expone `GET /api/guardia-ml/casos/:id/opciones`: publicación ML con imagen/detalle y candidatos Woo con SKU único, imagen y stock. La selección queda separada de la escritura; en modo lectura se puede comparar sin vincular.
 - Un `seller_sku` externo divergente bloquea la sincronización hasta revisión. Los vínculos compartidos pueden publicar el stock completo en cada clave por decisión operativa, pero una sobreventa agregada abre incidente crítico y retiene excedentes; no se promete reserva atómica entre claves ML.
 - UM1 es la única puerta de escritura para vínculos, `seller_sku` y pausas. Matcher, Cobertura y Sync legacy conservan consultas, pero sus mutaciones devuelven `410 Gone`; el cron legacy de push está retirado.

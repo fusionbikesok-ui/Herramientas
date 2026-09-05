@@ -72,6 +72,9 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - Webhook durable de catálogo Woo desplegado y configurado el 2026-09-05: suscripciones activas
   para crear, actualizar y borrar; una entrega firmada real para el producto 1732 completó el
   job `catalog.woo_product_sync` y releyó padre + variaciones. No escribe Woo ni ML.
+- Corrección inmediata: la primera versión disparaba una auditoría global con
+  `lecturaConfiable=false` y devolvió 1056 SKU exactos a `stock_no_verificado`. Esa llamada fue
+  retirada; los estados se restauran únicamente desde el último scan ML completo confiable.
 - `user_version` no numera migraciones: es la compuerta de Hito 7 (PM-034). Ninguna migración
   nueva puede escribirlo o la base queda sin `device_tokens` y cae la auth móvil.
 - Cada avance sobre UM1 actualiza en el mismo commit estado, evidencia, handoff y decisiones.
