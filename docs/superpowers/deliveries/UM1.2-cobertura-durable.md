@@ -26,7 +26,9 @@ Impedir que reaparezca cobertura insegura mediante eventos durables ML/Woo, rele
   completada por `catalog.woo_product_sync`; releyó el padre y sus cuatro variaciones vigentes.
 - Incidente detectado en la primera entrega: la auditoría global posterior usó evidencia ML no
   confiable y reabrió 1056 casos. Se eliminó ese llamado global y se restauraron los estados
-  desde el scan ML completo confiable de las 01:21 UTC.
+  desde el scan ML completo confiable de las 01:21 UTC. Resultado: 1055 verificadas, 34
+  urgentes, 1 esperando operación y `conciliado=true`. Una segunda entrega HMAC completó sin
+  alterar esos conteos. Backup: `data/fusion.sqlite.bak-um12-restaurar-cola-20260905T013950Z`.
 
 ## Gates
 
