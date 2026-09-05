@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
 import {
+  conflictosDeBolsaCompartida,
   auditarIdentidadProductos,
   bootstrapProductosFusion,
   buscarProductosFusion,
@@ -479,6 +480,33 @@ describe('UM1 identidad de productos', () => {
     const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA73|'").get();
     expect(caso.severidad).toBe('critica');
     expect(caso.estado).toBe('urgente');
+  });
+
+  // Un `user_product` de ML es UNA bolsa de stock. Dos publicaciones que lo comparten
+  // apuntando a productos Fusion distintos se pisan la cantidad en cada corrida del sync, y
+  // la que pierde queda exponiendo el stock de la otra. Observado en producción con tres
+  // pares reales (maza 28H vs 32H, entre otros).
+  it('detecta dos publicaciones que comparten bolsa de stock apuntando a productos distintos', () => {
+    woo(db, { id: 80, sku: 'FB-80', stock: 0 });
+    woo(db, { id: 81, sku: 'FB-81', stock: 4 });
+    ml(db, { clave: 'MLA80|', sku: 'FB-80', stock: 4 });
+    ml(db, { clave: 'MLA81|', sku: 'FB-81', stock: 4 });
+    db.prepare("UPDATE ml_publicaciones_cache SET user_product_id='MLAU-COMPARTIDO' WHERE clave IN ('MLA80|','MLA81|')").run();
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+
+    const conflictos = conflictosDeBolsaCompartida(db);
+    expect(conflictos).toHaveLength(1);
+    expect(conflictos[0].user_product_id).toBe('MLAU-COMPARTIDO');
+    expect(conflictos[0].productos).toBe(2);
+  });
+
+  it('compartir bolsa apuntando al MISMO producto no es conflicto', () => {
+    woo(db, { id: 82, sku: 'FB-82', stock: 3 });
+    ml(db, { clave: 'MLA82|a', sku: 'FB-82', stock: 3, itemId: 'MLA82a' });
+    ml(db, { clave: 'MLA82|b', sku: 'FB-82', stock: 3, itemId: 'MLA82b' });
+    db.prepare("UPDATE ml_publicaciones_cache SET user_product_id='MLAU-OK' WHERE clave LIKE 'MLA82|%'").run();
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    expect(conflictosDeBolsaCompartida(db)).toHaveLength(0);
   });
 
   it('bloquea impacto potencial sobre hermanas hasta confirmarlo y expone ambas colas', () => {

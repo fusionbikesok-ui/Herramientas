@@ -88,3 +88,36 @@ describe('aplanarItemMl', () => {
     expect(fila.catalogo).toBe(0);
   });
 });
+
+describe('user_product_id', () => {
+  // Es un campo de PRIMER NIVEL del ítem, no un atributo. El código lo buscaba entre los
+  // atributos (`USER_PRODUCT_ID`) y devolvía null siempre: las 6894 filas del cache quedaron
+  // en NULL, y sin ese dato el sistema no puede ver que dos publicaciones comparten una misma
+  // bolsa de stock — que es lo que hace que se pisen la cantidad y una venda sin existencia.
+  it('se toma del campo de primer nivel del ítem, no de los atributos', () => {
+    const filas = aplanarItemMl({
+      id: 'MLA2472219644', title: 'Cadena Shimano', status: 'active',
+      available_quantity: 4, user_product_id: 'MLAU3210195462', attributes: [],
+    });
+    expect(filas).toHaveLength(1);
+    expect(filas[0].user_product_id).toBe('MLAU3210195462');
+  });
+
+  it('una variación usa el suyo y, si no tiene, hereda el del ítem', () => {
+    const filas = aplanarItemMl({
+      id: 'MLA1', title: 'Con variaciones', status: 'active', user_product_id: 'MLAU-ITEM',
+      attributes: [],
+      variations: [
+        { id: '11', attribute_combinations: [], attributes: [], available_quantity: 1, user_product_id: 'MLAU-VAR' },
+        { id: '22', attribute_combinations: [], attributes: [], available_quantity: 2 },
+      ],
+    });
+    expect(filas.find((f) => f.variation_id === '11').user_product_id).toBe('MLAU-VAR');
+    expect(filas.find((f) => f.variation_id === '22').user_product_id).toBe('MLAU-ITEM');
+  });
+
+  it('sin user_product_id queda en null, no en undefined (el upsert usa parámetro nombrado)', () => {
+    const filas = aplanarItemMl({ id: 'MLA2', title: 'Suelto', status: 'active', attributes: [] });
+    expect(filas[0].user_product_id).toBeNull();
+  });
+});

@@ -545,3 +545,57 @@ casos: verificado 1124, resuelto 79, urgente 5
 Aparecieron exactamente las tres esperadas y ninguna más. Los 5 urgentes son los 2 previos más
 estas 3, que por severidad `normal` no cuentan como trabajo humano ni entran en la conciliación
 del universo activo.
+
+## Bolsa de stock compartida: `user_product_id` y su invariante — 2026-09-05
+
+Un `user_product` de MercadoLibre es UNA cantidad, compartida por todas las publicaciones que
+lo referencian. Si dos apuntan a Productos Fusion distintos, cada corrida del sync empuja una
+cantidad diferente a la misma bolsa: se pisan para siempre y la que pierde queda exponiendo el
+stock de la otra.
+
+Dos cambios:
+
+1. **`lib/modelos/publicacionMl.js`** — `user_product_id` se toma de `body.user_product_id`
+   (campo de primer nivel), no de los atributos. El código lo buscaba como atributo
+   `USER_PRODUCT_ID` y devolvía `null` siempre; las 6894 filas del cache estaban en NULL desde
+   la migración 082. La petición a ML ya lo pedía y el upsert ya tenía la columna.
+2. **`lib/identidadProductos.js`** — nuevo `conflictosDeBolsaCompartida(db)`. Agrupa por el
+   producto del **caso**, no por la identidad activa: una identidad sólo se activa al
+   verificarse, y estos conflictos impiden que se verifique, así que la primera versión no
+   habría detectado ninguno de los casos reales.
+
+Evidencia:
+
+```
+npx vitest run test/identidad-productos.test.js test/modelos-publicacionMl.test.js \
+  test/publicacion-ml.test.js test/matcher-candidatos.test.js \
+  test/matcher-ml-robusto-hito4.test.js test/guardia-ml.test.js test/um1-coverage-matrix.test.js
+  Test Files  7 passed (7)
+  Tests  123 passed (123)
+```
+
+Medición contra una **copia** de la base de producción, poblando `user_product_id` con lecturas
+autenticadas (sólo GET, ninguna escritura):
+
+```
+items activos a leer: 927
+leidos: 927 | con user_product_id: 874        (94%)
+
+=== CONFLICTOS DE BOLSA COMPARTIDA: 3
+   MLAU3086754975 | FB-3789, FB-28334     maza 28H vs 32H
+   MLAU3210195462 | FB-1805, FB-32234     cadena vs OEM
+   MLAU402482129  | FB-21141, FB-21145    maza Boost 15×110 vs estándar 15×100
+```
+
+El tercero **no daba síntoma**: sus cantidades coinciden hoy, así que no producía el bucle de
+reconciliación. Pero la bolsa tiene 1 unidad y las dos publicaciones muestran 1. Ése es el valor
+del detector: encuentra el conflicto latente, no sólo el que ya está fallando.
+
+### Handoff
+
+- Sin desplegar. Ninguna escritura remota.
+- Falta exponerlo en la pantalla y decidir el destino de cada par: cuál de los dos mapeos está
+  mal, o si hay que desvincular las publicaciones del `user_product` compartido en ML. Eso es
+  decisión de Ventas: son productos distintos que ML agrupó.
+- El primer refresco tras desplegar poblará `user_product_id` de forma natural; no hace falta
+  backfill.
