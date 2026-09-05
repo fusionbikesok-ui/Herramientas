@@ -379,3 +379,28 @@ Evidencia medida:
   confirmado`) y deja el camino largo como excepción marcada con `sin_cero=0`.
 - Pendiente de definición del usuario: si la capa de componentes se extiende a las 27 pantallas
   o queda por ahora en las de UM1.
+
+### Suite completa: de 121 rojos a 11 — 2026-09-05
+
+Resultado final: `Test Files 4 failed | 104 passed | 1 skipped (109)`,
+`Tests 14 failed | 2116 passed | 51 skipped (2181)`.
+
+De los 14, **3 son falsos** y **11 son una alarma correcta**:
+
+- `sync.test.js`, `inventario.test.js` y `consultaPrecios.test.js` fallan 1 caso cada uno en la
+  corrida completa y pasan **325/325 corridos juntos y aislados**. Es la interferencia entre
+  archivos ya documentada en CLAUDE.md.
+- `preparacion-contrato.test.js` (11) falla porque **falta el código**, no porque el test esté
+  viejo: la migración `064_seguimiento_paso1_incierto.sql` está aplicada y los tests existen,
+  pero `routes/preparacion.js` no tiene una sola aparición de `incierto`. El commit `1c5f560`
+  sí la tiene (17 apariciones) y **no es ancestro de esta rama**. Se dejan en rojo a propósito:
+  silenciarlos ocultaría una regresión real del flujo de tracking de Andreani.
+
+Causa raíz de los 121, ya cerrada: el commit base `6949f02` superpuso los invariantes estrictos
+de UM1 sobre el código y los tests legacy sin reconciliarlos.
+
+Lección operativa nueva: **un test puede estar verde por una base rancia.**
+`matcher-ml-robusto-hito4` escribe su propio `CREATE TABLE` a mano y había quedado seis columnas
+atrás de lo que inserta `prepararUpsertCache`; venía pasando sólo porque reusaba un `.sqlite`
+viejo de `test/` que sí las tenía. Al limpiar los temporales huérfanos apareció el fallo.
+Conviene correr `git clean -f -x test/` antes de una corrida que se vaya a creer.
