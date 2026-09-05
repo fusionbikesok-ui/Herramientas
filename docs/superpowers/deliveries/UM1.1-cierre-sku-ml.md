@@ -437,3 +437,17 @@ El rango `43cae13..bb35def` de esta sesión se reconcilió contra PM-104–PM-11
 Gate de la regla de despliegue: la suite global quedó en 11 rojos, todos de
 `preparacion-contrato.test.js` y todos por **código faltante**, no por tests viejos — ver la
 sección anterior. No hay rojo atribuible a este rango.
+
+### Despliegue del rediseño y la reconciliación de ventas — 2026-09-05
+
+- Producción había divergido dos veces durante el trabajo (`9ca06bf` y `f8388bb`, ambos sólo
+  documentación). Se mezclaron **hacia la rama** y recién después se hizo `--ff-only` sobre
+  producción: nunca se forzó ni se pisó el trabajo de la sesión paralela.
+- Backup consistente previo (`VACUUM INTO`):
+  `data/fusion.sqlite.bak-um11-merge-rediseno-20260905T124447Z` (83 MB).
+- `pm2 restart herramientas` → `online`. `GET /login/` responde **200** en 12 ms y
+  `GET /lib/components.css` responde **200**: la capa de componentes se sirve.
+- Verificación de que la reconciliación de ventas no retiene de más: reservas retenidas **2**
+  (las mismas del 2026-08-30), `wc_order_id=0` **3**, sin altas nuevas. Identidad: 109
+  operaciones completadas, 1133 casos verificados, 4 urgentes.
+- Los errores en el log son ruido preexistente de rate-limit 429 de ML, ajenos a este cambio.
