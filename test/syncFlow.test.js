@@ -20,6 +20,7 @@ import fs from 'fs';
 import { createHash } from 'node:crypto';
 import { openDb as openDbOriginal } from '../db/index.js';
 import { syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, limpiarVariacionesMuertas } from '../routes/sync.js';
+import { pedidoMlRetenido } from '../lib/guardiaMl.js';
 
 vi.mock('../lib/mlClient.js', () => ({
   mlFetch: vi.fn(),
@@ -361,7 +362,12 @@ describe('syncMlToWc', () => {
     expect(wooFetch).not.toHaveBeenCalled();
   });
 
-  it('sin_mapeo: item sin SKU asignado → log sin_mapeo, orden marcada parcial', async () => {
+  // Decisión del usuario (2026-09-05): un ítem que no resuelve a exactamente un producto del
+  // catálogo WC retiene la orden, en vez de sellarla como 'parcial'. Antes se sellaba, y sellar
+  // es lo que hacía que nadie volviera a mirarla: el cron no reprocesa una orden sellada. La
+  // retención deja la venta visible en el dashboard (reservasRetenidas) hasta que una persona
+  // la resuelva.
+  it('sin SKU asignado y sin seller_sku en la venta → retiene la orden, no la sella', async () => {
     const orden = {
       id: 'ORD-NOMATCH',
       date_created: new Date().toISOString(),
@@ -373,12 +379,13 @@ describe('syncMlToWc', () => {
     await vi.runAllTimersAsync();
     await p;
 
-    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NOMATCH');
-    expect(proc.estado).toBe('parcial');
+    // No se sella: la orden tiene que seguir siendo reprocesable.
+    expect(db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NOMATCH')).toBeFalsy();
 
-    const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'sin_mapeo'").get();
+    const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'retenido_guardia_ml'").get();
     expect(log).toBeTruthy();
-    expect(log.clave).toBe('MLA999|');
+    expect(log.clave).toBe('ORD-NOMATCH');
+    expect(pedidoMlRetenido(db, 'ORD-NOMATCH')).toBeTruthy();
 
     // Nada mapeable → no se crea pedido en WC
     expect(wooFetch).not.toHaveBeenCalled();
@@ -489,7 +496,9 @@ describe('syncMlToWc', () => {
   });
 
 
-  it('SKU mapeado ausente del catálogo WC → log error, orden marcada parcial', async () => {
+  // Mismo criterio que el caso sin SKU: si el SKU no resuelve a un producto del catálogo, no
+  // sabemos qué descontar, así que la orden se retiene en vez de sellarse como 'parcial'.
+  it('SKU mapeado ausente del catálogo WC → retiene la orden, no la sella', async () => {
     // Sin seedCatalogo: BIKE-001 no existe en catalogo_cache
     const orden = {
       id: 'ORD-NOCAT',
@@ -502,12 +511,8 @@ describe('syncMlToWc', () => {
     await vi.runAllTimersAsync();
     await p;
 
-    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NOCAT');
-    expect(proc.estado).toBe('parcial');
-
-    const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'error' AND sku = 'BIKE-001'").get();
-    expect(log).toBeTruthy();
-    expect(log.error).toMatch(/no encontrado/i);
+    expect(db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-NOCAT')).toBeFalsy();
+    expect(pedidoMlRetenido(db, 'ORD-NOCAT')).toBeTruthy();
 
     // No se llega a consultar precio ni a crear pedido en WC
     expect(wooFetch).not.toHaveBeenCalled();
@@ -1094,7 +1099,10 @@ describe('syncMlToWc — casos borde de cobertura (tester, 2026-08-03)', () => {
   // crearse igual con la línea que sí mapea (precio de contado propio), la que no mapea
   // queda en sin_mapeo, y la orden se sella como 'parcial' (no 'ok', no se pierde la venta,
   // pero tampoco se declara completa).
-  it('orden multi-ítem: un SKU mapea (usa precio de contado) y otro no mapea → pedido se crea con la línea válida, orden queda parcial', async () => {
+  // La retención es por ORDEN, no por línea: un solo ítem que no resuelve frena el pedido
+  // entero. Es a propósito — un pedido WC con la mitad de las líneas descuenta stock de una
+  // venta que todavía no sabemos servir completa, y el pedido no se modifica después.
+  it('orden multi-ítem: si un ítem no mapea, se retiene la orden entera y no se crea el pedido', async () => {
     seedCatalogo(db, { precio: 300 }); // BIKE-001 (MLA100) → contado 200
     const orden = {
       id: 'ORD-MIXTA',
@@ -1114,23 +1122,19 @@ describe('syncMlToWc — casos borde de cobertura (tester, 2026-08-03)', () => {
     await vi.runAllTimersAsync();
     await p;
 
-    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
-    expect(orderCall).toBeTruthy();
-    // Solo la línea mapeada, con el precio de contado propio — nunca el unit_price de ML.
-    expect(orderCall[3].line_items).toEqual([
-      { quantity: 1, subtotal: '200.00', total: '200.00', product_id: 100 },
-    ]);
+    expect(wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post')).toBeFalsy();
 
-    const logSinMapeo = db.prepare("SELECT * FROM sync_log WHERE estado = 'sin_mapeo'").get();
-    expect(logSinMapeo).toBeTruthy();
-    expect(logSinMapeo.clave).toBe('MLA999|');
+    const log = db.prepare("SELECT * FROM sync_log WHERE estado = 'retenido_guardia_ml'").get();
+    expect(log).toBeTruthy();
+    expect(log.error).toMatch(/MLA999\|/);
 
-    const proc = db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-MIXTA');
-    expect(proc.estado).toBe('parcial');
+    expect(db.prepare('SELECT * FROM ordenes_ml_procesadas WHERE order_id = ?').get('ORD-MIXTA')).toBeFalsy();
+    expect(pedidoMlRetenido(db, 'ORD-MIXTA')).toBeTruthy();
 
-    // Pedido igual quedó vinculado en ordenes_ml_wc_pedidos (no se perdió por el item sin mapeo).
+    // La reserva queda con wc_order_id=0: la orden sigue visible como retenida hasta que
+    // alguien resuelva el ítem que no mapea.
     const pedido = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-MIXTA');
-    expect(pedido.wc_order_id).toBe(7001);
+    expect(pedido.wc_order_id).toBe(0);
   });
 
   // Orden ML sin order_items (campo ausente): no debe explotar, no crea pedido (nada

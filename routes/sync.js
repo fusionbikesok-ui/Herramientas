@@ -163,6 +163,19 @@ export function logSync(db, { direccion, clave, sku, cantAnterior, cantNueva, es
   `).run(direccion, clave ?? null, sku ?? null, cantAnterior ?? null, cantNueva ?? null, estado, error ?? null, intentos, now(), now());
 }
 
+/**
+ * ¿Este SKU resuelve a exactamente un producto del catálogo WC?
+ *
+ * Deliberadamente NO usa `buscarEnCache`, que ante un SKU repetido elige el de menor stock:
+ * ese desempate sirve para elegir entre variaciones ya vinculadas, no para aceptar como
+ * identidad un SKU que nadie verificó. Acá la ambigüedad tiene que decir "no".
+ */
+function skuUnicoEnCatalogo(db, sku) {
+  const limpio = String(sku ?? '').trim();
+  if (!limpio) return false;
+  return db.prepare('SELECT COUNT(*) AS n FROM catalogo_cache WHERE sku = ?').get(limpio).n === 1;
+}
+
 function mlCfgOk(cfg) {
   return cfg?.ml?.clientId && cfg?.ml?.clientSecret && cfg?.ml?.userId;
 }
@@ -655,8 +668,25 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const clavesBloqueadas = [];
   for (const item of ov.items) {
     const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
-    if (!skuVinculado || !buscarEnCache(db, skuVinculado) || !esClaveCubierta(db, item.clave)) clavesSinCobertura.push(item.clave);
-    // GUARDIA: verificar también si la clave está bloqueada (seller_sku divergente o sin resolver)
+    const cubiertaPorVinculo = !!skuVinculado && !!buscarEnCache(db, skuVinculado) && esClaveCubierta(db, item.clave);
+    // Decisión del usuario (2026-09-05). Esta guarda y el fallback anti-sobreventa de más
+    // abajo (~línea 700) venían del commit base conflictivo y se contradecían: la guarda
+    // retenía la orden entera antes de que el fallback pudiera usar el `seller_sku` que trae
+    // la propia venta, dejándolo inalcanzable. El fallback se había escrito con datos
+    // medidos —83 ventas sin mapear en 60 días, 54 con un SKU que SÍ existía en el catálogo—
+    // así que anularlo reabría esa fábrica de sobreventas; pero aceptar cualquier seller_sku
+    // podía descontar el producto equivocado.
+    //
+    // Reconciliación: el `seller_sku` de la venta cuenta como cobertura SOLO si resuelve a
+    // EXACTAMENTE un producto del catálogo WC. Con cero coincidencias no sabemos qué
+    // descontar; con dos o más, `buscarEnCache` desempata por menor stock —bien para elegir
+    // entre hermanas ya vinculadas, pero no para decidir una identidad que nadie verificó.
+    // En ambos casos se retiene, que es lo que ya hacía.
+    const cubiertaPorSellerSku = !cubiertaPorVinculo && skuUnicoEnCatalogo(db, item.seller_sku);
+    if (!cubiertaPorVinculo && !cubiertaPorSellerSku) clavesSinCobertura.push(item.clave);
+    // GUARDIA: verificar también si la clave está bloqueada (seller_sku divergente o sin
+    // resolver). Esto NO lo levanta la cobertura por seller_sku: una clave que Guardia marcó
+    // como divergente se retiene igual, porque ahí el seller_sku es justamente el dato en duda.
     if (claveBloqueadaGuardia(db, item.clave)) clavesBloqueadas.push(item.clave);
   }
   if (clavesSinCobertura.length || clavesBloqueadas.length) {
