@@ -10,5 +10,7 @@ Corregir SKU fuera de `FB-{id_woo}`, activar el núcleo estricto y retirar motor
 
 - Canario designado y lotes posteriores de diez; fallos aislados permanecen bloqueados.
 - `shadow → enforced` solo con urgencias limpias y salud vigente.
+- Escritura directa con stock Woo fresco; rechazo o verificación fallida pasa a intervención y nunca activa fallback automático con stock cero.
 - Mutaciones legacy deshabilitadas; GET conservados 30 días con deprecación y métricas.
-- Rollback vuelve a sombra/read-only sin revertir efectos remotos confirmados.
+- Rollback probado en copia sanitaria y producción read-only; vuelve a sombra sin revertir efectos remotos confirmados.
+- Jornada comercial completa observada y aceptación explícita del usuario.

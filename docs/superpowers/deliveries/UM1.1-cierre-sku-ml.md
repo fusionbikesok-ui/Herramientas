@@ -306,7 +306,7 @@ arreglado y verificado): son dos caminos distintos.
    decisión nueva. Una saga que ya empezó conserva `intervencion`, porque puede tener efectos
    parciales. Regresión dirigida incluida.
 
-### Estado operativo actual
+### Estado operativo observado — 2026-09-05 01:07 UTC
 
 Configuración durante el canario: `modo=enforced`, `escrituras_remotas_habilitadas=1`,
 `canario_ml_key='MLA798189569|,MLA1541702013|'`, `lote_max=2`. Backups históricos:
@@ -315,7 +315,7 @@ Configuración durante el canario: `modo=enforced`, `escrituras_remotas_habilita
 `fusion.sqlite.bak-um11-canario2-20260905-010000`.
 
 Tras la observación, el canario fue retirado y se habilitó el procesamiento general el
-2026-09-05 01:07 UTC: configuración actual `modo=enforced`,
+2026-09-05 01:07 UTC: configuración observada `modo=enforced`,
 `escrituras_remotas_habilitadas=1`, `canario_ml_key=''`, `lote_max=2`. En el primer tick, dos
 operaciones antiguas fueron llevadas a `intervencion` por el umbral de 15 minutos, sin fallo
 remoto. Backups: `data/fusion.sqlite.bak-um11-retirar-canario-20260905T010521Z` y
@@ -339,3 +339,15 @@ remoto. Backups: `data/fusion.sqlite.bak-um11-retirar-canario-20260905T010521Z` 
   `MLA1541702013|` quedó en `FB-50396`, stock 6. El stock permaneció intacto en ambos casos.
 - Este resultado cierra la observación del camino directo para el canario de dos publicaciones;
   cualquier ampliación requiere una nueva designación explícita.
+
+## Cierre documental de reglas operativas — 2026-09-05
+
+- PM-111 reemplaza definitivamente la saga con stock cero por sobrescritura directa, stock Woo fresco y verificación remota; un fallo pasa a intervención sin fallback destructivo.
+- PM-104/PM-115 fijan protección ante pérdida de identidad Woo y retención del pedido completo.
+- PM-107 separa trabajo humano de operaciones esperando worker; `bloqueada_impacto` permanece accionable en ambas vistas.
+- Los conteos, canarios y diagnósticos anteriores de esta ficha son evidencia histórica fechada, no descripción automática del estado productivo actual.
+- Gates aún no ejecutados por este cierre: suite global serial, jornada comercial completa y rollback en copia sanitaria más prueba productiva `shadow/read-only`.
+
+### Checkpoint para integración paralela
+
+Base de este cierre: rama `conteo-confiable`, commit inicial `43cae13`, checkout `/opt/fusionbikes/herramientas`. Claude trabaja separadamente en `/opt/fusionbikes/worktrees/um1-identidad`, rama `feature/um1-identidad-continuacion`, rango observado `43cae13..1d5b2c8`. Ese rango todavía no se incorporó: toca código, UI, pruebas y documentación y debe reconciliarse contra PM-104–PM-116 antes de atribuir resultados. Este avance documental no ejecutó código, despliegues, escrituras remotas ni gates operativos.

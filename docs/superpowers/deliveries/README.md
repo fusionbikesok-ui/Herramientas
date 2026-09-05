@@ -1,6 +1,6 @@
 # Progreso y evidencia de entregas E0–E24 y urgentes
 
-Actualizado: 2026-09-04. Estas fichas registran realidad; el plan maestro especifica el objetivo. Solo evidencia reproducible permite avanzar de estado.
+Actualizado: 2026-09-05. Estas fichas registran realidad; el plan maestro especifica el objetivo. Solo evidencia reproducible permite avanzar de estado.
 
 | Entrega | Nombre | Estado | Ficha |
 | --- | --- | --- | --- |
@@ -31,7 +31,7 @@ Actualizado: 2026-09-04. Estas fichas registran realidad; el plan maestro especi
 | E24 | Consolidación final | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/E24.md` |
 | UM1 matriz | Identidad de productos | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1-guardia-ml.md` |
 | UM1.1 urgente | Cierre de publicaciones ML activas con stock sin SKU válido | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.1-cierre-sku-ml.md` |
-| UM1.2 | Detección y cobertura durable | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.2-cobertura-durable.md` |
+| UM1.2 | Detección y cobertura durable | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.2-cobertura-durable.md` |
 | UM1.3 | Producto Fusion completo | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.3-producto-fusion.md` |
 | UM1.4 | Matching bilateral y segunda cola | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.4-matching-bilateral.md` |
 | UM1.5 | Experiencia completa web y App | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.5-experiencia-web-app.md` |

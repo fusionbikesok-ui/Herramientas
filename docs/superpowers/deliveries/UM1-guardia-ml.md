@@ -1,7 +1,7 @@
 # UM1 urgente — Identidad de productos
 
 **Estado:** desarrollo. **Subentrega activa:** UM1.1. **Superficie:** VPS/web/App.
-**No autoriza despliegue, migración productiva ni escrituras reales en ML.**
+**La ficha no autoriza nuevas mutaciones; la operación productiva existente se registra como evidencia histórica y cada ampliación conserva sus gates.**
 
 ## Objetivo
 
@@ -34,17 +34,17 @@ La cobertura anterior dependía de `sku_matcher_decisiones` y no modelaba Produc
 - Producto Fusion es la identidad canónica; Woo es autoridad de stock.
 - Una clave ML solo queda cubierta con identidad y stock verificados remotamente en menos de 60 minutos o excepción explícita `solo_ml`.
 - `fusion_sku = FB-{id_woo}`; provisional sin Woo no tiene SKU y no sincroniza.
-- Auto-vínculo solo por `SELLER_SKU` textual exacto único o GTIN válido único.
-- Toda escritura remota usa operación durable por pasos y se verifica antes de resolver el caso.
+- Auto-vínculo sólo por `SELLER_SKU` textual exacto único o identificador EAN/UPC/GTIN activo y único.
+- La escritura de SKU es una sobrescritura directa durable, con stock Woo fresco y verificación remota; un fallo pasa a intervención sin fallback con stock cero.
+- `solo_ml` es una exclusión administrativa de sincronización; publicación y stock quedan bajo operación manual en ML.
 - Web y App comparten servicio de negocio, no autenticación ni adapters HTTP.
-- El modo inicial es `shadow`; `enforced` requiere canario y gates operativos.
+- Las transiciones de modo requieren canario y gates operativos; rollback significa `shadow/read-only` sin reactivar legacy.
 
 ## Base, rama y worktree
 
-- Base observada: `6949f02` desde `origin/conteo-confiable`.
-- Rama: `feature/um1-identidad-productos`.
-- Worktree: `/opt/fusionbikes/worktrees/identidad-productos`.
-- Checkout productivo `/opt/fusionbikes/herramientas`: preservado sin cambios de esta implementación.
+- Base documental de este cierre: `43cae13`, rama `conteo-confiable`, checkout `/opt/fusionbikes/herramientas`.
+- Trabajo paralelo de Claude todavía no incorporado: rama `feature/um1-identidad-continuacion`, worktree `/opt/fusionbikes/worktrees/um1-identidad`, rango `43cae13..1d5b2c8`.
+- Ese rango toca código, UI, tests y documentación; debe revisarse y reconciliarse antes de atribuir evidencia o gates.
 
 ## Gates de programa
 
@@ -59,9 +59,9 @@ La cobertura anterior dependía de `sku_matcher_decisiones` y no modelaba Produc
 
 - Especificación aprobada: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-04-identidad-productos.md`.
 - Diseño UX/UI desde cero contrastado después contra Matcher, Cobertura y Guardia.
-- Implementación UM1.1: en curso en worktree aislado.
-- Escrituras reales y despliegue: no ejecutados.
+- Implementación UM1.1 y UM1.2: en curso; las fichas individuales conservan evidencia productiva e incidentes.
+- Este cierre documental no ejecuta escrituras, despliegues ni gates operativos.
 
 ## Próxima acción reproducible
 
-Completar implementación y tests de UM1.1 en modo sombra. Ejecutar auditoría sobre una copia sanitaria, revisión independiente, suite global y E2E. La selección del canario y cualquier despliegue siguen siendo acciones manuales externas.
+Revisar y reconciliar `43cae13..1d5b2c8` antes de integrarlo. Luego ejecutar los gates todavía pendientes en las fichas: suite global serial, jornada comercial observada y rollback en copia sanitaria más prueba productiva `shadow/read-only`. Sólo el usuario puede aceptar una subentrega.

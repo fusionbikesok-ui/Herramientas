@@ -1,7 +1,7 @@
 # Plan Maestro de FusionBikes: operación, VPS y App
 
 **Estado:** especificación canónica vigente
-**Versión documental:** 2026-09-04 / programa E0–E24 + programa urgente UM1
+**Versión documental:** 2026-09-05 / programa E0–E24 + programa urgente UM1
 **Backend canónico:** `/opt/fusionbikes/herramientas`
 **Rama productiva observada:** `conteo-confiable`
 **Base verificada de esta reconstrucción:** `bc13898f9faeffcde00f49616ce6cb858eff03a3`
@@ -1087,6 +1087,8 @@ La unidad ML es siempre `item_id + variation_id`. Una clave solo está cubierta 
 
 Woo continúa como autoridad de stock. Producto Fusion es la identidad canónica: una unidad vendible, una identidad Woo activa como máximo y cero o más claves ML. Su SKU no es editable y cumple `FB-{id_woo}`; un producto provisional sin Woo no tiene SKU ni puede sincronizarse.
 
+Son unidades Woo activas los productos simples y variaciones `publish|private`; los padres `variable` quedan fuera y el stock cero no archiva identidad. Producto Fusion administra identificadores tipados EAN-8/13, UPC-A y GTIN-14, únicos globalmente mientras estén activos. UPC-A y EAN-13 con cero inicial son equivalentes para matching; Woo recibe sólo el identificador principal y ML conserva todos los observados.
+
 ### Subentregas ordenadas por valor operativo
 
 | Entrega | Resultado tangible | Gate dominante |
@@ -1101,43 +1103,46 @@ Woo continúa como autoridad de stock. Producto Fusion es la identidad canónica
 ### UM1.1: corrección segura
 
 Toda corrección persiste caso, decisión y operación antes de efectos externos. Cuando existe un
-`FB-{id_woo}` objetivo válido, la operación relee ML, sobrescribe directamente `SELLER_SKU`,
-verifica SKU y stock remoto intacto, activa localmente y reprocesa ventas retenidas. No pone stock
-en cero ni limpia el campo: MercadoLibre acepta la sobrescritura y el cero pausa la publicación
-con `out_of_stock`. El camino largo (cero, limpieza y restauración) queda reservado para un
-destino vacío o una limitación remota que impida la sobrescritura directa. Si la API ML obliga a
-afectar variaciones hermanas, la operación muestra el impacto y espera confirmación.
+`FB-{id_woo}` objetivo válido, la operación relee Woo para tomar stock fresco, sobrescribe
+directamente `SELLER_SKU`, relee ML, verifica SKU y stock remoto, activa localmente y reprocesa
+ventas retenidas. Nunca pone stock en cero ni limpia el campo como fallback: si ML rechaza o no
+permite verificar la escritura, conserva el stock y pasa a intervención. Si la API puede afectar
+variaciones hermanas, la operación muestra el impacto y espera confirmación hasta contar con
+evidencia real de aislamiento. El ejecutor corre cada minuto; scans y webhooks son procesos separados.
 
-Los casos no vinculables deben recibir una excepción explícita `solo_ml` o permanecer urgentes. Nunca se cierran por `omitir`. Si una operación `shadow` cambia de identidad antes de su primer intento remoto, queda inmovilizada como obsoleta y el caso vuelve a urgente para una decisión nueva; una saga que ya pudo tener efectos parciales permanece en intervención. El modo inicial es `shadow`; ninguna escritura real se habilita sin gates verdes, publicaciones canario designadas y autorización operativa. El canario admite como máximo dos claves explícitas y dos operaciones por corrida.
+Los casos no vinculables deben recibir una excepción explícita `solo_ml` o permanecer urgentes. `solo_ml` excluye sincronización de stock Fusion y deja la cantidad bajo administración manual en ML; sólo Administración la aprueba, con motivo y vigencia fechada o indefinida. Nunca se cierran por `omitir`. Si una operación `shadow` cambia de identidad antes de su primer intento remoto, queda inmovilizada como obsoleta y el caso vuelve a urgente para una decisión nueva; una operación que ya pudo tener efectos permanece en intervención. El canario admite como máximo dos claves explícitas y dos operaciones por corrida.
 
 ### Detección, estados y recuperación
 
-- Los webhooks ML `items` y Woo de producto crean trabajo durable y releen el origen; un scan completo cada 15 minutos repara eventos perdidos.
-- Más de 60 minutos sin scan ML completo confiable degrada la salud. Evento crítico o venta retenida debe producir urgencia y primer intento de alerta en menos de dos minutos.
-- Caso: `detectado → disponible → tomado → operación_pendiente → resuelto|intervención`; excepción explícita reabre al vencer o invalidarse.
-- Claim avisa a los 20 minutos y vence/reabre a los 30 por inactividad. Otro usuario puede relevarlo con motivo.
-- Operación: `queued → zeroing → clearing → writing → restoring_stock → verifying → completed`; tres fallos o quince minutos llevan a intervención. Administración puede reintentar, restaurar el SKU previo verificado o dejar bloqueado.
+- Los webhooks ML `items` y Woo de producto crean trabajo durable y releen el origen; scans completos separados cada 15 minutos reparan eventos perdidos. Woo degrada salud a los 30 minutos y ML a los 60. Un cambio descubierto sin webhook genera alerta/métrica de cobertura.
+- Una baja o cambio crítico Woo confirmado protege en cero todas las claves ML vinculadas y retiene pedidos. La recuperación válida verifica ambos canales, restaura stock y libera pedidos.
+- Una publicación ML pausada inválida conserva deuda no urgente; cerrada se archiva; reactivada con stock e identidad inválida se protege en cero y pasa a urgencia máxima.
+- Caso: `detectado → disponible → tomado → operación_pendiente → resuelto|intervención`; claim opcional, relevo por cualquier decisor con motivo y concurrencia por `expected_version`.
+- Operación: `queued → writing → verifying → completed`; tres fallos o quince minutos sin progreso llevan a intervención. Administración puede reintentar o dejar bloqueado.
 
 ### Matching y cobertura bilateral
 
-- Auto-vínculo solo por `SELLER_SKU` textualmente exacto y único o GTIN-8/12/13/14 canónico, único y con dígito verificador válido.
-- Conflicto SKU↔GTIN bloquea; una excepción elige la identidad válida pero mantiene el otro identificador para corrección.
+- Auto-vínculo sólo por `SELLER_SKU` textualmente exacto y único o EAN/UPC/GTIN activo, canónico, único y con dígito verificador válido.
+- Un conflicto entre SKU/EAN/UPC no se automatiza: la persona elige la identidad válida, el identificador descartado queda marcado incorrecto y genera tarea de catálogo.
 - Matching aproximado determinista por familia, con un candidato, razones visibles y confirmación individual. Precio y fotos son contexto, no puntaje.
 - Mostrar porcentaje solo si existe calibración suficiente y es ≥60%; de lo contrario indicar evidencia insuficiente.
-- Woo→ML termina en vínculo, tarea de publicación con SLA de siete días o exclusión explícita.
+- Woo→ML incluye unidades activas con stock y termina en vínculo, tarea de publicación con SLA de siete días o exclusión administrativa explícita. Una tarea vencida escala sin cerrarse.
 
 ### Superficies, permisos y alertas
 
 - Web: `/herramientas/identidad-productos/` y `/api/identidad-productos`.
 - App: `/api/v1/identidad-productos`; deep link `fusionbikes://identidad-productos/casos/{id}`.
 - Navegación: Pendientes, Productos Fusion, Operaciones e Historial, con salud/alertas persistentes.
-- Administradores y usuarios con `matcher:write` deciden; lectura puede consultar y agregar notas/evidencia. Familias y modo operativo son solo administrativos.
-- App y web tienen capacidad equivalente. La App entra desde Hoy y permite decisiones offline hasta 12 horas con versión/evidencia; un conflicto detiene el replay.
-- Alertas críticas llegan a todos los administradores por App, pantalla y push; recordatorio a los 15 minutos y nueva escalada a los 30. La bandeja persiste si push falla.
+- Administradores y usuarios con `matcher:write` deciden; lectura puede consultar y agregar notas/evidencia. Excepciones, exclusiones, transferencias, familias y modo operativo son sólo administrativos.
+- “Pendientes” cuenta acciones humanas; ejecución en espera tiene contador separado. `bloqueada_impacto` aparece también en Operaciones. Contradicciones posteriores a una verificación generan tarea de catálogo sin reabrir identidad.
+- La App permite offline hasta 12 horas sólo para vínculos y notas. Versión/evidencia divergente bloquea esa operación, no las independientes; una decisión válida entra al flujo remoto normal.
+- Alertas críticas llegan a Administración y usuarios activos con `matcher:write` por App, pantalla y push; recordatorio a los 15 minutos y nueva escalada a los 30. La bandeja persiste si push falla.
 
 ### Rollout y retiro legacy
 
-Bootstrap en sombra desde cada unidad Woo actual; solo relaciones heredadas exactas, únicas y nuevamente verificadas migran automáticamente. Los SKU fuera de `FB-{id_woo}` se corrigen con un canario y lotes de diez. Las mutaciones legacy se deshabilitan al corte; GET permanecen 30 días con deprecación y métricas. El rollback vuelve el núcleo a sombra/read-only, conserva casos/evidencia y nunca reactiva motores anteriores ni deshace automáticamente efectos remotos confirmados.
+Bootstrap en sombra desde productos simples y variaciones Woo `publish|private`; sólo relaciones heredadas exactas, únicas y nuevamente verificadas migran automáticamente. Identidades verificadas sin familia/atributos siguen operando con deuda de catálogo de siete días; vínculos nuevos incompletos se bloquean y un cambio de reglas revalida todos los vínculos afectados. Los SKU fuera de `FB-{id_woo}` se corrigen con un canario y lotes de diez. Las mutaciones legacy se deshabilitan al corte; GET permanecen 30 días con deprecación y métricas. El rollback vuelve el núcleo a sombra/read-only, conserva casos/evidencia y nunca reactiva motores anteriores ni deshace automáticamente efectos remotos confirmados.
+
+Una línea insegura retiene el pedido completo. Se revisan pedidos abiertos/no conciliados desde la última evidencia confiable y se liberan cronológica e idempotentemente hasta agotar stock. “Observada” exige una jornada comercial completa; el auditor recomienda y sólo el usuario declara una subentrega `aceptada`.
 
 La especificación completa es `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-04-identidad-productos.md`; la ficha matriz es `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1-guardia-ml.md` y UM1.1–UM1.6 conservan evidencia independiente.
 
