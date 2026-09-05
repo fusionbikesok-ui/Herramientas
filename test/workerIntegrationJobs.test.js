@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { openDb } from '../db/index.js';
 vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn() }));
 import { mlFetch } from '../lib/mlClient.js';
-import { registrarWebhookMl, procesarIntegrationJobs } from '../lib/workerIntegrationJobs.js';
+import { registrarWebhookMl, procesarIntegrationJobs, registrarCambiosObservados } from '../lib/workerIntegrationJobs.js';
 import { reclamarJobs, completarJob, reprocesarJob } from '../lib/integrationJobs.js';
 
 describe('worker durable de integration_jobs', () => {
@@ -176,6 +176,62 @@ describe('proyección del topic `items` (§15 del plan: dejaba la decisión abie
     await procesarIntegrationJobs(db, { mlCfg: { clientId: 'c', clientSecret: 's', userId: '9' } });
     expect(mlFetch).not.toHaveBeenCalled();
     expect(db.prepare('SELECT status FROM integration_jobs WHERE event_id=?').get(r.eventId).status).toBe('completed');
+    db.close();
+  });
+});
+
+describe('captura de qué cambió en una publicación de ML', () => {
+  function pub(db, clave, campos = {}) {
+    const base = { seller_sku: 'FB-1', available_quantity: 3, status: 'active', sub_status: '', precio: 100, user_product_id: null, gtin: null, ...campos };
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,sub_status,seller_sku,available_quantity,precio,user_product_id,gtin,actualizado_en)
+      VALUES (?,?,'','t',?,?,?,?,?,?,?,?)
+      ON CONFLICT(clave) DO UPDATE SET status=excluded.status, sub_status=excluded.sub_status, seller_sku=excluded.seller_sku,
+        available_quantity=excluded.available_quantity, precio=excluded.precio, user_product_id=excluded.user_product_id, gtin=excluded.gtin`)
+      .run(clave, clave.split('|')[0], base.status, base.sub_status, base.seller_sku, base.available_quantity, base.precio, base.user_product_id, base.gtin, new Date().toISOString());
+  }
+  const snap = (db, item) => db.prepare(`SELECT clave,item_id,seller_sku,available_quantity,status,sub_status,precio,user_product_id,gtin
+    FROM ml_publicaciones_cache WHERE item_id=?`).all(item);
+
+  it('registra sólo los campos que cambiaron, con antes y después', () => {
+    const db = openDb(':memory:');
+    pub(db, 'MLA1|');
+    const antes = snap(db, 'MLA1');
+    pub(db, 'MLA1|', { precio: 150, available_quantity: 0 });
+    expect(registrarCambiosObservados(db, 'MLA1', antes, 'webhook')).toBe(2);
+    const filas = db.prepare('SELECT campo,antes,despues,origen FROM ml_cambios_observados ORDER BY campo').all();
+    expect(filas).toEqual([
+      { campo: 'available_quantity', antes: '3', despues: '0', origen: 'webhook' },
+      { campo: 'precio', antes: '100', despues: '150', origen: 'webhook' },
+    ]);
+    db.close();
+  });
+
+  it('sin cambios no registra nada', () => {
+    const db = openDb(':memory:');
+    pub(db, 'MLA1|');
+    expect(registrarCambiosObservados(db, 'MLA1', snap(db, 'MLA1'), 'webhook')).toBe(0);
+    db.close();
+  });
+
+  it('una clave nueva no cuenta como cambio', () => {
+    const db = openDb(':memory:');
+    pub(db, 'MLA1|');
+    const antes = snap(db, 'MLA1');
+    pub(db, 'MLA1|b');
+    expect(registrarCambiosObservados(db, 'MLA1', antes, 'webhook')).toBe(0);
+    db.close();
+  });
+
+  // El caso que motivó todo esto: alguien edita el SELLER_SKU en ML por fuera de la
+  // herramienta y hoy no quedaba rastro de que hubiera pasado.
+  it('deja rastro de un SELLER_SKU editado fuera de la herramienta', () => {
+    const db = openDb(':memory:');
+    pub(db, 'MLA1|');
+    const antes = snap(db, 'MLA1');
+    pub(db, 'MLA1|', { seller_sku: 'FB-OTRO' });
+    registrarCambiosObservados(db, 'MLA1', antes, 'webhook');
+    expect(db.prepare("SELECT antes,despues FROM ml_cambios_observados WHERE campo='seller_sku'").get())
+      .toEqual({ antes: 'FB-1', despues: 'FB-OTRO' });
     db.close();
   });
 });

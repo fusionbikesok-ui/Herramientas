@@ -638,6 +638,13 @@ export function openDb(dbPath) {
   // migración Hito 7 (`user_version < 30`, al final de openDb). Subirla a 82 saltea esa
   // migración y deja la base sin device_tokens, rompiendo toda la auth móvil. La
   // idempotencia de 082 la da su marcador en `_schema_migrations`.
+  const cambiosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_cambios_observados_087'").get();
+  if (!cambiosMigration) {
+    try {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '087_ml_cambios_observados.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_cambios_observados_087')").run();
+    } catch (e) { console.error('migracion 087_ml_cambios_observados:', e.message); }
+  }
   const rampMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_scan_ramp_086'").get();
   if (!rampMigration) {
     try {
