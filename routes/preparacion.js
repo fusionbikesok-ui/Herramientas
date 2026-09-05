@@ -17,6 +17,8 @@ import {
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
+
+const TRACKING_META_KEY = '_andreani_tracking';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
 import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment, calcularSlaPreparacion } from '../lib/horariosDespacho.js';
 import { sincronizarMiniOlas, jornadaDeHoy } from '../lib/jornada.js';
@@ -224,6 +226,10 @@ function ensureTables(db) {
     dia INTEGER PRIMARY KEY CHECK (dia BETWEEN 1 AND 7), habilitado INTEGER NOT NULL DEFAULT 0 CHECK (habilitado IN (0,1)),
     hora_corte TEXT NOT NULL DEFAULT '16:00', actualizado_en TEXT NOT NULL
   )`).run(); sembrarHorarios(db); } catch (e) { console.error('ensureTables despacho_horarios:', e.message); }
+  // La migración histórica puede ejecutarse antes de que exista la tabla en una base
+  // nueva; garantizar aquí la columna evita que el contrato de resultado incierto
+  // dependa del orden de inicialización.
+  try { db.prepare('ALTER TABLE preparaciones ADD COLUMN woo_paso1_incierto INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { if (!/duplicate column/i.test(e.message)) console.error('ensureTables woo_paso1_incierto:', e.message); }
   // pack_id acá también: pedidos_cache es lo que alimenta tanto "A preparar" como el
   // Historial, así que es el único lugar donde ponerlo hace que el número que se lee en ML
   // sea encontrable en las dos pantallas (ver el comentario de preparaciones.pack_id).
@@ -599,6 +605,17 @@ function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
   return estadoFinal;
 }
 
+function registrarTrackingCargadoUnaVez(db, preparacionId, usuario, tracking) {
+  const resultado = db.prepare(`
+    INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
+    SELECT ?, NULL, 'tracking_cargado', ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM preparacion_eventos WHERE preparacion_id=? AND tipo='tracking_cargado'
+    )
+  `).run(preparacionId, usuario ?? null, JSON.stringify({ tracking }), now(), preparacionId);
+  return resultado.changes > 0;
+}
+
 // Crea (o completa) una preparación con el snapshot de sus ítems.
 // Idempotente por clave: si ya existe con ítems, devuelve el id existente.
 export function crearPreparacion(db, { canal, wcOrderId = null, mlOrderId = null, packId = null, numeroPedido, comprador, notas = null, items = [] }) {
@@ -776,10 +793,40 @@ export async function reintentarColgadosTracking(db, cfg) {
   let resueltos = 0;
   for (const prep of pendientes) {
     try {
-      await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', { status: cfg.enviadoAndreaniStatus || 'enviadoandreani' });
+      // Se relee Woo antes de tocar nada: mandar el PUT 2 a ciegas puede cerrar un pedido
+      // cuyo paso 1 nunca se aplicó, o pisar un tracking distinto al nuestro.
+      const actual = await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`);
+      const status = actual.data?.status;
+      const meta = (actual.data?.meta_data || []).find((m) => m.key === TRACKING_META_KEY);
+      const trackingGuardado = String(meta?.value || '').trim();
+      const trackingEsperado = String(prep.tracking || '').trim();
+      const mismoTracking = trackingEsperado && trackingGuardado === trackingEsperado;
+      // Preparaciones legacy pueden no tener tracking local; un estado terminal de Woo
+      // alcanza para recuperar el flag. En preparaciones modernas exigimos coincidencia.
+      const yaSalio = status === (cfg.enviadoAndreaniStatus || 'enviadoandreani') && (!trackingEsperado || mismoTracking);
+      let intencionRecuperada = false;
+      // incierto=2 es la intención anclada ANTES del paso 1: si Woo sigue en el estado de
+      // entrada, la escritura nunca llegó y hay que rehacerla.
+      if (prep.woo_paso1_incierto === 2 && status === (cfg.andreaniStatus || 'lpaandreani') && trackingEsperado) {
+        await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', {
+          status: 'completed',
+          meta_data: [{ key: TRACKING_META_KEY, value: trackingEsperado }],
+        });
+        db.prepare('UPDATE preparaciones SET woo_paso1_incierto=1 WHERE id=?').run(prep.id);
+        intencionRecuperada = true;
+      }
+      // incierto=1 es un paso 1 cuya respuesta no se pudo confirmar: no se avanza al paso 2
+      // hasta que Woo diga 'completed' con NUESTRO tracking.
+      const inciertoSinConfirmar = prep.woo_paso1_incierto === 1 && !(status === 'completed' && mismoTracking);
+      if (!intencionRecuperada && (inciertoSinConfirmar || (!yaSalio && !(status === 'completed' && mismoTracking)))) continue;
+      if (!yaSalio) {
+        await wooFetch(cfg.woo, `/orders/${prep.wc_order_id}`, 'put', { status: cfg.enviadoAndreaniStatus || 'enviadoandreani' });
+      }
+      if (prep.woo_paso1_incierto) db.prepare('UPDATE preparaciones SET woo_paso1_incierto=0 WHERE id=?').run(prep.id);
       // Mismo criterio que /seguimientos/:wcOrderId: 'completada' solo si de verdad está
       // verificada, y nunca pisa una 'cerrada_sin_evidencia' — ver marcarPreparacionEnviada.
       marcarPreparacionEnviada(db, prep.clave, { usuario: null });
+      registrarTrackingCargadoUnaVez(db, prep.id, null, trackingEsperado);
       registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'tracking_recuperado', usuario: null, detalle: {} });
       resueltos++;
     } catch (e) {
@@ -846,7 +893,6 @@ export function preparacionRouter(db, cfg) {
   } catch (error) { console.error('ensureTables despacho_lote_eventos:', error.message); }
   const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
-  const TRACKING_META_KEY = '_andreani_tracking';
 
   // Queries para resolución de GTIN/EAN en escanear
   const skuPorEan = db.prepare('SELECT sku FROM ean_sku WHERE ean=?');
@@ -1513,10 +1559,12 @@ export function preparacionRouter(db, cfg) {
       const totalAMedias = db.prepare(
         "SELECT COUNT(*) n FROM preparaciones WHERE canal='web' AND woo_paso2_pendiente=1"
       ).get().n;
+      const aMediasOffset = Math.max(0, Number.parseInt(req.query.a_medias_offset || '0', 10) || 0);
+      const aMediasLimit = Math.min(100, Math.max(1, Number.parseInt(req.query.a_medias_limit || '20', 10) || 20));
       const pendientesPaso2 = db.prepare(
-        `SELECT id, wc_order_id, tracking, numero_pedido, comprador, localidad FROM preparaciones
-         WHERE canal='web' AND woo_paso2_pendiente=1 ORDER BY id LIMIT 20`
-      ).all();
+        `SELECT id, wc_order_id, tracking, numero_pedido, comprador, localidad, woo_paso1_incierto FROM preparaciones
+         WHERE canal='web' AND woo_paso2_pendiente=1 ORDER BY id LIMIT ? OFFSET ?`
+      ).all(aMediasLimit, aMediasOffset);
       const aMedias = pendientesPaso2.map((row) => ({
         wc_order_id: row.wc_order_id,
         envio: {
@@ -1528,6 +1576,7 @@ export function preparacionRouter(db, cfg) {
         },
         preparacion_id: row.id,
         tracking: row.tracking || null,
+        incierto: !!row.woo_paso1_incierto,
       }));
 
       // Solo canal='web': esta pantalla trabaja exclusivamente el universo lpaandreani/
@@ -1558,6 +1607,9 @@ export function preparacionRouter(db, cfg) {
           sin_preparacion: sinPreparacion,
           a_medias: aMedias,
           a_medias_total: totalAMedias,
+          a_medias_offset: aMediasOffset,
+          a_medias_limit: aMediasLimit,
+          a_medias_has_more: aMediasOffset + aMedias.length < totalAMedias,
           despachados_sin_verificar: despachadosSinVerificar,
           cargados_hoy: cargadosHoy,
           truncado,
@@ -1605,12 +1657,57 @@ export function preparacionRouter(db, cfg) {
       // Paso 1: guarda el tracking y pasa a 'completed' (dispara el mail nativo de WooCommerce).
       // Se saltea cuando el pedido ya está en 'completed' con el mismo tracking (reintento):
       // así no se reenvía el mail al cliente.
+      // Registrar la intención antes del primer PUT deja un ancla durable para
+      // reconciliar incluso si Woo acepta la escritura y el proceso cae antes de
+      // completar la persistencia posterior. Si esta escritura local falla, no se
+      // toca Woo: es preferible no iniciar el efecto remoto sin una recuperación.
+      const persistirIntencion = db.transaction(() => {
+        db.prepare(`INSERT INTO preparaciones
+          (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, woo_paso1_incierto, tracking)
+          VALUES ('web', ?, ?, ?, ?, ?, 1, 'en_preparacion', ?, 1, 2, ?)
+          ON CONFLICT(clave) DO UPDATE SET woo_paso2_pendiente=1, woo_paso1_incierto=2, tracking=excluded.tracking,
+            numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, localidad=excluded.localidad`).run(
+          `web:${wcOrderId}`, wcOrderId, String(actual.data.number ?? wcOrderId),
+          `${actual.data.billing?.first_name || ''} ${actual.data.billing?.last_name || ''}`.trim() || null,
+          actual.data.shipping?.city || actual.data.billing?.city || null, now(), tracking,
+        );
+        const row = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+        if (!row) throw new Error('No se pudo persistir la intención de tracking');
+        if (!prepExistente) claimPreparacion(db, row.id, req.user.username, cfg, new Date(), true);
+        return row;
+      });
+      persistirIntencion();
+
       const yaCompletadoMismoTracking = statusActual === 'completed' && trackingGuardado === tracking;
       if (!yaCompletadoMismoTracking) {
-        await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
-          status: 'completed',
-          meta_data: [metaEntry],
-        });
+        try {
+          await wooFetch(cfg.woo, `/orders/${wcOrderId}`, 'put', {
+            status: 'completed',
+            meta_data: [metaEntry],
+          });
+          db.prepare('UPDATE preparaciones SET woo_paso1_incierto=0 WHERE clave=?').run(`web:${wcOrderId}`);
+        } catch (e) {
+          // La respuesta del PUT es incierta: Woo puede haber guardado el tracking aunque la
+          // conexión haya vencido. Se persiste la fila como pendiente/incierta y se evita el
+          // paso 2 hasta reconciliar por GET — cerrar a ciegas puede despachar un pedido cuyo
+          // cliente nunca recibió el mail de Woo.
+          const incierta = db.transaction(() => {
+            db.prepare(`INSERT INTO preparaciones
+              (canal, clave, wc_order_id, numero_pedido, comprador, localidad, etiqueta_lista, estado, creado_en, woo_paso2_pendiente, woo_paso1_incierto, tracking)
+              VALUES ('web', ?, ?, ?, ?, ?, 1, 'en_preparacion', ?, 1, 1, ?)
+              ON CONFLICT(clave) DO UPDATE SET woo_paso2_pendiente=1, woo_paso1_incierto=1, tracking=excluded.tracking`).run(
+              `web:${wcOrderId}`, wcOrderId, String(actual.data.number ?? wcOrderId),
+              `${actual.data.billing?.first_name || ''} ${actual.data.billing?.last_name || ''}`.trim() || null,
+              actual.data.shipping?.city || actual.data.billing?.city || null, now(), tracking,
+            );
+            const row = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+            if (!row) throw new Error('No se pudo persistir el tracking incierto');
+            if (!prepExistente) claimPreparacion(db, row.id, req.user.username, cfg, new Date(), true);
+            return row;
+          })();
+          registrarEvento(db, { preparacionId: incierta.id, itemId: null, tipo: 'tracking_paso1_incierto', usuario: req.user?.username, detalle: { error: e.message, tracking } });
+          return res.status(502).json({ ok: false, colgado: true, incierto: true, error: 'no se pudo confirmar si Woo guardó el tracking; queda pendiente de reconciliación' });
+        }
       }
       // Registro local ANTES del paso 2: si el paso 2 falla, igual queda constancia de
       // que el pedido llegó a 'completed' con tracking guardado — sin esto, la única
@@ -1658,10 +1755,7 @@ export function preparacionRouter(db, cfg) {
       // localmente y refrescar desde GET /seguimientos (o incrementar también en la rama
       // colgado) para no quedar corrido en -1 el resto del día.
       const prepId = preparacion.id;
-      registrarEvento(db, {
-        preparacionId: prepId, itemId: null, tipo: 'tracking_cargado', usuario: req.user?.username,
-        detalle: { tracking },
-      });
+      registrarTrackingCargadoUnaVez(db, prepId, req.user?.username, tracking);
 
       // Paso 2: estado final custom, en una segunda escritura separada. Si falla, no se
       // relanza — queda "colgado" (woo_paso2_pendiente=1) para que reintentarColgadosTracking
