@@ -34,7 +34,7 @@ console.log('operación     : id', op.id, '| estado', op.estado, '| paso', op.pa
 const sinEscritura = String(pub?.seller_sku || '').trim() === String(op.sku_objetivo || '').trim();
 console.log('previsión     :', sinEscritura
   ? 'el SKU ya coincide: la saga debería completar SIN escribir en ML'
-  : 'requiere escritura real: stock 0 → limpiar SKU → escribir SKU → restaurar stock');
+  : 'requiere una escritura directa de SELLER_SKU; el stock permanece intacto');
 
 if (!aplicar) { console.log('\nSIMULACIÓN. Nada se modificó. Repetí con --aplicar.'); db.close(); process.exit(0); }
 

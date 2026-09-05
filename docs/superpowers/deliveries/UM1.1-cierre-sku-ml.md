@@ -323,3 +323,13 @@ Producción sigue con la saga larga hasta integrar y autorizar el despliegue man
 soporta hasta dos claves explícitas separadas por coma y `lote_max=2`, pero no altera esa
 configuración productiva ni designa una segunda publicación. Backups:
 `fusion.sqlite.bak-antes-canario-20260904-232618` y `...-canario2-20260904-234431`.
+
+### Despliegue técnico — 2026-09-05
+
+- Merge local: `a0a6b6d`; sin push.
+- PM2 reiniciado; proceso online y servidor escuchando en `:3001`.
+- La migración `identidad_sin_cero_085` quedó aplicada sin tocar `user_version`.
+- Backup consistente previo: `data/fusion.sqlite.bak-um11-directo-20260905-005000`.
+- La configuración ML quedó restringida a `MLA1563030043|` y lote 1. Ese canario ya estaba
+  completado con la saga previa; falta designar una publicación nueva para observar en vivo el
+  camino directo y confirmar SKU escrito con stock intacto.

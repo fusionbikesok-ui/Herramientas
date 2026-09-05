@@ -52,6 +52,11 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - El rollout soporta hasta dos claves canario explícitas (separadas por coma) y dos operaciones
   por corrida. Producción conserva su única clave actual hasta que se designe la segunda y se
   autorice merge/despliegue.
+- Despliegue técnico del camino directo realizado el 2026-09-05: merge `a0a6b6d`, PM2
+  reiniciado, marcador `identidad_sin_cero_085` presente y endpoint en `:3001` responde 401 sin
+  sesión. La configuración quedó sin cambios (`MLA1563030043|`, lote 1). Backup consistente:
+  `data/fusion.sqlite.bak-um11-directo-20260905-005000`. Falta un canario nuevo explícitamente
+  designado para observar una escritura directa real con stock intacto.
 - `user_version` no numera migraciones: es la compuerta de Hito 7 (PM-034). Ninguna migración
   nueva puede escribirlo o la base queda sin `device_tokens` y cae la auth móvil.
 - Cada avance sobre UM1 actualiza en el mismo commit estado, evidencia, handoff y decisiones.
