@@ -306,7 +306,7 @@ arreglado y verificado): son dos caminos distintos.
    decisión nueva. Una saga que ya empezó conserva `intervencion`, porque puede tener efectos
    parciales. Regresión dirigida incluida.
 
-### Estado operativo actual
+### Estado operativo observado — 2026-09-05 01:07 UTC
 
 Configuración durante el canario: `modo=enforced`, `escrituras_remotas_habilitadas=1`,
 `canario_ml_key='MLA798189569|,MLA1541702013|'`, `lote_max=2`. Backups históricos:
@@ -315,7 +315,7 @@ Configuración durante el canario: `modo=enforced`, `escrituras_remotas_habilita
 `fusion.sqlite.bak-um11-canario2-20260905-010000`.
 
 Tras la observación, el canario fue retirado y se habilitó el procesamiento general el
-2026-09-05 01:07 UTC: configuración actual `modo=enforced`,
+2026-09-05 01:07 UTC: configuración observada `modo=enforced`,
 `escrituras_remotas_habilitadas=1`, `canario_ml_key=''`, `lote_max=2`. En el primer tick, dos
 operaciones antiguas fueron llevadas a `intervencion` por el umbral de 15 minutos, sin fallo
 remoto. Backups: `data/fusion.sqlite.bak-um11-retirar-canario-20260905T010521Z` y
@@ -339,6 +339,18 @@ remoto. Backups: `data/fusion.sqlite.bak-um11-retirar-canario-20260905T010521Z` 
   `MLA1541702013|` quedó en `FB-50396`, stock 6. El stock permaneció intacto en ambos casos.
 - Este resultado cierra la observación del camino directo para el canario de dos publicaciones;
   cualquier ampliación requiere una nueva designación explícita.
+
+## Cierre documental de reglas operativas — 2026-09-05
+
+- PM-111 reemplaza definitivamente la saga con stock cero por sobrescritura directa, stock Woo fresco y verificación remota; un fallo pasa a intervención sin fallback destructivo.
+- PM-104/PM-115 fijan protección ante pérdida de identidad Woo y retención del pedido completo.
+- PM-107 separa trabajo humano de operaciones esperando worker; `bloqueada_impacto` permanece accionable en ambas vistas.
+- Los conteos, canarios y diagnósticos anteriores de esta ficha son evidencia histórica fechada, no descripción automática del estado productivo actual.
+- Gates aún no ejecutados por este cierre: suite global serial, jornada comercial completa y rollback en copia sanitaria más prueba productiva `shadow/read-only`.
+
+### Checkpoint para integración paralela
+
+Base de este cierre: rama `conteo-confiable`, commit inicial `43cae13`, checkout `/opt/fusionbikes/herramientas`. Claude trabaja separadamente en `/opt/fusionbikes/worktrees/um1-identidad`, rama `feature/um1-identidad-continuacion`, rango observado `43cae13..1d5b2c8`. Ese rango todavía no se incorporó: toca código, UI, pruebas y documentación y debe reconciliarse contra PM-104–PM-116 antes de atribuir resultados. Este avance documental no ejecutó código, despliegues, escrituras remotas ni gates operativos.
 
 ### Rediseño de la pantalla — 2026-09-05
 
@@ -404,3 +416,24 @@ Lección operativa nueva: **un test puede estar verde por una base rancia.**
 atrás de lo que inserta `prepararUpsertCache`; venía pasando sólo porque reusaba un `.sqlite`
 viejo de `test/` que sí las tenía. Al limpiar los temporales huérfanos apareció el fallo.
 Conviene correr `git clean -f -x test/` antes de una corrida que se vaya a creer.
+
+### Reconciliación con el cierre documental paralelo — 2026-09-05
+
+El rango `43cae13..bb35def` de esta sesión se reconcilió contra PM-104–PM-116 mezclando
+`9ca06bf` hacia la rama, no al revés. Criterio de cada conflicto:
+
+- **§18.1 del plan maestro:** gana la reescritura de producción, posterior y más completa; ya
+  incorpora el camino directo. El detalle de implementación (`sin_cero`, nombres reales de los
+  pasos) queda en esta ficha, que es donde corresponde.
+- **Decisiones:** la numeración PM-103–PM-116 de producción es la canónica. Las tres decisiones
+  de esta sesión se renumeraron a PM-117 (capa de componentes), PM-118 (línea de telemetría) y
+  PM-119 (divulgación progresiva). PM-103 de producción reemplaza a la equivalente de esta rama,
+  mejor redactada. Se agregan PM-120 (cobertura por `seller_sku` único), PM-121 (retiro de
+  Cobertura confirmado) y PM-122 (un test verde por base rancia).
+- **Pendientes:** se conservan los dos hallazgos abiertos de esta sesión (2 publicaciones con SKU
+  inexistente en Woo y 3 claves con stock que no coincide). Se descartan los dos ya cerrados.
+- **Fichas:** ambas secciones son complementarias y se conservan las dos.
+
+Gate de la regla de despliegue: la suite global quedó en 11 rojos, todos de
+`preparacion-contrato.test.js` y todos por **código faltante**, no por tests viejos — ver la
+sección anterior. No hay rojo atribuible a este rango.

@@ -10,5 +10,7 @@ Unificar Pendientes, Productos Fusion, Operaciones e Historial bajo `Identidad d
 
 - Web 390/768/1440, teclado, lector de pantalla y claro/oscuro.
 - App desde Hoy, sin sexta pestaña, con deep links.
-- Replay ≤12 horas; versión/evidencia divergente responde 409 y detiene la cola.
+- Pendientes cuenta sólo acciones humanas; ejecución en espera tiene contador separado y `bloqueada_impacto` aparece también en Operaciones.
+- Offline permite vínculos y notas, no excepciones, transferencias, impacto ni configuración.
+- Replay ≤12 horas; versión/evidencia divergente responde 409 y bloquea sólo esa operación. Las independientes continúan.
 - Prueba en iPhone real obligatoria antes de aceptación móvil.

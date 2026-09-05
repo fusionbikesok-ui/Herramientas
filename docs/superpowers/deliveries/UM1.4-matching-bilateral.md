@@ -4,11 +4,11 @@
 
 ## Resultado
 
-Operar las colas ML→Fusion y Woo→ML. Todo Woo vendible con stock debe quedar vinculado, enviado a tarea de publicación con SLA de siete días o excluido explícitamente.
+Operar las colas ML→Fusion y Woo→ML. Todo Woo `publish|private` vendible con stock debe quedar vinculado, enviado a tarea de publicación con SLA de siete días o excluido por Administración. Una tarea vencida escala y permanece abierta.
 
 ## Gates
 
-- Automatización solo por `SELLER_SKU` textual exacto único o GTIN válido único.
-- Conflicto SKU↔GTIN bloqueante.
+- Automatización sólo por `SELLER_SKU` textual exacto único o EAN/UPC/GTIN activo, válido y único.
+- Conflicto entre identificadores impide automatizar pero permite decisión humana; el descartado genera tarea de catálogo.
 - Un candidato aproximado explicable; precio y fotos fuera del puntaje.
 - Calibración con 200 casos: ≥90% global y ninguna familia elegible <80%.

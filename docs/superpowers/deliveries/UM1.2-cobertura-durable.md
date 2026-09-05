@@ -1,6 +1,6 @@
 # UM1.2 — Detección y cobertura durable
 
-**Estado:** en desarrollo. **Dependencia:** UM1.1 candidata. **Superficie:** VPS.
+**Estado:** desarrollo. **Dependencia:** UM1.1 candidata. **Superficie:** VPS.
 
 ## Resultado
 
@@ -33,6 +33,16 @@ Impedir que reaparezca cobertura insegura mediante eventos durables ML/Woo, rele
 ## Gates
 
 - Evento perdido, duplicado y fuera de orden convergen mediante scan.
-- Claims avisan a los 20 minutos y vencen a los 30.
+- Webhook Woo relee puntualmente; scans completos Woo y ML corren cada 15 minutos. Woo degrada a los 30 minutos sin scan confiable y ML a los 60.
+- Un cambio descubierto por scan sin webhook converge y genera alerta/métrica de cobertura perdida.
+- Baja o cambio crítico Woo confirmado protege todas las claves ML vinculadas; recuperación válida restaura stock y libera pedidos tras verificar.
+- Claims son opcionales; cualquier decisor puede relevar con motivo y `expected_version` resuelve concurrencia.
 - Tres fallos o quince minutos terminan en intervención visible.
 - Sin despliegue ni activación antes de revisión, tests y piloto.
+
+## Ciclo de vida
+
+- ML pausada o sin stock con identidad inválida: caso no urgente.
+- ML cerrada/eliminada: identidad archivada e historia conservada.
+- ML reactivada con stock e identidad inválida: stock cero y urgencia máxima.
+- Woo eliminada, en papelera o con SKU alterado: relectura puntual y protección de todas sus claves; una recreación con otro ID exige transferencia administrativa.
