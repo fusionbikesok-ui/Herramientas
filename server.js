@@ -23,7 +23,7 @@ import { geminiRouter } from './routes/gemini.js';
 import { nuevosProductosRouter } from './routes/nuevosProductos.js';
 import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
-import { matcherRouter, dispararRefrescoMl } from './routes/matcher.js';
+import { matcherRouter, dispararRefrescoMl, estadoRefrescoMl } from './routes/matcher.js';
 import { syncRouter, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
@@ -503,12 +503,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         const { tocaScan, evaluarRamp, medirCoberturaWebhook, proyeccionItemsRota, estadoRamp } =
           await import('./lib/mlScanRamp.js');
         if (!tocaScan(app._db)) return;
+        // `dispararRefrescoMl` corre en BACKGROUND y vuelve al instante. Medir la cobertura
+        // justo después de lanzarlo compararía un cache que todavía no cambió y reportaría
+        // siempre cero sorpresas: el ramp subiría con evidencia falsa. Por eso se mide el
+        // refresco ANTERIOR —ya terminado— y recién después se dispara el siguiente.
+        if (estadoRefrescoMl()?.running) return;
         const desde = estadoRamp(app._db)?.ultimo_scan_en || null;
-        const r = dispararRefrescoMl(app._db, syncCfg.ml, 'all');
-        if (!r.ok && !r.running) { console.error('Guardia ML: no se pudo iniciar lectura:', r.error); return; }
-        if (r.running) return;
-        // La medición va DESPUÉS del refresco: compara la huella nueva contra la del scan
-        // anterior para saber qué cambió sin diffear en el camino caliente del scan.
         try {
           const cobertura = medirCoberturaWebhook(app._db, desde);
           const paso = evaluarRamp(app._db, {
@@ -520,6 +520,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
               (paso.motivo ? ` — ${paso.motivo}` : '') + ` | cambios sin aviso: ${cobertura.cambiosSinAviso}/${cobertura.cambios}`);
           }
         } catch (e) { console.error('[scan-ramp] error evaluando cobertura:', e.message); }
+        const r = dispararRefrescoMl(app._db, syncCfg.ml, 'all');
+        if (!r.ok && !r.running) console.error('Guardia ML: no se pudo iniciar lectura:', r.error);
       });
       cron.schedule('*/5 * * * *', () => {
         procesarOperacionesGuardia(app._db, syncCfg).catch(err => console.error('Guardia ML operaciones:', err.message));
