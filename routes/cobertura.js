@@ -694,7 +694,9 @@ export function coberturaRouter(db, cfg) {
     }
 
     // ALTO corregido (revisor): en el snapshot que acabamos de leer el push todavía no había
-    // escrito el SKU, pero pushSkusPendientes corre cada 10 min y puede estar escribiendo
+    // escrito el SKU. (Histórico: esto describía a pushSkusPendientes corriendo cada 10 min;
+    // ese cron ya no está agendado —matcherPush no se importa en server.js— y hoy el que puede
+    // estar escribiendo es el worker de identidad, cada minuto.)
     // esta MISMA clave en este instante — hay una ventana entre nuestro SELECT y el DELETE de
     // abajo. Cortar de entrada si el push está corriendo evita la carrera en el caso común
     // (más barato que esperar el mutex entero); el re-chequeo posterior al DELETE cubre el

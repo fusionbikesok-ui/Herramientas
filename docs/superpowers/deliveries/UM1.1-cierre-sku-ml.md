@@ -451,3 +451,52 @@ sección anterior. No hay rojo atribuible a este rango.
   (las mismas del 2026-08-30), `wc_order_id=0` **3**, sin altas nuevas. Identidad: 109
   operaciones completadas, 1133 casos verificados, 4 urgentes.
 - Los errores en el log son ruido preexistente de rate-limit 429 de ML, ajenos a este cambio.
+
+### Deuda dormida de publicaciones fuera del universo activo — 2026-09-05
+
+Brecha 5 del documento de arquitectura, acotada a su parte de detección (la protección remota
+con stock cero escribe en ML y va aparte).
+
+Hallazgo: una publicación pausada o en cero se cerraba como `resuelto` («fuera de alcance») y
+desaparecía. No es fuera de alcance: conserva la identidad que tenga y, si se reactiva, sale a
+la venta con ella. El cron legacy que las corregía (`pushSkusPendientes`) ya no está agendado.
+
+Peor: al reactivarse **se auto-verificaba contra el producto equivocado**, porque el SKU ajeno
+que llevaba existe y es único en Woo, así que clasificaba `sku_exacto`.
+
+Cambios (`lib/identidadProductos.js`):
+
+- Pase nuevo de deuda dormida, con corte **estrecho**: sólo claves fuera del universo activo con
+  una decisión que ML no refleja. Severidad `normal`, fuera de la conciliación.
+- `decision_no_aplicada`: una decisión divergente invalida la identidad y el caso apunta al
+  producto decidido, no al que ML lleva por error.
+- Escalada a `critica` cuando una deuda vuelve a estar activa con stock e identidad inválida.
+- `huellaIdentidad()` extraída: los dos pases deben producir la misma huella o el caso oscilaría
+  entre ellos en cada scan.
+
+Evidencia, comando y resultado literales:
+
+```
+npx vitest run test/identidad-productos.test.js test/invariantes-esquema.test.js \
+  test/guardia-ml.test.js test/um1-coverage-matrix.test.js test/matcher-candidatos.test.js \
+  test/cobertura.test.js test/syncFlow.test.js
+  Test Files  7 passed (7)
+  Tests  210 passed | 2 skipped (212)
+
+npm run e2e:um11:responsive → ok:true en 390/768/1440, "axe_violaciones":[]
+```
+
+Contra una **copia** de la base de producción (sin escrituras remotas):
+
+```
+conciliacion: {"total":1088,"verificadas":1086,"excepciones":0,"urgentes":2,"conciliado":true}
+decision_no_aplicada: MLA1401411650|180043410439, MLA1927478426|187049488547, MLA2000138388|192504429779
+```
+
+Un corte más ancho (toda pausada sin SKU) daba **4047 casos** y se descartó por eso.
+
+### Handoff
+
+- Sin desplegar. No se ejecutó ninguna escritura remota.
+- Pendiente de UM1.6: migrar `POST /api/guardia-ml/vincular-clave` a UM1 y recién después
+  desagendar el worker de Guardia (PM-125). Hoy hay dos escritores de `SELLER_SKU`.

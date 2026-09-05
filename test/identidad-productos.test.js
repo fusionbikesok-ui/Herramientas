@@ -29,13 +29,19 @@ function woo(db, { id, sku, gtin = null, stock = 2, nombre = `Producto ${id}` })
 
 // `atributos` distinto de null marca que la observación trae el detalle de la 082. Pasar
 // `atributos: null` simula una fila cacheada antes de esa migración, que no es clasificable.
-function ml(db, { clave, sku = null, presente = sku !== null, custom = null, gtin = null, stock = 2, itemId, atributos = '[]' }) {
+function ml(db, { clave, sku = null, presente = sku !== null, custom = null, gtin = null, stock = 2, itemId, atributos = '[]', status = 'active' }) {
   const [item, variation = ''] = clave.split('|');
   db.prepare(`INSERT INTO ml_publicaciones_cache
     (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,seller_custom_field,
      gtin,available_quantity,atributos_json,actualizado_en)
-    VALUES (?,?,?,'Publicación','active',?,?,?,?,?,?,?)`).run(clave, itemId || item, variation, sku,
+    VALUES (?,?,?,'Publicación',?,?,?,?,?,?,?,?)`).run(clave, itemId || item, variation, status, sku,
       presente ? 1 : 0, custom, gtin, stock, atributos, ISO);
+}
+
+// Decisión legacy: es la fuente que define la deuda dormida (una decisión que ML no refleja).
+function decision(db, clave, sku) {
+  db.prepare(`INSERT INTO sku_matcher_decisiones (clave,sku,accion,actualizado_en,origen)
+    VALUES (?,?,'confirmar',?,'test')`).run(clave, sku, ISO);
 }
 
 describe('UM1 identidad de productos', () => {
@@ -405,6 +411,66 @@ describe('UM1 identidad de productos', () => {
     expect(adapter.setStock).not.toHaveBeenCalled();
     expect(adapter.clearSku).not.toHaveBeenCalled();
     expect(adapter.writeSku).not.toHaveBeenCalled();
+  });
+
+  // Una publicación pausada con identidad inválida no está «fuera de alcance»: es deuda
+  // dormida. El cron de push que las corregía ya no existe, y si se reactiva sale a la venta
+  // con el SKU de otro producto. Observado en producción: 3 publicaciones pausadas con una
+  // decisión que nada iba a ejecutar (MLA1401411650|180043410439 y dos más).
+  it('una pausada cuya decisión ML no refleja queda como deuda, no como resuelta', () => {
+    woo(db, { id: 70, sku: 'FB-70', stock: 1 });   // el producto DECIDIDO
+    woo(db, { id: 79, sku: 'FB-79', stock: 1 });   // el que ML lleva por error
+    ml(db, { clave: 'MLA70|', sku: 'FB-79', stock: 1, status: 'paused' });
+    decision(db, 'MLA70|', 'FB-70');
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA70|'").get();
+    expect(caso).toBeTruthy();
+    expect(caso.estado).not.toBe('resuelto');
+    expect(caso.severidad).toBe('normal');
+    // Se nombra el problema real y apunta al producto decidido, no al que ML lleva por error.
+    expect(caso.clasificacion).toBe('decision_no_aplicada');
+    const decidido = db.prepare('SELECT id FROM productos_fusion WHERE primary_woo_id=70').get();
+    expect(caso.producto_id).toBe(decidido.id);
+  });
+
+  // El corte tiene que ser estrecho: marcar toda pausada sin SKU daba 4047 casos contra la
+  // base real y enterraba la cola. Una pausada sin SKU no es peligrosa; la peligrosa es la
+  // que lleva un SKU que contradice una decisión, porque al reactivarse se auto-verifica
+  // contra el producto equivocado.
+  it('una pausada SIN decisión divergente no genera deuda', () => {
+    woo(db, { id: 78, sku: 'FB-78', stock: 1 });
+    ml(db, { clave: 'MLA78|', sku: null, stock: 1, status: 'paused' });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA78|'").get();
+    expect(caso?.severidad === 'normal' && caso?.estado === 'urgente').toBe(false);
+  });
+
+  it('la deuda de una pausada no entra en la conciliación del universo activo', () => {
+    woo(db, { id: 71, sku: 'FB-71', stock: 1 });
+    ml(db, { clave: 'MLA71|', sku: 'FB-71', stock: 1 });            // activa y exacta
+    woo(db, { id: 72, sku: 'FB-72', stock: 1 });
+    woo(db, { id: 76, sku: 'FB-76', stock: 1 });
+    ml(db, { clave: 'MLA72|', sku: 'FB-76', stock: 1, status: 'paused' }); // pausada, decisión sin aplicar
+    decision(db, 'MLA72|', 'FB-72');
+    const r = auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    expect(r.total).toBe(1);          // el universo sigue siendo sólo la activa con stock
+    expect(r.urgentes).toBe(0);       // la deuda no infla el trabajo humano
+    expect(r.conciliado).toBe(true);  // y no rompe el gate
+  });
+
+  // La regla del plan: reactivada con stock e identidad inválida es urgencia máxima.
+  it('si la pausada se reactiva con identidad inválida, escala a severidad crítica', () => {
+    woo(db, { id: 73, sku: 'FB-73', stock: 1 });
+    woo(db, { id: 77, sku: 'FB-77', stock: 1 });
+    ml(db, { clave: 'MLA73|', sku: 'FB-77', stock: 1, status: 'paused' });
+    decision(db, 'MLA73|', 'FB-73');
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    expect(db.prepare("SELECT severidad FROM identidad_casos WHERE ml_key='MLA73|'").get().severidad).toBe('normal');
+    db.prepare("UPDATE ml_publicaciones_cache SET status='active' WHERE clave='MLA73|'").run();
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA73|'").get();
+    expect(caso.severidad).toBe('critica');
+    expect(caso.estado).toBe('urgente');
   });
 
   it('bloquea impacto potencial sobre hermanas hasta confirmarlo y expone ambas colas', () => {

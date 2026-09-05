@@ -917,7 +917,7 @@ fetch('/api/auth/me').then(function(r) {
   function cargarPanelSoloMatcher() {
     fetch('/api/matcher/push-skus-pendientes/count').then(function(r){return r.json();}).then(function(d){
       if (!d.ok) return;
-      var chips = [peChip(d.pendientes, 'SKUs por escribir en ML', 'warn', '/herramientas/sync-detalle/?cat=push_pendientes', null)].filter(Boolean);
+      var chips = [peChip(d.pendientes, 'SKUs decididos que ML no refleja', 'warn', '/herramientas/identidad-productos/', null)].filter(Boolean);
       document.getElementById('pe-atencion').innerHTML = chips.length ? renderChips(chips)
         : '<span class="attn-ok">✓ Todo al día — nada requiere tu atención.</span>';
       peMostrarAtencion();
@@ -945,7 +945,7 @@ fetch('/api/auth/me').then(function(r) {
         peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
         peChip(d.frenadas, 'pausadas frenadas por precio', 'warn', '/herramientas/sync-ml/#frenadas', 'sync-ml'),
         peChip(d.vinculos_sospechosos, 'vínculos sospechosos', 'warn', '/herramientas/vinculos/#sospechosos', 'sync-ml'),
-        peChip(sk.pendientes, 'SKUs por escribir en ML', 'warn', '/herramientas/sync-detalle/?cat=push_pendientes', 'matcher'),
+        peChip(sk.pendientes, 'SKUs decididos que ML no refleja', 'warn', '/herramientas/identidad-productos/', 'matcher'),
         peChip(at.sin_mapeo, 'ventas sin mapear', 'warn', '/herramientas/sync-detalle/?cat=sin_mapeo', 'sync-ml'),
         peChip(at.remapeo_requerido, 'a re-mapear', 'warn', '/herramientas/sync-detalle/?cat=remapeo_requerido', 'sync-ml')
       ].filter(Boolean);
