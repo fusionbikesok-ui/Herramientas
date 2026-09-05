@@ -35,16 +35,23 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 - Auditoría de webhooks: Woo `/api/woo/webhook/order` y ML `/api/ml/notificacion` tienen garantías distintas; Woo dispara trabajo en background sin intención durable previa al ACK y ML deja varios topics en `audit-only`. El plan maestro incorpora en E6/E11 un contrato común, cola durable, reconciliación por entidad, matriz de cobertura y pruebas de crash/duplicado/fuera de orden.
 
-## UM1 — Identidad de productos (2026-09-04)
+## UM1 — Identidad de productos (2026-09-05)
 
 - UM1 dejó de ser «Guardia ML»: es el programa de Identidad de productos UM1.1–UM1.6 (PM-031).
   Especificación en `docs/superpowers/plans/2026-09-04-identidad-productos.md`, sección 18.1 del
   maestro y fichas UM1.1–UM1.6. Reemplaza Matcher/Cobertura/Guardia; no los arregla.
-- UM1.1 (bloqueante) está en `desarrollo` en el worktree
-  `/opt/fusionbikes/worktrees/um1-identidad`, rama `feature/um1-identidad-continuacion`.
-  Núcleo + pantalla web con 69/69 en tests y E2E 390/768/1440 verde. Modo `shadow`: no escribe ML.
-- Pendiente para candidata: auditoría contra el universo ML real, buscador Woo en la pantalla
-  (hoy el vínculo pide el ID por `prompt`), revisión independiente, canario y jornada observada.
+- Producción sirve `9b8882d`; el camino directo sin cero está aislado en
+  `/opt/fusionbikes/worktrees/um1-identidad`, rama `feature/um1-identidad-continuacion`, desde
+  `33a3d43` y todavía no fue desplegado.
+- El canario 1 completado no vuelve a la cola cuando únicamente aparece una contradicción de
+  GTIN: conserva `verificado` si ML mantiene el mismo SKU y Producto Fusion; el conflicto queda
+  clasificado y auditado. Si el SKU cambia o desaparece, reabre urgente. Test dirigido 34/34.
+- Una operación `shadow` que cambia de identidad antes de cualquier efecto remoto queda obsoleta,
+  no admite reintento y libera el caso a `urgente`; una operación ya intentada conserva
+  intervención. La sección 18.1 documenta el camino directo sin stock cero.
+- El rollout soporta hasta dos claves canario explícitas (separadas por coma) y dos operaciones
+  por corrida. Producción conserva su única clave actual hasta que se designe la segunda y se
+  autorice merge/despliegue.
 - `user_version` no numera migraciones: es la compuerta de Hito 7 (PM-034). Ninguna migración
   nueva puede escribirlo o la base queda sin `device_tokens` y cae la auth móvil.
 - Cada avance sobre UM1 actualiza en el mismo commit estado, evidencia, handoff y decisiones.
@@ -60,14 +67,6 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - Backend/web solo podrán publicarse automáticamente cuando el pipeline definido por el maestro esté implementado y verde; hoy una tarea documental no autoriza push, migración, PM2 ni deploy.
 - Windows, hardware y App Store siempre exigen autorización explícita.
 - No almacenar secretos, PII, conversaciones ni logs en memoria.
-
-## UM1 — Guardia ML
-
-- UM1 urgente está en desarrollo. Separa Guardia ML, Corrección y Consulta; la cobertura válida es publicación+variación con SKU Woo exacto.
-- Gate auditoría 2026-09-03: 🔴. Tests y E2E están verdes, pero el checkout `conteo-confiable` está 1 commit detrás de `master`, contiene un diff acumulado de E1–E4/UM1 y no permite atribuir un diff final aislado; no hacer merge ni deploy hasta congelar/rebasar en un worktree seguro y repetir los gates.
-- El primer rollout es solo lectura, con escaneo al abrir/cada 15 minutos y frescura máxima de 30 minutos. Los casos activos con stock sin vínculo se crean como incidencias; el backlog inicial queda pendiente de validación del Administrador designado.
-- Los pedidos ML sin cobertura se retienen en Fusion sin alterar estado/notas de Woo. Vínculos, pausas y stock remoto permanecen deshabilitados hasta el gate operativo.
-- La especificación completa está en la sección 18.1 del Maestro y la evidencia en `docs/superpowers/deliveries/UM1-guardia-ml.md`.
 
 ## Decisiones E1 incorporadas
 

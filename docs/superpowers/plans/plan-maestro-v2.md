@@ -1100,9 +1100,15 @@ Woo continúa como autoridad de stock. Producto Fusion es la identidad canónica
 
 ### UM1.1: corrección segura
 
-Toda corrección persiste caso, decisión y operación antes de efectos externos. Después ejecuta y verifica, en orden: stock cero de la clave afectada; limpieza de `SELLER_SKU`; escritura de `FB-{id_woo}`; restauración del stock Woo objetivo; activación local y reproceso de ventas retenidas. Si la API ML obliga a afectar variaciones hermanas, la operación muestra el impacto y espera confirmación.
+Toda corrección persiste caso, decisión y operación antes de efectos externos. Cuando existe un
+`FB-{id_woo}` objetivo válido, la operación relee ML, sobrescribe directamente `SELLER_SKU`,
+verifica SKU y stock remoto intacto, activa localmente y reprocesa ventas retenidas. No pone stock
+en cero ni limpia el campo: MercadoLibre acepta la sobrescritura y el cero pausa la publicación
+con `out_of_stock`. El camino largo (cero, limpieza y restauración) queda reservado para un
+destino vacío o una limitación remota que impida la sobrescritura directa. Si la API ML obliga a
+afectar variaciones hermanas, la operación muestra el impacto y espera confirmación.
 
-Los casos no vinculables deben recibir una excepción explícita `solo_ml` o permanecer urgentes. Nunca se cierran por `omitir`. El modo inicial es `shadow`; ninguna escritura real se habilita sin gates verdes, publicación canario designada y autorización operativa.
+Los casos no vinculables deben recibir una excepción explícita `solo_ml` o permanecer urgentes. Nunca se cierran por `omitir`. Si una operación `shadow` cambia de identidad antes de su primer intento remoto, queda inmovilizada como obsoleta y el caso vuelve a urgente para una decisión nueva; una saga que ya pudo tener efectos parciales permanece en intervención. El modo inicial es `shadow`; ninguna escritura real se habilita sin gates verdes, publicaciones canario designadas y autorización operativa. El canario admite como máximo dos claves explícitas y dos operaciones por corrida.
 
 ### Detección, estados y recuperación
 

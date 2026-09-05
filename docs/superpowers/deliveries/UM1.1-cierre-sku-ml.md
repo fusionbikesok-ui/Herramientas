@@ -273,20 +273,53 @@ infiere por tener el diff limpio y la suite verde.
 ## Checkpoint para el próximo agente
 
 Base: worktree `/opt/fusionbikes/worktrees/um1-identidad`, rama
-`feature/um1-identidad-continuacion`. `node_modules` es un symlink al del checkout
-principal. No desplegar, no migrar contra `data/fusion.sqlite`, no escribir en ML.
+`feature/um1-identidad-continuacion`. **Producción está en `9b8882d`**, que NO incluye el
+camino directo: la rama tiene commits posteriores sin mergear a propósito (ver abajo).
 
-Verificado y funcionando:
+### Lo que quedó funcionando y verificado
 
-- Núcleo UM1.1 y pantalla web. `npx vitest run test/identidad-productos.test.js test/db.test.js test/guardia-ml.test.js test/server.test.js test/modelos-publicacionMl.test.js --no-file-parallelism` — 69/69.
-- `npm run e2e:um11:responsive` — `ok:true` en 390, 768 y 1440.
+- **Ejecutor de la saga remota completo**: `procesarOperacionesIdentidad` (worker, cron cada
+  minuto) + `lib/identidadMl.js` (adaptador, único lugar que escribe en ML). Fail-closed:
+  exige `modo='enforced'` y `escrituras_remotas_habilitadas=1`; respeta `canario_ml_key` y
+  `lote_max`; saltea operaciones con `claim_hasta` vigente.
+- **Dos canarios ejecutados en producción**, con escrituras reales verificadas leyendo la API
+  de ML en cada paso:
+  - `MLA1320264343` (SKU ya correcto): completó **sin ninguna escritura**.
+  - `MLA1563030043`: corrigió `FB-FB-29140` → `FB-29140`, stock 1 → 0 → 1. Ventana en 0: ~6 min.
+- **Pasos encadenados en una corrida**: la saga completa pasó de ~8 minutos a 13,7 s.
+- **Camino directo sin cero** (en la rama, sin desplegar): si el destino es un SKU válido se
+  sobrescribe de una, sin poner stock en 0 ni limpiar. Medido: 1 escritura en 6 s, stock
+  intacto. Tests 34/34 tras agregar la regresión de estado PM-096.
 
-Queda a medias, en orden de valor:
+### Problemas de estado reportados por el usuario
 
-1. **Auditoría contra el universo ML real** (gate 2). Hoy la conciliación solo se probó con
-   datos sintéticos. Exige lectura remota; el modo sigue en `shadow`.
-2. **Auditoría de despliegue**: pendiente sobre el diff final.
-3. Gates externos: canario, rollback real y jornada observada.
+Casos que ya tenían decisión volvieron a la cola. **No son el bug de la huella** (ese está
+arreglado y verificado): son dos caminos distintos.
 
-Próxima acción reproducible: correr los dos comandos de arriba para confirmar la base, y
-después atacar (1) o (2) según prioridad operativa.
+1. **Resuelto — caso 105 (`MLA1320264343|`)**: si la operación está `completada`, ML conserva
+   exactamente el `fusion_sku` y el Producto Fusion no cambió, una reclasificación
+   `gtin_contradictorio` mantiene el caso `verificado`. El conflicto queda en la clasificación
+   y en el evento `gtin_contradictorio_post_verificacion`; no vuelve a la cola ni repite la
+   escritura. Si el SKU desaparece o cambia, sí reabre urgente. Regresión dirigida: 34/34.
+2. **Resuelto — caso 1018 (`MLA3588983126|`)**: si el cambio de identidad llega mientras la
+   última operación sigue `shadow`, tiene cero intentos y no registra pasos remotos, esa
+   operación queda inmovilizada como `obsoleta_por_cambio_identidad_antes_de_efecto_remoto`.
+   No se puede reintentar, el responsable se libera y el caso vuelve a `urgente` para una
+   decisión nueva. Una saga que ya empezó conserva `intervencion`, porque puede tener efectos
+   parciales. Regresión dirigida incluida.
+
+### Por qué la rama no está mergeada
+
+El camino directo ya está reflejado en la sección 18.1 y está verificado con adaptador falso.
+Producción sigue con la saga larga hasta integrar y autorizar el despliegue manual.
+
+### Próxima acción reproducible
+
+1. Verificar el diff final y decidir merge/despliegue manual.
+2. Designar explícitamente la segunda clave canario antes de configurarla.
+
+**Config productiva al momento de escribir esto**: `modo=enforced`,
+`escrituras_remotas_habilitadas=1`, `canario_ml_key='MLA1563030043|'`, `lote_max=1`. La rama
+soporta hasta dos claves explícitas separadas por coma y `lote_max=2`, pero no altera esa
+configuración productiva ni designa una segunda publicación. Backups:
+`fusion.sqlite.bak-antes-canario-20260904-232618` y `...-canario2-20260904-234431`.

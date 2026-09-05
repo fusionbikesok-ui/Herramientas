@@ -12,7 +12,9 @@ import {
   estadoIdentidadProductos,
   fingerprintEvidencia,
   listarColasIdentidad,
+  procesarOperacionesIdentidad,
   procesarPasoOperacionIdentidad,
+  reintentarOperacionIdentidad,
 } from '../lib/identidadProductos.js';
 import { identidadProductosRouter } from '../routes/identidadProductos.js';
 
@@ -112,6 +114,61 @@ describe('UM1 identidad de productos', () => {
     expect(db.prepare("SELECT origen FROM sku_matcher_decisiones WHERE clave='MLA8|'").get().origen).toBe('identidad_productos');
   });
 
+  it('devuelve a urgente una operación shadow obsoleta antes de cualquier efecto remoto', () => {
+    woo(db, { id: 51, sku: 'FB-51', stock: 2 });
+    ml(db, { clave: 'MLA51|', sku: null, stock: 2 });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    let caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA51|'").get();
+    const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=51').get();
+    const decision = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'shadow-obsoleta', expected_version: caso.expected_version,
+      evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+    expect(decision.operacion.estado).toBe('shadow');
+
+    // La identidad cambia antes de que la operación llegue al adaptador remoto.
+    db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='SKU-AJENO',seller_sku_presente=1 WHERE clave='MLA51|'").run();
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA51|'").get();
+    const operacion = db.prepare('SELECT * FROM identidad_operaciones WHERE id=?').get(decision.operacion.id);
+    expect(caso).toMatchObject({ estado: 'urgente', clasificacion: 'sku_inexistente', responsable: null, tomado_en: null });
+    expect(operacion).toMatchObject({ estado: 'intervencion', intentos: 0, ultimo_error: 'obsoleta_por_cambio_identidad_antes_de_efecto_remoto' });
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_operacion_pasos WHERE operacion_id=?").get(operacion.id).n).toBe(0);
+    const evento = db.prepare("SELECT detalle_json FROM identidad_historial WHERE entidad_tipo='operacion' AND entidad_id=? AND evento='operacion_shadow_obsoleta_por_cambio_identidad'").get(operacion.id);
+    expect(JSON.parse(evento.detalle_json)).toMatchObject({ decision_id: decision.decision.id, clasificacion_nueva: 'sku_inexistente' });
+    expect(reintentarOperacionIdentidad(db, operacion.id, { operation_id: 'no-reintentar', expected_version: caso.expected_version,
+      evidence_fingerprint: caso.evidencia_fingerprint }, 'ana')).toMatchObject({ ok: false, code: 'OBSOLETE_OPERATION' });
+  });
+
+  it('admite hasta dos claves de canario y nunca procesa más de dos operaciones por corrida', async () => {
+    for (const id of [61, 62, 63]) {
+      woo(db, { id, sku: `FB-${id}`, stock: 2 });
+      ml(db, { clave: `MLA${id}|`, sku: null, stock: 2 });
+    }
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    for (const id of [61, 62, 63]) {
+      const caso = db.prepare('SELECT * FROM identidad_casos WHERE ml_key=?').get(`MLA${id}|`);
+      const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=?').get(id);
+      decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id, operation_id: `canario-${id}`,
+        expected_version: caso.expected_version, evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+    }
+    // Aisla el selector del worker: `reprocess` es terminal y no introduce pausas entre pasos.
+    db.prepare("UPDATE identidad_operaciones SET paso_actual='reprocess' WHERE ml_key IN ('MLA61|','MLA62|','MLA63|')").run();
+    db.prepare("UPDATE identidad_config SET modo='enforced',escrituras_remotas_habilitadas=1,canario_ml_key='MLA61|, MLA62|',lote_max=9 WHERE id=1").run();
+    const remoto = new Map([[ 'MLA61|', { seller_sku: '', stock: 2 } ], [ 'MLA62|', { seller_sku: '', stock: 2 } ], [ 'MLA63|', { seller_sku: '', stock: 2 } ]]);
+    const adapter = {
+      setStock: vi.fn(async (key, stock) => { remoto.get(key).stock = stock; return { ok: true }; }),
+      clearSku: vi.fn(async (key) => { remoto.get(key).seller_sku = ''; return { ok: true }; }),
+      writeSku: vi.fn(async (key, sku) => { remoto.get(key).seller_sku = sku; return { ok: true }; }),
+      read: vi.fn(async (key) => ({ ...remoto.get(key), observed_at: new Date().toISOString() })),
+    };
+    const r = await procesarOperacionesIdentidad(db, adapter, { ahora: new Date() });
+    expect(r).toMatchObject({ ok: true, canario: ['MLA61|', 'MLA62|'], tope: 2 });
+    expect(db.prepare("SELECT estado FROM identidad_operaciones WHERE ml_key='MLA61|'").get().estado).toBe('completada');
+    expect(db.prepare("SELECT estado FROM identidad_operaciones WHERE ml_key='MLA62|'").get().estado).toBe('completada');
+    expect(db.prepare("SELECT estado FROM identidad_operaciones WHERE ml_key='MLA63|'").get().estado).toBe('shadow');
+  });
+
   it('exige envelope concurrente, persiste solo_ml e invalida la excepción si cambia evidencia', () => {
     ml(db, { clave: 'MLA9|', sku: null, custom: 'A', stock: 1 });
     auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
@@ -145,7 +202,7 @@ describe('UM1 identidad de productos', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM identidad_decisiones').get().n).toBe(1);
   });
 
-  it('ejecuta zero/clear/write/restore con verificación durable y manda a intervención al tercer fallo', async () => {
+  it('ejecuta el camino directo sin cero (zero/write/verify_write/activate/reprocess) escribiendo el SKU una sola vez, y manda a intervención al tercer fallo', async () => {
     woo(db, { id: 11, sku: 'FB-11', gtin: '4006381333931', stock: 5 });
     ml(db, { clave: 'MLA11|', sku: null, gtin: '4006381333931', stock: 5 });
     auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
@@ -153,29 +210,169 @@ describe('UM1 identidad de productos', () => {
     const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=11').get();
     const creada = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
       operation_id: 'saga-ok', expected_version: caso.expected_version, evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
-    const remoto = { seller_sku: '', stock: 5 };
+    expect(creada.operacion.stock_objetivo).toBe(5);
+    // El SKU destino (producto.fusion_sku) llega no vacío: camino directo. El stock remoto
+    // arranca DISTINTO del stock_objetivo capturado al decidir (7 contra 5) — es justo el caso
+    // que antes rompía `activate` al exigir igualdad de stock también en el camino sin cero.
+    const remoto = { seller_sku: 'VIEJO-SKU', stock: 7 };
     const adapter = {
-      setStock: async (_key, stock) => { remoto.stock = stock; return { ok: true }; },
-      clearSku: async () => { remoto.seller_sku = ''; return { ok: true }; },
-      writeSku: async (_key, sku) => { remoto.seller_sku = sku; return { ok: true }; },
-      read: async () => ({ ...remoto, observed_at: new Date().toISOString() }),
+      setStock: vi.fn(async (_key, stock) => { remoto.stock = stock; return { ok: true }; }),
+      clearSku: vi.fn(async () => { remoto.seller_sku = ''; return { ok: true }; }),
+      writeSku: vi.fn(async (_key, sku) => { remoto.seller_sku = sku; return { ok: true }; }),
+      read: vi.fn(async () => ({ ...remoto, observed_at: new Date().toISOString() })),
     };
-    for (let i = 0; i < 10; i++) expect((await procesarPasoOperacionIdentidad(db, creada.operacion.id, adapter, { allowRemoteWrites: true })).ok).toBe(true);
-    expect(db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(creada.operacion.id).estado).toBe('completada');
-    expect(db.prepare('SELECT COUNT(*) n FROM identidad_operacion_pasos WHERE operacion_id=? AND estado=\'confirmado\'').get(creada.operacion.id).n).toBe(10);
+    for (let i = 0; i < 5; i++) expect((await procesarPasoOperacionIdentidad(db, creada.operacion.id, adapter, { allowRemoteWrites: true })).ok).toBe(true);
+    expect(db.prepare('SELECT estado,sin_cero FROM identidad_operaciones WHERE id=?').get(creada.operacion.id)).toEqual({ estado: 'completada', sin_cero: 1 });
+    const pasos = db.prepare("SELECT paso FROM identidad_operacion_pasos WHERE operacion_id=? AND estado='confirmado' ORDER BY id").all(creada.operacion.id).map((p) => p.paso);
+    expect(pasos).toEqual(['zero', 'write', 'verify_write', 'activate', 'reprocess']);
     expect(db.prepare('SELECT estado FROM identidad_casos WHERE id=?').get(caso.id).estado).toBe('verificado');
+    // Ni una escritura de stock: el camino directo sobrescribe el SKU y listo.
+    expect(adapter.setStock).not.toHaveBeenCalled();
+    expect(adapter.clearSku).not.toHaveBeenCalled();
+    expect(adapter.writeSku).toHaveBeenCalledTimes(1);
+    expect(adapter.writeSku).toHaveBeenCalledWith('MLA11|', 'FB-11');
+    // El stock remoto queda intacto (7), pese a ser distinto del stock_objetivo capturado (5):
+    // la activación no lo exige en el camino sin cero.
+    expect(remoto.stock).toBe(7);
 
     ml(db, { clave: 'MLA12|', sku: null, gtin: '4006381333931', stock: 5 });
     auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
     const caso2 = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA12|'").get();
     const fallida = decidirCasoIdentidad(db, caso2.id, { tipo: 'vincular', product_id: producto.id,
       operation_id: 'saga-fail', expected_version: caso2.expected_version, evidence_fingerprint: caso2.evidencia_fingerprint }, 'ana').operacion;
-    const adapterFail = { setStock: async () => { throw new Error('timeout ML'); } };
+    const adapterFail = { read: async () => { throw new Error('timeout ML'); } };
     await procesarPasoOperacionIdentidad(db, fallida.id, adapterFail, { allowRemoteWrites: true });
     await procesarPasoOperacionIdentidad(db, fallida.id, adapterFail, { allowRemoteWrites: true });
     const tercer = await procesarPasoOperacionIdentidad(db, fallida.id, adapterFail, { allowRemoteWrites: true });
     expect(tercer.code).toBe('INTERVENTION_REQUIRED');
     expect(tercer.operacion.intentos).toBe(3);
+  });
+
+  it('no reabre una identidad completada si aparece un GTIN contradictorio, pero sí si desaparece el SKU verificado', async () => {
+    woo(db, { id: 111, sku: 'FB-111', gtin: '4006381333931', stock: 5 });
+    woo(db, { id: 112, sku: 'FB-112', gtin: '036000291452', stock: 5 });
+    ml(db, { clave: 'MLA111|', sku: null, gtin: '4006381333931', stock: 5 });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    let caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=111').get();
+    const creada = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'saga-gtin-posterior', expected_version: caso.expected_version,
+      evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+    const remoto = { seller_sku: '', stock: 5 };
+    const adapter = {
+      setStock: vi.fn(), clearSku: vi.fn(),
+      writeSku: vi.fn(async (_key, sku) => { remoto.seller_sku = sku; return { ok: true }; }),
+      read: vi.fn(async () => ({ ...remoto, observed_at: new Date().toISOString() })),
+    };
+    for (let i = 0; i < 5; i++) {
+      const r = await procesarPasoOperacionIdentidad(db, creada.operacion.id, adapter, { allowRemoteWrites: true });
+      expect(r.ok).toBe(true);
+      if (db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(creada.operacion.id).estado === 'completada') break;
+    }
+
+    // Simula el refresco posterior del canario: el SKU escrito sigue correcto, pero ML
+    // publica ahora un GTIN válido que pertenece inequívocamente a otro producto Woo.
+    db.prepare(`UPDATE ml_publicaciones_cache SET seller_sku='FB-111',seller_sku_presente=1,
+      gtin='036000291452',actualizado_en=? WHERE clave='MLA111|'`).run(ISO);
+    // Primero persiste la nueva clasificación/huella; después reproduce el estado exacto que
+    // dejó el bug ya desplegado: urgente con esa misma evidencia y sin evento de recuperación.
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    db.prepare("DELETE FROM identidad_historial WHERE entidad_tipo='caso' AND entidad_id=? AND evento='gtin_contradictorio_post_verificacion'").run(caso.id);
+    db.prepare("UPDATE identidad_casos SET estado='urgente' WHERE id=?").run(caso.id);
+    const versionUrgente = caso.expected_version;
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    expect(caso).toMatchObject({ estado: 'verificado', clasificacion: 'gtin_contradictorio', producto_id: producto.id });
+    expect(caso.expected_version).toBe(versionUrgente + 1);
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE entidad_tipo='caso' AND entidad_id=? AND evento='gtin_contradictorio_post_verificacion'").get(caso.id).n).toBe(1);
+    expect(listarColasIdentidad(db).ml_to_fusion.some((fila) => fila.id === caso.id)).toBe(false);
+
+    // El siguiente scan trae la misma evidencia y ya no entra por `cambio`; debe conservar
+    // igual el estado y no duplicar el evento de reclasificación.
+    const versionRecuperada = caso.expected_version;
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    expect(caso).toMatchObject({ estado: 'verificado', clasificacion: 'gtin_contradictorio' });
+    expect(caso.expected_version).toBe(versionRecuperada);
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE entidad_tipo='caso' AND entidad_id=? AND evento='gtin_contradictorio_post_verificacion'").get(caso.id).n).toBe(1);
+
+    // Una operación posterior manda: la completada histórica no puede pisar trabajo nuevo.
+    const opCompletada = db.prepare('SELECT * FROM identidad_operaciones WHERE id=?').get(creada.operacion.id);
+    const opPosterior = db.prepare(`INSERT INTO identidad_operaciones
+      (operation_id,caso_id,decision_id,producto_id,ml_key,sku_objetivo,stock_objetivo,
+       estado,paso_actual,iniciada_en,actualizada_en)
+      VALUES ('saga-posterior',?,?,?,?,?,?,'shadow','zero',?,?)`).run(caso.id,
+        opCompletada.decision_id, producto.id, 'MLA111|', 'FB-111', 5, ISO, ISO).lastInsertRowid;
+    db.prepare("UPDATE identidad_casos SET estado='pendiente' WHERE id=?").run(caso.id);
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    expect(db.prepare('SELECT estado FROM identidad_casos WHERE id=?').get(caso.id).estado).toBe('pendiente');
+    db.prepare('DELETE FROM identidad_operaciones WHERE id=?').run(opPosterior);
+    db.prepare("UPDATE identidad_casos SET estado='verificado' WHERE id=?").run(caso.id);
+
+    // La protección es estrecha: si el SELLER_SKU verificado desaparece, vuelve a ser una
+    // urgencia real aunque el GTIN todavía sugiera el mismo Producto Fusion.
+    db.prepare(`UPDATE ml_publicaciones_cache SET seller_sku=NULL,seller_sku_presente=0,
+      gtin='4006381333931',actualizado_en=? WHERE clave='MLA111|'`).run(ISO);
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA111|'").get();
+    expect(caso).toMatchObject({ estado: 'urgente', clasificacion: 'sku_ausente', producto_id: producto.id });
+  });
+
+  it('recorre el camino largo (zero/verify_zero/clear/verify_clear/write/verify_write/restore/verify_restore/activate/reprocess) cuando la operación debe dejar la publicación sin SKU', async () => {
+    // `sku_objetivo` sale de `producto.fusion_sku`, generado siempre por la 082 a partir de
+    // `primary_woo_id` y column UNIQUE NOT NULL: por el flujo público (decidirCasoIdentidad)
+    // nunca llega vacío, así que este camino ya no es alcanzable operando la herramienta.
+    // Se fuerza acá pisando la fila directamente, únicamente para no perder cobertura de la
+    // rama que el código todavía contiene (`if (String(op.sku_objetivo||'').trim())`).
+    woo(db, { id: 13, sku: 'FB-13', gtin: '4006381333932', stock: 5 });
+    ml(db, { clave: 'MLA13|', sku: null, gtin: '4006381333932', stock: 5 });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA13|'").get();
+    const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=13').get();
+    const creada = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'saga-largo', expected_version: caso.expected_version, evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+    db.prepare("UPDATE identidad_operaciones SET sku_objetivo='' WHERE id=?").run(creada.operacion.id);
+    const remoto = { seller_sku: 'VIEJO-SKU', stock: 5 };
+    const adapter = {
+      setStock: vi.fn(async (_key, stock) => { remoto.stock = stock; return { ok: true }; }),
+      clearSku: vi.fn(async () => { remoto.seller_sku = ''; return { ok: true }; }),
+      writeSku: vi.fn(async (_key, sku) => { remoto.seller_sku = sku; return { ok: true }; }),
+      read: vi.fn(async () => ({ ...remoto, observed_at: new Date().toISOString() })),
+    };
+    for (let i = 0; i < 10; i++) expect((await procesarPasoOperacionIdentidad(db, creada.operacion.id, adapter, { allowRemoteWrites: true })).ok).toBe(true);
+    expect(db.prepare('SELECT estado,sin_cero FROM identidad_operaciones WHERE id=?').get(creada.operacion.id)).toEqual({ estado: 'completada', sin_cero: 0 });
+    const pasos = db.prepare("SELECT paso FROM identidad_operacion_pasos WHERE operacion_id=? AND estado='confirmado' ORDER BY id").all(creada.operacion.id).map((p) => p.paso);
+    expect(pasos).toEqual(['zero', 'verify_zero', 'clear', 'verify_clear', 'write', 'verify_write', 'restore', 'verify_restore', 'activate', 'reprocess']);
+    expect(adapter.setStock).toHaveBeenCalledTimes(2); // pone en 0 y luego restaura
+    expect(adapter.clearSku).toHaveBeenCalledTimes(1);
+    expect(adapter.writeSku).toHaveBeenCalledTimes(1);
+  });
+
+  it('atajo: si ML ya tiene SKU y stock objetivo, completa sin ninguna escritura remota', async () => {
+    woo(db, { id: 14, sku: 'FB-14', gtin: '4006381333933', stock: 5 });
+    ml(db, { clave: 'MLA14|', sku: null, gtin: '4006381333933', stock: 5 });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA14|'").get();
+    const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=14').get();
+    const creada = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'saga-atajo', expected_version: caso.expected_version, evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+    // ML ya tiene exactamente el SKU y el stock que la operación buscaba fijar.
+    const remoto = { seller_sku: producto.fusion_sku, stock: creada.operacion.stock_objetivo };
+    const adapter = {
+      setStock: vi.fn(), clearSku: vi.fn(), writeSku: vi.fn(),
+      read: vi.fn(async () => ({ ...remoto, observed_at: new Date().toISOString() })),
+    };
+    for (let i = 0; i < 5; i++) {
+      const r = await procesarPasoOperacionIdentidad(db, creada.operacion.id, adapter, { allowRemoteWrites: true });
+      expect(r.ok).toBe(true);
+      const estadoAhora = db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(creada.operacion.id).estado;
+      if (estadoAhora === 'completada') break;
+    }
+    expect(db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(creada.operacion.id).estado).toBe('completada');
+    expect(adapter.setStock).not.toHaveBeenCalled();
+    expect(adapter.clearSku).not.toHaveBeenCalled();
+    expect(adapter.writeSku).not.toHaveBeenCalled();
   });
 
   it('bloquea impacto potencial sobre hermanas hasta confirmarlo y expone ambas colas', () => {
