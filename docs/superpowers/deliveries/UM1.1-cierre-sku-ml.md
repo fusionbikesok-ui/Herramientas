@@ -273,20 +273,57 @@ infiere por tener el diff limpio y la suite verde.
 ## Checkpoint para el próximo agente
 
 Base: worktree `/opt/fusionbikes/worktrees/um1-identidad`, rama
-`feature/um1-identidad-continuacion`. `node_modules` es un symlink al del checkout
-principal. No desplegar, no migrar contra `data/fusion.sqlite`, no escribir en ML.
+`feature/um1-identidad-continuacion`. **Producción está en `9b8882d`**, que NO incluye el
+camino directo: la rama tiene commits posteriores sin mergear a propósito (ver abajo).
 
-Verificado y funcionando:
+### Lo que quedó funcionando y verificado
 
-- Núcleo UM1.1 y pantalla web. `npx vitest run test/identidad-productos.test.js test/db.test.js test/guardia-ml.test.js test/server.test.js test/modelos-publicacionMl.test.js --no-file-parallelism` — 69/69.
-- `npm run e2e:um11:responsive` — `ok:true` en 390, 768 y 1440.
+- **Ejecutor de la saga remota completo**: `procesarOperacionesIdentidad` (worker, cron cada
+  minuto) + `lib/identidadMl.js` (adaptador, único lugar que escribe en ML). Fail-closed:
+  exige `modo='enforced'` y `escrituras_remotas_habilitadas=1`; respeta `canario_ml_key` y
+  `lote_max`; saltea operaciones con `claim_hasta` vigente.
+- **Dos canarios ejecutados en producción**, con escrituras reales verificadas leyendo la API
+  de ML en cada paso:
+  - `MLA1320264343` (SKU ya correcto): completó **sin ninguna escritura**.
+  - `MLA1563030043`: corrigió `FB-FB-29140` → `FB-29140`, stock 1 → 0 → 1. Ventana en 0: ~6 min.
+- **Pasos encadenados en una corrida**: la saga completa pasó de ~8 minutos a 13,7 s.
+- **Camino directo sin cero** (en la rama, sin desplegar): si el destino es un SKU válido se
+  sobrescribe de una, sin poner stock en 0 ni limpiar. Medido: 1 escritura en 6 s, stock
+  intacto. Tests 33/33.
 
-Queda a medias, en orden de valor:
+### DOS PROBLEMAS ABIERTOS, reportados por el usuario
 
-1. **Auditoría contra el universo ML real** (gate 2). Hoy la conciliación solo se probó con
-   datos sintéticos. Exige lectura remota; el modo sigue en `shadow`.
-2. **Auditoría de despliegue**: pendiente sobre el diff final.
-3. Gates externos: canario, rollback real y jornada observada.
+Casos que ya tenían decisión volvieron a la cola. **No son el bug de la huella** (ese está
+arreglado y verificado): son dos caminos distintos y ninguno está resuelto.
 
-Próxima acción reproducible: correr los dos comandos de arriba para confirmar la base, y
-después atacar (1) o (2) según prioridad operativa.
+1. **Caso 105 (`MLA1320264343|`)** — el canario 1. Su operación está `completada` y la
+   identidad fue **escrita y verificada contra ML**, pero el caso volvió a `urgente` porque
+   la clasificación cambió de `sku_exacto` a `gtin_contradictorio`. `upsertCaso` trata
+   cualquier cambio de `clasificacion` como cambio de identidad y resetea el estado.
+   **Un caso cuya operación ya completó no debería volver a la cola por una reclasificación**:
+   la identidad ya se aplicó. Hay que decidir qué estado le corresponde (¿`verificado` con
+   aviso? ¿un caso nuevo para el conflicto de GTIN?) y por qué el GTIN pasó a contradecir.
+2. **Caso 1018 (`MLA3588983126|`)** — `intervencion` con una operación en `shadow` que nunca
+   corrió. Es el comportamiento que introduje en PM-084 (un `pendiente` que cambia va a
+   `intervencion` en vez de volver a `urgente`). Es correcto en intención, pero con una
+   operación que nunca se ejecutó le pide a la persona resolver algo que el sistema todavía
+   no intentó. Falta definir qué hacer con la operación encolada al pasar a `intervencion`.
+
+### Por qué la rama no está mergeada
+
+El camino directo cambia la saga que fija la sección 18.1 del maestro y está verificado sólo
+con adaptador falso. Con dos problemas de estado abiertos, sumar un cambio de comportamiento
+a producción mezcla variables. Producción sigue con la saga larga, que funciona.
+
+### Próxima acción reproducible
+
+1. `npx vitest run test/identidad-productos.test.js` (33/33) para confirmar la base.
+2. Resolver los dos problemas de estado de arriba **antes** de mergear el camino directo.
+3. Recién después: actualizar la sección 18.1 del maestro con el fundamento del camino directo
+   (la API no exige el cero; el cero pausa la publicación con `out_of_stock`), mergear y
+   desplegar.
+
+**Config productiva al momento de escribir esto**: `modo=enforced`,
+`escrituras_remotas_habilitadas=1`, `canario_ml_key='MLA1563030043|'`, `lote_max=1`. El
+canario sigue puesto, así que el worker **no puede tocar ninguna otra publicación**. Backups:
+`fusion.sqlite.bak-antes-canario-20260904-232618` y `...-canario2-20260904-234431`.

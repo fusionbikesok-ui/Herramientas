@@ -638,6 +638,14 @@ export function openDb(dbPath) {
   // migración Hito 7 (`user_version < 30`, al final de openDb). Subirla a 82 saltea esa
   // migración y deja la base sin device_tokens, rompiendo toda la auth móvil. La
   // idempotencia de 082 la da su marcador en `_schema_migrations`.
+  const sinCeroMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_sin_cero_085'").get();
+  if (!sinCeroMigration) {
+    db.transaction(() => {
+      const cols = new Set(db.prepare('PRAGMA table_info(identidad_operaciones)').all().map((c) => c.name));
+      if (!cols.has('sin_cero')) db.exec('ALTER TABLE identidad_operaciones ADD COLUMN sin_cero INTEGER NOT NULL DEFAULT 0');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_sin_cero_085')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {
