@@ -202,6 +202,38 @@ describe('UM1 identidad de productos', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM identidad_decisiones').get().n).toBe(1);
   });
 
+  it('una operación vieja que nunca se intentó se ejecuta sola, no va a intervención', async () => {
+    // El umbral de 15 minutos mide un intento que no progresa, NO la antigüedad del registro.
+    // Con `intentos = 0` la operación jamás corrió: descartarla por vieja mandaba a
+    // intervención trabajo que el sistema nunca intentó, y obligaba a un reintento manual.
+    // Pasó en producción con 51 operaciones encoladas mientras las escrituras estaban en shadow.
+    woo(db, { id: 77, sku: 'FB-77', gtin: '7501031311309', stock: 4 });
+    ml(db, { clave: 'MLA77|', sku: null, gtin: '7501031311309', stock: 4 });
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA77|'").get();
+    const producto = db.prepare('SELECT * FROM productos_fusion WHERE primary_woo_id=77').get();
+    const creada = decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'saga-vieja', expected_version: caso.expected_version, evidence_fingerprint: caso.evidencia_fingerprint }, 'ana');
+
+    // Encolada hace 3 horas y nunca intentada, como quedaban las que esperaban el rollout.
+    const hace3Horas = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    db.prepare("UPDATE identidad_operaciones SET estado='pendiente',intentos=0,iniciada_en=? WHERE id=?")
+      .run(hace3Horas, creada.operacion.id);
+
+    const remoto = { seller_sku: producto.fusion_sku, stock: 4 };
+    const adapter = {
+      setStock: vi.fn(async () => ({ ok: true })),
+      clearSku: vi.fn(async () => ({ ok: true })),
+      writeSku: vi.fn(async () => ({ ok: true })),
+      read: vi.fn(async () => ({ ...remoto, observed_at: new Date().toISOString() })),
+    };
+    const r = await procesarPasoOperacionIdentidad(db, creada.operacion.id, adapter, { allowRemoteWrites: true });
+
+    expect(r.ok).toBe(true);
+    expect(db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(creada.operacion.id).estado)
+      .not.toBe('intervencion');
+  });
+
   it('ejecuta el camino directo sin cero (zero/write/verify_write/activate/reprocess) escribiendo el SKU una sola vez, y manda a intervención al tercer fallo', async () => {
     woo(db, { id: 11, sku: 'FB-11', gtin: '4006381333931', stock: 5 });
     ml(db, { clave: 'MLA11|', sku: null, gtin: '4006381333931', stock: 5 });
