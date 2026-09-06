@@ -220,6 +220,33 @@
       + '</div>';
   }
 
+  /**
+   * Claves cuyo producto Woo se dio de baja: la publicación de ML sigue viva.
+   *
+   * Woo es la autoridad de stock, así que sin producto no hay nada que respalde lo que se
+   * ofrece. La protección remota pone la publicación en cero y lo verifica; hasta que eso
+   * ocurra la clave sigue expuesta, y por eso se muestra el stock que todavía tiene.
+   */
+  function bloqueEsperandoProteccion() {
+    const filas = state.resumen?.esperando_proteccion || [];
+    if (!filas.length) return '';
+    const items = filas.slice(0, 8).map(function (f) {
+      return '<li><span class="ui-id">' + esc(f.seller_sku || f.ml_key) + '</span> '
+        + '<span class="ui-label">' + esc(f.available_quantity ?? 0) + ' en venta · ' + esc(f.status || 'sin estado') + '</span>'
+        + '<br><span class="ui-label">' + esc((f.titulo || f.ml_key || '').slice(0, 60)) + '</span></li>';
+    }).join('');
+    return '<div class="ui-aviso ui-aviso--critico" style="margin-top:.6rem">'
+      + '<b>' + filas.length + (filas.length === 1 ? ' clave quedó' : ' claves quedaron')
+      + ' sin su producto de WooCommerce.</b>'
+      + '<br>El producto se dio de baja o le cambiaron el SKU y la publicación de MercadoLibre '
+      + 'sigue viva. Los pedidos que todavía no bajaron a Woo quedaron retenidos. La protección '
+      + 'remota pone la publicación en cero y lo verifica contra MercadoLibre; hasta entonces '
+      + 'sigue expuesta.'
+      + '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' + items + '</ul>'
+      + (filas.length > 8 ? '<div class="ui-label">y ' + (filas.length - 8) + ' más</div>' : '')
+      + '</div>';
+  }
+
   function renderRecon() {
     const c = state.resumen?.conciliacion;
     if (!c) { $('#recon').innerHTML = ''; return; }
@@ -239,6 +266,7 @@
     $('#recon').innerHTML = '<span class="ui-resumen">' + partes.join(' · ') + '</span>'
       + bloqueBolsaCompartida()
       + bloqueSinRespaldoWoo()
+      + bloqueEsperandoProteccion()
       // Una observación anterior a la 082 no se puede clasificar. Si se contara como urgente
       // fabricaría un backlog falso del tamaño del universo entero, así que va aparte y con
       // tratamiento fuerte: es lo único de este bloque que exige una acción.

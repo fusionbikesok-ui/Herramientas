@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { openDb } from '../db/index.js';
 import {
-  bootstrapProductosFusion, clavesAfectadasPorBajaWoo, clavesEsperandoProteccion,
-  procesarOperacionesIdentidad, protegerPorBajaWoo,
+  auditarIdentidadProductos, bootstrapProductosFusion, clavesAfectadasPorBajaWoo,
+  clavesEsperandoProteccion, conciliacionIdentidad, procesarOperacionesIdentidad, protegerPorBajaWoo,
 } from '../lib/identidadProductos.js';
 
 const FILE = './test/tmp-proteccion-woo.sqlite';
@@ -233,5 +233,48 @@ describe('protección Woo→ML: la operación remota', () => {
     const adapter = { setStock: async () => { throw new Error('no debería escribir'); }, read: async () => ({ ok: true, stock: 0 }) };
     const r = await procesarOperacionesIdentidad(db, adapter);
     expect(r.procesadas ?? 0).toBe(0);
+  });
+});
+
+describe('contador humano separado del trabajo del worker', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  it('un caso ya decidido, esperando al worker, no cuenta como trabajo humano', () => {
+    // Antes `urgentes` incluía `pendiente`, así que el contador decía que había más trabajo
+    // del que la cola mostraba: alguien veía un número y no encontraba qué hacer.
+    woo(db, { id: 40, sku: 'FB-40' });
+    bootstrapProductosFusion(db);
+    db.prepare(`INSERT INTO ml_publicaciones_cache
+      (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,available_quantity,canales_json,atributos_json,actualizado_en)
+      VALUES ('MLA40|','MLA40','','Publicación','active','FB-40',1,3,'["marketplace"]','[]',?)`).run(ISO);
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+
+    const caso = db.prepare("SELECT id FROM identidad_casos WHERE ml_key='MLA40|'").get();
+    db.prepare("UPDATE identidad_casos SET estado='pendiente' WHERE id=?").run(caso.id);
+
+    const c = conciliacionIdentidad(db);
+    expect(c.esperando_operacion).toBe(1);
+    expect(c.urgentes).toBe(0);
+  });
+
+  it('el gate de conciliación sigue exigiendo que toda clave esté en alguna categoría', () => {
+    // Sacar `pendiente` de urgentes sin sumarlo aparte dejaría un agujero por el que el
+    // tablero anunciaría "conciliado" con casos sin resolver.
+    woo(db, { id: 41, sku: 'FB-41' });
+    bootstrapProductosFusion(db);
+    db.prepare(`INSERT INTO ml_publicaciones_cache
+      (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,available_quantity,canales_json,atributos_json,actualizado_en)
+      VALUES ('MLA41|','MLA41','','Publicación','active','FB-41',1,3,'["marketplace"]','[]',?)`).run(ISO);
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    db.prepare("UPDATE identidad_casos SET estado='pendiente' WHERE ml_key='MLA41|'").run();
+
+    const c = conciliacionIdentidad(db);
+    expect(c.auditadas).toBe(c.verificadas + c.excepciones + c.urgentes + c.esperando_operacion);
+    expect(c.conciliado).toBe(true);
   });
 });
