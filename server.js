@@ -659,6 +659,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           .catch(err => console.error('Error reconciliando preguntas ML:', err.message));
       });
 
+      // Misma red para los mensajes post-venta, y acá hace más falta todavía: el camino del
+      // webhook nunca funcionó —39 jobs muertos entre el 30/08 y el 05/09— porque el id que
+      // manda ML no se puede resolver con credenciales de vendedor. Una llamada a
+      // `/messages/unread` por corrida, y sólo se leen los packs que tienen pendientes.
+      // Se lee con `mark_as_read=false`: un cron no decide por una persona que ya vio un mensaje.
+      cron.schedule('13-59/20 * * * *', async () => {
+        const { reconciliarMensajesMl } = await import('./routes/notificacionesMl.js');
+        reconciliarMensajesMl(app._db, mlCfg)
+          .catch(err => console.error('Error reconciliando mensajes ML:', err.message));
+      });
+
       cron.schedule('*/30 * * * *', () => {
         getAccessToken(app._db, mlCfg)
           .catch(err => console.error('Error renovando token ML (cron dedicado):', err.message));

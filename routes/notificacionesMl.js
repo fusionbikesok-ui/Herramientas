@@ -308,6 +308,50 @@ export async function ingerirPregunta(db, mlCfg, resource, backboneEvent = null,
 // GET <resource> de la notificación de messages — implementación mínima: guarda lo que
 // venga, sin asumir de más el shape hasta ver notificaciones reales en producción (el
 // contrato exacto de `resource` para `messages` varía según sea venta simple o pack).
+/**
+ * Trae los mensajes post-venta pendientes y los proyecta.
+ *
+ * El camino del webhook nunca funcionó y no puede funcionar: para el topic `messages` ML manda
+ * como `resource` el id del mensaje pelado, y ese id **no se puede resolver con credenciales de
+ * vendedor**. Verificado contra la API el 2026-09-06: `/marketplace/messages/{id}` devuelve 403
+ * `Invalid caller.id` —ese recurso es para apps de mensajería de marketplace— y `/messages/{id}`
+ * devuelve 404. Los 39 jobs muertos ni siquiera llegaban ahí: concatenaban el id a la base y
+ * pedían el host inexistente `api.mercadolibre.com01a0725…`.
+ *
+ * La vía del vendedor es la que documenta ML: `/messages/unread` lista las conversaciones con
+ * pendientes y cada una se lee por pack. Al no depender del aviso, además repara los mensajes
+ * que se hayan perdido mientras esto estuvo roto.
+ *
+ * `mark_as_read=false` es obligatorio: sin ese parámetro, LEER marca los mensajes como leídos en
+ * MercadoLibre. Una reconciliación que corre sola no puede decidir por una persona que ya vio un
+ * mensaje.
+ */
+export async function reconciliarMensajesMl(db, mlCfg, { limite = 20 } = {}) {
+  ensureTables(db);
+  if (!mlCfg?.userId) return { omitido: true, motivo: 'sin userId' };
+  const resp = await mlFetch(db, mlCfg, 'get', '/messages/unread?role=seller&tag=post_sale');
+  if (resp.status !== 200 || !Array.isArray(resp.data?.results)) {
+    return { omitido: true, motivo: `http_${resp.status}` };
+  }
+  // `resource` viene como `/packs/{pack}/sellers/{seller}`: se usa tal cual en vez de rearmarlo,
+  // que es exactamente el error que dejó 39 jobs muertos.
+  const pendientes = resp.data.results.slice(0, limite);
+  let packs = 0;
+  let mensajes = 0;
+  for (const r of pendientes) {
+    const recurso = String(r?.resource || '').trim();
+    if (!/^\/packs\/[^/]+\/sellers\/[^/]+$/.test(recurso)) continue;
+    const detalle = await mlFetch(db, mlCfg, 'get', `/messages${recurso}?tag=post_sale&mark_as_read=false`);
+    if (detalle.status !== 200 || !Array.isArray(detalle.data?.messages)) continue;
+    packs += 1;
+    // El detalle no repite el pack en cada mensaje, así que se pasa desde el recurso: sin él
+    // la bandeja no puede vincular la conversación con su pedido.
+    const pack = recurso.split('/')[2];
+    mensajes += proyectarMensajes(db, detalle.data.messages, { packId: pack });
+  }
+  return { ok: true, pendientes: resp.data.total ?? pendientes.length, packs, mensajes };
+}
+
 export async function ingerirMensaje(db, mlCfg, resource, options = {}) {
   ensureTables(db);
   if (!resource) return false;
@@ -315,10 +359,31 @@ export async function ingerirMensaje(db, mlCfg, resource, options = {}) {
   if (resp.status !== 200 || !resp.data) return false;
   if (options.leaseGuard && !options.leaseGuard()) return false;
   const msgs = Array.isArray(resp.data) ? resp.data : (resp.data.messages || [resp.data]);
+  proyectarMensajes(db, msgs, options);
+  return true;
+}
+
+/**
+ * Upsert de mensajes, compartido por el camino del webhook y el de la reconciliación.
+ *
+ * La guarda `excluded.actualizado_en >= ml_mensajes.actualizado_en` evita que una lectura vieja
+ * pise una más nueva cuando las dos vías tocan el mismo mensaje.
+ */
+/** Pedido ML al que pertenece un pack, para que la conversación quede unida a su venta. */
+function packDeOrden(db, packId) {
+  if (!packId) return null;
+  try {
+    return db.prepare("SELECT ml_order_id FROM pedidos_cache WHERE pack_id=? LIMIT 1").get(String(packId))?.ml_order_id || null;
+  } catch { return null; }
+}
+
+function proyectarMensajes(db, msgs, options = {}) {
+  let n = 0;
   db.transaction(() => {
   if (options.leaseGuard && !options.leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
   for (const msg of msgs) {
     if (!msg?.id) continue;
+    n += 1;
     db.prepare(`
       INSERT INTO ml_mensajes (id, pack_id, order_id, texto, de_quien, fecha_creacion, respondido_en, actualizado_en)
       VALUES (@id, @pack_id, @order_id, @texto, @de_quien, @fecha_creacion, @respondido_en, @actualizado_en)
@@ -327,8 +392,8 @@ export async function ingerirMensaje(db, mlCfg, resource, options = {}) {
         respondido_en=excluded.respondido_en, actualizado_en=excluded.actualizado_en
       WHERE excluded.actualizado_en >= ml_mensajes.actualizado_en
     `).run({
-      id: String(msg.id), pack_id: msg.pack_id ? String(msg.pack_id) : null,
-      order_id: msg.order_id ? String(msg.order_id) : null,
+      id: String(msg.id), pack_id: msg.pack_id ? String(msg.pack_id) : (options.packId || null),
+      order_id: msg.order_id ? String(msg.order_id) : (packDeOrden(db, msg.pack_id || options.packId) || null),
       texto: msg.text?.plain || msg.text || '',
       de_quien: msg.from?.user_id ? String(msg.from.user_id) : null,
       fecha_creacion: msg.message_date?.created || msg.date_created || null,
@@ -341,7 +406,7 @@ export async function ingerirMensaje(db, mlCfg, resource, options = {}) {
       preview: msg.text?.plain || msg.text || '', at: now(), occurredAt: msg.message_date?.created || msg.date_created || now(), leaseGuard: options.leaseGuard });
   }
   })();
-  return true;
+  return n;
 }
 
 // GET /post-purchase/v1/claims/{id} (endpoint vigente). Soporta topics legacy y post_purchase.
