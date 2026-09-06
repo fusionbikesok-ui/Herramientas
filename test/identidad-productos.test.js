@@ -16,6 +16,7 @@ import {
   procesarOperacionesIdentidad,
   procesarPasoOperacionIdentidad,
   reintentarOperacionIdentidad,
+  publicacionesSinRespaldoWoo,
 } from '../lib/identidadProductos.js';
 import { identidadProductosRouter } from '../routes/identidadProductos.js';
 
@@ -507,6 +508,32 @@ describe('UM1 identidad de productos', () => {
     db.prepare("UPDATE ml_publicaciones_cache SET user_product_id='MLAU-OK' WHERE clave LIKE 'MLA82|%'").run();
     auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
     expect(conflictosDeBolsaCompartida(db)).toHaveLength(0);
+  });
+
+  // Una unidad Woo dada de baja deja su publicación de ML viva y vendiendo. El pedido que
+  // entre se retiene solo, pero eso pasa cuando el cliente ya compró: esto es para verlo antes.
+  it('detecta una publicación que vende sin producto Woo detrás', () => {
+    woo(db, { id: 90, sku: 'FB-90', stock: 2 });
+    ml(db, { clave: 'MLA90|', sku: 'FB-90', stock: 2 });
+    expect(publicacionesSinRespaldoWoo(db)).toHaveLength(0);
+    // El producto se da de baja en Woo: el webhook retira la fila del catálogo.
+    db.prepare('DELETE FROM catalogo_cache WHERE sku=?').run('FB-90');
+    const r = publicacionesSinRespaldoWoo(db);
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ clave: 'MLA90|', seller_sku: 'FB-90', available_quantity: 2 });
+  });
+
+  it('una publicación pausada o sin stock no cuenta: no está vendiendo', () => {
+    woo(db, { id: 91, sku: 'FB-91', stock: 1 });
+    ml(db, { clave: 'MLA91|', sku: 'FB-91', stock: 1, status: 'paused' });
+    ml(db, { clave: 'MLA92|', sku: 'FB-91', stock: 0, itemId: 'MLA92' });
+    db.prepare('DELETE FROM catalogo_cache WHERE sku=?').run('FB-91');
+    expect(publicacionesSinRespaldoWoo(db)).toHaveLength(0);
+  });
+
+  it('una publicación sin SELLER_SKU no cuenta acá: es otro problema', () => {
+    ml(db, { clave: 'MLA93|', sku: null, stock: 3 });
+    expect(publicacionesSinRespaldoWoo(db)).toHaveLength(0);
   });
 
   it('bloquea impacto potencial sobre hermanas hasta confirmarlo y expone ambas colas', () => {

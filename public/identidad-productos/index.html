@@ -193,6 +193,32 @@
       + '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' + filas + '</ul></div>';
   }
 
+  /**
+   * Publicaciones vendiendo sin un producto Woo detrás: la unidad se dio de baja, se mandó a
+   * la papelera o le cambiaron el SKU, y la publicación de ML quedó viva ofreciendo stock.
+   *
+   * Si entra una venta el pedido se retiene solo —las dos vías de cobertura exigen que el SKU
+   * exista en el catálogo—, pero eso pasa cuando el cliente YA compró. Esto es para verlo antes.
+   */
+  function bloqueSinRespaldoWoo() {
+    const filas = state.resumen?.sin_respaldo_woo || [];
+    if (!filas.length) return '';
+    const items = filas.slice(0, 8).map(function (f) {
+      return '<li><span class="ui-id">' + esc(f.seller_sku) + '</span> '
+        + '<span class="ui-label">' + esc(f.available_quantity) + ' en venta</span>'
+        + '<br><span class="ui-label">' + esc(f.clave) + ' · ' + esc((f.titulo || '').slice(0, 60)) + '</span></li>';
+    }).join('');
+    return '<div class="ui-aviso ui-aviso--critico" style="margin-top:.6rem">'
+      + '<b>' + filas.length + (filas.length === 1 ? ' publicación está vendiendo' : ' publicaciones están vendiendo')
+      + ' sin un producto en WooCommerce detrás.</b>'
+      + '<br>Woo es la autoridad de stock: sin producto no hay nada que respalde lo que se ofrece. '
+      + 'Si entra una venta el pedido se retiene solo, pero para entonces el cliente ya compró. '
+      + 'Hay que dar de alta el producto en Woo o pausar la publicación en MercadoLibre.'
+      + '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' + items + '</ul>'
+      + (filas.length > 8 ? '<div class="ui-label">y ' + (filas.length - 8) + ' más</div>' : '')
+      + '</div>';
+  }
+
   function renderRecon() {
     const c = state.resumen?.conciliacion;
     if (!c) { $('#recon').innerHTML = ''; return; }
@@ -211,6 +237,7 @@
     if (!c.exacta) partes.push('<b class="dato-critico">universo SIN conciliar</b>');
     $('#recon').innerHTML = '<span class="ui-resumen">' + partes.join(' · ') + '</span>'
       + bloqueBolsaCompartida()
+      + bloqueSinRespaldoWoo()
       // Una observación anterior a la 082 no se puede clasificar. Si se contara como urgente
       // fabricaría un backlog falso del tamaño del universo entero, así que va aparte y con
       // tratamiento fuerte: es lo único de este bloque que exige una acción.

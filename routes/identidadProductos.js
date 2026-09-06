@@ -18,6 +18,7 @@ import {
   confirmarImpactoIdentidad,
   reintentarOperacionIdentidad,
   conflictosDeBolsaCompartida,
+  publicacionesSinRespaldoWoo,
 } from '../lib/identidadProductos.js';
 
 const actor = (req) => req.user?.username || 'sistema';
@@ -57,6 +58,9 @@ export function identidadProductosRouter(db) {
     const conflictosBolsa = conflictosDeBolsaCompartida(db);
     return res.json({ ok: true, data: { salud, conciliacion: { ...c, exacta: c.conciliado },
       conflictos_bolsa: conflictosBolsa,
+      // Publicaciones vendiendo sin producto Woo detrás. Si entra una venta el pedido se
+      // retiene solo; esto es para enterarse ANTES de que el cliente compre.
+      sin_respaldo_woo: publicacionesSinRespaldoWoo(db),
       colas: { ml_to_fusion: colas.ml_to_fusion.length, woo_to_ml: colas.woo_to_ml.length } } });
   });
   router.get('/casos', exigir(), (req, res) => res.json({ ok: true, data: listarCasosIdentidad(db, req.query) }));
