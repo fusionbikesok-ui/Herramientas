@@ -667,6 +667,7 @@ export function openDb(dbPath) {
     })();
   }
 
+
   const cambiosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_cambios_observados_087'").get();
   if (!cambiosMigration) {
     try {
@@ -688,6 +689,30 @@ export function openDb(dbPath) {
       if (!cols.has('sin_cero')) db.exec('ALTER TABLE identidad_operaciones ADD COLUMN sin_cero INTEGER NOT NULL DEFAULT 0');
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_sin_cero_085')").run();
     })();
+  }
+
+  const tipoOperacionMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='operaciones_tipo_proteccion_091'").get();
+  if (!tipoOperacionMigration) {
+    // `identidad_operacion_pasos` referencia esta tabla, así que recrearla con las claves
+    // foráneas activas falla: al soltar la tabla vieja, las filas hijas quedan apuntando a
+    // nada. Es el procedimiento que documenta SQLite para alterar una tabla referenciada:
+    // apagar el pragma FUERA de la transacción (dentro no tiene efecto), recrear, y recién
+    // entonces comprobar que no quedó ninguna referencia rota.
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '091_operaciones_tipo_proteccion.sql'), 'utf8'));
+        db.prepare("INSERT INTO _schema_migrations (key) VALUES ('operaciones_tipo_proteccion_091')").run();
+      })();
+      const rotas = db.pragma('foreign_key_check');
+      if (rotas.length) {
+        throw new Error(`migracion 091 dejó ${rotas.length} referencia(s) rota(s): ${JSON.stringify(rotas.slice(0, 3))}`);
+      }
+    } finally {
+      // Se reactiva pase lo que pase: dejar la base sin integridad referencial por un error
+      // de migración sería mucho peor que el error mismo.
+      db.pragma('foreign_keys = ON');
+    }
   }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {

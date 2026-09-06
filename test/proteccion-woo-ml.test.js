@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { openDb } from '../db/index.js';
 import {
-  bootstrapProductosFusion, clavesAfectadasPorBajaWoo, clavesEsperandoProteccion, protegerPorBajaWoo,
+  bootstrapProductosFusion, clavesAfectadasPorBajaWoo, clavesEsperandoProteccion,
+  procesarOperacionesIdentidad, protegerPorBajaWoo,
 } from '../lib/identidadProductos.js';
 
 const FILE = './test/tmp-proteccion-woo.sqlite';
@@ -61,7 +62,7 @@ describe('protección Woo→ML: la mitad que no escribe en ML', () => {
     ml(db, { clave: 'MLA2|', sku: 'FB-11', stock: 5 });
 
     const r = protegerPorBajaWoo(db, { idWoo: 11, sku: 'FB-11', confirmado: true }, 'ana');
-    expect(r).toMatchObject({ ok: true, claves: 1, casos: 1 });
+    expect(r).toMatchObject({ ok: true, claves: 1, casos: 1, operaciones: 1 });
 
     const caso = db.prepare("SELECT * FROM identidad_casos WHERE direccion='woo_ml'").get();
     expect(caso).toMatchObject({ ml_key: 'MLA2|', estado: 'urgente', severidad: 'critica', clasificacion: 'baja_woo' });
@@ -128,7 +129,7 @@ describe('protección Woo→ML: la mitad que no escribe en ML', () => {
     woo(db, { id: 15, sku: 'FB-15' });
     bootstrapProductosFusion(db);
     expect(protegerPorBajaWoo(db, { idWoo: 15, sku: 'FB-15', confirmado: true }))
-      .toEqual({ ok: true, claves: 0, casos: 0, pedidos_retenidos: 0 });
+      .toEqual({ ok: true, claves: 0, casos: 0, operaciones: 0, pedidos_retenidos: 0 });
   });
 
   it('ordena por stock expuesto: primero lo que más se puede vender sin tener', () => {
@@ -141,5 +142,96 @@ describe('protección Woo→ML: la mitad que no escribe en ML', () => {
     protegerPorBajaWoo(db, { idWoo: 17, sku: 'FB-17', confirmado: true });
 
     expect(clavesEsperandoProteccion(db).map((x) => x.ml_key)).toEqual(['MLA9|', 'MLA8|']);
+  });
+});
+
+describe('protección Woo→ML: la operación remota', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  function conProteccion() {
+    woo(db, { id: 30, sku: 'FB-30' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA30|', sku: 'FB-30', stock: 4 });
+    return protegerPorBajaWoo(db, { idWoo: 30, sku: 'FB-30', confirmado: true });
+  }
+
+  it('nace en shadow mientras las escrituras remotas estén apagadas', () => {
+    // Desplegar esto no enciende nada por sí solo.
+    db.prepare("UPDATE identidad_config SET modo='shadow', escrituras_remotas_habilitadas=0 WHERE id=1").run();
+    conProteccion();
+    const op = db.prepare("SELECT * FROM identidad_operaciones WHERE tipo='proteccion_woo'").get();
+    expect(op).toMatchObject({ estado: 'shadow', paso_actual: 'zero', stock_objetivo: 0 });
+    expect(op.sku_objetivo).toBeNull();
+    expect(op.decision_id).toBeNull();
+  });
+
+  it('queda pendiente cuando las escrituras están habilitadas', () => {
+    db.prepare("UPDATE identidad_config SET modo='enforced', escrituras_remotas_habilitadas=1 WHERE id=1").run();
+    conProteccion();
+    expect(db.prepare("SELECT estado FROM identidad_operaciones WHERE tipo='proteccion_woo'").get().estado).toBe('pendiente');
+  });
+
+  it('el esquema rechaza una corrección de SKU sin decisión ni objetivo', () => {
+    // El invariante vive en la base: una corrección sin decisión sería una escritura remota
+    // que nadie pidió, que es lo que la saga existe para evitar.
+    woo(db, { id: 31, sku: 'FB-31' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA31|', sku: 'FB-31' });
+    protegerPorBajaWoo(db, { idWoo: 31, sku: 'FB-31', confirmado: true });
+    expect(() => db.prepare("UPDATE identidad_operaciones SET tipo='correccion_sku' WHERE tipo='proteccion_woo'").run())
+      .toThrow();
+  });
+
+  it('el worker no la toca con las escrituras apagadas', async () => {
+    db.prepare("UPDATE identidad_config SET modo='shadow', escrituras_remotas_habilitadas=0 WHERE id=1").run();
+    conProteccion();
+    const r = await procesarOperacionesIdentidad(db, { setStock: async () => { throw new Error('no debería escribir'); } });
+    expect(r).toMatchObject({ omitido: 'escrituras_remotas_deshabilitadas', procesadas: 0 });
+  });
+
+  it('pone stock cero, lo verifica contra ML y cierra el caso', async () => {
+    db.prepare("UPDATE identidad_config SET modo='enforced', escrituras_remotas_habilitadas=1, lote_max=1 WHERE id=1").run();
+    conProteccion();
+    const escrituras = [];
+    const adapter = {
+      setStock: async (clave, cantidad) => { escrituras.push([clave, cantidad]); return { ok: true }; },
+      // `observed_at` es obligatorio: el ejecutor sólo da por buena una lectura fresca,
+      // así que un mock sin fecha se comporta como una respuesta ambigua y no confirma.
+      read: async () => ({ ok: true, stock: 0, seller_sku: 'FB-30', observed_at: new Date().toISOString() }),
+    };
+    await procesarOperacionesIdentidad(db, adapter);
+
+    expect(escrituras).toEqual([['MLA30|', 0]]);
+    const op = db.prepare("SELECT * FROM identidad_operaciones WHERE tipo='proteccion_woo'").get();
+    expect(op.estado).toBe('completada');
+    expect(db.prepare("SELECT estado FROM identidad_casos WHERE direccion='woo_ml'").get().estado).toBe('verificado');
+  });
+
+  it('no cierra el caso si ML no confirma el cero', async () => {
+    db.prepare("UPDATE identidad_config SET modo='enforced', escrituras_remotas_habilitadas=1, lote_max=1 WHERE id=1").run();
+    conProteccion();
+    const adapter = {
+      setStock: async () => ({ ok: true }),
+      read: async () => ({ ok: true, stock: 4, seller_sku: 'FB-30', observed_at: new Date().toISOString() }),
+    };
+    await procesarOperacionesIdentidad(db, adapter);
+    await procesarOperacionesIdentidad(db, adapter);
+
+    const op = db.prepare("SELECT * FROM identidad_operaciones WHERE tipo='proteccion_woo'").get();
+    expect(op.estado).not.toBe('completada');
+    expect(db.prepare("SELECT estado FROM identidad_casos WHERE direccion='woo_ml'").get().estado).not.toBe('verificado');
+  });
+
+  it('respeta el canario: no toca claves fuera de la lista', async () => {
+    db.prepare("UPDATE identidad_config SET modo='enforced', escrituras_remotas_habilitadas=1, canario_ml_key='OTRA|' WHERE id=1").run();
+    conProteccion();
+    const adapter = { setStock: async () => { throw new Error('no debería escribir'); }, read: async () => ({ ok: true, stock: 0 }) };
+    const r = await procesarOperacionesIdentidad(db, adapter);
+    expect(r.procesadas ?? 0).toBe(0);
   });
 });
