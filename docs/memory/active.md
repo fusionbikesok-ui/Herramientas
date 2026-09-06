@@ -87,7 +87,12 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - **Hay tests que fallan sólo en la corrida completa y pasan aislados.** Es contención, no un bug
   del cambio en curso: la suite tarda ~20 min y algunos casos cruzan su `testTimeout` de 5 s bajo
   carga. Vistos así: `inventario.test.js` y, el 2026-09-06, `workshop-stock.test.js` («registra
-  consumo idempotente desde ubicación», timeout a 5000 ms en la suite, 475 ms aislado). Antes de
+  consumo idempotente desde ubicación», timeout a 5000 ms en la suite, 475 ms aislado) y
+  `consultaPrecios.test.js` («rechaza id_woo inexistente», 5681 ms en la suite, 38/38 aislado).
+  Dos corridas seguidas fallaron en un test **distinto** cada vez: eso es contención, no un bug.
+  Cuando el archivo que falla consume algo que el cambio tocó —`consultaPrecios` usa
+  `looksLikeGtin`—, pasar aislado no alcanza: hay que probar la equivalencia del comportamiento
+  (se comparó la implementación vieja contra la nueva sobre 2481 valores reales, 0 divergencias). Antes de
   atribuirlo a la interferencia hay que descartar haber ralentizado la suite: comparar la duración
   total contra corridas previas —esa vez bajó de 1289 s a 1195 s con más tests, así que el cambio
   no era la causa—. La deuda de fondo sigue abierta: los timeouts dependen de la máquina.

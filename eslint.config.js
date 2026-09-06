@@ -54,4 +54,20 @@ export default [
     // para el analizador es un global del worker como cualquier otro.
     languageOptions: { sourceType: 'script', globals: { ...globals.worker, MatcherEngine: 'readonly' } },
   },
+  {
+    // Excepción acotada y temporal (decisión del usuario, 2026-09-06). `db/index.js` arrastra
+    // 57 `catch {}` repartidos entre las líneas 154 y 1107 —8 en migraciones, 18 alrededor de
+    // ALTER/PRAGMA, 31 en otros lugares—, todos anteriores al linter. Con el gate acotado al
+    // diff, cualquier cambio mínimo acá (registrar una migración nueva son ~10 líneas) obliga
+    // a saldar esa deuda en el mismo commit, mezclando dos trabajos en el archivo más sensible
+    // del arranque.
+    //
+    // Es deuda reconocida, no un permiso: la regla sigue activa en todo el resto del proyecto,
+    // y saldarla exige revisar los 57 uno por uno —los deliberados llevan el comentario que
+    // explica por qué están vacíos, y los que no, se arreglan—, porque un `catch` mudo que
+    // esconde un error real es exactamente el bug que motivó adoptar ESLint (PM-148/PM-149).
+    // Al levantar esta excepción hay que borrar este bloque, no ampliarlo a otros archivos.
+    files: ['db/index.js'],
+    rules: { 'no-empty': 'off' },
+  },
 ];

@@ -148,10 +148,9 @@ export function openDb(dbPath) {
   if (!horarioMigration) {
     const aplicarHorarios = db.transaction(() => {
       db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '032_despacho_horarios.sql'), 'utf8'));
-      let columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
+      const columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
       if (columnas.length && !columnas.includes('fecha_despacho')) {
         db.exec('ALTER TABLE pedidos_cache ADD COLUMN fecha_despacho TEXT');
-        columnas = db.prepare('PRAGMA table_info(pedidos_cache)').all().map((c) => c.name);
       }
       db.exec(`CREATE TABLE IF NOT EXISTS despacho_horarios_meta (
         id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 1, actualizado_en TEXT NOT NULL

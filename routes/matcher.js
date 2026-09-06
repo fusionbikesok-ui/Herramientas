@@ -6,12 +6,12 @@ import {
   construirWC, construirMLdesdeApi, candidatosDeItem, derivarEstadoApi,
 } from '../lib/matcherResolver.js';
 import {
-  contarPendientes, getEstadoPush,
+  getEstadoPush,
 } from '../lib/matcherPush.js';
 import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { escanearGuardiaMl } from '../lib/guardiaMl.js';
-import { auditarIdentidadProductos } from '../lib/identidadProductos.js';
+import { auditarIdentidadProductos, sembrarIdentificadoresMl } from '../lib/identidadProductos.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -94,6 +94,17 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
       // UM1: solo genera/actualiza casos locales; nunca escribe seller_sku, stock ni estados
       // remotos. Si el refresco fue completo, la lectura de Guardia tiene una base confiable.
       escanearGuardiaMl(db, 'sistema', { lecturaMlConfirmada: true });
+      // Los GTIN que sólo conoce ML se incorporan como identificadores acá porque acá es
+      // donde `ml_publicaciones_cache` acaba de quedar fresca. Sólo con lectura confiable:
+      // es idempotente y aditiva, pero registrar un conflicto pone trabajo en la bandeja de
+      // una persona, y con un refresco acotado ese conflicto podría venir de datos viejos.
+      if (scopeNorm === 'all') {
+        const siembra = sembrarIdentificadoresMl(db, 'sistema');
+        _refresco.identificadores = {
+          sembrados: siembra.sembrados, conflictos: siembra.conflictos,
+          absorbidos: siembra.absorbidos, sin_respaldo_woo: siembra.sinRespaldoWoo.length,
+        };
+      }
       auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: scopeNorm === 'all' });
     } catch (e) {
       _refresco.error = e.message;
@@ -674,7 +685,10 @@ function guardarCacheDisco(db, scope, firma, resultado) {
       VALUES (?,?,?,?)
       ON CONFLICT(scope) DO UPDATE SET firma=excluded.firma, resultado_json=excluded.resultado_json, actualizado_en=excluded.actualizado_en
     `).run(scope, firma, JSON.stringify(resultado), now());
-  } catch (_) {}
+  } catch (_) {
+    // La caché de candidatos es un acelerador: si no se puede escribir, el cómputo
+    // se rehace la próxima vez. No debe tumbar la respuesta que ya se calculó.
+  }
 }
 
 // Estado del cómputo de candidatos en background por scope. El cruce completo

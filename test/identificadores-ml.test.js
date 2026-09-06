@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { openDb } from '../db/index.js';
 import {
-  bootstrapProductosFusion, identificadorPrincipal, reordenarIdentificadores, sembrarIdentificadoresMl,
+  bootstrapProductosFusion, conflictosDeIdentificador, identificadorPrincipal,
+  reordenarIdentificadores, sembrarIdentificadoresMl,
 } from '../lib/identidadProductos.js';
 
 const FILE = './test/tmp-identificadores-ml.sqlite';
@@ -202,5 +203,53 @@ describe('orden de prioridad de identificadores', () => {
     db.prepare("UPDATE identidad_config SET identificadores_prioridad='ml,woo,manual' WHERE id=1").run();
     const id = productoConDos();
     expect(identificadorPrincipal(db, id).fuente).toBe('ml');
+  });
+});
+
+describe('conflictos de identificador para la bandeja', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  it('agrupa por código y no por fila, y ordena por stock expuesto en ML', () => {
+    // La unidad de trabajo es el código: en producción 41 códigos son 399 filas.
+    woo(db, { id: 90, sku: 'FB-90', gtin: '602883701731' });
+    woo(db, { id: 91, sku: 'FB-91' });
+    woo(db, { id: 92, sku: 'FB-92' });
+    woo(db, { id: 93, sku: 'FB-93', gtin: '4006381333931' });
+    woo(db, { id: 94, sku: 'FB-94' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA30|', sku: 'FB-91', gtin: '602883701731', stock: 1 });
+    ml(db, { clave: 'MLA31|', sku: 'FB-92', gtin: '602883701731', stock: 2 });
+    ml(db, { clave: 'MLA32|', sku: 'FB-94', gtin: '4006381333931', stock: 9 });
+    sembrarIdentificadoresMl(db);
+
+    const r = conflictosDeIdentificador(db);
+    expect(r).toHaveLength(2);
+    // El de más stock primero: puede estar descontando del producto equivocado.
+    expect(r[0]).toMatchObject({ valor_normalizado: '04006381333931', productos: 2, stock_ml: 9 });
+    expect(r[1]).toMatchObject({ valor_normalizado: '00602883701731', productos: 3, stock_ml: 3 });
+  });
+
+  it('no reporta un código que un solo producto reclama', () => {
+    woo(db, { id: 95, sku: 'FB-95', gtin: '602883701731' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA33|', sku: 'FB-95', gtin: '0602883701731' });
+    sembrarIdentificadoresMl(db);
+
+    expect(conflictosDeIdentificador(db)).toEqual([]);
+  });
+
+  it('cuenta sólo el stock de publicaciones activas', () => {
+    woo(db, { id: 96, sku: 'FB-96', gtin: '602883701731' });
+    woo(db, { id: 97, sku: 'FB-97' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA34|', sku: 'FB-97', gtin: '602883701731', stock: 5, status: 'paused' });
+    sembrarIdentificadoresMl(db);
+
+    expect(conflictosDeIdentificador(db)[0]).toMatchObject({ stock_ml: 0 });
   });
 });

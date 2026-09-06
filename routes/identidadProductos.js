@@ -18,6 +18,7 @@ import {
   confirmarImpactoIdentidad,
   reintentarOperacionIdentidad,
   conflictosDeBolsaCompartida,
+  conflictosDeIdentificador,
   publicacionesSinRespaldoWoo,
 } from '../lib/identidadProductos.js';
 
@@ -61,6 +62,10 @@ export function identidadProductosRouter(db) {
       // Publicaciones vendiendo sin producto Woo detrás. Si entra una venta el pedido se
       // retiene solo; esto es para enterarse ANTES de que el cliente compre.
       sin_respaldo_woo: publicacionesSinRespaldoWoo(db),
+      // Un mismo GTIN reclamado por varios Producto Fusion. La unidad de trabajo es el
+      // código, no la fila: resolverlo cierra todas sus filas. Vienen ordenados por stock
+      // expuesto en ML, que es por donde se arranca.
+      conflictos_gtin: conflictosDeIdentificador(db),
       colas: { ml_to_fusion: colas.ml_to_fusion.length, woo_to_ml: colas.woo_to_ml.length } } });
   });
   router.get('/casos', exigir(), (req, res) => res.json({ ok: true, data: listarCasosIdentidad(db, req.query) }));
