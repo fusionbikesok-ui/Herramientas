@@ -60,6 +60,7 @@ import { workshopRouter } from './routes/workshop.js';
 import { mobileWorkshopRouter } from './routes/mobileWorkshop.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
+import { mobileHoyRouter } from './routes/mobileHoy.js';
 import { registrarWebhookMl, registrarWebhookWooProducto, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
 
@@ -178,6 +179,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     },
   }));
 
+  // Política de privacidad: pública y sin sesión, porque App Store exige una URL que el
+  // revisor y cualquier usuario puedan abrir sin credenciales.
+  app.use('/privacidad', express.static(path.join(__dirname, 'public/privacidad')));
   app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
   app.use('/stock', express.static(path.join(__dirname, 'public/stock')));
   app.use('/excepciones', express.static(path.join(__dirname, 'public/excepciones')));
@@ -217,6 +221,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/v1/inbox', inboxClaimsRouter(db, mobileNotificationsAuth));
   app.use('/api/v1/workshop', mobileWorkshopRouter(db, mobileAuth));
   app.use('/api/v1/identidad-productos', mobileAuth, identidadProductosRouter(db));
+  // Antes del catch-all de `/api/v1`, o sus rutas quedarían capturadas por él y responderían
+  // 401 en vez de existir —que es exactamente lo que les pasaba—.
+  app.use('/api/v1', mobileHoyRouter(db, mobileAuth));
   app.use('/api/v1', operacionesMobileRouter(db, mobileNotificationsAuth));
 
   // A partir de acá, todo /api exige sesión válida + permiso por herramienta.

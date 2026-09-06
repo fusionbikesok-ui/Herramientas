@@ -172,3 +172,32 @@ describe('reencolar dead letters', () => {
     expect(r.body).toMatchObject({ ok: true, reencolados: 0 });
   });
 });
+
+describe('preguntas: sólo las que se pueden responder', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  it('cierra la que el comprador borró en vez de dejarla como trabajo eterno', async () => {
+    // Medido contra ML el 2026-09-06: de 9 sin responder, una estaba borrada de la publicación.
+    // Figuraba como pendiente y no había nada que contestar.
+    db.prepare(`CREATE TABLE IF NOT EXISTS ml_preguntas (id TEXT PRIMARY KEY, item_id TEXT, texto TEXT,
+      estado TEXT, fecha_creacion TEXT, respondida_en TEXT, actualizado_en TEXT)`).run();
+    db.prepare(`INSERT INTO ml_preguntas (id,item_id,texto,estado,fecha_creacion,actualizado_en)
+      VALUES ('q1','MLA1','¿tenés stock?','UNANSWERED','2026-09-01',?)`).run('2026-09-01');
+
+    vi.spyOn(mlClient, 'mlFetch').mockResolvedValue({ status: 200, data: { total: 1, questions: [
+      { id: 'q1', item_id: 'MLA1', text: '¿tenés stock?', status: 'UNANSWERED', deleted_from_listing: true },
+    ] } });
+    const { reconciliarPreguntasMl } = await import('../routes/notificacionesMl.js');
+    await reconciliarPreguntasMl(db, { userId: '1' });
+
+    const q = db.prepare("SELECT respondida_en, estado FROM ml_preguntas WHERE id='q1'").get();
+    expect(q.respondida_en).toBeTruthy();
+    expect(q.estado).toBe('DELETED');
+  });
+});

@@ -231,7 +231,14 @@ export async function reconciliarPreguntasMl(db, mlCfg, { limite = 50 } = {}) {
       // oficial de ML). No es trabajo pendiente y no se puede responder: traerla sería ruido
       // inaccionable en una bandeja. Medido el 2026-09-06: 2 de las 6 que faltaban estaban en
       // este estado, incluida una que a primera vista parecía un aviso perdido legítimo.
-      if (q.deleted_from_listing === true) { descartadas += 1; continue; }
+      if (q.deleted_from_listing === true) {
+        // Si además ya estaba guardada como pendiente, se cierra: el comprador la borró y no
+        // hay nada que responder, pero seguía contando como trabajo. Sin esto quedaba en la
+        // bandeja para siempre —una de las 9 que figuraban sin responder era exactamente eso—.
+        db.prepare("UPDATE ml_preguntas SET respondida_en=?, estado='DELETED', actualizado_en=? WHERE id=? AND COALESCE(respondida_en,'')=''")
+          .run(ts, ts, q.id);
+        descartadas += 1; continue;
+      }
       // `hold` = la pregunta está retenida por ML y todavía no corresponde actuar sobre ella.
       if (q.hold === true) { descartadas += 1; continue; }
       vistas += 1;
