@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import { openDb } from '../db/index.js';
 import * as mlClient from '../lib/mlClient.js';
-import { reconciliarMensajesMl } from '../routes/notificacionesMl.js';
+import express from 'express';
+import request from 'supertest';
+import { notificacionesMlRouter, reconciliarMensajesMl } from '../routes/notificacionesMl.js';
 
 const FILE = './test/tmp-mensajes-ml.sqlite';
 const CFG = { userId: '91406604', clientId: 'x', clientSecret: 'y' };
@@ -103,5 +105,70 @@ describe('reconciliación de mensajes post-venta de ML', () => {
 
   it('no hace nada sin userId', async () => {
     expect(await reconciliarMensajesMl(db, {})).toMatchObject({ omitido: true, motivo: 'sin userId' });
+  });
+});
+
+describe('reencolar dead letters', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  const ISO_E = '2026-08-30T13:53:26.366Z';
+  function muerto(evId, tipo) {
+    db.prepare(`INSERT INTO integration_events
+      (event_id,event_type,channel,source,occurred_at,received_at,correlation_id,dedupe_key,status)
+      VALUES (?,'x','ml','webhook',?,?,?,?,'dead_lettered')`).run(evId, ISO_E, ISO_E, 'c-' + evId, 'd-' + evId);
+    db.prepare(`INSERT INTO integration_jobs
+      (event_id,job_type,status,attempts,max_attempts,available_at,locked_by,lease_token,last_error_message)
+      VALUES (?,?,'dead_lettered',8,8,?,'worker-viejo','tok','se murió')`).run(evId, tipo, ISO_E);
+  }
+
+  function app(admin = true) {
+    const a = express(); a.use(express.json());
+    a.use((req, _res, next) => { req.user = { username: 'ana', is_admin: admin }; next(); });
+    a.use('/api/notificaciones-ml', notificacionesMlRouter(db, {}));
+    return a;
+  }
+
+  it('devuelve los jobs a la cola y suelta sus locks', async () => {
+    // Sin soltar el lease, el worker los saltearía por considerarlos tomados por otro.
+    muerto('e1', 'message.project');
+    const r = await request(app()).post('/api/notificaciones-ml/dead-letters/reintentar').send({});
+
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ reencolados: 1 });
+    const j = db.prepare('SELECT * FROM integration_jobs').get();
+    expect(j).toMatchObject({ status: 'pending', attempts: 0, locked_by: null, lease_token: null });
+  });
+
+  it('acota la tanda: cada job reencolado es al menos una llamada a ML', async () => {
+    for (let i = 0; i < 6; i += 1) muerto('e' + i, 'message.project');
+    const r = await request(app()).post('/api/notificaciones-ml/dead-letters/reintentar').send({ limite: 2 });
+
+    expect(r.body.reencolados).toBe(2);
+    expect(db.prepare("SELECT COUNT(*) n FROM integration_jobs WHERE status='dead_lettered'").get().n).toBe(4);
+  });
+
+  it('permite reencolar sólo un tipo', async () => {
+    muerto('e1', 'message.project');
+    muerto('e2', 'question.project');
+    await request(app()).post('/api/notificaciones-ml/dead-letters/reintentar').send({ job_type: 'question.project' });
+
+    expect(db.prepare("SELECT job_type FROM integration_jobs WHERE status='pending'").get().job_type).toBe('question.project');
+  });
+
+  it('es cosa de Administración', async () => {
+    muerto('e1', 'message.project');
+    const r = await request(app(false)).post('/api/notificaciones-ml/dead-letters/reintentar').send({});
+    expect(r.status).toBe(403);
+    expect(db.prepare("SELECT COUNT(*) n FROM integration_jobs WHERE status='dead_lettered'").get().n).toBe(1);
+  });
+
+  it('no rompe cuando no hay nada muerto', async () => {
+    const r = await request(app()).post('/api/notificaciones-ml/dead-letters/reintentar').send({});
+    expect(r.body).toMatchObject({ ok: true, reencolados: 0 });
   });
 });

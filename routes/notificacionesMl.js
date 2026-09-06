@@ -590,6 +590,39 @@ export function notificacionesMlRouter(db) {
    * Se agrupa por tipo y motivo en vez de listar todo: lo que importa operativamente es «qué
    * clase de cosa está fallando y desde cuándo», no el detalle de cada fila.
    */
+  /**
+   * Devuelve a la cola los jobs que agotaron sus reintentos.
+   *
+   * Un `dead_lettered` no se recupera solo: el worker no lo mira más. Cuando la causa se
+   * arregla —los 39 de `message.project` pedían un host inexistente, los 3 de
+   * `question.project` fueron un fallo transitorio del 30/08 que hoy responde 200— el trabajo
+   * sigue perdido hasta que alguien los reencola.
+   *
+   * `limite` acota la tanda a propósito: cada job reencolado es al menos una llamada a ML, y
+   * soltar decenas de golpe contra una API que ya nos bloqueó una vez es exactamente lo que no
+   * hay que hacer. `attempts` vuelve a 0 y se sueltan los locks, o el worker lo saltearía por
+   * lease ajeno.
+   */
+  router.post('/dead-letters/reintentar', (req, res) => {
+    if (!req.user?.is_admin) return res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Sólo Administración' });
+    const hay = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_jobs'").get();
+    if (!hay) return res.json({ ok: true, reencolados: 0 });
+    const tipo = String(req.body?.job_type || '').trim();
+    const limite = Math.max(1, Math.min(50, Number(req.body?.limite) || 10));
+    const ids = db.prepare(`SELECT job_id FROM integration_jobs
+      WHERE status='dead_lettered' ${tipo ? 'AND job_type=?' : ''}
+      ORDER BY job_id LIMIT ?`).all(...(tipo ? [tipo, limite] : [limite])).map((r) => r.job_id);
+    if (ids.length === 0) return res.json({ ok: true, reencolados: 0 });
+    const ts = now();
+    db.transaction(() => {
+      db.prepare(`UPDATE integration_jobs
+        SET status='pending', attempts=0, available_at=?, locked_at=NULL, locked_by=NULL,
+            lease_until=NULL, lease_token=NULL, last_error_code=NULL, last_error_message=NULL
+        WHERE job_id IN (${ids.map(() => '?').join(',')})`).run(ts, ...ids);
+    })();
+    return res.json({ ok: true, reencolados: ids.length, job_type: tipo || null });
+  });
+
   router.get('/dead-letters', (req, res) => {
     const hay = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_jobs'").get();
     if (!hay) return res.json({ ok: true, total: 0, grupos: [] });
