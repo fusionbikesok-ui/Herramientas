@@ -214,7 +214,7 @@ export async function reconciliarPreguntasMl(db, mlCfg, { limite = 50 } = {}) {
     return { omitido: true, motivo: `http_${resp.status}` };
   }
   const ts = now();
-  let recuperadas = 0, vistas = 0;
+  let recuperadas = 0, vistas = 0, descartadas = 0;
   const upsert = db.prepare(`
     INSERT INTO ml_preguntas (id, item_id, texto, estado, fecha_creacion, respondida_en, actualizado_en)
     VALUES (@id, @item_id, @texto, @estado, @fecha_creacion, NULL, @actualizado_en)
@@ -227,6 +227,13 @@ export async function reconciliarPreguntasMl(db, mlCfg, { limite = 50 } = {}) {
   db.transaction(() => {
     for (const q of resp.data.questions) {
       if (!q?.id) continue;
+      // `deleted_from_listing` = la pregunta se eliminó de la publicación (documentación
+      // oficial de ML). No es trabajo pendiente y no se puede responder: traerla sería ruido
+      // inaccionable en una bandeja. Medido el 2026-09-06: 2 de las 6 que faltaban estaban en
+      // este estado, incluida una que a primera vista parecía un aviso perdido legítimo.
+      if (q.deleted_from_listing === true) { descartadas += 1; continue; }
+      // `hold` = la pregunta está retenida por ML y todavía no corresponde actuar sobre ella.
+      if (q.hold === true) { descartadas += 1; continue; }
       vistas += 1;
       const existia = db.prepare('SELECT 1 FROM ml_preguntas WHERE id=?').get(q.id);
       upsert.run({ id: q.id, item_id: q.item_id || null, texto: q.text || '',
@@ -235,8 +242,8 @@ export async function reconciliarPreguntasMl(db, mlCfg, { limite = 50 } = {}) {
     }
   })();
   // Sólo se avisa cuando hubo algo que recuperar: si el webhook está cubriendo, esto es mudo.
-  if (recuperadas) console.log(`[reconciliar-preguntas] ${recuperadas} pregunta(s) que el webhook no trajo, de ${vistas} sin responder`);
-  return { omitido: false, vistas, recuperadas, total_ml: resp.data.total ?? null };
+  if (recuperadas) console.log(`[reconciliar-preguntas] ${recuperadas} pregunta(s) que el webhook no trajo, de ${vistas} accionables (${descartadas} descartada(s) por eliminada/retenida)`);
+  return { omitido: false, vistas, recuperadas, descartadas, total_ml: resp.data.total ?? null };
 }
 
 export async function ingerirPregunta(db, mlCfg, resource, backboneEvent = null, options = {}) {

@@ -626,6 +626,23 @@ describe('red de reconciliación de preguntas', () => {
     db.close();
   });
 
+  // `deleted_from_listing` = eliminada de la publicación (doc oficial de ML). No es trabajo
+  // pendiente ni se puede responder. Medido: 2 de las 6 que faltaban estaban así, incluida una
+  // que a primera vista parecía un aviso perdido legítimo.
+  it('descarta las eliminadas de la publicación y las retenidas', async () => {
+    const db = openDb(':memory:');
+    mlFetch.mockResolvedValue(respuesta([
+      { id: 1, item_id: 'MLA1', text: 'vale', status: 'UNANSWERED', date_created: '2026-09-01T10:00:00Z', deleted_from_listing: false },
+      { id: 2, item_id: 'MLA2', text: 'borrada', status: 'UNANSWERED', date_created: '2026-03-29T10:00:00Z', deleted_from_listing: true },
+      { id: 3, item_id: 'MLA3', text: 'retenida', status: 'UNANSWERED', date_created: '2026-08-01T10:00:00Z', hold: true },
+    ]));
+    const r = await reconciliarPreguntasMl(db, CFG);
+    expect(r).toMatchObject({ vistas: 1, recuperadas: 1, descartadas: 2 });
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_preguntas').get().n).toBe(1);
+    expect(db.prepare('SELECT 1 FROM ml_preguntas WHERE id=2').get()).toBeUndefined();
+    db.close();
+  });
+
   it('es idempotente: correrla de nuevo no cuenta recuperadas', async () => {
     const db = openDb(':memory:');
     mlFetch.mockResolvedValue(respuesta([{ id: 1, item_id: 'MLA1', text: 'hola', status: 'UNANSWERED', date_created: '2026-03-29T03:48:47Z' }]));
