@@ -638,6 +638,18 @@ export function openDb(dbPath) {
   // migración Hito 7 (`user_version < 30`, al final de openDb). Subirla a 82 saltea esa
   // migración y deja la base sin device_tokens, rompiendo toda la auth móvil. La
   // idempotencia de 082 la da su marcador en `_schema_migrations`.
+  const gtinCanonicoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identificadores_gtin_canonico_088'").get();
+  if (!gtinCanonicoMigration) {
+    // Recrea identificadores_producto para pasar el UNIQUE a índice parcial y
+    // llevar los GTIN a la forma canónica GS1. No se envuelve en try/catch: si
+    // esto falla a medias, la tabla de identificadores queda inconsistente y es
+    // preferible que el arranque se caiga a que el servidor siga con datos rotos.
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '088_identificadores_gtin_canonico.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identificadores_gtin_canonico_088')").run();
+    })();
+  }
+
   const cambiosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_cambios_observados_087'").get();
   if (!cambiosMigration) {
     try {
