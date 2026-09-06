@@ -73,11 +73,16 @@ describe('db schema', () => {
       'mapeo_fusion',
       'matcher_candidatos_cache',
       'metricas_ciclo_sync',
+      // Captura de qué cambió en una publicación de ML, campo por campo (migración 087).
+      'ml_cambios_observados',
       'ml_oauth_token',
       'ml_precio_auditoria',
       'ml_precios_cache',
       'ml_publicaciones_cache',
       'ml_reactivacion_frenada',
+      // Cadencia adaptativa del scan y huella para medir la cobertura del webhook (086).
+      'ml_scan_huella',
+      'ml_scan_ramp',
       'ml_shipment_estado',
       'ml_sku_push_fallos',
       'ml_stock_estado',
