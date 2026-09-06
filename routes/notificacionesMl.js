@@ -109,7 +109,7 @@ function proyectarPreguntaEnBackbone(db, { preguntaId, estado, texto, itemId, oc
 }
 
 export function extraerClaimId(resource) {
-  return String(resource || '').match(/\/claims\/([A-Za-z0-9_-]+)(?:[\/?#]|$)/)?.[1] || null;
+  return String(resource || '').match(/\/claims\/([A-Za-z0-9_-]+)(?:[/?#]|$)/)?.[1] || null;
 }
 
 function guardarReclamoMinimo(db, id, recurso, backboneEvent = null, leaseGuard = null) {
@@ -241,9 +241,36 @@ export async function reconciliarPreguntasMl(db, mlCfg, { limite = 50 } = {}) {
       if (!existia) recuperadas += 1;
     }
   })();
-  // Sólo se avisa cuando hubo algo que recuperar: si el webhook está cubriendo, esto es mudo.
-  if (recuperadas) console.log(`[reconciliar-preguntas] ${recuperadas} pregunta(s) que el webhook no trajo, de ${vistas} accionables (${descartadas} descartada(s) por eliminada/retenida)`);
-  return { omitido: false, vistas, recuperadas, descartadas, total_ml: resp.data.total ?? null };
+  // Y CERRAR las que ya no están sin responder. Sin esto la red sólo agrega: una pregunta que
+  // se contesta después queda como pendiente para siempre y le fabrica trabajo falso al
+  // operario. Lo detectó el usuario el 2026-09-06 — cuatro de las que le mostramos ya estaban
+  // respondidas en ML.
+  //
+  // ML sólo devuelve las UNANSWERED, así que su lista es la autoridad de "sigue sin responder".
+  // Guarda importante: si el total supera lo que trajo esta página, NO se cierra nada — una
+  // pregunta ausente podría estar en la página siguiente y no respondida, y cerrarla sería
+  // afirmar algo que no sabemos.
+  const totalMl = resp.data.total ?? null;
+  const completa = totalMl == null || totalMl <= resp.data.questions.length;
+  let cerradas = 0;
+  if (completa) {
+    const vivas = new Set(resp.data.questions.map((q) => String(q.id)));
+    const nuestras = db.prepare("SELECT id FROM ml_preguntas WHERE estado='UNANSWERED'").all();
+    const cerrar = db.prepare("UPDATE ml_preguntas SET estado='ANSWERED', respondida_en=?, actualizado_en=? WHERE id=?");
+    db.transaction(() => {
+      for (const r of nuestras) {
+        if (vivas.has(String(r.id))) continue;
+        cerrar.run(ts, ts, r.id);
+        cerradas += 1;
+      }
+    })();
+  }
+
+  // Sólo se avisa cuando hubo algo que hacer: si el webhook está cubriendo, esto es mudo.
+  if (recuperadas || cerradas) {
+    console.log(`[reconciliar-preguntas] +${recuperadas} recuperada(s), -${cerradas} ya respondida(s), de ${vistas} accionables (${descartadas} descartada(s))`);
+  }
+  return { omitido: false, vistas, recuperadas, cerradas, descartadas, total_ml: totalMl };
 }
 
 export async function ingerirPregunta(db, mlCfg, resource, backboneEvent = null, options = {}) {

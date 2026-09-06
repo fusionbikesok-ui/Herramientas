@@ -50,7 +50,8 @@ describe('UM1 identidad de productos', () => {
   let db;
   beforeEach(() => { db = openDb(FILE); });
   afterEach(() => {
-    try { db.close(); } catch {}
+    // Puede estar ya cerrada si el caso la cerró: cerrar dos veces no es un error acá.
+    try { db.close(); } catch { /* ya estaba cerrada */ }
     for (const suffix of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${suffix}`)) fs.unlinkSync(`${FILE}${suffix}`);
   });
 
@@ -499,6 +500,21 @@ describe('UM1 identidad de productos', () => {
     expect(conflictos).toHaveLength(1);
     expect(conflictos[0].user_product_id).toBe('MLAU-COMPARTIDO');
     expect(conflictos[0].productos).toBe(2);
+  });
+
+  // El caso conserva su producto_id aunque la publicación pierda el SELLER_SKU en ML. Sin
+  // filtrarlo se reportaba un conflicto que ya no reclama nada — pasó con el par de horquillas.
+  it('una publicación que perdió su SELLER_SKU no sostiene un conflicto', () => {
+    woo(db, { id: 83, sku: 'FB-83', stock: 1 });
+    woo(db, { id: 84, sku: 'FB-84', stock: 1 });
+    ml(db, { clave: 'MLA83|', sku: 'FB-83', stock: 1 });
+    ml(db, { clave: 'MLA84|', sku: 'FB-84', stock: 1 });
+    db.prepare("UPDATE ml_publicaciones_cache SET user_product_id='MLAU-SIN-SKU' WHERE clave IN ('MLA83|','MLA84|')").run();
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    expect(conflictosDeBolsaCompartida(db)).toHaveLength(1);
+    // ML deja de declarar el SELLER_SKU en ambas: el caso viejo sigue, pero ya no hay conflicto.
+    db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='' WHERE clave IN ('MLA83|','MLA84|')").run();
+    expect(conflictosDeBolsaCompartida(db)).toHaveLength(0);
   });
 
   it('compartir bolsa apuntando al MISMO producto no es conflicto', () => {

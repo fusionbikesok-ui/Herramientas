@@ -643,6 +643,41 @@ describe('red de reconciliación de preguntas', () => {
     db.close();
   });
 
+  // La red solo agregaba: una pregunta contestada despues quedaba pendiente para siempre y le
+  // fabricaba trabajo falso al operario. Lo detecto el usuario el 2026-09-06 — cuatro de las
+  // que le mostrabamos ya estaban respondidas en ML.
+  it('cierra las que ML ya no lista como sin responder', async () => {
+    const db = openDb(':memory:');
+    mlFetch.mockResolvedValue(respuesta([
+      { id: 1, item_id: 'MLA1', text: 'sigue viva', status: 'UNANSWERED', date_created: '2026-09-01T10:00:00Z' },
+      { id: 2, item_id: 'MLA2', text: 'la contestan luego', status: 'UNANSWERED', date_created: '2026-09-01T11:00:00Z' },
+    ]));
+    await reconciliarPreguntasMl(db, CFG);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_preguntas WHERE estado='UNANSWERED'").get().n).toBe(2);
+    // La 2 se responde en ML: deja de aparecer en la lista de sin responder.
+    mlFetch.mockResolvedValue(respuesta([
+      { id: 1, item_id: 'MLA1', text: 'sigue viva', status: 'UNANSWERED', date_created: '2026-09-01T10:00:00Z' },
+    ]));
+    const r = await reconciliarPreguntasMl(db, CFG);
+    expect(r.cerradas).toBe(1);
+    expect(db.prepare('SELECT estado FROM ml_preguntas WHERE id=2').get().estado).toBe('ANSWERED');
+    expect(db.prepare('SELECT estado FROM ml_preguntas WHERE id=1').get().estado).toBe('UNANSWERED');
+    db.close();
+  });
+
+  // Si ML dice que hay mas de las que trajo esta pagina, una ausente puede estar en la
+  // siguiente y seguir sin responder. Cerrarla seria afirmar algo que no sabemos.
+  it('no cierra nada si la pagina no trajo el total', async () => {
+    const db = openDb(':memory:');
+    mlFetch.mockResolvedValue(respuesta([{ id: 1, item_id: 'MLA1', text: 'a', status: 'UNANSWERED', date_created: '2026-09-01T10:00:00Z' }]));
+    await reconciliarPreguntasMl(db, CFG);
+    mlFetch.mockResolvedValue(respuesta([{ id: 9, item_id: 'MLA9', text: 'b', status: 'UNANSWERED', date_created: '2026-09-02T10:00:00Z' }], 80));
+    const r = await reconciliarPreguntasMl(db, CFG);
+    expect(r.cerradas).toBe(0);
+    expect(db.prepare('SELECT estado FROM ml_preguntas WHERE id=1').get().estado).toBe('UNANSWERED');
+    db.close();
+  });
+
   it('es idempotente: correrla de nuevo no cuenta recuperadas', async () => {
     const db = openDb(':memory:');
     mlFetch.mockResolvedValue(respuesta([{ id: 1, item_id: 'MLA1', text: 'hola', status: 'UNANSWERED', date_created: '2026-03-29T03:48:47Z' }]));

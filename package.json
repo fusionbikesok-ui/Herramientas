@@ -18,7 +18,9 @@
     "e2e:um11:responsive": "for width in 390 768 1440; do UM11_VIEWPORT_WIDTH=$width node scripts/um11-browser-smoke.mjs || exit 1; done",
     "e2e:um1:responsive": "for width in 390 768 1440; do UM1_VIEWPORT_WIDTH=$width node scripts/um1-browser-smoke.mjs || exit 1; done",
     "audit": "node scripts/audit-matcher.mjs",
-    "cerrar-preparaciones-sin-evidencia": "node scripts/cerrar-preparaciones-sin-evidencia.mjs"
+    "cerrar-preparaciones-sin-evidencia": "node scripts/cerrar-preparaciones-sin-evidencia.mjs",
+    "lint": "eslint .",
+    "lint:diff": "bash -c 'base=$(git merge-base origin/conteo-confiable HEAD); f=$(git diff --name-only --diff-filter=ACMR $base -- \"*.js\" \"*.mjs\"); [ -z \"$f\" ] && echo \"sin archivos JS en el diff\" || npx eslint $f'"
   },
   "keywords": [],
   "author": "",
@@ -39,7 +41,10 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "axe-core": "^4.13.0",
+    "eslint": "^10.10.0",
+    "globals": "^17.12.0",
     "playwright": "^1.62.1",
     "supertest": "^7.2.2",
     "vitest": "^4.1.9"
