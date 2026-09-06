@@ -203,6 +203,13 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   // revocable por dispositivo. Se monta antes del guard del panel /api.
   const mobileAuth = mobileAuthMiddleware(db, mobileSecret);
   const mobileNotificationsAuth = [mobileAuth, mobileRequirePermission('notificaciones-ml')];
+  // Versión del contrato, ANTES de la autenticación: una app que quedó vieja tiene que poder
+  // enterarse de que debe actualizarse sin necesidad de una sesión válida —si el contrato
+  // cambió, su login puede ser justamente lo que ya no funciona—.
+  app.get('/api/v1/meta', async (req, res) => {
+    const { estadoCompatibilidad } = await import('./lib/contratoMovil.js');
+    res.json({ ok: true, ...estadoCompatibilidad(req.query.app_version || req.get('x-app-version')) });
+  });
   app.use('/api/v1/auth', mobileAuthRouter(db, mobileSecret));
   app.get('/api/v1/me', mobileAuth, mobileMeHandler(db));
   app.use('/api/v1/devices', devicesRouter(db, mobileAuth));
