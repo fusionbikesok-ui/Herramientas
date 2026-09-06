@@ -337,3 +337,71 @@ describe('archivado de identidades ML huérfanas', () => {
     expect(db.prepare("SELECT COUNT(*) n FROM identidades_canal WHERE canal='ml'").get().n).toBe(1);
   });
 });
+
+describe('el historial registra cambios, no cada corrida', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  // La observación tiene que ser RECIENTE: la verificación exige que la lectura de ML esté
+  // dentro de la ventana de frescura, así que una fecha fija del pasado nunca verifica.
+  const fresco = () => new Date().toISOString();
+  function conPublicacion(stock = 3) {
+    woo(db, { id: 60, sku: 'FB-60', stock });
+    bootstrapProductosFusion(db);
+    db.prepare(`INSERT INTO ml_publicaciones_cache
+      (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,available_quantity,canales_json,atributos_json,actualizado_en)
+      VALUES ('MLA60|','MLA60','','Publicación','active','FB-60',1,?,'["marketplace"]','[]',?)`).run(stock, fresco());
+  }
+  const cuantos = () => db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento='identidad_verificada'").get().n;
+
+  it('anota la primera verificación', () => {
+    conPublicacion();
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    expect(cuantos()).toBe(1);
+  });
+
+  it('no vuelve a anotar cuando nada cambió', () => {
+    // Con 1130 claves y un scan cada 20 minutos, anotar siempre son ~81.000 filas por día:
+    // sepulta los eventos que sí importan.
+    conPublicacion();
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    expect(cuantos()).toBe(1);
+  });
+
+  it('vuelve a anotar cuando cambia la identidad', () => {
+    // La huella es de IDENTIDAD —SKU, GTIN, la clave—, no de stock: que cambie la cantidad no
+    // convierte a la publicación en otro producto, y por eso no ensucia el historial.
+    conPublicacion(3);
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    db.prepare("UPDATE ml_publicaciones_cache SET gtin='602883701731', actualizado_en=? WHERE clave='MLA60|'").run(fresco());
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    expect(cuantos()).toBe(2);
+  });
+
+  it('un cambio de stock no cuenta como cambio de identidad', () => {
+    conPublicacion(3);
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    db.prepare("UPDATE catalogo_cache SET stock=9 WHERE id_woo=60").run();
+    db.prepare("UPDATE ml_publicaciones_cache SET available_quantity=9, actualizado_en=? WHERE clave='MLA60|'").run(fresco());
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    expect(cuantos()).toBe(1);
+  });
+
+  it('la identidad se sigue refrescando aunque no se anote', () => {
+    // Lo que se dejó de registrar es el evento, no la observación: `observado_en` y el stock
+    // tienen que seguir al día o la frescura mentiría.
+    conPublicacion(3);
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+    db.prepare("UPDATE catalogo_cache SET stock=7 WHERE id_woo=60").run();
+    db.prepare("UPDATE ml_publicaciones_cache SET available_quantity=7, actualizado_en=? WHERE clave='MLA60|'").run(fresco());
+    auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
+
+    expect(db.prepare("SELECT stock_observado FROM identidades_canal WHERE canal='ml'").get().stock_observado).toBe(7);
+  });
+});
