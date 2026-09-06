@@ -54,7 +54,7 @@ describe('API móvil — sesiones, asociación y rate limit', () => {
     expect(res.status).toBe(422);
     expect(res.body.error).toEqual({
       code: 'body_invalido',
-      message: 'device_id no puede combinarse con platform, push_token o device_name',
+      message: 'device_id no puede combinarse con platform, push_token, device_name o device_uid',
     });
     expect(db.prepare('SELECT COUNT(*) AS n FROM device_tokens').get().n).toBe(0);
     db.close();

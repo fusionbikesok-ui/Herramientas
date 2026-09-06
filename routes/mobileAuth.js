@@ -44,10 +44,10 @@ function crearRefresh(db, userId, deviceId) {
 
 function deviceFromLogin(db, userId, body) {
   if (body.device_id != null) {
-    if (body.platform != null || body.push_token != null || body.device_name != null) {
+    if (body.platform != null || body.push_token != null || body.device_name != null || body.device_uid != null) {
       return {
         code: 'body_invalido',
-        error: 'device_id no puede combinarse con platform, push_token o device_name',
+        error: 'device_id no puede combinarse con platform, push_token, device_name o device_uid',
       };
     }
     const textId = String(body.device_id);
@@ -58,8 +58,32 @@ function deviceFromLogin(db, userId, body) {
     if (!device) return { error: 'device_id inválido o no pertenece al usuario' };
     return { id: device.id };
   }
+  // `device_uid`: identificador propio de la instalación, que la app genera y guarda en su
+  // almacén seguro. Existe para que rechazar las notificaciones en el iPhone no impida
+  // trabajar (decisión del usuario, 2026-09-06): antes la única forma de registrar un
+  // dispositivo era con un push_token, así que negar el permiso dejaba a la persona afuera por
+  // una decisión del sistema operativo. Se guarda con prefijo para no confundirlo nunca con un
+  // token de push real, y cuando la app consigue el push lo actualiza por /devices.
+  if ((typeof body.push_token !== 'string' || !body.push_token.trim())
+      && typeof body.device_uid === 'string' && body.device_uid.trim()) {
+    if (!['ios', 'android', 'web'].includes(body.platform)) return { error: 'platform inválido' };
+    const uid = `uid:${body.device_uid.trim()}`.slice(0, 255);
+    const ts0 = now();
+    const previo = db.prepare('SELECT id, user_id FROM device_tokens WHERE token = ? AND revocado_en IS NULL').get(uid);
+    if (previo && previo.user_id !== userId) {
+      // El mismo aparato con otra cuenta: se revoca el registro anterior en vez de reusarlo, o
+      // las notificaciones de una persona llegarían a la sesión de otra.
+      db.prepare('UPDATE device_tokens SET revocado_en = ?, actualizado_en = ? WHERE id = ?').run(ts0, ts0, previo.id);
+    } else if (previo) {
+      db.prepare('UPDATE device_tokens SET actualizado_en = ? WHERE id = ?').run(ts0, previo.id);
+      return { id: previo.id };
+    }
+    const ins = db.prepare(`INSERT INTO device_tokens (user_id, token, plataforma, nombre_dispositivo, creado_en, actualizado_en)
+      VALUES (?,?,?,?,?,?)`).run(userId, uid, body.platform, body.device_name || null, ts0, ts0);
+    return { id: Number(ins.lastInsertRowid) };
+  }
   if (typeof body.push_token !== 'string' || !body.push_token.trim()) {
-    return { error: 'device_id o push_token son requeridos' };
+    return { error: 'device_id, push_token o device_uid son requeridos' };
   }
   if (!['ios', 'android', 'web'].includes(body.platform)) return { error: 'platform inválido' };
   const token = body.push_token.trim();
@@ -92,16 +116,25 @@ export function mobileAuthRouter(db, secret) {
   const router = express.Router();
 
   router.post('/login', (req, res) => {
-    const { username, password } = req.body || {};
-    if (!username || !password) return error(res, 422, 'body_invalido', 'username y password son requeridos');
-    const rateLimitKey = claveRateLimit(username, req.ip);
+    // Se acepta `username` o `email` en cualquiera de los dos campos (decisión del usuario,
+    // 2026-09-06): en el celular la gente escribe lo que recuerda. Al 2026-09-06 sólo 1 de los
+    // 8 usuarios activos tiene email cargado, así que el usuario sigue siendo la vía principal.
+    const body = req.body || {};
+    const identificador = body.username || body.email;
+    const { password } = body;
+    if (!identificador || !password) return error(res, 422, 'body_invalido', 'usuario (o email) y password son requeridos');
+    const rateLimitKey = claveRateLimit(identificador, req.ip);
     const lockedUntil = loginBloqueado(rateLimitKey, req.ip);
     if (lockedUntil) {
       res.set('Retry-After', String(Math.ceil((lockedUntil - Date.now()) / 1000)));
       return error(res, 429, 'demasiados_intentos', 'Demasiados intentos fallidos. Esperá antes de reintentar');
     }
-    const row = db.prepare('SELECT id, username, pass_hash, activo FROM users WHERE username = ? COLLATE NOCASE')
-      .get(String(username).trim());
+    // El usuario gana sobre el email a propósito: si alguna vez el email de una persona
+    // coincidiera con el usuario de otra, entrar como quien no se es sería mucho peor que no
+    // entrar. Hoy no hay ninguna colisión, y este orden hace que siga sin haberla.
+    const buscado = String(identificador).trim();
+    const row = db.prepare('SELECT id, username, pass_hash, activo FROM users WHERE username = ? COLLATE NOCASE').get(buscado)
+      || db.prepare("SELECT id, username, pass_hash, activo FROM users WHERE TRIM(COALESCE(email,'')) <> '' AND email = ? COLLATE NOCASE").get(buscado);
     if (!row || !row.activo || !verifyPassword(password, row.pass_hash)) {
       registrarLoginFallido(rateLimitKey, req.ip);
       return error(res, 401, 'credenciales_invalidas', 'Usuario o contraseña incorrectos');

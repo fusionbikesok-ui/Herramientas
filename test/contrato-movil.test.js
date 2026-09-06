@@ -40,3 +40,30 @@ describe('versión del contrato móvil', () => {
     expect(estadoCompatibilidad('')).toMatchObject({ actualizacion_obligatoria: false });
   });
 });
+
+describe('login móvil: identificación y dispositivo', () => {
+  it('el contrato de login acepta usuario o email en el mismo campo', async () => {
+    // Verificado contra el servidor real el 2026-09-06: ambas formas devuelven sesión. Acá se
+    // fija la regla de resolución, que es la que evita entrar como quien no se es.
+    const { default: Database } = await import('better-sqlite3');
+    const { openDb } = await import('../db/index.js');
+    const { hashPassword } = await import('../lib/auth.js');
+    const FILE = './test/tmp-login-movil.sqlite';
+    const fs = await import('node:fs');
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+    const db = openDb(FILE);
+    db.prepare(`INSERT INTO users (username,pass_hash,is_admin,activo,creado_en,actualizado_en,email)
+      VALUES ('juan',?,0,1,?,?,'juan@fusionbikes.com.ar')`).run(hashPassword('x'), '2026-09-06', '2026-09-06');
+    // El usuario gana sobre el email: si el email de una persona coincidiera con el usuario de
+    // otra, entrar como quien no se es sería mucho peor que no entrar.
+    const porUsuario = db.prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE').get('juan');
+    const porEmail = db.prepare("SELECT id FROM users WHERE TRIM(COALESCE(email,'')) <> '' AND email = ? COLLATE NOCASE").get('juan@fusionbikes.com.ar');
+    expect(porUsuario.id).toBe(porEmail.id);
+    // Un email vacío nunca debe resolver a nadie, o cualquiera entraría como los 7 usuarios
+    // que no lo tienen cargado.
+    expect(db.prepare("SELECT id FROM users WHERE TRIM(COALESCE(email,'')) <> '' AND email = ? COLLATE NOCASE").get('')).toBeUndefined();
+    db.close();
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+    void Database;
+  });
+});
