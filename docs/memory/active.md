@@ -84,6 +84,21 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 ## Reglas inmediatas
 
+- **Verificar el artefacto, no la señal que lo representa.** Es el error que más veces se repitió
+  el 2026-09-05/06, siempre con la misma forma: un test verde no prueba que el código se ejecute
+  (un `catch` se tragaba un `ReferenceError` y la función nunca corría); un `200` de ML no prueba
+  que la escritura se aplicó (el sync logueaba `ok` sobre publicaciones que nunca cambiaban); un
+  script que imprime `ok` no prueba que el archivo quedó válido (tres archivos rotos con `,,`
+  por el mismo patrón de inserción de imports por regex, que hay que dejar de usar). Después de
+  cada edición hay que mirar la cosa —`node --check` sobre TODOS los archivos tocados, incluidos
+  los de test; el valor leído de vuelta, no el mensaje de la herramienta—, sin excepciones por
+  categoría: aplicar la verificación solo a los archivos "importantes" es peor que no tenerla,
+  porque da sensación de cobertura.
+- **Toda hipótesis se contrasta contra un número y contra la documentación oficial de ML o Woo**
+  (regla del usuario, 2026-09-06). Las tres causas raíz que resultaron falsas ese día —«es por
+  `user_product_id`» (lo tiene el 94%), «es por `catalog_listing`» (uno de tres), «los dead
+  letters son de un solo día» (seguían llegando)— cayeron todas contra una medición, no contra
+  un razonamiento. Si una causa raíz se enuncia sin un número al lado, todavía no está probada.
 - No declarar terminada una entrega por existir código o numeración previa.
 - Los agentes son especialistas opt-in: no hay pipeline, handoff formal, modelo/esfuerzo prescrito
   ni gates automáticos. Diseño se invoca al diseñar; revisión, testing, E2E y auditoría solo de
