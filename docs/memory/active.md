@@ -84,6 +84,15 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 ## Reglas inmediatas
 
+- **Un backup previo a un despliegue se guarda como `fusion-<AAAAMMDD>-<HHMMSS>-predeploy.sqlite.gz`,
+  en `/opt/fusionbikes/backups/db/`.** La rotación de `backups/backup.sh` borra a los 14 días lo que
+  coincide con `fusion-*.sqlite.gz`; cualquier otro nombre —o el mismo sin comprimir— queda en disco
+  para siempre. Pasó el 2026-09-06: tres backups pre-despliegue sin `.gz` sumaban 292 MB que ninguna
+  regla iba a limpiar. Nunca dejar copias en `data/`, que es donde vive la base productiva: ahí se
+  habían acumulado 22 copias ad-hoc de sesiones anteriores, 1,6 GB. El sistema de backups **sí tiene
+  retención** (14 días local, 30 en la nube, con snapshot consistente y DR cifrado); lo que faltaba
+  era respetar su convención de nombres.
+
 - **Nunca matar procesos por patrón de cmdline; siempre por PID verificado.** El 2026-09-06 se
   corrió `pkill -f "node server.js"` para bajar un servidor de prueba, y ése es exactamente el
   cmdline del servidor productivo. No lo mató por casualidad —pm2 lo lanza vía `start.sh`—, no
