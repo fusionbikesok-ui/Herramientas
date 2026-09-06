@@ -21,21 +21,39 @@
  *  - Una pantalla puede extender una clase, no redefinirla.
  */
 
-/* ── Escala tipográfica ──────────────────────────────────────────────────────
-   Cinco escalones reales. La escala vieja (1.08 / .88 / .8rem) comprimía todo en
-   0.28rem de rango: nada se leía como más importante que otra cosa. */
+/* ── Escala tipográfica FLUIDA ───────────────────────────────────────────────
+   Razón 1.25 desde un cuerpo de 14px. Cinco escalones que se distinguen de verdad:
+   la escala vieja (1.08 / .88 / .8rem) comprimía todo en 0.28rem de rango y por eso
+   nada se leía como más importante que otra cosa.
+
+   Fluida con `clamp()`, no por breakpoints. Diseñar para 390/768/1440 hace que el
+   layout salte en tres puntos y esté mal en todos los demás; esos tres anchos son
+   donde se VERIFICA, no para los que se diseña. Entre el mínimo y el máximo el
+   tamaño se interpola con el viewport y no hay ningún salto.
+
+   El título usa tracking negativo: a partir de ~20px el espaciado por defecto se lee
+   como documento, no como interfaz. */
 :root {
-  --fs-titulo: 1.25rem;   /* título de la entidad que se está trabajando */
-  --fs-dato:   0.95rem;   /* dato que decide: SKU, GTIN, identificador */
-  --fs-cuerpo: 0.875rem;  /* dato de apoyo */
-  --fs-meta:   0.8rem;    /* metadatos, telemetría, detalle colapsado */
-  --fs-label:  0.75rem;   /* etiqueta de campo */
+  --fs-titulo: clamp(1.15rem, 0.95rem + 0.9vw, 1.55rem); /* la entidad que se trabaja */
+  --fs-dato:   clamp(0.9rem, 0.85rem + 0.2vw, 1rem);     /* el dato que decide: SKU, GTIN */
+  --fs-cuerpo: clamp(0.85rem, 0.82rem + 0.12vw, 0.9rem); /* dato de apoyo */
+  --fs-meta:   clamp(0.78rem, 0.76rem + 0.1vw, 0.82rem); /* metadatos, telemetría */
+  --fs-label:  0.72rem;                                   /* etiqueta de campo: no crece */
+
+  /* Espaciado: base 4px. El de sección respira con el ancho; el de componente no,
+     porque un botón no debe engordar porque la pantalla sea grande. */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;  --sp-4: 16px;
+  --sp-seccion: clamp(16px, 2.2vw, 28px);
+  --medida:     68ch;   /* medida de lectura máxima para texto corrido */
 }
+
+/* Un número que cambia no debe mover lo que tiene al lado. */
+.ui-num, .ui-id, .ui-table td { font-variant-numeric: tabular-nums; }
 
 /* ── Botones ────────────────────────────────────────────────────────────────
    Tres pesos y ninguna ambigüedad: en una pantalla hay UNA acción primaria.
    La primaria usa fondo tenue + borde + texto de acento en vez de fondo sólido:
-   texto claro sobre #2DB8E8 sólido da ~1.9:1 y no pasa AA. Así se logra el peso
+   texto claro sobre el acento sólido no pasa AA. Así se logra el peso
    visual sin inventar un token de texto-sobre-acento. */
 .ui-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
@@ -129,3 +147,24 @@
 .ui-btn:focus-visible, .ui-input:focus-visible, .ui-mas > summary:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
+
+/* ── La firma: lo que difiere se pinta, lo que coincide se apaga ─────────────
+   Esta idea NO es nueva: existía en `public/cobertura/index.html` (`.tok-match`,
+   `.tok-diff`, `.tok-discriminant`) con sus tokens ya calibrados, y quedó enterrada
+   cuando Cobertura pasó a modo consulta y su pantalla dejó de ser alcanzable. Se
+   rescata acá para que la tenga cualquier pantalla, en vez de reinventarla.
+
+   Por qué importa en esta herramienta y no en cualquiera: el trabajo es distinguir
+   gemelos. Una maza de 28H y una de 32H, una horquilla Boost y una estándar, una
+   cadena y su versión OEM. El 2026-09-05 tres pares de esos compartían bolsa de
+   stock en ML sin que nadie lo viera, y en la pantalla el dato que los separaba
+   pesaba exactamente lo mismo que el resto del título.
+
+   Regla: el color señala LA DIFERENCIA, no el estado. Lo que coincide se atenúa. */
+.ui-igual     { color: var(--tok-match-txt); }
+.ui-difiere   { color: var(--tok-diff-txt); background: var(--tok-diff-bg);
+                border-bottom: 1px dashed var(--tok-diff-bd); font-weight: 600; padding: 0 2px; }
+/* Discriminante = difiere Y es lo que decide la identidad: medida, modelo, marca. */
+.ui-discrimina{ color: var(--tok-discriminant-txt); background: var(--tok-discriminant-bg);
+                border: 1px solid var(--tok-discriminant-bd); border-radius: 4px;
+                font-weight: 700; padding: 0 4px; font-family: var(--tok-discriminant-font); }

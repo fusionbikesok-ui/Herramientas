@@ -28,16 +28,27 @@
     .tabs{display:flex;gap:.45rem;overflow:auto;padding-bottom:.6rem;margin-bottom:.5rem}
     .tab{white-space:nowrap;background:transparent}
     .tab[aria-selected="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
-    .view{display:grid;grid-template-columns:minmax(280px,340px) 1fr;gap:1rem;align-items:start}
+    .wrap{container-type:inline-size}
+    /* La cola y el detalle conviven sólo si ENTRAN los dos: la cola pide 280px y el detalle
+       380px. Por debajo de eso no hay layout que los salve, así que el caso pasa a ocupar
+       todo. Se pregunta por el ancho del CONTENEDOR y no del viewport: el componente debe
+       responder al espacio que tiene, no al tamaño de la pantalla. */
+    .view{display:grid;grid-template-columns:1fr;gap:var(--sp-4);align-items:start}
+    @container (min-width: 44rem){
+      .view{grid-template-columns:minmax(280px,clamp(280px,26cqw,380px)) 1fr}
+      .view.has-detail .side{display:block}
+      .view:not(.has-detail) .detail-col{display:block}
+      .back{display:none}
+    }
     /* El ancho extra se gasta en poner ML y Woo lado a lado, que es la comparación que la
        persona tiene que hacer, en vez de estirar una sola columna de texto. */
-    .comparador{display:grid;grid-template-columns:1fr;gap:.8rem;align-items:start}
-    .col-comp{display:flex;flex-direction:column;gap:.8rem;min-width:0}
+    /* Sin breakpoint: pasa a dos columnas apenas entran dos de 26rem, a cualquier ancho.
+       Un `@media(min-width:1200px)` acomodaba la comparación en tres puntos y la dejaba mal
+       en todos los demás. `min(100%,26rem)` evita el desborde en contenedores angostos. */
+    .comparador{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr));
+                gap:var(--sp-3);align-items:start}
+    .col-comp{display:flex;flex-direction:column;gap:var(--sp-3);min-width:0}
     .col-comp .panel{margin-bottom:0}
-    /* ML trae más campos que Woo aun con el resto colapsado: 55/45 reduce el vacío
-       sin fabricar contenido del lado Woo. */
-    @media(min-width:1200px){ .comparador{grid-template-columns:55fr 45fr} }
-    @media(min-width:1800px){ .view{grid-template-columns:minmax(300px,380px) 1fr} }
     .card{background:var(--surface);border:1px solid var(--border);border-radius:10px}
     .side{max-height:72vh;overflow:auto}
     .card-head{padding:.75rem .85rem;border-bottom:1px solid var(--border)}
@@ -77,7 +88,8 @@
     .attrs-bloque b{display:inline}
     .attr{display:block;color:var(--txt);margin-top:.18rem}
     .aviso{margin-bottom:.85rem;padding:.7rem .85rem;border:1px solid var(--green-bd);border-radius:9px;background:var(--green-bg);color:var(--green)}
-    @media(max-width:850px){.foto{width:84px;height:84px}}
+    /* La foto crece con el espacio disponible en vez de saltar en un ancho concreto. */
+    .foto{width:clamp(84px,9cqw,120px);height:clamp(84px,9cqw,120px)}
     .search-row{display:flex;gap:.5rem}
     .search-row input{flex:1;min-width:0}
     .opciones{max-height:340px;overflow:auto;margin-top:.6rem}
@@ -94,16 +106,14 @@
     .conflicto{margin-top:.6rem;padding:.7rem;border:1px solid var(--red-bd);border-radius:8px;background:var(--red-bg);font-size:.88rem;line-height:1.55}
     .ambiguo{margin-top:.6rem;padding:.6rem;border:1px solid var(--amber-bd);border-radius:8px;background:var(--amber-bg);font-size:.86rem}
     .previa{margin-top:.6rem;padding:.7rem;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);font-size:.88rem;line-height:1.6}
-    @media(max-width:850px){.opcion{grid-template-columns:56px 1fr}.opcion .btn{grid-column:2}}
-    @media(max-width:850px){
+    @container (max-width: 44rem){.opcion{grid-template-columns:56px 1fr}.opcion .btn{grid-column:2}}
+    /* Estrecho: un caso a pantalla completa. La cola y el detalle no conviven si no entran. */
+    .view.has-detail .side{display:none}
+    .view:not(.has-detail) .detail-col{display:none}
+    .back{display:inline-flex}
+    .side{max-height:none}
+    @container (max-width: 44rem){
       .health{grid-template-columns:1fr}
-      .view{grid-template-columns:1fr}
-      .side{max-height:none}
-      .top{padding:.55rem}.wrap{padding:.75rem}
-      /* Un caso a pantalla completa: la cola y el detalle no conviven en móvil. */
-      .view.has-detail .side{display:none}
-      .view:not(.has-detail) .detail-col{display:none}
-      .back{display:inline-flex}
     }
   </style>
 </head>

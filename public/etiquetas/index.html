@@ -27,7 +27,7 @@
   .panel p { font-size:13px; color:var(--muted); margin:4px 0; line-height:1.4; }
   textarea { width:100%; height:150px; font-family:'Courier New',monospace; font-size:13px;
              padding:10px; border:1px solid var(--border2); border-radius:8px; background:var(--surface2); color:var(--text); }
-  textarea:focus, select:focus, input:focus { outline:none; border-color:var(--azul); box-shadow:0 0 0 3px rgba(45,184,232,.15); }
+  textarea:focus, select:focus, input:focus { outline:none; border-color:var(--azul); box-shadow:0 0 0 3px rgba(42,197,176,.15); }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
   label.fld { font-size:13px; color:var(--muted); }
   select, input[type=number] { background:var(--surface2); color:var(--text); border:1px solid var(--border2); border-radius:6px; padding:5px 8px; font-size:13px; }
@@ -45,7 +45,7 @@
          padding:7px 16px; cursor:pointer; font-size:13px; transition:all .15s; }
   .tab:hover { color:var(--text); border-color:var(--azul); }
   .tab:focus-visible { outline:2px solid var(--azul); outline-offset:2px; }
-  .tab.activa { background:rgba(45,184,232,.12); color:var(--azul); border-color:var(--azul); font-weight:700; }
+  .tab.activa { background:rgba(42,197,176,.12); color:var(--azul); border-color:var(--azul); font-weight:700; }
   .bloque { border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:12px; background:var(--surface); }
   .bloque.oculto { display:none; }
   .bloque p { margin:0 0 8px; }
@@ -62,7 +62,7 @@
   #catBuscar { width:100%; font-size:14px; padding:8px 10px; margin-bottom:8px; }
   .catRes { max-height:320px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; }
   .catFila { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border); font-size:13px; transition:background .15s; }
-  .catFila:hover { background:rgba(45,184,232,.06); }
+  .catFila:hover { background:rgba(42,197,176,.06); }
   .catFila:last-child { border-bottom:0; }
   .catFila .csku { font-family:'Courier New',monospace; color:var(--azul); font-weight:700; min-width:100px; }
   .catFila .cnom { flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -121,7 +121,7 @@
 <body>
 
 <div class="panel">
-  <a href="/herramientas/home/" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#8493B0;text-decoration:none;margin-bottom:12px">&larr; Inicio</a>
+  <a href="/herramientas/home/" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#8A867E;text-decoration:none;margin-bottom:12px">&larr; Inicio</a>
   <div class="page-head">
     <div class="page-eyebrow">
       <span class="brand-badge"><b class="bb-t">Fusion</b><b class="bb-b">Bikes</b></span>
@@ -146,7 +146,7 @@
     <p>Buscá por SKU o nombre en el catálogo de WooCommerce (se sincroniza cada 15 min). Agregar
        usa el título real del producto — sin errores de tipeo.</p>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-      <div id="catEstado" style="flex:1;font-size:12px;color:#8493B0">Cargando catálogo…</div>
+      <div id="catEstado" style="flex:1;font-size:12px;color:#8A867E">Cargando catálogo…</div>
       <button class="sec" id="btnRecargar" style="font-size:12px;padding:4px 10px" onclick="recargarCatalogo()" title="Forzar resincronización con WooCommerce ahora">↻ Recargar</button>
     </div>
     <input type="text" id="catBuscar" aria-label="Buscar producto en catálogo" placeholder="Escribí un SKU o parte del nombre…" oninput="buscarCatalogo()" disabled>
@@ -156,7 +156,7 @@
   <div class="bloque oculto" id="bloque-categoria">
     <p>Seleccioná una categoría para ver todos sus productos y agregar etiquetas masivamente.</p>
     <div id="catChipsWrap" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;min-height:32px">
-      <span style="color:#5B6B8C;font-size:12px">Cargando categorías…</span>
+      <span style="color:#63605A;font-size:12px">Cargando categorías…</span>
     </div>
     <div id="catProdWrap" style="display:none">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">

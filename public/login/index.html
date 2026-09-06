@@ -9,15 +9,15 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:          #0C0F16;
-      --surface:     #141A25;
-      --surface2:    #1B2235;
-      --border:      #24304A;
-      --accent:      #2DB8E8;
-      --accent-glow: rgba(45,184,232,.20);
-      --accent-dim:  rgba(45,184,232,.08);
-      --text:        #E4EAF4;
-      --muted:       #7A87A3;
+      --bg:          #0B0B0C;
+      --surface:     #141415;
+      --surface2:    #1D1D1F;
+      --border:      rgba(255,255,255,.07);
+      --accent:      #2AC5B0;
+      --accent-glow: rgba(42,197,176,.20);
+      --accent-dim:  rgba(42,197,176,.08);
+      --text:        #EDEBE7;
+      --muted:       #8A867E;
       --err-bg:      rgba(239,68,68,.1);
       --err-border:  rgba(239,68,68,.25);
       --err-text:    #FCA5A5;
@@ -50,7 +50,7 @@
       content: '';
       position: absolute;
       inset: 0;
-      background-image: radial-gradient(circle, rgba(45,184,232,.12) 1px, transparent 1px);
+      background-image: radial-gradient(circle, rgba(42,197,176,.12) 1px, transparent 1px);
       background-size: 28px 28px;
       -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 100%);
       mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 100%);
@@ -232,7 +232,7 @@
       margin-top: .25rem;
       padding: 12px;
       background: var(--accent);
-      color: #0C0F16;
+      color: #0B0B0C;
       border: none;
       border-radius: 8px;
       font-size: .95rem;
@@ -256,7 +256,7 @@
       width: 16px;
       height: 16px;
       border: 2px solid rgba(12,15,22,.3);
-      border-top-color: #0C0F16;
+      border-top-color: #0B0B0C;
       border-radius: 50%;
       animation: spin .7s linear infinite;
     }

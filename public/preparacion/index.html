@@ -6,9 +6,9 @@
 <title>Preparación de pedidos — Fusion Bikes</title>
 <style>
   :root{
-    --azul:#2DB8E8;--azul-dk:#1C93BD;--oscuro:#0C0F16;
-    --surface:#141A25;--surface2:#1B2235;--border:#24304A;--border2:#2E3B57;
-    --text:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
+    --azul:#2AC5B0;--azul-dk:#1FA593;--oscuro:#0B0B0C;
+    --surface:#141415;--surface2:#1D1D1F;--border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.13);
+    --text:#EDEBE7;--muted:#8A867E;--muted2:#63605A;
     --green:#34D399;--amber:#F5B942;--red:#F87171;--violet:#A78BFA;
     --focus-ring:#67e8f9;
     --tap-comfort:56px;
@@ -40,7 +40,7 @@
   .err{color:var(--red);}
 
   .badge{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;vertical-align:middle;}
-  .b-web{background:rgba(45,184,232,.14);color:var(--azul);}
+  .b-web{background:rgba(42,197,176,.14);color:var(--azul);}
   .b-ml{background:rgba(245,185,66,.14);color:var(--amber);}
   .b-ok{background:rgba(52,211,153,.14);color:var(--green);}
   .b-warn{background:rgba(245,185,66,.14);color:var(--amber);}
@@ -86,7 +86,7 @@
   /* cards de la cola */
   .ped-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
   .ped{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;cursor:pointer;transition:border-color .15s;}
-  .ped.nuevo{border-color:var(--azul);box-shadow:inset 3px 0 0 var(--azul);background:rgba(45,184,232,.08);}
+  .ped.nuevo{border-color:var(--azul);box-shadow:inset 3px 0 0 var(--azul);background:rgba(42,197,176,.08);}
   .ped-nuevo{font-size:10.5px;font-weight:800;letter-spacing:.04em;color:var(--azul);white-space:nowrap;}
   .ped.static{cursor:default;}
   .ped:hover{border-color:var(--azul);}
@@ -141,7 +141,7 @@
   .scanbar{display:flex;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:6px;flex-wrap:wrap;}
   .scanbar input{flex:1;min-width:160px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:9px 12px;font-size:14px;font-family:'Courier New',monospace;}
   .scanbar input:focus{outline:none;border-color:var(--azul);}
-  .aviso{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;background:rgba(45,184,232,.15);color:var(--azul);}
+  .aviso{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;background:rgba(42,197,176,.15);color:var(--azul);}
   .flash{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;}
   .flash.ok{display:block;background:rgba(52,211,153,.15);color:var(--green);}
   .flash.bad{display:block;background:rgba(248,113,113,.15);color:var(--red);}
@@ -231,7 +231,7 @@
   .feed-item{display:grid;grid-template-columns:28px 1fr;gap:10px;padding:10px 10px 10px 0;
     border-top:1px solid var(--act-rail)}
   .feed-item:first-child{border-top:none}
-  .feed-item.nuevo{background:rgba(45,184,232,.08);border-left:3px solid var(--azul);
+  .feed-item.nuevo{background:rgba(42,197,176,.08);border-left:3px solid var(--azul);
     transition:background 1.2s, border-color 1.2s}
   .feed-badge{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px}
   .feed-l1{font-size:13.5px;line-height:1.35}
