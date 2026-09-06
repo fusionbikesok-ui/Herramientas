@@ -18,6 +18,7 @@ import {
   confirmarImpactoIdentidad,
   reintentarOperacionIdentidad,
   conflictosDeBolsaCompartida,
+  clavesEsperandoProteccion,
   conflictosDeIdentificador,
   detalleConflictoIdentificador,
   marcarIdentificadorIncorrecto,
@@ -70,6 +71,9 @@ export function identidadProductosRouter(db) {
       // código, no la fila: resolverlo cierra todas sus filas. Vienen ordenados por stock
       // expuesto en ML, que es por donde se arranca.
       conflictos_gtin: conflictosDeIdentificador(db),
+      // Claves cuyo producto Woo se dio de baja: la publicación de ML sigue viva. La protección
+      // remota (stock cero + bloqueo) es una entrega aparte; esto es lo que ya se detectó.
+      esperando_proteccion: clavesEsperandoProteccion(db),
       colas: { ml_to_fusion: colas.ml_to_fusion.length, woo_to_ml: colas.woo_to_ml.length } } });
   });
   router.get('/casos', exigir(), (req, res) => res.json({ ok: true, data: listarCasosIdentidad(db, req.query) }));

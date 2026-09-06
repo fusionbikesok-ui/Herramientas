@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { protegerPorBajaWoo } from '../lib/identidadProductos.js';
 import express from 'express';
 import { normalizarProductoWc, normalizarVariacionWc, filaCatalogo } from '../lib/modelos/producto.js';
 import { mapConLimite } from '../lib/concurrencia.js';
@@ -471,11 +472,30 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
   }
 
   if (eliminado) {
+    // El SKU se lee ANTES de borrar la fila: después de borrarla no hay de dónde sacarlo, y sin
+    // SKU no se pueden encontrar las publicaciones de ML ni los pedidos que quedaron colgando.
+    const bajas = parentId
+      ? db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_woo=?').all(id)
+      : db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_woo=? OR id_padre=?').all(id, id);
     db.transaction(() => {
       if (parentId) db.prepare('DELETE FROM catalogo_cache WHERE id_woo=?').run(id);
       else db.prepare('DELETE FROM catalogo_cache WHERE id_woo=? OR id_padre=?').run(id, id);
     })();
-    return { producto_id: id, parent_id: parentId ? parent : null, eliminado: true, filas: 0 };
+    // PM-104: un `product.deleted` firmado por Woo ya es la confirmación del origen, así que no
+    // hace falta releer. Esta mitad marca y retiene; poner stock cero y bloquear en ML es una
+    // escritura remota y va en una entrega aparte.
+    let protegidas = 0;
+    for (const b of bajas) {
+      try {
+        const r = protegerPorBajaWoo(db, { idWoo: b.id_woo, sku: b.sku, motivo: 'baja_woo', confirmado: true }, 'webhook_woo');
+        if (r.ok) protegidas += r.claves;
+      } catch (e) {
+        // La protección no puede impedir que el catálogo local refleje la baja: si falla, la
+        // fila ya se borró y el detector de publicaciones sin respaldo lo sigue viendo.
+        console.error('[woo] proteccion por baja no aplicada para', b.id_woo, '-', e.message);
+      }
+    }
+    return { producto_id: id, parent_id: parentId ? parent : null, eliminado: true, filas: 0, claves_protegidas: protegidas };
   }
 
   const productoResp = await wooFetch(cfg, `/products/${parent}?context=view`);
