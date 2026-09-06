@@ -486,6 +486,36 @@ export function notificacionesMlRouter(db) {
     });
   });
 
+  /**
+   * Jobs de integración que agotaron sus reintentos y quedaron muertos.
+   *
+   * Hasta ahora NADA los mostraba ni los reclamaba: un job en `dead_lettered` se quedaba ahí
+   * para siempre y nadie se enteraba. Es la brecha 6 del documento de arquitectura («formalizar
+   * outbox, dead-letter y métricas de eventos perdidos») y la primera evidencia concreta de que
+   * hacía falta fueron 39 mensajes y 3 preguntas muertos que sólo aparecieron porque alguien
+   * fue a mirar la base a mano.
+   *
+   * Se agrupa por tipo y motivo en vez de listar todo: lo que importa operativamente es «qué
+   * clase de cosa está fallando y desde cuándo», no el detalle de cada fila.
+   */
+  router.get('/dead-letters', (req, res) => {
+    const hay = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_jobs'").get();
+    if (!hay) return res.json({ ok: true, total: 0, grupos: [] });
+    const grupos = db.prepare(`
+      SELECT j.job_type, COUNT(*) AS n,
+             MIN(e.received_at) AS primero, MAX(e.received_at) AS ultimo,
+             (SELECT h.safe_message FROM integration_event_history h
+               WHERE h.event_id = j.event_id AND h.to_status='dead_lettered'
+               ORDER BY h.created_at DESC LIMIT 1) AS motivo
+        FROM integration_jobs j
+        JOIN integration_events e ON e.event_id = j.event_id
+       WHERE j.status='dead_lettered'
+       GROUP BY j.job_type
+       ORDER BY n DESC
+    `).all();
+    res.json({ ok: true, total: grupos.reduce((a, g) => a + g.n, 0), grupos });
+  });
+
   // Conteo liviano — pensado para el aviso del Home (mismo patrón que otros contadores
   // livianos del proyecto, ej. push-skus-pendientes/count).
   router.get('/count', (req, res) => {
@@ -509,10 +539,14 @@ export function notificacionesMlRouter(db) {
         WHERE p.item_id = q.item_id
           AND (p.status <> 'active' OR COALESCE(p.available_quantity,0) = 0))
     `).get().n;
+    // Jobs muertos: hasta ahora nada los mostraba. Se cuentan acá para que el aviso del home
+    // pueda decirlo sin pedir el detalle.
+    const hayJobs = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='integration_jobs'").get();
+    const dead = !hayJobs ? 0 : db.prepare("SELECT COUNT(*) n FROM integration_jobs WHERE status='dead_lettered'").get().n;
     const mensajes = db.prepare('SELECT COUNT(*) n FROM ml_mensajes WHERE respondido_en IS NULL').get().n;
     const reclamos = db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE cerrado_en IS NULL AND consultado_en_ml = 1").get().n;
     const reclamosSinConfirmar = db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE consultado_en_ml = 0").get().n;
-    res.json({ ok: true, preguntas, preguntas_sin_stock: preguntasSinStock, mensajes, reclamos, reclamos_sin_confirmar: reclamosSinConfirmar, total: preguntas + mensajes + reclamos });
+    res.json({ ok: true, preguntas, preguntas_sin_stock: preguntasSinStock, dead_letters: dead, mensajes, reclamos, reclamos_sin_confirmar: reclamosSinConfirmar, total: preguntas + mensajes + reclamos });
   });
 
   return router;

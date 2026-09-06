@@ -695,6 +695,28 @@ describe('red de reconciliación de preguntas', () => {
     db.close();
   });
 
+  // Brecha 6 del documento de arquitectura. Hasta ahora un job muerto se quedaba ahi para
+  // siempre y nadie se enteraba: los 39 mensajes y 3 preguntas muertos solo aparecieron porque
+  // alguien fue a mirar la base a mano.
+  it('expone los jobs muertos agrupados por tipo y motivo', async () => {
+    const db = openDb(':memory:');
+    const app = express(); app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
+    const ts = new Date().toISOString();
+    for (const [id, tipo] of [['e1','message.project'], ['e2','message.project'], ['e3','question.project']]) {
+      db.prepare(`INSERT INTO integration_events (event_id,event_type,channel,source,resource_id,received_at,correlation_id,dedupe_key)
+        VALUES (?,'webhook.received','ml','mercadolibre','/x',?,?,?)`).run(id, ts, 'c'+id, 'd'+id);
+      db.prepare("INSERT INTO integration_jobs (event_id,job_type,available_at,status) VALUES (?,?,?,'dead_lettered')").run(id, tipo, ts);
+      db.prepare(`INSERT INTO integration_event_history (event_id,stage,to_status,correlation_id,safe_message,created_at)
+        VALUES (?,'job.process','dead_lettered',?,?,?)`).run(id, 'c' + id, 'ML no confirmo', ts);
+    }
+    const res = await request(app).get('/api/notificaciones-ml/dead-letters');
+    expect(res.body.total).toBe(3);
+    expect(res.body.grupos[0]).toMatchObject({ job_type: 'message.project', n: 2, motivo: 'ML no confirmo' });
+    // Y el contador liviano lo expone para el aviso del home.
+    expect((await request(app).get('/api/notificaciones-ml/count')).body.dead_letters).toBe(3);
+    db.close();
+  });
+
   it('pide sólo las UNANSWERED: una llamada, no el histórico de 1111', async () => {
     const db = openDb(':memory:');
     // El mock es compartido entre tests: sin limpiarlo se cuentan las llamadas de los demás.

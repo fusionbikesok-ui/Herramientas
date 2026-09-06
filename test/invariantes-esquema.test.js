@@ -113,3 +113,31 @@ describe('invariantes de esquema y persistencia', () => {
     expect(infractores).toEqual([]);
   });
 });
+
+describe('cableado entre módulos: probar el cable, no solo las puntas', () => {
+  // El 2026-09-06 el ramp del scan no gobernaba NADA y los tests estaban verdes.
+  // `identidadProductos` llamaba a `frescuraVigenteMs` sin haberla importado; el
+  // `try/catch` de respaldo se tragaba el ReferenceError y devolvía el default de 60
+  // minutos. Había cobertura en las dos puntas —la función probada en mlScanRamp.test.js,
+  // el consumidor probado en identidad-productos.test.js— y CERO en el cable entre ellas.
+  //
+  // La lección, que vale más allá de este caso: cuando un valor tiene que viajar de un
+  // módulo a otro, hay que afirmar el EFECTO, no las piezas. Un test verde en cada extremo
+  // no prueba que estén conectados.
+  it('la frescura del ramp llega de verdad a la salud de identidad', async () => {
+    const { openDb } = await import('../db/index.js');
+    const { estadoIdentidadProductos } = await import('../lib/identidadProductos.js');
+    const db = openDb(':memory:');
+    // Una lectura de hace 90 minutos: vieja para una ventana de 60, fresca para una de 120.
+    const hace90 = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    db.prepare('UPDATE identidad_config SET ultimo_scan_confiable_en=? WHERE id=1').run(hace90);
+
+    db.prepare('UPDATE ml_scan_ramp SET intervalo_min=15, frescura_min=60 WHERE id=1').run();
+    expect(estadoIdentidadProductos(db).degradado).toBe(true);
+
+    db.prepare('UPDATE ml_scan_ramp SET intervalo_min=60, frescura_min=120 WHERE id=1').run();
+    // Si esto vuelve a dar `true`, el cable se cortó otra vez y el ramp no gobierna nada.
+    expect(estadoIdentidadProductos(db).degradado).toBe(false);
+    db.close();
+  });
+});

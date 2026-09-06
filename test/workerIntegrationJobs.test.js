@@ -114,15 +114,22 @@ describe('worker durable de integration_jobs', () => {
     db.close();
   });
 
-  it('procesa messages de forma durable y deduplica por _id', async () => {
-    mlFetch.mockResolvedValueOnce({ status: 200, data: [{ id: 'msg-1', text: 'hola' }] });
+  // Contrato ACTUALIZADO: `messages` ya no proyecta —su endpoint responde 403 por pertenecer
+  // al flujo de aplicaciones marketplace— y queda auditado. El evento se sigue recibiendo y
+  // deduplicando, que es lo que este caso fija.
+  it('recibe y deduplica messages, pero sin proyeccion que no puede funcionar', async () => {
+    mlFetch.mockClear();
     const db = openDb(':memory:');
     const first = registrarWebhookMl(db, { topic: 'messages', resource: '/messages/msg-1', _id: 'ml-notif-1', user_id: 'u' });
     const second = registrarWebhookMl(db, { topic: 'messages', resource: '/messages/msg-1', _id: 'ml-notif-1', sent: 'different', user_id: 'u' });
     expect(second.duplicate).toBe(true);
-    expect(db.prepare("SELECT job_type FROM integration_jobs WHERE event_id=?").get(first.eventId).job_type).toBe('message.project');
+    expect(db.prepare("SELECT job_type FROM integration_jobs WHERE event_id=?").get(first.eventId).job_type).toBe('webhook.audit');
     await procesarIntegrationJobs(db, { workerId: 'messages', mlCfg: {} });
-    expect(db.prepare("SELECT COUNT(*) n FROM ml_mensajes WHERE id='msg-1'").get().n).toBe(1);
+    // El job cierra bien en vez de morir tras cinco reintentos: eso es lo que costaba 39 jobs
+    // muertos y 352 reintentos en 7 días, y mantenía la cola de dead-letters siempre roja.
+    expect(db.prepare("SELECT status FROM integration_jobs WHERE event_id=?").get(first.eventId).status).toBe('completed');
+    // Y no llama a ML: el endpoint que resolvería ese `resource` nos responde 403.
+    expect(mlFetch).not.toHaveBeenCalled();
     db.close();
   });
 
@@ -148,6 +155,20 @@ describe('proyección del topic `items` (§15 del plan: dejaba la decisión abie
     const db = openDb(':memory:');
     const r = registrarWebhookMl(db, { topic: 'items', resource: '/items/MLA123', user_id: '9', sent: '2026-09-05T18:00:00Z' });
     expect(db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(r.eventId).job_type).toBe('item.project');
+    db.close();
+  });
+
+  // No es preferencia: no se puede proyectar. El endpoint que resuelve el `resource` que manda
+  // ML responde 403 porque pertenece al flujo de aplicaciones marketplace. Mantener la
+  // proyección costaba 39 jobs muertos y 352 reintentos en 7 días, y dejaba la cola de
+  // dead-letters siempre roja, tapando los fallos reales.
+  it('`messages` queda auditado, sin proyección que no puede funcionar', () => {
+    const db = openDb(':memory:');
+    const r = registrarWebhookMl(db, { topic: 'messages', action: 'created', resource: '01a072ff', user_id: '9', sent: '2026-09-06T10:00:00Z' });
+    expect(db.prepare('SELECT job_type FROM integration_jobs WHERE event_id=?').get(r.eventId).job_type).toBe('webhook.audit');
+    // El evento se sigue recibiendo y registrando: si mañana se consigue el acceso, sólo hay
+    // que volver a enrutarlo.
+    expect(db.prepare('SELECT COUNT(*) n FROM integration_events WHERE event_id=?').get(r.eventId).n).toBe(1);
     db.close();
   });
 

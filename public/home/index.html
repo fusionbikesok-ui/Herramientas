@@ -1032,6 +1032,11 @@ fetch('/api/auth/me').then(function(r) {
     if (d.preguntas_sin_stock) desc += (desc ? ' ' : '') + 'De esas, '
       + d.preguntas_sin_stock + (d.preguntas_sin_stock === 1 ? ' es de una publicacion' : ' son de publicaciones')
       + ' pausada' + (d.preguntas_sin_stock === 1 ? '' : 's') + ' o sin stock.';
+    // Jobs de integracion que agotaron reintentos y quedaron muertos. Hasta ahora NADA los
+    // mostraba: se quedaban ahi para siempre y nadie se enteraba.
+    if (d.dead_letters) desc += (desc ? ' ' : '') + 'Hay ' + d.dead_letters
+      + (d.dead_letters === 1 ? ' aviso de MercadoLibre que no se pudo procesar' : ' avisos de MercadoLibre que no se pudieron procesar')
+      + ' y agotaron sus reintentos.';
     if (d.reclamos_sin_confirmar) desc += (desc ? ' ' : '') + 'No se pudieron consultar '
       + d.reclamos_sin_confirmar + (d.reclamos_sin_confirmar === 1 ? ' reclamo' : ' reclamos')
       + ' en MercadoLibre; se reintentará automáticamente.';
