@@ -189,6 +189,56 @@ function ensureTables(db) {
 // no vuelve a llegar OTRA notificación que corrija — como esto es un aviso, no una fuente de
 // verdad transaccional, el impacto es acotado; si algún día se necesita exactitud fuerte acá,
 // serializar por id (ej. una cola/lock simple) antes de confiar ciegamente.
+/**
+ * Red de reconciliación de preguntas: trae de ML las SIN RESPONDER y persiste las que falten.
+ *
+ * Las preguntas se poblaban únicamente por webhook, y ML no garantiza entrega ni orden. Un
+ * aviso perdido era una consulta de cliente que no aparecía nunca y de la que nadie se
+ * enteraba. Medido el 2026-09-06 contra la API: de 10 preguntas sin responder, **6 no estaban
+ * en la base** — algunas de marzo, abril y mayo.
+ *
+ * Se pide sólo `status=UNANSWERED` a propósito: es el subconjunto que exige acción humana, y
+ * mantiene el costo en UNA llamada por corrida (el histórico son 1111 preguntas y traerlo no
+ * aportaría nada). Endpoint verificado en vivo:
+ * `GET /questions/search?seller_id=&api_version=4&status=UNANSWERED`.
+ *
+ * Idempotente: el mismo upsert que usa el camino del webhook, con la misma guarda de no pisar
+ * una respondida con una no respondida.
+ */
+export async function reconciliarPreguntasMl(db, mlCfg, { limite = 50 } = {}) {
+  ensureTables(db);
+  if (!mlCfg?.userId) return { omitido: true, motivo: 'sin userId' };
+  const resp = await mlFetch(db, mlCfg, 'get',
+    `/questions/search?seller_id=${mlCfg.userId}&api_version=4&status=UNANSWERED&limit=${limite}`);
+  if (resp.status !== 200 || !Array.isArray(resp.data?.questions)) {
+    return { omitido: true, motivo: `http_${resp.status}` };
+  }
+  const ts = now();
+  let recuperadas = 0, vistas = 0;
+  const upsert = db.prepare(`
+    INSERT INTO ml_preguntas (id, item_id, texto, estado, fecha_creacion, respondida_en, actualizado_en)
+    VALUES (@id, @item_id, @texto, @estado, @fecha_creacion, NULL, @actualizado_en)
+    ON CONFLICT(id) DO UPDATE SET
+      item_id=excluded.item_id, texto=excluded.texto, estado=excluded.estado,
+      actualizado_en=excluded.actualizado_en
+    WHERE excluded.actualizado_en >= ml_preguntas.actualizado_en
+      AND NOT (ml_preguntas.estado = 'ANSWERED' AND excluded.estado <> 'ANSWERED')
+  `);
+  db.transaction(() => {
+    for (const q of resp.data.questions) {
+      if (!q?.id) continue;
+      vistas += 1;
+      const existia = db.prepare('SELECT 1 FROM ml_preguntas WHERE id=?').get(q.id);
+      upsert.run({ id: q.id, item_id: q.item_id || null, texto: q.text || '',
+        estado: q.status || 'UNANSWERED', fecha_creacion: q.date_created || null, actualizado_en: ts });
+      if (!existia) recuperadas += 1;
+    }
+  })();
+  // Sólo se avisa cuando hubo algo que recuperar: si el webhook está cubriendo, esto es mudo.
+  if (recuperadas) console.log(`[reconciliar-preguntas] ${recuperadas} pregunta(s) que el webhook no trajo, de ${vistas} sin responder`);
+  return { omitido: false, vistas, recuperadas, total_ml: resp.data.total ?? null };
+}
+
 export async function ingerirPregunta(db, mlCfg, resource, backboneEvent = null, options = {}) {
   ensureTables(db);
   const m = String(resource || '').match(/\/questions\/(\d+)/);
@@ -433,10 +483,29 @@ export function notificacionesMlRouter(db) {
   // livianos del proyecto, ej. push-skus-pendientes/count).
   router.get('/count', (req, res) => {
     const preguntas = db.prepare("SELECT COUNT(*) n FROM ml_preguntas WHERE estado='UNANSWERED'").get().n;
+    // Cuántas de esas son de publicaciones que hoy NO se pueden vender (pausadas o sin stock).
+    // Decisión del usuario (2026-09-06): se traen todas —una consulta sin responder lo es
+    // igual, y dice qué quiere gente que no tenemos— pero se separan, para que no compitan
+    // con las que sí se resuelven vendiendo. Medido ese día: de 6 preguntas que el webhook
+    // nunca trajo, 5 eran de publicaciones pausadas sin stock.
+    // `LEFT JOIN` + `IS NOT NULL`: una publicación que ni siquiera está en el cache no se
+    // cuenta como "sin stock" — no sabemos nada de ella, y afirmarlo sería inventar.
+    // Si el cache de publicaciones no está (contextos mínimos, sin el esquema completo) se
+    // devuelve `null` = "no sé", nunca 0. Cero afirmaría que ninguna está sin stock, y eso
+    // sería inventarlo. Se chequea la tabla en vez de envolver en try/catch, que además
+    // taparía errores de verdad.
+    const hayCache = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ml_publicaciones_cache'").get();
+    const preguntasSinStock = !hayCache ? null : db.prepare(`
+      SELECT COUNT(*) n FROM ml_preguntas q
+      WHERE q.estado='UNANSWERED' AND EXISTS (
+        SELECT 1 FROM ml_publicaciones_cache p
+        WHERE p.item_id = q.item_id
+          AND (p.status <> 'active' OR COALESCE(p.available_quantity,0) = 0))
+    `).get().n;
     const mensajes = db.prepare('SELECT COUNT(*) n FROM ml_mensajes WHERE respondido_en IS NULL').get().n;
     const reclamos = db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE cerrado_en IS NULL AND consultado_en_ml = 1").get().n;
     const reclamosSinConfirmar = db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE consultado_en_ml = 0").get().n;
-    res.json({ ok: true, preguntas, mensajes, reclamos, reclamos_sin_confirmar: reclamosSinConfirmar, total: preguntas + mensajes + reclamos });
+    res.json({ ok: true, preguntas, preguntas_sin_stock: preguntasSinStock, mensajes, reclamos, reclamos_sin_confirmar: reclamosSinConfirmar, total: preguntas + mensajes + reclamos });
   });
 
   return router;

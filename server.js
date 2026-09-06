@@ -634,6 +634,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // que el token llegue a vencer, sin sumar otro llamador más a la tormenta que causó
       // el incidente original (getAccessToken no pega a ML si el token sigue vigente, y no
       // hace nada si hay cooldown activo).
+      // Red de reconciliación de preguntas: el webhook es la vía rápida, esto la red. ML no
+      // garantiza entrega, y medido el 2026-09-06 faltaban 6 de 10 preguntas sin responder
+      // —algunas de marzo— que ningún aviso trajo. Una sola llamada por corrida: se piden
+      // únicamente las UNANSWERED, que son las que exigen acción humana.
+      cron.schedule('11-59/20 * * * *', async () => {
+        const { reconciliarPreguntasMl } = await import('./routes/notificacionesMl.js');
+        reconciliarPreguntasMl(app._db, mlCfg)
+          .catch(err => console.error('Error reconciliando preguntas ML:', err.message));
+      });
+
       cron.schedule('*/30 * * * *', () => {
         getAccessToken(app._db, mlCfg)
           .catch(err => console.error('Error renovando token ML (cron dedicado):', err.message));

@@ -13,7 +13,7 @@ import { openDb } from '../db/index.js';
 
 vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn() }));
 import { mlFetch } from '../lib/mlClient.js';
-import { ingerirPregunta, ingerirMensaje, ingerirReclamo, reintentarReclamosSinConsultar, notificacionesMlRouter } from '../routes/notificacionesMl.js';
+import { ingerirPregunta, ingerirMensaje, ingerirReclamo, reintentarReclamosSinConsultar, notificacionesMlRouter, reconciliarPreguntasMl } from '../routes/notificacionesMl.js';
 
 function tmpDb() {
   const f = path.join(os.tmpdir(), `notif_ml_test_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
@@ -603,5 +603,89 @@ describe('Migración de columnas de reclamos ML', () => {
     expect(columns).toEqual(expect.arrayContaining(['type', 'reason_id', 'resource_id', 'consultado_en_ml']));
     migrated.close();
     fs.unlinkSync(file);
+  });
+});
+
+describe('red de reconciliación de preguntas', () => {
+  const CFG = { clientId: 'c', clientSecret: 's', userId: '99' };
+  const respuesta = (qs, total) => ({ status: 200, data: { total: total ?? qs.length, questions: qs } });
+
+  // Medido contra la API el 2026-09-06: de 10 preguntas sin responder, 6 no estaban en la
+  // base. El usuario lo confirmó desde la pantalla: veía 4. Un aviso perdido era una consulta
+  // de cliente que no aparecía nunca.
+  it('persiste las preguntas sin responder que el webhook no trajo', async () => {
+    const db = openDb(':memory:');
+    mlFetch.mockResolvedValue(respuesta([
+      { id: 1, item_id: 'MLA1', text: '¿Tienen talle S?', status: 'UNANSWERED', date_created: '2026-03-29T03:48:47Z' },
+      { id: 2, item_id: 'MLA2', text: '¿Qué aceite es?', status: 'UNANSWERED', date_created: '2026-04-04T10:00:00Z' },
+    ]));
+    const r = await reconciliarPreguntasMl(db, CFG);
+    expect(r).toMatchObject({ omitido: false, vistas: 2, recuperadas: 2 });
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_preguntas').get().n).toBe(2);
+    expect(db.prepare('SELECT texto FROM ml_preguntas WHERE id=1').get().texto).toBe('¿Tienen talle S?');
+    db.close();
+  });
+
+  it('es idempotente: correrla de nuevo no cuenta recuperadas', async () => {
+    const db = openDb(':memory:');
+    mlFetch.mockResolvedValue(respuesta([{ id: 1, item_id: 'MLA1', text: 'hola', status: 'UNANSWERED', date_created: '2026-03-29T03:48:47Z' }]));
+    await reconciliarPreguntasMl(db, CFG);
+    expect((await reconciliarPreguntasMl(db, CFG)).recuperadas).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_preguntas').get().n).toBe(1);
+    db.close();
+  });
+
+  // La guarda que ya tenía el camino del webhook: una respondida no se pisa con una sin
+  // responder, aunque ML la devuelva en el listado por atraso de indexación.
+  it('no pisa una pregunta ya respondida', async () => {
+    const db = openDb(':memory:');
+    notificacionesMlRouter(db); // crea las tablas: openDb no las trae, las hace ensureTables
+    db.prepare(`INSERT INTO ml_preguntas (id,item_id,texto,estado,fecha_creacion,respondida_en,actualizado_en)
+      VALUES (1,'MLA1','hola','ANSWERED','2026-03-29T03:48:47Z',?,?)`).run(new Date().toISOString(), new Date().toISOString());
+    mlFetch.mockResolvedValue(respuesta([{ id: 1, item_id: 'MLA1', text: 'hola', status: 'UNANSWERED', date_created: '2026-03-29T03:48:47Z' }]));
+    await reconciliarPreguntasMl(db, CFG);
+    expect(db.prepare('SELECT estado FROM ml_preguntas WHERE id=1').get().estado).toBe('ANSWERED');
+    db.close();
+  });
+
+  it('si ML no responde 200, no toca nada y lo dice', async () => {
+    const db = openDb(':memory:');
+    mlFetch.mockResolvedValue({ status: 500, data: null });
+    expect(await reconciliarPreguntasMl(db, CFG)).toMatchObject({ omitido: true, motivo: 'http_500' });
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_preguntas').get().n).toBe(0);
+    db.close();
+  });
+
+  it('el contador separa las preguntas de publicaciones que no se pueden vender', async () => {
+    const db = openDb(':memory:');
+    const app = express(); app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
+    const ts = new Date().toISOString();
+    const pub = (item, status, stock) => db.prepare(`INSERT INTO ml_publicaciones_cache
+      (clave,item_id,variation_id,titulo,status,available_quantity,actualizado_en) VALUES (?,?,'','t',?,?,?)`)
+      .run(item + '|', item, status, stock, ts);
+    const preg = (id, item) => db.prepare(`INSERT INTO ml_preguntas (id,item_id,texto,estado,fecha_creacion,actualizado_en)
+      VALUES (?,?,'q','UNANSWERED',?,?)`).run(id, item, ts, ts);
+    pub('MLA-OK', 'active', 5);   preg(1, 'MLA-OK');
+    pub('MLA-PAUSA', 'paused', 0); preg(2, 'MLA-PAUSA');
+    pub('MLA-CERO', 'active', 0);  preg(3, 'MLA-CERO');
+    preg(4, 'MLA-DESCONOCIDA'); // sin fila en el cache
+
+    const res = await request(app).get('/api/notificaciones-ml/count');
+    expect(res.body.preguntas).toBe(4);
+    // Pausada y stock cero cuentan; la que no está en el cache NO —no sabemos nada de ella y
+    // afirmar que no tiene stock sería inventarlo.
+    expect(res.body.preguntas_sin_stock).toBe(2);
+    db.close();
+  });
+
+  it('pide sólo las UNANSWERED: una llamada, no el histórico de 1111', async () => {
+    const db = openDb(':memory:');
+    // El mock es compartido entre tests: sin limpiarlo se cuentan las llamadas de los demás.
+    mlFetch.mockClear();
+    mlFetch.mockResolvedValue(respuesta([]));
+    await reconciliarPreguntasMl(db, CFG);
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+    expect(mlFetch.mock.calls[0][3]).toContain('status=UNANSWERED');
+    db.close();
   });
 });

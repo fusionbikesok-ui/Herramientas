@@ -1026,6 +1026,12 @@ fetch('/api/auth/me').then(function(r) {
     if (d.mensajes) partes.push(d.mensajes + (d.mensajes === 1 ? ' mensaje' : ' mensajes'));
     if (d.reclamos) partes.push(d.reclamos + (d.reclamos === 1 ? ' reclamo' : ' reclamos'));
     var desc = d.total ? 'Hay ' + partes.join(' y ') + (d.total === 1 ? ' pendiente' : ' pendientes') + ' en MercadoLibre.' : '';
+    // Las preguntas de publicaciones pausadas o sin stock se separan: siguen siendo
+    // consultas sin responder, pero no se resuelven vendiendo y no deben competir con
+    // las que si. Decision del usuario (2026-09-06).
+    if (d.preguntas_sin_stock) desc += (desc ? ' ' : '') + 'De esas, '
+      + d.preguntas_sin_stock + (d.preguntas_sin_stock === 1 ? ' es de una publicacion' : ' son de publicaciones')
+      + ' pausada' + (d.preguntas_sin_stock === 1 ? '' : 's') + ' o sin stock.';
     if (d.reclamos_sin_confirmar) desc += (desc ? ' ' : '') + 'No se pudieron consultar '
       + d.reclamos_sin_confirmar + (d.reclamos_sin_confirmar === 1 ? ' reclamo' : ' reclamos')
       + ' en MercadoLibre; se reintentará automáticamente.';
