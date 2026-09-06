@@ -4,7 +4,8 @@ import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
 import {
-  bootstrapProductosFusion, conflictosDeIdentificador, identificadorPrincipal,
+  bootstrapProductosFusion, conflictosDeIdentificador, detalleConflictoIdentificador,
+  identificadorPrincipal,
   marcarIdentificadorIncorrecto, reordenarIdentificadores, resolverConflictoIdentificador,
   sembrarIdentificadoresMl,
 } from '../lib/identidadProductos.js';
@@ -500,5 +501,51 @@ describe('marcar un identificador como incorrecto', () => {
     marcarIdentificadorIncorrecto(db, id, '00602883701731', 'ana');
     expect(marcarIdentificadorIncorrecto(db, id, '00602883701731', 'ana'))
       .toMatchObject({ ok: false, code: 'NOT_FOUND' });
+  });
+});
+
+describe('detalle de un conflicto para poder decidir', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  it('trae los productos que se disputan el código, con su evidencia', () => {
+    woo(db, { id: 150, sku: 'FB-150', gtin: '602883701731', stock: 3 });
+    woo(db, { id: 151, sku: 'FB-151', stock: 9 });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA70|', sku: 'FB-151', gtin: '602883701731', stock: 5 });
+    sembrarIdentificadoresMl(db);
+
+    const d = detalleConflictoIdentificador(db, '00602883701731');
+    expect(d).toMatchObject({ valor_normalizado: '00602883701731', total_productos: 2, truncado: false });
+    // Ordenado por stock en ML: el que tiene unidades expuestas puede estar descontando
+    // del producto equivocado, y es el que hay que mirar primero.
+    expect(d.productos[0]).toMatchObject({ fusion_sku: 'FB-151', stock_ml: 5, estado: 'conflicto' });
+    expect(d.productos[0].claves_ml).toContain('MLA70|');
+    expect(d.productos[1]).toMatchObject({ fusion_sku: 'FB-150', estado: 'activo' });
+  });
+
+  it('trunca los códigos comodín en vez de volcar cientos de filas', () => {
+    // Hay códigos de fabricante con más de cien productos detrás: mostrarlos todos
+    // no ayuda a decidir.
+    woo(db, { id: 160, sku: 'FB-160', gtin: '602883701731' });
+    for (let i = 1; i <= 4; i += 1) woo(db, { id: 160 + i, sku: `FB-${160 + i}` });
+    bootstrapProductosFusion(db);
+    for (let i = 1; i <= 4; i += 1) ml(db, { clave: `MLA8${i}|`, sku: `FB-${160 + i}`, gtin: '602883701731' });
+    sembrarIdentificadoresMl(db);
+
+    const d = detalleConflictoIdentificador(db, '00602883701731', 2);
+    expect(d).toMatchObject({ total_productos: 5, truncado: true });
+    expect(d.productos).toHaveLength(2);
+  });
+
+  it('devuelve null para un código que no existe o no está en disputa', () => {
+    woo(db, { id: 170, sku: 'FB-170', gtin: '602883701731' });
+    bootstrapProductosFusion(db);
+    expect(detalleConflictoIdentificador(db, '00000000000000')).toBeNull();
+    expect(detalleConflictoIdentificador(db, '')).toBeNull();
   });
 });

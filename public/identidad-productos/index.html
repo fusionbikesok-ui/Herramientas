@@ -120,6 +120,7 @@
       <button class="btn tab" role="tab" aria-selected="true" data-view="pendientes">Pendientes</button>
       <button class="btn tab" role="tab" aria-selected="false" data-view="productos">Productos Fusion</button>
       <button class="btn tab" role="tab" aria-selected="false" data-view="operaciones">Operaciones</button>
+      <button class="btn tab" role="tab" aria-selected="false" data-view="codigos">Códigos en conflicto</button>
       <button class="btn tab" role="tab" aria-selected="false" data-view="historial">Historial</button>
     </nav>
     <section id="app" aria-live="polite"></section>
@@ -134,7 +135,7 @@
     : '<b>' + esc(n ?? 'sin dato') + '</b>');
   const opId = () => (crypto.randomUUID ? crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2));
 
-  const state = { view: 'pendientes', resumen: null, casos: [], colas: null, productos: [], operaciones: [],
+  const state = { view: 'pendientes', resumen: null, casos: [], colas: null, productos: [], operaciones: [], codigos: [], detalleCodigo: null,
     historial: [], actual: null, detalle: null, error: null,
     buscando: false, candidatos: null, elegido: null, consulta: '', aviso: null };
 
@@ -503,6 +504,68 @@
       + '</section>';
   }
 
+  /**
+   * Un mismo código GTIN reclamado por varios Producto Fusion.
+   *
+   * La unidad de trabajo es el CÓDIGO y no la fila: a uno solo pueden reclamarlo cien
+   * productos, y resolverlo los cierra a todos de una. Por eso la lista muestra códigos y el
+   * detalle se pide al abrir uno.
+   *
+   * El orden es por stock expuesto en ML, no por antigüedad: un código en disputa con unidades
+   * a la venta puede estar descontando del producto equivocado; uno sin stock es deuda de
+   * catálogo que puede esperar.
+   */
+  function vistaCodigos() {
+    const c = state.codigos || [];
+    const d = state.detalleCodigo;
+    return '<section class="card detail"><h2>Códigos en conflicto</h2>'
+      + '<p class="muted">Un mismo GTIN que varios productos reclaman como propio. Se resuelve por código: '
+      + 'el producto que se lo queda conserva la identidad y a los demás se les marca el código como '
+      + '<code>incorrecto</code>, que es una tarea de catálogo, no un borrado.</p>'
+      + (c.length
+        ? '<div class="tablewrap"><table class="table"><thead><tr><th>Código</th><th>Tipo</th><th>Productos</th><th>Stock en ML</th><th></th></tr></thead><tbody>'
+          + c.map(function (x) {
+            const abierto = d && d.valor_normalizado === x.valor_normalizado;
+            return '<tr><td><b>' + esc(x.valor_normalizado) + '</b></td>'
+              + '<td>' + esc(x.subtipo || '—') + '</td>'
+              + '<td>' + esc(x.productos) + '</td>'
+              + '<td>' + (Number(x.stock_ml) > 0
+                ? '<span class="ui-chip ui-chip--urgente">' + esc(x.stock_ml) + ' en venta</span>'
+                : '<span class="ui-label">sin stock</span>') + '</td>'
+              + '<td><button class="btn" data-codigo="' + esc(x.valor_normalizado) + '">'
+              + (abierto ? 'Cerrar' : 'Ver y resolver') + '</button></td></tr>'
+              + (abierto ? '<tr><td colspan="5">' + detalleCodigo(d) + '</td></tr>' : '');
+          }).join('')
+          + '</tbody></table></div>'
+        : '<p class="muted empty">Ningún código en conflicto.</p>')
+      + '</section>';
+  }
+
+  function detalleCodigo(d) {
+    if (!d) return '<p class="muted">Cargando…</p>';
+    const filas = d.productos.map(function (p) {
+      const claves = String(p.claves_ml || '').split(',').filter(Boolean);
+      return '<tr><td><b>' + esc(p.fusion_sku) + '</b>'
+        + (p.estado === 'activo' ? ' <span class="ui-chip">activo</span>' : ' <span class="ui-chip ui-chip--urgente">en conflicto</span>')
+        + '<br><span class="ui-label">' + esc((p.nombre_canonico || '').slice(0, 70)) + '</span>'
+        + (claves.length ? '<br><span class="ui-label">' + esc(claves.slice(0, 3).join(' · ')) + '</span>' : '')
+        + '</td>'
+        + '<td>' + esc(p.stock_woo == null ? '—' : p.stock_woo) + '</td>'
+        + '<td>' + esc(p.stock_ml) + '</td>'
+        + '<td><button class="btn primary" data-ganador="' + esc(p.id) + '" data-valor="' + esc(d.valor_normalizado) + '">Es de este</button> '
+        + '<button class="btn danger" data-incorrecto="' + esc(p.id) + '" data-valor="' + esc(d.valor_normalizado) + '">No le corresponde</button></td></tr>';
+    }).join('');
+    return '<div class="panel"><h3>' + esc(d.valor_normalizado) + ' · ' + esc(d.total_productos) + ' productos</h3>'
+      + '<p class="muted">«Es de este» le deja el código a ese producto y marca a todos los demás como incorrectos. '
+      + '«No le corresponde» descarta sólo a ese, y sirve cuando el código no es de ninguno —una bicicleta sin '
+      + 'código universal posible, por ejemplo—.</p>'
+      + '<div class="tablewrap"><table class="table"><thead><tr><th>Producto</th><th>Stock Woo</th><th>Stock ML</th><th></th></tr></thead><tbody>'
+      + filas + '</tbody></table></div>'
+      + (d.truncado ? '<p class="muted">Se muestran los ' + esc(d.productos.length) + ' con más stock, de ' + esc(d.total_productos) + '. '
+        + 'Un código que reclaman tantos productos suele ser un comodín de fabricante: conviene revisarlo en el catálogo antes de elegir uno.</p>' : '')
+      + '</div>';
+  }
+
   function vistaHistorial() {
     const h = state.historial;
     return '<section class="card detail"><h2>Historial</h2>'
@@ -516,7 +579,7 @@
   function render() {
     renderHealth(); renderRecon();
     document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.view === state.view)));
-    const vistas = { pendientes: vistaPendientes, productos: vistaProductos, operaciones: vistaOperaciones, historial: vistaHistorial };
+    const vistas = { pendientes: vistaPendientes, productos: vistaProductos, operaciones: vistaOperaciones, codigos: vistaCodigos, historial: vistaHistorial };
     $('#app').innerHTML = (state.error ? '<p class="error">' + esc(state.error) + '</p>' : '')
       + (state.aviso ? '<div class="aviso" role="status">' + esc(state.aviso) + '</div>' : '')
       + vistas[state.view]();
@@ -531,6 +594,7 @@
       if (state.view === 'productos') state.productos = (await api('/productos')).data;
       if (state.view === 'operaciones') state.operaciones = (await api('/operaciones')).data;
       if (state.view === 'historial') state.historial = (await api('/historial')).data;
+      if (state.view === 'codigos') state.codigos = (await api('/identificadores/conflictos')).data;
     } catch (e) { state.error = e.message; }
     render();
   }
@@ -582,6 +646,58 @@
   }
 
   function bind() {
+    document.querySelectorAll('[data-codigo]').forEach((b) => {
+      b.onclick = async () => {
+        const valor = b.dataset.codigo;
+        // Segundo click sobre el mismo código lo cierra.
+        if (state.detalleCodigo && state.detalleCodigo.valor_normalizado === valor) {
+          state.detalleCodigo = null; render(); return;
+        }
+        state.detalleCodigo = null; state.aviso = null; render();
+        try { state.detalleCodigo = (await api('/identificadores/conflictos/' + encodeURIComponent(valor))).data; }
+        catch (e) { state.error = e.message; }
+        render();
+      };
+    });
+    document.querySelectorAll('[data-ganador]').forEach((b) => {
+      b.onclick = async () => {
+        // Le saca el código a todos los demás: se dice cuántos son antes de pedir la
+        // confirmación, porque el alcance no se ve en el botón.
+        const d = state.detalleCodigo;
+        const otros = (d ? d.total_productos : 1) - 1;
+        if (!confirm('El código ' + b.dataset.valor + ' queda en este producto y se marca como '
+          + 'incorrecto en ' + otros + ' producto(s) más.\n\n¿Confirmás?')) return;
+        const motivo = prompt('Motivo (queda auditado):') || null;
+        try {
+          await api('/identificadores/conflictos/resolver', { method: 'POST',
+            body: JSON.stringify({ valor_normalizado: b.dataset.valor, producto_id: Number(b.dataset.ganador), motivo }) });
+          state.detalleCodigo = null; state.aviso = 'Conflicto resuelto: ' + b.dataset.valor;
+          await cargar();
+        } catch (e) { alert(e.message); }
+      };
+    });
+    document.querySelectorAll('[data-incorrecto]').forEach((b) => {
+      b.onclick = async () => {
+        const motivo = prompt('¿Por qué este código no le corresponde? (queda auditado)') || null;
+        if (motivo === null) return;
+        try {
+          await api('/identificadores/incorrecto', { method: 'POST',
+            body: JSON.stringify({ valor_normalizado: b.dataset.valor, producto_id: Number(b.dataset.incorrecto), motivo }) });
+        } catch (e) {
+          // El backend frena si es el único identificador del producto: dejarlo sin identidad
+          // tiene que ser una decisión, así que se pregunta en vez de forzarlo.
+          if (e.code === 'INVALID_STATE'
+            && confirm(e.message + '\n\nEs el único código del producto y va a quedar sin GTIN.\n\n¿Confirmás igual?')) {
+            try {
+              await api('/identificadores/incorrecto', { method: 'POST',
+                body: JSON.stringify({ valor_normalizado: b.dataset.valor, producto_id: Number(b.dataset.incorrecto), motivo, permitir_unico: true }) });
+            } catch (e2) { alert(e2.message); return; }
+          } else { alert(e.message); return; }
+        }
+        state.detalleCodigo = null; state.aviso = 'Marcado incorrecto: ' + b.dataset.valor;
+        await cargar();
+      };
+    });
     document.querySelectorAll('[data-caso]').forEach((b) => { b.onclick = () => { state.aviso = null; abrirCaso(Number(b.dataset.caso)); }; });
     document.querySelectorAll('[data-impacto]').forEach((b) => {
       b.onclick = async () => {

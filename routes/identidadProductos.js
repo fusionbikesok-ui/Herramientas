@@ -19,6 +19,8 @@ import {
   reintentarOperacionIdentidad,
   conflictosDeBolsaCompartida,
   conflictosDeIdentificador,
+  detalleConflictoIdentificador,
+  marcarIdentificadorIncorrecto,
   reordenarIdentificadores,
   resolverConflictoIdentificador,
   publicacionesSinRespaldoWoo,
@@ -107,6 +109,20 @@ export function identidadProductosRouter(db) {
     confirmarImpactoIdentidad(db, req.params.id, req.body || {}, actor(req))));
   router.post('/productos/:id/tareas-publicacion', exigir('write'), (req, res) => responder(res,
     crearTareaPublicacion(db, req.params.id, req.body || {}, actor(req)), true));
+  router.get('/identificadores/conflictos', exigir(), (_req, res) =>
+    res.json({ ok: true, data: conflictosDeIdentificador(db) }));
+  // El detalle va por código y bajo demanda: la lista alcanza para priorizar, no para decidir.
+  router.get('/identificadores/conflictos/:valor', exigir(), (req, res) => {
+    const data = detalleConflictoIdentificador(db, req.params.valor);
+    return data ? res.json({ ok: true, data })
+      : res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'ese código no está en conflicto' });
+  });
+  // Un código que no le corresponde a NINGÚN producto —una bicicleta sin código universal
+  // posible, por ejemplo—. `permitir_unico` es explícito porque dejar al producto sin GTIN
+  // tiene que ser una decisión y no un efecto colateral.
+  router.post('/identificadores/incorrecto', exigir('write'), (req, res) => responder(res,
+    marcarIdentificadorIncorrecto(db, req.body?.producto_id, req.body?.valor_normalizado,
+      actor(req), req.body?.motivo || null, { permitirUnico: req.body?.permitir_unico === true })));
   // Resolver un conflicto de GTIN le saca el código a uno o más productos y se lo deja a
   // otro: es una decisión de identidad, del mismo peso que decidir un caso.
   router.post('/identificadores/conflictos/resolver', exigir('write'), (req, res) => responder(res,

@@ -84,6 +84,14 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 ## Reglas inmediatas
 
+- **Nunca matar procesos por patrón de cmdline; siempre por PID verificado.** El 2026-09-06 se
+  corrió `pkill -f "node server.js"` para bajar un servidor de prueba, y ése es exactamente el
+  cmdline del servidor productivo. No lo mató por casualidad —pm2 lo lanza vía `start.sh`—, no
+  por criterio: si ese script hiciera `exec node server.js`, habría tirado producción. El
+  procedimiento es identificar el proceso (`pgrep -af`, y confirmar con `/proc/<pid>/environ` y
+  `/proc/<pid>/cwd` qué puerto y qué directorio usa) y recién entonces `kill <pid>`. Vale también
+  para `pkill -f vitest`, que alcanza corridas de otras sesiones.
+
 - **No correr la suite completa salvo que se vaya a desplegar** (instrucción del usuario,
   2026-09-06, explícita como excepción al gate habitual: «no quiero que corras la suite completa
   hasta que diga que vamos a hacer un despliegue»). Motivo práctico: tarda ~20 min, bloquea el
