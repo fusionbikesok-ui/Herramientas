@@ -11,7 +11,7 @@ import {
 import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { escanearGuardiaMl } from '../lib/guardiaMl.js';
-import { auditarIdentidadProductos, sembrarIdentificadoresMl } from '../lib/identidadProductos.js';
+import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl } from '../lib/identidadProductos.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -99,6 +99,10 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
       // es idempotente y aditiva, pero registrar un conflicto pone trabajo en la bandeja de
       // una persona, y con un refresco acotado ese conflicto podría venir de datos viejos.
       if (scopeNorm === 'all') {
+        // Sólo con el scan completo: el criterio para archivar es «no está en el cache», así que
+        // con un refresco acotado se archivarían identidades vivas que no se leyeron esta vez.
+        const archivado = archivarIdentidadesMlHuerfanas(db, { lecturaConfiable: true });
+        if (archivado.archivadas) console.log('[um1] identidades ML archivadas por publicación ausente:', archivado.archivadas);
         const siembra = sembrarIdentificadoresMl(db, 'sistema');
         _refresco.identificadores = {
           sembrados: siembra.sembrados, conflictos: siembra.conflictos,

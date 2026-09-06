@@ -53,7 +53,7 @@ import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
 import { validarConfiguracionPush } from './lib/notificacionesPush.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
 import { getAccessToken } from './lib/mlClient.js';
-import { notificacionesMlRouter, extraerClaimId } from './routes/notificacionesMl.js';
+import { notificacionesMlRouter } from './routes/notificacionesMl.js';
 import { stockExceptionsRouter } from './routes/stockExceptions.js';
 import { warrantiesRouter } from './routes/warranties.js';
 import { workshopRouter } from './routes/workshop.js';
@@ -254,7 +254,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       try {
         const url = new URL(resource, 'http://x');
         const pathname = url.pathname;
-        validResource = /^\/[A-Za-z0-9_.\-]+(?:\/[A-Za-z0-9_.\-]+)*$/.test(pathname);
+        validResource = /^\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(pathname);
       } catch { /* URL inválida */ }
     }
     const validTopic = typeof topic === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/i.test(topic);
@@ -486,6 +486,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('1-59/5 * * * *', () => {          // Woo
         refrescarCatalogo(app._db, wooCfg)
           .catch(err => console.error('Error refrescando catálogo:', err.message));
+      });
+      // Estado de los webhooks de Woo. Cada hora alcanza: no cambian solos salvo que Woo
+      // desactive uno tras entregas fallidas, y ahí lo que importa es enterarse, no el minuto
+      // exacto. Es una sola llamada, así que no mueve la aguja del consumo.
+      cron.schedule('7 * * * *', async () => {           // Woo
+        try {
+          const { refrescarWebhooksWoo, webhooksWooCaidos } = await import('./lib/wooWebhooks.js');
+          const r = await refrescarWebhooksWoo(app._db, wooCfg);
+          if (!r.ok) { console.error('[woo-webhooks]', r.error); return; }
+          const caidos = webhooksWooCaidos(app._db);
+          if (caidos.length) {
+            console.error('[woo-webhooks] NO están entregando: '
+              + caidos.map((w) => `${w.topic} (${w.status} desde ${w.status_desde})`).join(', '));
+          }
+        } catch (e) { console.error('[woo-webhooks] error:', e.message); }
       });
 
       cron.schedule('3-59/10 * * * *', () => {          // ML

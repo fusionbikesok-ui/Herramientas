@@ -518,9 +518,12 @@
   function vistaOperaciones() {
     const o = state.operaciones;
     return '<section class="card detail"><h2>Operaciones</h2>'
-      + '<p class="muted">Saga por pasos: stock cero → limpiar SKU → escribir SKU → restaurar stock → verificar. Cada paso se persiste antes del efecto remoto.</p>'
-      + (o.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>#</th><th>Clave ML</th><th>SKU objetivo</th><th>Estado</th><th>Paso</th><th>Intentos</th><th></th></tr></thead><tbody>'
-        + o.map((x) => '<tr><td>' + esc(x.id) + '</td><td>' + esc(x.ml_key) + '</td><td>' + esc(x.sku_objetivo) + '</td><td>'
+      + '<p class="muted">Saga por pasos, cada uno persistido antes del efecto remoto y verificado contra MercadoLibre. '
+      + 'Corregir un SKU por otro válido se escribe de una sola vez: poner el stock en cero y limpiar el SKU sólo hace '
+      + 'falta cuando la publicación debe quedar sin SKU, que es la ventana que ese cero cubre. '
+      + 'Una protección por baja de WooCommerce sólo pone el stock en cero y lo verifica: no hay SKU que escribir ni stock que restaurar.</p>'
+      + (o.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>#</th><th>Tipo</th><th>Clave ML</th><th>SKU objetivo</th><th>Estado</th><th>Paso</th><th>Intentos</th><th></th></tr></thead><tbody>'
+        + o.map((x) => '<tr><td>' + esc(x.id) + '</td><td>' + (x.tipo === 'proteccion_woo' ? '<span class="ui-chip ui-chip--urgente">protección</span>' : '<span class="ui-label">SKU</span>') + '</td><td>' + esc(x.ml_key) + '</td><td>' + esc(x.sku_objetivo || '—') + '</td><td>'
         + esc(x.estado) + (x.impacto_hermanas ? ' <span class="ui-chip ui-chip--urgente">hermanas: ' + esc(x.impacto_hermanas) + '</span>' : '')
         + (x.ultimo_error ? '<br><span class="muted error">' + esc(x.ultimo_error) + '</span>' : '')
         + '</td><td>' + esc(x.paso_actual) + '</td><td>' + esc(x.intentos) + '</td><td>'

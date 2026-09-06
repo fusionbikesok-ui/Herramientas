@@ -1,4 +1,5 @@
 import express from 'express';
+import { saludPipelineEventos, webhooksWooCaidos } from '../lib/wooWebhooks.js';
 import {
   agregarNotaIdentidad,
   asignarCasoIdentidad,
@@ -74,6 +75,12 @@ export function identidadProductosRouter(db) {
       // Claves cuyo producto Woo se dio de baja: la publicación de ML sigue viva. La protección
       // remota (stock cero + bloqueo) es una entrega aparte; esto es lo que ya se detectó.
       esperando_proteccion: clavesEsperandoProteccion(db),
+      // Woo desactiva un webhook por su cuenta tras varias entregas fallidas y no avisa: deja
+      // de mandar eventos y todo parece normal.
+      webhooks_woo_caidos: webhooksWooCaidos(db),
+      // Un evento que se ingirió y nunca derivó en trabajo desaparece sin dejar rastro: no
+      // falla, no reintenta y no aparece en dead letters.
+      pipeline_eventos: saludPipelineEventos(db),
       colas: { ml_to_fusion: colas.ml_to_fusion.length, woo_to_ml: colas.woo_to_ml.length } } });
   });
   router.get('/casos', exigir(), (req, res) => res.json({ ok: true, data: listarCasosIdentidad(db, req.query) }));

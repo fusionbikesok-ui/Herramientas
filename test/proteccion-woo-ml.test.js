@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { openDb } from '../db/index.js';
 import {
-  auditarIdentidadProductos, bootstrapProductosFusion, clavesAfectadasPorBajaWoo,
+  archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, bootstrapProductosFusion, clavesAfectadasPorBajaWoo,
   clavesEsperandoProteccion, conciliacionIdentidad, procesarOperacionesIdentidad, protegerPorBajaWoo,
 } from '../lib/identidadProductos.js';
 
@@ -37,6 +37,8 @@ function pedidoMl(db, { orderId, sku, wcOrderId = 0 }) {
   db.prepare('INSERT INTO ordenes_ml_wc_pedidos (ml_order_id,wc_order_id,creado_en) VALUES (?,?,?)')
     .run(String(orderId), wcOrderId, ISO);
 }
+
+const idDe = (db, idWoo) => db.prepare('SELECT id FROM productos_fusion WHERE primary_woo_id=?').get(idWoo).id;
 
 describe('protección Woo→ML: la mitad que no escribe en ML', () => {
   let db;
@@ -276,5 +278,62 @@ describe('contador humano separado del trabajo del worker', () => {
     const c = conciliacionIdentidad(db);
     expect(c.auditadas).toBe(c.verificadas + c.excepciones + c.urgentes + c.esperando_operacion);
     expect(c.conciliado).toBe(true);
+  });
+});
+
+describe('archivado de identidades ML huérfanas', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  function identidadMl(db2, clave, productoId) {
+    db2.prepare(`INSERT INTO identidades_canal
+      (producto_id,canal,external_key,activa,observado_en,evidencia_fingerprint,creado_en,actualizado_en)
+      VALUES (?,'ml',?,1,?,'fp',?,?)`).run(productoId, clave, ISO, ISO, ISO);
+  }
+
+  it('exige lectura confiable: con un scan acotado archivaría identidades vivas', () => {
+    // El criterio es «no está en el cache», así que sin scan completo lo que falta puede ser
+    // simplemente lo que no se leyó esta vez.
+    woo(db, { id: 50, sku: 'FB-50' });
+    bootstrapProductosFusion(db);
+    identidadMl(db, 'MLA50|', idDe(db, 50));
+
+    expect(archivarIdentidadesMlHuerfanas(db)).toMatchObject({ ok: false, code: 'LECTURA_NO_CONFIABLE', archivadas: 0 });
+    expect(db.prepare("SELECT activa FROM identidades_canal WHERE canal='ml'").get().activa).toBe(1);
+  });
+
+  it('archiva la identidad cuya publicación ya no existe', () => {
+    woo(db, { id: 51, sku: 'FB-51' });
+    bootstrapProductosFusion(db);
+    identidadMl(db, 'MLA51|', idDe(db, 51));
+
+    expect(archivarIdentidadesMlHuerfanas(db, { lecturaConfiable: true })).toMatchObject({ ok: true, archivadas: 1 });
+    const i = db.prepare("SELECT * FROM identidades_canal WHERE canal='ml'").get();
+    expect(i.activa).toBe(0);
+    expect(i.archivado_en).toBeTruthy();
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento='identidad_ml_archivada'").get().n).toBe(1);
+  });
+
+  it('no toca la identidad cuya publicación sigue en el cache', () => {
+    woo(db, { id: 52, sku: 'FB-52' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA52|', sku: 'FB-52' });
+    identidadMl(db, 'MLA52|', idDe(db, 52));
+
+    expect(archivarIdentidadesMlHuerfanas(db, { lecturaConfiable: true })).toMatchObject({ archivadas: 0 });
+    expect(db.prepare("SELECT activa FROM identidades_canal WHERE canal='ml'").get().activa).toBe(1);
+  });
+
+  it('no borra: deja la fila archivada para que la reactivación pueda recuperarla', () => {
+    woo(db, { id: 53, sku: 'FB-53' });
+    bootstrapProductosFusion(db);
+    identidadMl(db, 'MLA53|', idDe(db, 53));
+    archivarIdentidadesMlHuerfanas(db, { lecturaConfiable: true });
+
+    expect(db.prepare("SELECT COUNT(*) n FROM identidades_canal WHERE canal='ml'").get().n).toBe(1);
   });
 });

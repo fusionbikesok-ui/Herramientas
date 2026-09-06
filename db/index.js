@@ -714,6 +714,14 @@ export function openDb(dbPath) {
       db.pragma('foreign_keys = ON');
     }
   }
+
+  const wooWebhooksMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='woo_webhooks_estado_092'").get();
+  if (!wooWebhooksMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '092_woo_webhooks_estado.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('woo_webhooks_estado_092')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {
