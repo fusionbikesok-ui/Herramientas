@@ -17,16 +17,16 @@ describe('digitoControlOk', () => {
 
 describe('normalizarGtin', () => {
   it('lleva cada largo a 14 dígitos y deriva el tipo', () => {
-    expect(normalizarGtin('96385074')).toMatchObject({ ok: true, canonico: '00000096385074', tipo: 'GTIN-8' });
-    expect(normalizarGtin('036000291452')).toMatchObject({ ok: true, canonico: '00036000291452', tipo: 'UPC-A' });
-    expect(normalizarGtin('4006381333931')).toMatchObject({ ok: true, canonico: '04006381333931', tipo: 'EAN-13' });
-    expect(normalizarGtin('10614141000415')).toMatchObject({ ok: true, canonico: '10614141000415', tipo: 'GTIN-14' });
+    expect(normalizarGtin('96385074')).toMatchObject({ ok: true, canonico: '00000096385074', tipo: 'ean_8' });
+    expect(normalizarGtin('036000291452')).toMatchObject({ ok: true, canonico: '00036000291452', tipo: 'upc_a' });
+    expect(normalizarGtin('4006381333931')).toMatchObject({ ok: true, canonico: '04006381333931', tipo: 'ean_13' });
+    expect(normalizarGtin('10614141000415')).toMatchObject({ ok: true, canonico: '10614141000415', tipo: 'gtin_14' });
   });
 
   it('no destruye el cero significativo de un UPC-A', () => {
     // En 036000291452 el cero inicial es el sistema numérico, no relleno:
     // quitarlo deja 11 dígitos y rompe un código perfectamente válido.
-    expect(normalizarGtin('036000291452')).toMatchObject({ ok: true, tipo: 'UPC-A', canonico: '00036000291452' });
+    expect(normalizarGtin('036000291452')).toMatchObject({ ok: true, tipo: 'upc_a', canonico: '00036000291452' });
   });
 
   it('une los canales por el canónico aunque declaren tipos distintos', () => {
@@ -35,8 +35,8 @@ describe('normalizarGtin', () => {
     expect(conCero.canonico).toBe(sinCero.canonico);
     // El tipo describe la representación recibida, no un tipo "verdadero"
     // inferido: una vez rellenado el código, adivinarlo sería inventarlo.
-    expect(conCero.tipo).toBe('EAN-13');
-    expect(sinCero.tipo).toBe('UPC-A');
+    expect(conCero.tipo).toBe('ean_13');
+    expect(sinCero.tipo).toBe('upc_a');
   });
 
   it('conserva el crudo para no perder la representación original', () => {

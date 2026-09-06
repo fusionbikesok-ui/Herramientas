@@ -1089,7 +1089,7 @@ La unidad ML es siempre `item_id + variation_id`. Una clave solo está cubierta 
 
 Woo continúa como autoridad de stock. Producto Fusion es la identidad canónica: una unidad vendible, una identidad Woo activa como máximo y cero o más claves ML. Su SKU no es editable y cumple `FB-{id_woo}`; un producto provisional sin Woo no tiene SKU ni puede sincronizarse.
 
-Son unidades Woo activas los productos simples y variaciones `publish|private`; los padres `variable` quedan fuera y el stock cero no archiva identidad. Producto Fusion administra identificadores tipados EAN-8/13, UPC-A y GTIN-14, únicos globalmente mientras estén activos. UPC-A y EAN-13 con cero inicial son equivalentes para matching; Woo recibe sólo el identificador principal y ML conserva todos los observados.
+Son unidades Woo activas los productos simples y variaciones `publish|private`; los padres `variable` quedan fuera y el stock cero no archiva identidad. Producto Fusion administra identificadores tipados `ean_8`, `ean_13`, `upc_a` y `gtin_14`, únicos globalmente mientras estén activos. UPC-A y EAN-13 con cero inicial son equivalentes para matching mediante el canónico GS1 de 14 dígitos (PM-150). Woo recibe sólo el identificador principal y ML conserva todos los observados; el principal es **el primero de una lista de prioridad reordenable por producto** (PM-151, 2026-09-06), no una regla fija por fuente, y una unidad admite N identificadores activos —el límite de «un EAN y un UPC» quedó superado por ser falso contra los datos.
 
 ### Subentregas ordenadas por valor operativo
 
@@ -1125,7 +1125,7 @@ Los casos no vinculables deben recibir una excepción explícita `solo_ml` o per
 ### Matching y cobertura bilateral
 
 - Auto-vínculo sólo por `SELLER_SKU` textualmente exacto y único o EAN/UPC/GTIN activo, canónico, único y con dígito verificador válido.
-- Un conflicto entre SKU/EAN/UPC no se automatiza: la persona elige la identidad válida, el identificador descartado queda marcado incorrecto y genera tarea de catálogo.
+- Un conflicto entre SKU/EAN/UPC no se automatiza: la persona elige la identidad válida, el identificador descartado queda marcado incorrecto y genera tarea de catálogo. Desde 2026-09-06 el conflicto **se registra** en estado `conflicto` en vez de descartarse en silencio (PM-150). Excepción medida: las variaciones que heredaron el GTIN de su padre Woo se absorben sin generar trabajo humano —no confunden dos productos distintos— por decisión del usuario del 2026-09-06.
 - Matching aproximado determinista por familia, con un candidato, razones visibles y confirmación individual. Precio y fotos son contexto, no puntaje.
 - Mostrar porcentaje solo si existe calibración suficiente y es ≥60%; de lo contrario indicar evidencia insuficiente.
 - Woo→ML incluye unidades activas con stock y termina en vínculo, tarea de publicación con SLA de siete días o exclusión administrativa explícita. Una tarea vencida escala sin cerrarse.

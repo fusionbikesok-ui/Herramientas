@@ -84,6 +84,27 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 ## Reglas inmediatas
 
+- **Hay tests que fallan sólo en la corrida completa y pasan aislados.** Es contención, no un bug
+  del cambio en curso: la suite tarda ~20 min y algunos casos cruzan su `testTimeout` de 5 s bajo
+  carga. Vistos así: `inventario.test.js` y, el 2026-09-06, `workshop-stock.test.js` («registra
+  consumo idempotente desde ubicación», timeout a 5000 ms en la suite, 475 ms aislado). Antes de
+  atribuirlo a la interferencia hay que descartar haber ralentizado la suite: comparar la duración
+  total contra corridas previas —esa vez bajó de 1289 s a 1195 s con más tests, así que el cambio
+  no era la causa—. La deuda de fondo sigue abierta: los timeouts dependen de la máquina.
+
+- **`git clean -f -x` borra los tests nuevos que todavía no se commitearon.** Pasó el 2026-09-06:
+  se usó como higiene antes de correr la suite y se llevó puesto un archivo de test recién escrito
+  y sin `git add`. Antes de limpiar, `git status --porcelain` y `git add` de lo que se quiera
+  conservar; o limpiar sólo los residuos conocidos en vez de todo lo no rastreado.
+- **No editar el worktree mientras corre la suite.** Vuelve inválida la medición, y ese día pasó
+  dos veces: la segunda, además, la corrida tuvo que descartarse entera (`exit=143`) y repetirse.
+  Si hay que seguir trabajando, se espera el cierre o se corre sobre una copia.
+- **Una migración ya desplegada es inmutable; una que todavía no, se corrige en su lugar.** El
+  registro en `_schema_migrations` impide que vuelva a ejecutarse, así que cambiar su `.sql`
+  después de que corrió deja las bases viejas con un esquema distinto al de las nuevas. Corolario
+  operativo: las copias de prueba hay que regenerarlas desde el backup cuando la migración cambia,
+  o se prueba contra un esquema que ya no existe.
+
 - **Verificar el artefacto, no la señal que lo representa.** Es el error que más veces se repitió
   el 2026-09-05/06, siempre con la misma forma: un test verde no prueba que el código se ejecute
   (un `catch` se tragaba un `ReferenceError` y la función nunca corría); un `200` de ML no prueba

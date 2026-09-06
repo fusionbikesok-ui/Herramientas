@@ -71,10 +71,10 @@ Invariantes:
 
 - Una unidad vendible es un producto simple o variación Woo `publish|private`; un padre `variable` no es vendible.
 - `fusion_sku` es `FB-{id_woo}` y no editable.
-- Puede existir como máximo un EAN activo y un UPC activo por unidad; los valores activos son únicos globalmente.
+- Los valores activos son únicos globalmente. ~~Puede existir como máximo un EAN activo y un UPC activo por unidad~~ **superado el 2026-09-06 (PM-151)**: 22 productos tienen dos activos del mismo subtipo con códigos válidos. Una unidad admite N activos ordenados por prioridad.
 - Se preservan tipo, valor crudo, fuente, vigencia y estado del identificador.
-- UPC-A y EAN-13 con cero inicial comparten clave GTIN normalizada, sin perder sus representaciones originales.
-- Woo proyecta el identificador principal a `global_unique_id`; Fusion conserva el resto.
+- UPC-A y EAN-13 con cero inicial comparten clave GTIN normalizada, sin perder sus representaciones originales. Implementado (PM-150): canónico GS1 de 14 dígitos en `valor_normalizado`, representación recibida en `valor_crudo` y `subtipo`.
+- Woo proyecta el identificador principal a `global_unique_id`; Fusion conserva el resto. El principal es el primero de la lista de prioridad del producto, reordenable (PM-151), con desempate determinista por `(orden, id)`.
 - Un código histórico no confirma una identidad activa y no se reutiliza.
 
 ## 4. Máquinas de estado
@@ -123,8 +123,8 @@ Protegido significa: todas las claves ML vinculadas en stock cero, pedidos afect
 ### Identificadores
 
 ```text
-observado → validado → activo/principal
-                  ├→ activo/secundario
+observado → validado → activo (ordenado por prioridad; el primero es el principal)
+                  ├→ conflicto (mismo valor reclamado por otro producto)
                   ├→ incorrecto (tarea de catálogo)
                   └→ histórico/reservado
 ```
@@ -178,7 +178,7 @@ Una respuesta `409` por versión/huella no debe ocultarse ni convertirse en rein
 
 ## 8. Brechas actuales y orden recomendado
 
-1. **Alta:** el modelo local todavía concentra códigos en `gtin`; crear identificadores tipados y migración sin perder valores.
+1. ~~**Alta:** el modelo local todavía concentra códigos en `gtin`; crear identificadores tipados y migración sin perder valores.~~ **En curso desde el 2026-09-06.** La tabla `identificadores_producto` ya existía (migración 082); lo que faltaba era que el valor guardado fuera comparable. Hecho: forma canónica GS1 y subtipo (PM-150, migración 088), orden de prioridad por producto (PM-151, migración 089) y siembra de los GTIN que sólo conocía ML —hasta ahora la tabla se llenaba **sólo desde Woo**: 740 filas `gtin` para 5141 productos, mientras los 5241 GTIN válidos de ML no participaban de la identidad. Pendiente: cablear la siembra a un punto de ejecución y exponer en la bandeja los **41 códigos en conflicto** (27 con stock activo, que es por donde se arranca).
 2. **Alta:** implementar la protección Woo→ML definida en PM-104; hoy el webhook puntual actualiza catálogo pero no debe asumirse que protege todas las publicaciones.
 3. **Alta:** separar definitivamente contador humano de operaciones esperando worker en API y UI.
 4. **Media:** monitorear estado y logs de webhooks Woo, incluido el estado `disabled`.

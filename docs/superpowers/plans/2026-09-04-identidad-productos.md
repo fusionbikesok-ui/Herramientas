@@ -22,8 +22,8 @@ Un `SELLER_SKU` válido existe, no está vacío, coincide textualmente con un ú
 - Cada clave ML vinculada publica el stock Woo completo.
 - Una relación local no queda verificada hasta releer ML y confirmar SKU y stock objetivo con observaciones confiables de menos de 60 minutos.
 - Las decisiones aproximadas requieren confirmación individual. Solo `SELLER_SKU` exacto único o GTIN canónico válido único pueden automatizarse.
-- Los identificadores comerciales son tipados (`ean_8`, `ean_13`, `upc_a`, `gtin_14`): una unidad admite como máximo un EAN activo y un UPC activo, y cada valor activo es único globalmente.
-- UPC-A y su EAN-13 equivalente con cero inicial representan el mismo GTIN normalizado para matching y unicidad, aunque se preservan ambos valores y tipos.
+- Los identificadores comerciales son tipados (`ean_8`, `ean_13`, `upc_a`, `gtin_14`) y cada valor activo es único globalmente. ~~Una unidad admite como máximo un EAN activo y un UPC activo~~ **superado el 2026-09-06 (PM-151)**: es falso contra los datos —22 productos tienen dos activos del mismo subtipo, con códigos válidos— y limitar a uno por familia obligaría a descartar identificadores reales. Una unidad admite N identificadores activos, ordenados por prioridad; gana el primero.
+- UPC-A y su EAN-13 equivalente con cero inicial representan el mismo GTIN normalizado para matching y unicidad, aunque se preservan ambos valores y tipos. Implementado el 2026-09-06 (PM-150): la clave es el canónico GS1 de 14 dígitos, armado **rellenando y nunca quitando** ceros —en un UPC-A como `036000291452` el cero inicial es el sistema numérico—, y el `subtipo` guarda la representación que entregó cada canal, sin inferir un tipo «verdadero» bajo el relleno.
 - Sólo un identificador activo de un Producto Fusion activo confirma identidad. Los históricos quedan reservados y una transferencia requiere Administración.
 - Si SKU, EAN o UPC señalan productos distintos no hay auto-vínculo: la persona elige cuál coincide, el descartado queda marcado incorrecto y se crea una tarea de catálogo.
 
@@ -49,7 +49,7 @@ Una publicación ML pausada o sin stock con identidad inválida conserva un caso
 
 ### UM1.3 — Producto Fusion completo
 
-Agrega familias y reglas versionadas, atributos canónicos, productos provisionales, archivo, reserva/transferencia de identificadores y bootstrap idempotente desde unidades Woo vendibles. El `global_unique_id` Woo existente se importa tipado, activo y principal. Producto Fusion conserva todos los EAN/UPC/GTIN y proyecta a Woo sólo el principal. ML conserva todos los valores `GTIN`, `EAN` y `UPC` con su tipo, sin colapsarlos.
+Agrega familias y reglas versionadas, atributos canónicos, productos provisionales, archivo, reserva/transferencia de identificadores y bootstrap idempotente desde unidades Woo vendibles. El `global_unique_id` Woo existente se importa tipado y activo. Producto Fusion conserva todos los EAN/UPC/GTIN y proyecta a Woo sólo el principal, que desde 2026-09-06 (PM-151) **no es una regla fija sino el primero de una lista de prioridad reordenable por producto**, al modo del orden de arranque de una PC; `identidad_config.identificadores_prioridad` fija sólo el orden inicial. ML conserva todos los valores `GTIN`, `EAN` y `UPC` con su tipo, sin colapsarlos.
 
 Las decisiones heredadas quedan como historia; sólo las exactas, únicas y nuevamente verificadas migran como relaciones. Las identidades ya verificadas sin familia o atributos completos siguen sincronizando, pero generan deuda de catálogo con SLA de siete días; los vínculos nuevos incompletos se bloquean. Cambiar familia o atributos discriminantes revalida todos sus vínculos y conserva automáticamente sólo los exactos no contradictorios.
 

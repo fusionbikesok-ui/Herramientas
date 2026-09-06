@@ -650,6 +650,15 @@ export function openDb(dbPath) {
     })();
   }
 
+  const ordenIdentificadoresMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identificadores_orden_prioridad_089'").get();
+  if (!ordenIdentificadoresMigration) {
+    // Depende de 088 (crea la columna `fuente` que el backfill del orden lee).
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '089_identificadores_orden_prioridad.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identificadores_orden_prioridad_089')").run();
+    })();
+  }
+
   const cambiosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_cambios_observados_087'").get();
   if (!cambiosMigration) {
     try {

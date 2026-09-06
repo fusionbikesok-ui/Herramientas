@@ -28,7 +28,7 @@ CREATE TABLE identificadores_producto (
   valor_crudo TEXT,
   -- Sólo para `tipo = 'gtin'`: describe la representación recibida, no un tipo
   -- "verdadero" inferido bajo el relleno de ceros (ver lib/gtin.js).
-  subtipo TEXT CHECK (subtipo IS NULL OR subtipo IN ('GTIN-8', 'UPC-A', 'EAN-13', 'GTIN-14')),
+  subtipo TEXT CHECK (subtipo IS NULL OR subtipo IN ('ean_8', 'upc_a', 'ean_13', 'gtin_14')),
   fuente TEXT CHECK (fuente IS NULL OR fuente IN ('woo', 'ml', 'manual')),
   producto_id INTEGER NOT NULL REFERENCES productos_fusion(id),
   estado TEXT NOT NULL DEFAULT 'reservado'
@@ -56,10 +56,10 @@ SELECT
   CASE WHEN tipo = 'gtin' THEN valor_normalizado ELSE NULL END,
   CASE WHEN tipo = 'gtin' THEN
     CASE length(valor_normalizado)
-      WHEN 8 THEN 'GTIN-8'
-      WHEN 12 THEN 'UPC-A'
-      WHEN 13 THEN 'EAN-13'
-      WHEN 14 THEN 'GTIN-14'
+      WHEN 8 THEN 'ean_8'
+      WHEN 12 THEN 'upc_a'
+      WHEN 13 THEN 'ean_13'
+      WHEN 14 THEN 'gtin_14'
     END
   END,
   CASE WHEN tipo = 'gtin' THEN 'woo' ELSE NULL END,
