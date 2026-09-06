@@ -5,7 +5,8 @@ import request from 'supertest';
 import { openDb } from '../db/index.js';
 import {
   bootstrapProductosFusion, conflictosDeIdentificador, identificadorPrincipal,
-  reordenarIdentificadores, resolverConflictoIdentificador, sembrarIdentificadoresMl,
+  marcarIdentificadorIncorrecto, reordenarIdentificadores, resolverConflictoIdentificador,
+  sembrarIdentificadoresMl,
 } from '../lib/identidadProductos.js';
 import { identidadProductosRouter } from '../routes/identidadProductos.js';
 
@@ -416,5 +417,88 @@ describe('API de identificadores', () => {
     expect((await request(app).put(`/api/identidad-productos/productos/${id}/identificadores/orden`)
       .send({})).status).toBe(422);
     expect(identificadorPrincipal(db, id).valor_normalizado).toBe('04524667220343');
+  });
+});
+
+describe('marcar un identificador como incorrecto', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  it('saca de la bandeja el identificador que no le corresponde al producto', () => {
+    woo(db, { id: 140, sku: 'FB-140', gtin: '602883701731' });
+    woo(db, { id: 141, sku: 'FB-141' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA60|', sku: 'FB-141', gtin: '602883701731' });
+    sembrarIdentificadoresMl(db);
+
+    const r = marcarIdentificadorIncorrecto(db, idDe(db, 141), '00602883701731', 'ana', 'no es de este producto');
+    expect(r).toMatchObject({ ok: true });
+    expect(gtinDe(db, idDe(db, 141))).toMatchObject([{ estado: 'incorrecto' }]);
+    expect(conflictosDeIdentificador(db)).toEqual([]);
+  });
+
+  it('protege al producto de quedarse sin identidad por accidente', () => {
+    // Dejar un producto sin GTIN tiene que ser una decisión, no un efecto colateral.
+    woo(db, { id: 142, sku: 'FB-142', gtin: '602883701731' });
+    bootstrapProductosFusion(db);
+    const id = idDe(db, 142);
+
+    expect(marcarIdentificadorIncorrecto(db, id, '00602883701731', 'ana'))
+      .toMatchObject({ ok: false, code: 'INVALID_STATE' });
+    expect(gtinDe(db, id)).toMatchObject([{ estado: 'activo' }]);
+
+    // Con la confirmación explícita sí: es el caso de las bicicletas Venzo, que
+    // no tienen código universal posible y deben quedar sin GTIN.
+    expect(marcarIdentificadorIncorrecto(db, id, '00602883701731', 'ana', 'sin código posible', { permitirUnico: true }))
+      .toMatchObject({ ok: true });
+    expect(gtinDe(db, id)).toMatchObject([{ estado: 'incorrecto' }]);
+  });
+
+  it('deja marcar el activo cuando el producto conserva otro', () => {
+    woo(db, { id: 143, sku: 'FB-143', gtin: '4524667220343' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA61|', sku: 'FB-143', gtin: '689228220348' });
+    sembrarIdentificadoresMl(db);
+    const id = idDe(db, 143);
+
+    expect(marcarIdentificadorIncorrecto(db, id, '04524667220343', 'ana')).toMatchObject({ ok: true });
+    expect(identificadorPrincipal(db, id).valor_normalizado).toBe('00689228220348');
+  });
+
+  it('registra quién y por qué, con el estado previo', () => {
+    woo(db, { id: 144, sku: 'FB-144', gtin: '602883701731' });
+    woo(db, { id: 145, sku: 'FB-145' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA62|', sku: 'FB-145', gtin: '602883701731' });
+    sembrarIdentificadoresMl(db);
+
+    marcarIdentificadorIncorrecto(db, idDe(db, 145), '00602883701731', 'ana', 'GTIN ajeno');
+    const h = db.prepare("SELECT * FROM identidad_historial WHERE evento='gtin_marcado_incorrecto'").get();
+    expect(h.actor).toBe('ana');
+    expect(JSON.parse(h.detalle_json)).toMatchObject({ motivo: 'GTIN ajeno', estado_previo: 'conflicto' });
+  });
+
+  it('rechaza un identificador que el producto no tiene', () => {
+    woo(db, { id: 146, sku: 'FB-146' });
+    bootstrapProductosFusion(db);
+    expect(marcarIdentificadorIncorrecto(db, idDe(db, 146), '00602883701731', 'ana'))
+      .toMatchObject({ ok: false, code: 'NOT_FOUND' });
+  });
+
+  it('no revive un identificador ya marcado incorrecto', () => {
+    woo(db, { id: 147, sku: 'FB-147', gtin: '602883701731' });
+    woo(db, { id: 148, sku: 'FB-148' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA63|', sku: 'FB-148', gtin: '602883701731' });
+    sembrarIdentificadoresMl(db);
+    const id = idDe(db, 148);
+
+    marcarIdentificadorIncorrecto(db, id, '00602883701731', 'ana');
+    expect(marcarIdentificadorIncorrecto(db, id, '00602883701731', 'ana'))
+      .toMatchObject({ ok: false, code: 'NOT_FOUND' });
   });
 });

@@ -84,6 +84,13 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 ## Reglas inmediatas
 
+- **No correr la suite completa salvo que se vaya a desplegar** (instrucción del usuario,
+  2026-09-06, explícita como excepción al gate habitual: «no quiero que corras la suite completa
+  hasta que diga que vamos a hacer un despliegue»). Motivo práctico: tarda ~20 min, bloquea el
+  worktree —no se puede editar mientras corre sin invalidar la medición— y sus flaky por timeout
+  agregan ruido. Durante el desarrollo se corren sólo los archivos afectados y `npm run lint:diff`;
+  la suite completa vuelve como gate de despliegue, cuando el usuario lo pida.
+
 - **Hay tests que fallan sólo en la corrida completa y pasan aislados.** Es contención, no un bug
   del cambio en curso: la suite tarda ~20 min y algunos casos cruzan su `testTimeout` de 5 s bajo
   carga. Vistos así: `inventario.test.js` y, el 2026-09-06, `workshop-stock.test.js` («registra

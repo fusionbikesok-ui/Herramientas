@@ -62,6 +62,26 @@ describe('cadencia adaptativa del scan de ML', () => {
     expect(tocaScan(db, ahora)).toBe(true);
     db.close();
   });
+
+  it('no dispara cuando faltan milisegundos, y por eso la cadencia real es un tick más larga', () => {
+    // Comportamiento deliberado, no un descuido (decisión del usuario, 2026-09-06).
+    // El scan se registra unos ms después del tick que lo lanzó, así que al tick
+    // siguiente le faltan esos ms para el umbral y se posterga cinco minutos. Un
+    // intervalo de 15 min corre de hecho cada 20.
+    //
+    // Corregirlo con una tolerancia sube las llamadas a ML un 33% (de 14.184 a
+    // 18.912 por día) contra una API que ya nos bloqueó. Si alguna vez se hace,
+    // hay que bajar un escalón el ramp en la misma tanda. Este test está para que
+    // esa decisión sea consciente: si lo rompés, estás cambiando el consumo.
+    const db = openDb(':memory:');
+    const tick = new Date('2026-09-06T15:45:00.000Z');
+    db.prepare('UPDATE ml_scan_ramp SET intervalo_min=15, ultimo_scan_en=? WHERE id=1')
+      .run('2026-09-06T15:30:00.160Z');
+    expect(tocaScan(db, tick)).toBe(false);
+    // Recién el tick siguiente, cinco minutos después, lo deja pasar.
+    expect(tocaScan(db, new Date('2026-09-06T15:50:00.000Z'))).toBe(true);
+    db.close();
+  });
 });
 
 describe('métrica de cobertura del webhook', () => {
