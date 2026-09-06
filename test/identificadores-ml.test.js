@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
+import express from 'express';
+import request from 'supertest';
 import { openDb } from '../db/index.js';
 import {
   bootstrapProductosFusion, conflictosDeIdentificador, identificadorPrincipal,
-  reordenarIdentificadores, sembrarIdentificadoresMl,
+  reordenarIdentificadores, resolverConflictoIdentificador, sembrarIdentificadoresMl,
 } from '../lib/identidadProductos.js';
+import { identidadProductosRouter } from '../routes/identidadProductos.js';
 
 const FILE = './test/tmp-identificadores-ml.sqlite';
 const ISO = '2026-09-06T12:00:00.000Z';
@@ -251,5 +254,167 @@ describe('conflictos de identificador para la bandeja', () => {
     sembrarIdentificadoresMl(db);
 
     expect(conflictosDeIdentificador(db)[0]).toMatchObject({ stock_ml: 0 });
+  });
+});
+
+describe('resolución de un conflicto de GTIN', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  function conflicto() {
+    woo(db, { id: 100, sku: 'FB-100', gtin: '602883701731' });
+    woo(db, { id: 101, sku: 'FB-101' });
+    woo(db, { id: 102, sku: 'FB-102' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA40|', sku: 'FB-101', gtin: '602883701731' });
+    ml(db, { clave: 'MLA41|', sku: 'FB-102', gtin: '602883701731' });
+    sembrarIdentificadoresMl(db);
+    return { ganador: idDe(db, 101), otros: [idDe(db, 100), idDe(db, 102)] };
+  }
+
+  it('deja el código en el producto elegido y marca los demás incorrectos', () => {
+    const { ganador, otros } = conflicto();
+    const r = resolverConflictoIdentificador(db, '00602883701731', ganador, 'ana', 'el código es de este');
+
+    expect(r).toMatchObject({ ok: true, ganador, descartados: 2 });
+    expect(gtinDe(db, ganador)).toMatchObject([{ estado: 'activo' }]);
+    for (const o of otros) expect(gtinDe(db, o)).toMatchObject([{ estado: 'incorrecto' }]);
+    // El conflicto desaparece de la bandeja.
+    expect(conflictosDeIdentificador(db)).toEqual([]);
+  });
+
+  it('no borra el descartado ni lo confunde con un histórico', () => {
+    // `incorrecto` dice que el código nunca debió estar ahí y hay que corregirlo
+    // en el canal; `historico` diría que alguna vez fue válido, y sería falso.
+    const { ganador, otros } = conflicto();
+    resolverConflictoIdentificador(db, '00602883701731', ganador, 'ana');
+
+    const descartado = db.prepare("SELECT * FROM identificadores_producto WHERE producto_id=? AND tipo='gtin'").get(otros[0]);
+    expect(descartado.estado).toBe('incorrecto');
+    expect(descartado.resuelto_por).toBe('ana');
+    expect(descartado.resuelto_en).toBeTruthy();
+  });
+
+  it('registra quién resolvió y por qué', () => {
+    const { ganador } = conflicto();
+    resolverConflictoIdentificador(db, '00602883701731', ganador, 'ana', 'catálogo lo confirmó');
+
+    const h = db.prepare("SELECT * FROM identidad_historial WHERE evento='conflicto_gtin_resuelto'").get();
+    expect(h.actor).toBe('ana');
+    expect(JSON.parse(h.detalle_json)).toMatchObject({ ganador, motivo: 'catálogo lo confirmó' });
+  });
+
+  it('rechaza un producto que no reclama ese identificador', () => {
+    const { ganador } = conflicto();
+    const ajeno = ganador + 999;
+    expect(resolverConflictoIdentificador(db, '00602883701731', ajeno, 'ana'))
+      .toMatchObject({ ok: false, code: 'INVALID_INPUT' });
+    // Nada cambió: sigue en conflicto.
+    expect(conflictosDeIdentificador(db)).toHaveLength(1);
+  });
+
+  it('rechaza resolver algo que no está en conflicto', () => {
+    woo(db, { id: 110, sku: 'FB-110', gtin: '602883701731' });
+    bootstrapProductosFusion(db);
+    expect(resolverConflictoIdentificador(db, '00602883701731', idDe(db, 110), 'ana'))
+      .toMatchObject({ ok: false, code: 'INVALID_STATE' });
+    expect(resolverConflictoIdentificador(db, '00000000000000', idDe(db, 110), 'ana'))
+      .toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    expect(resolverConflictoIdentificador(db, '', null, 'ana'))
+      .toMatchObject({ ok: false, code: 'INVALID_INPUT' });
+  });
+
+  it('libera el índice único antes de activar al ganador', () => {
+    // Si el ganador se activara primero, el índice parcial sobre estado='activo'
+    // lo rechazaría mientras otra fila del mismo valor siguiera activa.
+    const { ganador } = conflicto();
+    expect(() => resolverConflictoIdentificador(db, '00602883701731', ganador, 'ana')).not.toThrow();
+    expect(db.prepare("SELECT COUNT(*) n FROM identificadores_producto WHERE valor_normalizado='00602883701731' AND estado='activo'").get().n).toBe(1);
+  });
+});
+
+describe('API de identificadores', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  function appCon(nivel) {
+    const app = express(); app.use(express.json());
+    app.use((req, _res, next) => {
+      req.user = { username: 'ana', is_admin: false, permisos: [{ herramienta: 'matcher', nivel }] };
+      next();
+    });
+    app.use('/api/identidad-productos', identidadProductosRouter(db));
+    return app;
+  }
+
+  function conflicto() {
+    woo(db, { id: 120, sku: 'FB-120', gtin: '602883701731' });
+    woo(db, { id: 121, sku: 'FB-121' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA50|', sku: 'FB-121', gtin: '602883701731' });
+    sembrarIdentificadoresMl(db);
+  }
+
+  it('expone los conflictos en el resumen', async () => {
+    conflicto();
+    const r = await request(appCon('read')).get('/api/identidad-productos/resumen');
+    expect(r.status).toBe(200);
+    expect(r.body.data.conflictos_gtin).toMatchObject([{ valor_normalizado: '00602883701731', productos: 2 }]);
+  });
+
+  it('resuelve el conflicto y deja de listarlo', async () => {
+    conflicto();
+    const app = appCon('write');
+    const r = await request(app).post('/api/identidad-productos/identificadores/conflictos/resolver')
+      .send({ valor_normalizado: '00602883701731', producto_id: idDe(db, 121), motivo: 'es de este' });
+
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true, descartados: 1 });
+    expect((await request(app).get('/api/identidad-productos/resumen')).body.data.conflictos_gtin).toEqual([]);
+  });
+
+  it('no deja resolver con permiso de sólo lectura', async () => {
+    conflicto();
+    const r = await request(appCon('read')).post('/api/identidad-productos/identificadores/conflictos/resolver')
+      .send({ valor_normalizado: '00602883701731', producto_id: idDe(db, 121) });
+    expect(r.status).toBe(403);
+    expect(conflictosDeIdentificador(db)).toHaveLength(1);
+  });
+
+  it('reordena la prioridad de un producto', async () => {
+    woo(db, { id: 130, sku: 'FB-130', gtin: '4524667220343' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA51|', sku: 'FB-130', gtin: '689228220348' });
+    sembrarIdentificadoresMl(db);
+    const id = idDe(db, 130);
+
+    const r = await request(appCon('write')).put(`/api/identidad-productos/productos/${id}/identificadores/orden`)
+      .send({ valores: ['00689228220348', '04524667220343'] });
+
+    expect(r.status).toBe(200);
+    expect(identificadorPrincipal(db, id).valor_normalizado).toBe('00689228220348');
+  });
+
+  it('rechaza una lista incompleta con 422 y no toca el orden', async () => {
+    woo(db, { id: 131, sku: 'FB-131', gtin: '4524667220343' });
+    bootstrapProductosFusion(db);
+    ml(db, { clave: 'MLA52|', sku: 'FB-131', gtin: '689228220348' });
+    sembrarIdentificadoresMl(db);
+    const id = idDe(db, 131);
+
+    const app = appCon('write');
+    expect((await request(app).put(`/api/identidad-productos/productos/${id}/identificadores/orden`)
+      .send({ valores: ['00689228220348'] })).status).toBe(422);
+    expect((await request(app).put(`/api/identidad-productos/productos/${id}/identificadores/orden`)
+      .send({})).status).toBe(422);
+    expect(identificadorPrincipal(db, id).valor_normalizado).toBe('04524667220343');
   });
 });

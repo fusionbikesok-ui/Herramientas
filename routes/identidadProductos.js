@@ -19,6 +19,8 @@ import {
   reintentarOperacionIdentidad,
   conflictosDeBolsaCompartida,
   conflictosDeIdentificador,
+  reordenarIdentificadores,
+  resolverConflictoIdentificador,
   publicacionesSinRespaldoWoo,
 } from '../lib/identidadProductos.js';
 
@@ -105,6 +107,22 @@ export function identidadProductosRouter(db) {
     confirmarImpactoIdentidad(db, req.params.id, req.body || {}, actor(req))));
   router.post('/productos/:id/tareas-publicacion', exigir('write'), (req, res) => responder(res,
     crearTareaPublicacion(db, req.params.id, req.body || {}, actor(req)), true));
+  // Resolver un conflicto de GTIN le saca el código a uno o más productos y se lo deja a
+  // otro: es una decisión de identidad, del mismo peso que decidir un caso.
+  router.post('/identificadores/conflictos/resolver', exigir('write'), (req, res) => responder(res,
+    resolverConflictoIdentificador(db, req.body?.valor_normalizado, req.body?.producto_id,
+      actor(req), req.body?.motivo || null)));
+  // Reordenar la prioridad no cambia qué códigos tiene el producto, sólo cuál lo representa
+  // (y por lo tanto cuál se proyecta a Woo). Mismo nivel de escritura, sin exigir Administración.
+  router.put('/productos/:id/identificadores/orden', exigir('write'), (req, res) => {
+    const valores = Array.isArray(req.body?.valores) ? req.body.valores : null;
+    if (!valores) {
+      return res.status(422).json({ ok: false, code: 'INVALID_INPUT', error: 'falta `valores`: la lista ordenada de identificadores' });
+    }
+    const r = reordenarIdentificadores(db, Number(req.params.id), valores);
+    return r.ok ? res.json({ ok: true, data: r })
+      : res.status(422).json({ ok: false, code: 'INVALID_INPUT', error: r.error });
+  });
   router.put('/config/modo', exigir('write', true), (req, res) => responder(res,
     cambiarModoIdentidad(db, req.body?.modo, actor(req))));
 

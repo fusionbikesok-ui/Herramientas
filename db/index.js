@@ -658,6 +658,15 @@ export function openDb(dbPath) {
     })();
   }
 
+  const estadoIncorrectoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identificadores_estado_incorrecto_090'").get();
+  if (!estadoIncorrectoMigration) {
+    // Depende de 089 (copia la columna `orden`). Sin try/catch por el mismo motivo que 088.
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '090_identificadores_estado_incorrecto.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identificadores_estado_incorrecto_090')").run();
+    })();
+  }
+
   const cambiosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_cambios_observados_087'").get();
   if (!cambiosMigration) {
     try {
