@@ -600,7 +600,9 @@
   function vistaHistorial() {
     const h = state.historial;
     return '<section class="card detail"><h2>Historial</h2>'
-      + '<p class="muted">Append-only: una corrección agrega eventos y nunca reescribe los anteriores.</p>'
+      + '<p class="muted">Append-only: una corrección agrega eventos y nunca reescribe los anteriores. '
+      + 'De las verificaciones automáticas se guarda la primera y la última de cada caso —desde cuándo la '
+      + 'identidad está verificada y hasta cuándo se la vio bien—; las repeticiones intermedias no se conservan.</p>'
       + (h.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>Cuándo</th><th>Entidad</th><th>Evento</th><th>Actor</th></tr></thead><tbody>'
         + h.map((x) => '<tr><td>' + esc(x.creado_en) + '</td><td>' + esc(x.entidad) + ' ' + esc(x.entidad_id) + '</td><td>' + esc(x.evento) + '</td><td>' + esc(x.actor || 'sistema') + '</td></tr>').join('')
         + '</tbody></table></div>' : '<p class="muted empty">Sin eventos registrados.</p>')

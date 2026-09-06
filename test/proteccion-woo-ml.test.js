@@ -4,6 +4,7 @@ import { openDb } from '../db/index.js';
 import {
   archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, bootstrapProductosFusion, clavesAfectadasPorBajaWoo,
   clavesEsperandoProteccion, conciliacionIdentidad, procesarOperacionesIdentidad, protegerPorBajaWoo,
+  purgarHistorialVerificaciones,
 } from '../lib/identidadProductos.js';
 
 const FILE = './test/tmp-proteccion-woo.sqlite';
@@ -403,5 +404,65 @@ describe('el historial registra cambios, no cada corrida', () => {
     auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: true });
 
     expect(db.prepare("SELECT stock_observado FROM identidades_canal WHERE canal='ml'").get().stock_observado).toBe(7);
+  });
+});
+
+describe('purga de las verificaciones repetidas', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  const anotar = (casoId, evento, cuando) => db.prepare(`INSERT INTO identidad_historial
+    (entidad_tipo,entidad_id,evento,actor,detalle_json,creado_en) VALUES ('caso',?,?,'sistema',NULL,?)`)
+    .run(casoId, evento, cuando);
+  const cuantos = (evento) => db.prepare('SELECT COUNT(*) n FROM identidad_historial WHERE evento=?').get(evento).n;
+
+  it('conserva la primera y la última de cada caso', () => {
+    // La primera dice desde cuándo está verificada; la última, hasta cuándo se la vio bien.
+    for (let i = 1; i <= 5; i += 1) anotar(1, 'identidad_verificada', `2026-09-0${i}T10:00:00Z`);
+    for (let i = 1; i <= 3; i += 1) anotar(2, 'identidad_verificada', `2026-09-0${i}T11:00:00Z`);
+
+    expect(purgarHistorialVerificaciones(db, { simular: false })).toMatchObject({ conservados: 4, borrados: 4 });
+    const quedan = db.prepare("SELECT entidad_id, creado_en FROM identidad_historial WHERE evento='identidad_verificada' ORDER BY entidad_id, creado_en").all();
+    expect(quedan.map((r) => r.creado_en)).toEqual([
+      '2026-09-01T10:00:00Z', '2026-09-05T10:00:00Z',
+      '2026-09-01T11:00:00Z', '2026-09-03T11:00:00Z',
+    ]);
+  });
+
+  it('no toca ningún otro evento', () => {
+    // El invariante append-only existe para proteger las decisiones, no la telemetría.
+    anotar(1, 'identidad_verificada', '2026-09-01T10:00:00Z');
+    anotar(1, 'identidad_verificada', '2026-09-02T10:00:00Z');
+    anotar(1, 'identidad_verificada', '2026-09-03T10:00:00Z');
+    anotar(1, 'decision_persistida_antes_de_efecto', '2026-09-02T10:00:00Z');
+    anotar(1, 'gtin_en_conflicto', '2026-09-02T10:00:00Z');
+    purgarHistorialVerificaciones(db, { simular: false });
+
+    expect(cuantos('decision_persistida_antes_de_efecto')).toBe(1);
+    expect(cuantos('gtin_en_conflicto')).toBe(1);
+    expect(cuantos('identidad_verificada')).toBe(2);
+  });
+
+  it('simula por defecto: no borra sin que se lo pidan', () => {
+    for (let i = 1; i <= 4; i += 1) anotar(1, 'identidad_verificada', `2026-09-0${i}T10:00:00Z`);
+    expect(purgarHistorialVerificaciones(db)).toMatchObject({ simulado: true, borrados: 0, a_borrar: 2 });
+    expect(cuantos('identidad_verificada')).toBe(4);
+  });
+
+  it('deja en paz al caso con una sola verificación', () => {
+    anotar(1, 'identidad_verificada', '2026-09-01T10:00:00Z');
+    expect(purgarHistorialVerificaciones(db, { simular: false })).toMatchObject({ borrados: 0 });
+    expect(cuantos('identidad_verificada')).toBe(1);
+  });
+
+  it('es idempotente', () => {
+    for (let i = 1; i <= 5; i += 1) anotar(1, 'identidad_verificada', `2026-09-0${i}T10:00:00Z`);
+    purgarHistorialVerificaciones(db, { simular: false });
+    expect(purgarHistorialVerificaciones(db, { simular: false })).toMatchObject({ borrados: 0 });
+    expect(cuantos('identidad_verificada')).toBe(2);
   });
 });
