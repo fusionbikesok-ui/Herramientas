@@ -56,7 +56,18 @@ export async function wooFetch(cfg, path, method = 'get', body = null) {
     validateStatus: () => true
   });
   if (resp.status < 200 || resp.status >= 300) {
+    // El cuerpo del error se conserva. Sin él, un 403 de credenciales inválidas y uno del
+    // firewall del hosting se ven idénticos —sólo el número—, y el incidente termina diciendo
+    // "revisar Consumer Key/Secret" cuando las credenciales están bien. Medido el 2026-09-07:
+    // 171 repeticiones de error contra Woo sin una sola pista de la causa.
+    const detalle = typeof resp.data === 'string'
+      ? resp.data.slice(0, 300)
+      : JSON.stringify(resp.data ?? {}).slice(0, 300);
     const err = new Error(`WooCommerce API error ${resp.status}`);
+    err.cuerpo = detalle;
+    // El servidor que responde importa: un 403 de WordPress trae `code`/`message` de la REST
+    // API; uno de Cloudflare o del WAF del hosting suele traer HTML y su propio `server`.
+    err.servidor = String(resp.headers?.server || '').slice(0, 60);
     // .status/.retryAfterMs: propiedades nuevas, no rompen los `new Error('WooCommerce API
     // error 500')` que ya usan los tests existentes (quedan undefined ahí, wooFetchConReintento
     // cae al parseo del mensaje como antes — ver parseStatusDelMensaje).
@@ -290,7 +301,45 @@ const CLAVE_ULTIMO_COMPLETO = 'catalogo_ultimo_completo';
 // la del cron (5 min) contra los 15 min de antes. Este barrido completo queda como red para
 // lo que el incremental no puede ver por diseño: borrados y papelera (ver comentario de
 // arriba sobre `trash`), que es lo que ahora fija el número.
-const INTERVALO_COMPLETO_MS = 60 * 60 * 1000; // 1 hora
+// Cada barrido completo son ~628 llamadas SEGUIDAS a Woo: 52 páginas de productos más una
+// consulta de variaciones por cada uno de los 576 productos variables. A una por hora eso son
+// ~15.000 llamadas diarias en ráfagas, y el hosting las corta con 403 —medido el 2026-09-07:
+// el completo de las 00:21 fue seguido por un episodio de 403 a las 00:31, y el patrón se
+// repite—. El incidente decía "revisar credenciales" y las credenciales estaban bien.
+//
+// Se espacia a 6 horas porque los webhooks de producto cubren los cambios: 354 eventos en 7
+// días, todos completados, sin uno solo fallido. El completo deja de ser la vía principal y
+// pasa a ser la red que repara lo que un aviso perdido no trajo, que es para lo que sirve.
+//
+// Si los webhooks se caen, esto se acorta solo: ver `intervaloCompletoVigente`.
+const INTERVALO_COMPLETO_MS = 6 * 60 * 60 * 1000; // 6 horas
+// Con los webhooks caídos, el barrido vuelve a ser la ÚNICA vía y se acorta a una hora. Woo
+// desactiva un webhook por su cuenta tras varias entregas fallidas y no avisa: sin esto, el
+// catálogo quedaría desactualizado hasta seis horas sin que nada lo note.
+const INTERVALO_COMPLETO_SIN_WEBHOOK_MS = 60 * 60 * 1000;
+
+/**
+ * Cada cuánto toca el barrido completo, según si los webhooks están entregando.
+ *
+ * No se pregunta a Woo: se lee el estado que ya vigila `lib/wooWebhooks.js` cada hora, para no
+ * agregar una llamada al problema que se está tratando de aliviar.
+ */
+function intervaloCompletoVigente(db) {
+  try {
+    const fila = db.prepare(`SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status <> 'active' THEN 1 ELSE 0 END) AS caidos
+      FROM woo_webhooks_estado WHERE propio = 1 AND topic LIKE 'product.%'`).get();
+    // Sin ningún webhook de producto conocido todavía no hay evidencia de que cubran, y
+    // relajar por defecto sería relajar a ciegas: se espera a la primera lectura, que corre
+    // cada hora.
+    if (!fila || !fila.total) return INTERVALO_COMPLETO_SIN_WEBHOOK_MS;
+    return fila.caidos > 0 ? INTERVALO_COMPLETO_SIN_WEBHOOK_MS : INTERVALO_COMPLETO_MS;
+  } catch {
+    // Sin la tabla —base vieja o migración pendiente— se asume lo conservador.
+    return INTERVALO_COMPLETO_SIN_WEBHOOK_MS;
+  }
+}
 
 // Margen de solape al calcular `modified_after`: sin esto, una edición que ocurrió DURANTE
 // la corrida anterior (entre que se leyó `modified_after` y que Woo terminó de responder)
@@ -448,7 +497,11 @@ export async function refrescarCatalogo(db, cfg, opts = {}) {
       severidad: (categoria === 'auth' || categoria === 'config') ? 'critico' : (categoria === 'datos' ? 'info' : 'advertencia'),
       mensajeTecnico: e.message,
       mensajeHumano: MENSAJE_HUMANO_POR_CATEGORIA[categoria] ?? MENSAJE_HUMANO_POR_CATEGORIA.interno,
-      contexto: { forzarCompleto: !!opts.forzarCompleto, circuitoAbierto: !!e.circuitoAbierto },
+      // El cuerpo y el `server` de la respuesta distinguen un rechazo de WordPress (credenciales)
+      // de uno del firewall del hosting (bloqueo por frecuencia). Sin eso los dos casos se ven
+      // igual y el mensaje manda a revisar credenciales que están bien.
+      contexto: { forzarCompleto: !!opts.forzarCompleto, circuitoAbierto: !!e.circuitoAbierto,
+        cuerpo: e.cuerpo ?? null, servidor: e.servidor ?? null, status: e.status ?? null },
     });
     throw e; // el comportamiento ante el caller (cron/endpoint) no cambia — solo se agrega telemetría.
   } finally {
@@ -538,7 +591,7 @@ async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {
   const inicio = new Date();
   const ultimoCompleto = leerMarca(db, CLAVE_ULTIMO_COMPLETO);
   const completo = forzarCompleto || !ultimoCompleto
-    || (inicio.getTime() - new Date(ultimoCompleto).getTime() >= INTERVALO_COMPLETO_MS);
+    || (inicio.getTime() - new Date(ultimoCompleto).getTime() >= intervaloCompletoVigente(db));
 
   // `dates_are_gmt=true` NO es opcional: sin él, Woo interpreta `modified_after` en la hora
   // LOCAL del sitio, no en UTC — el mismo problema que ya costó los pedidos duplicados
