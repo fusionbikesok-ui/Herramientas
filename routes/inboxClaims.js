@@ -6,6 +6,7 @@ function publicItem(row) {
   return {
     id: String(row.inbox_id), event_id: row.event_id, channel: row.channel,
     resource_id: row.resource_id, title: row.title, preview: row.preview,
+    kind: row.kind || 'otro', priority: row.priority || 'normal',
     status: row.status, version: row.version, created_at: row.created_at,
     updated_at: row.updated_at,
   };

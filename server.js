@@ -63,6 +63,7 @@ import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { mobileHoyRouter } from './routes/mobileHoy.js';
 import { registrarWebhookMl, registrarWebhookWooProducto, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
+import { chatEventsRouter } from './routes/chatEvents.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,6 +75,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   const app = express();
 
   app.set('trust proxy', 1); // detrás de Nginx
+  // Ingesta firmada del chat: debe montarse antes de express.json para verificar el cuerpo crudo.
+  app.use(chatEventsRouter(db));
   // ── Webhook WooCommerce → sync inmediato a ML ───────────────────────────────
   // POST /api/woo/webhook/order
   // WC lo llama con topic order.created y order.updated.

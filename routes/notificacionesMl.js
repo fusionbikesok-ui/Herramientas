@@ -14,6 +14,10 @@ import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs'
 const now = () => new Date().toISOString();
 
 function upsertInboxUnico(db, { eventId, resourceId, title, preview, at, occurredAt = at, payloadVersion = 'v1', leaseGuard = null }) {
+  const hasKind = db.prepare('PRAGMA table_info(inbox_items)').all().some((column) => column.name === 'kind');
+  const kind = String(resourceId).startsWith('claim:') ? 'reclamo'
+    : String(resourceId).startsWith('question:') ? 'pregunta'
+      : String(resourceId).startsWith('message:') ? 'mensaje' : 'otro';
   if (leaseGuard && !leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
   const existente = db.prepare("SELECT inbox_id, event_id, status, version, updated_at FROM inbox_items WHERE channel='ml' AND resource_id=? ORDER BY inbox_id LIMIT 1").get(String(resourceId));
   if (existente) {
@@ -24,11 +28,22 @@ function upsertInboxUnico(db, { eventId, resourceId, title, preview, at, occurre
       || (incomingVersion === previousVersion && String(occurredAt || '') > String(anterior?.occurred_at || ''));
     if (!newer) return existente.event_id;
     if (leaseGuard && !leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
-    db.prepare(`UPDATE inbox_items SET event_id=?, title=?, preview=?, version=version+1, updated_at=? WHERE inbox_id=?`)
-      .run(eventId, title, preview || null, at, existente.inbox_id);
+    if (hasKind) {
+      db.prepare(`UPDATE inbox_items SET event_id=?, title=?, preview=?, kind=?, version=version+1, updated_at=? WHERE inbox_id=?`)
+        .run(eventId, title, preview || null, kind, at, existente.inbox_id);
+    } else {
+      db.prepare(`UPDATE inbox_items SET event_id=?, title=?, preview=?, version=version+1, updated_at=? WHERE inbox_id=?`)
+        .run(eventId, title, preview || null, at, existente.inbox_id);
+    }
     return existente.inbox_id;
   }
   if (leaseGuard && !leaseGuard()) throw Object.assign(new Error('lease vencido'), { code: 'lease_expired', retryable: true });
+  if (hasKind) {
+    return db.prepare(`INSERT OR IGNORE INTO inbox_items
+      (event_id,channel,resource_id,title,preview,status,kind,version,created_at,updated_at)
+      VALUES (?,?,?,?,?,'unread',?,1,?,?)`).run(eventId, 'ml', String(resourceId), title, preview || null,
+        kind, at, at).lastInsertRowid;
+  }
   return db.prepare(`INSERT OR IGNORE INTO inbox_items
     (event_id,channel,resource_id,title,preview,status,version,created_at,updated_at)
     VALUES (?,?,?,?,?,'unread',1,?,?)`).run(eventId, 'ml', String(resourceId), title, preview || null, at, at).lastInsertRowid;

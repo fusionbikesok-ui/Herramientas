@@ -722,6 +722,16 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('woo_webhooks_estado_092')").run();
     })();
   }
+  const chatEventsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='chat_events_inbox_093'").get();
+  if (!chatEventsMigration) {
+    db.transaction(() => {
+      const columns = new Set(db.prepare('PRAGMA table_info(inbox_items)').all().map((column) => column.name));
+      if (!columns.has('kind')) db.exec("ALTER TABLE inbox_items ADD COLUMN kind TEXT CHECK (kind IS NULL OR kind IN ('mensaje','pregunta','reclamo','pedido','otro'))");
+      if (!columns.has('priority')) db.exec("ALTER TABLE inbox_items ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal','high','urgent'))");
+      db.exec('CREATE INDEX IF NOT EXISTS idx_inbox_items_priority ON inbox_items(priority, status, updated_at DESC)');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('chat_events_inbox_093')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {

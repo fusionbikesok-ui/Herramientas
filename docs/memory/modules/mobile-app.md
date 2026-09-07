@@ -20,6 +20,8 @@
 ## Contrato y arquitectura
 
 - `/opt/fusionbikes/herramientas/openapi/mobile-v1.yaml` es la fuente de verdad del contrato.
+- `InboxItem` expone aditivamente `kind` (`mensaje`, `pregunta`, `reclamo`, `pedido`, `otro`) y
+  `priority` sin cambiar la versión `1.0.0`; filas antiguas se presentan como `otro`/`normal`.
 - El objetivo E5 es publicar un artefacto generado por CI por commit de backend, fijarlo desde la App
   y verificar divergencias automáticamente. Las copias manuales son transitorias.
 - Expo SDK 57, TypeScript, Expo Router, TanStack Query, Zustand limitado a estado local,

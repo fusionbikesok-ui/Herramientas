@@ -1684,6 +1684,8 @@ components:
         resource_id: { type: string, nullable: true }
         title: { type: string }
         preview: { type: string, nullable: true }
+        kind: { type: string, enum: [mensaje, pregunta, reclamo, pedido, otro], nullable: true }
+        priority: { type: string, enum: [normal, high, urgent] }
         status: { type: string, enum: [unread, read, resolved, archived] }
         version: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }

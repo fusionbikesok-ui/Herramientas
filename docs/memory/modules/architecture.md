@@ -18,6 +18,10 @@
 - El delivery push usa `PUSH_PROVIDER=mock` solo para desarrollo (estado `simulado`) o FCM
   HTTP v1 real con credenciales fuera del repositorio. Las reservas de delivery se persisten
   antes del side effect mediante una clave de idempotencia durable.
+- La ingesta interna del plugin WordPress Live Chat entra por `POST /v1/events`, verifica HMAC
+  SHA-256 sobre el cuerpo crudo con una ventana máxima de 300 segundos y deduplica por
+  `event_id`. Proyecta atómicamente `integration_events`, `inbox_items`, notificaciones por
+  usuario con dispositivo activo y deliveries push; los handoffs se priorizan en el worker.
 - El programa canónico usa E0–E24 y está en `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`; las fichas separadas prueban progreso.
 - La API móvil de Preparación e Inventario vive bajo `/api/v1`, comparte servicios de negocio con
   el panel y nunca reutiliza rutas web autenticadas por cookies. Toda mutación reintentable exige
