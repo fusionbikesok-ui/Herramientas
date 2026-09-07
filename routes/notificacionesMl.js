@@ -1,6 +1,7 @@
 import express from 'express';
 import { mlFetch } from '../lib/mlClient.js';
 import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs';
+import { migrateInboxExternalProjection } from '../migrations/094_inbox_external_projection.mjs';
 
 // Notificaciones ML (webhooks): preguntas, mensajes y reclamos sin resolver.
 // Ver docs/superpowers/plans (sesión 2026-08-26) — la app de ML tiene TODOS los topics
@@ -190,6 +191,17 @@ function ensureTables(db) {
   // Algunas integraciones invocan este router con una DB desnuda (tests y workers aislados);
   // asegurar también el backbone mantiene el contrato sin depender del bootstrap del servidor.
   migrateClaimsBackbone(db);
+  migrateInboxExternalProjection(db);
+}
+
+function actualizarContextoInbox(db, resourceId, values) {
+  db.prepare(`UPDATE inbox_items SET external_type=@external_type, question_id=@question_id,
+    pack_id=@pack_id, order_id=@order_id, claim_id=@claim_id, item_id=@item_id,
+    external_status=@external_status, last_synced_at=@last_synced_at
+    WHERE channel='ml' AND resource_id=@resource_id`).run({
+    resource_id: resourceId, question_id: null, pack_id: null, order_id: null, claim_id: null,
+    item_id: null, ...values,
+  });
 }
 
 // ── Ingesta desde el webhook (llamadas por server.js al recibir la notificación) ──
@@ -323,6 +335,10 @@ export async function ingerirPregunta(db, mlCfg, resource, backboneEvent = null,
     proyectarPreguntaEnBackbone(db, {
       preguntaId: q.id, estado, texto: q.text || '', itemId: q.item_id, ocurridoEn: q.date_created, backboneEvent,
     }, db);
+    actualizarContextoInbox(db, `question:${q.id}`, {
+      external_type: 'question', question_id: String(q.id), item_id: q.item_id || null,
+      external_status: estado, last_synced_at: actualizadoEn,
+    });
   })();
   return true;
 }
@@ -551,6 +567,10 @@ export async function ingerirReclamo(db, mlCfg, resource, originalResource = res
     detalle: c.description || c.message,
     ocurridoEn: c.date_created || c.created_at,
   }, db);
+  actualizarContextoInbox(db, `claim:${canonicalId}`, {
+    external_type: 'claim', claim_id: canonicalId,
+    external_status: estado, last_synced_at: now(),
+  });
   })();
   return true;
 }

@@ -606,6 +606,23 @@ paths:
               schema: { $ref: '#/components/schemas/InboxItem' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /inbox/{id}/detail:
+    get:
+      tags: [inbox]
+      summary: Obtiene el detalle operativo seguro y actualizado de un ítem
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200':
+          description: Detalle unificado, sin tokens, PII ni payload de Mercado Libre
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboxDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
   /inbox/{id}/read:
     post:
       tags: [inbox]
@@ -1692,6 +1709,34 @@ components:
         version: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    InboxDetail:
+      type: object
+      required: [id, kind, external_id, external_status, last_synced_at, item, context, messages, available_actions]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [pregunta, mensaje, reclamo, pedido, otro] }
+        external_id: { type: string, nullable: true }
+        external_status: { type: string }
+        last_synced_at: { type: string, format: date-time }
+        item:
+          type: object
+          properties:
+            item_id: { type: string, nullable: true }
+            name: { type: string, nullable: true }
+            photo_url: { type: string, format: uri, nullable: true }
+        context: { type: object, additionalProperties: true }
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              text: { type: string }
+              created_at: { type: string, format: date-time, nullable: true }
+        available_actions:
+          type: array
+          items: { type: string }
 
     Notification:
       type: object

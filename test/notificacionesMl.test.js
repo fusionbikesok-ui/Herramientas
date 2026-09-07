@@ -49,6 +49,8 @@ describe('ingerirPregunta', () => {
       .toMatchObject({ event_type: 'question.received', channel: 'ml', resource_id: '123', dedupe_key: 'ml:question:123:UNANSWERED' });
     expect(db.prepare("SELECT title, preview, status FROM inbox_items WHERE resource_id='question:123'").get())
       .toMatchObject({ title: 'Pregunta ML · MLA1', preview: '¿Tiene stock?', status: 'unread' });
+    expect(db.prepare("SELECT external_type, question_id, item_id, external_status, last_synced_at FROM inbox_items WHERE resource_id='question:123'").get())
+      .toMatchObject({ external_type: 'question', question_id: '123', item_id: 'MLA1', external_status: 'UNANSWERED' });
   });
 
   it('marca respondida_en cuando la pregunta ya está ANSWERED', async () => {
@@ -159,6 +161,8 @@ describe('ingerirReclamo', () => {
     expect(row.reason_id).toBe('r123');
     expect(row.resource_id).toBe('res456');
     // Verificar que se llamó al endpoint vigente.
+    expect(db.prepare("SELECT external_type, claim_id, external_status, last_synced_at FROM inbox_items WHERE resource_id='claim:c1'").get())
+      .toMatchObject({ external_type: 'claim', claim_id: 'c1', external_status: 'opened' });
     expect(mlFetch).toHaveBeenCalledWith(db, {}, 'get', '/post-purchase/v1/claims/c1');
   });
 

@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { migrateMlClaims } from '../migrations/028_ml_reclamos_campos_tipo_razon.mjs';
 import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs';
+import { migrateInboxExternalProjection } from '../migrations/094_inbox_external_projection.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -732,6 +733,7 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('chat_events_inbox_093')").run();
     })();
   }
+  migrateInboxExternalProjection(db);
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {

@@ -41,6 +41,39 @@ describe('API móvil de inbox Claims', () => {
     expect(read.status).toBe(200); expect(read.body.status).toBe('read');
   });
 
+  it('documenta el detalle unificado y sus errores semánticos en OpenAPI', () => {
+    const contract = fs.readFileSync('./openapi/mobile-v1.yaml', 'utf8');
+    expect(contract).toContain('/inbox/{id}/detail:');
+    expect(contract).toContain('InboxDetail:');
+    expect(contract).toContain("'401': { $ref: '#/components/responses/Unauthorized' }");
+    expect(contract).toContain("'403': { $ref: '#/components/responses/Forbidden' }");
+    expect(contract).toContain("'422': { $ref: '#/components/responses/UnprocessableEntity' }");
+  });
+
+  it('migra el contexto externo durable de inbox de forma aditiva', () => {
+    const columns = db.prepare('PRAGMA table_info(inbox_items)').all().map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining([
+      'external_type', 'question_id', 'pack_id', 'order_id', 'claim_id', 'item_id', 'last_synced_at', 'external_status',
+    ]));
+  });
+
+  it('expone el detalle seguro y fresco de una pregunta sólo al usuario autorizado', async () => {
+    const syncedAt = '2026-09-07T12:00:00.000Z';
+    db.prepare("UPDATE inbox_items SET resource_id='question:123', kind='pregunta', question_id='123', item_id='MLA123', external_type='question', external_status='UNANSWERED', last_synced_at=?, title='Pregunta ML · MLA123', preview='¿Tiene stock?', updated_at=? WHERE inbox_id=1").run(syncedAt, syncedAt);
+
+    const detail = await request(app).get('/api/v1/inbox/1/detail').set(auth);
+
+    expect(detail.status).toBe(200);
+    expect(detail.body).toMatchObject({
+      id: '1', kind: 'pregunta', external_id: '123', external_status: 'UNANSWERED',
+      last_synced_at: syncedAt,
+      item: { item_id: 'MLA123', name: 'MLA123', photo_url: null },
+      context: { question: '¿Tiene stock?' },
+      available_actions: ['reply', 'mark_read'],
+    });
+    expect(JSON.stringify(detail.body)).not.toMatch(/token|authorization|buyer|customer/i);
+  });
+
   it('resuelve con versión y rechaza una versión obsoleta', async () => {
     const ok = await request(app).post('/api/v1/inbox/1/resolve').set(auth).send({ version: 1 });
     expect(ok.status).toBe(200); expect(ok.body.status).toBe('resolved');

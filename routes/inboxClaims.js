@@ -12,6 +12,40 @@ function publicItem(row) {
   };
 }
 
+function tableExists(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+}
+
+function detailFor(row, db) {
+  const kind = row.kind || 'otro';
+  const externalId = row.question_id || row.pack_id || row.claim_id
+    || String(row.resource_id || '').replace(/^(question|message|claim):/, '') || null;
+  const itemId = row.item_id || row.title?.match(/·\s*([^·]+)$/)?.[1]?.trim() || null;
+  const detail = {
+    id: String(row.inbox_id), kind, external_id: externalId,
+    external_status: row.external_status || 'UNKNOWN',
+    last_synced_at: row.last_synced_at || row.updated_at,
+    item: { item_id: itemId, name: itemId, photo_url: null },
+    context: {}, messages: [], available_actions: ['mark_read'],
+    assigned_user_id: row.assigned_user_id == null ? null : String(row.assigned_user_id),
+    status: row.status,
+  };
+  if (kind === 'pregunta') {
+    detail.context.question = row.preview || '';
+    if (detail.external_status === 'UNANSWERED') detail.available_actions.unshift('reply');
+  } else if (kind === 'mensaje') {
+    detail.context.pack_id = row.pack_id || externalId;
+    detail.context.order_id = row.order_id || null;
+    if (tableExists(db, 'ml_mensajes')) {
+      detail.messages = db.prepare(`SELECT id, texto, fecha_creacion FROM ml_mensajes WHERE pack_id = ? ORDER BY fecha_creacion ASC`).all(detail.context.pack_id)
+        .map((message) => ({ id: String(message.id), text: message.texto || '', created_at: message.fecha_creacion || null }));
+    }
+  } else if (kind === 'reclamo') {
+    detail.context.claim_id = row.claim_id || externalId;
+  }
+  return detail;
+}
+
 export function inboxClaimsRouter(db, authMiddleware) {
   const router = express.Router();
   const auth = authMiddleware;
@@ -34,6 +68,13 @@ export function inboxClaimsRouter(db, authMiddleware) {
       ORDER BY i.updated_at DESC, i.inbox_id DESC LIMIT ?`).all(...params, limit + 1);
     const items = rows.slice(0, limit).map(publicItem);
     return res.json({ items, next_cursor: rows.length > limit ? String(rows[limit - 1].inbox_id) : null });
+  });
+
+  router.get('/:id/detail', auth, (req, res) => {
+    const row = db.prepare(`SELECT * FROM inbox_items WHERE inbox_id = ? AND (assigned_user_id IS NULL OR assigned_user_id = ?)`)
+      .get(Number(req.params.id), req.user.id);
+    if (!row) return res.status(404).json({ error: { code: 'inbox_no_encontrado', message: 'Ítem no encontrado' } });
+    return res.json(detailFor(row, db));
   });
 
   router.get('/:id', auth, (req, res) => {
