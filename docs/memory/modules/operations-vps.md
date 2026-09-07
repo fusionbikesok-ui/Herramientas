@@ -10,6 +10,10 @@
 - El repositorio local `/opt/fusionbikes/herramientas` usa como remoto `origin` el repositorio
   privado `fusionbikesok-ui/Herramientas` en GitHub, mediante SSH.
 - `bubblewrap` está instalado en `/usr/bin/bwrap`, versión 0.9.0.
+- El commit `80e14eb` desplegó la ingesta de chat y aplicó la migración
+  `chat_events_inbox_093`; `/api/v1/meta` conserva contrato `1.0.0`. La ruta queda
+  deliberadamente fail-closed (`503`) hasta coordinar en producción
+  `FUSION_CHAT_EVENTS_API_KEY` y `FUSION_CHAT_EVENTS_SECRET` con WordPress.
 
 ## Restricciones
 
