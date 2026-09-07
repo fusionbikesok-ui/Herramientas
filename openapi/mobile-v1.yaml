@@ -978,8 +978,7 @@ paths:
     get:
       tags: [preparation]
       summary: Cola paginada de preparaciones
-      description: Adaptador pendiente; legacy GET /preparacion/pendientes.
-      x-implementation-status: adapter-pending
+      description: Implementado por routes/mobilePreparacion.js, que delega en los handlers del panel para no duplicar las reglas de picking.
       parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
       responses:
         '200': { description: Cola, content: { application/json: { schema: { $ref: '#/components/schemas/CursorPagePreparation' } } } }
@@ -990,8 +989,7 @@ paths:
     get:
       tags: [preparation]
       summary: Detalle de preparación
-      description: Adaptador pendiente; legacy GET /preparacion/:id.
-      x-implementation-status: adapter-pending
+      description: Implementado por routes/mobilePreparacion.js, que delega en los handlers del panel para no duplicar las reglas de picking.
       parameters: [{ $ref: '#/components/parameters/PathId' }]
       responses:
         '200': { description: Detalle, content: { application/json: { schema: { $ref: '#/components/schemas/PreparationDetail' } } } }
@@ -1003,8 +1001,7 @@ paths:
     post:
       tags: [preparation]
       summary: Toma exclusiva de una preparación
-      description: Adaptador pendiente; no existe una toma exclusiva móvil implementada en routes/preparacion.js.
-      x-implementation-status: adapter-pending
+      description: Implementado por routes/mobilePreparacion.js, que delega en los handlers del panel para no duplicar las reglas de picking.
       parameters: [{ $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
       responses:
@@ -1018,8 +1015,7 @@ paths:
     post:
       tags: [preparation]
       summary: Registra escaneo de un ítem
-      description: Adaptador pendiente; legacy POST /preparacion/:id/escanear.
-      x-implementation-status: adapter-pending
+      description: Implementado por routes/mobilePreparacion.js, que delega en los handlers del panel para no duplicar las reglas de picking.
       parameters: [{ $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PreparationScanRequest' } } } }
       responses:
@@ -1034,8 +1030,7 @@ paths:
     post:
       tags: [preparation]
       summary: Confirma manualmente un ítem sin escaneo válido
-      description: Adaptador pendiente; conserva el motivo obligatorio del endpoint legacy confirmar-manual.
-      x-implementation-status: adapter-pending
+      description: Implementado por routes/mobilePreparacion.js, que delega en los handlers del panel para no duplicar las reglas de picking.
       parameters:
         - $ref: '#/components/parameters/PathId'
         - name: itemId
@@ -1073,8 +1068,7 @@ paths:
     post:
       tags: [preparation]
       summary: Finaliza una preparación
-      description: Adaptador pendiente; legacy POST /preparacion/:id/completar.
-      x-implementation-status: adapter-pending
+      description: Implementado por routes/mobilePreparacion.js, que delega en los handlers del panel para no duplicar las reglas de picking.
       parameters: [{ $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
       responses:
@@ -1416,17 +1410,25 @@ components:
 
     PreparationSummary:
       type: object
-      required: [id, canal, estado, pack_id, envio]
+      required: [canal, estado, clave]
+      description: >
+        Fila de la cola. `id` es null mientras el pedido no tenga una preparación iniciada:
+        en ese caso `estado` es `sin_iniciar` y solo se puede abrir desde el panel.
       properties:
-        id: { type: string }
+        id: { type: string, nullable: true, description: "id de la preparación; null si todavía no se inició" }
+        clave: { type: string, description: "Identificador estable del pedido (canal:numero)" }
         canal: { type: string, enum: [ml, web] }
-        estado: { type: string, enum: [en_preparacion, pendiente_deposito, completada, despachada_sin_verificar, cerrada_sin_evidencia] }
+        estado: { type: string, enum: [sin_iniciar, en_preparacion, pendiente_deposito, completada, despachada_sin_verificar, cerrada_sin_evidencia] }
         pack_id: { type: string, nullable: true, description: "Identificador de pack de ML; null para pedidos sin pack o web" }
-        envio:
-          $ref: '#/components/schemas/ShippingData'
         numero_pedido: { type: string, nullable: true }
         comprador: { type: string, nullable: true }
-        actualizado_en: { type: string, format: date-time, nullable: true }
+        fecha: { type: string, nullable: true }
+        fecha_despacho: { type: string, nullable: true }
+        fecha_despacho_limite: { type: string, nullable: true }
+        estado_despacho: { type: string, nullable: true }
+        etiqueta_lista: { type: boolean }
+        cantidad_items: { type: integer }
+        items: { type: array, items: { type: object, additionalProperties: true } }
 
     ShippingData:
       type: object

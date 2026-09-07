@@ -58,6 +58,7 @@ import { stockExceptionsRouter } from './routes/stockExceptions.js';
 import { warrantiesRouter } from './routes/warranties.js';
 import { workshopRouter } from './routes/workshop.js';
 import { mobileWorkshopRouter } from './routes/mobileWorkshop.js';
+import { mobilePreparacionRouter } from './routes/mobilePreparacion.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { mobileHoyRouter } from './routes/mobileHoy.js';
@@ -224,6 +225,14 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/v1/inbox', inboxClaimsRouter(db, mobileNotificationsAuth));
   app.use('/api/v1/workshop', mobileWorkshopRouter(db, mobileAuth));
   app.use('/api/v1/identidad-productos', mobileAuth, identidadProductosRouter(db));
+  // Preparación para la app. Delega en los handlers del panel (routes/preparacion.js) para
+  // no tener dos versiones de las reglas de picking; acá solo se traduce al contrato móvil.
+  // Va antes del catch-all de /api/v1 por el mismo motivo que las de arriba.
+  app.use('/api/v1/preparation', mobilePreparacionRouter(db, mobileAuth, {
+    woo: wooCfg, ml: mlCfg,
+    andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
+    enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
+  }));
   // Antes del catch-all de `/api/v1`, o sus rutas quedarían capturadas por él y responderían
   // 401 en vez de existir —que es exactamente lo que les pasaba—.
   app.use('/api/v1', mobileHoyRouter(db, mobileAuth));
