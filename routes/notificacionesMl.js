@@ -154,7 +154,9 @@ function guardarReclamoMinimo(db, id, recurso, backboneEvent = null, leaseGuard 
   })();
 }
 
-function ensureTables(db) {
+// Exportada para que los tests creen el mismo esquema que usa producción en lugar de una
+// copia escrita a mano, que puede divergir sin que nadie lo note.
+export function ensureTables(db) {
   try {
     db.prepare(`CREATE TABLE IF NOT EXISTS ml_preguntas (
       id                INTEGER PRIMARY KEY,

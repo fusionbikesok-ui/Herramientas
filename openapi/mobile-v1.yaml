@@ -606,6 +606,30 @@ paths:
               schema: { $ref: '#/components/schemas/InboxItem' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /inbox/{id}/detail:
+    get:
+      tags: [inbox]
+      summary: Detalle operativo del caso, con estado externo y acciones permitidas
+      description: >
+        La notificación no es fuente de verdad. La app pide este detalle antes de mostrar o
+        habilitar cualquier acción. `available_actions` se deriva del estado externo del
+        recurso en Mercado Libre; la app no infiere acciones desde el tipo ni la prioridad.
+        `quick_actions` es el subconjunto que puede ofrecerse desde la notificación: nunca
+        incluye acciones que muevan dinero o cierren una disputa.
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200':
+          description: Detalle
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboxDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: >
+            El caso no existe o pertenece a otra persona. Se responde igual en ambos casos
+            para no revelar la existencia de un caso ajeno.
+
   /inbox/{id}/read:
     post:
       tags: [inbox]
@@ -1690,6 +1714,66 @@ components:
         priority: { type: string, enum: [normal, high, urgent] }
         status: { type: string, enum: [unread, read, resolved, archived] }
         version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    InboxDetail:
+      type: object
+      required: [id, kind, status, available_actions, quick_actions]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [mensaje, pregunta, reclamo, pedido, otro] }
+        channel: { type: string }
+        title: { type: string }
+        preview: { type: string, nullable: true }
+        status: { type: string, enum: [unread, read, resolved, archived] }
+        priority: { type: string, enum: [normal, high, urgent] }
+        version: { type: integer, minimum: 1 }
+        external_id: { type: string, nullable: true, description: "question_id, claim_id o pack_id según el tipo" }
+        external_status: { type: string, nullable: true, description: "Estado del recurso en Mercado Libre" }
+        last_synced_at: { type: string, format: date-time, nullable: true, description: "Cuándo se leyó por última vez el recurso real" }
+        order_id: { type: string, nullable: true }
+        pack_id: { type: string, nullable: true }
+        acknowledged_at: { type: string, format: date-time, nullable: true, description: "Reconocido no es resuelto: el caso sigue abierto" }
+        assigned_user_id: { type: integer, nullable: true }
+        producto:
+          type: object
+          nullable: true
+          properties:
+            item_id: { type: string, nullable: true }
+        pregunta:
+          type: object
+          nullable: true
+          properties:
+            texto: { type: string }
+            creada_en: { type: string, nullable: true }
+            respondida_en: { type: string, nullable: true }
+        reclamo:
+          type: object
+          nullable: true
+          properties:
+            titulo: { type: string, nullable: true }
+            detalle: { type: string, nullable: true }
+            tipo: { type: string, nullable: true }
+            motivo: { type: string, nullable: true }
+            recurso: { type: string, nullable: true }
+            creado_en: { type: string, nullable: true }
+            cerrado_en: { type: string, nullable: true }
+        conversacion:
+          type: object
+          nullable: true
+          properties:
+            estado: { type: string, nullable: true }
+            asunto: { type: string, nullable: true }
+            mensajes: { type: array, items: { type: object, additionalProperties: true } }
+        available_actions:
+          type: array
+          description: "Vacío cuando el recurso ya está cerrado en Mercado Libre."
+          items: { type: string, enum: [reply, message] }
+        quick_actions:
+          type: array
+          description: "Subconjunto ofrecible desde la notificación; excluye refund, return y mediation."
+          items: { type: string, enum: [reply, message] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 

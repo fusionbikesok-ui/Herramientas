@@ -62,6 +62,7 @@ describe('db schema', () => {
       'identidad_tareas_publicacion',
       'identidades_canal',
       'identificadores_producto',
+      'inbox_assignments',
       'inbox_items',
       'incidentes_email_outbox',
       'incidentes_operativos',

@@ -1,4 +1,5 @@
 import express from 'express';
+import { detalleDeCaso } from '../lib/inboxDetalle.js';
 
 const now = () => new Date().toISOString();
 
@@ -34,6 +35,15 @@ export function inboxClaimsRouter(db, authMiddleware) {
       ORDER BY i.updated_at DESC, i.inbox_id DESC LIMIT ?`).all(...params, limit + 1);
     const items = rows.slice(0, limit).map(publicItem);
     return res.json({ items, next_cursor: rows.length > limit ? String(rows[limit - 1].inbox_id) : null });
+  });
+
+  // Detalle operativo. Va antes de '/:id' porque Express resuelve por orden de registro y
+  // '/:id' capturaría 'detail' como si fuera un identificador.
+  router.get('/:id/detail', auth, (req, res) => {
+    const detalle = detalleDeCaso(db, req.params.id, req.user.id);
+    // Mismo 404 para inexistente y para ajeno: distinguirlos revelaría que el caso existe.
+    if (!detalle) return res.status(404).json({ error: { code: 'no_encontrado', message: 'caso no encontrado' } });
+    return res.json(detalle);
   });
 
   router.get('/:id', auth, (req, res) => {

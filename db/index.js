@@ -732,6 +732,38 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('chat_events_inbox_093')").run();
     })();
   }
+
+  // E6: contexto externo del caso y ciclo reconocer/escalar/reasignar (ver
+  // migrations/094_inbox_contexto_externo.sql para el porqué de cada columna).
+  const inboxContextoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='inbox_contexto_externo_094'").get();
+  if (!inboxContextoMigration) {
+    db.transaction(() => {
+      const columns = new Set(db.prepare('PRAGMA table_info(inbox_items)').all().map((column) => column.name));
+      const agregar = (nombre, ddl) => { if (!columns.has(nombre)) db.exec(`ALTER TABLE inbox_items ADD COLUMN ${ddl}`); };
+      agregar('pack_id', 'pack_id TEXT');
+      agregar('order_id', 'order_id TEXT');
+      agregar('item_id', 'item_id TEXT');
+      agregar('external_status', 'external_status TEXT');
+      agregar('last_synced_at', 'last_synced_at TEXT');
+      agregar('acknowledged_at', 'acknowledged_at TEXT');
+      agregar('acknowledged_by', 'acknowledged_by INTEGER');
+      agregar('escalated_at', 'escalated_at TEXT');
+      agregar('next_repeat_at', 'next_repeat_at TEXT');
+      agregar('area', 'area TEXT');
+      db.exec(`CREATE TABLE IF NOT EXISTS inbox_assignments (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        inbox_id       INTEGER NOT NULL REFERENCES inbox_items(inbox_id) ON DELETE CASCADE,
+        from_user_id   INTEGER,
+        to_user_id     INTEGER,
+        actor_user_id  INTEGER NOT NULL,
+        motivo         TEXT,
+        created_at     TEXT NOT NULL
+      )`);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_inbox_assignments_item ON inbox_assignments(inbox_id, id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_inbox_repeat ON inbox_items(next_repeat_at) WHERE next_repeat_at IS NOT NULL');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('inbox_contexto_externo_094')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {
