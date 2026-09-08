@@ -9,6 +9,7 @@
     "test": "vitest run",
     "verify:mobile-contract": "node scripts/verify-mobile-contract.mjs",
     "e2e:e2": "node scripts/e2-browser-smoke.mjs",
+    "design:preview": "node scripts/design-preview.mjs",
     "e2e:e4": "node scripts/e4-browser-smoke.mjs",
     "e2e:e19": "node scripts/e19-browser-smoke.mjs",
     "e2e:e20": "node scripts/e20-browser-smoke.mjs",
