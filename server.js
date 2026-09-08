@@ -405,6 +405,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/recepcion', express.static(path.join(__dirname, 'public/recepcion')));
   app.use('/api/pedidos', pedidosRouter(db));
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
+  app.use('/gestion-pedidos', express.static(path.join(__dirname, 'public/gestion-pedidos')));
   app.use('/api/cobertura', coberturaRouter(db, syncCfg));
   app.use('/api/guardia-ml', guardiaMlRouter(db, syncCfg));
   app.use('/api/identidad-productos', identidadProductosRouter(db));
