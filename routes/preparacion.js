@@ -1116,7 +1116,10 @@ export function preparacionRouter(db, cfg) {
         WHERE pc2.clave = p.clave OR (p.pack_id IS NOT NULL AND pc2.pack_id = p.pack_id)
         ORDER BY pc2.actualizado_en DESC, pc2.clave DESC LIMIT 1)
       GROUP BY d.id`;
-    const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha, d.creado_en`).all(...params);
+    // La cola operativa se recorre de lo más nuevo a lo más viejo. Mantenemos las
+    // jornadas con fecha antes de las que no la tienen y usamos la creación como
+    // desempate estable dentro de cada jornada.
+    const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha DESC, d.creado_en DESC`).all(...params);
     const jornada = fecha || 'sin_fecha';
     const allParams = fecha === 'sin_fecha' ? [] : fecha ? [fecha] : [];
     const summaryRows = db.prepare(`${base}${fecha === 'sin_fecha' ? ' HAVING jornada_fecha IS NULL' : fecha ? " HAVING (jornada_fecha = ? OR (p.canal = 'web' AND jornada_fecha IS NULL))" : ''}`).all(...allParams);
