@@ -8,6 +8,8 @@
 
 La operación se separa en dos herramientas sobre el mismo modelo: **Gestión de pedidos**, accesible desde Home para administrar pedidos, clientes, ventas físicas e intención de envío; y **Gestión de envíos**, que ejecuta recolección, preparación, evidencia, embalaje, tracking, grupos y salida física. Dentro de Gestión de envíos existen cuatro espacios: **Productos a buscar**, **Pedidos a preparar**, **Listos para despachar** y **Despachos**. El historial no depende de haber pasado por “listo para despachar”: un pedido informado como enviado por el canal puede existir sin preparación local y debe mostrarse como **despachado sin registro local**.
 
+La navegación de **Gestión de pedidos** tendrá solo tres pills, en este orden: **Requieren atención**, **Recuperar ventas** y **Todos los pedidos**. La primera será la vista inicial. Las etapas físicas de preparación y despacho no se muestran como pills aquí, porque pertenecen a Gestión de envíos.
+
 ### Cancelados y recuperación comercial
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados de las últimas 24 horas hábiles con los carritos abandonados del plugin existente. Al vencer la ventana, salen de esa vista y permanecen en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.

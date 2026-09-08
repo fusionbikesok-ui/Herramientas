@@ -110,6 +110,8 @@ Falta validación operativa real de la checklist, tratamiento integrado de falta
 
 **Gestión de pedidos** será la vista principal del Home para importar y administrar todos los pedidos de WooCommerce y MercadoLibre del último mes, incluyendo ventas físicas registradas en Woo. Permitirá consultar clientes, productos, estados, incidencias y fotos de preparación, además de marcar manualmente un pedido como “requiere envío”.
 
+Su navegación se limitará a tres pills: **Requieren atención**, **Recuperar ventas** y **Todos los pedidos**, en ese orden. “Requieren atención” será la vista inicial; los cancelados permanecerán en “Todos” y aparecerán temporalmente en “Recuperar ventas”. Las etapas de preparación, despacho y agrupación pertenecen exclusivamente a Gestión de envíos.
+
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 
 La importación no implica despacho. Solo entran a la cola de envíos los pedidos que Woo coloque en “listo para enviar Andreani” o los que un usuario autorizado derive manualmente desde Gestión de pedidos. Una venta física o un pedido que no requiere envío permanece visible en Gestión de pedidos, pero no aparece como tarea logística.
