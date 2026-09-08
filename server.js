@@ -60,6 +60,7 @@ import { workshopRouter } from './routes/workshop.js';
 import { mobileWorkshopRouter } from './routes/mobileWorkshop.js';
 import { mobilePreparacionRouter } from './routes/mobilePreparacion.js';
 import { inboxClaimsRouter } from './routes/inboxClaims.js';
+import { mobileInboxAccionesRouter } from './routes/mobileInboxAcciones.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { mobileHoyRouter } from './routes/mobileHoy.js';
 import { registrarWebhookMl, registrarWebhookWooProducto, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
@@ -223,6 +224,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/v1/devices', devicesRouter(db, mobileAuth));
   app.use('/api/v1/notifications', notificationsRouter(db, mobileNotificationsAuth));
   app.use('/api/v1/inbox', inboxClaimsRouter(db, mobileNotificationsAuth));
+  // Acciones contra Mercado Libre. Va antes del catch-all de `/api/v1` por el mismo motivo
+  // que las de abajo: si no, sus rutas quedarían capturadas y responderían 404.
+  app.use('/api/v1', mobileInboxAccionesRouter(db, mobileNotificationsAuth, mlCfg));
   app.use('/api/v1/workshop', mobileWorkshopRouter(db, mobileAuth));
   app.use('/api/v1/identidad-productos', mobileAuth, identidadProductosRouter(db));
   // Preparación para la app. Delega en los handlers del panel (routes/preparacion.js) para
@@ -679,6 +683,27 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       // garantiza entrega, y medido el 2026-09-06 faltaban 6 de 10 preguntas sin responder
       // —algunas de marzo— que ningún aviso trajo. Una sola llamada por corrida: se piden
       // únicamente las UNANSWERED, que son las que exigen acción humana.
+      // Reloj de escalamiento de la bandeja (§14). Corre cada minuto porque la política más
+      // corta repite a los 2: con una vuelta más lenta, "urgente" dejaría de serlo. Vive en
+      // el VPS y no en la app a propósito: un teléfono apagado no puede ser responsable de
+      // que una alerta urgente escale.
+      cron.schedule('* * * * *', async () => {
+        const { procesarEscalamiento } = await import('./lib/workerEscalamiento.js');
+        procesarEscalamiento(app._db)
+          .catch(err => console.error('Error en el escalamiento de la bandeja:', err.message));
+      });
+
+      // Acciones permitidas de los reclamos abiertos. Se lee de la BÚSQUEDA y no del detalle
+      // porque el detalle devuelve la lista vacía para los tres players (§4.3 de la
+      // especificación de ML). Sin este barrido `external_actions` quedaría siempre nulo y la
+      // app no habilitaría nunca una acción de reclamo. Una sola llamada por corrida cubre
+      // todos los reclamos abiertos de la cuenta.
+      cron.schedule('17-59/20 * * * *', async () => {
+        const { reconciliarAccionesMl } = await import('./lib/reconciliarAccionesMl.js');
+        reconciliarAccionesMl(app._db, mlCfg)
+          .catch(err => console.error('Error reconciliando acciones de reclamo ML:', err.message));
+      });
+
       cron.schedule('11-59/20 * * * *', async () => {
         const { reconciliarPreguntasMl } = await import('./routes/notificacionesMl.js');
         reconciliarPreguntasMl(app._db, mlCfg)
