@@ -14,6 +14,8 @@ La navegación de **Gestión de pedidos** tendrá solo tres pills, en este orden
 
 El buscador será global y funcionará desde cualquiera de las tres pills. Permitirá buscar por número de pedido, identificador externo de WooCommerce o MercadoLibre, nombre o apellido, email, teléfono, SKU, **EAN** y nombre de producto. Los resultados indicarán el campo coincidente, canal, cliente, fecha, estado e importe. La búsqueda no cambiará automáticamente de pill: si encuentra un pedido fuera de la vista actual, ofrecerá abrirlo en **Todos los pedidos**.
 
+La selección múltiple de la lista tendrá como acción principal inicial **Enviar a preparación**. No se incluirá todavía una acción de asignación. Antes de crear el lote, el sistema validará la elegibilidad de cada pedido, informará cuántos serán enviados y señalará los excluidos con su motivo. La operación será confirmable, idempotente y auditable.
+
 ### Vista rápida y pantalla específica del pedido
 
 La vista rápida lateral mostrará toda la información relevante para consultar el pedido sin abandonar el listado: identificadores y canal, fechas, cliente y contacto, tipo de entrega, dirección o retiro, estado externo y operativo, pago e importe, productos con cantidades, notas visibles, tracking si existe, fotos de preparación disponibles y línea de tiempo resumida. Será principalmente de lectura y tendrá pocas acciones seguras: abrir el pedido completo, contactar al cliente o acceder a una evidencia.
