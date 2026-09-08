@@ -85,6 +85,12 @@
 
   /* cards de la cola */
   .ped-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
+  .recoleccion-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin:12px 0 18px}
+  .recoleccion-item{display:grid;grid-template-columns:72px 1fr auto;gap:11px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;min-width:0}
+  .recoleccion-img{width:72px;height:72px;border-radius:8px;object-fit:contain;background:var(--surface2);border:1px solid var(--border)}
+  .recoleccion-sin-img{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;text-align:center}
+  .recoleccion-info{min-width:0}.recoleccion-info strong{display:block;font-size:13px;line-height:1.3}.recoleccion-info span{display:block;color:var(--muted);font:12px monospace;margin-top:4px}
+  .recoleccion-cantidad{font-size:22px;font-weight:800;color:var(--text);white-space:nowrap}.recoleccion-cantidad small{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;text-align:right}
   .ped{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;cursor:pointer;transition:border-color .15s;}
   .ped.nuevo{border-color:var(--azul);box-shadow:inset 3px 0 0 var(--azul);background:rgba(45,184,232,.08);}
   .ped-nuevo{font-size:10.5px;font-weight:800;letter-spacing:.04em;color:var(--azul);white-space:nowrap;}
@@ -367,8 +373,7 @@
 <script src="../lib/api.js"></script>
 <script>
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
-var JORNADA={estado:'idle',jornada:null,olas:[],zonas:[],error:null,busy:false,claims:{},reglas:null,preflight:null,detalle:null,ayudas:[]};
-var PEND_WAVE_FILTER=null, PEND_STATUS='idle';
+var PEND_STATUS='idle';
 var PEND_BASELINE_LISTA=false, PEND_NUEVOS={};
 // fotoId (o id temporal mientras sube) -> object URL local. Vive fuera de PREP a propósito:
 // sobrevive a los refrescos completos de PREP (refrescarDetalle) mientras el servidor todavía
@@ -412,7 +417,7 @@ async function cargarLotes(){
 async function verDetalleLote(id){
   var c=document.getElementById('cuerpo'); c.innerHTML='<div class="loading">Cargando paquetes…</div>';
   try{var r=await api('/despacho/lotes/'+encodeURIComponent(id));if(!r.body.ok)throw new Error(r.body.error||'error');var l=r.body.lote,items=r.body.items||[];
-    c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">← Volver a lotes</button>'+(l.estado==='abierto'?'<button class="btn" onclick="accionLote('+l.id+',\'iniciar\')">Iniciar lote</button>':'')+(l.estado==='en_preparacion'?'<button class="btn danger" onclick="cerrarLote('+l.id+')">Cerrar lote</button>':'')+((l.estado==='abierto'||l.estado==='en_preparacion')?'<button class="btn danger" onclick="anularLote('+l.id+')">Anular lote</button>':'')+'</div><h2>Lote '+esc(String(l.id))+' · '+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+'</h2><p class="sub">Estado: '+esc(l.estado)+' · Jornada: '+esc(l.fecha_jornada)+'</p><div class="desp-scan"><label for="lote-codigo">Código del paquete</label><input id="lote-codigo" placeholder="pack o clave" autocomplete="off"><button class="btn" onclick="escanearLote('+l.id+')" '+(l.estado==='en_preparacion'?'':'disabled')+'>Escanear</button></div><div class="desp-list">'+(items.length?items.map(function(i){return '<article class="desp-card"><h3>'+esc(i.grupo_clave)+' <span class="badge '+(i.estado==='confirmado'?'b-ok':'b-mut')+'">'+esc(i.estado)+'</span></h3><div class="desp-meta">Tracking: '+esc(i.tracking||'pendiente')+'</div><div class="desp-actions">'+(l.estado!=='cerrado'&&l.estado!=='anulado'?'<button class="btn sec" onclick="trackingLote('+l.id+','+i.control_id+')">'+(i.tracking?'Cambiar tracking':'Cargar tracking')+'</button>':'')+'</div></article>';}).join(''):'<div class="desp-empty">Lote sin paquetes.</div>')+'</div>';
+    c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">← Volver a lotes</button>'+(l.estado==='abierto'?'<button class="btn" onclick="accionLote('+l.id+',\'iniciar\')">Iniciar lote</button>':'')+(l.estado==='en_preparacion'?'<button class="btn danger" onclick="cerrarLote('+l.id+')">Cerrar lote</button>':'')+((l.estado==='abierto'||l.estado==='en_preparacion')?'<button class="btn danger" onclick="anularLote('+l.id+')">Anular lote</button>':'')+'</div><h2>Lote '+esc(String(l.id))+' · '+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+'</h2><p class="sub">Estado: '+esc(l.estado)+' · Jornada: '+esc(l.fecha_jornada)+'</p><div class="desp-scan"><label for="lote-codigo">Código del paquete</label><input id="lote-codigo" placeholder="pack o clave" autocomplete="off"><button class="btn" onclick="escanearLote('+l.id+')" '+(l.estado==='en_preparacion'?'':'disabled')+'>Escanear</button></div><div class="desp-list">'+(items.length?items.map(function(i){return '<article class="desp-card"><h3>'+esc(i.grupo_clave)+' <span class="badge '+(i.estado==='confirmado'?'b-ok':'b-mut')+'">'+esc(i.estado)+'</span></h3><div class="desp-meta">'+(l.canal==='web'?'Tracking: '+esc(i.tracking||'asociar en embalaje'):'MercadoLibre: el tracking se gestiona fuera de este sistema')+'</div></article>';}).join(''):'<div class="desp-empty">Lote sin paquetes.</div>')+'</div>';
     if(l.estado==='cerrado'&&!l.salida_confirmada_en){var toolbar=c.querySelector('.desp-toolbar');if(toolbar){var b=document.createElement('button');b.className='btn';b.textContent='Confirmar salida';b.onclick=function(){confirmarSalidaLote(l.id);};toolbar.appendChild(b);}}
     if(window.__PREP_AUTH&&(window.__PREP_AUTH.is_admin||['supervisor','supervisor_deposito','auditor','despacho'].indexOf(String(window.__PREP_AUTH.rol||window.__PREP_AUTH.role||'').toLowerCase())>=0)){var tb=c.querySelector('.desp-toolbar');if(tb){var ev=document.createElement('button');ev.className='btn sec';ev.textContent='Ver auditoría';ev.onclick=function(){verEventosLote(l.id);};tb.appendChild(ev);}}
   }catch(e){c.innerHTML='<div class="loading err" role="alert">No se pudo cargar el lote: '+esc(e.message)+'</div>';}
@@ -420,7 +425,7 @@ async function verDetalleLote(id){
 async function accionLote(id,op){var r=await api('/despacho/lotes/'+id+'/'+op,{method:'POST'});if(!r.body.ok)return despAviso(r.body.error||'No se pudo actualizar el lote','bad');verDetalleLote(id);}
 async function anularLote(id){var motivo=prompt('Motivo de anulación (obligatorio):');if(!motivo||!motivo.trim())return despAviso('La anulación requiere un motivo','bad');if(!confirm('¿Anular este lote? Sus eventos se conservarán.'))return;var r=await api('/despacho/lotes/'+id+'/anular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:motivo.trim()})});if(!r.body.ok)return despAviso(r.body.error||'No se pudo anular el lote','bad');verDetalleLote(id);}
 async function escanearLote(id){var el=document.getElementById('lote-codigo'),codigo=(el&&el.value||'').trim();if(!codigo)return despAviso('Ingresá el código del paquete','bad');var r=await api('/despacho/lotes/'+id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':despEscaneoClave()},body:JSON.stringify({codigo:codigo})});if(!r.body.ok)return despAviso(r.body.error||'No se pudo escanear','bad');verDetalleLote(id);}
-async function trackingLote(id,controlId){var tracking=prompt('Tracking del transportista:');if(!tracking)return;var r=await api('/despacho/lotes/'+id+'/tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({control_id:controlId,tracking:tracking.trim()})});if(!r.body.ok)return despAviso(r.body.error||'No se pudo guardar el tracking','bad');verDetalleLote(id);}
+async function trackingLote(id,controlId){return despAviso('El tracking se asocia durante el embalaje; despacho solo reconcilia el paquete.','bad');}
 async function cerrarLote(id){var r=await api('/despacho/lotes/'+id+'/cerrar',{method:'POST'});if(!r.body.ok){var motivo=prompt(r.body.error+' Motivo excepcional (opcional):');if(!motivo)return; r=await api('/despacho/lotes/'+id+'/cerrar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:motivo.trim()})});}if(!r.body.ok)return despAviso(r.body.error||'No se pudo cerrar','bad');verDetalleLote(id);}
 async function confirmarSalidaLote(id){if(!confirm('¿Confirmás que todo el lote fue entregado al transporte?'))return;var r=await api('/despacho/lotes/'+id+'/salida',{method:'POST',headers:{'Idempotency-Key':despEscaneoClave()}});if(!r.body.ok)return despAviso(r.body.error||'No se pudo confirmar la salida','bad');verDetalleLote(id);}
 async function verEventosLote(id){var r=await api('/despacho/lotes/'+id+'/eventos');if(!r.body.ok)return despAviso(r.body.error||'No se pudo cargar la auditoría','bad');var eventos=r.body.eventos||[];alert(eventos.map(function(e){return e.creado_en+' · '+e.usuario+' · '+e.tipo;}).join('\n')||'Sin eventos');}
@@ -492,7 +497,6 @@ async function cargarPendientes(){
   var c=document.getElementById('cuerpo');
   PEND_STATUS='loading';
   c.innerHTML='<div class="loading">Cargando pedidos…</div>';
-  cargarJornada();
   try{
     var r=await api('/pendientes');
     if(!r.body.ok)throw new Error(r.body.error||'error');
@@ -505,6 +509,8 @@ async function cargarPendientes(){
   }catch(e){PEND_STATUS='error';c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
 }
 
+/* Flujo de olas retirado. Se conserva temporalmente este bloque como referencia histórica
+   hasta que la siguiente limpieza compacte el archivo; no se registra ni se ejecuta.
 async function cargarJornada(){
   JORNADA.estado='loading';JORNADA.error=null;
   if(VISTA==='pendientes'&&PEND_CACHE)renderPendientes();
@@ -640,6 +646,7 @@ async function cerrarJornada(){if(JORNADA.busy||!confirm('¿Cerrar la jornada de
 function verPedidosOla(id){PEND_WAVE_FILTER=id;JORNADA.detalle=olaActual(id);renderPendientes();}
 function quitarFiltroOla(){PEND_WAVE_FILTER=null;renderPendientes();}
 function anunciarJornada(msg){var live=document.getElementById('foto-live');if(live)live.textContent=msg;}
+*/
 
 function clavePendiente(p){ return p.canal==='web'?'web:'+p.wc_order_id:'ml:'+(p.ml_order_id||p.pack_id||p.numero_pedido); }
 function registrarPendientesNuevos(pedidos, detectarNuevos){
@@ -651,13 +658,31 @@ function registrarPendientesNuevos(pedidos, detectarNuevos){
   PEND_BASELINE_LISTA=true;
 }
 
+function renderListaRecoleccion(pedidos){
+  var grupos={};
+  pedidos.forEach(function(p){
+    (p.items||[]).forEach(function(it){
+      var clave=String(it.sku||('woo:'+String(it.variation_id||it.product_id||it.nombre||''))).trim().toUpperCase();
+      if(!grupos[clave])grupos[clave]={sku:it.sku||'Sin SKU',nombre:it.nombre||'Producto sin nombre',imagen:it.imagen||'',cantidad:0,pedidos:{}};
+      grupos[clave].cantidad+=Number(it.cantidad||0);
+      grupos[clave].pedidos[clavePendiente(p)]=true;
+      if(!grupos[clave].imagen&&it.imagen)grupos[clave].imagen=it.imagen;
+    });
+  });
+  var items=Object.keys(grupos).map(function(k){return grupos[k];}).sort(function(a,b){return a.nombre.localeCompare(b.nombre,'es');});
+  if(!items.length)return '';
+  return '<section aria-labelledby="recoleccion-title"><h2 id="recoleccion-title" style="font-size:17px;margin:4px 0">Lista de recolección</h2><p class="sub" style="margin:0">Buscá estas cantidades totales antes de verificar cada pedido.</p><div class="recoleccion-grid">'+items.map(function(it){
+    var foto=it.imagen?'<img class="recoleccion-img" src="'+esc(it.imagen)+'" alt="Foto de '+esc(it.nombre)+'" loading="lazy" width="72" height="72">':'<div class="recoleccion-img recoleccion-sin-img" role="img" aria-label="Producto sin imagen">Sin imagen</div>';
+    var pedidosCount=Object.keys(it.pedidos).length;
+    return '<article class="recoleccion-item">'+foto+'<div class="recoleccion-info"><strong>'+esc(it.nombre)+'</strong><span>'+esc(it.sku)+'</span><span>'+pedidosCount+' pedido'+(pedidosCount===1?'':'s')+'</span></div><div class="recoleccion-cantidad">'+it.cantidad+'<small>unidades</small></div></article>';
+  }).join('')+'</div></section>';
+}
+
 var PEND_META={};
 function renderPendientes(){
   var c=document.getElementById('cuerpo');
-  if(JORNADA.detalle){c.innerHTML=renderDetalleOla(JORNADA.detalle);return;}
-  var html=renderJornada();
-  var visibles=PEND_WAVE_FILTER===null?PEND_CACHE:PEND_CACHE.filter(function(p){return Number(p.pick_wave_id)===Number(PEND_WAVE_FILTER);});
-  if(PEND_WAVE_FILTER!==null)html+='<div class="jornada-note">Mostrando solo pedidos de la ola seleccionada. <button class="btn sec mini" style="min-height:44px" onclick="quitarFiltroOla()">Quitar filtro</button></div>';
+  var html='<section class="jornada-panel cola-directa" aria-labelledby="cola-title"><div class="jornada-head"><div><h2 id="cola-title">Pedidos para preparar</h2><div class="jornada-meta">Abrí un pedido y verificá cada unidad con su código.</div></div><button class="btn sec mini" onclick="cargarPendientes()">Actualizar</button></div><p class="jornada-note">La cola se actualiza automáticamente. MercadoLibre aparece primero y luego los pedidos más antiguos.</p></section>';
+  var visibles=PEND_CACHE;
   var hm=haceMin(PEND_META.actualizado_en);
   if(PEND_META.sync_error){
     html+='<div class="flash warn" style="display:block">⚠ El último sync de pedidos falló: '+esc(PEND_META.sync_error)
@@ -665,9 +690,10 @@ function renderPendientes(){
   }else if(hm){
     html+='<div style="font-size:12px;color:var(--muted,#888);margin:4px 0 8px">actualizado hace '+hm+'</div>';
   }
+  if(PEND_STATUS==='ready')html+=renderListaRecoleccion(visibles);
   if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
   else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini" style="min-height:44px" onclick="cargarPendientes()">Reintentar</button></div>';
-  else if(!visibles.length)html+='<div class="loading">'+(PEND_WAVE_FILTER===null?'No hay pedidos para preparar 🎉':'No hay pedidos visibles para esta ola.')+'</div>';
+  else if(!visibles.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
   else html+='<div class="ped-grid">'+visibles.map(cardPendiente).join('')+'</div>';
   c.innerHTML=html;
 }
@@ -687,16 +713,11 @@ function renderPendientesSinInterrumpir(){
   }
   if(restaurado){restaurado.focus();if(seleccion&&typeof restaurado.setSelectionRange==='function')restaurado.setSelectionRange(seleccion.inicio,seleccion.fin);}
 }
-function jornadaEdicionActiva(){
-  var activo=document.activeElement, formulario=document.querySelector('.jornada-form');
-  return !!(JORNADA.busy||(formulario&&activo&&formulario.contains(activo)));
-}
-
-var pendientesTimer=null, pendientesEnVuelo=false, jornadaPollEnVuelo=false;
+var pendientesTimer=null, pendientesEnVuelo=false;
 function iniciarPollingPendientes(){
   detenerPollingPendientes();
   pendientesTimer=setInterval(function(){
-    if(VISTA==='pendientes'&&!pendientesEnVuelo&&!jornadaPollEnVuelo)cargarDatosSilenciosos();
+    if(VISTA==='pendientes'&&!pendientesEnVuelo)cargarDatosSilenciosos();
   }, 25000);
 }
 function detenerPollingPendientes(){
@@ -713,24 +734,18 @@ async function cargarPendientesSilencioso(){
   finally{ pendientesEnVuelo=false; }
 }
 async function cargarDatosSilenciosos(){
-  if(JORNADA.busy||jornadaEdicionActiva())return;
-  pendientesEnVuelo=true;jornadaPollEnVuelo=true;
+  if(pendientesEnVuelo)return;
+  pendientesEnVuelo=true;
   try{
-    var resultados=await Promise.all([api('/pendientes'),fetch('/api/jornada/hoy')]);
-    var pr=resultados[0],hr=resultados[1],hd=await hr.json();
+    var pr=await api('/pendientes');
     if(!pr.body.ok)throw new Error(pr.body.error||'No se pudo actualizar la cola');
-    if(!hd.ok)throw new Error(hd.error||'No se pudo actualizar la jornada');
-    var olas=[];
-    if(hd.jornada){var or=await fetch('/api/jornada/olas'),od=await or.json();if(!od.ok)throw new Error(od.error||'No se pudieron actualizar las olas');olas=od.olas||[];}
-    if(JORNADA.busy||jornadaEdicionActiva())return;
     var pedidos=pr.body.data||[];
     registrarPendientesNuevos(pedidos,true);PEND_CACHE=pedidos;PEND_META={actualizado_en:pr.body.actualizado_en,sync_error:pr.body.sync_error};
-    JORNADA.jornada=hd.jornada;JORNADA.olas=olas;JORNADA.claimsError=null;JORNADA.estado='ready';
     renderPendientesSinInterrumpir();
-  }catch(e){
-    if(!JORNADA.busy&&!jornadaEdicionActiva()){JORNADA.claimsError=e.message||'error';renderPendientesSinInterrumpir();}
-  }finally{pendientesEnVuelo=false;jornadaPollEnVuelo=false;}
+  }catch(e){/* el refresco de fondo no interrumpe la preparación */}
+  finally{pendientesEnVuelo=false;}
 }
+/* Polling de jornada/olas retirado.
 async function cargarJornadaSilenciosa(){
   if(JORNADA.busy||jornadaPollEnVuelo)return;
   jornadaPollEnVuelo=true;
@@ -746,6 +761,7 @@ async function cargarJornadaSilenciosa(){
     if(!JORNADA.busy){JORNADA.claimsError=e.message||'error';if(!jornadaEdicionActiva())renderPendientesSinInterrumpir();}
   }finally{jornadaPollEnVuelo=false;}
 }
+*/
 
 // El número que hay que mostrar es el que el operario tiene DELANTE en ML. Cuando la compra
 // agrupa varios ítems, ML le muestra al vendedor el número de "pack", que NO es el id de la
@@ -800,6 +816,7 @@ function cardPendiente(p){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB · Andreani</span>':'<span class="badge b-ml">ML · '+esc(p.logistic_type==='self_service'?'Flex':'Colecta')+'</span>';
   var estado='';
   if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
+  var accion=p.preparacion_id&&p.estado_preparacion==='en_preparacion'?'Continuar →':'Preparar →';
   if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
@@ -809,7 +826,7 @@ function cardPendiente(p){
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
     +nota+despacho
-    +'<div class="ped-foot">'+estado+'<button class="btn mini" style="margin-left:auto">Preparar →</button></div>'
+    +'<div class="ped-foot">'+estado+'<button class="btn mini" style="margin-left:auto">'+accion+'</button></div>'
     +'</div>';
 }
 
@@ -854,6 +871,15 @@ async function prepararClave(clave){
   var p=PEND_CACHE.find(function(v){return clavePendiente(v)===clave;});
   if(!p)return;
   var c=document.getElementById('cuerpo');
+  if(p.preparacion_id&&p.estado_preparacion==='en_preparacion'){
+    c.innerHTML='<div class="loading">Volviendo a la preparación…</div>';
+    try{
+      var reingreso=await api('/'+p.preparacion_id+'/tomar',{method:'POST'});
+      if(!reingreso.body.ok)throw new Error(reingreso.body.error||'No se pudo reabrir la preparación');
+      abrirDetalle(p.preparacion_id);
+    }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
+    return;
+  }
   c.innerHTML='<div class="loading">Iniciando preparación…</div>';
   await iniciarPreparacion(p.canal,p.canal==='web'?p.wc_order_id:p.ml_order_id,null);
 }
@@ -1092,7 +1118,7 @@ function renderDetalle(){
     +'<span class="dot"></span> Actividad ('+(p.eventos||[]).length+')</button></div>'
     +(p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'')
     +'<div class="stepper">'
-    +'<div class="step '+(paso1?'done':'on')+'"><span class="n">1</span> Escaneo</div>'
+    +'<div class="step '+(paso1?'done':'on')+'"><span class="n">1</span> Productos</div>'
     +'<div class="step '+(paso2?'done':(paso1?'on':''))+'"><span class="n">2</span> Fotos</div>'
     +'<div class="step '+(completada?'done':(paso2?'on':''))+'"><span class="n">✓</span> Finalizar</div>'
     +'</div>';
@@ -1108,7 +1134,11 @@ function renderDetalle(){
   if(!completada&&hayFotosConCantidad(p)){
     html+='<p class="sub" style="margin:2px 0 10px">Cuando un ítem pide varias unidades, mostralas TODAS juntas en la misma foto. El sistema no puede comprobar que estén — es un control humano, no una validación automática.</p>';
   }
-  html+=p.items.map(itemHtml).join('');
+  var unidadesEsperadas=p.items.reduce(function(total,it){return total+Number(it.cantidad_esperada||0);},0);
+  var unidadesVerificadas=p.items.reduce(function(total,it){return total+Math.min(Number(it.cantidad_escaneada||0),Number(it.cantidad_esperada||0));},0);
+  html+='<section aria-labelledby="checklist-productos-title"><h2 id="checklist-productos-title" style="font-size:16px;margin:14px 0 8px">Checklist de productos <span class="badge '+(paso1?'b-ok':'b-mut')+'">'+unidadesVerificadas+'/'+unidadesEsperadas+' unidades</span></h2>'
+    +'<p class="sub" style="margin:0 0 10px">Escaneá cada unidad. Una línea se completa únicamente al alcanzar la cantidad esperada.</p>'
+    +p.items.map(itemHtml).join('')+'</section>';
   html+=renderFotosPaquete(p);
 
   html+='<div style="margin-top:16px">'+renderActividad()+'</div>';
@@ -1122,6 +1152,7 @@ function renderDetalle(){
   // largo de Actividad aparte (ahora hay un evento por unidad escaneada, no por ítem).
   html+='<div class="finbar">';
   if(!completada){
+    html+='<button class="btn sec" onclick="asociarTracking()">'+(PREP.tracking?'Tracking asociado ✓':'Escanear tracking')+'</button>';
     html+='<button class="btn" '+(paso2?'':'disabled')+' onclick="completar()">Finalizar preparación</button>';
     if(!paso1)html+='<span class="sub" style="margin:0">Faltan ítems por verificar.</span>';
     else if(!paso2)html+='<span class="sub" style="margin:0">Faltan fotos obligatorias.</span>';
@@ -1971,6 +2002,15 @@ async function completar(){
   }else{
     flash('bad',r.body.error||'error');
   }
+}
+
+async function asociarTracking(){
+  var tracking=prompt('Escaneá o ingresá el tracking de la etiqueta externa:',PREP.tracking||'');
+  if(!tracking||!tracking.trim())return;
+  var r=await api('/'+PREP.id+'/asociar-tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:tracking.trim()})});
+  if(!r.body.ok){flash('bad',r.body.error||'No se pudo asociar el tracking');return;}
+  flash('ok',r.body.repetido?'El tracking ya estaba asociado.':'Tracking asociado al paquete.');
+  refrescarDetalle();
 }
 
 // captura tipo teclado del lector (wedge) cuando no hay un input enfocado

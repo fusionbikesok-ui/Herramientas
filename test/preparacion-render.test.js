@@ -93,34 +93,25 @@ describe('preparacion/index.html — render de pedidos nuevos', () => {
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain('min-height:44px');
   });
-  it('descarta claims locales expirados y permite tomar olas en búsqueda', () => {
-    ctx.JORNADA = { estado: 'abierta', jornada: { id: 1 }, olas: [{ id: 7, tipo: 'inicial', estado: 'en_picking', items: [] }], error: null, busy: false, claims: { 7: { usuario: 'tester', expires_at: '2020-01-01T00:00:00Z' } } };
-    const html = ctx.jornadaCard(ctx.JORNADA.olas[0]);
-    expect(ctx.JORNADA.claims[7]).toBeUndefined();
-    expect(html).toContain('>Tomar ola</button>');
+  it('muestra la lista consolidada con cantidades e imágenes', () => {
+    const pedidos = [
+      { canal:'ml', ml_order_id:'1', items:[{sku:'CASCO-1',nombre:'Casco',cantidad:2,imagen:'https://img.example/casco.jpg'}] },
+      { canal:'web', wc_order_id:2, items:[{sku:'CASCO-1',nombre:'Casco',cantidad:1,imagen:'https://img.example/casco.jpg'}] },
+    ];
+    const html = ctx.renderListaRecoleccion(pedidos);
+    expect(html).toContain('Lista de recolección');
+    expect(html).toContain('https://img.example/casco.jpg');
+    expect(html).toContain('>3<small>unidades</small>');
+    expect(html).toContain('2 pedidos');
   });
-  it('muestra el aviso operativo del claim próximo a vencer con texto accesible', () => {
-    ctx.JORNADA = { estado: 'ready', jornada: { id: 1 }, olas: [{ id: 8, tipo: 'inicial', estado: 'en_picking', items: [], claim: { usuario: 'tester', por_vencer: true, segundos_restantes: 540 } }], error: null, busy: false, claims: {} };
-    const html = ctx.jornadaCard(ctx.JORNADA.olas[0]);
-    expect(html).toContain('role="alert"');
-    expect(html).toContain('vence en 9 min');
-    expect(html).toContain('Terminá o liberá la ola.');
+  it('muestra un fallback explícito cuando el producto no tiene imagen', () => {
+    const html = ctx.renderListaRecoleccion([{canal:'web',wc_order_id:2,items:[{sku:'X',nombre:'Producto X',cantidad:1}]}]);
+    expect(html).toContain('Producto sin imagen');
+    expect(html).toContain('Sin imagen');
   });
-  it('mantiene controles visibles de pausa y reanudación de la ola', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
-    expect(source).toContain("onclick=\"pausarOla(");
-    expect(source).toContain("onclick=\"reanudarOla(");
-    expect(source).toContain("'/pausar'");
-    expect(source).toContain("'/reanudar'");
-  });
-  it('restaura foco visible para controles de jornada', () => {
+  it('conserva foco visible para los controles de la cola', () => {
     const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
-    expect(html).toContain('.jornada-form input:focus-visible');
     expect(html).toContain('.jornada-panel button:focus-visible');
-  });
-  it('anuncia cambios en la región live persistente', () => {
-    ctx.anunciarJornada('Ola reclamada.');
-    expect(ctx.document.getElementById('foto-live').textContent).toBe('Ola reclamada.');
   });
   it('muestra ambos límites para ML/Andreani sin inventar horarios', () => {
     const pedido = { canal: 'ml', logistic_type: 'cross_docking', shipment_limite_original: '2026-09-02T15:30:00-03:00', fecha_despacho_limite: '2026-09-02T15:00:00-03:00', estado_despacho: 'activo', items: [] };
@@ -143,89 +134,14 @@ describe('preparacion/index.html — render de pedidos nuevos', () => {
     expect(ctx.cardPendiente({ canal: 'ml', estado_despacho: 'diferido', despacho_motivo: 'MARGEN_30_MIN_SUPERADO', items: [] })).toContain('margen operativo de 30 minutos');
     expect(ctx.cardPendiente({ canal: 'ml', logistic_type: 'self_service', estado_despacho: 'diferido', despacho_motivo: 'FLEX_SALIDA_17:00_SUPERADA', items: [] })).toContain('salida máxima de Flex');
   });
-  it('muestra reglas canónicas y preflight antes y después de abrir', () => {
-    ctx.JORNADA = { estado: 'ready', jornada: null, olas: [], error: null, busy: false, claims: {} };
-    let html = ctx.renderJornada();
-    expect(html).toContain('Web: preparar antes de <b>15:00</b>');
-    expect(html).toContain('ML/Andreani: entregar según el límite de cada paquete, con <b>30 min</b>');
-    expect(html).toContain('Flex: salida máxima <b>17:00</b>');
-    expect(html).toContain('ML Full: <b>fuera del flujo</b>');
-    expect(html).toContain('desconocido · no_verificado');
-    expect(html).not.toContain('jornada-hora');
-    expect(html).not.toContain('jornada-ventana');
-
-    ctx.JORNADA.jornada = { id: 1, estado: 'abierta', fecha: '2026-09-02' };
-    ctx.JORNADA.reglas = { zona_horaria: 'America/Argentina/Buenos_Aires', web: { hora: '15:00' }, ml_andreani: { margen_minutos: 30 }, flex: { hora: '17:00' }, full: { estado: 'excluido' } };
-    ctx.JORNADA.preflight = { estado: 'abierta_con_advertencias', integraciones: { mercadolibre: { estado: 'desconocido', verificacion: 'no_verificado' }, woocommerce: { estado: 'verificado', verificacion: 'verificado' } }, agente_impresora: { estado: 'desconocido', verificacion: 'no_verificado' }, operaciones_no_afectadas: 'continuan' };
-    html = ctx.renderJornada();
-    expect(html).toContain('WooCommerce: <b>verificado · verificado</b>');
-    expect(html).toContain('Agente/impresora: <b>desconocido · no_verificado</b>');
-  });
-  it('envía body vacío y deja error accionable si se mandan overrides', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
-    expect(source).toContain("body:'{}'");
-    expect(source).toContain("r.status===400&&d.code==='OPENING_RULES_SERVER_CONTROLLED'");
-    expect(source).toContain('Las reglas de apertura son canónicas y se calculan en el servidor');
-  });
-  it('actualiza el polling sin repintar la cola ni interrumpir la apertura', () => {
+  it('actualiza la cola en segundo plano sin consultar jornadas ni olas', () => {
     const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
     const silencioso = html.match(/async function cargarPendientesSilencioso\(\)\{([\s\S]*?)\n\}/)?.[1] || '';
     expect(silencioso).not.toContain('renderPendientes()');
-    expect(html).toContain('if(!jornadaEdicionActiva())renderPendientesSinInterrumpir();');
     expect(html).toContain('async function cargarDatosSilenciosos()');
-    expect(html).toContain('Promise.all([api(\'/pendientes\'),fetch(\'/api/jornada/hoy\')])');
+    expect(html).toContain("var pr=await api('/pendientes')");
     expect(html).toContain('document.getElementById(foco.id)');
     expect(html).toContain('setSelectionRange(seleccion.inicio,seleccion.fin)');
     expect(html).toContain('--focus-ring:#67e8f9');
-    expect(html).not.toContain('data-poll-focus');
-  });
-  it('renderiza la ola con estados objetivo y acciones de búsqueda, mesa y ayuda', () => {
-    ctx.USERNAME = 'tester';
-    ctx.JORNADA.zonas = [{ id: 2, nombre: 'Estante B', verificada: 0 }];
-    const html = ctx.renderDetalleOla({ id: 4, tipo: 'inicial', estado_operativo: 'en_busqueda', expected_version: 3,
-      claim: { usuario: 'tester' }, items: [{ pedido_clave: 'ml:22', sku: 'ABC', cantidad: 1 }] });
-    expect(html).toContain('Recorriendo zonas');
-    expect(html).toContain('Pasar a mesa');
-    expect(html).toContain('Pedir ayuda por zona');
-    expect(html).toContain('Mesa de asignación');
-    expect(html).toContain('Estante B · ubicación sugerida');
-  });
-  it('mantiene la separación E1/E2 y muestra faltantes sin ocultarlos', () => {
-    ctx.USERNAME = 'tester';
-    const html = ctx.renderDetalleOla({ id: 5, tipo: 'mini', estado_operativo: 'en_mesa', expected_version: 1,
-      claim: { usuario: 'tester' }, items: [{ pedido_clave: 'web:91', sku: 'XYZ', cantidad: 2 }] });
-    expect(html).toContain('Escanear unidad en mesa');
-    expect(html).toContain('Registrar faltante');
-    expect(html).toContain('La búsqueda no escanea unidades');
-    expect(html).not.toContain('Aprobar preparación');
-  });
-  it('usa requests E1 con idempotencia, versión esperada y feedback accesible', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
-    expect(source).toContain("body.expected_version=ola.expected_version||1");
-    expect(source).toContain("body.operation_id=E1_OPERATION_IDS[opKey]||(E1_OPERATION_IDS[opKey]=operationId())");
-    expect(source).toContain("'/api/jornada/zonas'");
-    expect(source).toContain('role="status" aria-live="polite"');
-  });
-  it('ofrece escaneo de unidad en mesa sin pedir el SKU en el flujo normal', () => {
-    ctx.USERNAME = 'tester';
-    ctx.JORNADA = { estado: 'ready', jornada: { id: 1 }, zonas: [], olas: [], claims: {}, busy: false };
-    const html = ctx.renderDetalleOla({ id: 12, tipo: 'inicial', estado_operativo: 'en_mesa', expected_version: 4,
-      claim: { usuario: 'tester' }, items: [{ pedido_clave: 'ml:200', sku: 'ABC-1', cantidad: 1 }] });
-    expect(html).toContain('Escanear unidad en mesa');
-    expect(html).toContain('Todavía no hay una unidad leída');
-    expect(html).not.toContain('onclick="asignarMesa(');
-    expect(html).toContain('buscarUnidadMesaManual');
-    const source = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
-    expect(source).toContain('window.Scanner.open');
-    expect(source).toContain('onCode:function(v){mesaLectura(id,v);}');
-    expect(source).toContain('Pedido prioritario sugerido');
-  });
-  it('mantiene feedback accesible y fallback manual con motivo', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
-    expect(source).toContain('role="status" aria-live="polite"');
-    expect(source).toContain('role="alert"');
-    expect(source).toContain('La búsqueda manual requiere un motivo.');
-    expect(source).toContain('E1_OPERATION_IDS[opKey]||(E1_OPERATION_IDS[opKey]=operationId())');
-    expect(source).toContain('Código leído. Confirmá el pedido sugerido en la mesa.');
   });
 });

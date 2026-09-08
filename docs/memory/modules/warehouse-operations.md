@@ -10,11 +10,9 @@ implementadas como un único libro de stock.
 ## Preparación y despacho
 
 - Los pedidos ingresan continuamente durante el día y se notifican al área de preparación.
-- La jornada comienza con una ola de todos los elegibles actuales; pedidos normales posteriores forman mini-olas y ML urgente se incorpora a la ola activa. La prioridad es MercadoLibre y luego límite/antigüedad.
-- E1 separa estados de ola y pedido: la ola pasa por disponible, búsqueda, mesa y cierre; un pedido se vuelve individual al recibir la primera unidad escaneada en mesa.
-- La búsqueda no escanea unidad por unidad. En picos, el responsable puede pedir ayuda por zona manual; el ayudante ve solo la zona/lista, entrega en mesa y queda identificado, pero no modifica cantidades ni estados.
-- E1 usa tablero PC y celular web; una tablet futura será tablero compartido sin PII y la App iPhone futura tendrá el flujo completo de piso.
-- La confirmación final escanea cada unidad en mesa, sugiere asignación prioritaria y exige confirmación del responsable. Faltantes bloquean solo el pedido afectado y se resuelven por supervisor, con resguardo físico.
+- Desde el 2026-09-08, preparación usa una cola continua sin olas: MercadoLibre primero y antigüedad después. Los pedidos nuevos aparecen en la próxima actualización.
+- La pantalla primero consolida todos los productos pendientes por SKU y muestra imagen, cantidad total y cantidad de pedidos. Después el operario abre un pedido, adquiere su claim y completa una checklist escaneando cada unidad. La línea muestra cantidad escaneada/esperada; excedentes y códigos ajenos o desconocidos no modifican cantidades.
+- Las olas nunca tuvieron adopción operativa y se retiraron de la UI, del contrato de pendientes y del montaje de `/api/jornada`. Sus tablas y eventos históricos se conservan como auditoría, sin trabajo nuevo.
 - El operario encuentra unidades, las asigna al pedido, escanea, toma evidencia y aprueba la
   preparación antes del despacho.
 - La evidencia incluye requisitos por ítem y fotos del paquete cuando corresponda. Un error de
@@ -26,8 +24,7 @@ implementadas como un único libro de stock.
 - Objetivo E4: generar/reconciliar lotes de transporte después de que los paquetes aprobados estén listos.
 - ML Full queda fuera. El transporte único retira ML, Andreani y Flex. Para MercadoEnvíos la hora máxima no es fija y puede variar por paquete; se usa la hora máxima de entrega en el centro de acopio. ML y Andreani requieren 30 minutos de margen. Flex debe salir como máximo a las 17:00 para permitir el regreso del transporte antes del cierre de las 19:00. Web mantiene máximo normal de preparación a las 15:00.
 - Un Flex fuera de margen se prepara igualmente y queda para el día siguiente; no se descarta ni se fuerza un despacho tardío.
-- E1 tiene implementación local para apertura, olas, ML urgente incorporado con retorno, claims vigentes, estados búsqueda/mesa/cierre, zonas no verificadas, ayuda física consultable, asignación de mesa con cámara/fallback auditado, faltantes, necesidades SKU/cantidad y auditoría (`routes/jornada.js`, `lib/jornada.js`, `migrations/048_jornada_picking_operativo.sql`, `public/preparacion/index.html`). Continúa sin aceptación: la revisión dejó pendientes ayuda operativa completa, permisos finos, resolución comercial y replay idempotente integral; faltan demo aislada y jornada observada.
-- La ayuda por zona solo incluye SKU con ubicación activa mapeada a esa zona; los SKU sin ubicación no se asignan artificialmente y quedan para la tarea de ubicar.
+- E1 se redefine como cola continua, checklist por pedido y escaneo unitario. Continúa sin aceptación hasta completar pruebas focalizadas, recorrido responsive y validación operativa real.
 - Cancelaciones o cambios que afectan un pedido preparado invalidan evidencia y etiquetas; una
   unidad reasignada a un ML urgente puede exigir rehacer la preparación web desplazada.
 - Un faltante es incidente urgente y dispara búsqueda/conteo escalonado; no se oculta como pedido
@@ -36,15 +33,7 @@ implementadas como un único libro de stock.
 
 ## Modelo físico y comercial: objetivo E8–E18
 
-> Corrección de evidencia 2026-09-03: la suite vigente de jornada es **53/53**; cualquier conteo anterior en este módulo es histórico.
-
-Gate técnico E1 2026-09-03: se corrigieron los cuatro P1 de replay/autorización/snapshot identificados por revisión independiente; la demo y la observación real siguen pendientes.
-
-La suite E1 vigente queda en **54/54** tras cubrir pausa/reanudación persistentes.
-
-La pausa de ola queda disponible mediante `/api/jornada/ola/:id/pausar` y `/api/jornada/ola/:id/reanudar`, con migración `migrations/058_jornada_pausa.sql`; requiere motivo, conserva el claim y registra auditoría.
-
-Validación E1 del 2026-09-03: 48/48 pruebas de jornada y smoke autenticado responsive con axe sin violaciones. E1 continúa en desarrollo; no se publicó ni se observó una jornada real.
+La validación histórica de jornada/olas queda obsoleta para aceptación funcional. Los archivos y migraciones históricos pueden servir para auditoría, pero no forman parte del runtime ni de los gates focalizados de la checklist.
 
 - Fusion mantiene físico por ubicación y libro inmutable de movimientos.
 - WooCommerce es autoridad de disponible comercial; Fusion separa físico, disponible,
@@ -117,6 +106,9 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
   automáticas quedan fuera del primer programa.
 
 ## Retención y alertas
+
+- En preparación, volver a la cola conserva el claim del operador. La tarjeta queda como `Continuar` y el reingreso usa `/tomar` de forma idempotente para renovar el claim; otro operador sigue bloqueado hasta liberación o vencimiento.
+- Las etiquetas Web/Andreani se generan fuera del VPS: durante el embalaje el preparador escanea código interno y tracking, confirma la asociación y el sistema bloquea duplicados/conflictos. Despacho solo reconcilia el código interno al retirar; la notificación a Woo ocurre después de confirmar salida. MercadoLibre no carga tracking en este sistema.
 
 - Movimientos y auditoría se conservan indefinidamente.
 - Fotos operativas se conservan 180 días; reclamos, incidentes, garantías o auditorías activas suspenden la purga.

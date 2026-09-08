@@ -10,7 +10,6 @@ import {
   clasificarElegibilidadMl, pedidosElegiblesOrdenados,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
-import { jornadaRouter } from '../routes/jornada.js';
 import { rutaAbsoluta } from '../utils/storage.js';
 import heicConvert from 'heic-convert';
 
@@ -2853,40 +2852,17 @@ describe('syncPedidosCache', () => {
     expect(r.body.data.find(p => p.ml_order_id === '2000017571249972')).toBeUndefined();
   });
 
-  it('/pendientes incluye pick_wave_id y pick_wave_tipo cuando hay jornada abierta', async () => {
-    const app = express();
-    app.use(express.json());
-    app.use((req, _res, next) => { req.user = { username: 'tester', is_admin: 1 }; next(); });
-    app.use('/api/jornada', jornadaRouter(db, {}));
-    app.use('/api/preparacion', preparacionRouter(db, { woo: {}, ml: {}, colaFotos: { disparoInmediato: false } }));
-    await request(app).post('/api/jornada/abrir').send({});
+  it('/pendientes no crea olas ni expone metadatos del flujo retirado', async () => {
+    const app = buildTestApp(db);
     const ts = new Date().toISOString();
     db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, espejo_ml, items_json, actualizado_en)
       VALUES ('web:77', 'web', 77, '77', 'Cliente', ?, 'pendiente', 0, '[]', ?)`).run(ts, ts);
+    const olasAntes = db.prepare('SELECT COUNT(*) AS n FROM pick_waves').get().n;
     const r = await request(app).get('/api/preparacion/pendientes');
     const fila = r.body.data.find(d => d.wc_order_id === 77);
-    expect(fila.pick_wave_tipo).toBe('mini');
-    expect(fila.pick_wave_id).toEqual(expect.any(Number));
-  });
-
-  it('/pendientes no devuelve la ola histórica si no hay jornada abierta hoy', async () => {
-    const app = buildTestApp(db);
-    const ts = new Date().toISOString();
-    const dayId = db.prepare(`INSERT INTO operational_days
-      (fecha, estado, abierta_por, abierta_en) VALUES ('2000-01-01', 'cerrada', 'tester', ?)`).run(ts).lastInsertRowid;
-    const waveId = db.prepare(`INSERT INTO pick_waves
-      (operational_day_id, tipo, estado, creada_en) VALUES (?, 'inicial', 'completada', ?)`).run(dayId, ts).lastInsertRowid;
-    db.prepare(`INSERT INTO pick_wave_items
-      (pick_wave_id, pedido_clave, agregado_en) VALUES (?, 'web:historico', ?)`).run(waveId, ts);
-    db.prepare(`INSERT INTO pedidos_cache
-      (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, espejo_ml, items_json, actualizado_en)
-      VALUES ('web:historico', 'web', 9901, '9901', 'Cliente', ?, 'pendiente', 0, '[]', ?)`).run(ts, ts);
-
-    const r = await request(app).get('/api/preparacion/pendientes');
-    const fila = r.body.data.find((item) => item.wc_order_id === 9901);
-    expect(r.status).toBe(200);
-    expect(fila.pick_wave_id).toBeNull();
-    expect(fila.pick_wave_tipo).toBeNull();
+    expect(fila).not.toHaveProperty('pick_wave_id');
+    expect(fila).not.toHaveProperty('pick_wave_tipo');
+    expect(db.prepare('SELECT COUNT(*) AS n FROM pick_waves').get().n).toBe(olasAntes);
   });
 
   it('GET /pendientes no muestra una fila con preparación en pendiente_deposito (tiene pantalla propia en Historial)', async () => {

@@ -1,7 +1,7 @@
 # Plan Maestro de FusionBikes: operación, VPS y App
 
 **Estado:** especificación canónica vigente
-**Versión documental:** 2026-09-05 / programa E0–E24 + programa urgente UM1
+**Versión documental:** 2026-09-08 / programa E0–E24 + programa urgente UM1
 **Backend canónico:** `/opt/fusionbikes/herramientas`
 **Rama productiva observada:** `conteo-confiable`
 **Base verificada de esta reconstrucción:** `bc13898f9faeffcde00f49616ce6cb858eff03a3`
@@ -53,13 +53,16 @@ Un diferido registra fecha, motivo, nota, origen de instrucción y auditoría. S
 | Tipo | Responsabilidad |
 | --- | --- |
 | `OperationalDay` | fecha local, horarios confirmados, salud, pendientes y cierre |
-| `PickWave` | conjunto de necesidades de picking con guía de zona y estado de búsqueda/mesa |
 | `Preparation` | asignación de producto/pedido y estado de preparación |
 | `Package` | contenido físico y ciclo evidencia→despacho |
 | `PhotoEvidence` | archivo, requisito, perfil/versionado y procesamiento |
 | `InternalLabelJob` | impresión 50×25 idempotente por paquete |
 | `ShippingBatch` | miembros congelados y reconciliación de transporte |
 | `DispatchConfirmation` | salida física y actualización comercial durable |
+| `DispatchOrder` | pedido externo normalizado para historial y cruce operativo |
+| `DispatchShipment` | envío, tracking, estado, devolución y eventos del canal |
+| `DispatchCustomer` | cliente normalizado por canal para consulta histórica |
+| `DispatchItem` | snapshot de líneas del pedido relacionado con el catálogo |
 | `StockBalance` | proyección de cantidades por ubicación/condición |
 | `StockMovement` | hecho inmutable que explica el balance |
 | `WarehouseLocation` | depósito→zona→estante y sectores operativos |
@@ -97,29 +100,30 @@ Pedidos ML elegibles, pedidos Woo en “listo para enviar Andreani”, cambios, 
 
 ### Estado actual verificado
 
-La preparación integrada posee cola continua, claims técnicos, escaneo, requisitos de evidencia, fotos por ítem/paquete, auditoría y confirmación de despacho idempotente. Existen ramas históricas para hoja diaria, fechas/SLA y resiliencia de fotos; su ancestry y diff deben verificarse antes de reutilizarlas. No están verificadas como operación aceptada bajo este modelo.
+La preparación integrada posee cola continua priorizada, claims por preparación, escaneo unitario, requisitos de evidencia, fotos por ítem/paquete, auditoría y confirmación de despacho idempotente. Las olas de recolección no tuvieron adopción operativa y fueron retiradas del flujo vigente por decisión del 2026-09-08; sus registros históricos se conservan sin generar trabajo nuevo.
 
 ### Brecha existente
 
-El backend ya implementa apertura diaria, ola inicial, mini-olas, mini-ola ML urgente, claims con vencimiento y cierre en `routes/jornada.js` y `lib/jornada.js`. El comportamiento actual todavía congela la ola, ofrece escaneo durante el recorrido y no modela mesa, zonas, retorno obligatorio ni ayuda física registrada. La UI tampoco separa completamente estado de ola y estado de pedido. La reasignación automática de última unidad pertenece a E12. Esta especificación redefine el objetivo de E1; no declara implementado lo que aún no está en código.
+Falta validación operativa real de la checklist, tratamiento integrado de faltantes y recuperación explícita ante códigos desconocidos o cambios concurrentes. La reasignación automática de última unidad pertenece a E12.
 
 ### Flujo normal paso a paso
 
-1. Ejecutar el preflight, mostrar causa/acción para cada fallo y confirmar fecha, límites, responsables y pendientes.
-2. Crear una ola inicial con todos los pedidos elegibles actuales. Los normales posteriores forman mini-olas; un ML urgente se incorpora a la ola activa.
-3. Recorrer la ola consolidada por zonas manuales. La búsqueda no escanea unidad por unidad; un segundo operario puede ayudar por zona sin modificar cantidades.
-4. Pasar a mesa. El responsable recibe la ayuda, identifica al ayudante y escanea cada unidad. El sistema sugiere pedido por prioridad y el responsable confirma la asignación.
-5. Si un urgente requiere una zona ya recorrida, crear retorno obligatorio. Un faltante bloquea solo el pedido afectado y crea incidencia.
-6. Dividir paquetes antes de E2. E2 continúa con control, fotos, sellado, aprobación y sector listo para despacho.
-7. Cerrar la ola cuando cada unidad quedó asignada, devuelta, resguardada o derivada con bloqueo explícito.
+1. Consolidar todos los pedidos pendientes en una lista de recolección por producto, con imagen, SKU, cantidad total y cantidad de pedidos que lo requieren.
+2. Buscar físicamente esas cantidades. La lista se recalcula con la cola continua; un pedido nuevo aparece en la próxima actualización sin esperar apertura, ola o corte.
+3. Abrir un pedido priorizado y adquirir su claim técnico para evitar edición simultánea.
+4. Mostrar una checklist con producto, SKU, cantidad esperada, cantidad escaneada y estado.
+5. Escanear cada unidad. Un código válido incrementa solo su línea; un excedente, código ajeno o desconocido no modifica cantidades y muestra recuperación explícita.
+6. Una confirmación sin código requiere motivo y queda auditada. Un faltante bloquea solo el pedido afectado y crea incidencia.
+7. Cuando todas las líneas estén verificadas, completar evidencia por ítem/paquete, dividir paquetes si corresponde y aprobar. La preparación aprobada pasa al sector listo para despacho.
+8. La navegación móvil se organiza en cuatro espacios: Productos a buscar, Pedidos a preparar, Listos para despachar y Despachos. Historial y configuración quedan secundarios.
 
 ### Estados y transiciones
 
-Jornada: pendiente → abierta → cerrada. Ola: disponible → en búsqueda → en mesa → cerrada. Pedido: retenido → elegible → en ola → armado individual → pausado|bloqueado → evidencia pendiente → aprobado → listo para despacho. La pausa conserva claim hasta aviso a 10 minutos; a los 15 se libera y queda disponible con aviso. Un retenido permanece visible con motivo pero no es pickeable.
+Preparación: pendiente → en preparación → productos verificados → evidencia completa → completada → lista para despacho. Puede derivar a pendiente de depósito, bloqueada por incidencia o cerrada sin evidencia mediante flujos auditados. El claim vence y libera el pedido según el contrato técnico vigente. Un retenido permanece visible con motivo pero no puede prepararse.
 
 ### Excepciones, concurrencia e idempotencia
 
-Doble escaneo técnico no duplica una mutación; el escaneo final unitario asigna una unidad a un pedido y nunca a dos. Toda mutación usa idempotency key y versión esperada. Claims identifican un responsable de ola; la ayuda física se registra como evento separado. Cambios externos bloquean el pedido afectado. Un faltante se clasifica, escala al supervisor y deja los productos separados en resguardo. Sustituciones transitorias requieren constancia de cliente, motivo y reflejo comercial; ML bloquea si no puede actualizarse.
+Doble escaneo técnico no duplica una mutación; cada escaneo aceptado confirma una sola unidad dentro del pedido abierto. Toda mutación reintentable usa idempotencia. El claim identifica al responsable de la preparación. Cambios externos bloquean el pedido afectado. Un faltante se clasifica, escala al supervisor y deja los productos separados en resguardo. Sustituciones transitorias requieren constancia de cliente, motivo y reflejo comercial; ML bloquea si no puede actualizarse.
 
 ### Comportamiento online y offline
 
@@ -127,27 +131,27 @@ La web actual requiere conexión para mutaciones de E1, pero conserva borrador y
 
 ### UX web, App y vista rápida
 
-PC inicia con tablero de operación: riesgos, ola activa, mini-olas, nuevos, vencimientos, bloqueos y tareas tomadas. Celular inicia en la tarea propia. La tablet futura será tablero común sin PII. Los estados de ola y pedido se muestran separados; los límites tienen hora, tiempo restante y severidad. Búsqueda incluye pedido, SKU, nombre y tracking; historial filtra por estado, fecha e incidencias.
+PC y celular inician con la lista consolidada de recolección y la cola priorizada debajo. Cada producto muestra imagen o un fallback explícito, SKU y cantidad total. Al abrir un pedido, la checklist mantiene foco de escaneo, muestra progreso por línea y total, y da feedback visual, sonoro y háptico. Los límites tienen hora, tiempo restante y severidad. Búsqueda incluye pedido, SKU, nombre y tracking; historial filtra por estado, fecha e incidencias.
 
 ### Auditoría y retención
 
-Guardar actor, dispositivo, operación, pedido, ola, zona, ayudante, producto, cantidad, origen/destino, versión esperada, fecha real y fecha del servidor. Registrar fallos operativos y técnicos relevantes, reintentos agrupados, antes/después y motivo. No borrar eventos: una corrección enlaza un nuevo evento. Movimientos y auditoría indefinidos; fotos 180 días según E2; borradores locales se purgan después de sincronizar.
+Guardar actor, dispositivo, operación, pedido, producto, cantidad, origen/destino, versión esperada, fecha real y fecha del servidor. Registrar fallos operativos y técnicos relevantes, reintentos agrupados, antes/después y motivo. No borrar eventos: una corrección enlaza un nuevo evento. Movimientos y auditoría indefinidos; fotos 180 días según E2; borradores locales se purgan después de sincronizar.
 
 ### Métricas y objetivos
 
-Tiempo activo de picking, recorrido aproximado, espera, pausas, faltantes, reaperturas, pedidos tardíos y porcentaje de mini-olas. Primer mes crea línea base; no se publican rankings personales.
+Tiempo activo por preparación, unidades verificadas, confirmaciones manuales, códigos rechazados, faltantes, reaperturas y pedidos tardíos. Primer mes crea línea base; no se publican rankings personales.
 
 ### Escenarios de aceptación
 
-Preflight con falla parcial; ola inicial; mini-ola normal; ML urgente que exige retorno; ayuda por zona; pausa y reanudación; escaneo unitario y asignación; código desconocido; faltante; cambio/cancelación concurrente; sustitución; diferimiento; recarga; claim vencido; sesión vencida; cierre con derivados; histórico sin evidencia.
+Consolidación del mismo SKU entre pedidos y canales; imagen disponible o ausente; pedido nuevo que actualiza cantidades; prioridad ML; escaneo unitario; múltiples unidades; excedente; código ajeno o desconocido; confirmación manual auditada; faltante; cambio/cancelación concurrente; sustitución; diferimiento; recarga; claim vencido; sesión vencida; evidencia incompleta e histórico sin evidencia.
 
 ### Entregas que lo implementan
 
-E1 define jornada/olas/picking; E2 evidencia/paquetes; E12 integra compromisos, faltantes y reasignación; E13 incorpora captura móvil/offline.
+E1 define cola continua, checklist y escaneo; E2 evidencia/paquetes; E12 integra compromisos, faltantes y reasignación; E13 incorpora captura móvil/offline.
 
 ### Decisiones pendientes, responsable e impacto
 
-Definir nombres iniciales de zonas manuales y responsables fijos de apertura; las zonas pueden ser editadas por cualquier operario, se aplican desde la próxima ola y quedan como sugerencias no verificadas. Responsable: depósito. Afecta la demo, no bloquea la documentación.
+Definir si la ubicación sugerida se muestra desde el catálogo actual o espera al modelo de ubicaciones de E9. Responsable: depósito. Afecta la guía de búsqueda, no bloquea la checklist.
 
 ## 5. Evidencia fotográfica y aprobación
 
@@ -244,7 +248,7 @@ Faltan validación física del agente, semántica completa de paquete, lotes con
 2. Agente autenticado reclama atómicamente, imprime 50×25 sin diálogo y confirma éxito/fallo. El paquete sigue aprobado aunque falle.
 3. Paquetes aprobados se acumulan. Despacho inicia lote y congela miembros.
 4. ML se etiqueta en MercadoLibre. Andreani recibe tabla/TSV actual; operador confirma por lote que allí se generaron etiquetas.
-5. Al pegar etiqueta de transporte se escanean código interno y tracking; discrepancia bloquea.
+5. En Web/Andreani, al embalar, el preparador escanea código interno y tracking de la etiqueta externa. Como las etiquetas se generan fuera del VPS, el sistema valida formato, duplicado y conflicto, y registra la asociación con confirmación del operador; no afirma una pertenencia que no puede conocer automáticamente. Despacho solo reconcilia el código interno al retirar. MercadoLibre no carga tracking en este sistema.
 6. En retiro, despacho escanea internos y compara esperados, escaneados, faltantes, duplicados y ajenos.
 7. Confirmación física cambia Woo a enviado mediante operación durable/idempotente y guarda actor, hora, lote y adjunto opcional.
 
@@ -283,6 +287,10 @@ E3 impresión; E4 lotes/tracking/despacho; E23 robustez y recuperación.
 ### Decisiones pendientes, responsable e impacto
 
 Modelo, driver, lenguaje y puerto físicos bloquean publicación E3. SLA/modalidad ML bloquea aceptación E4.
+
+### Historial relacional de despachos
+
+El historial de despachos es independiente de la cola operativa. Se modela con pedidos, clientes, items, shipments, eventos y cruces con preparaciones; no se usa `pedidos_cache` como fuente histórica. La importación inicial cubre los últimos 30 días de MercadoLibre y únicamente WooCommerce `enviadoandreani`. Un despacho sin preparación local se muestra como “despachado sin registro local”, nunca como verificado. La migración y sus criterios de aceptación están en `docs/superpowers/plans/2026-09-08-historial-despachos-relacional.md`.
 
 ## 7. Stock, identidad, familias, ubicaciones y movimientos
 
@@ -1163,7 +1171,7 @@ Cada avance sobre UM1, aunque sea parcial o quede a medias, actualiza en el mism
 | UM1.1 urgente | VPS + web móvil | Cierre de publicaciones ML activas con stock sin SKU válido | Bloqueante; protege E1/E11/E12 |
 | UM1.2–UM1.6 | VPS + web + App | Cobertura durable, Producto Fusion, matching bilateral, UX completa y retiro legacy | UM1.1 y gates progresivos |
 | E0 | Ambos | Maestro, memoria, archivo, decisiones, patrones, fichas y handoffs reconstruidos | Ninguna |
-| E1 | VPS | Apertura diaria, horarios, olas y picking consolidado | Entrega operativa anterior |
+| E1 | VPS | Cola continua, checklist y escaneo unitario | Entrega operativa anterior |
 | E2 | VPS/web móvil | Evidencia, perfiles, paquetes y aprobación confiable | Entrega operativa anterior |
 | E3 | VPS/Windows | Etiqueta interna automática 50×25 y agente validado | Entrega operativa anterior |
 | E4 | VPS | Lotes ML/Andreani, tracking y despacho reconciliado | Entrega operativa anterior |
@@ -1216,7 +1224,7 @@ Pipeline verde puede publicar automáticamente backend/web VPS: push, migración
 
 | Área | Escenarios mínimos | Entregas |
 | --- | --- | --- |
-| Jornada/picking | Pedido nuevo durante ola; ML urgente; reasignación última unidad; hold; multipaquete | E1,E12 |
+| Preparación/picking | Pedido nuevo durante preparación; prioridad ML; reasignación última unidad; hold; multipaquete | E1,E12 |
 | Fotos | Lenta; timeout; tardía; doble toque; recarga; parcial; perfil faltante | E2 |
 | Impresión | Apagada; sin papel; USB/red/Windows; confirmación perdida; reimpresión | E3 |
 | Despacho | Lote congelado; anulado; tardío; tracking incorrecto; duplicado/ajeno; offline | E4 |

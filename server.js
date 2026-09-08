@@ -35,7 +35,6 @@ import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
-import { jornadaRouter } from './routes/jornada.js';
 import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
@@ -425,7 +424,6 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
   }));
   app.use('/preparacion', express.static(path.join(__dirname, 'public/preparacion')));
-  app.use('/api/jornada', jornadaRouter(db, {}));
   app.use('/api/consulta-precios', consultaPreciosRouter(db, wooCfg));
   app.use('/consulta-precios', express.static(path.join(__dirname, 'public/consulta-precios')));
   app.use('/api/codigos', codigosRouter(db, wooCfg));

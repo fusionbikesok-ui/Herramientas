@@ -90,6 +90,7 @@ describe('contrato GET /pendientes', () => {
     db.prepare(
       'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, actualizado_en) VALUES (?,?,?,?,?,?,?,?)'
     ).run(601, 'Casco L', 'CASCO-9', 'simple', null, 5, '["Cascos"]', new Date().toISOString());
+    db.prepare("UPDATE catalogo_cache SET img='https://img.example/casco.jpg' WHERE id_woo=601").run();
   });
 
   afterEach(() => {
@@ -123,7 +124,7 @@ describe('contrato GET /pendientes', () => {
     expect(Object.keys(web).sort()).toEqual([
       'canal', 'comprador', 'espejo_ml', 'estado_preparacion', 'estado_wc', 'etiqueta_lista',
       'fecha', 'fecha_despacho', 'fecha_despacho_limite', 'estado_despacho', 'despacho_motivo',
-      'shipment_limite_original', 'items', 'notas', 'numero_pedido', 'pick_wave_id', 'pick_wave_tipo',
+      'shipment_limite_original', 'items', 'notas', 'numero_pedido',
       'preparacion_id', 'wc_order_id',
     ].sort());
     expect(web.wc_order_id).toBe(900);
@@ -131,7 +132,7 @@ describe('contrato GET /pendientes', () => {
     expect(web.comprador).toBe('Juan Perez');
     expect(web.notas).toBe('tocar timbre, hay perro');
     expect(Object.keys(web.items[0]).sort()).toEqual([
-      'cantidad', 'categoria', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
+      'cantidad', 'categoria', 'imagen', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
     ].sort());
     expect(web.items[0]).toMatchObject({ sku: 'BIKE-1', categoria: 'Bicicletas', cantidad: 2 });
 
@@ -141,7 +142,7 @@ describe('contrato GET /pendientes', () => {
       // pack_id: el número que ML le muestra al vendedor cuando la compra agrupa varios
       // ítems. Va en el contrato porque es el que el operario tiene delante al buscar
       // (2026-08-18: 37 de las 50 ventas más recientes tienen un pack distinto del order id).
-      'ml_order_id', 'pack_id', 'numero_pedido', 'pick_wave_id', 'pick_wave_tipo', 'preparacion_id',
+      'ml_order_id', 'pack_id', 'numero_pedido', 'preparacion_id',
       'substatus', 'wc_order_id', 'fecha_despacho_limite', 'estado_despacho', 'despacho_motivo',
       'shipment_limite_original',
     ].sort());
@@ -149,9 +150,10 @@ describe('contrato GET /pendientes', () => {
     expect(ml.comprador).toBe('comprador_ml');
     expect(ml.logistic_type).toBe('self_service');
     expect(Object.keys(ml.items[0]).sort()).toEqual([
-      'cantidad', 'categoria', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
+      'cantidad', 'categoria', 'imagen', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
     ].sort());
     expect(ml.items[0]).toMatchObject({ sku: 'CASCO-9', categoria: 'Cascos', cantidad: 1 });
+    expect(ml.items[0].imagen).toBe('https://img.example/casco.jpg');
   });
 });
 

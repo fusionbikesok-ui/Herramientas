@@ -1,6 +1,6 @@
 # Estado activo
 
-Actualizado: 2026-09-05.
+Actualizado: 2026-09-08.
 
 ## Fuente de verdad
 
@@ -17,8 +17,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Estado funcional verificado, no aceptación
 
-- Preparación posee cola, claims, escaneo, fotos/evidencia y despacho idempotente. E1 tiene correcciones locales para arrastre entre jornadas, elegibilidad efectiva, transición/polling de claims, aviso de vencimiento, compatibilidad 042→043 y ventanas SLA confirmadas. E2 suma perfiles versionados, snapshot de requisitos, idempotencia/fingerprint, auditoría atómica, limpieza compensatoria, retención con holds y recuperación de cola por lease; suite 246/246 y E2E verde. Queda validación operativa real, dispositivo/hardware, piloto y aceptación.
-- E1 registra además la confirmación de horarios de apertura por operador, rechaza una negativa explícita, bloquea asignaciones si `items_json` no es verificable, restringe la configuración de zonas y ayudas, detecta cambios externos o snapshots ausentes en pedidos ya tomados, crea retornos físicos pendientes para unidades asignadas y reproduce asignaciones idempotentemente antes de validar versión; `test/jornada.test.js` queda en 53/53.
+- Preparación posee lista de recolección consolidada por producto con imagen y cantidades, cola continua priorizada, claims por preparación, checklist con escaneo unitario, fotos/evidencia y despacho idempotente. El 2026-09-08 se retiraron las olas del runtime, UI y contrato de pendientes por falta de adopción; sus datos históricos se preservan. E2 mantiene perfiles versionados, snapshot de requisitos, idempotencia/fingerprint, auditoría atómica, limpieza compensatoria, retención con holds y recuperación de cola por lease. Quedan pruebas focalizadas, validación operativa real, dispositivo/hardware, piloto y aceptación.
 - Etiquetas posee cola interna y endpoints/agente candidato; falta relevamiento y validación con impresora real.
 - E3 está en desarrollo: el agente admite Bearer JWT revocable, el permiso `etiquetas` y recuperación de leases; faltan modelo/driver/puerto, Windows e impresora real.
 - E4 está en desarrollo: lotes separados ML/Web, miembros congelados, tracking, escaneo idempotente, confirmación de salida física, auditoría propia y worker Woo con reintento/dead-letter tienen migraciones 050–056, API/UI, pruebas de integración y E2E visual aislada (`npm run e2e:e4`); falta revisión independiente, tracking integrado con Woo/transportista y piloto.
@@ -159,8 +158,9 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - Windows, hardware y App Store siempre exigen autorización explícita.
 - No almacenar secretos, PII, conversaciones ni logs en memoria.
 
+- Preparación: volver a la cola conserva la preparación propia y permite reingresar mediante `/tomar`; la tarjeta cambia de “Preparar” a “Continuar”. El E2 de navegador cubre salida y reingreso.
+
 ## Decisiones E1 incorporadas
 
-- E1 queda especificada, pero no implementada con estas nuevas reglas: ola inicial de elegibles, mini-olas normales, ML urgente en ola activa, búsqueda por zonas manuales, ayuda física registrada y escaneo unitario en mesa.
-- PC muestra tablero operativo; celular web muestra una tarea; tablet futura es tablero compartido sin PII. E1 permanece `desarrollo` y la demo sintética solo puede llevarla a `candidata`.
-- La documentación separa E1 (jornada/olas/búsqueda/mesa) de E2 (embalaje/fotos/aprobación/listo para despacho). No se autoriza cambio de código en esta actualización documental.
+- E1 queda redefinida como cola continua, checklist por pedido y escaneo de cada unidad. PC y celular abren directamente el pedido priorizado; E1 permanece `desarrollo` hasta validar el recorrido responsive y una operación real.
+- E2 conserva embalaje, fotos, aprobación y listo para despacho como continuación de la checklist.

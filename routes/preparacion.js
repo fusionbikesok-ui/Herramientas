@@ -21,8 +21,6 @@ import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 const TRACKING_META_KEY = '_andreani_tracking';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
 import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment, calcularSlaPreparacion } from '../lib/horariosDespacho.js';
-import { sincronizarMiniOlas, jornadaDeHoy } from '../lib/jornada.js';
-import { ensureTablesJornada } from './jornada.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -36,10 +34,23 @@ const PERFILES_VALIDOS = ['bici', 'kit_transmision', 'sellado'];
 const MOTIVOS_CONFIRMACION_MANUAL = ['codigo_ilegible', 'sin_etiqueta', 'otro'];
 const MOTIVOS_DESPACHO_MANUAL = ['ya_despachado_sin_codigo'];
 
+function imagenProductoPendiente(db, item) {
+  const idWoo = item.variation_id || item.product_id;
+  if (idWoo) {
+    const fila = db.prepare('SELECT img FROM catalogo_cache WHERE id_woo=?').get(idWoo);
+    if (fila?.img) return fila.img;
+  }
+  if (item.sku) {
+    const fila = db.prepare("SELECT img FROM catalogo_cache WHERE UPPER(sku)=UPPER(?) AND img IS NOT NULL AND img<>'' ORDER BY CASE WHEN tipo='variation' THEN 0 ELSE 1 END LIMIT 1").get(item.sku);
+    if (fila?.img) return fila.img;
+  }
+  return null;
+}
+
 function encolarSalidaWoo(db, lote, usuario) {
   const at = new Date().toISOString();
   const eventId = `dispatch-lote-${lote.id}`;
-  const orders = db.prepare(`SELECT DISTINCT p.wc_order_id, p.canal FROM despacho_lote_items li
+  const orders = db.prepare(`SELECT DISTINCT p.wc_order_id, p.canal, p.tracking FROM despacho_lote_items li
     JOIN despacho_controles d ON d.id=li.control_id
     JOIN preparaciones p ON (p.pack_id=d.grupo_clave OR p.clave=d.grupo_clave)
     WHERE li.lote_id=? AND p.wc_order_id IS NOT NULL`).all(lote.id);
@@ -103,10 +114,6 @@ function puedeVerDetallePreparacion(db, prep, user) {
 // ─── Tablas (idempotente, patrón de routes/pedidos.js) ───────────────────────
 
 function ensureTables(db) {
-  // pick_wave_items/pick_waves/operational_days son de jornadaRouter, pero /pendientes
-  // las lee (sincronizarMiniOlas, join en el listado) sin importar si jornadaRouter
-  // está montado en esta instancia de Express — aseguramos su existencia acá también.
-  ensureTablesJornada(db);
   db.prepare(`CREATE TABLE IF NOT EXISTS preparaciones (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     canal           TEXT NOT NULL,
@@ -977,7 +984,6 @@ export function preparacionRouter(db, cfg) {
   // ── Pendientes: lee de pedidos_cache (sincronizada por cron cada 5 min) ──
   router.get('/pendientes', (req, res) => {
     try {
-      try { sincronizarMiniOlas(db); } catch (e) { console.error('[preparacion] error sincronizando mini-olas:', e.message); }
       const rows = pedidosElegiblesOrdenados(db);
       // Filtramos filas cuya preparación local ya está resuelta (completada, o en flujo de
       // depósito con pantalla propia en Historial). El sync de ML nunca marca estado_envio
@@ -1001,16 +1007,10 @@ export function preparacionRouter(db, cfg) {
         })
         .filter(({ prep }) => !prep || !RESUELTAS.includes(prep.estado))
         .map(({ row, prep }) => {
-          const items = JSON.parse(row.items_json);
-          let waveItem = null;
-          try {
-            const jornada = jornadaDeHoy(db);
-            waveItem = jornada
-              ? db.prepare(`SELECT pw.id, pw.tipo FROM pick_wave_items pi
-                JOIN pick_waves pw ON pw.id = pi.pick_wave_id
-                WHERE pi.pedido_clave = ? AND pw.operational_day_id = ?`).get(row.clave, jornada.id)
-              : null;
-          } catch (e) { /* fail-open: metadata auxiliar de jornada, no debe romper /pendientes */ }
+          const items = JSON.parse(row.items_json).map(item => ({
+            ...item,
+            imagen: imagenProductoPendiente(db, item),
+          }));
         if (row.canal === 'web') {
           return {
             canal: 'web',
@@ -1030,8 +1030,6 @@ export function preparacionRouter(db, cfg) {
             preparacion_id: prep?.id || null,
             estado_preparacion: prep?.estado || null,
             etiqueta_lista: prep?.etiqueta_lista || 0,
-            pick_wave_id: waveItem?.id || null,
-            pick_wave_tipo: waveItem?.tipo || null,
           };
         }
         return {
@@ -1052,8 +1050,6 @@ export function preparacionRouter(db, cfg) {
           items,
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
-          pick_wave_id: waveItem?.id || null,
-          pick_wave_tipo: waveItem?.tipo || null,
         };
       });
       const ultimoLog = db.prepare(
@@ -1247,6 +1243,7 @@ export function preparacionRouter(db, cfg) {
     if (!Number.isInteger(controlId) || !tracking) return res.status(400).json({ ok: false, error: 'control_id y tracking requeridos', code: 'DATOS_REQUERIDOS' });
     const lote = db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(loteId);
     if (!lote || !['abierto', 'en_preparacion'].includes(lote.estado)) return res.status(409).json({ ok: false, error: 'el lote no admite tracking', code: 'LOTE_ESTADO_INVALIDO' });
+    if (lote.canal !== 'web') return res.status(409).json({ ok: false, error: 'MercadoLibre no usa tracking cargado en este sistema', code: 'TRACKING_NO_APLICA' });
     const item = db.prepare('SELECT * FROM despacho_lote_items WHERE lote_id=? AND control_id=?').get(loteId, controlId);
     if (!item) return res.status(404).json({ ok: false, error: 'el paquete no pertenece al lote', code: 'LOTE_PAQUETE_AJENO' });
     if (item.tracking && item.tracking !== tracking) return res.status(409).json({ ok: false, error: 'el paquete ya tiene otro tracking', code: 'TRACKING_CONFLICTO' });
@@ -2623,6 +2620,26 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Completar ──
+  router.post('/:id/asociar-tracking', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+    if (['completada', 'cerrada_sin_evidencia'].includes(prep.estado)) return res.status(409).json({ ok: false, error: 'la preparación ya no admite asociar tracking', code: 'PREPARACION_NO_OPERABLE' });
+    const tracking = String(req.body?.tracking || '').trim();
+    if (!tracking) return res.status(400).json({ ok: false, error: 'tracking requerido', code: 'DATOS_REQUERIDOS' });
+    const otro = db.prepare('SELECT id FROM preparaciones WHERE tracking=? AND id<>? LIMIT 1').get(tracking, prep.id);
+    if (otro) return res.status(409).json({ ok: false, error: 'ese tracking ya está asociado a otro pedido', code: 'TRACKING_DUPLICADO' });
+    const anterior = String(prep.tracking || '').trim();
+    if (anterior && anterior !== tracking) return res.status(409).json({ ok: false, error: 'el pedido ya tiene otro tracking asociado', code: 'TRACKING_CONFLICTO' });
+    if (!anterior) {
+      db.transaction(() => {
+        db.prepare('UPDATE preparaciones SET tracking=? WHERE id=?').run(tracking, prep.id);
+        registrarEvento(db, { preparacionId: prep.id, tipo: 'tracking_asociado', usuario: req.user?.username, detalle: { tracking }, failClosed: true });
+      })();
+    }
+    res.json({ ok: true, repetido: !!anterior, tracking });
+  });
+
   router.post('/:id/completar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });

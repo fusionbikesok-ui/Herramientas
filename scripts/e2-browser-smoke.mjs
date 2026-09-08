@@ -45,6 +45,13 @@ async function main() {
     canal: 'web', wcOrderId: 910001, numeroPedido: '910001', comprador: 'E2 browser',
     items: [{ sku: 'E2-TEST', nombre: 'Producto E2', cantidad: 1, perfil: 'sellado' }],
   });
+  const productImage = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="72" height="72"%3E%3Crect width="72" height="72" fill="green"/%3E%3C/svg%3E';
+  db.prepare(`INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,img,actualizado_en)
+    VALUES (910001,'Producto E2','E2-TEST','simple',5,?,?)`).run(productImage, now);
+  db.prepare(`INSERT INTO pedidos_cache
+    (clave,canal,wc_order_id,numero_pedido,comprador,fecha,estado_envio,estado_wc,espejo_ml,items_json,actualizado_en)
+    VALUES ('web:910001','web',910001,'910001','E2 browser',?,'pendiente','lpaandreani',0,?,?)`)
+    .run(now, JSON.stringify([{ line_item_id: 1, product_id: 910001, variation_id: null, sku: 'E2-TEST', nombre: 'Producto E2', categoria: 'Prueba', cantidad: 1 }]), now);
   const itemId = db.prepare("SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku='E2-TEST'").get(prepId).id;
   db.close();
   const jpeg = await sharp({ create: { width: 20, height: 20, channels: 3, background: 'green' } }).jpeg().toBuffer();
@@ -58,9 +65,34 @@ async function main() {
     await page.locator('#btn').click();
     await page.waitForURL(/herramientas\/home/);
     await page.goto(`http://127.0.0.1:${port}/preparacion/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.recoleccion-item');
+    await page.screenshot({ path: path.join(root, 'output/playwright/preparacion-telefono-01-recoleccion.png'), fullPage: true });
+    const collection = await page.locator('.recoleccion-item').first().evaluate((element) => ({
+      text: element.textContent,
+      image: element.querySelector('img')?.getAttribute('src'),
+    }));
+    if (!collection.text?.includes('Producto E2') || !collection.text?.includes('1') || collection.image !== productImage) {
+      throw new Error(`lista de recolección incorrecta: ${JSON.stringify(collection)}`);
+    }
     const claim = await page.evaluate(async (id) => (await fetch(`/api/preparacion/${id}/tomar`, { method: 'POST' })).status, prepId);
     if (claim !== 200) throw new Error(`no se pudo tomar la preparación: HTTP ${claim}`);
     await page.evaluate(async (id) => window.abrirDetalle(id), prepId);
+    await page.waitForSelector('#scan-in');
+    await page.screenshot({ path: path.join(root, 'output/playwright/preparacion-telefono-02-pedido.png'), fullPage: true });
+    await page.evaluate(() => window.ir('pendientes'));
+    await page.waitForSelector('.recoleccion-item');
+    await page.evaluate(() => window.prepararClave('web:910001'));
+    await page.waitForSelector('#scan-in');
+    await page.evaluate(async (id) => {
+      const response = await fetch(`/api/preparacion/${id}/asociar-tracking`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracking: 'AND-DEMO-001' }),
+      });
+      if (!response.ok) throw new Error(`tracking demo: HTTP ${response.status}`);
+    }, prepId);
+    await page.evaluate(async (id) => window.abrirDetalle(id), prepId);
+    await page.waitForSelector('#scan-in');
+    await page.screenshot({ path: path.join(root, 'output/playwright/preparacion-telefono-03-tracking-asociado.png'), fullPage: true });
     const result = await page.evaluate(async ({ prepId, itemId, bytes }) => {
       const image = new Uint8Array(bytes);
       const file = new File([image], 'e2.jpg', { type: 'image/jpeg' });
@@ -130,7 +162,7 @@ async function main() {
       } finally { window.fetch = originalFetch; }
     }, { itemId, bytes: [...jpeg] });
     if (!late.reconciliada || late.fallida) throw new Error(`respuesta tardía no reconciliada: ${JSON.stringify(late)}`);
-    console.log('E2 browser: upload multipart + idempotencia + recarga + timeout/reintento + respuesta tardía reconciliada OK');
+    console.log('E2 browser: recolección con imagen + checklist + upload/idempotencia + recarga + timeout/reintento + respuesta tardía OK');
   } finally {
     await context.close(); await browser.close();
   }
