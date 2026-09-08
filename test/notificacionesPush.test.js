@@ -228,4 +228,30 @@ describe('notificacionesPush', () => {
       expect(tipoNotificacionValido(null)).toBe(false);
     });
   });
+
+  describe('proveedor apns', () => {
+    const ENV_BASE = {
+      PUSH_PROVIDER: 'apns',
+      APNS_KEY_ID: 'ABCDE12345',
+      APNS_TEAM_ID: '2GXNRP23GZ',
+      APNS_BUNDLE_ID: 'com.fusionbikes.operaciones',
+      APNS_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----',
+    };
+
+    it('acepta apns como proveedor valido', () => {
+      expect(validarConfiguracionPush({ ...ENV_BASE })).toBe('apns');
+    });
+
+    // En produccion mock devolvia ok:true sin enviar nada, y por eso el backend se veia sano
+    // mientras no llegaba ninguna push. Esa puerta queda cerrada para apns tambien.
+    it('en produccion rechaza mock', () => {
+      expect(() => validarConfiguracionPush({ NODE_ENV: 'production', PUSH_PROVIDER: 'mock' }))
+        .toThrow(/mock no está permitido/);
+    });
+
+    it('en produccion exige la configuracion completa de apns', () => {
+      expect(() => validarConfiguracionPush({ NODE_ENV: 'production', PUSH_PROVIDER: 'apns' }))
+        .toThrow(/APNS/i);
+    });
+  });
 });
