@@ -828,6 +828,12 @@ E6 bandeja/ML; E7 turnos; verticales posteriores producen tareas.
 
 ## 15. Integraciones WooCommerce, MercadoLibre y Andreani
 
+> **Antes de escribir código contra Mercado Libre se lee
+> `docs/superpowers/specs/api-mercadolibre-especificacion.md`.** Es la fuente única de la
+> integración: combina la documentación oficial con lo observado en vivo contra la cuenta, y
+> registra las trampas que la documentación no hace evidentes. Si algo no está ahí, se releva
+> primero y se agrega; no se implementa contra memoria.
+
 ### Propósito y resultado esperado
 
 Mantener contratos externos observables, idempotentes y reconciliables sin esconder caídas ni mezclar autoridades.
