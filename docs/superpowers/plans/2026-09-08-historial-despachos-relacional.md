@@ -14,6 +14,12 @@ La navegación de **Gestión de pedidos** tendrá solo tres pills, en este orden
 
 El buscador será global y funcionará desde cualquiera de las tres pills. Permitirá buscar por número de pedido, identificador externo de WooCommerce o MercadoLibre, nombre o apellido, email, teléfono, SKU, **EAN** y nombre de producto. Los resultados indicarán el campo coincidente, canal, cliente, fecha, estado e importe. La búsqueda no cambiará automáticamente de pill: si encuentra un pedido fuera de la vista actual, ofrecerá abrirlo en **Todos los pedidos**.
 
+### Vista rápida y pantalla específica del pedido
+
+La vista rápida lateral mostrará toda la información relevante para consultar el pedido sin abandonar el listado: identificadores y canal, fechas, cliente y contacto, tipo de entrega, dirección o retiro, estado externo y operativo, pago e importe, productos con cantidades, notas visibles, tracking si existe, fotos de preparación disponibles y línea de tiempo resumida. Será principalmente de lectura y tendrá pocas acciones seguras: abrir el pedido completo, contactar al cliente o acceder a una evidencia.
+
+La pantalla específica del pedido será el lugar de trabajo detallado. Allí se podrán ejecutar acciones autorizadas, modificar datos, cambiar la intención de envío, registrar decisiones, consultar la línea de tiempo completa y gestionar incidencias. La vista rápida no duplicará esos formularios ni permitirá cambios complejos.
+
 ### Cancelados y recuperación comercial
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados de las últimas 24 horas hábiles con los carritos abandonados del plugin existente. Al vencer la ventana, salen de esa vista y permanecen en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.

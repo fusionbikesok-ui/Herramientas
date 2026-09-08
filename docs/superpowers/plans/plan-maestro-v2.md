@@ -114,6 +114,8 @@ Su navegación se limitará a tres pills: **Requieren atención**, **Recuperar v
 
 El buscador global de esta pantalla buscará por número de pedido, identificadores externos Woo/MercadoLibre, cliente, email, teléfono, SKU, **EAN** y nombre de producto. Mostrará el motivo de coincidencia y no cambiará de pill automáticamente; para un resultado fuera de la vista actual permitirá abrirlo desde **Todos los pedidos**.
 
+La vista rápida lateral será una ficha completa de consulta con datos del pedido, cliente, entrega o retiro, estados, pago, importe, productos y cantidades, notas, tracking, fotos de preparación y timeline resumido. Tendrá pocas acciones seguras y un acceso claro a la pantalla específica. La pantalla específica del pedido concentrará las modificaciones y acciones operativas autorizadas, evitando que la vista rápida se convierta en un segundo formulario incompleto.
+
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 
 La importación no implica despacho. Solo entran a la cola de envíos los pedidos que Woo coloque en “listo para enviar Andreani” o los que un usuario autorizado derive manualmente desde Gestión de pedidos. Una venta física o un pedido que no requiere envío permanece visible en Gestión de pedidos, pero no aparece como tarea logística.
