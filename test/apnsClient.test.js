@@ -12,30 +12,85 @@ const { privateKey } = crypto.generateKeyPairSync('ec', {
 });
 const CFG = { keyId: 'ABCDE12345', teamId: '2GXNRP23GZ', bundleId: 'com.fusionbikes.operaciones', privateKey };
 
-/** Sesión HTTP/2 falsa: guarda lo que se le pidió y responde lo que le digamos. */
+/**
+ * Sesión HTTP/2 falsa: guarda lo que se le pidió y responde lo que le digamos.
+ * El stream expone `.close()` (como el `ClientHttp2Stream` real) para que la rama de timeout
+ * pueda ejercitarse sin lanzar un `TypeError` enmascarado por el `try/catch` de producción.
+ * La sesión expone `.on()` real (no un no-op) para poder simular un error de conexión con
+ * `sesionEmitter.emit('error', ...)`, que es justamente lo que el doble anterior no permitía
+ * probar.
+ */
 function sesionFalsa({ status = 200, cuerpo = '' } = {}) {
-  const registro = { host: null, cabeceras: null, cuerpo: null, cerrada: false };
+  const registro = { host: null, cabeceras: null, cuerpo: null, cerrada: false, streamCerrado: false };
+  const sesionEmitter = new EventEmitter();
   const factory = (host) => {
     registro.host = host;
-    return {
-      request(cabeceras) {
-        registro.cabeceras = cabeceras;
-        const stream = new EventEmitter();
-        stream.setEncoding = () => {};
-        stream.end = (datos) => {
-          registro.cuerpo = datos;
-          setImmediate(() => {
-            stream.emit('response', { ':status': status });
-            if (cuerpo) stream.emit('data', cuerpo);
-            stream.emit('end');
-          });
-        };
-        return stream;
-      },
-      close() { registro.cerrada = true; },
-      on() {},
+    sesionEmitter.request = (cabeceras) => {
+      registro.cabeceras = cabeceras;
+      const stream = new EventEmitter();
+      stream.setEncoding = () => {};
+      stream.close = () => { registro.streamCerrado = true; };
+      stream.end = (datos) => {
+        registro.cuerpo = datos;
+        setImmediate(() => {
+          stream.emit('response', { ':status': status });
+          if (cuerpo) stream.emit('data', cuerpo);
+          stream.emit('end');
+        });
+      };
+      return stream;
     };
+    sesionEmitter.close = () => { registro.cerrada = true; };
+    return sesionEmitter;
   };
+  return { factory, registro, sesionEmitter };
+}
+
+/** Sesión que nunca responde: sirve para ejercitar la rama de `TIMEOUT_MS`. */
+function sesionColgada() {
+  const registro = { cerrada: false, streamCerrado: false };
+  const factory = () => ({
+    request() {
+      const stream = new EventEmitter();
+      stream.setEncoding = () => {};
+      stream.close = () => { registro.streamCerrado = true; };
+      stream.end = () => { /* Apple nunca contesta */ };
+      return stream;
+    },
+    close() { registro.cerrada = true; },
+    on() {},
+  });
+  return { factory, registro };
+}
+
+/** Sesión que emite 'error' a nivel de sesión (DNS/TLS/ECONNREFUSED/GOAWAY) antes de responder. */
+function sesionConErrorDeConexion(mensaje) {
+  const registro = { cerrada: false };
+  const emitter = new EventEmitter();
+  const factory = () => {
+    emitter.request = () => {
+      const stream = new EventEmitter();
+      stream.setEncoding = () => {};
+      stream.close = () => {};
+      stream.end = () => {
+        setImmediate(() => emitter.emit('error', new Error(mensaje)));
+      };
+      return stream;
+    };
+    emitter.close = () => { registro.cerrada = true; };
+    return emitter;
+  };
+  return { factory, registro };
+}
+
+/** Sesión que lanza sincrónicamente al pedir el stream (carrera, o sesión ya destruida). */
+function sesionQueTiraAlPedirStream(mensaje) {
+  const registro = { cerrada: false };
+  const factory = () => ({
+    request() { throw new Error(mensaje); },
+    close() { registro.cerrada = true; },
+    on() {},
+  });
   return { factory, registro };
 }
 
@@ -100,5 +155,42 @@ describe('lib/apnsClient', () => {
     const [, , firmaB64url] = jwt.split('.');
     const firma = Buffer.from(firmaB64url, 'base64url');
     expect(firma.length).toBe(64);
+  });
+
+  // Hallazgo del revisor sobre la Tarea 3: nada ejercitaba TIMEOUT_MS, y el doble anterior
+  // no tenía `.close()` en el stream, así que un timeout real habría lanzado un TypeError
+  // que el propio try/catch de producción se traga en silencio.
+  it('corta por timeout si Apple no responde y cierra el stream', async () => {
+    vi.useFakeTimers();
+    try {
+      const { factory, registro } = sesionColgada();
+      const promesa = enviarApns('tok-8', { aps: {} }, { entorno: 'production', cfg: CFG, sesionFactory: factory });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const r = await promesa;
+      expect(r).toMatchObject({ ok: false, status: 0, reason: 'Timeout', reintentable: true });
+      expect(registro.streamCerrado).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Hallazgo crítico del revisor: `http2.connect` es asíncrono, y si la sesión emite 'error'
+  // (DNS, TLS, ECONNREFUSED, GOAWAY de Apple) antes de que el stream responda, sin listener a
+  // nivel de sesión Node trata eso como excepción no capturada y tira abajo el proceso.
+  it('no revienta el proceso si la sesion emite error antes de responder, y resuelve reintentable', async () => {
+    const { factory, registro } = sesionConErrorDeConexion('ECONNREFUSED');
+    const r = await enviarApns('tok-9', { aps: {} }, { entorno: 'production', cfg: CFG, sesionFactory: factory });
+    expect(r).toMatchObject({ ok: false, status: 0, reason: 'ErrorDeRed', reintentable: true });
+    expect(registro.cerrada).toBe(true);
+  });
+
+  // Hallazgo del revisor: si `sesion.request()` lanza sincrónico (sesión ya cerrada/destruida
+  // por una carrera, o un GOAWAY justo antes), la promesa debe resolver {ok:false,...} y no
+  // rechazar, para no romper el contrato Promise<{ok, status, reason}> de `enviarApns`.
+  it('resuelve {ok:false} en vez de rechazar si sesion.request() lanza sincronicamente', async () => {
+    const { factory, registro } = sesionQueTiraAlPedirStream('Session closed');
+    const r = await enviarApns('tok-10', { aps: {} }, { entorno: 'production', cfg: CFG, sesionFactory: factory });
+    expect(r).toMatchObject({ ok: false, status: 0, reason: 'ErrorDeRed' });
+    expect(registro.cerrada).toBe(true);
   });
 });
