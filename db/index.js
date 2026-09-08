@@ -745,6 +745,9 @@ export function openDb(dbPath) {
       agregar('item_id', 'item_id TEXT');
       agregar('external_status', 'external_status TEXT');
       agregar('last_synced_at', 'last_synced_at TEXT');
+      agregar('external_actions', 'external_actions TEXT');
+      agregar('severidad', 'severidad TEXT');
+      agregar('dedupe_key', 'dedupe_key TEXT');
       agregar('acknowledged_at', 'acknowledged_at TEXT');
       agregar('acknowledged_by', 'acknowledged_by INTEGER');
       agregar('escalated_at', 'escalated_at TEXT');
@@ -761,6 +764,19 @@ export function openDb(dbPath) {
       )`);
       db.exec('CREATE INDEX IF NOT EXISTS idx_inbox_assignments_item ON inbox_assignments(inbox_id, id)');
       db.exec('CREATE INDEX IF NOT EXISTS idx_inbox_repeat ON inbox_items(next_repeat_at) WHERE next_repeat_at IS NOT NULL');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_inbox_dedupe ON inbox_items(dedupe_key) WHERE dedupe_key IS NOT NULL');
+      // Claves de idempotencia de las escrituras contra ML. Va con el resto del esquema y no
+      // con un CREATE por request, que era la única tabla de la entrega fuera de migraciones.
+      db.exec(`CREATE TABLE IF NOT EXISTS mobile_action_keys (
+        idempotency_key TEXT PRIMARY KEY,
+        user_id         INTEGER NOT NULL,
+        accion          TEXT NOT NULL,
+        recurso         TEXT NOT NULL,
+        estado          TEXT NOT NULL,
+        resultado       TEXT,
+        created_at      TEXT NOT NULL
+      )`);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_mobile_action_keys_fecha ON mobile_action_keys(created_at)');
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('inbox_contexto_externo_094')").run();
     })();
   }

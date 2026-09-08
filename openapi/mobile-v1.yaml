@@ -670,6 +670,150 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: El ítem ya está asignado a otro usuario }
 
+  /inbox/{id}/acknowledge:
+    post:
+      tags: [inbox]
+      summary: Reconoce el caso sin resolverlo
+      description: >
+        Reconocer NO resuelve. Frena la repetición del aviso y deja constancia de quién lo
+        está mirando; el caso sigue abierto y sigue contando como trabajo pendiente. Es
+        idempotente: reconocer dos veces devuelve 200 con `ya_reconocido: true` y no pisa
+        quién reconoció primero.
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      responses:
+        '200':
+          description: Caso reconocido
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/InboxItem'
+                  - type: object
+                    properties: { ya_reconocido: { type: boolean } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /inbox/{id}/assign:
+    post:
+      tags: [inbox]
+      summary: Reasigna el caso conservando la historia
+      description: >
+        Guarda quién movió el caso, a quién y cuándo. `to_user_id` en null lo devuelve a la
+        cola sin dueño.
+      parameters: [{ $ref: '#/components/parameters/PathId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to_user_id]
+              properties:
+                to_user_id: { type: integer, nullable: true }
+                expected_version: { type: integer, minimum: 1 }
+                motivo: { type: string, maxLength: 300, nullable: true }
+      responses:
+        '200': { description: Caso reasignado, content: { application/json: { schema: { $ref: '#/components/schemas/InboxItem' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Conflicto de versión }
+        '422': { description: to_user_id o expected_version inválidos }
+
+  /questions/{questionId}/reply:
+    post:
+      tags: [acciones]
+      summary: Responde una pregunta en Mercado Libre
+      description: >
+        El VPS relee la pregunta antes de escribir y rechaza con 409 si ya no está
+        `UNANSWERED`. La app nunca llama a Mercado Libre ni maneja credenciales.
+      parameters:
+        - { name: questionId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties: { text: { type: string, minLength: 1 } }
+      responses:
+        '200':
+          description: Respuesta enviada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResultadoAccion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: La pregunta ya no admite respuesta }
+        '422': { description: Texto vacío, demasiado largo o falta Idempotency-Key }
+        '502': { description: Mercado Libre rechazó la operación }
+        '503': { description: Mercado Libre está limitando las llamadas }
+
+  /conversations/{packId}/messages:
+    post:
+      tags: [acciones]
+      summary: Envía un mensaje posventa al comprador
+      description: >
+        El largo máximo lo declara Mercado Libre en el hilo (`seller_max_message_length`), no
+        lo fija el cliente. Mercado Libre modera los mensajes: `moderado: true` significa que
+        se envió pero puede no llegar.
+      parameters:
+        - { name: packId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties: { text: { type: string, minLength: 1 } }
+      responses:
+        '200':
+          description: Mensaje enviado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResultadoAccion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: Mercado Libre no permite escribir en esta conversación }
+        '422': { description: Texto inválido o falta Idempotency-Key }
+        '502': { description: Mercado Libre rechazó la operación }
+        '503': { description: Mercado Libre está limitando las llamadas }
+
+  /claims/{claimId}/actions/{accion}:
+    post:
+      tags: [acciones]
+      summary: Ejecuta una acción permitida sobre un reclamo
+      description: >
+        La allowlist la decide Mercado Libre, no el cliente: el VPS relee el reclamo y toma
+        `available_actions` del player con rol `respondent`. Si Mercado Libre no declara
+        acciones, se responde 409 `acciones_desconocidas` y NO se escribe: una lista vacía en
+        el detalle significa desconocido, no "ninguna acción". Las acciones económicas
+        (reembolso, devolución, mediación) se rechazan con 422 en este camino.
+      parameters:
+        - { name: claimId, in: path, required: true, schema: { type: string } }
+        - { name: accion, in: path, required: true, schema: { type: string, enum: [send_message_to_mediator, send_message] } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties: { text: { type: string, minLength: 1 } }
+      responses:
+        '200':
+          description: Acción ejecutada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResultadoAccion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: Reclamo cerrado, acción no permitida o acciones desconocidas }
+        '422': { description: Acción económica, desconocida, texto inválido o falta Idempotency-Key }
+        '502': { description: Mercado Libre rechazó la operación }
+        '503': { description: Mercado Libre está limitando las llamadas }
+
   /notifications/{id}/read:
     post:
       tags: [notifications]
@@ -1139,6 +1283,15 @@ components:
       bearerFormat: JWT
 
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, maxLength: 128 }
+      description: >
+        Generada por la app POR INTENTO. Sin ella un reintento tras una red cortada le manda
+        dos respuestas al comprador. Repetir la misma clave devuelve el resultado anterior sin
+        volver a escribir en Mercado Libre.
     PathId:
       name: id
       in: path
@@ -1717,9 +1870,40 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    ResultadoAccion:
+      type: object
+      required: [moderado]
+      properties:
+        question_id: { type: string }
+        pack_id: { type: string }
+        claim_id: { type: string }
+        accion: { type: string }
+        external_status: { type: string }
+        moderado:
+          type: boolean
+          description: >
+            Mercado Libre modera los mensajes. `true` significa que se envió pero quedó en
+            revisión y puede no llegar al cliente.
+        moderacion: { type: string, nullable: true }
+        repetida:
+          type: boolean
+          description: La Idempotency-Key ya se había usado; no se volvió a escribir en Mercado Libre.
+
+    AccionDisponible:
+      type: object
+      required: [action]
+      description: >
+        Acción tal como la publica Mercado Libre dentro de `players[]`. Es un OBJETO y no un
+        string: `mandatory` y `due_date` son la señal de urgencia y el plazo, y para un caso
+        de Mercado Libre manda ese plazo y no un temporizador propio del VPS.
+      properties:
+        action: { type: string }
+        mandatory: { type: boolean }
+        due_date: { type: string, nullable: true }
+
     InboxDetail:
       type: object
-      required: [id, kind, status, available_actions, quick_actions]
+      required: [id, kind, status, available_actions, quick_actions, actions_source]
       properties:
         id: { type: string }
         kind: { type: string, enum: [mensaje, pregunta, reclamo, pedido, otro] }
@@ -1728,7 +1912,26 @@ components:
         preview: { type: string, nullable: true }
         status: { type: string, enum: [unread, read, resolved, archived] }
         priority: { type: string, enum: [normal, high, urgent] }
+        severidad:
+          type: string
+          enum: [urgente, alta, normal, baja]
+          description: Gobierna el reloj de repetición y escalamiento del VPS.
         version: { type: integer, minimum: 1 }
+        area: { type: string, nullable: true }
+        acknowledged_by: { type: string, nullable: true }
+        due_date:
+          type: string
+          nullable: true
+          description: >
+            Vencimiento que declara Mercado Libre para una acción obligatoria. Para casos de
+            Mercado Libre manda este plazo y no el temporizador propio del VPS.
+        actions_source:
+          type: string
+          enum: [ml, ml_closed, local_state, unknown]
+          description: >
+            De dónde salió `available_actions`. `unknown` significa que no se pudo confirmar
+            contra Mercado Libre: con ese valor la app no habilita NI esconde el botón, lo
+            deshabilita y explica por qué.
         external_id: { type: string, nullable: true, description: "question_id, claim_id o pack_id según el tipo" }
         external_status: { type: string, nullable: true, description: "Estado del recurso en Mercado Libre" }
         last_synced_at: { type: string, format: date-time, nullable: true, description: "Cuándo se leyó por última vez el recurso real" }
@@ -1768,12 +1971,21 @@ components:
             mensajes: { type: array, items: { type: object, additionalProperties: true } }
         available_actions:
           type: array
-          description: "Vacío cuando el recurso ya está cerrado en Mercado Libre."
-          items: { type: string, enum: [reply, message] }
+          nullable: true
+          description: >
+            TRI-ESTADO. Un array es una afirmación del VPS; `null` significa DESCONOCIDO,
+            porque Mercado Libre publica las acciones dentro de `players[]` y su endpoint de
+            detalle se contradice con el de búsqueda: una lista vacía ahí no prueba que no
+            haya acciones. Con `null` la app no habilita NI esconde el botón. Un array vacío
+            sí afirma que no hay acciones, y solo se envía cuando el caso está cerrado.
+          items: { $ref: '#/components/schemas/AccionDisponible' }
         quick_actions:
           type: array
-          description: "Subconjunto ofrecible desde la notificación; excluye refund, return y mediation."
-          items: { type: string, enum: [reply, message] }
+          description: >
+            Subconjunto ofrecible desde la notificación. Nunca incluye acciones que muevan
+            dinero o cierren una disputa, y queda vacío mientras las acciones sean
+            desconocidas: ante la duda no se ofrece el atajo.
+          items: { $ref: '#/components/schemas/AccionDisponible' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 

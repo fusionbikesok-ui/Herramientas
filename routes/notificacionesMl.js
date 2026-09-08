@@ -1,5 +1,6 @@
 import express from 'express';
 import { mlFetch } from '../lib/mlClient.js';
+import { accionesDelVendedor, serializarAcciones } from '../lib/mlAccionesCaso.js';
 import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs';
 
 // Notificaciones ML (webhooks): preguntas, mensajes y reclamos sin resolver.
@@ -194,6 +195,27 @@ export function ensureTables(db) {
   migrateClaimsBackbone(db);
 }
 
+/**
+ * Proyecta al caso de la bandeja el contexto externo que la app necesita para decidir.
+ *
+ * Se escribe SOLO después de haber leído el recurso real de ML: `last_synced_at` afirma
+ * frescura y una marca sin lectura detrás sería mentira. `external_actions` guarda el JSON
+ * crudo de `players[]` porque `mandatory` y `due_date` son el plazo que manda para un caso de
+ * ML (§4.2 de la especificación); NULL significa DESCONOCIDO, no "ninguna acción" (§4.3).
+ */
+function proyectarContextoInbox(db, resourceId, valores) {
+  const columnas = new Set(db.prepare('PRAGMA table_info(inbox_items)').all().map((c) => c.name));
+  // La migración 094 es aditiva y puede no estar aplicada en una DB desnuda de test.
+  if (!columnas.has('external_status')) return;
+  const campos = ['external_status', 'last_synced_at', 'item_id', 'pack_id', 'order_id', 'external_actions']
+    .filter((campo) => campo in valores && columnas.has(campo));
+  if (!campos.length) return;
+  const set = campos.map((campo) => `${campo} = @${campo}`).join(', ');
+  const datos = { resource_id: String(resourceId) };
+  for (const campo of campos) datos[campo] = valores[campo] ?? null;
+  db.prepare(`UPDATE inbox_items SET ${set} WHERE channel = 'ml' AND resource_id = @resource_id`).run(datos);
+}
+
 // ── Ingesta desde el webhook (llamadas por server.js al recibir la notificación) ──
 
 // GET /questions/{id} — trae la pregunta y la guarda/actualiza local.
@@ -325,6 +347,9 @@ export async function ingerirPregunta(db, mlCfg, resource, backboneEvent = null,
     proyectarPreguntaEnBackbone(db, {
       preguntaId: q.id, estado, texto: q.text || '', itemId: q.item_id, ocurridoEn: q.date_created, backboneEvent,
     }, db);
+    proyectarContextoInbox(db, `question:${q.id}`, {
+      external_status: estado, last_synced_at: now(), item_id: q.item_id || null,
+    });
   })();
   return true;
 }
@@ -553,6 +578,11 @@ export async function ingerirReclamo(db, mlCfg, resource, originalResource = res
     detalle: c.description || c.message,
     ocurridoEn: c.date_created || c.created_at,
   }, db);
+  proyectarContextoInbox(db, `claim:${canonicalId}`, {
+    external_status: estado, last_synced_at: now(),
+    order_id: c.resource === 'order' ? String(c.resource_id || '') || null : null,
+    external_actions: serializarAcciones(accionesDelVendedor(c)),
+  });
   })();
   return true;
 }
