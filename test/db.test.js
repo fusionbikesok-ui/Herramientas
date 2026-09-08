@@ -88,6 +88,7 @@ describe('db schema', () => {
       'ml_sku_push_fallos',
       'ml_stock_estado',
       'ml_vinculos_revisados',
+      'mobile_action_keys',
       'mobile_refresh_tokens',
       'notificaciones_enviadas',
       'notificaciones_usuario',
