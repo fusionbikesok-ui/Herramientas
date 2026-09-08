@@ -112,6 +112,8 @@ Falta validación operativa real de la checklist, tratamiento integrado de falta
 
 Su navegación se limitará a tres pills: **Requieren atención**, **Recuperar ventas** y **Todos los pedidos**, en ese orden. “Requieren atención” será la vista inicial; los cancelados permanecerán en “Todos” y aparecerán temporalmente en “Recuperar ventas”. Las etapas de preparación, despacho y agrupación pertenecen exclusivamente a Gestión de envíos.
 
+El buscador global de esta pantalla buscará por número de pedido, identificadores externos Woo/MercadoLibre, cliente, email, teléfono, SKU, **EAN** y nombre de producto. Mostrará el motivo de coincidencia y no cambiará de pill automáticamente; para un resultado fuera de la vista actual permitirá abrirlo desde **Todos los pedidos**.
+
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 
 La importación no implica despacho. Solo entran a la cola de envíos los pedidos que Woo coloque en “listo para enviar Andreani” o los que un usuario autorizado derive manualmente desde Gestión de pedidos. Una venta física o un pedido que no requiere envío permanece visible en Gestión de pedidos, pero no aparece como tarea logística.

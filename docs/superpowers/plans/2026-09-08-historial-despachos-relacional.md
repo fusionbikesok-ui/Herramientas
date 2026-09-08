@@ -10,6 +10,10 @@ La operación se separa en dos herramientas sobre el mismo modelo: **Gestión de
 
 La navegación de **Gestión de pedidos** tendrá solo tres pills, en este orden: **Requieren atención**, **Recuperar ventas** y **Todos los pedidos**. La primera será la vista inicial. Las etapas físicas de preparación y despacho no se muestran como pills aquí, porque pertenecen a Gestión de envíos.
 
+### Buscador de Gestión de pedidos
+
+El buscador será global y funcionará desde cualquiera de las tres pills. Permitirá buscar por número de pedido, identificador externo de WooCommerce o MercadoLibre, nombre o apellido, email, teléfono, SKU, **EAN** y nombre de producto. Los resultados indicarán el campo coincidente, canal, cliente, fecha, estado e importe. La búsqueda no cambiará automáticamente de pill: si encuentra un pedido fuera de la vista actual, ofrecerá abrirlo en **Todos los pedidos**.
+
 ### Cancelados y recuperación comercial
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados de las últimas 24 horas hábiles con los carritos abandonados del plugin existente. Al vencer la ventana, salen de esa vista y permanecen en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
