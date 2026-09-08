@@ -1217,5 +1217,20 @@ export function openDb(dbPath) {
     }
   }
 
+  // 095: entorno APNs del token (ver migrations/095_device_tokens_entorno.sql). Va despues
+  // de aplicarMigracionHito7 porque device_tokens recien existe a partir de ahi en una base
+  // nueva; antes de ese punto la tabla todavia no fue creada.
+  const entornoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='device_tokens_entorno_095'").get();
+  if (!entornoMigration) {
+    db.transaction(() => {
+      const columnas = new Set(db.prepare('PRAGMA table_info(device_tokens)').all().map((c) => c.name));
+      if (!columnas.has('entorno')) {
+        db.exec("ALTER TABLE device_tokens ADD COLUMN entorno TEXT NOT NULL DEFAULT 'production'");
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_device_tokens_entorno ON device_tokens(entorno) WHERE revocado_en IS NULL');
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('device_tokens_entorno_095')").run();
+    })();
+  }
+
   return db;
 }
