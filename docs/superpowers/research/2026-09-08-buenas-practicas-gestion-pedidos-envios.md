@@ -75,6 +75,10 @@ La interfaz debe explicar el efecto antes de confirmar. Si Woo no responde, el p
 
 Las ventas del local deben ser visibles como pedidos normales, pero con tipo de cumplimiento `retiro_local` o `venta_fisica`. No deben entrar a preparación ni despacho salvo derivación manual autorizada.
 
+### Cancelados y carritos abandonados
+
+La cancelación detiene el fulfillment y conserva el pedido para consulta; no es una tarea logística activa. Para este proyecto, **Recuperar ventas** será una cola comercial temporal que combina cancelados de las últimas 24 horas hábiles con carritos abandonados del plugin existente. No se guardará todavía el motivo de cancelación. Al vencer la ventana, el cancelado sale de la cola prioritaria pero no se elimina. Si se recupera, se crea o vincula un nuevo pedido en lugar de reabrir silenciosamente el original.
+
 ## 3. Diseño de Gestión de envíos
 
 ### Navegación principal
@@ -196,4 +200,3 @@ No publicar rankings personales en el primer período. Primero establecer una l�
 3. Microsoft Learn, [Scan bar codes using a camera in the Warehouse Management mobile app](https://learn.microsoft.com/en-us/dynamics365/supply-chain/warehousing/scan-bar-codes-using-a-camera), consultado 2026-09-08.
 4. MercadoLibre Developers, [Órdenes y shipments](https://developers.mercadolibre.com.ar/es_ar/gestiona-ventas/gestiona-ventas), consultado 2026-09-08.
 5. WooCommerce, [REST API v3 — Orders](https://woocommerce.github.io/woocommerce-rest-api-docs/), consultado 2026-09-08.
-

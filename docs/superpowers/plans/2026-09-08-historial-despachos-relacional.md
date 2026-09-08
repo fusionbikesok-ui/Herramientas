@@ -8,6 +8,10 @@
 
 La operación se separa en dos herramientas sobre el mismo modelo: **Gestión de pedidos**, accesible desde Home para administrar pedidos, clientes, ventas físicas e intención de envío; y **Gestión de envíos**, que ejecuta recolección, preparación, evidencia, embalaje, tracking, grupos y salida física. Dentro de Gestión de envíos existen cuatro espacios: **Productos a buscar**, **Pedidos a preparar**, **Listos para despachar** y **Despachos**. El historial no depende de haber pasado por “listo para despachar”: un pedido informado como enviado por el canal puede existir sin preparación local y debe mostrarse como **despachado sin registro local**.
 
+### Cancelados y recuperación comercial
+
+Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados de las últimas 24 horas hábiles con los carritos abandonados del plugin existente. Al vencer la ventana, salen de esa vista y permanecen en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
+
 ## Importación inicial
 
 - MercadoLibre: todas las órdenes y shipments de los últimos 30 días.
@@ -99,6 +103,8 @@ La migración es idempotente, no borra evidencia y no convierte pedidos antiguos
 - Repetir la sincronización no duplica pedidos, items, shipments ni eventos.
 - Un fallo parcial conserva lo importado y muestra la frescura por fuente.
 - La cola operativa no muestra históricos como pendientes.
+- Recuperar ventas muestra cancelados solo durante las últimas 24 horas hábiles y también carritos abandonados.
+- Un cancelado vencido queda fuera de la cola comercial sin borrarse del historial.
 
 ## Fuera de alcance
 
