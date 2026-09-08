@@ -46,6 +46,9 @@ function seed() {
     ['web:PREVIEW-1001', 'web', 920101, 'PREVIEW-1001', 'Ana García', 'pendiente', 'lpaandreani', [{ product_id: 920001, sku: 'FB-CASCO-DEMO', nombre: 'Casco urbano demo', cantidad: 1 }]],
     ['web:PREVIEW-1002', 'web', 920102, 'PREVIEW-1002', 'Bruno López', 'pendiente', 'lpaandreani', [{ product_id: 920002, sku: 'FB-LUZ-DEMO', nombre: 'Luces LED delanteras', cantidad: 2 }]],
     ['web:LOCAL-1003', 'web', 920103, 'LOCAL-1003', 'Venta local demo', 'enviado', 'completed', [{ product_id: 920003, sku: 'FB-KIT-DEMO', nombre: 'Kit transmisión 9v', cantidad: 1 }]],
+    ['web:PREVIEW-1005', 'web', 920105, 'PREVIEW-1005', 'Diego Ruiz', 'enviado', 'cancelled', [{ product_id: 920001, sku: 'FB-CASCO-DEMO', nombre: 'Casco urbano demo', cantidad: 1 }]],
+    ['web:PREVIEW-1006', 'web', 920106, 'PREVIEW-1006', 'Elena Soto', 'pendiente', 'pending', [{ product_id: 920002, sku: 'FB-LUZ-DEMO', nombre: 'Luces LED delanteras', cantidad: 1 }]],
+    ['web:LOCAL-1008', 'web', 920108, 'LOCAL-1008', 'Gabriela León', 'enviado', 'completed', [{ product_id: 920003, sku: 'FB-KIT-DEMO', nombre: 'Kit transmisión 9v', cantidad: 1 }]],
   ];
   const insertPedido = db.prepare(`INSERT INTO pedidos_cache
     (clave,canal,wc_order_id,numero_pedido,comprador,fecha,estado_envio,estado_wc,espejo_ml,items_json,actualizado_en)
