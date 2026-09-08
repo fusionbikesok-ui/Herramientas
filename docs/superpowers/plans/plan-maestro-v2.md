@@ -298,7 +298,7 @@ Modelo, driver, lenguaje y puerto físicos bloquean publicación E3. SLA/modalid
 
 ### Historial relacional de despachos
 
-El historial de despachos es independiente de la cola operativa. Se modela con pedidos, clientes, items, shipments, eventos, grupos y cruces con preparaciones; no se usa `pedidos_cache` como fuente histórica. La importación cubre todos los pedidos de WooCommerce y MercadoLibre del último mes. Un despacho sin preparación local se muestra como “despachado sin registro local”, nunca como verificado. Desde Gestión de pedidos se pueden consultar las fotos de preparación en modo lectura. La migración y sus criterios de aceptación están en `docs/superpowers/plans/2026-09-08-historial-despachos-relacional.md`.
+El historial de despachos es independiente de la cola operativa. Se modela con pedidos, clientes, items, shipments, eventos, grupos y cruces con preparaciones; no se usa `pedidos_cache` como fuente histórica. La importación cubre todos los pedidos de WooCommerce y MercadoLibre del último mes. Un despacho sin preparación local se muestra como “despachado sin registro local”, nunca como verificado. Desde Gestión de pedidos se pueden consultar las fotos de preparación en modo lectura. Las buenas prácticas de diseño y flujo están consolidadas en `docs/superpowers/research/2026-09-08-buenas-practicas-gestion-pedidos-envios.md`; la migración y sus criterios de aceptación están en `docs/superpowers/plans/2026-09-08-historial-despachos-relacional.md`.
 
 ## 7. Stock, identidad, familias, ubicaciones y movimientos
 
