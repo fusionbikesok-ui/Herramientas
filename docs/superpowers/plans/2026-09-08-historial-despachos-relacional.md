@@ -2,17 +2,17 @@
 
 **Fecha:** 2026-09-08  
 **Estado:** planificado  
-**Alcance:** reemplazar el uso histórico de `pedidos_cache` por un modelo relacional permanente, manteniendo compatibilidad durante la migración.
+**Alcance:** separar Gestión de pedidos de Gestión de envíos y reemplazar el uso histórico de `pedidos_cache` por un modelo relacional permanente, manteniendo compatibilidad durante la migración.
 
 ## Decisión operativa
 
-La operación se separa en cuatro espacios: **Productos a buscar**, **Pedidos a preparar**, **Listos para despachar** y **Despachos**. El historial no depende de haber pasado por “listo para despachar”: un pedido informado como enviado por el canal puede existir sin preparación local y debe mostrarse como **despachado sin registro local**.
+La operación se separa en dos herramientas sobre el mismo modelo: **Gestión de pedidos**, accesible desde Home para administrar pedidos, clientes, ventas físicas e intención de envío; y **Gestión de envíos**, que ejecuta recolección, preparación, evidencia, embalaje, tracking, grupos y salida física. Dentro de Gestión de envíos existen cuatro espacios: **Productos a buscar**, **Pedidos a preparar**, **Listos para despachar** y **Despachos**. El historial no depende de haber pasado por “listo para despachar”: un pedido informado como enviado por el canal puede existir sin preparación local y debe mostrarse como **despachado sin registro local**.
 
 ## Importación inicial
 
-- MercadoLibre: órdenes y shipments de los últimos 30 días.
-- WooCommerce: únicamente pedidos con estado `enviadoandreani` de los últimos 30 días.
-- No se importan otros estados Woo en esta entrega.
+- MercadoLibre: todas las órdenes y shipments de los últimos 30 días.
+- WooCommerce: todos los pedidos desde un mes atrás hasta hoy, incluidas ventas físicas del local.
+- Importar no crea tareas de preparación ni cambia estados externos.
 - ML no recibe tracking desde FusionBikes; se conserva el tracking informado por MercadoLibre.
 - Web/Andreani asocia tracking durante el embalaje y lo informa a Woo solo después de confirmar la salida.
 
@@ -42,6 +42,14 @@ Transiciones observadas con estado anterior/nuevo, subestado, fecha del canal, f
 
 Relación entre pedido externo y `preparaciones`, con estado de verificación, cantidad de fotos, tracking asociado, motivo de ausencia y fecha del cruce.
 
+### `pedido_gestion_estado`
+
+Intención operativa separada del estado externo: no requiere envío, requiere envío, enviado manualmente, en preparación, listo para despachar, despachado o retenido. El cambio manual debe ser idempotente y auditable.
+
+### `grupos_despacho`
+
+Agrupa pedidos y paquetes compatibles por transportista, canal, jornada y condiciones de retiro. No fusiona pedidos comerciales: cada pedido conserva cliente, items y tracking propios.
+
 ## Clasificación visible
 
 - Preparado y verificado.
@@ -61,7 +69,7 @@ Buscar órdenes del vendedor por fecha y paginar; obtener sus shipments; guardar
 
 ### WooCommerce
 
-Consultar únicamente `status=enviadoandreani` dentro de la ventana de 30 días; guardar pedido, cliente, líneas y tracking; y cruzar con `preparaciones` por `web:{wc_order_id}`. No inferir preparación porque Woo esté enviado.
+Consultar todos los pedidos dentro de la ventana de un mes; guardar pedido, cliente, líneas y estado; y cruzar con `preparaciones` por `web:{wc_order_id}`. Solo un pedido que Woo marque “listo para enviar Andreani”, o que un usuario autorizado marque manualmente desde Gestión de pedidos, pasa a la cola de envíos. Una venta física puede quedar visible sin tarea logística.
 
 ## Migración desde `pedidos_cache`
 
@@ -79,8 +87,12 @@ La migración es idempotente, no borra evidencia y no convierte pedidos antiguos
 ## Aceptación
 
 - Un pedido ML enviado en los últimos 30 días aparece aunque nunca haya tenido preparación local.
-- Un pedido Web `enviadoandreani` aparece aunque no haya pasado por “listo para despachar”.
+- Un pedido Woo físico aparece en Gestión de pedidos sin entrar a la cola de envíos.
+- Un pedido Woo en “listo para enviar Andreani” entra a la cola de envíos.
+- Un usuario autorizado puede derivar manualmente un pedido y el cambio externo ocurre solo al indicar que se envía.
 - Un pedido con preparación verificada conserva el cruce y sus evidencias.
+- Desde Gestión de pedidos se pueden consultar las fotos de preparación de un pedido ya enviado en modo lectura.
+- Un grupo de despacho conserva sus pedidos y paquetes sin fusionar datos comerciales.
 - Un pedido sin preparación se muestra como “sin registro local”, no como “verificado”.
 - Un pack ML con varias órdenes conserva sus relaciones.
 - Un shipment de devolución no se mezcla con el envío de ida.
@@ -90,8 +102,7 @@ La migración es idempotente, no borra evidencia y no convierte pedidos antiguos
 
 ## Fuera de alcance
 
-- Importar Woo `completed`, `processing` u otros estados en esta entrega.
+- Cambiar automáticamente a enviado todos los pedidos importados.
 - Cargar tracking de MercadoLibre desde FusionBikes.
 - Reconstruir evidencia fotográfica inexistente.
 - Convertir automáticamente un despacho histórico en una preparación.
-

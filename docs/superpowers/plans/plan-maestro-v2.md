@@ -96,7 +96,7 @@ Operario de depósito prepara y puede aprobar; supervisor resuelve reaperturas y
 
 ### Disparadores y fuentes de datos
 
-Pedidos ML elegibles, pedidos Woo en “listo para enviar Andreani”, cambios, cancelaciones, horarios de la jornada, compromisos Woo, ubicaciones activas y alertas de integración.
+Todos los pedidos ML y Woo del último mes, cambios, cancelaciones, horarios de la jornada, compromisos Woo, ubicaciones activas y alertas de integración. La elegibilidad para envío se decide después en Gestión de pedidos; no durante la importación.
 
 ### Estado actual verificado
 
@@ -105,6 +105,14 @@ La preparación integrada posee cola continua priorizada, claims por preparació
 ### Brecha existente
 
 Falta validación operativa real de la checklist, tratamiento integrado de faltantes y recuperación explícita ante códigos desconocidos o cambios concurrentes. La reasignación automática de última unidad pertenece a E12.
+
+### Separación de herramientas
+
+**Gestión de pedidos** será la vista principal del Home para importar y administrar todos los pedidos de WooCommerce y MercadoLibre del último mes, incluyendo ventas físicas registradas en Woo. Permitirá consultar clientes, productos, estados, incidencias y fotos de preparación, además de marcar manualmente un pedido como “requiere envío”.
+
+**Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
+
+La importación no implica despacho. Solo entran a la cola de envíos los pedidos que Woo coloque en “listo para enviar Andreani” o los que un usuario autorizado derive manualmente desde Gestión de pedidos. Una venta física o un pedido que no requiere envío permanece visible en Gestión de pedidos, pero no aparece como tarea logística.
 
 ### Flujo normal paso a paso
 
@@ -290,7 +298,7 @@ Modelo, driver, lenguaje y puerto físicos bloquean publicación E3. SLA/modalid
 
 ### Historial relacional de despachos
 
-El historial de despachos es independiente de la cola operativa. Se modela con pedidos, clientes, items, shipments, eventos y cruces con preparaciones; no se usa `pedidos_cache` como fuente histórica. La importación inicial cubre los últimos 30 días de MercadoLibre y únicamente WooCommerce `enviadoandreani`. Un despacho sin preparación local se muestra como “despachado sin registro local”, nunca como verificado. La migración y sus criterios de aceptación están en `docs/superpowers/plans/2026-09-08-historial-despachos-relacional.md`.
+El historial de despachos es independiente de la cola operativa. Se modela con pedidos, clientes, items, shipments, eventos, grupos y cruces con preparaciones; no se usa `pedidos_cache` como fuente histórica. La importación cubre todos los pedidos de WooCommerce y MercadoLibre del último mes. Un despacho sin preparación local se muestra como “despachado sin registro local”, nunca como verificado. Desde Gestión de pedidos se pueden consultar las fotos de preparación en modo lectura. La migración y sus criterios de aceptación están en `docs/superpowers/plans/2026-09-08-historial-despachos-relacional.md`.
 
 ## 7. Stock, identidad, familias, ubicaciones y movimientos
 

@@ -9,6 +9,9 @@ implementadas como un único libro de stock.
 
 ## Preparación y despacho
 
+- La arquitectura separa Gestión de pedidos (Home: importar y administrar pedidos, ventas físicas, clientes, productos, incidencias, decisión de envío y consulta de fotos) de Gestión de envíos (recolección, preparación, evidencia, embalaje, tracking, grupos y salida). Ambas comparten el modelo relacional.
+- Se importan todos los pedidos de WooCommerce y MercadoLibre del último mes. Importar no crea tarea logística: solo entran a Gestión de envíos los Woo en “listo para enviar Andreani” o los pedidos derivados manualmente por un usuario autorizado.
+
 - Los pedidos ingresan continuamente durante el día y se notifican al área de preparación.
 - Desde el 2026-09-08, preparación usa una cola continua sin olas: MercadoLibre primero y antigüedad después. Los pedidos nuevos aparecen en la próxima actualización.
 - La pantalla primero consolida todos los productos pendientes por SKU y muestra imagen, cantidad total y cantidad de pedidos. Después el operario abre un pedido, adquiere su claim y completa una checklist escaneando cada unidad. La línea muestra cantidad escaneada/esperada; excedentes y códigos ajenos o desconocidos no modifican cantidades.
