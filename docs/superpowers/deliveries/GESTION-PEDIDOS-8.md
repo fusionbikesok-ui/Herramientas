@@ -1,6 +1,6 @@
 # GP8: Integraciones, cuotas, stock y permisos
 
-**Estado:** candidata  
+**Estado:** publicada  
 **Superficie:** Gestión de pedidos / VPS  
 **Dependencia:** GP4, GP5, GP6 y GP7 publicadas
 
@@ -49,4 +49,11 @@ Entregas internas completadas. Evidencia focalizada:
 - Actualización de WooCommerce antes de confirmar envío local.
 - Suite focalizada de Gestión de pedidos: `15/15` verdes.
 
-Suite completa en ejecución al cerrar GP8. Si queda verde, se publica GP8 y se abre GP9.
+Suite completa ejecutada al cerrar GP8:
+
+- `128` archivos pasaron.
+- `2416` tests pasaron.
+- `51` tests quedaron omitidos.
+- Duración: `2033,86 s`.
+
+Resultado: **verde**. GP8 queda publicada y habilita GP9.
