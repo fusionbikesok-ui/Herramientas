@@ -132,7 +132,7 @@ El botón genérico “Editar pedido” se reemplaza por **Editar datos** —cli
 
 Cada línea existente tendrá un botón **Remover** y el buscador solo ofrecerá **Agregar producto**. Un reemplazo se modelará explícitamente como remover el producto anterior y agregar el nuevo, con revisión de cantidades, total y stock antes de guardar.
 
-La remoción exigirá seleccionar uno de tres motivos auditables: **No lo quiso**, **No apto para la venta** o **Falla de stock**. Sin motivo no se podrá confirmar el cambio.
+La remoción exigirá seleccionar uno de cuatro motivos auditables: **No lo quiso**, **No apto para la venta**, **Falla de stock** o **Cambio**. Sin motivo no se podrá confirmar el cambio.
 
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 

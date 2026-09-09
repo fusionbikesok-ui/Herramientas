@@ -34,7 +34,7 @@ La edición del pedido se separa en dos acciones: **Editar datos**, que permite 
 
 En la lista de líneas existentes cada producto tendrá su propio botón **Remover**. La ventana de búsqueda tendrá únicamente **Agregar producto**; no habrá un reemplazo implícito. Para cambiar un producto se removerá la línea anterior y se agregará la nueva, dejando ambos cambios en la revisión previa.
 
-Remover exigirá seleccionar un motivo simple: **No lo quiso**, **No apto para la venta** o **Falla de stock**. La remoción no se confirma sin motivo y registra pedido, producto, cantidad, motivo, usuario, fecha y hora para auditoría.
+Remover exigirá seleccionar un motivo simple: **No lo quiso**, **No apto para la venta**, **Falla de stock** o **Cambio**. La remoción no se confirma sin motivo y registra pedido, producto, cantidad, motivo, usuario, fecha y hora para auditoría.
 
 ### Cancelados y recuperación comercial
 
