@@ -60,7 +60,7 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
   });
   router.get('/recuperar-ventas', (req, res) => {
     const ahora = new Date().toISOString();
-    const cancelados = db.prepare(`SELECT p.id, p.fuente, p.external_id, p.creado_fuente_en
+    const cancelados = db.prepare(`SELECT p.id, p.fuente, p.external_id, p.creado_fuente_en, p.cancelado_en
       FROM gestion_pedidos p
       WHERE p.estado_comercial='cancelado' AND p.cancelado_en IS NOT NULL`).all();
     const crear = db.prepare(`INSERT OR IGNORE INTO gestion_recuperacion_oportunidades
@@ -68,7 +68,7 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       VALUES (?,?,?,?,?,?,?,?)`);
     const tx = db.transaction(() => {
       for (const pedido of cancelados) {
-        const creado = pedido.creado_fuente_en || ahora;
+        const creado = pedido.cancelado_en || pedido.creado_fuente_en || ahora;
         crear.run(pedido.id, 'pedido_cancelado', `${pedido.fuente}:${pedido.external_id}`, creado,
           vencimientoRecuperacion(creado), null, ahora, ahora);
       }
