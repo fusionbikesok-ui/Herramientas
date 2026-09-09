@@ -28,6 +28,19 @@ describe('POST /api/gestion-pedidos/importar', () => {
     db.close();
   });
 
+  it('lista las corridas de importación para auditoría', async () => {
+    const db = dbPrueba();
+    db.prepare(`INSERT INTO gestion_pedido_importaciones (desde, hasta, estado, importados, iniciado_en) VALUES (?, ?, 'completada', ?, ?)`)
+      .run('2026-09-01', '2026-09-09', 4, '2026-09-09T10:00:00Z');
+    const app = express();
+    app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const response = await request(app).get('/api/gestion-pedidos/importaciones?limit=1');
+    expect(response.status).toBe(200);
+    expect(response.body.corridas).toHaveLength(1);
+    expect(response.body.corridas[0]).toMatchObject({ estado: 'completada', importados: 4 });
+    db.close();
+  });
+
   it('importa por HTTP con adaptadores simulados y devuelve el resumen', async () => {
     const db = dbPrueba();
     const app = express();

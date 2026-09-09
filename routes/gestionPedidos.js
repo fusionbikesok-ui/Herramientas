@@ -22,6 +22,12 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
     ventana_por_defecto_dias: 30,
     estados_ml: String(process.env.GESTION_PEDIDOS_ML_STATUSES || 'confirmed,payment_required,payment_in_process,partially_paid,paid,partially_refunded,pending_cancel,cancelled,manually_cancelled').split(',').map(x => x.trim()).filter(Boolean),
   }));
+  router.get('/importaciones', (req, res) => {
+    const limite = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const corridas = db.prepare(`SELECT id, desde, hasta, estado, woo_recibidos, ml_recibidos, importados, creados, actualizados, error, iniciado_en, finalizado_en
+      FROM gestion_pedido_importaciones ORDER BY id DESC LIMIT ?`).all(limite);
+    return res.json({ ok: true, corridas });
+  });
   router.post('/importar', async (req, res) => {
     const desde = req.body?.desde || fechaHaceDias(30);
     const hasta = req.body?.hasta || new Date().toISOString();

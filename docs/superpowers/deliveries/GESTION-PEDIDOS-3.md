@@ -17,6 +17,7 @@ Importar de forma controlada el último mes de pedidos de WooCommerce y MercadoL
 - Separar estado comercial de estado operativo.
 - Registrar resumen de creados, actualizados y errores.
 - Persistir cada corrida en `gestion_pedido_importaciones` con ventana, estado, cantidades y error.
+- Consultar las últimas corridas mediante `GET /api/gestion-pedidos/importaciones`.
 - No enviar pedidos a preparación ni despacho sólo por importarlos.
 - Mantener `pedidos_cache` sin borrado ni mutación destructiva.
 
