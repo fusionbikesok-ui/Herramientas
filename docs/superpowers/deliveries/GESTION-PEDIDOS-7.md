@@ -1,6 +1,6 @@
 # GP7: Recuperar ventas
 
-**Estado:** candidata  
+**Estado:** publicada  
 **Superficie:** Gestión de pedidos / Home  
 **Dependencia:** GP3 y GP4 publicadas
 
@@ -55,4 +55,11 @@ Entregas internas completadas. Evidencia focalizada:
 - Smoke de preview: login, listado, Recuperar ventas, detalle y render sin errores.
 - Acciones reales conectadas a la API, sin registrar contacto al preparar/copiarlos.
 
-Suite completa en ejecución al cerrar GP7. Fixtures cubren cancelado, carrito abandonado, consolidación, contacto y pedido exitoso posterior.
+Suite completa ejecutada al cerrar GP7:
+
+- `128` archivos pasaron.
+- `2411` tests pasaron.
+- `51` tests quedaron omitidos.
+- Duración: `2084,76 s`.
+
+Resultado: **verde**. GP7 queda publicada y habilita GP8.
