@@ -13,7 +13,7 @@ function exigirRespuesta(resp, nombre) {
 }
 
 /** Router administrativo para la importación inicial/reconciliación manual. */
-export function gestionPedidosRouter(db, { woo, ml }) {
+export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride }) {
   const router = express.Router();
   router.post('/importar', async (req, res) => {
     const desde = req.body?.desde || fechaHaceDias(30);
@@ -24,11 +24,11 @@ export function gestionPedidosRouter(db, { woo, ml }) {
         desde,
         hasta,
         porPagina: 50,
-        listarWoo: async ({ desde: after, hasta: before, pagina, limite }) => {
+        listarWoo: listarWooOverride || (async ({ desde: after, hasta: before, pagina, limite }) => {
           const query = `/orders?status=any&after=${encodeURIComponent(after)}&before=${encodeURIComponent(before)}&orderby=date&order=asc&per_page=${limite}&page=${pagina}`;
           return exigirRespuesta(await wooFetch(woo, query), 'WooCommerce');
-        },
-        listarMl: async ({ desde: from, offset, limite }) => {
+        }),
+        listarMl: listarMlOverride || (async ({ desde: from, offset, limite }) => {
           const todas = [];
           for (const status of statusesMl) {
             const query = `/orders/search?seller=${encodeURIComponent(ml.userId)}&order.status=${encodeURIComponent(status)}&sort=date_asc&order.date_created.from=${encodeURIComponent(from)}&order.date_created.to=${encodeURIComponent(hasta)}&offset=${offset}&limit=${limite}`;
@@ -37,7 +37,7 @@ export function gestionPedidosRouter(db, { woo, ml }) {
           }
           const unicas = new Map(todas.map(orden => [String(orden.id), orden]));
           return [...unicas.values()];
-        },
+        }),
       });
       return res.json({ ok: true, desde, hasta, importados: resultados.length, creados: resultados.filter(x => x.created).length, actualizados: resultados.filter(x => x.changed && !x.created).length });
     } catch (error) {
