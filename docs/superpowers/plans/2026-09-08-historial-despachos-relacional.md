@@ -26,6 +26,8 @@ La pantalla específica del pedido será el lugar de trabajo detallado. Allí se
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados de las últimas 24 horas hábiles con los carritos abandonados del plugin existente. Al vencer la ventana, salen de esa vista y permanecen en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
 
+La recuperación solo podrá iniciarse mediante **WhatsApp** o **Email**, con un botón independiente para cada canal. Un tercer botón, **Marcar contactado**, confirmará que la comunicación efectivamente se realizó. Se conservará si nunca se contactó, quién confirmó el contacto, fecha, hora y canal; hacer clic en el canal registra el intento/canal elegido, pero no confirma el contacto hasta la acción explícita.
+
 ## Importación inicial
 
 - MercadoLibre: todas las órdenes y shipments de los últimos 30 días.
