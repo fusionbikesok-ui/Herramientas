@@ -405,6 +405,11 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/recepcion', express.static(path.join(__dirname, 'public/recepcion')));
   app.use('/api/pedidos', pedidosRouter(db));
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
+  app.get('/gestion-pedidos/pedidos/:id', authGuard, (req, res) => {
+    const permitido = process.env.PEDIDOS_PREVIEW_USER || 'Matias';
+    if (req.user?.username !== permitido) return res.status(403).send('Vista de pedidos en preview no habilitada para este usuario.');
+    res.sendFile(path.join(__dirname, 'public/gestion-pedidos/index.html'));
+  });
   app.use('/gestion-pedidos', authGuard, (req, res, next) => {
     const permitido = process.env.PEDIDOS_PREVIEW_USER || 'Matias';
     if (req.user?.username !== permitido) return res.status(403).send('Vista de pedidos en preview no habilitada para este usuario.');
