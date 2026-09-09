@@ -13,6 +13,7 @@ function dbPrueba() {
   const db = new Database(':memory:');
   db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '095_gestion_pedidos_relacional.sql'), 'utf8'));
   db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '096_gestion_pedidos_importaciones.sql'), 'utf8'));
+  db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '097_gestion_pedidos_recuperacion.sql'), 'utf8'));
   return db;
 }
 
@@ -90,6 +91,25 @@ describe('POST /api/gestion-pedidos/importar', () => {
     expect(response.body.corridas).toHaveLength(1);
     expect(response.body.corridas[0]).toMatchObject({ estado: 'completada', importados: 4 });
     db.close();
+  });
+
+  it('construye Recuperar ventas para cancelados, consolida por cliente y registra contacto manual', async () => {
+    const db = dbPrueba(); const now = '2026-09-08T15:00:00Z';
+    const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,email,telefono,creado_en,actualizado_en) VALUES (?,?,?,?,?)')
+      .run('Cliente Demo', 'demo@example.com', '+54 9 11 5555 1234', now, now).lastInsertRowid;
+    const insert = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,numero_visible,estado_comercial,estado_operativo,importado_en,actualizado_en,creado_fuente_en,cancelado_en) VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    const first = insert.run(cliente, 'woocommerce', 'r-1', '#R1', 'cancelado', 'cerrado', now, now, now, now).lastInsertRowid;
+    insert.run(cliente, 'woocommerce', 'r-2', '#R2', 'cancelado', 'cerrado', now, now, '2026-09-08T16:00:00Z', '2026-09-08T16:00:00Z');
+    const app = express(); app.use(express.json()); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const lista = await request(app).get('/api/gestion-pedidos/recuperar-ventas');
+    expect(lista.status).toBe(200); expect(lista.body.total).toBe(1); expect(lista.body.oportunidades[0].intentos).toBe(2);
+    const id = lista.body.oportunidades[0].id;
+    const contacto = await request(app).post(`/api/gestion-pedidos/recuperar-ventas/${id}/contactar`).send({ canal: 'whatsapp' });
+    expect(contacto.status).toBe(201); expect(contacto.body.contacto).toMatchObject({ canal: 'whatsapp', actor: 'usuario_actual' });
+    const otra = await request(app).post(`/api/gestion-pedidos/recuperar-ventas/${id}/contactar`).send({ canal: 'email' });
+    expect(otra.status).toBe(201);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM gestion_recuperacion_contactos WHERE oportunidad_id=?').get(id).n).toBe(2);
+    expect(first).toBeTruthy(); db.close();
   });
 
   it('importa por HTTP con adaptadores simulados y devuelve el resumen', async () => {

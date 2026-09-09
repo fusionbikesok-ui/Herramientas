@@ -12,9 +12,87 @@ function exigirRespuesta(resp, nombre) {
   return resp.data;
 }
 
+function fechaLocalArgentina(iso) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+}
+
+function sumarDiasHabiles(fechaIso, dias) {
+  const d = new Date(fechaIso);
+  while (dias > 0) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const nombre = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Argentina/Buenos_Aires', weekday: 'short' }).format(d);
+    if (!['Sat', 'Sun'].includes(nombre)) dias -= 1;
+  }
+  return d;
+}
+
+function cierreDia(diaLocal, hora = process.env.GESTION_PEDIDOS_CIERRE || '19:00') {
+  const [h, m] = String(hora).split(':').map(Number);
+  return new Date(`${diaLocal}T${String(h || 19).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}:00-03:00`).toISOString();
+}
+
+function vencimientoRecuperacion(creado) {
+  const local = fechaLocalArgentina(creado);
+  const siguiente = sumarDiasHabiles(new Date(`${local}T12:00:00-03:00`).toISOString(), 1);
+  return cierreDia(fechaLocalArgentina(siguiente));
+}
+
 /** Router administrativo para la importación inicial/reconciliación manual. */
 export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride }) {
   const router = express.Router();
+  router.get('/recuperar-ventas', (req, res) => {
+    const ahora = new Date().toISOString();
+    const cancelados = db.prepare(`SELECT p.id, p.fuente, p.external_id, p.creado_fuente_en
+      FROM gestion_pedidos p
+      WHERE p.estado_comercial='cancelado' AND p.cancelado_en IS NOT NULL`).all();
+    const crear = db.prepare(`INSERT OR IGNORE INTO gestion_recuperacion_oportunidades
+      (pedido_id,fuente,external_id,creado_fuente_en,vence_en,datos_json,creado_en,actualizado_en)
+      VALUES (?,?,?,?,?,?,?,?)`);
+    const tx = db.transaction(() => {
+      for (const pedido of cancelados) {
+        const creado = pedido.creado_fuente_en || ahora;
+        crear.run(pedido.id, 'pedido_cancelado', `${pedido.fuente}:${pedido.external_id}`, creado,
+          vencimientoRecuperacion(creado), null, ahora, ahora);
+      }
+    });
+    tx();
+    db.prepare(`UPDATE gestion_recuperacion_oportunidades SET estado='recuperada', actualizado_en=?
+      WHERE estado='vigente' AND pedido_id IN (SELECT p.id FROM gestion_pedidos p WHERE p.estado_comercial NOT IN ('cancelado','fallido'))`).run(ahora);
+    db.prepare(`UPDATE gestion_recuperacion_oportunidades SET estado='vencida', actualizado_en=?
+      WHERE estado='vigente' AND vence_en <= ?`).run(ahora, ahora);
+    const rows = db.prepare(`SELECT o.*, p.numero_visible, p.fuente AS pedido_fuente,
+      c.id AS cliente_id, c.nombre AS cliente_nombre, c.email AS cliente_email, c.telefono AS cliente_telefono,
+      (SELECT COUNT(*) FROM gestion_recuperacion_contactos x WHERE x.oportunidad_id=o.id) AS contactos,
+      (SELECT x.canal FROM gestion_recuperacion_contactos x WHERE x.oportunidad_id=o.id ORDER BY x.id DESC LIMIT 1) AS ultimo_canal,
+      (SELECT x.actor FROM gestion_recuperacion_contactos x WHERE x.oportunidad_id=o.id ORDER BY x.id DESC LIMIT 1) AS ultimo_actor,
+      (SELECT x.contactado_en FROM gestion_recuperacion_contactos x WHERE x.oportunidad_id=o.id ORDER BY x.id DESC LIMIT 1) AS ultimo_contacto
+      FROM gestion_recuperacion_oportunidades o
+      LEFT JOIN gestion_pedidos p ON p.id=o.pedido_id
+      LEFT JOIN gestion_pedido_clientes c ON c.id=p.cliente_id
+      WHERE o.estado='vigente' ORDER BY o.vence_en ASC, o.creado_fuente_en DESC`).all();
+    const consolidadas = new Map();
+    for (const row of rows) {
+      const key = row.cliente_id ? `cliente:${row.cliente_id}` : `oportunidad:${row.id}`;
+      const anterior = consolidadas.get(key);
+      if (!anterior) consolidadas.set(key, { ...row, intentos: 1 });
+      else if (row.creado_fuente_en > anterior.creado_fuente_en) consolidadas.set(key, { ...row, intentos: anterior.intentos + 1 });
+      else anterior.intentos += 1;
+    }
+    return res.json({ ok: true, oportunidades: [...consolidadas.values()], total: consolidadas.size });
+  });
+  router.post('/recuperar-ventas/:id/contactar', (req, res) => {
+    const canal = String(req.body?.canal || '').toLowerCase();
+    if (!['whatsapp', 'email'].includes(canal)) return res.status(400).json({ ok: false, error: 'canal inválido' });
+    const oportunidad = db.prepare('SELECT * FROM gestion_recuperacion_oportunidades WHERE id=?').get(req.params.id);
+    if (!oportunidad) return res.status(404).json({ ok: false, error: 'Oportunidad no encontrada' });
+    if (oportunidad.estado !== 'vigente') return res.status(409).json({ ok: false, error: 'La oportunidad ya no está vigente' });
+    const ahora = new Date().toISOString();
+    const actor = String(req.user?.username || req.user?.nombre || 'usuario_actual');
+    const contacto = db.prepare(`INSERT INTO gestion_recuperacion_contactos
+      (oportunidad_id,canal,actor,contactado_en,creado_en) VALUES (?,?,?,?,?)`)
+      .run(oportunidad.id, canal, actor, ahora, ahora);
+    return res.status(201).json({ ok: true, contacto: { id: contacto.lastInsertRowid, oportunidad_id: oportunidad.id, canal, actor, contactado_en: ahora } });
+  });
   router.get('/', (req, res) => {
     const limite = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
