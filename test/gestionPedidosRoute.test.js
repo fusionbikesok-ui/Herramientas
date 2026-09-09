@@ -112,6 +112,18 @@ describe('POST /api/gestion-pedidos/importar', () => {
     expect(first).toBeTruthy(); db.close();
   });
 
+  it('importa carritos abandonados del plugin y los consolida por email aunque no tengan pedido', async () => {
+    const db = dbPrueba(); const app = express(); app.use(express.json()); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const importacion = await request(app).post('/api/gestion-pedidos/recuperar-ventas/importar-carritos').send({ carritos: [
+      { id: 'cart-a', abandoned_at: '2026-09-08T12:00:00Z', email: 'cart@example.com', phone: '11 5555 1234', cart_total: 1000 },
+      { id: 'cart-b', abandoned_at: '2026-09-08T13:00:00Z', email: 'cart@example.com', phone: '11 5555 1234', cart_total: 1200 },
+    ] });
+    expect(importacion.status).toBe(200); expect(importacion.body.importados).toBe(2);
+    const lista = await request(app).get('/api/gestion-pedidos/recuperar-ventas');
+    expect(lista.body.total).toBe(1); expect(lista.body.oportunidades[0]).toMatchObject({ intentos: 2, cliente_email: 'cart@example.com' });
+    db.close();
+  });
+
   it('importa por HTTP con adaptadores simulados y devuelve el resumen', async () => {
     const db = dbPrueba();
     const app = express();

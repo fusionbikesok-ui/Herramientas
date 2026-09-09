@@ -40,6 +40,24 @@ function vencimientoRecuperacion(creado) {
 /** Router administrativo para la importación inicial/reconciliación manual. */
 export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride }) {
   const router = express.Router();
+  router.post('/recuperar-ventas/importar-carritos', (req, res) => {
+    const carritos = Array.isArray(req.body?.carritos) ? req.body.carritos : [];
+    if (carritos.length > 1000) return res.status(400).json({ ok: false, error: 'demasiados carritos' });
+    const ahora = new Date().toISOString();
+    const upsert = db.prepare(`INSERT INTO gestion_recuperacion_oportunidades
+      (fuente,external_id,creado_fuente_en,vence_en,datos_json,creado_en,actualizado_en)
+      VALUES ('carrito_abandonado',?,?,?,?,?,?)
+      ON CONFLICT(fuente,external_id) DO UPDATE SET creado_fuente_en=excluded.creado_fuente_en,
+      vence_en=excluded.vence_en, datos_json=excluded.datos_json, actualizado_en=excluded.actualizado_en`);
+    const tx = db.transaction(() => carritos.reduce((n, carrito) => {
+      const id = String(carrito.id || carrito.cart_id || carrito.cart_hash || '').trim();
+      const creado = carrito.abandoned_at || carrito.updated_at || carrito.created_at;
+      if (!id || !creado) return n;
+      upsert.run(id, creado, vencimientoRecuperacion(creado), JSON.stringify(carrito), ahora, ahora);
+      return n + 1;
+    }, 0));
+    return res.json({ ok: true, importados: tx() });
+  });
   router.get('/recuperar-ventas', (req, res) => {
     const ahora = new Date().toISOString();
     const cancelados = db.prepare(`SELECT p.id, p.fuente, p.external_id, p.creado_fuente_en
@@ -72,9 +90,13 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       WHERE o.estado='vigente' ORDER BY o.vence_en ASC, o.creado_fuente_en DESC`).all();
     const consolidadas = new Map();
     for (const row of rows) {
-      const key = row.cliente_id ? `cliente:${row.cliente_id}` : `oportunidad:${row.id}`;
+      let datos = {};
+      try { datos = row.datos_json ? JSON.parse(row.datos_json) : {}; } catch { datos = {}; }
+      const email = row.cliente_email || datos.email || datos.billing_email;
+      const telefono = row.cliente_telefono || datos.phone || datos.billing_phone;
+      const key = row.cliente_id ? `cliente:${row.cliente_id}` : email ? `email:${String(email).toLowerCase()}` : telefono ? `telefono:${String(telefono).replace(/\D/g, '')}` : `oportunidad:${row.id}`;
       const anterior = consolidadas.get(key);
-      if (!anterior) consolidadas.set(key, { ...row, intentos: 1 });
+      if (!anterior) consolidadas.set(key, { ...row, cliente_email: email, cliente_telefono: telefono, datos, intentos: 1 });
       else if (row.creado_fuente_en > anterior.creado_fuente_en) consolidadas.set(key, { ...row, intentos: anterior.intentos + 1 });
       else anterior.intentos += 1;
     }
