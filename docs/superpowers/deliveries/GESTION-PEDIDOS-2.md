@@ -1,6 +1,6 @@
 # GP2: Modelo relacional e importación base
 
-**Estado:** candidata  
+**Estado:** publicada  
 **Superficie:** VPS  
 **Dependencia:** GP1 aceptada
 
@@ -77,6 +77,10 @@ npm test -- --reporter=dot --no-file-parallelism
 ```
 
 Resultado: **verde**. `127` archivos de test pasaron, `1` quedó omitido; `2400` pruebas pasaron y `51` quedaron omitidas (`2451` totales). Duración: `2246.08s`. El primer gate detectó y corrigió la expectativa explícita de tablas en `test/db.test.js`; esta segunda ejecución valida el estado corregido.
+
+## Handoff a GP3
+
+GP2 queda publicada sobre `conteo-confiable` con suite completa verde. GP3 puede usar `POST /api/gestion-pedidos/importar`, las tablas `gestion_*` y la clave idempotente `(fuente, external_id)`. No debe borrar ni reemplazar `pedidos_cache`.
 
 ## Gates
 
