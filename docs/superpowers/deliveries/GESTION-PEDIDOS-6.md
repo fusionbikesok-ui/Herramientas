@@ -1,6 +1,6 @@
 # GP6: Despachos, agrupación y evidencia
 
-**Estado:** desarrollo  
+**Estado:** candidata  
 **Superficie:** Gestión de envíos / VPS  
 **Dependencia:** GP5 publicada
 
@@ -26,6 +26,14 @@ Permitir que los pedidos preparados se agrupen en despachos, se embalen y se reg
 - El despachador sólo recibe paquetes cerrados y evidenciados.
 - Todas las transiciones registran actor, hora y motivo cuando corresponda.
 - Suite completa sólo al cerrar GP6.
+
+## Evidencia previa al gate 2026-09-09
+
+- La cola y los lotes de despacho ya existen en `routes/preparacion.js`.
+- Las pruebas focalizadas cubren creación idempotente, agrupación por canal, escaneo, tracking, conflictos, cierre, salida y anulación.
+- La suite focalizada de preparación quedó en `225/225` verdes.
+- No se carga tracking en MercadoLibre: el endpoint devuelve `TRACKING_NO_APLICA`.
+- Los eventos de lote conservan actor, hora y detalle.
 
 ## Gate
 
