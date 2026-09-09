@@ -35,6 +35,18 @@ Construir el modelo persistente que reemplazará la dependencia de pedidos cache
 - La cola de envíos no incluye pedidos sólo por estar importados: exige el estado operativo correspondiente.
 - Se documentan migración, rollback, índices y datos no importables.
 
+## Avance reproducible 2026-09-09
+
+Se agregó la migración `095_gestion_pedidos_relacional.sql` y su registro idempotente en `db/index.js`. La prueba focalizada sobre una base SQLite temporal confirmó la creación de las cinco tablas, el marcador de migración y una inserción relacional de cliente, pedido, ítem y evento.
+
+Comando ejecutado:
+
+```text
+node --input-type=module - <<'NODE' ... NODE
+```
+
+Resultado: `OK: GP2 migration tables, marker and relational insert`.
+
 ## Gates
 
 - Pruebas focalizadas de esquema, idempotencia, relaciones y casos Woo/ML/físicos/cancelados.

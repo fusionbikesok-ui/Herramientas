@@ -780,6 +780,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('inbox_contexto_externo_094')").run();
     })();
   }
+  const gestionPedidosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='gestion_pedidos_relacional_095'").get();
+  if (!gestionPedidosMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '095_gestion_pedidos_relacional.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_relacional_095')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {
