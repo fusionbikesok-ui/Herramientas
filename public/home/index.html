@@ -1025,16 +1025,12 @@ fetch('/api/auth/me').then(function(r) {
     if (d.preguntas) partes.push(d.preguntas + (d.preguntas === 1 ? ' pregunta respondible' : ' preguntas respondibles'));
     if (d.mensajes) partes.push(d.mensajes + (d.mensajes === 1 ? ' mensaje' : ' mensajes'));
     if (d.reclamos) partes.push(d.reclamos + (d.reclamos === 1 ? ' reclamo' : ' reclamos'));
-    var desc = d.total ? 'Hay ' + partes.join(' y ') + (d.total === 1 ? ' pendiente' : ' pendientes') + ' en MercadoLibre.' : '';
+    var desc = partes.join(' · ');
+    var detalle = [];
     // Las preguntas de publicaciones pausadas o sin stock se separan: siguen siendo
     // consultas sin responder, pero no se resuelven vendiendo y no deben competir con
     // las que si. Decision del usuario (2026-09-06).
-    if (d.preguntas_sin_stock) desc += (desc ? ' ' : '') + 'De esas, '
-      + d.preguntas_sin_stock + (d.preguntas_sin_stock === 1 ? ' es de una publicacion' : ' son de publicaciones')
-      + ' pausada' + (d.preguntas_sin_stock === 1 ? '' : 's') + ' o sin stock.';
-    if (d.preguntas_no_accionables) desc += (desc ? ' ' : '') + d.preguntas_no_accionables
-      + (d.preguntas_no_accionables === 1 ? ' pregunta queda archivada' : ' preguntas quedan archivadas')
-      + ' porque no se pueden responder desde la publicación actual.';
+    if (d.preguntas_no_accionables) detalle.push(d.preguntas_no_accionables + ' preguntas no accionables');
     // Jobs de integracion que agotaron reintentos y quedaron muertos. Hasta ahora NADA los
     // mostraba: se quedaban ahi para siempre y nadie se enteraba.
     if (d.dead_letters) {
@@ -1042,15 +1038,17 @@ fetch('/api/auth/me').then(function(r) {
       var gruposAvisos = (d.dead_letter_groups || []).map(function(g) {
         return g.n + ' ' + (nombresAvisos[g.job_type] || g.job_type);
       });
-      desc += (desc ? ' ' : '') + 'Avisos técnicos sin reintentos: ' + gruposAvisos.join(', ') + '.';
+      detalle.push('Avisos técnicos: ' + gruposAvisos.join(', '));
     }
-    if (d.reclamos_sin_confirmar) desc += (desc ? ' ' : '') + 'No se pudieron consultar '
+    if (d.reclamos_sin_confirmar) detalle.push('Reclamos por consultar: '
       + d.reclamos_sin_confirmar + (d.reclamos_sin_confirmar === 1 ? ' reclamo' : ' reclamos')
-      + ' en MercadoLibre; se reintentará automáticamente.';
+      );
+    var detalleHtml = detalle.length ? '<div class="token-banner-desc">' + esc(detalle.join(' · ')) + '</div>' : '';
     host.innerHTML = '<div class="token-banner warn" role="status">'
       + '<svg class="token-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>'
       + '<div class="token-banner-body">'
-      + '<div class="token-banner-title">' + esc(desc) + '</div>'
+      + '<div class="token-banner-title">' + esc(desc || 'Sin pendientes accionables') + '</div>'
+      + detalleHtml
       + '<div class="token-banner-actions">'
       + '<a class="token-banner-btn" href="https://myaccount.mercadolibre.com.ar/questions/list" target="_blank" rel="noopener">Abrir bandeja en MercadoLibre</a>'
       + '</div></div></div>';
