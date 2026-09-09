@@ -9,6 +9,7 @@ const mockState = vi.hoisted(() => {
   let failureCount = 0;
   let failureResult = { ok: false, error: 'Simulated network failure', reintentable: true };
   let callCount = 0; // Contar total de llamadas a enviarNotificacion
+  let lastOpciones = null; // Últimas opciones (3er argumento) recibidas por enviarNotificacion
   return {
     setShouldFailOnDevice: (deviceToken) => { shouldFailOnDevice = deviceToken; },
     clearFailure: () => {
@@ -24,6 +25,8 @@ const mockState = vi.hoisted(() => {
     incrementCallCount: () => ++callCount,
     getCallCount: () => callCount,
     resetCallCount: () => { callCount = 0; },
+    recordOpciones: (opciones) => { lastOpciones = opciones; },
+    getLastOpciones: () => lastOpciones,
   };
 });
 
@@ -31,8 +34,9 @@ const mockState = vi.hoisted(() => {
 vi.mock('../lib/notificacionesPush.js', async () => {
   const actual = await vi.importActual('../lib/notificacionesPush.js');
   return {
-    enviarNotificacion: async (deviceToken, payload) => {
+    enviarNotificacion: async (deviceToken, payload, opciones = {}) => {
       mockState.incrementCallCount(); // Contar cada llamada
+      mockState.recordOpciones(opciones); // Registrar el 3er argumento tal cual llegó
       const deviceToFail = mockState.getShouldFailOnDevice();
       if (deviceToFail && deviceToken === deviceToFail) {
         mockState.incrementFailureCount();
@@ -75,6 +79,18 @@ function seedDevice(db, userId, token = 'device-token-123', plataforma = 'ios') 
       INSERT INTO device_tokens (user_id, token, plataforma, creado_en, actualizado_en)
       VALUES (?, ?, ?, ?, ?)
     `).run(userId, token, plataforma, now, now);
+  } catch (e) {
+    if (!e.message.includes('UNIQUE')) throw e;
+  }
+}
+
+function seedDeviceConEntorno(db, userId, token, entorno, plataforma = 'ios') {
+  const now = new Date().toISOString();
+  try {
+    db.prepare(`
+      INSERT INTO device_tokens (user_id, token, plataforma, entorno, creado_en, actualizado_en)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(userId, token, plataforma, entorno, now, now);
   } catch (e) {
     if (!e.message.includes('UNIQUE')) throw e;
   }
@@ -1089,6 +1105,69 @@ describe('lib/workerNotificacionesPush', () => {
     expect(fila.estado).not.toBeNull();
     // Si tiene intentos > 2, significa que fue reseteada y reintentada en este tick
     // (intentos empezó en 2, fue reseteado a 0, y se intentó al menos 1 vez)
+
+    db.close();
+  });
+
+  // Importante 2 (revisión Tarea 5): revocarPorRespuesta se agregó al worker en esta tarea,
+  // pero el mock ignoraba el 3er argumento y nunca devolvía un motivo terminal, así que la
+  // revocación corría siempre como no-op en la suite. Estos tests la ejercitan de verdad.
+  it('revoca el token cuando enviarNotificacion devuelve un motivo terminal (Unregistered)', async () => {
+    mockState.resetCallCount();
+    mockState.clearFailure();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-terminal-unregistered';
+    seedDevice(db, 1, deviceToken, 'ios');
+    seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    mockState.setShouldFailOnDevice(deviceToken);
+    mockState.setFailureResult({ ok: false, reason: 'Unregistered' });
+
+    await procesarNotificacionesPush(db);
+
+    const fila = db.prepare('SELECT revocado_en FROM device_tokens WHERE token = ?').get(deviceToken);
+    expect(fila.revocado_en).not.toBeNull();
+
+    db.close();
+  });
+
+  it('NO revoca el token cuando enviarNotificacion devuelve un motivo pasajero (429)', async () => {
+    mockState.resetCallCount();
+    mockState.clearFailure();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-pasajero-429';
+    seedDevice(db, 1, deviceToken, 'ios');
+    seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    mockState.setShouldFailOnDevice(deviceToken);
+    mockState.setFailureResult({ ok: false, reason: 'TooManyRequests', reintentable: true });
+
+    await procesarNotificacionesPush(db);
+
+    const fila = db.prepare('SELECT revocado_en FROM device_tokens WHERE token = ?').get(deviceToken);
+    expect(fila.revocado_en).toBeNull();
+
+    db.close();
+  });
+
+  it('propaga entorno: dev.entorno al enviar la notificación', async () => {
+    mockState.resetCallCount();
+    mockState.clearFailure();
+    const db = openDb(TEST_DB);
+    seedUser(db, { id: 1 });
+    seedPreferencias(db, 1);
+    const deviceToken = 'device-sandbox-entorno';
+    seedDeviceConEntorno(db, 1, deviceToken, 'sandbox');
+    seedIncidente(db, { severidad: 'critico', estado: 'activo' });
+
+    await procesarNotificacionesPush(db);
+
+    expect(mockState.getCallCount()).toBeGreaterThan(0);
+    expect(mockState.getLastOpciones()).toEqual({ entorno: 'sandbox' });
 
     db.close();
   });

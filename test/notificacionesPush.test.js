@@ -1,6 +1,11 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
 import { enviarNotificacion, tokenValido, tipoNotificacionValido, validarConfiguracionPush } from '../lib/notificacionesPush.js';
+import { enviarApns } from '../lib/apnsClient.js';
+
+vi.mock('../lib/apnsClient.js', () => ({
+  enviarApns: vi.fn(),
+}));
 
 describe('notificacionesPush', () => {
   const originalProvider = process.env.PUSH_PROVIDER;
@@ -252,6 +257,96 @@ describe('notificacionesPush', () => {
     it('en produccion exige la configuracion completa de apns', () => {
       expect(() => validarConfiguracionPush({ NODE_ENV: 'production', PUSH_PROVIDER: 'apns' }))
         .toThrow(/APNS/i);
+    });
+
+    describe('enviarNotificacion arma el envio a apns', () => {
+      beforeEach(() => {
+        process.env.PUSH_PROVIDER = ENV_BASE.PUSH_PROVIDER;
+        process.env.APNS_KEY_ID = ENV_BASE.APNS_KEY_ID;
+        process.env.APNS_TEAM_ID = ENV_BASE.APNS_TEAM_ID;
+        process.env.APNS_BUNDLE_ID = ENV_BASE.APNS_BUNDLE_ID;
+        process.env.APNS_PRIVATE_KEY = ENV_BASE.APNS_PRIVATE_KEY;
+        enviarApns.mockReset();
+        enviarApns.mockResolvedValue({ ok: true, status: 200 });
+      });
+
+      afterEach(() => {
+        delete process.env.APNS_KEY_ID;
+        delete process.env.APNS_TEAM_ID;
+        delete process.env.APNS_BUNDLE_ID;
+        delete process.env.APNS_PRIVATE_KEY;
+      });
+
+      it('manda los datos de enrutamiento FUERA de aps, como strings', async () => {
+        await enviarNotificacion('device-token-abc', {
+          titulo: 'Nuevo caso',
+          cuerpo: 'Hay un caso nuevo',
+          inbox_id: 42,
+          deep_link: 'inbox/42',
+          case_type: 'reclamo',
+          event_id: 7,
+        });
+
+        expect(enviarApns).toHaveBeenCalledTimes(1);
+        const [token, body] = enviarApns.mock.calls[0];
+        expect(token).toBe('device-token-abc');
+        expect(body.inbox_id).toBe('42');
+        expect(body.deep_link).toBe('inbox/42');
+        expect(body.case_type).toBe('reclamo');
+        expect(body.event_id).toBe('7');
+        expect(body.aps.inbox_id).toBeUndefined();
+        expect(body.aps.deep_link).toBeUndefined();
+      });
+
+      it('mapea categoryId a aps.category e interruptionLevel a aps["interruption-level"]', async () => {
+        await enviarNotificacion('device-token-abc', {
+          titulo: 'Nuevo caso',
+          cuerpo: 'Hay un caso nuevo',
+          categoryId: 'CASO_NUEVO',
+          interruptionLevel: 'time-sensitive',
+        });
+
+        const [, body] = enviarApns.mock.calls[0];
+        expect(body.aps.category).toBe('CASO_NUEVO');
+        expect(body.aps['interruption-level']).toBe('time-sensitive');
+        expect(body.categoryId).toBeUndefined();
+        expect(body.interruptionLevel).toBeUndefined();
+      });
+
+      it('titulo y cuerpo van a aps.alert y no se duplican fuera de aps', async () => {
+        await enviarNotificacion('device-token-abc', { titulo: 'Hola', cuerpo: 'Mundo' });
+
+        const [, body] = enviarApns.mock.calls[0];
+        expect(body.aps.alert).toEqual({ title: 'Hola', body: 'Mundo' });
+        expect(body.titulo).toBeUndefined();
+        expect(body.cuerpo).toBeUndefined();
+      });
+
+      it('propaga el entorno recibido en opciones a enviarApns', async () => {
+        await enviarNotificacion('device-token-abc', { titulo: 'Hola', cuerpo: 'Mundo' }, { entorno: 'sandbox' });
+
+        const [, , opciones] = enviarApns.mock.calls[0];
+        expect(opciones.entorno).toBe('sandbox');
+      });
+
+      it('usa production como entorno por defecto si no se especifica', async () => {
+        await enviarNotificacion('device-token-abc', { titulo: 'Hola', cuerpo: 'Mundo' });
+
+        const [, , opciones] = enviarApns.mock.calls[0];
+        expect(opciones.entorno).toBe('production');
+      });
+
+      it('arma cfg completo desde el entorno para enviarApns', async () => {
+        await enviarNotificacion('device-token-abc', { titulo: 'Hola', cuerpo: 'Mundo' });
+
+        const [, , opciones] = enviarApns.mock.calls[0];
+        expect(opciones.cfg).toEqual({
+          keyId: ENV_BASE.APNS_KEY_ID,
+          teamId: ENV_BASE.APNS_TEAM_ID,
+          bundleId: ENV_BASE.APNS_BUNDLE_ID,
+          privateKey: ENV_BASE.APNS_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        });
+      });
     });
   });
 });
