@@ -64,6 +64,14 @@ describe('server', () => {
     expect(res.headers.location).toBe('/herramientas/home/');
   });
 
+  it('expone healthz sin sesión y confirma la integridad de SQLite', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const res = await request(app).get('/healthz');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, integridad: 'ok' });
+  });
+
   it('rejects API requests without sesión', async () => {
     const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;

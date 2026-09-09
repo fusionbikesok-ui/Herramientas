@@ -11,6 +11,7 @@ Habilitar la Gestión de pedidos para operación real mediante un despliegue con
 ## Alcance
 
 - Preflight determinista de configuración, backup, migraciones, muestra, permisos y smoke.
+- Health check `GET /healthz` para confirmar proceso y SQLite antes/después del despliegue.
 - Configuración final del VPS y variables de entorno.
 - Permisos y usuarios operativos definitivos.
 - Migraciones y backup previo al despliegue.
@@ -31,6 +32,6 @@ Habilitar la Gestión de pedidos para operación real mediante un despliegue con
 
 ## Gate
 
-Preflight implementado en `lib/gestionPedidosPublicacion.js`, con pruebas focalizadas en `test/gestionPedidosPublicacion.test.js`.
+Preflight implementado en `lib/gestionPedidosPublicacion.js`, con pruebas focalizadas en `test/gestionPedidosPublicacion.test.js`; health check agregado en `GET /healthz`.
 
 GP10 en desarrollo. Suite completa: no ejecutada para GP10.

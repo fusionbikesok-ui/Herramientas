@@ -76,6 +76,18 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   const db = openDb(dbPath);
   const app = express();
 
+  // Endpoint mínimo para health checks del despliegue. No expone credenciales ni datos
+  // operativos; sólo confirma que el proceso responde y SQLite está íntegro.
+  app.get('/healthz', (req, res) => {
+    try {
+      const integridad = db.prepare('PRAGMA integrity_check').get().integrity_check;
+      if (integridad !== 'ok') return res.status(503).json({ ok: false, integridad });
+      return res.json({ ok: true, integridad: 'ok' });
+    } catch (error) {
+      return res.status(503).json({ ok: false, error: 'base de datos no disponible' });
+    }
+  });
+
   app.set('trust proxy', 1); // detrás de Nginx
   // Ingesta firmada del chat: debe montarse antes de express.json para verificar el cuerpo crudo.
   app.use(chatEventsRouter(db));
