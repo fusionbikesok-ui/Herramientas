@@ -1,6 +1,6 @@
 # GP9: Validación operativa controlada
 
-**Estado:** desarrollo  
+**Estado:** candidata  
 **Superficie:** VPS / operación de tienda  
 **Dependencia:** GP8 publicada
 
@@ -39,4 +39,12 @@ Validar el flujo completo con una muestra acotada y reversible antes de habilita
 
 ## Gate
 
-No ejecutado todavía. GP9 acaba de abrirse tras el gate verde de GP8.
+Entregas internas completadas. Evidencia focalizada:
+
+- Backup verificable: `integrity_check=ok`.
+- Reconciliación de muestra con faltantes y duplicados: `ok` sólo con coincidencia exacta.
+- Checklist de jornada con pasos obligatorios y aceptación explícita.
+- Validación de acciones con usuario autorizado.
+- Pruebas focalizadas de Gestión de pedidos y GP9: `23/23` verdes.
+
+Suite completa en ejecución al cerrar GP9. Si queda verde y la jornada es aceptada, se publica GP9 y se abre GP10.
