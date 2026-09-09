@@ -58,7 +58,7 @@ npx eslint lib/gestionPedidos.js test/gestionPedidos.test.js
 
 Resultado: `1` archivo y `2` pruebas aprobados; ESLint aprobado. La segunda prueba verifica paginación independiente de Woo/ML y que la segunda importación no duplica pedidos.
 
-Se conectó la importación administrativa en `POST /api/gestion-pedidos/importar`. Por defecto toma los últimos 30 días; acepta `desde` y `hasta`, consulta WooCommerce con `status=any`, consulta MercadoLibre para los estados configurados y conserva la deduplicación relacional. El endpoint está detrás del guard general de `/api`, por lo que requiere sesión y permisos del panel.
+Se conectó la importación administrativa en `POST /api/gestion-pedidos/importar`. Por defecto toma los últimos 30 días; acepta `desde` y `hasta`, consulta WooCommerce con `status=any`, y consulta MercadoLibre recorriendo el universo de estados (`confirmed`, `payment_required`, `payment_in_process`, `partially_paid`, `paid`, `partially_refunded`, `pending_cancel`, `cancelled` y `manually_cancelled`). La lista se puede ajustar con `GESTION_PEDIDOS_ML_STATUSES` y conserva la deduplicación relacional. El endpoint está detrás del guard general de `/api`, por lo que requiere sesión y permisos del panel.
 
 Validación adicional: la ruta acepta adaptadores inyectables para pruebas. `test/gestionPedidosRoute.test.js` verifica el POST HTTP, el resumen JSON y la persistencia de dos pedidos sin red externa. En total, las pruebas focalizadas de GP2 son `3` aprobadas; ESLint aprobado para los módulos y pruebas de esta entrega.
 

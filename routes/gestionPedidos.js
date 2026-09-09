@@ -18,7 +18,12 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
   router.post('/importar', async (req, res) => {
     const desde = req.body?.desde || fechaHaceDias(30);
     const hasta = req.body?.hasta || new Date().toISOString();
-    const statusesMl = String(process.env.GESTION_PEDIDOS_ML_STATUSES || 'paid,cancelled').split(',').map(x => x.trim()).filter(Boolean);
+    // ML permite filtrar por varios estados separados por coma. Se consulta el universo
+    // explícito porque el buscador de vendedor no debe asumir que "paid" representa todas
+    // las órdenes: también hay órdenes sin pago confirmado, parcialmente reembolsadas o
+    // pendientes de cancelación. Puede ajustarse temporalmente por entorno si ML incorpora
+    // un estado nuevo.
+    const statusesMl = String(process.env.GESTION_PEDIDOS_ML_STATUSES || 'confirmed,payment_required,payment_in_process,partially_paid,paid,partially_refunded,pending_cancel,cancelled,manually_cancelled').split(',').map(x => x.trim()).filter(Boolean);
     try {
       const resultados = await importarVentanaGestionPedidos(db, {
         desde,
