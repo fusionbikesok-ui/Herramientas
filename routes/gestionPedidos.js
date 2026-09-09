@@ -69,9 +69,21 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       (pedido_id,accion,producto_nombre,sku,cantidad,motivo,diferencia_contado_centavos,diferencia_financiada_centavos,cuotas,actor,creado_en)
       VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(pedidoId, accion, nombre, req.body?.sku || null, cantidad, motivo,
       Number(req.body?.diferencia_contado_centavos || 0), req.body?.diferencia_financiada_centavos ?? null, req.body?.cuotas ?? null, actor, now);
+    let stock = null;
+    if (motivo === 'falla_stock' && req.body?.sku) {
+      try {
+        const producto = db.prepare('SELECT stock FROM catalogo_cache WHERE sku=? ORDER BY id LIMIT 1').get(String(req.body.sku));
+        if (producto && Number.isFinite(Number(producto.stock))) {
+          const anterior = Number(producto.stock);
+          const nuevo = Math.max(0, anterior - cantidad);
+          db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE sku=?').run(nuevo, now, String(req.body.sku));
+          stock = { sku: String(req.body.sku), anterior, nuevo, cantidad };
+        }
+      } catch (_) { /* instalaciones sin catálogo aún conservan el cambio auditable */ }
+    }
     db.prepare(`INSERT INTO gestion_pedido_eventos (pedido_id,evento,actor_tipo,datos_json,creado_en) VALUES (?, 'cambio_producto', 'usuario', ?, ?)`)
-      .run(pedidoId, JSON.stringify({ cambio_id: cambio.lastInsertRowid, accion, motivo, sku: req.body?.sku || null, cantidad }), now);
-    return res.status(201).json({ ok: true, cambio: db.prepare('SELECT * FROM gestion_pedido_cambios WHERE id=?').get(cambio.lastInsertRowid) });
+      .run(pedidoId, JSON.stringify({ cambio_id: cambio.lastInsertRowid, accion, motivo, sku: req.body?.sku || null, cantidad, stock }), now);
+    return res.status(201).json({ ok: true, cambio: db.prepare('SELECT * FROM gestion_pedido_cambios WHERE id=?').get(cambio.lastInsertRowid), stock });
   });
   router.post('/:id/reintegros/:reintegroId/marcar', (req, res) => {
     const id = Number(req.params.reintegroId); const now = new Date().toISOString();
