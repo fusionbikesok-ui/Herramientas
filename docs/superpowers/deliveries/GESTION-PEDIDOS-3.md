@@ -1,6 +1,6 @@
 # GP3: Importación inicial WooCommerce/MercadoLibre
 
-**Estado:** candidata  
+**Estado:** publicada  
 **Superficie:** VPS  
 **Dependencia:** GP2 publicada
 
@@ -60,8 +60,14 @@ La primera tentativa fue registrada como corrida `id=2` fallida porque el filtro
 - `pedidos_cache` permaneció en 449 filas.
 - No se enviaron pedidos a preparación ni despacho.
 
+### Gate final 2026-09-09
+
+- Suite completa: `127` archivos pasaron, `1` omitido; `2401` pruebas pasaron, `51` omitidas.
+- Duración: `2667.36s`.
+- Resultado: verde; GP3 queda publicada y habilita GP4.
+
 ## Gates
 
 - Pruebas focalizadas de paginación, estados, duplicados entre filtros, fallo parcial y resumen.
 - Corrida controlada read-only o sobre muestra antes de escribir datos reales.
-- Suite completa sólo al cerrar la ficha; verde habilita merge directo y GP4.
+- Suite completa ejecutada al cerrar la ficha; verde habilita merge directo y GP4.

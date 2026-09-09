@@ -38,7 +38,7 @@ Actualizado: 2026-09-05. Estas fichas registran realidad; el plan maestro especi
 | UM1.6 | SKU canónico, corte estricto y retiro legacy | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.6-corte-y-retiro-legacy.md` |
 | GP1 | Diseño aprobado de Gestión de pedidos | candidata | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-1.md` |
 | GP2 | Modelo relacional e importación | publicada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-2.md` |
-| GP3 | Importación inicial WooCommerce/MercadoLibre | planificada | pendiente de crear al cerrar GP2 |
+| GP3 | Importación inicial WooCommerce/MercadoLibre | publicada | suite completa verde; habilita GP4 |
 | GP4 | Gestión funcional de pedidos | planificada | pendiente de crear al cerrar GP3 |
 | GP5 | Preparación por lote y checklist | planificada | pendiente de crear al cerrar GP4 |
 | GP6 | Despachos, agrupación y evidencia | planificada | pendiente de crear al cerrar GP5 |
