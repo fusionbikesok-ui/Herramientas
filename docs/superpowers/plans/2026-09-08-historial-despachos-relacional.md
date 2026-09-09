@@ -12,6 +12,8 @@ La navegación de **Gestión de pedidos** tendrá solo tres pills, en este orden
 
 **Requieren atención** incluirá todos los pedidos activos que todavía no tienen un cierre confirmado, no solo las excepciones. Esto contempla pedidos confirmados pendientes de decidir o derivar, retiros en local pendientes de marcar como retirados y pedidos con pago, datos, sincronización o incidencia pendiente. Un pedido de retiro sale de esta vista únicamente cuando queda registrado como **retirado/completado**. Cancelados y carritos abandonados se gestionan en Recuperar ventas; pedidos cerrados permanecen en Todos.
 
+Los contadores **En preparación** y **Despachos** abrirán vistas filtradas dentro de Gestión de pedidos, sin redirigir a otra pantalla. Mantendrán la misma lista, buscador y vista rápida derecha, mostrando los pedidos en esos estados. Las acciones físicas detalladas y el procesamiento de lotes continuarán ejecutándose en Gestión de envíos.
+
 ### Buscador de Gestión de pedidos
 
 El buscador será global y funcionará desde cualquiera de las tres pills. Permitirá buscar por número de pedido, identificador externo de WooCommerce o MercadoLibre, nombre o apellido, email, teléfono, SKU, **EAN** y nombre de producto. Los resultados indicarán el campo coincidente, canal, cliente, fecha, estado e importe. La búsqueda no cambiará automáticamente de pill: si encuentra un pedido fuera de la vista actual, ofrecerá abrirlo en **Todos los pedidos**.
