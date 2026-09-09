@@ -17,6 +17,12 @@ try {
   if (page.url() !== `${base}/gestion-pedidos/`) throw new Error(`listado redirigió a ${page.url()}`);
   await page.getByRole('button', { name: /Recuperar ventas/ }).click();
   if (!(await page.locator('#recovery').isVisible())) throw new Error('Recuperar ventas no se mostró');
+  await page.getByRole('button', { name: /En preparación/ }).click();
+  if (!(await page.locator('#preparation').isVisible())) throw new Error('En preparación no se mostró');
+  await page.getByRole('button', { name: /Despachos/ }).click();
+  if (!(await page.locator('#dispatch').isVisible())) throw new Error('Despachos no se mostró');
+  await page.getByRole('button', { name: /Todos los pedidos/ }).click();
+  if (!(await page.locator('#orders').isVisible())) throw new Error('Todos los pedidos no se mostró');
   await page.goto(`${base}/gestion-pedidos/pedidos/1001`, { waitUntil: 'domcontentloaded', timeout: 5000 });
   await page.waitForTimeout(300);
   if (page.url() !== `${base}/gestion-pedidos/pedidos/1001`) throw new Error(`detalle redirigió a ${page.url()}`);
