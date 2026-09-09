@@ -35,6 +35,20 @@ Importar de forma controlada el último mes de pedidos de WooCommerce y MercadoL
 
 Se agregó `gestion_pedido_importaciones` y el endpoint ahora registra cada corrida como `iniciada`, `completada` o `fallida`, con ventana, cantidades, resumen y error. La prueba HTTP conserva la persistencia de pedidos y la suite focalizada de esquema/importación quedó en `13/13` pruebas verdes; ESLint aprobado.
 
+### Muestra controlada en VPS 2026-09-09
+
+Se ejecutó una muestra de sólo 24 horas con lectura de WooCommerce/MercadoLibre y escritura únicamente en `gestion_*`:
+
+- 27 pedidos importados: 20 WooCommerce y 7 MercadoLibre.
+- 27 creados, 0 actualizados, 0 duplicados.
+- WooCommerce: 16 confirmados, 2 cancelados y 2 fallidos.
+- MercadoLibre: 6 confirmados y 1 cancelado.
+- 34 ítems relacionados persistidos.
+- `pedidos_cache` quedó con 449 filas y no fue modificado por el importador.
+- Corrida auditada como `gestion_pedido_importaciones.id=1`.
+
+La muestra no habilitó preparación ni despacho. El proceso activo debe reiniciarse antes de usar el endpoint administrativo, para cargar las migraciones 095/096 en memoria.
+
 ## Gates
 
 - Pruebas focalizadas de paginación, estados, duplicados entre filtros, fallo parcial y resumen.
