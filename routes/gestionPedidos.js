@@ -15,6 +15,13 @@ function exigirRespuesta(resp, nombre) {
 /** Router administrativo para la importación inicial/reconciliación manual. */
 export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride }) {
   const router = express.Router();
+  router.get('/importar/config', (_req, res) => res.json({
+    ok: true,
+    woocommerce: Boolean(woo?.url && woo?.ck && woo?.cs),
+    mercadolibre: Boolean(ml?.clientId && ml?.clientSecret && ml?.userId),
+    ventana_por_defecto_dias: 30,
+    estados_ml: String(process.env.GESTION_PEDIDOS_ML_STATUSES || 'confirmed,payment_required,payment_in_process,partially_paid,paid,partially_refunded,pending_cancel,cancelled,manually_cancelled').split(',').map(x => x.trim()).filter(Boolean),
+  }));
   router.post('/importar', async (req, res) => {
     const desde = req.body?.desde || fechaHaceDias(30);
     const hasta = req.body?.hasta || new Date().toISOString();

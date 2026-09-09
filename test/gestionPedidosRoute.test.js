@@ -16,6 +16,17 @@ function dbPrueba() {
 }
 
 describe('POST /api/gestion-pedidos/importar', () => {
+  it('expone el estado de configuración sin credenciales', async () => {
+    const db = dbPrueba();
+    const app = express();
+    app.use('/api/gestion-pedidos', gestionPedidosRouter(db, { woo: { url: 'https://woo.test', ck: 'ck', cs: 'cs' }, ml: { clientId: 'id', clientSecret: 'secret', userId: '1' } }));
+    const response = await request(app).get('/api/gestion-pedidos/importar/config');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, woocommerce: true, mercadolibre: true });
+    expect(JSON.stringify(response.body)).not.toContain('secret');
+    db.close();
+  });
+
   it('importa por HTTP con adaptadores simulados y devuelve el resumen', async () => {
     const db = dbPrueba();
     const app = express();
