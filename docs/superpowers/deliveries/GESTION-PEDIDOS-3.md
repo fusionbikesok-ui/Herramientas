@@ -1,6 +1,6 @@
 # GP3: Importación inicial WooCommerce/MercadoLibre
 
-**Estado:** desarrollo  
+**Estado:** candidata  
 **Superficie:** VPS  
 **Dependencia:** GP2 publicada
 
