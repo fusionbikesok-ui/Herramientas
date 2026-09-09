@@ -1257,7 +1257,7 @@ La nueva Gestión de pedidos se ejecuta como una línea de entregas propia, para
 | GP9 | Validación operativa controlada: datos reales acotados, backup, rollback, capacitación y jornada observada | GP8 |
 | GP10 | Publicación: migración definitiva y habilitación diaria | GP9 aceptada |
 
-GP1 no se considera cerrada mientras la preview no cubra las cinco vistas y sus estados principales. GP2 no reemplaza ni elimina el historial existente hasta que el modelo relacional haya sido verificado y la importación sea idempotente. GP6 mantiene separada la decisión de despacho de la gestión general del pedido.
+GP1 no se considera cerrada mientras la preview no cubra las cinco vistas y sus estados principales. GP2 no reemplaza ni elimina el historial existente hasta que el modelo relacional haya sido verificado y la importación sea idempotente. GP6 mantiene separada la decisión de despacho de la gestión general del pedido. GP4 quedó publicada con listado/detalle relacional, búsqueda por EAN y enlace a WooCommerce; GP5 queda abierta para lote y checklist.
 
 ### Gate de suite y merge por entrega
 

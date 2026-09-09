@@ -39,7 +39,8 @@ Actualizado: 2026-09-05. Estas fichas registran realidad; el plan maestro especi
 | GP1 | Diseño aprobado de Gestión de pedidos | candidata | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-1.md` |
 | GP2 | Modelo relacional e importación | publicada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-2.md` |
 | GP3 | Importación inicial WooCommerce/MercadoLibre | publicada | suite completa verde; habilita GP4 |
-| GP4 | Gestión funcional de pedidos | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-4.md` |
+| GP4 | Gestión funcional de pedidos | publicada | suite completa verde; habilita GP5 |
+| GP5 | Preparación por lote y checklist | desarrollo | pendiente de crear implementación |
 | GP5 | Preparación por lote y checklist | planificada | pendiente de crear al cerrar GP4 |
 | GP6 | Despachos, agrupación y evidencia | planificada | pendiente de crear al cerrar GP5 |
 | GP7 | Recuperar ventas | planificada | pendiente de crear al cerrar GP4 |

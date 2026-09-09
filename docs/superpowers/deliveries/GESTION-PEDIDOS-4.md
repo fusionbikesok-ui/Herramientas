@@ -1,6 +1,6 @@
 # GP4: Gestión funcional de pedidos
 
-**Estado:** desarrollo  
+**Estado:** publicada  
 **Superficie:** Home / VPS  
 **Dependencia:** GP2 y GP3 publicadas
 
@@ -31,3 +31,11 @@ Hacer que la Gestión de pedidos permita encontrar y consultar cualquier pedido 
 ## Gate
 
 Antes de cerrar se verificará la navegación de los cinco contadores, búsquedas por cada campo, detalle por URL y responsive móvil. Con la evidencia completa se ejecutará la suite total; si queda verde, se publica GP4 y se avanza a GP5.
+
+## Cierre 2026-09-09
+
+- Smoke de preview: verde (login, listado, Recuperar ventas, URL de detalle y render).
+- Pruebas focalizadas: `7/7` verdes.
+- Suite completa: `127` archivos pasaron, `1` omitido; `2405` pruebas pasaron, `51` omitidas.
+- Duración de la suite: `2270.19s`.
+- Resultado: verde; GP4 publicada y GP5 habilitada.
