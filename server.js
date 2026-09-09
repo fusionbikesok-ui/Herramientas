@@ -35,6 +35,7 @@ import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { preciosRouter } from './routes/precios.js';
 import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
+import { gestionPedidosRouter } from './routes/gestionPedidos.js';
 import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
 import { codigosRouter } from './routes/codigos.js';
@@ -404,6 +405,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/recepciones', recepcionesRouter(db, wooCfg));
   app.use('/recepcion', express.static(path.join(__dirname, 'public/recepcion')));
   app.use('/api/pedidos', pedidosRouter(db));
+  app.use('/api/gestion-pedidos', gestionPedidosRouter(db, { woo: wooCfg, ml: mlCfg }));
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
   app.get('/gestion-pedidos/pedidos/:id', authGuard, (req, res) => {
     const permitido = process.env.PEDIDOS_PREVIEW_USER || 'Matias';
