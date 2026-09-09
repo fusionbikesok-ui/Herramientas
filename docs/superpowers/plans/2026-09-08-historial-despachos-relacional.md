@@ -34,6 +34,8 @@ La edición del pedido se separa en dos acciones: **Editar datos**, que permite 
 
 En la lista de líneas existentes cada producto tendrá su propio botón **Remover**. La ventana de búsqueda tendrá únicamente **Agregar producto**; no habrá un reemplazo implícito. Para cambiar un producto se removerá la línea anterior y se agregará la nueva, dejando ambos cambios en la revisión previa.
 
+Remover exigirá seleccionar un motivo simple: **No lo quiso**, **No apto para la venta** o **Falla de stock**. La remoción no se confirma sin motivo y registra pedido, producto, cantidad, motivo, usuario, fecha y hora para auditoría.
+
 ### Cancelados y recuperación comercial
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados y carritos abandonados. La oportunidad permanece visible hasta el cierre del día hábil siguiente a su detección o cancelación; la interfaz debe mostrar explícitamente si el vencimiento es **hoy** o **mañana**, calculándolo desde la fecha del pedido/abandono y el calendario de la tienda. Después sale de esta vista y permanece en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.

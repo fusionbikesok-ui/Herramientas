@@ -132,6 +132,8 @@ El botón genérico “Editar pedido” se reemplaza por **Editar datos** —cli
 
 Cada línea existente tendrá un botón **Remover** y el buscador solo ofrecerá **Agregar producto**. Un reemplazo se modelará explícitamente como remover el producto anterior y agregar el nuevo, con revisión de cantidades, total y stock antes de guardar.
 
+La remoción exigirá seleccionar uno de tres motivos auditables: **No lo quiso**, **No apto para la venta** o **Falla de stock**. Sin motivo no se podrá confirmar el cambio.
+
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 
 La importación no implica despacho. Solo entran a la cola de envíos los pedidos que Woo coloque en “listo para enviar Andreani” o los que un usuario autorizado derive manualmente desde Gestión de pedidos. Una venta física o un pedido que no requiere envío permanece visible en Gestión de pedidos, pero no aparece como tarea logística.
