@@ -794,6 +794,20 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_importaciones_096')").run();
     })();
   }
+  const gestionPedidosRecuperacionMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='gestion_pedidos_recuperacion_097'").get();
+  if (!gestionPedidosRecuperacionMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '097_gestion_pedidos_recuperacion.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_recuperacion_097')").run();
+    })();
+  }
+  const gestionPedidosCambiosMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='gestion_pedidos_cambios_098'").get();
+  if (!gestionPedidosCambiosMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '098_gestion_pedidos_cambios.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_cambios_098')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {
