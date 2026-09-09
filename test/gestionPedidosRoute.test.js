@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gestionPedidosRouter } from '../routes/gestionPedidos.js';
+import { resolvePermiso, permiteAcceso } from '../lib/permisos.js';
 import { describe, expect, it } from 'vitest';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -18,6 +19,12 @@ function dbPrueba() {
 }
 
 describe('POST /api/gestion-pedidos/importar', () => {
+  it('aplica el permiso pedidos por método en toda la superficie relacional', () => {
+    expect(resolvePermiso('GET', '/gestion-pedidos/recuperar-ventas')).toMatchObject({ anyOf: ['pedidos'], nivel: 'read' });
+    expect(resolvePermiso('POST', '/gestion-pedidos/recuperar-ventas/1/contactar')).toMatchObject({ anyOf: ['pedidos'], nivel: 'write' });
+    expect(permiteAcceso([{ herramienta: 'pedidos', nivel: 'read' }], resolvePermiso('GET', '/gestion-pedidos'))).toBe(true);
+    expect(permiteAcceso([{ herramienta: 'pedidos', nivel: 'read' }], resolvePermiso('POST', '/gestion-pedidos'))).toBe(false);
+  });
   it('lista y busca pedidos por cliente, SKU y EAN', async () => {
     const db = dbPrueba();
     const ahora = '2026-09-09T10:00:00Z';
