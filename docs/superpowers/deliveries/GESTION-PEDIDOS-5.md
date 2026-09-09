@@ -1,6 +1,6 @@
 # GP5: Preparación por lote y checklist
 
-**Estado:** candidata  
+**Estado:** publicada  
 **Superficie:** Gestión de pedidos + Gestión de envíos  
 **Dependencia:** GP4 publicada; catálogo y stock disponibles
 
@@ -41,3 +41,9 @@ Se validará el flujo con datos genéricos y luego con una muestra controlada: s
 - Pruebas de preparación existentes: `225/225` verdes.
 - Smoke de preview: verde.
 - La checklist existente conserva cantidades, estados, fotos, eventos y reingreso por detalle.
+
+## Gate final 2026-09-09
+
+- Suite completa: `128` archivos pasaron, `1` omitido; `2408` pruebas pasaron, `51` omitidas.
+- Duración: `2009.40s`.
+- Resultado: verde; GP5 publicada y GP6 habilitada.
