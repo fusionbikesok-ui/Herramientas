@@ -1,6 +1,6 @@
 # GP8: Integraciones, cuotas, stock y permisos
 
-**Estado:** desarrollo  
+**Estado:** candidata  
 **Superficie:** Gestión de pedidos / VPS  
 **Dependencia:** GP4, GP5, GP6 y GP7 publicadas
 
@@ -40,4 +40,13 @@ Completar las reglas que conectan la gestión de pedidos con WooCommerce y el in
 
 ## Gate
 
-No ejecutado todavía. GP8 acaba de abrirse tras el gate verde de GP7.
+Entregas internas completadas. Evidencia focalizada:
+
+- Permisos `pedidos` aplicados en servidor.
+- Cuotas explícitas de WooCommerce/MercadoLibre persistidas.
+- Cálculo de diferencias por cuotas sin inventar tasas.
+- Cambios, stock por falta de stock y reintegros auditables.
+- Actualización de WooCommerce antes de confirmar envío local.
+- Suite focalizada de Gestión de pedidos: `15/15` verdes.
+
+Suite completa en ejecución al cerrar GP8. Si queda verde, se publica GP8 y se abre GP9.

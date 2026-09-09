@@ -43,7 +43,7 @@ Actualizado: 2026-09-09. Estas fichas registran realidad; el plan maestro especi
 | GP5 | Preparación por lote y checklist | publicada | suite completa verde; habilita GP6 |
 | GP6 | Despachos, agrupación y evidencia | publicada | suite completa verde: 128 archivos, 2408 tests, 51 omitidos |
 | GP7 | Recuperar ventas | publicada | suite completa verde: 128 archivos, 2411 tests, 51 omitidos |
-| GP8 | Integraciones, cuotas, stock y permisos | desarrollo | Woo, cuotas, stock, reintegros, permisos y enlace a WooCommerce |
+| GP8 | Integraciones, cuotas, stock y permisos | candidata | gate de suite completa en curso |
 | GP9 | Validación operativa controlada | planificada | pendiente de crear al cerrar GP8 |
 | GP10 | Publicación | planificada | pendiente de crear al cerrar GP9 |
 
