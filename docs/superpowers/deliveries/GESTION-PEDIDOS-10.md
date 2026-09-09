@@ -50,4 +50,20 @@ Preflight implementado en `lib/gestionPedidosPublicacion.js`, con pruebas focali
 
 Siguiente bloque: ejecutar la primera jornada observada y completar el checklist operativo; GP10 no se considera aceptada antes de esa evidencia.
 
+## Runbook de jornada observada
+
+El supervisor debe registrar fecha, usuario y hora de cada paso, usando un pedido de muestra que no tenga riesgo comercial:
+
+1. Verificar el backup y abrir Gestión de pedidos con un usuario de lectura.
+2. Consultar un pedido confirmado y validar cliente, productos, importes, imágenes y estado.
+3. Pasar un pedido de muestra a preparación mediante la acción autorizada.
+4. Completar el checklist de preparación y comprobar que el estado cambia una sola vez.
+5. Simular el armado de despacho con tracking externo, verificando auditoría y no duplicación.
+6. Consultar fotos de preparación desde el detalle del pedido.
+7. Probar una acción de edición con usuario sin `pedidos:write` y confirmar rechazo.
+8. Ejecutar una lectura de Recuperar ventas y confirmar que no contacta automáticamente.
+9. Revisar el evento de cada acción y ejecutar el cierre/rollback de la muestra.
+
+La jornada se acepta sólo si todos los pasos tienen evidencia, no hay duplicados ni mutaciones inesperadas y el supervisor firma el checklist. Hasta entonces GP10 permanece en `desarrollo`.
+
 GP10 en desarrollo. Suite completa: no ejecutada para GP10.
