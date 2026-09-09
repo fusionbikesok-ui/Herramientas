@@ -68,6 +68,16 @@ Se inspeccionó únicamente la presencia de variables en el entorno del proceso 
 
 Validación adicional: la ruta acepta adaptadores inyectables para pruebas. `test/gestionPedidosRoute.test.js` verifica el GET de configuración sin secretos, el POST HTTP, el resumen JSON y la persistencia de dos pedidos sin red externa. En total, las pruebas focalizadas de GP2 son `4` aprobadas; ESLint aprobado para los módulos y pruebas de esta entrega.
 
+### Suite completa 2026-09-09 — segundo gate
+
+Comando:
+
+```text
+npm test -- --reporter=dot --no-file-parallelism
+```
+
+Resultado: **verde**. `127` archivos de test pasaron, `1` quedó omitido; `2400` pruebas pasaron y `51` quedaron omitidas (`2451` totales). Duración: `2246.08s`. El primer gate detectó y corrigió la expectativa explícita de tablas en `test/db.test.js`; esta segunda ejecución valida el estado corregido.
+
 ## Gates
 
 - Pruebas focalizadas de esquema, idempotencia, relaciones y casos Woo/ML/físicos/cancelados.
