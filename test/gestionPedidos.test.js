@@ -50,4 +50,19 @@ describe('Gestión de pedidos relacional', () => {
     expect(db.prepare('SELECT count(*) AS n FROM gestion_pedidos').get().n).toBe(2);
     db.close();
   });
+
+  it('persiste únicamente las cuotas explícitas de Woo y MercadoLibre', async () => {
+    const db = dbPrueba();
+    await importarVentanaGestionPedidos(db, {
+      desde: '2026-09-01T00:00:00Z', porPagina: 10,
+      listarWoo: async () => [{ id: 21, number: '21', date_created: '2026-09-01T00:00:00Z', status: 'processing', payment_method: 'tarjeta', meta_data: [{ key: 'installments', value: '6' }], billing: {}, line_items: [] }],
+      listarMl: async () => [{ id: 'ML-21', date_created: '2026-09-01T00:00:00Z', status: 'paid', buyer: {}, payments: [{ payment_type: 'credit_card', installments: 3, status: 'approved' }], order_items: [] }],
+    });
+    const filas = db.prepare('SELECT fuente, pago_metodo, pago_estado, cuotas FROM gestion_pedidos ORDER BY fuente').all();
+    expect(filas).toEqual([
+      { fuente: 'mercadolibre', pago_metodo: 'credit_card', pago_estado: 'approved', cuotas: 3 },
+      { fuente: 'woocommerce', pago_metodo: 'tarjeta', pago_estado: null, cuotas: 6 },
+    ]);
+    db.close();
+  });
 });
