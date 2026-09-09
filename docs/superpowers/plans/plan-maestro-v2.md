@@ -138,6 +138,8 @@ Al agregar, remover o cambiar cantidades se mostrará la diferencia de precio an
 
 Los cambios se acumularán como pendientes y se aplicarán con un único botón **Confirmar cambios**, después de una revisión general de productos, motivos, cantidades, total, stock y diferencias económicas. **Descartar cambios** cancela toda la edición pendiente. Reintegrar y enviar a preparación permanecen como acciones posteriores separadas.
 
+La diferencia de precio respetará el método de pago y las cuotas del pedido. Por ejemplo, un adicional de $32.250 en un pedido pagado en 6 cuotas se mostrará como 6 cuotas adicionales de $5.375; un saldo a favor se presentará según el mismo esquema antes de permitir marcarlo como reintegrado.
+
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 
 La importación no implica despacho. Solo entran a la cola de envíos los pedidos que Woo coloque en “listo para enviar Andreani” o los que un usuario autorizado derive manualmente desde Gestión de pedidos. Una venta física o un pedido que no requiere envío permanece visible en Gestión de pedidos, pero no aparece como tarea logística.

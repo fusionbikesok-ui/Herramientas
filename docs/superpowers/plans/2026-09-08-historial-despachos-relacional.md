@@ -40,6 +40,8 @@ Toda adición, remoción o cambio de cantidad debe mostrar antes de guardar la d
 
 Toda edición del pedido se acumulará como cambio pendiente y tendrá una única revisión general. La revisión mostrará datos modificados, productos agregados/removidos, motivos, cantidades, diferencia económica e impacto de stock. Solo **Confirmar cambios** aplicará la operación completa; **Descartar cambios** la cancelará. El reintegro y el envío a preparación son acciones posteriores independientes.
 
+La diferencia económica se calculará según el método de pago y las cuotas originales del pedido. Si el pedido fue pagado en 6 cuotas y se agrega un producto, la revisión mostrará el saldo adicional dividido en 6 cuotas; si el cambio genera saldo a favor, mostrará el reintegro conforme a las condiciones del pago original. No se mostrará únicamente la diferencia bruta.
+
 ### Cancelados y recuperación comercial
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados y carritos abandonados. La oportunidad permanece visible hasta el cierre del día hábil siguiente a su detección o cancelación; la interfaz debe mostrar explícitamente si el vencimiento es **hoy** o **mañana**, calculándolo desde la fecha del pedido/abandono y el calendario de la tienda. Después sale de esta vista y permanece en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
