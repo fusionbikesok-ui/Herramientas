@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { importarGestionPedidos } from '../lib/gestionPedidos.js';
+import { importarGestionPedidos, importarVentanaGestionPedidos } from '../lib/gestionPedidos.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +25,29 @@ describe('Gestión de pedidos relacional', () => {
     expect(db.prepare('SELECT count(*) AS n FROM gestion_pedidos').get().n).toBe(2);
     expect(db.prepare("SELECT estado_comercial FROM gestion_pedidos WHERE fuente='mercadolibre'").get().estado_comercial).toBe('cancelado');
     expect(db.prepare('SELECT count(*) AS n FROM gestion_pedido_items').get().n).toBe(2);
+    db.close();
+  });
+
+  it('pagina ambos adaptadores y vuelve a importar sin duplicar', async () => {
+    const db = dbPrueba();
+    const wooPages = [[{ id: 10, number: '10', date_created: '2026-09-01T00:00:00Z', status: 'processing', billing: { first_name: 'W', email: 'w@example.com' }, line_items: [] }], []];
+    const mlPages = [[{ id: 'ML-10', date_created: '2026-09-01T00:00:00Z', status: 'paid', buyer: { nickname: 'ml-demo' }, order_items: [] }], []];
+    let wooCalls = 0; let mlCalls = 0;
+    const options = {
+      desde: '2026-09-01T00:00:00Z',
+      porPagina: 1,
+      listarWoo: async ({ pagina }) => wooPages[pagina - 1] || [],
+      listarMl: async ({ offset }) => mlPages[offset / 100] || [],
+    };
+    const first = await importarVentanaGestionPedidos(db, options);
+    expect(first).toHaveLength(2);
+    expect(db.prepare('SELECT count(*) AS n FROM gestion_pedidos').get().n).toBe(2);
+    options.listarWoo = async ({ pagina }) => { wooCalls += 1; return wooPages[pagina - 1] || []; };
+    options.listarMl = async ({ offset }) => { mlCalls += 1; return mlPages[offset / 100] || []; };
+    await importarVentanaGestionPedidos(db, options);
+    expect(wooCalls).toBe(2);
+    expect(mlCalls).toBe(2);
+    expect(db.prepare('SELECT count(*) AS n FROM gestion_pedidos').get().n).toBe(2);
     db.close();
   });
 });

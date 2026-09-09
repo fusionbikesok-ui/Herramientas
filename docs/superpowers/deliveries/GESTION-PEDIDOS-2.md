@@ -56,7 +56,7 @@ npx vitest run test/gestionPedidos.test.js --reporter=dot --no-file-parallelism
 npx eslint lib/gestionPedidos.js test/gestionPedidos.test.js
 ```
 
-Resultado: `1` archivo y `1` prueba aprobados; ESLint aprobado.
+Resultado: `1` archivo y `2` pruebas aprobados; ESLint aprobado. La segunda prueba verifica paginación independiente de Woo/ML y que la segunda importación no duplica pedidos.
 
 ## Gates
 
