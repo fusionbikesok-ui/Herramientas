@@ -1240,6 +1240,25 @@ Cada avance sobre UM1, aunque sea parcial o quede a medias, actualiza en el mism
 
 Cada entrega dura idealmente 3–5 días, es reversible/apagable por flag, actualiza maestro/memoria/ficha/SOP, se demuestra, pilota acotadamente y observa al menos una jornada. La ficha individual es la única fuente de progreso.
 
+### Línea específica de Gestión de pedidos
+
+La nueva Gestión de pedidos se ejecuta como una línea de entregas propia, paralela a la evolución de la herramienta de envíos. La herramienta de pedidos conserva todos los pedidos y su historial; la herramienta de envíos recibe únicamente los pedidos que entran en el flujo de despacho.
+
+| Entrega | Resultado tangible | Dependencia dominante |
+| --- | --- | --- |
+| GP1 | Diseño navegable aprobado: Requieren atención, En preparación, Despachos, Recuperar ventas y Todos; buscador, vista rápida y detalle con URL | Ninguna; preview aislada |
+| GP2 | Modelo relacional de pedidos, clientes, productos, ítems, estados, fuentes, eventos y auditoría | GP1 |
+| GP3 | Importación inicial del último mes de WooCommerce y MercadoLibre, incluyendo pedidos físicos, cancelados y carritos abandonados disponibles | GP2 |
+| GP4 | Gestión funcional desde Home: filtros, búsqueda por pedido/cliente/teléfono/SKU/EAN, edición de datos y cambios controlados | GP2–GP3 |
+| GP5 | Preparación por lote: selección múltiple, envío a preparación, checklist por producto, imágenes, cantidades y faltantes | GP4; catálogo y stock |
+| GP6 | Despacho: listos para enviar, agrupación de pedidos, embalaje, tracking externo, fotos y evidencia | GP5 |
+| GP7 | Recuperar ventas: cancelados dentro del plazo, carritos abandonados, WhatsApp/email, contacto manual y deduplicación | GP3–GP4 |
+| GP8 | Integraciones y control: WooCommerce, cuotas, stock, reintegros, permisos, auditoría y enlace al pedido en WooCommerce | GP5–GP7 |
+| GP9 | Validación operativa controlada: datos reales acotados, backup, rollback, capacitación y jornada observada | GP8 |
+| GP10 | Publicación: migración definitiva y habilitación diaria | GP9 aceptada |
+
+GP1 no se considera cerrada mientras la preview no cubra las cinco vistas y sus estados principales. GP2 no reemplaza ni elimina el historial existente hasta que el modelo relacional haya sido verificado y la importación sea idempotente. GP6 mantiene separada la decisión de despacho de la gestión general del pedido.
+
 ### Gate de suite y merge por entrega
 
 Al finalizar cada entrega se ejecutará la **suite completa**, no solo pruebas focalizadas. Si el resultado es verde y la evidencia de la entrega está completa, se hará merge directo a la rama de integración y se continuará con la siguiente entrega. Si falla, la entrega vuelve a desarrollo, se corrige y se repite la suite completa; no se hace merge parcial ni se avanza dejando fallos conocidos. El despliegue final conserva el mismo criterio: suite completa verde antes de publicar.

@@ -36,6 +36,16 @@ Actualizado: 2026-09-05. Estas fichas registran realidad; el plan maestro especi
 | UM1.4 | Matching bilateral y segunda cola | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.4-matching-bilateral.md` |
 | UM1.5 | Experiencia completa web y App | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.5-experiencia-web-app.md` |
 | UM1.6 | SKU canónico, corte estricto y retiro legacy | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/UM1.6-corte-y-retiro-legacy.md` |
+| GP1 | Diseño aprobado de Gestión de pedidos | desarrollo | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-1.md` |
+| GP2 | Modelo relacional e importación | planificada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-2.md` |
+| GP3 | Importación inicial WooCommerce/MercadoLibre | planificada | pendiente de crear al cerrar GP2 |
+| GP4 | Gestión funcional de pedidos | planificada | pendiente de crear al cerrar GP3 |
+| GP5 | Preparación por lote y checklist | planificada | pendiente de crear al cerrar GP4 |
+| GP6 | Despachos, agrupación y evidencia | planificada | pendiente de crear al cerrar GP5 |
+| GP7 | Recuperar ventas | planificada | pendiente de crear al cerrar GP4 |
+| GP8 | Integraciones, cuotas, stock y permisos | planificada | pendiente de crear al cerrar GP7 |
+| GP9 | Validación operativa controlada | planificada | pendiente de crear al cerrar GP8 |
+| GP10 | Publicación | planificada | pendiente de crear al cerrar GP9 |
 
 Estados: `planificada → desarrollo → candidata → publicada → observada → aceptada`. Un estado no se infiere por código, número de commit o nombre de rama.
 

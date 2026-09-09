@@ -30,6 +30,17 @@ Cerrar el diseño navegable de Gestión de pedidos antes de implementar el model
 - Datos de acceso: `preview-admin` / `preview-only-123!`
 - Commits de diseño en `conteo-confiable`, último cambio registrado en `git log`.
 
+### Smoke focalizado 2026-09-09
+
+Comando ejecutado con Playwright/Chromium `--no-sandbox` contra la preview local:
+
+```text
+npx eslint scripts/gestion-pedidos-preview-smoke.mjs
+node scripts/gestion-pedidos-preview-smoke.mjs
+```
+
+Resultado: el lint no pudo ejecutarse porque falta `@eslint/js` en las dependencias instaladas; no se modificó `package-lock.json` para resolverlo dentro de esta entrega. El smoke Playwright sí pasó: login correcto; `/gestion-pedidos/` cargó; la pill **Recuperar ventas** abrió su vista; `/gestion-pedidos/pedidos/1001` mantuvo URL propia y mostró el detalle; no hubo errores de página. Captura: `output/playwright/gestion-pedidos-detail-final.png`.
+
 ## Criterios de aceptación
 
 - La vista rápida no duplica el formulario de edición.
