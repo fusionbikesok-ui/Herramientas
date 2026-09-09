@@ -20,7 +20,7 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
     woocommerce: Boolean(woo?.url && woo?.ck && woo?.cs),
     mercadolibre: Boolean(ml?.clientId && ml?.clientSecret && ml?.userId),
     ventana_por_defecto_dias: 30,
-    estados_ml: String(process.env.GESTION_PEDIDOS_ML_STATUSES || 'confirmed,payment_required,payment_in_process,partially_paid,paid,partially_refunded,pending_cancel,cancelled,manually_cancelled').split(',').map(x => x.trim()).filter(Boolean),
+    estados_ml: process.env.GESTION_PEDIDOS_ML_STATUSES ? process.env.GESTION_PEDIDOS_ML_STATUSES.split(',').map(x => x.trim()).filter(Boolean) : null,
   }));
   router.get('/importaciones', (req, res) => {
     const limite = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
@@ -31,12 +31,12 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
   router.post('/importar', async (req, res) => {
     const desde = req.body?.desde || fechaHaceDias(30);
     const hasta = req.body?.hasta || new Date().toISOString();
-    // ML permite filtrar por varios estados separados por coma. Se consulta el universo
-    // explícito porque el buscador de vendedor no debe asumir que "paid" representa todas
-    // las órdenes: también hay órdenes sin pago confirmado, parcialmente reembolsadas o
-    // pendientes de cancelación. Puede ajustarse temporalmente por entorno si ML incorpora
-    // un estado nuevo.
-    const statusesMl = String(process.env.GESTION_PEDIDOS_ML_STATUSES || 'confirmed,payment_required,payment_in_process,partially_paid,paid,partially_refunded,pending_cancel,cancelled,manually_cancelled').split(',').map(x => x.trim()).filter(Boolean);
+    // Sin override se usa únicamente la ventana de fechas: el buscador de vendedor devuelve
+    // el universo vigente sin depender de que cada estado documentado sea válido para la
+    // cuenta/API actual. El override sirve para corridas acotadas y se deduplica por ID.
+    const statusesMl = process.env.GESTION_PEDIDOS_ML_STATUSES
+      ? process.env.GESTION_PEDIDOS_ML_STATUSES.split(',').map(x => x.trim()).filter(Boolean)
+      : null;
     const iniciadoEn = new Date().toISOString();
     const corrida = db.prepare(`INSERT INTO gestion_pedido_importaciones (desde, hasta, estado, iniciado_en) VALUES (?, ?, 'iniciada', ?)`).run(desde, hasta, iniciadoEn);
     try {
@@ -48,10 +48,11 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
           const query = `/orders?status=any&after=${encodeURIComponent(after)}&before=${encodeURIComponent(before)}&orderby=date&order=asc&per_page=${limite}&page=${pagina}`;
           return exigirRespuesta(await wooFetch(woo, query), 'WooCommerce');
         }),
-        listarMl: listarMlOverride || (async ({ desde: from, offset, limite }) => {
+        listarMl: listarMlOverride || (async ({ desde: from, hasta: to, offset, limite }) => {
           const todas = [];
-          for (const status of statusesMl) {
-            const query = `/orders/search?seller=${encodeURIComponent(ml.userId)}&order.status=${encodeURIComponent(status)}&sort=date_asc&order.date_created.from=${encodeURIComponent(from)}&order.date_created.to=${encodeURIComponent(hasta)}&offset=${offset}&limit=${limite}`;
+          for (const status of statusesMl || [null]) {
+            const estado = status ? `&order.status=${encodeURIComponent(status)}` : '';
+            const query = `/orders/search?seller=${encodeURIComponent(ml.userId)}${estado}&sort=date_asc&order.date_created.from=${encodeURIComponent(from)}&order.date_created.to=${encodeURIComponent(to)}&offset=${offset}&limit=${limite}`;
             const data = exigirRespuesta(await mlFetch(db, ml, 'get', query), `MercadoLibre ${status}`);
             todas.push(...(data.results || []));
           }

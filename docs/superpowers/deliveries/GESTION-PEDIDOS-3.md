@@ -24,7 +24,7 @@ Importar de forma controlada el último mes de pedidos de WooCommerce y MercadoL
 ## Criterios de aceptación
 
 - La importación de WooCommerce consulta el último mes y conserva pedidos físicos y cancelados.
-- MercadoLibre recorre todos los estados configurados y no duplica una orden que aparezca en más de un filtro.
+- MercadoLibre consulta por ventana de fechas para traer el universo vigente; si se configura `GESTION_PEDIDOS_ML_STATUSES`, recorre esos filtros y deduplica una orden que aparezca en más de uno.
 - Una segunda corrida produce cero duplicados y sólo actualiza cambios.
 - Un fallo de una fuente no borra ni invalida los datos previamente importados de la otra.
 - Un pedido importado queda fuera de la cola de despacho hasta tener estado operativo habilitante.
@@ -48,6 +48,17 @@ Se ejecutó una muestra de sólo 24 horas con lectura de WooCommerce/MercadoLibr
 - Corrida auditada como `gestion_pedido_importaciones.id=1`.
 
 La muestra no habilitó preparación ni despacho. El proceso activo debe reiniciarse antes de usar el endpoint administrativo, para cargar las migraciones 095/096 en memoria.
+
+### Importación mensual controlada en VPS 2026-09-09
+
+La primera tentativa fue registrada como corrida `id=2` fallida porque el filtro ML `partially_paid` devolvió `400`. Se corrigió el adaptador para consultar el universo por ventana de fechas y la segunda tentativa quedó completada como corrida `id=3`:
+
+- 551 pedidos WooCommerce y 155 MercadoLibre recibidos.
+- 706 órdenes procesadas; 679 creadas y 27 ya existentes de la muestra de 24 horas.
+- 0 duplicados creados.
+- Estados persistidos: WooCommerce confirmado, cancelado, fallido y reembolsado; MercadoLibre confirmado y cancelado.
+- `pedidos_cache` permaneció en 449 filas.
+- No se enviaron pedidos a preparación ni despacho.
 
 ## Gates
 
