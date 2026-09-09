@@ -47,6 +47,17 @@ node --input-type=module - <<'NODE' ... NODE
 
 Resultado: `OK: GP2 migration tables, marker and relational insert`.
 
+Se agregó `lib/gestionPedidos.js` como servicio de persistencia de órdenes normalizadas y la prueba `test/gestionPedidos.test.js`. La importación usa la clave `(fuente, external_id)`, actualiza ítems de forma determinista, conserva cancelados y registra eventos sólo cuando cambia el estado.
+
+Pruebas focalizadas:
+
+```text
+npx vitest run test/gestionPedidos.test.js --reporter=dot --no-file-parallelism
+npx eslint lib/gestionPedidos.js test/gestionPedidos.test.js
+```
+
+Resultado: `1` archivo y `1` prueba aprobados; ESLint aprobado.
+
 ## Gates
 
 - Pruebas focalizadas de esquema, idempotencia, relaciones y casos Woo/ML/físicos/cancelados.
