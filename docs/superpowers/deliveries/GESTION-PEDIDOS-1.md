@@ -1,6 +1,6 @@
 # GP1: Diseño aprobado de Gestión de pedidos
 
-**Estado:** desarrollo  
+**Estado:** candidata  
 **Superficie:** VPS, preview aislada  
 **Rama:** `conteo-confiable`
 
@@ -41,6 +41,16 @@ node scripts/gestion-pedidos-preview-smoke.mjs
 
 Resultado: lint focalizado aprobado para el script y smoke Playwright aprobado: login correcto; `/gestion-pedidos/` cargó; las vistas **Recuperar ventas**, **En preparación**, **Despachos** y **Todos los pedidos** abrieron; `/gestion-pedidos/pedidos/1001` mantuvo URL propia, mostró el detalle y el acceso a WooCommerce; no hubo errores de página. La instalación local de dependencias se hizo sin modificar el lockfile versionado. Captura: `output/playwright/gestion-pedidos-detail-final.png`.
 
+### Suite completa 2026-09-09
+
+Comando:
+
+```text
+npm test -- --reporter=dot --no-file-parallelism
+```
+
+Resultado: **verde**. `125` archivos de test pasaron, `1` quedó omitido; `2396` pruebas pasaron y `51` quedaron omitidas (`2447` totales). Duración: `2209.72s`.
+
 ## Criterios de aceptación
 
 - La vista rápida no duplica el formulario de edición.
@@ -55,13 +65,13 @@ Resultado: lint focalizado aprobado para el script y smoke Playwright aprobado: 
 - El detalle muestra imágenes grandes, SKU, EAN, cantidad y precio.
 - La suite completa se ejecuta solo al cerrar esta ficha y habilita merge únicamente si queda verde.
 
-## Pendientes antes del gate
+## Pendientes antes de publicar
 
 - Revisión visual final en escritorio y móvil.
 - Verificación manual de todas las rutas y modales de la preview.
 - Evidencia reproducible de autenticación y URL persistente.
 - Implementar o registrar el comando exacto de suite aplicable a esta entrega.
-- Ejecutar suite completa; si falla, corregir antes de merge.
+- Merge a la rama de integración y registro de la publicación.
 
 ## Siguiente entrega
 
