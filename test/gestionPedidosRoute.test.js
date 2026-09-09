@@ -31,6 +31,17 @@ describe('POST /api/gestion-pedidos/importar', () => {
     db.close();
   });
 
+  it('combina filtros comercial, operativo y fuente sin consultar pedidos_cache', async () => {
+    const db = dbPrueba(); const now = '2026-09-09T10:00:00Z';
+    const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,creado_en,actualizado_en) VALUES (?,?,?)').run('Cliente', now, now).lastInsertRowid;
+    const insert = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,numero_visible,estado_comercial,estado_operativo,importado_en,actualizado_en,creado_fuente_en) VALUES (?,?,?,?,?,?,?,?,?)`);
+    insert.run(cliente, 'woocommerce', '1', '#1', 'confirmado', 'importado', now, now, now);
+    insert.run(cliente, 'mercadolibre', '2', '#2', 'cancelado', 'cerrado', now, now, now);
+    const app = express(); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const response = await request(app).get('/api/gestion-pedidos?comercial=cancelado&estado=cerrado&fuente=mercadolibre');
+    expect(response.status).toBe(200); expect(response.body.total).toBe(1); expect(response.body.pedidos[0].external_id).toBe('2'); db.close();
+  });
+
   it('construye el enlace administrativo de WooCommerce en el detalle Woo', async () => {
     const db = dbPrueba(); const now = '2026-09-09T10:00:00Z';
     const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,creado_en,actualizado_en) VALUES (?,?,?)').run('Demo', now, now).lastInsertRowid;
