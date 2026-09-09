@@ -2,6 +2,7 @@ import express from 'express';
 import { wooFetch } from './woo.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { importarVentanaGestionPedidos } from '../lib/gestionPedidos.js';
+import { calcularDiferenciaPorCuotas } from '../lib/calculoCuotas.js';
 
 function fechaHaceDias(dias) {
   return new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
@@ -45,6 +46,14 @@ function normalizarTelefonoArgentina(value) {
 /** Router administrativo para la importación inicial/reconciliación manual. */
 export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride }) {
   const router = express.Router();
+  router.post('/calcular-diferencia', (req, res) => {
+    const resultado = calcularDiferenciaPorCuotas({
+      diferenciaContadoCentavos: req.body?.diferencia_contado_centavos,
+      cuotas: req.body?.cuotas,
+      coeficiente: req.body?.coeficiente,
+    });
+    return resultado.ok ? res.json(resultado) : res.status(422).json(resultado);
+  });
   router.post('/recuperar-ventas/importar-carritos', (req, res) => {
     const carritos = Array.isArray(req.body?.carritos) ? req.body.carritos : [];
     if (carritos.length > 1000) return res.status(400).json({ ok: false, error: 'demasiados carritos' });

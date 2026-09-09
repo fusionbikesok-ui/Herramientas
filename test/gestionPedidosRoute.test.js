@@ -25,6 +25,14 @@ describe('POST /api/gestion-pedidos/importar', () => {
     expect(permiteAcceso([{ herramienta: 'pedidos', nivel: 'read' }], resolvePermiso('GET', '/gestion-pedidos'))).toBe(true);
     expect(permiteAcceso([{ herramienta: 'pedidos', nivel: 'read' }], resolvePermiso('POST', '/gestion-pedidos'))).toBe(false);
   });
+
+  it('calcula diferencia financiada sólo con cuotas y tasa explícitas', async () => {
+    const db = dbPrueba(); const app = express(); app.use(express.json()); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const ok = await request(app).post('/api/gestion-pedidos/calcular-diferencia').send({ diferencia_contado_centavos: 200000, cuotas: 6, coeficiente: 1.125 });
+    expect(ok.status).toBe(200); expect(ok.body).toMatchObject({ diferencia_financiada_centavos: 225000, importe_por_cuota_centavos: 37500 });
+    const missing = await request(app).post('/api/gestion-pedidos/calcular-diferencia').send({ diferencia_contado_centavos: 200000, cuotas: 6 });
+    expect(missing.status).toBe(422); expect(missing.body.code).toBe('TASA_NO_DISPONIBLE'); db.close();
+  });
   it('lista y busca pedidos por cliente, SKU y EAN', async () => {
     const db = dbPrueba();
     const ahora = '2026-09-09T10:00:00Z';
