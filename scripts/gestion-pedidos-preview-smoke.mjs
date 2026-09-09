@@ -27,6 +27,7 @@ try {
   await page.waitForTimeout(300);
   if (page.url() !== `${base}/gestion-pedidos/pedidos/1001`) throw new Error(`detalle redirigió a ${page.url()}`);
   if (!(await page.locator('#full-order').isVisible())) throw new Error('detalle completo no se mostró');
+  if (!(await page.getByRole('button', { name: /Abrir en WooCommerce/ }).isVisible())) throw new Error('enlace a WooCommerce no se mostró');
   if (errors.length) throw new Error(`errores de página: ${errors.join('; ')}`);
   await page.screenshot({ path: 'output/playwright/gestion-pedidos-detail-final.png', fullPage: true });
   console.log('OK: login, listado, Recuperar ventas, URL de detalle y render sin errores');
