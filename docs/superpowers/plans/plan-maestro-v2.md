@@ -140,7 +140,7 @@ Los cambios se acumularán como pendientes y se aplicarán con un único botón 
 
 La diferencia de precio respetará el método de pago y las cuotas del pedido. Por ejemplo, un adicional de $32.250 en un pedido pagado en 6 cuotas se mostrará como 6 cuotas adicionales de $5.375; un saldo a favor se presentará según el mismo esquema antes de permitir marcarlo como reintegrado.
 
-El VPS automatizará la lectura de cuotas desde `_fusion_mp_installments` y usará los coeficientes `fusion_coef_*` de Master Control. El precio de contado será el precio base del producto; para productos nuevos se aplicará el coeficiente del plan del pedido y se mostrará la diferencia financiada por cuota.
+Master Control permanecerá en WordPress. El VPS automatizará la lectura de cuotas desde el metadato WooCommerce `_fusion_mp_installments`, pero no accederá directamente a los archivos u opciones del plugin. Para productos nuevos, WordPress deberá exponer mediante una integración autenticada el coeficiente/plan aplicable o el precio financiado calculado; el VPS usará ese dato junto con el precio de contado y mostrará la diferencia por cuota.
 
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 

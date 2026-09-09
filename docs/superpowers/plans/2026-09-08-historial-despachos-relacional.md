@@ -42,7 +42,7 @@ Toda edición del pedido se acumulará como cambio pendiente y tendrá una únic
 
 La diferencia económica se calculará según el método de pago y las cuotas originales del pedido. Si el pedido fue pagado en 6 cuotas y se agrega un producto, la revisión mostrará el saldo adicional dividido en 6 cuotas; si el cambio genera saldo a favor, mostrará el reintegro conforme a las condiciones del pago original. No se mostrará únicamente la diferencia bruta.
 
-La automatización leerá la cantidad real de cuotas desde el metadato WooCommerce `_fusion_mp_installments`. El precio de contado será el precio base actual del producto y el importe financiado se calculará aplicando el coeficiente del plan provisto por Master Control (`fusion_coef_3`, `fusion_coef_6`, `fusion_coef_9`, `fusion_coef_12`, `fusion_coef_18` o `fusion_coef_24`). Los productos ya existentes conservarán el precio histórico del pedido; los nuevos usarán precio de contado y coeficiente del plan elegido.
+Master Control seguirá viviendo exclusivamente en WordPress. El VPS no leerá sus archivos, tablas ni opciones internas. La integración deberá sincronizar desde WooCommerce el metadato `_fusion_mp_installments` y, para calcular cambios, recibir mediante contrato autenticado el coeficiente/plan aplicable o un cálculo de precio financiado generado por WordPress. Los productos ya existentes conservarán el precio histórico del pedido; los nuevos usarán precio de contado y la regla de financiación confirmada por WordPress.
 
 ### Cancelados y recuperación comercial
 
