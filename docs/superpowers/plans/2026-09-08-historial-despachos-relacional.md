@@ -24,7 +24,7 @@ La pantalla específica del pedido será el lugar de trabajo detallado. Allí se
 
 ### Cancelados y recuperación comercial
 
-Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados y carritos abandonados. La oportunidad permanece visible hasta el cierre del día hábil siguiente a su detección o cancelación; después sale de esta vista y permanece en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
+Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados y carritos abandonados. La oportunidad permanece visible hasta el cierre del día hábil siguiente a su detección o cancelación; la interfaz debe mostrar explícitamente si el vencimiento es **hoy** o **mañana**, calculándolo desde la fecha del pedido/abandono y el calendario de la tienda. Después sale de esta vista y permanece en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
 
 La vista consolida los intentos por cliente usando identificador de cliente, email o teléfono. Si una persona tiene varios carritos o pedidos fallidos, muestra una sola oportunidad con el último intento y la cantidad de intentos acumulados. Si se detecta un pedido exitoso del mismo cliente durante la jornada, se retira la oportunidad de Recuperar ventas y no se muestran sus intentos fallidos.
 
