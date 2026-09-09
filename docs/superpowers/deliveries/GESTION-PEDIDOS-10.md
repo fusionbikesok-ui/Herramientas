@@ -44,6 +44,8 @@ Preflight implementado en `lib/gestionPedidosPublicacion.js`, con pruebas focali
 - Muestra controlada: `5/5` pedidos reconciliados, `0` faltantes y `0` duplicados; sin mutar estados.
 - Smoke autenticado de preview: login, listado, las cuatro vistas operativas, detalle con URL persistente, enlace a WooCommerce y cero errores de página.
 - Permisos: matriz de lectura/escritura y rutas de Gestión de pedidos verificadas con `39/39` tests focalizados verdes; las mutaciones requieren `pedidos:write`.
+- Diagnóstico previo de jornada: `706` pedidos y `0` incompletos; `611` confirmados/importados, `68` cancelados/cerrados, `25` fallidos/cerrados y `2` reembolsados/cerrados; `706` eventos auditables.
+- Historial de importación: una corrida fallida quedó seguida por una corrida completada de `706` pedidos; debe observarse la lectura operativa de este caso durante la jornada.
 - Suite completa para GP10: no ejecutada.
 
 Siguiente bloque: ejecutar la primera jornada observada y completar el checklist operativo; GP10 no se considera aceptada antes de esa evidencia.
