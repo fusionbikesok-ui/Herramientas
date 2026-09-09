@@ -37,6 +37,11 @@ function vencimientoRecuperacion(creado) {
   return cierreDia(fechaLocalArgentina(siguiente));
 }
 
+function normalizarTelefonoArgentina(value) {
+  const digits = String(value || '').replace(/\D/g, '').replace(/^54/, '').replace(/^9/, '');
+  return digits.length === 10 ? digits : null;
+}
+
 /** Router administrativo para la importación inicial/reconciliación manual. */
 export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride }) {
   const router = express.Router();
@@ -114,6 +119,29 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       (oportunidad_id,canal,actor,contactado_en,creado_en) VALUES (?,?,?,?,?)`)
       .run(oportunidad.id, canal, actor, ahora, ahora);
     return res.status(201).json({ ok: true, contacto: { id: contacto.lastInsertRowid, oportunidad_id: oportunidad.id, canal, actor, contactado_en: ahora } });
+  });
+  router.get('/recuperar-ventas/:id', (req, res) => {
+    const oportunidad = db.prepare(`SELECT o.*, p.numero_visible, p.total_centavos,
+      c.nombre AS cliente_nombre, c.email AS cliente_email, c.telefono AS cliente_telefono
+      FROM gestion_recuperacion_oportunidades o
+      LEFT JOIN gestion_pedidos p ON p.id=o.pedido_id
+      LEFT JOIN gestion_pedido_clientes c ON c.id=p.cliente_id
+      WHERE o.id=?`).get(req.params.id);
+    if (!oportunidad) return res.status(404).json({ ok: false, error: 'Oportunidad no encontrada' });
+    let datos = {};
+    try { datos = oportunidad.datos_json ? JSON.parse(oportunidad.datos_json) : {}; } catch { datos = {}; }
+    const items = oportunidad.pedido_id
+      ? db.prepare('SELECT nombre, cantidad, precio_unitario_centavos FROM gestion_pedido_items WHERE pedido_id=? ORDER BY id').all(oportunidad.pedido_id)
+      : (Array.isArray(datos.items) ? datos.items : Array.isArray(datos.line_items) ? datos.line_items : []);
+    const nombre = oportunidad.cliente_nombre || datos.name || datos.billing_name || 'cliente';
+    const email = oportunidad.cliente_email || datos.email || datos.billing_email || '';
+    const telefono = oportunidad.cliente_telefono || datos.phone || datos.billing_phone || '';
+    const lineas = items.map(item => `${item.nombre || item.name || 'Producto'} x${item.cantidad || item.qty || item.quantity || 1}`).join(', ') || 'los productos seleccionados';
+    return res.json({ ok: true, oportunidad: { ...oportunidad, datos, items, contacto: {
+      nombre, email, telefono, telefono_argentina: normalizarTelefonoArgentina(telefono),
+      asunto: `¿Pudiste completar tu compra? ${oportunidad.numero_visible || 'Carrito abandonado'}`,
+      cuerpo: `Hola ${nombre},\n\nVimos que tu compra no llegó a completarse. Habías seleccionado: ${lineas}.\n\n¿Tuviste algún problema con la compra, te arrepentiste o necesitás que te ayudemos con algo? Estamos para ayudarte.\n\nSaludos,\nFusion Bikes`,
+    } } });
   });
   router.get('/', (req, res) => {
     const limite = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);

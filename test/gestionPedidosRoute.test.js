@@ -124,6 +124,19 @@ describe('POST /api/gestion-pedidos/importar', () => {
     db.close();
   });
 
+  it('devuelve datos de contacto preparados sin registrar contacto', async () => {
+    const db = dbPrueba(); const now = '2026-09-08T12:00:00Z';
+    const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,email,telefono,creado_en,actualizado_en) VALUES (?,?,?,?,?)').run('Ana Demo', 'ana@example.com', '+54 9 11 5555 1234', now, now).lastInsertRowid;
+    const pedido = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,numero_visible,estado_comercial,estado_operativo,importado_en,actualizado_en,creado_fuente_en,cancelado_en) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(cliente, 'woocommerce', 'detail-1', '#D1', 'cancelado', 'cerrado', now, now, now, now).lastInsertRowid;
+    db.prepare(`INSERT INTO gestion_pedido_items (pedido_id,nombre,cantidad,creado_en,actualizado_en) VALUES (?,?,?,?,?)`).run(pedido, 'Casco demo', 2, now, now);
+    const app = express(); app.use(express.json()); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const lista = await request(app).get('/api/gestion-pedidos/recuperar-ventas');
+    const detail = await request(app).get(`/api/gestion-pedidos/recuperar-ventas/${lista.body.oportunidades[0].id}`);
+    expect(detail.status).toBe(200); expect(detail.body.oportunidad.contacto).toMatchObject({ email: 'ana@example.com', telefono_argentina: '1155551234' });
+    expect(detail.body.oportunidad.contacto.cuerpo).toContain('Casco demo x2');
+    expect(db.prepare('SELECT COUNT(*) AS n FROM gestion_recuperacion_contactos').get().n).toBe(0); db.close();
+  });
+
   it('importa por HTTP con adaptadores simulados y devuelve el resumen', async () => {
     const db = dbPrueba();
     const app = express();
