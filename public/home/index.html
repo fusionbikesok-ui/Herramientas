@@ -1022,7 +1022,7 @@ fetch('/api/auth/me').then(function(r) {
     var host = document.getElementById('notif-ml-banner');
     if (!d || (!d.total && !d.reclamos_sin_confirmar)) { host.innerHTML = ''; return; }
     var partes = [];
-    if (d.preguntas) partes.push(d.preguntas + (d.preguntas === 1 ? ' pregunta' : ' preguntas'));
+    if (d.preguntas) partes.push(d.preguntas + (d.preguntas === 1 ? ' pregunta respondible' : ' preguntas respondibles'));
     if (d.mensajes) partes.push(d.mensajes + (d.mensajes === 1 ? ' mensaje' : ' mensajes'));
     if (d.reclamos) partes.push(d.reclamos + (d.reclamos === 1 ? ' reclamo' : ' reclamos'));
     var desc = d.total ? 'Hay ' + partes.join(' y ') + (d.total === 1 ? ' pendiente' : ' pendientes') + ' en MercadoLibre.' : '';
@@ -1032,11 +1032,18 @@ fetch('/api/auth/me').then(function(r) {
     if (d.preguntas_sin_stock) desc += (desc ? ' ' : '') + 'De esas, '
       + d.preguntas_sin_stock + (d.preguntas_sin_stock === 1 ? ' es de una publicacion' : ' son de publicaciones')
       + ' pausada' + (d.preguntas_sin_stock === 1 ? '' : 's') + ' o sin stock.';
+    if (d.preguntas_no_accionables) desc += (desc ? ' ' : '') + d.preguntas_no_accionables
+      + (d.preguntas_no_accionables === 1 ? ' pregunta queda archivada' : ' preguntas quedan archivadas')
+      + ' porque no se pueden responder desde la publicación actual.';
     // Jobs de integracion que agotaron reintentos y quedaron muertos. Hasta ahora NADA los
     // mostraba: se quedaban ahi para siempre y nadie se enteraba.
-    if (d.dead_letters) desc += (desc ? ' ' : '') + 'Hay ' + d.dead_letters
-      + (d.dead_letters === 1 ? ' aviso de MercadoLibre que no se pudo procesar' : ' avisos de MercadoLibre que no se pudieron procesar')
-      + ' y agotaron sus reintentos.';
+    if (d.dead_letters) {
+      var nombresAvisos = {'message.project':'mensajes', 'question.project':'preguntas', 'catalog.woo_product_sync':'sincronizaciones de catálogo'};
+      var gruposAvisos = (d.dead_letter_groups || []).map(function(g) {
+        return g.n + ' ' + (nombresAvisos[g.job_type] || g.job_type);
+      });
+      desc += (desc ? ' ' : '') + 'Avisos técnicos sin reintentos: ' + gruposAvisos.join(', ') + '.';
+    }
     if (d.reclamos_sin_confirmar) desc += (desc ? ' ' : '') + 'No se pudieron consultar '
       + d.reclamos_sin_confirmar + (d.reclamos_sin_confirmar === 1 ? ' reclamo' : ' reclamos')
       + ' en MercadoLibre; se reintentará automáticamente.';
@@ -1045,7 +1052,7 @@ fetch('/api/auth/me').then(function(r) {
       + '<div class="token-banner-body">'
       + '<div class="token-banner-title">' + esc(desc) + '</div>'
       + '<div class="token-banner-actions">'
-      + '<a class="token-banner-btn" href="https://myaccount.mercadolibre.com.ar/questions/list" target="_blank" rel="noopener">Ver en MercadoLibre</a>'
+      + '<a class="token-banner-btn" href="https://myaccount.mercadolibre.com.ar/questions/list" target="_blank" rel="noopener">Abrir bandeja en MercadoLibre</a>'
       + '</div></div></div>';
   }
 

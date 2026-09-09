@@ -698,7 +698,12 @@ export function notificacionesMlRouter(db) {
   // Conteo liviano — pensado para el aviso del Home (mismo patrón que otros contadores
   // livianos del proyecto, ej. push-skus-pendientes/count).
   router.get('/count', (req, res) => {
-    const preguntas = db.prepare("SELECT COUNT(*) n FROM ml_preguntas WHERE estado='UNANSWERED'").get().n;
+    const preguntasTotales = db.prepare("SELECT COUNT(*) n FROM ml_preguntas WHERE estado='UNANSWERED'").get().n;
+    const hayCacheInicial = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ml_publicaciones_cache'").get();
+    // El Home es una bandeja de trabajo: sólo cuenta preguntas de publicaciones activas
+    // con stock. Las demás se conservan para auditoría, pero no se presentan como accionables.
+    const preguntas = hayCacheInicial ? db.prepare("SELECT COUNT(*) n FROM ml_preguntas q WHERE q.estado='UNANSWERED' AND EXISTS (SELECT 1 FROM ml_publicaciones_cache p WHERE p.item_id=q.item_id AND p.status='active' AND COALESCE(p.available_quantity,0)>0)").get().n : 0;
+    const preguntasNoAccionables = preguntasTotales - preguntas;
     // Cuántas de esas son de publicaciones que hoy NO se pueden vender (pausadas o sin stock).
     // Decisión del usuario (2026-09-06): se traen todas —una consulta sin responder lo es
     // igual, y dice qué quiere gente que no tenemos— pero se separan, para que no compitan
@@ -725,7 +730,8 @@ export function notificacionesMlRouter(db) {
     const mensajes = db.prepare('SELECT COUNT(*) n FROM ml_mensajes WHERE respondido_en IS NULL').get().n;
     const reclamos = db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE cerrado_en IS NULL AND consultado_en_ml = 1").get().n;
     const reclamosSinConfirmar = db.prepare("SELECT COUNT(*) n FROM ml_reclamos WHERE consultado_en_ml = 0").get().n;
-    res.json({ ok: true, preguntas, preguntas_sin_stock: preguntasSinStock, dead_letters: dead, mensajes, reclamos, reclamos_sin_confirmar: reclamosSinConfirmar, total: preguntas + mensajes + reclamos });
+    const deadLetterGroups = !hayJobs ? [] : db.prepare("SELECT job_type, COUNT(*) n FROM integration_jobs WHERE status='dead_lettered' GROUP BY job_type ORDER BY n DESC, job_type").all();
+    res.json({ ok: true, preguntas, preguntas_no_accionables: preguntasNoAccionables, preguntas_sin_stock: preguntasSinStock, dead_letters: dead, dead_letter_groups: deadLetterGroups, mensajes, reclamos, reclamos_sin_confirmar: reclamosSinConfirmar, total: preguntas + mensajes + reclamos });
   });
 
   return router;

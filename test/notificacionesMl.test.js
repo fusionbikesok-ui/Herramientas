@@ -390,7 +390,7 @@ describe('GET /api/notificaciones-ml/pendientes y /count', () => {
   it('/count devuelve los mismos totales sin traer las filas', async () => {
     const r = await request(app).get('/api/notificaciones-ml/count');
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ ok: true, preguntas: 1, mensajes: 1, reclamos: 2, reclamos_sin_confirmar: 1, total: 4 });
+    expect(r.body).toMatchObject({ ok: true, preguntas: 0, preguntas_no_accionables: 1, mensajes: 1, reclamos: 2, reclamos_sin_confirmar: 1, total: 3 });
   });
 });
 
@@ -723,9 +723,10 @@ describe('red de reconciliación de preguntas', () => {
     preg(4, 'MLA-DESCONOCIDA'); // sin fila en el cache
 
     const res = await request(app).get('/api/notificaciones-ml/count');
-    expect(res.body.preguntas).toBe(4);
-    // Pausada y stock cero cuentan; la que no está en el cache NO —no sabemos nada de ella y
-    // afirmar que no tiene stock sería inventarlo.
+    expect(res.body.preguntas).toBe(1);
+    expect(res.body.preguntas_no_accionables).toBe(3);
+    // Sólo la publicación activa con stock es una acción del Home. Las demás se conservan
+    // pero no compiten por atención.
     expect(res.body.preguntas_sin_stock).toBe(2);
     db.close();
   });
