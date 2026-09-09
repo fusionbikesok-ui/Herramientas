@@ -140,6 +140,8 @@ Los cambios se acumularán como pendientes y se aplicarán con un único botón 
 
 La diferencia de precio respetará el método de pago y las cuotas del pedido. Por ejemplo, un adicional de $32.250 en un pedido pagado en 6 cuotas se mostrará como 6 cuotas adicionales de $5.375; un saldo a favor se presentará según el mismo esquema antes de permitir marcarlo como reintegrado.
 
+El VPS automatizará la lectura de cuotas desde `_fusion_mp_installments` y usará los coeficientes `fusion_coef_*` de Master Control. El precio de contado será el precio base del producto; para productos nuevos se aplicará el coeficiente del plan del pedido y se mostrará la diferencia financiada por cuota.
+
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 
 La importación no implica despacho. Solo entran a la cola de envíos los pedidos que Woo coloque en “listo para enviar Andreani” o los que un usuario autorizado derive manualmente desde Gestión de pedidos. Una venta física o un pedido que no requiere envío permanece visible en Gestión de pedidos, pero no aparece como tarea logística.

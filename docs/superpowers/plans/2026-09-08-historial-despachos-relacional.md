@@ -42,6 +42,8 @@ Toda edición del pedido se acumulará como cambio pendiente y tendrá una únic
 
 La diferencia económica se calculará según el método de pago y las cuotas originales del pedido. Si el pedido fue pagado en 6 cuotas y se agrega un producto, la revisión mostrará el saldo adicional dividido en 6 cuotas; si el cambio genera saldo a favor, mostrará el reintegro conforme a las condiciones del pago original. No se mostrará únicamente la diferencia bruta.
 
+La automatización leerá la cantidad real de cuotas desde el metadato WooCommerce `_fusion_mp_installments`. El precio de contado será el precio base actual del producto y el importe financiado se calculará aplicando el coeficiente del plan provisto por Master Control (`fusion_coef_3`, `fusion_coef_6`, `fusion_coef_9`, `fusion_coef_12`, `fusion_coef_18` o `fusion_coef_24`). Los productos ya existentes conservarán el precio histórico del pedido; los nuevos usarán precio de contado y coeficiente del plan elegido.
+
 ### Cancelados y recuperación comercial
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados y carritos abandonados. La oportunidad permanece visible hasta el cierre del día hábil siguiente a su detección o cancelación; la interfaz debe mostrar explícitamente si el vencimiento es **hoy** o **mañana**, calculándolo desde la fecha del pedido/abandono y el calendario de la tienda. Después sale de esta vista y permanece en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
