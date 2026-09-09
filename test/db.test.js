@@ -40,6 +40,7 @@ describe('db schema', () => {
       'gestion_pedido_clientes',
       'gestion_pedido_entregas',
       'gestion_pedido_eventos',
+      'gestion_pedido_importaciones',
       'gestion_pedido_items',
       'gestion_pedidos',
       'guardia_ml_aprendizajes',

@@ -31,6 +31,8 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
     // pendientes de cancelación. Puede ajustarse temporalmente por entorno si ML incorpora
     // un estado nuevo.
     const statusesMl = String(process.env.GESTION_PEDIDOS_ML_STATUSES || 'confirmed,payment_required,payment_in_process,partially_paid,paid,partially_refunded,pending_cancel,cancelled,manually_cancelled').split(',').map(x => x.trim()).filter(Boolean);
+    const iniciadoEn = new Date().toISOString();
+    const corrida = db.prepare(`INSERT INTO gestion_pedido_importaciones (desde, hasta, estado, iniciado_en) VALUES (?, ?, 'iniciada', ?)`).run(desde, hasta, iniciadoEn);
     try {
       const resultados = await importarVentanaGestionPedidos(db, {
         desde,
@@ -51,8 +53,11 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
           return [...unicas.values()];
         }),
       });
-      return res.json({ ok: true, desde, hasta, importados: resultados.length, creados: resultados.filter(x => x.created).length, actualizados: resultados.filter(x => x.changed && !x.created).length });
+      const resumen = { ok: true, desde, hasta, importados: resultados.length, creados: resultados.filter(x => x.created).length, actualizados: resultados.filter(x => x.changed && !x.created).length };
+      db.prepare(`UPDATE gestion_pedido_importaciones SET estado='completada', importados=?, creados=?, actualizados=?, finalizado_en=? WHERE id=?`).run(resumen.importados, resumen.creados, resumen.actualizados, new Date().toISOString(), corrida.lastInsertRowid);
+      return res.json(resumen);
     } catch (error) {
+      db.prepare(`UPDATE gestion_pedido_importaciones SET estado='fallida', error=?, finalizado_en=? WHERE id=?`).run(error.message, new Date().toISOString(), corrida.lastInsertRowid);
       return res.status(502).json({ ok: false, error: 'No se pudo completar la importación', detalle: error.message });
     }
   });

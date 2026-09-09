@@ -12,6 +12,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 function dbPrueba() {
   const db = new Database(':memory:');
   db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '095_gestion_pedidos_relacional.sql'), 'utf8'));
+  db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '096_gestion_pedidos_importaciones.sql'), 'utf8'));
   return db;
 }
 
