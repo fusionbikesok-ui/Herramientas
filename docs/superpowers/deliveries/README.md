@@ -45,7 +45,7 @@ Actualizado: 2026-09-09. Estas fichas registran realidad; el plan maestro especi
 | GP7 | Recuperar ventas | publicada | suite completa verde: 128 archivos, 2411 tests, 51 omitidos |
 | GP8 | Integraciones, cuotas, stock y permisos | publicada | suite completa verde: 128 archivos, 2416 tests, 51 omitidos |
 | GP9 | Validación operativa controlada | publicada | suite completa verde: 131 archivos, 2421 tests, 51 omitidos |
-| GP10 | Publicación controlada | desarrollo | migraciones, health check y muestra 5/5 verificados; falta smoke/jornada |
+| GP10 | Publicación controlada | desarrollo | migraciones, health check, muestra 5/5 y smoke autenticado verificados; falta permisos/jornada |
 
 Estados: `planificada → desarrollo → candidata → publicada → observada → aceptada`. Un estado no se infiere por código, número de commit o nombre de rama.
 

@@ -42,8 +42,9 @@ Preflight implementado en `lib/gestionPedidosPublicacion.js`, con pruebas focali
 - Conteos iniciales: `706` pedidos; oportunidades, cambios y reintegros nuevos en `0`.
 - Smoke de salud real: `GET /healthz` respondió `200` y `{ ok: true, integridad: "ok" }`.
 - Muestra controlada: `5/5` pedidos reconciliados, `0` faltantes y `0` duplicados; sin mutar estados.
+- Smoke autenticado de preview: login, listado, las cuatro vistas operativas, detalle con URL persistente, enlace a WooCommerce y cero errores de página.
 - Suite completa para GP10: no ejecutada.
 
-Siguiente bloque: ejecutar el smoke autenticado de las vistas y acciones permitidas.
+Siguiente bloque: validar permisos con perfiles operativos y realizar la primera jornada observada.
 
 GP10 en desarrollo. Suite completa: no ejecutada para GP10.
