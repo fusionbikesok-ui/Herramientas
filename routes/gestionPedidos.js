@@ -15,6 +15,31 @@ function exigirRespuesta(resp, nombre) {
 /** Router administrativo para la importación inicial/reconciliación manual. */
 export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride }) {
   const router = express.Router();
+  router.get('/', (req, res) => {
+    const limite = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const condiciones = [];
+    const params = [];
+    if (req.query.estado) { condiciones.push('p.estado_operativo = ?'); params.push(String(req.query.estado)); }
+    if (req.query.comercial) { condiciones.push('p.estado_comercial = ?'); params.push(String(req.query.comercial)); }
+    if (req.query.fuente) { condiciones.push('p.fuente = ?'); params.push(String(req.query.fuente)); }
+    if (req.query.q) {
+      condiciones.push(`(p.numero_visible LIKE ? OR p.external_id LIKE ? OR c.nombre LIKE ? OR c.email LIKE ? OR c.telefono LIKE ? OR EXISTS
+        (SELECT 1 FROM gestion_pedido_items i WHERE i.pedido_id=p.id AND (i.sku LIKE ? OR i.ean LIKE ? OR i.nombre LIKE ?)))`);
+      const q = `%${String(req.query.q).trim()}%`;
+      params.push(q, q, q, q, q, q, q, q);
+    }
+    const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+    const total = db.prepare(`SELECT COUNT(*) AS total FROM gestion_pedidos p JOIN gestion_pedido_clientes c ON c.id=p.cliente_id ${where}`).get(...params).total;
+    const pedidos = db.prepare(`SELECT p.id, p.numero_visible, p.fuente, p.external_id, p.estado_comercial, p.estado_operativo,
+      p.pago_estado, p.total_centavos, p.moneda, p.creado_fuente_en, p.actualizado_en,
+      c.nombre AS cliente_nombre, c.email AS cliente_email, c.telefono AS cliente_telefono,
+      (SELECT COUNT(*) FROM gestion_pedido_items i WHERE i.pedido_id=p.id) AS productos,
+      (SELECT COALESCE(SUM(i.cantidad),0) FROM gestion_pedido_items i WHERE i.pedido_id=p.id) AS unidades
+      FROM gestion_pedidos p JOIN gestion_pedido_clientes c ON c.id=p.cliente_id ${where}
+      ORDER BY p.creado_fuente_en DESC, p.id DESC LIMIT ? OFFSET ?`).all(...params, limite, offset);
+    return res.json({ ok: true, total, limit: limite, offset, pedidos });
+  });
   router.get('/importar/config', (_req, res) => res.json({
     ok: true,
     woocommerce: Boolean(woo?.url && woo?.ck && woo?.cs),
@@ -67,6 +92,15 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       db.prepare(`UPDATE gestion_pedido_importaciones SET estado='fallida', error=?, finalizado_en=? WHERE id=?`).run(error.message, new Date().toISOString(), corrida.lastInsertRowid);
       return res.status(502).json({ ok: false, error: 'No se pudo completar la importación', detalle: error.message });
     }
+  });
+  router.get('/:id', (req, res) => {
+    const pedido = db.prepare(`SELECT p.*, c.nombre AS cliente_nombre, c.email AS cliente_email, c.telefono AS cliente_telefono
+      FROM gestion_pedidos p JOIN gestion_pedido_clientes c ON c.id=p.cliente_id WHERE p.id=?`).get(req.params.id);
+    if (!pedido) return res.status(404).json({ ok: false, error: 'Pedido no encontrado' });
+    pedido.entrega = db.prepare('SELECT * FROM gestion_pedido_entregas WHERE pedido_id=?').get(pedido.id) || null;
+    pedido.items = db.prepare('SELECT * FROM gestion_pedido_items WHERE pedido_id=? ORDER BY id').all(pedido.id);
+    pedido.eventos = db.prepare('SELECT * FROM gestion_pedido_eventos WHERE pedido_id=? ORDER BY creado_en DESC, id DESC').all(pedido.id);
+    return res.json({ ok: true, pedido });
   });
   return router;
 }

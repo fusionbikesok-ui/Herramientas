@@ -17,6 +17,26 @@ function dbPrueba() {
 }
 
 describe('POST /api/gestion-pedidos/importar', () => {
+  it('lista y busca pedidos por cliente, SKU y EAN', async () => {
+    const db = dbPrueba();
+    const ahora = '2026-09-09T10:00:00Z';
+    const cliente = db.prepare(`INSERT INTO gestion_pedido_clientes (nombre,email,telefono,creado_en,actualizado_en) VALUES (?,?,?,?,?)`).run('Ana Demo', 'ana@example.com', '1122334455', ahora, ahora).lastInsertRowid;
+    const pedido = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,numero_visible,estado_comercial,estado_operativo,importado_en,actualizado_en,creado_fuente_en) VALUES (?,?,?,?,?,?,?,?,?)`).run(cliente, 'woocommerce', '501', '#501', 'confirmado', 'importado', ahora, ahora, ahora).lastInsertRowid;
+    db.prepare(`INSERT INTO gestion_pedido_items (pedido_id,nombre,sku,ean,cantidad,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?)`).run(pedido, 'Casco demo', 'CASCO-1', '7790000000012', 2, ahora, ahora);
+    const app = express(); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const lista = await request(app).get('/api/gestion-pedidos?q=7790000000012');
+    expect(lista.status).toBe(200); expect(lista.body.total).toBe(1); expect(lista.body.pedidos[0].unidades).toBe(2);
+    const detalle = await request(app).get(`/api/gestion-pedidos/${pedido}`);
+    expect(detalle.status).toBe(200); expect(detalle.body.pedido.items[0]).toMatchObject({ sku: 'CASCO-1', ean: '7790000000012' });
+    db.close();
+  });
+
+  it('devuelve 404 para un pedido inexistente', async () => {
+    const db = dbPrueba(); const app = express(); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const response = await request(app).get('/api/gestion-pedidos/999');
+    expect(response.status).toBe(404); expect(response.body.error).toBe('Pedido no encontrado'); db.close();
+  });
+
   it('expone el estado de configuración sin credenciales', async () => {
     const db = dbPrueba();
     const app = express();
