@@ -38,6 +38,8 @@ Remover exigirá seleccionar un motivo simple: **No lo quiso**, **No apto para l
 
 Toda adición, remoción o cambio de cantidad debe mostrar antes de guardar la diferencia económica: importe adicional a cobrar, importe a favor del cliente o sin diferencia. Si existe importe a favor, el pedido tendrá una acción separada **Marcar como reintegrado**; no se asumirá que el reintegro ocurrió por guardar la edición. El reintegro registra usuario, fecha, hora, importe y referencia operativa.
 
+Toda edición del pedido se acumulará como cambio pendiente y tendrá una única revisión general. La revisión mostrará datos modificados, productos agregados/removidos, motivos, cantidades, diferencia económica e impacto de stock. Solo **Confirmar cambios** aplicará la operación completa; **Descartar cambios** la cancelará. El reintegro y el envío a preparación son acciones posteriores independientes.
+
 ### Cancelados y recuperación comercial
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados y carritos abandonados. La oportunidad permanece visible hasta el cierre del día hábil siguiente a su detección o cancelación; la interfaz debe mostrar explícitamente si el vencimiento es **hoy** o **mañana**, calculándolo desde la fecha del pedido/abandono y el calendario de la tienda. Después sale de esta vista y permanece en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
