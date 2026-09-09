@@ -124,6 +124,8 @@ La primera acción masiva de la lista será **Enviar a preparación**. El botón
 
 La vista rápida lateral será una ficha completa de consulta con datos del pedido, cliente, entrega o retiro, estados, pago, importe, productos y cantidades, notas, tracking, fotos de preparación y timeline resumido. Tendrá pocas acciones seguras y un acceso claro a la pantalla específica. La pantalla específica del pedido concentrará las modificaciones y acciones operativas autorizadas, evitando que la vista rápida se convierta en un segundo formulario incompleto.
 
+Los cambios de productos deberán conciliar reservas y stock sin doble descuento: retirar una línea libera la reserva, reemplazarla libera el producto original y descuenta el nuevo, y un faltante físico confirmado genera un ajuste negativo auditado. En el detalle, los productos se mostrarán con imágenes grandes, además de SKU, EAN, cantidad y precio.
+
 **Gestión de envíos** conserva la herramienta actual y ejecuta únicamente el trabajo logístico: productos a buscar, pedidos a preparar, listos para despachar, grupos de despacho y confirmación de salida. Ambas herramientas comparten el modelo relacional de pedidos, clientes, productos, items, preparaciones, paquetes, envíos y eventos.
 
 La importación no implica despacho. Solo entran a la cola de envíos los pedidos que Woo coloque en “listo para enviar Andreani” o los que un usuario autorizado derive manualmente desde Gestión de pedidos. Una venta física o un pedido que no requiere envío permanece visible en Gestión de pedidos, pero no aparece como tarea logística.
