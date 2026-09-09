@@ -128,7 +128,7 @@ El listado vivirá en `/gestion-pedidos/` y cada pedido tendrá una URL persiste
 
 Los cambios de productos deberán conciliar reservas y stock sin doble descuento: retirar una línea libera la reserva, reemplazarla libera el producto original y descuenta el nuevo, y un faltante físico confirmado genera un ajuste negativo auditado. En el detalle, los productos se mostrarán con imágenes grandes, además de SKU, EAN, cantidad y precio.
 
-El botón genérico “Editar pedido” se reemplaza por **Editar datos** —cliente y entrega juntos— y **Editar productos**. Esta última acción abrirá una ventana de búsqueda por nombre, SKU o EAN con fotos grandes, miniaturas, stock, precio y cantidad, para agregar o reemplazar productos con confirmación de impacto.
+El botón genérico “Editar pedido” se reemplaza por **Editar datos** —cliente y entrega juntos— y **Añadir productos**. Esta última acción abrirá una ventana de búsqueda por nombre, SKU o EAN con fotos grandes, miniaturas, stock, precio y cantidad, para agregar productos con confirmación de impacto.
 
 Cada línea existente tendrá un botón **Remover** y el buscador solo ofrecerá **Agregar producto**. Un reemplazo se modelará explícitamente como remover el producto anterior y agregar el nuevo, con revisión de cantidades, total y stock antes de guardar.
 
