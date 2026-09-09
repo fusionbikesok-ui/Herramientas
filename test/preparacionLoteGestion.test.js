@@ -31,4 +31,17 @@ describe('POST /api/preparacion/lote-desde-gestion', () => {
     expect(db.prepare('SELECT usuario FROM preparacion_claims').get().usuario).toBe('operador-demo');
     db.close();
   });
+
+  it('rechaza un lote mixto y no deja preparaciones parciales', async () => {
+    const db = dbPrueba(); const now = '2026-09-09T10:00:00Z';
+    const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,creado_en,actualizado_en) VALUES (?,?,?)').run('Cliente', now, now).lastInsertRowid;
+    const insert = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,numero_visible,estado_comercial,estado_operativo,importado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?)`);
+    const bueno = insert.run(cliente, 'woocommerce', '501', '#501', 'confirmado', 'importado', now, now).lastInsertRowid;
+    const malo = insert.run(cliente, 'woocommerce', '502', '#502', 'cancelado', 'cerrado', now, now).lastInsertRowid;
+    const app = express(); app.use(express.json()); app.use((req, _res, next) => { req.user = { username: 'operador-demo' }; next(); });
+    app.use('/api/preparacion', preparacionRouter(db, { woo: {}, ml: {}, preparacionClaimTtlMs: 60_000 }));
+    const response = await request(app).post('/api/preparacion/lote-desde-gestion').send({ gestion_pedido_ids: [bueno, malo] });
+    expect(response.status).toBe(409); expect(db.prepare('SELECT COUNT(*) AS n FROM preparaciones').get().n).toBe(0);
+    expect(db.prepare('SELECT estado_operativo FROM gestion_pedidos WHERE id=?').get(bueno).estado_operativo).toBe('importado'); db.close();
+  });
 });
