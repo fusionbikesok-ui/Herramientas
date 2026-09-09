@@ -42,7 +42,7 @@ Actualizado: 2026-09-09. Estas fichas registran realidad; el plan maestro especi
 | GP4 | Gestión funcional de pedidos | publicada | suite completa verde; habilita GP5 |
 | GP5 | Preparación por lote y checklist | publicada | suite completa verde; habilita GP6 |
 | GP6 | Despachos, agrupación y evidencia | publicada | suite completa verde: 128 archivos, 2408 tests, 51 omitidos |
-| GP7 | Recuperar ventas | desarrollo | cancelados, carritos abandonados y contacto manual |
+| GP7 | Recuperar ventas | candidata | gate de suite completa en curso |
 | GP8 | Integraciones, cuotas, stock y permisos | planificada | pendiente de crear al cerrar GP7 |
 | GP9 | Validación operativa controlada | planificada | pendiente de crear al cerrar GP8 |
 | GP10 | Publicación | planificada | pendiente de crear al cerrar GP9 |

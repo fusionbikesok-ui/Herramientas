@@ -1,6 +1,6 @@
 # GP7: Recuperar ventas
 
-**Estado:** desarrollo  
+**Estado:** candidata  
 **Superficie:** Gestión de pedidos / Home  
 **Dependencia:** GP3 y GP4 publicadas
 
@@ -49,4 +49,10 @@ Dar prioridad operativa a oportunidades de recuperación sin borrar pedidos canc
 
 ## Gate
 
-No ejecutado todavía. Se ejecutará al finalizar las cinco entregas internas y con fixtures que cubran: cancelado vigente, vencido, cierre hoy, cierre mañana, carrito abandonado, cliente duplicado y pedido exitoso posterior.
+Entregas internas completadas. Evidencia focalizada:
+
+- `test/gestionPedidosRoute.test.js`: 11/11 verdes.
+- Smoke de preview: login, listado, Recuperar ventas, detalle y render sin errores.
+- Acciones reales conectadas a la API, sin registrar contacto al preparar/copiarlos.
+
+Suite completa en ejecución al cerrar GP7. Fixtures cubren cancelado, carrito abandonado, consolidación, contacto y pedido exitoso posterior.
