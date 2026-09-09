@@ -24,7 +24,9 @@ La pantalla específica del pedido será el lugar de trabajo detallado. Allí se
 
 ### Cancelados y recuperación comercial
 
-Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados de las últimas 24 horas hábiles con los carritos abandonados del plugin existente. Al vencer la ventana, salen de esa vista y permanecen en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
+Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados y carritos abandonados de la jornada comercial vigente. La oportunidad permanece visible desde su detección hasta el cierre de la tienda; si se detecta fuera de horario, se presenta en la siguiente jornada hábil hasta el cierre. Al vencer la jornada, sale de esta vista y permanece en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
+
+La vista consolida los intentos por cliente usando identificador de cliente, email o teléfono. Si una persona tiene varios carritos o pedidos fallidos, muestra una sola oportunidad con el último intento y la cantidad de intentos acumulados. Si se detecta un pedido exitoso del mismo cliente durante la jornada, se retira la oportunidad de Recuperar ventas y no se muestran sus intentos fallidos.
 
 La recuperación solo podrá iniciarse mediante **WhatsApp** o **Email**, con un botón independiente para cada canal. Un tercer botón, **Marcar contactado**, confirmará que la comunicación efectivamente se realizó. Se conservará si nunca se contactó, quién confirmó el contacto, fecha, hora y canal; hacer clic en el canal registra el intento/canal elegido, pero no confirma el contacto hasta la acción explícita.
 
