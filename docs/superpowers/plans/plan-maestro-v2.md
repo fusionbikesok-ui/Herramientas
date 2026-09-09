@@ -1240,6 +1240,10 @@ Cada avance sobre UM1, aunque sea parcial o quede a medias, actualiza en el mism
 
 Cada entrega dura idealmente 3–5 días, es reversible/apagable por flag, actualiza maestro/memoria/ficha/SOP, se demuestra, pilota acotadamente y observa al menos una jornada. La ficha individual es la única fuente de progreso.
 
+### Gate de suite y merge por entrega
+
+Al finalizar cada entrega se ejecutará la **suite completa**, no solo pruebas focalizadas. Si el resultado es verde y la evidencia de la entrega está completa, se hará merge directo a la rama de integración y se continuará con la siguiente entrega. Si falla, la entrega vuelve a desarrollo, se corrige y se repite la suite completa; no se hace merge parcial ni se avanza dejando fallos conocidos. El despliegue final conserva el mismo criterio: suite completa verde antes de publicar.
+
 ## 20. Gates de calidad, pruebas y publicación
 
 ### Gate técnico obligatorio
