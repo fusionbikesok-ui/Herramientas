@@ -54,6 +54,32 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
     });
     return resultado.ok ? res.json(resultado) : res.status(422).json(resultado);
   });
+  router.post('/:id/cambios-productos', (req, res) => {
+    const pedidoId = Number(req.params.id);
+    const accion = String(req.body?.accion || '').toLowerCase();
+    const motivo = String(req.body?.motivo || '').toLowerCase();
+    const cantidad = Number(req.body?.cantidad);
+    const nombre = String(req.body?.producto_nombre || '').trim();
+    if (!Number.isInteger(pedidoId) || !['adicion', 'remocion'].includes(accion) || !['no_lo_quiso', 'no_apto_venta', 'falla_stock', 'cambio'].includes(motivo) || !Number.isInteger(cantidad) || cantidad < 1 || !nombre) return res.status(400).json({ ok: false, error: 'acción, producto, cantidad y motivo válidos son obligatorios' });
+    const pedido = db.prepare('SELECT id FROM gestion_pedidos WHERE id=?').get(pedidoId);
+    if (!pedido) return res.status(404).json({ ok: false, error: 'Pedido no encontrado' });
+    const actor = String(req.user?.username || req.user?.nombre || 'usuario_actual');
+    const now = new Date().toISOString();
+    const cambio = db.prepare(`INSERT INTO gestion_pedido_cambios
+      (pedido_id,accion,producto_nombre,sku,cantidad,motivo,diferencia_contado_centavos,diferencia_financiada_centavos,cuotas,actor,creado_en)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(pedidoId, accion, nombre, req.body?.sku || null, cantidad, motivo,
+      Number(req.body?.diferencia_contado_centavos || 0), req.body?.diferencia_financiada_centavos ?? null, req.body?.cuotas ?? null, actor, now);
+    db.prepare(`INSERT INTO gestion_pedido_eventos (pedido_id,evento,actor_tipo,datos_json,creado_en) VALUES (?, 'cambio_producto', 'usuario', ?, ?)`)
+      .run(pedidoId, JSON.stringify({ cambio_id: cambio.lastInsertRowid, accion, motivo, sku: req.body?.sku || null, cantidad }), now);
+    return res.status(201).json({ ok: true, cambio: db.prepare('SELECT * FROM gestion_pedido_cambios WHERE id=?').get(cambio.lastInsertRowid) });
+  });
+  router.post('/:id/reintegros/:reintegroId/marcar', (req, res) => {
+    const id = Number(req.params.reintegroId); const now = new Date().toISOString();
+    const actor = String(req.user?.username || req.user?.nombre || 'usuario_actual');
+    const result = db.prepare(`UPDATE gestion_pedido_reintegros SET estado='reintegrado', reintegrado_en=?, reintegrado_por=? WHERE id=? AND estado='pendiente'`).run(now, actor, id);
+    if (!result.changes) return res.status(404).json({ ok: false, error: 'Reintegro no encontrado o ya reintegrado' });
+    return res.json({ ok: true, reintegro: db.prepare('SELECT * FROM gestion_pedido_reintegros WHERE id=?').get(id) });
+  });
   router.post('/recuperar-ventas/importar-carritos', (req, res) => {
     const carritos = Array.isArray(req.body?.carritos) ? req.body.carritos : [];
     if (carritos.length > 1000) return res.status(400).json({ ok: false, error: 'demasiados carritos' });

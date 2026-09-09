@@ -15,6 +15,7 @@ function dbPrueba() {
   db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '095_gestion_pedidos_relacional.sql'), 'utf8'));
   db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '096_gestion_pedidos_importaciones.sql'), 'utf8'));
   db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '097_gestion_pedidos_recuperacion.sql'), 'utf8'));
+  db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '098_gestion_pedidos_cambios.sql'), 'utf8'));
   return db;
 }
 
@@ -32,6 +33,18 @@ describe('POST /api/gestion-pedidos/importar', () => {
     expect(ok.status).toBe(200); expect(ok.body).toMatchObject({ diferencia_financiada_centavos: 225000, importe_por_cuota_centavos: 37500 });
     const missing = await request(app).post('/api/gestion-pedidos/calcular-diferencia').send({ diferencia_contado_centavos: 200000, cuotas: 6 });
     expect(missing.status).toBe(422); expect(missing.body.code).toBe('TASA_NO_DISPONIBLE'); db.close();
+  });
+
+  it('registra cambio de producto con motivo obligatorio y lo deja en auditoría', async () => {
+    const db = dbPrueba(); const now = '2026-09-09T10:00:00Z';
+    const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,creado_en,actualizado_en) VALUES (?,?,?)').run('Cliente', now, now).lastInsertRowid;
+    const pedido = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,estado_comercial,estado_operativo,importado_en,actualizado_en) VALUES (?,?,?,?,?,?,?)`).run(cliente, 'woocommerce', 'cambio-1', 'confirmado', 'importado', now, now).lastInsertRowid;
+    const app = express(); app.use(express.json()); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const bad = await request(app).post(`/api/gestion-pedidos/${pedido}/cambios-productos`).send({ accion: 'remocion', producto_nombre: 'Casco' });
+    expect(bad.status).toBe(400);
+    const ok = await request(app).post(`/api/gestion-pedidos/${pedido}/cambios-productos`).send({ accion: 'remocion', producto_nombre: 'Casco', sku: 'CAS-1', cantidad: 1, motivo: 'falla_stock', diferencia_contado_centavos: -200000, cuotas: 6 });
+    expect(ok.status).toBe(201); expect(ok.body.cambio).toMatchObject({ motivo: 'falla_stock', actor: 'usuario_actual', cuotas: 6 });
+    expect(db.prepare("SELECT evento FROM gestion_pedido_eventos WHERE pedido_id=?").get(pedido).evento).toBe('cambio_producto'); db.close();
   });
   it('lista y busca pedidos por cliente, SKU y EAN', async () => {
     const db = dbPrueba();
