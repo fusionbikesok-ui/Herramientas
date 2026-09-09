@@ -2214,6 +2214,35 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Detalle ──
+  router.post('/lote-desde-gestion', (req, res) => {
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const ids = [...new Set((Array.isArray(req.body?.gestion_pedido_ids) ? req.body.gestion_pedido_ids : []).map(Number).filter(Number.isSafeInteger))];
+    if (!ids.length || ids.length > 100) return res.status(400).json({ ok: false, error: 'gestion_pedido_ids debe contener entre 1 y 100 IDs' });
+    const placeholders = ids.map(() => '?').join(',');
+    const pedidos = db.prepare(`SELECT p.*, c.nombre AS cliente_nombre FROM gestion_pedidos p
+      LEFT JOIN gestion_pedido_clientes c ON c.id=p.cliente_id WHERE p.id IN (${placeholders})`).all(...ids);
+    if (pedidos.length !== ids.length) return res.status(404).json({ ok: false, error: 'Uno o más pedidos no existen', code: 'ORDER_NOT_FOUND' });
+    const invalidos = pedidos.filter(p => p.estado_comercial !== 'confirmado' || !['importado', 'requiere_atencion'].includes(p.estado_operativo));
+    if (invalidos.length) return res.status(409).json({ ok: false, error: 'El lote contiene pedidos no habilitados', code: 'BATCH_NOT_ELIGIBLE', pedidos: invalidos.map(p => ({ id: p.id, estado_comercial: p.estado_comercial, estado_operativo: p.estado_operativo })) });
+    try {
+      const creados = db.transaction(() => pedidos.map(pedido => {
+        const items = db.prepare('SELECT * FROM gestion_pedido_items WHERE pedido_id=? ORDER BY id').all(pedido.id).map(item => ({
+          sku: item.sku, nombre: item.nombre, cantidad: item.cantidad, product_id: item.producto_woo_id,
+        }));
+        const canal = pedido.fuente === 'mercadolibre' ? 'ml' : 'web';
+        const prepId = crearPreparacion(db, { canal, wcOrderId: canal === 'web' ? Number(pedido.external_id) : null, mlOrderId: canal === 'ml' ? pedido.external_id : null, numeroPedido: pedido.numero_visible, comprador: pedido.cliente_nombre, items });
+        const claim = claimPreparacion(db, prepId, req.user.username, cfg, new Date(), true);
+        if (!claim.ok) { const error = new Error(claim.code); error.claimResult = claim; throw error; }
+        db.prepare("UPDATE gestion_pedidos SET estado_operativo='en_preparacion', actualizado_en=? WHERE id=?").run(now(), pedido.id);
+        db.prepare(`INSERT INTO gestion_pedido_eventos (pedido_id,evento,estado_anterior,estado_nuevo,actor_tipo,actor_id,datos_json,creado_en) VALUES (?,?,?,?,?,?,?,?)`).run(pedido.id, 'enviado_a_preparacion', 'importado', 'en_preparacion', 'usuario', null, JSON.stringify({ preparacion_id: prepId, usuario: req.user.username }), now());
+        return { gestion_pedido_id: pedido.id, preparacion_id: prepId };
+      }))();
+      return res.status(201).json({ ok: true, lote: { pedidos: creados.length }, pedidos: creados });
+    } catch (error) {
+      if (error?.claimResult?.code === 'PREPARATION_CLAIMED') return claimConflict(res, error.claimResult.claim);
+      return res.status(500).json({ ok: false, error: 'No se pudo crear el lote de preparación' });
+    }
+  });
   router.get('/:id', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
