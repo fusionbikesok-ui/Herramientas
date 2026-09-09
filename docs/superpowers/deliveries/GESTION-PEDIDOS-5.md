@@ -11,6 +11,7 @@ Enviar varios pedidos confirmados a preparación como lote y ejecutar una checkl
 ## Alcance
 
 - Selección múltiple desde Todos los pedidos y Requieren atención.
+- Endpoint de validación de lote que rechaza antes de mutar los pedidos cualquier cancelado, fallido, reembolsado, estado operativo incompatible o ID inexistente.
 - Acción masiva “Enviar a preparación” con validación de estado y confirmación general.
 - Registro del lote y de cada transición en eventos auditables.
 - Checklist por ítem: pendiente, verificado, faltante o incidencia.

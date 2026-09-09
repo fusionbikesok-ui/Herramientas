@@ -40,6 +40,26 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       ORDER BY p.creado_fuente_en DESC, p.id DESC LIMIT ? OFFSET ?`).all(...params, limite, offset);
     return res.json({ ok: true, total, limit: limite, offset, pedidos });
   });
+  router.post('/preparacion/validar-lote', (req, res) => {
+    const ids = [...new Set((Array.isArray(req.body?.pedido_ids) ? req.body.pedido_ids : []).map(Number).filter(Number.isSafeInteger))];
+    if (!ids.length || ids.length > 100) return res.status(400).json({ ok: false, error: 'pedido_ids debe contener entre 1 y 100 IDs' });
+    const placeholders = ids.map(() => '?').join(',');
+    const pedidos = db.prepare(`SELECT id, numero_visible, fuente, estado_comercial, estado_operativo
+      FROM gestion_pedidos WHERE id IN (${placeholders})`).all(...ids);
+    const encontrados = new Set(pedidos.map(p => p.id));
+    const rechazados = ids.filter(id => !encontrados.has(id)).map(id => ({ id, motivo: 'pedido inexistente' }));
+    const validos = [];
+    for (const pedido of pedidos) {
+      if (pedido.estado_comercial !== 'confirmado') {
+        rechazados.push({ id: pedido.id, numero_visible: pedido.numero_visible, motivo: `estado comercial ${pedido.estado_comercial}` });
+      } else if (!['importado', 'requiere_atencion'].includes(pedido.estado_operativo)) {
+        rechazados.push({ id: pedido.id, numero_visible: pedido.numero_visible, motivo: `estado operativo ${pedido.estado_operativo}` });
+      } else {
+        validos.push(pedido);
+      }
+    }
+    return res.json({ ok: true, puede_iniciar: validos.length > 0 && rechazados.length === 0, solicitados: ids.length, validos, rechazados });
+  });
   router.get('/importar/config', (_req, res) => res.json({
     ok: true,
     woocommerce: Boolean(woo?.url && woo?.ck && woo?.cs),

@@ -57,6 +57,17 @@ describe('POST /api/gestion-pedidos/importar', () => {
     expect(response.status).toBe(404); expect(response.body.error).toBe('Pedido no encontrado'); db.close();
   });
 
+  it('valida un lote y rechaza cancelados antes de crear preparaciones', async () => {
+    const db = dbPrueba(); const now = '2026-09-09T10:00:00Z';
+    const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,creado_en,actualizado_en) VALUES (?,?,?)').run('Cliente', now, now).lastInsertRowid;
+    const insert = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,numero_visible,estado_comercial,estado_operativo,importado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?)`);
+    const confirmado = insert.run(cliente, 'woocommerce', '1', '#1', 'confirmado', 'importado', now, now).lastInsertRowid;
+    const cancelado = insert.run(cliente, 'woocommerce', '2', '#2', 'cancelado', 'cerrado', now, now).lastInsertRowid;
+    const app = express(); app.use(express.json()); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
+    const response = await request(app).post('/api/gestion-pedidos/preparacion/validar-lote').send({ pedido_ids: [confirmado, cancelado] });
+    expect(response.status).toBe(200); expect(response.body.validos).toHaveLength(1); expect(response.body.rechazados[0].motivo).toContain('cancelado'); expect(response.body.puede_iniciar).toBe(false); db.close();
+  });
+
   it('expone el estado de configuración sin credenciales', async () => {
     const db = dbPrueba();
     const app = express();
