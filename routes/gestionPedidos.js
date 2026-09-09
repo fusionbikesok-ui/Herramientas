@@ -44,8 +44,27 @@ function normalizarTelefonoArgentina(value) {
 }
 
 /** Router administrativo para la importación inicial/reconciliación manual. */
-export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride }) {
+export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride, actualizarWoo: actualizarWooOverride } = {}) {
   const router = express.Router();
+  router.post('/:id/enviar-woo', async (req, res) => {
+    const pedido = db.prepare(`SELECT * FROM gestion_pedidos WHERE id=? AND fuente='woocommerce'`).get(req.params.id);
+    if (!pedido) return res.status(404).json({ ok: false, error: 'Pedido WooCommerce no encontrado' });
+    const estadoWoo = String(req.body?.estado_woo || process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani').trim();
+    const actualizar = actualizarWooOverride || (async ({ externalId, estado }) => wooFetch(woo, `/orders/${encodeURIComponent(externalId)}`, { method: 'PUT', data: { status: estado } }));
+    try {
+      const respuesta = await actualizar({ externalId: pedido.external_id, estado: estadoWoo });
+      if (!respuesta || (respuesta.status != null && (respuesta.status < 200 || respuesta.status >= 300))) throw new Error(`WooCommerce respondió ${respuesta?.status ?? 'sin status'}`);
+      const now = new Date().toISOString(); const actor = String(req.user?.username || req.user?.nombre || 'usuario_actual');
+      db.transaction(() => {
+        db.prepare(`UPDATE gestion_pedidos SET estado_operativo='enviado', actualizado_en=? WHERE id=?`).run(now, pedido.id);
+        db.prepare(`INSERT INTO gestion_pedido_eventos (pedido_id,evento,estado_anterior,estado_nuevo,actor_tipo,datos_json,creado_en) VALUES (?, 'enviado_a_woo', ?, 'enviado', 'usuario', ?, ?)`)
+          .run(pedido.id, pedido.estado_operativo, JSON.stringify({ estado_woo: estadoWoo, actor }), now);
+      })();
+      return res.json({ ok: true, pedido_id: pedido.id, estado_operativo: 'enviado', estado_woo: estadoWoo });
+    } catch (error) {
+      return res.status(502).json({ ok: false, code: 'WOO_UPDATE_FAILED', error: 'No se pudo actualizar WooCommerce', detalle: error.message });
+    }
+  });
   router.post('/calcular-diferencia', (req, res) => {
     const resultado = calcularDiferenciaPorCuotas({
       diferenciaContadoCentavos: req.body?.diferencia_contado_centavos,

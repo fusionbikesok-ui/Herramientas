@@ -46,6 +46,19 @@ describe('POST /api/gestion-pedidos/importar', () => {
     expect(ok.status).toBe(201); expect(ok.body.cambio).toMatchObject({ motivo: 'falla_stock', actor: 'usuario_actual', cuotas: 6 });
     expect(db.prepare("SELECT evento FROM gestion_pedido_eventos WHERE pedido_id=?").get(pedido).evento).toBe('cambio_producto'); db.close();
   });
+
+  it('actualiza Woo antes de marcar enviado y no muta si Woo falla', async () => {
+    const db = dbPrueba(); const now = '2026-09-09T10:00:00Z';
+    const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,creado_en,actualizado_en) VALUES (?,?,?)').run('Cliente', now, now).lastInsertRowid;
+    const pedido = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,estado_comercial,estado_operativo,importado_en,actualizado_en) VALUES (?,?,?,?,?,?,?)`).run(cliente, 'woocommerce', 'woo-send-1', 'confirmado', 'listo_para_despachar', now, now).lastInsertRowid;
+    const calls = []; const app = express(); app.use(express.json()); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, { actualizarWoo: async input => { calls.push(input); return { status: 200 }; } }));
+    const ok = await request(app).post(`/api/gestion-pedidos/${pedido}/enviar-woo`).send({ estado_woo: 'enviadoandreani' });
+    expect(ok.status).toBe(200); expect(calls).toEqual([{ externalId: 'woo-send-1', estado: 'enviadoandreani' }]); expect(db.prepare('SELECT estado_operativo FROM gestion_pedidos WHERE id=?').get(pedido).estado_operativo).toBe('enviado');
+    const pedido2 = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,estado_comercial,estado_operativo,importado_en,actualizado_en) VALUES (?,?,?,?,?,?,?)`).run(cliente, 'woocommerce', 'woo-send-2', 'confirmado', 'listo_para_despachar', now, now).lastInsertRowid;
+    const failing = express(); failing.use(express.json()); failing.use('/api/gestion-pedidos', gestionPedidosRouter(db, { actualizarWoo: async () => { throw new Error('caído'); } }));
+    const bad = await request(failing).post(`/api/gestion-pedidos/${pedido2}/enviar-woo`).send({});
+    expect(bad.status).toBe(502); expect(db.prepare('SELECT estado_operativo FROM gestion_pedidos WHERE id=?').get(pedido2).estado_operativo).toBe('listo_para_despachar'); db.close();
+  });
   it('lista y busca pedidos por cliente, SKU y EAN', async () => {
     const db = dbPrueba();
     const ahora = '2026-09-09T10:00:00Z';
