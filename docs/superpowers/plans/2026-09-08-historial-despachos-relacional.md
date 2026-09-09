@@ -28,6 +28,8 @@ La pantalla específica del pedido será el lugar de trabajo detallado. Allí se
 
 Las ediciones de productos deben generar movimientos de inventario idempotentes y auditables. Quitar una línea libera la reserva o concilia la cantidad ya descontada, sin doble descuento. Reemplazar un producto libera el original y descuenta el reemplazo. Si se confirma que el stock físico estaba mal contado, se registra un ajuste negativo separado con motivo, usuario, fecha, stock anterior y posterior. El detalle completo mostrará imágenes de producto grandes para facilitar la identificación.
 
+La edición del pedido se separa en dos acciones: **Editar datos**, que permite modificar en un mismo formulario los datos del cliente y de la entrega; y **Editar productos**, que abre un buscador independiente. El buscador permitirá localizar por nombre, SKU o EAN y mostrará productos con fotos grandes, miniaturas, stock disponible, precio y cantidades. Agregar, reemplazar o quitar una línea requerirá confirmar el impacto en totales y stock antes de guardar.
+
 ### Cancelados y recuperación comercial
 
 Los cancelados permanecen en **Todos** para consulta, pero nunca entran en preparación, despacho ni agrupación. **Recuperar ventas** combina cancelados y carritos abandonados. La oportunidad permanece visible hasta el cierre del día hábil siguiente a su detección o cancelación; la interfaz debe mostrar explícitamente si el vencimiento es **hoy** o **mañana**, calculándolo desde la fecha del pedido/abandono y el calendario de la tienda. Después sale de esta vista y permanece en el historial. En esta primera versión no se guarda el motivo de cancelación. Contactar no reactiva el pedido original: una venta recuperada crea o vincula un pedido nuevo.
