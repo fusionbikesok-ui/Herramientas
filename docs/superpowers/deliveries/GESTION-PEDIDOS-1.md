@@ -39,7 +39,7 @@ npx eslint scripts/gestion-pedidos-preview-smoke.mjs
 node scripts/gestion-pedidos-preview-smoke.mjs
 ```
 
-Resultado: el lint no pudo ejecutarse porque falta `@eslint/js` en las dependencias instaladas; no se modificó `package-lock.json` para resolverlo dentro de esta entrega. El smoke Playwright sí pasó: login correcto; `/gestion-pedidos/` cargó; la pill **Recuperar ventas** abrió su vista; `/gestion-pedidos/pedidos/1001` mantuvo URL propia y mostró el detalle; no hubo errores de página. Captura: `output/playwright/gestion-pedidos-detail-final.png`.
+Resultado: lint focalizado aprobado para el script y smoke Playwright aprobado: login correcto; `/gestion-pedidos/` cargó; las vistas **Recuperar ventas**, **En preparación**, **Despachos** y **Todos los pedidos** abrieron; `/gestion-pedidos/pedidos/1001` mantuvo URL propia, mostró el detalle y el acceso a WooCommerce; no hubo errores de página. La instalación local de dependencias se hizo sin modificar el lockfile versionado. Captura: `output/playwright/gestion-pedidos-detail-final.png`.
 
 ## Criterios de aceptación
 
