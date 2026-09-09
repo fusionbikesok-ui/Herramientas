@@ -41,8 +41,9 @@ Preflight implementado en `lib/gestionPedidosPublicacion.js`, con pruebas focali
 - Migraciones 095–098: aplicadas en la base del VPS; integridad SQLite `ok`.
 - Conteos iniciales: `706` pedidos; oportunidades, cambios y reintegros nuevos en `0`.
 - Smoke de salud real: `GET /healthz` respondió `200` y `{ ok: true, integridad: "ok" }`.
+- Muestra controlada: `5/5` pedidos reconciliados, `0` faltantes y `0` duplicados; sin mutar estados.
 - Suite completa para GP10: no ejecutada.
 
-Siguiente bloque: importar/reconciliar una muestra controlada y ejecutar el smoke autenticado de las vistas y acciones permitidas.
+Siguiente bloque: ejecutar el smoke autenticado de las vistas y acciones permitidas.
 
 GP10 en desarrollo. Suite completa: no ejecutada para GP10.
