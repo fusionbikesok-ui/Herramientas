@@ -1,6 +1,6 @@
 # GP10: Publicación controlada
 
-**Estado:** planificada  
+**Estado:** desarrollo  
 **Superficie:** VPS / operación de tienda  
 **Dependencia:** GP9 publicada
 
@@ -33,5 +33,16 @@ Habilitar la Gestión de pedidos para operación real mediante un despliegue con
 ## Gate
 
 Preflight implementado en `lib/gestionPedidosPublicacion.js`, con pruebas focalizadas en `test/gestionPedidosPublicacion.test.js`; health check agregado en `GET /healthz`.
+
+## Evidencia actual
+
+- Configuración del VPS: válida, con secreto fuerte y acceso restringido.
+- Backup sobre copia sanitaria: íntegro, con `706` pedidos.
+- Migraciones 095–098: aplicadas en la base del VPS; integridad SQLite `ok`.
+- Conteos iniciales: `706` pedidos; oportunidades, cambios y reintegros nuevos en `0`.
+- Smoke de salud real: `GET /healthz` respondió `200` y `{ ok: true, integridad: "ok" }`.
+- Suite completa para GP10: no ejecutada.
+
+Siguiente bloque: importar/reconciliar una muestra controlada y ejecutar el smoke autenticado de las vistas y acciones permitidas.
 
 GP10 en desarrollo. Suite completa: no ejecutada para GP10.
