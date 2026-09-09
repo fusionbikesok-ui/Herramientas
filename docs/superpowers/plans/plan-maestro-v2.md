@@ -114,6 +114,8 @@ Su navegación se limitará a tres pills: **Requieren atención**, **Recuperar v
 
 En Recuperar ventas, los únicos canales de contacto serán WhatsApp y Email, cada uno con su botón. Otro botón permitirá marcar el contacto como realizado. Se registrará el estado nunca contactado/contactado, usuario, fecha, hora y canal; seleccionar un canal por sí solo registra el intento, no confirma el contacto.
 
+WhatsApp solo validará y copiará el teléfono argentino sin `+54`; no enviará automáticamente. Email mostrará un recuadro copiable con destinatario, asunto y cuerpo personalizado con el carrito, preguntando si hubo problemas o arrepentimiento. Se comenzará con plantillas rotativas revisables; Gemini podrá evaluarse después como generador opcional, nunca como envío automático.
+
 El buscador global de esta pantalla buscará por número de pedido, identificadores externos Woo/MercadoLibre, cliente, email, teléfono, SKU, **EAN** y nombre de producto. Mostrará el motivo de coincidencia y no cambiará de pill automáticamente; para un resultado fuera de la vista actual permitirá abrirlo desde **Todos los pedidos**.
 
 La primera acción masiva de la lista será **Enviar a preparación**. El botón de asignación queda fuera por ahora. La confirmación validará la elegibilidad de los pedidos seleccionados, creará un lote de preparación y mostrará cualquier pedido excluido antes de confirmar.

@@ -28,6 +28,8 @@ Los cancelados permanecen en **Todos** para consulta, pero nunca entran en prepa
 
 La recuperación solo podrá iniciarse mediante **WhatsApp** o **Email**, con un botón independiente para cada canal. Un tercer botón, **Marcar contactado**, confirmará que la comunicación efectivamente se realizó. Se conservará si nunca se contactó, quién confirmó el contacto, fecha, hora y canal; hacer clic en el canal registra el intento/canal elegido, pero no confirma el contacto hasta la acción explícita.
 
+WhatsApp no enviará mensajes desde el VPS: validará el teléfono argentino y copiará el número en formato nacional, sin `+54`. Email abrirá un recuadro con destinatario, asunto y mensaje completo del carrito para copiar manualmente. El mensaje usará plantillas rotativas controladas; la generación asistida por Gemini queda como mejora posterior y siempre requerirá revisión antes de copiar o enviar.
+
 ## Importación inicial
 
 - MercadoLibre: todas las órdenes y shipments de los últimos 30 días.
