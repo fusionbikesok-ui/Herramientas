@@ -1,6 +1,6 @@
 # GP5: Preparación por lote y checklist
 
-**Estado:** desarrollo  
+**Estado:** candidata  
 **Superficie:** Gestión de pedidos + Gestión de envíos  
 **Dependencia:** GP4 publicada; catálogo y stock disponibles
 
@@ -32,3 +32,12 @@ Enviar varios pedidos confirmados a preparación como lote y ejecutar una checkl
 ## Gate
 
 Se validará el flujo con datos genéricos y luego con una muestra controlada: seleccionar varios, confirmar el lote, verificar productos, registrar faltantes, salir y volver a entrar. Con la evidencia completa se ejecutará la suite total; sólo si queda verde se publica GP5 y se avanza a GP6.
+
+## Evidencia previa al gate 2026-09-09
+
+- Puente real de lote publicado en `routes/preparacion.js`.
+- Pruebas focalizadas del puente: `2/2` verdes.
+- Pruebas del router de gestión: `8/8` verdes.
+- Pruebas de preparación existentes: `225/225` verdes.
+- Smoke de preview: verde.
+- La checklist existente conserva cantidades, estados, fotos, eventos y reingreso por detalle.
