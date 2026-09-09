@@ -100,6 +100,12 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
     pedido.entrega = db.prepare('SELECT * FROM gestion_pedido_entregas WHERE pedido_id=?').get(pedido.id) || null;
     pedido.items = db.prepare('SELECT * FROM gestion_pedido_items WHERE pedido_id=? ORDER BY id').all(pedido.id);
     pedido.eventos = db.prepare('SELECT * FROM gestion_pedido_eventos WHERE pedido_id=? ORDER BY creado_en DESC, id DESC').all(pedido.id);
+    if (pedido.fuente === 'woocommerce' && woo?.url) {
+      const base = String(woo.url).replace(/\/$/, '');
+      pedido.enlace_woocommerce = `${base}/wp-admin/post.php?post=${encodeURIComponent(pedido.external_id)}&action=edit`;
+    } else {
+      pedido.enlace_woocommerce = null;
+    }
     return res.json({ ok: true, pedido });
   });
   return router;

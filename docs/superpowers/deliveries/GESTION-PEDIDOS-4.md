@@ -14,6 +14,7 @@ Hacer que la Gestión de pedidos permita encontrar y consultar cualquier pedido 
 - Búsqueda por número visible, ID externo, cliente, email, teléfono, nombre de producto, SKU y EAN.
 - Conteo de productos y unidades para la lista compacta.
 - API de detalle con cliente, entrega, ítems, importes, estados y timeline de eventos.
+- Enlace administrativo al pedido original de WooCommerce cuando la fuente es WooCommerce.
 - Respuesta 404 clara para pedidos inexistentes.
 - La preview mantiene las cinco vistas, los contadores clickeables y la URL específica `/gestion-pedidos/pedidos/:id`.
 - Lectura sin acciones destructivas; edición, cambios de productos, stock y permisos se implementan en entregas posteriores.

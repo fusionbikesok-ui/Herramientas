@@ -31,6 +31,15 @@ describe('POST /api/gestion-pedidos/importar', () => {
     db.close();
   });
 
+  it('construye el enlace administrativo de WooCommerce en el detalle Woo', async () => {
+    const db = dbPrueba(); const now = '2026-09-09T10:00:00Z';
+    const cliente = db.prepare('INSERT INTO gestion_pedido_clientes (nombre,creado_en,actualizado_en) VALUES (?,?,?)').run('Demo', now, now).lastInsertRowid;
+    const pedido = db.prepare(`INSERT INTO gestion_pedidos (cliente_id,fuente,external_id,estado_comercial,estado_operativo,importado_en,actualizado_en) VALUES (?,?,?,?,?,?,?)`).run(cliente, 'woocommerce', '501', 'confirmado', 'importado', now, now).lastInsertRowid;
+    const app = express(); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, { woo: { url: 'https://shop.example/' } }));
+    const response = await request(app).get(`/api/gestion-pedidos/${pedido}`);
+    expect(response.body.pedido.enlace_woocommerce).toBe('https://shop.example/wp-admin/post.php?post=501&action=edit'); db.close();
+  });
+
   it('devuelve 404 para un pedido inexistente', async () => {
     const db = dbPrueba(); const app = express(); app.use('/api/gestion-pedidos', gestionPedidosRouter(db, {}));
     const response = await request(app).get('/api/gestion-pedidos/999');
