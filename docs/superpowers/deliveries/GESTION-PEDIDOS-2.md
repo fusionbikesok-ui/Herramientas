@@ -1,6 +1,6 @@
 # GP2: Modelo relacional e importación base
 
-**Estado:** planificada  
+**Estado:** candidata  
 **Superficie:** VPS  
 **Dependencia:** GP1 aceptada
 
@@ -61,6 +61,10 @@ Resultado: `1` archivo y `2` pruebas aprobados; ESLint aprobado. La segunda prue
 Se conectó la importación administrativa en `POST /api/gestion-pedidos/importar`. Por defecto toma los últimos 30 días; acepta `desde` y `hasta`, consulta WooCommerce con `status=any`, y consulta MercadoLibre recorriendo el universo de estados (`confirmed`, `payment_required`, `payment_in_process`, `partially_paid`, `paid`, `partially_refunded`, `pending_cancel`, `cancelled` y `manually_cancelled`). La lista se puede ajustar con `GESTION_PEDIDOS_ML_STATUSES` y conserva la deduplicación relacional. El endpoint está detrás del guard general de `/api`, por lo que requiere sesión y permisos del panel.
 
 La ruta `GET /api/gestion-pedidos/importar/config` expone únicamente indicadores booleanos de configuración, nunca credenciales, para verificar el VPS antes de lanzar la primera importación. Su prueba confirma que las credenciales no aparecen en la respuesta.
+
+### Verificación de configuración efectiva del VPS 2026-09-09
+
+Se inspeccionó únicamente la presencia de variables en el entorno del proceso activo `node /opt/fusionbikes/herramientas/server.js`, sin imprimir valores ni ejecutar la importación. Resultado: presentes `WOO_URL`, `WOO_CK`, `WOO_CS`, `ML_CLIENT_ID`, `ML_CLIENT_SECRET` y `ML_USER_ID`.
 
 Validación adicional: la ruta acepta adaptadores inyectables para pruebas. `test/gestionPedidosRoute.test.js` verifica el GET de configuración sin secretos, el POST HTTP, el resumen JSON y la persistencia de dos pedidos sin red externa. En total, las pruebas focalizadas de GP2 son `4` aprobadas; ESLint aprobado para los módulos y pruebas de esta entrega.
 
