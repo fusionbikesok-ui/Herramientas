@@ -638,6 +638,22 @@ body {
           <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         </div>
       </a>
+      <a class="card card-control" href="/herramientas/gestion-pedidos/" data-tool="pedidos">
+        <div class="card-top">
+          <div class="card-icon icon-control">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>
+              <path d="M8 7h8M8 11h8M8 15h5"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card-title">Gestión de pedidos</div>
+        <div class="card-desc">Consultá, prepará y gestioná pedidos web, MercadoLibre y ventas del local desde una única bandeja.</div>
+        <div class="card-footer">
+          <span class="card-tag">Pedidos · Preparación · Despachos</span>
+          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
       <a class="card card-control" data-admin-only href="/herramientas/inventario/">
         <div class="card-top">
           <div class="card-icon icon-control">
@@ -808,6 +824,7 @@ function logout() {
 
 // Deriva el id de herramienta desde el href de una tarjeta (/herramientas/<tool>/).
 function toolDeHref(href) {
+  if ((href || '').indexOf('/herramientas/gestion-pedidos/') === 0) return 'pedidos';
   var m = (href || '').match(/\/herramientas\/([a-z0-9-]+)\//);
   return m ? m[1] : null;
 }
