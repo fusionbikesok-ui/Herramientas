@@ -1,6 +1,6 @@
 # GP9: Validación operativa controlada
 
-**Estado:** candidata  
+**Estado:** publicada  
 **Superficie:** VPS / operación de tienda  
 **Dependencia:** GP8 publicada
 
@@ -47,4 +47,6 @@ Entregas internas completadas. Evidencia focalizada:
 - Validación de acciones con usuario autorizado.
 - Pruebas focalizadas de Gestión de pedidos y GP9: `23/23` verdes.
 
-Suite completa en ejecución al cerrar GP9. Si queda verde y la jornada es aceptada, se publica GP9 y se abre GP10.
+Suite completa: `131` archivos pasaron, `1` omitido; `2421` tests pasaron, `51` omitidos; duración `2002.85s`; salida `0`.
+
+GP9 queda publicada y habilita GP10.
