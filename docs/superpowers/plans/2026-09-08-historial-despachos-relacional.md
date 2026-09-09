@@ -26,6 +26,8 @@ La vista rápida lateral mostrará toda la información relevante para consultar
 
 La pantalla específica del pedido será el lugar de trabajo detallado. Allí se podrán ejecutar acciones autorizadas, modificar datos, cambiar la intención de envío, registrar decisiones, consultar la línea de tiempo completa y gestionar incidencias. La vista rápida no duplicará esos formularios ni permitirá cambios complejos.
 
+Cada pedido tendrá una URL persistente propia con formato `/gestion-pedidos/pedidos/{id}`. El listado general permanecerá en `/gestion-pedidos/`; la vista rápida podrá consultar sin navegar, pero **Abrir pedido completo** llevará a la URL del detalle, compatible con recarga, historial del navegador, permisos y auditoría.
+
 Las ediciones de productos deben generar movimientos de inventario idempotentes y auditables. Quitar una línea libera la reserva o concilia la cantidad ya descontada, sin doble descuento. Reemplazar un producto libera el original y descuenta el reemplazo. Si se confirma que el stock físico estaba mal contado, se registra un ajuste negativo separado con motivo, usuario, fecha, stock anterior y posterior. El detalle completo mostrará imágenes de producto grandes para facilitar la identificación.
 
 La edición del pedido se separa en dos acciones: **Editar datos**, que permite modificar en un mismo formulario los datos del cliente y de la entrega; y **Editar productos**, que abre un buscador independiente. El buscador permitirá localizar por nombre, SKU o EAN y mostrará productos con fotos grandes, miniaturas, stock disponible, precio y cantidades. Agregar, reemplazar o quitar una línea requerirá confirmar el impacto en totales y stock antes de guardar.

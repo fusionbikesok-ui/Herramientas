@@ -124,6 +124,8 @@ La primera acción masiva de la lista será **Enviar a preparación**. El botón
 
 La vista rápida lateral será una ficha completa de consulta con datos del pedido, cliente, entrega o retiro, estados, pago, importe, productos y cantidades, notas, tracking, fotos de preparación y timeline resumido. Tendrá pocas acciones seguras y un acceso claro a la pantalla específica. La pantalla específica del pedido concentrará las modificaciones y acciones operativas autorizadas, evitando que la vista rápida se convierta en un segundo formulario incompleto.
 
+El listado vivirá en `/gestion-pedidos/` y cada pedido tendrá una URL persistente `/gestion-pedidos/pedidos/{id}`. Abrir el detalle completo conservará navegación, recarga, permisos y auditoría del pedido.
+
 Los cambios de productos deberán conciliar reservas y stock sin doble descuento: retirar una línea libera la reserva, reemplazarla libera el producto original y descuenta el nuevo, y un faltante físico confirmado genera un ajuste negativo auditado. En el detalle, los productos se mostrarán con imágenes grandes, además de SKU, EAN, cantidad y precio.
 
 El botón genérico “Editar pedido” se reemplaza por **Editar datos** —cliente y entrega juntos— y **Editar productos**. Esta última acción abrirá una ventana de búsqueda por nombre, SKU o EAN con fotos grandes, miniaturas, stock, precio y cantidad, para agregar o reemplazar productos con confirmación de impacto.
