@@ -1,6 +1,6 @@
 # GP6: Despachos, agrupación y evidencia
 
-**Estado:** candidata  
+**Estado:** publicada  
 **Superficie:** Gestión de envíos / VPS  
 **Dependencia:** GP5 publicada
 
@@ -35,6 +35,13 @@ Permitir que los pedidos preparados se agrupen en despachos, se embalen y se reg
 - No se carga tracking en MercadoLibre: el endpoint devuelve `TRACKING_NO_APLICA`.
 - Los eventos de lote conservan actor, hora y detalle.
 
-## Gate
+## Gate ejecutado 2026-09-09
 
-Se validará con datos genéricos y una muestra controlada: seleccionar pedidos listos, agrupar, escanear códigos, cargar tracking externo, fotografiar paquete, cerrar y reabrir el despacho. Si la suite completa queda verde, se publica GP6 y se avanza a GP7.
+Suite completa ejecutada al cerrar la entrega:
+
+- `128` archivos pasaron.
+- `2408` tests pasaron.
+- `51` tests quedaron omitidos.
+- Duración: `2179,58 s`.
+
+Resultado: **verde**. GP6 queda publicada y habilita GP7.

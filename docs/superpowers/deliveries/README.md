@@ -1,6 +1,6 @@
 # Progreso y evidencia de entregas E0–E24 y urgentes
 
-Actualizado: 2026-09-05. Estas fichas registran realidad; el plan maestro especifica el objetivo. Solo evidencia reproducible permite avanzar de estado.
+Actualizado: 2026-09-09. Estas fichas registran realidad; el plan maestro especifica el objetivo. Solo evidencia reproducible permite avanzar de estado.
 
 | Entrega | Nombre | Estado | Ficha |
 | --- | --- | --- | --- |
@@ -41,10 +41,8 @@ Actualizado: 2026-09-05. Estas fichas registran realidad; el plan maestro especi
 | GP3 | Importación inicial WooCommerce/MercadoLibre | publicada | suite completa verde; habilita GP4 |
 | GP4 | Gestión funcional de pedidos | publicada | suite completa verde; habilita GP5 |
 | GP5 | Preparación por lote y checklist | publicada | suite completa verde; habilita GP6 |
-| GP6 | Despachos, agrupación y evidencia | candidata | gate de suite completa en curso |
-| GP5 | Preparación por lote y checklist | planificada | pendiente de crear al cerrar GP4 |
-| GP6 | Despachos, agrupación y evidencia | planificada | pendiente de crear al cerrar GP5 |
-| GP7 | Recuperar ventas | planificada | pendiente de crear al cerrar GP4 |
+| GP6 | Despachos, agrupación y evidencia | publicada | suite completa verde: 128 archivos, 2408 tests, 51 omitidos |
+| GP7 | Recuperar ventas | desarrollo | cancelados, carritos abandonados y contacto manual |
 | GP8 | Integraciones, cuotas, stock y permisos | planificada | pendiente de crear al cerrar GP7 |
 | GP9 | Validación operativa controlada | planificada | pendiente de crear al cerrar GP8 |
 | GP10 | Publicación | planificada | pendiente de crear al cerrar GP9 |
