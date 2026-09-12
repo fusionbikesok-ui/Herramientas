@@ -339,6 +339,7 @@
   .pf{display:flex;gap:10px;align-items:center;background:var(--panel);
       border:1px solid var(--line);border-radius:12px;padding:9px 6px 9px 9px;margin-bottom:8px;}
   .pf[data-estado="sin_asociar"]{border-color:rgba(245,185,66,.45);}
+
   .pf-foto{width:64px;height:64px;border-radius:9px;object-fit:cover;background:#fff;flex:0 0 auto;
       outline:1px solid rgba(255,255,255,.10);outline-offset:-1px;}
   .pf-foto-vacia{display:grid;place-items:center;background:var(--panel2);color:var(--muted2);
@@ -353,6 +354,11 @@
   .pf-res.ok{color:var(--green);}
   .pf-res.dif{color:var(--amber,#F5B942);}
   .pf-res.warn{color:var(--amber,#F5B942);}
+  /* CHOQUE DE NOMBRES: la ficha usa class="pf-res dif", y `.dif` existe aparte como componente
+     de la lista de diferencias (display:flex, padding:12px 0). Esos 24px de relleno le sumaban
+     altura a TODAS las fichas, en todos los anchos — no sólo en teléfono. Se neutraliza acá con
+     dos clases, que gana por especificidad. */
+  .pf-res.dif, .pf-res.ok, .pf-res.warn{display:block;padding:0;gap:0;flex-wrap:nowrap;}
   .pf-num{display:flex;flex-direction:row;align-items:center;gap:2px;flex:0 0 auto;}
   .pf-menos{min-width:44px;min-height:56px;border:0;background:none;color:var(--txt);
       font-size:25px;line-height:1;border-radius:9px;cursor:pointer;}
@@ -367,6 +373,17 @@
   .pf-caja::placeholder{color:var(--muted2);font-size:20px;font-weight:500;}
   .pf-caja.vacia{border-style:dashed;}
   .pf-caja.ok{border-color:rgba(52,211,153,.55);background:rgba(52,211,153,.12);color:var(--green);}
+
+  /* TELÉFONO: el título baja a ocupar el ancho, los controles pasan a una segunda fila.
+     VA DESPUÉS de las reglas base de .pf a propósito: con la misma especificidad gana el que
+     aparece último, y puesto antes la base le pisaba la foto. Ya pasó una vez en esta pantalla
+     con el bloque de escritorio.
+
+     Medido a 390px con el layout de una sola fila: la ficha son 366px, la foto 64 y los
+     controles 158 (dos botones de 44 y la caja de 56, que es el piso accesible). Al nombre le
+     quedaban 107px — unos 13 caracteres por línea. "Cubierta Grand Prix 5000 All Se 700x28 Tr
+     Kv - Continental" son 58, y el conteo se hace 100% en teléfono. */
+
   .pf-caja.dif{border-color:rgba(245,185,66,.55);background:rgba(245,185,66,.12);color:var(--amber,#F5B942);}
   .pf-caja:focus{outline:2px solid var(--azul);outline-offset:2px;}
   .pf-mas{min-width:44px;min-height:56px;border:0;background:none;color:var(--muted);
@@ -381,6 +398,25 @@
       background:none;border:0;color:var(--txt);font-size:14.5px;cursor:pointer;}
   .pf-menu button:hover,.pf-menu button:focus-visible{background:var(--panel);}
   .pf-menu button.peligro{color:var(--rojo,#F87171);}
+
+  @media (max-width: 600px) {
+    .pf{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;
+        column-gap:10px;row-gap:4px;align-items:start;}
+    .pf-foto{grid-column:1;grid-row:1;width:52px;height:52px;}
+    .pf-info{grid-column:2;grid-row:1;}
+    /* Los controles a la derecha, donde ya estaba el pulgar. */
+    .pf-num{grid-column:2;grid-row:2;justify-content:flex-end;}
+    /* Una línea cada uno: cada línea extra le suma ~20px a CADA ficha, y la lista es para
+       escanear. El resultado envolvía en dos líneas y era el que más altura agregaba. */
+    .pf-nom{-webkit-line-clamp:2;}
+    .pf-meta{margin-top:1px;}
+    .pf-res{display:block;margin-top:2px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    /* 44px es el piso accesible del proyecto (WCAG 2.5.5); los 56 de escritorio no hacen falta
+       acá y cada píxel de la fila de controles se paga en CADA ficha. */
+    .pf-menos{min-height:44px;}
+    .pf-caja{height:44px;width:58px;font-size:22px;}
+    .pf-mas{min-height:44px;}
+  }
 
   /* ─── Escritorio: dos paneles (2026-09-11) ────────────────────────────────
      No es la pantalla del teléfono estirada. En 1440px cada ficha medía 1.076px de ancho:
