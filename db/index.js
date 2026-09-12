@@ -841,6 +841,28 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_devoluciones_102')").run();
     })();
   }
+  const vigiaFormatoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_publicacion_cambios_103'").get();
+  if (!vigiaFormatoMigration) {
+    db.transaction(() => {
+      // La columna puede existir ya en bases que vienen de producción con un ALTER manual:
+      // en ese caso sólo se crea la tabla y se registra la migración.
+      const columnas = db.prepare('PRAGMA table_info(ml_publicaciones_cache)').all();
+      if (columnas.some((c) => c.name === 'catalog_product_id')) {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS ml_publicacion_cambios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, clave TEXT NOT NULL, item_id TEXT NOT NULL,
+            sku TEXT, campo TEXT NOT NULL, valor_anterior TEXT, valor_nuevo TEXT,
+            pausada INTEGER NOT NULL DEFAULT 0, pausa_error TEXT, detectado_en TEXT NOT NULL,
+            revisado_en TEXT, revisado_por TEXT);
+          CREATE INDEX IF NOT EXISTS idx_ml_pub_cambios_sin_revisar ON ml_publicacion_cambios(revisado_en, clave);
+          CREATE INDEX IF NOT EXISTS idx_ml_pub_cambios_clave ON ml_publicacion_cambios(clave, id);
+        `);
+      } else {
+        db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '103_ml_publicacion_cambios.sql'), 'utf8'));
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_publicacion_cambios_103')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {

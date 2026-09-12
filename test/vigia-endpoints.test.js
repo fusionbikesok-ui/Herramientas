@@ -1,0 +1,94 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import express from 'express';
+import request from 'supertest';
+
+vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn(), bootstrapToken: vi.fn(), getAccessToken: vi.fn() }));
+import { mlFetch } from '../lib/mlClient.js';
+import { openDb } from '../db/index.js';
+import { getReactivablesRows, syncRouter } from '../routes/sync.js';
+
+const TEST_DB = './test/vigia-endpoints.sqlite';
+const CFG = { clientId: 'cid', clientSecret: 'cs', userId: '99999' };
+
+function sembrarPausada(db, clave = 'MLA1|', sku = 'FB-1') {
+  db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, actualizado_en)
+    VALUES (1, 'Cubierta', ?, 'simple', 5, datetime('now'))`).run(sku);
+  // SIN ESTA FILA EL TEST NO MIDE NADA. getReactivablesRows se apoya en COMPUTED_STOCK_CTE
+  // (routes/sync.js:224), que arranca `FROM sku_matcher_decisiones` con accion IN
+  // ('asignar','confirmar'): sin una decisión, la consulta devuelve [] pase lo que pase y los
+  // tres casos "pasarían" por la razón equivocada.
+  db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
+    VALUES (?, ?, 'WC Cubierta', 'confirmar', datetime('now'))`).run(clave, sku);
+  db.prepare(`INSERT INTO ml_publicaciones_cache
+    (clave, item_id, variation_id, titulo, status, sub_status, es_variante, seller_sku, available_quantity, actualizado_en)
+    VALUES (?, 'MLA1', '', 'Cubierta', 'paused', 'out_of_stock', 0, ?, 0, datetime('now'))`).run(clave, sku);
+}
+
+describe('el reactivador respeta las pausas del vigía', () => {
+  let db, app;
+  beforeEach(() => {
+    db = openDb(TEST_DB);
+    vi.clearAllMocks();
+    app = express();
+    app.use(express.json());
+    app.use('/api/sync', syncRouter(db, { ml: CFG }));
+  });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('sin cambios del vigía, la publicación es reactivable', () => {
+    sembrarPausada(db);
+    expect(getReactivablesRows(db).map(r => r.clave)).toContain('MLA1|');
+  });
+
+  it('con un cambio SIN revisar, el reactivador la saltea', () => {
+    sembrarPausada(db);
+    db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|','MLA1','catalog_product_id',NULL,'MLA44441017',1,datetime('now'))`).run();
+    expect(getReactivablesRows(db).map(r => r.clave)).not.toContain('MLA1|');
+  });
+
+  it('revisado el cambio, vuelve a ser reactivable', () => {
+    sembrarPausada(db);
+    db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en, revisado_en, revisado_por)
+      VALUES ('MLA1|','MLA1','catalog_product_id',NULL,'MLA44441017',1,datetime('now'),datetime('now'),'jose')`).run();
+    expect(getReactivablesRows(db).map(r => r.clave)).toContain('MLA1|');
+  });
+
+  it('GET /cambios-formato devuelve los sin revisar con su antes y después', async () => {
+    sembrarPausada(db);
+    db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, sku, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|','MLA1','FB-1','catalog_product_id',NULL,'MLA44441017',1,datetime('now'))`).run();
+    const r = await request(app).get('/api/sync/cambios-formato');
+    expect(r.status).toBe(200);
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0]).toMatchObject({ campo: 'catalog_product_id', valor_nuevo: 'MLA44441017', pausada: 1 });
+    expect(r.body.data[0].titulo).toBe('Cubierta');
+  });
+
+  it('revisar sin reactivar marca revisado y NO toca ML', async () => {
+    sembrarPausada(db);
+    const info = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|','MLA1','SALE_FORMAT','Unidad','Pack',1,datetime('now'))`).run();
+    const r = await request(app).post(`/api/sync/cambios-formato/${info.lastInsertRowid}/revisar`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.reactivada).toBe(false);
+    expect(mlFetch).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT revisado_en FROM ml_publicacion_cambios WHERE id=?').get(info.lastInsertRowid).revisado_en).toBeTruthy();
+  });
+
+  it('revisar con reactivar:true despausa en ML', async () => {
+    sembrarPausada(db);
+    mlFetch.mockResolvedValue({ status: 200, data: {} });
+    const info = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|','MLA1','SALE_FORMAT','Unidad','Pack',1,datetime('now'))`).run();
+    const r = await request(app).post(`/api/sync/cambios-formato/${info.lastInsertRowid}/revisar`).send({ reactivar: true });
+    expect(r.body.reactivada).toBe(true);
+    expect(mlFetch).toHaveBeenCalledWith(db, CFG, 'put', '/items/MLA1', { status: 'active' });
+  });
+
+  it('revisar un id inexistente da 404', async () => {
+    const r = await request(app).post('/api/sync/cambios-formato/9999/revisar').send({});
+    expect(r.status).toBe(404);
+  });
+});

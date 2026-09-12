@@ -42,7 +42,7 @@ describe('aplanarItemMl', () => {
       canales_json: null,
       seller_sku_presente: 1, seller_custom_field: null,
       atributos_json: JSON.stringify([{ id: 'SELLER_SKU', value_name: 'CBL' }]),
-      gtin: '', user_product_id: null,
+      gtin: '', catalog_product_id: null, user_product_id: null,
     }]);
   });
 
@@ -119,5 +119,33 @@ describe('user_product_id', () => {
   it('sin user_product_id queda en null, no en undefined (el upsert usa parámetro nombrado)', () => {
     const filas = aplanarItemMl({ id: 'MLA2', title: 'Suelto', status: 'active', attributes: [] });
     expect(filas[0].user_product_id).toBeNull();
+  });
+});
+
+describe('catalog_product_id', () => {
+  it('mapea catalog_product_id del item a la fila (simple)', () => {
+    const filas = aplanarItemMl({
+      id: 'MLA1', title: 'x', status: 'active', attributes: [], variations: [],
+      catalog_listing: true, catalog_product_id: 'MLA44441017',
+    });
+    expect(filas[0].catalog_product_id).toBe('MLA44441017');
+  });
+
+  it('catalog_product_id ausente → null, no undefined', () => {
+    const filas = aplanarItemMl({
+      id: 'MLA2', title: 'x', status: 'active', attributes: [], variations: [],
+      catalog_listing: false,
+    });
+    expect(filas[0].catalog_product_id).toBeNull();
+  });
+
+  it('denormaliza catalog_product_id en cada variación', () => {
+    const filas = aplanarItemMl({
+      id: 'MLA3', title: 'x', status: 'active', attributes: [], catalog_listing: true,
+      catalog_product_id: 'MLA999',
+      variations: [{ id: 1, attribute_combinations: [], attributes: [] },
+        { id: 2, attribute_combinations: [], attributes: [] }],
+    });
+    expect(filas.map(f => f.catalog_product_id)).toEqual(['MLA999', 'MLA999']);
   });
 });

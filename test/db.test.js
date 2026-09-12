@@ -89,6 +89,7 @@ describe('db schema', () => {
       'ml_oauth_token',
       'ml_precio_auditoria',
       'ml_precios_cache',
+      'ml_publicacion_cambios',
       'ml_publicaciones_cache',
       'ml_reactivacion_frenada',
       // Cadencia adaptativa del scan y huella para medir la cobertura del webhook (086).
