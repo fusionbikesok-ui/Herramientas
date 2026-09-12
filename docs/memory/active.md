@@ -207,6 +207,25 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   estrenado queda por debajo del umbral y pausa publicaciones sanas de a una. El 2026-09-12 se
   hizo el backfill de `catalog_product_id` (3.955 ítems) antes del reinicio, y la primera corrida
   dio 0 cambios y 0 pausadas.
+- **La suite completa cuesta ~11 minutos, no 50** (2026-09-12). Cada test abre una base nueva y
+  corre las 68 migraciones, pero el 90% de ese costo es **fsync**, no las migraciones: `openDb`
+  tarda 1.681 ms en disco, 175 ms con el journal en memoria y 160 ms sobre tmpfs. `vitest.config.js`
+  setea `SQLITE_UNSAFE_FAST=1` y `db/index.js` pone `journal_mode=MEMORY` + `synchronous=OFF` sólo
+  con esa bandera. **Nunca en producción**: ahí se escribe el stock real y un corte de luz
+  corrompería la base. No está en `.env`, ni en `ecosystem.config.cjs`, ni en el entorno de pm2.
+- **Dos tests dependían de que la máquina fuera lenta** y la base rápida los destapó: sembraban
+  filas seguidas confiando en que `new Date()` diera timestamps distintos. En el mismo
+  milisegundo el `ORDER BY` empata y lo desempata SQLite. Regla: si un test depende del orden o
+  de que una fecha cambió, la fecha va **explícita** o el reloj va fijado con `vi.setSystemTime`.
+- **Un 403 de ML no es un problema de credenciales.** 401 y 403 estaban en la misma categoría
+  `auth`, así que un 403 abría un incidente crítico que mandaba a revisar el Client ID. 403 pasó
+  a la categoría `permiso` (advertencia). El fallo real del refresh de token setea
+  `.categoria='auth'` explícitamente y sigue siendo crítico.
+- **Choque de clases en el contador**: la ficha usa `class="pf-res dif"` y `.dif` existe aparte
+  como componente de la lista de diferencias (`display:flex`, `padding:12px 0`). Le inflaba la
+  altura a todas las fichas en todos los anchos. Al mirar CSS de esa pantalla, ojo también con el
+  **orden**: los bloques `@media` van DESPUÉS de las reglas base o la base gana por orden de
+  aparición — pasó tres veces.
 - **El contado de referencia sale SIEMPRE de `catalogo_cache.regular_price`, nunca de `precio`**
   (regresión reintroducida y corregida el 2026-09-11 en `POST /api/precios/objetivo`). `precio` es
   el VIGENTE y ya trae el `sale_price`: usarlo descuenta dos veces. El SKU de una publicación sale
