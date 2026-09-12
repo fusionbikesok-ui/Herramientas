@@ -131,11 +131,17 @@ body {
 .btn-logout:hover { border-color: var(--muted); color: var(--text); }
 
 /* ── Main ── */
+/* ANCHO COMPLETO (pedido del usuario, 2026-09-12). La grilla aprovecha todo el ancho —más
+   tarjetas por fila, menos scroll— pero el TEXTO CORRIDO queda acotado: 45-75 caracteres por
+   línea es el rango legible, y una descripción que cruza un monitor de 2560px no se lee.
+   Ver docs/superpowers/specs/2026-09-12-home-rediseno-design.md */
 .main {
-  max-width: 920px;
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 2.75rem 2rem 5rem;
 }
+/* Lo que se LEE, acotado. Lo que se ESCANEA (la grilla), no. */
+.page-desc, .card-desc { max-width: 68ch; }
 
 /* ── Page header ── */
 .page-header {
@@ -213,6 +219,25 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
   gap: 12px;
+}
+/* En pantallas anchas el problema NO es que falte ancho para las tarjetas: es que un grupo de
+   3 las apila a la izquierda y deja media pantalla vacía. La solución es poner los GRUPOS en
+   columnas, no estirar las tarjetas: una tarjeta de 700px con una descripción de dos renglones
+   se ve rota, y el texto ya está topeado en 68ch por legibilidad. */
+@media (min-width: 1700px) {
+  #grupos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 2.5rem; align-items: start; }
+}
+@media (min-width: 2300px) {
+  #grupos { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Herramienta incompleta: se muestra, pero con su estado a la vista. Esconderla es cómo
+   llegamos a tener cuatro pantallas construidas que nadie podía alcanzar. */
+.card--parcial { opacity: .82; }
+.card-estado {
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+  border-radius: 20px; background: rgba(245,185,66,.14); color: var(--amber, #F5B942);
+  margin-left: 8px; vertical-align: middle;
 }
 
 /* Card: left color border via box-shadow inset */
@@ -537,278 +562,10 @@ body {
   </section>
 
   <!-- INGRESO -->
-  <section class="category" data-admin-only>
-    <div class="category-header">
-      <span class="category-label label-ingreso">Ingreso</span>
-      <div class="category-line"></div>
-    </div>
-    <div class="cards">
-      <a class="card card-ingreso" href="/herramientas/stock/">
-        <div class="card-top">
-          <div class="card-icon icon-ingreso">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/>
-              <path d="M16 3l-4 4-4-4"/>
-              <path d="M12 7v7"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Ingreso de Stock</div>
-        <div class="card-desc">Subí archivos del proveedor (CSV, PDF, XLSX, imagen), mapeá al catálogo WooCommerce y generá el CSV de importación.</div>
-        <div class="card-footer">
-          <span class="card-tag">Catálogo · Mapeo · CSV</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-ingreso" href="/herramientas/recepcion/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-ingreso">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 3h15v13H1z"/>
-              <path d="M16 8h4l3 3v5h-7V8z"/>
-              <circle cx="5.5" cy="18.5" r="2.5"/>
-              <circle cx="18.5" cy="18.5" r="2.5"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Recepción de Mercadería</div>
-        <div class="card-desc">Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic.</div>
-        <div class="card-footer">
-          <span class="card-tag">Facturas · Remitos · Stock</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-ingreso" href="/herramientas/pedidos/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-ingreso">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="3" width="20" height="18" rx="2"/>
-              <path d="M8 7h8M8 11h8M8 15h5"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Pedidos de Compra</div>
-        <div class="card-desc">Seguí el estado de cada pedido: documentos recibidos, recepciones confirmadas y mercadería pendiente de llegada.</div>
-        <div class="card-footer">
-          <span class="card-tag">Pedidos · OC · Importadores</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-ingreso" href="/herramientas/preparacion/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-ingreso">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/>
-              <path d="M3 8l9 5 9-5"/>
-              <path d="M12 13v8"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Preparación de Pedidos</div>
-        <div class="card-desc">Escaneá y fotografiá cada pedido antes de embalarlo (web Andreani + ML Flex/colecta) y armá las etiquetas de Andreani en lote.</div>
-        <div class="card-footer">
-          <span class="card-tag">Escaneo · Fotos · Etiquetas</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-    </div>
-  </section>
-
-  <!-- CONTROL -->
-  <section class="category">
-    <div class="category-header">
-      <span class="category-label label-control">Control</span>
-      <div class="category-line"></div>
-    </div>
-    <div class="cards">
-      <a class="card card-control" href="/herramientas/cobertura/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M8 12h8M12 8v8"/>
-              <path d="M4.93 4.93l4.24 4.24M14.83 14.83l4.24 4.24"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Cobertura de Catálogo</div>
-        <div class="card-desc">Verificá qué productos están en WooCommerce, en MercadoLibre o en ambos, y si los SKUs coinciden.</div>
-        <div class="card-footer">
-          <span class="card-tag">WC · ML · SKU</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" href="/herramientas/gestion-pedidos/" data-tool="pedidos">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>
-              <path d="M8 7h8M8 11h8M8 15h5"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Gestión de pedidos</div>
-        <div class="card-desc">Consultá, prepará y gestioná pedidos web, MercadoLibre y ventas del local desde una única bandeja.</div>
-        <div class="card-footer">
-          <span class="card-tag">Pedidos · Preparación · Despachos</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" data-admin-only href="/herramientas/inventario/">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 11l3 3L22 4"/>
-              <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Contador de Inventario</div>
-        <div class="card-desc">Conteo físico de stock uno por uno. Registrá cantidades para conciliar el inventario real contra WooCommerce.</div>
-        <div class="card-footer">
-          <span class="card-tag">Conteo · Auditoría</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" href="/herramientas/consulta-precios/">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <path d="M21 21l-4.35-4.35"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Consulta de Precios</div>
-        <div class="card-desc">Escaneá o tipeá un SKU o código EAN y mirá al instante el precio web, con foto, marca y categoría del producto.</div>
-        <div class="card-footer">
-          <span class="card-tag">SKU · EAN · Precio</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" href="/herramientas/codigos/">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 5v14M7 5v14M11 5v14M15 5v14M19 5v14"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Carga de Códigos Universales</div>
-        <div class="card-desc">Recorré el depósito escaneando el código de barras (GTIN) de cada producto sin cargar y guardalo en WooCommerce al instante.</div>
-        <div class="card-footer">
-          <span class="card-tag">GTIN · Cámara · Woo</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" href="/herramientas/etiquetas/">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/>
-              <line x1="7" y1="7" x2="7.01" y2="7"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Etiquetas de Productos</div>
-        <div class="card-desc">Generá e imprimí etiquetas de precio. Catálogo completo, búsqueda por SKU, y filtro por categoría con stock.</div>
-        <div class="card-footer">
-          <span class="card-tag">Impresión · Etiquetas</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-    </div>
-  </section>
-
-  <!-- SINCRONIZACIÓN -->
-  <section class="category">
-    <div class="category-header">
-      <span class="category-label label-sync">Sincronización</span>
-      <div class="category-line"></div>
-    </div>
-    <div class="cards">
-      <a class="card card-sync" href="/herramientas/identidad-productos/">
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 7h-9M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Identidad de productos</div>
-        <div class="card-desc">Cierra las publicaciones ML activas con stock y sin SKU válido. Verifica identidad y stock contra MercadoLibre antes de dar por cubierta una clave.</div>
-        <div class="card-footer">
-          <span class="card-tag">UM1 · Identidad · ML</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-sync" href="/herramientas/matcher/">
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
-              <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">SKU Matcher ML ↔ WooCommerce</div>
-        <div class="card-desc">Vinculá publicaciones de MercadoLibre con productos WooCommerce por score de similitud. Confirmás SKUs y exportás el CSV.</div>
-        <div class="card-footer">
-          <span class="card-tag">Mapeo · SKU · ML</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-sync" href="/herramientas/config-ml/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-              <path d="M9 12l2 2 4-4"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Config ML — Reservas Locales</div>
-        <div class="card-desc">Marcá SKUs individuales como "solo local" o reservá N unidades para el local. El resto del stock se sincroniza normalmente a MercadoLibre.</div>
-        <div class="card-footer">
-          <span class="card-tag">SKU · Reserva · Stock</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-sync" href="/herramientas/precios/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="1" x2="12" y2="23"/>
-              <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Precios ML — Auditoría</div>
-        <div class="card-desc">Compará el neto que recibís en MercadoLibre (precio − comisión − envío) contra el precio de contado. Detectá dónde perdés margen o hay precios mal puestos.</div>
-        <div class="card-footer">
-          <span class="card-tag">Neto · Comisión · Envío</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-sync" href="/herramientas/sync-ml/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="1 4 1 10 7 10"/>
-              <polyline points="23 20 23 14 17 14"/>
-              <path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Sincronización ML — Estado</div>
-        <div class="card-desc">Estado en vivo de la integración con MercadoLibre: stock sincronizado, pedidos de ML en WooCommerce, cancelaciones y qué necesita tu atención.</div>
-        <div class="card-footer">
-          <span class="card-tag">Stock · Pedidos · Alertas</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-    </div>
-  </section>
+  <!-- GRUPOS DE HERRAMIENTAS — se arman solos desde la lista declarativa del script.
+       Antes eran tres bloques de HTML escritos a mano: agregar una herramienta era copiar
+       y pegar ~10 líneas, y por eso Auditoría de publicaciones quedó meses sin enlace. -->
+  <div id="grupos"></div>
 </main>
 
 <script src="../lib/format.js"></script>
@@ -843,6 +600,90 @@ fetch('/api/auth/me').then(function(r) {
 
   function tienePermiso(tool) { return isAdmin || !!permitidas[tool]; }
 
+  /* ── LAS HERRAMIENTAS, COMO DATOS ──────────────────────────────────────────
+     Agrupadas por TAREA, no por parte del sistema. NN/g, sobre 77 intranets: las estructuras
+     por tarea resistieron mejor que las organizadas por departamento y se aprenden más rápido.
+     "Control" y "Sincronización" —los grupos viejos— no son cosas que alguien haga.
+     Seis grupos, bajo la mediana de 7 que midió NN/g.
+
+     Dentro de cada grupo, PRIMERO LO QUE MÁS SE USA, medido contra la base el 2026-09-12:
+     preparación 294, conteo 38 sesiones, gestión de pedidos 2.124. No alfabético.
+
+     `parcial` marca lo que funciona a medias y por qué. Taller, garantías y excepciones dejan
+     avanzar un caso existente pero NINGUNA permite crear el primero: por eso tienen 0 filas.
+     Se muestran sólo a admin y con el estado a la vista — esconderlas es cómo llegamos a tener
+     cuatro pantallas construidas que nadie podía alcanzar. */
+  var GRUPOS = [
+    { titulo: 'Vender y despachar', color: 'ingreso', tools: [
+      { tool: 'preparacion', href: 'preparacion', t: 'Preparación de pedidos', d: 'Buscá los productos, escaneá cada unidad, embalá y dejá el pedido listo para despachar.', tag: 'Picking · Embalaje · Evidencia' },
+      { tool: 'gestion-pedidos', href: 'gestion-pedidos', t: 'Gestión de pedidos', d: 'Todos los pedidos de la web y de MercadoLibre en un solo lugar, con su estado y su cliente.', tag: 'Woo · ML · Clientes' },
+      { tool: 'etiquetas', href: 'etiquetas', t: 'Etiquetas de productos', d: 'Cola de etiquetas para imprimir con el SKU y el código de barras.', tag: 'Impresión · SKU' },
+    ]},
+    { titulo: 'Stock y depósito', color: 'ingreso', tools: [
+      { tool: 'inventario', href: 'inventario', t: 'Contador de inventario', d: 'Conteo a ciegas por marca o categoría, con ajuste controlado del stock publicado.', tag: 'Conteo · Ajustes · Diferencias' },
+      { tool: 'recepcion', href: 'recepcion', t: 'Recepción de mercadería', d: 'Registrá lo que llega del proveedor contra el remito y sumalo al stock.', tag: 'Remitos · Ingreso' },
+      { tool: 'stock', href: 'stock', t: 'Ingreso de stock', d: 'Consulta rápida y carga puntual de existencias.', tag: 'Stock · Consulta' },
+      { tool: 'pedidos', href: 'pedidos', t: 'Pedidos de compra', d: 'Qué hay que reponer y qué está en camino.', tag: 'Reposición · Proveedores' },
+    ]},
+    { titulo: 'Precios y catálogo', color: 'control', tools: [
+      { tool: 'consulta-precios', href: 'consulta-precios', t: 'Consulta de precios', d: 'Buscá un producto y mirá su precio de lista, de contado y en cuotas.', tag: 'Mostrador · Contado · Cuotas' },
+      { tool: 'precios', href: 'precios', t: 'Precios ML — auditoría', d: 'Dónde estás perdiendo margen en MercadoLibre y qué precio deja el neto que querés.', tag: 'Neto · Comisión · Envío' },
+      { tool: 'codigos', href: 'codigos', t: 'Códigos universales', d: 'Asociá el EAN o UPC del producto a su SKU para poder escanearlo en todas las herramientas.', tag: 'EAN · UPC · GTIN' },
+      { tool: 'identidad-productos', href: 'identidad-productos', t: 'Identidad de productos', d: 'Casos donde el código, el SKU o el stock no coinciden entre canales.', tag: 'GTIN · SKU · Canales' },
+    ]},
+    { titulo: 'MercadoLibre', color: 'sync', tools: [
+      { tool: 'sync-ml', href: 'sync-ml', t: 'Sincronización ML', d: 'Estado del stock y los pedidos entre MercadoLibre y la web, y qué necesita atención.', tag: 'Stock · Pedidos · Reactivación' },
+      { tool: 'matcher', href: 'matcher', t: 'SKU Matcher', d: 'Vinculá cada publicación de ML con su producto de WooCommerce.', tag: 'Vínculos · ML ↔ Woo' },
+      { tool: 'cobertura', href: 'cobertura', t: 'Cobertura de catálogo', d: 'Qué productos están publicados, cuáles no y dónde falta información.', tag: 'Catálogo · Faltantes' },
+      { tool: 'auditoria', href: 'auditoria', t: 'Auditoría de publicaciones', d: 'Fotos, videos y salud de cada publicación, con lo que le falta a cada una.', tag: 'Fotos · Video · Salud' },
+      { tool: 'config-ml', href: 'config-ml', t: 'Config ML — reservas', d: 'Cuánto stock reservás para el local y qué política sigue cada SKU.', tag: 'Reservas · Política' },
+    ]},
+    { titulo: 'Posventa', color: 'control', adminOnly: true, tools: [
+      { tool: 'taller', href: 'taller', t: 'Taller', d: 'Trabajos, diagnóstico y repuestos.', tag: 'Trabajos · Diagnóstico', parcial: 'sin alta de trabajos' },
+      { tool: 'garantias', href: 'garantias', t: 'Garantías', d: 'Casos, inspecciones y compromisos de reemplazo.', tag: 'Casos · Inspección', parcial: 'sin alta de casos' },
+      { tool: 'excepciones', href: 'excepciones', t: 'Excepciones físicas', d: 'Incidentes, daños y devoluciones a proveedor.', tag: 'Incidentes · Proveedor', parcial: 'sin alta de incidentes' },
+    ]},
+    { titulo: 'Administración', color: 'control', adminOnly: true, tools: [
+      { tool: 'usuarios', href: 'usuarios', t: 'Usuarios y permisos', d: 'Las cuentas del equipo y qué herramienta puede abrir cada una.', tag: 'Cuentas · Permisos' },
+    ]},
+  ];
+
+  var FLECHA = '<svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
+
+  function tarjetaHtml(x) {
+    return '<a class="card card-' + x._color + (x.parcial ? ' card--parcial' : '') + '"'
+      + ' href="/herramientas/' + x.href + '/" data-tool="' + x.tool + '">'
+      + '<div class="card-title">' + escHtml(x.t)
+      + (x.parcial ? '<span class="card-estado">' + escHtml(x.parcial) + '</span>' : '') + '</div>'
+      + '<div class="card-desc">' + escHtml(x.d) + '</div>'
+      + '<div class="card-footer"><span class="card-tag">' + escHtml(x.tag) + '</span>' + FLECHA + '</div></a>';
+  }
+
+  function escHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /* Un grupo sin ninguna herramienta permitida NO se dibuja. Miguel tiene un solo permiso:
+     mostrarle cinco encabezados vacíos sería peor que el panel de hoy. */
+  function renderGrupos() {
+    var host = document.getElementById('grupos');
+    if (!host) return;
+    var html = '';
+    GRUPOS.forEach(function (g) {
+      if (g.adminOnly && !isAdmin) return;
+      var visibles = g.tools.filter(function (x) { return tienePermiso(x.tool); });
+      if (!visibles.length) return;
+      html += '<section class="category"><div class="category-header">'
+        + '<span class="category-label label-' + g.color + '">' + escHtml(g.titulo) + '</span>'
+        + '<div class="category-line"></div></div><div class="cards">'
+        + visibles.map(function (x) { x._color = g.color; return tarjetaHtml(x); }).join('')
+        + '</div></section>';
+    });
+    host.innerHTML = html;
+  }
+
   // Chip de usuario + saludo (para todos)
   var chip = document.getElementById('user-chip');
   if (chip) {
@@ -853,35 +694,10 @@ fetch('/api/auth/me').then(function(r) {
   document.getElementById('page-eyebrow').textContent = 'Hola, ' + d.user;
   document.getElementById('page-title').innerHTML = isAdmin ? 'Panel de <em>herramientas</em>' : 'Tus <em>herramientas</em>';
 
-  // Tarjeta de gestión de usuarios: solo admins
-  if (isAdmin) {
-    var host = document.querySelector('.category .cards') || document.querySelector('.cards');
-    if (host) {
-      var a = document.createElement('a');
-      a.className = 'card card-control';
-      a.href = '/herramientas/usuarios/';
-      a.innerHTML = '<div class="card-top"><div class="card-icon icon-control">'
-        + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
-        + '</div></div><div class="card-title">Usuarios y Permisos</div>'
-        + '<div class="card-desc">Gestioná las cuentas del equipo y qué herramientas puede usar cada una. Solo administradores.</div>'
-        + '<div class="card-footer"><span class="card-tag">Cuentas · Permisos · Admin</span>'
-        + '<svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></div>';
-      host.appendChild(a);
-    }
-  }
-
-  // Mostrar/ocultar cada tarjeta según permiso; luego ocultar secciones vacías.
-  document.querySelectorAll('.card[href^="/herramientas/"]').forEach(function(card) {
-    var tool = toolDeHref(card.getAttribute('href'));
-    if (!tool || tool === 'usuarios' || tool === 'home') return;
-    if (!tienePermiso(tool)) card.style.display = 'none';
-  });
-  document.querySelectorAll('section.category').forEach(function(sec) {
-    var visibles = Array.prototype.filter.call(sec.querySelectorAll('.card'), function(c) {
-      return c.style.display !== 'none';
-    });
-    if (visibles.length === 0) sec.style.display = 'none';
-  });
+  // Las tarjetas y el filtrado por permiso los resuelve renderGrupos() con la lista
+  // declarativa de GRUPOS: ya no hay tarjetas en el HTML que haya que esconder a mano, ni una
+  // tarjeta de Usuarios inyectada aparte.
+  renderGrupos();
 
   // ── Progreso (contexto, subordinado) ──
   function peBarra(label, valor, total, colorVar, sub) {
