@@ -205,6 +205,13 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/garantias', express.static(path.join(__dirname, 'public/garantias')));
   app.use('/taller', express.static(path.join(__dirname, 'public/taller')));
   app.use('/etiquetas', express.static(path.join(__dirname, 'public/etiquetas')));
+  // Una sesión de conteo tiene URL propia, igual que un pedido en gestión de pedidos
+  // (/gestion-pedidos/pedidos/:id). VA ANTES del static: express.static no conoce esta ruta y
+  // devolvería 404. La pantalla decide qué hacer con el id — retomar si es tuya y está abierta,
+  // abrirla en lectura si no.
+  app.get('/inventario/sesion/:id', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public/inventario/index.html'));
+  });
   app.use('/inventario', express.static(path.join(__dirname, 'public/inventario')));
   app.use('/home', express.static(path.join(__dirname, 'public/home')));
   app.use('/login', express.static(path.join(__dirname, 'public/login')));

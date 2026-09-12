@@ -4,7 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fusion Bikes · Contador de inventario</title>
-<link rel="stylesheet" href="../lib/theme.css">
+<script>
+/* La app se sirve detrás del prefijo /herramientas/ (nginx), así que los assets van con ruta
+   relativa: /lib/ no está proxyeado, /herramientas/lib/ sí. Pero una sesión vive un nivel más
+   abajo (/inventario/sesion/37), donde "../lib/" apunta a /inventario/lib/ y da 404.
+
+   Un <base> insertado por script NO sirve: se probó el 2026-09-09 en gestión de pedidos y los
+   <link> del markup igual resolvieron contra la URL del documento. Por eso se calcula la raíz
+   de la herramienta y se escriben las rutas ya resueltas. document.write y no appendChild
+   porque el orden de parseo importa: api.js tiene que existir antes del script principal. */
+(function () {
+  var marca = '/inventario/';
+  var i = location.pathname.indexOf(marca);
+  var raiz = i >= 0 ? location.pathname.slice(0, i + marca.length) : '/inventario/';
+  window.RAIZ = raiz;
+  window.LIB = raiz.slice(0, raiz.length - 'inventario/'.length) + 'lib/';
+  document.write('<link rel="stylesheet" href="' + window.LIB + 'theme.css">');
+})();
+</script>
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
@@ -939,10 +956,10 @@
   </div>
 </div>
 
-<script src="../lib/format.js"></script>
-<script src="../lib/api.js"></script>
-<script src="../lib/conteoCantidad.js"></script>
-<script src="../lib/conteoLista.js"></script>
+<script>document.write('<script src="' + window.LIB + 'format.js"><\/script>'
+  + '<script src="' + window.LIB + 'api.js"><\/script>'
+  + '<script src="' + window.LIB + 'conteoCantidad.js"><\/script>'
+  + '<script src="' + window.LIB + 'conteoLista.js"><\/script>');</script>
 <script type="module" src="../lib/scanner.js"></script>
 <script>
   Api.installAuth();
@@ -971,6 +988,7 @@
   var state = {
     sesion: null, // sesión activa/actual en memoria
     sesionVista: null, // sesión cerrada abierta en modo lectura desde el historial (no pisa la activa)
+    usuario: null, // quién sos: decide si una sesión abierta se retoma o se abre en lectura
   };
 
   // ----- Navegación entre vistas -----
@@ -1135,6 +1153,7 @@
           '<button class="btn secondary" id="btn-nueva" disabled title="Ya tenés una sesión abierta — retomala o descartala">Nueva sesión</button>';
         document.getElementById('btn-retomar').addEventListener('click', function(){
           resetEstadoBloqueSinStock();
+          empujarUrlSesion(j.sesion.id);
           mostrarVista('conteo');
         });
         // Descartar la sesión bloqueante sin necesidad de retomarla primero
@@ -1799,6 +1818,7 @@
         if(res.status === 200 && res.body.ok){
           state.sesion = res.body.sesion;
           resetEstadoBloqueSinStock();
+          empujarUrlSesion(res.body.sesion.id);
           mostrarVista('conteo');
         } else if(res.status === 409){
           mostrarAvisoAlcance(res.body.error, res.body.ocupada_por,
@@ -3817,6 +3837,7 @@
     fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok || !j.sesion){ alert('No se pudo abrir la sesión.'); return; }
       state.sesionVista = j.sesion;
+      empujarUrlSesion(id);
       mostrarDetalleSesion(j.sesion, j.items || []);
       mostrarVista('resultado');
     }).catch(function(){ alert('No se pudo abrir la sesión (sin conexión).'); });
@@ -3889,13 +3910,87 @@
     resetEstadoBloqueSinStock();
     var det = document.getElementById('inicio-historial');
     if(det.open){ cargarHistorial(); } else { historialCargado = false; }
+    empujarUrlSesion(null);
     mostrarVista('inicio');
+  });
+
+  /* ── URL POR SESIÓN (2026-09-12) ──────────────────────────────────────────
+     Antes el id de la sesión vivía sólo en memoria: no se podía compartir un link, ni
+     recargar sin perder el lugar, ni volver con el botón de atrás. Mismo patrón que gestión
+     de pedidos y preparación, que ya usan pushState por entidad.
+
+     UNA sola URL que hace lo correcto según el caso (decisión del usuario): si la sesión es
+     tuya y está abierta, la retoma para seguir contando; si es de otro o ya se cerró, la abre
+     en lectura. Así el link sirve para las dos cosas sin que haya que saber cuál mandar. */
+  var RAIZ_INV = window.RAIZ || '/inventario/';
+
+  function urlDeSesion(id){ return RAIZ_INV + 'sesion/' + id; }
+
+  function empujarUrlSesion(id){
+    var destino = id ? urlDeSesion(id) : RAIZ_INV;
+    if(location.pathname !== destino) history.pushState({ sesion: id || null }, '', destino);
+  }
+
+  function idDeLaUrl(){
+    var m = location.pathname.match(/\/sesion\/(\d+)\/?$/);
+    return m ? Number(m[1]) : null;
+  }
+
+  /* Abre lo que diga la URL. Pide la sesión y el usuario EN PARALELO: sin saber quién sos no se
+     puede decidir entre retomar y leer, y encadenar los dos fetch duplicaría la espera en el
+     único momento en que la pantalla está en blanco. */
+  function abrirDesdeUrl(id){
+    Promise.all([
+      fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }),
+      fetch('/api/auth/me').then(function(r){ return r.json(); }).catch(function(){ return null; }),
+    ]).then(function(res){
+      var j = res[0];
+      var yo = res[1] && res[1].ok ? res[1] : null;
+      if(yo) state.usuario = yo.user;
+      if(!j || !j.ok || !j.sesion){
+        mostrarBannerEscaneo('Esa sesión no existe o no se pudo abrir.');
+        mostrarVista('inicio');
+        history.replaceState({}, '', RAIZ_INV);
+        return;
+      }
+      var esMia = String(j.sesion.usuario || '') === String(state.usuario || '');
+      if(j.sesion.estado === 'abierta' && esMia){
+        state.sesion = j.sesion;
+        modoHistorial = false;
+        resetEstadoBloqueSinStock();
+        mostrarVista('conteo');
+        return;
+      }
+      // De otro, o ya cerrada: lectura. Es para lo que sirve compartir el link.
+      if(j.sesion.estado === 'abierta' && !esMia){
+        mostrarBannerEscaneo('Esa sesión la está contando ' + (j.sesion.usuario || 'otra persona') + '. Se abre para mirar.');
+      }
+      state.sesionVista = j.sesion;
+      mostrarDetalleSesion(j.sesion, j.items || []);
+      mostrarVista('resultado');
+    }).catch(function(){
+      mostrarBannerEscaneo('No se pudo abrir la sesión (sin conexión).');
+      mostrarVista('inicio');
+    });
+  }
+
+  // El botón de atrás del navegador tiene que funcionar como en cualquier página.
+  window.addEventListener('popstate', function(){
+    var id = idDeLaUrl();
+    if(id) abrirDesdeUrl(id);
+    else {
+      state.sesionVista = null;
+      modoHistorial = false;
+      mostrarVista('inicio');
+    }
   });
 
   // Expuesto para que las próximas tareas (Conteo, Revisión, etc.) lo reusen.
   window.InvApp = { mostrarVista: mostrarVista, state: state, fechaRelativa: fechaRelativa, alcanceTexto: alcanceTexto };
 
-  mostrarVista('inicio');
+  var idInicial = idDeLaUrl();
+  if(idInicial) abrirDesdeUrl(idInicial);
+  else mostrarVista('inicio');
 })();
 </script>
 
