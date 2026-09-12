@@ -1195,7 +1195,27 @@ console.log(db.prepare(\"SELECT 1 FROM _schema_migrations WHERE key='ml_publicac
 console.log(db.prepare('PRAGMA table_info(ml_publicaciones_cache)').all().some(c=>c.name==='catalog_product_id'));"
 ```
 
-- [ ] **Step 5: Primera corrida real, vigilada**
+- [ ] **Step 5 (CORREGIDO): línea base ANTES de reiniciar, no después**
+
+El paso que sigue abajo daba por hecho que la primera corrida sería el refresco TOTAL, con sus
+1.140 cambios de golpe frenados por el umbral. **Es falso y peligroso.** El refresco ACOTADO lo
+dispara el worker de webhooks **de a un ítem por vez** (`lib/workerIntegrationJobs.js:215`): cada
+webhook de una publicación de catálogo detectaría un cambio `null → MLAxxxx`, quedaría por debajo
+del umbral de 5 y **pausaría una publicación sana**. Una por una, a medida que llegan los avisos.
+
+Por eso la línea base se carga ANTES del reinicio, leyendo `catalog_product_id` de ML para todas
+las publicaciones cacheadas y escribiéndolo en el cache. El código viejo ignora la columna nueva,
+así que se puede hacer con la app corriendo.
+
+Ejecutado el 2026-09-12: 3.955 ítems, 0 fallos, 2.446 con producto de catálogo. Los 1.509 que
+quedaron en NULL no son de catálogo y ese es su valor real. Tras el reinicio: **0 cambios
+detectados, 0 pausadas, 0 incidentes**, que es exactamente lo que tiene que dar.
+
+Dato que confirma el diseño: 2.446 ítems tienen `catalog_product_id` pero sólo 1.140 tenían
+`catalogo=1`. Los dos campos no coinciden — el booleano nunca habría alcanzado para detectar
+esto.
+
+- [ ] **Step 5-bis (histórico, ya no aplica): Primera corrida real, vigilada**
 
 La primera corrida del refresco después de desplegar encuentra `catalog_product_id` en **NULL**
 para las 1.140 publicaciones de catálogo, porque nunca se persistió. Todas van a parecer un

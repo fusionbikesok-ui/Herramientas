@@ -194,6 +194,19 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   que un refresco de fondo borraba lo que se estaba tipeando y devolvía el foco al lector.
   Además sólo guardaba con Enter (no al salir del campo) y no tenía botón de restar. Los tres
   corregidos el 2026-09-11.
+- **Vigía de formato de publicaciones** (desplegado el 2026-09-12): compara `catalog_product_id`,
+  `UNITS_PER_PACK` y `SALE_FORMAT` de cada publicación contra lo último guardado, en el upsert del
+  cache (`routes/matcher.js`). Si alguno CAMBIA, pausa la publicación y abre incidente crítico
+  (email + push). Detecta el cambio, no el valor: en Woo no hay ningún campo que diga cuántas
+  unidades trae un producto, así que ninguna regla puede saber si un "Pack de 2" está bien.
+  Freno de mano: más de 5 publicaciones en una corrida → no pausa ninguna y abre un solo
+  incidente. `getReactivablesRows` saltea las que tienen un cambio sin revisar, o el reactivador
+  desharía el trabajo del vigía en silencio.
+- **Al agregar un campo vigilado hay que cargar su LÍNEA BASE antes de desplegar.** El refresco
+  acotado corre de a UN ítem desde el worker de webhooks, así que un `null → valor` recién
+  estrenado queda por debajo del umbral y pausa publicaciones sanas de a una. El 2026-09-12 se
+  hizo el backfill de `catalog_product_id` (3.955 ítems) antes del reinicio, y la primera corrida
+  dio 0 cambios y 0 pausadas.
 - **El contado de referencia sale SIEMPRE de `catalogo_cache.regular_price`, nunca de `precio`**
   (regresión reintroducida y corregida el 2026-09-11 en `POST /api/precios/objetivo`). `precio` es
   el VIGENTE y ya trae el `sale_price`: usarlo descuenta dos veces. El SKU de una publicación sale
