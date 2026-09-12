@@ -693,7 +693,10 @@ import { openDb } from '../db/index.js';
 import { refrescarPublicacionesMlAcotado } from '../routes/matcher.js';
 
 const TEST_DB = './test/vigia-refresco.sqlite';
-const CFG = { clientId: 'x', clientSecret: 'y', redirectUri: 'z' };
+// `userId` es obligatorio: mlCfgOk de routes/matcher.js:209 lo exige y, sin él, el refresco
+// aborta con "Configuración de MercadoLibre incompleta" antes de llegar a la detección.
+// Mismo valor que usa test/cobertura-actualizar-ml.test.js.
+const CFG = { clientId: 'cid', clientSecret: 'cs', userId: '99999' };
 
 // Responde el multiget de /items con un item simple y el catalog_product_id pedido.
 function mockItems(catalogProductId) {
@@ -850,6 +853,12 @@ const TEST_DB = './test/vigia-endpoints.sqlite';
 function sembrarPausada(db, clave = 'MLA1|', sku = 'FB-1') {
   db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, actualizado_en)
     VALUES (1, 'Cubierta', ?, 'simple', 5, datetime('now'))`).run(sku);
+  // SIN ESTA FILA EL TEST NO MIDE NADA. getReactivablesRows se apoya en COMPUTED_STOCK_CTE
+  // (routes/sync.js:224), que arranca `FROM sku_matcher_decisiones` con accion IN
+  // ('asignar','confirmar'): sin una decisión, la consulta devuelve [] pase lo que pase y los
+  // tres casos "pasarían" por la razón equivocada.
+  db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en)
+    VALUES (?, ?, 'WC Cubierta', 'confirmar', datetime('now'))`).run(clave, sku);
   db.prepare(`INSERT INTO ml_publicaciones_cache
     (clave, item_id, variation_id, titulo, status, sub_status, es_variante, seller_sku, available_quantity, actualizado_en)
     VALUES (?, 'MLA1', '', 'Cubierta', 'paused', 'out_of_stock', 0, ?, 0, datetime('now'))`).run(clave, sku);
@@ -1011,9 +1020,12 @@ Expected: FAIL con 404 en el GET (la ruta no existe).
 
     let reactivada = false;
     if (req.body?.reactivar === true) {
-      if (!mlCfgOk(mlCfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+      // Convención de este router: mlCfgOk valida el CONTENEDOR (`cfg`, con cfg.ml adentro,
+      // ver routes/sync.js:179) y mlFetch recibe el cliente ya desestructurado (línea 276).
+      // No existe ninguna variable `mlCfg` en syncRouter.
+      if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
       try {
-        const r = await mlFetch(db, mlCfg, 'put', `/items/${fila.item_id}`, { status: 'active' });
+        const r = await mlFetch(db, cfg.ml, 'put', `/items/${fila.item_id}`, { status: 'active' });
         if (r.status < 200 || r.status >= 300) {
           // Fail-closed: si no se pudo reactivar, NO se marca revisado — el aviso sigue vivo.
           return res.status(502).json({ ok: false, error: `ML respondió ${r.status}` });

@@ -1913,6 +1913,10 @@ export async function procesarReintentos(db, cfg) {
 
 // ─── reactivación de pausadas por falta de stock ────────────────────────────────
 
+// El vigía de formato pausa publicaciones que pasaron a describir otra cosa (ver
+// docs/superpowers/specs/2026-09-12-vigia-formato-publicaciones-design.md). Si el reactivador
+// las levantara, el arreglo se anularía solo y en silencio: se saltean hasta que una persona
+// revise el cambio, igual que se hace con las pausadas manualmente por el vendedor.
 /**
  * Lista las publicaciones ML pausadas por out_of_stock que ya tienen stock
  * disponible en la web y están mapeadas. Devuelve filas por variación.
@@ -1928,7 +1932,11 @@ export function getReactivablesRows(db, itemIds = null) {
     WHERE p.status = 'paused'
       AND p.sub_status LIKE '%out_of_stock%'
       AND p.sub_status NOT LIKE '%paused_by_seller%'
-      AND cm.stock_disponible_ml > 0`;
+      AND cm.stock_disponible_ml > 0
+      AND NOT EXISTS (
+        SELECT 1 FROM ml_publicacion_cambios vc
+        WHERE vc.clave = p.clave AND vc.revisado_en IS NULL
+      )`;
   const params = [];
   if (Array.isArray(itemIds) && itemIds.length) {
     sql += ` AND p.item_id IN (${itemIds.map(() => '?').join(',')})`;
@@ -3126,6 +3134,48 @@ export function syncRouter(db, cfg) {
       frenadas,
       vinculos_sospechosos: contarVinculosSospechosos(db),
     });
+  });
+
+  // Cambios de formato detectados por el vigía, sin revisar. El JOIN con el cache trae el
+  // título para que la pantalla no muestre sólo un MLA.
+  router.get('/cambios-formato', (_req, res) => {
+    const data = db.prepare(`
+      SELECT c.id, c.clave, c.item_id, c.sku, c.campo, c.valor_anterior, c.valor_nuevo,
+             c.pausada, c.pausa_error, c.detectado_en, p.titulo, p.thumbnail, p.permalink
+      FROM ml_publicacion_cambios c
+      LEFT JOIN ml_publicaciones_cache p ON p.clave = c.clave
+      WHERE c.revisado_en IS NULL
+      ORDER BY c.detectado_en DESC, c.id DESC
+    `).all();
+    res.json({ ok: true, data });
+  });
+
+  // Revisar cierra el aviso. Con `reactivar: true` además despausa: es el ÚNICO camino por el
+  // que una pausa del vigía se revierte, y siempre lo dispara una persona.
+  router.post('/cambios-formato/:id/revisar', async (req, res) => {
+    const fila = db.prepare('SELECT * FROM ml_publicacion_cambios WHERE id=?').get(req.params.id);
+    if (!fila) return res.status(404).json({ ok: false, error: 'Cambio no encontrado' });
+    if (fila.revisado_en) return res.json({ ok: true, ya_revisado: true, reactivada: false });
+
+    let reactivada = false;
+    if (req.body?.reactivar === true) {
+      // Convención de este router: mlCfgOk valida el CONTENEDOR (`cfg`, con cfg.ml adentro) y
+      // mlFetch recibe el cliente ya desestructurado. Ver el patrón de la línea 276.
+      if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+      try {
+        const r = await mlFetch(db, cfg.ml, 'put', `/items/${fila.item_id}`, { status: 'active' });
+        if (r.status < 200 || r.status >= 300) {
+          // Fail-closed: si no se pudo reactivar, NO se marca revisado — el aviso sigue vivo.
+          return res.status(502).json({ ok: false, error: `ML respondió ${r.status}` });
+        }
+        reactivada = true;
+      } catch (e) {
+        return res.status(502).json({ ok: false, error: e?.message || 'No se pudo reactivar' });
+      }
+    }
+    db.prepare('UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=? WHERE id=?')
+      .run(new Date().toISOString(), req.user?.username || null, fila.id);
+    res.json({ ok: true, reactivada });
   });
 
   // Conteo rápido de reactivables (solo lee el caché local, sin consultar precios en ML).
