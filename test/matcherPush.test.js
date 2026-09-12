@@ -61,10 +61,15 @@ function seedToken(db) {
     .run('tok', 'ref', expiresAt, now());
 }
 
-function seedDecision(db, { clave, sku, accion = 'asignar' }) {
+// `actualizado_en` acepta un valor explícito porque el ORDER BY de pushSkusPendientes ordena
+// por esta columna (lib/matcherPush.js:262). Los tests que dependen del orden entre dos claves
+// NO pueden confiar en que dos `new Date()` consecutivos difieran: con la base de test rápida
+// caen en el mismo milisegundo, el ORDER BY empata y SQLite devuelve el orden que quiere.
+// Apareció el 2026-09-12 al poner el journal en memoria, pero la fragilidad ya estaba.
+function seedDecision(db, { clave, sku, accion = 'asignar', actualizadoEn = now() }) {
   db.prepare(
     'INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
-  ).run(clave, sku, sku, accion, now());
+  ).run(clave, sku, sku, accion, actualizadoEn);
 }
 
 function seedCache(db, { clave, itemId, variationId = '', titulo = 'Pub', status = 'active', sellerSku = '' }) {
@@ -634,12 +639,14 @@ describe('lib/matcherPush', () => {
     }, 15000);
 
     it('una clave saltada por idempotencia (caché refrescada por otro proceso) cuenta en "saltados", no en "escritos"', async () => {
-      // A2 se seedea primero (queda con timestamp más viejo) y A1 después (más nuevo), para
-      // que el ORDER BY ... DESC procese A1 primero dentro del grupo de activas.
+      // A1 tiene que procesarse ANTES que A2 para que el mock alcance a "refrescar" la caché
+      // de A2 mientras se escribe A1. El orden sale del ORDER BY d.actualizado_en DESC, así que
+      // las fechas van EXPLÍCITAS: sembrarlas una tras otra y confiar en el reloj no alcanza,
+      // porque las dos caen en el mismo milisegundo y el empate lo desempata SQLite.
       seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
-      seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
+      seedDecision(db, { clave: 'A2|', sku: 'FB-2', actualizadoEn: '2026-01-01T00:00:00.000Z' });
       seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
-      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1', actualizadoEn: '2026-01-02T00:00:00.000Z' });
 
       let llamados = 0;
       axios.request.mockImplementation(async () => {

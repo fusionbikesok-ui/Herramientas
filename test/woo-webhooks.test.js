@@ -60,15 +60,27 @@ describe('vigilancia de los webhooks de Woo', () => {
   });
 
   it('mueve la fecha sólo cuando el estado cambia de verdad', async () => {
-    responder([{ id: 7, topic: 'order.updated', status: 'disabled', delivery_url: `https://${HOST}/x` }]);
-    await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
-    const caido = webhooksWooCaidos(db)[0].status_desde;
+    // El reloj va FIJADO a propósito. Este test afirma que `status_desde` cambió entre las dos
+    // corridas, y las dos escriben `new Date().toISOString()`: si corren dentro del mismo
+    // milisegundo, las fechas son idénticas y el test falla sin que nada esté roto. Con la base
+    // de test rápida (journal en memoria, 2026-09-12) eso pasa casi siempre.
+    // Sólo se falsea Date: falsear los timers colgaría los await del cliente HTTP.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-01T10:00:00.000Z'));
+      responder([{ id: 7, topic: 'order.updated', status: 'disabled', delivery_url: `https://${HOST}/x` }]);
+      await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+      const caido = webhooksWooCaidos(db)[0].status_desde;
 
-    vi.restoreAllMocks();
-    responder([{ id: 7, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/x` }]);
-    await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
-    expect(webhooksWooCaidos(db)).toEqual([]);
-    expect(db.prepare('SELECT status_desde FROM woo_webhooks_estado WHERE id=7').get().status_desde).not.toBe(caido);
+      vi.restoreAllMocks();
+      vi.setSystemTime(new Date('2026-01-01T11:00:00.000Z'));
+      responder([{ id: 7, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/x` }]);
+      await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+      expect(webhooksWooCaidos(db)).toEqual([]);
+      expect(db.prepare('SELECT status_desde FROM woo_webhooks_estado WHERE id=7').get().status_desde).not.toBe(caido);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('olvida el webhook que se borró en la tienda', async () => {
