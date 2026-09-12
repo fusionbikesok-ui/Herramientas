@@ -1,17 +1,55 @@
 import express from 'express';
 import { wooFetch } from './woo.js';
-import { mlFetch } from '../lib/mlClient.js';
-import { importarVentanaGestionPedidos } from '../lib/gestionPedidos.js';
+import { ejecutarImportacion } from '../lib/gestionPedidosSync.js';
 import { calcularDiferenciaPorCuotas } from '../lib/calculoCuotas.js';
 
 function fechaHaceDias(dias) {
   return new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
 }
 
-function exigirRespuesta(resp, nombre) {
-  if (!resp || resp.status < 200 || resp.status >= 300) throw new Error(`${nombre} respondió ${resp?.status ?? 'sin status'}`);
-  return resp.data;
+// Un pedido deja "Requieren atención" sólo con un cierre confirmado. Un retiro en local
+// sigue apareciendo hasta registrarse como retirado: es exactamente el caso que el plan
+// pide no perder de vista.
+const ESTADOS_CERRADOS = ['cerrado', 'despachado', 'retirado'];
+
+// Una venta de ML entra dos veces: la orden de ML y el pedido espejo que el sync crea en
+// WooCommerce. Se muestra la de ML, que es la venta, y su estado lo manda MercadoLibre.
+// El espejo se oculta SÓLO si su orden de ML está importada; si no llegó (quedó fuera de
+// la ventana, o falló esa página del barrido), el espejo se sigue viendo y el pedido no
+// desaparece de la pantalla.
+const SIN_ESPEJO_DUPLICADO = `(p.espejo_ml = 0 OR NOT EXISTS (
+  SELECT 1 FROM gestion_pedidos ml
+  WHERE ml.fuente='mercadolibre' AND ml.external_id = p.ml_order_id))`;
+
+// En ML el estado operativo local puede seguir siendo `importado` aunque el
+// shipment ya haya avanzado. En la bandeja de atención manda el estado logístico
+// confirmado por ML: un paquete despachado o entregado no requiere intervención.
+// `ml_shipment_estado` es de Preparación, no de esta herramienta: si no está, la condición
+// no puede nombrarla o el listado responde 500 en cualquier base donde ese módulo no corrió.
+// Sin ese dato el pedido queda a la vista, que es el lado seguro: no saber si salió nunca
+// puede esconder una venta sin despachar.
+function mlEnvioResuelto(hayEnvios) {
+  const porShipment = hayEnvios
+    ? `NOT EXISTS (SELECT 1 FROM ml_shipment_estado se
+        WHERE se.shipment_id = p.ml_shipment_id AND se.status IN ('shipped', 'delivered'))`
+    : '1=1';
+  return `(p.fuente != 'mercadolibre' OR ${porShipment}
+    AND COALESCE(json_extract(p.datos_ml_json, '$.fulfilled'), 0) != 1)`;
 }
+
+// Corte operativo solicitado: los pedidos web en espera del pedido de Pilar
+// Suquilvide (66887, 2026-07-30 17:59:00) o anteriores no deben entrar en la
+// bandeja diaria de atención.
+// COALESCE y no una comparación directa: en SQL `NULL != 'on-hold'` no es verdadero sino
+// NULL, así que un pedido sin estado del canal quedaba fuera de la bandeja en silencio. Pasa
+// con los pedidos del borde de la ventana de importación, que nunca llegan a tener estado.
+const WEB_ON_HOLD_ANTIGUOS_EXCLUIDOS = `(p.fuente != 'woocommerce'
+  OR COALESCE(p.estado_canal, '') != 'on-hold'
+  OR p.creado_fuente_en > '2026-07-30T17:59:00')`;
+
+// `fusion` significa que el pedido ya fue tomado por el circuito interno de
+// taller/servicio y no debe aparecer como atención comercial pendiente.
+const WEB_EN_FUSION_EXCLUIDOS = `(p.fuente != 'woocommerce' OR COALESCE(p.estado_canal, '') != 'fusion')`;
 
 function fechaLocalArgentina(iso) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
@@ -46,11 +84,27 @@ function normalizarTelefonoArgentina(value) {
 /** Router administrativo para la importación inicial/reconciliación manual. */
 export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride, listarMl: listarMlOverride, actualizarWoo: actualizarWooOverride } = {}) {
   const router = express.Router();
+  // Se resuelve una sola vez: la tabla no aparece ni desaparece durante la vida del proceso.
+  const tablas = new Map();
+  const hayTabla = (nombre) => {
+    if (!tablas.has(nombre)) {
+      tablas.set(nombre, Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(nombre)));
+    }
+    return tablas.get(nombre);
+  };
+  const hayCatalogo = () => hayTabla('catalogo_cache');
+  // El estado logístico de ML vive en otra herramienta (preparación lo mantiene). Si su
+  // tabla no está, el listado no puede caerse: se informa sin ese dato.
+  const hayEnviosMl = () => hayTabla('ml_shipment_estado');
   router.post('/:id/enviar-woo', async (req, res) => {
     const pedido = db.prepare(`SELECT * FROM gestion_pedidos WHERE id=? AND fuente='woocommerce'`).get(req.params.id);
     if (!pedido) return res.status(404).json({ ok: false, error: 'Pedido WooCommerce no encontrado' });
     const estadoWoo = String(req.body?.estado_woo || process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani').trim();
-    const actualizar = actualizarWooOverride || (async ({ externalId, estado }) => wooFetch(woo, `/orders/${encodeURIComponent(externalId)}`, { method: 'PUT', data: { status: estado } }));
+    // wooFetch es (cfg, path, method, body). La versión anterior pasaba un objeto
+    // `{ method, data }` en la posición de `method`, así que axios recibía un método
+    // inválido: en producción esta ruta nunca pudo actualizar Woo. Los tests no lo
+    // detectaron porque siempre inyectan `actualizarWooOverride`.
+    const actualizar = actualizarWooOverride || (async ({ externalId, estado }) => wooFetch(woo, `/orders/${encodeURIComponent(externalId)}`, 'put', { status: estado }));
     try {
       const respuesta = await actualizar({ externalId: pedido.external_id, estado: estadoWoo });
       if (!respuesta || (respuesta.status != null && (respuesta.status < 200 || respuesta.status >= 300))) throw new Error(`WooCommerce respondió ${respuesta?.status ?? 'sin status'}`);
@@ -161,7 +215,7 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       WHERE o.estado='vigente' ORDER BY o.vence_en ASC, o.creado_fuente_en DESC`).all();
     const consolidadas = new Map();
     for (const row of rows) {
-      let datos = {};
+      let datos;
       try { datos = row.datos_json ? JSON.parse(row.datos_json) : {}; } catch { datos = {}; }
       const email = row.cliente_email || datos.email || datos.billing_email;
       const telefono = row.cliente_telefono || datos.phone || datos.billing_phone;
@@ -194,7 +248,7 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       LEFT JOIN gestion_pedido_clientes c ON c.id=p.cliente_id
       WHERE o.id=?`).get(req.params.id);
     if (!oportunidad) return res.status(404).json({ ok: false, error: 'Oportunidad no encontrada' });
-    let datos = {};
+    let datos;
     try { datos = oportunidad.datos_json ? JSON.parse(oportunidad.datos_json) : {}; } catch { datos = {}; }
     const items = oportunidad.pedido_id
       ? db.prepare('SELECT nombre, cantidad, precio_unitario_centavos FROM gestion_pedido_items WHERE pedido_id=? ORDER BY id').all(oportunidad.pedido_id)
@@ -209,23 +263,64 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       cuerpo: `Hola ${nombre},\n\nVimos que tu compra no llegó a completarse. Habías seleccionado: ${lineas}.\n\n¿Tuviste algún problema con la compra, te arrepentiste o necesitás que te ayudemos con algo? Estamos para ayudarte.\n\nSaludos,\nFusion Bikes`,
     } } });
   });
+  // Contadores de las pills y frescura del dato. Va antes de `/:id` a propósito: si se
+  // registrara después, Express resolvería "resumen" como un id de pedido.
+  router.get('/resumen', (_req, res) => {
+    const cerrados = ESTADOS_CERRADOS.map(() => '?').join(',');
+    // Mismo colapso del espejo que la lista, o la pill cuenta ventas que no se muestran.
+    const atencion = db.prepare(`SELECT COUNT(*) AS n FROM gestion_pedidos p
+      WHERE p.estado_operativo NOT IN (${cerrados}) AND ${SIN_ESPEJO_DUPLICADO}
+        AND ${mlEnvioResuelto(hayEnviosMl())} AND ${WEB_ON_HOLD_ANTIGUOS_EXCLUIDOS}
+        AND ${WEB_EN_FUSION_EXCLUIDOS}`).get(...ESTADOS_CERRADOS).n;
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM gestion_pedidos p WHERE ${SIN_ESPEJO_DUPLICADO}`).get().n;
+    // Mismo filtro que GET /recuperar-ventas (`estado='vigente'` + no vencida): si el
+    // contador de la pill usara otra condición, mostraría un número que la lista no explica.
+    const recuperar = db.prepare(`SELECT COUNT(*) AS n FROM gestion_recuperacion_oportunidades
+      WHERE estado='vigente' AND vence_en > ?`).get(new Date().toISOString()).n;
+    const ultima = db.prepare(`SELECT estado, importados, finalizado_en, error FROM gestion_pedido_importaciones
+      WHERE estado != 'iniciada' ORDER BY id DESC LIMIT 1`).get() || null;
+    return res.json({ ok: true, atencion, recuperar, total, ultima_importacion: ultima });
+  });
   router.get('/', (req, res) => {
     const limite = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
     const condiciones = [];
     const params = [];
+    // `vista=atencion` es la pill inicial: todos los pedidos activos sin cierre confirmado,
+    // no sólo las excepciones. La regla vive acá y no en el frontend para que la lista y el
+    // contador de la pill no puedan discrepar.
+    if (req.query.vista === 'atencion') {
+      condiciones.push(`p.estado_operativo NOT IN (${ESTADOS_CERRADOS.map(() => '?').join(',')})`);
+      params.push(...ESTADOS_CERRADOS);
+      condiciones.push(mlEnvioResuelto(hayEnviosMl()));
+      condiciones.push(WEB_ON_HOLD_ANTIGUOS_EXCLUIDOS);
+      condiciones.push(WEB_EN_FUSION_EXCLUIDOS);
+    }
     if (req.query.estado) { condiciones.push('p.estado_operativo = ?'); params.push(String(req.query.estado)); }
     if (req.query.comercial) { condiciones.push('p.estado_comercial = ?'); params.push(String(req.query.comercial)); }
     if (req.query.fuente) { condiciones.push('p.fuente = ?'); params.push(String(req.query.fuente)); }
     if (req.query.q) {
-      condiciones.push(`(p.numero_visible LIKE ? OR p.external_id LIKE ? OR c.nombre LIKE ? OR c.email LIKE ? OR c.telefono LIKE ? OR EXISTS
-        (SELECT 1 FROM gestion_pedido_items i WHERE i.pedido_id=p.id AND (i.sku LIKE ? OR i.ean LIKE ? OR i.nombre LIKE ?)))`);
+      // Se busca también por el número del pedido espejo en Woo: la fila que se muestra es
+      // la de ML, pero el depósito trabaja con el número de Woo y tiene que encontrarla.
+      condiciones.push(`(p.numero_visible LIKE ? OR p.external_id LIKE ? OR c.nombre LIKE ? OR c.email LIKE ? OR c.telefono LIKE ?
+        OR EXISTS (SELECT 1 FROM gestion_pedidos w WHERE w.fuente='woocommerce' AND w.ml_order_id = p.external_id
+                   AND (w.numero_visible LIKE ? OR w.external_id LIKE ?))
+        OR EXISTS (SELECT 1 FROM gestion_pedido_items i WHERE i.pedido_id=p.id AND (i.sku LIKE ? OR i.ean LIKE ? OR i.nombre LIKE ?)))`);
       const q = `%${String(req.query.q).trim()}%`;
-      params.push(q, q, q, q, q, q, q, q);
+      params.push(q, q, q, q, q, q, q, q, q, q);
     }
-    const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+    condiciones.push(SIN_ESPEJO_DUPLICADO);
+    const where = `WHERE ${condiciones.join(' AND ')}`;
     const total = db.prepare(`SELECT COUNT(*) AS total FROM gestion_pedidos p JOIN gestion_pedido_clientes c ON c.id=p.cliente_id ${where}`).get(...params).total;
     const pedidos = db.prepare(`SELECT p.id, p.numero_visible, p.fuente, p.external_id, p.estado_comercial, p.estado_operativo,
+      p.estado_canal, p.espejo_ml, p.ml_order_id, p.ml_shipment_id,
+      -- El estado que importa en una venta de ML es el del envío: el status de la orden se
+      -- queda en paid aunque el paquete ya haya salido.
+      ${hayEnviosMl() ? '(SELECT s.status FROM ml_shipment_estado s WHERE s.shipment_id = p.ml_shipment_id)' : 'NULL'} AS estado_envio_ml,
+      -- Número del pedido espejo en Woo, para que la fila de ML también lo muestre y el
+      -- depósito reconozca el número con el que trabaja.
+      (SELECT w.numero_visible FROM gestion_pedidos w
+        WHERE w.fuente='woocommerce' AND w.ml_order_id = p.external_id LIMIT 1) AS numero_espejo_woo,
       p.pago_estado, p.total_centavos, p.moneda, p.creado_fuente_en, p.actualizado_en,
       c.nombre AS cliente_nombre, c.email AS cliente_email, c.telefono AS cliente_telefono,
       (SELECT COUNT(*) FROM gestion_pedido_items i WHERE i.pedido_id=p.id) AS productos,
@@ -267,43 +362,22 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       FROM gestion_pedido_importaciones ORDER BY id DESC LIMIT ?`).all(limite);
     return res.json({ ok: true, corridas });
   });
+  // Reconciliación manual de la ventana completa. La corrida en sí vive en
+  // lib/gestionPedidosSync.js, compartida con el cron incremental de server.js: sin
+  // override se usa únicamente la ventana de fechas, porque el buscador de vendedor
+  // devuelve el universo vigente sin depender de que cada estado documentado siga siendo
+  // válido para la cuenta. Los overrides sirven para corridas acotadas y en pruebas.
   router.post('/importar', async (req, res) => {
-    const desde = req.body?.desde || fechaHaceDias(30);
-    const hasta = req.body?.hasta || new Date().toISOString();
-    // Sin override se usa únicamente la ventana de fechas: el buscador de vendedor devuelve
-    // el universo vigente sin depender de que cada estado documentado sea válido para la
-    // cuenta/API actual. El override sirve para corridas acotadas y se deduplica por ID.
-    const statusesMl = process.env.GESTION_PEDIDOS_ML_STATUSES
-      ? process.env.GESTION_PEDIDOS_ML_STATUSES.split(',').map(x => x.trim()).filter(Boolean)
-      : null;
-    const iniciadoEn = new Date().toISOString();
-    const corrida = db.prepare(`INSERT INTO gestion_pedido_importaciones (desde, hasta, estado, iniciado_en) VALUES (?, ?, 'iniciada', ?)`).run(desde, hasta, iniciadoEn);
     try {
-      const resultados = await importarVentanaGestionPedidos(db, {
-        desde,
-        hasta,
-        porPagina: 50,
-        listarWoo: listarWooOverride || (async ({ desde: after, hasta: before, pagina, limite }) => {
-          const query = `/orders?status=any&after=${encodeURIComponent(after)}&before=${encodeURIComponent(before)}&orderby=date&order=asc&per_page=${limite}&page=${pagina}`;
-          return exigirRespuesta(await wooFetch(woo, query), 'WooCommerce');
-        }),
-        listarMl: listarMlOverride || (async ({ desde: from, hasta: to, offset, limite }) => {
-          const todas = [];
-          for (const status of statusesMl || [null]) {
-            const estado = status ? `&order.status=${encodeURIComponent(status)}` : '';
-            const query = `/orders/search?seller=${encodeURIComponent(ml.userId)}${estado}&sort=date_asc&order.date_created.from=${encodeURIComponent(from)}&order.date_created.to=${encodeURIComponent(to)}&offset=${offset}&limit=${limite}`;
-            const data = exigirRespuesta(await mlFetch(db, ml, 'get', query), `MercadoLibre ${status}`);
-            todas.push(...(data.results || []));
-          }
-          const unicas = new Map(todas.map(orden => [String(orden.id), orden]));
-          return [...unicas.values()];
-        }),
-      });
-      const resumen = { ok: true, desde, hasta, importados: resultados.length, creados: resultados.filter(x => x.created).length, actualizados: resultados.filter(x => x.changed && !x.created).length };
-      db.prepare(`UPDATE gestion_pedido_importaciones SET estado='completada', importados=?, creados=?, actualizados=?, finalizado_en=? WHERE id=?`).run(resumen.importados, resumen.creados, resumen.actualizados, new Date().toISOString(), corrida.lastInsertRowid);
-      return res.json(resumen);
+      return res.json(await ejecutarImportacion(db, {
+        woo,
+        ml,
+        desde: req.body?.desde || fechaHaceDias(30),
+        hasta: req.body?.hasta || new Date().toISOString(),
+        listarWoo: listarWooOverride,
+        listarMl: listarMlOverride,
+      }));
     } catch (error) {
-      db.prepare(`UPDATE gestion_pedido_importaciones SET estado='fallida', error=?, finalizado_en=? WHERE id=?`).run(error.message, new Date().toISOString(), corrida.lastInsertRowid);
       return res.status(502).json({ ok: false, error: 'No se pudo completar la importación', detalle: error.message });
     }
   });
@@ -312,8 +386,29 @@ export function gestionPedidosRouter(db, { woo, ml, listarWoo: listarWooOverride
       FROM gestion_pedidos p JOIN gestion_pedido_clientes c ON c.id=p.cliente_id WHERE p.id=?`).get(req.params.id);
     if (!pedido) return res.status(404).json({ ok: false, error: 'Pedido no encontrado' });
     pedido.entrega = db.prepare('SELECT * FROM gestion_pedido_entregas WHERE pedido_id=?').get(pedido.id) || null;
-    pedido.items = db.prepare('SELECT * FROM gestion_pedido_items WHERE pedido_id=? ORDER BY id').all(pedido.id);
+    // La imagen se resuelve contra el catálogo por SKU en vez de copiarse al importar:
+    // así una foto que se corrige en Woo aparece acá sin reimportar el pedido.
+    // La imagen y el stock se resuelven contra el catálogo por SKU en vez de copiarse al
+    // importar: así una foto corregida en Woo aparece sin reimportar el pedido. Se
+    // consulta sólo si la tabla existe — es de otra herramienta, y el detalle del pedido
+    // no puede caerse porque falte. Subconsultas y no JOIN: catalogo_cache puede tener
+    // más de una fila por SKU (variaciones) y un JOIN duplicaría la línea.
+    pedido.items = hayCatalogo()
+      ? db.prepare(`SELECT i.*,
+          COALESCE(i.imagen_url, (SELECT c.img FROM catalogo_cache c WHERE c.sku=i.sku AND c.img IS NOT NULL ORDER BY c.id_woo LIMIT 1)) AS imagen,
+          (SELECT c.stock FROM catalogo_cache c WHERE c.sku=i.sku ORDER BY c.id_woo LIMIT 1) AS stock_actual
+          FROM gestion_pedido_items i WHERE i.pedido_id=? ORDER BY i.id`).all(pedido.id)
+      : db.prepare('SELECT i.*, i.imagen_url AS imagen, NULL AS stock_actual FROM gestion_pedido_items i WHERE i.pedido_id=? ORDER BY i.id').all(pedido.id);
     pedido.eventos = db.prepare('SELECT * FROM gestion_pedido_eventos WHERE pedido_id=? ORDER BY creado_en DESC, id DESC').all(pedido.id);
+    // Pedido espejo vinculado: la fila que se ve es la de ML, pero el detalle muestra el
+    // número de Woo con el que trabaja el depósito y su estado, marcados como dato de Woo.
+    pedido.estado_envio_ml = pedido.ml_shipment_id && hayEnviosMl()
+      ? db.prepare('SELECT status, logistic_type, actualizado_en FROM ml_shipment_estado WHERE shipment_id=?').get(String(pedido.ml_shipment_id)) || null
+      : null;
+    pedido.espejo_woo = pedido.fuente === 'mercadolibre'
+      ? db.prepare(`SELECT id, numero_visible, external_id, estado_canal
+          FROM gestion_pedidos WHERE fuente='woocommerce' AND ml_order_id=? LIMIT 1`).get(pedido.external_id) || null
+      : null;
     if (pedido.fuente === 'woocommerce' && woo?.url) {
       const base = String(woo.url).replace(/\/$/, '');
       pedido.enlace_woocommerce = `${base}/wp-admin/post.php?post=${encodeURIComponent(pedido.external_id)}&action=edit`;

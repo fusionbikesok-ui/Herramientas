@@ -57,6 +57,9 @@ describe('normalizarPedidoWc', () => {
       line_item_id: 5, product_id: 100, variation_id_wc: null,
       item_id_ml: '', variation_id_ml: '', clave: '',
       sku: 'BIKE-1', seller_sku: '', nombre: 'Bici Rodado', cantidad: 2,
+      // Agregado para Gestión de pedidos (2026-09-09): sin precio de línea la ficha del
+      // pedido no puede mostrar importes. Este pedido de prueba no trae `price`.
+      unit_price: null,
     }]);
   });
 

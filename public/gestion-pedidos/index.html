@@ -1,91 +1,673 @@
 <!doctype html>
 <html lang="es">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gestión de pedidos · Fusion Bikes</title>
+<script>
+/* La app se sirve detrás del prefijo /herramientas/ (nginx), así que los assets se piden
+   con ruta relativa y no absoluta: /lib/ no está proxyeado, /herramientas/lib/ sí. Pero el
+   detalle vive un nivel más abajo (/gestion-pedidos/pedidos/123), donde "../lib/" apunta a
+   /gestion-pedidos/lib/ y da 404.
+
+   Un <base> insertado por script NO sirve acá: se probó el 2026-09-09 y los <link> del
+   markup igual resolvieron contra la URL del documento. Por eso se calcula la raíz de la
+   herramienta y se escriben las rutas ya resueltas. document.write y no appendChild porque
+   necesitamos que el CSS y, más abajo, los scripts de lib/ mantengan el orden de parseo:
+   api.js debe existir antes del script principal. */
+(function () {
+  var marca = '/gestion-pedidos/';
+  var i = location.pathname.indexOf(marca);
+  var raiz = i >= 0 ? location.pathname.slice(0, i + marca.length) : '/gestion-pedidos/';
+  window.RAIZ = raiz;
+  window.LIB = raiz.slice(0, raiz.length - 'gestion-pedidos/'.length) + 'lib/';
+  document.write('<link rel="stylesheet" href="' + window.LIB + 'theme.css">' +
+                 '<link rel="stylesheet" href="' + window.LIB + 'components.css">');
+})();
+</script>
 <style>
-:root{--bg:#0c0f16;--panel:#141a25;--panel2:#1b2235;--line:#293650;--text:#e7edf7;--muted:#8b9ab7;--blue:#2db8e8;--green:#34d399;--amber:#f5b942;--red:#f87171;--purple:#a78bfa}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{max-width:1220px;margin:auto;padding:18px 22px 72px}.top{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:28px}.brand{display:flex;align-items:center;gap:10px;font-weight:800}.mark{background:var(--blue);color:#06131c;padding:3px 8px;border-radius:6px;font-weight:900;font-style:italic}.top small{color:var(--muted)}h1{font-size:clamp(1.65rem,4vw,2.35rem);letter-spacing:-.04em;margin:0 0 5px}h1 span{color:var(--blue)}.intro{color:var(--muted);max-width:650px;margin:0 0 22px}.mainnav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px}.nav{border:1px solid var(--line);background:var(--panel2);color:var(--muted);border-radius:10px;padding:10px 14px;cursor:pointer}.nav.active{background:var(--blue);border-color:var(--blue);color:#06131c;font-weight:800}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}.metric{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}.metric b{display:block;font-size:1.45rem}.metric span{color:var(--muted);font-size:12px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.search{flex:1;min-width:220px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;color:var(--text);font:inherit}.select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:11px}.layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(340px,.8fr);gap:16px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.panel h2{font-size:1rem;margin:0 0 4px}.panel .hint{color:var(--muted);font-size:12px;margin:0 0 14px}.order{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px;margin:9px 0;cursor:pointer}.order:hover,.order.selected{border-color:var(--blue)}.orderhead{display:flex;justify-content:space-between;gap:10px}.order strong{font-size:15px}.meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:7px}.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.chip{border-radius:20px;padding:3px 8px;font-size:11px;font-weight:700;border:1px solid transparent}.web{color:var(--blue);background:#123348;border-color:#1b6686}.ml{color:var(--amber);background:#3a2f16;border-color:#735d24}.ok{color:var(--green);background:#12392e;border-color:#1d765e}.warn{color:var(--amber);background:#3a2f16;border-color:#735d24}.muted{color:var(--muted);background:#252d41;border-color:#3b4a69}.local{color:var(--purple);background:#2d2547;border-color:#5e4a91}.btn{border:1px solid var(--line);background:#202a40;color:var(--text);border-radius:9px;padding:9px 12px;font-weight:700;cursor:pointer}.btn.primary{background:var(--blue);border-color:var(--blue);color:#06131c}.btn.green{background:#12392e;border-color:#1d765e;color:var(--green)}.btn:focus-visible,.nav:focus-visible,.order:focus-visible{outline:3px solid #67e8f9;outline-offset:2px}.detail-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.detail-title{font-size:1.35rem;font-weight:800}.timeline{border-left:2px solid var(--line);margin:17px 0 20px;padding-left:16px}.event{position:relative;margin-bottom:15px}.event:before{content:"";position:absolute;left:-23px;top:5px;width:8px;height:8px;border-radius:50%;background:var(--blue)}.event b{display:block}.event small{color:var(--muted)}.items{border-top:1px solid var(--line);padding-top:12px}.item{display:flex;gap:10px;align-items:center;border-bottom:1px solid var(--line);padding:9px 0}.thumb{width:42px;height:42px;background:#287da0;border-radius:8px;display:grid;place-items:center;color:white;font-weight:800}.item small{display:block;color:var(--muted)}.photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:9px}.photo{height:76px;background:linear-gradient(135deg,#244b61,#2db8e8);border-radius:8px;display:grid;place-items:center;font-size:11px;color:white}.actionbox{background:#123348;border:1px solid #1b6686;border-radius:10px;padding:12px;margin-top:16px}.actionbox p{margin:0 0 9px;color:#c9eefd;font-size:12px}.hidden{display:none}.footer-note{color:var(--muted);font-size:11px;margin-top:14px}@media(max-width:760px){.shell{padding:14px 12px 52px}.top{margin-bottom:22px}.top small{display:none}.mainnav{display:grid;grid-template-columns:1fr 1fr}.nav{text-align:left;min-height:46px}.metrics{grid-template-columns:repeat(2,1fr)}.layout{display:block}.detail{margin-top:14px}.toolbar{display:grid;grid-template-columns:1fr 1fr}.search{grid-column:1/-1;width:100%;min-width:0}.select{width:100%}.toolbar .btn{min-height:44px}.order{padding:13px}.photo-grid{grid-template-columns:repeat(3,1fr)}}
-.cancel{color:var(--red);background:#3d2028;border-color:#85404e}.batch-order{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;margin:9px 0}.batch-order>div:first-child{display:flex;justify-content:space-between;gap:8px}.batch-order small{display:block;color:var(--muted);margin-top:3px}.batch-items{display:grid;gap:7px;margin-top:10px;border-top:1px solid var(--line);padding-top:9px}.batch-items label{display:flex;gap:8px;align-items:center;color:var(--text);font-size:13px}.batch-items input{width:18px;height:18px;accent-color:var(--green)}
-</style>
-<style>
-.full-order .item{align-items:center}.full-order .item>div:nth-child(2){flex:1}.qty-badge{font-size:18px;font-weight:900;color:var(--blue);white-space:nowrap;margin-left:auto}.price-badge{font-size:13px;color:var(--text);white-space:nowrap}.product-modal{position:fixed;z-index:6;inset:5% 8%;max-width:900px;margin:auto;box-shadow:0 20px 80px #000;overflow:auto;max-height:90vh}.product-search{display:flex;gap:8px;margin:14px 0}.product-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.product-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px}.product-image{height:110px;border-radius:9px;background:linear-gradient(135deg,#244b61,#2db8e8);display:grid;place-items:center;font-size:28px;font-weight:800}.product-card h3{font-size:13px;margin:8px 0 3px}.product-card small{display:block;color:var(--muted);line-height:1.5}.product-card .btn{margin-top:8px;width:100%}@media(max-width:760px){.product-modal{inset:2% 3%;max-height:96vh}.product-grid{grid-template-columns:repeat(2,1fr)}}
-.edit-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#123348;border:1px solid #1b6686;border-radius:10px;padding:10px 12px;margin:14px 0}.edit-bar small{color:#c9eefd}.review-list{display:grid;gap:8px;margin:14px 0}.review-row{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:8px 0;color:var(--muted)}
-</style>
-<style>
-.order{padding:11px 12px;margin:6px 0;border-radius:10px}.order:hover,.order.selected{background:#202b43}.order strong{font-size:14px}.meta{margin-top:5px}.chips{margin-top:7px}.row-select{width:16px;height:16px;accent-color:var(--blue);vertical-align:-3px;margin-right:7px}.bulkbar{display:flex;align-items:center;gap:9px;background:#123348;border:1px solid #1b6686;border-radius:10px;padding:9px 11px;margin:-3px 0 10px}.bulkbar strong{color:#c9eefd}.bulkbar .btn{padding:7px 10px}
-.recovery-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.recovery-card{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:13px;margin:8px 0}.recovery-card.priority{border-color:var(--amber)}.recovery-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.recovery-card h3{font-size:14px;margin:0 0 3px}.recovery-card p{color:var(--muted);font-size:12px;margin:5px 0 10px}.recovery-card .btn{font-size:12px;padding:7px 9px}.recovery-label{color:var(--amber);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}.recovery-expiry{color:var(--red);font-size:11px}.recovery-note{background:#252d41;border-radius:8px;color:var(--muted);font-size:11px;padding:8px;margin:10px 0}@media(max-width:760px){.recovery-grid{display:block}}
-.contact-state{font-size:11px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line);color:var(--muted)}.contact-state.done{color:var(--green)}.contact-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
-.full-order{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}.full-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.info-box{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:13px}.info-box h3{font-size:14px;margin:0 0 10px}.info-list{display:grid;gap:6px;color:var(--muted);font-size:13px}.info-list b{color:var(--text)}.full-actions{display:flex;gap:8px;flex-wrap:wrap;margin:15px 0}.back{margin-bottom:14px}@media(max-width:760px){.full-grid{display:block}.info-box{margin:10px 0}}
-.full-order .thumb{width:72px;height:72px;border-radius:10px;font-size:18px;flex:0 0 72px}
-.full-order .item{align-items:center}.full-order .item>div:nth-child(2){flex:1}.qty-badge{font-size:18px;font-weight:900;color:var(--blue);white-space:nowrap;margin-left:auto}.price-badge{font-size:13px;color:var(--text);white-space:nowrap}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--oscuro);color:var(--text);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
+  .wrap{max-width:1220px;margin:0 auto;padding:18px 22px 72px}
+  a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);
+         text-decoration:none;margin-bottom:10px}
+  a.back:hover{color:var(--azul)}
+  h1{font-size:clamp(1.5rem,4vw,2.1rem);font-weight:800;letter-spacing:-.03em;margin:4px 0}
+  h1 em{font-style:normal;color:var(--azul)}
+  .sub{color:var(--muted);font-size:12.5px;margin:0 0 16px;max-width:80ch}
+
+  /* Frescura del dato: si la herramienta muestra pedidos viejos hay que verlo sin buscarlo. */
+  .frescura{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 16px;
+            font-size:12px;color:var(--muted)}
+  .frescura.vieja{color:var(--amber)}
+
+  .pills{margin-bottom:14px}
+  .pills .ui-btn b{margin-left:.35rem;font-weight:800}
+
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .toolbar .ui-input{flex:1;min-width:220px}
+  select.ui-input{min-width:150px;flex:0 0 auto}
+
+  .layout{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(330px,.75fr);gap:16px;
+          align-items:start}
+  .lista{padding:14px}
+
+  .fila{width:100%;text-align:left;display:block;background:var(--surface2);
+        border:1px solid var(--border);border-radius:var(--radius);padding:11px 12px;
+        margin:7px 0;cursor:pointer;color:inherit;font:inherit}
+  .fila:hover{border-color:var(--border2)}
+  .fila[aria-current="true"]{border-color:var(--accent);background:var(--accent-dim)}
+  .fila:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .fila-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+  .fila-top strong{font-size:14px}
+  .fila-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:5px}
+  .fila-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;align-items:center}
+  .ui-chip--info{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-bd)}
+  .sel{width:16px;height:16px;accent-color:var(--accent);margin-right:8px;vertical-align:-3px}
+
+  .bulk{display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:var(--blue-bg);
+        border:1px solid var(--blue-bd);border-radius:var(--radius);padding:9px 11px;margin:6px 0}
+
+  .detalle{padding:14px;position:sticky;top:14px}
+  .detalle h2{font-size:1.05rem;margin:0 0 2px}
+  .kv{display:grid;gap:5px;font-size:13px;color:var(--muted);margin:10px 0}
+  .kv b{color:var(--text);font-weight:600}
+  .items{border-top:1px solid var(--border);margin-top:12px;padding-top:8px}
+  .item{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)}
+  .item:last-child{border-bottom:0}
+  .item .nom{flex:1;min-width:0}
+  .miniatura{width:44px;height:44px;flex:0 0 44px;object-fit:cover;border-radius:8px;
+             background:var(--surface2);border:1px solid var(--border)}
+  .miniatura.vacia{display:grid;place-items:center;color:var(--muted)}
+  .full .miniatura{width:72px;height:72px;flex-basis:72px}
+  .item .nom small{display:block;color:var(--muted)}
+  .qty{font-weight:800;color:var(--azul);white-space:nowrap}
+  .timeline{border-left:2px solid var(--act-rail,var(--border));margin:12px 0;padding-left:14px}
+  .ev{margin-bottom:11px;font-size:12.5px}
+  .ev b{display:block}
+  .ev small{color:var(--muted)}
+
+  .estado{padding:26px 6px;text-align:center;color:var(--muted);font-size:13px}
+  .estado.error{color:var(--amber)}
+  .oculto{display:none!important}
+  .acciones{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+
+  /* Detalle a pantalla completa, en su URL propia. */
+  .full{padding:18px}
+  .full-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+
+  @media (max-width:860px){
+    .wrap{padding:14px 12px 56px}
+    .layout{display:block}
+    .detalle{position:static;margin-top:14px}
+    .full-grid{display:block}
+    .toolbar .ui-input{min-width:0;width:100%;flex:1 1 100%}
+    select.ui-input{width:100%;flex:1 1 100%}
+  }
 </style>
 </head>
 <body>
-<main class="shell">
-  <header class="top"><div class="brand"><span class="mark">FB</span> Gestión de pedidos</div><small>Preview · datos genéricos</small></header>
-  <section><h1>Pedidos <span>de hoy</span></h1><p class="intro">Administrá ventas de WooCommerce y MercadoLibre desde un solo lugar. La preparación física ocurre en Gestión de envíos.</p></section>
-  <nav class="mainnav" aria-label="Áreas de gestión"><button class="nav active" onclick="mostrarPanel('orders',this)">Requieren atención <b>4</b></button><button class="nav" onclick="mostrarPanel('preparation',this)">En preparación <b>6</b></button><button class="nav" onclick="mostrarPanel('dispatch',this)">Despachos <b>3</b></button><button class="nav" onclick="mostrarPanel('recovery',this)">Recuperar ventas <b>3</b></button><button class="nav" onclick="mostrarPanel('orders',this)">Todos los pedidos <b>18</b></button></nav>
-  <section class="metrics" aria-label="Resumen"><div class="metric"><b>18</b><span>Pedidos importados</span></div><div class="metric"><b style="color:var(--amber)">4</b><span>Requieren decisión</span></div><div class="metric"><b style="color:var(--blue)">6</b><span>En preparación</span></div><div class="metric"><b style="color:var(--green)">8</b><span>Despachados</span></div></section>
-  <div class="toolbar"><input class="search" aria-label="Buscar pedidos" placeholder="Buscar por pedido, cliente, SKU, EAN o tracking…"><select class="select" aria-label="Filtrar canal"><option>Todos los canales</option><option>WooCommerce</option><option>MercadoLibre</option><option>Venta local</option></select><select class="select" aria-label="Filtrar estado"><option>Todos los estados</option><option>Requiere atención</option><option>Cancelado</option><option>Pago pendiente</option></select><button class="btn">Filtros</button></div>
-  <section class="panel hidden" id="recovery"><div class="detail-head"><div><h2>Recuperar ventas</h2><p class="hint">Una oportunidad por cliente hasta el cierre de la tienda. Si compra con éxito, se retiran sus intentos fallidos.</p></div><span class="chip warn">3 oportunidades</span></div><div class="recovery-note">La vista agrupa por cliente usando email, teléfono o identificador de cliente. No muestra múltiples intentos fallidos de la misma persona.</div><div class="recovery-grid"><div><div class="section-title">Pedidos cancelados recientes</div><article class="recovery-card priority"><div class="recovery-top"><div><span class="recovery-label">Prioridad alta · pedido cancelado</span><h3>#1005 · Diego Ruiz</h3></div><span class="chip web">WEB</span></div><p>2 productos · $128.700 · cancelado hoy 11:18<br>diego.ruiz@demo.com · +54 11 5555-0144</p><span class="recovery-expiry">Contactar hasta el cierre de hoy · 19:00</span><div class="contact-actions"><button class="btn primary" onclick="registrarCanal('contact-1005','WhatsApp')">WhatsApp</button><button class="btn primary" onclick="registrarCanal('contact-1005','Email')">Email</button><button class="btn" onclick="marcarContactado('contact-1005')">Marcar contactado</button><button class="btn">Ver pedido</button></div><div class="contact-state" id="contact-1005">Nunca contactado</div></article></div><div><div class="section-title">Carritos abandonados</div><article class="recovery-card"><div class="recovery-top"><div><span class="recovery-label">Cliente consolidado · 2 intentos fallidos</span><h3>Mariana Silva</h3></div><span class="chip web">WEB</span></div><p>Último carrito: Casco urbano demo + luces LED · $92.500<br>mariana.silva@demo.com · última actividad hace 2 h</p><span class="recovery-expiry">Contactar hasta el cierre de hoy · 19:00</span><div class="contact-actions"><button class="btn primary" onclick="registrarCanal('contact-1010','WhatsApp')">WhatsApp</button><button class="btn primary" onclick="registrarCanal('contact-1010','Email')">Email</button><button class="btn" onclick="marcarContactado('contact-1010')">Marcar contactado</button><button class="btn">Ver carrito</button></div><div class="contact-state" id="contact-1010">Nunca contactado</div></article></div></div></section>
-  <section class="panel hidden" id="preparation"><div class="detail-head"><div><h2>En preparación</h2><p class="hint">Pedidos que ya fueron enviados a preparar. La checklist y el escaneo físico se realizan en Gestión de envíos.</p></div><span class="chip muted">6 pedidos</span></div><div class="order"><div class="orderhead"><strong>#1001 · Ana García</strong><span class="chip muted">3 productos · 0/3 verificados</span></div><div class="meta"><span>Enviado a preparación hoy 10:40</span><span>Preparador: sin asignar</span></div><div class="chips"><span class="chip warn">Pendiente de escaneo</span><button class="btn" onclick="abrirDesdeEstado('1001')">Ver pedido</button></div></div><div class="order"><div class="orderhead"><strong>#1011 · Martín Costa</strong><span class="chip muted">2 productos · 2/2 verificados</span></div><div class="meta"><span>En preparación desde hoy 09:12</span><span>Fotos pendientes</span></div><div class="chips"><span class="chip ok">Checklist completa</span><button class="btn" onclick="abrirDesdeEstado('1011')">Ver pedido</button></div></div><p class="footer-note">Esta vista es un contador operativo clickeable; no cambia de pantalla de forma automática.</p></section>
-  <section class="panel hidden" id="dispatch"><div class="detail-head"><div><h2>Despachos</h2><p class="hint">Pedidos listos para despachar o agrupados en un despacho. El tracking se carga desde el embalado.</p></div><span class="chip ok">3 pedidos</span></div><div class="order"><div class="orderhead"><strong>Despacho D-0042 · Andreani</strong><span class="chip ok">2 pedidos</span></div><div class="meta"><span>#1002 Bruno López · #1009 Hugo Vera</span><span>Tracking: pendiente</span></div><div class="chips"><span class="chip warn">Listo para etiquetar</span><button class="btn" onclick="mostrarPanel('orders',document.querySelector('.nav:last-child'))">Ver pedidos</button></div></div><div class="order"><div class="orderhead"><strong>#1001 · Ana García</strong><span class="chip ok">Listo para despachar</span></div><div class="meta"><span>Checklist completa · paquete fotografiado</span><span>Tracking: pendiente de asociar</span></div><div class="chips"><span class="chip warn">Sin agrupación</span><button class="btn" onclick="abrirDesdeEstado('1001')">Ver pedido</button></div></div><p class="footer-note">La gestión detallada de embalaje y despacho continúa en la herramienta de envíos.</p></section>
-  <section class="layout" id="orders"><div class="panel"><h2>Pedidos recientes</h2><p class="hint">Seleccioná pedidos para enviarlos juntos a preparación. Hacé clic en una fila para consultar el detalle.</p><div class="bulkbar hidden" id="bulkbar"><strong><span id="selected-count">0</span> seleccionados</strong><button class="btn primary" onclick="enviarLote()">Enviar a preparación</button><button class="btn" onclick="limpiarSeleccion()">Limpiar</button></div>
-    <article class="order selected" tabindex="0" onclick="ver('1001',this)"><div class="orderhead"><strong>#1001 · Ana García</strong><span class="chip web">WEB</span></div><div class="meta"><span>Hoy · 10:24</span><span>3 productos</span><span>$184.500</span></div><div class="chips"><span class="chip warn">Requiere envío</span><span class="chip muted">En preparación</span></div></article>
-    <article class="order" tabindex="0" onclick="ver('1002',this)"><div class="orderhead"><strong>#1002 · Bruno López</strong><span class="chip ml">ML</span></div><div class="meta"><span>Hoy · 09:50</span><span>1 producto</span><span>$62.300</span></div><div class="chips"><span class="chip ok">Listo para despachar</span><span class="chip ml">MercadoLibre</span></div></article>
-    <article class="order" tabindex="0" onclick="ver('1003',this)"><div class="orderhead"><strong>#1003 · Venta local</strong><span class="chip local">LOCAL</span></div><div class="meta"><span>Ayer · 18:12</span><span>2 productos</span><span>$97.000</span></div><div class="chips"><span class="chip local">Retiro en local</span><span class="chip ok">Retiro completado</span></div></article>
-    <article class="order" tabindex="0" onclick="ver('1004',this)"><div class="orderhead"><strong>#1004 · Carla Méndez</strong><span class="chip web">WEB</span></div><div class="meta"><span>Ayer · 16:40</span><span>1 producto</span><span>$45.900</span></div><div class="chips"><span class="chip ok">Despachado</span><span class="chip muted">Sin evidencia local</span></div></article>
-    <article class="order" tabindex="0" onclick="ver('1005',this)"><div class="orderhead"><strong>#1005 · Diego Ruiz</strong><span class="chip web">WEB</span></div><div class="meta"><span>Ayer · 15:18</span><span>2 productos</span><span>$128.700</span></div><div class="chips"><span class="chip cancel">Cancelado</span><span class="chip muted">No requiere envío</span></div></article>
-    <article class="order" tabindex="0" onclick="ver('1006',this)"><div class="orderhead"><strong>#1006 · Elena Soto</strong><span class="chip web">WEB</span></div><div class="meta"><span>Ayer · 13:05</span><span>1 producto</span><span>$76.400</span></div><div class="chips"><span class="chip warn">Pago pendiente</span><span class="chip muted">Sin tarea logística</span></div></article>
-    <article class="order" tabindex="0" onclick="ver('1007',this)"><div class="orderhead"><strong>#1007 · Federico Paz</strong><span class="chip ml">ML</span></div><div class="meta"><span>08/09 · 11:30</span><span>4 productos</span><span>$231.900</span></div><div class="chips"><span class="chip ok">Entregado</span><span class="chip ml">Shipment ML</span></div></article>
-    <article class="order" tabindex="0" onclick="ver('1008',this)"><div class="orderhead"><strong>#1008 · Gabriela León</strong><span class="chip web">WEB</span></div><div class="meta"><span>08/09 · 10:12</span><span>1 producto</span><span>$39.900</span></div><div class="chips"><span class="chip local">Retiro en local</span><span class="chip warn">Pendiente de retiro</span></div></article>
-    <article class="order" tabindex="0" onclick="ver('1009',this)"><div class="orderhead"><strong>#1009 · Hugo Vera</strong><span class="chip web">WEB</span></div><div class="meta"><span>08/09 · 09:44</span><span>3 productos</span><span>$315.000</span></div><div class="chips"><span class="chip ok">Listo para despachar</span><span class="chip muted">Grupo pendiente</span></div></article>
-    <p class="footer-note">Última sincronización: hace 4 minutos · WooCommerce + MercadoLibre</p></div>
-    <aside class="panel detail" id="detail"><div class="detail-head"><div><div class="detail-title" id="detail-title">Pedido #1001</div><div class="meta">Ana García · WEB · creado hoy 10:24</div></div><span class="chip warn">Requiere envío</span></div><div class="actionbox"><p>Vista de consulta. Las modificaciones y acciones completas están en la pantalla específica del pedido.</p><button class="btn primary" onclick="enviar()">Abrir pedido completo</button></div><div class="section-title">Cliente y entrega</div><div class="meta" style="display:grid;gap:5px;margin-bottom:12px"><span><b>Cliente:</b> Ana García</span><span><b>Email:</b> ana.garcia@demo.com</span><span><b>Teléfono:</b> +54 11 5555-0101</span><span><b>Entrega:</b> Envío a domicilio · Andreani</span><span><b>Dirección:</b> Av. Corrientes 1234, CABA · CP 1043</span></div><div class="section-title">Pago y totales</div><div class="meta" style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:12px"><span>Subtotal: <b>$180.000</b></span><span>Envío: <b>$4.500</b></span><span>Pago: <b>Transferencia</b></span><span>Total: <b>$184.500</b></span></div><div class="section-title">Productos · 3 unidades</div><div class="items"><div class="item"><div class="thumb">C</div><div><b>Casco urbano demo</b><small>SKU FB-CASCO-DEMO · EAN 7790000000012 · 1 unidad · $120.000</small></div></div><div class="item"><div class="thumb">L</div><div><b>Luces LED delanteras</b><small>SKU FB-LUZ-DEMO · EAN 7790000000029 · 2 unidades · $32.250 c/u</small></div></div></div><div class="section-title">Notas y seguimiento</div><div class="meta" style="display:grid;gap:5px;margin-bottom:12px"><span><b>Nota:</b> Entregar por la tarde si es posible.</span><span><b>Tracking:</b> Pendiente de asociar</span><span><b>Origen:</b> WooCommerce · sincronizado hace 4 minutos</span></div><div class="section-title">Timeline</div><div class="timeline"><div class="event"><b>Pedido importado</b><small>Hoy, 10:24 · WooCommerce</small></div><div class="event"><b>Pago confirmado</b><small>Hoy, 10:31 · WooCommerce</small></div><div class="event"><b>Requiere envío</b><small>Hoy, 10:40 · Gestión de pedidos</small></div></div><div class="section-title">Fotos de preparación</div><div class="photo-grid"><div class="photo">Producto</div><div class="photo">Paquete abierto</div><div class="photo">Paquete cerrado</div></div></aside>
-</section>
-  <section class="full-order hidden" id="full-order"><button class="btn back" onclick="cerrarDetalleCompleto()">← Volver a pedidos</button><div class="detail-head"><div><div class="detail-title">Pedido #1001</div><div class="meta">Ana García · WEB · creado hoy 10:24</div></div><span class="chip warn">Requiere envío</span></div><div class="full-actions"><button class="btn primary">Editar pedido</button><button class="btn green">Enviar a preparación</button><button class="btn">Cambiar entrega</button><button class="btn">Agregar nota</button><button class="btn">Más acciones</button></div><div class="full-grid"><div class="info-box"><h3>Cliente</h3><div class="info-list"><span><b>Nombre:</b> Ana García</span><span><b>Email:</b> ana.garcia@demo.com</span><span><b>Teléfono:</b> +54 11 5555-0101</span><span><b>Pedidos anteriores:</b> 3</span></div></div><div class="info-box"><h3>Entrega</h3><div class="info-list"><span><b>Tipo:</b> Envío a domicilio</span><span><b>Transportista:</b> Andreani</span><span><b>Dirección:</b> Av. Corrientes 1234, CABA</span><span><b>Tracking:</b> Pendiente de asociar</span></div></div><div class="info-box"><h3>Productos</h3><div class="items"><div class="item"><div class="thumb">C</div><div><b>Casco urbano demo</b><small>SKU FB-CASCO-DEMO · EAN 7790000000012 · 1 × $120.000</small></div></div><div class="item"><div class="thumb">L</div><div><b>Luces LED delanteras</b><small>SKU FB-LUZ-DEMO · EAN 7790000000029 · 2 × $32.250</small></div></div></div></div><div class="info-box"><h3>Pago y totales</h3><div class="info-list"><span><b>Estado:</b> Confirmado</span><span><b>Método:</b> Transferencia</span><span><b>Subtotal:</b> $180.000</span><span><b>Envío:</b> $4.500</span><span><b>Total:</b> $184.500</span></div></div><div class="info-box"><h3>Notas e incidencias</h3><div class="info-list"><span>Entregar por la tarde si es posible.</span><span>Sin incidencias abiertas.</span><button class="btn">Editar notas</button></div></div><div class="info-box"><h3>Preparación y evidencias</h3><div class="photo-grid"><div class="photo">Producto</div><div class="photo">Paquete abierto</div><div class="photo">Paquete cerrado</div></div><small class="footer-note">Las fotos se consultan en modo lectura.</small></div><div class="info-box"><h3>Timeline completo</h3><div class="timeline"><div class="event"><b>Pedido importado</b><small>Hoy, 10:24 · WooCommerce</small></div><div class="event"><b>Pago confirmado</b><small>Hoy, 10:31 · WooCommerce</small></div><div class="event"><b>Requiere envío</b><small>Hoy, 10:40 · preview-admin</small></div></div></div></div></section>
+<main class="wrap">
+  <a class="back" id="ir-home" href="../home/">← Volver al inicio</a>
+
+  <!-- ── Listado ────────────────────────────────────────────────────────────── -->
+  <section id="vista-lista">
+    <h1>Gestión de <em>pedidos</em></h1>
+    <p class="sub">Pedidos de WooCommerce y MercadoLibre del último mes, incluidas las ventas
+      físicas del local. La preparación y el despacho se ejecutan en Gestión de envíos.</p>
+
+    <div class="frescura" id="frescura" aria-live="polite">
+      <span id="frescura-txt">Consultando la última importación…</span>
+      <button class="ui-btn" id="btn-reconciliar" type="button">Reconciliar 30 días</button>
+    </div>
+
+    <nav class="ui-tabs pills" id="pills" aria-label="Vistas de pedidos">
+      <button class="ui-btn" type="button" role="tab" data-vista="atencion" aria-selected="true">Requieren atención <b id="n-atencion">–</b></button>
+      <button class="ui-btn" type="button" role="tab" data-vista="recuperar" aria-selected="false">Recuperar ventas <b id="n-recuperar">–</b></button>
+      <button class="ui-btn" type="button" role="tab" data-vista="todos" aria-selected="false">Todos los pedidos <b id="n-todos">–</b></button>
+    </nav>
+
+    <div class="toolbar">
+      <input class="ui-input" id="q" type="search" autocomplete="off"
+             placeholder="Buscar por pedido, id externo, cliente, email, teléfono, SKU, EAN o producto…"
+             aria-label="Buscar pedidos">
+      <select class="ui-input" id="f-fuente" aria-label="Filtrar por canal">
+        <option value="">Todos los canales</option>
+        <option value="woocommerce">WooCommerce</option>
+        <option value="mercadolibre">MercadoLibre</option>
+      </select>
+      <select class="ui-input" id="f-comercial" aria-label="Filtrar por estado comercial">
+        <option value="">Todos los estados</option>
+        <option value="confirmado">Confirmado</option>
+        <option value="cancelado">Cancelado</option>
+        <option value="fallido">Fallido</option>
+        <option value="reembolsado">Reembolsado</option>
+      </select>
+    </div>
+
+    <div class="layout">
+      <div class="ui-card lista">
+        <div class="bulk oculto" id="bulk">
+          <strong><span id="n-sel">0</span> seleccionados</strong>
+          <button class="ui-btn ui-btn--primario" type="button" id="btn-lote">Enviar a preparación</button>
+          <button class="ui-btn" type="button" id="btn-limpiar">Limpiar</button>
+        </div>
+        <div id="resultado" aria-live="polite"></div>
+        <div class="estado" id="estado-lista">Cargando pedidos…</div>
+        <div class="acciones oculto" id="paginacion">
+          <button class="ui-btn" type="button" id="btn-mas">Ver más</button>
+        </div>
+      </div>
+
+      <aside class="ui-card detalle" id="rapida" aria-label="Vista rápida del pedido">
+        <div class="estado">Elegí un pedido para ver su ficha.</div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ── Detalle en URL propia ──────────────────────────────────────────────── -->
+  <section id="vista-detalle" class="oculto">
+    <a class="back" href="#" id="volver-lista">← Volver al listado</a>
+    <div class="ui-card full" id="full"></div>
+  </section>
 </main>
-<div class="panel hidden product-modal" id="batch-modal"><div class="detail-head"><div><h2 id="batch-title">Lote de preparación</h2><p class="hint">Checklist demo persistida localmente. Podés cerrar y volver a entrar sin perder el progreso.</p></div><button class="btn" onclick="cerrarLote()">Cerrar</button></div><div id="batch-orders"></div><div class="full-actions"><button class="btn primary" onclick="confirmarLoteReal()">Confirmar lote</button><button class="btn" onclick="cerrarLote()">Volver a pedidos</button></div></div>
-<div class="panel hidden product-modal" id="product-modal"><div class="detail-head"><div><h2>Agregar o reemplazar producto</h2><p class="hint">Buscá por nombre, SKU o EAN. Las fotos ayudan a confirmar la variante correcta.</p></div><button class="btn" onclick="cerrarProductos()">Cerrar</button></div><div class="product-search"><input class="search" placeholder="Buscar producto, SKU o EAN…"><button class="btn">Buscar</button></div><div class="product-grid"><article class="product-card"><div class="product-image">C</div><h3>Casco urbano demo</h3><small>SKU FB-CASCO-DEMO<br>EAN 7790000000012<br>Stock disponible: 12 · $120.000</small><button class="btn primary">Agregar</button></article><article class="product-card"><div class="product-image">L</div><h3>Luces LED delanteras</h3><small>SKU FB-LUZ-DEMO<br>EAN 7790000000029<br>Stock disponible: 8 · $32.250</small><button class="btn primary">Agregar</button></article><article class="product-card"><div class="product-image">S</div><h3>Soporte de celular demo</h3><small>SKU FB-SOPORTE-DEMO<br>EAN 7790000000036<br>Stock disponible: 0 · $38.900</small><button class="btn" disabled>Sin stock</button></article></div></div>
-<script>function ver(id,el){if(window.event&&window.event.target&&window.event.target.classList.contains('row-select'))return;document.querySelectorAll('.order').forEach(x=>x.classList.remove('selected'));el.classList.add('selected');document.getElementById('detail').classList.add('open');document.getElementById('detail-title').textContent='Pedido #'+id;if(innerWidth<761)document.getElementById('detail').scrollIntoView({behavior:'smooth',block:'start'});}function actualizarSeleccion(){const checks=[...document.querySelectorAll('.row-select')],n=checks.filter(x=>x.checked).length;document.getElementById('selected-count').textContent=n;document.getElementById('bulkbar').classList.toggle('hidden',n===0);}function limpiarSeleccion(){document.querySelectorAll('.row-select').forEach(x=>x.checked=false);actualizarSeleccion();}function enviarLote(){const ids=[...document.querySelectorAll('.row-select:checked')].map(x=>x.closest('.order')?.textContent.match(/#(\d+)/)?.[1]).filter(Boolean);if(!ids.length)return;document.getElementById('batch-title').textContent='Lote de preparación · '+ids.length+' pedidos';document.getElementById('batch-orders').innerHTML=ids.map(id=>'<article class="batch-order"><div><b>Pedido #'+id+'</b><small>Cliente demo · 2 productos</small></div><span class="chip muted">0/2 verificados</span><div class="batch-items"><label><input type="checkbox" onchange="guardarChecklist()"> Casco urbano demo <b>×1</b></label><label><input type="checkbox" onchange="guardarChecklist()"> Luces LED delanteras <b>×1</b></label></div></article>').join('');restaurarChecklist();document.getElementById('batch-modal').classList.remove('hidden');}function guardarChecklist(){localStorage.setItem('fb-demo-checklist',JSON.stringify([...document.querySelectorAll('#batch-orders input')].map(x=>x.checked)));}function restaurarChecklist(){const saved=JSON.parse(localStorage.getItem('fb-demo-checklist')||'[]');document.querySelectorAll('#batch-orders input').forEach((x,i)=>{x.checked=Boolean(saved[i]);});}function cerrarLote(){document.getElementById('batch-modal').classList.add('hidden');}document.querySelectorAll('.order').forEach(row=>{const box=document.createElement('input');box.type='checkbox';box.className='row-select';box.setAttribute('aria-label','Seleccionar pedido');box.addEventListener('click',e=>e.stopPropagation());box.addEventListener('change',actualizarSeleccion);row.querySelector('strong').prepend(box);});function enviar(){alert('Demo: el pedido se derivaría a Gestión de envíos y quedaría auditado.');}</script>
-<script>async function confirmarLoteReal(){const boton=document.querySelector('#batch-modal .btn.primary');const ids=[...document.querySelectorAll('#batch-orders .batch-order b')].map(x=>Number(x.textContent.replace(/\D/g,''))).filter(Number.isSafeInteger);boton.disabled=true;try{const response=await fetch('/api/preparacion/lote-desde-gestion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gestion_pedido_ids:ids})});const data=await response.json();if(!response.ok)throw new Error(data.error||'No se pudo crear el lote');alert('Lote creado: '+(data.lote?.pedidos||0)+' pedidos enviados a preparación.');cerrarLote();limpiarSeleccion();}catch(error){alert('No se pudo crear el lote real: '+error.message+'\nLa preview no modificó datos.');}finally{boton.disabled=false;}}</script>
-<script>function enviar(){alert('Demo: se abriría la pantalla específica del pedido.');}</script>
-<script>function enviar(){history.pushState({pedido:'1001'},'', '/gestion-pedidos/pedidos/1001');document.getElementById('orders').classList.add('hidden');document.getElementById('recovery').classList.add('hidden');document.querySelector('.toolbar').classList.add('hidden');document.querySelector('.metrics').classList.add('hidden');document.querySelector('.mainnav').classList.add('hidden');document.getElementById('full-order').classList.remove('hidden');}function cerrarDetalleCompleto(){history.pushState({},'', '/gestion-pedidos/');document.getElementById('full-order').classList.add('hidden');document.querySelector('.toolbar').classList.remove('hidden');document.querySelector('.metrics').classList.remove('hidden');document.querySelector('.mainnav').classList.remove('hidden');document.getElementById('orders').classList.remove('hidden');}window.addEventListener('popstate',()=>{if(!window.location.pathname.match(/^\/gestion-pedidos\/pedidos\//))cerrarDetalleCompleto();});</script>
-<script>document.querySelectorAll('#full-order .full-actions .btn').forEach(b=>{if(b.textContent.trim()==='Editar pedido'){b.remove();}});const actions=document.querySelector('#full-order .full-actions');if(actions){const datos=document.createElement('button');datos.className='btn primary';datos.textContent='Editar datos';const productos=document.createElement('button');productos.className='btn primary';productos.textContent='Editar productos';productos.onclick=()=>document.getElementById('product-modal').classList.remove('hidden');actions.prepend(productos,datos);}function cerrarProductos(){document.getElementById('product-modal').classList.add('hidden');}</script>
-<script>function mostrarPanel(panel,button){document.querySelectorAll('.nav').forEach(x=>x.classList.remove('active'));if(button)button.classList.add('active');['recovery','orders','preparation','dispatch'].forEach(id=>document.getElementById(id)?.classList.toggle('hidden',id!==panel));}function abrirDesdeEstado(id){history.pushState({pedido:id},'', '/gestion-pedidos/pedidos/'+id);document.querySelector('.mainnav').classList.add('hidden');document.querySelector('.toolbar').classList.add('hidden');document.querySelector('.metrics').classList.add('hidden');['orders','recovery','preparation','dispatch'].forEach(x=>document.getElementById(x)?.classList.add('hidden'));document.getElementById('full-order').classList.remove('hidden');}</script>
-<script>document.querySelectorAll('.recovery-expiry').forEach((x,i)=>x.textContent=i===0?'Contactar hasta el cierre de mañana · 19:00':'Contactar hasta el cierre de hoy · 19:00');document.querySelector('#recovery .hint').textContent='La fecha límite se calcula según el día del pedido o abandono: cierre de hoy o cierre de mañana.';</script>
-<script>document.querySelectorAll('#full-order .items .item').forEach(item=>{const small=item.querySelector('small');if(!small||item.querySelector('.qty-badge'))return;const m=small.textContent.match(/·\s*(\d+)\s*×\s*\$([\d.]+)/);if(!m)return;small.textContent=small.textContent.replace(m[0],'');const qty=document.createElement('span');qty.className='qty-badge';qty.textContent='× '+m[1];const price=document.createElement('span');price.className='price-badge';price.textContent='$'+m[2];const remove=document.createElement('button');remove.className='btn';remove.textContent='Remover';remove.onclick=()=>alert('Demo: la línea queda marcada para remover y se revisa el impacto en stock y total.');item.append(qty,price,remove);});</script>
-<script>[...document.querySelectorAll('#full-order button')].find(x=>x.textContent.trim()==='Agregar nota')?.remove();</script>
-<script>const productTitle=document.querySelector('#product-modal h2');if(productTitle)productTitle.textContent='Agregar producto';</script>
-<script>const fullActions=document.querySelector('#full-order .full-actions');if(fullActions&&!document.getElementById('open-woo')){const woo=document.createElement('button');woo.id='open-woo';woo.type='button';woo.className='btn';woo.textContent='Abrir en WooCommerce ↗';woo.onclick=()=>window.open('https://demo.fusionbikes.com/wp-admin/post.php?post=1001&action=edit','_blank','noopener');fullActions.append(woo);}</script>
-<script>const addProductsButton=[...document.querySelectorAll('#full-order button')].find(x=>x.textContent.trim()==='Editar productos');if(addProductsButton)addProductsButton.textContent='Añadir productos';</script>
-<script>function demoHora(){return new Date().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});}function registrarCanal(id,canal){const el=document.getElementById(id);el.dataset.canal=canal;el.dataset.hora=demoHora();el.textContent='Canal elegido: '+canal+' · contacto aún no confirmado · hoy '+el.dataset.hora;el.classList.remove('done');}function marcarContactado(id){const el=document.getElementById(id),canal=el.dataset.canal||'canal no registrado';el.textContent='Contactado por '+canal+' · hoy '+(el.dataset.hora||demoHora())+' · por preview-admin';el.classList.add('done');}</script>
-<div class="panel hidden" id="email-modal" style="position:fixed;z-index:5;inset:8% 10%;max-width:760px;margin:auto;box-shadow:0 20px 80px #000"><div class="detail-head"><div><h2>Preparar email</h2><p class="hint">Copiá cada campo y enviá el mensaje desde tu correo. Esto no marca el contacto como realizado.</p></div><button class="btn" onclick="cerrarEmail()">Cerrar</button></div><div class="meta" style="display:grid;gap:8px;margin-top:14px"><label>Para<input class="search" id="email-to" readonly></label><label>Asunto<input class="search" id="email-subject" readonly></label><label>Mensaje<textarea class="search" id="email-body" rows="9" readonly></textarea></label></div><div class="contact-actions"><button class="btn primary" onclick="copiarCampo('email-to')">Copiar email</button><button class="btn primary" onclick="copiarCampo('email-subject')">Copiar asunto</button><button class="btn primary" onclick="copiarCampo('email-body')">Copiar mensaje</button></div></div>
-<script>const recoveryContacts={'contact-1005':{email:'diego.ruiz@demo.com',name:'Diego Ruiz',phone:'+54 11 5555-0144',order:'#1005',items:'Casco urbano demo x1, luces LED delanteras x1',total:'$128.700'},'contact-1010':{email:'mariana.silva@demo.com',name:'Mariana Silva',phone:'+54 11 5555-0188',order:'Carrito abandonado',items:'Casco urbano demo x1, luces LED delanteras x1',total:'$92.500'},'contact-1011':{email:'',name:'Lucas Benítez',phone:'',order:'Carrito abandonado',items:'Soporte de celular demo x1',total:'$38.900'}};function formatoArgentina(phone){const digits=String(phone||'').replace(/\D/g,'').replace(/^54/,'').replace(/^9/,'');if(digits.length===10)return digits;return '';}function copiarTexto(value){if(navigator.clipboard)return navigator.clipboard.writeText(value);return Promise.resolve();}function registrarCanal(id,canal){const c=recoveryContacts[id]||{};if(canal==='WhatsApp'){const phone=formatoArgentina(c.phone);if(!phone){alert('No hay un teléfono argentino válido para copiar.');return;}copiarTexto(phone);alert('Teléfono copiado: '+phone+'\nEl contacto sigue sin confirmar.');}else{abrirEmail(id);}const el=document.getElementById(id);el.dataset.canal=canal;el.dataset.hora=demoHora();el.textContent='Canal elegido: '+canal+' · contacto aún no confirmado · hoy '+el.dataset.hora;el.classList.remove('done');}function abrirEmail(id){const c=recoveryContacts[id]||{};if(!c.email){alert('No hay un email disponible para este registro.');return;}document.getElementById('email-to').value=c.email;document.getElementById('email-subject').value='¿Pudiste completar tu compra? '+c.order;document.getElementById('email-body').value='Hola '+c.name+',\n\nVimos que tu compra no llegó a completarse. Habías seleccionado: '+c.items+' por '+c.total+'.\n\n¿Tuviste algún problema con la compra, te arrepentiste o necesitás que te ayudemos con algo? Estamos para ayudarte.\n\nSaludos,\nFusion Bikes';document.getElementById('email-modal').classList.remove('hidden');const el=document.getElementById(id);el.dataset.canal='Email';el.dataset.hora=demoHora();el.textContent='Canal elegido: Email · contacto aún no confirmado · hoy '+el.dataset.hora;el.classList.remove('done');}function cerrarEmail(){document.getElementById('email-modal').classList.add('hidden');}function copiarCampo(id){copiarTexto(document.getElementById(id).value);alert('Campo copiado.');}</script>
-<script>if(window.location.pathname.match(/^\/gestion-pedidos\/pedidos\//)){enviar();}</script>
-<div class="panel hidden product-modal" id="remove-modal" style="z-index:7;max-width:520px"><div class="detail-head"><div><h2>Remover producto</h2><p class="hint">Elegí un motivo obligatorio. La acción queda auditada.</p></div><button class="btn" onclick="cerrarRemocion()">Cancelar</button></div><p id="remove-product-name"></p><select class="select" id="remove-reason" style="width:100%"><option value="">Seleccionar motivo…</option><option>No lo quiso</option><option>No apto para la venta</option><option>Falla de stock</option></select><div class="contact-actions"><button class="btn primary" onclick="confirmarRemocion()">Confirmar remoción</button></div></div>
-<script>let productoARemover=null;const cambioOption=document.createElement('option');cambioOption.textContent='Cambio';document.getElementById('remove-reason')?.append(cambioOption);document.querySelectorAll('#full-order .items .item .btn').forEach(btn=>{btn.onclick=()=>abrirRemocion(btn.closest('.item'));});function abrirRemocion(item){productoARemover=item;document.getElementById('remove-product-name').textContent='Producto: '+(item.querySelector('b')?.textContent||'Producto');document.getElementById('remove-reason').value='';document.getElementById('remove-modal').classList.remove('hidden');}function cerrarRemocion(){document.getElementById('remove-modal').classList.add('hidden');productoARemover=null;}function confirmarRemocion(){const reason=document.getElementById('remove-reason').value;if(!reason){alert('Seleccioná un motivo para continuar.');return;}alert('Demo auditada: '+reason+' · preview-admin · '+demoHora());cerrarRemocion();}</script>
-<script>const impact=document.createElement('div');impact.className='recovery-note';impact.innerHTML='<b>Impacto económico estimado:</b> $120.000 a favor del cliente<br><span class="muted">Después de confirmar, se podrá marcar el reintegro como realizado.</span>';document.querySelector('#remove-modal .contact-actions')?.before(impact);const refund=document.createElement('button');refund.className='btn';refund.textContent='Marcar como reintegrado';refund.onclick=()=>{refund.textContent='Reintegro registrado · preview-admin · '+demoHora();refund.classList.add('green');refund.disabled=true;};document.querySelector('#full-order .info-box:nth-last-child(3) .info-list')?.append(refund);</script>
-<div class="panel hidden product-modal" id="review-modal" style="z-index:8;max-width:620px"><div class="detail-head"><div><h2>Revisar cambios</h2><p class="hint">Todavía no se modificó el pedido. Confirmá el resumen para aplicar todo junto.</p></div><button class="btn" onclick="cerrarRevision()">Cancelar</button></div><div class="review-list"><div class="review-row"><span>Productos agregados</span><b>1 · Luces LED delanteras</b></div><div class="review-row"><span>Productos removidos</span><b>1 · Casco urbano demo</b></div><div class="review-row"><span>Motivo</span><b>Cambio</b></div><div class="review-row"><span>Diferencia</span><b style="color:var(--green)">$32.250 a favor</b></div><div class="review-row"><span>Impacto de stock</span><b>Reserva liberada · nuevo producto reservado</b></div></div><div class="contact-actions"><button class="btn" onclick="cerrarRevision()">Descartar cambios</button><button class="btn primary" onclick="confirmarCambios()">Confirmar cambios</button></div></div>
-<script>const editBar=document.createElement('div');editBar.className='edit-bar';editBar.innerHTML='<small>Hay cambios pendientes sin aplicar</small><div><button class="btn" onclick="descartarCambios()">Descartar</button> <button class="btn primary" onclick="abrirRevision()">Revisar cambios</button></div>';document.querySelector('#full-order .full-actions')?.after(editBar);function abrirRevision(){document.getElementById('review-modal').classList.remove('hidden');}function cerrarRevision(){document.getElementById('review-modal').classList.add('hidden');}function descartarCambios(){alert('Demo: se descartan todos los cambios pendientes.');editBar.classList.add('hidden');}function confirmarCambios(){alert('Demo: cambios confirmados en una sola operación y auditados.');cerrarRevision();editBar.classList.add('hidden');}</script>
-<script>document.querySelectorAll('#review-modal .review-row').forEach(row=>{if(row.textContent.includes('Diferencia'))row.innerHTML='<span>Diferencia según pago</span><b style="color:var(--amber)">$32.250 adicionales · 6 cuotas de $5.375<br><small style="color:var(--muted)">Precio contado + coeficiente del plugin · cuota leída del pedido</small></b>';});</script>
-<script>const examples=document.createElement('div');examples.className='recovery-note';examples.innerHTML='<b>Ejemplos de financiación</b><br><small>Precio contado del producto adicional: $20.000 · coeficientes ilustrativos del plugin</small><div class="review-list"><div class="review-row"><span>3 cuotas</span><b>$21.000 total · $7.000 por cuota</b></div><div class="review-row"><span>6 cuotas</span><b>$22.500 total · $3.750 por cuota</b></div><div class="review-row"><span>12 cuotas</span><b>$25.000 total · $2.083 por cuota</b></div><div class="review-row"><span>24 cuotas</span><b>$29.000 total · $1.208 por cuota</b></div></div><small>El pedido de esta preview conserva el plan detectado: 6 cuotas.</small>';document.querySelector('#review-modal .review-list')?.after(examples);</script>
-<script>document.querySelectorAll('.order').forEach(row=>{if(row.textContent.includes('#1006')){const chip=document.createElement('span');chip.className='chip cancel';chip.textContent='Atención especial · +1 día en espera';row.querySelector('.chips')?.append(chip);}});</script>
+
+<script>document.write('<script src="' + window.LIB + 'format.js"><\/script>' +
+                 '<script src="' + window.LIB + 'api.js"><\/script>');</script>
 <script>
-// GP7: cuando el VPS dispone de oportunidades reales, reemplaza la maqueta sin
-// perder el fallback genérico de esta preview.
-const mostrarPanelPreview = window.mostrarPanel;
-function escapeRecovery(value){return String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function recoveryFecha(iso){return iso ? new Date(iso).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : 'sin fecha';}
-function renderRecoveryApi(rows){
-  const panel=document.getElementById('recovery'); if(!panel) return;
-  const cards=rows.map(row=>{const id=`api-${row.id}`;const nombre=row.cliente_nombre||row.cliente_email||'Cliente sin identificar';const tipo=row.fuente==='carrito_abandonado'?'Carrito abandonado':'Pedido cancelado';const estado=row.contactos?`Contactado por ${escapeRecovery(row.ultimo_canal)} · ${escapeRecovery(row.ultimo_actor)} · ${recoveryFecha(row.ultimo_contacto)}`:'Nunca contactado';return `<article class="recovery-card ${row.fuente==='pedido_cancelado'?'priority':''}"><div class="recovery-top"><div><span class="recovery-label">${tipo} · ${row.intentos||1} intento(s)</span><h3>${escapeRecovery(row.numero_visible||nombre)} · ${escapeRecovery(nombre)}</h3></div><span class="chip web">${escapeRecovery(row.pedido_fuente||'WEB')}</span></div><p>${escapeRecovery(row.cliente_email||'Sin email')} · ${escapeRecovery(row.cliente_telefono||'Sin teléfono')}</p><span class="recovery-expiry">Contactar hasta ${recoveryFecha(row.vence_en)}</span><div class="contact-actions"><button class="btn primary" onclick="prepararRecoveryApi(${row.id},'whatsapp')">WhatsApp</button><button class="btn primary" onclick="prepararRecoveryApi(${row.id},'email')">Email</button><button class="btn" onclick="marcarRecoveryApi(${row.id},this)">Marcar contactado</button></div><div class="contact-state" data-recovery-state="${row.id}">${estado}</div></article>`}).join('');
-  panel.querySelector('.recovery-grid').innerHTML=cards||'<p class="footer-note">No hay oportunidades vigentes.</p>'; panel.querySelector('.chip.warn').textContent=`${rows.length} oportunidades`;
-}
-async function cargarRecoveryApi(){try{const r=await fetch('/api/gestion-pedidos/recuperar-ventas',{credentials:'same-origin'});if(!r.ok)return;const data=await r.json();if(data.ok&&Array.isArray(data.oportunidades))renderRecoveryApi(data.oportunidades);}catch(_e){/* preview/fallback */}}
-async function prepararRecoveryApi(id,canal){const state=document.querySelector(`[data-recovery-state="${id}"]`);try{const r=await fetch(`/api/gestion-pedidos/recuperar-ventas/${id}`,{credentials:'same-origin'});const data=await r.json();if(!r.ok)throw new Error(data.error||'No se pudo cargar la oportunidad');const c=data.oportunidad.contacto||{};if(canal==='whatsapp'){if(!c.telefono_argentina)throw new Error('No hay un teléfono argentino válido para copiar.');await navigator.clipboard?.writeText(c.telefono_argentina);alert(`Teléfono copiado: ${c.telefono_argentina}\nEl contacto sigue sin confirmar.`);}else{document.getElementById('email-to').value=c.email||'';document.getElementById('email-subject').value=c.asunto||'';document.getElementById('email-body').value=c.cuerpo||'';document.getElementById('email-modal').classList.remove('hidden');}if(state){state.dataset.canal=canal;state.textContent=`Canal elegido: ${canal} · contacto aún no confirmado`;state.classList.remove('done');}}catch(error){alert(error.message);}}
-async function marcarRecoveryApi(id,button){const state=document.querySelector(`[data-recovery-state="${id}"]`);const canal=state?.dataset.canal;if(!canal){alert('Primero elegí WhatsApp o Email.');return;}const r=await fetch(`/api/gestion-pedidos/recuperar-ventas/${id}/contactar`,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({canal})});const data=await r.json();if(!r.ok){alert(data.error||'No se pudo registrar el contacto');return;}state.textContent=`Contactado por ${data.contacto.canal} · ${data.contacto.actor} · ahora`;state.classList.add('done');button.disabled=true;}
-window.mostrarPanel=function(panel,button){mostrarPanelPreview(panel,button);if(panel==='recovery')cargarRecoveryApi();};
+(function () {
+  'use strict';
+  Api.installAuth();
+
+  var API = '/api/gestion-pedidos';
+  var PAGINA = 50;
+
+  var estado = {
+    vista: 'atencion',
+    q: '',
+    fuente: '',
+    comercial: '',
+    offset: 0,
+    total: 0,
+    pedidos: [],
+    seleccion: new Set(),
+    abierto: null
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = window.esc;
+
+  // ── Formato ───────────────────────────────────────────────────────────────
+  function plata(centavos, moneda) {
+    if (centavos == null) return '—';
+    var v = (Number(centavos) / 100).toLocaleString('es-AR', { minimumFractionDigits: 2 });
+    return (moneda === 'USD' ? 'US$ ' : '$ ') + v;
+  }
+  function cuando(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d)) return String(iso);
+    return d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit',
+                                       hour: '2-digit', minute: '2-digit' });
+  }
+  function canal(fuente) {
+    return fuente === 'mercadolibre' ? 'ML' : fuente === 'woocommerce' ? 'WEB' : String(fuente || '—');
+  }
+  // El estado que el operario reconoce es el del canal ('enviadoandreani', 'lpaandreani',
+  // 'completed'), no la clasificación propia: 625 de 723 pedidos comparten la misma
+  // combinación comercial/operativa, así que ese chip no distinguía nada. Se muestra el del
+  // canal con su origen a la vista, y el operativo sólo cuando aporta algo distinto.
+  var ESTADOS_LEGIBLES = {
+    mercadolibre: 'Venta de ML', lpaandreani: 'Listo para enviar', enviadoandreani: 'Enviado',
+    completed: 'Completado', processing: 'En proceso', cancelled: 'Cancelado',
+    'on-hold': 'En espera', pending: 'Pago pendiente', refunded: 'Reembolsado',
+    failed: 'Fallido', paid: 'Pagado', checkout: 'Checkout',
+    retiradoenfusion: 'Retirado en el local', serviceterminado: 'Service terminado',
+    serviceenproces: 'Service en proceso', fusion: 'Entregado sin aviso'
+  };
+
+  // El listado devuelve el estado del envío como texto y el detalle como objeto (con
+  // logistic_type y frescura). Se normaliza acá para que chipEstado sirva en los dos.
+  function statusEnvio(valor) {
+    if (!valor) return null;
+    return typeof valor === 'string' ? valor : (valor.status || null);
+  }
+
+  // Estados del envío de ML. Son los que mandan en una venta de ML: su estado de orden se
+  // queda en 'Pagado' aunque el paquete ya haya salido.
+  var ENVIOS_ML = {
+    ready_to_ship: 'Listo para enviar', shipped: 'Despachado',
+    delivered: 'Entregado', not_delivered: 'No entregado', cancelled: 'Envío cancelado'
+  };
+
+  function estadoLegible(estado) {
+    if (!estado) return null;
+    return ESTADOS_LEGIBLES[estado] || estado;
+  }
+
+  function nombreOperacion(p) {
+    var esService = ['serviceenproces', 'serviceterminado'].indexOf(p.estado_canal) >= 0;
+    return (esService ? 'Service · ' : '') + (p.cliente_nombre || 'Sin cliente');
+  }
+
+  function chipEstado(p) {
+    var cerrado = ['cerrado', 'despachado', 'retirado'].indexOf(p.estado_operativo) >= 0;
+    var clase = p.estado_comercial === 'cancelado' || p.estado_comercial === 'fallido' ? 'ui-chip--critico'
+      : cerrado ? 'ui-chip--ok' : 'ui-chip--urgente';
+    if (['serviceenproces', 'processing', 'lpaandreani'].indexOf(p.estado_canal) >= 0) clase = 'ui-chip--info';
+    if (['fusion', 'retiradoenfusion', 'serviceterminado', 'completed', 'enviadoandreani'].indexOf(p.estado_canal) >= 0) clase = 'ui-chip--ok';
+    if (['cancelled', 'failed', 'refunded'].indexOf(p.estado_canal) >= 0) clase = 'ui-chip--critico';
+    var origen = p.fuente === 'mercadolibre' ? 'ML' : 'Woo';
+    // En una venta de ML manda el envío: 'paid' sólo dice que ML cobró.
+    var status = p.fuente === 'mercadolibre' ? statusEnvio(p.estado_envio_ml) : null;
+    var envio = status ? (ENVIOS_ML[status] || status) : null;
+    var canal = envio || estadoLegible(p.estado_canal);
+    if (status === 'ready_to_ship') clase = 'ui-chip--info';
+    if (status && ['shipped', 'delivered'].indexOf(status) >= 0) clase = 'ui-chip--ok';
+    if (status === 'cancelled' || status === 'not_delivered') clase = 'ui-chip--critico';
+    // Sin estado del canal no se cae a la clasificación propia: eso afirmaría algo que no
+    // se verificó. Son pedidos viejos, fuera de la ventana que la reconciliación alcanza.
+    var html = '<span class="ui-chip ' + (canal ? clase : '') + '">' +
+      (canal ? esc(canal) + ' <small>(' + origen + ')</small>' : 'Sin estado conocido') + '</span>';
+    // El estado operativo sólo se agrega cuando dice algo que el del canal no dice.
+    if (p.estado_operativo && p.estado_operativo !== 'importado' && !cerrado) {
+      html += ' <span class="ui-chip">' + esc(p.estado_operativo.replace(/_/g, ' ')) + '</span>';
+    }
+    return html;
+  }
+
+  // ── Estados explícitos de carga/vacío/error ──────────────────────────────
+  function mostrarEstado(texto, esError) {
+    var el = $('estado-lista');
+    el.textContent = texto || '';
+    el.classList.toggle('oculto', !texto);
+    el.classList.toggle('error', Boolean(esError));
+  }
+
+  // ── Resumen: contadores de pills y frescura ──────────────────────────────
+  function cargarResumen() {
+    return fetch(API + '/resumen', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.ok) { $('frescura-txt').textContent = 'No se pudo leer el estado de la importación.'; return; }
+        $('n-atencion').textContent = d.atencion;
+        $('n-recuperar').textContent = d.recuperar;
+        $('n-todos').textContent = d.total;
+        pintarFrescura(d.ultima_importacion);
+      })
+      .catch(function () { $('frescura-txt').textContent = 'No se pudo leer el estado de la importación.'; });
+  }
+
+  function pintarFrescura(ultima) {
+    var caja = $('frescura');
+    if (!ultima) {
+      caja.classList.add('vieja');
+      $('frescura-txt').textContent = 'Todavía no se importó ningún pedido.';
+      return;
+    }
+    if (ultima.estado === 'fallida') {
+      caja.classList.add('vieja');
+      $('frescura-txt').textContent = 'La última importación falló (' + esc(ultima.error || 'sin detalle') +
+        '). Se muestran los datos de la corrida anterior.';
+      return;
+    }
+    var horas = (Date.now() - new Date(ultima.finalizado_en).getTime()) / 36e5;
+    caja.classList.toggle('vieja', !(horas < 1));
+    $('frescura-txt').textContent = 'Última importación: ' + cuando(ultima.finalizado_en) +
+      ' · ' + ultima.importados + ' pedidos' + (horas >= 1 ? ' (hace más de una hora)' : '');
+  }
+
+  // ── Listado ───────────────────────────────────────────────────────────────
+  function url() {
+    var p = new URLSearchParams();
+    if (estado.vista === 'atencion') p.set('vista', 'atencion');
+    if (estado.q) p.set('q', estado.q);
+    if (estado.fuente) p.set('fuente', estado.fuente);
+    if (estado.comercial) p.set('comercial', estado.comercial);
+    p.set('limit', PAGINA);
+    p.set('offset', estado.offset);
+    return API + '?' + p.toString();
+  }
+
+  function cargarLista(acumular) {
+    if (!acumular) {
+      estado.offset = 0;
+      estado.pedidos = [];
+      $('resultado').innerHTML = '';
+      // La selección se limpia al cambiar de vista, buscar o filtrar. Si no, un pedido
+      // elegido en otra vista sigue seleccionado sin estar en pantalla y "Enviar a
+      // preparación" lo mandaría sin que nadie lo vea. Paginar (acumular) sí la conserva.
+      estado.seleccion.clear();
+      refrescarSeleccion();
+    }
+    mostrarEstado('Cargando pedidos…');
+    $('paginacion').classList.add('oculto');
+    return fetch(url(), { credentials: 'same-origin' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        estado.total = d.total;
+        estado.pedidos = estado.pedidos.concat(d.pedidos);
+        pintarLista();
+        if (!estado.pedidos.length) {
+          mostrarEstado(estado.q ? 'Ningún pedido coincide con la búsqueda.' : 'No hay pedidos en esta vista.');
+        } else {
+          mostrarEstado('');
+          $('paginacion').classList.toggle('oculto', estado.pedidos.length >= estado.total);
+        }
+      })
+      .catch(function (e) {
+        mostrarEstado('No se pudieron cargar los pedidos: ' + e.message + '. Reintentá en unos segundos.', true);
+      });
+  }
+
+  function pintarLista() {
+    $('resultado').innerHTML = estado.pedidos.map(function (p) {
+      return '<article class="fila" tabindex="0" role="button" data-id="' + p.id + '"' +
+        (estado.abierto === p.id ? ' aria-current="true"' : '') + '>' +
+        '<div class="fila-top"><strong>' +
+          '<input class="sel" type="checkbox" data-sel="' + p.id + '" aria-label="Seleccionar pedido ' + esc(p.numero_visible) + '"' +
+          (estado.seleccion.has(p.id) ? ' checked' : '') + '>' +
+          esc(p.numero_visible) + ' · ' + esc(nombreOperacion(p)) +
+        '</strong><span class="ui-chip">' + canal(p.fuente) + '</span></div>' +
+        '<div class="fila-meta"><span>' + cuando(p.creado_fuente_en) + '</span>' +
+          (p.numero_espejo_woo ? '<span>Woo ' + esc(p.numero_espejo_woo) + '</span>' : '') +
+          '<span>' + p.productos + ' productos · ' + p.unidades + ' u.</span>' +
+          '<span>' + plata(p.total_centavos, p.moneda) + '</span></div>' +
+        '<div class="fila-chips">' + chipEstado(p) + '</div>' +
+      '</article>';
+    }).join('');
+  }
+
+  // ── Vista rápida ──────────────────────────────────────────────────────────
+  function abrirRapida(id) {
+    estado.abierto = id;
+    pintarLista();
+    var caja = $('rapida');
+    caja.innerHTML = '<div class="estado">Cargando ficha…</div>';
+    fetch(API + '/' + id, { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) { caja.innerHTML = fichaRapida(d.pedido); })
+      .catch(function (e) {
+        caja.innerHTML = '<div class="estado error">No se pudo cargar la ficha: ' + esc(e.message) + '</div>';
+      });
+  }
+
+  function fichaRapida(p) {
+    var e = p.entrega || {};
+    return '<h2>' + esc(p.numero_visible) + '</h2>' +
+      '<div class="ui-chip">' + canal(p.fuente) + ' · ' + esc(p.external_id) + '</div> ' + chipEstado(p) +
+      '<div class="kv">' +
+        fila('Estado en ' + (p.fuente === 'mercadolibre' ? 'MercadoLibre' : 'WooCommerce'), estadoLegible(p.estado_canal)) +
+        (statusEnvio(p.estado_envio_ml) ? fila('Envío ML', ENVIOS_ML[statusEnvio(p.estado_envio_ml)] || statusEnvio(p.estado_envio_ml)) : '') +
+        (p.espejo_woo ? fila('Pedido en Woo', p.espejo_woo.numero_visible + ' · ' + (estadoLegible(p.espejo_woo.estado_canal) || 'sin estado')) : '') +
+        fila('Cliente', p.cliente_nombre) +
+        fila('Email', p.cliente_email) +
+        fila('Teléfono', p.cliente_telefono) +
+        fila('Fecha', cuando(p.creado_fuente_en)) +
+        fila('Entrega', e.tipo) +
+        fila('Dirección', e.direccion) +
+        fila('Pago', [p.pago_metodo, p.pago_estado].filter(Boolean).join(' · ')) +
+        fila('Cuotas', p.cuotas) +
+        fila('Total', plata(p.total_centavos, p.moneda)) +
+        fila('Notas', p.notas) +
+      '</div>' +
+      itemsHtml(p.items) +
+      '<div class="acciones">' +
+        '<a class="ui-btn ui-btn--primario" data-pedido="' + p.id + '" href="' + RAIZ + 'pedidos/' + p.id + '">Abrir pedido completo</a>' +
+        (p.enlace_woocommerce ? '<a class="ui-btn" target="_blank" rel="noopener" href="' + esc(p.enlace_woocommerce) + '">Abrir en WooCommerce ↗</a>' : '') +
+      '</div>';
+  }
+
+  function fila(label, valor) {
+    if (valor == null || valor === '') return '';
+    return '<div>' + esc(label) + ': <b>' + esc(valor) + '</b></div>';
+  }
+
+  function itemsHtml(items) {
+    if (!items || !items.length) return '<div class="items"><div class="estado">Sin productos registrados.</div></div>';
+    return '<div class="items">' + items.map(function (i) {
+      var unit = i.precio_unitario_centavos;
+      return '<div class="item">' +
+        (i.imagen ? '<img class="miniatura" src="' + esc(i.imagen) + '" alt="" loading="lazy">' : '<span class="miniatura vacia" aria-hidden="true">–</span>') +
+        '<div class="nom"><b>' + esc(i.nombre) + '</b>' +
+        '<small>' + esc(i.sku || 'sin SKU') + (i.ean ? ' · EAN ' + esc(i.ean) : '') +
+        (i.stock_actual != null ? ' · stock ' + esc(i.stock_actual) : '') + '</small></div>' +
+        '<span class="qty">× ' + esc(i.cantidad) + '</span>' +
+        '<span>' + (unit != null ? plata(unit * i.cantidad) : '—') + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  // ── Detalle completo, en su propia URL ───────────────────────────────────
+  function idDeLaUrl() {
+    var m = location.pathname.match(/\/gestion-pedidos\/pedidos\/(\d+)/);
+    return m ? Number(m[1]) : null;
+  }
+
+  function mostrarDetalle(id, empujar) {
+    if (empujar) history.pushState({ id: id }, '', RAIZ + 'pedidos/' + id);
+    $('vista-lista').classList.add('oculto');
+    $('vista-detalle').classList.remove('oculto');
+    $('full').innerHTML = '<div class="estado">Cargando pedido…</div>';
+    fetch(API + '/' + id, { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) { $('full').innerHTML = detalleHtml(d.pedido); })
+      .catch(function (e) {
+        $('full').innerHTML = '<div class="estado error">No se pudo cargar el pedido: ' + esc(e.message) + '</div>';
+      });
+  }
+
+  function detalleHtml(p) {
+    var e = p.entrega || {};
+    return '<h1>' + esc(p.numero_visible) + ' <em>' + canal(p.fuente) + '</em></h1>' +
+      '<p class="sub">' + esc(p.external_id) + ' · ' + cuando(p.creado_fuente_en) + '</p>' +
+      chipEstado(p) +
+      '<div class="acciones">' +
+        (p.enlace_woocommerce ? '<a class="ui-btn ui-btn--primario" target="_blank" rel="noopener" href="' + esc(p.enlace_woocommerce) + '">Abrir en WooCommerce ↗</a>' : '') +
+      '</div>' +
+      '<div class="full-grid">' +
+        '<div class="ui-panel"><h3>Estado</h3><div class="kv">' +
+          fila('En ' + (p.fuente === 'mercadolibre' ? 'MercadoLibre' : 'WooCommerce'), estadoLegible(p.estado_canal)) +
+          (statusEnvio(p.estado_envio_ml) ? fila('Envío ML', (ENVIOS_ML[statusEnvio(p.estado_envio_ml)] || statusEnvio(p.estado_envio_ml)) + (p.estado_envio_ml.logistic_type ? ' · ' + p.estado_envio_ml.logistic_type : '')) : '') +
+          (p.espejo_woo ? fila('Pedido espejo en Woo', p.espejo_woo.numero_visible + ' · ' + (estadoLegible(p.espejo_woo.estado_canal) || 'sin estado')) : '') +
+          fila('Operativo', p.estado_operativo) +
+          (p.fuente === 'mercadolibre' ? '<div class="ui-aviso ui-aviso--info" style="margin-top:8px">Los pedidos de MercadoLibre no se modifican desde acá: los cambios se hacen en ML y se traen por la API.</div>' : '') +
+        '</div></div>' +
+        '<div class="ui-panel"><h3>Cliente</h3><div class="kv">' +
+          fila('Nombre', p.cliente_nombre) + fila('Email', p.cliente_email) +
+          fila('Teléfono', p.cliente_telefono) + '</div></div>' +
+        '<div class="ui-panel"><h3>Entrega</h3><div class="kv">' +
+          fila('Tipo', e.tipo) + fila('Transportista', e.transportista) + fila('Receptor', e.nombre_receptor) + fila('Dirección', e.direccion) +
+          fila('Ciudad', e.ciudad) + fila('Provincia', e.provincia) +
+          fila('Código postal', e.codigo_postal) + fila('Tracking', e.tracking) + '</div></div>' +
+        '<div class="ui-panel"><h3>Pago</h3><div class="kv">' +
+          fila('Método', p.pago_metodo) + fila('Estado', p.pago_estado) +
+          fila('Cuotas', p.cuotas) + fila('Subtotal', plata(p.subtotal_centavos, p.moneda)) +
+          fila('Envío', plata(p.envio_centavos, p.moneda)) +
+          fila('Total', plata(p.total_centavos, p.moneda)) + '</div></div>' +
+        '<div class="ui-panel"><h3>Productos</h3>' + itemsHtml(p.items) + '</div>' +
+      '</div>' +
+      '<div class="ui-panel" style="margin-top:14px"><h3>Línea de tiempo</h3>' + eventosHtml(p.eventos) + '</div>';
+  }
+
+  function eventosHtml(eventos) {
+    if (!eventos || !eventos.length) return '<div class="estado">Sin eventos registrados.</div>';
+    return '<div class="timeline">' + eventos.map(function (ev) {
+      return '<div class="ev"><b>' + esc(ev.evento) + '</b>' +
+        '<small>' + cuando(ev.creado_en) + ' · ' + esc(ev.actor_tipo || 'sistema') +
+        (ev.estado_anterior || ev.estado_nuevo ? ' · ' + esc(ev.estado_anterior || '—') + ' → ' + esc(ev.estado_nuevo || '—') : '') +
+        '</small></div>';
+    }).join('') + '</div>';
+  }
+
+  function volverAlListado() {
+    $('vista-detalle').classList.add('oculto');
+    $('vista-lista').classList.remove('oculto');
+  }
+
+  // ── Selección múltiple y envío a preparación ─────────────────────────────
+  function refrescarSeleccion() {
+    $('n-sel').textContent = estado.seleccion.size;
+    $('bulk').classList.toggle('oculto', estado.seleccion.size === 0);
+  }
+
+  function enviarALote() {
+    var ids = Array.from(estado.seleccion);
+    if (!ids.length) return;
+    var boton = $('btn-lote');
+    boton.disabled = true;
+    fetch(API + '/preparacion/validar-lote', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pedido_ids: ids })
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d.error || 'No se pudo validar el lote');
+        var d = res.d;
+        var detalle = d.validos.length + ' de ' + d.solicitados + ' pedidos entran a preparación.';
+        if (d.rechazados.length) {
+          detalle += '\n\nQuedan afuera:\n' + d.rechazados.map(function (r) {
+            return '· ' + (r.numero_visible || ('#' + r.id)) + ': ' + r.motivo;
+          }).join('\n');
+        }
+        if (!d.validos.length) { alert(detalle); return; }
+        if (!confirm(detalle + '\n\n¿Confirmás el envío a preparación?')) return;
+        return crearLote(d.validos.map(function (p) { return p.id; }));
+      })
+      .catch(function (e) { alert('No se pudo enviar a preparación: ' + e.message); })
+      .then(function () { boton.disabled = false; });
+  }
+
+  function crearLote(ids) {
+    return fetch('/api/preparacion/lote-desde-gestion', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gestion_pedido_ids: ids })
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d.error || 'No se pudo crear el lote');
+        alert('Lote creado: ' + ((res.d.lote && res.d.lote.pedidos) || ids.length) + ' pedidos enviados a preparación.');
+        estado.seleccion.clear();
+        refrescarSeleccion();
+        cargarResumen();
+        cargarLista(false);
+      });
+  }
+
+  // ── Reconciliación manual ────────────────────────────────────────────────
+  function reconciliar() {
+    var boton = $('btn-reconciliar');
+    if (!confirm('Se vuelven a leer los pedidos de los últimos 30 días de WooCommerce y MercadoLibre. No cambia estados ni crea preparaciones. ¿Seguimos?')) return;
+    boton.disabled = true;
+    var textoPrevio = boton.textContent;
+    boton.textContent = 'Importando…';
+    fetch(API + '/importar', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: '{}'
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d.detalle || res.d.error || 'falló la importación');
+        alert('Importación completa: ' + res.d.creados + ' nuevos y ' + res.d.actualizados + ' actualizados.');
+        cargarResumen();
+        cargarLista(false);
+      })
+      .catch(function (e) { alert('No se pudo importar: ' + e.message); })
+      .then(function () { boton.disabled = false; boton.textContent = textoPrevio; });
+  }
+
+  // ── Eventos ───────────────────────────────────────────────────────────────
+  $('pills').addEventListener('click', function (ev) {
+    var b = ev.target.closest('[data-vista]');
+    if (!b) return;
+    Array.prototype.forEach.call(this.querySelectorAll('[data-vista]'), function (x) {
+      x.setAttribute('aria-selected', String(x === b));
+    });
+    estado.vista = b.dataset.vista;
+    if (estado.vista === 'recuperar') {
+      // Recuperar ventas tiene su propio endpoint y su propia forma; hasta que se porte
+      // a esta pantalla se dice qué pasa, en vez de mostrar una lista vacía sin explicar.
+      $('resultado').innerHTML = '';
+      $('paginacion').classList.add('oculto');
+      mostrarEstado('Recuperar ventas todavía se opera en su pantalla anterior. No hay oportunidades vigentes cargadas.');
+      return;
+    }
+    cargarLista(false);
+  });
+
+  var timer = null;
+  $('q').addEventListener('input', function () {
+    var v = this.value.trim();
+    clearTimeout(timer);
+    timer = setTimeout(function () { estado.q = v; cargarLista(false); }, 300);
+  });
+  $('f-fuente').addEventListener('change', function () { estado.fuente = this.value; cargarLista(false); });
+  $('f-comercial').addEventListener('change', function () { estado.comercial = this.value; cargarLista(false); });
+
+  $('resultado').addEventListener('click', function (ev) {
+    var caja = ev.target.closest('[data-sel]');
+    if (caja) {
+      var id = Number(caja.dataset.sel);
+      if (caja.checked) estado.seleccion.add(id); else estado.seleccion.delete(id);
+      refrescarSeleccion();
+      return;
+    }
+    var fila = ev.target.closest('.fila');
+    if (fila) abrirRapida(Number(fila.dataset.id));
+  });
+  $('resultado').addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    var fila = ev.target.closest('.fila');
+    if (!fila) return;
+    ev.preventDefault();
+    abrirRapida(Number(fila.dataset.id));
+  });
+
+  // "Abrir pedido completo" es un <a> real: navega con clic del medio y se puede copiar,
+  // pero en el clic común se resuelve sin recargar.
+  $('rapida').addEventListener('click', function (ev) {
+    var a = ev.target.closest('a[data-pedido]');
+    if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+    ev.preventDefault();
+    mostrarDetalle(Number(a.dataset.pedido), true);
+  });
+
+  $('volver-lista').addEventListener('click', function (ev) {
+    ev.preventDefault();
+    history.pushState({}, '', RAIZ);
+    volverAlListado();
+  });
+  window.addEventListener('popstate', function () {
+    var id = idDeLaUrl();
+    if (id) mostrarDetalle(id, false); else volverAlListado();
+  });
+
+  $('btn-limpiar').addEventListener('click', function () {
+    estado.seleccion.clear();
+    refrescarSeleccion();
+    pintarLista();
+  });
+  $('btn-lote').addEventListener('click', enviarALote);
+  $('btn-reconciliar').addEventListener('click', reconciliar);
+  $('btn-mas').addEventListener('click', function () {
+    estado.offset += PAGINA;
+    cargarLista(true);
+  });
+
+  // ── Arranque ──────────────────────────────────────────────────────────────
+  // El "volver al inicio" del markup es relativo y apuntaría mal desde la URL del
+  // detalle; se reescribe con la raíz ya calculada.
+  $('ir-home').setAttribute('href', RAIZ.slice(0, RAIZ.length - 'gestion-pedidos/'.length) + 'home/');
+  cargarResumen();
+  var inicial = idDeLaUrl();
+  if (inicial) { mostrarDetalle(inicial, false); cargarLista(false); }
+  else cargarLista(false);
+})();
 </script>
-</body></html>
+</body>
+</html>

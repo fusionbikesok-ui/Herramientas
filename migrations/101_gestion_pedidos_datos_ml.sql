@@ -1,0 +1,12 @@
+-- Gestión de pedidos: payload crudo de la orden de MercadoLibre.
+--
+-- La columna ya existía en producción, pero creada por un `ALTER TABLE` en línea dentro de
+-- `lib/gestionPedidos.js`, que sólo corre cuando se importa. El efecto: una base creada
+-- desde las migraciones —un despliegue nuevo, un backup restaurado, cualquier entorno de
+-- prueba— no tenía la columna, y el listado de pedidos respondía 500 hasta que alguien
+-- corriera una importación. Los tests de ruta lo reflejaban en rojo.
+--
+-- Se agrega acá para que el esquema quede definido por las migraciones y no por un efecto
+-- secundario del importador. El ALTER en línea es idempotente y puede convivir: comprueba
+-- la existencia antes de crearla.
+ALTER TABLE gestion_pedidos ADD COLUMN datos_ml_json TEXT;
