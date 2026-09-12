@@ -136,6 +136,24 @@ export function openDb(dbPath) {
   const dir = path.dirname(dbPath);
   if (dir !== '.' && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const db = new Database(dbPath);
+  // Sólo para la suite de tests, nunca en producción.
+  //
+  // Los tests abren una base NUEVA por caso —605 llamadas a openDb en 141 archivos— y el 90%
+  // de lo que tarda no son las 68 migraciones: es fsync. Medido el 2026-09-12 en este VPS:
+  // 1.681 ms en disco contra 175 ms con el journal en memoria, y 160 ms corriendo sobre tmpfs,
+  // que confirma que el cuello es el disco. Con eso `preparacion.test.js` pasa de 462 s (242
+  // tests x 1,89 s, coincide al 1% con lo medido) a unos pocos segundos.
+  //
+  // Importa más de lo que parece: la suite completa costaba ~50 minutos, y ese costo es lo que
+  // empuja a saltearla — y saltearla es lo que deja pasar regresiones.
+  //
+  // NUNCA en producción: `synchronous = OFF` significa que un corte de luz puede dejar la base
+  // corrupta, y en esta se escribe el stock real que se publica a Woo y a ML. Por eso va detrás
+  // de una bandera con la palabra UNSAFE en el nombre, que sólo setea vitest.config.js.
+  if (process.env.SQLITE_UNSAFE_FAST === '1') {
+    db.pragma('journal_mode = MEMORY');
+    db.pragma('synchronous = OFF');
+  }
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
   // Incremental migrations — safe to run every startup
