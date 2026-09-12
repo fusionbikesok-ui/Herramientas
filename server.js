@@ -419,16 +419,20 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/pedidos', pedidosRouter(db));
   app.use('/api/gestion-pedidos', gestionPedidosRouter(db, { woo: wooCfg, ml: mlCfg }));
   app.use('/pedidos', express.static(path.join(__dirname, 'public/pedidos')));
-  app.get('/gestion-pedidos/pedidos/:id', authGuard, (req, res) => {
-    const permitido = process.env.PEDIDOS_PREVIEW_USER || 'Matias';
-    if (req.user?.username !== permitido) return res.status(403).send('Vista de pedidos en preview no habilitada para este usuario.');
+  // La pantalla exige el mismo permiso que su API (`pedidos`, nivel lectura): el gate de
+  // preview por nombre de usuario se retiró el 2026-09-09 porque excluía a operarios que ya
+  // tenían `pedidos:write` en la base. Las mutaciones las sigue filtrando scopeCheck sobre
+  // /api/gestion-pedidos, que resuelve write por método.
+  function pedidosPageGuard(req, res, next) {
+    if (req.user?.is_admin) return next();
+    if (permiteAcceso(req.user?.permisos || [], { anyOf: ['pedidos'], nivel: 'read' })) return next();
+    return res.status(403).send('No tenés permiso para ver Gestión de pedidos.');
+  }
+  // URL persistente del detalle: sirve la misma SPA, que resuelve el id desde el pathname.
+  app.get('/gestion-pedidos/pedidos/:id', authGuard, pedidosPageGuard, (req, res) => {
     res.sendFile(path.join(__dirname, 'public/gestion-pedidos/index.html'));
   });
-  app.use('/gestion-pedidos', authGuard, (req, res, next) => {
-    const permitido = process.env.PEDIDOS_PREVIEW_USER || 'Matias';
-    if (req.user?.username !== permitido) return res.status(403).send('Vista de pedidos en preview no habilitada para este usuario.');
-    next();
-  }, express.static(path.join(__dirname, 'public/gestion-pedidos')));
+  app.use('/gestion-pedidos', authGuard, pedidosPageGuard, express.static(path.join(__dirname, 'public/gestion-pedidos')));
   app.use('/api/cobertura', coberturaRouter(db, syncCfg));
   app.use('/api/guardia-ml', guardiaMlRouter(db, syncCfg));
   app.use('/api/identidad-productos', identidadProductosRouter(db));
@@ -470,6 +474,13 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/notifications', notificationsRouter(db));
   app.use('/api/ml', mlEstadoRouter(db));
   app.use('/api/notificaciones-ml', notificacionesMlRouter(db));
+
+  // Express responde 404 con HTML por defecto. Para la API eso rompe el contrato y hace
+  // que los clientes fallen al ejecutar response.json(); una ruta o método inexistente
+  // debe conservar el mismo formato JSON que el resto de los errores de /api.
+  app.use('/api', (req, res) => {
+    return res.status(404).json({ ok: false, error: 'Endpoint no encontrado' });
+  });
 
   // -- Error handler global (respaldo) ---------------------------------
   // Debe ir al final, con 4 argumentos para que Express lo reconozca. Cualquier
@@ -538,6 +549,26 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('1-59/5 * * * *', () => {          // Woo
         refrescarCatalogo(app._db, wooCfg)
           .catch(err => console.error('Error refrescando catálogo:', err.message));
+      });
+      // Gestión de pedidos: importación incremental de la ventana reciente. Sin esto la
+      // herramienta muestra el resultado de la última corrida manual y envejece sola —
+      // era el estado al 2026-09-09, con la única corrida completa del día anterior.
+      // Ventana corta (GESTION_PEDIDOS_VENTANA_HORAS, 48 h por defecto) porque el upsert
+      // es idempotente por (fuente, external_id): reimportar lo mismo no duplica, y una
+      // ventana de 30 días cada 10 minutos gastaría cuota de ML sin necesidad. La
+      // reconciliación completa del mes sigue siendo el botón manual de la pantalla.
+      // Minuto 9, paso 10: no pisa ningún otro cron de esta lista (offsets 1..8).
+      cron.schedule('9-59/10 * * * *', async () => {   // ML + Woo
+        try {
+          const { ejecutarImportacion } = await import('./lib/gestionPedidosSync.js');
+          const horas = Number(process.env.GESTION_PEDIDOS_VENTANA_HORAS) || 48;
+          const r = await ejecutarImportacion(app._db, {
+            woo: wooCfg,
+            ml: mlCfg,
+            desde: new Date(Date.now() - horas * 60 * 60 * 1000).toISOString(),
+          });
+          if (r.creados || r.actualizados) console.log(`[gestion-pedidos] ${r.creados} nuevos, ${r.actualizados} actualizados`);
+        } catch (e) { console.error('[gestion-pedidos] importación incremental falló:', e.message); }
       });
       // Estado de los webhooks de Woo. Cada hora alcanza: no cambian solos salvo que Woo
       // desactive uno tras entregas fallidas, y ahí lo que importa es enterarse, no el minuto

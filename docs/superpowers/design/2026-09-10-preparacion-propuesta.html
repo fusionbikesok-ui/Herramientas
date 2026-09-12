@@ -1,0 +1,628 @@
+<title>Cola de Despacho</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Tokens tomados de public/lib/theme.css del proyecto: el problema no era el color.
+   Se agrega sólo la escala de urgencia del corte, que es lo que la pantalla no tenía. */
+:root{
+  --oscuro:#0C0F16; --surface:#141A25; --surface2:#1B2235; --surface3:#212a40;
+  --border:rgba(255,255,255,.07); --border2:rgba(255,255,255,.12);
+  --text:#E4EAF4; --muted:#8493B0; --muted2:#5B6B8C;
+  --azul:#2DB8E8; --azul-dk:#1C93BD;
+  --green:#34D399; --amber:#FBBF24; --red:#F87171;
+  --green-bg:rgba(52,211,153,.12); --amber-bg:rgba(251,191,36,.12);
+  --red-bg:rgba(248,113,113,.12); --azul-bg:rgba(45,184,232,.10);
+  --tap:56px;
+  --cond:'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--oscuro);color:var(--text);font:15px/1.5 var(--ui);
+     -webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 20px 72px}
+
+.doc-h{font:600 13px/1.4 var(--ui);letter-spacing:.08em;text-transform:uppercase;
+       color:var(--muted2);margin:44px 0 12px}
+.doc-h:first-child{margin-top:0}
+.nota{color:var(--muted);font-size:13.5px;max-width:68ch;margin:0 0 18px}
+.marco{border:1px solid var(--border);border-radius:14px;padding:18px;background:var(--surface);
+       margin-bottom:8px}
+.marco.telefono{max-width:392px;padding:14px;border-radius:26px}
+
+/* ── Franja de estado: lo único que el operario mira al levantar la vista ── */
+.corte{display:flex;align-items:center;gap:22px;flex-wrap:wrap;
+       background:var(--surface2);border:1px solid var(--border);border-radius:12px;
+       padding:14px 18px}
+.corte .reloj{display:flex;align-items:baseline;gap:8px}
+.reloj b{font:700 40px/1 var(--cond);letter-spacing:.01em;font-variant-numeric:tabular-nums;
+         color:var(--amber)}
+.reloj.urgente b{color:var(--red)}
+.reloj small{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.corte .sep{width:1px;align-self:stretch;background:var(--border2)}
+.cifra{display:flex;flex-direction:column;gap:2px}
+.cifra b{font:600 22px/1 var(--cond);font-size:26px;font-variant-numeric:tabular-nums}
+.cifra span{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em}
+
+/* ── Navegación: una fila. Lo demás vive en el menú ── */
+.nav{display:flex;align-items:center;gap:8px;margin:16px 0 20px;flex-wrap:wrap}
+.tab{appearance:none;border:1px solid var(--border);background:transparent;color:var(--muted);
+     font:600 14px/1 var(--ui);padding:11px 15px;border-radius:9px;cursor:pointer;
+     min-height:44px;transition:border-color .16s cubic-bezier(.23,1,.32,1),color .16s}
+.tab:hover{border-color:var(--border2);color:var(--text)}
+.tab[aria-selected="true"]{background:var(--azul-bg);border-color:var(--azul);color:var(--azul)}
+.tab:focus-visible{outline:2px solid var(--azul);outline-offset:2px}
+.nav .mas{margin-left:auto}
+
+/* ── El pedido que domina ── */
+.principal{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,.9fr);gap:16px;
+           align-items:start}
+.foco{background:var(--surface);border:1px solid var(--border2);border-radius:14px;padding:18px;
+      box-shadow:0 0 0 1px rgba(45,184,232,.10), 0 8px 30px -12px rgba(0,0,0,.7)}
+.foco-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.eyebrow{color:var(--muted2);font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+         font-weight:600}
+.pedido-n{font:700 27px/1.1 var(--cond);letter-spacing:.01em;margin:3px 0 0;
+          font-variant-numeric:tabular-nums}
+.cliente{color:var(--muted);font-size:13.5px;margin-top:2px}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 10px;
+      font-size:11.5px;font-weight:700;letter-spacing:.02em;border:1px solid transparent;
+      white-space:nowrap}
+.chip.ml{background:var(--amber-bg);color:var(--amber);border-color:rgba(251,191,36,.35)}
+.chip.web{background:var(--azul-bg);color:var(--azul);border-color:rgba(45,184,232,.35)}
+.chip.urgente{background:var(--red-bg);color:var(--red);border-color:rgba(248,113,113,.35)}
+.chip.ok{background:var(--green-bg);color:var(--green);border-color:rgba(52,211,153,.35)}
+.chip.calma{background:var(--surface3);color:var(--muted);border-color:var(--border2)}
+
+.lineas{display:flex;flex-direction:column;gap:2px;margin:16px 0 0;
+        border-top:1px solid var(--border);padding-top:14px}
+.linea{display:flex;align-items:center;gap:13px;padding:9px 0}
+.linea + .linea{border-top:1px solid var(--border)}
+.mini{width:64px;height:64px;flex:0 0 64px;border-radius:10px;background:var(--surface3);
+      display:grid;place-items:center;font-size:26px;
+      outline:1px solid rgba(255,255,255,.10);outline-offset:-1px}
+.linea .nom{flex:1;min-width:0}
+.linea .nom b{display:block;font-weight:600;font-size:14.5px}
+.linea .nom span{color:var(--muted);font-size:12.5px;font-family:ui-monospace,Menlo,monospace}
+/* Unidades como marcas, no como número: el operario cuenta bultos, no lee cifras. */
+.unidades{display:flex;gap:4px}
+.u{width:15px;height:22px;border-radius:3px;border:1.5px solid var(--border2)}
+.u.hecha{background:var(--green);border-color:var(--green)}
+.cant{font:700 19px/1 var(--cond);color:var(--azul);font-variant-numeric:tabular-nums;
+      min-width:26px;text-align:right}
+
+.acciones{display:flex;gap:10px;margin-top:18px}
+.progreso{margin:14px 0 0;padding-top:13px;border-top:1px solid var(--border);
+          color:var(--muted);font-size:12.5px}
+.progreso b{color:var(--text);font-variant-numeric:tabular-nums}
+.unidades{position:relative}
+.u{position:relative}
+.u.hecha::after{content:'';position:absolute;inset:0;background:var(--green);border-radius:2px}
+.btn{appearance:none;border:1px solid var(--border2);background:var(--surface2);color:var(--text);
+     font:600 15px/1 var(--ui);border-radius:10px;padding:0 18px;min-height:48px;cursor:pointer;
+     display:inline-flex;align-items:center;justify-content:center;gap:8px;
+     transition:transform .12s cubic-bezier(.23,1,.32,1),background .16s,border-color .16s}
+.btn:hover{border-color:var(--azul);color:var(--azul)}
+.btn:active{transform:scale(.975)}
+.btn:focus-visible{outline:2px solid var(--azul);outline-offset:2px}
+.btn.primario{flex:1;min-height:var(--tap);background:var(--azul);border-color:var(--azul);
+              color:#06131C;font-size:16.5px;font-weight:700}
+.btn.primario:hover{background:var(--azul-dk);border-color:var(--azul-dk);color:#06131C}
+
+/* ── El resto de la cola: compacta, ordenada por el corte ── */
+.cola{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:6px}
+.cola h3, .recol h3{font:600 12px/1 var(--ui);letter-spacing:.08em;text-transform:uppercase;
+                    color:var(--muted2);margin:12px 12px 10px}
+.fila{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:9px;cursor:pointer;
+      min-height:52px;transition:background .14s}
+.fila:hover{background:var(--surface2)}
+.fila .t{flex:1;min-width:0}
+.fila .t b{display:block;font:600 14px/1.3 var(--cond);font-size:16px;letter-spacing:.01em;
+           font-variant-numeric:tabular-nums}
+.fila .t span{color:var(--muted);font-size:12px}
+/* La barra de urgencia: el dato que ordena la cola, leíble sin leer. */
+.rail{width:3px;align-self:stretch;border-radius:2px;background:var(--muted2)}
+.rail.rojo{background:var(--red)} .rail.ambar{background:var(--amber)}
+.rail.verde{background:var(--green)}
+.queda{font:700 15px/1 var(--cond);font-variant-numeric:tabular-nums;color:var(--muted);
+       white-space:nowrap}
+.queda.rojo{color:var(--red)} .queda.ambar{color:var(--amber)}
+
+.recol{margin-top:16px;background:var(--surface);border:1px solid var(--border);
+       border-radius:14px;padding:6px}
+.recol .fila{cursor:default}
+.recol .mini, .cola .mini{width:44px;height:44px;flex-basis:44px;font-size:19px;border-radius:9px}
+.recol .fila:hover{background:transparent}
+
+/* ── Teléfono ── */
+.tel-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.tel-corte{display:flex;align-items:baseline;gap:7px}
+.tel-corte b{font:700 30px/1 var(--cond);color:var(--red);font-variant-numeric:tabular-nums}
+.tel-corte small{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.icono{width:44px;height:44px;border-radius:10px;border:1px solid var(--border);
+       background:var(--surface2);display:grid;place-items:center;color:var(--muted);
+       font-size:17px;cursor:pointer}
+.tel-strip{display:flex;gap:7px;overflow-x:auto;padding-bottom:9px;margin-bottom:12px}
+.tel-strip::-webkit-scrollbar{height:0}
+.mini-p{flex:0 0 auto;border:1px solid var(--border);border-radius:9px;padding:7px 11px;
+        background:var(--surface);display:flex;flex-direction:column;gap:2px;min-width:78px}
+.mini-p b{font:700 15px/1 var(--cond);font-variant-numeric:tabular-nums}
+.mini-p.activo{border-color:var(--azul);background:var(--azul-bg)}
+.mini-p small{font-size:10.5px;color:var(--muted)}
+
+.comparar{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.comparar > div{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--surface)}
+.comparar h4{margin:0 0 10px;font-size:12px;letter-spacing:.07em;text-transform:uppercase;
+             color:var(--muted2)}
+.antes .tab-viejo{display:inline-block;border:1px solid var(--border);border-radius:999px;
+  padding:7px 12px;margin:0 5px 6px 0;font-size:12.5px;color:var(--muted);background:var(--surface2)}
+
+.pip{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;
+     background:var(--surface3);color:var(--muted);font:700 11.5px/1.5 var(--ui);
+     font-variant-numeric:tabular-nums}
+.tab[aria-selected="true"] .pip{background:var(--azul);color:#06131C}
+
+/* ── Productos a buscar ── */
+.buscar{display:flex;flex-direction:column;gap:8px}
+.prod{display:flex;align-items:center;gap:16px;background:var(--surface2);
+      border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+/* La foto manda acá: el operario reconoce la bici o el casco de lejos, no lee el SKU. */
+.prod .mini{width:88px;height:88px;flex-basis:88px;border-radius:11px;font-size:36px}
+.prod.completo{border-color:rgba(52,211,153,.30);background:rgba(52,211,153,.05)}
+.prod.falta{border-color:rgba(248,113,113,.30);background:rgba(248,113,113,.05)}
+.prod-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.prod-info b{font-size:15px;font-weight:600}
+.prod-info .meta{color:var(--muted);font-size:12.5px}
+.prod-info .aviso{color:var(--red);font-size:12.5px;margin-top:3px}
+.marcas{display:flex;gap:7px}
+/* Un blanco de toque por unidad: se marca de a una, con guantes. */
+.marca{width:var(--tap);height:var(--tap);border-radius:11px;border:1.5px dashed var(--border2);
+       background:transparent;color:var(--muted);cursor:pointer;display:flex;
+       flex-direction:column;align-items:center;justify-content:center;gap:1px;
+       font:700 17px/1 var(--ui);
+       transition:transform .12s cubic-bezier(.23,1,.32,1),border-color .16s,background .16s}
+.marca small{font-size:9.5px;font-weight:600;letter-spacing:.02em}
+.marca:hover{border-color:var(--azul);color:var(--azul)}
+.marca:active{transform:scale(.96)}
+.marca:focus-visible{outline:2px solid var(--azul);outline-offset:2px}
+.marca.hecha{border-style:solid;border-color:var(--border2);background:var(--surface3);
+             color:var(--muted)}
+.marca.hecha.mia{border-color:var(--green);background:var(--green-bg);color:var(--green)}
+.tot{font:700 22px/1 var(--cond);font-variant-numeric:tabular-nums;min-width:46px;
+     text-align:right;color:var(--text)}
+.tot i{font-style:normal;color:var(--muted2);font-size:16px}
+.tot.ok{color:var(--green)} .tot.rojo{color:var(--red)}
+
+.volver{appearance:none;border:1px solid var(--border2);background:var(--surface2);
+        color:var(--text);border-radius:9px;min-height:44px;padding:0 14px;cursor:pointer;
+        font:600 14px/1 var(--ui)}
+.aviso-canal{background:var(--amber-bg);border:1px solid rgba(251,191,36,.35);border-radius:10px;
+             padding:11px 13px;font-size:13px;color:var(--text);margin-bottom:13px;line-height:1.5}
+.aviso-canal b{display:block;color:var(--amber);margin-bottom:2px}
+.pasos{display:flex;gap:7px;margin-bottom:13px}
+.paso{flex:1;text-align:center;padding:9px 4px;border-radius:9px;border:1px solid var(--border);
+      color:var(--muted2);font:600 12.5px/1 var(--ui)}
+.paso.hecho{color:var(--green);border-color:rgba(52,211,153,.35);background:var(--green-bg)}
+.paso.activo{color:var(--azul);border-color:var(--azul);background:var(--azul-bg)}
+.escaneo{background:var(--surface);border:1px solid var(--border2);border-radius:13px;padding:14px}
+.escaneo-prod{display:flex;gap:13px;align-items:flex-start;margin-bottom:13px}
+.escaneo-prod .mini{width:88px;height:88px;flex-basis:88px;font-size:36px}
+/* El campo de escaneo es el foco: alto de toque cómodo y siempre a la vista. */
+.campo{width:100%;min-height:var(--tap);border-radius:10px;border:1.5px solid var(--azul);
+       background:var(--oscuro);color:var(--text);padding:0 14px;font:500 16px/1 var(--ui)}
+.campo::placeholder{color:var(--muted2)}
+.btn.enlace{width:100%;margin-top:9px;background:transparent;border-color:transparent;
+            color:var(--muted);font-weight:500;font-size:13.5px;min-height:44px}
+.btn.enlace:hover{color:var(--azul);border-color:var(--border)}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.fotos{margin-top:14px;background:var(--surface);border:1px solid var(--border);
+       border-radius:13px;padding:13px}
+.fotos h4{margin:0 0 11px;font:600 12px/1 var(--ui);letter-spacing:.07em;text-transform:uppercase;
+          color:var(--muted2)}
+.foto-fila{display:flex;align-items:center;gap:12px;padding:7px 0}
+.foto-fila + .foto-fila{border-top:1px solid var(--border)}
+.foto-fila b{display:block;font-size:14px;font-weight:600}
+.foto-fila span{color:var(--muted);font-size:12.5px}
+.foto{width:var(--tap);height:var(--tap);flex:0 0 var(--tap);border-radius:10px;
+      border:1.5px dashed var(--border2);display:grid;place-items:center;color:var(--muted);
+      font-size:20px;cursor:pointer}
+.foto.hecha{border-style:solid;border-color:var(--green);background:var(--green-bg);
+            color:var(--green)}
+.cierre{margin-top:14px}
+.cierre .btn{width:100%}
+.cierre p{margin:8px 0 0;text-align:center;color:var(--muted);font-size:12.5px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+.dos-pasos{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.rotulo{margin:0 0 12px;font:600 11.5px/1 var(--ui);letter-spacing:.08em;text-transform:uppercase;
+        color:var(--muted2)}
+.escaneo-fijo{position:sticky;top:0;z-index:2;background:var(--surface);
+              border:1px solid var(--azul);border-radius:12px;padding:12px;margin-bottom:12px;
+              box-shadow:0 6px 18px -10px rgba(0,0,0,.85)}
+.fijo-nota{display:block;text-align:center;margin-top:8px;color:var(--muted2);font-size:11px;
+           letter-spacing:.04em}
+.escaneo-prod{display:flex;gap:13px;align-items:flex-start;background:var(--surface);
+              border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:9px}
+.escaneo-prod.actual{border-color:var(--border2);background:var(--surface2)}
+.escaneo-prod .mini{width:88px;height:88px;flex-basis:88px;font-size:36px}
+.campo-fila{display:flex;align-items:center;gap:11px;padding:6px 0}
+.campo-fila + .campo-fila{border-top:1px solid var(--border)}
+.campo-fila label{flex:0 0 82px;color:var(--muted);font-size:13px}
+.campo.select{flex:1;min-width:0;border-color:var(--border2);font-size:14px}
+
+@media (max-width:900px){
+  .prod{flex-wrap:wrap}
+  .prod .mini{width:76px;height:76px;flex-basis:76px;font-size:32px}
+  .prod-info{flex:1 1 100%;order:2}
+  .marcas{order:3;flex:1}
+  .tot{order:4}
+
+  .principal{grid-template-columns:1fr}
+  .comparar{grid-template-columns:1fr}
+  .corte{gap:14px}
+}
+</style>
+
+<div class="wrap">
+
+  <p class="doc-h">Propuesta · Preparación</p>
+  <p class="nota">Misma paleta que el resto de las herramientas: los tokens salen de
+    <code>public/lib/theme.css</code>. Lo que cambia es la jerarquía, la navegación y la densidad.
+    Datos de ejemplo con productos reales del catálogo.</p>
+
+  <p class="doc-h">Escritorio · mesa de embalaje</p>
+
+  <div class="marco">
+    <!-- Franja de corte: la firma de la pantalla. Gobierna el orden de la cola. -->
+    <div class="corte">
+      <div class="reloj urgente">
+        <b>41′</b>
+        <small>para el corte<br>de MercadoLibre</small>
+      </div>
+      <div class="sep"></div>
+      <div class="cifra"><b>7</b><span>pedidos</span></div>
+      <div class="cifra"><b>12</b><span>unidades</span></div>
+      <div class="cifra"><b style="color:var(--red)">2</b><span>vencen antes</span></div>
+      <div class="sep"></div>
+      <div class="cifra"><b style="color:var(--green)">17:00</b><span>corte Flex</span></div>
+    </div>
+
+    <nav class="nav" aria-label="Vistas de preparación">
+      <button class="tab" role="tab" aria-selected="true">Productos a buscar <b class="pip">7</b></button>
+      <button class="tab" role="tab" aria-selected="false">Pedidos a preparar <b class="pip">4</b></button>
+      <button class="tab" role="tab" aria-selected="false">Listos para despachar</button>
+      <button class="tab" role="tab" aria-selected="false">Despachos</button>
+      <button class="tab mas">Más ▾</button>
+    </nav>
+
+    <div class="principal">
+      <article class="foco">
+        <div class="foco-top">
+          <div>
+            <p class="eyebrow">Siguiente</p>
+            <p class="pedido-n">#2000018375307076</p>
+            <p class="cliente">ARIELBREIDE · entró 21:27</p>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+            <span class="chip ml">MercadoLibre · Colecta</span>
+            <span class="chip urgente">Sale 15:30 · quedan 41′</span>
+          </div>
+        </div>
+
+        <div class="lineas">
+          <div class="linea">
+            <span class="mini" aria-hidden="true">🚲</span>
+            <span class="nom"><b>Bicicleta Polygon Siskiu T7 UDH 2026 — Deore 1×12, Rojo M</b>
+              <span>FB-57242</span></span>
+            <span class="unidades"><i class="u"></i></span>
+            <span class="cant">×1</span>
+          </div>
+          <div class="linea">
+            <span class="mini" aria-hidden="true">🪖</span>
+            <span class="nom"><b>Casco Giro Isode MIPS Titanium, talle único</b>
+              <span>FB-29101</span></span>
+            <span class="unidades"><i class="u hecha"></i><i class="u"></i></span>
+            <span class="cant">×2</span>
+          </div>
+        </div>
+
+        <div class="acciones">
+          <button class="btn primario">Preparar este pedido</button>
+          <button class="btn">Diferir</button>
+        </div>
+        <p class="progreso"><b>1</b> de <b>3</b> unidades verificadas · el escaneo confirma
+          una unidad por vez, y un código ajeno no modifica cantidades</p>
+      </article>
+
+      <div>
+        <section class="cola">
+          <h3>Después de éste</h3>
+          <div class="fila"><span class="rail rojo"></span>
+            <span class="t"><b>#68974</b><span>Web · Andreani · 1 unidad</span></span>
+            <span class="queda rojo">52′</span></div>
+          <div class="fila"><span class="rail ambar"></span>
+            <span class="t"><b>#2000018369308114</b><span>ML · Flex · 1 unidad</span></span>
+            <span class="queda ambar">2 h</span></div>
+          <div class="fila"><span class="rail verde"></span>
+            <span class="t"><b>#68971</b><span>Web · Andreani · 3 unidades</span></span>
+            <span class="queda">4 h</span></div>
+          <div class="fila"><span class="rail verde"></span>
+            <span class="t"><b>#68966</b><span>Web · retiro en local</span></span>
+            <span class="queda">hoy</span></div>
+        </section>
+        <p class="nota" style="margin:12px 4px 0;font-size:12.5px">La lista consolidada de
+          productos vive ahora en su propia pestaña: se junta todo primero y después se
+          prepara pedido por pedido.</p>
+
+      </div>
+    </div>
+  </div>
+
+  <p class="doc-h">Productos a buscar · la pestaña nueva</p>
+  <p class="nota">Se junta primero, se prepara después. Cada unidad se marca por separado, y la
+    marca dice quién la tiene: con dos personas buscando, lo que uno agarra desaparece del otro.
+    Marcar es "lo tengo en el carro" — el escaneo contra el pedido se sigue haciendo en la mesa.
+    <br><br>Sin ubicaciones de estante todavía, la lista se ordena por urgencia: primero lo que
+    espera el pedido que sale antes. Cuando la herramienta de conteo deje las ubicaciones
+    cargadas, se agrega el recorrido físico y el orden pasa a ser por zona.</p>
+
+  <div class="marco">
+    <div class="corte" style="margin-bottom:16px">
+      <div class="cifra"><b>12</b><span>unidades a buscar</span></div>
+      <div class="cifra"><b style="color:var(--green)">5</b><span>en el carro</span></div>
+      <div class="sep"></div>
+      <div class="cifra"><b>7</b><span>productos</span></div>
+      <div class="cifra"><b style="color:var(--red)">1</b><span>no se encuentra</span></div>
+    </div>
+
+    <section class="buscar">
+      <article class="prod">
+        <span class="mini" aria-hidden="true">🪖</span>
+        <div class="prod-info">
+          <b>Casco Giro Isode MIPS Titanium, talle único</b>
+          <span class="meta">FB-29101 · lo piden 3 pedidos · el más urgente sale en 41′</span>
+        </div>
+        <div class="marcas">
+          <button class="marca hecha" title="La marcó Joaco">✓<small>Joaco</small></button>
+          <button class="marca hecha mia" title="La marcaste vos">✓<small>vos</small></button>
+          <button class="marca">+<small>marcar</small></button>
+        </div>
+        <span class="tot">2<i>/3</i></span>
+      </article>
+
+      <article class="prod">
+        <span class="mini" aria-hidden="true">🚲</span>
+        <div class="prod-info">
+          <b>Bicicleta Polygon Siskiu T7 UDH 2026 — Deore 1×12, Rojo M</b>
+          <span class="meta">FB-57242 · lo pide 1 pedido · sale en 52′</span>
+        </div>
+        <div class="marcas"><button class="marca">+<small>marcar</small></button></div>
+        <span class="tot">0<i>/1</i></span>
+      </article>
+
+      <article class="prod completo">
+        <span class="mini" aria-hidden="true">💡</span>
+        <div class="prod-info">
+          <b>Luces LED delanteras recargables</b>
+          <span class="meta">FB-50396 · lo piden 2 pedidos · el más urgente sale en 2 h</span>
+        </div>
+        <div class="marcas">
+          <button class="marca hecha mia">✓<small>vos</small></button>
+          <button class="marca hecha mia">✓<small>vos</small></button>
+        </div>
+        <span class="tot ok">2<i>/2</i></span>
+      </article>
+
+      <article class="prod falta">
+        <span class="mini" aria-hidden="true">🔧</span>
+        <div class="prod-info">
+          <b>Kit transmisión Shimano 9v</b>
+          <span class="meta">FB-77210 · lo pide 1 pedido · sale en 4 h</span>
+          <span class="aviso">No aparece en el estante · avisado por Joaco 09:14 · el pedido
+            #68971 queda bloqueado hasta resolverlo</span>
+        </div>
+        <div class="marcas"><button class="marca">+<small>marcar</small></button></div>
+        <span class="tot rojo">0<i>/1</i></span>
+      </article>
+    </section>
+
+    <div class="acciones" style="max-width:520px">
+      <button class="btn primario">Ir a preparar pedidos (2 completos)</button>
+      <button class="btn">No lo encuentro</button>
+    </div>
+  </div>
+
+  <p class="doc-h">Teléfono · en el depósito, con guantes</p>
+  <p class="nota">Una tarea por pantalla. Las 12 pills se reducen a un ícono de menú, y el
+    pedido ocupa el alto completo: sin scrollear se ve qué preparar, cuánto queda y el botón.</p>
+
+  <div class="marco telefono">
+    <div class="tel-top">
+      <div class="tel-corte"><b>41′</b><small>corte ML<br>15:30</small></div>
+      <div style="display:flex;gap:8px">
+        <span class="icono" title="Buscar">⌕</span>
+        <span class="icono" title="Menú">☰</span>
+      </div>
+    </div>
+
+    <div class="tel-strip">
+      <div class="mini-p activo"><b>7</b><small>a preparar</small></div>
+      <div class="mini-p"><b>3</b><small>listos</small></div>
+      <div class="mini-p"><b>12</b><small>unidades</small></div>
+    </div>
+
+    <article class="foco" style="box-shadow:none">
+      <div class="foco-top">
+        <div>
+          <p class="eyebrow">Siguiente</p>
+          <p class="pedido-n" style="font-size:22px">#2000018375307076</p>
+          <p class="cliente">ARIELBREIDE</p>
+        </div>
+        <span class="chip ml">ML</span>
+      </div>
+      <div class="lineas">
+        <div class="linea">
+          <span class="mini" aria-hidden="true">🚲</span>
+          <span class="nom"><b>Polygon Siskiu T7 UDH</b><span>FB-57242</span></span>
+          <span class="cant">×1</span>
+        </div>
+        <div class="linea">
+          <span class="mini" aria-hidden="true">🪖</span>
+          <span class="nom"><b>Casco Giro Isode MIPS</b><span>FB-29101</span></span>
+          <span class="cant">×2</span>
+        </div>
+      </div>
+      <div class="acciones">
+        <button class="btn primario">Escanear unidad</button>
+      </div>
+    </article>
+  </div>
+
+
+  <p class="doc-h">El pedido abierto · la pantalla donde se pasa el tiempo</p>
+  <p class="nota">Sale de la cola y pasa a tener URL propia (<code>/preparacion/pedido/305</code>):
+    hoy sólo se llega desde su tarjeta, y si el pedido se cae de la cola la preparación queda
+    inalcanzable — así quedaron encerradas las 38. Adentro no van las 12 pestañas: mientras
+    preparás, la navegación general no sirve.</p>
+
+  <div class="dos-pasos">
+
+    <div class="marco telefono">
+      <p class="rotulo">Paso 1 · Productos</p>
+      <div class="tel-top" style="margin-bottom:14px">
+        <button class="volver">← Cola</button>
+        <span class="chip ml">ML · Colecta</span>
+      </div>
+
+      <div class="aviso-canal">
+        <b>MercadoLibre informó que este envío ya salió.</b>
+        Terminá de registrar lo que hiciste; la evidencia se guarda igual.
+      </div>
+
+      <div class="pasos">
+        <span class="paso activo">Productos</span>
+        <span class="paso">Fotos</span>
+        <span class="paso">Finalizar</span>
+      </div>
+
+      <!-- Fijo al hacer scroll: con guantes, volver arriba para escanear es incómodo. -->
+      <div class="escaneo-fijo">
+        <label class="sr" for="cod">Código o SKU</label>
+        <input class="campo" id="cod" placeholder="Escaneá el código…" autocomplete="off">
+        <div class="acciones" style="margin-top:9px">
+          <button class="btn primario">Confirmar unidad</button>
+          <button class="btn" title="Escanear con la cámara">📷</button>
+        </div>
+        <span class="fijo-nota">queda fijo mientras scrolleás</span>
+      </div>
+
+      <article class="escaneo-prod actual">
+        <span class="mini" aria-hidden="true">🚲</span>
+        <div class="prod-info">
+          <b>Bicicleta Polygon Siskiu T7 UDH 2026 — Deore 1×12, Rojo M</b>
+          <span class="meta">FB-57242</span>
+          <span class="unidades" style="margin-top:6px"><i class="u hecha"></i><i class="u"></i></span>
+        </div>
+        <span class="tot ok">1<i>/2</i></span>
+      </article>
+
+      <article class="escaneo-prod">
+        <span class="mini" aria-hidden="true">🪖</span>
+        <div class="prod-info">
+          <b>Casco Giro Isode MIPS Titanium</b>
+          <span class="meta">FB-29101</span>
+          <span class="unidades" style="margin-top:6px"><i class="u"></i></span>
+        </div>
+        <span class="tot">0<i>/1</i></span>
+      </article>
+
+      <button class="btn enlace">No tiene código · confirmar a mano</button>
+    </div>
+
+    <div class="marco telefono">
+      <p class="rotulo">Paso 2 · Fotos y embalaje</p>
+      <div class="tel-top" style="margin-bottom:14px">
+        <button class="volver">← Productos</button>
+        <span class="chip ok">3 de 3 unidades</span>
+      </div>
+
+      <div class="pasos">
+        <span class="paso hecho">Productos</span>
+        <span class="paso activo">Fotos</span>
+        <span class="paso">Finalizar</span>
+      </div>
+
+      <!-- Las decisiones de embalaje viven acá: se toman cuando se embala de verdad. -->
+      <section class="fotos" style="margin-top:0">
+        <h4>Cómo se embala</h4>
+        <div class="campo-fila">
+          <label for="emb">Embalaje</label>
+          <select class="campo select" id="emb">
+            <option>Caja de fábrica sellada</option>
+            <option>Caja abierta</option>
+            <option>Re-embalada (exhibida)</option>
+          </select>
+        </div>
+        <div class="campo-fila">
+          <label for="don">Dónde</label>
+          <select class="campo select" id="don">
+            <option>Se prepara acá</option>
+            <option>Desde depósito (sin escaneo/foto)</option>
+            <option>Desde depósito (lo completa el depósito)</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="fotos">
+        <h4>Fotos que faltan · 1 de 3</h4>
+        <div class="foto-fila">
+          <span class="foto hecha" aria-hidden="true">✓</span>
+          <div><b>Foto de la bici</b><span>tomada 09:41</span></div>
+        </div>
+        <div class="foto-fila pendiente">
+          <span class="foto" aria-hidden="true">+</span>
+          <div><b>Paquete abierto</b><span>con todo el contenido a la vista</span></div>
+        </div>
+        <div class="foto-fila pendiente">
+          <span class="foto" aria-hidden="true">+</span>
+          <div><b>Paquete cerrado</b><span>con la etiqueta puesta</span></div>
+        </div>
+      </section>
+
+      <div class="cierre">
+        <button class="btn primario" disabled>Finalizar preparación</button>
+        <p>Faltan 2 fotos</p>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="doc-h">Qué cambia, concretamente</p>
+  <div class="comparar">
+    <div class="antes">
+      <h4>Hoy</h4>
+      <span class="tab-viejo">A preparar</span><span class="tab-viejo">Etiquetas Andreani</span>
+      <span class="tab-viejo">Cargar seguimientos</span><span class="tab-viejo">Historial</span>
+      <span class="tab-viejo">Cerradas sin evidencia</span><span class="tab-viejo">Despachadas sin verificar</span>
+      <span class="tab-viejo">Perfiles de foto</span><span class="tab-viejo">Horarios de despacho</span>
+      <span class="tab-viejo">Hoja MercadoLibre</span><span class="tab-viejo">Hoja Andreani/Web</span>
+      <span class="tab-viejo">Lotes de despacho</span><span class="tab-viejo">Regularizar sin evidencia</span>
+      <p class="nota" style="margin:10px 0 0">12 destinos del mismo peso. Siete filas en el
+        celular antes del primer pedido. El trabajo del día y la configuración, mezclados.</p>
+    </div>
+    <div>
+      <h4>Propuesta</h4>
+      <nav class="nav" style="margin:0 0 10px;gap:6px">
+        <button class="tab" aria-selected="true">Productos a buscar</button>
+        <button class="tab">Pedidos a preparar</button>
+        <button class="tab">Listos para despachar</button>
+        <button class="tab">Despachos</button>
+        <button class="tab mas">Más ▾</button>
+      </nav>
+      <p class="nota" style="margin:0">Los cuatro espacios que ya nombra el plan maestro, en
+        el orden del trabajo real: primero se junta, después se prepara. Etiquetas,
+        seguimientos, hojas, perfiles de foto y horarios son consulta o configuración: entran
+        en <b>Más</b>. La acción primaria pasa a 56 px de alto — se aprieta con guantes.</p>
+    </div>
+  </div>
+
+</div>

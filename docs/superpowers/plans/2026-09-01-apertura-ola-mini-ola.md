@@ -2,6 +2,23 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Estado (verificado el 2026-09-11): CONSTRUIDO Y DESCONECTADO. No es trabajo pendiente.**
+
+El código existe —`routes/jornada.js`, `lib/jornada.js`, las tablas `pick_wave*` y su suite en
+`test/jornada.test.js`— pero **`jornadaRouter` no está montado en `server.js`**: fuera de los
+tests nadie lo instancia, así que `/api/jornada/*` no existe en producción. Y la pantalla de
+preparación retiró el flujo: `public/preparacion/index.html:590` y `:972` conservan el bloque
+comentado como "Flujo de olas retirado". Los datos lo confirman: 2 olas y 8 ítems, ninguna
+devolución ni faltante registrados.
+
+Los 52 pasos figuran sin tildar, lo que no refleja la realidad: el trabajo se hizo y después
+se dio marcha atrás. Vale la regla de `CLAUDE.md` — no inferir el estado de una entrega por sus
+marcas.
+
+**Qué decidir antes de tocar esto:** si las olas vuelven, hay que montar el router y reponer la
+pantalla; si no vuelven, corresponde archivar el plan y sacar el código muerto. Hoy la cola de
+preparación es directa, sin olas, y el rediseño del 2026-09-10 se construyó sobre esa premisa.
+
 **Goal:** Implementar apertura de jornada, ola inicial congelada, mini-olas acumulativas continuas, mini-ola ML urgente, y el aviso de vencimiento de claim a 10 minutos, sobre el backend de preparación de FusionBikes.
 
 **Architecture:** Un router nuevo `routes/jornada.js` (siguiendo el mismo patrón que `preparacionRouter`: `ensureTablesJornada(db)` + `jornadaRouter(db, cfg)`) con su lógica de dominio en `lib/jornada.js`. Reutiliza el criterio de elegibilidad ya existente en `GET /api/preparacion/pendientes` (extraído a una función compartida) y el mecanismo de claim con TTL ya probado en `routes/preparacion.js`, sin modificar su tabla ni su contrato — se agrega una tabla de claims paralela para `pick_wave`, mismo patrón que ya usa el código para no reescribir historia.

@@ -1,8 +1,36 @@
 # Plan específico: historial relacional de despachos
 
 **Fecha:** 2026-09-08  
-**Estado:** planificado  
+**Estado:** SUSTITUIDO EN SU MODELO, VIGENTE EN SUS DECISIONES (verificado el 2026-09-11).
+Ver "Qué pasó realmente" abajo.  
 **Alcance:** separar Gestión de pedidos de Gestión de envíos y reemplazar el uso histórico de `pedidos_cache` por un modelo relacional permanente, manteniendo compatibilidad durante la migración.
+
+## Qué pasó realmente (verificado el 2026-09-11)
+
+**El modelo relacional que este plan propone no se construyó.** Ninguna de sus seis tablas
+existe: `clientes_despacho`, `pedidos_despacho`, `pedido_despacho_items`, `envios_despacho`,
+`envio_eventos` ni `despacho_preparacion_cruces`. Lo que se construyó y está en producción es
+la familia `gestion_*` — `gestion_pedidos` (2.120 filas), `gestion_pedido_items` (2.690),
+`gestion_pedido_entregas` (1.623) y `gestion_pedido_eventos` (2.687) — sobre la que corre
+Gestión de pedidos desde el 2026-09-09.
+
+**Sus decisiones operativas sí siguen vigentes** y se implementaron por ese otro camino: las
+tres pills en orden, Requieren atención como vista inicial, el buscador global por SKU/EAN,
+la vista rápida, la URL propia del pedido y el envío a preparación desde la lista. La
+especificación de edición (motivos de remoción, revisión única, diferencia en cuotas,
+reintegro como acción separada) está pendiente y vive como GP13–GP15 en
+`2026-09-09-gestion-pedidos-utilizable.md`, que es el plan operativo vigente.
+
+**Lo único suyo que quedó sin dueño es la parte física de despacho:** las cuatro vistas de
+Gestión de envíos existen como pestañas, pero **"Listos para despachar" no tiene por dónde
+empezar**. El backend de lotes está completo —crear, iniciar, escanear paquete, tracking,
+cerrar, salida, anular con motivo, auditoría por evento— y **ninguna pantalla llama al
+endpoint que crea el lote** (`routes/preparacion.js:1128`). Por eso `despacho_lotes` y
+`despacho_escaneos` tienen **0 filas**, mientras `despacho_controles` tiene 179: la parte que
+sí tiene puerta se usa. Es el mismo patrón que tuvieron las ubicaciones del conteo.
+
+**Al leer este documento:** el modelo de datos describe un camino que no se tomó; las
+decisiones de producto siguen siendo la referencia.
 
 ## Decisión operativa
 

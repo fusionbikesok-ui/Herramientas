@@ -31,6 +31,257 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 E2 conserva pendientes externos de revisión independiente y piloto/jornada observada; E3 ya está en desarrollo técnico con autenticación del agente validada, pero requiere relevamiento de impresora, prueba Windows/hardware, revisión y piloto antes de candidata. No desplegar runtime mientras las entregas sigan sin aceptación.
 
+## Gestión de pedidos (2026-09-09)
+
+- **La pantalla era una maqueta.** GP4–GP8 figuraban `publicada` con backend real y probado,
+  pero `public/gestion-pedidos/index.html` seguía siendo el prototipo de GP1: pedidos
+  hardcodeados, `alert('Demo: …')` y checklist en `localStorage`. Sólo Recuperar ventas
+  llamaba a la API. Se reescribió contra la API real (tres pills, buscador, vista rápida,
+  detalle en URL propia, selección múltiple y envío a preparación).
+- **El gate `PEDIDOS_PREVIEW_USER` se retiró.** Limitaba la pantalla a un único nombre de
+  usuario y dejaba afuera a Joaco y Santi, que ya tenían `pedidos:write`. Ahora la página
+  exige el mismo permiso `pedidos` que su API.
+- **El importador no persistía importes ni entrega.** Los 706 pedidos importados tenían
+  `total_centavos` NULL, `gestion_pedido_entregas` vacía y las líneas Woo sin precio. Se
+  extendieron `normalizarPedidoWc`/`normalizarOrdenMl` y `upsertGestionPedido`. Los pedidos
+  ya importados sólo muestran importes después de una reconciliación.
+- **Los importes de ML no se mapean por el nombre del campo.** `total_amount` es la suma de
+  los ítems (el subtotal) y `paid_amount` es lo pagado, que en un cancelado con reembolso
+  queda en 0. El total del pedido se arma como ítems + envío; lo pagado o devuelto lo cuenta
+  `pago_estado`. Tomarlos literalmente daba subtotal mayor que total, y "Total $0" en ventas
+  reembolsadas que sí existieron.
+- **La entrega de un pedido ML no se escribe** hasta importar su shipment: afirmar
+  `domicilio` clasificaba mal los Flex y los retiros en sucursal.
+- **`gestion_pedido_items.id` no es estable:** el importador borra e inserta las líneas en
+  cada corrida, y con el cron eso ocurre cada 10 minutos. Cualquier referencia a una línea
+  (por ejemplo, remover un producto en GP14) tiene que ser por SKU, no por id.
+- **El estado real del canal no se guardaba.** La 095 sólo tenía clasificaciones propias y
+  625 de 723 pedidos caían en la misma combinación, así que la columna de estado no
+  distinguía nada. La migración 099 agrega `estado_canal` crudo: los valores reales son
+  `enviadoandreani`, `retiradoenfusion`, `paid`, `mercadolibre`, `serviceterminado`.
+- **Cierre por estado del canal** (decisión del usuario, 2026-09-09): `enviadoandreani`,
+  `retiradoenfusion`, `completed` y `serviceterminado` cierran el pedido y lo sacan de
+  "Requieren atención" — de 497 a 175. `paid` de ML NO cierra: sólo dice que ML cobró, y
+  saber si salió exige importar el shipment, que sigue pendiente.
+- **El estado de una orden de ML es de cobro, no de logística:** se queda en `paid` aunque
+  el paquete ya haya salido, y por eso ventas despachadas seguían en "Requieren atención".
+  El estado logístico ya vivía en `ml_shipment_estado` (migración 006, la mantiene el flujo
+  de preparación); faltaba el puente, porque esa tabla se indexa por `shipment_id` y no se
+  guardaba. La migración 100 agrega `ml_shipment_id`, que la orden trae en `shipping.id`.
+  `shipped` y `delivered` cierran el pedido; `ready_to_ship` no, porque está listo pero
+  todavía no salió. Sin dato de envío el pedido queda abierto: no saber si salió nunca puede
+  esconder una venta sin despachar. Con esto "Requieren atención" bajó de 175 a 77.
+- **El estado del envío ML lo refresca el cron `5-59/10` de `syncPedidosCache`**, que por
+  cada orden `paid` de los últimos 30 días consulta `/shipments/:id` y actualiza
+  `ml_shipment_estado`. Un estado terminal queda cacheado 7 días y se saltea; uno en
+  `ready_to_ship` se vuelve a consultar cada 10 minutos.
+- **`pendientesMl` salteaba el GET de shipment cuando la preparación local estaba
+  `completada`.** Ahorraba cuota, pero congelaba el estado en `ready_to_ship` justo para los
+  pedidos que ya habían pasado por el depósito: 39 de las 42 ventas de ML que Gestión de
+  pedidos mostraba como pendientes. Ahora se consulta igual y el pedido **no** vuelve a la
+  cola de preparación; el costo se acota solo porque al pasar a terminal se cachea 7 días.
+- **La importación pisaba el estado operativo local.** Recalculaba y escribía sin mirar el
+  anterior, así que con el cron un pedido mandado a preparar volvía solo a `importado` a los
+  diez minutos. Ahora los estados locales se conservan y el canal sólo gana cuando informa un
+  cierre.
+- **Una venta de ML entraba dos veces:** la orden de ML y su pedido espejo en Woo (142 de
+  723). No se detectaban cruzando datos porque el espejo trae el nombre real en vez del
+  nickname, otra hora y **otro importe** (usa el precio de contado de la web, por la regla de
+  negocio). El vínculo determinista es la meta `_ml_order_id` de Woo, que el normalizador ya
+  leía y no se persistía. Se muestra la fila de ML, con el número de Woo del depósito a la
+  vista; el espejo sólo se oculta si su orden de ML está importada.
+- **El estado de un pedido de ML lo manda ML** (instrucción del usuario): no se toma del
+  espejo de Woo ni se modifica localmente; los cambios se traen por la API.
+- **`NULL != 'valor'` en SQL no es verdadero, es NULL.** Las exclusiones de la bandeja
+  (`on-hold` antiguos, `fusion`) comparaban `estado_canal` directo, así que un pedido sin
+  estado del canal desaparecía de "Requieren atención" en silencio. Se comparan con
+  `COALESCE(estado_canal,'')`.
+- **El esquema se define en migraciones, no con `ALTER` en línea.** `datos_ml_json` se creaba
+  dentro del importador, así que una base creada desde las migraciones —despliegue nuevo,
+  backup restaurado, entorno de prueba— no tenía la columna y el listado respondía 500 hasta
+  que alguien importara. Migración 101.
+- **Los tests con fechas fijas se rompen solos al cambiar el día.** Los de Recuperar ventas
+  usaban `2026-09-08` y la oportunidad vence al cierre del día hábil siguiente: pasaban el día
+  que se escribieron y fallaban al siguiente. Se anclan con `haceHoras()`.
+- **`enviar-woo` nunca pudo actualizar Woo:** llamaba a `wooFetch` pasando
+  `{ method, data }` en la posición de `method`. Los tests no lo detectaban porque siempre
+  inyectan `actualizarWooOverride`. Corregido a la firma real `(cfg, path, method, body)`.
+- **La importación ahora tiene cron** (`9-59/10`, ventana `GESTION_PEDIDOS_VENTANA_HORAS`,
+  48 h por defecto), compartiendo `lib/gestionPedidosSync.js` con el botón manual de
+  reconciliación de 30 días.
+- **Sólo se editan los pedidos nativos de Woo** (decisión del usuario, 2026-09-09). Los de ML
+  no se modifican, y tampoco los espejo (`espejo_ml`, meta `_ml_order_id`), que son ventas de
+  ML viviendo en Woo y caen bajo la regla de negocio vigente. `gestion_pedidos` todavía no
+  persiste `espejo_ml`: hay que agregar la columna antes de habilitar la edición.
+- **El contrato de cuotas con Master Control está escrito y sin desplegar.**
+  `fusion-pricing/v1/cotizacion` en `includes/Controllers/ApiController.php` del plugin, de
+  sólo lectura, autenticado con `X-Fusion-Token` contra la constante `FUSION_API_TOKEN` de
+  `wp-config.php`; cliente del VPS en `lib/masterControlPricing.js`, fail-closed, variable
+  `MASTER_CONTROL_TOKEN`. El WordPress **no está en este VPS**: `fusionbikes.com.ar` está en
+  Hostinger detrás de Cloudflare, y desde acá sólo hay claves REST de Woo (`wc/v3`), que no
+  autorizan a desplegar código. La subida del plugin es manual. Ese WordPress ya sirve
+  namespaces propios (`fusion-abandoned/v1`, `fusion-chat/v1`) cuyo código no está versionado
+  en ningún repositorio conocido.
+- **Un `<base>` insertado por script no aplica a los `<link>` del markup.** Se probó y falló:
+  la herramienta calcula la raíz y escribe las rutas de `lib/` ya resueltas, porque el
+  detalle vive en `/gestion-pedidos/pedidos/{id}` y `../lib/` apunta mal desde ahí.
+
+## Preparación (2026-09-10)
+
+- **Una preparación en curso podía quedar inalcanzable.** Sólo se reabría desde su tarjeta en
+  la cola, y la cola muestra únicamente pedidos vigentes del canal; la pantalla no usaba
+  `pushState` ni hash, así que no había URL. Cuando el pedido avanzaba —envío ML a `shipped`,
+  pedido web fuera de `lpaandreani`— la tarjeta desaparecía y el trabajo quedaba encerrado: ni
+  en la cola, ni en el historial. Así se acumularon 38.
+- **Arreglado con tres piezas:** `GET /api/preparacion/abiertas` y un bloque "Preparaciones
+  abiertas sin terminar" arriba de la cola; URL propia `?pedido=N` con recarga, botón atrás y
+  link compartible; y aviso en el detalle cuando el canal informa que el pedido ya salió o se
+  canceló (se avisa y se deja terminar: la evidencia se guarda igual).
+- **La URL usa query param y no `/preparacion/pedido/N`** a propósito: la página carga
+  `format.js`, `api.js` y `scanner.js` (módulo) con rutas `../lib/`, que desde un nivel más
+  profundo darían 404. Mismo problema que se resolvió en Gestión de pedidos con `document.write`;
+  acá se evitó por completo.
+- **Sólo ve el detalle quien tiene el claim vigente** (`puedeVerDetallePreparacion`), y las
+  encerradas lo tenían vencido: al abrirlas desde la vista nueva o por URL se toma el claim
+  primero, como ya hacían las tarjetas de la cola.
+- **Las 36 encerradas se cerraron** con `scripts/cerrar-preparaciones-despachadas.mjs`, que
+  reusa `marcarPreparacionEnviada` en vez de inventar un cierre: decide `completada` si estaba
+  verificada y `despachada_sin_verificar` si no, y registra el evento. Quedaron 67 ítems y 29
+  fotos conservados. **Dos ML canceladas se dejaron a mano**: marcarlas "enviada" sería falso.
+  El script saltea las que tienen claim vigente.
+
+## Conteo de inventario (2026-09-10)
+
+- **La herramienta está completa, pero la parte de ubicaciones tenía cero uso:** 0 de 33
+  sesiones con ubicación, 1 sola ubicación creada (`Mostrador/Molicsyn`, bootstrap) y 0
+  productos mapeados. La causa: elegir ubicación era **mutuamente excluyente** con
+  categoría/marca y obligaba a un barrido completo de la zona, y en la tienda se cuenta por
+  marca. El código que asocia SKU→ubicación al escanear (`capturarUbicacion`) ya existía y
+  estaba bien cableado; nunca se disparaba porque ninguna sesión tenía ubicación.
+- **Se levantó la exclusión** (decisión del usuario, 2026-09-10): la categoría/marca dice QUÉ
+  se cuenta y la ubicación DÓNDE está parado el operario. La ubicación sola sigue siendo
+  barrido completo. El anti-solape sólo considera la ubicación cuando ella define el alcance:
+  dos personas contando marcas distintas en el mismo estante ya no se pisan.
+- **Universo real a controlar: 1.605 SKUs con stock**, no los 5.168 del catálogo. De ésos
+  **1.213 (76%) nunca se contaron**. `sku_ultimo_conteo` (433 filas) guarda cuándo se contó
+  cada SKU y qué diferencia dio: es la base para priorizar el conteo cíclico.
+- **El contador de inventario se rediseñó el 2026-09-11.** Una sola lista de productos con
+  foto y un campo numérico que se tipea; contar NO mueve la fila. **Conteo a ciegas**: con la
+  sesión abierta la API no manda la cantidad esperada ni el bloque `con_stock`/`sin_stock` de un
+  producto sin contar, y reordena para que el orden tampoco lo delate. La lógica de la lista
+  vive en `public/lib/conteoLista.js` con tests propios. En escritorio (≥1024 px) son **dos
+  paneles** con flujo de teclado: ↑↓ mueven, Enter guarda y avanza, Esc vuelve al campo.
+- **El escaneo suena distinto según lo que pasó** (2026-09-11): 880 Hz al leer, 660→990 en la
+  primera unidad de un producto, 990·990 cuando **ya estaba contado**, 240 Hz grave si el código
+  no está asociado. Ese contraste es la señal que faltaba en el incidente del casco Giro.
+  **No se usa vibración**: Safari en iOS no soporta la Vibration API de forma confiable y desde
+  iOS 18.4 exige una interacción táctil que caduca en 1 s — un escaneo con lector nunca entra en
+  esa ventana, y el conteo se hace 100% en iPhone. Lo que llama `navigator.vibrate` en
+  preparación es un no-op en esos equipos.
+- **Preparación ya acepta códigos de barras** (2026-09-11): `POST /api/preparacion/:id/escanear`
+  resolvía el código solo contra `preparacion_items.sku`, así que leer el EAN del producto daba
+  "no coincide" y obligaba a tipear el SKU. Ahora traduce a SKUs candidatos por `ean_sku` y por
+  `catalogo_cache.gtin`, probando las formas equivalentes del mismo GTIN (UPC-12 / EAN-13 con
+  cero adelante / canónico de 14 de `lib/gtin.js`). 7 tests nuevos en `test/preparacion.test.js`.
+- **Tipear una cantidad a mano no guardaba nada** (2026-09-11, corregido y desplegado el
+  2026-09-12): la ficha del contador rediseñada leía el resultado del control como
+  `decision.cantidad`, propiedad que `conteoCantidad.js` nunca expuso — se llama `valorEnviar`.
+  El PATCH viajaba con el cuerpo vacío, el servidor contestaba 400 y el número volvía solo al
+  valor anterior, en teléfono y en escritorio. El módulo estaba bien: lo que estaba mal era quién
+  lo leía, así que la guarda nueva en `test/conteoCantidad.test.js` verifica el **call site** —
+  que la pantalla no lea ninguna propiedad que la decisión no devuelva.
+- **El panel de escritorio del conteo (`#cd-caja`) no entraba en la guarda de re-render**, así
+  que un refresco de fondo borraba lo que se estaba tipeando y devolvía el foco al lector.
+  Además sólo guardaba con Enter (no al salir del campo) y no tenía botón de restar. Los tres
+  corregidos el 2026-09-11.
+- **El contado de referencia sale SIEMPRE de `catalogo_cache.regular_price`, nunca de `precio`**
+  (regresión reintroducida y corregida el 2026-09-11 en `POST /api/precios/objetivo`). `precio` es
+  el VIGENTE y ya trae el `sale_price`: usarlo descuenta dos veces. El SKU de una publicación sale
+  de `sku_matcher_decisiones`, no de `p.seller_sku` (difieren en 2). Es el mismo bug que ya se
+  había corregido una vez en `auditarPrecios`: si aparece un tercer call site, revisar esto primero.
+- **El precio objetivo de ML apunta al contado exacto** (2026-09-11): `precioObjetivoMl()` de
+  `lib/mlPrecios.js` resuelve en dos fases (punto fijo sobre comisión+envío, luego cubre en pasos
+  de $100) el precio de publicación cuyo neto iguala el precio de contado de la web. El envío se
+  cotiza al precio nuevo (`item_price` + `listing_type_id`), no al viejo; el 5% es solo tolerancia
+  de juicio, no el objetivo. Se dispara a mano desde el reactivador de publicaciones
+  ("Corregir precio y reactivar"), nunca automáticamente.
+- **El bug de las filas partidas estaba en `/asociar`, no en `/escanear`.** `/escanear` deduplica
+  por SKU desde el 2026-08-25; `/asociar` ponía el SKU sobre la fila del EAN sin mirar si ya
+  había otra fila con ese SKU en la sesión. Así el casco Giro `FB-67121` (sesión 33) quedó en dos
+  filas, generó dos faltantes y **se publicó en 0 teniendo las 3 unidades**. Corregido: ahora
+  funde. Las 4 filas partidas históricas (sesiones 31 y 33) NO se tocaron — su stock ya se aplicó
+  y rehacerlas no lo devolvería; `FB-67121` hay que corregirlo en Woo a mano.
+- **Sólo el 17% del catálogo tiene código cargado** (800 de 4.588, más 321 EAN asociados a mano):
+  por eso no se puede escanear. El 99% sí tiene foto (4.560), y ninguna pantalla de conteo la
+  usaba. Hasta 21 productos comparten la misma imagen (talles), así que en variantes el
+  talle/color manda sobre el nombre.
+- **El conteo se hace 100% desde el teléfono**: las 12 sesiones de los últimos 14 días se
+  abrieron desde un iPhone. Pero el escritorio es el 37% del tráfico y hace dos trabajos propios
+  — **asociar códigos** (176 contra 86) y **cerrar la sesión** (42).
+- **Los sobrantes esperaban autorización que nadie podía dar.** `/diferencias/pendientes`,
+  `/aprobar` y `/rechazar` existían desde el 2026-08-27 y **ninguna pantalla los llamaba**. La
+  sesión 33 (Joaco, 8/9) quedó en `confirmada_con_errores` con 3 sobrantes por $814.950, y una
+  sesión trabada en ese estado bloquea el anti-solape de cualquier alcance que se cruce. Se
+  agregó la tarjeta "Esperan tu autorización" en el inicio de conteo (2026-09-10). Autorizar y
+  descartar son admin (`requireAdmin`).
+- **Una preparación cancelada con producto ya levantado abre una tarea de devolución**
+  (2026-09-10). Antes la única forma de cerrar una preparación era declararla enviada, y para un
+  pedido cancelado eso era falso: por eso quedaban abiertas para siempre mientras el producto
+  seguía fuera de su estante. Ahora pasa a `cancelada_pendiente_devolucion`, aparece en "Volver
+  a su lugar" arriba de la cola, y sólo se cierra como `cancelada_devuelta` cuando alguien
+  confirma a qué estante volvió cada producto. Decisiones del usuario: una confirmación por
+  pedido, ubicación concreta (no "exhibición/depósito"), sin nada escaneado no se pide nada, las
+  post-despacho quedan fuera, y **los estantes los carga el admin** — el preparador sólo elige.
+  Depende de que existan ubicaciones activas: hoy hay 1 y la pantalla lo dice explícitamente.
+  La devolución además mapea `producto_ubicacion`, igual que el conteo.
+- **El anti-solape compara alcances REALES (Y), no la unión (O)** — cambiado el 2026-09-10.
+  Antes usaba `productoEnAlcanceOr` sobre el catálogo entero, marcado "NO TOCAR" por ser
+  conservador. El efecto real era frenar por productos que **ninguna de las dos sesiones iba a
+  contar**: una ronda Shimano·TRANSMISIÓN quedó bloqueada por la sesión 33 (CASCOS·Giro) a
+  causa de `FB-2419`, `FB-4751` y `FB-5530`, repuestos Shimano categorizados en CASCOS. Con
+  alcance real (`skusDeAlcance`, mismo criterio que `congelarAlcance`: `productoEnAlcance`
+  sobre `SQL_CATALOGO_CONTABLE`) ninguna de las dos los toca. El caso que justificaba el O
+  sigue protegido: "categoría Cascos" y "marca Bell" comparten el Casco Bell y ese SKU está en
+  los dos conjuntos reales, así que chocan igual. Verificado sobre la base de producción:
+  Shimano·TRANSMISIÓN pasa (151 productos) y CASCOS entero sigue frenando por 87.
+- **El 409 dice qué productos cruzan** (`productos_en_comun` + `ejemplos`) y la pantalla los
+  lista: antes decía "se cruza" sin decir con qué y había que ir a buscarlo a la base.
+- **Las categorías de `FB-2419`, `FB-4751` y `FB-5530` siguen mal en Woo** (repuestos Shimano
+  en CASCOS). Ya no bloquean, pero ensucian cualquier conteo de CASCOS.
+- **`rechazar` una diferencia recalcula el estado de la sesión** (2026-09-10). Antes no lo hacía
+  a propósito, asumiendo que quien contaba iba a reintentar `/confirmar`; con la pantalla de
+  autorización quien resuelve es el admin desde otra vista y nunca pasa por ahí, así que la
+  sesión quedaba con 0 conteos sin ajustar pero seguía en `confirmada_con_errores` bloqueando
+  el anti-solape. Como consecuencia, `POST /sesiones/:id/confirmar` sobre una sesión ya
+  `confirmada` responde **200 idempotente** (`ya_confirmada:true`) en vez de 400: la sesión
+  puede cerrarse sola mientras el operario todavía tiene el botón a la vista.
+- **Los faltantes se ajustan solos y así queda** (decisión del usuario, 2026-09-10: "dejarlo
+  como está pero dejando información para auditar"). La asimetría es real y consciente: un
+  sobrante de $248.850 espera aprobación y un faltante de $23.985.000 se aplica solo. Medido al
+  2026-09-10: **77 productos, 92 unidades, $138.311.232**, de los cuales **48 estaban marcados
+  `requiere_revision=1` y se aplicaron igual**. Pesa más porque hay movimiento depósito↔salón
+  que nadie asienta: un "faltante" puede ser un producto que está en el otro lado.
+  `GET /api/inventario/diferencias/aplicadas?dias=N` es la información para auditarlo (sólo
+  `tipo='faltante'`, orden por valor, `en_cero` separa el ajuste total del parcial), y se ve en
+  "Faltantes ajustados solos" del inicio de conteo.
+- **`inventario_sesiones.segundos_activos` no sirve para medir ritmo**: cuenta la sesión
+  abierta, y hay una de 22 horas. La referencia útil es la sesión más reciente — 24 productos
+  en 21 minutos, ~52 s por producto.
+- **Ronda sugerida** (`GET /api/inventario/ronda-sugerida`): dice qué contar ahora y llena el
+  alcance de un toque. La unidad es la marca, o marca+categoría cuando la marca no entra en
+  una ronda — coincide con cómo se cuenta y con cómo está acomodado el local. El alcance de
+  sesión ya combina marca y categoría con **Y** (`productoEnAlcance`), así que la sugerencia
+  se inicia sin tocar el modelo.
+- **El orden es por proporción sin contar, no por cantidad.** Un grupo con 86 nuevos sobre 134
+  obliga a recontar 48 que ya estaban al día, y ese tiempo no avanza la cobertura; uno de
+  60 sobre 60 rinde el 100%. Se mide sobre los que tienen stock: un grupo entero en cero no
+  aporta cobertura.
+- **La sugerencia usa `SQL_CATALOGO_CONTABLE`**, la misma definición que el alcance de la
+  sesión (excluye `tipo='variable'`, los padres de variaciones). Con un filtro propio prometía
+  152 y la sesión traía 151.
+- **Objetivo fijado por el usuario: 160 productos por ronda diaria** (~2 h 20 al ritmo real),
+  que cubre los 1.605 con stock en unos 10 días hábiles.
+
 ## Hallazgo agregado
 
 - Woo ya tiene webhook durable de catálogo en `/api/woo/webhook/product`: persiste/deduplica

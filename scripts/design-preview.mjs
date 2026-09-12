@@ -67,7 +67,10 @@ function seed() {
 async function main() {
   server = spawn(process.execPath, ['server.js'], {
     cwd: root,
-    env: { ...process.env, DB_PATH: dbPath, PORT: String(port), PEDIDOS_PREVIEW_USER: 'preview-admin', DISABLE_CRONS: 'true', DOTENV_CONFIG_PATH: '/dev/null', SESSION_SECRET: 'design-preview-session', MOBILE_JWT_SECRET: 'design-preview-mobile-secret-0123456789' },
+    // `PEDIDOS_PREVIEW_USER` se retiró el 2026-09-09 junto con el gate por nombre de
+    // usuario: Gestión de pedidos ahora exige el permiso `pedidos`, y `preview-admin` se
+    // siembra como admin, así que entra por el bypass de administrador.
+    env: { ...process.env, DB_PATH: dbPath, PORT: String(port), DISABLE_CRONS: 'true', DOTENV_CONFIG_PATH: '/dev/null', SESSION_SECRET: 'design-preview-session', MOBILE_JWT_SECRET: 'design-preview-mobile-secret-0123456789' },
     stdio: 'inherit',
   });
   await waitFor(`http://127.0.0.1:${port}/login/`);

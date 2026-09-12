@@ -39,13 +39,15 @@ Actualizado: 2026-09-09. Estas fichas registran realidad; el plan maestro especi
 | GP1 | Diseño aprobado de Gestión de pedidos | candidata | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-1.md` |
 | GP2 | Modelo relacional e importación | publicada | `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/GESTION-PEDIDOS-2.md` |
 | GP3 | Importación inicial WooCommerce/MercadoLibre | publicada | suite completa verde; habilita GP4 |
-| GP4 | Gestión funcional de pedidos | publicada | suite completa verde; habilita GP5 |
-| GP5 | Preparación por lote y checklist | publicada | suite completa verde; habilita GP6 |
+| GP4 | Gestión funcional de pedidos | publicada (backend) | El backend estaba y probado; la pantalla siguió siendo la maqueta de GP1 hasta GP11 (2026-09-09) |
+| GP5 | Preparación por lote y checklist | publicada (backend) | La pantalla recién ejecuta el lote real desde GP12 (2026-09-09) |
 | GP6 | Despachos, agrupación y evidencia | publicada | suite completa verde: 128 archivos, 2408 tests, 51 omitidos |
 | GP7 | Recuperar ventas | publicada | suite completa verde: 128 archivos, 2411 tests, 51 omitidos |
 | GP8 | Integraciones, cuotas, stock y permisos | publicada | suite completa verde: 128 archivos, 2416 tests, 51 omitidos |
 | GP9 | Validación operativa controlada | publicada | suite completa verde: 131 archivos, 2421 tests, 51 omitidos |
 | GP10 | Publicación controlada | desarrollo | preflight, muestra 5/5, smoke, permisos y diagnóstico de datos verificados; falta jornada observada |
+| GP11 | Gestión de pedidos consultable de verdad | desarrollo | Pantalla real contra la API, permiso `pedidos` en vez del gate de un usuario, cron de importación, importes y entrega persistidos |
+| GP12 | Enviar a preparación desde la lista | desarrollo | Selección múltiple, validación de elegibilidad y lote real verificado en instancia aislada |
 
 Estados: `planificada → desarrollo → candidata → publicada → observada → aceptada`. Un estado no se infiere por código, número de commit o nombre de rama.
 

@@ -16,6 +16,7 @@ implementadas como un único libro de stock.
 - Desde el 2026-09-08, preparación usa una cola continua sin olas: MercadoLibre primero y antigüedad después. Los pedidos nuevos aparecen en la próxima actualización.
 - La pantalla primero consolida todos los productos pendientes por SKU y muestra imagen, cantidad total y cantidad de pedidos. Después el operario abre un pedido, adquiere su claim y completa una checklist escaneando cada unidad. La línea muestra cantidad escaneada/esperada; excedentes y códigos ajenos o desconocidos no modifican cantidades.
 - Las olas nunca tuvieron adopción operativa y se retiraron de la UI, del contrato de pendientes y del montaje de `/api/jornada`. Sus tablas y eventos históricos se conservan como auditoría, sin trabajo nuevo.
+- El escaneo del checklist (`POST /api/preparacion/:id/escanear`) acepta SKU, el GTIN del catálogo y los EAN asociados a mano (`ean_sku`). Compara por la forma canónica de 14 dígitos de `lib/gtin.js`, así que UPC-12 y EAN-13 con cero adelante son el mismo código. Hasta el 2026-09-11 solo aceptaba SKU.
 - El operario encuentra unidades, las asigna al pedido, escanea, toma evidencia y aprueba la
   preparación antes del despacho.
 - La evidencia incluye requisitos por ítem y fotos del paquete cuando corresponda. Un error de

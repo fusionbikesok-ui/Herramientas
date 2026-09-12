@@ -1,6 +1,8 @@
 # Arquitectura de sistemas UM1 — Identidad de productos
 
-**Estado:** diseño arquitectónico para revisión.
+**Estado:** diseño ya implementado en lo sustancial; el estado medido por subentrega vive en
+`2026-09-04-identidad-productos.md` (verificado el 2026-09-11). Este documento explica el porqué
+de la arquitectura, no el avance.
 **Fecha:** 2026-09-05.
 **Alcance:** identidad Fusion, WooCommerce, MercadoLibre, catálogo, stock, ventas retenidas, web y App.
 **Base observada:** `/opt/fusionbikes/herramientas`, rama `conteo-confiable`, commit `9ca06bf`.

@@ -1,6 +1,7 @@
 # UM1 urgente — Identidad de productos y cierre de publicaciones ML sin SKU
 
-**Estado:** especificación aprobada; implementación en curso.
+**Estado (verificado el 2026-09-11):** UM1.1 y UM1.2 **en producción y en modo `enforced`**,
+con escrituras remotas habilitadas. UM1.3 apenas empezado, UM1.4 sin uso. Detalle abajo.
 **Prioridad:** UM1.1 es bloqueante y precede UM1.2–UM1.6.
 **Superficies:** VPS, web responsive y App iPhone.
 **Seguridad:** la operación productiva usa sobrescritura directa, autorización explícita y verificación remota; nunca cae automáticamente al camino heredado con stock cero.
@@ -26,6 +27,20 @@ Un `SELLER_SKU` válido existe, no está vacío, coincide textualmente con un ú
 - UPC-A y su EAN-13 equivalente con cero inicial representan el mismo GTIN normalizado para matching y unicidad, aunque se preservan ambos valores y tipos. Implementado el 2026-09-06 (PM-150): la clave es el canónico GS1 de 14 dígitos, armado **rellenando y nunca quitando** ceros —en un UPC-A como `036000291452` el cero inicial es el sistema numérico—, y el `subtipo` guarda la representación que entregó cada canal, sin inferir un tipo «verdadero» bajo el relleno.
 - Sólo un identificador activo de un Producto Fusion activo confirma identidad. Los históricos quedan reservados y una transferencia requiere Administración.
 - Si SKU, EAN o UPC señalan productos distintos no hay auto-vínculo: la persona elige cuál coincide, el descartado queda marcado incorrecto y se crea una tarea de catálogo.
+
+## Estado real medido el 2026-09-11
+
+| Subentrega | Estado | Evidencia |
+|---|---|---|
+| UM1.1 cierre de SKU ML | **en producción** | `identidad_config.modo = enforced`, escrituras remotas habilitadas, canario fijado. 1.218 casos: **1.120 verificados, 95 resueltos, 3 urgentes**. 125 decisiones, 124 operaciones completadas y **1 bloqueada por impacto** esperando confirmación humana. |
+| UM1.2 cobertura durable | **en producción** | Último scan confiable: 2026-09-11 02:56, sin error. 6.330 identidades de canal, 13.095 evidencias, 6.370 entradas de historial. |
+| UM1.3 producto Fusion completo | **apenas empezado** | 5.177 productos Fusion activos (bootstrap hecho), pero **1 sola familia**, 1 regla y **0 atributos canónicos**. La parte de familias/atributos/deuda de catálogo no está en uso. |
+| UM1.4 matching bilateral | **sin uso** | `identidad_tareas_publicacion` en **0**: la cola Woo→ML no generó ninguna tarea. |
+| UM1.5 experiencia web y App | **parcial** | La pantalla `public/identidad-productos/` existe y el router está montado. Falta verificar la parte de App y offline. |
+| UM1.6 corte estricto y retiro legacy | **hecho en lo esencial** | El modo ya es `enforced`, que era el objetivo del corte. |
+
+Lo urgente que queda es chico y concreto: **3 casos urgentes y 1 operación bloqueada por
+impacto**. Lo grande que falta es UM1.3/UM1.4, que no son cierre de SKU sino catálogo.
 
 ## Subentregas
 
