@@ -633,6 +633,11 @@ fetch('/api/auth/me').then(function(r) {
     ]},
     { titulo: 'MercadoLibre', color: 'sync', tools: [
       { tool: 'sync-ml', href: 'sync-ml', t: 'Sincronización ML', d: 'Estado del stock y los pedidos entre MercadoLibre y la web, y qué necesita atención.', tag: 'Stock · Pedidos · Reactivación' },
+      // Guardia retiene ventas pagas de ML que no puede convertir en pedido, y NADA las libera
+      // solo: hay que entrar y liberarlas a mano. No estaba enlazada desde el home —ni en el
+      // diseño viejo ni en el nuevo— y por eso dos ventas quedaron retenidas 8 y 1 días sin que
+      // nadie se enterara (Jersey Santini $218.000 y una caramañola Camelbak, 2026-09-12).
+      { tool: 'guardia-ml', href: 'guardia-ml', t: 'Guardia ML', d: 'Ventas retenidas que todavía no se convirtieron en pedido, y publicaciones que necesitan una decisión.', tag: 'Retenidas · Casos · Bloqueos' },
       // Cobertura de catálogo NO es una herramienta aparte desde el 2026-08-14: se unificó
       // dentro del Matcher como su dirección Woo→ML, y /cobertura sólo redirige ahí. Tenerla
       // como tarjeta propia mandaba a una pantalla que ya no existe por separado.
