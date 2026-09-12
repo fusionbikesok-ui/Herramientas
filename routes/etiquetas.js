@@ -111,6 +111,48 @@ export function etiquetasRouter(db) {
     res.json({ ok: true, item });
   });
 
+  // Alta en lote (2026-09-11). `POST /cola` toma un SKU por llamada: mandar los 137 productos
+  // de una ronda de conteo serían 137 pedidos desde un teléfono en el depósito. Este endpoint
+  // existe para las dos puertas que pidió el usuario — el botón del conteo y el del historial.
+  //
+  // Idempotente por (sku, sesion_id) contra las filas PENDIENTES: tocar dos veces el botón no
+  // duplica la etiqueta. Una ya impresa no bloquea: si se pide de nuevo es porque se necesita
+  // otra copia (se despegó, se imprimió mal), y eso es un pedido legítimo.
+  //
+  // Cantidad 1 por producto, no una por unidad contada: la etiqueta se pega en el estante.
+  router.post('/cola/lote', (req, res) => {
+    const skus = Array.isArray(req.body?.skus)
+      ? [...new Set(req.body.skus.map(v => String(v || '').trim()).filter(Boolean))]
+      : [];
+    if (!skus.length) return res.status(400).json({ ok: false, error: 'Indicá `skus` (array no vacío).' });
+    const cant = req.body?.cantidad === undefined ? 1 : parseInt(req.body.cantidad, 10);
+    if (!Number.isInteger(cant) || cant <= 0) {
+      return res.status(400).json({ ok: false, error: 'cantidad debe ser un entero mayor a 0' });
+    }
+    const origen = req.body?.origen || 'conteo';
+    const sesionId = req.body?.sesion_id ?? null;
+    const usuario = req.user?.username || null;
+    const ts = now();
+
+    const yaPendiente = db.prepare(
+      `SELECT 1 FROM etiquetas_cola WHERE sku=? AND estado='pendiente'
+         AND ((? IS NULL AND sesion_id IS NULL) OR sesion_id = ?)`
+    );
+    const insertar = db.prepare(`
+      INSERT INTO etiquetas_cola (sku, cantidad, origen, sesion_id, solicitado_por, nota, estado, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, 'pendiente', ?)
+    `);
+    let creadas = 0; const repetidas = [];
+    db.transaction(() => {
+      for (const sku of skus) {
+        if (yaPendiente.get(sku, sesionId, sesionId)) { repetidas.push(sku); continue; }
+        insertar.run(sku, cant, origen, sesionId, usuario, req.body?.nota || null, ts);
+        creadas++;
+      }
+    })();
+    res.json({ ok: true, creadas, repetidas: repetidas.length, skus_repetidos: repetidas });
+  });
+
   router.patch('/cola/:id', (req, res) => {
     const id = parseInt(req.params.id, 10);
     const item = db.prepare('SELECT * FROM etiquetas_cola WHERE id=?').get(id);

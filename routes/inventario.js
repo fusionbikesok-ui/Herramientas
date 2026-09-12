@@ -1,6 +1,6 @@
 import express from 'express';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { setStockWcDelta, buscarEnCache } from '../lib/wooStock.js';
+import { getStockLiveWc, setStockWcDelta, buscarEnCache } from '../lib/wooStock.js';
 import { looksLikeGtin, subirGtinAWoo, persistirGtinConfirmado } from '../lib/gtinWoo.js';
 import { requireAdmin } from '../lib/auth.js';
 
@@ -62,8 +62,9 @@ export function parseSeleccionQuery(valor) {
  * cuando ambas tienen selección: si elijo categoría "Cascos" Y marca "Bell",
  * quiero solo cascos Bell — no cualquier casco ni cualquier producto Bell.
  *
- * Esta es la función que define los `pendientes` de una sesión. NO se usa para
- * detectar solape entre sesiones de distintos usuarios (ver `productoEnAlcanceOr`).
+ * Define los `pendientes` de una sesión y, desde el 2026-09-10, también el conjunto que se
+ * compara para detectar solape entre sesiones (ver `skusDeAlcance`): dos sesiones chocan
+ * cuando los productos que realmente van a contar se pisan.
  */
 export function productoEnAlcance(prodCategorias, prodMarca, categoriasSel, marcasSel) {
   const cats = parseLista(categoriasSel);
@@ -77,11 +78,11 @@ export function productoEnAlcance(prodCategorias, prodMarca, categoriasSel, marc
 }
 
 /**
- * Variante OR — INTENCIONAL y distinta de `productoEnAlcance`: se usa SOLO para
- * detectar solape entre sesiones de distintos usuarios. Para el anti-solape
- * queremos ser conservadores: si una sesión declaró "Cascos" y otra "Bell", un
- * "Casco Bell" cae potencialmente en las dos y hay que bloquear. Achicar esto a
- * AND permitiría que dos personas cuenten el mismo producto físico. NO TOCAR.
+ * Variante OR. Fue la regla del anti-solape hasta el 2026-09-10 y ya no se usa: bloqueaba por
+ * productos que ninguna de las dos sesiones iba a contar (ver `skusDeAlcance`). Se conserva
+ * exportada porque el caso que la justificaba sigue siendo el que hay que no romper: una
+ * sesión "Cascos" y otra "Bell" comparten el "Casco Bell" y tienen que chocar — con alcances
+ * reales también chocan, porque ese producto está en los dos conjuntos.
  */
 export function productoEnAlcanceOr(prodCategorias, prodMarca, categoriasSel, marcasSel) {
   const cats = parseLista(categoriasSel);
@@ -152,8 +153,10 @@ export function ensureTables(db) {
   try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN iniciado_en TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN segundos_activos INTEGER'); } catch (_) {}
   try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN items_contados INTEGER'); } catch (_) {}
-  // Fase 2 — Ubicaciones: alcance alternativo por ubicación (barrido completo), en vez de
-  // categoria/marca. Mutuamente excluyente con categorias/marcas (ver POST /sesiones).
+  // Fase 2 — Ubicaciones: sola define el alcance (barrido completo de la zona); combinada
+  // con categoria/marca indica dónde está parado el operario, para mapear lo que escanea.
+  // Fueron mutuamente excluyentes hasta el 2026-09-10: con esa regla el mapeo nunca se llenó
+  // (0 de 33 sesiones con ubicación) porque en la tienda se cuenta por marca.
   try { db.exec('ALTER TABLE inventario_sesiones ADD COLUMN ubicacion_id INTEGER'); } catch (_) {}
   db.prepare('CREATE INDEX IF NOT EXISTS idx_inv_sesiones_estado ON inventario_sesiones(estado)').run();
 
@@ -258,6 +261,110 @@ export function inventarioRouter(db, wooCfg) {
     )`).run();
   } catch (_) {}
 
+  // ── Ronda sugerida: qué contar ahora ──────────────────────────────────────
+  //
+  // El universo real no es el catálogo entero (5.168 SKUs) sino lo que tiene stock: al
+  // 2026-09-10 eran 1.605, de los cuales 1.213 (76%) nunca se habían contado. Sin una
+  // sugerencia, elegir qué contar es una decisión diaria que nadie quiere tomar y termina
+  // contándose siempre lo mismo.
+  //
+  // La unidad es marca, o marca+categoría cuando la marca no entra en una ronda. Es la forma
+  // en que se cuenta en la tienda y además coincide con cómo está acomodado el local
+  // (Shimano tiene 73 zapatillas juntas y 60 de transmisión juntas). El alcance de sesión ya
+  // combina marca y categoría con Y (`productoEnAlcance`), así que la sugerencia se puede
+  // iniciar tal cual, sin tocar el modelo.
+  //
+  // Prioridad: primero lo que nunca se contó, después lo más viejo. Un grupo que dio
+  // diferencias la última vez sube, porque es donde el stock se desvía.
+  router.get('/ronda-sugerida', (req, res) => {
+    const objetivo = Math.min(Math.max(parseInt(req.query.objetivo, 10) || 160, 10), 500);
+    const hoy = new Date().toISOString().slice(0, 10);
+
+    // Todos los contables, no sólo los que tienen stock: la sesión va a incluir también los
+    // que figuran en cero, y confirmar que un cero es cero es justamente donde aparece el
+    // stock invisible. Se informan los dos números para que la sugerencia no prometa 60 y el
+    // operario se encuentre con 152.
+    // Misma definición de "contable" que usa el alcance de la sesión (SQL_CATALOGO_CONTABLE):
+    // excluye los productos `variable`, que son los padres de variaciones y no se cuentan.
+    // Si acá se usara otro filtro, la sugerencia prometería un número y la sesión traería otro.
+    const ultimos = new Map(db.prepare('SELECT sku, contado_en, diferencia_ultima FROM sku_ultimo_conteo').all()
+      .map(u => [u.sku, u]));
+    const productos = catalogoContable().map(c => ({
+      ...c,
+      contado_en: ultimos.get(c.sku)?.contado_en || null,
+      diferencia_ultima: ultimos.get(c.sku)?.diferencia_ultima || null,
+    }));
+
+    const grupos = new Map();
+    const sumar = (clave, marca, categoria, p) => {
+      if (!grupos.has(clave)) {
+        grupos.set(clave, { marca, categoria, skus: 0, con_stock: 0, nunca: 0, nunca_con_stock: 0, mas_viejo: null, con_diferencia: 0 });
+      }
+      const g = grupos.get(clave);
+      const tieneStock = (p.stock || 0) > 0;
+      g.skus++;
+      if (tieneStock) g.con_stock++;
+      if (!p.contado_en) { g.nunca++; if (tieneStock) g.nunca_con_stock++; }
+      else if (!g.mas_viejo || p.contado_en < g.mas_viejo) g.mas_viejo = p.contado_en;
+      if (p.diferencia_ultima) g.con_diferencia++;
+    };
+
+    // Marcas grandes: se cortan por categoría para que una ronda entre en un día. El corte usa
+    // la categoría principal, pero el alcance de la sesión matchea CUALQUIER categoría del
+    // producto, así que el grupo se cuenta con esa misma regla y los números coinciden.
+    const conStockPorMarca = new Map();
+    for (const p of productos) {
+      if ((p.stock || 0) <= 0) continue;
+      const marca = p.marca || '(sin marca)';
+      conStockPorMarca.set(marca, (conStockPorMarca.get(marca) || 0) + 1);
+    }
+    const catsDe = (p) => parseCategorias(p.categorias_json);
+    const grandes = new Set([...conStockPorMarca].filter(([, n]) => n > objetivo).map(([m]) => m));
+    for (const p of productos) {
+      const marca = p.marca || '(sin marca)';
+      if (!grandes.has(marca)) { sumar(marca, marca, null, p); continue; }
+      // En una marca grande el producto entra en cada categoría suya que sea candidata:
+      // así el conteo del grupo coincide con lo que la sesión va a traer.
+      const cats = catsDe(p);
+      if (!cats.length) { sumar(marca + '\u0000(sin categoría)', marca, '(sin categoría)', p); continue; }
+      for (const c of cats) sumar(marca + '\u0000' + c, marca, c, p);
+    }
+
+    // Ordena por PROPORCIÓN sin contar, no por cantidad absoluta. Un grupo con 86 nuevos de
+    // 134 obliga a recontar 48 que ya estaban al día: ese tiempo no avanza la cobertura.
+    // Uno de 60 sobre 60 rinde el 100%. Entre dos con la misma proporción gana el más grande,
+    // que cubre más de una sentada; después, el más viejo, y las diferencias previas
+    // desempatan porque ahí es donde el stock se desvía.
+    // Se mide sobre lo que tiene stock: es lo que existe en el local y lo que la cobertura
+    // realmente persigue. Un grupo entero en cero no aporta cobertura aunque nunca se haya
+    // contado.
+    const rinde = (g) => (g.con_stock ? g.nunca_con_stock / g.con_stock : 0);
+    const orden = [...grupos.values()].filter(g => g.con_stock > 0).sort((a, b) => {
+      if (rinde(b) !== rinde(a)) return rinde(b) - rinde(a);
+      if (b.nunca_con_stock !== a.nunca_con_stock) return b.nunca_con_stock - a.nunca_con_stock;
+      const va = a.mas_viejo || '', vb = b.mas_viejo || '';
+      if (va !== vb) return va < vb ? -1 : 1;
+      return b.con_diferencia - a.con_diferencia;
+    });
+
+    const motivo = (g) => (g.nunca_con_stock === g.con_stock ? 'nunca se contó'
+      : g.nunca_con_stock ? `${g.nunca_con_stock} sin contar nunca`
+      : g.mas_viejo ? `sin contar desde ${g.mas_viejo.slice(0, 10)}` : 'pendiente');
+
+    const conMotivo = (g) => ({ ...g, motivo: motivo(g) });
+    const contadosHoy = db.prepare('SELECT COUNT(*) AS n FROM sku_ultimo_conteo WHERE substr(contado_en,1,10)=?').get(hoy).n;
+
+    return res.json({
+      ok: true,
+      objetivo,
+      contados_hoy: contadosHoy,
+      universo: productos.filter(p => (p.stock || 0) > 0).length,
+      nunca_contados: productos.filter(p => (p.stock || 0) > 0 && !p.contado_en).length,
+      sugerencia: orden.length ? conMotivo(orden[0]) : null,
+      siguientes: orden.slice(1, 5).map(conMotivo),
+    });
+  });
+
   router.get('/ubicaciones-stock', (_req, res) => {
     const rows = db.prepare(`SELECT u.*, COUNT(pu.sku) AS skus_registrados
       FROM ubicaciones u LEFT JOIN producto_ubicacion pu ON pu.ubicacion_id=u.id
@@ -341,9 +448,28 @@ export function inventarioRouter(db, wooCfg) {
       WHERE lower(COALESCE(c.sku,'')) LIKE ? OR lower(COALESCE(c.gtin,'')) LIKE ? OR lower(COALESCE(c.nombre,'')) LIKE ?
       ORDER BY CASE WHEN lower(COALESCE(c.sku,'')) = lower(?) THEN 0 ELSE 1 END, c.nombre
       LIMIT ?`).all(term, term, term, q, limit);
+    // Dónde está cada producto y cuántas unidades se vieron en cada lugar.
+    //
+    // Es una FOTO FECHADA, no stock en vivo: sale del último conteo hecho en esa ubicación.
+    // Se eligió así a propósito. Un libro de movimientos daría cantidades exactas, pero
+    // exige que alguien asiente cada traslado del depósito al salón — y eso, hoy, no pasa
+    // (usuario, 2026-09-10). Un número exacto que nadie mantiene miente con más confianza
+    // que una foto que dice cuándo se sacó. Por eso siempre viaja `visto_en`: quien la lee
+    // decide cuánto confiarle.
+    const ubicacionesDe = db.prepare(`
+      SELECT u.id, u.zona, u.estante, pu.principal, pu.confirmado_en AS visto_en,
+        (SELECT t.cantidad FROM inventario_conteos t
+           JOIN inventario_sesiones ses ON ses.id = t.sesion_id
+          WHERE t.sku = pu.sku AND ses.ubicacion_id = u.id
+          ORDER BY t.actualizado_en DESC LIMIT 1) AS unidades_vistas
+      FROM producto_ubicacion pu JOIN ubicaciones u ON u.id = pu.ubicacion_id
+      WHERE pu.sku = ? AND u.activa = 1
+      ORDER BY pu.principal DESC, pu.confirmado_en DESC`);
+
     res.json({ ok: true, actualizado_en: new Date().toISOString(), data: rows.map(row => ({
       ...row, fisico_conocido: null, no_disponible: null, entrante: null,
       stock_publicado_woo: row.disponible_comercial,
+      ubicaciones: ubicacionesDe.all(row.sku),
       frescura: { woo: row.woo_actualizado_en, ml: row.ml_actualizado_en },
     })) });
   });
@@ -364,7 +490,8 @@ export function inventarioRouter(db, wooCfg) {
     return db.prepare(`
       SELECT a.sku, a.nombre, a.bloque, a.stock_inicial, a.marca,
              a.categoria_principal,
-             (SELECT c.stock FROM catalogo_cache c WHERE c.sku=a.sku LIMIT 1) AS stock_actual
+             (SELECT c.stock FROM catalogo_cache c WHERE c.sku=a.sku LIMIT 1) AS stock_actual,
+             (SELECT c.img FROM catalogo_cache c WHERE c.sku=a.sku LIMIT 1) AS img
       FROM inventario_sesion_alcance a
       WHERE a.sesion_id=?
         AND NOT EXISTS (
@@ -385,6 +512,7 @@ export function inventarioRouter(db, wooCfg) {
         categoria_principal: p.categoria_principal,
         stock_inicial: p.stock_inicial,
         stock_woo: p.stock_actual ?? p.stock_inicial,
+        img: p.img || null,
       }));
   }
 
@@ -403,8 +531,22 @@ export function inventarioRouter(db, wooCfg) {
     switch (estadoDeCodigo(item)) {
       case 'desconocido':
         return `El código "${item.ean}" no está en el catálogo. Asocialo a un SKU real o borralo antes de confirmar.`;
-      case 'sin_asociar':
+      case 'sin_asociar': {
+        // Si el código SÍ existe pero está cargado en el producto padre, decirlo con nombre y
+        // apellido: "no está asociado" mandaría a buscar un código que en realidad ya existe.
+        // Se resuelve en cada lectura y no en una columna nueva porque son pocas filas y así
+        // el mensaje sigue siendo correcto aunque el catálogo cambie después.
+        // Por GTIN o por SKU: al padre se puede llegar escaneando su código de barras o
+        // tipeando/leyendo su SKU, y los dos caminos merecen el mismo mensaje.
+        const padre = db.prepare(
+          `SELECT sku, nombre FROM catalogo_cache
+           WHERE (gtin=? OR sku=?) AND (COALESCE(tipo,'')='variable' OR no_contable=1) LIMIT 1`
+        ).get(item.ean, item.ean);
+        if (padre) {
+          return `El código "${item.ean}" está cargado en el producto padre (${padre.sku}), que no tiene stock propio. Elegí la variante que tenés en la mano.`;
+        }
         return `El código "${item.ean}" todavía no está asociado a un SKU.`;
+      }
       case 'fuera_de_alcance':
         return 'Este producto está fuera del alcance de la sesión. Se cuenta igual, revisalo al cerrar.';
       default:
@@ -413,12 +555,24 @@ export function inventarioRouter(db, wooCfg) {
   }
 
   function itemOut(item) {
+    // `nombre` e `img` se resuelven acá porque la confirmación de lectura los necesita: lo
+    // primero que tiene que decir después de un escaneo es QUÉ producto entró. Sin el nombre
+    // mostraba el SKU dos veces, que no le confirma nada a quien está mirando el estante.
+    const prod = item.sku
+      ? db.prepare('SELECT nombre, img FROM catalogo_cache WHERE sku=? LIMIT 1').get(item.sku)
+      : null;
     return {
       ...item,
+      nombre: prod?.nombre || null,
+      img: prod?.img || null,
       sin_asociar: !item.sku,
       fuera_de_alcance: !!item.fuera_de_alcance,
       codigo_desconocido: !!item.codigo_desconocido,
       estado_codigo: estadoDeCodigo(item),
+      // El aviso viaja CON el ítem, no sólo suelto en la respuesta del escaneo: la
+      // confirmación de lectura y la ficha lo necesitan, y así el contrato es el mismo que el
+      // de GET /sesiones/:id, que ya lo incluía por ítem.
+      aviso: avisoDeCodigo(item),
     };
   }
 
@@ -627,19 +781,35 @@ export function inventarioRouter(db, wooCfg) {
     return new Set(rows.map(r => r.sku).filter(sku => skusContables.has(sku)));
   }
 
-  // SKUs que entran en un alcance dado con la semántica OR — SOLO para anti-solape.
-  // `ubicacionId` se UNE (no reemplaza) al resultado de categorias/marcas: en la práctica
-  // un alcance real es uno u otro (ver POST /sesiones, son mutuamente excluyentes), pero
-  // la función acepta ambos para no tener dos caminos de anti-solape distintos.
-  function skusDeAlcanceOr(categorias, marcas, ubicacionId) {
-    const catalogo = db.prepare("SELECT sku, categorias_json, marca FROM catalogo_cache WHERE COALESCE(sku,'')<>''").all();
-    const set = new Set(
-      catalogo
-        .filter(p => productoEnAlcanceOr(parseCategorias(p.categorias_json), p.marca, categorias, marcas))
+  // SKUs que una sesión con ese alcance va a contar realmente — el MISMO criterio que
+  // congelarAlcance: `productoEnAlcance` (Y entre categoría y marca) sobre el catálogo
+  // contable. Es lo que se compara para detectar solape.
+  //
+  // Antes esto usaba la semántica O (`productoEnAlcanceOr`) sobre el catálogo entero, con el
+  // argumento de ser conservador. El resultado era bloquear por productos que NINGUNA de las
+  // dos sesiones iba a tocar: el 2026-09-10 una ronda Shimano·TRANSMISIÓN quedó frenada por
+  // una sesión CASCOS·Giro a causa de FB-2419, FB-4751 y FB-5530 — repuestos Shimano
+  // categorizados en CASCOS. Con la regla Y ninguna de las dos sesiones los cuenta (no son
+  // TRANSMISIÓN, no son Giro), así que no hay nada que proteger y el bloqueo era falso.
+  // Comparar los alcances reales no afloja la protección: si dos sesiones van a tocar el
+  // mismo SKU, ese SKU está en los dos conjuntos y el choque se detecta igual — incluido el
+  // caso que motivó el O (una sesión por categoría y otra por marca que comparten un
+  // producto, ej. "Casco Bell" entre categoria=Cascos y marca=Bell).
+  //
+  // `ubicacionId` sólo aporta SKUs cuando define el alcance, o sea cuando no hay categoría ni
+  // marca. Si las hay, la ubicación es el lugar donde se cuenta y no debería bloquear a otra
+  // persona que cuenta otra marca en el mismo estante.
+  function skusDeAlcance(categorias, marcas, ubicacionId) {
+    // parseLista y no `.length`: acá los alcances llegan desde la base como JSON ('[]' mide
+    // 2 y sería un falso "tiene categorías"), y desde el request como array.
+    const cats = parseLista(categorias);
+    const mrcs = parseLista(marcas);
+    if (ubicacionId != null && !cats.length && !mrcs.length) return skusDeUbicacion(ubicacionId);
+    return new Set(
+      catalogoContable()
+        .filter(p => productoEnAlcance(parseCategorias(p.categorias_json), p.marca, cats, mrcs))
         .map(p => p.sku)
     );
-    for (const sku of skusDeUbicacion(ubicacionId)) set.add(sku);
-    return set;
   }
 
   // Dos alcances se solapan si existe AL MENOS UN producto real que entra en ambos —
@@ -648,19 +818,38 @@ export function inventarioRouter(db, wooCfg) {
   // (ej. "Casco Bell") sin que ningún campo coincida literalmente entre las dos. Mismo
   // criterio aplica a ubicación: una sesión por ubicación y otra por marca pueden compartir
   // SKUs sin que ningún campo coincida literalmente.
-  // Semántica OR intencional (conservadora): se mantiene sin cambios.
   function sesionesSolapan(a, b) {
     // Fase 2 (hallazgo del revisor): una ubicación recién creada, todavía sin ningún SKU
     // asociado (bootstrap), da skusDeUbicacion vacío — el chequeo por SKU de abajo no
     // detectaría que dos personas abrieron sesión sobre la MISMA ubicación física. El
     // solape por ubicación se decide por el id, no solo por los SKUs que ya tiene.
-    if (a.ubicacion_id != null && a.ubicacion_id === b.ubicacion_id) return true;
-    const skusA = skusDeAlcanceOr(a.categorias, a.marcas, a.ubicacion_id);
+    // Sólo cuando la ubicación ES el alcance: dos barridos completos del mismo estante se
+    // pisan, pero contar Giro y contar Bell parados en el mismo estante, no.
+    const alcanceEsUbicacion = (x) => x.ubicacion_id != null && !parseLista(x.categorias).length && !parseLista(x.marcas).length;
+    if (a.ubicacion_id != null && a.ubicacion_id === b.ubicacion_id
+        && alcanceEsUbicacion(a) && alcanceEsUbicacion(b)) return true;
+    const skusA = skusDeAlcance(a.categorias, a.marcas, a.ubicacion_id);
     if (!skusA.size) return false;
-    for (const sku of skusDeAlcanceOr(b.categorias, b.marcas, b.ubicacion_id)) {
+    for (const sku of skusDeAlcance(b.categorias, b.marcas, b.ubicacion_id)) {
       if (skusA.has(sku)) return true;
     }
     return false;
+  }
+
+  // Los productos que provocan el choque, para poder mostrarlos en el 409. Mismo criterio
+  // que sesionesSolapan, sólo que en vez de cortar en el primero los junta.
+  function productosDelCruce(a, b, limite = 5) {
+    const skusA = skusDeAlcance(a.categorias, a.marcas, a.ubicacion_id);
+    const comunes = [...skusDeAlcance(b.categorias, b.marcas, b.ubicacion_id)].filter(sku => skusA.has(sku));
+    if (!comunes.length) return { total: 0, ejemplos: [] };
+    const marcadores = comunes.slice(0, limite).map(() => '?').join(',');
+    const ejemplos = db.prepare(
+      `SELECT sku, nombre, marca, categorias_json, stock FROM catalogo_cache WHERE sku IN (${marcadores})`
+    ).all(...comunes.slice(0, limite)).map(p => ({
+      sku: p.sku, nombre: p.nombre, marca: p.marca, stock: p.stock,
+      categoria: parseCategorias(p.categorias_json)[0] || null,
+    }));
+    return { total: comunes.length, ejemplos };
   }
 
   const insertAlcance = db.prepare(`INSERT OR IGNORE INTO inventario_sesion_alcance
@@ -669,8 +858,16 @@ export function inventarioRouter(db, wooCfg) {
   // Congela el alcance de la sesión (qué SKUs y en qué bloque). Se llama al crear
   // la sesión; también de forma perezosa al leer una sesión abierta creada antes
   // de esta versión (o migrada desde el esquema string), para no romperlas.
+  // Cuando hay categoría o marca, la ubicación NO define el alcance: sólo dice dónde está
+  // parado el operario, para que lo que escanee quede mapeado ahí (ver capturarUbicacion).
+  // La ubicación sola sigue significando barrido completo de esa zona, como antes.
+  //
+  // Antes las dos cosas eran mutuamente excluyentes y el mapeo nunca se llenó: al 2026-09-10
+  // había 0 de 33 sesiones con ubicación y 0 productos mapeados, porque en la tienda se
+  // cuenta por marca y elegir ubicación obligaba a abandonar esa forma de contar.
   function congelarAlcance(sesionId, categorias, marcas, ubicacionId) {
-    const enAlcance = ubicacionId
+    const porCatalogo = categorias.length || marcas.length;
+    const enAlcance = (ubicacionId && !porCatalogo)
       ? (() => { const set = skusDeUbicacion(ubicacionId); return catalogoContable().filter(p => set.has(p.sku)); })()
       : catalogoContable().filter(p => productoEnAlcance(parseCategorias(p.categorias_json), p.marca, categorias, marcas));
     const escribir = db.transaction(filas => {
@@ -743,9 +940,8 @@ export function inventarioRouter(db, wooCfg) {
     // físico), no una tercera dimensión que se combine con categoria/marca — mezclarlas
     // exigiría definir semántica AND/OR nueva que el plan no especifica todavía (queda
     // para el planificador de ciclos, Fase 4). Por ahora es uno u otro.
-    if (ubicacionId != null && (categorias.length || marcas.length)) {
-      return res.status(400).json({ ok: false, error: 'Elegí categoría/marca O ubicación, no ambas.' });
-    }
+    // Se pueden combinar: la categoría/marca dice QUÉ se cuenta y la ubicación DÓNDE se está
+    // parado, para que el mapeo se llene con el conteo que ya se hace.
     if (ubicacionId == null && !categorias.length && !marcas.length) {
       return res.status(400).json({ ok: false, error: 'Elegí categoría, marca o ubicación para el alcance.' });
     }
@@ -769,9 +965,16 @@ export function inventarioRouter(db, wooCfg) {
     const nueva = { categorias, marcas, ubicacion_id: ubicacionId };
     const choque = abiertas.find(s => sesionesSolapan(s, nueva));
     if (choque) {
+      // Los SKUs concretos del cruce. Sin esto el 409 dice "se cruza" y no hay forma de
+      // saber por qué: el 2026-09-10 una ronda Shimano·TRANSMISIÓN quedó frenada por una
+      // sesión de CASCOS·Giro a causa de 3 repuestos Shimano mal categorizados en CASCOS,
+      // y hubo que salir a buscarlo a la base.
+      const productos = productosDelCruce(choque, nueva);
       return res.status(409).json({
         ok: false,
         error: `El alcance se cruza con la sesión de ${choque.usuario}.`,
+        productos_en_comun: productos.total,
+        ejemplos: productos.ejemplos,
         ocupada_por: choque.usuario,
         ocupada_por_sesion_id: choque.id,
         ocupada_por_estado: choque.estado,
@@ -806,11 +1009,19 @@ export function inventarioRouter(db, wooCfg) {
     // escaneo, no conviene compilar y correr un SELECT por ítem contado.
     // Resolución determinista (subselect LIMIT 1) para evitar duplicar ítems si
     // hay SKU homónimos en catalogo_cache.
+    // `img`, `marca` y la categoría viajan para que la pantalla pueda dibujar UNA sola lista
+    // ordenada por producto: contar algo no lo mueve de lugar, y para eso la fila contada
+    // necesita las mismas claves de orden que la pendiente. La foto existe para el 99% del
+    // catálogo (4.560 de 4.588) y hasta ahora no se usaba en ninguna pantalla de conteo.
     const conteos = db.prepare(`
       SELECT t.*,
              (SELECT sku FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_sku,
              (SELECT stock FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_stock,
-             (SELECT nombre FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_nombre
+             (SELECT nombre FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_nombre,
+             (SELECT img FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_img,
+             (SELECT marca FROM catalogo_cache WHERE sku = t.sku LIMIT 1) AS prod_marca,
+             (SELECT categoria_principal FROM inventario_sesion_alcance
+               WHERE sesion_id = t.sesion_id AND sku = t.sku LIMIT 1) AS prod_categoria
       FROM inventario_conteos t
       WHERE t.sesion_id = ?
       ORDER BY t.id
@@ -820,6 +1031,9 @@ export function inventarioRouter(db, wooCfg) {
       return {
         id: c.id, ean: c.ean, sku: c.sku, cantidad: c.cantidad,
         nombre: c.prod_nombre || null,
+        img: c.prod_img || null,
+        marca: c.prod_marca || null,
+        categoria_principal: c.prod_categoria || null,
         stock_woo: enCatalogo ? c.prod_stock : null,
         diferencia: enCatalogo ? c.cantidad - c.prod_stock : null,
         bloque: c.bloque || null,
@@ -837,17 +1051,49 @@ export function inventarioRouter(db, wooCfg) {
     // viene congelado del snapshot, no se recalcula contra el stock actual.
     const pendientes = pendientesDeSesion(sesion.id);
 
+    // CONTEO A CIEGAS (decisión del usuario, 2026-09-11). Mientras la sesión está abierta, un
+    // producto que todavía no se contó viaja SIN su cantidad esperada: ni `stock_inicial`, ni
+    // `stock_actual`, ni `bloque` — el bloque con_stock/sin_stock delata el número igual de
+    // bien que el número mismo. La práctica de cycle counting detecta 20-30% más diferencias
+    // sin ese anclaje. El gate de /confirmar sigue mirando el bloque del lado del servidor: lo
+    // que cambia es qué sale por la API, no qué sabe el sistema.
+    //
+    // Con la sesión cerrada se manda todo: ahí ya no hay conteo que anclar y lo que se está
+    // haciendo es auditar lo que pasó.
+    const abierta = sesion.estado === 'abierta';
+    // Ojo con el ORDEN, no sólo con los campos: `pendientesDeSesion` ordena `con_stock`
+    // primero, así que la lista delata el bloque aunque el bloque no viaje. A ciegas se
+    // reordena por categoría → marca → nombre, que es cómo está acomodado el local.
+    const sinAnclaje = (a, b) =>
+      String(a.categoria_principal || '').localeCompare(String(b.categoria_principal || ''), 'es')
+      || String(a.marca || '').localeCompare(String(b.marca || ''), 'es')
+      || String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es');
+    const pendientesOut = abierta
+      ? pendientes
+        // Los nombres con guion bajo son la convención del linter para "descartado a
+        // propósito": esta desestructuración existe sólo para sacar esos cuatro campos.
+        .map(({ stock_inicial: _si, stock_actual: _sa, stock_woo: _sw, bloque: _b, ...resto }) => resto)
+        .sort(sinAnclaje)
+      : pendientes;
+
     res.json({
       ok: true,
       sesion: sesionOut(sesion),
       items,
-      pendientes,
-      resumen: {
-        pendientes_con_stock: pendientes.filter(p => p.bloque === 'con_stock').length,
-        pendientes_sin_stock: pendientes.filter(p => p.bloque === 'sin_stock').length,
-        fuera_de_alcance: items.filter(i => i.fuera_de_alcance).length,
-        codigos_desconocidos: items.filter(i => i.codigo_desconocido).length,
-      },
+      pendientes: pendientesOut,
+      resumen: abierta
+        ? {
+          pendientes: pendientes.length,
+          fuera_de_alcance: items.filter(i => i.fuera_de_alcance).length,
+          codigos_desconocidos: items.filter(i => i.codigo_desconocido).length,
+        }
+        : {
+          pendientes: pendientes.length,
+          pendientes_con_stock: pendientes.filter(p => p.bloque === 'con_stock').length,
+          pendientes_sin_stock: pendientes.filter(p => p.bloque === 'sin_stock').length,
+          fuera_de_alcance: items.filter(i => i.fuera_de_alcance).length,
+          codigos_desconocidos: items.filter(i => i.codigo_desconocido).length,
+        },
     });
   });
 
@@ -861,6 +1107,8 @@ export function inventarioRouter(db, wooCfg) {
     if (!codigo) return res.status(400).json({ ok: false, error: 'Código requerido' });
 
     let ean, sku;
+    // Guarda el SKU del padre cuando el código estaba cargado ahí, sólo para poder explicarlo.
+    let skuEnPadre = null;
     if (looksLikeEan(codigo)) {
       ean = codigo;
       const catalogado = db.prepare('SELECT sku FROM catalogo_cache WHERE gtin=?').get(ean)
@@ -869,6 +1117,29 @@ export function inventarioRouter(db, wooCfg) {
     } else {
       ean = codigo; // se guarda igual como "código leído" aunque sea SKU, para tener una clave única por fila
       sku = codigo;
+    }
+
+    // Un código cargado en el producto PADRE (`tipo='variable'`) no se cuenta contra el padre.
+    // Un padre no tiene stock propio —lo tienen sus variantes— así que el alcance ad hoc lo
+    // excluye y la fila quedaría sin `stock_inicial`: el error recién aparecería al CERRAR la
+    // sesión, con «stockInicial requerido», cuando ya es tarde y el operario no está.
+    //
+    // Caso real (sesión 34, 2026-09-11): la Caja Pedalera Un300 tiene el código en el padre y
+    // el stock en tres variantes, que además YA estaban contadas — esa lectura era la misma
+    // unidad contada dos veces. `/asociar` ya rechazaba un SKU variable con un mensaje claro;
+    // esto cierra la misma puerta en el otro camino de entrada.
+    //
+    // Se deja como "sin asociar" en vez de rechazarlo: el producto es real y el operario lo
+    // tiene en la mano. La pantalla abre el buscador para que elija la variante correcta, y de
+    // paso el código queda bien cargado para la próxima.
+    if (sku) {
+      const prodResuelto = db.prepare(
+        "SELECT tipo, no_contable FROM catalogo_cache WHERE sku=? LIMIT 1"
+      ).get(sku);
+      if (prodResuelto && (String(prodResuelto.tipo || '') === 'variable' || prodResuelto.no_contable)) {
+        skuEnPadre = sku;
+        sku = null;
+      }
     }
 
     // Código que NO existe en el catálogo: es un caso distinto de "fuera de alcance".
@@ -990,10 +1261,38 @@ export function inventarioRouter(db, wooCfg) {
 
     // El SKU ya se validó contra el catálogo más arriba, así que el ítem deja de
     // ser un "código desconocido" y pasa a ser un conteo real.
-    const cambio = db.prepare('UPDATE inventario_conteos SET sku=?, bloque=?, fuera_de_alcance=?, codigo_desconocido=0, actualizado_en=? WHERE sesion_id=? AND ean=?')
-      .run(sku, alcance?.bloque || null, alcance ? 0 : 1, now(), sesion.id, ean);
-    if (cambio.changes === 0) {
+    //
+    // FUSIÓN (2026-09-11). Antes esto era un UPDATE directo del sku sobre la fila del EAN, sin
+    // mirar si la sesión YA tenía una fila con ese mismo SKU. `/escanear` deduplica por SKU
+    // desde el 2026-08-25, pero ese dedup no puede actuar cuando el código todavía no resuelve:
+    // el escaneo crea una fila con sku=null y es este endpoint el que le pone el SKU después.
+    // Resultado real (sesión 33, casco Giro FB-67121, 2026-09-08): a las 14:42 se contó a mano
+    // por SKU (cantidad 2) y a las 14:56 se escaneó su EAN sin asociar; al asociarlo quedaron
+    // DOS filas del mismo producto, cada una con su propia diferencia, y el stock se publicó en
+    // 0 teniendo las 3 unidades. Ahora, si ya hay una fila con ese SKU, se le suma la cantidad
+    // y la fila del EAN se elimina: un producto, una fila.
+    const filaEan = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
+    if (!filaEan) {
       return res.status(404).json({ ok: false, error: 'No hay ningún ítem escaneado con ese EAN en esta sesión' });
+    }
+    // `ajustado_en IS NULL` en la gemela: una fila que ya se escribió a Woo no se toca — sumarle
+    // acá haría que un reintento de /confirmar aplique de nuevo un delta ya aplicado.
+    const gemela = db.prepare(
+      'SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=? AND id<>? AND ajustado_en IS NULL'
+    ).get(sesion.id, sku, filaEan.id);
+    // Id de la fila que queda viva: la gemela si hubo fusión, si no la del propio EAN. Todo lo
+    // que sigue (corrección de bloque, respuesta) se resuelve por id y no por `ean`, porque
+    // después de fundir esa fila ya no existe.
+    const filaFinalId = gemela ? gemela.id : filaEan.id;
+    if (gemela) {
+      db.transaction(() => {
+        db.prepare('UPDATE inventario_conteos SET cantidad=cantidad+?, confirmado_por_omision=0, actualizado_en=? WHERE id=?')
+          .run(filaEan.cantidad || 0, now(), gemela.id);
+        db.prepare('DELETE FROM inventario_conteos WHERE id=?').run(filaEan.id);
+      })();
+    } else {
+      db.prepare('UPDATE inventario_conteos SET sku=?, bloque=?, fuera_de_alcance=?, codigo_desconocido=0, actualizado_en=? WHERE id=?')
+        .run(sku, alcance?.bloque || null, alcance ? 0 : 1, now(), filaEan.id);
     }
 
     // El ítem existe: ahora sí es seguro congelar el alcance si todavía no estaba.
@@ -1008,8 +1307,7 @@ export function inventarioRouter(db, wooCfg) {
       alcance = db.prepare('SELECT bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(sesion.id, sku);
       // Si el bloque cambió respecto del que usamos en el UPDATE, corregirlo ahora.
       if (alcance?.bloque) {
-        db.prepare('UPDATE inventario_conteos SET bloque=? WHERE sesion_id=? AND ean=?')
-          .run(alcance.bloque, sesion.id, ean);
+        db.prepare('UPDATE inventario_conteos SET bloque=? WHERE id=?').run(alcance.bloque, filaFinalId);
       }
     }
     if (sesion.ubicacion_id) capturarUbicacion(sesion.ubicacion_id, sku, req.user?.username);
@@ -1055,8 +1353,8 @@ export function inventarioRouter(db, wooCfg) {
       return { estado: 'subido', gtin };
     }
 
-    const item = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND ean=?').get(sesion.id, ean);
-    res.json({ ok: true, item: itemOut(item), codigo });
+    const item = db.prepare('SELECT * FROM inventario_conteos WHERE id=?').get(filaFinalId);
+    res.json({ ok: true, item: itemOut(item), fusionado: Boolean(gemela), codigo });
   });
 
   router.delete('/sesiones/:id/items/:itemId', (req, res) => {
@@ -1238,6 +1536,13 @@ export function inventarioRouter(db, wooCfg) {
       ? db.prepare('SELECT * FROM inventario_sesiones WHERE id=?').get(req.params.id)
       : getSesion(req.params.id, req.user?.username);
     if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    // Una sesión ya confirmada responde OK en vez de 400: desde que el admin puede resolver
+    // las diferencias desde su pantalla (2026-09-10), la sesión puede cerrarse sola mientras
+    // quien contaba todavía tiene abierta la vista con el botón "Confirmar". Ese reintento no
+    // es un error del operario —el trabajo está hecho— y no toca nada: es idempotente.
+    if (sesion.estado === 'confirmada') {
+      return res.json({ ok: true, ya_confirmada: true, ajustados: 0, fallidos: 0, sesion: sesionOut(sesion) });
+    }
     if (sesion.estado !== 'abierta' && sesion.estado !== 'confirmada_con_errores') {
       return res.status(400).json({ ok: false, error: 'La sesión no admite confirmar/reintentar en su estado actual' });
     }
@@ -1321,7 +1626,7 @@ export function inventarioRouter(db, wooCfg) {
         const pendiente = (stockInicial !== null && stockInicial !== undefined)
           ? diferenciaSobrantePendiente.get(sesion.id, item.sku)
           : null;
-        if (pendiente && !req.user?.is_admin) {
+        if (pendiente) {
           fallidos++;
           errores.push({
             sku: item.sku,
@@ -1418,15 +1723,88 @@ export function inventarioRouter(db, wooCfg) {
   });
 
   // ─── Diferencias (Fase 0, Tarea 2) — freno por sobrante ──────────────────────
+  // Una diferencia pendiente puede estar en dos situaciones muy distintas, y la pantalla
+  // tiene que poder separarlas (2026-09-10): al día de hoy, 5 de los 8 sobrantes pendientes
+  // YA tienen su conteo ajustado (`ajustado_en`) y el stock de Woo ya coincide con lo contado
+  // — alguien lo aplicó después (típicamente con "Confirmar ajuste como administrador", que
+  // ajusta pero no marca la diferencia como revisada) y quedó el aviso colgado. Autorizar uno
+  // de esos no duplica stock, porque setStockWcDelta corta cuando el stock live subió respecto
+  // del inicial, pero devuelve un 502 incomprensible para quien lo aprieta.
   router.get('/diferencias/pendientes', (req, res) => {
     const rows = db.prepare(`
-      SELECT d.*, c.nombre, c.marca
+      SELECT d.*, c.nombre, c.marca, c.stock AS stock_actual,
+             (SELECT t.ajustado_en FROM inventario_conteos t
+               WHERE t.sesion_id=d.sesion_id AND t.sku=d.sku ORDER BY t.id DESC LIMIT 1) AS ajustado_en
       FROM inventario_diferencias d
       LEFT JOIN catalogo_cache c ON c.sku = d.sku
       WHERE d.requiere_revision=1 AND d.revisado_en IS NULL AND d.tipo='sobrante'
+        AND d.id = (
+          SELECT MAX(dup.id) FROM inventario_diferencias dup
+          WHERE dup.sesion_id=d.sesion_id AND dup.sku=d.sku
+            AND dup.tipo='sobrante' AND dup.requiere_revision=1 AND dup.revisado_en IS NULL
+        )
       ORDER BY d.creado_en
     `).all();
-    res.json({ ok: true, pendientes: rows });
+    res.json({ ok: true, pendientes: rows.map(r => ({ ...r, ya_aplicado: !!r.ajustado_en })) });
+  });
+
+  // Diferencias de UNA sesión, para que el historial deje de ser sólo lectura. Hasta ahora las
+  // diferencias sólo se veían agregadas en la tarjeta de auditoría del inicio, sin poder
+  // atribuirlas a la ronda que las produjo: las 10 últimas sesiones acumulan 139 diferencias
+  // por $29 M y no había forma de preguntar "¿qué pasó en la sesión de Shimano?".
+  router.get('/sesiones/:id/diferencias', (req, res) => {
+    const sesion = req.user?.is_admin
+      ? db.prepare('SELECT id FROM inventario_sesiones WHERE id=?').get(req.params.id)
+      : getSesion(req.params.id, req.user?.username);
+    if (!sesion) return res.status(404).json({ ok: false, error: 'Sesión no encontrada' });
+    const filas = db.prepare(`
+      SELECT d.id, d.sku, d.tipo, d.cantidad_esperada, d.cantidad_contada, d.diferencia,
+             d.valor_diferencia, d.requiere_revision, d.revisado_en, d.revisado_por, d.creado_en,
+             c.nombre, c.marca, c.img, c.stock AS stock_actual
+      FROM inventario_diferencias d
+      LEFT JOIN catalogo_cache c ON c.sku = d.sku
+      WHERE d.sesion_id = ?
+      ORDER BY d.valor_diferencia DESC
+    `).all(sesion.id);
+    res.json({
+      ok: true,
+      diferencias: filas,
+      total_valor: filas.reduce((a, f) => a + Number(f.valor_diferencia || 0), 0),
+      faltantes: filas.filter(f => f.tipo === 'faltante').length,
+      sobrantes: filas.filter(f => f.tipo === 'sobrante').length,
+    });
+  });
+
+  // Faltantes que se aplicaron solos: el stock se mandó a cero sin que nadie lo autorizara.
+  //
+  // Es a propósito (decisión del usuario, 2026-09-10): frenarlos agregaría una cola de
+  // aprobaciones diaria. Pero quedan a la vista para auditar, porque el riesgo es real y
+  // conocido: hay movimiento entre depósito y salón que nadie asienta, así que un producto
+  // contado en un lugar y guardado en el otro se publica en cero y deja de venderse. Al
+  // 2026-09-10 eran 77 casos por $138.311.232, de los cuales 48 el propio sistema los había
+  // marcado `requiere_revision=1` y se aplicaron igual.
+  //
+  // Se ordenan por valor: lo que duele es la bici de millones, no el casco suelto.
+  router.get('/diferencias/aplicadas', (req, res) => {
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 30, 1), 365);
+    const desde = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString();
+    const rows = db.prepare(`
+      SELECT d.id, d.sesion_id, d.sku, d.cantidad_esperada, d.cantidad_contada, d.diferencia,
+             d.valor_diferencia, d.requiere_revision, d.creado_en,
+             c.nombre, c.marca, c.stock AS stock_actual,
+             s.usuario, s.confirmado_en
+      FROM inventario_diferencias d
+      LEFT JOIN catalogo_cache c ON c.sku = d.sku
+      LEFT JOIN inventario_sesiones s ON s.id = d.sesion_id
+      WHERE d.tipo='faltante' AND d.creado_en >= ?
+      ORDER BY d.valor_diferencia DESC
+      LIMIT 200
+    `).all(desde);
+    const total = rows.reduce((a, r) => a + Number(r.valor_diferencia || 0), 0);
+    // `en_cero` se separa del total porque no es lo mismo un conteo parcial (contó 3 de 10,
+    // el resto puede estar en otro estante) que un producto que no apareció en ningún lado.
+    const enCero = rows.filter(r => Number(r.cantidad_contada) === 0).length;
+    res.json({ ok: true, dias, total_valor: total, cantidad: rows.length, en_cero: enCero, aplicadas: rows });
   });
 
   // Una sesión cae en 'confirmada_con_errores' cuando al confirmar quedó al menos un ítem
@@ -1456,7 +1834,38 @@ export function inventarioRouter(db, wooCfg) {
     if (fila.tipo !== 'sobrante') {
       return res.status(400).json({ ok: false, error: 'Solo los sobrantes requieren aprobación; los faltantes ya se ajustaron automáticamente al confirmar la sesión' });
     }
+    // Si el conteo de esa sesión ya se ajustó, el stock de Woo ya refleja lo contado y no hay
+    // nada que aplicar: autorizar acá sólo cierra el aviso. Volver a llamar a setStockWcDelta
+    // no duplicaría el stock (corta con "el stock aumentó durante el conteo"), pero le
+    // devolvería un 502 a quien aprieta el botón por un trabajo que ya está hecho.
+    const yaAjustado = db.prepare(`SELECT ajustado_en FROM inventario_conteos
+      WHERE sesion_id=? AND sku=? ORDER BY id DESC LIMIT 1`).get(fila.sesion_id, fila.sku)?.ajustado_en;
+    if (yaAjustado) {
+      db.prepare('UPDATE inventario_diferencias SET revisado_en=?, revisado_por=? WHERE id=?')
+        .run(now(), req.user?.username || null, fila.id);
+      recomputarEstadoSesion(fila.sesion_id);
+      return res.json({ ok: true, ya_aplicado: true, ajustado_en: yaAjustado });
+    }
+
     try {
+      // Si el stock actual ya coincide con el conteo físico, el aumento vino de una
+      // operación externa durante la sesión (recepción, ajuste, etc.). La autorización
+      // valida esa conciliación y debe cerrar el caso SIN otro PUT, que duplicaría stock.
+      const stockLive = await getStockLiveWc(wooCfg, db, fila.sku);
+      if (stockLive === fila.cantidad_contada) {
+        const ts = now();
+        db.transaction(() => {
+          db.prepare(`UPDATE inventario_diferencias
+            SET revisado_en=?, revisado_por=?
+            WHERE sesion_id=? AND sku=? AND tipo='sobrante' AND requiere_revision=1 AND revisado_en IS NULL`)
+            .run(ts, req.user?.username || null, fila.sesion_id, fila.sku);
+          db.prepare(`UPDATE inventario_conteos SET ajustado_en=?
+            WHERE sesion_id=? AND sku=? AND ajustado_en IS NULL`)
+            .run(ts, fila.sesion_id, fila.sku);
+        })();
+        recomputarEstadoSesion(fila.sesion_id);
+        return res.json({ ok: true, ya_conciliado: true, stock_live: stockLive });
+      }
       // Reconstruye el mismo llamado que se hubiera hecho al confirmar, con los datos
       // que quedaron congelados en la fila (sesion_id, sku, cantidad_contada, stock_inicial_usado).
       const resultado = await setStockWcDelta(wooCfg, db, fila.sku, fila.cantidad_contada, fila.stock_inicial_usado);
@@ -1498,8 +1907,16 @@ export function inventarioRouter(db, wooCfg) {
       .run(now(), req.user?.username || null, fila.id);
     db.prepare('DELETE FROM inventario_conteos WHERE sesion_id=? AND sku=? AND ajustado_en IS NULL')
       .run(fila.sesion_id, fila.sku);
-    // Nota: no llamamos recomputarEstadoSesion acá — el flujo de rechazar cierra la sesión
-    // vía /confirmar (que sí la promueve), preservando la confirmación explícita del usuario.
+    // Antes no se recomputaba acá, con el argumento de que rechazar cierra la sesión vía
+    // /confirmar y así se preserva la confirmación explícita del usuario. Ese argumento sólo
+    // valía cuando la misma persona que contaba reintentaba /confirmar. Desde que existe la
+    // pantalla de autorización (2026-09-10), quien resuelve es el admin desde otra vista y
+    // nunca pasa por /confirmar: la sesión quedaba con 0 conteos sin ajustar pero seguía en
+    // 'confirmada_con_errores', o sea seguía bloqueando el anti-solape de cualquier alcance
+    // que se cruzara — exactamente el problema que la pantalla venía a resolver.
+    // recomputarEstadoSesion sólo promueve cuando no queda nada sin ajustar, así que no
+    // adelanta ningún cierre: si algo sigue pendiente, la sesión no se mueve.
+    recomputarEstadoSesion(fila.sesion_id);
     res.json({ ok: true });
   });
 

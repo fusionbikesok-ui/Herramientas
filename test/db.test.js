@@ -118,6 +118,8 @@ describe('db schema', () => {
       'pick_wave_shortages',
       'pick_waves',
       'preferencias_notificacion',
+      'preparacion_devolucion_items',
+      'preparacion_devoluciones',
       'preparacion_fotos_holds',
       'producto_fusion_atributos',
       'productos_fusion',

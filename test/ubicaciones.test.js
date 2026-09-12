@@ -88,13 +88,21 @@ describe('ubicaciones — CRUD', () => {
 });
 
 describe('sesión con alcance por ubicación', () => {
-  it('categoria/marca Y ubicacion_id juntos se rechazan (mutuamente excluyentes)', async () => {
+  // Regla invertida el 2026-09-10 por decisión del usuario. Antes elegir ubicación era
+  // mutuamente excluyente con categoría/marca y obligaba a barrer la zona entera; como en la
+  // tienda se cuenta por marca, la opción quedó muerta: 0 de 33 sesiones con ubicación y 0
+  // productos mapeados. Ahora la marca dice QUÉ se cuenta y la ubicación DÓNDE está parado el
+  // operario, que es lo que llena el mapeo aprovechando el trabajo que ya se hace.
+  it('categoria/marca Y ubicacion_id se combinan: la marca dice qué se cuenta, la ubicación dónde', async () => {
     const db = openDb(TEST_DB);
     const app = buildApp(db);
     const crear = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'A', estante: '1' });
     const res = await request(app).post('/api/inventario/sesiones')
       .send({ marcas: ['Trek'], ubicacion_id: crear.body.ubicacion.id });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const sesion = db.prepare('SELECT marcas, ubicacion_id FROM inventario_sesiones WHERE id=?').get(res.body.sesion.id);
+    expect(JSON.parse(sesion.marcas)).toEqual(['Trek']);
+    expect(sesion.ubicacion_id).toBe(crear.body.ubicacion.id);
   });
 
   it('rechaza ubicacion_id inexistente o inactiva', async () => {

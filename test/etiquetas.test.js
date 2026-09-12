@@ -189,3 +189,51 @@ describe('etiquetas cola', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ─── Alta masiva desde el conteo y el historial ───────────────────────────────
+// Pedido del usuario (2026-09-11): poder mandar a imprimir las etiquetas con los SKU desde el
+// conteo y desde el historial. `POST /cola` acepta un SKU por llamada: mandar los 137 productos
+// de una ronda serían 137 pedidos. Y tocar dos veces el botón no puede duplicar la etiqueta.
+describe('Etiquetas — alta en lote desde una sesión de conteo', () => {
+  it('crea una fila por SKU y responde cuántas creó', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    const r = await request(app).post('/api/etiquetas/cola/lote')
+      .send({ skus: ['FB-1', 'FB-2', 'FB-3'], origen: 'conteo', sesion_id: 42 });
+    expect(r.status).toBe(200);
+    expect(r.body.creadas).toBe(3);
+    expect(r.body.repetidas).toBe(0);
+    const filas = db.prepare("SELECT * FROM etiquetas_cola WHERE origen='conteo' ORDER BY sku").all();
+    expect(filas.map(f => f.sku)).toEqual(['FB-1', 'FB-2', 'FB-3']);
+    expect(filas.every(f => f.cantidad === 1)).toBe(true); // una etiqueta por producto, no por unidad
+    expect(filas.every(f => f.sesion_id === 42)).toBe(true);
+  });
+
+  it('mandar la misma sesión dos veces no duplica: las repetidas se informan', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    await request(app).post('/api/etiquetas/cola/lote').send({ skus: ['FB-1', 'FB-2'], origen: 'conteo', sesion_id: 7 });
+    const r = await request(app).post('/api/etiquetas/cola/lote')
+      .send({ skus: ['FB-1', 'FB-2', 'FB-9'], origen: 'conteo', sesion_id: 7 });
+    expect(r.status).toBe(200);
+    expect(r.body.creadas).toBe(1);
+    expect(r.body.repetidas).toBe(2);
+    expect(db.prepare("SELECT COUNT(*) n FROM etiquetas_cola WHERE sesion_id=7").get().n).toBe(3);
+  });
+
+  it('una etiqueta ya impresa no bloquea volver a pedirla', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    await request(app).post('/api/etiquetas/cola/lote').send({ skus: ['FB-1'], origen: 'conteo', sesion_id: 3 });
+    db.prepare("UPDATE etiquetas_cola SET estado='impresa' WHERE sesion_id=3").run();
+    const r = await request(app).post('/api/etiquetas/cola/lote').send({ skus: ['FB-1'], origen: 'conteo', sesion_id: 3 });
+    expect(r.body.creadas).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM etiquetas_cola WHERE sesion_id=3").get().n).toBe(2);
+  });
+
+  it('rechaza una lista vacía', async () => {
+    const db = openDb(TEST_DB);
+    const r = await request(buildApp(db)).post('/api/etiquetas/cola/lote').send({ skus: [] });
+    expect(r.status).toBe(400);
+  });
+});

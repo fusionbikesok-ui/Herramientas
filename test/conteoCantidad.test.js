@@ -227,3 +227,43 @@ describe('conteoCantidad.js (ConteoCantidad)', () => {
   });
 
 });
+
+// ── Guarda de call site (2026-09-11) ────────────────────────────────────────
+// El rediseño de la ficha copió la lógica del control de cantidad y leyó el
+// resultado como `decision.cantidad`, una propiedad que este módulo NUNCA
+// devolvió (se llama `valorEnviar`). Resultado: el PATCH viajaba con el cuerpo
+// vacío, el servidor contestaba 400 y tipear una cantidad a mano no guardaba
+// nada — el número volvía solo al valor anterior, en teléfono y en escritorio.
+// Es un error que ningún test del módulo puede ver, porque el módulo estaba
+// bien: lo que estaba mal era quién lo leía. Por eso se verifica el call site.
+describe('conteoCantidad — el contador lee propiedades que existen', () => {
+  const html = readFileSync(path.join(__dirname, '../public/inventario/index.html'), 'utf8');
+
+  it('decidirCantidadAEnviar no expone `cantidad` (el nombre es `valorEnviar`)', () => {
+    const ConteoCantidad = loadConteoCantidad();
+    const r = ConteoCantidad.decidirCantidadAEnviar(1, '9');
+    expect(r.enviar).toBe(true);
+    expect(r.valorEnviar).toBe(9);
+    expect(r).not.toHaveProperty('cantidad');
+  });
+
+  it('la pantalla no lee ninguna propiedad que la decisión no devuelva', () => {
+    const ConteoCantidad = loadConteoCantidad();
+    // Unión de las claves de todos los resultados posibles de la función.
+    const posibles = new Set();
+    [
+      ConteoCantidad.decidirCantidadAEnviar(1, '9'),        // enviar ok
+      ConteoCantidad.decidirCantidadAEnviar(1, ''),         // vacio
+      ConteoCantidad.decidirCantidadAEnviar(1, 'x'),        // invalida
+      ConteoCantidad.decidirCantidadAEnviar(1, '999999'),   // tope
+      ConteoCantidad.decidirCantidadAEnviar(1, '1'),        // sin_cambio
+      ConteoCantidad.decidirCantidadAEnviar(1, '2.5'),      // truncada
+      ConteoCantidad.decidirCantidadAEnviar(1, '-3'),       // negativa
+    ].forEach(r => Object.keys(r).forEach(k => posibles.add(k)));
+
+    const leidas = [...html.matchAll(/\bdecision\.([A-Za-z_$][\w$]*)/g)].map(m => m[1]);
+    expect(leidas.length).toBeGreaterThan(0); // si deja de haber call sites, el test avisa
+    const inventadas = [...new Set(leidas)].filter(k => !posibles.has(k));
+    expect(inventadas).toEqual([]);
+  });
+});
