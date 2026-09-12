@@ -220,6 +220,7 @@ const PROCESO_REFRESCAR_PUBLICACIONES = 'refrescar_publicaciones';
 const MENSAJE_HUMANO_POR_CATEGORIA = Object.create(null); // evita herencia indeseada del prototipo de Object (BAJO 8)
 MENSAJE_HUMANO_POR_CATEGORIA['rate_limit'] = 'MercadoLibre está limitando la frecuencia de refrescos de publicaciones (429).';
 MENSAJE_HUMANO_POR_CATEGORIA['auth'] = 'MercadoLibre rechazó las credenciales del refresco — revisar Client ID/Secret.';
+MENSAJE_HUMANO_POR_CATEGORIA['permiso'] = 'MercadoLibre rechazó la consulta (403). Suele ser un límite temporal y se resuelve solo; si se repite de forma sostenida, revisar los permisos de la aplicación en MercadoLibre.';
 MENSAJE_HUMANO_POR_CATEGORIA['config'] = 'Configuración inválida de MercadoLibre (Client ID/Secret/User ID faltantes) — revisar variables de entorno, no la conexión.';
 MENSAJE_HUMANO_POR_CATEGORIA['transitorio'] = 'MercadoLibre no responde de forma sostenida al refrescar publicaciones.';
 MENSAJE_HUMANO_POR_CATEGORIA['datos'] = 'MercadoLibre rechazó una solicitud puntual al refrescar publicaciones.';

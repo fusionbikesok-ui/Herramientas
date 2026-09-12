@@ -113,14 +113,30 @@ describe('Hito 4: ML robusto — categorizarErrorMl', () => {
     expect(categorizarErrorMl(err)).toBe('rate_limit');
   });
 
-  it('clasifica 401/403 como auth', () => {
+  it('clasifica 401 como auth', () => {
     const err401 = new Error('401');
     err401.status = 401;
     expect(categorizarErrorMl(err401)).toBe('auth');
+  });
 
+  // Comportamiento cambiado a propósito el 2026-09-12. Antes 403 caía en 'auth' y abría un
+  // incidente CRÍTICO cuyo mensaje mandaba a revisar el Client ID/Secret. En producción el
+  // scan de pausadas dio 403 a las 07:31 y a las 10:31, se curó solo las dos veces, y el
+  // mismo scan con las mismas credenciales respondía 200 minutos después: no era un problema
+  // de credenciales, y el aviso mandaba a mirar donde no era.
+  it('clasifica 403 como permiso, NO como auth: no es un problema de credenciales', () => {
     const err403 = new Error('403');
     err403.status = 403;
-    expect(categorizarErrorMl(err403)).toBe('auth');
+    expect(categorizarErrorMl(err403)).toBe('permiso');
+  });
+
+  // Lo que sí es un fallo de credenciales sigue siendo crítico: el refresh de token setea
+  // .categoria explícitamente y tiene precedencia sobre la inferencia por status.
+  it('un fallo real del refresh de token sigue siendo auth aunque el status sea 403', () => {
+    const err = new Error('Autenticación ML rechazada (403)');
+    err.status = 403;
+    err.categoria = 'auth';
+    expect(categorizarErrorMl(err)).toBe('auth');
   });
 
   it('clasifica 5xx como transitorio', () => {
