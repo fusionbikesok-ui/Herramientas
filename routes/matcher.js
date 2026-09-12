@@ -314,7 +314,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity,user_product_id,channels`,
+      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels`,
       null, { manual: true }
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
@@ -461,10 +461,10 @@ function prepararUpsertCache(db) {
     INSERT INTO ml_publicaciones_cache
       (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle,
        seller_sku, seller_sku_presente, seller_custom_field, atributos_json, gtin, user_product_id, canales_json,
-       variations_texto, thumbnail, permalink, catalogo, precio, available_quantity, precio_actualizado_en, actualizado_en)
+       variations_texto, thumbnail, permalink, catalogo, catalog_product_id, precio, available_quantity, precio_actualizado_en, actualizado_en)
     VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle,
       @seller_sku, @seller_sku_presente, @seller_custom_field, @atributos_json, @gtin, @user_product_id, @canales_json,
-      @variations_texto, @thumbnail, @permalink, @catalogo, @precio, @available_quantity, @actualizado_en, @actualizado_en)
+      @variations_texto, @thumbnail, @permalink, @catalogo, @catalog_product_id, @precio, @available_quantity, @actualizado_en, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
       item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
       status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
@@ -474,6 +474,7 @@ function prepararUpsertCache(db) {
       canales_json=excluded.canales_json,
       variations_texto=excluded.variations_texto,
       thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo,
+      catalog_product_id=excluded.catalog_product_id,
       precio=excluded.precio, available_quantity=excluded.available_quantity,
       precio_actualizado_en=excluded.precio_actualizado_en, actualizado_en=excluded.actualizado_en
   `);
@@ -508,7 +509,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity,user_product_id,channels`
+      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       // Mismo criterio que BLOQUEANTE 1 en el camino total: .status explícito para que
