@@ -633,8 +633,10 @@ fetch('/api/auth/me').then(function(r) {
     ]},
     { titulo: 'MercadoLibre', color: 'sync', tools: [
       { tool: 'sync-ml', href: 'sync-ml', t: 'Sincronización ML', d: 'Estado del stock y los pedidos entre MercadoLibre y la web, y qué necesita atención.', tag: 'Stock · Pedidos · Reactivación' },
-      { tool: 'matcher', href: 'matcher', t: 'SKU Matcher', d: 'Vinculá cada publicación de ML con su producto de WooCommerce.', tag: 'Vínculos · ML ↔ Woo' },
-      { tool: 'cobertura', href: 'cobertura', t: 'Cobertura de catálogo', d: 'Qué productos están publicados, cuáles no y dónde falta información.', tag: 'Catálogo · Faltantes' },
+      // Cobertura de catálogo NO es una herramienta aparte desde el 2026-08-14: se unificó
+      // dentro del Matcher como su dirección Woo→ML, y /cobertura sólo redirige ahí. Tenerla
+      // como tarjeta propia mandaba a una pantalla que ya no existe por separado.
+      { tool: 'matcher', href: 'matcher', t: 'SKU Matcher y cobertura', d: 'Vinculá cada publicación de ML con su producto de Woo, y mirá qué falta publicar o vincular.', tag: 'Vínculos · Cobertura · ML ↔ Woo' },
       { tool: 'auditoria', href: 'auditoria', t: 'Auditoría de publicaciones', d: 'Fotos, videos y salud de cada publicación, con lo que le falta a cada una.', tag: 'Fotos · Video · Salud' },
       { tool: 'config-ml', href: 'config-ml', t: 'Config ML — reservas', d: 'Cuánto stock reservás para el local y qué política sigue cada SKU.', tag: 'Reservas · Política' },
     ]},

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { mlFetch, categorizarErrorMl, estadoCooldownMl } from '../lib/mlClient.js';
-import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
+import { clavesNecesitanAtencion, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { aplanarItemMl } from '../lib/modelos/publicacionMl.js';
 import {
   construirWC, construirMLdesdeApi, candidatosDeItem, derivarEstadoApi,
@@ -346,6 +346,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   // ALTO 4: si filas es vacío, NO borrar el cache existente (mismo criterio que Woo)
   // — una lista 0 es ambigua (podría ser legítimo o degradación) y no debe pisar datos válidos.
   let vigia = { detectados: 0, pausadas: 0, omitidos_por_umbral: 0, errores: 0 };
+  let autoVinculadas = 0;
   if (filas.length > 0) {
     // SNAPSHOT ANTES DE TOCAR NADA. El refresco total borra el cache entero y reinserta dentro
     // de una transacción: si la comparación se hiciera adentro, el valor anterior ya no existe.
@@ -366,10 +367,18 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
 
     // Después de persistir: pausar toca ML y no puede correr dentro de la transacción.
     vigia = await procesarCambios(db, cfg, cambios);
+
+    // Vincular solo lo que no necesita criterio: una publicación cuyo SELLER_SKU coincide con
+    // UN único producto de Woo que todavía no está vinculado a otra. La función existía,
+    // estaba testeada desde el incidente del 2026-08-27 y NADIE la llamaba fuera de los tests:
+    // por eso las publicaciones nuevas con SKU correcto quedaban sin vincular y sin sincronizar
+    // stock. Es conservadora por diseño — ante cualquier ambigüedad no vincula ninguna.
+    autoVinculadas = autoVincularPorSellerSku(db);
+    if (autoVinculadas) console.log(`[matcher] auto-vinculadas por seller_sku: ${autoVinculadas}`);
   }
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
-  return { total: filas.length, items: allIds.length, variaciones, vigia };
+  return { total: filas.length, items: allIds.length, variaciones, vigia, auto_vinculadas: autoVinculadas };
 }
 
 /**
@@ -561,9 +570,11 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
   tx(filas);
 
   const vigia = await procesarCambios(db, cfg, cambios);
+  const autoVinculadas = autoVincularPorSellerSku(db);
+  if (autoVinculadas) console.log(`[matcher] auto-vinculadas por seller_sku: ${autoVinculadas}`);
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
-  return { total: filas.length, items: ids.length, variaciones, vigia };
+  return { total: filas.length, items: ids.length, variaciones, vigia, auto_vinculadas: autoVinculadas };
 }
 
 /**

@@ -24,6 +24,18 @@ function makeDb() {
       id INTEGER PRIMARY KEY,
       access_token TEXT, refresh_token TEXT, expires_at TEXT, actualizado_en TEXT
     );
+    -- Las tres que necesita autoVincularPorSellerSku, que corre al final del refresco desde el
+    -- 2026-09-12. Mismo motivo que el resto de este mini-esquema escrito a mano: hay que
+    -- mantenerlo al día con lo que el código realmente toca, o el refresco muere con
+    -- "no such table" antes de llegar a lo que este archivo mide.
+    CREATE TABLE IF NOT EXISTS sku_matcher_decisiones (
+      clave TEXT PRIMARY KEY, sku TEXT, wc_nombre TEXT, accion TEXT,
+      origen TEXT, confirmado_por TEXT, actualizado_en TEXT
+    );
+    CREATE TABLE IF NOT EXISTS errores_descartados (clave TEXT PRIMARY KEY, motivo TEXT, creado_en TEXT);
+    CREATE TABLE IF NOT EXISTS catalogo_cache (
+      id_woo INTEGER PRIMARY KEY, nombre TEXT, sku TEXT, tipo TEXT, stock INTEGER, actualizado_en TEXT
+    );
     CREATE TABLE ml_publicaciones_cache (
       clave TEXT PRIMARY KEY,
       item_id TEXT NOT NULL,

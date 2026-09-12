@@ -18,6 +18,7 @@ import { dispararRefrescoMl, estadoRefrescoMl } from './matcher.js';
 import { requireAdmin } from '../lib/auth.js';
 import { precioContado } from '../lib/mlPrecios.js';
 import { filasDeVinculos, cargarDescartes, senalesVigentes, logSync } from './sync.js';
+import { FILTRO_MARKETPLACE } from '../lib/identidadProductos.js';
 
 /**
  * Cruza el catálogo de WooCommerce (catalogo_cache) contra las publicaciones de ML
@@ -35,9 +36,19 @@ import { filasDeVinculos, cargarDescartes, senalesVigentes, logSync } from './sy
  */
 export function computarCruce(db) {
   const wcProductos = db.prepare('SELECT * FROM catalogo_cache').all();
+  // Sólo lo que se vende por el marketplace. Un ítem cuyo `channels` no incluye "marketplace"
+  // es un LINK DE PAGO de Mercado Pago: no se vende por ML, no se prepara, no tiene producto de
+  // Woo detrás y su stock es 99.999 por diseño. Contarlos acá los muestra como publicaciones
+  // sin vincular y sin stock controlado, que es ruido que el usuario tiene que descartar a mano
+  // cada vez. Al 2026-09-12 son 139 (111 activas) de 6.917.
+  //
+  // Es la TERCERA vez que este mismo ruido hay que tapar: guardiaMl.js ya los excluye
+  // (ahí los 67 casos abiertos eran todos links de pago) y identidadProductos.js definió
+  // FILTRO_MARKETPLACE para lo mismo. Se reusa esa constante en lugar de escribir otra.
   const mlRows = db.prepare(`
     SELECT item_id, variation_id, titulo, status, seller_sku, variations_texto
     FROM ml_publicaciones_cache
+    WHERE ${FILTRO_MARKETPLACE}
   `).all();
   const excluidosArr = db.prepare('SELECT id_woo FROM cobertura_exclusiones').all();
   const excluidosSet = new Set(excluidosArr.map((e) => e.id_woo));
@@ -438,6 +449,7 @@ export function coberturaRouter(db, cfg) {
       solo_ml: db.prepare(`
         SELECT COUNT(*) n FROM ml_publicaciones_cache p
         WHERE COALESCE(p.seller_sku,'') = ''
+          AND ${FILTRO_MARKETPLACE}
           AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave)
       `).get().n,
       // Mismo criterio EXACTO que GET /sin-stock (ver esa ruta) — antes este conteo no
@@ -1064,6 +1076,7 @@ export function coberturaRouter(db, cfg) {
     const FILTRO = `
       FROM ml_publicaciones_cache p
       WHERE COALESCE(p.seller_sku,'') = '' AND p.titulo LIKE @q
+        AND ${FILTRO_MARKETPLACE}
         AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave)
         AND p.clave NOT IN (SELECT clave FROM cobertura_marcados_correcto WHERE seccion = 'solo_ml')`;
     const total = db.prepare(`SELECT COUNT(*) n ${FILTRO}`).get({ q }).n;

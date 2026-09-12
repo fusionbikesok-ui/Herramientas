@@ -296,11 +296,12 @@
     // decisión se guarda bajo la misma clave undefined en vez de una por publicación.
     function normalizarItems(items) {
       return items.map(it => {
-        let variationsTexto = '';
-        try {
-          const vars = it.ml_variations ? JSON.parse(it.ml_variations) : [];
-          variationsTexto = vars.length ? vars.map(v => v.attribute_name + ': ' + v.value_name).join(' • ') : '';
-        } catch (_) { /* variations mal formadas: sin texto, no rompemos el render */ }
+        // `ml_variations` es TEXTO LEGIBLE ("Negro / U"), no JSON: lo arma
+        // lib/modelos/publicacionMl.js uniendo los value_name con " / " y lo pasa
+        // lib/matcherResolver.js:39 como `p.variations_texto`. Parsearlo como JSON tiraba
+        // "Unexpected token 'N'" — acá el try/catch lo tapaba y se perdía el dato en silencio;
+        // más abajo, sin try/catch, rompía el panel de detalle entero.
+        const variationsTexto = String(it.ml_variations || '').trim();
         return {
           ...it,
           clave: it.ml_item_id + (it.ml_variation_id ? '|' + it.ml_variation_id : ''),
@@ -513,10 +514,9 @@
         </div>
       ` : '<div class="status-empty">Sin candidatos</div>';
 
-      const mlVars = item.ml_variations ? JSON.parse(item.ml_variations) : [];
-      const mlVarsText = mlVars.length > 0
-        ? mlVars.map(v => v.attribute_name + ': ' + v.value_name).join(' • ')
-        : '(sin variaciones)';
+      // Texto legible, no JSON (ver normalizarItems). Acá no había try/catch: cualquier
+      // publicación con variaciones rompía el panel con "is not valid JSON".
+      const mlVarsText = String(item.ml_variations || '').trim() || '(sin variaciones)';
 
       detail.innerHTML = `
         <div class="mode-badge">${modesign}</div>
