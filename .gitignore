@@ -18,3 +18,4 @@ uploads/
 /output/
 /*.png
 /*.log
+.codex/
