@@ -12,6 +12,8 @@ import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { escanearGuardiaMl } from '../lib/guardiaMl.js';
 import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl } from '../lib/identidadProductos.js';
+import { detectarCambios } from '../lib/vigiaFormato.js';
+import { procesarCambios } from '../lib/vigiaPausado.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -342,7 +344,16 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   // 3) Reemplazar el cache de forma atómica
   // ALTO 4: si filas es vacío, NO borrar el cache existente (mismo criterio que Woo)
   // — una lista 0 es ambigua (podría ser legítimo o degradación) y no debe pisar datos válidos.
+  let vigia = { detectados: 0, pausadas: 0, omitidos_por_umbral: 0, errores: 0 };
   if (filas.length > 0) {
+    // SNAPSHOT ANTES DE TOCAR NADA. El refresco total borra el cache entero y reinserta dentro
+    // de una transacción: si la comparación se hiciera adentro, el valor anterior ya no existe.
+    const previas = new Map(
+      db.prepare('SELECT clave, item_id, seller_sku, catalog_product_id, atributos_json FROM ml_publicaciones_cache').all()
+        .map((f) => [f.clave, f])
+    );
+    const cambios = detectarCambios(previas, filas);
+
     const upsert = prepararUpsertCache(db);
     const ts = now();
     const tx = db.transaction((rows) => {
@@ -351,10 +362,13 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
       for (const f of rows) upsert.run({ ...f, actualizado_en: ts });
     });
     tx(filas);
+
+    // Después de persistir: pausar toca ML y no puede correr dentro de la transacción.
+    vigia = await procesarCambios(db, cfg, cambios);
   }
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
-  return { total: filas.length, items: allIds.length, variaciones };
+  return { total: filas.length, items: allIds.length, variaciones, vigia };
 }
 
 /**
@@ -502,7 +516,9 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     throw err;
   }
   const ids = [...new Set((itemIds || []).map(String).filter(Boolean))];
-  if (ids.length === 0) return { total: 0, items: 0, variaciones: 0 };
+  // `vigia` va también acá: el contrato de retorno tiene que ser el mismo por todos los
+  // caminos, o quien lea r.vigia.detectados rompe justo en el caso borde.
+  if (ids.length === 0) return { total: 0, items: 0, variaciones: 0, vigia: { detectados: 0, pausadas: 0, omitidos_por_umbral: 0, errores: 0 } };
 
   const filas = [];
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
@@ -529,6 +545,13 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     await sleep(CALL_DELAY_MS);
   }
 
+  const previas = new Map(
+    db.prepare(`SELECT clave, item_id, seller_sku, catalog_product_id, atributos_json
+                FROM ml_publicaciones_cache WHERE item_id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids).map((f) => [f.clave, f])
+  );
+  const cambios = detectarCambios(previas, filas);
+
   const upsert = prepararUpsertCache(db);
   const ts = now();
   const tx = db.transaction((rows) => {
@@ -536,8 +559,10 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
   });
   tx(filas);
 
+  const vigia = await procesarCambios(db, cfg, cambios);
+
   const variaciones = filas.filter(f => f.es_variante === 1).length;
-  return { total: filas.length, items: ids.length, variaciones };
+  return { total: filas.length, items: ids.length, variaciones, vigia };
 }
 
 /**

@@ -50,6 +50,10 @@ function makeDb() {
       thumbnail TEXT,
       permalink TEXT,
       catalogo INTEGER,
+      -- Llegó con la migración 103 (vigía de formato). Mismo caso que las seis de arriba: el
+      -- snapshot previo al DELETE la lee, así que sin ella el refresco muere con
+      -- "no such column" antes de llegar a lo que este archivo mide.
+      catalog_product_id TEXT,
       precio REAL,
       available_quantity INTEGER,
       precio_actualizado_en TEXT,
