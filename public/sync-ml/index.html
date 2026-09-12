@@ -219,8 +219,110 @@ function renderFrenadas(d){
     h+='</tr>';
   });
   h+='</tbody></table></div>';
-  h+='<div class="acciones"><button class="btn" id="btn-fr" onclick="reintentarFrenadasSel()" disabled>Reintentar reactivación (0)</button></div>';
+  h+='<div class="acciones">'
+   +'<button class="btn" id="btn-fr-precio" onclick="corregirPrecioSel()" disabled>Corregir precio y reactivar (0)</button>'
+   +'<button class="btn sec" id="btn-fr" onclick="reintentarFrenadasSel()" disabled>Reintentar reactivación (0)</button>'
+   +'</div>';
+  h+='<div id="fr-plan"></div>';
   return h;
+}
+
+// ─── Corregir precio y reactivar (2026-09-11) ────────────────────────────────
+// El botón que faltaba. "Reintentar reactivación" vuelve a evaluar lo mismo y vuelve a frenar,
+// porque el precio sigue mal: lo que hace falta es corregir la causa. Se calcula el precio que
+// deja el neto igual al precio de contado, se muestra qué va a pasar, y recién con la
+// confirmación se aplica en ML y se reactiva.
+//
+// Nunca se reactiva una publicación cuyo precio no se pudo corregir: sería volver a publicar a
+// pérdida, que es exactamente lo que el freno existe para evitar.
+var planPrecios = null;
+
+async function corregirPrecioSel(){
+  var sel=[...document.querySelectorAll('.chk-fr:checked')];
+  if(!sel.length) return;
+  var claves=sel.map(function(c){ return c.getAttribute('data-clave'); }).filter(Boolean);
+  var caja=document.getElementById('fr-plan');
+  var btn=document.getElementById('btn-fr-precio');
+  btn.disabled=true;
+  caja.innerHTML='<div class="card"><div class="lbl">Calculando el precio de '+claves.length+' publicación(es)…</div>'
+    +'<div class="hint">Se le pregunta a MercadoLibre la comisión y el envío de cada precio candidato.</div></div>';
+  try{
+    var r=await fetch('/api/precios/objetivo',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({claves:claves})});
+    var d=await r.json();
+    if(!d.ok) throw new Error(d.error||'No se pudo calcular');
+    planPrecios=d.resultados.filter(function(x){ return x.precio!=null; });
+    caja.innerHTML=renderPlanPrecios(d.resultados);
+  }catch(e){
+    caja.innerHTML='<div class="card bad"><div class="lbl">No se pudo calcular: '+esc(e.message)+'</div></div>';
+  }finally{ actualizarBtnFrenadas(); }
+}
+
+function renderPlanPrecios(res){
+  var ok=res.filter(function(x){ return x.precio!=null; });
+  var no=res.filter(function(x){ return x.precio==null; });
+  var h='<div class="card"><div class="lbl">Qué va a pasar</div>';
+  if(ok.length){
+    h+='<div class="tbl-wrap"><table><thead><tr><th>Publicación</th><th class="num">Precio hoy</th>'
+      +'<th class="num">Precio nuevo</th><th class="num">Neto que deja</th><th>Desglose</th></tr></thead><tbody>';
+    ok.forEach(function(x){
+      h+='<tr><td>'+esc(x.sku||x.item_id||x.clave)+(x.cruza_umbral_envio
+          ?' <span class="badge b-bajo" title="El costo de envío cambia con el precio nuevo">cambia el envío</span>':'')+'</td>'
+        +'<td class="num">'+money(x.precio_actual)+'</td>'
+        +'<td class="num"><b>'+money(x.precio)+'</b></td>'
+        +'<td class="num">'+money(x.neto)+'</td>'
+        +'<td class="hint">'+money(x.contado)+' de contado + '+money(x.comision)+' de comisión'
+        +(x.envio?(' + '+money(x.envio)+' de envío'):'')+'</td></tr>';
+    });
+    h+='</tbody></table></div>';
+    h+='<div class="acciones"><button class="btn" onclick="aplicarPlanPrecios()">Aplicar '+ok.length
+      +' precio(s) y reactivar</button> <button class="btn sec" onclick="document.getElementById(\'fr-plan\').innerHTML=\'\'">Cancelar</button></div>';
+  } else {
+    h+='<div class="hint">No se pudo calcular ningún precio.</div>';
+  }
+  if(no.length){
+    h+='<div class="hint" style="margin-top:10px"><b>Sin precio calculado ('+no.length+'):</b><br>'
+      +no.map(function(x){ return esc(x.sku||x.clave)+' — '+esc(x.motivo||'sin motivo'); }).join('<br>')+'</div>';
+  }
+  return h+'</div>';
+}
+
+async function aplicarPlanPrecios(){
+  if(!planPrecios||!planPrecios.length) return;
+  if(!confirm('Se van a cambiar '+planPrecios.length+' precio(s) en MercadoLibre y reactivar las publicaciones. ¿Seguir?')) return;
+  var caja=document.getElementById('fr-plan');
+  var aplicados=[], fallados=[];
+  for(var i=0;i<planPrecios.length;i++){
+    var x=planPrecios[i];
+    caja.innerHTML='<div class="card"><div class="lbl">Aplicando '+(i+1)+' de '+planPrecios.length+'…</div></div>';
+    try{
+      var r=await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({clave:x.clave, precio:x.precio})});
+      var d=await r.json();
+      if(!d.ok) throw new Error(d.error||'ML rechazó el precio');
+      aplicados.push(x);
+    }catch(e){ fallados.push({x:x, error:e.message}); }
+  }
+  // Sólo se reactiva lo que quedó con el precio corregido.
+  var reactivadas=0, errorReactivar=null;
+  if(aplicados.length){
+    try{
+      var rr=await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({itemIds:aplicados.map(function(x){ return x.item_id; })})});
+      var dd=await rr.json();
+      if(!dd.ok) throw new Error(dd.error||'No se pudo reactivar');
+      reactivadas=dd.reactivados!=null?dd.reactivados:aplicados.length;
+    }catch(e){ errorReactivar=e.message; }
+  }
+  var h='<div class="card '+(fallados.length?'bad':'good')+'"><div class="lbl">'
+    +aplicados.length+' precio(s) corregido(s)'+(reactivadas?(' · '+reactivadas+' reactivada(s)'):'')+'</div>';
+  if(errorReactivar) h+='<div class="hint">Los precios se corrigieron, pero la reactivación falló: '+esc(errorReactivar)+'</div>';
+  if(fallados.length) h+='<div class="hint"><b>No se pudieron corregir ('+fallados.length+'), y por eso NO se reactivaron:</b><br>'
+    +fallados.map(function(f){ return esc(f.x.sku||f.x.clave)+' — '+esc(f.error); }).join('<br>')+'</div>';
+  h+='</div>';
+  caja.innerHTML=h;
+  planPrecios=null;
+  cargarFrenadas();
 }
 
 // Mismo criterio que actualizarBtnReactivar(): default DESTILDADO, botón deshabilitado
@@ -232,6 +334,8 @@ function actualizarBtnFrenadas(){
   var n=document.querySelectorAll('.chk-fr:checked').length;
   btn.disabled=(n===0);
   btn.textContent='Reintentar reactivación ('+n+')';
+  var btnP=document.getElementById('btn-fr-precio');
+  if(btnP){ btnP.disabled=(n===0); btnP.textContent='Corregir precio y reactivar ('+n+')'; }
   var chkAll=document.getElementById('chk-all-fr');
   var total=document.querySelectorAll('.chk-fr:not(:disabled)').length;
   if(chkAll) chkAll.checked=(total>0 && n===total);

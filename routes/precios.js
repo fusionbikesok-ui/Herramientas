@@ -11,7 +11,7 @@
 
 import { Router } from 'express';
 import { mlFetch } from '../lib/mlClient.js';
-import { netoMl, veredictoNeto, precioSugerido, upsertAuditoria, precioContado } from '../lib/mlPrecios.js';
+import { netoMl, veredictoNeto, upsertAuditoria, precioContado, precioObjetivoMl } from '../lib/mlPrecios.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
 
 const MULTIGET_CHUNK = 20;
@@ -231,15 +231,119 @@ export function preciosRouter(db, cfg) {
                a.deficit_pct DESC
       LIMIT 1000
     `).all();
-    const data = rows.map(r => ({
-      ...r,
-      precio_sugerido: r.estado === 'bajo' ? precioSugerido(r.precio_ml, r.sale_fee, r.envio, r.precio_web) : null,
-    }));
+    // Sin `precio_sugerido`: esa fórmula cerrada ignoraba que la comisión de ML tiene parte
+    // fija y que el envío se recotiza al precio nuevo, así que dejaba el neto corto. El precio
+    // objetivo lo calcula `POST /objetivo` contra ML, a pedido y sobre lo seleccionado.
+    const data = rows;
     // total = COUNT real (no el LIMIT); truncado avisa cuando data.length quedó recortado.
     res.json({ ok: true, total: totalReal, truncado: totalReal > data.length, data });
   });
 
   // Corrige el precio de una publicación/variación en ML y refresca su fila auditada.
+  /**
+   * Precio objetivo: el que deja el neto igual al precio de contado de la tienda.
+   *
+   * Es sólo CÁLCULO — no escribe nada en ML. Lo usan las dos puertas: el reactivador (sobre las
+   * publicaciones frenadas por precio) y, más adelante, la auditoría. Aplicar es una acción
+   * aparte que dispara el usuario (`/actualizar-precio`).
+   *
+   * Devuelve una fila por clave, con el desglose completo: sin ver de qué se compone el precio,
+   * aplicarlo es un acto de fe.
+   */
+  router.post('/objetivo', async (req, res) => {
+    if (!mlCfgOk(mlCfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+    const claves = Array.isArray(req.body?.claves)
+      ? [...new Set(req.body.claves.map(v => String(v || '').trim()).filter(Boolean))]
+      : [];
+    if (!claves.length) return res.status(400).json({ ok: false, error: 'Indicá `claves` (array no vacío).' });
+    if (claves.length > 100) return res.status(400).json({ ok: false, error: 'Máximo 100 publicaciones por vez.' });
+
+    // El contado sale de donde ya está calculado: la frenada lo guarda, y si no, del catálogo.
+    const contadoDe = db.prepare(`
+      SELECT COALESCE(f.precio_contado, ?) AS contado FROM ml_reactivacion_frenada f WHERE f.clave = ?
+    `);
+    // Mismo origen que la auditoría (`auditarPrecios`): el SKU sale de la decisión del matcher
+    // —no del `seller_sku` crudo, que difiere en algunas— y el precio de `regular_price`, el de
+    // LISTA. Con `c.precio` (vigente) una oferta de la web se descontaría dos veces y el objetivo
+    // quedaría por debajo del contado real.
+    const contadoDelCatalogo = db.prepare(`
+      SELECT c.regular_price AS precio_lista FROM ml_publicaciones_cache p
+      LEFT JOIN sku_matcher_decisiones d
+        ON d.clave = p.clave AND d.accion IN ('asignar','confirmar') AND d.sku <> ''
+      LEFT JOIN catalogo_cache c
+        ON c.sku = COALESCE(NULLIF(d.sku,''), NULLIF(p.seller_sku,'')) AND c.sku <> ''
+      WHERE p.clave = ? LIMIT 1
+    `);
+    const envioAuditado = db.prepare('SELECT envio FROM ml_precio_auditoria WHERE clave = ?');
+
+    const caches = { fee: new Map(), envio: new Map() };
+    const resultados = [];
+    try {
+      for (let i = 0; i < claves.length; i += MULTIGET_CHUNK) {
+        const chunk = claves.slice(i, i + MULTIGET_CHUNK);
+        const porItem = new Map();
+        for (const clave of chunk) {
+          const { itemId, variationId } = partirClaveMl(clave);
+          if (!itemId) { resultados.push({ clave, precio: null, motivo: 'Clave inválida' }); continue; }
+          if (!porItem.has(itemId)) porItem.set(itemId, []);
+          porItem.get(itemId).push({ clave, variationId });
+        }
+        if (!porItem.size) continue;
+
+        const resp = await mlFetch(
+          db, mlCfg, 'get',
+          `/items?ids=${[...porItem.keys()].join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations,status`
+        );
+        await sleep(ML_CALL_DELAY_MS);
+        const items = new Map();
+        if (resp.status === 200 && Array.isArray(resp.data)) {
+          for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+        }
+
+        for (const [itemId, filas] of porItem) {
+          const item = items.get(itemId);
+          for (const { clave, variationId } of filas) {
+            if (!item) {
+              resultados.push({ clave, precio: null, motivo: 'ML no devolvió la publicación.' });
+              continue;
+            }
+            const precioActual = precioEfectivo(item, variationId);
+            const lista = contadoDelCatalogo.get(clave)?.precio_lista ?? null;
+            const contado = contadoDe.get(precioContado(lista), clave)?.contado ?? precioContado(lista);
+            const envioActual = envioAuditado.get(clave)?.envio ?? null;
+
+            const r = await precioObjetivoMl(db, mlCfg, {
+              itemId,
+              categoryId: item.category_id,
+              listingTypeId: item.listing_type_id,
+              freeShipping: !!item.shipping?.free_shipping,
+              contado,
+              envioActual,
+            }, caches);
+            await sleep(ML_CALL_DELAY_MS);
+
+            resultados.push({
+              clave, item_id: itemId, sku: item.seller_custom_field || null,
+              precio_actual: precioActual,
+              contado,
+              ...r,
+              // Cuánto sube o baja, para que la confirmación diga algo entendible.
+              delta: r.precio != null && precioActual > 0 ? +(r.precio - precioActual).toFixed(2) : null,
+            });
+          }
+        }
+      }
+      res.json({
+        ok: true,
+        resultados,
+        calculadas: resultados.filter(r => r.precio != null).length,
+        sin_precio: resultados.filter(r => r.precio == null).length,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   router.post('/actualizar-precio', async (req, res) => {
     if (!mlCfgOk(mlCfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
     const { clave } = req.body || {};

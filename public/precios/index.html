@@ -74,6 +74,20 @@
   .filtros-count{font-size:12px;color:var(--muted);}
   .btn-limpiar{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:border-color .15s,color .15s;}
   .btn-limpiar:hover{border-color:var(--azul);color:var(--azul);}
+  /* Selección múltiple + precio objetivo (tramo 2 del plan de precio objetivo). */
+  .acciones-sel{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border2);border-radius:12px;padding:11px 14px;margin-bottom:14px;}
+  .acciones-sel .cuenta{font-size:12.5px;color:var(--text);font-weight:600;}
+  .acciones-sel .nota{font-size:12px;color:var(--muted);}
+  .chk{width:18px;height:18px;accent-color:var(--azul);cursor:pointer;}
+  td.chk-cell,th.chk-cell{width:34px;padding-right:0;}
+  .obj-precio{font-weight:700;color:var(--green);}
+  .obj-desglose{font-size:11px;color:var(--muted2);margin-top:2px;white-space:nowrap;}
+  .obj-delta{font-size:11px;color:var(--muted);}
+  .obj-aviso{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:20px;background:rgba(245,185,66,.14);color:var(--amber);margin-top:3px;}
+  .obj-motivo{font-size:11.5px;color:var(--red);}
+  .res-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px;font-size:13px;}
+  .res-panel h3{margin:0 0 8px;font-size:13px;}
+  .res-panel ul{margin:0;padding-left:18px;color:var(--muted);}
   @media(max-width:600px){.filtros-panel{grid-template-columns:1fr 1fr;}}
   @media(max-width:400px){.filtros-panel{grid-template-columns:1fr;}}
 </style>
@@ -151,6 +165,14 @@
     </div>
   </div>
 
+  <div class="acciones-sel" id="acciones-sel" style="display:none">
+    <span class="cuenta" id="sel-cuenta"></span>
+    <button class="btn" id="btn-objetivo" onclick="calcularObjetivos()">Calcular precio objetivo</button>
+    <button class="btn" id="btn-aplicar" onclick="aplicarObjetivos()" style="display:none"></button>
+    <button class="btn sec" onclick="limpiarSeleccion()">Limpiar selección</button>
+    <span class="nota" id="sel-nota">El precio objetivo es el que deja el neto igual al precio de contado. Calcular no escribe nada en ML.</span>
+  </div>
+  <div id="resultado-aplicar"></div>
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
 </div>
 
@@ -307,6 +329,7 @@ function pintar(){
   var cont=document.getElementById('cuerpo');
   var lista=aplicarFiltrosYOrden(ROWS);
   cont.innerHTML=render(lista);
+  refrescarBarra();
   var cnt=document.getElementById('filtros-count');
   if(cnt) cnt.textContent=(lista.length===1?'1 resultado':(lista.length+' resultados'));
   var avisoTrunc=document.getElementById('aviso-truncado');
@@ -349,12 +372,17 @@ function render(rows){
   _rowsPorClave={};
   rows.forEach(function(o){_rowsPorClave[o.clave]=o;});
   if(!rows.length) return '<div class="tbl-wrap"><div class="loading" style="color:var(--green)">✓ Nada en esta vista. Si nunca recalculaste, tocá "Recalcular".</div></div>';
+  var todasMarcadas=rows.length>0&&rows.every(function(o){return SEL[o.clave];});
   var h='<div class="tbl-wrap"><table><thead><tr>';
-  h+='<th>Publicación</th><th class="num">Precio ML</th><th class="num">Comisión</th><th class="num">Envío</th>'
-   +'<th class="num">Neto</th><th class="num">Precio contado</th><th class="num">Sugerido</th><th>Estado</th><th></th></tr></thead><tbody>';
+  h+='<th class="chk-cell"><input type="checkbox" class="chk" id="chk-todos" onchange="marcarTodos(this.checked)" '
+   +(todasMarcadas?'checked':'')+' aria-label="Seleccionar todas las visibles"></th>'
+   +'<th>Publicación</th><th class="num">Precio ML</th><th class="num">Comisión</th><th class="num">Envío</th>'
+   +'<th class="num">Neto</th><th class="num">Precio contado</th><th class="num">Precio objetivo</th><th>Estado</th><th></th></tr></thead><tbody>';
   rows.forEach(function(o){
     var thumb=o.thumbnail?'<img class="pub-thumb" src="'+esc(o.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
     h+='<tr data-clave="'+esc(o.clave)+'">';
+    h+='<td class="chk-cell"><input type="checkbox" class="chk" onchange="marcarUna(\''+esc(o.clave)+'\',this.checked)" '
+      +(SEL[o.clave]?'checked':'')+' aria-label="Seleccionar '+esc(o.sku||o.item_id)+'"></td>';
     h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(o.titulo||o.item_id)+'</div>'
       +'<div class="pub-meta">'+esc(o.sku||'')+' · '+esc(o.item_id)+'</div></div></div></td>';
     h+='<td class="num">'+money(o.precio_ml)+'</td>';
@@ -362,11 +390,11 @@ function render(rows){
     h+='<td class="num">'+money(o.envio)+'</td>';
     h+='<td class="num"><b>'+money(o.neto)+'</b></td>';
     h+='<td class="num">'+money(o.precio_web)+'</td>';
-    h+='<td class="num">'+(o.precio_sugerido!=null?money(o.precio_sugerido):'—')+'</td>';
+    h+='<td class="num">'+celdaObjetivo(o)+'</td>';
     h+='<td><span class="badge b-'+esc(o.estado)+'">'+esc(LABELS[o.estado]||o.estado)+'</span> '
       +(o.estado==='bajo'||o.estado==='alto'?('<span class="pub-meta" style="display:inline">'+pct(o.deficit_pct)+'</span>'):'')+'</td>';
     h+='<td><div class="acc-cell"><a class="ml-link" href="'+mlUrl(o.item_id)+'" target="_blank" rel="noopener">Abrir en ML ↗</a>'
-      +(o.estado==='bajo'&&o.precio_sugerido!=null?'<button class="btn mini sec" onclick="corregirPrecio(this)">Corregir precio</button>':'')
+      +(OBJ[o.clave]&&OBJ[o.clave].precio!=null?'<button class="btn mini sec" onclick="corregirPrecio(this)">Aplicar objetivo</button>':'')
       +'</div></td>';
     h+='</tr>';
   });
@@ -374,24 +402,145 @@ function render(rows){
   return h;
 }
 
+/* ── PRECIO OBJETIVO ──
+   El objetivo es el precio de ML cuyo neto (precio − comisión − envío) iguala al precio de
+   contado de la tienda. No se puede calcular con una fórmula cerrada desde acá: la comisión
+   de ML tiene parte porcentual y parte fija y cambia de tramo, y el envío se recotiza al
+   precio nuevo. Por eso lo calcula el backend preguntándole a ML (`POST /api/precios/objetivo`),
+   a pedido y sólo sobre lo seleccionado. Calcular no escribe nada; aplicar es otro botón. */
+var SEL={};   // clave -> true (selección, sobrevive al re-render y al filtrado)
+var OBJ={};   // clave -> resultado del cálculo, con su desglose
+var LOTE_MAX=100;  // tope del endpoint
+
+function clavesSel(){ return Object.keys(SEL).filter(function(k){return SEL[k];}); }
+function clavesAplicables(){ return clavesSel().filter(function(k){ return OBJ[k]&&OBJ[k].precio!=null; }); }
+
+function marcarUna(clave,on){ if(on)SEL[clave]=true; else delete SEL[clave]; refrescarBarra(); sincronizarTodos(); }
+function marcarTodos(on){
+  aplicarFiltrosYOrden(ROWS).forEach(function(o){ if(on)SEL[o.clave]=true; else delete SEL[o.clave]; });
+  pintar(); refrescarBarra();
+}
+function limpiarSeleccion(){ SEL={}; pintar(); refrescarBarra(); }
+
+/* El "marcar todas" refleja lo visible: si destildás una fila, deja de estar marcado. */
+function sincronizarTodos(){
+  var cb=document.getElementById('chk-todos'); if(!cb)return;
+  var vis=aplicarFiltrosYOrden(ROWS);
+  cb.checked=vis.length>0&&vis.every(function(o){return SEL[o.clave];});
+}
+
+function refrescarBarra(){
+  var barra=document.getElementById('acciones-sel');
+  var n=clavesSel().length, aplicables=clavesAplicables().length;
+  if(!barra)return;
+  barra.style.display=n?'flex':'none';
+  document.getElementById('sel-cuenta').textContent=(n===1?'1 publicación seleccionada':n+' publicaciones seleccionadas');
+  var bo=document.getElementById('btn-objetivo');
+  bo.textContent='Calcular precio objetivo ('+n+')';
+  bo.disabled=!n;
+  var ba=document.getElementById('btn-aplicar');
+  ba.style.display=aplicables?'':'none';
+  ba.textContent='Aplicar precio en ML ('+aplicables+')';
+}
+
+function celdaObjetivo(o){
+  var r=OBJ[o.clave];
+  if(!r) return '<span class="obj-delta">—</span>';
+  if(r.precio==null) return '<div class="obj-motivo">'+esc(r.motivo||'No se pudo calcular')+'</div>';
+  var h='<div class="obj-precio">'+money(r.precio)+'</div>';
+  // El desglose tiene que sumar exactamente el precio propuesto: sin verlo, aplicarlo es un
+  // acto de fe (criterio de aceptación 4 del plan).
+  // El redondeo a $100 hacia arriba sobra sobre el objetivo: si no se muestra, el desglose
+  // no suma el precio propuesto y el número parece inventado.
+  var redondeo=Math.round((r.precio-(r.contado||0)-(r.comision||0)-(r.envio||0))*100)/100;
+  h+='<div class="obj-desglose">'+money(r.contado)+' contado + '+money(r.comision)+' comisión + '+money(r.envio)+' envío'
+    +(redondeo>0?(' + '+money(redondeo)+' redondeo'):'')+'</div>';
+  if(r.delta!=null) h+='<div class="obj-delta">'+(r.delta>=0?'▲ +':'▼ ')+money(Math.abs(r.delta))+'</div>';
+  if(r.cruza_umbral_envio) h+='<div class="obj-aviso">cambia el envío</div>';
+  return h;
+}
+
+async function calcularObjetivos(){
+  var claves=clavesSel();
+  if(!claves.length)return;
+  var btn=document.getElementById('btn-objetivo');
+  btn.disabled=true;
+  try{
+    // El endpoint acepta hasta 100 por llamada; cortamos acá para no depender del tope remoto.
+    for(var i=0;i<claves.length;i+=LOTE_MAX){
+      var chunk=claves.slice(i,i+LOTE_MAX);
+      btn.textContent='Calculando… ('+Math.min(i+chunk.length,claves.length)+'/'+claves.length+')';
+      var r=await fetch('/api/precios/objetivo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({claves:chunk})});
+      var d=await r.json();
+      if(!d.ok)throw new Error(d.error||'error');
+      (d.resultados||[]).forEach(function(x){ OBJ[x.clave]=x; });
+      pintar();
+    }
+  }catch(err){
+    alert('No se pudieron calcular los precios objetivo: '+err.message);
+  }
+  btn.disabled=false;
+  refrescarBarra();
+}
+
+async function aplicarObjetivos(){
+  var claves=clavesAplicables();
+  if(!claves.length)return;
+  var sube=0,baja=0;
+  claves.forEach(function(k){ var d=OBJ[k].delta||0; if(d>0)sube++; else if(d<0)baja++; });
+  if(!confirm('Vas a escribir el precio en ML de '+claves.length+' publicacion'+(claves.length===1?'':'es')+'.\n\n'
+    +sube+' suben de precio y '+baja+' bajan.\n\nEsto modifica las publicaciones reales. ¿Seguimos?'))return;
+  var btn=document.getElementById('btn-aplicar');
+  btn.disabled=true;
+  // Fail-closed por ítem: si ML rechaza uno, los demás siguen y ese queda con su error.
+  var okList=[],errList=[];
+  for(var i=0;i<claves.length;i++){
+    var clave=claves[i];
+    btn.textContent='Aplicando… ('+(i+1)+'/'+claves.length+')';
+    try{
+      var r=await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave,precio:OBJ[clave].precio})});
+      var d=await r.json();
+      if(!d.ok)throw new Error(d.error||'error');
+      okList.push(clave); delete SEL[clave]; delete OBJ[clave];
+    }catch(err){
+      errList.push({clave:clave,error:err.message});
+    }
+  }
+  btn.disabled=false;
+  mostrarResultado(okList,errList);
+  await cargar(); estado(); refrescarBarra();
+}
+
+function mostrarResultado(okList,errList){
+  var cont=document.getElementById('resultado-aplicar');
+  if(!cont)return;
+  var h='<div class="res-panel"><h3>'+okList.length+' precio'+(okList.length===1?'':'s')+' aplicado'+(okList.length===1?'':'s')+' en ML'
+    +(errList.length?' · <span style="color:var(--red)">'+errList.length+' con error</span>':'')+'</h3>';
+  if(errList.length){
+    h+='<ul>'+errList.map(function(e){return '<li><b>'+esc(e.clave)+'</b>: '+esc(e.error)+'</li>';}).join('')+'</ul>';
+  }
+  h+='</div>';
+  cont.innerHTML=h;
+}
+
+/* Botón por fila: aplica el objetivo ya calculado de esa publicación. */
 async function corregirPrecio(btn){
   var tr=btn.closest('tr');
   var clave=tr.getAttribute('data-clave');
-  var o=_rowsPorClave[clave];
-  if(!o)return;
-  var precio=prompt('Nuevo precio en ML para "'+(o.titulo||o.item_id)+'"\n\nSugerido para igualar el neto al precio de contado ('+money(o.precio_web)+'):', Math.round(o.precio_sugerido));
-  if(precio==null)return;
-  precio=Number(precio);
-  if(!(precio>0)){alert('Precio inválido.');return;}
-  btn.disabled=true;btn.textContent='Actualizando…';
+  var o=_rowsPorClave[clave], r=OBJ[clave];
+  if(!o||!r||r.precio==null)return;
+  if(!confirm('Poner el precio de "'+(o.titulo||o.item_id)+'" en '+money(r.precio)+'?\n\n'
+    +'Deja un neto de '+money(r.neto)+' contra un contado de '+money(r.contado)+'.'))return;
+  btn.disabled=true;btn.textContent='Aplicando…';
   try{
-    var r=await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave,precio:precio})});
-    var d=await r.json();
+    var resp=await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave,precio:r.precio})});
+    var d=await resp.json();
     if(!d.ok)throw new Error(d.error||'error');
-    await cargar();estado();
+    delete SEL[clave]; delete OBJ[clave];
+    await cargar();estado();refrescarBarra();
   }catch(err){
     alert('No se pudo actualizar: '+err.message);
-    btn.disabled=false;btn.textContent='Corregir precio';
+    btn.disabled=false;btn.textContent='Aplicar objetivo';
   }
 }
 

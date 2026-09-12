@@ -246,19 +246,68 @@ describe('auditarPrecios + router', () => {
     expect(vacio.body.data).toHaveLength(0);
   });
 
-  it('GET /api/precios incluye precio_sugerido solo para filas "bajo"', async () => {
+  // Comportamiento cambiado a propósito (2026-09-11): `precio_sugerido` salía de una fórmula
+  // cerrada que ignoraba la parte fija de la comisión y que el envío se recotiza al precio
+  // nuevo, así que dejaba el neto corto. La pantalla ya no muestra ese número: el precio
+  // objetivo se pide a `POST /objetivo`, que lo calcula contra ML.
+  it('GET /api/precios ya NO devuelve precio_sugerido (la fórmula cerrada quedó obsoleta)', async () => {
     seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
-    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 1305 });
-    seedDecision(db, 'MLO|v1', 'FB-O'); seedPub(db, { clave: 'MLO|v1', itemId: 'MLO', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
 
     const res = await request(app).get('/api/precios?estado=all');
     const bajo = res.body.data.find(r => r.clave === 'MLB|v1');
-    const ok = res.body.data.find(r => r.clave === 'MLO|v1');
-    expect(bajo.precio_sugerido).toBeGreaterThan(bajo.precio_ml);
-    expect(ok.precio_sugerido).toBeNull();
+    expect(bajo.estado).toBe('bajo');
+    expect(bajo).not.toHaveProperty('precio_sugerido');
+  });
+
+  it('POST /api/precios/objetivo: el precio propuesto deja el neto igual al contado y trae el desglose', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 }); // lista 1500 → contado 1000
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+
+    const res = await request(app).post('/api/precios/objetivo').send({ claves: ['MLB|v1'] });
+    expect(res.status).toBe(200);
+    const r = res.body.resultados[0];
+    expect(r.contado).toBe(1000);
+    // El desglose que muestra la pantalla tiene que sumar exactamente el precio propuesto
+    // (criterio 4 del plan). El redondeo hacia arriba a $100 es el cuarto término: sin él,
+    // los tres primeros quedan cortos y el precio parece inventado.
+    const redondeo = r.precio - (r.contado + r.comision + r.envio);
+    expect(redondeo).toBeGreaterThanOrEqual(0);
+    expect(redondeo).toBeLessThan(100);
+    expect(r.contado + r.comision + r.envio + redondeo).toBe(r.precio);
+    // El neto nunca por debajo del contado: el redondeo siempre juega a favor.
+    expect(r.neto).toBeGreaterThanOrEqual(r.contado);
+  });
+
+  it('POST /api/precios/objetivo: producto en oferta apunta al precio de LISTA, no al vigente', async () => {
+    // Mismo bug que ya se había corregido en auditarPrecios y que `/objetivo` reintrodujo:
+    // con `c.precio` (vigente, ya con el sale_price) el contado caía de 1000 a 666.67 y el
+    // objetivo quedaba ~333 por debajo del precio que la tienda cobra de verdad.
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-OFERTA', precio: 1000, regularPrice: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-OFERTA'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+
+    const res = await request(app).post('/api/precios/objetivo').send({ claves: ['MLB|v1'] });
+    expect(res.body.resultados[0].contado).toBe(1000); // 2/3 de 1500, no de 1000
+  });
+
+  it('POST /api/precios/objetivo: sin precio de lista no inventa un objetivo', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-S', precio: null });
+    seedDecision(db, 'MLS|v1', 'FB-S'); seedPub(db, { clave: 'MLS|v1', itemId: 'MLS', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+
+    const res = await request(app).post('/api/precios/objetivo').send({ claves: ['MLS|v1'] });
+    expect(res.body.resultados[0].precio).toBeNull();
+    expect(res.body.resultados[0].motivo).toBeTruthy();
+  });
+
+  it('POST /api/precios/objetivo: rechaza más de 100 claves de una', async () => {
+    const claves = Array.from({ length: 101 }, (_, i) => `MLX${i}|v1`);
+    const res = await request(app).post('/api/precios/objetivo').send({ claves });
+    expect(res.status).toBe(400);
   });
 
   it('GET /api/precios: total es el COUNT real (no el LIMIT) y avisa truncado', async () => {
