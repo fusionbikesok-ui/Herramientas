@@ -20,6 +20,7 @@ import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 
 const TRACKING_META_KEY = '_andreani_tracking';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
+import { claveGtin } from '../lib/gtin.js';
 import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment, calcularSlaPreparacion } from '../lib/horariosDespacho.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -595,7 +596,7 @@ function preparacionEstaVerificada(db, prep) {
 // falta para el caso simple).
 // `woo_paso2_pendiente` se limpia siempre (es un flag del lado Woo, no del de
 // verificación) — incluso si la preparación resultó ser 'cerrada_sin_evidencia'.
-function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
+export function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
   db.prepare('UPDATE preparaciones SET woo_paso2_pendiente=0 WHERE clave=?').run(clave);
   const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(clave);
   if (!prep || prep.estado === 'cerrada_sin_evidencia') return null;
@@ -877,6 +878,71 @@ function getPrep(db, id) {
   return db.prepare('SELECT * FROM preparaciones WHERE id=?').get(parseInt(id));
 }
 
+// Estado real del pedido en su canal. No se deduce de "no está en la cola": eso también pasa
+// si se canceló o si el barrido no lo vio. Se lee de gestion_pedidos, que guarda el estado
+// crudo del canal y el envío de ML. Fail-open: una instalación sin gestion_pedidos sigue
+// funcionando igual, sólo que sin avisos de canal.
+export function estadoDelCanal(db, prep) {
+  try {
+    const ext = prep.canal === 'ml' ? String(prep.ml_order_id || '') : String(prep.wc_order_id || '');
+    if (!ext) return null;
+    const g = db.prepare(`SELECT estado_canal, estado_comercial, ml_shipment_id FROM gestion_pedidos
+      WHERE external_id=? AND fuente=? LIMIT 1`).get(ext, prep.canal === 'ml' ? 'mercadolibre' : 'woocommerce');
+    if (!g) return null;
+    let envio = null;
+    try {
+      envio = g.ml_shipment_id
+        ? db.prepare('SELECT status FROM ml_shipment_estado WHERE shipment_id=?').get(String(g.ml_shipment_id))?.status || null
+        : null;
+    } catch { envio = null; }
+    const despachado = ['shipped', 'delivered'].includes(envio)
+      || ['enviadoandreani', 'retiradoenfusion', 'completed'].includes(String(g.estado_canal || '').toLowerCase());
+    const cancelado = ['cancelado', 'fallido', 'reembolsado'].includes(String(g.estado_comercial || ''));
+    return { estado_canal: g.estado_canal, envio_ml: envio, despachado, cancelado };
+  } catch { return null; }
+}
+
+// Ítems que alguien fue a buscar de verdad: escaneados, o ya embalados. Son los que quedaron
+// fuera de su estante cuando el pedido se canceló, y los únicos que hay que devolver.
+export function itemsLevantados(db, preparacionId) {
+  return db.prepare(`SELECT * FROM preparacion_items WHERE preparacion_id=?
+    AND (COALESCE(cantidad_escaneada,0) > 0 OR COALESCE(estado_embalaje,'') <> '')
+    ORDER BY id`).all(preparacionId);
+}
+
+// Abre la tarea de devolución cuando el canal informa la cancelación y hay producto levantado.
+//
+// Por qué existe: hasta hoy la única forma de cerrar una preparación era declararla enviada, y
+// para un pedido cancelado eso sería falso — por eso las canceladas quedaban abiertas para
+// siempre. Y mientras tanto el producto quedaba en la mesa de embalaje, fuera de su estante y
+// sin que nadie lo registrara. Una preparación cancelada SIN nada escaneado no genera tarea:
+// no hay qué devolver (decisión del usuario, 2026-09-10).
+//
+// Idempotente: UNIQUE(preparacion_id) en la tabla y INSERT OR IGNORE en los ítems, así que
+// llamarla en cada carga de la cola y en cada apertura del detalle no duplica nada.
+export function asegurarDevolucionPendiente(db, prep, canal) {
+  if (!canal?.cancelado) return null;
+  if (prep.estado !== 'en_preparacion' && prep.estado !== 'cancelada_pendiente_devolucion') return null;
+  const existente = db.prepare('SELECT * FROM preparacion_devoluciones WHERE preparacion_id=?').get(prep.id);
+  if (existente) return existente;
+  const items = itemsLevantados(db, prep.id);
+  if (!items.length) return null;
+  const ts = now();
+  return db.transaction(() => {
+    const dev = db.prepare(`INSERT INTO preparacion_devoluciones
+      (preparacion_id, estado, motivo, creado_en) VALUES (?, 'pendiente', ?, ?) RETURNING *`)
+      .get(prep.id, `canal:${canal.estado_canal || 'cancelado'}`, ts);
+    const insItem = db.prepare(`INSERT OR IGNORE INTO preparacion_devolucion_items
+      (devolucion_id, item_id, sku, cantidad) VALUES (?,?,?,?)`);
+    for (const it of items) {
+      insItem.run(dev.id, it.id, it.sku || null, Math.max(1, Number(it.cantidad_escaneada) || Number(it.cantidad_esperada) || 1));
+    }
+    db.prepare("UPDATE preparaciones SET estado='cancelada_pendiente_devolucion' WHERE id=? AND estado='en_preparacion'").run(prep.id);
+    registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'devolucion_pendiente', usuario: null, detalle: { items: items.length } });
+    return dev;
+  })();
+}
+
 // Busca en preparacion_eventos quién subió una foto, mirando el evento 'foto_subida'
 // que quedó registrado con ese foto_id en su detalle_json. Fail-open a propósito (igual
 // que registrarEvento): si json_extract fallara (JSON1 no disponible, detalle_json
@@ -916,6 +982,34 @@ export function preparacionRouter(db, cfg) {
   // Queries para resolución de GTIN/EAN en escanear
   const skuPorEan = db.prepare('SELECT sku FROM ean_sku WHERE ean=?');
   const skusPorGtin = db.prepare("SELECT DISTINCT sku FROM catalogo_cache WHERE gtin=? AND sku IS NOT NULL AND sku <> ''");
+
+  // Un mismo GTIN se guarda con distinto largo según el canal (UPC-12 y EAN-13 con
+  // cero adelante son el mismo código). Comparamos siempre por la forma canónica de
+  // 14 dígitos, pero las tablas guardan el código crudo: probamos todas sus formas.
+  function formasDelCodigo(codigo) {
+    const canonico = claveGtin(codigo);
+    if (!canonico) return [codigo];
+    const sinCeros = canonico.replace(/^0+/, '');
+    const formas = new Set([codigo, canonico, sinCeros]);
+    for (const largo of [8, 12, 13, 14]) {
+      if (sinCeros.length <= largo) formas.add(sinCeros.padStart(largo, '0'));
+    }
+    return [...formas].filter(Boolean);
+  }
+
+  // SKUs que puede representar un código escaneado: el propio código (si es un SKU),
+  // el GTIN del catálogo y los EAN asociados a mano.
+  function skusDelCodigo(codigo) {
+    const skus = new Set([codigo]);
+    for (const forma of formasDelCodigo(codigo)) {
+      const asociado = skuPorEan.get(forma);
+      if (asociado?.sku) skus.add(String(asociado.sku).trim().toUpperCase());
+      for (const fila of skusPorGtin.all(forma)) {
+        if (fila?.sku) skus.add(String(fila.sku).trim().toUpperCase());
+      }
+    }
+    return [...skus];
+  }
 
   // ─── Detección de vínculos entre pedidos (Fase 4) ─────────────────────────
   //
@@ -2012,6 +2106,136 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Historial ──
+  // Preparaciones abiertas: las que quedaron en curso, con o sin dueño vigente.
+  //
+  // Existe porque una preparación en curso sólo se podía reabrir desde su tarjeta en la cola,
+  // y la cola sólo muestra pedidos vigentes del canal. Cuando el pedido avanzaba —el envío de
+  // ML pasaba a `shipped`, el pedido web dejaba `lpaandreani`— la tarjeta desaparecía y la
+  // preparación quedaba sin ninguna puerta: no está en el historial, y no había URL para
+  // abrirla. Así quedaron encerradas 38 al 2026-09-10, la más vieja del 13 de agosto, todas
+  // de pedidos que ya habían salido. Lo escaneado y las fotos seguían en la base.
+  router.get('/abiertas', (req, res) => {
+    const ahora = now();
+    const filas = db.prepare(`
+      SELECT p.*,
+        (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
+        (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id AND cantidad_escaneada >= cantidad_esperada) AS items_listos,
+        (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id AND borrado_en IS NULL) AS total_fotos,
+        (SELECT c.usuario FROM preparacion_claims c WHERE c.preparacion_id=p.id AND c.expires_at > ?) AS claim_de,
+        EXISTS(SELECT 1 FROM pedidos_cache pc WHERE pc.clave=p.clave AND pc.estado_envio='pendiente') AS en_cola
+      FROM preparaciones p
+      WHERE p.estado='en_preparacion'
+      ORDER BY p.creado_en ASC
+    `).all(ahora);
+    return res.json({ ok: true, data: filas.map(f => ({ ...f, en_cola: Boolean(f.en_cola) })) });
+  });
+
+  // ── Devoluciones de preparaciones canceladas ────────────────────────────────
+  // El producto de un pedido cancelado que ya se fue a buscar queda en la mesa de embalaje.
+  // Estas rutas son el circuito para que vuelva a su estante y quede asentado.
+
+  // Lista de estantes para elegir. Decisión del usuario (2026-09-10): los carga el admin
+  // desde conteo; el preparador sólo elige. Si está vacía se dice explícitamente, en vez de
+  // ofrecer un desplegable sin opciones.
+  const ubicacionesDisponibles = () => {
+    try {
+      return db.prepare("SELECT id, zona, estante FROM ubicaciones WHERE activa=1 ORDER BY zona, estante").all();
+    } catch { return []; }
+  };
+
+  router.get('/devoluciones', (req, res) => {
+    // Barre las preparaciones abiertas por si el canal informó una cancelación desde la
+    // última vez: la tarea tiene que aparecer sola, sin que nadie entre al detalle.
+    for (const prep of db.prepare("SELECT * FROM preparaciones WHERE estado='en_preparacion'").all()) {
+      // Fail-open a propósito: un problema abriendo UNA tarea no puede dejar sin lista a todo
+      // el depósito. Pero se loguea — la primera versión tragaba el error en silencio y una
+      // clave foránea rota hizo que la tarea simplemente no apareciera, sin ninguna señal.
+      try { asegurarDevolucionPendiente(db, prep, estadoDelCanal(db, prep)); }
+      catch (e) { console.error(`devoluciones: no se pudo abrir la tarea de la preparación ${prep.id}:`, e.message); }
+    }
+    const filas = db.prepare(`
+      SELECT d.*, p.numero_pedido, p.canal, p.clave, p.preparado_por, p.creado_en AS preparacion_creada_en,
+        (SELECT COUNT(*) FROM preparacion_devolucion_items di WHERE di.devolucion_id=d.id) AS productos
+      FROM preparacion_devoluciones d
+      JOIN preparaciones p ON p.id = d.preparacion_id
+      WHERE d.estado='pendiente'
+      ORDER BY d.creado_en ASC
+    `).all();
+    res.json({ ok: true, data: filas, ubicaciones_cargadas: ubicacionesDisponibles().length });
+  });
+
+  router.get('/devoluciones/:id', (req, res) => {
+    const dev = db.prepare('SELECT * FROM preparacion_devoluciones WHERE id=?').get(parseInt(req.params.id));
+    if (!dev) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const prep = getPrep(db, dev.preparacion_id);
+    const items = db.prepare(`SELECT di.*, i.nombre, i.cantidad_esperada, i.cantidad_escaneada
+      FROM preparacion_devolucion_items di
+      JOIN preparacion_items i ON i.id = di.item_id
+      WHERE di.devolucion_id=? ORDER BY di.id`).all(dev.id);
+    res.json({ ok: true, data: { ...dev, preparacion: prep, items, ubicaciones: ubicacionesDisponibles() } });
+  });
+
+  // Una sola confirmación por pedido (decisión del usuario), con una ubicación por producto:
+  // el 91% de las preparaciones tiene un solo producto, pero para las que tienen varios una
+  // única ubicación para todo el pedido sería un dato inventado, y este flujo existe
+  // justamente para no inventar dónde está la mercadería.
+  router.post('/devoluciones/:id/confirmar', (req, res) => {
+    const dev = db.prepare('SELECT * FROM preparacion_devoluciones WHERE id=?').get(parseInt(req.params.id));
+    if (!dev) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (dev.estado === 'confirmada') {
+      return res.json({ ok: true, repetido: true, devolucion: dev });
+    }
+    const items = db.prepare('SELECT * FROM preparacion_devolucion_items WHERE devolucion_id=? ORDER BY id').all(dev.id);
+    const validas = new Set(ubicacionesDisponibles().map(u => u.id));
+    if (!validas.size) {
+      return res.status(409).json({
+        ok: false,
+        code: 'SIN_UBICACIONES',
+        error: 'Todavía no hay estantes cargados. Cargalos desde Conteo → Elegir alcance antes de confirmar una devolución.',
+      });
+    }
+    // Fail-closed: sin ubicación para cada producto no se confirma. Una devolución a medias
+    // deja producto suelto y además afirma que se guardó, que es peor que no registrar nada.
+    const seleccion = req.body?.ubicaciones && typeof req.body.ubicaciones === 'object' ? req.body.ubicaciones : {};
+    const faltan = [], invalidas = [];
+    for (const it of items) {
+      const uid = parseInt(seleccion[String(it.item_id)], 10);
+      if (!Number.isInteger(uid)) { faltan.push(it.item_id); continue; }
+      if (!validas.has(uid)) invalidas.push(it.item_id);
+    }
+    if (faltan.length || invalidas.length) {
+      return res.status(400).json({
+        ok: false, code: 'UBICACION_REQUERIDA',
+        error: 'Falta indicar a qué estante volvió cada producto.',
+        items_sin_ubicacion: faltan, items_con_ubicacion_invalida: invalidas,
+      });
+    }
+    const ts = now();
+    const usuario = req.user?.username || null;
+    db.transaction(() => {
+      const marcar = db.prepare('UPDATE preparacion_devolucion_items SET ubicacion_id=? WHERE id=?');
+      // El mapeo se aprovecha igual que en el conteo: si el producto volvió al estante B2,
+      // ahora sabemos que vive en B2. INSERT OR IGNORE por la PK compuesta (sku, ubicacion).
+      const mapear = db.prepare(`INSERT OR IGNORE INTO producto_ubicacion
+        (sku, ubicacion_id, principal, confirmado_en, confirmado_por) VALUES (?,?,0,?,?)`);
+      for (const it of items) {
+        const uid = parseInt(seleccion[String(it.item_id)], 10);
+        marcar.run(uid, it.id);
+        if (it.sku) { try { mapear.run(it.sku, uid, ts, usuario); } catch { /* el mapeo no bloquea la devolución */ } }
+      }
+      db.prepare("UPDATE preparacion_devoluciones SET estado='confirmada', confirmado_por=?, confirmado_en=? WHERE id=?")
+        .run(usuario, ts, dev.id);
+      // Cierre honesto: 'cancelada_devuelta' dice lo que pasó. Declararla enviada era la
+      // única salida que existía antes, y era falsa.
+      db.prepare("UPDATE preparaciones SET estado='cancelada_devuelta', completado_en=? WHERE id=?").run(ts, dev.preparacion_id);
+      registrarEvento(db, {
+        preparacionId: dev.preparacion_id, itemId: null, tipo: 'devolucion_confirmada', usuario,
+        detalle: { ubicaciones: items.map(it => ({ item_id: it.item_id, sku: it.sku, ubicacion_id: parseInt(seleccion[String(it.item_id)], 10) })) },
+      });
+    })();
+    res.json({ ok: true, devolucion: db.prepare('SELECT * FROM preparacion_devoluciones WHERE id=?').get(dev.id) });
+  });
+
   router.get('/historial', (req, res) => {
     const preparadas = db.prepare(`
       SELECT p.*,
@@ -2234,7 +2458,10 @@ export function preparacionRouter(db, cfg) {
         const claim = claimPreparacion(db, prepId, req.user.username, cfg, new Date(), true);
         if (!claim.ok) { const error = new Error(claim.code); error.claimResult = claim; throw error; }
         db.prepare("UPDATE gestion_pedidos SET estado_operativo='en_preparacion', actualizado_en=? WHERE id=?").run(now(), pedido.id);
-        db.prepare(`INSERT INTO gestion_pedido_eventos (pedido_id,evento,estado_anterior,estado_nuevo,actor_tipo,actor_id,datos_json,creado_en) VALUES (?,?,?,?,?,?,?,?)`).run(pedido.id, 'enviado_a_preparacion', 'importado', 'en_preparacion', 'usuario', null, JSON.stringify({ preparacion_id: prepId, usuario: req.user.username }), now());
+        // El estado anterior se lee del pedido y no se asume 'importado': un pedido que
+        // venía de 'requiere_atencion' es igual de elegible, y el evento tiene que decir
+        // de dónde salió realmente o la auditoría miente.
+        db.prepare(`INSERT INTO gestion_pedido_eventos (pedido_id,evento,estado_anterior,estado_nuevo,actor_tipo,actor_id,datos_json,creado_en) VALUES (?,?,?,?,?,?,?,?)`).run(pedido.id, 'enviado_a_preparacion', pedido.estado_operativo, 'en_preparacion', 'usuario', null, JSON.stringify({ preparacion_id: prepId, usuario: req.user.username }), now());
         return { gestion_pedido_id: pedido.id, preparacion_id: prepId };
       }))();
       return res.status(201).json({ ok: true, lote: { pedidos: creados.length }, pedidos: creados });
@@ -2251,8 +2478,17 @@ export function preparacionRouter(db, cfg) {
     const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL ORDER BY id').all(prep.id);
     const eventos = db.prepare('SELECT * FROM preparacion_eventos WHERE preparacion_id=? ORDER BY id DESC').all(prep.id)
       .map(mapearEvento);
+    // Estado real del pedido en su canal, para avisar cuando ya salió mientras la
+    // preparación sigue abierta. No se deduce de "no está en la cola": eso también pasa si
+    // se canceló o si el barrido no lo vio. Se lee de gestion_pedidos, que guarda el estado
+    // crudo del canal y el envío de ML.
+    const datosCanal = estadoDelCanal(db, prep);
+    // Si el canal dice que se canceló y alguien ya fue a buscar el producto, se abre la tarea
+    // de devolución acá mismo: es el momento en que alguien está mirando esta preparación.
+    asegurarDevolucionPendiente(db, prep, datosCanal);
     const data = {
       ...prep,
+      canal_estado: datosCanal,
       items: items.map(it => ({
         ...it,
         requisitos_foto: requisitosParaItem(db, it),
@@ -2355,9 +2591,12 @@ export function preparacionRouter(db, cfg) {
     const codigo = String(req.body?.codigo || '').trim().toUpperCase();
     if (!codigo) return res.status(400).json({ ok: false, error: 'codigo requerido' });
 
+    const skusPosibles = skusDelCodigo(codigo);
     const items = db.prepare(
-      "SELECT * FROM preparacion_items WHERE preparacion_id=? AND UPPER(TRIM(sku))=? AND estado_item <> 'exento'"
-    ).all(prep.id, codigo);
+      `SELECT * FROM preparacion_items WHERE preparacion_id=?
+         AND UPPER(TRIM(sku)) IN (${skusPosibles.map(() => '?').join(',')})
+         AND estado_item <> 'exento'`
+    ).all(prep.id, ...skusPosibles);
 
     if (!items.length) return res.json({ ok: true, resultado: 'no_coincide', codigo });
 
@@ -2950,7 +3189,9 @@ const VIGENCIA_SHIPMENT_TERMINAL_MS = 7 * 24 * 3600 * 1000;
 
 async function pendientesMl(db, mlCfg) {
   if (!mlCfg?.clientId || !mlCfg?.userId) return { pendientes: [], confiable: false };
-  const desde = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  // La gestión de pedidos conserva ventas ML durante 90 días; una ventana menor
+  // dejaba fuera despachos históricos que todavía aparecen en la bandeja operativa.
+  const desde = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
   const limite = 50;
 
   // Paginación real (mismo patrón que syncMlToWc/procesarCancelacionesMl en sync.js):
@@ -2966,8 +3207,12 @@ async function pendientesMl(db, mlCfg) {
   // (no hay nada útil que devolver).
   let paginacionCortada = false;
   while (hayMas) {
+    // El estado de la orden deja de ser `paid` cuando MercadoLibre avanza el envío.
+    // Si filtramos por paid, perdemos precisamente los paquetes que ya fueron
+    // despachados. Consultamos el universo reciente y usamos el estado del shipment
+    // como fuente de verdad logística.
     const resp = await mlFetch(db, mlCfg, 'get',
-      `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_desc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limite}`);
+      `/orders/search?seller=${mlCfg.userId}&sort=date_desc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limite}`);
     if (resp.status !== 200) {
       if (offset === 0) throw new Error(`ML orders ${resp.status}`);
       paginacionCortada = true;
@@ -2987,11 +3232,19 @@ async function pendientesMl(db, mlCfg) {
     const shipmentId = orden.shipping?.id;
     if (!shipmentId) { clavesInconclusas.add(`ml:${orden.id}`); continue; }
 
-    // Saltar las ya completadas sin gastar un GET de shipment. No cuenta como fallo (la
-    // preparación ya está confirmada del lado local) y esas filas se excluyen de la poda
-    // por separado en syncPedidosCache, no dependen de aparecer acá.
+    // Una preparación ya completada no vuelve a la cola, pero su envío SÍ se consulta.
+    //
+    // Antes se salteaba el GET de shipment por completo para no gastar cuota. El efecto era
+    // que `ml_shipment_estado` se congelaba en 'ready_to_ship' justo para los pedidos que ya
+    // habían pasado por el depósito: al 2026-09-09 eran 39 de las 42 ventas de ML que
+    // Gestión de pedidos mostraba como pendientes de despachar sin serlo. El estado del
+    // envío lo tiene que confirmar ML, no la preparación local.
+    //
+    // El costo se acota solo: en cuanto el envío pasa a shipped/delivered, el corte por
+    // estado terminal de más abajo lo vuelve a saltear durante 7 días. La exclusión de la
+    // cola se conserva intacta, más abajo, para no resucitar trabajo ya hecho.
     const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(`ml:${orden.id}`);
-    if (prep?.estado === 'completada') continue;
+    const yaPreparado = prep?.estado === 'completada';
 
     // Saltar envíos ya en estado terminal sin gastar el GET, pero solo mientras el cacheo
     // sea reciente (< 7 días): pasado ese plazo se re-verifica contra ML por las dudas. No
@@ -3022,6 +3275,9 @@ async function pendientesMl(db, mlCfg) {
       VALUES (?, ?, ?, ?)
       ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
     `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
+    // Ya refrescamos el estado del envío, que era el objetivo de no saltearla. A la cola de
+    // pendientes no vuelve: la preparación está confirmada del lado local.
+    if (yaPreparado) continue;
     if (envio.status !== 'ready_to_ship') continue;
     const elegibilidad = clasificarElegibilidadMl(orden, envio);
     if (elegibilidad.estado !== 'elegible') {

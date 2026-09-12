@@ -808,6 +808,39 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_cambios_098')").run();
     })();
   }
+  const gestionPedidosEstadoCanalMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='gestion_pedidos_estado_canal_099'").get();
+  if (!gestionPedidosEstadoCanalMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '099_gestion_pedidos_estado_canal.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_estado_canal_099')").run();
+    })();
+  }
+  const gestionPedidosShipmentMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='gestion_pedidos_shipment_ml_100'").get();
+  if (!gestionPedidosShipmentMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '100_gestion_pedidos_shipment_ml.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_shipment_ml_100')").run();
+    })();
+  }
+  const gestionPedidosDatosMlMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='gestion_pedidos_datos_ml_101'").get();
+  if (!gestionPedidosDatosMlMigration) {
+    db.transaction(() => {
+      // La columna puede existir ya, creada por el ALTER en línea del importador en bases
+      // que vienen de producción: en ese caso sólo se registra la migración.
+      const columnas = db.prepare('PRAGMA table_info(gestion_pedidos)').all();
+      if (!columnas.some((c) => c.name === 'datos_ml_json')) {
+        db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '101_gestion_pedidos_datos_ml.sql'), 'utf8'));
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_datos_ml_101')").run();
+    })();
+  }
+  const devolucionesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_devoluciones_102'").get();
+  if (!devolucionesMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '102_preparacion_devoluciones.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_devoluciones_102')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {

@@ -10,6 +10,10 @@ import {
   clasificarElegibilidadMl, pedidosElegiblesOrdenados,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
+// Las tablas de ubicaciones las crea el router de inventario al construirse (ensureTables).
+// En producción los dos routers conviven; acá se monta igual para que el test corra contra
+// el mismo esquema, en vez de duplicar el DDL y arriesgar que se separen.
+import { inventarioRouter } from '../routes/inventario.js';
 import { rutaAbsoluta } from '../utils/storage.js';
 import heicConvert from 'heic-convert';
 
@@ -2337,6 +2341,31 @@ describe('syncPedidosCache', () => {
     expect(row.customer_note).toBe('entregar después de las 18h');
   });
 
+  it('refresca el envío de una venta ML ya preparada, sin devolverla a la cola', async () => {
+    // Antes se salteaba el GET de shipment cuando la preparación estaba completada, y el
+    // estado quedaba congelado en 'ready_to_ship' para siempre: al 2026-09-09 eran 39 ventas
+    // que Gestión de pedidos mostraba como pendientes de despachar sin serlo.
+    // Las tablas las crea ensureTables dentro de syncPedidosCache: una corrida en vacío
+    // primero, y recién después se puede sembrar la preparación.
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+    await syncPedidosCache(db, CFG);
+    db.prepare(`INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en, completado_en, preparado_por)
+      VALUES ('ml','ml:5001','completada',1,'2026-09-01T00:00:00Z','2026-09-01T01:00:00Z','Joaco')`).run();
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 5001, status: 'paid',
+        date_created: '2026-09-01T00:00:00Z', shipping: { id: 77001 }, buyer: {}, payments: [], order_items: [] }] } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'shipped', logistic_type: 'xd_drop_off' } });
+
+    const r = await syncPedidosCache(db, CFG);
+
+    expect(db.prepare('SELECT status FROM ml_shipment_estado WHERE shipment_id=?').get('77001'))
+      .toEqual({ status: 'shipped' });
+    // Y no vuelve a la cola de pendientes: la preparación ya está confirmada.
+    expect((r?.pendientes || []).find((p) => String(p.ml_order_id) === '5001')).toBeUndefined();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM pedidos_cache WHERE clave='ml:5001' AND estado_envio='pendiente'").get().n).toBe(0);
+  });
+
   it('un pedido ML no tiene equivalente de nota — queda vacía, no inventada', async () => {
     wooFetch.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [] });
     mlFetch.mockResolvedValueOnce({
@@ -3242,5 +3271,276 @@ describe('syncPedidoMlPuntual', () => {
     const row = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:ORD-13'").get();
     expect(row).toBeTruthy();
     expect(row.estado_envio).toBe('pendiente');
+  });
+});
+
+describe('Preparaciones abiertas y estado del canal', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  function sembrarAbierta(clave, canal, numero) {
+    return db.prepare(`INSERT INTO preparaciones (canal, clave, ml_order_id, wc_order_id, numero_pedido, comprador, estado, etiqueta_lista, creado_en)
+      VALUES (?, ?, ?, ?, ?, 'Cliente', 'en_preparacion', 0, '2026-09-01T10:00:00Z')`)
+      .run(canal, clave, canal === 'ml' ? numero : null, canal === 'web' ? Number(numero) : null, numero).lastInsertRowid;
+  }
+
+  it('lista las abiertas y distingue las que ya no están en la cola', async () => {
+    const app = buildTestApp(db);
+    const enCola = sembrarAbierta('web:900', 'web', '900');
+    sembrarAbierta('web:901', 'web', '901');
+    db.prepare(`INSERT INTO pedidos_cache (clave,canal,wc_order_id,numero_pedido,comprador,fecha,estado_envio,espejo_ml,items_json,actualizado_en)
+      VALUES ('web:900','web',900,'900','Cliente','2026-09-01T10:00:00Z','pendiente',0,'[]','2026-09-01T10:00:00Z')`).run();
+
+    const r = await request(app).get('/api/preparacion/abiertas');
+
+    expect(r.status).toBe(200);
+    expect(r.body.data).toHaveLength(2);
+    const porId = Object.fromEntries(r.body.data.map((x) => [x.id, x]));
+    expect(porId[enCola].en_cola).toBe(true);
+    // La que no está en la cola es justamente la que no tenía ninguna puerta: sin esta vista
+    // no aparece en ningún lado y el trabajo queda encerrado.
+    expect(r.body.data.find((x) => x.numero_pedido === '901').en_cola).toBe(false);
+  });
+
+  it('el detalle avisa cuando el canal ya despachó el pedido', async () => {
+    const app = buildTestApp(db);
+    const id = sembrarAbierta('web:902', 'web', '902');
+    const cli = db.prepare(`INSERT INTO gestion_pedido_clientes (nombre,creado_en,actualizado_en)
+      VALUES ('Cliente','2026-09-01T10:00:00Z','2026-09-01T10:00:00Z')`).run().lastInsertRowid;
+    db.prepare(`INSERT INTO gestion_pedidos
+      (cliente_id,fuente,external_id,numero_visible,estado_comercial,estado_operativo,estado_canal,importado_en,actualizado_en)
+      VALUES (?,'woocommerce','902','902','confirmado','cerrado','enviadoandreani','2026-09-01T10:00:00Z','2026-09-01T10:00:00Z')`).run(cli);
+
+    const r = await request(app).get('/api/preparacion/' + id);
+
+    expect(r.status).toBe(200);
+    expect(r.body.data.canal_estado).toMatchObject({ despachado: true, cancelado: false, estado_canal: 'enviadoandreani' });
+  });
+
+  it('sin el pedido en gestión de pedidos el detalle sigue funcionando', async () => {
+    // Los datos son de otra herramienta: el detalle no puede caerse porque falten.
+    const app = buildTestApp(db);
+    const id = sembrarAbierta('web:903', 'web', '903');
+    const r = await request(app).get('/api/preparacion/' + id);
+    expect(r.status).toBe(200);
+    expect(r.body.data.canal_estado).toBeNull();
+  });
+});
+
+// ─── Devolución de preparaciones canceladas ───────────────────────────────────
+// Cuando un pedido se cancela después de que alguien fue a buscar el producto, ese producto
+// queda en la mesa de embalaje: fuera de su estante y contado como disponible. Hasta ahora la
+// única forma de cerrar una preparación era declararla enviada, así que las canceladas
+// quedaban abiertas para siempre porque "enviada" habría sido mentira.
+describe('Devoluciones — pedido cancelado con producto ya levantado', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch { /* el archivo puede no existir */ } });
+
+  function cancelarEnCanal(db, { externalId, fuente = 'mercadolibre' }) {
+    const ts = new Date().toISOString();
+    db.prepare(`INSERT INTO gestion_pedidos (external_id, fuente, estado_canal, estado_comercial, importado_en, actualizado_en)
+      VALUES (?,?,?,?,?,?)`).run(String(externalId), fuente, 'cancelled', 'cancelado', ts, ts);
+  }
+
+  function ubicacion(db, zona, estante) {
+    inventarioRouter(db, {});
+    return db.prepare(`INSERT INTO ubicaciones (zona, estante, estado, activa, creado_en)
+      VALUES (?,?,'bootstrap',1,?) RETURNING id`).get(zona, estante, new Date().toISOString()).id;
+  }
+
+  function prepCanceladaConProductoLevantado(db, { escaneado = 1 } = {}) {
+    const id = crearPreparacion(db, {
+      canal: 'ml', mlOrderId: 'ORD-CANCEL', numeroPedido: 'ORD-CANCEL', comprador: 'Ana',
+      items: [{ sku: 'FB-1', nombre: 'Stem Mtb', cantidad: 1 }],
+    });
+    db.prepare('UPDATE preparacion_items SET cantidad_escaneada=? WHERE preparacion_id=?').run(escaneado, id);
+    cancelarEnCanal(db, { externalId: 'ORD-CANCEL' });
+    return id;
+  }
+
+  it('aparece como devolución pendiente y la preparación NO se cierra sola', async () => {
+    const app = buildTestApp(db);
+    const id = prepCanceladaConProductoLevantado(db);
+
+    const r = await request(app).get('/api/preparacion/devoluciones');
+    expect(r.status).toBe(200);
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].productos).toBe(1);
+    expect(r.body.data[0].numero_pedido).toBe('ORD-CANCEL');
+    // El estado dice la verdad: no está "enviada", está esperando que vuelva a su lugar.
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado)
+      .toBe('cancelada_pendiente_devolucion');
+  });
+
+  it('una cancelada sin nada escaneado no genera tarea: no hay qué devolver', async () => {
+    const app = buildTestApp(db);
+    const id = prepCanceladaConProductoLevantado(db, { escaneado: 0 });
+
+    const r = await request(app).get('/api/preparacion/devoluciones');
+    expect(r.body.data).toHaveLength(0);
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
+  });
+
+  it('confirmar con estante cierra la preparación, deja registro y mapea el producto', async () => {
+    const app = buildTestApp(db);
+    const id = prepCanceladaConProductoLevantado(db);
+    const ubi = ubicacion(db, 'Salón', 'B2');
+
+    const lista = await request(app).get('/api/preparacion/devoluciones');
+    const dev = lista.body.data[0];
+    const detalle = await request(app).get(`/api/preparacion/devoluciones/${dev.id}`);
+    expect(detalle.body.data.items).toHaveLength(1);
+    expect(detalle.body.data.ubicaciones.map(u => u.estante)).toContain('B2');
+    const itemId = detalle.body.data.items[0].item_id;
+
+    const r = await request(app).post(`/api/preparacion/devoluciones/${dev.id}/confirmar`)
+      .send({ ubicaciones: { [itemId]: ubi } });
+    expect(r.status).toBe(200);
+
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('cancelada_devuelta');
+    const fila = db.prepare('SELECT * FROM preparacion_devoluciones WHERE id=?').get(dev.id);
+    expect(fila.estado).toBe('confirmada');
+    expect(fila.confirmado_por).toBe('tester');
+    // Aprovecha el movimiento para mapear, igual que el conteo.
+    expect(db.prepare('SELECT ubicacion_id FROM producto_ubicacion WHERE sku=?').get('FB-1').ubicacion_id).toBe(ubi);
+    expect(db.prepare("SELECT COUNT(*) n FROM preparacion_eventos WHERE preparacion_id=? AND tipo='devolucion_confirmada'").get(id).n).toBe(1);
+    // Y desaparece de la lista de pendientes.
+    expect((await request(app).get('/api/preparacion/devoluciones')).body.data).toHaveLength(0);
+  });
+
+  it('sin ubicación no se confirma: una devolución a medias afirma que se guardó algo que quedó suelto', async () => {
+    const app = buildTestApp(db);
+    prepCanceladaConProductoLevantado(db);
+    ubicacion(db, 'Salón', 'B2');
+    const dev = (await request(app).get('/api/preparacion/devoluciones')).body.data[0];
+
+    const r = await request(app).post(`/api/preparacion/devoluciones/${dev.id}/confirmar`).send({ ubicaciones: {} });
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('UBICACION_REQUERIDA');
+    expect(db.prepare('SELECT estado FROM preparacion_devoluciones WHERE id=?').get(dev.id).estado).toBe('pendiente');
+  });
+
+  it('sin estantes cargados explica qué falta en vez de aceptar una confirmación vacía', async () => {
+    const app = buildTestApp(db);
+    prepCanceladaConProductoLevantado(db);
+    const lista = await request(app).get('/api/preparacion/devoluciones');
+    expect(lista.body.ubicaciones_cargadas).toBe(0);
+
+    const r = await request(app).post(`/api/preparacion/devoluciones/${lista.body.data[0].id}/confirmar`).send({ ubicaciones: {} });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('SIN_UBICACIONES');
+    expect(r.body.error).toMatch(/estantes/i);
+  });
+
+  it('es idempotente: dos barridos no duplican la tarea, y reconfirmar no rompe', async () => {
+    const app = buildTestApp(db);
+    prepCanceladaConProductoLevantado(db);
+    const ubi = ubicacion(db, 'Salón', 'B2');
+    await request(app).get('/api/preparacion/devoluciones');
+    const lista = await request(app).get('/api/preparacion/devoluciones');
+    expect(lista.body.data).toHaveLength(1);
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_devoluciones').get().n).toBe(1);
+
+    const dev = lista.body.data[0];
+    const itemId = db.prepare('SELECT item_id FROM preparacion_devolucion_items WHERE devolucion_id=?').get(dev.id).item_id;
+    await request(app).post(`/api/preparacion/devoluciones/${dev.id}/confirmar`).send({ ubicaciones: { [itemId]: ubi } });
+    const otra = await request(app).post(`/api/preparacion/devoluciones/${dev.id}/confirmar`).send({ ubicaciones: { [itemId]: ubi } });
+    expect(otra.status).toBe(200);
+    expect(otra.body.repetido).toBe(true);
+  });
+});
+
+// ─── Escanear el código de barras del producto, no sólo el SKU ────────────────
+// Problema reportado en producción (2026-09-11): en la mesa de preparación el lector no sirve,
+// sólo se puede verificar tipeando el SKU. La causa: `POST /:id/escanear` compara el código
+// contra `preparacion_items.sku` y nada más, así que un EAN o un UPC nunca coincide.
+//
+// Lo llamativo es que las consultas para traducirlo ya estaban escritas en el archivo
+// (`skuPorEan`, `skusPorGtin`, con el comentario "Queries para resolución de GTIN/EAN en
+// escanear") y no las llamaba nadie.
+//
+// Se resuelven además las dos formas del mismo código: un UPC-A de 12 dígitos es el mismo
+// código que un EAN-13 con un cero adelante, y el catálogo tiene las dos conviviendo (438 de
+// 13 dígitos y 354 de 12). Sin normalizar, el lector acierta o no según cómo esté cargado.
+describe('Preparación — escanear por código de barras además de por SKU', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  function prepConProducto(db, { sku = 'FB-1', gtin = null, ean = null } = {}) {
+    const id = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 700, numeroPedido: '700', comprador: 'Ana',
+      items: [{ sku, nombre: 'Casco Giro', cantidad: 1 }],
+    });
+    if (gtin) {
+      db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, gtin, actualizado_en)
+        VALUES (900, 'Casco Giro', ?, 'simple', 3, ?, ?)`).run(sku, gtin, new Date().toISOString());
+    }
+    if (ean) {
+      db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+      db.prepare('INSERT OR REPLACE INTO ean_sku (ean, sku, actualizado_en) VALUES (?,?,?)').run(ean, sku, new Date().toISOString());
+    }
+    return id;
+  }
+
+  async function escanear(app, id, codigo) {
+    await tomarPorApi(app, id);
+    return request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo });
+  }
+
+  it('el GTIN del catálogo verifica el ítem', async () => {
+    const app = buildTestApp(db);
+    const id = prepConProducto(db, { gtin: '7798765432107' });
+    const r = await escanear(app, id, '7798765432107');
+    expect(r.body.resultado).toBe('match');
+    expect(r.body.item.sku).toBe('FB-1');
+    expect(r.body.item.cantidad_escaneada).toBe(1);
+  });
+
+  it('un EAN asociado a mano también verifica', async () => {
+    const app = buildTestApp(db);
+    const id = prepConProducto(db, { ean: '7798765432107' });
+    const r = await escanear(app, id, '7798765432107');
+    expect(r.body.resultado).toBe('match');
+  });
+
+  // UPC-A de 12 y EAN-13 con cero adelante son el MISMO código. El catálogo tiene las dos
+  // formas conviviendo, así que sin esto el lector acierta o no según cómo se haya cargado.
+  it('un UPC de 12 dígitos encuentra al producto cargado como EAN-13 con cero adelante', async () => {
+    const app = buildTestApp(db);
+    const id = prepConProducto(db, { gtin: '0192790619255' });
+    const r = await escanear(app, id, '192790619255');
+    expect(r.body.resultado).toBe('match');
+  });
+
+  it('y al revés: un EAN-13 con cero adelante encuentra al cargado como UPC de 12', async () => {
+    const app = buildTestApp(db);
+    const id = prepConProducto(db, { gtin: '192790619255' });
+    const r = await escanear(app, id, '0192790619255');
+    expect(r.body.resultado).toBe('match');
+  });
+
+  it('el SKU sigue funcionando igual que siempre', async () => {
+    const app = buildTestApp(db);
+    const id = prepConProducto(db, { gtin: '7798765432107' });
+    const r = await escanear(app, id, 'FB-1');
+    expect(r.body.resultado).toBe('match');
+  });
+
+  it('un código que no es de este pedido sigue diciendo que no coincide', async () => {
+    const app = buildTestApp(db);
+    const id = prepConProducto(db, { gtin: '7798765432107' });
+    const r = await escanear(app, id, '7791234567898');
+    expect(r.body.resultado).toBe('no_coincide');
+  });
+
+  it('escanear dos veces el mismo producto de un pedido de 1 unidad avisa sobrante', async () => {
+    const app = buildTestApp(db);
+    const id = prepConProducto(db, { gtin: '7798765432107' });
+    await escanear(app, id, '7798765432107');
+    const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '7798765432107' });
+    expect(r.body.resultado).toBe('sobrante');
   });
 });

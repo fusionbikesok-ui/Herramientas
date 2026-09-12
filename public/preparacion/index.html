@@ -25,17 +25,49 @@
   h1{font-size:1.5rem;font-weight:800;letter-spacing:-.03em;margin:6px 0 4px;}
   h1 em{font-style:normal;color:var(--azul);}
   .sub{font-size:12.5px;color:var(--muted);margin:0 0 18px;max-width:85ch;line-height:1.5;}
-  .btn{background:var(--azul);color:#06131C;border:0;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:700;cursor:pointer;transition:background .15s;}
+  /* 44px es el piso de WCAG y acá se toca con guantes: los botones medían 26-33px de alto.
+     El primario del pedido abierto sube a 56 (ver .btn.grande). */
+  .btn{background:var(--azul);color:#06131C;border:0;border-radius:9px;padding:0 16px;
+       min-height:44px;font-size:13.5px;font-weight:700;cursor:pointer;transition:background .15s;
+       display:inline-flex;align-items:center;justify-content:center;gap:6px;}
   .btn:hover{background:var(--azul-dk);}
   .btn:focus-visible,.tab:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px;}
   .btn:disabled{opacity:.45;cursor:default;}
   .btn.sec{background:var(--surface2);color:var(--text);font-weight:600;border:1px solid var(--border);}
   .btn.sec:hover{background:var(--border2);}
   .btn.danger{background:rgba(248,113,113,.15);color:var(--red);border:1px solid rgba(248,113,113,.3);}
-  .btn.mini{padding:4px 9px;font-size:11px;border-radius:6px;}
-  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;}
-  .tab{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:20px;padding:6px 14px;font-size:12.5px;cursor:pointer;}
-  .tab.on{background:var(--azul);border-color:var(--azul);color:#06131C;font-weight:700;}
+  /* `mini` sigue existiendo para acciones secundarias en listas, pero no baja de 40px:
+     el "Preparar" de la cola medía 84×20 y era la acción principal de la pantalla. */
+  .btn.mini{padding:0 12px;min-height:40px;font-size:12.5px;border-radius:8px;}
+  .btn.grande{min-height:56px;font-size:16px;padding:0 20px;}
+  .tabs{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px;}
+  /* 44px de alto: se toca con guantes. Antes eran 6px de padding y ~26px de alto. */
+  .tab{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;
+       padding:0 15px;min-height:44px;font-size:13.5px;font-weight:600;cursor:pointer;
+       display:inline-flex;align-items:center;transition:border-color .16s,color .16s;}
+  .tab:hover{border-color:var(--border2);color:var(--text);}
+  .tab:focus-visible{outline:2px solid var(--azul);outline-offset:2px;}
+  .tab.on{background:rgba(45,184,232,.12);border-color:var(--azul);color:var(--azul);font-weight:700;}
+  /* "Más": <details> nativo — sin JS, cierra con Escape y es navegable por teclado. */
+  .mas{position:relative;margin-left:auto;}
+  .mas > summary{list-style:none;user-select:none;}
+  .mas > summary::-webkit-details-marker{display:none;}
+  .mas[open] > summary{border-color:var(--azul);color:var(--azul);}
+  .mas-panel{position:absolute;right:0;top:calc(100% + 6px);z-index:20;min-width:236px;
+             background:var(--surface);border:1px solid var(--border2);border-radius:12px;
+             padding:6px;box-shadow:0 12px 34px -14px rgba(0,0,0,.9);display:flex;
+             flex-direction:column;gap:2px;}
+  .mas-grupo{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2);
+             font-weight:700;padding:9px 10px 4px;}
+  .mas-item{background:transparent;border:0;color:var(--text);text-align:left;border-radius:8px;
+            padding:0 10px;min-height:44px;font-size:13.5px;cursor:pointer;}
+  .mas-item:hover{background:var(--surface2);}
+  .mas-item:focus-visible{outline:2px solid var(--azul);outline-offset:-2px;}
+  .mas-item.on{color:var(--azul);font-weight:700;}
+  @media(max-width:640px){
+    .mas{margin-left:0;}
+    .mas-panel{right:auto;left:0;min-width:min(280px,calc(100vw - 32px));}
+  }
   .loading{color:var(--muted2);font-size:13px;padding:34px 0;text-align:center;}
   .err{color:var(--red);}
 
@@ -144,8 +176,16 @@
   .step.done .n{background:var(--green);color:#06131C;}
   .step.on .n{background:var(--azul);color:#06131C;}
 
-  .scanbar{display:flex;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:6px;flex-wrap:wrap;}
-  .scanbar input{flex:1;min-width:160px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:9px 12px;font-size:14px;font-family:'Courier New',monospace;}
+  /* Fija al hacer scroll: con guantes y varios productos, volver arriba para escanear es
+     incómodo (decisión del usuario, 2026-09-10). El borde acentuado la separa del contenido
+     que pasa por debajo. */
+  .scanbar{position:sticky;top:0;z-index:15;display:flex;gap:8px;align-items:center;
+           background:var(--surface);border:1px solid var(--azul);border-radius:12px;
+           padding:12px 14px;margin-bottom:6px;flex-wrap:wrap;
+           box-shadow:0 8px 22px -14px rgba(0,0,0,.95);}
+  .scanbar input{flex:1;min-width:160px;background:var(--oscuro);border:1.5px solid var(--azul);
+                 border-radius:9px;color:var(--text);padding:0 14px;min-height:56px;
+                 font-size:16px;font-family:'Courier New',monospace;}
   .scanbar input:focus{outline:none;border-color:var(--azul);}
   .aviso{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;background:rgba(45,184,232,.15);color:var(--azul);}
   .flash{border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin:8px 0;display:none;}
@@ -286,25 +326,48 @@
 <body>
 <main aria-labelledby="preparacion-title">
 <div class="wrap">
-  <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
-  <h1 id="preparacion-title">Preparación de <em>pedidos</em></h1>
-  <p class="sub">Cola de despacho <b>web (Andreani)</b> + <b>MercadoLibre</b> (Flex/colecta listos para despachar).
-    Buscá los productos por zona, confirmá cada unidad en mesa, sacá las fotos según el tipo de producto y
-    armá las etiquetas de Andreani en lote.</p>
+  <!-- El encabezado y la navegación se ocultan dentro de un pedido: ahí no sirven y en el
+       celular empujaban el trabajo a 388 px del borde superior. -->
+  <div id="encabezado">
+    <a class="back" href="/herramientas/home/">&larr; Volver al inicio</a>
+    <h1 id="preparacion-title">Preparación de <em>pedidos</em></h1>
+    <p class="sub">Cola de despacho <b>web (Andreani)</b> + <b>MercadoLibre</b> (Flex/colecta listos para despachar).
+      Buscá los productos por zona, confirmá cada unidad en mesa, sacá las fotos según el tipo de producto y
+      armá las etiquetas de Andreani en lote.</p>
+  </div>
 
+  <!-- Navegación: sólo el trabajo del día. Las 12 pestañas planas mezclaban la cola con la
+       configuración y en el celular ocupaban siete filas antes del primer pedido; adentro de
+       un pedido, además, no sirven para nada. Las otras nueve son consulta o configuración y
+       viven en "Más", que es un <details> nativo: se cierra solo al elegir y no necesita JS. -->
+  <!-- Los cuatro espacios del plan maestro, en el orden del trabajo real: se junta, se
+       prepara, se arma la salida, se despacha. Historial y configuración quedan secundarios,
+       en "Más" — un <details> nativo que cierra con Escape y anda por teclado sin JS.
+       Antes eran 12 pestañas planas que mezclaban la cola con la configuración y en el
+       celular ocupaban siete filas antes del primer pedido. -->
   <div class="tabs" id="tabs">
-    <button class="tab on" data-v="pendientes" onclick="ir('pendientes')">A preparar</button>
-    <button class="tab" data-v="etiquetas" onclick="ir('etiquetas')">Etiquetas Andreani</button>
-    <button class="tab" data-v="seguimientos" onclick="ir('seguimientos')">Cargar seguimientos</button>
-    <button class="tab" data-v="historial" onclick="ir('historial')">Historial</button>
-    <button class="tab" data-v="cerradas" onclick="ir('cerradas')">Cerradas sin evidencia</button>
-    <button class="tab" data-v="despachadas" onclick="ir('despachadas')">Despachadas sin verificar</button>
-    <button class="tab" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
-    <button class="tab" data-v="horarios" onclick="ir('horarios')">Horarios de despacho</button>
-    <button class="tab" data-v="hoja-ml" onclick="ir('hoja-ml')">Hoja MercadoLibre</button>
-    <button class="tab" data-v="hoja-andreani" onclick="ir('hoja-andreani')">Hoja Andreani/Web</button>
-    <button class="tab" data-v="lotes" onclick="ir('lotes')">Lotes de despacho</button>
-    <button class="tab" data-v="regularizar-despachos" onclick="regularizarJornadaSeleccionada()">Regularizar sin evidencia</button>
+    <button class="tab" data-v="recoleccion" onclick="ir('recoleccion')">Productos a buscar</button>
+    <button class="tab on" data-v="pendientes" onclick="ir('pendientes')">Pedidos a preparar</button>
+    <button class="tab" data-v="lotes" onclick="ir('lotes')">Listos para despachar</button>
+    <button class="tab" data-v="hoja-andreani" onclick="ir('hoja-andreani')">Despachos</button>
+    <details class="mas" id="mas-menu">
+      <summary class="tab" aria-haspopup="true">Más ▾</summary>
+      <div class="mas-panel" role="menu">
+        <span class="mas-grupo">Consulta</span>
+        <button class="mas-item" data-v="historial" onclick="ir('historial')">Historial</button>
+        <button class="mas-item" data-v="hoja-ml" onclick="ir('hoja-ml')">Hoja MercadoLibre</button>
+        <span class="mas-grupo">Despacho</span>
+        <button class="mas-item" data-v="etiquetas" onclick="ir('etiquetas')">Etiquetas Andreani</button>
+        <button class="mas-item" data-v="seguimientos" onclick="ir('seguimientos')">Cargar seguimientos</button>
+        <span class="mas-grupo">Sin evidencia</span>
+        <button class="mas-item" data-v="cerradas" onclick="ir('cerradas')">Cerradas sin evidencia</button>
+        <button class="mas-item" data-v="despachadas" onclick="ir('despachadas')">Despachadas sin verificar</button>
+        <button class="mas-item" data-v="regularizar-despachos" onclick="regularizarJornadaSeleccionada()">Regularizar sin evidencia</button>
+        <span class="mas-grupo">Configuración</span>
+        <button class="mas-item" data-v="perfiles" onclick="ir('perfiles')">Perfiles de foto</button>
+        <button class="mas-item" data-v="horarios" onclick="ir('horarios')">Horarios de despacho</button>
+      </div>
+    </details>
   </div>
 
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
@@ -389,12 +452,23 @@ function actAbierta(){ return sessionStorage.getItem('prep_actividad_abierta')==
 function setActAbierta(v){ sessionStorage.setItem('prep_actividad_abierta', v?'1':'0'); }
 
 function ir(v){
+  modoPedido(false);
+  if(pedidoDeLaUrl())history.pushState({},'',location.pathname.replace(/[?#].*$/,''));
   detenerHeartbeat();
   detenerPollFotos();
   if(v!=='pendientes')detenerPollingPendientes();
   VISTA=v; PREP=null;
-  document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
-  if(v==='pendientes'){cargarPendientes();iniciarPollingPendientes();}
+  document.querySelectorAll('.tab, .mas-item').forEach(function(t){t.classList.toggle('on',t.dataset.v===v);});
+  var mas=document.getElementById('mas-menu');
+  if(mas){
+    mas.open=false; // elegir una opción cierra el menú
+    // El botón "Más" queda marcado cuando la vista activa vive adentro, para que no parezca
+    // que no hay nada seleccionado.
+    var dentro=!!mas.querySelector('.mas-item.on');
+    mas.querySelector('summary').classList.toggle('on', dentro);
+  }
+  if(v==='recoleccion'){cargarRecoleccion();}
+  else if(v==='pendientes'){cargarPendientes();iniciarPollingPendientes();}
   else if(v==='hoja-ml'){DESP.canal='ml';cargarHojaDespachos();}
   else if(v==='hoja-andreani'){DESP.canal='web';cargarHojaDespachos();}
   else if(v==='lotes')cargarLotes();
@@ -505,6 +579,10 @@ async function cargarPendientes(){
     PEND_CACHE=pedidos;
     PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error};
     PEND_STATUS='ready';
+    // Fail-open: si /abiertas o /devoluciones fallan, la cola se muestra igual. Es
+    // información adicional, no puede tumbar la pantalla principal del depósito.
+    await cargarAbiertas();
+    await cargarDevoluciones();
     renderPendientes();
   }catch(e){PEND_STATUS='error';c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
 }
@@ -679,6 +757,146 @@ function renderListaRecoleccion(pedidos){
 }
 
 var PEND_META={};
+// Preparaciones abiertas que ya no están en la cola. Es la única puerta hacia ellas: la
+// tarjeta desaparece cuando el pedido avanza en el canal, y el historial no las lista.
+var ABIERTAS=[];
+async function cargarAbiertas(){
+  try{
+    var r=await api('/abiertas');
+    ABIERTAS=(r.body&&r.body.ok&&r.body.data)?r.body.data:[];
+  }catch(e){ ABIERTAS=[]; }
+}
+// Devoluciones pendientes: pedidos cancelados cuyo producto ya se había levantado y sigue
+// fuera de su estante. La preparación no se cierra hasta que alguien confirme que volvió.
+var DEVOL=[]; var DEVOL_UBIS=0;
+async function cargarDevoluciones(){
+  try{
+    var r=await api('/devoluciones');
+    DEVOL=(r.body&&r.body.ok&&r.body.data)?r.body.data:[];
+    DEVOL_UBIS=(r.body&&r.body.ubicaciones_cargadas)||0;
+  }catch(e){ DEVOL=[]; DEVOL_UBIS=0; }
+}
+
+function renderDevoluciones(){
+  if(!DEVOL.length)return '';
+  return '<section class="jornada-panel" aria-labelledby="devol-title" style="border-color:var(--danger,#E5484D)">'
+    +'<div class="jornada-head"><div><h2 id="devol-title">Volver a su lugar <span class="badge b-warn">'+DEVOL.length+'</span></h2>'
+    +'<div class="jornada-meta">Estos pedidos se cancelaron después de que alguien fue a buscar el producto. '
+    +'Está fuera de su estante hasta que se confirme dónde volvió.</div></div></div>'
+    +(DEVOL_UBIS?'':'<div class="flash warn" style="display:block">⚠ No hay estantes cargados todavía. '
+      +'Un administrador tiene que crearlos en <b>Conteo → Elegir alcance</b> antes de poder confirmar una devolución.</div>')
+    +DEVOL.map(function(d){
+      return '<div class="ped" onclick="abrirDevolucion('+d.id+')">'
+        +'<div class="ped-top"><span class="ped-num">#'+esc(d.numero_pedido||('preparación '+d.preparacion_id))+'</span>'
+        +(d.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>')
+        +'<span class="badge b-warn">cancelado</span></div>'
+        +'<div class="ped-cli">'+Number(d.productos)+' producto'+(Number(d.productos)===1?'':'s')+' a devolver'
+        +(d.preparado_por?' · lo preparó '+esc(d.preparado_por):'')+'</div>'
+        +'<div class="ped-items">pendiente desde '+fecha(d.creado_en)+'</div>'
+        +'<div class="ped-foot"><button class="btn mini" style="margin-left:auto">Confirmar devolución →</button></div></div>';
+    }).join('')
+    +'</section>';
+}
+
+async function abrirDevolucion(id){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Cargando…</div>';
+  try{
+    var r=await api('/devoluciones/'+id);
+    if(!r.body.ok)throw new Error(r.body.error||'No se pudo abrir');
+    var d=r.body.data, ubis=d.ubicaciones||[];
+    var opciones=ubis.map(function(u){return '<option value="'+u.id+'">'+esc(u.zona)+' · '+esc(u.estante)+'</option>';}).join('');
+    c.innerHTML='<button class="btn sec mini" onclick="ir(\'pendientes\')">← Cola</button>'
+      +'<h2 style="margin:12px 0 4px">Volver a su lugar</h2>'
+      +'<p class="sub">Pedido #'+esc((d.preparacion&&d.preparacion.numero_pedido)||'')+' · cancelado. '
+      +'Indicá a qué estante volvió cada producto.</p>'
+      +(ubis.length?'':'<div class="flash warn" style="display:block">No hay estantes cargados. '
+        +'Un administrador tiene que crearlos en Conteo → Elegir alcance.</div>')
+      +'<div class="desp-list">'+(d.items||[]).map(function(it){
+        return '<article class="desp-card"><h3>'+esc(it.nombre||it.sku||'producto')+'</h3>'
+          +'<div class="desp-meta">'+esc(it.sku||'sin SKU')+' · '+Number(it.cantidad)+' unidad'+(Number(it.cantidad)===1?'':'es')+'</div>'
+          +(ubis.length?'<div class="desp-scan"><label for="ubi-'+it.item_id+'">¿Dónde lo dejaste?</label>'
+            +'<select id="ubi-'+it.item_id+'" data-item="'+it.item_id+'"><option value="">Elegí el estante…</option>'+opciones+'</select></div>':'')
+          +'</article>';
+      }).join('')+'</div>'
+      +(ubis.length?'<div class="finbar"><button class="btn grande" onclick="confirmarDevolucion('+d.id+')">Confirmar que volvió a su lugar</button></div>':'');
+    // Con un solo producto —el 91% de los casos— elegir el estante ya es todo el trabajo.
+    // Con varios, el primero que elijas se copia a los que siguen vacíos: lo habitual es que
+    // todo el pedido vuelva al mismo lado, pero cada uno queda editable porque a veces no.
+    var sel=c.querySelectorAll('select[data-item]');
+    if(sel.length===1){ sel[0].focus(); }
+    else if(sel.length>1){
+      sel[0].addEventListener('change',function(){
+        for(var i=1;i<sel.length;i++)if(!sel[i].value)sel[i].value=sel[0].value;
+      });
+    }
+  }catch(e){ c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>'
+    +'<button class="btn sec mini" style="margin-top:10px" onclick="ir(\'pendientes\')">← Cola</button>'; }
+}
+
+async function confirmarDevolucion(id){
+  var sel=document.querySelectorAll('select[data-item]'), ubicaciones={}, falta=false;
+  sel.forEach(function(s){ if(!s.value){falta=true; s.style.borderColor='var(--danger,#E5484D)';} else ubicaciones[s.getAttribute('data-item')]=Number(s.value); });
+  if(falta)return toastSeg('Elegí el estante de cada producto','bad');
+  var r=await api('/devoluciones/'+id+'/confirmar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ubicaciones:ubicaciones})});
+  if(!r.body.ok)return toastSeg(r.body.error||'No se pudo confirmar','bad');
+  toastSeg('Devolución confirmada: el producto quedó asentado en su estante','ok');
+  ir('pendientes');
+}
+
+// Se toma el claim antes de abrir: sólo ve el detalle quien lo tiene vigente, y estas
+// quedaron con el claim vencido. Es el mismo camino que usan las tarjetas de la cola.
+// Si otro la tiene tomada, el servidor lo dice y se muestra ese motivo, en vez de un 403 seco.
+async function retomarAbierta(id){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Abriendo la preparación…</div>';
+  try{
+    var r=await api('/'+id+'/tomar',{method:'POST'});
+    if(!r.body.ok)throw new Error(r.body.error||'No se pudo abrir');
+    await abrirDetalle(id,true);
+  }catch(e){
+    c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>'
+      +'<button class="btn sec mini" style="margin-top:10px" onclick="ir(\'pendientes\')">← Cola</button>';
+  }
+}
+
+function renderAbiertas(){
+  var fuera=ABIERTAS.filter(function(a){return !a.en_cola;});
+  if(!fuera.length)return '';
+  return '<section class="jornada-panel" aria-labelledby="abiertas-title" style="border-color:var(--amber,#F5B942)">'
+    +'<div class="jornada-head"><div><h2 id="abiertas-title">Preparaciones abiertas sin terminar <span class="badge b-warn">'+fuera.length+'</span></h2>'
+    +'<div class="jornada-meta">Su pedido ya no está en la cola —salió, se canceló o cambió de estado— pero la preparación quedó abierta. Lo escaneado y las fotos se conservan.</div></div></div>'
+    +fuera.map(function(a){
+      var det=a.items_listos+'/'+a.total_items+' ítems';
+      if(a.total_fotos)det+=' · '+a.total_fotos+' foto'+(a.total_fotos===1?'':'s');
+      if(a.claim_de)det+=' · la tiene '+esc(a.claim_de);
+      return '<div class="ped" onclick="retomarAbierta('+a.id+')">'
+        +'<div class="ped-top"><span class="ped-num">#'+esc(a.numero_pedido||('preparación '+a.id))+'</span>'
+        +(a.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>')+'</div>'
+        +'<div class="ped-cli">'+esc(a.comprador||'—')+' · abierta '+fecha(a.creado_en)+'</div>'
+        +'<div class="ped-items">'+det+'</div>'
+        +'<div class="ped-foot"><button class="btn mini" style="margin-left:auto">Abrir →</button></div></div>';
+    }).join('')
+    +'</section>';
+}
+
+// "Productos a buscar": la lista consolidada por producto, que hasta ahora vivía embebida
+// arriba de la cola. Todavía sin marcado unidad por unidad — eso necesita la tabla de marcas
+// y llega en la próxima tanda; por ahora es la misma lista, en su propio lugar.
+async function cargarRecoleccion(){
+  var c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="loading">Cargando productos…</div>';
+  try{
+    var r=await api('/pendientes');
+    if(!r.body.ok)throw new Error(r.body.error||'error');
+    PEND_CACHE=r.body.data||[];
+    PEND_META={actualizado_en:r.body.actualizado_en,sync_error:r.body.sync_error};
+    var lista=renderListaRecoleccion(PEND_CACHE);
+    c.innerHTML=(lista||'<div class="loading">No hay productos para buscar: la cola está vacía.</div>')
+      +'<p class="sub" style="margin-top:14px">Cuando termines de juntar, pasá a <b>Pedidos a preparar</b> para verificar cada unidad con su código.</p>';
+  }catch(e){c.innerHTML='<div class="loading err">No se pudo cargar: '+esc(e.message)+'</div>';}
+}
+
 function renderPendientes(){
   var c=document.getElementById('cuerpo');
   var html='<section class="jornada-panel cola-directa" aria-labelledby="cola-title"><div class="jornada-head"><div><h2 id="cola-title">Pedidos para preparar</h2><div class="jornada-meta">Abrí un pedido y verificá cada unidad con su código.</div></div><button class="btn sec mini" onclick="cargarPendientes()">Actualizar</button></div><p class="jornada-note">La cola se actualiza automáticamente. MercadoLibre aparece primero y luego los pedidos más antiguos.</p></section>';
@@ -690,6 +908,8 @@ function renderPendientes(){
   }else if(hm){
     html+='<div style="font-size:12px;color:var(--muted,#888);margin:4px 0 8px">actualizado hace '+hm+'</div>';
   }
+  html+=renderDevoluciones();
+  html+=renderAbiertas();
   if(PEND_STATUS==='ready')html+=renderListaRecoleccion(visibles);
   if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
   else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini" style="min-height:44px" onclick="cargarPendientes()">Reintentar</button></div>';
@@ -741,6 +961,10 @@ async function cargarDatosSilenciosos(){
     if(!pr.body.ok)throw new Error(pr.body.error||'No se pudo actualizar la cola');
     var pedidos=pr.body.data||[];
     registrarPendientesNuevos(pedidos,true);PEND_CACHE=pedidos;PEND_META={actualizado_en:pr.body.actualizado_en,sync_error:pr.body.sync_error};
+    // Una cancelación puede llegar en cualquier momento: si el refresco de fondo no las
+    // trajera, la tarea de devolución sólo aparecería al recargar la pantalla entera.
+    await cargarAbiertas();
+    await cargarDevoluciones();
     renderPendientesSinInterrumpir();
   }catch(e){/* el refresco de fondo no interrumpe la preparación */}
   finally{pendientesEnVuelo=false;}
@@ -936,7 +1160,26 @@ async function elegirDireccion(fuente){
 
 // ─── Detalle / preparación ────────────────────────────────────────────────────
 
-async function abrirDetalle(id){
+// La preparación abierta tiene URL propia. Antes sólo se llegaba desde su tarjeta en la
+// cola, y si el pedido se caía de la cola quedaba inalcanzable: así se encerraron 38.
+function urlPedido(id){
+  var base=location.pathname.replace(/[?#].*$/,'');
+  return base+'?pedido='+encodeURIComponent(id);
+}
+function pedidoDeLaUrl(){
+  var m=/[?&]pedido=(\d+)/.exec(location.search);
+  return m?Number(m[1]):null;
+}
+// Dentro de un pedido no se muestran el encabezado ni las pestañas: la navegación general no
+// sirve mientras se escanea, y en el celular el trabajo arrancaba recién a 388 px.
+function modoPedido(activo){
+  var enc=document.getElementById('encabezado'), tabs=document.getElementById('tabs');
+  if(enc) enc.style.display = activo ? 'none' : '';
+  if(tabs) tabs.style.display = activo ? 'none' : '';
+}
+
+async function abrirDetalle(id,empujar){
+  modoPedido(true);
   // Sale del flujo de tabs (VISTA sigue siendo 'pendientes' si se llegó por click en una
   // card, ya que ese camino no pasa por ir()) — sin esto, el polling de Pendientes seguía
   // activo y pisaba el detalle en curso cada ~25s sin ningún aviso.
@@ -945,8 +1188,21 @@ async function abrirDetalle(id){
   ACT_TOPE=30;
   NUEVOS_ACUMULADOS=0;
   var r=await api('/'+id);
-  if(!r.body.ok){document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>';return;}
+  // Entrar por URL directa a una preparación libre: sólo ve el detalle quien tiene el claim
+  // vigente, así que si está libre se toma y se reintenta una vez. Si la tiene otro, el
+  // servidor lo dice y se muestra ese motivo.
+  if(!r.body.ok&&r.body.code==='FORBIDDEN'){
+    var t=await api('/'+id+'/tomar',{method:'POST'});
+    if(t.body&&t.body.ok)r=await api('/'+id);
+    else if(t.body&&t.body.error)r={body:{ok:false,error:t.body.error}};
+  }
+  if(!r.body.ok){
+    document.getElementById('cuerpo').innerHTML='<div class="loading err">'+esc(r.body.error)+'</div>'
+      +'<button class="btn sec mini" style="margin-top:10px" onclick="ir(\'pendientes\')">← Cola</button>';
+    return;
+  }
   PREP=r.body.data;
+  if(empujar!==false&&pedidoDeLaUrl()!==Number(id))history.pushState({pedido:Number(id)},'',urlPedido(id));
   ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, (PREP.eventos&&PREP.eventos[0])?PREP.eventos[0].id:0);
   renderDetalle();
   iniciarHeartbeat(id);
@@ -1075,6 +1331,25 @@ function renderFotosPaquete(p){
     +'</div>';
 }
 
+// El canal informó que el pedido ya salió (o se canceló) mientras esta preparación sigue
+// abierta. Se avisa y se deja terminar: la evidencia se guarda igual y nada se pierde.
+// Antes esto no se decía en ningún lado — el pedido simplemente desaparecía de la cola.
+function avisoCanal(p){
+  var c=p.canal_estado;
+  if(!c||p.estado==='completada')return '';
+  if(c.cancelado){
+    return '<div class="flash warn" style="display:block">⚠ Este pedido figura <b>'+esc(c.estado_canal||'cancelado')
+      +'</b> en '+(p.canal==='ml'?'MercadoLibre':'WooCommerce')
+      +'. No lo despaches: registrá lo que hiciste y cerrala.</div>';
+  }
+  if(c.despachado){
+    var det=c.envio_ml==='delivered'?'ya fue entregado':(c.envio_ml==='shipped'?'ya salió':'figura '+esc(c.estado_canal||'despachado'));
+    return '<div class="flash warn" style="display:block">⚠ <b>'+(p.canal==='ml'?'MercadoLibre':'WooCommerce')
+      +' informa que este envío '+det+'.</b> Terminá de registrar lo que hiciste; la evidencia se guarda igual.</div>';
+  }
+  return '';
+}
+
 function renderDetalle(){
   var p=PREP;
 
@@ -1111,6 +1386,7 @@ function renderDetalle(){
     // Cuando el número visible es el del pack, el id de la orden queda igual a la vista: es
     // el que aparece en la etiqueta y en el resto de la herramienta.
     +(p.pack_id&&p.numero_pedido&&p.pack_id!==p.numero_pedido?'<p class="sub" style="margin-top:-6px">Orden ML '+esc(p.numero_pedido)+'</p>':'')
+    +avisoCanal(p)
     +'<div id="banner-presencia" class="aviso" role="status" aria-live="polite" style="display:none"></div>'
     +'<div style="display:flex;justify-content:space-between;align-items:center">'
     +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
@@ -1153,7 +1429,7 @@ function renderDetalle(){
   html+='<div class="finbar">';
   if(!completada){
     html+='<button class="btn sec" onclick="asociarTracking()">'+(PREP.tracking?'Tracking asociado ✓':'Escanear tracking')+'</button>';
-    html+='<button class="btn" '+(paso2?'':'disabled')+' onclick="completar()">Finalizar preparación</button>';
+    html+='<button class="btn grande" '+(paso2?'':'disabled')+' onclick="completar()">Finalizar preparación</button>';
     if(!paso1)html+='<span class="sub" style="margin:0">Faltan ítems por verificar.</span>';
     else if(!paso2)html+='<span class="sub" style="margin:0">Faltan fotos obligatorias.</span>';
   }else{
@@ -3025,8 +3301,19 @@ Api.requirePermiso('preparacion').then(function(d){
   if (!d) return;
   window.__PREP_AUTH=d;
   if (d.user) USERNAME = d.user;
+  // Si la URL trae un pedido, se abre ése: es lo que permite recargar, compartir el link y
+  // volver a entrar a una preparación que ya no está en la cola.
+  var inicial=pedidoDeLaUrl();
+  if(inicial){ abrirDetalle(inicial,false); return; }
   cargarPendientes();
   iniciarPollingPendientes();
+});
+
+// Botón atrás del navegador: vuelve a la cola sin recargar, y adelante reabre el pedido.
+window.addEventListener('popstate', function(){
+  var id=pedidoDeLaUrl();
+  if(id){ abrirDetalle(id,false); }
+  else if(VISTA==='detalle'){ ir('pendientes'); }
 });
 </script>
 <script type="module" src="../lib/scanner.js"></script>
