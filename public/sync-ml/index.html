@@ -77,6 +77,20 @@
   .acciones{display:flex;gap:10px;flex-wrap:wrap;margin-top:11px;}
   .msg{font-size:12.5px;color:var(--muted);margin-top:12px;min-height:16px;}
   .loading{color:var(--muted2);font-size:13px;padding:30px 0;text-align:center;}
+  /* Vigía de formato (2026-09-12). Va arriba de todo y en ámbar: si una publicación cambió de
+     formato, es lo primero que hay que mirar en esta pantalla. */
+  .cambios-formato{background:var(--panel,#141A25);border:1px solid rgba(245,185,66,.45);border-radius:12px;padding:14px 16px;margin-bottom:16px;}
+  .cambios-formato[hidden]{display:none!important;}
+  .cambios-formato h2{font-size:14px;margin:0 0 4px;}
+  .cf-sub{font-size:12.5px;color:var(--muted,#8493B0);margin:0 0 10px;line-height:1.5;}
+  .cf-fila{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border,#24304A);}
+  .cf-fila:last-child{border-bottom:0;}
+  .cf-cambio{font-family:'Courier New',monospace;font-size:12px;margin-top:3px;}
+  .cf-antes{color:var(--muted,#8493B0);text-decoration:line-through;}
+  .cf-despues{color:var(--amber,#F5B942);font-weight:700;}
+  .cf-acciones{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;}
+  .cf-acciones .btn{min-height:44px;display:inline-flex;align-items:center;}
+  @media(max-width:600px){.cf-acciones{margin-left:0;width:100%;}.cf-acciones .btn{flex:1;justify-content:center;}}
 </style>
 </head>
 <body>
@@ -92,6 +106,13 @@
       <p class="sub">Estado en vivo del stock, los pedidos y lo que necesita tu atención.</p>
     </div>
     <button class="btn sec" id="btn-refresh" onclick="cargar()">↻ Actualizar</button>
+  </div>
+
+  <div class="cambios-formato" id="cambios-formato" hidden>
+    <h2>Publicaciones que cambiaron de formato</h2>
+    <p class="cf-sub">MercadoLibre cambió qué dice que estás vendiendo en estas publicaciones.
+      Se pausaron para que no vendan mal. Revisá el antes y el después antes de reactivarlas.</p>
+    <div id="cambios-formato-lista"></div>
   </div>
 
   <div id="cuerpo"><div class="loading">Cargando estado…</div></div>
@@ -112,6 +133,7 @@ async function cargar(){
     cont.innerHTML=render(d);
     cargarReactivables();
     cargarFrenadas();
+    cargarCambiosFormato();
   }catch(err){
     cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
   }finally{btn.disabled=false;}
@@ -153,6 +175,50 @@ async function cargarReactivables(){
 }
 
 var LABELS_PRECIO={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:'OK'};
+
+/* ── VIGÍA DE FORMATO ──
+   Publicaciones que pasaron a describir otra cosa (cambió su producto de catálogo, sus
+   unidades por pack o su formato de venta) y el vigía pausó. Reactivar es siempre una
+   decisión humana: el vigía nunca despausa solo. */
+async function cargarCambiosFormato(){
+  var caja=document.getElementById('cambios-formato');
+  if(!caja)return;
+  try{
+    var r=await fetch('/api/sync/cambios-formato');
+    var d=await r.json();
+    var filas=(d&&d.data)||[];
+    caja.hidden=!filas.length;
+    if(!filas.length)return;
+    document.getElementById('cambios-formato-lista').innerHTML=filas.map(function(c){
+      var antes=c.valor_anterior==null?'(vacío)':c.valor_anterior;
+      var despues=c.valor_nuevo==null?'(vacío)':c.valor_nuevo;
+      return '<div class="cf-fila">'
+        +'<div style="min-width:0">'
+        +'<div><b>'+esc(c.titulo||c.item_id)+'</b>'+(c.sku?' · '+esc(c.sku):'')+'</div>'
+        +'<div class="cf-cambio">'+esc(c.campo)+': <span class="cf-antes">'+esc(antes)+'</span> → <span class="cf-despues">'+esc(despues)+'</span></div>'
+        +(c.pausada?'':'<div style="font-size:12px;color:var(--amber,#F5B942)">No se pausó (freno de mano o error).</div>')
+        +(c.pausa_error?'<div style="font-size:12px;color:var(--red,#F87171)">No se pudo pausar: '+esc(c.pausa_error)+'</div>':'')
+        +'</div>'
+        +'<div class="cf-acciones">'
+        +'<button class="btn sec" onclick="revisarCambio('+c.id+',false)">Dejar pausada</button>'
+        +'<button class="btn" onclick="revisarCambio('+c.id+',true)">Estaba bien, reactivar</button>'
+        +(c.permalink?'<a class="btn sec" href="'+esc(c.permalink)+'" target="_blank" rel="noopener">Ver en ML ↗</a>':'')
+        +'</div></div>';
+    }).join('');
+  }catch(e){ caja.hidden=true; }
+}
+
+async function revisarCambio(id, reactivar){
+  if(reactivar && !confirm('Vas a reactivar esta publicación en MercadoLibre.\n\n¿Verificaste que el formato ahora es el correcto?'))return;
+  try{
+    var r=await fetch('/api/sync/cambios-formato/'+id+'/revisar',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({reactivar:!!reactivar})});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    await cargarCambiosFormato();
+    cargarReactivables();
+  }catch(err){ alert('No se pudo: '+err.message); }
+}
 
 var yaScrolleFrenadas=false;
 async function cargarFrenadas(){
