@@ -1,0 +1,65 @@
+# Stack QA bajo demanda. No usar directamente: lo levanta y baja scripts/qa/qa.sh, que prepara
+# QA_DIR (snapshot anonimizado, certificados, secretos aleatorios) y el contexto de build.
+name: fusion-qa
+
+x-seguridad: &seguridad
+  read_only: true
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  tmpfs: ["/tmp:size=64m"]
+  restart: "no"
+  cpu_shares: 256          # prioridad menor que producción ante contención
+
+services:
+  qa-simulador:
+    <<: *seguridad
+    build: { context: "${QA_BUILD_DIR}", dockerfile: deploy/qa/Dockerfile }
+    image: fusion-qa-app:local
+    # Se apaga solo a las 8 h: QA es bajo demanda y nunca queda olvidado encendido.
+    command: ["timeout", "8h", "node", "scripts/qa/simulador-canales.mjs"]
+    environment:
+      SIM_DB: /data/fusion.sqlite
+      SIM_CERT: /certs/simulador.pem
+      SIM_KEY: /certs/simulador-key.pem
+      SIM_PORT: "8443"
+    volumes:
+      - "${QA_DIR}/data:/data:ro"
+      - "${QA_DIR}/certs:/certs:ro"
+    mem_limit: 384m
+    cpus: 0.5
+    networks: [qa]
+    # Sin puertos publicados: sólo lo alcanza qa-app por la red interna.
+
+  qa-app:
+    <<: *seguridad
+    image: fusion-qa-app:local
+    depends_on: [qa-simulador]
+    command: ["timeout", "8h", "node", "server.js"]
+    env_file: ["${QA_DIR}/qa.env"]
+    environment:
+      PORT: "3101"
+      DB_PATH: /data/fusion.sqlite
+      NODE_ENV: qa
+      DISABLE_CRONS: "${QA_CRONS_DESACTIVADOS:-true}"
+      PUSH_PROVIDER: mock
+      PUSH_REAL_ENABLED: "false"
+      ML_API_BASE: https://qa-simulador:8443
+      WOO_URL: https://qa-simulador:8443
+      NODE_EXTRA_CA_CERTS: /certs/ca.pem
+    volumes:
+      - "${QA_DIR}/data:/data"
+      - "${QA_DIR}/uploads:/app/uploads"
+      - "${QA_DIR}/certs/ca.pem:/certs/ca.pem:ro"
+    ports:
+      - "127.0.0.1:3101:3101"
+    mem_limit: 768m
+    cpus: 0.75
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3101/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [qa]
+
+networks:
+  qa: {}
