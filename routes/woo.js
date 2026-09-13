@@ -6,6 +6,7 @@ import { mapConLimite } from '../lib/concurrencia.js';
 import { buildWooPath } from '../lib/wooStock.js';
 import { syncSkuPuntual } from './sync.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
+import { espera } from '../lib/esperas.js';
 
 const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refresco
 
@@ -140,8 +141,8 @@ export async function wooFetchConReintento(cfg, path, method = 'get', body = nul
       // sin este piso, un header en 0 o casi disparaba 3 reintentos casi inmediatos contra
       // un Woo que recién pidió frenar).
       const esperaMs = (ultimoError?.status === 429 && ultimoError?.retryAfterMs != null)
-        ? Math.max(ultimoError.retryAfterMs, WOO_RETRY_BACKOFF_MS[intento - 1])
-        : WOO_RETRY_BACKOFF_MS[intento - 1];
+        ? Math.max(ultimoError.retryAfterMs, espera(WOO_RETRY_BACKOFF_MS[intento - 1]))
+        : espera(WOO_RETRY_BACKOFF_MS[intento - 1]);
       await sleep(esperaMs);
     }
     try {

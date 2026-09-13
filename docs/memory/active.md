@@ -212,7 +212,17 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   estrenado queda por debajo del umbral y pausa publicaciones sanas de a una. El 2026-09-12 se
   hizo el backfill de `catalog_product_id` (3.955 ítems) antes del reinicio, y la primera corrida
   dio 0 cambios y 0 pausadas.
-- **La suite completa cuesta ~11 minutos, no 50** (2026-09-12). Cada test abre una base nueva y
+- **La suite completa cuesta ~4,5 minutos** (259 s y 264 s, dos corridas verdes 2026-09-13; eran
+  ~50 min antes de la base rápida y ~10 min después). Dos ajustes más del 2026-09-13:
+  `maxWorkers: 2` en `vitest.config.js` (con 2 CPU vitest corría los archivos de a uno; no hay
+  archivos que compartan base temporal) y `FUSION_ESPERAS_RAPIDAS=1`, que vía `lib/esperas.js`
+  acorta a 1 ms los backoff de reintento de Woo/ML/verificación y las pausas entre llamadas a ML
+  (`routes/woo.js`, `routes/matcher.js`, `routes/sync.js`, `lib/matcherPush.js`). Se lee en cada
+  llamada: los tests que verifican el valor real la apagan en su `describe` (piso de 500 ms del
+  Retry-After en `woo.test.js`, corte por tiempo en `matcherPush.test.js`). No se tocaron las
+  esperas de fotos, identidad, reconciliación de stock ni el limitador de ML (sus tests miden el
+  valor real). Producción nunca define la variable.
+- **Base rápida de la suite** (2026-09-12). Cada test abre una base nueva y
   corre las 68 migraciones, pero el 90% de ese costo es **fsync**, no las migraciones: `openDb`
   tarda 1.681 ms en disco, 175 ms con el journal en memoria y 160 ms sobre tmpfs. `vitest.config.js`
   setea `SQLITE_UNSAFE_FAST=1` y `db/index.js` pone `journal_mode=MEMORY` + `synchronous=OFF` sólo

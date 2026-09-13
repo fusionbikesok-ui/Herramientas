@@ -348,8 +348,16 @@ describe('lib/matcherPush', () => {
   });
 
   describe('corte por tope de tiempo puro (hallazgo A del revisor, 2026-08-06)', () => {
+    // Estos tests dependen del CALL_DELAY_MS real (900 × 350 ms > 300 s): sin la espera rápida
+    // de la suite (lib/esperas.js).
+    let esperasRapidas;
+    beforeEach(() => {
+      esperasRapidas = process.env.FUSION_ESPERAS_RAPIDAS;
+      delete process.env.FUSION_ESPERAS_RAPIDAS;
+    });
     afterEach(() => {
       vi.useRealTimers();
+      if (esperasRapidas !== undefined) process.env.FUSION_ESPERAS_RAPIDAS = esperasRapidas;
     });
     // Con muchas publicaciones sanas (ML responde 200 a todo) el CALL_DELAY_MS entre cada una
     // termina agotando TIEMPO_MAX_CORRIDA_MS sin que haya habido ningún cooldown/cupo propio

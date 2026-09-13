@@ -123,6 +123,12 @@ describe('woo route', () => {
     afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); _resetCircuitoWooParaTests(); });
 
     describe('Retry-After', () => {
+      // Estos tests verifican el valor REAL del backoff (piso de 500 ms): sin la espera rápida
+      // de la suite (lib/esperas.js).
+      let esperasRapidas;
+      beforeEach(() => { esperasRapidas = process.env.FUSION_ESPERAS_RAPIDAS; delete process.env.FUSION_ESPERAS_RAPIDAS; });
+      afterEach(() => { if (esperasRapidas !== undefined) process.env.FUSION_ESPERAS_RAPIDAS = esperasRapidas; });
+
       it('respeta Retry-After en segundos en vez del backoff fijo', async () => {
         vi.useFakeTimers();
         try {

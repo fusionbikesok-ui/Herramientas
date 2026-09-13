@@ -21,6 +21,7 @@ import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta } from '../lib/guardiaMl.js';
+import { espera } from '../lib/esperas.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -481,7 +482,7 @@ async function buscarPedidoWcPorMlOrderId(wooCfg, orderId, desdeIso) {
   let ultimoError;
 
   for (let intento = 0; intento <= VERIF_WC_BACKOFF_MS.length; intento++) {
-    if (intento > 0) await sleep(VERIF_WC_BACKOFF_MS[intento - 1]);
+    if (intento > 0) await sleep(espera(VERIF_WC_BACKOFF_MS[intento - 1]));
     try {
       for (let page = 1; page <= VERIF_WC_MAX_PAGINAS; page++) {
         const resp = await wooFetch(
@@ -1103,7 +1104,7 @@ async function _empujarClaveMl(db, mlCfg, sku, diff) {
           return { clave, estado: 'omitido', detalle: 'Cooldown activo en ML (429), lo retoma el cron' };
         }
         status = est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido';
-        await sleep(ML_CALL_DELAY_MS);
+        await sleep(espera(ML_CALL_DELAY_MS));
       }
       if (status === 'desconocido') {
         logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: 'No se pudo consultar el status de la publicación en ML' });
@@ -1333,7 +1334,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
           break;
         }
         estadoItem.set(itemId, est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido');
-        await sleep(ML_CALL_DELAY_MS);
+        await sleep(espera(ML_CALL_DELAY_MS));
       }
       const status = estadoItem.get(itemId);
       if (status === 'desconocido') {
@@ -1396,7 +1397,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     }
 
     // Delay para respetar rate limits de ML.
-    await sleep(ML_CALL_DELAY_MS);
+    await sleep(espera(ML_CALL_DELAY_MS));
   }
 
   if (cortadoPor429) {
@@ -2621,7 +2622,7 @@ async function variacionesVivasDeMl(db, mlCfg, itemIds) {
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(db, mlCfg, 'get', `/items?ids=${chunk.join(',')}&attributes=id,status,variations`);
-    await sleep(ML_CALL_DELAY_MS);
+    await sleep(espera(ML_CALL_DELAY_MS));
     if (resp.status !== 200 || !Array.isArray(resp.data)) continue; // chunk fallido → fail-closed
     for (const entry of resp.data) {
       if (entry.code !== 200 || !entry.body) continue;

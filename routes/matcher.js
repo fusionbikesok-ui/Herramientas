@@ -14,6 +14,7 @@ import { escanearGuardiaMl } from '../lib/guardiaMl.js';
 import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl } from '../lib/identidadProductos.js';
 import { detectarCambios } from '../lib/vigiaFormato.js';
 import { procesarCambios } from '../lib/vigiaPausado.js';
+import { espera } from '../lib/esperas.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -180,7 +181,7 @@ const ML_ERRORES_NO_TRANSITORIOS = [
 export async function mlFetchConReintento(db, cfg, method, path, body = null, opts = {}) {
   let ultimoResp, ultimoError;
   for (let intento = 0; intento <= ML_RETRY_BACKOFF_MS.length; intento++) {
-    if (intento > 0) await sleep(ML_RETRY_BACKOFF_MS[intento - 1]);
+    if (intento > 0) await sleep(espera(ML_RETRY_BACKOFF_MS[intento - 1]));
     try {
       const resp = await mlFetch(db, cfg, method, path, body, opts);
       if (resp.status === 200) return resp;
@@ -282,7 +283,7 @@ async function listarItemIds(db, cfg, status) {
     ids.push(...results);
     scrollId = resp.data.scroll_id;
     if (!scrollId) break;
-    await sleep(CALL_DELAY_MS);
+    await sleep(espera(CALL_DELAY_MS));
   }
   return ids;
 }
@@ -306,7 +307,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   for (const st of STATUSES_A_TRAER) {
     const ids = await listarItemIds(db, cfg, st);
     ids.forEach(id => idSet.add(id));
-    await sleep(CALL_DELAY_MS);
+    await sleep(espera(CALL_DELAY_MS));
   }
   const allIds = [...idSet];
 
@@ -339,7 +340,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
       filas.push(...aplanarItemMl(entry.body));
     }
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, allIds.length), total: allIds.length });
-    await sleep(CALL_DELAY_MS);
+    await sleep(espera(CALL_DELAY_MS));
   }
 
   // 3) Reemplazar el cache de forma atómica
@@ -552,7 +553,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
       filas.push(...aplanarItemMl(entry.body));
     }
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, ids.length), total: ids.length });
-    await sleep(CALL_DELAY_MS);
+    await sleep(espera(CALL_DELAY_MS));
   }
 
   const previas = new Map(
