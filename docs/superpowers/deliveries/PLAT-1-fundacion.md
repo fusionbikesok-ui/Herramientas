@@ -9,6 +9,13 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 - Responsable operativo y técnico: José (usuario), valida los reportes de diferencias en sombra; técnico: asistente
 - Base, rama y worktree: por definir
 - Feature flags y alcance del piloto: por definir
+- Decisiones de José (2026-09-13):
+  - **Código:** carpeta nueva `plataforma/` dentro de este repo (no repo aparte); comparte tests,
+    QA bajo demanda, backups y despliegue con el legado, que se vacía corte a corte.
+  - **Claves de cifrado** de PII y secretos: archivo 600 en el VPS, fuera del repo y de la base, con
+    copia que José guarda fuera del VPS (mismo criterio que la passphrase de Backblaze).
+  - **Passkeys** (catálogo y administración): deben funcionar en iPhone, Mac/PC con biometría,
+    computadoras sin biometría (iPhone como llave vía QR o llave USB) y Android.
 
 ## Evidencia técnica
 

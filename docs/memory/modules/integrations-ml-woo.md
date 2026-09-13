@@ -54,3 +54,20 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
 - Un `seller_sku` externo divergente bloquea la sincronización hasta revisión. Los vínculos compartidos pueden publicar el stock completo en cada clave por decisión operativa, pero una sobreventa agregada abre incidente crítico y retiene excedentes; no se promete reserva atómica entre claves ML.
 - UM1 es la única puerta de escritura para vínculos, `seller_sku` y pausas. Matcher, Cobertura y Sync legacy conservan consultas, pero sus mutaciones devuelven `410 Gone`; el cron legacy de push está retirado.
 - Guardia compara publicación+variación con SKU Woo único y seller_sku remoto exacto. La cola ofrece resolver, investigar, corregir catálogo, auditar cobertura e historial; la selección humana nunca convierte una sugerencia aproximada en auto-confirmación.
+- **Ventas retenidas (2026-09-13, plan `2026-09-13-guardia-ventas-retenidas.md`, decisiones de José):**
+  - `liberarPedidoRetenido` (`lib/guardiaMl.js`) es la única implementación de liberar: la usan el
+    endpoint manual y `liberarRetenidasResueltas`, que corre tras `procesarOperacionesGuardia` en la
+    cron `*/5` y libera una venta sólo si **todas** sus claves (`clavesDePedidoRetenido`, desde
+    `items_json`) están cubiertas (`esClaveCubierta` o `skuUnicoEnCatalogo` del seller_sku, la misma
+    regla exportada que usa `syncMlToWc`) y ninguna `claveBloqueadaGuardia`. Una excepción **no**
+    libera (sigue `bloquea_sync=1`). Liberar borra la reserva `wc_order_id=0` sin `retenido_en` y la
+    procesada: la próxima importación crea el pedido Woo.
+  - Retener abre el incidente `guardia_ml/venta_retenida/<ml_order_id>` (advertencia, sin email);
+    liberar o cancelar lo resuelve. El worker de push (`lib/guardiaAvisos.js`) lo manda a admin o
+    `matcher:write`, con un único recordatorio a los 120 min y título "Venta liberada" al resolverse;
+    deep link `incidentes/{id}` (la App ya lo abre). El inicio muestra el chip
+    `atencion.ventas_retenidas_guardia` → `/herramientas/guardia-ml/`.
+- **Bolsas de stock compartidas (verificado 2026-09-13):** el bucle de reactivaciones de FB-32234,
+  FB-4746 y FB-10376 (jul–5 sep) era un `user_product` compartido entre productos Woo distintos
+  (causa documentada en `UM1.1-cierre-sku-ml.md`). `conflictosDeBolsaCompartida` da 0 hoy; la
+  reactivación de FB-32234 del 12-09 fue legítima (venta y reposición).

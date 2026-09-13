@@ -29,7 +29,7 @@ import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { guardiaMlRouter } from './routes/guardiaMl.js';
-import { procesarOperacionesGuardia } from './lib/guardiaMl.js';
+import { procesarOperacionesGuardia, liberarRetenidasResueltas } from './lib/guardiaMl.js';
 import { procesarOperacionesIdentidad } from './lib/identidadProductos.js';
 import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
@@ -639,7 +639,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         if (!r.ok && !r.running) console.error('Guardia ML: no se pudo iniciar lectura:', r.error);
       });
       cron.schedule('*/5 * * * *', () => {
-        procesarOperacionesGuardia(app._db, syncCfg).catch(err => console.error('Guardia ML operaciones:', err.message));
+        procesarOperacionesGuardia(app._db, syncCfg)
+          .catch(err => console.error('Guardia ML operaciones:', err.message))
+          // A continuación: un vincular confirmado en esta misma corrida ya libera la venta.
+          .finally(() => {
+            try {
+              const r = liberarRetenidasResueltas(app._db);
+              if (r.liberadas) console.log(`Guardia ML: ${r.liberadas} venta(s) retenida(s) liberada(s) al resolverse su bloqueo`);
+            } catch (err) { console.error('Guardia ML liberación automática:', err.message); }
+          });
       });
 
       // UM1 — único ejecutor de la saga remota de identidad. Fail-closed: si

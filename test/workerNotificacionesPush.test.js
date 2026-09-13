@@ -1093,3 +1093,82 @@ describe('lib/workerNotificacionesPush', () => {
     db.close();
   });
 });
+
+describe('lib/workerNotificacionesPush — venta retenida por Guardia ML', () => {
+  const pushAnterior = process.env.PUSH_REAL_ENABLED;
+  beforeEach(() => {
+    process.env.PUSH_REAL_ENABLED = 'true';
+    for (const f of [TEST_DB, `${TEST_DB}-wal`, `${TEST_DB}-shm`]) fs.rmSync(f, { force: true });
+  });
+  afterEach(() => {
+    if (pushAnterior === undefined) delete process.env.PUSH_REAL_ENABLED; else process.env.PUSH_REAL_ENABLED = pushAnterior;
+    for (const f of [TEST_DB, `${TEST_DB}-wal`, `${TEST_DB}-shm`]) fs.rmSync(f, { force: true });
+  });
+
+  function usuario(db, id, { admin = 0, permisos = [] } = {}) {
+    const ts = new Date().toISOString();
+    db.prepare('INSERT INTO users (id, username, pass_hash, is_admin, activo, creado_en, actualizado_en) VALUES (?, ?, ?, ?, 1, ?, ?)')
+      .run(id, `u${id}`, 'hash', admin, ts, ts);
+    for (const [herramienta, nivel] of permisos) db.prepare('INSERT INTO user_permisos (user_id, herramienta, nivel) VALUES (?, ?, ?)').run(id, herramienta, nivel);
+    seedDevice(db, id, `device-${id}`);
+  }
+  function ventaRetenida(db, { orderId = 'ORD-1', estado = 'activo' } = {}) {
+    const ts = new Date().toISOString();
+    return db.prepare(`INSERT INTO incidentes_operativos
+      (integracion, proceso, tipo_error, clave_dedupe, severidad, estado, mensaje_humano, contador_repeticiones,
+       primera_deteccion_en, ultima_deteccion_en, creado_en, actualizado_en)
+      VALUES ('guardia_ml', 'venta_retenida', ?, ?, 'advertencia', ?, 'Venta pagada retenida', 1, ?, ?, ?, ?)`)
+      .run(orderId, `guardia_ml|venta_retenida|${orderId}`, estado, ts, ts, ts, ts).lastInsertRowid;
+  }
+  const feed = (db, id) => db.prepare('SELECT user_id, tipo, titulo FROM notificaciones_usuario WHERE incidente_id = ? ORDER BY user_id, tipo').all(id);
+
+  it('avisa a admin y a Matcher con escritura, no a quien sólo lee ni a notificaciones-ml sin Matcher', async () => {
+    const db = openDb(TEST_DB);
+    usuario(db, 1, { admin: 1 });
+    usuario(db, 2, { permisos: [['matcher', 'write']] });
+    usuario(db, 3, { permisos: [['matcher', 'read']] });
+    usuario(db, 4, { permisos: [['notificaciones-ml', 'read']] });
+    const id = ventaRetenida(db);
+    await procesarNotificacionesPush(db);
+    expect(feed(db, id)).toEqual([
+      { user_id: 1, tipo: 'nuevo', titulo: '🛑 Venta retenida en Guardia ML' },
+      { user_id: 2, tipo: 'nuevo', titulo: '🛑 Venta retenida en Guardia ML' },
+    ]);
+    db.close();
+  });
+
+  it('manda un único recordatorio a las 2 h, nunca antes ni un segundo', async () => {
+    const db = openDb(TEST_DB);
+    usuario(db, 1, { admin: 1 });
+    const id = ventaRetenida(db);
+    await procesarNotificacionesPush(db);
+    const hace = min => new Date(Date.now() - min * 60 * 1000).toISOString();
+
+    db.prepare("UPDATE notificaciones_usuario SET creado_en = ? WHERE incidente_id = ? AND tipo = 'nuevo'").run(hace(90), id);
+    await procesarNotificacionesPush(db);
+    expect(feed(db, id).map(f => f.tipo)).toEqual(['nuevo']); // 90 min: todavía no
+
+    db.prepare("UPDATE notificaciones_usuario SET creado_en = ? WHERE incidente_id = ? AND tipo = 'nuevo'").run(hace(121), id);
+    await procesarNotificacionesPush(db);
+    expect(feed(db, id).map(f => f.tipo)).toEqual(['nuevo', 'reaviso']);
+
+    db.prepare("UPDATE notificaciones_usuario SET creado_en = ? WHERE incidente_id = ?").run(hace(600), id);
+    await procesarNotificacionesPush(db);
+    expect(db.prepare("SELECT COUNT(*) n FROM notificaciones_usuario WHERE incidente_id = ? AND tipo = 'reaviso'").get(id).n).toBe(1);
+    db.close();
+  });
+
+  it('al liberarse avisa "Venta liberada" a quienes recibieron el aviso', async () => {
+    const db = openDb(TEST_DB);
+    usuario(db, 1, { admin: 1 });
+    const id = ventaRetenida(db);
+    await procesarNotificacionesPush(db);
+    db.prepare("UPDATE incidentes_operativos SET estado = 'resuelto', resuelto_en = datetime('now') WHERE id = ?").run(id);
+    await procesarNotificacionesPush(db);
+    expect(feed(db, id)).toEqual([
+      { user_id: 1, tipo: 'nuevo', titulo: '🛑 Venta retenida en Guardia ML' },
+      { user_id: 1, tipo: 'resuelto', titulo: '✅ Venta liberada' },
+    ]);
+    db.close();
+  });
+});

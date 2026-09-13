@@ -780,6 +780,7 @@ fetch('/api/auth/me').then(function(r) {
       peMostrarProgreso();
 
       var chips = [
+        peChip(at.ventas_retenidas_guardia, 'ventas retenidas en Guardia ML', 'crit', '/herramientas/guardia-ml/', 'guardia-ml'),
         peChip(at.errores_reales, 'errores de sync', 'crit', '/herramientas/sync-detalle/?cat=errores', 'sync-ml'),
         peChip(at.requiere_atencion_ml, 'con exceso de fotos', 'crit', '/herramientas/sync-detalle/?cat=requiere_atencion_ml', 'sync-ml'),
         peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
@@ -932,6 +933,7 @@ fetch('/api/auth/me').then(function(r) {
     var labelIntegracion = Object.create(null);
     labelIntegracion['mercadolibre'] = 'MercadoLibre';
     labelIntegracion['woocommerce'] = 'WooCommerce';
+    labelIntegracion['guardia_ml'] = 'Guardia ML';
 
     var labelProceso = Object.create(null);
     labelProceso['refrescar_publicaciones'] = 'Refresco de publicaciones';

@@ -1,5 +1,5 @@
 import express from 'express';
-import { escanearGuardiaMl, estadoGuardiaMl, listarGuardiaMl, registrarEventoGuardia, encolarOperacionGuardia } from '../lib/guardiaMl.js';
+import { escanearGuardiaMl, estadoGuardiaMl, listarGuardiaMl, registrarEventoGuardia, encolarOperacionGuardia, liberarPedidoRetenido, cerrarAvisoVentaRetenida } from '../lib/guardiaMl.js';
 import { requireAdmin } from '../lib/auth.js';
 import { pausarPublicacionMl } from '../lib/matcherPush.js';
 import { perfilPublicacionMl } from '../lib/guardiaMlAprendizaje.js';
@@ -148,17 +148,8 @@ export function guardiaMlRouter(db, cfg) {
   router.post('/pedidos-retenidos/:orderId/liberar', (req, res) => {
     if (!puedeResolver(req)) return res.status(403).json({ok:false,error:'solo Ventas, Supervisor o Admin puede liberar una venta retenida'});
     const motivo=String(req.body?.motivo||'').trim(); if(!motivo)return res.status(400).json({ok:false,error:'motivo obligatorio'});
-    let ok=false;
-    db.transaction(()=>{
-      const ts=new Date().toISOString();
-      const actualizado=db.prepare("UPDATE guardia_ml_pedidos_retenidos SET estado='liberado', responsable=?, liberado_en=?, liberado_por=?, actualizado_en=? WHERE ml_order_id=? AND estado='retenido'").run(actor(req),ts,actor(req),ts,String(req.params.orderId));
-      if(!actualizado.changes)return;
-      db.prepare("DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id=? AND wc_order_id=0 AND retenido_en IS NULL").run(String(req.params.orderId));
-      db.prepare("DELETE FROM ordenes_ml_procesadas WHERE order_id=? AND NOT EXISTS (SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id=? AND wc_order_id<>0)").run(String(req.params.orderId),String(req.params.orderId));
-      const caso=db.prepare("SELECT id FROM guardia_ml_casos WHERE pedido_ml_order_id=? AND estado!='resuelto' ORDER BY id DESC LIMIT 1").get(String(req.params.orderId));
-      if(caso)registrarEventoGuardia(db,caso.id,'pedido_liberado',actor(req),{order_id:req.params.orderId,motivo});
-      ok=true;
-    })();
+    // Mismo camino que la liberación automática (lib/guardiaMl.js): un único lugar con los efectos.
+    const ok=liberarPedidoRetenido(db,req.params.orderId,{actor:actor(req),motivo});
     if(!ok)return res.status(404).json({ok:false,error:'retención no encontrada o ya resuelta'});
     res.json({ok:true,estado:'liberado'});
   });
@@ -176,6 +167,7 @@ export function guardiaMlRouter(db, cfg) {
       ok=true;
     })();
     if(!ok)return res.status(404).json({ok:false,error:'retención no encontrada o ya resuelta'});
+    cerrarAvisoVentaRetenida(db,req.params.orderId);
     res.json({ok:true,estado:'cancelado'});
   });
   router.post('/stock-compartido/:sku/confirmar', (req, res) => {

@@ -20,7 +20,7 @@ import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVe
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta } from '../lib/guardiaMl.js';
+import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { espera } from '../lib/esperas.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
@@ -171,10 +171,15 @@ export function logSync(db, { direccion, clave, sku, cantAnterior, cantNueva, es
  * ese desempate sirve para elegir entre variaciones ya vinculadas, no para aceptar como
  * identidad un SKU que nadie verificó. Acá la ambigüedad tiene que decir "no".
  */
-function skuUnicoEnCatalogo(db, sku) {
-  const limpio = String(sku ?? '').trim();
-  if (!limpio) return false;
-  return db.prepare('SELECT COUNT(*) AS n FROM catalogo_cache WHERE sku = ?').get(limpio).n === 1;
+// Ventas pagas retenidas por Guardia ML, para el chip de "Requiere tu atención" del inicio
+// (plan 2026-09-13-guardia-ventas-retenidas.md). Fail-open: sin tabla (bases de test mínimas) → 0.
+function contarVentasRetenidasGuardia(db) {
+  try {
+    return db.prepare("SELECT COUNT(*) AS n FROM guardia_ml_pedidos_retenidos WHERE estado = 'retenido'").get().n;
+  } catch (e) {
+    if (!/no such table/i.test(e.message)) console.error('dashboard: no se pudo contar ventas retenidas de Guardia ML:', e.message);
+    return 0;
+  }
 }
 
 function mlCfgOk(cfg) {
@@ -3130,6 +3135,7 @@ export function syncRouter(db, cfg) {
         remapeo_requerido: catMap.remapeo_requerido ?? 0,
         requiere_atencion_ml: catMap.requiere_atencion_ml ?? 0,
         errores_reales: erroresReales,
+        ventas_retenidas_guardia: contarVentasRetenidasGuardia(db),
       },
       skus,
       frenadas,
