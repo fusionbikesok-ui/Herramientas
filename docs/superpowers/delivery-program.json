@@ -38,7 +38,7 @@
       "id": "E1",
       "slug": "fundacion-sombra",
       "title": "Fundación PostgreSQL en sombra",
-      "state": "borrador",
+      "state": "planificada",
       "depends": [
         "E0"
       ],
@@ -49,14 +49,14 @@
       "scope": "Node 24/TypeScript estricto en plataforma/, PostgreSQL, roles, WebAuthn virtual, cifrado de PII, colas durables y barridos ML/Woo por tópico.",
       "non_goals": "No entrega catálogo, stock, pedidos, pantallas operativas ni escritores remotos.",
       "baseline": "El legado Node/Express/SQLite sigue atendiendo producción; existe plan P1 auditado archivado.",
-      "data": "companies, channel_accounts, users, roles, capabilities, audit_events, audit_daily_manifests, inbox_messages, outbox_commands, command_attempts y dead_letters.",
-      "interfaces": "GET /api/v2/health y GET /api/v2/incidents; reporte firmado en B2 y email. No hay UI ni login real en P1.",
+      "data": "Esquema en docs/superpowers/specs/e1/schema.sql: core (companies, channel_accounts), security (users con email cifrado e índice ciego, roles, capabilities, webauthn_credentials, recovery_codes, feature_flags), audit (audit_events append-only con cadena de hash y verify_chain, audit_daily_manifests) e integrations (inbox_messages, outbox_commands, command_attempts, dead_letters, reconciliation_cursors, sweep_runs, shadow_copy_losses, daily_shadow_reports, vista incidents).",
+      "interfaces": "GET /api/v2/health y GET /api/v2/incidents según openapi/platform-v2.yaml; reporte firmado en B2 (governance 365 d) y email por SMTP existente con adjuntos. No hay UI ni login real en E1.",
       "migration": "Usuarios sin contraseñas; importación idempotente de metadatos, sin datos de negocio.",
       "risks": "La sombra jamás condiciona el ACK legacy. Estados sin historial enumerables se validan por convergencia; envíos usan cursor shipment.last_updated propio.",
-      "tests": "npm test; tests de restricciones, hash, concurrencia, leases, DLQ y WebAuthn virtual; tres corridas de ≥500 webhooks con presupuestos p95/p99.",
+      "tests": "npm run test:e1 con los escenarios de docs/superpowers/specs/e1/test-e1.md (esquema, auditoría, colas, duplicados, barridos por tópico, convergencia de envíos, borrados Woo, presupuesto de latencia, PostgreSQL caído, reporte firmado, WebAuthn virtual, capacidades, contrato y servicios separados).",
       "rollout": "API/worker/scheduler sin credenciales de escritura; 7 días de sombra; aborto ante impacto en códigos HTTP, errores o latencia.",
       "acceptance": "0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José.",
-      "next": "Crear el script test:e1 y convertir la especificación vinculante de esta ficha en migraciones, OpenAPI y fixtures revisables."
+      "next": "Esperar la aceptación de E0; luego implementar en plataforma/ el paso 1 (esqueleto TypeScript, migraciones desde specs/e1/schema.sql y `npm run test:e1` con los escenarios de specs/e1/test-e1.md)."
     },
     {
       "id": "E2",

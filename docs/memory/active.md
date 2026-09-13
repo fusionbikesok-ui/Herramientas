@@ -463,3 +463,13 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 - E1 queda redefinida como cola continua, checklist por pedido y escaneo de cada unidad. PC y celular abren directamente el pedido priorizado; E1 permanece `desarrollo` hasta validar el recorrido responsive y una operación real.
 - E2 conserva embalaje, fotos, aprobación y listo para despacho como continuación de la checklist.
+
+## Programa E1 (Fundación PostgreSQL en sombra) — especificada 2026-09-13
+
+- E1 del programa E0–E26 está `planificada`: esquema `docs/superpowers/specs/e1/schema.sql` (aplicado y
+  probado en PostgreSQL 18.6 descartable: cadena de auditoría verifica y detecta alteración directa),
+  contrato `openapi/platform-v2.yaml`, matriz de barridos verificada `specs/e1/matriz-barridos.md` y
+  escenarios `specs/e1/test-e1.md`. Decisiones PM-170 (SimpleWebAuthn 14), PM-171 (SMTP existente con
+  adjuntos), PM-172 (B2 Object Lock governance 365 d con clave sin borrado). Implementación espera
+  la aceptación de E0. (La sección "Decisiones E1 incorporadas" de arriba es de otra numeración histórica.)
+

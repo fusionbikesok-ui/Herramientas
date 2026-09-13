@@ -67,6 +67,14 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
     `matcher:write`, con un único recordatorio a los 120 min y título "Venta liberada" al resolverse;
     deep link `incidentes/{id}` (la App ya lo abre). El inicio muestra el chip
     `atencion.ventas_retenidas_guardia` → `/herramientas/guardia-ml/`.
+- **Verificado por sonda autenticada de sólo lectura (2026-09-13):** `GET /orders/search` acepta
+  `order.date_last_updated.from` y lo aplica (sin filtro 2.446, desde ayer 3, desde +30 días 0).
+  `GET /shipments/{id}` responde 200 **sin** `x-format-new` y trae `last_updated`, aunque la
+  documentación lo declara obligatorio desde 2025-10-12. `lib/mlClient.js` (`_request`) **no reenvía
+  headers por llamada**: cualquier cliente que necesite `x-format-new` debe agregarlo explícitamente.
+  WooCommerce REST v3 (trunk) expone `modified_after`/`modified_before`/`dates_are_gmt` y
+  `per_page` ≤ 100. La documentación de developers.mercadolibre bloquea lecturas automatizadas (403):
+  verificar con sondas de sólo lectura o código productivo. Matriz de E1: `docs/superpowers/specs/e1/matriz-barridos.md`.
 - **Bolsas de stock compartidas (verificado 2026-09-13):** el bucle de reactivaciones de FB-32234,
   FB-4746 y FB-10376 (jul–5 sep) era un `user_product` compartido entre productos Woo distintos
   (causa documentada en `UM1.1-cierre-sku-ml.md`). `conflictosDeBolsaCompartida` da 0 hoy; la

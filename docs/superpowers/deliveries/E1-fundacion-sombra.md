@@ -1,6 +1,6 @@
 # E1 — Fundación PostgreSQL en sombra
 
-**Estado:** borrador
+**Estado:** planificada
 
 **Dependencias:** E0
 
@@ -32,8 +32,8 @@
 
 ## Diseño, datos e interfaces
 
-- **Modelo:** companies, channel_accounts, users, roles, capabilities, audit_events, audit_daily_manifests, inbox_messages, outbox_commands, command_attempts y dead_letters.
-- **Interfaces:** GET /api/v2/health y GET /api/v2/incidents; reporte firmado en B2 y email. No hay UI ni login real en P1.
+- **Modelo:** Esquema en docs/superpowers/specs/e1/schema.sql: core (companies, channel_accounts), security (users con email cifrado e índice ciego, roles, capabilities, webauthn_credentials, recovery_codes, feature_flags), audit (audit_events append-only con cadena de hash y verify_chain, audit_daily_manifests) e integrations (inbox_messages, outbox_commands, command_attempts, dead_letters, reconciliation_cursors, sweep_runs, shadow_copy_losses, daily_shadow_reports, vista incidents).
+- **Interfaces:** GET /api/v2/health y GET /api/v2/incidents según openapi/platform-v2.yaml; reporte firmado en B2 (governance 365 d) y email por SMTP existente con adjuntos. No hay UI ni login real en E1.
 - Los endpoints nuevos viven bajo `/api/v2`, usan errores `{code,message,correlation_id,details?}`, autorización por capacidad y paginación por cursor.
 - Las mutaciones requieren `Idempotency-Key`; las actualizaciones concurrentes requieren `expected_version` y responden 409 sin efecto parcial.
 - Eventos/auditoría son append-only; correcciones agregan un evento compensatorio y nunca reescriben historia.
@@ -54,7 +54,7 @@
 
 ## Pruebas y evidencia
 
-- **Comando contractual:** npm test; tests de restricciones, hash, concurrencia, leases, DLQ y WebAuthn virtual; tres corridas de ≥500 webhooks con presupuestos p95/p99.
+- **Comando contractual:** npm run test:e1 con los escenarios de docs/superpowers/specs/e1/test-e1.md (esquema, auditoría, colas, duplicados, barridos por tópico, convergencia de envíos, borrados Woo, presupuesto de latencia, PostgreSQL caído, reporte firmado, WebAuthn virtual, capacidades, contrato y servicios separados).
 - El comando `npm run test:e1` debe existir antes de pasar a `desarrollo`; no puede ser un alias vacío y debe fallar si falta un escenario obligatorio.
 - Registrar salida literal, commit, fixture, fecha, duración y omisiones. Tests existentes sólo cuentan si cubren el contrato nuevo.
 - Revisión independiente sin críticos/altos, suite global serial, restauración aplicable y E2E/dispositivo/hardware según superficie.
@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Crear el script test:e1 y convertir la especificación vinculante de esta ficha en migraciones, OpenAPI y fixtures revisables.
+- **Próxima acción exacta:** Esperar la aceptación de E0; luego implementar en plataforma/ el paso 1 (esqueleto TypeScript, migraciones desde specs/e1/schema.sql y `npm run test:e1` con los escenarios de specs/e1/test-e1.md).
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
@@ -228,6 +228,10 @@ flowchart LR
   platform_scheduler[platform_scheduler]
   legacy_runtime[legacy_runtime]
   qa_simulator[qa_simulator]
+  schema_spec[schema_spec]
+  api_contract[api_contract]
+  sweep_matrix[sweep_matrix]
+  test_matrix[test_matrix]
 ```
 
 | Componente | Estado | Ruta | Responsabilidad |
@@ -237,19 +241,23 @@ flowchart LR
 | platform_scheduler | future | plataforma/src/scheduler | encolar barridos y tareas periódicas |
 | legacy_runtime | existing | server.js | ACK y operación productiva sin dependencia de PostgreSQL |
 | qa_simulator | existing | scripts/qa/simulador-canales.mjs | fallos y respuestas remotas simuladas |
+| schema_spec | existing | docs/superpowers/specs/e1/schema.sql | esquema base: core, security, audit con cadena de hash, integrations |
+| api_contract | existing | openapi/platform-v2.yaml | contrato de /api/v2/health e /api/v2/incidents |
+| sweep_matrix | existing | docs/superpowers/specs/e1/matriz-barridos.md | barridos por tópico verificados con evidencia |
+| test_matrix | existing | docs/superpowers/specs/e1/test-e1.md | escenarios obligatorios de npm run test:e1 |
 
 ## Actores, tecnologías y dependencias externas
 
 - **Actores:** sistema_ml, sistema_woo, api, worker, scheduler, jose_revisor.
-- **Tecnologías:** Node.js 24, TypeScript strict, PostgreSQL 18, Vitest, WebAuthn mediante librería mantenida, B2 Object Lock, SMTP existente o proveedor candidato.
+- **Tecnologías:** Node.js 24.21.0, TypeScript strict, PostgreSQL 18.6 (fusion-pg de E0), Vitest, @simplewebauthn/server 14.x (PM-170), B2 Object Lock governance 365 d (PM-172), SMTP existente (PM-171).
 
 | Servicio | Estado | Finalidad |
 |---|---|---|
 | Mercado Libre API | required | relectura y conciliación |
 | WooCommerce REST API | required | relectura y conciliación |
-| Backblaze B2 | chosen | manifiesto firmado |
-| proveedor email | candidate | entrega del reporte diario |
-| SimpleWebAuthn equivalente | candidate | verificación WebAuthn sin criptografía propia |
+| Backblaze B2 | chosen | manifiesto y reporte firmados con Object Lock governance 365 d y clave sin borrado (PM-172) |
+| SMTP existente | chosen | aviso diario con reporte y firma adjuntos (PM-171) |
+| @simplewebauthn/server 14.x | chosen | verificación WebAuthn sin criptografía propia (PM-170) |
 
 Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.
 
@@ -353,7 +361,7 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 ## Integraciones, observabilidad, rollout y rollback
 
-- **Integración:** ML/Woo: webhook es aviso; GET remoto decide; cursor con solape por tópico
+- **Integración:** ML/Woo: webhook es aviso; GET remoto decide; barrido por tópico según docs/superpowers/specs/e1/matriz-barridos.md (paridad donde la API enumera, convergencia donde no)
 - **Integración:** B2: reporte firmado con Object Lock
 - **Integración:** email: notificación no es fuente de verdad
 - **Observación:** ACK p95/p99 y códigos
@@ -377,21 +385,24 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 | Requisito | Diseño | Archivo | Migración | Prueba | Métrica | Evidencia |
 |---|---|---|---|---|---|---|
-| 8 tópicos reconciliados | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-Q-01 | 8 tópicos reconciliados | salida literal + commit + fecha |
-| p95 delta<=25ms | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-Q-02 | p95 delta<=25ms | salida literal + commit + fecha |
-| p99 delta<=100ms | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-Q-03 | p99 delta<=100ms | salida literal + commit + fecha |
-| 0 cambios HTTP | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-Q-04 | 0 cambios HTTP | salida literal + commit + fecha |
-| 7 días sombra | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-LAT-01 | 7 días sombra | salida literal + commit + fecha |
+| 8 tópicos reconciliados | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-SCH-01 | 8 tópicos reconciliados | salida literal + commit + fecha |
+| p95 delta<=25ms | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-SCH-02 | p95 delta<=25ms | salida literal + commit + fecha |
+| p99 delta<=100ms | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-AUD-01 | p99 delta<=100ms | salida literal + commit + fecha |
+| 0 cambios HTTP | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-AUD-02 | 0 cambios HTTP | salida literal + commit + fecha |
+| 7 días sombra | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-AUD-03 | 7 días sombra | salida literal + commit + fecha |
 
 ## Fuentes y decisiones abiertas
 
 - https://developers.mercadolibre.com.ar/es_ar/productos-recibe-notificaciones — consultada 2026-09-13.
+- https://github.com/woocommerce/woocommerce/blob/trunk/plugins/woocommerce/includes/rest-api/Controllers/Version3/class-wc-rest-crud-controller.php — consultada 2026-09-13.
+- https://global-selling.mercadolibre.com/devsite/manage-shipments — consultada 2026-09-13.
+- https://www.npmjs.com/package/@simplewebauthn/server — consultada 2026-09-13.
 - https://www.backblaze.com/docs/cloud-storage-object-lock — consultada 2026-09-13.
 - https://developers.google.com/identity/passkeys/developer-guides/server-registration — consultada 2026-09-13.
 
-**Decisiones abiertas que mantienen la ficha en borrador:** librería WebAuthn concreta; proveedor/cuenta email; modo y retención Object Lock; dominio TLS QA.
+**Decisiones abiertas:** ninguna.
 
 ## Decisiones PM asignadas
 
-- **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158
+- **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158, PM-170, PM-171, PM-172
 - **Consumidora:** PM-003, PM-006, PM-008, PM-017, PM-046, PM-048, PM-085, PM-086, PM-087, PM-094, PM-105, PM-107, PM-125, PM-127, PM-129, PM-149, PM-160

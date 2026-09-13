@@ -1,0 +1,172 @@
+openapi: 3.0.3
+info:
+  title: FusionBikes — Plataforma API v2 (E1)
+  version: 0.1.0
+  description: |
+    Contrato de E1 (docs/superpowers/deliveries/E1-fundacion-sombra.md). E1 expone sólo salud e
+    incidentes; ninguna ruta HTTP llama a MercadoLibre ni a Woo (plan §5.1).
+
+    Convenciones comunes a toda la v2:
+    - Fechas ISO 8601 UTC. IDs como string.
+    - Error uniforme `Error` con `code` estable, `message` legible, `correlation_id` y `details` opcional.
+    - Paginación por cursor opaco (`cursor` / `next_cursor`), nunca por offset.
+    - Toda respuesta incluye el header `X-Correlation-Id` (se respeta el recibido si es UUID válido).
+
+servers:
+  - url: http://127.0.0.1:3201/api/v2
+    description: Sombra local en el VPS (sin publicar)
+
+tags:
+  - name: health
+  - name: incidents
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Estado de los componentes del núcleo
+      description: |
+        Sin autenticación pero sólo accesible desde 127.0.0.1 (readiness del despliegue). Consulta
+        PostgreSQL con `SELECT 1`, el último heartbeat del worker y del scheduler (≤ 120 s) y el estado
+        del archivado de WAL publicado por E0. No expone datos operativos.
+      security: []
+      responses:
+        '200':
+          description: Todos los componentes sanos
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/CorrelationId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Al menos un componente degradado o caído
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/CorrelationId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+  /incidents:
+    get:
+      tags: [incidents]
+      summary: Mensajes y comandos que requieren atención
+      description: |
+        Lista `integrations.incidents` (retryable, uncertain, dead_lettered, parked). Orden estable por
+        (opened_at, source_type, source_id). Requiere la capacidad `operations.read`.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string, maxLength: 512 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: topic
+          in: query
+          schema:
+            type: string
+            enum: [ml.orders, ml.shipments, ml.questions, ml.messages, ml.claims, ml.items, woo.orders, woo.products]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [retryable, uncertain, dead_lettered, parked]
+      responses:
+        '200':
+          description: Página de incidentes
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/CorrelationId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IncidentPage' }
+        '401':
+          description: Sin sesión válida
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: unauthenticated, message: Se requiere iniciar sesión., correlation_id: 0191f2c4-7b1e-7d3a-9c1f-2b6a1e4d5f60 }
+        '403':
+          description: Sin la capacidad operations.read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: forbidden, message: No tenés permiso para ver incidentes., correlation_id: 0191f2c4-7b1e-7d3a-9c1f-2b6a1e4d5f61 }
+        '422':
+          description: Parámetros inválidos (cursor corrupto, limit fuera de rango, enum desconocido)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: invalid_parameter, message: El cursor no es válido., correlation_id: 0191f2c4-7b1e-7d3a-9c1f-2b6a1e4d5f62, details: { parameter: cursor } }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: fusion_v2_session
+      description: Sesión del núcleo. En E1 no hay login real de personas; las pruebas usan sesiones de fixture.
+
+  headers:
+    CorrelationId:
+      schema: { type: string, format: uuid }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message, correlation_id]
+      additionalProperties: false
+      properties:
+        code: { type: string, pattern: '^[a-z_]+$' }
+        message: { type: string }
+        correlation_id: { type: string, format: uuid }
+        details: { type: object, additionalProperties: true }
+
+    ComponentStatus:
+      type: object
+      required: [status, checked_at]
+      additionalProperties: false
+      properties:
+        status: { type: string, enum: [ok, degraded, down] }
+        checked_at: { type: string, format: date-time }
+        detail: { type: string, maxLength: 200 }
+
+    Health:
+      type: object
+      required: [status, components]
+      additionalProperties: false
+      properties:
+        status: { type: string, enum: [ok, degraded, down] }
+        components:
+          type: object
+          required: [database, worker, scheduler, wal_archive]
+          additionalProperties: false
+          properties:
+            database: { $ref: '#/components/schemas/ComponentStatus' }
+            worker: { $ref: '#/components/schemas/ComponentStatus' }
+            scheduler: { $ref: '#/components/schemas/ComponentStatus' }
+            wal_archive: { $ref: '#/components/schemas/ComponentStatus' }
+
+    Incident:
+      type: object
+      required: [source_type, source_id, topic, status, opened_at, attempts, correlation_id]
+      additionalProperties: false
+      properties:
+        source_type: { type: string, enum: [inbox, outbox] }
+        source_id: { type: string }
+        topic: { type: string }
+        status: { type: string, enum: [retryable, uncertain, dead_lettered, parked] }
+        reason_code: { type: string, nullable: true }
+        opened_at: { type: string, format: date-time }
+        attempts: { type: integer, minimum: 0 }
+        correlation_id: { type: string, format: uuid }
+
+    IncidentPage:
+      type: object
+      required: [items, next_cursor]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Incident' }
+        next_cursor: { type: string, nullable: true }

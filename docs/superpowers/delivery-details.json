@@ -309,16 +309,40 @@
           "status": "existing",
           "path": "scripts/qa/simulador-canales.mjs",
           "purpose": "fallos y respuestas remotas simuladas"
+        },
+        {
+          "id": "schema_spec",
+          "status": "existing",
+          "path": "docs/superpowers/specs/e1/schema.sql",
+          "purpose": "esquema base: core, security, audit con cadena de hash, integrations"
+        },
+        {
+          "id": "api_contract",
+          "status": "existing",
+          "path": "openapi/platform-v2.yaml",
+          "purpose": "contrato de /api/v2/health e /api/v2/incidents"
+        },
+        {
+          "id": "sweep_matrix",
+          "status": "existing",
+          "path": "docs/superpowers/specs/e1/matriz-barridos.md",
+          "purpose": "barridos por tópico verificados con evidencia"
+        },
+        {
+          "id": "test_matrix",
+          "status": "existing",
+          "path": "docs/superpowers/specs/e1/test-e1.md",
+          "purpose": "escenarios obligatorios de npm run test:e1"
         }
       ],
       "technologies": [
-        "Node.js 24",
+        "Node.js 24.21.0",
         "TypeScript strict",
-        "PostgreSQL 18",
+        "PostgreSQL 18.6 (fusion-pg de E0)",
         "Vitest",
-        "WebAuthn mediante librería mantenida",
-        "B2 Object Lock",
-        "SMTP existente o proveedor candidato"
+        "@simplewebauthn/server 14.x (PM-170)",
+        "B2 Object Lock governance 365 d (PM-172)",
+        "SMTP existente (PM-171)"
       ],
       "external_services": [
         {
@@ -334,17 +358,17 @@
         {
           "name": "Backblaze B2",
           "status": "chosen",
-          "purpose": "manifiesto firmado"
+          "purpose": "manifiesto y reporte firmados con Object Lock governance 365 d y clave sin borrado (PM-172)"
         },
         {
-          "name": "proveedor email",
-          "status": "candidate",
-          "purpose": "entrega del reporte diario"
+          "name": "SMTP existente",
+          "status": "chosen",
+          "purpose": "aviso diario con reporte y firma adjuntos (PM-171)"
         },
         {
-          "name": "SimpleWebAuthn equivalente",
-          "status": "candidate",
-          "purpose": "verificación WebAuthn sin criptografía propia"
+          "name": "@simplewebauthn/server 14.x",
+          "status": "chosen",
+          "purpose": "verificación WebAuthn sin criptografía propia (PM-170)"
         }
       ],
       "entities": [
@@ -507,13 +531,30 @@
         "webhook disabled abre incidente"
       ],
       "tests": [
+        "E1-SCH-01",
+        "E1-SCH-02",
+        "E1-AUD-01",
+        "E1-AUD-02",
+        "E1-AUD-03",
+        "E1-AUD-04",
         "E1-Q-01",
         "E1-Q-02",
         "E1-Q-03",
         "E1-Q-04",
+        "E1-Q-05",
+        "E1-Q-06",
+        "E1-DUP-01",
+        "E1-SWP-01",
+        "E1-SWP-09",
+        "E1-CONV-01",
+        "E1-DEL-01",
         "E1-LAT-01",
+        "E1-PGDOWN-01",
         "E1-REC-01",
-        "E1-WA-01"
+        "E1-WA-01",
+        "E1-CAP-01",
+        "E1-API-01",
+        "E1-SVC-01"
       ],
       "requirements": [
         "8 tópicos reconciliados",
@@ -523,7 +564,7 @@
         "7 días sombra"
       ],
       "integrations": [
-        "ML/Woo: webhook es aviso; GET remoto decide; cursor con solape por tópico",
+        "ML/Woo: webhook es aviso; GET remoto decide; barrido por tópico según docs/superpowers/specs/e1/matriz-barridos.md (paridad donde la API enumera, convergencia donde no)",
         "B2: reporte firmado con Object Lock",
         "email: notificación no es fuente de verdad"
       ],
@@ -557,6 +598,18 @@
           "consulted": "2026-09-13"
         },
         {
+          "url": "https://github.com/woocommerce/woocommerce/blob/trunk/plugins/woocommerce/includes/rest-api/Controllers/Version3/class-wc-rest-crud-controller.php",
+          "consulted": "2026-09-13"
+        },
+        {
+          "url": "https://global-selling.mercadolibre.com/devsite/manage-shipments",
+          "consulted": "2026-09-13"
+        },
+        {
+          "url": "https://www.npmjs.com/package/@simplewebauthn/server",
+          "consulted": "2026-09-13"
+        },
+        {
           "url": "https://www.backblaze.com/docs/cloud-storage-object-lock",
           "consulted": "2026-09-13"
         },
@@ -565,12 +618,7 @@
           "consulted": "2026-09-13"
         }
       ],
-      "open_decisions": [
-        "librería WebAuthn concreta",
-        "proveedor/cuenta email",
-        "modo y retención Object Lock",
-        "dominio TLS QA"
-      ]
+      "open_decisions": []
     },
     "E2": {
       "actors": [
