@@ -1,8 +1,8 @@
 # E20 — Bandeja, alertas, turnos y reemplazos en App
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E19
+**Dependencias:** E9, E19
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Medir uso real de inbox y definir matriz de routing desde decisiones existentes.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-017
+- **Consumidora:** PM-015, PM-016, PM-020, PM-022, PM-023, PM-034, PM-037, PM-052, PM-068, PM-097, PM-109, PM-137, PM-146, PM-157, PM-158, PM-162

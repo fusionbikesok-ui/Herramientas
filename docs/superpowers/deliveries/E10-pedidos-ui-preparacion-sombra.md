@@ -1,6 +1,6 @@
 # E10 — UI, preparación y simulación de pedidos
 
-**Estado:** planificada
+**Estado:** borrador
 
 **Dependencias:** E9
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Levantar matriz UI/API desde código productivo y cerrar diferencias contra el dominio v2.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-003, PM-004, PM-005, PM-006, PM-007, PM-008, PM-023, PM-024, PM-025, PM-026, PM-027, PM-028
+- **Consumidora:** PM-018, PM-030, PM-104, PM-115, PM-127, PM-144, PM-154, PM-157, PM-159

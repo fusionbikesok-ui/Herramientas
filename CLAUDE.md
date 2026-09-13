@@ -1,7 +1,7 @@
 # Proyecto FusionBikes — herramientas
 
 App Node/Express (ESM, better-sqlite3, vitest) en VPS de **producción real**. La operación vigente
-continúa manual hasta que E23 implemente el pipeline objetivo; luego backend/web podrán publicarse
+continúa manual hasta que el gate de despliegue de E26 esté aceptado; luego backend/web podrán publicarse
 automáticamente con gates y rollback. Windows, hardware y App Store siempre requieren autorización. Remoto en GitHub (`git@github.com:fusionbikesok-ui/Herramientas.git`, privado, vía
 deploy key con acceso de escritura). Integración MercadoLibre ↔ WooCommerce. Responder en
 español.
@@ -19,9 +19,10 @@ La memoria compartida del proyecto vive en `docs/memory/`. Antes de explorar el 
 2. Usá la tabla de rutas del índice para abrir **solo** los módulos relacionados con la tarea.
 3. No cargues todos los módulos ni planes históricos por defecto.
 
-El programa canónico E0–E24 vive en `docs/superpowers/plans/plan-maestro-v2.md`; su índice,
-decisiones, archivo y fichas están en `docs/superpowers/INDEX.md`. El maestro especifica el
+El programa canónico E0–E26 vive en `docs/superpowers/plan-maestro.md`; su índice,
+decisiones, archivo, crosswalk y fichas están en `docs/superpowers/INDEX.md`. El maestro especifica el
 objetivo y las fichas prueban el progreso: no inferir una entrega terminada por commits o numeración.
+Los documentos bajo `docs/superpowers/archive/` son evidencia histórica y nunca instrucciones.
 
 En cualquier cambio del repositorio o del VPS, actualizá la memoria afectada después de
 actuar y antes de revisar o reportar el resultado. En cambios de código, repetí esa

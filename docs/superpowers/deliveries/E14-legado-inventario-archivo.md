@@ -1,8 +1,8 @@
 # E14 — Inventario, archivo y apagado reversible del legado
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E13
+**Dependencias:** E11, E13
 
 **Responsable operativo:** José
 
@@ -12,8 +12,8 @@
 
 ## Resultado y límites
 
-- Cada componente legacy queda clasificado, archivado y con escritores apagables por flag.
-- **Incluye:** Workers, crons, tablas, pantallas, rutas y /api/v1 clasificados como fachada v2, lógica legacy o sin uso.
+- Cada componente legacy queda clasificado y archivado; sólo se apagan por flag los escritores de verticales ya reemplazadas.
+- **Incluye:** Workers, crons, tablas, pantallas, rutas y /api/v1 clasificados como fachada v2, lógica legacy o sin uso; apagado limitado a catálogo, identidad, stock, pedidos y estandarización ya cortados.
 - **No incluye:** No borra tablas, archivos ni fachadas usadas.
 - **Evidencia histórica absorbida:** P6.1–P6.4. Es evidencia, no aceptación automática.
 
@@ -63,7 +63,7 @@
 
 - **Despliegue:** Orden inverso de riesgo, un componente por vez, reversión inmediata disponible.
 - Todo corte de autoridad dura <15 minutos, comienza con backup/restauración vigentes y se aborta ante discrepancia crítica, doble escritor, cola ciega o disco fuera de umbral.
-- **Aceptación técnica y operativa:** 0 lógica legacy escritora activa y cada activo clasificado con evidencia.
+- **Aceptación técnica y operativa:** 0 escritores legacy activos en las verticales E2–E13 ya reemplazadas; el resto queda clasificado, conservado y con dependencia explícita.
 - Código construido pero no usado no cuenta como observado; publicación no equivale a aceptación.
 
 ## Continuidad
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Generar inventario de procesos/rutas/tablas y asignar vertical/dueño.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-160
+- **Consumidora:** ninguna

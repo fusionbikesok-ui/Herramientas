@@ -1,8 +1,8 @@
 # E11 — Corte de pedidos, preparación y despacho
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E10
+**Dependencias:** E7, E10
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Preparar runbook minuto a minuto y ensayo en QA sanitaria.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** ninguna
+- **Consumidora:** PM-004, PM-005, PM-006, PM-018, PM-024, PM-026, PM-028, PM-030, PM-104, PM-115, PM-127, PM-144, PM-154, PM-157, PM-159

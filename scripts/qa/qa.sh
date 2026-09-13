@@ -1,5 +1,5 @@
 #!/bin/bash
-# Entorno QA bajo demanda (plan docs/superpowers/plans/2026-09-13-qa-bajo-demanda.md, paso 5).
+# Entorno QA bajo demanda; contrato vigente E0/E1, evidencia bajo docs/superpowers/archive/.
 #
 #   scripts/qa/qa.sh up [rama]   snapshot anonimizado + build de la rama + levantar + /healthz
 #   scripts/qa/qa.sh down        bajar y borrar snapshot, certificados, secretos y código

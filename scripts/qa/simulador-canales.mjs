@@ -1,5 +1,5 @@
 // Simulador de MercadoLibre y WooCommerce para el entorno QA bajo demanda.
-// Plan: docs/superpowers/plans/2026-09-13-qa-bajo-demanda.md (paso 2).
+// Contrato vigente: E0/E1. Procedencia: archive/plans-legacy-2026-09-13/2026-09-13-qa-bajo-demanda.md.
 //
 // Uso: SIM_DB=<snapshot anonimizado> [SIM_CERT=cert.pem SIM_KEY=key.pem] [SIM_PORT=8443] \
 //      node scripts/qa/simulador-canales.mjs

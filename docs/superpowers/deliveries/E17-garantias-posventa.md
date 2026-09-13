@@ -1,8 +1,8 @@
 # E17 — Garantías y posventa
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E16
+**Dependencias:** E8, E16
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Auditar estados/rutas legacy y mapearlos al dominio v2.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** ninguna
+- **Consumidora:** ninguna

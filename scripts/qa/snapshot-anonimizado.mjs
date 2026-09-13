@@ -1,5 +1,5 @@
 // Snapshot anonimizado de la base de producción para el entorno QA bajo demanda.
-// Plan: docs/superpowers/plans/2026-09-13-qa-bajo-demanda.md (paso 1).
+// Contrato vigente: E0/E1. Procedencia: archive/plans-legacy-2026-09-13/2026-09-13-qa-bajo-demanda.md.
 //
 // Uso: node scripts/qa/snapshot-anonimizado.mjs <origen.sqlite> <destino.sqlite>
 //      Clave común de QA: env QA_CLAVE o /root/.config/fusion-qa/clave.

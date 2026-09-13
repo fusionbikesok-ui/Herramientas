@@ -1,8 +1,8 @@
 # E22 — Recepción y conteos en iPhone
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E21
+**Dependencias:** E6, E21
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Diseñar navegación y matriz de conflictos usando contratos E6/E21.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** ninguna
+- **Consumidora:** PM-015, PM-016, PM-020, PM-022, PM-023, PM-034, PM-037, PM-052, PM-068, PM-097, PM-109, PM-137, PM-146, PM-157, PM-158, PM-162

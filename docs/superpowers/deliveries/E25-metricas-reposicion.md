@@ -1,8 +1,8 @@
 # E25 — Métricas, reposición, entrante y preventa
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E24
+**Dependencias:** E7, E11
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Priorizar KPIs del maestro y definir fórmulas/ventanas exactas.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-019
+- **Consumidora:** ninguna

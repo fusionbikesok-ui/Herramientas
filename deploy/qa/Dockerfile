@@ -1,4 +1,4 @@
-# Imagen del entorno QA bajo demanda (plan docs/superpowers/plans/2026-09-13-qa-bajo-demanda.md).
+# Imagen QA; contrato vigente E0/E1 y evidencia en docs/superpowers/archive/plans-legacy-2026-09-13/2026-09-13-qa-bajo-demanda.md.
 # El contexto de build lo arma scripts/qa/qa.sh con `git archive` de la rama: nunca contiene
 # .env, data/ ni uploads/ (están en .gitignore).
 FROM node@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553

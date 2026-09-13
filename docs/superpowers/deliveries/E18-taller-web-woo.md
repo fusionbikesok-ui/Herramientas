@@ -1,6 +1,6 @@
 # E18 — Taller web y venta Woo
 
-**Estado:** planificada
+**Estado:** borrador
 
 **Dependencias:** E17
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Cruzar el flujo legacy con órdenes/stock v2 y escribir máquina de estados.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** ninguna
+- **Consumidora:** ninguna

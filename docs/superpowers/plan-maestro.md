@@ -4,7 +4,7 @@
 
 **Secuencia:** E0–E26
 
-**Estado del programa:** E0 en desarrollo; E1–E26 planificadas
+**Estado del programa:** E0–E26 en borrador hasta satisfacer el contrato documental
 
 **Fuente estructurada:** `delivery-program.json`
 
@@ -29,13 +29,15 @@ que una de ellas está actualizada.
 
 ## Reglas del programa
 
-- Cada número representa un resultado verificable, aceptable y reversible.
+- Cada número representa una identidad estable y un resultado verificable, aceptable y reversible.
+- Las dependencias forman un DAG explícito. La numeración facilita referencia y no crea por sí sola
+  una dependencia con la entrega anterior.
 - Una ficha debe ser autocontenida y no puede pasar a `desarrollo` si conserva decisiones abiertas,
   cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - El código existente es evidencia reutilizable, no aceptación automática.
-- Los IDs en `desarrollo` o posteriores son inmutables. Sólo fichas `planificada|borrador` pueden
-  renumerarse; el cambio exige actualizar programa, crosswalk, dependencias y registro de decisiones.
-- Ninguna entrega comienza hasta que todas sus dependencias estén `aceptada`.
+- Los IDs E0–E26 quedan congelados por decisión de José del 2026-09-13. Cambiar dependencias no
+  cambia identidad; una entrega nueva recibe un número posterior a E26 y una decisión documental.
+- Ninguna entrega comienza hasta que todas sus dependencias explícitas estén `aceptada`.
 - El legado sólo recibe correcciones que eviten pérdida económica o bloqueo operativo mientras su
   vertical tenga reemplazo planificado.
 - No se instalan servicios, migran datos, habilitan escritores ni cambian canales por autoridad de
@@ -45,33 +47,33 @@ que una de ellas está actualizada.
 
 | Entrega | Resultado verificable | Dependencia | Estado |
 |---|---|---|---|
-| E0 | Infraestructura, DR y PITR | — | desarrollo |
-| E1 | Fundación PostgreSQL en sombra | E0 | planificada |
-| E2 | Modelo e importación del catálogo | E1 | planificada |
-| E3 | Identidad y matcher único en sombra | E2 | planificada |
-| E4 | Campaña SKU y corte de identidad | E3 | planificada |
-| E5 | Libro de stock, apertura y reservas | E4 | planificada |
-| E6 | Recepción y conteos sobre el libro | E5 | planificada |
-| E7 | Corte de autoridad de stock | E6 | planificada |
-| E8 | Orden canónica e importación | E7 | planificada |
-| E9 | Dominio de pedidos y efectos remotos | E8 | planificada |
-| E10 | UI, preparación y simulación | E9 | planificada |
-| E11 | Corte de pedidos y despacho | E10 | planificada |
-| E12 | Plantillas y propuestas de catálogo | E11 | planificada |
-| E13 | Publicación verificada por categorías | E12 | planificada |
-| E14 | Inventario, archivo y apagado legacy | E13 | planificada |
-| E15 | Compatibilidad y retiro autorizado | E14 | planificada |
-| E16 | Excepciones físicas y proveedor | E15 | planificada |
-| E17 | Garantías y posventa | E16 | planificada |
-| E18 | Taller web y Woo | E17 | planificada |
-| E19 | Base App, contrato y migración OTA | E18 | planificada |
-| E20 | Bandeja, alertas y turnos App | E19 | planificada |
-| E21 | Infraestructura móvil offline | E20 | planificada |
-| E22 | Recepción y conteos iPhone | E21 | planificada |
-| E23 | Taller iPhone | E22 | planificada |
-| E24 | Impresión y agente Windows | E23 | planificada |
-| E25 | Métricas, reposición y preventa | E24 | planificada |
-| E26 | Consolidación y cierre | E25 | planificada |
+| E0 | Infraestructura, DR y PITR | — | borrador |
+| E1 | Fundación PostgreSQL en sombra | E0 | borrador |
+| E2 | Modelo e importación del catálogo | E1 | borrador |
+| E3 | Identidad y matcher único en sombra | E2 | borrador |
+| E4 | Campaña SKU y corte de identidad | E3 | borrador |
+| E5 | Libro de stock, apertura y reservas | E4 | borrador |
+| E6 | Recepción y conteos sobre el libro | E5 | borrador |
+| E7 | Corte de autoridad de stock | E6 | borrador |
+| E8 | Orden canónica e importación | E1 | borrador |
+| E9 | Dominio de pedidos y efectos remotos | E5, E8 | borrador |
+| E10 | UI, preparación y simulación | E9 | borrador |
+| E11 | Corte de pedidos y despacho | E7, E10 | borrador |
+| E12 | Plantillas y propuestas de catálogo | E2 | borrador |
+| E13 | Publicación verificada por categorías | E4, E12 | borrador |
+| E14 | Inventario, archivo y apagado reversible | E11, E13 | borrador |
+| E15 | Compatibilidad y retiro físico autorizado | E14, E23, E24 | borrador |
+| E16 | Excepciones físicas y proveedor | E7 | borrador |
+| E17 | Garantías y posventa | E8, E16 | borrador |
+| E18 | Taller web y Woo | E17 | borrador |
+| E19 | Base App, contrato y migración OTA | E1 | borrador |
+| E20 | Bandeja, alertas y turnos App | E9, E19 | borrador |
+| E21 | Infraestructura móvil offline | E19 | borrador |
+| E22 | Recepción y conteos iPhone | E6, E21 | borrador |
+| E23 | Taller iPhone | E18, E21 | borrador |
+| E24 | Impresión y agente Windows | E10 | borrador |
+| E25 | Métricas, reposición y preventa | E7, E11 | borrador |
+| E26 | Consolidación y cierre | terminales del DAG | borrador |
 
 La ruta de cada ficha está en `deliveries/README.md`.
 
@@ -112,4 +114,4 @@ los gates. Ningún estado implica automáticamente el siguiente.
 
 Precios y contenido ML, sincronización de precios ML y storefront público quedan fuera. Un módulo
 nuevo sin descubrimiento equivalente requiere decisión de José y, si entra al programa, una ficha
-planificada renumerable o un número nuevo posterior al último ID congelado.
+con un número nuevo posterior al último ID congelado.

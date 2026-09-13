@@ -1,6 +1,6 @@
 # E5 — Libro de stock, apertura y reservas
 
-**Estado:** planificada
+**Estado:** borrador
 
 **Dependencias:** E4
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Fijar esquema y algoritmo de apertura con fixture de pedidos abiertos.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-010, PM-011, PM-012, PM-030, PM-032, PM-043, PM-046, PM-059, PM-073, PM-076, PM-093, PM-105, PM-113, PM-115, PM-123, PM-134, PM-135
+- **Consumidora:** PM-013, PM-014, PM-018, PM-040, PM-054, PM-068, PM-081, PM-082, PM-083, PM-089, PM-094, PM-095, PM-098, PM-101, PM-104, PM-106, PM-111, PM-120, PM-125, PM-128, PM-132, PM-133, PM-140, PM-141, PM-142, PM-143, PM-144, PM-145, PM-153, PM-154, PM-156, PM-158, PM-159, PM-160, PM-161

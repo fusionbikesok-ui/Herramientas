@@ -2,7 +2,7 @@
 
 ## Fuente canónica
 
-La hoja de ruta vigente está en `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`.
+La hoja de ruta vigente está en `/opt/fusionbikes/herramientas/docs/superpowers/plan-maestro.md`.
 Este módulo conserva decisiones aprobadas para entregas futuras y el estado actual explícito;
 la historia de cambios pertenece a Git. Las reglas bajo “Modelo objetivo” todavía no están
 implementadas como un único libro de stock.

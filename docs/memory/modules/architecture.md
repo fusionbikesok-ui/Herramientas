@@ -22,7 +22,7 @@
   SHA-256 sobre el cuerpo crudo con una ventana máxima de 300 segundos y deduplica por
   `event_id`. Proyecta atómicamente `integration_events`, `inbox_items`, notificaciones por
   usuario con dispositivo activo y deliveries push; los handoffs se priorizan en el worker.
-- El programa canónico usa E0–E24 y está en `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`; las fichas separadas prueban progreso.
+- El programa canónico usa E0–E26 y está en `/opt/fusionbikes/herramientas/docs/superpowers/plan-maestro.md`; sus dependencias forman un DAG explícito y las fichas separadas prueban progreso.
 - La API móvil de Preparación e Inventario vive bajo `/api/v1`, comparte servicios de negocio con
   el panel y nunca reutiliza rutas web autenticadas por cookies. Toda mutación reintentable exige
   idempotencia y toda edición concurrente, versión esperada con conflicto `409` sin sobrescritura.
@@ -30,7 +30,7 @@
 
 ## Decisiones vigentes
 
-- Los planes de cambios normales o grandes viven en `docs/superpowers/plans/`.
+- El alcance de cambios del programa vive en `docs/superpowers/deliveries/`; un plan auxiliar no altera el maestro ni una ficha.
 - Las especificaciones de diseño viven en `docs/superpowers/specs/`.
 - Vigencia, archivos, decisiones y progreso se enrutan desde `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.
 

@@ -1,6 +1,6 @@
 # E3 — Identidad y matcher único en sombra
 
-**Estado:** planificada
+**Estado:** borrador
 
 **Dependencias:** E2
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Congelar fixture de calibración y redactar OpenAPI/máquinas de estado antes de implementar.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-037, PM-038, PM-039, PM-042, PM-053, PM-055, PM-057, PM-058, PM-061, PM-075, PM-077, PM-085, PM-087, PM-092, PM-100, PM-116, PM-117, PM-118, PM-124, PM-126, PM-131
+- **Consumidora:** PM-004, PM-029, PM-031, PM-032, PM-033, PM-034, PM-040, PM-044, PM-045, PM-046, PM-048, PM-049, PM-054, PM-059, PM-060, PM-064, PM-068, PM-069, PM-070, PM-073, PM-074, PM-076, PM-078, PM-080, PM-081, PM-083, PM-084, PM-089, PM-090, PM-093, PM-094, PM-095, PM-096, PM-097, PM-098, PM-099, PM-101, PM-103, PM-105, PM-106, PM-107, PM-108, PM-110, PM-111, PM-113, PM-114, PM-115, PM-119, PM-120, PM-121, PM-122, PM-123, PM-125, PM-128, PM-129, PM-130, PM-132, PM-133, PM-134, PM-135, PM-136, PM-139, PM-140, PM-141, PM-142, PM-143, PM-144, PM-148, PM-149, PM-150, PM-151, PM-153, PM-154, PM-156, PM-158, PM-159, PM-160, PM-164

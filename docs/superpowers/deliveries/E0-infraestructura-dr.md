@@ -1,6 +1,6 @@
 # E0 — Infraestructura, DR y PITR
 
-**Estado:** desarrollo
+**Estado:** borrador
 
 **Dependencias:** ninguna
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Escribir y aprobar el procedimiento PostgreSQL+PITR, ejecutarlo y adjuntar evidencia literal.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** ninguna
+- **Consumidora:** ninguna

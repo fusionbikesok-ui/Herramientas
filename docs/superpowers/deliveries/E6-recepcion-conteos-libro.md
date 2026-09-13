@@ -1,6 +1,6 @@
 # E6 — Recepción y conteos sobre el libro
 
-**Estado:** planificada
+**Estado:** borrador
 
 **Dependencias:** E5
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Mapear contratos actuales a estados v2 y seleccionar una ubicación canaria.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-013, PM-014, PM-161
+- **Consumidora:** PM-011, PM-012, PM-018, PM-030, PM-032, PM-040, PM-043, PM-046, PM-054, PM-059, PM-068, PM-073, PM-076, PM-081, PM-082, PM-083, PM-089, PM-093, PM-094, PM-095, PM-098, PM-101, PM-104, PM-105, PM-106, PM-111, PM-113, PM-115, PM-120, PM-123, PM-125, PM-128, PM-132, PM-133, PM-134, PM-135, PM-140, PM-141, PM-142, PM-143, PM-144, PM-145, PM-153, PM-154, PM-156, PM-158, PM-159, PM-160

@@ -1,8 +1,8 @@
 # E19 — Base App, contrato y migración OTA
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E18
+**Dependencias:** E1
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Publicar o descartar explícitamente el commit local de App y registrar ancestry.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-015, PM-020, PM-022, PM-162
+- **Consumidora:** PM-016, PM-023, PM-034, PM-037, PM-052, PM-068, PM-097, PM-109, PM-137, PM-146, PM-157, PM-158

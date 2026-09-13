@@ -1,8 +1,8 @@
 # E9 — Dominio de pedidos y efectos remotos
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E8
+**Dependencias:** E5, E8
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Especificar comandos, compensaciones y OpenAPI de mutaciones.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-127
+- **Consumidora:** PM-004, PM-005, PM-006, PM-018, PM-024, PM-026, PM-028, PM-030, PM-104, PM-115, PM-144, PM-154, PM-157, PM-159

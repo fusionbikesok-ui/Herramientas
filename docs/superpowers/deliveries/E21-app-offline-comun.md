@@ -1,8 +1,8 @@
 # E21 — Infraestructura móvil offline común
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E20
+**Dependencias:** E19
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Inventariar almacenamiento/colas actuales de App y definir contrato común.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-016
+- **Consumidora:** PM-015, PM-020, PM-022, PM-023, PM-034, PM-037, PM-052, PM-068, PM-097, PM-109, PM-137, PM-146, PM-157, PM-158, PM-162

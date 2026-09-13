@@ -1,8 +1,8 @@
 # E12 — Plantillas y propuestas de catálogo
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E11
+**Dependencias:** E2
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Elegir categoría canaria por volumen y calidad medidos.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** ninguna
+- **Consumidora:** ninguna

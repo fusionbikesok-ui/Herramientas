@@ -29,18 +29,17 @@
 - Refresh tokens y secretos permanecen en almacenamiento seguro; permisos e idempotencia se
   resuelven en backend.
 
-## Orden E0–E24 relevante para App
+## DAG E0–E26 relevante para App
 
-1. E5: autenticación, dispositivos, permisos y contrato real en iPhone.
-2. E6–E7: bandeja, reclamos ML, alertas, deep links y turnos.
-3. E12–E13: tareas de stock y base offline común.
-4. E15 y E17: recepción y conteos iPhone/offline.
-5. E18–E19: excepciones y garantías.
-6. E21: taller iPhone/offline.
-7. E22: métricas, reposición, entrante y preventa.
+1. E19: base App, autenticación, dispositivos, contrato y OTA; depende de E1.
+2. E20: bandeja, alertas y turnos; depende de E9 y E19.
+3. E21: infraestructura offline común; depende de E19.
+4. E22: recepción y conteos; depende de E6 y E21.
+5. E23: taller móvil; depende de E18 y E21.
+6. E15 sólo puede retirar compatibilidad usada después de E23 y E24.
 
 Cada vertical móvil incluye vacío, carga, sin permiso, error, reintento, conflicto y sincronización. Cierra con E2E en un iPhone real. El lease offline máximo es 12 horas y la cola cifrada se conserva hasta siete días, sin `last-write-wins`.
-## Estado E21
+## Evidencia histórica del antiguo E21
 
 E21 está en desarrollo en `/opt/fusionbikes/FusionBikes-App`, rama `feature/stock-flow-ui`.
 Los commits `36a1d28`, `514605e`, `86bfb8d`, `8083318`, `06c3544` y `3237077` agregan el cliente

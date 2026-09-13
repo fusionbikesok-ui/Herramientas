@@ -4,13 +4,13 @@ Actualizado: 2026-09-13.
 
 ## Fuente de verdad
 
-- Especificación vigente: `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md` (el *qué*).
-- **Arquitectura y orden de ejecución desde 2026-09-13:** `docs/superpowers/plans/2026-09-13-plataforma-auditable-catalogo-identidad-stock-pedidos.md` (el *cómo*). Núcleo PostgreSQL por verticales P0–P6; reemplaza a UM1. Orden en §19.0 del maestro, fichas `deliveries/PLAT-*`, decisiones PM-159 a PM-164.
+- Especificación y arquitectura vigentes: `/opt/fusionbikes/herramientas/docs/superpowers/plan-maestro.md`.
+- La ejecución usa un DAG explícito E0–E26; el número identifica la entrega y no implica depender de la anterior. Las fichas históricas y líneas P/UM/GP están archivadas y sólo aportan evidencia mediante el crosswalk.
 - **Congelamiento del legado (PM-160):** sólo arreglos de bugs que pierden plata o bloquean la operación; ninguna función nueva en áreas que reemplaza una vertical. La corrección de conteos espera al libro (P3).
 - **App iPhone (PM-162):** no se rehace; `/api/v1` queda como fachada sobre v2 y la App migra por OTA. Falta verificar que la build instalada tenga `expo-updates` y que un OTA de prueba llegue.
 - Índice de planificación: `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.
-- Progreso verificable: `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E24.
-- E0 fue aprobada por el usuario el 2026-09-02 y figura `aceptada` en el índice de entregas. No implica despliegue de código.
+- Progreso verificable: `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E26.
+- Todas las fichas están en `borrador` hasta satisfacer el contrato documental. E0 conserva su número, pero no puede volver a `desarrollo` hasta que exista y pase `npm run test:e0`.
 - La App remota `feature/stock-flow-ui` alineó `README.md` y `docs/backend-sync/README.md` en `ac4c48f` y `380640f`; no se publicó build móvil.
 - El VPS `/opt/fusionbikes/herramientas` es producción real y sirve `conteo-confiable`.
 
@@ -32,7 +32,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Próxima acción
 
-**Desde 2026-09-13 la primera es P0 (Gate 0):** medido disco 91% (8,9 GB libres), Node v20.20.2, DR externo sin funcionar. Inventariar el disco sin borrar nada y pedir autorización para B2 y servicios. Lo que sigue abajo es el estado previo del legado.
+**La primera entrega habilitable es E0:** medido disco 91% (8,9 GB libres), Node v20.20.2 y DR externo sin funcionar. Primero debe completarse su ficha y su contrato ejecutable; no instalar ni cambiar servicios por autoridad de esta memoria. Lo que sigue abajo describe evidencia del legado.
 
 E2 conserva pendientes externos de revisión independiente y piloto/jornada observada; E3 ya está en desarrollo técnico con autenticación del agente validada, pero requiere relevamiento de impresora, prueba Windows/hardware, revisión y piloto antes de candidata. No desplegar runtime mientras las entregas sigan sin aceptación.
 

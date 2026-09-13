@@ -1,8 +1,8 @@
 # E16 — Excepciones físicas y proveedor
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E15
+**Dependencias:** E7
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Revisar implementación legacy contra el libro v2 y decidir qué código puede adaptarse.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-018, PM-163
+- **Consumidora:** ninguna

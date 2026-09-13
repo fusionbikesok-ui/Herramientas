@@ -1,8 +1,8 @@
 # E26 — Consolidación y cierre del programa
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E25
+**Dependencias:** E13, E15, E16, E17, E18, E20, E22, E23, E24, E25
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Preparar checklist final cuando E25 sea aceptada.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-001, PM-002, PM-021, PM-034, PM-035, PM-041, PM-047, PM-056, PM-079, PM-084, PM-088, PM-090, PM-102, PM-109, PM-121, PM-148, PM-149, PM-159
+- **Consumidora:** ninguna

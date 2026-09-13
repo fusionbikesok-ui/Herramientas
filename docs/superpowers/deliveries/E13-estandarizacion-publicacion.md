@@ -1,8 +1,8 @@
 # E13 — Publicación verificada por categorías
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E12
+**Dependencias:** E4, E12
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Definir tamaño máximo de lote a partir de prueba de cuota en QA.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** ninguna
+- **Consumidora:** ninguna

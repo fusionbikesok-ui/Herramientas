@@ -1,8 +1,8 @@
 # E15 — Compatibilidad y retiro físico autorizado
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E14
+**Dependencias:** E14, E23, E24
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Crear checklist por vertical y calendario de deprecación.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** ninguna
+- **Consumidora:** ninguna

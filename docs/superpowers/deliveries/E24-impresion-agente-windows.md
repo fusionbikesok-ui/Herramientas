@@ -1,8 +1,8 @@
 # E24 — Impresión y agente Windows
 
-**Estado:** planificada
+**Estado:** borrador
 
-**Dependencias:** E23
+**Dependencias:** E10
 
 **Responsable operativo:** José
 
@@ -71,3 +71,8 @@
 - **Próxima acción exacta:** Registrar modelo, driver, lenguaje y puerto de impresora.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
+
+## Decisiones PM asignadas
+
+- **Dueña:** PM-009
+- **Consumidora:** ninguna
