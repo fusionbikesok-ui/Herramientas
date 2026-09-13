@@ -1,7 +1,7 @@
 # Índice canónico de planificación y operación
 
-Actualizado: 2026-09-11. Los estados de esta tabla se verificaron contra el código y la base de
-producción ese día, no contra lo que decían los propios documentos.
+Actualizado: 2026-09-13. Los estados de esta tabla se verificaron contra el código y la base de
+producción, no contra lo que decían los propios documentos.
 
 ## Plan maestro y referencias
 
@@ -15,8 +15,9 @@ producción ese día, no contra lo que decían los propios documentos.
 
 ## Planes específicos y su estado real
 
-| Plan | Estado verificado el 2026-09-11 |
+| Plan | Estado verificado al 2026-09-13 |
 |---|---|
+| `2026-09-13-plataforma-auditable-catalogo-identidad-stock-pedidos.md` | **Borrador para revisión; no autoriza implementación.** Propone reemplazar UM1 por un núcleo PostgreSQL único para catálogo, identidad, stock y pedidos, con migración vertical y DR externo. |
 | `2026-09-09-gestion-pedidos-utilizable.md` | **GP11 y GP12 entregados.** La pantalla es real, el cron importa cada 10 min (2.120 pedidos), el gate de preview ya no existe. **Faltan GP13 (editar datos), GP14 (editar productos) y GP15 (cuotas y reintegros).** |
 | `2026-09-10-preparacion-rediseno.md` | **Navegación de 4 pestañas y pantalla del pedido hechas.** Faltan: marcado unidad por unidad en "Productos a buscar", cola por reloj de corte, cierre automático de preparaciones despachadas. |
 | `2026-09-10-devolucion-preparaciones-canceladas.md` | **Implementado y desplegado.** Bloqueado por un dato: faltan cargar los estantes reales (hay 1). |
