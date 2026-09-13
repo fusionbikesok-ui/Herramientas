@@ -39,6 +39,45 @@ function makeDb() {
   return db;
 }
 
+describe('mlClient — base de la API configurable para QA (ML_API_BASE)', () => {
+  let db;
+  const anterior = process.env.ML_API_BASE;
+
+  beforeEach(() => {
+    vi.resetModules();
+    axios.request.mockReset();
+    axios.post.mockReset();
+    db = makeDb();
+  });
+
+  afterEach(() => {
+    if (anterior === undefined) delete process.env.ML_API_BASE; else process.env.ML_API_BASE = anterior;
+    _resetPresupuestoParaTests();
+    db.close();
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('sin ML_API_BASE las llamadas van a la API real de MercadoLibre', async () => {
+    delete process.env.ML_API_BASE;
+    const { mlFetch } = await import('../lib/mlClient.js');
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: { id: 'MLA1' } });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    expect(axios.request.mock.calls[0][0].url).toBe('https://api.mercadolibre.com/items/MLA1');
+  });
+
+  it('con ML_API_BASE las llamadas y el refresh OAuth van al simulador (barra final tolerada)', async () => {
+    process.env.ML_API_BASE = 'https://qa-simulador:8443/';
+    db.prepare('DELETE FROM ml_oauth_token').run();
+    seedTokenVencido(db);
+    const { mlFetch } = await import('../lib/mlClient.js');
+    axios.post.mockResolvedValueOnce({ status: 200, data: { access_token: 'qa', refresh_token: 'qa', expires_in: 21600 } });
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: { id: 'MLA1' } });
+    await mlFetch(db, ML_CFG, 'get', '/items/MLA1');
+    expect(axios.post.mock.calls[0][0]).toBe('https://qa-simulador:8443/oauth/token');
+    expect(axios.request.mock.calls[0][0].url).toBe('https://qa-simulador:8443/items/MLA1');
+  });
+});
+
 describe('mlClient — cooldown global de rate-limit', () => {
   let db;
 

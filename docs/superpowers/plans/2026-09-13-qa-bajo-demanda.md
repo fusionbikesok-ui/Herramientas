@@ -72,6 +72,18 @@ Ajustes respecto del diseño, decididos al implementar:
 - **Pendiente de verificar al implementar:** si las URLs base de ML y Woo son configurables por
   entorno; si no lo son, agregar esa opción es parte de este paso.
 
+**Implementado 2026-09-13** (`scripts/qa/simulador-canales.mjs`, `test/qa-simulador-canales.test.js`).
+- Verificado: toda llamada del servidor a ML pasa por `lib/mlClient.js`; se agregó `ML_API_BASE`
+  (producción no la define → API real; test en `test/mlClient.test.js`). Woo ya usa `WOO_URL`.
+- Woo exige `https://` en tres lugares (`routes/woo.js`, `lib/gtinWoo.js`, `lib/wooWebhooks.js`):
+  el simulador sirve HTTPS con certificado propio y el contenedor QA confía sólo en él con
+  `NODE_EXTRA_CA_CERTS` (no se desactiva la verificación TLS).
+- Resto de salidas: SMTP sin `SMTP_HOST` no envía; push real sólo con `PUSH_REAL_ENABLED=true`;
+  `NODE_ENV` sólo afecta la validación de push → QA usa `NODE_ENV=qa` y `PUSH_PROVIDER=mock`;
+  Gemini sin `GEMINI_KEY`. `fusion-pricing` de WordPress responde 503 en el simulador.
+- Control de pruebas: `GET /__qa/llamadas`, `POST|DELETE /__qa/fallas` (regex de ruta, status,
+  veces, `retryAfter`).
+
 ### 3. Stack QA (`deploy/qa/docker-compose.yml`)
 
 - Contenedores `qa-app` (Node 24, código de la rama a probar, `PORT` interno, `DB_PATH` al
