@@ -149,8 +149,12 @@ migración de esquema aplicada si corresponde + presupuesto de peso frontend.
 ## Cuentas de prueba para agentes de UI
 
 Para que `probador-e2e` / `auditor-despliegue` puedan loguearse solos: usuario `auditor` /
-clave `Auditor2026!` (cuenta admin, sembrada en `data/fusion.sqlite`). Es solo para testing
-automatizado — no usarla para operar el negocio real.
+clave `Auditor2026!` (sembrada en `data/fusion.sqlite`). Es solo para testing automatizado — no
+usarla para operar el negocio real. **No es admin** (verificado 2026-09-13): tiene sólo lectura en
+13 herramientas (codigos, config-ml, consulta-precios, etiquetas, inventario, matcher,
+notificaciones-ml, pedidos, precios, preparacion, recepcion, stock, sync-ml). Las rutas de
+escritura le responden 403; para probarlas usar el entorno QA (`scripts/qa/qa.sh`) con un usuario
+admin y la clave de QA.
 
 Para probar permisos limitados/rutas protegidas: usuario `auditor_limitado` / clave
 `AuditorLtd2026!` (no-admin, solo lectura en Consulta de Precios; ver `routes/usuarios.js`
