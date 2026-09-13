@@ -48,6 +48,21 @@
    muestra tomada antes de anonimizar; si aparece alguno, borra el snapshot y falla.
 7. Test vitest con una base sembrada que contiene datos personales en columnas y en JSON.
 
+**Implementado 2026-09-13** (`scripts/qa/snapshot-anonimizado.mjs`, `test/qa-snapshot-anonimizado.test.js`).
+Ajustes respecto del diseño, decididos al implementar:
+- Usuarios internos: se **conserva `username`** (la auditoría de preparaciones, conteos y
+  etiquetas guarda nombres de usuario en texto); se reemplazan `email` y `pass_hash`.
+- Teléfono y documento falsos llevan prefijo `QA-TEL-` / `QA-DOC-` en lugar de un formato
+  numérico válido: así nunca colisionan con un dato real de la muestra.
+- La verificación trata los valores sólo numéricos como número completo (sin dígitos pegados):
+  la primera corrida real dio falso positivo con teléfonos contenidos en números largos de
+  atributos de publicaciones ML.
+- Sesiones: `data/sessions.sqlite` es otro archivo y nunca se copia. `direccion` en `sync_log`,
+  `identidad_casos` y `cobertura_sesion` es sentido de sincronización, no dato personal.
+- Corrida real contra producción: 80 s, 121 MB, 1.021 valores de muestra verificados, 18.269
+  clientes anonimizados, tokens y emails internos eliminados, `quick_check` ok.
+- Clave común de QA generada en `/root/.config/fusion-qa/clave` (600).
+
 ### 2. Simuladores de canales (`scripts/qa/simulador-canales.mjs`)
 
 - Servidor local que responde las rutas de ML y Woo que usa la app con datos derivados del
