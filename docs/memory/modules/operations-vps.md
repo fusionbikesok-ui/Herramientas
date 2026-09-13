@@ -21,7 +21,7 @@
   Local: base 14 días, tarball de uploads 2 días (14 si la nube falló).
 - Nube: Backblaze B2, bucket `Herramientas-Fusion` (versionado, Object Lock, SSE-B2), prefijo
   `herramientas/crypt` vía remoto rclone crypt (nombres y contenido cifrados con
-  `/root/.config/fusion-backup/passphrase`; copia de la passphrase fuera del VPS a cargo del usuario).
+  `/root/.config/fusion-backup/passphrase`; copia de la passphrase guardada fuera del VPS por el usuario, confirmado 2026-09-13).
   `db/` y `env/` una copia diaria; `uploads/` espejo incremental con `copy` (nunca borra).
 - La clave del VPS (`B2_*` en `.env`, nombre `fusion-backup-vps`) sólo tiene
   listBuckets/listFiles/readFiles/writeFiles: borrar versiones da 401. Se crea con
