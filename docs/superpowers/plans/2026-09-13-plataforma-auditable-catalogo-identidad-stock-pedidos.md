@@ -2,9 +2,9 @@
 
 **Estado:** aprobado por el usuario (José) 2026-09-13
 **Fecha:** 2026-09-13.
-**Precedencia propuesta:** cuando sea aprobado, reemplazará como guía futura a
+**Precedencia:** desde su aprobación (2026-09-13) reemplaza como guía futura a
 `2026-09-04-identidad-productos.md` y `2026-09-05-arquitectura-um1.md`. Esos documentos
-permanecerán como evidencia histórica de las decisiones y errores anteriores.
+permanecen como evidencia histórica de las decisiones y errores anteriores.
 
 ## 1. Resumen
 

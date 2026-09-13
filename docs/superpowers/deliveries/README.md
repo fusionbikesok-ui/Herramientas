@@ -55,8 +55,8 @@ Reemplaza a UM1 y reordena E0–E24 (PM-159, §19.0 del maestro). Las fichas UM1
 
 | Paso | Vertical | Estado | Ficha | Absorbe |
 | --- | --- | --- | --- | --- |
-| P0 | Gate 0 — infraestructura y DR | cumplida salvo PITR (2026-09-13) | `PLAT-0-gate0.md` | E23 (recuperación y staging) |
-| P1 | Fundación en sombra | siguiente (plan aprobado 2026-09-13) | `PLAT-1-fundacion.md` | — |
+| P0 | Gate 0 — infraestructura y DR | en curso: falta PostgreSQL + PITR probado | `PLAT-0-gate0.md` | E23 (recuperación y staging) |
+| P1 | Fundación en sombra | bloqueada por P0; plan corregido pendiente de confirmación | `PLAT-1-fundacion.md` | — |
 | P2 | Catálogo e identidad | planificada | `PLAT-2-catalogo-identidad.md` | UM1.1–UM1.6, E9 identidad |
 | P3 | Stock | planificada | `PLAT-3-stock.md` | E8, E9 ubicaciones, E10, E11, E14, E16 |
 | P4 | Pedidos y preparación | planificada | `PLAT-4-pedidos-preparacion.md` | E1, E2, E4, E12, GP |
