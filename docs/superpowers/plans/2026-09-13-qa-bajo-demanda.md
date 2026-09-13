@@ -135,6 +135,7 @@ Resultado de la primera corrida real:
 | 4. Crons sin tocar canales reales | con crons activos: 500+ llamadas Woo al simulador en 107 s, 0 conexiones salientes a internet; TLS verificado sin desactivar validación |
 | 5. Producción no afectada | `/healthz` prod 1 ms con QA encendido; QA 70/768 MB, simulador 109/384 MB |
 | 6. down deja el disco limpio | sin contenedores, imagen, red ni archivos en `/opt/fusionbikes/qa` |
+| Flujos de canal (2ª corrida, token ML falso) | Woo: `/api/woo/test` → 200, 2.062 productos del simulador. ML: `mlClient` dentro del contenedor → búsqueda 200 (3.964) y multiget 200, ambas registradas en el simulador. up en 89 s |
 
 ## Criterios de aceptación
 
