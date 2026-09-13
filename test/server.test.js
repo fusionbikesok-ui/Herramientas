@@ -72,6 +72,22 @@ describe('server', () => {
     expect(res.body).toEqual({ ok: true, integridad: 'ok' });
   });
 
+  it('healthz no repite integrity_check en cada llamada pero sí detecta la base caída', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    await request(app).get('/healthz');
+    const sqls = [];
+    const original = app._db.prepare.bind(app._db);
+    app._db.prepare = (sql) => { sqls.push(sql); return original(sql); };
+    const segunda = await request(app).get('/healthz');
+    expect(segunda.status).toBe(200);
+    expect(sqls).not.toContain('PRAGMA integrity_check');
+    app._db.prepare = original;
+    app._db.close();
+    const caida = await request(app).get('/healthz');
+    expect(caida.status).toBe(503);
+  });
+
   it('rejects API requests without sesión', async () => {
     const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;

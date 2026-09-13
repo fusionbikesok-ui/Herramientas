@@ -79,9 +79,18 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
 
   // Endpoint mínimo para health checks del despliegue. No expone credenciales ni datos
   // operativos; sólo confirma que el proceso responde y SQLite está íntegro.
+  // `integrity_check` bloquea el event loop ~0,5 s con la base de producción (medido
+  // 2026-09-13) y el endpoint es público: se recalcula a lo sumo cada 5 min. Cada llamada sí
+  // verifica que la base responda.
+  const HEALTHZ_INTEGRIDAD_TTL_MS = 5 * 60 * 1000;
+  let healthzIntegridad = null; // { valor, en }
   app.get('/healthz', (req, res) => {
     try {
-      const integridad = db.prepare('PRAGMA integrity_check').get().integrity_check;
+      db.prepare('SELECT 1').get();
+      if (!healthzIntegridad || Date.now() - healthzIntegridad.en > HEALTHZ_INTEGRIDAD_TTL_MS) {
+        healthzIntegridad = { valor: db.prepare('PRAGMA integrity_check').get().integrity_check, en: Date.now() };
+      }
+      const integridad = healthzIntegridad.valor;
       if (integridad !== 'ok') return res.status(503).json({ ok: false, integridad });
       return res.json({ ok: true, integridad: 'ok' });
     } catch (error) {
