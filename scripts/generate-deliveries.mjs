@@ -255,6 +255,7 @@ const ownerFor = (id) => {
   if (n === 161) return 'E6';
   if (n === 162) return 'E19';
   if (n === 163) return 'E16';
+  if (n >= 165 && n <= 168) return 'E0';
   if (/webhook|barrido|scan|pregunta|mensaje|reclamo|dead.?letter|pipeline de eventos|frescura/i.test(row)) return 'E1';
   if (/GTIN|EAN|UPC|Producto Fusion|producto Woo|variaci[oó]n|familia|atributo|cat[aá]logo/i.test(row)) return 'E2';
   if (/escritor|escritura remota|canario|saga|operaci[oó]n.*ML|stock cero|SELLER_SKU.*PUT/i.test(row)) return 'E4';
@@ -265,6 +266,9 @@ const ownerFor = (id) => {
   return 'E3';
 };
 const consumersFor = (id, owner) => {
+  // PM-165–168 (infraestructura y DR de E0) no tienen consumidores: sus textos mencionan
+  // "migración" o "producto" como contexto y las reglas por palabra los asignarían por error.
+  if (Number(id.slice(3)) >= 165 && Number(id.slice(3)) <= 168) return [];
   const row = decisionRows.get(id) || '';
   const consumers = new Set();
   if (/identidad|matcher|seller_sku|GTIN|EAN|UPC|Producto Fusion|publicaci[oó]n/i.test(row)) ['E2', 'E3', 'E4'].forEach((value) => consumers.add(value));

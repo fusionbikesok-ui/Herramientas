@@ -32,7 +32,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Próxima acción
 
-**La primera entrega habilitable es E0:** medido disco 91% (8,9 GB libres), Node v20.20.2 y DR externo sin funcionar. Primero debe completarse su ficha y su contrato ejecutable; no instalar ni cambiar servicios por autoridad de esta memoria. Lo que sigue abajo describe evidencia del legado.
+**La primera entrega habilitable es E0 (borrador).** Medido 2026-09-13: disco 33 GB libres / 66 %, Node 24.21.0, backups SQLite cifrados a B2 con vigía y heartbeat Better Stack, QA bajo demanda. Decisiones de José (PM-165–168): sin almacenamiento pago para PostgreSQL (Backblaze sólo para SQLite, 10 GB gratis); pgBackRest 2.59.x; DR en dos niveles —nivel 1 repositorio local cifrado RPO ≤ 5 min / RTO ≤ 1 h, nivel 2 copia externa por pull desde una máquina propia (Mac o servidor sin uso, pendiente de confirmar SO, espacio y 24/7)—; backups diarios de Hostinger se activan más adelante. Única decisión abierta de E0: esa máquina. El nivel 1 se implementa primero en QA; no instalar en producción por autoridad de esta memoria. Lo que sigue abajo describe evidencia del legado.
 
 E2 conserva pendientes externos de revisión independiente y piloto/jornada observada; E3 ya está en desarrollo técnico con autenticación del agente validada, pero requiere relevamiento de impresora, prueba Windows/hardware, revisión y piloto antes de candidata. No desplegar runtime mientras las entregas sigan sin aceptación.
 

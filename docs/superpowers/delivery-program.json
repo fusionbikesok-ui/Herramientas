@@ -1,34 +1,712 @@
 {
   "schema_version": 1,
   "generated_at": "2026-09-13",
-  "states": ["borrador", "planificada", "desarrollo", "candidata", "publicada", "observada", "aceptada"],
+  "states": [
+    "borrador",
+    "planificada",
+    "desarrollo",
+    "candidata",
+    "publicada",
+    "observada",
+    "aceptada"
+  ],
   "deliveries": [
-    {"id":"E0","slug":"infraestructura-dr","title":"Infraestructura, DR y PITR","state":"borrador","depends":[],"result":"PostgreSQL 18 vacío y aislado, WAL continuo, backup base verificable y restauración PITR medida con RPO ≤ 5 min y RTO ≤ 1 h.","absorbs":["P0","E23 recuperación"],"scope":"PostgreSQL por digest, volumen propio, archive_command no bloqueante, B2 Object Lock, pg_verifybackup, QA aislado, capacidad, alertas y SOP de restauración.","non_goals":"No crea tablas de aplicación ni migra datos operativos.","baseline":"Backups SQLite/B2, monitoreo, disco, Node 24 y QA bajo demanda existen; falta PostgreSQL y PITR probado.","data":"Instancia vacía; catálogo de backups y WAL con hash, fecha, rango LSN, retención y resultado de verificación.","interfaces":"Healthcheck interno de PostgreSQL y métricas de backup/WAL; ninguna API de negocio.","migration":"No aplica a datos de negocio. Restaurar en QA desde backup base más WAL hasta un instante elegido.","risks":"Una caída de B2 no puede bloquear PostgreSQL: spool local acotado, alertas al 70 % de disco y procedimiento de emergencia sin borrar WAL no archivado.","tests":"pg_isready; pg_verifybackup sobre cada base backup; restauración PITR mensual; prueba de pérdida del uploader y medición de RPO/RTO.","rollout":"Desplegar sin conexiones de aplicación, observar 24 h de WAL, ejecutar restore QA y aceptar sólo con vigías verdes.","acceptance":"Backup y restore repetibles; RPO/RTO medidos; ninguna degradación del servicio legacy.","next":"Escribir y aprobar el procedimiento PostgreSQL+PITR, ejecutarlo y adjuntar evidencia literal."},
-    {"id":"E1","slug":"fundacion-sombra","title":"Fundación PostgreSQL en sombra","state":"borrador","depends":["E0"],"result":"Esquema base, auditoría encadenada, inbox/outbox/DLQ, API, worker y scheduler separados, passkeys desactivadas y reporte diario firmado de sombra.","absorbs":["P1"],"scope":"Node 24/TypeScript estricto en plataforma/, PostgreSQL, roles, WebAuthn virtual, cifrado de PII, colas durables y barridos ML/Woo por tópico.","non_goals":"No entrega catálogo, stock, pedidos, pantallas operativas ni escritores remotos.","baseline":"El legado Node/Express/SQLite sigue atendiendo producción; existe plan P1 auditado archivado.","data":"companies, channel_accounts, users, roles, capabilities, audit_events, audit_daily_manifests, inbox_messages, outbox_commands, command_attempts y dead_letters.","interfaces":"GET /api/v2/health y GET /api/v2/incidents; reporte firmado en B2 y email. No hay UI ni login real en P1.","migration":"Usuarios sin contraseñas; importación idempotente de metadatos, sin datos de negocio.","risks":"La sombra jamás condiciona el ACK legacy. Estados sin historial enumerables se validan por convergencia; envíos usan cursor shipment.last_updated propio.","tests":"npm test; tests de restricciones, hash, concurrencia, leases, DLQ y WebAuthn virtual; tres corridas de ≥500 webhooks con presupuestos p95/p99.","rollout":"API/worker/scheduler sin credenciales de escritura; 7 días de sombra; aborto ante impacto en códigos HTTP, errores o latencia.","acceptance":"0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José.","next":"Crear el script test:e1 y convertir la especificación vinculante de esta ficha en migraciones, OpenAPI y fixtures revisables."},
-    {"id":"E2","slug":"catalogo-modelo-importacion","title":"Modelo e importación del catálogo canónico","state":"borrador","depends":["E1"],"result":"Catálogo relacional completo importado y reconciliado sin escritores remotos.","absorbs":["P2.1","P2.2","UM1.3 modelo","E9 familias"],"scope":"Modelos, variantes vendibles, cuentas, claves externas, taxonomía, atributos, unidades, imágenes, overlays reservados, GTIN como evidencia y composiciones de packs/kits.","non_goals":"No activa matcher, UI ni cambios en Woo/ML.","baseline":"catalogo_cache tiene 5.170 filas; Woo padre variable no es vendible; existen datos legacy parciales de familias e identidad.","data":"product_models, sellable_variants, external_representations, identifiers, categories, brands, collections, attributes, attribute_values, media_assets y bundle_versions con FKs, vigencia y archivo.","interfaces":"GET /api/v2/catalog/models, /variants y /reconciliation; lectura paginada con filtros y errores estables.","migration":"Snapshot SQLite/Woo/ML, staging, hashes, crosswalk por entidad, rechazo explícito y repetición idempotente antes del delta final.","risks":"No inferir identidad por nombre o GTIN; nulos y duplicados se convierten en casos, nunca se descartan.","tests":"npm run test:e2; restricciones SQL, importación repetida, padres no vendibles, SKU inmutable y snapshots de packs.","rollout":"Sólo lectura; comparar conteos, relaciones y hashes durante 7 días; rollback deshabilitando API v2 y conservando esquema.","acceptance":"100 % del universo clasificado como importado o rechazado con causa; crosswalk íntegro y conciliación firmada.","next":"Producir especificación SQL/OpenAPI y fixture sanitario desde el snapshot auditado."},
-    {"id":"E3","slug":"identidad-matcher-sombra","title":"Identidad y matcher único en sombra","state":"borrador","depends":["E2"],"result":"Un solo motor explica y registra identidades y casos, con UI v2, simulación y decisiones en sombra.","absorbs":["P2.3–P2.6","UM1.1–UM1.5","Matcher","Cobertura","Guardia ML","vigía de formato"],"scope":"Auto-vínculo sólo por seller_sku exacto único; sugerencias explicables; decisiones humanas versionadas; alerta SKU y pausa por cambio de producto/formato/pack.","non_goals":"No ejecuta comandos reales ni corrige los 39 SKU.","baseline":"1.055 verificadas, 11 esperando operación, 0 urgentes y 0 conflictos user_product al snapshot; el código legacy es evidencia, no aceptación.","data":"identity_cases, identity_decisions, identity_evidence, identity_candidates, format_observations y comandos parked; una decisión vigente por clave.","interfaces":"API v2 de casos, candidatos, decisión, historial y simulación; mutaciones con expected_version, idempotency-key, roles catálogo/administración y 409 en conflicto.","migration":"Importar sólo SKU exacto único o decisión humana unívoca; contradicciones y objetivos cambiantes vuelven a revisión.","risks":"GTIN nunca auto-vincula. Un cambio de seller_sku confirmado alerta sin reasignar; un cambio estructural pausa de forma durable.","tests":"npm run test:e3; calibración ≥200 casos, concurrencia de dos operadores, duplicados/desorden, 403/408/429/5xx y E2E 390/768/1440 WCAG 2.2 AA.","rollout":"Sombra ≥7 días, comandos contra simulador, canario por cuenta preparado pero sin escritor real.","acceptance":"Decisiones iguales al comportamiento aprobado o diferencia explicada; 0 decisiones contradictorias; UI y auditoría completas.","next":"Congelar fixture de calibración y redactar OpenAPI/máquinas de estado antes de implementar."},
-    {"id":"E4","slug":"catalogo-identidad-corte","title":"Campaña SKU y corte de catálogo/identidad","state":"borrador","depends":["E3"],"result":"Catálogo e identidad pasan al núcleo con un único ejecutor remoto y rollback probado.","absorbs":["P2.7","P2.8","UM1.6"],"scope":"Campaña de 39 SKU, duplicados, contradicciones, passkeys reales probadas, canario y apagado de escritores legacy de identidad.","non_goals":"Los GTIN sin riesgo comercial migran como casos abiertos y no bloquean.","baseline":"39 vendibles fuera de FB-{ID_WOO}: 5 simples y 34 variaciones al snapshot.","data":"Crosswalk final, comandos de migración y verificaciones remotas append-only; ningún SKU se reutiliza.","interfaces":"Comandos v2 aprobar/pausar/corregir/reanudar con estado consultable; fachada v1 sólo lectura donde sea necesaria.","migration":"Pausar, cambiar Woo/ML, verificar, reanudar por lotes pequeños; delta final bajo congelamiento de escritores.","risks":"Respuesta remota incierta queda bloqueada hasta GET; nunca repetir una escritura sin reconciliar.","tests":"npm run test:e4; simulación completa, passkeys en dispositivos reales, canario y rollback a shadow/read-only.","rollout":"Ventana <15 min, lote inicial de 10, ampliación por métricas; abortar ante escritor duplicado o discrepancia crítica.","acceptance":"Un solo ejecutor, 39 SKU reconciliados, GTIN riesgosos resueltos y jornada observada aceptada.","next":"Crear runbook de campaña y seleccionar canario sin ventas activas conflictivas."},
-    {"id":"E5","slug":"stock-libro-dominio","title":"Libro de stock, apertura y reservas","state":"borrador","depends":["E4"],"result":"Libro append-only importado en sombra con disponible calculado, reservas, retenciones, packs y agrupación user_product.","absorbs":["P3.1–P3.3","E8–E11 dominio"],"scope":"Existencia, ubicaciones, movimientos, reservas sólo con pago, retenciones, asignaciones, salidas, doble descuento y proyección remota.","non_goals":"No reemplaza todavía recepción/conteos ni escribe stock remoto.","baseline":"stock_movements legacy tiene 0 filas; Woo continúa siendo autoridad provisional.","data":"inventory_ledgers, stock_movements, balances, reservations, holds, allocations, locations y remote_stock_resources; cantidades derivadas, nunca sobrescritas.","interfaces":"GET /api/v2/inventory y movimientos; POST de reserva/liberación idempotentes con versión esperada y causal obligatoria.","migration":"Woo como apertura provisional más pedidos pagos abiertos; hashes y crosswalk; impedir descontar dos veces pedidos ya reflejados.","risks":"Aumentos fail-closed; disminuciones prioritarias; bolsa user_product tiene una sola proyección remota.","tests":"npm run test:e5; invariantes SQL, carreras de reserva, packs, doble descuento, reapertura y replay.","rollout":"Sombra sin credenciales remotas; conciliación diaria contra Woo/ML y rollback eliminando consumidores nuevos.","acceptance":"Cada diferencia tiene movimiento causal o caso; disponible reproducible y 0 saldos mutables fuera del libro.","next":"Fijar esquema y algoritmo de apertura con fixture de pedidos abiertos."},
-    {"id":"E6","slug":"recepcion-conteos-libro","title":"Recepción y conteos sobre el libro","state":"borrador","depends":["E5"],"result":"Recepción, ubicaciones, conteos y correcciones auditadas escriben exclusivamente movimientos del nuevo libro.","absorbs":["P3.4","E14","E16","corrección conteos 2026-09-11"],"scope":"Recepción parcial, putaway, conteo ciego, aprobación de diferencias, concurrencia y evidencia.","non_goals":"No activa proyección remota ni App offline.","baseline":"16 recepciones, 39 sesiones de inventario y 1 producto_ubicacion al snapshot; flujos legacy en uso.","data":"receipts, receipt_lines, count_sessions, count_lines, count_approvals y location_assignments vinculados a movimientos causales.","interfaces":"API v2 de recepción/conteo con leases, expected_version, upload idempotente y estados explícitos.","migration":"Importar abiertos; cerrados quedan en archivo mediante crosswalk. Nuevos movimientos se comparan en sombra con escrituras legacy.","risks":"Movimiento posterior invalida aprobación; cero requiere confirmación explícita; foto fallida no pierde borrador.","tests":"npm run test:e6; parcial, dos operadores, movimiento posterior, omisión, cero, ajuste de alto riesgo y E2E responsive.","rollout":"Canario por ubicación, doble lectura sin doble escritura; rollback devuelve UI al legado preservando movimientos nuevos.","acceptance":"Todas las acciones generan movimientos auditados y jornada de recepción/conteo observada.","next":"Mapear contratos actuales a estados v2 y seleccionar una ubicación canaria."},
-    {"id":"E7","slug":"stock-corte","title":"Sombra y corte de autoridad de stock","state":"borrador","depends":["E6"],"result":"Fusion pasa a ser autoridad de stock y Woo/ML quedan como proyecciones verificadas.","absorbs":["P3.5–P3.8","E8–E11 corte"],"scope":"Sombra, simulación, campaña de apertura, proyección completa por publicación, user_product y alerta de sobreventa <2 min.","non_goals":"No cambia la política aprobada de exponer stock completo por publicación.","baseline":"Woo es autoridad y existe riesgo declarado de sobreventa entre publicaciones independientes.","data":"Comandos remotos, intentos, evidencias, DLQ y conciliaciones por variante/recurso remoto.","interfaces":"Estado de proyección y bloqueos; comandos internos idempotentes, sin endpoint libre de cantidad.","migration":"Congelar sync/recepción/conteo legacy, delta final, reconciliar y transferir autoridad en ventana <15 min.","risks":"Ante duda bajar o pausar; jamás aumentar sin identidad, saldo, reservas y lectura fresca.","tests":"npm run test:e7; ventas simultáneas, user_product, packs, 403/408/429/5xx, caída después del efecto y alerta <2 min.","rollout":"Canario por SKU/cuenta, ampliación por lotes; rollback a shadow sin deshacer efectos confirmados, usando compensación.","acceptance":"Un escritor remoto, proyección conciliada, sin doble descuento y piloto físico aceptado.","next":"Definir simulador y conjunto canario de variantes certificadas por conteo."},
-    {"id":"E8","slug":"pedidos-modelo-importacion","title":"Orden canónica e importación","state":"borrador","depends":["E1"],"result":"Órdenes y líneas abiertas quedan modeladas e importadas en PostgreSQL con crosswalk y hashes.","absorbs":["P4.1–P4.2","GP2–GP3"],"scope":"Pedido, pago, cliente, línea, asignación, picking, empaque, despacho, cancelación, devolución y referencias ML/Woo.","non_goals":"No crea espejos ni cambia preparación productiva.","baseline":"2.161 pedidos gestionados y 294 preparaciones al snapshot; cron legacy activo.","data":"orders, order_lines, payments, assignments, fulfillment_units, order_events y external_order_refs con estados separados.","interfaces":"GET /api/v2/orders, detalle, historial y reconciliación; filtros estables y paginación.","migration":"Importar pedidos abiertos/preparación y referencias; histórico queda crosswalk; repetición idempotente y delta final preparado.","risks":"No colapsar pago, preparación y despacho en un solo estado; PII cifrada e índices ciegos.","tests":"npm run test:e8; constraints, importación repetida, líneas multipack, cancelados y datos incompletos.","rollout":"Sólo lectura en sombra; comparar contra Woo, ML y legacy durante 7 días.","acceptance":"100 % de abiertos importados o rechazados con causa; relaciones y totales conciliados.","next":"Fijar máquinas de estado y crosswalk de pedidos/preparaciones actuales."},
-    {"id":"E9","slug":"pedidos-dominio","title":"Dominio de pedidos y efectos remotos","state":"borrador","depends":["E5","E8"],"result":"Pedidos canónicos procesan webhooks, prioridad ML, espejo Woo, cancelaciones, devoluciones y cálculo económico sin efectos dobles.","absorbs":["P4.3","GP4–GP8","GP13–GP15","ventas retenidas"],"scope":"Webhooks durables, espejo sin segunda reserva, desplazamiento retenido, cancelación verificada, cuarentena y eventos packed_verified/dispatch_confirmed.","non_goals":"No sincroniza precios de catálogo ni precios ML.","baseline":"Dominio legacy y línea GP existen parcialmente; deben validarse contra invariantes nuevos.","data":"Order events y comandos durables; GP13 datos, GP14 productos y GP15 cuotas/reintegros/total.","interfaces":"Mutaciones v2 con idempotencia/expected_version; estado de espejo, retención, cancelación y economía; permisos por capacidad.","migration":"Adaptar eventos importados; nunca crear espejo durante replay histórico.","risks":"Pedido desplazado no se cancela ni reintegra; devolución no aumenta disponible hasta clasificación.","tests":"npm run test:e9; duplicados, desorden, venta simultánea, efecto incierto, cancelación remota y cálculos GP15.","rollout":"Simulador sin credenciales reales y sombra sin espejos; DLQ visible.","acceptance":"0 espejos duplicados, 0 segundas reservas y todas las transiciones inválidas rechazadas por base.","next":"Especificar comandos, compensaciones y OpenAPI de mutaciones."},
-    {"id":"E10","slug":"pedidos-ui-preparacion-sombra","title":"UI, preparación y simulación de pedidos","state":"borrador","depends":["E9"],"result":"Gestión, picking, empaque y despacho operan sobre API v2 en sombra y pasan simulación/campaña correctiva.","absorbs":["P4.4–P4.7","E1","E2","E4","E12","GP1–GP12"],"scope":"Web responsive, fachada App, selección/lotes, checklist, fotos, faltantes, tracking, retenciones y campaña de trabados.","non_goals":"No corta escritores legacy.","baseline":"Preparación productiva tiene 294 casos y 540 fotos en medición previa; lote de despacho carecía de adopción.","data":"Claims/leases, evidencias, lotes y snapshots inmutables de líneas/paquetes.","interfaces":"API v2 para gestión/preparación/despacho; /api/v1/meta y fachadas compatibles; SSE con polling fallback.","migration":"Comparar estados y acciones; fotos históricas permanecen referenciadas y protegidas por hash/retención.","risks":"Recarga, doble toque, lease vencido, tracking incierto y pedido urgente durante preparación.","tests":"npm run test:e10; E2E 390/768/1440, axe, fotos lentas/tardías, faltantes, lotes, tracking y simulación remota.","rollout":"Canario por tipo de envío y operadores; campaña de pedidos trabados antes del corte.","acceptance":"Paridad funcional, accesibilidad, 0 pérdida de evidencia y práctica guiada completada.","next":"Levantar matriz UI/API desde código productivo y cerrar diferencias contra el dominio v2."},
-    {"id":"E11","slug":"pedidos-corte","title":"Corte de pedidos, preparación y despacho","state":"borrador","depends":["E7","E10"],"result":"El núcleo asume pedidos/preparación/despacho con un único ejecutor y compatibilidad App.","absorbs":["P4.8","GP9–GP12 corte"],"scope":"Congelamiento, delta final, conciliación, canario, espejo Woo real, preparación y despacho.","non_goals":"No retira todavía fachadas v1 ni archivos legacy.","baseline":"Los escritores legacy siguen activos hasta esta entrega.","data":"Acta de corte firmada, posiciones de cursor, hashes y comandos pendientes clasificados.","interfaces":"v2 autoridad; v1 fachada delgada compatible, sin lógica duplicada.","migration":"Ventana <15 min; pausar consumidores, delta, verificar, activar único ejecutor y reanudar.","risks":"Efectos remotos confirmados no se revierten; se compensan. Respuesta incierta bloquea ampliación.","tests":"npm run test:e11; ensayo completo de corte/rollback, contratos App y jornada con ventas reales acotadas.","rollout":"Canario por cuenta/envío, métricas en tiempo real y abortar ante discrepancia crítica, writer duplicado o DLQ invisible.","acceptance":"Un único escritor, conciliación exacta y aceptación operativa de José.","next":"Preparar runbook minuto a minuto y ensayo en QA sanitaria."},
-    {"id":"E12","slug":"estandarizacion-modelo-propuestas","title":"Plantillas y propuestas de catálogo","state":"borrador","depends":["E2"],"result":"Plantillas versionadas generan propuestas revisables de normalización sin publicar cambios.","absorbs":["P5.1–P5.3"],"scope":"Categoría primaria, marca, colecciones, vocabularios, unidades, atributos requeridos/recomendados, facetas y descripción de imágenes.","non_goals":"No cambia storefront ni publica en Woo.","baseline":"catalogo_cache registra 154 marcas y 126 filas con atributos vacíos al snapshot.","data":"category_templates, template_versions, vocabularies, normalization_proposals, proposal_diffs y approvals.","interfaces":"API/UI v2 para lotes, diff, aprobación/rechazo y explicación; sólo catálogo/administración.","migration":"Importar valores existentes preservando original y procedencia; inválidos generan propuesta, no sobrescritura.","risks":"Nunca inventar atributos sin evidencia; sugerencias automáticas requieren confianza visible y aprobación humana.","tests":"npm run test:e12; versionado, vocabularios, diff estable, dos revisores y E2E WCAG.","rollout":"Primera categoría acotada, sin escritor remoto; rollback archivando propuestas.","acceptance":"Cobertura antes/después medible y ningún lote aprobado sin actor/evidencia.","next":"Elegir categoría canaria por volumen y calidad medidos."},
-    {"id":"E13","slug":"estandarizacion-publicacion","title":"Publicación verificada por categorías","state":"borrador","depends":["E4","E12"],"result":"Lotes aprobados se publican en Woo, se verifican y pueden compensarse.","absorbs":["P5.4–P5.5"],"scope":"Comandos auditados, simulador, canario y campaña por categoría.","non_goals":"No modifica contenido/precios ML ni storefront.","baseline":"Woo es el único destino de escritura de esta etapa.","data":"publication_batches, commands, attempts, remote_evidence y compensations.","interfaces":"Aprobar, ejecutar, consultar y compensar lote; idempotencia y reautenticación reciente.","migration":"No masiva inicial: lotes pequeños con snapshot previo y post-verificación.","risks":"Fallo parcial produce estado bloqueado y compensación explícita, nunca rollback ciego.","tests":"npm run test:e13; 403/408/429/5xx, respuesta incierta, parcial, compensación y fixture Woo.","rollout":"QA, una categoría canaria, expansión por métricas; abortar ante diferencia no explicada.","acceptance":"100 % de escrituras verificadas y jornada de revisión/publicación aceptada.","next":"Definir tamaño máximo de lote a partir de prueba de cuota en QA."},
-    {"id":"E14","slug":"legado-inventario-archivo","title":"Inventario, archivo y apagado reversible del legado","state":"borrador","depends":["E11","E13"],"result":"Cada componente legacy queda clasificado y archivado; sólo se apagan por flag los escritores de verticales ya reemplazadas.","absorbs":["P6.1–P6.4"],"scope":"Workers, crons, tablas, pantallas, rutas y /api/v1 clasificados como fachada v2, lógica legacy o sin uso; apagado limitado a catálogo, identidad, stock, pedidos y estandarización ya cortados.","non_goals":"No borra tablas, archivos ni fachadas usadas.","baseline":"10 montajes /api/v1 y múltiples routers legacy; el inventario exacto se refresca al iniciar.","data":"Exportación SQLite completa firmada, Object Lock, crosswalk y reconciliación por vertical.","interfaces":"Métricas por ruta y flags de apagado; fachadas conservan contrato.","migration":"Apagar escritores por vertical después de exportar/reconciliar; lectura histórica permanece.","risks":"No apagar cron oculto ni perder evidencia de disputa; owner y uso medido obligatorios.","tests":"npm run test:e14; inventario automatizado, restauración del archivo, flags y regresión de contratos.","rollout":"Orden inverso de riesgo, un componente por vez, reversión inmediata disponible.","acceptance":"0 escritores legacy activos en las verticales E2–E13 ya reemplazadas; el resto queda clasificado, conservado y con dependencia explícita.","next":"Generar inventario de procesos/rutas/tablas y asignar vertical/dueño."},
-    {"id":"E15","slug":"legado-compatibilidad-retiro","title":"Compatibilidad y retiro físico autorizado","state":"borrador","depends":["E14","E23","E24"],"result":"Pantallas/rutas sin uso completan deprecación y retiro; fachadas v1 usadas pueden sobrevivir sin lógica legacy.","absorbs":["P6.5–P6.6","E24 retiro"],"scope":"30 días GET read-only, advertencia, métricas cero, 410 y borrado autorizado tras restauración probada.","non_goals":"No retira /api/v1 mientras la App lo use.","baseline":"La App llama auth, meta, inbox, preparación, hoy y workshop mediante v1.","data":"Manifiesto firmado de cada objeto retirado y ubicación recuperable.","interfaces":"410 Gone estable para rutas retiradas; fachadas v1 delegan exclusivamente a v2.","migration":"Exportación, crosswalk, reconciliación, plazo cumplido y aprobación de José son cuatro precondiciones acumulativas.","risks":"Borrado sólo por targets explícitos y backup restaurado; nada destructivo por glob.","tests":"npm run test:e15; métricas 30 días, 410, contratos App, restore B2 y consulta histórica.","rollout":"Retiro individual con revisión previa; recuperación desde Git/archivo documentada.","acceptance":"Sin lógica duplicada; todo borrado recuperable y ninguna llamada App rota.","next":"Crear checklist por vertical y calendario de deprecación."},
-    {"id":"E16","slug":"excepciones-fisicas","title":"Excepciones físicas y proveedor","state":"borrador","depends":["E7"],"result":"Cancelaciones físicas, devoluciones, daños, proveedor y descarte operan sobre el libro nuevo.","absorbs":["E18 histórico"],"scope":"Cuarentena, clasificación, tareas, devolución a proveedor, descarte y evidencia.","non_goals":"No activa código legacy existente sin revalidarlo.","baseline":"Tablas/rutas/pantalla legacy existen con 0 casos productivos al snapshot.","data":"Stock exceptions y eventos ligados a movimientos del libro, orden y evidencia.","interfaces":"API/UI v2 con estados, permisos, expected_version y comandos Woo verificados.","migration":"No hay filas que migrar; fixtures existentes sirven como evidencia de comportamiento.","risks":"Nunca devolver a disponible antes de clasificación humana.","tests":"npm run test:e16; pre/post despacho, dañada, proveedor, descarte, concurrencia y compensación.","rollout":"Piloto con caso controlado y enlace visible; rollback por flag.","acceptance":"Caso completo observado y movimientos/auditoría reconciliados.","next":"Revisar implementación legacy contra el libro v2 y decidir qué código puede adaptarse."},
-    {"id":"E17","slug":"garantias-posventa","title":"Garantías y posventa","state":"borrador","depends":["E8","E16"],"result":"Garantías vinculan venta, producto, diagnóstico, compromiso de stock y resolución auditada.","absorbs":["E19 histórico"],"scope":"Ingreso, evidencia, diagnóstico, proveedor, reparación/reemplazo y cierre.","non_goals":"No reutiliza stock fuera de reservas/retenciones del libro.","baseline":"Backend/pantalla legacy existen y warranty_cases tiene 0 filas.","data":"Warranties, items, events, stock commitments y remote commands sobre IDs canónicos.","interfaces":"API/UI v2 con roles, fotos idempotentes y estados explícitos.","migration":"Sin filas productivas; conservar fixtures y decisiones del diseño viejo.","risks":"Compromiso de garantía no puede venderse; resolución económica separada de movimiento físico.","tests":"npm run test:e17; reparación, reemplazo, proveedor, foto fallida, concurrencia y cierre.","rollout":"Caso controlado, seguimiento hasta cierre y rollback por flag.","acceptance":"Primera garantía observada sin diferencia de stock ni evidencia perdida.","next":"Auditar estados/rutas legacy y mapearlos al dominio v2."},
-    {"id":"E18","slug":"taller-web-woo","title":"Taller web y venta Woo","state":"borrador","depends":["E17"],"result":"Taller consume repuestos del libro y genera servicios/ventas Woo verificadas.","absorbs":["E20 histórico"],"scope":"Orden de taller, diagnóstico, presupuesto, partes, estados, evidencia y efecto Woo.","non_goals":"La App de taller pertenece a E23.","baseline":"Backend/pantalla legacy existen y workshop_jobs tiene 0 filas.","data":"Workshop jobs, parts, events y comandos vinculados a variantes/stock canónicos.","interfaces":"API/UI v2 con idempotencia, permisos y estado de efectos Woo.","migration":"Sin filas productivas; adaptar código sólo después de pruebas del nuevo dominio.","risks":"Repuesto reservado/usado/no usado produce movimientos diferentes; venta incierta se reconcilia.","tests":"npm run test:e18; presupuesto, repuesto, devolución, garantía, caída Woo y E2E.","rollout":"Orden controlada completa y rollback por flag sin borrar eventos.","acceptance":"Servicio observado con stock y Woo reconciliados.","next":"Cruzar el flujo legacy con órdenes/stock v2 y escribir máquina de estados."},
-    {"id":"E19","slug":"app-base-ota-fachadas","title":"Base App, contrato y migración OTA","state":"borrador","depends":["E1"],"result":"App tiene contrato versionado, runtime OTA, auth/dispositivo y fachadas v1 verificadas sobre v2.","absorbs":["E5 histórico","PM-162"],"scope":"Build nativa final necesaria, expo-updates fingerprint, login/refresh/revoke, meta y estrategia pantalla por pantalla.","non_goals":"No migra aún todos los flujos operativos.","baseline":"App instalada y con push; checkout 4f9eec2 está un commit por delante de origin y debe reconciliarse antes de iniciar.","data":"Devices, sessions, refresh tokens, runtime versions y compatibilidad de contrato.","interfaces":"/api/v1/meta compatible y contrato v2 versionado; revocación fail-closed.","migration":"Publicar build con capacidades nativas futuras y luego congelar dependencias nativas; migrar por OTA.","risks":"La discrepancia Git App es bloqueante; ningún OTA puede exceder su runtime compatible.","tests":"npm run verify:mobile-contract y suite App; token vencido, dispositivo perdido, rollback OTA e iPhone real.","rollout":"Canal QA, dispositivo canario, OTA gradual y rollback a actualización anterior.","acceptance":"Contrato fijado, App remota reconciliada e iPhone real validado.","next":"Publicar o descartar explícitamente el commit local de App y registrar ancestry."},
-    {"id":"E20","slug":"app-bandeja-turnos","title":"Bandeja, alertas, turnos y reemplazos en App","state":"borrador","depends":["E9","E19"],"result":"App opera bandeja, alertas, claims, turnos y reemplazos con paridad web.","absorbs":["E6","E7 históricos"],"scope":"Push, deep links, asignación, acuse, escalamiento, turnos y ausencia.","non_goals":"No incluye offline común de depósito.","baseline":"Inbox y push se usan; asignaciones/turnos no tienen adopción verificada.","data":"Assignments, acknowledgements, escalation events y shifts sobre el núcleo.","interfaces":"API v2 y fachada v1 durante migración; acciones idempotentes y permisos comunes.","migration":"Migrar pantalla por OTA conservando deep links y preferencias.","risks":"Push es señal, nunca fuente de verdad; polling/SSE recuperan pérdidas.","tests":"npm run test:e20 más suite App; push perdido, doble claim, ausencia y deep links.","rollout":"Equipo interno canario, métricas de acuse y rollback OTA.","acceptance":"Paridad web/App y turno observado con reemplazo.","next":"Medir uso real de inbox y definir matriz de routing desde decisiones existentes."},
-    {"id":"E21","slug":"app-offline-comun","title":"Infraestructura móvil offline común","state":"borrador","depends":["E19"],"result":"Cola offline cifrada, leases, replay y resolución de conflictos reutilizables por flujos móviles.","absorbs":["E13 histórico"],"scope":"Persistencia local, cifrado, operaciones con UUID, dependencias, backoff, revocación y limpieza.","non_goals":"No implementa recepción, conteos ni taller específicos.","baseline":"La App tiene piezas offline parciales que requieren auditoría contra el contrato v2.","data":"Operaciones locales versionadas sin PII innecesaria; servidor conserva idempotencia y resultado.","interfaces":"SDK interno App y endpoint v2 de estado/replay por operación.","migration":"Adoptar por flujo, nunca reemplazar todas las colas a la vez.","risks":"Lease vencido/conflicto detiene dependientes y pide resolución; dispositivo revocado no sincroniza.","tests":"npm run test:e21 y suite App; 7 días offline, replay, orden causal, conflicto y pérdida de dispositivo.","rollout":"Feature flag por dispositivo/flujo y rollback OTA.","acceptance":"Replay determinista sin efectos dobles y seguridad local validada.","next":"Inventariar almacenamiento/colas actuales de App y definir contrato común."},
-    {"id":"E22","slug":"app-recepcion-conteos","title":"Recepción y conteos en iPhone","state":"borrador","depends":["E6","E21"],"result":"Recepción y conteos móviles operan online/offline sobre E6 con evidencia y conflictos visibles.","absorbs":["E15","E17 históricos"],"scope":"Escaneo, foto, ubicación, conteo ciego, aprobación y replay.","non_goals":"No redefine reglas del libro ni aprobaciones.","baseline":"Backend legacy de recepción/conteo está en uso; UX móvil debe mapearse a v2.","data":"Snapshots locales mínimos y operaciones idempotentes del SDK E21.","interfaces":"API v2 E6, fachada temporal y deep links.","migration":"OTA por pantalla, piloto en una ubicación y convivencia sin doble escritura.","risks":"Dos operadores, foto fallida, movimiento posterior y lease vencido.","tests":"npm run test:e22 y E2E App; offline, accesibilidad, cámara y dispositivo real.","rollout":"Un iPhone/ubicación, luego operadores restantes; rollback OTA.","acceptance":"Jornada de recepción y conteo observada sin diferencias.","next":"Diseñar navegación y matriz de conflictos usando contratos E6/E21."},
-    {"id":"E23","slug":"app-taller","title":"Taller en iPhone","state":"borrador","depends":["E18","E21"],"result":"Taller móvil completa diagnóstico, repuestos, estado y evidencia online/offline.","absorbs":["E21 histórico"],"scope":"Paridad con E18, cámara, escaneo, cola offline y deep links.","non_goals":"No modifica dominio ni política de stock.","baseline":"Existe API móvil legacy de workshop; debe quedar como fachada o retirarse tras OTA.","data":"Operaciones E21 vinculadas a workshop jobs/parts v2.","interfaces":"API v2 E18 y fachada /api/v1/workshop compatible durante migración.","migration":"OTA gradual; métricas confirman abandono v1 antes de deprecación.","risks":"Repuesto usado offline puede colisionar con stock; conflicto bloquea cierre.","tests":"npm run test:e23 y suite App; offline, conflicto, fotos, revocación e iPhone real.","rollout":"Un técnico/dispositivo, jornada observada y rollback OTA.","acceptance":"Orden completa móvil reconciliada con stock y Woo.","next":"Auditar workshopApi actual y fijar crosswalk de endpoints."},
-    {"id":"E24","slug":"impresion-agente-windows","title":"Impresión y agente Windows","state":"borrador","depends":["E10"],"result":"Etiqueta interna 50×25 se imprime mediante agente autenticado, idempotente y observable.","absorbs":["E3 histórico"],"scope":"Cola, claim/lease, resultado, reimpresión, permisos y hardware real.","non_goals":"No rediseña preparación.","baseline":"62 etiquetas pendientes en medición previa; migración 049 y backend existen, falta agente/hardware aceptado.","data":"Print jobs y attempts con lease, device, hash y resultado.","interfaces":"API v2 de agente con JWT de dispositivo y permiso etiquetas; payload versionado.","migration":"Importar cola pendiente sólo tras validar vigencia; duplicados por fingerprint.","risks":"Impresora apagada/sin papel/USB; reintento nunca duplica etiqueta confirmada.","tests":"npm run test:e24; suite backend, agente Windows y prueba física de impresora/red/USB.","rollout":"Una estación, lote de prueba y ampliación tras confirmación.","acceptance":"Cola drena, reimpresión controlada y hardware aceptado.","next":"Registrar modelo, driver, lenguaje y puerto de impresora."},
-    {"id":"E25","slug":"metricas-reposicion","title":"Métricas, reposición, entrante y preventa","state":"borrador","depends":["E7","E11"],"result":"Decisiones de reposición y preventa usan métricas auditables del núcleo.","absorbs":["E22 histórico"],"scope":"KPIs operativos, demanda, entrante, reposición, stock condicionado y preventa.","non_goals":"No automatiza compras ni cambia precios.","baseline":"Incidentes y métricas legacy existen parcialmente; deben recalcularse desde eventos canónicos.","data":"Proyecciones derivadas versionadas con ventana, fórmula, fuente y fecha.","interfaces":"API/UI v2 de métricas y recomendaciones; exportación reproducible.","migration":"Recalcular histórico disponible sin copiar agregados opacos.","risks":"Toda recomendación explica fórmula y frescura; datos degradados no producen acción automática.","tests":"npm run test:e25; recomputación, zonas horarias, faltantes, entrante tardío y E2E.","rollout":"Sólo lectura, comparación con operación y piloto de decisiones humanas.","acceptance":"Métricas reconciliables y decisión de reposición observada.","next":"Priorizar KPIs del maestro y definir fórmulas/ventanas exactas."},
-    {"id":"E26","slug":"consolidacion-cierre","title":"Consolidación y cierre del programa","state":"borrador","depends":["E13","E15","E16","E17","E18","E20","E22","E23","E24","E25"],"result":"Repositorios, migraciones, contratos, DR, documentación y operación quedan consolidados y aceptados.","absorbs":["E24 histórico","resto de E23"],"scope":"Ancestry/diffs, suite global, migraciones, contratos App/backend, restore integral, SOP y archivo definitivo.","non_goals":"No incorpora funcionalidades nuevas.","baseline":"Sólo puede iniciar cuando E0–E25 estén aceptadas o excluidas explícitamente por José.","data":"Manifiesto final de esquemas, archivos, hashes, decisiones y evidencia.","interfaces":"Versiones finales v2/v1 compatible documentadas; ninguna ruta sin dueño.","migration":"Ensayo acumulado desde cero y restore productivo sanitario completo.","risks":"No merge ciego, no borrar historia y no aceptar con tests omitidos sin justificación.","tests":"npm run test:e26; suite global serial, E2E web/App/hardware, restore y auditoría de seguridad.","rollout":"Congelamiento documental/código, ensayo final, publicación y ventana de observación.","acceptance":"Git limpio, DR probado, contratos fijados, 100 % del crosswalk cerrado y aceptación de responsables.","next":"Preparar checklist final cuando E25 sea aceptada."}
+    {
+      "id": "E0",
+      "slug": "infraestructura-dr",
+      "title": "Infraestructura, DR y PITR",
+      "state": "borrador",
+      "depends": [],
+      "result": "DR de PostgreSQL 18 en dos niveles (PM-167): repositorio pgBackRest local cifrado con WAL continuo y PITR medido (RPO ≤ 5 min, RTO ≤ 1 h ante errores de base), copia externa descargada por una máquina propia ante pérdida total del VPS, y backups semanales de Hostinger como red de fondo.",
+      "absorbs": [
+        "P0",
+        "E23 recuperación"
+      ],
+      "scope": "PostgreSQL 18 por digest con volumen propio y límites; pgBackRest 2.59.x (PM-166) con archive-push asíncrono, spool local, compresión y cifrado de repositorio; restauración PITR en QA; copia externa por pull SSH de sólo lectura; alertas en Better Stack y vigía interno; capacidad y SOP de restauración.",
+      "non_goals": "No crea tablas de aplicación ni migra datos operativos; no usa almacenamiento pago ni Backblaze para PostgreSQL (PM-165); los backups diarios de Hostinger se activan después y no cuentan para la aceptación (PM-168).",
+      "baseline": "Al 2026-09-13: backups SQLite cifrados a B2 con 1.786.838.106 bytes de 10 GB gratis (`cat /opt/fusionbikes/backups/estado-nube.json`), vigía interno y heartbeat Better Stack activos, disco 33 GB libres / 66 % (`df -h /`), RAM 3,9 GB disponibles (`free -h`), Docker 29.7.2 (`docker version`), Node 24 y QA bajo demanda; Hostinger incluye backups semanales. Falta PostgreSQL, pgBackRest y PITR probado.",
+      "data": "Sin tablas de aplicación. El catálogo de backups y WAL lo gestiona pgBackRest (`pgbackrest info --output=json`); cada simulacro de restauración deja un registro JSON firmado (target, inicio, fin, RPO, RTO, consultas centinela) fuera del cluster restaurado.",
+      "interfaces": "Healthcheck interno de PostgreSQL en 127.0.0.1, `pgbackrest check` e `info`, métricas de archive lag y tamaño del spool para el vigía; ninguna API de negocio.",
+      "migration": "No aplica a datos de negocio. Restaurar en QA, en un contenedor PostgreSQL aparte limitado a 512 MB, desde el repositorio hasta un instante elegido y medir RPO/RTO.",
+      "risks": "`archive_command` (pgbackrest archive-push asíncrono) devuelve 0 sólo después de escribir el WAL en el spool local con fsync; nunca se borra WAL no archivado. Spool acotado a 5 GB con alerta al 70 % de disco. El repositorio local no protege la pérdida total del VPS: eso lo cubre el nivel 2.",
+      "tests": "pg_isready; pgbackrest check; backup completo + verify; caída del proceso de push con WAL conservado en spool; restauración PITR a un instante con RPO/RTO medidos; hash de la copia externa cuando exista la máquina del nivel 2.",
+      "rollout": "Nivel 1: desplegar sin conexiones de aplicación, observar 24 h de WAL, restaurar en QA y aceptar con vigías verdes. Nivel 2: instalar la tarea de pull en la máquina elegida y restaurar una vez desde esa copia.",
+      "acceptance": "Nivel 1: RPO ≤ 5 min y RTO ≤ 1 h medidos, backup y restore repetibles. Nivel 2: copia externa al día y restaurable con el RPO declarado según la disponibilidad de la máquina. Ninguna degradación del servicio legacy.",
+      "next": "Implementar el nivel 1 en QA (compose PostgreSQL + pgBackRest y `npm run test:e0`) mientras José confirma la máquina del nivel 2: sistema operativo, espacio libre y disponibilidad 24/7."
+    },
+    {
+      "id": "E1",
+      "slug": "fundacion-sombra",
+      "title": "Fundación PostgreSQL en sombra",
+      "state": "borrador",
+      "depends": [
+        "E0"
+      ],
+      "result": "Esquema base, auditoría encadenada, inbox/outbox/DLQ, API, worker y scheduler separados, passkeys desactivadas y reporte diario firmado de sombra.",
+      "absorbs": [
+        "P1"
+      ],
+      "scope": "Node 24/TypeScript estricto en plataforma/, PostgreSQL, roles, WebAuthn virtual, cifrado de PII, colas durables y barridos ML/Woo por tópico.",
+      "non_goals": "No entrega catálogo, stock, pedidos, pantallas operativas ni escritores remotos.",
+      "baseline": "El legado Node/Express/SQLite sigue atendiendo producción; existe plan P1 auditado archivado.",
+      "data": "companies, channel_accounts, users, roles, capabilities, audit_events, audit_daily_manifests, inbox_messages, outbox_commands, command_attempts y dead_letters.",
+      "interfaces": "GET /api/v2/health y GET /api/v2/incidents; reporte firmado en B2 y email. No hay UI ni login real en P1.",
+      "migration": "Usuarios sin contraseñas; importación idempotente de metadatos, sin datos de negocio.",
+      "risks": "La sombra jamás condiciona el ACK legacy. Estados sin historial enumerables se validan por convergencia; envíos usan cursor shipment.last_updated propio.",
+      "tests": "npm test; tests de restricciones, hash, concurrencia, leases, DLQ y WebAuthn virtual; tres corridas de ≥500 webhooks con presupuestos p95/p99.",
+      "rollout": "API/worker/scheduler sin credenciales de escritura; 7 días de sombra; aborto ante impacto en códigos HTTP, errores o latencia.",
+      "acceptance": "0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José.",
+      "next": "Crear el script test:e1 y convertir la especificación vinculante de esta ficha en migraciones, OpenAPI y fixtures revisables."
+    },
+    {
+      "id": "E2",
+      "slug": "catalogo-modelo-importacion",
+      "title": "Modelo e importación del catálogo canónico",
+      "state": "borrador",
+      "depends": [
+        "E1"
+      ],
+      "result": "Catálogo relacional completo importado y reconciliado sin escritores remotos.",
+      "absorbs": [
+        "P2.1",
+        "P2.2",
+        "UM1.3 modelo",
+        "E9 familias"
+      ],
+      "scope": "Modelos, variantes vendibles, cuentas, claves externas, taxonomía, atributos, unidades, imágenes, overlays reservados, GTIN como evidencia y composiciones de packs/kits.",
+      "non_goals": "No activa matcher, UI ni cambios en Woo/ML.",
+      "baseline": "catalogo_cache tiene 5.170 filas; Woo padre variable no es vendible; existen datos legacy parciales de familias e identidad.",
+      "data": "product_models, sellable_variants, external_representations, identifiers, categories, brands, collections, attributes, attribute_values, media_assets y bundle_versions con FKs, vigencia y archivo.",
+      "interfaces": "GET /api/v2/catalog/models, /variants y /reconciliation; lectura paginada con filtros y errores estables.",
+      "migration": "Snapshot SQLite/Woo/ML, staging, hashes, crosswalk por entidad, rechazo explícito y repetición idempotente antes del delta final.",
+      "risks": "No inferir identidad por nombre o GTIN; nulos y duplicados se convierten en casos, nunca se descartan.",
+      "tests": "npm run test:e2; restricciones SQL, importación repetida, padres no vendibles, SKU inmutable y snapshots de packs.",
+      "rollout": "Sólo lectura; comparar conteos, relaciones y hashes durante 7 días; rollback deshabilitando API v2 y conservando esquema.",
+      "acceptance": "100 % del universo clasificado como importado o rechazado con causa; crosswalk íntegro y conciliación firmada.",
+      "next": "Producir especificación SQL/OpenAPI y fixture sanitario desde el snapshot auditado."
+    },
+    {
+      "id": "E3",
+      "slug": "identidad-matcher-sombra",
+      "title": "Identidad y matcher único en sombra",
+      "state": "borrador",
+      "depends": [
+        "E2"
+      ],
+      "result": "Un solo motor explica y registra identidades y casos, con UI v2, simulación y decisiones en sombra.",
+      "absorbs": [
+        "P2.3–P2.6",
+        "UM1.1–UM1.5",
+        "Matcher",
+        "Cobertura",
+        "Guardia ML",
+        "vigía de formato"
+      ],
+      "scope": "Auto-vínculo sólo por seller_sku exacto único; sugerencias explicables; decisiones humanas versionadas; alerta SKU y pausa por cambio de producto/formato/pack.",
+      "non_goals": "No ejecuta comandos reales ni corrige los 39 SKU.",
+      "baseline": "1.055 verificadas, 11 esperando operación, 0 urgentes y 0 conflictos user_product al snapshot; el código legacy es evidencia, no aceptación.",
+      "data": "identity_cases, identity_decisions, identity_evidence, identity_candidates, format_observations y comandos parked; una decisión vigente por clave.",
+      "interfaces": "API v2 de casos, candidatos, decisión, historial y simulación; mutaciones con expected_version, idempotency-key, roles catálogo/administración y 409 en conflicto.",
+      "migration": "Importar sólo SKU exacto único o decisión humana unívoca; contradicciones y objetivos cambiantes vuelven a revisión.",
+      "risks": "GTIN nunca auto-vincula. Un cambio de seller_sku confirmado alerta sin reasignar; un cambio estructural pausa de forma durable.",
+      "tests": "npm run test:e3; calibración ≥200 casos, concurrencia de dos operadores, duplicados/desorden, 403/408/429/5xx y E2E 390/768/1440 WCAG 2.2 AA.",
+      "rollout": "Sombra ≥7 días, comandos contra simulador, canario por cuenta preparado pero sin escritor real.",
+      "acceptance": "Decisiones iguales al comportamiento aprobado o diferencia explicada; 0 decisiones contradictorias; UI y auditoría completas.",
+      "next": "Congelar fixture de calibración y redactar OpenAPI/máquinas de estado antes de implementar."
+    },
+    {
+      "id": "E4",
+      "slug": "catalogo-identidad-corte",
+      "title": "Campaña SKU y corte de catálogo/identidad",
+      "state": "borrador",
+      "depends": [
+        "E3"
+      ],
+      "result": "Catálogo e identidad pasan al núcleo con un único ejecutor remoto y rollback probado.",
+      "absorbs": [
+        "P2.7",
+        "P2.8",
+        "UM1.6"
+      ],
+      "scope": "Campaña de 39 SKU, duplicados, contradicciones, passkeys reales probadas, canario y apagado de escritores legacy de identidad.",
+      "non_goals": "Los GTIN sin riesgo comercial migran como casos abiertos y no bloquean.",
+      "baseline": "39 vendibles fuera de FB-{ID_WOO}: 5 simples y 34 variaciones al snapshot.",
+      "data": "Crosswalk final, comandos de migración y verificaciones remotas append-only; ningún SKU se reutiliza.",
+      "interfaces": "Comandos v2 aprobar/pausar/corregir/reanudar con estado consultable; fachada v1 sólo lectura donde sea necesaria.",
+      "migration": "Pausar, cambiar Woo/ML, verificar, reanudar por lotes pequeños; delta final bajo congelamiento de escritores.",
+      "risks": "Respuesta remota incierta queda bloqueada hasta GET; nunca repetir una escritura sin reconciliar.",
+      "tests": "npm run test:e4; simulación completa, passkeys en dispositivos reales, canario y rollback a shadow/read-only.",
+      "rollout": "Ventana <15 min, lote inicial de 10, ampliación por métricas; abortar ante escritor duplicado o discrepancia crítica.",
+      "acceptance": "Un solo ejecutor, 39 SKU reconciliados, GTIN riesgosos resueltos y jornada observada aceptada.",
+      "next": "Crear runbook de campaña y seleccionar canario sin ventas activas conflictivas."
+    },
+    {
+      "id": "E5",
+      "slug": "stock-libro-dominio",
+      "title": "Libro de stock, apertura y reservas",
+      "state": "borrador",
+      "depends": [
+        "E4"
+      ],
+      "result": "Libro append-only importado en sombra con disponible calculado, reservas, retenciones, packs y agrupación user_product.",
+      "absorbs": [
+        "P3.1–P3.3",
+        "E8–E11 dominio"
+      ],
+      "scope": "Existencia, ubicaciones, movimientos, reservas sólo con pago, retenciones, asignaciones, salidas, doble descuento y proyección remota.",
+      "non_goals": "No reemplaza todavía recepción/conteos ni escribe stock remoto.",
+      "baseline": "stock_movements legacy tiene 0 filas; Woo continúa siendo autoridad provisional.",
+      "data": "inventory_ledgers, stock_movements, balances, reservations, holds, allocations, locations y remote_stock_resources; cantidades derivadas, nunca sobrescritas.",
+      "interfaces": "GET /api/v2/inventory y movimientos; POST de reserva/liberación idempotentes con versión esperada y causal obligatoria.",
+      "migration": "Woo como apertura provisional más pedidos pagos abiertos; hashes y crosswalk; impedir descontar dos veces pedidos ya reflejados.",
+      "risks": "Aumentos fail-closed; disminuciones prioritarias; bolsa user_product tiene una sola proyección remota.",
+      "tests": "npm run test:e5; invariantes SQL, carreras de reserva, packs, doble descuento, reapertura y replay.",
+      "rollout": "Sombra sin credenciales remotas; conciliación diaria contra Woo/ML y rollback eliminando consumidores nuevos.",
+      "acceptance": "Cada diferencia tiene movimiento causal o caso; disponible reproducible y 0 saldos mutables fuera del libro.",
+      "next": "Fijar esquema y algoritmo de apertura con fixture de pedidos abiertos."
+    },
+    {
+      "id": "E6",
+      "slug": "recepcion-conteos-libro",
+      "title": "Recepción y conteos sobre el libro",
+      "state": "borrador",
+      "depends": [
+        "E5"
+      ],
+      "result": "Recepción, ubicaciones, conteos y correcciones auditadas escriben exclusivamente movimientos del nuevo libro.",
+      "absorbs": [
+        "P3.4",
+        "E14",
+        "E16",
+        "corrección conteos 2026-09-11"
+      ],
+      "scope": "Recepción parcial, putaway, conteo ciego, aprobación de diferencias, concurrencia y evidencia.",
+      "non_goals": "No activa proyección remota ni App offline.",
+      "baseline": "16 recepciones, 39 sesiones de inventario y 1 producto_ubicacion al snapshot; flujos legacy en uso.",
+      "data": "receipts, receipt_lines, count_sessions, count_lines, count_approvals y location_assignments vinculados a movimientos causales.",
+      "interfaces": "API v2 de recepción/conteo con leases, expected_version, upload idempotente y estados explícitos.",
+      "migration": "Importar abiertos; cerrados quedan en archivo mediante crosswalk. Nuevos movimientos se comparan en sombra con escrituras legacy.",
+      "risks": "Movimiento posterior invalida aprobación; cero requiere confirmación explícita; foto fallida no pierde borrador.",
+      "tests": "npm run test:e6; parcial, dos operadores, movimiento posterior, omisión, cero, ajuste de alto riesgo y E2E responsive.",
+      "rollout": "Canario por ubicación, doble lectura sin doble escritura; rollback devuelve UI al legado preservando movimientos nuevos.",
+      "acceptance": "Todas las acciones generan movimientos auditados y jornada de recepción/conteo observada.",
+      "next": "Mapear contratos actuales a estados v2 y seleccionar una ubicación canaria."
+    },
+    {
+      "id": "E7",
+      "slug": "stock-corte",
+      "title": "Sombra y corte de autoridad de stock",
+      "state": "borrador",
+      "depends": [
+        "E6"
+      ],
+      "result": "Fusion pasa a ser autoridad de stock y Woo/ML quedan como proyecciones verificadas.",
+      "absorbs": [
+        "P3.5–P3.8",
+        "E8–E11 corte"
+      ],
+      "scope": "Sombra, simulación, campaña de apertura, proyección completa por publicación, user_product y alerta de sobreventa <2 min.",
+      "non_goals": "No cambia la política aprobada de exponer stock completo por publicación.",
+      "baseline": "Woo es autoridad y existe riesgo declarado de sobreventa entre publicaciones independientes.",
+      "data": "Comandos remotos, intentos, evidencias, DLQ y conciliaciones por variante/recurso remoto.",
+      "interfaces": "Estado de proyección y bloqueos; comandos internos idempotentes, sin endpoint libre de cantidad.",
+      "migration": "Congelar sync/recepción/conteo legacy, delta final, reconciliar y transferir autoridad en ventana <15 min.",
+      "risks": "Ante duda bajar o pausar; jamás aumentar sin identidad, saldo, reservas y lectura fresca.",
+      "tests": "npm run test:e7; ventas simultáneas, user_product, packs, 403/408/429/5xx, caída después del efecto y alerta <2 min.",
+      "rollout": "Canario por SKU/cuenta, ampliación por lotes; rollback a shadow sin deshacer efectos confirmados, usando compensación.",
+      "acceptance": "Un escritor remoto, proyección conciliada, sin doble descuento y piloto físico aceptado.",
+      "next": "Definir simulador y conjunto canario de variantes certificadas por conteo."
+    },
+    {
+      "id": "E8",
+      "slug": "pedidos-modelo-importacion",
+      "title": "Orden canónica e importación",
+      "state": "borrador",
+      "depends": [
+        "E1"
+      ],
+      "result": "Órdenes y líneas abiertas quedan modeladas e importadas en PostgreSQL con crosswalk y hashes.",
+      "absorbs": [
+        "P4.1–P4.2",
+        "GP2–GP3"
+      ],
+      "scope": "Pedido, pago, cliente, línea, asignación, picking, empaque, despacho, cancelación, devolución y referencias ML/Woo.",
+      "non_goals": "No crea espejos ni cambia preparación productiva.",
+      "baseline": "2.161 pedidos gestionados y 294 preparaciones al snapshot; cron legacy activo.",
+      "data": "orders, order_lines, payments, assignments, fulfillment_units, order_events y external_order_refs con estados separados.",
+      "interfaces": "GET /api/v2/orders, detalle, historial y reconciliación; filtros estables y paginación.",
+      "migration": "Importar pedidos abiertos/preparación y referencias; histórico queda crosswalk; repetición idempotente y delta final preparado.",
+      "risks": "No colapsar pago, preparación y despacho en un solo estado; PII cifrada e índices ciegos.",
+      "tests": "npm run test:e8; constraints, importación repetida, líneas multipack, cancelados y datos incompletos.",
+      "rollout": "Sólo lectura en sombra; comparar contra Woo, ML y legacy durante 7 días.",
+      "acceptance": "100 % de abiertos importados o rechazados con causa; relaciones y totales conciliados.",
+      "next": "Fijar máquinas de estado y crosswalk de pedidos/preparaciones actuales."
+    },
+    {
+      "id": "E9",
+      "slug": "pedidos-dominio",
+      "title": "Dominio de pedidos y efectos remotos",
+      "state": "borrador",
+      "depends": [
+        "E5",
+        "E8"
+      ],
+      "result": "Pedidos canónicos procesan webhooks, prioridad ML, espejo Woo, cancelaciones, devoluciones y cálculo económico sin efectos dobles.",
+      "absorbs": [
+        "P4.3",
+        "GP4–GP8",
+        "GP13–GP15",
+        "ventas retenidas"
+      ],
+      "scope": "Webhooks durables, espejo sin segunda reserva, desplazamiento retenido, cancelación verificada, cuarentena y eventos packed_verified/dispatch_confirmed.",
+      "non_goals": "No sincroniza precios de catálogo ni precios ML.",
+      "baseline": "Dominio legacy y línea GP existen parcialmente; deben validarse contra invariantes nuevos.",
+      "data": "Order events y comandos durables; GP13 datos, GP14 productos y GP15 cuotas/reintegros/total.",
+      "interfaces": "Mutaciones v2 con idempotencia/expected_version; estado de espejo, retención, cancelación y economía; permisos por capacidad.",
+      "migration": "Adaptar eventos importados; nunca crear espejo durante replay histórico.",
+      "risks": "Pedido desplazado no se cancela ni reintegra; devolución no aumenta disponible hasta clasificación.",
+      "tests": "npm run test:e9; duplicados, desorden, venta simultánea, efecto incierto, cancelación remota y cálculos GP15.",
+      "rollout": "Simulador sin credenciales reales y sombra sin espejos; DLQ visible.",
+      "acceptance": "0 espejos duplicados, 0 segundas reservas y todas las transiciones inválidas rechazadas por base.",
+      "next": "Especificar comandos, compensaciones y OpenAPI de mutaciones."
+    },
+    {
+      "id": "E10",
+      "slug": "pedidos-ui-preparacion-sombra",
+      "title": "UI, preparación y simulación de pedidos",
+      "state": "borrador",
+      "depends": [
+        "E9"
+      ],
+      "result": "Gestión, picking, empaque y despacho operan sobre API v2 en sombra y pasan simulación/campaña correctiva.",
+      "absorbs": [
+        "P4.4–P4.7",
+        "E1",
+        "E2",
+        "E4",
+        "E12",
+        "GP1–GP12"
+      ],
+      "scope": "Web responsive, fachada App, selección/lotes, checklist, fotos, faltantes, tracking, retenciones y campaña de trabados.",
+      "non_goals": "No corta escritores legacy.",
+      "baseline": "Preparación productiva tiene 294 casos y 540 fotos en medición previa; lote de despacho carecía de adopción.",
+      "data": "Claims/leases, evidencias, lotes y snapshots inmutables de líneas/paquetes.",
+      "interfaces": "API v2 para gestión/preparación/despacho; /api/v1/meta y fachadas compatibles; SSE con polling fallback.",
+      "migration": "Comparar estados y acciones; fotos históricas permanecen referenciadas y protegidas por hash/retención.",
+      "risks": "Recarga, doble toque, lease vencido, tracking incierto y pedido urgente durante preparación.",
+      "tests": "npm run test:e10; E2E 390/768/1440, axe, fotos lentas/tardías, faltantes, lotes, tracking y simulación remota.",
+      "rollout": "Canario por tipo de envío y operadores; campaña de pedidos trabados antes del corte.",
+      "acceptance": "Paridad funcional, accesibilidad, 0 pérdida de evidencia y práctica guiada completada.",
+      "next": "Levantar matriz UI/API desde código productivo y cerrar diferencias contra el dominio v2."
+    },
+    {
+      "id": "E11",
+      "slug": "pedidos-corte",
+      "title": "Corte de pedidos, preparación y despacho",
+      "state": "borrador",
+      "depends": [
+        "E7",
+        "E10"
+      ],
+      "result": "El núcleo asume pedidos/preparación/despacho con un único ejecutor y compatibilidad App.",
+      "absorbs": [
+        "P4.8",
+        "GP9–GP12 corte"
+      ],
+      "scope": "Congelamiento, delta final, conciliación, canario, espejo Woo real, preparación y despacho.",
+      "non_goals": "No retira todavía fachadas v1 ni archivos legacy.",
+      "baseline": "Los escritores legacy siguen activos hasta esta entrega.",
+      "data": "Acta de corte firmada, posiciones de cursor, hashes y comandos pendientes clasificados.",
+      "interfaces": "v2 autoridad; v1 fachada delgada compatible, sin lógica duplicada.",
+      "migration": "Ventana <15 min; pausar consumidores, delta, verificar, activar único ejecutor y reanudar.",
+      "risks": "Efectos remotos confirmados no se revierten; se compensan. Respuesta incierta bloquea ampliación.",
+      "tests": "npm run test:e11; ensayo completo de corte/rollback, contratos App y jornada con ventas reales acotadas.",
+      "rollout": "Canario por cuenta/envío, métricas en tiempo real y abortar ante discrepancia crítica, writer duplicado o DLQ invisible.",
+      "acceptance": "Un único escritor, conciliación exacta y aceptación operativa de José.",
+      "next": "Preparar runbook minuto a minuto y ensayo en QA sanitaria."
+    },
+    {
+      "id": "E12",
+      "slug": "estandarizacion-modelo-propuestas",
+      "title": "Plantillas y propuestas de catálogo",
+      "state": "borrador",
+      "depends": [
+        "E2"
+      ],
+      "result": "Plantillas versionadas generan propuestas revisables de normalización sin publicar cambios.",
+      "absorbs": [
+        "P5.1–P5.3"
+      ],
+      "scope": "Categoría primaria, marca, colecciones, vocabularios, unidades, atributos requeridos/recomendados, facetas y descripción de imágenes.",
+      "non_goals": "No cambia storefront ni publica en Woo.",
+      "baseline": "catalogo_cache registra 154 marcas y 126 filas con atributos vacíos al snapshot.",
+      "data": "category_templates, template_versions, vocabularies, normalization_proposals, proposal_diffs y approvals.",
+      "interfaces": "API/UI v2 para lotes, diff, aprobación/rechazo y explicación; sólo catálogo/administración.",
+      "migration": "Importar valores existentes preservando original y procedencia; inválidos generan propuesta, no sobrescritura.",
+      "risks": "Nunca inventar atributos sin evidencia; sugerencias automáticas requieren confianza visible y aprobación humana.",
+      "tests": "npm run test:e12; versionado, vocabularios, diff estable, dos revisores y E2E WCAG.",
+      "rollout": "Primera categoría acotada, sin escritor remoto; rollback archivando propuestas.",
+      "acceptance": "Cobertura antes/después medible y ningún lote aprobado sin actor/evidencia.",
+      "next": "Elegir categoría canaria por volumen y calidad medidos."
+    },
+    {
+      "id": "E13",
+      "slug": "estandarizacion-publicacion",
+      "title": "Publicación verificada por categorías",
+      "state": "borrador",
+      "depends": [
+        "E4",
+        "E12"
+      ],
+      "result": "Lotes aprobados se publican en Woo, se verifican y pueden compensarse.",
+      "absorbs": [
+        "P5.4–P5.5"
+      ],
+      "scope": "Comandos auditados, simulador, canario y campaña por categoría.",
+      "non_goals": "No modifica contenido/precios ML ni storefront.",
+      "baseline": "Woo es el único destino de escritura de esta etapa.",
+      "data": "publication_batches, commands, attempts, remote_evidence y compensations.",
+      "interfaces": "Aprobar, ejecutar, consultar y compensar lote; idempotencia y reautenticación reciente.",
+      "migration": "No masiva inicial: lotes pequeños con snapshot previo y post-verificación.",
+      "risks": "Fallo parcial produce estado bloqueado y compensación explícita, nunca rollback ciego.",
+      "tests": "npm run test:e13; 403/408/429/5xx, respuesta incierta, parcial, compensación y fixture Woo.",
+      "rollout": "QA, una categoría canaria, expansión por métricas; abortar ante diferencia no explicada.",
+      "acceptance": "100 % de escrituras verificadas y jornada de revisión/publicación aceptada.",
+      "next": "Definir tamaño máximo de lote a partir de prueba de cuota en QA."
+    },
+    {
+      "id": "E14",
+      "slug": "legado-inventario-archivo",
+      "title": "Inventario, archivo y apagado reversible del legado",
+      "state": "borrador",
+      "depends": [
+        "E11",
+        "E13"
+      ],
+      "result": "Cada componente legacy queda clasificado y archivado; sólo se apagan por flag los escritores de verticales ya reemplazadas.",
+      "absorbs": [
+        "P6.1–P6.4"
+      ],
+      "scope": "Workers, crons, tablas, pantallas, rutas y /api/v1 clasificados como fachada v2, lógica legacy o sin uso; apagado limitado a catálogo, identidad, stock, pedidos y estandarización ya cortados.",
+      "non_goals": "No borra tablas, archivos ni fachadas usadas.",
+      "baseline": "10 montajes /api/v1 y múltiples routers legacy; el inventario exacto se refresca al iniciar.",
+      "data": "Exportación SQLite completa firmada, Object Lock, crosswalk y reconciliación por vertical.",
+      "interfaces": "Métricas por ruta y flags de apagado; fachadas conservan contrato.",
+      "migration": "Apagar escritores por vertical después de exportar/reconciliar; lectura histórica permanece.",
+      "risks": "No apagar cron oculto ni perder evidencia de disputa; owner y uso medido obligatorios.",
+      "tests": "npm run test:e14; inventario automatizado, restauración del archivo, flags y regresión de contratos.",
+      "rollout": "Orden inverso de riesgo, un componente por vez, reversión inmediata disponible.",
+      "acceptance": "0 escritores legacy activos en las verticales E2–E13 ya reemplazadas; el resto queda clasificado, conservado y con dependencia explícita.",
+      "next": "Generar inventario de procesos/rutas/tablas y asignar vertical/dueño."
+    },
+    {
+      "id": "E15",
+      "slug": "legado-compatibilidad-retiro",
+      "title": "Compatibilidad y retiro físico autorizado",
+      "state": "borrador",
+      "depends": [
+        "E14",
+        "E23",
+        "E24"
+      ],
+      "result": "Pantallas/rutas sin uso completan deprecación y retiro; fachadas v1 usadas pueden sobrevivir sin lógica legacy.",
+      "absorbs": [
+        "P6.5–P6.6",
+        "E24 retiro"
+      ],
+      "scope": "30 días GET read-only, advertencia, métricas cero, 410 y borrado autorizado tras restauración probada.",
+      "non_goals": "No retira /api/v1 mientras la App lo use.",
+      "baseline": "La App llama auth, meta, inbox, preparación, hoy y workshop mediante v1.",
+      "data": "Manifiesto firmado de cada objeto retirado y ubicación recuperable.",
+      "interfaces": "410 Gone estable para rutas retiradas; fachadas v1 delegan exclusivamente a v2.",
+      "migration": "Exportación, crosswalk, reconciliación, plazo cumplido y aprobación de José son cuatro precondiciones acumulativas.",
+      "risks": "Borrado sólo por targets explícitos y backup restaurado; nada destructivo por glob.",
+      "tests": "npm run test:e15; métricas 30 días, 410, contratos App, restore B2 y consulta histórica.",
+      "rollout": "Retiro individual con revisión previa; recuperación desde Git/archivo documentada.",
+      "acceptance": "Sin lógica duplicada; todo borrado recuperable y ninguna llamada App rota.",
+      "next": "Crear checklist por vertical y calendario de deprecación."
+    },
+    {
+      "id": "E16",
+      "slug": "excepciones-fisicas",
+      "title": "Excepciones físicas y proveedor",
+      "state": "borrador",
+      "depends": [
+        "E7"
+      ],
+      "result": "Cancelaciones físicas, devoluciones, daños, proveedor y descarte operan sobre el libro nuevo.",
+      "absorbs": [
+        "E18 histórico"
+      ],
+      "scope": "Cuarentena, clasificación, tareas, devolución a proveedor, descarte y evidencia.",
+      "non_goals": "No activa código legacy existente sin revalidarlo.",
+      "baseline": "Tablas/rutas/pantalla legacy existen con 0 casos productivos al snapshot.",
+      "data": "Stock exceptions y eventos ligados a movimientos del libro, orden y evidencia.",
+      "interfaces": "API/UI v2 con estados, permisos, expected_version y comandos Woo verificados.",
+      "migration": "No hay filas que migrar; fixtures existentes sirven como evidencia de comportamiento.",
+      "risks": "Nunca devolver a disponible antes de clasificación humana.",
+      "tests": "npm run test:e16; pre/post despacho, dañada, proveedor, descarte, concurrencia y compensación.",
+      "rollout": "Piloto con caso controlado y enlace visible; rollback por flag.",
+      "acceptance": "Caso completo observado y movimientos/auditoría reconciliados.",
+      "next": "Revisar implementación legacy contra el libro v2 y decidir qué código puede adaptarse."
+    },
+    {
+      "id": "E17",
+      "slug": "garantias-posventa",
+      "title": "Garantías y posventa",
+      "state": "borrador",
+      "depends": [
+        "E8",
+        "E16"
+      ],
+      "result": "Garantías vinculan venta, producto, diagnóstico, compromiso de stock y resolución auditada.",
+      "absorbs": [
+        "E19 histórico"
+      ],
+      "scope": "Ingreso, evidencia, diagnóstico, proveedor, reparación/reemplazo y cierre.",
+      "non_goals": "No reutiliza stock fuera de reservas/retenciones del libro.",
+      "baseline": "Backend/pantalla legacy existen y warranty_cases tiene 0 filas.",
+      "data": "Warranties, items, events, stock commitments y remote commands sobre IDs canónicos.",
+      "interfaces": "API/UI v2 con roles, fotos idempotentes y estados explícitos.",
+      "migration": "Sin filas productivas; conservar fixtures y decisiones del diseño viejo.",
+      "risks": "Compromiso de garantía no puede venderse; resolución económica separada de movimiento físico.",
+      "tests": "npm run test:e17; reparación, reemplazo, proveedor, foto fallida, concurrencia y cierre.",
+      "rollout": "Caso controlado, seguimiento hasta cierre y rollback por flag.",
+      "acceptance": "Primera garantía observada sin diferencia de stock ni evidencia perdida.",
+      "next": "Auditar estados/rutas legacy y mapearlos al dominio v2."
+    },
+    {
+      "id": "E18",
+      "slug": "taller-web-woo",
+      "title": "Taller web y venta Woo",
+      "state": "borrador",
+      "depends": [
+        "E17"
+      ],
+      "result": "Taller consume repuestos del libro y genera servicios/ventas Woo verificadas.",
+      "absorbs": [
+        "E20 histórico"
+      ],
+      "scope": "Orden de taller, diagnóstico, presupuesto, partes, estados, evidencia y efecto Woo.",
+      "non_goals": "La App de taller pertenece a E23.",
+      "baseline": "Backend/pantalla legacy existen y workshop_jobs tiene 0 filas.",
+      "data": "Workshop jobs, parts, events y comandos vinculados a variantes/stock canónicos.",
+      "interfaces": "API/UI v2 con idempotencia, permisos y estado de efectos Woo.",
+      "migration": "Sin filas productivas; adaptar código sólo después de pruebas del nuevo dominio.",
+      "risks": "Repuesto reservado/usado/no usado produce movimientos diferentes; venta incierta se reconcilia.",
+      "tests": "npm run test:e18; presupuesto, repuesto, devolución, garantía, caída Woo y E2E.",
+      "rollout": "Orden controlada completa y rollback por flag sin borrar eventos.",
+      "acceptance": "Servicio observado con stock y Woo reconciliados.",
+      "next": "Cruzar el flujo legacy con órdenes/stock v2 y escribir máquina de estados."
+    },
+    {
+      "id": "E19",
+      "slug": "app-base-ota-fachadas",
+      "title": "Base App, contrato y migración OTA",
+      "state": "borrador",
+      "depends": [
+        "E1"
+      ],
+      "result": "App tiene contrato versionado, runtime OTA, auth/dispositivo y fachadas v1 verificadas sobre v2.",
+      "absorbs": [
+        "E5 histórico",
+        "PM-162"
+      ],
+      "scope": "Build nativa final necesaria, expo-updates fingerprint, login/refresh/revoke, meta y estrategia pantalla por pantalla.",
+      "non_goals": "No migra aún todos los flujos operativos.",
+      "baseline": "App instalada y con push; checkout 4f9eec2 está un commit por delante de origin y debe reconciliarse antes de iniciar.",
+      "data": "Devices, sessions, refresh tokens, runtime versions y compatibilidad de contrato.",
+      "interfaces": "/api/v1/meta compatible y contrato v2 versionado; revocación fail-closed.",
+      "migration": "Publicar build con capacidades nativas futuras y luego congelar dependencias nativas; migrar por OTA.",
+      "risks": "La discrepancia Git App es bloqueante; ningún OTA puede exceder su runtime compatible.",
+      "tests": "npm run verify:mobile-contract y suite App; token vencido, dispositivo perdido, rollback OTA e iPhone real.",
+      "rollout": "Canal QA, dispositivo canario, OTA gradual y rollback a actualización anterior.",
+      "acceptance": "Contrato fijado, App remota reconciliada e iPhone real validado.",
+      "next": "Publicar o descartar explícitamente el commit local de App y registrar ancestry."
+    },
+    {
+      "id": "E20",
+      "slug": "app-bandeja-turnos",
+      "title": "Bandeja, alertas, turnos y reemplazos en App",
+      "state": "borrador",
+      "depends": [
+        "E9",
+        "E19"
+      ],
+      "result": "App opera bandeja, alertas, claims, turnos y reemplazos con paridad web.",
+      "absorbs": [
+        "E6",
+        "E7 históricos"
+      ],
+      "scope": "Push, deep links, asignación, acuse, escalamiento, turnos y ausencia.",
+      "non_goals": "No incluye offline común de depósito.",
+      "baseline": "Inbox y push se usan; asignaciones/turnos no tienen adopción verificada.",
+      "data": "Assignments, acknowledgements, escalation events y shifts sobre el núcleo.",
+      "interfaces": "API v2 y fachada v1 durante migración; acciones idempotentes y permisos comunes.",
+      "migration": "Migrar pantalla por OTA conservando deep links y preferencias.",
+      "risks": "Push es señal, nunca fuente de verdad; polling/SSE recuperan pérdidas.",
+      "tests": "npm run test:e20 más suite App; push perdido, doble claim, ausencia y deep links.",
+      "rollout": "Equipo interno canario, métricas de acuse y rollback OTA.",
+      "acceptance": "Paridad web/App y turno observado con reemplazo.",
+      "next": "Medir uso real de inbox y definir matriz de routing desde decisiones existentes."
+    },
+    {
+      "id": "E21",
+      "slug": "app-offline-comun",
+      "title": "Infraestructura móvil offline común",
+      "state": "borrador",
+      "depends": [
+        "E19"
+      ],
+      "result": "Cola offline cifrada, leases, replay y resolución de conflictos reutilizables por flujos móviles.",
+      "absorbs": [
+        "E13 histórico"
+      ],
+      "scope": "Persistencia local, cifrado, operaciones con UUID, dependencias, backoff, revocación y limpieza.",
+      "non_goals": "No implementa recepción, conteos ni taller específicos.",
+      "baseline": "La App tiene piezas offline parciales que requieren auditoría contra el contrato v2.",
+      "data": "Operaciones locales versionadas sin PII innecesaria; servidor conserva idempotencia y resultado.",
+      "interfaces": "SDK interno App y endpoint v2 de estado/replay por operación.",
+      "migration": "Adoptar por flujo, nunca reemplazar todas las colas a la vez.",
+      "risks": "Lease vencido/conflicto detiene dependientes y pide resolución; dispositivo revocado no sincroniza.",
+      "tests": "npm run test:e21 y suite App; 7 días offline, replay, orden causal, conflicto y pérdida de dispositivo.",
+      "rollout": "Feature flag por dispositivo/flujo y rollback OTA.",
+      "acceptance": "Replay determinista sin efectos dobles y seguridad local validada.",
+      "next": "Inventariar almacenamiento/colas actuales de App y definir contrato común."
+    },
+    {
+      "id": "E22",
+      "slug": "app-recepcion-conteos",
+      "title": "Recepción y conteos en iPhone",
+      "state": "borrador",
+      "depends": [
+        "E6",
+        "E21"
+      ],
+      "result": "Recepción y conteos móviles operan online/offline sobre E6 con evidencia y conflictos visibles.",
+      "absorbs": [
+        "E15",
+        "E17 históricos"
+      ],
+      "scope": "Escaneo, foto, ubicación, conteo ciego, aprobación y replay.",
+      "non_goals": "No redefine reglas del libro ni aprobaciones.",
+      "baseline": "Backend legacy de recepción/conteo está en uso; UX móvil debe mapearse a v2.",
+      "data": "Snapshots locales mínimos y operaciones idempotentes del SDK E21.",
+      "interfaces": "API v2 E6, fachada temporal y deep links.",
+      "migration": "OTA por pantalla, piloto en una ubicación y convivencia sin doble escritura.",
+      "risks": "Dos operadores, foto fallida, movimiento posterior y lease vencido.",
+      "tests": "npm run test:e22 y E2E App; offline, accesibilidad, cámara y dispositivo real.",
+      "rollout": "Un iPhone/ubicación, luego operadores restantes; rollback OTA.",
+      "acceptance": "Jornada de recepción y conteo observada sin diferencias.",
+      "next": "Diseñar navegación y matriz de conflictos usando contratos E6/E21."
+    },
+    {
+      "id": "E23",
+      "slug": "app-taller",
+      "title": "Taller en iPhone",
+      "state": "borrador",
+      "depends": [
+        "E18",
+        "E21"
+      ],
+      "result": "Taller móvil completa diagnóstico, repuestos, estado y evidencia online/offline.",
+      "absorbs": [
+        "E21 histórico"
+      ],
+      "scope": "Paridad con E18, cámara, escaneo, cola offline y deep links.",
+      "non_goals": "No modifica dominio ni política de stock.",
+      "baseline": "Existe API móvil legacy de workshop; debe quedar como fachada o retirarse tras OTA.",
+      "data": "Operaciones E21 vinculadas a workshop jobs/parts v2.",
+      "interfaces": "API v2 E18 y fachada /api/v1/workshop compatible durante migración.",
+      "migration": "OTA gradual; métricas confirman abandono v1 antes de deprecación.",
+      "risks": "Repuesto usado offline puede colisionar con stock; conflicto bloquea cierre.",
+      "tests": "npm run test:e23 y suite App; offline, conflicto, fotos, revocación e iPhone real.",
+      "rollout": "Un técnico/dispositivo, jornada observada y rollback OTA.",
+      "acceptance": "Orden completa móvil reconciliada con stock y Woo.",
+      "next": "Auditar workshopApi actual y fijar crosswalk de endpoints."
+    },
+    {
+      "id": "E24",
+      "slug": "impresion-agente-windows",
+      "title": "Impresión y agente Windows",
+      "state": "borrador",
+      "depends": [
+        "E10"
+      ],
+      "result": "Etiqueta interna 50×25 se imprime mediante agente autenticado, idempotente y observable.",
+      "absorbs": [
+        "E3 histórico"
+      ],
+      "scope": "Cola, claim/lease, resultado, reimpresión, permisos y hardware real.",
+      "non_goals": "No rediseña preparación.",
+      "baseline": "62 etiquetas pendientes en medición previa; migración 049 y backend existen, falta agente/hardware aceptado.",
+      "data": "Print jobs y attempts con lease, device, hash y resultado.",
+      "interfaces": "API v2 de agente con JWT de dispositivo y permiso etiquetas; payload versionado.",
+      "migration": "Importar cola pendiente sólo tras validar vigencia; duplicados por fingerprint.",
+      "risks": "Impresora apagada/sin papel/USB; reintento nunca duplica etiqueta confirmada.",
+      "tests": "npm run test:e24; suite backend, agente Windows y prueba física de impresora/red/USB.",
+      "rollout": "Una estación, lote de prueba y ampliación tras confirmación.",
+      "acceptance": "Cola drena, reimpresión controlada y hardware aceptado.",
+      "next": "Registrar modelo, driver, lenguaje y puerto de impresora."
+    },
+    {
+      "id": "E25",
+      "slug": "metricas-reposicion",
+      "title": "Métricas, reposición, entrante y preventa",
+      "state": "borrador",
+      "depends": [
+        "E7",
+        "E11"
+      ],
+      "result": "Decisiones de reposición y preventa usan métricas auditables del núcleo.",
+      "absorbs": [
+        "E22 histórico"
+      ],
+      "scope": "KPIs operativos, demanda, entrante, reposición, stock condicionado y preventa.",
+      "non_goals": "No automatiza compras ni cambia precios.",
+      "baseline": "Incidentes y métricas legacy existen parcialmente; deben recalcularse desde eventos canónicos.",
+      "data": "Proyecciones derivadas versionadas con ventana, fórmula, fuente y fecha.",
+      "interfaces": "API/UI v2 de métricas y recomendaciones; exportación reproducible.",
+      "migration": "Recalcular histórico disponible sin copiar agregados opacos.",
+      "risks": "Toda recomendación explica fórmula y frescura; datos degradados no producen acción automática.",
+      "tests": "npm run test:e25; recomputación, zonas horarias, faltantes, entrante tardío y E2E.",
+      "rollout": "Sólo lectura, comparación con operación y piloto de decisiones humanas.",
+      "acceptance": "Métricas reconciliables y decisión de reposición observada.",
+      "next": "Priorizar KPIs del maestro y definir fórmulas/ventanas exactas."
+    },
+    {
+      "id": "E26",
+      "slug": "consolidacion-cierre",
+      "title": "Consolidación y cierre del programa",
+      "state": "borrador",
+      "depends": [
+        "E13",
+        "E15",
+        "E16",
+        "E17",
+        "E18",
+        "E20",
+        "E22",
+        "E23",
+        "E24",
+        "E25"
+      ],
+      "result": "Repositorios, migraciones, contratos, DR, documentación y operación quedan consolidados y aceptados.",
+      "absorbs": [
+        "E24 histórico",
+        "resto de E23"
+      ],
+      "scope": "Ancestry/diffs, suite global, migraciones, contratos App/backend, restore integral, SOP y archivo definitivo.",
+      "non_goals": "No incorpora funcionalidades nuevas.",
+      "baseline": "Sólo puede iniciar cuando E0–E25 estén aceptadas o excluidas explícitamente por José.",
+      "data": "Manifiesto final de esquemas, archivos, hashes, decisiones y evidencia.",
+      "interfaces": "Versiones finales v2/v1 compatible documentadas; ninguna ruta sin dueño.",
+      "migration": "Ensayo acumulado desde cero y restore productivo sanitario completo.",
+      "risks": "No merge ciego, no borrar historia y no aceptar con tests omitidos sin justificación.",
+      "tests": "npm run test:e26; suite global serial, E2E web/App/hardware, restore y auditoría de seguridad.",
+      "rollout": "Congelamiento documental/código, ensayo final, publicación y ventana de observación.",
+      "acceptance": "Git limpio, DR probado, contratos fijados, 100 % del crosswalk cerrado y aceptación de responsables.",
+      "next": "Preparar checklist final cuando E25 sea aceptada."
+    }
   ]
 }

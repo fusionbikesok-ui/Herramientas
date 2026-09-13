@@ -12,14 +12,14 @@
 
 ## Resultado y límites
 
-- PostgreSQL 18 vacío y aislado, WAL continuo, backup base verificable y restauración PITR medida con RPO ≤ 5 min y RTO ≤ 1 h.
-- **Incluye:** PostgreSQL por digest, volumen propio, archive_command no bloqueante, B2 Object Lock, pg_verifybackup, QA aislado, capacidad, alertas y SOP de restauración.
-- **No incluye:** No crea tablas de aplicación ni migra datos operativos.
+- DR de PostgreSQL 18 en dos niveles (PM-167): repositorio pgBackRest local cifrado con WAL continuo y PITR medido (RPO ≤ 5 min, RTO ≤ 1 h ante errores de base), copia externa descargada por una máquina propia ante pérdida total del VPS, y backups semanales de Hostinger como red de fondo.
+- **Incluye:** PostgreSQL 18 por digest con volumen propio y límites; pgBackRest 2.59.x (PM-166) con archive-push asíncrono, spool local, compresión y cifrado de repositorio; restauración PITR en QA; copia externa por pull SSH de sólo lectura; alertas en Better Stack y vigía interno; capacidad y SOP de restauración.
+- **No incluye:** No crea tablas de aplicación ni migra datos operativos; no usa almacenamiento pago ni Backblaze para PostgreSQL (PM-165); los backups diarios de Hostinger se activan después y no cuentan para la aceptación (PM-168).
 - **Evidencia histórica absorbida:** P0, E23 recuperación. Es evidencia, no aceptación automática.
 
 ## Línea base verificada
 
-- Backups SQLite/B2, monitoreo, disco, Node 24 y QA bajo demanda existen; falta PostgreSQL y PITR probado.
+- Al 2026-09-13: backups SQLite cifrados a B2 con 1.786.838.106 bytes de 10 GB gratis (`cat /opt/fusionbikes/backups/estado-nube.json`), vigía interno y heartbeat Better Stack activos, disco 33 GB libres / 66 % (`df -h /`), RAM 3,9 GB disponibles (`free -h`), Docker 29.7.2 (`docker version`), Node 24 y QA bajo demanda; Hostinger incluye backups semanales. Falta PostgreSQL, pgBackRest y PITR probado.
 - Fotografía común: `docs/superpowers/audit-baseline-2026-09-13.md`. Al iniciar se debe refrescar con los mismos comandos y registrar fecha, commit y origen.
 - Toda diferencia entre Git, despliegue y base se registra como hallazgo bloqueante; no se rellena por inferencia.
 
@@ -28,19 +28,19 @@
 - PostgreSQL es destino canónico; cambios de negocio son transaccionales, auditados y atribuibles.
 - Ningún efecto remoto se considera exitoso hasta releer y verificar el recurso; respuesta incierta bloquea repetición ciega.
 - Un solo escritor remoto por vertical; idempotencia, versión esperada, leases y DLQ son obligatorios.
-- Una caída de B2 no puede bloquear PostgreSQL: spool local acotado, alertas al 70 % de disco y procedimiento de emergencia sin borrar WAL no archivado.
+- `archive_command` (pgbackrest archive-push asíncrono) devuelve 0 sólo después de escribir el WAL en el spool local con fsync; nunca se borra WAL no archivado. Spool acotado a 5 GB con alerta al 70 % de disco. El repositorio local no protege la pérdida total del VPS: eso lo cubre el nivel 2.
 
 ## Diseño, datos e interfaces
 
-- **Modelo:** Instancia vacía; catálogo de backups y WAL con hash, fecha, rango LSN, retención y resultado de verificación.
-- **Interfaces:** Healthcheck interno de PostgreSQL y métricas de backup/WAL; ninguna API de negocio.
+- **Modelo:** Sin tablas de aplicación. El catálogo de backups y WAL lo gestiona pgBackRest (`pgbackrest info --output=json`); cada simulacro de restauración deja un registro JSON firmado (target, inicio, fin, RPO, RTO, consultas centinela) fuera del cluster restaurado.
+- **Interfaces:** Healthcheck interno de PostgreSQL en 127.0.0.1, `pgbackrest check` e `info`, métricas de archive lag y tamaño del spool para el vigía; ninguna API de negocio.
 - Los endpoints nuevos viven bajo `/api/v2`, usan errores `{code,message,correlation_id,details?}`, autorización por capacidad y paginación por cursor.
 - Las mutaciones requieren `Idempotency-Key`; las actualizaciones concurrentes requieren `expected_version` y responden 409 sin efecto parcial.
 - Eventos/auditoría son append-only; correcciones agregan un evento compensatorio y nunca reescriben historia.
 
 ## Integraciones, migración y recuperación
 
-- **Migración:** No aplica a datos de negocio. Restaurar en QA desde backup base más WAL hasta un instante elegido.
+- **Migración:** No aplica a datos de negocio. Restaurar en QA, en un contenedor PostgreSQL aparte limitado a 512 MB, desde el repositorio hasta un instante elegido y medir RPO/RTO.
 - ML/Woo se releen desde origen; los cursores tienen solape, deduplicación y cobertura observable. Límites de la API se documentan con fuente oficial y fecha.
 - Fallos 403/408/429/5xx usan clasificación estable, backoff con jitter, límite de intentos y DLQ visible.
 - El rollback vuelve consumidores o UI a sombra/read-only; no deshace efectos remotos confirmados y usa comandos compensatorios cuando corresponda.
@@ -54,21 +54,21 @@
 
 ## Pruebas y evidencia
 
-- **Comando contractual:** pg_isready; pg_verifybackup sobre cada base backup; restauración PITR mensual; prueba de pérdida del uploader y medición de RPO/RTO.
+- **Comando contractual:** pg_isready; pgbackrest check; backup completo + verify; caída del proceso de push con WAL conservado en spool; restauración PITR a un instante con RPO/RTO medidos; hash de la copia externa cuando exista la máquina del nivel 2.
 - El comando `npm run test:e0` debe existir antes de pasar a `desarrollo`; no puede ser un alias vacío y debe fallar si falta un escenario obligatorio.
 - Registrar salida literal, commit, fixture, fecha, duración y omisiones. Tests existentes sólo cuentan si cubren el contrato nuevo.
 - Revisión independiente sin críticos/altos, suite global serial, restauración aplicable y E2E/dispositivo/hardware según superficie.
 
 ## Rollout, rollback y aceptación
 
-- **Despliegue:** Desplegar sin conexiones de aplicación, observar 24 h de WAL, ejecutar restore QA y aceptar sólo con vigías verdes.
+- **Despliegue:** Nivel 1: desplegar sin conexiones de aplicación, observar 24 h de WAL, restaurar en QA y aceptar con vigías verdes. Nivel 2: instalar la tarea de pull en la máquina elegida y restaurar una vez desde esa copia.
 - Todo corte de autoridad dura <15 minutos, comienza con backup/restauración vigentes y se aborta ante discrepancia crítica, doble escritor, cola ciega o disco fuera de umbral.
-- **Aceptación técnica y operativa:** Backup y restore repetibles; RPO/RTO medidos; ninguna degradación del servicio legacy.
+- **Aceptación técnica y operativa:** Nivel 1: RPO ≤ 5 min y RTO ≤ 1 h medidos, backup y restore repetibles. Nivel 2: copia externa al día y restaurable con el RPO declarado según la disponibilidad de la máquina. Ninguna degradación del servicio legacy.
 - Código construido pero no usado no cuenta como observado; publicación no equivale a aceptación.
 
 ## Continuidad
 
-- **Próxima acción exacta:** Escribir y aprobar el procedimiento PostgreSQL+PITR, ejecutarlo y adjuntar evidencia literal.
+- **Próxima acción exacta:** Implementar el nivel 1 en QA (compose PostgreSQL + pgBackRest y `npm run test:e0`) mientras José confirma la máquina del nivel 2: sistema operativo, espacio libre y disponibilidad 24/7.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
@@ -78,29 +78,33 @@
 ```mermaid
 flowchart LR
   postgres18[postgres18]
-  wal_archiver[wal_archiver]
-  backup_runner[backup_runner]
-  restore_runner[restore_runner]
+  pgbackrest[pgbackrest]
+  repo_local[repo_local]
+  restore_drill[restore_drill]
+  offsite_pull[offsite_pull]
   qa_existing[qa_existing]
 ```
 
 | Componente | Estado | Ruta | Responsabilidad |
 |---|---|---|---|
-| postgres18 | future | deploy/postgres/compose.yml | cluster vacío aislado y fijado por digest |
-| wal_archiver | future | scripts/postgres/archive-wal.sh | spool local y carga idempotente a B2 |
-| backup_runner | future | scripts/postgres/base-backup.sh | backup base, manifiesto y verificación |
-| restore_runner | future | scripts/postgres/restore-pitr.sh | restore sanitario y medición RPO/RTO |
+| postgres18 | future | deploy/postgres/compose.yml | cluster vacío en 127.0.0.1, digest fijado, 768 MB, volumen propio |
+| pgbackrest | future | deploy/postgres/pgbackrest.conf | archive-push asíncrono con spool, compresión zstd, cifrado aes-256-cbc, retención |
+| repo_local | future | /var/lib/pgbackrest (volumen) | repositorio nivel 1 en el VPS |
+| restore_drill | future | scripts/postgres/restore-drill.sh | restaura en QA a un instante y firma el registro RPO/RTO |
+| offsite_pull | future | scripts/postgres/offsite-pull.sh | la máquina del nivel 2 descarga el repositorio por SSH de sólo lectura |
 | qa_existing | existing | scripts/qa/qa.sh | entorno QA bajo demanda existente |
 
 ## Actores, tecnologías y dependencias externas
 
 - **Actores:** operador_infraestructura, revisor_tecnico, jose_aceptacion.
-- **Tecnologías:** PostgreSQL 18.x por digest, Docker 29.7.2 observado, Backblaze B2 S3 API, Bash estricto, SHA-256.
+- **Tecnologías:** PostgreSQL 18.x por digest, pgBackRest 2.59.x, Docker 29.7.2 observado, SSH sólo lectura, SHA-256.
 
 | Servicio | Estado | Finalidad |
 |---|---|---|
-| Backblaze B2 | chosen | WAL, backups y evidencia inmutable |
-| servicio de monitoreo | candidate | alertas de WAL, disco y restore |
+| Better Stack | chosen | alertas de archive lag, spool, disco y resultado de simulacros (ya monitorea /healthz y el heartbeat del backup SQLite) |
+| Hostinger backups semanales | chosen | red de fondo incluida en el plan; RPO hasta 7 días |
+| Hostinger backups diarios | candidate | se activan más adelante (PM-168); no cuentan para la aceptación |
+| Máquina del nivel 2 (Mac o servidor sin uso) | candidate | copia externa del repositorio por pull |
 
 Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.
 
@@ -108,8 +112,9 @@ Un servicio `candidate` no autoriza contratación, instalación ni uso de creden
 
 | ID | Actor | Precondición | Disparador | Flujo principal | Alternativas | Errores | Postcondición | Prueba | Evidencia |
 |---|---|---|---|---|---|---|---|---|---|
-| E0-UC1 | operador_infraestructura | cluster vacío y B2 configurado fuera del repo | ventana de backup | crear backup base, verificar manifiesto, subir y confirmar lectura | B2 caído conserva spool y alerta | hash distinto o WAL faltante bloquea aceptación | backup verificable y catálogo firmado | E0-WAL-01 | salida pg_verifybackup y manifiesto |
-| E0-UC2 | revisor_tecnico | backup y WAL continuos disponibles | simulacro mensual | restaurar en QA a target elegido y medir | timeline alterna se registra sin pisar origen | restore no arranca o excede RPO/RTO | cluster sanitario consultable | E0-PITR-01 | log, tiempos y consultas centinela |
+| E0-UC1 | operador_infraestructura | cluster vacío, stanza creada y clave de cifrado fuera del repo | backup programado diario | backup, verify y confirmación en info | repositorio lleno o spool > 70 % alerta y detiene ampliación | WAL faltante o verify con error bloquea aceptación | backup verificable | E0-WAL-03 | salida de pgbackrest backup/verify/info |
+| E0-UC2 | revisor_tecnico | backup y WAL continuos | simulacro mensual o antes de aceptar | restaurar en QA a un instante elegido y medir | timeline alterna se registra sin pisar el origen | restore no arranca o excede RPO/RTO | cluster de QA consultable | E0-PITR-01 | registro firmado con tiempos y consultas centinela |
+| E0-UC3 | operador_infraestructura | máquina del nivel 2 confirmada y clave SSH de sólo lectura | tarea programada en la máquina | descargar repositorio, verificar hash y restaurar una vez | máquina apagada: se pone al día al volver | hash distinto o descarga incompleta alerta | copia externa restaurable | E0-OFF-01 | log de pull con hashes y restore de prueba |
 
 La guía operativa para cada caso es: verificar precondiciones; registrar commit, actor y hora; ejecutar
 el flujo sin saltar guardas; ante una alternativa seguir su rama; ante error detener ampliación,
@@ -119,9 +124,9 @@ preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evi
 
 | Entidad | PK | Restricciones | Índices | Dueño | Retención | PII |
 |---|---|---|---|---|---|---|
-| backup_catalog | backup_id | sha256 único; system_identifier y LSN obligatorios | created_at, status | infraestructura | según política aprobada | none |
-| wal_catalog | timeline+segment | hash único; no marcar uploaded sin HEAD/GET confirmado | archived_at, status | infraestructura | hasta vencer backups dependientes | none |
-| restore_drills | drill_id | target, inicio, fin, RPO y RTO obligatorios | finished_at | infraestructura | permanente | none |
+| repositorio pgBackRest | stanza + backup label | cifrado obligatorio; verify sin errores antes de aceptar | gestionados por pgBackRest | infraestructura | 2 completos + WAL necesario (repo-retention-full=2) | cifrada en reposo |
+| spool de archive-push | segmento WAL | fsync antes de devolver 0; máximo 5 GB | n/a | infraestructura | hasta confirmación en el repositorio | cifrada al pasar al repositorio |
+| registro de simulacro | drill_id (UTC) | target, inicio, fin, RPO, RTO y consultas centinela obligatorios; firmado | archivo por fecha | infraestructura | permanente | none |
 
 Las entidades objetivo son `future`: su nombre y contrato quedan fijados para el diseño, pero ninguna
 tabla se declara existente hasta observar su migración aplicada y consultar su esquema.
@@ -130,16 +135,16 @@ tabla se declara existente hasta observar su migración aplicada y consultar su 
 
 ```mermaid
 stateDiagram-v2
-  discovered -->|archive_command| spooled
-  spooled -->|upload| uploaded
-  uploaded -->|verify| verified
+  generated -->|archive_command| spooled
+  spooled -->|push asíncrono| archived
+  archived -->|check/verify| verified
 ```
 
 | Desde | Evento | Guarda | Hasta | Efecto | Error | Prueba |
 |---|---|---|---|---|---|---|
-| discovered | archive_command | segmento completo | spooled | copia atómica local | blocked | E0-WAL-01 |
-| spooled | upload | B2 disponible | uploaded | PUT idempotente | permanece spooled | E0-WAL-02 |
-| uploaded | verify | hash y objeto legibles | verified | registra evidencia | blocked | E0-WAL-03 |
+| generated | archive_command | segmento completo o archive_timeout=60s | spooled | escritura en spool con fsync; recién entonces devuelve 0 | devuelve no-cero y PostgreSQL conserva el WAL | E0-WAL-01 |
+| spooled | push asíncrono | repositorio disponible | archived | copia comprimida y cifrada al repositorio | permanece spooled; alerta si lag > 3 min | E0-WAL-02 |
+| archived | check/verify | segmento legible y continuo | verified | registra evidencia en info | blocked: invalida backup dependiente | E0-WAL-03 |
 
 ## Secuencias normal, degradada e incierta
 
@@ -183,11 +188,12 @@ Esta entrega no expone API de negocio.
 
 ## Fallos, recuperación y SOP
 
-- B2 no debe bloquear archive_command
-- spool al 70% alerta y detiene ampliación
-- WAL faltante invalida el backup
-- pg_verifybackup verde no reemplaza restore real
-- configuración PostgreSQL se respalda aparte
+- archive_command nunca devuelve 0 antes del fsync en spool
+- spool al 70 % del límite o disco al 70 % alerta y detiene ampliación
+- WAL faltante invalida el backup dependiente
+- verify verde no reemplaza una restauración real
+- pérdida de la clave de cifrado vuelve irrecuperable el repositorio: copia fuera del VPS obligatoria
+- máquina del nivel 2 apagada: el RPO de pérdida total crece hasta que vuelve
 
 El SOP común es: congelar ampliación; conservar payloads redactados, hashes y correlation ID; comprobar
 fuente remota sin escribir; clasificar retryable/uncertain/terminal; reparar mediante replay idempotente
@@ -195,13 +201,14 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 ## Integraciones, observabilidad, rollout y rollback
 
-- **Integración:** B2: PUT idempotente, HEAD/GET de confirmación, timeout y spool local
-- **Integración:** PostgreSQL: archive_command devuelve no-cero sin borrar WAL ante fallo
-- **Observación:** archive lag y último WAL verificado
-- **Observación:** spool/disco con alerta al 70%
-- **Observación:** RPO y RTO por simulacro
-- **Rollout:** cluster vacío sin clientes, 24h de WAL, backup, restore QA y aceptación
-- **Rollback:** detener clientes nuevos; conservar cluster, spool y objetos; legacy no cambia
+- **Integración:** PostgreSQL: archive_command = pgbackrest archive-push asíncrono; archive_timeout 60 s
+- **Integración:** Nivel 2: pull por SSH con clave de sólo lectura desde la máquina propia; nada se empuja desde el VPS
+- **Observación:** archive lag: alerta > 3 min, crítico > 5 min
+- **Observación:** spool: alerta al 70 % de 5 GB; disco: alerta al 70 %
+- **Observación:** último backup verificado: alerta si > 26 h
+- **Observación:** RPO y RTO por simulacro; copia externa: antigüedad del último pull
+- **Rollout:** cluster vacío sin clientes, 24 h de WAL, backup, restore en QA y aceptación del nivel 1; luego pull y restore desde la máquina del nivel 2
+- **Rollback:** detener clientes nuevos; conservar cluster, spool y repositorio; el legacy no cambia
 
 ## Plan de implementación por cortes revisables
 
@@ -216,20 +223,22 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 | Requisito | Diseño | Archivo | Migración | Prueba | Métrica | Evidencia |
 |---|---|---|---|---|---|---|
-| RPO<=5m | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-WAL-01 | RPO<=5m | salida literal + commit + fecha |
-| RTO<=60m | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-WAL-02 | RTO<=60m | salida literal + commit + fecha |
+| RPO<=5m nivel 1 | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-WAL-01 | RPO<=5m nivel 1 | salida literal + commit + fecha |
+| RTO<=60m nivel 1 | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-WAL-02 | RTO<=60m nivel 1 | salida literal + commit + fecha |
 | 0 impacto legacy | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-WAL-03 | 0 impacto legacy | salida literal + commit + fecha |
 | restore mensual | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-PITR-01 | restore mensual | salida literal + commit + fecha |
+| copia externa restaurable | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-RPO-01 | copia externa restaurable | salida literal + commit + fecha |
 
 ## Fuentes y decisiones abiertas
 
 - https://www.postgresql.org/docs/18/continuous-archiving.html — consultada 2026-09-13.
-- https://www.postgresql.org/docs/18/app-pgverifybackup.html — consultada 2026-09-13.
-- https://www.backblaze.com/docs/cloud-storage-object-lock — consultada 2026-09-13.
+- https://pgbackrest.org/release.html — consultada 2026-09-13.
+- https://pgbackrest.org/user-guide.html — consultada 2026-09-13.
+- https://www.hostinger.com/support/1583232-how-to-back-up-or-restore-a-vps-at-hostinger/ — consultada 2026-09-13.
 
-**Decisiones abiertas que mantienen la ficha en borrador:** retención exacta B2; proveedor/canal de monitoreo; dominio y certificado QA.
+**Decisiones abiertas que mantienen la ficha en borrador:** máquina del nivel 2 (Mac o servidor sin uso): sistema operativo, espacio libre y disponibilidad 24/7 — José la confirma.
 
 ## Decisiones PM asignadas
 
-- **Dueña:** ninguna
+- **Dueña:** PM-165, PM-166, PM-167, PM-168
 - **Consumidora:** ninguna
