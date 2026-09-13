@@ -8,6 +8,8 @@
     "start": "node server.js",
     "test": "vitest run",
     "verify:mobile-contract": "node scripts/verify-mobile-contract.mjs",
+    "docs:generate-deliveries": "node scripts/generate-deliveries.mjs",
+    "docs:validate-deliveries": "node scripts/validate-deliveries.mjs",
     "e2e:e2": "node scripts/e2-browser-smoke.mjs",
     "design:preview": "node scripts/design-preview.mjs",
     "e2e:e4": "node scripts/e4-browser-smoke.mjs",

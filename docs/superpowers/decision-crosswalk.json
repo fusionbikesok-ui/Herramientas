@@ -1,0 +1,662 @@
+{
+  "schema_version": 1,
+  "rule": "Un dueño vigente por decisión; consumidores adicionales se declaran en las fichas.",
+  "decisions": [
+    {
+      "id": "PM-001",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-002",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-003",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-004",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-005",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-006",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-007",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-008",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-009",
+      "owner": "E24"
+    },
+    {
+      "id": "PM-010",
+      "owner": "E5"
+    },
+    {
+      "id": "PM-011",
+      "owner": "E5"
+    },
+    {
+      "id": "PM-012",
+      "owner": "E5"
+    },
+    {
+      "id": "PM-013",
+      "owner": "E6"
+    },
+    {
+      "id": "PM-014",
+      "owner": "E6"
+    },
+    {
+      "id": "PM-015",
+      "owner": "E19"
+    },
+    {
+      "id": "PM-016",
+      "owner": "E21"
+    },
+    {
+      "id": "PM-017",
+      "owner": "E20"
+    },
+    {
+      "id": "PM-018",
+      "owner": "E16"
+    },
+    {
+      "id": "PM-019",
+      "owner": "E25"
+    },
+    {
+      "id": "PM-020",
+      "owner": "E19"
+    },
+    {
+      "id": "PM-021",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-022",
+      "owner": "E19"
+    },
+    {
+      "id": "PM-023",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-024",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-025",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-026",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-027",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-028",
+      "owner": "E10"
+    },
+    {
+      "id": "PM-029",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-030",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-031",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-032",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-033",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-034",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-035",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-036",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-037",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-038",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-039",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-040",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-041",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-042",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-043",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-044",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-045",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-046",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-047",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-048",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-049",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-050",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-051",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-052",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-053",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-054",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-055",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-056",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-057",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-058",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-059",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-060",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-061",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-062",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-063",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-064",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-065",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-066",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-067",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-068",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-069",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-070",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-071",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-072",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-073",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-074",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-075",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-076",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-077",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-078",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-079",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-080",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-081",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-082",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-083",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-084",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-085",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-086",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-087",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-088",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-089",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-090",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-091",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-092",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-093",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-094",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-095",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-096",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-097",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-098",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-099",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-100",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-101",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-102",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-103",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-104",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-105",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-106",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-107",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-108",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-109",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-110",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-111",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-112",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-113",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-114",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-115",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-116",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-117",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-118",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-119",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-120",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-121",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-122",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-123",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-124",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-125",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-126",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-127",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-128",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-129",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-130",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-131",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-132",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-133",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-134",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-135",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-136",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-137",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-138",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-139",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-140",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-141",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-142",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-143",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-144",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-145",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-146",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-147",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-148",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-149",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-150",
+      "owner": "E2"
+    },
+    {
+      "id": "PM-151",
+      "owner": "E2"
+    },
+    {
+      "id": "PM-152",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-153",
+      "owner": "E4"
+    },
+    {
+      "id": "PM-154",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-155",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-156",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-157",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-158",
+      "owner": "E3"
+    },
+    {
+      "id": "PM-159",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-160",
+      "owner": "E26"
+    },
+    {
+      "id": "PM-161",
+      "owner": "E6"
+    },
+    {
+      "id": "PM-162",
+      "owner": "E19"
+    },
+    {
+      "id": "PM-163",
+      "owner": "E16"
+    },
+    {
+      "id": "PM-164",
+      "owner": "E2"
+    }
+  ]
+}

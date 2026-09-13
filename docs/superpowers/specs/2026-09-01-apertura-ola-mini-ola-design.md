@@ -3,7 +3,8 @@
 **Estado:** aprobado por usuario, pendiente de plan de implementación
 **Entrega:** E1
 **Rama/worktree:** `feature/e1-current-rollout` / `/tmp/fusion-e1-current`
-**Fuente de objetivo:** `docs/superpowers/plans/plan-maestro-v2.md` §4 (flujo, estados, excepciones)
+**Fuente histórica del objetivo:** archivada; su destino vigente está en
+`docs/superpowers/crosswalk-entregas.md` y su ejecución se rige por E10.
 
 ## Alcance
 
