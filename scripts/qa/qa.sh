@@ -102,6 +102,18 @@ cmd_up() {
   log "snapshot anonimizado (~80 s)"
   QA_CLAVE="$(cat "$CLAVE_QA")" nice -n 10 node "$REPO/scripts/qa/snapshot-anonimizado.mjs" "$PROD_DB" "$QA_DIR/data/fusion.sqlite"
 
+  # El snapshot deja ml_oauth_token vacío (el token real nunca sale de producción). Sin fila, la
+  # app no llega a llamar a ML y los flujos de ML no se pueden probar: se siembra un token falso
+  # que sólo acepta el simulador.
+  node -e "
+    const D = require('$REPO/node_modules/better-sqlite3');
+    const db = new D('$QA_DIR/data/fusion.sqlite');
+    const vence = new Date(Date.now() + 6 * 3600 * 1000).toISOString();
+    db.prepare('INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en) VALUES (1, ?, ?, ?, ?)')
+      .run('APP_USR-QA', 'TG-QA', vence, new Date().toISOString());
+    db.close();
+  "
+
   generar_certificados
   generar_env
   verificar_sin_credenciales_reales
@@ -123,7 +135,8 @@ cmd_down() {
   "${COMPOSE[@]}" down --remove-orphans 2>&1 | tail -2 || true
   limpiar_archivos
   docker image rm fusion-qa-app:local >/dev/null 2>&1 || true
-  docker builder prune -f --filter "until=1h" >/dev/null 2>&1 || true
+  # No se hace `docker builder prune`: la caché de build es compartida con otros proyectos del VPS
+  # (chatbot, fusion-vision) y no se puede filtrar sólo la de QA. La de QA es chica y acelera el próximo up.
   log "QA apagado; snapshot, certificados, secretos y código borrados"
 }
 
