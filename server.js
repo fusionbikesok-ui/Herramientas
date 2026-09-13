@@ -47,6 +47,7 @@ import { auditoriaRouter } from './routes/auditoria.js';
 import { barridoAuditoria } from './lib/auditoria.js';
 import { incidentesRouter } from './routes/incidentes.js';
 import { procesarAlertasEmailIncidentes } from './lib/incidentes.js';
+import { revisarBackupNube } from './lib/vigiaBackup.js';
 import { devicesRouter } from './routes/devices.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
@@ -699,6 +700,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           if (n) console.log(`Purgadas ${n} fotos de preparación (borrado_en > 60 días)`);
         } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
       });
+
+      // Vigía del backup a B2 (Gate 0): backup.sh corre por cron del sistema a las 06:00 UTC.
+      cron.schedule('17 * * * *', () => { revisarBackupNube(app._db); });
 
       cron.schedule('0 5 * * *', () => {
         backfillVentas(app._db, syncCfg)

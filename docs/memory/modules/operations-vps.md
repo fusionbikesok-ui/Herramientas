@@ -31,6 +31,12 @@
   3.736/3.736 por `cryptcheck`. La descarga completa de uploads cortó por el **tope diario de
   descarga de la cuenta B2** (403 `download_cap_exceeded`): una restauración real exige subir ese
   tope en Caps & Alerts.
+- El tope diario de descarga también cuenta los HEAD de rclone: `copyto` sin `--no-check-dest`
+  falló con 403 el 2026-09-13 06:00 tras la prueba de restauración. El script usa
+  `--no-check-dest` en base y .env; `copy` de uploads sólo lista (no descarga).
+- Vigía: `lib/vigiaBackup.js`, cron de la app minuto 17 de cada hora; si `ultimo_ok` > 26 h o
+  falta el estado, abre incidente crítico `backup/backup_nube/backup_vencido` (email) y lo
+  resuelve solo al volver un backup completo.
 
 ## Restricciones
 
