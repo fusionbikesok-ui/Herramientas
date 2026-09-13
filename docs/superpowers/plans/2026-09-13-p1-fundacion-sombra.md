@@ -37,7 +37,8 @@ auditoría encadenada y las colas funcionando sobre la base que P0 dejó respald
 | Passkeys | catálogo y administración; iPhone, Mac/PC con biometría, compu sin biometría (QR/llave USB) y Android | José 2026-09-13, plan §4.2 |
 | Prueba de passkeys | P1 las valida con autenticador virtual (WebAuthn en tests); la prueba en dispositivos reales es **condición para activarlas** en P2, cuando exista `qa-herramientas` con HTTPS | José 2026-09-13 |
 | Procesos | API, worker y scheduler como **servicios separados** (misma imagen, contenedores distintos) | plan §2.1, revisión 2026-09-13 |
-| Sombra | la copia al inbox nuevo **nunca** afecta el ACK ni el procesamiento del legado; la fuente de conciliación es la relectura de ML/Woo | revisión 2026-09-13 |
+| Sombra | la copia al inbox nuevo **nunca** afecta el ACK ni el procesamiento del legado; la fuente de conciliación es la relectura de ML/Woo con barrido independiente por tópico | revisión 2026-09-13 |
+| Acceso al reporte | **reporte diario firmado fuera de la UI**: se guarda en B2 y llega por email a José; P1 no expone pantallas con login. Acceso administrativo de emergencia sólo por consola en el VPS, auditado | José 2026-09-13 |
 | Responsable | José valida el reporte de sombra; técnico: asistente | José 2026-09-13 |
 | Capacidad | VPS actual (2 CPU, 7,8 GB, ~3,4 GB libres); ampliación futura sin fecha | José 2026-09-13 |
 
@@ -105,16 +106,40 @@ Cada paso termina en algo verificable y con tests. El orden importa: primero lo 
   `inbox_messages` nuevo ocurre después, fuera de la transacción del legado, con timeout corto. Si
   PostgreSQL no está o falla, la copia se descarta con una métrica y **no** se reintenta desde el
   handler: el ACK a ML/Woo nunca depende de la base nueva.
-- **Reparación por relectura externa:** un trabajo del scheduler relee periódicamente ML (órdenes y
-  recursos notificados) y Woo (órdenes y productos modificados desde el último cursor) y encola en el
-  inbox lo que falte. La fuente de conciliación es **la API remota**, no la base del legado ni la copia.
+- **Reparación por barrido independiente por tópico:** si la copia se perdió, también se perdió el
+  identificador notificado; por eso la reparación **no** depende del aviso: cada tópico tiene su propio
+  barrido de la API remota con cursor persistido, y la fuente de conciliación es **la API remota**, no
+  la base del legado ni la copia.
+
+  | Canal / tópico | Barrido | Cursor | Borrados / bajas | Limitaciones conocidas |
+  |---|---|---|---|---|
+  | ML `orders` / `orders_v2` | `/orders/search` por `order.date_last_updated` | última fecha vista − solape de 10 min | `status=cancelled` en la misma búsqueda | paginado máx. por consulta; ventana acotada por día |
+  | ML envíos | derivado de cada orden (`/shipments/{id}`) | el de órdenes | cancelación del envío en el estado | sin búsqueda propia |
+  | ML `questions` | `/questions/search` del vendedor por fecha | última pregunta vista | preguntas eliminadas por ML no vuelven: se registran como no encontradas | igual criterio que el cron actual cada 20 min |
+  | ML `messages` | **por pack** (PM-157): `/messages/unread?role=seller&tag=post_sale` + `/messages/packs/{pack}/sellers/{seller}` para los packs de órdenes del período, siempre con `mark_as_read=false` | último pack/fecha visto | no aplica | el id del aviso no es resoluble como vendedor |
+  | ML `claims` / `post_purchase` | `/post-purchase/v1/claims/search` por última actualización | última fecha vista | cierre como estado | ventana de búsqueda acotada |
+  | ML `items` | barrido completo `/users/{id}/items/search?search_type=scan` + multiget | conjunto completo por corrida | publicación que deja de aparecer o pasa a `closed` → baja | costo de cuota: una vuelta completa por día, fuera de horario |
+  | Woo pedidos | `/orders?modified_after=` | último `date_modified_gmt` − solape | `status=trash`/`cancelled` en la consulta | un borrado definitivo no aparece: se detecta por diferencia de IDs semanal |
+  | Woo productos | `/products?modified_after=` (y variaciones) | último `date_modified_gmt` − solape | **`product.deleted` no aparece en modificados**: diferencia del conjunto completo de IDs contra el catálogo del núcleo en cada vuelta completa | vuelta completa diaria |
+
+  "0 faltantes" se demuestra **por tópico**: para cada fila, lo que el barrido encontró en su ventana
+  contra lo que hay en el inbox; los tópicos con limitación declarada informan su cobertura en vez de
+  prometer cero.
 - Deduplicación por (cuenta, tópico, recurso, versión remota): una señal repetida o fuera de orden no
   duplica mensajes.
-- Reporte diario para José: señales del legado, señales del núcleo, faltantes reparados por relectura,
-  duplicados descartados, latencia, y copias descartadas por falla de la base nueva.
-- **Aceptación:** con PostgreSQL detenido a propósito durante una prueba, el legado no cambia su
-  respuesta ni su latencia y la relectura repara lo perdido; 7 días de sombra con 0 faltantes sin
-  explicar y el reporte revisado por José.
+- **Reporte diario firmado, fuera de la UI:** por tópico, señales del legado, señales del núcleo,
+  faltantes reparados por barrido, duplicados descartados, latencia y copias descartadas por falla de la
+  base nueva. Se firma con la clave de auditoría, se guarda en B2 (Object Lock) y llega por email a
+  José con el resumen y el hash para verificarlo.
+- **Aceptación medible:**
+  - **Presupuesto de latencia del handler del legado:** reproducir en QA ≥ 500 webhooks reales (tomados
+    del registro, anonimizados) a ritmo de producción durante 30 minutos, tres corridas: copia apagada,
+    copia encendida, y copia encendida con PostgreSQL detenido. Diferencia de p95 ≤ 25 ms y de p99
+    ≤ 100 ms contra la corrida con la copia apagada; 0 cambios en códigos de respuesta y 0 errores nuevos.
+  - Con PostgreSQL detenido, los barridos reparan en el inbox el 100 % de lo recibido durante la caída
+    en los tópicos sin limitación declarada.
+  - 7 días de sombra con 0 faltantes sin explicar por tópico, reportes firmados verificados por hash y
+    revisados por José.
 
 ## Riesgos y cómo se contienen
 
@@ -128,6 +153,7 @@ Cada paso termina en algo verificable y con tests. El orden importa: primero lo 
 ## Qué necesita José
 
 1. Confirmar este plan corregido (y el presupuesto de RAM), después de que P0 quede cerrado.
+   El acceso de José en P1 es el reporte firmado por email; no hay login a pantallas del núcleo.
 2. Guardar fuera del VPS la clave de cifrado cuando se genere en el paso 3.
 3. Revisar el reporte de sombra durante los 7 días del paso 6.
 4. Cuando exista `qa-herramientas`, probar passkeys en sus dispositivos (condición para activarlas en P2).

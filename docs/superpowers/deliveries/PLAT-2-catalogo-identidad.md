@@ -11,7 +11,7 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
   - **Taxonomía y contenido:** categorías jerárquicas, marcas, colecciones, atributos, unidades, vocabularios, imágenes, textos `es-AR` y procedencia (el diseño de plantillas y la estandarización masiva son P5).
   - **Cuentas de canal:** empresa, cuentas ML/Woo, clave externa por (empresa, cuenta, canal, tipo, ID, variación).
   - **Overlays por canal:** estructura reservada para contenido y precios ML, **sin escritores activos** en este programa.
-  - **GTIN:** sólo evidencia; conflicto → caso de catálogo con tres resoluciones auditadas.
+  - **GTIN:** sólo evidencia; conflicto → caso de catálogo con tres resoluciones auditadas. Por **PM-153** los GTIN conflictivos (incluidos los Venzo marcados `incorrecto`) **no bloquean el desarrollo**: migran como **casos abiertos auditados** y sólo bloquean el corte los que tengan riesgo comercial concreto (publicación activa con stock vendiendo contra ese código).
   - **Packs y kits:** composición versionada; cada venta conserva el snapshot aplicado.
   - **Matcher único:** auto-vínculo sólo con `seller_sku` exacto y único; lo demás es sugerencia.
   - **Vigía de formato — dos reglas distintas que no se mezclan:**
@@ -31,7 +31,7 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 4. **P2.4 UI:** pantallas de catálogo, identidad y casos sobre API v2 (responsive, WCAG 2.2 AA).
 5. **P2.5 Sombra:** el núcleo decide en paralelo al legado y se comparan decisiones; 0 escrituras remotas.
 6. **P2.6 Simulación:** comandos contra el simulador de canales en QA, incluidos fallos 403/408/429/5xx.
-7. **P2.7 Campaña correctiva:** 39 SKU irregulares, GTIN conflictivos, duplicados y decisiones contradictorias.
+7. **P2.7 Campaña correctiva:** 39 SKU irregulares, duplicados y decisiones contradictorias. Los GTIN conflictivos **no** son requisito de la campaña (PM-153): migran como casos abiertos y sólo entran si tienen riesgo comercial concreto.
 8. **P2.8 Cutover:** congelar escritores legacy de la vertical, delta final, conciliación exacta, único ejecutor remoto, canario y ampliación.
 
 ## Gates y aceptación propios
@@ -61,9 +61,9 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 
 ## Continuidad
 
-- Estado externo relevante: No iniciado. Medido 2026-09-13: Identidad del legado con 0 casos por resolver, 11 esperando operación y 1.054 verificadas; 0 conflictos de bolsa `user_product` compartida.
+- Estado externo relevante: No iniciado. Medido 2026-09-13 con `conciliacionIdentidad()`: 1.055 verificadas, 11 esperando operación y 0 urgentes; 0 conflictos de bolsa `user_product` compartida.
 - Consultas para refrescar cifras (solo lectura sobre `data/fusion.sqlite`):
-  - `SELECT estado, COUNT(*) FROM identidad_casos GROUP BY estado;`
+  - `conciliacionIdentidad(db)` de `lib/identidadProductos.js` (universo conciliado: publicaciones ML activas con stock del marketplace; un `GROUP BY estado` sobre `identidad_casos` incluye históricos y da otra cifra)
   - `SELECT COUNT(*) FROM catalogo_cache WHERE coalesce(tipo,'') <> 'variable' AND sku <> 'FB-' || id_woo;` (vendibles fuera de `FB-{ID_WOO}`; 39 al 2026-09-13: 5 simples y 34 variaciones)
   - `conflictosDeBolsaCompartida(db)` de `lib/identidadProductos.js`
 - Próxima acción exacta y reproducible: con P1 aceptado, escribir `docs/superpowers/plans/AAAA-MM-DD-p2-catalogo-identidad.md` cubriendo cada punto de "Alcance" y las subentregas P2.1–P2.8, y pedir aprobación a José.

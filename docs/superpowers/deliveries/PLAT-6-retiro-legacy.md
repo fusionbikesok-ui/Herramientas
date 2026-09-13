@@ -11,7 +11,8 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
   2. **crosswalk completo** SQLite → PostgreSQL de cada entidad migrada;
   3. **reconciliación** exacta registrada de entidades, relaciones, reservas y comandos;
   4. **vencimiento del plazo de compatibilidad:** 30 días de GET read-only con advertencia y métricas en cero uso, y para `/api/v1`, que la App ya no llame esa ruta (PM-162).
-  Apagar un escritor es posible antes; **borrar** sólo después de los cuatro puntos. Lo retirado responde `410 Gone`.
+  Apagar un escritor es posible antes; **borrar** sólo después de los cuatro puntos. Las pantallas y rutas legacy efectivamente retiradas responden `410 Gone`.
+- **P6 puede terminar con fachadas `/api/v1` delgadas todavía activas** mientras la App las use (PM-162). Lo que debe desaparecer es la **lógica legacy duplicada**, no la compatibilidad: una ruta v1 clasificada como fachada sobre v2 se conserva hasta que la App deje de llamarla.
 - **Inventario `/api/v1` (medido 2026-09-13):**
   - Montajes en `server.js` (10): `/api/v1/auth`, `/api/v1/devices`, `/api/v1/notifications`, `/api/v1/inbox`, `/api/v1` (acciones de inbox ML), `/api/v1/workshop`, `/api/v1/identidad-productos`, `/api/v1/preparation`, `/api/v1` (hoy), `/api/v1` (operaciones).
   - Rutas que llama la App (`FusionBikes-App/src/api`): `auth/login`, `auth/logout`, `auth/refresh`, `meta`, `devices`, `notifications`, `notifications/:id/read`, `notifications/preferences`, `integration-notifications`, `inbox`, `inbox/:id/{detail,read,claim,assign,acknowledge,resolve}`, `claims/:id/actions/:id`, `conversations/:id/messages`, `questions/:id/reply`, `orders`, `today`, `preparation`, `preparation/queue`, `preparation/:id`, `preparation/:id/{take,scans,complete,claim/release}`, `preparation/:id/items/:id/confirm-manual`, `workshop`, `workshop/:id/{diagnostic,parts,state}`, `workshop/parts/:id/move`.
@@ -26,7 +27,7 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 2. **P6.2 Clasificación `/api/v1`:** fachada v2 / lógica legacy / sin uso, con evidencia.
 3. **P6.3 Archivo:** exportación firmada, crosswalk y reconciliación por vertical.
 4. **P6.4 Apagado:** escritores y workers legacy apagados por flag, con reversión documentada.
-5. **P6.5 Read-only y 410:** 30 días de lectura con advertencia, luego `410 Gone`.
+5. **P6.5 Read-only y 410:** pantallas y rutas legacy **no usadas por la App** pasan 30 días en lectura con advertencia y luego `410 Gone`. Las rutas `/api/v1` clasificadas como fachada sobre v2 **no** entran en este paso: siguen activas mientras la App las use.
 6. **P6.6 Retiro físico:** borrar código y tablas sólo con los cuatro puntos cumplidos y aprobación de José.
 
 ## Gates y aceptación propios
