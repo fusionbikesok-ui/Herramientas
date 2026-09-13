@@ -1,6 +1,6 @@
 # E0 — Infraestructura, DR y PITR
 
-**Estado:** borrador
+**Estado:** desarrollo
 
 **Dependencias:** ninguna
 
@@ -19,7 +19,7 @@
 
 ## Línea base verificada
 
-- Al 2026-09-13: backups SQLite cifrados a B2 con 1.786.838.106 bytes de 10 GB gratis (`cat /opt/fusionbikes/backups/estado-nube.json`), vigía interno y heartbeat Better Stack activos, disco 33 GB libres / 66 % (`df -h /`), RAM 3,9 GB disponibles (`free -h`), Docker 29.7.2 (`docker version`), Node 24 y QA bajo demanda; Hostinger incluye backups semanales. Falta PostgreSQL, pgBackRest y PITR probado.
+- Al 2026-09-13: backups SQLite cifrados a B2 con 1.786.838.106 bytes de 10 GB gratis (`cat /opt/fusionbikes/backups/estado-nube.json`), vigía interno y heartbeat Better Stack activos, disco 33 GB libres / 66 % (`df -h /`), RAM 3,9 GB disponibles (`free -h`), Docker 29.7.2 (`docker version`), Node 24 y QA bajo demanda; Hostinger incluye backups semanales. Falta PostgreSQL, pgBackRest y PITR probado. Nivel 1 desplegado el 2026-09-13 22:36 UTC: contenedor fusion-pg sano con init, 127.0.0.1:5432, primer backup full verificado en 4 s (base 22,6 MB, repositorio 2,7 MB cifrado), registro firmado válido, manifiesto de 980 archivos, 0 segmentos WAL pendientes, 35 MB de RAM, legacy sin cambios (`docker compose -f deploy/postgres/compose.prod.yml -p fusion-pg exec -T pg pgbr info`).
 - Fotografía común: `docs/superpowers/audit-baseline-2026-09-13.md`. Al iniciar se debe refrescar con los mismos comandos y registrar fecha, commit y origen.
 - Toda diferencia entre Git, despliegue y base se registra como hallazgo bloqueante; no se rellena por inferencia.
 
@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Nivel 1 ensayado en QA el 2026-09-13 con `npm run test:e0` (7/7 escenarios, RTO 5 s, RPO estimado ≤ 61 s, registro sha256 e43f7869e9b9…5792). Falta: firma criptográfica del registro, despliegue del nivel 1 con 24 h de WAL observadas y alertas en Better Stack, y que José confirme la máquina del nivel 2 (sistema operativo, espacio libre y disponibilidad 24/7).
+- **Próxima acción exacta:** Observar 24 h de WAL y el backup programado de 05:30 UTC con el vigía activo; alta del heartbeat de Better Stack para PostgreSQL (PG_BACKUP_HEARTBEAT_URL); instalar el nivel 2 en la Mac siguiendo deploy/postgres/mac/INSTALAR-NIVEL-2.md (clave pública de la Mac, usuario fusion-offsite con rrsync -ro y ACL) y restaurar una vez desde esa copia.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
@@ -80,9 +80,12 @@ flowchart LR
   postgres18[postgres18]
   pgbackrest[pgbackrest]
   repo_local[repo_local]
-  restore_drill[restore_drill]
   offsite_pull[offsite_pull]
   qa_existing[qa_existing]
+  restore_drill[restore_drill]
+  backup_diario[backup_diario]
+  estado_archivo[estado_archivo]
+  firma_registros[firma_registros]
 ```
 
 | Componente | Estado | Ruta | Responsabilidad |
@@ -90,9 +93,12 @@ flowchart LR
 | postgres18 | future | deploy/postgres/compose.yml | cluster vacío en 127.0.0.1, digest fijado, init como PID 1, 768 MB, volumen propio |
 | pgbackrest | future | deploy/postgres/pgbackrest.conf | archive-push asíncrono con spool, compresión zstd, cifrado aes-256-cbc, retención |
 | repo_local | future | /var/lib/pgbackrest (volumen) | repositorio nivel 1 en el VPS |
-| restore_drill | future | scripts/postgres/restore-drill.sh | restaura en QA a un instante y firma el registro RPO/RTO |
-| offsite_pull | future | scripts/postgres/offsite-pull.sh | la máquina del nivel 2 descarga el repositorio por SSH de sólo lectura |
+| offsite_pull | future | scripts/postgres/offsite-pull-mac.sh | tarea launchd en la Mac: rsync de sólo lectura del repositorio y verificación de hashes |
 | qa_existing | existing | scripts/qa/qa.sh | entorno QA bajo demanda existente |
+| restore_drill | future | scripts/postgres/test-e0.sh | ensayo de restauración a un instante con registro firmado |
+| backup_diario | future | scripts/postgres/backup-diario.sh | backup full dominical y diferencial diario con verify y estado |
+| estado_archivo | future | scripts/postgres/estado-archivo.sh | cada 5 min: segmentos WAL pendientes, antigüedad del más viejo y spool |
+| firma_registros | future | scripts/postgres/firmar-registro.sh | firma y verificación Ed25519 de registros de ensayo y backup |
 
 ## Actores, tecnologías y dependencias externas
 
@@ -104,7 +110,7 @@ flowchart LR
 | Better Stack | chosen | alertas de archive lag, spool, disco y resultado de simulacros (ya monitorea /healthz y el heartbeat del backup SQLite) |
 | Hostinger backups semanales | chosen | red de fondo incluida en el plan; RPO hasta 7 días |
 | Hostinger backups diarios | candidate | se activan más adelante (PM-168); no cuentan para la aceptación |
-| Máquina del nivel 2 (Mac o servidor sin uso) | candidate | copia externa del repositorio por pull |
+| Mac del local (nivel 2, PM-169) | chosen | descarga el repositorio por SSH de sólo lectura mientras está encendida (horario del local) |
 
 Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.
 
@@ -195,6 +201,7 @@ Esta entrega no expone API de negocio.
 - verify verde no reemplaza una restauración real
 - pérdida de la clave de cifrado vuelve irrecuperable el repositorio: copia fuera del VPS obligatoria
 - máquina del nivel 2 apagada: el RPO de pérdida total crece hasta que vuelve
+- RPO de pérdida total hasta la última sincronización del día hábil (Mac en horario del local)
 
 El SOP común es: congelar ampliación; conservar payloads redactados, hashes y correlation ID; comprobar
 fuente remota sin escribir; clasificar retryable/uncertain/terminal; reparar mediante replay idempotente
@@ -237,9 +244,9 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 - https://pgbackrest.org/user-guide.html — consultada 2026-09-13.
 - https://www.hostinger.com/support/1583232-how-to-back-up-or-restore-a-vps-at-hostinger/ — consultada 2026-09-13.
 
-**Decisiones abiertas que mantienen la ficha en borrador:** máquina del nivel 2 (Mac o servidor sin uso): sistema operativo, espacio libre y disponibilidad 24/7 — José la confirma.
+**Decisiones abiertas:** ninguna.
 
 ## Decisiones PM asignadas
 
-- **Dueña:** PM-165, PM-166, PM-167, PM-168
+- **Dueña:** PM-165, PM-166, PM-167, PM-168, PM-169
 - **Consumidora:** ninguna

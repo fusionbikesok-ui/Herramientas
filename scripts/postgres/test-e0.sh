@@ -198,9 +198,25 @@ INFO="$(pgbr --output=json info 2>/dev/null | head -c 20000 || echo '[]')"
 echo "$INFO" > "$E0_DIR/pgbackrest-info.json"
 HASH="$(sha256sum "$RESULTADO" | cut -d' ' -f1)"
 log "registro: $(cat "$RESULTADO")"
-log "sha256 del registro (hash; la firma criptográfica queda pendiente): $HASH"
+log "sha256 del registro: $HASH"
+# E0-FIRMA-01: firma Ed25519 con una clave descartable del ensayo y verificación con su pública; un
+# registro alterado tiene que fallar la verificación. En producción se usa la clave del VPS.
+openssl genpkey -algorithm ed25519 -out "$E0_DIR/firma.pem" 2>/dev/null
+openssl pkey -in "$E0_DIR/firma.pem" -pubout -out "$E0_DIR/firma.pub" 2>/dev/null
+if bash "$REPO/scripts/postgres/firmar-registro.sh" firmar "$RESULTADO" "$E0_DIR/firma.pem" >/dev/null \
+   && bash "$REPO/scripts/postgres/firmar-registro.sh" verificar "$RESULTADO" "$E0_DIR/firma.pub" >/dev/null 2>&1; then
+  cp "$RESULTADO" "$E0_DIR/alterado.json"; cp "$RESULTADO.sig" "$E0_DIR/alterado.json.sig"
+  sed -i 's/"fallos"/"fallos_alterado"/' "$E0_DIR/alterado.json"
+  if bash "$REPO/scripts/postgres/firmar-registro.sh" verificar "$E0_DIR/alterado.json" "$E0_DIR/firma.pub" >/dev/null 2>&1; then
+    falla E0-FIRMA-01 "un registro alterado pasó la verificación"
+  else
+    ok E0-FIRMA-01 "registro firmado con Ed25519, verificado, y la alteración detectada"
+  fi
+else
+  falla E0-FIRMA-01 "no se pudo firmar o verificar el registro"
+fi
 
-OBLIGATORIOS=(E0-WAL-01 E0-WAL-01b E0-WAL-02 E0-WAL-03 E0-PITR-01 E0-RPO-01 E0-LEG-01)
+OBLIGATORIOS=(E0-WAL-01 E0-WAL-01b E0-WAL-02 E0-WAL-03 E0-PITR-01 E0-RPO-01 E0-LEG-01 E0-FIRMA-01)
 for e in "${OBLIGATORIOS[@]}"; do [ -n "${ESTADO[$e]:-}" ] || { log "FALLA escenario obligatorio sin ejecutar: $e"; FALLOS=$((FALLOS+1)); }; done
 [ "$FALLOS" = "0" ] && log "E0 nivel 1: todos los escenarios OK" || log "E0 nivel 1: $FALLOS falla(s)"
 exit "$FALLOS"

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { evaluarBackupNube, revisarBackupNube } from '../lib/vigiaBackup.js';
+import { evaluarBackupNube, revisarBackupNube, evaluarPostgres, revisarBackupPostgres } from '../lib/vigiaBackup.js';
 
 const TEST_DB = './test/tmp-vigia-backup.sqlite';
 const ESTADO = './test/tmp-vigia-backup-estado.json';
@@ -78,5 +78,65 @@ describe('lib/vigiaBackup', () => {
     db.close();
     expect(() => revisarBackupNube(db, { estadoPath: ESTADO, ahora: AHORA })).not.toThrow();
     db = openDb(TEST_DB);
+  });
+});
+
+describe('lib/vigiaBackup — PostgreSQL (E0 nivel 1)', () => {
+  let db;
+  const DIR = './test/tmp-vigia-pg';
+  const opciones = (extra = {}) => ({ desplegadoPath: DIR, estadoPath: `${DIR}/estado-pg.json`, archivoPath: `${DIR}/archivo.json`, ahora: AHORA, ...extra });
+  const escribir = (nombre, obj) => fs.writeFileSync(`${DIR}/${nombre}`, JSON.stringify(obj));
+  const pg = () => db.prepare("SELECT tipo_error, severidad FROM incidentes_operativos WHERE integracion='backup' AND proceso='postgres' AND estado='activo' ORDER BY tipo_error").all();
+  const archivoSano = { medido: '2026-09-13T11:58:00Z', ok: true, pendientes: 0, mas_viejo_s: 0, spool_bytes: 1000 };
+
+  beforeEach(() => { db = openDb(TEST_DB); fs.mkdirSync(DIR, { recursive: true }); });
+  afterEach(() => {
+    db.close();
+    for (const f of [TEST_DB, `${TEST_DB}-wal`, `${TEST_DB}-shm`]) if (fs.existsSync(f)) fs.unlinkSync(f);
+    fs.rmSync(DIR, { recursive: true, force: true });
+  });
+
+  it('no hace nada mientras PostgreSQL no está desplegado', () => {
+    fs.rmSync(DIR, { recursive: true, force: true });
+    expect(revisarBackupPostgres(db, opciones())).toMatchObject({ desplegado: false });
+    expect(pg()).toHaveLength(0);
+  });
+
+  it('sano: backup de hace 6 h y archivado al día', () => {
+    escribir('estado-pg.json', { ultimo_ok: '2026-09-13T06:00:00Z', ok: true });
+    escribir('archivo.json', archivoSano);
+    const r = revisarBackupPostgres(db, opciones());
+    expect(r.problemas).toEqual([]);
+    expect(pg()).toHaveLength(0);
+  });
+
+  it('WAL sin archivar hace más de 5 min es crítico; entre 3 y 5 min es aviso; se resuelve al volver', () => {
+    escribir('estado-pg.json', { ultimo_ok: '2026-09-13T06:00:00Z', ok: true });
+    escribir('archivo.json', { ...archivoSano, pendientes: 3, mas_viejo_s: 420 });
+    revisarBackupPostgres(db, opciones());
+    expect(pg()).toEqual([{ tipo_error: 'archivo_wal', severidad: 'critico' }]);
+    escribir('archivo.json', archivoSano);
+    revisarBackupPostgres(db, opciones());
+    expect(pg()).toHaveLength(0);
+    escribir('archivo.json', { ...archivoSano, pendientes: 1, mas_viejo_s: 200 });
+    revisarBackupPostgres(db, opciones());
+    expect(pg()).toEqual([{ tipo_error: 'archivo_wal', severidad: 'advertencia' }]);
+  });
+
+  it('medición vieja, ilegible o ausente es crítica: sin medición no hay RPO', () => {
+    escribir('estado-pg.json', { ultimo_ok: '2026-09-13T06:00:00Z', ok: true });
+    escribir('archivo.json', { ...archivoSano, medido: '2026-09-13T11:30:00Z' });
+    expect(evaluarPostgres(opciones()).problemas).toEqual([expect.objectContaining({ tipo: 'archivo_wal', severidad: 'critico' })]);
+    fs.rmSync(`${DIR}/archivo.json`);
+    expect(evaluarPostgres(opciones()).problemas).toEqual([expect.objectContaining({ tipo: 'archivo_wal', severidad: 'critico' })]);
+  });
+
+  it('backup vencido o nunca hecho es crítico, y spool por encima del 70 % avisa', () => {
+    escribir('archivo.json', { ...archivoSano, spool_bytes: 4 * 1024 ** 3 });
+    escribir('estado-pg.json', { ultimo_ok: '', ok: false, detalle: 'backup diff falló' });
+    const r = evaluarPostgres(opciones());
+    expect(r.problemas.map(p => [p.tipo, p.severidad]).sort()).toEqual([['backup_vencido', 'critico'], ['spool_wal', 'advertencia']]);
+    escribir('estado-pg.json', { ultimo_ok: '2026-09-12T08:00:00Z', ok: true });
+    expect(evaluarPostgres(opciones()).problemas.find(p => p.tipo === 'backup_vencido').mensajeHumano).toContain('hace 28 h');
   });
 });

@@ -1,0 +1,49 @@
+# E0 nivel 1 en producción: PostgreSQL 18.6 + pgBackRest, sin conexiones de aplicación todavía.
+# Uso: docker compose -f deploy/postgres/compose.prod.yml -p fusion-pg up -d --build
+# Requiere (fuera del repo):
+#   /root/.config/fusion-pg/cipher-pass    clave del repositorio (José la crea y la guarda fuera del VPS)
+#   /root/.config/fusion-pg/postgres-pass  contraseña del superusuario (uid 999, 600)
+name: fusion-pg
+
+services:
+  pg:
+    build: { context: ., dockerfile: Dockerfile }
+    image: fusion-pg:local
+    init: true            # obligatorio: ver compose.yml y PM-166 (push asíncrono huérfano)
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_PASSWORD_FILE: /run/fusion-pg/postgres-pass
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=pgbackrest --stanza=fusion archive-push %p
+      - -c
+      - archive_timeout=60
+      - -c
+      - max_wal_size=512MB
+      - -c
+      - shared_buffers=192MB
+      - -c
+      - listen_addresses=*
+    volumes:
+      - /opt/fusionbikes/postgres/pgdata:/var/lib/postgresql/data
+      - /opt/fusionbikes/postgres/repo:/var/lib/pgbackrest
+      - /opt/fusionbikes/postgres/spool:/var/spool/pgbackrest
+      - /opt/fusionbikes/postgres/log:/var/log/pgbackrest
+      - /root/.config/fusion-pg/cipher-pass:/run/fusion-pg/cipher-pass:ro
+      - /root/.config/fusion-pg/postgres-pass:/run/fusion-pg/postgres-pass:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    mem_limit: 768m
+    cpus: 0.75
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 30

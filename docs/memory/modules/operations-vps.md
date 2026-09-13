@@ -78,6 +78,25 @@
   demora de archivado 1 s, segmento cerrado durante la caída del push archivado en 57 s sin perder
   WAL, restauración PITR exacta (1.500/1.500 filas, 0 posteriores) con RTO 5 s, RPO estimado ≤ 61 s,
   legacy intacto; registro sha256 `e43f7869e9b9…5792`. Firma criptográfica del registro pendiente.
+- **E0 nivel 1 en producción desde 2026-09-13 22:36 UTC:** `docker compose -f
+  deploy/postgres/compose.prod.yml -p fusion-pg` (PostgreSQL 18.6 + pgBackRest 2.59.1, init,
+  `127.0.0.1:5432`, 768 MB, datos en `/opt/fusionbikes/postgres/{pgdata,repo,spool,log}`). Secretos
+  en `/root/.config/fusion-pg/` (`cipher-pass` creada por José y guardada fuera del VPS;
+  `postgres-pass` uid 999; `firma-ed25519.pem`, pública en `deploy/postgres/firma-ed25519.pub`).
+  Cron `/etc/cron.d/fusion-backup`: `backup-diario.sh` 05:30 UTC (full domingo / diff; verify,
+  manifiesto `repo/MANIFEST-fusion.sha256`, registro firmado en `/opt/fusionbikes/backups/pg-registros/`)
+  y `estado-archivo.sh` cada 5 min (archivos `.ready` pendientes). Vigía `revisarBackupPostgres`
+  cada 5 min; se activa porque existe `/opt/fusionbikes/postgres`. Ninguna app conecta todavía.
+  Comandos: `... exec -T pg pgbr info|check|backup`. Nivel 2 (Mac): `deploy/postgres/mac/INSTALAR-NIVEL-2.md`.
+- **SSH sólo por clave desde 2026-09-13** (José entra por clave; 8/8 ingresos aceptados eran
+  `publickey`): `/etc/ssh/sshd_config.d/00-fusion-hardening.conf` con `PasswordAuthentication no`,
+  `KbdInteractiveAuthentication no` y `PermitRootLogin prohibit-password`. Prefijo `00-` porque sshd
+  toma el primer valor y `50-cloud-init.conf` habilitaba la contraseña. Aplicado con reload tras
+  `sshd -t`; revertir = borrar el archivo y `systemctl reload ssh`.
+- El gid 999 del contenedor PostgreSQL es `systemd-journal` en el host: no usar pertenencia a grupo para
+  dar lectura al repositorio (nivel 2 usa ACL).
+- Vigía PostgreSQL activo tras reinicio de la app (2026-09-13 22:42 UTC): desplegado, sanos backup,
+  archivado y spool; 0 incidentes. Primer tick del cron de medición a las 22:40 UTC con 0 pendientes.
 - **Lección:** el contenedor de PostgreSQL necesita **init como PID 1** (`init: true`). Sin init,
   el push asíncrono de pgBackRest queda huérfano de postgres y su muerte (kill/OOM) provoca
   recuperación de arranque con corte de todas las conexiones (medido). Además `failed_count` de

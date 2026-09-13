@@ -10,3 +10,9 @@ RUN apt-get update \
  && chown -R postgres:postgres /var/lib/pgbackrest /var/spool/pgbackrest /var/log/pgbackrest /etc/pgbackrest
 
 COPY pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
+COPY fusion-entrypoint.sh /usr/local/bin/fusion-entrypoint.sh
+COPY pgbr /usr/local/bin/pgbr
+RUN chmod 755 /usr/local/bin/fusion-entrypoint.sh /usr/local/bin/pgbr
+
+ENTRYPOINT ["fusion-entrypoint.sh"]
+CMD ["postgres"]

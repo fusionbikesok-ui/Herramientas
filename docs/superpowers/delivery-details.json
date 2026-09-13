@@ -28,22 +28,40 @@
           "purpose": "repositorio nivel 1 en el VPS"
         },
         {
-          "id": "restore_drill",
-          "status": "future",
-          "path": "scripts/postgres/restore-drill.sh",
-          "purpose": "restaura en QA a un instante y firma el registro RPO/RTO"
-        },
-        {
           "id": "offsite_pull",
           "status": "future",
-          "path": "scripts/postgres/offsite-pull.sh",
-          "purpose": "la máquina del nivel 2 descarga el repositorio por SSH de sólo lectura"
+          "path": "scripts/postgres/offsite-pull-mac.sh",
+          "purpose": "tarea launchd en la Mac: rsync de sólo lectura del repositorio y verificación de hashes"
         },
         {
           "id": "qa_existing",
           "status": "existing",
           "path": "scripts/qa/qa.sh",
           "purpose": "entorno QA bajo demanda existente"
+        },
+        {
+          "id": "restore_drill",
+          "status": "future",
+          "path": "scripts/postgres/test-e0.sh",
+          "purpose": "ensayo de restauración a un instante con registro firmado"
+        },
+        {
+          "id": "backup_diario",
+          "status": "future",
+          "path": "scripts/postgres/backup-diario.sh",
+          "purpose": "backup full dominical y diferencial diario con verify y estado"
+        },
+        {
+          "id": "estado_archivo",
+          "status": "future",
+          "path": "scripts/postgres/estado-archivo.sh",
+          "purpose": "cada 5 min: segmentos WAL pendientes, antigüedad del más viejo y spool"
+        },
+        {
+          "id": "firma_registros",
+          "status": "future",
+          "path": "scripts/postgres/firmar-registro.sh",
+          "purpose": "firma y verificación Ed25519 de registros de ensayo y backup"
         }
       ],
       "technologies": [
@@ -70,9 +88,9 @@
           "purpose": "se activan más adelante (PM-168); no cuentan para la aceptación"
         },
         {
-          "name": "Máquina del nivel 2 (Mac o servidor sin uso)",
-          "status": "candidate",
-          "purpose": "copia externa del repositorio por pull"
+          "name": "Mac del local (nivel 2, PM-169)",
+          "status": "chosen",
+          "purpose": "descarga el repositorio por SSH de sólo lectura mientras está encendida (horario del local)"
         }
       ],
       "entities": [
@@ -186,7 +204,8 @@
         "WAL faltante invalida el backup dependiente",
         "verify verde no reemplaza una restauración real",
         "pérdida de la clave de cifrado vuelve irrecuperable el repositorio: copia fuera del VPS obligatoria",
-        "máquina del nivel 2 apagada: el RPO de pérdida total crece hasta que vuelve"
+        "máquina del nivel 2 apagada: el RPO de pérdida total crece hasta que vuelve",
+        "RPO de pérdida total hasta la última sincronización del día hábil (Mac en horario del local)"
       ],
       "tests": [
         "E0-WAL-01",
@@ -249,9 +268,7 @@
           "consulted": "2026-09-13"
         }
       ],
-      "open_decisions": [
-        "máquina del nivel 2 (Mac o servidor sin uso): sistema operativo, espacio libre y disponibilidad 24/7 — José la confirma"
-      ]
+      "open_decisions": []
     },
     "E1": {
       "actors": [
