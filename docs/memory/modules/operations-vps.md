@@ -43,6 +43,12 @@
 - Vigía: `lib/vigiaBackup.js`, cron de la app minuto 17 de cada hora; si `ultimo_ok` > 26 h o
   falta el estado, abre incidente crítico `backup/backup_nube/backup_vencido` (email) y lo
   resuelve solo al volver un backup completo.
+- Monitoreo externo (Better Stack, plan gratis, cuenta del usuario, desde 2026-09-13):
+  monitor keyword `"ok":true` sobre `https://herramientas.fusionbikes.com.ar/herramientas/healthz`
+  cada 3 min (NA + Europa, confirmación 1–2 min para no alertar en reinicios de pm2) y heartbeat
+  diario con 3 h de gracia que `backup.sh` envía sólo si la nube quedó completa
+  (`BACKUP_HEARTBEAT_URL` en `.env`, tratarla como secreto). Cubre la caída total del VPS, que
+  el vigía interno no puede avisar. Alertas por email.
 - `/healthz` es público (sin sesión) y sirve para monitoreo externo: `SELECT 1` en cada
   llamada e `integrity_check` cacheado 5 min (sin caché bloqueaba el event loop ~0,5 s por
   llamada; commit `0df724d`).

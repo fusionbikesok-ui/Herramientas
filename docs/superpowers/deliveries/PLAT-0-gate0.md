@@ -4,7 +4,7 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 
 ## Identidad
 
-- Entrega / estado: **en curso** (backups B2 y disco cumplidos; PITR, QA, monitoreo y Node 24 pendientes)
+- Entrega / estado: **en curso** (backups B2, disco y monitoreo externo cumplidos; PITR, QA y Node 24 pendientes)
 - Objetivo y requisitos cubiertos: Backblaze B2 con cifrado, versionado y Object Lock; backups PostgreSQL con WAL y PITR (RPO 5 min, RTO 1 h) con restauración probada; respaldo incremental de uploads; al menos 30 GB libres y uso ≤70%; QA separado con datos anonimizados; monitoreo externo; Node 24. Absorbe la parte de recuperación y staging de E23.
 - Responsable operativo y técnico: por definir
 - Base, rama y worktree: por definir
@@ -24,6 +24,6 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 ## Continuidad
 
 - Estado externo relevante: 2026-09-13: 34 GB libres, 66% usado (**cumple**, margen chico: uploads crece ~1,6 GB/mes). Node v20.20.2 en producción; suite verde en Node 24. DR externo funcionando desde 2026-09-13; cuenta B2 sin tarjeta por decisión del usuario (restauración completa limitada por topes gratis, ver operations-vps).
-- Próxima acción exacta y reproducible: decidir migración de producción a Node 24; monitor externo sobre `/healthz` (cuenta del usuario); definir entorno QA separado; antes de ~8 GB en el bucket decidir tarjeta, lifecycle o proveedor.
+- Próxima acción exacta y reproducible: decidir migración de producción a Node 24; definir entorno QA separado; antes de ~8 GB en el bucket decidir tarjeta, lifecycle o proveedor.
 - Gates: los del programa de plataforma (corte <15 min, un solo escritor remoto, DR probado) más §20 del maestro.
 - Confirmación: sin secretos ni datos personales.
