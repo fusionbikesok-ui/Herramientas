@@ -1,6 +1,6 @@
 # Plataforma auditable de catálogo, identidad, stock y pedidos
 
-**Estado:** borrador para revisión — no autoriza implementación ni despliegue.
+**Estado:** aprobado por el usuario (José) 2026-09-13
 **Fecha:** 2026-09-13.
 **Precedencia propuesta:** cuando sea aprobado, reemplazará como guía futura a
 `2026-09-04-identidad-productos.md` y `2026-09-05-arquitectura-um1.md`. Esos documentos
