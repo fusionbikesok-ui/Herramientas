@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-09-13",
+  "deliveries": {
+    "E0": {
+      "actors": ["operador_infraestructura", "revisor_tecnico", "jose_aceptacion"],
+      "components": [
+        {"id":"postgres18","status":"future","path":"deploy/postgres/compose.yml","purpose":"cluster vacío aislado y fijado por digest"},
+        {"id":"wal_archiver","status":"future","path":"scripts/postgres/archive-wal.sh","purpose":"spool local y carga idempotente a B2"},
+        {"id":"backup_runner","status":"future","path":"scripts/postgres/base-backup.sh","purpose":"backup base, manifiesto y verificación"},
+        {"id":"restore_runner","status":"future","path":"scripts/postgres/restore-pitr.sh","purpose":"restore sanitario y medición RPO/RTO"},
+        {"id":"qa_existing","status":"existing","path":"scripts/qa/qa.sh","purpose":"entorno QA bajo demanda existente"}
+      ],
+      "technologies": ["PostgreSQL 18.x por digest", "Docker 29.7.2 observado", "Backblaze B2 S3 API", "Bash estricto", "SHA-256"],
+      "external_services": [{"name":"Backblaze B2","status":"chosen","purpose":"WAL, backups y evidencia inmutable"},{"name":"servicio de monitoreo","status":"candidate","purpose":"alertas de WAL, disco y restore"}],
+      "entities": [
+        {"name":"backup_catalog","pk":"backup_id","constraints":"sha256 único; system_identifier y LSN obligatorios","indexes":"created_at, status","owner":"infraestructura","retention":"según política aprobada","pii":"none"},
+        {"name":"wal_catalog","pk":"timeline+segment","constraints":"hash único; no marcar uploaded sin HEAD/GET confirmado","indexes":"archived_at, status","owner":"infraestructura","retention":"hasta vencer backups dependientes","pii":"none"},
+        {"name":"restore_drills","pk":"drill_id","constraints":"target, inicio, fin, RPO y RTO obligatorios","indexes":"finished_at","owner":"infraestructura","retention":"permanente","pii":"none"}
+      ],
+      "states": ["discovered", "spooled", "uploaded", "verified", "retained", "expired", "blocked"],
+      "transitions": [
+        {"from":"discovered","event":"archive_command","guard":"segmento completo","to":"spooled","effect":"copia atómica local","error":"blocked","test":"E0-WAL-01"},
+        {"from":"spooled","event":"upload","guard":"B2 disponible","to":"uploaded","effect":"PUT idempotente","error":"permanece spooled","test":"E0-WAL-02"},
+        {"from":"uploaded","event":"verify","guard":"hash y objeto legibles","to":"verified","effect":"registra evidencia","error":"blocked","test":"E0-WAL-03"}
+      ],
+      "apis": [],
+      "use_cases": [
+        {"id":"E0-UC1","actor":"operador_infraestructura","pre":"cluster vacío y B2 configurado fuera del repo","trigger":"ventana de backup","main":"crear backup base, verificar manifiesto, subir y confirmar lectura","alternatives":"B2 caído conserva spool y alerta","errors":"hash distinto o WAL faltante bloquea aceptación","post":"backup verificable y catálogo firmado","evidence":"salida pg_verifybackup y manifiesto","test":"E0-WAL-01"},
+        {"id":"E0-UC2","actor":"revisor_tecnico","pre":"backup y WAL continuos disponibles","trigger":"simulacro mensual","main":"restaurar en QA a target elegido y medir","alternatives":"timeline alterna se registra sin pisar origen","errors":"restore no arranca o excede RPO/RTO","post":"cluster sanitario consultable","evidence":"log, tiempos y consultas centinela","test":"E0-PITR-01"}
+      ],
+      "failure_modes": ["B2 no debe bloquear archive_command", "spool al 70% alerta y detiene ampliación", "WAL faltante invalida el backup", "pg_verifybackup verde no reemplaza restore real", "configuración PostgreSQL se respalda aparte"],
+      "tests": ["E0-WAL-01", "E0-WAL-02", "E0-WAL-03", "E0-PITR-01", "E0-RPO-01"],
+      "requirements": ["RPO<=5m", "RTO<=60m", "0 impacto legacy", "restore mensual"],
+      "integrations": ["B2: PUT idempotente, HEAD/GET de confirmación, timeout y spool local", "PostgreSQL: archive_command devuelve no-cero sin borrar WAL ante fallo"],
+      "events": ["wal_spooled", "wal_verified", "backup_verified", "restore_completed", "restore_failed"],
+      "observability": ["archive lag y último WAL verificado", "spool/disco con alerta al 70%", "RPO y RTO por simulacro"],
+      "rollout": "cluster vacío sin clientes, 24h de WAL, backup, restore QA y aceptación",
+      "rollback": "detener clientes nuevos; conservar cluster, spool y objetos; legacy no cambia",
+      "diagrams": ["components", "states", "normal", "degraded", "uncertain"],
+      "sources": [{"url":"https://www.postgresql.org/docs/18/continuous-archiving.html","consulted":"2026-09-13"},{"url":"https://www.postgresql.org/docs/18/app-pgverifybackup.html","consulted":"2026-09-13"},{"url":"https://www.backblaze.com/docs/cloud-storage-object-lock","consulted":"2026-09-13"}],
+      "open_decisions": ["retención exacta B2", "proveedor/canal de monitoreo", "dominio y certificado QA"]
+    },
+    "E1": {
+      "actors": ["sistema_ml", "sistema_woo", "api", "worker", "scheduler", "jose_revisor"],
+      "components": [
+        {"id":"platform_api","status":"future","path":"plataforma/src/api","purpose":"health, auth y consulta de incidentes"},
+        {"id":"platform_worker","status":"future","path":"plataforma/src/worker","purpose":"claims, proyecciones y reintentos"},
+        {"id":"platform_scheduler","status":"future","path":"plataforma/src/scheduler","purpose":"encolar barridos y tareas periódicas"},
+        {"id":"legacy_runtime","status":"existing","path":"server.js","purpose":"ACK y operación productiva sin dependencia de PostgreSQL"},
+        {"id":"qa_simulator","status":"existing","path":"scripts/qa/simulador-canales.mjs","purpose":"fallos y respuestas remotas simuladas"}
+      ],
+      "technologies": ["Node.js 24", "TypeScript strict", "PostgreSQL 18", "Vitest", "WebAuthn mediante librería mantenida", "B2 Object Lock", "SMTP existente o proveedor candidato"],
+      "external_services": [{"name":"Mercado Libre API","status":"required","purpose":"relectura y conciliación"},{"name":"WooCommerce REST API","status":"required","purpose":"relectura y conciliación"},{"name":"Backblaze B2","status":"chosen","purpose":"manifiesto firmado"},{"name":"proveedor email","status":"candidate","purpose":"entrega del reporte diario"},{"name":"SimpleWebAuthn equivalente","status":"candidate","purpose":"verificación WebAuthn sin criptografía propia"}],
+      "entities": [
+        {"name":"inbox_messages","pk":"id","constraints":"unique account+topic+resource+remote_version","indexes":"status, available_at","owner":"integrations","retention":"auditable","pii":"encrypted when present"},
+        {"name":"outbox_commands","pk":"id","constraints":"idempotency_key unique; estado válido","indexes":"status, available_at","owner":"integrations","retention":"auditable","pii":"encrypted when present"},
+        {"name":"audit_events","pk":"id","constraints":"append-only; prev_hash/hash","indexes":"occurred_at, aggregate","owner":"audit","retention":"permanente","pii":"references only"},
+        {"name":"dead_letters","pk":"id","constraints":"source id and terminal reason","indexes":"topic, created_at","owner":"operations","retention":"hasta resolución+archivo","pii":"minimal"},
+        {"name":"reconciliation_cursors","pk":"account+topic","constraints":"cursor and overlap policy","indexes":"next_run_at","owner":"integrations","retention":"vigente","pii":"none"},
+        {"name":"webauthn_credentials","pk":"credential_id","constraints":"public key; counter; user FK","indexes":"user_id","owner":"security","retention":"hasta revocación","pii":"encrypted user link"}
+      ],
+      "states": ["pending", "claimed", "succeeded", "retryable", "uncertain", "dead_lettered", "parked"],
+      "transitions": [
+        {"from":"pending","event":"claim","guard":"lease libre/vencido","to":"claimed","effect":"token y vencimiento","error":"sin cambio","test":"E1-Q-01"},
+        {"from":"claimed","event":"success","guard":"token vigente","to":"succeeded","effect":"audita resultado","error":"409","test":"E1-Q-02"},
+        {"from":"claimed","event":"timeout_after_effect","guard":"resultado remoto desconocido","to":"uncertain","effect":"bloquea repetición y agenda GET","error":"DLQ si no converge","test":"E1-Q-03"},
+        {"from":"retryable","event":"attempt_limit","guard":"intentos agotados","to":"dead_lettered","effect":"alerta y SOP","error":"ninguno","test":"E1-Q-04"}
+      ],
+      "apis": [{"method":"GET","path":"/api/v2/health","auth":"internal/readiness","input":"none","output":"component statuses","errors":"503 degraded","idempotency":"n/a","concurrency":"snapshot"},{"method":"GET","path":"/api/v2/incidents","auth":"operations capability","input":"cursor, topic, status","output":"paged incidents","errors":"401/403/422","idempotency":"n/a","concurrency":"stable cursor"}],
+      "use_cases": [{"id":"E1-UC1","actor":"sistema_ml/sistema_woo","pre":"callback recibido","trigger":"webhook","main":"legacy responde; copia asíncrona intenta inbox; worker relee recurso","alternatives":"copia caída se repara por barrido","errors":"PostgreSQL caído no altera ACK ni latencia permitida","post":"evento deduplicado o pérdida contabilizada","evidence":"métrica y correlación","test":"E1-LAT-01"},{"id":"E1-UC2","actor":"jose_revisor","pre":"cierre diario","trigger":"scheduler","main":"calcular paridad/convergencia, firmar, subir a B2 y enviar hash","alternatives":"email falla pero B2 conserva reporte","errors":"firma o upload fallido alerta","post":"reporte inmutable verificable","evidence":"hash y HEAD/GET","test":"E1-REC-01"}],
+      "failure_modes": ["PostgreSQL detenido no cambia ACK", "duplicados y desorden convergen", "403 es terminal hasta intervención", "408/429/5xx reintentan con backoff+jitter", "respuesta incierta exige relectura", "webhook disabled abre incidente"],
+      "tests": ["E1-Q-01", "E1-Q-02", "E1-Q-03", "E1-Q-04", "E1-LAT-01", "E1-REC-01", "E1-WA-01"],
+      "requirements": ["8 tópicos reconciliados", "p95 delta<=25ms", "p99 delta<=100ms", "0 cambios HTTP", "7 días sombra"],
+      "integrations": ["ML/Woo: webhook es aviso; GET remoto decide; cursor con solape por tópico", "B2: reporte firmado con Object Lock", "email: notificación no es fuente de verdad"],
+      "events": ["inbox_received", "message_claimed", "projection_succeeded", "projection_uncertain", "dead_lettered", "report_signed"],
+      "observability": ["ACK p95/p99 y códigos", "paridad por tópico enumerable", "cobertura/convergencia", "retry/DLQ/uncertain", "firma y entrega del reporte"],
+      "rollout": "tres pruebas de 500 webhooks, PostgreSQL caído y 7 días de sombra",
+      "rollback": "apagar copia/consumidores nuevos; ACK y procesamiento legacy permanecen independientes",
+      "diagrams": ["components", "states", "normal", "degraded", "uncertain"],
+      "sources": [{"url":"https://developers.mercadolibre.com.ar/es_ar/productos-recibe-notificaciones","consulted":"2026-09-13"},{"url":"https://www.backblaze.com/docs/cloud-storage-object-lock","consulted":"2026-09-13"},{"url":"https://developers.google.com/identity/passkeys/developer-guides/server-registration","consulted":"2026-09-13"}],
+      "open_decisions": ["librería WebAuthn concreta", "proveedor/cuenta email", "modo y retención Object Lock", "dominio TLS QA"]
+    },
+    "E2": {
+      "actors": ["catalogo", "importador", "revisor_catalogo"],
+      "components": [{"id":"catalog_domain","status":"future","path":"plataforma/src/catalog","purpose":"modelo canónico"},{"id":"legacy_catalog","status":"existing","path":"lib/identidadProductos.js","purpose":"evidencia reutilizable"},{"id":"legacy_migrations","status":"existing","path":"migrations/082_identidad_productos.sql","purpose":"crosswalk, no esquema objetivo"}],
+      "technologies": ["PostgreSQL 18", "TypeScript strict", "SQL migrations expand/contract", "GS1 GTIN-14 canonical form"],
+      "external_services": [{"name":"WooCommerce REST API","status":"required","purpose":"snapshot productos/variaciones"},{"name":"Mercado Libre API","status":"required","purpose":"snapshot publicaciones/variaciones"},{"name":"servicio de imágenes","status":"discarded","purpose":"no agregar CDN nuevo en E2"}],
+      "entities": [{"name":"product_models","pk":"id","constraints":"archivable; no vendible","indexes":"brand_id, category_id","owner":"catalog","retention":"permanente","pii":"none"},{"name":"sellable_variants","pk":"id","constraints":"fusion_sku unique immutable; model FK","indexes":"model_id, status","owner":"catalog","retention":"permanente","pii":"none"},{"name":"external_representations","pk":"id","constraints":"channel+account+external key unique","indexes":"variant_id","owner":"catalog","retention":"auditable","pii":"none"},{"name":"identifiers","pk":"id","constraints":"canonical value unique while active; provenance required","indexes":"variant_id, canonical_value","owner":"catalog","retention":"history retained","pii":"none"},{"name":"bundle_versions","pk":"id","constraints":"dated composition; positive quantities; no cycles","indexes":"bundle_variant_id, valid_from","owner":"catalog","retention":"permanente","pii":"none"},{"name":"import_rejections","pk":"id","constraints":"source hash and reason required","indexes":"run_id, reason","owner":"migration","retention":"hasta cierre+archivo","pii":"none"}],
+      "states": ["staged", "validated", "rejected", "promoted", "reconciled", "archived"],
+      "transitions": [{"from":"staged","event":"validate","guard":"shape and provenance valid","to":"validated","effect":"crosswalk candidate","error":"rejected","test":"E2-IMP-01"},{"from":"validated","event":"promote","guard":"constraints and identity non-inferred","to":"promoted","effect":"transactional upsert","error":"rollback transaction","test":"E2-IMP-02"},{"from":"promoted","event":"reconcile","guard":"counts+hashes+relations","to":"reconciled","effect":"signed report","error":"blocked","test":"E2-IMP-03"}],
+      "apis": [{"method":"GET","path":"/api/v2/catalog/models","auth":"catalog.read","input":"cursor+filters","output":"paged models","errors":"401/403/422","idempotency":"n/a","concurrency":"stable cursor"},{"method":"GET","path":"/api/v2/catalog/variants","auth":"catalog.read","input":"cursor+sku+identifier","output":"paged variants","errors":"401/403/422","idempotency":"n/a","concurrency":"stable cursor"},{"method":"GET","path":"/api/v2/catalog/reconciliation","auth":"catalog.audit","input":"run_id","output":"counts, hashes, rejects","errors":"401/403/404","idempotency":"n/a","concurrency":"immutable run"}],
+      "use_cases": [{"id":"E2-UC1","actor":"importador","pre":"snapshots fechados y hasheados","trigger":"import run","main":"staging, validar, promover y reconciliar","alternatives":"fila ambigua pasa a rechazo","errors":"FK/unique aborta lote atómico","post":"100% importado o rechazado","evidence":"crosswalk y reporte firmado","test":"E2-IMP-01"},{"id":"E2-UC2","actor":"revisor_catalogo","pre":"run reconciliado","trigger":"consulta","main":"navegar modelo, variantes, externos, GTIN y kits","alternatives":"dato ausente visible","errors":"sin permisos 403","post":"sin escrituras remotas","evidence":"captura y query reproducible","test":"E2-SQL-01"}],
+      "failure_modes": ["padre variable nunca vendible", "GTIN no auto-vincula", "SKU no se reutiliza", "kit cíclico rechazado", "reimportación no duplica", "rechazos nunca se descartan"],
+      "tests": ["E2-IMP-01", "E2-IMP-02", "E2-IMP-03", "E2-SQL-01", "E2-KIT-01"],
+      "requirements": ["100% clasificado", "importación repetible", "crosswalk íntegro", "0 escritura remota"],
+      "integrations": ["Woo/ML: snapshots paginados de sólo lectura con fecha y hash", "staging: carga repetible sin promover filas rechazadas"],
+      "events": ["import_started", "row_rejected", "batch_promoted", "reconciliation_signed"],
+      "observability": ["importados/rechazados por causa", "FK/duplicados", "hashes y duración por run"],
+      "rollout": "lectura y reconciliación siete días sin escritores remotos",
+      "rollback": "deshabilitar API v2 y conservar staging/esquema para auditoría",
+      "diagrams": ["components", "states", "normal", "degraded", "uncertain"],
+      "sources": [{"url":"https://www.gs1.org/standards/id-keys/gtin","consulted":"2026-09-13"}],
+      "open_decisions": ["taxonomía inicial", "retención de imágenes originales", "estrategia de búsqueda PostgreSQL"]
+    },
+    "E3": {
+      "actors": ["operador_catalogo", "administrador", "matcher", "simulador"],
+      "components": [{"id":"identity_domain","status":"future","path":"plataforma/src/identity","purpose":"única autoridad de matching/casos"},{"id":"legacy_identity","status":"existing","path":"lib/identidadProductos.js","purpose":"evidencia"},{"id":"legacy_matcher","status":"existing","path":"lib/matcherEngine.js","purpose":"algoritmos a recalibrar"},{"id":"legacy_routes","status":"existing","path":"routes/identidadProductos.js","purpose":"mapa de compatibilidad"},{"id":"legacy_ui","status":"existing","path":"public/identidad-productos","purpose":"evidencia UX"}],
+      "technologies": ["PostgreSQL 18", "TypeScript strict", "Express/API v2", "Mermaid", "axe-core", "Playwright"],
+      "external_services": [{"name":"Mercado Libre API","status":"required","purpose":"relectura de publicación antes de clasificar"},{"name":"WooCommerce REST API","status":"required","purpose":"relectura de variante/candidato"},{"name":"servicio ML externo adicional","status":"discarded","purpose":"no delegar identidad fuera del núcleo"}],
+      "entities": [{"name":"identity_cases","pk":"id","constraints":"account+ML key unique vigente; version","indexes":"state,severity,updated_at","owner":"identity","retention":"permanente","pii":"none"},{"name":"identity_decisions","pk":"id","constraints":"actor, reason, expected_version; append-only","indexes":"case_id,created_at","owner":"identity","retention":"permanente","pii":"actor reference"},{"name":"identity_evidence","pk":"id","constraints":"source, observed_at, hash","indexes":"case_id,source","owner":"identity","retention":"permanente","pii":"none"},{"name":"identity_candidates","pk":"case+variant","constraints":"score+explanation+engine_version","indexes":"case_id,rank","owner":"identity","retention":"por run","pii":"none"},{"name":"format_observations","pk":"ML key+version","constraints":"remote hash and structural fields","indexes":"observed_at","owner":"identity","retention":"auditable","pii":"none"}],
+      "states": ["unclassified", "actionable", "claimed", "decided", "parked", "verified", "intervention", "archived"],
+      "transitions": [{"from":"unclassified","event":"classify","guard":"ML/Woo fresh","to":"actionable","effect":"evidence+candidates","error":"parked","test":"E3-SM-01"},{"from":"actionable","event":"decide","guard":"capability+expected_version","to":"decided","effect":"append decision; parked command","error":"409","test":"E3-SM-02"},{"from":"decided","event":"identity_changed","guard":"fingerprint differs","to":"intervention","effect":"invalidate prior assumption","error":"none","test":"E3-SM-03"},{"from":"verified","event":"format_structural_change","guard":"product/format/pack differs","to":"intervention","effect":"park pause command","error":"alert","test":"E3-SM-04"}],
+      "apis": [{"method":"GET","path":"/api/v2/identity/cases","auth":"identity.read","input":"cursor,state,severity","output":"paged cases","errors":"401/403/422","idempotency":"n/a","concurrency":"stable cursor"},{"method":"GET","path":"/api/v2/identity/cases/{id}","auth":"identity.read","input":"id","output":"case,evidence,candidates,history","errors":"401/403/404","idempotency":"n/a","concurrency":"version returned"},{"method":"POST","path":"/api/v2/identity/cases/{id}/decisions","auth":"identity.write","input":"choice,variant_id,reason,expected_version","output":"decision,new_version,parked_command","errors":"401/403/404/409/422","idempotency":"Idempotency-Key","concurrency":"optimistic"}],
+      "use_cases": [{"id":"E3-UC1","actor":"matcher","pre":"observaciones frescas","trigger":"barrido/webhook","main":"clasificar, puntuar y explicar candidatos","alternatives":"seller_sku exacto único auto-verifica","errors":"GTIN contradictorio crea intervención","post":"caso reproducible","evidence":"engine_version+hashes","test":"E3-SM-01"},{"id":"E3-UC2","actor":"operador_catalogo","pre":"caso actionable","trigger":"abrir detalle","main":"comparar ML/Woo, buscar, previsualizar y decidir","alternatives":"tomar nota o excluir con permiso","errors":"409 refresca sin sobrescribir","post":"decisión append-only y comando parked","evidence":"actor, motivo, antes/después","test":"E3-SM-02"}],
+      "failure_modes": ["webhook falso no se confía", "relectura 404 archiva o bloquea según contexto", "GTIN sólo evidencia", "empate no auto-vincula", "cambio seller_sku alerta", "cambio estructural prepara pausa"],
+      "tests": ["E3-SM-01", "E3-SM-02", "E3-SM-03", "E3-SM-04", "E3-CAL-01", "E3-E2E-390", "E3-E2E-768", "E3-E2E-1440"],
+      "requirements": [">=200 casos calibración", "WCAG 2.2 AA", "0 decisiones contradictorias", "0 escritura remota"],
+      "integrations": ["ML: webhook dispara GET de publicación; payload no es autoridad", "Woo: candidato se confirma con lectura fresca", "simulador: captura comandos parked sin credenciales"],
+      "events": ["case_classified", "candidate_ranked", "decision_recorded", "identity_changed", "format_changed"],
+      "observability": ["casos por estado/severidad", "precisión calibrada", "409 concurrentes", "frescura ML/Woo"],
+      "rollout": "fixture >=200, E2E tres anchos, simulación y siete días sombra",
+      "rollback": "UI read-only y consumidor apagado; decisiones/evidencias se conservan",
+      "diagrams": ["components", "states", "normal", "degraded", "uncertain"],
+      "sources": [{"url":"https://developers.mercadolibre.com.ar/es_ar/descripcion-de-articulos/seguridad-apps","consulted":"2026-09-13"}],
+      "open_decisions": ["umbrales de scoring tras calibración", "vocabulario final de causas", "SLA operativo por severidad"]
+    },
+    "E4": {
+      "actors": ["administrador", "ejecutor_remoto", "jose_aprobador", "mercado_libre", "woocommerce"],
+      "components": [{"id":"identity_executor","status":"future","path":"plataforma/src/identity/worker","purpose":"único escritor remoto"},{"id":"campaign_cli","status":"future","path":"plataforma/scripts/e4-campaign.ts","purpose":"runbook reproducible"},{"id":"legacy_writer","status":"existing","path":"lib/identidadMl.js","purpose":"apagar tras corte"},{"id":"legacy_guard","status":"existing","path":"lib/guardiaMl.js","purpose":"apagar mutaciones tras corte"}],
+      "technologies": ["PostgreSQL 18", "TypeScript strict", "WebAuthn/passkeys reales", "ML API", "Woo REST API"],
+      "external_services": [{"name":"Mercado Libre API","status":"required","purpose":"SKU/pausa/relectura"},{"name":"WooCommerce REST API","status":"required","purpose":"SKU/relectura"},{"name":"dispositivos passkey de José","status":"required","purpose":"aceptación autenticación real"}],
+      "entities": [{"name":"migration_campaigns","pk":"id","constraints":"scope hash, approver, status","indexes":"status,created_at","owner":"identity","retention":"permanente","pii":"actor reference"},{"name":"remote_commands","pk":"id","constraints":"idempotency unique; expected evidence","indexes":"state,available_at","owner":"integrations","retention":"permanente","pii":"none"},{"name":"remote_attempts","pk":"id","constraints":"command FK; request/response hashes","indexes":"command_id,started_at","owner":"integrations","retention":"permanente","pii":"redacted"}],
+      "states": ["planned", "approved", "paused", "writing_woo", "writing_ml", "verifying", "completed", "uncertain", "compensating", "blocked"],
+      "transitions": [{"from":"planned","event":"approve","guard":"passkey reciente+scope hash","to":"approved","effect":"freeze target","error":"403/409","test":"E4-SM-01"},{"from":"approved","event":"execute","guard":"canary/lote habilitado","to":"paused","effect":"pausa si riesgo requiere","error":"blocked","test":"E4-SM-02"},{"from":"writing_ml","event":"timeout","guard":"resultado desconocido","to":"uncertain","effect":"sólo GET posterior","error":"no repetir PUT","test":"E4-SM-03"},{"from":"verifying","event":"match","guard":"Woo/ML objetivo confirmado","to":"completed","effect":"reanuda si corresponde","error":"compensating","test":"E4-SM-04"}],
+      "apis": [{"method":"POST","path":"/api/v2/identity/campaigns","auth":"identity.admin+recent passkey","input":"case_ids,scope_hash","output":"campaign planned","errors":"401/403/409/422","idempotency":"Idempotency-Key","concurrency":"scope lock"},{"method":"POST","path":"/api/v2/identity/campaigns/{id}/approve","auth":"identity.admin+recent passkey","input":"expected_version","output":"approved campaign","errors":"401/403/409/422","idempotency":"Idempotency-Key","concurrency":"optimistic"},{"method":"GET","path":"/api/v2/identity/commands/{id}","auth":"identity.read","input":"id","output":"state,attempts,evidence","errors":"401/403/404","idempotency":"n/a","concurrency":"snapshot"}],
+      "use_cases": [{"id":"E4-UC1","actor":"administrador","pre":"39 casos conciliados y simulados","trigger":"campaña aprobada","main":"congelar scope, canario, lotes, verificar y ampliar","alternatives":"caso GTIN no vendedor queda abierto","errors":"writer duplicado o discrepancia aborta","post":"SKU reconciliados","evidence":"acta y hashes","test":"E4-CUT-01"},{"id":"E4-UC2","actor":"ejecutor_remoto","pre":"comando claimed","trigger":"worker","main":"releer, escribir sólo si necesario, releer y confirmar","alternatives":"ya coincide completa sin PUT","errors":"timeout pasa uncertain","post":"efecto confirmado o bloqueado","evidence":"request/response redacted hashes","test":"E4-SM-03"}],
+      "failure_modes": ["respuesta incierta nunca se repite ciegamente", "403 bloquea campaña", "429/5xx conservan orden y backoff", "escritor legacy detectado aborta", "efecto confirmado se compensa, no se borra"],
+      "tests": ["E4-SM-01", "E4-SM-02", "E4-SM-03", "E4-SM-04", "E4-CUT-01", "E4-PASSKEY-01"],
+      "requirements": ["39 SKU conciliados", "corte<15m", "un escritor", "passkeys reales", "jornada observada"],
+      "integrations": ["ML/Woo: GET antes y después de PUT", "passkeys: reautenticación reciente", "legacy: flags prueban un solo escritor"],
+      "events": ["campaign_approved", "command_claimed", "remote_effect_observed", "command_uncertain", "campaign_aborted"],
+      "observability": ["comandos por estado", "latencia/cuota remota", "writer duplicado", "diferencias SKU", "duración del corte"],
+      "rollout": "simulador, canario aprobado, lote pequeño, corte menor a 15m y ampliación por métricas",
+      "rollback": "volver a shadow/read-only; compensar efectos confirmados y reconciliar inciertos",
+      "diagrams": ["components", "states", "normal", "degraded", "uncertain"],
+      "sources": [{"url":"https://developers.mercadolibre.com.ar/es_ar/productos-recibe-notificaciones","consulted":"2026-09-13"}],
+      "open_decisions": ["orden exacto de los 39 casos", "tamaño de lote después del canario", "dispositivos concretos de prueba"]
+    }
+  }
+}

@@ -72,6 +72,173 @@
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
+
+## Vista de arquitectura de la entrega
+
+```mermaid
+flowchart LR
+  identity_domain[identity_domain]
+  legacy_identity[legacy_identity]
+  legacy_matcher[legacy_matcher]
+  legacy_routes[legacy_routes]
+  legacy_ui[legacy_ui]
+```
+
+| Componente | Estado | Ruta | Responsabilidad |
+|---|---|---|---|
+| identity_domain | future | plataforma/src/identity | única autoridad de matching/casos |
+| legacy_identity | existing | lib/identidadProductos.js | evidencia |
+| legacy_matcher | existing | lib/matcherEngine.js | algoritmos a recalibrar |
+| legacy_routes | existing | routes/identidadProductos.js | mapa de compatibilidad |
+| legacy_ui | existing | public/identidad-productos | evidencia UX |
+
+## Actores, tecnologías y dependencias externas
+
+- **Actores:** operador_catalogo, administrador, matcher, simulador.
+- **Tecnologías:** PostgreSQL 18, TypeScript strict, Express/API v2, Mermaid, axe-core, Playwright.
+
+| Servicio | Estado | Finalidad |
+|---|---|---|
+| Mercado Libre API | required | relectura de publicación antes de clasificar |
+| WooCommerce REST API | required | relectura de variante/candidato |
+| servicio ML externo adicional | discarded | no delegar identidad fuera del núcleo |
+
+Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.
+
+## Casos de uso y guía operativa
+
+| ID | Actor | Precondición | Disparador | Flujo principal | Alternativas | Errores | Postcondición | Prueba | Evidencia |
+|---|---|---|---|---|---|---|---|---|---|
+| E3-UC1 | matcher | observaciones frescas | barrido/webhook | clasificar, puntuar y explicar candidatos | seller_sku exacto único auto-verifica | GTIN contradictorio crea intervención | caso reproducible | E3-SM-01 | engine_version+hashes |
+| E3-UC2 | operador_catalogo | caso actionable | abrir detalle | comparar ML/Woo, buscar, previsualizar y decidir | tomar nota o excluir con permiso | 409 refresca sin sobrescribir | decisión append-only y comando parked | E3-SM-02 | actor, motivo, antes/después |
+
+La guía operativa para cada caso es: verificar precondiciones; registrar commit, actor y hora; ejecutar
+el flujo sin saltar guardas; ante una alternativa seguir su rama; ante error detener ampliación,
+preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evidencia indicada.
+
+## Modelo relacional detallado
+
+| Entidad | PK | Restricciones | Índices | Dueño | Retención | PII |
+|---|---|---|---|---|---|---|
+| identity_cases | id | account+ML key unique vigente; version | state,severity,updated_at | identity | permanente | none |
+| identity_decisions | id | actor, reason, expected_version; append-only | case_id,created_at | identity | permanente | actor reference |
+| identity_evidence | id | source, observed_at, hash | case_id,source | identity | permanente | none |
+| identity_candidates | case+variant | score+explanation+engine_version | case_id,rank | identity | por run | none |
+| format_observations | ML key+version | remote hash and structural fields | observed_at | identity | auditable | none |
+
+Las entidades objetivo son `future`: su nombre y contrato quedan fijados para el diseño, pero ninguna
+tabla se declara existente hasta observar su migración aplicada y consultar su esquema.
+
+## Máquina de estados y transiciones
+
+```mermaid
+stateDiagram-v2
+  unclassified -->|classify| actionable
+  actionable -->|decide| decided
+  decided -->|identity_changed| intervention
+  verified -->|format_structural_change| intervention
+```
+
+| Desde | Evento | Guarda | Hasta | Efecto | Error | Prueba |
+|---|---|---|---|---|---|---|
+| unclassified | classify | ML/Woo fresh | actionable | evidence+candidates | parked | E3-SM-01 |
+| actionable | decide | capability+expected_version | decided | append decision; parked command | 409 | E3-SM-02 |
+| decided | identity_changed | fingerprint differs | intervention | invalidate prior assumption | none | E3-SM-03 |
+| verified | format_structural_change | product/format/pack differs | intervention | park pause command | alert | E3-SM-04 |
+
+## Secuencias normal, degradada e incierta
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E3
+  participant D as Dependencia
+  A->>S: solicitud con precondiciones
+  S->>D: lectura o efecto autorizado
+  D-->>S: resultado verificable
+  S-->>A: postcondición y evidencia
+```
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E3
+  participant D as Dependencia degradada
+  A->>S: solicitud
+  S-xD: timeout o error clasificado
+  S-->>A: bloqueado/reintentable sin efecto duplicado
+  S->>S: métrica, auditoría y SOP
+```
+
+```mermaid
+sequenceDiagram
+  participant W as Worker
+  participant D as Dependencia remota
+  W->>D: operación idempotente
+  D--xW: respuesta perdida
+  W->>W: estado uncertain; no repetir
+  W->>D: GET de reconciliación
+  D-->>W: estado observado
+  W->>W: confirmar o compensar
+```
+
+## Contratos API
+
+| Método | Ruta | Autenticación | Entrada | Salida | Errores | Idempotencia | Concurrencia |
+|---|---|---|---|---|---|---|---|
+| GET | /api/v2/identity/cases | identity.read | cursor,state,severity | paged cases | 401/403/422 | n/a | stable cursor |
+| GET | /api/v2/identity/cases/{id} | identity.read | id | case,evidence,candidates,history | 401/403/404 | n/a | version returned |
+| POST | /api/v2/identity/cases/{id}/decisions | identity.write | choice,variant_id,reason,expected_version | decision,new_version,parked_command | 401/403/404/409/422 | Idempotency-Key | optimistic |
+
+## Fallos, recuperación y SOP
+
+- webhook falso no se confía
+- relectura 404 archiva o bloquea según contexto
+- GTIN sólo evidencia
+- empate no auto-vincula
+- cambio seller_sku alerta
+- cambio estructural prepara pausa
+
+El SOP común es: congelar ampliación; conservar payloads redactados, hashes y correlation ID; comprobar
+fuente remota sin escribir; clasificar retryable/uncertain/terminal; reparar mediante replay idempotente
+o compensación; demostrar conciliación; sólo entonces reanudar.
+
+## Integraciones, observabilidad, rollout y rollback
+
+- **Integración:** ML: webhook dispara GET de publicación; payload no es autoridad
+- **Integración:** Woo: candidato se confirma con lectura fresca
+- **Integración:** simulador: captura comandos parked sin credenciales
+- **Observación:** casos por estado/severidad
+- **Observación:** precisión calibrada
+- **Observación:** 409 concurrentes
+- **Observación:** frescura ML/Woo
+- **Rollout:** fixture >=200, E2E tres anchos, simulación y siete días sombra
+- **Rollback:** UI read-only y consumidor apagado; decisiones/evidencias se conservan
+
+## Plan de implementación por cortes revisables
+
+1. Congelar línea base, fuentes y fixture sin PII; commit sólo documental/evidencia.
+2. Crear migraciones y restricciones con pruebas fallando; commit de esquema aislado.
+3. Implementar dominio y máquinas de estado sin efectos remotos; commit unitario.
+4. Añadir contratos, adaptadores y simulador; commit de integración.
+5. Añadir UI/SOP/observabilidad y pruebas contractuales; commit operable.
+6. Ensayar sombra, canario, aborto y rollback; adjuntar evidencia sin mezclar cambios.
+
+## Matriz de trazabilidad
+
+| Requisito | Diseño | Archivo | Migración | Prueba | Métrica | Evidencia |
+|---|---|---|---|---|---|---|
+| >=200 casos calibración | entidades/transiciones/API de esta ficha | plataforma/src/identity | migración E3 aún no creada | E3-SM-01 | >=200 casos calibración | salida literal + commit + fecha |
+| WCAG 2.2 AA | entidades/transiciones/API de esta ficha | plataforma/src/identity | migración E3 aún no creada | E3-SM-02 | WCAG 2.2 AA | salida literal + commit + fecha |
+| 0 decisiones contradictorias | entidades/transiciones/API de esta ficha | plataforma/src/identity | migración E3 aún no creada | E3-SM-03 | 0 decisiones contradictorias | salida literal + commit + fecha |
+| 0 escritura remota | entidades/transiciones/API de esta ficha | plataforma/src/identity | migración E3 aún no creada | E3-SM-04 | 0 escritura remota | salida literal + commit + fecha |
+
+## Fuentes y decisiones abiertas
+
+- https://developers.mercadolibre.com.ar/es_ar/descripcion-de-articulos/seguridad-apps — consultada 2026-09-13.
+
+**Decisiones abiertas que mantienen la ficha en borrador:** umbrales de scoring tras calibración; vocabulario final de causas; SLA operativo por severidad.
+
 ## Decisiones PM asignadas
 
 - **Dueña:** PM-037, PM-038, PM-039, PM-042, PM-053, PM-055, PM-057, PM-058, PM-061, PM-075, PM-077, PM-085, PM-087, PM-092, PM-100, PM-116, PM-117, PM-118, PM-124, PM-126, PM-131

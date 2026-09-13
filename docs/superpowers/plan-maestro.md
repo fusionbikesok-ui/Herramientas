@@ -9,6 +9,8 @@
 **Fuente estructurada:** `delivery-program.json`
 
 El contrato que debe satisfacer cada ficha está en `delivery-contract.md`.
+La arquitectura transversal está en `atlas-arquitectura.md`; E0–E4 agregan contratos específicos
+generados desde `delivery-details.json`.
 
 ## Propósito y autoridad
 

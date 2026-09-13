@@ -72,6 +72,163 @@
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
+
+## Vista de arquitectura de la entrega
+
+```mermaid
+flowchart LR
+  postgres18[postgres18]
+  wal_archiver[wal_archiver]
+  backup_runner[backup_runner]
+  restore_runner[restore_runner]
+  qa_existing[qa_existing]
+```
+
+| Componente | Estado | Ruta | Responsabilidad |
+|---|---|---|---|
+| postgres18 | future | deploy/postgres/compose.yml | cluster vacío aislado y fijado por digest |
+| wal_archiver | future | scripts/postgres/archive-wal.sh | spool local y carga idempotente a B2 |
+| backup_runner | future | scripts/postgres/base-backup.sh | backup base, manifiesto y verificación |
+| restore_runner | future | scripts/postgres/restore-pitr.sh | restore sanitario y medición RPO/RTO |
+| qa_existing | existing | scripts/qa/qa.sh | entorno QA bajo demanda existente |
+
+## Actores, tecnologías y dependencias externas
+
+- **Actores:** operador_infraestructura, revisor_tecnico, jose_aceptacion.
+- **Tecnologías:** PostgreSQL 18.x por digest, Docker 29.7.2 observado, Backblaze B2 S3 API, Bash estricto, SHA-256.
+
+| Servicio | Estado | Finalidad |
+|---|---|---|
+| Backblaze B2 | chosen | WAL, backups y evidencia inmutable |
+| servicio de monitoreo | candidate | alertas de WAL, disco y restore |
+
+Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.
+
+## Casos de uso y guía operativa
+
+| ID | Actor | Precondición | Disparador | Flujo principal | Alternativas | Errores | Postcondición | Prueba | Evidencia |
+|---|---|---|---|---|---|---|---|---|---|
+| E0-UC1 | operador_infraestructura | cluster vacío y B2 configurado fuera del repo | ventana de backup | crear backup base, verificar manifiesto, subir y confirmar lectura | B2 caído conserva spool y alerta | hash distinto o WAL faltante bloquea aceptación | backup verificable y catálogo firmado | E0-WAL-01 | salida pg_verifybackup y manifiesto |
+| E0-UC2 | revisor_tecnico | backup y WAL continuos disponibles | simulacro mensual | restaurar en QA a target elegido y medir | timeline alterna se registra sin pisar origen | restore no arranca o excede RPO/RTO | cluster sanitario consultable | E0-PITR-01 | log, tiempos y consultas centinela |
+
+La guía operativa para cada caso es: verificar precondiciones; registrar commit, actor y hora; ejecutar
+el flujo sin saltar guardas; ante una alternativa seguir su rama; ante error detener ampliación,
+preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evidencia indicada.
+
+## Modelo relacional detallado
+
+| Entidad | PK | Restricciones | Índices | Dueño | Retención | PII |
+|---|---|---|---|---|---|---|
+| backup_catalog | backup_id | sha256 único; system_identifier y LSN obligatorios | created_at, status | infraestructura | según política aprobada | none |
+| wal_catalog | timeline+segment | hash único; no marcar uploaded sin HEAD/GET confirmado | archived_at, status | infraestructura | hasta vencer backups dependientes | none |
+| restore_drills | drill_id | target, inicio, fin, RPO y RTO obligatorios | finished_at | infraestructura | permanente | none |
+
+Las entidades objetivo son `future`: su nombre y contrato quedan fijados para el diseño, pero ninguna
+tabla se declara existente hasta observar su migración aplicada y consultar su esquema.
+
+## Máquina de estados y transiciones
+
+```mermaid
+stateDiagram-v2
+  discovered -->|archive_command| spooled
+  spooled -->|upload| uploaded
+  uploaded -->|verify| verified
+```
+
+| Desde | Evento | Guarda | Hasta | Efecto | Error | Prueba |
+|---|---|---|---|---|---|---|
+| discovered | archive_command | segmento completo | spooled | copia atómica local | blocked | E0-WAL-01 |
+| spooled | upload | B2 disponible | uploaded | PUT idempotente | permanece spooled | E0-WAL-02 |
+| uploaded | verify | hash y objeto legibles | verified | registra evidencia | blocked | E0-WAL-03 |
+
+## Secuencias normal, degradada e incierta
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E0
+  participant D as Dependencia
+  A->>S: solicitud con precondiciones
+  S->>D: lectura o efecto autorizado
+  D-->>S: resultado verificable
+  S-->>A: postcondición y evidencia
+```
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E0
+  participant D as Dependencia degradada
+  A->>S: solicitud
+  S-xD: timeout o error clasificado
+  S-->>A: bloqueado/reintentable sin efecto duplicado
+  S->>S: métrica, auditoría y SOP
+```
+
+```mermaid
+sequenceDiagram
+  participant W as Worker
+  participant D as Dependencia remota
+  W->>D: operación idempotente
+  D--xW: respuesta perdida
+  W->>W: estado uncertain; no repetir
+  W->>D: GET de reconciliación
+  D-->>W: estado observado
+  W->>W: confirmar o compensar
+```
+
+## Contratos API
+
+Esta entrega no expone API de negocio.
+
+## Fallos, recuperación y SOP
+
+- B2 no debe bloquear archive_command
+- spool al 70% alerta y detiene ampliación
+- WAL faltante invalida el backup
+- pg_verifybackup verde no reemplaza restore real
+- configuración PostgreSQL se respalda aparte
+
+El SOP común es: congelar ampliación; conservar payloads redactados, hashes y correlation ID; comprobar
+fuente remota sin escribir; clasificar retryable/uncertain/terminal; reparar mediante replay idempotente
+o compensación; demostrar conciliación; sólo entonces reanudar.
+
+## Integraciones, observabilidad, rollout y rollback
+
+- **Integración:** B2: PUT idempotente, HEAD/GET de confirmación, timeout y spool local
+- **Integración:** PostgreSQL: archive_command devuelve no-cero sin borrar WAL ante fallo
+- **Observación:** archive lag y último WAL verificado
+- **Observación:** spool/disco con alerta al 70%
+- **Observación:** RPO y RTO por simulacro
+- **Rollout:** cluster vacío sin clientes, 24h de WAL, backup, restore QA y aceptación
+- **Rollback:** detener clientes nuevos; conservar cluster, spool y objetos; legacy no cambia
+
+## Plan de implementación por cortes revisables
+
+1. Congelar línea base, fuentes y fixture sin PII; commit sólo documental/evidencia.
+2. Crear migraciones y restricciones con pruebas fallando; commit de esquema aislado.
+3. Implementar dominio y máquinas de estado sin efectos remotos; commit unitario.
+4. Añadir contratos, adaptadores y simulador; commit de integración.
+5. Añadir UI/SOP/observabilidad y pruebas contractuales; commit operable.
+6. Ensayar sombra, canario, aborto y rollback; adjuntar evidencia sin mezclar cambios.
+
+## Matriz de trazabilidad
+
+| Requisito | Diseño | Archivo | Migración | Prueba | Métrica | Evidencia |
+|---|---|---|---|---|---|---|
+| RPO<=5m | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-WAL-01 | RPO<=5m | salida literal + commit + fecha |
+| RTO<=60m | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-WAL-02 | RTO<=60m | salida literal + commit + fecha |
+| 0 impacto legacy | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-WAL-03 | 0 impacto legacy | salida literal + commit + fecha |
+| restore mensual | entidades/transiciones/API de esta ficha | deploy/postgres/compose.yml | migración E0 aún no creada | E0-PITR-01 | restore mensual | salida literal + commit + fecha |
+
+## Fuentes y decisiones abiertas
+
+- https://www.postgresql.org/docs/18/continuous-archiving.html — consultada 2026-09-13.
+- https://www.postgresql.org/docs/18/app-pgverifybackup.html — consultada 2026-09-13.
+- https://www.backblaze.com/docs/cloud-storage-object-lock — consultada 2026-09-13.
+
+**Decisiones abiertas que mantienen la ficha en borrador:** retención exacta B2; proveedor/canal de monitoreo; dominio y certificado QA.
+
 ## Decisiones PM asignadas
 
 - **Dueña:** ninguna

@@ -72,6 +72,170 @@
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
+
+## Vista de arquitectura de la entrega
+
+```mermaid
+flowchart LR
+  identity_executor[identity_executor]
+  campaign_cli[campaign_cli]
+  legacy_writer[legacy_writer]
+  legacy_guard[legacy_guard]
+```
+
+| Componente | Estado | Ruta | Responsabilidad |
+|---|---|---|---|
+| identity_executor | future | plataforma/src/identity/worker | único escritor remoto |
+| campaign_cli | future | plataforma/scripts/e4-campaign.ts | runbook reproducible |
+| legacy_writer | existing | lib/identidadMl.js | apagar tras corte |
+| legacy_guard | existing | lib/guardiaMl.js | apagar mutaciones tras corte |
+
+## Actores, tecnologías y dependencias externas
+
+- **Actores:** administrador, ejecutor_remoto, jose_aprobador, mercado_libre, woocommerce.
+- **Tecnologías:** PostgreSQL 18, TypeScript strict, WebAuthn/passkeys reales, ML API, Woo REST API.
+
+| Servicio | Estado | Finalidad |
+|---|---|---|
+| Mercado Libre API | required | SKU/pausa/relectura |
+| WooCommerce REST API | required | SKU/relectura |
+| dispositivos passkey de José | required | aceptación autenticación real |
+
+Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.
+
+## Casos de uso y guía operativa
+
+| ID | Actor | Precondición | Disparador | Flujo principal | Alternativas | Errores | Postcondición | Prueba | Evidencia |
+|---|---|---|---|---|---|---|---|---|---|
+| E4-UC1 | administrador | 39 casos conciliados y simulados | campaña aprobada | congelar scope, canario, lotes, verificar y ampliar | caso GTIN no vendedor queda abierto | writer duplicado o discrepancia aborta | SKU reconciliados | E4-CUT-01 | acta y hashes |
+| E4-UC2 | ejecutor_remoto | comando claimed | worker | releer, escribir sólo si necesario, releer y confirmar | ya coincide completa sin PUT | timeout pasa uncertain | efecto confirmado o bloqueado | E4-SM-03 | request/response redacted hashes |
+
+La guía operativa para cada caso es: verificar precondiciones; registrar commit, actor y hora; ejecutar
+el flujo sin saltar guardas; ante una alternativa seguir su rama; ante error detener ampliación,
+preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evidencia indicada.
+
+## Modelo relacional detallado
+
+| Entidad | PK | Restricciones | Índices | Dueño | Retención | PII |
+|---|---|---|---|---|---|---|
+| migration_campaigns | id | scope hash, approver, status | status,created_at | identity | permanente | actor reference |
+| remote_commands | id | idempotency unique; expected evidence | state,available_at | integrations | permanente | none |
+| remote_attempts | id | command FK; request/response hashes | command_id,started_at | integrations | permanente | redacted |
+
+Las entidades objetivo son `future`: su nombre y contrato quedan fijados para el diseño, pero ninguna
+tabla se declara existente hasta observar su migración aplicada y consultar su esquema.
+
+## Máquina de estados y transiciones
+
+```mermaid
+stateDiagram-v2
+  planned -->|approve| approved
+  approved -->|execute| paused
+  writing_ml -->|timeout| uncertain
+  verifying -->|match| completed
+```
+
+| Desde | Evento | Guarda | Hasta | Efecto | Error | Prueba |
+|---|---|---|---|---|---|---|
+| planned | approve | passkey reciente+scope hash | approved | freeze target | 403/409 | E4-SM-01 |
+| approved | execute | canary/lote habilitado | paused | pausa si riesgo requiere | blocked | E4-SM-02 |
+| writing_ml | timeout | resultado desconocido | uncertain | sólo GET posterior | no repetir PUT | E4-SM-03 |
+| verifying | match | Woo/ML objetivo confirmado | completed | reanuda si corresponde | compensating | E4-SM-04 |
+
+## Secuencias normal, degradada e incierta
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E4
+  participant D as Dependencia
+  A->>S: solicitud con precondiciones
+  S->>D: lectura o efecto autorizado
+  D-->>S: resultado verificable
+  S-->>A: postcondición y evidencia
+```
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E4
+  participant D as Dependencia degradada
+  A->>S: solicitud
+  S-xD: timeout o error clasificado
+  S-->>A: bloqueado/reintentable sin efecto duplicado
+  S->>S: métrica, auditoría y SOP
+```
+
+```mermaid
+sequenceDiagram
+  participant W as Worker
+  participant D as Dependencia remota
+  W->>D: operación idempotente
+  D--xW: respuesta perdida
+  W->>W: estado uncertain; no repetir
+  W->>D: GET de reconciliación
+  D-->>W: estado observado
+  W->>W: confirmar o compensar
+```
+
+## Contratos API
+
+| Método | Ruta | Autenticación | Entrada | Salida | Errores | Idempotencia | Concurrencia |
+|---|---|---|---|---|---|---|---|
+| POST | /api/v2/identity/campaigns | identity.admin+recent passkey | case_ids,scope_hash | campaign planned | 401/403/409/422 | Idempotency-Key | scope lock |
+| POST | /api/v2/identity/campaigns/{id}/approve | identity.admin+recent passkey | expected_version | approved campaign | 401/403/409/422 | Idempotency-Key | optimistic |
+| GET | /api/v2/identity/commands/{id} | identity.read | id | state,attempts,evidence | 401/403/404 | n/a | snapshot |
+
+## Fallos, recuperación y SOP
+
+- respuesta incierta nunca se repite ciegamente
+- 403 bloquea campaña
+- 429/5xx conservan orden y backoff
+- escritor legacy detectado aborta
+- efecto confirmado se compensa, no se borra
+
+El SOP común es: congelar ampliación; conservar payloads redactados, hashes y correlation ID; comprobar
+fuente remota sin escribir; clasificar retryable/uncertain/terminal; reparar mediante replay idempotente
+o compensación; demostrar conciliación; sólo entonces reanudar.
+
+## Integraciones, observabilidad, rollout y rollback
+
+- **Integración:** ML/Woo: GET antes y después de PUT
+- **Integración:** passkeys: reautenticación reciente
+- **Integración:** legacy: flags prueban un solo escritor
+- **Observación:** comandos por estado
+- **Observación:** latencia/cuota remota
+- **Observación:** writer duplicado
+- **Observación:** diferencias SKU
+- **Observación:** duración del corte
+- **Rollout:** simulador, canario aprobado, lote pequeño, corte menor a 15m y ampliación por métricas
+- **Rollback:** volver a shadow/read-only; compensar efectos confirmados y reconciliar inciertos
+
+## Plan de implementación por cortes revisables
+
+1. Congelar línea base, fuentes y fixture sin PII; commit sólo documental/evidencia.
+2. Crear migraciones y restricciones con pruebas fallando; commit de esquema aislado.
+3. Implementar dominio y máquinas de estado sin efectos remotos; commit unitario.
+4. Añadir contratos, adaptadores y simulador; commit de integración.
+5. Añadir UI/SOP/observabilidad y pruebas contractuales; commit operable.
+6. Ensayar sombra, canario, aborto y rollback; adjuntar evidencia sin mezclar cambios.
+
+## Matriz de trazabilidad
+
+| Requisito | Diseño | Archivo | Migración | Prueba | Métrica | Evidencia |
+|---|---|---|---|---|---|---|
+| 39 SKU conciliados | entidades/transiciones/API de esta ficha | plataforma/src/identity/worker | migración E4 aún no creada | E4-SM-01 | 39 SKU conciliados | salida literal + commit + fecha |
+| corte<15m | entidades/transiciones/API de esta ficha | plataforma/src/identity/worker | migración E4 aún no creada | E4-SM-02 | corte<15m | salida literal + commit + fecha |
+| un escritor | entidades/transiciones/API de esta ficha | plataforma/src/identity/worker | migración E4 aún no creada | E4-SM-03 | un escritor | salida literal + commit + fecha |
+| passkeys reales | entidades/transiciones/API de esta ficha | plataforma/src/identity/worker | migración E4 aún no creada | E4-SM-04 | passkeys reales | salida literal + commit + fecha |
+| jornada observada | entidades/transiciones/API de esta ficha | plataforma/src/identity/worker | migración E4 aún no creada | E4-CUT-01 | jornada observada | salida literal + commit + fecha |
+
+## Fuentes y decisiones abiertas
+
+- https://developers.mercadolibre.com.ar/es_ar/productos-recibe-notificaciones — consultada 2026-09-13.
+
+**Decisiones abiertas que mantienen la ficha en borrador:** orden exacto de los 39 casos; tamaño de lote después del canario; dispositivos concretos de prueba.
+
 ## Decisiones PM asignadas
 
 - **Dueña:** PM-036, PM-048, PM-050, PM-086, PM-089, PM-091, PM-094, PM-095, PM-097, PM-098, PM-099, PM-104, PM-125, PM-129, PM-153

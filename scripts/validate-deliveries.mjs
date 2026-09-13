@@ -6,6 +6,7 @@ const docsRoot = path.join(root, 'docs/superpowers');
 const deliveriesDir = path.join(docsRoot, 'deliveries');
 const program = JSON.parse(fs.readFileSync(path.join(docsRoot, 'delivery-program.json'), 'utf8'));
 const decisionCrosswalk = JSON.parse(fs.readFileSync(path.join(docsRoot, 'decision-crosswalk.json'), 'utf8'));
+const deliveryDetails = JSON.parse(fs.readFileSync(path.join(docsRoot, 'delivery-details.json'), 'utf8'));
 const required = [
   '## Resultado y límites', '## Línea base verificada', '## Decisiones e invariantes',
   '## Diseño, datos e interfaces', '## Integraciones, migración y recuperación',
@@ -16,6 +17,47 @@ const errors = [];
 const ids = new Set();
 const byId = new Map(program.deliveries.map((delivery) => [delivery.id, delivery]));
 const stateRank = new Map(program.states.map((state, index) => [state, index]));
+const serviceStates = new Set(['required', 'chosen', 'candidate', 'discarded']);
+function hasCycle(graph) {
+  const active = new Set();
+  const done = new Set();
+  function walk(id) {
+    if (active.has(id)) return true;
+    if (done.has(id)) return false;
+    active.add(id);
+    for (const dependency of graph.get(id) || []) if (walk(dependency)) return true;
+    active.delete(id);
+    done.add(id);
+    return false;
+  }
+  return [...graph.keys()].some(walk);
+}
+
+for (const id of ['E0', 'E1', 'E2', 'E3', 'E4']) {
+  const detail = deliveryDetails.deliveries[id];
+  if (!detail) { errors.push(`detalle estructurado ausente para ${id}`); continue; }
+  for (const field of ['actors', 'components', 'technologies', 'external_services', 'entities', 'states', 'transitions', 'apis', 'use_cases', 'failure_modes', 'integrations', 'events', 'observability', 'diagrams', 'tests', 'requirements', 'sources', 'open_decisions']) {
+    if (!Array.isArray(detail[field])) errors.push(`${id}: campo estructurado inválido ${field}`);
+  }
+  if (typeof detail.rollout !== 'string' || typeof detail.rollback !== 'string') errors.push(`${id}: rollout/rollback estructurado ausente`);
+  for (const requiredDiagram of ['components', 'states', 'normal', 'degraded', 'uncertain']) if (!detail.diagrams.includes(requiredDiagram)) errors.push(`${id}: diagrama ausente ${requiredDiagram}`);
+  const componentIds = detail.components.map((item) => item.id);
+  if (new Set(componentIds).size !== componentIds.length) errors.push(`${id}: componentes duplicados`);
+  for (const component of detail.components) {
+    if (!['existing', 'future'].includes(component.status)) errors.push(`${id}: estado de archivo inválido ${component.status}`);
+    if (component.status === 'existing' && !fs.existsSync(path.join(root, component.path))) errors.push(`${id}: archivo existente no encontrado ${component.path}`);
+  }
+  for (const service of detail.external_services) if (!serviceStates.has(service.status)) errors.push(`${id}: estado de servicio inválido ${service.status}`);
+  for (const transition of detail.transitions) {
+    if (!detail.states.includes(transition.from) || !detail.states.includes(transition.to)) errors.push(`${id}: transición refiere estado inexistente`);
+    if (!detail.tests.includes(transition.test)) errors.push(`${id}: transición sin prueba declarada ${transition.test}`);
+  }
+  for (const useCase of detail.use_cases) if (!detail.tests.includes(useCase.test)) errors.push(`${id}: caso de uso ${useCase.id} sin prueba declarada`);
+  for (const source of detail.sources) {
+    if (!/^https:\/\//.test(source.url) || !/^\d{4}-\d{2}-\d{2}$/.test(source.consulted)) errors.push(`${id}: fuente oficial sin URL/fecha válida`);
+  }
+  if (detail.open_decisions.length === 0 && byId.get(id)?.state === 'borrador') errors.push(`${id}: borrador sin causa de bloqueo declarada`);
+}
 
 program.deliveries.forEach((delivery, index) => {
   const expected = `E${index}`;
@@ -48,6 +90,7 @@ function visit(id) {
   visited.add(id);
 }
 for (const id of ids) visit(id);
+if (hasCycle(new Map(program.deliveries.map((delivery) => [delivery.id, delivery.depends])))) errors.push('DAG: ciclo detectado');
 
 const currentFiles = fs.readdirSync(deliveriesDir).filter((name) => /^E\d+-.*\.md$/.test(name));
 if (currentFiles.length !== program.deliveries.length) errors.push(`cantidad de fichas: ${currentFiles.length}, esperadas ${program.deliveries.length}`);
@@ -90,7 +133,21 @@ for (const file of linkedDocs) {
       errors.push(`${path.relative(root, file)}: enlace local roto ${target}`);
     }
   }
+  for (const block of text.matchAll(/```mermaid\n([\s\S]*?)```/g)) {
+    const declarations = [...block[1].matchAll(/^\s*([A-Za-z][A-Za-z0-9_]*)\s*(?:\[|\()/gm)].map((match) => match[1]);
+    if (new Set(declarations).size !== declarations.length) errors.push(`${path.relative(root, file)}: ID Mermaid duplicado`);
+  }
 }
+
+const invalidFixtures = [
+  ['ciclo', hasCycle(new Map([['E0', ['E1']], ['E1', ['E0']]]))],
+  ['archivo inexistente', !fs.existsSync(path.join(root, '__fixture_missing__'))],
+  ['transición sin prueba', !deliveryDetails.deliveries.E0.tests.includes('__fixture_test__')],
+  ['servicio sin estado', !serviceStates.has('__fixture_state__')],
+  ['decisión abierta', ['fixture'].length > 0],
+  ['estado sin test:eN', !JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts['test:e0']]
+];
+for (const [name, rejected] of invalidFixtures) if (!rejected) errors.push(`autoprueba del validador no rechazó: ${name}`);
 
 const operationalDocs = [
   path.join(root, 'CLAUDE.md'),

@@ -72,6 +72,166 @@
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
+
+## Vista de arquitectura de la entrega
+
+```mermaid
+flowchart LR
+  catalog_domain[catalog_domain]
+  legacy_catalog[legacy_catalog]
+  legacy_migrations[legacy_migrations]
+```
+
+| Componente | Estado | Ruta | Responsabilidad |
+|---|---|---|---|
+| catalog_domain | future | plataforma/src/catalog | modelo canónico |
+| legacy_catalog | existing | lib/identidadProductos.js | evidencia reutilizable |
+| legacy_migrations | existing | migrations/082_identidad_productos.sql | crosswalk, no esquema objetivo |
+
+## Actores, tecnologías y dependencias externas
+
+- **Actores:** catalogo, importador, revisor_catalogo.
+- **Tecnologías:** PostgreSQL 18, TypeScript strict, SQL migrations expand/contract, GS1 GTIN-14 canonical form.
+
+| Servicio | Estado | Finalidad |
+|---|---|---|
+| WooCommerce REST API | required | snapshot productos/variaciones |
+| Mercado Libre API | required | snapshot publicaciones/variaciones |
+| servicio de imágenes | discarded | no agregar CDN nuevo en E2 |
+
+Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.
+
+## Casos de uso y guía operativa
+
+| ID | Actor | Precondición | Disparador | Flujo principal | Alternativas | Errores | Postcondición | Prueba | Evidencia |
+|---|---|---|---|---|---|---|---|---|---|
+| E2-UC1 | importador | snapshots fechados y hasheados | import run | staging, validar, promover y reconciliar | fila ambigua pasa a rechazo | FK/unique aborta lote atómico | 100% importado o rechazado | E2-IMP-01 | crosswalk y reporte firmado |
+| E2-UC2 | revisor_catalogo | run reconciliado | consulta | navegar modelo, variantes, externos, GTIN y kits | dato ausente visible | sin permisos 403 | sin escrituras remotas | E2-SQL-01 | captura y query reproducible |
+
+La guía operativa para cada caso es: verificar precondiciones; registrar commit, actor y hora; ejecutar
+el flujo sin saltar guardas; ante una alternativa seguir su rama; ante error detener ampliación,
+preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evidencia indicada.
+
+## Modelo relacional detallado
+
+| Entidad | PK | Restricciones | Índices | Dueño | Retención | PII |
+|---|---|---|---|---|---|---|
+| product_models | id | archivable; no vendible | brand_id, category_id | catalog | permanente | none |
+| sellable_variants | id | fusion_sku unique immutable; model FK | model_id, status | catalog | permanente | none |
+| external_representations | id | channel+account+external key unique | variant_id | catalog | auditable | none |
+| identifiers | id | canonical value unique while active; provenance required | variant_id, canonical_value | catalog | history retained | none |
+| bundle_versions | id | dated composition; positive quantities; no cycles | bundle_variant_id, valid_from | catalog | permanente | none |
+| import_rejections | id | source hash and reason required | run_id, reason | migration | hasta cierre+archivo | none |
+
+Las entidades objetivo son `future`: su nombre y contrato quedan fijados para el diseño, pero ninguna
+tabla se declara existente hasta observar su migración aplicada y consultar su esquema.
+
+## Máquina de estados y transiciones
+
+```mermaid
+stateDiagram-v2
+  staged -->|validate| validated
+  validated -->|promote| promoted
+  promoted -->|reconcile| reconciled
+```
+
+| Desde | Evento | Guarda | Hasta | Efecto | Error | Prueba |
+|---|---|---|---|---|---|---|
+| staged | validate | shape and provenance valid | validated | crosswalk candidate | rejected | E2-IMP-01 |
+| validated | promote | constraints and identity non-inferred | promoted | transactional upsert | rollback transaction | E2-IMP-02 |
+| promoted | reconcile | counts+hashes+relations | reconciled | signed report | blocked | E2-IMP-03 |
+
+## Secuencias normal, degradada e incierta
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E2
+  participant D as Dependencia
+  A->>S: solicitud con precondiciones
+  S->>D: lectura o efecto autorizado
+  D-->>S: resultado verificable
+  S-->>A: postcondición y evidencia
+```
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E2
+  participant D as Dependencia degradada
+  A->>S: solicitud
+  S-xD: timeout o error clasificado
+  S-->>A: bloqueado/reintentable sin efecto duplicado
+  S->>S: métrica, auditoría y SOP
+```
+
+```mermaid
+sequenceDiagram
+  participant W as Worker
+  participant D as Dependencia remota
+  W->>D: operación idempotente
+  D--xW: respuesta perdida
+  W->>W: estado uncertain; no repetir
+  W->>D: GET de reconciliación
+  D-->>W: estado observado
+  W->>W: confirmar o compensar
+```
+
+## Contratos API
+
+| Método | Ruta | Autenticación | Entrada | Salida | Errores | Idempotencia | Concurrencia |
+|---|---|---|---|---|---|---|---|
+| GET | /api/v2/catalog/models | catalog.read | cursor+filters | paged models | 401/403/422 | n/a | stable cursor |
+| GET | /api/v2/catalog/variants | catalog.read | cursor+sku+identifier | paged variants | 401/403/422 | n/a | stable cursor |
+| GET | /api/v2/catalog/reconciliation | catalog.audit | run_id | counts, hashes, rejects | 401/403/404 | n/a | immutable run |
+
+## Fallos, recuperación y SOP
+
+- padre variable nunca vendible
+- GTIN no auto-vincula
+- SKU no se reutiliza
+- kit cíclico rechazado
+- reimportación no duplica
+- rechazos nunca se descartan
+
+El SOP común es: congelar ampliación; conservar payloads redactados, hashes y correlation ID; comprobar
+fuente remota sin escribir; clasificar retryable/uncertain/terminal; reparar mediante replay idempotente
+o compensación; demostrar conciliación; sólo entonces reanudar.
+
+## Integraciones, observabilidad, rollout y rollback
+
+- **Integración:** Woo/ML: snapshots paginados de sólo lectura con fecha y hash
+- **Integración:** staging: carga repetible sin promover filas rechazadas
+- **Observación:** importados/rechazados por causa
+- **Observación:** FK/duplicados
+- **Observación:** hashes y duración por run
+- **Rollout:** lectura y reconciliación siete días sin escritores remotos
+- **Rollback:** deshabilitar API v2 y conservar staging/esquema para auditoría
+
+## Plan de implementación por cortes revisables
+
+1. Congelar línea base, fuentes y fixture sin PII; commit sólo documental/evidencia.
+2. Crear migraciones y restricciones con pruebas fallando; commit de esquema aislado.
+3. Implementar dominio y máquinas de estado sin efectos remotos; commit unitario.
+4. Añadir contratos, adaptadores y simulador; commit de integración.
+5. Añadir UI/SOP/observabilidad y pruebas contractuales; commit operable.
+6. Ensayar sombra, canario, aborto y rollback; adjuntar evidencia sin mezclar cambios.
+
+## Matriz de trazabilidad
+
+| Requisito | Diseño | Archivo | Migración | Prueba | Métrica | Evidencia |
+|---|---|---|---|---|---|---|
+| 100% clasificado | entidades/transiciones/API de esta ficha | plataforma/src/catalog | migración E2 aún no creada | E2-IMP-01 | 100% clasificado | salida literal + commit + fecha |
+| importación repetible | entidades/transiciones/API de esta ficha | plataforma/src/catalog | migración E2 aún no creada | E2-IMP-02 | importación repetible | salida literal + commit + fecha |
+| crosswalk íntegro | entidades/transiciones/API de esta ficha | plataforma/src/catalog | migración E2 aún no creada | E2-IMP-03 | crosswalk íntegro | salida literal + commit + fecha |
+| 0 escritura remota | entidades/transiciones/API de esta ficha | plataforma/src/catalog | migración E2 aún no creada | E2-SQL-01 | 0 escritura remota | salida literal + commit + fecha |
+
+## Fuentes y decisiones abiertas
+
+- https://www.gs1.org/standards/id-keys/gtin — consultada 2026-09-13.
+
+**Decisiones abiertas que mantienen la ficha en borrador:** taxonomía inicial; retención de imágenes originales; estrategia de búsqueda PostgreSQL.
+
 ## Decisiones PM asignadas
 
 - **Dueña:** PM-029, PM-031, PM-033, PM-040, PM-044, PM-045, PM-054, PM-060, PM-062, PM-063, PM-064, PM-065, PM-066, PM-067, PM-068, PM-069, PM-070, PM-071, PM-072, PM-078, PM-080, PM-081, PM-082, PM-096, PM-103, PM-106, PM-107, PM-108, PM-110, PM-114, PM-119, PM-120, PM-122, PM-130, PM-132, PM-133, PM-144, PM-145, PM-150, PM-151, PM-164

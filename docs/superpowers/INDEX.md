@@ -9,6 +9,7 @@
 - [Plan maestro](plan-maestro.md): única autoridad de alcance, orden, dependencias y gates.
 - [Entregas E0–E26](deliveries/README.md): fichas ejecutables y estado vigente.
 - [Contrato de una ficha](delivery-contract.md): condiciones para autorizar implementación.
+- [Atlas de arquitectura](atlas-arquitectura.md): contexto, DAG, procesos, datos, tecnologías y glosario.
 - [Crosswalk histórico](crosswalk-entregas.md): destino de requisitos, planes, líneas y artefactos anteriores.
 - [Crosswalk de decisiones](decision-crosswalk.json): dueño único de cada decisión PM.
 - [Línea base auditada](audit-baseline-2026-09-13.md): fotografía de Git, despliegue, esquema y volúmenes.

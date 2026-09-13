@@ -5,8 +5,137 @@ const root = path.resolve(import.meta.dirname, '..');
 const programPath = path.join(root, 'docs/superpowers/delivery-program.json');
 const outDir = path.join(root, 'docs/superpowers/deliveries');
 const program = JSON.parse(fs.readFileSync(programPath, 'utf8'));
+const details = JSON.parse(fs.readFileSync(path.join(root, 'docs/superpowers/delivery-details.json'), 'utf8')).deliveries;
 
 const one = (value) => `- ${value}`;
+const cell = (value) => String(value ?? '—').replaceAll('|', '\\|').replaceAll('\n', ' ');
+const table = (headers, rows) => `| ${headers.join(' | ')} |\n|${headers.map(() => '---').join('|')}|\n${rows.map((row) => `| ${row.map(cell).join(' | ')} |`).join('\n')}`;
+const node = (value) => value.replace(/[^A-Za-z0-9_]/g, '_');
+function renderDetail(id) {
+  const detail = details[id];
+  if (!detail) return '';
+  const componentDiagram = detail.components.map((component) => `  ${node(component.id)}[${component.id}]`).join('\n');
+  const stateDiagram = detail.transitions.map((transition) => `  ${node(transition.from)} -->|${transition.event}| ${node(transition.to)}`).join('\n');
+  const targetFile = detail.components.find((component) => component.status === 'future')?.path || detail.components[0].path;
+  const traceRows = detail.requirements.map((requirement, index) => [requirement, 'entidades/transiciones/API de esta ficha', targetFile, 'migración E' + id.slice(1) + ' aún no creada', detail.tests[index] || detail.tests.at(-1), requirement, 'salida literal + commit + fecha']);
+  return `
+## Vista de arquitectura de la entrega
+
+\`\`\`mermaid
+flowchart LR
+${componentDiagram}
+\`\`\`
+
+${table(['Componente', 'Estado', 'Ruta', 'Responsabilidad'], detail.components.map((item) => [item.id, item.status, item.path, item.purpose]))}
+
+## Actores, tecnologías y dependencias externas
+
+- **Actores:** ${detail.actors.join(', ')}.
+- **Tecnologías:** ${detail.technologies.join(', ')}.
+
+${table(['Servicio', 'Estado', 'Finalidad'], detail.external_services.map((item) => [item.name, item.status, item.purpose]))}
+
+` + 'Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.' + `
+
+## Casos de uso y guía operativa
+
+${table(['ID', 'Actor', 'Precondición', 'Disparador', 'Flujo principal', 'Alternativas', 'Errores', 'Postcondición', 'Prueba', 'Evidencia'], detail.use_cases.map((item) => [item.id, item.actor, item.pre, item.trigger, item.main, item.alternatives, item.errors, item.post, item.test, item.evidence]))}
+
+La guía operativa para cada caso es: verificar precondiciones; registrar commit, actor y hora; ejecutar
+el flujo sin saltar guardas; ante una alternativa seguir su rama; ante error detener ampliación,
+preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evidencia indicada.
+
+## Modelo relacional detallado
+
+${table(['Entidad', 'PK', 'Restricciones', 'Índices', 'Dueño', 'Retención', 'PII'], detail.entities.map((item) => [item.name, item.pk, item.constraints, item.indexes, item.owner, item.retention, item.pii]))}
+
+Las entidades objetivo son \`future\`: su nombre y contrato quedan fijados para el diseño, pero ninguna
+tabla se declara existente hasta observar su migración aplicada y consultar su esquema.
+
+## Máquina de estados y transiciones
+
+\`\`\`mermaid
+stateDiagram-v2
+${stateDiagram}
+\`\`\`
+
+${table(['Desde', 'Evento', 'Guarda', 'Hasta', 'Efecto', 'Error', 'Prueba'], detail.transitions.map((item) => [item.from, item.event, item.guard, item.to, item.effect, item.error, item.test]))}
+
+## Secuencias normal, degradada e incierta
+
+\`\`\`mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E${id.slice(1)}
+  participant D as Dependencia
+  A->>S: solicitud con precondiciones
+  S->>D: lectura o efecto autorizado
+  D-->>S: resultado verificable
+  S-->>A: postcondición y evidencia
+\`\`\`
+
+\`\`\`mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E${id.slice(1)}
+  participant D as Dependencia degradada
+  A->>S: solicitud
+  S-xD: timeout o error clasificado
+  S-->>A: bloqueado/reintentable sin efecto duplicado
+  S->>S: métrica, auditoría y SOP
+\`\`\`
+
+\`\`\`mermaid
+sequenceDiagram
+  participant W as Worker
+  participant D as Dependencia remota
+  W->>D: operación idempotente
+  D--xW: respuesta perdida
+  W->>W: estado uncertain; no repetir
+  W->>D: GET de reconciliación
+  D-->>W: estado observado
+  W->>W: confirmar o compensar
+\`\`\`
+
+## Contratos API
+
+${detail.apis.length ? table(['Método', 'Ruta', 'Autenticación', 'Entrada', 'Salida', 'Errores', 'Idempotencia', 'Concurrencia'], detail.apis.map((item) => [item.method, item.path, item.auth, item.input, item.output, item.errors, item.idempotency, item.concurrency])) : 'Esta entrega no expone API de negocio.'}
+
+## Fallos, recuperación y SOP
+
+${detail.failure_modes.map((item) => `- ${item}`).join('\n')}
+
+El SOP común es: congelar ampliación; conservar payloads redactados, hashes y correlation ID; comprobar
+fuente remota sin escribir; clasificar retryable/uncertain/terminal; reparar mediante replay idempotente
+o compensación; demostrar conciliación; sólo entonces reanudar.
+
+## Integraciones, observabilidad, rollout y rollback
+
+${detail.integrations.map((item) => `- **Integración:** ${item}`).join('\n')}
+${detail.observability.map((item) => `- **Observación:** ${item}`).join('\n')}
+- **Rollout:** ${detail.rollout}
+- **Rollback:** ${detail.rollback}
+
+## Plan de implementación por cortes revisables
+
+1. Congelar línea base, fuentes y fixture sin PII; commit sólo documental/evidencia.
+2. Crear migraciones y restricciones con pruebas fallando; commit de esquema aislado.
+3. Implementar dominio y máquinas de estado sin efectos remotos; commit unitario.
+4. Añadir contratos, adaptadores y simulador; commit de integración.
+5. Añadir UI/SOP/observabilidad y pruebas contractuales; commit operable.
+6. Ensayar sombra, canario, aborto y rollback; adjuntar evidencia sin mezclar cambios.
+
+## Matriz de trazabilidad
+
+${table(['Requisito', 'Diseño', 'Archivo', 'Migración', 'Prueba', 'Métrica', 'Evidencia'], traceRows)}
+
+## Fuentes y decisiones abiertas
+
+${detail.sources.map((source) => `- ${source.url} — consultada ${source.consulted}.`).join('\n')}
+
+**Decisiones abiertas que mantienen la ficha en borrador:** ${detail.open_decisions.join('; ')}.
+`;
+}
 const e1EvidencePath = path.join(root, 'docs/superpowers/archive/plans-legacy-2026-09-13/2026-09-13-p1-fundacion-sombra.md');
 const e1Detail = fs.readFileSync(e1EvidencePath, 'utf8')
   .slice(fs.readFileSync(e1EvidencePath, 'utf8').indexOf('## Decisiones fijadas'))
@@ -96,6 +225,7 @@ ${one(d.baseline)}
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 ${d.id === 'E1' ? `\n## Especificación vinculante incorporada\n\nEste contenido forma parte de E1. Su copia archivada sólo acredita procedencia.\n\n${e1Detail}` : ''}
+${renderDetail(d.id)}
 `;
   fs.writeFileSync(file, `${body.trimEnd()}\n`);
 }

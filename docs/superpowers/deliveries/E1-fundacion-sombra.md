@@ -218,6 +218,179 @@ Cada paso termina en algo verificable y con tests. El orden importa: primero lo 
 3. Revisar el reporte de sombra durante los 7 días del paso 6.
 4. Cuando exista `qa-herramientas`, probar passkeys en sus dispositivos (condición para activarlas en E2).
 
+
+## Vista de arquitectura de la entrega
+
+```mermaid
+flowchart LR
+  platform_api[platform_api]
+  platform_worker[platform_worker]
+  platform_scheduler[platform_scheduler]
+  legacy_runtime[legacy_runtime]
+  qa_simulator[qa_simulator]
+```
+
+| Componente | Estado | Ruta | Responsabilidad |
+|---|---|---|---|
+| platform_api | future | plataforma/src/api | health, auth y consulta de incidentes |
+| platform_worker | future | plataforma/src/worker | claims, proyecciones y reintentos |
+| platform_scheduler | future | plataforma/src/scheduler | encolar barridos y tareas periódicas |
+| legacy_runtime | existing | server.js | ACK y operación productiva sin dependencia de PostgreSQL |
+| qa_simulator | existing | scripts/qa/simulador-canales.mjs | fallos y respuestas remotas simuladas |
+
+## Actores, tecnologías y dependencias externas
+
+- **Actores:** sistema_ml, sistema_woo, api, worker, scheduler, jose_revisor.
+- **Tecnologías:** Node.js 24, TypeScript strict, PostgreSQL 18, Vitest, WebAuthn mediante librería mantenida, B2 Object Lock, SMTP existente o proveedor candidato.
+
+| Servicio | Estado | Finalidad |
+|---|---|---|
+| Mercado Libre API | required | relectura y conciliación |
+| WooCommerce REST API | required | relectura y conciliación |
+| Backblaze B2 | chosen | manifiesto firmado |
+| proveedor email | candidate | entrega del reporte diario |
+| SimpleWebAuthn equivalente | candidate | verificación WebAuthn sin criptografía propia |
+
+Un servicio `candidate` no autoriza contratación, instalación ni uso de credenciales.
+
+## Casos de uso y guía operativa
+
+| ID | Actor | Precondición | Disparador | Flujo principal | Alternativas | Errores | Postcondición | Prueba | Evidencia |
+|---|---|---|---|---|---|---|---|---|---|
+| E1-UC1 | sistema_ml/sistema_woo | callback recibido | webhook | legacy responde; copia asíncrona intenta inbox; worker relee recurso | copia caída se repara por barrido | PostgreSQL caído no altera ACK ni latencia permitida | evento deduplicado o pérdida contabilizada | E1-LAT-01 | métrica y correlación |
+| E1-UC2 | jose_revisor | cierre diario | scheduler | calcular paridad/convergencia, firmar, subir a B2 y enviar hash | email falla pero B2 conserva reporte | firma o upload fallido alerta | reporte inmutable verificable | E1-REC-01 | hash y HEAD/GET |
+
+La guía operativa para cada caso es: verificar precondiciones; registrar commit, actor y hora; ejecutar
+el flujo sin saltar guardas; ante una alternativa seguir su rama; ante error detener ampliación,
+preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evidencia indicada.
+
+## Modelo relacional detallado
+
+| Entidad | PK | Restricciones | Índices | Dueño | Retención | PII |
+|---|---|---|---|---|---|---|
+| inbox_messages | id | unique account+topic+resource+remote_version | status, available_at | integrations | auditable | encrypted when present |
+| outbox_commands | id | idempotency_key unique; estado válido | status, available_at | integrations | auditable | encrypted when present |
+| audit_events | id | append-only; prev_hash/hash | occurred_at, aggregate | audit | permanente | references only |
+| dead_letters | id | source id and terminal reason | topic, created_at | operations | hasta resolución+archivo | minimal |
+| reconciliation_cursors | account+topic | cursor and overlap policy | next_run_at | integrations | vigente | none |
+| webauthn_credentials | credential_id | public key; counter; user FK | user_id | security | hasta revocación | encrypted user link |
+
+Las entidades objetivo son `future`: su nombre y contrato quedan fijados para el diseño, pero ninguna
+tabla se declara existente hasta observar su migración aplicada y consultar su esquema.
+
+## Máquina de estados y transiciones
+
+```mermaid
+stateDiagram-v2
+  pending -->|claim| claimed
+  claimed -->|success| succeeded
+  claimed -->|timeout_after_effect| uncertain
+  retryable -->|attempt_limit| dead_lettered
+```
+
+| Desde | Evento | Guarda | Hasta | Efecto | Error | Prueba |
+|---|---|---|---|---|---|---|
+| pending | claim | lease libre/vencido | claimed | token y vencimiento | sin cambio | E1-Q-01 |
+| claimed | success | token vigente | succeeded | audita resultado | 409 | E1-Q-02 |
+| claimed | timeout_after_effect | resultado remoto desconocido | uncertain | bloquea repetición y agenda GET | DLQ si no converge | E1-Q-03 |
+| retryable | attempt_limit | intentos agotados | dead_lettered | alerta y SOP | ninguno | E1-Q-04 |
+
+## Secuencias normal, degradada e incierta
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E1
+  participant D as Dependencia
+  A->>S: solicitud con precondiciones
+  S->>D: lectura o efecto autorizado
+  D-->>S: resultado verificable
+  S-->>A: postcondición y evidencia
+```
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as Sistema E1
+  participant D as Dependencia degradada
+  A->>S: solicitud
+  S-xD: timeout o error clasificado
+  S-->>A: bloqueado/reintentable sin efecto duplicado
+  S->>S: métrica, auditoría y SOP
+```
+
+```mermaid
+sequenceDiagram
+  participant W as Worker
+  participant D as Dependencia remota
+  W->>D: operación idempotente
+  D--xW: respuesta perdida
+  W->>W: estado uncertain; no repetir
+  W->>D: GET de reconciliación
+  D-->>W: estado observado
+  W->>W: confirmar o compensar
+```
+
+## Contratos API
+
+| Método | Ruta | Autenticación | Entrada | Salida | Errores | Idempotencia | Concurrencia |
+|---|---|---|---|---|---|---|---|
+| GET | /api/v2/health | internal/readiness | none | component statuses | 503 degraded | n/a | snapshot |
+| GET | /api/v2/incidents | operations capability | cursor, topic, status | paged incidents | 401/403/422 | n/a | stable cursor |
+
+## Fallos, recuperación y SOP
+
+- PostgreSQL detenido no cambia ACK
+- duplicados y desorden convergen
+- 403 es terminal hasta intervención
+- 408/429/5xx reintentan con backoff+jitter
+- respuesta incierta exige relectura
+- webhook disabled abre incidente
+
+El SOP común es: congelar ampliación; conservar payloads redactados, hashes y correlation ID; comprobar
+fuente remota sin escribir; clasificar retryable/uncertain/terminal; reparar mediante replay idempotente
+o compensación; demostrar conciliación; sólo entonces reanudar.
+
+## Integraciones, observabilidad, rollout y rollback
+
+- **Integración:** ML/Woo: webhook es aviso; GET remoto decide; cursor con solape por tópico
+- **Integración:** B2: reporte firmado con Object Lock
+- **Integración:** email: notificación no es fuente de verdad
+- **Observación:** ACK p95/p99 y códigos
+- **Observación:** paridad por tópico enumerable
+- **Observación:** cobertura/convergencia
+- **Observación:** retry/DLQ/uncertain
+- **Observación:** firma y entrega del reporte
+- **Rollout:** tres pruebas de 500 webhooks, PostgreSQL caído y 7 días de sombra
+- **Rollback:** apagar copia/consumidores nuevos; ACK y procesamiento legacy permanecen independientes
+
+## Plan de implementación por cortes revisables
+
+1. Congelar línea base, fuentes y fixture sin PII; commit sólo documental/evidencia.
+2. Crear migraciones y restricciones con pruebas fallando; commit de esquema aislado.
+3. Implementar dominio y máquinas de estado sin efectos remotos; commit unitario.
+4. Añadir contratos, adaptadores y simulador; commit de integración.
+5. Añadir UI/SOP/observabilidad y pruebas contractuales; commit operable.
+6. Ensayar sombra, canario, aborto y rollback; adjuntar evidencia sin mezclar cambios.
+
+## Matriz de trazabilidad
+
+| Requisito | Diseño | Archivo | Migración | Prueba | Métrica | Evidencia |
+|---|---|---|---|---|---|---|
+| 8 tópicos reconciliados | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-Q-01 | 8 tópicos reconciliados | salida literal + commit + fecha |
+| p95 delta<=25ms | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-Q-02 | p95 delta<=25ms | salida literal + commit + fecha |
+| p99 delta<=100ms | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-Q-03 | p99 delta<=100ms | salida literal + commit + fecha |
+| 0 cambios HTTP | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-Q-04 | 0 cambios HTTP | salida literal + commit + fecha |
+| 7 días sombra | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-LAT-01 | 7 días sombra | salida literal + commit + fecha |
+
+## Fuentes y decisiones abiertas
+
+- https://developers.mercadolibre.com.ar/es_ar/productos-recibe-notificaciones — consultada 2026-09-13.
+- https://www.backblaze.com/docs/cloud-storage-object-lock — consultada 2026-09-13.
+- https://developers.google.com/identity/passkeys/developer-guides/server-registration — consultada 2026-09-13.
+
+**Decisiones abiertas que mantienen la ficha en borrador:** librería WebAuthn concreta; proveedor/cuenta email; modo y retención Object Lock; dominio TLS QA.
+
 ## Decisiones PM asignadas
 
 - **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158
