@@ -50,6 +50,29 @@ describe('lib/vigiaBackup', () => {
     expect(activos(db)).toHaveLength(0);
   });
 
+  it('avisa por capacidad del bucket y resuelve el aviso al bajar, sin mezclarlo con el backup vencido', () => {
+    const capacidad = () => activos(db).filter(i => i.tipo_error === 'capacidad_bucket');
+    escribirEstado({ ultimo_ok: '2026-09-13T06:00:00Z', bucket_bytes: 8.5e9 });
+    const r = revisarBackupNube(db, { estadoPath: ESTADO, ahora: AHORA });
+    expect(r).toMatchObject({ ok: true, bucketBytes: 8.5e9 });
+    expect(capacidad()).toHaveLength(1);
+    expect(capacidad()[0]).toMatchObject({ severidad: 'advertencia' });
+    expect(capacidad()[0].mensaje_humano).toContain('8.5 GB');
+    expect(activos(db).filter(i => i.tipo_error === 'backup_vencido')).toHaveLength(0);
+
+    escribirEstado({ ultimo_ok: '2026-09-13T06:00:00Z', bucket_bytes: 2e9 });
+    revisarBackupNube(db, { estadoPath: ESTADO, ahora: AHORA });
+    expect(capacidad()).toHaveLength(0);
+  });
+
+  it('sin dato de tamaño (bucket_bytes null o ausente) no abre ni resuelve el aviso de capacidad', () => {
+    escribirEstado({ ultimo_ok: '2026-09-13T06:00:00Z', bucket_bytes: 9e9 });
+    revisarBackupNube(db, { estadoPath: ESTADO, ahora: AHORA });
+    escribirEstado({ ultimo_ok: '2026-09-13T06:00:00Z', bucket_bytes: null });
+    expect(revisarBackupNube(db, { estadoPath: ESTADO, ahora: AHORA }).bucketBytes).toBeNull();
+    expect(activos(db).filter(i => i.tipo_error === 'capacidad_bucket')).toHaveLength(1);
+  });
+
   it('nunca lanza aunque la base falle', () => {
     escribirEstado({ ultimo_ok: '2026-09-01T00:00:00Z' });
     db.close();

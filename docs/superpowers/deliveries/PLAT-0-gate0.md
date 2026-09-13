@@ -23,7 +23,7 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 
 ## Continuidad
 
-- Estado externo relevante: 2026-09-13 tras limpieza y rotación: 35 GB libres, 65% usado (**cumple**). Node v20.20.2. DR externo funcionando desde 2026-09-13.
-- Próxima acción exacta y reproducible: subir el tope diario de descarga de B2 y repetir la restauración completa de uploads; guardar la passphrase fuera del VPS (confirmar); alerta si `backups/estado-nube.json` tiene `ultimo_ok` > 26 h; luego QA separado, monitoreo externo y Node 24.
+- Estado externo relevante: 2026-09-13: 34 GB libres, 66% usado (**cumple**, margen chico: uploads crece ~1,6 GB/mes). Node v20.20.2 en producción; suite verde en Node 24. DR externo funcionando desde 2026-09-13; cuenta B2 sin tarjeta por decisión del usuario (restauración completa limitada por topes gratis, ver operations-vps).
+- Próxima acción exacta y reproducible: decidir migración de producción a Node 24; monitor externo sobre `/healthz` (cuenta del usuario); definir entorno QA separado; antes de ~8 GB en el bucket decidir tarjeta, lifecycle o proveedor.
 - Gates: los del programa de plataforma (corte <15 min, un solo escritor remoto, DR probado) más §20 del maestro.
 - Confirmación: sin secretos ni datos personales.

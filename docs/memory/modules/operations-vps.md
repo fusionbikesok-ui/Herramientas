@@ -34,6 +34,12 @@
 - El tope diario de descarga también cuenta los HEAD de rclone: `copyto` sin `--no-check-dest`
   falló con 403 el 2026-09-13 06:00 tras la prueba de restauración. El script usa
   `--no-check-dest` en base y .env; `copy` de uploads sólo lista (no descarga).
+- Decisión 2026-09-13: la cuenta B2 sigue **sin tarjeta**. Consecuencias: topes gratis de
+  1 GB de descarga y ~2.500 transacciones clase B por día (una restauración completa de uploads
+  tarda ≥2 días, no cumple RTO 1 h) y las subidas se cortan a los 10 GB (al ritmo de
+  ~2,3 GB/mes, hacia fines de 2026). Revisar entonces tarjeta, lifecycle de `db/` o proveedor.
+  `backup.sh` registra `bucket_bytes` (con versiones) en `estado-nube.json`; el vigía abre
+  advertencia `backup/backup_nube/capacidad_bucket` por encima de 8 GB.
 - Vigía: `lib/vigiaBackup.js`, cron de la app minuto 17 de cada hora; si `ultimo_ok` > 26 h o
   falta el estado, abre incidente crítico `backup/backup_nube/backup_vencido` (email) y lo
   resuelve solo al volver un backup completo.
