@@ -1,6 +1,7 @@
 # Plan Maestro de FusionBikes: operación, VPS y App
 
 **Estado:** especificación canónica vigente
+**Arquitectura y programa de ejecución (desde 2026-09-13):** `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plataforma-auditable-catalogo-identidad-stock-pedidos.md`. Este maestro fija el *qué* (procesos, escenarios, gates y aceptación operativa); ese programa fija el *cómo* y reemplaza a UM1 (§18.1) y a la secuencia original de §19. Ver §19.0.
 **Versión documental:** 2026-09-08 / programa E0–E24 + programa urgente UM1
 **Backend canónico:** `/opt/fusionbikes/herramientas`
 **Rama productiva observada:** `conteo-confiable`
@@ -1074,6 +1075,8 @@ Entrega candidata, migración, incidente, health/smoke fallido, backup/restore y
 
 El VPS `/opt/fusionbikes/herramientas` es producción real y sirve `conteo-confiable`; hay PM2, health, tests y reglas de coordinación. No existe staging integral sanitizado ni RTO/RPO medidos.
 
+**Desde 2026-09-13 la parte de recuperación de E23 pasa a ser el Gate 0 del programa de plataforma y va primero, no último.** Medido ese día: disco al 91% (8,9 GB libres de 96), Node v20.20.2 fuera de soporte y DR externo nunca funcionando. El Gate 0 exige al menos 30 GB libres y uso no mayor al 70% antes de instalar el núcleo nuevo.
+
 ### Brecha existente
 
 Faltan pipeline automático completo, entorno aislado reproducible, restore probado periódico, runbooks y métricas DR.
@@ -1136,6 +1139,8 @@ Precios, catálogo, consulta de precios, códigos universales, variaciones muert
 | Herramientas auxiliares | Inventario pendiente por tarea | Dueño operativo, uso real y deuda antes de rediseñar |
 
 ## 18.1 Programa urgente UM1 — Identidad de productos
+
+> **Sustituido el 2026-09-13** por la vertical *Catálogo e identidad* del programa de plataforma (PM-159). Lo que sigue es evidencia histórica de decisiones y errores, no instrucción vigente. Los cinco casos abiertos y los arreglos operativos sobre el legado siguen valiendo hasta el corte de esa vertical, bajo la regla de congelamiento (PM-160).
 
 ### Propósito, prioridad e invariante
 
@@ -1207,6 +1212,25 @@ La especificación completa es `/opt/fusionbikes/herramientas/docs/superpowers/p
 Cada avance sobre UM1, aunque sea parcial o quede a medias, actualiza en el mismo commit el estado de la ficha, la evidencia con ubicación exacta y comando/resultado copiado literalmente, y el handoff para el próximo agente. La regla completa está en la sección «Estado, handoff y evidencia en cada avance» de esa especificación. Un avance sin esos tres elementos se trata como trabajo no entregado y se re-verifica desde cero.
 
 ## 19. Secuencia de entregas E0–E24
+
+### 19.0 Secuencia vigente desde 2026-09-13
+
+La tabla original de abajo se conserva como catálogo de entregas y de su resultado funcional, pero **el orden de ejecución lo fija esta sección** (PM-159). Cada vertical cumple a la vez los gates del programa de plataforma (corte menor a 15 minutos, un solo escritor remoto, DR probado) y los de §20 (suite completa, E2E 390/768/1440, jornada observada y aceptación del usuario).
+
+| Paso | Vertical | Entregas del maestro que absorbe | Ficha |
+| --- | --- | --- | --- |
+| P0 | Gate 0 — infraestructura, DR, QA, monitoreo, disco, Node 24 | E23 (recuperación y staging) | `deliveries/PLAT-0-gate0.md` |
+| P1 | Fundación en sombra — esquema, auditoría, inbox/outbox, auth, workers sin escrituras remotas | — | `deliveries/PLAT-1-fundacion.md` |
+| P2 | Catálogo e identidad | UM1.1–UM1.6, E9 (familias e identidad); reemplaza Matcher, Cobertura, Guardia y el vigía de formato | `deliveries/PLAT-2-catalogo-identidad.md` |
+| P3 | Stock | E8, E9 (ubicaciones), E10, E11, **E14 recepción y E16 conteos** (PM-161) | `deliveries/PLAT-3-stock.md` |
+| P4 | Pedidos y preparación | E1, E2, E4, E12 y la línea GP; ventas retenidas y espejo ML→Woo | `deliveries/PLAT-4-pedidos-preparacion.md` |
+| P5 | Estandarización de catálogo | — | `deliveries/PLAT-5-estandarizacion.md` |
+| P6 | Retiro del legado | E24 (parte de consolidación) | `deliveries/PLAT-6-retiro-legacy.md` |
+| Después | Sobre el núcleo nuevo, en este orden sugerido | E18, E19, E20 (reconstruidas, PM-163); App E5–E7, E13, E15, E17, E21 migrando por OTA (PM-162); E3 impresión; E22 métricas; cierre de E24 | fichas E## existentes |
+
+**Precios ML, consulta de precios y sync ML** no están en ninguna vertical: el programa de plataforma deja contenido y precios ML "previstos, no habilitados". Siguen en el legado hasta un plan propio, bajo la regla de congelamiento.
+
+### 19.1 Catálogo original de entregas (orden histórico)
 
 | Entrega | Superficie | Resultado tangible | Dependencia dominante |
 | --- | --- | --- | --- |
@@ -1332,9 +1356,14 @@ La cobertura se controla por decisiones, procesos, estados, errores, permisos, i
 - Staging y sanitización — operaciones — bloquea fallos integrales y despliegue automático.
 - RTO/RPO — operaciones — se fijan tras medir backup/restauración en E23.
 
+### Regla de congelamiento del legado (PM-160)
+
+Durante el programa de plataforma, el sistema actual (Node/Express/SQLite) sólo recibe arreglos de bugs que pierden plata o bloquean la operación. **No se construyen funciones nuevas en áreas que una vertical va a reemplazar.** Consecuencias explícitas: la corrección de conteos con auditoría espera al libro de P3; GP13–GP15 van a P4; el alta de casos en taller, garantías y excepciones espera al núcleo nuevo.
+
 ### Fuera de esta etapa
 
-- MercadoLibre Full; Android hasta demanda concreta; serialización; lotes y vencimientos; kits/combos; consignación.
+- MercadoLibre Full; Android hasta demanda concreta; serialización; lotes y vencimientos; consignación.
+- ~~kits/combos~~ **Entran al programa de plataforma (PM-164)**: la oferta ML tipo pack/kit se modela con composición versionada. El incidente del GP5000 (2026-09-11) fue justamente un kit.
 - Órdenes de compra automáticas; inventario de embalaje; peso/dimensiones/balanza en Fusion.
 - Retiros web/locales dentro de despacho; portal cliente de taller; asistencia/liquidación; ranking público.
 - Reembolsos automáticos y garantía de cero sobreventa mientras cada publicación ML anuncie stock completo.

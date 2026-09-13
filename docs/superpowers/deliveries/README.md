@@ -1,6 +1,6 @@
 # Progreso y evidencia de entregas E0–E24 y urgentes
 
-Actualizado: 2026-09-09. Estas fichas registran realidad; el plan maestro especifica el objetivo. Solo evidencia reproducible permite avanzar de estado.
+Actualizado: 2026-09-13. Estas fichas registran realidad; el plan maestro especifica el objetivo. Solo evidencia reproducible permite avanzar de estado.
 
 | Entrega | Nombre | Estado | Ficha |
 | --- | --- | --- | --- |
@@ -48,6 +48,22 @@ Actualizado: 2026-09-09. Estas fichas registran realidad; el plan maestro especi
 | GP10 | Publicación controlada | desarrollo | preflight, muestra 5/5, smoke, permisos y diagnóstico de datos verificados; falta jornada observada |
 | GP11 | Gestión de pedidos consultable de verdad | desarrollo | Pantalla real contra la API, permiso `pedidos` en vez del gate de un usuario, cron de importación, importes y entrega persistidos |
 | GP12 | Enviar a preparación desde la lista | desarrollo | Selección múltiple, validación de elegibilidad y lote real verificado en instancia aislada |
+
+### Programa de plataforma (orden vigente desde 2026-09-13)
+
+Reemplaza a UM1 y reordena E0–E24 (PM-159, §19.0 del maestro). Las fichas UM1 quedan como evidencia histórica.
+
+| Paso | Vertical | Estado | Ficha | Absorbe |
+| --- | --- | --- | --- | --- |
+| P0 | Gate 0 — infraestructura y DR | planificada | `PLAT-0-gate0.md` | E23 (recuperación y staging) |
+| P1 | Fundación en sombra | planificada | `PLAT-1-fundacion.md` | — |
+| P2 | Catálogo e identidad | planificada | `PLAT-2-catalogo-identidad.md` | UM1.1–UM1.6, E9 identidad |
+| P3 | Stock | planificada | `PLAT-3-stock.md` | E8, E9 ubicaciones, E10, E11, E14, E16 |
+| P4 | Pedidos y preparación | planificada | `PLAT-4-pedidos-preparacion.md` | E1, E2, E4, E12, GP |
+| P5 | Estandarización | planificada | `PLAT-5-estandarizacion.md` | — |
+| P6 | Retiro del legado | planificada | `PLAT-6-retiro-legacy.md` | E24 (consolidación) |
+
+Después, sobre el núcleo nuevo: E18–E20 reconstruidas (PM-163), App por OTA sobre fachada `/api/v1` (PM-162), E3, E22.
 
 Estados: `planificada → desarrollo → candidata → publicada → observada → aceptada`. Un estado no se infiere por código, número de commit o nombre de rama.
 

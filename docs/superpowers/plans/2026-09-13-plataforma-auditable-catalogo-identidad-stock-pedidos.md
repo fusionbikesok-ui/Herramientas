@@ -237,6 +237,12 @@ No instalar ni activar el nuevo núcleo hasta cumplir todo este gate:
 - Después de 30 días, retirar las pantallas antiguas y responder `410 Gone` desde sus rutas.
 - No copiar el motor Matcher del navegador: toda sugerencia debe provenir del único motor de
   dominio del servidor.
+- **App iPhone (decisión 2026-09-13, PM-162):** `/api/v1` NO se retira con el plazo de 30 días.
+  Se conserva como **fachada delgada sobre el dominio v2** mientras la App lo use, y la App migra
+  pantalla por pantalla a v2 mediante **actualizaciones OTA** (`expo-updates`, runtime `fingerprint`).
+  Quedan pocas builds de App Store: la próxima build debe incluir todas las capacidades nativas
+  que el programa vaya a necesitar y después se congelan las dependencias nativas. El chequeo de
+  contrato de la App (`/api/v1/meta`) debe seguir respondiendo compatible en cada corte.
 
 ## 6. Migración y cortes
 
@@ -248,7 +254,9 @@ No instalar ni activar el nuevo núcleo hasta cumplir todo este gate:
    excepciones. Corregir los 39 SKU vendibles legacy mediante campaña coordinada: pausar ofertas
    afectadas, cambiar Woo/ML, verificar y reanudar.
 4. **Stock:** importar apertura provisional y pedidos pagados abiertos, activar reservas y comparar
-   proyecciones contra Woo antes de transferir autoridad.
+   proyecciones contra Woo antes de transferir autoridad. **Recepción y conteos entran en este
+   mismo corte** como escritores del libro (PM-161): hoy escriben stock en Woo y dejarlos afuera
+   crearía dos escritores.
 5. **Pedidos y preparación:** activar orden canónica, espejo ML→Woo, asignaciones, prioridad,
    picking, empaque y despacho.
 6. **Estandarización:** proponer atributos por categoría en lotes revisables, mostrar vista previa,
@@ -309,3 +317,28 @@ un plan posterior, alimentado por el catálogo normalizado de este programa.
 - La estandarización de catálogo sí pertenece a este programa; el storefront público no.
 - Este documento no autoriza limpiar disco, instalar servicios, cambiar canales, migrar datos ni
   desplegar. Cada ejecución requiere que el borrador sea revisado y aprobado.
+
+
+## 9. Integración con el plan maestro (decisiones del 2026-09-13)
+
+- **Roles de los documentos:** `plan-maestro-v2.md` sigue siendo la especificación funcional
+  canónica —procesos, escenarios, gates y aceptación operativa—. Este documento es la arquitectura
+  y el programa de ejecución que la implementa. Reemplaza la §18.1 (UM1) y el orden de la §19 del
+  maestro; la secuencia vigente está en la §19.0 del maestro.
+- **Gates acumulados:** cada corte cumple los de este documento y los de la §20 del maestro
+  (suite completa, E2E 390/768/1440, jornada observada y aceptación del usuario).
+- **Regla de congelamiento del legado (PM-160):** mientras dure el programa, el legado sólo recibe
+  arreglos de bugs que pierden plata o bloquean la operación; no se construyen funciones nuevas en
+  áreas que una vertical reemplaza. La corrección de conteos con auditoría espera al libro de
+  stock.
+- **Huecos que el borrador no cubría y quedan resueltos:**
+  - Recepción y conteos dentro del corte de stock (PM-161).
+  - App iPhone sobre fachada `/api/v1` + migración por OTA (PM-162, §5.2).
+  - Excepciones físicas, garantías y taller no están en ninguna vertical: se **reconstruyen sobre el
+    núcleo nuevo después del corte de stock**. Hoy tienen 0 filas, así que no hay datos que migrar
+    (PM-163).
+  - Precios ML, consulta de precios y sync ML quedan en el legado hasta un plan propio.
+  - Lo construido en el legado esta semana —vigía de formato, auto-vínculo por `seller_sku`,
+    liberación de ventas retenidas— es comportamiento requerido de la vertical de catálogo e
+    identidad y de la de pedidos, no código a portar.
+- **Kits/combos:** el maestro los tenía fuera de alcance; entran a este programa (PM-164).

@@ -1,10 +1,13 @@
 # Estado activo
 
-Actualizado: 2026-09-08.
+Actualizado: 2026-09-13.
 
 ## Fuente de verdad
 
-- Especificación vigente: `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`.
+- Especificación vigente: `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md` (el *qué*).
+- **Arquitectura y orden de ejecución desde 2026-09-13:** `docs/superpowers/plans/2026-09-13-plataforma-auditable-catalogo-identidad-stock-pedidos.md` (el *cómo*). Núcleo PostgreSQL por verticales P0–P6; reemplaza a UM1. Orden en §19.0 del maestro, fichas `deliveries/PLAT-*`, decisiones PM-159 a PM-164.
+- **Congelamiento del legado (PM-160):** sólo arreglos de bugs que pierden plata o bloquean la operación; ninguna función nueva en áreas que reemplaza una vertical. La corrección de conteos espera al libro (P3).
+- **App iPhone (PM-162):** no se rehace; `/api/v1` queda como fachada sobre v2 y la App migra por OTA. Falta verificar que la build instalada tenga `expo-updates` y que un OTA de prueba llegue.
 - Índice de planificación: `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.
 - Progreso verificable: `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E24.
 - E0 fue aprobada por el usuario el 2026-09-02 y figura `aceptada` en el índice de entregas. No implica despliegue de código.
@@ -28,6 +31,8 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 - Conteos, recepción e integraciones existen como herramientas legacy; aún no comparten el modelo E0–E24.
 
 ## Próxima acción
+
+**Desde 2026-09-13 la primera es P0 (Gate 0):** medido disco 91% (8,9 GB libres), Node v20.20.2, DR externo sin funcionar. Inventariar el disco sin borrar nada y pedir autorización para B2 y servicios. Lo que sigue abajo es el estado previo del legado.
 
 E2 conserva pendientes externos de revisión independiente y piloto/jornada observada; E3 ya está en desarrollo técnico con autenticación del agente validada, pero requiere relevamiento de impresora, prueba Windows/hardware, revisión y piloto antes de candidata. No desplegar runtime mientras las entregas sigan sin aceptación.
 

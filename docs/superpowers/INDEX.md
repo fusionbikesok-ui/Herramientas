@@ -17,7 +17,7 @@ producción, no contra lo que decían los propios documentos.
 
 | Plan | Estado verificado al 2026-09-13 |
 |---|---|
-| `2026-09-13-plataforma-auditable-catalogo-identidad-stock-pedidos.md` | **Borrador para revisión; no autoriza implementación.** Propone reemplazar UM1 por un núcleo PostgreSQL único para catálogo, identidad, stock y pedidos, con migración vertical y DR externo. |
+| `2026-09-13-plataforma-auditable-catalogo-identidad-stock-pedidos.md` | **Arquitectura y orden de ejecución vigentes del maestro desde 2026-09-13 (PM-159).** Integrado: §9 del plan y §19.0 del maestro. Verticales P0–P6 en `deliveries/PLAT-*`, todas planificadas. Gate 0 no se cumple hoy (disco 91%). Cada ejecución sigue requiriendo autorización explícita. |
 | `2026-09-09-gestion-pedidos-utilizable.md` | **GP11 y GP12 entregados.** La pantalla es real, el cron importa cada 10 min (2.120 pedidos), el gate de preview ya no existe. **Faltan GP13 (editar datos), GP14 (editar productos) y GP15 (cuotas y reintegros).** |
 | `2026-09-10-preparacion-rediseno.md` | **Navegación de 4 pestañas y pantalla del pedido hechas.** Faltan: marcado unidad por unidad en "Productos a buscar", cola por reloj de corte, cierre automático de preparaciones despachadas. |
 | `2026-09-10-devolucion-preparaciones-canceladas.md` | **Implementado y desplegado.** Bloqueado por un dato: faltan cargar los estantes reales (hay 1). |
@@ -26,8 +26,8 @@ producción, no contra lo que decían los propios documentos.
 | `2026-09-12-vigia-formato-publicaciones-design.md` (specs/) | **Diseño aprobado el 2026-09-12, sin implementar.** Detecta cuándo una publicación cambia de formato o de producto de catálogo, la pausa y avisa. |
 | `2026-09-11-correccion-de-conteos-design.md` (specs/) | **Diseño aprobado el 2026-09-11, sin implementar.** Corregir un conteo ya confirmado crea una sesión de corrección propia; la original nunca se reescribe. |
 | `2026-09-10-ubicaciones-y-ronda.md` | **Ronda sugerida, foto de ubicación, autorización y auditoría de diferencias desplegadas.** Falta el mapeo real: 0 productos mapeados. |
-| `2026-09-04-identidad-productos.md` | **UM1.1 y UM1.2 en producción, modo `enforced`.** Quedan 3 casos urgentes y 1 operación bloqueada. UM1.3 apenas empezado, UM1.4 sin uso. |
-| `2026-09-05-arquitectura-um1.md` | Diseño ya implementado. Explica el porqué, no el avance. |
+| `2026-09-04-identidad-productos.md` | **Sustituido como guía futura el 2026-09-13 por el programa de plataforma (PM-159); queda como evidencia.** Legado vigente hasta el corte P2: modo `enforced`, 5 casos abiertos asignados a Jose. |
+| `2026-09-05-arquitectura-um1.md` | **Histórico desde 2026-09-13.** Explica el porqué del legado UM1, no instrucción vigente. |
 | `2026-09-08-historial-despachos-relacional.md` | **Modelo sustituido, decisiones vigentes.** Sus seis tablas `*_despacho` nunca se crearon; se construyó `gestion_*`. Su parte física sigue sin puerta: `despacho_lotes` en 0. |
 | `2026-09-01-apertura-ola-mini-ola.md` | **Construido y desconectado.** El router `jornada` no está montado y la pantalla retiró el flujo. Hay que decidir si vuelve o se archiva. |
 
