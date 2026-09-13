@@ -114,7 +114,7 @@ Cada paso termina en algo verificable y con tests. El orden importa: primero lo 
   | Canal / tópico | Barrido | Cursor | Borrados / bajas | Limitaciones conocidas |
   |---|---|---|---|---|
   | ML `orders` / `orders_v2` | `/orders/search` por `order.date_last_updated` | última fecha vista − solape de 10 min | `status=cancelled` en la misma búsqueda | paginado máx. por consulta; ventana acotada por día |
-  | ML envíos | derivado de cada orden (`/shipments/{id}`) | el de órdenes | cancelación del envío en el estado | sin búsqueda propia |
+  | ML envíos | **barrido periódico de todos los envíos abiertos o recientes ya conocidos** (de órdenes importadas: no entregados/cancelados, más los cerrados en los últimos 30 días) con `/shipments/{id}` | **cursor propio por envío basado en `shipment.last_updated`**: sólo se reproyecta si cambió | cancelación y devolución como estado | sin búsqueda ni historial enumerable de cambios: se acepta por **convergencia** (ver abajo), no por paridad de eventos |
   | ML `questions` | `/questions/search` del vendedor por fecha | última pregunta vista | preguntas eliminadas por ML no vuelven: se registran como no encontradas | igual criterio que el cron actual cada 20 min |
   | ML `messages` | **por pack** (PM-157): `/messages/unread?role=seller&tag=post_sale` + `/messages/packs/{pack}/sellers/{seller}` para los packs de órdenes del período, siempre con `mark_as_read=false` | último pack/fecha visto | no aplica | el id del aviso no es resoluble como vendedor |
   | ML `claims` / `post_purchase` | `/post-purchase/v1/claims/search` por última actualización | última fecha vista | cierre como estado | ventana de búsqueda acotada |
@@ -122,24 +122,32 @@ Cada paso termina en algo verificable y con tests. El orden importa: primero lo 
   | Woo pedidos | `/orders?modified_after=` | último `date_modified_gmt` − solape | `status=trash`/`cancelled` en la consulta | un borrado definitivo no aparece: se detecta por diferencia de IDs semanal |
   | Woo productos | `/products?modified_after=` (y variaciones) | último `date_modified_gmt` − solape | **`product.deleted` no aparece en modificados**: diferencia del conjunto completo de IDs contra el catálogo del núcleo en cada vuelta completa | vuelta completa diaria |
 
-  "0 faltantes" se demuestra **por tópico**: para cada fila, lo que el barrido encontró en su ventana
-  contra lo que hay en el inbox; los tópicos con limitación declarada informan su cobertura en vez de
-  prometer cero.
+  **Dos criterios de aceptación distintos, según lo que la API permite:**
+  - **Paridad de eventos ("0 faltantes")** sólo en tópicos cuya API permite **enumerar** los eventos o
+    recursos de una ventana (órdenes, preguntas, reclamos, publicaciones, pedidos y productos Woo): lo
+    que el barrido enumeró contra lo que hay en el inbox, por tópico.
+  - **Convergencia del estado remoto** en tópicos **sin historial consultable** (envíos; y cualquier
+    otro que se descubra así): no se intenta reconstruir todas las señales intermedias. Se acepta si,
+    para cada recurso conocido, el estado proyectado en el núcleo coincide con el estado remoto actual
+    dentro de un plazo. Se informa **cobertura** (recursos conocidos barridos / recursos abiertos o
+    recientes conocidos) y **convergencia** (recursos cuyo estado coincide / recursos barridos, y
+    tiempo hasta coincidir).
 - Deduplicación por (cuenta, tópico, recurso, versión remota): una señal repetida o fuera de orden no
   duplica mensajes.
-- **Reporte diario firmado, fuera de la UI:** por tópico, señales del legado, señales del núcleo,
-  faltantes reparados por barrido, duplicados descartados, latencia y copias descartadas por falla de la
-  base nueva. Se firma con la clave de auditoría, se guarda en B2 (Object Lock) y llega por email a
+- **Reporte diario firmado, fuera de la UI:** por tópico enumerable, paridad (señales del legado, señales del núcleo,
+  faltantes reparados por barrido, duplicados descartados); para envíos, cobertura y convergencia; más
+  latencia y copias descartadas por falla de la base nueva. Se firma con la clave de auditoría, se guarda en B2 (Object Lock) y llega por email a
   José con el resumen y el hash para verificarlo.
 - **Aceptación medible:**
   - **Presupuesto de latencia del handler del legado:** reproducir en QA ≥ 500 webhooks reales (tomados
     del registro, anonimizados) a ritmo de producción durante 30 minutos, tres corridas: copia apagada,
     copia encendida, y copia encendida con PostgreSQL detenido. Diferencia de p95 ≤ 25 ms y de p99
     ≤ 100 ms contra la corrida con la copia apagada; 0 cambios en códigos de respuesta y 0 errores nuevos.
-  - Con PostgreSQL detenido, los barridos reparan en el inbox el 100 % de lo recibido durante la caída
-    en los tópicos sin limitación declarada.
-  - 7 días de sombra con 0 faltantes sin explicar por tópico, reportes firmados verificados por hash y
-    revisados por José.
+  - Con PostgreSQL detenido, los barridos reparan en el inbox el 100 % de lo enumerable recibido durante
+    la caída; en envíos, al terminar el siguiente barrido la convergencia vuelve al 100 %.
+  - 7 días de sombra: 0 faltantes sin explicar en los tópicos enumerables; en envíos, cobertura 100 % de
+    los abiertos o recientes conocidos y convergencia 100 % dentro de un barrido (los desvíos se listan
+    uno por uno); reportes firmados verificados por hash y revisados por José.
 
 ## Riesgos y cómo se contienen
 
