@@ -28,11 +28,11 @@
       "data": "Sin tablas de aplicación. El catálogo de backups y WAL lo gestiona pgBackRest (`pgbackrest info --output=json`); cada simulacro de restauración deja un registro JSON firmado (target, inicio, fin, RPO, RTO, consultas centinela) fuera del cluster restaurado.",
       "interfaces": "Healthcheck interno de PostgreSQL en 127.0.0.1, `pgbackrest check` e `info`, métricas de archive lag y tamaño del spool para el vigía; ninguna API de negocio.",
       "migration": "No aplica a datos de negocio. Restaurar en QA, en un contenedor PostgreSQL aparte limitado a 512 MB, desde el repositorio hasta un instante elegido y medir RPO/RTO.",
-      "risks": "`archive_command` (pgbackrest archive-push asíncrono) devuelve 0 sólo después de escribir el WAL en el spool local con fsync; nunca se borra WAL no archivado. Spool acotado a 5 GB con alerta al 70 % de disco. El repositorio local no protege la pérdida total del VPS: eso lo cubre el nivel 2.",
+      "risks": "`archive_command` (pgbackrest archive-push asíncrono) devuelve 0 sólo después de escribir el WAL en el spool local con fsync; nunca se borra WAL no archivado. Spool acotado a 5 GB con alerta al 70 % de disco. El repositorio local no protege la pérdida total del VPS: eso lo cubre el nivel 2. El contenedor corre con init como PID 1: sin él, la muerte del push asíncrono reinicia postgres (medido 2026-09-13).",
       "tests": "pg_isready; pgbackrest check; backup completo + verify; caída del proceso de push con WAL conservado en spool; restauración PITR a un instante con RPO/RTO medidos; hash de la copia externa cuando exista la máquina del nivel 2.",
       "rollout": "Nivel 1: desplegar sin conexiones de aplicación, observar 24 h de WAL, restaurar en QA y aceptar con vigías verdes. Nivel 2: instalar la tarea de pull en la máquina elegida y restaurar una vez desde esa copia.",
       "acceptance": "Nivel 1: RPO ≤ 5 min y RTO ≤ 1 h medidos, backup y restore repetibles. Nivel 2: copia externa al día y restaurable con el RPO declarado según la disponibilidad de la máquina. Ninguna degradación del servicio legacy.",
-      "next": "Implementar el nivel 1 en QA (compose PostgreSQL + pgBackRest y `npm run test:e0`) mientras José confirma la máquina del nivel 2: sistema operativo, espacio libre y disponibilidad 24/7."
+      "next": "Nivel 1 ensayado en QA el 2026-09-13 con `npm run test:e0` (7/7 escenarios, RTO 5 s, RPO estimado ≤ 61 s, registro sha256 e43f7869e9b9…5792). Falta: firma criptográfica del registro, despliegue del nivel 1 con 24 h de WAL observadas y alertas en Better Stack, y que José confirme la máquina del nivel 2 (sistema operativo, espacio libre y disponibilidad 24/7)."
     },
     {
       "id": "E1",

@@ -28,7 +28,7 @@
 - PostgreSQL es destino canónico; cambios de negocio son transaccionales, auditados y atribuibles.
 - Ningún efecto remoto se considera exitoso hasta releer y verificar el recurso; respuesta incierta bloquea repetición ciega.
 - Un solo escritor remoto por vertical; idempotencia, versión esperada, leases y DLQ son obligatorios.
-- `archive_command` (pgbackrest archive-push asíncrono) devuelve 0 sólo después de escribir el WAL en el spool local con fsync; nunca se borra WAL no archivado. Spool acotado a 5 GB con alerta al 70 % de disco. El repositorio local no protege la pérdida total del VPS: eso lo cubre el nivel 2.
+- `archive_command` (pgbackrest archive-push asíncrono) devuelve 0 sólo después de escribir el WAL en el spool local con fsync; nunca se borra WAL no archivado. Spool acotado a 5 GB con alerta al 70 % de disco. El repositorio local no protege la pérdida total del VPS: eso lo cubre el nivel 2. El contenedor corre con init como PID 1: sin él, la muerte del push asíncrono reinicia postgres (medido 2026-09-13).
 
 ## Diseño, datos e interfaces
 
@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Implementar el nivel 1 en QA (compose PostgreSQL + pgBackRest y `npm run test:e0`) mientras José confirma la máquina del nivel 2: sistema operativo, espacio libre y disponibilidad 24/7.
+- **Próxima acción exacta:** Nivel 1 ensayado en QA el 2026-09-13 con `npm run test:e0` (7/7 escenarios, RTO 5 s, RPO estimado ≤ 61 s, registro sha256 e43f7869e9b9…5792). Falta: firma criptográfica del registro, despliegue del nivel 1 con 24 h de WAL observadas y alertas en Better Stack, y que José confirme la máquina del nivel 2 (sistema operativo, espacio libre y disponibilidad 24/7).
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
@@ -87,7 +87,7 @@ flowchart LR
 
 | Componente | Estado | Ruta | Responsabilidad |
 |---|---|---|---|
-| postgres18 | future | deploy/postgres/compose.yml | cluster vacío en 127.0.0.1, digest fijado, 768 MB, volumen propio |
+| postgres18 | future | deploy/postgres/compose.yml | cluster vacío en 127.0.0.1, digest fijado, init como PID 1, 768 MB, volumen propio |
 | pgbackrest | future | deploy/postgres/pgbackrest.conf | archive-push asíncrono con spool, compresión zstd, cifrado aes-256-cbc, retención |
 | repo_local | future | /var/lib/pgbackrest (volumen) | repositorio nivel 1 en el VPS |
 | restore_drill | future | scripts/postgres/restore-drill.sh | restaura en QA a un instante y firma el registro RPO/RTO |
@@ -189,6 +189,7 @@ Esta entrega no expone API de negocio.
 ## Fallos, recuperación y SOP
 
 - archive_command nunca devuelve 0 antes del fsync en spool
+- contenedor PostgreSQL con init como PID 1 (compose init: true): sin init, pgBackRest asíncrono queda huérfano de postgres y su muerte (OOM, kill) provoca recuperación de arranque con corte de todas las conexiones (medido 2026-09-13)
 - spool al 70 % del límite o disco al 70 % alerta y detiene ampliación
 - WAL faltante invalida el backup dependiente
 - verify verde no reemplaza una restauración real

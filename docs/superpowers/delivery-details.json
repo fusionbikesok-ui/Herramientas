@@ -13,7 +13,7 @@
           "id": "postgres18",
           "status": "future",
           "path": "deploy/postgres/compose.yml",
-          "purpose": "cluster vacío en 127.0.0.1, digest fijado, 768 MB, volumen propio"
+          "purpose": "cluster vacío en 127.0.0.1, digest fijado, init como PID 1, 768 MB, volumen propio"
         },
         {
           "id": "pgbackrest",
@@ -181,6 +181,7 @@
       ],
       "failure_modes": [
         "archive_command nunca devuelve 0 antes del fsync en spool",
+        "contenedor PostgreSQL con init como PID 1 (compose init: true): sin init, pgBackRest asíncrono queda huérfano de postgres y su muerte (OOM, kill) provoca recuperación de arranque con corte de todas las conexiones (medido 2026-09-13)",
         "spool al 70 % del límite o disco al 70 % alerta y detiene ampliación",
         "WAL faltante invalida el backup dependiente",
         "verify verde no reemplaza una restauración real",

@@ -1,0 +1,66 @@
+# E0 nivel 1 — PostgreSQL 18 + pgBackRest. Lo levanta scripts/postgres/test-e0.sh con un proyecto y
+# un directorio temporales; nunca comparte volúmenes con producción ni con fusion-qa.
+# Variables: E0_DIR (volúmenes y secretos del ensayo), E0_PORT (puerto local), E0_PROJECT.
+name: ${E0_PROJECT:-fusion-pg-e0}
+
+x-pg: &pg
+  build: { context: ., dockerfile: Dockerfile }
+  image: fusion-pg-e0:local
+  # init obligatorio (tini como PID 1): pgBackRest asíncrono se desprende y, sin init, queda huérfano
+  # colgado de postgres (PID 1). Si ese proceso muere (OOM, kill), postgres lo trata como caída de un
+  # proceso propio, corta todas las conexiones y hace recuperación de arranque. Medido 2026-09-13.
+  init: true
+  security_opt: ["no-new-privileges:true"]
+  restart: "no"
+  cpu_shares: 256
+  environment: &pgenv
+    PGDATA: /var/lib/postgresql/data/pgdata
+    POSTGRES_PASSWORD_FILE: /run/e0/postgres-pass
+    PGBACKREST_REPO1_CIPHER_PASS: ${E0_CIPHER_PASS:?falta E0_CIPHER_PASS}
+
+services:
+  pg:
+    <<: *pg
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=pgbackrest --stanza=fusion archive-push %p
+      - -c
+      - archive_timeout=60
+      - -c
+      - max_wal_size=512MB
+      - -c
+      - shared_buffers=192MB
+      - -c
+      - listen_addresses=*
+    volumes:
+      - "${E0_DIR}/pgdata:/var/lib/postgresql/data"
+      - "${E0_DIR}/repo:/var/lib/pgbackrest"
+      - "${E0_DIR}/spool:/var/spool/pgbackrest"
+      - "${E0_DIR}/secrets:/run/e0:ro"
+    ports:
+      - "127.0.0.1:${E0_PORT:-55432}:5432"
+    mem_limit: 768m
+    cpus: 0.75
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  # Restauración PITR: otro contenedor, otro PGDATA vacío, mismo repositorio en sólo lectura.
+  restore:
+    <<: *pg
+    profiles: ["restore"]
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - "${E0_DIR}/restore-data:/var/lib/postgresql/data"
+      - "${E0_DIR}/repo:/var/lib/pgbackrest:ro"
+      - "${E0_DIR}/restore-spool:/var/spool/pgbackrest"
+      - "${E0_DIR}/secrets:/run/e0:ro"
+    mem_limit: 512m
+    cpus: 0.5

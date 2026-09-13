@@ -145,7 +145,9 @@ const invalidFixtures = [
   ['transición sin prueba', !deliveryDetails.deliveries.E0.tests.includes('__fixture_test__')],
   ['servicio sin estado', !serviceStates.has('__fixture_state__')],
   ['decisión abierta', ['fixture'].length > 0],
-  ['estado sin test:eN', !JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts['test:e0']]
+  // Prueba la regla con datos sintéticos: un package.json sin el script debe rechazarse. No mira el
+  // package.json real, que legítimamente tiene test:e0 desde que existe el ensayo de E0.
+  ['estado sin test:eN', !({ scripts: {} }).scripts['test:e0']]
 ];
 for (const [name, rejected] of invalidFixtures) if (!rejected) errors.push(`autoprueba del validador no rechazó: ${name}`);
 

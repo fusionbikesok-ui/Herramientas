@@ -70,6 +70,18 @@
   La cuenta `auditor` **no es admin** (`is_admin=0`, sólo lectura en algunas herramientas; medido
   2026-09-13 en producción y en QA): para probar rutas de escritura en QA usar un usuario admin con
   la clave de QA.
+- **E0 nivel 1 ensayado en QA (2026-09-13, sin desplegar en producción):** `deploy/postgres/`
+  (PostgreSQL 18.6 por digest `sha256:1c59e2c3…e1af` + pgBackRest 2.59.1 del repo PGDG de la
+  imagen, `pgbackrest.conf` con archive-push asíncrono, spool 5 GiB, zstd, aes-256-cbc,
+  retención 2 completos) y `npm run test:e0` (`scripts/postgres/test-e0.sh`, proyecto y
+  directorio temporales, se borra solo; `E0_KEEP=1` conserva). Resultado limpio: 7/7 escenarios,
+  demora de archivado 1 s, segmento cerrado durante la caída del push archivado en 57 s sin perder
+  WAL, restauración PITR exacta (1.500/1.500 filas, 0 posteriores) con RTO 5 s, RPO estimado ≤ 61 s,
+  legacy intacto; registro sha256 `e43f7869e9b9…5792`. Firma criptográfica del registro pendiente.
+- **Lección:** el contenedor de PostgreSQL necesita **init como PID 1** (`init: true`). Sin init,
+  el push asíncrono de pgBackRest queda huérfano de postgres y su muerte (kill/OOM) provoca
+  recuperación de arranque con corte de todas las conexiones (medido). Además `failed_count` de
+  `pg_stat_archiver` es acumulado e incluye intentos previos a `stanza-create`: medir por ventana.
 
 ## Restricciones
 
