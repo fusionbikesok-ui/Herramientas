@@ -52,6 +52,16 @@
 - `/healthz` es público (sin sesión) y sirve para monitoreo externo: `SELECT 1` en cada
   llamada e `integrity_check` cacheado 5 min (sin caché bloqueaba el event loop ~0,5 s por
   llamada; commit `0df724d`).
+- Producción corre con **Node 24.21.0** (NodeSource `node_24.x`) desde 2026-09-13; pm2 levanta
+  `start.sh` con intérprete bash y la lista está guardada en `/root/.pm2/dump.pm2`.
+  Vuelta atrás: `/opt/fusionbikes/rollback-node20/` (paquete .deb de Node 20 + tarball de
+  `node_modules` compilado para Node 20).
+- **Lección del cambio de Node (caída de 13 min, 15:16–15:29 UTC):** `apt-get install nodejs`
+  reinicia el daemon de pm2 (`pm2-root.service` corre `pm2 kill` / `resurrect`) **antes** de
+  recompilar los módulos nativos; la app murió por `NODE_MODULE_VERSION` de `better-sqlite3` y
+  pm2 la dejó fuera de la lista. En un próximo cambio de versión: `pm2 stop herramientas`,
+  instalar, `npm rebuild better-sqlite3 sharp`, `pm2 start` + `pm2 save`, y verificar
+  `/healthz` en el momento.
 
 ## Restricciones
 

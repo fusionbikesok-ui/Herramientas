@@ -9,6 +9,12 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 - Responsable operativo y técnico: por definir
 - Base, rama y worktree: por definir
 - Feature flags y alcance del piloto: por definir
+- Decisiones QA (usuario, 2026-09-13): mismo VPS con stack y base propios (plan §2.2/§8);
+  **bajo demanda** (se levanta para probar y se apaga); acceso **solo local en el VPS**
+  (`127.0.0.1`, lo levanta y opera el asistente; Cloudflare no se puede modificar por ahora); MercadoLibre y WooCommerce **simulados** (sin credenciales reales en QA);
+  anonimización obligatoria de **clientes** (nombre, email, teléfono, dirección, DNI) y
+  **usuarios internos** (claves reales eliminadas, cuentas de prueba). Fotos de preparación y
+  precios/costos no se anonimizan en esta etapa.
 
 ## Evidencia técnica
 
