@@ -114,6 +114,28 @@ Ajustes respecto del diseño, decididos al implementar:
 - `qa.sh down`: baja el stack y **borra el snapshot**.
 - `qa.sh status`. Apagado automático tras 8 h encendido (cron del sistema).
 
+### Pasos 3–5 implementados (2026-09-13)
+
+`deploy/qa/Dockerfile` (Node 24 por digest), `deploy/qa/docker-compose.yml`, `scripts/qa/qa.sh`.
+- Escrituras de la app medidas: `uploads/` (vía `utils/storage.js`, relativo al código) y la
+  carpeta de `DB_PATH` (base + `sessions.sqlite`). Documentos de recepción van a Drive. Todo lo
+  demás corre `read_only`, sin capacidades, usuario `node` (uid 1000).
+- Apagado a las 8 h con `timeout 8h` en ambos procesos (sin cron del sistema).
+- `qa.sh up` siembra un token ML falso (`ml_oauth_token` queda vacío en el snapshot) para que los
+  flujos de ML lleguen al simulador.
+- `qa.sh down` **no** hace `docker builder prune`: la caché de build es compartida con otros
+  proyectos del VPS.
+
+Resultado de la primera corrida real:
+| Criterio | Resultado |
+|---|---|
+| 1. up < 5 min, sólo local | 107 s; `127.0.0.1:3101`; IP pública sin conexión |
+| 2. Verificación anonimización | 1.043 valores reales verificados |
+| 3. Sin credenciales reales | 8 variables revisadas contra `.env`; login con clave de producción → 401, con clave QA → 200 |
+| 4. Crons sin tocar canales reales | con crons activos: 500+ llamadas Woo al simulador en 107 s, 0 conexiones salientes a internet; TLS verificado sin desactivar validación |
+| 5. Producción no afectada | `/healthz` prod 1 ms con QA encendido; QA 70/768 MB, simulador 109/384 MB |
+| 6. down deja el disco limpio | sin contenedores, imagen, red ni archivos en `/opt/fusionbikes/qa` |
+
 ## Criterios de aceptación
 
 1. `qa.sh up` levanta QA en < 5 min, `http://127.0.0.1:3101/healthz` responde y el puerto no es

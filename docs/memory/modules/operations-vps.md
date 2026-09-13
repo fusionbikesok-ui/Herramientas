@@ -62,6 +62,11 @@
   pm2 la dejó fuera de la lista. En un próximo cambio de versión: `pm2 stop herramientas`,
   instalar, `npm rebuild better-sqlite3 sharp`, `pm2 start` + `pm2 save`, y verificar
   `/healthz` en el momento.
+- **QA bajo demanda** (plan `2026-09-13-qa-bajo-demanda.md`): `scripts/qa/qa.sh up [rama] | down |
+  status`. Sólo `127.0.0.1:3101` (túnel SSH para mirar), snapshot anonimizado de la base,
+  MercadoLibre/Woo simulados (`scripts/qa/simulador-canales.mjs`, control en `/__qa/llamadas` y
+  `/__qa/fallas`), usuarios con la clave de `/root/.config/fusion-qa/clave`, apagado solo a las
+  8 h. Lo levanta el asistente cuando una prueba lo necesita; `down` al terminar.
 
 ## Restricciones
 
