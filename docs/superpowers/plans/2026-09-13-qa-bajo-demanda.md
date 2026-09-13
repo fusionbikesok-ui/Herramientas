@@ -1,6 +1,6 @@
 # Plan: entorno de pruebas (QA) bajo demanda
 
-**Fecha:** 2026-09-13 · **Estado:** aprobado por el usuario 2026-09-13 (acceso solo local) · **Entrega:** P0 Gate 0 (ficha
+**Fecha:** 2026-09-13 · **Estado:** implementado y aceptado 2026-09-13 (aprobado por el usuario; acceso solo local) · **Entrega:** P0 Gate 0 (ficha
 `deliveries/PLAT-0-gate0.md`) · **Marco:** plan de plataforma §2.2 y §8.
 
 ## Decisiones fijadas
@@ -135,7 +135,7 @@ Resultado de la primera corrida real:
 | 4. Crons sin tocar canales reales | con crons activos: 500+ llamadas Woo al simulador en 107 s, 0 conexiones salientes a internet; TLS verificado sin desactivar validación |
 | 5. Producción no afectada | `/healthz` prod 1 ms con QA encendido; QA 70/768 MB, simulador 109/384 MB |
 | 6. down deja el disco limpio | sin contenedores, imagen, red ni archivos en `/opt/fusionbikes/qa` |
-| Flujos de canal (2ª corrida, token ML falso) | Woo: `/api/woo/test` → 200, 2.062 productos del simulador. ML: `mlClient` dentro del contenedor → búsqueda 200 (3.964) y multiget 200, ambas registradas en el simulador. up en 89 s |
+| Flujos de canal (2ª corrida, token ML falso) | Woo: `/api/woo/test` → 200, 2.062 productos del simulador. ML: `mlClient` dentro del contenedor → búsqueda 200 (3.964) y multiget 200, ambas registradas en el simulador. `POST /api/matcher/refrescar-ml` (scope atención, usuario admin) → listo en 13 s: 102 items, 43 variaciones, 0 errores, 6 multiget al simulador. up en 89 s |
 
 ## Criterios de aceptación
 

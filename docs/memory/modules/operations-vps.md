@@ -67,6 +67,9 @@
   MercadoLibre/Woo simulados (`scripts/qa/simulador-canales.mjs`, control en `/__qa/llamadas` y
   `/__qa/fallas`), usuarios con la clave de `/root/.config/fusion-qa/clave`, apagado solo a las
   8 h. Lo levanta el asistente cuando una prueba lo necesita; `down` al terminar.
+  La cuenta `auditor` **no es admin** (`is_admin=0`, sólo lectura en algunas herramientas; medido
+  2026-09-13 en producción y en QA): para probar rutas de escritura en QA usar un usuario admin con
+  la clave de QA.
 
 ## Restricciones
 
