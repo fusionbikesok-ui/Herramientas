@@ -40,6 +40,18 @@ const TEST_DB = './test/tmp-syncflow.sqlite';
 let currentTestId = 'setup';
 const TEST_DB_PATHS = new Set();
 beforeEach((ctx) => { currentTestId = ctx.task.id; });
+// Cada test abre su base con nombre propio (`tmp-syncflow.sqlite.<pid>.<hash>.sqlite`), pero los
+// afterEach de cada describe borran TEST_DB, el nombre base, que nunca se crea. Así quedaban
+// todas: el 2026-09-12 había 2.676 archivos y 3,5 GB en test/. Este afterEach de nivel archivo
+// corre después de los de cada describe —que ya cerraron la base— y borra lo que se abrió.
+afterEach(() => {
+  for (const ruta of TEST_DB_PATHS) {
+    for (const sufijo of ['', '-wal', '-shm', '-journal']) {
+      try { fs.rmSync(ruta + sufijo, { force: true }); } catch { /* ya no está */ }
+    }
+  }
+  TEST_DB_PATHS.clear();
+});
 function openTestDb() {
   const hash = createHash('sha256').update(currentTestId).digest('hex').slice(0, 16);
   const ruta = `${TEST_DB}.${process.pid}.${hash}.sqlite`;
