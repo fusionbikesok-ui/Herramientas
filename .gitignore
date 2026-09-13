@@ -19,3 +19,7 @@ uploads/
 /*.png
 /*.log
 .codex/
+
+# Volcados de memoria de procesos caídos: contienen variables de entorno con credenciales.
+/core
+core.*
