@@ -59,8 +59,16 @@ Ajustes respecto del diseño, decididos al implementar:
   atributos de publicaciones ML.
 - Sesiones: `data/sessions.sqlite` es otro archivo y nunca se copia. `direccion` en `sync_log`,
   `identidad_casos` y `cobertura_sesion` es sentido de sincronización, no dato personal.
+- **Conversaciones con compradores** (`ml_mensajes.texto`, `ml_preguntas.texto`,
+  `ml_reclamos.titulo`/`detalle`) se reemplazan completas: una corrida real encontró el nombre
+  completo de un cliente en un mensaje de posventa. Un barrido con la muestra completa sobre el
+  resto del texto libre conservado (notificaciones, motivos, mensajes técnicos, historial de
+  integración) no encontró datos personales.
+- La muestra excluye valores que figuran en nombres de producto, títulos de publicación, ciudad,
+  provincia o localidad: son texto que no identifica personas y producían fallos al azar.
 - Corrida real contra producción: 80 s, 121 MB, 1.021 valores de muestra verificados, 18.269
-  clientes anonimizados, tokens y emails internos eliminados, `quick_check` ok.
+  clientes anonimizados, tokens y emails internos eliminados, `quick_check` ok. Tras los ajustes,
+  5 corridas seguidas OK (1.025–1.046 valores verificados cada una).
 - Clave común de QA generada en `/root/.config/fusion-qa/clave` (600).
 
 ### 2. Simuladores de canales (`scripts/qa/simulador-canales.mjs`)

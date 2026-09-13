@@ -115,7 +115,27 @@ export function tomarMuestra(db, limite = 150) {
     ...valores(db, `SELECT json_extract(datos_ml_json,'$.buyer.nickname') v FROM gestion_pedidos WHERE datos_ml_json IS NOT NULL ${lim}`, 8),
     ...valores(db, `SELECT email v FROM users WHERE email LIKE '%@%'`, 7),
   ];
-  return [...new Set(muestra)];
+  // Un valor que figura en nombres de producto, títulos de publicación o en una localidad es texto
+  // que no identifica a una persona (medido 2026-09-13: un "comprador" de pedidos internos coincide
+  // con 668 títulos ML, y un valor de la muestra coincidió con `gestion_pedido_entregas.ciudad`,
+  // que se conserva a propósito). Sin este filtro la verificación falla al azar según la muestra.
+  const noPersonales = textosNoPersonales(db);
+  return [...new Set(muestra)].filter(v => {
+    const m = v.toLowerCase();
+    return !noPersonales.some(t => t.includes(m));
+  });
+}
+
+function textosNoPersonales(db) {
+  const fuentes = [
+    'SELECT nombre v FROM catalogo_cache', 'SELECT titulo v FROM ml_publicaciones_cache',
+    'SELECT nombre_canonico v FROM productos_fusion',
+    'SELECT DISTINCT ciudad v FROM gestion_pedido_entregas', 'SELECT DISTINCT provincia v FROM gestion_pedido_entregas',
+    'SELECT DISTINCT localidad v FROM preparaciones',
+  ];
+  const textos = new Set();
+  for (const sql of fuentes) for (const v of valores(db, sql, 1)) textos.add(v.toLowerCase());
+  return [...textos];
 }
 
 // Un valor sólo numérico (teléfono, DNI) cuenta únicamente como número completo: medido en
@@ -184,6 +204,15 @@ export function anonimizarBase(db, { claveQa }) {
       customer_note = CASE WHEN customer_note IS NULL OR customer_note = '' THEN customer_note ELSE '${ANON}' END`);
     actualizarSi(db, 'gestion_pedidos', `UPDATE gestion_pedidos SET notas = CASE WHEN notas IS NULL OR notas = '' THEN notas ELSE '${ANON}' END`);
     actualizarSi(db, 'pedidos', `UPDATE pedidos SET notas = CASE WHEN notas IS NULL OR notas = '' THEN notas ELSE '${ANON}' END`);
+
+    // Conversaciones con compradores: texto libre que puede traer nombre, teléfono o dirección que
+    // no figuran en ninguna tabla estructurada (medido 2026-09-13: un nombre completo de cliente en
+    // ml_mensajes.texto). Se reemplazan completas, no por coincidencia con la muestra.
+    const CONVERSACIONES = [['ml_mensajes', 'texto'], ['ml_preguntas', 'texto'], ['ml_reclamos', 'titulo'], ['ml_reclamos', 'detalle']];
+    for (const [t, c] of CONVERSACIONES) {
+      if (!tablaExiste(db, t) || !columnas(db, t).includes(c)) continue;
+      db.prepare(`UPDATE "${t}" SET "${c}" = '${ANON}' WHERE "${c}" IS NOT NULL AND "${c}" <> ''`).run();
+    }
 
     for (const id of COLUMNAS_JSON) {
       const [t, c] = id.split('.');

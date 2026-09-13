@@ -78,6 +78,27 @@ describe('scripts/qa/snapshot-anonimizado', () => {
     } finally { db.close(); }
   });
 
+  it('reemplaza completo el texto de mensajes, preguntas y reclamos de compradores', () => {
+    const db = openDb(ORIGEN);
+    try {
+      // Algunas de estas tablas las crea su router y no openDb: se aseguran con las columnas reales.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ml_mensajes (id TEXT PRIMARY KEY, pack_id TEXT, order_id TEXT, texto TEXT, de_quien TEXT, fecha_creacion TEXT, respondido_en TEXT, actualizado_en TEXT);
+        CREATE TABLE IF NOT EXISTS ml_preguntas (id TEXT PRIMARY KEY, item_id TEXT, texto TEXT, estado TEXT, fecha_creacion TEXT, respondida_en TEXT, actualizado_en TEXT);
+        CREATE TABLE IF NOT EXISTS ml_reclamos (id TEXT PRIMARY KEY, recurso TEXT, estado TEXT, titulo TEXT, detalle TEXT, fecha_creacion TEXT, cerrado_en TEXT, actualizado_en TEXT);
+      `);
+      db.prepare(`INSERT INTO ml_mensajes (id, texto, de_quien) VALUES ('m1', 'Hola, soy Roberto Fernández, llamame al 1155667788', 'comprador')`).run();
+      db.prepare(`INSERT INTO ml_mensajes (id, texto, de_quien) VALUES ('m2', '', 'vendedor')`).run();
+      db.prepare(`INSERT INTO ml_preguntas (id, item_id, texto) VALUES ('p1', 'MLA1', '¿Envían a Av. Siempre Viva 742?')`).run();
+      db.prepare(`INSERT INTO ml_reclamos (id, titulo, detalle) VALUES ('r1', 'Producto dañado', 'Lo recibió mi esposa Ana Pérez')`).run();
+      anonimizarBase(db, { claveQa: CLAVE });
+      expect(db.prepare("SELECT texto FROM ml_mensajes WHERE id='m1'").get().texto).toBe('[anonimizado]');
+      expect(db.prepare("SELECT texto FROM ml_mensajes WHERE id='m2'").get().texto).toBe('');
+      expect(db.prepare("SELECT texto FROM ml_preguntas").get().texto).toBe('[anonimizado]');
+      expect(db.prepare('SELECT titulo, detalle FROM ml_reclamos').get()).toEqual({ titulo: '[anonimizado]', detalle: '[anonimizado]' });
+    } finally { db.close(); }
+  });
+
   it('exige una clave de QA de al menos 12 caracteres', () => {
     const db = openDb(ORIGEN);
     try { expect(() => anonimizarBase(db, { claveQa: 'corta' })).toThrow(/clave/i); } finally { db.close(); }
@@ -94,6 +115,21 @@ describe('scripts/qa/snapshot-anonimizado', () => {
       db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, origen, nota, estado, creado_en) VALUES ('X', 1, 'manual', ?, 'pendiente', ?)`)
         .run(`reclamo de ${EMAIL}`, new Date().toISOString());
       expect(buscarDatosReales(db, muestra)).toMatchObject({ tabla: 'etiquetas_cola', columna: 'nota', valor: EMAIL });
+    } finally { db.close(); }
+  });
+
+  it('la muestra excluye texto comercial (nombre de la tienda en títulos) pero conserva nombres de personas', () => {
+    const db = openDb(ORIGEN);
+    try {
+      const ahora = new Date().toISOString();
+      db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, actualizado_en) VALUES (1, 'Jersey Tienda Ciclista Pro talle M', 'J-1', 'simple', 0, ?)`).run(ahora);
+      // pedidos_cache la crea su router, no openDb: la muestra de nombres de clientes cubre el mismo filtro.
+      const cliente = db.prepare(`INSERT INTO gestion_pedido_clientes (nombre, creado_en, actualizado_en) VALUES (?, ?, ?)`);
+      cliente.run('Tienda Ciclista', ahora, ahora);
+      cliente.run('Roberto Fernández Real', ahora, ahora);
+      const muestra = tomarMuestra(db);
+      expect(muestra).not.toContain('Tienda Ciclista');
+      expect(muestra).toContain('Roberto Fernández Real');
     } finally { db.close(); }
   });
 
