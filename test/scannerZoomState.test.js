@@ -108,11 +108,12 @@ function installFakeBrowserGlobals({ decodeBitmapCalls, canvasRef }) {
     head: { appendChild: () => {} },
     getElementById: () => null,
   };
-  global.navigator = {
+  // stubGlobal (no asignación directa): desde Node 21 `navigator` es un getter de solo lectura.
+  vi.stubGlobal('navigator', {
     mediaDevices: {
       getUserMedia: async () => fakeStream,
     },
-  };
+  });
 
   return { fakeStream };
 }
@@ -123,7 +124,6 @@ describe('scanner.js — máquina de estados de zoom (camino ZXing, fallback iPh
   beforeEach(() => {
     savedGlobals.window = global.window;
     savedGlobals.document = global.document;
-    savedGlobals.navigator = global.navigator;
     vi.resetModules();
     vi.useFakeTimers();
   });
@@ -131,7 +131,7 @@ describe('scanner.js — máquina de estados de zoom (camino ZXing, fallback iPh
   afterEach(() => {
     global.window = savedGlobals.window;
     global.document = savedGlobals.document;
-    global.navigator = savedGlobals.navigator;
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

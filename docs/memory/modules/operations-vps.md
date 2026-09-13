@@ -37,6 +37,9 @@
 - Vigía: `lib/vigiaBackup.js`, cron de la app minuto 17 de cada hora; si `ultimo_ok` > 26 h o
   falta el estado, abre incidente crítico `backup/backup_nube/backup_vencido` (email) y lo
   resuelve solo al volver un backup completo.
+- `/healthz` es público (sin sesión) y sirve para monitoreo externo: `SELECT 1` en cada
+  llamada e `integrity_check` cacheado 5 min (sin caché bloqueaba el event loop ~0,5 s por
+  llamada; commit `0df724d`).
 
 ## Restricciones
 

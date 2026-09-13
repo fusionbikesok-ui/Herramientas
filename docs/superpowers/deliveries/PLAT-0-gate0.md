@@ -14,7 +14,7 @@ Programa: `/opt/fusionbikes/herramientas/docs/superpowers/plans/2026-09-13-plata
 
 - Commits integrados y candidatos: ninguno
 - Migraciones, compatibilidad, backup y restauración: 2026-09-13 backup cifrado a B2 (base, .env, uploads incremental) con clave sin borrado; restauración de base y .env idéntica e íntegra; uploads verificados 3.736/3.736 por hash; descarga completa limitada por el tope diario de B2 (ver operations-vps). PITR PostgreSQL: no aplica aún.
-- Tests exactos y resultado: no ejecutado
+- Tests exactos y resultado: 2026-09-13 suite completa en contenedor `node:24-bookworm-slim` (v24.21.0) sobre clon de `conteo-confiable`: 140 archivos verdes; `better-sqlite3` y `sharp` cargan. Único fallo: `agent-pipeline-policy.test.js` por falta de `git` en la imagen slim (herramienta fuera de uso). `scannerZoomState.test.js` corregido con `vi.stubGlobal` (en Node ≥21 `navigator` es de solo lectura). La migración de producción a Node 24 no se hizo: requiere decisión.
 - Revisión independiente, E2E y auditoría de despliegue: no ejecutado
 
 ## Evidencia operativa
