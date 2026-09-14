@@ -127,7 +127,10 @@ despliegue, incluso cuando no haya cambios de código. El estado transitorio va 
 - IP pública del VPS para el destino de la Mac: 179.197.74.83. El contenedor se llama `fusion-pg-pg-1`.
 - **SSH 2026-09-14:** apareció `/etc/ssh/sshd_config.d/00-00-local-password.conf` (13:57:50 UTC, con
   recarga de sshd) que antepone `PermitRootLogin yes` y `PasswordAuthentication yes` al endurecimiento.
-  Los logins con contraseña de ese día vinieron de la IP del local; queda pendiente la decisión de José.
+  Los logins con contraseña de ese día vinieron de la IP del local. Por decisión de José se borró el
+  mismo día (copia en `/root/00-00-local-password.conf.bak-20260914`); efectivo otra vez
+  `passwordauthentication no`, `permitrootlogin without-password`. Si el panel de Hostinger lo vuelve a
+  crear, revisar antes de borrarlo.
 - **Primer pull de la Mac OK (2026-09-14 20:28 UTC):** `OK: 1002 archivos verificados; foto diaria
   2026-09-14`, en ~3 s. Usuario de la Mac: `santi`; script en `~/FusionBackups/offsite-pull-mac.sh`.
   launchd `ar.com.fusionbikes.offsite-pull` instalado y cargado (corrida automática 20:29 UTC OK).
