@@ -836,6 +836,41 @@ describe('preparacion flujo', () => {
     expect(r.body.resultado).toBe('sobrante');
   });
 
+  it('escanear no_coincide dice de qué producto es el código y queda en el historial', async () => {
+    const id = await nuevaPrep();
+    db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, gtin, actualizado_en)
+      VALUES (900, 'Caramañola Podium Chill 21oz Blanco/Negro', 'FB-68995', 'simple', 3, '886798014845', datetime('now'))`).run();
+    const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '886798014845', origen: 'camara' });
+    expect(r.body.resultado).toBe('no_coincide');
+    expect(r.body.producto_codigo).toEqual({ sku: 'FB-68995', nombre: 'Caramañola Podium Chill 21oz Blanco/Negro' });
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo_no_coincide'").get(id);
+    expect(JSON.parse(ev.detalle_json)).toMatchObject({ codigo: '886798014845', producto_sku: 'FB-68995', origen: 'camara' });
+  });
+
+  it('escanear no_coincide de un código desconocido: sin producto, igual queda registrado', async () => {
+    const id = await nuevaPrep();
+    const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '7790000000001' });
+    expect(r.body.resultado).toBe('no_coincide');
+    expect(r.body.producto_codigo).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) n FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo_no_coincide'").get(id).n).toBe(1);
+  });
+
+  it('confirmar-manual tras un escaneo que no coincidió exige confirmación explícita', async () => {
+    const id = await nuevaPrep();
+    await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '7790000000001' });
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'CUB-1');
+    let r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('NO_COINCIDE_PREVIO');
+    expect(r.body.lecturas).toEqual([expect.objectContaining({ codigo: '7790000000001' })]);
+    expect(db.prepare('SELECT estado_item FROM preparacion_items WHERE id=?').get(item.id).estado_item).not.toBe('verificado');
+
+    r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta', pese_a_no_coincide: true });
+    expect(r.status).toBe(200);
+    const ev = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo' AND item_id=?").get(id, item.id);
+    expect(JSON.parse(ev.detalle_json).no_coincide_previo).toEqual([expect.objectContaining({ codigo: '7790000000001' })]);
+  });
+
   it('confirmar-manual verifica ítems sin código, con motivo válido', async () => {
     const id = await nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');

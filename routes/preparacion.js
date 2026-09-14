@@ -2598,7 +2598,22 @@ export function preparacionRouter(db, cfg) {
          AND estado_item <> 'exento'`
     ).all(prep.id, ...skusPosibles);
 
-    if (!items.length) return res.json({ ok: true, resultado: 'no_coincide', codigo });
+    const origen = ['camara', 'lector_teclado'].includes(req.body?.origen) ? req.body.origen : 'lector_teclado';
+
+    if (!items.length) {
+      // Decir de qué producto es el código es lo que delata una variante equivocada en la mano
+      // (2026-09-14: una Podium Chill confirmada "sin etiqueta" tras tres lecturas que no
+      // coincidían). La lectura queda en el historial y frena el atajo de confirmar sin código.
+      const fila = db.prepare(
+        `SELECT sku, nombre FROM catalogo_cache WHERE UPPER(TRIM(sku)) IN (${skusPosibles.map(() => '?').join(',')}) LIMIT 1`
+      ).get(...skusPosibles);
+      const productoCodigo = fila ? { sku: fila.sku, nombre: fila.nombre } : null;
+      registrarEvento(db, {
+        preparacionId: prep.id, tipo: 'escaneo_no_coincide', usuario: req.user?.username,
+        detalle: { codigo, producto_sku: productoCodigo?.sku || null, producto_nombre: productoCodigo?.nombre || null, origen },
+      });
+      return res.json({ ok: true, resultado: 'no_coincide', codigo, producto_codigo: productoCodigo });
+    }
 
     const item = items.find(i => i.cantidad_escaneada < i.cantidad_esperada);
     if (!item) return res.json({ ok: true, resultado: 'sobrante', codigo });
@@ -2608,7 +2623,6 @@ export function preparacionRouter(db, cfg) {
     db.prepare('UPDATE preparacion_items SET cantidad_escaneada=?, estado_item=? WHERE id=?')
       .run(nuevaCant, verificado ? 'verificado' : 'pendiente', item.id);
 
-    const origen = ['camara', 'lector_teclado'].includes(req.body?.origen) ? req.body.origen : 'lector_teclado';
     registrarEvento(db, {
       preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
       detalle: { sku: item.sku, nombre: item.nombre, cantidad_nueva: nuevaCant, cantidad_esperada: item.cantidad_esperada, origen },
@@ -2645,6 +2659,23 @@ export function preparacionRouter(db, cfg) {
       return res.status(400).json({ ok: false, error: 'detalle_texto requerido cuando motivo es "otro"' });
     }
 
+    // Si en este pedido se leyó un código que no pertenece, confirmar sin código podría estar
+    // tapando una unidad equivocada: se exige decirlo a propósito y queda asentado.
+    const noCoincidePrevio = db.prepare(
+      "SELECT detalle_json FROM preparacion_eventos WHERE preparacion_id=? AND tipo='escaneo_no_coincide' ORDER BY id"
+    ).all(prep.id).map((ev) => {
+      try { const d = JSON.parse(ev.detalle_json); return { codigo: d.codigo, producto_nombre: d.producto_nombre || null }; }
+      catch { return null; }
+    }).filter(Boolean);
+    if (noCoincidePrevio.length && req.body?.pese_a_no_coincide !== true && item.estado_item !== 'verificado') {
+      return res.status(409).json({
+        ok: false,
+        code: 'NO_COINCIDE_PREVIO',
+        error: 'En este pedido se leyeron códigos que no pertenecen. Revisá la unidad antes de confirmar sin código.',
+        lecturas: noCoincidePrevio,
+      });
+    }
+
     // Si ya estaba verificado antes de esta llamada, es un no-op (doble tap /
     // re-confirmación): no pasó nada nuevo que auditar, igual que "sobrante" en /escanear.
     const yaVerificado = item.estado_item === 'verificado';
@@ -2658,6 +2689,7 @@ export function preparacionRouter(db, cfg) {
           sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada,
           cantidad_esperada: item.cantidad_esperada, origen: 'manual',
           motivo, detalle_texto: detalleTexto || null,
+          ...(noCoincidePrevio.length ? { no_coincide_previo: noCoincidePrevio } : {}),
         },
       });
     }

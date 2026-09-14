@@ -3164,25 +3164,41 @@ export function syncRouter(db, cfg) {
     if (!fila) return res.status(404).json({ ok: false, error: 'Cambio no encontrado' });
     if (fila.revisado_en) return res.json({ ok: true, ya_revisado: true, reactivada: false });
 
+    // Los rechazos se responden con 409, nunca 502: Cloudflare reemplaza los 502 por su página
+    // HTML y la pantalla mostraba "Unexpected token '<'" en vez del motivo (2026-09-14).
     let reactivada = false;
+    let pendienteStock = false;
     if (req.body?.reactivar === true) {
       // Convención de este router: mlCfgOk valida el CONTENEDOR (`cfg`, con cfg.ml adentro) y
       // mlFetch recibe el cliente ya desestructurado. Ver el patrón de la línea 276.
       if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
       try {
         const r = await mlFetch(db, cfg.ml, 'put', `/items/${fila.item_id}`, { status: 'active' });
-        if (r.status < 200 || r.status >= 300) {
-          // Fail-closed: si no se pudo reactivar, NO se marca revisado — el aviso sigue vivo.
-          return res.status(502).json({ ok: false, error: `ML respondió ${r.status}` });
+        if (r.status >= 200 && r.status < 300) {
+          reactivada = true;
+        } else {
+          // ML no activa una publicación sin stock. Si ese es el motivo, el formato quedó
+          // aprobado igual: se cierra el aviso y el reactivador la activa cuando haya stock.
+          const item = await mlFetch(db, cfg.ml, 'get', `/items/${fila.item_id}?attributes=status,sub_status,available_quantity`);
+          const subStatus = Array.isArray(item?.data?.sub_status) ? item.data.sub_status : [];
+          if (item?.status === 200 && item.data?.status === 'paused' && subStatus.includes('out_of_stock')) {
+            pendienteStock = true;
+          } else {
+            // Fail-closed: si no se pudo reactivar por otro motivo, el aviso sigue vivo.
+            const detalle = r.data?.message || r.data?.error || `status ${r.status}`;
+            return res.status(409).json({ ok: false, error: `MercadoLibre no la reactivó: ${detalle}` });
+          }
         }
-        reactivada = true;
       } catch (e) {
-        return res.status(502).json({ ok: false, error: e?.message || 'No se pudo reactivar' });
+        return res.status(409).json({ ok: false, error: `No se pudo reactivar: ${e?.message || 'error de conexión con MercadoLibre'}` });
       }
     }
-    db.prepare('UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=? WHERE id=?')
-      .run(new Date().toISOString(), req.user?.username || null, fila.id);
-    res.json({ ok: true, reactivada });
+    // El vigía abre un aviso por variación: se cierran las variaciones del MISMO cambio (campo y
+    // valor nuevo). Un cambio de otro campo en la misma publicación sigue abierto para decidirlo aparte.
+    const cerrados = db.prepare(`UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=?
+      WHERE item_id=? AND campo=? AND valor_nuevo IS ? AND revisado_en IS NULL`)
+      .run(new Date().toISOString(), req.user?.username || null, fila.item_id, fila.campo, fila.valor_nuevo).changes;
+    res.json({ ok: true, reactivada, pendiente_stock: pendienteStock, cerrados });
   });
 
   // Conteo rápido de reactivables (solo lee el caché local, sin consultar precios en ML).

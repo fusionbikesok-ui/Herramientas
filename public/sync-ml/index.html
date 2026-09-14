@@ -186,7 +186,13 @@ async function cargarCambiosFormato(){
   try{
     var r=await fetch('/api/sync/cambios-formato');
     var d=await r.json();
-    var filas=(d&&d.data)||[];
+    var todas=(d&&d.data)||[];
+    // Una tarjeta por cambio de una publicación (mismo campo y valor nuevo): el vigía abre un
+    // aviso por variación y revisar cierra esas variaciones, no los cambios de otros campos.
+    var claveCambio=function(c){return c.item_id+'|'+c.campo+'|'+(c.valor_nuevo==null?'':c.valor_nuevo);};
+    var vistos={}, variaciones={};
+    todas.forEach(function(c){var k=claveCambio(c);(variaciones[k]=variaciones[k]||{})[c.clave]=true;});
+    var filas=todas.filter(function(c){var k=claveCambio(c);if(vistos[k])return false;vistos[k]=true;return true;});
     caja.hidden=!filas.length;
     if(!filas.length)return;
     document.getElementById('cambios-formato-lista').innerHTML=filas.map(function(c){
@@ -194,7 +200,7 @@ async function cargarCambiosFormato(){
       var despues=c.valor_nuevo==null?'(vacío)':c.valor_nuevo;
       return '<div class="cf-fila">'
         +'<div style="min-width:0">'
-        +'<div><b>'+esc(c.titulo||c.item_id)+'</b>'+(c.sku?' · '+esc(c.sku):'')+'</div>'
+        +'<div><b>'+esc(c.titulo||c.item_id)+'</b>'+(c.sku?' · '+esc(c.sku):'')+(Object.keys(variaciones[claveCambio(c)]).length>1?' · '+Object.keys(variaciones[claveCambio(c)]).length+' variaciones':'')+'</div>'
         +'<div class="cf-cambio">'+esc(c.campo)+': <span class="cf-antes">'+esc(antes)+'</span> → <span class="cf-despues">'+esc(despues)+'</span></div>'
         +(c.pausada?'':'<div style="font-size:12px;color:var(--amber,#F5B942)">No se pausó (freno de mano o error).</div>')
         +(c.pausa_error?'<div style="font-size:12px;color:var(--red,#F87171)">No se pudo pausar: '+esc(c.pausa_error)+'</div>':'')
@@ -213,8 +219,12 @@ async function revisarCambio(id, reactivar){
   try{
     var r=await fetch('/api/sync/cambios-formato/'+id+'/revisar',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({reactivar:!!reactivar})});
-    var d=await r.json();
+    // Leer como texto: si en el camino un proxy devuelve una página HTML, se muestra un motivo
+    // legible en vez de "Unexpected token '<'".
+    var texto=await r.text(), d;
+    try{ d=JSON.parse(texto); }catch(_e){ throw new Error('el servidor respondió '+r.status+' sin datos. Recargá la página y reintentá.'); }
     if(!d.ok)throw new Error(d.error||'error');
+    if(d.pendiente_stock)alert('Aviso cerrado. La publicación no tiene stock en MercadoLibre: se va a reactivar sola cuando vuelva a haber stock.');
     await cargarCambiosFormato();
     cargarReactivables();
   }catch(err){ alert('No se pudo: '+err.message); }

@@ -87,6 +87,55 @@ describe('el reactivador respeta las pausas del vigía', () => {
     expect(mlFetch).toHaveBeenCalledWith(db, CFG, 'put', '/items/MLA1', { status: 'active' });
   });
 
+  it('reactivar sin stock en ML: cierra el aviso y deja que la reactive el reactivador cuando haya stock', async () => {
+    sembrarPausada(db);
+    mlFetch
+      .mockResolvedValueOnce({ status: 400, data: { message: 'Item without available_quantity' } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'paused', sub_status: ['out_of_stock'], available_quantity: 0 } });
+    const info = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|','MLA1','catalog_product_id','MLA1','MLA2',1,datetime('now'))`).run();
+    const r = await request(app).post(`/api/sync/cambios-formato/${info.lastInsertRowid}/revisar`).send({ reactivar: true });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true, reactivada: false, pendiente_stock: true });
+    expect(db.prepare('SELECT revisado_en FROM ml_publicacion_cambios WHERE id=?').get(info.lastInsertRowid).revisado_en).toBeTruthy();
+  });
+
+  it('ML rechaza por otro motivo: 409 con el mensaje de ML (nunca 502) y el aviso sigue abierto', async () => {
+    sembrarPausada(db);
+    mlFetch
+      .mockResolvedValueOnce({ status: 400, data: { message: 'item.status.invalid' } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'under_review', sub_status: [], available_quantity: 3 } });
+    const info = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|','MLA1','catalog_product_id','MLA1','MLA2',1,datetime('now'))`).run();
+    const r = await request(app).post(`/api/sync/cambios-formato/${info.lastInsertRowid}/revisar`).send({ reactivar: true });
+    expect(r.status).toBe(409);
+    expect(r.body.ok).toBe(false);
+    expect(r.body.error).toContain('item.status.invalid');
+    expect(db.prepare('SELECT revisado_en FROM ml_publicacion_cambios WHERE id=?').get(info.lastInsertRowid).revisado_en).toBeNull();
+  });
+
+  it('revisar cierra todas las variaciones abiertas de la misma publicación', async () => {
+    sembrarPausada(db);
+    const ins = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES (?, 'MLA1', 'catalog_product_id', NULL, 'MLA9', 1, datetime('now'))`);
+    const a = ins.run('MLA1|11').lastInsertRowid; ins.run('MLA1|12'); ins.run('MLA1|13');
+    const r = await request(app).post(`/api/sync/cambios-formato/${a}/revisar`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.cerrados).toBe(3);
+    expect(db.prepare("SELECT COUNT(*) n FROM ml_publicacion_cambios WHERE item_id='MLA1' AND revisado_en IS NULL").get().n).toBe(0);
+  });
+
+  it('revisar NO cierra un cambio de otro campo de la misma publicación', async () => {
+    sembrarPausada(db);
+    const a = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|11','MLA1','catalog_product_id',NULL,'MLA9',1,datetime('now'))`).run().lastInsertRowid;
+    const b = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|11','MLA1','UNITS_PER_PACK','1','2',1,datetime('now'))`).run().lastInsertRowid;
+    const r = await request(app).post(`/api/sync/cambios-formato/${a}/revisar`).send({});
+    expect(r.body.cerrados).toBe(1);
+    expect(db.prepare('SELECT revisado_en FROM ml_publicacion_cambios WHERE id=?').get(b).revisado_en).toBeNull();
+  });
+
   it('revisar un id inexistente da 404', async () => {
     const r = await request(app).post('/api/sync/cambios-formato/9999/revisar').send({});
     expect(r.status).toBe(404);

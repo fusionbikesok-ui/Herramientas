@@ -1547,7 +1547,20 @@ function flashDeshacer(msg,onDeshacer,ms){
 // MOTIVOS_CONFIRMACION_MANUAL en routes/preparacion.js).
 var MOTIVO_MANUAL_LABEL={codigo_ilegible:'código ilegible',sin_etiqueta:'producto sin etiqueta'};
 
+// Lecturas que no coincidieron en esta sesión, por preparación: permiten avisar antes de
+// programar una confirmación sin código (el servidor igual lo exige si se recargó la página).
+var NO_COINCIDE_LOCAL={};
+function textoNoCoincide(codigo,producto){
+  return producto&&producto.nombre
+    ?'✕ '+codigo+' es de «'+producto.nombre+'» ('+producto.sku+'), no de este pedido. Revisá la unidad.'
+    :'✕ '+codigo+' NO pertenece a este pedido';
+}
+function textoLecturasNoCoinciden(lecturas){
+  return (lecturas||[]).map(function(l){return '• '+l.codigo+(l.producto_nombre?' — '+l.producto_nombre:' — código desconocido');}).join('\n');
+}
+
 function verboEvento(tipo,detalle){
+  if(tipo==='escaneo_no_coincide')return 'leyó un código que no es del pedido';
   if(tipo==='escaneo'){
     if(detalle.origen==='manual')return 'confirmó sin código';
     return detalle.origen==='camara'?'escaneó (cámara)':'escaneó';
@@ -1588,7 +1601,7 @@ function motivoManualTexto(d){
 
 function feedItemHtml(ev,esNuevo){
   var d=ev.detalle||{};
-  var iconos={escaneo:'◎',foto_subida:'▣',foto_borrada:'⌫',embalaje:'⬒',despacho:'➜',completado:'★',reabierta:'↺',cerrada_sin_evidencia:'⛔',despachado_sin_verificar:'✈',tracking_cargado:'▤',tracking_colgado:'⏳',tracking_recuperado:'♻'};
+  var iconos={escaneo:'◎',escaneo_no_coincide:'✕',foto_subida:'▣',foto_borrada:'⌫',embalaje:'⬒',despacho:'➜',completado:'★',reabierta:'↺',cerrada_sin_evidencia:'⛔',despachado_sin_verificar:'✈',tracking_cargado:'▤',tracking_colgado:'⏳',tracking_recuperado:'♻'};
   var quien=ev.usuario?esc(ev.usuario):'—';
   var cuando=fecha(ev.creado_en);
   var hm=haceMin(ev.creado_en);
@@ -1607,10 +1620,14 @@ function feedItemHtml(ev,esNuevo){
     extra='<div class="feed-delta">'
       +(d.valor_anterior?'<span class="antes">'+esc(d.valor_anterior)+'</span> › ':'')
       +'<span class="desp">'+esc(d.valor_nuevo)+'</span></div>';
+  }else if(ev.tipo==='escaneo_no_coincide'){
+    extra='<div class="feed-meta" style="margin-top:4px">Código '+esc(d.codigo||'')
+      +(d.producto_nombre?' — es de '+esc(d.producto_nombre)+(d.producto_sku?' ('+esc(d.producto_sku)+')':''):' — no está en el catálogo')+'</div>';
   }else if(motivoTxt){
     // El evento sin esto se leía "confirmó sin código" a secas — el motivo (por qué se
     // saltó el escaneo) es justo lo que alguien investigando un reclamo necesita ver acá.
-    extra='<div class="feed-meta" style="margin-top:4px">Motivo: '+esc(motivoTxt)+'</div>';
+    extra='<div class="feed-meta" style="margin-top:4px">Motivo: '+esc(motivoTxt)+'</div>'
+      +(Array.isArray(d.no_coincide_previo)&&d.no_coincide_previo.length?'<div class="feed-meta" style="margin-top:4px;color:var(--red,#F87171)">Confirmado pese a '+d.no_coincide_previo.length+' lectura(s) que no coincidían</div>':'');
   }else if(ev.tipo==='cerrada_sin_evidencia'&&d.motivo){
     extra='<div class="feed-meta" style="margin-top:4px">'+esc(d.motivo)+'</div>';
   }
@@ -1706,9 +1723,13 @@ async function escanear(codigo,origen){
   }else{
     await refrescarDetalle(); // error inesperado: mejor traer el estado real del servidor
   }
+  if(b.resultado==='no_coincide'){
+    NO_COINCIDE_LOCAL[PREP.id]=(NO_COINCIDE_LOCAL[PREP.id]||[]).concat([{codigo:codigo,producto_nombre:b.producto_codigo?b.producto_codigo.nombre:null}]);
+    refrescarSoloActividad();
+  }
   if(b.resultado==='match')flash('ok','✓ '+codigo+' — '+(b.item.estado_item==='verificado'?'ítem completo':'anotado '+b.item.cantidad_escaneada+'/'+b.item.cantidad_esperada));
   else if(b.resultado==='sobrante')flash('warn','⚠︎ '+codigo+' ya está completo — ¿estás poniendo de más?');
-  else if(b.resultado==='no_coincide')flash('bad','✕ '+codigo+' NO pertenece a este pedido');
+  else if(b.resultado==='no_coincide')flash('bad',textoNoCoincide(codigo,b.producto_codigo));
   else flash('bad',b.error||'error');
   return b;
 }
@@ -1887,10 +1908,19 @@ function programarConfirmacionManual(motivo,detalleTexto){
   var itemId=MANUAL_ITEM_ID;
   if(!itemId)return;
   cerrarManualModal();
-  if(pendienteManual)clearTimeout(pendienteManual.timer);
   var it=(PREP.items||[]).find(function(x){return x.id===itemId;});
   var nombreItem=it?(it.nombre||it.sku||'este ítem'):'este ítem';
-  var pend={itemId:itemId,motivo:motivo,detalleTexto:detalleTexto};
+  var lecturas=NO_COINCIDE_LOCAL[PREP.id]||[];
+  var pese=false;
+  if(lecturas.length){
+    if(!confirm('Antes se leyeron códigos que NO son de este pedido:\n'+textoLecturasNoCoinciden(lecturas)+'\n\n¿Revisaste que la unidad sea «'+nombreItem+'» y querés confirmarla sin código igual?')){
+      flash('warn','No se confirmó. Revisá la unidad y volvé a escanearla.');
+      return;
+    }
+    pese=true;
+  }
+  if(pendienteManual)clearTimeout(pendienteManual.timer);
+  var pend={itemId:itemId,motivo:motivo,detalleTexto:detalleTexto,pese:pese};
   pendienteManual=pend;
   flashDeshacer('Confirmando "'+nombreItem+'" sin código…',function(){
     if(pendienteManual!==pend)return;
@@ -1901,13 +1931,21 @@ function programarConfirmacionManual(motivo,detalleTexto){
   pend.timer=setTimeout(function(){
     if(pendienteManual!==pend)return; // se deshizo antes de disparar
     pendienteManual=null;
-    enviarConfirmacionManual(itemId,motivo,detalleTexto);
+    enviarConfirmacionManual(itemId,motivo,detalleTexto,pend.pese);
   },MANUAL_UNDO_MS);
 }
-async function enviarConfirmacionManual(itemId,motivo,detalleTexto){
+async function enviarConfirmacionManual(itemId,motivo,detalleTexto,pese){
   var body={motivo:motivo};
   if(detalleTexto)body.detalle_texto=detalleTexto;
+  if(pese)body.pese_a_no_coincide=true;
   var r=await api('/'+PREP.id+'/item/'+itemId+'/confirmar-manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===409&&r.body.code==='NO_COINCIDE_PREVIO'&&!pese){
+    // Lecturas de antes de recargar la página: el servidor las recuerda aunque la pantalla no.
+    NO_COINCIDE_LOCAL[PREP.id]=r.body.lecturas||[];
+    if(confirm('Antes se leyeron códigos que NO son de este pedido:\n'+textoLecturasNoCoinciden(r.body.lecturas)+'\n\n¿Revisaste la unidad y querés confirmarla sin código igual?'))return enviarConfirmacionManual(itemId,motivo,detalleTexto,true);
+    flash('warn','No se confirmó. Revisá la unidad y volvé a escanearla.');
+    return;
+  }
   if(r.body.ok&&mergeItemLocal(r.body.item)){renderDetalle();refrescarSoloActividad();}
   else{flash('bad',r.body.error||'No se pudo confirmar sin código');refrescarDetalle();}
 }
@@ -1926,6 +1964,7 @@ function flushConfirmacionManualPendiente(){
   huboFlushPorOcultarse=true;
   var body={motivo:pend.motivo};
   if(pend.detalleTexto)body.detalle_texto=pend.detalleTexto;
+  if(pend.pese)body.pese_a_no_coincide=true;
   var url='/api/preparacion/'+PREP.id+'/item/'+pend.itemId+'/confirmar-manual';
   if(navigator.sendBeacon){
     navigator.sendBeacon(url,new Blob([JSON.stringify(body)],{type:'application/json'}));
@@ -2379,7 +2418,7 @@ async function escanearCamara(codigo){
   }else if(b.resultado==='no_coincide'){
     beep('bad');
     if(navigator.vibrate)navigator.vibrate([80,60,80]);
-    setCamProgress('✕ '+codigo+' no pertenece a este pedido');
+    setCamProgress(textoNoCoincide(codigo,b.producto_codigo));
   }else{
     setCamProgress(b.error||'No se pudo escanear');
   }

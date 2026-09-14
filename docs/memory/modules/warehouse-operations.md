@@ -118,3 +118,14 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
 - Fotos operativas se conservan 180 días; reclamos, incidentes, garantías o auditorías activas suspenden la purga.
 - Las alertas se muestran en App, panel y sonido, distinguen reconocimiento de resolución y
   pueden transferirse a otro usuario autorizado.
+
+## Escaneo que no coincide (2026-09-14)
+
+- `POST /api/preparacion/:id/escanear` con resultado `no_coincide` devuelve `producto_codigo`
+  ({sku, nombre} del catálogo o `null`) y registra el evento `escaneo_no_coincide` con el código leído.
+- `confirmar-manual` responde **409 `NO_COINCIDE_PREVIO`** (con `lecturas`) si la preparación tiene
+  lecturas que no coincidieron, salvo `pese_a_no_coincide:true`; esa confirmación guarda
+  `no_coincide_previo` en su evento. Motivo: una Podium Chill FB-69004 se confirmó "sin etiqueta"
+  tras tres lecturas de otro código.
+- En iPhone la cámara usa ZXing (Safari no tiene BarcodeDetector). El banco sintético mostró que la
+  configuración del lector casi no cambia la tasa de lectura; decide la nitidez/tamaño del código.

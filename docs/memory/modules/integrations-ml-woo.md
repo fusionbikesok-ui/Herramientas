@@ -75,6 +75,13 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   WooCommerce REST v3 (trunk) expone `modified_after`/`modified_before`/`dates_are_gmt` y
   `per_page` ≤ 100. La documentación de developers.mercadolibre bloquea lecturas automatizadas (403):
   verificar con sondas de sólo lectura o código productivo. Matriz de E1: `docs/superpowers/specs/e1/matriz-barridos.md`.
+- **Vigía de formato — revisar avisos (2026-09-14):** `POST /api/sync/cambios-formato/:id/revisar`
+  cierra los avisos abiertos del mismo `item_id` **con el mismo `campo` y `valor_nuevo`** (el vigía
+  abre uno por variación); un cambio de otro campo de la misma publicación sigue abierto. Con
+  `reactivar:true`, si ML rechaza y la publicación está `paused/out_of_stock`, el aviso se cierra con
+  `pendiente_stock:true` y la reactiva el reactivador cuando haya stock; otro rechazo responde **409**
+  con el mensaje de ML. Nunca responder 502/503/504 en rutas que la UI lee como JSON: Cloudflare los
+  reemplaza por una página HTML.
 - **Bolsas de stock compartidas (verificado 2026-09-13):** el bucle de reactivaciones de FB-32234,
   FB-4746 y FB-10376 (jul–5 sep) era un `user_product` compartido entre productos Woo distintos
   (causa documentada en `UM1.1-cierre-sku-ml.md`). `conflictosDeBolsaCompartida` da 0 hoy; la
