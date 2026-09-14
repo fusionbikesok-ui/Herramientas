@@ -143,3 +143,10 @@ despliegue, incluso cuando no haya cambios de código. El estado transitorio va 
   Lecciones del ensayo 2026-09-14: `--target-action` exige `--type` de objetivo (error 031), y el
   `postgres` restaurado necesita la clave del repo en su entorno (archive-get), leída como root y
   bajando con gosu. Ensayo con copia armada en el VPS: OK, RTO 7 s (etiquetado ENSAYO, no es aceptación).
+- **Heartbeat "Backup PostgreSQL (VPS)" activo (2026-09-14):** Better Stack, período 1 día; URL en `.env`
+  como `PG_BACKUP_HEARTBEAT_URL` (no se copia en docs). Ping de prueba HTTP 200; lo envía
+  `backup-diario.sh` a las 05:30 UTC.
+- **Observación de 24 h de WAL (13/09 22:36 → 14/09 22:36 UTC):** 0 fallos de archivado dentro de la
+  ventana (los 9 de `pg_stat_archiver` son del despliegue, antes del stanza), WAL 01→11 continuo y
+  `pgbackrest verify` OK, sobrevivió al reinicio del VPS de 13:45 UTC, backups full y diff firmados OK,
+  0 incidentes del vigía de PostgreSQL.

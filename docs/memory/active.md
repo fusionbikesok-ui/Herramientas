@@ -473,3 +473,13 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   adjuntos), PM-172 (B2 Object Lock governance 365 d con clave sin borrado). Implementación espera
   la aceptación de E0. (La sección "Decisiones E1 incorporadas" de arriba es de otra numeración histórica.)
 
+## E0 aceptada (2026-09-14)
+
+- E0 (PostgreSQL 18.6 + pgBackRest, DR en dos niveles) quedó `aceptada` por decisión de José con la
+  evidencia de 24 h de WAL, backups firmados, test:e0 y heartbeat activo. Seguimiento pendiente, no
+  bloqueante: restauración desde la copia real de la Mac (`scripts/postgres/restaurar-desde-mac.sh`),
+  acordada para el 2026-09-15, y heartbeat opcional de la Mac. E1 ya puede pasar a implementación.
+- Causa de la caída de 13 min del 13/09 (15:16–15:29 UTC, 33 × 502 en Better Stack): `better-sqlite3`
+  sin binario nativo al reiniciar PM2 (se intentó cargar un build de Node 20; producción usa Node 24).
+  Antes de reiniciar tras `npm install`/`npm rebuild`, verificar `node -e "require('better-sqlite3')"`.
+
