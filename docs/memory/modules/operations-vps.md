@@ -116,3 +116,19 @@
 Ante cambios confirmados de infraestructura, dependencias del sistema, proceso de staging o
 despliegue, incluso cuando no haya cambios de código. El estado transitorio va en
 `../active.md` y debe verificarse en vivo antes de usarlo.
+
+## Nivel 2 DR: usuario de lectura (2026-09-14)
+
+- `fusion-offsite` existe con **uid 1999** (bloqueado, sin contraseña) y ACL `rX` sobre
+  `/opt/fusionbikes/postgres/repo` (también por defecto para archivos nuevos). Verificado: lee todo el
+  repositorio y no puede escribir. `authorized_keys` tiene sólo la clave `mac-local-fusion-offsite` (2026-09-14) con `restrict,command="/usr/bin/rrsync -ro /opt/fusionbikes/postgres/repo"`. Verificado por SSH real con clave temporal: descarga 1007/1007 y manifiesto OK; subida, shell y rutas fuera del repo rechazadas.
+- uid **999** en el host = postgres del contenedor `fusion-pg-pg-1` (dueño de `repo` y `pgdata`). Nunca
+  crear usuarios con `useradd --system` sin `--uid` explícito.
+- IP pública del VPS para el destino de la Mac: 179.197.74.83. El contenedor se llama `fusion-pg-pg-1`.
+- **SSH 2026-09-14:** apareció `/etc/ssh/sshd_config.d/00-00-local-password.conf` (13:57:50 UTC, con
+  recarga de sshd) que antepone `PermitRootLogin yes` y `PasswordAuthentication yes` al endurecimiento.
+  Los logins con contraseña de ese día vinieron de la IP del local; queda pendiente la decisión de José.
+- **Primer pull de la Mac OK (2026-09-14 20:28 UTC):** `OK: 1002 archivos verificados; foto diaria
+  2026-09-14`, en ~3 s. Usuario de la Mac: `santi`; script en `~/FusionBackups/offsite-pull-mac.sh`.
+  launchd `ar.com.fusionbikes.offsite-pull` instalado y cargado (corrida automática 20:29 UTC OK).
+  Pendiente: heartbeat opcional y la restauración de prueba desde la copia de la Mac (aceptación del nivel 2).

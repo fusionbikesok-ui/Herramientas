@@ -35,8 +35,11 @@ puede **leer** el repositorio en el VPS.
 ## 2. En el VPS (asistente)
 
 1. Instalar ACL: `apt-get install -y acl`.
-2. Usuario dedicado sin contraseña ni shell interactivo:
-   `useradd --system --create-home --shell /bin/sh fusion-offsite` y `passwd -l fusion-offsite`.
+2. Usuario dedicado sin contraseña ni shell interactivo, con **uid fijo 1999**:
+   `useradd --system --uid 1999 --user-group --create-home --shell /bin/sh fusion-offsite` y
+   `passwd -l fusion-offsite`. **Nunca** dejar que `--system` elija el uid: en este host tomó el 999,
+   que es el uid de PostgreSQL dentro del contenedor, y el usuario pasó a ser dueño (con escritura)
+   del repositorio y de `pgdata` (2026-09-14, corregido antes de cargar ninguna clave).
 3. Permiso de sólo lectura sobre el repositorio (el grupo 999 del contenedor en el host es
    `systemd-journal`, por eso **no** se usa pertenencia a grupo):
    ```bash
