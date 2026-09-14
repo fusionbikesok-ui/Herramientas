@@ -135,3 +135,11 @@ despliegue, incluso cuando no haya cambios de código. El estado transitorio va 
   2026-09-14`, en ~3 s. Usuario de la Mac: `santi`; script en `~/FusionBackups/offsite-pull-mac.sh`.
   launchd `ar.com.fusionbikes.offsite-pull` instalado y cargado (corrida automática 20:29 UTC OK).
   Pendiente: heartbeat opcional y la restauración de prueba desde la copia de la Mac (aceptación del nivel 2).
+- **Restauración desde la copia de la Mac (aceptación nivel 2):** `scripts/postgres/restaurar-desde-mac.sh`
+  restaura lo que la Mac sube a `/opt/fusionbikes/qa/restore-mac/entrada` (usuario `fusion-restore`, uid
+  1998, pensado para `rrsync -wo`; solo puede leer el manifiesto del repo de producción) en un contenedor
+  sin red, verifica hashes, `pgbackrest verify`, la marca de `public.e0_verificacion` indicada en
+  `qa/restore-mac/marca-esperada` y firma el registro en `pg-registros/restore-mac-*.json`.
+  Lecciones del ensayo 2026-09-14: `--target-action` exige `--type` de objetivo (error 031), y el
+  `postgres` restaurado necesita la clave del repo en su entorno (archive-get), leída como root y
+  bajando con gosu. Ensayo con copia armada en el VPS: OK, RTO 7 s (etiquetado ENSAYO, no es aceptación).
