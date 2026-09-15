@@ -32,7 +32,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Próxima acción
 
-**Siguiente paso de programa: revisión independiente de E1, tramo 1.** El commit `2dc9ca4` incorporó `plataforma/` con migraciones, auditoría, colas, API, worker, scheduler y ensayo Docker temporal. La corrección posterior pendiente de confirmar como commit valida OpenAPI y limita el chequeo de base de `/health` a 2 s. No autoriza crear roles, migrar E0 ni levantar servicios en el VPS. El corte de sombra exige autorización explícita, línea base del momento y las verificaciones operativas de la ficha E1.
+**Siguiente paso de programa: implementar E1, tramo 2, en aislamiento.** El commit `2dc9ca4` incorporó `plataforma/`; `8b9303d` cerró la revisión de T1. José aprobó el 2026-09-15 el diseño T2 y, mediante PM-178, la retención de 400 días para observaciones/relaciones técnicas sin PII. Spec: `docs/superpowers/specs/2026-09-15-e1-tramo2-barridos-design.md`; plan: `docs/superpowers/plans/2026-09-15-e1-tramo2-barridos.md`. No autoriza roles, migraciones sobre E0, canales reales ni servicios persistentes en el VPS.
 
 E2 conserva pendientes externos de revisión independiente y piloto/jornada observada; E3 ya está en desarrollo técnico con autenticación del agente validada, pero requiere relevamiento de impresora, prueba Windows/hardware, revisión y piloto antes de candidata. No desplegar runtime mientras las entregas sigan sin aceptación.
 
@@ -470,8 +470,9 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   probado en PostgreSQL 18.6 descartable: cadena de auditoría verifica y detecta alteración directa),
   contrato `openapi/platform-v2.yaml`, matriz de barridos verificada `specs/e1/matriz-barridos.md` y
   escenarios `specs/e1/test-e1.md`. Decisiones PM-170 (SimpleWebAuthn 14), PM-171 (SMTP existente con
-  adjuntos), PM-172 (B2 Object Lock governance 365 d con clave sin borrado). Implementación espera
-  la aceptación de E0. (La sección "Decisiones E1 incorporadas" de arriba es de otra numeración histórica.)
+  adjuntos), PM-172 (B2 Object Lock governance 365 d con clave sin borrado). E0 está aceptada; T1 fue
+  implementado/revisado en aislamiento y T2 fue aprobado para implementación efímera. (La sección
+  "Decisiones E1 incorporadas" de arriba es de otra numeración histórica.)
 
 ## E0 aceptada (2026-09-14)
 
@@ -493,20 +494,14 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - Nunca montar `/opt/fusionbikes/backups` en un contenedor (tiene backups SQLite con datos de negocio);
   el estado de E0 se moverá a `/opt/fusionbikes/estado-pg/` en la puesta en marcha del tramo 1. Montar
   carpetas, no archivos sueltos: los scripts reemplazan con `mv` y un bind de archivo queda congelado.
-- Siguiente paso: plan de implementación del tramo 1 (writing-plans) tras la revisión de la spec por José.
+- Siguiente paso: ejecutar el plan aprobado de T2 por cortes; ningún corte se conecta a E0 o canales reales.
 
-## E0 reabierta (2026-09-15, revisión técnica)
+## Corrección PM-177 incorporada en E0
 
-- **PM-177:** pgBackRest **sin `archive-push-queue-max`** (al superarlo informa el WAL como archivado, lo
-  descarta y corta el PITR; confirmado con `pgbackrest help archive-push archive-push-queue-max` 2.59.1).
-  El spool asíncrono sólo guarda archivos de estado; la cola real son los `.ready` de `pg_wal`.
-- Vigía de capacidad (`lib/vigiaBackup.js`): disco del host ≥ 80 % aviso / ≥ 90 % crítico; bytes en cola
-  `.ready` ≥ 1/4 GiB; `pg_wal` ≥ 2/8 GiB; medición ausente → crítico. `estado-archivo.sh` publica
-  `ready_bytes`, `pg_wal_bytes`, `disco_pct`, `disco_libre_bytes` (ya no `spool_bytes`).
-- E0 volvió a `desarrollo`. Para re-aceptar: contenedor recreado sin el límite con `test:e0` verde, vigía
-  de capacidad en producción, restauración real desde la copia subida por la Mac y fichas coherentes.
-- E1: `shadow_copy_losses` salió del esquema (el contador de pérdidas no puede vivir en el PostgreSQL que
-  se cae; contrato del tramo 3). Registro de observaciones remotas y orden de versiones: tramo 2.
+- pgBackRest corre sin `archive-push-queue-max`; el vigía controla `.ready`, `pg_wal` y disco. E0 fue
+  reaceptada después de recrear, verificar y restaurar desde la copia real de la Mac.
+- `shadow_copy_losses` no vive en PostgreSQL; el contador externo pertenece a T3. Observaciones,
+  relaciones y orden de versiones pertenecen a T2 y se retienen 400 días sin payload ni PII.
 
 ## E0 re-aceptada (2026-09-15)
 

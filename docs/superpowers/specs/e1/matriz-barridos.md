@@ -1,4 +1,4 @@
-# E1 — Matriz de barridos por tópico (verificada 2026-09-13)
+# E1 — Matriz de barridos por tópico (revisada 2026-09-15)
 
 Contrato de reparación de la sombra de E1. La reparación **no depende del aviso**: cada tópico tiene su
 barrido de la API remota con cursor persistido en `integrations.reconciliation_cursors`. La fuente de
@@ -36,6 +36,10 @@ Dos criterios de aceptación, según lo que la API permite **enumerar**:
 4. Cuota: los barridos comparten el limitador del legado mientras convivan; ningún barrido corre si el
    cooldown de ML está activo.
 5. Tópicos con limitación declarada informan cobertura; nunca prometen "0 faltantes".
+6. Toda ventana temporal congela su límite superior; órdenes se subdividen en intervalos de hasta 6 h.
+7. Envíos y packs se descubren mediante relaciones técnicas extraídas de órdenes; no se inventan IDs
+   ni se depende de una tabla de dominio de E2.
+8. `missed_feeds` se incorpora en T3 como suplemento con cursor propio; no sustituye estos barridos.
 
 ## Pendiente de verificar al implementar (no bloquea la especificación)
 

@@ -282,19 +282,19 @@
       "components": [
         {
           "id": "platform_api",
-          "status": "future",
+          "status": "existing",
           "path": "plataforma/src/api",
           "purpose": "health, auth y consulta de incidentes"
         },
         {
           "id": "platform_worker",
-          "status": "future",
+          "status": "existing",
           "path": "plataforma/src/worker",
           "purpose": "claims, proyecciones y reintentos"
         },
         {
           "id": "platform_scheduler",
-          "status": "future",
+          "status": "existing",
           "path": "plataforma/src/scheduler",
           "purpose": "encolar barridos y tareas periódicas"
         },
@@ -339,6 +339,18 @@
           "status": "existing",
           "path": "docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md",
           "purpose": "diseño aprobado del tramo 1: estructura, base, auditoría, colas, API y puesta en marcha"
+        },
+        {
+          "id": "tramo2_design",
+          "status": "existing",
+          "path": "docs/superpowers/specs/2026-09-15-e1-tramo2-barridos-design.md",
+          "purpose": "diseño aprobado del tramo 2: barridos, cursores, relaciones, observaciones y cifrado"
+        },
+        {
+          "id": "reconciliation_engine",
+          "status": "future",
+          "path": "plataforma/src/reconciliacion",
+          "purpose": "ventanas, adaptadores de lectura, observaciones, relaciones y convergencia"
         }
       ],
       "technologies": [
@@ -416,12 +428,30 @@
         },
         {
           "name": "reconciliation_cursors",
-          "pk": "account+topic",
-          "constraints": "cursor and overlap policy",
+          "pk": "account+topic+cursor_kind",
+          "constraints": "cursor JSONB versionado; overlap; enabled",
           "indexes": "next_run_at",
           "owner": "integrations",
           "retention": "vigente",
           "pii": "none"
+        },
+        {
+          "name": "resource_observations",
+          "pk": "account+topic+resource_id",
+          "constraints": "remote/projection hash; lifecycle; last_seen_run",
+          "indexes": "lifecycle, last_seen_at",
+          "owner": "integrations",
+          "retention": "activas o 400 días tras último avistamiento",
+          "pii": "none; identifiers and hashes only"
+        },
+        {
+          "name": "resource_relations",
+          "pk": "account+relation_type+source+target",
+          "constraints": "order_shipment, order_pack, product_variation",
+          "indexes": "target topic/id, lifecycle",
+          "owner": "integrations",
+          "retention": "activas o 400 días tras último avistamiento",
+          "pii": "none; remote identifiers only"
         },
         {
           "name": "webauthn_credentials",
@@ -440,7 +470,9 @@
         "retryable",
         "uncertain",
         "dead_lettered",
-        "parked"
+        "parked",
+        "failed",
+        "partial"
       ],
       "transitions": [
         {
@@ -478,6 +510,24 @@
           "effect": "alerta y SOP",
           "error": "ninguno",
           "test": "E1-Q-04"
+        },
+        {
+          "from": "claimed",
+          "event": "read_retryable",
+          "guard": "lease vigente e intentos restantes",
+          "to": "retryable",
+          "effect": "cursor inmóvil y available_at con backoff",
+          "error": "failed al octavo reclamo",
+          "test": "E1-SWP-09"
+        },
+        {
+          "from": "claimed",
+          "event": "sweep_complete",
+          "guard": "todas las páginas válidas y versión de cursor vigente",
+          "to": "succeeded",
+          "effect": "avanza cursor y confirma observaciones/bajas",
+          "error": "partial ante conflicto de versión",
+          "test": "E1-SWP-01"
         }
       ],
       "apis": [
@@ -526,6 +576,18 @@
           "post": "reporte inmutable verificable",
           "evidence": "hash y HEAD/GET",
           "test": "E1-REC-01"
+        },
+        {
+          "id": "E1-UC3",
+          "actor": "scheduler/worker",
+          "pre": "corriente habilitada y vencida; transporte simulado de sólo lectura",
+          "trigger": "next_run_at",
+          "main": "scheduler crea run; worker congela ventana, pagina, cifra inbox, actualiza observaciones/relaciones y avanza cursor al cerrar",
+          "alternatives": "convergencia por IDs relacionados o vuelta completa para bajas",
+          "errors": "cursor inmóvil, retry con backoff o failed visible",
+          "post": "paridad o convergencia medida sin PII en claro",
+          "evidence": "sweep_run, hashes, métricas y registro GET del simulador",
+          "test": "E1-CONV-01"
         }
       ],
       "failure_modes": [
@@ -551,6 +613,13 @@
         "E1-Q-06",
         "E1-DUP-01",
         "E1-SWP-01",
+        "E1-SWP-02",
+        "E1-SWP-03",
+        "E1-SWP-04",
+        "E1-SWP-05",
+        "E1-SWP-06",
+        "E1-SWP-07",
+        "E1-SWP-08",
         "E1-SWP-09",
         "E1-CONV-01",
         "E1-DEL-01",

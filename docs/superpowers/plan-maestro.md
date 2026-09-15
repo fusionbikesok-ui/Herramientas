@@ -4,7 +4,7 @@
 
 **Secuencia:** E0–E26
 
-**Estado del programa:** E0–E26 en borrador hasta satisfacer el contrato documental
+**Estado del programa:** E0 aceptada; E1 planificada por tramos; E2–E26 en borrador
 
 **Fuente estructurada:** `delivery-program.json`
 
@@ -78,6 +78,11 @@ que una de ellas está actualizada.
 | E26 | Consolidación y cierre | terminales del DAG | borrador |
 
 La ruta de cada ficha está en `deliveries/README.md`.
+
+La ejecución vigente de E1 se divide según PM-174. El tramo 1 está implementado y revisado sólo en
+aislamiento; el [diseño del tramo 2](specs/2026-09-15-e1-tramo2-barridos-design.md) y su
+[plan de implementación](plans/2026-09-15-e1-tramo2-barridos.md) están aprobados únicamente contra
+infraestructura efímera. Los tramos 3 y 4 y cualquier cambio en el VPS requieren aprobación propia.
 
 ## Arquitectura e invariantes acumulativos
 

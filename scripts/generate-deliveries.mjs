@@ -230,7 +230,7 @@ ${one(d.baseline)}
 - **Próxima acción exacta:** ${d.next}
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
-${d.id === 'E1' ? `\n## Especificación original incorporada\n\nEspecificación de E1 confirmada el 2026-09-13; su copia archivada sólo acredita procedencia. **Donde contradiga documentos posteriores, prevalecen** la spec del tramo 1 (\`docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md\`: paquete \`plataforma/\` con lockfile propio fuera de la suite del legado, contenedores de ~128 MB), \`specs/e1/schema.sql\`, \`specs/e1/test-e1.md\` y las decisiones PM-173 a PM-177.\n\n${e1Detail}` : ''}
+${d.id === 'E1' ? `\n## Especificación original incorporada\n\nEspecificación de E1 confirmada el 2026-09-13; su copia archivada sólo acredita procedencia. **Donde contradiga documentos posteriores, prevalecen** las specs aprobadas de los tramos 1 y 2 (\`docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md\` y \`docs/superpowers/specs/2026-09-15-e1-tramo2-barridos-design.md\`), \`specs/e1/schema.sql\`, \`specs/e1/test-e1.md\` y las decisiones PM-173 a PM-178.\n\n${e1Detail}` : ''}
 ${renderDetail(d.id)}
 `;
   fs.writeFileSync(file, `${body.trimEnd()}\n`);
@@ -262,7 +262,7 @@ const ownerFor = (id) => {
   if (n === 162) return 'E19';
   if (n === 163) return 'E16';
   if ((n >= 165 && n <= 169) || n === 177) return 'E0';
-  if (n >= 170 && n <= 176) return 'E1';
+  if ((n >= 170 && n <= 176) || n === 178) return 'E1';
   if (/webhook|barrido|scan|pregunta|mensaje|reclamo|dead.?letter|pipeline de eventos|frescura/i.test(row)) return 'E1';
   if (/GTIN|EAN|UPC|Producto Fusion|producto Woo|variaci[oó]n|familia|atributo|cat[aá]logo/i.test(row)) return 'E2';
   if (/escritor|escritura remota|canario|saga|operaci[oó]n.*ML|stock cero|SELLER_SKU.*PUT/i.test(row)) return 'E4';

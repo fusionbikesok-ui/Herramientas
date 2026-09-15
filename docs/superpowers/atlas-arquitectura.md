@@ -178,3 +178,8 @@ Consultadas el 2026-09-13, sin credenciales: PostgreSQL 18 sobre
 La documentación actual de ML agrega `missed_feeds`, ventana de hasta dos días y `site_id` obligatorio
 para `items`, además del ACK 200 en 500 ms. Esto se registra como hallazgo a reconciliar en E1: no
 reemplaza por sí solo los barridos de estado ni autoriza cambiar producción.
+
+El diseño aprobado de E1 T2 separa corrientes por cuenta+tópico+clase, conserva observaciones y
+relaciones técnicas sin PII durante 400 días y cifra payloads con AES-256-GCM. El scheduler sólo
+materializa corridas; el worker ejecuta adaptadores GET contra simulador. `missed_feeds` queda para T3
+como suplemento con cursor propio, nunca como sustituto de la relectura del estado remoto.

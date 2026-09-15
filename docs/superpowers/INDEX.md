@@ -16,6 +16,11 @@
 - [Registro de decisiones](decisions/plan-maestro-decisions.md): motivos y decisiones de producto preservadas.
 - [SOP operativos](../operations/sops/README.md): procedimientos de operación.
 
+## E1 activa
+
+- [Tramo 1 — diseño](specs/2026-09-15-e1-tramo1-fundacion-design.md) y [plan](plans/2026-09-15-e1-tramo1-fundacion.md): implementado y revisado en aislamiento; no desplegado.
+- [Tramo 2 — diseño](specs/2026-09-15-e1-tramo2-barridos-design.md) y [plan](plans/2026-09-15-e1-tramo2-barridos.md): aprobados para implementación exclusivamente efímera.
+
 ## Archivo
 
 Los planes y fichas anteriores están bajo [`archive/`](archive/) y su integridad se registra en

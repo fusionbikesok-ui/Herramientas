@@ -49,14 +49,14 @@
       "scope": "Node 24/TypeScript estricto en plataforma/, PostgreSQL, roles, WebAuthn virtual, cifrado de PII, colas durables y barridos ML/Woo por tópico.",
       "non_goals": "No entrega catálogo, stock, pedidos, pantallas operativas ni escritores remotos.",
       "baseline": "El legado Node/Express/SQLite sigue atendiendo producción; existe plan P1 auditado archivado.",
-      "data": "Esquema en docs/superpowers/specs/e1/schema.sql: core (companies, channel_accounts), security (users con email cifrado e índice ciego, roles, capabilities, webauthn_credentials, recovery_codes, feature_flags), audit (audit_events append-only con cadena de hash y verify_chain, audit_daily_manifests) e integrations (inbox_messages, outbox_commands, command_attempts, dead_letters, reconciliation_cursors, sweep_runs, daily_shadow_reports, vista incidents).",
+      "data": "Esquema en docs/superpowers/specs/e1/schema.sql: core (companies, channel_accounts), security (users con email cifrado e índice ciego, roles, capabilities, webauthn_credentials, recovery_codes, feature_flags), audit (audit_events append-only con cadena de hash y verify_chain, audit_daily_manifests) e integrations (inbox_messages con sobre AES-256-GCM, outbox_commands, command_attempts, dead_letters, reconciliation_cursors por clase, sweep_runs, resource_observations y resource_relations con retención técnica de 400 días, daily_shadow_reports y vista incidents).",
       "interfaces": "GET /api/v2/health y GET /api/v2/incidents según openapi/platform-v2.yaml; reporte firmado en B2 (governance 365 d) y email por SMTP existente con adjuntos. No hay UI ni login real en E1.",
       "migration": "Usuarios sin contraseñas; importación idempotente de metadatos, sin datos de negocio.",
       "risks": "La sombra jamás condiciona el ACK legacy. Estados sin historial enumerables se validan por convergencia; envíos usan cursor shipment.last_updated propio.",
       "tests": "npm run test:e1 con los escenarios de docs/superpowers/specs/e1/test-e1.md (esquema, auditoría, colas, duplicados, barridos por tópico, convergencia de envíos, borrados Woo, presupuesto de latencia, PostgreSQL caído, reporte firmado, WebAuthn virtual, capacidades, contrato y servicios separados).",
       "rollout": "API/worker/scheduler sin credenciales de escritura; 7 días de sombra; aborto ante impacto en códigos HTTP, errores o latencia.",
       "acceptance": "0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José.",
-      "next": "Tramo 1 (Fundación) con diseño aprobado en docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md (PM-173..176): escribir el plan de implementación y ejecutarlo; luego tramos 2 (barridos), 3 (sombra en vivo, aprobación propia) y 4 (passkeys y reporte)."
+      "next": "Ejecutar docs/superpowers/plans/2026-09-15-e1-tramo2-barridos.md únicamente contra infraestructura efímera; después realizar revisión independiente. Los tramos 3 y 4 y cualquier corte en VPS requieren aprobación propia."
     },
     {
       "id": "E2",

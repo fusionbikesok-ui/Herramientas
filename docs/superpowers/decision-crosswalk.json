@@ -1670,6 +1670,12 @@
       "owner": "E0",
       "consumers": [],
       "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-178",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
     }
   ]
 }

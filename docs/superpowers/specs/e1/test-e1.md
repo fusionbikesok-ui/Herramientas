@@ -5,6 +5,8 @@ migraciones de `plataforma/migrations/` generadas desde `specs/e1/schema.sql`, c
 `plataforma/` y el simulador de canales de QA, y **falla si falta cualquier escenario exigido para
 el tramo vigente** (mismo patrón que `test:e0`). Ningún escenario usa credenciales reales ni escribe
 en ML/Woo. Diseño del tramo 1: [2026-09-15-e1-tramo1-fundacion-design.md](../2026-09-15-e1-tramo1-fundacion-design.md).
+El tramo se selecciona con `E1_TRAMO=1|2`; omitirlo conserva tramo 1 hasta que T2 esté implementado.
+Diseño T2: [2026-09-15-e1-tramo2-barridos-design.md](../2026-09-15-e1-tramo2-barridos-design.md).
 
 ## Escenarios exigidos por tramo (PM-174)
 
@@ -32,9 +34,9 @@ en ML/Woo. Diseño del tramo 1: [2026-09-15-e1-tramo1-fundacion-design.md](../20
 | E1-Q-05 | dos workers | 2 workers sobre 1.000 mensajes | cada mensaje procesado exactamente una vez (`FOR UPDATE SKIP LOCKED`) | doble proceso |
 | E1-Q-06 | lease vencido | matar worker con lease tomado | el mensaje vuelve a estar disponible al vencer y se procesa una vez | queda colgado o se duplica |
 | E1-DUP-01 | duplicados y desorden | misma señal 5 veces y versiones fuera de orden | 1 mensaje por versión; proyección final = versión remota más nueva | duplica o retrocede |
-| E1-SWP-01..08 | barrido por tópico | simulador con fixture por tópico de la matriz | enumerables: 0 faltantes; convergencia: cobertura y convergencia 100 % | faltante sin explicar |
+| E1-SWP-01..08 | barrido por tópico | simulador con fixture no vacío por tópico | enumerables: 0 faltantes; convergencia: cobertura y convergencia 100 %; payload cifrado | faltante, fixture vacío o payload plano |
 | E1-SWP-09 | caída en medio de ventana | error en página 3 | cursor no avanza; la corrida siguiente repite con solape sin duplicar | avanza o duplica |
-| E1-CONV-01 | envíos por convergencia | 20 envíos, 5 cambian `last_updated` | sólo los 5 se reproyectan; convergencia 100 %; header `x-format-new` enviado | reproyecta todo o no envía el header |
+| E1-CONV-01 | envíos por convergencia | 20 relaciones orden→envío, 5 cambian `last_updated` | sólo los 5 se encolan; cobertura y convergencia 100 %; header `x-format-new` enviado | falta relación, encola todo o no envía el header |
 | E1-DEL-01 | borrados Woo | producto borrado sin `product.deleted` | la vuelta diaria de IDs lo detecta | no se detecta |
 | E1-LAT-01 | presupuesto del legado | ≥ 500 webhooks anonimizados, 30 min, 3 corridas (copia apagada / encendida / encendida con PostgreSQL detenido) | Δp95 ≤ 25 ms, Δp99 ≤ 100 ms, 0 cambios de código HTTP, 0 errores nuevos | cualquier umbral excedido |
 | E1-PGDOWN-01 | reparación tras caída | PostgreSQL detenido 10 min con tráfico | pérdidas contadas por un contador durable **fuera** de PostgreSQL e importadas con auditoría al volver (contrato del tramo 3); barridos reparan el 100 % de lo enumerable; envíos convergen en un barrido | queda faltante |

@@ -32,7 +32,7 @@
 
 ## Diseño, datos e interfaces
 
-- **Modelo:** Esquema en docs/superpowers/specs/e1/schema.sql: core (companies, channel_accounts), security (users con email cifrado e índice ciego, roles, capabilities, webauthn_credentials, recovery_codes, feature_flags), audit (audit_events append-only con cadena de hash y verify_chain, audit_daily_manifests) e integrations (inbox_messages, outbox_commands, command_attempts, dead_letters, reconciliation_cursors, sweep_runs, daily_shadow_reports, vista incidents).
+- **Modelo:** Esquema en docs/superpowers/specs/e1/schema.sql: core (companies, channel_accounts), security (users con email cifrado e índice ciego, roles, capabilities, webauthn_credentials, recovery_codes, feature_flags), audit (audit_events append-only con cadena de hash y verify_chain, audit_daily_manifests) e integrations (inbox_messages con sobre AES-256-GCM, outbox_commands, command_attempts, dead_letters, reconciliation_cursors por clase, sweep_runs, resource_observations y resource_relations con retención técnica de 400 días, daily_shadow_reports y vista incidents).
 - **Interfaces:** GET /api/v2/health y GET /api/v2/incidents según openapi/platform-v2.yaml; reporte firmado en B2 (governance 365 d) y email por SMTP existente con adjuntos. No hay UI ni login real en E1.
 - Los endpoints nuevos viven bajo `/api/v2`, usan errores `{code,message,correlation_id,details?}`, autorización por capacidad y paginación por cursor.
 - Las mutaciones requieren `Idempotency-Key`; las actualizaciones concurrentes requieren `expected_version` y responden 409 sin efecto parcial.
@@ -68,13 +68,13 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** revisión independiente del código y del ensayo aislado del tramo 1, documentados en `docs/superpowers/plans/2026-09-15-e1-tramo1-fundacion.md`; el corte en VPS sigue bloqueado y requiere autorización expresa. Después, diseñar y aprobar por separado los tramos 2 (barridos), 3 (sombra en vivo) y 4 (passkeys y reporte).
+- **Próxima acción exacta:** Ejecutar docs/superpowers/plans/2026-09-15-e1-tramo2-barridos.md únicamente contra infraestructura efímera; después realizar revisión independiente. Los tramos 3 y 4 y cualquier corte en VPS requieren aprobación propia.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
 ## Especificación original incorporada
 
-Especificación de E1 confirmada el 2026-09-13; su copia archivada sólo acredita procedencia. **Donde contradiga documentos posteriores, prevalecen** la spec del tramo 1 (`docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md`: paquete `plataforma/` con lockfile propio fuera de la suite del legado, contenedores de ~128 MB), `specs/e1/schema.sql`, `specs/e1/test-e1.md` y las decisiones PM-173 a PM-177.
+Especificación de E1 confirmada el 2026-09-13; su copia archivada sólo acredita procedencia. **Donde contradiga documentos posteriores, prevalecen** las specs aprobadas de los tramos 1 y 2 (`docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md` y `docs/superpowers/specs/2026-09-15-e1-tramo2-barridos-design.md`), `specs/e1/schema.sql`, `specs/e1/test-e1.md` y las decisiones PM-173 a PM-178.
 
 #### Decisiones fijadas
 
@@ -233,13 +233,15 @@ flowchart LR
   sweep_matrix[sweep_matrix]
   test_matrix[test_matrix]
   tramo1_design[tramo1_design]
+  tramo2_design[tramo2_design]
+  reconciliation_engine[reconciliation_engine]
 ```
 
 | Componente | Estado | Ruta | Responsabilidad |
 |---|---|---|---|
-| platform_api | future | plataforma/src/api | health, auth y consulta de incidentes |
-| platform_worker | future | plataforma/src/worker | claims, proyecciones y reintentos |
-| platform_scheduler | future | plataforma/src/scheduler | encolar barridos y tareas periódicas |
+| platform_api | existing | plataforma/src/api | health, auth y consulta de incidentes |
+| platform_worker | existing | plataforma/src/worker | claims, proyecciones y reintentos |
+| platform_scheduler | existing | plataforma/src/scheduler | encolar barridos y tareas periódicas |
 | legacy_runtime | existing | server.js | ACK y operación productiva sin dependencia de PostgreSQL |
 | qa_simulator | existing | scripts/qa/simulador-canales.mjs | fallos y respuestas remotas simuladas |
 | schema_spec | existing | docs/superpowers/specs/e1/schema.sql | esquema base: core, security, audit con cadena de hash, integrations |
@@ -247,6 +249,8 @@ flowchart LR
 | sweep_matrix | existing | docs/superpowers/specs/e1/matriz-barridos.md | barridos por tópico verificados con evidencia |
 | test_matrix | existing | docs/superpowers/specs/e1/test-e1.md | escenarios obligatorios de npm run test:e1 |
 | tramo1_design | existing | docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md | diseño aprobado del tramo 1: estructura, base, auditoría, colas, API y puesta en marcha |
+| tramo2_design | existing | docs/superpowers/specs/2026-09-15-e1-tramo2-barridos-design.md | diseño aprobado del tramo 2: barridos, cursores, relaciones, observaciones y cifrado |
+| reconciliation_engine | future | plataforma/src/reconciliacion | ventanas, adaptadores de lectura, observaciones, relaciones y convergencia |
 
 ## Actores, tecnologías y dependencias externas
 
@@ -269,6 +273,7 @@ Un servicio `candidate` no autoriza contratación, instalación ni uso de creden
 |---|---|---|---|---|---|---|---|---|---|
 | E1-UC1 | sistema_ml/sistema_woo | callback recibido | webhook | legacy responde; copia asíncrona intenta inbox; worker relee recurso | copia caída se repara por barrido | PostgreSQL caído no altera ACK ni latencia permitida | evento deduplicado o pérdida contabilizada | E1-LAT-01 | métrica y correlación |
 | E1-UC2 | jose_revisor | cierre diario | scheduler | calcular paridad/convergencia, firmar, subir a B2 y enviar hash | email falla pero B2 conserva reporte | firma o upload fallido alerta | reporte inmutable verificable | E1-REC-01 | hash y HEAD/GET |
+| E1-UC3 | scheduler/worker | corriente habilitada y vencida; transporte simulado de sólo lectura | next_run_at | scheduler crea run; worker congela ventana, pagina, cifra inbox, actualiza observaciones/relaciones y avanza cursor al cerrar | convergencia por IDs relacionados o vuelta completa para bajas | cursor inmóvil, retry con backoff o failed visible | paridad o convergencia medida sin PII en claro | E1-CONV-01 | sweep_run, hashes, métricas y registro GET del simulador |
 
 La guía operativa para cada caso es: verificar precondiciones; registrar commit, actor y hora; ejecutar
 el flujo sin saltar guardas; ante una alternativa seguir su rama; ante error detener ampliación,
@@ -282,7 +287,9 @@ preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evi
 | outbox_commands | id | idempotency_key unique; estado válido | status, available_at | integrations | auditable | encrypted when present |
 | audit_events | id | append-only; prev_hash/hash | occurred_at, aggregate | audit | permanente | references only |
 | dead_letters | id | source id and terminal reason | topic, created_at | operations | hasta resolución+archivo | minimal |
-| reconciliation_cursors | account+topic | cursor and overlap policy | next_run_at | integrations | vigente | none |
+| reconciliation_cursors | account+topic+cursor_kind | cursor JSONB versionado; overlap; enabled | next_run_at | integrations | vigente | none |
+| resource_observations | account+topic+resource_id | remote/projection hash; lifecycle; last_seen_run | lifecycle, last_seen_at | integrations | activas o 400 días tras último avistamiento | none; identifiers and hashes only |
+| resource_relations | account+relation_type+source+target | order_shipment, order_pack, product_variation | target topic/id, lifecycle | integrations | activas o 400 días tras último avistamiento | none; remote identifiers only |
 | webauthn_credentials | credential_id | public key; counter; user FK | user_id | security | hasta revocación | encrypted user link |
 
 Las entidades objetivo son `future`: su nombre y contrato quedan fijados para el diseño, pero ninguna
@@ -296,6 +303,8 @@ stateDiagram-v2
   claimed -->|success| succeeded
   claimed -->|timeout_after_effect| uncertain
   retryable -->|attempt_limit| dead_lettered
+  claimed -->|read_retryable| retryable
+  claimed -->|sweep_complete| succeeded
 ```
 
 | Desde | Evento | Guarda | Hasta | Efecto | Error | Prueba |
@@ -304,6 +313,8 @@ stateDiagram-v2
 | claimed | success | token vigente | succeeded | audita resultado | 409 | E1-Q-02 |
 | claimed | timeout_after_effect | resultado remoto desconocido | uncertain | bloquea repetición y agenda GET | DLQ si no converge | E1-Q-03 |
 | retryable | attempt_limit | intentos agotados | dead_lettered | alerta y SOP | ninguno | E1-Q-04 |
+| claimed | read_retryable | lease vigente e intentos restantes | retryable | cursor inmóvil y available_at con backoff | failed al octavo reclamo | E1-SWP-09 |
+| claimed | sweep_complete | todas las páginas válidas y versión de cursor vigente | succeeded | avanza cursor y confirma observaciones/bajas | partial ante conflicto de versión | E1-SWP-01 |
 
 ## Secuencias normal, degradada e incierta
 
@@ -387,11 +398,11 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 | Requisito | Diseño | Archivo | Migración | Prueba | Métrica | Evidencia |
 |---|---|---|---|---|---|---|
-| 8 tópicos reconciliados | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-SCH-01 | 8 tópicos reconciliados | salida literal + commit + fecha |
-| p95 delta<=25ms | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-SCH-02 | p95 delta<=25ms | salida literal + commit + fecha |
-| p99 delta<=100ms | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-AUD-01 | p99 delta<=100ms | salida literal + commit + fecha |
-| 0 cambios HTTP | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-AUD-02 | 0 cambios HTTP | salida literal + commit + fecha |
-| 7 días sombra | entidades/transiciones/API de esta ficha | plataforma/src/api | migración E1 aún no creada | E1-AUD-03 | 7 días sombra | salida literal + commit + fecha |
+| 8 tópicos reconciliados | entidades/transiciones/API de esta ficha | plataforma/src/reconciliacion | migración E1 aún no creada | E1-SCH-01 | 8 tópicos reconciliados | salida literal + commit + fecha |
+| p95 delta<=25ms | entidades/transiciones/API de esta ficha | plataforma/src/reconciliacion | migración E1 aún no creada | E1-SCH-02 | p95 delta<=25ms | salida literal + commit + fecha |
+| p99 delta<=100ms | entidades/transiciones/API de esta ficha | plataforma/src/reconciliacion | migración E1 aún no creada | E1-AUD-01 | p99 delta<=100ms | salida literal + commit + fecha |
+| 0 cambios HTTP | entidades/transiciones/API de esta ficha | plataforma/src/reconciliacion | migración E1 aún no creada | E1-AUD-02 | 0 cambios HTTP | salida literal + commit + fecha |
+| 7 días sombra | entidades/transiciones/API de esta ficha | plataforma/src/reconciliacion | migración E1 aún no creada | E1-AUD-03 | 7 días sombra | salida literal + commit + fecha |
 
 ## Fuentes y decisiones abiertas
 
@@ -406,5 +417,5 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 ## Decisiones PM asignadas
 
-- **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158, PM-170, PM-171, PM-172, PM-173, PM-174, PM-175, PM-176
+- **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158, PM-170, PM-171, PM-172, PM-173, PM-174, PM-175, PM-176, PM-178
 - **Consumidora:** PM-003, PM-006, PM-008, PM-017, PM-046, PM-048, PM-085, PM-086, PM-087, PM-094, PM-105, PM-107, PM-125, PM-127, PM-129, PM-149, PM-160
