@@ -1,6 +1,6 @@
 # E0 — Infraestructura, DR y PITR
 
-**Estado:** aceptada
+**Estado:** desarrollo
 
 **Dependencias:** ninguna
 
@@ -13,7 +13,7 @@
 ## Resultado y límites
 
 - DR de PostgreSQL 18 en dos niveles (PM-167): repositorio pgBackRest local cifrado con WAL continuo y PITR medido (RPO ≤ 5 min, RTO ≤ 1 h ante errores de base), copia externa descargada por una máquina propia ante pérdida total del VPS, y backups semanales de Hostinger como red de fondo.
-- **Incluye:** PostgreSQL 18 por digest con volumen propio y límites; pgBackRest 2.59.x (PM-166) con archive-push asíncrono, spool local, compresión y cifrado de repositorio; restauración PITR en QA; copia externa por pull SSH de sólo lectura; alertas en Better Stack y vigía interno; capacidad y SOP de restauración.
+- **Incluye:** PostgreSQL 18 por digest con volumen propio y límites; pgBackRest 2.59.x (PM-166) con archive-push asíncrono (sin límite de cola), compresión y cifrado de repositorio; restauración PITR en QA; copia externa por pull SSH de sólo lectura; alertas en Better Stack y vigía interno; capacidad y SOP de restauración.
 - **No incluye:** No crea tablas de aplicación ni migra datos operativos; no usa almacenamiento pago ni Backblaze para PostgreSQL (PM-165); los backups diarios de Hostinger se activan después y no cuentan para la aceptación (PM-168).
 - **Evidencia histórica absorbida:** P0, E23 recuperación. Es evidencia, no aceptación automática.
 
@@ -28,12 +28,12 @@
 - PostgreSQL es destino canónico; cambios de negocio son transaccionales, auditados y atribuibles.
 - Ningún efecto remoto se considera exitoso hasta releer y verificar el recurso; respuesta incierta bloquea repetición ciega.
 - Un solo escritor remoto por vertical; idempotencia, versión esperada, leases y DLQ son obligatorios.
-- `archive_command` (pgbackrest archive-push asíncrono) devuelve 0 sólo después de escribir el WAL en el spool local con fsync; nunca se borra WAL no archivado. Spool acotado a 5 GB con alerta al 70 % de disco. El repositorio local no protege la pérdida total del VPS: eso lo cubre el nivel 2. El contenedor corre con init como PID 1: sin él, la muerte del push asíncrono reinicia postgres (medido 2026-09-13).
+- `archive_command` (pgBackRest archive-push asíncrono) devuelve 0 a PostgreSQL sólo cuando el segmento llegó al repositorio; el spool guarda archivos de estado, no copias del WAL, y mientras no se archive PostgreSQL conserva el segmento en pg_wal (.ready). Sin `archive-push-queue-max` (PM-177, 2026-09-15): superarlo hacía que pgBackRest informara el WAL como archivado, lo descartara y cortara el PITR; ahora un disco lleno detiene PostgreSQL y la protección previa son las alertas de capacidad (disco del host, pg_wal y bytes en cola). El repositorio local no protege la pérdida total del VPS: eso lo cubre el nivel 2. El contenedor corre con init como PID 1: sin él, la muerte del push asíncrono reinicia postgres (medido 2026-09-13).
 
 ## Diseño, datos e interfaces
 
 - **Modelo:** Sin tablas de aplicación. El catálogo de backups y WAL lo gestiona pgBackRest (`pgbackrest info --output=json`); cada simulacro de restauración deja un registro JSON firmado (target, inicio, fin, RPO, RTO, consultas centinela) fuera del cluster restaurado.
-- **Interfaces:** Healthcheck interno de PostgreSQL en 127.0.0.1, `pgbackrest check` e `info`, métricas de archive lag y tamaño del spool para el vigía; ninguna API de negocio.
+- **Interfaces:** Healthcheck interno de PostgreSQL en 127.0.0.1, `pgbackrest check` e `info`, y para el vigía: segmentos .ready (cantidad, bytes y antigüedad), tamaño de pg_wal y ocupación del disco del host; ninguna API de negocio.
 - Los endpoints nuevos viven bajo `/api/v2`, usan errores `{code,message,correlation_id,details?}`, autorización por capacidad y paginación por cursor.
 - Las mutaciones requieren `Idempotency-Key`; las actualizaciones concurrentes requieren `expected_version` y responden 409 sin efecto parcial.
 - Eventos/auditoría son append-only; correcciones agregan un evento compensatorio y nunca reescriben historia.
@@ -54,7 +54,7 @@
 
 ## Pruebas y evidencia
 
-- **Comando contractual:** pg_isready; pgbackrest check; backup completo + verify; caída del proceso de push con WAL conservado en spool; restauración PITR a un instante con RPO/RTO medidos; hash de la copia externa cuando exista la máquina del nivel 2.
+- **Comando contractual:** pg_isready; pgbackrest check; backup completo + verify; caída del proceso de push sin perder segmentos (PostgreSQL los conserva en pg_wal hasta archivarlos); restauración PITR a un instante con RPO/RTO medidos; restauración desde la copia subida por la máquina del nivel 2.
 - El comando `npm run test:e0` debe existir antes de pasar a `desarrollo`; no puede ser un alias vacío y debe fallar si falta un escenario obligatorio.
 - Registrar salida literal, commit, fixture, fecha, duración y omisiones. Tests existentes sólo cuentan si cubren el contrato nuevo.
 - Revisión independiente sin críticos/altos, suite global serial, restauración aplicable y E2E/dispositivo/hardware según superficie.
@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Seguimiento de la aceptación (no bloquea E1): restaurar una vez desde la copia real de la Mac con scripts/postgres/restaurar-desde-mac.sh (clave de subida temporal para fusion-restore con rrsync -wo, borrarla al terminar) y alta opcional del heartbeat de la Mac.
+- **Próxima acción exacta:** Reabierta 2026-09-15 por revisión técnica. Para volver a aceptar: (1) quitar archive-push-queue-max y recrear el contenedor con test:e0 verde; (2) vigía de capacidad en producción (disco, pg_wal, cola .ready) con estado nuevo publicado; (3) restauración real desde la copia subida por la Mac con scripts/postgres/restaurar-desde-mac.sh; (4) fichas coherentes con lo desplegado.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
@@ -90,15 +90,15 @@ flowchart LR
 
 | Componente | Estado | Ruta | Responsabilidad |
 |---|---|---|---|
-| postgres18 | future | deploy/postgres/compose.yml | cluster vacío en 127.0.0.1, digest fijado, init como PID 1, 768 MB, volumen propio |
-| pgbackrest | future | deploy/postgres/pgbackrest.conf | archive-push asíncrono con spool, compresión zstd, cifrado aes-256-cbc, retención |
-| repo_local | future | /var/lib/pgbackrest (volumen) | repositorio nivel 1 en el VPS |
-| offsite_pull | future | scripts/postgres/offsite-pull-mac.sh | tarea launchd en la Mac: rsync de sólo lectura del repositorio y verificación de hashes |
+| postgres18 | existing | deploy/postgres/compose.yml | cluster vacío en 127.0.0.1, digest fijado, init como PID 1, 768 MB, volumen propio |
+| pgbackrest | existing | deploy/postgres/pgbackrest.conf | archive-push asíncrono sin límite de cola (PM-177), compresión zstd, cifrado aes-256-cbc, retención |
+| repo_local | existing | deploy/postgres/compose.prod.yml | repositorio pgBackRest cifrado en el volumen /opt/fusionbikes/postgres/repo (montado en /var/lib/pgbackrest) |
+| offsite_pull | existing | scripts/postgres/offsite-pull-mac.sh | tarea launchd en la Mac: rsync de sólo lectura del repositorio y verificación de hashes |
 | qa_existing | existing | scripts/qa/qa.sh | entorno QA bajo demanda existente |
-| restore_drill | future | scripts/postgres/test-e0.sh | ensayo de restauración a un instante con registro firmado |
-| backup_diario | future | scripts/postgres/backup-diario.sh | backup full dominical y diferencial diario con verify y estado |
-| estado_archivo | future | scripts/postgres/estado-archivo.sh | cada 5 min: segmentos WAL pendientes, antigüedad del más viejo y spool |
-| firma_registros | future | scripts/postgres/firmar-registro.sh | firma y verificación Ed25519 de registros de ensayo y backup |
+| restore_drill | existing | scripts/postgres/test-e0.sh | ensayo de restauración a un instante con registro firmado |
+| backup_diario | existing | scripts/postgres/backup-diario.sh | backup full dominical y diferencial diario con verify y estado |
+| estado_archivo | existing | scripts/postgres/estado-archivo.sh | cada 5 min: segmentos .ready (cantidad, bytes, antigüedad), tamaño de pg_wal y disco del host |
+| firma_registros | existing | scripts/postgres/firmar-registro.sh | firma y verificación Ed25519 de registros de ensayo y backup |
 
 ## Actores, tecnologías y dependencias externas
 
@@ -107,7 +107,7 @@ flowchart LR
 
 | Servicio | Estado | Finalidad |
 |---|---|---|
-| Better Stack | chosen | alertas de archive lag, spool, disco y resultado de simulacros (ya monitorea /healthz y el heartbeat del backup SQLite) |
+| Better Stack | chosen | heartbeat del backup PostgreSQL y /healthz; alertas de capacidad por el vigía interno (incidentes y email) |
 | Hostinger backups semanales | chosen | red de fondo incluida en el plan; RPO hasta 7 días |
 | Hostinger backups diarios | candidate | se activan más adelante (PM-168); no cuentan para la aceptación |
 | Mac del local (nivel 2, PM-169) | chosen | descarga el repositorio por SSH de sólo lectura mientras está encendida (horario del local) |
@@ -118,7 +118,7 @@ Un servicio `candidate` no autoriza contratación, instalación ni uso de creden
 
 | ID | Actor | Precondición | Disparador | Flujo principal | Alternativas | Errores | Postcondición | Prueba | Evidencia |
 |---|---|---|---|---|---|---|---|---|---|
-| E0-UC1 | operador_infraestructura | cluster vacío, stanza creada y clave de cifrado fuera del repo | backup programado diario | backup, verify y confirmación en info | repositorio lleno o spool > 70 % alerta y detiene ampliación | WAL faltante o verify con error bloquea aceptación | backup verificable | E0-WAL-03 | salida de pgbackrest backup/verify/info |
+| E0-UC1 | operador_infraestructura | cluster vacío, stanza creada y clave de cifrado fuera del repo | backup programado diario | backup, verify y confirmación en info | disco ≥ 80 % o cola de WAL ≥ 1 GiB alerta antes de que PostgreSQL se detenga | WAL faltante o verify con error bloquea aceptación | backup verificable | E0-WAL-03 | salida de pgbackrest backup/verify/info |
 | E0-UC2 | revisor_tecnico | backup y WAL continuos | simulacro mensual o antes de aceptar | restaurar en QA a un instante elegido y medir | timeline alterna se registra sin pisar el origen | restore no arranca o excede RPO/RTO | cluster de QA consultable | E0-PITR-01 | registro firmado con tiempos y consultas centinela |
 | E0-UC3 | operador_infraestructura | máquina del nivel 2 confirmada y clave SSH de sólo lectura | tarea programada en la máquina | descargar repositorio, verificar hash y restaurar una vez | máquina apagada: se pone al día al volver | hash distinto o descarga incompleta alerta | copia externa restaurable | E0-OFF-01 | log de pull con hashes y restore de prueba |
 
@@ -131,8 +131,8 @@ preservar evidencia y aplicar el SOP; comprobar postcondición y adjuntar la evi
 | Entidad | PK | Restricciones | Índices | Dueño | Retención | PII |
 |---|---|---|---|---|---|---|
 | repositorio pgBackRest | stanza + backup label | cifrado obligatorio; verify sin errores antes de aceptar | gestionados por pgBackRest | infraestructura | 2 completos + WAL necesario (repo-retention-full=2) | cifrada en reposo |
-| spool de archive-push | segmento WAL | fsync antes de devolver 0; máximo 5 GB | n/a | infraestructura | hasta confirmación en el repositorio | cifrada al pasar al repositorio |
 | registro de simulacro | drill_id (UTC) | target, inicio, fin, RPO, RTO y consultas centinela obligatorios; firmado | archivo por fecha | infraestructura | permanente | none |
+| cola de archivado (pg_wal/archive_status) | segmento WAL | PostgreSQL conserva el segmento hasta que archive_command devuelve 0; nunca se descarta (sin archive-push-queue-max) | n/a | infraestructura | hasta confirmación en el repositorio | en claro dentro del volumen; cifrado al pasar al repositorio |
 
 Las entidades objetivo son `future`: su nombre y contrato quedan fijados para el diseño, pero ninguna
 tabla se declara existente hasta observar su migración aplicada y consultar su esquema.
@@ -148,8 +148,8 @@ stateDiagram-v2
 
 | Desde | Evento | Guarda | Hasta | Efecto | Error | Prueba |
 |---|---|---|---|---|---|---|
-| generated | archive_command | segmento completo o archive_timeout=60s | spooled | escritura en spool con fsync; recién entonces devuelve 0 | devuelve no-cero y PostgreSQL conserva el WAL | E0-WAL-01 |
-| spooled | push asíncrono | repositorio disponible | archived | copia comprimida y cifrada al repositorio | permanece spooled; alerta si lag > 3 min | E0-WAL-02 |
+| generated | archive_command | segmento completo o archive_timeout=60s | spooled | pgBackRest encola el push asíncrono; el segmento sigue en pg_wal como .ready | devuelve no-cero y PostgreSQL conserva el WAL | E0-WAL-01 |
+| spooled | push asíncrono | repositorio disponible | archived | copia comprimida y cifrada al repositorio; recién entonces archive_command devuelve 0 y PostgreSQL puede reciclar el segmento | el segmento queda en pg_wal; alerta si el más viejo supera 3 min o la cola 1 GiB | E0-WAL-02 |
 | archived | check/verify | segmento legible y continuo | verified | registra evidencia en info | blocked: invalida backup dependiente | E0-WAL-03 |
 
 ## Secuencias normal, degradada e incierta
@@ -194,9 +194,9 @@ Esta entrega no expone API de negocio.
 
 ## Fallos, recuperación y SOP
 
-- archive_command nunca devuelve 0 antes del fsync en spool
+- archive-push-queue-max descarta WAL y corta el PITR: prohibido en la configuración (PM-177)
+- disco del host lleno detiene PostgreSQL: alertas de capacidad en 80 % (aviso) y 90 % (crítico), cola .ready ≥ 1/4 GiB y pg_wal ≥ 2/8 GiB
 - contenedor PostgreSQL con init como PID 1 (compose init: true): sin init, pgBackRest asíncrono queda huérfano de postgres y su muerte (OOM, kill) provoca recuperación de arranque con corte de todas las conexiones (medido 2026-09-13)
-- spool al 70 % del límite o disco al 70 % alerta y detiene ampliación
 - WAL faltante invalida el backup dependiente
 - verify verde no reemplaza una restauración real
 - pérdida de la clave de cifrado vuelve irrecuperable el repositorio: copia fuera del VPS obligatoria
@@ -212,8 +212,8 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 - **Integración:** PostgreSQL: archive_command = pgbackrest archive-push asíncrono; archive_timeout 60 s
 - **Integración:** Nivel 2: pull por SSH con clave de sólo lectura desde la máquina propia; nada se empuja desde el VPS
 - **Observación:** archive lag: alerta > 3 min, crítico > 5 min
-- **Observación:** spool: alerta al 70 % de 5 GB; disco: alerta al 70 %
-- **Observación:** último backup verificado: alerta si > 26 h
+- **Observación:** capacidad: disco del host ≥ 80 % aviso / ≥ 90 % crítico; cola .ready ≥ 1 GiB / ≥ 4 GiB; pg_wal ≥ 2 GiB / ≥ 8 GiB; sin medición → crítico
+- **Observación:** último backup verificado: alerta si > 26 h (y heartbeat de Better Stack)
 - **Observación:** RPO y RTO por simulacro; copia externa: antigüedad del último pull
 - **Rollout:** cluster vacío sin clientes, 24 h de WAL, backup, restore en QA y aceptación del nivel 1; luego pull y restore desde la máquina del nivel 2
 - **Rollback:** detener clientes nuevos; conservar cluster, spool y repositorio; el legacy no cambia
@@ -248,5 +248,5 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 ## Decisiones PM asignadas
 
-- **Dueña:** PM-165, PM-166, PM-167, PM-168, PM-169
+- **Dueña:** PM-165, PM-166, PM-167, PM-168, PM-169, PM-177
 - **Consumidora:** ninguna

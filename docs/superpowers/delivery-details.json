@@ -11,25 +11,25 @@
       "components": [
         {
           "id": "postgres18",
-          "status": "future",
+          "status": "existing",
           "path": "deploy/postgres/compose.yml",
           "purpose": "cluster vacío en 127.0.0.1, digest fijado, init como PID 1, 768 MB, volumen propio"
         },
         {
           "id": "pgbackrest",
-          "status": "future",
+          "status": "existing",
           "path": "deploy/postgres/pgbackrest.conf",
-          "purpose": "archive-push asíncrono con spool, compresión zstd, cifrado aes-256-cbc, retención"
+          "purpose": "archive-push asíncrono sin límite de cola (PM-177), compresión zstd, cifrado aes-256-cbc, retención"
         },
         {
           "id": "repo_local",
-          "status": "future",
-          "path": "/var/lib/pgbackrest (volumen)",
-          "purpose": "repositorio nivel 1 en el VPS"
+          "status": "existing",
+          "path": "deploy/postgres/compose.prod.yml",
+          "purpose": "repositorio pgBackRest cifrado en el volumen /opt/fusionbikes/postgres/repo (montado en /var/lib/pgbackrest)"
         },
         {
           "id": "offsite_pull",
-          "status": "future",
+          "status": "existing",
           "path": "scripts/postgres/offsite-pull-mac.sh",
           "purpose": "tarea launchd en la Mac: rsync de sólo lectura del repositorio y verificación de hashes"
         },
@@ -41,25 +41,25 @@
         },
         {
           "id": "restore_drill",
-          "status": "future",
+          "status": "existing",
           "path": "scripts/postgres/test-e0.sh",
           "purpose": "ensayo de restauración a un instante con registro firmado"
         },
         {
           "id": "backup_diario",
-          "status": "future",
+          "status": "existing",
           "path": "scripts/postgres/backup-diario.sh",
           "purpose": "backup full dominical y diferencial diario con verify y estado"
         },
         {
           "id": "estado_archivo",
-          "status": "future",
+          "status": "existing",
           "path": "scripts/postgres/estado-archivo.sh",
-          "purpose": "cada 5 min: segmentos WAL pendientes, antigüedad del más viejo y spool"
+          "purpose": "cada 5 min: segmentos .ready (cantidad, bytes, antigüedad), tamaño de pg_wal y disco del host"
         },
         {
           "id": "firma_registros",
-          "status": "future",
+          "status": "existing",
           "path": "scripts/postgres/firmar-registro.sh",
           "purpose": "firma y verificación Ed25519 de registros de ensayo y backup"
         }
@@ -75,7 +75,7 @@
         {
           "name": "Better Stack",
           "status": "chosen",
-          "purpose": "alertas de archive lag, spool, disco y resultado de simulacros (ya monitorea /healthz y el heartbeat del backup SQLite)"
+          "purpose": "heartbeat del backup PostgreSQL y /healthz; alertas de capacidad por el vigía interno (incidentes y email)"
         },
         {
           "name": "Hostinger backups semanales",
@@ -104,15 +104,6 @@
           "pii": "cifrada en reposo"
         },
         {
-          "name": "spool de archive-push",
-          "pk": "segmento WAL",
-          "constraints": "fsync antes de devolver 0; máximo 5 GB",
-          "indexes": "n/a",
-          "owner": "infraestructura",
-          "retention": "hasta confirmación en el repositorio",
-          "pii": "cifrada al pasar al repositorio"
-        },
-        {
           "name": "registro de simulacro",
           "pk": "drill_id (UTC)",
           "constraints": "target, inicio, fin, RPO, RTO y consultas centinela obligatorios; firmado",
@@ -120,6 +111,15 @@
           "owner": "infraestructura",
           "retention": "permanente",
           "pii": "none"
+        },
+        {
+          "name": "cola de archivado (pg_wal/archive_status)",
+          "pk": "segmento WAL",
+          "constraints": "PostgreSQL conserva el segmento hasta que archive_command devuelve 0; nunca se descarta (sin archive-push-queue-max)",
+          "indexes": "n/a",
+          "owner": "infraestructura",
+          "retention": "hasta confirmación en el repositorio",
+          "pii": "en claro dentro del volumen; cifrado al pasar al repositorio"
         }
       ],
       "states": [
@@ -135,7 +135,7 @@
           "event": "archive_command",
           "guard": "segmento completo o archive_timeout=60s",
           "to": "spooled",
-          "effect": "escritura en spool con fsync; recién entonces devuelve 0",
+          "effect": "pgBackRest encola el push asíncrono; el segmento sigue en pg_wal como .ready",
           "error": "devuelve no-cero y PostgreSQL conserva el WAL",
           "test": "E0-WAL-01"
         },
@@ -144,8 +144,8 @@
           "event": "push asíncrono",
           "guard": "repositorio disponible",
           "to": "archived",
-          "effect": "copia comprimida y cifrada al repositorio",
-          "error": "permanece spooled; alerta si lag > 3 min",
+          "effect": "copia comprimida y cifrada al repositorio; recién entonces archive_command devuelve 0 y PostgreSQL puede reciclar el segmento",
+          "error": "el segmento queda en pg_wal; alerta si el más viejo supera 3 min o la cola 1 GiB",
           "test": "E0-WAL-02"
         },
         {
@@ -166,7 +166,7 @@
           "pre": "cluster vacío, stanza creada y clave de cifrado fuera del repo",
           "trigger": "backup programado diario",
           "main": "backup, verify y confirmación en info",
-          "alternatives": "repositorio lleno o spool > 70 % alerta y detiene ampliación",
+          "alternatives": "disco ≥ 80 % o cola de WAL ≥ 1 GiB alerta antes de que PostgreSQL se detenga",
           "errors": "WAL faltante o verify con error bloquea aceptación",
           "post": "backup verificable",
           "evidence": "salida de pgbackrest backup/verify/info",
@@ -198,9 +198,9 @@
         }
       ],
       "failure_modes": [
-        "archive_command nunca devuelve 0 antes del fsync en spool",
+        "archive-push-queue-max descarta WAL y corta el PITR: prohibido en la configuración (PM-177)",
+        "disco del host lleno detiene PostgreSQL: alertas de capacidad en 80 % (aviso) y 90 % (crítico), cola .ready ≥ 1/4 GiB y pg_wal ≥ 2/8 GiB",
         "contenedor PostgreSQL con init como PID 1 (compose init: true): sin init, pgBackRest asíncrono queda huérfano de postgres y su muerte (OOM, kill) provoca recuperación de arranque con corte de todas las conexiones (medido 2026-09-13)",
-        "spool al 70 % del límite o disco al 70 % alerta y detiene ampliación",
         "WAL faltante invalida el backup dependiente",
         "verify verde no reemplaza una restauración real",
         "pérdida de la clave de cifrado vuelve irrecuperable el repositorio: copia fuera del VPS obligatoria",
@@ -237,8 +237,8 @@
       ],
       "observability": [
         "archive lag: alerta > 3 min, crítico > 5 min",
-        "spool: alerta al 70 % de 5 GB; disco: alerta al 70 %",
-        "último backup verificado: alerta si > 26 h",
+        "capacidad: disco del host ≥ 80 % aviso / ≥ 90 % crítico; cola .ready ≥ 1 GiB / ≥ 4 GiB; pg_wal ≥ 2 GiB / ≥ 8 GiB; sin medición → crítico",
+        "último backup verificado: alerta si > 26 h (y heartbeat de Better Stack)",
         "RPO y RTO por simulacro; copia externa: antigüedad del último pull"
       ],
       "rollout": "cluster vacío sin clientes, 24 h de WAL, backup, restore en QA y aceptación del nivel 1; luego pull y restore desde la máquina del nivel 2",

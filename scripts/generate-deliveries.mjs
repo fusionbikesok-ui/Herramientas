@@ -146,7 +146,13 @@ const e1Detail = fs.readFileSync(e1EvidencePath, 'utf8')
   .replaceAll('P2–P5', 'E2–E13')
   .replaceAll('P2+', 'E2+')
   .replaceAll('P2', 'E2')
-  .replace('1. Confirmar este plan corregido (y el presupuesto de RAM), después de que E0 quede cerrado.', '1. Esta especificación fue confirmada el 2026-09-13; E1 sólo puede iniciar después de aceptar E0 y crear su contrato ejecutable.');
+  .replace('1. Confirmar este plan corregido (y el presupuesto de RAM), después de que E0 quede cerrado.', '1. Esta especificación fue confirmada el 2026-09-13; E1 sólo puede iniciar después de aceptar E0 y crear su contrato ejecutable.')
+  // Correcciones de la revisión técnica del 2026-09-15: el WAL de PostgreSQL no va a B2 (PM-165/167),
+  // pgBackRest corre sin límite de cola con alertas de capacidad (PM-177) y las passkeys reales son de E4.
+  .replace('WAL archivado a B2, retención local mínima.', 'WAL en repositorio local cifrado con copia en la Mac (PM-165, PM-167), sin límite de cola (PM-177).')
+  .replace('siguen vigentes (alerta 70%).', 'se reemplazan por las alertas de capacidad del vigía: disco ≥ 80 % aviso / ≥ 90 % crítico.')
+  .replace('PostgreSQL vacío, WAL archivado a B2,', 'PostgreSQL vacío, WAL archivado en repositorio local cifrado con copia en la Mac,')
+  .replace('condición para activarlas en E2', 'condición para activarlas en E4');
 
 for (const d of program.deliveries) {
   const dependencies = d.depends.length ? d.depends.join(', ') : 'ninguna';
@@ -224,7 +230,7 @@ ${one(d.baseline)}
 - **Próxima acción exacta:** ${d.next}
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
-${d.id === 'E1' ? `\n## Especificación vinculante incorporada\n\nEste contenido forma parte de E1. Su copia archivada sólo acredita procedencia.\n\n${e1Detail}` : ''}
+${d.id === 'E1' ? `\n## Especificación original incorporada\n\nEspecificación de E1 confirmada el 2026-09-13; su copia archivada sólo acredita procedencia. **Donde contradiga documentos posteriores, prevalecen** la spec del tramo 1 (\`docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md\`: paquete \`plataforma/\` con lockfile propio fuera de la suite del legado, contenedores de ~128 MB), \`specs/e1/schema.sql\`, \`specs/e1/test-e1.md\` y las decisiones PM-173 a PM-177.\n\n${e1Detail}` : ''}
 ${renderDetail(d.id)}
 `;
   fs.writeFileSync(file, `${body.trimEnd()}\n`);
@@ -255,7 +261,7 @@ const ownerFor = (id) => {
   if (n === 161) return 'E6';
   if (n === 162) return 'E19';
   if (n === 163) return 'E16';
-  if (n >= 165 && n <= 169) return 'E0';
+  if ((n >= 165 && n <= 169) || n === 177) return 'E0';
   if (n >= 170 && n <= 176) return 'E1';
   if (/webhook|barrido|scan|pregunta|mensaje|reclamo|dead.?letter|pipeline de eventos|frescura/i.test(row)) return 'E1';
   if (/GTIN|EAN|UPC|Producto Fusion|producto Woo|variaci[oó]n|familia|atributo|cat[aá]logo/i.test(row)) return 'E2';
@@ -269,7 +275,7 @@ const ownerFor = (id) => {
 const consumersFor = (id, owner) => {
   // PM-165–169 (infraestructura y DR de E0) no tienen consumidores: sus textos mencionan
   // "migración" o "producto" como contexto y las reglas por palabra los asignarían por error.
-  if (Number(id.slice(3)) >= 165 && Number(id.slice(3)) <= 176) return [];
+  if (Number(id.slice(3)) >= 165 && Number(id.slice(3)) <= 177) return [];
   const row = decisionRows.get(id) || '';
   const consumers = new Set();
   if (/identidad|matcher|seller_sku|GTIN|EAN|UPC|Producto Fusion|publicaci[oó]n/i.test(row)) ['E2', 'E3', 'E4'].forEach((value) => consumers.add(value));

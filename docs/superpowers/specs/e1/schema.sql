@@ -332,14 +332,9 @@ CREATE TABLE integrations.sweep_runs (
 );
 CREATE INDEX sweep_runs_topic ON integrations.sweep_runs (channel_account_id, topic, started_at DESC);
 
--- Copias de señales del legado descartadas (PostgreSQL caído o timeout): el legado sólo cuenta, nunca
--- reintenta. El reporte las contrasta con lo que repararon los barridos.
-CREATE TABLE integrations.shadow_copy_losses (
-  day        date NOT NULL,
-  topic      text NOT NULL,
-  lost       integer NOT NULL CHECK (lost >= 0),
-  PRIMARY KEY (day, topic)
-);
+-- Sin tabla de pérdidas de copia (2026-09-15): una falla de PostgreSQL no puede contarse dentro del mismo
+-- PostgreSQL caído. El contador durable vive fuera (legado) y su importación auditada se diseña en el
+-- tramo 3; el registro de observaciones remotas y el orden de versiones, en el tramo 2.
 
 CREATE TABLE integrations.daily_shadow_reports (
   report_date      date PRIMARY KEY,

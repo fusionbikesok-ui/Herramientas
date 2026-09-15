@@ -32,7 +32,7 @@
 
 ## Diseño, datos e interfaces
 
-- **Modelo:** Esquema en docs/superpowers/specs/e1/schema.sql: core (companies, channel_accounts), security (users con email cifrado e índice ciego, roles, capabilities, webauthn_credentials, recovery_codes, feature_flags), audit (audit_events append-only con cadena de hash y verify_chain, audit_daily_manifests) e integrations (inbox_messages, outbox_commands, command_attempts, dead_letters, reconciliation_cursors, sweep_runs, shadow_copy_losses, daily_shadow_reports, vista incidents).
+- **Modelo:** Esquema en docs/superpowers/specs/e1/schema.sql: core (companies, channel_accounts), security (users con email cifrado e índice ciego, roles, capabilities, webauthn_credentials, recovery_codes, feature_flags), audit (audit_events append-only con cadena de hash y verify_chain, audit_daily_manifests) e integrations (inbox_messages, outbox_commands, command_attempts, dead_letters, reconciliation_cursors, sweep_runs, daily_shadow_reports, vista incidents).
 - **Interfaces:** GET /api/v2/health y GET /api/v2/incidents según openapi/platform-v2.yaml; reporte firmado en B2 (governance 365 d) y email por SMTP existente con adjuntos. No hay UI ni login real en E1.
 - Los endpoints nuevos viven bajo `/api/v2`, usan errores `{code,message,correlation_id,details?}`, autorización por capacidad y paginación por cursor.
 - Las mutaciones requieren `Idempotency-Key`; las actualizaciones concurrentes requieren `expected_version` y responden 409 sin efecto parcial.
@@ -72,9 +72,9 @@
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
-## Especificación vinculante incorporada
+## Especificación original incorporada
 
-Este contenido forma parte de E1. Su copia archivada sólo acredita procedencia.
+Especificación de E1 confirmada el 2026-09-13; su copia archivada sólo acredita procedencia. **Donde contradiga documentos posteriores, prevalecen** la spec del tramo 1 (`docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md`: paquete `plataforma/` con lockfile propio fuera de la suite del legado, contenedores de ~128 MB), `specs/e1/schema.sql`, `specs/e1/test-e1.md` y las decisiones PM-173 a PM-177.
 
 #### Decisiones fijadas
 
@@ -104,8 +104,8 @@ Este contenido forma parte de E1. Su copia archivada sólo acredita procedencia.
 | Scheduler | 96 MB | 0,1 | sólo encola trabajos periódicos; no ejecuta efectos |
 | **Total nuevo** | **~1,3 GB** | | deja ~2 GB libres; se mide antes y después |
 
-Disco: PostgreSQL arranca < 1 GB; WAL archivado a B2, retención local mínima. Umbrales de Gate 0
-siguen vigentes (alerta 70%).
+Disco: PostgreSQL arranca < 1 GB; WAL en repositorio local cifrado con copia en la Mac (PM-165, PM-167), sin límite de cola (PM-177). Umbrales de Gate 0
+se reemplazan por las alertas de capacidad del vigía: disco ≥ 80 % aviso / ≥ 90 % crítico.
 
 #### Pasos
 
@@ -119,7 +119,7 @@ Cada paso termina en algo verificable y con tests. El orden importa: primero lo 
 - **Aceptación:** `npm test` del repo corre los tests de `plataforma/` y del legado; CI local verde.
 
 #### 2. Condición de entrada: E0 cerrado
-- PostgreSQL vacío, WAL archivado a B2, base backups verificados y PITR medido pertenecen a E0
+- PostgreSQL vacío, WAL archivado en repositorio local cifrado con copia en la Mac, base backups verificados y PITR medido pertenecen a E0
   (`deliveries/PLAT-0-gate0.md`). E1 no instala ni configura la base: aplica migraciones sobre ella.
 - **Aceptación:** la ficha de E0 registra RPO/RTO medidos y el vigía de WAL activo.
 
@@ -216,7 +216,7 @@ Cada paso termina en algo verificable y con tests. El orden importa: primero lo 
    El acceso de José en E1 es el reporte firmado por email; no hay login a pantallas del núcleo.
 2. Guardar fuera del VPS la clave de cifrado cuando se genere en el paso 3.
 3. Revisar el reporte de sombra durante los 7 días del paso 6.
-4. Cuando exista `qa-herramientas`, probar passkeys en sus dispositivos (condición para activarlas en E2).
+4. Cuando exista `qa-herramientas`, probar passkeys en sus dispositivos (condición para activarlas en E4).
 
 
 ## Vista de arquitectura de la entrega

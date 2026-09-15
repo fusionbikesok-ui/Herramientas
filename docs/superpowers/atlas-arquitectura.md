@@ -143,7 +143,7 @@ sequenceDiagram
 | PostgreSQL 18 | requerido | base canónica | E0 debe instalar y probar PITR |
 | TypeScript estricto | elegido | `plataforma/` | todavía no instalado allí |
 | Vitest/ESLint/Playwright/axe | existentes | unitarias, lint y E2E | ampliar scripts contractuales |
-| Backblaze B2 | elegido | WAL, backups y reportes | modo/retención Object Lock siguen abiertos |
+| Backblaze B2 | elegido | backups SQLite del legado, manifiestos y reportes firmados de E1 (PM-172) | el WAL de PostgreSQL **no** va a B2: repositorio local cifrado + copia en la Mac (PM-165, PM-167) |
 | Mercado Libre API | requerido | avisos, relectura y efectos futuros | sin sondas autenticadas en esta documentación |
 | WooCommerce REST API | requerido | catálogo, relectura y efectos futuros | sin sondas autenticadas en esta documentación |
 | Librería WebAuthn mantenida | candidata | passkeys | elegir mediante decisión antes de E1 planificada |

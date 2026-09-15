@@ -154,3 +154,8 @@ despliegue, incluso cuando no haya cambios de código. El estado transitorio va 
   en `700` root (antes 755 con archivos 644, legibles por cualquier usuario local). Sólo los usa
   `backup.sh` (cron root 06:00 UTC). Memoria disponible medida ese día: 2,9 GB (Ollama 1,5 GB, legado 504 MB).
 
+- **pgBackRest sin límite de cola en producción (2026-09-15 10:38 UTC, PM-177):** imagen `fusion-pg:local`
+  reconstruida y contenedor `fusion-pg-pg-1` recreado; `test:e0` 8/8 antes (RTO 12 s, RPO 61 s); después
+  `pgbackrest check` OK, `init=true`, archivado sin fallos y la marca `e0_verificacion` intacta. El
+  arranque de archive-push ya no lista `--archive-push-queue-max`. `estado-archivo.sh` publica
+  `ready_bytes`, `pg_wal_bytes`, `disco_pct` (68 % ese día) y `disco_libre_bytes`.

@@ -87,7 +87,7 @@ describe('lib/vigiaBackup — PostgreSQL (E0 nivel 1)', () => {
   const opciones = (extra = {}) => ({ desplegadoPath: DIR, estadoPath: `${DIR}/estado-pg.json`, archivoPath: `${DIR}/archivo.json`, ahora: AHORA, ...extra });
   const escribir = (nombre, obj) => fs.writeFileSync(`${DIR}/${nombre}`, JSON.stringify(obj));
   const pg = () => db.prepare("SELECT tipo_error, severidad FROM incidentes_operativos WHERE integracion='backup' AND proceso='postgres' AND estado='activo' ORDER BY tipo_error").all();
-  const archivoSano = { medido: '2026-09-13T11:58:00Z', ok: true, pendientes: 0, mas_viejo_s: 0, spool_bytes: 1000 };
+  const archivoSano = { medido: '2026-09-13T11:58:00Z', ok: true, pendientes: 0, mas_viejo_s: 0, ready_bytes: 0, pg_wal_bytes: 81 * 1024 ** 2, disco_pct: 68, disco_libre_bytes: 32 * 1024 ** 3 };
 
   beforeEach(() => { db = openDb(TEST_DB); fs.mkdirSync(DIR, { recursive: true }); });
   afterEach(() => {
@@ -131,12 +131,58 @@ describe('lib/vigiaBackup — PostgreSQL (E0 nivel 1)', () => {
     expect(evaluarPostgres(opciones()).problemas).toEqual([expect.objectContaining({ tipo: 'archivo_wal', severidad: 'critico' })]);
   });
 
-  it('backup vencido o nunca hecho es crítico, y spool por encima del 70 % avisa', () => {
-    escribir('archivo.json', { ...archivoSano, spool_bytes: 4 * 1024 ** 3 });
+  it('backup vencido o nunca hecho es crítico', () => {
+    escribir('archivo.json', archivoSano);
     escribir('estado-pg.json', { ultimo_ok: '', ok: false, detalle: 'backup diff falló' });
-    const r = evaluarPostgres(opciones());
-    expect(r.problemas.map(p => [p.tipo, p.severidad]).sort()).toEqual([['backup_vencido', 'critico'], ['spool_wal', 'advertencia']]);
+    expect(evaluarPostgres(opciones()).problemas.map(p => [p.tipo, p.severidad])).toEqual([['backup_vencido', 'critico']]);
     escribir('estado-pg.json', { ultimo_ok: '2026-09-12T08:00:00Z', ok: true });
     expect(evaluarPostgres(opciones()).problemas.find(p => p.tipo === 'backup_vencido').mensajeHumano).toContain('hace 28 h');
+  });
+
+  // archive-push-queue-max se eliminó (2026-09-15): superarlo descartaba WAL y cortaba el PITR. La
+  // protección pasa a ser capacidad real medida — disco del host, pg_wal y bytes en cola .ready —.
+  describe('capacidad (sin límite de cola en pgBackRest)', () => {
+    const tipos = (extra) => {
+      escribir('estado-pg.json', { ultimo_ok: '2026-09-13T06:00:00Z', ok: true });
+      escribir('archivo.json', { ...archivoSano, ...extra });
+      return evaluarPostgres(opciones()).problemas.map(p => [p.tipo, p.severidad]).sort();
+    };
+
+    it('ya no existe la alerta de spool: el spool sólo tiene archivos de estado', () => {
+      expect(tipos({ spool_bytes: 9 * 1024 ** 3 })).toEqual([]);
+    });
+
+    it('disco del host: aviso desde 80 % y crítico desde 90 %', () => {
+      expect(tipos({ disco_pct: 79 })).toEqual([]);
+      expect(tipos({ disco_pct: 80 })).toEqual([['capacidad_disco', 'advertencia']]);
+      expect(tipos({ disco_pct: 90 })).toEqual([['capacidad_disco', 'critico']]);
+    });
+
+    it('cola de WAL sin archivar: aviso desde 1 GiB y crítico desde 4 GiB, aunque sea reciente', () => {
+      expect(tipos({ ready_bytes: 1024 ** 3 })).toEqual([['cola_wal', 'advertencia']]);
+      expect(tipos({ ready_bytes: 4 * 1024 ** 3 })).toEqual([['cola_wal', 'critico']]);
+    });
+
+    it('pg_wal: aviso desde 2 GiB y crítico desde 8 GiB', () => {
+      expect(tipos({ pg_wal_bytes: 2 * 1024 ** 3 })).toEqual([['pg_wal', 'advertencia']]);
+      expect(tipos({ pg_wal_bytes: 8 * 1024 ** 3 })).toEqual([['pg_wal', 'critico']]);
+    });
+
+    it('sin medición de capacidad es crítico: sin límite de cola, un disco lleno detiene PostgreSQL', () => {
+      const { disco_pct: _d, pg_wal_bytes: _w, ready_bytes: _r, ...sinCapacidad } = archivoSano;
+      escribir('estado-pg.json', { ultimo_ok: '2026-09-13T06:00:00Z', ok: true });
+      escribir('archivo.json', sinCapacidad);
+      expect(evaluarPostgres(opciones()).problemas.map(p => [p.tipo, p.severidad])).toEqual([['capacidad_disco', 'critico']]);
+    });
+
+    it('la alerta de capacidad se abre y se resuelve sola al volver a la normalidad', () => {
+      escribir('estado-pg.json', { ultimo_ok: '2026-09-13T06:00:00Z', ok: true });
+      escribir('archivo.json', { ...archivoSano, disco_pct: 92 });
+      revisarBackupPostgres(db, opciones());
+      expect(pg()).toEqual([{ tipo_error: 'capacidad_disco', severidad: 'critico' }]);
+      escribir('archivo.json', archivoSano);
+      revisarBackupPostgres(db, opciones());
+      expect(pg()).toHaveLength(0);
+    });
   });
 });

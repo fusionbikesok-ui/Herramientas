@@ -495,3 +495,16 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   carpetas, no archivos sueltos: los scripts reemplazan con `mv` y un bind de archivo queda congelado.
 - Siguiente paso: plan de implementación del tramo 1 (writing-plans) tras la revisión de la spec por José.
 
+## E0 reabierta (2026-09-15, revisión técnica)
+
+- **PM-177:** pgBackRest **sin `archive-push-queue-max`** (al superarlo informa el WAL como archivado, lo
+  descarta y corta el PITR; confirmado con `pgbackrest help archive-push archive-push-queue-max` 2.59.1).
+  El spool asíncrono sólo guarda archivos de estado; la cola real son los `.ready` de `pg_wal`.
+- Vigía de capacidad (`lib/vigiaBackup.js`): disco del host ≥ 80 % aviso / ≥ 90 % crítico; bytes en cola
+  `.ready` ≥ 1/4 GiB; `pg_wal` ≥ 2/8 GiB; medición ausente → crítico. `estado-archivo.sh` publica
+  `ready_bytes`, `pg_wal_bytes`, `disco_pct`, `disco_libre_bytes` (ya no `spool_bytes`).
+- E0 volvió a `desarrollo`. Para re-aceptar: contenedor recreado sin el límite con `test:e0` verde, vigía
+  de capacidad en producción, restauración real desde la copia subida por la Mac y fichas coherentes.
+- E1: `shadow_copy_losses` salió del esquema (el contador de pérdidas no puede vivir en el PostgreSQL que
+  se cae; contrato del tramo 3). Registro de observaciones remotas y orden de versiones: tramo 2.
+
