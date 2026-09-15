@@ -97,6 +97,7 @@ export async function renovarLeaseCorrida(pool: pg.Pool, corrida: CorridaReclama
 
 export async function completarCorrida(
   pool: pg.Pool, corrida: CorridaReclamada, cursorAfter: Record<string, unknown>,
+  antesDeCerrar?: (tx: pg.PoolClient) => Promise<void>,
 ): Promise<'succeeded' | 'partial'> {
   return enTransaccion(pool, async (tx) => {
     const run = await tx.query(
@@ -110,6 +111,7 @@ export async function completarCorrida(
       [cursorAfter, corrida.channelAccountId, corrida.topic, corrida.cursorKind, corrida.cursorVersion],
     );
     const estado = cursor.rowCount === 1 ? 'succeeded' : 'partial';
+    if (estado === 'succeeded') await antesDeCerrar?.(tx);
     await tx.query(
       `UPDATE integrations.sweep_runs SET status=$2,finished_at=now(),cursor_after=$3,
        lease_token=NULL,lease_until=NULL,worker_id=NULL WHERE id=$1`,

@@ -4,7 +4,10 @@ import {
   type CorridaReclamada,
 } from '../reconciliacion/corridas.ts';
 
-export interface ResultadoBarrido { cursorAfter: Record<string, unknown> }
+export interface ResultadoBarrido {
+  cursorAfter: Record<string, unknown>;
+  antesDeCerrar?: (tx: pg.PoolClient) => Promise<void>;
+}
 export type ProcesadorBarrido = (corrida: CorridaReclamada) => Promise<ResultadoBarrido>;
 
 export class ErrorBarridoReintentable extends Error {
@@ -35,7 +38,7 @@ export function crearWorkerBarridos(opciones: {
         activas.set(corrida.id, corrida);
         try {
           const resultado = await opciones.procesadores[corrida.topic]!(corrida);
-          await completarCorrida(opciones.db, corrida, resultado.cursorAfter);
+          await completarCorrida(opciones.db, corrida, resultado.cursorAfter, resultado.antesDeCerrar);
         } catch (error) {
           const retryAfter = error instanceof ErrorBarridoReintentable ? error.retryAfter : undefined;
           const codigo = error instanceof Error ? error.name : 'ErrorDesconocido';

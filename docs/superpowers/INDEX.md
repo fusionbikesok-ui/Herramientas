@@ -19,7 +19,7 @@
 ## E1 activa
 
 - [Tramo 1 — diseño](specs/2026-09-15-e1-tramo1-fundacion-design.md) y [plan](plans/2026-09-15-e1-tramo1-fundacion.md): implementado y revisado en aislamiento; no desplegado.
-- [Tramo 2 — diseño](specs/2026-09-15-e1-tramo2-barridos-design.md) y [plan](plans/2026-09-15-e1-tramo2-barridos.md): aprobados para implementación exclusivamente efímera.
+- [Tramo 2 — diseño](specs/2026-09-15-e1-tramo2-barridos-design.md) y [plan](plans/2026-09-15-e1-tramo2-barridos.md): aprobados para implementación exclusivamente efímera; cortes 1–3 implementados, faltan 4 (adaptadores y simulador) y 5 (contrato acumulativo).
 
 ## Archivo
 
