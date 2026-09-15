@@ -2,14 +2,26 @@
 
 `npm run test:e1` levanta PostgreSQL 18.6 de ensayo (misma imagen que E0, proyecto temporal), aplica las
 migraciones de `plataforma/migrations/` generadas desde `specs/e1/schema.sql`, corre la suite de
-`plataforma/` y el simulador de canales de QA, y **falla si falta cualquier escenario obligatorio**
-(mismo patrón que `test:e0`). Ningún escenario usa credenciales reales ni escribe en ML/Woo.
+`plataforma/` y el simulador de canales de QA, y **falla si falta cualquier escenario exigido para
+el tramo vigente** (mismo patrón que `test:e0`). Ningún escenario usa credenciales reales ni escribe
+en ML/Woo. Diseño del tramo 1: [2026-09-15-e1-tramo1-fundacion-design.md](../2026-09-15-e1-tramo1-fundacion-design.md).
+
+## Escenarios exigidos por tramo (PM-174)
+
+| Tramo | Exigidos (acumulativo) |
+|---|---|
+| 1. Fundación | E1-SCH-01, E1-SCH-02, E1-AUD-01, E1-AUD-02, E1-AUD-03, E1-Q-01..06, E1-DUP-01, E1-CAP-01, E1-API-01, E1-SVC-01 |
+| 2. Barridos | tramo 1 + E1-SWP-01..09, E1-CONV-01, E1-DEL-01 |
+| 3. Sombra en vivo | tramo 2 + E1-LAT-01, E1-PGDOWN-01 |
+| 4. Seguridad y reporte | tramo 3 + E1-AUD-04, E1-REC-01, E1-WA-01 (los 24 de la tabla) |
+
+## Escenarios
 
 | ID | Cubre | Preparación | Verificación | Falla si |
 |---|---|---|---|---|
 | E1-SCH-01 | restricciones del esquema | migraciones desde cero | inserts inválidos rechazados: topic fuera de lista, `claimed` sin lease, `parked` sin motivo, segundo Woo primario, email sin índice ciego | alguno se acepta |
-| E1-SCH-02 | migración repetible | aplicar, revertir contract, reaplicar | esquema final idéntico (hash de `pg_dump --schema-only`) | difiere |
-| E1-AUD-01 | cadena de auditoría | 1.000 eventos | `audit.verify_chain()` devuelve NULL | rompe |
+| E1-SCH-02 | migraciones sólo hacia adelante (PM-176) | migrar dos bases vacías; reaplicar sobre una; alterar una migración ya aplicada | mismo `pg_dump --schema-only`; reaplicar no cambia nada; la migración alterada frena el arranque | difiere, reaplica o arranca |
+| E1-AUD-01 | cadena de auditoría | 1.000 eventos | `audit.verify_chain()` devuelve NULL; `chain_seq` continuo | rompe |
 | E1-AUD-02 | append-only y detección | UPDATE/DELETE/TRUNCATE; luego alteración directa deshabilitando el trigger como superusuario | los tres rechazados; la alteración directa se detecta en el id exacto | se acepta o no se detecta |
 | E1-AUD-03 | concurrencia de la cadena | 4 conexiones insertando 500 eventos cada una | cadena íntegra y 2.000 hashes únicos | bifurcación o hash duplicado |
 | E1-AUD-04 | manifiesto diario | día con eventos | manifiesto firmado Ed25519, `retention_until` ≥ 365 días, subida al simulador S3 y verificación de firma | firma inválida o retención menor |

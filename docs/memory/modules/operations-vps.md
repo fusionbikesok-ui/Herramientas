@@ -150,3 +150,7 @@ despliegue, incluso cuando no haya cambios de código. El estado transitorio va 
   ventana (los 9 de `pg_stat_archiver` son del despliegue, antes del stanza), WAL 01→11 continuo y
   `pgbackrest verify` OK, sobrevivió al reinicio del VPS de 13:45 UTC, backups full y diff firmados OK,
   0 incidentes del vigía de PostgreSQL.
+- **Permisos de backups (2026-09-15):** `/opt/fusionbikes/backups/db` y `/opt/fusionbikes/backups/uploads`
+  en `700` root (antes 755 con archivos 644, legibles por cualquier usuario local). Sólo los usa
+  `backup.sh` (cron root 06:00 UTC). Memoria disponible medida ese día: 2,9 GB (Ollama 1,5 GB, legado 504 MB).
+

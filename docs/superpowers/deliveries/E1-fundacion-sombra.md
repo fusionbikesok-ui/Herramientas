@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Esperar la aceptación de E0; luego implementar en plataforma/ el paso 1 (esqueleto TypeScript, migraciones desde specs/e1/schema.sql y `npm run test:e1` con los escenarios de specs/e1/test-e1.md).
+- **Próxima acción exacta:** Tramo 1 (Fundación) con diseño aprobado en docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md (PM-173..176): escribir el plan de implementación y ejecutarlo; luego tramos 2 (barridos), 3 (sombra en vivo, aprobación propia) y 4 (passkeys y reporte).
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
@@ -232,6 +232,7 @@ flowchart LR
   api_contract[api_contract]
   sweep_matrix[sweep_matrix]
   test_matrix[test_matrix]
+  tramo1_design[tramo1_design]
 ```
 
 | Componente | Estado | Ruta | Responsabilidad |
@@ -245,6 +246,7 @@ flowchart LR
 | api_contract | existing | openapi/platform-v2.yaml | contrato de /api/v2/health e /api/v2/incidents |
 | sweep_matrix | existing | docs/superpowers/specs/e1/matriz-barridos.md | barridos por tópico verificados con evidencia |
 | test_matrix | existing | docs/superpowers/specs/e1/test-e1.md | escenarios obligatorios de npm run test:e1 |
+| tramo1_design | existing | docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md | diseño aprobado del tramo 1: estructura, base, auditoría, colas, API y puesta en marcha |
 
 ## Actores, tecnologías y dependencias externas
 
@@ -404,5 +406,5 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 ## Decisiones PM asignadas
 
-- **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158, PM-170, PM-171, PM-172
+- **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158, PM-170, PM-171, PM-172, PM-173, PM-174, PM-175, PM-176
 - **Consumidora:** PM-003, PM-006, PM-008, PM-017, PM-046, PM-048, PM-085, PM-086, PM-087, PM-094, PM-105, PM-107, PM-125, PM-127, PM-129, PM-149, PM-160

@@ -36,6 +36,16 @@ CREATE TABLE core.channel_accounts (
 CREATE UNIQUE INDEX channel_accounts_un_woo_primario
   ON core.channel_accounts (company_id) WHERE channel = 'woocommerce' AND is_primary AND archived_at IS NULL;
 
+-- Latido de cada servicio (API, worker, scheduler). GET /api/v2/health lo considera vivo si
+-- visto_en tiene ≤ 120 s. Se actualiza con UPSERT; una fila por servicio. UNLOGGED: un latido no
+-- necesita sobrevivir a una caída (se vacía en la recuperación) ni viajar en WAL/backups.
+CREATE UNLOGGED TABLE core.service_heartbeats (
+  servicio     text PRIMARY KEY CHECK (servicio IN ('api', 'worker', 'scheduler')),
+  instancia    text NOT NULL,
+  visto_en     timestamptz NOT NULL DEFAULT now(),
+  version      text NOT NULL
+);
+
 -- ───────────────────────────── security ─────────────────────────────
 CREATE TABLE security.roles (
   code text PRIMARY KEY CHECK (code IN ('operador', 'catalogo', 'administracion'))
@@ -119,8 +129,12 @@ CREATE TABLE security.feature_flags (
 -- Append-only con cadena de hash: hash = sha256(prev_hash || contenido canónico). Un único escritor
 -- de la cadena a la vez (advisory lock transaccional). UPDATE/DELETE rechazados por trigger; una
 -- alteración directa por superusuario se detecta con audit.verify_chain().
+-- La cadena se ordena por chain_seq, NO por id: el id sale de la secuencia ANTES de tomar el lock y
+-- dos transacciones concurrentes pueden encadenarse en orden inverso a su id (reproducido
+-- 2026-09-14: verify_chain marcaba rota una cadena intacta). chain_seq se asigna dentro del lock.
 CREATE TABLE audit.audit_events (
   id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  chain_seq       bigint NOT NULL UNIQUE CHECK (chain_seq > 0),
   occurred_at     timestamptz NOT NULL DEFAULT clock_timestamp(),
   company_id      uuid NOT NULL REFERENCES core.companies(id),
   actor_type      text NOT NULL CHECK (actor_type IN ('user', 'system', 'channel')),
@@ -139,17 +153,18 @@ CREATE INDEX audit_events_occurred ON audit.audit_events (occurred_at);
 
 CREATE FUNCTION audit.canonical(e audit.audit_events) RETURNS bytea LANGUAGE sql IMMUTABLE AS $$
   SELECT convert_to(concat_ws(E'\x1f',
-    e.id::text, to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+    e.chain_seq::text, e.id::text, to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
     e.company_id::text, e.actor_type, e.actor_id, e.action, e.aggregate_type, e.aggregate_id,
     e.correlation_id::text, coalesce(e.reason, ''), e.payload::text), 'UTF8')
 $$;
 
 CREATE FUNCTION audit.chain_before_insert() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE ultimo bytea;
+DECLARE ultimo_seq bigint; ultimo_hash bytea;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('audit.audit_events.chain', 0));
-  SELECT hash INTO ultimo FROM audit.audit_events ORDER BY id DESC LIMIT 1;
-  NEW.prev_hash := coalesce(ultimo, '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea);
+  SELECT chain_seq, hash INTO ultimo_seq, ultimo_hash FROM audit.audit_events ORDER BY chain_seq DESC LIMIT 1;
+  NEW.chain_seq := coalesce(ultimo_seq, 0) + 1;
+  NEW.prev_hash := coalesce(ultimo_hash, '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea);
   NEW.hash := sha256(NEW.prev_hash || audit.canonical(NEW));
   RETURN NEW;
 END $$;
@@ -165,15 +180,18 @@ CREATE TRIGGER audit_events_no_update BEFORE UPDATE OR DELETE ON audit.audit_eve
 CREATE TRIGGER audit_events_no_truncate BEFORE TRUNCATE ON audit.audit_events
   FOR EACH STATEMENT EXECUTE FUNCTION audit.reject_mutation();
 
--- Devuelve el primer id donde la cadena se rompe, o NULL si está íntegra.
+-- Devuelve el primer chain_seq donde la cadena se rompe, o NULL si está íntegra. También detecta
+-- huecos o saltos de chain_seq (una fila borrada con los triggers desactivados).
 CREATE FUNCTION audit.verify_chain(desde bigint DEFAULT NULL, hasta bigint DEFAULT NULL) RETURNS bigint
 LANGUAGE plpgsql STABLE AS $$
-DECLARE r audit.audit_events; esperado bytea;
+DECLARE r audit.audit_events; esperado bytea; seq_esperado bigint;
 BEGIN
-  SELECT hash INTO esperado FROM audit.audit_events WHERE id < coalesce(desde, 1) ORDER BY id DESC LIMIT 1;
+  seq_esperado := coalesce(desde, 1);
+  SELECT hash INTO esperado FROM audit.audit_events WHERE chain_seq = seq_esperado - 1;
   esperado := coalesce(esperado, '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea);
-  FOR r IN SELECT * FROM audit.audit_events WHERE id >= coalesce(desde, 1) AND (hasta IS NULL OR id <= hasta) ORDER BY id LOOP
-    IF r.prev_hash <> esperado OR r.hash <> sha256(r.prev_hash || audit.canonical(r)) THEN RETURN r.id; END IF;
+  FOR r IN SELECT * FROM audit.audit_events WHERE chain_seq >= seq_esperado AND (hasta IS NULL OR chain_seq <= hasta) ORDER BY chain_seq LOOP
+    IF r.chain_seq <> seq_esperado OR r.prev_hash <> esperado OR r.hash <> sha256(r.prev_hash || audit.canonical(r)) THEN RETURN seq_esperado; END IF;
+    seq_esperado := seq_esperado + 1;
     esperado := r.hash;
   END LOOP;
   RETURN NULL;
@@ -181,8 +199,8 @@ END $$;
 
 CREATE TABLE audit.audit_daily_manifests (
   manifest_date     date PRIMARY KEY,
-  first_event_id    bigint REFERENCES audit.audit_events(id),
-  last_event_id     bigint REFERENCES audit.audit_events(id),
+  first_chain_seq   bigint REFERENCES audit.audit_events(chain_seq),
+  last_chain_seq    bigint REFERENCES audit.audit_events(chain_seq),
   last_hash         bytea NOT NULL CHECK (length(last_hash) = 32),
   event_count       integer NOT NULL CHECK (event_count >= 0),
   signature         bytea NOT NULL,                          -- Ed25519 sobre el manifiesto canónico

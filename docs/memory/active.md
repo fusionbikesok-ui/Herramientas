@@ -483,3 +483,15 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   sin binario nativo al reiniciar PM2 (se intentó cargar un build de Node 20; producción usa Node 24).
   Antes de reiniciar tras `npm install`/`npm rebuild`, verificar `node -e "require('better-sqlite3')"`.
 
+## E1 tramo 1 — diseño aprobado (2026-09-15)
+
+- Diseño: `docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md` (PM-173..176). E1 en 4 tramos;
+  tramo 1 = Fundación en `plataforma/` (package propio), Docker (api/worker/scheduler + migrate),
+  Node 24 TS nativo + tsc 7, Fastify 5, `pg` SQL explícito, migraciones sólo hacia adelante.
+- `schema.sql` corregido: la cadena de auditoría se ordena por `chain_seq` asignado dentro del lock (la
+  carrera por `id` estaba reproducida); `core.service_heartbeats` agregada (será `UNLOGGED`).
+- Nunca montar `/opt/fusionbikes/backups` en un contenedor (tiene backups SQLite con datos de negocio);
+  el estado de E0 se moverá a `/opt/fusionbikes/estado-pg/` en la puesta en marcha del tramo 1. Montar
+  carpetas, no archivos sueltos: los scripts reemplazan con `mv` y un bind de archivo queda congelado.
+- Siguiente paso: plan de implementación del tramo 1 (writing-plans) tras la revisión de la spec por José.
+

@@ -56,7 +56,7 @@
       "tests": "npm run test:e1 con los escenarios de docs/superpowers/specs/e1/test-e1.md (esquema, auditoría, colas, duplicados, barridos por tópico, convergencia de envíos, borrados Woo, presupuesto de latencia, PostgreSQL caído, reporte firmado, WebAuthn virtual, capacidades, contrato y servicios separados).",
       "rollout": "API/worker/scheduler sin credenciales de escritura; 7 días de sombra; aborto ante impacto en códigos HTTP, errores o latencia.",
       "acceptance": "0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José.",
-      "next": "Esperar la aceptación de E0; luego implementar en plataforma/ el paso 1 (esqueleto TypeScript, migraciones desde specs/e1/schema.sql y `npm run test:e1` con los escenarios de specs/e1/test-e1.md)."
+      "next": "Tramo 1 (Fundación) con diseño aprobado en docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md (PM-173..176): escribir el plan de implementación y ejecutarlo; luego tramos 2 (barridos), 3 (sombra en vivo, aprobación propia) y 4 (passkeys y reporte)."
     },
     {
       "id": "E2",

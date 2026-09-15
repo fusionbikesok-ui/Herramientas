@@ -333,6 +333,12 @@
           "status": "existing",
           "path": "docs/superpowers/specs/e1/test-e1.md",
           "purpose": "escenarios obligatorios de npm run test:e1"
+        },
+        {
+          "id": "tramo1_design",
+          "status": "existing",
+          "path": "docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md",
+          "purpose": "diseño aprobado del tramo 1: estructura, base, auditoría, colas, API y puesta en marcha"
         }
       ],
       "technologies": [
