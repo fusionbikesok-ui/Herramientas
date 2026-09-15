@@ -51,7 +51,9 @@ tópicos, subida a B2, email, cambios en el ACK del legado.
 ### Alta y migraciones
 
 - `deploy/alta-base.sql`, una sola vez con el superusuario de E0: crea base, roles y `CONNECT`;
-  `REVOKE ALL ON DATABASE ... FROM PUBLIC`; `REVOKE CREATE ON SCHEMA public FROM PUBLIC`. Idempotente.
+  `REVOKE ALL ON DATABASE ... FROM PUBLIC`. Idempotente. `REVOKE CREATE ON SCHEMA public FROM PUBLIC`
+  va en `0002_permisos.sql`: `public` es un esquema de cada base y el alta corre conectada a `postgres`,
+  así que sólo la migración, que corre dentro de `plataforma`, lo aplica a la base correcta.
 - Runner propio `src/db/migrar.ts`: archivos `migrations/NNNN_nombre.sql` en orden, cada uno en su
   transacción bajo advisory lock; `core.schema_migrations` guarda nombre y SHA-256. **No arranca**
   si una migración aplicada cambió o hay huecos. Migraciones sólo hacia adelante (PM-176): la
