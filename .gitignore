@@ -23,3 +23,6 @@ uploads/
 # Volcados de memoria de procesos caídos: contienen variables de entorno con credenciales.
 /core
 core.*
+
+# Espacio de trabajo de planes ejecutados por agentes (registro, briefs, reportes)
+.superpowers/
