@@ -37,7 +37,10 @@ while (activo) {
       logger.info('exclusión del scheduler obtenida');
     }
     const resultado = await scheduler.unaVuelta();
-    if (resultado.pendientes || resultado.muertos) logger.info(resultado, 'leases vencidos liberados');
+    if (resultado.pendientes || resultado.muertos || resultado.corridas
+      || resultado.corridasRecuperadas || resultado.corridasFallidas) {
+      logger.info(resultado, 'vuelta del scheduler completada');
+    }
   } catch (error) {
     logger.error({ err: (error as Error).message }, 'vuelta del scheduler falló; reintentando');
   }
