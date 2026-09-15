@@ -2,13 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Construir `plataforma/` (TypeScript sobre Node 24) con migraciones, auditoría encadenada, colas durables, API de salud e incidentes, worker y scheduler en contenedores, `npm run test:e1` del tramo 1 y la puesta en marcha en sombra en el VPS.
+**Goal:** Construir y verificar en un entorno aislado `plataforma/` (TypeScript sobre Node 24) con migraciones, auditoría encadenada, colas durables, API de salud e incidentes, worker y scheduler en contenedores, y `npm run test:e1` del tramo 1. La puesta en marcha en sombra en el VPS es una decisión y un corte posteriores; este plan no la autoriza.
 
 **Architecture:** Paquete independiente dentro del repo (lockfile propio). Una imagen Docker con tres puntos de entrada (`api`, `worker`, `scheduler`) más `migrate`, conectados al PostgreSQL 18.6 de E0 por la red `fusion-pg_default` con roles sin superusuario. SQL explícito con `pg`; la auditoría y los permisos se garantizan en la base.
 
 **Tech Stack:** Node 24.21 (TypeScript nativo, sin build), TypeScript 7.0.2 (sólo `tsc --noEmit`), Fastify 5.12.4, pg 8.23.0, Zod 4.6.5, Pino 10.3.1, Vitest 5.0.0, @apidevtools/swagger-parser 13.0.0, Ajv 8.20.0 + ajv-formats, Docker Compose.
 
-**Condición de inicio:** no ejecutar hasta que E0 vuelva a `aceptada` (reabierta el 2026-09-15 por PM-177; falta la restauración real desde la copia subida por la Mac). El maestro exige dependencias aceptadas antes de comenzar una entrega.
+**Condición de inicio:** E0 fue aceptada por decisión de José y conserva esa aceptación. El maestro exige dependencias aceptadas antes de comenzar una entrega. Esta implementación sólo usa PostgreSQL efímero propio y no conecta con la instancia de E0.
+
+> **Estado de implementación — 2026-09-15:** se completó el código del tramo 1 y se verificó con `npm --prefix plataforma run typecheck`, `npm --prefix plataforma test` (38 pruebas) y `E1_SKIP_UNIT=1 npm run test:e1`. El último ensayo crea una red, secretos, estado y PostgreSQL temporales, y destruye todo al terminar; también verifica que `/api/v2/health` pasa a `503` al detener el worker y vuelve a `200` al reiniciarlo. No se ejecutaron los pasos de VPS de Task 10, no se crearon roles ni tablas en E0, no se generaron secretos reales y E1 sigue `planificada` hasta las aprobaciones y cortes de sus tramos posteriores.
 
 **Spec:** [docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md](../specs/2026-09-15-e1-tramo1-fundacion-design.md) · [schema.sql](../specs/e1/schema.sql) · [test-e1.md](../specs/e1/test-e1.md) · [openapi/platform-v2.yaml](../../../openapi/platform-v2.yaml)
 
@@ -49,7 +51,7 @@ plataforma/
   migrations/0002_permisos.sql           permisos de plataforma_app
   deploy/alta-base.sql                   base y roles (superusuario, una vez)
   deploy/Dockerfile                      imagen única
-  deploy/compose.prod.yml                producción (red fusion-pg_default)
+  deploy/compose.yml                     manifiesto preparado para producción (red fusion-pg_default); no desplegar sin corte autorizado
   deploy/compose.test.yml                entorno aislado de test:e1
   src/db/pool.ts                         pool y transacciones
   src/db/migrar.ts                       runner de migraciones
@@ -2404,6 +2406,8 @@ git commit -m "refactor(e0): estado de PostgreSQL en carpeta propia montable, fu
 ---
 
 ### Task 10: Revisión, suite completa y puesta en marcha en sombra
+
+> **Bloqueado intencionalmente:** esta task describe un futuro corte en VPS y no forma parte de la implementación actual. Requiere autorización expresa de José, una línea base tomada en el momento del corte y revisión independiente del diff. No ejecutar los pasos 3–9 desde esta ficha como consecuencia de la verificación aislada indicada arriba.
 
 **Files:**
 - Modify: `docs/superpowers/delivery-program.json` (E1 `next`), `docs/memory/active.md`, `docs/memory/modules/operations-vps.md`

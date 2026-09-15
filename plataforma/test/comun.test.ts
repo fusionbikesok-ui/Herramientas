@@ -13,7 +13,7 @@ describe('configuración', () => {
 
   it('arma la URL con la contraseña leída del archivo', () => {
     const c = cargarConfig(env, () => 'cla ve/1\n');
-    expect(c).toMatchObject({ servicio: 'api', apiPuerto: 3201, estadoPgDir: '/estado-pg' });
+    expect(c).toMatchObject({ servicio: 'api', apiPuerto: 3201, estadoPgDir: '/estado-pg', heartbeatMaxS: 120, heartbeatIntervalMs: 30000 });
     expect(c.pgUrl).toBe('postgres://plataforma_app:cla%20ve%2F1@pg:5432/plataforma');
   });
 
@@ -25,6 +25,11 @@ describe('configuración', () => {
 
   it('rechaza un servicio desconocido', () => {
     expect(() => cargarConfig({ ...env, SERVICIO: 'otro' }, () => 'x')).toThrow(ErrorConfig);
+  });
+
+  it('acepta la contraseña efímera inyectada sólo por el entrypoint', () => {
+    const { PG_PASSWORD_FILE: _archivo, ...sinArchivo } = env;
+    expect(cargarConfig({ ...sinArchivo, PG_PASSWORD: 'temporal' }, () => { throw new Error('no debe leer archivo'); }).pgUrl).toContain(':temporal@');
   });
 });
 

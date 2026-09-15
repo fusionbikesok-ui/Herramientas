@@ -51,6 +51,7 @@ describe('colas', () => {
     const [a, b] = await reclamar(app, 'inbox', ['ml.orders'], 2);
     await completar(app, a!);
     expect((await estado(a!.id)).status).toBe('succeeded');
+    expect((await app.query("select 1 from audit.audit_events where action='cola.succeeded' and aggregate_id=$1", [a!.id])).rowCount).toBe(1);
     await admin.query("update integrations.inbox_messages set lease_until = now() - interval '1 second' where id=$1", [b!.id]);
     await expect(completar(app, b!)).rejects.toBeInstanceOf(ErrorLeaseVencido);
     expect((await estado(b!.id)).status).toBe('claimed');

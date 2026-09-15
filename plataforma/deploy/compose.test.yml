@@ -1,0 +1,26 @@
+name: ${E1_PROJECT:-fusion-e1-test}
+services:
+  pg:
+    image: postgres@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    init: true
+    environment: { POSTGRES_PASSWORD: admin }
+    volumes: ["./test-init.sql:/docker-entrypoint-initdb.d/10-plataforma.sql:ro"]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "postgres"], interval: 2s, timeout: 2s, retries: 30 }
+  api:
+    extends: { file: compose.yml, service: api }
+    environment: { SERVICIO: api, HEARTBEAT_MAX_S: 5, HEARTBEAT_INTERVAL_MS: 500 }
+    restart: "no"
+  worker:
+    extends: { file: compose.yml, service: worker }
+    environment: { SERVICIO: worker, HEARTBEAT_INTERVAL_MS: 500 }
+    restart: "no"
+  scheduler:
+    extends: { file: compose.yml, service: scheduler }
+    environment: { SERVICIO: scheduler, HEARTBEAT_INTERVAL_MS: 500 }
+    restart: "no"
+  migrate:
+    extends: { file: compose.yml, service: migrate }
+    restart: "no"
+
+networks:
+  default: {}

@@ -55,8 +55,14 @@ const VIGENTE = `id = $1 AND status = 'claimed' AND lease_token = $2 AND lease_u
 
 export async function completar(pool: pg.Pool, r: Reclamo): Promise<void> {
   const { tabla } = TABLA[r.cola];
-  const u = await pool.query(`UPDATE ${tabla} SET status = 'succeeded', lease_token = NULL, lease_until = NULL WHERE ${VIGENTE}`, [r.id, r.token]);
-  if (u.rowCount !== 1) throw new ErrorLeaseVencido(`lease vencido o ajeno para ${r.cola}#${r.id}`);
+  await enTransaccion(pool, async (tx) => {
+    const u = await tx.query(`UPDATE ${tabla} SET status = 'succeeded', lease_token = NULL, lease_until = NULL WHERE ${VIGENTE}`, [r.id, r.token]);
+    if (u.rowCount !== 1) throw new ErrorLeaseVencido(`lease vencido o ajeno para ${r.cola}#${r.id}`);
+    await registrarEvento(tx, {
+      companyId: await empresaDe(tx, r.cola, r.id), actorType: 'system', actorId: 'plataforma.colas',
+      action: 'cola.succeeded', aggregateType: r.cola, aggregateId: r.id, correlationId: r.correlationId,
+    });
+  });
 }
 
 export function backoffSegundos(intento: number, azar: () => number = Math.random): number {

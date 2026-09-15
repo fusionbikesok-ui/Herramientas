@@ -1,0 +1,60 @@
+# E1 tramo 1. Sólo api publica un puerto local; worker y scheduler comparten imagen y red interna.
+name: fusion-plataforma
+x-servicio: &servicio
+  build: { context: .., dockerfile: deploy/Dockerfile }
+  image: fusion-plataforma:local
+  init: true
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  stop_grace_period: 15s
+  environment: &env
+    INSTANCIA: ${INSTANCIA_PREFIX:-plataforma}-service
+    VERSION: ${VERSION:-0.1.0}
+    PG_HOST: ${PG_HOST:-pg}
+    PG_PORT: 5432
+    PG_DATABASE: plataforma
+    PG_USER: plataforma_app
+    PG_PASSWORD_FILE: /run/fusion-plataforma/app-pass
+    ESTADO_PG_DIR: /estado-pg
+  volumes:
+    - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
+    - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
+  mem_limit: 128m
+  cpus: 0.20
+
+services:
+  api:
+    <<: *servicio
+    environment: { <<: *env, SERVICIO: api, INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-api", API_PUERTO: 3201 }
+    command: ["node", "src/api/main.ts"]
+    ports: ["127.0.0.1:${API_PORT:-3201}:3201"]
+  worker:
+    <<: *servicio
+    environment: { <<: *env, SERVICIO: worker, INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-worker" }
+    command: ["node", "src/worker/main.ts"]
+  scheduler:
+    <<: *servicio
+    environment: { <<: *env, SERVICIO: scheduler, INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-scheduler" }
+    command: ["node", "src/scheduler/main.ts"]
+  migrate:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    image: fusion-plataforma:local
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    environment:
+      PG_HOST: ${PG_HOST:-pg}
+      PG_PORT: 5432
+      PG_DATABASE: plataforma
+      PG_USER: plataforma_migrador
+      PG_PASSWORD_FILE: /run/fusion-plataforma/migrador-pass
+    volumes:
+      - ${SECRET_DIR:?SECRET_DIR requerido}/migrador-pass:/run/fusion-plataforma/migrador-pass:ro
+    command: ["node", "src/db/cli-migrar.ts"]
+    mem_limit: 128m
+    cpus: 0.20
+
+networks:
+  default:
+    external: true
+    name: ${PG_NETWORK:-fusion-pg_default}

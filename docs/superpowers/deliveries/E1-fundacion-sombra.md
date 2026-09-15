@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Tramo 1 (Fundación) con diseño aprobado en docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md (PM-173..176): escribir el plan de implementación y ejecutarlo; luego tramos 2 (barridos), 3 (sombra en vivo, aprobación propia) y 4 (passkeys y reporte).
+- **Próxima acción exacta:** revisión independiente del código y del ensayo aislado del tramo 1, documentados en `docs/superpowers/plans/2026-09-15-e1-tramo1-fundacion.md`; el corte en VPS sigue bloqueado y requiere autorización expresa. Después, diseñar y aprobar por separado los tramos 2 (barridos), 3 (sombra en vivo) y 4 (passkeys y reporte).
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
