@@ -1,27 +1,32 @@
-// Simulador de MercadoLibre y WooCommerce para el entorno QA bajo demanda.
+// Simulador de MercadoLibre y WooCommerce para el entorno QA bajo demanda y los barridos de E1 T2.
 // Contrato vigente: E0/E1. Procedencia: archive/plans-legacy-2026-09-13/2026-09-13-qa-bajo-demanda.md.
 //
 // Uso: SIM_DB=<snapshot anonimizado> [SIM_CERT=cert.pem SIM_KEY=key.pem] [SIM_PORT=8443] \
 //      node scripts/qa/simulador-canales.mjs
 //
 // - Lee publicaciones y productos del snapshot (sólo lectura) y responde con esa forma.
+// - E1 T2 pasa `crearSimulador({ fixture, reloj })`: datos en memoria (órdenes, envíos, preguntas,
+//   reclamos, mensajes, items, pedidos y productos Woo), sin SQLite ni configuración por HTTP.
+//   `fixture.alLlamar({metodo, ruta, n}, datos)` muta los datos vivos entre páginas de forma determinista.
 // - Las escrituras (PUT/POST) nunca salen de acá: se responden con éxito y quedan registradas.
-// - Control de pruebas:
-//     GET  /__qa/llamadas         últimas llamadas recibidas
-//     POST /__qa/fallas           {"ruta": "regex", "status": 429, "veces": 3}  inyecta fallas
+// - Control de pruebas (plano de control, no cuenta como llamada de canal):
+//     GET  /__qa/llamadas         últimas llamadas recibidas (con headers no sensibles)
+//     POST /__qa/fallas           {"ruta": "regex", "status": 429, "veces": 3, "retryAfter": 30}
+//                                 o {"ruta": "regex", "modo": "cortar"|"cortar-despues"} o {"ruta", "demoraMs"}
 //     DELETE /__qa/fallas         limpia fallas y registro
 // - HTTPS si recibe certificado (el cliente Woo de la app exige https); si no, HTTP.
 import http from 'http';
 import https from 'https';
 import fs from 'fs';
 import { pathToFileURL } from 'url';
-import Database from 'better-sqlite3';
 
 const MAX_LLAMADAS = 500;
+// Nunca se registra Authorization ni cookies: sólo headers que las pruebas necesitan verificar.
+const HEADERS_REGISTRADOS = ['x-format-new', 'x-fusion-plano'];
 
-function json(res, status, body) {
+function json(res, status, body, extra = {}) {
   const data = JSON.stringify(body);
-  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) });
+  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), ...extra });
   res.end(data);
 }
 
@@ -35,6 +40,13 @@ function leerCuerpo(req) {
 
 function parse(v, porDefecto) {
   try { return v ? JSON.parse(v) : porDefecto; } catch { return porDefecto; }
+}
+
+function coleccionesVacias() {
+  return {
+    ordenesMl: [], envios: new Map(), preguntas: new Map(), reclamos: new Map(),
+    noLeidos: [], packs: new Map(), ordenesWoo: [],
+  };
 }
 
 export function crearDatos(db) {
@@ -91,7 +103,32 @@ export function crearDatos(db) {
       hijos.get(prod.parent_id).push(prod);
     }
   }
-  return { items, productos: porId, variaciones: hijos };
+  return { items, productos: porId, variaciones: hijos, ...coleccionesVacias() };
+}
+
+function porId(lista = []) {
+  return new Map(lista.map(x => [String(x.id), x]));
+}
+
+function datosDesdeFixture(fixture) {
+  const ml = fixture.ml ?? {};
+  const woo = fixture.woo ?? {};
+  const productos = new Map();
+  const variaciones = new Map();
+  for (const p of woo.products ?? []) {
+    productos.set(Number(p.id), p);
+    const padre = Number(p.parent_id) || 0;
+    if (padre) {
+      if (!variaciones.has(padre)) variaciones.set(padre, []);
+      variaciones.get(padre).push(p);
+    }
+  }
+  return {
+    items: porId(ml.items), productos, variaciones,
+    ordenesMl: ml.orders ?? [], envios: porId(ml.shipments), preguntas: porId(ml.questions),
+    reclamos: porId(ml.claims), noLeidos: ml.unread ?? [],
+    packs: new Map(Object.entries(ml.packs ?? {})), ordenesWoo: woo.orders ?? [],
+  };
 }
 
 function paginar(lista, url, porPaginaDefecto = 10) {
@@ -100,14 +137,27 @@ function paginar(lista, url, porPaginaDefecto = 10) {
   return { pagina: lista.slice((page - 1) * perPage, page * perPage), total: lista.length, paginas: Math.max(Math.ceil(lista.length / perPage), 1) };
 }
 
-export function crearSimulador({ db, cert, key, reloj = () => new Date() } = {}) {
-  const datos = crearDatos(db);
+function offsetLimit(url, limiteDefecto = 50, maximo = 50) {
+  return {
+    offset: Math.max(Number(url.searchParams.get('offset')) || 0, 0),
+    limit: Math.min(Number(url.searchParams.get('limit')) || limiteDefecto, maximo),
+  };
+}
+
+// Woo guarda `*_gmt` sin zona; se interpreta como UTC.
+const msGmt = v => Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/.test(v) ? v : `${v}Z`);
+
+export function crearSimulador({ db, fixture, cert, key, reloj = () => new Date() } = {}) {
+  const datos = fixture ? datosDesdeFixture(fixture) : crearDatos(db);
   const llamadas = [];
   let fallas = [];
   let siguienteOrdenWoo = 900000;
+  let contador = 0;
 
   function registrar(req, url, cuerpo, status) {
-    llamadas.push({ en: reloj().toISOString(), metodo: req.method, ruta: url.pathname + url.search, cuerpo, status });
+    const headers = {};
+    for (const h of HEADERS_REGISTRADOS) if (typeof req.headers[h] === 'string') headers[h] = req.headers[h];
+    llamadas.push({ en: reloj().toISOString(), metodo: req.method, ruta: url.pathname + url.search, cuerpo, status, headers });
     if (llamadas.length > MAX_LLAMADAS) llamadas.shift();
   }
 
@@ -123,7 +173,7 @@ export function crearSimulador({ db, cert, key, reloj = () => new Date() } = {})
     const headersPaginado = (r) => ({ 'x-wp-total': String(r.total), 'x-wp-totalpages': String(r.paginas) });
     let m;
     if (p === '/products' && req.method === 'GET') {
-      const lista = [...datos.productos.values()].filter(x => !x.parent_id);
+      const lista = [...datos.productos.values()].filter(x => !x.parent_id).sort((a, b) => Number(a.id) - Number(b.id));
       const r = paginar(lista, url);
       res.writeHead(200, { 'content-type': 'application/json', ...headersPaginado(r) });
       return res.end(JSON.stringify(r.pagina));
@@ -140,8 +190,14 @@ export function crearSimulador({ db, cert, key, reloj = () => new Date() } = {})
       return json(res, 200, { ...prod, ...(cuerpo && typeof cuerpo === 'object' ? cuerpo : {}) });
     }
     if (p === '/orders' && req.method === 'GET') {
-      res.writeHead(200, { 'content-type': 'application/json', 'x-wp-total': '0', 'x-wp-totalpages': '1' });
-      return res.end('[]');
+      const despues = url.searchParams.get('modified_after');
+      const antes = url.searchParams.get('modified_before');
+      const lista = datos.ordenesWoo
+        .filter(o => (!despues || msGmt(o.date_modified_gmt) > Date.parse(despues)) && (!antes || msGmt(o.date_modified_gmt) < Date.parse(antes)))
+        .sort((a, b) => msGmt(a.date_modified_gmt) - msGmt(b.date_modified_gmt) || Number(a.id) - Number(b.id));
+      const r = paginar(lista, url);
+      res.writeHead(200, { 'content-type': 'application/json', ...headersPaginado(r) });
+      return res.end(JSON.stringify(r.pagina));
     }
     if (p === '/orders' && req.method === 'POST') {
       siguienteOrdenWoo += 1;
@@ -186,12 +242,50 @@ export function crearSimulador({ db, cert, key, reloj = () => new Date() } = {})
       const results = ids.slice(desde, desde + limit);
       return json(res, 200, { results, paging: { total: ids.length, offset: desde, limit }, scroll_id: scroll && results.length ? String(desde + limit) : null });
     }
-    if (p === '/orders/search') return json(res, 200, { results: [], paging: { total: 0, offset: 0, limit: 50 } });
+    if (p === '/orders/search') {
+      const desde = url.searchParams.get('order.date_last_updated.from');
+      const hasta = url.searchParams.get('order.date_last_updated.to');
+      const { offset, limit } = offsetLimit(url);
+      const lista = datos.ordenesMl
+        .filter(o => (!desde || Date.parse(o.date_last_updated) >= Date.parse(desde)) && (!hasta || Date.parse(o.date_last_updated) <= Date.parse(hasta)))
+        .sort((a, b) => Date.parse(a.date_last_updated) - Date.parse(b.date_last_updated) || String(a.id).localeCompare(String(b.id)));
+      if (url.searchParams.get('sort') === 'date_desc') lista.reverse();
+      return json(res, 200, { results: lista.slice(offset, offset + limit), paging: { total: lista.length, offset, limit } });
+    }
+    if ((m = p.match(/^\/shipments\/([^/]+)$/)) && req.method === 'GET') {
+      const s = datos.envios.get(decodeURIComponent(m[1]));
+      return s ? json(res, 200, s) : json(res, 404, { error: 'not_found' });
+    }
+    if (p === '/post-purchase/v1/claims/search') {
+      const estado = url.searchParams.get('status');
+      const { offset, limit } = offsetLimit(url, 30, 100);
+      const lista = [...datos.reclamos.values()].filter(c => !estado || c.status === estado);
+      return json(res, 200, { data: lista.slice(offset, offset + limit), results: [], paging: { total: lista.length, offset, limit } });
+    }
+    if ((m = p.match(/^\/post-purchase\/v1\/claims\/([^/]+)$/)) && req.method === 'GET') {
+      const c = datos.reclamos.get(decodeURIComponent(m[1]));
+      return c ? json(res, 200, c) : json(res, 404, { error: 'not_found' });
+    }
     if (/^\/(orders|shipments|packs|claims)\//.test(p) || p.startsWith('/post-purchase/v1/claims/')) {
       if (p.endsWith('/search')) return json(res, 200, { data: [], results: [], paging: { total: 0 } });
       return json(res, 404, { error: 'not_found' });
     }
-    if (p === '/questions/search') return json(res, 200, { questions: [], total: 0 });
+    if (p === '/questions/search') {
+      const estado = url.searchParams.get('status');
+      const { offset, limit } = offsetLimit(url);
+      const lista = [...datos.preguntas.values()].filter(q => !estado || q.status === estado);
+      return json(res, 200, { questions: lista.slice(offset, offset + limit), total: lista.length, limit, offset });
+    }
+    if ((m = p.match(/^\/questions\/([^/]+)$/)) && req.method === 'GET') {
+      const q = datos.preguntas.get(decodeURIComponent(m[1]));
+      return q ? json(res, 200, q) : json(res, 404, { error: 'not_found' });
+    }
+    if (p === '/messages/unread') return json(res, 200, { results: datos.noLeidos, total: datos.noLeidos.length, messages: [], paging: { total: datos.noLeidos.length } });
+    if ((m = p.match(/^\/messages\/packs\/([^/]+)\/sellers\/[^/]+$/)) && req.method === 'GET') {
+      const mensajes = datos.packs.get(decodeURIComponent(m[1]));
+      if (!mensajes && fixture) return json(res, 404, { error: 'not_found' });
+      return json(res, 200, { messages: mensajes ?? [], results: [], paging: { total: mensajes?.length ?? 0 } });
+    }
     if (p.startsWith('/messages')) return json(res, 200, { results: [], messages: [], paging: { total: 0 } });
     if (/^\/sites\/[^/]+\/listing_prices$/.test(p)) return json(res, 200, []);
     if (/^\/users\/[^/]+\/shipping_options\/free$/.test(p)) return json(res, 200, { coverage: { all_country: { list_cost: 0 } } });
@@ -205,17 +299,33 @@ export function crearSimulador({ db, cert, key, reloj = () => new Date() } = {})
     if (url.pathname === '/__qa/llamadas') return json(res, 200, llamadas);
     if (url.pathname === '/__qa/fallas') {
       if (req.method === 'DELETE') { fallas = []; llamadas.length = 0; return json(res, 200, { ok: true }); }
-      if (req.method === 'POST' && cuerpo?.ruta && cuerpo?.status) {
+      if (req.method === 'POST' && cuerpo?.ruta && (cuerpo?.status || cuerpo?.modo || cuerpo?.demoraMs)) {
         try { new RegExp(cuerpo.ruta); } catch { return json(res, 400, { error: 'regex inválida' }); }
-        fallas.push({ ruta: cuerpo.ruta, status: Number(cuerpo.status), veces: Number(cuerpo.veces) || 1, retryAfter: cuerpo.retryAfter });
+        fallas.push({
+          ruta: cuerpo.ruta, status: Number(cuerpo.status) || 0, veces: Number(cuerpo.veces) || 1,
+          retryAfter: cuerpo.retryAfter, modo: cuerpo.modo, demoraMs: Number(cuerpo.demoraMs) || 0,
+        });
         return json(res, 201, { ok: true, fallas });
       }
       return json(res, 200, fallas);
     }
 
     const ruta = url.pathname + url.search;
+    contador += 1;
+    fixture?.alLlamar?.({ metodo: req.method, ruta, n: contador }, datos);
     const falla = fallaPara(ruta);
-    if (falla) {
+    if (falla?.demoraMs) await new Promise(r => setTimeout(r, falla.demoraMs));
+    if (falla?.modo === 'cortar') {
+      registrar(req, url, cuerpo, 0);
+      return req.socket.destroy();
+    }
+    if (falla?.modo === 'cortar-despues') {
+      registrar(req, url, cuerpo, 200);
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': '4096' });
+      res.write('{"results":[');
+      return setTimeout(() => req.socket.destroy(), 10);
+    }
+    if (falla?.status) {
       registrar(req, url, cuerpo, falla.status);
       const headers = { 'content-type': 'application/json' };
       if (falla.retryAfter) headers['retry-after'] = String(falla.retryAfter);
@@ -237,6 +347,8 @@ export function crearSimulador({ db, cert, key, reloj = () => new Date() } = {})
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const dbPath = process.env.SIM_DB;
   if (!dbPath) { console.error('Falta SIM_DB (snapshot anonimizado)'); process.exit(2); }
+  // Import diferido: el modo fixture (plataforma/) no necesita el binario nativo de SQLite.
+  const { default: Database } = await import('better-sqlite3');
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
   const cert = process.env.SIM_CERT ? fs.readFileSync(process.env.SIM_CERT) : null;
   const key = process.env.SIM_KEY ? fs.readFileSync(process.env.SIM_KEY) : null;
