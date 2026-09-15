@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { inject } from 'vitest';
+import { migrar } from '../../src/db/migrar.ts';
 
 export interface BaseDePrueba {
   nombre: string;
@@ -31,4 +33,12 @@ export async function crearBaseVacia(): Promise<BaseDePrueba> {
       await c.end();
     },
   };
+}
+
+export const DIR_MIGRACIONES = fileURLToPath(new URL('../../migrations', import.meta.url));
+
+export async function crearBaseDePrueba(): Promise<BaseDePrueba> {
+  const base = await crearBaseVacia();
+  await migrar(base.urlMigrador, DIR_MIGRACIONES);
+  return base;
 }
