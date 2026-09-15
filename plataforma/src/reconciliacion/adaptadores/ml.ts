@@ -1,7 +1,7 @@
 import type { Consultable } from '../../db/pool.ts';
 import { hashCanonico } from '../canonico.ts';
 import { ErrorCanalTerminal, type RespuestaCanal, type TransporteCanal } from '../cliente-http.ts';
-import type { AdaptadorBarrido, ContextoListado, PaginaRemota, RecursoRemoto, RelacionRemota } from '../tipos.ts';
+import { claveCorriente, type AdaptadorBarrido, type ContextoListado, type PaginaRemota, type RecursoRemoto, type RelacionRemota } from '../tipos.ts';
 import {
   BOOTSTRAP_ORDENES_MS, DIA_MS, cicloPorEstado, esRegistro, exigirLista, exigirRegistro, fechaUtc, finSegmento,
   idTexto, inicioVentana, numeroPosicion, textoPosicion, valorOnull, type Registro,
@@ -56,7 +56,7 @@ function ordenMl(crudo: unknown): RecursoRemoto {
 
 export function adaptadorOrdenesMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
-    topic: 'ml.orders', fullScan: false, versionKind: 'temporal',
+    topic: 'ml.orders', cursorKind: 'state_sweep', fullScan: false, versionKind: 'temporal',
     async listar(ctx, posicion): Promise<PaginaRemota> {
       const desdeTexto = textoPosicion(posicion, 'desde');
       const desde = desdeTexto ? new Date(desdeTexto) : inicioVentana(ctx.windowFrom, ctx.windowTo, BOOTSTRAP_ORDENES_MS);
@@ -88,7 +88,7 @@ const ENVIO_CERRADO = ['delivered', 'cancelled', 'not_delivered'];
 
 export function adaptadorEnviosMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
-    topic: 'ml.shipments', fullScan: false, versionKind: 'temporal',
+    topic: 'ml.shipments', cursorKind: 'state_sweep', fullScan: false, versionKind: 'temporal',
     async listar(ctx, posicion): Promise<PaginaRemota> {
       const despuesDe = textoPosicion(posicion, 'despuesDe') ?? '';
       // Conocidos por relación orden→envío: abiertos, nunca leídos o cerrados en los últimos 30 días.
@@ -141,7 +141,7 @@ function adaptadorAbiertasYConocidas(dep: DependenciasMl, config: {
     return { id: n.id, version: versionHash(n.projection), updatedAt: null, lifecycle: n.lifecycle, payload: crudo, projection: n.projection };
   };
   return {
-    topic: config.topic, fullScan: false, versionKind: 'hash',
+    topic: config.topic, cursorKind: 'state_sweep', fullScan: false, versionKind: 'hash',
     async listar(ctx, posicion): Promise<PaginaRemota> {
       const cursorAfter = cursorGeneracion(ctx.windowTo);
       if (textoPosicion(posicion, 'fase') !== 'conocidas') {
@@ -219,7 +219,7 @@ const RECURSO_PACK = /^\/packs\/[^/?#]+\/sellers\/[^/?#]+$/;
 
 export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
-    topic: 'ml.messages', fullScan: false, versionKind: 'hash',
+    topic: 'ml.messages', cursorKind: 'state_sweep', fullScan: false, versionKind: 'hash',
     async listar(ctx, posicion): Promise<PaginaRemota> {
       const cursorAfter = cursorGeneracion(ctx.windowTo);
       if (posicion === null) {
@@ -275,7 +275,8 @@ const LOTE_MULTIGET = 20;
 
 export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
-    topic: 'ml.items', fullScan: true, versionKind: 'temporal',
+    // Items no tiene filtro por modificación: su única corriente es la vuelta completa diaria.
+    topic: 'ml.items', cursorKind: 'full_scan', fullScan: true, versionKind: 'temporal',
     async listar(ctx, posicion): Promise<PaginaRemota> {
       const q = new URLSearchParams({ search_type: 'scan', limit: '100' });
       const scroll = textoPosicion(posicion, 'scroll_id');
@@ -317,5 +318,5 @@ export function crearAdaptadoresMl(dep: DependenciasMl): Record<string, Adaptado
   return Object.fromEntries([
     adaptadorOrdenesMl(dep), adaptadorEnviosMl(dep), adaptadorPreguntasMl(dep),
     adaptadorMensajesMl(dep), adaptadorReclamosMl(dep), adaptadorItemsMl(dep),
-  ].map((a) => [a.topic, a]));
+  ].map((a) => [claveCorriente(a.topic, a.cursorKind), a]));
 }

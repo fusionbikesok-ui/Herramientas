@@ -19,7 +19,7 @@
 ## E1 activa
 
 - [Tramo 1 — diseño](specs/2026-09-15-e1-tramo1-fundacion-design.md) y [plan](plans/2026-09-15-e1-tramo1-fundacion.md): implementado y revisado en aislamiento; no desplegado.
-- [Tramo 2 — diseño](specs/2026-09-15-e1-tramo2-barridos-design.md) y [plan](plans/2026-09-15-e1-tramo2-barridos.md): aprobados para implementación exclusivamente efímera; cortes 1–4 implementados, falta 5 (contrato acumulativo) y cerrar las brechas de adaptadores anotadas en la memoria activa.
+- [Tramo 2 — diseño](specs/2026-09-15-e1-tramo2-barridos-design.md) y [plan](plans/2026-09-15-e1-tramo2-barridos.md): aprobados para implementación exclusivamente efímera; cortes 1–4 implementados, más la separación de corrientes `state_sweep`/`full_scan` y las vueltas de presencia del corte 5; falta el arnés dockerizado con worker real, la relectura de segmento en `/orders/search` y el contrato acumulativo (ver memoria activa).
 
 ## Archivo
 

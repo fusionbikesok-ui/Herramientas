@@ -5,7 +5,7 @@ import { cifrarSobre, type KeyringSobre } from '../seguridad/sobre.ts';
 import type { ResultadoBarrido } from '../worker/barridos.ts';
 import { hashCanonico, jsonCanonico } from './canonico.ts';
 import { renovarLeaseCorrida, type CorridaReclamada } from './corridas.ts';
-import type { AdaptadorBarrido, RecursoRemoto, TipoVersion } from './tipos.ts';
+import type { AdaptadorBarrido, AlcanceBajas, RecursoRemoto, TipoVersion } from './tipos.ts';
 
 export class ErrorPaginaInvalida extends Error { override name = 'ErrorPaginaInvalida'; }
 
@@ -102,6 +102,22 @@ async function persistirRecurso(
   return comparacion < 0 ? 'stale' : 'duplicate';
 }
 
+/**
+ * Corriente de sólo presencia: marca avistamiento de los IDs enumerados sin tocar versión, hash,
+ * ciclo de vida ni inbox. Un ID desconocido no crea observación: el contenido lo trae la corriente
+ * incremental del mismo tópico.
+ */
+async function marcarPresencia(
+  tx: pg.PoolClient, corrida: CorridaReclamada, ids: readonly string[],
+): Promise<void> {
+  if (!ids.length) return;
+  await tx.query(
+    `UPDATE integrations.resource_observations SET last_seen_run_id=$3,last_seen_at=now()
+      WHERE channel_account_id=$1 AND topic=$2 AND resource_id = ANY($4::text[])`,
+    [corrida.channelAccountId, corrida.topic, corrida.id, ids],
+  );
+}
+
 async function persistirRelaciones(tx: Consultable, corrida: CorridaReclamada, recurso: RecursoRemoto): Promise<void> {
   for (const relacion of recurso.relations ?? []) {
     await tx.query(
@@ -116,13 +132,21 @@ async function persistirRelaciones(tx: Consultable, corrida: CorridaReclamada, r
   }
 }
 
+const CONDICION_ALCANCE: Readonly<Record<AlcanceBajas, string>> = {
+  todos: '',
+  no_variaciones: `AND NOT EXISTS (SELECT 1 FROM integrations.resource_relations r
+      WHERE r.channel_account_id=o.channel_account_id AND r.relation_type='product_variation'
+        AND r.target_topic=o.topic AND r.target_id=o.resource_id)`,
+};
+
 async function declararBajas(
-  tx: pg.PoolClient, corrida: CorridaReclamada, keyring: KeyringSobre,
+  tx: pg.PoolClient, corrida: CorridaReclamada, keyring: KeyringSobre, alcance: AlcanceBajas,
 ): Promise<number> {
   const ausentes = await tx.query<{ resource_id: string }>(
-    `SELECT resource_id FROM integrations.resource_observations
-      WHERE channel_account_id=$1 AND topic=$2 AND lifecycle<>'deleted'
-        AND last_seen_run_id IS DISTINCT FROM $3 FOR UPDATE`,
+    `SELECT o.resource_id FROM integrations.resource_observations o
+      WHERE o.channel_account_id=$1 AND o.topic=$2 AND o.lifecycle<>'deleted'
+        AND o.last_seen_run_id IS DISTINCT FROM $3 ${CONDICION_ALCANCE[alcance]}
+      FOR UPDATE`,
     [corrida.channelAccountId, corrida.topic, corrida.id],
   );
   for (const fila of ausentes.rows) {
@@ -149,9 +173,12 @@ export function crearProcesadorMotor(opciones: {
   maxPaginas?: number;
 }): (corrida: CorridaReclamada) => Promise<ResultadoBarrido> {
   const { adaptador, db, keyring } = opciones;
+  const presencia = adaptador.modo === 'presencia';
   const monotono = opciones.relojMonotonoMs ?? (() => performance.now());
   return async (corrida) => {
-    if (corrida.topic !== adaptador.topic) throw new Error('adaptador asignado a tópico incorrecto');
+    if (corrida.topic !== adaptador.topic || corrida.cursorKind !== adaptador.cursorKind) {
+      throw new Error('adaptador asignado a otra corriente');
+    }
     const config = await db.query<{ overlap_seconds: number }>(
       `SELECT overlap_seconds FROM integrations.reconciliation_cursors
         WHERE channel_account_id=$1 AND topic=$2 AND cursor_kind=$3`,
@@ -189,12 +216,25 @@ export function crearProcesadorMotor(opciones: {
       }
       const pagina = await adaptador.listar({ corrida, windowFrom, windowTo }, posicion);
       if (!pagina || !Array.isArray(pagina.resources)) throw new ErrorPaginaInvalida('página remota malformada');
-      for (const recurso of pagina.resources) validarRecurso(recurso, adaptador.versionKind);
+      let presentes: readonly string[] = [];
+      if (presencia) {
+        if (!Array.isArray(pagina.presentes)) throw new ErrorPaginaInvalida('corriente de presencia sin IDs');
+        if (pagina.resources.length) throw new ErrorPaginaInvalida('corriente de presencia con contenido');
+        presentes = pagina.presentes;
+        if (presentes.some((id) => typeof id !== 'string' || !id.trim())) throw new ErrorPaginaInvalida('ID presente inválido');
+      } else {
+        for (const recurso of pagina.resources) validarRecurso(recurso, adaptador.versionKind);
+      }
       await enTransaccion(db, async (tx) => {
-        for (const recurso of pagina.resources) {
-          const resultado = await persistirRecurso(tx, corrida, adaptador.versionKind, recurso, keyring);
-          enumerados++;
-          if (resultado === 'enqueued') encolados++; else duplicados++;
+        if (presencia) {
+          await marcarPresencia(tx, corrida, presentes);
+          enumerados += presentes.length;
+        } else {
+          for (const recurso of pagina.resources) {
+            const resultado = await persistirRecurso(tx, corrida, adaptador.versionKind, recurso, keyring);
+            enumerados++;
+            if (resultado === 'enqueued') encolados++; else duplicados++;
+          }
         }
         await tx.query(
           `UPDATE integrations.sweep_runs SET enumerated=$2,missing_enqueued=$3,duplicates=$4 WHERE id=$1`,
@@ -206,7 +246,8 @@ export function crearProcesadorMotor(opciones: {
     } while (posicion !== null);
     if (!cursorAfter || cursorAfter.v !== 1) throw new ErrorPaginaInvalida('adaptador no devolvió cursor v1');
     if (adaptador.fullScan) {
-      return { cursorAfter, antesDeCerrar: async (tx) => { await declararBajas(tx, corrida, keyring); } };
+      const alcance = adaptador.alcanceBajas ?? 'todos';
+      return { cursorAfter, antesDeCerrar: async (tx) => { await declararBajas(tx, corrida, keyring, alcance); } };
     }
     return { cursorAfter };
   };

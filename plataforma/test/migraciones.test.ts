@@ -24,7 +24,7 @@ async function valor<T>(url: string, sql: string): Promise<T> {
 describe('migraciones', () => {
   it('E1-SCH-02 migrar dos bases vacías da el mismo esquema', async () => {
     const a = await nueva(); const b = await nueva();
-    expect(await migrar(a.urlMigrador, DIR_MIGRACIONES)).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql']);
+    expect(await migrar(a.urlMigrador, DIR_MIGRACIONES)).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql']);
     await migrar(b.urlMigrador, DIR_MIGRACIONES);
     expect(esquemaDe(a.nombre)).toBe(esquemaDe(b.nombre));
   });
@@ -51,7 +51,7 @@ describe('migraciones', () => {
     const a = await nueva();
     const dir = mkdtempSync(join(tmpdir(), 'migr-'));
     cpSync(DIR_MIGRACIONES, dir, { recursive: true });
-    writeFileSync(join(dir, '0005_salto.sql'), 'select 1;');
+    writeFileSync(join(dir, '0006_salto.sql'), 'select 1;');
     await expect(migrar(a.urlMigrador, dir)).rejects.toThrow(/numeración/);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -59,7 +59,7 @@ describe('migraciones', () => {
   it('E1-SCH-02 dos migradores concurrentes aplican una sola vez', async () => {
     const a = await nueva();
     const [r1, r2] = await Promise.all([migrar(a.urlMigrador, DIR_MIGRACIONES), migrar(a.urlMigrador, DIR_MIGRACIONES)]);
-    expect([...r1, ...r2].sort()).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql']);
+    expect([...r1, ...r2].sort()).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql']);
   });
 
   it('el esquema migrado coincide con la referencia schema.sql', async () => {

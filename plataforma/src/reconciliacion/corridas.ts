@@ -17,6 +17,9 @@ export interface CorridaReclamada {
   workerId: string;
 }
 
+/** Corriente que un worker puede reclamar: un tópico y su clase de cursor. */
+export interface Corriente { topic: string; cursorKind: string }
+
 export async function materializarCorridas(pool: pg.Pool, ahora = new Date()): Promise<number> {
   return enTransaccion(pool, async (tx) => {
     const r = await tx.query<{
@@ -54,28 +57,32 @@ export async function materializarCorridas(pool: pg.Pool, ahora = new Date()): P
 }
 
 export async function reclamarCorridas(
-  pool: pg.Pool, workerId: string, topics: readonly string[], cantidad: number, leaseSegundos = 60,
+  pool: pg.Pool, workerId: string, corrientes: readonly Corriente[], cantidad: number, leaseSegundos = 60,
 ): Promise<CorridaReclamada[]> {
-  if (!topics.length || cantidad < 1) return [];
+  if (!corrientes.length || cantidad < 1) return [];
+  const topics = corrientes.map((c) => c.topic);
+  const kinds = corrientes.map((c) => c.cursorKind);
   const r = await pool.query<{
     id: string; channel_account_id: string; topic: string; cursor_kind: string;
     strategy: 'enumerable' | 'convergence'; lease_token: string; attempts: number;
     max_attempts: number; cursor_before: Record<string, unknown> | null;
     cursor_version: number; correlation_id: string;
   }>(
-    `WITH candidatas AS (
-       SELECT id FROM integrations.sweep_runs
-        WHERE status IN ('pending','retryable') AND available_at<=now() AND topic=ANY($1)
-        ORDER BY available_at,id LIMIT $2 FOR UPDATE SKIP LOCKED)
+    `WITH corrientes AS (SELECT * FROM unnest($1::text[],$2::text[]) AS c(topic,cursor_kind)),
+       candidatas AS (
+       SELECT s.id FROM integrations.sweep_runs s JOIN corrientes c
+              ON c.topic=s.topic AND c.cursor_kind=s.cursor_kind
+        WHERE s.status IN ('pending','retryable') AND s.available_at<=now()
+        ORDER BY s.available_at,s.id LIMIT $3 FOR UPDATE OF s SKIP LOCKED)
      UPDATE integrations.sweep_runs r
-        SET status='claimed',lease_token=uuidv7(),lease_until=now()+make_interval(secs=>$3),
-            worker_id=$4,attempts=r.attempts+1
+        SET status='claimed',lease_token=uuidv7(),lease_until=now()+make_interval(secs=>$4),
+            worker_id=$5,attempts=r.attempts+1
        FROM candidatas c,integrations.reconciliation_cursors rc
       WHERE r.id=c.id AND rc.channel_account_id=r.channel_account_id
         AND rc.topic=r.topic AND rc.cursor_kind=r.cursor_kind AND rc.enabled
      RETURNING r.id,r.channel_account_id,r.topic,r.cursor_kind,r.strategy,r.lease_token,
        r.attempts,r.max_attempts,r.cursor_before,rc.version AS cursor_version,r.correlation_id`,
-    [topics, cantidad, leaseSegundos, workerId],
+    [topics, kinds, cantidad, leaseSegundos, workerId],
   );
   return r.rows.map((f) => ({
     id: f.id, channelAccountId: f.channel_account_id, topic: f.topic, cursorKind: f.cursor_kind,

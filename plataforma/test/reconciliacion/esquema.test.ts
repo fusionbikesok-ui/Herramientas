@@ -1,3 +1,6 @@
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
 import { migrar } from '../../src/db/migrar.ts';
@@ -41,6 +44,49 @@ describe('contrato relacional E1 T2', () => {
     await expect(db.query(`insert into integrations.sweep_runs(channel_account_id,topic,strategy)
       values ($1,'ml.orders','enumerable')`, [cuenta])).rejects.toThrow();
     await db.end();
+  });
+
+  it('la migración 0004 siembra las diez corrientes con su calendario', async () => {
+    // La cuenta tiene que existir antes de 0004: se migra hasta 0003, se crea la cuenta y se sigue.
+    const base = await crearBaseVacia(); bases.push(base);
+    const dir = mkdtempSync(join(tmpdir(), 'migr-corrientes-'));
+    cpSync(DIR_MIGRACIONES, dir, { recursive: true });
+    rmSync(join(dir, '0004_corrientes.sql'));
+    await migrar(base.urlMigrador, dir);
+    const db = new pg.Client({ connectionString: base.urlApp }); await db.connect();
+    const empresa = (await db.query<{ id: string }>("insert into core.companies(legal_name) values ('Corrientes') returning id")).rows[0]!.id;
+    await db.query("insert into core.channel_accounts(company_id,channel,external_account) values ($1,'mercadolibre','c1')", [empresa]);
+    cpSync(join(DIR_MIGRACIONES, '0004_corrientes.sql'), join(dir, '0004_corrientes.sql'));
+    expect(await migrar(base.urlMigrador, dir)).toEqual(['0004_corrientes.sql']);
+
+    const filas = await db.query<{ topic: string; cursor_kind: string; interval_seconds: number; hora: string; dow: number }>(
+      `select topic,cursor_kind,interval_seconds,
+              to_char(next_run_at AT TIME ZONE 'America/Argentina/Buenos_Aires','HH24:MI') AS hora,
+              extract(dow from next_run_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::int AS dow
+         from integrations.reconciliation_cursors order by topic,cursor_kind`);
+    expect(filas.rows.map((f) => `${f.topic}|${f.cursor_kind}`)).toEqual([
+      'ml.claims|state_sweep', 'ml.items|full_scan', 'ml.messages|state_sweep', 'ml.orders|state_sweep',
+      'ml.questions|state_sweep', 'ml.shipments|state_sweep', 'woo.orders|full_scan', 'woo.orders|state_sweep',
+      'woo.products|full_scan', 'woo.products|state_sweep',
+    ]);
+    const completas = Object.fromEntries(filas.rows.filter((f) => f.cursor_kind === 'full_scan').map((f) => [f.topic, f]));
+    expect(completas['ml.items']).toMatchObject({ interval_seconds: 86400, hora: '04:00' });
+    expect(completas['woo.products']).toMatchObject({ interval_seconds: 86400, hora: '04:15' });
+    expect(completas['woo.orders']).toMatchObject({ interval_seconds: 604800, hora: '04:30', dow: 0 });
+    const incrementales = Object.fromEntries(filas.rows.filter((f) => f.cursor_kind === 'state_sweep').map((f) => [f.topic, f.interval_seconds]));
+    expect(incrementales).toEqual({
+      'ml.orders': 600, 'ml.shipments': 900, 'ml.questions': 1200, 'ml.messages': 1200,
+      'ml.claims': 1200, 'woo.orders': 600, 'woo.products': 600,
+    });
+    // Reaplicar la migración no duplica corrientes ni reabre una deshabilitada a mano.
+    await db.query("update integrations.reconciliation_cursors set enabled=false where topic='ml.orders'");
+    expect(await migrar(base.urlMigrador, dir)).toEqual([]);
+    expect(await migrar(base.urlMigrador, DIR_MIGRACIONES)).toEqual([]);
+    const despues = await db.query<{ n: string; apagadas: string }>(
+      "select count(*) n, count(*) filter (where not enabled) apagadas from integrations.reconciliation_cursors");
+    expect(despues.rows[0]).toEqual({ n: '10', apagadas: '1' });
+    await db.end();
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('valida hashes, lifecycle, relaciones y sobre completo', async () => {

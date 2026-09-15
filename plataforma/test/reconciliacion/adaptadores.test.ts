@@ -10,7 +10,7 @@ import {
 } from '../../src/reconciliacion/cliente-http.ts';
 import { completarCorrida, fallarCorrida, materializarCorridas, reclamarCorridas } from '../../src/reconciliacion/corridas.ts';
 import { crearProcesadorMotor } from '../../src/reconciliacion/motor.ts';
-import type { AdaptadorBarrido } from '../../src/reconciliacion/tipos.ts';
+import { claveCorriente, type AdaptadorBarrido } from '../../src/reconciliacion/tipos.ts';
 import { descifrarSobre, type KeyringSobre } from '../../src/seguridad/sobre.ts';
 import { ErrorBarridoReintentable } from '../../src/worker/barridos.ts';
 import { crearSimulador, type DatosSimulador, type FixtureCanales, type LlamadaSimulador, type RegistroSim } from '../../../scripts/qa/simulador-canales.mjs';
@@ -21,6 +21,7 @@ const PII = '@fixture.invalid';
 const keyring: KeyringSobre = { activeKeyId: 'adaptadores', keys: { adaptadores: Buffer.alloc(32, 9) } };
 const WINDOW_TO = new Date('2026-09-15T12:00:00.000Z');
 const reloj = () => WINDOW_TO;
+const despues = (minutos: number) => () => new Date(WINDOW_TO.getTime() + minutos * 60_000);
 const hace = (horas: number) => new Date(WINDOW_TO.getTime() - horas * 3_600_000).toISOString();
 
 function fixtureBase(): FixtureCanales {
@@ -92,16 +93,18 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
   const contar = async (sql: string, params: unknown[] = []) => Number((await db.query<{ n: string }>(sql, params)).rows[0]!.n);
   const inbox = (topic: string) => contar('select count(*) n from integrations.inbox_messages where topic=$1', [topic]);
 
-  async function barrer(topic: string, opciones: { reloj?: () => Date } = {}) {
-    const estrategia = ['ml.shipments'].includes(topic) ? 'convergence' : 'enumerable';
+  /** Programa y ejecuta una corrida de la corriente pedida, tal como lo haría scheduler + worker. */
+  async function barrer(topic: string, cursorKind = 'state_sweep', opciones: { reloj?: () => Date } = {}) {
+    const estrategia = topic === 'ml.shipments' ? 'convergence' : 'enumerable';
     await db.query(`insert into integrations.reconciliation_cursors
-        (channel_account_id,topic,strategy,overlap_seconds,interval_seconds,next_run_at)
-      values ($1,$2,$3,600,600,now()-interval '1 hour')
+        (channel_account_id,topic,cursor_kind,strategy,overlap_seconds,interval_seconds,next_run_at)
+      values ($1,$2,$3,$4,600,600,now()-interval '1 hour')
       on conflict (channel_account_id,topic,cursor_kind) do update set next_run_at=now()-interval '1 second'`,
-    [cuenta, topic, estrategia]);
+    [cuenta, topic, cursorKind, estrategia]);
     await materializarCorridas(db);
-    const corrida = (await reclamarCorridas(db, 'w-adaptadores', [topic], 1))[0]!;
-    const procesar = crearProcesadorMotor({ db, adaptador: adaptadores()[topic]!, keyring, reloj: opciones.reloj ?? reloj });
+    const corrida = (await reclamarCorridas(db, 'w-adaptadores', [{ topic, cursorKind }], 1))[0]!;
+    const adaptador = adaptadores()[claveCorriente(topic, cursorKind)]!;
+    const procesar = crearProcesadorMotor({ db, adaptador, keyring, reloj: opciones.reloj ?? reloj });
     try {
       const r = await procesar(corrida);
       return { corrida, estado: await completarCorrida(db, corrida, r.cursorAfter, r.antesDeCerrar) };
@@ -179,7 +182,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect((await barrer('ml.shipments')).estado).toBe('succeeded');
     expect(await inbox('ml.shipments')).toBe(20);
     for (const s of [...datos!.envios.values()].slice(0, 5)) { s.last_updated = hace(0.5); s.status = 'shipped'; }
-    await barrer('ml.shipments', { reloj: () => new Date(WINDOW_TO.getTime() + 60_000) });
+    await barrer('ml.shipments', 'state_sweep', { reloj: despues(1) });
     expect(await inbox('ml.shipments')).toBe(25);
     const ultima = await db.query<{ enumerated: number; missing_enqueued: number }>(
       "select enumerated,missing_enqueued from integrations.sweep_runs where topic='ml.shipments' order by id desc limit 1");
@@ -217,16 +220,16 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
   });
 
   it('E1-SWP ml.items: scan paginado + multiget de 20 y baja sólo tras una vuelta completa', async () => {
-    await barrer('ml.items');
+    await barrer('ml.items', 'full_scan');
     expect(await inbox('ml.items')).toBe(130);
     expect((await llamadas()).filter((l) => l.ruta.startsWith('/items?ids=')).every((l) => l.ruta.split('=')[1]!.split(',').length <= 20)).toBe(true);
     datos!.items.delete('MLA100005');
     await qa({ ruta: 'scroll_id=100', status: 503 });
-    await expect(barrer('ml.items', { reloj: () => new Date(WINDOW_TO.getTime() + 60_000) })).rejects.toBeInstanceOf(ErrorBarridoReintentable);
+    await expect(barrer('ml.items', 'full_scan', { reloj: despues(1) })).rejects.toBeInstanceOf(ErrorBarridoReintentable);
     expect(await contar("select count(*) n from integrations.resource_observations where lifecycle='deleted'")).toBe(0);
     await admin.query("update integrations.sweep_runs set available_at=now() where status='retryable'");
-    const corrida = (await reclamarCorridas(db, 'w-adaptadores', ['ml.items'], 1))[0]!;
-    const r = await crearProcesadorMotor({ db, adaptador: adaptadores()['ml.items']!, keyring, reloj })(corrida);
+    const corrida = (await reclamarCorridas(db, 'w-adaptadores', [{ topic: 'ml.items', cursorKind: 'full_scan' }], 1))[0]!;
+    const r = await crearProcesadorMotor({ db, adaptador: adaptadores()[claveCorriente('ml.items', 'full_scan')]!, keyring, reloj })(corrida);
     expect(await completarCorrida(db, corrida, r.cursorAfter, r.antesDeCerrar)).toBe('succeeded');
     expect((await db.query<{ resource_id: string }>("select resource_id from integrations.resource_observations where lifecycle='deleted'")).rows).toEqual([{ resource_id: 'MLA100005' }]);
   });
@@ -241,12 +244,27 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect(fila.rows[0]?.remote_version.endsWith('Z')).toBe(true);
   });
 
-  it('E1-DEL-01 woo.products: padres + variaciones y producto borrado sin webhook detectado en la vuelta', async () => {
+  it('la vuelta semanal de IDs de pedidos Woo declara un borrado duro sin releer contenido', async () => {
+    await barrer('woo.orders');
+    datos!.ordenesWoo.splice(datos!.ordenesWoo.findIndex((o) => Number(o.id) === 305), 1);
+    await fetch(`${url}/__qa/fallas`, { method: 'DELETE' });
+    await barrer('woo.orders', 'full_scan', { reloj: despues(1) });
+    const bajas = await db.query<{ resource_id: string }>(
+      "select resource_id from integrations.resource_observations where topic='woo.orders' and lifecycle='deleted'");
+    expect(bajas.rows).toEqual([{ resource_id: '305' }]);
+    // Sólo presencia: la vuelta pide únicamente el id y no reescribe versiones ni encola contenido.
+    const vuelta = (await llamadas()).filter((l) => l.ruta.includes('/orders?'));
+    expect(vuelta.length).toBeGreaterThan(0);
+    expect(vuelta.every((l) => new URL(l.ruta, url).searchParams.get('_fields') === 'id')).toBe(true);
+    expect(await inbox('woo.orders')).toBe(151);
+  });
+
+  it('E1-DEL-01 woo.products: incremental trae padres y variaciones; la vuelta de IDs declara la baja del padre', async () => {
     await barrer('woo.products');
     expect(await inbox('woo.products')).toBe(122);
     expect(await contar("select count(*) n from integrations.resource_relations where relation_type='product_variation'")).toBe(2);
     datos!.productos.delete(15);
-    await barrer('woo.products', { reloj: () => new Date(WINDOW_TO.getTime() + 60_000) });
+    await barrer('woo.products', 'full_scan', { reloj: despues(1) });
     const bajas = await db.query<{ resource_id: string; payload_ciphertext: Buffer; payload_nonce: Buffer; payload_tag: Buffer; payload_key_id: string; remote_version: string }>(
       "select resource_id,payload_ciphertext,payload_nonce,payload_tag,payload_key_id,remote_version from integrations.inbox_messages where remote_version like 'deleted:%'");
     expect(bajas.rows.map((f) => f.resource_id)).toEqual(['15']);
@@ -254,6 +272,10 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     const plano = descifrarSobre({ keyId: b.payload_key_id, nonce: b.payload_nonce, tag: b.payload_tag, ciphertext: b.payload_ciphertext },
       { account: cuenta, topic: 'woo.products', resource: '15', remoteVersion: b.remote_version }, keyring);
     expect(JSON.parse(plano.toString())).toEqual({ id: '15', lifecycle: 'deleted' });
+    // La vuelta enumera padres: no puede declarar ausentes a las variaciones que no lista.
+    const variaciones = await db.query<{ resource_id: string; lifecycle: string }>(
+      "select resource_id,lifecycle from integrations.resource_observations where resource_id in ('900','901') order by 1");
+    expect(variaciones.rows).toEqual([{ resource_id: '900', lifecycle: 'open' }, { resource_id: '901', lifecycle: 'open' }]);
   });
 
   it('ninguna llamada de canal usa un método distinto de GET', async () => {

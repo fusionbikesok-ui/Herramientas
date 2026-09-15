@@ -325,6 +325,14 @@ CREATE TABLE integrations.reconciliation_cursors (
     jsonb_typeof(cursor_value) = 'object' AND cursor_value ? 'v' AND cursor_value->>'v' = '1')),
   PRIMARY KEY (channel_account_id, topic, cursor_kind)
 );
+-- Corrientes sembradas por la migración 0004 para cada cuenta de canal (José, 2026-09-15):
+--   cursor_kind='state_sweep' (ventana incremental): ml.orders 10 min, ml.shipments 15 min
+--   (convergencia), ml.questions/ml.messages/ml.claims 20 min, woo.orders y woo.products 10 min.
+--   cursor_kind='full_scan' (vuelta completa que declara bajas por conjunto): ml.items diaria 04:00,
+--   woo.products diaria 04:15 y woo.orders semanal los domingos 04:30, hora de Argentina.
+-- Las vueltas de Woo son de sólo presencia: enumeran IDs y no reescriben versión ni payload, para no
+-- competir con el hash de la corriente incremental. La de productos enumera padres, así que no puede
+-- declarar ausente una variación. T3 agregará cursor_kind='missed_feed' sin tocar estas posiciones.
 
 CREATE TABLE integrations.sweep_runs (
   id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -1,8 +1,9 @@
 import type pg from 'pg';
 import {
   completarCorrida, fallarCorrida, reclamarCorridas, soltarCorridaPorApagado,
-  type CorridaReclamada,
+  type Corriente, type CorridaReclamada,
 } from '../reconciliacion/corridas.ts';
+import { claveCorriente } from '../reconciliacion/tipos.ts';
 
 export interface ResultadoBarrido {
   cursorAfter: Record<string, unknown>;
@@ -21,6 +22,7 @@ export interface WorkerBarridos {
   detener(): Promise<void>;
 }
 
+/** Los procesadores se indexan por corriente (`topic|cursor_kind`): un tópico puede tener varias. */
 export function crearWorkerBarridos(opciones: {
   db: pg.Pool;
   workerId: string;
@@ -28,16 +30,21 @@ export function crearWorkerBarridos(opciones: {
 }): WorkerBarridos {
   const activas = new Map<string, CorridaReclamada>();
   let aceptando = true;
-  const topics = Object.keys(opciones.procesadores);
+  const corrientes: Corriente[] = Object.keys(opciones.procesadores).map((clave) => {
+    const [topic, cursorKind] = clave.split('|');
+    if (!topic || !cursorKind) throw new Error(`clave de corriente inválida: ${clave}`);
+    return { topic, cursorKind };
+  });
 
   return {
     async unaVuelta(cantidad = 5) {
-      if (!aceptando || topics.length === 0) return 0;
-      const corridas = await reclamarCorridas(opciones.db, opciones.workerId, topics, cantidad);
+      if (!aceptando || corrientes.length === 0) return 0;
+      const corridas = await reclamarCorridas(opciones.db, opciones.workerId, corrientes, cantidad);
       for (const corrida of corridas) {
         activas.set(corrida.id, corrida);
         try {
-          const resultado = await opciones.procesadores[corrida.topic]!(corrida);
+          const procesador = opciones.procesadores[claveCorriente(corrida.topic, corrida.cursorKind)]!;
+          const resultado = await procesador(corrida);
           await completarCorrida(opciones.db, corrida, resultado.cursorAfter, resultado.antesDeCerrar);
         } catch (error) {
           const retryAfter = error instanceof ErrorBarridoReintentable ? error.retryAfter : undefined;
