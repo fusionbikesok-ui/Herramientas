@@ -50,7 +50,9 @@ describe('auditoría', () => {
     expect(await verificarCadena(app)).toBeNull();
     await admin.query('delete from audit.audit_events where chain_seq = 700');
     expect(await verificarCadena(app)).toBe(700);
-    expect(await verificarCadena(app, 701)).toBeNull();
+    // Sin el evento 700, verificar desde 701 no tiene contra qué validar: el hueco es la evidencia del borrado.
+    expect(await verificarCadena(app, 701)).toBe(701);
+    expect(await verificarCadena(app, 702)).toBeNull();
     await admin.end();
   });
 });
