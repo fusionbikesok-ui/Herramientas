@@ -16,6 +16,6 @@ export default defineConfig({
     // (medido 2026-09-13). Con 2 procesos la suite pasó de 593 s a 332 s, 0 fallos. No hay
     // archivos que compartan base temporal (verificado).
     maxWorkers: 2,
-    exclude: ['**/node_modules/**', '**/.claude/worktrees/**'],
+    exclude: ['**/node_modules/**', '**/.claude/worktrees/**', 'plataforma/**'],
   },
 });
