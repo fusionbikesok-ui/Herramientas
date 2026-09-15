@@ -236,9 +236,20 @@ CREATE TABLE integrations.inbox_messages (
   payload_hash       bytea CHECK (payload_hash IS NULL OR length(payload_hash) = 32),
   payload_ciphertext bytea,                   -- payload original cifrado, 90 días (plan §4.1)
   parked_reason      text,
+  payload_key_id     text,
+  payload_nonce      bytea,
+  payload_tag        bytea,
   UNIQUE (channel_account_id, topic, resource_id, remote_version),
   CHECK ((status = 'claimed') = (lease_token IS NOT NULL AND lease_until IS NOT NULL)),
-  CHECK ((status = 'parked') = (parked_reason IS NOT NULL))
+  CHECK ((status = 'parked') = (parked_reason IS NOT NULL)),
+  CONSTRAINT inbox_payload_envelope_check CHECK (
+    (payload_ciphertext IS NULL AND payload_key_id IS NULL AND payload_nonce IS NULL AND payload_tag IS NULL)
+    OR
+    (payload_ciphertext IS NOT NULL AND length(payload_ciphertext) > 0
+      AND payload_key_id IS NOT NULL AND length(payload_key_id) BETWEEN 1 AND 128
+      AND payload_nonce IS NOT NULL AND payload_tag IS NOT NULL
+      AND length(payload_nonce) = 12 AND length(payload_tag) = 16)
+  )
 );
 CREATE INDEX inbox_messages_claimable ON integrations.inbox_messages (available_at, id) WHERE status IN ('pending', 'retryable');
 CREATE INDEX inbox_messages_lease ON integrations.inbox_messages (lease_until) WHERE status = 'claimed';
@@ -300,13 +311,19 @@ CREATE TABLE integrations.reconciliation_cursors (
   channel_account_id uuid NOT NULL REFERENCES core.channel_accounts(id),
   topic              text NOT NULL,
   strategy           text NOT NULL CHECK (strategy IN ('enumerable', 'convergence')),
-  cursor_value       text,                    -- último valor remoto confirmado (ISO 8601 UTC o scroll)
+  cursor_value       jsonb,
   overlap_seconds    integer NOT NULL CHECK (overlap_seconds BETWEEN 60 AND 86400),
   interval_seconds   integer NOT NULL CHECK (interval_seconds BETWEEN 60 AND 604800),
   next_run_at        timestamptz NOT NULL DEFAULT now(),
   last_success_at    timestamptz,
   version            integer NOT NULL DEFAULT 1 CHECK (version > 0),
-  PRIMARY KEY (channel_account_id, topic)
+  cursor_kind        text NOT NULL DEFAULT 'state_sweep'
+                       CONSTRAINT reconciliation_cursors_cursor_kind_check
+                       CHECK (cursor_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+  enabled            boolean NOT NULL DEFAULT true,
+  CONSTRAINT reconciliation_cursors_cursor_value_check CHECK (cursor_value IS NULL OR (
+    jsonb_typeof(cursor_value) = 'object' AND cursor_value ? 'v' AND cursor_value->>'v' = '1')),
+  PRIMARY KEY (channel_account_id, topic, cursor_kind)
 );
 
 CREATE TABLE integrations.sweep_runs (
@@ -316,7 +333,8 @@ CREATE TABLE integrations.sweep_runs (
   strategy           text NOT NULL CHECK (strategy IN ('enumerable', 'convergence')),
   started_at         timestamptz NOT NULL DEFAULT now(),
   finished_at        timestamptz,
-  status             text NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'succeeded', 'failed', 'partial')),
+  status             text NOT NULL DEFAULT 'pending'
+                       CHECK (status IN ('pending', 'claimed', 'succeeded', 'retryable', 'failed', 'partial')),
   window_from        timestamptz,
   window_to          timestamptz,
   enumerated         integer CHECK (enumerated >= 0),      -- enumerable: recursos listados por la API
@@ -327,10 +345,75 @@ CREATE TABLE integrations.sweep_runs (
   converged          integer CHECK (converged >= 0),
   diverged           integer CHECK (diverged >= 0),
   error_detail       text,
+  cursor_kind        text NOT NULL DEFAULT 'state_sweep'
+                       CONSTRAINT sweep_runs_cursor_kind_check
+                       CHECK (cursor_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+  scheduled_for      timestamptz NOT NULL DEFAULT now(),
+  available_at       timestamptz NOT NULL DEFAULT now(),
+  attempts           integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  max_attempts       integer NOT NULL DEFAULT 8 CHECK (max_attempts > 0),
+  lease_token        uuid,
+  lease_until        timestamptz,
+  worker_id          text,
+  cursor_before      jsonb CONSTRAINT sweep_runs_cursor_before_check
+                       CHECK (cursor_before IS NULL OR jsonb_typeof(cursor_before) = 'object'),
+  cursor_after       jsonb CONSTRAINT sweep_runs_cursor_after_check
+                       CHECK (cursor_after IS NULL OR jsonb_typeof(cursor_after) = 'object'),
+  correlation_id     uuid NOT NULL DEFAULT uuidv7(),
+  CONSTRAINT sweep_runs_cursor_fk FOREIGN KEY (channel_account_id, topic, cursor_kind)
+    REFERENCES integrations.reconciliation_cursors(channel_account_id, topic, cursor_kind)
+    ON DELETE RESTRICT,
   CHECK (strategy <> 'convergence' OR (swept IS NULL OR known_resources IS NULL OR swept <= known_resources)),
-  CHECK (converged IS NULL OR swept IS NULL OR converged <= swept)
+  CHECK (converged IS NULL OR swept IS NULL OR converged <= swept),
+  CONSTRAINT sweep_runs_lease_check CHECK (
+    (status = 'claimed') = (lease_token IS NOT NULL AND lease_until IS NOT NULL AND worker_id IS NOT NULL))
 );
 CREATE INDEX sweep_runs_topic ON integrations.sweep_runs (channel_account_id, topic, started_at DESC);
+CREATE UNIQUE INDEX sweep_runs_un_activa ON integrations.sweep_runs(channel_account_id, topic, cursor_kind)
+  WHERE status IN ('pending', 'claimed', 'retryable');
+CREATE INDEX sweep_runs_claimable ON integrations.sweep_runs(status, available_at, id)
+  WHERE status IN ('pending', 'retryable');
+CREATE INDEX sweep_runs_lease ON integrations.sweep_runs(lease_until) WHERE status = 'claimed';
+
+CREATE TABLE integrations.resource_observations (
+  channel_account_id    uuid NOT NULL REFERENCES core.channel_accounts(id) ON DELETE RESTRICT,
+  topic                 text NOT NULL,
+  resource_id           text NOT NULL CHECK (length(resource_id) > 0),
+  remote_version        text NOT NULL CHECK (length(remote_version) > 0),
+  remote_updated_at     timestamptz,
+  remote_hash           bytea NOT NULL CHECK (length(remote_hash) = 32),
+  projection_hash       bytea NOT NULL CHECK (length(projection_hash) = 32),
+  lifecycle             text NOT NULL CHECK (lifecycle IN ('open', 'closed', 'deleted', 'unknown')),
+  last_seen_run_id      bigint REFERENCES integrations.sweep_runs(id) ON DELETE SET NULL,
+  first_seen_at         timestamptz NOT NULL DEFAULT now(),
+  last_seen_at          timestamptz NOT NULL DEFAULT now(),
+  last_enqueued_version text,
+  PRIMARY KEY (channel_account_id, topic, resource_id),
+  CHECK (last_seen_at >= first_seen_at)
+);
+CREATE INDEX resource_observations_lifecycle
+  ON integrations.resource_observations(channel_account_id, topic, lifecycle, last_seen_at);
+CREATE INDEX resource_observations_retention ON integrations.resource_observations(last_seen_at)
+  WHERE lifecycle IN ('closed', 'deleted');
+
+CREATE TABLE integrations.resource_relations (
+  channel_account_id uuid NOT NULL REFERENCES core.channel_accounts(id) ON DELETE RESTRICT,
+  relation_type      text NOT NULL CHECK (relation_type IN ('order_shipment', 'order_pack', 'product_variation')),
+  source_topic       text NOT NULL,
+  source_id          text NOT NULL CHECK (length(source_id) > 0),
+  target_topic       text NOT NULL,
+  target_id          text NOT NULL CHECK (length(target_id) > 0),
+  first_seen_at      timestamptz NOT NULL DEFAULT now(),
+  last_seen_at       timestamptz NOT NULL DEFAULT now(),
+  last_seen_run_id   bigint REFERENCES integrations.sweep_runs(id) ON DELETE SET NULL,
+  lifecycle          text NOT NULL DEFAULT 'open' CHECK (lifecycle IN ('open', 'closed', 'deleted', 'unknown')),
+  PRIMARY KEY (channel_account_id, relation_type, source_topic, source_id, target_topic, target_id),
+  CHECK (last_seen_at >= first_seen_at)
+);
+CREATE INDEX resource_relations_target
+  ON integrations.resource_relations(channel_account_id, target_topic, target_id);
+CREATE INDEX resource_relations_retention ON integrations.resource_relations(last_seen_at)
+  WHERE lifecycle IN ('closed', 'deleted');
 
 -- Sin tabla de pérdidas de copia (2026-09-15): una falla de PostgreSQL no puede contarse dentro del mismo
 -- PostgreSQL caído. El contador durable vive fuera (legado) y su importación auditada se diseña en el
