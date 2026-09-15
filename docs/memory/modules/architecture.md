@@ -23,6 +23,7 @@
   `event_id`. Proyecta atómicamente `integration_events`, `inbox_items`, notificaciones por
   usuario con dispositivo activo y deliveries push; los handoffs se priorizan en el worker.
 - El programa canónico usa E0–E26 y está en `/opt/fusionbikes/herramientas/docs/superpowers/plan-maestro.md`; sus dependencias forman un DAG explícito y las fichas separadas prueban progreso.
+- E1 tramo 1 añade el paquete aislado `plataforma/`: Node 24 con TypeScript nativo, PostgreSQL, Fastify y `pg` con SQL explícito. API, worker y scheduler son procesos distintos de una misma imagen; todavía no reemplazan ni se conectan al runtime legacy en producción. Sus contratos públicos iniciales son `/api/v2/health` e `/api/v2/incidents` en `openapi/platform-v2.yaml`.
 - La API móvil de Preparación e Inventario vive bajo `/api/v1`, comparte servicios de negocio con
   el panel y nunca reutiliza rutas web autenticadas por cookies. Toda mutación reintentable exige
   idempotencia y toda edición concurrente, versión esperada con conflicto `409` sin sobrescritura.

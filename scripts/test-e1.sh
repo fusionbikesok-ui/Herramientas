@@ -7,7 +7,12 @@ TRABAJO="$(mktemp -d /tmp/fusion-e1.XXXXXX)"
 export E1_PROJECT="fusion-e1-$$"
 export SECRET_DIR="$TRABAJO/secretos"
 export ESTADO_PG_DIR="$TRABAJO/estado-pg"
-export API_PORT="${E1_PORT:-53201}"
+if [ -n "${E1_PORT:-}" ]; then
+  export API_PORT="$E1_PORT"
+else
+  # Reservar un puerto efímero evita que dos ensayos aislados compitan por 53201.
+  export API_PORT="$(node --input-type=module -e "import net from 'node:net'; const s=net.createServer(); s.listen(0, '127.0.0.1', () => { console.log(s.address().port); s.close(); });")"
+fi
 COMPOSE=(docker compose -f "$PLATAFORMA/deploy/compose.test.yml" -p "$E1_PROJECT")
 limpiar() {
   code=$?

@@ -9,6 +9,7 @@
   sigue requiriendo confirmación manual. Windows, hardware y App Store siempre requieren autorización explícita.
 - El repositorio local `/opt/fusionbikes/herramientas` usa como remoto `origin` el repositorio
   privado `fusionbikesok-ui/Herramientas` en GitHub, mediante SSH.
+- El tramo 1 de E1 se verificó exclusivamente con PostgreSQL, secretos, estado y red Docker efímeros mediante `npm run test:e1`; no creó roles, bases, secretos ni contenedores persistentes en el VPS. Cualquier puesta en sombra requiere autorización explícita, línea base contemporánea y el SOP de E1.
 - `bubblewrap` está instalado en `/usr/bin/bwrap`, versión 0.9.0.
 - El commit `80e14eb` desplegó la ingesta de chat y aplicó la migración
   `chat_events_inbox_093`; `/api/v1/meta` conserva contrato `1.0.0`. La ruta queda

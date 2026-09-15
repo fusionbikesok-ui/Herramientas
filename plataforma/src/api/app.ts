@@ -31,6 +31,22 @@ async function leerArchivoWal(dir: string): Promise<EstadoArchivo | null> {
   catch { return null; }
 }
 
+/** La comprobación de salud no puede consumir el timeout general de 5 s. */
+async function comprobarBase(pool: pg.Pool): Promise<void> {
+  const cliente = await pool.connect();
+  try {
+    await cliente.query('BEGIN');
+    await cliente.query("SET LOCAL statement_timeout = '2000ms'");
+    await cliente.query('SELECT 1');
+    await cliente.query('COMMIT');
+  } catch (error) {
+    await cliente.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    cliente.release();
+  }
+}
+
 function cursorDecode(valor: unknown): { openedAt: string; sourceType: string; sourceId: string } | null {
   if (typeof valor !== 'string' || !valor || valor.length > 512) return valor === undefined ? null : null;
   try {
@@ -57,7 +73,7 @@ export function crearApi(opciones: OpcionesApi) {
   app.get('/api/v2/health', async (_req, reply) => {
     const fecha = ahora();
     let database: Componente;
-    try { await opciones.pool.query('SELECT 1'); database = componente('ok', undefined, fecha); }
+    try { await comprobarBase(opciones.pool); database = componente('ok', undefined, fecha); }
     catch { database = componente('down', 'No responde PostgreSQL.', fecha); }
     const vivos = await opciones.pool.query<{ servicio: string; visto_en: string }>("SELECT servicio, visto_en::text FROM core.service_heartbeats WHERE servicio IN ('worker','scheduler') AND visto_en >= now() - make_interval(secs => $1)", [opciones.heartbeatMaxS ?? 120]).catch(() => ({ rows: [] }));
     const presentes = new Set(vivos.rows.map((r) => r.servicio));

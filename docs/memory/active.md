@@ -1,6 +1,6 @@
 # Estado activo
 
-Actualizado: 2026-09-13.
+Actualizado: 2026-09-15.
 
 ## Fuente de verdad
 
@@ -10,7 +10,7 @@ Actualizado: 2026-09-13.
 - **App iPhone (PM-162):** no se rehace; `/api/v1` queda como fachada sobre v2 y la App migra por OTA. Falta verificar que la build instalada tenga `expo-updates` y que un OTA de prueba llegue.
 - Índice de planificación: `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.
 - Progreso verificable: `/opt/fusionbikes/herramientas/docs/superpowers/deliveries/README.md` y fichas E0–E26.
-- Todas las fichas están en `borrador` hasta satisfacer el contrato documental. E0 conserva su número, pero no puede volver a `desarrollo` hasta que exista y pase `npm run test:e0`.
+- E0 fue aceptada por decisión de José tras sus verificaciones de DR; conserva su número y no se reabre por una inferencia documental. E1 tiene el tramo 1 implementado y validado sólo en infraestructura efímera; la entrega E1 aún no está aceptada ni desplegada.
 - La App remota `feature/stock-flow-ui` alineó `README.md` y `docs/backend-sync/README.md` en `ac4c48f` y `380640f`; no se publicó build móvil.
 - El VPS `/opt/fusionbikes/herramientas` es producción real y sirve `conteo-confiable`.
 
@@ -32,7 +32,7 @@ La reconstrucción partió de `bc13898f9faeffcde00f49616ce6cb858eff03a3` y se in
 
 ## Próxima acción
 
-**La primera entrega habilitable es E0 (borrador).** Medido 2026-09-13: disco 33 GB libres / 66 %, Node 24.21.0, backups SQLite cifrados a B2 con vigía y heartbeat Better Stack, QA bajo demanda. Decisiones de José (PM-165–168): sin almacenamiento pago para PostgreSQL (Backblaze sólo para SQLite, 10 GB gratis); pgBackRest 2.59.x; DR en dos niveles —nivel 1 repositorio local cifrado RPO ≤ 5 min / RTO ≤ 1 h, nivel 2 copia externa por pull desde una máquina propia (Mac o servidor sin uso, pendiente de confirmar SO, espacio y 24/7)—; backups diarios de Hostinger se activan más adelante. Única decisión abierta de E0: esa máquina. El nivel 1 se implementa primero en QA; no instalar en producción por autoridad de esta memoria. Lo que sigue abajo describe evidencia del legado.
+**Siguiente paso de programa: revisión independiente de E1, tramo 1.** El commit `2dc9ca4` incorporó `plataforma/` con migraciones, auditoría, colas, API, worker, scheduler y ensayo Docker temporal. La corrección posterior pendiente de confirmar como commit valida OpenAPI y limita el chequeo de base de `/health` a 2 s. No autoriza crear roles, migrar E0 ni levantar servicios en el VPS. El corte de sombra exige autorización explícita, línea base del momento y las verificaciones operativas de la ficha E1.
 
 E2 conserva pendientes externos de revisión independiente y piloto/jornada observada; E3 ya está en desarrollo técnico con autenticación del agente validada, pero requiere relevamiento de impresora, prueba Windows/hardware, revisión y piloto antes de candidata. No desplegar runtime mientras las entregas sigan sin aceptación.
 
@@ -516,4 +516,3 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - Cumplidas las cuatro condiciones de PM-177 → E0 `aceptada`. E1 tramo 1 puede ejecutarse según
   `docs/superpowers/plans/2026-09-15-e1-tramo1-fundacion.md`.
 - rsync de la Mac con `-rt` omite `backup/fusion/latest` (enlace simbólico): pgBackRest no lo necesita.
-

@@ -1,7 +1,8 @@
 # E1 · Tramo 1 — Fundación de la plataforma (diseño aprobado)
 
-**Estado:** diseño aprobado por José el 2026-09-15, sección por sección. Pendiente: revisión del
-documento escrito y plan de implementación.
+**Estado:** diseño aprobado por José el 2026-09-15, sección por sección. El tramo 1 fue
+implementado en `2dc9ca4` y revisado en entorno aislado; no está desplegado ni aceptado como
+entrega E1. Los tramos 2–4 y cualquier corte en VPS siguen requiriendo sus aprobaciones propias.
 **Ficha:** [E1 — Fundación PostgreSQL en sombra](../deliveries/E1-fundacion-sombra.md).
 **Especificaciones que implementa:** [schema.sql](e1/schema.sql),
 [platform-v2.yaml](../../../openapi/platform-v2.yaml), [test-e1.md](e1/test-e1.md).
