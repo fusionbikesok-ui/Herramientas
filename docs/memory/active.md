@@ -508,3 +508,12 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - E1: `shadow_copy_losses` salió del esquema (el contador de pérdidas no puede vivir en el PostgreSQL que
   se cae; contrato del tramo 3). Registro de observaciones remotas y orden de versiones: tramo 2.
 
+## E0 re-aceptada (2026-09-15)
+
+- Restauración real desde la copia subida por la Mac (E0-OFF-01): 1068 archivos verificados, verify OK,
+  marca `mac-20260914T221129Z` restaurada, RTO 6 s, registro firmado
+  `pg-registros/restore-mac-20260915T122312Z.json`. Clave de subida de `fusion-restore` borrada y entrada vacía.
+- Cumplidas las cuatro condiciones de PM-177 → E0 `aceptada`. E1 tramo 1 puede ejecutarse según
+  `docs/superpowers/plans/2026-09-15-e1-tramo1-fundacion.md`.
+- rsync de la Mac con `-rt` omite `backup/fusion/latest` (enlace simbólico): pgBackRest no lo necesita.
+

@@ -159,3 +159,9 @@ despliegue, incluso cuando no haya cambios de código. El estado transitorio va 
   `pgbackrest check` OK, `init=true`, archivado sin fallos y la marca `e0_verificacion` intacta. El
   arranque de archive-push ya no lista `--archive-push-queue-max`. `estado-archivo.sh` publica
   `ready_bytes`, `pg_wal_bytes`, `disco_pct` (68 % ese día) y `disco_libre_bytes`.
+- **Subida de la Mac para restaurar (2026-09-15):** `fusion-restore` (uid 1998) tiene sólo la clave
+  `mac-local-fusion-restore` con `restrict,command="/usr/bin/rrsync -wo /opt/fusionbikes/qa/restore-mac/entrada"`
+  (verificado: sube; lectura, shell y rutas fuera rechazadas). La entrada debe ser `fusion-restore` 700 sin
+  ACL: `cp -a origen/. entrada/` o `rsync -a` sobre la raíz copian dueño/permisos de la carpeta y la
+  rompen (pasó con el ensayo del 14/09). La Mac sube con `rsync -rt` (sin permisos). Borrar la clave al
+  terminar la restauración.

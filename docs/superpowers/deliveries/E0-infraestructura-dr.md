@@ -1,6 +1,6 @@
 # E0 — Infraestructura, DR y PITR
 
-**Estado:** desarrollo
+**Estado:** aceptada
 
 **Dependencias:** ninguna
 
@@ -19,7 +19,7 @@
 
 ## Línea base verificada
 
-- Al 2026-09-13: backups SQLite cifrados a B2 con 1.786.838.106 bytes de 10 GB gratis (`cat /opt/fusionbikes/backups/estado-nube.json`), vigía interno y heartbeat Better Stack activos, disco 33 GB libres / 66 % (`df -h /`), RAM 3,9 GB disponibles (`free -h`), Docker 29.7.2 (`docker version`), Node 24 y QA bajo demanda; Hostinger incluye backups semanales. Falta PostgreSQL, pgBackRest y PITR probado. Nivel 1 desplegado el 2026-09-13 22:36 UTC: contenedor fusion-pg sano con init, 127.0.0.1:5432, primer backup full verificado en 4 s (base 22,6 MB, repositorio 2,7 MB cifrado), registro firmado válido, manifiesto de 980 archivos, 0 segmentos WAL pendientes, 35 MB de RAM, legacy sin cambios (`docker compose -f deploy/postgres/compose.prod.yml -p fusion-pg exec -T pg pgbr info`). Aceptada 2026-09-14 por decisión de José. Evidencia nivel 1: 24 h de WAL (13/09 22:36 → 14/09 22:36 UTC) sin fallos de archivado dentro de la ventana, WAL continuo y pgbackrest verify OK, reinicio del VPS de 13:45 UTC superado sin pérdida, backups full (4 s) y diff (7 s) firmados, test:e0 8/8 (RTO 5 s, RPO ≤ 62 s), heartbeat de Better Stack activo y 0 incidentes del vigía. Evidencia nivel 2: tarea launchd en la Mac copiando cada hora con 1002 archivos verificados contra el manifiesto; script scripts/postgres/restaurar-desde-mac.sh ensayado en el VPS (RTO 7 s).
+- Al 2026-09-13: backups SQLite cifrados a B2 con 1.786.838.106 bytes de 10 GB gratis (`cat /opt/fusionbikes/backups/estado-nube.json`), vigía interno y heartbeat Better Stack activos, disco 33 GB libres / 66 % (`df -h /`), RAM 3,9 GB disponibles (`free -h`), Docker 29.7.2 (`docker version`), Node 24 y QA bajo demanda; Hostinger incluye backups semanales. Falta PostgreSQL, pgBackRest y PITR probado. Nivel 1 desplegado el 2026-09-13 22:36 UTC: contenedor fusion-pg sano con init, 127.0.0.1:5432, primer backup full verificado en 4 s (base 22,6 MB, repositorio 2,7 MB cifrado), registro firmado válido, manifiesto de 980 archivos, 0 segmentos WAL pendientes, 35 MB de RAM, legacy sin cambios (`docker compose -f deploy/postgres/compose.prod.yml -p fusion-pg exec -T pg pgbr info`). Aceptada 2026-09-14 por decisión de José y reabierta el 2026-09-15 por revisión técnica (PM-177). Re-aceptada 2026-09-15 con evidencia: (1) pgBackRest sin archive-push-queue-max, contenedor recreado con test:e0 8/8 (RTO 12 s, RPO 61 s) y pgbackrest check OK; (2) vigía de capacidad en producción (disco 68 %, pg_wal 84 MB, cola vacía) sin incidentes tras el reinicio; (3) restauración real desde la copia subida por la Mac (E0-OFF-01): 1068 archivos verificados, pgbackrest verify OK, base restaurada con la marca de producción mac-20260914T221129Z, RTO 6 s, registro firmado Ed25519 pg-registros/restore-mac-20260915T122312Z.json (manifiesto sha256 5a3deac4…); (4) fichas corregidas y validadas. Nivel 1: 24 h de WAL sin fallos, backups full/diff firmados, heartbeat de Better Stack activo.
 - Fotografía común: `docs/superpowers/audit-baseline-2026-09-13.md`. Al iniciar se debe refrescar con los mismos comandos y registrar fecha, commit y origen.
 - Toda diferencia entre Git, despliegue y base se registra como hallazgo bloqueante; no se rellena por inferencia.
 
@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Reabierta 2026-09-15 por revisión técnica. Para volver a aceptar: (1) quitar archive-push-queue-max y recrear el contenedor con test:e0 verde; (2) vigía de capacidad en producción (disco, pg_wal, cola .ready) con estado nuevo publicado; (3) restauración real desde la copia subida por la Mac con scripts/postgres/restaurar-desde-mac.sh; (4) fichas coherentes con lo desplegado.
+- **Próxima acción exacta:** Mantener: simulacro de restauración mensual (test:e0) y restauración desde la Mac trimestral con scripts/postgres/restaurar-desde-mac.sh (clave de subida temporal para fusion-restore, borrarla al terminar). Heartbeat de Better Stack para la Mac, opcional.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 

@@ -49,7 +49,7 @@ que una de ellas está actualizada.
 
 | Entrega | Resultado verificable | Dependencia | Estado |
 |---|---|---|---|
-| E0 | Infraestructura, DR y PITR | — | desarrollo |
+| E0 | Infraestructura, DR y PITR | — | aceptada |
 | E1 | Fundación PostgreSQL en sombra | E0 | planificada |
 | E2 | Modelo e importación del catálogo | E1 | borrador |
 | E3 | Identidad y matcher único en sombra | E2 | borrador |
