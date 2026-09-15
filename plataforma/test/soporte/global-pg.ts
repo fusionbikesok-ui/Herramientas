@@ -16,20 +16,31 @@ declare module 'vitest' {
   }
 }
 
+function eliminarContenedor(): void {
+  try { docker('rm', '-f', NOMBRE); } catch { /* ya no existe */ }
+}
+
 export default async function setup(project: TestProject): Promise<() => void> {
   docker('run', '-d', '--rm', '--name', NOMBRE, '-e', 'POSTGRES_PASSWORD=admin', '-p', '127.0.0.1::5432', IMAGEN);
-  for (let i = 0; i < 60; i++) {
-    try { docker('exec', NOMBRE, 'pg_isready', '-U', 'postgres', '-q'); break; } catch { await new Promise((r) => setTimeout(r, 1000)); }
+  try {
+    let listo = false;
+    for (let i = 0; i < 60; i++) {
+      try { docker('exec', NOMBRE, 'pg_isready', '-U', 'postgres', '-q'); listo = true; break; } catch { await new Promise((r) => setTimeout(r, 1000)); }
+    }
+    if (!listo) throw new Error('PostgreSQL de prueba no quedó listo en 60 s');
+    await new Promise((r) => setTimeout(r, 1500));
+    const puerto = docker('port', NOMBRE, '5432/tcp').split(':').pop() ?? '';
+    const sql = [
+      "CREATE ROLE plataforma_migrador LOGIN PASSWORD 'migrador' NOSUPERUSER NOCREATEDB NOCREATEROLE",
+      "CREATE ROLE plataforma_app LOGIN PASSWORD 'app' NOSUPERUSER NOCREATEDB NOCREATEROLE",
+    ];
+    for (const s of sql) docker('exec', NOMBRE, 'psql', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1', '-qc', s);
+    project.provide('pgAdminUrl', `postgres://postgres:admin@127.0.0.1:${puerto}/postgres`);
+    project.provide('pgHostPort', `127.0.0.1:${puerto}`);
+    project.provide('pgContenedor', NOMBRE);
+  } catch (error) {
+    eliminarContenedor();
+    throw error;
   }
-  await new Promise((r) => setTimeout(r, 1500));
-  const puerto = docker('port', NOMBRE, '5432/tcp').split(':').pop() ?? '';
-  const sql = [
-    "CREATE ROLE plataforma_migrador LOGIN PASSWORD 'migrador' NOSUPERUSER NOCREATEDB NOCREATEROLE",
-    "CREATE ROLE plataforma_app LOGIN PASSWORD 'app' NOSUPERUSER NOCREATEDB NOCREATEROLE",
-  ];
-  for (const s of sql) docker('exec', NOMBRE, 'psql', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1', '-qc', s);
-  project.provide('pgAdminUrl', `postgres://postgres:admin@127.0.0.1:${puerto}/postgres`);
-  project.provide('pgHostPort', `127.0.0.1:${puerto}`);
-  project.provide('pgContenedor', NOMBRE);
-  return () => { try { docker('rm', '-f', NOMBRE); } catch { /* ya no existe */ } };
+  return eliminarContenedor;
 }
