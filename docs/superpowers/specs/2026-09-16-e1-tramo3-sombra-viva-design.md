@@ -37,9 +37,13 @@ reportes firmados.
 5. Woo orders responde antes de persistir; T3 exige un recibo SQLite mínimo antes del ACK.
 6. La plataforma no puede refrescar el token ML: el refresh token es de un solo uso y el lock actual
    vive dentro del proceso legacy.
-7. Nginx reenvía hoy `location /` al legado; un endpoint `/internal/` sería público si no se niega.
+7. Nginx tiene dos caminos al mismo Express (`location /` y `location /herramientas/`, este último con
+   barra final, que quita el prefijo): un endpoint `/internal/` sería público por ambas vías si no se
+   niegan las dos.
 8. `missed_feeds` sólo conserva dos días y sólo contiene avisos que nunca recibieron HTTP 200.
-9. El multiget ML usado por T2 debe migrar a `/items/bulk?ids=` antes del tráfico real.
+9. El multiget ML de T2 lee `code` por elemento; `/items/bulk?ids=` informa `status_code` y mejora el
+   diagnóstico. Verificado por sonda el 2026-09-16: los dos endpoints responden, así que la migración
+   conviene pero no bloquea el tráfico real (§10).
 10. Los siete días y el reporte firmado se habían atribuido erróneamente a T3; pertenecen a T4.
 
 ## 3. Arquitectura
@@ -48,7 +52,7 @@ reportes firmados.
 flowchart LR
   ml[Mercado Libre] --> whml[Webhook ML legacy]
   woo[WooCommerce] --> whwoo[Webhook Woo legacy]
-  whml --> sqlite[(SQLite receipts)]
+  whml --> sqlite[(SQLite integration_events + ciclo de sombra)]
   whwoo --> sqlite
   whml --> ackml[ACK 200]
   whwoo --> ackwoo[ACK 2xx]
