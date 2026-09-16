@@ -19,6 +19,7 @@ servers:
 tags:
   - name: health
   - name: incidents
+  - name: signals
 
 paths:
   /health:
@@ -99,6 +100,44 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
               example: { code: invalid_parameter, message: El cursor no es válido., correlation_id: 0191f2c4-7b1e-7d3a-9c1f-2b6a1e4d5f62, details: { parameter: cursor } }
 
+  /internal/v1/reconciliation-signals:
+    servers:
+      - url: http://127.0.0.1:3201
+        description: Plano de control interno; no se publica por Nginx
+    post:
+      tags: [signals]
+      summary: Recibe una señal de reconciliación del legado (E1 T3)
+      description: |
+        Una señal es un aviso, no una observación: nunca se proyecta. La cuenta la resuelve la
+        configuración del servidor por canal; el cliente no envía un UUID. Cuerpo máximo 16 KiB.
+        Firma v1 = HMAC-SHA256 en hex sobre `v1\n{timestamp}\n{nonce}\nPOST\n{path}\n{sha256(cuerpo) hex}`,
+        con cualquiera de las claves vigentes (rotación con dos claves). Ventana de 300 s. Un nonce
+        repetido es un replay y responde 401 aunque la firma sea válida; un aviso repetido con nonce
+        nuevo responde 202 `duplicate` sin crear otra señal. Origen fuera de las redes internas: 401.
+      security:
+        - internalHmac: []
+      parameters:
+        - { name: x-fusion-key-id, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' } }
+        - { name: x-fusion-timestamp, in: header, required: true, schema: { type: string, pattern: '^[0-9]{1,12}$' } }
+        - { name: x-fusion-nonce, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{16,128}$' } }
+        - { name: x-fusion-signature, in: header, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignalEnvelope' }
+      responses:
+        '202':
+          description: Señal aceptada o duplicada (sin segunda fila)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignalAccepted' }
+        '400': { description: Envelope inválido, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: Origen, firma, ventana, clave o nonce inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: Canal o tópico sin cuenta configurada, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '413': { description: Cuerpo mayor a 16 KiB, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: PostgreSQL no disponible, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
 components:
   securitySchemes:
     sessionCookie:
@@ -106,6 +145,11 @@ components:
       in: cookie
       name: fusion_v2_session
       description: Sesión del núcleo. En E1 no hay login real de personas; las pruebas usan sesiones de fixture.
+    internalHmac:
+      type: apiKey
+      in: header
+      name: x-fusion-signature
+      description: HMAC interno del plano de control; ver la descripción de la ruta de señales.
 
   headers:
     CorrelationId:
@@ -121,6 +165,26 @@ components:
         message: { type: string }
         correlation_id: { type: string, format: uuid }
         details: { type: object, additionalProperties: true }
+
+    SignalEnvelope:
+      type: object
+      required: [channel, topic, resource_id, fingerprint, source]
+      additionalProperties: false
+      properties:
+        channel: { type: string, enum: [mercadolibre, woocommerce] }
+        topic: { type: string, enum: [ml.orders, ml.shipments, ml.questions, ml.messages, ml.claims, ml.items, woo.orders, woo.products] }
+        resource_id: { type: string, minLength: 1, maxLength: 512 }
+        fingerprint: { type: string, minLength: 1, maxLength: 512 }
+        notification_id: { type: string, minLength: 1, maxLength: 256, nullable: true }
+        source: { type: string, enum: [webhook_copy, ml_missed_feed] }
+
+    SignalAccepted:
+      type: object
+      required: [status, correlation_id]
+      additionalProperties: false
+      properties:
+        status: { type: string, enum: [accepted, duplicate] }
+        correlation_id: { type: string, format: uuid }
 
     ComponentStatus:
       type: object

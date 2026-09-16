@@ -177,6 +177,14 @@ excluye; ampliar esta tabla amplía E1 y exige decisión propia.
   `413` tamaño y `503` PostgreSQL caído;
 - no se publica por Nginx y rechaza orígenes fuera de la red interna configurada.
 
+Precisiones fijadas al implementar C3 (2026-09-16): un **nonce repetido responde `401`** —es un replay,
+falla de autenticación— aunque la firma sea válida, y los nonces viven en PostgreSQL
+(`integrations.signal_nonces`) para que un reinicio no reabra la ventana; un **aviso repetido con nonce
+nuevo responde `202 duplicate`** sin segunda fila; un origen fuera de las redes internas también es
+`401`; una cuenta configurada que no existe en la base es `409`. La firma v1 cubre timestamp, nonce,
+método, path y el SHA-256 del cuerpo crudo, y el módulo `plataforma/src/seguridad/interna.ts` queda
+para reutilizarlo en el gateway de C5.
+
 ## 7. Cuentas y corrientes
 
 La configuración pasa de una cuenta T2 a un registro de cuentas. Cada entrada define UUID,

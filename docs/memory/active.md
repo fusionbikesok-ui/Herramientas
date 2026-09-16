@@ -595,6 +595,16 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     `registrarWebhookMl(db, envelope, { sinJob: true })`: **cero jobs**. Encolar trabajo sobre el recurso
     de una cuenta que el emisor elige a voluntad sería trabajar para un tercero — el `sinJob` existe por
     eso, no por prolijidad.
+  - **C3 (API interna de señales)**: `POST /internal/v1/reconciliation-signals` vive en la **plataforma**
+    (Fastify, puerto 3201, no publicada por Nginx); el gateway GET de C5 vive en el **legado**. Nace
+    apagada: sin `SENALES_KEYRING_FILE`+`SENALES_CUENTAS`+`SENALES_ORIGENES` (todo o nada) la ruta es 404.
+    La cuenta la resuelve el servidor por canal; un `channel_account_id` en el cuerpo es 400. Nonce
+    repetido = 401 (replay) y los nonces viven en `integrations.signal_nonces` para que un reinicio no
+    reabra la ventana de 300 s; aviso repetido con nonce nuevo = 202 `duplicate`. `plataforma_app` no
+    tiene DELETE por defecto (0002): toda tabla que purgue necesita GRANT explícito, como 0006.
+    Firma y origen en `plataforma/src/seguridad/interna.ts`, reutilizable por C5.
+  - La cola de sombra del legado (`crearColaSombra`) todavía no tiene `enviar` conectado: el cliente
+    firmado que la une con la API de C3 no está implementado y la copia sigue apagada por flag.
   - `woo_webhooks_estado` ya registra `topic`, `status`, `delivery_url`, `propio`, `visto_en` y
     `status_desde` de las entregas propias: la alerta de webhook caído lee esa tabla.
   - `integration_events` crece ~1.400 filas/día y **hoy no tiene purga**. La purga de 400 días de T3 es

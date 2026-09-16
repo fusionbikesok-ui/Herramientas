@@ -5,6 +5,7 @@ import type pg from 'pg';
 import type { Logger } from 'pino';
 import { correlacionDe } from '../comun/correlacion.ts';
 import { sinSesion, type ProveedorSesion } from '../auth/sesion.ts';
+import { registrarSenales, type OpcionesSenales } from './senales.ts';
 
 type Estado = 'ok' | 'degraded' | 'down';
 interface Componente { status: Estado; checked_at: string; detail?: string }
@@ -17,6 +18,8 @@ export interface OpcionesApi {
   heartbeatMaxS?: number;
   sesion?: ProveedorSesion;
   ahora?: () => Date;
+  /** Sin esto la ruta interna de señales no existe (404): nace apagada. */
+  senales?: OpcionesSenales;
 }
 
 const TOPICOS = new Set(['ml.orders', 'ml.shipments', 'ml.questions', 'ml.messages', 'ml.claims', 'ml.items', 'woo.orders', 'woo.products']);
@@ -116,5 +119,6 @@ export function crearApi(opciones: OpcionesApi) {
     const next_cursor = r.rows.length > limit && ultimo ? Buffer.from(JSON.stringify({ openedAt: ultimo.opened_at.toISOString(), sourceType: ultimo.source_type, sourceId: ultimo.source_id })).toString('base64url') : null;
     return { items: filas.map((f) => ({ ...f, source_id: f.source_id, opened_at: f.opened_at.toISOString() })), next_cursor };
   });
+  if (opciones.senales) registrarSenales(app, opciones.pool, opciones.logger, opciones.senales, ahora);
   return app;
 }

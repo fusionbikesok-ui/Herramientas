@@ -23,6 +23,18 @@ describe('configuración', () => {
     expect(() => cargarConfig(incompleto, () => 'x')).toThrow(/PG_USER/);
   });
 
+  it('E1-SIG-02 la configuración de señales es todo o nada y valida canal=uuid', () => {
+    const leer = () => 'x';
+    expect(cargarConfig(env, leer).senales).toBeUndefined();
+    const ml = '01a0aa38-c27b-73b9-ac6d-2ce5f0feea17';
+    const ok = cargarConfig({ ...env, SENALES_KEYRING_FILE: '/run/secretos/senales', SENALES_CUENTAS: `mercadolibre=${ml}`, SENALES_ORIGENES: '172.16.0.0/12' }, leer);
+    expect(ok.senales?.cuentas.get('mercadolibre')).toBe(ml);
+    expect(() => cargarConfig({ ...env, SENALES_CUENTAS: `mercadolibre=${ml}` }, leer)).toThrow(/incompleta/);
+    for (const cuentas of ['mercadolibre=no-uuid', `amazon=${ml}`, `mercadolibre=${ml},mercadolibre=${ml}`]) {
+      expect(() => cargarConfig({ ...env, SENALES_KEYRING_FILE: '/k', SENALES_CUENTAS: cuentas, SENALES_ORIGENES: '127.0.0.1/32' }, leer), cuentas).toThrow(ErrorConfig);
+    }
+  });
+
   it('rechaza un servicio desconocido', () => {
     expect(() => cargarConfig({ ...env, SERVICIO: 'otro' }, () => 'x')).toThrow(ErrorConfig);
   });
