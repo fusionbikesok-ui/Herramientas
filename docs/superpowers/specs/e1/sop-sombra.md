@@ -121,9 +121,9 @@ Verificación: `scripts/qa/deny-interno.sh herramientas.fusionbikes.com.ar <ip>`
 <a id="requisitos-canario"></a>
 ## Requisitos antes del canario (C10, con autorización propia)
 
-1. Sonda autenticada de sólo lectura de `missed_feeds` que confirme la forma de la respuesta (hoy el parser
-   falla cerrado con `FORMA_MISSED_FEEDS`).
-2. `ML_SITE_ID` cargada y validada contra `ML_USER_ID` (sitio del usuario en `/users/{id}`).
+1. ~~Sonda de `missed_feeds`~~ hecha 2026-09-16 (caso vacío `{"messages": null}`); si aparece
+   `FORMA_MISSED_FEEDS` con avisos reales, revisar la forma con datos antes de seguir.
+2. ~~`ML_SITE_ID`~~ `MLA`, validada y cargada 2026-09-16.
 3. Siete días de medición de llamadas del legado para fijar `GATEWAY_ML_SHADOW_RPM`.
 4. Decisión operativa sobre el puerto 3001 del legado, hoy alcanzable desde Internet sin Nginx.
 5. Fotografía previa de producción y `E1-LAT-01`/`E1-PGDOWN-01` en verde (C9).

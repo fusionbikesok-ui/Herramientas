@@ -324,10 +324,12 @@ Precisiones fijadas al implementar C7 (2026-09-16):
   `ML_SITE_ID` los pone el legado. Cada 30 min por cuenta ML con lock consultivo; seis tópicos
   consultados, cada uno desde offset 0; fingerprint `mf:<_id>`; aviso de otra cuenta, sin `_id` o con
   recurso ilegible se cuenta y se excluye; un tópico caído no frena a los demás.
-- **La forma de la respuesta de `missed_feeds` no está verificada por sonda.** El parser exige
-  `messages` (lista) y un total entero (`total` o `paging.total`) y ante otra forma falla cerrado con
-  `FORMA_MISSED_FEEDS` sin crear señales. Verificarla con una sonda autenticada de sólo lectura es
-  **requisito del canario** y necesita autorización propia.
+- **Forma de `missed_feeds` verificada por sonda autorizada el 2026-09-16, sólo el caso vacío:** sin avisos
+  pendientes ML responde `{"messages": null}`, sin total (orders_v2 e items, 200). El parser toma `null`
+  como vacío, usa el total si viene y pagina hasta una página vacía con tope de páginas; otra forma falla
+  cerrado con `FORMA_MISSED_FEEDS`. La forma de un aviso con datos no pudo observarse (no había): sus
+  campos se validan uno a uno y lo ilegible se excluye.
+- `ML_SITE_ID=MLA` validada con `GET /users/{ML_USER_ID}` y cargada en `.env` (sin reiniciar).
 - Clase de cuota `shadow`: bucket por minuto en el gateway (`GATEWAY_ML_SHADOW_RPM`, 0 por defecto).
 - `ML_SITE_ID` documentada en `.env.example`; su validación contra `ML_USER_ID` queda en el SOP de
   habilitación del canario (C8).

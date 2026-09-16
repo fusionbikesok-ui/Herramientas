@@ -76,6 +76,17 @@ describe('E1-MFD-01 missed_feeds', () => {
     expect(rutas.filter((r) => r.includes('topic=orders_v2'))).toHaveLength(6);
   });
 
+  it('forma real verificada por sonda: messages null sin total es vacío, y sin total pagina hasta página vacía', async () => {
+    fixture.ml!.missedFeedsForma = 'real';
+    const cobertura = await enumerar();
+    expect(cobertura.every((c) => !c.error)).toBe(true);
+    expect(cobertura.find((c) => c.topic === 'orders_v2')).toMatchObject({ total: 121, nuevas: 120, duplicadas: 1 });
+    // Sin avisos: `{"messages": null}` no es error.
+    fixture.ml!.missedFeeds = [];
+    const vacia = await enumerar();
+    expect(vacia.every((c) => !c.error && c.enumerados === 0)).toBe(true);
+  });
+
   it('una forma inesperada falla cerrado por tópico y un tópico caído no frena a los demás', async () => {
     fixture.ml!.missedFeedsForma = 'rota';
     const rota = await enumerar();

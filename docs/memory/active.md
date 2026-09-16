@@ -626,6 +626,15 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     (`aggregate_type='shadow_receipt'`, `aggregate_id`=fingerprint). SOP con un ancla por alerta en
     `docs/superpowers/specs/e1/sop-sombra.md`; un test por lado verifica que cada runbook citado exista.
     El scheduler ahora libera leases vencidos de señales (C6 no lo hacía: quedaban `claimed` para siempre).
+  - **Migraciones 104 y 105 del legado YA están aplicadas en producción** (2026-09-16 ~15:10 UTC), por
+    accidente: un script de sonda abrió `data/fusion.sqlite` con `openDb`, que migra al abrir. Son aditivas;
+    verificado después: `/healthz` 200, webhooks persistiéndose, `quick_check` ok, 0 filas con sombra. Lección:
+    **nunca `openDb` sobre la base de producción desde un script**; usar `better-sqlite3` con `readonly: true`.
+    El reinicio de C10 ya no aplica esquema, sólo carga código.
+  - `missed_feeds` real sin avisos = `{"messages": null}` sin total (sonda 2026-09-16). `ML_SITE_ID=MLA` en
+    `.env` de producción (copia previa en `/root/env-backup-e1-*`). Leer el token ML desde un segundo proceso
+    con `getAccessToken` puede rotar el refresh token de un solo uso: la sonda leyó `ml_oauth_token` en solo
+    lectura y abortaba con < 30 min de vigencia.
   - **Nginx (VPS, fuera del repo) desde 2026-09-16**: `location ~* ^/(herramientas/+)?internal(/|$) { return 404; }`
     en `sites-available/herramientas` y `sites-available/fusionbikes` (el `default_server` del 80 también
     proxea `/herramientas/`). Copia previa en `/root/nginx-backup-e1c5/`. Evidencia: `scripts/qa/deny-interno.sh`.

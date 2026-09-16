@@ -14,7 +14,7 @@ export interface FixtureCanales {
     /** Fallo simulado de un elemento del bulk: `{ id: status_code }`. */
     fallosBulk?: Record<string, number>;
     missedFeeds?: RegistroSim[];
-    missedFeedsForma?: 'rota';
+    missedFeedsForma?: 'rota' | 'real';
     missedFeedsExigeSitio?: boolean;
     items?: RegistroSim[];
   };

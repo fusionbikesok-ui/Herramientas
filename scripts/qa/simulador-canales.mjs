@@ -241,6 +241,11 @@ export function crearSimulador({ db, fixture, cert, key, reloj = () => new Date(
       const offset = Number(url.searchParams.get('offset')) || 0;
       const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 50);
       if (fixture?.ml?.missedFeedsForma === 'rota') return json(res, 200, { results: todos.slice(offset, offset + limit) });
+      // Forma verificada por sonda 2026-09-16 para el caso vacío: `{"messages": null}` sin total.
+      if (fixture?.ml?.missedFeedsForma === 'real') {
+        const pagina = todos.slice(offset, offset + limit);
+        return json(res, 200, { messages: pagina.length ? pagina : null });
+      }
       return json(res, 200, { messages: todos.slice(offset, offset + limit), offset, limit, total: todos.length });
     }
     // Multiget verificado por sonda 2026-09-16: `{id, status_code, body}` por elemento. `fixture.ml.fallosBulk`

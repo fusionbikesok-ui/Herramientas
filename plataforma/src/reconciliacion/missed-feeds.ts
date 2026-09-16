@@ -11,9 +11,11 @@ import { ErrorCanalTerminal, type TransporteCanal } from './cliente-http.ts';
  *   enumeración cada 30 minutos no crea señales nuevas.
  * - Crea señales `ml_missed_feed` y nunca observaciones: la verdad sale de la relectura.
  *
- * **La forma de la respuesta no está verificada por sonda autenticada** (sólo lo está el multiget). El
- * parser exige `messages` como lista y un total entero; ante cualquier otra forma el tópico falla
- * cerrado con `FORMA_MISSED_FEEDS` y no crea nada. Verificarla es requisito del canario (C10).
+ * **Forma verificada por sonda autenticada de sólo lectura el 2026-09-16, sólo para el caso vacío:** sin
+ * avisos pendientes ML responde `{"messages": null}`, sin total. Por eso `null` es lista vacía, el total es
+ * opcional (se usa si viene) y se pagina hasta una página vacía, con tope de páginas. Cualquier otra
+ * forma (`messages` que no sea lista ni null) falla cerrado con `FORMA_MISSED_FEEDS` y no crea nada. La
+ * forma de un aviso con datos no se pudo observar: sus campos se validan uno por uno y lo ilegible se excluye.
  */
 
 /** Tópicos que se consultan, y la equivalencia de cada aviso con los ocho tópicos de E1 (§6). */
@@ -59,12 +61,13 @@ export async function enumerarMissedFeeds(opciones: {
         const r = await opciones.transporte.get(`/missed_feeds?${new URLSearchParams({ topic: consulta, offset: String(offset), limit: '50' })}`);
         if (r.status === 404) throw new ErrorCanalTerminal('HTTP_404 /missed_feeds', 404);
         const body = r.body;
-        const total = esRegistro(body) ? Number(body.total ?? (esRegistro(body.paging) ? body.paging.total : undefined)) : Number.NaN;
-        if (!esRegistro(body) || !Array.isArray(body.messages) || !Number.isInteger(total) || total < 0) {
-          throw new ErrorCanalTerminal('FORMA_MISSED_FEEDS');
-        }
-        c.total = total;
-        for (const crudo of body.messages) {
+        if (!esRegistro(body) || !(Array.isArray(body.messages) || body.messages === null)) throw new ErrorCanalTerminal('FORMA_MISSED_FEEDS');
+        const mensajes: unknown[] = Array.isArray(body.messages) ? body.messages : [];
+        const declarado = body.total ?? (esRegistro(body.paging) ? body.paging.total : undefined);
+        const total = declarado === undefined ? null : Number(declarado);
+        if (total !== null && (!Number.isInteger(total) || total < 0)) throw new ErrorCanalTerminal('FORMA_MISSED_FEEDS');
+        if (total !== null) c.total = total;
+        for (const crudo of mensajes) {
           c.enumerados++;
           const aviso = esRegistro(crudo) ? crudo : {};
           const notificacion = typeof aviso._id === 'string' ? aviso._id.trim() : '';
@@ -87,8 +90,9 @@ export async function enumerarMissedFeeds(opciones: {
           );
           if (insertada.rowCount) c.nuevas++; else c.duplicadas++;
         }
-        offset += body.messages.length;
-        if (body.messages.length === 0 || offset >= total) break;
+        offset += mensajes.length;
+        if (total === null) c.total = Math.max(c.total, offset);
+        if (mensajes.length === 0 || (total !== null && offset >= total)) break;
       }
     } catch (error) {
       // Un tópico que falla no frena a los demás: items sin sitio configurado no tapa pedidos.
