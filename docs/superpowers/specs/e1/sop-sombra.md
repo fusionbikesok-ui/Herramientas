@@ -125,5 +125,7 @@ Verificación: `scripts/qa/deny-interno.sh herramientas.fusionbikes.com.ar <ip>`
    `FORMA_MISSED_FEEDS` con avisos reales, revisar la forma con datos antes de seguir.
 2. ~~`ML_SITE_ID`~~ `MLA`, validada y cargada 2026-09-16.
 3. Siete días de medición de llamadas del legado para fijar `GATEWAY_ML_SHADOW_RPM`.
-4. Decisión operativa sobre el puerto 3001 del legado, hoy alcanzable desde Internet sin Nginx.
+4. ~~Puerto 3001~~ cerrado 2026-09-16: `fusion-firewall-3001.service` (cadena `FUSION_3001`, IPv4/IPv6) sólo
+   admite loopback y `172.16.0.0/12` (Docker). Revertir: `systemctl disable --now fusion-firewall-3001` y
+   `iptables -D INPUT -p tcp --dport 3001 -j FUSION_3001` (ídem `ip6tables`); copia en `/root/firewall-backup-e1-*`.
 5. Fotografía previa de producción y `E1-LAT-01`/`E1-PGDOWN-01` en verde (C9).

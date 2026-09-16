@@ -638,9 +638,11 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   - **Nginx (VPS, fuera del repo) desde 2026-09-16**: `location ~* ^/(herramientas/+)?internal(/|$) { return 404; }`
     en `sites-available/herramientas` y `sites-available/fusionbikes` (el `default_server` del 80 también
     proxea `/herramientas/`). Copia previa en `/root/nginx-backup-e1c5/`. Evidencia: `scripts/qa/deny-interno.sh`.
-  - **El legado escucha en `*:3001` sin firewall**: responde desde Internet por IP sin pasar por Nginx
-    (verificado 2026-09-16, `/healthz` 200). El gateway se protege validando el origen por socket; cerrar
-    3001 hacia afuera queda pendiente de decisión operativa.
+  - **Puerto 3001 cerrado hacia afuera desde 2026-09-16** (antes respondía por IP sin Nginx): unidad
+    `fusion-firewall-3001.service` → `/usr/local/sbin/fusion-firewall-3001.sh`, cadena `FUSION_3001` en
+    iptables e ip6tables, sólo loopback y `172.16.0.0/12` (redes de Docker del VPS: 172.16.0-4.0/24).
+    Verificado: Nginx 200, contenedor → `host.docker.internal:3001` 200, webhooks entrando. Sin ufw ni
+    netfilter-persistent activos: la persistencia es esa unidad. Copia previa en `/root/firewall-backup-e1-*`.
   - **C6 (relectura por señal)**: `worker/senales.ts` + `reconciliacion/relectura.ts` (relectores por
     tópico) + `senales-cola.ts` (lease, backoff, dead letter). Los normalizadores de recurso se exportan
     desde los adaptadores y los usan barrido y relectura, para que la versión y la proyección coincidan.
