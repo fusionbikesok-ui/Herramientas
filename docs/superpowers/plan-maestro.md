@@ -4,7 +4,7 @@
 
 **Secuencia:** E0–E26
 
-**Estado del programa:** E0 aceptada; E1 planificada por tramos; E2–E26 en borrador
+**Estado del programa:** E0 aceptada; E1 en desarrollo por tramos (1 y 2 implementados, sin desplegar); E2–E26 en borrador
 
 **Fuente estructurada:** `delivery-program.json`
 
@@ -50,7 +50,7 @@ que una de ellas está actualizada.
 | Entrega | Resultado verificable | Dependencia | Estado |
 |---|---|---|---|
 | E0 | Infraestructura, DR y PITR | — | aceptada |
-| E1 | Fundación PostgreSQL en sombra | E0 | planificada |
+| E1 | Fundación PostgreSQL en sombra | E0 | desarrollo |
 | E2 | Modelo e importación del catálogo | E1 | borrador |
 | E3 | Identidad y matcher único en sombra | E2 | borrador |
 | E4 | Campaña SKU y corte de identidad | E3 | borrador |
@@ -79,10 +79,13 @@ que una de ellas está actualizada.
 
 La ruta de cada ficha está en `deliveries/README.md`.
 
-La ejecución vigente de E1 se divide según PM-174. El tramo 1 está implementado y revisado sólo en
-aislamiento; el [diseño del tramo 2](specs/2026-09-15-e1-tramo2-barridos-design.md) y su
-[plan de implementación](plans/2026-09-15-e1-tramo2-barridos.md) están aprobados únicamente contra
-infraestructura efímera. Los tramos 3 y 4 y cualquier cambio en el VPS requieren aprobación propia.
+La ejecución vigente de E1 se divide según PM-174. Los tramos 1 y 2 están implementados y verificados
+sólo en infraestructura efímera, según el [diseño del tramo 2](specs/2026-09-15-e1-tramo2-barridos-design.md)
+y su [plan de implementación](plans/2026-09-15-e1-tramo2-barridos.md): el 2026-09-16 `E1_TRAMO=2 npm run
+test:e1` terminó en verde con el worker real barriendo las diez corrientes contra el simulador, y el gate
+de escenarios cubrió los 26 IDs exigidos para el tramo. Falta la revisión independiente del tramo 2.
+Nada está desplegado y E1 no está aceptada: código construido pero no usado no cuenta como observado.
+Los tramos 3 y 4 y cualquier cambio en el VPS requieren aprobación propia.
 
 ## Arquitectura e invariantes acumulativos
 

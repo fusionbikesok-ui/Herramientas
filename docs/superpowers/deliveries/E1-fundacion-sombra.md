@@ -1,6 +1,6 @@
 # E1 — Fundación PostgreSQL en sombra
 
-**Estado:** planificada
+**Estado:** desarrollo
 
 **Dependencias:** E0
 
@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Ejecutar docs/superpowers/plans/2026-09-15-e1-tramo2-barridos.md únicamente contra infraestructura efímera; después realizar revisión independiente. Los tramos 3 y 4 y cualquier corte en VPS requieren aprobación propia.
+- **Próxima acción exacta:** Cerrar los hallazgos de la revisión independiente del tramo 2 (diff 8b9303d..f5f57b8) y recién después abrir el diseño del tramo 3. Los tramos 1 y 2 están implementados y verificados sólo en infraestructura efímera: `E1_TRAMO=2 npm run test:e1` en verde el 2026-09-16, con el worker real barriendo las diez corrientes contra el simulador. Nada está desplegado ni aceptado; los tramos 3 y 4 y cualquier corte en el VPS requieren aprobación propia.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 

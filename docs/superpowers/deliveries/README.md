@@ -6,7 +6,7 @@ define el DAG. El archivo histórico sólo se consulta mediante el crosswalk.
 | Entrega | Resultado | Dependencias | Estado | Ficha |
 |---|---|---|---|---|
 | E0 | Infraestructura, DR y PITR | — | aceptada | [E0](E0-infraestructura-dr.md) |
-| E1 | Fundación PostgreSQL en sombra | E0 | planificada | [E1](E1-fundacion-sombra.md) |
+| E1 | Fundación PostgreSQL en sombra | E0 | desarrollo | [E1](E1-fundacion-sombra.md) |
 | E2 | Modelo e importación del catálogo canónico | E1 | borrador | [E2](E2-catalogo-modelo-importacion.md) |
 | E3 | Identidad y matcher único en sombra | E2 | borrador | [E3](E3-identidad-matcher-sombra.md) |
 | E4 | Campaña SKU y corte de catálogo/identidad | E3 | borrador | [E4](E4-catalogo-identidad-corte.md) |
