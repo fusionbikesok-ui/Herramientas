@@ -1,3 +1,6 @@
+# E1 tramos 1 y 2. Sólo api publica un puerto local; worker y scheduler comparten imagen y red interna.
+# El simulador de canales corre en su propio contenedor con el fixture en memoria de T2: el worker sólo
+# puede leer de él (la allowlist del cliente admite el nombre de servicio `simulator`).
 name: ${E1_PROJECT:-fusion-e1-test}
 services:
   pg:
@@ -6,13 +9,39 @@ services:
     environment: { POSTGRES_PASSWORD: admin }
     volumes: ["./test-init.sql:/docker-entrypoint-initdb.d/10-plataforma.sql:ro"]
     healthcheck: { test: ["CMD", "pg_isready", "-U", "postgres"], interval: 2s, timeout: 2s, retries: 30 }
+  simulator:
+    image: node@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553
+    init: true
+    user: node
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    working_dir: /qa
+    environment:
+      SIM_PORT: 8080
+      SIM_FIXTURE: /qa/fixtures/e1-t2.json
+      SIM_SELLER: ${BARRIDOS_ML_SELLER:-777}
+    volumes: ["../../scripts/qa:/qa:ro"]
+    command: ["node", "/qa/simulador-e1.mjs"]
+    ports: ["127.0.0.1::8080"]
+    mem_limit: 128m
+    cpus: 0.20
   api:
     extends: { file: compose.yml, service: api }
     environment: { SERVICIO: api, HEARTBEAT_MAX_S: 5, HEARTBEAT_INTERVAL_MS: 500 }
     restart: "no"
   worker:
     extends: { file: compose.yml, service: worker }
-    environment: { SERVICIO: worker, HEARTBEAT_INTERVAL_MS: 500 }
+    environment:
+      SERVICIO: worker
+      HEARTBEAT_INTERVAL_MS: 500
+      # Vacías en el tramo 1: sin ellas el worker no registra adaptadores ni reclama corridas.
+      BARRIDOS_CUENTA: ${BARRIDOS_CUENTA:-}
+      BARRIDOS_ML_URL: ${BARRIDOS_ML_URL:-}
+      BARRIDOS_WOO_URL: ${BARRIDOS_WOO_URL:-}
+      BARRIDOS_ML_SELLER: ${BARRIDOS_ML_SELLER:-}
+      BARRIDOS_KEYRING_FILE: ${BARRIDOS_KEYRING_FILE:-}
+    volumes:
+      - ${KEYRING_DIR:?KEYRING_DIR requerido}:/run/fusion-keyring:ro
     restart: "no"
   scheduler:
     extends: { file: compose.yml, service: scheduler }

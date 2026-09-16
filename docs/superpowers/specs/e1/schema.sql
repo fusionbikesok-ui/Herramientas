@@ -325,6 +325,41 @@ CREATE TABLE integrations.reconciliation_cursors (
     jsonb_typeof(cursor_value) = 'object' AND cursor_value ? 'v' AND cursor_value->>'v' = '1')),
   PRIMARY KEY (channel_account_id, topic, cursor_kind)
 );
+-- Alta de las corrientes de una cuenta de canal. La migración 0004 la llama para las cuentas
+-- existentes; el ensayo de T2 y el alta de cuentas de T3 la llaman para las nuevas.
+CREATE FUNCTION integrations.sembrar_corrientes(cuenta uuid) RETURNS integer LANGUAGE sql AS $$
+  WITH nuevas AS (
+    INSERT INTO integrations.reconciliation_cursors
+      (channel_account_id, topic, cursor_kind, strategy, overlap_seconds, interval_seconds, next_run_at)
+    SELECT cuenta, v.topic, v.cursor_kind, v.strategy, 600, v.interval_seconds, v.next_run_at
+      FROM (VALUES
+        -- Corrientes incrementales: cadencia de la matriz de barridos.
+        ('ml.orders',    'state_sweep', 'enumerable',    600, now()),
+        ('ml.shipments', 'state_sweep', 'convergence',   900, now()),
+        ('ml.questions', 'state_sweep', 'enumerable',   1200, now()),
+        ('ml.messages',  'state_sweep', 'enumerable',   1200, now()),
+        ('ml.claims',    'state_sweep', 'enumerable',   1200, now()),
+        ('woo.orders',   'state_sweep', 'enumerable',    600, now()),
+        ('woo.products', 'state_sweep', 'enumerable',    600, now()),
+        -- Vueltas completas escalonadas en hora de Argentina: items 04:00, productos 04:15 y
+        -- pedidos los domingos 04:30. date_trunc('week') cae en lunes: el domingo está seis días después.
+        ('ml.items',     'full_scan',   'enumerable',  86400,
+          ((date_trunc('day', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
+            + interval '1 day 4 hours') AT TIME ZONE 'America/Argentina/Buenos_Aires')),
+        ('woo.products', 'full_scan',   'enumerable',  86400,
+          ((date_trunc('day', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
+            + interval '1 day 4 hours 15 minutes') AT TIME ZONE 'America/Argentina/Buenos_Aires')),
+        ('woo.orders',   'full_scan',   'enumerable', 604800,
+          (SELECT CASE WHEN b > now() THEN b ELSE b + interval '7 days' END
+             FROM (SELECT ((date_trunc('week', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
+                            + interval '6 days 4 hours 30 minutes')
+                           AT TIME ZONE 'America/Argentina/Buenos_Aires') AS b) t))
+      ) AS v(topic, cursor_kind, strategy, interval_seconds, next_run_at)
+    ON CONFLICT (channel_account_id, topic, cursor_kind) DO NOTHING
+    RETURNING 1)
+  SELECT count(*)::integer FROM nuevas;
+$$;
+
 -- Corrientes sembradas por la migración 0004 para cada cuenta de canal (José, 2026-09-15):
 --   cursor_kind='state_sweep' (ventana incremental): ml.orders 10 min, ml.shipments 15 min
 --   (convergencia), ml.questions/ml.messages/ml.claims 20 min, woo.orders y woo.products 10 min.

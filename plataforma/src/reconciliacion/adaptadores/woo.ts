@@ -1,8 +1,8 @@
 import { ErrorCanalTerminal, type RespuestaCanal, type TransporteCanal } from '../cliente-http.ts';
 import { claveCorriente, type AdaptadorBarrido, type PaginaRemota, type RecursoRemoto } from '../tipos.ts';
 import {
-  BOOTSTRAP_ORDENES_MS, cicloPorEstado, exigirLista, exigirRegistro, fechaUtc, finSegmento, idTexto,
-  inicioVentana, numeroPosicion, textoPosicion, valorOnull,
+  BOOTSTRAP_ORDENES_MS, cicloPorEstado, exigirLista, exigirRegistro, fechaUtc, idTexto,
+  inicioVentana, numeroPosicion, valorOnull,
 } from './comun.ts';
 
 export interface DependenciasWoo { transporte: TransporteCanal }
@@ -23,12 +23,12 @@ export function adaptadorPedidosWoo(dep: DependenciasWoo): AdaptadorBarrido {
   return {
     topic: 'woo.orders', cursorKind: 'state_sweep', fullScan: false, versionKind: 'temporal',
     async listar(ctx, posicion): Promise<PaginaRemota> {
-      const desdeTexto = textoPosicion(posicion, 'desde');
-      const desde = desdeTexto ? new Date(desdeTexto) : inicioVentana(ctx.windowFrom, ctx.windowTo, BOOTSTRAP_ORDENES_MS);
-      const hasta = finSegmento(desde, ctx.windowTo);
+      // Woo pagina por número de página sobre la ventana congelada, así que la ventana no se parte en
+      // segmentos: los 6 h de ML existen por el tope de offset de su búsqueda, no por la fecha.
+      const desde = inicioVentana(ctx.windowFrom, ctx.windowTo, BOOTSTRAP_ORDENES_MS);
       const page = Math.max(1, numeroPosicion(posicion, 'page', 1));
       const q = new URLSearchParams({
-        modified_after: desde.toISOString(), modified_before: hasta.toISOString(), dates_are_gmt: 'true',
+        modified_after: desde.toISOString(), modified_before: ctx.windowTo.toISOString(), dates_are_gmt: 'true',
         per_page: String(POR_PAGINA), page: String(page), orderby: 'modified', order: 'asc',
       });
       const r = await dep.transporte.get(`${BASE}/orders?${q}`);
@@ -42,10 +42,11 @@ export function adaptadorPedidosWoo(dep: DependenciasWoo): AdaptadorBarrido {
           projection: { id, status: valorOnull(o.status), date_modified_gmt: version },
         };
       });
-      let nextPosition: Record<string, unknown> | null = null;
-      if (page < totalPaginas) nextPosition = { desde: desde.toISOString(), page: page + 1 };
-      else if (hasta.getTime() < ctx.windowTo.getTime()) nextPosition = { desde: hasta.toISOString(), page: 1 };
-      return { resources, nextPosition, cursorAfter: { v: 1, updated_at: ctx.windowTo.toISOString(), tie_breaker: '' } };
+      return {
+        resources,
+        nextPosition: page < totalPaginas ? { page: page + 1 } : null,
+        cursorAfter: { v: 1, updated_at: ctx.windowTo.toISOString(), tie_breaker: '' },
+      };
     },
   };
 }
@@ -65,12 +66,12 @@ export function adaptadorProductosWoo(dep: DependenciasWoo): AdaptadorBarrido {
   return {
     topic: 'woo.products', cursorKind: 'state_sweep', fullScan: false, versionKind: 'temporal',
     async listar(ctx, posicion): Promise<PaginaRemota> {
-      const desdeTexto = textoPosicion(posicion, 'desde');
-      const desde = desdeTexto ? new Date(desdeTexto) : inicioVentana(ctx.windowFrom, ctx.windowTo, BOOTSTRAP_ORDENES_MS);
-      const hasta = finSegmento(desde, ctx.windowTo);
+      // Ventana única con paginado por página, igual que pedidos: partirla en segmentos multiplicaba
+      // las consultas y volvía a enumerar el mismo catálogo en cada tramo.
+      const desde = inicioVentana(ctx.windowFrom, ctx.windowTo, BOOTSTRAP_ORDENES_MS);
       const page = Math.max(1, numeroPosicion(posicion, 'page', 1));
       const q = new URLSearchParams({
-        modified_after: desde.toISOString(), modified_before: hasta.toISOString(), dates_are_gmt: 'true',
+        modified_after: desde.toISOString(), modified_before: ctx.windowTo.toISOString(), dates_are_gmt: 'true',
         per_page: String(POR_PAGINA), page: String(page), orderby: 'modified', order: 'asc', status: 'any',
       });
       const r = await dep.transporte.get(`${BASE}/products?${q}`);
@@ -91,10 +92,11 @@ export function adaptadorProductosWoo(dep: DependenciasWoo): AdaptadorBarrido {
           ...variaciones,
         );
       }
-      let nextPosition: Record<string, unknown> | null = null;
-      if (page < totalPaginas) nextPosition = { desde: desde.toISOString(), page: page + 1 };
-      else if (hasta.getTime() < ctx.windowTo.getTime()) nextPosition = { desde: hasta.toISOString(), page: 1 };
-      return { resources, nextPosition, cursorAfter: { v: 1, updated_at: ctx.windowTo.toISOString(), tie_breaker: '' } };
+      return {
+        resources,
+        nextPosition: page < totalPaginas ? { page: page + 1 } : null,
+        cursorAfter: { v: 1, updated_at: ctx.windowTo.toISOString(), tie_breaker: '' },
+      };
     },
   };
 }

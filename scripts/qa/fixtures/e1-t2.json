@@ -1,0 +1,60 @@
+{
+  "ml": {
+    "orders": [
+      { "id": 5001, "status": "paid", "date_last_updated": "@-3h", "shipping": { "id": 9001 }, "pack_id": 7001, "buyer": { "email": "comprador1@fixture.invalid", "nickname": "FIXTURE1" }, "total_amount": 15000 },
+      { "id": 5002, "status": "paid", "date_last_updated": "@-2h", "shipping": { "id": 9002 }, "pack_id": null, "buyer": { "email": "comprador2@fixture.invalid", "nickname": "FIXTURE2" }, "total_amount": 22000 },
+      { "id": 5003, "status": "cancelled", "date_last_updated": "@-1h", "shipping": { "id": 9003 }, "pack_id": 7003, "buyer": { "email": "comprador3@fixture.invalid", "nickname": "FIXTURE3" }, "total_amount": 9000 }
+    ],
+    "shipments": [
+      { "id": 9001, "status": "ready_to_ship", "substatus": "printed", "last_updated": "@-2h", "receiver_address": { "street_name": "Calle Fixture", "street_number": "123" } },
+      { "id": 9002, "status": "shipped", "substatus": "in_transit", "last_updated": "@-1h", "receiver_address": { "street_name": "Calle Fixture", "street_number": "456" } },
+      { "id": 9003, "status": "cancelled", "substatus": null, "last_updated": "@-30m", "receiver_address": { "street_name": "Calle Fixture", "street_number": "789" } }
+    ],
+    "questions": [
+      { "id": 41, "status": "UNANSWERED", "date_created": "@-4h", "item_id": "MLA100000", "text": "¿Tienen talle M?", "answer": null },
+      { "id": 42, "status": "UNANSWERED", "date_created": "@-2h", "item_id": "MLA100001", "text": "¿Hacen envío al interior?", "answer": null }
+    ],
+    "claims": [
+      { "id": 61, "status": "opened", "stage": "claim", "last_updated": "@-5h", "type": "mediations", "players": [{ "role": "respondent", "user_id": "{{seller}}" }] }
+    ],
+    "unread": [
+      { "resource": "/packs/7001/sellers/{{seller}}", "count": 1 }
+    ],
+    "packs": {
+      "7001": [
+        { "id": "msg-1", "status": "available", "message_date": { "created": "@-3h", "available": "@-3h" }, "text": "Hola, ¿cuándo lo despachan?", "from": { "user_id": "111" } }
+      ],
+      "7003": [
+        { "id": "msg-2", "status": "available", "message_date": { "created": "@-90m", "available": "@-90m" }, "text": "Cancelé la compra.", "from": { "user_id": "333" } }
+      ]
+    },
+    "items": [
+      { "id": "MLA100000", "status": "active", "sub_status": [], "last_updated": "@-6h", "title": "Cubierta 29 fixture", "available_quantity": 4, "variations": [] },
+      { "id": "MLA100001", "status": "active", "sub_status": [], "last_updated": "@-6h", "title": "Jersey fixture", "available_quantity": 5,
+        "variations": [{ "id": 11, "available_quantity": 2 }, { "id": 12, "available_quantity": 3 }] },
+      { "id": "MLA100002", "status": "active", "sub_status": [], "last_updated": "@-5h", "title": "Casco fixture", "available_quantity": 1, "variations": [] },
+      { "id": "MLA100003", "status": "paused", "sub_status": ["out_of_stock"], "last_updated": "@-5h", "title": "Guantes fixture", "available_quantity": 0, "variations": [] },
+      { "id": "MLA100004", "status": "closed", "sub_status": [], "last_updated": "@-4h", "title": "Bomba fixture", "available_quantity": 0, "variations": [] },
+      { "id": "MLA100005", "status": "active", "sub_status": [], "last_updated": "@-4h", "title": "Luz fixture", "available_quantity": 7, "variations": [] },
+      { "id": "MLA100006", "status": "active", "sub_status": [], "last_updated": "@-3h", "title": "Candado fixture", "available_quantity": 2, "variations": [] },
+      { "id": "MLA100007", "status": "active", "sub_status": [], "last_updated": "@-3h", "title": "Inflador fixture", "available_quantity": 3, "variations": [] },
+      { "id": "MLA100008", "status": "active", "sub_status": [], "last_updated": "@-2h", "title": "Camara fixture", "available_quantity": 12, "variations": [] },
+      { "id": "MLA100009", "status": "active", "sub_status": [], "last_updated": "@-2h", "title": "Pedales fixture", "available_quantity": 6, "variations": [] }
+    ]
+  },
+  "woo": {
+    "orders": [
+      { "id": 301, "status": "processing", "date_modified_gmt": "@gmt-3h", "billing": { "email": "web1@fixture.invalid" }, "total": "15000.00" },
+      { "id": 302, "status": "completed", "date_modified_gmt": "@gmt-2h", "billing": { "email": "web2@fixture.invalid" }, "total": "22000.00" },
+      { "id": 303, "status": "cancelled", "date_modified_gmt": "@gmt-1h", "billing": { "email": "web3@fixture.invalid" }, "total": "9000.00" }
+    ],
+    "products": [
+      { "id": 10, "parent_id": 0, "type": "variable", "status": "publish", "date_modified_gmt": "@gmt-5h", "name": "Jersey fixture", "sku": "FX-JERSEY" },
+      { "id": 11, "parent_id": 0, "type": "simple", "status": "publish", "date_modified_gmt": "@gmt-4h", "name": "Cubierta fixture", "sku": "FX-CUB", "stock_quantity": 4 },
+      { "id": 12, "parent_id": 0, "type": "simple", "status": "publish", "date_modified_gmt": "@gmt-3h", "name": "Casco fixture", "sku": "FX-CASCO", "stock_quantity": 1 },
+      { "id": 13, "parent_id": 0, "type": "simple", "status": "private", "date_modified_gmt": "@gmt-2h", "name": "Prototipo fixture", "sku": "FX-PROTO", "stock_quantity": 0 },
+      { "id": 900, "parent_id": 10, "type": "variation", "status": "publish", "date_modified_gmt": "@gmt-5h", "name": "Jersey fixture - M", "sku": "FX-JERSEY-M", "stock_quantity": 2 },
+      { "id": 901, "parent_id": 10, "type": "variation", "status": "publish", "date_modified_gmt": "@gmt-5h", "name": "Jersey fixture - L", "sku": "FX-JERSEY-L", "stock_quantity": 3 }
+    ]
+  }
+}

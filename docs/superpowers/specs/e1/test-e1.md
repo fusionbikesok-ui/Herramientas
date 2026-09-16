@@ -5,8 +5,29 @@ migraciones de `plataforma/migrations/` generadas desde `specs/e1/schema.sql`, c
 `plataforma/` y el simulador de canales de QA, y **falla si falta cualquier escenario exigido para
 el tramo vigente** (mismo patrón que `test:e0`). Ningún escenario usa credenciales reales ni escribe
 en ML/Woo. Diseño del tramo 1: [2026-09-15-e1-tramo1-fundacion-design.md](../2026-09-15-e1-tramo1-fundacion-design.md).
-El tramo se selecciona con `E1_TRAMO=1|2`; omitirlo conserva tramo 1 hasta que T2 esté implementado.
+El tramo se selecciona con `E1_TRAMO=1|2`; omitirlo conserva tramo 1.
 Diseño T2: [2026-09-15-e1-tramo2-barridos-design.md](../2026-09-15-e1-tramo2-barridos-design.md).
+
+**Cómo se exigen los IDs.** La suite de `plataforma/` se corre con el reporte JSON de vitest y
+`scripts/qa/gate-e1.mjs` verifica que cada ID del tramo esté en el título de una prueba que pasó; los IDs
+que el arnés comprueba por sí mismo (hoy `E1-SVC-01`) se le pasan con `--verificado`. El gate falla si
+falta un ID o si alguna prueba falló, así que un escenario no puede desaparecer sin romper el comando.
+`E1_SKIP_UNIT=1` saltea la suite y, con ella, el gate: esa corrida no es contractual y lo declara.
+
+**Qué agrega `E1_TRAMO=2`.** Un contenedor `simulator` con el fixture en memoria de
+`scripts/qa/fixtures/e1-t2.json` (sin SQLite ni credenciales), un keyring de sobres efímero de 32 bytes
+montado como carpeta read-only, una cuenta de canal de ensayo sembrada con
+`integrations.sembrar_corrientes` y el **worker real** barriendo esas diez corrientes contra el
+simulador. El arnés comprueba después, sobre la base: diez corrientes con corrida exitosa y ninguna
+corrida no exitosa, los ocho tópicos con inbox, todo payload cifrado (y ningún rastro del dominio del
+fixture en el ciphertext), todos los cursores avanzados, observaciones y relaciones creadas, y que
+ninguna llamada atribuida al transporte de canal use un método distinto de GET (`/__qa/*` es plano de
+control y no cuenta). Al terminar, baja el proyecto y falla si queda un contenedor.
+
+Los ocho barridos por tópico se numeran así: `E1-SWP-01` ml.orders, `E1-SWP-02` ml.shipments (junto con
+`E1-CONV-01`), `E1-SWP-03` ml.questions, `E1-SWP-04` ml.messages, `E1-SWP-05` ml.claims, `E1-SWP-06`
+ml.items, `E1-SWP-07` woo.orders y `E1-SWP-08` woo.products (junto con `E1-DEL-01`). Las vueltas
+completas de Woo son de sólo presencia: enumeran IDs para declarar bajas y no reescriben contenido.
 
 ## Escenarios exigidos por tramo (PM-174)
 

@@ -1,4 +1,5 @@
 import type { Consultable } from '../../db/pool.ts';
+import { ErrorBarridoReintentable } from '../../worker/barridos.ts';
 import { hashCanonico } from '../canonico.ts';
 import { ErrorCanalTerminal, type RespuestaCanal, type TransporteCanal } from '../cliente-http.ts';
 import { claveCorriente, type AdaptadorBarrido, type ContextoListado, type PaginaRemota, type RecursoRemoto, type RelacionRemota } from '../tipos.ts';
@@ -10,6 +11,8 @@ import {
 export interface DependenciasMl { transporte: TransporteCanal; db: Consultable; sellerId: string }
 
 const LOTE_INDIVIDUAL = 20;
+/** Relecturas de un segmento de órdenes antes de declararlo inestable y dejar el cursor quieto. */
+const MAX_RELECTURAS_SEGMENTO = 3;
 const LOTE_PACKS = 10;
 const LIMITE_BUSQUEDA = 50;
 
@@ -62,6 +65,8 @@ export function adaptadorOrdenesMl(dep: DependenciasMl): AdaptadorBarrido {
       const desde = desdeTexto ? new Date(desdeTexto) : inicioVentana(ctx.windowFrom, ctx.windowTo, BOOTSTRAP_ORDENES_MS);
       const hasta = finSegmento(desde, ctx.windowTo);
       const offset = numeroPosicion(posicion, 'offset', 0);
+      const totalPrevio = numeroPosicion(posicion, 'total', -1);
+      const relecturas = numeroPosicion(posicion, 'relecturas', 0);
       const q = new URLSearchParams({
         seller: dep.sellerId,
         'order.date_last_updated.from': desde.toISOString(),
@@ -72,14 +77,27 @@ export function adaptadorOrdenesMl(dep: DependenciasMl): AdaptadorBarrido {
       const resultados = exigirLista(body.results, '/orders/search results');
       const total = Number(exigirRegistro(body.paging, '/orders/search paging').total);
       if (!Number.isInteger(total) || total < 0) throw new ErrorCanalTerminal('PAGING_INVALIDO /orders/search');
+      const cursorAfter = { v: 1, updated_at: ctx.windowTo.toISOString(), tie_breaker: '' };
+
+      // El offset no es estable: si una orden se modifica y sale de la ventana congelada, las páginas
+      // siguientes se corren y otra orden quedaría sin leer. Un total distinto delata ese movimiento, y
+      // entonces el segmento se relee completo (repetir es inocuo por la deduplicación del motor).
+      if (totalPrevio >= 0 && total !== totalPrevio) {
+        if (relecturas >= MAX_RELECTURAS_SEGMENTO) {
+          throw new ErrorBarridoReintentable(`SEGMENTO_INESTABLE /orders/search ${desde.toISOString()}`);
+        }
+        return {
+          resources: resultados.map(ordenMl),
+          nextPosition: { desde: desde.toISOString(), offset: 0, relecturas: relecturas + 1 },
+          cursorAfter,
+        };
+      }
+
       const siguiente = offset + resultados.length;
       let nextPosition: Record<string, unknown> | null = null;
-      if (resultados.length > 0 && siguiente < total) nextPosition = { desde: desde.toISOString(), offset: siguiente };
+      if (resultados.length > 0 && siguiente < total) nextPosition = { desde: desde.toISOString(), offset: siguiente, total, relecturas };
       else if (hasta.getTime() < ctx.windowTo.getTime()) nextPosition = { desde: hasta.toISOString(), offset: 0 };
-      return {
-        resources: resultados.map(ordenMl), nextPosition,
-        cursorAfter: { v: 1, updated_at: ctx.windowTo.toISOString(), tie_breaker: '' },
-      };
+      return { resources: resultados.map(ordenMl), nextPosition, cursorAfter };
     },
   };
 }

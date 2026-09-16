@@ -85,6 +85,12 @@ describe('contrato relacional E1 T2', () => {
     const despues = await db.query<{ n: string; apagadas: string }>(
       "select count(*) n, count(*) filter (where not enabled) apagadas from integrations.reconciliation_cursors");
     expect(despues.rows[0]).toEqual({ n: '10', apagadas: '1' });
+
+    // Una cuenta que nace después de la migración se siembra con la misma función, sin repetir el calendario.
+    const nueva = (await db.query<{ id: string }>("insert into core.channel_accounts(company_id,channel,external_account) values ($1,'woocommerce','https://c2') returning id", [empresa])).rows[0]!.id;
+    expect((await db.query<{ sembrar_corrientes: number }>('select integrations.sembrar_corrientes($1)', [nueva])).rows[0]?.sembrar_corrientes).toBe(10);
+    expect((await db.query<{ sembrar_corrientes: number }>('select integrations.sembrar_corrientes($1)', [nueva])).rows[0]?.sembrar_corrientes).toBe(0);
+    expect(await db.query<{ n: string }>('select count(*) n from integrations.reconciliation_cursors').then((r) => r.rows[0]?.n)).toBe('20');
     await db.end();
     rmSync(dir, { recursive: true, force: true });
   });

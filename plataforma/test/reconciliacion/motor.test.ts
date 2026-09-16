@@ -97,7 +97,7 @@ describe('motor transaccional de reconciliación E1 T2', () => {
     return Number((await db.query<{ n: string }>(sql)).rows[0]!.n);
   }
 
-  it('una falla en página 3 conserva cursor y el reintento repite la ventana congelada sin duplicar', async () => {
+  it('E1-SWP-09 una falla en página 3 conserva cursor y el reintento repite la ventana congelada sin duplicar', async () => {
     const corrida = await nuevaCorrida();
     const recursos = ['o-1', 'o-2', 'o-3'].map((id) => recurso(id, '2026-09-15T10:00:00Z'));
     let falla = true;

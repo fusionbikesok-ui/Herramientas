@@ -12,42 +12,40 @@ DELETE FROM integrations.reconciliation_cursors c
      SELECT 1 FROM integrations.sweep_runs s
       WHERE s.channel_account_id = c.channel_account_id AND s.topic = c.topic AND s.cursor_kind = c.cursor_kind);
 
--- Próximo instante local de Argentina para las vueltas completas.
-CREATE OR REPLACE FUNCTION integrations.proxima_vuelta_diaria(desplazamiento interval)
-RETURNS timestamptz LANGUAGE sql STABLE AS $$
-  SELECT ((date_trunc('day', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
-           + interval '1 day' + interval '4 hours' + desplazamiento)
-          AT TIME ZONE 'America/Argentina/Buenos_Aires');
+-- La siembra vive en una función porque una cuenta de canal puede nacer después de esta migración
+-- (el ensayo de T2 crea la suya, y T3 dará de alta cuentas reales): el alta llama a esta función en
+-- vez de repetir el calendario. Es idempotente y devuelve cuántas corrientes creó.
+CREATE FUNCTION integrations.sembrar_corrientes(cuenta uuid) RETURNS integer LANGUAGE sql AS $$
+  WITH nuevas AS (
+    INSERT INTO integrations.reconciliation_cursors
+      (channel_account_id, topic, cursor_kind, strategy, overlap_seconds, interval_seconds, next_run_at)
+    SELECT cuenta, v.topic, v.cursor_kind, v.strategy, 600, v.interval_seconds, v.next_run_at
+      FROM (VALUES
+        -- Corrientes incrementales: cadencia de la matriz de barridos.
+        ('ml.orders',    'state_sweep', 'enumerable',    600, now()),
+        ('ml.shipments', 'state_sweep', 'convergence',   900, now()),
+        ('ml.questions', 'state_sweep', 'enumerable',   1200, now()),
+        ('ml.messages',  'state_sweep', 'enumerable',   1200, now()),
+        ('ml.claims',    'state_sweep', 'enumerable',   1200, now()),
+        ('woo.orders',   'state_sweep', 'enumerable',    600, now()),
+        ('woo.products', 'state_sweep', 'enumerable',    600, now()),
+        -- Vueltas completas escalonadas en hora de Argentina: items 04:00, productos 04:15 y
+        -- pedidos los domingos 04:30. date_trunc('week') cae en lunes: el domingo está seis días después.
+        ('ml.items',     'full_scan',   'enumerable',  86400,
+          ((date_trunc('day', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
+            + interval '1 day 4 hours') AT TIME ZONE 'America/Argentina/Buenos_Aires')),
+        ('woo.products', 'full_scan',   'enumerable',  86400,
+          ((date_trunc('day', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
+            + interval '1 day 4 hours 15 minutes') AT TIME ZONE 'America/Argentina/Buenos_Aires')),
+        ('woo.orders',   'full_scan',   'enumerable', 604800,
+          (SELECT CASE WHEN b > now() THEN b ELSE b + interval '7 days' END
+             FROM (SELECT ((date_trunc('week', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
+                            + interval '6 days 4 hours 30 minutes')
+                           AT TIME ZONE 'America/Argentina/Buenos_Aires') AS b) t))
+      ) AS v(topic, cursor_kind, strategy, interval_seconds, next_run_at)
+    ON CONFLICT (channel_account_id, topic, cursor_kind) DO NOTHING
+    RETURNING 1)
+  SELECT count(*)::integer FROM nuevas;
 $$;
 
-CREATE OR REPLACE FUNCTION integrations.proximo_domingo(desplazamiento interval)
-RETURNS timestamptz LANGUAGE sql STABLE AS $$
-  -- date_trunc('week') cae en lunes: el domingo de esa semana está seis días después.
-  SELECT CASE WHEN base > now() THEN base ELSE base + interval '7 days' END
-    FROM (SELECT ((date_trunc('week', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
-                   + interval '6 days' + interval '4 hours' + desplazamiento)
-                  AT TIME ZONE 'America/Argentina/Buenos_Aires') AS base) t;
-$$;
-
-INSERT INTO integrations.reconciliation_cursors
-  (channel_account_id, topic, cursor_kind, strategy, overlap_seconds, interval_seconds, next_run_at)
-SELECT a.id, v.topic, v.cursor_kind, v.strategy, 600, v.interval_seconds, v.next_run_at
-  FROM core.channel_accounts a
-  CROSS JOIN (VALUES
-    -- Corrientes incrementales: cadencia de la matriz de barridos.
-    ('ml.orders',    'state_sweep', 'enumerable',    600, now()),
-    ('ml.shipments', 'state_sweep', 'convergence',   900, now()),
-    ('ml.questions', 'state_sweep', 'enumerable',   1200, now()),
-    ('ml.messages',  'state_sweep', 'enumerable',   1200, now()),
-    ('ml.claims',    'state_sweep', 'enumerable',   1200, now()),
-    ('woo.orders',   'state_sweep', 'enumerable',    600, now()),
-    ('woo.products', 'state_sweep', 'enumerable',    600, now()),
-    -- Vueltas completas escalonadas: items 04:00, productos 04:15, pedidos (domingos) 04:30.
-    ('ml.items',     'full_scan',   'enumerable',  86400, integrations.proxima_vuelta_diaria(interval '0 minutes')),
-    ('woo.products', 'full_scan',   'enumerable',  86400, integrations.proxima_vuelta_diaria(interval '15 minutes')),
-    ('woo.orders',   'full_scan',   'enumerable', 604800, integrations.proximo_domingo(interval '30 minutes'))
-  ) AS v(topic, cursor_kind, strategy, interval_seconds, next_run_at)
-ON CONFLICT (channel_account_id, topic, cursor_kind) DO NOTHING;
-
-DROP FUNCTION integrations.proxima_vuelta_diaria(interval);
-DROP FUNCTION integrations.proximo_domingo(interval);
+SELECT integrations.sembrar_corrientes(a.id) FROM core.channel_accounts a;

@@ -173,7 +173,17 @@ export function crearSimulador({ db, fixture, cert, key, reloj = () => new Date(
     const headersPaginado = (r) => ({ 'x-wp-total': String(r.total), 'x-wp-totalpages': String(r.paginas) });
     let m;
     if (p === '/products' && req.method === 'GET') {
-      const lista = [...datos.productos.values()].filter(x => !x.parent_id).sort((a, b) => Number(a.id) - Number(b.id));
+      // Mismos filtros que el controlador real: sin esto un barrido incremental recibiría todo el
+      // catálogo en cada ventana y la prueba no distinguiría un adaptador que consulta de más.
+      const despues = url.searchParams.get('modified_after');
+      const antes = url.searchParams.get('modified_before');
+      const estado = url.searchParams.get('status');
+      const lista = [...datos.productos.values()]
+        .filter(x => !x.parent_id)
+        .filter(x => (!despues || msGmt(x.date_modified_gmt) > Date.parse(despues))
+          && (!antes || msGmt(x.date_modified_gmt) < Date.parse(antes)))
+        .filter(x => !estado || estado === 'any' || x.status === estado)
+        .sort((a, b) => Number(a.id) - Number(b.id));
       const r = paginar(lista, url);
       res.writeHead(200, { 'content-type': 'application/json', ...headersPaginado(r) });
       return res.end(JSON.stringify(r.pagina));

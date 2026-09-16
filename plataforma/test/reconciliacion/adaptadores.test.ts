@@ -57,6 +57,8 @@ function fixtureBase(): FixtureCanales {
         ...Array.from({ length: 120 }, (_, i) => ({ id: 10 + i, parent_id: 0, type: i === 0 ? 'variable' : 'simple', status: 'publish', date_modified_gmt: hace(20).slice(0, 19) })),
         { id: 900, parent_id: 10, type: 'variation', status: 'publish', date_modified_gmt: hace(20).slice(0, 19) },
         { id: 901, parent_id: 10, type: 'variation', status: 'publish', date_modified_gmt: hace(20).slice(0, 19) },
+        // Fuera de la ventana de arranque de 30 días: el barrido incremental no debe traerlo.
+        { id: 500, parent_id: 0, type: 'simple', status: 'publish', date_modified_gmt: hace(24 * 40).slice(0, 19) },
       ],
     },
   };
@@ -158,7 +160,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     });
   });
 
-  it('E1-SWP ml.orders: bootstrap en ventanas ≤6 h, 0 faltantes, relaciones y payload cifrado', async () => {
+  it('E1-SWP-01 ml.orders: bootstrap en ventanas ≤6 h, 0 faltantes, relaciones y payload cifrado', async () => {
     expect((await barrer('ml.orders')).estado).toBe('succeeded');
     expect(await inbox('ml.orders')).toBe(60);
     const rutas = (await llamadas()).map((l) => new URL(l.ruta, url).searchParams);
@@ -175,7 +177,56 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect(cursor.rows[0]?.cursor_value.updated_at).toBe(WINDOW_TO.toISOString());
   });
 
-  it('E1-CONV-01 ml.shipments: 20 relaciones, 5 cambian y sólo esas se encolan, siempre con x-format-new', async () => {
+  /** Órdenes dentro de la última hora: caen en un solo segmento de 6 h y fuerzan dos páginas. */
+  function soloOrdenes(cantidad: number): RegistroSim[] {
+    const nuevas: RegistroSim[] = Array.from({ length: cantidad }, (_, i) => ({
+      id: 6000 + i, status: 'paid',
+      date_last_updated: new Date(WINDOW_TO.getTime() - (cantidad - i) * 60_000).toISOString(),
+      shipping: { id: 9500 + i }, pack_id: null, buyer: { email: `o${i}${PII}` },
+    }));
+    fixture.ml!.orders!.splice(0, Number.POSITIVE_INFINITY, ...nuevas);
+    return nuevas;
+  }
+
+  it('relee el segmento de ml.orders si el total cambia durante el paginado', async () => {
+    const ultima = soloOrdenes(60).at(-1)!;
+    fixture.alLlamar = (llamada, vivos) => {
+      datos = vivos;
+      // Al pedir la segunda página, la orden más nueva se modifica y sale de la ventana congelada.
+      if (llamada.ruta.includes('offset=50') && vivos.ordenesMl.length === 60) {
+        vivos.ordenesMl.splice(vivos.ordenesMl.findIndex((o) => o.id === ultima.id), 1);
+      }
+    };
+    expect((await barrer('ml.orders')).estado).toBe('succeeded');
+    expect(await inbox('ml.orders')).toBe(59);
+    const observadas = (await db.query<{ resource_id: string }>(
+      "select resource_id from integrations.resource_observations where topic='ml.orders'")).rows.map((f) => f.resource_id);
+    expect(observadas.sort()).toEqual(datos!.ordenesMl.map((o) => String(o.id)).sort());
+    const inicios = new Map<string, number>();
+    for (const l of await llamadas()) {
+      const q = new URL(l.ruta, url).searchParams;
+      if (q.get('offset') === '0') {
+        const desde = q.get('order.date_last_updated.from')!;
+        inicios.set(desde, (inicios.get(desde) ?? 0) + 1);
+      }
+    }
+    expect([...inicios.values()].some((n) => n >= 2)).toBe(true);
+  });
+
+  it('un segmento de ml.orders que nunca se estabiliza deja la corrida reintentable y el cursor quieto', async () => {
+    soloOrdenes(60);
+    let quitadas = 0;
+    fixture.alLlamar = (llamada, vivos) => {
+      datos = vivos;
+      if (llamada.ruta.includes('offset=50')) { vivos.ordenesMl.pop(); quitadas++; }
+    };
+    await expect(barrer('ml.orders')).rejects.toThrow(/SEGMENTO_INESTABLE/);
+    expect(quitadas).toBeGreaterThanOrEqual(3);
+    expect((await db.query<{ status: string }>("select status from integrations.sweep_runs where topic='ml.orders'")).rows[0]?.status).toBe('retryable');
+    expect((await db.query<{ cursor_value: unknown }>("select cursor_value from integrations.reconciliation_cursors where topic='ml.orders'")).rows[0]?.cursor_value).toBeNull();
+  });
+
+  it('E1-SWP-02 y E1-CONV-01 ml.shipments: 20 relaciones, 5 cambian y sólo esas se encolan, siempre con x-format-new', async () => {
     // El simulador comparte el array vivo: se recorta en el lugar para que el barrido de órdenes lo vea.
     fixture.ml!.orders!.splice(20);
     await barrer('ml.orders');
@@ -192,7 +243,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect(envios.every((l) => l.headers['x-format-new'] === 'true')).toBe(true);
   });
 
-  it('E1-SWP ml.questions y ml.claims: abiertas enumeradas y conocidas convergen al cerrarse o desaparecer', async () => {
+  it('E1-SWP-03 y E1-SWP-05 ml.questions y ml.claims: abiertas enumeradas y conocidas convergen al cerrarse o desaparecer', async () => {
     await barrer('ml.questions'); await barrer('ml.claims');
     expect(await inbox('ml.questions')).toBe(2);
     expect(await inbox('ml.claims')).toBe(1);
@@ -210,7 +261,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect((await llamadas()).some((l) => l.ruta === '/questions/1')).toBe(true);
   });
 
-  it('E1-SWP ml.messages: no leídos + packs de órdenes, siempre mark_as_read=false', async () => {
+  it('E1-SWP-04 ml.messages: no leídos + packs de órdenes, siempre mark_as_read=false', async () => {
     await barrer('ml.orders');
     expect((await barrer('ml.messages')).estado).toBe('succeeded');
     expect(await inbox('ml.messages')).toBe(2);
@@ -219,7 +270,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect(packs.every((l) => new URL(l.ruta, url).searchParams.get('mark_as_read') === 'false')).toBe(true);
   });
 
-  it('E1-SWP ml.items: scan paginado + multiget de 20 y baja sólo tras una vuelta completa', async () => {
+  it('E1-SWP-06 ml.items: scan paginado + multiget de 20 y baja sólo tras una vuelta completa', async () => {
     await barrer('ml.items', 'full_scan');
     expect(await inbox('ml.items')).toBe(130);
     expect((await llamadas()).filter((l) => l.ruta.startsWith('/items?ids=')).every((l) => l.ruta.split('=')[1]!.split(',').length <= 20)).toBe(true);
@@ -234,12 +285,16 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect((await db.query<{ resource_id: string }>("select resource_id from integrations.resource_observations where lifecycle='deleted'")).rows).toEqual([{ resource_id: 'MLA100005' }]);
   });
 
-  it('E1-SWP woo.orders: GMT explícito, ventanas congeladas y 100 por página', async () => {
-    await barrer('woo.orders');
+  it('E1-SWP-07 woo.orders: GMT explícito, ventana única y 100 por página', async () => {
+    const { corrida } = await barrer('woo.orders');
     expect(await inbox('woo.orders')).toBe(150);
+    expect((await db.query<{ enumerated: number }>('select enumerated from integrations.sweep_runs where id=$1', [corrida.id])).rows[0]?.enumerated).toBe(150);
     const qs = (await llamadas()).map((l) => new URL(l.ruta, url).searchParams);
     expect(qs.every((q) => q.get('dates_are_gmt') === 'true' && q.get('per_page') === '100')).toBe(true);
     expect(qs.some((q) => q.get('page') === '2')).toBe(true);
+    // Woo no se parte en segmentos de 6 h: una sola ventana y dos páginas, no 120 consultas.
+    expect(new Set(qs.map((q) => q.get('modified_after'))).size).toBe(1);
+    expect(qs).toHaveLength(2);
     const fila = await db.query<{ remote_version: string }>("select remote_version from integrations.resource_observations where topic='woo.orders' and resource_id='300'");
     expect(fila.rows[0]?.remote_version.endsWith('Z')).toBe(true);
   });
@@ -259,9 +314,16 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect(await inbox('woo.orders')).toBe(151);
   });
 
-  it('E1-DEL-01 woo.products: incremental trae padres y variaciones; la vuelta de IDs declara la baja del padre', async () => {
-    await barrer('woo.products');
+  it('E1-SWP-08 y E1-DEL-01 woo.products: incremental trae padres y variaciones; la vuelta de IDs declara la baja del padre', async () => {
+    const { corrida } = await barrer('woo.products');
     expect(await inbox('woo.products')).toBe(122);
+    // Ni una consulta ni un recurso de más: 2 páginas de padres, 1 de variaciones y 122 enumerados.
+    expect((await db.query<{ enumerated: number }>('select enumerated from integrations.sweep_runs where id=$1', [corrida.id])).rows[0]?.enumerated).toBe(122);
+    const rutas = (await llamadas()).map((l) => l.ruta);
+    expect(rutas.filter((r) => r.includes('/products?'))).toHaveLength(2);
+    expect(rutas.filter((r) => r.includes('/variations?'))).toHaveLength(1);
+    // El producto modificado hace 40 días queda fuera de la ventana de arranque.
+    expect(await contar("select count(*) n from integrations.resource_observations where topic='woo.products' and resource_id='500'")).toBe(0);
     expect(await contar("select count(*) n from integrations.resource_relations where relation_type='product_variation'")).toBe(2);
     datos!.productos.delete(15);
     await barrer('woo.products', 'full_scan', { reloj: despues(1) });
