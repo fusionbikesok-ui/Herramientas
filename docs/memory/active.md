@@ -638,6 +638,9 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   - **Nginx (VPS, fuera del repo) desde 2026-09-16**: `location ~* ^/(herramientas/+)?internal(/|$) { return 404; }`
     en `sites-available/herramientas` y `sites-available/fusionbikes` (el `default_server` del 80 también
     proxea `/herramientas/`). Copia previa en `/root/nginx-backup-e1c5/`. Evidencia: `scripts/qa/deny-interno.sh`.
+  - **Medición de llamadas a ML** (techo shadow): `lib/medicionMl.js` + migración 106 `ml_llamadas_minuto`
+    (minuto, recurso, reales, 429, sintéticas; 30 días). Enganchada en `mlFetch`, fail-open. Entra en vigor con
+    el próximo reinicio del legado; los 7 días de medición cuentan desde ahí. `resumenMedicionMl` da p50/p95/p99.
   - **Puerto 3001 cerrado hacia afuera desde 2026-09-16** (antes respondía por IP sin Nginx): unidad
     `fusion-firewall-3001.service` → `/usr/local/sbin/fusion-firewall-3001.sh`, cadena `FUSION_3001` en
     iptables e ip6tables, sólo loopback y `172.16.0.0/12` (redes de Docker del VPS: 172.16.0-4.0/24).

@@ -87,6 +87,8 @@ describe('db schema', () => {
       'metricas_ciclo_sync',
       // Captura de qué cambió en una publicación de ML, campo por campo (migración 087).
       'ml_cambios_observados',
+      // Medición por minuto de llamadas a ML para el techo shadow de E1 T3 (106).
+      'ml_llamadas_minuto',
       'ml_oauth_token',
       'ml_precio_auditoria',
       'ml_precios_cache',

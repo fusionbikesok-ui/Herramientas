@@ -897,6 +897,14 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('sombra_ciclo_104')").run();
     })();
   }
+  // E1 T3: medición por minuto de llamadas a ML para fijar el techo shadow (lib/medicionMl.js).
+  const mlLlamadasMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_llamadas_minuto_106'").get();
+  if (!mlLlamadasMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '106_ml_llamadas_minuto.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_llamadas_minuto_106')").run();
+    })();
+  }
   // E1 T3 C5: nonces del gateway interno de sólo lectura (lib/internoHmac.js).
   const internalNoncesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='internal_nonces_105'").get();
   if (!internalNoncesMigration) {
