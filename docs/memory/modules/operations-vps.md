@@ -20,6 +20,9 @@
   `quick_check=ok`, health interno y externo OK, `/herramientas/precios/` 200. Backup previo:
   `/opt/fusionbikes/backups/db/predeploy-auditoria-precios-20260916T163605Z.sqlite`; snapshot
   de código anterior en `/opt/fusionbikes/deploy-backups/auditoria-precios-20260916T163605Z`.
+  Corrección posterior `07b9652`: retirado el corte de 1.000 filas de `GET /api/precios`, que
+  hacía incompletos los filtros locales (Pirelli: 6 visibles de 21 auditadas). Suite completa
+  2.679/2.679, PM2 reiniciado/guardado y health interno/externo OK.
 
 ## Backups y DR (desde 2026-09-13)
 
