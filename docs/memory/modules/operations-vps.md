@@ -15,6 +15,11 @@
   `chat_events_inbox_093`; `/api/v1/meta` conserva contrato `1.0.0`. La ruta queda
   deliberadamente fail-closed (`503`) hasta coordinar en producción
   `FUSION_CHAT_EVENTS_API_KEY` y `FUSION_CHAT_EVENTS_SECRET` con WordPress.
+- **Auditoría automática de precios desplegada (2026-09-16):** commit `cd8f141`, migración
+  `auditoria_precios_107`, PM2 reiniciado y guardado. Verificaciones posteriores: SQLite
+  `quick_check=ok`, health interno y externo OK, `/herramientas/precios/` 200. Backup previo:
+  `/opt/fusionbikes/backups/db/predeploy-auditoria-precios-20260916T163605Z.sqlite`; snapshot
+  de código anterior en `/opt/fusionbikes/deploy-backups/auditoria-precios-20260916T163605Z`.
 
 ## Backups y DR (desde 2026-09-13)
 
