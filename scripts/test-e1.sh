@@ -63,13 +63,13 @@ for _ in $(seq 1 45); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$("$
 "${COMPOSE[@]}" run --rm migrate
 
 if [ "$TRAMO" -ge 2 ]; then
-  # Cuenta de canal del ensayo y sus diez corrientes, con la misma función que usa la migración.
-  CUENTA="$(sql "with e as (insert into core.companies(legal_name) values ('Ensayo E1 T2') returning id),
-                      a as (insert into core.channel_accounts(company_id,channel,external_account)
-                            select id,'mercadolibre','ensayo-t2' from e returning id)
-                 select id from a")"
-  [ -n "$CUENTA" ] || { echo 'no se pudo crear la cuenta de ensayo' >&2; exit 1; }
-  afirmar 'corrientes sembradas' 10 "$(sql "select integrations.sembrar_corrientes('$CUENTA')")"
+  # Dos cuentas del ensayo, una por canal (T3 C4): la siembra por canal le da 6 corrientes a ML y 4 a Woo.
+  EMPRESA="$(sql "with e as (insert into core.companies(legal_name) values ('Ensayo E1') returning id) select id from e")"
+  CUENTA_ML="$(sql "with a as (insert into core.channel_accounts(company_id,channel,external_account) values ('$EMPRESA','mercadolibre','777') returning id) select id from a")"
+  CUENTA_WOO="$(sql "with a as (insert into core.channel_accounts(company_id,channel,external_account) values ('$EMPRESA','woocommerce','http://simulator:8080') returning id) select id from a")"
+  [ -n "$CUENTA_ML" ] && [ -n "$CUENTA_WOO" ] || { echo 'no se pudieron crear las cuentas de ensayo' >&2; exit 1; }
+  afirmar 'corrientes ML sembradas' 6 "$(sql "select integrations.sembrar_corrientes('$CUENTA_ML')")"
+  afirmar 'corrientes Woo sembradas' 4 "$(sql "select integrations.sembrar_corrientes('$CUENTA_WOO')")"
   # Dos olas: envíos y mensajes descubren sus recursos por las relaciones que dejan las órdenes, y las
   # vueltas de presencia necesitan observaciones para poder declarar una baja. En el ensayo tampoco se
   # espera hasta las 04:00: las vueltas completas corren dentro de la corrida.
@@ -78,10 +78,12 @@ if [ "$TRAMO" -ge 2 ]; then
         where (topic,cursor_kind) in (('ml.orders','state_sweep'),('ml.questions','state_sweep'),
               ('ml.claims','state_sweep'),('ml.items','full_scan'),('woo.orders','state_sweep'),
               ('woo.products','state_sweep'))" >/dev/null
-  export BARRIDOS_CUENTA="$CUENTA"
-  export BARRIDOS_ML_URL='http://simulator:8080'
-  export BARRIDOS_WOO_URL='http://simulator:8080'
-  export BARRIDOS_ML_SELLER='777'
+  # Registro de cuentas sin credenciales, junto al keyring (mismo volumen de sólo lectura).
+  printf '{"version":1,"cuentas":[{"id":"%s","channel":"mercadolibre","external_account":"777","base_url":"http://simulator:8080","seller_id":"777"},{"id":"%s","channel":"woocommerce","external_account":"http://simulator:8080","base_url":"http://simulator:8080"}]}' \
+    "$CUENTA_ML" "$CUENTA_WOO" > "$KEYRING_DIR/registro.json"
+  chown 1000:1000 "$KEYRING_DIR/registro.json" 2>/dev/null || true
+  chmod 400 "$KEYRING_DIR/registro.json"
+  export BARRIDOS_REGISTRO_FILE='/run/fusion-keyring/registro.json'
   export BARRIDOS_KEYRING_FILE='/run/fusion-keyring/keyring.json'
   "${COMPOSE[@]}" up -d simulator
   SIM="$("${COMPOSE[@]}" port simulator 8080)"

@@ -3,14 +3,11 @@ import { z } from 'zod';
 
 export type Servicio = 'api' | 'worker' | 'scheduler';
 /**
- * Barridos de una única cuenta de ensayo (T2): el worker no descubre cuentas ni credenciales desde la
- * base. El multi-cuenta con credenciales reales pertenece al tramo 3.
+ * Barridos multi-cuenta (T3 C4): las cuentas salen de un registro en archivo, validado contra la base al
+ * arrancar (`reconciliacion/registro.ts`); el worker no descubre cuentas desde la base.
  */
 export interface ConfigBarridos {
-  cuenta: string;
-  mlUrl: string;
-  wooUrl: string;
-  mlSeller: string;
+  registroFile: string;
   keyringFile: string;
 }
 /**
@@ -32,7 +29,7 @@ export class ErrorConfig extends Error { override name = 'ErrorConfig'; }
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const CAMPOS_SENALES = ['SENALES_KEYRING_FILE', 'SENALES_CUENTAS', 'SENALES_ORIGENES'] as const;
-const CAMPOS_BARRIDOS = ['BARRIDOS_CUENTA', 'BARRIDOS_ML_URL', 'BARRIDOS_WOO_URL', 'BARRIDOS_ML_SELLER', 'BARRIDOS_KEYRING_FILE'] as const;
+const CAMPOS_BARRIDOS = ['BARRIDOS_REGISTRO_FILE', 'BARRIDOS_KEYRING_FILE'] as const;
 
 const Esquema = z.object({
   SERVICIO: z.enum(['api', 'worker', 'scheduler', 'migrate']),
@@ -48,10 +45,7 @@ const Esquema = z.object({
   ESTADO_PG_DIR: z.string().min(1).default('/estado-pg'),
   HEARTBEAT_MAX_S: z.coerce.number().int().min(1).default(120),
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(100).default(30_000),
-  BARRIDOS_CUENTA: z.string().min(1).optional(),
-  BARRIDOS_ML_URL: z.string().min(1).optional(),
-  BARRIDOS_WOO_URL: z.string().min(1).optional(),
-  BARRIDOS_ML_SELLER: z.string().min(1).optional(),
+  BARRIDOS_REGISTRO_FILE: z.string().min(1).optional(),
   BARRIDOS_KEYRING_FILE: z.string().min(1).optional(),
 });
 
@@ -61,12 +55,10 @@ function leerBarridos(env: Record<string, string | undefined>): ConfigBarridos |
   if (presentes.length === 0) return undefined;
   const faltantes = CAMPOS_BARRIDOS.filter((c) => !env[c]);
   if (faltantes.length) throw new ErrorConfig(`configuración de barridos incompleta: ${faltantes.join(', ')}`);
-  const cuenta = env.BARRIDOS_CUENTA!;
-  if (!UUID.test(cuenta)) throw new ErrorConfig('BARRIDOS_CUENTA no es un uuid');
-  return {
-    cuenta, mlUrl: env.BARRIDOS_ML_URL!, wooUrl: env.BARRIDOS_WOO_URL!,
-    mlSeller: env.BARRIDOS_ML_SELLER!, keyringFile: env.BARRIDOS_KEYRING_FILE!,
-  };
+  // Las variables T2 de cuenta única ya no existen: dejarlas puestas indica una configuración vieja.
+  const viejas = ['BARRIDOS_CUENTA', 'BARRIDOS_ML_URL', 'BARRIDOS_WOO_URL', 'BARRIDOS_ML_SELLER'].filter((c) => env[c]);
+  if (viejas.length) throw new ErrorConfig(`variables de cuenta única de T2 ya no soportadas: ${viejas.join(', ')}`);
+  return { registroFile: env.BARRIDOS_REGISTRO_FILE!, keyringFile: env.BARRIDOS_KEYRING_FILE! };
 }
 
 function leerSenales(env: Record<string, string | undefined>): ConfigSenales | undefined {

@@ -56,7 +56,7 @@ describe('motor transaccional de reconciliación E1 T2', () => {
       await db.query('update integrations.reconciliation_cursors set next_run_at=now()-interval \'1 second\'');
     }
     await materializarCorridas(db);
-    return (await reclamarCorridas(db, 'motor-worker', [{ topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
+    return (await reclamarCorridas(db, 'motor-worker', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
   }
 
   it('canoniza claves, arrays por id y valores ausentes de forma estable', () => {
@@ -121,7 +121,7 @@ describe('motor transaccional de reconciliación E1 T2', () => {
 
     falla = false;
     await admin.query('update integrations.sweep_runs set available_at=now()');
-    const reintento = (await reclamarCorridas(db, 'motor-worker', [{ topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
+    const reintento = (await reclamarCorridas(db, 'motor-worker', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
     expect(reintento.id).toBe(corrida.id);
     const relojPosterior = () => new Date('2026-09-15T13:00:00.000Z');
     const resultado = await crearProcesadorMotor({ db, adaptador: conCaida, keyring, reloj: relojPosterior })(reintento);

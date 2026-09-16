@@ -35,10 +35,7 @@ services:
       SERVICIO: worker
       HEARTBEAT_INTERVAL_MS: 500
       # Vacías en el tramo 1: sin ellas el worker no registra adaptadores ni reclama corridas.
-      BARRIDOS_CUENTA: ${BARRIDOS_CUENTA:-}
-      BARRIDOS_ML_URL: ${BARRIDOS_ML_URL:-}
-      BARRIDOS_WOO_URL: ${BARRIDOS_WOO_URL:-}
-      BARRIDOS_ML_SELLER: ${BARRIDOS_ML_SELLER:-}
+      BARRIDOS_REGISTRO_FILE: ${BARRIDOS_REGISTRO_FILE:-}
       BARRIDOS_KEYRING_FILE: ${BARRIDOS_KEYRING_FILE:-}
     volumes:
       - ${KEYRING_DIR:?KEYRING_DIR requerido}:/run/fusion-keyring:ro

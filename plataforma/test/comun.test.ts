@@ -35,6 +35,14 @@ describe('configuración', () => {
     }
   });
 
+  it('E1-ACC-01 barridos: registro+keyring todo o nada y sin variables de cuenta única', () => {
+    const leer = () => 'x';
+    expect(cargarConfig({ ...env, BARRIDOS_REGISTRO_FILE: '/r.json', BARRIDOS_KEYRING_FILE: '/k.json' }, leer).barridos)
+      .toEqual({ registroFile: '/r.json', keyringFile: '/k.json' });
+    expect(() => cargarConfig({ ...env, BARRIDOS_REGISTRO_FILE: '/r.json' }, leer)).toThrow(/incompleta/);
+    expect(() => cargarConfig({ ...env, BARRIDOS_REGISTRO_FILE: '/r.json', BARRIDOS_KEYRING_FILE: '/k.json', BARRIDOS_CUENTA: 'x' }, leer)).toThrow(/cuenta única/);
+  });
+
   it('rechaza un servicio desconocido', () => {
     expect(() => cargarConfig({ ...env, SERVICIO: 'otro' }, () => 'x')).toThrow(ErrorConfig);
   });

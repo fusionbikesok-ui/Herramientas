@@ -17,8 +17,11 @@ export interface CorridaReclamada {
   workerId: string;
 }
 
-/** Corriente que un worker puede reclamar: un tópico y su clase de cursor. */
-export interface Corriente { topic: string; cursorKind: string }
+/**
+ * Corriente que un worker puede reclamar: cuenta, tópico y clase de cursor. La cuenta es obligatoria desde
+ * T3: sin ella un worker con adaptadores ML reclamaría las corridas de cualquier cuenta ML.
+ */
+export interface Corriente { channelAccountId: string; topic: string; cursorKind: string }
 
 export async function materializarCorridas(pool: pg.Pool, ahora = new Date()): Promise<number> {
   return enTransaccion(pool, async (tx) => {
@@ -60,6 +63,7 @@ export async function reclamarCorridas(
   pool: pg.Pool, workerId: string, corrientes: readonly Corriente[], cantidad: number, leaseSegundos = 60,
 ): Promise<CorridaReclamada[]> {
   if (!corrientes.length || cantidad < 1) return [];
+  const cuentas = corrientes.map((c) => c.channelAccountId);
   const topics = corrientes.map((c) => c.topic);
   const kinds = corrientes.map((c) => c.cursorKind);
   const r = await pool.query<{
@@ -68,10 +72,10 @@ export async function reclamarCorridas(
     max_attempts: number; cursor_before: Record<string, unknown> | null;
     cursor_version: number; correlation_id: string;
   }>(
-    `WITH corrientes AS (SELECT * FROM unnest($1::text[],$2::text[]) AS c(topic,cursor_kind)),
+    `WITH corrientes AS (SELECT * FROM unnest($6::uuid[],$1::text[],$2::text[]) AS c(channel_account_id,topic,cursor_kind)),
        candidatas AS (
        SELECT s.id FROM integrations.sweep_runs s JOIN corrientes c
-              ON c.topic=s.topic AND c.cursor_kind=s.cursor_kind
+              ON c.channel_account_id=s.channel_account_id AND c.topic=s.topic AND c.cursor_kind=s.cursor_kind
         WHERE s.status IN ('pending','retryable') AND s.available_at<=now()
         ORDER BY s.available_at,s.id LIMIT $3 FOR UPDATE OF s SKIP LOCKED)
      UPDATE integrations.sweep_runs r
@@ -82,7 +86,7 @@ export async function reclamarCorridas(
         AND rc.topic=r.topic AND rc.cursor_kind=r.cursor_kind AND rc.enabled
      RETURNING r.id,r.channel_account_id,r.topic,r.cursor_kind,r.strategy,r.lease_token,
        r.attempts,r.max_attempts,r.cursor_before,rc.version AS cursor_version,r.correlation_id`,
-    [topics, kinds, cantidad, leaseSegundos, workerId],
+    [topics, kinds, cantidad, leaseSegundos, workerId, cuentas],
   );
   return r.rows.map((f) => ({
     id: f.id, channelAccountId: f.channel_account_id, topic: f.topic, cursorKind: f.cursor_kind,

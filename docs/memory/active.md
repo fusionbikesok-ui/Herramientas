@@ -603,6 +603,14 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     reabra la ventana de 300 s; aviso repetido con nonce nuevo = 202 `duplicate`. `plataforma_app` no
     tiene DELETE por defecto (0002): toda tabla que purgue necesita GRANT explícito, como 0006.
     Firma y origen en `plataforma/src/seguridad/interna.ts`, reutilizable por C5.
+  - **C4 (multi-cuenta)**: el worker lee un registro de cuentas (`BARRIDOS_REGISTRO_FILE` +
+    `BARRIDOS_KEYRING_FILE`, todo o nada); las variables T2 `BARRIDOS_CUENTA/ML_URL/WOO_URL/ML_SELLER` ya
+    no existen y dejarlas puestas frena el arranque. El registro es un JSON de esquema cerrado (sin
+    credenciales: un `token` o `consumer_key` lo invalida), y se valida contra `core.channel_accounts`
+    (canal + identificador externo) antes de registrar adaptadores. `reclamarCorridas` exige
+    `channelAccountId` en cada corriente y los procesadores se indexan `cuenta|topic|cursor_kind`.
+    El harness `E1_TRAMO=2` usa dos cuentas (ML 6 + Woo 4 corrientes); con `psql -c` un
+    `INSERT … RETURNING` imprime `INSERT 0 1`, por eso el harness captura ids con CTE.
   - La cola de sombra del legado (`crearColaSombra`) todavía no tiene `enviar` conectado: el cliente
     firmado que la une con la API de C3 no está implementado y la copia sigue apagada por flag.
   - `woo_webhooks_estado` ya registra `topic`, `status`, `delivery_url`, `propio`, `visto_en` y

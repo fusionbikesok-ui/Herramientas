@@ -3,7 +3,7 @@ import {
   completarCorrida, fallarCorrida, reclamarCorridas, soltarCorridaPorApagado,
   type Corriente, type CorridaReclamada,
 } from '../reconciliacion/corridas.ts';
-import { claveCorriente } from '../reconciliacion/tipos.ts';
+import { claveCorrienteCuenta } from '../reconciliacion/tipos.ts';
 
 export interface ResultadoBarrido {
   cursorAfter: Record<string, unknown>;
@@ -22,7 +22,10 @@ export interface WorkerBarridos {
   detener(): Promise<void>;
 }
 
-/** Los procesadores se indexan por corriente (`topic|cursor_kind`): un tópico puede tener varias. */
+/**
+ * Los procesadores se indexan por `cuenta|topic|cursor_kind`: el worker sólo reclama corridas de las
+ * cuentas y corrientes que registró, así que nunca recibe una corrida que no sabe procesar.
+ */
 export function crearWorkerBarridos(opciones: {
   db: pg.Pool;
   workerId: string;
@@ -31,9 +34,9 @@ export function crearWorkerBarridos(opciones: {
   const activas = new Map<string, CorridaReclamada>();
   let aceptando = true;
   const corrientes: Corriente[] = Object.keys(opciones.procesadores).map((clave) => {
-    const [topic, cursorKind] = clave.split('|');
-    if (!topic || !cursorKind) throw new Error(`clave de corriente inválida: ${clave}`);
-    return { topic, cursorKind };
+    const [channelAccountId, topic, cursorKind, sobra] = clave.split('|');
+    if (!channelAccountId || !topic || !cursorKind || sobra !== undefined) throw new Error(`clave de corriente inválida: ${clave}`);
+    return { channelAccountId, topic, cursorKind };
   });
 
   return {
@@ -43,7 +46,7 @@ export function crearWorkerBarridos(opciones: {
       for (const corrida of corridas) {
         activas.set(corrida.id, corrida);
         try {
-          const procesador = opciones.procesadores[claveCorriente(corrida.topic, corrida.cursorKind)]!;
+          const procesador = opciones.procesadores[claveCorrienteCuenta(corrida.channelAccountId, corrida.topic, corrida.cursorKind)]!;
           const resultado = await procesador(corrida);
           await completarCorrida(opciones.db, corrida, resultado.cursorAfter, resultado.antesDeCerrar);
         } catch (error) {

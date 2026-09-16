@@ -9,7 +9,7 @@ import {
 import { crearWorkerBarridos } from '../../src/worker/barridos.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 
-const CORRIENTE = { topic: 'ml.orders', cursorKind: 'state_sweep' };
+
 
 describe('programación y leases de barridos E1 T2', () => {
   let base: BaseDePrueba; let db: pg.Pool; let admin: pg.Pool; let cuenta: string;
@@ -47,8 +47,8 @@ describe('programación y leases de barridos E1 T2', () => {
   it('dos workers no reclaman la misma corrida y el lease se renueva', async () => {
     await corriente();
     const [a, b] = await Promise.all([
-      reclamarCorridas(db, 'w1', [CORRIENTE], 1),
-      reclamarCorridas(db, 'w2', [CORRIENTE], 1),
+      reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1),
+      reclamarCorridas(db, 'w2', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1),
     ]);
     expect(a.length + b.length).toBe(1);
     const corrida = [...a, ...b][0]!;
@@ -65,7 +65,7 @@ describe('programación y leases de barridos E1 T2', () => {
 
     const worker = crearWorkerBarridos({
       db, workerId: 'w-adaptador',
-      procesadores: { 'ml.orders|state_sweep': async () => ({ cursorAfter: { v: 1, updated_at: '2026-09-15T00:00:00Z', tie_breaker: '1' } }) },
+      procesadores: { [`${cuenta}|ml.orders|state_sweep`]: async () => ({ cursorAfter: { v: 1, updated_at: '2026-09-15T00:00:00Z', tie_breaker: '1' } }) },
     });
     expect(await worker.unaVuelta()).toBe(1);
     expect((await db.query<{ status: string }>('select status from integrations.sweep_runs')).rows[0]?.status).toBe('succeeded');
@@ -79,12 +79,12 @@ describe('programación y leases de barridos E1 T2', () => {
     expect((await db.query('select 1 from integrations.sweep_runs')).rowCount).toBe(1);
     const incremental = crearWorkerBarridos({
       db, workerId: 'w-incremental',
-      procesadores: { 'ml.orders|state_sweep': async () => ({ cursorAfter: { v: 1, generation: 'x' } }) },
+      procesadores: { [`${cuenta}|ml.orders|state_sweep`]: async () => ({ cursorAfter: { v: 1, generation: 'x' } }) },
     });
     expect(await incremental.unaVuelta()).toBe(0);
     const completa = crearWorkerBarridos({
       db, workerId: 'w-completa',
-      procesadores: { 'ml.orders|full_scan': async () => ({ cursorAfter: { v: 1, generation: 'x' } }) },
+      procesadores: { [`${cuenta}|ml.orders|full_scan`]: async () => ({ cursorAfter: { v: 1, generation: 'x' } }) },
     });
     expect(await completa.unaVuelta()).toBe(1);
     const fila = await db.query<{ cursor_kind: string; status: string }>('select cursor_kind,status from integrations.sweep_runs');
@@ -93,29 +93,29 @@ describe('programación y leases de barridos E1 T2', () => {
 
   it('conflicto optimista deja partial y lease vencido no escribe', async () => {
     await corriente();
-    const corrida = (await reclamarCorridas(db, 'w1', [CORRIENTE], 1))[0]!;
+    const corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
     await admin.query('update integrations.reconciliation_cursors set version=version+1');
     expect(await completarCorrida(db, corrida, { v: 1, generation: 'x' })).toBe('partial');
 
     await admin.query("update integrations.sweep_runs set status='pending',finished_at=null,cursor_after=null where id=$1", [corrida.id]);
-    const otra = (await reclamarCorridas(db, 'w2', [CORRIENTE], 1))[0]!;
+    const otra = (await reclamarCorridas(db, 'w2', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
     await admin.query("update integrations.sweep_runs set lease_until=now()-interval '1 second'");
     await expect(renovarLeaseCorrida(db, otra)).rejects.toBeInstanceOf(ErrorLeaseVencido);
   });
 
   it('reintenta, agota, recupera lease y devuelve intento al apagar', async () => {
     await corriente({ maxAttempts: 2 });
-    let corrida = (await reclamarCorridas(db, 'w1', [CORRIENTE], 1))[0]!;
+    let corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
     expect(await fallarCorrida(db, corrida, 'HTTP_503', undefined, () => 0.5)).toBe('retryable');
     await admin.query('update integrations.sweep_runs set available_at=now()');
-    corrida = (await reclamarCorridas(db, 'w1', [CORRIENTE], 1))[0]!;
+    corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
     expect(await fallarCorrida(db, corrida, 'HTTP_503')).toBe('failed');
 
     await admin.query("update integrations.sweep_runs set status='pending',attempts=0,max_attempts=8,finished_at=null");
-    corrida = (await reclamarCorridas(db, 'w1', [CORRIENTE], 1))[0]!;
+    corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
     await soltarCorridaPorApagado(db, corrida);
     expect((await db.query<{ attempts: number }>('select attempts from integrations.sweep_runs')).rows[0]?.attempts).toBe(0);
-    corrida = (await reclamarCorridas(db, 'w1', [CORRIENTE], 1, 1))[0]!;
+    corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1, 1))[0]!;
     await new Promise((resolve) => setTimeout(resolve, 1100));
     expect(await liberarCorridasVencidas(db)).toEqual({ pendientes: 1, fallidas: 0 });
 

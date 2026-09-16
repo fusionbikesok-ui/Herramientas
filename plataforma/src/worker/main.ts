@@ -8,6 +8,8 @@ import { crearAdaptadoresWoo } from '../reconciliacion/adaptadores/woo.ts';
 import { crearClienteCanal } from '../reconciliacion/cliente-http.ts';
 import { crearProcesadorMotor } from '../reconciliacion/motor.ts';
 import { cargarKeyring } from '../seguridad/keyring.ts';
+import { cargarRegistro, validarRegistroContraBase } from '../reconciliacion/registro.ts';
+import { claveCorrienteCuenta } from '../reconciliacion/tipos.ts';
 import { crearWorkerBarridos, type ProcesadorBarrido } from './barridos.ts';
 
 const config = cargarConfig(process.env);
@@ -18,21 +20,28 @@ const detenerLatidos = iniciarLatidos(pool, 'worker', config.instancia, config.v
 // Sin configuración de barridos el worker no registra procesadores y por lo tanto no reclama corridas.
 let procesadores: Record<string, ProcesadorBarrido> = {};
 if (config.barridos) {
-  const barridos = config.barridos;
-  const keyring = cargarKeyring(barridos.keyringFile);
-  const adaptadores = {
-    ...crearAdaptadoresMl({ transporte: crearClienteCanal({ baseUrl: barridos.mlUrl }), db: pool, sellerId: barridos.mlSeller }),
-    ...crearAdaptadoresWoo({ transporte: crearClienteCanal({ baseUrl: barridos.wooUrl }) }),
-  };
-  procesadores = Object.fromEntries(Object.entries(adaptadores).map(([clave, adaptador]) => {
-    const motor = crearProcesadorMotor({ db: pool, adaptador, keyring });
-    // El reclamo filtra por corriente, no por cuenta: este worker atiende una sola y lo verifica.
-    return [clave, async (corrida) => {
-      if (corrida.channelAccountId !== barridos.cuenta) throw new Error('corrida de otra cuenta de canal');
-      return motor(corrida);
-    }] satisfies [string, ProcesadorBarrido];
-  }));
-  logger.info({ corrientes: Object.keys(procesadores).sort() }, 'adaptadores de barrido registrados');
+  const keyring = cargarKeyring(config.barridos.keyringFile);
+  const cuentas = cargarRegistro(config.barridos.registroFile);
+  // Un registro que no coincide con la base frena el arranque: es preferible un worker caído y visible
+  // en /health a observaciones de un canal escritas bajo la cuenta de otro.
+  await validarRegistroContraBase(pool, cuentas);
+  for (const cuenta of cuentas) {
+    // Un transporte por cuenta: cada una tiene su URL y su semáforo de concurrencia.
+    const transporte = crearClienteCanal({ baseUrl: cuenta.base_url });
+    const adaptadores = cuenta.channel === 'mercadolibre'
+      ? crearAdaptadoresMl({ transporte, db: pool, sellerId: cuenta.seller_id })
+      : crearAdaptadoresWoo({ transporte });
+    for (const adaptador of Object.values(adaptadores)) {
+      const motor = crearProcesadorMotor({ db: pool, adaptador, keyring });
+      const clave = claveCorrienteCuenta(cuenta.id, adaptador.topic, adaptador.cursorKind);
+      // Redundante con el reclamo filtrado por cuenta; barato y deja el invariante explícito.
+      procesadores[clave] = (async (corrida) => {
+        if (corrida.channelAccountId !== cuenta.id) throw new Error('corrida de otra cuenta de canal');
+        return motor(corrida);
+      }) satisfies ProcesadorBarrido;
+    }
+  }
+  logger.info({ cuentas: cuentas.length, corrientes: Object.keys(procesadores).length }, 'adaptadores de barrido registrados');
 } else {
   logger.warn('sin configuración de barridos: el worker no reclama corridas');
 }

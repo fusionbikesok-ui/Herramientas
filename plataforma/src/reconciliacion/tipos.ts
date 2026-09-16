@@ -67,3 +67,8 @@ export interface AdaptadorBarrido {
 export function claveCorriente(topic: string, cursorKind: string): string {
   return `${topic}|${cursorKind}`;
 }
+
+/** Clave de procesador en el worker multi-cuenta (T3): una corriente sólo existe dentro de una cuenta. */
+export function claveCorrienteCuenta(channelAccountId: string, topic: string, cursorKind: string): string {
+  return `${channelAccountId}|${topic}|${cursorKind}`;
+}

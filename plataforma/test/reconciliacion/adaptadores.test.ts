@@ -109,7 +109,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
       on conflict (channel_account_id,topic,cursor_kind) do update set next_run_at=now()-interval '1 second'`,
     [cuenta, topic, cursorKind, estrategia]);
     await materializarCorridas(db);
-    const corrida = (await reclamarCorridas(db, 'w-adaptadores', [{ topic, cursorKind }], 1))[0]!;
+    const corrida = (await reclamarCorridas(db, 'w-adaptadores', [{ channelAccountId: cuenta, topic, cursorKind }], 1))[0]!;
     const adaptador = adaptadores()[claveCorriente(topic, cursorKind)]!;
     const procesar = crearProcesadorMotor({ db, adaptador, keyring, reloj: opciones.reloj ?? reloj });
     try {
@@ -284,7 +284,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     await expect(barrer('ml.items', 'full_scan', { reloj: despues(1) })).rejects.toBeInstanceOf(ErrorBarridoReintentable);
     expect(await contar("select count(*) n from integrations.resource_observations where lifecycle='deleted'")).toBe(0);
     await admin.query("update integrations.sweep_runs set available_at=now() where status='retryable'");
-    const corrida = (await reclamarCorridas(db, 'w-adaptadores', [{ topic: 'ml.items', cursorKind: 'full_scan' }], 1))[0]!;
+    const corrida = (await reclamarCorridas(db, 'w-adaptadores', [{ channelAccountId: cuenta, topic: 'ml.items', cursorKind: 'full_scan' }], 1))[0]!;
     const r = await crearProcesadorMotor({ db, adaptador: adaptadores()[claveCorriente('ml.items', 'full_scan')]!, keyring, reloj })(corrida);
     expect(await completarCorrida(db, corrida, r.cursorAfter, r.antesDeCerrar)).toBe('succeeded');
     expect((await db.query<{ resource_id: string }>("select resource_id from integrations.resource_observations where lifecycle='deleted'")).rows).toEqual([{ resource_id: 'MLA100005' }]);
