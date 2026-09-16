@@ -61,20 +61,20 @@
 
 ## Rollout, rollback y aceptación
 
-- **Despliegue:** API/worker/scheduler sin credenciales de escritura; 7 días de sombra; aborto ante impacto en códigos HTTP, errores o latencia.
+- **Despliegue:** T3 conecta la sombra mediante recibos mínimos, señales separadas y gateway GET tipado; canario 1/10/50/100% y soak de 24 h. T4 ejecuta los 7 días contractuales con reportes firmados. Aborto ante impacto en códigos HTTP, errores o latencia.
 - Todo corte de autoridad dura <15 minutos, comienza con backup/restauración vigentes y se aborta ante discrepancia crítica, doble escritor, cola ciega o disco fuera de umbral.
 - **Aceptación técnica y operativa:** 0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José.
 - Código construido pero no usado no cuenta como observado; publicación no equivale a aceptación.
 
 ## Continuidad
 
-- **Próxima acción exacta:** Cerrar los hallazgos de la revisión independiente del tramo 2 (diff 8b9303d..f5f57b8) y recién después abrir el diseño del tramo 3. Los tramos 1 y 2 están implementados y verificados sólo en infraestructura efímera: `E1_TRAMO=2 npm run test:e1` en verde el 2026-09-16, con el worker real barriendo las diez corrientes contra el simulador. Nada está desplegado ni aceptado; los tramos 3 y 4 y cualquier corte en el VPS requieren aprobación propia.
+- **Próxima acción exacta:** Revisar y aprobar el diseño y plan de T3 (`specs/2026-09-16-e1-tramo3-sombra-viva-design.md` y `plans/2026-09-16-e1-tramo3-sombra-viva.md`). T1 y T2 están implementados y verificados sólo en infraestructura efímera; T3 está documentado pero no implementado, desplegado ni autorizado para usar credenciales o tráfico real.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
 ## Especificación original incorporada
 
-Especificación de E1 confirmada el 2026-09-13; su copia archivada sólo acredita procedencia. **Donde contradiga documentos posteriores, prevalecen** las specs aprobadas de los tramos 1 y 2 (`docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md` y `docs/superpowers/specs/2026-09-15-e1-tramo2-barridos-design.md`), `specs/e1/schema.sql`, `specs/e1/test-e1.md` y las decisiones PM-173 a PM-178.
+Especificación de E1 confirmada el 2026-09-13; su copia archivada sólo acredita procedencia. **Donde contradiga documentos posteriores, prevalecen** las specs aprobadas de los tramos 1, 2 y 3 (`docs/superpowers/specs/2026-09-15-e1-tramo1-fundacion-design.md`, `docs/superpowers/specs/2026-09-15-e1-tramo2-barridos-design.md` y `docs/superpowers/specs/2026-09-16-e1-tramo3-sombra-viva-design.md`), `specs/e1/schema.sql`, `specs/e1/test-e1.md` y las decisiones PM-173 a PM-183.
 
 #### Decisiones fijadas
 
@@ -417,5 +417,5 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 ## Decisiones PM asignadas
 
-- **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158, PM-170, PM-171, PM-172, PM-173, PM-174, PM-175, PM-176, PM-178
+- **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158, PM-170, PM-171, PM-172, PM-173, PM-174, PM-175, PM-176, PM-178, PM-179, PM-180, PM-181, PM-182, PM-183
 - **Consumidora:** PM-003, PM-006, PM-008, PM-017, PM-046, PM-048, PM-085, PM-086, PM-087, PM-094, PM-105, PM-107, PM-125, PM-127, PM-129, PM-149, PM-160

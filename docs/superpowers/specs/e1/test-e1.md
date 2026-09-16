@@ -35,7 +35,7 @@ completas de Woo son de sólo presencia: enumeran IDs para declarar bajas y no r
 |---|---|
 | 1. Fundación | E1-SCH-01, E1-SCH-02, E1-AUD-01, E1-AUD-02, E1-AUD-03, E1-Q-01..06, E1-DUP-01, E1-CAP-01, E1-API-01, E1-SVC-01 |
 | 2. Barridos | tramo 1 + E1-SWP-01..09, E1-CONV-01, E1-DEL-01 |
-| 3. Sombra en vivo | tramo 2 + E1-LAT-01, E1-PGDOWN-01 |
+| 3. Sombra en vivo | tramo 2 + E1-LAT-01, E1-PGDOWN-01, E1-RCP-01..02, E1-QUE-01, E1-SIG-01..02, E1-ACC-01, E1-GW-01..02, E1-RER-01, E1-MFD-01, E1-BLK-01, E1-SOAK-01 |
 | 4. Seguridad y reporte | tramo 3 + E1-AUD-04, E1-REC-01, E1-WA-01 (los 24 de la tabla) |
 
 ## Escenarios
@@ -61,6 +61,18 @@ completas de Woo son de sólo presencia: enumeran IDs para declarar bajas y no r
 | E1-DEL-01 | borrados Woo | producto borrado sin `product.deleted` | la vuelta diaria de IDs lo detecta | no se detecta |
 | E1-LAT-01 | presupuesto del legado | ≥ 500 webhooks anonimizados, 30 min, 3 corridas (copia apagada / encendida / encendida con PostgreSQL detenido) | Δp95 ≤ 25 ms, Δp99 ≤ 100 ms, 0 cambios de código HTTP, 0 errores nuevos | cualquier umbral excedido |
 | E1-PGDOWN-01 | reparación tras caída | PostgreSQL detenido 10 min con tráfico | pérdidas contadas por un contador durable **fuera** de PostgreSQL e importadas con auditoría al volver (contrato del tramo 3); barridos reparan el 100 % de lo enumerable; envíos convergen en un barrido | queda faltante |
+| E1-RCP-01 | recibo de sombra | avisos ML y Woo products con el ciclo de sombra en `integration_events` | el ciclo no agrega PII, la identidad y la deduplicación siguen siendo las del evento, y la purga de 400 días sólo toca filas con sombra terminal y trabajo legacy cerrado | guarda body/PII, duplica identidad o purga un evento en curso |
+| E1-RCP-02 | Woo orders antes del ACK | webhook de pedido con SQLite sano y con SQLite caído | sano: evento persistido antes del ACK y 200; caído: 503 y ningún ACK falso. Una ráfaga de `user_id` ajenos queda `excluded/foreign_account` sin hacer crecer la base más allá del límite por IP/ventana | responde 200 sin persistir o la ráfaga infla la base |
+| E1-QUE-01 | cola posterior al ACK | cola llena, plataforma lenta y plataforma caída | capacidad 256, concurrencia 2, timeout 250 ms y un solo intento; `queue_full`, `platform_timeout` y `platform_unavailable` quedan registrados y el ACK nunca cambia | reintenta, retiene payload o el ACK se degrada |
+| E1-SIG-01 | señal ≠ observación | señal repetida y varias señales del mismo recurso | una sola señal activa coalescida; `inbox_messages` y `resource_observations` sólo reciben el resultado de un GET remoto | una señal se proyecta como observación o se duplica |
+| E1-SIG-02 | API interna de señales | envelope inválido, HMAC vencido, nonce repetido, cuerpo >16 KiB, canal/tópico ajeno y PostgreSQL caído | 202/400/401/409/413/503 según el contrato; el replay no crea una segunda señal | acepta un replay o filtra otro código |
+| E1-ACC-01 | multi-cuenta | dos cuentas (ML y Woo) simultáneas | ninguna señal, cursor, observación ni inbox cruza de cuenta; la siembra respeta el canal y falla ante canal ambiguo | hay cruce o siembra corrientes incompatibles |
+| E1-GW-01 | gateway sólo lectura | operaciones tipadas y intentos de método, host, path o query libres | sólo GET tipado sale a la red; toda escritura o URL libre falla antes de red y sin credenciales expuestas en el error | ejecuta algo no tipado o filtra credenciales |
+| E1-GW-02 | exposición pública | peticiones desde Internet a `/internal/` y a `/herramientas/internal/` | Nginx rechaza ambas antes del proxy; el segundo prefijo importa porque se reescribe a la misma ruta interna | alguna de las dos llega a Express |
+| E1-RER-01 | relectura puntual | señal de orden, envío, pregunta, reclamo y producto; 404 y versión atrasada | el resultado remoto observa y encola; un 404 sólo da baja donde el contrato lo permite; una versión vieja nunca reemplaza una nueva; mensajes se resuelven por pack con `mark_as_read=false` | proyecta el aviso, retrocede una versión o resuelve el id del aviso |
+| E1-MFD-01 | `missed_feeds` | ventana de dos días con avisos repetidos | enumera desde offset cero sin cursor, deduplica por notification id, exige `site_id` en items, crea señales y nunca observaciones | usa cursor, duplica o genera observaciones |
+| E1-BLK-01 | multiget de items | lote con ids válidos e inválidos | cada elemento informa su propio estado y un fallo parcial no invalida el lote; el endpoint es el verificado por sonda autenticada y registrado con fecha | un elemento fallido tira el lote o el endpoint no tiene fuente |
+| E1-SOAK-01 | soak de 24 horas | sombra encendida al 100 % durante 24 h | sin cambios de ACK, sin cola saturada, sin señal vieja, cobertura y convergencia sostenidas y rollback ensayado | cualquier umbral del diseño excedido |
 | E1-REC-01 | reporte diario | día simulado | reporte con paridad/cobertura/convergencia por tópico, firmado, en S3 simulado con retención governance 365 d y email con adjuntos (JSON + firma) | falta firma, retención o adjuntos |
 | E1-WA-01 | passkeys virtuales | autenticador virtual | registro, login, reautenticación y recuperación con código; flag `passkeys.real` apagado impide uso real | alguna etapa falla o el flag no bloquea |
 | E1-CAP-01 | autorización | sesiones de fixture con y sin `operations.read` | 401 sin sesión, 403 sin capacidad, 200 con capacidad | responde datos sin permiso |

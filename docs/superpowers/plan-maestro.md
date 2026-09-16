@@ -80,12 +80,13 @@ que una de ellas está actualizada.
 La ruta de cada ficha está en `deliveries/README.md`.
 
 La ejecución vigente de E1 se divide según PM-174. Los tramos 1 y 2 están implementados y verificados
-sólo en infraestructura efímera, según el [diseño del tramo 2](specs/2026-09-15-e1-tramo2-barridos-design.md)
-y su [plan de implementación](plans/2026-09-15-e1-tramo2-barridos.md): el 2026-09-16 `E1_TRAMO=2 npm run
-test:e1` terminó en verde con el worker real barriendo las diez corrientes contra el simulador, y el gate
-de escenarios cubrió los 26 IDs exigidos para el tramo. Falta la revisión independiente del tramo 2.
-Nada está desplegado y E1 no está aceptada: código construido pero no usado no cuenta como observado.
-Los tramos 3 y 4 y cualquier cambio en el VPS requieren aprobación propia.
+sólo en infraestructura efímera: el 2026-09-16 `E1_TRAMO=2 npm run test:e1` terminó en verde con el
+worker real contra el simulador y la revisión independiente quedó aprobada en `52f6805`. El
+[diseño de T3](specs/2026-09-16-e1-tramo3-sombra-viva-design.md) y su
+[plan](plans/2026-09-16-e1-tramo3-sombra-viva.md) fijan recibos mínimos, señales separadas de
+observaciones, gateway GET tipado, multi-cuenta, `missed_feeds`, prueba de latencia y soak de 24 h.
+T3 está documentado pero no implementado ni autorizado para tráfico real. T4 conserva passkeys y la
+campaña contractual de siete días con reporte firmado. Nada está desplegado y E1 no está aceptada.
 
 ## Arquitectura e invariantes acumulativos
 

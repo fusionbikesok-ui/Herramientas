@@ -9,6 +9,8 @@ aprobados para ejecutar cortes concretos; nunca amplían por sí mismos la autor
 - [Tramo 1 — Fundación](2026-09-15-e1-tramo1-fundacion.md): implementado y revisado en aislamiento.
 - [Tramo 2 — Barridos](2026-09-15-e1-tramo2-barridos.md): listo para ejecutar sólo contra
   infraestructura efímera; no autoriza canales reales, E0 ni producción.
+- [Tramo 3 — Sombra conectada](2026-09-16-e1-tramo3-sombra-viva.md): plan documentado, no ejecutado;
+  sus cortes locales no autorizan despliegue, credenciales ni tráfico real.
 
 ## Archivo
 

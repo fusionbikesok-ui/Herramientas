@@ -7,7 +7,9 @@ RAIZ="$(cd "$(dirname "$0")/.." && pwd)"
 PLATAFORMA="$RAIZ/plataforma"
 TRABAJO="$(mktemp -d /tmp/fusion-e1.XXXXXX)"
 TRAMO="${E1_TRAMO:-1}"
-[ "$TRAMO" = 1 ] || [ "$TRAMO" = 2 ] || { echo "E1_TRAMO debe ser 1 o 2 (recibido: $TRAMO)" >&2; exit 2; }
+case "$TRAMO" in 1|2|3) ;; *) echo "E1_TRAMO debe ser 1, 2 o 3 (recibido: $TRAMO)" >&2; exit 2 ;; esac
+# El tramo 3 está documentado y con contrato exigible, pero sin implementar: su gate falla a propósito
+# hasta que los cortes C1–C9 del plan existan.
 export E1_PROJECT="fusion-e1-$$"
 export SECRET_DIR="$TRABAJO/secretos"
 export ESTADO_PG_DIR="$TRABAJO/estado-pg"
@@ -60,7 +62,7 @@ for _ in $(seq 1 45); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$("$
 "${COMPOSE[@]}" build migrate api worker scheduler
 "${COMPOSE[@]}" run --rm migrate
 
-if [ "$TRAMO" = 2 ]; then
+if [ "$TRAMO" -ge 2 ]; then
   # Cuenta de canal del ensayo y sus diez corrientes, con la misma función que usa la migración.
   CUENTA="$(sql "with e as (insert into core.companies(legal_name) values ('Ensayo E1 T2') returning id),
                       a as (insert into core.channel_accounts(company_id,channel,external_account)
@@ -98,7 +100,7 @@ for _ in $(seq 1 45); do [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127
 for _ in $(seq 1 45); do curl -fsS "http://127.0.0.1:${API_PORT}/api/v2/health" >/dev/null && break; sleep 1; done
 curl -fsS "http://127.0.0.1:${API_PORT}/api/v2/health" >/dev/null
 
-if [ "$TRAMO" = 2 ]; then
+if [ "$TRAMO" -ge 2 ]; then
   # El scheduler materializa cada ola y el worker real la barre contra el simulador.
   esperar_corridas() { # esperar_corridas <corridas exitosas esperadas>
     for _ in $(seq 1 90); do
@@ -145,8 +147,8 @@ fi
 RESTANTES="$(docker ps -a --format '{{.Names}}' | grep -c "^${E1_PROJECT}" || true)"
 afirmar 'contenedores del ensayo restantes' 0 "$RESTANTES"
 
-if [ "$TRAMO" = 2 ]; then
-  echo '{"tramo":"E1-2","resultado":"ok","escenarios":["SCH","AUD","Q","DUP","CAP","API","SVC","SWP","CONV","DEL"]}'
+if [ "$TRAMO" -ge 2 ]; then
+  echo "{\"tramo\":\"E1-$TRAMO\",\"resultado\":\"ok\",\"escenarios\":[\"SCH\",\"AUD\",\"Q\",\"DUP\",\"CAP\",\"API\",\"SVC\",\"SWP\",\"CONV\",\"DEL\"]}"
 else
   echo '{"tramo":"E1-1","resultado":"ok","escenarios":["SCH","AUD","Q","DUP","CAP","API","SVC"]}'
 fi

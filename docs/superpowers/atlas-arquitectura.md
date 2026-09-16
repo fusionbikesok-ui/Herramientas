@@ -181,5 +181,12 @@ reemplaza por sí solo los barridos de estado ni autoriza cambiar producción.
 
 El diseño aprobado de E1 T2 separa corrientes por cuenta+tópico+clase, conserva observaciones y
 relaciones técnicas sin PII durante 400 días y cifra payloads con AES-256-GCM. El scheduler sólo
-materializa corridas; el worker ejecuta adaptadores GET contra simulador. `missed_feeds` queda para T3
-como suplemento con cursor propio, nunca como sustituto de la relectura del estado remoto.
+materializa corridas; el worker ejecuta adaptadores GET contra simulador.
+
+El diseño de E1 T3 añade una frontera explícita entre aviso y verdad remota: el legado deja un recibo
+SQLite mínimo y, después del ACK, intenta copiar una señal por una cola acotada. La plataforma relee
+el recurso mediante un gateway legacy de operaciones GET tipadas; sólo esa respuesta entra en
+observaciones e inbox. Las credenciales permanecen en el legado. ML y Woo usan cuentas y corrientes
+distintas. `missed_feeds` es un suplemento de dos días para avisos que nunca obtuvieron ACK, mientras
+los barridos reparan copias perdidas después del ACK. T3 concluye con un soak de 24 horas; la firma y
+los siete días contractuales pertenecen a T4.

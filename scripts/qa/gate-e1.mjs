@@ -18,7 +18,14 @@ const TRAMO_2 = [
   'E1-SWP-01', 'E1-SWP-02', 'E1-SWP-03', 'E1-SWP-04', 'E1-SWP-05',
   'E1-SWP-06', 'E1-SWP-07', 'E1-SWP-08', 'E1-SWP-09', 'E1-CONV-01', 'E1-DEL-01',
 ];
-const EXIGIDOS = { 1: TRAMO_1, 2: TRAMO_2 };
+// El tramo 3 ya tiene contrato exigible aunque todavía no esté implementado: `E1_TRAMO=3` falla
+// mientras falte un escenario, que es exactamente para lo que existe este gate (PM-174).
+const TRAMO_3 = [
+  ...TRAMO_2,
+  'E1-LAT-01', 'E1-PGDOWN-01', 'E1-RCP-01', 'E1-RCP-02', 'E1-QUE-01', 'E1-SIG-01', 'E1-SIG-02',
+  'E1-ACC-01', 'E1-GW-01', 'E1-GW-02', 'E1-RER-01', 'E1-MFD-01', 'E1-BLK-01', 'E1-SOAK-01',
+];
+const EXIGIDOS = { 1: TRAMO_1, 2: TRAMO_2, 3: TRAMO_3 };
 
 function argumentos(argv) {
   const salida = { tramo: '1', reporte: '', verificado: [] };
@@ -34,7 +41,7 @@ function argumentos(argv) {
 
 const { tramo, reporte, verificado } = argumentos(process.argv.slice(2));
 const exigidos = EXIGIDOS[tramo];
-if (!exigidos) { console.error(`tramo inválido: ${tramo} (1 o 2)`); process.exit(2); }
+if (!exigidos) { console.error(`tramo inválido: ${tramo} (1, 2 o 3)`); process.exit(2); }
 if (!reporte) { console.error('falta --reporte con el JSON de vitest'); process.exit(2); }
 
 let datos;

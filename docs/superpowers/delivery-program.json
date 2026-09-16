@@ -54,9 +54,9 @@
       "migration": "Usuarios sin contraseñas; importación idempotente de metadatos, sin datos de negocio.",
       "risks": "La sombra jamás condiciona el ACK legacy. Estados sin historial enumerables se validan por convergencia; envíos usan cursor shipment.last_updated propio.",
       "tests": "npm run test:e1 con los escenarios de docs/superpowers/specs/e1/test-e1.md (esquema, auditoría, colas, duplicados, barridos por tópico, convergencia de envíos, borrados Woo, presupuesto de latencia, PostgreSQL caído, reporte firmado, WebAuthn virtual, capacidades, contrato y servicios separados).",
-      "rollout": "API/worker/scheduler sin credenciales de escritura; 7 días de sombra; aborto ante impacto en códigos HTTP, errores o latencia.",
+      "rollout": "T3 conecta la sombra mediante recibos mínimos, señales separadas y gateway GET tipado; canario 1/10/50/100% y soak de 24 h. T4 ejecuta los 7 días contractuales con reportes firmados. Aborto ante impacto en códigos HTTP, errores o latencia.",
       "acceptance": "0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José.",
-      "next": "Cerrar los hallazgos de la revisión independiente del tramo 2 (diff 8b9303d..f5f57b8) y recién después abrir el diseño del tramo 3. Los tramos 1 y 2 están implementados y verificados sólo en infraestructura efímera: `E1_TRAMO=2 npm run test:e1` en verde el 2026-09-16, con el worker real barriendo las diez corrientes contra el simulador. Nada está desplegado ni aceptado; los tramos 3 y 4 y cualquier corte en el VPS requieren aprobación propia."
+      "next": "Revisar y aprobar el diseño y plan de T3 (`specs/2026-09-16-e1-tramo3-sombra-viva-design.md` y `plans/2026-09-16-e1-tramo3-sombra-viva.md`). T1 y T2 están implementados y verificados sólo en infraestructura efímera; T3 está documentado pero no implementado, desplegado ni autorizado para usar credenciales o tráfico real."
     },
     {
       "id": "E2",

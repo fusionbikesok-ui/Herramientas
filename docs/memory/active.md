@@ -525,6 +525,49 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - `shadow_copy_losses` no vive en PostgreSQL; el contador externo pertenece a T3. Observaciones,
   relaciones y orden de versiones pertenecen a T2 y se retienen 400 días sin payload ni PII.
 
+## E1 tramo 3 — diseño asentado (2026-09-16)
+
+- Diseño: `docs/superpowers/specs/2026-09-16-e1-tramo3-sombra-viva-design.md`; implementación:
+  `docs/superpowers/plans/2026-09-16-e1-tramo3-sombra-viva.md`. Está documentado, no implementado,
+  desplegado ni autorizado para credenciales/tráfico real.
+- Corrección central: el webhook crea una señal, no una observación. El worker relee por un gateway
+  legacy GET tipado; sólo el resultado remoto entra en observaciones/inbox. La plataforma nunca recibe
+  tokens ML ni claves Woo.
+- SQLite conserva recibos mínimos sin body/PII por 400 días. Woo orders persiste antes del ACK. La
+  copia posterior usa cola acotada 256, concurrencia 2, timeout 250 ms y un intento.
+- ML y Woo tienen cuentas/corrientes separadas. `missed_feeds` es suplemento de dos días y no repara
+  copias perdidas después de un ACK; los barridos siguen siendo la reparación independiente.
+- T3 exige prueba 500/30 min en tres modos y soak de 24 horas. T4 conserva passkeys, firma, email,
+  Object Lock y los siete días contractuales. Decisiones PM-179..183.
+- **Revisado el 2026-09-16** (sección 13 del diseño tiene la tabla completa de correcciones). Lo
+  durable que salió de esa revisión:
+  - El recibo de sombra **no es una tabla nueva**: ML y Woo products ya persisten antes del ACK en
+    `integration_events` (`lib/workerIntegrationJobs.js:94` y `:137`) con tópico, recurso, fingerprint,
+    delivery id, tiempos y dedupe. T3 agrega sólo el ciclo de vida como columnas. Woo orders es el
+    único canal sin recibo (`server.js:130` responde antes de persistir) y es el único cambio de código
+    de respuesta del legado que introduce T3.
+  - Nginx tiene **dos** caminos al mismo Express: `location /` y `location /herramientas/`, y el segundo
+    proxea con barra final, así que quita el prefijo. Cualquier deny de rutas internas tiene que cubrir
+    las dos formas; verificado en `/etc/nginx/sites-available/herramientas`.
+  - Multiget de ML verificado con sonda autenticada de sólo lectura el 2026-09-16: `/items?ids=`
+    responde 200 con `{code, body}` por elemento y `/items/bulk?ids=` responde 200 con
+    `{id, status_code, body}`. Los dos existen; migrar a bulk sólo cambia de `code` a `status_code`. La
+    documentación pública de ML devuelve 403 a consultas automatizadas: los límites se afirman con
+    sonda, no con la página.
+  - Config ML real: `ML_CLIENT_ID`, `ML_CLIENT_SECRET` y `ML_USER_ID` (`server.js:525`). No existe
+    `ML_APP_ID` —en ML el app id es el client id— ni `ML_SITE_ID`, que hay que agregar para
+    `missed_feeds` de items.
+  - El aviso de cuenta ajena hoy responde 200 **sin persistir** a propósito (`server.js:342`): persistirlo
+    exige límite por IP/ventana, y sin esa defensa el corte C2 no pasa.
+  - `woo_webhooks_estado` ya registra `topic`, `status`, `delivery_url`, `propio`, `visto_en` y
+    `status_desde` de las entregas propias: la alerta de webhook caído lee esa tabla.
+  - `integration_events` crece ~1.400 filas/día y **hoy no tiene purga**. La purga de 400 días de T3 es
+    la primera retención sobre esa tabla y sólo alcanza filas con sombra terminal y trabajo legacy
+    cerrado.
+  - El contrato de T3 ya es exigible: doce IDs (`E1-RCP-01..02`, `E1-QUE-01`, `E1-SIG-01..02`,
+    `E1-ACC-01`, `E1-GW-01..02`, `E1-RER-01`, `E1-MFD-01`, `E1-BLK-01`, `E1-SOAK-01`) en `test-e1.md`,
+    y `gate-e1.mjs` conoce el tramo 3. `E1_TRAMO=3` falla a propósito hasta que existan los cortes.
+
 ## E0 re-aceptada (2026-09-15)
 
 - Restauración real desde la copia subida por la Mac (E0-OFF-01): 1068 archivos verificados, verify OK,
