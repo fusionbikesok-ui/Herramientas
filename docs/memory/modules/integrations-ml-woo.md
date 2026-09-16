@@ -39,6 +39,9 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   scans ML completos/acotados, refrescos y webhooks Woo, y por cron de respaldo cada 15 minutos;
   la huella evita recalcular filas sin cambios y un scan ML completo exitoso poda filas fuera de
   alcance. El botón manual usa la misma proyección local.
+- El listado `GET /api/precios` devuelve el universo completo del estado solicitado: los filtros
+  de marca/categoría son locales y no pueden operar sobre un corte previo de 1.000 filas (ese corte
+  mostraba sólo 6 de las 21 publicaciones Pirelli auditadas).
 
 - Las confirmaciones puntuales no elegibles de Woo o ML conservan la fila de `pedidos_cache`
   como `no_elegible` para no romper preparaciones/auditoría, pero la excluyen de la cola y

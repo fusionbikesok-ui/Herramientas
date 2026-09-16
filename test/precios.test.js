@@ -313,20 +313,20 @@ describe('auditarPrecios + router', () => {
     expect(res.status).toBe(400);
   });
 
-  it('GET /api/precios: total es el COUNT real (no el LIMIT) y avisa truncado', async () => {
+  it('GET /api/precios: devuelve el universo completo para que los filtros locales no oculten marcas', async () => {
     const ins = db.prepare(`
       INSERT INTO ml_precio_auditoria
         (clave, item_id, titulo, sku, precio_ml, sale_fee, envio, neto, precio_web, deficit_pct, estado, actualizado_en)
       VALUES (?, ?, 't', 'FB-X', 100, 10, 5, 85, 200, 50, 'bajo', datetime('now'))
     `);
     const tx = db.transaction((n) => { for (let i = 0; i < n; i++) ins.run(`MLX${i}|v1`, `MLX${i}`); });
-    tx(1050); // por encima del LIMIT 1000 de la query
+    tx(1050); // regresión: antes la query cortaba en 1000 y el filtro de marca quedaba incompleto
 
     const res = await request(app).get('/api/precios?estado=all');
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1050);
-    expect(res.body.truncado).toBe(true);
-    expect(res.body.data).toHaveLength(1000);
+    expect(res.body.truncado).toBe(false);
+    expect(res.body.data).toHaveLength(1050);
   });
 
   it('GET /api/precios: sin truncar, total coincide con la cantidad de filas devueltas', async () => {

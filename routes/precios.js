@@ -235,13 +235,13 @@ export function preciosRouter(db, cfg) {
       WHERE ${where}
       ORDER BY CASE a.estado WHEN 'bajo' THEN 0 WHEN 'alto' THEN 1 WHEN 'sin_precio' THEN 2 ELSE 3 END,
                a.deficit_pct DESC
-      LIMIT 1000
     `).all();
     // Sin `precio_sugerido`: esa fórmula cerrada ignoraba que la comisión de ML tiene parte
     // fija y que el envío se recotiza al precio nuevo, así que dejaba el neto corto. El precio
     // objetivo lo calcula `POST /objetivo` contra ML, a pedido y sobre lo seleccionado.
     const data = rows;
-    // total = COUNT real (no el LIMIT); truncado avisa cuando data.length quedó recortado.
+    // Los filtros de marca/categoría se aplican en el navegador: devolver sólo las primeras
+    // 1000 hacía que "Pirelli" mostrara 6 de 21 aunque las 21 estuvieran auditadas.
     res.json({ ok: true, total: totalReal, truncado: totalReal > data.length, data });
   });
 

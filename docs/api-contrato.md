@@ -1661,18 +1661,17 @@ queries usan `LIKE ? ESCAPE '\\'`. Antes de este fix, `q=%` o `q=_` actuaban com
 total (devolvían cualquier fila) en vez de buscarse como texto literal. Sin cambio de forma
 en la respuesta, solo de comportamiento de búsqueda.
 
-## GET /api/precios (contrato de `total`/`truncado` agregado)
+## GET /api/precios (universo completo para filtros locales)
 
-La query interna tiene `LIMIT 1000` (deliberado, se mantiene). Antes, `total` reportaba
-`data.length` (el tope del LIMIT) como si fuera el total real, ocultando publicaciones sin
-aviso ni paginación. Ahora:
+La respuesta trae todas las filas del estado solicitado. El límite histórico de 1.000 se retiró:
+marca, categoría, búsqueda y rangos se aplican en el navegador, por lo que truncar antes del
+filtro ocultaba resultados válidos (caso medido: Pirelli mostraba 6 de 21 publicaciones).
 
 ```
 { "ok": true, "total": <COUNT real, sin LIMIT>, "truncado": <bool>, "data": [...] }
 ```
 
-`truncado=true` cuando `total > data.length` (hay más filas de las que trajo esta
-respuesta). El frontend debe mostrar "mostrando N de M" cuando `truncado` sea `true`.
+`truncado` se conserva por compatibilidad y actualmente es `false`.
 
 ## GET /api/precios/estado y POST /api/precios/recalcular — proyección local
 
