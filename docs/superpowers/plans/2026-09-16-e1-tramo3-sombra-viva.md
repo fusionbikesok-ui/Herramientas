@@ -100,6 +100,25 @@
 - Soak 24 horas, revisión operativa y rollback ensayado.
 - Gate: T3 aceptado; E1 continúa en desarrollo y T4 sigue pendiente.
 
+## Decisiones de José para C9 y C10 (2026-09-16)
+
+- **C9:** corridas de latencia y PostgreSQL detenido en el VPS, de madrugada (01:00–05:00 ART, fuera de los
+  barridos de 04:00–04:30), en entorno aislado; nunca contra la app de producción. Los 500 webhooks salen de
+  recibos reales **anonimizados** (ids, usuarios y textos reemplazados), sin salir del VPS ni commitearse.
+  `E1-GW-02` desde Internet lo corre José con `scripts/qa/deny-interno.sh` y pega la salida.
+- **Puerto 3001:** firewall que sólo permita loopback y la red de Docker, con respaldo previo y verificación de
+  que la app siga respondiendo por Nginx.
+- **Revisión independiente** de C2–C8 antes de C9; se corrigen hallazgos hasta "aprobado".
+- **Autorizadas:** una sonda autenticada de sólo lectura a `/missed_feeds` (offset 0, limit 1 por tópico, sin
+  rotar el token si le quedan > 30 min, sin guardar cuerpos) y validar `ML_SITE_ID` con `GET /users/{ML_USER_ID}`
+  y cargarla en `.env` sin reiniciar.
+- **Cuota shadow ML:** medir 7 días y proponer el techo; hasta entonces `GATEWAY_ML_SHADOW_RPM=0`.
+- **C10:** reinicio de producción de madrugada con backup de `data/fusion.sqlite` y verificación de `/healthz`
+  y de los tres webhooks. Woo primero; ML cuando exista el techo medido; items al final. Cada ampliación
+  (relectura → copia 1/10/50/100 %) la aprueba José tras un intervalo de barrido con métricas. En el soak de
+  24 h monitorea la sesión: ante alerta crítica se aplica el aborto del SOP automáticamente y se avisa; nada
+  más se revierte sin José.
+
 ## Orden de commits
 
 Un commit por corte. C1–C8 pueden implementarse sin conexión real. C9 genera evidencia QA. C10 nunca
