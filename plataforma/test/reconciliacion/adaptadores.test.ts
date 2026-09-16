@@ -52,7 +52,12 @@ function fixtureBase(): FixtureCanales {
       })),
     },
     woo: {
-      orders: Array.from({ length: 150 }, (_, i) => ({ id: 300 + i, status: 'processing', date_modified_gmt: hace(1 + i / 100).slice(0, 19), billing: { email: `w${i}${PII}` } })),
+      orders: [
+        ...Array.from({ length: 150 }, (_, i) => ({ id: 300 + i, status: 'processing', date_modified_gmt: hace(1 + i / 100).slice(0, 19), billing: { email: `w${i}${PII}` } })),
+        // Cancelado y papelereado dentro de la ventana: `any` trae el primero y excluye el segundo.
+        { id: 450, status: 'cancelled', date_modified_gmt: hace(1).slice(0, 19), billing: { email: `cancel${PII}` } },
+        { id: 451, status: 'trash', date_modified_gmt: hace(1).slice(0, 19), billing: { email: `papelera${PII}` } },
+      ],
       products: [
         ...Array.from({ length: 120 }, (_, i) => ({ id: 10 + i, parent_id: 0, type: i === 0 ? 'variable' : 'simple', status: 'publish', date_modified_gmt: hace(20).slice(0, 19) })),
         { id: 900, parent_id: 10, type: 'variation', status: 'publish', date_modified_gmt: hace(20).slice(0, 19) },
@@ -285,16 +290,24 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect((await db.query<{ resource_id: string }>("select resource_id from integrations.resource_observations where lifecycle='deleted'")).rows).toEqual([{ resource_id: 'MLA100005' }]);
   });
 
-  it('E1-SWP-07 woo.orders: GMT explícito, ventana única y 100 por página', async () => {
+  it('E1-SWP-07 woo.orders: GMT explícito, ventana única, 100 por página y cierres capturados', async () => {
     const { corrida } = await barrer('woo.orders');
-    expect(await inbox('woo.orders')).toBe(150);
-    expect((await db.query<{ enumerated: number }>('select enumerated from integrations.sweep_runs where id=$1', [corrida.id])).rows[0]?.enumerated).toBe(150);
+    expect(await inbox('woo.orders')).toBe(152);
+    expect((await db.query<{ enumerated: number }>('select enumerated from integrations.sweep_runs where id=$1', [corrida.id])).rows[0]?.enumerated).toBe(152);
     const qs = (await llamadas()).map((l) => new URL(l.ruta, url).searchParams);
     expect(qs.every((q) => q.get('dates_are_gmt') === 'true' && q.get('per_page') === '100')).toBe(true);
     expect(qs.some((q) => q.get('page') === '2')).toBe(true);
-    // Woo no se parte en segmentos de 6 h: una sola ventana y dos páginas, no 120 consultas.
+    // Woo no se parte en segmentos de 6 h: una sola ventana, 2 páginas de `any` y 1 de `trash`.
     expect(new Set(qs.map((q) => q.get('modified_after'))).size).toBe(1);
-    expect(qs).toHaveLength(2);
+    expect(qs).toHaveLength(3);
+    expect(qs.filter((q) => q.get('status') === 'trash')).toHaveLength(1);
+    // Un cancelado y un papelereado se observan como cierre en la misma corrida, no como ausencia.
+    const cierres = await db.query<{ resource_id: string; lifecycle: string }>(
+      "select resource_id,lifecycle from integrations.resource_observations where topic='woo.orders' and resource_id in ('450','451') order by 1");
+    expect(cierres.rows).toEqual([
+      { resource_id: '450', lifecycle: 'closed' },
+      { resource_id: '451', lifecycle: 'closed' },
+    ]);
     const fila = await db.query<{ remote_version: string }>("select remote_version from integrations.resource_observations where topic='woo.orders' and resource_id='300'");
     expect(fila.rows[0]?.remote_version.endsWith('Z')).toBe(true);
   });
@@ -306,12 +319,15 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     await barrer('woo.orders', 'full_scan', { reloj: despues(1) });
     const bajas = await db.query<{ resource_id: string }>(
       "select resource_id from integrations.resource_observations where topic='woo.orders' and lifecycle='deleted'");
+    // Sólo el borrado definitivo: el pedido en la papelera sigue siendo un cierre, no una ausencia.
     expect(bajas.rows).toEqual([{ resource_id: '305' }]);
+    expect((await db.query<{ lifecycle: string }>("select lifecycle from integrations.resource_observations where topic='woo.orders' and resource_id='451'")).rows[0]?.lifecycle).toBe('closed');
     // Sólo presencia: la vuelta pide únicamente el id y no reescribe versiones ni encola contenido.
     const vuelta = (await llamadas()).filter((l) => l.ruta.includes('/orders?'));
     expect(vuelta.length).toBeGreaterThan(0);
     expect(vuelta.every((l) => new URL(l.ruta, url).searchParams.get('_fields') === 'id')).toBe(true);
-    expect(await inbox('woo.orders')).toBe(151);
+    // 152 observados por el incremental más el mensaje de baja del pedido borrado definitivamente.
+    expect(await inbox('woo.orders')).toBe(153);
   });
 
   it('E1-SWP-08 y E1-DEL-01 woo.products: incremental trae padres y variaciones; la vuelta de IDs declara la baja del padre', async () => {

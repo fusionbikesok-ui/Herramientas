@@ -171,18 +171,23 @@ export function crearSimulador({ db, fixture, cert, key, reloj = () => new Date(
   function woo(req, res, url, cuerpo) {
     const p = url.pathname.replace(/^\/wp-json\/wc\/v3/, '');
     const headersPaginado = (r) => ({ 'x-wp-total': String(r.total), 'x-wp-totalpages': String(r.paginas) });
+    // Semántica de `status` de Woo: por defecto `any`, y `any` NO incluye `trash` (el legado depende de
+    // esa exclusión: ver routes/sync.js y routes/woo.js). Un valor explícito, o una lista, filtra.
+    const porEstado = () => {
+      const pedidos = (url.searchParams.get('status') || 'any').split(',').map(s => s.trim()).filter(Boolean);
+      return (x) => (pedidos.includes('any') ? x.status !== 'trash' : pedidos.includes(x.status));
+    };
     let m;
     if (p === '/products' && req.method === 'GET') {
       // Mismos filtros que el controlador real: sin esto un barrido incremental recibiría todo el
       // catálogo en cada ventana y la prueba no distinguiría un adaptador que consulta de más.
       const despues = url.searchParams.get('modified_after');
       const antes = url.searchParams.get('modified_before');
-      const estado = url.searchParams.get('status');
       const lista = [...datos.productos.values()]
         .filter(x => !x.parent_id)
         .filter(x => (!despues || msGmt(x.date_modified_gmt) > Date.parse(despues))
           && (!antes || msGmt(x.date_modified_gmt) < Date.parse(antes)))
-        .filter(x => !estado || estado === 'any' || x.status === estado)
+        .filter(porEstado())
         .sort((a, b) => Number(a.id) - Number(b.id));
       const r = paginar(lista, url);
       res.writeHead(200, { 'content-type': 'application/json', ...headersPaginado(r) });
@@ -204,6 +209,7 @@ export function crearSimulador({ db, fixture, cert, key, reloj = () => new Date(
       const antes = url.searchParams.get('modified_before');
       const lista = datos.ordenesWoo
         .filter(o => (!despues || msGmt(o.date_modified_gmt) > Date.parse(despues)) && (!antes || msGmt(o.date_modified_gmt) < Date.parse(antes)))
+        .filter(porEstado())
         .sort((a, b) => msGmt(a.date_modified_gmt) - msGmt(b.date_modified_gmt) || Number(a.id) - Number(b.id));
       const r = paginar(lista, url);
       res.writeHead(200, { 'content-type': 'application/json', ...headersPaginado(r) });
