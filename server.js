@@ -64,7 +64,8 @@ import { inboxClaimsRouter } from './routes/inboxClaims.js';
 import { mobileInboxAccionesRouter } from './routes/mobileInboxAcciones.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { mobileHoyRouter } from './routes/mobileHoy.js';
-import { registrarWebhookMl, registrarWebhookWooProducto, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
+import { registrarWebhookMl, registrarWebhookWooProducto, registrarWebhookWooPedido, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
+import { marcarSombra, abandonarHuerfanas, permitirCuentaAjena } from './lib/sombra.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
 import { chatEventsRouter } from './routes/chatEvents.js';
 
@@ -125,6 +126,20 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       let order;
       try { order = JSON.parse(req.body.toString('utf8')); }
       catch { return res.status(400).json({ ok: false, error: 'payload inválido' }); }
+
+      // E1 T3 C2: recibo durable ANTES del ACK. Es el único cambio deliberado de código de respuesta
+      // del legado: este webhook no tenía recibo y un reinicio perdía el aviso sin rastro. Si SQLite
+      // falla devolvemos 503 y WC reintenta, que es exactamente lo que queremos de un aviso no
+      // registrado; un id inválido es 400 y no se reintenta. El ACK sigue sin esperar a la plataforma.
+      try {
+        registrarWebhookWooPedido(app._db, order, {
+          topic: req.headers['x-wc-webhook-topic'],
+          deliveryId: req.headers['x-wc-webhook-delivery-id'],
+        });
+      } catch (err) {
+        const status = err.code === 'woo_order_id_invalid' ? 400 : 503;
+        return res.status(status).json({ ok: false, error: err.message });
+      }
 
       // Responder antes de procesar — WC no espera más de 5s
       res.json({ ok: true });
@@ -341,8 +356,17 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     }
     const esOtraCuenta = String(user_id) !== String(mlUserId);
     if (esOtraCuenta) {
-      // Cuenta ajena: acepta el webhook (200, no reintentable), sin persistir nada.
-      // No aporta valor durable y un atacante podría saturar con user_id aleatorios.
+      // E1 T3 C2: se persiste el recibo como `excluded/foreign_account` para que el aviso deje traza,
+      // pero SÓLO si la defensa por IP lo permite (20/IP/hora, lib/sombra.js). Ese límite es la razón
+      // por la que antes no se persistía nada: sin él, user_id al azar infla la base. Pasado el techo
+      // se descarta sin escribir. El código de respuesta no cambia: siempre 200, no reintentable.
+      if (permitirCuentaAjena(req.ip)) {
+        try {
+          // `sinJob`: la traza no debe agendar trabajo sobre el recurso de otra cuenta.
+          const ajeno = registrarWebhookMl(app._db, req.body, { sinJob: true });
+          marcarSombra(app._db, ajeno.eventId, 'excluded', { razon: 'foreign_account', completedAt: new Date().toISOString() });
+        } catch { /* fail-open: la traza no vale romper el ACK de ML */ }
+      }
       return res.status(200).json({ ok: true, ignored: true });
     }
 
@@ -515,6 +539,13 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   });
 
   app._db = db;
+  // E1 T3 C2: toda sombra activa de un proceso anterior quedó huérfana — su intento murió con él.
+  // Se cierra con razón explícita en vez de quedar `attempting` para siempre. Fail-open: esto es
+  // higiene de la copia, no puede impedir que la app arranque.
+  try {
+    const huerfanas = abandonarHuerfanas(db);
+    if (huerfanas) console.log(`[sombra] ${huerfanas} copia(s) huérfana(s) de un proceso anterior abandonadas`);
+  } catch (e) { console.error('[sombra] no se pudo limpiar huérfanas:', e.message); }
   app._syncCfg = syncCfg;
   return app;
 }

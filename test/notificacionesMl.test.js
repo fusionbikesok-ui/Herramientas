@@ -491,11 +491,15 @@ describe('Webhook HTTP: topic post_purchase con acción claims', () => {
       topic: 'post_purchase', actions: ['claims'], user_id: 'otro',
       resource: '/post-purchase/v1/claims/ignored',
     });
-    // Cuenta ajena: responder 200 (no reintentable), ignored:true, y NO persistir nada
-    // (riesgo de saturación del sqlite si se guardara cada user_id ajeno recibido).
+    // Cuenta ajena: responder 200 (no reintentable) e ignored:true, como siempre. Lo que cambió
+    // (E1 T3 C2) es que ahora deja traza: una fila `excluded/foreign_account`, acotada por la defensa
+    // por IP de lib/sombra.js. Lo que NO cambia, y es la garantía que importa: cero jobs. La traza no
+    // agenda trabajo sobre el recurso de una cuenta que el emisor elige a voluntad.
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ ok: true, ignored: true });
-    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(1);
+    expect(app._db.prepare('SELECT shadow_status,shadow_reason,status FROM integration_events').get())
+      .toMatchObject({ shadow_status: 'excluded', shadow_reason: 'foreign_account', status: 'completed' });
     expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
     expect(mlFetch).not.toHaveBeenCalled();
   });

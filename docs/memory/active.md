@@ -569,9 +569,16 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   durable que salió de esa revisión:
   - El recibo de sombra **no es una tabla nueva**: ML y Woo products ya persisten antes del ACK en
     `integration_events` (`lib/workerIntegrationJobs.js:94` y `:137`) con tópico, recurso, fingerprint,
-    delivery id, tiempos y dedupe. T3 agrega sólo el ciclo de vida como columnas. Woo orders es el
-    único canal sin recibo (`server.js:130` responde antes de persistir) y es el único cambio de código
-    de respuesta del legado que introduce T3.
+    delivery id, tiempos y dedupe. T3 agrega sólo el ciclo de vida como columnas. **Cerrado en C2:**
+    `registrarWebhookWooPedido` le da recibo a Woo orders antes del ACK y es el único cambio de código
+    de respuesta del legado (400 con id inválido, 503 si falla SQLite; antes siempre 200).
+  - Los recibos sin job nacen `status='completed'`, no `'pending'`: pedidos Woo (el trabajo del legado es
+    fail-open en background) y la traza de cuenta ajena. `'pending'` significa "hay trabajo durable
+    encolado"; sin job quedaría activo para siempre y la purga de 400 días nunca lo alcanzaría.
+  - `crearColaSombra` expone `detener()`: deja de aceptar, abandona lo no intentado como
+    `abandoned/process_stopped` y espera lo en vuelo. Además `marcarSombra` no escribe si `db.open` es
+    false. Sin las dos cosas, un intento posterior al ACK sobrevive al cierre de la base y rompe con
+    `database connection is not open` dentro de una promesa suelta.
   - Nginx tiene **dos** caminos al mismo Express: `location /` y `location /herramientas/`, y el segundo
     proxea con barra final, así que quita el prefijo. Cualquier deny de rutas internas tiene que cubrir
     las dos formas; verificado en `/etc/nginx/sites-available/herramientas`.
@@ -583,8 +590,11 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   - Config ML real: `ML_CLIENT_ID`, `ML_CLIENT_SECRET` y `ML_USER_ID` (`server.js:525`). No existe
     `ML_APP_ID` —en ML el app id es el client id— ni `ML_SITE_ID`, que hay que agregar para
     `missed_feeds` de items.
-  - El aviso de cuenta ajena hoy responde 200 **sin persistir** a propósito (`server.js:342`): persistirlo
-    exige límite por IP/ventana, y sin esa defensa el corte C2 no pasa.
+  - El aviso de cuenta ajena persiste traza desde C2: sigue respondiendo 200/`ignored:true`, y deja una
+    fila `excluded/foreign_account` sólo si `permitirCuentaAjena` lo admite (20/IP/hora). Se llama con
+    `registrarWebhookMl(db, envelope, { sinJob: true })`: **cero jobs**. Encolar trabajo sobre el recurso
+    de una cuenta que el emisor elige a voluntad sería trabajar para un tercero — el `sinJob` existe por
+    eso, no por prolijidad.
   - `woo_webhooks_estado` ya registra `topic`, `status`, `delivery_url`, `propio`, `visto_en` y
     `status_desde` de las entregas propias: la alerta de webhook caído lee esa tabla.
   - `integration_events` crece ~1.400 filas/día y **hoy no tiene purga**. La purga de 400 días de T3 es

@@ -42,6 +42,34 @@ describe('handlers reales de webhooks en server.js', () => {
     expect(puntualWeb).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ woo: {} }), 901);
   });
 
+  it('E1-RCP-01 el pedido Woo deja recibo antes del ACK, sin job y deduplicado por entrega', async () => {
+    const app = nuevaApp();
+    const envio = (id) => request(app).post('/api/woo/webhook/order')
+      .set('x-wc-webhook-topic', 'order.updated')
+      .set('x-wc-webhook-delivery-id', `entrega-${id}`)
+      .send({ id, status: 'processing', date_modified_gmt: '2026-09-16T10:00:00' });
+
+    expect((await envio(902)).status).toBe(200);
+    const fila = app._db.prepare("SELECT status,shadow_status,resource_id,channel FROM integration_events").get();
+    // El recibo nace con la sombra pendiente y el trabajo legacy cerrado: en pedidos Woo no hay job,
+    // el trabajo del legado es fail-open en background. Un 'pending' acá mentiría.
+    expect(fila).toMatchObject({ status: 'completed', shadow_status: 'pending', resource_id: '/orders/902', channel: 'woo' });
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
+
+    // Reentrega de WC: mismo delivery id, un solo recibo.
+    expect((await envio(902)).status).toBe(200);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(1);
+  });
+
+  it('E1-RCP-01 un pedido Woo sin id válido es 400 y no se reintenta', async () => {
+    const app = nuevaApp();
+    const res = await request(app).post('/api/woo/webhook/order').send({ status: 'processing' });
+    expect(res.status).toBe(400);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    // Un aviso que no se puede identificar no dispara trabajo de fondo.
+    expect(puntualWeb).not.toHaveBeenCalled();
+  });
+
   it.each(['orders', 'orders_v2'])('ML %s dispara el camino puntual', async topic => {
     process.env.ML_USER_ID = '123';
     const res = await request(nuevaApp()).post('/api/ml/notificacion')
