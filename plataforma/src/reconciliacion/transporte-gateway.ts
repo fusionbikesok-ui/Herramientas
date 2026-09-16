@@ -73,6 +73,11 @@ export function rutaAOperacion(ruta: string, headers: Readonly<Record<string, st
     vendedor(v.seller_id!);
     return { op: 'ml.questions.search', params: { offset: entero(v.offset!) } };
   }
+  if ((m = p.match(/^\/orders\/(\d{1,20})$/))) { exacto(q, {}, []); return { op: 'ml.order', params: { id: m[1]! } }; }
+  if ((m = p.match(/^\/wp-json\/wc\/v3\/(orders|products)\/(\d{1,20})$/))) {
+    exacto(q, {}, []);
+    return { op: m[1] === 'orders' ? 'woo.order' : 'woo.product', params: { id: m[2]! } };
+  }
   if ((m = p.match(/^\/questions\/(\d{1,20})$/))) { exacto(q, {}, []); return { op: 'ml.question', params: { id: m[1]! } }; }
   if (p === '/post-purchase/v1/claims/search') {
     const v = exacto(q, { status: 'opened', 'players.role': 'respondent', limit: '50' }, ['players.user_id', 'offset']);

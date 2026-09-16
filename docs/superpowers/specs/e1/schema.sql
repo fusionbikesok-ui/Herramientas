@@ -222,7 +222,7 @@ CREATE TABLE integrations.inbox_messages (
                        'woo.orders', 'woo.products')),
   resource_id        text NOT NULL CHECK (length(resource_id) > 0),
   remote_version     text NOT NULL,          -- last_updated / date_modified_gmt remoto o hash del recurso
-  source             text NOT NULL CHECK (source IN ('webhook_copy', 'sweep')),
+  source             text NOT NULL CHECK (source IN ('webhook_copy', 'sweep', 'signal_reread')),
   status             text NOT NULL DEFAULT 'pending'
                        CHECK (status IN ('pending', 'claimed', 'succeeded', 'retryable', 'uncertain', 'dead_lettered', 'parked')),
   received_at        timestamptz NOT NULL DEFAULT now(),

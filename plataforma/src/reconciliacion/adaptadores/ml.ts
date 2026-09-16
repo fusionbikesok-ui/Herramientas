@@ -41,7 +41,8 @@ async function conocidasPendientes(db: Consultable, ctx: ContextoListado, despue
   return r.rows.map((f) => f.resource_id);
 }
 
-function ordenMl(crudo: unknown): RecursoRemoto {
+/** Normalizadores compartidos por el barrido y la relectura puntual (C6): misma versión y proyección. */
+export function ordenMl(crudo: unknown): RecursoRemoto {
   const o = exigirRegistro(crudo, 'orden ML');
   const id = idTexto(o.id);
   const version = fechaUtc(o.date_last_updated);
@@ -104,6 +105,16 @@ export function adaptadorOrdenesMl(dep: DependenciasMl): AdaptadorBarrido {
 
 const ENVIO_CERRADO = ['delivered', 'cancelled', 'not_delivered'];
 
+export function envioMl(crudo: unknown): RecursoRemoto {
+  const s = exigirRegistro(crudo, 'envío ML');
+  const id = idTexto(s.id);
+  const version = fechaUtc(s.last_updated);
+  return {
+    id, version, updatedAt: version || null, lifecycle: cicloPorEstado(s.status, ENVIO_CERRADO), payload: s,
+    projection: { id, status: valorOnull(s.status), substatus: valorOnull(s.substatus), last_updated: version },
+  };
+}
+
 export function adaptadorEnviosMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
     topic: 'ml.shipments', cursorKind: 'state_sweep', fullScan: false, versionKind: 'temporal',
@@ -125,13 +136,7 @@ export function adaptadorEnviosMl(dep: DependenciasMl): AdaptadorBarrido {
       const resources: RecursoRemoto[] = [];
       for (const r of leidos) {
         if (r.status === 404) continue;
-        const s = exigirRegistro(r.body, 'envío ML');
-        const id = idTexto(s.id);
-        const version = fechaUtc(s.last_updated);
-        resources.push({
-          id, version, updatedAt: version || null, lifecycle: cicloPorEstado(s.status, ENVIO_CERRADO), payload: s,
-          projection: { id, status: valorOnull(s.status), substatus: valorOnull(s.substatus), last_updated: version },
-        });
+        resources.push(envioMl(r.body));
       }
       return {
         resources,
@@ -141,6 +146,39 @@ export function adaptadorEnviosMl(dep: DependenciasMl): AdaptadorBarrido {
     },
   };
 }
+
+type Normalizador = (crudo: Registro) => { id: string; lifecycle: RecursoRemoto['lifecycle']; projection: Record<string, unknown> };
+
+function recursoPorHash(crudo: unknown, que: string, normalizar: Normalizador): RecursoRemoto {
+  const n = normalizar(exigirRegistro(crudo, que));
+  return { id: n.id, version: versionHash(n.projection), updatedAt: null, lifecycle: n.lifecycle, payload: crudo, projection: n.projection };
+}
+
+/** Un conocido de preguntas o reclamos que ya no existe: el contrato de esos tópicos sí admite la baja por 404. */
+export function recursoNoEncontrado(id: string): RecursoRemoto {
+  const projection = { id, status: 'NOT_FOUND' };
+  return { id, version: versionHash(projection), updatedAt: null, lifecycle: 'deleted', payload: projection, projection };
+}
+
+const normalizarPregunta: Normalizador = (q) => ({
+  id: idTexto(q.id),
+  lifecycle: q.status === 'UNANSWERED' && q.deleted_from_listing !== true ? 'open' : 'closed',
+  projection: {
+    id: idTexto(q.id), status: valorOnull(q.status), date_created: valorOnull(q.date_created),
+    answer_status: esRegistro(q.answer) ? valorOnull(q.answer.status) : null,
+  },
+});
+
+const normalizarReclamo: Normalizador = (c) => ({
+  id: idTexto(c.id),
+  lifecycle: c.status === 'opened' ? 'open' : 'closed',
+  projection: {
+    id: idTexto(c.id), status: valorOnull(c.status), last_updated: valorOnull(c.last_updated), stage: valorOnull(c.stage),
+  },
+});
+
+export const preguntaMl = (crudo: unknown): RecursoRemoto => recursoPorHash(crudo, 'ml.questions', normalizarPregunta);
+export const reclamoMl = (crudo: unknown): RecursoRemoto => recursoPorHash(crudo, 'ml.claims', normalizarReclamo);
 
 /**
  * Estrategia común de preguntas y reclamos: primero el conjunto abierto enumerable completo; después,
@@ -152,12 +190,9 @@ function adaptadorAbiertasYConocidas(dep: DependenciasMl, config: {
   listaDe: (body: Registro) => unknown;
   totalDe: (body: Registro) => unknown;
   individual: (id: string) => string;
-  normalizar: (crudo: Registro) => { id: string; lifecycle: RecursoRemoto['lifecycle']; projection: Record<string, unknown> };
+  normalizar: Normalizador;
 }): AdaptadorBarrido {
-  const recurso = (crudo: unknown): RecursoRemoto => {
-    const n = config.normalizar(exigirRegistro(crudo, config.topic));
-    return { id: n.id, version: versionHash(n.projection), updatedAt: null, lifecycle: n.lifecycle, payload: crudo, projection: n.projection };
-  };
+  const recurso = (crudo: unknown): RecursoRemoto => recursoPorHash(crudo, config.topic, config.normalizar);
   return {
     topic: config.topic, cursorKind: 'state_sweep', fullScan: false, versionKind: 'hash',
     async listar(ctx, posicion): Promise<PaginaRemota> {
@@ -180,9 +215,7 @@ function adaptadorAbiertasYConocidas(dep: DependenciasMl, config: {
       const leidos = await Promise.all(ids.map((id) => dep.transporte.get(config.individual(id))));
       const resources = leidos.map((r, i): RecursoRemoto => {
         if (r.status !== 404) return recurso(r.body);
-        const id = ids[i]!;
-        const projection = { id, status: 'NOT_FOUND' };
-        return { id, version: versionHash(projection), updatedAt: null, lifecycle: 'deleted', payload: projection, projection };
+        return recursoNoEncontrado(ids[i]!);
       });
       return {
         resources,
@@ -202,14 +235,7 @@ export function adaptadorPreguntasMl(dep: DependenciasMl): AdaptadorBarrido {
     listaDe: (b) => b.questions,
     totalDe: (b) => b.total,
     individual: (id) => `/questions/${encodeURIComponent(id)}`,
-    normalizar: (q) => ({
-      id: idTexto(q.id),
-      lifecycle: q.status === 'UNANSWERED' && q.deleted_from_listing !== true ? 'open' : 'closed',
-      projection: {
-        id: idTexto(q.id), status: valorOnull(q.status), date_created: valorOnull(q.date_created),
-        answer_status: esRegistro(q.answer) ? valorOnull(q.answer.status) : null,
-      },
-    }),
+    normalizar: normalizarPregunta,
   });
 }
 
@@ -223,13 +249,7 @@ export function adaptadorReclamosMl(dep: DependenciasMl): AdaptadorBarrido {
     listaDe: (b) => b.data ?? b.results,
     totalDe: (b) => (esRegistro(b.paging) ? b.paging.total : undefined),
     individual: (id) => `/post-purchase/v1/claims/${encodeURIComponent(id)}`,
-    normalizar: (c) => ({
-      id: idTexto(c.id),
-      lifecycle: c.status === 'opened' ? 'open' : 'closed',
-      projection: {
-        id: idTexto(c.id), status: valorOnull(c.status), last_updated: valorOnull(c.last_updated), stage: valorOnull(c.stage),
-      },
-    }),
+    normalizar: normalizarReclamo,
   });
 }
 
@@ -291,6 +311,20 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
 
 const LOTE_MULTIGET = 20;
 
+export function itemMl(crudo: unknown): RecursoRemoto {
+  const it = exigirRegistro(crudo, 'item ML');
+  const id = idTexto(it.id);
+  const version = fechaUtc(it.last_updated);
+  const variaciones = Array.isArray(it.variations) ? it.variations.filter(esRegistro) : [];
+  return {
+    id, version, updatedAt: version || null, lifecycle: cicloPorEstado(it.status, ['closed']), payload: it,
+    projection: {
+      id, status: valorOnull(it.status), sub_status: valorOnull(it.sub_status), last_updated: version,
+      variations: variaciones.map((v) => ({ id: idTexto(v.id), available_quantity: valorOnull(v.available_quantity) })),
+    },
+  };
+}
+
 export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
     // Items no tiene filtro por modificación: su única corriente es la vuelta completa diaria.
@@ -313,17 +347,7 @@ export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
           // Publicación eliminada entre el scan y el multiget: no se observa y la vuelta completa la da de baja.
           if (e.code === 404) continue;
           if (e.code !== 200) throw new ErrorCanalTerminal(`MULTIGET_${idTexto(e.code)} /items`);
-          const it = exigirRegistro(e.body, 'item ML');
-          const id = idTexto(it.id);
-          const version = fechaUtc(it.last_updated);
-          const variaciones = Array.isArray(it.variations) ? it.variations.filter(esRegistro) : [];
-          resources.push({
-            id, version, updatedAt: version || null, lifecycle: cicloPorEstado(it.status, ['closed']), payload: it,
-            projection: {
-              id, status: valorOnull(it.status), sub_status: valorOnull(it.sub_status), last_updated: version,
-              variations: variaciones.map((v) => ({ id: idTexto(v.id), available_quantity: valorOnull(v.available_quantity) })),
-            },
-          });
+          resources.push(itemMl(e.body));
         }
       }
       const siguiente = typeof body.scroll_id === 'string' && body.scroll_id && ids.length > 0 ? body.scroll_id : null;

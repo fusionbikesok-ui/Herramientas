@@ -266,6 +266,21 @@ Las señales se reclaman con lease y se coalescen.
   `mark_as_read=false`, coalescido por cuenta.
 - Tópicos fuera de E1 quedan `excluded` sólo en SQLite con razón y conteo; no amplían E1.
 
+Precisiones fijadas al implementar C6 (2026-09-16):
+
+- `resource_id` de una señal es el **id remoto pelado** (`5000`, `MLA123`), no la ruta del aviso; un id
+  fuera del formato del tópico deja la señal `excluded/invalid_resource` sin tocar la red.
+- Baja por 404 en relectura sólo en `ml.questions` y `ml.claims` (igual que el barrido de conocidos).
+  Órdenes, envíos, ítems y pedidos/productos Woo cierran la señal `succeeded` con
+  `not_found:sin_baja`: las bajas las declaran sus vueltas completas.
+- El inbox marca el origen `signal_reread` (migración 0007). Una relectura **nunca** toca
+  `last_seen_run_id` (ni de observación ni de relación): ponerlo en NULL durante una vuelta completa
+  haría que `declararBajas` tomara como ausente un recurso existente.
+- El resultado se persiste en la misma transacción que cierra la señal y sólo con el lease vigente.
+- El gateway suma `ml.order`, `woo.order` y `woo.product` (lecturas individuales).
+- 429/5xx → `retryable` con `Retry-After` o backoff 10 s·2ⁿ⁻¹ (máx. 15 min); terminal o intentos
+  agotados → `dead_lettered`.
+
 ## 10. `missed_feeds` y ML bulk
 
 Cada 30 minutos se enumera desde offset cero el universo de hasta dos días. No se usa cursor para

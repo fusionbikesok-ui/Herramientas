@@ -35,6 +35,16 @@ function siguienteFase(fase: string, page: number, totalPaginas: number): Record
   return proxima ? { fase: proxima, page: 1 } : null;
 }
 
+export function pedidoWoo(crudo: unknown): RecursoRemoto {
+  const o = exigirRegistro(crudo, 'pedido Woo');
+  const id = idTexto(o.id);
+  const version = fechaUtc(o.date_modified_gmt);
+  return {
+    id, version, updatedAt: version || null, lifecycle: cicloPorEstado(o.status, PEDIDO_CERRADO), payload: o,
+    projection: { id, status: valorOnull(o.status), date_modified_gmt: version },
+  };
+}
+
 export function adaptadorPedidosWoo(dep: DependenciasWoo): AdaptadorBarrido {
   return {
     topic: 'woo.orders', cursorKind: 'state_sweep', fullScan: false, versionKind: 'temporal',
@@ -50,15 +60,7 @@ export function adaptadorPedidosWoo(dep: DependenciasWoo): AdaptadorBarrido {
       });
       const r = await dep.transporte.get(`${BASE}/orders?${q}`);
       const totalPaginas = paginasTotales(r, '/orders');
-      const resources = exigirLista(r.body, '/orders').map((crudo): RecursoRemoto => {
-        const o = exigirRegistro(crudo, 'pedido Woo');
-        const id = idTexto(o.id);
-        const version = fechaUtc(o.date_modified_gmt);
-        return {
-          id, version, updatedAt: version || null, lifecycle: cicloPorEstado(o.status, PEDIDO_CERRADO), payload: o,
-          projection: { id, status: valorOnull(o.status), date_modified_gmt: version },
-        };
-      });
+      const resources = exigirLista(r.body, '/orders').map(pedidoWoo);
       return {
         resources,
         nextPosition: siguienteFase(fase, page, totalPaginas),
@@ -68,7 +70,8 @@ export function adaptadorPedidosWoo(dep: DependenciasWoo): AdaptadorBarrido {
   };
 }
 
-function productoWoo(crudo: unknown): RecursoRemoto {
+/** Normalizadores compartidos por el barrido y la relectura puntual (C6). */
+export function productoWoo(crudo: unknown): RecursoRemoto {
   const p = exigirRegistro(crudo, 'producto Woo');
   const id = idTexto(p.id);
   const version = fechaUtc(p.date_modified_gmt);

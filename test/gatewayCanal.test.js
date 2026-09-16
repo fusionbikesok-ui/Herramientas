@@ -45,6 +45,7 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
   it('ninguna plantilla produce una ruta con host, esquema o salto de directorio', () => {
     const ejemplos = {
       'ml.orders.search': { from: '2026-09-16T00:00:00Z', to: '2026-09-16T06:00:00Z', offset: 50 },
+      'ml.order': { id: '1' }, 'woo.order': { id: '1' }, 'woo.product': { id: '1' },
       'ml.shipment': { id: '1' }, 'ml.questions.search': { offset: 0 }, 'ml.question': { id: '1' },
       'ml.claims.search': { offset: 0 }, 'ml.claim': { id: '1' }, 'ml.messages.unread': {}, 'ml.messages.pack': { pack: '1' },
       'ml.items.scan': { scroll_id: 'abc' }, 'ml.items.multiget': { ids: ['MLA1'] },

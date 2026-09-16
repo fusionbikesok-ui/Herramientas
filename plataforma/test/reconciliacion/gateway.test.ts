@@ -112,9 +112,10 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
     for (const [ruta, headers] of [
       ['/shipments/9000', { 'x-format-new': 'true' }], ['/questions/1', {}], ['/post-purchase/v1/claims/31', {}],
       [`/messages/packs/8001/sellers/${SELLER}?tag=post_sale&mark_as_read=false`, {}],
+      ['/orders/5000', {}], ['/wp-json/wc/v3/orders/300', {}], ['/wp-json/wc/v3/products/10', {}],
     ] as const) await transporte.get(ruta, { headers });
     expect(new Set(traducidas)).toEqual(new Set([
-      'ml.orders.search', 'ml.shipment', 'ml.questions.search', 'ml.question', 'ml.claims.search', 'ml.claim',
+      'ml.orders.search', 'ml.order', 'woo.order', 'woo.product', 'ml.shipment', 'ml.questions.search', 'ml.question', 'ml.claims.search', 'ml.claim',
       'ml.messages.unread', 'ml.messages.pack', 'ml.items.scan', 'ml.items.multiget',
       'woo.orders.list', 'woo.products.list', 'woo.variations.list', 'woo.presence.list',
     ]));
@@ -125,7 +126,7 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
     let llamadas = 0;
     const t = crearTransporteGateway({ url: 'http://127.0.0.1:3001', keyring, sellerId: SELLER, fetch: async () => { llamadas++; return new Response('{}'); } });
     const casos: Array<[string, Record<string, string>?]> = [
-      ['https://api.mercadolibre.com/users/me'], ['//evil.example/orders'], ['/users/me'], ['/orders/5000'],
+      ['https://api.mercadolibre.com/users/me'], ['//evil.example/orders'], ['/users/me'], ['/orders/5000/billing_info'], ['/orders/5000?attributes=buyer'], ['/wp-json/wc/v3/orders/1/notes'],
       ['/shipments/1'], ['/shipments/1', { 'x-format-new': 'true', authorization: 'Bearer x' }],
       ['/questions/1', { 'x-format-new': 'true' }],
       [`/orders/search?seller=999&order.date_last_updated.from=${hace(1)}&order.date_last_updated.to=${hace(0)}&sort=date_asc&limit=50&offset=0`],

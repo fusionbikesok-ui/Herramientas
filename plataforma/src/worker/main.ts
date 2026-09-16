@@ -12,6 +12,8 @@ import { cargarRegistro, validarRegistroContraBase } from '../reconciliacion/reg
 import { crearTransporteGateway } from '../reconciliacion/transporte-gateway.ts';
 import { claveCorrienteCuenta } from '../reconciliacion/tipos.ts';
 import { crearWorkerBarridos, type ProcesadorBarrido } from './barridos.ts';
+import { crearRelectoresMl, crearRelectoresWoo, type Relector } from '../reconciliacion/relectura.ts';
+import { claveRelector, crearWorkerSenales } from './senales.ts';
 
 const config = cargarConfig(process.env);
 const logger = crearLogger(config.servicio);
@@ -20,8 +22,11 @@ const detenerLatidos = iniciarLatidos(pool, 'worker', config.instancia, config.v
 
 // Sin configuración de barridos el worker no registra procesadores y por lo tanto no reclama corridas.
 let procesadores: Record<string, ProcesadorBarrido> = {};
+const relectores: Record<string, Relector> = {};
+let keyringSobres: ReturnType<typeof cargarKeyring> | null = null;
 if (config.barridos) {
   const keyring = cargarKeyring(config.barridos.keyringFile);
+  keyringSobres = keyring;
   const cuentas = cargarRegistro(config.barridos.registroFile);
   // Un registro que no coincide con la base frena el arranque: es preferible un worker caído y visible
   // en /health a observaciones de un canal escritas bajo la cuenta de otro.
@@ -38,6 +43,9 @@ if (config.barridos) {
     const adaptadores = cuenta.channel === 'mercadolibre'
       ? crearAdaptadoresMl({ transporte, db: pool, sellerId: cuenta.seller_id })
       : crearAdaptadoresWoo({ transporte });
+    // Relectura puntual por señal (C6) con el mismo transporte de la cuenta.
+    const propios = cuenta.channel === 'mercadolibre' ? crearRelectoresMl({ transporte }) : crearRelectoresWoo({ transporte });
+    for (const relector of Object.values(propios)) relectores[claveRelector(cuenta.id, relector.topic)] = relector;
     for (const adaptador of Object.values(adaptadores)) {
       const motor = crearProcesadorMotor({ db: pool, adaptador, keyring });
       const clave = claveCorrienteCuenta(cuenta.id, adaptador.topic, adaptador.cursorKind);
@@ -54,12 +62,21 @@ if (config.barridos) {
 }
 
 const barridos = crearWorkerBarridos({ db: pool, workerId: config.instancia, procesadores });
-const vuelta = setInterval(() => { void barridos.unaVuelta().catch((error) => {
-  logger.error({ err: (error as Error).message }, 'vuelta de barridos falló');
-}); }, 1_000);
+const senales = keyringSobres ? crearWorkerSenales({ db: pool, workerId: config.instancia, keyring: keyringSobres, relectores }) : null;
+let enVuelta = false;
+const vuelta = setInterval(() => {
+  // Una vuelta a la vez: señales después de barridos, para no competir por el mismo presupuesto remoto.
+  if (enVuelta) return;
+  enVuelta = true;
+  void (async () => {
+    await barridos.unaVuelta().catch((error) => { logger.error({ err: (error as Error).message }, 'vuelta de barridos falló'); });
+    await senales?.unaVuelta().catch((error) => { logger.error({ err: (error as Error).message }, 'vuelta de señales falló'); });
+  })().finally(() => { enVuelta = false; });
+}, 1_000);
 alApagar(logger, async () => {
   clearInterval(vuelta);
   detenerLatidos();
+  senales?.detener();
   await barridos.detener();
   await pool.end();
 });

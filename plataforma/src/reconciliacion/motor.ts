@@ -14,7 +14,7 @@ const RENOVAR_LEASE_MS = 25_000;
 
 interface ObservacionActual { remote_version: string; remote_hash: Buffer; lifecycle: string }
 
-function validarRecurso(r: RecursoRemoto, tipo: TipoVersion): void {
+export function validarRecurso(r: RecursoRemoto, tipo: TipoVersion): void {
   if (!r.id?.trim() || !r.version?.trim()) throw new ErrorPaginaInvalida('recurso remoto sin identidad o versión');
   if (r.version.startsWith(PREFIJO_BAJA)) throw new ErrorPaginaInvalida(`versión reservada para ${r.id}`);
   if (tipo === 'temporal' && !Number.isFinite(Date.parse(r.version))) {
@@ -42,8 +42,26 @@ function compararVersion(tipo: TipoVersion, nueva: string, previa: ObservacionAc
   return Math.sign(Date.parse(nueva) - Date.parse(previa.remote_version));
 }
 
+/**
+ * Origen de una escritura de resultado remoto. Un barrido lleva su corrida; una relectura puntual por
+ * señal (C6) no tiene corrida y nunca toca `last_seen_run_id`: si lo pusiera en NULL mientras corre una
+ * vuelta completa, `declararBajas` tomaría como ausente un recurso que existe.
+ */
+export interface ContextoEscritura {
+  channelAccountId: string;
+  topic: string;
+  correlationId: string;
+  runId: string | null;
+  source: 'sweep' | 'signal_reread';
+}
+
+const contextoDe = (corrida: CorridaReclamada): ContextoEscritura => ({
+  channelAccountId: corrida.channelAccountId, topic: corrida.topic, correlationId: corrida.correlationId,
+  runId: corrida.id, source: 'sweep',
+});
+
 async function encolar(
-  tx: pg.PoolClient, corrida: CorridaReclamada, resourceId: string, version: string,
+  tx: pg.PoolClient, corrida: ContextoEscritura, resourceId: string, version: string,
   payload: unknown, keyring: KeyringSobre,
 ): Promise<boolean> {
   const sobre = cifrarSobre(Buffer.from(jsonCanonico(payload), 'utf8'), {
@@ -53,16 +71,17 @@ async function encolar(
     `INSERT INTO integrations.inbox_messages
       (channel_account_id,topic,resource_id,remote_version,source,correlation_id,payload_hash,
        payload_ciphertext,payload_key_id,payload_nonce,payload_tag)
-     VALUES ($1,$2,$3,$4,'sweep',$5,$6,$7,$8,$9,$10)
+     VALUES ($1,$2,$3,$4,$11,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (channel_account_id,topic,resource_id,remote_version) DO NOTHING`,
     [corrida.channelAccountId, corrida.topic, resourceId, version, corrida.correlationId,
-      hashCanonico(payload), sobre.ciphertext, sobre.keyId, sobre.nonce, sobre.tag],
+      hashCanonico(payload), sobre.ciphertext, sobre.keyId, sobre.nonce, sobre.tag, corrida.source],
   );
   return r.rowCount === 1;
 }
 
-async function persistirRecurso(
-  tx: pg.PoolClient, corrida: CorridaReclamada, tipo: TipoVersion,
+/** Persiste un recurso remoto ya validado: relaciones, observación y, si es más nuevo, inbox cifrado. */
+export async function persistirRecurso(
+  tx: pg.PoolClient, corrida: ContextoEscritura, tipo: TipoVersion,
   recurso: RecursoRemoto, keyring: KeyringSobre,
 ): Promise<'enqueued' | 'duplicate' | 'stale'> {
   const actual = await tx.query<ObservacionActual>(
@@ -85,19 +104,20 @@ async function persistirRecurso(
        ON CONFLICT (channel_account_id,topic,resource_id) DO UPDATE SET
          remote_version=excluded.remote_version,remote_updated_at=excluded.remote_updated_at,
          remote_hash=excluded.remote_hash,projection_hash=excluded.projection_hash,
-         lifecycle=excluded.lifecycle,last_seen_run_id=excluded.last_seen_run_id,
+         lifecycle=excluded.lifecycle,
+         last_seen_run_id=coalesce(excluded.last_seen_run_id,integrations.resource_observations.last_seen_run_id),
          last_seen_at=now(),last_enqueued_version=excluded.last_enqueued_version`,
       [corrida.channelAccountId, corrida.topic, recurso.id, recurso.version, recurso.updatedAt ?? null,
-        remoteHash, hashCanonico(recurso.projection), recurso.lifecycle, corrida.id],
+        remoteHash, hashCanonico(recurso.projection), recurso.lifecycle, corrida.runId],
     );
     return encolado ? 'enqueued' : 'duplicate';
   }
 
   // Igual o atrasada: sólo cuenta como avistamiento; una señal vieja nunca cambia el estado observado.
   await tx.query(
-    `UPDATE integrations.resource_observations SET last_seen_run_id=$4,last_seen_at=now()
+    `UPDATE integrations.resource_observations SET last_seen_run_id=coalesce($4,last_seen_run_id),last_seen_at=now()
       WHERE channel_account_id=$1 AND topic=$2 AND resource_id=$3`,
-    [corrida.channelAccountId, corrida.topic, recurso.id, corrida.id],
+    [corrida.channelAccountId, corrida.topic, recurso.id, corrida.runId],
   );
   return comparacion < 0 ? 'stale' : 'duplicate';
 }
@@ -118,16 +138,18 @@ async function marcarPresencia(
   );
 }
 
-async function persistirRelaciones(tx: Consultable, corrida: CorridaReclamada, recurso: RecursoRemoto): Promise<void> {
+async function persistirRelaciones(tx: Consultable, corrida: ContextoEscritura, recurso: RecursoRemoto): Promise<void> {
   for (const relacion of recurso.relations ?? []) {
     await tx.query(
       `INSERT INTO integrations.resource_relations
         (channel_account_id,relation_type,source_topic,source_id,target_topic,target_id,last_seen_run_id,lifecycle)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (channel_account_id,relation_type,source_topic,source_id,target_topic,target_id)
-       DO UPDATE SET last_seen_at=now(),last_seen_run_id=excluded.last_seen_run_id,lifecycle=excluded.lifecycle`,
+       DO UPDATE SET last_seen_at=now(),
+         last_seen_run_id=coalesce(excluded.last_seen_run_id,integrations.resource_relations.last_seen_run_id),
+         lifecycle=excluded.lifecycle`,
       [corrida.channelAccountId, relacion.type, corrida.topic, recurso.id, relacion.targetTopic,
-        relacion.targetId, corrida.id, relacion.lifecycle ?? 'open'],
+        relacion.targetId, corrida.runId, relacion.lifecycle ?? 'open'],
     );
   }
 }
@@ -153,7 +175,7 @@ async function declararBajas(
     const version = `${PREFIJO_BAJA}${corrida.id}`;
     const payload = { id: fila.resource_id, lifecycle: 'deleted' };
     const hash = hashCanonico(payload);
-    await encolar(tx, corrida, fila.resource_id, version, payload, keyring);
+    await encolar(tx, contextoDe(corrida), fila.resource_id, version, payload, keyring);
     await tx.query(
       `UPDATE integrations.resource_observations SET remote_version=$3,remote_hash=$4,
        projection_hash=$4,lifecycle='deleted',last_enqueued_version=$3
@@ -231,7 +253,7 @@ export function crearProcesadorMotor(opciones: {
           enumerados += presentes.length;
         } else {
           for (const recurso of pagina.resources) {
-            const resultado = await persistirRecurso(tx, corrida, adaptador.versionKind, recurso, keyring);
+            const resultado = await persistirRecurso(tx, contextoDe(corrida), adaptador.versionKind, recurso, keyring);
             enumerados++;
             if (resultado === 'enqueued') encolados++; else duplicados++;
           }

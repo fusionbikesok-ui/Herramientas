@@ -623,6 +623,13 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   - **El legado escucha en `*:3001` sin firewall**: responde desde Internet por IP sin pasar por Nginx
     (verificado 2026-09-16, `/healthz` 200). El gateway se protege validando el origen por socket; cerrar
     3001 hacia afuera queda pendiente de decisión operativa.
+  - **C6 (relectura por señal)**: `worker/senales.ts` + `reconciliacion/relectura.ts` (relectores por
+    tópico) + `senales-cola.ts` (lease, backoff, dead letter). Los normalizadores de recurso se exportan
+    desde los adaptadores y los usan barrido y relectura, para que la versión y la proyección coincidan.
+    `persistirRecurso` recibe un `ContextoEscritura` con `runId` opcional y usa `coalesce` sobre
+    `last_seen_run_id`: una relectura durante una vuelta completa no puede provocar una baja falsa.
+    Inbox `source='signal_reread'` (0007). Mensajes adelantan `next_run_at` del barrido en vez de
+    resolver el id. El bucle del worker ya no se superpone: barridos y después señales, una vuelta a la vez.
   - La cola de sombra del legado (`crearColaSombra`) todavía no tiene `enviar` conectado: el cliente
     firmado que la une con la API de C3 no está implementado y la copia sigue apagada por flag.
   - `woo_webhooks_estado` ya registra `topic`, `status`, `delivery_url`, `propio`, `visto_en` y
