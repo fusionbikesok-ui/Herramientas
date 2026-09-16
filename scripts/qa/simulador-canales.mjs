@@ -232,6 +232,28 @@ export function crearSimulador({ db, fixture, cert, key, reloj = () => new Date(
     const p = url.pathname;
     let m;
     if (p === '/oauth/token') return json(res, 200, { access_token: 'APP_USR-QA', refresh_token: 'TG-QA', expires_in: 21600, token_type: 'bearer' });
+    // missed_feeds: forma NO verificada por sonda (ver plataforma/src/reconciliacion/missed-feeds.ts).
+    // `fixture.ml.missedFeeds` es la lista completa; `fixture.ml.missedFeedsForma` puede romper la forma.
+    if (p === '/missed_feeds' && req.method === 'GET') {
+      const topic = url.searchParams.get('topic');
+      if (topic === 'items' && !url.searchParams.get('site_id') && fixture?.ml?.missedFeedsExigeSitio) return json(res, 400, { error: 'site_id requerido' });
+      const todos = (fixture?.ml?.missedFeeds || []).filter(m => (m.topic === topic) || (topic === 'orders_v2' && m.topic === 'orders'));
+      const offset = Number(url.searchParams.get('offset')) || 0;
+      const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 50);
+      if (fixture?.ml?.missedFeedsForma === 'rota') return json(res, 200, { results: todos.slice(offset, offset + limit) });
+      return json(res, 200, { messages: todos.slice(offset, offset + limit), offset, limit, total: todos.length });
+    }
+    // Multiget verificado por sonda 2026-09-16: `{id, status_code, body}` por elemento. `fixture.ml.fallosBulk`
+    // ({ id: status }) simula un fallo parcial de un elemento sin tirar el lote.
+    if (p === '/items/bulk' && req.method === 'GET') {
+      const ids = (url.searchParams.get('ids') || '').split(',').filter(Boolean);
+      return json(res, 200, ids.map(id => {
+        const fallo = fixture?.ml?.fallosBulk?.[id];
+        if (fallo) return { id, status_code: fallo, body: { error: 'simulado' } };
+        const it = datos.items.get(id);
+        return it ? { id, status_code: 200, body: it } : { id, status_code: 404, body: { error: 'not_found' } };
+      }));
+    }
     if (p === '/items' && req.method === 'GET') {
       const ids = (url.searchParams.get('ids') || '').split(',').filter(Boolean);
       return json(res, 200, ids.map(id => {

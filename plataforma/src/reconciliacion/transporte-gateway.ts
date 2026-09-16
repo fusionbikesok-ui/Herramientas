@@ -85,6 +85,11 @@ export function rutaAOperacion(ruta: string, headers: Readonly<Record<string, st
     return { op: 'ml.claims.search', params: { offset: entero(v.offset!) } };
   }
   if ((m = p.match(/^\/post-purchase\/v1\/claims\/(\d{1,20})$/))) { exacto(q, {}, []); return { op: 'ml.claim', params: { id: m[1]! } }; }
+  if (p === '/missed_feeds') {
+    // `app_id` y `site_id` los agrega el legado desde su configuración: la plataforma no los decide.
+    const v = exacto(q, { limit: '50' }, ['topic', 'offset']);
+    return { op: 'ml.missed_feeds', params: { topic: v.topic, offset: entero(v.offset!) } };
+  }
   if (p === '/messages/unread') { exacto(q, { role: 'seller', tag: 'post_sale' }, []); return { op: 'ml.messages.unread', params: {} }; }
   if ((m = p.match(/^\/messages\/packs\/(\d{1,20})\/sellers\/(\d{1,20})$/))) {
     exacto(q, { tag: 'post_sale', mark_as_read: 'false' }, []);
@@ -96,7 +101,7 @@ export function rutaAOperacion(ruta: string, headers: Readonly<Record<string, st
     vendedor(m[1]!);
     return { op: 'ml.items.scan', params: v.scroll_id ? { scroll_id: v.scroll_id } : {} };
   }
-  if (p === '/items') {
+  if (p === '/items/bulk') {
     const v = exacto(q, {}, ['ids']);
     return { op: 'ml.items.multiget', params: { ids: v.ids!.split(',') } };
   }

@@ -113,6 +113,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     origenes: crearOrigenesInternos(process.env.GATEWAY_ORIGENES),
     ejecutar: crearGatewayCanal({
       mlUserId: mlCfg?.userId || process.env.ML_USER_ID,
+      mlAppId: mlCfg?.clientId || process.env.ML_CLIENT_ID,
+      mlSiteId: process.env.ML_SITE_ID || null,
       presupuestoMl: crearPresupuestoShadow(Number(process.env.GATEWAY_ML_SHADOW_RPM || 0)),
       ejecutarMl: (ruta, headers) => mlFetch(app._db, mlCfg, 'get', ruta, null, { headers }),
       ejecutarWoo: (ruta) => wooFetch(wooCfg, ruta),

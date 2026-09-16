@@ -630,6 +630,11 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     `last_seen_run_id`: una relectura durante una vuelta completa no puede provocar una baja falsa.
     Inbox `source='signal_reread'` (0007). Mensajes adelantan `next_run_at` del barrido en vez de
     resolver el id. El bucle del worker ya no se superpone: barridos y después señales, una vuelta a la vez.
+  - **C7 (bulk y missed_feeds)**: ítems por `/items/bulk` (elemento fallido = presente sin contenido, nunca
+    baja). `reconciliacion/missed-feeds.ts` crea sólo señales `ml_missed_feed` con fingerprint `mf:<_id>`,
+    cada 30 min con lock consultivo por cuenta. **Forma de respuesta de `missed_feeds` sin verificar por
+    sonda**: falla cerrado con `FORMA_MISSED_FEEDS`; verificarla requiere autorización antes del canario.
+    Gateway: `app_id`=`ML_CLIENT_ID`, `site_id`=`ML_SITE_ID` (nueva, en `.env.example`, aún no en `.env`).
   - La cola de sombra del legado (`crearColaSombra`) todavía no tiene `enviar` conectado: el cliente
     firmado que la une con la API de C3 no está implementado y la copia sigue apagada por flag.
   - `woo_webhooks_estado` ya registra `topic`, `status`, `delivery_url`, `propio`, `visto_en` y

@@ -23,7 +23,8 @@ const keyring = { activeKeyId: 'gw', keys: { gw: randomBytes(32) } };
 
 function normalizar(ruta: string): string {
   const u = new URL(ruta, 'http://x');
-  const pares = [...u.searchParams.entries()].map(([k, v]) => `${k}=${v}`).sort();
+  // `app_id` y `site_id` los inyecta el legado desde su configuración: no forman parte de la ruta del adaptador.
+  const pares = [...u.searchParams.entries()].filter(([k]) => k !== 'app_id' && k !== 'site_id').map(([k, v]) => `${k}=${v}`).sort();
   return `${u.pathname}?${pares.join('&')}`;
 }
 
@@ -61,7 +62,7 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
     const esperada = firmarInterno(keyring.keys.gw, h['x-fusion-timestamp'], h['x-fusion-nonce'], 'POST', RUTA_GATEWAY, cuerpo);
     expect(h['x-fusion-signature']).toBe(esperada);
     const gw = crearGatewayCanal({
-      mlUserId: SELLER, presupuestoMl: () => true,
+      mlUserId: SELLER, mlAppId: '998877', mlSiteId: 'MLA', presupuestoMl: () => true,
       ejecutarMl: async (ruta: string, headers: Record<string, string>) => {
         rutasVistas.push(ruta);
         const r = await fetch(`${url}${ruta}`, { headers });
@@ -90,7 +91,7 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
     const transporte = {
       async get(ruta: string, o?: { headers?: Readonly<Record<string, string>> }) {
         const op = rutaAOperacion(ruta, o?.headers ?? {}, SELLER);
-        const construida = construirOperacion(op, { mlUserId: SELLER }) as { canal: string; ruta: string };
+        const construida = construirOperacion(op, { mlUserId: SELLER, mlAppId: '998877', mlSiteId: 'MLA' }) as { canal: string; ruta: string };
         const legadoRuta = construida.canal === 'woo' ? `/wp-json/wc/v3${construida.ruta}` : construida.ruta;
         expect(normalizar(legadoRuta), ruta).toBe(normalizar(ruta));
         traducidas.push(op.op);
@@ -113,9 +114,10 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
       ['/shipments/9000', { 'x-format-new': 'true' }], ['/questions/1', {}], ['/post-purchase/v1/claims/31', {}],
       [`/messages/packs/8001/sellers/${SELLER}?tag=post_sale&mark_as_read=false`, {}],
       ['/orders/5000', {}], ['/wp-json/wc/v3/orders/300', {}], ['/wp-json/wc/v3/products/10', {}],
+      ['/missed_feeds?topic=items&offset=0&limit=50', {}],
     ] as const) await transporte.get(ruta, { headers });
     expect(new Set(traducidas)).toEqual(new Set([
-      'ml.orders.search', 'ml.order', 'woo.order', 'woo.product', 'ml.shipment', 'ml.questions.search', 'ml.question', 'ml.claims.search', 'ml.claim',
+      'ml.orders.search', 'ml.missed_feeds', 'ml.order', 'woo.order', 'woo.product', 'ml.shipment', 'ml.questions.search', 'ml.question', 'ml.claims.search', 'ml.claim',
       'ml.messages.unread', 'ml.messages.pack', 'ml.items.scan', 'ml.items.multiget',
       'woo.orders.list', 'woo.products.list', 'woo.variations.list', 'woo.presence.list',
     ]));

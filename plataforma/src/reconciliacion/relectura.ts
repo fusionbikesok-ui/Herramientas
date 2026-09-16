@@ -1,6 +1,7 @@
 import { envioMl, itemMl, ordenMl, preguntaMl, reclamoMl, recursoNoEncontrado } from './adaptadores/ml.ts';
 import { pedidoWoo, productoWoo } from './adaptadores/woo.ts';
 import { esRegistro, exigirLista, exigirRegistro, idTexto } from './adaptadores/comun.ts';
+import { ErrorBarridoReintentable } from '../worker/barridos.ts';
 import { ErrorCanalTerminal, type TransporteCanal } from './cliente-http.ts';
 import type { RecursoRemoto, TipoVersion } from './tipos.ts';
 
@@ -51,11 +52,13 @@ export function crearRelectoresMl(dep: { transporte: TransporteCanal }): Record<
     {
       topic: 'ml.items', versionKind: 'temporal', id: ITEM,
       async releer(id) {
-        const r = await t.get(`/items?ids=${id}`);
-        const entrada = exigirRegistro(exigirLista(r.body, '/items multiget')[0], 'multiget');
+        const r = await t.get(`/items/bulk?ids=${id}`);
+        const entrada = exigirRegistro(exigirLista(r.body, '/items/bulk')[0], 'bulk');
+        const codigo = Number(entrada.status_code);
         // Una publicación eliminada sólo la da de baja la vuelta completa diaria.
-        if (entrada.code === 404) return sinBaja();
-        if (entrada.code !== 200) throw new ErrorCanalTerminal(`MULTIGET_${idTexto(entrada.code)} /items`);
+        if (codigo === 404) return sinBaja();
+        if (codigo === 429 || codigo >= 500) throw new ErrorBarridoReintentable(`BULK_${codigo} /items/bulk`);
+        if (codigo !== 200) throw new ErrorCanalTerminal(`BULK_${idTexto(entrada.status_code)} /items/bulk`);
         return { tipo: 'recursos', recursos: [itemMl(entrada.body)] };
       },
     },

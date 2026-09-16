@@ -246,6 +246,13 @@ export function crearProcesadorMotor(opciones: {
         if (presentes.some((id) => typeof id !== 'string' || !id.trim())) throw new ErrorPaginaInvalida('ID presente inválido');
       } else {
         for (const recurso of pagina.resources) validarRecurso(recurso, adaptador.versionKind);
+        // Contenido con IDs vistos sin contenido (p. ej. un elemento del bulk que falló): se marcan presentes
+        // para que la vuelta completa no los dé de baja, sin cambiar su versión ni encolar.
+        if (pagina.presentes !== undefined) {
+          if (!Array.isArray(pagina.presentes)) throw new ErrorPaginaInvalida('presentes inválidos');
+          presentes = pagina.presentes;
+          if (presentes.some((id) => typeof id !== 'string' || !id.trim())) throw new ErrorPaginaInvalida('ID presente inválido');
+        }
       }
       await enTransaccion(db, async (tx) => {
         if (presencia) {
@@ -257,6 +264,7 @@ export function crearProcesadorMotor(opciones: {
             enumerados++;
             if (resultado === 'enqueued') encolados++; else duplicados++;
           }
+          if (presentes.length) { await marcarPresencia(tx, corrida, presentes); enumerados += presentes.length; }
         }
         await tx.query(
           `UPDATE integrations.sweep_runs SET enumerated=$2,missing_enqueued=$3,duplicates=$4 WHERE id=$1`,

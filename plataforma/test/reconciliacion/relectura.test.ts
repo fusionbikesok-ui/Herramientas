@@ -108,7 +108,7 @@ describe('E1-RER-01 relectura puntual por señal', () => {
       item: await senal(ml, 'ml.items', 'MLA3'), pedido: await senal(woo, 'woo.orders', '4'),
       pregunta: await senal(ml, 'ml.questions', '5'), reclamo: await senal(ml, 'ml.claims', '6'),
     };
-    const { w, llamadasMl } = worker({ '/items?ids=MLA3': { status: 200, body: [{ code: 404, body: null }] } });
+    const { w, llamadasMl } = worker({ '/items/bulk?ids=MLA3': { status: 200, body: [{ id: 'MLA3', status_code: 404, body: null }] } });
     expect(await w.unaVuelta(20)).toBe(6);
     for (const k of ['orden', 'envio', 'item', 'pedido'] as const) {
       expect(await estado(ids[k]), k).toMatchObject({ status: 'succeeded', error_detail: 'not_found:sin_baja' });

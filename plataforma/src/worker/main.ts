@@ -14,6 +14,8 @@ import { claveCorrienteCuenta } from '../reconciliacion/tipos.ts';
 import { crearWorkerBarridos, type ProcesadorBarrido } from './barridos.ts';
 import { crearRelectoresMl, crearRelectoresWoo, type Relector } from '../reconciliacion/relectura.ts';
 import { claveRelector, crearWorkerSenales } from './senales.ts';
+import { enumerarMissedFeeds } from '../reconciliacion/missed-feeds.ts';
+import type { TransporteCanal } from '../reconciliacion/cliente-http.ts';
 
 const config = cargarConfig(process.env);
 const logger = crearLogger(config.servicio);
@@ -23,6 +25,7 @@ const detenerLatidos = iniciarLatidos(pool, 'worker', config.instancia, config.v
 // Sin configuración de barridos el worker no registra procesadores y por lo tanto no reclama corridas.
 let procesadores: Record<string, ProcesadorBarrido> = {};
 const relectores: Record<string, Relector> = {};
+const cuentasMissedFeeds: Array<{ id: string; sellerId: string; transporte: TransporteCanal }> = [];
 let keyringSobres: ReturnType<typeof cargarKeyring> | null = null;
 if (config.barridos) {
   const keyring = cargarKeyring(config.barridos.keyringFile);
@@ -45,6 +48,7 @@ if (config.barridos) {
       : crearAdaptadoresWoo({ transporte });
     // Relectura puntual por señal (C6) con el mismo transporte de la cuenta.
     const propios = cuenta.channel === 'mercadolibre' ? crearRelectoresMl({ transporte }) : crearRelectoresWoo({ transporte });
+    if (cuenta.channel === 'mercadolibre') cuentasMissedFeeds.push({ id: cuenta.id, sellerId: cuenta.seller_id, transporte });
     for (const relector of Object.values(propios)) relectores[claveRelector(cuenta.id, relector.topic)] = relector;
     for (const adaptador of Object.values(adaptadores)) {
       const motor = crearProcesadorMotor({ db: pool, adaptador, keyring });
@@ -73,8 +77,33 @@ const vuelta = setInterval(() => {
     await senales?.unaVuelta().catch((error) => { logger.error({ err: (error as Error).message }, 'vuelta de señales falló'); });
   })().finally(() => { enVuelta = false; });
 }, 1_000);
+// missed_feeds cada 30 minutos por cuenta ML (C7). El lock consultivo evita que dos workers enumeren a la vez;
+// aun sin él, la deduplicación por notificación haría inocua la repetición, pero gastaría presupuesto.
+const MISSED_FEEDS_MS = 30 * 60 * 1000;
+async function rondaMissedFeeds(): Promise<void> {
+  for (const c of cuentasMissedFeeds) {
+    const cliente = await pool.connect();
+    try {
+      const lock = await cliente.query<{ ok: boolean }>("SELECT pg_try_advisory_lock(hashtextextended('missed_feeds:' || $1, 0)) ok", [c.id]);
+      if (!lock.rows[0]?.ok) continue;
+      try {
+        const cobertura = await enumerarMissedFeeds({ db: pool, transporte: c.transporte, channelAccountId: c.id, sellerId: c.sellerId });
+        logger.info({ cuenta: c.id, cobertura }, 'missed_feeds enumerado');
+      } finally {
+        await cliente.query("SELECT pg_advisory_unlock(hashtextextended('missed_feeds:' || $1, 0))", [c.id]);
+      }
+    } catch (error) {
+      logger.error({ cuenta: c.id, err: (error as Error).message }, 'missed_feeds falló');
+    } finally {
+      cliente.release();
+    }
+  }
+}
+const vueltaMissedFeeds = cuentasMissedFeeds.length ? setInterval(() => { void rondaMissedFeeds(); }, MISSED_FEEDS_MS) : null;
+
 alApagar(logger, async () => {
   clearInterval(vuelta);
+  if (vueltaMissedFeeds) clearInterval(vueltaMissedFeeds);
   detenerLatidos();
   senales?.detener();
   await barridos.detener();

@@ -278,7 +278,9 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
   it('E1-SWP-06 ml.items: scan paginado + multiget de 20 y baja sólo tras una vuelta completa', async () => {
     await barrer('ml.items', 'full_scan');
     expect(await inbox('ml.items')).toBe(130);
-    expect((await llamadas()).filter((l) => l.ruta.startsWith('/items?ids=')).every((l) => l.ruta.split('=')[1]!.split(',').length <= 20)).toBe(true);
+    const bulk = (await llamadas()).filter((l) => l.ruta.startsWith('/items/bulk?ids='));
+    expect(bulk.length).toBe(7);
+    expect(bulk.every((l) => l.ruta.split('=')[1]!.split(',').length <= 20)).toBe(true);
     datos!.items.delete('MLA100005');
     await qa({ ruta: 'scroll_id=100', status: 503 });
     await expect(barrer('ml.items', 'full_scan', { reloj: despues(1) })).rejects.toBeInstanceOf(ErrorBarridoReintentable);
@@ -288,6 +290,23 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     const r = await crearProcesadorMotor({ db, adaptador: adaptadores()[claveCorriente('ml.items', 'full_scan')]!, keyring, reloj })(corrida);
     expect(await completarCorrida(db, corrida, r.cursorAfter, r.antesDeCerrar)).toBe('succeeded');
     expect((await db.query<{ resource_id: string }>("select resource_id from integrations.resource_observations where lifecycle='deleted'")).rows).toEqual([{ resource_id: 'MLA100005' }]);
+  });
+
+  it('E1-BLK-01 bulk parcial: cada elemento informa su estado y un fallo no tira el lote ni provoca una baja', async () => {
+    await barrer('ml.items', 'full_scan');
+    expect(await inbox('ml.items')).toBe(130);
+    // En la vuelta siguiente cambian dos ítems y a uno de ellos el bulk le responde 500 sólo a él.
+    for (const id of ['MLA100001', 'MLA100002']) datos!.items.get(id)!.last_updated = hace(0);
+    fixture.ml!.fallosBulk = { MLA100002: 500 };
+    const { estado } = await barrer('ml.items', 'full_scan', { reloj: despues(1) });
+    expect(estado).toBe('succeeded');
+    // El sano se encoló; el fallido no se observó con contenido nuevo, pero tampoco quedó dado de baja.
+    expect(await inbox('ml.items')).toBe(131);
+    const fallido = (await db.query<{ lifecycle: string; remote_version: string }>(
+      "select lifecycle, remote_version from integrations.resource_observations where resource_id='MLA100002'")).rows[0]!;
+    expect(fallido.lifecycle).toBe('open');
+    expect(fallido.remote_version).toBe(hace(10));
+    expect(await contar("select count(*) n from integrations.resource_observations where lifecycle='deleted'")).toBe(0);
   });
 
   it('E1-SWP-07 woo.orders: GMT explícito, ventana única, 100 por página y cierres capturados', async () => {

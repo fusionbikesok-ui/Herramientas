@@ -315,6 +315,23 @@ Fuentes consultadas 2026-09-16:
   2026-09-16: la documentación pública devolvió 403 a la consulta automatizada, así que el límite se
   afirma con la sonda y no con la página.
 
+Precisiones fijadas al implementar C7 (2026-09-16):
+
+- Multiget migrado a `/items/bulk?ids=` en barrido, relectura y gateway. Un elemento con estado distinto
+  de 200/404 **no tira el lote**: queda como presente sin contenido (`PaginaRemota.presentes` en modo
+  contenido), así no se observa con datos viejos ni la vuelta completa lo da de baja.
+- `missed_feeds`: operación `ml.missed_feeds` en el gateway; `app_id` = `ML_CLIENT_ID` y `site_id` =
+  `ML_SITE_ID` los pone el legado. Cada 30 min por cuenta ML con lock consultivo; seis tópicos
+  consultados, cada uno desde offset 0; fingerprint `mf:<_id>`; aviso de otra cuenta, sin `_id` o con
+  recurso ilegible se cuenta y se excluye; un tópico caído no frena a los demás.
+- **La forma de la respuesta de `missed_feeds` no está verificada por sonda.** El parser exige
+  `messages` (lista) y un total entero (`total` o `paging.total`) y ante otra forma falla cerrado con
+  `FORMA_MISSED_FEEDS` sin crear señales. Verificarla con una sonda autenticada de sólo lectura es
+  **requisito del canario** y necesita autorización propia.
+- Clase de cuota `shadow`: bucket por minuto en el gateway (`GATEWAY_ML_SHADOW_RPM`, 0 por defecto).
+- `ML_SITE_ID` documentada en `.env.example`; su validación contra `ML_USER_ID` queda en el SOP de
+  habilitación del canario (C8).
+
 ## 11. Observabilidad y SOP
 
 Métricas: recibos, excluidos, duplicados, profundidad/máximo/saturación de cola, copias, descartes,

@@ -339,19 +339,24 @@ export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
       if (ids.some((id) => !id)) throw new ErrorCanalTerminal('ID_INVALIDO items/search');
       const lotes: string[][] = [];
       for (let i = 0; i < ids.length; i += LOTE_MULTIGET) lotes.push(ids.slice(i, i + LOTE_MULTIGET));
-      const respuestas = await Promise.all(lotes.map((lote) => dep.transporte.get(`/items?ids=${lote.map(encodeURIComponent).join(',')}`)));
+      // `/items/bulk?ids=` (sonda autenticada 2026-09-16): cada elemento trae su `status_code`.
+      const respuestas = await Promise.all(lotes.map((lote) => dep.transporte.get(`/items/bulk?ids=${lote.map(encodeURIComponent).join(',')}`)));
       const resources: RecursoRemoto[] = [];
+      const presentes: string[] = [];
       for (const r of respuestas) {
-        for (const entrada of exigirLista(exigirOk(r, '/items'), '/items multiget')) {
-          const e = exigirRegistro(entrada, 'multiget');
-          // Publicación eliminada entre el scan y el multiget: no se observa y la vuelta completa la da de baja.
-          if (e.code === 404) continue;
-          if (e.code !== 200) throw new ErrorCanalTerminal(`MULTIGET_${idTexto(e.code)} /items`);
-          resources.push(itemMl(e.body));
+        for (const entrada of exigirLista(exigirOk(r, '/items/bulk'), '/items/bulk')) {
+          const e = exigirRegistro(entrada, 'bulk');
+          // Eliminada entre el scan y el bulk: no se observa y la vuelta completa la da de baja.
+          if (e.status_code === 404) continue;
+          if (e.status_code === 200) { resources.push(itemMl(e.body)); continue; }
+          // Fallo parcial de un elemento: no invalida el lote ni lo da de baja; queda presente sin contenido.
+          const id = idTexto(e.id);
+          if (!id || !ids.includes(id)) throw new ErrorCanalTerminal('BULK_ID_INVALIDO /items/bulk');
+          presentes.push(id);
         }
       }
       const siguiente = typeof body.scroll_id === 'string' && body.scroll_id && ids.length > 0 ? body.scroll_id : null;
-      return { resources, nextPosition: siguiente ? { scroll_id: siguiente } : null, cursorAfter: cursorGeneracion(ctx.windowTo) };
+      return { resources, presentes, nextPosition: siguiente ? { scroll_id: siguiente } : null, cursorAfter: cursorGeneracion(ctx.windowTo) };
     },
   };
 }

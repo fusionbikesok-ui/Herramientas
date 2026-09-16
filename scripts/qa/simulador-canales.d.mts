@@ -11,6 +11,11 @@ export interface FixtureCanales {
     claims?: RegistroSim[];
     unread?: RegistroSim[];
     packs?: Record<string, RegistroSim[]>;
+    /** Fallo simulado de un elemento del bulk: `{ id: status_code }`. */
+    fallosBulk?: Record<string, number>;
+    missedFeeds?: RegistroSim[];
+    missedFeedsForma?: 'rota';
+    missedFeedsExigeSitio?: boolean;
     items?: RegistroSim[];
   };
   woo?: { orders?: RegistroSim[]; products?: RegistroSim[] };

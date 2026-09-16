@@ -7,14 +7,14 @@ import { crearOrigenesInternos, firmarInterno } from '../lib/internoHmac.js';
 
 const { buildApp } = await import('../server.js');
 const DB = './test/tmp-gateway-canal.sqlite';
-const ctx = { mlUserId: '123456' };
+const ctx = { mlUserId: '123456', mlAppId: '998877', mlSiteId: 'MLA' };
 
 describe('E1-GW-01 catálogo cerrado del gateway', () => {
   it('arma rutas sólo desde plantillas y con el vendedor de la configuración', () => {
     expect(construirOperacion({ op: 'ml.shipment', params: { id: '4455' } }, ctx)).toEqual({ canal: 'ml', ruta: '/shipments/4455', headers: { 'x-format-new': 'true' } });
     expect(construirOperacion({ op: 'ml.messages.pack', params: { pack: '200' } }, ctx).ruta)
       .toBe('/messages/packs/200/sellers/123456?tag=post_sale&mark_as_read=false');
-    expect(construirOperacion({ op: 'ml.items.multiget', params: { ids: ['MLA1', 'MLA2'] } }, ctx).ruta).toBe('/items?ids=MLA1,MLA2');
+    expect(construirOperacion({ op: 'ml.items.multiget', params: { ids: ['MLA1', 'MLA2'] } }, ctx).ruta).toBe('/items/bulk?ids=MLA1,MLA2');
     expect(construirOperacion({ op: 'woo.presence.list', params: { resource: 'orders', page: 2, status: 'trash' } }, ctx).ruta)
       .toBe('/orders?per_page=100&page=2&orderby=id&order=asc&status=trash&_fields=id');
   });
@@ -45,6 +45,7 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
   it('ninguna plantilla produce una ruta con host, esquema o salto de directorio', () => {
     const ejemplos = {
       'ml.orders.search': { from: '2026-09-16T00:00:00Z', to: '2026-09-16T06:00:00Z', offset: 50 },
+      'ml.missed_feeds': { topic: 'orders_v2', offset: 0 },
       'ml.order': { id: '1' }, 'woo.order': { id: '1' }, 'woo.product': { id: '1' },
       'ml.shipment': { id: '1' }, 'ml.questions.search': { offset: 0 }, 'ml.question': { id: '1' },
       'ml.claims.search': { offset: 0 }, 'ml.claim': { id: '1' }, 'ml.messages.unread': {}, 'ml.messages.pack': { pack: '1' },
@@ -59,6 +60,17 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
       expect(ruta.startsWith('/'), op).toBe(true);
       expect(ruta, op).not.toMatch(/\/\/|\.\.|:\/\/|access_token|#/);
     }
+  });
+
+  it('E1-MFD-01 missed_feeds: app_id y site_id salen de la configuración y items exige sitio', () => {
+    expect(construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'orders_v2', offset: 50 } }, ctx).ruta)
+      .toBe('/missed_feeds?app_id=998877&topic=orders_v2&offset=50&limit=50');
+    expect(construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'items', offset: 0 } }, ctx).ruta)
+      .toBe('/missed_feeds?app_id=998877&topic=items&offset=0&limit=50&site_id=MLA');
+    expect(() => construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'items', offset: 0 } }, { ...ctx, mlSiteId: null })).toThrow(ErrorOperacionInvalida);
+    expect(() => construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'orders_v2', offset: 0, app_id: '1' } }, ctx)).toThrow(ErrorOperacionInvalida);
+    expect(() => construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'payments', offset: 0 } }, ctx)).toThrow(ErrorOperacionInvalida);
+    expect(() => construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'orders_v2', offset: 0 } }, { ...ctx, mlAppId: null })).toThrow(ErrorOperacionInvalida);
   });
 
   it('presupuesto shadow en cero: ML responde 429 sintético sin llamar a ML', async () => {

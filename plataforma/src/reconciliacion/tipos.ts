@@ -28,7 +28,10 @@ export interface ContextoListado {
 export interface PaginaRemota {
   /** Recursos con contenido. Vacío en una corriente de sólo presencia. */
   resources: readonly RecursoRemoto[];
-  /** IDs presentes en el remoto, sin contenido. Obligatorio en modo `presencia`. */
+  /**
+   * IDs presentes en el remoto, sin contenido. Obligatorio en modo `presencia`; en modo `contenido`
+   * marca recursos vistos cuyo contenido no se pudo leer, para que una vuelta completa no los dé de baja.
+   */
   presentes?: readonly string[];
   nextPosition: Record<string, unknown> | null;
   cursorAfter: Record<string, unknown>;
