@@ -9,6 +9,8 @@ export type Servicio = 'api' | 'worker' | 'scheduler';
 export interface ConfigBarridos {
   registroFile: string;
   keyringFile: string;
+  /** Claves HMAC del plano de control hacia el gateway del legado. Separadas del keyring de sobres. */
+  gatewayKeyringFile?: string;
 }
 /**
  * API interna de señales (T3 C3). Todo o nada, igual que barridos: sin estas tres variables la ruta no
@@ -46,6 +48,7 @@ const Esquema = z.object({
   HEARTBEAT_MAX_S: z.coerce.number().int().min(1).default(120),
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(100).default(30_000),
   BARRIDOS_REGISTRO_FILE: z.string().min(1).optional(),
+  BARRIDOS_GATEWAY_KEYRING_FILE: z.string().min(1).optional(),
   BARRIDOS_KEYRING_FILE: z.string().min(1).optional(),
 });
 
@@ -58,7 +61,10 @@ function leerBarridos(env: Record<string, string | undefined>): ConfigBarridos |
   // Las variables T2 de cuenta única ya no existen: dejarlas puestas indica una configuración vieja.
   const viejas = ['BARRIDOS_CUENTA', 'BARRIDOS_ML_URL', 'BARRIDOS_WOO_URL', 'BARRIDOS_ML_SELLER'].filter((c) => env[c]);
   if (viejas.length) throw new ErrorConfig(`variables de cuenta única de T2 ya no soportadas: ${viejas.join(', ')}`);
-  return { registroFile: env.BARRIDOS_REGISTRO_FILE!, keyringFile: env.BARRIDOS_KEYRING_FILE! };
+  return {
+    registroFile: env.BARRIDOS_REGISTRO_FILE!, keyringFile: env.BARRIDOS_KEYRING_FILE!,
+    ...(env.BARRIDOS_GATEWAY_KEYRING_FILE ? { gatewayKeyringFile: env.BARRIDOS_GATEWAY_KEYRING_FILE } : {}),
+  };
 }
 
 function leerSenales(env: Record<string, string | undefined>): ConfigSenales | undefined {

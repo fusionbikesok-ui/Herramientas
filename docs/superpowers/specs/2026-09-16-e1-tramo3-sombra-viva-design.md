@@ -229,6 +229,24 @@ lleva el rótulo `x-fusion-plano: canal`. El invariante de T2 sigue valiendo tal
 no se relaja ni se reescribe su prueba; el corte C5 sólo agrega `host.docker.internal` a la allowlist
 de ese transporte local.
 
+Precisiones fijadas al implementar C5 (2026-09-16):
+
+- **Tres caminos públicos, no dos.** Además de `location /` y `location /herramientas/` del sitio
+  `herramientas` (443), el sitio `fusionbikes` (80, `default_server`, por IP) proxea `/herramientas/`
+  con barra final. Express enruta sin distinguir mayúsculas, así que el deny es una regex
+  insensible a mayúsculas, `~* ^/(herramientas/+)?internal(/|$)`, en **los dos** sitios.
+  Verificable con `scripts/qa/deny-interno.sh`.
+- **El puerto 3001 del legado es alcanzable desde Internet sin pasar por Nginx** (escucha en `*`,
+  sin firewall). Por eso el origen del gateway se valida contra la dirección del socket —nunca
+  `X-Forwarded-For`— y sólo se admite la red de Docker; cerrar 3001 hacia afuera es una decisión
+  operativa aparte, no de este corte.
+- El HMAC del plano de control usa un keyring **propio** (`BARRIDOS_GATEWAY_KEYRING_FILE` en la
+  plataforma, `GATEWAY_KEYRING_FILE` en el legado), separado de las claves de sobres.
+- Los nonces del legado viven en SQLite (`internal_nonces`, migración 105).
+- El registro de cuentas elige transporte (`gateway` por defecto, `directo` sólo para el simulador).
+- El bucket `shadow` de ML (`GATEWAY_ML_SHADOW_RPM`) queda en **0**: el gateway responde 429
+  sintético sin salir a red hasta que se mida y se fije el techo (C7).
+
 ### Presupuesto remoto
 
 ML agrega clase `shadow`: consume global+lectura y un bucket propio que nunca toma capacidad

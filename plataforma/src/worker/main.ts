@@ -9,6 +9,7 @@ import { crearClienteCanal } from '../reconciliacion/cliente-http.ts';
 import { crearProcesadorMotor } from '../reconciliacion/motor.ts';
 import { cargarKeyring } from '../seguridad/keyring.ts';
 import { cargarRegistro, validarRegistroContraBase } from '../reconciliacion/registro.ts';
+import { crearTransporteGateway } from '../reconciliacion/transporte-gateway.ts';
 import { claveCorrienteCuenta } from '../reconciliacion/tipos.ts';
 import { crearWorkerBarridos, type ProcesadorBarrido } from './barridos.ts';
 
@@ -25,9 +26,15 @@ if (config.barridos) {
   // Un registro que no coincide con la base frena el arranque: es preferible un worker caído y visible
   // en /health a observaciones de un canal escritas bajo la cuenta de otro.
   await validarRegistroContraBase(pool, cuentas);
+  const usaGateway = cuentas.some((c) => c.transporte === 'gateway');
+  if (usaGateway && !config.barridos.gatewayKeyringFile) throw new Error('el registro usa el gateway y falta BARRIDOS_GATEWAY_KEYRING_FILE');
+  // El HMAC del plano de control no comparte claves con el cifrado de sobres.
+  const keyringGateway = usaGateway ? cargarKeyring(config.barridos.gatewayKeyringFile!) : null;
   for (const cuenta of cuentas) {
-    // Un transporte por cuenta: cada una tiene su URL y su semáforo de concurrencia.
-    const transporte = crearClienteCanal({ baseUrl: cuenta.base_url });
+    // Un transporte por cuenta: cada una tiene su URL y, en directo, su semáforo de concurrencia.
+    const transporte = cuenta.transporte === 'gateway'
+      ? crearTransporteGateway({ url: cuenta.base_url, keyring: keyringGateway!, ...(cuenta.channel === 'mercadolibre' ? { sellerId: cuenta.seller_id } : {}) })
+      : crearClienteCanal({ baseUrl: cuenta.base_url });
     const adaptadores = cuenta.channel === 'mercadolibre'
       ? crearAdaptadoresMl({ transporte, db: pool, sellerId: cuenta.seller_id })
       : crearAdaptadoresWoo({ transporte });

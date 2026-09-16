@@ -79,7 +79,7 @@ if [ "$TRAMO" -ge 2 ]; then
               ('ml.claims','state_sweep'),('ml.items','full_scan'),('woo.orders','state_sweep'),
               ('woo.products','state_sweep'))" >/dev/null
   # Registro de cuentas sin credenciales, junto al keyring (mismo volumen de sólo lectura).
-  printf '{"version":1,"cuentas":[{"id":"%s","channel":"mercadolibre","external_account":"777","base_url":"http://simulator:8080","seller_id":"777"},{"id":"%s","channel":"woocommerce","external_account":"http://simulator:8080","base_url":"http://simulator:8080"}]}' \
+  printf '{"version":1,"cuentas":[{"id":"%s","channel":"mercadolibre","external_account":"777","base_url":"http://simulator:8080","seller_id":"777","transporte":"directo"},{"id":"%s","channel":"woocommerce","external_account":"http://simulator:8080","base_url":"http://simulator:8080","transporte":"directo"}]}' \
     "$CUENTA_ML" "$CUENTA_WOO" > "$KEYRING_DIR/registro.json"
   chown 1000:1000 "$KEYRING_DIR/registro.json" 2>/dev/null || true
   chmod 400 "$KEYRING_DIR/registro.json"

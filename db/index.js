@@ -897,6 +897,14 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('sombra_ciclo_104')").run();
     })();
   }
+  // E1 T3 C5: nonces del gateway interno de sólo lectura (lib/internoHmac.js).
+  const internalNoncesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='internal_nonces_105'").get();
+  if (!internalNoncesMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '105_internal_nonces.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('internal_nonces_105')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {

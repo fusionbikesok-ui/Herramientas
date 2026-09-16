@@ -32,6 +32,8 @@ services:
     <<: *servicio
     environment: { <<: *env, SERVICIO: worker, INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-worker" }
     command: ["node", "src/worker/main.ts"]
+    # E1 T3 C5: el worker lee canales por el gateway del legado en el host (plano de control).
+    extra_hosts: ["host.docker.internal:host-gateway"]
   scheduler:
     <<: *servicio
     environment: { <<: *env, SERVICIO: scheduler, INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-scheduler" }

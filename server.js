@@ -18,7 +18,7 @@ import { resolvePermiso, permiteAcceso } from './lib/permisos.js';
 import { authRouter } from './routes/auth.js';
 import { mobileAuthRouter, mobileMeHandler } from './routes/mobileAuth.js';
 import { usuariosRouter } from './routes/usuarios.js';
-import { wooRouter, refrescarCatalogo } from './routes/woo.js';
+import { wooRouter, refrescarCatalogo, wooFetch } from './routes/woo.js';
 import { geminiRouter } from './routes/gemini.js';
 import { nuevosProductosRouter } from './routes/nuevosProductos.js';
 import { mapeoRouter } from './routes/mapeo.js';
@@ -53,7 +53,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
 import { validarConfiguracionPush } from './lib/notificacionesPush.js';
 import { mlEstadoRouter } from './routes/mlEstado.js';
-import { getAccessToken } from './lib/mlClient.js';
+import { getAccessToken, mlFetch } from './lib/mlClient.js';
 import { notificacionesMlRouter } from './routes/notificacionesMl.js';
 import { stockExceptionsRouter } from './routes/stockExceptions.js';
 import { warrantiesRouter } from './routes/warranties.js';
@@ -66,12 +66,14 @@ import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { mobileHoyRouter } from './routes/mobileHoy.js';
 import { registrarWebhookMl, registrarWebhookWooProducto, registrarWebhookWooPedido, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
 import { marcarSombra, abandonarHuerfanas, permitirCuentaAjena } from './lib/sombra.js';
+import { cargarKeyringInterno, crearOrigenesInternos, verificarInterno } from './lib/internoHmac.js';
+import { crearGatewayCanal, crearPresupuestoShadow, ErrorOperacionInvalida } from './lib/gatewayCanal.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
 import { chatEventsRouter } from './routes/chatEvents.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobileJwtSecret }) {
+export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobileJwtSecret, gatewayInterno = null }) {
   const mobileSecret = mobileJwtSecret ?? process.env.MOBILE_JWT_SECRET;
   validarMobileJwtSecret(mobileSecret);
   validarConfiguracionPush(process.env);
@@ -100,6 +102,49 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   });
 
   app.set('trust proxy', 1); // detrás de Nginx
+
+  // ── E1 T3 C5: gateway interno de sólo lectura ────────────────────────────────
+  // POST /internal/v1/channel-read. Nace apagado: sin GATEWAY_KEYRING_FILE y GATEWAY_ORIGENES la ruta no
+  // existe (404). Nginx la niega desde Internet por /internal/ y /herramientas/internal/; HMAC, nonce y
+  // origen son la defensa adicional. El origen se toma del socket, no de X-Forwarded-For: una petición
+  // que pasó por Nginx llega desde 127.0.0.1 y ese origen NO está en la lista de la red de Docker.
+  const gw = gatewayInterno ?? (process.env.GATEWAY_KEYRING_FILE && process.env.GATEWAY_ORIGENES ? {
+    claves: cargarKeyringInterno(process.env.GATEWAY_KEYRING_FILE),
+    origenes: crearOrigenesInternos(process.env.GATEWAY_ORIGENES),
+    ejecutar: crearGatewayCanal({
+      mlUserId: mlCfg?.userId || process.env.ML_USER_ID,
+      presupuestoMl: crearPresupuestoShadow(Number(process.env.GATEWAY_ML_SHADOW_RPM || 0)),
+      ejecutarMl: (ruta, headers) => mlFetch(app._db, mlCfg, 'get', ruta, null, { headers }),
+      ejecutarWoo: (ruta) => wooFetch(wooCfg, ruta),
+    }),
+  } : null);
+  if (gw) {
+    app.post('/internal/v1/channel-read', express.raw({ type: 'application/json', limit: '16kb' }), async (req, res) => {
+      const correlacion = crypto.randomUUID();
+      const cuerpo = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      let v;
+      try {
+        v = verificarInterno({ db: app._db, claves: gw.claves, origenes: gw.origenes, direccion: req.socket.remoteAddress,
+          headers: req.headers, metodo: 'POST', ruta: '/internal/v1/channel-read', cuerpo });
+      } catch {
+        return res.status(503).json({ code: 'unavailable', correlation_id: correlacion });
+      }
+      if (!v.ok) {
+        console.warn(`[gateway] rechazo motivo=${v.motivo} correlacion=${correlacion}`);
+        return res.status(401).json({ code: 'unauthorized', correlation_id: correlacion });
+      }
+      let peticion;
+      try { peticion = JSON.parse(cuerpo.toString('utf8')); } catch { return res.status(400).json({ code: 'invalid_operation', correlation_id: correlacion }); }
+      try {
+        return res.status(200).json(await gw.ejecutar(peticion));
+      } catch (err) {
+        if (err instanceof ErrorOperacionInvalida) return res.status(400).json({ code: 'invalid_operation', correlation_id: correlacion });
+        // Sin mensaje remoto: puede traer URL, cuerpo o detalle de credenciales.
+        console.error(`[gateway] fallo de ejecución correlacion=${correlacion}`);
+        return res.status(502).json({ code: 'channel_unavailable', correlation_id: correlacion });
+      }
+    });
+  }
   // Ingesta firmada del chat: debe montarse antes de express.json para verificar el cuerpo crudo.
   app.use(chatEventsRouter(db));
   // ── Webhook WooCommerce → sync inmediato a ML ───────────────────────────────

@@ -80,6 +80,7 @@ describe('db schema', () => {
       'integration_event_history',
       'integration_events',
       'integration_jobs',
+      'internal_nonces',
       'inventario_diferencias',
       'mapeo_fusion',
       'matcher_candidatos_cache',

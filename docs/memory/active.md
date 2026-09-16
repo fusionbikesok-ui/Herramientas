@@ -611,6 +611,18 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     `channelAccountId` en cada corriente y los procesadores se indexan `cuenta|topic|cursor_kind`.
     El harness `E1_TRAMO=2` usa dos cuentas (ML 6 + Woo 4 corrientes); con `psql -c` un
     `INSERT … RETURNING` imprime `INSERT 0 1`, por eso el harness captura ids con CTE.
+  - **C5 (gateway GET)**: `POST /internal/v1/channel-read` en el legado (`lib/gatewayCanal.js`, catálogo
+    cerrado de 14 operaciones; `lib/internoHmac.js`, mismo HMAC v1 que la plataforma). Nace apagado sin
+    `GATEWAY_KEYRING_FILE`+`GATEWAY_ORIGENES`. La plataforma traduce rutas de adaptador a operaciones en
+    `transporte-gateway.ts`; `test/reconciliacion/gateway.test.ts` importa el JS del legado y prueba la
+    ida y vuelta, así que los dos lados no pueden divergir en silencio. `mlFetch` acepta `opts.headers`
+    (nunca pisan Authorization). Presupuesto shadow de ML en 0 = 429 sintético sin red.
+  - **Nginx (VPS, fuera del repo) desde 2026-09-16**: `location ~* ^/(herramientas/+)?internal(/|$) { return 404; }`
+    en `sites-available/herramientas` y `sites-available/fusionbikes` (el `default_server` del 80 también
+    proxea `/herramientas/`). Copia previa en `/root/nginx-backup-e1c5/`. Evidencia: `scripts/qa/deny-interno.sh`.
+  - **El legado escucha en `*:3001` sin firewall**: responde desde Internet por IP sin pasar por Nginx
+    (verificado 2026-09-16, `/healthz` 200). El gateway se protege validando el origen por socket; cerrar
+    3001 hacia afuera queda pendiente de decisión operativa.
   - La cola de sombra del legado (`crearColaSombra`) todavía no tiene `enviar` conectado: el cliente
     firmado que la une con la API de C3 no está implementado y la copia sigue apagada por flag.
   - `woo_webhooks_estado` ya registra `topic`, `status`, `delivery_url`, `propio`, `visto_en` y

@@ -6,6 +6,8 @@ import type { Consultable } from '../db/pool.ts';
  * Registro de cuentas de canal (E1 T3 §7). Sustituye la configuración de cuenta única de T2.
  *
  * Cada entrada define UUID, canal, identificador externo, URL base del transporte y metadatos del canal.
+ * `transporte` vale `gateway` por defecto: en producción la plataforma lee a través del legado (C5), que
+ * es dueño de las credenciales. `directo` existe sólo para el simulador del ensayo.
  * **Nunca credenciales**: el esquema es cerrado, así que un `token`, `client_secret` o `consumer_key`
  * agregado por error hace fallar el arranque en vez de viajar a la plataforma (la plataforma no recibe
  * tokens ML ni consumer keys Woo; el legado es dueño exclusivo).
@@ -18,12 +20,14 @@ const CuentaMl = z.strictObject({
   external_account: z.string().min(1).max(256),
   base_url: z.url(),
   seller_id: z.string().regex(/^\d{1,20}$/),
+  transporte: z.enum(['gateway', 'directo']).default('gateway'),
 });
 const CuentaWoo = z.strictObject({
   id: z.string().regex(UUID),
   channel: z.literal('woocommerce'),
   external_account: z.string().min(1).max(256),
   base_url: z.url(),
+  transporte: z.enum(['gateway', 'directo']).default('gateway'),
 });
 const Registro = z.strictObject({
   version: z.literal(1),

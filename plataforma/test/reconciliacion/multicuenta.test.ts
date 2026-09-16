@@ -31,7 +31,9 @@ describe('E1-ACC-01 multi-cuenta', () => {
   it('el registro es cerrado: rechaza credenciales, repetidos y metadatos del canal equivocado', () => {
     const ml = { id: ML, channel: 'mercadolibre', external_account: '777', base_url: 'http://simulator:8080', seller_id: '777' };
     const woo = { id: WOO, channel: 'woocommerce', external_account: 'https://tienda', base_url: 'http://simulator:8080' };
-    expect(parsearRegistro({ version: 1, cuentas: [ml, woo] })).toHaveLength(2);
+    const leidas = parsearRegistro({ version: 1, cuentas: [ml, woo] });
+    // Sin decirlo, una cuenta lee por el gateway del legado: la plataforma no tiene credenciales de canal.
+    expect(leidas.map((c) => c.transporte)).toEqual(['gateway', 'gateway']);
     const casos: Array<[string, unknown]> = [
       ['token en una cuenta', { version: 1, cuentas: [{ ...ml, access_token: 'APP_USR-secreto' }] }],
       ['consumer key en Woo', { version: 1, cuentas: [{ ...woo, consumer_key: 'ck_secreto' }] }],
@@ -41,6 +43,7 @@ describe('E1-ACC-01 multi-cuenta', () => {
       ['externa repetida', { version: 1, cuentas: [ml, { ...ml, id: WOO }] }],
       ['canal desconocido', { version: 1, cuentas: [{ ...woo, channel: 'amazon' }] }],
       ['vacío', { version: 1, cuentas: [] }],
+      ['transporte inventado', { version: 1, cuentas: [{ ...ml, transporte: 'https' }] }],
     ];
     for (const [nombre, crudo] of casos) {
       expect(() => parsearRegistro(crudo), nombre).toThrow(ErrorRegistro);
@@ -60,8 +63,8 @@ describe('E1-ACC-01 multi-cuenta', () => {
     afterAll(async () => { await db.end(); await admin.end(); await base.borrar(); });
 
     it('el registro tiene que coincidir con la base en canal e identificador externo', async () => {
-      const ml = { id: cuentaMl, channel: 'mercadolibre' as const, external_account: '777', base_url: 'http://s', seller_id: '777' };
-      const woo = { id: cuentaWoo, channel: 'woocommerce' as const, external_account: 'https://tienda', base_url: 'http://s' };
+      const ml = { id: cuentaMl, channel: 'mercadolibre' as const, external_account: '777', base_url: 'http://s', seller_id: '777', transporte: 'gateway' as const };
+      const woo = { id: cuentaWoo, channel: 'woocommerce' as const, external_account: 'https://tienda', base_url: 'http://s', transporte: 'gateway' as const };
       await expect(validarRegistroContraBase(db, [ml, woo])).resolves.toBeUndefined();
       await expect(validarRegistroContraBase(db, [{ ...woo, id: cuentaMl }])).rejects.toThrow(/no coincide/);
       await expect(validarRegistroContraBase(db, [{ ...ml, external_account: '999' }])).rejects.toThrow(/no coincide/);
