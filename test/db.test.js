@@ -121,6 +121,7 @@ describe('db schema', () => {
       'pick_wave_returns',
       'pick_wave_shortages',
       'pick_waves',
+      'precios_auditoria_estado',
       'preferencias_notificacion',
       'preparacion_devolucion_items',
       'preparacion_devoluciones',

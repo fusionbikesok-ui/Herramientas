@@ -1032,6 +1032,23 @@ export function openDb(dbPath) {
     actualizado_en TEXT NOT NULL
   )`); } catch (_) {}
 
+  // Auditoría de precios ML como proyección local (107): metadatos del multiget en el cache de
+  // publicaciones y huella/origen/pendiente en la auditoría. Columnas por PRAGMA (idempotente), el
+  // resto en el .sql. Va después de crear ml_publicaciones_cache y ml_precio_auditoria.
+  const auditoriaPrecios107 = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='auditoria_precios_107'").get();
+  if (!auditoriaPrecios107) {
+    db.transaction(() => {
+      const agregar = (tabla, columnas) => {
+        const existentes = new Set(db.prepare(`PRAGMA table_info(${tabla})`).all().map((c) => c.name));
+        for (const [col, tipo] of columnas) if (!existentes.has(col)) db.exec(`ALTER TABLE ${tabla} ADD COLUMN ${col} ${tipo}`);
+      };
+      agregar('ml_publicaciones_cache', [['category_id', 'TEXT'], ['listing_type_id', 'TEXT'], ['free_shipping', 'INTEGER']]);
+      agregar('ml_precio_auditoria', [['huella_fuente', 'TEXT'], ['origen_ml_en', 'TEXT'], ['origen_woo_en', 'TEXT'], ['pendiente_motivo', 'TEXT']]);
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '107_auditoria_precios_cache.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('auditoria_precios_107')").run();
+    })();
+  }
+
   // Errores de sync descartados a mano (no accionables: sin stock real, pausa manual, etc.)
   try { db.exec(`CREATE TABLE IF NOT EXISTS errores_descartados (
     clave TEXT PRIMARY KEY,

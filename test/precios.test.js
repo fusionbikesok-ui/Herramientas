@@ -34,8 +34,11 @@ function seedDecision(db, clave, sku) {
 }
 function seedPub(db, { clave, itemId, varId = '', status = 'active' }) {
   db.prepare(`INSERT INTO ml_publicaciones_cache
-    (clave, item_id, variation_id, titulo, status, es_variante, seller_sku, variations_texto, actualizado_en)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(clave, itemId, varId, 'Pub ' + itemId, status, varId ? 1 : 0, '', '', ahora());
+    (clave, item_id, variation_id, titulo, status, es_variante, seller_sku, variations_texto,
+     precio, category_id, listing_type_id, free_shipping, actualizado_en)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    clave, itemId, varId, 'Pub ' + itemId, status, varId ? 1 : 0, '', '',
+    1000, 'MLA1', 'gold_special', 1, ahora());
 }
 
 // Mock de axios.request que enruta por URL (listing_prices / shipping / multiget items).

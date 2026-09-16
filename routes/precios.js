@@ -13,6 +13,7 @@ import { Router } from 'express';
 import { mlFetch } from '../lib/mlClient.js';
 import { netoMl, veredictoNeto, upsertAuditoria, precioContado, precioObjetivoMl } from '../lib/mlPrecios.js';
 import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
+import { sincronizarAuditoriaPreciosDesdeCache, estadoProgresoAuditoria, estadoAuditoriaPrecios, auditoriaEnCurso } from '../lib/auditoriaPrecios.js';
 
 const MULTIGET_CHUNK = 20;
 const ML_CALL_DELAY_MS = 500;
@@ -39,6 +40,10 @@ function precioEfectivo(item, variationId) {
  * el veredicto en ml_precio_auditoria. Guardado contra corridas concurrentes.
  */
 export async function auditarPrecios(db, mlCfg) {
+  // La auditoría ya no relee `/items`: el refresco ML guarda precio, categoría, tipo y envío
+  // gratis en ml_publicaciones_cache. Se conserva este export para callers/tests históricos.
+  return sincronizarAuditoriaPreciosDesdeCache(db, { origen: 'manual', manual: true, mlCfg });
+  /* c8 ignore start -- implementación remota histórica, retirada al migrar a proyección local.
   if (!mlCfgOk(mlCfg)) throw new Error('MercadoLibre no configurado');
   if (_auditEnCurso) return { yaEnCurso: true };
   _auditEnCurso = true;
@@ -115,6 +120,7 @@ export async function auditarPrecios(db, mlCfg) {
     _auditProgreso.enCurso = false;
     _auditEnCurso = false;
   }
+  c8 ignore stop */
 }
 
 /** Path + body para actualizar el precio de una publicación/variación en ML. */
@@ -189,7 +195,7 @@ export function preciosRouter(db, cfg) {
   // Dispara el recálculo en background (no bloquea la respuesta).
   router.post('/recalcular', (req, res) => {
     if (!mlCfgOk(mlCfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
-    if (_auditEnCurso) return res.status(409).json({ ok: false, error: 'Ya hay un recálculo en curso' });
+    if (auditoriaEnCurso()) return res.status(409).json({ ok: false, error: 'Ya hay un recálculo en curso' });
     auditarPrecios(db, mlCfg).catch(err => console.error('auditarPrecios error:', err.message));
     res.json({ ok: true, iniciado: true });
   });
@@ -200,7 +206,7 @@ export function preciosRouter(db, cfg) {
       if (r.estado in resumen) resumen[r.estado] = r.n;
     }
     const ultimo = db.prepare('SELECT MAX(actualizado_en) u FROM ml_precio_auditoria').get()?.u || null;
-    res.json({ ok: true, ..._auditProgreso, ultimo, resumen });
+    res.json({ ok: true, ..._auditProgreso, ...estadoProgresoAuditoria(), ...estadoAuditoriaPrecios(db), ultimo, resumen });
   });
 
   // Lista de publicaciones auditadas. Por defecto solo los problemas (bajo/alto/sin_precio).

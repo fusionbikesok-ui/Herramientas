@@ -31,6 +31,15 @@ invalidar/podar. El cron poda ausencias únicamente con listado confiable.
 Solo con decisiones verificadas que cambien contratos, invariantes, fuentes de datos o rutas
 canónicas de esta integración. No dupliques reglas normativas: enlazalas a su única fuente.
 
+- **Auditoría de precios ML (2026-09-16):** `ml_publicaciones_cache` conserva también
+  `category_id`, `listing_type_id` y `free_shipping`, obtenidos en el mismo multiget que refresca
+  publicaciones. `lib/auditoriaPrecios.js` proyecta `ml_precio_auditoria` desde ese cache, el
+  vínculo confirmado y `catalogo_cache.regular_price`; nunca relee `/items`. Comisión y envío se
+  consultan sólo si `ml_precios_cache` no tiene una entrada vigente (7 días). Se dispara tras
+  scans ML completos/acotados, refrescos y webhooks Woo, y por cron de respaldo cada 15 minutos;
+  la huella evita recalcular filas sin cambios y un scan ML completo exitoso poda filas fuera de
+  alcance. El botón manual usa la misma proyección local.
+
 - Las confirmaciones puntuales no elegibles de Woo o ML conservan la fila de `pedidos_cache`
   como `no_elegible` para no romper preparaciones/auditoría, pero la excluyen de la cola y
   del inicio; ML requiere `paid`, `ready_to_ship` y logística local.

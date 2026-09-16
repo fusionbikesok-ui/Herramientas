@@ -34,6 +34,7 @@ import { procesarOperacionesIdentidad } from './lib/identidadProductos.js';
 import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { preciosRouter } from './routes/precios.js';
+import { configurarAuditoriaPrecios, dispararAuditoriaPrecios } from './lib/auditoriaPrecios.js';
 import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
 import { gestionPedidosRouter } from './routes/gestionPedidos.js';
 import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
@@ -424,6 +425,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     return res.status(403).json({ ok: false, error: 'Acceso no autorizado' });
   }
   const syncCfg = { woo: wooCfg, ml: mlCfg };
+  configurarAuditoriaPrecios({ mlCfg });
 
   // ── Notificaciones ML ────────────────────────────────────────────────────────
   // POST /api/ml/notificacion
@@ -864,6 +866,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             }
           })
           .catch(err => console.error('reactivación automática error:', err.message));
+      });
+
+      // Red de seguridad de la auditoría de precios: sólo deriva filas que cambió alguno de
+      // sus orígenes o que quedaron pendientes. No hace multiget /items ni se superpone.
+      cron.schedule('12-59/15 * * * *', () => {
+        dispararAuditoriaPrecios(app._db, { origen: 'cron', mlCfg: syncCfg.ml });
       });
 
       cron.schedule('5-59/10 * * * *', () => {          // ML + Woo

@@ -572,7 +572,9 @@ async function estado(){
       setTimeout(estado,2500);
     }else{
       btn.disabled=false;
-      p.textContent=d.ultimo?('Último cálculo: '+new Date(d.ultimo).toLocaleString('es-AR')):'Nunca calculado — tocá "Recalcular".';
+      var ultima=d.ultima_sync_en||d.ultimo;
+      var origen=d.ultima_sync_origen ? ' · '+String(d.ultima_sync_origen).replace('_',' ') : '';
+      p.textContent=ultima?('Actualización '+origen+': '+new Date(ultima).toLocaleString('es-AR')):'Nunca calculado — el sistema lo completará al recibir el próximo catálogo.';
       if(_recalcActivo){_recalcActivo=false;cargar();}
     }
   }catch(e){}

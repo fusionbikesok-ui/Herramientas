@@ -1674,6 +1674,16 @@ aviso ni paginación. Ahora:
 `truncado=true` cuando `total > data.length` (hay más filas de las que trajo esta
 respuesta). El frontend debe mostrar "mostrando N de M" cuando `truncado` sea `true`.
 
+## GET /api/precios/estado y POST /api/precios/recalcular — proyección local
+
+La auditoría de precios se actualiza automáticamente desde los caches de ML y Woo. El
+estado conserva los campos históricos (`enCurso`, progreso, `ultimo`, `resumen`) y agrega,
+de forma aditiva, `ultima_sync_en`, `ultima_sync_origen`, `ultima_completa_en`,
+`ml_datos_en`, `woo_datos_en`, `ultimo_error` y `ultimo_error_en`. `POST
+/api/precios/recalcular` mantiene `{ ok, iniciado }`, pero deriva desde cache local: no
+relee masivamente `/items` de Mercado Libre. Comisión y envío sólo se consultan si su cache
+de siete días falta o venció.
+
 Mismo contrato aplicado en `GET /api/sync/atencion/:cat` (también tenía `LIMIT 500`
 reportado como `total: rows.length`): ahora `total` es el COUNT real de esa categoría y se
 agregó `truncado`.

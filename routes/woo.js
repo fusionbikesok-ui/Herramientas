@@ -7,6 +7,7 @@ import { buildWooPath } from '../lib/wooStock.js';
 import { syncSkuPuntual } from './sync.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { espera } from '../lib/esperas.js';
+import { dispararAuditoriaPrecios } from '../lib/auditoriaPrecios.js';
 
 const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refresco
 
@@ -475,6 +476,9 @@ export async function refrescarCatalogo(db, cfg, opts = {}) {
     // ciclo trajo productos de verdad (señal inequívoca de que Woo respondió con datos).
     if (typeof resultado === 'number' && resultado === 0) return resultado;
     confirmarCicloSano(db, { integracion: INTEGRACION_WOO, proceso: PROCESO_REFRESCAR_CATALOGO });
+    // La auditoría deriva el contado de regular_price. Este disparo es local y deduplicado por
+    // huella: nunca bloquea el refresco de Woo ni relee publicaciones de ML.
+    dispararAuditoriaPrecios(db, { origen: 'woo' });
     return resultado;
   } catch (e) {
     // Hallazgo del revisor (A3, corregido tras regresión detectada en la 2da pasada): la
@@ -549,6 +553,7 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
         console.error('[woo] proteccion por baja no aplicada para', b.id_woo, '-', e.message);
       }
     }
+    dispararAuditoriaPrecios(db, { origen: 'woo' });
     return { producto_id: id, parent_id: parentId ? parent : null, eliminado: true, filas: 0, claves_protegidas: protegidas };
   }
 
@@ -585,6 +590,7 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
     db.prepare('DELETE FROM catalogo_cache WHERE id_padre=?').run(parent);
     for (const fila of filas) upsert.run(filaCatalogo(fila, actualizadoEn));
   })();
+  dispararAuditoriaPrecios(db, { origen: 'woo' });
   return { producto_id: id, parent_id: parent, eliminado: false, filas: filas.length };
 }
 

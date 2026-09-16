@@ -15,6 +15,7 @@ import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdent
 import { detectarCambios } from '../lib/vigiaFormato.js';
 import { procesarCambios } from '../lib/vigiaPausado.js';
 import { espera } from '../lib/esperas.js';
+import { dispararAuditoriaPrecios } from '../lib/auditoriaPrecios.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -113,6 +114,11 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
         };
       }
       auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: scopeNorm === 'all' });
+      // El mismo snapshot ML que acabamos de confirmar también es la fuente de la auditoría
+      // de precios. Es una proyección local: no relanza /items ni bloquea Guardia/Matcher.
+      if (scopeNorm === 'all') {
+        dispararAuditoriaPrecios(db, { origen: 'ml_completo', podar: true, mlCfg: cfg });
+      }
     } catch (e) {
       _refresco.error = e.message;
       try {
@@ -318,7 +324,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels`,
+      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels,category_id,listing_type_id,shipping`,
       null, { manual: true }
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
@@ -486,10 +492,12 @@ function prepararUpsertCache(db) {
     INSERT INTO ml_publicaciones_cache
       (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle,
        seller_sku, seller_sku_presente, seller_custom_field, atributos_json, gtin, user_product_id, canales_json,
-       variations_texto, thumbnail, permalink, catalogo, catalog_product_id, precio, available_quantity, precio_actualizado_en, actualizado_en)
+       variations_texto, thumbnail, permalink, catalogo, catalog_product_id, precio, available_quantity,
+       category_id, listing_type_id, free_shipping, precio_actualizado_en, actualizado_en)
     VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle,
       @seller_sku, @seller_sku_presente, @seller_custom_field, @atributos_json, @gtin, @user_product_id, @canales_json,
-      @variations_texto, @thumbnail, @permalink, @catalogo, @catalog_product_id, @precio, @available_quantity, @actualizado_en, @actualizado_en)
+      @variations_texto, @thumbnail, @permalink, @catalogo, @catalog_product_id, @precio, @available_quantity,
+      @category_id, @listing_type_id, @free_shipping, @actualizado_en, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
       item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
       status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
@@ -501,6 +509,7 @@ function prepararUpsertCache(db) {
       thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo,
       catalog_product_id=excluded.catalog_product_id,
       precio=excluded.precio, available_quantity=excluded.available_quantity,
+      category_id=excluded.category_id, listing_type_id=excluded.listing_type_id, free_shipping=excluded.free_shipping,
       precio_actualizado_en=excluded.precio_actualizado_en, actualizado_en=excluded.actualizado_en
   `);
 }
@@ -536,7 +545,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels`
+      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels,category_id,listing_type_id,shipping`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       // Mismo criterio que BLOQUEANTE 1 en el camino total: .status explícito para que
@@ -575,6 +584,9 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
   if (autoVinculadas) console.log(`[matcher] auto-vinculadas por seller_sku: ${autoVinculadas}`);
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
+  // Este camino también lo llama el worker de webhooks directamente, sin pasar por
+  // dispararRefrescoMl: proyectar ahora evita que un cambio puntual de precio espere el scan.
+  dispararAuditoriaPrecios(db, { origen: 'ml_acotado', itemIds: ids, podar: true, mlCfg: cfg });
   return { total: filas.length, items: ids.length, variaciones, vigia, auto_vinculadas: autoVinculadas };
 }
 

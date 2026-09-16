@@ -68,6 +68,9 @@ function makeDb() {
       catalog_product_id TEXT,
       precio REAL,
       available_quantity INTEGER,
+      category_id TEXT,
+      listing_type_id TEXT,
+      free_shipping INTEGER,
       precio_actualizado_en TEXT,
       actualizado_en TEXT NOT NULL
     );
