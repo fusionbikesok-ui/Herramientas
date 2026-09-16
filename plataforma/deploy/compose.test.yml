@@ -27,7 +27,16 @@ services:
     cpus: 0.20
   api:
     extends: { file: compose.yml, service: api }
-    environment: { SERVICIO: api, HEARTBEAT_MAX_S: 5, HEARTBEAT_INTERVAL_MS: 500 }
+    environment:
+      SERVICIO: api
+      HEARTBEAT_MAX_S: 5
+      HEARTBEAT_INTERVAL_MS: 500
+      # Vacías salvo en C9 de T3: sin ellas la API interna de señales no existe.
+      SENALES_KEYRING_FILE: ${SENALES_KEYRING_FILE:-}
+      SENALES_CUENTAS: ${SENALES_CUENTAS:-}
+      SENALES_ORIGENES: ${SENALES_ORIGENES:-}
+    volumes:
+      - ${KEYRING_DIR:?KEYRING_DIR requerido}:/run/fusion-keyring:ro
     restart: "no"
   worker:
     extends: { file: compose.yml, service: worker }

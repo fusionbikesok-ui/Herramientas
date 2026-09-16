@@ -147,7 +147,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
           .then((r) => { if (r.importadas || r.detenida) console.log(`[sombra] pérdidas importadas=${r.importadas} pendientes=${r.pendientes} detenida=${r.detenida}`); })
           .catch((e) => console.error('[sombra] importación de pérdidas falló:', e.message))
           .finally(() => { importando = false; });
-      }, 5 * 60_000).unref();
+      }, Number(process.env.SOMBRA_IMPORTAR_CADA_MS) > 0 ? Number(process.env.SOMBRA_IMPORTAR_CADA_MS) : 5 * 60_000).unref();
     }
   }
   app._colaSombra = colaSombra;
@@ -1031,6 +1031,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
 
     const port = process.env.PORT || 3001;
-    app.listen(port, () => console.log(`herramientas-app escuchando en :${port}`));
+    // LISTEN_HOST sólo para instancias de prueba aisladas (C9 de E1): escuchar en 127.0.0.1 evita exponer un
+    // puerto nuevo a Internet. Sin la variable el comportamiento es el de siempre (todas las interfaces).
+    const host = process.env.LISTEN_HOST || undefined;
+    app.listen(port, host, () => console.log(`herramientas-app escuchando en ${host || '*'}:${port}`));
   });
 }

@@ -643,6 +643,15 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     el próximo reinicio del legado; los 7 días de medición cuentan desde ahí. `resumenMedicionMl` da p50/p95/p99.
     **Reinicio hecho 2026-09-16 15:58:30 UTC** (backup `/root/fusion-sqlite-backup-e1-20260916T155355Z.sqlite`):
     106 aplicada, webhooks ML entrando, medición escribiendo desde 15:59Z. La ventana de 7 días cierra el 2026-09-23 16:00 UTC.
+  - **C9 (arnés contractual)**: `scripts/qa/c9/correr-c9.sh` corre E1-LAT-01 (A copia apagada, B encendida, C
+    encendida + PostgreSQL detenido) y la parte de importación de E1-PGDOWN-01, con webhooks anonimizados de los
+    recibos reales de 7 días (`anonimizar.mjs`, base de producción en solo lectura). Legado de prueba aislado:
+    `env -i`, cwd en `/root/e1-c9/<ts>` (no carga el `.env` real), `LISTEN_HOST=127.0.0.1`, crons apagados,
+    `ML_API_BASE` inalcanzable; aborta si la carga supera 1,6 o producción no responde. Sin `NODE_ENV=production`:
+    en ese modo el legado exige push FCM y no arranca.
+  - **Defecto encontrado por C9 y corregido**: `crearPool` (plataforma) no escuchaba `error`; al reiniciar PostgreSQL
+    una conexión ociosa muerta tiraba el proceso (API/worker/scheduler) por excepción no capturada, y las pérdidas
+    nunca se importaban. Ahora el pool registra el mensaje y descarta la conexión (`test/pool.test.ts`).
   - **Puerto 3001 cerrado hacia afuera desde 2026-09-16** (antes respondía por IP sin Nginx): unidad
     `fusion-firewall-3001.service` → `/usr/local/sbin/fusion-firewall-3001.sh`, cadena `FUSION_3001` en
     iptables e ip6tables, sólo loopback y `172.16.0.0/12` (redes de Docker del VPS: 172.16.0-4.0/24).
