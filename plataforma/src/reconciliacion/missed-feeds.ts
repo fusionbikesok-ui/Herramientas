@@ -68,6 +68,8 @@ export async function enumerarMissedFeeds(opciones: {
           c.enumerados++;
           const aviso = esRegistro(crudo) ? crudo : {};
           const notificacion = typeof aviso._id === 'string' ? aviso._id.trim() : '';
+          // Sin `topic` en el aviso se asume el tópico consultado: la consulta ya filtra por tópico. Si el aviso
+          // trae uno, manda el suyo (p. ej. `orders` dentro de `orders_v2`).
           const topic = typeof aviso.topic === 'string' ? EQUIVALENCIA[aviso.topic] : EQUIVALENCIA[consulta];
           const usuario = idTexto(aviso.user_id);
           const coincide = topic ? String(aviso.resource ?? '').match(RECURSO[topic]!) : null;
