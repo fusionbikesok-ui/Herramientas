@@ -881,6 +881,22 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_publicacion_cambios_103')").run();
     })();
   }
+  // E1 T3 C1: ciclo de vida de la copia de sombra sobre integration_events. Las columnas se agregan
+  // una por una según PRAGMA para que una base con la migración a medio aplicar se complete sola; los
+  // índices del .sql son idempotentes. Ninguna columna lleva CHECK: SQLite no puede agregar
+  // restricciones a una tabla existente sin reconstruirla, y esta tabla es caliente (~1.400 filas por
+  // día). Los valores válidos los impone el módulo de sombra del corte C2.
+  const sombraCicloMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='sombra_ciclo_104'").get();
+  if (!sombraCicloMigration) {
+    db.transaction(() => {
+      const columnas = new Set(db.prepare('PRAGMA table_info(integration_events)').all().map((c) => c.name));
+      for (const col of ['shadow_status', 'shadow_reason', 'ack_at', 'enqueue_at', 'completed_at', 'boot_id', 'attempt_id', 'shadow_imported_at']) {
+        if (!columnas.has(col)) db.exec(`ALTER TABLE integration_events ADD COLUMN ${col} TEXT`);
+      }
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '104_sombra_ciclo_eventos.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('sombra_ciclo_104')").run();
+    })();
+  }
   const canarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_canario_084'").get();
   if (!canarioMigration) {
     db.transaction(() => {

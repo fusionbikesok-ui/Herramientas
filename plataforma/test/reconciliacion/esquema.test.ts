@@ -46,21 +46,22 @@ describe('contrato relacional E1 T2', () => {
     await db.end();
   });
 
-  it('la migración 0004 siembra las diez corrientes con su calendario', async () => {
+  it('0004 siembra el calendario y 0005 deshabilita lo que no corresponde al canal', async () => {
     // La cuenta tiene que existir antes de 0004: se migra hasta 0003, se crea la cuenta y se sigue.
+    // 0005 también se aparta, porque quitar sólo 0004 dejaría un hueco de numeración.
     const base = await crearBaseVacia(); bases.push(base);
     const dir = mkdtempSync(join(tmpdir(), 'migr-corrientes-'));
     cpSync(DIR_MIGRACIONES, dir, { recursive: true });
-    rmSync(join(dir, '0004_corrientes.sql'));
+    for (const m of ['0004_corrientes.sql', '0005_senales.sql']) rmSync(join(dir, m));
     await migrar(base.urlMigrador, dir);
     const db = new pg.Client({ connectionString: base.urlApp }); await db.connect();
     const empresa = (await db.query<{ id: string }>("insert into core.companies(legal_name) values ('Corrientes') returning id")).rows[0]!.id;
     await db.query("insert into core.channel_accounts(company_id,channel,external_account) values ($1,'mercadolibre','c1')", [empresa]);
-    cpSync(join(DIR_MIGRACIONES, '0004_corrientes.sql'), join(dir, '0004_corrientes.sql'));
-    expect(await migrar(base.urlMigrador, dir)).toEqual(['0004_corrientes.sql']);
+    for (const m of ['0004_corrientes.sql', '0005_senales.sql']) cpSync(join(DIR_MIGRACIONES, m), join(dir, m));
+    expect(await migrar(base.urlMigrador, dir)).toEqual(['0004_corrientes.sql', '0005_senales.sql']);
 
-    const filas = await db.query<{ topic: string; cursor_kind: string; interval_seconds: number; hora: string; dow: number }>(
-      `select topic,cursor_kind,interval_seconds,
+    const filas = await db.query<{ topic: string; cursor_kind: string; enabled: boolean; interval_seconds: number; hora: string; dow: number }>(
+      `select topic,cursor_kind,enabled,interval_seconds,
               to_char(next_run_at AT TIME ZONE 'America/Argentina/Buenos_Aires','HH24:MI') AS hora,
               extract(dow from next_run_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::int AS dow
          from integrations.reconciliation_cursors order by topic,cursor_kind`);
@@ -69,6 +70,11 @@ describe('contrato relacional E1 T2', () => {
       'ml.questions|state_sweep', 'ml.shipments|state_sweep', 'woo.orders|full_scan', 'woo.orders|state_sweep',
       'woo.products|full_scan', 'woo.products|state_sweep',
     ]);
+    // 0004 sembraba sin mirar el canal; 0005 deja apagadas las corrientes de Woo en una cuenta de ML,
+    // sin borrarlas y sólo porque no tienen éxito previo ni corrida activa (forward-only).
+    expect(filas.rows.filter((f) => f.topic.startsWith('ml.')).every((f) => f.enabled)).toBe(true);
+    expect(filas.rows.filter((f) => f.topic.startsWith('woo.')).every((f) => !f.enabled)).toBe(true);
+
     const completas = Object.fromEntries(filas.rows.filter((f) => f.cursor_kind === 'full_scan').map((f) => [f.topic, f]));
     expect(completas['ml.items']).toMatchObject({ interval_seconds: 86400, hora: '04:00' });
     expect(completas['woo.products']).toMatchObject({ interval_seconds: 86400, hora: '04:15' });
@@ -78,19 +84,20 @@ describe('contrato relacional E1 T2', () => {
       'ml.orders': 600, 'ml.shipments': 900, 'ml.questions': 1200, 'ml.messages': 1200,
       'ml.claims': 1200, 'woo.orders': 600, 'woo.products': 600,
     });
-    // Reaplicar la migración no duplica corrientes ni reabre una deshabilitada a mano.
+
+    // Reaplicar no duplica corrientes ni reabre una deshabilitada a mano.
     await db.query("update integrations.reconciliation_cursors set enabled=false where topic='ml.orders'");
     expect(await migrar(base.urlMigrador, dir)).toEqual([]);
     expect(await migrar(base.urlMigrador, DIR_MIGRACIONES)).toEqual([]);
     const despues = await db.query<{ n: string; apagadas: string }>(
       "select count(*) n, count(*) filter (where not enabled) apagadas from integrations.reconciliation_cursors");
-    expect(despues.rows[0]).toEqual({ n: '10', apagadas: '1' });
+    expect(despues.rows[0]).toEqual({ n: '10', apagadas: '5' });
 
-    // Una cuenta que nace después de la migración se siembra con la misma función, sin repetir el calendario.
+    // Una cuenta que nace después se siembra con la misma función, y sólo con lo de su canal.
     const nueva = (await db.query<{ id: string }>("insert into core.channel_accounts(company_id,channel,external_account) values ($1,'woocommerce','https://c2') returning id", [empresa])).rows[0]!.id;
-    expect((await db.query<{ sembrar_corrientes: number }>('select integrations.sembrar_corrientes($1)', [nueva])).rows[0]?.sembrar_corrientes).toBe(10);
+    expect((await db.query<{ sembrar_corrientes: number }>('select integrations.sembrar_corrientes($1)', [nueva])).rows[0]?.sembrar_corrientes).toBe(4);
     expect((await db.query<{ sembrar_corrientes: number }>('select integrations.sembrar_corrientes($1)', [nueva])).rows[0]?.sembrar_corrientes).toBe(0);
-    expect(await db.query<{ n: string }>('select count(*) n from integrations.reconciliation_cursors').then((r) => r.rows[0]?.n)).toBe('20');
+    expect(await db.query<{ n: string }>('select count(*) n from integrations.reconciliation_cursors').then((r) => r.rows[0]?.n)).toBe('14');
     await db.end();
     rmSync(dir, { recursive: true, force: true });
   });

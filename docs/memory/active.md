@@ -54,6 +54,32 @@ La revisión independiente de T2 quedó **aprobada el 2026-09-16**, después de 
 
 La suite legacy completa, que comparte el simulador de canales, dio 2631/2683 el 2026-09-16 con un único fallo: `test/preparacion.test.js` ("cola de fotos", dependiente de tiempo) esperaba `listo` y encontró `procesando`. Corrido solo, ese archivo pasa 245/245, no importa el simulador y nada del diff de T2 toca `routes/`, `lib/`, `db/` ni `utils/`: es el falso fallo que ya describe CLAUDE.md cuando la suite completa corre con el servidor de producción arriba, no una regresión.
 
+**T3 corte C1 implementado el 2026-09-16** (contrato y migraciones, sin conexión real ni flags):
+
+- Legado: migración `104_sombra_ciclo_eventos.sql` + su registro en `db/index.js` con la clave
+  `sombra_ciclo_104`. Agrega a `integration_events` ocho columnas nulables del ciclo de sombra
+  (`shadow_status`, `shadow_reason`, `ack_at`, `enqueue_at`, `completed_at`, `boot_id`, `attempt_id`,
+  `shadow_imported_at`) y tres índices parciales: activa, purga y descartes sin importar. **SQLite no
+  puede agregar un CHECK a una tabla existente** sin reconstruirla, y esa tabla es caliente, así que los
+  valores válidos los impone el código del corte C2, no el esquema. Ojo: el legado aplica sus
+  migraciones **en cada arranque**, así que commitear una migración toca producción en el próximo
+  reinicio; por eso columnas nulables y sin default.
+- Plataforma: migración `0005_senales.sql` con `integrations.reconciliation_signals` (unicidad por aviso
+  cuenta+tópico+fingerprint, índice único parcial de una sola señal activa por recurso, mismo contrato
+  de lease que colas y corridas, checks de tópico/fuente/estado) y `sembrar_corrientes` reescrita en
+  plpgsql: consulta `core.channel_accounts.channel`, siembra sólo las corrientes de ese canal (6 para ML,
+  4 para Woo) y **falla** si la cuenta no existe o el canal no tiene corrientes definidas. La misma
+  migración deshabilita —sin borrar— las corrientes cruzadas que 0004 había sembrado, sólo si no tienen
+  éxito previo ni corrida activa.
+- Los permisos de `plataforma_app` sobre tablas nuevas se heredan por `ALTER DEFAULT PRIVILEGES` del rol
+  migrador (0002): una tabla nueva no necesita GRANT explícito.
+- El cuerpo de una función en PostgreSQL se guarda textualmente, así que `schema.sql` y la migración
+  tienen que ser **idénticos byte a byte**: el test que compara `pg_dump` de la base migrada contra la
+  referencia falla por un cambio de indentación. Empalmar el bloque con un script es más seguro que
+  editarlo a mano.
+- Al agregar una migración de plataforma hay que actualizar la lista exacta de `migraciones.test.ts`, y
+  el test del hueco de numeración usa el número siguiente al último (hoy `0007_salto.sql`).
+
 Falta para cerrar E1: los tramos 3 (sombra en vivo) y 4 (seguridad y reporte). E1 queda en `desarrollo`, no en `candidata`: T2 verificado no acepta la entrega, y nada de esto está desplegado.
 
 E2 conserva pendientes externos de revisión independiente y piloto/jornada observada; E3 ya está en desarrollo técnico con autenticación del agente validada, pero requiere relevamiento de impresora, prueba Windows/hardware, revisión y piloto antes de candidata. No desplegar runtime mientras las entregas sigan sin aceptación.
