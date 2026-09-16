@@ -6,6 +6,7 @@ import type { Logger } from 'pino';
 import { correlacionDe } from '../comun/correlacion.ts';
 import { sinSesion, type ProveedorSesion } from '../auth/sesion.ts';
 import { registrarSenales, type OpcionesSenales } from './senales.ts';
+import { evaluarAlertasPlataforma, medirPlataforma } from '../observabilidad/sombra.ts';
 
 type Estado = 'ok' | 'degraded' | 'down';
 interface Componente { status: Estado; checked_at: string; detail?: string }
@@ -119,6 +120,15 @@ export function crearApi(opciones: OpcionesApi) {
     const next_cursor = r.rows.length > limit && ultimo ? Buffer.from(JSON.stringify({ openedAt: ultimo.opened_at.toISOString(), sourceType: ultimo.source_type, sourceId: ultimo.source_id })).toString('base64url') : null;
     return { items: filas.map((f) => ({ ...f, source_id: f.source_id, opened_at: f.opened_at.toISOString() })), next_cursor };
   });
+  app.get('/api/v2/shadow/status', async (req, reply) => {
+    const actual = await sesion(req);
+    const correlation_id = req.headers['x-correlation-id'];
+    if (!actual) return reply.code(401).send({ code: 'unauthenticated', message: 'Se requiere iniciar sesión.', correlation_id });
+    if (!actual.capabilities.includes('operations.read')) return reply.code(403).send({ code: 'forbidden', message: 'No tenés permiso para ver la sombra.', correlation_id });
+    const metricas = await medirPlataforma(opciones.pool, ahora());
+    return { metrics: metricas, alerts: evaluarAlertasPlataforma(metricas) };
+  });
+
   if (opciones.senales) registrarSenales(app, opciones.pool, opciones.logger, opciones.senales, ahora);
   return app;
 }

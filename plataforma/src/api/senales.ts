@@ -6,6 +6,7 @@ import type { Logger } from 'pino';
 import { z } from 'zod';
 import type { KeyringSobre } from '../seguridad/sobre.ts';
 import { verificarInterna } from '../seguridad/interna.ts';
+import { registrarEvento } from '../audit/auditoria.ts';
 
 export type Canal = 'mercadolibre' | 'woocommerce';
 
@@ -32,6 +33,14 @@ const Envelope = z.strictObject({
   fingerprint: z.string().min(1).max(512),
   notification_id: z.string().min(1).max(256).nullable().optional(),
   source: z.enum(['webhook_copy', 'ml_missed_feed']),
+  /**
+   * Importación de una pérdida (§11): el legado reenvía un recibo que descartó con la plataforma caída.
+   * Además de la señal deja un evento de auditoría encadenada, una sola vez por recibo.
+   */
+  import: z.strictObject({
+    discarded_at: z.iso.datetime({ offset: true }),
+    reason: z.enum(['platform_unavailable', 'platform_timeout']),
+  }).optional(),
 });
 
 function error(req: FastifyRequest, reply: FastifyReply, status: number, code: string, message: string) {
@@ -71,7 +80,8 @@ export function registrarSenales(app: FastifyInstance<Server, IncomingMessage, S
 
       const prefijo = datos.channel === 'mercadolibre' ? 'ml.' : 'woo.';
       const cuenta = opciones.cuentas.get(datos.channel);
-      if (!cuenta || !datos.topic.startsWith(prefijo) || (datos.source === 'ml_missed_feed' && datos.channel !== 'mercadolibre')) {
+      if (!cuenta || !datos.topic.startsWith(prefijo) || (datos.source === 'ml_missed_feed' && datos.channel !== 'mercadolibre')
+        || (datos.import && datos.source !== 'webhook_copy')) {
         return error(req, reply, 409, 'channel_topic_mismatch', 'El canal o el tópico no corresponden a una cuenta configurada.');
       }
 
@@ -92,6 +102,26 @@ export function registrarSenales(app: FastifyInstance<Server, IncomingMessage, S
             (channel_account_id, topic, resource_id, notification_id, fingerprint, source)
           VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING RETURNING id`,
         [cuenta, datos.topic, datos.resource_id, datos.notification_id ?? null, datos.fingerprint, datos.source]);
+        if (datos.import) {
+          // Idempotente por recibo: el fingerprint identifica el recibo del legado. Un reintento de la
+          // importación (el legado no llegó a marcarla) no encadena un segundo evento.
+          const ya = await cliente.query(
+            "SELECT 1 FROM audit.audit_events WHERE aggregate_type='shadow_receipt' AND aggregate_id=$1 AND action='shadow.loss_imported' LIMIT 1",
+            [datos.fingerprint]);
+          if (!ya.rowCount) {
+            const empresa = (await cliente.query<{ company_id: string }>('SELECT company_id FROM core.channel_accounts WHERE id=$1', [cuenta])).rows[0];
+            if (!empresa) throw Object.assign(new Error('cuenta inexistente'), { code: '23503' });
+            await registrarEvento(cliente, {
+              companyId: empresa.company_id, actorType: 'system', actorId: 'legacy-shadow-import',
+              action: 'shadow.loss_imported', aggregateType: 'shadow_receipt', aggregateId: datos.fingerprint,
+              correlationId: String(req.headers['x-correlation-id']), reason: datos.import.reason,
+              payload: {
+                channel_account_id: cuenta, topic: datos.topic, resource_id: datos.resource_id,
+                reason: datos.import.reason, discarded_at: datos.import.discarded_at,
+              },
+            });
+          }
+        }
         await cliente.query('COMMIT');
         return reply.code(202).send({ status: senal.rowCount ? 'accepted' : 'duplicate', correlation_id: req.headers['x-correlation-id'] });
       } catch (err) {

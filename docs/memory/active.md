@@ -617,6 +617,15 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     `transporte-gateway.ts`; `test/reconciliacion/gateway.test.ts` importa el JS del legado y prueba la
     ida y vuelta, así que los dos lados no pueden divergir en silencio. `mlFetch` acepta `opts.headers`
     (nunca pisan Authorization). Presupuesto shadow de ML en 0 = 429 sintético sin red.
+  - **C8 (observabilidad y SOP)**: legado `lib/metricasSombra.js` (recibos, razones, latencia p95, cola,
+    pérdidas sin importar, webhooks Woo caídos) publica alertas como incidentes `integracion='sombra'` y los
+    cierra solos; plataforma `observabilidad/sombra.ts` mide señales y barridos, el scheduler guarda
+    `integrations.shadow_daily_summaries` (0008, sin firma) y loguea alertas; `GET /api/v2/shadow/status`
+    con `operations.read`. Importación de pérdidas: el legado reenvía descartes por plataforma caída con
+    bloque `import` y la API deja `audit_events` `shadow.loss_imported` una vez por recibo
+    (`aggregate_type='shadow_receipt'`, `aggregate_id`=fingerprint). SOP con un ancla por alerta en
+    `docs/superpowers/specs/e1/sop-sombra.md`; un test por lado verifica que cada runbook citado exista.
+    El scheduler ahora libera leases vencidos de señales (C6 no lo hacía: quedaban `claimed` para siempre).
   - **Nginx (VPS, fuera del repo) desde 2026-09-16**: `location ~* ^/(herramientas/+)?internal(/|$) { return 404; }`
     en `sites-available/herramientas` y `sites-available/fusionbikes` (el `default_server` del 80 también
     proxea `/herramientas/`). Copia previa en `/root/nginx-backup-e1c5/`. Evidencia: `scripts/qa/deny-interno.sh`.

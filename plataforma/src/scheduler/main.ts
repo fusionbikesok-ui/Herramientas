@@ -37,8 +37,11 @@ while (activo) {
       logger.info('exclusión del scheduler obtenida');
     }
     const resultado = await scheduler.unaVuelta();
+    // Alertas como log estructurado: sin PII, con umbral, responsable y runbook para el SOP.
+    const alertas = await scheduler.observar();
+    for (const alerta of alertas ?? []) logger.warn({ alerta }, 'alerta de sombra');
     if (resultado.pendientes || resultado.muertos || resultado.corridas
-      || resultado.corridasRecuperadas || resultado.corridasFallidas) {
+      || resultado.corridasRecuperadas || resultado.corridasFallidas || resultado.senalesRecuperadas || resultado.senalesMuertas) {
       logger.info(resultado, 'vuelta del scheduler completada');
     }
   } catch (error) {

@@ -66,7 +66,8 @@ import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { mobileHoyRouter } from './routes/mobileHoy.js';
 import { registrarWebhookMl, registrarWebhookWooProducto, registrarWebhookWooPedido, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
 import { marcarSombra, abandonarHuerfanas, abandonarVencidos, permitirCuentaAjena, copiaHabilitada, crearColaSombra } from './lib/sombra.js';
-import { crearEmisorSombra, destinoSenal } from './lib/emisorSombra.js';
+import { crearEmisorSombra, crearEnvioSenal, destinoSenal, importarPerdidas } from './lib/emisorSombra.js';
+import { crearMuestreoCola, evaluarAlertasLegado, medirSombraLegado, publicarAlertasLegado } from './lib/metricasSombra.js';
 import { cargarKeyringInterno, cargarKeyringInternoActivo, crearOrigenesInternos, verificarInterno } from './lib/internoHmac.js';
 import { crearGatewayCanal, crearPresupuestoShadow, ErrorOperacionInvalida } from './lib/gatewayCanal.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
@@ -116,15 +117,37 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     }
     try {
       const keyring = cargarKeyringInternoActivo(process.env.SOMBRA_KEYRING_FILE);
-      return crearColaSombra({ db, enviar: crearEmisorSombra({ db, url: process.env.SOMBRA_PLATAFORMA_URL, keyring }) });
+      const cola = crearColaSombra({ db, enviar: crearEmisorSombra({ db, url: process.env.SOMBRA_PLATAFORMA_URL, keyring }) });
+      cola.enviarSenal = crearEnvioSenal({ url: process.env.SOMBRA_PLATAFORMA_URL, keyring, timeoutMs: 5000 });
+      return cola;
     } catch (e) {
       console.error('[sombra] configuración de copia inválida, copia apagada:', e.message);
       return null;
     }
   })();
   if (colaSombra) {
-    // Intentos de este proceso que nunca cerraron (p. ej. un fetch colgado más allá del timeout).
-    setInterval(() => { try { abandonarVencidos(db); } catch { /* base cerrada en pruebas */ } }, 60_000).unref();
+    // Intentos de este proceso que nunca cerraron (p. ej. un fetch colgado más allá del timeout), muestreo
+    // de la cola, alertas como incidentes operativos e importación de pérdidas. Todo fail-open.
+    const muestreo = crearMuestreoCola(colaSombra);
+    setInterval(() => { try { muestreo.registrar(); } catch { /* fail-open */ } }, 30_000).unref();
+    setInterval(() => {
+      try {
+        abandonarVencidos(db);
+        const m = medirSombraLegado(db, { cola: colaSombra });
+        publicarAlertasLegado(db, evaluarAlertasLegado(m, { colaSaturadaSostenida: muestreo.saturadaSostenida() }));
+      } catch { /* base cerrada en pruebas */ }
+    }, 60_000).unref();
+    if (colaSombra.enviarSenal) {
+      let importando = false;
+      setInterval(() => {
+        if (importando) return;
+        importando = true;
+        importarPerdidas({ db, enviarSenal: colaSombra.enviarSenal })
+          .then((r) => { if (r.importadas || r.detenida) console.log(`[sombra] pérdidas importadas=${r.importadas} pendientes=${r.pendientes} detenida=${r.detenida}`); })
+          .catch((e) => console.error('[sombra] importación de pérdidas falló:', e.message))
+          .finally(() => { importando = false; });
+      }, 5 * 60_000).unref();
+    }
   }
   app._colaSombra = colaSombra;
 

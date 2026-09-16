@@ -52,13 +52,13 @@ describe('contrato relacional E1 T2', () => {
     const base = await crearBaseVacia(); bases.push(base);
     const dir = mkdtempSync(join(tmpdir(), 'migr-corrientes-'));
     cpSync(DIR_MIGRACIONES, dir, { recursive: true });
-    for (const m of ['0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql']) rmSync(join(dir, m));
+    for (const m of ['0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql']) rmSync(join(dir, m));
     await migrar(base.urlMigrador, dir);
     const db = new pg.Client({ connectionString: base.urlApp }); await db.connect();
     const empresa = (await db.query<{ id: string }>("insert into core.companies(legal_name) values ('Corrientes') returning id")).rows[0]!.id;
     await db.query("insert into core.channel_accounts(company_id,channel,external_account) values ($1,'mercadolibre','c1')", [empresa]);
-    for (const m of ['0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql']) cpSync(join(DIR_MIGRACIONES, m), join(dir, m));
-    expect(await migrar(base.urlMigrador, dir)).toEqual(['0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql']);
+    for (const m of ['0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql']) cpSync(join(DIR_MIGRACIONES, m), join(dir, m));
+    expect(await migrar(base.urlMigrador, dir)).toEqual(['0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql']);
 
     const filas = await db.query<{ topic: string; cursor_kind: string; enabled: boolean; interval_seconds: number; hora: string; dow: number }>(
       `select topic,cursor_kind,enabled,interval_seconds,

@@ -20,6 +20,7 @@ tags:
   - name: health
   - name: incidents
   - name: signals
+  - name: shadow
 
 paths:
   /health:
@@ -100,6 +101,22 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
               example: { code: invalid_parameter, message: El cursor no es válido., correlation_id: 0191f2c4-7b1e-7d3a-9c1f-2b6a1e4d5f62, details: { parameter: cursor } }
 
+  /shadow/status:
+    get:
+      tags: [shadow]
+      summary: Métricas y alertas de la sombra (E1 T3)
+      description: Conteos y edades sin PII, con las alertas activas; cada alerta trae umbral, responsable y runbook. Requiere `operations.read`.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Estado medido en el momento
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShadowStatus' }
+        '401': { description: Sin sesión, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Sin capacidad, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /internal/v1/reconciliation-signals:
     servers:
       - url: http://127.0.0.1:3201
@@ -177,6 +194,42 @@ components:
         fingerprint: { type: string, minLength: 1, maxLength: 512 }
         notification_id: { type: string, minLength: 1, maxLength: 256, nullable: true }
         source: { type: string, enum: [webhook_copy, ml_missed_feed] }
+        import:
+          type: object
+          description: Importación de una pérdida del legado (plataforma caída). Deja auditoría encadenada una sola vez por recibo.
+          required: [discarded_at, reason]
+          additionalProperties: false
+          properties:
+            discarded_at: { type: string, format: date-time }
+            reason: { type: string, enum: [platform_unavailable, platform_timeout] }
+
+    ShadowAlert:
+      type: object
+      required: [id, severidad, responsable, umbral, valor, runbook]
+      additionalProperties: false
+      properties:
+        id: { type: string, pattern: '^[a-z_0-9]+$' }
+        severidad: { type: string, enum: [alta, media] }
+        responsable: { type: string, enum: [operaciones, desarrollo] }
+        umbral: { type: string }
+        valor: { type: number }
+        runbook: { type: string }
+
+    ShadowStatus:
+      type: object
+      required: [metrics, alerts]
+      additionalProperties: false
+      properties:
+        metrics:
+          type: object
+          required: [medido_en, senales, barridos]
+          properties:
+            medido_en: { type: string, format: date-time }
+            senales: { type: object }
+            barridos: { type: object }
+        alerts:
+          type: array
+          items: { $ref: '#/components/schemas/ShadowAlert' }
 
     SignalAccepted:
       type: object
