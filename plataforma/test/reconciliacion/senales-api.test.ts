@@ -10,6 +10,9 @@ import { crearLogger } from '../../src/comun/logger.ts';
 import { crearPool } from '../../src/db/pool.ts';
 import { crearOrigenes, firmar } from '../../src/seguridad/interna.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
+// El emisor real del legado: prueba de punta a punta del contrato de firma y envelope.
+// @ts-expect-error módulo JS del legado sin tipos
+import { crearEmisorSombra } from '../../../lib/emisorSombra.js';
 
 const require = createRequire(import.meta.url);
 const Ajv = require('ajv') as new (o: object) => { compile(s: object): ValidateFunction };
@@ -159,6 +162,28 @@ describe('E1-SIG-02 API interna de señales', () => {
     expect(r.statusCode).toBe(503); expect(r.json()).toMatchObject({ code: 'platform_unavailable' });
     expect(r.body).not.toContain('ECONNREFUSED');
     await app.close(); await caido.end();
+  });
+
+  it('el emisor del legado habla con esta API: firma aceptada, señal creada y reentrega deduplicada', async () => {
+    const app = api();
+    const eventos: Record<string, { event_id: string; channel: string; resource_id: string; metadata_json: string }> = {
+      e1: { event_id: 'ml-webhook-e1', channel: 'ml', resource_id: '/orders/7777', metadata_json: '{"topic":"orders_v2","notification_id":"n-7777"}' },
+      e2: { event_id: 'woo-webhook-e2', channel: 'woo', resource_id: '/products/15', metadata_json: '{"topic":"product.updated"}' },
+    };
+    const db = { prepare: () => ({ get: (id: string) => eventos[id] }) };
+    const fetchInyectado = async (url: URL, init: { headers: Record<string, string>; body: Buffer }) => {
+      const r = await app.inject({ method: 'POST', url: url.pathname, headers: init.headers, payload: init.body });
+      return new Response(r.body, { status: r.statusCode });
+    };
+    const enviar = crearEmisorSombra({ db, url: 'http://127.0.0.1:3201', keyring, fetch: fetchInyectado });
+    await enviar({ eventId: 'e1' });
+    await enviar({ eventId: 'e1' });
+    // Woo no tiene cuenta configurada en este test: la API responde 409 y el emisor lo normaliza.
+    await expect(enviar({ eventId: 'e2' })).rejects.toThrow('invalid_resource');
+    const filas = await admin.query<{ topic: string; resource_id: string; notification_id: string; source: string }>(
+      "select topic,resource_id,notification_id,source from integrations.reconciliation_signals where resource_id='7777'");
+    expect(filas.rows).toEqual([{ topic: 'ml.orders', resource_id: '7777', notification_id: 'n-7777', source: 'webhook_copy' }]);
+    await app.close();
   });
 
   it('sin configuración la ruta interna no existe', async () => {

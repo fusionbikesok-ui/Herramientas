@@ -51,9 +51,9 @@ describe('handlers reales de webhooks en server.js', () => {
 
     expect((await envio(902)).status).toBe(200);
     const fila = app._db.prepare("SELECT status,shadow_status,resource_id,channel FROM integration_events").get();
-    // El recibo nace con la sombra pendiente y el trabajo legacy cerrado: en pedidos Woo no hay job,
-    // el trabajo del legado es fail-open en background. Un 'pending' acá mentiría.
-    expect(fila).toMatchObject({ status: 'completed', shadow_status: 'pending', resource_id: '/orders/902', channel: 'woo' });
+    // Trabajo legacy cerrado (en pedidos Woo no hay job) y, con la copia de sombra apagada, sin ciclo de
+    // sombra: un 'pending' que nadie cierra quedaría activo para siempre.
+    expect(fila).toMatchObject({ status: 'completed', shadow_status: null, resource_id: '/orders/902', channel: 'woo' });
     expect(app._db.prepare('SELECT COUNT(*) n FROM integration_jobs').get().n).toBe(0);
 
     // Reentrega de WC: mismo delivery id, un solo recibo.

@@ -635,8 +635,13 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     cada 30 min con lock consultivo por cuenta. **Forma de respuesta de `missed_feeds` sin verificar por
     sonda**: falla cerrado con `FORMA_MISSED_FEEDS`; verificarla requiere autorización antes del canario.
     Gateway: `app_id`=`ML_CLIENT_ID`, `site_id`=`ML_SITE_ID` (nueva, en `.env.example`, aún no en `.env`).
-  - La cola de sombra del legado (`crearColaSombra`) todavía no tiene `enviar` conectado: el cliente
-    firmado que la une con la API de C3 no está implementado y la copia sigue apagada por flag.
+  - **Lazo legado→plataforma conectado** (completa C2, que había dejado la cola sin enganchar):
+    `lib/emisorSombra.js` traduce un recibo a señal (tópico E1 + id pelado + fingerprint `ev:<sha256>`) y
+    la manda firmada a C3. `server.js` engancha `finish`/`close` antes de responder en los tres webhooks;
+    un duplicado no se copia; fuera de E1 queda `excluded/unsupported_topic`. Encendido sólo con
+    `SOMBRA_COPIA_ENABLED=true` + `SOMBRA_PLATAFORMA_URL` + `SOMBRA_KEYRING_FILE`; media configuración
+    apaga la copia con log. **Con la copia apagada el recibo nace `shadow_status=NULL`**: C2 lo creaba
+    `pending` siempre, y esas filas habrían quedado activas para siempre y fuera de la purga.
   - `woo_webhooks_estado` ya registra `topic`, `status`, `delivery_url`, `propio`, `visto_en` y
     `status_desde` de las entregas propias: la alerta de webhook caído lee esa tabla.
   - `integration_events` crece ~1.400 filas/día y **hoy no tiene purga**. La purga de 400 días de T3 es

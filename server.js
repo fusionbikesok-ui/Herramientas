@@ -65,15 +65,16 @@ import { mobileInboxAccionesRouter } from './routes/mobileInboxAcciones.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { mobileHoyRouter } from './routes/mobileHoy.js';
 import { registrarWebhookMl, registrarWebhookWooProducto, registrarWebhookWooPedido, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
-import { marcarSombra, abandonarHuerfanas, permitirCuentaAjena } from './lib/sombra.js';
-import { cargarKeyringInterno, crearOrigenesInternos, verificarInterno } from './lib/internoHmac.js';
+import { marcarSombra, abandonarHuerfanas, abandonarVencidos, permitirCuentaAjena, copiaHabilitada, crearColaSombra } from './lib/sombra.js';
+import { crearEmisorSombra, destinoSenal } from './lib/emisorSombra.js';
+import { cargarKeyringInterno, cargarKeyringInternoActivo, crearOrigenesInternos, verificarInterno } from './lib/internoHmac.js';
 import { crearGatewayCanal, crearPresupuestoShadow, ErrorOperacionInvalida } from './lib/gatewayCanal.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
 import { chatEventsRouter } from './routes/chatEvents.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobileJwtSecret, gatewayInterno = null }) {
+export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobileJwtSecret, gatewayInterno = null, sombraEnviar = null }) {
   const mobileSecret = mobileJwtSecret ?? process.env.MOBILE_JWT_SECRET;
   validarMobileJwtSecret(mobileSecret);
   validarConfiguracionPush(process.env);
@@ -102,6 +103,60 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   });
 
   app.set('trust proxy', 1); // detrás de Nginx
+
+  // ── E1 T3: copia de sombra posterior al ACK ─────────────────────────────────
+  // Apagada salvo SOMBRA_COPIA_ENABLED=true con SOMBRA_PLATAFORMA_URL y SOMBRA_KEYRING_FILE. Media
+  // configuración apaga la copia con un log: nunca puede impedir que el legado arranque ni cambiar un ACK.
+  const colaSombra = (() => {
+    if (sombraEnviar) return crearColaSombra({ db, enviar: sombraEnviar });
+    if (!copiaHabilitada()) return null;
+    if (!process.env.SOMBRA_PLATAFORMA_URL || !process.env.SOMBRA_KEYRING_FILE) {
+      console.error('[sombra] SOMBRA_COPIA_ENABLED=true sin SOMBRA_PLATAFORMA_URL o SOMBRA_KEYRING_FILE: copia apagada');
+      return null;
+    }
+    try {
+      const keyring = cargarKeyringInternoActivo(process.env.SOMBRA_KEYRING_FILE);
+      return crearColaSombra({ db, enviar: crearEmisorSombra({ db, url: process.env.SOMBRA_PLATAFORMA_URL, keyring }) });
+    } catch (e) {
+      console.error('[sombra] configuración de copia inválida, copia apagada:', e.message);
+      return null;
+    }
+  })();
+  if (colaSombra) {
+    // Intentos de este proceso que nunca cerraron (p. ej. un fetch colgado más allá del timeout).
+    setInterval(() => { try { abandonarVencidos(db); } catch { /* base cerrada en pruebas */ } }, 60_000).unref();
+  }
+  app._colaSombra = colaSombra;
+
+  /**
+   * Engancha el ciclo de sombra a una respuesta. Se llama ANTES de responder: `finish` significa que el
+   * ACK salió; `close` sin `finish` es una respuesta cortada. Todo lo que pasa acá ocurre después del ACK.
+   * Un duplicado no se copia: el aviso original ya tuvo su intento.
+   */
+  function engancharSombra(res, persistido) {
+    if (!colaSombra || !persistido || persistido.duplicate) return;
+    const id = persistido.eventId;
+    let terminada = false;
+    res.once('finish', () => {
+      terminada = true;
+      try {
+        const ahora = new Date().toISOString();
+        const evento = db.prepare('SELECT event_id, channel, resource_id, metadata_json FROM integration_events WHERE event_id = ?').get(id);
+        if (!destinoSenal(evento)) {
+          marcarSombra(db, id, 'excluded', { razon: 'unsupported_topic', ackAt: ahora, completedAt: ahora });
+          return;
+        }
+        marcarSombra(db, id, 'pending', { ackAt: ahora });
+        colaSombra.encolar(id);
+      } catch (e) {
+        console.error('[sombra] no se pudo encolar la copia:', e.message);
+      }
+    });
+    res.once('close', () => {
+      if (terminada) return;
+      try { marcarSombra(db, id, 'abandoned', { razon: 'response_not_finished', completedAt: new Date().toISOString() }); } catch { /* fail-open */ }
+    });
+  }
 
   // ── E1 T3 C5: gateway interno de sólo lectura ────────────────────────────────
   // POST /internal/v1/channel-read. Nace apagado: sin GATEWAY_KEYRING_FILE y GATEWAY_ORIGENES la ruta no
@@ -179,10 +234,12 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       // falla devolvemos 503 y WC reintenta, que es exactamente lo que queremos de un aviso no
       // registrado; un id inválido es 400 y no se reintenta. El ACK sigue sin esperar a la plataforma.
       try {
-        registrarWebhookWooPedido(app._db, order, {
+        const persistido = registrarWebhookWooPedido(app._db, order, {
           topic: req.headers['x-wc-webhook-topic'],
           deliveryId: req.headers['x-wc-webhook-delivery-id'],
+          sombra: Boolean(colaSombra),
         });
+        engancharSombra(res, persistido);
       } catch (err) {
         const status = err.code === 'woo_order_id_invalid' ? 400 : 503;
         return res.status(status).json({ ok: false, error: err.message });
@@ -239,7 +296,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
         const persistido = registrarWebhookWooProducto(app._db, producto, {
           topic: req.headers['x-wc-webhook-topic'],
           deliveryId: req.headers['x-wc-webhook-delivery-id'],
+          sombra: Boolean(colaSombra),
         });
+        engancharSombra(res, persistido);
         return res.status(200).json({ ok: true, duplicate: persistido.duplicate, event_id: persistido.eventId });
       } catch (err) {
         const status = err.code === 'woo_product_topic_invalid' || err.code === 'woo_product_id_invalid' ? 400 : 503;
@@ -421,7 +480,10 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     // conservar el contrato de orders y no bloquear los webhooks de ML por una llamada
     // externa lenta; el evento durable permite auditar el recibo aunque falle el handler.
     let persisted;
-    try { persisted = registrarWebhookMl(app._db, req.body); }
+    try {
+      persisted = registrarWebhookMl(app._db, req.body, { sombra: Boolean(colaSombra) });
+      engancharSombra(res, persisted);
+    }
     catch (err) {
       const timestamp = new Date().toISOString();
       console.error(`[notif-ml-error] ${timestamp} 503 persistencia-fallo | topic=${sanear(topic)} resource=${sanear(resource)} user_id=${sanear(user_id)} | motivo: ${err.message}`);
