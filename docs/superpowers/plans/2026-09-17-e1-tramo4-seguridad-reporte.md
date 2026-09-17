@@ -762,6 +762,11 @@ describe('informes.entregas', () => {
     expect(fila).toEqual({ estado_deposito: 'firmado', estado_aviso: 'avisado' });
   });
 
+  it('no se puede avisar de algo que todavía no se firmó', async () => {
+    await expect(pool.query(`INSERT INTO informes.entregas (tipo, fecha, estado_aviso, hash_contenido)
+      VALUES ('reporte','2026-09-12','avisado', repeat('a',64))`)).rejects.toThrow(/entregas_aviso_check/);
+  });
+
   it('subido exige clave de objeto y versión', async () => {
     await expect(pool.query(`INSERT INTO informes.entregas (tipo, fecha, estado_deposito, hash_contenido)
       VALUES ('reporte','2026-09-10','subido', repeat('a',64))`)).rejects.toThrow(/entregas_subido_check/);
@@ -825,7 +830,11 @@ CREATE TABLE informes.entregas (
   avisado_en        timestamptz,
   PRIMARY KEY (tipo, fecha),
   CONSTRAINT entregas_subido_check CHECK (
-    (estado_deposito = 'subido') = (b2_object_key IS NOT NULL AND b2_version_id IS NOT NULL AND retention_until IS NOT NULL))
+    (estado_deposito = 'subido') = (b2_object_key IS NOT NULL AND b2_version_id IS NOT NULL AND retention_until IS NOT NULL)),
+  -- El aviso es independiente de la SUBIDA, no de la firma: se puede avisar sin haber subido (el email no
+  -- depende de B2), pero no se puede avisar de algo que todavía no se firmó, porque el email lleva adjunto el
+  -- sobre firmado.
+  CONSTRAINT entregas_aviso_check CHECK (estado_aviso = 'pendiente' OR estado_deposito <> 'generado')
 );
 
 CREATE INDEX entregas_deposito_pendiente ON informes.entregas (fecha) WHERE estado_deposito <> 'subido';
@@ -857,8 +866,11 @@ Esperado: PASA, incluida la prueba de migraciones.
 
 - [ ] **Paso 6: reflejar la tabla en el esquema de referencia**
 
-Agregar el mismo `CREATE TABLE` a `docs/superpowers/specs/e1/schema.sql` con su comentario, y corregir ahí el
-`CHECK` de `retention_mode` para que diga lo mismo que la migración.
+Copiar a `docs/superpowers/specs/e1/schema.sql` **todo** lo que agrega la migración, con sus comentarios: el
+`CREATE SCHEMA`, el `CREATE TABLE` con sus dos `CONSTRAINT`, los dos índices, el `GRANT` y el
+`ALTER DEFAULT PRIVILEGES`; y corregir ahí el `CHECK` de `retention_mode` para que diga lo mismo. El test que
+compara la referencia contra el volcado usa `pg_dump --no-privileges`, así que **no** detecta un `GRANT` ni un
+`ALTER DEFAULT PRIVILEGES` faltante: que estén es responsabilidad de quien escribe el archivo.
 
 - [ ] **Paso 7: commit**
 
