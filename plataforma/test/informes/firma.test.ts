@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cargarClaveFirma, firmar, huella, verificar } from '../../src/informes/firma.ts';
@@ -56,5 +57,40 @@ describe('firma', () => {
   it('la huella es estable y no es la clave', () => {
     expect(huella(publicaPem)).toMatch(/^[A-Za-z0-9+/]{43}=$/);
     expect(huella(publicaPem)).not.toContain('BEGIN');
+  });
+
+  it('un enlace simbólico a una clave válida sigue fallando (apertura con O_NOFOLLOW)', () => {
+    const enlace = join(dir, 'enlace-valido.pem');
+    symlinkSync(ruta, enlace);
+    expect(() => cargarClaveFirma(enlace)).toThrow(/archivo regular/);
+  });
+
+  it('un archivo válido carga bien (guardas y lectura sobre el mismo descriptor)', () => {
+    const clave = cargarClaveFirma(ruta);
+    expect(clave.kid).toBe('k1');
+    expect(clave.privada.asymmetricKeyType).toBe('ed25519');
+  });
+});
+
+describe('generar-clave-firma.mjs', () => {
+  let dir: string; let rutaPem: string; let rutaPub: string;
+  const script = join(import.meta.dirname, '..', '..', 'scripts', 'generar-clave-firma.mjs');
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'genclave-'));
+    rutaPem = join(dir, 'firma.pem');
+    rutaPub = join(dir, 'firma.pub');
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('corrido dos veces sobre la misma ruta, la segunda falla y no toca la clave existente', () => {
+    execFileSync('node', [script, 'k1', rutaPem, rutaPub]);
+    const pemAntes = readFileSync(rutaPem, 'utf8');
+    const pubAntes = readFileSync(rutaPub, 'utf8');
+
+    expect(() => execFileSync('node', [script, 'k2', rutaPem, rutaPub], { stdio: 'pipe' })).toThrow();
+
+    expect(readFileSync(rutaPem, 'utf8')).toBe(pemAntes);
+    expect(readFileSync(rutaPub, 'utf8')).toBe(pubAntes);
   });
 });

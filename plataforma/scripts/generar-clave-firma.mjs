@@ -6,11 +6,25 @@
  * puede dejar media clave. La pública se commitea; la privada nunca.
  */
 import { generateKeyPairSync } from 'node:crypto';
-import { closeSync, fsyncSync, openSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, openSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 
 const [kid, rutaPem, rutaPub] = process.argv.slice(2);
 if (!kid || !rutaPem || !rutaPub) { console.error('uso: generar-clave-firma.mjs <kid> <ruta.pem> <ruta.pub>'); process.exit(2); }
 if (!/^[A-Za-z0-9._-]{1,64}$/.test(kid)) { console.error('kid inválido'); process.exit(2); }
+
+// Sin este chequeo, correr el script dos veces por error sobre las rutas de producción pisa en
+// silencio el par vigente: toda la evidencia ya firmada con el kid anterior queda huérfana, sin
+// error y sin vuelta atrás. `existsSync` sigue symlinks; se usa `lstatSync` en el catch de
+// ENOENT para no dejar pasar un enlace roto como "no existe".
+const yaExiste = (ruta) => existsSync(ruta) || (() => { try { lstatSync(ruta); return true; } catch { return false; } })();
+if (yaExiste(rutaPem) || yaExiste(rutaPub)) {
+  console.error(
+    `ya existe ${yaExiste(rutaPem) ? rutaPem : rutaPub}: este script no rota claves, sólo genera un par nuevo.\n` +
+    `Para rotar a propósito: primero mové la clave vieja a un nombre que incluya su kid ` +
+    `(por ejemplo "${rutaPem}.<kid-viejo>"), y recién después corré este script para la nueva.`,
+  );
+  process.exit(1);
+}
 
 const par = generateKeyPairSync('ed25519');
 const tmp = `${rutaPem}.tmp`;
