@@ -660,6 +660,11 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     Canario de copia: `SOMBRA_CANALES=woo`, `SOMBRA_PORCENTAJE` determinístico por recurso; cada ampliación la aprueba José.
     Copia Woo al 1 % desde 2026-09-17 04:08 UTC; en 6 h entraron sólo 3 webhooks Woo (≈1 cada 2 h), así que José
     amplió directo al **50 % el 2026-09-17 10:38 UTC**. ML sigue fuera del canario hasta la cuota medida (23/09).
+    **100 % el 2026-09-17 10:48 UTC** y prueba en vivo de **5 h por decisión de José** (no las 24 h de E1-SOAK-01,
+    que queda sin cumplir): `scripts/qa/c10/soak.sh` como unidad `fusion-e1-c10-soak`, mide cada 5 min y aplica el
+    aborto del SOP (copia a false + reinicio) ante alerta de cola/pérdidas/respuesta cortada, legado caído 15 min o
+    plataforma no ok 30 min. Log y evidencia en `/root/e1-c10/<ts>/`. `DB_PATH` del `.env` es relativa: un script
+    fuera del repo tiene que resolverla contra la raíz.
   - **C9 en verde (2026-09-17)**: 500 webhooks anonimizados × 3 corridas de 30 min. p95 A 63,5 / B 72,3 / C 50,1 ms;
     p99 148,5 / 143,1 / 107,8 ms; códigos idénticos (423 ML + 77 Woo, todos 200); con PostgreSQL detenido 10 min hubo
     124 pérdidas, 124 importadas y 124 eventos `shadow.loss_imported`. La corrida C se repitió con `C9_REUSAR` +
