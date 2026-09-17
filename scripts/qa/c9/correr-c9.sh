@@ -9,6 +9,8 @@
 # Parámetros por entorno (defaults = corrida contractual):
 #   C9_N=500 C9_DURACION_S=1800 C9_PG_STOP_TRAS_S=300 C9_PG_CAIDO_S=600 C9_IMPORTAR_CADA_MS=300000
 #   C9_ESPERA_IMPORT_S=420 C9_CARGA_MAX=1.6 C9_EVIDENCIA_REPO=1 (copia el resumen al repo)
+#   C9_REUSAR=/root/e1-c9/<ts> + C9_CORRIDAS="C": retoma una corrida interrumpida con las MISMAS peticiones
+#   y los resultados ya completos de las corridas que no se repiten.
 set -euo pipefail
 RAIZ="$(cd "$(dirname "$0")/../../.." && pwd)"
 PLATAFORMA="$RAIZ/plataforma"
@@ -54,7 +56,12 @@ QA_USER=424242
 
 # 1) Webhooks anonimizados desde recibos reales (base de producción en solo lectura).
 PROD_DB="$(grep '^DB_PATH=' "$RAIZ/.env" | cut -d= -f2-)"
-node "$RAIZ/scripts/qa/c9/anonimizar.mjs" "$PROD_DB" "$WORK/peticiones.json" "$N" "$QA_USER"
+if [ -n "${C9_REUSAR:-}" ]; then
+  cp "$C9_REUSAR/peticiones.json" "$WORK/peticiones.json"
+  for c in A B C; do case " ${C9_CORRIDAS:-A B C} " in *" $c "*) ;; *) cp -r "$C9_REUSAR/$c" "$WORK/$c"; echo "reusa corrida $c de $C9_REUSAR";; esac; done
+else
+  node "$RAIZ/scripts/qa/c9/anonimizar.mjs" "$PROD_DB" "$WORK/peticiones.json" "$N" "$QA_USER"
+fi
 
 # 2) PostgreSQL + API de señales aislados.
 "${COMPOSE[@]}" up -d pg
@@ -107,9 +114,7 @@ corrida() { # corrida <nombre> <copia>
   parar_legado
 }
 
-corrida A off
-corrida B on
-corrida C on
+for c in ${C9_CORRIDAS:-A B C}; do case "$c" in A) corrida A off;; B) corrida B on;; C) corrida C on;; esac; done
 
 # 4) Evaluación.
 AUDIT="$(sql "select count(*) from audit.audit_events where action='shadow.loss_imported'" || echo -1)"

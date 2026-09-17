@@ -649,6 +649,11 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     `env -i`, cwd en `/root/e1-c9/<ts>` (no carga el `.env` real), `LISTEN_HOST=127.0.0.1`, crons apagados,
     `ML_API_BASE` inalcanzable; aborta si la carga supera 1,6 o producción no responde. Sin `NODE_ENV=production`:
     en ese modo el legado exige push FCM y no arranca.
+  - **C9 en verde (2026-09-17)**: 500 webhooks anonimizados × 3 corridas de 30 min. p95 A 63,5 / B 72,3 / C 50,1 ms;
+    p99 148,5 / 143,1 / 107,8 ms; códigos idénticos (423 ML + 77 Woo, todos 200); con PostgreSQL detenido 10 min hubo
+    124 pérdidas, 124 importadas y 124 eventos `shadow.loss_imported`. La corrida C se repitió con `C9_REUSAR` +
+    `C9_CORRIDAS=C` porque la primera murió con la sesión; correr arneses largos como unidad `systemd-run`, no ligados
+    a la sesión. Evidencia: `docs/superpowers/evidence/e1/2026-09-17-E1-LAT-PGDOWN-20260917T030620Z.md`.
   - **Defecto encontrado por C9 y corregido**: `crearPool` (plataforma) no escuchaba `error`; al reiniciar PostgreSQL
     una conexión ociosa muerta tiraba el proceso (API/worker/scheduler) por excepción no capturada, y las pérdidas
     nunca se importaban. Ahora el pool registra el mensaje y descarta la conexión (`test/pool.test.ts`).
