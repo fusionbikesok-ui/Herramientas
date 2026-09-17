@@ -716,3 +716,5 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - rsync de la Mac con `-rt` omite `backup/fusion/latest` (enlace simbólico): pgBackRest no lo necesita.
 
 - 2026-09-17 vigía de formato (`lib/vigiaPausado.js`, d90a0da): en `catalog_product_id`, producto→vacío o volver a un valor ya visto por ese ítem en 7 días se asienta con `revisado_por='vigia-auto'` y NO pausa ni cuenta para el umbral; producto nuevo sigue pausando. Desplegado 12:58:30 UTC durante la prueba C10 (reinicio planificado).
+
+- 2026-09-17 canario Woo de C10 dado por cerrado por José (evidencia `docs/superpowers/evidence/e1/2026-09-17-E1-C10-canario-woo.md`); copia Woo queda al 100 %. Pendientes: E1-SOAK-01 24 h y canario ML tras 23/09 16:00 UTC.
