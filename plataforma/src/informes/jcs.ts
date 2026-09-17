@@ -46,7 +46,16 @@ function serializar(valor: unknown, vistos: Set<object>): string {
     if (vistos.has(valor as object)) throw new Error('canonizar: hay un ciclo en el objeto');
     vistos.add(valor as object);
     try {
-      if (Array.isArray(valor)) return `[${valor.map((v) => serializar(v, vistos)).join(',')}]`;
+      if (Array.isArray(valor)) {
+        // Iterar con índice explícito en lugar de .map: Array.prototype.map no invoca el callback
+        // en huecos ("holes") de arrays dispersos, así que los undefined implícitos nunca pasan por
+        // serializar y nunca lanzan. Con .map, [1, , 3] produciría "[1,,3]", JSON inválido.
+        const elementos: string[] = [];
+        for (let i = 0; i < valor.length; i += 1) {
+          elementos.push(serializar(valor[i], vistos));
+        }
+        return `[${elementos.join(',')}]`;
+      }
       const entradas = Object.entries(valor as Record<string, unknown>)
         .filter(([, v]) => v !== undefined)
         // RFC 8785 §3.2.3: se ordena por las unidades de código UTF-16, que es lo que compara `<`.

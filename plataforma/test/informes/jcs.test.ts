@@ -37,4 +37,12 @@ describe('canonizar', () => {
     const ciclo: Record<string, unknown> = {}; ciclo.yo = ciclo;
     expect(() => canonizar(ciclo)).toThrow(/ciclo/);
   });
+
+  it('rechaza arrays con huecos (undefined implícito)', () => {
+    // Array disperso: los huecos son undefined implícito y deben rechazarse igual que undefined explícito.
+    // Sin esta validación, el canonizador emitiría JSON sintácticamente inválido como [1,,3].
+    const conHueco = [1, 3];
+    conHueco[5] = 7;
+    expect(() => canonizar(conHueco)).toThrow(/undefined/);
+  });
 });
