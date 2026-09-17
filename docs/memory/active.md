@@ -719,3 +719,4 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 - 2026-09-17 canario Woo de C10 dado por cerrado por José (evidencia `docs/superpowers/evidence/e1/2026-09-17-E1-C10-canario-woo.md`); copia Woo queda al 100 %. E1-SOAK-01 dispensado por José (aprobó el comportamiento sin las 24 h). Pendiente: canario ML tras 23/09 16:00 UTC.
 - 2026-09-17 rollback de la copia ensayado (15:18:30 apagar, 15:38:30 encender, healthz 200 en ambos); evidencia en el mismo archivo del canario Woo. T3 sólo espera el canario ML.
+- 2026-09-17 decisiones de José para T4: firma Ed25519 con privada en keyring del VPS (0600) y pública en el repo; reporte diario 07:00 ART a `ALERTAS_EMAIL`; la campaña de 7 días arranca con ML en canario (después del 23/09). Clave B2 propia: pendiente de que José la cree (la de backups no se usa).
