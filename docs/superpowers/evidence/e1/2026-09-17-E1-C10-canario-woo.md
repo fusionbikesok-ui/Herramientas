@@ -7,3 +7,7 @@
 - Un reinicio planificado (12:58:30 UTC, fix del vigía d90a0da), sin impacto.
 - No cumple `E1-SOAK-01` (24 h): sigue pendiente. ML sigue excluido hasta después del 23/09 16:00 UTC.
 - La copia Woo queda encendida al 100 %; el monitor sigue hasta su fin natural como red de rollback.
+
+## E1-SOAK-01 — dispensa
+
+José decidió el 2026-09-17 que la prueba de 24 h no es necesaria y **aprobó el comportamiento como está** con base en esta corrida. E1-SOAK-01 queda **aceptado por decisión de José (dispensa)**, no cumplido por medición.
