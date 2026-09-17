@@ -4,6 +4,7 @@ import fs from 'fs';
 import request from 'supertest';
 import { crearEmisorSombra, destinoSenal, RUTA_SENALES } from '../lib/emisorSombra.js';
 import { firmarInterno } from '../lib/internoHmac.js';
+import { crearSelectorCanario } from '../lib/sombra.js';
 
 vi.mock('../routes/preparacion.js', async () => {
   const actual = await vi.importActual('../routes/preparacion.js');
@@ -75,6 +76,42 @@ describe('E1-RCP-01 copia de sombra enganchada a los webhooks', () => {
     expect(Date.now() - inicio).toBeLessThan(250);
     await esperar(400);
     expect(fila()).toMatchObject({ shadow_status: 'discarded', shadow_reason: 'platform_timeout' });
+  });
+});
+
+describe('canario de la copia (C10)', () => {
+  it('filtra por canal y el porcentaje es determinístico por recurso', () => {
+    const woo = crearSelectorCanario({ SOMBRA_CANALES: 'woo' });
+    expect(woo.incluye('ml', 'ml.orders|1')).toBe(false);
+    expect(woo.incluye('woo', 'woo.orders|1')).toBe(true);
+    const diez = crearSelectorCanario({ SOMBRA_CANALES: 'woo', SOMBRA_PORCENTAJE: '10' });
+    const recursos = Array.from({ length: 2000 }, (_, i) => `woo.products|${i}`);
+    const dentro = recursos.filter((r) => diez.incluye('woo', r));
+    // Aproximadamente 10 % y siempre la misma decisión para el mismo recurso.
+    expect(dentro.length).toBeGreaterThan(140); expect(dentro.length).toBeLessThan(260);
+    expect(recursos.filter((r) => diez.incluye('woo', r))).toEqual(dentro);
+    // Ampliar el porcentaje nunca saca a un recurso que ya estaba adentro.
+    const cincuenta = crearSelectorCanario({ SOMBRA_CANALES: 'woo', SOMBRA_PORCENTAJE: '50' });
+    expect(dentro.every((r) => cincuenta.incluye('woo', r))).toBe(true);
+    expect(crearSelectorCanario({ SOMBRA_PORCENTAJE: 'basura' }).incluye('woo', 'x')).toBe(false);
+    expect(crearSelectorCanario({}).incluye('ml', 'x')).toBe(true);
+  });
+
+  it('un aviso de un canal no habilitado queda excluded/canary_excluded sin intento', async () => {
+    process.env.SOMBRA_CANALES = 'woo';
+    try {
+      const enviar = vi.fn(async () => undefined);
+      const a = nuevaApp(enviar);
+      expect((await request(a).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/77', user_id: 123 })).status).toBe(200);
+      expect((await request(a).post('/api/woo/webhook/order').set('x-wc-webhook-delivery-id', 'd9').send({ id: 99, status: 'processing' })).status).toBe(200);
+      await esperar(50);
+      expect(enviar).toHaveBeenCalledTimes(1);
+      const filas = a._db.prepare('SELECT channel, shadow_status, shadow_reason FROM integration_events ORDER BY channel').all();
+      expect(filas).toEqual([
+        { channel: 'ml', shadow_status: 'excluded', shadow_reason: 'canary_excluded' },
+        { channel: 'woo', shadow_status: 'copied', shadow_reason: null },
+      ]);
+    } finally { delete process.env.SOMBRA_CANALES; }
   });
 });
 

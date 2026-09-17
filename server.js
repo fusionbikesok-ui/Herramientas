@@ -66,7 +66,7 @@ import { mobileInboxAccionesRouter } from './routes/mobileInboxAcciones.js';
 import { operacionesMobileRouter } from './routes/operacionesMobile.js';
 import { mobileHoyRouter } from './routes/mobileHoy.js';
 import { registrarWebhookMl, registrarWebhookWooProducto, registrarWebhookWooPedido, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
-import { marcarSombra, abandonarHuerfanas, abandonarVencidos, permitirCuentaAjena, copiaHabilitada, crearColaSombra } from './lib/sombra.js';
+import { marcarSombra, abandonarHuerfanas, abandonarVencidos, permitirCuentaAjena, copiaHabilitada, crearColaSombra, crearSelectorCanario } from './lib/sombra.js';
 import { crearEmisorSombra, crearEnvioSenal, destinoSenal, importarPerdidas } from './lib/emisorSombra.js';
 import { crearMuestreoCola, evaluarAlertasLegado, medirSombraLegado, publicarAlertasLegado } from './lib/metricasSombra.js';
 import { cargarKeyringInterno, cargarKeyringInternoActivo, crearOrigenesInternos, verificarInterno } from './lib/internoHmac.js';
@@ -151,6 +151,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     }
   }
   app._colaSombra = colaSombra;
+  const canario = crearSelectorCanario();
+  if (colaSombra) console.log(`[sombra] copia encendida: canales=${canario.canales.join(',')} porcentaje=${canario.porcentaje}`);
 
   /**
    * Engancha el ciclo de sombra a una respuesta. Se llama ANTES de responder: `finish` significa que el
@@ -166,8 +168,13 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       try {
         const ahora = new Date().toISOString();
         const evento = db.prepare('SELECT event_id, channel, resource_id, metadata_json FROM integration_events WHERE event_id = ?').get(id);
-        if (!destinoSenal(evento)) {
+        const senal = destinoSenal(evento);
+        if (!senal) {
           marcarSombra(db, id, 'excluded', { razon: 'unsupported_topic', ackAt: ahora, completedAt: ahora });
+          return;
+        }
+        if (!canario.incluye(evento.channel, `${senal.topic}|${senal.resource_id}`)) {
+          marcarSombra(db, id, 'excluded', { razon: 'canary_excluded', ackAt: ahora, completedAt: ahora });
           return;
         }
         marcarSombra(db, id, 'pending', { ackAt: ahora });
