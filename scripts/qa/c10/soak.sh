@@ -15,7 +15,22 @@ const D=require('$RAIZ/node_modules/better-sqlite3');const db=new D('$DB',{reado
 const r={};
 for(const f of db.prepare(\"SELECT channel||':'||COALESCE(shadow_status,'-')||':'||COALESCE(shadow_reason,'') k, COUNT(*) n FROM integration_events WHERE received_at>=? GROUP BY 1\").all('$DESDE')) r[f.k]=f.n;
 const inc=db.prepare(\"SELECT tipo_error, severidad FROM incidentes_operativos WHERE integracion='sombra' AND estado='activo'\").all();
-console.log(JSON.stringify({recibos:r,incidentes:inc}));"
+const desde5=new Date(Date.now()-6*60000).toISOString().slice(0,16)+'Z';
+const q=db.prepare(\"SELECT COALESCE(SUM(status_429),0) n FROM ml_llamadas_minuto WHERE minuto>=?\").get(desde5).n;
+console.log(JSON.stringify({recibos:r,incidentes:inc,ml_429_6min:q}));"
+}
+# Decisión de José 2026-09-17: si ML devuelve 429, bajar el tope de relecturas de la sombra de a un escalón
+# (60→45→30→20→10) y sólo en el último caso dejarlo en 0; nunca apagar toda la copia por esto.
+ESCALONES_RPM=(60 45 30 20 10 0)
+bajar_rpm() {
+  local actual sig i; actual="$(grep '^GATEWAY_ML_SHADOW_RPM=' "$RAIZ/.env" | cut -d= -f2)"; sig=0
+  for i in "${!ESCALONES_RPM[@]}"; do [ "${ESCALONES_RPM[$i]}" -lt "${actual:-0}" ] && { sig="${ESCALONES_RPM[$i]}"; break; }; done
+  [ "${actual:-0}" -le 0 ] && { log "AVISO: 429 de ML con el tope de sombra ya en 0 (no es la sombra)"; return; }
+  cp -a "$RAIZ/.env" "$DIR/env-antes-rpm-$sig"
+  sed -i "s/^GATEWAY_ML_SHADOW_RPM=.*/GATEWAY_ML_SHADOW_RPM=$sig/" "$RAIZ/.env"
+  pm2 restart herramientas --update-env >/dev/null 2>&1
+  for _ in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:3001/healthz)" = 200 ] && break; sleep 1; done
+  log "429 de ML: tope de sombra $actual → $sig rpm; legado $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3001/healthz)"
 }
 abortar() {
   abortado="$1"; log "ABORTO: $1 — apagando la copia (SOP)"
@@ -25,7 +40,7 @@ abortar() {
   for _ in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:3001/healthz)" = 200 ] && break; sleep 1; done
   log "legado tras aborto: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3001/healthz)"
 }
-log "inicio prueba ${HORAS} h, copia Woo 100 %, desde $DESDE"
+log "inicio prueba ${HORAS} h, copia $(grep '^SOMBRA_CANALES=' "$RAIZ/.env" | cut -d= -f2) 100 %, desde $DESDE"
 while [ "$(date +%s)" -lt "$fin" ]; do
   L="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:3001/healthz)"
   PH="$(curl -s --max-time 8 http://127.0.0.1:3201/api/v2/health | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).status)}catch{console.log('sin_respuesta')}})")"
@@ -37,9 +52,10 @@ while [ "$(date +%s)" -lt "$fin" ]; do
   if [ "$fallos_legado" -ge 3 ]; then abortar "legado sin /healthz 200 en 3 mediciones"; break; fi
   if echo "$M" | grep -qE '"tipo_error":"(cola_llena|cola_saturada|perdidas_sin_importar|respuesta_no_terminada)"'; then abortar "alerta de sombra activa: $(echo "$M" | grep -oE '"tipo_error":"[a-z_]+"' | tr '\n' ' ')"; break; fi
   if [ "$fallos_plataforma" -ge 6 ]; then abortar "plataforma no ok durante 30 min"; break; fi
+  if echo "$M" | grep -qE '"ml_429_6min":[1-9]'; then bajar_rpm; fi
   [ "${VIEJA:-0}" -gt 1800 ] && log "AVISO: señal activa de más de 30 min"
   sleep 300
 done
 log "fin: ${abortado:-sin aborto}"
-{ echo "# C10 — prueba en vivo ${HORAS} h (copia Woo 100 %) $TS"; echo; echo "Resultado: **${abortado:+ABORTADA — $abortado}${abortado:-completada sin aborto}**"; echo;
+{ echo "# C10 — prueba en vivo ${HORAS} h (copia $(grep '^SOMBRA_CANALES=' "$RAIZ/.env" | cut -d= -f2) 100 %) $TS"; echo; echo "Resultado: **${abortado:+ABORTADA — $abortado}${abortado:-completada sin aborto}**"; echo;
   echo "Decisión de José 2026-09-17: prueba de ${HORAS} h en lugar de las 24 h de E1-SOAK-01 (no satisface ese ID)."; echo; echo '```'; tail -3 "$LOG"; echo '```'; } > "$DIR/evidencia.md"
