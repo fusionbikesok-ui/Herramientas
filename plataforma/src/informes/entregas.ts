@@ -1,0 +1,106 @@
+/*
+ * src/informes/entregas.ts — quién tiene derecho a firmar, subir y avisar cada artefacto.
+ *
+ * La clave primaria por fecha evita dos filas, pero no dos PUT a B2 ni dos emails: entre el efecto y su
+ * registro hay una ventana. Cada efecto se reclama con un testigo (`lease`) que se verifica en el UPDATE
+ * posterior; si cambió, el proceso viejo se detiene sin escribir (hallazgos 2 y 3 de la revisión externa).
+ */
+import { randomUUID } from 'node:crypto';
+import type { Consultable } from '../db/pool.ts';
+
+export type TipoEntrega = 'manifiesto' | 'reporte';
+export type EstadoDeposito = 'generado' | 'firmado' | 'subido';
+export type EstadoAviso = 'pendiente' | 'avisado';
+export interface Reclamo {
+  tipo: TipoEntrega; fecha: string; testigo: string; deposito: EstadoDeposito; aviso: EstadoAviso;
+  // El instante con el que se reclamó el lease. `avanzarDeposito`/`avanzarAviso` lo usan como valor por
+  // omisión: ninguna función decide con el reloj real (`new Date()`), la hora entra siempre por parámetro,
+  // y este es el único "ahora" que el dueño del lease conoce sin tener que pedirlo de nuevo.
+  ahora: Date;
+}
+
+const LEASE_MS = 10 * 60_000;
+const HORAS_INCIDENTE = 24;
+const ANTERIOR: Record<Exclude<EstadoDeposito, 'generado'>, EstadoDeposito> = { firmado: 'generado', subido: 'firmado' };
+const DATOS_PERMITIDOS = new Set(['kid', 'ruta_pendiente', 'b2_object_key', 'b2_version_id', 'retention_until']);
+
+export async function reclamar(
+  db: Consultable, tipo: TipoEntrega, fecha: string,
+  opciones: { hash: string; leaseMs?: number; ahora?: Date },
+): Promise<Reclamo | null> {
+  const ahora = opciones.ahora ?? new Date();
+  const testigo = randomUUID();
+  const hasta = new Date(ahora.getTime() + (opciones.leaseMs ?? LEASE_MS));
+  const r = await db.query<{ estado_deposito: EstadoDeposito; estado_aviso: EstadoAviso }>(
+    `INSERT INTO informes.entregas (tipo, fecha, hash_contenido, testigo, lease_hasta)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (tipo, fecha) DO UPDATE
+       SET testigo = $4, lease_hasta = $5
+       WHERE informes.entregas.hash_contenido = $3
+         AND NOT (informes.entregas.estado_deposito = 'subido' AND informes.entregas.estado_aviso = 'avisado')
+         AND (informes.entregas.lease_hasta IS NULL OR informes.entregas.lease_hasta <= $6)
+     RETURNING estado_deposito, estado_aviso`,
+    [tipo, fecha, opciones.hash, testigo, hasta, ahora],
+  );
+  const fila = r.rows[0];
+  if (fila) return { tipo, fecha, testigo, deposito: fila.estado_deposito, aviso: fila.estado_aviso, ahora };
+  // Puede haber sido el lease de otro, o un contenido distinto para el mismo día: eso último se anota, porque
+  // significa que alguien va a subir algo que no corresponde al sobre ya firmado.
+  await db.query(
+    `UPDATE informes.entregas SET ultimo_error = 'hash distinto del ya firmado para este día'
+      WHERE tipo = $1 AND fecha = $2 AND hash_contenido <> $3`,
+    [tipo, fecha, opciones.hash],
+  );
+  return null;
+}
+
+export async function avanzarDeposito(
+  db: Consultable, reclamo: Reclamo, estado: Exclude<EstadoDeposito, 'generado'>,
+  datos: Record<string, unknown> = {}, ahora: Date = reclamo.ahora,
+): Promise<boolean> {
+  const extra = Object.keys(datos).filter((k) => DATOS_PERMITIDOS.has(k));
+  const columna = estado === 'firmado' ? 'firmado_en' : 'subido_en';
+  const valores = [reclamo.tipo, reclamo.fecha, reclamo.testigo, estado, ANTERIOR[estado], ahora, ...extra.map((k) => datos[k])];
+  const asignaciones = extra.map((k, i) => `${k} = $${7 + i}`).join(', ');
+  const r = await db.query(
+    `UPDATE informes.entregas
+        SET estado_deposito = $4, ${columna} = $6${asignaciones ? `, ${asignaciones}` : ''}
+      WHERE tipo = $1 AND fecha = $2 AND testigo = $3
+        AND estado_deposito = $5 AND lease_hasta > $6`,
+    valores,
+  );
+  return (r.rowCount ?? 0) === 1;
+}
+
+export async function avanzarAviso(db: Consultable, reclamo: Reclamo, ahora: Date = reclamo.ahora): Promise<boolean> {
+  const r = await db.query(
+    `UPDATE informes.entregas SET estado_aviso = 'avisado', avisado_en = $4
+      WHERE tipo = $1 AND fecha = $2 AND testigo = $3 AND estado_aviso = 'pendiente' AND lease_hasta > $4`,
+    [reclamo.tipo, reclamo.fecha, reclamo.testigo, ahora],
+  );
+  return (r.rowCount ?? 0) === 1;
+}
+
+export async function anotarFallo(
+  db: Consultable, reclamo: Reclamo, cual: 'deposito' | 'aviso', error: string,
+): Promise<void> {
+  const columna = cual === 'deposito' ? 'intentos_deposito' : 'intentos_aviso';
+  await db.query(
+    `UPDATE informes.entregas SET ${columna} = ${columna} + 1, ultimo_error = $4, lease_hasta = NULL
+      WHERE tipo = $1 AND fecha = $2 AND testigo = $3`,
+    [reclamo.tipo, reclamo.fecha, reclamo.testigo, error.slice(0, 500)],
+  );
+}
+
+export async function pendientesVencidas(
+  db: Consultable, ahora: Date, horas: number = HORAS_INCIDENTE,
+): Promise<Array<{ tipo: string; fecha: string; estado_deposito: string; estado_aviso: string; intentos_deposito: number }>> {
+  const r = await db.query<{ tipo: string; fecha: string; estado_deposito: string; estado_aviso: string; intentos_deposito: number }>(
+    `SELECT tipo, to_char(fecha, 'YYYY-MM-DD') AS fecha, estado_deposito, estado_aviso, intentos_deposito
+       FROM informes.entregas
+      WHERE estado_deposito <> 'subido' AND generado_en <= $1::timestamptz - make_interval(hours => $2)
+      ORDER BY fecha`,
+    [ahora, horas],
+  );
+  return r.rows;
+}
