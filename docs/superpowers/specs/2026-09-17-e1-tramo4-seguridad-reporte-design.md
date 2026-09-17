@@ -29,6 +29,11 @@ No entra: UI, login real en dispositivos (es condición de E2/E4), dominio con H
 | Email | La plataforma usa el **SMTP directo**, con credenciales en su propio archivo de entorno |
 | Cadena de auditoría rota | Se firma y sube igual, con la rotura registrada, **más incidente crítico** |
 | Clave de firma | Privada en el keyring del VPS (0600), pública en el repo |
+| Usuarios | Sólo los que crean los tests; en producción no se carga ninguno (el alta real es de E4) |
+| Verificación | Comando del repo `npm run verificar-informe` |
+| Faltantes explicados | Sólo causas que el sistema registró; no hay explicación manual |
+| Reporte que no llega | Cada reporte numera el día de la campaña; un salto se ve solo |
+| Secretos de SMTP y B2 | Archivos sueltos en `secretos/`, montados 0600, leídos al arrancar |
 
 ## 3. Arquitectura
 
@@ -86,6 +91,14 @@ migraciones de esquema, sólo la fila del interruptor `passkeys.real` en `false`
   faltantes sin explicar, alerta alta o cadena rota.
 - **Email:** asunto con fecha y semáforo; cuerpo con el estado, lo que necesita acción y la clave pública;
   adjuntos `reporte.json` y `reporte.json.sig`. Sale 07:00 ART a `ALERTAS_EMAIL`.
+- **Faltante explicado:** sólo cuando la causa quedó registrada por el sistema — recurso borrado en el canal,
+  recurso fuera de la ventana de la corrida, tópico sin historial consultable (se acepta por convergencia), o
+  copia descartada ya contada. No existe la explicación manual: un faltante que nadie puede explicar con datos
+  cuenta como sin explicar y rompe la campaña. Es lo que evita auto-engañarse para cerrar la entrega.
+- **Continuidad:** el asunto y el JSON llevan el número de día de la campaña y la fecha del reporte anterior.
+  Un día que no llegó se nota por el salto, sin necesidad de un vigilante externo.
+- **Verificación independiente:** `npm run verificar-informe <archivo.json> <archivo.sig>` responde válido o
+  inválido usando la pública del repo. Se prueba con un reporte bueno y con uno alterado.
 - **Idempotencia:** `report_date` es clave primaria. Repetir el día no duplica ni reenvía; `email_sent_at`
   y `email_error` registran el envío.
 
@@ -111,6 +124,8 @@ migraciones de esquema, sólo la fila del interruptor `passkeys.real` en `false`
   para que no pueda quedar una ruta sin ella; hay un test que recorre la lista de rutas del grupo y exige 503
   en todas.
 - **Exposición:** la API sigue escuchando sólo en loopback. Publicarla hacia un navegador es E4.
+- **Usuarios:** los crean los tests; en producción E1 no carga ninguno. Sin usuarios no hay credencial que
+  robar, y el alta real llega con E4 junto al dominio y la UI.
 - **Códigos de recuperación:** de un solo uso, guardados como HMAC-SHA256 (`security.recovery_codes`); el
   código en claro sólo existe en la respuesta que lo entrega.
 - **Pruebas:** autenticador virtual WebAuthn, con las cuatro etapas (registro, login, reautenticación,
@@ -125,6 +140,14 @@ migraciones de esquema, sólo la fila del interruptor `passkeys.real` en `false`
   adentro.
 - **Evidencia:** los 7 reportes firmados, su verificación y la revisión de José. Nada se declara cumplido sin
   comando, salida, commit y fecha.
+
+## 9 bis. Secretos
+
+Cada secreto en su propio archivo bajo `/opt/fusionbikes/plataforma-prod/secretos/` (0600, montado de sólo
+lectura), leído al arrancar: es el patrón que la plataforma ya usa. No van en `plataforma.env`, porque ahí
+quedan visibles en `docker inspect` y en el entorno de cualquier proceso del contenedor. Los archivos nuevos
+son los de SMTP (usuario y clave) y los de B2 (id y clave de aplicación). Ningún secreto se registra en logs
+ni viaja en la línea de comando.
 
 ## 10. Errores y bordes
 
