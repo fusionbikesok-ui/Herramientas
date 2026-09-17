@@ -33,7 +33,11 @@ CREATE TABLE informes.entregas (
   avisado_en        timestamptz,
   PRIMARY KEY (tipo, fecha),
   CONSTRAINT entregas_subido_check CHECK (
-    (estado_deposito = 'subido') = (b2_object_key IS NOT NULL AND b2_version_id IS NOT NULL AND retention_until IS NOT NULL))
+    (estado_deposito = 'subido') = (b2_object_key IS NOT NULL AND b2_version_id IS NOT NULL AND retention_until IS NOT NULL)),
+  -- El email lleva adjunto el sobre firmado: avisar sin firmar es un estado imposible en el dominio.
+  -- No exige haber subido — el aviso es deliberadamente independiente de Backblaze (hallazgo 2 de la
+  -- revisión del 2026-09-17).
+  CONSTRAINT entregas_aviso_check CHECK (estado_aviso = 'pendiente' OR estado_deposito <> 'generado')
 );
 
 CREATE INDEX entregas_deposito_pendiente ON informes.entregas (fecha) WHERE estado_deposito <> 'subido';

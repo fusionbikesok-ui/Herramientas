@@ -27,6 +27,11 @@ describe('informes.entregas', () => {
     expect(fila).toEqual({ estado_deposito: 'firmado', estado_aviso: 'avisado' });
   });
 
+  it('no se puede avisar sin haber firmado', async () => {
+    await expect(pool.query(`INSERT INTO informes.entregas (tipo, fecha, estado_deposito, estado_aviso, hash_contenido)
+      VALUES ('reporte','2026-09-08','generado','avisado', repeat('a',64))`)).rejects.toThrow(/entregas_aviso_check/);
+  });
+
   it('subido exige clave de objeto y versión', async () => {
     await expect(pool.query(`INSERT INTO informes.entregas (tipo, fecha, estado_deposito, hash_contenido)
       VALUES ('reporte','2026-09-10','subido', repeat('a',64))`)).rejects.toThrow(/entregas_subido_check/);
