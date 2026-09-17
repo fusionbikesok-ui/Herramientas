@@ -85,8 +85,8 @@ worker real contra el simulador y la revisión independiente quedó aprobada en 
 [diseño de T3](specs/2026-09-16-e1-tramo3-sombra-viva-design.md) y su
 [plan](plans/2026-09-16-e1-tramo3-sombra-viva.md) fijan recibos mínimos, señales separadas de
 observaciones, gateway GET tipado, multi-cuenta, `missed_feeds`, prueba de latencia y soak de 24 h.
-T3 está documentado pero no implementado ni autorizado para tráfico real. T4 conserva passkeys y la
-campaña contractual de siete días con reporte firmado. Nada está desplegado y E1 no está aceptada.
+T3 está implementado (C1–C10, commits hasta `3a17af0`): C9 verde el 2026-09-17 (`evidence/e1/2026-09-17-E1-LAT-PGDOWN-20260917T030620Z.md`), plataforma en producción y copia de sombra de Woo al 100 % desde el 2026-09-17 10:48 UTC, canario Woo cerrado por José y E1-SOAK-01 dispensado por José (`evidence/e1/2026-09-17-E1-C10-canario-woo.md`). Falta en T3: ensayo de rollback y canario de ML, no antes del 2026-09-23 16:00 UTC, con techo medido de `GATEWAY_ML_SHADOW_RPM`. T4 conserva passkeys y la
+campaña contractual de siete días con reporte firmado. E1 no está aceptada.
 
 ## Arquitectura e invariantes acumulativos
 

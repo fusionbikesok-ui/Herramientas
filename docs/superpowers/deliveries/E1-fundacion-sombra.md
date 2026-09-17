@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Revisar y aprobar el diseño y plan de T3 (`specs/2026-09-16-e1-tramo3-sombra-viva-design.md` y `plans/2026-09-16-e1-tramo3-sombra-viva.md`). T1 y T2 están implementados y verificados sólo en infraestructura efímera; T3 está documentado pero no implementado, desplegado ni autorizado para usar credenciales o tráfico real.
+- **Próxima acción exacta:** T3 está implementado (C1–C10, commits hasta `3a17af0`): C9 verde el 2026-09-17 (`evidence/e1/2026-09-17-E1-LAT-PGDOWN-20260917T030620Z.md`), plataforma en producción y copia de sombra de Woo al 100 % desde el 2026-09-17 10:48 UTC, canario Woo cerrado por José y E1-SOAK-01 dispensado por José (`evidence/e1/2026-09-17-E1-C10-canario-woo.md`). Falta en T3: ensayo de rollback y canario de ML, no antes del 2026-09-23 16:00 UTC, con techo medido de `GATEWAY_ML_SHADOW_RPM`. Luego, diseño de T4.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
