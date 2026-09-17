@@ -319,12 +319,13 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
 
   // 2) Multiget de a 20 con los atributos necesarios
   const filas = [];
+  const creadas = new Map(); // item_id → date_created, para que el vigía reconozca altas recientes
   for (let i = 0; i < allIds.length; i += MULTIGET_CHUNK) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels,category_id,listing_type_id,shipping`,
+      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels,category_id,listing_type_id,shipping,date_created`,
       null, { manual: true }
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
@@ -344,6 +345,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
       // legítimamente (no es un fallo de fetch del chunk completo).
       if (entry.code !== 200 || !entry.body) continue;
       filas.push(...aplanarItemMl(entry.body));
+      if (entry.body.date_created) creadas.set(String(entry.body.id), entry.body.date_created);
     }
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, allIds.length), total: allIds.length });
     await sleep(espera(CALL_DELAY_MS));
@@ -361,7 +363,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
       db.prepare('SELECT clave, item_id, seller_sku, catalog_product_id, atributos_json FROM ml_publicaciones_cache').all()
         .map((f) => [f.clave, f])
     );
-    const cambios = detectarCambios(previas, filas);
+    const cambios = detectarCambios(previas, filas).map((c) => ({ ...c, creada_en: creadas.get(c.item_id) || null }));
 
     const upsert = prepararUpsertCache(db);
     const ts = now();
@@ -541,11 +543,12 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
   if (ids.length === 0) return { total: 0, items: 0, variaciones: 0, vigia: { detectados: 0, pausadas: 0, omitidos_por_umbral: 0, errores: 0 } };
 
   const filas = [];
+  const creadas = new Map();
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels,category_id,listing_type_id,shipping`
+      `/items?ids=${chunk.join(',')}&include_attributes=all&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,catalog_product_id,price,available_quantity,user_product_id,channels,category_id,listing_type_id,shipping,date_created`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       // Mismo criterio que BLOQUEANTE 1 en el camino total: .status explícito para que
@@ -560,6 +563,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     for (const entry of resp.data) {
       if (entry.code !== 200 || !entry.body) continue;
       filas.push(...aplanarItemMl(entry.body));
+      if (entry.body.date_created) creadas.set(String(entry.body.id), entry.body.date_created);
     }
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, ids.length), total: ids.length });
     await sleep(espera(CALL_DELAY_MS));
@@ -570,7 +574,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
                 FROM ml_publicaciones_cache WHERE item_id IN (${ids.map(() => '?').join(',')})`)
       .all(...ids).map((f) => [f.clave, f])
   );
-  const cambios = detectarCambios(previas, filas);
+  const cambios = detectarCambios(previas, filas).map((c) => ({ ...c, creada_en: creadas.get(c.item_id) || null }));
 
   const upsert = prepararUpsertCache(db);
   const ts = now();

@@ -134,5 +134,21 @@ describe('vigiaPausado', () => {
       const r = await procesarCambios(db, CFG, [cambio(1, { campo: 'UNITS_PER_PACK', valor_anterior: '2', valor_nuevo: null })]);
       expect(r.pausadas).toBe(1);
     });
+
+    it('publicación creada hace poco: vacío → producto no pausa', async () => {
+      const r = await procesarCambios(db, CFG, [cambio(1, { creada_en: new Date(Date.now() - 3600e3).toISOString() })]);
+      expect(r).toMatchObject({ pausadas: 0, ignorados_por_ruido: 1 });
+      expect(mlFetch).not.toHaveBeenCalled();
+    });
+
+    it('publicación vieja: vacío → producto nuevo sigue pausando', async () => {
+      const r = await procesarCambios(db, CFG, [cambio(1, { creada_en: '2025-01-01T00:00:00.000Z' })]);
+      expect(r.pausadas).toBe(1);
+    });
+
+    it('publicación nueva: salto entre dos productos sí pausa', async () => {
+      const r = await procesarCambios(db, CFG, [cambio(1, { valor_anterior: 'MLA1', creada_en: new Date().toISOString() })]);
+      expect(r.pausadas).toBe(1);
+    });
   });
 });
