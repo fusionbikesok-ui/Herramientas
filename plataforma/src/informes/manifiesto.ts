@@ -40,16 +40,23 @@ export async function armarManifiesto(pool: pg.Pool, fecha: string): Promise<Man
     );
     const { primero, ultimo, n } = dia.rows[0]!;
     // Sin eventos en el día, el extremo que se fija es el último hash conocido hasta el fin del día.
-    const hash = await cliente.query<{ hash: string | null }>(
-      `SELECT encode(hash, 'hex') AS hash FROM audit.audit_events
+    const hash = await cliente.query<{ hash: string | null; chain_seq: string | null }>(
+      `SELECT encode(hash, 'hex') AS hash, chain_seq::text AS chain_seq FROM audit.audit_events
         WHERE occurred_at < $1 ORDER BY chain_seq DESC LIMIT 1`,
       [hasta],
     );
     // La función real es verify_chain(desde, hasta): se verifica hasta el extremo capturado, no toda la
     // cadena, para que un evento posterior no cambie el veredicto del día (hallazgo 10 de la revisión).
-    const roto = await cliente.query<{ roto: string | null }>(
-      'SELECT audit.verify_chain(NULL::bigint, $1::bigint) AS roto', [ultimo]);
-    const rotoEn = roto.rows[0]?.roto ?? null;
+    // En un día sin eventos `ultimo` es null, y verify_chain interpreta `hasta = NULL` como "sin tope":
+    // sin este resguardo, un día vacío terminaría verificando también los eventos POSTERIORES al día
+    // reportado, y una corrupción futura podría marcar como rota una jornada que nunca tuvo problema.
+    // El tope correcto para un día vacío es el chain_seq del último hash conocido hasta el fin del día
+    // (el mismo que se acaba de leer arriba). Si tampoco hay cadena previa (nada ocurrió todavía a esa
+    // fecha), no hay nada que verificar: pasar hasta=NULL igual sería "sin tope" y volvería a mirar
+    // eventos futuros, así que directamente no se llama a verify_chain.
+    const hastaVerificar = ultimo ?? hash.rows[0]?.chain_seq ?? null;
+    const rotoEn = hastaVerificar === null ? null : (await cliente.query<{ roto: string | null }>(
+      'SELECT audit.verify_chain(NULL::bigint, $1::bigint) AS roto', [hastaVerificar])).rows[0]?.roto ?? null;
     await cliente.query('COMMIT');
 
     return {

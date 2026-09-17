@@ -65,10 +65,35 @@ describe('armarManifiesto', () => {
 
   it('E1-AUD-04 verifica la cadena sólo hasta el extremo del día, no más allá', async () => {
     // Un evento posterior al día reportado no puede cambiar el veredicto de ese día.
+    const b = await registrarEventoFechado(pool, companyId, 2, '2026-09-16T15:00:00Z');
     const c = await registrarEventoFechado(pool, companyId, 3, '2026-09-20T15:00:00Z');
     const m = await armarManifiesto(pool, '2026-09-16');
+    expect(m.ultimo_chain_seq).toBe(b.chainSeq);
     expect(m.ultimo_chain_seq).not.toBe(c.chainSeq);
     expect(m.cadena.integra).toBe(true);
+  });
+
+  it('E1-AUD-04 un día vacío no verifica más allá de su propio extremo aunque la cadena se rompa después', async () => {
+    // Hallazgo de revisión: con el día vacío, `ultimo` (MAX(chain_seq) del día) es null, y
+    // verify_chain(desde, hasta) interpreta hasta = NULL como "sin tope". Sin acotar con el
+    // chain_seq del último hash conocido HASTA el fin del día, un día vacío terminaría
+    // verificando también eventos posteriores al día reportado — justo lo que el comentario del
+    // archivo dice que no puede pasar. Se arma en una base propia para no tocar la cadena de los
+    // demás casos.
+    const sola = await crearBaseDePrueba();
+    const admin = crearPool(sola.urlAdmin); const app = crearPool(sola.urlApp);
+    try {
+      const semilla = await sembrar(app);
+      // Un evento fechado bien DESPUÉS del día que se va a pedir: '2026-01-05' queda vacío.
+      await registrarEventoFechado(app, semilla.companyId, 1, '2026-09-20T15:00:00Z');
+      // Sólo un superusuario puede saltear el trigger; se corrompe ese evento posterior a propósito.
+      await admin.query(`ALTER TABLE audit.audit_events DISABLE TRIGGER ALL`);
+      await admin.query(`UPDATE audit.audit_events SET payload = '{"tocado":true}' WHERE chain_seq = 1`);
+      const m = await armarManifiesto(app, '2026-01-05');
+      expect(m.eventos).toBe(0);
+      expect(m.cadena.integra).toBe(true);
+      expect(m.cadena.roto_en).toBeNull();
+    } finally { await admin.end(); await app.end(); await sola.borrar(); }
   });
 
   it('E1-AUD-04 un día sin eventos y sin cadena previa usa el hash cero', async () => {
