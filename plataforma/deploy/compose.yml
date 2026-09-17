@@ -25,12 +25,35 @@ x-servicio: &servicio
 services:
   api:
     <<: *servicio
-    environment: { <<: *env, SERVICIO: api, INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-api", API_PUERTO: 3201 }
+    environment:
+      <<: *env
+      SERVICIO: api
+      INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-api"
+      API_PUERTO: 3201
+      # API interna de señales (T3 C3): vacías = la ruta no existe.
+      SENALES_KEYRING_FILE: ${SENALES_KEYRING_FILE:-}
+      SENALES_CUENTAS: ${SENALES_CUENTAS:-}
+      SENALES_ORIGENES: ${SENALES_ORIGENES:-}
+    volumes:
+      - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
+      - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
+      - ${KEYRING_DIR:?KEYRING_DIR requerido}:/run/fusion-keyring:ro
     command: ["node", "src/api/main.ts"]
     ports: ["127.0.0.1:${API_PORT:-3201}:3201"]
   worker:
     <<: *servicio
-    environment: { <<: *env, SERVICIO: worker, INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-worker" }
+    environment:
+      <<: *env
+      SERVICIO: worker
+      INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-worker"
+      # Barridos multi-cuenta (T3 C4/C5): vacías = el worker no reclama nada.
+      BARRIDOS_REGISTRO_FILE: ${BARRIDOS_REGISTRO_FILE:-}
+      BARRIDOS_KEYRING_FILE: ${BARRIDOS_KEYRING_FILE:-}
+      BARRIDOS_GATEWAY_KEYRING_FILE: ${BARRIDOS_GATEWAY_KEYRING_FILE:-}
+    volumes:
+      - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
+      - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
+      - ${KEYRING_DIR:?KEYRING_DIR requerido}:/run/fusion-keyring:ro
     command: ["node", "src/worker/main.ts"]
     # E1 T3 C5: el worker lee canales por el gateway del legado en el host (plano de control).
     extra_hosts: ["host.docker.internal:host-gateway"]

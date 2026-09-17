@@ -649,6 +649,15 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     `env -i`, cwd en `/root/e1-c9/<ts>` (no carga el `.env` real), `LISTEN_HOST=127.0.0.1`, crons apagados,
     `ML_API_BASE` inalcanzable; aborta si la carga supera 1,6 o producción no responde. Sin `NODE_ENV=production`:
     en ese modo el legado exige push FCM y no arranca.
+  - **C10 — plataforma en producción, etapa 1 (2026-09-17 ~04:00 UTC), sin copia de sombra**:
+    base `plataforma` y roles en el PostgreSQL de E0 (`alta-base.sql`), migraciones 0001–0008; api/worker/scheduler
+    con `docker compose -f plataforma/deploy/compose.yml -p fusion-plataforma --env-file /opt/fusionbikes/plataforma-prod/plataforma.env`
+    (red `fusion-pg_default`). Secretos y keyrings (`sobres`, `senales`, `gateway`, `registro.json`) en
+    `/opt/fusionbikes/plataforma-prod/` (root 700; keyrings uid 1000, 400). Una sola cuenta: Woo (4 corrientes),
+    transporte gateway `host.docker.internal:3001`. Legado con `GATEWAY_*` en `.env` (ML shadow RPM 0), reinicio
+    03:58:34 UTC con backup `/root/fusion-sqlite-backup-e1-c10-*` y `.env` en `/root/env-backup-e1-c10-*`.
+    `/opt/fusionbikes/estado-pg/` lo refresca `fusion-estado-pg-copia.timer` desde `backups/` (no montar `backups`).
+    Canario de copia: `SOMBRA_CANALES=woo`, `SOMBRA_PORCENTAJE` determinístico por recurso; cada ampliación la aprueba José.
   - **C9 en verde (2026-09-17)**: 500 webhooks anonimizados × 3 corridas de 30 min. p95 A 63,5 / B 72,3 / C 50,1 ms;
     p99 148,5 / 143,1 / 107,8 ms; códigos idénticos (423 ML + 77 Woo, todos 200); con PostgreSQL detenido 10 min hubo
     124 pérdidas, 124 importadas y 124 eventos `shadow.loss_imported`. La corrida C se repitió con `C9_REUSAR` +
