@@ -4,6 +4,12 @@
  * La clave primaria por fecha evita dos filas, pero no dos PUT a B2 ni dos emails: entre el efecto y su
  * registro hay una ventana. Cada efecto se reclama con un testigo (`lease`) que se verifica en el UPDATE
  * posterior; si cambió, el proceso viejo se detiene sin escribir (hallazgos 2 y 3 de la revisión externa).
+ *
+ * `ahora` es obligatorio en las cuatro funciones y no tiene valor por omisión: ni `new Date()` ni el
+ * instante del reclamo. Con un default basado en el instante del reclamo, `lease_hasta > ahora` se vuelve
+ * `(ahora + leaseMs) > ahora`, siempre verdadero, y un proceso con el permiso vencido de verdad puede seguir
+ * escribiendo mientras nadie le reclame la fila (hallazgo crítico de la revisión del 2026-09-17). El
+ * orquestador (tarea 10) inyecta el reloj una sola vez, arriba de la pila, y lo pasa a todas.
  */
 import { randomUUID } from 'node:crypto';
 import type { Consultable } from '../db/pool.ts';
@@ -11,13 +17,7 @@ import type { Consultable } from '../db/pool.ts';
 export type TipoEntrega = 'manifiesto' | 'reporte';
 export type EstadoDeposito = 'generado' | 'firmado' | 'subido';
 export type EstadoAviso = 'pendiente' | 'avisado';
-export interface Reclamo {
-  tipo: TipoEntrega; fecha: string; testigo: string; deposito: EstadoDeposito; aviso: EstadoAviso;
-  // El instante con el que se reclamó el lease. `avanzarDeposito`/`avanzarAviso` lo usan como valor por
-  // omisión: ninguna función decide con el reloj real (`new Date()`), la hora entra siempre por parámetro,
-  // y este es el único "ahora" que el dueño del lease conoce sin tener que pedirlo de nuevo.
-  ahora: Date;
-}
+export interface Reclamo { tipo: TipoEntrega; fecha: string; testigo: string; deposito: EstadoDeposito; aviso: EstadoAviso }
 
 const LEASE_MS = 10 * 60_000;
 const HORAS_INCIDENTE = 24;
@@ -26,9 +26,9 @@ const DATOS_PERMITIDOS = new Set(['kid', 'ruta_pendiente', 'b2_object_key', 'b2_
 
 export async function reclamar(
   db: Consultable, tipo: TipoEntrega, fecha: string,
-  opciones: { hash: string; leaseMs?: number; ahora?: Date },
+  opciones: { hash: string; ahora: Date; leaseMs?: number },
 ): Promise<Reclamo | null> {
-  const ahora = opciones.ahora ?? new Date();
+  const { ahora } = opciones;
   const testigo = randomUUID();
   const hasta = new Date(ahora.getTime() + (opciones.leaseMs ?? LEASE_MS));
   const r = await db.query<{ estado_deposito: EstadoDeposito; estado_aviso: EstadoAviso }>(
@@ -43,7 +43,7 @@ export async function reclamar(
     [tipo, fecha, opciones.hash, testigo, hasta, ahora],
   );
   const fila = r.rows[0];
-  if (fila) return { tipo, fecha, testigo, deposito: fila.estado_deposito, aviso: fila.estado_aviso, ahora };
+  if (fila) return { tipo, fecha, testigo, deposito: fila.estado_deposito, aviso: fila.estado_aviso };
   // Puede haber sido el lease de otro, o un contenido distinto para el mismo día: eso último se anota, porque
   // significa que alguien va a subir algo que no corresponde al sobre ya firmado.
   await db.query(
@@ -56,7 +56,7 @@ export async function reclamar(
 
 export async function avanzarDeposito(
   db: Consultable, reclamo: Reclamo, estado: Exclude<EstadoDeposito, 'generado'>,
-  datos: Record<string, unknown> = {}, ahora: Date = reclamo.ahora,
+  datos: Record<string, unknown>, ahora: Date,
 ): Promise<boolean> {
   const extra = Object.keys(datos).filter((k) => DATOS_PERMITIDOS.has(k));
   const columna = estado === 'firmado' ? 'firmado_en' : 'subido_en';
@@ -72,7 +72,7 @@ export async function avanzarDeposito(
   return (r.rowCount ?? 0) === 1;
 }
 
-export async function avanzarAviso(db: Consultable, reclamo: Reclamo, ahora: Date = reclamo.ahora): Promise<boolean> {
+export async function avanzarAviso(db: Consultable, reclamo: Reclamo, ahora: Date): Promise<boolean> {
   const r = await db.query(
     `UPDATE informes.entregas SET estado_aviso = 'avisado', avisado_en = $4
       WHERE tipo = $1 AND fecha = $2 AND testigo = $3 AND estado_aviso = 'pendiente' AND lease_hasta > $4`,
@@ -82,13 +82,16 @@ export async function avanzarAviso(db: Consultable, reclamo: Reclamo, ahora: Dat
 }
 
 export async function anotarFallo(
-  db: Consultable, reclamo: Reclamo, cual: 'deposito' | 'aviso', error: string,
+  db: Consultable, reclamo: Reclamo, cual: 'deposito' | 'aviso', error: string, ahora: Date,
 ): Promise<void> {
   const columna = cual === 'deposito' ? 'intentos_deposito' : 'intentos_aviso';
+  // También exige el lease vigente: un dueño vencido no sigue contando intentos ni pisando el error de
+  // quien haya reclamado la fila después (hallazgo menor de la revisión del 2026-09-17). A diferencia de la
+  // primera versión, no libera el lease: el mismo dueño puede seguir reintentando dentro de su ventana.
   await db.query(
-    `UPDATE informes.entregas SET ${columna} = ${columna} + 1, ultimo_error = $4, lease_hasta = NULL
-      WHERE tipo = $1 AND fecha = $2 AND testigo = $3`,
-    [reclamo.tipo, reclamo.fecha, reclamo.testigo, error.slice(0, 500)],
+    `UPDATE informes.entregas SET ${columna} = ${columna} + 1, ultimo_error = $4
+      WHERE tipo = $1 AND fecha = $2 AND testigo = $3 AND lease_hasta > $5`,
+    [reclamo.tipo, reclamo.fecha, reclamo.testigo, error.slice(0, 500), ahora],
   );
 }
 
