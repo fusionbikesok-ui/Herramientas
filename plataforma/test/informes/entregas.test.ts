@@ -113,3 +113,23 @@ describe('entregas', () => {
     expect(vencidas[0]).toMatchObject({ tipo: 'manifiesto', estado_deposito: 'firmado' });
   });
 });
+
+// Red de tipos contra la reaparición del defecto crítico de la ronda 1: un valor por omisión para `ahora`
+// (`new Date()` o el instante del reclamo) vuelve tautológico el chequeo de vencimiento y ningún test en
+// tiempo de ejecución lo detecta, porque toda llamada de la suite pasa `ahora` explícito y un argumento
+// explícito siempre pisa el default. Esta función nunca se invoca: existe sólo para que `tsc` la revise.
+// Si alguien vuelve a poner un valor por omisión en `ahora`, estas llamadas dejan de tener el error que
+// `@ts-expect-error` espera y el typecheck falla.
+async function _guardaDeTipos(): Promise<void> {
+  const db = null as unknown as Parameters<typeof reclamar>[0];
+  const r = null as unknown as Awaited<ReturnType<typeof reclamar>>;
+  // @ts-expect-error reclamar exige `ahora` en las opciones: sin esta línea, un default lo dejaría pasar.
+  await reclamar(db, 'reporte', '2026-09-16', { hash: 'a'.repeat(64) });
+  // @ts-expect-error avanzarDeposito exige `ahora` como último argumento.
+  await avanzarDeposito(db, r!, 'firmado', {});
+  // @ts-expect-error avanzarAviso exige `ahora` como último argumento.
+  await avanzarAviso(db, r!);
+  // @ts-expect-error anotarFallo exige `ahora` como último argumento.
+  await anotarFallo(db, r!, 'deposito', 'error');
+}
+void _guardaDeTipos;

@@ -88,6 +88,12 @@ export async function anotarFallo(
   // También exige el lease vigente: un dueño vencido no sigue contando intentos ni pisando el error de
   // quien haya reclamado la fila después (hallazgo menor de la revisión del 2026-09-17). A diferencia de la
   // primera versión, no libera el lease: el mismo dueño puede seguir reintentando dentro de su ventana.
+  // Esto significa que, tras un fallo, el reintento tiene que esperar a que venza el lease vigente (10
+  // minutos por omisión) antes de que reclamar() vuelva a admitir esta fila — no hay forma de retomarla
+  // antes salvo con el mismo testigo. Es aceptable: reintentar contra un B2 o un SMTP caído a los pocos
+  // segundos no sirve de nada. Si la tarea 10 necesita un reintento más ágil que esos 10 minutos, hay que
+  // decidirlo explícitamente (por ejemplo, un `leaseMs` de reclamo más corto para el camino de reintento),
+  // no asumirlo acá.
   await db.query(
     `UPDATE informes.entregas SET ${columna} = ${columna} + 1, ultimo_error = $4
       WHERE tipo = $1 AND fecha = $2 AND testigo = $3 AND lease_hasta > $5`,
