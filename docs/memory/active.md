@@ -658,6 +658,8 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
     03:58:34 UTC con backup `/root/fusion-sqlite-backup-e1-c10-*` y `.env` en `/root/env-backup-e1-c10-*`.
     `/opt/fusionbikes/estado-pg/` lo refresca `fusion-estado-pg-copia.timer` desde `backups/` (no montar `backups`).
     Canario de copia: `SOMBRA_CANALES=woo`, `SOMBRA_PORCENTAJE` determinístico por recurso; cada ampliación la aprueba José.
+    Copia Woo al 1 % desde 2026-09-17 04:08 UTC; en 6 h entraron sólo 3 webhooks Woo (≈1 cada 2 h), así que José
+    amplió directo al **50 % el 2026-09-17 10:38 UTC**. ML sigue fuera del canario hasta la cuota medida (23/09).
   - **C9 en verde (2026-09-17)**: 500 webhooks anonimizados × 3 corridas de 30 min. p95 A 63,5 / B 72,3 / C 50,1 ms;
     p99 148,5 / 143,1 / 107,8 ms; códigos idénticos (423 ML + 77 Woo, todos 200); con PostgreSQL detenido 10 min hubo
     124 pérdidas, 124 importadas y 124 eventos `shadow.loss_imported`. La corrida C se repitió con `C9_REUSAR` +
