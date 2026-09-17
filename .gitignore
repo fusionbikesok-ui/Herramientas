@@ -26,3 +26,11 @@ core.*
 
 # Espacio de trabajo de planes ejecutados por agentes (registro, briefs, reportes)
 .superpowers/
+
+# Obsidian: estado local del vault de docs/ (cambia con cada clic, no es contenido)
+docs/.obsidian/workspace.json
+docs/.obsidian/workspace-mobile.json
+docs/.obsidian/cache
+docs/.obsidian/plugins/
+docs/.obsidian/themes/
+docs/.obsidian/snippets/
