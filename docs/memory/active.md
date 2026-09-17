@@ -718,3 +718,4 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - 2026-09-17 vigía de formato (`lib/vigiaPausado.js`, d90a0da): en `catalog_product_id`, producto→vacío o volver a un valor ya visto por ese ítem en 7 días se asienta con `revisado_por='vigia-auto'` y NO pausa ni cuenta para el umbral; producto nuevo sigue pausando. Desplegado 12:58:30 UTC durante la prueba C10 (reinicio planificado).
 
 - 2026-09-17 canario Woo de C10 dado por cerrado por José (evidencia `docs/superpowers/evidence/e1/2026-09-17-E1-C10-canario-woo.md`); copia Woo queda al 100 %. E1-SOAK-01 dispensado por José (aprobó el comportamiento sin las 24 h). Pendiente: canario ML tras 23/09 16:00 UTC.
+- 2026-09-17 rollback de la copia ensayado (15:18:30 apagar, 15:38:30 encender, healthz 200 en ambos); evidencia en el mismo archivo del canario Woo. T3 sólo espera el canario ML.

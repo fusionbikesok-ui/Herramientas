@@ -11,3 +11,15 @@
 ## E1-SOAK-01 — dispensa
 
 José decidió el 2026-09-17 que la prueba de 24 h no es necesaria y **aprobó el comportamiento como está** con base en esta corrida. E1-SOAK-01 queda **aceptado por decisión de José (dispensa)**, no cumplido por medición.
+
+## Ensayo de rollback (2026-09-17, aprobado por José)
+
+Registro en el VPS: `/root/e1-c10/rollback-20260917T150732Z.log`; backup `.env` en `/root/env-backup-rollback-20260917T150725Z`.
+
+| Hora UTC | Paso | Resultado |
+|---|---|---|
+| 15:18:30 | `SOMBRA_COPIA_ENABLED=false` + `pm2 restart herramientas` | `/healthz` 200 en 3 s |
+| 15:18–15:29 | observación con copia apagada | 4 recibos ML registrados sin `shadow_status` (antes `excluded/canary_excluded`); ningún webhook Woo en la ventana |
+| 15:38:30 | `SOMBRA_COPIA_ENABLED=true` + reinicio | `/healthz` 200 en 2 s; log `[sombra] copia encendida: canales=woo porcentaje=100` |
+
+Rollback ensayado: apagar la copia no afecta la recepción del legado y volver a encenderla restablece el canario.
