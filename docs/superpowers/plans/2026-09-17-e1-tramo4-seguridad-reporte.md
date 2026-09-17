@@ -61,6 +61,8 @@ Valen para **todas** las tareas:
   No se escriben tests contra la base de producción.
 - **Cada migración nueva actualiza `plataforma/test/migraciones.test.ts`** en el mismo commit: ese test compara
   la lista de archivos **literal** (`0001…0008` hoy), así que agregar una sin tocarlo lo rompe.
+- **`limpiar` va con el pool administrador** (`crearPool(base.urlAdmin)`), creado en el `beforeAll` del archivo
+  y cerrado en el `afterAll`: el rol de la aplicación no puede borrar filas.
 - **Cada caso de test limpia lo suyo y recibe la hora como parámetro.** Nada de estado compartido entre `it`
   del mismo archivo ni de `new Date()` dentro del código probado: se inyecta `ahora`.
 - **Nombres reales del esquema**, verificados el 2026-09-17 contra `plataforma/migrations/`:
@@ -127,8 +129,11 @@ FK válida, las señales exigen una cuenta de canal, y `security.users` pide `co
 - Consume: `crearBaseDePrueba()` de `test/soporte/base.ts`.
 - Produce:
   - `sembrar(pool): Promise<Semilla>` con `Semilla = { companyId: string; cuentaWoo: string; cuentaMl: string; userId: string }`
-  - `limpiar(pool, tablas: string[]): Promise<void>` — `TRUNCATE` de las tablas indicadas, para que cada caso
-    arranque limpio sin recrear la base.
+  - `limpiar(poolAdmin, tablas: string[]): Promise<void>` — borra las filas de las tablas indicadas, para que
+    cada caso arranque limpio sin recrear la base. **Recibe el pool administrador** (`base.urlAdmin`), no el de
+    la aplicación: `plataforma_app` tiene `SELECT`, `INSERT` y `UPDATE` por `0002_permisos.sql`, así que no
+    puede ni `TRUNCATE` ni `DELETE` (verificado el 2026-09-17 contra la base: las dos operaciones dan
+    `permission denied`).
 
 - [ ] **Paso 1: escribir el test que falla**
 
@@ -158,12 +163,14 @@ describe('fixtures', () => {
   });
 
   it('limpiar vacía las tablas pedidas y deja las demás', async () => {
+    const admin = crearPool(base.urlAdmin);
     const s = await sembrar(pool);
     await pool.query(`INSERT INTO integrations.reconciliation_signals
       (channel_account_id, topic, resource_id, fingerprint, source) VALUES ($1,'woo.orders','1','ev:a','webhook_copy')`, [s.cuentaWoo]);
-    await limpiar(pool, ['integrations.reconciliation_signals']);
+    await limpiar(admin, ['integrations.reconciliation_signals']);
     expect((await pool.query('SELECT COUNT(*)::int n FROM integrations.reconciliation_signals')).rows[0].n).toBe(0);
     expect((await pool.query('SELECT COUNT(*)::int n FROM core.companies')).rows[0].n).toBeGreaterThan(0);
+    await admin.end();
   });
 });
 ```
@@ -212,7 +219,9 @@ export async function limpiar(pool: pg.Pool, tablas: string[]): Promise<void> {
 }
 ```
 
-Si el rol `plataforma_app` no puede hacer `TRUNCATE`, usar `DELETE FROM` en el mismo orden y anotarlo.
+`limpiar` usa el pool **administrador** y `DELETE FROM` en el orden recibido: con el pool de la aplicación,
+`TRUNCATE` y `DELETE` dan los dos `permission denied`, porque `0002_permisos.sql` sólo le da `SELECT`, `INSERT`
+y `UPDATE`.
 
 - [ ] **Paso 4: correr el test y verificar que pasa**
 
@@ -899,7 +908,7 @@ describe('entregas', () => {
   beforeAll(async () => { base = await crearBaseDePrueba(); pool = crearPool(base.urlApp); });
   afterAll(async () => { await pool.end(); await base.borrar(); });
   // Cada caso arranca con la tabla vacía: si compartieran filas, el orden decidiría el resultado.
-  beforeEach(async () => { await limpiar(pool, ['informes.entregas']); });
+  beforeEach(async () => { await limpiar(admin, ['informes.entregas']); });
 
   const SUBIDA = { b2_object_key: 'e1/reportes/2026-09-16.json', b2_version_id: 'v1', retention_until: new Date('2027-09-20T00:00:00Z') };
 
@@ -1345,7 +1354,7 @@ describe('armarReporte', () => {
   beforeAll(async () => { base = await crearBaseDePrueba(); pool = crearPool(base.urlApp); s = await sembrar(pool); });
   afterAll(async () => { await pool.end(); await base.borrar(); });
   // Sin esto, las señales de un caso cuentan en el siguiente y el resultado depende del orden.
-  beforeEach(async () => { await limpiar(pool, ['integrations.reconciliation_signals', 'informes.entregas']); });
+  beforeEach(async () => { await limpiar(admin, ['integrations.reconciliation_signals', 'informes.entregas']); });
 
   const senal = (extra: Record<string, unknown>) => pool.query(
     `INSERT INTO integrations.reconciliation_signals
@@ -1780,7 +1789,7 @@ describe('vueltaDeInformes', () => {
   afterAll(async () => { await pool.end(); await base.borrar(); });
   beforeEach(async () => {
     // Sin limpiar, el primer caso deja el día cerrado y los siguientes no ejercitan ningún camino.
-    await limpiar(pool, ['informes.entregas', 'integrations.reconciliation_signals']);
+    await limpiar(admin, ['informes.entregas', 'integrations.reconciliation_signals']);
     dir = mkdtempSync(join(tmpdir(), 'vuelta-'));
     subidas = []; emails = [];
     cfg = {
@@ -2265,7 +2274,7 @@ describe('recuperación', () => {
   afterAll(async () => { await pool.end(); await base.borrar(); });
   // Cada caso arranca con su propio usuario y sin intentos previos: el límite de uno no puede afectar al otro.
   beforeEach(async () => {
-    await limpiar(pool, ['security.recovery_attempts', 'security.recovery_codes']);
+    await limpiar(admin, ['security.recovery_attempts', 'security.recovery_codes']);
     userId = (await sembrar(pool)).userId;
   });
 
