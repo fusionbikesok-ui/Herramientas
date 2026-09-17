@@ -714,3 +714,5 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 - Cumplidas las cuatro condiciones de PM-177 → E0 `aceptada`. E1 tramo 1 puede ejecutarse según
   `docs/superpowers/plans/2026-09-15-e1-tramo1-fundacion.md`.
 - rsync de la Mac con `-rt` omite `backup/fusion/latest` (enlace simbólico): pgBackRest no lo necesita.
+
+- 2026-09-17 vigía de formato (`lib/vigiaPausado.js`, d90a0da): en `catalog_product_id`, producto→vacío o volver a un valor ya visto por ese ítem en 7 días se asienta con `revisado_por='vigia-auto'` y NO pausa ni cuenta para el umbral; producto nuevo sigue pausando. Desplegado 12:58:30 UTC durante la prueba C10 (reinicio planificado).
