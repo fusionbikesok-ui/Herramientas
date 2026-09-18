@@ -51,12 +51,26 @@ for (const ch in agg) {
 " "$m" "$prev"
 }
 # Decisión de José 2026-09-17: si ML devuelve 429, bajar el tope de relecturas de la sombra de a un escalón
-# (60→45→30→20→10) y sólo en el último caso dejarlo en 0; nunca apagar toda la copia por esto.
-ESCALONES_RPM=(60 45 30 20 10 0)
+# y nunca apagar toda la copia por esto.
+#
+# Corregido el 2026-09-18 (José: "si llega a saturar la API bajemos... no hagas una regresión enorme"): el
+# monitor bajaba un escalón por CADA 429 suelto y llegó a 0 a las 20:09 con sólo 5 respuestas 429 reales en
+# todo el día, sobre ~1.500 lecturas por hora. Con el tope en 0 la sombra de ML no leía nada y todas las
+# señales murieron. Tres arreglos:
+#   1. Baja sólo con 429 SOSTENIDOS: al menos UMBRAL_429 reales en la ventana. Uno suelto se anota y nada más.
+#   2. Piso de 10: el monitor nunca lo deja en 0 por su cuenta. Por debajo de eso decide José.
+#   3. Espera ENFRIAMIENTO_S entre bajadas: la ventana es de 6 min y se mide cada 5, así que el mismo 429
+#      entraba en dos mediciones seguidas y bajaba dos escalones (07:01 y 07:06, con un solo 429 en esa hora).
+ESCALONES_RPM=(60 45 30 20 10)
+PISO_RPM=10; UMBRAL_429=3; ENFRIAMIENTO_S=1800; ULTIMA_BAJADA=0
 bajar_rpm() {
   local actual sig i; actual="$(grep '^GATEWAY_ML_SHADOW_RPM=' "$RAIZ/.env" | cut -d= -f2)"; sig=0
   for i in "${!ESCALONES_RPM[@]}"; do [ "${ESCALONES_RPM[$i]}" -lt "${actual:-0}" ] && { sig="${ESCALONES_RPM[$i]}"; break; }; done
-  [ "${actual:-0}" -le 0 ] && { log "AVISO: 429 de ML con el tope de sombra ya en 0 (no es la sombra)"; return; }
+  [ "${actual:-0}" -le "$PISO_RPM" ] && { log "AVISO: 429 sostenidos de ML con el tope de sombra ya en el piso ($actual rpm): no lo bajo más, decide José"; return; }
+  [ $(( $(date +%s) - ULTIMA_BAJADA )) -lt "$ENFRIAMIENTO_S" ] && { log "AVISO: 429 sostenidos de ML, pero hubo una bajada hace menos de $((ENFRIAMIENTO_S/60)) min: espero"; return; }
+  [ "$sig" -lt "$PISO_RPM" ] && sig="$PISO_RPM"
+  ULTIMA_BAJADA=$(date +%s)
+  log "429 sostenidos de ML: bajo el tope de sombra $actual → $sig rpm y reinicio el legado"
   cp -a "$RAIZ/.env" "$DIR/env-antes-rpm-$sig"
   sed -i "s/^GATEWAY_ML_SHADOW_RPM=.*/GATEWAY_ML_SHADOW_RPM=$sig/" "$RAIZ/.env"
   pm2 restart herramientas --update-env >/dev/null 2>&1
@@ -86,7 +100,9 @@ while [ "$(date +%s)" -lt "$fin" ]; do
   if [ "$fallos_legado" -ge 3 ]; then abortar "legado sin /healthz 200 en 3 mediciones"; break; fi
   if echo "$M" | grep -qE '"tipo_error":"(cola_llena|cola_saturada|perdidas_sin_importar|respuesta_no_terminada)"'; then abortar "alerta de sombra activa: $(echo "$M" | grep -oE '"tipo_error":"[a-z_]+"' | tr '\n' ' ')"; break; fi
   if [ "$fallos_plataforma" -ge 6 ]; then abortar "plataforma no ok durante 30 min"; break; fi
-  if echo "$M" | grep -qE '"ml_429_6min":[1-9]'; then bajar_rpm; fi
+  N429="$(echo "$M" | grep -oE '"ml_429_6min":[0-9]+' | cut -d: -f2)"
+  if [ "${N429:-0}" -ge "$UMBRAL_429" ]; then bajar_rpm
+  elif [ "${N429:-0}" -gt 0 ]; then log "429 de ML sueltos en la ventana: ${N429} (umbral $UMBRAL_429): no toco el tope"; fi
   [ "${VIEJA:-0}" -gt 1800 ] && log "AVISO: señal activa de más de 30 min"
   sleep 300
 done
