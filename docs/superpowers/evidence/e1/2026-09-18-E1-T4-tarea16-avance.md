@@ -8,8 +8,8 @@ avisó los dos artefactos del 2026-09-17 (ver "Primera vuelta real" al final).
 | Paso | Estado |
 |---|---|
 | Buckets en B2 | `bucket-produccion` y `bucket-verificacion`, privados, región `us-east-005`, endpoint `https://s3.us-east-005.backblazeb2.com`. Object Lock **habilitado** en los dos y cifrado por omisión SSE-B2 |
-| Credenciales de B2 | `e1-escritura` (`listBuckets,listFiles,writeFiles,readFileRetentions,writeFileRetentions`) y `e1-lectura` (`listBuckets,listFiles,readFiles,readFileRetentions`), las dos acotadas a `bucket-produccion`, **sin** `deleteFiles` ni `bypassGovernance`. En `/opt/fusionbikes/plataforma-prod/secretos/b2-{escritura,lectura}-{id,clave}`, 0600 |
-| Clave de firma | `kid e1-2026-09`, privada en `/opt/fusionbikes/plataforma-prod/keyring/firma-informes.pem` (0600, root); pública commiteada en `specs/e1/firma-informes/e1-2026-09.pub`, huella SHA-256 `vxWdZOUP21/br6qbfukLe50pNE76GAwjBo50krnYYoE=` |
+| Credenciales de B2 | `e1-escritura` (`listBuckets,listFiles,writeFiles,readFileRetentions,writeFileRetentions`) y `e1-lectura` (`listBuckets,listFiles,readFiles,readFileRetentions`), las dos acotadas a `bucket-produccion`, **sin** `deleteFiles` ni `bypassGovernance`. En `/opt/fusionbikes/plataforma-prod/secretos/b2-{escritura,lectura}-{id,clave}`, uid 1000, 0400 (ver "el dueño de los secretos" abajo) |
+| Clave de firma | `kid e1-2026-09`, privada en `/opt/fusionbikes/plataforma-prod/keyring/firma-informes.pem` (uid 1000, 0400); pública commiteada en `specs/e1/firma-informes/e1-2026-09.pub`, huella SHA-256 `vxWdZOUP21/br6qbfukLe50pNE76GAwjBo50krnYYoE=` |
 | Verificación contra B2 real | hecha en `bucket-verificacion` con una credencial temporal, ya borrada |
 | Email | remitente y destinatario: los mismos del canal de alertas del legado (`SMTP_FROM` y `ALERTAS_EMAIL`) |
 
@@ -40,13 +40,12 @@ Lo que **sí** quedó verificado como rechazado: acortar la retención con la cr
 
 ## Lo que falta para terminar la tarea 16
 
-1. **El vigilante del legado todavía no alerta por informes ocultos.** La ruta interna ya los expone; falta que
-   `lib/vigilanteInformes.js` los lea y abra incidente, con su test. Es lo único que quedó a medias del cambio.
-2. **Configurar el scheduler**: las quince variables de `CAMPOS_INFORMES` en `plataforma.env` y los montajes del
-   keyring y del directorio de pendientes en `deploy/compose.yml`, que hoy no los pasa al servicio.
-3. **Aplicar las migraciones** 0009 a 0012 con `npm run migrar` y recrear los contenedores.
-4. **Un envío real de email** y la primera vuelta diaria observada.
-5. **Arrancar la campaña de 7 días** verdes seguidos.
+Hechos el 2026-09-18: el vigilante alerta por informes ocultos (`3b0cf53`), el scheduler recibe la configuración y
+los montajes (`d1dd0cf`), las migraciones 0009 a 0012 están aplicadas, y el primer email real salió. Queda:
+
+1. **La campaña de 7 días verdes seguidos.** El primer reporte (17/09) salió amarillo; cuenta desde el primer día
+   limpio.
+2. **Rotar la clave maestra de Backblaze**, que apareció en la salida de un comando.
 
 ## Limpieza hecha
 
