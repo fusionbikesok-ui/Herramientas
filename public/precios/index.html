@@ -88,6 +88,7 @@
   .res-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px;font-size:13px;}
   .res-panel h3{margin:0 0 8px;font-size:13px;}
   .res-panel ul{margin:0;padding-left:18px;color:var(--muted);}
+  .res-nota{margin:0 0 8px;color:var(--muted);line-height:1.45;}
   @media(max-width:600px){.filtros-panel{grid-template-columns:1fr 1fr;}}
   @media(max-width:400px){.filtros-panel{grid-template-columns:1fr;}}
 </style>
@@ -493,29 +494,65 @@ async function aplicarObjetivos(){
   var btn=document.getElementById('btn-aplicar');
   btn.disabled=true;
   // Fail-closed por ítem: si ML rechaza uno, los demás siguen y ese queda con su error.
-  var okList=[],errList=[];
-  for(var i=0;i<claves.length;i++){
-    var clave=claves[i];
-    btn.textContent='Aplicando… ('+(i+1)+'/'+claves.length+')';
+  // Las variaciones de una misma publicación van juntas: ML exige que todas tengan el mismo precio (salvo cuentas
+  // con Mercado Envíos 1), y cambiarlas de a una falla porque al cambiar la primera quedan distintas. Se aplica el
+  // MÁS ALTO de los precios calculados, así ninguna variación queda con un neto por debajo del precio de contado.
+  var okList=[],errList=[],unicos=[];
+  var tareas=agruparPorPublicacion(claves);
+  for(var i=0;i<tareas.length;i++){
+    var t=tareas[i];
+    btn.textContent='Aplicando… ('+(i+1)+'/'+tareas.length+')';
     try{
-      var r=await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave,precio:OBJ[clave].precio})});
-      var d=await r.json();
+      var r=t.claves.length>1
+        ? await fetch('/api/precios/actualizar-precio-item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemId:t.itemId,precio:t.precio})})
+        : await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:t.claves[0],precio:t.precio})});
+      var d=await leerJson(r);
       if(!d.ok)throw new Error(d.error||'error');
-      okList.push(clave); delete SEL[clave]; delete OBJ[clave];
+      t.claves.forEach(function(k){ okList.push(k); delete SEL[k]; delete OBJ[k]; });
+      if(t.claves.length>1&&t.distintos)unicos.push({itemId:t.itemId,precio:t.precio,n:t.claves.length});
     }catch(err){
-      errList.push({clave:clave,error:err.message});
+      t.claves.forEach(function(k){ errList.push({clave:k,error:err.message}); });
     }
   }
   btn.disabled=false;
-  mostrarResultado(okList,errList);
+  mostrarResultado(okList,errList,unicos);
   await cargar(); estado(); refrescarBarra();
 }
 
-function mostrarResultado(okList,errList){
+/* Agrupa las claves por publicación. Una clave es "ITEM|VARIACION": las que comparten ítem y tienen variación van
+   juntas con el precio más alto; las demás siguen solas. `distintos` indica si los calculados no coincidían. */
+function agruparPorPublicacion(claves){
+  var grupos={},orden=[];
+  claves.forEach(function(k){
+    var partes=String(k).split('|'), item=partes[0], variacion=partes[1]||'';
+    var id=variacion?item:k;
+    if(!grupos[id]){grupos[id]={itemId:item,claves:[],precios:[]};orden.push(id);}
+    grupos[id].claves.push(k); grupos[id].precios.push(OBJ[k].precio);
+  });
+  return orden.map(function(id){
+    var g=grupos[id], max=Math.max.apply(null,g.precios), min=Math.min.apply(null,g.precios);
+    return {itemId:g.itemId,claves:g.claves,precio:max,distintos:max!==min};
+  });
+}
+
+/* Un 502 del proxy (por ejemplo durante un reinicio) llega como página HTML: se traduce a un mensaje entendible
+   en lugar de "Unexpected token '<'". */
+async function leerJson(r){
+  var texto=await r.text();
+  try{ return JSON.parse(texto); }
+  catch(e){ return {ok:false,error:'El servidor no respondió bien ('+r.status+'). Probá de nuevo en unos segundos.'}; }
+}
+
+function mostrarResultado(okList,errList,unicos){
   var cont=document.getElementById('resultado-aplicar');
   if(!cont)return;
   var h='<div class="res-panel"><h3>'+okList.length+' precio'+(okList.length===1?'':'s')+' aplicado'+(okList.length===1?'':'s')+' en ML'
     +(errList.length?' · <span style="color:var(--red)">'+errList.length+' con error</span>':'')+'</h3>';
+  if(unicos&&unicos.length){
+    h+='<p class="res-nota">Precio único por publicación (Mercado Libre no admite precios distintos entre variaciones en esta cuenta): '
+      +unicos.map(function(u){return '<b>'+esc(u.itemId)+'</b> quedó en $'+esc(Math.round(u.precio).toLocaleString('es-AR'))+' para sus '+u.n+' variaciones, el más alto de los calculados';}).join('; ')
+      +'.</p>';
+  }
   if(errList.length){
     h+='<ul>'+errList.map(function(e){return '<li><b>'+esc(e.clave)+'</b>: '+esc(e.error)+'</li>';}).join('')+'</ul>';
   }
@@ -529,14 +566,25 @@ async function corregirPrecio(btn){
   var clave=tr.getAttribute('data-clave');
   var o=_rowsPorClave[clave], r=OBJ[clave];
   if(!o||!r||r.precio==null)return;
-  if(!confirm('Poner el precio de "'+(o.titulo||o.item_id)+'" en '+money(r.precio)+'?\n\n'
-    +'Deja un neto de '+money(r.neto)+' contra un contado de '+money(r.contado)+'.'))return;
+  // Una variación no se puede cambiar sola: ML exige el mismo precio para todas las de la publicación. Se usa el
+  // más alto entre los calculados de esa publicación, y la confirmación lo dice.
+  var partes=String(clave).split('|'), item=partes[0], esVariacion=!!partes[1];
+  var hermanas=esVariacion?Object.keys(OBJ).filter(function(k){return String(k).split('|')[0]===item&&OBJ[k]&&OBJ[k].precio!=null;}):[clave];
+  var precio=Math.max.apply(null,hermanas.map(function(k){return OBJ[k].precio;}));
+  var aviso=esVariacion
+    ? '\n\nMercado Libre exige el mismo precio para todas las variaciones de esta publicación: se aplica a TODAS'
+      +(precio!==r.precio?(', usando el más alto de los calculados ('+money(precio)+')'):'')+'.'
+    : '';
+  if(!confirm('Poner el precio de "'+(o.titulo||o.item_id)+'" en '+money(precio)+'?\n\n'
+    +'Deja un neto de '+money(r.neto)+' contra un contado de '+money(r.contado)+'.'+aviso))return;
   btn.disabled=true;btn.textContent='Aplicando…';
   try{
-    var resp=await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave,precio:r.precio})});
-    var d=await resp.json();
+    var resp=esVariacion
+      ? await fetch('/api/precios/actualizar-precio-item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemId:item,precio:precio})})
+      : await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:clave,precio:precio})});
+    var d=await leerJson(resp);
     if(!d.ok)throw new Error(d.error||'error');
-    delete SEL[clave]; delete OBJ[clave];
+    hermanas.forEach(function(k){ delete SEL[k]; delete OBJ[k]; });
     await cargar();estado();refrescarBarra();
   }catch(err){
     alert('No se pudo actualizar: '+err.message);

@@ -370,6 +370,58 @@ describe('auditarPrecios + router', () => {
     expect(fila.precio_ml).toBe(1200);
   });
 
+  // 2026-09-18: en una publicación del modelo viejo de variaciones, ML exige que TODAS las variaciones tengan
+  // el mismo precio salvo cuentas con Mercado Envíos 1 ("Found different prices in variations | User has not
+  // mode me1"). Cambiarlas de a una tampoco sirve: al cambiar la primera, las demás quedan distintas y ML
+  // rechaza. Hay que mandar todas las variaciones, con el mismo precio, en un solo PUT al ítem.
+  it('POST /api/precios/actualizar-precio-item pone el mismo precio a TODAS las variaciones en un solo pedido', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    seedDecision(db, 'MLB|v2', 'FB-B'); seedPub(db, { clave: 'MLB|v2', itemId: 'MLB', varId: 'v2' });
+    const puts = [];
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'put') { puts.push({ url, data: cfg.data }); return { status: 200, data: {}, headers: {} }; }
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+      if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
+      // v3 existe en ML pero no está en el sistema: igual tiene que ir en el PUT, o queda con otro precio.
+      if (/\/items\/MLB\?/.test(url)) return { status: 200, data: { id: 'MLB', price: 1200, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, status: 'active',
+        variations: [{ id: 'v1', price: 1000 }, { id: 'v2', price: 1100 }, { id: 'v3', price: 900 }] }, headers: {} };
+      return { status: 404, data: {}, headers: {} };
+    });
+
+    const res = await request(app).post('/api/precios/actualizar-precio-item').send({ itemId: 'MLB', precio: 1200 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    // Un solo PUT, al ítem, con las tres variaciones al mismo precio.
+    expect(puts).toHaveLength(1);
+    expect(puts[0].url).toMatch(/\/items\/MLB$/);
+    const cuerpo = typeof puts[0].data === 'string' ? JSON.parse(puts[0].data) : puts[0].data;
+    expect(cuerpo.variations).toEqual([{ id: 'v1', price: 1200 }, { id: 'v2', price: 1200 }, { id: 'v3', price: 1200 }]);
+    // El caché local queda al día para las dos variaciones que el sistema conoce.
+    const precios = db.prepare("SELECT clave, precio FROM ml_publicaciones_cache WHERE item_id='MLB' ORDER BY clave").all();
+    expect(precios).toEqual([{ clave: 'MLB|v1', precio: 1200 }, { clave: 'MLB|v2', precio: 1200 }]);
+    expect(res.body.claves.sort()).toEqual(['MLB|v1', 'MLB|v2']);
+  });
+
+  it('POST /api/precios/actualizar-precio-item devuelve el error de ML si lo rechaza', async () => {
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    axios.request.mockImplementation((cfg) => ((cfg.method || '').toLowerCase() === 'put'
+      ? { status: 400, data: { message: 'precio inválido' }, headers: {} }
+      : { status: 200, data: { id: 'MLB', variations: [{ id: 'v1', price: 1000 }] }, headers: {} }));
+    const res = await request(app).post('/api/precios/actualizar-precio-item').send({ itemId: 'MLB', precio: 1200 });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toMatch(/inválido/);
+  });
+
+  it('POST /api/precios/actualizar-precio-item rechaza datos inválidos sin llamar a ML', async () => {
+    const res = await request(app).post('/api/precios/actualizar-precio-item').send({ itemId: 'MLB', precio: 0 });
+    expect(res.status).toBe(400);
+    expect(axios.request).not.toHaveBeenCalled();
+  });
+
   it('POST /api/precios/actualizar-precio devuelve error si ML rechaza el precio', async () => {
     seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });

@@ -384,5 +384,50 @@ export function preciosRouter(db, cfg) {
     }
   });
 
+  /**
+   * Precio único para una publicación con variaciones (2026-09-18). En el modelo viejo de variaciones, ML exige
+   * que TODAS tengan el mismo precio salvo en cuentas con Mercado Envíos 1 ("Found different prices in
+   * variations | User has not mode me1"). Tampoco se pueden cambiar de a una: al cambiar la primera, las demás
+   * quedan distintas y ML rechaza. Por eso va un solo PUT al ítem con TODAS sus variaciones —también las que el
+   * sistema no tiene cargadas, que si no quedarían con otro precio— y el mismo precio para todas. Qué precio es
+   * lo decide la pantalla (el más alto de los calculados, para que ninguna quede con neto bajo el contado).
+   */
+  router.post('/actualizar-precio-item', async (req, res) => {
+    if (!mlCfgOk(mlCfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+    const itemId = String(req.body?.itemId || '');
+    const precio = Number(req.body?.precio);
+    // Sólo alfanumérico: el id va en la ruta del pedido a ML.
+    if (!/^[A-Za-z0-9]{3,30}$/.test(itemId) || !(precio > 0)) return res.status(400).json({ ok: false, error: 'Faltan itemId o precio válido' });
+    try {
+      const actual = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=id,variations`, null, { manual: true });
+      if (actual.status !== 200) return res.status(400).json({ ok: false, error: extraerErrorMl(actual) });
+      const variaciones = Array.isArray(actual.data?.variations) ? actual.data.variations : [];
+      const body = variaciones.length
+        ? { variations: variaciones.map((v) => ({ id: v.id, price: precio })) }
+        : { price: precio };
+      const resp = await mlFetch(db, mlCfg, 'put', `/items/${itemId}`, body, { manual: true });
+      if (resp.status !== 200) return res.status(400).json({ ok: false, error: extraerErrorMl(resp) });
+
+      // Mismo cierre que `/actualizar-precio`: el caché local y la reactivación frenada se ponen al día para cada
+      // variación que el sistema conoce. Fail-open: el precio en ML ya cambió.
+      const claves = db.prepare('SELECT clave FROM ml_publicaciones_cache WHERE item_id = ?').all(itemId).map((f) => f.clave);
+      try {
+        const actualizar = db.prepare('UPDATE ml_publicaciones_cache SET precio = ?, precio_actualizado_en = ? WHERE clave = ?');
+        const borrarFrenada = db.prepare('DELETE FROM ml_reactivacion_frenada WHERE clave = ?');
+        const ts = now();
+        db.transaction(() => { for (const c of claves) { actualizar.run(precio, ts, c); borrarFrenada.run(c); } })();
+      } catch (e) {
+        console.error(`actualizar-precio-item: no se pudo refrescar el caché local de ${itemId}:`, e.message);
+      }
+      const filas = [];
+      for (const c of claves) {
+        try { filas.push(await refrescarFila(db, mlCfg, c)); } catch { /* la fila se recalcula en la próxima auditoría */ }
+      }
+      res.json({ ok: true, claves, data: filas.filter(Boolean) });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   return router;
 }
