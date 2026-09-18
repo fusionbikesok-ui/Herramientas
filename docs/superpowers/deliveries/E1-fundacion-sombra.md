@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** T3 está implementado (C1–C10, commits hasta `3a17af0`): C9 verde el 2026-09-17 (`evidence/e1/2026-09-17-E1-LAT-PGDOWN-20260917T030620Z.md`), plataforma en producción y copia de sombra de Woo al 100 % desde el 2026-09-17 10:48 UTC, canario Woo cerrado por José y E1-SOAK-01 dispensado por José (`evidence/e1/2026-09-17-E1-C10-canario-woo.md`). Rollback ensayado el 2026-09-17 15:18–15:38 UTC. Canario de ML al 100 % desde el 2026-09-17 16:38 UTC con tope provisorio de 60 rpm; falta ajustar el tope con la medición de 7 días (23/09). Luego, diseño de T4.
+- **Próxima acción exacta:** T4 implementado en código (tareas 0–15 del plan del tramo 4, rama `feature/e1-t4-continuacion`, 2026-09-18): firma Ed25519 sobre JCS, manifiesto de auditoría y reporte de sombra diarios, depósito en B2 con Object Lock COMPLIANCE que no duplica ante caídas, email con el sobre adjunto, vigilante del legado a las 09:00 ART, verificador `npm run verificar-informe`, y passkeys con recuperación, todo detrás de la doble llave. Revisado por Codex en dos tandas (A: 3 críticos corregidos; B: sin críticos). `E1_TRAMO=4` del gate de escenarios cubre los 43 escenarios. Falta: la tarea 16 (puesta en producción, requiere autorización de José: buckets y credenciales B2, clave de firma, migraciones 0009–0011, verificación contra B2 real y un email real) y la campaña de 7 días verdes seguidos con ML en canario.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 

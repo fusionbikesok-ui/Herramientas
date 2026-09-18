@@ -187,6 +187,9 @@ Actualizado: 2026-09-05. Este registro resume decisiones aprobadas; el detalle o
 | PM-181 | **Las credenciales remotas permanecen en el legado** (2026-09-16). Plataforma usa un gateway interno de operaciones GET tipadas; no recibe tokens ML, claves Woo ni acepta método, host o path arbitrarios. | E1 T3 / Seguridad |
 | PM-182 | **T3 cierra con 24 horas en vivo; T4 conserva los siete días contractuales y el reporte firmado** (decisión de José, 2026-09-16). El resumen T3 no se firma ni se envía y no acepta E1 completa. | E1 T3/T4 |
 | PM-183 | **Tópicos ML fuera de los ocho de E1 se registran y excluyen** (decisión de José, 2026-09-16). Quedan contados en SQLite con razón, sin copiarse a PostgreSQL ni ampliar implícitamente E1. | E1 T3 |
+| PM-184 | **Revisa PM-172: los informes firmados de E1 van a B2 con Object Lock en modo COMPLIANCE, no governance** (decisión de José, 2026-09-17). Governance protege contra alguien que entre al VPS, pero una clave administrativa de la cuenta puede acortar la retención; compliance no. Es irreversible: lo subido queda 365 días. Por eso hay un bucket de verificación aparte y la retención se fija sobre el momento de la subida, no en el contenido firmado. Diseño y plan del tramo 4. | E1 T4 / Operaciones |
+| PM-185 | **Ajusta PM-170: `@simplewebauthn/server` fijado en 14.0.2 exacto** (2026-09-17). La 14.0.1 arrastra dos vulnerabilidades moderadas de validación de cadenas de certificados; "14.x" las permitía. Revisión externa del diseño del tramo 4. | E1 T4 / Seguridad |
+| PM-186 | **La campaña contractual de 7 días de E1 cuenta sólo días VERDES seguidos** (2026-09-18). El diseño §9 exige cobertura 100 % y convergencia declarada los siete días: un día amarillo (cobertura o convergencia incompleta), uno rojo o uno sin reporte reinician el conteo. Revisión externa de la tanda A del tramo 4. | E1 T4 |
 
 ## Pendientes que no deben suponerse
 
