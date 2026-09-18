@@ -1,36 +1,48 @@
 # Plan de implementación — E2 tramo 1 (modelos, variantes y claves externas)
 
 **Objetivo:** que la base canónica sepa qué se vende, dónde y con qué SKU, y qué falta decidir: modelos, variantes
-vendibles, sus representaciones en Woo y ML, y el cruce Woo↔ML que hoy vive sólo en el matcher del legado.
+vendibles, sus representaciones en Woo y ML, y el cruce Woo↔ML que hoy vive sólo en el legado.
 
-**Arquitectura:** un proyector de catálogo en el worker de la plataforma consume de la cola de E1 los temas
-`woo.products` y `ml.items` (hoy nadie los consume), los descifra y los proyecta en un esquema `catalog`. Una lectura
-completa inicial (bootstrap) cubre lo que la cola no tiene. Las decisiones del matcher llegan desde el legado por una
-API interna firmada: una copia consistente al arrancar y un evento por cada cambio después.
+**Arquitectura:** un consumidor de la cola de E1 (hoy no existe ninguno) proyecta `woo.products` y `ml.items` en un
+esquema `catalog`. Una lectura completa inicial con su propio checkpoint cubre lo que la cola no tiene. Las decisiones
+del matcher y los casos de identidad llegan desde el legado por una outbox durable y una API interna firmada.
 
 **Stack:** Node 24.21, TypeScript strict, Fastify 5, pg 8, PostgreSQL 18, Vitest 5; legado Node/Express con SQLite.
 
 **Diseño:** `docs/superpowers/specs/2026-09-18-e2-tramo1-modelos-variantes-design.md` (commit `ef4e72e`).
-Revisión externa del diseño: `docs/superpowers/evidence/e2/2026-09-18-E2-T1-revision-codex.md`.
+**Revisiones externas:** del diseño, `evidence/e2/2026-09-18-E2-T1-revision-codex.md`; de la primera versión de este
+plan (commit `b51d224`), `evidence/e2/2026-09-18-E2-T1-revision-plan-codex.md`, con 26 hallazgos. Esta versión los
+incorpora; la tabla final dice dónde.
+
+## Decisiones de José para el plan (2026-09-18)
+
+| Tema | Decisión |
+|---|---|
+| Cuentas | **Una por canal, sin cerrar la puerta**: todas las claves incluyen la cuenta, pero no se construye ni se prueba el caso de varias |
+| Escrituras automáticas del matcher | **Entran como decisiones del sistema**, con actor `sistema` y su motivo (coincidencia de SKU, corrección de Guardia) |
+| Arranque del proyector | **Canario de 100 mensajes y revisión**; con el OK de José, el resto a ritmo controlado |
+| Cuota del bootstrap de ML | **10 lecturas por minuto desde que se encienda**; si de madrugada no terminó, se sube |
+| Casos de identidad del legado | **Igual que el matcher: copia y eventos** |
+| Dónde se ven los casos | **En el reporte diario firmado**, en una sección de catálogo |
 
 ## Restricciones globales
 
-- **Sólo lectura hacia los canales.** Nada escribe en Woo ni en ML. El único efecto remoto es leer, y siempre por el
-  gateway del legado, que aplica el tope de la sombra (`GATEWAY_ML_SHADOW_RPM`).
+- **Sólo lectura hacia los canales.** Nada escribe en Woo ni en ML; se lee siempre por el gateway del legado.
 - **Producción real.** Ninguna tarea despliega, reinicia PM2, toca `.env` ni `plataforma.env`, ni abre
-  `data/fusion.sqlite` con el helper que aplica migraciones. La tarea 11 es la única que toca producción y **necesita
+  `data/fusion.sqlite` con el helper que aplica migraciones. La tarea 14 es la única que toca producción y **necesita
   autorización explícita de José en el momento**.
 - **Español** en código, comentarios y commits; cada commit termina con
   `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
-- **Ninguna identidad por nombre ni por GTIN.** Nulos, duplicados y dudas se convierten en casos, nunca se descartan.
-- **El SKU canónico es `FB-{ID_WOO}`**, obligatorio para cerrar el caso de una variante, no para que exista, e
-  inmutable una vez puesto.
-- **Cada migración nueva actualiza `plataforma/test/migraciones.test.ts`** (lista literal) y
-  `docs/superpowers/specs/e1/schema.sql`, que desde E2 es el esquema de referencia de toda la plataforma.
-- **Un cambio que toca el arranque de un servicio se prueba en un contenedor aparte antes de desplegarlo**
-  (`docker compose run --rm --no-deps -T <servicio>`): el 2026-09-18 un cambio así tiró la API un minuto.
-- **Tests:** `test/soporte/base.ts` (`crearBaseDePrueba()`) y `test/soporte/fixtures.ts` (`sembrar`, `limpiar` con el
-  pool administrador). Cada caso limpia lo suyo y recibe la hora como parámetro.
+- **Ninguna identidad por nombre ni por GTIN.** Nulos, duplicados y dudas son casos, nunca se descartan.
+- **SKU canónico `FB-{ID_WOO}`**: obligatorio para cerrar el caso, no para que la variante exista, e inmutable.
+- **Toda clave incluye la cuenta del canal** (`channel_account_id`), aunque hoy haya una sola por canal.
+- **Cada migración actualiza `plataforma/test/migraciones.test.ts`** (lista literal) y
+  `docs/superpowers/specs/e1/schema.sql`.
+- **Un cambio que toca el arranque de un servicio se prueba en un contenedor aparte antes de desplegarlo.**
+- **Ninguna escritura del legado espera a la red.** Todo lo que el legado le manda a la plataforma pasa por una outbox
+  local escrita en la misma transacción que el cambio; el envío ocurre después, fuera de la respuesta.
+- **Tests:** `crearBaseDePrueba()`, `sembrar`, `limpiar` con el pool administrador; cada caso limpia lo suyo y recibe la
+  hora como parámetro.
 
 ---
 
@@ -38,16 +50,21 @@ Revisión externa del diseño: `docs/superpowers/evidence/e2/2026-09-18-E2-T1-re
 
 | Archivo | Responsabilidad |
 |---|---|
-| `plataforma/migrations/0013_catalogo.sql` | esquema `catalog`, sus cinco tablas, el trigger de SKU inmutable, `source='bootstrap'` en la cola |
-| `plataforma/src/catalogo/woo.ts` | puro: payload de un producto de Woo → modelo, variantes, representaciones y casos |
-| `plataforma/src/catalogo/ml.ts` | puro: payload de un ítem de ML → lo mismo, para simples, clásicos con variaciones y familias `user_product` |
-| `plataforma/src/catalogo/proyector.ts` | consume la cola, descifra y aplica lo anterior en una transacción, idempotente |
-| `plataforma/src/catalogo/decisiones.ts` | vigencia de las decisiones del matcher y su efecto sobre las representaciones |
-| `plataforma/src/catalogo/fusion.ts` | la resolución de una variante con SKU pendiente (§6 del diseño) |
-| `plataforma/src/catalogo/conciliacion.ts` | denominadores, cruce por conjunto y hash (§8 del diseño) |
-| `plataforma/src/catalogo/bootstrap.ts` | la lectura completa inicial con checkpoint por página |
-| `plataforma/src/api/catalogo.ts` | `GET /api/v2/catalog/{models,variants,reconciliation}` y la API interna del matcher |
-| `lib/matcherSombra.js` (legado) | emite cada cambio del matcher y hace la copia consistente de arranque |
+| `plataforma/migrations/0013_catalogo.sql` | esquema `catalog`, `bootstrap_runs`, staging de copias, `source='bootstrap'` |
+| `plataforma/src/colas/colas.ts` | se amplía: `reclamar` devuelve los datos del sobre; `completarEnTx` para cerrar dentro de otra transacción |
+| `plataforma/src/comun/config.ts` | se amplía: configuración del catálogo, independiente de la de barridos |
+| `plataforma/src/catalogo/woo.ts`, `ml.ts` | puros: payload → intenciones de proyección |
+| `plataforma/src/catalogo/proyector.ts` | consumidor de la cola: lote, lease, transacción única, drenaje controlado, canario |
+| `plataforma/src/catalogo/decisiones.ts`, `fusion.ts` | vigencia de decisiones del matcher y fusión de variantes |
+| `plataforma/src/catalogo/copias.ts` | protocolo de copia en tandas con commit atómico |
+| `plataforma/src/catalogo/bootstrap.ts` | lector propio, checkpoint durable, cuota y pausa |
+| `plataforma/src/catalogo/conciliacion.ts` | denominadores, cruce por conjunto y hash |
+| `plataforma/src/api/catalogo.ts` | lectura pública y API interna del legado |
+| `plataforma/src/worker/catalogo.ts` | la vuelta del worker que corre proyector y bootstrap |
+| `lib/outboxPlataforma.js` (legado) | outbox durable en SQLite y su despachador con reintentos |
+| `lib/matcherEventos.js` (legado) | un único punto de escritura de decisiones del matcher que registra el evento |
+| `scripts/catalogo-copia.mjs` (legado) | copia consistente del matcher y de los casos de identidad |
+| `scripts/qa/gate-e2.mjs` | gate propio de E2, separado del de E1 |
 
 ---
 
@@ -55,169 +72,190 @@ Revisión externa del diseño: `docs/superpowers/evidence/e2/2026-09-18-E2-T1-re
 
 Cada tarea es un commit, empieza por el test que falla y termina con el test verde y el typecheck limpio.
 
-### Tarea 1: Esquema `catalog` (migración 0013)
+### Tarea 1: Esquema `catalog` y sus tablas de soporte (migración 0013)
 
-**Archivos:** crear `plataforma/migrations/0013_catalogo.sql` y `plataforma/test/catalogo/esquema.test.ts`; modificar
-`plataforma/test/migraciones.test.ts` y `docs/superpowers/specs/e1/schema.sql`.
+Todo lo del §5.1 del diseño, con estas precisiones de la revisión:
+- Las claves naturales incluyen la cuenta: modelos únicos por `(channel_account_id, origen, clave_origen)`;
+  representaciones únicas por `(channel_account_id, recurso, variacion_normalizada)`.
+- `sellable_variants` lleva `company_id`; el índice único parcial de `sku` es **por empresa**.
+- `catalog.bootstrap_runs`: una fila por cuenta y canal, con `estado`, `pagina_confirmada`, `cursor`, `lease`, y
+  conteos; es el checkpoint durable del bootstrap.
+- `catalog.copias` y `catalog.copias_lotes`: el staging de una copia en tandas (`copy_id`, número de lote, total
+  esperado, hash) para el protocolo de la tarea 7.
+- `integrations.inbox_messages.source` acepta `bootstrap`, y `integrations.reconciliation_signals.source` acepta
+  `payload_expired`. Antes de cambiar cada `CHECK`, la migración **verifica** que ninguna fila existente lo viole y usa
+  `lock_timeout` para no quedar esperando un bloqueo en producción.
+- Los tipos TypeScript que representan esos orígenes se amplían en el mismo commit (`MensajeEntrada.source`,
+  `ContextoEscritura.source`), o no compila.
 
-**Qué fija la base** (del §5.1 del diseño):
-- `catalog.product_models`: `id`, `company_id`, `origen` en (`woo_padre`, `woo_simple`, `ml_familia`, `ml_clasico`,
-  `ml_simple`), `clave_origen` (el id de Woo, el `user_product_id` o el id del ítem clásico) única por `(company_id,
-  origen, clave_origen)`, `version`, `archivado_en`, `motivo_archivo`.
-- `catalog.sellable_variants`: `model_id` **NOT NULL**, `sku` nulo o `^FB-[0-9]+$`, **índice único parcial** donde
-  `sku IS NOT NULL`, `version`, `archivado_en`, `motivo_archivo`. Trigger `BEFORE UPDATE` que rechaza cambiar un `sku`
-  que ya no era nulo.
-- `catalog.external_representations`: `canal`, `cuenta`, `recurso`, `variacion_normalizada` **NOT NULL DEFAULT ''**,
-  `tipo` en (`contenedor`, `vendible`), `model_id` y `variant_id` con `CHECK` de que un `contenedor` tiene modelo y no
-  variante y un `vendible` tiene variante; `sku_observado`, `user_product_id`, `modelo_ml` en (`clasico`,
-  `user_product`) o nulo, `estado_remoto`, `version_remota`, `observado_en`, `origen_mensaje` (id de la cola),
-  `omitida_por_decision` boolean, `archivado_en`; **único por `(canal, cuenta, recurso, variacion_normalizada)`**.
-- `catalog.matcher_decisions`: append-only (sin `UPDATE` ni `DELETE` para la app, salvo cerrar la vigencia),
-  `clave_legado`, `accion`, `sku`, `origen`, `confirmado_por`, `actualizado_en_legado`, `vigente_desde`,
-  `vigente_hasta`, `motivo_cierre`, `procedencia` en (`copia`, `evento`, `conciliacion`), `corte_en`.
-- `catalog.identity_cases`: `tipo` en los ocho del §5.3 del diseño, `prioridad` en (`normal`, `baja`), referencia a
-  representación o variante, `abierto_en`, `cerrado_en`, `motivo_cierre`; **un solo caso abierto por
-  `(tipo, referencia)`**.
-- `integrations.inbox_messages.source` acepta además `bootstrap`.
-- `GRANT` propios para el esquema nuevo (los de `0002_permisos.sql` no lo cubren); sin `DELETE` para la app.
+**Tests:** los de la versión anterior (SKU inválido, duplicado, inmutable, `contenedor` sin variante, duplicado con
+variación vacía, casos abiertos únicos, la app no borra), más: el mismo SKU en dos empresas distintas se acepta; el
+mismo id de Woo en dos cuentas distintas no choca; la migración falla limpia si una fila existente viola el `CHECK`.
 
-**Tests que tienen que pasar:** SKU con formato inválido rechazado; dos variantes con el mismo SKU rechazadas; dos con
-SKU nulo aceptadas; cambiar un SKU ya puesto rechazado por el trigger; ponerle SKU a una pendiente aceptado; una
-representación `contenedor` con variante rechazada; **dos representaciones del mismo recurso sin variación rechazadas**
-(el caso que un `UNIQUE` con `NULL` dejaba pasar); dos casos abiertos iguales rechazados; la app no puede borrar.
+### Tarea 2: La cola entrega lo necesario para consumirla
 
-### Tarea 2: Proyección pura de Woo
+**Archivos:** modificar `plataforma/src/colas/colas.ts` y su test.
 
-**Archivos:** crear `plataforma/src/catalogo/woo.ts` y `plataforma/test/catalogo/woo.test.ts`.
+- `reclamar` devuelve también `channel_account_id`, `resource_id`, `remote_version`, y los campos del sobre
+  (`payload_ciphertext`, `payload_key_id`, `payload_nonce`, `payload_tag`), para poder armar el contexto de
+  `descifrarSobre` (`seguridad/sobre.ts:3`).
+- `completarEnTx(tx, reclamo)`: la misma transición que `completar`, pero dentro de una transacción ajena y exigiendo
+  el lease vigente. `completar` pasa a usarla.
 
-**Interfaz:** `proyectarWoo(payload, cuenta): Proyeccion`, con `Proyeccion = { modelos, variantes, representaciones,
-casos }` en forma de intenciones, sin tocar la base.
+**Tests:** `reclamar` trae los datos del sobre y descifra; `completarEnTx` falla con lease vencido o ajeno; si la
+transacción externa se deshace, el mensaje sigue reclamado y vuelve a la cola al vencer el lease.
 
-**Reglas** (§5.2 y §5.3 del diseño): simple → modelo `woo_simple` + variante + representación `vendible`; variable →
-modelo `woo_padre` + representación `contenedor` + una variante y una representación `vendible` por variación. El SKU
-canónico se asigna **sólo** si `sku_observado === 'FB-' + id` y no está repetido dentro del payload; si no, variante con
-SKU pendiente y caso `woo_sin_sku`, `woo_sku_no_canonico` o `woo_sku_duplicado`.
+### Tarea 3: Configuración del catálogo
 
-**Tests:** simple con SKU canónico; simple sin SKU; simple con SKU no canónico; variable con tres variaciones; variable
-con dos variaciones de SKU repetido; el padre nunca produce variante; el mismo payload produce siempre la misma
-proyección.
+**Archivos:** `plataforma/src/comun/config.ts`, `plataforma/src/worker/main.ts` y sus tests.
 
-### Tarea 3: Proyección pura de ML
+Variables propias (`CATALOGO_PROYECTOR`, `CATALOGO_LOTE`, `CATALOGO_PAUSA_MS`, `CATALOGO_CANARIO`,
+`CATALOGO_BOOTSTRAP_RPM`) y el keyring de sobres cargado **aunque no haya barridos**, porque hoy sólo se carga dentro
+de `if (config.barridos)` (`worker/main.ts:29`). Todo apagado por omisión.
 
-**Archivos:** crear `plataforma/src/catalogo/ml.ts` y `plataforma/test/catalogo/ml.test.ts`.
+**Tests:** sin las variables, el worker arranca igual y no consume; con el proyector encendido pero sin keyring, no
+arranca y dice por qué.
 
-**Reglas:** ítem simple → representación `vendible`; ítem clásico con variaciones → modelo `ml_clasico` +
-representación `contenedor` + una `vendible` por variación con `modelo_ml='clasico'`; ítem con `user_product_id` →
-modelo `ml_familia` con esa clave (dos ítems de la misma familia comparten el modelo) y `modelo_ml='user_product'`.
-La variante de cada representación la decide el matcher (tarea 6); hasta entonces es una variante con SKU pendiente y
-caso `sku_pendiente`.
+### Tareas 4 y 5: Proyección pura de Woo y de ML
 
-**Tests:** ítem simple; clásico con dos variaciones; dos ítems de la misma familia `user_product` comparten modelo;
-ítem cerrado queda con `estado_remoto='closed'`; payload sin `variations` no rompe.
+Igual que las tareas 2 y 3 de la versión anterior (reglas del §5.2 y §5.3 del diseño), con las intenciones incluyendo
+la cuenta en todas las claves. Sin base: sólo entrada y salida.
 
-### Tarea 4: El proyector
+### Tarea 6: El proyector
 
-**Archivos:** crear `plataforma/src/catalogo/proyector.ts`, `plataforma/test/catalogo/proyector.test.ts`; modificar
-`plataforma/src/worker/main.ts` para registrarlo detrás de un flag de configuración (`CATALOGO_PROYECTOR=true`),
-apagado por omisión.
+**Archivos:** `plataforma/src/catalogo/proyector.ts`, `plataforma/src/worker/catalogo.ts` y sus tests.
 
-**Comportamiento:** reclama `woo.products` y `ml.items` con `reclamar` de `colas.ts`, descifra con `descifrarSobre` y
-el keyring de sobres, aplica la proyección en **una transacción** con upserts por clave natural, y llama a `completar`
-en la misma. Si la proyección falla, la transacción entera se deshace y el mensaje vuelve a la cola con backoff; tras
-el máximo de intentos va a la DLQ visible. Un payload vencido (sin `payload_ciphertext`) no se proyecta: se marca para
-relectura de ese recurso.
+- Una vuelta reclama un lote (`CATALOGO_LOTE`, por omisión 20) de `woo.products` y `ml.items`, y por cada mensaje abre
+  **una** transacción donde descifra, proyecta y llama a `completarEnTx`. Una falla deshace todo y el mensaje vuelve a
+  la cola con backoff; al superar los intentos, a la DLQ.
+- Entre lotes, pausa (`CATALOGO_PAUSA_MS`). Si la tasa de errores del lote supera el 10 %, se detiene y abre incidente.
+- **Canario:** con `CATALOGO_CANARIO=100`, se detiene después de 100 mensajes y deja un resumen para revisar. Sigue
+  sólo cuando se quita el límite.
+- Renueva el lease en mensajes lentos y lo libera al apagar el proceso.
+- Un mensaje sin payload (vencido) crea una señal `payload_expired` para ese recurso y se completa.
 
-**Tests:** proyecta y completa un mensaje de Woo; el mismo mensaje dos veces no duplica nada; un mensaje con versión
-más vieja que la ya proyectada no pisa; una falla a mitad deja todo sin efecto y el mensaje reintentable; un recurso
-que desaparece en el canal se archiva, no se borra, y si reaparece se desarchiva; un payload vencido se marca para
-relectura; los temas que no son de catálogo no se tocan.
+**Tests:** el de atomicidad **inyecta una falla entre la proyección y `completarEnTx`** y verifica en la misma conexión
+que ni el catálogo ni la cola cambiaron; el canario se detiene exactamente en 100; el umbral de errores detiene la
+vuelta; un payload vencido genera su señal; más los de la versión anterior (idempotencia, versión vieja no pisa,
+archivo y desarchivo).
 
-### Tarea 5: API interna del matcher
+### Tarea 7: Copias en tandas y API interna
 
-**Archivos:** crear `plataforma/src/api/catalogo.ts` (la parte interna) y `plataforma/test/catalogo/matcher-api.test.ts`;
-modificar `plataforma/src/api/app.ts`.
+**Archivos:** `plataforma/src/catalogo/copias.ts`, la parte interna de `plataforma/src/api/catalogo.ts` y sus tests.
 
-**Rutas**, firmadas con HMAC como `/internal/v1/reconciliation-signals` y reusando su verificación:
-- `POST /internal/v1/matcher/copia`: tanda de decisiones con `corte_en`, conteo total y hash de la copia.
-- `POST /internal/v1/matcher/evento`: una decisión que cambió o se borró.
-- `POST /internal/v1/matcher/conciliacion`: el conteo y el hash de la tabla completa del legado, para comparar.
+Protocolo: `POST /internal/v1/catalogo/copias` abre una copia con `copy_id`, tipo (`matcher` o `identidad`), total
+esperado y hash; `.../copias/{copy_id}/lotes` recibe cada tanda numerada al staging; `.../copias/{copy_id}/confirmar`
+verifica conteo y hash y **recién ahí**, en una transacción, cierra las vigencias de lo ausente y abre lo nuevo. Una
+copia sin confirmar no cambia nada. `POST /internal/v1/catalogo/eventos` recibe un cambio suelto. Firmado con HMAC,
+reusando la verificación de `api/senales.ts` extraída a una función.
 
-**Tests:** una copia cierra las decisiones vigentes que ya no aparecen, con motivo `revocada_en_legado`; un evento
-nuevo cierra la vigente anterior de esa clave; un borrado cierra sin abrir otra; la misma copia dos veces no duplica;
-una conciliación con hash distinto abre caso `decision_en_conflicto`; sin firma válida, 401.
+**Tests:** una tanda intermedia no cierra nada; confirmar con un lote faltante falla sin efecto; confirmar con hash
+distinto falla sin efecto; la misma copia confirmada dos veces no duplica; un evento cierra la vigencia anterior de su
+clave; sin firma válida, 401.
 
-### Tarea 6: Aplicar las decisiones y la fusión
+### Tarea 8: Aplicar decisiones y fusión
 
-**Archivos:** crear `plataforma/src/catalogo/decisiones.ts`, `plataforma/src/catalogo/fusion.ts` y sus tests.
+Igual que la tarea 6 anterior, con dos correcciones: el conflicto concurrente se prueba **a nivel de base**
+(versión esperada; la segunda transacción no aplica nada y se reintenta), porque en T1 no hay un endpoint de
+resolución que devuelva 409; y las decisiones del sistema entran con actor `sistema` y su motivo.
 
-**Comportamiento** (§5.2 y §6 del diseño): una decisión `confirmar`/`asignar` vigente vincula la representación a la
-variante del SKU; si esa variante no existe, **se le pone el SKU a la provisoria** (válido sólo si el SKU no existe);
-si existe, **se fusiona**: bloqueo con `version` esperada de las dos variantes y la representación, se mueven
-representaciones y casos, la provisoria se archiva con `fusionada_en`, se cierra el caso y queda el evento. `omitir`
-marca la representación como omitida, sin variante, y abre `omitida_revisar` de baja prioridad. Un SKU que no existe
-en Woo abre `sku_inexistente_en_woo`.
+### Tarea 9: Outbox durable del legado
 
-**Tests:** asignar un SKU nuevo a una pendiente; fusionar cuando el SKU ya existe (la provisoria queda archivada y su id
-no se reusa); **dos resoluciones concurrentes: una gana y la otra recibe 409 sin efecto parcial**; revocar una decisión
-en el legado desvincula con evento compensatorio y deja la representación pendiente; omitir y des-omitir; SKU
-inexistente en Woo.
+**Archivos:** `lib/outboxPlataforma.js`, una migración SQLite del legado para la tabla `outbox_plataforma`, y sus tests.
 
-### Tarea 7: Emisor del legado
+La cola de la copia de sombra no sirve: hace un solo intento y trabaja sobre `integration_events`. Ésta es propia:
+filas escritas en la misma transacción que el cambio, un despachador fuera de la respuesta con reintento y backoff,
+y un contador de pendientes viejos que alimenta una alerta.
 
-**Archivos:** crear `lib/matcherSombra.js` y `test/matcherSombra.test.js`; modificar `routes/cobertura.js` en el
-upsert (~línea 876) y el borrado (~línea 922), y agregar `scripts/matcher-copia.mjs`.
+**Tests:** escribir un cambio y su evento es atómico; con la plataforma caída el cambio se hace igual y el evento queda
+pendiente; al volver, sale una sola vez; la respuesta HTTP del legado no espera al envío.
 
-**Comportamiento:** después de cada escritura del matcher, **fail-open** (nunca frena la operación del legado), encola
-un evento firmado hacia la plataforma con la misma cola acotada que la copia de sombra. `scripts/matcher-copia.mjs`
-hace la copia consistente con la API de backup de SQLite (no una lectura en caliente), calcula conteo y hash, y la
-manda en tandas. La conciliación diaria corre con el cron que ya existe.
+### Tarea 10: Un único punto de escritura del matcher
 
-**Tests:** confirmar, asignar, omitir y borrar emiten cada uno su evento; una plataforma caída no frena al matcher y
-el evento queda para reintentar; la copia de una base que se escribe durante la lectura da el mismo hash que su backup.
+**Archivos:** `lib/matcherEventos.js`; modificar **todos** los escritores de `sku_matcher_decisiones`:
+`routes/cobertura.js` (confirmación ~264, borrados ~704 y ~722, upsert ~876, borrado ~922), `lib/mlMapeo.js`
+(autoasignación ~113) y `lib/guardiaMl.js` (~367). Los escritores de `identidad_casos` igual.
 
-### Tarea 8: Bootstrap
+Cada escritor pasa a llamar a una función única que escribe la decisión y su fila de outbox en la misma transacción.
 
-**Archivos:** crear `plataforma/src/catalogo/bootstrap.ts` y su test; modificar el adaptador de ML para que las
-multigets de una página vayan **en serie** cuando corre el bootstrap.
+**Tests:** un test por escritor, que verifica que su cambio deja su evento; y un test de guardia que **busca en el código
+cualquier `INSERT`/`UPDATE`/`DELETE` sobre `sku_matcher_decisiones` o `identidad_casos` fuera de la función única** y
+falla si aparece uno, para que un escritor nuevo no se escape en silencio.
 
-**Comportamiento** (§4.2 del diseño): una corrida por cuenta que recorre Woo (productos y variaciones con todos sus
-campos) y ML (scan + multiget de 20) y encola **todo** con `source='bootstrap'`, sin importar si cambió. Checkpoint
-durable por página: tras una caída o un 429, retoma desde la última página confirmada.
+### Tarea 11: Copia consistente y conciliación diaria
 
-**Tests:** recorre las páginas y encola con `bootstrap`; un 429 en la página 30 retoma desde la 30, no desde la 1; una
-segunda corrida sobre la misma versión no duplica mensajes; las multigets de una página salen de a una.
+**Archivos:** `scripts/catalogo-copia.mjs` y el cableado del cron en `server.js`.
 
-### Tarea 9: API de lectura del catálogo
+Copia con la API de backup de SQLite, conteo y hash, enviada por el protocolo de la tarea 7. La conciliación diaria
+compara conteo y hash del legado contra lo vigente en E2 y abre `decision_en_conflicto` por diferencia.
 
-**Archivos:** completar `plataforma/src/api/catalogo.ts`; agregar las rutas a `openapi/platform-v2.yaml`; test
-`plataforma/test/catalogo/api.test.ts`.
+**Tests:** la copia llega completa y se confirma; una copia que se corta a mitad no cambia nada en E2.
 
-**Rutas:** `GET /api/v2/catalog/models`, `/variants` y `/reconciliation`, paginadas por cursor, con errores
-`{code,message,correlation_id,details?}` y autorización por capacidad.
+### Tarea 12: Bootstrap
 
-**Tests:** paginación estable por cursor; filtros por canal y por estado de SKU; 401 sin sesión y 403 sin capacidad;
-las respuestas validan contra el OpenAPI.
+**Archivos:** `plataforma/src/catalogo/bootstrap.ts`, su vuelta en `worker/catalogo.ts` y sus tests. **No se toca** el
+adaptador productivo de ML: el bootstrap tiene su lector propio.
 
-### Tarea 10: Conciliación y contrato `test:e2`
+- Recorre Woo y ML, encola todo con `source='bootstrap'`, y guarda `pagina_confirmada` en `catalog.bootstrap_runs`
+  después de cada página.
+- Tope propio de `CATALOGO_BOOTSTRAP_RPM` (10 por omisión), **debajo** del tope de la sombra del legado, y multigets en
+  serie.
+- **Cede:** si hay señales u órdenes de ML esperando, o si aparece un 429, se pausa y retoma más tarde.
 
-**Archivos:** crear `plataforma/src/catalogo/conciliacion.ts` y su test; crear `scripts/test-e2.sh` y el script
-`test:e2` en `package.json`; extender `scripts/qa/gate-e1.mjs` (o uno propio de E2) con los escenarios de E2 y sus
-subcasos nombrados.
+**Tests:** el de retoma **mata el proceso y lo vuelve a crear** y verifica en PostgreSQL que sigue en la página 30;
+respeta el tope por minuto con un reloj simulado; se pausa si hay señales esperando; una segunda corrida sobre la misma
+versión no duplica mensajes.
 
-**Comportamiento** (§8 del diseño): denominadores por cuenta y tipo, cruce por conjunto, y el hash definido. El gate
-exige los veinte escenarios del §8 del diseño, cada uno con sus subcasos nombrados, y falla si falta alguno.
+### Tarea 13: Lectura, conciliación, reporte y contrato
 
-### Tarea 11: Puesta en producción (requiere autorización de José)
+- `GET /api/v2/catalog/{models,variants,reconciliation}` con su OpenAPI.
+- `catalogo/conciliacion.ts` con denominadores, cruce y hash del §8 del diseño.
+- **Sección de catálogo en el reporte diario firmado**: casos por tipo, y cuáles son nuevos del día.
+- `npm run test:e2` y `scripts/qa/gate-e2.mjs`, **propio**, con los escenarios del §8 del diseño y sus subcasos
+  nombrados, más los que agregó la revisión: payload vencido, copia incompleta, escritor del matcher no registrado.
 
-1. Backup de la base `plataforma` y de `data/fusion.sqlite`.
-2. Aplicar la migración 0013 y recrear worker y API con `CATALOGO_PROYECTOR=false`.
-3. Encender el proyector: consume lo que ya está en la cola.
-4. Correr la copia consistente del matcher y encender los eventos del legado (un reinicio del legado, avisado).
-5. Correr el bootstrap en el horario de poca venta que decida José.
-6. Conciliar y comparar conteos, relaciones y hashes durante 7 días.
+### Tarea 14: Puesta en producción (requiere autorización de José)
 
-## Autorrevisión
+En este orden, que la revisión corrigió: las decisiones antes que el proyector, para no crear miles de variantes
+provisorias que después haya que fusionar.
 
-- **Cobertura del diseño:** §4.1 → tarea 4; §4.2 → tarea 8; §4.3 → tareas 5 y 7; §5 → tareas 1 a 3; §6 → tarea 6;
-  §7 → tarea 9; §8 → tarea 10; §9 → tarea 11.
-- **Lo que queda abierto para decidir en la tarea 11:** el horario del bootstrap.
+1. **Ensayo** de la migración 0013 sobre una copia de la base de producción: medir el tiempo y los bloqueos, y ensayar
+   la restauración del backup.
+2. Backup de `plataforma` y de `data/fusion.sqlite`.
+3. Migración, con todo el catálogo apagado.
+4. Copia consistente del matcher y de los casos de identidad, confirmada.
+5. Encender la outbox y los eventos del legado (un reinicio del legado, **avisado**).
+6. Encender el proyector con **canario de 100**; revisión conjunta; con el OK de José, el resto.
+7. Encender el bootstrap a 10 por minuto; si de madrugada no terminó, subir el tope.
+8. Conciliar y comparar conteos, relaciones y hashes durante 7 días.
+
+## Cómo se resolvió cada hallazgo de la revisión del plan
+
+| # | Hallazgo | Dónde |
+|---|---|---|
+| 1 | `completar` abre su propia transacción | Tarea 2, `completarEnTx` |
+| 2 | `reclamar` no trae el sobre | Tarea 2 |
+| 3 | No hay worker de inbox | Tareas 3 y 6 |
+| 4 | No existe la configuración del catálogo | Tarea 3 |
+| 5 | El bootstrap no tiene checkpoint | Tarea 1 `bootstrap_runs`, tarea 12 |
+| 6 | `source='bootstrap'` no compila | Tarea 1 |
+| 7 | La copia en tandas no tiene fin | Tareas 1 y 7 |
+| 8 | La cola de sombra no sirve para el matcher | Tarea 9 |
+| 9 | El matcher se escribe desde siete lugares | Tarea 10 |
+| 10 | Claves sin cuenta ni empresa | Tarea 1 |
+| 11 | Proyector antes que las decisiones | Tarea 14, orden corregido |
+| 12 | Bootstrap sin infraestructura | Tareas 1 y 12 |
+| 13 | Conciliación diaria sin cableado | Tarea 11 |
+| 14 | El proyector suelta todo de golpe | Tarea 6, lote, pausa, umbral y canario |
+| 15 | Bootstrap y barridos compiten por la cuota | Tarea 12, tope propio y cede |
+| 16 | El hook puede frenar el matcher | Tareas 9 y 10, outbox fuera de la respuesta |
+| 17 | Migración sin ensayo | Tareas 1 y 14 |
+| 18 | Atomicidad no probada | Tarea 6 |
+| 19 | 409 sin endpoint | Tarea 8 |
+| 20 | Checkpoint no demostrado | Tarea 12 |
+| 21 | Payload vencido sin mecanismo | Tareas 1 y 6 |
+| 22 | Casos de identidad sin tarea | Tareas 10 y 11 |
+| 23 | Copia sin prueba de punta a punta | Tareas 7 y 11 |
+| 24 | Multicuenta | Decisión de José: una por canal; claves con cuenta (tarea 1) |
+| 25 | Sobra tocar el adaptador de ML | Tarea 12, lector propio |
+| 26 | Sobra extender el gate de E1 | Tarea 13, `gate-e2.mjs` |
