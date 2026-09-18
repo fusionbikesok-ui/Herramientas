@@ -170,6 +170,19 @@ describe('E2-SCH-01 esquema del catálogo', () => {
       .rejects.toThrow(/colgadura/i);
   });
 
+  it('un vendible omitido por decisión no tiene variante, y uno omitido no puede tenerla', async () => {
+    const db = await admin(); const e = await sembrar(db);
+    const m = await modelo(db, e, e.ml, 'ml_simple', 'MLA8');
+    const v = await variante(db, e.empresa, m, null);
+    const rep = (recurso: string, variante: string | null, omitida: boolean) => db.query(
+      `INSERT INTO catalog.external_representations
+         (company_id, channel_account_id, canal, recurso, tipo, variant_id, omitida_por_decision)
+       VALUES ($1, $2, 'mercadolibre', $3, 'vendible', $4, $5)`, [e.empresa, e.ml, recurso, variante, omitida]);
+    await expect(rep('MLA8', null, true)).resolves.toBeTruthy();
+    // Omitida pero con variante: contradictorio, se rechaza.
+    await expect(rep('MLA9', v, true)).rejects.toThrow(/colgadura/i);
+  });
+
   it('un caso abierto no se duplica para el mismo objeto y tipo', async () => {
     const db = await admin(); const e = await sembrar(db);
     const m = await modelo(db, e, e.ml, 'ml_simple', 'MLA3');

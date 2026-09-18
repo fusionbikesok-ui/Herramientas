@@ -753,8 +753,10 @@ CREATE TABLE catalog.external_representations (
   -- Lo que el diseño pide que la base garantice sola: un contenedor jamás cuelga de una variante.
   -- El nombre no repite "tipo_check": ése lo toma PostgreSQL solo para el CHECK inline de la columna.
   CONSTRAINT external_representations_colgadura_check CHECK (
-    (tipo = 'contenedor' AND model_id IS NOT NULL AND variant_id IS NULL)
-    OR (tipo = 'vendible' AND variant_id IS NOT NULL)),
+    (tipo = 'contenedor' AND model_id IS NOT NULL AND variant_id IS NULL AND NOT omitida_por_decision)
+    -- Un vendible omitido por decisión del matcher no tiene variante (§5.2 del diseño): existe en el canal,
+    -- pero alguien decidió que no es un producto nuestro que se venda. Cualquier otro vendible sí la tiene.
+    OR (tipo = 'vendible' AND (variant_id IS NOT NULL) <> omitida_por_decision)),
   CONSTRAINT external_representations_un_aparicion
     UNIQUE (channel_account_id, recurso, variacion_normalizada)
 );

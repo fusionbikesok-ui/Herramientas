@@ -1,4 +1,6 @@
 import { planDeKeyrings } from '../catalogo/arranque.ts';
+import { crearProyector } from '../catalogo/proyector.ts';
+import { iniciarCicloCatalogo } from './catalogo.ts';
 import { cargarConfig } from '../comun/config.ts';
 import { crearLogger } from '../comun/logger.ts';
 import { crearPool } from '../db/pool.ts';
@@ -70,11 +72,17 @@ if (config.barridos) {
   logger.warn('sin configuración de barridos: el worker no reclama corridas');
 }
 
-if (keyringCatalogo) {
-  // El proyector y el bootstrap llegan en las tareas 6 y 12; el keyring ya se carga acá para que encender
-  // el catálogo no dependa de barridos. Mientras no haya consumidor, el log lo dice en vez de callarlo.
-  logger.info({ proyector: config.catalogo!.proyector, bootstrap: config.catalogo!.bootstrap },
-    'keyring del catálogo cargado; el consumidor todavía no está registrado');
+// El proyector del catálogo (E2 T1) tiene su propio ciclo: lee lo que el inbox ya tiene, no llama al canal,
+// así que no compite por el cupo del gateway con barridos y señales. El bootstrap llega en la tarea 12.
+const cicloCatalogo = config.catalogo?.proyector && keyringCatalogo
+  ? iniciarCicloCatalogo(crearProyector({
+      pool, keyring: keyringCatalogo, lote: config.catalogo.lote, canario: config.catalogo.canario,
+      umbralErrorPorciento: config.catalogo.umbralErrorPorciento,
+    }), config.catalogo.pausaMs, logger)
+  : null;
+if (cicloCatalogo) {
+  logger.info({ lote: config.catalogo!.lote, canario: config.catalogo!.canario, pausaMs: config.catalogo!.pausaMs },
+    'proyector del catálogo encendido');
 }
 
 const barridos = crearWorkerBarridos({ db: pool, workerId: config.instancia, procesadores });
@@ -118,6 +126,7 @@ alApagar(logger, async () => {
   if (vueltaMissedFeeds) clearInterval(vueltaMissedFeeds);
   detenerLatidos();
   senales?.detener();
+  await cicloCatalogo?.detener();
   await barridos.detener();
   await pool.end();
 });
