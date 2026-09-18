@@ -142,6 +142,19 @@ CREATE TABLE security.webauthn_challenges (
 );
 CREATE INDEX webauthn_challenges_vigentes ON security.webauthn_challenges (vence_en) WHERE usado_en IS NULL;
 
+-- E1 T4 · tarea 13 (migración 0011): los intentos de recuperación, donde se cuenta el límite de cinco por hora
+-- por cuenta, por IP y global. Un intento contra un usuario inexistente se registra con user_id nulo.
+CREATE TABLE security.recovery_attempts (
+  id           uuid PRIMARY KEY DEFAULT uuidv7(),
+  user_id      uuid REFERENCES security.users(id),
+  ip           inet NOT NULL,
+  intentado_en timestamptz NOT NULL,
+  exitoso      boolean NOT NULL DEFAULT false
+);
+CREATE INDEX recovery_attempts_cuenta ON security.recovery_attempts (user_id, intentado_en DESC);
+CREATE INDEX recovery_attempts_ip ON security.recovery_attempts (ip, intentado_en DESC);
+CREATE INDEX recovery_attempts_fecha ON security.recovery_attempts (intentado_en DESC);
+
 -- ─────────────────────────────── audit ──────────────────────────────
 -- Append-only con cadena de hash: hash = sha256(prev_hash || contenido canónico). Un único escritor
 -- de la cadena a la vez (advisory lock transaccional). UPDATE/DELETE rechazados por trigger; una

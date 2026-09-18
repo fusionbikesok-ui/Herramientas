@@ -10,6 +10,8 @@ import {
 import { crearBaseDePrueba, type BaseDePrueba } from './soporte/base.ts';
 import { limpiar, sembrar, type Semilla } from './soporte/fixtures.ts';
 import { crearAutenticador } from './soporte/webauthn.ts';
+import { emitirCodigos } from '../src/auth/recuperacion.ts';
+import { randomBytes } from 'node:crypto';
 
 const CFG = { rpID: 'localhost', rpNombre: 'FusionBikes', origen: 'http://localhost' };
 const AHORA = new Date('2026-09-17T10:00:00Z');
@@ -174,6 +176,26 @@ describe('rutas de passkeys', () => {
       expect(r.statusCode).toBe(200);
       expect(r.json()).toHaveProperty('challenge');
       await encendida.close();
+    } finally {
+      await admin.query(`UPDATE security.feature_flags SET enabled = false WHERE code = 'passkeys.real'`);
+    }
+  });
+
+  it('E1-WA-01 la recuperación funciona por la ruta con las dos llaves, y no dice si el usuario existe', async () => {
+    const clave = randomBytes(32);
+    const usuario = (await sembrar(pool)).userId;
+    const [codigo] = await emitirCodigos(pool, clave, usuario, new Date(), 1);
+    await admin.query(`UPDATE security.feature_flags SET enabled = true WHERE code = 'passkeys.real'`);
+    try {
+      const app = crearApi({ pool, logger: crearLogger('test'), estadoPgDir: '/nada',
+        passkeys: { cfg: CFG, entorno: { PASSKEYS_HABILITADAS: '1' }, claveRecuperacion: clave } });
+      const pedir = (payload: object) => app.inject({ method: 'POST', url: `${PREFIJO_PASSKEYS}/recuperacion`, payload });
+      const mal = await pedir({ usuario, codigo: 'nosirve' });
+      const inexistente = await pedir({ usuario: '00000000-0000-7000-8000-0000000000ff', codigo: 'nosirve' });
+      expect(mal.statusCode).toBe(400);
+      expect(inexistente.json()).toEqual(mal.json());
+      expect((await pedir({ usuario, codigo })).json()).toEqual({ ok: true });
+      await app.close();
     } finally {
       await admin.query(`UPDATE security.feature_flags SET enabled = false WHERE code = 'passkeys.real'`);
     }

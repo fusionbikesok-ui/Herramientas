@@ -16,11 +16,13 @@ import {
   ErrorPasskey, iniciarAutenticacion, iniciarRegistro, passkeysHabilitadas, terminarAutenticacion, terminarRegistro,
   type CfgPasskeys,
 } from '../auth/passkeys.ts';
+import { usarCodigo } from '../auth/recuperacion.ts';
 
 export const PREFIJO_PASSKEYS = '/api/v2/auth/passkeys';
 
 export const RUTAS_PASSKEYS = [
   'registro/inicio', 'registro/fin', 'login/inicio', 'login/fin', 'reautenticacion/inicio', 'reautenticacion/fin',
+  'recuperacion',
 ].map((r) => `${PREFIJO_PASSKEYS}/${r}`);
 
 export interface OpcionesPasskeys {
@@ -28,8 +30,8 @@ export interface OpcionesPasskeys {
   cfg?: CfgPasskeys;
   /** De dónde se lee PASSKEYS_HABILITADAS; en tests se inyecta. */
   entorno?: Record<string, string | undefined>;
-  /** Registro y reautenticación de otras tareas (recuperación) cuelgan del mismo plugin y la misma guarda. */
-  extra?: (sub: FastifyInstance, cfg: CfgPasskeys) => void;
+  /** Clave HMAC de los códigos de recuperación. Sin ella, la ruta de recuperación responde 503. */
+  claveRecuperacion?: Buffer;
 }
 
 const deshabilitadas = (reply: FastifyReply) =>
@@ -74,6 +76,19 @@ export function registrarPasskeys(
       const actual = await conSesion(req, reply); if (!actual) return reply;
       return terminarAutenticacion(pool, cfg(), 'reautenticacion', actual.userId, req.body as AuthenticationResponseJSON, ahora());
     });
-    if (opciones.extra && opciones.cfg) opciones.extra(sub, opciones.cfg);
+    // Recuperación: vive bajo la misma guarda de doble llave que el resto del grupo.
+    sub.post('/recuperacion', async (req, reply) => {
+      if (!opciones.claveRecuperacion) return deshabilitadas(reply);
+      const cuerpo = req.body as { usuario?: unknown; codigo?: unknown } | undefined;
+      const usuario = typeof cuerpo?.usuario === 'string' && /^[0-9a-f-]{36}$/.test(cuerpo.usuario) ? cuerpo.usuario : null;
+      const codigo = typeof cuerpo?.codigo === 'string' && cuerpo.codigo.length <= 64 ? cuerpo.codigo : null;
+      if (!usuario || !codigo) return reply.code(400).send({ error: 'pedido_invalido', message: 'Faltan usuario o código.' });
+      const r = await usarCodigo(pool, opciones.claveRecuperacion, usuario, codigo, { ip: req.ip, ahora: ahora() });
+      if (r.ok) return { ok: true };
+      // El mismo mensaje exista o no el usuario: la respuesta no puede revelar quién tiene cuenta.
+      return r.motivo === 'limite'
+        ? reply.code(429).send({ error: 'demasiados_intentos', message: 'Demasiados intentos. Probá en una hora.' })
+        : reply.code(400).send({ error: 'codigo_invalido', message: 'Código inválido.' });
+    });
   }, { prefix: PREFIJO_PASSKEYS });
 }
