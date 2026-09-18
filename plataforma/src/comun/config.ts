@@ -34,12 +34,34 @@ export interface ConfigInformes {
   b2: { endpoint: string; region: string; bucket: string; escritura: { id: string; clave: string }; lectura: { id: string; clave: string } };
   smtp: { host: string; puerto: number; seguro: boolean; usuario: string; clave: string; desde: string; para: string };
 }
+/**
+ * Catálogo canónico (E2 T1). Tiene **su propio** keyring de sobres a propósito: el del worker se cargaba
+ * sólo dentro de `if (config.barridos)`, así que el proyector no podía encenderse sin encender barridos,
+ * que es exactamente al revés del orden de puesta en producción (primero el proyector con canario).
+ *
+ * Todo nace apagado. Los topes están pensados para no atropellar: el backlog son 3.490 mensajes de Woo
+ * más 427 de ML, y el bootstrap comparte con los barridos el cupo del gateway del legado.
+ */
+export interface ConfigCatalogo {
+  proyector: boolean;
+  bootstrap: boolean;
+  keyringFile: string;
+  lote: number;
+  pausaMs: number;
+  /** 0 = sin límite. Con un número, el proyector se detiene ahí y deja un resumen para revisar. */
+  canario: number;
+  bootstrapRpm: number;
+  /** Señales de ML reclamables a partir de las cuales el bootstrap cede una vuelta. */
+  bootstrapCedeSenales: number;
+  umbralErrorPorciento: number;
+}
 export interface Config {
   servicio: Servicio; instancia: string; version: string; pgUrl: string; apiPuerto: number;
   estadoPgDir: string; heartbeatMaxS: number; heartbeatIntervalMs: number;
   barridos?: ConfigBarridos;
   senales?: ConfigSenales;
   informes?: ConfigInformes;
+  catalogo?: ConfigCatalogo;
 }
 export class ErrorConfig extends Error { override name = 'ErrorConfig'; }
 
@@ -70,6 +92,16 @@ const Esquema = z.object({
   BARRIDOS_REGISTRO_FILE: z.string().min(1).optional(),
   BARRIDOS_GATEWAY_KEYRING_FILE: z.string().min(1).optional(),
   BARRIDOS_KEYRING_FILE: z.string().min(1).optional(),
+  CATALOGO_PROYECTOR: z.string().min(1).optional(),
+  CATALOGO_BOOTSTRAP: z.string().min(1).optional(),
+  CATALOGO_KEYRING_FILE: z.string().min(1).optional(),
+  // Los mínimos no son decoración: un lote o un rpm en 0 haría un bucle que no procesa nada y parece sano.
+  CATALOGO_LOTE: z.coerce.number().int().min(1).max(500).default(20),
+  CATALOGO_PAUSA_MS: z.coerce.number().int().min(0).default(1000),
+  CATALOGO_CANARIO: z.coerce.number().int().min(0).default(0),
+  CATALOGO_BOOTSTRAP_RPM: z.coerce.number().int().min(1).max(600).default(10),
+  CATALOGO_BOOTSTRAP_CEDE_SENALES: z.coerce.number().int().min(0).default(20),
+  CATALOGO_UMBRAL_ERROR: z.coerce.number().int().min(1).max(100).default(10),
 });
 
 /** Todo o nada: media configuración de barridos haría arrancar un worker que no barre nada. */
@@ -84,6 +116,23 @@ function leerBarridos(env: Record<string, string | undefined>): ConfigBarridos |
   return {
     registroFile: env.BARRIDOS_REGISTRO_FILE!, keyringFile: env.BARRIDOS_KEYRING_FILE!,
     ...(env.BARRIDOS_GATEWAY_KEYRING_FILE ? { gatewayKeyringFile: env.BARRIDOS_GATEWAY_KEYRING_FILE } : {}),
+  };
+}
+
+/**
+ * El keyring es obligatorio en cuanto se enciende cualquiera de los dos: sin él no se descifra ningún
+ * payload, y descubrirlo mensaje por mensaje manda todo el backlog a la DLQ.
+ */
+function leerCatalogo(v: z.infer<typeof Esquema>): ConfigCatalogo | undefined {
+  const proyector = v.CATALOGO_PROYECTOR === '1';
+  const bootstrap = v.CATALOGO_BOOTSTRAP === '1';
+  if (!proyector && !bootstrap) return undefined;
+  if (!v.CATALOGO_KEYRING_FILE) throw new ErrorConfig('el catálogo está encendido y falta CATALOGO_KEYRING_FILE');
+  return {
+    proyector, bootstrap, keyringFile: v.CATALOGO_KEYRING_FILE,
+    lote: v.CATALOGO_LOTE, pausaMs: v.CATALOGO_PAUSA_MS, canario: v.CATALOGO_CANARIO,
+    bootstrapRpm: v.CATALOGO_BOOTSTRAP_RPM, bootstrapCedeSenales: v.CATALOGO_BOOTSTRAP_CEDE_SENALES,
+    umbralErrorPorciento: v.CATALOGO_UMBRAL_ERROR,
   };
 }
 
@@ -149,6 +198,7 @@ export function cargarConfig(env: NodeJS.ProcessEnv, leerArchivo: (ruta: string)
   const barridos = leerBarridos(env);
   const senales = leerSenales(env);
   const informes = leerInformes(env, leerArchivo);
+  const catalogo = leerCatalogo(e);
   return {
     servicio: e.SERVICIO, instancia: e.INSTANCIA, version: e.VERSION,
     pgUrl: `postgres://${encodeURIComponent(e.PG_USER)}:${encodeURIComponent(clave)}@${e.PG_HOST}:${e.PG_PORT}/${e.PG_DATABASE}`,
@@ -156,5 +206,6 @@ export function cargarConfig(env: NodeJS.ProcessEnv, leerArchivo: (ruta: string)
     ...(barridos ? { barridos } : {}),
     ...(senales ? { senales } : {}),
     ...(informes ? { informes } : {}),
+    ...(catalogo ? { catalogo } : {}),
   };
 }

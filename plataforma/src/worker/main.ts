@@ -1,3 +1,4 @@
+import { planDeKeyrings } from '../catalogo/arranque.ts';
 import { cargarConfig } from '../comun/config.ts';
 import { crearLogger } from '../comun/logger.ts';
 import { crearPool } from '../db/pool.ts';
@@ -26,10 +27,14 @@ const detenerLatidos = iniciarLatidos(pool, 'worker', config.instancia, config.v
 let procesadores: Record<string, ProcesadorBarrido> = {};
 const relectores: Record<string, Relector> = {};
 const cuentasMissedFeeds: Array<{ id: string; sellerId: string; transporte: TransporteCanal }> = [];
-let keyringSobres: ReturnType<typeof cargarKeyring> | null = null;
+// El plan decide qué keyrings cargar. Antes el de sobres salía de dentro de `if (config.barridos)`, así que
+// el catálogo no podía encenderse sin barridos: al revés del orden de puesta en producción.
+const plan = planDeKeyrings(config.barridos, config.catalogo);
+const keyrings = new Map(plan.archivos.map((archivo) => [archivo, cargarKeyring(archivo)]));
+const keyringSobres = plan.sobresFile ? keyrings.get(plan.sobresFile)! : null;
+const keyringCatalogo = plan.catalogoFile ? keyrings.get(plan.catalogoFile)! : null;
 if (config.barridos) {
-  const keyring = cargarKeyring(config.barridos.keyringFile);
-  keyringSobres = keyring;
+  const keyring = keyringSobres!;
   const cuentas = cargarRegistro(config.barridos.registroFile);
   // Un registro que no coincide con la base frena el arranque: es preferible un worker caído y visible
   // en /health a observaciones de un canal escritas bajo la cuenta de otro.
@@ -63,6 +68,13 @@ if (config.barridos) {
   logger.info({ cuentas: cuentas.length, corrientes: Object.keys(procesadores).length }, 'adaptadores de barrido registrados');
 } else {
   logger.warn('sin configuración de barridos: el worker no reclama corridas');
+}
+
+if (keyringCatalogo) {
+  // El proyector y el bootstrap llegan en las tareas 6 y 12; el keyring ya se carga acá para que encender
+  // el catálogo no dependa de barridos. Mientras no haya consumidor, el log lo dice en vez de callarlo.
+  logger.info({ proyector: config.catalogo!.proyector, bootstrap: config.catalogo!.bootstrap },
+    'keyring del catálogo cargado; el consumidor todavía no está registrado');
 }
 
 const barridos = crearWorkerBarridos({ db: pool, workerId: config.instancia, procesadores });
