@@ -75,7 +75,9 @@ export async function iniciarRegistro(db: Consultable, cfg: CfgPasskeys, usuario
   const opciones = await generateRegistrationOptions({
     rpName: cfg.rpNombre, rpID: cfg.rpID, userName: usuario.nombre, userID: uuidABytes(usuario.id),
     attestationType: 'none',
-    authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
+    // Clave descubrible obligatoria: el login no identifica al usuario ni manda la lista de credenciales, así
+    // que una credencial no descubrible se registraría bien y después el navegador no podría ofrecerla.
+    authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
     // No se deja registrar dos veces el mismo autenticador.
     excludeCredentials: existentes.rows.map((c) => ({
       id: c.credential_id.toString('base64url'), transports: c.transports as AuthenticatorTransport[],
@@ -139,10 +141,17 @@ export async function terminarAutenticacion(
     },
   }).catch((e: Error) => { throw new ErrorPasskey(`autenticación rechazada: ${e.message}`); });
   if (!v.verified) throw new ErrorPasskey('autenticación rechazada');
-  await db.query(
-    `UPDATE security.webauthn_credentials SET sign_count = $2, backup_state = $3, last_used_at = $4 WHERE credential_id = $1`,
-    [Buffer.from(respuesta.rawId, 'base64url'), v.authenticationInfo.newCounter, v.authenticationInfo.credentialBackedUp, ahora],
+  // El contador sólo avanza: dos autenticaciones simultáneas con el mismo contador no pueden pasar las dos,
+  // porque la segunda ya no encuentra el valor viejo. Sin esta condición, la que terminaba última podía grabar
+  // un contador menor y debilitar la detección de un autenticador clonado. Los que informan siempre 0 (claves
+  // sincronizadas) quedan en 0 y no compiten.
+  const nuevo = v.authenticationInfo.newCounter;
+  const act = await db.query(
+    `UPDATE security.webauthn_credentials SET sign_count = $2, backup_state = $3, last_used_at = $4
+      WHERE credential_id = $1 AND (sign_count < $2 OR ($2 = 0 AND sign_count = 0))`,
+    [Buffer.from(respuesta.rawId, 'base64url'), nuevo, v.authenticationInfo.credentialBackedUp, ahora],
   );
+  if (act.rowCount !== 1) throw new ErrorPasskey('el contador de la credencial no avanzó: posible uso simultáneo o clonado');
   return { userId: fila.user_id };
 }
 

@@ -5,10 +5,12 @@
 CREATE TABLE security.recovery_attempts (
   id           uuid PRIMARY KEY DEFAULT uuidv7(),
   user_id      uuid REFERENCES security.users(id),
+  -- El id que se pidió, exista o no: el límite por cuenta se cuenta sobre esto para no revelar quién tiene cuenta.
+  cuenta_pedida text NOT NULL CHECK (length(cuenta_pedida) BETWEEN 1 AND 64),
   ip           inet NOT NULL,
   intentado_en timestamptz NOT NULL,
   exitoso      boolean NOT NULL DEFAULT false
 );
-CREATE INDEX recovery_attempts_cuenta ON security.recovery_attempts (user_id, intentado_en DESC);
+CREATE INDEX recovery_attempts_cuenta ON security.recovery_attempts (cuenta_pedida, intentado_en DESC);
 CREATE INDEX recovery_attempts_ip ON security.recovery_attempts (ip, intentado_en DESC);
 CREATE INDEX recovery_attempts_fecha ON security.recovery_attempts (intentado_en DESC);

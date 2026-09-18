@@ -37,7 +37,10 @@ function codigoNuevo(): string {
   return salida;
 }
 
-const hashDe = (clave: Buffer, codigo: string) => createHmac('sha256', clave).update(codigo.trim().toLowerCase()).digest();
+export const hashDe = (clave: Buffer, codigo: string) => {
+  if (clave.length < 32) throw new Error('recuperación: la clave HMAC tiene que tener al menos 32 bytes');
+  return createHmac('sha256', clave).update(codigo.trim().toLowerCase()).digest();
+};
 
 /** Emite códigos nuevos y deja sin efecto los que quedaban sin usar. Devuelve los códigos en claro. */
 export async function emitirCodigos(
@@ -69,24 +72,27 @@ export async function usarCodigo(
   const cliente = await pool.connect();
   try {
     await cliente.query('BEGIN');
+    // Un intento a la vez: sin esto, pedidos simultáneos veían el mismo conteo y pasaban todos el límite.
+    await cliente.query(`SELECT pg_advisory_xact_lock(hashtext('security.recovery_attempts'))`);
     const usuario = (await cliente.query<{ company_id: string }>(
       `SELECT company_id FROM security.users WHERE id = $1`, [userId])).rows[0];
-    const cuenta = usuario ? userId : null;
+    // El límite por cuenta se cuenta por el identificador PEDIDO, exista o no: si se contara sólo para cuentas
+    // reales, un id inexistente nunca llegaría al 429 y la diferencia revelaría quién tiene cuenta.
     const conteos = (await cliente.query<{ cuenta: number; ip: number; global: number }>(
-      `SELECT count(*) FILTER (WHERE user_id = $1)::int AS cuenta,
+      `SELECT count(*) FILTER (WHERE cuenta_pedida = $1)::int AS cuenta,
               count(*) FILTER (WHERE ip = $2::inet)::int AS ip,
               count(*)::int AS global
          FROM security.recovery_attempts WHERE intentado_en > $3 AND NOT exitoso`,
-      [cuenta, ip, desde])).rows[0]!;
-    const registrar = (exitoso: boolean) => cliente.query(
-      `INSERT INTO security.recovery_attempts (user_id, ip, intentado_en, exitoso) VALUES ($1, $2, $3, $4)`,
-      [cuenta, ip, ahora, exitoso]);
+      [userId, ip, desde])).rows[0]!;
 
     if (conteos.cuenta >= INTENTOS_POR_HORA || conteos.ip >= INTENTOS_POR_HORA || conteos.global >= INTENTOS_GLOBALES_POR_HORA) {
-      await registrar(false);
+      // Frenado no se registra: cada pedido rechazado sumaba una fila y permitía sostener el bloqueo sin fin.
       await cliente.query('COMMIT');
       return { ok: false, motivo: 'limite' };
     }
+    const registrar = (exitoso: boolean) => cliente.query(
+      `INSERT INTO security.recovery_attempts (user_id, cuenta_pedida, ip, intentado_en, exitoso) VALUES ($1, $2, $3, $4, $5)`,
+      [usuario ? userId : null, userId, ip, ahora, exitoso]);
 
     const usado = usuario ? (await cliente.query<{ id: string }>(
       `UPDATE security.recovery_codes SET used_at = $3

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { crearPool } from '../src/db/pool.ts';
 import { emitirCodigos, INTENTOS_POR_HORA, usarCodigo } from '../src/auth/recuperacion.ts';
@@ -70,5 +70,29 @@ describe('recuperación de acceso', () => {
   it('responde igual exista o no el usuario', async () => {
     const inexistente = '00000000-0000-7000-8000-0000000000ff';
     expect(await usar('nosirve', '5.5.5.5', AHORA, inexistente)).toEqual(await usar('nosirve', '6.6.6.6'));
+  });
+
+  it('guarda exactamente el HMAC-SHA256 del código con la clave', async () => {
+    const [codigo] = await emitirCodigos(pool, CLAVE, userId, AHORA, 1);
+    const esperado = createHmac('sha256', CLAVE).update(codigo!).digest('hex');
+    const fila = await pool.query(`SELECT encode(code_hash, 'hex') AS h FROM security.recovery_codes WHERE user_id = $1 AND used_at IS NULL`, [userId]);
+    expect(fila.rows[0].h).toBe(esperado);
+  });
+
+  it('después del bloqueo tampoco se distingue un usuario inexistente', async () => {
+    const inexistente = '00000000-0000-7000-8000-0000000000aa';
+    for (let i = 0; i < INTENTOS_POR_HORA; i += 1) {
+      await usar('nosirve', `20.0.0.${i}`, AHORA, inexistente);
+      await usar('nosirve', `21.0.0.${i}`);
+    }
+    // Las dos cuentas, la real y la que no existe, quedan frenadas igual.
+    expect(await usar('nosirve', '22.0.0.1', AHORA, inexistente)).toEqual({ ok: false, motivo: 'limite' });
+    expect(await usar('nosirve', '22.0.0.2')).toEqual({ ok: false, motivo: 'limite' });
+  });
+
+  it('intentos simultáneos no pasan todos el límite', async () => {
+    const resultados = await Promise.all(Array.from({ length: 12 }, (_, i) => usar('nosirve', `30.0.0.${i}`)));
+    expect(resultados.filter((r) => !r.ok && r.motivo === 'invalido')).toHaveLength(INTENTOS_POR_HORA);
+    expect(resultados.filter((r) => !r.ok && r.motivo === 'limite')).toHaveLength(12 - INTENTOS_POR_HORA);
   });
 });

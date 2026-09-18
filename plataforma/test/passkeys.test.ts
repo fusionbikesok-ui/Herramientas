@@ -81,7 +81,7 @@ describe('passkeys', () => {
     await expect(terminarAutenticacion(pool, CFG, 'login', null, respuesta, despues(2000))).rejects.toThrow(/ya usado/);
   });
 
-  it('E1-WA-01 un desafío vencido se rechaza, y queda consumido', async () => {
+  it('E1-WA-01 un desafío vencido se rechaza', async () => {
     const aut = await registrar();
     const login = await iniciarAutenticacion(pool, CFG, 'login', null, AHORA);
     await expect(terminarAutenticacion(pool, CFG, 'login', null, aut.responderLogin(login) as AuthenticationResponseJSON, despues(6 * 60_000)))
@@ -115,6 +115,18 @@ describe('passkeys', () => {
     const reaut = await iniciarAutenticacion(pool, CFG, 'reautenticacion', otro.userId, AHORA);
     await expect(terminarAutenticacion(pool, CFG, 'reautenticacion', otro.userId,
       ajeno.responderLogin(reaut) as AuthenticationResponseJSON, despues(1000))).rejects.toThrow(/otro usuario/);
+  });
+
+  it('E1-WA-01 dos autenticaciones simultáneas con el mismo contador no pasan las dos', async () => {
+    const aut = await registrar();
+    aut.contador = 7;
+    const a = await iniciarAutenticacion(pool, CFG, 'login', null, AHORA);
+    const b = await iniciarAutenticacion(pool, CFG, 'login', null, AHORA);
+    const resultados = await Promise.allSettled([
+      terminarAutenticacion(pool, CFG, 'login', null, aut.responderLogin(a) as AuthenticationResponseJSON, despues(1000)),
+      terminarAutenticacion(pool, CFG, 'login', null, aut.responderLogin(b) as AuthenticationResponseJSON, despues(1000)),
+    ]);
+    expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
   });
 
   it('E1-WA-01 un contador que retrocede se rechaza; uno siempre en cero se acepta', async () => {
