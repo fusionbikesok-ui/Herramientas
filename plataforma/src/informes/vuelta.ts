@@ -64,7 +64,20 @@ async function diasATrabajar(pool: pg.Pool, ahora: Date): Promise<string[]> {
     `SELECT DISTINCT to_char(fecha, 'YYYY-MM-DD') AS fecha FROM informes.entregas
       WHERE estado_deposito <> 'subido' OR estado_aviso <> 'avisado'`,
   );
-  const dias = new Set([...aMedias.rows.map((r) => r.fecha), ...diasFaltantes(ultima.rows[0]?.fecha ?? null, ahora)]);
+  // Un día puede estar subido y avisado y quedarse sin su fila canónica si el proceso se cortó entre las dos
+  // escrituras. Si no se lo vuelve a elegir, nadie lo repara nunca (hallazgo crítico de la revisión 2026-09-18).
+  const sinCanonico = await pool.query<{ fecha: string }>(
+    `SELECT DISTINCT to_char(e.fecha, 'YYYY-MM-DD') AS fecha
+       FROM informes.entregas e
+       LEFT JOIN audit.audit_daily_manifests m ON e.tipo = 'manifiesto' AND m.manifest_date = e.fecha
+       LEFT JOIN integrations.daily_shadow_reports r ON e.tipo = 'reporte' AND r.report_date = e.fecha
+      WHERE e.estado_deposito = 'subido'
+        AND ((e.tipo = 'manifiesto' AND m.manifest_date IS NULL) OR (e.tipo = 'reporte' AND r.report_date IS NULL))`,
+  );
+  const dias = new Set([
+    ...aMedias.rows.map((r) => r.fecha), ...sinCanonico.rows.map((r) => r.fecha),
+    ...diasFaltantes(ultima.rows[0]?.fecha ?? null, ahora),
+  ]);
   return [...dias].sort();
 }
 
@@ -81,9 +94,15 @@ export async function vueltaDeInformes(pool: pg.Pool, cfg: CfgInformes, ahora: D
     const artefactos: Artefacto[] = [];
 
     for (const [tipo, contenido] of [['manifiesto', manifiesto], ['reporte', reporte]] as const) {
-      const reclamo = await reclamar(pool, tipo, fecha, { hash: hashDe(contenido), ahora: reloj() });
-      // null: otro proceso la tiene, ya está terminada, o el contenido cambió. En los tres casos, no se toca.
-      if (!reclamo) continue;
+      const hash = hashDe(contenido);
+      const reclamo = await reclamar(pool, tipo, fecha, { hash, ahora: reloj() });
+      // null: otro proceso la tiene, ya está terminada, o el contenido cambió. En los tres casos no se toca,
+      // pero una entrega TERMINADA puede haberse quedado sin su fila canónica (corte entre las dos escrituras),
+      // y entonces nadie la repararía: se repone acá, con el mismo contenido que se firmó (hash igual).
+      if (!reclamo) {
+        await repararCanonico(pool, cfg, tipo, fecha, contenido, hash);
+        continue;
+      }
       const sobre = firmar(contenido, cfg.clave);
       const cuerpo = JSON.stringify(sobre);
       artefactos.push({ tipo, contenido, reclamo, sobre, cuerpo });
@@ -96,8 +115,14 @@ export async function vueltaDeInformes(pool: pg.Pool, cfg: CfgInformes, ahora: D
         reclamo.deposito = 'firmado';
       }
       if (reclamo.deposito === 'firmado') {
-        const subido = await depositar(pool, cfg, reclamo, tipo, fecha, cuerpo, reloj, fallados);
-        if (subido) await registrarCanonico(pool, tipo, contenido, sobre, subido);
+        await depositar(pool, cfg, reclamo, tipo, fecha, cuerpo, reloj, fallados);
+      }
+      // La fila canónica se escribe SIEMPRE que el depósito esté confirmado, no sólo en la vuelta que subió:
+      // son dos escrituras, y un corte entre ellas dejaba la entrega cerrada y sin registro canónico.
+      // `registrarCanonico` es idempotente.
+      if (reclamo.deposito === 'subido') {
+        const subida = await subidaDe(pool, tipo, fecha);
+        if (subida) await registrarCanonico(pool, tipo, contenido, sobre, subida);
       }
     }
 
@@ -198,6 +223,32 @@ async function depositar(
   const ruta = fila.rows[0]?.ruta_pendiente;
   if (ruta) await cfg.deposito.limpiarPendiente(ruta).catch(() => undefined);
   return subida;
+}
+
+/**
+ * Repone la fila canónica de una entrega ya subida cuando falta, sin tocar B2 ni el email. Sólo actúa si el
+ * contenido recalculado es exactamente el que se firmó (mismo hash): si el día cambió, no hay nada que reponer.
+ */
+async function repararCanonico(
+  pool: pg.Pool, cfg: CfgInformes, tipo: TipoEntrega, fecha: string,
+  contenido: Manifiesto | Reporte, hash: string,
+): Promise<void> {
+  const r = await pool.query<{ estado_deposito: string; hash_contenido: string }>(
+    `SELECT estado_deposito, hash_contenido FROM informes.entregas WHERE tipo = $1 AND fecha = $2`, [tipo, fecha]);
+  const fila = r.rows[0];
+  if (!fila || fila.estado_deposito !== 'subido' || fila.hash_contenido !== hash) return;
+  const subida = await subidaDe(pool, tipo, fecha);
+  if (subida) await registrarCanonico(pool, tipo, contenido, firmar(contenido, cfg.clave), subida);
+}
+
+/** Los datos de la subida ya confirmada, leídos de la entrega: la fila canónica se puede reparar después. */
+async function subidaDe(
+  pool: pg.Pool, tipo: TipoEntrega, fecha: string,
+): Promise<{ versionId: string; retencion: string } | null> {
+  const r = await pool.query<{ b2_version_id: string | null; retention_until: string | null }>(
+    `SELECT b2_version_id, retention_until FROM informes.entregas WHERE tipo = $1 AND fecha = $2`, [tipo, fecha]);
+  const f = r.rows[0];
+  return f?.b2_version_id && f.retention_until ? { versionId: f.b2_version_id, retencion: f.retention_until } : null;
 }
 
 /**

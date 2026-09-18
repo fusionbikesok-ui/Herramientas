@@ -77,6 +77,24 @@ describe('vueltaDeInformes', () => {
     expect(r[0].email_sent_at).not.toBeNull();
   });
 
+  it('repara la fila canónica si la entrega quedó subida sin registro del tramo 1', async () => {
+    // Hallazgo crítico de la revisión del 2026-09-18: marcar `subido` y escribir la tabla canónica son dos
+    // escrituras. Un corte entre ellas dejaba la entrega cerrada y avisada, sin registro canónico, y ninguna
+    // vuelta posterior la reparaba porque salteaba el depósito. Se simula borrando la fila canónica.
+    await correr('2026-09-17T10:00:00Z');
+    await admin.query('DELETE FROM audit.audit_daily_manifests');
+    await admin.query('DELETE FROM integrations.daily_shadow_reports');
+    // La entrega sigue subida y avisada; la vuelta siguiente no sube ni manda, pero tiene que reponer el registro.
+    const subidasAntes = subidas.length; const emailsAntes = emails.length;
+    await correr('2026-09-17T10:30:00Z');
+    expect(subidas).toHaveLength(subidasAntes);
+    expect(emails).toHaveLength(emailsAntes);
+    const m = (await pool.query(`SELECT b2_version_id FROM audit.audit_daily_manifests`)).rows;
+    expect(m).toEqual([{ b2_version_id: 'v1' }]);
+    const r = (await pool.query(`SELECT b2_version_id FROM integrations.daily_shadow_reports`)).rows;
+    expect(r).toEqual([{ b2_version_id: 'v2' }]);
+  });
+
   it('correrla dos veces no sube ni manda de nuevo', async () => {
     await correr('2026-09-17T10:00:00Z');
     const r = await correr('2026-09-17T10:05:00Z');
