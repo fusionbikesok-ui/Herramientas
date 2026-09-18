@@ -25,15 +25,20 @@ describe('armarReporte', () => {
 
   // Sin esto, las señales de un caso cuentan en el siguiente y el resultado depende del orden.
   beforeEach(async () => {
-    await limpiar(admin, ['integrations.reconciliation_signals', 'integrations.sweep_runs', 'informes.entregas']);
+    await limpiar(admin, ['integrations.reconciliation_signals', 'integrations.sweep_runs', 'integrations.reconciliation_cursors', 'integrations.shadow_daily_summaries', 'informes.entregas']);
   });
 
-  const senal = (extra: Record<string, unknown>) => pool.query(
-    `INSERT INTO integrations.reconciliation_signals
-       (channel_account_id, topic, resource_id, fingerprint, source, status, error_detail, received_at)
-     VALUES ($1, $2, $3, $4, 'webhook_copy', $5, $6, $7)`,
-    [extra.cuenta ?? s.cuentaWoo, extra.topic, extra.resource, extra.fingerprint, extra.status, extra.motivo ?? null, extra.recibida],
-  );
+  // Una señal terminal se cierra un minuto después de recibida, salvo que el caso diga otra cosa (`cerrada`).
+  const senal = (extra: Record<string, unknown>) => {
+    const terminal = ['succeeded', 'excluded', 'dead_lettered'].includes(String(extra.status));
+    const cerrada = extra.cerrada ?? (terminal ? new Date(Date.parse(String(extra.recibida)) + 60_000).toISOString() : null);
+    return pool.query(
+      `INSERT INTO integrations.reconciliation_signals
+         (channel_account_id, topic, resource_id, fingerprint, source, status, error_detail, received_at, finished_at)
+       VALUES ($1, $2, $3, $4, 'webhook_copy', $5, $6, $7, $8)`,
+      [extra.cuenta ?? s.cuentaWoo, extra.topic, extra.resource, extra.fingerprint, extra.status, extra.motivo ?? null, extra.recibida, cerrada],
+    );
+  };
 
   it('E1-REC-01 un día sin actividad da verde y cero faltantes', async () => {
     const r = await armarReporte(pool, '2026-09-16');
@@ -84,8 +89,8 @@ describe('armarReporte', () => {
   const barrido = async (inicio: string, conocidos: number, barridos: number, convergidos: number) => {
     await pool.query('SELECT integrations.sembrar_corrientes($1)', [s.cuentaMl]);
     await pool.query(`INSERT INTO integrations.sweep_runs
-      (channel_account_id, topic, cursor_kind, strategy, started_at, status, known_resources, swept, converged)
-      VALUES ($1, 'ml.shipments', 'state_sweep', 'convergence', $2, 'succeeded', $3, $4, $5)`,
+      (channel_account_id, topic, cursor_kind, strategy, started_at, finished_at, status, known_resources, swept, converged)
+      VALUES ($1, 'ml.shipments', 'state_sweep', 'convergence', $2, $2::timestamptz + interval '5 minutes', 'succeeded', $3, $4, $5)`,
       [s.cuentaMl, inicio, conocidos, barridos, convergidos]);
   };
 
@@ -99,11 +104,49 @@ describe('armarReporte', () => {
 
   it('E1-REC-01 numera el día de campaña y recuerda el reporte anterior', async () => {
     await reportePrevio('2026-09-13', 'verde');
-    await reportePrevio('2026-09-14', 'amarillo');
+    await reportePrevio('2026-09-14', 'verde');
     const r = await armarReporte(pool, '2026-09-15');
     expect(r.reporte_anterior).toBe('2026-09-14');
-    // Dos días previos seguidos sin rojo más éste: tercer día. Amarillo no reinicia (diseño §9).
     expect(r.dia_campana).toBe(3);
+  });
+
+  it('E1-REC-01 un día amarillo anterior también reinicia la campaña', async () => {
+    // El diseño §9 exige cobertura 100 % y convergencia declarada los siete días: amarillo no cuenta.
+    await reportePrevio('2026-09-13', 'verde');
+    await reportePrevio('2026-09-14', 'amarillo');
+    expect((await armarReporte(pool, '2026-09-15')).dia_campana).toBe(1);
+  });
+
+  it('E1-REC-01 una señal abierta al corte cuenta como faltante aunque se resuelva después', async () => {
+    // Recibida el 16, resuelta el 17 a las 12:00 UTC (09:00 ART), después del corte de las 06:00 ART.
+    await senal({ topic: 'woo.orders', resource: '7', fingerprint: 'ev:tarde', status: 'succeeded',
+      recibida: '2026-09-16T12:00:00Z', cerrada: '2026-09-17T12:00:00Z' });
+    const r = await armarReporte(pool, '2026-09-16');
+    expect(r.faltantes_sin_explicar).toBe(1);
+    expect(r.semaforo).toBe('rojo');
+    // Y es estable: rearmar el mismo día da exactamente lo mismo.
+    expect(await armarReporte(pool, '2026-09-16')).toEqual(r);
+  });
+
+  it('E1-REC-01 con varios barridos del día manda el peor', async () => {
+    await barrido('2026-09-16T10:00:00Z', 10, 10, 5);
+    await barrido('2026-09-16T14:00:00Z', 10, 10, 10);
+    expect((await armarReporte(pool, '2026-09-16')).topicos['ml.shipments']).toMatchObject({ convergencia: 0.5 });
+  });
+
+  it('E1-REC-01 un tópico de convergencia habilitado sin barrido en el día pinta amarillo', async () => {
+    await pool.query('SELECT integrations.sembrar_corrientes($1)', [s.cuentaMl]);
+    const r = await armarReporte(pool, '2026-09-16');
+    expect(r.alertas).toContainEqual(expect.objectContaining({ codigo: 'convergencia_no_declarada', topic: 'ml.shipments' }));
+    expect(r.semaforo).toBe('amarillo');
+  });
+
+  it('E1-REC-01 incluye las alertas operativas del resumen de ese día', async () => {
+    await admin.query(`INSERT INTO integrations.shadow_daily_summaries (summary_date, payload) VALUES ('2026-09-16', $1)`,
+      [JSON.stringify({ alertas: [{ id: 'barrido_vencido', severidad: 'alta', umbral: 'atraso > 2 intervalos' }] })]);
+    const r = await armarReporte(pool, '2026-09-16');
+    expect(r.alertas).toContainEqual(expect.objectContaining({ codigo: 'barrido_vencido', nivel: 'alta' }));
+    expect(r.semaforo).toBe('rojo');
   });
 
   it('E1-REC-01 un día rojo anterior reinicia la campaña', async () => {
@@ -138,7 +181,8 @@ describe('armarReporte', () => {
   it('E1-REC-01 un barrido de otro día no cuenta', async () => {
     await barrido('2026-09-17T12:00:00Z', 10, 5, 1);
     const r = await armarReporte(pool, '2026-09-16');
+    // El barrido del 17 no le da convergencia al 16: el 16 queda sin convergencia declarada.
     expect(r.topicos['ml.shipments']).toBeUndefined();
-    expect(r.semaforo).toBe('verde');
+    expect(r.alertas).toContainEqual(expect.objectContaining({ codigo: 'convergencia_no_declarada', topic: 'ml.shipments' }));
   });
 });

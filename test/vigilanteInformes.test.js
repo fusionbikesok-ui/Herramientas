@@ -68,3 +68,16 @@ describe('revisarInformeDelDia', () => {
     expect(activos(db, 'informe_faltante')).toBe(0);
   });
 });
+
+describe('revisarInformeDelDia con una respuesta mal formada', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('no la usa: la trata como una plataforma que no respondió bien', async () => {
+    for (const cuerpo of [{ ultimo: 'zzzz', atrasadas: [] }, { ultimo: '2026-09-16', atrasadas: 'x' }, { ultimo: '2026-09-16', atrasadas: [{ tipo: 'otro', fecha: '2026-09-15' }] }]) {
+      expect(await revisarInformeDelDia(db, { url: 'http://x', keyring, fetch: responde(cuerpo), ahora }), JSON.stringify(cuerpo))
+        .toMatchObject({ estado: 'sin_respuesta' });
+    }
+  });
+});

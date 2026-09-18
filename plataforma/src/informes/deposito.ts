@@ -12,13 +12,14 @@
  * SigV4 hecho a mano sobre `fetch`: son dos verbos, y el SDK de AWS pesa más que todo el módulo. El firmador
  * se prueba contra el vector publicado en la documentación de AWS, no contra una copia de sí mismo.
  */
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const RETENCION_DIAS = 365;
 export const MARGEN_DIAS = 2;
 const MAX_ERROR = 500;
+const TIMEOUT_MS = 60_000;
 
 export interface Credencial { id: string; clave: string }
 
@@ -31,12 +32,17 @@ export interface CfgDeposito {
   lectura: Credencial;
   dirPendientes: string;
   fetch?: typeof fetch;
+  /** Tope de cada pedido a B2. Sin tope, un pedido colgado sobrevive al lease y otro proceso repite el efecto. */
+  timeoutMs?: number;
 }
+
+/** Lo que hay en B2 para una clave: su versión, su retención y el SHA-256 del contenido que se subió. */
+export interface ObjetoB2 { versionId: string; retencion: string; modo: string; sha256: string | null }
 
 export interface Deposito {
   guardarPendiente(clave: string, cuerpo: string): Promise<string>;
   subir(clave: string, cuerpo: string, ahora: Date): Promise<{ versionId: string; retencion: string }>;
-  consultar(clave: string): Promise<{ versionId: string; retencion: string; modo: string } | null>;
+  consultar(clave: string): Promise<ObjetoB2 | null>;
   limpiarPendiente(ruta: string): Promise<void>;
 }
 
@@ -87,10 +93,17 @@ export function crearDeposito(cfg: CfgDeposito): Deposito {
   const host = new URL(cfg.endpoint).host;
   const rutaDe = (clave: string) => `/${cfg.bucket}/${codificarRuta(clave)}`;
 
+  // El depósito sólo escribe dentro de su prefijo: la credencial también está acotada a él, y un error de
+  // armado de clave no puede terminar en otra parte del bucket.
+  const dentroDelPrefijo = (clave: string) => {
+    if (!clave.startsWith(cfg.prefijo) || clave.includes('..')) throw new Error(`clave fuera del prefijo ${cfg.prefijo}: ${clave}`);
+  };
+
   const pedir = async (
     metodo: string, clave: string, consulta: string, extra: Record<string, string>,
     cuerpo: string, credencial: Credencial, ahora: Date,
   ) => {
+    dentroDelPrefijo(clave);
     const ruta = rutaDe(clave);
     const hashCuerpo = sha256(cuerpo);
     const cabeceras: Record<string, string> = {
@@ -102,22 +115,48 @@ export function crearDeposito(cfg: CfgDeposito): Deposito {
       method: metodo,
       headers: { ...enviar, authorization },
       ...(metodo === 'PUT' ? { body: cuerpo } : {}),
+      signal: AbortSignal.timeout(cfg.timeoutMs ?? TIMEOUT_MS),
     });
+  };
+
+  const consultar = async (clave: string): Promise<ObjetoB2 | null> => {
+    // Con la credencial de LECTURA: si se filtra la de escritura, no sirve para leer, y al revés.
+    // Primero HEAD, que da la versión vigente y el hash que se mandó al subir; después la retención de ESA
+    // versión: GET ?retention no documenta devolver la versión en B2, así que no se puede confiar en eso.
+    const cabeza = await pedir('HEAD', clave, '', {}, '', cfg.lectura, new Date());
+    if (cabeza.status === 404) return null;
+    if (!cabeza.ok) throw await errorDe(cabeza, 'HEAD');
+    const versionId = cabeza.headers.get('x-amz-version-id');
+    if (!versionId) throw new Error('B2 HEAD no devolvió x-amz-version-id: ¿el bucket tiene Object Lock?');
+    const r = await pedir('GET', clave, `retention=&versionId=${encodeURIComponent(versionId)}`, {}, '', cfg.lectura, new Date());
+    if (!r.ok) throw await errorDe(r, 'GET retention');
+    const xml = await r.text();
+    const modo = /<Mode>([^<]+)<\/Mode>/.exec(xml)?.[1];
+    const retencion = /<RetainUntilDate>([^<]+)<\/RetainUntilDate>/.exec(xml)?.[1];
+    if (!modo || !retencion) throw new Error('B2 GET retention devolvió una respuesta incompleta');
+    return { versionId, retencion, modo, sha256: cabeza.headers.get('x-amz-meta-sha256') };
   };
 
   return {
     async guardarPendiente(clave, cuerpo) {
       // Temporal, fsync y renombre: un corte de luz deja el archivo entero o no lo deja.
       const ruta = join(cfg.dirPendientes, clave.replace(/[^A-Za-z0-9._-]/g, '_'));
-      const tmp = `${ruta}.tmp`;
-      const fd = openSync(tmp, 'wx', 0o600);
+      // Temporal con nombre único: con uno fijo, un corte entre crearlo y renombrarlo dejaba un huérfano que
+      // hacía fallar con EEXIST todos los reintentos siguientes.
+      const tmp = `${ruta}.${randomBytes(6).toString('hex')}.tmp`;
       try {
-        writeSync(fd, cuerpo);
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
+        const fd = openSync(tmp, 'wx', 0o600);
+        try {
+          writeSync(fd, cuerpo);
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+        renameSync(tmp, ruta);
+      } catch (error) {
+        try { unlinkSync(tmp); } catch { /* ya no está */ }
+        throw error;
       }
-      renameSync(tmp, ruta);
       return ruta;
     },
 
@@ -126,26 +165,22 @@ export function crearDeposito(cfg: CfgDeposito): Deposito {
       const r = await pedir('PUT', clave, '', {
         'x-amz-object-lock-mode': 'COMPLIANCE',
         'x-amz-object-lock-retain-until-date': retener.toISOString(),
+        // El hash viaja como metadato para que un reintento pueda saber si lo que ya está es esto mismo.
+        'x-amz-meta-sha256': sha256(cuerpo),
       }, cuerpo, cfg.escritura, ahora);
       if (!r.ok) throw await errorDe(r, 'PUT');
       const versionId = r.headers.get('x-amz-version-id');
       // Sin versión no hay forma de probar después qué se subió: se trata como fallo.
       if (!versionId) throw new Error('B2 PUT no devolvió x-amz-version-id: ¿el bucket tiene Object Lock?');
+      // Se relee lo que quedó: que la retención sea COMPLIANCE y llegue a la fecha pedida (diseño §7).
+      const leido = await consultar(clave);
+      if (!leido || leido.modo !== 'COMPLIANCE' || Date.parse(leido.retencion) < retener.getTime() - 1000) {
+        throw new Error(`B2 no confirmó la retención: ${leido ? `${leido.modo} hasta ${leido.retencion}` : 'objeto no encontrado'}`);
+      }
       return { versionId, retencion: retener.toISOString() };
     },
 
-    async consultar(clave) {
-      // Con la credencial de LECTURA: si se filtra la de escritura, no sirve para leer, y al revés.
-      const r = await pedir('GET', clave, 'retention=', {}, '', cfg.lectura, new Date());
-      if (r.status === 404) return null;
-      if (!r.ok) throw await errorDe(r, 'GET retention');
-      const xml = await r.text();
-      const modo = /<Mode>([^<]+)<\/Mode>/.exec(xml)?.[1];
-      const retencion = /<RetainUntilDate>([^<]+)<\/RetainUntilDate>/.exec(xml)?.[1];
-      const versionId = r.headers.get('x-amz-version-id');
-      if (!modo || !retencion || !versionId) throw new Error('B2 GET retention devolvió una respuesta incompleta');
-      return { versionId, retencion, modo };
-    },
+    consultar,
 
     async limpiarPendiente(ruta) {
       unlinkSync(ruta);

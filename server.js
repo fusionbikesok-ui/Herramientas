@@ -160,6 +160,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       const revisar = () => revisarInformeDelDia(db, { url: process.env.SOMBRA_PLATAFORMA_URL, keyring: keyringVigilante })
         .then((r) => { if (r.estado !== 'ok' && r.estado !== 'temprano') console.error(`[informes] vigilante: ${r.estado} (esperado ${r.esperado})`); })
         .catch((e) => console.error('[informes] vigilante falló:', e.message));
+      // Una vez al arrancar (a los dos minutos, con el servicio ya estable) y después cada hora: sin la corrida
+      // inicial, un reinicio después de las 09:00 demoraba el primer control una hora.
+      setTimeout(revisar, 2 * 60_000).unref();
       setInterval(revisar, 60 * 60_000).unref();
     } catch (e) {
       console.error('[informes] vigilante sin configuración válida, apagado:', e.message);
