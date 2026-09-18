@@ -74,4 +74,22 @@ describe('enviar', () => {
     await expect(enviar({ ...CFG, transporte: { async sendMail() { throw new Error('451 try later'); } } },
       { asunto: 'x', texto: 'y', adjuntos: [] })).rejects.toThrow(/451/);
   });
+  it('manda un Message-ID estable cuando se le da identidad, con el dominio del remitente', async () => {
+    // Hallazgo medio de la revisión de T4: el envío es "al menos una vez", así que el reenvío del mismo
+    // informe tiene que llegar con el mismo Message-ID para que el receptor pueda descartarlo.
+    const visto: Array<Record<string, unknown>> = [];
+    const transporte = { async sendMail(m: Record<string, unknown>) { visto.push(m); return {}; } };
+    const mensaje = { asunto: 'x', texto: 'y', adjuntos: [], identidad: 'informe-2026-09-16-abc123' };
+    await enviar({ ...CFG, desde: 'informes@fusionbikes.com.ar', transporte }, mensaje);
+    await enviar({ ...CFG, desde: 'informes@fusionbikes.com.ar', transporte }, mensaje);
+    expect(visto[0]!.messageId).toBe('<informe-2026-09-16-abc123@fusionbikes.com.ar>');
+    expect(visto[1]!.messageId).toBe(visto[0]!.messageId);
+  });
+
+  it('sin identidad no fuerza ningún Message-ID', async () => {
+    const visto: Array<Record<string, unknown>> = [];
+    await enviar({ ...CFG, transporte: { async sendMail(m: Record<string, unknown>) { visto.push(m); return {}; } } },
+      { asunto: 'x', texto: 'y', adjuntos: [] });
+    expect(visto[0]!.messageId).toBeUndefined();
+  });
 });

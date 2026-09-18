@@ -158,7 +158,13 @@ async function avisar(
 
   try {
     const { asunto, texto } = armarCuerpo(delReporte.contenido as Reporte, cfg.datosClave);
-    await cfg.correo.enviar({ asunto, texto, adjuntos: [{ nombre: `reporte-${fecha}.json`, contenido: delReporte.cuerpo }] });
+    // La identidad lleva el día y el hash del reporte firmado: un reenvío del mismo informe se deduplica en el
+    // receptor, y un informe distinto del mismo día (rearmado) llega como mensaje nuevo, que es lo correcto.
+    const identidad = `informe-${fecha}-${sha256(delReporte.cuerpo).slice(0, 16)}`;
+    await cfg.correo.enviar({
+      asunto, texto, identidad,
+      adjuntos: [{ nombre: `reporte-${fecha}.json`, contenido: delReporte.cuerpo }],
+    });
   } catch (error) {
     for (const a of pendientes) {
       await anotarFallo(pool, a.reclamo, 'aviso', (error as Error).message, reloj());

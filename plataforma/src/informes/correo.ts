@@ -32,7 +32,19 @@ export interface CfgCorreo {
   transporte?: Transporte;
 }
 
-export interface Mensaje { asunto: string; texto: string; adjuntos: Array<{ nombre: string; contenido: string }> }
+export interface Mensaje {
+  asunto: string;
+  texto: string;
+  adjuntos: Array<{ nombre: string; contenido: string }>;
+  /**
+   * Identidad del mensaje, para que el receptor pueda descartar un duplicado. El envío es "al menos una vez"
+   * a propósito (un día sin aviso es peor que un aviso repetido), pero si el servidor acepta y el proceso cae
+   * antes de anotarlo, el reenvío llega como un mensaje nuevo salvo que lleve el mismo `Message-ID`. Se arma con
+   * el día y el hash del contenido firmado, así el reenvío del MISMO informe se deduplica y un informe distinto
+   * del mismo día no (hallazgo medio de la revisión de T4 del 2026-09-18).
+   */
+  identidad?: string;
+}
 
 const TIMEOUT_MS = 20_000;
 const TAMANO_MAX = 5 * 1024 * 1024;
@@ -92,8 +104,14 @@ export async function enviar(cfg: CfgCorreo, mensaje: Mensaje): Promise<void> {
     auth: { user: cfg.usuario, pass: cfg.clave },
     connectionTimeout: timeout, greetingTimeout: timeout, socketTimeout: timeout,
   });
+  // El dominio del Message-ID sale del remitente configurado: un identificador sin dominio propio lo reescriben
+  // muchos servidores, y entonces deja de servir para deduplicar.
+  const dominio = /@([^>\s]+)>?\s*$/.exec(cfg.desde)?.[1] ?? 'fusionbikes.local';
+  const messageId = mensaje.identidad ? `<${mensaje.identidad}@${dominio}>` : undefined;
+  if (messageId && SALTO.test(messageId)) throw new Error('correo: la identidad del mensaje tiene un salto de línea');
   await transporte.sendMail({
     from: cfg.desde, to: cfg.para, subject: mensaje.asunto, text: mensaje.texto,
+    ...(messageId ? { messageId } : {}),
     attachments: mensaje.adjuntos.map((a) => ({ filename: a.nombre, content: a.contenido, contentType: 'application/json' })),
   });
 }
