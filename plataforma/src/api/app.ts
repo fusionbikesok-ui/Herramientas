@@ -6,6 +6,7 @@ import type { Logger } from 'pino';
 import { correlacionDe } from '../comun/correlacion.ts';
 import { sinSesion, type ProveedorSesion } from '../auth/sesion.ts';
 import { registrarSenales, type OpcionesSenales } from './senales.ts';
+import { registrarEstadoInformes } from './informes.ts';
 import { evaluarAlertasPlataforma, medirPlataforma } from '../observabilidad/sombra.ts';
 
 type Estado = 'ok' | 'degraded' | 'down';
@@ -129,6 +130,10 @@ export function crearApi(opciones: OpcionesApi) {
     return { metrics: metricas, alerts: evaluarAlertasPlataforma(metricas) };
   });
 
-  if (opciones.senales) registrarSenales(app, opciones.pool, opciones.logger, opciones.senales, ahora);
+  if (opciones.senales) {
+    registrarSenales(app, opciones.pool, opciones.logger, opciones.senales, ahora);
+    // El estado de los informes viaja con el mismo keyring y orígenes: sin API interna, tampoco existe (404).
+    registrarEstadoInformes(app, opciones.pool, opciones.logger, opciones.senales, ahora);
+  }
   return app;
 }

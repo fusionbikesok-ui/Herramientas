@@ -49,6 +49,7 @@ import { barridoAuditoria } from './lib/auditoria.js';
 import { incidentesRouter } from './routes/incidentes.js';
 import { procesarAlertasEmailIncidentes } from './lib/incidentes.js';
 import { revisarBackupNube, revisarBackupPostgres } from './lib/vigiaBackup.js';
+import { revisarInformeDelDia } from './lib/vigilanteInformes.js';
 import { devicesRouter } from './routes/devices.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
@@ -148,6 +149,20 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
           .catch((e) => console.error('[sombra] importación de pérdidas falló:', e.message))
           .finally(() => { importando = false; });
       }, Number(process.env.SOMBRA_IMPORTAR_CADA_MS) > 0 ? Number(process.env.SOMBRA_IMPORTAR_CADA_MS) : 5 * 60_000).unref();
+    }
+  }
+  // E1 T4: vigilante de los informes firmados. Apagado salvo VIGILANTE_INFORMES_ENABLED=true: si se encendiera
+  // solo al desplegar, alertaría esa misma mañana, porque la plataforma todavía no emite informes. Usa el mismo
+  // destino y keyring que la copia de sombra. Revisa cada hora; antes de las 09:00 ART no consulta.
+  if (process.env.VIGILANTE_INFORMES_ENABLED === 'true') {
+    try {
+      const keyringVigilante = cargarKeyringInternoActivo(process.env.SOMBRA_KEYRING_FILE);
+      const revisar = () => revisarInformeDelDia(db, { url: process.env.SOMBRA_PLATAFORMA_URL, keyring: keyringVigilante })
+        .then((r) => { if (r.estado !== 'ok' && r.estado !== 'temprano') console.error(`[informes] vigilante: ${r.estado} (esperado ${r.esperado})`); })
+        .catch((e) => console.error('[informes] vigilante falló:', e.message));
+      setInterval(revisar, 60 * 60_000).unref();
+    } catch (e) {
+      console.error('[informes] vigilante sin configuración válida, apagado:', e.message);
     }
   }
   app._colaSombra = colaSombra;
