@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import fs from 'node:fs';
 import { openDb } from '../db/index.js';
 import { firmarInterno } from '../lib/internoHmac.js';
-import { revisarInformeDelDia, RUTA_ESTADO_INFORMES } from '../lib/vigilanteInformes.js';
+import { anunciarVigilanteApagado, revisarInformeDelDia, RUTA_ESTADO_INFORMES } from '../lib/vigilanteInformes.js';
 
 const TEST_DB = './test/vigilante-informes.sqlite';
 const clave = crypto.randomBytes(32);
@@ -80,4 +80,14 @@ describe('revisarInformeDelDia con una respuesta mal formada', () => {
         .toMatchObject({ estado: 'sin_respuesta' });
     }
   });
+  it('si el vigilante no pudo arrancar, abre incidente crítico en lugar de callarse', () => {
+    // Hallazgo alto de la revisión de T4: con el keyring ausente o inválido, server.js sólo registraba en
+    // consola y abandonaba la instalación. Fallar en silencio es lo peor para el componente que existe para
+    // avisar que la plataforma dejó de emitir.
+    anunciarVigilanteApagado(db, 'keyring interno inválido: el archivo no existe');
+    const inc = db.prepare("SELECT tipo_error, severidad, estado, contexto_json FROM incidentes_operativos WHERE proceso='vigilante_informes' AND tipo_error='vigilante_sin_configuracion'").get();
+    expect(inc).toMatchObject({ severidad: 'critico', estado: 'activo' });
+    expect(JSON.parse(inc.contexto_json).motivo).toMatch(/keyring interno inválido/);
+  });
+
 });

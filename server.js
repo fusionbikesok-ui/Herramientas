@@ -49,7 +49,7 @@ import { barridoAuditoria } from './lib/auditoria.js';
 import { incidentesRouter } from './routes/incidentes.js';
 import { procesarAlertasEmailIncidentes } from './lib/incidentes.js';
 import { revisarBackupNube, revisarBackupPostgres } from './lib/vigiaBackup.js';
-import { revisarInformeDelDia } from './lib/vigilanteInformes.js';
+import { anunciarVigilanteApagado, revisarInformeDelDia } from './lib/vigilanteInformes.js';
 import { devicesRouter } from './routes/devices.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { procesarNotificacionesPush } from './lib/workerNotificacionesPush.js';
@@ -165,7 +165,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       setTimeout(revisar, 2 * 60_000).unref();
       setInterval(revisar, 60 * 60_000).unref();
     } catch (e) {
+      // No alcanza con registrarlo: si el vigilante no arranca, nadie avisaría que la plataforma dejó de emitir.
       console.error('[informes] vigilante sin configuración válida, apagado:', e.message);
+      try { anunciarVigilanteApagado(db, e.message); } catch (e2) { console.error('[informes] tampoco se pudo abrir el incidente:', e2.message); }
     }
   }
   app._colaSombra = colaSombra;
