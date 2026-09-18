@@ -72,3 +72,24 @@ Quedan anotados y **no corregidos** (hallazgos de menor gravedad de esa misma re
 
 Encender un canal de la copia de sombra no es un flag: son tres piezas de configuración en dos sistemas. Falta
 una verificación previa que las contraste antes de encender, y es lo que habría evitado estas cinco horas.
+
+## Anexo: revisión final de T4 y sus arreglos (2026-09-18)
+
+Con T4 completo (merge `d6a06e1` de `feature/e1-t4-continuacion`, que traía las tareas 7 a 15), Codex revisó el
+código entero en modo sólo lectura y encontró un crítico y cinco altos. Los seis corregidos:
+
+| Hallazgo | Arreglo | Commit |
+|---|---|---|
+| **Crítico:** marcar la entrega como subida y escribir la tabla del tramo 1 son dos escrituras; un corte entre ellas dejaba el objeto en B2, el email enviado y ningún registro canónico, y ninguna vuelta lo reparaba | El día se vuelve a elegir si le falta la fila canónica, y se repone con el mismo contenido firmado. Verificado por mutación | `b761ea6` |
+| **Alto:** un pedido a B2 podía sobrevivir al permiso de 10 min y dejar que otro proceso subiera una segunda versión inmutable | El tope de espera no puede pasar de un cuarto del permiso; el depósito se niega a construirse si se configura más alto | `7c71975` |
+| **Alto:** si el vigilante no podía cargar su configuración, sólo escribía en consola y abandonaba | Abre incidente crítico `vigilante_sin_configuracion` | `4944ad5` |
+| **Alto:** sólo la clave de firma tenía guardas fuertes; las credenciales de B2 y SMTP se leían sin mirar dueño, permisos ni enlaces | Guardas extraídas a `src/seguridad/secreto.ts` y aplicadas a todos los secretos | `5059f5e` |
+| **Alto:** nadie comprobaba que la pública anunciada fuera la pareja de la privada que firma | Se firma y verifica un valor de prueba al arrancar; si no son pareja, el servicio no arranca | `c2a41cf` |
+| **Medio:** el email podía duplicarse sin un identificador que permitiera descartarlo | `Message-ID` estable con el día y el hash del reporte firmado | `2c6ea7c` |
+
+Quedan sin hacer, por decisión: la recuperación de acceso no cierra sesiones ni avisa por email, porque E1 no
+tiene sesiones reales y eso pertenece a E4; y el gate puede quedar verde con variantes del mismo caso feliz.
+
+Verificación posterior a los arreglos: **261 tests de plataforma** y **2.706 del legado** en verde, typecheck
+limpio. El único fallo de la suite completa fue `test/preparacion.test.js` (cola de fotos, dependiente de
+tiempos), que corrido solo da 245/245: es el falso positivo que ya documenta CLAUDE.md.
