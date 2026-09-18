@@ -18,7 +18,9 @@ const senales = config.senales
 // Las cuentas que acepta la API tienen que ser las mismas que consume el worker. El 2026-09-17 faltaba la de ML
 // y se rechazaron todas sus señales durante cinco horas sin que nadie lo notara: mejor no arrancar.
 if (senales) {
-  const registroFile = process.env.BARRIDOS_REGISTRO_FILE;
+  // Variable propia de la API: `BARRIDOS_REGISTRO_FILE` activa en `cargarConfig` la configuración completa de
+  // barridos, que exige su keyring, y la API no arrancaba (verificado en producción el 2026-09-18).
+  const registroFile = process.env.SENALES_REGISTRO_FILE;
   if (registroFile) {
     const diferencias = contrastarCuentas(senales.cuentas, cargarRegistro(registroFile));
     if (diferencias.length) {
@@ -26,7 +28,7 @@ if (senales) {
       throw new Error(`SENALES_CUENTAS y el registro del worker no coinciden: ${diferencias.join('; ')}`);
     }
   } else {
-    logger.warn('sin BARRIDOS_REGISTRO_FILE: no se puede comprobar que SENALES_CUENTAS coincida con el registro del worker');
+    logger.warn('sin SENALES_REGISTRO_FILE: no se puede comprobar que SENALES_CUENTAS coincida con el registro del worker');
   }
 }
 const app = crearApi({ pool, logger, estadoPgDir: config.estadoPgDir, heartbeatMaxS: config.heartbeatMaxS, ...(senales ? { senales } : {}) });
