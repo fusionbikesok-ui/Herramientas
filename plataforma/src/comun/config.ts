@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { leerSecretoProtegido } from '../seguridad/secreto.ts';
 import { z } from 'zod';
 
 export type Servicio = 'api' | 'worker' | 'scheduler';
@@ -108,6 +109,9 @@ function leerInformes(env: Record<string, string | undefined>, leerArchivo: (rut
   if (presentes.length === 0) return undefined;
   const faltantes = CAMPOS_INFORMES.filter((c) => !env[c]);
   if (faltantes.length) throw new ErrorConfig(`configuración de informes incompleta: ${faltantes.join(', ')}`);
+  // Los secretos de B2 y SMTP se leen con las mismas guardas que la clave de firma (dueño, permisos, archivo
+  // regular, directorio no escribible por otros): antes bastaba un readFileSync y un archivo montado con
+  // permisos abiertos pasaba en silencio.
   const secreto = (campo: typeof CAMPOS_INFORMES[number]) => {
     const valor = leerArchivo(env[campo]!).trim();
     if (!valor) throw new ErrorConfig(`${campo} está vacío`);
@@ -131,7 +135,7 @@ function leerInformes(env: Record<string, string | undefined>, leerArchivo: (rut
   };
 }
 
-export function cargarConfig(env: NodeJS.ProcessEnv, leerArchivo: (ruta: string) => string = (r) => readFileSync(r, 'utf8')): Config {
+export function cargarConfig(env: NodeJS.ProcessEnv, leerArchivo: (ruta: string) => string = leerSecretoProtegido): Config {
   const r = Esquema.safeParse(env);
   if (!r.success) {
     const campos = r.error.issues.map((i) => i.path.join('.')).join(', ');
