@@ -36,7 +36,7 @@ independiente y suite global. T1 se declara "terminado como tramo", nada más.
 |---|---|
 | Tramos | Tres, por valor (§1) |
 | Fuente | Releer Woo y ML **desde el origen**, no desde los cachés del legado |
-| Cómo se relee | **Camino A corregido**: una **lectura completa inicial forzada**, una sola vez, y después **E1 le pasa cada cambio a E2** en el mismo paso en que lo procesa. A futuro hay un solo lector del origen |
+| Cómo se relee | **Camino A corregido**: una **lectura completa inicial forzada**, una sola vez, y después E2 consume de la cola de E1 los cambios de productos e ítems. A futuro hay un solo lector del origen |
 | Identidad sin resolver | Se importa como **caso visible**; nunca se adivina por nombre ni por GTIN |
 | Cruce Woo↔ML | Las decisiones del matcher entran como **decisiones auditadas**, con quién y cuándo |
 | Seguir al matcher | **Sincronización continua** mientras se siga decidiendo en el legado, con fecha de corte y hash; se corta cuando el matcher pase a la plataforma |
@@ -58,11 +58,22 @@ La primera versión suponía que el inbox de E1 ya tenía todo. **No es así**, 
 (`motor.ts:87`), las vueltas completas de Woo leen sólo identificadores (`woo.ts:124`), y el payload se borra a los
 90 días. De ahí salen las dos piezas nuevas:
 
-### 4.1 E1 le pasa cada cambio a E2 (fan-out en el mismo paso)
+### 4.1 E2 es el primer consumidor de la cola (corregido tras verificar producción)
 
-Cuando el worker de E1 procesa un mensaje de `woo.products` o `ml.items`, **en la misma transacción** en que escribe
-su observación llama al proyector de catálogo. Si la proyección falla, falla la transacción entera y el mensaje vuelve
-a la cola: no hay forma de que E1 lo dé por hecho y E2 no lo haya visto. No hay un segundo consumidor compitiendo.
+La revisión supuso que E1 ya consumía el inbox y que E2 competiría con él. **Verificado en producción el 2026-09-18:
+nadie consume el inbox todavía.** Todos los mensajes están `pending`: `woo.products` 3.490, `ml.items` 427,
+`woo.orders` 688, `ml.orders` 219, `ml.shipments` 200, y así con cada tema. E1 los encola para las entregas que vengan.
+
+Por eso el fan-out que se había agregado sobra: **el proyector de catálogo reclama los temas `woo.products` y
+`ml.items`** de la cola, con el lease y la auditoría que la cola ya tiene (`colas.ts`: `reclamar`/`completar`), y es su
+único consumidor. Los demás temas quedan intactos para sus entregas. Si una entrega futura necesita también
+`woo.products`, ésa es la que agrega el fan-out; T1 no lo necesita.
+
+Dos consecuencias que sí quedan:
+- **El payload vence a los 90 días** y el primer mensaje es del 2026-09-15: el proyector tiene que haber consumido la
+  cola antes del 2026-12-14, y un payload vencido fuerza la relectura de ese recurso (§10.2).
+- **La cola no tiene todo el catálogo** (3.089 productos de Woo distintos contra ~5.200 filas con variaciones, y 271
+  ítems de ML contra ~7.000): el bootstrap del §4.2 sigue haciendo falta.
 
 ### 4.2 La lectura completa inicial (bootstrap)
 
@@ -185,8 +196,8 @@ por cuenta cubriendo variaciones anidadas.
 ## 9. Despliegue y reversión
 
 Sólo lectura: el proyector escribe únicamente en `catalog.*` y no hay escritor remoto. Se comparan conteos, relaciones y
-hashes durante 7 días. Reversión: apagar el proyector, el fan-out y la API de catálogo, conservando el esquema. El
-fan-out se apaga con un flag propio, así E1 sigue funcionando sin E2.
+hashes durante 7 días. Reversión: apagar el proyector y la API de catálogo, conservando el esquema. Los mensajes que
+el proyector no consumió siguen en la cola.
 
 ## 10. Preguntas que quedan para el plan
 
@@ -197,7 +208,7 @@ fan-out se apaga con un flag propio, así E1 sigue funcionando sin E2.
 
 | # | Hallazgo | Dónde |
 |---|---|---|
-| 1 | El inbox es de un solo consumidor | §4.1 fan-out en la misma transacción |
+| 1 | El inbox es de un solo consumidor | §4.1: nadie lo consume todavía; E2 es su primer consumidor para esos dos temas |
 | 2 | El inbox no es un snapshot completo | §4 y §4.2 bootstrap forzado; §10.2 |
 | 3 | Fusión de una variante pendiente | §6 |
 | 4 | Familias `user_product` | §5.1 y §5.2 |
