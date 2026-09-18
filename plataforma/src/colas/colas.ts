@@ -12,7 +12,8 @@ const TABLA: Record<Cola, { tabla: string; tipo: string }> = {
 
 export interface MensajeEntrada {
   channelAccountId: string; topic: string; resourceId: string; remoteVersion: string;
-  source: 'webhook_copy' | 'sweep'; correlationId: string; maxAttempts?: number;
+  // 'bootstrap' (E2 T1): la lectura completa inicial del catálogo, que encola lo que la cola nunca vio.
+  source: 'webhook_copy' | 'sweep' | 'bootstrap'; correlationId: string; maxAttempts?: number;
 }
 
 export interface Reclamo {

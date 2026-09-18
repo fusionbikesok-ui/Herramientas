@@ -52,7 +52,7 @@ export interface ContextoEscritura {
   topic: string;
   correlationId: string;
   runId: string | null;
-  source: 'sweep' | 'signal_reread';
+  source: 'sweep' | 'signal_reread' | 'bootstrap';
 }
 
 const contextoDe = (corrida: CorridaReclamada): ContextoEscritura => ({
