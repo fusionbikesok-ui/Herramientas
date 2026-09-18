@@ -55,6 +55,27 @@ describe('revisarInformeDelDia', () => {
     expect(activos(db, 'entregas_atrasadas')).toBe(1);
   });
 
+  it('un informe oculto en B2 abre incidente, y se cierra cuando vuelve a estar a la vista', async () => {
+    // Verificado contra B2 real el 2026-09-18: la credencial de escritura puede ocultar un objeto. No lo
+    // destruye, pero quien lo busque sin pedir la versión recibe 404: la evidencia deja de estar a la vista.
+    const oculto = responde({ ultimo: '2026-09-16', atrasadas: [], ocultos: [{ tipo: 'reporte', fecha: '2026-09-15' }] });
+    expect(await revisarInformeDelDia(db, { url: 'http://x', keyring, fetch: oculto, ahora })).toMatchObject({ estado: 'ocultos' });
+    expect(activos(db, 'informes_ocultos')).toBe(1);
+    const visible = responde({ ultimo: '2026-09-16', atrasadas: [], ocultos: [] });
+    expect(await revisarInformeDelDia(db, { url: 'http://x', keyring, fetch: visible, ahora })).toMatchObject({ estado: 'ok' });
+    expect(activos(db, 'informes_ocultos')).toBe(0);
+  });
+
+  it('una plataforma anterior a la migración 0012, sin `ocultos`, se sigue aceptando', async () => {
+    const vieja = responde({ ultimo: '2026-09-16', atrasadas: [] });
+    expect(await revisarInformeDelDia(db, { url: 'http://x', keyring, fetch: vieja, ahora })).toMatchObject({ estado: 'ok' });
+  });
+
+  it('un `ocultos` con forma inválida no se usa: se trata como plataforma sin respuesta', async () => {
+    const rota = responde({ ultimo: '2026-09-16', atrasadas: [], ocultos: [{ tipo: 'otro', fecha: 'ayer' }] });
+    expect(await revisarInformeDelDia(db, { url: 'http://x', keyring, fetch: rota, ahora })).toMatchObject({ estado: 'sin_respuesta' });
+  });
+
   it('si la plataforma no responde, avisa y no lanza', async () => {
     const f = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     expect(await revisarInformeDelDia(db, { url: 'http://x', keyring, fetch: f, ahora })).toMatchObject({ estado: 'sin_respuesta' });
