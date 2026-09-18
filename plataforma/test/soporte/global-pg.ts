@@ -17,7 +17,9 @@ declare module 'vitest' {
 }
 
 function eliminarContenedor(): void {
-  try { docker('rm', '-f', NOMBRE); } catch { /* ya no existe */ }
+  // Con -v: sin eso, cada corrida dejaba huérfano el volumen anónimo de PostgreSQL (198 volúmenes y 9,7 GB
+  // acumulados al 2026-09-18, alerta de disco #36).
+  try { docker('rm', '-f', '-v', NOMBRE); } catch { /* ya no existe */ }
 }
 
 export default async function setup(project: TestProject): Promise<() => void> {
