@@ -19,6 +19,30 @@ const desde5=new Date(Date.now()-6*60000).toISOString().slice(0,16)+'Z';
 const q=db.prepare(\"SELECT COALESCE(SUM(status_429),0) n FROM ml_llamadas_minuto WHERE minuto>=?\").get(desde5).n;
 console.log(JSON.stringify({recibos:r,incidentes:inc,ml_429_6min:q}));"
 }
+# Aviso (no aborta) de descartes masivos por canal, sobre la ventana acumulada desde el inicio de la
+# corrida: si un canal tiene más descartes que copias y al menos 20 descartes, esto se habría visto en
+# la primera medición (5 min) en vez de tardar horas, como pasó con el incidente de ML del 2026-09-16.
+revisar_descartes() {
+  local m="$1"
+  node -e "
+const r=JSON.parse(process.argv[1]).recibos;
+const agg={};
+for (const k in r) {
+  const [ch, st, rz] = k.split(':');
+  agg[ch] = agg[ch] || { copied: 0, discarded: 0, razones: {} };
+  if (st === 'copied') agg[ch].copied += r[k];
+  if (st === 'discarded') { agg[ch].discarded += r[k]; agg[ch].razones[rz] = (agg[ch].razones[rz] || 0) + r[k]; }
+}
+for (const ch in agg) {
+  const a = agg[ch];
+  if (a.discarded >= 20 && a.discarded > a.copied) {
+    let top = '', topn = -1;
+    for (const rz in a.razones) { if (a.razones[rz] > topn) { topn = a.razones[rz]; top = rz; } }
+    console.log('AVISO: canal ' + ch + ' con ' + a.discarded + ' descartes vs ' + a.copied + ' copias (razón principal: ' + top + ')');
+  }
+}
+" "$m"
+}
 # Decisión de José 2026-09-17: si ML devuelve 429, bajar el tope de relecturas de la sombra de a un escalón
 # (60→45→30→20→10) y sólo en el último caso dejarlo en 0; nunca apagar toda la copia por esto.
 ESCALONES_RPM=(60 45 30 20 10 0)
@@ -47,6 +71,7 @@ while [ "$(date +%s)" -lt "$fin" ]; do
   M="$(medir)"; S="$(sqlpg "select coalesce(string_agg(status||'='||n,','),'') from (select status,count(*) n from integrations.reconciliation_signals group by 1) t")"
   VIEJA="$(sqlpg "select coalesce(max(extract(epoch from now()-received_at))::int,0) from integrations.reconciliation_signals where status in ('pending','claimed','retryable')")"
   log "legado=$L plataforma=$PH señales[$S] señal_activa_mas_vieja_s=$VIEJA $M"
+  AV="$(revisar_descartes "$M")"; [ -n "$AV" ] && log "$AV"
   [ "$L" = 200 ] && fallos_legado=0 || fallos_legado=$((fallos_legado+1))
   [ "$PH" = ok ] && fallos_plataforma=0 || fallos_plataforma=$((fallos_plataforma+1))
   if [ "$fallos_legado" -ge 3 ]; then abortar "legado sin /healthz 200 en 3 mediciones"; break; fi
