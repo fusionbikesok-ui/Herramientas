@@ -25,7 +25,7 @@ describe('armarReporte', () => {
 
   // Sin esto, las señales de un caso cuentan en el siguiente y el resultado depende del orden.
   beforeEach(async () => {
-    await limpiar(admin, ['integrations.reconciliation_signals', 'informes.entregas']);
+    await limpiar(admin, ['integrations.reconciliation_signals', 'integrations.sweep_runs', 'informes.entregas']);
   });
 
   const senal = (extra: Record<string, unknown>) => pool.query(
@@ -79,13 +79,66 @@ describe('armarReporte', () => {
     expect(r.semaforo).toBe('rojo');
   });
 
+  // Un barrido de convergencia de envíos. `sweep_runs` referencia al cursor de su corriente, así que la
+  // cuenta tiene que tener sus corrientes sembradas (lo hace la migración para las cuentas existentes).
+  const barrido = async (inicio: string, conocidos: number, barridos: number, convergidos: number) => {
+    await pool.query('SELECT integrations.sembrar_corrientes($1)', [s.cuentaMl]);
+    await pool.query(`INSERT INTO integrations.sweep_runs
+      (channel_account_id, topic, cursor_kind, strategy, started_at, status, known_resources, swept, converged)
+      VALUES ($1, 'ml.shipments', 'state_sweep', 'convergence', $2, 'succeeded', $3, $4, $5)`,
+      [s.cuentaMl, inicio, conocidos, barridos, convergidos]);
+  };
+
+  // Un reporte ya enviado en `fecha` con el semáforo dado; `null` simula uno viejo sin semáforo guardado.
+  const reportePrevio = (fecha: string, semaforo: 'verde' | 'amarillo' | 'rojo' | null) => pool.query(
+    `INSERT INTO informes.entregas
+       (tipo, fecha, estado_deposito, estado_aviso, hash_contenido, semaforo, b2_object_key, b2_version_id, retention_until)
+     VALUES ('reporte', $1, 'subido', 'avisado', repeat('a', 64), $2, $3, 'v1', '2027-09-20T00:00:00Z')`,
+    [fecha, semaforo, `e1/reportes/${fecha}.json`],
+  );
+
   it('E1-REC-01 numera el día de campaña y recuerda el reporte anterior', async () => {
-    await pool.query(`INSERT INTO informes.entregas
-      (tipo, fecha, estado_deposito, estado_aviso, hash_contenido, b2_object_key, b2_version_id, retention_until)
-      VALUES ('reporte','2026-09-14','subido','avisado', repeat('a',64),
-              'e1/reportes/2026-09-14.json', 'v1', '2027-09-20T00:00:00Z')`);
+    await reportePrevio('2026-09-13', 'verde');
+    await reportePrevio('2026-09-14', 'amarillo');
     const r = await armarReporte(pool, '2026-09-15');
     expect(r.reporte_anterior).toBe('2026-09-14');
-    expect(r.dia_campana).toBeGreaterThanOrEqual(1);
+    // Dos días previos seguidos sin rojo más éste: tercer día. Amarillo no reinicia (diseño §9).
+    expect(r.dia_campana).toBe(3);
+  });
+
+  it('E1-REC-01 un día rojo anterior reinicia la campaña', async () => {
+    await reportePrevio('2026-09-12', 'verde');
+    await reportePrevio('2026-09-13', 'rojo');
+    await reportePrevio('2026-09-14', 'verde');
+    // Sin esto, la racha contaba días avisados y no días limpios: aprobaba 7 días con un rojo adentro.
+    expect((await armarReporte(pool, '2026-09-15')).dia_campana).toBe(2);
+  });
+
+  it('E1-REC-01 un día sin reporte también corta la campaña', async () => {
+    await reportePrevio('2026-09-12', 'verde');
+    await reportePrevio('2026-09-14', 'verde');
+    expect((await armarReporte(pool, '2026-09-15')).dia_campana).toBe(2);
+  });
+
+  it('E1-REC-01 si este día es rojo, la campaña queda en cero', async () => {
+    await reportePrevio('2026-09-14', 'verde');
+    await senal({ topic: 'woo.orders', resource: '9', fingerprint: 'ev:z', status: 'dead_lettered', recibida: '2026-09-15T12:00:00Z' });
+    const r = await armarReporte(pool, '2026-09-15');
+    expect(r.semaforo).toBe('rojo');
+    expect(r.dia_campana).toBe(0);
+  });
+
+  it('E1-REC-01 la convergencia incompleta de un barrido pinta amarillo', async () => {
+    await barrido('2026-09-16T12:00:00Z', 10, 10, 9);
+    const r = await armarReporte(pool, '2026-09-16');
+    expect(r.topicos['ml.shipments']).toMatchObject({ cobertura: 1, convergencia: 0.9 });
+    expect(r.semaforo).toBe('amarillo');
+  });
+
+  it('E1-REC-01 un barrido de otro día no cuenta', async () => {
+    await barrido('2026-09-17T12:00:00Z', 10, 5, 1);
+    const r = await armarReporte(pool, '2026-09-16');
+    expect(r.topicos['ml.shipments']).toBeUndefined();
+    expect(r.semaforo).toBe('verde');
   });
 });

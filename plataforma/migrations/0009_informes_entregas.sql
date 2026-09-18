@@ -13,6 +13,9 @@ CREATE TABLE informes.entregas (
   estado_deposito   text NOT NULL DEFAULT 'generado' CHECK (estado_deposito IN ('generado', 'firmado', 'subido')),
   estado_aviso      text NOT NULL DEFAULT 'pendiente' CHECK (estado_aviso IN ('pendiente', 'avisado')),
   hash_contenido    text NOT NULL CHECK (hash_contenido ~ '^[0-9a-f]{64}$'),
+  -- Sólo en los reportes: el semáforo con que salió ese día. La campaña contractual cuenta días seguidos que
+  -- no fueron rojos, y sin guardarlo habría que re-armar cada reporte viejo para saberlo.
+  semaforo          text CHECK (semaforo IN ('verde', 'amarillo', 'rojo')),
   kid               text,
   ruta_pendiente    text,
   b2_object_key     text,
@@ -37,7 +40,8 @@ CREATE TABLE informes.entregas (
   -- El email lleva adjunto el sobre firmado: avisar sin firmar es un estado imposible en el dominio.
   -- No exige haber subido — el aviso es deliberadamente independiente de Backblaze (hallazgo 2 de la
   -- revisión del 2026-09-17).
-  CONSTRAINT entregas_aviso_check CHECK (estado_aviso = 'pendiente' OR estado_deposito <> 'generado')
+  CONSTRAINT entregas_aviso_check CHECK (estado_aviso = 'pendiente' OR estado_deposito <> 'generado'),
+  CONSTRAINT entregas_semaforo_tipo_check CHECK ((tipo = 'reporte') OR semaforo IS NULL)
 );
 
 CREATE INDEX entregas_deposito_pendiente ON informes.entregas (fecha) WHERE estado_deposito <> 'subido';
