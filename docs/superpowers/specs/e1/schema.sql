@@ -874,6 +874,13 @@ CREATE TABLE catalog.copias_lotes (
   PRIMARY KEY (copy_id, numero)
 );
 
+-- Eventos del matcher ya aplicados. La outbox del legado reintenta con una firma nueva cada vez, así que el
+-- nonce no alcanza para deduplicar: un evento reintentado se reconoce por su id y no se aplica dos veces.
+CREATE TABLE catalog.eventos_recibidos (
+  evento_id   text PRIMARY KEY CHECK (length(evento_id) > 0),
+  recibido_en timestamptz NOT NULL DEFAULT now()
+);
+
 -- ─────────── permisos del esquema nuevo ───────────
 -- La app lee, inserta y actualiza. No borra: una baja es `archivado_en`, y un caso resuelto es
 -- `cerrado_en`. Que no tenga DELETE es lo que hace que "forward-only" no dependa de la disciplina.

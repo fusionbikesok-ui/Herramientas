@@ -5,6 +5,7 @@ import type pg from 'pg';
 import type { Logger } from 'pino';
 import { correlacionDe } from '../comun/correlacion.ts';
 import { sinSesion, type ProveedorSesion } from '../auth/sesion.ts';
+import { registrarCatalogoInterno } from './catalogo-interna.ts';
 import { registrarSenales, type OpcionesSenales } from './senales.ts';
 import { registrarEstadoInformes } from './informes.ts';
 import { registrarPasskeys, type OpcionesPasskeys } from './passkeys.ts';
@@ -138,6 +139,9 @@ export function crearApi(opciones: OpcionesApi) {
     registrarSenales(app, opciones.pool, opciones.logger, opciones.senales, ahora);
     // El estado de los informes viaja con el mismo keyring y orígenes: sin API interna, tampoco existe (404).
     registrarEstadoInformes(app, opciones.pool, opciones.logger, opciones.senales, ahora);
+    // Igual el catálogo interno (E2 T1): sólo escribe en catalog.matcher_decisions e identity_cases, y sin
+    // la outbox del legado encendida nadie lo llama.
+    registrarCatalogoInterno(app, opciones.pool, opciones.logger, opciones.senales, ahora);
   }
   return app;
 }
