@@ -178,8 +178,9 @@ describe('E1-SIG-02 API interna de señales', () => {
     const enviar = crearEmisorSombra({ db, url: 'http://127.0.0.1:3201', keyring, fetch: fetchInyectado });
     await enviar({ eventId: 'e1' });
     await enviar({ eventId: 'e1' });
-    // Woo no tiene cuenta configurada en este test: la API responde 409 y el emisor lo normaliza.
-    await expect(enviar({ eventId: 'e2' })).rejects.toThrow('invalid_resource');
+    // Woo no tiene cuenta configurada en este test: la API responde 409 y el emisor lo normaliza como
+    // `cuenta_no_configurada`, que es lo que distingue un problema de configuración de un dato inválido.
+    await expect(enviar({ eventId: 'e2' })).rejects.toThrow('cuenta_no_configurada');
     const filas = await admin.query<{ topic: string; resource_id: string; notification_id: string; source: string }>(
       "select topic,resource_id,notification_id,source from integrations.reconciliation_signals where resource_id='7777'");
     expect(filas.rows).toEqual([{ topic: 'ml.orders', resource_id: '7777', notification_id: 'n-7777', source: 'webhook_copy' }]);

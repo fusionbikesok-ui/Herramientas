@@ -124,13 +124,31 @@ describe('E1-PGDOWN-01 importación de pérdidas desde el legado', () => {
     expect(db.prepare('SELECT shadow_imported_at FROM integration_events WHERE event_id = ?').get(a).shadow_imported_at).not.toBeNull();
   });
 
-  it('si la cuenta sigue sin configurar, se detiene en el primero y no martilla', async () => {
+  it('si la cuenta sigue sin configurar, intenta una vez por canal y no martilla', async () => {
     recibo({ estado: 'discarded', razon: 'cuenta_no_configurada', completado: iso(600_000), recurso: '/items/MLA2', topic: 'items' });
     recibo({ estado: 'discarded', razon: 'cuenta_no_configurada', completado: iso(500_000), recurso: '/items/MLA3', topic: 'items' });
     let llamadas = 0;
     const r = await importarPerdidas({ db, enviarSenal: async () => { llamadas++; throw new Error('cuenta_no_configurada'); } });
-    expect(r).toMatchObject({ importadas: 0, detenida: true, pendientes: 2 });
+    expect(r).toMatchObject({ importadas: 0, bloqueadas: 2, detenida: false, pendientes: 2 });
     expect(llamadas).toBe(1);
+  });
+
+  it('un canal sin configurar no bloquea la recuperación de los otros', async () => {
+    // El 2026-09-17 el barrido se detenía en el primer recibo de ML y dejaba sin importar las pérdidas de Woo
+    // de la misma tanda. Un canal mal configurado no puede frenar a los demás.
+    recibo({ estado: 'discarded', razon: 'cuenta_no_configurada', completado: iso(600_000), recurso: '/items/MLA4', topic: 'items' });
+    const woo = db.prepare(`INSERT INTO integration_events (event_id,event_type,channel,source,resource_id,received_at,correlation_id,dedupe_key,metadata_json,status,
+        shadow_status,shadow_reason,completed_at)
+      VALUES ('ev-woo-1','webhook.received','woo','woocommerce','/orders/99',?,'c-woo','d-woo',?,'completed','discarded','platform_timeout',?)`);
+    woo.run(iso(500_000), JSON.stringify({ topic: 'order.updated' }), iso(500_000));
+    const enviadas = [];
+    const r = await importarPerdidas({ db, enviarSenal: async (s) => {
+      if (s.channel === 'mercadolibre') throw new Error('cuenta_no_configurada');
+      enviadas.push(s);
+    } });
+    expect(r).toMatchObject({ importadas: 1, bloqueadas: 1, detenida: false });
+    expect(enviadas.map((s) => s.resource_id)).toEqual(['99']);
+    expect(db.prepare("SELECT shadow_imported_at FROM integration_events WHERE event_id='ev-woo-1'").get().shadow_imported_at).not.toBeNull();
   });
 
   it('con la plataforma todavía caída se detiene y no marca nada; un recibo inválido no bloquea al resto', async () => {
