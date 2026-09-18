@@ -13,6 +13,7 @@
  *     una fusión o una revocación, y eso lo hace `decisiones.ts` (tarea 8), con su evento y su auditoría.
  */
 import type { Consultable } from '../db/pool.ts';
+import { bloquearDecisiones, reconciliarSku } from './decisiones.ts';
 import type { OrigenModelo, Proyeccion, RepresentacionObservada, SkuObservado } from './intenciones.ts';
 
 export type Canal = 'woocommerce' | 'mercadolibre';
@@ -129,6 +130,15 @@ async function vincularWoo(
   existente: RepExistente | undefined, obtenerModelo: () => Promise<string>, abrir: Abrir,
   cerrar: (variante: string, tipos: TipoCaso[], motivo: string) => Promise<unknown>,
 ): Promise<Vinculo> {
+  // Orden de candados: primero el de decisiones, después las filas. Si Woo asigna el SKU, reconciliarSku va a
+  // pedir el candado de las cuentas de ML; tomarlo DESPUÉS de bloquear la variante invertía el orden de un
+  // evento (candado → variante) y podía terminar en deadlock. Los advisory locks son reentrantes: pedirlo de
+  // nuevo más adelante no bloquea.
+  if (obs.sku.estado === 'canonico') {
+    const cuentasMl = (await tx.query<{ id: string }>(
+      "SELECT id FROM core.channel_accounts WHERE company_id = $1 AND channel = 'mercadolibre' ORDER BY id", [empresa])).rows;
+    for (const c of cuentasMl) await bloquearDecisiones(tx, c.id);
+  }
   const modelo = await obtenerModelo();
   const variante = existente?.variant_id ?? (await tx.query<{ id: string }>(
     'INSERT INTO catalog.sellable_variants (company_id, model_id) VALUES ($1, $2) RETURNING id',
@@ -158,6 +168,8 @@ async function vincularWoo(
       } else {
         await tx.query('UPDATE catalog.sellable_variants SET sku = $2, version = version + 1 WHERE id = $1', [variante, valor]);
         await cerrar(variante, CASOS_SKU_WOO, 'SKU canónico asignado');
+        // Publicaciones de ML que esperaban este SKU (caso sku_inexistente_en_woo) se fusionan ahora.
+        await reconciliarSku(tx, empresa, valor, `apareció ${valor} en Woo`);
       }
     }
     // Si la variante ya tiene otro SKU, el canónico de un id de Woo no cambia nunca: no hay nada que hacer.
@@ -177,6 +189,9 @@ async function vincularMl(
   if (existente?.variant_id) return { modelo: null, variante: existente.variant_id, omitida: false };
   if (existente?.omitida_por_decision) return { modelo: null, variante: null, omitida: true };
 
+  // Mismo candado que los eventos: si no, un evento que llega mientras esta publicación nueva todavía no está
+  // confirmada no la encuentra, y acá se lee "sin decisión": quedaría pendiente con una decisión vigente.
+  await bloquearDecisiones(tx, ctx.cuenta);
   const decision = (await tx.query<{ accion: string; sku: string | null }>(
     `SELECT accion, sku FROM catalog.matcher_decisions
       WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND vigente_hasta IS NULL`,
