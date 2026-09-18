@@ -96,6 +96,26 @@ describe('armarManifiesto', () => {
     } finally { await admin.end(); await app.end(); await sola.borrar(); }
   });
 
+  it('E1-AUD-04 un día vacío SÍ verifica la cadena anterior a ese día', async () => {
+    // El caso que faltaba: verificado por mutación el 2026-09-18, el test de arriba pasa igual si el día vacío
+    // no verifica NADA. Lo que distingue al arreglo correcto es que un día vacío sigue verificando hasta su
+    // propio extremo, así que una corrupción ANTERIOR a ese día se informa igual.
+    const sola = await crearBaseDePrueba();
+    const admin = crearPool(sola.urlAdmin); const app = crearPool(sola.urlApp);
+    try {
+      const semilla = await sembrar(app);
+      await registrarEventoFechado(app, semilla.companyId, 1, '2025-12-20T15:00:00Z');
+      await registrarEventoFechado(app, semilla.companyId, 2, '2025-12-21T15:00:00Z');
+      await admin.query(`ALTER TABLE audit.audit_events DISABLE TRIGGER ALL`);
+      await admin.query(`UPDATE audit.audit_events SET payload = '{"tocado":true}' WHERE chain_seq = 1`);
+      // El 2026-01-05 no tiene eventos, pero la cadena que lo precede está rota: hay que decirlo.
+      const m = await armarManifiesto(app, '2026-01-05');
+      expect(m.eventos).toBe(0);
+      expect(m.cadena.integra).toBe(false);
+      expect(m.cadena.roto_en).not.toBeNull();
+    } finally { await admin.end(); await app.end(); await sola.borrar(); }
+  });
+
   it('E1-AUD-04 un día sin eventos y sin cadena previa usa el hash cero', async () => {
     const vacia = await crearBaseDePrueba();
     const p2 = crearPool(vacia.urlApp);
