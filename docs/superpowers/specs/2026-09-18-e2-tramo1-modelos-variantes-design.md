@@ -128,9 +128,19 @@ No están en Woo ni en ML: viven sólo en el legado, en una tabla que **se pisa 
 | Woo, cada variación | el del padre | una | una `vendible` |
 | ML, ítem simple **con** decisión | el de la variante del SKU | la del SKU | una `vendible` |
 | ML, ítem clásico con variaciones | uno, `ml_clasico`, si no se vincula a uno de Woo | una por variación | una `contenedor` para el ítem y una `vendible` por variación |
-| ML, ítems `user_product` de la misma familia | **uno solo** para la familia, `ml_familia`, con `user_product_id` como clave | una por ítem | una `vendible` por ítem |
+| ML, ítem sin variaciones (incluye el modelo nuevo) | uno, `ml_simple`, si no se vincula a uno de Woo | una | una `vendible`, con su `user_product_id` como pista |
 | ML sin decisión | el que corresponda por las reglas de arriba | **variante con SKU pendiente** | la que corresponda, más caso `sku_pendiente` |
 | ML con `omitir` | — | ninguna | representación marcada **omitida por decisión**, más caso `omitida_revisar` de baja prioridad |
+
+**Corrección del 2026-09-18 (implementación, tarea 5).** Esta sección decía que los ítems `user_product` de
+una misma familia van a un solo modelo `ml_familia` con `user_product_id` como clave. Los datos lo desmienten: en
+las 6.969 filas de `ml_publicaciones_cache` del legado **todas** tienen `user_product_id`, cada variación del
+modelo viejo tiene el suyo (565 de 565 ítems con variaciones), y hay valores compartidos por dos publicaciones
+distintas (por ejemplo, la variación `184864981315` de `MLA1401411650` y el ítem `MLA1775660825`). O sea que
+`user_product_id` identifica **lo que se vende**, no una familia. Decisión de José: es una **pista de variante**,
+se guarda en cada representación y, si dos publicaciones que lo comparten no terminan en la misma variante, se abre
+un caso `user_product_divergente`; nunca se fusiona sola. El id de familia no está en los datos que tenemos:
+`ml_familia` queda reservado hasta confirmarlo con un payload real.
 
 ### 5.3 SKU de Woo: el observado y el canónico no son lo mismo
 

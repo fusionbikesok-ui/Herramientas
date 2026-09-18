@@ -671,7 +671,9 @@ CREATE TABLE catalog.product_models (
   company_id         uuid NOT NULL REFERENCES core.companies(id) ON DELETE RESTRICT,
   channel_account_id uuid NOT NULL REFERENCES core.channel_accounts(id) ON DELETE RESTRICT,
   origen             text NOT NULL CHECK (origen IN ('woo_padre', 'woo_simple', 'ml_familia', 'ml_clasico', 'ml_simple')),
-  -- Para `ml_familia` es el user_product_id, que es justamente lo que agrupa a la familia.
+  -- Para `ml_familia`, el id de la familia de ML. NO es el user_product_id: ése identifica una variante
+  -- (cada variación del modelo viejo tiene el suyo, y dos publicaciones pueden compartirlo). Verificado el
+  -- 2026-09-18 sobre las 6.969 filas de la cache del legado.
   clave_origen       text NOT NULL CHECK (length(clave_origen) > 0),
   titulo             text NOT NULL,
   observado_en       timestamptz NOT NULL DEFAULT now(),
@@ -738,7 +740,7 @@ CREATE TABLE catalog.external_representations (
   model_id              uuid REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
   variant_id            uuid REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
   sku_observado         text,                 -- lo que dice el canal, tal cual, aunque esté mal
-  user_product_id       text,                 -- ML: la familia a la que pertenece el ítem
+  user_product_id       text,                 -- ML: el producto que se vende. Pista de variante, no identidad
   estado_remoto         text,
   version_remota        text,
   omitida_por_decision  boolean NOT NULL DEFAULT false,
@@ -758,7 +760,7 @@ CREATE TABLE catalog.external_representations (
 );
 CREATE INDEX external_representations_variante ON catalog.external_representations (variant_id);
 CREATE INDEX external_representations_modelo ON catalog.external_representations (model_id);
-CREATE INDEX external_representations_familia
+CREATE INDEX external_representations_user_product
   ON catalog.external_representations (channel_account_id, user_product_id) WHERE user_product_id IS NOT NULL;
 
 -- ───────────────────────────── la evidencia del legado ─────────────────────────────
@@ -799,7 +801,10 @@ CREATE TABLE catalog.identity_cases (
   company_id      uuid NOT NULL REFERENCES core.companies(id) ON DELETE RESTRICT,
   tipo            text NOT NULL CHECK (tipo IN (
                     'sku_pendiente', 'omitida_revisar', 'sku_inexistente_en_woo', 'woo_sin_sku',
-                    'woo_sku_duplicado', 'woo_sku_no_canonico', 'decision_en_conflicto', 'identidad_legado')),
+                    'woo_sku_duplicado', 'woo_sku_no_canonico', 'decision_en_conflicto', 'identidad_legado',
+                    -- Dos publicaciones de ML con el mismo user_product_id (ML dice que venden lo mismo) que
+                    -- el matcher no vincula a la misma variante. Pista, no identidad: se revisa, no se fusiona.
+                    'user_product_divergente')),
   prioridad       text NOT NULL DEFAULT 'normal' CHECK (prioridad IN ('baja', 'normal', 'urgente')),
   variant_id      uuid REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
   representation_id uuid REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
