@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cargarClaveFirma, firmar, huella, verificar } from '../../src/informes/firma.ts';
+import { cargarClaveFirma, firmar, huella, verificar, verificarPar } from '../../src/informes/firma.ts';
 
 describe('firma', () => {
   let dir: string; let ruta: string; let publicaPem: string;
@@ -69,6 +69,15 @@ describe('firma', () => {
     const clave = cargarClaveFirma(ruta);
     expect(clave.kid).toBe('k1');
     expect(clave.privada.asymmetricKeyType).toBe('ed25519');
+  });
+  it('detecta que la pública anunciada no es la pareja de la privada', () => {
+    // Hallazgo alto de la revisión de T4: el scheduler cargaba las dos por separado y nadie comprobaba que
+    // fueran pareja. Con una rotación a medias, los informes salen firmados y nadie puede verificarlos.
+    const clave = cargarClaveFirma(ruta);
+    expect(() => verificarPar(clave, publicaPem)).not.toThrow();
+    const otra = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    expect(() => verificarPar(clave, otra)).toThrow(/no corresponde a la privada/);
+    expect(() => verificarPar(clave, 'no es un PEM')).toThrow(/no se pudo comprobar el par/);
   });
 });
 

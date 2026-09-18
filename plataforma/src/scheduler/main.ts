@@ -6,7 +6,7 @@ import { alApagar } from '../comun/apagado.ts';
 import { tomarExclusion, type ExclusionScheduler } from './exclusion.ts';
 import { crearScheduler } from './scheduler.ts';
 import { readFileSync } from 'node:fs';
-import { cargarClaveFirma, huella } from '../informes/firma.ts';
+import { cargarClaveFirma, huella, verificarPar } from '../informes/firma.ts';
 import { crearDeposito } from '../informes/deposito.ts';
 import { enviar } from '../informes/correo.ts';
 import type { CfgInformes } from '../informes/vuelta.ts';
@@ -21,11 +21,15 @@ function armarInformes(): CfgInformes | undefined {
   const i = config.informes;
   if (!i) return undefined;
   const clave = cargarClaveFirma(i.claveFirmaFile);
+  const publicaPem = readFileSync(i.clavePublicaUbicacion, 'utf8');
+  // Si la pública anunciada no es la pareja de la privada, los informes salen firmados pero nadie puede
+  // verificarlos: mejor no arrancar que emitir evidencia que parece sana y no lo es.
+  verificarPar(clave, publicaPem);
   return {
     clave,
     deposito: crearDeposito({ ...i.b2, prefijo: 'e1/', dirPendientes: i.pendientesDir }),
     correo: { enviar: (mensaje) => enviar(i.smtp, mensaje) },
-    datosClave: { kid: clave.kid, huella: huella(readFileSync(i.clavePublicaUbicacion, 'utf8')), ubicacion: i.clavePublicaUbicacion },
+    datosClave: { kid: clave.kid, huella: huella(publicaPem), ubicacion: i.clavePublicaUbicacion },
   };
 }
 const informes = armarInformes();

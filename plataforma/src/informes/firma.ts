@@ -71,6 +71,23 @@ export function verificar(sobre: unknown, publicas: Record<string, string>): { v
   return ok ? { valido: true, contenido } : { valido: false, motivo: 'firma_invalida' };
 }
 
+/**
+ * Comprueba que la pública anunciada sea la pareja de la privada que firma. Sin esto, una rotación a medias o un
+ * montaje equivocado producen informes correctamente firmados que el email y el verificador atribuyen a OTRA
+ * clave: nadie podría verificarlos, y la evidencia parecería sana (hallazgo alto de la revisión de T4).
+ * Se verifica firmando y verificando un valor de prueba, que es la única comprobación que no se puede fingir.
+ */
+export function verificarPar(clave: { kid: string; privada: KeyObject }, publicaPem: string): void {
+  const prueba = Buffer.from(`par:${clave.kid}`, 'utf8');
+  let ok = false;
+  try {
+    ok = verify(null, prueba, createPublicKey(publicaPem), sign(null, prueba, clave.privada));
+  } catch (e) {
+    throw new ErrorFirma(`no se pudo comprobar el par de claves: ${(e as Error).message}`);
+  }
+  if (!ok) throw new ErrorFirma(`la clave pública anunciada no corresponde a la privada (kid ${clave.kid})`);
+}
+
 export function huella(publicaPem: string): string {
   const spki = createPublicKey(publicaPem).export({ type: 'spki', format: 'der' });
   return createHash('sha256').update(spki).digest('base64');
