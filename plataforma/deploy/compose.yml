@@ -59,7 +59,46 @@ services:
     extra_hosts: ["host.docker.internal:host-gateway"]
   scheduler:
     <<: *servicio
-    environment: { <<: *env, SERVICIO: scheduler, INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-scheduler" }
+    environment:
+      <<: *env
+      SERVICIO: scheduler
+      INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-scheduler"
+      # Informes firmados (E1 T4). Todo o nada: vacías = el scheduler no los emite; con una sola cargada,
+      # el arranque falla con la lista de las que faltan. Las rutas son las de adentro del contenedor.
+      INFORMES_CLAVE_FIRMA_FILE: ${INFORMES_CLAVE_FIRMA_FILE:-}
+      INFORMES_PENDIENTES_DIR: ${INFORMES_PENDIENTES_DIR:-}
+      INFORMES_CLAVE_PUBLICA_UBICACION: ${INFORMES_CLAVE_PUBLICA_UBICACION:-}
+      B2_ENDPOINT: ${B2_ENDPOINT:-}
+      B2_REGION: ${B2_REGION:-}
+      B2_BUCKET: ${B2_BUCKET:-}
+      B2_ESCRITURA_ID_FILE: ${B2_ESCRITURA_ID_FILE:-}
+      B2_ESCRITURA_CLAVE_FILE: ${B2_ESCRITURA_CLAVE_FILE:-}
+      B2_LECTURA_ID_FILE: ${B2_LECTURA_ID_FILE:-}
+      B2_LECTURA_CLAVE_FILE: ${B2_LECTURA_CLAVE_FILE:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PUERTO: ${SMTP_PUERTO:-}
+      SMTP_SEGURO: ${SMTP_SEGURO:-}
+      SMTP_USUARIO_FILE: ${SMTP_USUARIO_FILE:-}
+      SMTP_CLAVE_FILE: ${SMTP_CLAVE_FILE:-}
+      SMTP_DESDE: ${SMTP_DESDE:-}
+      INFORMES_PARA: ${INFORMES_PARA:-}
+    volumes:
+      - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
+      - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
+      # Archivo por archivo, no la carpeta de secretos entera: así el scheduler no ve la contraseña del
+      # migrador ni nada que no use. Si el archivo del host no existe, Docker crea una carpeta vacía en su lugar
+      # y el arranque falla en la guarda de "archivo regular", que es lo que se quiere.
+      - ${KEYRING_DIR:?KEYRING_DIR requerido}/firma-informes.pem:/run/fusion-informes/firma-informes.pem:ro
+      - ${SECRET_DIR}/b2-escritura-id:/run/fusion-informes/b2-escritura-id:ro
+      - ${SECRET_DIR}/b2-escritura-clave:/run/fusion-informes/b2-escritura-clave:ro
+      - ${SECRET_DIR}/b2-lectura-id:/run/fusion-informes/b2-lectura-id:ro
+      - ${SECRET_DIR}/b2-lectura-clave:/run/fusion-informes/b2-lectura-clave:ro
+      - ${SECRET_DIR}/smtp-usuario:/run/fusion-informes/smtp-usuario:ro
+      - ${SECRET_DIR}/smtp-clave:/run/fusion-informes/smtp-clave:ro
+      # La pública que se anuncia en el email; el scheduler verifica al arrancar que sea pareja de la privada.
+      - ${INFORMES_CLAVE_PUBLICA_HOST:-../../docs/superpowers/specs/e1/firma-informes/e1-2026-09.pub}:/run/fusion-informes/firma-informes.pub:ro
+      # Único montaje de escritura: los informes firmados que todavía no se pudieron subir a B2.
+      - ${INFORMES_PENDIENTES_HOST:?INFORMES_PENDIENTES_HOST requerido}:/var/lib/fusion-informes
     command: ["node", "src/scheduler/main.ts"]
   migrate:
     build: { context: .., dockerfile: deploy/Dockerfile }
