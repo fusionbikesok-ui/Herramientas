@@ -34,6 +34,8 @@ services:
       SENALES_KEYRING_FILE: ${SENALES_KEYRING_FILE:-}
       SENALES_CUENTAS: ${SENALES_CUENTAS:-}
       SENALES_ORIGENES: ${SENALES_ORIGENES:-}
+      # El mismo registro que usa el worker: la API no arranca si sus cuentas no coinciden con SENALES_CUENTAS.
+      BARRIDOS_REGISTRO_FILE: ${BARRIDOS_REGISTRO_FILE:-}
     volumes:
       - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
       - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro

@@ -79,3 +79,26 @@ export async function validarRegistroContraBase(db: Consultable, cuentas: readon
     }
   }
 }
+
+/**
+ * Contrasta las cuentas que acepta la API de señales (`SENALES_CUENTAS`) con las que consume el worker (el
+ * registro). Tienen que ser exactamente las mismas: el 2026-09-17 la cuenta de ML faltaba en la API y en el
+ * registro, y la plataforma rechazó TODAS las señales de ML durante cinco horas sin que nadie lo notara. Con
+ * una cuenta sólo en la API, las señales se aceptan y nadie las consume; con una sólo en el registro, se
+ * rechazan con 409. Devuelve la lista de diferencias, vacía si coinciden.
+ */
+export function contrastarCuentas(
+  senales: ReadonlyMap<string, string>, registro: readonly CuentaRegistrada[],
+): string[] {
+  const diferencias: string[] = [];
+  const enRegistro = new Map<string, string>(registro.map((c) => [c.channel, c.id]));
+  for (const [canal, id] of senales) {
+    const suya = enRegistro.get(canal);
+    if (!suya) diferencias.push(`${canal} está en SENALES_CUENTAS pero no en el registro del worker: sus señales se aceptan y nadie las consume`);
+    else if (suya !== id) diferencias.push(`${canal} tiene un uuid distinto en SENALES_CUENTAS y en el registro del worker`);
+  }
+  for (const [canal] of enRegistro) {
+    if (!senales.has(canal)) diferencias.push(`${canal} está en el registro del worker pero no en SENALES_CUENTAS: sus señales se rechazan con 409`);
+  }
+  return diferencias;
+}
