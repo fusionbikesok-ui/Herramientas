@@ -35,6 +35,42 @@ const EXIGIDOS = { 1: TRAMO_1, 2: TRAMO_2, 3: TRAMO_3, 4: TRAMO_4 };
 // Mínimo de pruebas que pasaron por escenario. Con un solo `it` por ID alcanzaba para pintarlo verde, sin
 // demostrar los subcasos que el contrato enumera (revisión del plan del tramo 4, hallazgo 18).
 const MINIMOS = { 'E1-AUD-04': 4, 'E1-REC-01': 6, 'E1-WA-01': 6 };
+// Contar pruebas no alcanza: seis variantes del mismo camino feliz satisfacían el mínimo sin cubrir los
+// subcasos que `docs/superpowers/specs/e1/test-e1.md` enumera (revisión de T4 del 2026-09-18, hallazgo medio).
+// Cada subcase exige que AL MENOS UNA prueba que pasó lo nombre. El nombre del subcase es lo que se imprime
+// cuando falta, así que dice qué hay que escribir.
+const SUBCASOS = {
+  'E1-AUD-04': [
+    ['extremos exactos de la cadena', /extremos exactos/i],
+    ['día vacío', /d[ií]a (sin eventos|vac[ií]o)/i],
+    ['verificación acotada al extremo del día', /(s[óo]lo hasta el extremo|no verifica m[áa]s all[áa]|no m[áa]s all[áa])/i],
+    ['cadena rota informada sin fallar', /cadena (est[áa] )?rota|se rompa/i],
+  ],
+  'E1-REC-01': [
+    ['ventana del día congelada', /ventana del d[ií]a/i],
+    ['estado al corte', /al corte/i],
+    ['faltante explicado sólo por motivo registrado', /motivo registrado/i],
+    ['semáforo rojo por faltante sin explicar', /(sin motivo|fuera de la lista).*rojo|rojo/i],
+    ['peor barrido del día', /peor/i],
+    ['convergencia', /convergencia/i],
+    ['alertas operativas del día', /alertas operativas/i],
+    ['la campaña sólo cuenta días verdes', /campa[ñn]a/i],
+    ['B2 no duplica ante una subida en duda', /(adopta en lugar de subir|no lo pisa)/i],
+    ['el email sale aunque B2 falle', /B2 falla.*email/i],
+  ],
+  'E1-WA-01': [
+    ['las cuatro etapas con el autenticador virtual', /autenticador virtual/i],
+    ['desafío de un solo uso', /desaf[íi]o se usa una sola vez/i],
+    ['desafío vencido', /desaf[íi]o vencido/i],
+    ['desafío de otro propósito', /no sirve para un login/i],
+    ['origen ajeno rechazado', /origen distinto/i],
+    ['verificación de usuario exigida', /verificaci[óo]n de usuario/i],
+    ['contador que retrocede rechazado', /contador que retrocede/i],
+    ['doble llave: una sola no habilita', /(fila sola no alcanza|sin la variable)/i],
+    ['todas las rutas registradas en 503', /TODAS las rutas/i],
+    ['recuperación con límite y sin revelar el usuario', /(no dice si el usuario existe|intentos fallidos)/i],
+  ],
+};
 
 function argumentos(argv) {
   const salida = { tramo: '1', reportes: [], verificado: [], evidencia: new Map() };
@@ -79,8 +115,13 @@ const cobertura = exigidos.map((id) => {
   if (evidencia.has(id)) return { id, por: `evidencia ${evidencia.get(id)}` };
   // El id va seguido de fin de palabra para que E1-Q-01 no cubra E1-Q-010.
   const patron = new RegExp(`${id}(?![0-9-])`);
-  const cuantas = pasadas.filter((n) => patron.test(n)).length;
+  const suyas = pasadas.filter((n) => patron.test(n));
+  const cuantas = suyas.length;
   const minimo = MINIMOS[id] ?? 1;
+  const faltantes = (SUBCASOS[id] ?? []).filter(([, sub]) => !suyas.some((n) => sub.test(n))).map(([nombre]) => nombre);
+  if (faltantes.length) {
+    return { id, por: null, detalle: `sin cubrir: ${faltantes.join('; ')}` };
+  }
   if (cuantas >= minimo) return { id, por: `${cuantas} prueba(s)` };
   return { id, por: null, detalle: cuantas ? `${cuantas} de ${minimo} pruebas mínimas` : undefined };
 });

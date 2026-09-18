@@ -67,7 +67,7 @@ describe('vueltaDeInformes', () => {
     ]);
   });
 
-  it('escribe las tablas canónicas del tramo 1 con la versión real', async () => {
+  it('E1-REC-01 escribe las tablas canónicas del tramo 1 con la versión real', async () => {
     await correr('2026-09-17T10:00:00Z');
     const m = (await pool.query(`SELECT b2_version_id, retention_mode, signing_key_id FROM audit.audit_daily_manifests`)).rows;
     expect(m).toEqual([{ b2_version_id: 'v1', retention_mode: 'compliance', signing_key_id: 'k1' }]);
@@ -103,7 +103,7 @@ describe('vueltaDeInformes', () => {
     expect(emails).toHaveLength(1);
   });
 
-  it('si el proceso cayó después de que B2 aceptó la subida, la adopta en lugar de subir otra copia', async () => {
+  it('E1-REC-01 si el proceso cayó después de que B2 aceptó la subida, la adopta en lugar de subir otra copia', async () => {
     // Primera vuelta: B2 acepta el PUT del manifiesto pero el proceso "se cae" antes de anotarlo.
     // La consulta previa encuentra vacío; después del PUT la red se corta y ya no se puede confirmar.
     const subirReal = cfg.deposito.subir;
@@ -128,7 +128,7 @@ describe('vueltaDeInformes', () => {
     expect(filas).toEqual([{ estado_deposito: 'subido', b2_version_id: 'v1' }, { estado_deposito: 'subido', b2_version_id: 'v2' }]);
   });
 
-  it('si en B2 ya hay OTRO contenido para esa clave, no lo pisa y lo anota', async () => {
+  it('E1-REC-01 si en B2 ya hay OTRO contenido para esa clave, no lo pisa y lo anota', async () => {
     b2.set('e1/manifiestos/2026-09-16.json', { versionId: 'vx', retencion: '2027-12-01T00:00:00Z', modo: 'COMPLIANCE', sha256: sha('otra cosa'), cuerpo: 'otra cosa' });
     const r = await correr('2026-09-17T10:00:00Z');
     expect(r.fallados).toContain('manifiesto:2026-09-16');
@@ -145,7 +145,7 @@ describe('vueltaDeInformes', () => {
     expect(r.fallados).toEqual(['manifiesto:2026-09-16', 'reporte:2026-09-16']);
   });
 
-  it('si B2 falla, el email igual sale y la subida queda pendiente y reintentable', async () => {
+  it('E1-REC-01 si B2 falla, el email igual sale y la subida queda pendiente y reintentable', async () => {
     cfg.deposito.subir = async () => { throw new Error('sin red'); };
     const r = await correr('2026-09-17T10:00:00Z');
     expect(r.fallados).toContain('manifiesto:2026-09-16');
