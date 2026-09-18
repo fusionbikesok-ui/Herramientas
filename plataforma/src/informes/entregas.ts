@@ -22,7 +22,7 @@ export interface Reclamo { tipo: TipoEntrega; fecha: string; testigo: string; de
 const LEASE_MS = 10 * 60_000;
 const HORAS_INCIDENTE = 24;
 const ANTERIOR: Record<Exclude<EstadoDeposito, 'generado'>, EstadoDeposito> = { firmado: 'generado', subido: 'firmado' };
-const DATOS_PERMITIDOS = new Set(['kid', 'ruta_pendiente', 'b2_object_key', 'b2_version_id', 'retention_until']);
+const DATOS_PERMITIDOS = new Set(['kid', 'ruta_pendiente', 'b2_object_key', 'b2_version_id', 'retention_until', 'semaforo']);
 
 export async function reclamar(
   db: Consultable, tipo: TipoEntrega, fecha: string,

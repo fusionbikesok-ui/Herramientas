@@ -25,7 +25,8 @@
     "lint": "eslint .",
     "lint:diff": "bash -c 'base=$(git merge-base origin/conteo-confiable HEAD); f=$(git diff --name-only --diff-filter=ACMR $base -- \"*.js\" \"*.mjs\"); [ -z \"$f\" ] && echo \"sin archivos JS en el diff\" || npx eslint $f'",
     "test:e0": "bash scripts/postgres/test-e0.sh",
-    "test:e1": "bash scripts/test-e1.sh"
+    "test:e1": "bash scripts/test-e1.sh",
+    "verificar-informe": "node scripts/verificar-informe.mjs"
   },
   "keywords": [],
   "author": "",

@@ -45,4 +45,17 @@ describe('canonizar', () => {
     conHueco[5] = 7;
     expect(() => canonizar(conHueco)).toThrow(/undefined/);
   });
+
+  it('da exactamente la salida del ejemplo publicado en RFC 8785 (§3.2.4)', () => {
+    // Vector externo: el verificador del repo reusa esta misma implementación, así que un error compartido
+    // (números, escapado, orden) sólo lo detecta una salida producida por otro.
+    const entrada = String.raw`{
+      "numbers": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001],
+      "string": "\u20ac$\u000F\u000aA'\u0042\u0022\u005c\\\"\/",
+      "literals": [null, true, false]
+    }`;
+    const esperado = String.raw`{"literals":[null,true,false],"numbers":[333333333.3333333,1e+30,4.5,0.002,1e-27],"string":"\u20ac$\u000f\nA'B\"\\\\\"/"}`;
+    // El euro va literal en la salida canónica: se reemplaza la secuencia del texto esperado por el carácter.
+    expect(canonizar(JSON.parse(entrada))).toBe(esperado.replace('\\u20ac', '€'));
+  });
 });

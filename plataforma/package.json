@@ -11,7 +11,9 @@
     "migrar": "node src/db/cli-migrar.ts"
   },
   "dependencies": {
+    "@simplewebauthn/server": "14.0.2",
     "fastify": "5.12.4",
+    "nodemailer": "9.1.1",
     "pg": "8.23.0",
     "pino": "10.3.1",
     "zod": "4.6.5"
@@ -19,6 +21,7 @@
   "devDependencies": {
     "@apidevtools/swagger-parser": "13.0.0",
     "@types/node": "24.13.4",
+    "@types/nodemailer": "8.0.2",
     "@types/pg": "8.23.1",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",

@@ -35,6 +35,25 @@ describe('configuración', () => {
     }
   });
 
+  it('informes: todo o nada, y los secretos se leen de archivos', () => {
+    const informes = {
+      INFORMES_CLAVE_FIRMA_FILE: '/k/firma.pem', INFORMES_PENDIENTES_DIR: '/pendientes',
+      INFORMES_CLAVE_PUBLICA_UBICACION: '/pub/firma.pub',
+      B2_ENDPOINT: 'https://s3.us-west-000.backblazeb2.com', B2_REGION: 'us-west-000', B2_BUCKET: 'b',
+      B2_ESCRITURA_ID_FILE: '/s/b2w-id', B2_ESCRITURA_CLAVE_FILE: '/s/b2w', B2_LECTURA_ID_FILE: '/s/b2r-id', B2_LECTURA_CLAVE_FILE: '/s/b2r',
+      SMTP_HOST: 'smtp', SMTP_PUERTO: '587', SMTP_USUARIO_FILE: '/s/smtp-u', SMTP_CLAVE_FILE: '/s/smtp', SMTP_DESDE: 'a@b', INFORMES_PARA: 'c@d',
+    };
+    const leer = (ruta: string) => `valor de ${ruta}\n`;
+    expect(cargarConfig(env, leer).informes).toBeUndefined();
+    const c = cargarConfig({ ...env, ...informes }, leer).informes!;
+    // Los secretos salen del archivo, recortados; nunca del valor de la variable.
+    expect(c.b2.escritura).toEqual({ id: 'valor de /s/b2w-id', clave: 'valor de /s/b2w' });
+    expect(c.smtp).toMatchObject({ puerto: 587, seguro: false, clave: 'valor de /s/smtp' });
+    const { SMTP_CLAVE_FILE: _sin, ...incompleto } = informes;
+    expect(() => cargarConfig({ ...env, ...incompleto }, leer)).toThrow(/SMTP_CLAVE_FILE/);
+    expect(() => cargarConfig({ ...env, ...informes }, () => '  ')).toThrow(/vacío/);
+  });
+
   it('E1-ACC-01 barridos: registro+keyring todo o nada y sin variables de cuenta única', () => {
     const leer = () => 'x';
     expect(cargarConfig({ ...env, BARRIDOS_REGISTRO_FILE: '/r.json', BARRIDOS_KEYRING_FILE: '/k.json' }, leer).barridos)

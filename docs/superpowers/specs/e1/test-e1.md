@@ -36,7 +36,7 @@ completas de Woo son de sólo presencia: enumeran IDs para declarar bajas y no r
 | 1. Fundación | E1-SCH-01, E1-SCH-02, E1-AUD-01, E1-AUD-02, E1-AUD-03, E1-Q-01..06, E1-DUP-01, E1-CAP-01, E1-API-01, E1-SVC-01 |
 | 2. Barridos | tramo 1 + E1-SWP-01..09, E1-CONV-01, E1-DEL-01 |
 | 3. Sombra en vivo | tramo 2 + E1-LAT-01, E1-PGDOWN-01, E1-RCP-01..02, E1-QUE-01, E1-SIG-01..02, E1-ACC-01, E1-GW-01..02, E1-RER-01, E1-MFD-01, E1-BLK-01, E1-SOAK-01 |
-| 4. Seguridad y reporte | tramo 3 + E1-AUD-04, E1-REC-01, E1-WA-01 (los 24 de la tabla) |
+| 4. Seguridad y reporte | tramo 3 + E1-AUD-04 (mín. 4 pruebas), E1-REC-01 (mín. 6), E1-WA-01 (mín. 6). E1-LAT-01, E1-PGDOWN-01, E1-GW-02 y E1-SOAK-01 se cubren con evidencia fechada (`--evidencia`), y E1-RCP/QUE con los tests del legado |
 
 ## Escenarios
 
@@ -47,7 +47,7 @@ completas de Woo son de sólo presencia: enumeran IDs para declarar bajas y no r
 | E1-AUD-01 | cadena de auditoría | 1.000 eventos | `audit.verify_chain()` devuelve NULL; `chain_seq` continuo | rompe |
 | E1-AUD-02 | append-only y detección | UPDATE/DELETE/TRUNCATE; luego alteración directa deshabilitando el trigger como superusuario | los tres rechazados; la alteración directa se detecta en el id exacto | se acepta o no se detecta |
 | E1-AUD-03 | concurrencia de la cadena | 4 conexiones insertando 500 eventos cada una | cadena íntegra y 2.000 hashes únicos | bifurcación o hash duplicado |
-| E1-AUD-04 | manifiesto diario | día con eventos | manifiesto firmado Ed25519, `retention_until` ≥ 365 días, subida al simulador S3 y verificación de firma | firma inválida o retención menor |
+| E1-AUD-04 | manifiesto diario | día con eventos; día vacío; cadena rota; evento posterior al día | manifiesto firmado Ed25519 sobre JCS con extremos exactos de la cadena, leído en un snapshot `REPEATABLE READ`; el día vacío se emite con extremos nulos y el último hash conocido, y verifica sólo hasta ese extremo; la cadena rota se informa sin fallar; la retención no va en el contenido firmado, se fija al subir en modo COMPLIANCE ≥ 365 días | firma inválida, extremo corrido, verificación sin tope o retención menor |
 | E1-Q-01 | claim | mensaje `pending` | un worker lo reclama con lease; `status=claimed` | queda sin lease |
 | E1-Q-02 | éxito | lease vigente | `succeeded` y evento auditado; token vencido → 409 sin efecto | acepta token vencido |
 | E1-Q-03 | incierto | simulador corta la respuesta tras el efecto | `uncertain`, sin reintento ciego, relectura agendada | repite la operación |
@@ -75,8 +75,8 @@ completas de Woo son de sólo presencia: enumeran IDs para declarar bajas y no r
 | E1-SOAK-01 | soak de 24 horas | sombra encendida al 100 % durante 24 h | sin cambios de ACK, sin cola saturada, sin señal vieja, cobertura y convergencia sostenidas y rollback ensayado | cualquier umbral del diseño excedido |
 
 > **E1-SOAK-01 — dispensado por José el 2026-09-17.** No se corrieron las 24 h: José aprobó el comportamiento observado en la prueba de ~3,5 h con Woo al 100 % (0 abortos, 0 incidentes) y dio el criterio por aceptado tal como está. Evidencia: `docs/superpowers/evidence/e1/2026-09-17-E1-C10-canario-woo.md`. No es un soak de 24 h cumplido.
-| E1-REC-01 | reporte diario | día simulado | reporte con paridad/cobertura/convergencia por tópico, firmado, en S3 simulado con retención governance 365 d y email con adjuntos (JSON + firma) | falta firma, retención o adjuntos |
-| E1-WA-01 | passkeys virtuales | autenticador virtual | registro, login, reautenticación y recuperación con código; flag `passkeys.real` apagado impide uso real | alguna etapa falla o el flag no bloquea |
+| E1-REC-01 | reporte diario | día simulado | ventana del día ART congelada y estado de señales y barridos al corte (06:00 ART); faltante explicado sólo por motivo registrado; peor barrido por tópico; convergencia no declarada y alertas operativas del día; semáforo; racha de campaña sólo con días verdes; firmado, subido a B2 con Object Lock COMPLIANCE sin duplicar ante una caída o una subida en duda, y email con el sobre adjunto aunque B2 falle | falta firma, retención o adjuntos; un día sucio o sin reporte cuenta en la campaña; una subida duplicada |
+| E1-WA-01 | passkeys virtuales | autenticador virtual | registro, login, reautenticación y recuperación con código; desafío de un solo uso, que vence y no sirve para otro propósito; origen ajeno y falta de verificación de usuario rechazados; contador que retrocede rechazado; interruptor de doble llave (fila `passkeys.real` y `PASSKEYS_HABILITADAS`): con una sola, 503 en todas las rutas que Fastify registró; recuperación con límite por cuenta e IP y sin revelar si el usuario existe | alguna etapa falla, una llave sola habilita, o una ruta del grupo queda sin guarda |
 | E1-CAP-01 | autorización | sesiones de fixture con y sin `operations.read` | 401 sin sesión, 403 sin capacidad, 200 con capacidad | responde datos sin permiso |
 | E1-API-01 | contrato | respuestas reales de `/health` e `/incidents` | validan contra `openapi/platform-v2.yaml`; errores con `code`, `message`, `correlation_id` | no validan |
 | E1-SVC-01 | servicios separados | API, worker y scheduler en contenedores distintos | caída de uno no detiene a los otros; `/health` refleja el componente caído con 503 | se arrastran o `/health` miente |

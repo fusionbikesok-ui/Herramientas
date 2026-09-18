@@ -125,6 +125,38 @@ CREATE TABLE security.feature_flags (
   reason     text NOT NULL
 );
 
+-- E1 T4 · tarea 12 (migración 0010): el desafío de cada ceremonia WebAuthn. SimpleWebAuthn exige pasar el
+-- desafío generado como `expectedChallenge` al verificar; en memoria se rompe con dos procesos o un reinicio.
+-- Cada desafío tiene propósito, vencimiento corto y un solo uso. La migración además siembra la fila
+-- `passkeys.real` en false: la primera de las dos llaves (la otra es PASSKEYS_HABILITADAS).
+CREATE TABLE security.webauthn_challenges (
+  id         uuid PRIMARY KEY DEFAULT uuidv7(),
+  proposito  text NOT NULL CHECK (proposito IN ('registro', 'login', 'reautenticacion')),
+  desafio    text NOT NULL UNIQUE CHECK (desafio ~ '^[A-Za-z0-9_-]{16,128}$'),
+  user_id    uuid REFERENCES security.users(id),
+  creado_en  timestamptz NOT NULL DEFAULT now(),
+  vence_en   timestamptz NOT NULL,
+  usado_en   timestamptz,
+  CHECK (vence_en > creado_en),
+  CHECK (proposito = 'login' OR user_id IS NOT NULL)
+);
+CREATE INDEX webauthn_challenges_vigentes ON security.webauthn_challenges (vence_en) WHERE usado_en IS NULL;
+
+-- E1 T4 · tarea 13 (migración 0011): los intentos de recuperación, donde se cuenta el límite de cinco por hora
+-- por cuenta, por IP y global. Un intento contra un usuario inexistente se registra con user_id nulo.
+CREATE TABLE security.recovery_attempts (
+  id           uuid PRIMARY KEY DEFAULT uuidv7(),
+  user_id      uuid REFERENCES security.users(id),
+  -- El id que se pidió, exista o no: el límite por cuenta se cuenta sobre esto para no revelar quién tiene cuenta.
+  cuenta_pedida text NOT NULL CHECK (length(cuenta_pedida) BETWEEN 1 AND 64),
+  ip           inet NOT NULL,
+  intentado_en timestamptz NOT NULL,
+  exitoso      boolean NOT NULL DEFAULT false
+);
+CREATE INDEX recovery_attempts_cuenta ON security.recovery_attempts (cuenta_pedida, intentado_en DESC);
+CREATE INDEX recovery_attempts_ip ON security.recovery_attempts (ip, intentado_en DESC);
+CREATE INDEX recovery_attempts_fecha ON security.recovery_attempts (intentado_en DESC);
+
 -- ─────────────────────────────── audit ──────────────────────────────
 -- Append-only con cadena de hash: hash = sha256(prev_hash || contenido canónico). Un único escritor
 -- de la cadena a la vez (advisory lock transaccional). UPDATE/DELETE rechazados por trigger; una
@@ -579,6 +611,9 @@ CREATE TABLE informes.entregas (
   estado_deposito   text NOT NULL DEFAULT 'generado' CHECK (estado_deposito IN ('generado', 'firmado', 'subido')),
   estado_aviso      text NOT NULL DEFAULT 'pendiente' CHECK (estado_aviso IN ('pendiente', 'avisado')),
   hash_contenido    text NOT NULL CHECK (hash_contenido ~ '^[0-9a-f]{64}$'),
+  -- Sólo en los reportes: el semáforo con que salió ese día. La campaña contractual cuenta días seguidos que
+  -- no fueron rojos, y sin guardarlo habría que re-armar cada reporte viejo para saberlo.
+  semaforo          text CHECK (semaforo IN ('verde', 'amarillo', 'rojo')),
   kid               text,
   ruta_pendiente    text,
   b2_object_key     text,
@@ -603,7 +638,8 @@ CREATE TABLE informes.entregas (
   -- El email lleva adjunto el sobre firmado: avisar sin firmar es un estado imposible en el dominio.
   -- No exige haber subido — el aviso es deliberadamente independiente de Backblaze (hallazgo 2 de la
   -- revisión del 2026-09-17).
-  CONSTRAINT entregas_aviso_check CHECK (estado_aviso = 'pendiente' OR estado_deposito <> 'generado')
+  CONSTRAINT entregas_aviso_check CHECK (estado_aviso = 'pendiente' OR estado_deposito <> 'generado'),
+  CONSTRAINT entregas_semaforo_tipo_check CHECK ((tipo = 'reporte') OR semaforo IS NULL)
 );
 
 CREATE INDEX entregas_deposito_pendiente ON informes.entregas (fecha) WHERE estado_deposito <> 'subido';

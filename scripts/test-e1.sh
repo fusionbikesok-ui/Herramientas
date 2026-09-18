@@ -7,7 +7,7 @@ RAIZ="$(cd "$(dirname "$0")/.." && pwd)"
 PLATAFORMA="$RAIZ/plataforma"
 TRABAJO="$(mktemp -d /tmp/fusion-e1.XXXXXX)"
 TRAMO="${E1_TRAMO:-1}"
-case "$TRAMO" in 1|2|3) ;; *) echo "E1_TRAMO debe ser 1, 2 o 3 (recibido: $TRAMO)" >&2; exit 2 ;; esac
+case "$TRAMO" in 1|2|3|4) ;; *) echo "E1_TRAMO debe ser 1, 2, 3 o 4 (recibido: $TRAMO)" >&2; exit 2 ;; esac
 # El tramo 3 está documentado y con contrato exigible, pero sin implementar: su gate falla a propósito
 # hasta que los cortes C1–C9 del plan existan.
 export E1_PROJECT="fusion-e1-$$"
@@ -15,6 +15,7 @@ export SECRET_DIR="$TRABAJO/secretos"
 export ESTADO_PG_DIR="$TRABAJO/estado-pg"
 export KEYRING_DIR="$TRABAJO/keyring"
 REPORTE="$TRABAJO/vitest.json"
+REPORTE_LEGADO="$TRABAJO/vitest-legado.json"
 if [ -n "${E1_PORT:-}" ]; then
   export API_PORT="$E1_PORT"
 else
@@ -52,6 +53,12 @@ afirmar() { # afirmar <descripción> <esperado> <obtenido>
 if [ "${E1_SKIP_UNIT:-0}" != 1 ]; then
   npm --prefix "$PLATAFORMA" run typecheck
   npm --prefix "$PLATAFORMA" test -- --reporter=json --outputFile="$REPORTE"
+  # Desde el tramo 3, los recibos y la cola de la copia de sombra se prueban del lado del legado: sin estos
+  # archivos el gate no podía ver E1-RCP-01, E1-RCP-02 ni E1-QUE-01.
+  if [ "$TRAMO" -ge 3 ]; then
+    (cd "$RAIZ" && npx vitest run test/sombra.test.js test/copiaSombra.test.js test/server-webhooks.test.js \
+      test/metricasSombra.test.js test/gatewayCanal.test.js --reporter=json --outputFile="$REPORTE_LEGADO")
+  fi
 else
   echo 'E1_SKIP_UNIT=1: ensayo sin suite unitaria; el gate de escenarios no se aplica' >&2
 fi
@@ -141,7 +148,22 @@ console.log('ok: ' + canal.length + ' llamadas de canal, todas GET');
 fi
 
 if [ "${E1_SKIP_UNIT:-0}" != 1 ]; then
-  node "$RAIZ/scripts/qa/gate-e1.mjs" --tramo "$TRAMO" --reporte "$REPORTE" --verificado E1-SVC-01
+  # Desde el tramo 3 hay escenarios que no los prueba una prueba unitaria sino una corrida o una decisión
+  # fechada: la latencia y la caída de PostgreSQL (arnés C9), el bloqueo desde Internet (chequeo externo de
+  # José) y la prueba de 24 h (dispensada por José el 2026-09-17). El gate exige que el archivo exista.
+  EVIDENCIAS=()
+  if [ "$TRAMO" -ge 3 ]; then
+    EV="$RAIZ/docs/superpowers/evidence/e1"
+    EVIDENCIAS=(
+      --evidencia "E1-LAT-01=$EV/2026-09-17-E1-LAT-PGDOWN-20260917T030620Z.md"
+      --evidencia "E1-PGDOWN-01=$EV/2026-09-17-E1-LAT-PGDOWN-20260917T030620Z.md"
+      --evidencia "E1-GW-02=$EV/2026-09-16-E1-GW-02-deny-externo.md"
+      --evidencia "E1-SOAK-01=$EV/2026-09-17-E1-C10-canario-woo.md"
+    )
+  fi
+  REPORTES=(--reporte "$REPORTE")
+  [ "$TRAMO" -ge 3 ] && REPORTES+=(--reporte "$REPORTE_LEGADO")
+  node "$RAIZ/scripts/qa/gate-e1.mjs" --tramo "$TRAMO" "${REPORTES[@]}" --verificado E1-SVC-01 "${EVIDENCIAS[@]}"
 fi
 
 # Ningún proceso ni contenedor del ensayo queda vivo.

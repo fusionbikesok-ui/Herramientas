@@ -155,6 +155,47 @@ paths:
         '413': { description: Cuerpo mayor a 16 KiB, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '503': { description: PostgreSQL no disponible, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
+  /internal/v1/informes/estado:
+    servers:
+      - url: http://127.0.0.1:3201
+        description: Plano de control interno; no se publica por Nginx
+    get:
+      tags: [signals]
+      summary: Estado de los informes diarios firmados, para el vigilante del legado (E1 T4)
+      description: |
+        Devuelve la fecha del último reporte avisado y las entregas que llevan más de 24 h sin subir. La
+        consulta el legado a las 09:00 ART y, si falta el informe del día o hay atrasadas, abre el incidente.
+        Misma firma v1 que la ruta de señales, con método GET y cuerpo vacío. Es una lectura sin efectos: no
+        registra nonces. Existe sólo si la API interna de señales está configurada; si no, 404.
+      security:
+        - internalHmac: []
+      parameters:
+        - { name: x-fusion-key-id, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' } }
+        - { name: x-fusion-timestamp, in: header, required: true, schema: { type: string, pattern: '^[0-9]{1,12}$' } }
+        - { name: x-fusion-nonce, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{16,128}$' } }
+        - { name: x-fusion-signature, in: header, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
+      responses:
+        '200':
+          description: Estado de los informes
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ultimo, atrasadas]
+                properties:
+                  ultimo: { type: [string, 'null'], format: date }
+                  atrasadas:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [tipo, fecha]
+                      properties:
+                        tipo: { type: string, enum: [manifiesto, reporte] }
+                        fecha: { type: string, format: date }
+        '401': { description: Origen, firma, ventana o clave inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
 components:
   securitySchemes:
     sessionCookie:
