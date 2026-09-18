@@ -161,14 +161,27 @@ resolución que devuelva 409; y las decisiones del sistema entran con actor `sis
 
 ### Tarea 9: Outbox durable del legado
 
-**Archivos:** `lib/outboxPlataforma.js`, una migración SQLite del legado para la tabla `outbox_plataforma`, y sus tests.
+**Archivos:** `lib/outboxPlataforma.js`, una migración SQLite del legado para la tabla `outbox_plataforma`,
+el cableado del despachador en `server.js`, y sus tests.
 
 La cola de la copia de sombra no sirve: hace un solo intento y trabaja sobre `integration_events`. Ésta es propia:
 filas escritas en la misma transacción que el cambio, un despachador fuera de la respuesta con reintento y backoff,
 y un contador de pendientes viejos que alimenta una alerta.
 
+**Cableado operativo, que la revisión pidió explicitar** (sin esto "encender la outbox" no es implementable):
+
+| Qué | Cómo |
+|---|---|
+| Quién lo corre | un `setInterval` en `server.js`, en el mismo proceso del legado, igual que el vigilante de informes |
+| Cada cuánto | `OUTBOX_PLATAFORMA_INTERVALO_MS` (10 s por omisión), lote de `OUTBOX_PLATAFORMA_LOTE` (50) |
+| Firma | HMAC con `OUTBOX_PLATAFORMA_SECRETO`, el mismo mecanismo que usa la copia de sombra contra la API de señales |
+| Apagado | `OUTBOX_PLATAFORMA_ENABLED`, apagado por omisión; al apagarse el proceso, termina el lote en curso y no toma otro |
+| Recuperación tras reinicio | nada se pierde: las filas son durables y el despachador retoma por `estado='pendiente'` ordenado por id |
+| Una sola instancia | el despachador reclama con `UPDATE ... SET estado='enviando', lease_hasta=...` y sólo toma lo vencido, para que dos procesos no manden lo mismo |
+
 **Tests:** escribir un cambio y su evento es atómico; con la plataforma caída el cambio se hace igual y el evento queda
-pendiente; al volver, sale una sola vez; la respuesta HTTP del legado no espera al envío.
+pendiente; al volver, sale una sola vez; la respuesta HTTP del legado no espera al envío; el despachador apagado no
+manda nada; un lease vencido se vuelve a tomar; dos despachadores simultáneos no duplican el envío.
 
 ### Tarea 10: Un único punto de escritura del matcher
 
@@ -200,7 +213,15 @@ adaptador productivo de ML: el bootstrap tiene su lector propio.
   después de cada página.
 - Tope propio de `CATALOGO_BOOTSTRAP_RPM` (10 por omisión), **debajo** del tope de la sombra del legado, y multigets en
   serie.
-- **Cede:** si hay señales u órdenes de ML esperando, o si aparece un 429, se pausa y retoma más tarde.
+- **Cede, con una señal observable.** "Si hay órdenes esperando" no sirve como criterio: el bootstrap corre en la
+  plataforma y el presupuesto vive en el gateway del legado, y los mensajes `ml.orders` del inbox **hoy no tienen
+  consumidor**, así que esperar a que se vacíen dejaría el bootstrap pausado para siempre. Lo que se mira, en este
+  orden, antes de cada página:
+  1. **`integrations.reconciliation_signals` reclamables de ML** (`status in ('pending','retryable')` y
+     `available_at <= now()`): son relecturas que sí tienen consumidor y compiten por el mismo cupo. Si hay más de
+     `CATALOGO_BOOTSTRAP_CEDE_SENALES` (20), se pausa una vuelta.
+  2. **Un 429 del gateway**: se pausa y se retoma con backoff, sin gastar intentos del checkpoint.
+  El conteo del inbox **no** se usa como criterio, justamente porque nadie lo drena todavía.
 
 **Tests:** el de retoma **mata el proceso y lo vuelve a crear** y verifica en PostgreSQL que sigue en la página 30;
 respeta el tope por minuto con un reloj simulado; se pausa si hay señales esperando; una segunda corrida sobre la misma
@@ -216,18 +237,41 @@ versión no duplica mensajes.
 
 ### Tarea 14: Puesta en producción (requiere autorización de José)
 
-En este orden, que la revisión corrigió: las decisiones antes que el proyector, para no crear miles de variantes
-provisorias que después haya que fusionar.
+En este orden, que la revisión corrigió dos veces: las decisiones antes que el proyector, para no crear miles de
+variantes provisorias que después haya que fusionar; y la **captura** de eventos antes de la copia, para que no haya
+ventana de pérdida.
+
+**Paso 0 — gate de dependencia con E1, que la revisión pidió agregar.** E1 todavía **no está aceptada**: le falta la
+campaña de 7 días verdes. E2 se apoya en su inbox, su gateway, su worker y sus secretos, así que nada de lo que sigue
+arranca sin verificar y anotar, en el momento:
+
+| Qué se verifica | Cómo |
+|---|---|
+| Los cuatro componentes de la plataforma | `/api/v2/health` en verde |
+| Los productores del inbox | hay filas nuevas de `woo.products` y `ml.items` en las últimas 24 h |
+| El gateway y su cupo | el tope de la sombra vigente y cuánto margen real queda por minuto |
+| El worker | `cuentas` y `corrientes` que registra al arrancar, contrastadas con `SENALES_CUENTAS` |
+| Los secretos | los siete archivos que lee node, uid 1000 y 0400 |
+| El estado de E1 | día de campaña y último reporte diario firmado en verde |
+
+Si algo de eso está en rojo, **se para acá** y se le cuenta a José, en vez de apilar E2 sobre una base que todavía se
+está probando.
 
 1. **Ensayo** de la migración 0013 sobre una copia de la base de producción: medir el tiempo y los bloqueos, y ensayar
    la restauración del backup.
 2. Backup de `plataforma` y de `data/fusion.sqlite`.
 3. Migración, con todo el catálogo apagado.
-4. Copia consistente del matcher y de los casos de identidad, confirmada.
-5. Encender la outbox y los eventos del legado (un reinicio del legado, **avisado**).
-6. Encender el proyector con **canario de 100**; revisión conjunta; con el OK de José, el resto.
-7. Encender el bootstrap a 10 por minuto; si de madrugada no terminó, subir el tope.
-8. Conciliar y comparar conteos, relaciones y hashes durante 7 días.
+4. **Encender la escritura de la outbox en el legado, con el despachador todavía apagado** (un reinicio del legado,
+   **avisado**). Desde acá, todo cambio del matcher y de los casos de identidad queda guardado, aunque no se mande.
+5. **Recién ahora**, la copia consistente del matcher y de los casos de identidad, con su corte, confirmada.
+6. Encender el despachador: manda lo que se acumuló desde el paso 4, que es exactamente lo que la copia no vio.
+7. Encender el proyector con **canario de 100**; revisión conjunta; con el OK de José, el resto.
+8. Encender el bootstrap a 10 por minuto; si de madrugada no terminó, subir el tope.
+9. Conciliar y comparar conteos, relaciones y hashes durante 7 días.
+
+El orden de los pasos 4 a 6 es lo que cierra la ventana: si la copia fuera antes de la captura, un cambio hecho entre
+las dos no estaría ni en la copia ni en los eventos, y nadie se enteraría. Al revés, un cambio que esté en las dos se
+deduplica por su clave natural y la vigencia no se abre dos veces.
 
 ## Cómo se resolvió cada hallazgo de la revisión del plan
 
@@ -259,3 +303,15 @@ provisorias que después haya que fusionar.
 | 24 | Multicuenta | Decisión de José: una por canal; claves con cuenta (tarea 1) |
 | 25 | Sobra tocar el adaptador de ML | Tarea 12, lector propio |
 | 26 | Sobra extender el gate de E1 | Tarea 13, `gate-e2.mjs` |
+
+## Segunda revisión del plan (Codex, sobre el commit `0d2aad8`)
+
+Los 26 de arriba quedaron bien resueltos, sin regresiones. Aparecieron cuatro más, los cuatro ciertos y los cuatro
+incorporados:
+
+| # | Hallazgo | Dónde se resolvió |
+|---|---|---|
+| 27 | La outbox no tiene cableado operativo: quién corre el despachador, su firma, cada cuánto, apagado y recuperación | Tarea 9, tabla de cableado y sus tres tests nuevos |
+| 28 | Ventana de pérdida entre copiar el matcher y empezar a capturar eventos | Tarea 14, pasos 4 a 6 invertidos: capturar primero, copiar después |
+| 29 | Falta un gate de dependencia con E1, que todavía no está aceptada | Tarea 14, paso 0 |
+| 30 | "Cede si hay órdenes esperando" no es una señal observable, y el inbox no tiene consumidor | Tarea 12, cede por señales reclamables y por 429, nunca por el inbox |
