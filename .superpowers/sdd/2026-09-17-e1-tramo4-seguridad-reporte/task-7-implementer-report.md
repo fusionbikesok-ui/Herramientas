@@ -29,3 +29,12 @@ Implementado el reporte diario de sombra `E1-REC-01` con ventana ART congelada, 
 `ab21724 feat(informes): reporte diario de sombra con ventana congelada`
 
 Footer requerido incluido: `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+
+## Fix round 1
+
+Se corrigió la campaña consecutiva (fechas avisadas contiguas), se añadió JOIN al canal, lectura de recibos del inbox legado, métricas de barridos/convergencia, cobertura resueltas/recibidas y alertas baja/media/alta. Se eliminó el reloj opcional no usado.
+
+- RED exacto: `cd plataforma && npx vitest run test/informes/reporte.test.ts` (antes del fix falló por el módulo eliminado durante el reemplazo; la prueba de regresión quedó reproducida por la suite tras restaurarlo).
+- GREEN exacto: `cd plataforma && npx vitest run test/informes/reporte.test.ts && npm run typecheck`
+- GREEN: 1 archivo, 4 tests pasaron; typecheck pasó.
+- Commit fix: `8e61b469bbcbff6e699ab0f150311d484eed8bb4`.
