@@ -37,6 +37,12 @@ export function registrarEstadoInformes(
         WHERE tipo = 'reporte' AND estado_aviso = 'avisado'`,
     );
     const atrasadas = (await pendientesVencidas(pool, ahora())).map(({ tipo, fecha }) => ({ tipo, fecha }));
-    return { ultimo: ultimo.rows[0]?.fecha ?? null, atrasadas };
+    // Informes cuyo objeto en B2 quedó oculto por un marcador de borrado: la versión retenida sobrevive, pero
+    // un cliente normal recibe 404. Lo marca la vuelta diaria; acá se expone para que el legado lo alerte.
+    const oc = await pool.query<{ tipo: string; fecha: string }>(
+      `SELECT tipo, to_char(fecha, 'YYYY-MM-DD') AS fecha FROM informes.entregas
+        WHERE oculto_en IS NOT NULL ORDER BY fecha DESC, tipo`,
+    );
+    return { ultimo: ultimo.rows[0]?.fecha ?? null, atrasadas, ocultos: oc.rows };
   });
 }

@@ -632,6 +632,9 @@ CREATE TABLE informes.entregas (
   firmado_en        timestamptz,
   subido_en         timestamptz,
   avisado_en        timestamptz,
+  -- Las agrega la migración 0012 (ALTER TABLE), así que van al final: el volcado compara el orden real.
+  oculto_en         timestamptz,
+  oculto_version_retenida text,
   PRIMARY KEY (tipo, fecha),
   CONSTRAINT entregas_subido_check CHECK (
     (estado_deposito = 'subido') = (b2_object_key IS NOT NULL AND b2_version_id IS NOT NULL AND retention_until IS NOT NULL)),
@@ -644,6 +647,9 @@ CREATE TABLE informes.entregas (
 
 CREATE INDEX entregas_deposito_pendiente ON informes.entregas (fecha) WHERE estado_deposito <> 'subido';
 CREATE INDEX entregas_aviso_pendiente ON informes.entregas (fecha) WHERE estado_aviso = 'pendiente';
+-- La credencial de escritura de B2 puede OCULTAR un objeto (en B2 escribir incluye ocultar): no lo destruye
+-- —la versión retenida sobrevive— pero un cliente normal recibe 404. Se detecta y se marca acá.
+CREATE INDEX entregas_ocultas ON informes.entregas (fecha) WHERE oculto_en IS NOT NULL;
 
 -- Los GRANT por defecto de 0002_permisos.sql cubren core, security, audit e integrations: un esquema nuevo
 -- necesita los suyos. Sin DELETE: una entrega es evidencia de lo que pasó ese día.

@@ -93,6 +93,7 @@ describe('deposito', () => {
     expect(p.headers.authorization).toBe(firmarSigV4({
       metodo: 'PUT', ruta: '/fusion-e1-pruebas/e1/reportes/2026-09-16.json', consulta: '',
       cabeceras: {
+        'content-md5': createHash('md5').update('{"a":1}', 'utf8').digest('base64'),
         host: 's3.us-west-000.backblazeb2.com',
         'x-amz-content-sha256': hash, 'x-amz-date': '20260917T100000Z', 'x-amz-meta-sha256': hash,
         'x-amz-object-lock-mode': 'COMPLIANCE',

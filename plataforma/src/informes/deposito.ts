@@ -51,6 +51,8 @@ export interface Deposito {
   guardarPendiente(clave: string, cuerpo: string): Promise<string>;
   subir(clave: string, cuerpo: string, ahora: Date): Promise<{ versionId: string; retencion: string }>;
   consultar(clave: string): Promise<ObjetoB2 | null>;
+  /** Versiones de una clave: si está oculta por un marcador de borrado y cuál es la versión retenida. */
+  versiones(clave: string): Promise<{ oculto: boolean; versionRetenida: string | null }>;
   limpiarPendiente(ruta: string): Promise<void>;
 }
 
@@ -149,6 +151,34 @@ export function crearDeposito(cfg: CfgDeposito): Deposito {
     return { versionId, retencion, modo, sha256: cabeza.headers.get('x-amz-meta-sha256') };
   };
 
+  /**
+   * Verificado contra B2 real el 2026-09-18: la credencial de escritura **puede** hacer un DELETE, porque en B2
+   * el permiso de escritura incluye ocultar. En un bucket con versionado eso no destruye nada —crea un marcador
+   * y la versión retenida sigue ahí, recuperable pidiéndola por su id— pero un cliente normal recibe 404. O sea
+   * que la evidencia es indestructible y aun así se puede volver invisible. Esto lo hace detectable.
+   */
+  const versiones = async (clave: string): Promise<{ oculto: boolean; versionRetenida: string | null }> => {
+    const r = await pedir('GET', '', `versions=&prefix=${encodeURIComponent(clave)}&max-keys=50`, {}, '', cfg.lectura, new Date());
+    if (!r.ok) throw await errorDe(r, 'GET versions');
+    const xml = await r.text();
+    // Se miran sólo las entradas de ESTA clave exacta: el prefijo puede traer vecinas.
+    const bloques = [...xml.matchAll(/<(Version|DeleteMarker)>([\s\S]*?)<\/\1>/g)]
+      .map((m) => {
+        const tipo = m[1] ?? '';
+        const bloque = m[2] ?? '';
+        return {
+          tipo,
+          clave: /<Key>([^<]*)<\/Key>/.exec(bloque)?.[1] ?? '',
+          id: /<VersionId>([^<]*)<\/VersionId>/.exec(bloque)?.[1] ?? null,
+          ultima: /<IsLatest>true<\/IsLatest>/.test(bloque),
+        };
+      })
+      .filter((b) => b.clave === clave);
+    const oculto = bloques.some((b) => b.tipo === 'DeleteMarker' && b.ultima);
+    const versionRetenida = bloques.find((b) => b.tipo === 'Version')?.id ?? null;
+    return { oculto, versionRetenida };
+  };
+
   return {
     async guardarPendiente(clave, cuerpo) {
       // Temporal, fsync y renombre: un corte de luz deja el archivo entero o no lo deja.
@@ -177,6 +207,10 @@ export function crearDeposito(cfg: CfgDeposito): Deposito {
       const r = await pedir('PUT', clave, '', {
         'x-amz-object-lock-mode': 'COMPLIANCE',
         'x-amz-object-lock-retain-until-date': retener.toISOString(),
+        // B2 exige Content-MD5 (o un x-amz-checksum-*) en todo PUT que traiga parámetros de Object Lock, y
+        // rechaza con 400 InvalidRequest si falta. Verificado contra B2 real el 2026-09-18: el simulador de los
+        // tests no lo exigía, así que esto sólo aparece probando de verdad.
+        'content-md5': createHash('md5').update(cuerpo, 'utf8').digest('base64'),
         // El hash viaja como metadato para que un reintento pueda saber si lo que ya está es esto mismo.
         'x-amz-meta-sha256': sha256(cuerpo),
       }, cuerpo, cfg.escritura, ahora);
@@ -193,6 +227,8 @@ export function crearDeposito(cfg: CfgDeposito): Deposito {
     },
 
     consultar,
+
+    versiones,
 
     async limpiarPendiente(ruta) {
       unlinkSync(ruta);

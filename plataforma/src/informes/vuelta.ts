@@ -47,6 +47,13 @@ export interface ResultadoVuelta {
   hechos: string[];
   fallados: string[];
   atrasadas: Array<{ tipo: string; fecha: string }>;
+  /**
+   * Informes cuyo objeto en B2 quedó OCULTO por un marcador de borrado. La versión retenida sigue existiendo
+   * (Object Lock la protege), pero un cliente normal recibe 404, así que la evidencia deja de estar a la vista.
+   * En B2 el permiso de escritura incluye ocultar, así que la propia credencial de la plataforma puede hacerlo:
+   * verificado contra B2 real el 2026-09-18. No se puede prevenir con permisos; se detecta y se reporta.
+   */
+  ocultos: Array<{ tipo: string; fecha: string; versionRetenida: string | null }>;
 }
 
 const sha256 = (datos: string) => createHash('sha256').update(datos, 'utf8').digest('hex');
@@ -134,7 +141,50 @@ export async function vueltaDeInformes(pool: pg.Pool, cfg: CfgInformes, ahora: D
   }
 
   const atrasadas = (await pendientesVencidas(pool, reloj())).map(({ tipo, fecha }) => ({ tipo, fecha }));
-  return { hechos, fallados: [...new Set(fallados)], atrasadas };
+  const ocultos = await revisarOcultos(pool, cfg, reloj());
+  return { hechos, fallados: [...new Set(fallados)], atrasadas, ocultos };
+}
+
+/**
+ * Revisa que los objetos ya subidos sigan VISIBLES en B2. Se limita a los últimos días para que el costo no
+ * crezca con la historia: lo que interesa es detectar un ocultamiento reciente, y la retención protege al resto.
+ * Un fallo al consultar no rompe la vuelta: se informa como si no se pudiera verificar.
+ */
+const DIAS_VISIBILIDAD = 7;
+
+async function revisarOcultos(
+  pool: pg.Pool, cfg: CfgInformes, ahora: Date,
+): Promise<Array<{ tipo: string; fecha: string; versionRetenida: string | null }>> {
+  const desde = new Date(ahora.getTime() - DIAS_VISIBILIDAD * 86_400_000).toISOString().slice(0, 10);
+  const r = await pool.query<{ tipo: TipoEntrega; fecha: string }>(
+    `SELECT tipo, to_char(fecha, 'YYYY-MM-DD') AS fecha FROM informes.entregas
+      WHERE estado_deposito = 'subido' AND fecha >= $1::date ORDER BY fecha DESC, tipo`,
+    [desde],
+  );
+  const ocultos: Array<{ tipo: string; fecha: string; versionRetenida: string | null }> = [];
+  for (const { tipo, fecha } of r.rows) {
+    let v;
+    try {
+      v = await cfg.deposito.versiones(claveObjeto(tipo, fecha));
+    } catch {
+      // Sin poder consultar no se afirma nada, ni que está oculto ni que no: el vigilante ya alerta si la
+      // plataforma no responde, y la marca anterior se conserva.
+      continue;
+    }
+    if (v.oculto) {
+      ocultos.push({ tipo, fecha, versionRetenida: v.versionRetenida });
+      // Se marca en la base para que la ruta interna lo exponga y el vigilante del legado lo alerte: el
+      // resultado de esta vuelta sólo lo ve el log del scheduler.
+      await pool.query(
+        `UPDATE informes.entregas SET oculto_en = COALESCE(oculto_en, $3), oculto_version_retenida = $4
+          WHERE tipo = $1 AND fecha = $2`, [tipo, fecha, ahora, v.versionRetenida]);
+    } else {
+      await pool.query(
+        `UPDATE informes.entregas SET oculto_en = NULL, oculto_version_retenida = NULL
+          WHERE tipo = $1 AND fecha = $2 AND oculto_en IS NOT NULL`, [tipo, fecha]);
+    }
+  }
+  return ocultos;
 }
 
 /** Un email por día, con el reporte adjunto; recién ahí se marca el aviso de los artefactos que tiene. */

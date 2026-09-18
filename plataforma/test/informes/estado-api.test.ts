@@ -58,7 +58,7 @@ describe('GET /internal/v1/informes/estado', () => {
     const app = api();
     const r = await app.inject({ method: 'GET', url: RUTA_ESTADO_INFORMES, remoteAddress: '127.0.0.1', headers: firmado() });
     expect(r.statusCode).toBe(200);
-    expect(r.json()).toEqual({ ultimo: '2026-09-15', atrasadas: [{ tipo: 'manifiesto', fecha: '2026-09-16' }] });
+    expect(r.json()).toMatchObject({ ultimo: '2026-09-15', atrasadas: [{ tipo: 'manifiesto', fecha: '2026-09-16' }] });
     await app.close();
   });
 });

@@ -42,6 +42,7 @@ describe('vueltaDeInformes', () => {
           return { versionId: `v${subidas.length}`, retencion };
         },
         async consultar(clave) { return b2.get(clave) ?? null; },
+        async versiones() { return { oculto: false, versionRetenida: 'v1' }; },
         async guardarPendiente() { return join(dir, 'p.json'); },
         async limpiarPendiente() {},
       },
@@ -93,6 +94,21 @@ describe('vueltaDeInformes', () => {
     expect(m).toEqual([{ b2_version_id: 'v1' }]);
     const r = (await pool.query(`SELECT b2_version_id FROM integrations.daily_shadow_reports`)).rows;
     expect(r).toEqual([{ b2_version_id: 'v2' }]);
+  });
+
+  it('informa un informe cuyo objeto quedó OCULTO en B2', async () => {
+    // Verificado contra B2 real el 2026-09-18: la credencial de escritura puede ocultar un objeto (en B2 el
+    // permiso de escritura incluye ocultar). La versión retenida sobrevive, pero un cliente normal recibe 404,
+    // así que hay que detectarlo. No se puede prevenir con permisos.
+    await correr('2026-09-17T10:00:00Z');
+    let ocultar = true;
+    cfg.deposito.versiones = async (clave: string) => (ocultar && clave.includes('reportes')
+      ? { oculto: true, versionRetenida: 'v2' }
+      : { oculto: false, versionRetenida: 'v1' });
+    const r = await correr('2026-09-17T10:30:00Z');
+    expect(r.ocultos).toEqual([{ tipo: 'reporte', fecha: '2026-09-16', versionRetenida: 'v2' }]);
+    ocultar = false;
+    expect((await correr('2026-09-17T11:00:00Z')).ocultos).toEqual([]);
   });
 
   it('correrla dos veces no sube ni manda de nuevo', async () => {
