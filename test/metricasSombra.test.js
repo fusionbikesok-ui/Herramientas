@@ -113,6 +113,26 @@ describe('E1-PGDOWN-01 importación de pérdidas desde el legado', () => {
     expect((await importarPerdidas({ db, enviarSenal: async () => { throw new Error('no debería'); } })).importadas).toBe(0);
   });
 
+  it('reimporta los descartes por cuenta no configurada cuando la cuenta ya existe', async () => {
+    // El 2026-09-17, encender el canario de ML sin la cuenta en SENALES_CUENTAS descartó 347 recibos con esta
+    // razón. Al corregir la configuración tienen que recuperarse solos, o esas horas se pierden para siempre.
+    const a = recibo({ estado: 'discarded', razon: 'cuenta_no_configurada', completado: iso(600_000), recurso: '/items/MLA1', topic: 'items' });
+    const enviadas = [];
+    const r = await importarPerdidas({ db, enviarSenal: async (s) => { enviadas.push(s); } });
+    expect(r).toMatchObject({ importadas: 1, invalidas: 0, pendientes: 0, detenida: false });
+    expect(enviadas[0].import.reason).toBe('cuenta_no_configurada');
+    expect(db.prepare('SELECT shadow_imported_at FROM integration_events WHERE event_id = ?').get(a).shadow_imported_at).not.toBeNull();
+  });
+
+  it('si la cuenta sigue sin configurar, se detiene en el primero y no martilla', async () => {
+    recibo({ estado: 'discarded', razon: 'cuenta_no_configurada', completado: iso(600_000), recurso: '/items/MLA2', topic: 'items' });
+    recibo({ estado: 'discarded', razon: 'cuenta_no_configurada', completado: iso(500_000), recurso: '/items/MLA3', topic: 'items' });
+    let llamadas = 0;
+    const r = await importarPerdidas({ db, enviarSenal: async () => { llamadas++; throw new Error('cuenta_no_configurada'); } });
+    expect(r).toMatchObject({ importadas: 0, detenida: true, pendientes: 2 });
+    expect(llamadas).toBe(1);
+  });
+
   it('con la plataforma todavía caída se detiene y no marca nada; un recibo inválido no bloquea al resto', async () => {
     recibo({ estado: 'discarded', razon: 'platform_unavailable', completado: iso(600_000), recurso: '/orders/21' });
     recibo({ estado: 'discarded', razon: 'platform_unavailable', completado: iso(500_000), recurso: '/orders/22' });

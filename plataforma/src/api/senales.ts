@@ -39,7 +39,10 @@ const Envelope = z.strictObject({
    */
   import: z.strictObject({
     discarded_at: z.iso.datetime({ offset: true }),
-    reason: z.enum(['platform_unavailable', 'platform_timeout']),
+    // `cuenta_no_configurada` (2026-09-18): un 409 por cuenta ausente en SENALES_CUENTAS descarta el recibo,
+    // y al corregir la configuración el barrido del legado lo reimporta. Sin esta razón en el enum, esa
+    // reimportación rebotaba con 400 y los recibos quedaban perdidos para siempre.
+    reason: z.enum(['platform_unavailable', 'platform_timeout', 'cuenta_no_configurada']),
   }).optional(),
 });
 
