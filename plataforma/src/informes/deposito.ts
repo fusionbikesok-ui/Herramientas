@@ -15,11 +15,18 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
+import { LEASE_MS } from './entregas.ts';
 
 export const RETENCION_DIAS = 365;
 export const MARGEN_DIAS = 2;
 const MAX_ERROR = 500;
 const TIMEOUT_MS = 60_000;
+/**
+ * Tope duro del timeout de cada pedido a B2: un cuarto del permiso de entrega. Con un pedido que pueda durar
+ * más que el permiso, otro proceso puede reclamar la entrega, no ver el objeto todavía y subir una SEGUNDA
+ * versión, que en modo compliance queda un año (hallazgo alto de la revisión de T4 del 2026-09-18).
+ */
+export const TOPE_TIMEOUT_MS = LEASE_MS / 4;
 
 export interface Credencial { id: string; clave: string }
 
@@ -32,7 +39,8 @@ export interface CfgDeposito {
   lectura: Credencial;
   dirPendientes: string;
   fetch?: typeof fetch;
-  /** Tope de cada pedido a B2. Sin tope, un pedido colgado sobrevive al lease y otro proceso repite el efecto. */
+  /** Tope de cada pedido a B2, en ms. Como máximo `TOPE_TIMEOUT_MS`: un pedido colgado más que el permiso de
+   *  entrega deja que otro proceso repita el efecto. */
   timeoutMs?: number;
 }
 
@@ -89,6 +97,10 @@ async function errorDe(r: Response, accion: string): Promise<Error> {
 }
 
 export function crearDeposito(cfg: CfgDeposito): Deposito {
+  const timeoutMs = cfg.timeoutMs ?? TIMEOUT_MS;
+  if (!(timeoutMs > 0) || timeoutMs > TOPE_TIMEOUT_MS) {
+    throw new Error(`timeoutMs de B2 inválido: ${timeoutMs} ms; tiene que estar entre 1 y ${TOPE_TIMEOUT_MS} ms`);
+  }
   const hacer = cfg.fetch ?? fetch;
   const host = new URL(cfg.endpoint).host;
   const rutaDe = (clave: string) => `/${cfg.bucket}/${codificarRuta(clave)}`;
@@ -115,7 +127,7 @@ export function crearDeposito(cfg: CfgDeposito): Deposito {
       method: metodo,
       headers: { ...enviar, authorization },
       ...(metodo === 'PUT' ? { body: cuerpo } : {}),
-      signal: AbortSignal.timeout(cfg.timeoutMs ?? TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   };
 

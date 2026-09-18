@@ -19,7 +19,9 @@ export type EstadoDeposito = 'generado' | 'firmado' | 'subido';
 export type EstadoAviso = 'pendiente' | 'avisado';
 export interface Reclamo { tipo: TipoEntrega; fecha: string; testigo: string; deposito: EstadoDeposito; aviso: EstadoAviso }
 
-const LEASE_MS = 10 * 60_000;
+/** Cuánto dura el permiso de una entrega. El depósito acota su timeout contra esto: un pedido en vuelo que
+ *  sobreviva al permiso deja que otro proceso repita el efecto (una segunda versión inmutable en B2). */
+export const LEASE_MS = 10 * 60_000;
 const HORAS_INCIDENTE = 24;
 const ANTERIOR: Record<Exclude<EstadoDeposito, 'generado'>, EstadoDeposito> = { firmado: 'generado', subido: 'firmado' };
 const DATOS_PERMITIDOS = new Set(['kid', 'ruta_pendiente', 'b2_object_key', 'b2_version_id', 'retention_until', 'semaforo']);

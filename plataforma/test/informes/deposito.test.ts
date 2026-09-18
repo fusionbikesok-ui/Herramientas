@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { crearDeposito, firmarSigV4 } from '../../src/informes/deposito.ts';
+import { TOPE_TIMEOUT_MS, crearDeposito, firmarSigV4 } from '../../src/informes/deposito.ts';
 
 const CFG = (dir: string, fetchSimulado: typeof fetch) => ({
   endpoint: 'https://s3.us-west-000.backblazeb2.com', region: 'us-west-000', bucket: 'fusion-e1-pruebas',
@@ -152,4 +152,14 @@ describe('deposito', () => {
     await dep.limpiarPendiente(ruta);
     expect(readdirSync(dir).filter((f) => !f.endsWith('.tmp'))).toEqual(['e1_reportes_2026-09-17.json']);
   });
+  it('rechaza un timeout que pueda sobrevivir al permiso de entrega', () => {
+    // Hallazgo alto de la revisión de T4: con un pedido que dure más que el permiso, otro proceso puede
+    // reclamar la entrega, no ver el objeto y subir una SEGUNDA versión, que en compliance queda un año.
+    const fetchSimulado = (async () => new Response('', { status: 200 })) as unknown as typeof fetch;
+    expect(() => crearDeposito({ ...CFG('/tmp', fetchSimulado), timeoutMs: TOPE_TIMEOUT_MS + 1 }))
+      .toThrow(/timeoutMs de B2 inválido/);
+    expect(() => crearDeposito({ ...CFG('/tmp', fetchSimulado), timeoutMs: 0 })).toThrow(/timeoutMs de B2 inválido/);
+    expect(() => crearDeposito({ ...CFG('/tmp', fetchSimulado), timeoutMs: TOPE_TIMEOUT_MS })).not.toThrow();
+  });
+
 });
