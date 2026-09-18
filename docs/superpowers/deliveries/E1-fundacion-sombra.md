@@ -69,6 +69,11 @@
 ## Continuidad
 
 - **Próxima acción exacta:** T4 implementado en código (tareas 0–15 del plan del tramo 4, rama `feature/e1-t4-continuacion`, 2026-09-18): firma Ed25519 sobre JCS, manifiesto de auditoría y reporte de sombra diarios, depósito en B2 con Object Lock COMPLIANCE que no duplica ante caídas, email con el sobre adjunto, vigilante del legado a las 09:00 ART, verificador `npm run verificar-informe`, y passkeys con recuperación, todo detrás de la doble llave. Revisado por Codex en dos tandas (A: 3 críticos corregidos; B: sin críticos). `E1_TRAMO=4` del gate de escenarios cubre los 43 escenarios. Falta: la tarea 16 (puesta en producción, requiere autorización de José: buckets y credenciales B2, clave de firma, migraciones 0009–0011, verificación contra B2 real y un email real) y la campaña de 7 días verdes seguidos con ML en canario.
+- **Tarea 16 (puesta en producción) a mitad de camino, 2026-09-18:** buckets, credenciales y clave de firma
+  listos, y la verificación contra B2 real ya hecha (encontró dos defectos que el simulador no podía ver, los dos
+  corregidos). Falta el vigilante alertando por informes ocultos, la configuración del scheduler y sus montajes,
+  las migraciones 0009–0012, un email real y la campaña de 7 días. Detalle en
+  `evidence/e1/2026-09-18-E1-T4-tarea16-avance.md`.
 - **Estado del canario de ML:** se encendió el 2026-09-17 16:38 UTC pero descartó todo durante 5 h por una
   cuenta sin configurar, y el monitor aplicó el aborto del SOP a las 21:40 UTC. Corregido el 2026-09-18: cuenta
   sembrada, `SENALES_CUENTAS` y el registro del worker completos, copia reencendida a las 03:48:30 UTC
