@@ -125,6 +125,23 @@ CREATE TABLE security.feature_flags (
   reason     text NOT NULL
 );
 
+-- E1 T4 · tarea 12 (migración 0010): el desafío de cada ceremonia WebAuthn. SimpleWebAuthn exige pasar el
+-- desafío generado como `expectedChallenge` al verificar; en memoria se rompe con dos procesos o un reinicio.
+-- Cada desafío tiene propósito, vencimiento corto y un solo uso. La migración además siembra la fila
+-- `passkeys.real` en false: la primera de las dos llaves (la otra es PASSKEYS_HABILITADAS).
+CREATE TABLE security.webauthn_challenges (
+  id         uuid PRIMARY KEY DEFAULT uuidv7(),
+  proposito  text NOT NULL CHECK (proposito IN ('registro', 'login', 'reautenticacion')),
+  desafio    text NOT NULL UNIQUE CHECK (desafio ~ '^[A-Za-z0-9_-]{16,128}$'),
+  user_id    uuid REFERENCES security.users(id),
+  creado_en  timestamptz NOT NULL DEFAULT now(),
+  vence_en   timestamptz NOT NULL,
+  usado_en   timestamptz,
+  CHECK (vence_en > creado_en),
+  CHECK (proposito = 'login' OR user_id IS NOT NULL)
+);
+CREATE INDEX webauthn_challenges_vigentes ON security.webauthn_challenges (vence_en) WHERE usado_en IS NULL;
+
 -- ─────────────────────────────── audit ──────────────────────────────
 -- Append-only con cadena de hash: hash = sha256(prev_hash || contenido canónico). Un único escritor
 -- de la cadena a la vez (advisory lock transaccional). UPDATE/DELETE rechazados por trigger; una

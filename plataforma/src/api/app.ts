@@ -7,6 +7,7 @@ import { correlacionDe } from '../comun/correlacion.ts';
 import { sinSesion, type ProveedorSesion } from '../auth/sesion.ts';
 import { registrarSenales, type OpcionesSenales } from './senales.ts';
 import { registrarEstadoInformes } from './informes.ts';
+import { registrarPasskeys, type OpcionesPasskeys } from './passkeys.ts';
 import { evaluarAlertasPlataforma, medirPlataforma } from '../observabilidad/sombra.ts';
 
 type Estado = 'ok' | 'degraded' | 'down';
@@ -22,6 +23,8 @@ export interface OpcionesApi {
   ahora?: () => Date;
   /** Sin esto la ruta interna de señales no existe (404): nace apagada. */
   senales?: OpcionesSenales;
+  /** Passkeys: las rutas existen siempre, pero responden 503 salvo con las dos llaves encendidas. */
+  passkeys?: OpcionesPasskeys;
 }
 
 const TOPICOS = new Set(['ml.orders', 'ml.shipments', 'ml.questions', 'ml.messages', 'ml.claims', 'ml.items', 'woo.orders', 'woo.products']);
@@ -130,6 +133,7 @@ export function crearApi(opciones: OpcionesApi) {
     return { metrics: metricas, alerts: evaluarAlertasPlataforma(metricas) };
   });
 
+  registrarPasskeys(app, opciones.pool, sesion, opciones.passkeys ?? {}, ahora);
   if (opciones.senales) {
     registrarSenales(app, opciones.pool, opciones.logger, opciones.senales, ahora);
     // El estado de los informes viaja con el mismo keyring y orígenes: sin API interna, tampoco existe (404).

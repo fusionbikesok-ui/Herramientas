@@ -11,6 +11,7 @@
     "migrar": "node src/db/cli-migrar.ts"
   },
   "dependencies": {
+    "@simplewebauthn/server": "14.0.2",
     "fastify": "5.12.4",
     "nodemailer": "9.1.1",
     "pg": "8.23.0",
