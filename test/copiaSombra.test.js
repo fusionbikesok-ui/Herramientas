@@ -144,9 +144,12 @@ describe('emisor de señales', () => {
     };
     const enviar = crearEmisorSombra({ db, url: 'http://host.docker.internal:3201', keyring: { activeKeyId: 'k', keys: { k: clave } }, fetch: fetchFalso });
     await expect(enviar({ eventId: 'e1' })).resolves.toBeUndefined();
-    respuesta = 409; await expect(enviar({ eventId: 'e1' })).rejects.toThrow('invalid_resource');
+    respuesta = 400; await expect(enviar({ eventId: 'e1' })).rejects.toThrow('invalid_resource');
+    // 409: la plataforma dice que el canal/tópico no corresponde a una cuenta configurada
+    // (`channel_topic_mismatch`) — es un problema nuestro de configuración, no del recurso.
+    respuesta = 409; await expect(enviar({ eventId: 'e1' })).rejects.toThrow('cuenta_no_configurada');
     respuesta = 503; await expect(enviar({ eventId: 'e1' })).rejects.toThrow('platform_unavailable');
     respuesta = 'red'; await expect(enviar({ eventId: 'e1' })).rejects.toThrow('platform_unavailable');
-    expect(llamadas).toBe(4);
+    expect(llamadas).toBe(5);
   });
 });
