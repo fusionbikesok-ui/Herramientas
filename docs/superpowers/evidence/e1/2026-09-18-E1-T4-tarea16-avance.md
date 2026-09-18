@@ -1,7 +1,7 @@
 # E1 T4 · tarea 16 — avance de la puesta en producción (2026-09-18)
 
-Estado: **a mitad de camino y detenido a pedido de José**. Nada de esto emite informes todavía: el scheduler
-sigue sin la configuración de informes, así que la vuelta diaria no corre.
+Estado: **informes encendidos el 2026-09-18 a las 12:29 UTC**, con autorización de José. La primera vuelta subió y
+avisó los dos artefactos del 2026-09-17 (ver "Primera vuelta real" al final).
 
 ## Lo que ya está hecho
 
@@ -55,3 +55,37 @@ Lo que **sí** quedó verificado como rechazado: acortar la retención con la cr
   retención compliance hasta 2027-09-20: no se pueden borrar, y no molestan (son 52 bytes cada uno).
 - La clave maestra de Backblaze está en el `.env` del legado y **apareció completa en la salida de un comando
   durante esta sesión**: conviene rotarla desde el panel de B2.
+
+## Encendido (2026-09-18)
+
+| Paso | Resultado |
+|---|---|
+| Backup de la base `plataforma` | `/root/plataforma-pgdump-antes-t4-20260918T122323Z.dump` (72 MB) |
+| Imagen reconstruida y migraciones | `0009` a `0012` aplicadas; `passkeys.real=false`, `PASSKEYS_HABILITADAS` ausente |
+| Servicios recreados con los informes apagados | `/api/v2/health` ok en los cuatro componentes; las rutas de passkeys responden **503** |
+| Configuración de informes | 17 variables en `plataforma.env` (backup previo en `/root/plataforma-env-backup-informes-*`); montajes archivo por archivo en `deploy/compose.yml` (`d1dd0cf`), para que el scheduler no vea la contraseña del migrador |
+| Credenciales de SMTP | copiadas del `.env` del legado a `secretos/smtp-{usuario,clave}`, sin mostrarlas |
+| Vigilante del legado | `VIGILANTE_INFORMES_ENABLED=true` en el `.env` del legado, con un reinicio a las 15:38:30 UTC |
+
+### Lo que el diseño decía mal: el dueño de los secretos
+
+El diseño (§9 bis) y el plan decían que los secretos quedan **0600 root**. El primer arranque con los informes
+encendidos falló con `EACCES` al abrir `b2-escritura-id`: el `entrypoint` baja los privilegios con `gosu` y **node
+corre como uid 1000**, así que un archivo de root no se puede leer. Es la misma razón por la que el keyring del
+tramo 3 ya era de uid 1000 con 0400. Las guardas de `src/seguridad/secreto.ts` exigen además que el dueño sea el
+usuario del proceso. Corregido: los siete archivos que lee node (cuatro de B2, dos de SMTP y la privada de firma)
+son de uid 1000 con permisos 0400; el directorio de pendientes es de uid 1000 con 0700. La única contraseña que
+sigue siendo de root es la de PostgreSQL, que el `entrypoint` lee como root antes de bajar los privilegios.
+
+## Primera vuelta real
+
+| Qué | Resultado, verificado en su fuente |
+|---|---|
+| Entregas | `manifiesto` y `reporte` del 2026-09-17 en `subido` + `avisado`, retención hasta **2027-09-20** |
+| Tablas canónicas del tramo 1 | `audit_daily_manifests` con `retention_mode=compliance`, `signing_key_id=e1-2026-09`, 3 eventos; `daily_shadow_reports` con `email_sent_at` y sin error |
+| Objetos en B2 | bajados con la credencial de lectura: `e1/manifiestos/2026-09-17.json` (448 bytes) y `e1/reportes/2026-09-17.json` (802 bytes) |
+| Firma | `npm run verificar-informe` sobre los dos archivos bajados de B2: **válido (kid e1-2026-09)** |
+| Manifiesto | 3 eventos, cadena íntegra |
+| Reporte | **amarillo**, 0 faltantes sin explicar, día de campaña 0. Motivo: `convergencia_no_declarada` en `ml.shipments`, porque el 17 la cuenta de ML no estaba en el worker y no hubo barrido. Es el reporte diciendo la verdad sobre el día del incidente |
+
+La campaña de 7 días cuenta sólo días verdes: arranca a contar desde el primer día limpio.
