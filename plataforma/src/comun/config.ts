@@ -184,7 +184,21 @@ function leerInformes(env: Record<string, string | undefined>, leerArchivo: (rut
   };
 }
 
-export function cargarConfig(env: NodeJS.ProcessEnv, leerArchivo: (ruta: string) => string = leerSecretoProtegido): Config {
+/**
+ * Una variable vacía es una variable ausente.
+ *
+ * Docker Compose interpola `${VAR}` de una variable que no existe como cadena vacía, y la pasa igual al
+ * contenedor. Contra un esquema de `z.string().min(1).optional()` eso no es "ausente" sino "inválida", y el
+ * servicio no arranca: un flag apagado tumbaba el worker. Pasó con `CATALOGO_BOOTSTRAP` el 2026-09-19.
+ */
+function sinVacias(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const limpio: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) if (v !== '') limpio[k] = v;
+  return limpio;
+}
+
+export function cargarConfig(envCrudo: NodeJS.ProcessEnv, leerArchivo: (ruta: string) => string = leerSecretoProtegido): Config {
+  const env = sinVacias(envCrudo);
   const r = Esquema.safeParse(env);
   if (!r.success) {
     const campos = r.error.issues.map((i) => i.path.join('.')).join(', ');

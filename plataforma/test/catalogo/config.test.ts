@@ -133,3 +133,38 @@ describe('E2-CFG-01 plan de keyrings del worker', () => {
       .toThrow(ErrorArranqueCatalogo);
   });
 });
+
+/*
+ * E2-CFG-07 — regresión del 2026-09-19, encontrada al encender el proyector en producción.
+ *
+ * Docker Compose interpola `${VAR}` de una variable que no existe como cadena VACÍA y la pasa igual al
+ * contenedor. El esquema declara estos campos `z.string().min(1).optional()`, así que `''` no es "ausente"
+ * sino "inválida": el worker no arrancaba con "configuración inválida o incompleta: CATALOGO_BOOTSTRAP"
+ * por un flag que estaba apagado. Un flag apagado nunca debe tumbar un servicio.
+ */
+describe('E2-CFG-07 una variable vacía es una variable ausente', () => {
+  it('el proyector se enciende aunque el bootstrap llegue como cadena vacía', () => {
+    const c = cargarConfig({
+      ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json',
+      CATALOGO_BOOTSTRAP: '', CATALOGO_CANARIO: '100',
+    });
+    expect(c.catalogo).toMatchObject({ proyector: true, bootstrap: false, canario: 100 });
+  });
+
+  it('con todas las variables del catálogo vacías no hay catálogo, y no es un error', () => {
+    const c = cargarConfig({
+      ...base, CATALOGO_PROYECTOR: '', CATALOGO_BOOTSTRAP: '', CATALOGO_KEYRING_FILE: '',
+    });
+    expect(c.catalogo).toBeUndefined();
+  });
+
+  it('una vacía no enmascara lo que de verdad falta: el keyring sigue siendo obligatorio', () => {
+    expect(() => cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '' }))
+      .toThrow(ErrorConfig);
+  });
+
+  it('no se come un valor legítimo de otra variable', () => {
+    const c = cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', CATALOGO_LOTE: '50' });
+    expect(c.catalogo?.lote).toBe(50);
+  });
+});

@@ -53,6 +53,23 @@ services:
       BARRIDOS_REGISTRO_FILE: ${BARRIDOS_REGISTRO_FILE:-}
       BARRIDOS_KEYRING_FILE: ${BARRIDOS_KEYRING_FILE:-}
       BARRIDOS_GATEWAY_KEYRING_FILE: ${BARRIDOS_GATEWAY_KEYRING_FILE:-}
+      # Catálogo (E2 T1): el proyector y el bootstrap viven en el worker. Ausentes = apagado, que es el
+      # estado por omisión; `CATALOGO_PROYECTOR=1` o `CATALOGO_BOOTSTRAP=1` sin keyring no arranca.
+      # Sin estas líneas la configuración del host no llega al contenedor y el catálogo queda apagado
+      # en silencio, aunque `plataforma.env` diga lo contrario.
+      #
+      # Sin `:-` a propósito: el esquema las declara `z.string().min(1).optional()`, así que una cadena
+      # VACÍA no es lo mismo que ausente y rompe el arranque con "configuración inválida". Con esta
+      # forma, una variable que no está en `plataforma.env` no se le pasa al contenedor.
+      CATALOGO_PROYECTOR: ${CATALOGO_PROYECTOR}
+      CATALOGO_BOOTSTRAP: ${CATALOGO_BOOTSTRAP}
+      CATALOGO_KEYRING_FILE: ${CATALOGO_KEYRING_FILE}
+      CATALOGO_LOTE: ${CATALOGO_LOTE:-20}
+      CATALOGO_PAUSA_MS: ${CATALOGO_PAUSA_MS:-1000}
+      CATALOGO_CANARIO: ${CATALOGO_CANARIO:-0}
+      CATALOGO_BOOTSTRAP_RPM: ${CATALOGO_BOOTSTRAP_RPM:-10}
+      CATALOGO_BOOTSTRAP_CEDE_SENALES: ${CATALOGO_BOOTSTRAP_CEDE_SENALES:-20}
+      CATALOGO_UMBRAL_ERROR: ${CATALOGO_UMBRAL_ERROR:-10}
     volumes:
       - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
       - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
