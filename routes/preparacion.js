@@ -3257,7 +3257,11 @@ async function pendientesMl(db, mlCfg) {
   }
   const truncado = paginacionCortada;
 
-  let fallosShipment = 0;
+  // Dos causas distintas, contadas aparte y con su id: un no-200 deja rastro en mlFetch, pero un 200 con
+  // un cuerpo sin `status` no dejaba ninguno, y los dos juntos apagaban la poda sin poder averiguar cuál
+  // envío fallaba. Un solo fallo desactiva la poda de TODOS los pendientes, así que saber cuál es importa.
+  const fallosHttp = [];
+  const fallosSinStatus = [];
   const out = [];
   const clavesInconclusas = new Set();
   for (const orden of resultados) {
@@ -3290,7 +3294,7 @@ async function pendientesMl(db, mlCfg) {
 
     const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
     if (shipResp.status !== 200) {
-      fallosShipment++;
+      fallosHttp.push(`${shipmentId}→${shipResp.status}`);
       continue;
     }
     const envio = shipResp.data;
@@ -3299,7 +3303,7 @@ async function pendientesMl(db, mlCfg) {
     // syncPedidosCache la sección ML entera de la corrida (ver revisión 2026-08-08). Se
     // trata igual que un fallo de red: cuenta para `fallosShipment` y nunca se cachea.
     if (!envio?.status) {
-      fallosShipment++;
+      fallosSinStatus.push(String(shipmentId));
       continue;
     }
     db.prepare(`
@@ -3345,9 +3349,15 @@ async function pendientesMl(db, mlCfg) {
     });
   }
 
+  const fallosShipment = fallosHttp.length + fallosSinStatus.length;
   const confiable = !truncado && fallosShipment === 0;
   if (!confiable && fallosShipment > 0) {
-    console.warn(`pendientesMl: ${fallosShipment} fallo(s) de /shipments al listar pendientes ML`);
+    // Se listan hasta 10 ids por causa: con el id se puede ir a mirar ese envío en ML, que es lo que
+    // hace falta para decidir si el dato está roto del lado de ellos o si es un defecto nuestro.
+    const detalle = [];
+    if (fallosHttp.length) detalle.push(`http[${fallosHttp.slice(0, 10).join(' ')}${fallosHttp.length > 10 ? ' …' : ''}]`);
+    if (fallosSinStatus.length) detalle.push(`sin_status[${fallosSinStatus.slice(0, 10).join(' ')}${fallosSinStatus.length > 10 ? ' …' : ''}]`);
+    console.warn(`pendientesMl: ${fallosShipment} fallo(s) de /shipments al listar pendientes ML — ${detalle.join(' ')}`);
   }
   return { pendientes: out, confiable, clavesInconclusas };
 }

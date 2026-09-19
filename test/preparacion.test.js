@@ -2684,6 +2684,38 @@ describe('syncPedidosCache', () => {
     expect(log.estado).toBe('ok');
   });
 
+  it('los fallos de shipment se distinguen por causa en el log, con el id del envío', async () => {
+    // Antes el log decía sólo "4 fallo(s) de /shipments" y contaba juntas dos cosas muy distintas:
+    // un no-200 (red, 404, 429) y un 200 con un cuerpo sin `status`. La consecuencia práctica es que
+    // los fallos llevaban semanas desactivando la poda de 55 pedidos sin que se pudiera averiguar
+    // cuál envío fallaba ni por qué: un no-200 deja rastro en mlFetch, pero un 200 sin `status` no
+    // dejaba ninguno. Sin el id no hay forma de mirar ese envío en ML.
+    buildTestApp(db);
+    wooFetch.mockResolvedValue({ data: [] });
+    const avisos = [];
+    const warnOriginal = console.warn;
+    console.warn = (...args) => { avisos.push(args.join(' ')); };
+    try {
+      mlFetch
+        .mockResolvedValueOnce({ status: 200, data: { results: [
+          { id: 101, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'a' }, shipping: { id: 901 }, order_items: [] },
+          { id: 102, date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'b' }, shipping: { id: 902 }, order_items: [] },
+        ] } })
+        .mockResolvedValueOnce({ status: 500, data: {} })                 // 901: no-200
+        .mockResolvedValueOnce({ status: 200, data: { id: 902 } });       // 902: 200 sin status
+      await syncPedidosCache(db, CFG);
+    } finally {
+      console.warn = warnOriginal;
+    }
+    const linea = avisos.find((a) => a.includes('fallo(s) de /shipments'));
+    expect(linea).toBeTruthy();
+    // Las dos causas, separadas y con el id del envío: es lo que permite ir a mirarlo a ML.
+    expect(linea).toMatch(/sin_status/);
+    expect(linea).toMatch(/902/);
+    expect(linea).toMatch(/http/);
+    expect(linea).toMatch(/901/);
+  });
+
   it('un status terminal cacheado hace más de 7 días se vuelve a verificar contra ML', async () => {
     buildTestApp(db);
     const hace10Dias = new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString();
