@@ -69,6 +69,16 @@ describe('E2-BOO-01 bootstrap del catálogo', () => {
     expect(await corrida(ml)).toMatchObject({ estado: 'terminada', pagina_confirmada: 3, encolados: 3 });
   });
 
+  it('un recurso sin cambios desde antes del bootstrap (E1 ya lo observó y nunca lo encoló) igual se encola', async () => {
+    // Es la razón de ser del bootstrap: la corriente de E1 sólo encola lo que cambió.
+    await admin.query(`INSERT INTO integrations.resource_observations
+      (channel_account_id, topic, resource_id, remote_version, remote_hash, projection_hash, lifecycle)
+      VALUES ($1, 'ml.items', 'MLA1', '2026-09-18T10:00:00.000Z', decode(repeat('00', 32), 'hex'), decode(repeat('00', 32), 'hex'), 'open')`, [ml]);
+    const { transporte } = mlFalso([['MLA1'], []]);
+    await boot().unaPagina(cuentaMl(transporte));
+    expect(await inbox()).toEqual([{ resource_id: 'MLA1', source: 'bootstrap' }]);
+  });
+
   it('RETOMA: un proceso muere en la página 2 y el que arranca sigue desde ahí, según PostgreSQL', async () => {
     const primero = mlFalso([['MLA1'], ['MLA2'], ['MLA3'], []]);
     const a = boot();

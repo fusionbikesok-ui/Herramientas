@@ -5,6 +5,7 @@ import type pg from 'pg';
 import type { Logger } from 'pino';
 import { correlacionDe } from '../comun/correlacion.ts';
 import { sinSesion, type ProveedorSesion } from '../auth/sesion.ts';
+import { registrarCatalogo } from './catalogo.ts';
 import { registrarCatalogoInterno } from './catalogo-interna.ts';
 import { registrarSenales, type OpcionesSenales } from './senales.ts';
 import { registrarEstadoInformes } from './informes.ts';
@@ -135,6 +136,7 @@ export function crearApi(opciones: OpcionesApi) {
   });
 
   registrarPasskeys(app, opciones.pool, sesion, opciones.passkeys ?? {}, ahora);
+  registrarCatalogo(app, opciones.pool, sesion, ahora);
   if (opciones.senales) {
     registrarSenales(app, opciones.pool, opciones.logger, opciones.senales, ahora);
     // El estado de los informes viaja con el mismo keyring y orígenes: sin API interna, tampoco existe (404).

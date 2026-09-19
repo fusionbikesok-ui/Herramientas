@@ -117,6 +117,70 @@ paths:
         '401': { description: Sin sesión, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { description: Sin capacidad, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
+  /catalog/models:
+    get:
+      tags: [catalog]
+      summary: Modelos del catálogo canónico (E2 T1)
+      description: Paginados por cursor (el id del último de la página anterior). Requiere `catalog.read`.
+      security:
+        - sessionCookie: []
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Una página, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogModelPage' } } } }
+        '401': { description: Sin sesión, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Sin capacidad, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: Parámetros inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /catalog/variants:
+    get:
+      tags: [catalog]
+      summary: Variantes vendibles con su SKU o pendientes, y sus publicaciones (E2 T1)
+      description: Con `pending=true`, sólo las que esperan SKU. Requiere `catalog.read`.
+      security:
+        - sessionCookie: []
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string, format: uuid } }
+        - { name: pending, in: query, schema: { type: string, enum: ['true', 'false'] } }
+      responses:
+        '200': { description: Una página, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVariantPage' } } } }
+        '401': { description: Sin sesión, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Sin capacidad, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: Parámetros inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /catalog/reconciliation:
+    get:
+      tags: [catalog]
+      summary: Conciliación del catálogo (E2 T1, §8 del diseño)
+      description: |
+        Denominadores por canal, tipo y estado; variantes con SKU, pendientes y archivadas; casos abiertos por tipo
+        (y nuevos en 24 h); los cuatro cruces conjunto por conjunto; la última copia del matcher; y el hash del estado
+        del catálogo sin ids ni marcas de tiempo. Requiere `catalog.read`.
+      security:
+        - sessionCookie: []
+      responses:
+        '200': { description: Estado medido en el momento, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogReconciliation' } } } }
+        '401': { description: Sin sesión, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Sin capacidad, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /internal/v1/catalogo/copias:
+    servers:
+      - url: http://127.0.0.1:3201
+        description: Plano de control interno; no se publica por Nginx
+    post:
+      tags: [catalog]
+      summary: Abre una copia del matcher o de identidad (E2 T1)
+      description: |
+        Misma firma y nonce que las señales. Después, `POST /internal/v1/catalogo/copias/{id}/lotes` con `{numero, filas}`
+        (1..N sin huecos) y `POST /internal/v1/catalogo/copias/{id}/confirmar`, que verifica conteo y hash (SHA-256 de
+        RFC 8785 de las filas ordenadas por `recurso\0variacion`) y aplica todo en una transacción; 409 `copia_incompleta`
+        o `hash_distinto` si no coincide. Los cambios sueltos llegan por `POST /internal/v1/catalogo/eventos` y
+        `POST /internal/v1/catalogo/eventos-identidad`, deduplicados por `evento_id`.
+      responses:
+        '201': { description: 'Copia abierta; devuelve su copy_id' }
+        '400': { description: Cuerpo inválido, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: 'Firma, origen o nonce inválidos', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /internal/v1/reconciliation-signals:
     servers:
       - url: http://127.0.0.1:3201
@@ -150,7 +214,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SignalAccepted' }
         '400': { description: Envelope inválido, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '401': { description: Origen, firma, ventana, clave o nonce inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: 'Origen, firma, ventana, clave o nonce inválidos', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '409': { description: Canal o tópico sin cuenta configurada, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '413': { description: Cuerpo mayor a 16 KiB, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '503': { description: PostgreSQL no disponible, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -184,7 +248,7 @@ paths:
                 additionalProperties: false
                 required: [ultimo, atrasadas]
                 properties:
-                  ultimo: { type: [string, 'null'], format: date }
+                  ultimo: { type: string, format: date, nullable: true }
                   atrasadas:
                     type: array
                     items:
@@ -194,7 +258,7 @@ paths:
                       properties:
                         tipo: { type: string, enum: [manifiesto, reporte] }
                         fecha: { type: string, format: date }
-        '401': { description: Origen, firma, ventana o clave inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: 'Origen, firma, ventana o clave inválidos', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
 components:
   securitySchemes:
@@ -256,6 +320,105 @@ components:
         valor: { type: number }
         runbook: { type: string }
 
+    CatalogModelPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, origen, clave_origen, titulo, archivado, variantes]
+            properties:
+              id: { type: string, format: uuid }
+              origen: { type: string, enum: [woo_padre, woo_simple, ml_familia, ml_clasico, ml_simple] }
+              clave_origen: { type: string }
+              titulo: { type: string }
+              archivado: { type: boolean }
+              variantes: { type: integer, minimum: 0 }
+        next_cursor: { type: string, nullable: true }
+    CatalogVariantPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, model_id, sku, archivado, representaciones]
+            properties:
+              id: { type: string, format: uuid }
+              model_id: { type: string, format: uuid }
+              sku: { type: string, pattern: '^FB-[0-9]+$', nullable: true }
+              archivado: { type: boolean }
+              representaciones:
+                type: array
+                items:
+                  type: object
+                  required: [canal, recurso, variacion]
+                  properties:
+                    canal: { type: string, enum: [mercadolibre, woocommerce] }
+                    recurso: { type: string }
+                    variacion: { type: string }
+                    sku_observado: { type: string, nullable: true }
+                    estado: { type: string, nullable: true }
+        next_cursor: { type: string, nullable: true }
+    CatalogCruce:
+      type: object
+      required: [total, discrepan]
+      properties:
+        total: { type: integer, minimum: 0 }
+        discrepan: { type: integer, minimum: 0 }
+    CatalogReconciliation:
+      type: object
+      required: [representaciones, variantes, modelos, casos_abiertos, cruces, ultima_copia, hash]
+      properties:
+        representaciones:
+          type: array
+          items:
+            type: object
+            required: [canal, tipo, estado, n]
+            properties:
+              canal: { type: string }
+              tipo: { type: string, enum: [contenedor, vendible] }
+              estado: { type: string, enum: [activo, pausado, cerrado, otro] }
+              n: { type: integer }
+        variantes:
+          type: object
+          required: [con_sku, pendientes, archivadas]
+          properties:
+            con_sku: { type: integer }
+            pendientes: { type: integer }
+            archivadas: { type: integer }
+        modelos:
+          type: array
+          items: { type: object, required: [origen, n], properties: { origen: { type: string }, n: { type: integer } } }
+        casos_abiertos:
+          type: array
+          items:
+            type: object
+            required: [tipo, prioridad, n, nuevos_24h]
+            properties:
+              tipo: { type: string }
+              prioridad: { type: string, enum: [baja, normal, urgente] }
+              n: { type: integer }
+              nuevos_24h: { type: integer }
+        cruces:
+          type: object
+          required: [decisiones_vinculadas, sin_decision_pendientes, omitidas, sku_inexistente]
+          properties:
+            decisiones_vinculadas: { $ref: '#/components/schemas/CatalogCruce' }
+            sin_decision_pendientes: { $ref: '#/components/schemas/CatalogCruce' }
+            omitidas: { $ref: '#/components/schemas/CatalogCruce' }
+            sku_inexistente: { $ref: '#/components/schemas/CatalogCruce' }
+        ultima_copia:
+          type: object
+          nullable: true
+          properties:
+            tipo: { type: string, enum: [matcher, identidad] }
+            confirmada_en: { type: string, format: date-time }
+            resultado: {}
+        hash: { type: string, pattern: '^[0-9a-f]{64}$' }
     ShadowStatus:
       type: object
       required: [metrics, alerts]

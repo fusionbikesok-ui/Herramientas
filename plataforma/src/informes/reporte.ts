@@ -13,6 +13,7 @@
  */
 import type pg from 'pg';
 import { medianocheArt } from './dia.ts';
+import { seccionCatalogo, type SeccionCatalogo } from '../catalogo/conciliacion.ts';
 import type { Manifiesto } from './manifiesto.ts';
 
 /** Las únicas causas que cuentan como explicación: quedaron registradas por el sistema. No hay manual. */
@@ -43,6 +44,8 @@ export interface Reporte {
   /** Días verdes seguidos, terminando en éste. Cero si este día no es verde: la campaña reinicia. */
   dia_campana: number;
   reporte_anterior: string | null;
+  /** E2 T1: los casos del catálogo, como estaban en el corte. No interviene en el semáforo. */
+  catalogo?: SeccionCatalogo;
 }
 
 // Una señal que al cierre del día no terminó bien es un faltante; `excluded` también, salvo que su motivo
@@ -173,5 +176,6 @@ export async function armarReporte(
     topicos, faltantes_sin_explicar: faltantesSinExplicar, alertas, semaforo,
     dia_campana: diaCampana,
     reporte_anterior: previos.rows[0]?.fecha ?? null,
+    catalogo: await seccionCatalogo(pool, desde, hasta, corte),
   };
 }
