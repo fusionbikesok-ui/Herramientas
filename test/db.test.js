@@ -111,6 +111,7 @@ describe('db schema', () => {
       'operational_days',
       'ordenes_ml_procesadas',
       'ordenes_ml_wc_pedidos',
+      'outbox_config',
       'outbox_plataforma',
       'password_reset_tokens',
       'pedidos',
