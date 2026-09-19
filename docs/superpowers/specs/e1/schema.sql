@@ -862,6 +862,9 @@ CREATE TABLE catalog.copias (
   corte          timestamptz NOT NULL DEFAULT now(),
   estado         text NOT NULL DEFAULT 'abierta' CHECK (estado IN ('abierta', 'confirmada', 'abortada')),
   error_detail   text,
+  -- Lo que hizo la confirmación (abiertas, cerradas, sin cambios…). Una copia diaria que cambia algo quiere
+  -- decir que un evento se perdió en el camino: es la conciliación, y la lee el reporte diario.
+  resultado      jsonb,
   abierta_en     timestamptz NOT NULL DEFAULT now(),
   confirmada_en  timestamptz,
   CONSTRAINT copias_confirmada_check CHECK ((estado = 'confirmada') = (confirmada_en IS NOT NULL))

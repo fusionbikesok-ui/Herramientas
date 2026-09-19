@@ -47,7 +47,7 @@ import { backfillVentas } from './lib/criticidad.js';
 import { auditoriaRouter } from './routes/auditoria.js';
 import { barridoAuditoria } from './lib/auditoria.js';
 import { incidentesRouter } from './routes/incidentes.js';
-import { procesarAlertasEmailIncidentes } from './lib/incidentes.js';
+import { abrirOActualizarIncidente, confirmarCicloSano, procesarAlertasEmailIncidentes } from './lib/incidentes.js';
 import { revisarBackupNube, revisarBackupPostgres } from './lib/vigiaBackup.js';
 import { anunciarVigilanteApagado, revisarInformeDelDia } from './lib/vigilanteInformes.js';
 import { devicesRouter } from './routes/devices.js';
@@ -70,6 +70,7 @@ import { registrarWebhookMl, registrarWebhookWooProducto, registrarWebhookWooPed
 import { marcarSombra, abandonarHuerfanas, abandonarVencidos, permitirCuentaAjena, copiaHabilitada, crearColaSombra, crearSelectorCanario } from './lib/sombra.js';
 import { crearEmisorSombra, crearEnvioSenal, destinoSenal, importarPerdidas } from './lib/emisorSombra.js';
 import { iniciarOutboxPlataforma } from './lib/outboxPlataforma.js';
+import { copiaDiaria, msHastaProximaCopia } from './lib/catalogoCopia.js';
 import { crearMuestreoCola, evaluarAlertasLegado, medirSombraLegado, publicarAlertasLegado } from './lib/metricasSombra.js';
 import { cargarKeyringInterno, cargarKeyringInternoActivo, crearOrigenesInternos, verificarInterno } from './lib/internoHmac.js';
 import { crearGatewayCanal, crearPresupuestoShadow, ErrorOperacionInvalida } from './lib/gatewayCanal.js';
@@ -178,6 +179,26 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     iniciarOutboxPlataforma(db, { cargarKeyring: cargarKeyringInternoActivo });
   } catch (e) {
     console.error('[outbox] configuración inválida, despachador apagado:', e.message);
+  }
+  // E2 T1: copia diaria del matcher y de los casos de identidad a la plataforma, 03:30 ART. Es la conciliación:
+  // con la outbox funcionando no cambia nada, y si cambia algo abre un incidente. Apagada salvo
+  // CATALOGO_COPIA_DIARIA=true; usa el destino y el keyring de la sombra.
+  if (process.env.CATALOGO_COPIA_DIARIA === 'true') {
+    try {
+      const keyringCopia = cargarKeyringInternoActivo(process.env.SOMBRA_KEYRING_FILE);
+      const opcionesCopia = { url: process.env.SOMBRA_PLATAFORMA_URL, keyring: keyringCopia };
+      const programar = () => setTimeout(() => {
+        copiaDiaria(db, opcionesCopia, {
+          abrir: (i) => abrirOActualizarIncidente(db, i), cerrar: (i) => confirmarCicloSano(db, i),
+        })
+          .then((r) => console.log(`[catalogo] copia diaria: matcher=${r.matcher.total} identidad=${r.identidad.total} diferencias=${r.diferencias}`))
+          .catch((e) => console.error('[catalogo] copia diaria falló:', e.message))
+          .finally(programar);
+      }, msHastaProximaCopia()).unref();
+      programar();
+    } catch (e) {
+      console.error('[catalogo] copia diaria sin configuración válida, apagada:', e.message);
+    }
   }
   app._colaSombra = colaSombra;
   const canario = crearSelectorCanario();

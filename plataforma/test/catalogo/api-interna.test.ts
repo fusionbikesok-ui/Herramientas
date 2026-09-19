@@ -14,6 +14,8 @@ import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 // La traducción real del legado: contrato de punta a punta entre la fila que deja el trigger y la API.
 // @ts-expect-error módulo JS del legado sin tipos
 import { traducirEvento } from '../../../lib/outboxPlataforma.js';
+// @ts-expect-error módulo JS del legado sin tipos
+import { enviarCopia, hashFilas as hashLegado } from '../../../lib/catalogoCopia.js';
 
 const clave = randomBytes(32);
 const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
@@ -103,6 +105,31 @@ describe('E2-CPY-02 API interna del catálogo', () => {
       const r = await post(ruta, cuerpo);
       expect(r.status, `${f.tipo} ${JSON.stringify(f.payload)}`).toBe(200);
     }
+  });
+
+  it('CONTRATO: el hash del legado es el mismo que el de la plataforma', () => {
+    const filas = [
+      { recurso: 'MLA2', variacion: '', sku: null, accion: 'omitir', actor: 'persona', motivo: null, confirmado_por: null, actualizado_en_legado: null },
+      { recurso: 'MLA1', variacion: '9', sku: 'FB-1', accion: 'confirmar', actor: 'sistema', motivo: 'autoasignación por SKU — ñ "comillas" \\ 🚲', confirmado_por: null, actualizado_en_legado: '2026-09-18T10:00:00.000Z' },
+    ];
+    const identidad = [{ caso_legado: '7', recurso: 'MLA3', variacion: '', prioridad: 'urgente', detalle: { z: 1, a: { b: [true, null, 'x'] }, 'ü': 'é' } }];
+    expect(hashLegado(filas)).toBe(hashFilas(filas as FilaDecision[]));
+    expect(hashLegado(identidad)).toBe(hashFilas(identidad as never));
+  });
+
+  it('CONTRATO: la copia completa del legado contra la API real, en varios lotes', async () => {
+    // Un fetch que en vez de salir a la red le pega a la app con inject: la firma, las rutas y los cuerpos
+    // son los reales del legado.
+    const app = api();
+    const fetch = async (url: URL, init: { headers: Record<string, string>; body: Buffer }) => {
+      const r = await app.inject({ method: 'POST', url: url.pathname, payload: init.body, headers: init.headers, remoteAddress: '127.0.0.1' });
+      return { status: r.statusCode, text: async () => r.body };
+    };
+    const filas = Array.from({ length: 7 }, (_, i) => ({ recurso: `MLA9${i}`, variacion: '', sku: `FB-9${i}`, accion: 'confirmar',
+      actor: 'persona', motivo: null, confirmado_por: 'jose', actualizado_en_legado: null }));
+    const r = await enviarCopia({ url: 'http://plataforma', keyring, fetch, tipo: 'matcher', filas, corte: new Date(), lote: 3 }) as { resultado: { abiertas: number } };
+    expect(r.resultado.abiertas).toBe(7);
+    expect((await admin.query("SELECT resultado->>'abiertas' AS a FROM catalog.copias WHERE estado = 'confirmada'")).rows).toEqual([{ a: '7' }]);
   });
 
   it('sin firma válida, 401, y no se escribe nada', async () => {
