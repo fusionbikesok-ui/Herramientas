@@ -821,8 +821,12 @@ CREATE TABLE catalog.identity_cases (
 -- Un caso abierto por objeto y tipo. Cerrado, puede volver a abrirse: el problema puede reaparecer.
 CREATE UNIQUE INDEX identity_cases_un_abierto_variante
   ON catalog.identity_cases (variant_id, tipo) WHERE cerrado_en IS NULL AND variant_id IS NOT NULL;
+-- El caso del legado entra en la clave: el legado admite varios casos abiertos por publicación (uno por dirección),
+-- y con (representación, tipo) solos colapsaban en uno, y resolver uno cerraba el del otro (revisión de la
+-- implementación). Para los casos propios del catálogo, caso_legado no existe y la clave queda como antes.
 CREATE UNIQUE INDEX identity_cases_un_abierto_representacion
-  ON catalog.identity_cases (representation_id, tipo) WHERE cerrado_en IS NULL AND representation_id IS NOT NULL;
+  ON catalog.identity_cases (representation_id, tipo, (COALESCE(detalle->>'caso_legado', '')))
+  WHERE cerrado_en IS NULL AND representation_id IS NOT NULL;
 CREATE INDEX identity_cases_abiertos
   ON catalog.identity_cases (company_id, tipo, prioridad) WHERE cerrado_en IS NULL;
 

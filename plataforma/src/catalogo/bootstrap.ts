@@ -26,6 +26,8 @@ import { cifrarSobre, type KeyringSobre } from '../seguridad/sobre.ts';
 
 export type TopicoBootstrap = 'ml.items' | 'woo.products';
 
+export class ErrorLeasePerdido extends Error { override name = 'ErrorLeasePerdido'; }
+
 export interface CuentaBootstrap {
   id: string;
   topic: TopicoBootstrap;
@@ -164,10 +166,23 @@ export function crearBootstrap(o: OpcionesBootstrap) {
         return { estado: 'cedio_senales', detalle: `${esperando} señales de ML esperando` };
       }
 
+      // El lease se renueva antes de cada llamada al canal (hallazgo alto de la revisión): a 10 por minuto, una
+      // página de Woo con 100 padres variables son más de 100 llamadas, bastante más que un lease fijo; al vencer,
+      // otro worker retomaba la misma página y ninguno podía confirmar el checkpoint.
+      const renovando = (async <T>(llamada: () => Promise<T>): Promise<T> => {
+        const r = await o.pool.query(
+          `UPDATE catalog.bootstrap_runs SET lease_until = $3::timestamptz + make_interval(secs => $4)
+            WHERE id = $1 AND lease_token = $2`, [tomada.id, tomada.lease_token, ahora().toISOString(), leaseMs / 1000]);
+        if (r.rowCount !== 1) throw new ErrorLeasePerdido('otro worker tomó el bootstrap de esta cuenta');
+        return llamar(llamada);
+      }) as ReturnType<typeof crearRitmo>;
+
       let pagina: Pagina;
       try {
-        pagina = c.topic === 'ml.items' ? await leerPaginaMl(c, tomada.cursor, llamar) : await leerPaginaWoo(c, tomada.cursor, llamar);
+        pagina = c.topic === 'ml.items' ? await leerPaginaMl(c, tomada.cursor, renovando) : await leerPaginaWoo(c, tomada.cursor, renovando);
       } catch (e) {
+        // Perdimos el lease: la página es de otro worker ahora. No se toca la corrida.
+        if (e instanceof ErrorLeasePerdido) return { estado: 'ocupada', detalle: e.message };
         if (e instanceof ErrorBarridoReintentable) {
           await soltar('pausada', ', error_detail = $4', [e.message.slice(0, 200)]);
           return { estado: 'cedio_429', detalle: e.message };

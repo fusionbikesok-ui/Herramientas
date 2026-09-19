@@ -135,6 +135,16 @@ describe('E2-CPY-03 copia del catálogo desde el legado', () => {
       expect(i.a).toEqual(['divergencia']);
     });
 
+    it('con filas que no se pueden traducir, no manda nada: su ausencia cerraría decisiones válidas', async () => {
+      decision('MLA1|', 'FB-1');
+      decision('ROTA', 'FB-2');
+      const i = incidentes();
+      const p = plataformaFalsa(feliz);
+      await expect(copiaDiaria(db, { url: 'http://p', keyring, fetch: p.fetch }, i)).rejects.toThrow(/no se pueden copiar/);
+      expect(p.recibidos).toEqual([]);
+      expect(i.a).toEqual(['copia_fallida']);
+    });
+
     it('si falla, abre copia_fallida', async () => {
       const i = incidentes();
       const caida = { fetch: async () => { throw new Error('ECONNREFUSED'); } };

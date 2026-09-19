@@ -140,6 +140,23 @@ describe('E2-BOO-01 bootstrap del catálogo', () => {
     expect((await inbox()).map((m) => m.resource_id)).toEqual(['MLA1', 'MLA2']);
   });
 
+  it('una página más larga que el lease no se traba: cada llamada lo renueva', async () => {
+    // Lease de 20 s y 10 llamadas por minuto: una búsqueda y cinco multigets son 30 s, más que el lease.
+    let t = Date.parse('2026-09-19T00:00:00Z');
+    const { transporte } = mlFalso([Array.from({ length: 100 }, (_, i) => `MLA${i}`), []]);
+    const inicio = t; let intruso: unknown = null;
+    const otro = boot({ workerId: 'w2', ahora: () => new Date(t) });
+    const b = boot({ rpm: 10, leaseMs: 20_000, ahora: () => new Date(t), dormir: async (ms) => {
+      t += ms;
+      // A los 25 s de página, con el lease original ya vencido, otro worker intenta tomarla.
+      if (!intruso && t - inicio > 25_000) intruso = await otro.unaPagina(cuentaMl(mlFalso([[]]).transporte));
+    } });
+    expect(await b.unaPagina(cuentaMl(transporte))).toMatchObject({ estado: 'avanzo', encolados: 100 });
+    // El intruso encontró el lease renovado: no la tomó.
+    expect(intruso).toMatchObject({ estado: 'ocupada' });
+    expect(await corrida(ml)).toMatchObject({ pagina_confirmada: 1 });
+  });
+
   it('dos workers no leen la misma cuenta a la vez', async () => {
     let soltar!: () => void;
     const lento: TransporteCanal = { get: () => new Promise((ok) => { soltar = () => ok(resp({ results: [], scroll_id: null })); }) };

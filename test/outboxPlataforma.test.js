@@ -235,7 +235,10 @@ describe('E2-OBX-01 outbox del legado hacia la plataforma', () => {
         VALUES ('ml_fusion', 'MLA5|', 'sin_match', 'pendiente', 'normal', 'f', 'x', 'x')`).run().lastInsertRowid;
       db.prepare("UPDATE identidad_casos SET ultima_deteccion_en = 'y', evidencia_fingerprint = 'g' WHERE id = ?").run(id);
       db.prepare("UPDATE identidad_casos SET estado = 'resuelto' WHERE id = ?").run(id);
-      expect(outbox().map((e) => [e.tipo, e.estado])).toEqual([['identidad.caso', 'pendiente'], ['identidad.caso', 'resuelto']]);
+      // Un cambio de clasificación también: la plataforma lo muestra en el caso (hallazgo medio de la revisión).
+      db.prepare("UPDATE identidad_casos SET clasificacion = 'otra' WHERE id = ?").run(id);
+      expect(outbox().map((e) => [e.tipo, e.estado, e.clasificacion])).toEqual([
+        ['identidad.caso', 'pendiente', 'sin_match'], ['identidad.caso', 'resuelto', 'sin_match'], ['identidad.caso', 'resuelto', 'otra']]);
     });
   });
 

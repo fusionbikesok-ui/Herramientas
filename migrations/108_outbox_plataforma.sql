@@ -80,11 +80,12 @@ BEGIN
     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 END;
 
--- Sólo cambios de estado o severidad: la detección periódica reescribe `ultima_deteccion_en` de cientos de
+-- Sólo cambios de estado, severidad, clasificación o dirección: la detección periódica reescribe `ultima_deteccion_en` de cientos de
 -- casos en cada pasada, y eso inundaría la outbox sin decirle nada nuevo a la plataforma.
 CREATE TRIGGER IF NOT EXISTS outbox_identidad_cambio AFTER UPDATE ON identidad_casos
 WHEN (SELECT valor FROM outbox_config WHERE clave = 'captura') = 'true'
-  AND (OLD.estado IS NOT NEW.estado OR OLD.severidad IS NOT NEW.severidad OR OLD.ml_key IS NOT NEW.ml_key)
+  AND (OLD.estado IS NOT NEW.estado OR OLD.severidad IS NOT NEW.severidad OR OLD.ml_key IS NOT NEW.ml_key
+       OR OLD.clasificacion IS NOT NEW.clasificacion OR OLD.direccion IS NOT NEW.direccion)
 BEGIN
   INSERT INTO outbox_plataforma (evento_id, tipo, payload, creado_en, proximo_en)
   VALUES (lower(hex(randomblob(16))), 'identidad.caso',

@@ -58,6 +58,12 @@ export interface Proyector {
 export function crearProyector(o: OpcionesProyector): Proyector {
   let procesados = 0;
   let detenido: string | null = null;
+  // El umbral se mide sobre los últimos VENTANA mensajes, y sólo con al menos MINIMO: medido por vuelta, un único
+  // mensaje rechazado (un producto agrupado de Woo, que es legítimo) o un error transitorio suelto era 1 de 1, el
+  // 100 %, y detenía el proyector para siempre.
+  const VENTANA = 50; const MINIMO = 10;
+  const recientes: boolean[] = [];
+  const anotar = (fallo: boolean) => { recientes.push(fallo); if (recientes.length > VENTANA) recientes.shift(); };
 
   async function procesar(tx: Consultable, r: Reclamo): Promise<'aplicado' | 'vencido'> {
     if (!r.sobre) {
@@ -106,9 +112,13 @@ export function crearProyector(o: OpcionesProyector): Proyector {
         await detener(`canario de ${o.canario} completo: revisar antes de seguir`, r);
         return { ...r, detenido };
       }
-      const reclamos = await reclamar(o.pool, 'inbox', [...TOPICOS_CATALOGO], Math.min(o.lote, restantes));
-      r.reclamados = reclamos.length;
-      for (const reclamo of reclamos) {
+      // De a UN mensaje por reclamo (hallazgo alto de la revisión): reclamar el lote entero con leases de 60 s
+      // dejaba que los últimos vencieran esperando su turno, volvieran a la cola gastando un intento y
+      // terminaran en la DLQ sin haberse proyectado nunca.
+      for (let i = 0; i < Math.min(o.lote, restantes); i++) {
+        const [reclamo] = await reclamar(o.pool, 'inbox', [...TOPICOS_CATALOGO], 1);
+        if (!reclamo) break;
+        r.reclamados++;
         try {
           const resultado = await enTransaccion(o.pool, async (tx) => {
             const x = await procesar(tx, reclamo);
@@ -116,21 +126,27 @@ export function crearProyector(o: OpcionesProyector): Proyector {
             return x;
           });
           if (resultado === 'vencido') r.vencidos++; else r.aplicados++;
+          anotar(false);
         } catch (error) {
           if (error instanceof ErrorRechazoProyeccion) {
             await fallar(o.pool, reclamo, error);
             r.rechazados++;
+            anotar(true);
           } else {
             // Todo lo demás se reintenta: una falla de base, un bloqueo, un sobre que no descifra por una
             // rotación de claves a medias. Si es persistente, los intentos se agotan y va a la DLQ.
             await fallar(o.pool, reclamo, new ErrorTransitorio((error as Error).message));
             r.errores++;
+            anotar(true);
           }
         }
         procesados++;
       }
-      if (r.reclamados > 0 && (r.errores * 100) / r.reclamados > o.umbralErrorPorciento) {
-        await detener(`${r.errores} de ${r.reclamados} mensajes fallaron en una vuelta (umbral ${o.umbralErrorPorciento} %)`, r);
+      // Los rechazos cuentan (hallazgo alto): si cambia el formato de los payloads, todo el lote se rechaza, y sin
+      // contarlos el proyector seguiría mandando mensajes válidos a la DLQ en vez de detenerse.
+      const fallidos = recientes.filter(Boolean).length;
+      if (recientes.length >= MINIMO && (fallidos * 100) / recientes.length > o.umbralErrorPorciento) {
+        await detener(`${fallidos} de los últimos ${recientes.length} mensajes fallaron o se rechazaron (umbral ${o.umbralErrorPorciento} %)`, r);
       } else if (o.canario > 0 && procesados >= o.canario) {
         await detener(`canario de ${o.canario} completo: revisar antes de seguir`, r);
       }

@@ -199,6 +199,22 @@ describe('E2-PRY-10 proyector del catálogo', () => {
         .toEqual([{ estado_remoto: 'publish', version_remota: '2026-09-18T12:00:00Z' }]);
     });
 
+    it('dos proyectores con versiones distintas de un recurso NUEVO: una sola variante y gana la más nueva', async () => {
+      for (let i = 0; i < 5; i++) {
+        const id = 1500 + i;
+        await encolar(woo, 'woo.products', String(id), { id, type: 'simple', status: 'draft', sku: '' }, { version: '2026-09-18T12:00:00Z' });
+        await encolar(woo, 'woo.products', String(id), { id, type: 'simple', status: 'publish', sku: '' }, { version: '2026-09-18T13:00:00Z' });
+        // Dos workers, cada uno reclama un mensaje: las dos transacciones se cruzan sobre un recurso que no existe.
+        await Promise.all([proyector({ lote: 1 }).unaVuelta(), proyector({ lote: 1 }).unaVuelta()]);
+        expect(await q('SELECT count(*)::int n FROM catalog.sellable_variants v JOIN catalog.external_representations r ON r.variant_id = v.id WHERE r.recurso = $1', [String(id)]))
+          .toEqual([{ n: 1 }]);
+        expect(await q('SELECT estado_remoto FROM catalog.external_representations WHERE recurso = $1', [String(id)])).toEqual([{ estado_remoto: 'publish' }]);
+      }
+      // Ninguna variante huérfana: todas tienen su publicación.
+      expect(await q('SELECT count(*)::int n FROM catalog.sellable_variants v WHERE NOT EXISTS (SELECT 1 FROM catalog.external_representations r WHERE r.variant_id = v.id)'))
+        .toEqual([{ n: 0 }]);
+    });
+
     it('la papelera archiva con motivo y la reaparición desarchiva', async () => {
       await encolar(woo, 'woo.products', '800', { id: 800, type: 'simple', status: 'trash' });
       await proyector().unaVuelta();
@@ -248,13 +264,21 @@ describe('E2-PRY-10 proyector del catálogo', () => {
         .toEqual([{ n: 1 }]);
     });
 
-    it('si falla más que el umbral en una vuelta, se detiene', async () => {
-      // Sobres cifrados con otra clave: no se pueden descifrar.
-      for (let i = 0; i < 3; i++) await encolar(woo, 'woo.products', String(1200 + i), { id: 1200 + i, type: 'simple' }, { keyring: otroKeyring });
-      const p = proyector();
-      const r = await p.unaVuelta();
-      expect(r.errores).toBe(3);
+    it('si los últimos mensajes fallan más que el umbral, se detiene; los rechazos también cuentan', async () => {
+      // Sobres cifrados con otra clave (no se pueden descifrar) y productos agrupados (rechazados).
+      for (let i = 0; i < 6; i++) await encolar(woo, 'woo.products', String(1200 + i), { id: 1200 + i, type: 'simple' }, { keyring: otroKeyring });
+      for (let i = 0; i < 6; i++) await encolar(woo, 'woo.products', String(1210 + i), { id: 1210 + i, type: 'grouped' });
+      const r = await proyector().unaVuelta();
+      expect(r.errores + r.rechazados).toBe(12);
       expect(r.detenido).toMatch(/umbral/);
+    });
+
+    it('un fallo suelto no detiene el proyector: el umbral necesita al menos diez mensajes', async () => {
+      await encolar(woo, 'woo.products', '1250', { id: 1250, type: 'grouped' });
+      const p = proyector();
+      expect((await p.unaVuelta()).detenido).toBeNull();
+      await encolar(woo, 'woo.products', '1251', { id: 1251, type: 'simple', sku: 'FB-1251' });
+      expect(await p.unaVuelta()).toMatchObject({ aplicados: 1, detenido: null });
     });
 
     it('un payload vencido pide releer el recurso por señales y cierra el mensaje', async () => {

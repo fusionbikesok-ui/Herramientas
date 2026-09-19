@@ -53,6 +53,16 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
   if (!empresa) throw new Error(`cuenta de canal inexistente: ${ctx.cuenta}`);
   const resumen: ResumenAplicacion = { representaciones: 0, viejas: 0, casosAbiertos: [] };
 
+  // Serializa por recurso ANTES de tocar cualquier fila (hallazgo crítico de la revisión de la implementación):
+  // dos mensajes de un recurso NUEVO (el bootstrap y un barrido, por ejemplo) no encuentran fila que bloquear,
+  // crean cada uno su variante y compiten en el upsert; el más viejo podía pisar al más nuevo y dejar una variante
+  // huérfana. Orden de candados: recurso → filas de la representación → decisiones → variantes. Los eventos del
+  // matcher no toman éste, así que no hay ciclo.
+  const recursos = [...new Set(p.representaciones.map((r) => r.recurso))].sort();
+  for (const recurso of recursos) {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalogo.recurso:' || $1 || ':' || $2, 0))", [ctx.cuenta, recurso]);
+  }
+
   // El modelo propio se crea sólo si alguien lo usa: un ítem de ML vinculado a un SKU de Woo cuelga del
   // modelo de esa variante, y crear un `ml_simple` vacío para él sería ruido en el catálogo.
   let modeloPropio: string | null = null;

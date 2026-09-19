@@ -188,6 +188,28 @@ describe('E2-CPY-01 copias del matcher', () => {
         .toEqual([{ tipo: 'identidad_legado', prioridad: 'urgente', c: 'c1' }]);
     });
 
+    it('dos casos del legado sobre la misma publicación conviven, y resolver uno no cierra el otro', async () => {
+      await representacion('MLA1');
+      await copiarIdentidad([caso('c1', 'MLA1'), caso('c2', 'MLA1')]);
+      expect(await q("SELECT count(*)::int n FROM catalog.identity_cases WHERE cerrado_en IS NULL")).toEqual([{ n: 2 }]);
+      await copiarIdentidad([caso('c2', 'MLA1')]);
+      expect(await q("SELECT detalle->>'caso_legado' AS c FROM catalog.identity_cases WHERE cerrado_en IS NULL")).toEqual([{ c: 'c2' }]);
+      // Por evento, lo mismo: cerrar c2 no toca a un c3 abierto sobre la misma publicación.
+      const ev = (caso_legado: string, abierto: boolean): EventoIdentidad => ({ evento_id: randomUUID(), caso_legado, recurso: 'MLA1', variacion: '',
+        prioridad: 'normal', abierto, detalle: {}, ocurrido_en: new Date().toISOString() });
+      await enTransaccion(app, (tx) => aplicarEventoIdentidad(tx, empresa, ml, ev('c3', true)));
+      await enTransaccion(app, (tx) => aplicarEventoIdentidad(tx, empresa, ml, ev('c2', false)));
+      expect(await q("SELECT detalle->>'caso_legado' AS c FROM catalog.identity_cases WHERE cerrado_en IS NULL")).toEqual([{ c: 'c3' }]);
+    });
+
+    it('un cambio de prioridad o de detalle en el legado llega por la copia', async () => {
+      await representacion('MLA1');
+      await copiarIdentidad([caso('c1', 'MLA1')]);
+      await copiarIdentidad([{ ...caso('c1', 'MLA1', 'urgente'), detalle: { motivo: 'otra clasificación' } }]);
+      expect(await q("SELECT prioridad, detalle->>'motivo' AS m FROM catalog.identity_cases WHERE cerrado_en IS NULL"))
+        .toEqual([{ prioridad: 'urgente', m: 'otra clasificación' }]);
+    });
+
     it('eventos de identidad: abre, actualiza la prioridad, cierra, y deduplica', async () => {
       await representacion('MLA1');
       const ev = (abierto: boolean, prioridad: EventoIdentidad['prioridad'] = 'normal', evento_id = randomUUID()): EventoIdentidad =>
