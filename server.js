@@ -69,6 +69,7 @@ import { mobileHoyRouter } from './routes/mobileHoy.js';
 import { registrarWebhookMl, registrarWebhookWooProducto, registrarWebhookWooPedido, procesarIntegrationJobs } from './lib/workerIntegrationJobs.js';
 import { marcarSombra, abandonarHuerfanas, abandonarVencidos, permitirCuentaAjena, copiaHabilitada, crearColaSombra, crearSelectorCanario } from './lib/sombra.js';
 import { crearEmisorSombra, crearEnvioSenal, destinoSenal, importarPerdidas } from './lib/emisorSombra.js';
+import { iniciarOutboxPlataforma } from './lib/outboxPlataforma.js';
 import { crearMuestreoCola, evaluarAlertasLegado, medirSombraLegado, publicarAlertasLegado } from './lib/metricasSombra.js';
 import { cargarKeyringInterno, cargarKeyringInternoActivo, crearOrigenesInternos, verificarInterno } from './lib/internoHmac.js';
 import { crearGatewayCanal, crearPresupuestoShadow, ErrorOperacionInvalida } from './lib/gatewayCanal.js';
@@ -169,6 +170,14 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       console.error('[informes] vigilante sin configuración válida, apagado:', e.message);
       try { anunciarVigilanteApagado(db, e.message); } catch (e2) { console.error('[informes] tampoco se pudo abrir el incidente:', e2.message); }
     }
+  }
+  // E2 T1: despachador de la outbox hacia la plataforma. Apagado salvo OUTBOX_PLATAFORMA_ENVIO=true. La captura
+  // (OUTBOX_PLATAFORMA_CAPTURA) es independiente: se enciende antes, para que no se pierda ningún cambio mientras
+  // se toma la copia del matcher (plan de E2 T1, tarea 14).
+  try {
+    iniciarOutboxPlataforma(db, { cargarKeyring: cargarKeyringInternoActivo });
+  } catch (e) {
+    console.error('[outbox] configuración inválida, despachador apagado:', e.message);
   }
   app._colaSombra = colaSombra;
   const canario = crearSelectorCanario();

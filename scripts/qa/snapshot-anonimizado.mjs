@@ -32,7 +32,7 @@ export const COLUMNAS_JSON = new Set([
   'incidentes_operativos.contexto_json', 'incidentes_operativos_historial.detalle_json',
   'integration_events.metadata_json', 'matcher_candidatos_cache.resultado_json',
   'ml_publicaciones_cache.atributos_json', 'ml_publicaciones_cache.canales_json',
-  'operational_day_events.antes_json', 'operational_day_events.despues_json',
+  'operational_day_events.antes_json', 'operational_day_events.despues_json', 'outbox_plataforma.payload',
   'operational_day_events.detalle_json', 'operational_days.ventana_ml_json',
   'ordenes_ml_procesadas.items_json', 'ordenes_ml_wc_pedidos.comprador_json', 'pedidos_cache.items_json',
   'pick_wave_helpers.entrega_json', 'pick_wave_items.items_json_snapshot', 'preparacion_eventos.detalle_json',
@@ -51,6 +51,8 @@ const CLAVES_SENSIBLES = new Set([
   'address_line', 'street_name', 'street_number', 'comment', 'doc_number', 'doc_type', 'identification',
   'billing_info', 'billing', 'receiver_name', 'receiver_phone', 'receiver_address', 'customer_note',
   'nombre_receptor', 'comprador', 'nota', 'notas', 'telefono', 'documento', 'direccion_envio',
+  // Outbox hacia la plataforma (E2 T1): quién confirmó una decisión del matcher es un usuario interno.
+  'confirmado_por',
 ]);
 
 export const TABLAS_SECRETOS = ['ml_oauth_token', 'device_tokens', 'mobile_refresh_tokens', 'password_reset_tokens'];

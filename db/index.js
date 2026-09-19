@@ -1049,6 +1049,16 @@ export function openDb(dbPath) {
     })();
   }
 
+  const outboxPlataformaMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='outbox_plataforma_108'").get();
+  if (!outboxPlataformaMigration) {
+    // E2 T1: outbox durable hacia la plataforma. Sin try/catch: una tabla a medias rompe la captura de eventos
+    // del matcher, y es preferible que el arranque se caiga a perder decisiones en silencio.
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '108_outbox_plataforma.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('outbox_plataforma_108')").run();
+    })();
+  }
+
   // Errores de sync descartados a mano (no accionables: sin stock real, pausa manual, etc.)
   try { db.exec(`CREATE TABLE IF NOT EXISTS errores_descartados (
     clave TEXT PRIMARY KEY,
