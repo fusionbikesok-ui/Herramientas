@@ -37,7 +37,18 @@ describe('vueltaDeInformes', () => {
       deposito: {
         async subir(clave, cuerpo, ahora) {
           subidas.push({ clave, cuerpo });
-          const retencion = new Date(ahora.getTime() + 367 * 86400e3).toISOString();
+          /*
+           * La retención se calcula sobre `ahora` SIMULADO (2026-09-17 en los casos de acá), pero el
+           * `CHECK` de `audit_daily_manifests` la compara contra `created_at`, que PostgreSQL pone con
+           * `now()` REAL. Con 367 días el margen era de 2 días respecto de la fecha simulada: el
+           * 2026-09-19 el reloj real lo alcanzó y los 8 casos del archivo empezaron a fallar por una
+           * violación de restricción, sin que nada hubiera cambiado en el código.
+           *
+           * B2 en producción calcula la retención sobre su propio reloj, así que el doble no tiene por qué
+           * atarse al simulado: se usa el real más un año y un mes, y el test deja de caducar.
+           */
+          void ahora;
+          const retencion = new Date(Date.now() + 396 * 86400e3).toISOString();
           b2.set(clave, { versionId: `v${subidas.length}`, retencion, modo: 'COMPLIANCE', sha256: sha(cuerpo), cuerpo });
           return { versionId: `v${subidas.length}`, retencion };
         },
