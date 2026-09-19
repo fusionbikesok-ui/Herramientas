@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Proyector, ResultadoVuelta } from '../../src/catalogo/proyector.ts';
-import { iniciarCicloCatalogo } from '../../src/worker/catalogo.ts';
+import { iniciarCicloBootstrap, iniciarCicloCatalogo } from '../../src/worker/catalogo.ts';
 
 const vacio: ResultadoVuelta = { reclamados: 0, aplicados: 0, vencidos: 0, rechazados: 0, errores: 0, detenido: null };
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -61,5 +61,33 @@ describe('E2-PRY-11 ciclo del proyector', () => {
     await espera(30);
     await c.detener();
     expect(l.error.filter((m) => m === 'proyector del catálogo detenido')).toHaveLength(1);
+  });
+});
+
+describe('E2-BOO-02 ciclo del bootstrap', () => {
+  const cuenta = (id: string) => ({ id, topic: 'ml.items' as const, transporte: { get: async () => ({ status: 200, headers: new Headers(), body: null }) } });
+
+  it('recorre las cuentas en orden hasta terminarlas todas, y se detiene', async () => {
+    const paginas: Record<string, number> = { a: 2, b: 1 };
+    const pedidas: string[] = [];
+    const lector = { async unaPagina(c: { id: string }) {
+      pedidas.push(c.id);
+      return paginas[c.id]!-- > 0 ? { estado: 'avanzo' as const, pagina: 1, encolados: 1, leidos: 1 } : { estado: 'terminada' as const };
+    } };
+    const { l, reg } = log();
+    const c = iniciarCicloBootstrap(lector, [cuenta('a'), cuenta('b')], 1, reg);
+    await espera(60);
+    await c.detener();
+    expect(pedidas).toEqual(['a', 'a', 'a', 'b', 'b']);
+    expect(l.info).toContain('bootstrap del catálogo completo en todas las cuentas');
+  });
+
+  it('cuando cede, espera más antes de insistir', async () => {
+    let n = 0;
+    const lector = { async unaPagina() { n++; return { estado: 'cedio_429' as const }; } };
+    const c = iniciarCicloBootstrap(lector, [cuenta('a')], 1, log().reg, 1000);
+    await espera(60);
+    await c.detener();
+    expect(n).toBe(1);
   });
 });

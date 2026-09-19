@@ -1,6 +1,7 @@
 import { planDeKeyrings } from '../catalogo/arranque.ts';
+import { crearBootstrap, prepararBootstrap, type CuentaBootstrap } from '../catalogo/bootstrap.ts';
 import { crearProyector } from '../catalogo/proyector.ts';
-import { iniciarCicloCatalogo } from './catalogo.ts';
+import { iniciarCicloBootstrap, iniciarCicloCatalogo } from './catalogo.ts';
 import { cargarConfig } from '../comun/config.ts';
 import { crearLogger } from '../comun/logger.ts';
 import { crearPool } from '../db/pool.ts';
@@ -29,6 +30,8 @@ const detenerLatidos = iniciarLatidos(pool, 'worker', config.instancia, config.v
 let procesadores: Record<string, ProcesadorBarrido> = {};
 const relectores: Record<string, Relector> = {};
 const cuentasMissedFeeds: Array<{ id: string; sellerId: string; transporte: TransporteCanal }> = [];
+// Las cuentas que el bootstrap del catálogo lee, con el mismo transporte que usan los barridos.
+const cuentasBootstrap: CuentaBootstrap[] = [];
 // El plan decide qué keyrings cargar. Antes el de sobres salía de dentro de `if (config.barridos)`, así que
 // el catálogo no podía encenderse sin barridos: al revés del orden de puesta en producción.
 const plan = planDeKeyrings(config.barridos, config.catalogo);
@@ -56,6 +59,9 @@ if (config.barridos) {
     // Relectura puntual por señal (C6) con el mismo transporte de la cuenta.
     const propios = cuenta.channel === 'mercadolibre' ? crearRelectoresMl({ transporte }) : crearRelectoresWoo({ transporte });
     if (cuenta.channel === 'mercadolibre') cuentasMissedFeeds.push({ id: cuenta.id, sellerId: cuenta.seller_id, transporte });
+    cuentasBootstrap.push(cuenta.channel === 'mercadolibre'
+      ? { id: cuenta.id, topic: 'ml.items', transporte, sellerId: cuenta.seller_id }
+      : { id: cuenta.id, topic: 'woo.products', transporte });
     for (const relector of Object.values(propios)) relectores[claveRelector(cuenta.id, relector.topic)] = relector;
     for (const adaptador of Object.values(adaptadores)) {
       const motor = crearProcesadorMotor({ db: pool, adaptador, keyring });
@@ -80,6 +86,20 @@ const cicloCatalogo = config.catalogo?.proyector && keyringCatalogo
       umbralErrorPorciento: config.catalogo.umbralErrorPorciento,
     }), config.catalogo.pausaMs, logger)
   : null;
+// El bootstrap necesita los transportes de las cuentas, que salen de la configuración de barridos.
+let cicloBootstrap: ReturnType<typeof iniciarCicloBootstrap> | null = null;
+if (config.catalogo?.bootstrap && keyringCatalogo) {
+  if (!cuentasBootstrap.length) {
+    logger.error({}, 'el bootstrap del catálogo está encendido pero no hay cuentas de barridos configuradas: no arranca');
+  } else {
+    for (const c of cuentasBootstrap) await prepararBootstrap(pool, c.id, c.topic);
+    cicloBootstrap = iniciarCicloBootstrap(crearBootstrap({
+      pool, keyring: keyringCatalogo, rpm: config.catalogo.bootstrapRpm, cedeSenales: config.catalogo.bootstrapCedeSenales,
+      workerId: config.instancia,
+    }), cuentasBootstrap, config.catalogo.pausaMs, logger);
+    logger.info({ cuentas: cuentasBootstrap.length, rpm: config.catalogo.bootstrapRpm }, 'bootstrap del catálogo encendido');
+  }
+}
 if (cicloCatalogo) {
   logger.info({ lote: config.catalogo!.lote, canario: config.catalogo!.canario, pausaMs: config.catalogo!.pausaMs },
     'proyector del catálogo encendido');
@@ -127,6 +147,7 @@ alApagar(logger, async () => {
   detenerLatidos();
   senales?.detener();
   await cicloCatalogo?.detener();
+  await cicloBootstrap?.detener();
   await barridos.detener();
   await pool.end();
 });

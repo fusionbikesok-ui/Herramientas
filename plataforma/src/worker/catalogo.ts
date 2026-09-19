@@ -7,6 +7,7 @@
  * antes de cerrar el pool: cortar a mitad de una transacción la deshace, pero deja el lease tomado hasta que
  * venza.
  */
+import type { CuentaBootstrap, ResultadoPagina } from '../catalogo/bootstrap.ts';
 import type { Proyector } from '../catalogo/proyector.ts';
 
 export interface RegistroCiclo {
@@ -45,6 +46,65 @@ export function iniciarCicloCatalogo(proyector: Proyector, pausaMs: number, log:
     }, pausaMs);
   };
   programar();
+
+  return {
+    async detener() {
+      apagando = true;
+      if (temporizador) clearTimeout(temporizador);
+      await enCurso;
+    },
+  };
+}
+
+/** Lo que el ciclo del bootstrap necesita del bootstrap: leer una página de una cuenta. */
+export interface LectorBootstrap {
+  unaPagina(c: CuentaBootstrap): Promise<ResultadoPagina>;
+}
+
+/**
+ * El ciclo del bootstrap: una página por vuelta, de la primera cuenta que no terminó. Si cede (señales de ML
+ * esperando o un 429) espera un minuto antes de la próxima, para no insistir sobre un cupo que ya está usado.
+ * Cuando todas terminan, lo avisa y se detiene: el bootstrap corre una vez por cuenta, para siempre.
+ */
+export function iniciarCicloBootstrap(
+  lector: LectorBootstrap, cuentas: readonly CuentaBootstrap[], pausaMs: number, log: RegistroCiclo,
+  esperaCedido = 60_000,
+): CicloCatalogo {
+  let apagando = false;
+  let temporizador: NodeJS.Timeout | null = null;
+  let enCurso: Promise<void> = Promise.resolve();
+  const terminadas = new Set<string>();
+
+  const vuelta = async (): Promise<number> => {
+    const c = cuentas.find((x) => !terminadas.has(`${x.id}:${x.topic}`));
+    if (!c) return -1;
+    try {
+      const r = await lector.unaPagina(c);
+      if (r.estado === 'terminada') {
+        terminadas.add(`${c.id}:${c.topic}`);
+        log.info({ cuenta: c.id, topic: c.topic }, 'bootstrap del catálogo terminado para la cuenta');
+        return pausaMs;
+      }
+      if (r.estado === 'avanzo') { log.info({ cuenta: c.id, topic: c.topic, ...r }, 'bootstrap del catálogo: página confirmada'); return pausaMs; }
+      if (r.estado === 'ocupada') return pausaMs;
+      log.info({ cuenta: c.id, topic: c.topic, ...r }, 'bootstrap del catálogo en pausa');
+      return esperaCedido;
+    } catch (error) {
+      log.error({ cuenta: c.id, topic: c.topic, err: (error as Error).message }, 'página del bootstrap falló');
+      return esperaCedido;
+    }
+  };
+
+  const programar = (ms: number) => {
+    if (apagando) return;
+    temporizador = setTimeout(() => {
+      enCurso = vuelta().then((proxima) => {
+        if (proxima < 0) { log.info({}, 'bootstrap del catálogo completo en todas las cuentas'); return; }
+        programar(proxima);
+      });
+    }, ms);
+  };
+  programar(pausaMs);
 
   return {
     async detener() {
