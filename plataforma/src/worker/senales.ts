@@ -47,8 +47,22 @@ export function crearWorkerSenales(opciones: {
     } catch (error) {
       if (error instanceof ErrorBarridoReintentable) {
         await fallarSenal(opciones.db, s, `retryable:${error.message.split(' ')[0]}`, error.retryAfter !== undefined ? { retryAfterS: error.retryAfter } : {});
-      } else if (error instanceof ErrorCanalTerminal || error instanceof ErrorDestinoProhibido || error instanceof ErrorPaginaInvalida) {
+      } else if (error instanceof ErrorCanalTerminal || error instanceof ErrorDestinoProhibido) {
+        // Terminal de verdad: el canal dijo que no (404, 403) o el destino está prohibido. Reintentar no
+        // cambia el resultado.
         await fallarSenal(opciones.db, s, `terminal:${error.name}`, { terminal: true });
+      } else if (error instanceof ErrorPaginaInvalida) {
+        /*
+         * "No entendí la respuesta" NO es terminal, aunque antes estaba agrupado con los de arriba. Puede
+         * ser un campo nuevo de ML, un dato transitorio, o un defecto nuestro: el 2026-09-19 fueron 35
+         * órdenes muertas porque `ordenMl` no toleraba una orden sin `date_last_updated`, y el registro de
+         * órdenes de la copia quedó clavado una semana sin que nada lo dijera.
+         *
+         * Reintentando, el arreglo de un defecto nuestro recupera las señales solo; y si el dato es
+         * realmente inservible, muere igual al agotar los intentos, pero con la causa escrita y contada
+         * en la alerta `senal_dead_letter`.
+         */
+        await fallarSenal(opciones.db, s, `retryable:${error.name}`);
       } else {
         await fallarSenal(opciones.db, s, `error:${(error as Error)?.name ?? 'desconocido'}`);
       }
@@ -74,7 +88,10 @@ export function crearWorkerSenales(opciones: {
     try {
       for (const recurso of resultado.recursos) validarRecurso(recurso, relector.versionKind);
     } catch (error) {
-      await fallarSenal(opciones.db, s, `terminal:${(error as Error).name}`, { terminal: true });
+      // Mismo criterio que arriba: un recurso que no se entiende reintenta, no muere al primer intento.
+      // Éste es el camino por el que murieron las 35 órdenes: la relectura traía 200 y la validación
+      // posterior las rechazaba.
+      await fallarSenal(opciones.db, s, `retryable:${(error as Error).name}`);
       return;
     }
     await enTransaccion(opciones.db, async (tx) => {

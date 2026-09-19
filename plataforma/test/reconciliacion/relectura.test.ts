@@ -146,7 +146,7 @@ describe('E1-RER-01 relectura puntual por señal', () => {
     expect(await contar('select count(*) n from integrations.inbox_messages')).toBe(0);
   });
 
-  it('429 reintenta con Retry-After, un error terminal va a dead letter y un id inválido se excluye sin red', async () => {
+  it('429 reintenta con Retry-After, una respuesta incomprensible reintenta y un id inválido se excluye sin red', async () => {
     const lenta = await senal(ml, 'ml.orders', '7');
     const prohibida = await senal(ml, 'ml.claims', '8');
     const invalida = await senal(ml, 'ml.orders', '../users/me');
@@ -158,7 +158,10 @@ describe('E1-RER-01 relectura puntual por señal', () => {
     const e1 = await estado(lenta);
     expect(e1).toMatchObject({ status: 'retryable', attempts: 1, lease_token: null });
     expect(e1.available_at.getTime()).toBeGreaterThan(Date.now() + 100_000);
-    expect(await estado(prohibida)).toMatchObject({ status: 'dead_lettered' });
+    // Un reclamo que vuelve sin `id` no se entiende, y desde el 2026-09-19 eso REINTENTA en vez de morir
+    // al primer intento: el mismo camino por el que se enterraron 35 órdenes por un defecto nuestro.
+    // Sigue muriendo al agotar los intentos, como se comprueba abajo con `lenta`.
+    expect(await estado(prohibida)).toMatchObject({ status: 'retryable' });
     expect(await estado(invalida)).toMatchObject({ status: 'excluded', error_detail: 'invalid_resource' });
     expect(llamadasMl.some((l) => l.includes('users'))).toBe(false);
     // Agotados los intentos, un reintentable también termina en dead letter.
@@ -174,4 +177,42 @@ describe('E1-RER-01 relectura puntual por señal', () => {
     expect(await soloMl.unaVuelta()).toBe(0);
     expect((await estado(s)).status).toBe('pending');
   });
+
+  /*
+   * Los dos casos que dejaron 35 señales de `ml.orders` muertas el 2026-09-19, con el registro de
+   * órdenes de la copia clavado desde el 12/09. La operación del negocio nunca se vio afectada: el
+   * legado procesa las ventas por su propio camino.
+   */
+  it('una orden sin date_last_updated se observa igual, usando la fecha de creación', async () => {
+    // El caso real de producción: ML no mandó date_last_updated. Antes esto lanzaba
+    // ErrorPaginaInvalida, el worker lo daba por TERMINAL y la orden no entraba nunca a la copia.
+    const orden = { id: 2000018533891264, status: 'paid', date_created: '2026-09-18T13:59:02.000-03:00', shipping: { id: 44556677 }, pack_id: null };
+    const id = await senal(ml, 'ml.orders', '2000018533891264');
+    const { w } = worker({ '/orders/2000018533891264': { status: 200, body: orden } });
+    expect(await w.unaVuelta()).toBe(1);
+    expect(await estado(id)).toMatchObject({ status: 'succeeded', error_detail: 'enqueued' });
+    const fila = (await admin.query<{ remote_version: string }>(
+      "select remote_version from integrations.inbox_messages where topic='ml.orders'")).rows;
+    expect(fila[0]!.remote_version).toBe('2026-09-18T16:59:02.000Z');
+  });
+
+  it('un recurso que no se entiende reintenta en vez de morir sin rastro', async () => {
+    // Sin NINGUNA fecha no hay versión posible, así que el recurso es inválido de verdad. Pero eso no
+    // es un "terminal" como un 404 o un destino prohibido: puede ser un campo nuevo de ML, un dato
+    // transitorio o un defecto nuestro —como fue éste—. Enterrarlo al primer intento deja un hueco
+    // silencioso en la copia; reintentar da tiempo a que lo veamos y lo arreglemos.
+    const orden = { id: 7777, status: 'paid', shipping: { id: 1 }, pack_id: null };
+    const id = await senal(ml, 'ml.orders', '7777');
+    const { w } = worker({ '/orders/7777': { status: 200, body: orden } });
+    expect(await w.unaVuelta()).toBe(1);
+    const e = await estado(id);
+    expect(e.status).toBe('retryable');
+    expect(e.error_detail).toMatch(/ErrorPaginaInvalida/);
+    // Y al agotar los intentos sí muere, con la causa escrita: no se reintenta para siempre.
+    await admin.query('update integrations.reconciliation_signals set attempts=max_attempts where id=$1', [id]);
+    await admin.query("update integrations.reconciliation_signals set status='pending', available_at=now(), lease_token=null, lease_until=null, worker_id=null where id=$1", [id]);
+    expect(await w.unaVuelta()).toBe(1);
+    expect(await estado(id)).toMatchObject({ status: 'dead_lettered' });
+  });
+
 });

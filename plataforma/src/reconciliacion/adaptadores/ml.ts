@@ -45,7 +45,16 @@ async function conocidasPendientes(db: Consultable, ctx: ContextoListado, despue
 export function ordenMl(crudo: unknown): RecursoRemoto {
   const o = exigirRegistro(crudo, 'orden ML');
   const id = idTexto(o.id);
-  const version = fechaUtc(o.date_last_updated);
+  /*
+   * `date_last_updated` no siempre viene: una orden recién creada y nunca modificada puede traerlo nulo o
+   * ausente. Antes eso dejaba `version` en cadena vacía, `validarRecurso` lanzaba ErrorPaginaInvalida y el
+   * worker de señales lo clasificaba como TERMINAL: la señal moría sin reintento y la orden nunca entraba
+   * a la copia. Así se clavó el registro de órdenes el 2026-09-12, con 35 señales muertas.
+   *
+   * La fecha de creación es una versión legítima para una orden que no se modificó nunca, y es monótona
+   * respecto de sí misma: si después la orden cambia, llega con `date_last_updated` posterior y gana.
+   */
+  const version = fechaUtc(o.date_last_updated) || fechaUtc(o.date_created);
   const envio = esRegistro(o.shipping) ? idTexto(o.shipping.id) : '';
   const pack = idTexto(o.pack_id) || id;
   const relations: RelacionRemota[] = [];
