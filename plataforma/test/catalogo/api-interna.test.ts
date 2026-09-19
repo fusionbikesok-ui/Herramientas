@@ -11,6 +11,9 @@ import { crearLogger } from '../../src/comun/logger.ts';
 import { crearPool } from '../../src/db/pool.ts';
 import { crearOrigenes, firmar } from '../../src/seguridad/interna.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
+// La traducción real del legado: contrato de punta a punta entre la fila que deja el trigger y la API.
+// @ts-expect-error módulo JS del legado sin tipos
+import { traducirEvento } from '../../../lib/outboxPlataforma.js';
 
 const clave = randomBytes(32);
 const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
@@ -84,6 +87,22 @@ describe('E2-CPY-02 API interna del catálogo', () => {
     expect(await post(`${PREFIJO_CATALOGO}/eventos`, e)).toMatchObject({ status: 200, body: { resultado: 'aplicado' } });
     // La outbox reintenta con una firma nueva: el nonce es otro, pero el evento es el mismo.
     expect(await post(`${PREFIJO_CATALOGO}/eventos`, e)).toMatchObject({ status: 200, body: { resultado: 'repetido' } });
+  });
+
+  it('CONTRATO: lo que traduce el legado desde las filas del trigger, la API lo acepta', async () => {
+    const creado_en = new Date().toISOString();
+    const filas = [
+      { tipo: 'matcher.decision', payload: { op: 'vigente', clave: 'MLA70|', sku: 'FB-70', accion: 'confirmar', origen: null, confirmado_por: 'jose' } },
+      { tipo: 'matcher.decision', payload: { op: 'vigente', clave: 'MLA71|55', sku: 'FB-71', accion: 'asignar', origen: 'auto_seller_sku', confirmado_por: null } },
+      { tipo: 'matcher.decision', payload: { op: 'vigente', clave: 'MLA72|', sku: '', accion: 'omitir', origen: null, confirmado_por: null } },
+      { tipo: 'matcher.decision', payload: { op: 'borrada', clave: 'MLA70|' } },
+      { tipo: 'identidad.caso', payload: { id: 9, ml_key: 'MLA73|', estado: 'pendiente', severidad: 'critica', clasificacion: 'c', direccion: 'ml_fusion' } },
+    ];
+    for (const f of filas) {
+      const { ruta, cuerpo } = traducirEvento({ evento_id: randomUUID(), creado_en, ...f }) as { ruta: string; cuerpo: unknown };
+      const r = await post(ruta, cuerpo);
+      expect(r.status, `${f.tipo} ${JSON.stringify(f.payload)}`).toBe(200);
+    }
   });
 
   it('sin firma válida, 401, y no se escribe nada', async () => {

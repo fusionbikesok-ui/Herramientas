@@ -6,7 +6,8 @@ import fs from 'fs';
 import { openDb } from '../db/index.js';
 import {
   encolarEventoPlataforma, crearDespachadorOutbox, estadoOutbox, crearEnvioEventoCatalogo,
-  RechazoPlataforma, capturaHabilitada, backoffMs, RUTA_EVENTOS_CATALOGO, revisarOutbox, iniciarOutboxPlataforma,
+  RechazoPlataforma, capturaHabilitada, backoffMs, RUTA_EVENTOS_CATALOGO, RUTA_EVENTOS_IDENTIDAD, revisarOutbox, iniciarOutboxPlataforma,
+  sincronizarCaptura, traducirEvento,
 } from '../lib/outboxPlataforma.js';
 import { firmarInterno } from '../lib/internoHmac.js';
 
@@ -187,6 +188,87 @@ describe('E2-OBX-01 outbox del legado hacia la plataforma', () => {
     });
   });
 
+  describe('captura por triggers (tarea 10)', () => {
+    const outbox = () => db.prepare('SELECT tipo, payload FROM outbox_plataforma ORDER BY id').all().map((f) => ({ tipo: f.tipo, ...JSON.parse(f.payload) }));
+    const capturar = (on) => sincronizarCaptura(db, on ? CON : {});
+    const decision = (clave, sku, accion = 'confirmar') => db.prepare(
+      'INSERT INTO sku_matcher_decisiones (clave, sku, accion, actualizado_en) VALUES (?, ?, ?, ?)').run(clave, sku, accion, '2026-09-19');
+
+    it('con la captura apagada los cambios no dejan eventos', () => {
+      capturar(false);
+      decision('MLA1|', 'FB-1');
+      expect(outbox()).toEqual([]);
+    });
+
+    it('alta, cambio y baja de una decisión dejan su evento, en la misma transacción', () => {
+      capturar(true);
+      decision('MLA1|', 'FB-1');
+      db.prepare("UPDATE sku_matcher_decisiones SET sku = 'FB-2' WHERE clave = 'MLA1|'").run();
+      db.prepare("DELETE FROM sku_matcher_decisiones WHERE clave = 'MLA1|'").run();
+      expect(outbox().map((e) => [e.op, e.clave, e.sku ?? null])).toEqual([['vigente', 'MLA1|', 'FB-1'], ['vigente', 'MLA1|', 'FB-2'], ['borrada', 'MLA1|', null]]);
+      // Atomicidad: si la transacción del cambio se deshace, su evento también.
+      expect(() => db.transaction(() => { decision('MLA2|', 'FB-3'); throw new Error('falla'); })()).toThrow();
+      expect(outbox()).toHaveLength(3);
+    });
+
+    it('reescribir una decisión igual no es un evento', () => {
+      capturar(true);
+      decision('MLA1|', 'FB-1');
+      db.prepare("UPDATE sku_matcher_decisiones SET actualizado_en = '2026-09-20', wc_nombre = 'x' WHERE clave = 'MLA1|'").run();
+      expect(outbox()).toHaveLength(1);
+    });
+
+    it('las tres formas de escribir que usa el legado quedan capturadas', () => {
+      capturar(true);
+      db.prepare("INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, accion, actualizado_en) VALUES ('MLA1|', 'FB-1', 'asignar', 'x')").run();
+      db.prepare("INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, accion, actualizado_en) VALUES ('MLA1|', 'FB-2', 'asignar', 'x')").run();
+      db.prepare(`INSERT INTO sku_matcher_decisiones (clave, sku, accion, actualizado_en) VALUES ('MLA1|', 'FB-3', 'confirmar', 'x')
+                  ON CONFLICT(clave) DO UPDATE SET sku = excluded.sku, accion = excluded.accion`).run();
+      // INSERT OR IGNORE sobre una clave existente no cambia nada: no es un evento.
+      db.prepare("INSERT OR IGNORE INTO sku_matcher_decisiones (clave, sku, accion, actualizado_en) VALUES ('MLA1|', 'FB-9', 'confirmar', 'x')").run();
+      expect(outbox().map((e) => e.sku)).toEqual(['FB-1', 'FB-2', 'FB-3']);
+    });
+
+    it('en identidad, sólo los cambios de estado o severidad son eventos, no la detección periódica', () => {
+      capturar(true);
+      const id = db.prepare(`INSERT INTO identidad_casos (direccion, ml_key, clasificacion, estado, severidad, evidencia_fingerprint, primera_deteccion_en, ultima_deteccion_en)
+        VALUES ('ml_fusion', 'MLA5|', 'sin_match', 'pendiente', 'normal', 'f', 'x', 'x')`).run().lastInsertRowid;
+      db.prepare("UPDATE identidad_casos SET ultima_deteccion_en = 'y', evidencia_fingerprint = 'g' WHERE id = ?").run(id);
+      db.prepare("UPDATE identidad_casos SET estado = 'resuelto' WHERE id = ?").run(id);
+      expect(outbox().map((e) => [e.tipo, e.estado])).toEqual([['identidad.caso', 'pendiente'], ['identidad.caso', 'resuelto']]);
+    });
+  });
+
+  describe('traducción al formato de la plataforma', () => {
+    const ev = (payload, tipo = 'matcher.decision') => traducirEvento({ evento_id: 'e', tipo, payload, creado_en: '2026-09-19T00:00:00.000Z' });
+
+    it('las decisiones automáticas entran como del sistema, con su motivo', () => {
+      expect(ev({ op: 'vigente', clave: 'MLA1|', sku: 'FB-1', accion: 'asignar', origen: 'auto_seller_sku', confirmado_por: null }).cuerpo)
+        .toMatchObject({ actor: 'sistema', motivo: 'autoasignación por SKU', confirmado_por: null });
+      expect(ev({ op: 'vigente', clave: 'MLA1|', sku: 'FB-1', accion: 'confirmar', origen: 'identidad_productos', confirmado_por: 'sistema' }).cuerpo)
+        .toMatchObject({ actor: 'sistema', motivo: 'identidad de productos' });
+      expect(ev({ op: 'vigente', clave: 'MLA1|7', sku: 'FB-1', accion: 'confirmar', origen: null, confirmado_por: 'jose' }).cuerpo)
+        .toMatchObject({ actor: 'persona', confirmado_por: 'jose', recurso: 'MLA1', variacion: '7' });
+    });
+
+    it('omitir va sin SKU, y una baja es revocar', () => {
+      expect(ev({ op: 'vigente', clave: 'MLA1|', sku: '', accion: 'omitir' }).cuerpo).toMatchObject({ accion: 'omitir', sku: null });
+      expect(ev({ op: 'borrada', clave: 'MLA1|' }).cuerpo).toMatchObject({ accion: 'revocar', sku: null });
+    });
+
+    it('una clave o una acción que la plataforma no aceptaría se rechaza acá', () => {
+      expect(() => ev({ op: 'vigente', clave: 'MLA1', accion: 'confirmar' })).toThrow(RechazoPlataforma);
+      expect(() => ev({ op: 'vigente', clave: 'MLA1|', accion: 'inventada' })).toThrow(RechazoPlataforma);
+    });
+
+    it('un caso de identidad va a su ruta, con prioridad y si sigue abierto', () => {
+      const r = ev({ id: 7, ml_key: 'MLA9|', estado: 'pendiente', severidad: 'critica', clasificacion: 'c', direccion: 'ml_fusion' }, 'identidad.caso');
+      expect(r.ruta).toBe(RUTA_EVENTOS_IDENTIDAD);
+      expect(r.cuerpo).toMatchObject({ caso_legado: '7', recurso: 'MLA9', prioridad: 'urgente', abierto: true });
+      expect(ev({ id: 7, ml_key: 'MLA9|', estado: 'verificado', severidad: 'normal' }, 'identidad.caso').cuerpo).toMatchObject({ abierto: false, prioridad: 'normal' });
+    });
+  });
+
   describe('envío firmado a la plataforma', () => {
     const clave = Buffer.alloc(32, 3);
     const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
@@ -197,16 +279,17 @@ describe('E2-OBX-01 outbox del legado hacia la plataforma', () => {
 
     it('manda el evento firmado a la ruta de eventos del catálogo', async () => {
       const capturas = [];
-      await conRespuesta(200, capturas)({ evento_id: 'e1', tipo: 'matcher.decision', payload: { recurso: 'MLA1' } });
+      await conRespuesta(200, capturas)({ evento_id: 'e1', tipo: 'matcher.decision', creado_en: '2026-09-19T01:00:00.000Z',
+        payload: { op: 'vigente', clave: 'MLA1|', sku: 'FB-1', accion: 'confirmar', origen: null, confirmado_por: 'jose' } });
       const { url, init } = capturas[0];
       expect(url).toBe(`http://plataforma:3201${RUTA_EVENTOS_CATALOGO}`);
-      expect(JSON.parse(init.body.toString())).toEqual({ evento_id: 'e1', recurso: 'MLA1' });
+      expect(JSON.parse(init.body.toString())).toMatchObject({ evento_id: 'e1', recurso: 'MLA1', variacion: '', sku: 'FB-1' });
       const h = init.headers;
       expect(h['x-fusion-signature']).toBe(firmarInterno(clave, h['x-fusion-timestamp'], h['x-fusion-nonce'], 'POST', RUTA_EVENTOS_CATALOGO, init.body));
     });
 
     it('400 es rechazo definitivo; 401, 409, 500 y la red caída son transitorios', async () => {
-      const ev = { evento_id: 'e1', tipo: 'matcher.decision', payload: {} };
+      const ev = { evento_id: 'e1', tipo: 'matcher.decision', creado_en: '2026-09-19T01:00:00.000Z', payload: { op: 'borrada', clave: 'MLA1|' } };
       await expect(conRespuesta(400)(ev)).rejects.toBeInstanceOf(RechazoPlataforma);
       for (const s of [401, 409, 500]) {
         const p = conRespuesta(s)(ev);

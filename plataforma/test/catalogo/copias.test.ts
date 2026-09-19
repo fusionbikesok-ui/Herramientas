@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  abrirCopia, aplicarEvento, confirmarCopia, ErrorCopia, hashFilas, recibirLote, type EventoDecision, type FilaDecision, type FilaIdentidad,
+  abrirCopia, aplicarEvento, aplicarEventoIdentidad, confirmarCopia, ErrorCopia, hashFilas, recibirLote, type EventoDecision, type EventoIdentidad, type FilaDecision, type FilaIdentidad,
 } from '../../src/catalogo/copias.ts';
 import { crearPool, enTransaccion } from '../../src/db/pool.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
@@ -186,6 +186,22 @@ describe('E2-CPY-01 copias del matcher', () => {
       expect(r).toMatchObject({ abiertas: 1, sinRepresentacion: 1 });
       expect(await q("SELECT tipo, prioridad, detalle->>'caso_legado' AS c FROM catalog.identity_cases"))
         .toEqual([{ tipo: 'identidad_legado', prioridad: 'urgente', c: 'c1' }]);
+    });
+
+    it('eventos de identidad: abre, actualiza la prioridad, cierra, y deduplica', async () => {
+      await representacion('MLA1');
+      const ev = (abierto: boolean, prioridad: EventoIdentidad['prioridad'] = 'normal', evento_id = randomUUID()): EventoIdentidad =>
+        ({ evento_id, caso_legado: '7', recurso: 'MLA1', variacion: '', prioridad, abierto, detalle: { estado: 'x' }, ocurrido_en: new Date().toISOString() });
+      const ap = (e: EventoIdentidad) => enTransaccion(app, (tx) => aplicarEventoIdentidad(tx, empresa, ml, e));
+      await ap(ev(true));
+      const repetido = ev(true, 'urgente');
+      await ap(repetido);
+      expect(await ap(repetido)).toBe('repetido');
+      expect(await q("SELECT prioridad, cerrado_en FROM catalog.identity_cases WHERE tipo = 'identidad_legado'")).toEqual([{ prioridad: 'urgente', cerrado_en: null }]);
+      await ap(ev(false));
+      expect(await q("SELECT motivo_cierre FROM catalog.identity_cases WHERE tipo = 'identidad_legado'")).toEqual([{ motivo_cierre: 'resuelto en el legado' }]);
+      // Sin publicación en el catálogo no hay a qué colgarlo: lo trae la copia diaria.
+      expect(await ap({ ...ev(true), recurso: 'MLA404' })).toBe('sin_representacion');
     });
 
     it('un caso que ya no viene en la copia se cierra como resuelto en el legado', async () => {

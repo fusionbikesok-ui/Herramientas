@@ -9,6 +9,7 @@
  *   POST /internal/v1/catalogo/copias/:id/lotes          un lote numerado → 202
  *   POST /internal/v1/catalogo/copias/:id/confirmar      verifica y aplica → 200 | 409 copia_incompleta / hash_distinto
  *   POST /internal/v1/catalogo/eventos                   un cambio suelto → 200 { resultado }
+ *   POST /internal/v1/catalogo/eventos-identidad         un caso de identidad del legado → 200 { resultado }
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -16,7 +17,7 @@ import type pg from 'pg';
 import type { Logger } from 'pino';
 import { z } from 'zod';
 import {
-  abrirCopia, aplicarEvento, confirmarCopia, ErrorCopia, recibirLote, type TipoCopia,
+  abrirCopia, aplicarEvento, aplicarEventoIdentidad, confirmarCopia, ErrorCopia, recibirLote, type TipoCopia,
 } from '../catalogo/copias.ts';
 import { enTransaccion } from '../db/pool.ts';
 import { verificarInterna } from '../seguridad/interna.ts';
@@ -53,6 +54,11 @@ const Evento = z.strictObject({
 
 interface Respuesta { status: number; body: Record<string, unknown> }
 const fallo = (status: number, code: string, message: string): Respuesta => ({ status, body: { code, message } });
+
+const EventoIdentidad = z.strictObject({
+  evento_id: texto.min(1), caso_legado: texto.min(1), recurso: texto.min(1), variacion: texto,
+  prioridad: z.enum(['normal', 'urgente']), abierto: z.boolean(), detalle: z.record(z.string(), z.unknown()), ocurrido_en: Fecha,
+});
 
 function error(req: FastifyRequest, reply: FastifyReply, status: number, code: string, message: string) {
   return reply.code(status).send({ code, message, correlation_id: req.headers['x-correlation-id'] });
@@ -144,6 +150,13 @@ export function registrarCatalogoInterno(
       const d = Evento.safeParse(cuerpo);
       if (!d.success) return fallo(400, 'invalid_body', 'El evento no es válido.');
       const resultado = await aplicarEvento(tx, empresa, cuenta, d.data);
+      return { status: 200, body: { resultado } };
+    }));
+
+    sub.post(`${PREFIJO_CATALOGO}/eventos-identidad`, (req, reply) => autenticado(req, reply, async (tx, cuerpo, cuenta, empresa) => {
+      const d = EventoIdentidad.safeParse(cuerpo);
+      if (!d.success) return fallo(400, 'invalid_body', 'El evento de identidad no es válido.');
+      const resultado = await aplicarEventoIdentidad(tx, empresa, cuenta, d.data);
       return { status: 200, body: { resultado } };
     }));
   });

@@ -185,6 +185,15 @@ manda nada; un lease vencido se vuelve a tomar; dos despachadores simultáneos n
 
 ### Tarea 10: Un único punto de escritura del matcher
 
+> **Cómo se implementó (2026-09-19):** con triggers de SQLite en vez de una función única. Al ir a hacerlo había
+> 14 escrituras de `sku_matcher_decisiones` (no 7) y unas 20 de `identidad_casos`. Los triggers de la migración
+> 108 escriben la fila de la outbox en la misma transacción que el cambio, cubren a todos los escritores de hoy y
+> de mañana sin tocar ninguna ruta, y reemplazan al test de guardia que buscaba texto. El interruptor de captura
+> vive en `outbox_config` (un trigger no lee el entorno). La traducción al formato de la plataforma la hace el
+> despachador (`traducirEvento`), y un test de contrato en la plataforma la valida contra la API real. Los casos
+> de identidad viajan como eventos propios (`/internal/v1/catalogo/eventos-identidad`), como decidió José.
+
+
 **Archivos:** `lib/matcherEventos.js`; modificar **todos** los escritores de `sku_matcher_decisiones`:
 `routes/cobertura.js` (confirmación ~264, borrados ~704 y ~722, upsert ~876, borrado ~922), `lib/mlMapeo.js`
 (autoasignación ~113) y `lib/guardiaMl.js` (~367). Los escritores de `identidad_casos` igual.
