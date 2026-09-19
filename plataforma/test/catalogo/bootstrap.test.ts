@@ -185,3 +185,70 @@ describe('E2-BOO-01 bootstrap del catálogo', () => {
       .toEqual(['10', '20', '21', '22', '30']);
   });
 });
+
+/*
+ * E2-BOOT-CONTRATO — regresión del 2026-09-19, encontrada al encender el bootstrap en producción.
+ *
+ * Los casos de arriba usan un canal falso, así que nunca comprobaron que las rutas que arma el bootstrap
+ * sean traducibles por el gateway del legado, cuyo catálogo de operaciones es CERRADO. En producción el
+ * bootstrap de Woo falló en la primera página, antes de red, con "ruta sin operación de gateway: valor de
+ * dates_are_gmt": pedía `orderby=id` sin ventana de modificación, y la única operación que devuelve el
+ * producto completo (`woo.products.list`) exige `modified_after`/`modified_before`, `dates_are_gmt=true`
+ * y `orderby=modified`.
+ *
+ * Este test cruza las dos mitades: toma las rutas que el bootstrap realmente pide y las pasa por el
+ * traductor de verdad. Si alguien cambia una ruta del bootstrap o endurece la lista blanca, falla acá y
+ * no en producción.
+ */
+describe('E2-BOOT-CONTRATO las rutas del bootstrap las acepta el gateway del legado', () => {
+  let base2: BaseDePrueba; let app2: pg.Pool; let empresa2: string;
+  beforeAll(async () => {
+    base2 = await crearBaseDePrueba(); app2 = crearPool(base2.urlApp, { max: 4 });
+    const empresa = (await app2.query<{ id: string }>("insert into core.companies(legal_name) values ('F') returning id")).rows[0]!.id;
+    empresa2 = empresa;
+  });
+  /** Cuenta nueva por caso: el checkpoint de un caso no puede mover de página al siguiente. */
+  const cuentaWooNueva = async () => (await app2.query<{ id: string }>('insert into core.channel_accounts(company_id,channel,external_account) values ($1,$2,$3) returning id', [empresa2, 'woocommerce', randomUUID()])).rows[0]!.id;
+  afterAll(async () => { await app2.end(); await base2.borrar(); });
+
+  it('la ruta de productos de Woo se traduce a woo.products.list', async () => {
+    const { rutaAOperacion } = await import('../../src/reconciliacion/transporte-gateway.ts');
+    const rutas: string[] = [];
+    const transporte: TransporteCanal = {
+      async get(ruta) {
+        rutas.push(ruta);
+        // Un producto simple: sin `type: 'variable'` no se piden variaciones.
+        return { status: 200, headers: new Headers({ 'x-wp-totalpages': '1' }), body: [{ id: 1, sku: 'FB-1', name: 'x', type: 'simple', status: 'publish', date_modified_gmt: '2026-09-18T10:00:00' }] };
+      },
+    };
+    const cuenta: CuentaBootstrap = { id: await cuentaWooNueva(), topic: 'woo.products', transporte };
+    await prepararBootstrap(app2, cuenta.id, cuenta.topic);
+    await crearBootstrap({ pool: app2, keyring, rpm: 6000, cedeSenales: 1e9, workerId: 'w1', dormir: async () => {} }).unaPagina(cuenta);
+
+    expect(rutas.length).toBeGreaterThan(0);
+    for (const ruta of rutas) {
+      // No debe lanzar: si lanza, el gateway rechazaría esta ruta antes de salir a red.
+      const op = rutaAOperacion(ruta, {});
+      expect(op.op).toMatch(/^woo\.(products|variations)\.list$/);
+    }
+  });
+
+  it('la ruta de variaciones de Woo se traduce a woo.variations.list', async () => {
+    const { rutaAOperacion } = await import('../../src/reconciliacion/transporte-gateway.ts');
+    const rutas: string[] = [];
+    const transporte: TransporteCanal = {
+      async get(ruta) {
+        rutas.push(ruta);
+        if (ruta.includes('/variations')) return { status: 200, headers: new Headers(), body: [{ id: 2, sku: 'FB-1-A', name: 'v', type: 'variation', status: 'publish', date_modified_gmt: '2026-09-18T10:00:00' }] };
+        return { status: 200, headers: new Headers({ 'x-wp-totalpages': '1' }), body: [{ id: 1, sku: 'FB-1', name: 'x', type: 'variable', status: 'publish', date_modified_gmt: '2026-09-18T10:00:00' }] };
+      },
+    };
+    const cuenta: CuentaBootstrap = { id: await cuentaWooNueva(), topic: 'woo.products', transporte };
+    await prepararBootstrap(app2, cuenta.id, cuenta.topic);
+    await crearBootstrap({ pool: app2, keyring, rpm: 6000, cedeSenales: 1e9, workerId: 'w1', dormir: async () => {} }).unaPagina(cuenta);
+
+    const deVariaciones = rutas.filter((r) => r.includes('/variations'));
+    expect(deVariaciones.length).toBeGreaterThan(0);
+    for (const ruta of deVariaciones) expect(rutaAOperacion(ruta, {}).op).toBe('woo.variations.list');
+  });
+});

@@ -91,9 +91,26 @@ async function leerPaginaMl(c: CuentaBootstrap, cursor: string | null, llamar: R
   return { recursos, siguiente };
 }
 
+/*
+ * El bootstrap de Woo va por el gateway del legado, cuyo catálogo de operaciones es cerrado:
+ * `woo.products.list` es la única que devuelve el producto completo, y exige la ventana de modificación
+ * (`modified_after`/`modified_before`, `dates_are_gmt=true`, `orderby=modified`). La que sí barre por id,
+ * `woo.presence.list`, trae `_fields=id` y no alcanza para proyectar.
+ *
+ * Por eso el barrido completo se pide como una ventana que abarca todo: desde el epoch hasta un futuro
+ * lejano, ordenado por fecha de modificación. Un listado por id se rechaza **antes de red** con
+ * "ruta sin operación de gateway: valor de dates_are_gmt", que es lo que pasó al encender el paso 8
+ * el 2026-09-19.
+ */
+const WOO_DESDE = '1970-01-01T00:00:00Z';
+const WOO_HASTA = '2100-01-01T00:00:00Z';
+
 async function leerPaginaWoo(c: CuentaBootstrap, cursor: string | null, llamar: ReturnType<typeof crearRitmo>): Promise<Pagina> {
   const pagina = cursor ? Number(cursor) : 1;
-  const q = new URLSearchParams({ per_page: String(WOO_POR_PAGINA), page: String(pagina), orderby: 'id', order: 'asc', status: 'any' });
+  const q = new URLSearchParams({
+    modified_after: WOO_DESDE, modified_before: WOO_HASTA, dates_are_gmt: 'true',
+    per_page: String(WOO_POR_PAGINA), page: String(pagina), orderby: 'modified', order: 'asc', status: 'any',
+  });
   const r = await llamar(() => c.transporte.get(`/wp-json/wc/v3/products?${q}`));
   const crudos = exigirLista(r.body, '/products');
   const recursos: RecursoRemoto[] = [];
