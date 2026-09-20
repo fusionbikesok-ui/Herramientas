@@ -61,7 +61,7 @@ type Extras = Pick<RepresentacionObservada, 'atributos' | 'imagenes' | 'comercia
  * traer DOS códigos separados por coma: al ser evidencia y nunca autoridad se guarda entero, pero quien lo
  * lea no debe asumir que es un solo código. El GTIN sale como atributo (evidencia) y también en lo comercial; nunca casa identidades.
  */
-function extraerExtrasMl(r: Registro, item: Registro, esVariacion: boolean, conCategoria: boolean): Extras {
+export function extraerExtrasMl(r: Registro, item: Registro, esVariacion: boolean, conCategoria: boolean): Extras {
   const atributos: AtributoObservado[] = [];
   const combinaciones = Array.isArray(r.attribute_combinations) ? r.attribute_combinations.filter(esRegistro) : [];
   const propios = Array.isArray(r.attributes) ? r.attributes.filter(esRegistro) : [];

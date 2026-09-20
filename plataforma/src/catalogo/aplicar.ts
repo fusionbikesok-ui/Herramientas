@@ -321,7 +321,7 @@ async function upsertRepresentacion(
  * Es una pérdida SILENCIOSA (el valor absurdo no queda en ningún lado salvo en el crudo): si algún día importa,
  * debe convertirse en un caso en lugar de un NULL.
  */
-const numeroAcotado = (n: number | undefined, tope: number): number | null =>
+export const numeroAcotado = (n: number | undefined, tope: number): number | null =>
   n !== undefined && Number.isFinite(n) && Math.abs(n) < tope ? n : null;
 
 /**
@@ -330,8 +330,8 @@ const numeroAcotado = (n: number | undefined, tope: number): number | null =>
  * no borra lo ya guardado. Con `crudo`, lo que el canal ya no informa se marca con `vigente_hasta` (la app no
  * tiene DELETE) y lo que reaparece revive su misma fila.
  */
-async function persistirExtras(
-  tx: Consultable, ctx: ContextoAplicacion, repId: string, obs: RepresentacionObservada,
+export async function persistirExtras(
+  tx: Consultable, ctx: ContextoAplicacion, repId: string, obs: Pick<RepresentacionObservada, 'atributos' | 'imagenes' | 'crudo'>,
   resumen: ResumenAplicacion, empresa: string,
 ): Promise<void> {
   if (!obs.crudo) return;
