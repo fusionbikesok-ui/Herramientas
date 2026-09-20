@@ -142,8 +142,15 @@ Un valor múltiple de Woo (`{"name":"Talle","option":"41, 42, 43, 44, 45"}`, que
 guarda **como cinco filas**, una por valor. Esto es la diferencia entre que el atributo sea consultable o sea
 un string opaco, y afecta al **22 % de los atributos** (110 de 500 en una muestra real).
 
-Reglas de la partición, porque «partir por coma» a secas rompe valores legítimos (medio de la revisión Codex):
-se parte por coma, se hace `trim` de cada parte y se descartan las vacías; **se conserva además el valor
+Reglas de la partición, porque «partir por coma» a secas rompe valores legítimos (medio de la revisión Codex,
+confirmado con datos el 2026-09-20): **se parte por coma seguida de espacio (`/,\s/`), no por coma sola**, porque
+en este catálogo **la coma es también el separador decimal**. Hay 21 valores reales donde partir por coma sola
+inventa datos: `Talle: "40, 42, 42,5, 43, 45, 46"` daría siete filas con un `5` que no es ningún talle, y
+`Largo: "110, 117,5, 122,5"` daría cinco largos en vez de tres. La lista de texto libre **no** resuelve esto:
+`talle` y `largo` son multivalor legítimos y no se pueden excluir sin perder la partición que sí corresponde.
+Se verificó sobre los 5.235 productos que **no existe ningún valor con coma-sin-espacio que sea un separador
+legítimo**, así que la regla no pierde nada. Después de partir se hace `trim` de cada parte y se descartan las
+vacías; **se conserva además el valor
 entero como venía en `atributos_crudos`**, así que una partición equivocada se corrige reproyectando sin
 volver al canal (invariante 3). **No se parte** cuando el atributo está en la lista de los que admiten coma
 como parte del valor (`descripcion`, `observaciones` y los de texto libre): esa lista se fija en el commit y se
