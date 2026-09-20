@@ -108,6 +108,19 @@ manda la marca/material.
   `ACCESORIOS`. Y **`CAMARAS` (126) queda absorbida por `Cubiertas y Cámaras` (1477)**: no hay nodo propio de
   cámaras en el árbol nuestro, y la categoría 126 del canal mapea al nodo `Cubiertas y Cámaras`.
 
+### D6 — `Cubiertas y Cámaras` queda como nodo hoja (2026-09-20)
+
+Se absorben **las dos** hijas: `CUBIERTAS` (119) y `CAMARAS` (126) dejan de ser nodos y sus categorías de
+canal mapean al nodo `Cubiertas y Cámaras` (1477). La distinción cubierta/cámara —y rodado, y las demás— pasa
+a ser **atributo del modelo**, no lugar en el árbol, y se resuelve en la entrega de atributos, no acá.
+
+Es la razón por la que este árbol puede ser corto: lo que varía por producto y se combina libremente (rodado
+× tipo × medida) no es jerarquía. Ponerlo como nodos multiplica las ramas y después no se puede filtrar en
+cruz. El árbol responde «qué clase de cosa es»; los atributos, «cuál».
+
+`ACCESORIOS TUBELESS` (96) se llama **`INSUMOS TUBELESS`** en nuestro árbol. La categoría de Woo conserva su
+nombre: el mapeo es por id.
+
 
 ## Estructura de archivos
 
