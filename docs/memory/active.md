@@ -1022,3 +1022,21 @@ a 96. Los 19 conflictos reales son sólo cuatro casos, todos interpretables:
 - `FRENOS → TRANSMISIÓN` (1): «Manijas Integradas Shimano Ef510 3x9v», que **es las dos cosas** — manija de
   freno y shifter en una pieza. No es un error de nadie: es un producto que pertenece a dos nodos, y el caso
   que justifica resolverlo por atributo y no por nodo (D6/D7).
+
+## D15 — los insumos tubeless se quedan con las cubiertas (20/09)
+
+Decisión de José. **No cambia el árbol**: en Woo `ACCESORIOS TUBELESS` (id 96) ya cuelga de `Cubiertas y
+Cámaras` y así está mapeado, así que la versión publicada ya decía esto. No hubo nada que correr.
+
+Lo que mueve es el mapeo de ML, con la misma forma que D12: **`MLA416575` Selladores es un balde.** De sus 32
+modelos, por título 25 son sellador de verdad y **7 son insumos** (cinta tubeless, válvulas, kits de
+conversión); sólo 8 están también en Woo. Se mantiene `MLA416575 → selladores` y los 7 se corrigen a mano al
+clasificar, igual que las 12 grasas. No se vuelve a preguntar: es la misma decisión que D12 sobre un caso de
+forma idéntica, y bajar el mapeo al padre para salvar 7 degradaría 25.
+
+Ojo con el número: el informe marcaba **4** conflictos, pero la deuda es de **7**. Los otros 3 son sólo de ML,
+así que ningún canal los contradice y nada los señala. Es la diferencia entre «lo que el informe ve» y «lo que
+está mal»: el informe sólo puede ver un error cuando dos canales opinan distinto.
+
+**Pendiente del lado de Woo, no nuestro:** D6 decidió renombrar la categoría 96 a `INSUMOS TUBELESS` y en Woo
+sigue llamándose `ACCESORIOS TUBELESS`. El mapeo es por id, así que el renombre no rompe nada cuando ocurra.
