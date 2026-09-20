@@ -7,6 +7,7 @@
  *
  * Todo nace apagado: sin las variables, el worker arranca igual y no consume nada.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ErrorArranqueCatalogo, planDeKeyrings } from '../../src/catalogo/arranque.ts';
 import { cargarConfig, ErrorConfig, type ConfigCatalogo } from '../../src/comun/config.ts';
@@ -177,5 +178,23 @@ describe('E2-CFG-02 CATALOGO_COMPARAR_ATRIBUTOS', () => {
     expect(con('')).toBe(false);
     expect(con('0')).toBe(false);
     expect(con('1')).toBe(true);
+  });
+});
+
+/*
+ * E2-CFG-03 — la guarda que faltaba. El 2026-09-19 el catálogo quedó inencendible en producción porque
+ * `compose.yml` no declaraba las variables `CATALOGO_*`: el worker arrancaba sano y no proyectaba nada.
+ * El 2026-09-20, al desplegar el tramo 2, `CATALOGO_COMPARAR_ATRIBUTOS` repitió el mismo hueco. Tres
+ * veces la misma clase de defecto sin un test que la vigile, así que acá está: toda variable `CATALOGO_*`
+ * del esquema tiene que estar en el bloque `environment` del worker, o esto falla nombrándola.
+ */
+describe('E2-CFG-03 compose declara todas las variables del catálogo', () => {
+  it('ninguna variable CATALOGO_* del esquema falta en el worker de compose.yml', () => {
+    const esquema = readFileSync(new URL('../../src/comun/config.ts', import.meta.url), 'utf8');
+    const compose = readFileSync(new URL('../../deploy/compose.yml', import.meta.url), 'utf8');
+    const delEsquema = [...esquema.matchAll(/^\s{2}(CATALOGO_[A-Z_]+):/gm)].map((m) => m[1]);
+    expect(delEsquema.length).toBeGreaterThan(5); // si el regex deja de matchear, que no pase en verde
+    const ausentes = delEsquema.filter((v) => !compose.includes(`${v}: \${${v}`));
+    expect(ausentes).toEqual([]);
   });
 });

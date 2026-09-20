@@ -70,6 +70,9 @@ services:
       CATALOGO_BOOTSTRAP_RPM: ${CATALOGO_BOOTSTRAP_RPM:-10}
       CATALOGO_BOOTSTRAP_CEDE_SENALES: ${CATALOGO_BOOTSTRAP_CEDE_SENALES:-20}
       CATALOGO_UMBRAL_ERROR: ${CATALOGO_UMBRAL_ERROR:-10}
+      # E2 T2: comparar atributos entre canales y abrir `atributo_divergente`. Nace apagada: primero se
+      # captura y se verifica, después se enciende. Sin `:-` por la misma razón que las de arriba.
+      CATALOGO_COMPARAR_ATRIBUTOS: ${CATALOGO_COMPARAR_ATRIBUTOS}
     volumes:
       - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
       - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
