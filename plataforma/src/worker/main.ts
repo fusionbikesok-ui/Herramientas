@@ -84,6 +84,7 @@ const cicloCatalogo = config.catalogo?.proyector && keyringCatalogo
   ? iniciarCicloCatalogo(crearProyector({
       pool, keyring: keyringCatalogo, lote: config.catalogo.lote, canario: config.catalogo.canario,
       umbralErrorPorciento: config.catalogo.umbralErrorPorciento,
+      compararAtributos: config.catalogo.compararAtributos,
     }), config.catalogo.pausaMs, logger)
   : null;
 // El bootstrap necesita los transportes de las cuentas, que salen de la configuración de barridos.

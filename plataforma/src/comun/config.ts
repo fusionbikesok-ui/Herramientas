@@ -54,6 +54,8 @@ export interface ConfigCatalogo {
   /** Señales de ML reclamables a partir de las cuales el bootstrap cede una vuelta. */
   bootstrapCedeSenales: number;
   umbralErrorPorciento: number;
+  /** Abrir `atributo_divergente` al comparar canales. Apagado, los atributos se capturan igual. */
+  compararAtributos: boolean;
 }
 export interface Config {
   servicio: Servicio; instancia: string; version: string; pgUrl: string; apiPuerto: number;
@@ -101,6 +103,8 @@ const Esquema = z.object({
   CATALOGO_CANARIO: z.coerce.number().int().min(0).default(0),
   CATALOGO_BOOTSTRAP_RPM: z.coerce.number().int().min(1).max(600).default(10),
   CATALOGO_BOOTSTRAP_CEDE_SENALES: z.coerce.number().int().min(0).default(20),
+  // Apagado por omisión: se despliega capturando y se enciende ('1') después de medir. Capturar no depende de esto.
+  CATALOGO_COMPARAR_ATRIBUTOS: z.enum(['0', '1']).default('0'),
   CATALOGO_UMBRAL_ERROR: z.coerce.number().int().min(1).max(100).default(10),
 });
 
@@ -133,6 +137,7 @@ function leerCatalogo(v: z.infer<typeof Esquema>): ConfigCatalogo | undefined {
     lote: v.CATALOGO_LOTE, pausaMs: v.CATALOGO_PAUSA_MS, canario: v.CATALOGO_CANARIO,
     bootstrapRpm: v.CATALOGO_BOOTSTRAP_RPM, bootstrapCedeSenales: v.CATALOGO_BOOTSTRAP_CEDE_SENALES,
     umbralErrorPorciento: v.CATALOGO_UMBRAL_ERROR,
+    compararAtributos: v.CATALOGO_COMPARAR_ATRIBUTOS === '1',
   };
 }
 

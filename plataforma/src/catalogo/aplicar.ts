@@ -13,6 +13,7 @@
  *     una fusión o una revocación, y eso lo hace `decisiones.ts` (tarea 8), con su evento y su auditoría.
  */
 import type { Consultable } from '../db/pool.ts';
+import { valoresRelacionados } from './atributos.ts';
 import { bloquearDecisiones, reconciliarSku } from './decisiones.ts';
 import type { OrigenModelo, Proyeccion, RepresentacionObservada, SkuObservado } from './intenciones.ts';
 
@@ -24,6 +25,8 @@ export interface ContextoAplicacion {
   canal: Canal;
   /** La versión remota del mensaje: ISO de la fecha de modificación, comparable como texto. */
   versionRemota: string;
+  /** Abrir `atributo_divergente`. Por defecto NO (se despliega capturando, se enciende después de medir). */
+  compararAtributos?: boolean;
 }
 
 export interface ResumenAplicacion {
@@ -99,8 +102,9 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
     }
 
     if (obs.tipo === 'contenedor') {
-      await upsertRepresentacion(tx, empresa, ctx, obs, { modelo: await obtenerModelo(), variante: null, omitida: false }, p.archivar);
+      const contenedorId = await upsertRepresentacion(tx, empresa, ctx, obs, { modelo: await obtenerModelo(), variante: null, omitida: false }, p.archivar);
       resumen.representaciones++;
+      await persistirExtras(tx, ctx, contenedorId, obs, resumen, empresa);
       continue;
     }
 
@@ -109,6 +113,7 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
       : await vincularMl(tx, empresa, ctx, obs, existente, obtenerModelo, abrir);
     const repId = await upsertRepresentacion(tx, empresa, ctx, obs, vinculo, p.archivar);
     resumen.representaciones++;
+    await persistirExtras(tx, ctx, repId, obs, resumen, empresa);
 
     if (vinculo.casoSobreRepresentacion) {
       await abrir(vinculo.casoSobreRepresentacion.tipo, { representacion: repId },
@@ -281,8 +286,11 @@ async function upsertRepresentacion(
   return (await tx.query<{ id: string }>(
     `INSERT INTO catalog.external_representations
        (company_id, channel_account_id, canal, recurso, variacion_normalizada, tipo, model_id, variant_id,
-        omitida_por_decision, sku_observado, user_product_id, estado_remoto, version_remota, archivado_en, motivo_archivo)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CASE WHEN $14::text IS NULL THEN NULL ELSE now() END, $14)
+        omitida_por_decision, sku_observado, user_product_id, estado_remoto, version_remota, archivado_en, motivo_archivo,
+        atributos_crudos, comercial_crudo, capturado_en, precio, moneda, stock_canal, gtin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CASE WHEN $14::text IS NULL THEN NULL ELSE now() END, $14,
+        $15::jsonb, $16::jsonb, CASE WHEN $15::jsonb IS NOT NULL OR $16::jsonb IS NOT NULL THEN now() END,
+        $17::numeric, $18, $19::integer, $20)
      ON CONFLICT (channel_account_id, recurso, variacion_normalizada) DO UPDATE SET
        tipo = EXCLUDED.tipo, model_id = EXCLUDED.model_id, variant_id = EXCLUDED.variant_id,
        omitida_por_decision = EXCLUDED.omitida_por_decision,
@@ -291,8 +299,131 @@ async function upsertRepresentacion(
        -- La reaparición desarchiva: una publicación que vuelve de la papelera es la misma representación.
        archivado_en = CASE WHEN $14::text IS NULL THEN NULL
                            ELSE COALESCE(external_representations.archivado_en, now()) END,
-       motivo_archivo = $14
+       motivo_archivo = $14,
+       -- Lo capturado se pisa sólo si esta observación trae datos: una proyección sin extras no borra lo que ya había.
+       atributos_crudos = COALESCE(EXCLUDED.atributos_crudos, external_representations.atributos_crudos),
+       comercial_crudo = COALESCE(EXCLUDED.comercial_crudo, external_representations.comercial_crudo),
+       capturado_en = COALESCE(EXCLUDED.capturado_en, external_representations.capturado_en),
+       precio = COALESCE(EXCLUDED.precio, external_representations.precio),
+       moneda = COALESCE(EXCLUDED.moneda, external_representations.moneda),
+       stock_canal = COALESCE(EXCLUDED.stock_canal, external_representations.stock_canal),
+       gtin = COALESCE(EXCLUDED.gtin, external_representations.gtin)
      RETURNING id`,
     [empresa, ctx.cuenta, ctx.canal, obs.recurso, obs.variacion, obs.tipo, v.modelo, v.variante, v.omitida,
-      textoSku(obs.sku), obs.userProductId, obs.estadoRemoto, ctx.versionRemota || null, archivar])).rows[0]!.id;
+      textoSku(obs.sku), obs.userProductId, obs.estadoRemoto, ctx.versionRemota || null, archivar,
+      obs.crudo ? JSON.stringify(obs.crudo.atributos ?? null) : null, obs.crudo ? JSON.stringify(obs.crudo.comercial ?? null) : null,
+      numeroAcotado(obs.comercial?.precio, 1e10), obs.comercial?.moneda ?? null,
+      numeroAcotado(obs.comercial?.stock, 2 ** 31) === null ? null : Math.trunc(obs.comercial!.stock!), obs.comercial?.gtin ?? null])).rows[0]!.id;
+}
+
+/**
+ * Un número finito dentro de ±tope, o null: un valor fuera de rango abortaría la transacción del mensaje entero.
+ * Es una pérdida SILENCIOSA (el valor absurdo no queda en ningún lado salvo en el crudo): si algún día importa,
+ * debe convertirse en un caso en lugar de un NULL.
+ */
+const numeroAcotado = (n: number | undefined, tope: number): number | null =>
+  n !== undefined && Number.isFinite(n) && Math.abs(n) < tope ? n : null;
+
+/**
+ * Persiste lo extraído (atributos e imágenes) en la MISMA transacción que la representación, y compara con el
+ * otro canal. Sin `crudo` la observación no trajo nada capturable y no se toca nada: una proyección sin extras
+ * no borra lo ya guardado. Con `crudo`, lo que el canal ya no informa se marca con `vigente_hasta` (la app no
+ * tiene DELETE) y lo que reaparece revive su misma fila.
+ */
+async function persistirExtras(
+  tx: Consultable, ctx: ContextoAplicacion, repId: string, obs: RepresentacionObservada,
+  resumen: ResumenAplicacion, empresa: string,
+): Promise<void> {
+  if (!obs.crudo) return;
+  const modelo = (await tx.query<{ model_id: string | null }>(
+    `SELECT COALESCE(r.model_id, v.model_id) AS model_id FROM catalog.external_representations r
+       LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [repId])).rows[0]?.model_id;
+  // Una publicación omitida por decisión no tiene modelo ni variante: no hay a quién colgarle los atributos.
+  if (!modelo) return;
+
+  const attrs = obs.atributos ?? [];
+  const nombres = attrs.map((a) => a.nombre); const valores = attrs.map((a) => a.valor);
+  await tx.query(
+    `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+     SELECT $1, $2, n, v, now() FROM unnest($3::text[], $4::text[]) AS u(n, v)
+     ON CONFLICT (representation_id, nombre_normalizado, valor) DO UPDATE
+       SET observado_en = EXCLUDED.observado_en, vigente_hasta = NULL, model_id = EXCLUDED.model_id`,
+    [modelo, repId, nombres, valores]);
+  await tx.query(
+    `UPDATE catalog.model_attributes m SET vigente_hasta = now()
+      WHERE m.representation_id = $1 AND m.vigente_hasta IS NULL
+        AND NOT EXISTS (SELECT 1 FROM unnest($2::text[], $3::text[]) AS u(n, v)
+                         WHERE u.n = m.nombre_normalizado AND u.v = m.valor)`, [repId, nombres, valores]);
+
+  const imgs = obs.imagenes ?? [];
+  const urls = imgs.map((i) => i.url); const ordenes = imgs.map((i) => i.orden);
+  await tx.query(
+    `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en)
+     SELECT $1, $2, u, o, now() FROM unnest($3::text[], $4::int[]) AS x(u, o)
+     ON CONFLICT (representation_id, url) DO UPDATE
+       SET orden = EXCLUDED.orden, observado_en = EXCLUDED.observado_en, vigente_hasta = NULL, model_id = EXCLUDED.model_id`,
+    [modelo, repId, urls, ordenes]);
+  await tx.query(
+    `UPDATE catalog.model_images m SET vigente_hasta = now()
+      WHERE m.representation_id = $1 AND m.vigente_hasta IS NULL AND NOT (m.url = ANY($2::text[]))`, [repId, urls]);
+
+  if (ctx.compararAtributos ?? false) await compararAtributos(tx, ctx, repId, modelo, attrs, resumen, empresa);
+}
+
+/** La categoría es propia de cada canal (nombre en Woo, id en ML): compararla daría divergencia siempre. */
+const NO_COMPARABLES = new Set(['categoria_canal']);
+
+/**
+ * Dos canales que afirman valores DISJUNTOS para el mismo atributo del mismo modelo abren UN caso
+ * `atributo_divergente`, colgado de esta representación (`identity_cases` no tiene `model_id`), con todos los
+ * atributos en conflicto en el detalle: uno por atributo violaría `identity_cases_un_abierto_representacion` y
+ * abortaría el mensaje. Que un canal no informe un atributo NO es contradicción. Valores que se solapan
+ * (Woo lista cinco talles y ML publica uno de ellos) o cuyos tokens se contienen ("43" / "43 eu") tampoco. Si el conflicto desaparece, el caso se cierra.
+ * Nunca se fusiona nada solo.
+ */
+async function compararAtributos(
+  tx: Consultable, ctx: ContextoAplicacion, repId: string, modelo: string,
+  attrs: { nombre: string; valor: string }[], resumen: ResumenAplicacion, empresa: string,
+): Promise<void> {
+  const propios = new Map<string, string[]>();
+  for (const a of attrs) {
+    if (NO_COMPARABLES.has(a.nombre)) continue;
+    propios.set(a.nombre, [...(propios.get(a.nombre) ?? []), a.valor]);
+  }
+  const conflictos: { nombre: string; canal: string; valores: string[]; canal_otro: string; valores_otro: string[] }[] = [];
+  if (propios.size) {
+    const otros = (await tx.query<{ nombre_normalizado: string; valor: string; canal: string }>(
+      `SELECT DISTINCT a.nombre_normalizado, a.valor, r.canal
+         FROM catalog.model_attributes a JOIN catalog.external_representations r ON r.id = a.representation_id
+        WHERE a.model_id = $1 AND a.vigente_hasta IS NULL AND r.canal <> $2 AND r.archivado_en IS NULL
+          AND a.nombre_normalizado = ANY($3::text[])`, [modelo, ctx.canal, [...propios.keys()]])).rows;
+    const porNombre = new Map<string, { canal: string; valores: string[] }>();
+    for (const o of otros) {
+      const e = porNombre.get(o.nombre_normalizado) ?? { canal: o.canal, valores: [] };
+      e.valores.push(o.valor); porNombre.set(o.nombre_normalizado, e);
+    }
+    for (const [nombre, mios] of propios) {
+      const otro = porNombre.get(nombre);
+      if (!otro) continue;
+      if (otro.valores.some((v) => mios.some((m) => valoresRelacionados(m, v)))) continue;
+      conflictos.push({ nombre, canal: ctx.canal, valores: mios, canal_otro: otro.canal, valores_otro: otro.valores });
+    }
+  }
+  const abierto = (await tx.query<{ id: string }>(
+    `SELECT id FROM catalog.identity_cases
+      WHERE representation_id = $1 AND tipo = 'atributo_divergente' AND cerrado_en IS NULL FOR UPDATE`, [repId])).rows[0];
+  if (conflictos.length === 0) {
+    if (abierto) await tx.query(
+      `UPDATE catalog.identity_cases SET cerrado_en = now(), motivo_cierre = 'los canales ya no discrepan' WHERE id = $1`, [abierto.id]);
+    return;
+  }
+  const detalle = JSON.stringify({ atributos: conflictos });
+  if (abierto) {
+    await tx.query('UPDATE catalog.identity_cases SET detalle = $2::jsonb WHERE id = $1', [abierto.id, detalle]);
+  } else {
+    await tx.query(
+      `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id, detalle) VALUES ($1, 'atributo_divergente', $2, $3::jsonb)`,
+      [empresa, repId, detalle]);
+    resumen.casosAbiertos.push('atributo_divergente');
+  }
 }

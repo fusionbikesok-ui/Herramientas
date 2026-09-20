@@ -95,7 +95,7 @@ describe('E2-CFG-01 configuración del catálogo', () => {
 describe('E2-CFG-01 plan de keyrings del worker', () => {
   const catalogo = (extra: Partial<ConfigCatalogo> = {}): ConfigCatalogo => ({
     proyector: true, bootstrap: false, keyringFile: '/run/catalogo.json',
-    lote: 20, pausaMs: 1000, canario: 0, bootstrapRpm: 10, bootstrapCedeSenales: 20, umbralErrorPorciento: 10,
+    lote: 20, pausaMs: 1000, canario: 0, bootstrapRpm: 10, bootstrapCedeSenales: 20, umbralErrorPorciento: 10, compararAtributos: false,
     ...extra,
   });
   const barridos = { registroFile: '/run/registro.json', keyringFile: '/run/sobres.json' };
@@ -166,5 +166,16 @@ describe('E2-CFG-07 una variable vacía es una variable ausente', () => {
   it('no se come un valor legítimo de otra variable', () => {
     const c = cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', CATALOGO_LOTE: '50' });
     expect(c.catalogo?.lote).toBe(50);
+  });
+});
+
+describe('E2-CFG-02 CATALOGO_COMPARAR_ATRIBUTOS', () => {
+  const con = (v: string) => cargarConfig({
+    ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', CATALOGO_COMPARAR_ATRIBUTOS: v }).catalogo!.compararAtributos;
+  it('por defecto está APAGADO; vacío es lo mismo que ausente; solo "1" lo enciende', () => {
+    expect(cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json' }).catalogo!.compararAtributos).toBe(false);
+    expect(con('')).toBe(false);
+    expect(con('0')).toBe(false);
+    expect(con('1')).toBe(true);
   });
 });

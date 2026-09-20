@@ -36,6 +36,8 @@ export interface OpcionesProyector {
   /** 0 = sin límite. */
   canario: number;
   umbralErrorPorciento: number;
+  /** Por defecto false. Falso: los atributos se capturan pero no se abre `atributo_divergente`. */
+  compararAtributos?: boolean;
 }
 
 export interface ResultadoVuelta {
@@ -82,7 +84,8 @@ export function crearProyector(o: OpcionesProyector): Proyector {
     const canal: Canal = r.tipo === 'woo.products' ? 'woocommerce' : 'mercadolibre';
     const proyeccion = canal === 'woocommerce' ? proyectarProductoWoo(payload) : proyectarItemMl(payload);
     if (esRechazo(proyeccion)) throw new ErrorRechazoProyeccion(proyeccion.rechazo);
-    await aplicarProyeccion({ tx, cuenta: r.channelAccountId, canal, versionRemota: r.remoteVersion }, proyeccion);
+    await aplicarProyeccion({ tx, cuenta: r.channelAccountId, canal, versionRemota: r.remoteVersion,
+      compararAtributos: o.compararAtributos ?? false }, proyeccion);
     return 'aplicado';
   }
 

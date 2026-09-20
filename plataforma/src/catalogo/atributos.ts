@@ -56,3 +56,24 @@ export function agregarImagen(lista: ImagenObservada[], url: string, orden: numb
   const u = url.trim();
   if (u !== '' && !lista.some((i) => i.url === u)) lista.push({ url: u, orden });
 }
+
+/** Tokens de un valor para comparar entre canales: sin acentos, en minúsculas, y con `/`, `-` y espacios como separador. */
+export function tokensComparacion(valor: string): string[] {
+  return valor.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().split(/[\s/-]+/).filter((t) => t !== '');
+}
+
+/**
+ * Dos valores de canales distintos se consideran el mismo (o compatibles) si los tokens de uno están contenidos
+ * en los del otro. Medido en el ensayo en seco (5.235 productos de Woo cruzados por SKU con 2.785 publicaciones
+ * de ML): comparar por igualdad exacta abría 333 casos y 8 de cada 10 eran notación ("43" vs "43 eu", "m/l" vs
+ * "m-l"), granularidad ("verde" vs "verde agua") o marca contra marca+modelo ("shimano" vs "shimano tiagra"); con
+ * contención por tokens quedan 114, que son typos de carga ("amarilllo") y errores reales ("rojo" vs "azul").
+ * Limitación conocida: idioma ("gris" vs "stone gray") y sinónimos ("plata" vs "plateado") siguen dando caso;
+ * resolverlos pide un diccionario, que es decisión de negocio y no de este tramo.
+ */
+export function valoresRelacionados(a: string, b: string): boolean {
+  const ta = new Set(tokensComparacion(a)); const tb = new Set(tokensComparacion(b));
+  if (ta.size === 0 || tb.size === 0) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  const contenido = (x: Set<string>, y: Set<string>) => [...x].every((t) => y.has(t));
+  return contenido(ta, tb) || contenido(tb, ta);
+}
