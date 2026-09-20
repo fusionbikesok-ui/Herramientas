@@ -177,3 +177,29 @@ export const FUERA_DEL_ARBOL: Record<string, string> = {
   '260': 'QR PAGOS sale del árbol; su producto se clasifica a mano',
   '389': 'SMARTWATCH sale del árbol; su producto se clasifica a mano',
 };
+
+/**
+ * Categorías de MercadoLibre → nodo del árbol propio, por id (el nombre va de comentario). Sólo las diez que
+ * cubren la mitad del catálogo; el resto lo decide José aparte.
+ *
+ * DECISIÓN CONSCIENTE: ML es MÁS fino que el árbol. `Piñones → transmision` colapsa a propósito la
+ * granularidad de ML (D7: lo fino es atributo, no nodo), y es lo que va a bajar las «contradicciones reales» del
+ * informe. CUANDO LOS DOS CANALES ESTÉN MAPEADOS, EL PUENTE DE GRANULARIDAD DE `medirCobertura` SE RETIRA: la
+ * pregunta pasa a ser «¿caen en el mismo nodo?», exacta. No se sigue afinando el puente.
+ *
+ * D8: `MLA6143` (460 modelos) va al nodo RAÍZ `bicicletas`. ML las mete en una sola categoría y el árbol las
+ * separa en 15 marcas; un mapeo apunta a un nodo y la marca la resuelve el atributo de marca. No se inventa
+ * un nodo genérico ni se reparte por marca.
+ */
+export const MAPEO_ML: Record<string, string> = {
+  MLA6143: 'bicicletas',                // Bicicletas Convencionales (460 modelos)
+  MLA371625: 'cubiertas-y-camaras',     // Cubiertas de Bicicleta
+  MLA9766: 'cascos',                    // Cascos
+  MLA429231: 'zapatillas',              // Zapatillas de Ciclismo
+  MLA429032: 'lubricantes',             // Lubricantes
+  MLA429725: 'lentes',                  // Lentes para Ciclismo
+  MLA371883: 'ciclocomputadoras-y-gps', // Ciclocomputadoras
+  MLA371650: 'pedales-y-trabas',        // Pedales
+  MLA18091: 'luces-y-seguridad',        // Luces
+  MLA78906: 'transmision',              // Piñones (colapsa la granularidad de ML, ver arriba)
+};
