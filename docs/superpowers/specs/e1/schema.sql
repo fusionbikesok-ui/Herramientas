@@ -1207,7 +1207,7 @@ DECLARE muerta boolean; cicla boolean;
 BEGIN
   -- Mismo motivo que en el árbol: sin lock, dos transacciones que cierran el ciclo desde los dos lados a la
   -- vez pasan las dos. El lock es por pack para no serializar toda la tabla.
-  PERFORM pg_advisory_xact_lock(hashtextextended('catalog.pack_components', 0), hashtextextended(NEW.pack_variant_id::text, 0));
+  PERFORM pg_advisory_xact_lock(hashtextextended('catalog.pack_components:' || NEW.pack_variant_id::text, 0));
   SELECT archivado_en IS NOT NULL INTO muerta FROM catalog.sellable_variants WHERE id = NEW.variant_id;
   IF muerta THEN
     RAISE EXCEPTION 'la variante % está archivada: no puede ser componente de un pack', NEW.variant_id;
