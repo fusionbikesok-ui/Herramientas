@@ -203,15 +203,22 @@ empresa `01a0ad82-dcf5-7235-a8d6-13fe30b386a2`; cuenta de WooCommerce
 El informe de taxonomía (`catalogo-informe-taxonomia.mjs`) se corre DESPUÉS de importar las categorías del
 canal, no antes: traduce los `category_id` de MercadoLibre a nombres leyendo `catalog.channel_categories`, y
 con esa tabla vacía cada id de ML queda sin traducir, ningún modelo publicado en los dos canales puede
-coincidir y `contradictoriosEntreCanales` sale inflado con todos ellos. No es un hallazgo del catálogo: es el
-informe corriendo sin su diccionario.
+coincidir y el desglose del puente (`cobertura.puente`) sale inflado con todos ellos. No es un hallazgo del
+catálogo: es el informe corriendo sin su diccionario.
 
-`contradictoriosEntreCanales` del informe es INVÁLIDO mientras no se importen las categorías de
-MercadoLibre. Medido el 2026-09-20, ya con las 82 categorías de Woo importadas: 942 modelos publicados en
+El desglose del puente es INVÁLIDO mientras no se importen las categorías de MercadoLibre. Medido el 2026-09-20, ya con las 82 categorías de Woo importadas: 942 modelos publicados en
 los dos canales, y los 942 con el `category_id` crudo de ML (126 ids distintos). El número es idéntico al de
 modelos en ambos canales, así que no mide contradicción: mide doble publicación. Importar Woo no lo arregla,
 porque los valores de Woo ya eran nombres; los que necesitan diccionario son los `MLA*`, y esa importación no
 existe todavía. No leerlo como un hallazgo del catálogo.
+
+**Al 2026-09-20 esto quedó superado y el campo `contradictoriosEntreCanales` ya no existe.** El informe mide
+por NODO del árbol propio, que es exacto, y dejó el criterio de nombres agrupado en `cobertura.puente`, que
+cubre exactamente `sinNodoEnAlgunCanal` — los modelos a los que todavía les falta nodo en algún canal — y se
+retira cuando ML esté mapeado del todo. Se le sacó el nombre viejo a propósito: había cambiado de significado
+dos veces y nada fuera del informe lo consumía, así que el único riesgo era que una persona leyera un número
+creyendo que medía lo de antes. `cadenasIncompletas` vive ahora dentro de `puente`, porque sólo se calcula
+subiendo cadenas de categorías del canal.
 
 El comando de la plataforma se corre **desde `/opt/fusionbikes/herramientas`**, siempre. El `-f` es una ruta
 relativa, así que desde otro directorio falla con

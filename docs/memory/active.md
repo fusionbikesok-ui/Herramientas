@@ -902,3 +902,38 @@ el mismo nodo?». Tamaño de esa decisión: 126 categorías de ML en uso, **9 cu
 
 Commits: `5d20734` (desglose), `4b2cb52` (los dos arreglos). Nada publicado: la versión 2 del árbol sigue
 en borrador, esperando que José mire los 65 nodos y los 78 mapeos.
+
+## El árbol propio existe, y la comparación entre canales pasó a ser exacta (E2 T3, 20/09)
+
+**Versión 2 publicada** (`estado='vigente'`, 65 nodos, 6 raíces, 0 mapeos colgados). Es la primera acción del
+tramo que cambia lo que el sistema hace: `leerArbol` y `clasificarModelo` ya ven el árbol. **No reclasificó
+nada**: `model_categories` sigue en 0 y clasificar es un paso aparte. Publicar creó el lugar, no movió producto.
+
+Publicar tiene un solo modo de romper algo, y por eso hay un script (`catalogo-arbol-publicar.mjs`) y no un
+UPDATE a mano: `taxonomy_channel_map` apunta al NODO, que vive **fuera** de la versión, así que publicar una
+versión que no contenga un nodo mapeado deja el mapeo apuntando a la nada y los modelos de esa categoría sin
+clasificar, en silencio. El script lo verifica, exige el id de versión explícito y comprueba alcanzabilidad
+desde una raíz. La misma garantía faltaba del otro lado de la puerta — `aplicarMapeoCategorias` verificaba que
+el nodo existiera, no que estuviera en la versión vigente — y se cerró en `9a2d624`.
+
+**Las 10 categorías de ML que cubren la mitad del catálogo, mapeadas** (D8/D9). Con eso la pregunta «¿coinciden
+los canales?» dejó de ser una heurística de nombres y pasó a ser «¿caen en el mismo nodo?». Medido:
+
+| de 942 modelos en ambos canales | |
+|---|---|
+| mismo nodo | 359 |
+| uno es ancestro del otro | 12 |
+| nodos distintos | **15** |
+| sin nodo en algún canal | 556 |
+
+Los 12 son bicicletas y **no son un error**: Woo dice la marca y ML la raíz `BICICLETAS POR MARCA`, que es D8
+funcionando. Los 15 sí son un conflicto real de criterio: Woo en `GRASAS` (11) y `LIQUIDOS DE FRENOS` (3)
+contra ML en `LUBRICANTES`. Son hermanos bajo TALLER, no padre e hijo. **Pendiente de José: ¿una grasa es un
+lubricante?** De 942 «contradicciones» a 15 decisiones humanas.
+
+El campo `contradictoriosEntreCanales` **se eliminó** y el criterio de nombres quedó agrupado en
+`cobertura.puente`, que cubre exactamente `sinNodoEnAlgunCanal`. Había cambiado de significado dos veces y nada
+fuera del informe lo consumía: el único riesgo era humano, alguien leyendo un número creyendo que medía lo de
+antes. Un campo cuyo nombre sobrevive a tres significados es una trampa con antigüedad.
+
+Commits: `ea5d534` (publicador), `52eb474` (MAPEO_ML), `9a2d624` (comparación por nodo), `5fcd9a5` (renombre).
