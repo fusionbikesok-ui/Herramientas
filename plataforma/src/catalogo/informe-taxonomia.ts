@@ -24,6 +24,12 @@ import type { Consultable } from '../db/pool.ts';
 import { tokensComparacion, valoresRelacionados } from './atributos.ts';
 import { normalizarMarca } from './taxonomia.ts';
 
+/**
+ * La clave con la que se compara un nombre de categoría en TODO este informe. Una sola función a propósito:
+ * la partición y la medición de cobertura se indexan con ella y tienen que casar exactamente.
+ */
+export const claveNombre = (nombre: string): string => tokensComparacion(nombre).join(' ');
+
 // ─────────────────────────── candidatos ───────────────────────────
 
 export interface CandidatoCategoriaCanal {
@@ -42,7 +48,7 @@ export async function candidatosDesdeAtributo(tx: Consultable, empresa: string):
       GROUP BY a.valor`, [empresa]);
   const porNormalizado = new Map<string, CandidatoCategoriaCanal>();
   for (const fila of r.rows) {
-    const clave = tokensComparacion(fila.valor).join(' ');
+    const clave = claveNombre(fila.valor);
     const actual = porNormalizado.get(clave);
     if (!actual) {
       porNormalizado.set(clave, { nombreNormalizado: clave, ejemplos: [fila.valor], modelos: Number(fila.modelos) });
@@ -67,7 +73,11 @@ export async function categoriasDeCanal(tx: Consultable, channelAccountId: strin
     `SELECT id_externo AS "idExterno", parent_externo AS "parentExterno", nombre, conteo
        FROM catalog.channel_categories
       WHERE channel_account_id = $1 AND vigente_hasta IS NULL
-      ORDER BY id_externo::int`, [channelAccountId]);
+      -- Ordenado por los DIGITOS del id y no con un cast a int: los ids de ML son 'MLA1234' y el cast
+      -- reventaba el informe entero en cuanto se le pasaba una cuenta de MercadoLibre. El orden es cosmético;
+      -- lo que no puede es fallar.
+      ORDER BY nullif(regexp_replace(id_externo, '[^0-9]', '', 'g'), '')::bigint NULLS LAST, id_externo`,
+    [channelAccountId]);
   return r.rows;
 }
 
@@ -92,7 +102,10 @@ export function clasificarCategorias(
   coleccionesConocidas: Set<string>,
 ): CategoriaClasificada[] {
   return categorias.map((c) => {
-    const clave = normalizarMarca(c.nombre);
+    // `claveNombre` y no `normalizarMarca`: `medirCobertura` indexa la partición con `claveNombre`, y con dos
+    // normalizadores distintos un nombre con puntuación ('LIQUIDOS/FRENOS') caía en claves diferentes a cada
+    // lado y el modelo quedaba sin clasificar sin que nada protestara.
+    const clave = claveNombre(c.nombre);
     if (coleccionesConocidas.has(clave)) {
       return { ...c, grupo: 'coleccion', motivo: `coincide con una colección conocida ('${c.nombre}')` };
     }
@@ -187,7 +200,7 @@ interface FilaCategoriaModelo { modelId: string; canal: string; valor: string }
 /**
  * Cuenta, no abre casos (igual criterio que el informe del tramo 2). `clasificacionPorNombre` es la
  * partición ya calculada por `clasificarCategorias` sobre las categorías DEL CANAL, indexada por nombre
- * normalizado con `tokensComparacion` — la misma clave que usa `candidatosDesdeAtributo` para agrupar los
+ * normalizado con `claveNombre` — la misma clave que usa `candidatosDesdeAtributo` para agrupar los
  * valores de `categoria_canal`, así los dos lados casan.
  */
 export async function medirCobertura(
@@ -217,7 +230,7 @@ export async function medirCobertura(
     const valoresUnicos = new Set(lista.map((f) => f.valor));
     if (valoresUnicos.size > 1) variasCandidatas++;
 
-    const grupos = [...valoresUnicos].map((v) => clasificacionPorNombre.get(tokensComparacion(v).join(' ')) ?? 'taxonomia');
+    const grupos = [...valoresUnicos].map((v) => clasificacionPorNombre.get(claveNombre(v)) ?? 'taxonomia');
     if (grupos.length > 0 && grupos.every((g) => g !== 'taxonomia')) soloMarcaOColeccion++;
 
     const porCanal = new Map<string, Set<string>>();
@@ -269,7 +282,7 @@ export async function generarInforme(
   for (const c of categoriasCanal) particion[c.grupo]++;
 
   const clasificacionPorNombre = new Map<string, GrupoCategoria>();
-  for (const c of categoriasCanal) clasificacionPorNombre.set(tokensComparacion(c.nombre).join(' '), c.grupo);
+  for (const c of categoriasCanal) clasificacionPorNombre.set(claveNombre(c.nombre), c.grupo);
 
   const todosLosSolapamientos = detectarSolapamientos(categorias);
   const solapamientos = {

@@ -205,3 +205,21 @@ describe('E2-INF-05 clasificarCategorias', () => {
     expect(r[0]).toMatchObject({ grupo: 'marca' });
   });
 });
+
+describe('E2-INF-04 las categorías de MercadoLibre', () => {
+  it('el informe no revienta con ids MLA…', async () => {
+    // Regresión: `ORDER BY id_externo::int` hacía fallar el informe entero en cuanto la cuenta era de ML,
+    // cuyos ids de categoría son 'MLA1234'. Ningún test lo cubría porque el fixture era sólo de Woo.
+    await admin.query(
+      `INSERT INTO catalog.channel_categories
+         (company_id, channel_account_id, canal, id_externo, parent_externo, nombre, conteo)
+       VALUES ($1, $2, 'mercadolibre', 'MLA1234', NULL, 'Cascos', 10),
+              ($1, $2, 'mercadolibre', 'MLA5', 'MLA1234', 'Cascos de MTB', 4),
+              ($1, $2, 'mercadolibre', 'sin-digitos', NULL, 'Raro', 0)`, [empresa, cuentaMl]);
+    const informe = await generarInforme(app, empresa, cuentaMl);
+    expect(informe.categoriasCanal.map((c) => c.idExterno)).toEqual(['MLA5', 'MLA1234', 'sin-digitos']);
+    // Y la jerarquía de ML se lee igual que la de Woo: el par es padre e hijo, no algo que decidir.
+    expect(informe.solapamientos.sinEmparentar).toEqual([]);
+    expect(informe.solapamientos.emparentados.map((s) => `${s.a}|${s.b}`)).toEqual(['Cascos de MTB|Cascos']);
+  });
+});
