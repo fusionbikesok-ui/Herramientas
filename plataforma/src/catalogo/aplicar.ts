@@ -33,9 +33,9 @@ export interface ResumenAplicacion {
   casosAbiertos: string[];
 }
 
-type TipoCaso =
+export type TipoCaso =
   | 'sku_pendiente' | 'omitida_revisar' | 'sku_inexistente_en_woo' | 'woo_sin_sku'
-  | 'woo_sku_duplicado' | 'woo_sku_no_canonico' | 'user_product_divergente';
+  | 'woo_sku_duplicado' | 'woo_sku_no_canonico' | 'user_product_divergente' | 'atributo_divergente';
 
 /** Casos que una observación de Woo puede abrir y, cuando el SKU queda bien, cerrar. */
 const CASOS_SKU_WOO: TipoCaso[] = ['woo_sin_sku', 'woo_sku_no_canonico', 'woo_sku_duplicado', 'sku_pendiente'];
