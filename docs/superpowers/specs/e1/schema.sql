@@ -657,9 +657,12 @@ GRANT USAGE ON SCHEMA informes TO plataforma_app;
 GRANT SELECT, INSERT, UPDATE ON informes.entregas TO plataforma_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE plataforma_migrador IN SCHEMA informes GRANT SELECT, INSERT, UPDATE ON TABLES TO plataforma_app;
 
--- ═══════════════════════════ catalog (E2 T1, migración 0013) ═══════════════════════════
+-- ═══════════════════════════ catalog (E2 T1, migración 0013; E2 T2, migración 0014) ═══════════════════════════
 -- El catálogo canónico: qué se vende, dónde, con qué SKU, y qué falta decidir. Los `source` nuevos
 -- ('bootstrap' en inbox_messages, 'payload_expired' en reconciliation_signals) están arriba, en su tabla.
+-- Lo de E2 T2 (atributos, imágenes y datos comerciales por representación) entró en este archivo DESPUÉS de la
+-- migración 0014, no antes: el orden que pide la cabecera ("primero aquí") se invirtió y este contrato se puso al
+-- día cuando la suite completa lo detectó (test "el esquema migrado coincide con la referencia").
 
 CREATE SCHEMA catalog;
 GRANT USAGE ON SCHEMA catalog TO plataforma_app;
@@ -749,6 +752,16 @@ CREATE TABLE catalog.external_representations (
   archivado_en          timestamptz,
   motivo_archivo        text,
   creado_en             timestamptz NOT NULL DEFAULT now(),
+  -- Lo que el canal informó de ESTA publicación (E2 T2). Todo nullable y sin default: una representación
+  -- proyectada antes de T2 no lo tiene. Es evidencia por canal y va acá y no en la variante, porque una variante
+  -- puede estar en Woo y en ML a la vez y cada canal tiene su precio y su stock.
+  atributos_crudos      jsonb,                -- lo que vino, sin tocar: permite reproyectar sin volver al canal
+  comercial_crudo       jsonb,
+  capturado_en          timestamptz,          -- NULL = todavía no se intentó capturar (checkpoint del backfill)
+  precio                numeric(12,2),
+  moneda                text,
+  stock_canal           integer,
+  gtin                  text,                 -- evidencia, nunca autoridad: no casa identidades
   CONSTRAINT external_representations_archivo_check CHECK ((archivado_en IS NULL) = (motivo_archivo IS NULL)),
   -- Lo que el diseño pide que la base garantice sola: un contenedor jamás cuelga de una variante.
   -- El nombre no repite "tipo_check": ése lo toma PostgreSQL solo para el CHECK inline de la columna.
@@ -764,6 +777,38 @@ CREATE INDEX external_representations_variante ON catalog.external_representatio
 CREATE INDEX external_representations_modelo ON catalog.external_representations (model_id);
 CREATE INDEX external_representations_user_product
   ON catalog.external_representations (channel_account_id, user_product_id) WHERE user_product_id IS NOT NULL;
+
+-- ───────────────────────────── atributos e imágenes (E2 T2) ─────────────────────────────
+-- Una fila por (representación, nombre, valor): un atributo multivalor son varias filas. La procedencia es la
+-- representación y no el canal, porque un canal puede tener varias publicaciones del mismo modelo (el canal sale
+-- por join). Nada se borra: lo que el canal deja de informar queda con `vigente_hasta`, y si reaparece revive la
+-- misma fila. `nombre_normalizado` es léxico (minúsculas, sin acentos, `_`); no hay sinónimos.
+CREATE TABLE catalog.model_attributes (
+  id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  model_id           uuid NOT NULL REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
+  representation_id  uuid NOT NULL REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
+  nombre_normalizado text NOT NULL CHECK (length(nombre_normalizado) > 0),
+  valor              text NOT NULL,
+  observado_en       timestamptz NOT NULL,
+  vigente_hasta      timestamptz,             -- NULL = vigente
+  CONSTRAINT model_attributes_un_valor UNIQUE (representation_id, nombre_normalizado, valor)
+);
+CREATE INDEX model_attributes_modelo ON catalog.model_attributes (model_id);
+CREATE INDEX model_attributes_nombre_valor ON catalog.model_attributes (nombre_normalizado, valor);
+
+-- Una fila por (representación, url), con su posición original. Dos canales pueden publicar la misma URL y cada
+-- uno conserva su procedencia. Misma regla de vigencia que los atributos.
+CREATE TABLE catalog.model_images (
+  id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  model_id          uuid NOT NULL REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
+  representation_id uuid NOT NULL REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
+  url               text NOT NULL CHECK (length(url) > 0),
+  orden             integer,
+  observado_en      timestamptz NOT NULL,
+  vigente_hasta     timestamptz,
+  CONSTRAINT model_images_una_url UNIQUE (representation_id, url)
+);
+CREATE INDEX model_images_modelo ON catalog.model_images (model_id);
 
 -- ───────────────────────────── la evidencia del legado ─────────────────────────────
 -- Append-only: una decisión no se edita, se cierra y entra la siguiente. Así queda el historial de
@@ -806,7 +851,11 @@ CREATE TABLE catalog.identity_cases (
                     'woo_sku_duplicado', 'woo_sku_no_canonico', 'decision_en_conflicto', 'identidad_legado',
                     -- Dos publicaciones de ML con el mismo user_product_id (ML dice que venden lo mismo) que
                     -- el matcher no vincula a la misma variante. Pista, no identidad: se revisa, no se fusiona.
-                    'user_product_divergente')),
+                    'user_product_divergente',
+                    -- Dos canales afirman valores distintos para el mismo atributo de un modelo (E2 T2). Cuelga de
+                    -- la representación que lo introduce; un solo caso abierto por representación agrupa todos sus
+                    -- atributos en conflicto. Se revisa, nunca se fusiona sola.
+                    'atributo_divergente')),
   prioridad       text NOT NULL DEFAULT 'normal' CHECK (prioridad IN ('baja', 'normal', 'urgente')),
   variant_id      uuid REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
   representation_id uuid REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
