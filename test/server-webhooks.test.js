@@ -5,13 +5,14 @@ import request from 'supertest';
 const puntualWeb = vi.fn(() => Promise.resolve());
 const puntualMl = vi.fn(() => Promise.resolve());
 const syncMl = vi.fn(() => Promise.resolve());
+const puntualOrdenMl = vi.fn(() => Promise.resolve());
 vi.mock('../routes/preparacion.js', async () => {
   const actual = await vi.importActual('../routes/preparacion.js');
   return { ...actual, syncPedidoWebPuntual: puntualWeb, syncPedidoMlPuntual: puntualMl };
 });
 vi.mock('../routes/sync.js', async () => {
   const actual = await vi.importActual('../routes/sync.js');
-  return { ...actual, syncMlToWc: syncMl };
+  return { ...actual, syncMlToWc: syncMl, syncOrdenMlPuntual: puntualOrdenMl };
 });
 
 const { buildApp } = await import('../server.js');
@@ -96,5 +97,72 @@ describe('handlers reales de webhooks en server.js', () => {
       .send({ topic: 'orders_v2', resource: '/shipments/9', user_id: 123 });
     expect(res.status).toBe(200);
     expect(puntualMl).not.toHaveBeenCalled();
+  });
+
+  describe('deduplicación corta de notificaciones ML repetidas del mismo pedido', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('dos webhooks orders_v2 seguidos del mismo pedido disparan una sola sincronización, y el ACK sigue en 200 en los dos', async () => {
+      process.env.ML_USER_ID = '123';
+      const app = nuevaApp();
+      const notif = () => request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-DUP', user_id: 123 });
+      const r1 = await notif();
+      const r2 = await notif();
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      expect(puntualMl).toHaveBeenCalledTimes(1);
+    });
+
+    it('pasada la ventana de 15 s, el mismo pedido vuelve a disparar la sincronización', async () => {
+      process.env.ML_USER_ID = '123';
+      vi.useFakeTimers();
+      const app = nuevaApp();
+      const notif = () => request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-VENTANA', user_id: 123 });
+      await notif();
+      vi.advanceTimersByTime(15_001);
+      await notif();
+      expect(puntualMl).toHaveBeenCalledTimes(2);
+    });
+
+    it('pedidos ML distintos no se pisan entre sí', async () => {
+      process.env.ML_USER_ID = '123';
+      const app = nuevaApp();
+      await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-A', user_id: 123 });
+      await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-B', user_id: 123 });
+      expect(puntualMl).toHaveBeenCalledTimes(2);
+      expect(puntualMl).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ORD-A');
+      expect(puntualMl).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ORD-B');
+    });
+
+    it('syncOrdenMlPuntual y syncPedidoMlPuntual tienen ventanas de dedup independientes: un orders_v2 no bloquea el orders posterior del mismo pedido', async () => {
+      process.env.ML_USER_ID = '123';
+      const app = nuevaApp();
+      // orders_v2 sólo dispara syncPedidoMlPuntual; no debería consumir la ventana de syncOrdenMlPuntual.
+      await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-COMPARTIDO', user_id: 123 });
+      await request(app).post('/api/ml/notificacion').send({ topic: 'orders', resource: '/orders/ORD-COMPARTIDO', user_id: 123 });
+      // Las dos llamadas a syncPedidoMlPuntual caen en la misma ventana (mismo pedido): una sola.
+      expect(puntualMl).toHaveBeenCalledTimes(1);
+      // syncOrdenMlPuntual es de 'orders' únicamente y nunca se disparó antes para este pedido: sí corre.
+      expect(puntualOrdenMl).toHaveBeenCalledTimes(1);
+      expect(puntualOrdenMl).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ORD-COMPARTIDO');
+    });
+
+    it('el Map de dedup no acumula entradas vencidas para siempre', async () => {
+      process.env.ML_USER_ID = '123';
+      vi.useFakeTimers();
+      const app = nuevaApp();
+      for (let i = 0; i < 5; i++) {
+        await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: `/orders/ORD-VIEJO-${i}`, user_id: 123 });
+      }
+      vi.advanceTimersByTime(15_001);
+      // Un pedido nuevo, después de vencida la ventana de los anteriores: su sola llegada purga lo vencido
+      // (purga perezosa, sin tabla ni temporizador aparte) y no se acumula sin límite.
+      await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-NUEVO', user_id: 123 });
+      expect(puntualMl).toHaveBeenCalledTimes(6);
+      // No hay forma directa de leer el tamaño del Map desde afuera del módulo: se verifica por
+      // comportamiento — un pedido repetido de los "viejos", ya vencidos, vuelve a disparar.
+      await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-VIEJO-0', user_id: 123 });
+      expect(puntualMl).toHaveBeenCalledTimes(7);
+    });
   });
 });

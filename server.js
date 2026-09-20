@@ -484,6 +484,31 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   const syncCfg = { woo: wooCfg, ml: mlCfg };
   configurarAuditoriaPrecios({ mlCfg });
 
+  // Deduplicación corta de webhooks `orders`/`orders_v2` de la misma orden ML (2026-09-20): ML manda
+  // varias notificaciones del mismo pedido en ráfaga (cambios de estado, envío, pago) y cada una
+  // disparaba su propia llamada a ML, hasta 17 veces para un solo pedido en producción — compite por un
+  // cupo que ya sabemos escaso (ver el 429 del bootstrap del catálogo). El ACK a ML nunca cambia por
+  // esto: sigue siendo 200 siempre: la ventana sólo decide si se llama a ML de nuevo, no si el webhook
+  // se acepta. Ventana corta (15 s) a propósito: alcanza para matar la ráfaga de notificaciones del
+  // mismo evento sin perder un cambio de estado real y posterior del mismo pedido. Clave por función
+  // (`syncOrdenMlPuntual`/`syncPedidoMlPuntual`) + `mlOrderId`, no sólo por pedido: son sincronizaciones
+  // distintas (stock por venta vs. pedidos_cache) y compartir la ventana dejaría que una consuma la
+  // dedup de la otra y la salte sin haber corrido nunca. Fail-open preexistente intacto: si la dedup
+  // saltea un pedido que sí cambió, `syncPedidosCache` (cron cada 10 min) lo agarra igual por
+  // `pendientesMl` — por eso una ventana corta es segura.
+  const VENTANA_DEDUP_NOTIF_ML_MS = 15_000;
+  const notifMlVistos = new Map(); // clave `${funcion}:${mlOrderId}` → timestamp del último disparo.
+  function deberiaSincronizarNotifMl(funcion, mlOrderId) {
+    const clave = `${funcion}:${mlOrderId}`;
+    const ahora = Date.now();
+    // Purga perezosa de vencidos en cada llamada: sin tabla ni temporizador aparte, y el tráfico real
+    // que se quiere deduplicar es justamente lo que dispara esta función seguido.
+    for (const [k, t] of notifMlVistos) if (ahora - t > VENTANA_DEDUP_NOTIF_ML_MS) notifMlVistos.delete(k);
+    if (notifMlVistos.has(clave)) return false;
+    notifMlVistos.set(clave, ahora);
+    return true;
+  }
+
   // ── Notificaciones ML ────────────────────────────────────────────────────────
   // POST /api/ml/notificacion
   // La app tiene TODOS los topics seleccionados en el panel de ML Developers (decisión
@@ -590,7 +615,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       // abajo) — si esto falla o no llega, el cron la termina agarrando igual. Comportamiento
       // preexistente (solo 'orders', no 'orders_v2') sin tocar: syncMlToWc/syncOrdenMlPuntual
       // ajustan stock por venta, no aplica a 'orders_v2' hasta que se defina esa función.
-      if (topic === 'orders' && mlOrderId) {
+      if (topic === 'orders' && mlOrderId && deberiaSincronizarNotifMl('syncOrdenMlPuntual', mlOrderId)) {
         syncOrdenMlPuntual(app._db, syncCfg, mlOrderId)
           .catch(err => console.error('[notif-ml] syncOrdenMlPuntual error:', err.message));
       }
@@ -599,7 +624,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       // por igual. Fail-open: si falla o el order id no se puede extraer, no se pierde nada --
       // el pedido igual va a aparecer en la próxima corrida de syncPedidosCache (cron cada 10
       // min) vía pendientesMl, que no depende de este camino puntual.
-      if (mlOrderId) {
+      if (mlOrderId && deberiaSincronizarNotifMl('syncPedidoMlPuntual', mlOrderId)) {
         syncPedidoMlPuntual(app._db, mlCfg, mlOrderId)
           .catch(err => console.error('[notif-ml] syncPedidoMlPuntual error:', err.message));
       }
