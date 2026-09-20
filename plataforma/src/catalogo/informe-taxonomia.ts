@@ -222,7 +222,8 @@ export interface Cobertura {
   //    Excluyentes, precedencia mismoNodo > unoAncestroDelOtro > nodosDistintos, y
   //      mismoNodo + unoAncestroDelOtro + nodosDistintos + sinNodoEnAlgunCanal = entreCanales.
   //    «Tiene nodo» = alguna de sus categorías de ese canal resuelve a un nodo NO archivado de la versión
-  //    vigente (las demás, sin nodo, no cuentan: «alguna contra alguna»). Hermanos (mismo padre, distinto
+  //    vigente (las demás, sin nodo, no cuentan). Se compara «alguna contra alguna» entre las HOJAS de cada canal
+  //    (se descarta el nodo que es ancestro de otro del mismo canal y modelo: ver la poda en el código). Hermanos (mismo padre, distinto
   //    nodo) NO es acuerdo: cae en nodosDistintos.
   entreCanales: number;
   mismoNodo: number;
@@ -399,16 +400,24 @@ export async function medirCobertura(
       const nodosA = nodosDe(canalA!, valoresA, crudoDe);
       const nodosB = nodosDe(canalB!, valoresB, crudoDe);
       if (nodosA.size > 0 && nodosB.size > 0) {
-        if ([...nodosA].some((n) => nodosB.has(n))) { mismoNodo++; continue; }
-        // Ancestro en la versión VIGENTE, en cualquier sentido: es granularidad medida sobre nuestro árbol.
         const conAncestros = (n: string) => ancestrosDe(n, nodos).nombres;
-        if ([...nodosA].some((a) => conAncestros(a).some((x) => nodosB.has(x)))
-          || [...nodosB].some((b) => conAncestros(b).some((x) => nodosA.has(x)))) { unoAncestroDelOtro++; continue; }
+        // Se compara sólo con las HOJAS de cada canal (dentro de ESTE modelo y ESTE canal). Woo etiqueta el padre
+        // y la hija a la vez (TALLER + GRASAS); con «alguna contra alguna», el TALLER de Woo es ancestro del
+        // LUBRICANTES de ML y el par contaría como acuerdo, tapando el desacuerdo real GRASAS ↔ LUBRICANTES con
+        // el padre genérico que el mismo canal agregó de paso. La categoría de un modelo es su nodo más
+        // específico; el padre agregado no es información nueva y no puede servir de acuerdo. NO simplificar:
+        // sin esta poda `nodosDistintos` daba 0 en producción con 14 desacuerdos reales.
+        const hojas = (ns: Set<string>) => new Set([...ns].filter((n) => ![...ns].some((m) => m !== n && conAncestros(m).includes(n))));
+        const hojasA = hojas(nodosA); const hojasB = hojas(nodosB);
+        if ([...hojasA].some((n) => hojasB.has(n))) { mismoNodo++; continue; }
+        // Ancestro en la versión VIGENTE, en cualquier sentido: es granularidad medida sobre nuestro árbol.
+        if ([...hojasA].some((a) => conAncestros(a).some((x) => hojasB.has(x)))
+          || [...hojasB].some((b) => conAncestros(b).some((x) => hojasA.has(x)))) { unoAncestroDelOtro++; continue; }
         nodosDistintos++;
         if (porCanal.has('woocommerce') && porCanal.has('mercadolibre')) {
           const nombresDe = (ns: Set<string>) => [...new Set([...ns].map((n) => nombreNodo.get(n)!))].sort().join(' + ');
-          const woo = nombresDe(canalA === 'woocommerce' ? nodosA : nodosB);
-          const ml = nombresDe(canalA === 'woocommerce' ? nodosB : nodosA);
+          const woo = nombresDe(canalA === 'woocommerce' ? hojasA : hojasB);
+          const ml = nombresDe(canalA === 'woocommerce' ? hojasB : hojasA);
           const k = `${woo}\u0000${ml}`;
           const p = paresNodo.get(k) ?? { woo, ml, modelos: 0 };
           p.modelos++;

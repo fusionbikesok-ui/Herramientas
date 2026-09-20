@@ -32,11 +32,11 @@ beforeEach(async () => {
     { id: 62, parent: 0, name: 'BICICLETAS POR MARCA' }, { id: 142, parent: 62, name: 'BICICLETAS VOLTA' },
     { id: 114, parent: 0, name: 'LUBRICANTES' }, { id: 115, parent: 0, name: 'GRASAS' },
     { id: 300, parent: 0, name: 'OTRAS' }, { id: 301, parent: 0, name: 'ARCHIVADA' },
-    { id: 302, parent: 0, name: 'HIJO' }, { id: 303, parent: 0, name: 'CASCOS' },
+    { id: 302, parent: 0, name: 'HIJO' }, { id: 303, parent: 0, name: 'CASCOS' }, { id: 400, parent: 0, name: 'TALLER' },
   ] }, { companyId: empresa, channelAccountId: cuentaWoo, canal: 'woocommerce' });
   await importarCategoriasCanal(app, { listar: async () => [
     { id: 'MLA1', parent: 0, name: 'Bicicletas Convencionales' }, { id: 'MLA2', parent: 0, name: 'Lubricantes' },
-    { id: 'MLA3', parent: 0, name: 'Cascos' }, { id: 'MLA5', parent: 0, name: 'Bici Volta' },
+    { id: 'MLA3', parent: 0, name: 'Cascos' }, { id: 'MLA5', parent: 0, name: 'Bici Volta' }, { id: 'MLA6', parent: 0, name: 'Taller ML' },
   ] }, { companyId: empresa, channelAccountId: cuentaMl, canal: 'mercadolibre' });
 });
 
@@ -61,8 +61,8 @@ async function publicarArbol(publicar = true) {
     const mapa = async (cuenta: string, canal: 'woocommerce' | 'mercadolibre', ids: Record<string, string>) => {
       for (const [id, clave] of Object.entries(ids)) await mapearCategoria(tx, empresa, claves.get(clave)!, cuenta, canal, id, 'test');
     };
-    await mapa(cuentaWoo, 'woocommerce', { 62: 'bicicletas', 142: 'volta', 114: 'lubricantes', 115: 'grasas', 301: 'obsoleto', 302: 'hijo' });
-    await mapa(cuentaMl, 'mercadolibre', { MLA1: 'bicicletas', MLA2: 'lubricantes', MLA5: 'volta' });
+    await mapa(cuentaWoo, 'woocommerce', { 62: 'bicicletas', 142: 'volta', 114: 'lubricantes', 115: 'grasas', 301: 'obsoleto', 302: 'hijo', 400: 'taller' });
+    await mapa(cuentaMl, 'mercadolibre', { MLA1: 'bicicletas', MLA2: 'lubricantes', MLA5: 'volta', MLA6: 'taller' });
   });
 }
 
@@ -138,5 +138,25 @@ describe('E2-NODO-01 comparación exacta por nodo', () => {
     expect([c.mismoNodo, c.unoAncestroDelOtro, c.nodosDistintos]).toEqual([0, 0, 0]);
     expect(c.sinNodoEnAlgunCanal).toBe(c.entreCanales);
     expect(c.puente.relacionadosPorNombre + c.puente.compatiblesPorGranularidad + c.puente.contradiccionesReales).toBe(c.entreCanales);
+  });
+});
+
+describe('E2-NODO-02 sólo se comparan las hojas de cada canal', () => {
+  it('padre e hija en un canal no convierten un desacuerdo en acuerdo (TALLER + GRASAS contra LUBRICANTES)', async () => {
+    await publicarArbol();
+    await modelo(['TALLER', 'GRASAS'], ['MLA2']);       // el caso que se perdía: el padre agregado tapaba el desacuerdo
+    await modelo(['TALLER', 'GRASAS'], ['MLA2']);
+    await modelo(['GRASAS'], ['MLA2']);                 // dos hojas hermanas sin padre agregado: distintos, como antes
+    await modelo(['TALLER', 'LUBRICANTES'], ['MLA2']);  // padre e hija contra la misma hija: mismo nodo
+    await modelo(['TALLER', 'GRASAS'], ['MLA6']);       // la hoja de uno es descendiente de la del otro: acuerdo legítimo
+    await modelo(['TALLER'], ['MLA2']);                 // sólo el padre en Woo: ancestro. Si la poda cruzara canales, se perdería
+    await modelo(['TALLER'], ['MLA6']);                 // mismo nodo; no lo afecta que OTRO modelo tenga GRASAS
+    const c = (await generarInforme(app, empresa, cuentaWoo)).cobertura;
+    expect(c.entreCanales).toBe(7);
+    expect(c.mismoNodo).toBe(2);
+    expect(c.unoAncestroDelOtro).toBe(2);
+    expect(c.nodosDistintos).toBe(3);
+    expect(c.mismoNodo + c.unoAncestroDelOtro + c.nodosDistintos + c.sinNodoEnAlgunCanal).toBe(c.entreCanales);
+    expect(c.muestraNodosDistintos).toEqual([{ woo: 'GRASAS', ml: 'LUBRICANTES', modelos: 3 }]);
   });
 });
