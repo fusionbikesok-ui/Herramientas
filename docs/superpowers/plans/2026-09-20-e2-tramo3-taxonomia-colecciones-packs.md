@@ -225,3 +225,33 @@ más trabajando, al final del tramo.
 Cada tarea de esquema es aditiva y con columnas nullable: el código viejo sigue funcionando. Apagar el tramo
 es dejar de leer las tablas nuevas; no hay borrado de datos en ningún paso y nada se escribe en los canales,
 así que **el rollback no puede dejar inconsistencia remota**.
+
+### D7 — El árbol definitivo: dos niveles, el resto es faceta (2026-09-20)
+
+José definió el árbol completo. La restricción que lo gobierna es de diseño de la home: **el menú despliega
+el nivel 1 y muestra el nivel 2, y nada más**; todo lo que en Woo era un tercer nivel se alcanza por búsqueda
+facetada sobre atributos. Queda en `plataforma/src/catalogo/arbol-fusionbikes.ts`: **65 nodos, 6 raíces,
+profundidad 2**, con las 82 categorías de Woo con destino (nodo, absorción o fuera por decisión).
+
+Raíces: `BICICLETAS POR MARCA` (15 hijas), `COMPONENTES Y REPUESTOS` (9), `ACCESORIOS` (16),
+`INDUMENTARIA Y CALZADO` (13), `TALLER` (6, absorbió la raíz `LÍQUIDOS`), `SANTINI`.
+
+Esto **revierte D4 y la mitad de D2**: las marcas de bici vuelven a ser nodos, y `FANTTIK` y `SANTINI` son
+nodos visibles. Decisión del dueño del negocio, tomada con la jerarquía a la vista. Consecuencia asumida: la
+marca vive en dos lugares, como nodo (un lugar en el menú) y como marca (un eje de filtrado). NO son
+redundantes —si la marca sólo fuera nodo, filtrar por marca dejaría de funcionar— pero hay que mantener los
+dos, y ahí es donde se van a desincronizar si nadie lo cuida.
+
+Lo que **se convirtió en faceta** (20 categorías, `ABSORBIDAS`): el desglose de frenos, ruedas, dirección,
+asientos, horquillas y pedales; `CUBIERTAS`/`CAMARAS`/`INSUMOS TUBELESS`; `SHIFTERS`/`FUSIBLES`;
+`HERRAMIENTAS`/`INFLADORES`; `CALZAS`; `CHALECOS`. Cada una mapea al nodo que la absorbe, así que un modelo
+que sólo tenía esa categoría cae en el padre en vez de quedar sin clasificar.
+
+Lo que **sale del árbol**: `OTROS`, `QR PAGOS` y `SMARTWATCH` (un producto cada una, se clasifican a mano);
+`Hotsale` (colección). `BICICLETAS SCHWINN` se queda, junto con la nueva `BICICLETAS REMBRANDT`.
+
+Los 23 nodos nuevos que no existen en Woo (`PASTILLAS DE FRENO` y el resto del desglose de frenos,
+`Dirección`, `CARAMAGNOLAS`, `CUBRE VAINA`, `CUERNITOS`, `SILLAS TRASERAS`, `PORTA CELULAR`, `BUZOS`,
+`DESTORNILLADORES`, `HIDROLAVADORAS`…) NO entran como nodos: los que eran de tercer nivel son valores de
+faceta, y los de segundo nivel que no tienen categoría de origen entran vacíos, sin nada que los alimente
+automáticamente.
