@@ -1,6 +1,6 @@
 # E2 — Modelo e importación del catálogo canónico
 
-**Estado:** tramo 1 (modelos y variantes) desplegado en producción el 2026-09-20; **tramo 2 (atributos, imágenes y datos comerciales) desplegado en producción el 2026-09-20** (migración `0014`, worker recreado, backfill de las 12.850 representaciones ejecutado; la comparación entre canales queda apagada en `CATALOGO_COMPARAR_ATRIBUTOS=0`); tramo 3 (taxonomía propia, colecciones, packs y kits) sin especificar.
+**Estado:** tramo 1 (modelos y variantes) desplegado en producción el 2026-09-20; **tramo 2 (atributos, imágenes y datos comerciales) desplegado en producción el 2026-09-20** (migración `0014`, worker recreado, backfill de las 12.850 representaciones ejecutado; la comparación entre canales se encendió el mismo día, `CATALOGO_COMPARAR_ATRIBUTOS=1`); tramo 3 (taxonomía propia, colecciones, packs y kits) sin especificar.
 
 **Partición de E2 redefinida el 2026-09-20 por José:** el diseño de T1 había previsto T2 «taxonomía, marcas, colecciones y atributos» y T3 «imágenes y packs/kits». El corte nuevo separa *capturar lo que el canal ya nos dio y hoy se descarta* (T2: atributos, imágenes, precio, stock, GTIN, marca) de *decidir estructura propia de Fusion* (T3: taxonomía, colecciones, packs). Motivo: lo primero no necesita ninguna decisión de negocio ni una llamada extra al canal; lo segundo exige definir una taxonomía que no existe en ninguna parte — `producto_fusion_atributos` y `categorias_criticas` están **vacías** en el legado. Diseño en `specs/2026-09-20-e2-tramo2-atributos-imagenes-design.md`.
 
