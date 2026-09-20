@@ -823,3 +823,30 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   **Cobertura** (`medirCobertura`) cuenta, no abre casos: modelos sin `categoria_canal` capturado, con más de un valor distinto, cuyas categorías caen TODAS en marca/colección (ninguna en taxonomía), y con `categoria_canal` de Woo y de ML capturados que no están relacionados por tokens (contradicción real entre canales).
   9/9 tests verdes (`npx vitest run test/catalogo/informe-taxonomia.test.ts` desde `plataforma/`), sobre un recorte del fixture real (`docs/superpowers/specs/e2/woo-categorias-2026-09-20.md`): `Cubiertas y Cámaras`⊃{`CUBIERTAS`,`CAMARAS`}, `LÍQUIDOS`⊃`LIQUIDOS DE FRENOS`, `BICICLETAS POR MARCA`⊃`BICICLETAS TREK`, `Hotsale`, `CASCOS`.
   **Hueco dejado a propósito:** no se corrió contra datos reales de producción, sólo contra el fixture; el informe no decide nada de D1-D4 (eso es la tarea 4, con José); no se tocó `taxonomia.ts` ni la migración 0015.
+
+## E2 tramo 3 — taxonomía, marcas, colecciones y packs (2026-09-20)
+
+Implementado en sombra, sin desplegar. Migración `0015_catalogo_taxonomia.sql` y
+`plataforma/src/catalogo/{taxonomia,packs,categorias-canal,informe-taxonomia}.ts`, con sus cuatro
+archivos de test (17 + 9 + 9 + 10 verdes) y los scripts `catalogo-categorias-importar.mjs` y
+`catalogo-informe-taxonomia.mjs`. El contrato `docs/superpowers/specs/e1/schema.sql` está al día y
+`test/migraciones.test.ts` vuelve a 8/8.
+
+Decisiones que no hay que volver a discutir (las cerró José el 2026-09-20 con la jerarquía real
+a la vista, `docs/superpowers/specs/e2/woo-categorias-2026-09-20.md`):
+
+- El árbol propio **se diseña de cero**; la jerarquía de los canales es evidencia y se mapea
+  contra él por ID REMOTO, nunca por nombre. Nunca se promueve sola.
+- Los «solapamientos» de Woo **no existían**: eran padre e hijo, aplanados por nuestra propia
+  importación (`Cubiertas y Cámaras` ⊃ `CUBIERTAS`, `LÍQUIDOS` ⊃ `LIQUIDOS DE FRENOS`).
+- `Hotsale` es colección con vigencia; `SERVICES` y `Taller` son un rubro de servicios; `FANTTIK`
+  es marca; `BICICLETAS POR MARCA` se colapsa a un árbol por tipo de bici con la marca como eje
+  aparte. No se fija profundidad máxima en el esquema, pero sí se prohíben los ciclos.
+- Los componentes de un pack son **variantes vendibles**, no modelos. Los packs nacen en borrador
+  y sin precio, reserva de stock, explosión de pedidos ni publicación: las cuatro están diferidas.
+
+La identidad de un nodo (`taxonomy_nodes`) está separada de su nombre y su padre
+(`taxonomy_node_versions`): renombrar un rubro no cambia su id ni mueve el mapeo con el canal, y
+una versión pasada se reconstruye entera. Es lo que E12/E13 necesitan para publicar lo aprobado.
+
+El árbol propio está implementado pero **vacío**: cargarlo es la primera corrida operativa.
