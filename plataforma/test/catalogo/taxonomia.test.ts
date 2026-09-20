@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 /*
  * test/catalogo/taxonomia.test.ts — E2 T3 tareas 2, 5 y 6: marcas canónicas, colecciones con vigencia, el
  * árbol propio versionado y la clasificación de un modelo. Con base real y con el rol de la app (sin DELETE),
@@ -389,5 +390,31 @@ describe('E2-TAX-04 el modelo en el árbol', () => {
   it('la app no puede borrar nada de la taxonomía', async () => {
     await expect(app.query('DELETE FROM catalog.taxonomy_nodes')).rejects.toThrow(/permiso|permission/i);
     await expect(app.query('DELETE FROM catalog.collections')).rejects.toThrow(/permiso|permission/i);
+  });
+});
+
+describe('garantías de escritura del catálogo', () => {
+  it('E2-TAX-08 ningún ON CONFLICT del catálogo va sin blanco explícito', () => {
+    // Un `ON CONFLICT DO NOTHING` pelado tolera CUALQUIER violación de unicidad, incluidas las que nadie
+    // previó. Con el índice viejo por nodo todavía en producción se comió 20 de 78 mapeos y la carga informó
+    // éxito: el defecto no fue el índice, fue que el INSERT no distinguía el choque que quería tolerar del
+    // que tenía que romper. Es una clase, no un caso, así que se cuida sobre el código y no sobre una tabla.
+    // Deuda conocida, NO una excepción permanente: estos módulos son de tramos anteriores y cada uno
+    // necesita que alguien determine cuál era el choque que quería tolerar. La lista sólo puede encogerse; si
+    // aparece un archivo nuevo, el test falla. Sin esta lista el test tendría que borrarse, y con él la
+    // guarda sobre el código nuevo, que es lo que importa hoy.
+    const DEUDA = ['aplicar.ts', 'bootstrap.ts', 'copias.ts', 'decisiones.ts', 'proyector.ts'];
+    const dir = new URL('../../src/catalogo/', import.meta.url);
+    const pelados: string[] = [];
+    for (const f of readdirSync(dir).filter((x) => x.endsWith('.ts'))) {
+      // Se descartan los comentarios antes de buscar: si no, este mismo test marca los archivos que EXPLICAN
+      // el defecto en prosa, que es lo que pasó la primera vez que corrió.
+      const codigo = readFileSync(new URL(f, dir), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+      if (/ON CONFLICT\s+DO\s+(NOTHING|UPDATE)/i.test(codigo)) pelados.push(f);
+    }
+    expect(pelados.filter((f) => !DEUDA.includes(f))).toEqual([]);
+    // Y la deuda no se agranda en silencio: si uno de esos archivos se arregla, hay que sacarlo de la lista.
+    expect(DEUDA.filter((f) => !pelados.includes(f))).toEqual([]);
   });
 });

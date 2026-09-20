@@ -91,7 +91,18 @@ try {
         const nodo = claves.get(clave);
         if (!nodo) throw new Error(`MAPEO_WOO apunta a la clave ${clave}, que no quedó escrita`);
         await mapearCategoria(cliente, opciones.empresa, nodo, opciones.cuenta, 'woocommerce', idExterno, 'jose');
-        resumen.mapeadas++;
+      }
+      // Se cuenta lo que QUEDÓ y no las llamadas que se hicieron. Contar llamadas es contar intenciones: la
+      // primera corrida informó 78 mapeos cuando en la base habían entrado 58, porque un ON CONFLICT pelado
+      // se tragaba las 20 absorbidas. Un cargador que no verifica su propio resultado no es una verificación.
+      const puestas = await cliente.query(
+        `SELECT count(*)::int AS n FROM catalog.taxonomy_channel_map
+          WHERE channel_account_id = $1 AND vigente_hasta IS NULL`, [opciones.cuenta]);
+      resumen.mapeadas = puestas.rows[0].n;
+      const esperadas = Object.keys(MAPEO_WOO).length;
+      if (resumen.mapeadas !== esperadas) {
+        throw new Error(`quedaron ${resumen.mapeadas} mapeos vigentes y MAPEO_WOO tiene ${esperadas}: `
+          + 'la carga no está completa y se deshace. ¿Está aplicada la migración 0016?');
       }
       await cliente.query('COMMIT');
       console.log(JSON.stringify({ dryRun: false, version: v.id, numero: v.numero, estado: 'borrador',

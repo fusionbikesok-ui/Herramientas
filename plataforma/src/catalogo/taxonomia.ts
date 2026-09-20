@@ -335,11 +335,18 @@ export async function mapearCategoria(
         WHERE node_id = $1 AND channel_account_id = $2 AND vigente_hasta IS NULL AND id_externo IS NOT NULL`,
       [nodo, cuenta]);
   }
+  // El `ON CONFLICT` va con BLANCO EXPLÍCITO y nunca pelado. Un `ON CONFLICT DO NOTHING` sin blanco se traga
+  // CUALQUIER violación de unicidad, no sólo la que uno quiso tolerar: con el índice viejo por nodo todavía
+  // puesto, se comió 20 de los 78 mapeos y la carga informó éxito. Lo único que se tolera acá es reescribir
+  // el mapeo que ya existe idéntico; cualquier otro choque tiene que romper la transacción y verse.
+  const blanco = idExterno === null
+    ? 'ON CONFLICT (node_id, channel_account_id) WHERE vigente_hasta IS NULL AND id_externo IS NULL DO NOTHING'
+    : 'ON CONFLICT (channel_account_id, id_externo) WHERE vigente_hasta IS NULL AND id_externo IS NOT NULL DO NOTHING';
   await tx.query(
     `INSERT INTO catalog.taxonomy_channel_map
        (company_id, node_id, channel_account_id, canal, id_externo, sin_equivalencia, decidido_por)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT DO NOTHING`,
+       ${blanco}`,
     [empresa, nodo, cuenta, canal, idExterno, idExterno === null, decididoPor]);
 }
 
