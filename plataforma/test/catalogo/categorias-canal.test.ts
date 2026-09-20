@@ -101,19 +101,34 @@ describe('E2-CAT-02 importación', () => {
     expect(await vigentesDe(cuenta)).toHaveLength(5);
   });
 
-  it('un cambio de nombre/conteo cierra la fila vieja y abre una nueva, sin perder historia', async () => {
+  it('un cambio de NOMBRE cierra la fila vieja y abre una nueva, sin perder historia', async () => {
     await importarCategoriasCanal(app, fuente(FIXTURE_WOO), ctx());
-    const cambiada = FIXTURE_WOO.map((c) => (c.id === 27 ? { ...c, count: 99 } : c));
+    const cambiada = FIXTURE_WOO.map((c) => (c.id === 27 ? { ...c, name: 'ZAPATILLAS DE RUTA' } : c));
     const r2 = await importarCategoriasCanal(app, fuente(cambiada), ctx());
     expect(r2).toMatchObject({ actualizadas: 1, sinCambios: 4 });
 
     const historicas = (await admin.query(
-      `SELECT conteo, vigente_hasta FROM catalog.channel_categories
+      `SELECT nombre, vigente_hasta FROM catalog.channel_categories
         WHERE channel_account_id = $1 AND id_externo = '27' ORDER BY capturado_en`, [cuenta])).rows;
     expect(historicas).toHaveLength(2);
     expect(historicas[0].vigente_hasta).not.toBeNull();
     expect(historicas[1].vigente_hasta).toBeNull();
-    expect(historicas[1].conteo).toBe(99);
+    expect(historicas[1].nombre).toBe('ZAPATILLAS DE RUTA');
+  });
+
+  it('un cambio de CONTEO se actualiza sobre la vigente y no genera historia', async () => {
+    // El conteo es la cantidad de productos publicados y cambia todos los días: si abriera fila, cada
+    // importación dejaría una fila nueva por categoría, con historia que no dice nada. Lo que hace historia
+    // es la identidad y el lugar en el árbol.
+    await importarCategoriasCanal(app, fuente(FIXTURE_WOO), ctx());
+    const cambiada = FIXTURE_WOO.map((c) => (c.id === 27 ? { ...c, count: 99 } : c));
+    expect(await importarCategoriasCanal(app, fuente(cambiada), ctx())).toMatchObject({ actualizadas: 0, sinCambios: 5 });
+    const filas = (await admin.query(
+      `SELECT conteo, vigente_hasta FROM catalog.channel_categories
+        WHERE channel_account_id = $1 AND id_externo = '27'`, [cuenta])).rows;
+    expect(filas).toHaveLength(1);
+    expect(filas[0].conteo).toBe(99);
+    expect(filas[0].vigente_hasta).toBeNull();
   });
 
   it('una categoría que el canal deja de informar se marca vigente_hasta y no se borra', async () => {

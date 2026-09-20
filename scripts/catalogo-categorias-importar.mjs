@@ -34,6 +34,9 @@ function leerArgs(argv) {
     if (a === '--cuenta') o.cuenta = argv[++i];
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--ejecutar') o.dryRun = false;
+    // Aceptar una baja masiva de categorías. Sin esto la corrida se detiene: una lectura incompleta del canal
+    // no se puede distinguir de una baja real, así que la baja grande la confirma una persona.
+    else if (a === '--permitir-baja') o.permitirBaja = true;
     else { console.error(`argumento desconocido: ${a}`); process.exit(2); }
   }
   if (!o.cuenta) { console.error('falta --cuenta <channel_account_id>'); process.exit(2); }
@@ -63,14 +66,31 @@ async function companyIdDeCuenta(pool, channelAccountId) {
   return r.rows[0].company_id;
 }
 
-/** Trae TODAS las categorías de Woo paginando per_page=100 hasta que una página vuelva incompleta. */
+/**
+ * Trae TODAS las categorías de Woo paginando per_page=100 hasta que una página vuelva incompleta.
+ *
+ * Un cuerpo que NO es una lista se trata como error y no como «página vacía». Antes era
+ * `Array.isArray(resp.data) ? resp.data : []`, y con eso un 200 con el HTML de un WAF, o el objeto de error
+ * de WordPress, se convertía en «el canal no tiene categorías» — que aguas abajo cerraba las 82 vigentes.
+ * `wooFetch` sólo lanza cuando el status queda fuera de 2xx, así que ese caso llegaba hasta acá intacto.
+ * Además se cotejan las páginas contra el total que Woo informa en `X-WP-Total`, cuando lo manda: es la única
+ * forma de distinguir «terminó» de «la página vino corta por un error transitorio».
+ */
 async function listarTodasLasCategoriasWoo() {
   const categorias = [];
+  let total = null;
   for (let page = 1; ; page++) {
     const resp = await wooFetch(wooCfg, `/products/categories?per_page=100&page=${page}`);
-    const pagina = Array.isArray(resp.data) ? resp.data : [];
-    categorias.push(...pagina);
-    if (pagina.length < 100) break;
+    if (!Array.isArray(resp.data)) {
+      throw new Error(`WooCommerce devolvió un cuerpo que no es una lista de categorías en la página ${page}`);
+    }
+    const informado = Number(resp.headers?.['x-wp-total']);
+    if (Number.isInteger(informado)) total = informado;
+    categorias.push(...resp.data);
+    if (resp.data.length < 100) break;
+  }
+  if (total !== null && categorias.length !== total) {
+    throw new Error(`Woo informa ${total} categorías y se leyeron ${categorias.length}: lectura incompleta, no se importa`);
   }
   return categorias;
 }
@@ -81,7 +101,7 @@ try {
   const companyId = await companyIdDeCuenta(pool, opciones.cuenta);
   const resumen = await importarCategoriasCanal(pool, { listar: listarTodasLasCategoriasWoo }, {
     companyId, channelAccountId: opciones.cuenta, canal: 'woocommerce',
-  }, { dryRun: opciones.dryRun });
+  }, { dryRun: opciones.dryRun, permitirBaja: opciones.permitirBaja });
   console.log(JSON.stringify({ dryRun: opciones.dryRun, cuenta: opciones.cuenta, ...resumen }, null, 2));
 } catch (error) {
   console.error(JSON.stringify({ error: error.message }));

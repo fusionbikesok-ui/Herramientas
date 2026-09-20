@@ -17,6 +17,11 @@
  */
 import type { Consultable } from '../db/pool.ts';
 
+/** Una identidad de marca que una persona tiene que resolver: no se adivina ni se sigue de largo. */
+export class ErrorMarca extends Error {
+  override name = 'ErrorMarca';
+}
+
 // ───────────────────────────────── marcas ─────────────────────────────────
 
 /**
@@ -37,15 +42,19 @@ export type OrigenAlias = 'legado' | 'ml_atributo' | 'woo_taxonomia' | 'categori
 export async function resolverMarca(tx: Consultable, empresa: string, nombre: string): Promise<string | null> {
   const clave = normalizarMarca(nombre);
   if (clave === '') return null;
-  // El alias primero: es lo que permite que 'FANTTIK' (que en Woo era una categoría) y el atributo `BRAND`
+  // El nombre propio primero y el alias después: es lo que permite que 'FANTTIK' (que en Woo era una categoría) y el atributo `BRAND`
   // de ML lleguen a la misma fila sin duplicarla.
+  // El `ORDER BY prioridad` no es adorno: con `UNION ALL ... LIMIT 1` a secas, un nombre que es a la vez el
+  // nombre de una marca y el alias de OTRA devolvía una de las dos al azar, y el comentario de esta función
+  // afirmaba un orden que el SQL no garantizaba. Gana el nombre propio sobre el alias ajeno.
   const r = await tx.query<{ brand_id: string }>(
-    `SELECT b.id AS brand_id FROM catalog.brands b
+    `SELECT b.id AS brand_id, 0 AS prioridad FROM catalog.brands b
       WHERE b.company_id = $1 AND b.nombre_normalizado = $2 AND b.archivado_en IS NULL
       UNION ALL
-     SELECT a.brand_id FROM catalog.brand_aliases a
+     SELECT a.brand_id, 1 FROM catalog.brand_aliases a
        JOIN catalog.brands b ON b.id = a.brand_id AND b.archivado_en IS NULL
       WHERE a.company_id = $1 AND a.alias_normalizado = $2
+      ORDER BY prioridad
       LIMIT 1`, [empresa, clave]);
   return r.rows[0]?.brand_id ?? null;
 }
@@ -62,17 +71,36 @@ export async function asegurarMarca(
 ): Promise<string | null> {
   const clave = normalizarMarca(nombre);
   if (clave === '') return null;
-  const ya = await resolverMarca(tx, empresa, nombre);
-  const id = ya ?? (await tx.query<{ id: string }>(
-    `INSERT INTO catalog.brands (company_id, nombre, nombre_normalizado) VALUES ($1, $2, $3)
-       ON CONFLICT (company_id, nombre_normalizado) DO UPDATE SET nombre = catalog.brands.nombre
-     RETURNING id`, [empresa, nombre.trim(), clave])).rows[0]!.id;
+  let id = await resolverMarca(tx, empresa, nombre);
+  if (id === null) {
+    // `resolverMarca` filtra las archivadas, así que acá el ON CONFLICT podía devolver la fila ARCHIVADA y
+    // seguir como si nada: se le colgaban modelos y alias a una marca dada de baja, y el informe (que sí
+    // filtra archivadas) no la mostraba. Ahora se distingue «no existe» de «existe pero está de baja».
+    const r = await tx.query<{ id: string; archivada: boolean }>(
+      `INSERT INTO catalog.brands (company_id, nombre, nombre_normalizado) VALUES ($1, $2, $3)
+         ON CONFLICT (company_id, nombre_normalizado) DO UPDATE SET nombre = catalog.brands.nombre
+       RETURNING id, archivado_en IS NOT NULL AS archivada`, [empresa, nombre.trim(), clave]);
+    if (r.rows[0]!.archivada) {
+      throw new ErrorMarca(`la marca ${nombre} está archivada: hay que reactivarla a mano antes de usarla`);
+    }
+    id = r.rows[0]!.id;
+  }
   for (const a of new Set([...alias, nombre].map(normalizarMarca))) {
     if (a === '') continue;
-    await tx.query(
+    // Un alias ya tomado por OTRA marca FALLA. Antes era `ON CONFLICT DO NOTHING`: la ambigüedad que el
+    // esquema dice prohibir pasaba en silencio, y el comentario decía que «quien importa abre
+    // marca_ambigua» cuando nadie lo abría (y `identity_cases` no puede ni alojar ese caso, porque exige
+    // una variante o una representación). Ahora la decisión vuelve a quien importa, con el alias nombrado.
+    const r = await tx.query<{ brand_id: string }>(
       `INSERT INTO catalog.brand_aliases (company_id, brand_id, alias_normalizado, origen)
-       VALUES ($1, $2, $3, $4) ON CONFLICT (company_id, alias_normalizado) DO NOTHING`,
-      [empresa, id, a, origen]);
+       VALUES ($1, $2, $3, $4) ON CONFLICT (company_id, alias_normalizado) DO NOTHING
+       RETURNING brand_id`, [empresa, id, a, origen]);
+    if (r.rowCount) continue;
+    const dueño = await tx.query<{ brand_id: string }>(
+      'SELECT brand_id FROM catalog.brand_aliases WHERE company_id = $1 AND alias_normalizado = $2', [empresa, a]);
+    if (dueño.rows[0]?.brand_id !== id) {
+      throw new ErrorMarca(`el alias «${a}» ya es de otra marca: no se puede usar también para ${nombre}`);
+    }
   }
   return id;
 }
@@ -168,32 +196,77 @@ export async function crearVersion(tx: Consultable, empresa: string, notas?: str
 }
 
 /**
- * Escribe un árbol entero en una versión en borrador. Los nodos se insertan en dos pasadas —primero las
- * identidades, después los padres— porque un árbol se escribe en el orden en que lo escribió una persona y no
- * hay razón para exigirle que ponga cada padre antes que sus hijos.
- * Los ciclos los rechaza la base (trigger `taxonomy_node_versions_sin_ciclos`), no este código: una segunda
- * vía de escritura no podría saltearse la restricción.
+ * El orden en que hay que escribir los nodos: cada padre antes que sus hijos. Los ciclos se detectan acá con
+ * un mensaje claro, además de en la base: el trigger es la garantía, esto es el diagnóstico.
+ */
+function ordenTopologico(nodos: NodoArbol[]): NodoArbol[] {
+  const porClave = new Map(nodos.map((n) => [n.clave, n]));
+  const listos = new Set<string>();
+  const enCamino = new Set<string>();
+  const salida: NodoArbol[] = [];
+  const visitar = (n: NodoArbol): void => {
+    if (listos.has(n.clave)) return;
+    if (enCamino.has(n.clave)) throw new Error(`el árbol tiene un ciclo que pasa por ${n.clave}`);
+    enCamino.add(n.clave);
+    if (n.padre != null) {
+      const padre = porClave.get(n.padre);
+      if (padre === undefined) throw new Error(`el nodo ${n.clave} cuelga de ${n.padre}, que no está en el árbol`);
+      visitar(padre);
+    }
+    enCamino.delete(n.clave); listos.add(n.clave); salida.push(n);
+  };
+  for (const n of nodos) visitar(n);
+  return salida;
+}
+
+/**
+ * Escribe un árbol entero en una versión EN BORRADOR. Una versión ya vigente o reemplazada no se puede
+ * reescribir: si se pudiera, «E13 publica exactamente lo que E12 propuso» sería una frase sin respaldo, y
+ * versionar el árbol no serviría para nada. La versión tiene que ser de la misma empresa por el mismo motivo.
+ *
+ * Se escribe en tres pasadas:
+ *   1. las identidades (`taxonomy_nodes`), que no llevan nombre ni padre;
+ *   2. las filas de la versión con el padre en NULL;
+ *   3. los padres, en orden topológico.
+ * Parece rebuscado y no lo es: la pasada 2 evita que una REORGANIZACIÓN falle por un ciclo transitorio
+ * (intercambiar el padre entre dos nodos pasa por un estado intermedio inválido si se escribe de una), y la
+ * pasada 3 garantiza que cuando se cuelga un hijo su padre ya tiene fila en esta versión, que es lo que la
+ * base ahora exige. Así el resultado no depende del orden en que venga el arreglo de entrada.
+ *
+ * `rubro` NO se pisa cuando no viene explícito: vive en la identidad y no está versionado, así que un
+ * `SET rubro = EXCLUDED.rubro` con el default 'producto' convertía un nodo de servicios (SERVICES, Taller)
+ * en un nodo de producto, y no sólo en esta versión — en todas, incluida la vigente.
  */
 export async function escribirArbol(
   tx: Consultable, empresa: string, version: string, nodos: NodoArbol[],
 ): Promise<Map<string, string>> {
+  const v = await tx.query<{ estado: string }>(
+    'SELECT estado FROM catalog.taxonomy_versions WHERE id = $1 AND company_id = $2', [version, empresa]);
+  if (!v.rowCount) throw new Error(`la versión ${version} no existe en esta empresa`);
+  if (v.rows[0]!.estado !== 'borrador') throw new Error(`la versión ${version} está ${v.rows[0]!.estado}: sólo se escribe un borrador`);
+
+  const ordenados = ordenTopologico(nodos);
   const porClave = new Map<string, string>();
-  for (const n of nodos) {
+  for (const n of ordenados) {
     const r = await tx.query<{ id: string }>(
-      `INSERT INTO catalog.taxonomy_nodes (company_id, clave, rubro) VALUES ($1, $2, $3)
-         ON CONFLICT (company_id, clave) DO UPDATE SET rubro = EXCLUDED.rubro
-       RETURNING id`, [empresa, n.clave, n.rubro ?? 'producto']);
+      `INSERT INTO catalog.taxonomy_nodes (company_id, clave, rubro) VALUES ($1, $2, COALESCE($3, 'producto'))
+         ON CONFLICT (company_id, clave) DO UPDATE SET rubro = COALESCE($3, catalog.taxonomy_nodes.rubro)
+       RETURNING id`, [empresa, n.clave, n.rubro ?? null]);
     porClave.set(n.clave, r.rows[0]!.id);
   }
-  for (const n of nodos) {
-    const padre = n.padre == null ? null : porClave.get(n.padre);
-    if (n.padre != null && padre === undefined) throw new Error(`el nodo ${n.clave} cuelga de ${n.padre}, que no está en el árbol`);
+  for (const n of ordenados) {
     await tx.query(
       `INSERT INTO catalog.taxonomy_node_versions (version_id, node_id, parent_id, nombre, orden)
-       VALUES ($1, $2, $3, $4, $5)
+       VALUES ($1, $2, NULL, $3, $4)
          ON CONFLICT (version_id, node_id) DO UPDATE
-            SET parent_id = EXCLUDED.parent_id, nombre = EXCLUDED.nombre, orden = EXCLUDED.orden`,
-      [version, porClave.get(n.clave), padre, n.nombre, n.orden ?? 0]);
+            SET parent_id = NULL, nombre = EXCLUDED.nombre, orden = EXCLUDED.orden`,
+      [version, porClave.get(n.clave), n.nombre, n.orden ?? 0]);
+  }
+  for (const n of ordenados) {
+    if (n.padre == null) continue;
+    await tx.query(
+      'UPDATE catalog.taxonomy_node_versions SET parent_id = $3 WHERE version_id = $1 AND node_id = $2',
+      [version, porClave.get(n.clave), porClave.get(n.padre)]);
   }
   return porClave;
 }
@@ -270,9 +343,19 @@ export async function clasificarModelo(
   { primaria = false, origen = 'persona' }: { primaria?: boolean; origen?: 'mapeo_canal' | 'persona' } = {},
 ): Promise<void> {
   if (primaria) {
+    // Una importación (`mapeo_canal`) no degrada una primaria puesta por una PERSONA: si lo hiciera, la
+    // próxima corrida del mapeo desharía en silencio una clasificación que alguien decidió a mano. Es el
+    // mismo criterio que `asignarMarca`, que no pisa una marca ya asignada.
     await tx.query(
       `UPDATE catalog.model_categories SET primaria = false
+        WHERE model_id = $1 AND quitado_en IS NULL AND primaria AND node_id <> $2
+          AND ($3 = 'persona' OR origen <> 'persona')`, [modelo, nodo, origen]);
+    const otra = await tx.query<{ node_id: string }>(
+      `SELECT node_id FROM catalog.model_categories
         WHERE model_id = $1 AND quitado_en IS NULL AND primaria AND node_id <> $2`, [modelo, nodo]);
+    if (otra.rowCount) {
+      throw new Error(`el modelo ${modelo} ya tiene una primaria puesta por una persona (${otra.rows[0]!.node_id}): un mapeo automático no la cambia`);
+    }
   }
   await tx.query(
     `INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen)
@@ -290,4 +373,20 @@ export async function desclasificarModelo(
     `UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = $3
       WHERE model_id = $1 AND node_id = $2 AND quitado_en IS NULL`, [modelo, nodo, motivo]);
   return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * Los modelos CLASIFICADOS que no tienen primaria. El esquema garantiza «a lo sumo una» (índice único
+ * parcial); «exactamente una» no lo puede garantizar una restricción de fila, así que la diferencia se mide
+ * en vez de prometerse. Un modelo acá no aparece en ningún informe por rubro: es el hueco que hay que cerrar
+ * antes de darle valor a un conteo por categoría.
+ */
+export async function modelosSinPrimaria(tx: Consultable, empresa: string): Promise<string[]> {
+  const r = await tx.query<{ model_id: string }>(
+    `SELECT c.model_id FROM catalog.model_categories c
+      WHERE c.company_id = $1 AND c.quitado_en IS NULL
+      GROUP BY c.model_id
+     HAVING count(*) FILTER (WHERE c.primaria) = 0
+      ORDER BY c.model_id`, [empresa]);
+  return r.rows.map((x) => x.model_id);
 }

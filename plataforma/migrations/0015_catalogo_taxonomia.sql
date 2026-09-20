@@ -160,6 +160,10 @@ CREATE INDEX taxonomy_node_versions_padre ON catalog.taxonomy_node_versions (ver
 CREATE OR REPLACE FUNCTION catalog.taxonomia_sin_ciclos() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE actual uuid := NEW.parent_id; saltos integer := 0;
 BEGIN
+  -- Serializa las escrituras de esta versión. Sin esto, dos transacciones que hacen A.padre=B y B.padre=A a
+  -- la vez ven cada una el estado anterior de la otra, las dos pasan la verificación y queda el ciclo: una
+  -- restricción que sólo mira el snapshot propio no es una restricción bajo concurrencia.
+  PERFORM 1 FROM catalog.taxonomy_versions WHERE id = NEW.version_id FOR UPDATE;
   WHILE actual IS NOT NULL LOOP
     IF actual = NEW.node_id THEN
       RAISE EXCEPTION 'el nodo % no puede colgar de % : cerraría un ciclo en la versión %',
@@ -170,13 +174,19 @@ BEGIN
     IF saltos > 64 THEN RAISE EXCEPTION 'cadena de padres demasiado larga o ya cíclica en la versión %', NEW.version_id; END IF;
     SELECT v.parent_id INTO actual FROM catalog.taxonomy_node_versions v
       WHERE v.version_id = NEW.version_id AND v.node_id = actual;
-    EXIT WHEN NOT FOUND;
+    -- Un padre SIN fila en esta versión no es un árbol válido: los nodos que cuelgan de él desaparecen de
+    -- `leerArbol` (que baja desde las raíces) sin que nada proteste. Antes se aceptaba en silencio.
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'el nodo % cuelga de un padre que no existe en la versión %', NEW.node_id, NEW.version_id;
+    END IF;
   END LOOP;
   RETURN NEW;
 END;
 $$;
 CREATE TRIGGER taxonomy_node_versions_sin_ciclos
-  BEFORE INSERT OR UPDATE OF parent_id ON catalog.taxonomy_node_versions
+  -- `node_id` y `version_id` también: mover una fila de nodo o de versión puede cerrar un ciclo igual que
+  -- cambiar el padre, y con `UPDATE OF parent_id` a secas esas dos vías no disparaban nada.
+  BEFORE INSERT OR UPDATE OF parent_id, node_id, version_id ON catalog.taxonomy_node_versions
   FOR EACH ROW EXECUTE FUNCTION catalog.taxonomia_sin_ciclos();
 
 -- El mapeo con el canal: por ID REMOTO (nunca por nombre), por canal y por cuenta, y admitiendo
@@ -258,6 +268,9 @@ CREATE INDEX pack_components_componente ON catalog.pack_components (variant_id) 
 CREATE OR REPLACE FUNCTION catalog.pack_componente_valido() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE muerta boolean; cicla boolean;
 BEGIN
+  -- Mismo motivo que en el árbol: sin lock, dos transacciones que cierran el ciclo desde los dos lados a la
+  -- vez pasan las dos. El lock es por pack para no serializar toda la tabla.
+  PERFORM pg_advisory_xact_lock(hashtextextended('catalog.pack_components:' || NEW.pack_variant_id::text, 0));
   SELECT archivado_en IS NOT NULL INTO muerta FROM catalog.sellable_variants WHERE id = NEW.variant_id;
   IF muerta THEN
     RAISE EXCEPTION 'la variante % está archivada: no puede ser componente de un pack', NEW.variant_id;
@@ -279,34 +292,23 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER pack_components_valido
-  BEFORE INSERT OR UPDATE OF variant_id, pack_variant_id ON catalog.pack_components
+  -- `vigente_hasta` está en la lista porque REABRIR un componente cerrado (poner `vigente_hasta` en NULL) es
+  -- la vía por la que se colaba un ciclo sin verificar: el componente inverso pudo agregarse mientras este
+  -- estaba cerrado, y al reabrirlo el trigger no se disparaba porque no se tocaba ninguna de las otras dos
+  -- columnas. El comentario de arriba promete que no hay segunda vía de escritura: ésta era la segunda vía.
+  BEFORE INSERT OR UPDATE OF variant_id, pack_variant_id, vigente_hasta ON catalog.pack_components
   FOR EACH ROW WHEN (NEW.vigente_hasta IS NULL) EXECUTE FUNCTION catalog.pack_componente_valido();
 
 -- ───────────────────────── casos nuevos ─────────────────────────
--- Igual que en 0014: antes de reemplazar el CHECK se comprueba que lo que ya hay lo cumple.
-DO $$
-DECLARE malas bigint;
-BEGIN
-  SELECT count(*) INTO malas FROM catalog.identity_cases
-   WHERE tipo NOT IN ('sku_pendiente', 'omitida_revisar', 'sku_inexistente_en_woo', 'woo_sin_sku',
-                      'woo_sku_duplicado', 'woo_sku_no_canonico', 'decision_en_conflicto', 'identidad_legado',
-                      'user_product_divergente', 'atributo_divergente',
-                      'categoria_sin_mapeo', 'marca_ambigua', 'categoria_en_conflicto');
-  IF malas > 0 THEN RAISE EXCEPTION 'identity_cases tiene % filas con un tipo que el CHECK nuevo rechaza', malas; END IF;
-END;
-$$;
-ALTER TABLE catalog.identity_cases DROP CONSTRAINT identity_cases_tipo_check;
-ALTER TABLE catalog.identity_cases ADD CONSTRAINT identity_cases_tipo_check CHECK (tipo IN (
-  'sku_pendiente', 'omitida_revisar', 'sku_inexistente_en_woo', 'woo_sin_sku',
-  'woo_sku_duplicado', 'woo_sku_no_canonico', 'decision_en_conflicto', 'identidad_legado',
-  'user_product_divergente', 'atributo_divergente',
-  -- Una categoría del canal que nadie mapeó a un nodo propio: los productos que sólo la tienen a ella
-  -- quedarían fuera de todo informe por rubro. Se revisa, no se adivina por parecido de nombre.
-  'categoria_sin_mapeo',
-  -- Un alias de marca que apunta a dos marcas candidatas, o un modelo cuya marca no se puede decidir.
-  'marca_ambigua',
-  -- Los dos canales ubican el mismo modelo en rubros propios incompatibles. Nunca se resuelve solo.
-  'categoria_en_conflicto'));
-
--- Los GRANT de tabla no hacen falta: 0013 dejó ALTER DEFAULT PRIVILEGES en `catalog` (SELECT, INSERT,
--- UPDATE, y USAGE en secuencias) para todo lo que cree `plataforma_migrador`.
+-- NINGUNO. La primera versión de este tramo reservaba `categoria_sin_mapeo`, `marca_ambigua` y
+-- `categoria_en_conflicto` en el CHECK de `identity_cases`. Se sacaron antes de desplegar, por dos razones
+-- que aparecieron en la revisión independiente:
+--   1. Ningún código los abre. Un tipo de caso declarado y nunca abierto es una promesa falsa: el comentario
+--      del código decía «quien importa abre `marca_ambigua`» y nadie lo abría, así que la ambigüedad que el
+--      esquema dice prohibir pasaba en silencio.
+--   2. Dos de los tres no se pueden ni representar: `identity_cases` exige `variant_id` o
+--      `representation_id` (CONSTRAINT identity_cases_objeto_check), y una categoría del canal sin mapear no
+--      es ninguna de las dos cosas. Reservar un nombre que la tabla no puede alojar es peor que no tenerlo.
+-- Lo que se hace en su lugar: `asegurarMarca` FALLA ante un alias ya tomado por otra marca, en vez de
+-- seguir en silencio. Cuando la carga del árbol necesite casos propios de taxonomía, se agregan con su
+-- objeto pensado y con el código que los abre en el mismo cambio.

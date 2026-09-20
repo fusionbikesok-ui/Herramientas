@@ -30,6 +30,25 @@ import { normalizarMarca } from './taxonomia.ts';
  */
 export const claveNombre = (nombre: string): string => tokensComparacion(nombre).join(' ');
 
+/**
+ * El nombre de cada categoría del canal, indexado por su id remoto. Existe por un defecto que invalidaba el
+ * informe entero: T2 guarda `categoria_canal` de **Woo** como el NOMBRE de la categoría, y el de
+ * **MercadoLibre** como el `category_id` ('MLA3'). Comparar un nombre contra un id da siempre «no
+ * relacionados», así que TODO modelo publicado en los dos canales se contaba como contradictorio, y la lista
+ * de candidatos mezclaba ids de ML con nombres de Woo. Es la misma razón por la que `categoria_canal` quedó
+ * fuera de la comparación de `atributo_divergente` en el tramo 2.
+ * Con este diccionario los dos canales se comparan en el mismo idioma: el nombre.
+ */
+export async function nombresPorIdExterno(tx: Consultable, empresa: string): Promise<Map<string, string>> {
+  const r = await tx.query<{ id_externo: string; nombre: string }>(
+    `SELECT c.id_externo, c.nombre FROM catalog.channel_categories c
+      WHERE c.company_id = $1 AND c.vigente_hasta IS NULL`, [empresa]);
+  return new Map(r.rows.map((x) => [x.id_externo, x.nombre]));
+}
+
+/** El valor de `categoria_canal` traducido a nombre cuando lo que llegó fue un id remoto (el caso de ML). */
+const enNombre = (valor: string, nombres: Map<string, string>): string => nombres.get(valor) ?? valor;
+
 // ─────────────────────────── candidatos ───────────────────────────
 
 export interface CandidatoCategoriaCanal {
@@ -39,7 +58,9 @@ export interface CandidatoCategoriaCanal {
 }
 
 /** Candidatos a nodo desde el atributo `categoria_canal` ya capturado por T2, agrupados por nombre normalizado. */
-export async function candidatosDesdeAtributo(tx: Consultable, empresa: string): Promise<CandidatoCategoriaCanal[]> {
+export async function candidatosDesdeAtributo(
+  tx: Consultable, empresa: string, nombres: Map<string, string> = new Map(),
+): Promise<CandidatoCategoriaCanal[]> {
   const r = await tx.query<{ valor: string; modelos: string }>(
     `SELECT a.valor, count(DISTINCT a.model_id) AS modelos
        FROM catalog.model_attributes a
@@ -47,7 +68,9 @@ export async function candidatosDesdeAtributo(tx: Consultable, empresa: string):
       WHERE m.company_id = $1 AND a.nombre_normalizado = 'categoria_canal' AND a.vigente_hasta IS NULL
       GROUP BY a.valor`, [empresa]);
   const porNormalizado = new Map<string, CandidatoCategoriaCanal>();
-  for (const fila of r.rows) {
+  for (const cruda of r.rows) {
+    // El valor de ML es un id ('MLA3'): se traduce a nombre para que los dos canales agrupen juntos.
+    const fila = { ...cruda, valor: enNombre(cruda.valor, nombres) };
     const clave = claveNombre(fila.valor);
     const actual = porNormalizado.get(clave);
     if (!actual) {
@@ -205,7 +228,10 @@ interface FilaCategoriaModelo { modelId: string; canal: string; valor: string }
  */
 export async function medirCobertura(
   tx: Consultable, empresa: string, clasificacionPorNombre: Map<string, GrupoCategoria>,
+  nombres: Map<string, string> = new Map(),
 ): Promise<Cobertura> {
+  // Simétrico con la consulta de abajo, que ahora también excluye modelos y representaciones archivadas: con
+  // un lado filtrando y el otro no, `sinCategoriaUtil` podía dar negativo.
   const totalModelos = Number((await tx.query<{ n: string }>(
     `SELECT count(*) AS n FROM catalog.product_models WHERE company_id = $1 AND archivado_en IS NULL`,
     [empresa])).rows[0]!.n);
@@ -215,8 +241,9 @@ export async function medirCobertura(
        FROM catalog.model_attributes a
        JOIN catalog.product_models m ON m.id = a.model_id
        JOIN catalog.external_representations r ON r.id = a.representation_id
-      WHERE m.company_id = $1 AND a.nombre_normalizado = 'categoria_canal' AND a.vigente_hasta IS NULL`,
-    [empresa])).rows;
+      WHERE m.company_id = $1 AND a.nombre_normalizado = 'categoria_canal' AND a.vigente_hasta IS NULL
+        AND m.archivado_en IS NULL AND r.archivado_en IS NULL`,
+    [empresa])).rows.map((f) => ({ ...f, valor: enNombre(f.valor, nombres) }));
 
   const porModelo = new Map<string, FilaCategoriaModelo[]>();
   for (const f of filas) {
@@ -270,8 +297,9 @@ export interface InformeTaxonomia {
 export async function generarInforme(
   tx: Consultable, empresa: string, channelAccountId: string,
 ): Promise<InformeTaxonomia> {
+  const nombres = await nombresPorIdExterno(tx, empresa);
   const [candidatosAtributo, categorias, marcas, colecciones] = await Promise.all([
-    candidatosDesdeAtributo(tx, empresa),
+    candidatosDesdeAtributo(tx, empresa, nombres),
     categoriasDeCanal(tx, channelAccountId),
     marcasConocidas(tx, empresa),
     coleccionesConocidas(tx, empresa),
@@ -290,7 +318,7 @@ export async function generarInforme(
     sinEmparentar: todosLosSolapamientos.filter((s) => !s.emparentado),
   };
 
-  const cobertura = await medirCobertura(tx, empresa, clasificacionPorNombre);
+  const cobertura = await medirCobertura(tx, empresa, clasificacionPorNombre, nombres);
 
   return { candidatosAtributo, categoriasCanal, particion, solapamientos, cobertura };
 }

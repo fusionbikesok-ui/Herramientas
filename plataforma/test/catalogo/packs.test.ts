@@ -136,6 +136,46 @@ describe('E2-PACK-02 estados', () => {
     expect((await admin.query<{ estado: string }>('SELECT estado FROM catalog.packs WHERE variant_id = $1', [pack])).rows[0]!.estado).toBe('archivado');
   });
 
+  it('una cantidad NaN o con más de 4 decimales se rechaza', async () => {
+    const pack = await variante(); const a = await variante();
+    await conTx((tx) => declararPack(tx, empresa, pack, 'Kit'));
+    // `'NaN'::numeric > 0` es TRUE en PostgreSQL: el CHECK `cantidad > 0` dejaba pasar un NaN.
+    await expect(conTx((tx) => ponerComponente(tx, pack, { variante: a, cantidad: NaN }))).rejects.toThrow(/inválida/);
+    // Y numeric(12,4) redondeaba en silencio, con lo que la comparación de idempotencia no volvía a calzar
+    // nunca y cada llamada cerraba y reabría la fila.
+    await expect(conTx((tx) => ponerComponente(tx, pack, { variante: a, cantidad: 0.00001 }))).rejects.toThrow(/decimales/);
+  });
+
+  it('reabrir un componente cerrado no puede colar un ciclo', async () => {
+    // Era la vía que se salteaba el trigger: estaba en `UPDATE OF variant_id, pack_variant_id`, y reabrir
+    // toca sólo `vigente_hasta`. P1→P2 se cierra, se agrega P2→P1 (legítimo mientras el otro está cerrado),
+    // y al reabrir P1→P2 quedaba un ciclo vigente sin un solo error.
+    const p1 = await variante(); const p2 = await variante();
+    await conTx(async (tx) => {
+      await declararPack(tx, empresa, p1, 'P1');
+      await declararPack(tx, empresa, p2, 'P2');
+      await ponerComponente(tx, p1, { variante: p2, cantidad: 1 });
+      await quitarComponente(tx, p1, p2, 'probando');
+      await ponerComponente(tx, p2, { variante: p1, cantidad: 1 });
+    });
+    const fila = (await admin.query<{ id: string }>(
+      `SELECT id FROM catalog.pack_components WHERE pack_variant_id = $1 AND variant_id = $2`, [p1, p2])).rows[0]!.id;
+    await expect(app.query(
+      'UPDATE catalog.pack_components SET vigente_hasta = NULL, motivo_cierre = NULL WHERE id = $1', [fila]))
+      .rejects.toThrow(/ciclo/);
+  });
+
+  it('un ciclo de tres niveles también se rechaza', async () => {
+    // El test viejo sólo probaba un salto: quitarle la recursión al trigger no rompía nada.
+    const p1 = await variante(); const p2 = await variante(); const p3 = await variante();
+    await conTx(async (tx) => {
+      for (const [p, n] of [[p1, 'P1'], [p2, 'P2'], [p3, 'P3']] as const) await declararPack(tx, empresa, p, n);
+      await ponerComponente(tx, p1, { variante: p2, cantidad: 1 });
+      await ponerComponente(tx, p2, { variante: p3, cantidad: 1 });
+    });
+    await expect(conTx((tx) => ponerComponente(tx, p3, { variante: p1, cantidad: 1 }))).rejects.toThrow(/ciclo/);
+  });
+
   it('la app no puede borrar una composición', async () => {
     await expect(app.query('DELETE FROM catalog.pack_components')).rejects.toThrow(/permiso|permission/i);
     await expect(app.query('DELETE FROM catalog.packs')).rejects.toThrow(/permiso|permission/i);

@@ -893,12 +893,7 @@ CREATE TABLE catalog.identity_cases (
                     -- Dos canales afirman valores distintos para el mismo atributo de un modelo (E2 T2). Cuelga de
                     -- la representación que lo introduce; un solo caso abierto por representación agrupa todos sus
                     -- atributos en conflicto. Se revisa, nunca se fusiona sola.
-                    'atributo_divergente',
-                    -- E2 T3. `categoria_sin_mapeo`: una categoría del canal que nadie mapeó a un nodo propio
-                    -- (sus productos quedarían fuera de todo informe por rubro). `marca_ambigua`: un alias que
-                    -- apunta a dos marcas candidatas. `categoria_en_conflicto`: los dos canales ubican el mismo
-                    -- modelo en rubros propios incompatibles. Ninguno se resuelve por parecido de nombre.
-                    'categoria_sin_mapeo', 'marca_ambigua', 'categoria_en_conflicto')),
+                    'atributo_divergente')),
   prioridad       text NOT NULL DEFAULT 'normal' CHECK (prioridad IN ('baja', 'normal', 'urgente')),
   variant_id      uuid REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
   representation_id uuid REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
@@ -980,6 +975,18 @@ CREATE TABLE catalog.eventos_recibidos (
   recibido_en timestamptz NOT NULL DEFAULT now()
 );
 
+-- ─────────────────────── taxonomía propia, marcas, colecciones y packs (E2 T3) ───────────────────────
+-- Las decisiones que NO se deben "simplificar" al leer esto:
+--   1. La jerarquía de los canales es EVIDENCIA, nunca el árbol propio (D1, cerrada por José el
+--      2026-09-20). Viven en tablas separadas y se unen sólo por un mapeo explícito y humano.
+--   2. La identidad de un nodo es estable e independiente de su nombre, su slug y su lugar en el árbol:
+--      `taxonomy_nodes` guarda la identidad y `taxonomy_node_versions` cómo se veía en cada versión. Sin
+--      esto, renombrar un rubro rompería todos los mapeos y E12/E13 no podrían publicar lo aprobado.
+--   3. Los componentes de un pack son VARIANTES VENDIBLES, no modelos: un modelo no tiene stock ni precio,
+--      y un pack se arma con cosas comprables. Elegir el modelo se paga caro en E5.
+--   4. Forward-only, como todo `catalog`: nada se borra. `plataforma_app` no tiene DELETE.
+--
+-- Nada de esto escribe en ningún canal: es sombra entera.
 -- ───────────────────────── tarea 1: la jerarquía del canal, como evidencia ─────────────────────────
 -- Un canal informa su propio árbol (Woo: `id`/`parent`/`slug`/`count`; ML: los códigos MLA…). Se guarda
 -- tal cual, por cuenta, y el padre se referencia por su ID REMOTO, no por una FK interna: la importación
@@ -1090,6 +1097,10 @@ CREATE INDEX taxonomy_node_versions_padre ON catalog.taxonomy_node_versions (ver
 CREATE OR REPLACE FUNCTION catalog.taxonomia_sin_ciclos() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE actual uuid := NEW.parent_id; saltos integer := 0;
 BEGIN
+  -- Serializa las escrituras de esta versión. Sin esto, dos transacciones que hacen A.padre=B y B.padre=A a
+  -- la vez ven cada una el estado anterior de la otra, las dos pasan la verificación y queda el ciclo: una
+  -- restricción que sólo mira el snapshot propio no es una restricción bajo concurrencia.
+  PERFORM 1 FROM catalog.taxonomy_versions WHERE id = NEW.version_id FOR UPDATE;
   WHILE actual IS NOT NULL LOOP
     IF actual = NEW.node_id THEN
       RAISE EXCEPTION 'el nodo % no puede colgar de % : cerraría un ciclo en la versión %',
@@ -1100,13 +1111,19 @@ BEGIN
     IF saltos > 64 THEN RAISE EXCEPTION 'cadena de padres demasiado larga o ya cíclica en la versión %', NEW.version_id; END IF;
     SELECT v.parent_id INTO actual FROM catalog.taxonomy_node_versions v
       WHERE v.version_id = NEW.version_id AND v.node_id = actual;
-    EXIT WHEN NOT FOUND;
+    -- Un padre SIN fila en esta versión no es un árbol válido: los nodos que cuelgan de él desaparecen de
+    -- `leerArbol` (que baja desde las raíces) sin que nada proteste. Antes se aceptaba en silencio.
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'el nodo % cuelga de un padre que no existe en la versión %', NEW.node_id, NEW.version_id;
+    END IF;
   END LOOP;
   RETURN NEW;
 END;
 $$;
 CREATE TRIGGER taxonomy_node_versions_sin_ciclos
-  BEFORE INSERT OR UPDATE OF parent_id ON catalog.taxonomy_node_versions
+  -- `node_id` y `version_id` también: mover una fila de nodo o de versión puede cerrar un ciclo igual que
+  -- cambiar el padre, y con `UPDATE OF parent_id` a secas esas dos vías no disparaban nada.
+  BEFORE INSERT OR UPDATE OF parent_id, node_id, version_id ON catalog.taxonomy_node_versions
   FOR EACH ROW EXECUTE FUNCTION catalog.taxonomia_sin_ciclos();
 
 -- El mapeo con el canal: por ID REMOTO (nunca por nombre), por canal y por cuenta, y admitiendo
@@ -1188,6 +1205,9 @@ CREATE INDEX pack_components_componente ON catalog.pack_components (variant_id) 
 CREATE OR REPLACE FUNCTION catalog.pack_componente_valido() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE muerta boolean; cicla boolean;
 BEGIN
+  -- Mismo motivo que en el árbol: sin lock, dos transacciones que cierran el ciclo desde los dos lados a la
+  -- vez pasan las dos. El lock es por pack para no serializar toda la tabla.
+  PERFORM pg_advisory_xact_lock(hashtextextended('catalog.pack_components', 0), hashtextextended(NEW.pack_variant_id::text, 0));
   SELECT archivado_en IS NOT NULL INTO muerta FROM catalog.sellable_variants WHERE id = NEW.variant_id;
   IF muerta THEN
     RAISE EXCEPTION 'la variante % está archivada: no puede ser componente de un pack', NEW.variant_id;
@@ -1209,15 +1229,10 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER pack_components_valido
-  BEFORE INSERT OR UPDATE OF variant_id, pack_variant_id ON catalog.pack_components
+  -- `vigente_hasta` está en la lista porque REABRIR un componente cerrado (poner `vigente_hasta` en NULL) es
+  -- la vía por la que se colaba un ciclo sin verificar: el componente inverso pudo agregarse mientras este
+  -- estaba cerrado, y al reabrirlo el trigger no se disparaba porque no se tocaba ninguna de las otras dos
+  -- columnas. El comentario de arriba promete que no hay segunda vía de escritura: ésta era la segunda vía.
+  BEFORE INSERT OR UPDATE OF variant_id, pack_variant_id, vigente_hasta ON catalog.pack_components
   FOR EACH ROW WHEN (NEW.vigente_hasta IS NULL) EXECUTE FUNCTION catalog.pack_componente_valido();
 
--- ─────────── permisos del esquema nuevo ───────────
--- La app lee, inserta y actualiza. No borra: una baja es `archivado_en`, y un caso resuelto es
--- `cerrado_en`. Que no tenga DELETE es lo que hace que "forward-only" no dependa de la disciplina.
-GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA catalog TO plataforma_app;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA catalog TO plataforma_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE plataforma_migrador IN SCHEMA catalog
-  GRANT SELECT, INSERT, UPDATE ON TABLES TO plataforma_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE plataforma_migrador IN SCHEMA catalog
-  GRANT USAGE ON SEQUENCES TO plataforma_app;

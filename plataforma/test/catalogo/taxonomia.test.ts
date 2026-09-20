@@ -9,7 +9,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   agregarAColeccion, asegurarColeccion, asegurarMarca, asignarMarca, clasificarModelo, crearVersion,
   desclasificarModelo, escribirArbol, leerArbol, mapearCategoria, modelosDeColeccion, normalizarMarca,
-  publicarVersion, quitarDeColeccion, resolverMarca,
+  ErrorMarca, modelosSinPrimaria, publicarVersion, quitarDeColeccion, resolverMarca,
 } from '../../src/catalogo/taxonomia.ts';
 import { crearPool, enTransaccion } from '../../src/db/pool.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
@@ -78,11 +78,36 @@ describe('E2-TAX-01 marcas canónicas', () => {
     expect((await admin.query<{ brand_id: string }>('SELECT brand_id FROM catalog.product_models WHERE id = $1', [m])).rows[0]!.brand_id).toBe(a);
   });
 
-  it('un alias no se puede robar entre dos marcas', async () => {
+  it('un alias ya tomado FALLA en vez de seguir en silencio', async () => {
     await conTx((tx) => asegurarMarca(tx, empresa, 'Zion', { origen: 'legado', alias: ['ZN'] }));
-    await conTx((tx) => asegurarMarca(tx, empresa, 'Zenith', { origen: 'legado', alias: ['ZN'] }));
+    // Antes esto era un `ON CONFLICT DO NOTHING`: la segunda marca se creaba, el alias se quedaba con la
+    // primera y nadie se enteraba. La ambigüedad que el esquema dice prohibir pasaba en silencio.
+    await expect(conTx((tx) => asegurarMarca(tx, empresa, 'Zenith', { origen: 'legado', alias: ['ZN'] })))
+      .rejects.toBeInstanceOf(ErrorMarca);
     const r = await admin.query<{ n: string }>(`SELECT count(*) AS n FROM catalog.brand_aliases WHERE alias_normalizado = 'zn'`);
     expect(r.rows[0]!.n).toBe('1');
+  });
+
+  it('una marca archivada no se devuelve como si estuviera viva', async () => {
+    const id = (await conTx((tx) => asegurarMarca(tx, empresa, 'Venzo', { origen: 'legado' })))!;
+    await admin.query(
+      `UPDATE catalog.brands SET archivado_en = now(), motivo_archivo = 'dejamos de venderla' WHERE id = $1`, [id]);
+    // `resolverMarca` filtra archivadas, así que el camino del INSERT devolvía la fila ARCHIVADA por
+    // ON CONFLICT y se le colgaban modelos y alias a una marca dada de baja.
+    await expect(conTx((tx) => asegurarMarca(tx, empresa, 'Venzo', { origen: 'ml_atributo' })))
+      .rejects.toThrow(/archivada/);
+  });
+
+  it('un nombre que es marca propia y alias de otra resuelve siempre a la misma', async () => {
+    // Se arma a mano el estado ambiguo que en producción puede llegar por una carga vieja: 'Otra' tiene 'zion'
+    // como alias y, además, existe una marca que se llama 'Zion'. `asegurarMarca` ya no lo deja crear, así
+    // que la única forma de tenerlo es la que lo tuvo antes: escrito directo.
+    await conTx((tx) => asegurarMarca(tx, empresa, 'Otra', { origen: 'legado', alias: ['ZION'] }));
+    const zion = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.brands (company_id, nombre, nombre_normalizado) VALUES ($1, 'Zion', 'zion') RETURNING id`,
+      [empresa])).rows[0]!.id;
+    // El UNION ALL sin ORDER BY devolvía una de las dos al azar. Gana el nombre propio sobre el alias ajeno.
+    for (let i = 0; i < 5; i++) expect(await conTx((tx) => resolverMarca(tx, empresa, 'Zion'))).toBe(zion);
   });
 });
 
@@ -165,14 +190,73 @@ describe('E2-TAX-03 el árbol propio, versionado', () => {
     expect((await conTx((tx) => leerArbol(tx, v1))).find((f) => f.clave === 'cubiertas')!.nombre).toBe('Cubiertas');
   });
 
-  it('un ciclo lo rechaza la base, no el código', async () => {
+  it('un ciclo en el árbol pedido se rechaza con su nodo nombrado', async () => {
+    const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
+    await expect(conTx((tx) => escribirArbol(tx, empresa, v, [
+      { clave: 'a', nombre: 'A', padre: 'b' },
+      { clave: 'b', nombre: 'B', padre: 'a' },
+    ]))).rejects.toThrow(/ciclo/);
+  });
+
+  it('reorganizar no es un ciclo: se puede invertir la relación padre-hijo', async () => {
+    // Este caso ANTES fallaba, y el test viejo lo daba por «ciclo». No lo es: el estado final es un árbol
+    // válido. Fallaba porque se escribía de una sola pasada y pasaba por un estado intermedio inválido.
     const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
     await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
-    // `componentes` pasa a colgar de su propio nieto.
-    await expect(conTx((tx) => escribirArbol(tx, empresa, v, [
-      { clave: 'componentes', nombre: 'Componentes y repuestos', padre: 'cubiertas' },
+    await conTx((tx) => escribirArbol(tx, empresa, v, [
       { clave: 'cubiertas', nombre: 'Cubiertas' },
-    ]))).rejects.toThrow(/ciclo/);
+      { clave: 'componentes', nombre: 'Componentes y repuestos', padre: 'cubiertas' },
+    ]));
+    const filas = await conTx((tx) => leerArbol(tx, v));
+    expect(filas.find((f) => f.clave === 'componentes')!.camino.join('/')).toBe('cubiertas/componentes');
+  });
+
+  it('el ciclo lo rechaza igual la BASE, aunque se escriba por fuera del código', async () => {
+    // La garantía tiene que vivir en la base: una segunda vía de escritura (una corrección a mano, otro
+    // servicio) no puede saltearla. Se escribe con SQL directo, sin pasar por `escribirArbol`.
+    const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
+    const claves = await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
+    const componentes = claves.get('componentes')!; const cubiertas = claves.get('cubiertas')!;
+    await expect(app.query(
+      'UPDATE catalog.taxonomy_node_versions SET parent_id = $3 WHERE version_id = $1 AND node_id = $2',
+      [v, componentes, cubiertas])).rejects.toThrow(/ciclo/);
+  });
+
+  it('un padre sin fila en esta versión se rechaza en vez de desaparecer del árbol', async () => {
+    // Antes se aceptaba: el nodo quedaba con un padre «colgando» y `leerArbol`, que baja desde las raíces,
+    // lo omitía junto con todo lo que colgara de él. Un árbol al que le faltan nodos sin un solo error.
+    const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
+    const claves = await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
+    const huerfano = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.taxonomy_nodes (company_id, clave) VALUES ($1, 'fuera-del-arbol') RETURNING id`, [empresa])).rows[0]!.id;
+    await expect(app.query(
+      `INSERT INTO catalog.taxonomy_node_versions (version_id, node_id, parent_id, nombre) VALUES ($1, $2, $3, 'X')`,
+      [v, claves.get('mtb')!, huerfano])).rejects.toThrow(/no existe en la versión/);
+  });
+
+  it('una versión ya publicada no se puede reescribir', async () => {
+    const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
+    await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
+    await conTx((tx) => publicarVersion(tx, empresa, v));
+    // Si se pudiera, «E13 publica exactamente lo que E12 propuso» no tendría respaldo.
+    await expect(conTx((tx) => escribirArbol(tx, empresa, v, ARBOL))).rejects.toThrow(/vigente/);
+  });
+
+  it('el rubro de un nodo no se pisa con el default al reescribirlo sin rubro', async () => {
+    // `rubro` vive en la identidad y no está versionado: un `SET rubro = EXCLUDED.rubro` con el default
+    // 'producto' convertía SERVICES/Taller en nodos de producto en TODAS las versiones, incluida la vigente.
+    const { id: v1 } = await conTx((tx) => crearVersion(tx, empresa));
+    await conTx((tx) => escribirArbol(tx, empresa, v1, ARBOL));
+    const { id: v2 } = await conTx((tx) => crearVersion(tx, empresa));
+    await conTx((tx) => escribirArbol(tx, empresa, v2, [{ clave: 'servicios', nombre: 'Servicios' }]));
+    expect((await conTx((tx) => leerArbol(tx, v2))).find((f) => f.clave === 'servicios')!.rubro).toBe('servicio');
+    expect((await conTx((tx) => leerArbol(tx, v1))).find((f) => f.clave === 'servicios')!.rubro).toBe('servicio');
+  });
+
+  it('una versión de otra empresa no se puede escribir', async () => {
+    const otra = (await admin.query<{ id: string }>('INSERT INTO core.companies (legal_name) VALUES ($1) RETURNING id', [`O ${randomUUID()}`])).rows[0]!.id;
+    const { id: v } = await conTx((tx) => crearVersion(tx, otra));
+    await expect(conTx((tx) => escribirArbol(tx, empresa, v, ARBOL))).rejects.toThrow(/no existe en esta empresa/);
   });
 
   it('una sola versión vigente por empresa', async () => {
@@ -234,6 +318,36 @@ describe('E2-TAX-04 el modelo en el árbol', () => {
     expect(await conTx((tx) => desclasificarModelo(tx, m, nodo, 'otra vez'))).toBe(false);
     await conTx((tx) => clasificarModelo(tx, empresa, m, nodo, { primaria: true }));
     expect((await admin.query('SELECT 1 FROM catalog.model_categories WHERE model_id = $1', [m])).rowCount).toBe(2);
+  });
+
+  it('un mapeo automático no degrada la primaria que puso una persona', async () => {
+    const m = await modelo('1');
+    const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
+    const claves = await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
+    await conTx((tx) => clasificarModelo(tx, empresa, m, claves.get('cubiertas')!, { primaria: true, origen: 'persona' }));
+    // Si la importación pudiera degradarla, la próxima corrida desharía en silencio una decisión humana.
+    await expect(conTx((tx) => clasificarModelo(tx, empresa, m, claves.get('camaras')!, { primaria: true, origen: 'mapeo_canal' })))
+      .rejects.toThrow(/puesta por una persona/);
+    // Una persona sí puede cambiarla.
+    await conTx((tx) => clasificarModelo(tx, empresa, m, claves.get('camaras')!, { primaria: true, origen: 'persona' }));
+    const r = await admin.query<{ clave: string }>(
+      `SELECT n.clave FROM catalog.model_categories c JOIN catalog.taxonomy_nodes n ON n.id = c.node_id
+        WHERE c.model_id = $1 AND c.quitado_en IS NULL AND c.primaria`, [m]);
+    expect(r.rows.map((x) => x.clave)).toEqual(['camaras']);
+  });
+
+  it('los modelos clasificados sin primaria son consultables', async () => {
+    // El esquema garantiza «a lo sumo una» primaria; «exactamente una» no lo puede garantizar una restricción
+    // de fila. La diferencia se MIDE en vez de prometerse: un modelo sin primaria no sale en ningún informe
+    // por rubro, y eso hay que poder verlo antes de darle valor a un conteo por categoría.
+    const m = await modelo('1'); const conPrimaria = await modelo('2');
+    const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
+    const claves = await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
+    await conTx(async (tx) => {
+      await clasificarModelo(tx, empresa, m, claves.get('mtb')!);
+      await clasificarModelo(tx, empresa, conPrimaria, claves.get('mtb')!, { primaria: true });
+    });
+    expect(await conTx((tx) => modelosSinPrimaria(tx, empresa))).toEqual([m]);
   });
 
   it('la app no puede borrar nada de la taxonomía', async () => {

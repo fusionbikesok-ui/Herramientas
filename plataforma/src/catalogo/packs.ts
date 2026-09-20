@@ -41,6 +41,16 @@ export async function ponerComponente(
   tx: Consultable, pack: string, c: Componente, motivo = 'composición corregida',
 ): Promise<boolean> {
   const unidad = c.unidad ?? 'unidad';
+  // `NaN` (el resultado típico de un `parseFloat('')`) llega a PostgreSQL como 'NaN', y `'NaN'::numeric > 0`
+  // es TRUE: el CHECK `cantidad > 0` lo dejaba pasar y quedaba un componente con cantidad NaN. Y una cantidad
+  // con más de 4 decimales se redondeaba sin aviso al insertar, con lo que la comparación de idempotencia no
+  // volvía a calzar nunca y cada llamada cerraba y reabría la fila.
+  if (!Number.isFinite(c.cantidad) || c.cantidad <= 0) {
+    throw new Error(`cantidad inválida para el componente ${c.variante}: ${c.cantidad}`);
+  }
+  if (Number(c.cantidad.toFixed(4)) !== c.cantidad) {
+    throw new Error(`la cantidad ${c.cantidad} tiene más de 4 decimales: numeric(12,4) la redondearía en silencio`);
+  }
   const ya = await tx.query<{ id: string }>(
     `SELECT id FROM catalog.pack_components
       WHERE pack_variant_id = $1 AND variant_id = $2 AND vigente_hasta IS NULL
