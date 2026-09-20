@@ -219,6 +219,8 @@ export interface Cobertura {
   // ── Desglose de los modelos publicados en AMBOS canales (`entreCanales`). PUENTE PROVISORIO ──────────────
   // Las tres clases son excluyentes, con precedencia nombre > granularidad > contradicción, y suman exacto
   // `entreCanales`. `contradictoriosEntreCanales` = compatiblesPorGranularidad + contradiccionesReales.
+  // (Desde que hay nodos, el puente SÓLO se usa para los modelos sin nodo en algún canal; ese uso se apaga
+  // cuando las categorías de ML estén mapeadas del todo. Se retira, no se afina.)
   // Este criterio (nombres + ancestros del canal) es un puente hasta que las categorías de los dos canales
   // estén mapeadas al árbol propio (`taxonomy_channel_map`): entonces «¿coinciden?» es «¿caen en el mismo
   // nodo?», exacto, y esto se retira. No lo extiendas: se reemplaza.
@@ -231,6 +233,22 @@ export interface Cobertura {
   contradiccionesReales: number;
   /** Categorías usadas cuya cadena de ancestros se cortó (padre ausente, ciclo o tope): su clase 1 puede estar subcontada. */
   cadenasIncompletas: number;
+  // ── Comparación EXACTA por nodo del árbol propio (versión vigente), para los modelos cuyos DOS canales tienen
+  // nodo. Excluyentes, precedencia mismoNodo > unoAncestroDelOtro > nodosDistintos, y
+  //   mismoNodo + unoAncestroDelOtro + nodosDistintos + sinNodoEnAlgunCanal = entreCanales.
+  // «Tiene nodo» = alguna de sus categorías de ese canal resuelve a un nodo NO archivado de la versión vigente
+  // (las demás categorías del modelo, sin nodo, no cuentan: «alguna contra alguna», como el puente).
+  // Hermanos (mismo padre, distinto nodo) NO es acuerdo: cae en nodosDistintos.
+  // Los campos del puente de arriba (relacionadosPorNombre, compatiblesPorGranularidad, contradiccionesReales,
+  // muestraContradicciones y contradictoriosEntreCanales) miden ahora SÓLO `sinNodoEnAlgunCanal`.
+  mismoNodo: number;
+  unoAncestroDelOtro: number;
+  nodosDistintos: number;
+  /** No es una clase: los modelos en ambos canales a los que les falta nodo en algún canal. Van al puente. */
+  sinNodoEnAlgunCanal: number;
+  /** Versión del árbol usada; null si no hay una vigente (entonces las tres clases quedan en 0). */
+  versionTaxonomia: string | null;
+  muestraNodosDistintos: Array<{ woo: string; ml: string; modelos: number }>;
   /** Las contradicciones reales de mayor a menor cantidad de modelos, acotada. */
   muestraContradicciones: Array<{ woo: string; ml: string; modelos: number }>;
 }
@@ -316,6 +334,37 @@ export async function medirCobertura(
     return r.nombres;
   };
 
+  // Árbol propio: versión vigente, nodos no archivados y qué categoría de canal mapea a cuál. Sin versión
+  // vigente no se inventa nada: las tres clases por nodo quedan en cero y todo va al puente.
+  const versionTaxonomia = (await tx.query<{ id: string }>(
+    `SELECT id FROM catalog.taxonomy_versions WHERE company_id = $1 AND estado = 'vigente'`, [empresa])).rows[0]?.id ?? null;
+  const nodos = new Map<string, { parent: string | null; nombre: string }>(); // nombre = id, para que ancestrosDe devuelva ids
+  const nombreNodo = new Map<string, string>();
+  const nodoDeCategoria = new Map<string, string>();
+  if (versionTaxonomia) {
+    for (const n of (await tx.query<{ node_id: string; parent_id: string | null; nombre: string }>(
+      `SELECT node_id, parent_id, nombre FROM catalog.taxonomy_node_versions
+        WHERE version_id = $1 AND NOT archivado`, [versionTaxonomia])).rows) {
+      nodos.set(n.node_id, { parent: n.parent_id, nombre: n.node_id });
+      nombreNodo.set(n.node_id, n.nombre);
+    }
+    for (const m of (await tx.query<{ canal: string; id_externo: string; node_id: string }>(
+      `SELECT canal, id_externo, node_id FROM catalog.taxonomy_channel_map
+        WHERE company_id = $1 AND vigente_hasta IS NULL AND id_externo IS NOT NULL`, [empresa])).rows) {
+      // Un mapeo a un nodo archivado o ausente en la versión vigente apunta a algo que el árbol no tiene.
+      if (nodos.has(m.node_id)) nodoDeCategoria.set(`${m.canal}\u0000${m.id_externo}`, m.node_id);
+    }
+  }
+  const nodosDe = (canal: string, valores: string[], crudoDe: Map<string, string>): Set<string> => {
+    const r = new Set<string>();
+    for (const v of valores) {
+      const id = resolverId(canal, crudoDe.get(`${canal}\u0000${v}`)!);
+      const n = id === null ? undefined : nodoDeCategoria.get(`${canal}\u0000${id}`);
+      if (n) r.add(n);
+    }
+    return r;
+  };
+
   const porModelo = new Map<string, FilaCategoriaModelo[]>();
   for (const f of filas) {
     const lista = porModelo.get(f.modelId) ?? [];
@@ -325,7 +374,9 @@ export async function medirCobertura(
 
   let variasCandidatas = 0; let soloMarcaOColeccion = 0;
   let entreCanales = 0; let relacionadosPorNombre = 0; let compatiblesPorGranularidad = 0; let contradiccionesReales = 0;
+  let mismoNodo = 0; let unoAncestroDelOtro = 0; let nodosDistintos = 0; let sinNodoEnAlgunCanal = 0;
   const pares = new Map<string, { woo: string; ml: string; modelos: number }>();
+  const paresNodo = new Map<string, { woo: string; ml: string; modelos: number }>();
   for (const lista of porModelo.values()) {
     const valoresUnicos = new Set(lista.map((f) => f.valor));
     if (valoresUnicos.size > 1) variasCandidatas++;
@@ -346,6 +397,28 @@ export async function medirCobertura(
       const valoresA = [...porCanal.get(canalA!)!];
       const valoresB = [...porCanal.get(canalB!)!];
       entreCanales++;
+      // Comparación exacta por nodo, si los DOS canales tienen. Para estos modelos el puente no se consulta.
+      const nodosA = nodosDe(canalA!, valoresA, crudoDe);
+      const nodosB = nodosDe(canalB!, valoresB, crudoDe);
+      if (nodosA.size > 0 && nodosB.size > 0) {
+        if ([...nodosA].some((n) => nodosB.has(n))) { mismoNodo++; continue; }
+        // Ancestro en la versión VIGENTE, en cualquier sentido: es granularidad medida sobre nuestro árbol.
+        const conAncestros = (n: string) => ancestrosDe(n, nodos).nombres;
+        if ([...nodosA].some((a) => conAncestros(a).some((x) => nodosB.has(x)))
+          || [...nodosB].some((b) => conAncestros(b).some((x) => nodosA.has(x)))) { unoAncestroDelOtro++; continue; }
+        nodosDistintos++;
+        if (porCanal.has('woocommerce') && porCanal.has('mercadolibre')) {
+          const nombresDe = (ns: Set<string>) => [...new Set([...ns].map((n) => nombreNodo.get(n)!))].sort().join(' + ');
+          const woo = nombresDe(canalA === 'woocommerce' ? nodosA : nodosB);
+          const ml = nombresDe(canalA === 'woocommerce' ? nodosB : nodosA);
+          const k = `${woo}\u0000${ml}`;
+          const p = paresNodo.get(k) ?? { woo, ml, modelos: 0 };
+          p.modelos++;
+          paresNodo.set(k, p);
+        }
+        continue;
+      }
+      sinNodoEnAlgunCanal++;
       // Clase 2 — relacionadas por NOMBRE. «Alguna contra alguna»: basta un par (una de cada canal).
       if (valoresA.some((va) => valoresB.some((vb) => valoresRelacionados(va, vb)))) {
         relacionadosPorNombre++;
@@ -380,6 +453,10 @@ export async function medirCobertura(
     soloMarcaOColeccion,
     contradictoriosEntreCanales: compatiblesPorGranularidad + contradiccionesReales,
     entreCanales, relacionadosPorNombre, compatiblesPorGranularidad, contradiccionesReales,
+    mismoNodo, unoAncestroDelOtro, nodosDistintos, sinNodoEnAlgunCanal, versionTaxonomia,
+    muestraNodosDistintos: [...paresNodo.values()]
+      .sort((a, b) => b.modelos - a.modelos || a.woo.localeCompare(b.woo) || a.ml.localeCompare(b.ml))
+      .slice(0, MUESTRA_CONTRADICCIONES),
     cadenasIncompletas: incompletas.size,
     muestraContradicciones: [...pares.values()]
       .sort((a, b) => b.modelos - a.modelos || a.woo.localeCompare(b.woo) || a.ml.localeCompare(b.ml))
