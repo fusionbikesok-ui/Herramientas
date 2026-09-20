@@ -223,3 +223,17 @@ cd /opt/fusionbikes/herramientas && docker compose -f plataforma/deploy/compose.
   -p fusion-plataforma --env-file /opt/fusionbikes/plataforma-prod/plataforma.env <subcomando>
 ```
 
+**Un `migrate` sin `build` previo parece exitoso y no aplica nada.** El Dockerfile hace
+`COPY migrations ./migrations`: las migraciones van HORNEADAS en la imagen, no montadas. Si la imagen no tiene
+el archivo nuevo, el migrador no ve nada pendiente, informa éxito y sale 0. Pasó el 2026-09-20 con la 0016: se
+corrió el `migrate`, dio bien, y `core.schema_migrations` seguía en 15 — y encima la carga posterior escribió
+58 de 78 mapeos porque el índice viejo seguía puesto.
+
+El `build` NO es opcional ni una optimización: es parte del despliegue, y va primero de los tres.
+Verificar SIEMPRE contra la base y no contra la salida del comando:
+
+```
+docker exec fusion-pg-pg-1 psql -U postgres -d plataforma -c \
+  'select count(*), max(nombre) from core.schema_migrations'
+```
+
