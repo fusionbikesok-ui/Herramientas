@@ -49,7 +49,8 @@ export interface OpcionesBootstrap {
 
 export type ResultadoPagina =
   | { estado: 'avanzo'; pagina: number; encolados: number; leidos: number }
-  | { estado: 'terminada' | 'ocupada' | 'cedio_senales' | 'cedio_429' | 'reinicio_scan'; detalle?: string };
+  | { estado: 'terminada' | 'ocupada' | 'cedio_senales' | 'reinicio_scan'; detalle?: string }
+  | { estado: 'cedio_429'; detalle?: string; retryAfterS?: number };
 
 /** Una página leída del canal: los recursos y la posición siguiente (null = terminó). */
 interface Pagina { recursos: RecursoRemoto[]; siguiente: string | null }
@@ -202,7 +203,7 @@ export function crearBootstrap(o: OpcionesBootstrap) {
         if (e instanceof ErrorLeasePerdido) return { estado: 'ocupada', detalle: e.message };
         if (e instanceof ErrorBarridoReintentable) {
           await soltar('pausada', ', error_detail = $4', [e.message.slice(0, 200)]);
-          return { estado: 'cedio_429', detalle: e.message };
+          return { estado: 'cedio_429', detalle: e.message, ...(e.retryAfter !== undefined ? { retryAfterS: e.retryAfter } : {}) };
         }
         // El scroll de ML vence a los pocos minutos: retomar con uno viejo da error. Se vuelve a empezar el scan;
         // lo ya encolado no se duplica (clave única), sólo se gasta cupo en releerlo.

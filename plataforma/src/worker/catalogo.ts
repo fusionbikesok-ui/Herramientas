@@ -61,10 +61,25 @@ export interface LectorBootstrap {
   unaPagina(c: CuentaBootstrap): Promise<ResultadoPagina>;
 }
 
+const TOPE_BACKOFF_429_MS = 900_000;
+
 /**
  * El ciclo del bootstrap: una página por vuelta, de la primera cuenta que no terminó. Si cede (señales de ML
- * esperando o un 429) espera un minuto antes de la próxima, para no insistir sobre un cupo que ya está usado.
- * Cuando todas terminan, lo avisa y se detiene: el bootstrap corre una vez por cuenta, para siempre.
+ * esperando o un 429) espera antes de la próxima, para no insistir sobre un cupo que ya está usado. Cuando
+ * todas terminan, lo avisa y se detiene: el bootstrap corre una vez por cuenta, para siempre.
+ *
+ * `cedio_429` es el único caso con backoff exponencial (base `esperaCedido`, tope 900_000 ms, igual que el
+ * backoff de señales en `senales-cola.ts`): el canal no tiene cupo, e insistir a ritmo fijo alimenta su
+ * propio 429 sin ganar nada. El contador de cesiones consecutivas es POR CUENTA — dos cuentas en cesión no
+ * comparten el mismo contador, y una cuenta que avanza no afecta el backoff de otra. Si ML manda
+ * `Retry-After`, ese valor es un piso: nunca se reintenta antes de lo que el canal pidió, aunque el backoff
+ * calculado sea menor.
+ *
+ * `cedio_senales` y `reinicio_scan` NO tienen backoff, a propósito: el primero es prioridad frente a señales
+ * reales, no falta de cupo, y crecerlo alargaría la espera sin motivo cuando las señales bajen; el segundo es
+ * un scroll de ML vencido (`ErrorCanalTerminal`, no `Reintentable`) que ya reinicia el scan desde cero —
+ * esperar más no lo mejora, y si el scroll vence seguido (típico cuando hay 429 de por medio) el backoff se
+ * dispararía por una causa que no es congestión.
  */
 export function iniciarCicloBootstrap(
   lector: LectorBootstrap, cuentas: readonly CuentaBootstrap[], pausaMs: number, log: RegistroCiclo,
@@ -74,19 +89,38 @@ export function iniciarCicloBootstrap(
   let temporizador: NodeJS.Timeout | null = null;
   let enCurso: Promise<void> = Promise.resolve();
   const terminadas = new Set<string>();
+  const cesiones429 = new Map<string, number>();
 
   const vuelta = async (): Promise<number> => {
     const c = cuentas.find((x) => !terminadas.has(`${x.id}:${x.topic}`));
     if (!c) return -1;
+    const clave = `${c.id}:${c.topic}`;
     try {
       const r = await lector.unaPagina(c);
       if (r.estado === 'terminada') {
-        terminadas.add(`${c.id}:${c.topic}`);
+        terminadas.add(clave);
         log.info({ cuenta: c.id, topic: c.topic }, 'bootstrap del catálogo terminado para la cuenta');
         return pausaMs;
       }
-      if (r.estado === 'avanzo') { log.info({ cuenta: c.id, topic: c.topic, ...r }, 'bootstrap del catálogo: página confirmada'); return pausaMs; }
+      if (r.estado === 'avanzo') {
+        cesiones429.delete(clave);
+        log.info({ cuenta: c.id, topic: c.topic, ...r }, 'bootstrap del catálogo: página confirmada');
+        return pausaMs;
+      }
       if (r.estado === 'ocupada') return pausaMs;
+      if (r.estado === 'cedio_429') {
+        const cesiones = (cesiones429.get(clave) ?? 0) + 1;
+        cesiones429.set(clave, cesiones);
+        const backoff = Math.min(TOPE_BACKOFF_429_MS, esperaCedido * 2 ** (cesiones - 1));
+        const espera = r.retryAfterS !== undefined ? Math.max(backoff, r.retryAfterS * 1000) : backoff;
+        // retryAfterS explícito (incluso `null` si ML no mandó el header): mide si el piso hace algo o es letra
+        // muerta la próxima vez que haya 429 reales, sin tener que inferirlo de si la clave aparece o no.
+        log.info(
+          { cuenta: c.id, topic: c.topic, ...r, retryAfterS: r.retryAfterS ?? null, cesiones, esperaMs: espera },
+          'bootstrap del catálogo en pausa',
+        );
+        return espera;
+      }
       log.info({ cuenta: c.id, topic: c.topic, ...r }, 'bootstrap del catálogo en pausa');
       return esperaCedido;
     } catch (error) {
