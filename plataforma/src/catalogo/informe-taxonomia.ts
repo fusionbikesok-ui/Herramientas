@@ -215,6 +215,9 @@ export interface Cobertura {
   sinCategoriaUtil: number;   // ningún categoria_canal capturado
   variasCandidatas: number;   // más de un valor distinto de categoria_canal
   soloMarcaOColeccion: number; // su(s) categoria_canal caen todos en grupo marca/colección, ninguno en taxonomía
+  // LÍMITE DEL INSTRUMENTO: este informe sólo puede ver un error de categorización cuando DOS canales opinan
+  // distinto. Los errores de un producto publicado en un solo canal son invisibles para él, por construcción
+  // (caso `Selladores` de ML: la deuda es de 7 modelos y el informe marcaba 4; los otros 3 son sólo de ML).
   // ── Modelos publicados en AMBOS canales: `entreCanales`. Hay DOS mediciones y cada una corre sobre un
   // subconjunto distinto; el que lee el JSON tiene que ver de una cuál es cuál.
   //

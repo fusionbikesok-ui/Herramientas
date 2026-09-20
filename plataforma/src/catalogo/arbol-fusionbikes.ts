@@ -216,6 +216,12 @@ export const MAPEO_ML: Record<string, string> = {
   MLA371624: 'cubiertas-y-camaras',     // Cámaras de Bicicleta
   MLA371623: 'ruedas',                  // Ruedas de Bicicleta
   MLA416575: 'selladores',              // Selladores
+  // DEUDA conocida de `Selladores` (D15: los insumos tubeless se quedan con las cubiertas): la categoría de ML es un
+  // balde. De sus 32 modelos, por título 25 son sellador de verdad y 7 son insumos tubeless (cinta, válvulas, kits de
+  // conversión); sólo 8 están también en Woo. Se mantiene `selladores` y los 7 se corrigen a mano al clasificar los
+  // modelos. Bajar el mapeo al padre para salvar 7 degradaría 25: no es una mejora pendiente, es la decisión.
+  // El informe de cobertura marcaba 4 y la deuda es de 7: los otros 3 son sólo de ML, así que ningún canal los
+  // contradice y nada los señala (ver el comentario de `Cobertura` en informe-taxonomia.ts).
   MLA371951: 'frenos',                  // Pastillas
   MLA432979: 'infladores-y-herramientas', // Kits de Extractoras
   MLA371938: 'transmision',             // Shifters
