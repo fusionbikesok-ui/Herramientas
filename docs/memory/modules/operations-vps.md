@@ -199,3 +199,9 @@ desde `/tmp` fallan con `ERR_MODULE_NOT_FOUND` por la resolución de `node_modul
 Ids de producción que estos scripts piden como argumento (lectura de `core.channel_accounts`, 2026-09-20):
 empresa `01a0ad82-dcf5-7235-a8d6-13fe30b386a2`; cuenta de WooCommerce
 `01a0ad82-de15-7a79-b935-dc665538cd05`; cuenta de MercadoLibre `01a0b28d-18e4-733b-b53f-64d1be288253`.
+
+El informe de taxonomía (`catalogo-informe-taxonomia.mjs`) se corre DESPUÉS de importar las categorías del
+canal, no antes: traduce los `category_id` de MercadoLibre a nombres leyendo `catalog.channel_categories`, y
+con esa tabla vacía cada id de ML queda sin traducir, ningún modelo publicado en los dos canales puede
+coincidir y `contradictoriosEntreCanales` sale inflado con todos ellos. No es un hallazgo del catálogo: es el
+informe corriendo sin su diccionario.

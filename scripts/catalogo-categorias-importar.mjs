@@ -61,8 +61,18 @@ const wooCfg = { url: process.env.WOO_URL, ck: process.env.WOO_CK, cs: process.e
 // En dry-run igual hace falta company_id para el resumen; se resuelve desde la propia cuenta (no hay otra
 // forma segura de saber a qué empresa pertenece sin leer plataforma.env, que este script nunca abre).
 async function companyIdDeCuenta(pool, channelAccountId) {
-  const r = await pool.query('SELECT company_id FROM core.channel_accounts WHERE id = $1', [channelAccountId]);
+  const r = await pool.query(
+    'SELECT company_id, channel FROM core.channel_accounts WHERE id = $1', [channelAccountId]);
   if (!r.rows[0]) throw new Error(`no existe channel_account ${channelAccountId}`);
+  // Este script lee Woo y escribe `canal: 'woocommerce'` fijo. Si la cuenta es de otro canal, la corrida
+  // guardaria las categorias de Woo DENTRO de esa cuenta, y nada protestaria: el esquema no puede saber que
+  // el id_externo que le llega no es de ahi. Los dos ids de cuenta se parecen y viven uno al lado del otro
+  // en la documentacion, asi que la confusion es esperable y tiene que frenar aca.
+  if (r.rows[0].channel !== 'woocommerce') {
+    throw new Error(
+      `la cuenta ${channelAccountId} es de ${r.rows[0].channel}, y este script solo importa categorias de ` +
+      'WooCommerce: con otra cuenta escribiria las categorias de Woo bajo el canal equivocado');
+  }
   return r.rows[0].company_id;
 }
 
