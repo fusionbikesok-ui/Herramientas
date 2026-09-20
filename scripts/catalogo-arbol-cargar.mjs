@@ -10,10 +10,14 @@
  */
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
-import pg from 'pg';
 import { ARBOL_FUSIONBIKES, FUERA_DEL_ARBOL, MAPEO_WOO }
   from '../plataforma/src/catalogo/arbol-fusionbikes.ts';
 import { crearVersion, escribirArbol, mapearCategoria } from '../plataforma/src/catalogo/taxonomia.ts';
+// El pool sale de `plataforma/src/db/pool.ts` y NO de `import pg` directo: `pg` está instalado en
+// `plataforma/node_modules`, y un import desde `scripts/` resuelve contra la raíz del legado, donde no está
+// (ERR_MODULE_NOT_FOUND). Además trae el manejador de `error` del pool, que evita que una conexión ociosa
+// muerta tire el proceso entero.
+import { crearPool } from '../plataforma/src/db/pool.ts';
 
 function argumentos(argv) {
   const o = { ejecutar: false };
@@ -36,14 +40,11 @@ if (!process.env.PG_PASSWORD && !process.env.PG_PASSWORD_FILE) {
   process.exit(2);
 }
 const opciones = argumentos(process.argv);
-const pool = new pg.Pool({
-  host: process.env.PG_HOST ?? '127.0.0.1',
-  port: Number(process.env.PG_PORT ?? 5432),
-  database: process.env.PG_DATABASE ?? 'plataforma',
-  user: process.env.PG_USER ?? 'plataforma_app',
-  password: process.env.PG_PASSWORD ?? readFileSync(process.env.PG_PASSWORD_FILE, 'utf8').trim(),
-  max: 2,
-});
+const clave = process.env.PG_PASSWORD ?? readFileSync(process.env.PG_PASSWORD_FILE, 'utf8').trim();
+const url = `postgres://${encodeURIComponent(process.env.PG_USER ?? '')}:${encodeURIComponent(clave)}`
+  + `@${process.env.PG_HOST ?? '127.0.0.1'}:${process.env.PG_PORT ?? '5432'}`
+  + `/${process.env.PG_DATABASE ?? 'plataforma'}`;
+const pool = crearPool(url, { max: 2 });
 
 let codigoSalida = 0;
 try {
