@@ -102,14 +102,20 @@ async function listarTodasLasCategoriasWoo() {
   if (total !== null && categorias.length !== total) {
     throw new Error(`Woo informa ${total} categorías y se leyeron ${categorias.length}: lectura incompleta, no se importa`);
   }
-  return categorias;
+  // Sin el header no hay con qué cotejar, y una sola página corta pasaría por «terminó». No se corta la
+  // corrida —Woo lo manda siempre que lo vimos, y un proxy que lo filtre no es motivo para no importar— pero
+  // se dice en voz alta: el resumen tiene que distinguir «cotejado» de «no se pudo cotejar».
+  if (total === null) {
+    console.error('aviso: Woo no informó X-WP-Total, no se pudo cotejar el total leído contra el del canal');
+  }
+  return { categorias, totalInformado: total };
 }
 
 let codigoSalida = 0;
 const pool = crearPool(url, { max: 1 });
 try {
   const companyId = await companyIdDeCuenta(pool, opciones.cuenta);
-  const resumen = await importarCategoriasCanal(pool, { listar: listarTodasLasCategoriasWoo }, {
+  const resumen = await importarCategoriasCanal(pool, { listar: async () => (await listarTodasLasCategoriasWoo()).categorias }, {
     companyId, channelAccountId: opciones.cuenta, canal: 'woocommerce',
   }, { dryRun: opciones.dryRun, permitirBaja: opciones.permitirBaja });
   console.log(JSON.stringify({ dryRun: opciones.dryRun, cuenta: opciones.cuenta, ...resumen }, null, 2));

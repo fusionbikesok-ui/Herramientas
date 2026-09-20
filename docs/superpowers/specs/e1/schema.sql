@@ -1142,8 +1142,12 @@ CREATE TABLE catalog.taxonomy_channel_map (
   CONSTRAINT taxonomy_channel_map_equivalencia_check CHECK ((id_externo IS NULL) = sin_equivalencia),
   CONSTRAINT taxonomy_channel_map_no_vacio CHECK (id_externo IS NULL OR length(id_externo) > 0)
 );
-CREATE UNIQUE INDEX taxonomy_channel_map_un_vigente
-  ON catalog.taxonomy_channel_map (node_id, channel_account_id) WHERE vigente_hasta IS NULL;
+-- Un nodo puede absorber VARIAS categorías del canal (D7: el árbol propio tiene dos niveles y absorbe el
+-- tercero de Woo), así que NO hay índice único por (node_id, channel_account_id). Lo único por nodo es
+-- «no tiene equivalente en el canal», que no lleva categoría que lo identifique. Ver migración 0016.
+CREATE UNIQUE INDEX taxonomy_channel_map_un_sin_equivalencia
+  ON catalog.taxonomy_channel_map (node_id, channel_account_id)
+  WHERE vigente_hasta IS NULL AND id_externo IS NULL;
 -- Dos nodos propios no pueden reclamar la misma categoría del canal: el mapeo dejaría de ser una función.
 CREATE UNIQUE INDEX taxonomy_channel_map_un_externo
   ON catalog.taxonomy_channel_map (channel_account_id, id_externo)

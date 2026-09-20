@@ -270,12 +270,48 @@ describe('E2-TAX-03 el árbol propio, versionado', () => {
     await expect(conTx((tx) => publicarVersion(tx, empresa, v2))).rejects.toThrow(/borrador/);
   });
 
-  it('dos nodos propios no pueden reclamar la misma categoría del canal', async () => {
+  it('E2-TAX-05 un nodo absorbe varias categorías del canal', async () => {
+    // Es el caso de D7 y la razón de la migración 0016: el árbol propio tiene dos niveles y `Cubiertas y
+    // Cámaras` absorbe CUBIERTAS, CAMARAS e INSUMOS TUBELESS. Con el índice único por nodo que había antes,
+    // mapear la segunda cerraba la primera y quedaba UNA sola, sin error y con los modelos de las otras sin
+    // clasificar. Por eso se verifica el conteo y no sólo que no lance.
+    const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
+    const claves = await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
+    const nodo = claves.get('cubiertas')!;
+    for (const id of ['119', '126', '96']) {
+      await conTx((tx) => mapearCategoria(tx, empresa, nodo, woo, 'woocommerce', id, 'jose'));
+    }
+    const r = await admin.query<{ id_externo: string }>(
+      `SELECT id_externo FROM catalog.taxonomy_channel_map
+        WHERE node_id = $1 AND vigente_hasta IS NULL ORDER BY id_externo`, [nodo]);
+    expect(r.rows.map((x) => x.id_externo)).toEqual(['119', '126', '96']);
+  });
+
+  it('E2-TAX-06 reasignar una categoría a otro nodo cierra la anterior, no duplica', async () => {
+    // Mover CUBIERTAS de un nodo a otro es una reorganización legítima, no un error: alguien lo decide y
+    // queda registrado en `decidido_por`. Lo que NO puede pasar es que queden las dos vigentes, porque
+    // entonces clasificar por esa categoría sería ambiguo.
     const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
     const claves = await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
     await conTx((tx) => mapearCategoria(tx, empresa, claves.get('cubiertas')!, woo, 'woocommerce', '119', 'jose'));
-    await expect(conTx((tx) => mapearCategoria(tx, empresa, claves.get('camaras')!, woo, 'woocommerce', '119', 'jose')))
-      .rejects.toThrow(/taxonomy_channel_map_un_externo/);
+    await conTx((tx) => mapearCategoria(tx, empresa, claves.get('camaras')!, woo, 'woocommerce', '119', 'jose'));
+    const r = await admin.query<{ node_id: string }>(
+      `SELECT node_id FROM catalog.taxonomy_channel_map
+        WHERE id_externo = '119' AND vigente_hasta IS NULL`);
+    expect(r.rows.map((x) => x.node_id)).toEqual([claves.get('camaras')]);
+  });
+
+  it('E2-TAX-07 la base rechaza dos nodos vigentes para la misma categoría', async () => {
+    // La garantía tiene que vivir en la base y no en `mapearCategoria`: si mañana alguien cambia la función,
+    // esto sigue fallando. Por eso se escribe con SQL crudo, salteando la función a propósito.
+    const { id: v } = await conTx((tx) => crearVersion(tx, empresa));
+    const claves = await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
+    await conTx((tx) => mapearCategoria(tx, empresa, claves.get('cubiertas')!, woo, 'woocommerce', '119', 'jose'));
+    await expect(admin.query(
+      `INSERT INTO catalog.taxonomy_channel_map
+         (company_id, node_id, channel_account_id, canal, id_externo, decidido_por)
+       VALUES ($1, $2, $3, 'woocommerce', '119', 'jose')`,
+      [empresa, claves.get('camaras'), woo])).rejects.toThrow(/taxonomy_channel_map_un_externo/);
   });
 
   it('«sin equivalencia» es una decisión tomada, no una fila que falta', async () => {

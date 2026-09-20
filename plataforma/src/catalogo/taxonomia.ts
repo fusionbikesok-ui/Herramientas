@@ -319,15 +319,27 @@ export async function mapearCategoria(
   tx: Consultable, empresa: string, nodo: string, cuenta: string, canal: 'woocommerce' | 'mercadolibre',
   idExterno: string | null, decididoPor: string,
 ): Promise<void> {
-  await tx.query(
-    `UPDATE catalog.taxonomy_channel_map SET vigente_hasta = now()
-      WHERE node_id = $1 AND channel_account_id = $2 AND vigente_hasta IS NULL
-        AND id_externo IS DISTINCT FROM $3`, [nodo, cuenta, idExterno]);
+  // Se cierra por CATEGORÍA y no por nodo: mover `CUBIERTAS` de un nodo a otro cierra el mapeo de CUBIERTAS,
+  // y nada más. Cerrar por nodo (como hacía antes) rompía la absorción muchos a uno de D7: al mapear la
+  // segunda categoría de un nodo se cerraba la primera, quedaba una sola por nodo y los modelos de las otras
+  // se quedaban sin clasificar, sin un solo error. Ver migración 0016.
+  if (idExterno !== null) {
+    await tx.query(
+      `UPDATE catalog.taxonomy_channel_map SET vigente_hasta = now()
+        WHERE channel_account_id = $1 AND id_externo = $2 AND vigente_hasta IS NULL
+          AND node_id IS DISTINCT FROM $3`, [cuenta, idExterno, nodo]);
+  } else {
+    // «Este nodo no tiene equivalente en el canal» sí es uno por nodo: no hay categoría que lo identifique.
+    await tx.query(
+      `UPDATE catalog.taxonomy_channel_map SET vigente_hasta = now()
+        WHERE node_id = $1 AND channel_account_id = $2 AND vigente_hasta IS NULL AND id_externo IS NOT NULL`,
+      [nodo, cuenta]);
+  }
   await tx.query(
     `INSERT INTO catalog.taxonomy_channel_map
        (company_id, node_id, channel_account_id, canal, id_externo, sin_equivalencia, decidido_por)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (node_id, channel_account_id) WHERE vigente_hasta IS NULL DO NOTHING`,
+       ON CONFLICT DO NOTHING`,
     [empresa, nodo, cuenta, canal, idExterno, idExterno === null, decididoPor]);
 }
 

@@ -12,7 +12,7 @@
  * roles distintos: el nodo es un lugar en el menú, la marca es un eje de filtrado.
  */
 
-/** Un nodo del árbol propio. `clave` es estable y por RUTA: hay dos `INFLADORES` en lugares distintos. */
+/** Un nodo del árbol propio. `clave` es estable e independiente del nombre: renombrar no rompe el mapeo. */
 export interface NodoFusion {
   clave: string;
   nombre: string;
@@ -20,8 +20,13 @@ export interface NodoFusion {
   rubro?: 'producto' | 'servicio';
 }
 
-const hijos = (padre: string | null, nombres: Array<[string, string]>): NodoFusion[] =>
-  nombres.map(([clave, nombre]) => ({ clave: padre ? `${padre}/${clave}` : clave, nombre, padre }));
+// Las claves son PLANAS y no rutas. `taxonomy_nodes_clave_check` es `^[a-z0-9][a-z0-9_-]*$` y no admite `/`:
+// con claves por ruta, 59 de los 65 nodos no se podían escribir. Lo encontró opt-2b revisando, y la ruta la
+// había justificado con un choque de nombres (dos `INFLADORES`) que ya no existe, porque esa categoría quedó
+// absorbida. Si algún día vuelve un nombre repetido, la clave del segundo lo desambigua a mano, no el padre.
+
+const hijos = (padre: string, nombres: Array<[string, string]>): NodoFusion[] =>
+  nombres.map(([clave, nombre]) => ({ clave, nombre, padre }));
 
 export const ARBOL_FUSIONBIKES: NodoFusion[] = [
   { clave: 'bicicletas', nombre: 'BICICLETAS POR MARCA', padre: null },
@@ -70,41 +75,99 @@ export const ARBOL_FUSIONBIKES: NodoFusion[] = [
     ['selladores', 'SELLADORES/ANTIPINCHADURAS'], ['limpiadores', 'LIMPIADORES/DESENGRASANTES'],
     ['liquidos-de-frenos', 'LIQUIDOS DE FRENOS'],
   ]),
-  { clave: 'taller/services', nombre: 'SERVICES', padre: 'taller', rubro: 'servicio' },
+  { clave: 'services', nombre: 'SERVICES', padre: 'taller', rubro: 'servicio' },
 
   { clave: 'santini', nombre: 'SANTINI', padre: null },
 ];
 
 /**
- * Categorías de Woo que NO mapean a un nodo porque su distinción pasó a faceta: cada una apunta al nodo que
- * la absorbe. Se mapean igual (`taxonomy_channel_map`) para que un modelo que sólo tiene esa categoría caiga
- * en el nodo padre en vez de quedar sin clasificar.
+ * El destino de CADA categoría de Woo, explícito y por id. Antes 61 de las 78 se resolvían haciendo coincidir
+ * el nombre del nodo con el de la categoría, y eso es exactamente donde un cambio de tipeo en Woo rompe un
+ * mapeo sin que nada proteste: la categoría deja de encontrar su nodo y sus modelos se quedan sin clasificar,
+ * en silencio. Acá el nombre es sólo un comentario; lo que manda es el id, que Woo no cambia.
+ *
+ * Varias categorías pueden apuntar al MISMO nodo: es la absorción de D7, el árbol tiene dos niveles y el
+ * tercero de Woo se vuelve faceta. Requiere la migración 0016 (antes había un único por nodo).
  */
-export const ABSORBIDAS: Record<string, string> = {
-  '119': 'componentes/cubiertas-y-camaras',   // CUBIERTAS
-  '126': 'componentes/cubiertas-y-camaras',   // CAMARAS
-  '96': 'componentes/cubiertas-y-camaras',    // ACCESORIOS TUBELESS
-  '135': 'componentes/transmision',           // SHIFTERS
-  '108': 'componentes/transmision',           // FUSIBLES
-  '107': 'componentes/ruedas',                // MAZAS
-  '105': 'componentes/ruedas',                // EJES PASANTES
-  '130': 'componentes/direccion',             // MANUBRIOS
-  '131': 'componentes/direccion',             // STEMS/AVANCES
-  '129': 'componentes/asientos',              // PORTASILLAS
-  '134': 'componentes/asientos',              // COLLARES DE ASIENTO
-  '79': 'componentes/asientos',               // FUNDAS ASIENTO
-  '839': 'componentes/horquillas',            // REPUESTOS PARA HORQUILLAS
-  '132': 'componentes/pedales-y-trabas',      // CALAS / TRABAS
-  '122': 'accesorios/infladores-y-herramientas', // HERRAMIENTAS
-  '1209': 'accesorios/infladores-y-herramientas', // INFLADORES
-  '1208': 'accesorios/fanttik',               // ASPIRADORAS
-  '788': 'accesorios/ciclocomputadoras-y-gps', // POTENCIOMETROS
-  '191': 'indumentaria/jerseys-y-calzas',     // CALZAS
-  '193': 'indumentaria/camperas',             // CHALECOS
-  // La RAÍZ `LÍQUIDOS` desaparece del árbol (TALLER la absorbe) pero sigue siendo una categoría con
-  // productos propios en Woo, no sólo un contenedor: sin esta línea sus modelos quedaban sin clasificar y
-  // nada protestaba. Lo encontró el chequeo de que las 82 categorías tengan destino.
-  '59': 'taller',                             // LÍQUIDOS
+export const MAPEO_WOO: Record<string, string> = {
+  '26': 'horquillas',                  // HORQUILLAS
+  '27': 'zapatillas',                  // ZAPATILLAS
+  '30': 'asientos',                    // ASIENTOS
+  '57': 'accesorios',                  // ACCESORIOS
+  '59': 'taller',                      // LÍQUIDOS
+  '60': 'componentes',                 // COMPONENTES Y REPUESTOS
+  '61': 'indumentaria',                // INDUMENTARIA Y CALZADO
+  '62': 'bicicletas',                  // BICICLETAS POR MARCA
+  '65': 'soportes-y-estacionamiento',  // SOPORTES Y ESTACIONAMIENTO
+  '66': 'portabicicletas',             // PORTABICICLETAS
+  '67': 'rodillos',                    // RODILLOS DE ENTRENAMIENTO
+  '68': 'luces-y-seguridad',           // LUCES Y SEGURIDAD
+  '69': 'ciclocomputadoras-y-gps',     // CICLOCOMPUTADORAS Y GPS
+  '70': 'infladores-y-herramientas',   // INFLADORES Y HERRAMIENTAS
+  '71': 'hidratacion',                 // HIDRATACIÓN
+  '74': 'bolsos',                      // BOLSOS
+  '75': 'cintas-y-punos',              // CINTAS Y PUÑOS
+  '79': 'asientos',                    // FUNDAS ASIENTO
+  '82': 'porta-objetos',               // PORTA OBJETOS
+  '95': 'frenos',                      // FRENOS
+  '96': 'cubiertas-y-camaras',         // ACCESORIOS TUBELESS
+  '105': 'ruedas',                      // EJES PASANTES
+  '107': 'ruedas',                      // MAZAS
+  '108': 'transmision',                 // FUSIBLES
+  '114': 'lubricantes',                 // LUBRICANTES
+  '115': 'grasas',                      // GRASAS
+  '116': 'selladores',                  // SELLADORES/ANTIPINCHADURAS
+  '117': 'limpiadores',                 // LIMPIADORES/DESENGRASANTES
+  '119': 'cubiertas-y-camaras',         // CUBIERTAS
+  '120': 'pedales-y-trabas',            // PEDALES Y TRABAS
+  '121': 'cuadros',                     // CUADROS
+  '122': 'infladores-y-herramientas',   // HERRAMIENTAS
+  '126': 'cubiertas-y-camaras',         // CAMARAS
+  '127': 'ruedas',                      // RUEDAS
+  '129': 'asientos',                    // PORTASILLAS
+  '130': 'direccion',                   // MANUBRIOS
+  '131': 'direccion',                   // STEMS/AVANCES
+  '132': 'pedales-y-trabas',            // CALAS / TRABAS
+  '134': 'asientos',                    // COLLARES DE ASIENTO
+  '135': 'transmision',                 // SHIFTERS
+  '138': 'venzo',                       // BICICLETAS VENZO
+  '140': 'topmega',                     // BICICLETAS TOPMEGA
+  '142': 'volta',                       // BICICLETAS VOLTA
+  '144': 'sava',                        // BICICLETAS SAVA
+  '145': 'zion',                        // BICICLETAS ZION
+  '185': 'guantes',                     // GUANTES
+  '189': 'lentes',                      // LENTES
+  '190': 'camperas',                    // CAMPERAS Y ROMPEVIENTOS
+  '191': 'jerseys-y-calzas',            // CALZAS
+  '192': 'jerseys-y-calzas',            // JERSEYS Y CALZAS
+  '193': 'camperas',                    // CHALECOS
+  '196': 'piernas',                     // PIERNAS
+  '197': 'remeras',                     // REMERAS
+  '199': 'mangas',                      // MANGAS
+  '200': 'cuellos-multiuso',            // CUELLOS MULTIUSO
+  '202': 'medias',                      // MEDIAS
+  '205': 'cascos',                      // CASCOS
+  '343': 'services',                    // SERVICES
+  '715': 'liquidos-de-frenos',          // LIQUIDOS DE FRENOS
+  '788': 'ciclocomputadoras-y-gps',     // POTENCIOMETROS
+  '839': 'horquillas',                  // REPUESTOS PARA HORQUILLAS
+  '840': 'mafia-bikes',                 // BICICLETAS MAFIA BIKES
+  '997': 'twitter',                     // BICICLETAS TWITTER
+  '1012': 'polygon',                     // BICICLETAS POLYGON
+  '1036': 'gravity',                     // BICICLETAS GRAVITY
+  '1112': 'trek',                        // BICICLETAS TREK
+  '1144': 'camaras-deportivas',          // CÁMARAS DEPORTIVAS
+  '1152': 'haven',                       // BICICLETAS HAVEN
+  '1205': 'fanttik',                     // FANTTIK
+  '1208': 'fanttik',                     // ASPIRADORAS
+  '1209': 'infladores-y-herramientas',   // INFLADORES
+  '1224': 'sars',                        // BICICLETAS SARS
+  '1230': 'gorros',                      // GORROS
+  '1472': 'transmision',                 // TRANSMISIÓN
+  '1477': 'cubiertas-y-camaras',         // Cubiertas y Cámaras
+  '1518': 'taller',                      // Taller
+  '1524': 'schwinn',                     // BICICLETAS SCHWINN
+  '1538': 'infantiles',                  // BICICLETAS INFANTILES
 };
 
 /** Categorías de Woo que quedan FUERA del árbol por decisión: sus modelos van a clasificar a mano. */
@@ -113,7 +176,4 @@ export const FUERA_DEL_ARBOL: Record<string, string> = {
   '1459': 'OTROS sale del árbol; su producto se clasifica a mano',
   '260': 'QR PAGOS sale del árbol; su producto se clasifica a mano',
   '389': 'SMARTWATCH sale del árbol; su producto se clasifica a mano',
-  '343': 'SERVICES se mapea al nodo de servicios bajo TALLER',
-  '1518': 'Taller es la raíz TALLER del árbol propio',
-  '1205': 'FANTTIK es marca Y nodo: se mapea al nodo accesorios/fanttik',
 };
