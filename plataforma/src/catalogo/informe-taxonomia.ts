@@ -215,10 +215,48 @@ export interface Cobertura {
   sinCategoriaUtil: number;   // ningún categoria_canal capturado
   variasCandidatas: number;   // más de un valor distinto de categoria_canal
   soloMarcaOColeccion: number; // su(s) categoria_canal caen todos en grupo marca/colección, ninguno en taxonomía
-  contradictoriosEntreCanales: number; // categoria_canal de Woo y de ML capturados, y no están relacionados
+  contradictoriosEntreCanales: number; // categoria_canal de Woo y de ML capturados, y no están relacionados por NOMBRE
+  // ── Desglose de los modelos publicados en AMBOS canales (`entreCanales`). PUENTE PROVISORIO ──────────────
+  // Las tres clases son excluyentes, con precedencia nombre > granularidad > contradicción, y suman exacto
+  // `entreCanales`. `contradictoriosEntreCanales` = compatiblesPorGranularidad + contradiccionesReales.
+  // Este criterio (nombres + ancestros del canal) es un puente hasta que las categorías de los dos canales
+  // estén mapeadas al árbol propio (`taxonomy_channel_map`): entonces «¿coinciden?» es «¿caen en el mismo
+  // nodo?», exacto, y esto se retira. No lo extiendas: se reemplaza.
+  entreCanales: number;
+  relacionadosPorNombre: number;
+  compatiblesPorGranularidad: number;
+  contradiccionesReales: number;
+  /** Categorías usadas cuya cadena de ancestros se cortó (padre ausente, ciclo o tope): su clase 1 puede estar subcontada. */
+  cadenasIncompletas: number;
+  /** Las contradicciones reales de mayor a menor cantidad de modelos, acotada. */
+  muestraContradicciones: Array<{ woo: string; ml: string; modelos: number }>;
 }
 
-interface FilaCategoriaModelo { modelId: string; canal: string; valor: string }
+/** Tope de saltos al subir por `parent_externo`: los datos vienen del canal y no se asume que no hay ciclos. */
+export const TOPE_SALTOS = 32;
+const MUESTRA_CONTRADICCIONES = 20;
+
+/**
+ * Nombres de los ANCESTROS de una categoría (sin ella misma), del padre hacia la raíz. `incompleta` si se cortó
+ * antes de llegar a una raíz: padre inexistente en la tabla, ciclo, o más de TOPE_SALTOS.
+ */
+export function ancestrosDe(
+  id: string, padres: Map<string, { parent: string | null; nombre: string }>, tope = TOPE_SALTOS,
+): { nombres: string[]; incompleta: boolean } {
+  const nombres: string[] = []; const visto = new Set<string>([id]);
+  let actual = padres.get(id)?.parent ?? null;
+  while (actual !== null) {
+    if (visto.has(actual) || nombres.length >= tope) return { nombres, incompleta: true };
+    visto.add(actual);
+    const fila = padres.get(actual);
+    if (!fila) return { nombres, incompleta: true };
+    nombres.push(fila.nombre);
+    actual = fila.parent;
+  }
+  return { nombres, incompleta: false };
+}
+
+interface FilaCategoriaModelo { modelId: string; canal: string; valor: string; crudo: string }
 
 /**
  * Cuenta, no abre casos (igual criterio que el informe del tramo 2). `clasificacionPorNombre` es la
@@ -243,7 +281,18 @@ export async function medirCobertura(
        JOIN catalog.external_representations r ON r.id = a.representation_id
       WHERE m.company_id = $1 AND a.nombre_normalizado = 'categoria_canal' AND a.vigente_hasta IS NULL
         AND m.archivado_en IS NULL AND r.archivado_en IS NULL`,
-    [empresa])).rows.map((f) => ({ ...f, valor: enNombre(f.valor, nombres) }));
+    [empresa])).rows.map((f) => ({ ...f, crudo: f.valor, valor: enNombre(f.valor, nombres) }));
+
+  const padres = new Map((await tx.query<{ id_externo: string; parent_externo: string | null; nombre: string }>(
+    `SELECT id_externo, parent_externo, nombre FROM catalog.channel_categories
+      WHERE company_id = $1 AND vigente_hasta IS NULL`, [empresa])).rows
+    .map((c) => [c.id_externo, { parent: c.parent_externo, nombre: c.nombre }] as const));
+  const incompletas = new Set<string>();
+  const ancestros = (id: string): string[] => {
+    const r = ancestrosDe(id, padres);
+    if (r.incompleta) incompletas.add(id);
+    return r.nombres;
+  };
 
   const porModelo = new Map<string, FilaCategoriaModelo[]>();
   for (const f of filas) {
@@ -252,7 +301,9 @@ export async function medirCobertura(
     porModelo.set(f.modelId, lista);
   }
 
-  let variasCandidatas = 0; let soloMarcaOColeccion = 0; let contradictoriosEntreCanales = 0;
+  let variasCandidatas = 0; let soloMarcaOColeccion = 0;
+  let entreCanales = 0; let relacionadosPorNombre = 0; let compatiblesPorGranularidad = 0; let contradiccionesReales = 0;
+  const pares = new Map<string, { woo: string; ml: string; modelos: number }>();
   for (const lista of porModelo.values()) {
     const valoresUnicos = new Set(lista.map((f) => f.valor));
     if (valoresUnicos.size > 1) variasCandidatas++;
@@ -261,17 +312,41 @@ export async function medirCobertura(
     if (grupos.length > 0 && grupos.every((g) => g !== 'taxonomia')) soloMarcaOColeccion++;
 
     const porCanal = new Map<string, Set<string>>();
+    const crudoDe = new Map<string, string>(); // nombre → id crudo, para subir la cadena de ancestros
     for (const f of lista) {
       const s = porCanal.get(f.canal) ?? new Set<string>();
       s.add(f.valor);
       porCanal.set(f.canal, s);
+      crudoDe.set(f.valor, f.crudo);
     }
     if (porCanal.size > 1) {
       const [canalA, canalB] = [...porCanal.keys()];
       const valoresA = [...porCanal.get(canalA!)!];
       const valoresB = [...porCanal.get(canalB!)!];
-      const relacionados = valoresA.some((va) => valoresB.some((vb) => valoresRelacionados(va, vb)));
-      if (!relacionados) contradictoriosEntreCanales++;
+      entreCanales++;
+      // Clase 2 — relacionadas por NOMBRE. «Alguna contra alguna»: basta un par (una de cada canal).
+      if (valoresA.some((va) => valoresB.some((vb) => valoresRelacionados(va, vb)))) {
+        relacionadosPorNombre++;
+        continue;
+      }
+      // Clase 1 — mismo producto a distinta granularidad: el NOMBRE de una categoría relaciona con algún
+      // ANCESTRO de la del otro canal, en cualquier sentido. Categoría contra cadena, NUNCA cadena contra
+      // cadena: dos categorías que sólo comparten un ancestro genérico («Ciclismo») son parientes, no la misma.
+      // Misma regla «alguna contra alguna» que la clase 2.
+      const ancDe = (v: string) => ancestros(crudoDe.get(v)!);
+      const compatible = valoresA.some((va) => valoresB.some((vb) =>
+        ancDe(vb).some((n) => valoresRelacionados(va, n)) || ancDe(va).some((n) => valoresRelacionados(vb, n))));
+      if (compatible) { compatiblesPorGranularidad++; continue; }
+      // Clase 3 — ni por nombre ni subiendo la cadena.
+      contradiccionesReales++;
+      if (porCanal.has('woocommerce') && porCanal.has('mercadolibre')) {
+        const woo = [...porCanal.get('woocommerce')!].sort().join(' + ');
+        const ml = [...porCanal.get('mercadolibre')!].sort().join(' + ');
+        const k = `${woo}\u0000${ml}`;
+        const p = pares.get(k) ?? { woo, ml, modelos: 0 };
+        p.modelos++;
+        pares.set(k, p);
+      }
     }
   }
 
@@ -280,7 +355,12 @@ export async function medirCobertura(
     sinCategoriaUtil: totalModelos - porModelo.size,
     variasCandidatas,
     soloMarcaOColeccion,
-    contradictoriosEntreCanales,
+    contradictoriosEntreCanales: compatiblesPorGranularidad + contradiccionesReales,
+    entreCanales, relacionadosPorNombre, compatiblesPorGranularidad, contradiccionesReales,
+    cadenasIncompletas: incompletas.size,
+    muestraContradicciones: [...pares.values()]
+      .sort((a, b) => b.modelos - a.modelos || a.woo.localeCompare(b.woo) || a.ml.localeCompare(b.ml))
+      .slice(0, MUESTRA_CONTRADICCIONES),
   };
 }
 
