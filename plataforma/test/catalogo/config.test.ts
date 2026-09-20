@@ -214,7 +214,7 @@ function delEsquema(re: RegExp): string[] {
 function deLista(nombre: string): string[] {
   const m = new RegExp(`const ${nombre} = \\[([^\\]]*)\\]`, 's').exec(fuenteConfig());
   if (!m) throw new Error(`no encontré la lista ${nombre} en config.ts`);
-  return [...m[1]!.matchAll(/'([A-Z0-9_]+)'/g)].map((x) => x[1]).filter((x): x is string => x !== undefined);
+  return [...m[1]!.matchAll(/['"]([A-Z0-9_]+)['"]/g)].map((x) => x[1]).filter((x): x is string => x !== undefined);
 }
 
 /**
@@ -225,10 +225,11 @@ function deLista(nombre: string): string[] {
 function bloqueServicio(servicio: string): string {
   const compose = readFileSync(new URL('../../deploy/compose.yml', import.meta.url), 'utf8');
   const lineas = compose.split('\n');
-  const desde = lineas.findIndex((l) => l === `  ${servicio}:`);
+  const esClave = (l: string) => /^ {2}["'\w]/.test(l); // una clave, no un comentario a dos espacios
+  const desde = lineas.findIndex((l) => new RegExp(`^ {2}["']?${servicio}["']?:`).test(l));
   if (desde === -1) throw new Error(`no encontré el servicio ${servicio} en compose.yml`);
   const resto = lineas.slice(desde + 1);
-  const hasta = resto.findIndex((l) => /^ {2}\S/.test(l));
+  const hasta = resto.findIndex(esClave);
   return (hasta === -1 ? resto : resto.slice(0, hasta)).join('\n');
 }
 
@@ -239,7 +240,10 @@ describe('E2-CFG-03 compose declara las variables de cada grupo en su servicio',
       // Si el regex o la lista dejan de matchear, esto falla en vez de pasar en verde sobre cero variables.
       expect(variables.length).toBeGreaterThanOrEqual(2);
       const bloque = bloqueServicio(g.servicio);
-      expect(variables.filter((v) => !bloque.includes(`${v}: \${${v}`))).toEqual([]);
+      // Línea ACTIVA: `includes` a secas aceptaba `# VAR: ${VAR}` comentada, o sea una variable
+      // desactivada. Verificado por mutación: comentarla dejaba el test en verde.
+      const declarada = (v: string) => new RegExp(`^ +${v}: \\$\\{${v}[:}]`, 'm').test(bloque);
+      expect(variables.filter((v) => !declarada(v))).toEqual([]);
     });
   }
 });

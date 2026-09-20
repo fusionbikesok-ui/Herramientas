@@ -55,6 +55,12 @@ describe('configuración', () => {
     // arranque no diría nada. Degradar el transporte en silencio es peor que no arrancar.
     const { SMTP_SEGURO: _sinTls, ...sinSeguro } = informes;
     expect(() => cargarConfig({ ...env, ...sinSeguro }, leer)).toThrow(/SMTP_SEGURO/);
+    // Y su VALOR se valida: exigirla sin mirar qué trae dejaba abierta la misma degradación por la
+    // puerta del typo. 'TRUE', '1' o 'tru' se volvían `false` en silencio.
+    for (const malo of ['TRUE', '1', 'tru', 'yes', ' true']) {
+      expect(() => cargarConfig({ ...env, ...informes, SMTP_SEGURO: malo }, leer)).toThrow(/SMTP_SEGURO/);
+    }
+    expect(cargarConfig({ ...env, ...informes, SMTP_SEGURO: 'false' }, leer).informes!.smtp.seguro).toBe(false);
     expect(() => cargarConfig({ ...env, ...informes }, () => '  ')).toThrow(/vacío/);
   });
 

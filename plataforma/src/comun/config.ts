@@ -70,13 +70,25 @@ export class ErrorConfig extends Error { override name = 'ErrorConfig'; }
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const CAMPOS_SENALES = ['SENALES_KEYRING_FILE', 'SENALES_CUENTAS', 'SENALES_ORIGENES'] as const;
 const CAMPOS_BARRIDOS = ['BARRIDOS_REGISTRO_FILE', 'BARRIDOS_KEYRING_FILE'] as const;
+/**
+ * Un booleano de entorno que sólo acepta 'true' o 'false'. Con `x === 'true'` a secas, un `TRUE`, un `1`
+ * o un `tru` se vuelven `false` sin que nadie se entere: la misma degradación silenciosa que motivó poner
+ * `SMTP_SEGURO` entre los campos obligatorios, pero por la puerta del typo en vez de la de la omisión.
+ */
+function booleanoEstricto(nombre: string, valor: string): boolean {
+  if (valor !== 'true' && valor !== 'false') {
+    throw new ErrorConfig(`${nombre} inválida: se espera 'true' o 'false', no ${JSON.stringify(valor)}`);
+  }
+  return valor === 'true';
+}
+
 const CAMPOS_INFORMES = [
   'INFORMES_CLAVE_FIRMA_FILE', 'INFORMES_PENDIENTES_DIR', 'INFORMES_CLAVE_PUBLICA_UBICACION',
   'B2_ENDPOINT', 'B2_REGION', 'B2_BUCKET',
   'B2_ESCRITURA_ID_FILE', 'B2_ESCRITURA_CLAVE_FILE', 'B2_LECTURA_ID_FILE', 'B2_LECTURA_CLAVE_FILE',
-  // `SMTP_SEGURO` va en la lista aunque tenga un default implícito: se consume como
-  // `env.SMTP_SEGURO === 'true'`, así que si falta el correo sale SIN TLS y el arranque no protesta.
-  // Una omisión de despliegue degradaría el transporte en silencio, que es peor que no arrancar.
+  // `SMTP_SEGURO` es obligatoria y además se valida su VALOR (`booleanoEstricto`): si faltara, o si
+  // trajera un typo, el correo saldría sin TLS y el arranque no protestaría. Degradar el transporte en
+  // silencio es peor que no arrancar.
   'SMTP_HOST', 'SMTP_PUERTO', 'SMTP_SEGURO', 'SMTP_USUARIO_FILE', 'SMTP_CLAVE_FILE', 'SMTP_DESDE', 'INFORMES_PARA',
 ] as const;
 
@@ -185,7 +197,7 @@ function leerInformes(env: Record<string, string | undefined>, leerArchivo: (rut
       lectura: { id: secreto('B2_LECTURA_ID_FILE'), clave: secreto('B2_LECTURA_CLAVE_FILE') },
     },
     smtp: {
-      host: env.SMTP_HOST!, puerto, seguro: env.SMTP_SEGURO === 'true',
+      host: env.SMTP_HOST!, puerto, seguro: booleanoEstricto('SMTP_SEGURO', env.SMTP_SEGURO!),
       usuario: secreto('SMTP_USUARIO_FILE'), clave: secreto('SMTP_CLAVE_FILE'),
       desde: env.SMTP_DESDE!, para: env.INFORMES_PARA!,
     },
