@@ -260,3 +260,40 @@ automáticamente.
 explícita: `INFLADORES` (1209) se absorbe en `INFLADORES Y HERRAMIENTAS` y `ASPIRADORAS` (1208) en `FANTTIK`,
 así que **un inflador Fanttik no aparece navegando el nodo FANTTIK**. Se encuentra por el rubro o filtrando
 por marca, que es el eje que para eso existe. No se hace una excepción a los dos niveles.
+
+## D8 — «Bicicletas Convencionales» de ML va al nodo RAÍZ (20/09)
+
+ML mete 460 bicicletas (el 17% del catálogo) en una sola categoría y el árbol propio las separa en 15 nodos
+por marca. Un mapeo apunta a UN nodo, así que no hay destino evidente. **Decisión de José: la categoría de ML
+cae en la raíz `BICICLETAS POR MARCA` y la marca la resuelve el atributo de marca del modelo.** Es la misma
+regla de D6 y D7: lo fino se resuelve por atributo y faceta, no multiplicando nodos. Consecuencia aceptada:
+el nodo raíz queda con producto directo, no sólo con hijas.
+
+## D9 — las diez primeras categorías de ML, aprobadas en bloque (20/09)
+
+`Cubiertas de Bicicleta → Cubiertas y Cámaras`, `Cascos → CASCOS`, `Zapatillas de Ciclismo → ZAPATILLAS`,
+`Lubricantes → LUBRICANTES`, `Lentes para Ciclismo → LENTES`, `Ciclocomputadoras → CICLOCOMPUTADORAS Y GPS`,
+`Pedales → PEDALES Y TRABAS`, `Luces → LUCES Y SEGURIDAD`, `Piñones → TRANSMISIÓN`, más D8. Con esas diez
+queda decidida **la mitad del catálogo** (51% medido sobre los pares modelo-categoría). Las 20 siguientes,
+que llevan al 80%, se le presentan aparte.
+
+`Piñones → TRANSMISIÓN` colapsa a propósito la granularidad de ML: por D7 el nivel de detalle vive en los
+atributos, no en el árbol. Es también lo que va a bajar las 309 «contradicciones reales» del informe, que hoy
+son casi todas este mismo colapso visto desde el otro lado.
+
+## D10 — los nodos sin producto se publican vacíos (20/09)
+
+Siete nodos no tienen ninguna categoría de Woo: SANTINI, BICICLETAS REMBRANDT, BUZOS, CUERNITOS, CUBRE VAINA,
+PORTA CELULAR y SILLAS TRASERAS. **Se publican igual.** No mostrar un nodo vacío es una regla de la vidriera,
+no del árbol: el árbol dice qué existe como categoría, y que hoy no haya mercadería es un estado del stock.
+Deuda que esto crea, anotada: el menú tiene que saber no ofrecer un nodo sin producto.
+
+## D11 — publicar la versión 2 (20/09)
+
+José pidió el comando. Se escribió `scripts/catalogo-arbol-publicar.mjs` en vez de un UPDATE a mano, porque es
+la primera acción del tramo que cambia lo que el sistema hace y hay una sola forma de romper algo acá:
+`taxonomy_channel_map` apunta al NODO, que vive fuera de la versión, así que publicar una versión que no
+contenga un nodo mapeado deja el mapeo apuntando a la nada y los modelos de esa categoría sin clasificar, en
+silencio. El script lo verifica, exige el id de versión explícito (nunca «el último borrador»), comprueba que
+los 65 nodos se alcancen desde una raíz y es dry-run por default. Verificado read-only antes de entregarlo:
+65 alcanzables de 65, 6 raíces, 0 mapeos colgados, Woo 78 de 82 decididas, ML 0 de 206.
