@@ -61,16 +61,22 @@ export interface LectorBootstrap {
   unaPagina(c: CuentaBootstrap): Promise<ResultadoPagina>;
 }
 
-const TOPE_BACKOFF_429_MS = 900_000;
+/*
+ * Tope del backoff por 429. Tres minutos, no los 900_000 ms del backoff de señales: ML manda
+ * `Retry-After: 60` y suelta el cupo por ventanas que se abren solas, así que un tope alto hace perder la
+ * ventana en vez de proteger a nadie. Medido el 2026-09-20: con el tope en 900_000, a la sexta cesión el
+ * ciclo se dormía 16 min y podía perderse una ventana abierta a los 3.
+ */
+const TOPE_BACKOFF_429_MS = 180_000;
 
 /**
  * El ciclo del bootstrap: una página por vuelta, de la primera cuenta que no terminó. Si cede (señales de ML
  * esperando o un 429) espera antes de la próxima, para no insistir sobre un cupo que ya está usado. Cuando
  * todas terminan, lo avisa y se detiene: el bootstrap corre una vez por cuenta, para siempre.
  *
- * `cedio_429` es el único caso con backoff exponencial (base `esperaCedido`, tope 900_000 ms, igual que el
- * backoff de señales en `senales-cola.ts`): el canal no tiene cupo, e insistir a ritmo fijo alimenta su
- * propio 429 sin ganar nada. El contador de cesiones consecutivas es POR CUENTA — dos cuentas en cesión no
+ * `cedio_429` es el único caso con backoff exponencial (base `esperaCedido`, tope `TOPE_BACKOFF_429_MS`):
+ * el canal no tiene cupo, e insistir a ritmo fijo alimenta su propio 429 sin ganar nada. El contador de
+ * cesiones consecutivas es POR CUENTA — dos cuentas en cesión no
  * comparten el mismo contador, y una cuenta que avanza no afecta el backoff de otra. Si ML manda
  * `Retry-After`, ese valor es un piso: nunca se reintenta antes de lo que el canal pidió, aunque el backoff
  * calculado sea menor.

@@ -72,12 +72,12 @@ describe('iniciarCicloBootstrap — backoff de cedio_429', () => {
     expect(esperas).toEqual([10_000, 20_000, 10_000]);
   });
 
-  it('el backoff no supera el tope de 900_000 ms aunque haya muchas cesiones seguidas', async () => {
+  it('el backoff no supera el tope de 180_000 ms aunque haya muchas cesiones seguidas', async () => {
     const respuestas: ResultadoPagina[] = Array.from({ length: 8 }, (_, i) => ({ estado: 'cedio_429', detalle: `HTTP_429 ${i}` }));
     const esperas = await correr(lectorFalso(respuestas), [cuenta('a')], 8, 60_000);
-    // 60_000 * 2^6 = 3_840_000 ya superaría el tope: a partir de ahí queda clavado en 900_000.
-    expect(Math.max(...esperas)).toBe(900_000);
-    expect(esperas.every((e) => e <= 900_000)).toBe(true);
+    // 60_000 * 2^2 = 240_000 ya superaría el tope: de la tercera cesión en adelante queda clavado en 180_000.
+    expect(Math.max(...esperas)).toBe(180_000);
+    expect(esperas.every((e) => e <= 180_000)).toBe(true);
   });
 
   it('respeta Retry-After como piso cuando pide más que el backoff calculado', async () => {
