@@ -1040,3 +1040,32 @@ está mal»: el informe sólo puede ver un error cuando dos canales opinan disti
 
 **Pendiente del lado de Woo, no nuestro:** D6 decidió renombrar la categoría 96 a `INSUMOS TUBELESS` y en Woo
 sigue llamándose `ACCESORIOS TUBELESS`. El mapeo es por id, así que el renombre no rompe nada cuando ocurra.
+
+## Suite completa verde, E2 tramo 3 cerrado (20/09 22:40)
+
+Corridas **en serie**, con el árbol de trabajo limpio, opt-2b detenida y ningún vitest vivo (el único
+`node.*server` era el PM2 `herramientas` de producción, que se dejó en paz):
+
+| | archivos | tests |
+|---|---|---|
+| plataforma | 64 | **607 verdes** |
+| legado | 155 (+1 salteado) | **2755 verdes** (+51 salteados) |
+
+`tsc -p plataforma/tsconfig.json` limpio. Duraciones: 132 s y 381 s.
+
+**Estado de E2 T3 al cierre.** Árbol propio publicado y vigente (65 nodos, 6 raíces); Woo mapeado completo
+(78 categorías, 4 fuera del árbol a propósito); ML al 80% del catálogo (29 categorías, 2 baldes registrados sin
+equivalencia con su motivo en la base); 663 de 942 modelos en ambos canales medidos exacto contra el árbol y 19
+conflictos, todos con decisión tomada o explicados. **`model_categories` = 0: nada se reclasificó.** Decisiones
+D1–D15 en el plan.
+
+**Deudas abiertas que dejó este tramo**, todas con su número:
+- 12 grasas en `LUBRICANTES` y 7 insumos tubeless en `SELLADORES`, a corregir a mano al clasificar (D12, D15).
+- 76 modelos en los dos baldes de ML, a clasificar por Woo o a mano (D13).
+- El menú tiene que saber no ofrecer un nodo sin producto: hay 7 vacíos (D10).
+- Las 4 categorías de Woo fuera del árbol viven sólo en el código; ahora que existe
+  `channel_category_sin_equivalencia` podrían registrarse con su motivo, y convendría.
+- El puente de nombres del informe cubre 279 modelos y **se retira** cuando ML esté mapeado del todo.
+- `ON CONFLICT` pelado en 5 módulos, 9 casos (`aplicar.ts`, `bootstrap.ts`, `copias.ts`, `decisiones.ts`,
+  `proyector.ts`), con E2-TAX-08 como guarda de encogimiento. Cada caso necesita que se determine el conflicto
+  buscado antes de tocarlo.
