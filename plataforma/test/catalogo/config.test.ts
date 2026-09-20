@@ -182,19 +182,64 @@ describe('E2-CFG-02 CATALOGO_COMPARAR_ATRIBUTOS', () => {
 });
 
 /*
- * E2-CFG-03 — la guarda que faltaba. El 2026-09-19 el catálogo quedó inencendible en producción porque
- * `compose.yml` no declaraba las variables `CATALOGO_*`: el worker arrancaba sano y no proyectaba nada.
- * El 2026-09-20, al desplegar el tramo 2, `CATALOGO_COMPARAR_ATRIBUTOS` repitió el mismo hueco. Tres
- * veces la misma clase de defecto sin un test que la vigile, así que acá está: toda variable `CATALOGO_*`
- * del esquema tiene que estar en el bloque `environment` del worker, o esto falla nombrándola.
+ * E2-CFG-03 — la guarda que faltaba, para los cuatro grupos y no sólo para uno.
+ *
+ * Historia del defecto: el 2026-09-19 el catálogo quedó inencendible en producción porque `compose.yml`
+ * no declaraba las variables `CATALOGO_*` — el worker arrancaba sano y no proyectaba nada. El 2026-09-20,
+ * al desplegar el tramo 2, `CATALOGO_COMPARAR_ATRIBUTOS` repitió el hueco. La primera versión de este
+ * test cubrió sólo `CATALOGO_*`, y una revisión externa marcó que el defecto es de CLASE y no de prefijo:
+ * `BARRIDOS_*`, `SENALES_*` e `INFORMES_*` tienen la misma forma y el mismo riesgo.
+ *
+ * Compose sólo le pasa al contenedor las variables que DECLARA, así que una variable ausente del bloque
+ * `environment` de su servicio no existe, por más que esté en `plataforma.env`.
+ *
+ * Las listas autoritativas son las del propio `config.ts` (`CAMPOS_BARRIDOS`, `CAMPOS_SENALES`,
+ * `CAMPOS_INFORMES` y las `CATALOGO_*` del esquema), no una copia acá: copiarlas dejaría que este test
+ * envejezca en silencio, que es justo el modo de falla que vino a cerrar.
  */
-describe('E2-CFG-03 compose declara todas las variables del catálogo', () => {
-  it('ninguna variable CATALOGO_* del esquema falta en el worker de compose.yml', () => {
-    const esquema = readFileSync(new URL('../../src/comun/config.ts', import.meta.url), 'utf8');
-    const compose = readFileSync(new URL('../../deploy/compose.yml', import.meta.url), 'utf8');
-    const delEsquema = [...esquema.matchAll(/^\s{2}(CATALOGO_[A-Z_]+):/gm)].map((m) => m[1]);
-    expect(delEsquema.length).toBeGreaterThan(5); // si el regex deja de matchear, que no pase en verde
-    const ausentes = delEsquema.filter((v) => !compose.includes(`${v}: \${${v}`));
-    expect(ausentes).toEqual([]);
-  });
+const GRUPOS: { nombre: string; servicio: string; variables: () => string[] }[] = [
+  { nombre: 'CATALOGO_*', servicio: 'worker', variables: () => delEsquema(/^\s{2}(CATALOGO_[A-Z_]+):/gm) },
+  { nombre: 'CAMPOS_BARRIDOS', servicio: 'worker', variables: () => deLista('CAMPOS_BARRIDOS') },
+  { nombre: 'CAMPOS_SENALES', servicio: 'api', variables: () => deLista('CAMPOS_SENALES') },
+  { nombre: 'CAMPOS_INFORMES', servicio: 'scheduler', variables: () => deLista('CAMPOS_INFORMES') },
+];
+
+const fuenteConfig = () => readFileSync(new URL('../../src/comun/config.ts', import.meta.url), 'utf8');
+
+function delEsquema(re: RegExp): string[] {
+  return [...fuenteConfig().matchAll(re)].map((m) => m[1]).filter((x): x is string => x !== undefined);
+}
+
+/** Los nombres de una lista `const CAMPOS_X = [...] as const;` de config.ts. */
+function deLista(nombre: string): string[] {
+  const m = new RegExp(`const ${nombre} = \\[([^\\]]*)\\]`, 's').exec(fuenteConfig());
+  if (!m) throw new Error(`no encontré la lista ${nombre} en config.ts`);
+  return [...m[1]!.matchAll(/'([A-Z0-9_]+)'/g)].map((x) => x[1]).filter((x): x is string => x !== undefined);
+}
+
+/**
+ * El bloque de un servicio en compose.yml: desde `  nombre:` hasta la próxima clave de dos espacios.
+ * Se corta por indentación porque lo que importa es que la variable esté en el bloque de SU servicio;
+ * declararla en otro no sirve de nada.
+ */
+function bloqueServicio(servicio: string): string {
+  const compose = readFileSync(new URL('../../deploy/compose.yml', import.meta.url), 'utf8');
+  const lineas = compose.split('\n');
+  const desde = lineas.findIndex((l) => l === `  ${servicio}:`);
+  if (desde === -1) throw new Error(`no encontré el servicio ${servicio} en compose.yml`);
+  const resto = lineas.slice(desde + 1);
+  const hasta = resto.findIndex((l) => /^ {2}\S/.test(l));
+  return (hasta === -1 ? resto : resto.slice(0, hasta)).join('\n');
+}
+
+describe('E2-CFG-03 compose declara las variables de cada grupo en su servicio', () => {
+  for (const g of GRUPOS) {
+    it(`${g.nombre} está completo en el servicio ${g.servicio}`, () => {
+      const variables = g.variables();
+      // Si el regex o la lista dejan de matchear, esto falla en vez de pasar en verde sobre cero variables.
+      expect(variables.length).toBeGreaterThanOrEqual(2);
+      const bloque = bloqueServicio(g.servicio);
+      expect(variables.filter((v) => !bloque.includes(`${v}: \${${v}`))).toEqual([]);
+    });
+  }
 });

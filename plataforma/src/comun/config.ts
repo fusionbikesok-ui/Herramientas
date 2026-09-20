@@ -74,7 +74,10 @@ const CAMPOS_INFORMES = [
   'INFORMES_CLAVE_FIRMA_FILE', 'INFORMES_PENDIENTES_DIR', 'INFORMES_CLAVE_PUBLICA_UBICACION',
   'B2_ENDPOINT', 'B2_REGION', 'B2_BUCKET',
   'B2_ESCRITURA_ID_FILE', 'B2_ESCRITURA_CLAVE_FILE', 'B2_LECTURA_ID_FILE', 'B2_LECTURA_CLAVE_FILE',
-  'SMTP_HOST', 'SMTP_PUERTO', 'SMTP_USUARIO_FILE', 'SMTP_CLAVE_FILE', 'SMTP_DESDE', 'INFORMES_PARA',
+  // `SMTP_SEGURO` va en la lista aunque tenga un default implícito: se consume como
+  // `env.SMTP_SEGURO === 'true'`, así que si falta el correo sale SIN TLS y el arranque no protesta.
+  // Una omisión de despliegue degradaría el transporte en silencio, que es peor que no arrancar.
+  'SMTP_HOST', 'SMTP_PUERTO', 'SMTP_SEGURO', 'SMTP_USUARIO_FILE', 'SMTP_CLAVE_FILE', 'SMTP_DESDE', 'INFORMES_PARA',
 ] as const;
 
 const Esquema = z.object({
