@@ -985,3 +985,40 @@ ciclismo (`Jersey Ciclismo Funkier`, `Primera Piel Santini`, `BASE LAYER`) y el 
 también dice «ciclista». Coincide con dónde ya están en Woo.
 
 Con las 21 nuevas categorías el catálogo queda mapeado al **80%** desde el 51%.
+
+## Las 29 categorías de ML mapeadas: el 80% del catálogo (E2 T3, 20/09)
+
+Verificado en producción: 29 mapeos vigentes de ML + 78 de Woo, 0 colgados, y las 2 categorías balde en
+`catalog.channel_category_sin_equivalencia` con su motivo y `decidido_por = jose`. `model_categories` sigue en
+0: nada se reclasificó todavía.
+
+**La migración 0017 existe porque `taxonomy_channel_map.sin_equivalencia` dice lo OPUESTO** de lo que yo
+supuse al dar la consigna: es «este NODO no tiene equivalente en el canal» (`node_id` obligatorio,
+`id_externo` NULL). Lo que faltaba era «esta CATEGORÍA del canal no equivale a ningún nodo». Sin esa tabla,
+«no está mapeada» significa a la vez «todavía no se decidió» y «se decidió que no». Lo encontró opt-2b
+verificando en vez de obedecer. La tabla no necesita GRANT propio: 0013 dejó `ALTER DEFAULT PRIVILEGES … IN
+SCHEMA catalog` para `plataforma_app` (SELECT/INSERT/UPDATE, **sin DELETE**) — verificado en producción, y era
+el único modo de que esto fallara en silencio, porque los tests habrían pasado igual.
+
+Se desplegó `build` + `migrate` **sin** recrear el worker: la migración es DDL aditiva y el script corre por
+fuera del contenedor, así que recrear un servicio en producción no aportaba nada.
+
+Efecto medido sobre los 942 modelos en ambos canales:
+
+| | antes (10 categorías) | ahora (29) |
+|---|---|---|
+| mismo nodo | 277 | **543** |
+| uno ancestro del otro | 95 | 101 |
+| nodos distintos | 14 | **19** |
+| sin nodo en algún canal | 556 | **279** |
+
+**663 de 942 se miden ahora exacto**, contra 386 antes, y el criterio provisorio bajó de 256 «contradicciones»
+a 96. Los 19 conflictos reales son sólo cuatro casos, todos interpretables:
+- `GRASAS → LUBRICANTES` (11) y `LIQUIDOS DE FRENOS → LUBRICANTES` (3): resueltos por D12, esperan la
+  corrección a mano de las 12 grasas al clasificar.
+- `Cubiertas y Cámaras → SELLADORES/ANTIPINCHADURAS` (4): son **cinta tubeless, válvulas y kits de
+  conversión**, no selladores. ML los puso en Selladores; Woo en ACCESORIOS TUBELESS. **Pendiente de José:
+  dónde viven los insumos tubeless, bajo Cubiertas y Cámaras o bajo TALLER junto a los selladores.**
+- `FRENOS → TRANSMISIÓN` (1): «Manijas Integradas Shimano Ef510 3x9v», que **es las dos cosas** — manija de
+  freno y shifter en una pieza. No es un error de nadie: es un producto que pertenece a dos nodos, y el caso
+  que justifica resolverlo por atributo y no por nodo (D6/D7).
