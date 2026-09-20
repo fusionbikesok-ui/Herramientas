@@ -36,6 +36,27 @@ export type SkuObservado =
    */
   | { estado: 'no_informado' };
 
+/** Un atributo del canal. `nombre` ya viene normalizado (ver `atributos.ts`); `valor` es un único valor. */
+export interface AtributoObservado { nombre: string; valor: string }
+
+/** Una imagen del canal. `orden` es su posición en la lista original, desde 0. */
+export interface ImagenObservada { url: string; orden: number }
+
+/**
+ * Lo comercial que el canal informa de ESTA representación. Es evidencia por canal, nunca del modelo ni de
+ * la variante (una variante puede estar en los dos canales con precios distintos). El GTIN tampoco decide
+ * identidades: se guarda y se muestra.
+ */
+export interface ComercialObservado {
+  precio?: number;
+  moneda?: string;
+  stock?: number;
+  gtin?: string;
+}
+
+/** Lo que el canal mandó, sin tocar: si la extracción cambia, se reproyecta desde acá sin volver al canal. */
+export interface CrudoObservado { atributos: unknown; comercial: unknown }
+
 export interface RepresentacionObservada {
   recurso: string;
   /** '' cuando no hay variación. Nunca null: ver la migración 0013. */
@@ -46,6 +67,14 @@ export interface RepresentacionObservada {
   estadoRemoto: string | null;
   /** Para Woo, el id del producto o de la variación que se vende: con él se arma FB-{ID_WOO}. */
   idWoo: string | null;
+  /**
+   * Los cuatro son opcionales y se omiten (no van vacíos) cuando el payload no trae nada: así lo que ya
+   * construye representaciones sigue igual.
+   */
+  atributos?: AtributoObservado[];
+  imagenes?: ImagenObservada[];
+  comercial?: ComercialObservado;
+  crudo?: CrudoObservado;
 }
 
 export interface Proyeccion {
