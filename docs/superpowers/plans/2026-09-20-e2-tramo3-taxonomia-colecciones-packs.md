@@ -89,6 +89,26 @@ categorías). **73 de 82 tienen padre y el árbol tiene 3 niveles**: lo que nues
 
 La evidencia cruda de la jerarquía quedó en `docs/superpowers/specs/e2/woo-categorias-2026-09-20.md`.
 
+### D5 — Los 4 solapamientos sin emparentar, cerrados por José (2026-09-20)
+
+Aparecieron recién con las 82 categorías de Woo importadas (`solapamientos.sinEmparentar` del informe). Son
+los únicos que la jerarquía del canal NO resolvía sola, y los cuatro eran la misma pregunta: manda el rubro o
+manda la marca/material.
+
+- **`INFLADORES Y HERRAMIENTAS` (70) engloba las dos cosas**, infladores y herramientas. Entonces
+  `INFLADORES` (1209), que hoy cuelga de `FANTTIK`, pasa a colgar de 70 — y no de `ACCESORIOS` como decía D2.
+  D2 queda corregida en esa mitad: de los dos hijos de FANTTIK, `ASPIRADORAS` (1208) va a `ACCESORIOS` (57) y
+  `INFLADORES` va a 70, porque hay un rubro que ya es exactamente su lugar.
+- **`ACCESORIOS TUBELESS` (96) está bien separado** colgando de `Cubiertas y Cámaras`: lo que está mal es el
+  nombre, que se parece a `ACCESORIOS` (57) sin tener nada que ver. Se renombra EN NUESTRO ÁRBOL; la categoría
+  de Woo no se toca (escribir en el canal no es parte de este tramo, y el mapeo va por id, no por nombre).
+- **`LIQUIDOS DE FRENOS` (715) se queda bajo `LÍQUIDOS` (59)**, no bajo `FRENOS` (95). Manda el tipo de
+  producto, no la función.
+- **`CÁMARAS DEPORTIVAS` (1144) son cámaras de acción** y no tienen relación con las de rueda: se queda en
+  `ACCESORIOS`. Y **`CAMARAS` (126) queda absorbida por `Cubiertas y Cámaras` (1477)**: no hay nodo propio de
+  cámaras en el árbol nuestro, y la categoría 126 del canal mapea al nodo `Cubiertas y Cámaras`.
+
+
 ## Estructura de archivos
 
 ```
