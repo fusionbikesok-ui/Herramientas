@@ -873,3 +873,32 @@ ninguna de las dos. En su lugar `asegurarMarca` falla con `ErrorMarca` ante un a
 del arreglo de entrada y una reorganización (invertir padre e hijo) no falla por un estado intermedio
 inválido. Los ciclos y el padre inexistente los rechaza la BASE, con tests que escriben por fuera del
 código para probar que la garantía no vive en TypeScript.
+
+## La asimetría de `categoria_canal` volvió a morder, del otro lado (E2 T3, 20/09)
+
+El desglose de granularidad del informe (`medirCobertura`, clases 1a/2/3) sube por la cadena de ancestros
+de `channel_categories`, que se indexa por `id_externo`. **Woo guarda `categoria_canal` como NOMBRE y ML
+como id**, así que la primera versión buscaba los 81 valores de Woo por nombre contra una tabla indexada
+por id: 0 aciertos, y la dirección Woo→ML del criterio era código muerto contra los datos reales. Medido:
+los 126 valores de ML existen como `id_externo`, los 81 de Woo **ninguno**.
+
+Y era **silencioso** porque `ancestrosDe` devolvía `incompleta: false` para un id que no estaba en el mapa:
+«raíz legítima» y «no la encontré» eran indistinguibles. El test lo tapaba porque su fixture usaba ids de
+Woo, que el canal no guarda — **un fixture cuya forma no es la de producción no prueba la función que
+corre**. Se arregló el aviso ANTES de la causa, para que el instrumento quede puesto.
+
+Ahora el valor se resuelve a id dentro de su canal (id directo, o nombre único), y un nombre que no
+resuelve o resuelve a varios ids vigentes no se adivina: suma a `cadenasIncompletas`. En producción hoy:
+0 ids repetidos entre canales, 0 nombres de Woo ambiguos, 0 valores sin resolver, así que
+`cadenasIncompletas: 0` es un cero real. `padres` sigue global por id a propósito: el cruce entre canales
+es imposible con Woo numérico y ML `MLA…`, y complicar el mapa por un riesgo medido en 0 no se paga.
+
+**Resultado: 942 modelos en ambos canales = 402 por nombre + 231 por granularidad + 309 contradicciones
+reales.** Las 309 encabezadas por `TRANSMISIÓN ~ Cadenas` (41), `Piñones` (38), `Plato Palanca` (29): o sea
+que siguen siendo granularidad, no error. El criterio es un **puente declarado en el código**; lo exacto
+llega cuando las categorías de los dos canales estén en `taxonomy_channel_map` y la pregunta sea «¿caen en
+el mismo nodo?». Tamaño de esa decisión: 126 categorías de ML en uso, **9 cubren el 50% de los modelos y
+30 el 80%**.
+
+Commits: `5d20734` (desglose), `4b2cb52` (los dos arreglos). Nada publicado: la versión 2 del árbol sigue
+en borrador, esperando que José mire los 65 nodos y los 78 mapeos.
