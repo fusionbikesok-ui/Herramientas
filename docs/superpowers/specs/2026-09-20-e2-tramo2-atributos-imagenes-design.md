@@ -138,7 +138,18 @@ normalización es **léxica y conservadora**: minúsculas, sin acentos, sin espa
 `diametro_de_rodado` quedan como dos atributos distintos, y unificarlos es decisión de negocio que pertenece a
 T3 o a E3.
 
-Un valor múltiple de Woo (`{"name":"Talle","option":"41, 42, 43, 44, 45"}`, que es real en el catálogo) se
+**Corrección del 2026-09-20 (hallazgo de `opt-2b`):** el ejemplo `{"name":"Talle","option":"41, 42, 43, 44, 45"}`
+sale de `catalogo_cache`, que es **la forma aplanada del legado**, no el payload crudo de Woo — `normalizarProductoWc`
+une los `options[]` de un producto variable con `", "` en un solo `option`, y hay un test del legado que lo fija
+(`test/modelos-producto.test.js`). El payload crudo trae `options[]` como arreglo en el padre y un `option` único
+en la variación. Por eso la regla `/,\s/` vale en las dos mitades **por razones distintas**: en el proyector en vivo
+protege los decimales de un valor único (`Largo: "117,5"`, que con `split(',')` se partiría en `117` y `5`) y no
+parte nada más, porque el padre ya viene en arreglo; en el backfill desde el caché, la coma+espacio es literalmente
+el separador que puso el legado, así que partir por ahí recupera los valores originales. Un `option` que ya trajera
+coma+espacio quedaría partido distinto entre backfill y proyector: es inevitable con el caché y se corrige cuando
+el proyector vuelve a observar el producto.
+
+Un valor múltiple (`{"name":"Talle","option":"41, 42, 43, 44, 45"}`, real en el caché del legado) se
 guarda **como cinco filas**, una por valor. Esto es la diferencia entre que el atributo sea consultable o sea
 un string opaco, y afecta al **22 % de los atributos** (110 de 500 en una muestra real).
 
