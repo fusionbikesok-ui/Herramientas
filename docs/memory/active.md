@@ -937,3 +937,51 @@ fuera del informe lo consumía: el único riesgo era humano, alguien leyendo un 
 antes. Un campo cuyo nombre sobrevive a tres significados es una trampa con antigüedad.
 
 Commits: `ea5d534` (publicador), `52eb474` (MAPEO_ML), `9a2d624` (comparación por nodo), `5fcd9a5` (renombre).
+
+## La regla «alguna contra alguna» escondía los desacuerdos reales (E2 T3, 20/09)
+
+Los números de la sección anterior (359 / 12 / 15) eran una aproximación mía por SQL que nunca aplicó la regla
+de ancestro. El informe real, con la regla acordada, dio **`nodosDistintos: 0`**: cero desacuerdos, con 14 que
+existían. Causa: **Woo etiqueta el padre Y la hija a la vez** (`TALLER` + `GRASAS`), así que con «basta que
+alguna categoría de un canal se relacione con alguna del otro», el `TALLER` de Woo resultaba ancestro del
+`LUBRICANTES` de ML y el par contaba como acuerdo. El desacuerdo verdadero quedaba tapado por el padre
+genérico que el propio canal agregó. Es la misma trampa que opt-2b había advertido para `ACCESORIOS` contra
+«Accesorios para Bicicletas», y la dejé pasar sin medirla; el defecto fue de la consigna, no del código.
+
+**Regla nueva: se comparan sólo las HOJAS de cada canal.** Antes de comparar se descarta todo nodo que sea
+ancestro propio de otro nodo del mismo canal y modelo. La categoría de un modelo es su nodo más específico; el
+padre que el canal agrega de paso no es información nueva y no puede servir de acuerdo. Verificado en
+producción, y coincide al dígito con una consulta SQL independiente:
+
+| de 942 modelos en ambos canales | |
+|---|---|
+| mismo nodo | 277 |
+| uno es ancestro del otro | 95 |
+| **nodos distintos** | **14** |
+| sin nodo en algún canal | 556 |
+
+Los 14 son `GRASAS → LUBRICANTES` (11) y `LIQUIDOS DE FRENOS → LUBRICANTES` (3), y nada más.
+
+Corolario que va a volver al clasificar: **1.296 modelos tienen más de una categoría candidata**, casi un
+tercio del catálogo, por este mismo hábito de Woo de etiquetar padre e hija. Clasificar tendrá que elegir la
+hoja, igual que acá.
+
+## D12–D14 — lubricantes, baldes de ML y jerseys (20/09)
+
+**D12.** Para José `LUBRICANTES` es específicamente lubricante de cadena, así que **una grasa no es un
+lubricante** y Woo tiene el nodo correcto. Su consecuencia esperada («entonces están mal cargados en ML») **no
+se puede ejecutar**: ML no tiene categoría de grasas ni de líquido de frenos — verificado contra
+`/categories/MLA371402`, público y sin token. Su `Lubricantes` es un balde con tres cosas que nuestro árbol
+separa. De los 89 modelos, 66 no están en Woo: por título, 49 son lubricante, **12 dicen «grasa»**, 5 dudosos.
+Decisión: mapear a `lubricantes` y **corregir esas 12 a mano al clasificar** (deuda anotada con su criterio de
+detección). Descartado mapear al padre `taller`, que no habría dejado nada mal pero habría bajado de nivel a 61.
+
+**D13.** `Otros Repuestos` (39) y `Productos no categorizados` (37) van **sin equivalencia**, con el motivo en
+la BASE y no sólo en el código: son baldes que significan «no sé», y mapearlos sería inventar información que
+ML no dio. No son «fuera del árbol»: están sin decidir del lado de ML, que es otra cosa.
+
+**D14.** `Camisetas y Remeras` → `jerseys-y-calzas`, decidido leyendo los 27 títulos: 26 son ropa técnica de
+ciclismo (`Jersey Ciclismo Funkier`, `Primera Piel Santini`, `BASE LAYER`) y el único que dice «urbana`
+también dice «ciclista». Coincide con dónde ya están en Woo.
+
+Con las 21 nuevas categorías el catálogo queda mapeado al **80%** desde el 51%.
