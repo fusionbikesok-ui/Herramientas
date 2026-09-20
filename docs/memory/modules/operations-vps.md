@@ -174,3 +174,28 @@ despliegue, incluso cuando no haya cambios de código. El estado transitorio va 
   ACL: `cp -a origen/. entrada/` o `rsync -a` sobre la raíz copian dueño/permisos de la carpeta y la
   rompen (pasó con el ensayo del 14/09). La Mac sube con `rsync -rt` (sin permisos). Borrar la clave al
   terminar la restauración.
+
+## Correr un script de `scripts/` contra PostgreSQL de producción
+
+Los scripts que escriben en PostgreSQL (`catalogo-atributos-backfill.mjs`,
+`catalogo-categorias-importar.mjs`, `catalogo-informe-taxonomia.mjs`, `revivir-senales.mjs`) **no leen
+`plataforma.env`** a propósito: esperar el entorno ya poblado es lo que evita que un script suelto
+pueda abrir el archivo de configuración del servicio. Por eso hay que pasárselo en la invocación:
+
+```
+cd /opt/fusionbikes/herramientas && PG_HOST=127.0.0.1 PG_PORT=5432 PG_DATABASE=plataforma \
+  PG_USER=plataforma_app PG_PASSWORD_FILE=/opt/fusionbikes/plataforma-prod/secretos/app-pass \
+  node scripts/<script>.mjs <argumentos>
+```
+
+`PG_PASSWORD_FILE` es una **ruta**: el secreto no pasa por la línea de comandos ni queda en el historial
+del shell. Los secretos viven en `/opt/fusionbikes/plataforma-prod/secretos/` (`app-pass` para el rol de
+la aplicación, `migrador-pass` para el migrador, que un script no debería necesitar nunca).
+
+El `cd` no es decorativo: los scripts que además hablan con un canal toman `WOO_URL`/`WOO_CK`/`WOO_CS`
+y `DB_PATH` del `.env` del legado vía `dotenv/config`, que se resuelve desde el directorio de trabajo, y
+desde `/tmp` fallan con `ERR_MODULE_NOT_FOUND` por la resolución de `node_modules`.
+
+Ids de producción que estos scripts piden como argumento (lectura de `core.channel_accounts`, 2026-09-20):
+empresa `01a0ad82-dcf5-7235-a8d6-13fe30b386a2`; cuenta de WooCommerce
+`01a0ad82-de15-7a79-b935-dc665538cd05`; cuenta de MercadoLibre `01a0b28d-18e4-733b-b53f-64d1be288253`.
