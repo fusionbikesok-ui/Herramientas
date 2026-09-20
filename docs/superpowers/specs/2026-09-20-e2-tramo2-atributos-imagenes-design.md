@@ -248,7 +248,30 @@ dejar de escribir: el catálogo de T1 sigue funcionando igual. La migración inv
 `ALTER DEFAULT PRIVILEGES` en el esquema `catalog`, así que las tablas nuevas heredan `SELECT, INSERT, UPDATE`
 para `plataforma_app` (verificado el 2026-09-20).
 
-**El volumen de casos `atributo_divergente` se acota antes de encender**, y es el riesgo más serio del tramo:
+**El ensayo en seco ya se corrió (2026-09-20) y el volumen es atendible, pero hubo que cambiar la regla.**
+Simulado sobre los datos reales —los 5.235 productos de Woo cruzados por SKU con las publicaciones de ML—, la
+comparación por conjuntos disjuntos abría **333 casos sobre 2.785 publicaciones cruzadas (12 %)** con 360
+atributos divergentes: `color` 210, `talle` 98, `marca` 39, el resto menor. Atendible en volumen, **pero con
+mala relación señal/ruido**: la mayoría era notación, no error — `talle 43` contra `43 eu`, `m/l` contra `m-l`,
+`verde` contra `verde agua`, `shimano` contra `shimano tiagra`. Una bandeja donde 8 de cada 10 casos no son un
+problema se deja de mirar, y un caso que nadie atiende es peor que no abrirlo.
+
+Por eso la regla final **no abre caso cuando los valores están relacionados por contención de tokens** (con `/`
+y `-` normalizados a espacio): **333 → 114 casos**, una reducción del 66 %. Lo que queda es señal real, y
+apareció trabajo que nadie había detectado: **dos errores de carga** (`amarilllo` con tres L en Woo, `sporatace`
+en ML) y varias discrepancias genuinas (`rojo` contra `azul`, `chaoyang` contra `compass`, `largo 40mm` contra
+`81 cm`, `talle 40` contra `40,5 eu`). Queda ruido de idioma (`gris` / `stone gray`, `naranja` / `hiviz orange`)
+y de sinónimo (`plata` / `plateado`): resolverlo pide un diccionario, que es decisión de negocio y **no es de
+este tramo**.
+
+`categoria_canal` **no se compara**: Woo trae el nombre y ML un id, así que divergiría siempre.
+
+**El interruptor nace apagado** (`CATALOGO_COMPARAR_ATRIBUTOS`, default `0`), por la lección de T1: todo se
+desplegó apagado y se encendió después de medir —el catálogo off, el proyector con canario de 100, el bootstrap
+al final— y eso atrapó dos defectos reales antes de que tocaran datos. Se despliega capturando, se verifica que
+los atributos se guarden bien, y la comparación se enciende con José.
+
+**El volumen de casos se acota antes de encender**, y es el riesgo más serio del tramo:
 **2.093 variantes tienen representaciones en los dos canales**, así que la comparación se hace sobre esas y no
 sobre las 12.849. Antes de activarlo en producción se corre un ensayo en seco que cuenta cuántos casos abriría;
 si el número es inatendible, el tramo se despliega **con la comparación apagada** (una variable, como
