@@ -255,3 +255,8 @@ Los 23 nodos nuevos que no existen en Woo (`PASTILLAS DE FRENO` y el resto del d
 `DESTORNILLADORES`, `HIDROLAVADORAS`…) NO entran como nodos: los que eran de tercer nivel son valores de
 faceta, y los de segundo nivel que no tienen categoría de origen entran vacíos, sin nada que los alimente
 automáticamente.
+
+**FANTTIK queda como está** (José, 2026-09-20, cerrando B4 de la revisión de opt-2b). Consecuencia asumida y
+explícita: `INFLADORES` (1209) se absorbe en `INFLADORES Y HERRAMIENTAS` y `ASPIRADORAS` (1208) en `FANTTIK`,
+así que **un inflador Fanttik no aparece navegando el nodo FANTTIK**. Se encuentra por el rubro o filtrando
+por marca, que es el eje que para eso existe. No se hace una excepción a los dos niveles.
