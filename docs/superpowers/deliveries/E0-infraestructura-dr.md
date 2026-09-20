@@ -244,7 +244,24 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 - https://pgbackrest.org/user-guide.html — consultada 2026-09-13.
 - https://www.hostinger.com/support/1583232-how-to-back-up-or-restore-a-vps-at-hostinger/ — consultada 2026-09-13.
 
-**Decisiones abiertas:** ninguna.
+**Decisiones abiertas:** una, anotada el 2026-09-20 y sin fecha asignada por decisión de José.
+
+### Deuda: `integrations.inbox_messages` no tiene retención
+
+Nada borra un mensaje del inbox, ni exitoso ni pendiente: no existe purga en ninguna parte de `src/`
+(verificado el 2026-09-20). Medido ese día: **171 MB con 12.307 filas**, de las cuales **153 MB son
+`payload_ciphertext`**. El motor del crecimiento no son los pendientes sin consumidor (goteo de 30-50/día
+de 2-4 KB) sino los **exitosos del catálogo**: `ml.items` promedia **11,9 KB** por mensaje a ~500/día,
+o sea **~6 MB/día, ~2 GB/año**. El disco estaba al 75 %.
+
+La decisión que falta antes de fijar el plazo: **¿se quiere poder reproyectar el catálogo desde el inbox
+sin volver a llamar al canal?** Si sí, el plazo tiene que cubrir esa ventana; si no, 30 días alcanzan.
+
+**Condición que restringe la rotación de la clave de payload:** `descifrarSobre` resuelve la clave por
+`sobre.keyId` contra el keyring, así que varias conviven y rotar es seguro — **pero la clave vieja no se
+puede retirar mientras queden mensajes que la referencian.** Al 2026-09-20 hay una sola `payload_key_id`
+y **1.382 mensajes pendientes sin consumidor**: si se retira esa clave, sus payloads quedan indescifrables
+para la etapa futura que venga a leerlos, y nadie se enteraría hasta ese momento.
 
 ## Decisiones PM asignadas
 
