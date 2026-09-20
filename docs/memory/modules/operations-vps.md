@@ -212,3 +212,14 @@ los dos canales, y los 942 con el `category_id` crudo de ML (126 ids distintos).
 modelos en ambos canales, así que no mide contradicción: mide doble publicación. Importar Woo no lo arregla,
 porque los valores de Woo ya eran nombres; los que necesitan diccionario son los `MLA*`, y esa importación no
 existe todavía. No leerlo como un hallazgo del catálogo.
+
+El comando de la plataforma se corre **desde `/opt/fusionbikes/herramientas`**, siempre. El `-f` es una ruta
+relativa, así que desde otro directorio falla con
+`compose file "/opt/plataforma/deploy/compose.yml" is invalid: no such file or directory`, que parece un
+archivo faltante y es sólo el directorio de trabajo. Escribirlo con el `cd` adelante evita la confusión:
+
+```
+cd /opt/fusionbikes/herramientas && docker compose -f plataforma/deploy/compose.yml \
+  -p fusion-plataforma --env-file /opt/fusionbikes/plataforma-prod/plataforma.env <subcomando>
+```
+
