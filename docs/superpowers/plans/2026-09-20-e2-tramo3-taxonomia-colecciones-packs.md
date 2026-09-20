@@ -61,17 +61,33 @@ Los dos de afuera no se pierden: **dependen de que este tramo produzca la taxono
 9. **Los packs nacen en borrador y sin reglas de negocio**: sin precio, sin reserva de stock, sin explosión
    de pedidos y sin publicación. Esas cuatro cosas quedan explícitamente diferidas.
 
-## Decisiones abiertas — requieren a José
+## Decisiones cerradas por José (2026-09-20, con la jerarquía real a la vista)
 
-- **D1. El árbol propio.** Se decide en la tarea 4, con la jerarquía real a la vista. No antes: hacerlo
-  sobre la lista aplanada obligaría a rehacer mapeos.
-- **D2. Las entradas que no son rubro de producto** (`QR PAGOS`, `SERVICES`, `ASPIRADORAS`, `FUSIBLES`,
-  `SMARTWATCH`): ¿se excluyen del árbol, se agrupan en un rubro «no ciclismo», o son productos legítimos?
-- **D3. Los solapamientos** (`CUBIERTAS` vs `Cubiertas y Cámaras`): ¿se fusionan, o son rubros distintos?
-- **D4. Profundidad máxima del árbol** y si `BICICLETAS POR MARCA` sobrevive como nodo o desaparece al
-  separarse la marca.
+Antes de preguntar se trajo la jerarquía real de Woo (`GET /products/categories`, lectura pura, 82
+categorías). **73 de 82 tienen padre y el árbol tiene 3 niveles**: lo que nuestros datos guardaban era ese
+árbol aplanado, no una lista plana. Eso disolvió D3 solo.
 
-Ninguna bloquea las tareas 1 a 3.
+- **D1 — El árbol propio se diseña de cero.** La jerarquía de Woo NO se promueve: se importa como evidencia
+  (tarea 1) y se mapea contra el árbol propio (tarea 5). El árbol propio se propone en la tarea 5 y José lo
+  revisa; Woo queda como una correspondencia más, no como fuente.
+- **D2 — Las cuatro raíces que no son rubro de producto:**
+  - `Hotsale` (29) → **colección con vigencia**, fuera del árbol.
+  - `SERVICES` (12) y `Taller` (11) → **rubro propio de servicios**, aparte del árbol de productos: no
+    tienen stock, marca ni GTIN.
+  - `FANTTIK` (7) → **marca canónica, no nodo**; sus hijos `INFLADORES` (3) y `ASPIRADORAS` (2) se recolocan
+    bajo `ACCESORIOS`.
+- **D3 — Los «solapamientos» no existían.** Eran padre e hijo, y la importación plana los había puesto al
+  mismo nivel: `Cubiertas y Cámaras` ⊃ {`CUBIERTAS`, `CAMARAS`, `ACCESORIOS TUBELESS`};
+  `INFLADORES Y HERRAMIENTAS` ⊃ `HERRAMIENTAS`; `LÍQUIDOS` ⊃ `LIQUIDOS DE FRENOS`. Tampoco eran anomalías
+  `FUSIBLES` (cuelga de `TRANSMISIÓN`: son fusibles de shifter) ni `SMARTWATCH`/`QR PAGOS` (de `ACCESORIOS`).
+  Ninguno se fusiona: la jerarquía ya los distinguía.
+- **D4 — `BICICLETAS POR MARCA` y sus 14 hijos se colapsan a un árbol por TIPO de bici** (MTB, ruta, gravel,
+  infantil, urbana…) con la marca como eje separado. «Bicicletas Trek» se responde filtrando marca, no con un
+  nodo. `BICICLETAS INFANTILES` ya estaba cortada por tipo, no por marca. Profundidad: el árbol de Woo llega
+  a 3 niveles y el propio no necesita más; no se fija un máximo en el esquema (una restricción de
+  profundidad en la base impediría una reorganización legítima), pero sí se prohíben los ciclos.
+
+La evidencia cruda de la jerarquía quedó en `docs/superpowers/specs/e2/woo-categorias-2026-09-20.md`.
 
 ## Estructura de archivos
 
