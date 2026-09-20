@@ -205,3 +205,10 @@ canal, no antes: traduce los `category_id` de MercadoLibre a nombres leyendo `ca
 con esa tabla vacía cada id de ML queda sin traducir, ningún modelo publicado en los dos canales puede
 coincidir y `contradictoriosEntreCanales` sale inflado con todos ellos. No es un hallazgo del catálogo: es el
 informe corriendo sin su diccionario.
+
+`contradictoriosEntreCanales` del informe es INVÁLIDO mientras no se importen las categorías de
+MercadoLibre. Medido el 2026-09-20, ya con las 82 categorías de Woo importadas: 942 modelos publicados en
+los dos canales, y los 942 con el `category_id` crudo de ML (126 ids distintos). El número es idéntico al de
+modelos en ambos canales, así que no mide contradicción: mide doble publicación. Importar Woo no lo arregla,
+porque los valores de Woo ya eran nombres; los que necesitan diccionario son los `MLA*`, y esa importación no
+existe todavía. No leerlo como un hallazgo del catálogo.
