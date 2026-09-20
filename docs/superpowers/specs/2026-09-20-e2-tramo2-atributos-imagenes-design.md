@@ -2,6 +2,10 @@
 
 **Fecha:** 2026-09-20 · **Estado:** diseño, sin implementar · **Entrega:** E2, tramo 2 de 3
 **Ficha:** `docs/superpowers/deliveries/E2-catalogo-modelo-importacion.md` · **Depende de:** E2 T1 (en producción desde el 2026-09-20)
+**Revisión externa:** Codex, 2026-09-20 — 2 críticos, 3 altos, 2 medios sobre la primera versión, todos
+incorporados. Los dos críticos eran defectos que habrían corrompido datos en producción: lo comercial en la
+variante (2.093 variantes están en los dos canales y se habrían pisado) y un caso de identidad por modelo, que
+`identity_cases` no admite. Más dos cosas que faltaban (§7 bis) y el backfill, el costo y el rollback (§7 ter).
 
 ## 1. Por qué este tramo, y por qué cambia la partición de E2
 
@@ -80,33 +84,48 @@ para que T2 sirva. Se llenan al pasar el próximo cambio de ese recurso, y el §
 ```
 catalog.model_attributes
   model_id uuid NOT NULL REFERENCES catalog.product_models(id)
+  representation_id uuid NOT NULL REFERENCES catalog.external_representations(id)
   nombre_normalizado text NOT NULL   -- 'marca', 'color', 'talle', 'rodado', …
   valor text NOT NULL
-  canal text NOT NULL                -- de dónde salió este valor
-  recurso text NOT NULL              -- qué representación lo afirmó
   observado_en timestamptz NOT NULL
-  UNIQUE (model_id, nombre_normalizado, valor, canal)
+  vigente_hasta timestamptz          -- NULL = vigente; con fecha = el canal dejó de afirmarlo
+  UNIQUE (representation_id, nombre_normalizado, valor)
 ```
 
-La unicidad incluye `canal` **a propósito**: dos canales pueden afirmar valores distintos y los dos se
-guardan. Eso es lo que permite detectar la divergencia en lugar de que una escritura pise la otra.
+**La procedencia es la representación, no el canal** (alto de la revisión Codex): `canal` solo no alcanza,
+porque **un mismo canal puede tener varias publicaciones vinculadas al mismo modelo** y con `(model_id,
+nombre, valor, canal)` dos publicaciones de ML que afirman lo mismo colapsan en una fila y se pierde cuál lo
+dijo. Con `representation_id` la fila sabe exactamente de dónde salió, y el canal se obtiene por join.
+
+**`vigente_hasta` implementa «ningún borrado»** (alto de la revisión): cuando un canal deja de informar un
+atributo que antes informaba, la fila **no se borra** — se le pone fecha. Eso respeta que la app no tiene
+DELETE y deja historia de lo que el canal decía antes. Una consulta normal filtra `vigente_hasta IS NULL`.
 
 ```
 catalog.model_images
-  model_id, url, orden, canal, recurso, observado_en
-  UNIQUE (model_id, url)
+  model_id, representation_id, url, orden, observado_en, vigente_hasta
+  UNIQUE (representation_id, url)
 ```
 
-Y en la variante, lo comercial derivado:
+La unicidad por representación y no por modelo (medio de la revisión): dos canales pueden publicar la misma
+URL y cada uno conserva su procedencia; y las imágenes propias de una variación de ML cuelgan de **su**
+representación, que es la que las trae.
+
+Y lo comercial derivado **en la representación, NO en la variante**:
 
 ```
-catalog.sellable_variants
-  + precio numeric(12,2)        -- del canal, no autoridad de Fusion
+catalog.external_representations
+  + precio numeric(12,2)        -- del canal que esta representación observa
   + moneda text
   + stock_canal integer
   + gtin text
-  + comercial_observado_en timestamptz
 ```
+
+**Por qué no en la variante (defecto crítico de la primera versión, revisión Codex 2026-09-20):** una variante
+puede estar publicada en Woo y en ML a la vez, y **2.093 variantes ya lo están** (medido en producción). Con
+columnas en `sellable_variants`, cada proyección de un canal habría pisado el precio y el stock del otro, en
+silencio y sin dejar rastro — justo lo contrario de «guardar ambos» y de «el precio es del canal». La
+representación ya tiene la identidad correcta: cuenta, recurso y variación.
 
 **`gtin` es evidencia, nunca autoridad** (invariante acumulativo del plan maestro): se guarda y se muestra,
 no se usa para casar identidades. La cobertura del 16,9 % lo confirma como insuficiente para decidir.
@@ -120,13 +139,31 @@ normalización es **léxica y conservadora**: minúsculas, sin acentos, sin espa
 T3 o a E3.
 
 Un valor múltiple de Woo (`{"name":"Talle","option":"41, 42, 43, 44, 45"}`, que es real en el catálogo) se
-guarda **como cinco filas**, una por valor, partiendo por coma. Esto se especifica porque es la diferencia
-entre que el atributo sea consultable o sea un string opaco.
+guarda **como cinco filas**, una por valor. Esto es la diferencia entre que el atributo sea consultable o sea
+un string opaco, y afecta al **22 % de los atributos** (110 de 500 en una muestra real).
+
+Reglas de la partición, porque «partir por coma» a secas rompe valores legítimos (medio de la revisión Codex):
+se parte por coma, se hace `trim` de cada parte y se descartan las vacías; **se conserva además el valor
+entero como venía en `atributos_crudos`**, así que una partición equivocada se corrige reproyectando sin
+volver al canal (invariante 3). **No se parte** cuando el atributo está en la lista de los que admiten coma
+como parte del valor (`descripcion`, `observaciones` y los de texto libre): esa lista se fija en el commit y se
+justifica con los datos, no se adivina en tiempo de ejecución.
 
 ## 5. La divergencia entre canales
 
 Cuando dos canales afirman valores distintos para el mismo `nombre_normalizado` de un modelo, se abre un caso
 de identidad de tipo nuevo **`atributo_divergente`**, con los dos valores y su canal en el detalle.
+
+**El caso cuelga de una representación, no del modelo** (defecto crítico de la primera versión, revisión Codex
+2026-09-20): `catalog.identity_cases` **no tiene `model_id`**, y su `identity_cases_objeto_check` exige
+`variant_id` o `representation_id` — un caso por modelo era literalmente ininsertable. Se cuelga de la
+representación que introduce el valor divergente, que además es la que hay que ir a mirar para resolverlo.
+
+**Un caso por representación agrupa todos sus atributos divergentes**, porque
+`identity_cases_un_abierto_representacion` admite un solo caso abierto por (representación, tipo,
+`detalle->>'caso_legado'`). El detalle lleva una lista de atributos en conflicto y **se actualiza** cuando
+aparece uno nuevo; no se abre un caso por atributo. Sin esto, el segundo atributo divergente de la misma
+representación violaría el índice y abortaría la transacción del mensaje.
 
 El CHECK de `catalog.identity_cases.tipo` es cerrado (9 valores hoy), así que **el tipo nuevo exige migración**
 y ampliar los tipos de TS en el mismo commit, o no compila — la lección de T1.
@@ -140,8 +177,11 @@ contradicción — si abriera caso, los 5.235 productos generarían miles de cas
 ## 6. Invariantes
 
 1. **Una transacción por mensaje**, como T1. Los atributos de un recurso se escriben con su representación.
-2. **La versión remota vieja no pisa.** Si `comercial_observado_en` es posterior a la versión del mensaje, no
-   se escribe: el mismo criterio de T1 para no retroceder.
+2. **La versión remota vieja no pisa, con el mismo reloj que usa T1.** La comparación es contra
+   `external_representations.version_remota` (`text`, la que el adaptador ya escribe) y **no contra un
+   timestamp propio inventado** (alto de la revisión Codex): en Woo la versión es `date_modified_gmt` y en ML
+   es un hash, así que el orden total lo define el adaptador —`versionKind` `temporal` o `hash`— exactamente
+   como en E1. Reusar ese criterio en lugar de crear otro evita dos relojes que discrepan.
 3. **Lo derivado se recalcula desde lo crudo, nunca al revés.** Si la normalización cambia, se reproyecta
    desde `atributos_crudos` sin volver al canal. Es la razón de guardar el crudo.
 4. **Ningún borrado.** Un atributo que desaparece del canal se marca, no se elimina (la app no tiene DELETE).
@@ -165,6 +205,48 @@ desde el origen, no desde los cachés» — **y la contradicción es deliberada 
 *atributos descriptivos*, donde un color desactualizado se corrige en el próximo cambio del producto y no
 afecta ninguna identidad. Esto se anota como decisión, no se esconde.
 
+## 7 bis. Lo que se agrega por la revisión (Codex, 2026-09-20)
+
+**La categoría del canal se proyecta consultable**, no sólo dentro del JSONB. Llega con **cobertura del 100 %**
+en los dos canales (5.235 `categorias_json` en Woo con 165 combinaciones distintas; 6.969 `category_id` en ML) y
+el objetivo del tramo es poder consultar lo que ya se recibió. Va en la misma tabla de atributos, con
+`nombre_normalizado = 'categoria_canal'`, así que no hace falta una tabla nueva ni definir taxonomía propia —
+eso sigue siendo T3. Sin esto, «qué cubiertas tengo» obliga a escarbar JSONB.
+
+**Los atributos de cada variación de ML se proyectan en su propia representación.** El proyector ya recibe cada
+objeto de variación (`src/catalogo/ml.ts`, `payload.variations`) y **3.522 publicaciones de ML son variantes**:
+si sólo se proyectaran los atributos del ítem padre, el color y el talle de cada variación —que es justo lo que
+distingue una variante de otra— se perderían. Cada variación tiene su representación desde T1, y ahí van.
+
+## 7 ter. Backfill, costo y rollback
+
+**El relleno va por lotes con checkpoint durable**, no en una transacción gigante: se reusa la forma de
+`catalog.bootstrap_runs` (lote configurable, posición confirmada, reanudable) que ya funcionó en T1 con 9.285
+recursos. Una sola transacción sobre 12.849 representaciones tomaría la tabla el tiempo que dure y bloquearía al
+proyector, que está en producción.
+
+**Costo estimado, para dimensionar antes de escribir la migración:** 12.849 representaciones × ~1,6 atributos
+promedio (medido) ≈ **21.000 filas** en `model_attributes`, más ~13.000 en `model_images`. Con la partición de
+valores múltiples (22 % de los atributos) el número sube a ~26.000. Son decenas de miles, no millones: no
+requiere particionado. El JSONB crudo por representación sí puede activar TOAST en los payloads grandes de ML;
+**se mide el tamaño de la tabla antes y después del backfill y queda en la evidencia**.
+
+**Índices desde el principio**, porque la consulta de aceptación los necesita: `(nombre_normalizado, valor)`
+para «qué tiene marca Maxxis» y GIN sobre `atributos_crudos` sólo si la medición muestra que se consulta el
+crudo. Un índice que no se usa es costo de escritura en cada proyección.
+
+**Rollback:** el tramo es aditivo —columnas y tablas nuevas, ningún cambio a lo existente—, así que apagarlo es
+dejar de escribir: el catálogo de T1 sigue funcionando igual. La migración inversa es `DROP` de lo nuevo, y
+**no se ejecuta con el proyector encendido**. Los `GRANT` no hacen falta: `0013_catalogo.sql` dejó un
+`ALTER DEFAULT PRIVILEGES` en el esquema `catalog`, así que las tablas nuevas heredan `SELECT, INSERT, UPDATE`
+para `plataforma_app` (verificado el 2026-09-20).
+
+**El volumen de casos `atributo_divergente` se acota antes de encender**, y es el riesgo más serio del tramo:
+**2.093 variantes tienen representaciones en los dos canales**, así que la comparación se hace sobre esas y no
+sobre las 12.849. Antes de activarlo en producción se corre un ensayo en seco que cuenta cuántos casos abriría;
+si el número es inatendible, el tramo se despliega **con la comparación apagada** (una variable, como
+`CATALOGO_CANARIO` en T1) y los atributos se capturan igual. Capturar es el valor; comparar es opcional.
+
 ## 8. Fuera de alcance
 
 Taxonomía propia de Fusion, colecciones, packs y kits (son T3). Unificar sinónimos de atributos. Escribir
@@ -182,13 +264,23 @@ nada en Woo ni en ML. UI. Tocar el matcher.
 6. La normalización se recalcula desde el crudo sin tocar el canal.
 7. El relleno desde los cachés deja marcado el origen y es idempotente.
 8. Consulta de humo que hoy es imposible: **«qué variantes publicadas tienen marca Maxxis»** devuelve filas.
-9. Suite de `plataforma/` en verde y tests que fallan si se revierte cada punto.
+9. Lo comercial (precio, stock, GTIN) se escribe en la **representación**: dos canales sobre la misma variante
+   conservan sus dos valores y ninguno pisa al otro. Test con una variante en Woo y ML a la vez.
+10. Un segundo atributo divergente de la misma representación **actualiza** el caso abierto en lugar de violar
+   `identity_cases_un_abierto_representacion`.
+11. Un atributo que el canal deja de informar queda con `vigente_hasta` y **no se borra**.
+12. El backfill avanza por lotes con checkpoint y es reanudable: cortarlo a la mitad y retomarlo no duplica ni
+   saltea.
+13. El ensayo en seco informa cuántos casos `atributo_divergente` se abrirían, antes de encender.
+14. Suite de `plataforma/` en verde y tests que fallan si se revierte cada punto.
 
 ## 10. Riesgos
 
 | Riesgo | Mitigación |
 |---|---|
-| El JSONB crudo infla la tabla | son 12.849 filas, no millones; medir el tamaño antes y después y dejarlo en la evidencia |
+| El JSONB crudo infla la tabla | ~21.000 filas derivadas estimadas (§7 ter); medir el tamaño antes y después y dejarlo en la evidencia |
 | La normalización léxica junta cosas distintas | conservadora a propósito: sólo minúsculas y acentos, sin sinónimos |
-| Miles de casos `atributo_divergente` de golpe | la ausencia no abre caso (§5); medir en el ensayo antes de encender en producción |
+| Miles de casos `atributo_divergente` de golpe | la ausencia no abre caso (§5); un caso por representación y no por atributo; sólo se comparan las 2.093 variantes con dos canales; ensayo en seco que los cuenta y, si es inatendible, se enciende la captura con la comparación apagada (§7 ter) |
+| El backfill bloquea al proyector en producción | por lotes con checkpoint reanudable, nunca una transacción sobre las 12.849 (§7 ter) |
+| Dos canales se pisan el precio | lo comercial vive en la representación, no en la variante (§4.2) |
 | Los cachés del legado están atrasados | acotado a atributos descriptivos, con origen marcado (§7) |
