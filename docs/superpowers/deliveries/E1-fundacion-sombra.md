@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** T4 implementado en código (tareas 0–15 del plan del tramo 4, rama `feature/e1-t4-continuacion`, 2026-09-18): firma Ed25519 sobre JCS, manifiesto de auditoría y reporte de sombra diarios, depósito en B2 con Object Lock COMPLIANCE que no duplica ante caídas, email con el sobre adjunto, vigilante del legado a las 09:00 ART, verificador `npm run verificar-informe`, y passkeys con recuperación, todo detrás de la doble llave. Revisado por Codex en dos tandas (A: 3 críticos corregidos; B: sin críticos). `E1_TRAMO=4` del gate de escenarios cubre los 43 escenarios. Falta: la tarea 16 (puesta en producción, requiere autorización de José: buckets y credenciales B2, clave de firma, migraciones 0009–0011, verificación contra B2 real y un email real) y la campaña de 7 días verdes seguidos con ML en canario.
+- **Próxima acción exacta:** esperar a que cierre la **campaña de 7 días verdes seguidos con ML en canario** y ajustar el tope de ML con la medición de 7 días (23/09), después pedir la revisión de José. Todo el código de E1 (T1–T4) está implementado y **desplegado en producción**: la tarea 16 se hizo el 2026-09-18 y el 2026-09-20 se confirmó que `audit.audit_daily_manifests` acumula los manifiestos del 17, 18 y 19 firmados con `e1-2026-09` en modo `compliance`, con el scheduler cerrando la vuelta diaria sin fallos. No queda nada por desplegar de E1.
 - **Tarea 16 (puesta en producción) hecha el 2026-09-18:** informes firmados encendidos a las 12:29 UTC. La primera
   vuelta (día 17) subió manifiesto y reporte a `bucket-produccion` en compliance, mandó el email y su firma se
   verificó con `npm run verificar-informe` sobre los objetos bajados de B2; el reporte salió amarillo, honesto

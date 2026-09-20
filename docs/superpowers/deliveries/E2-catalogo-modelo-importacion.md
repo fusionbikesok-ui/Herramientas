@@ -1,6 +1,6 @@
 # E2 — Modelo e importación del catálogo canónico
 
-**Estado:** borrador
+**Estado:** tramo 1 (modelos y variantes) desplegado en producción el 2026-09-20; tramos posteriores sin especificar
 
 **Dependencias:** E1
 
@@ -68,7 +68,9 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** Producir especificación SQL/OpenAPI y fixture sanitario desde el snapshot auditado.
+- **Próxima acción exacta:** definir con José el alcance del **tramo 2** — no hay diseño escrito más allá del tramo 1. El candidato natural son los **~4.700 casos de identidad abiertos** que el bootstrap destapó (2.227 `omitida_revisar`, 1.991 `sku_pendiente`, 422 `user_product_divergente`, 49 `woo_sku_no_canonico`, 17 `sku_inexistente_en_woo`, 14 `identidad_legado`): son decisiones de negocio pendientes, no fallas, y caen en el territorio de E3 (identidad y matcher único en sombra), así que hay que resolver si se atienden acá o allá.
+- **Tramo 1 en producción (2026-09-20):** las 14 tareas del [plan](../plans/2026-09-18-e2-tramo1-modelos-variantes.md) hechas, incluida la tarea 14 (puesta en producción) con sus 9 pasos: migración `0013_catalogo.sql` (esquema `catalog`, 9 tablas), outbox del legado (migración 108) con captura y despachador firmando con el keyring de la sombra, copia inicial de 5.207 decisiones del matcher, proyector con canario de 100 (100 aplicados, 0 rechazados), bootstrap completo de las dos cuentas (Woo 21 páginas / 5.235 recursos; ML 42 páginas / 4.050 ítems) y conciliación diaria a las 03:30 ART. Resultado: **4.053 modelos, 6.946 variantes, 12.849 representaciones, 10.699 mensajes procesados, 1 solo en DLQ** (un producto en la papelera de Woo, rechazo correcto que protege el archivo). La conciliación automática del 2026-09-20 a las 06:30 UTC dio el matcher en `sinCambios: 5207`: cero deriva entre legado y plataforma.
+- **Defectos reales que el despliegue destapó y se corrigieron:** `compose.yml` nunca declaraba las variables `CATALOGO_*`, así que el catálogo era inencendible en producción pese a estar implementado y testeado (`b9851e3`); Docker Compose interpola una variable inexistente como cadena vacía y el esquema zod la rechaza como inválida, no como ausente, de modo que un flag apagado tumbaba el worker (arreglado en `cargarConfig` con `sinVacias`); el bootstrap de Woo pedía una ruta que el gateway rechaza antes de red (`c9ea2cd`); y el bootstrap cedía ante los 429 de ML con una espera fija de 60 s, sin backoff y descartando el `Retry-After` que el cliente ya parseaba (`9ede20c`, `1684559`).
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 

@@ -7,4 +7,4 @@ Una clave pública por archivo, nombrado por su `kid`: `<kid>.pub`, en PEM (SPKI
   `plataforma/scripts/generar-clave-firma.mjs`.
 - Rotar la clave es agregar un archivo nuevo. Los viejos **no se borran**: sin ellos, los informes
   firmados antes de la rotación dejan de poder verificarse.
-- La primera clave se agrega en la puesta en producción (tarea 16 del plan del tramo 4).
+- La primera clave, `e1-2026-09`, se agregó en la puesta en producción (tarea 16 del plan del tramo 4) el 2026-09-18 y está **activa**: firma los manifiestos diarios que van a B2 en modo `compliance` (verificado el 2026-09-20 sobre los del 17, 18 y 19).

@@ -2500,6 +2500,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ### Tarea 16: Puesta en producción (requiere autorización explícita de José)
 
+> **HECHA el 2026-09-18**, con autorización de José: informes firmados encendidos a las 12:29 UTC, manifiesto y reporte del día 17 subidos a B2 en modo `compliance`, firma verificada con `npm run verificar-informe` sobre los objetos bajados de B2, email enviado y vigilante del legado encendido. Detalle en `evidence/e1/2026-09-18-E1-T4-tarea16-avance.md`. Confirmado el 2026-09-20: `audit.audit_daily_manifests` acumula los manifiestos del 17, 18 y 19 firmados con `e1-2026-09`, con retención a 2027, y el scheduler cierra la vuelta diaria sin fallos. Para aceptar E1 falta la campaña de 7 días verdes con ML en canario y el ajuste del tope (23/09).
+
 **No se ejecuta sin que José lo autorice en el momento**, igual que C10 de T3. Nada de esta tarea se infiere
 de un merge.
 

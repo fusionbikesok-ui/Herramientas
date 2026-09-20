@@ -246,6 +246,8 @@ versión no duplica mensajes.
 
 ### Tarea 14: Puesta en producción (requiere autorización de José)
 
+> **HECHA el 2026-09-20.** Los 9 pasos ejecutados y verificados con autorización de José. Resultado: 4.053 modelos, 6.946 variantes, 12.849 representaciones, 10.699 mensajes procesados y 1 solo en DLQ; la conciliación automática de las 06:30 UTC dio el matcher en `sinCambios: 5207`. Cuatro defectos reales aparecieron al desplegar y se corrigieron: las variables `CATALOGO_*` no estaban declaradas en `compose.yml` (`b9851e3`), la cadena vacía de Compose contra un esquema `.min(1).optional()` tumbaba el worker (mismo commit), el bootstrap de Woo pedía una ruta que el gateway rechaza antes de red (`c9ea2cd`) y la cesión por 429 de ML no tenía backoff ni respetaba el `Retry-After` (`9ede20c`, `1684559`).
+
 En este orden, que la revisión corrigió dos veces: las decisiones antes que el proyector, para no crear miles de
 variantes provisorias que después haya que fusionar; y la **captura** de eventos antes de la copia, para que no haya
 ventana de pérdida.
