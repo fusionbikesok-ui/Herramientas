@@ -181,7 +181,7 @@ describe('E2-INF-04 cobertura', () => {
        VALUES ($1, $2, 'categoria_canal', 'CASCOS', now())`, [modelo, rep]);
 
     const r = await generarInforme(app, empresa, cuentaWoo);
-    expect(r.cobertura.contradictoriosEntreCanales).toBe(1);
+    expect(r.cobertura.puente.contradiccionesReales).toBe(1);
   });
 
   it('sin contradicción cuando los valores de los dos canales están relacionados por tokens', async () => {
@@ -193,7 +193,7 @@ describe('E2-INF-04 cobertura', () => {
        VALUES ($1, $2, 'categoria_canal', 'Cubiertas', now())`, [modelo, rep]);
 
     const r = await generarInforme(app, empresa, cuentaWoo);
-    expect(r.cobertura.contradictoriosEntreCanales).toBe(0);
+    expect(r.cobertura.puente.contradiccionesReales).toBe(0);
   });
 });
 

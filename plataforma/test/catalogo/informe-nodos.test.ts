@@ -123,11 +123,11 @@ describe('E2-NODO-01 comparación exacta por nodo', () => {
     const c = (await generarInforme(app, empresa, cuentaWoo)).cobertura;
     // Los 4 sin nodo: CASCOS~Cascos por nombre; los otros tres, sin relación. Los 7 con nodo ya no pasan por acá
     // (GRASAS~Lubricantes NO se re-evalúa por nombre: es una diferencia real y no debe rescatarla el puente).
-    expect(c.relacionadosPorNombre).toBe(1);
-    expect(c.contradiccionesReales).toBe(3);
-    expect(c.compatiblesPorGranularidad).toBe(0);
-    expect(c.relacionadosPorNombre + c.compatiblesPorGranularidad + c.contradiccionesReales).toBe(c.sinNodoEnAlgunCanal);
-    expect(c.contradictoriosEntreCanales).toBe(3);
+    expect(c.puente.relacionadosPorNombre).toBe(1);
+    expect(c.puente.contradiccionesReales).toBe(3);
+    expect(c.puente.compatiblesPorGranularidad).toBe(0);
+    expect(c.puente.relacionadosPorNombre + c.puente.compatiblesPorGranularidad + c.puente.contradiccionesReales).toBe(c.sinNodoEnAlgunCanal);
+    expect('contradictoriosEntreCanales' in c).toBe(false); // el campo ambiguo ya no existe
   });
 
   it('sin versión vigente no inventa nada: las clases por nodo en 0 y todo va al puente', async () => {
@@ -137,6 +137,6 @@ describe('E2-NODO-01 comparación exacta por nodo', () => {
     expect(c.versionTaxonomia).toBeNull();
     expect([c.mismoNodo, c.unoAncestroDelOtro, c.nodosDistintos]).toEqual([0, 0, 0]);
     expect(c.sinNodoEnAlgunCanal).toBe(c.entreCanales);
-    expect(c.relacionadosPorNombre + c.compatiblesPorGranularidad + c.contradiccionesReales).toBe(c.entreCanales);
+    expect(c.puente.relacionadosPorNombre + c.puente.compatiblesPorGranularidad + c.puente.contradiccionesReales).toBe(c.entreCanales);
   });
 });

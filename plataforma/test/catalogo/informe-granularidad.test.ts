@@ -84,16 +84,16 @@ describe('E2-GRAN-01 tres clases sobre los modelos en ambos canales', () => {
 
     const c = (await generarInforme(app, empresa, cuentaWoo)).cobertura;
     expect(c.entreCanales).toBe(10);
-    expect(c.relacionadosPorNombre).toBe(1);
-    expect(c.compatiblesPorGranularidad).toBe(3);
-    expect(c.contradiccionesReales).toBe(6);
+    expect(c.puente.relacionadosPorNombre).toBe(1);
+    expect(c.puente.compatiblesPorGranularidad).toBe(3);
+    expect(c.puente.contradiccionesReales).toBe(6);
     // La aritmética: las tres clases son excluyentes y suman exacto los modelos en ambos canales.
-    expect(c.relacionadosPorNombre + c.compatiblesPorGranularidad + c.contradiccionesReales).toBe(c.entreCanales);
-    // Y el campo que ya existía conserva su significado: todo lo que NO se relaciona por nombre.
-    expect(c.contradictoriosEntreCanales).toBe(9);
+    expect(c.puente.relacionadosPorNombre + c.puente.compatiblesPorGranularidad + c.puente.contradiccionesReales).toBe(c.entreCanales);
+    // Sin versión de árbol vigente todo modelo en ambos canales pertenece al puente.
+    expect(c.sinNodoEnAlgunCanal).toBe(c.entreCanales);
     // Exacto: el ciclo de ML, el nombre inexistente y el nombre ambiguo. El resto sube sin problema.
-    expect(c.cadenasIncompletas).toBe(3);
-    expect(c.muestraContradicciones).toEqual([
+    expect(c.puente.cadenasIncompletas).toBe(3);
+    expect(c.puente.muestraContradicciones).toEqual([
       { woo: 'CASCOS', ml: 'Luces', modelos: 2 },
       { woo: 'CASCOS', ml: 'Cadenas', modelos: 1 },
       { woo: 'CASCOS', ml: 'Ciclo Uno', modelos: 1 },

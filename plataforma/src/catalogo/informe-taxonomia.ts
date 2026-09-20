@@ -215,42 +215,40 @@ export interface Cobertura {
   sinCategoriaUtil: number;   // ningún categoria_canal capturado
   variasCandidatas: number;   // más de un valor distinto de categoria_canal
   soloMarcaOColeccion: number; // su(s) categoria_canal caen todos en grupo marca/colección, ninguno en taxonomía
-  contradictoriosEntreCanales: number; // categoria_canal de Woo y de ML capturados, y no están relacionados por NOMBRE
-  // ── Desglose de los modelos publicados en AMBOS canales (`entreCanales`). PUENTE PROVISORIO ──────────────
-  // Las tres clases son excluyentes, con precedencia nombre > granularidad > contradicción, y suman exacto
-  // `entreCanales`. `contradictoriosEntreCanales` = compatiblesPorGranularidad + contradiccionesReales.
-  // (Desde que hay nodos, el puente SÓLO se usa para los modelos sin nodo en algún canal; ese uso se apaga
-  // cuando las categorías de ML estén mapeadas del todo. Se retira, no se afina.)
-  // Este criterio (nombres + ancestros del canal) es un puente hasta que las categorías de los dos canales
-  // estén mapeadas al árbol propio (`taxonomy_channel_map`): entonces «¿coinciden?» es «¿caen en el mismo
-  // nodo?», exacto, y esto se retira. No lo extiendas: se reemplaza.
-  // Sabido y aceptado sin medir: una raíz genérica de Woo (ACCESORIOS) queda «compatible» con un ancestro de ML
-  // como «Accesorios para Bicicletas» por contención de tokens. Es granularidad correcta, pero puede tapar un
-  // error real dentro de esa rama.
+  // ── Modelos publicados en AMBOS canales: `entreCanales`. Hay DOS mediciones y cada una corre sobre un
+  // subconjunto distinto; el que lee el JSON tiene que ver de una cuál es cuál.
+  //
+  // 1. EXACTA, por nodo del árbol propio (versión vigente), para los modelos cuyos DOS canales tienen nodo.
+  //    Excluyentes, precedencia mismoNodo > unoAncestroDelOtro > nodosDistintos, y
+  //      mismoNodo + unoAncestroDelOtro + nodosDistintos + sinNodoEnAlgunCanal = entreCanales.
+  //    «Tiene nodo» = alguna de sus categorías de ese canal resuelve a un nodo NO archivado de la versión
+  //    vigente (las demás, sin nodo, no cuentan: «alguna contra alguna»). Hermanos (mismo padre, distinto
+  //    nodo) NO es acuerdo: cae en nodosDistintos.
   entreCanales: number;
-  relacionadosPorNombre: number;
-  compatiblesPorGranularidad: number;
-  contradiccionesReales: number;
-  /** Categorías usadas cuya cadena de ancestros se cortó (padre ausente, ciclo o tope): su clase 1 puede estar subcontada. */
-  cadenasIncompletas: number;
-  // ── Comparación EXACTA por nodo del árbol propio (versión vigente), para los modelos cuyos DOS canales tienen
-  // nodo. Excluyentes, precedencia mismoNodo > unoAncestroDelOtro > nodosDistintos, y
-  //   mismoNodo + unoAncestroDelOtro + nodosDistintos + sinNodoEnAlgunCanal = entreCanales.
-  // «Tiene nodo» = alguna de sus categorías de ese canal resuelve a un nodo NO archivado de la versión vigente
-  // (las demás categorías del modelo, sin nodo, no cuentan: «alguna contra alguna», como el puente).
-  // Hermanos (mismo padre, distinto nodo) NO es acuerdo: cae en nodosDistintos.
-  // Los campos del puente de arriba (relacionadosPorNombre, compatiblesPorGranularidad, contradiccionesReales,
-  // muestraContradicciones y contradictoriosEntreCanales) miden ahora SÓLO `sinNodoEnAlgunCanal`.
   mismoNodo: number;
   unoAncestroDelOtro: number;
   nodosDistintos: number;
-  /** No es una clase: los modelos en ambos canales a los que les falta nodo en algún canal. Van al puente. */
+  /** No es una clase: los modelos en ambos canales a los que les falta nodo en algún canal. Son el dominio del puente. */
   sinNodoEnAlgunCanal: number;
-  /** Versión del árbol usada; null si no hay una vigente (entonces las tres clases quedan en 0). */
+  /** Versión del árbol usada; null si no hay una vigente (entonces las tres clases quedan en 0 y todo va al puente). */
   versionTaxonomia: string | null;
   muestraNodosDistintos: Array<{ woo: string; ml: string; modelos: number }>;
-  /** Las contradicciones reales de mayor a menor cantidad de modelos, acotada. */
-  muestraContradicciones: Array<{ woo: string; ml: string; modelos: number }>;
+  // 2. PUENTE PROVISORIO, por nombres y ancestros del canal. Cubre EXACTAMENTE `sinNodoEnAlgunCanal` y
+  //    desaparece cuando las categorías de ML estén mapeadas del todo: entonces «¿coinciden?» es «¿caen en el
+  //    mismo nodo?». Se retira, no se afina; no lo extiendas.
+  //    Sabido y aceptado sin medir: una raíz genérica de Woo (ACCESORIOS) queda «compatible» con un ancestro
+  //    de ML como «Accesorios para Bicicletas» por contención de tokens. Es granularidad correcta, pero puede
+  //    tapar un error real dentro de esa rama.
+  puente: {
+    // Excluyentes, precedencia nombre > granularidad > contradicción; suman `sinNodoEnAlgunCanal`.
+    relacionadosPorNombre: number;
+    compatiblesPorGranularidad: number;
+    contradiccionesReales: number;
+    /** Categorías usadas cuya cadena de ancestros se cortó (padre ausente, ciclo o tope): la clase de granularidad puede estar subcontada. */
+    cadenasIncompletas: number;
+    /** Las contradicciones reales del puente de mayor a menor cantidad de modelos, acotada. */
+    muestraContradicciones: Array<{ woo: string; ml: string; modelos: number }>;
+  };
 }
 
 /** Tope de saltos al subir por `parent_externo`: los datos vienen del canal y no se asume que no hay ciclos. */
@@ -451,16 +449,18 @@ export async function medirCobertura(
     sinCategoriaUtil: totalModelos - porModelo.size,
     variasCandidatas,
     soloMarcaOColeccion,
-    contradictoriosEntreCanales: compatiblesPorGranularidad + contradiccionesReales,
-    entreCanales, relacionadosPorNombre, compatiblesPorGranularidad, contradiccionesReales,
+    entreCanales,
     mismoNodo, unoAncestroDelOtro, nodosDistintos, sinNodoEnAlgunCanal, versionTaxonomia,
     muestraNodosDistintos: [...paresNodo.values()]
       .sort((a, b) => b.modelos - a.modelos || a.woo.localeCompare(b.woo) || a.ml.localeCompare(b.ml))
       .slice(0, MUESTRA_CONTRADICCIONES),
-    cadenasIncompletas: incompletas.size,
-    muestraContradicciones: [...pares.values()]
-      .sort((a, b) => b.modelos - a.modelos || a.woo.localeCompare(b.woo) || a.ml.localeCompare(b.ml))
-      .slice(0, MUESTRA_CONTRADICCIONES),
+    puente: {
+      relacionadosPorNombre, compatiblesPorGranularidad, contradiccionesReales,
+      cadenasIncompletas: incompletas.size,
+      muestraContradicciones: [...pares.values()]
+        .sort((a, b) => b.modelos - a.modelos || a.woo.localeCompare(b.woo) || a.ml.localeCompare(b.ml))
+        .slice(0, MUESTRA_CONTRADICCIONES),
+    },
   };
 }
 
