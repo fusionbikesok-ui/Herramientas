@@ -202,4 +202,47 @@ export const MAPEO_ML: Record<string, string> = {
   MLA371650: 'pedales-y-trabas',        // Pedales
   MLA18091: 'luces-y-seguridad',        // Luces
   MLA78906: 'transmision',              // Piñones (colapsa la granularidad de ML, ver arriba)
+
+  // ── Segunda tanda (hasta ~80% del catálogo), decidida por José ─────────────────────────────────────────
+  MLA78904: 'asientos',                 // Asientos
+  MLA371728: 'transmision',             // Cajas Pedaleras
+  MLA371727: 'transmision',             // Plato Palanca
+  MLA371730: 'transmision',             // Cadenas
+  MLA371411: 'hidratacion',             // Caramañolas
+  MLA371936: 'transmision',             // Descarriladores Traseros
+  MLA341702: 'horquillas',              // Horquillas
+  MLA371518: 'cintas-y-punos',          // Manoplas
+  MLA416573: 'rodillos',                // Rodillos
+  MLA371624: 'cubiertas-y-camaras',     // Cámaras de Bicicleta
+  MLA371623: 'ruedas',                  // Ruedas de Bicicleta
+  MLA416575: 'selladores',              // Selladores
+  MLA371951: 'frenos',                  // Pastillas
+  MLA432979: 'infladores-y-herramientas', // Kits de Extractoras
+  MLA371938: 'transmision',             // Shifters
+  MLA78907: 'transmision',              // Platos
+  MLA371517: 'direccion',               // Manubrios
+  // La ÚNICA de la tanda cuya clave no se deduce del nombre. «Camisetas y Remeras» es genérica, pero se leyeron
+  // los 27 títulos de los modelos: 26 son ropa técnica de ciclismo («Jersey Ciclismo Funkier», «Primera Piel
+  // Santini», «BASE LAYER») y el único que dice «urbana» dice también «ciclista». Por eso va a `jerseys-y-calzas`
+  // y no a `remeras` (que en Woo es casual).
+  MLA429722: 'jerseys-y-calzas',        // Camisetas y Remeras
+  MLA371410: 'cintas-y-punos',          // Cintas para Manubrio
+  // `Lubricantes` (MLA429032, de la primera tanda) va a `lubricantes` y NO al padre, con una DEUDA conocida: ML no
+  // tiene categoría de grasas ni de líquido de frenos (sus hermanas, bajo MLA371402, son Centradores, Corta
+  // Cadenas, Multifunción, Kits, Limpiadores de Cadena, Llaves y Otras Herramientas), así que su `Lubricantes` es un
+  // balde con tres cosas que nuestro árbol separa; para José `LUBRICANTES` es lubricante de cadena. De sus 89
+  // modelos, 66 no están en Woo, y por título 49 son lubricante, 12 dicen «grasa» y 5 no se sabe. Esos 12 quedan en
+  // `LUBRICANTES` siendo grasas y se corrigen a mano cuando se clasifiquen los modelos (paso que todavía no existe);
+  // se detectan porque el título dice «grasa». Anotado acá para que nadie lo descubra por casualidad.
+};
+
+/**
+ * Categorías de ML decididas como SIN EQUIVALENCIA en el árbol propio, con el motivo (que se escribe en la base,
+ * `catalog.channel_category_sin_equivalencia`, para poder leerlo sin abrir el repo). No son «fuera del árbol»
+ * (eso es FUERA_DEL_ARBOL, de Woo) ni están mapeadas: son baldes que no significan una categoría sino «no sé», y
+ * mapearlas sería inventar información que ML no dio. Decisión de José.
+ */
+export const SIN_EQUIVALENCIA_ML: Record<string, string> = {
+  MLA78908: 'Otros Repuestos (39 modelos): balde de ML que no nombra una categoría; mapearla a un nodo inventaría información que ML no dio. Sus modelos se clasifican a mano.',
+  MLA458068: 'Productos no categorizados (37 modelos): significa «no sé» y no una categoría; mapearla a un nodo inventaría información que ML no dio. Sus modelos se clasifican a mano.',
 };

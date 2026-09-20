@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * E2 T3 — mapea al árbol propio las categorías de MercadoLibre de MAPEO_ML (`arbol-fusionbikes.ts`). NO toca el
+ * E2 T3 — mapea al árbol propio las categorías de MercadoLibre de MAPEO_ML y deja escritas como «sin equivalencia», con su motivo,
+ * las de SIN_EQUIVALENCIA_ML (`arbol-fusionbikes.ts`; requiere la migración 0017). NO toca el
  * árbol ni MAPEO_WOO: usa los nodos que ya están cargados. Dry-run por default; escribe sólo con --ejecutar.
  * Molde: scripts/catalogo-arbol-cargar.mjs. Cuenta lo que QUEDÓ en la base, no las llamadas.
  *
@@ -9,7 +10,7 @@
  */
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
-import { MAPEO_ML } from '../plataforma/src/catalogo/arbol-fusionbikes.ts';
+import { MAPEO_ML, SIN_EQUIVALENCIA_ML } from '../plataforma/src/catalogo/arbol-fusionbikes.ts';
 import { aplicarMapeoCategorias } from '../plataforma/src/catalogo/mapeo-canal.ts';
 import { crearPool } from '../plataforma/src/db/pool.ts';
 
@@ -47,7 +48,7 @@ try {
     await cliente.query('BEGIN');
     const resumen = await aplicarMapeoCategorias(cliente, {
       empresa: opciones.empresa, cuenta: opciones.cuenta, canal: 'mercadolibre',
-      mapeo: MAPEO_ML, decididoPor: 'jose', dryRun: !opciones.ejecutar,
+      mapeo: MAPEO_ML, sinEquivalencia: SIN_EQUIVALENCIA_ML, decididoPor: 'jose', dryRun: !opciones.ejecutar,
     });
     await cliente.query(opciones.ejecutar ? 'COMMIT' : 'ROLLBACK');
     console.log(JSON.stringify({ dryRun: !opciones.ejecutar, ...resumen,

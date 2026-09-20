@@ -1153,6 +1153,22 @@ CREATE UNIQUE INDEX taxonomy_channel_map_un_externo
   ON catalog.taxonomy_channel_map (channel_account_id, id_externo)
   WHERE vigente_hasta IS NULL AND id_externo IS NOT NULL;
 
+-- 0017: una categoría del canal decidida como «sin equivalencia» en el árbol propio, con su motivo.
+CREATE TABLE catalog.channel_category_sin_equivalencia (
+  id                 uuid PRIMARY KEY DEFAULT uuidv7(),
+  company_id         uuid NOT NULL REFERENCES core.companies(id) ON DELETE RESTRICT,
+  channel_account_id uuid NOT NULL REFERENCES core.channel_accounts(id) ON DELETE RESTRICT,
+  canal              text NOT NULL CHECK (canal IN ('mercadolibre', 'woocommerce')),
+  id_externo         text NOT NULL CHECK (length(id_externo) > 0),
+  motivo             text NOT NULL CHECK (length(btrim(motivo)) > 0),
+  decidido_por       text NOT NULL CHECK (length(btrim(decidido_por)) > 0),
+  decidido_en        timestamptz NOT NULL DEFAULT now(),
+  vigente_hasta      timestamptz
+);
+CREATE UNIQUE INDEX channel_category_sin_equivalencia_un_vigente
+  ON catalog.channel_category_sin_equivalencia (channel_account_id, id_externo)
+  WHERE vigente_hasta IS NULL;
+
 -- ───────────────────────── tarea 6: el producto en el árbol ─────────────────────────
 -- Exactamente una primaria por modelo cuando está clasificado; las secundarias sin límite. La primaria
 -- es la que usan los informes y E13 para publicar; sin una sola, un modelo contaría dos veces por rubro.

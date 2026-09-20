@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ARBOL_FUSIONBIKES, FUERA_DEL_ARBOL, MAPEO_ML, MAPEO_WOO } from '../../src/catalogo/arbol-fusionbikes.ts';
+import { ARBOL_FUSIONBIKES, FUERA_DEL_ARBOL, MAPEO_ML, MAPEO_WOO, SIN_EQUIVALENCIA_ML } from '../../src/catalogo/arbol-fusionbikes.ts';
 
 const claves = new Set(ARBOL_FUSIONBIKES.map((n) => n.clave));
 const porClave = new Map(ARBOL_FUSIONBIKES.map((n) => [n.clave, n]));
@@ -72,16 +72,28 @@ describe('árbol propio de FusionBikes — invariantes de la definición', () =>
     // mapeo se aplicaría a la cuenta equivocada sin que la base lo pueda distinguir.
     expect(Object.entries(MAPEO_ML).filter(([, clave]) => !claves.has(clave))).toEqual([]);
     expect(Object.keys(MAPEO_ML).filter((id) => !/^MLA\d+$/.test(id))).toEqual([]);
-    expect(Object.keys(MAPEO_ML).length).toBe(10);
+    expect(Object.keys(MAPEO_ML).length).toBe(29);
   });
 
   it('E2-ARB-09 ninguna categoría de ML está también excluida o duplicada con Woo', () => {
     // Un objeto literal con una clave repetida se queda con la última en silencio: se cuenta el texto fuente.
     const fuente = readFileSync(new URL('../../src/catalogo/arbol-fusionbikes.ts', import.meta.url), 'utf8');
-    const bloque = fuente.slice(fuente.indexOf('export const MAPEO_ML'));
+    const bloque = fuente.slice(fuente.indexOf('export const MAPEO_ML'), fuente.indexOf('export const SIN_EQUIVALENCIA_ML'));
     const ids = [...bloque.matchAll(/^\s+(MLA\d+):/gm)].map((m) => m[1]);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.length).toBe(Object.keys(MAPEO_ML).length);
     expect(Object.keys(MAPEO_ML).filter((id) => id in FUERA_DEL_ARBOL || id in MAPEO_WOO)).toEqual([]);
+  });
+
+  it('E2-ARB-10 ninguna categoría de ML está a la vez mapeada y sin equivalencia, y cada una lleva motivo', () => {
+    const fuente = readFileSync(new URL('../../src/catalogo/arbol-fusionbikes.ts', import.meta.url), 'utf8');
+    const bloque = fuente.slice(fuente.indexOf('export const SIN_EQUIVALENCIA_ML'));
+    const ids = [...bloque.matchAll(/^\s+(MLA\d+):/gm)].map((m) => m[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.length).toBe(Object.keys(SIN_EQUIVALENCIA_ML).length);
+    expect(Object.keys(SIN_EQUIVALENCIA_ML).filter((id) => id in MAPEO_ML)).toEqual([]);
+    expect(Object.keys(SIN_EQUIVALENCIA_ML).filter((id) => !/^MLA\d+$/.test(id))).toEqual([]);
+    expect(Object.values(SIN_EQUIVALENCIA_ML).filter((m) => m.trim().length < 20)).toEqual([]);
+    expect(Object.keys(SIN_EQUIVALENCIA_ML).sort()).toEqual(['MLA458068', 'MLA78908']);
   });
 });

@@ -353,6 +353,35 @@ export async function mapearCategoria(
 // ─────────────────── tarea 6: el modelo en el árbol ───────────────────
 
 /**
+ * Deja escrito que una categoría del canal NO equivale a ningún nodo del árbol propio, con el MOTIVO
+ * (`catalog.channel_category_sin_equivalencia`, migración 0017). Distinto de «todavía no decidida»: eso es no
+ * tener fila. Idempotente; un motivo distinto cierra la decisión anterior y abre otra, así queda la historia.
+ * Devuelve false si ya estaba igual.
+ */
+export async function declararSinEquivalencia(
+  tx: Consultable, empresa: string, cuenta: string, canal: 'woocommerce' | 'mercadolibre',
+  idExterno: string, motivo: string, decididoPor: string,
+): Promise<boolean> {
+  const previa = (await tx.query<{ motivo: string }>(
+    `SELECT motivo FROM catalog.channel_category_sin_equivalencia
+      WHERE channel_account_id = $1 AND id_externo = $2 AND vigente_hasta IS NULL`, [cuenta, idExterno])).rows[0];
+  if (previa?.motivo === motivo) return false;
+  if (previa) {
+    await tx.query(
+      `UPDATE catalog.channel_category_sin_equivalencia SET vigente_hasta = now()
+        WHERE channel_account_id = $1 AND id_externo = $2 AND vigente_hasta IS NULL`, [cuenta, idExterno]);
+  }
+  // Blanco explícito, nunca pelado: lo único que se tolera es que otra transacción haya escrito lo mismo.
+  await tx.query(
+    `INSERT INTO catalog.channel_category_sin_equivalencia
+       (company_id, channel_account_id, canal, id_externo, motivo, decidido_por)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (channel_account_id, id_externo) WHERE vigente_hasta IS NULL DO NOTHING`,
+    [empresa, cuenta, canal, idExterno, motivo, decididoPor]);
+  return true;
+}
+
+/**
  * Clasifica un modelo en un nodo. `primaria` es la que usan los informes y E13: hay a lo sumo UNA vigente por
  * modelo (índice único parcial), y si se pide una nueva se cierra la anterior en vez de fallar — reclasificar
  * es una operación legítima; tener dos primarias, no, porque el modelo contaría dos veces por rubro.
