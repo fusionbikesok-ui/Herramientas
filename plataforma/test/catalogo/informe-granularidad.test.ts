@@ -33,10 +33,14 @@ const WOO = [
   { id: 1472, parent: 0, name: 'TRANSMISIÓN' }, { id: 135, parent: 1472, name: 'SHIFTERS' },
   { id: 1477, parent: 0, name: 'Cubiertas y Cámaras' }, { id: 119, parent: 1477, name: 'CUBIERTAS' },
   { id: 900, parent: 0, name: 'ACCESORIOS DE SEGURIDAD' }, { id: 205, parent: 900, name: 'CASCOS' },
+  // Dos categorías vigentes con el mismo nombre: un valor «DUPLI» es ambiguo y no se adivina cuál es.
+  { id: 901, parent: 0, name: 'DUPLI' }, { id: 902, parent: 0, name: 'DUPLI' },
 ];
 const ML = [
   { id: 'MLA20', parent: 0, name: 'Transmisión y Cambios' }, { id: 'MLA21', parent: 'MLA20', name: 'Cadenas' },
   { id: 'MLA22', parent: 0, name: 'Transmisión' }, { id: 'MLA30', parent: 0, name: 'Cubiertas' },
+  // Mismo nombre que una de Woo, en OTRO lugar: el nombre se resuelve dentro del canal, no globalmente.
+  { id: 'MLA60', parent: 0, name: 'CASCOS' },
   { id: 'MLA40', parent: 0, name: 'Accesorios de Seguridad' }, { id: 'MLA41', parent: 'MLA40', name: 'Luces' },
   // Ciclo de datos del canal: no puede colgar el informe.
   { id: 'MLA50', parent: 'MLA51', name: 'Ciclo Uno' }, { id: 'MLA51', parent: 'MLA50', name: 'Ciclo Dos' },
@@ -65,30 +69,36 @@ describe('E2-GRAN-01 tres clases sobre los modelos en ambos canales', () => {
     await importarCategoriasCanal(app, { listar: async () => WOO }, { companyId: empresa, channelAccountId: cuentaWoo, canal: 'woocommerce' });
     await importarCategoriasCanal(app, { listar: async () => ML }, { companyId: empresa, channelAccountId: cuentaMl, canal: 'mercadolibre' });
 
-    await modelo(['119'], ['MLA30']);           // clase 2: CUBIERTAS ~ Cubiertas, por nombre
-    await modelo(['1472'], ['MLA21']);          // clase 1: TRANSMISIÓN vs Cadenas, cuyo ancestro es «Transmisión y Cambios»
-    await modelo(['135'], ['MLA22']);           // clase 1 al revés: el ancestro (TRANSMISIÓN) es del lado de Woo
-    await modelo(['205', '1472'], ['MLA21']);   // clase 1 con VARIAS categorías: basta que UNA contra UNA cumpla
-    await modelo(['205'], ['MLA41']);           // clase 3: ancestros «Accesorios de Seguridad» en ambos lados, pero ninguna categoría contra cadena
-    await modelo(['205'], ['MLA41']);           // clase 3 (mismo par: cuenta 2)
-    await modelo(['205'], ['MLA21']);           // clase 3
-    await modelo(['205'], ['MLA50']);           // clase 3, con cadena cíclica: termina y se marca incompleta
-    await modelo(['205'], []);                  // sólo Woo: no entra en ninguna clase
+    // Woo guarda el NOMBRE de la categoría (`woo.ts`) y ML su id (`ml.ts`): el dato de entrada es el del canal.
+    await modelo(['CUBIERTAS'], ['MLA30']);     // clase 2: CUBIERTAS ~ Cubiertas, por nombre
+    await modelo(['TRANSMISIÓN'], ['MLA21']);   // clase 1: TRANSMISIÓN vs Cadenas, cuyo ancestro es «Transmisión y Cambios»
+    await modelo(['SHIFTERS'], ['MLA22']);      // clase 1 al revés: el ancestro (TRANSMISIÓN) es del lado de Woo
+    await modelo(['CASCOS', 'TRANSMISIÓN'], ['MLA21']); // clase 1 con VARIAS categorías: basta que UNA contra UNA cumpla
+    await modelo(['CASCOS'], ['MLA41']);           // clase 3: ancestros «Accesorios de Seguridad» en ambos lados, pero ninguna categoría contra cadena
+    await modelo(['CASCOS'], ['MLA41']);        // clase 3 (mismo par: cuenta 2)
+    await modelo(['CASCOS'], ['MLA21']);        // clase 3
+    await modelo(['CASCOS'], ['MLA50']);        // clase 3, con cadena cíclica: termina y se marca incompleta
+    await modelo(['FANTASMA'], ['MLA41']);      // clase 3: un nombre de Woo que no existe en sus categorías → incompleta
+    await modelo(['DUPLI'], ['MLA41']);         // clase 3: nombre ambiguo (dos ids vigentes) → incompleta, no se adivina
+    await modelo(['CASCOS'], []);               // sólo Woo: no entra en ninguna clase
 
     const c = (await generarInforme(app, empresa, cuentaWoo)).cobertura;
-    expect(c.entreCanales).toBe(8);
+    expect(c.entreCanales).toBe(10);
     expect(c.relacionadosPorNombre).toBe(1);
     expect(c.compatiblesPorGranularidad).toBe(3);
-    expect(c.contradiccionesReales).toBe(4);
+    expect(c.contradiccionesReales).toBe(6);
     // La aritmética: las tres clases son excluyentes y suman exacto los modelos en ambos canales.
     expect(c.relacionadosPorNombre + c.compatiblesPorGranularidad + c.contradiccionesReales).toBe(c.entreCanales);
     // Y el campo que ya existía conserva su significado: todo lo que NO se relaciona por nombre.
-    expect(c.contradictoriosEntreCanales).toBe(7);
-    expect(c.cadenasIncompletas).toBeGreaterThanOrEqual(1);
+    expect(c.contradictoriosEntreCanales).toBe(9);
+    // Exacto: el ciclo de ML, el nombre inexistente y el nombre ambiguo. El resto sube sin problema.
+    expect(c.cadenasIncompletas).toBe(3);
     expect(c.muestraContradicciones).toEqual([
       { woo: 'CASCOS', ml: 'Luces', modelos: 2 },
       { woo: 'CASCOS', ml: 'Cadenas', modelos: 1 },
       { woo: 'CASCOS', ml: 'Ciclo Uno', modelos: 1 },
+      { woo: 'DUPLI', ml: 'Luces', modelos: 1 },
+      { woo: 'FANTASMA', ml: 'Luces', modelos: 1 },
     ]);
   });
 });
@@ -101,6 +111,9 @@ describe('E2-GRAN-02 ancestrosDe: los datos del canal no son de fiar', () => {
   });
   it('un ciclo termina y se marca incompleto', () => {
     expect(ancestrosDe('a', t([['a', 'b', 'A'], ['b', 'a', 'B']]))).toEqual({ nombres: ['B'], incompleta: true });
+  });
+  it('un id de partida que no está en el mapa NO es una raíz: es desconocido', () => {
+    expect(ancestrosDe('nadie', t([['a', null, 'A']]))).toEqual({ nombres: [], incompleta: true });
   });
   it('un padre inexistente corta la cadena y se marca incompleta', () => {
     expect(ancestrosDe('b', t([['b', 'zzz', 'B']]))).toEqual({ nombres: [], incompleta: true });

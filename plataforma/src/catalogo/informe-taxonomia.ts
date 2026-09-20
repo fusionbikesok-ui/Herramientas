@@ -222,6 +222,9 @@ export interface Cobertura {
   // Este criterio (nombres + ancestros del canal) es un puente hasta que las categorías de los dos canales
   // estén mapeadas al árbol propio (`taxonomy_channel_map`): entonces «¿coinciden?» es «¿caen en el mismo
   // nodo?», exacto, y esto se retira. No lo extiendas: se reemplaza.
+  // Sabido y aceptado sin medir: una raíz genérica de Woo (ACCESORIOS) queda «compatible» con un ancestro de ML
+  // como «Accesorios para Bicicletas» por contención de tokens. Es granularidad correcta, pero puede tapar un
+  // error real dentro de esa rama.
   entreCanales: number;
   relacionadosPorNombre: number;
   compatiblesPorGranularidad: number;
@@ -243,6 +246,9 @@ const MUESTRA_CONTRADICCIONES = 20;
 export function ancestrosDe(
   id: string, padres: Map<string, { parent: string | null; nombre: string }>, tope = TOPE_SALTOS,
 ): { nombres: string[]; incompleta: boolean } {
+  // Una categoría que no está en el mapa NO es una raíz: no se sabe nada de ella. Devolver [] sin marcarlo
+  // hacía indistinguible «raíz legítima» de «no la encontré» y escondía cualquier desajuste de identificadores.
+  if (!padres.has(id)) return { nombres: [], incompleta: true };
   const nombres: string[] = []; const visto = new Set<string>([id]);
   let actual = padres.get(id)?.parent ?? null;
   while (actual !== null) {
@@ -283,14 +289,30 @@ export async function medirCobertura(
         AND m.archivado_en IS NULL AND r.archivado_en IS NULL`,
     [empresa])).rows.map((f) => ({ ...f, crudo: f.valor, valor: enNombre(f.valor, nombres) }));
 
-  const padres = new Map((await tx.query<{ id_externo: string; parent_externo: string | null; nombre: string }>(
-    `SELECT id_externo, parent_externo, nombre FROM catalog.channel_categories
-      WHERE company_id = $1 AND vigente_hasta IS NULL`, [empresa])).rows
-    .map((c) => [c.id_externo, { parent: c.parent_externo, nombre: c.nombre }] as const));
+  const cats = (await tx.query<{ canal: string; id_externo: string; parent_externo: string | null; nombre: string }>(
+    `SELECT canal, id_externo, parent_externo, nombre FROM catalog.channel_categories
+      WHERE company_id = $1 AND vigente_hasta IS NULL`, [empresa])).rows;
+  const padres = new Map(cats.map((c) => [c.id_externo, { parent: c.parent_externo, nombre: c.nombre }] as const));
+  // Cada canal guarda `categoria_canal` en OTRA forma: Woo el NOMBRE (`woo.ts`), ML el id (`ml.ts`). Para subir
+  // la cadena hay que llegar al id: si el valor ya es un id de ese canal se usa; si no, se resuelve por nombre
+  // DENTRO del canal («Cubiertas» existe en los dos). Un nombre que no resuelve o que resuelve a varios ids
+  // vigentes no se adivina: la cadena queda incompleta y se cuenta.
+  const idsDe = new Map<string, Set<string>>(); const idsPorCanal = new Set<string>();
+  for (const c of cats) {
+    idsPorCanal.add(`${c.canal}\u0000${c.id_externo}`);
+    const k = `${c.canal}\u0000${c.nombre}`;
+    (idsDe.get(k) ?? idsDe.set(k, new Set()).get(k)!).add(c.id_externo);
+  }
+  const resolverId = (canal: string, crudo: string): string | null => {
+    if (idsPorCanal.has(`${canal}\u0000${crudo}`)) return crudo;
+    const candidatos = idsDe.get(`${canal}\u0000${crudo}`);
+    return candidatos?.size === 1 ? [...candidatos][0]! : null;
+  };
   const incompletas = new Set<string>();
-  const ancestros = (id: string): string[] => {
-    const r = ancestrosDe(id, padres);
-    if (r.incompleta) incompletas.add(id);
+  const ancestros = (canal: string, crudo: string): string[] => {
+    const id = resolverId(canal, crudo);
+    const r = id === null ? { nombres: [], incompleta: true } : ancestrosDe(id, padres);
+    if (r.incompleta) incompletas.add(`${canal}\u0000${crudo}`);
     return r.nombres;
   };
 
@@ -312,12 +334,12 @@ export async function medirCobertura(
     if (grupos.length > 0 && grupos.every((g) => g !== 'taxonomia')) soloMarcaOColeccion++;
 
     const porCanal = new Map<string, Set<string>>();
-    const crudoDe = new Map<string, string>(); // nombre → id crudo, para subir la cadena de ancestros
+    const crudoDe = new Map<string, string>(); // `canal␀nombre` → valor tal como el canal lo guardó
     for (const f of lista) {
       const s = porCanal.get(f.canal) ?? new Set<string>();
       s.add(f.valor);
       porCanal.set(f.canal, s);
-      crudoDe.set(f.valor, f.crudo);
+      crudoDe.set(`${f.canal}\u0000${f.valor}`, f.crudo);
     }
     if (porCanal.size > 1) {
       const [canalA, canalB] = [...porCanal.keys()];
@@ -333,9 +355,10 @@ export async function medirCobertura(
       // ANCESTRO de la del otro canal, en cualquier sentido. Categoría contra cadena, NUNCA cadena contra
       // cadena: dos categorías que sólo comparten un ancestro genérico («Ciclismo») son parientes, no la misma.
       // Misma regla «alguna contra alguna» que la clase 2.
-      const ancDe = (v: string) => ancestros(crudoDe.get(v)!);
+      const ancA = (v: string) => ancestros(canalA!, crudoDe.get(`${canalA}\u0000${v}`)!);
+      const ancB = (v: string) => ancestros(canalB!, crudoDe.get(`${canalB}\u0000${v}`)!);
       const compatible = valoresA.some((va) => valoresB.some((vb) =>
-        ancDe(vb).some((n) => valoresRelacionados(va, n)) || ancDe(va).some((n) => valoresRelacionados(vb, n))));
+        ancB(vb).some((n) => valoresRelacionados(va, n)) || ancA(va).some((n) => valoresRelacionados(vb, n))));
       if (compatible) { compatiblesPorGranularidad++; continue; }
       // Clase 3 — ni por nombre ni subiendo la cadena.
       contradiccionesReales++;
