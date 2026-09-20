@@ -826,7 +826,7 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
 
 ## E2 tramo 3 — taxonomía, marcas, colecciones y packs (2026-09-20)
 
-Implementado en sombra, sin desplegar. Migración `0015_catalogo_taxonomia.sql` y
+**Desplegado en producción el 2026-09-20.** Migración `0015_catalogo_taxonomia.sql` y
 `plataforma/src/catalogo/{taxonomia,packs,categorias-canal,informe-taxonomia}.ts`, con sus cuatro
 archivos de test (17 + 9 + 9 + 10 verdes) y los scripts `catalogo-categorias-importar.mjs` y
 `catalogo-informe-taxonomia.mjs`. El contrato `docs/superpowers/specs/e1/schema.sql` está al día y
@@ -850,3 +850,26 @@ La identidad de un nodo (`taxonomy_nodes`) está separada de su nombre y su padr
 una versión pasada se reconstruye entera. Es lo que E12/E13 necesitan para publicar lo aprobado.
 
 El árbol propio está implementado pero **vacío**: cargarlo es la primera corrida operativa.
+
+Los once hallazgos de la revisión independiente se arreglaron ANTES de desplegar (`5a71691`). Los dos
+que importan para quien siga, porque daban resultados falsos sin un solo error:
+
+- **La importación de categorías cerraba todas las vigentes ante una lectura incompleta.** Un 200 con un
+  cuerpo que no es lista (el HTML de un WAF, el objeto de error de WordPress) se volvía «página vacía» y
+  de ahí «el canal no tiene categorías». Ahora se niega si no leyó nada o si la baja supera el 20%, salvo
+  `permitirBaja`, y el script coteja el total contra `X-WP-Total`. Mismo criterio que `catalog.copias`:
+  **una lectura parcial no se distingue de una baja, así que no se trata como una baja.**
+- **El informe comparaba el nombre de Woo contra el id `MLA…` de ML.** T2 guarda `categoria_canal` de Woo
+  como NOMBRE y de ML como `category_id`, así que todo modelo publicado en los dos canales se contaba como
+  contradictorio. Se traduce el id a nombre contra `channel_categories` (`nombresPorIdExterno`). Es la
+  misma razón por la que `categoria_canal` quedó fuera de la comparación de `atributo_divergente` en T2.
+
+Tres tipos de caso (`categoria_sin_mapeo`, `marca_ambigua`, `categoria_en_conflicto`) se sacaron del CHECK
+de `identity_cases` antes de desplegar: nadie los abría y **dos no se pueden ni representar**, porque
+`identity_cases_objeto_check` exige una variante o una representación y una categoría del canal no es
+ninguna de las dos. En su lugar `asegurarMarca` falla con `ErrorMarca` ante un alias ambiguo.
+
+`escribirArbol` escribe en tres pasadas y en orden topológico, así que el resultado no depende del orden
+del arreglo de entrada y una reorganización (invertir padre e hijo) no falla por un estado intermedio
+inválido. Los ciclos y el padre inexistente los rechaza la BASE, con tests que escriben por fuera del
+código para probar que la garantía no vive en TypeScript.
