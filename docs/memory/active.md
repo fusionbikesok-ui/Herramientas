@@ -877,6 +877,25 @@ Dos cosas que se descubrieron al hacerlo y conviene no re-descubrir:
   «infantil» contra la única evidencia que hay es inventar un hecho, que es justo lo que la tabla
   existe para impedir. Los decide José uno por uno. Reparto verificado en producción: 11 `Niños`,
   8 sin dato, 5 `Adultos`, 1 con los dos.
+
+**Publicado y verificado en producción el 2026-09-21.** Versión 3 vigente
+(`01a0c1ea-5282-7d5a-9099-6d52da22cd73`), la 2 cerrada a las 03:05. 64 nodos activos + `infantiles`
+archivado = 65 filas, 6 raíces, las 65 alcanzables desde una raíz, 0 mapeos vigentes colgados,
+`1538 -> bicicletas`, 24 facetas (19 `regla_categoria` + 5 `persona`) y `model_categories` sigue en 0.
+El publicador cuenta SÓLO nodos activos (total, raíces, alcanzabilidad y mapeos colgados), así que su
+«64» y las 65 filas de la base son el mismo árbol: no es un nodo perdido. Suite completa verde en serie:
+plataforma 628/628 y legado 2755 + 51 salteados, con `tsc` limpio.
+
+Dos deudas que abrió esta corrida:
+
+- **El mecanismo que crea la faceta desaparece con ella.** El script es de una sola vez y después
+  `1538` apunta a `bicicletas`, así que una bici infantil que Woo cargue mañana **no recibe la faceta y
+  nadie se entera**. Antes de que tarea 6 esté andando, la clasificación tiene que leer `model_facets` y
+  algo tiene que avisar cuando entre un modelo nuevo por esa categoría de Woo.
+- **`test/fotos-preparacion-cola.test.js` es intermitente** (2026-09-21): 1 fallo en la suite completa
+  sobre `url_liviana`, 8/8 corrido solo y 156/156 en la corrida completa siguiente. Ajeno a D16. Lo
+  peligroso es la FORMA: falla como aserción real, no como base bloqueada, así que no se distingue de
+  una regresión. Hay que encontrar por qué es frágil, no re-correrlo hasta que dé verde.
 - **Deuda: la categoría de Woo de la Venzo R26 Loki está mal** (modelo `01a0bbfe-05bb-78ef-b1c1-c191a987c3c0`,
   una MTB R26 de 21 velocidades para adulto publicada en `BICICLETAS INFANTILES`). José decidió que NO lleva
   faceta (queda excluida por id en `infantiles.ts`, no por quedar fuera de un filtro) y hay que corregir la
