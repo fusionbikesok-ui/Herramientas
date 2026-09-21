@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ARBOL_FUSIONBIKES, FUERA_DEL_ARBOL, MAPEO_ML, MAPEO_WOO, SIN_EQUIVALENCIA_ML } from '../../src/catalogo/arbol-fusionbikes.ts';
+import { ARBOL_FUSIONBIKES, FUERA_DEL_ARBOL, MAPEO_ML, MAPEO_WOO, NODOS_ARCHIVADOS, SIN_EQUIVALENCIA_ML } from '../../src/catalogo/arbol-fusionbikes.ts';
 
 const claves = new Set(ARBOL_FUSIONBIKES.map((n) => n.clave));
 const porClave = new Map(ARBOL_FUSIONBIKES.map((n) => [n.clave, n]));
@@ -95,5 +95,19 @@ describe('árbol propio de FusionBikes — invariantes de la definición', () =>
     expect(Object.keys(SIN_EQUIVALENCIA_ML).filter((id) => !/^MLA\d+$/.test(id))).toEqual([]);
     expect(Object.values(SIN_EQUIVALENCIA_ML).filter((m) => m.trim().length < 20)).toEqual([]);
     expect(Object.keys(SIN_EQUIVALENCIA_ML).sort()).toEqual(['MLA458068', 'MLA78908']);
+  });
+
+  it('E2-ARB-11 un nodo archivado no está en el árbol, su padre sí, y ningún mapeo apunta a él', () => {
+    // D16: `infantiles` dejó de ser nodo. Si un mapeo (de Woo o de ML) siguiera apuntando a él, publicar la versión
+    // nueva dejaría esas categorías apuntando a la nada (el publicador lo frena, pero mejor que ni llegue).
+    for (const a of NODOS_ARCHIVADOS) {
+      expect(claves.has(a.clave)).toBe(false);
+      expect(a.padre === null || claves.has(a.padre)).toBe(true);
+      expect(a.motivo.length).toBeGreaterThan(20);
+      expect(Object.values(MAPEO_WOO)).not.toContain(a.clave);
+      expect(Object.values(MAPEO_ML)).not.toContain(a.clave);
+    }
+    expect(NODOS_ARCHIVADOS.map((a) => a.clave)).toEqual(['infantiles']);
+    expect(MAPEO_WOO['1538']).toBe('bicicletas');
   });
 });

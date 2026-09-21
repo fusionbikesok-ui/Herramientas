@@ -1169,6 +1169,35 @@ CREATE UNIQUE INDEX channel_category_sin_equivalencia_un_vigente
   ON catalog.channel_category_sin_equivalencia (channel_account_id, id_externo)
   WHERE vigente_hasta IS NULL;
 
+-- 0018: facetas de un modelo decididas por nosotros. Tabla propia y no `model_attributes`: la ingestión cierra
+-- todo atributo de una publicación que el canal no repitió (persistirExtras), y un dato derivado se perdería.
+CREATE TABLE catalog.model_facets (
+  id           uuid PRIMARY KEY DEFAULT uuidv7(),
+  company_id   uuid NOT NULL REFERENCES core.companies(id) ON DELETE RESTRICT,
+  model_id     uuid NOT NULL REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
+  faceta       text NOT NULL CHECK (faceta ~ '^[a-z][a-z0-9_]*$'),
+  valor        text NOT NULL CHECK (length(btrim(valor)) > 0),
+  origen       text NOT NULL CHECK (origen IN ('regla_categoria', 'persona')),
+  motivo       text NOT NULL CHECK (length(btrim(motivo)) > 0),
+  decidido_por text NOT NULL CHECK (length(btrim(decidido_por)) > 0),
+  decidido_en  timestamptz NOT NULL DEFAULT now(),
+  vigente_hasta timestamptz
+);
+CREATE UNIQUE INDEX model_facets_un_vigente
+  ON catalog.model_facets (company_id, model_id, faceta) WHERE vigente_hasta IS NULL;
+CREATE INDEX model_facets_faceta_valor
+  ON catalog.model_facets (company_id, faceta, valor) WHERE vigente_hasta IS NULL;
+CREATE FUNCTION catalog.model_facets_misma_empresa() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM catalog.product_models WHERE id = NEW.model_id AND company_id = NEW.company_id) THEN
+    RAISE EXCEPTION 'el modelo % no es de la empresa %', NEW.model_id, NEW.company_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER model_facets_misma_empresa BEFORE INSERT ON catalog.model_facets
+  FOR EACH ROW EXECUTE FUNCTION catalog.model_facets_misma_empresa();
+
 -- ───────────────────────── tarea 6: el producto en el árbol ─────────────────────────
 -- Exactamente una primaria por modelo cuando está clasificado; las secundarias sin límite. La primaria
 -- es la que usan los informes y E13 para publicar; sin una sola, un modelo contaría dos veces por rubro.

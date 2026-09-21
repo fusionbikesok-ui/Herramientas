@@ -36,7 +36,7 @@ export const ARBOL_FUSIONBIKES: NodoFusion[] = [
     ['topmega', 'BICICLETAS TOPMEGA'], ['sava', 'BICICLETAS SAVA'], ['sars', 'BICICLETAS SARS'],
     ['gravity', 'BICICLETAS GRAVITY'], ['haven', 'BICICLETAS HAVEN'],
     ['mafia-bikes', 'BICICLETAS MAFIA BIKES'], ['rembrandt', 'BICICLETAS REMBRANDT'],
-    ['schwinn', 'BICICLETAS SCHWINN'], ['infantiles', 'BICICLETAS INFANTILES'],
+    ['schwinn', 'BICICLETAS SCHWINN'],
   ]),
 
   { clave: 'componentes', nombre: 'COMPONENTES Y REPUESTOS', padre: null },
@@ -89,6 +89,16 @@ export const ARBOL_FUSIONBIKES: NodoFusion[] = [
  * Varias categorías pueden apuntar al MISMO nodo: es la absorción de D7, el árbol tiene dos niveles y el
  * tercero de Woo se vuelve faceta. Requiere la migración 0016 (antes había un único por nodo).
  */
+/**
+ * Nodos que existieron en una versión anterior y ya no son parte del árbol. Se escriben en la versión nueva con
+ * `archivado = true` (y no ausentes): «archivado» dice que se decidió, «ausente» es indistinguible de un olvido.
+ * Ningún mapeo puede apuntar a uno de estos (lo garantiza un test y el publicador).
+ */
+export const NODOS_ARCHIVADOS: Array<{ clave: string; nombre: string; padre: string | null; motivo: string }> = [
+  { clave: 'infantiles', nombre: 'BICICLETAS INFANTILES', padre: 'bicicletas',
+    motivo: 'D16: una bici infantil Trek cae en `infantiles` y en `trek` al mismo nivel y el nodo más específico no decide; la edad es faceta (`publico = infantil`), no rama.' },
+];
+
 export const MAPEO_WOO: Record<string, string> = {
   '26': 'horquillas',                  // HORQUILLAS
   '27': 'zapatillas',                  // ZAPATILLAS
@@ -167,7 +177,7 @@ export const MAPEO_WOO: Record<string, string> = {
   '1477': 'cubiertas-y-camaras',         // Cubiertas y Cámaras
   '1518': 'taller',                      // Taller
   '1524': 'schwinn',                     // BICICLETAS SCHWINN
-  '1538': 'infantiles',                  // BICICLETAS INFANTILES
+  '1538': 'bicicletas',                  // BICICLETAS INFANTILES: D16, ya no es nodo; «es infantil» pasa a la faceta `publico` (model_facets)
 };
 
 /** Categorías de Woo que quedan FUERA del árbol por decisión: sus modelos van a clasificar a mano. */
