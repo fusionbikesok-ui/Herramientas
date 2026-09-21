@@ -358,3 +358,29 @@ Reparto verificado en producción: 11 `Niños`, 8 sin dato, 5 `Adultos`, 1 con `
   como infantil sin que nadie lo decida.
 
 Total de facetas de la corrida: **24** (19 por regla + 5 por persona).
+
+### D20–D22 — ronda 2 de ML (José, 2026-09-21)
+
+Eran «~15» categorías en la estimación y son **30**: la cola es larga y fina. Evidencia usada para cada
+propuesta: el nodo en que el mapeo de Woo ya pone los modelos que están en los dos canales, contando el
+más específico (Woo etiqueta padre e hijo a la vez).
+
+- **D20 — 27 categorías mapeadas en bloque**, que resuelven 215 de los 316 modelos que sólo están en ML.
+  Dos se cerraron leyendo títulos: *Camperas y Buzos* → `camperas` (17 de 17 son camperas, chalecos o
+  rompevientos, ningún buzo) y *Limpiadores de Cadena* → `limpiadores` (8 líquidos y un solo aparato,
+  «Limpiacadenas con reservorio», que se corrige a mano como las 12 grasas).
+- **D21 — «Otros» (MLA9760) sin equivalencia**: sus modelos en común caen en 7 nodos distintos. Mismo
+  criterio que D13.
+- **D22 — «Bicicletas Infantiles» (MLA459678) y «Camicletas» (MLA424974) → `bicicletas` + faceta
+  `publico = infantil`, en una sola transacción**: es D16 del lado de ML, y mapear sin la faceta pierde
+  el dato. Se excluye por id la **Gravity Bling**, que son **4 modelos** con el mismo título (rodado 29,
+  recomendada +14 años, 1×10 con frenos hidráulicos: de adulto).
+
+**Lo que D22 enseña y vale más que la decisión: el atributo `edad` observado no es confiable en ninguna
+dirección.** En Woo decía «Adultos» en bicis de niño (D19); en ML dice «Niños» y «edad mínima 8 años» en
+una R29 de adulto. La regla de D16 sólo detecta contradicción cuando el atributo dice «Adultos», así que
+una exclusión que dependa del atributo no protege nada: las 4 Gravity Bling habrían recibido la faceta
+en automático. Toda exclusión va por id.
+
+Los 4 Gravity Bling con título idéntico son además, casi seguro, un problema de identidad (E3), no de
+taxonomía: se anota, no se resuelve acá.
