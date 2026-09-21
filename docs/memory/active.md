@@ -911,6 +911,15 @@ producción y no se aplica** hasta que el dry-run dé los números con D26–D27
 ~3.783, sin mapeo 97 + 130, suma 4.043): una migración aplicada con el código que la usa a medias no
 sirve. D26–D27 quedaron despachadas a opt-2b y cortadas antes de terminar; revisar `git status` antes de
 retomar. `model_categories` sigue en 0.
+
+Estado exacto al cortar (informado por opt-2b y sin commitear): D26–D27 implementadas en
+`plataforma/src/catalogo/clasificacion.ts` y `plataforma/test/catalogo/clasificacion.test.ts` (25/25,
+`tsc` limpio). **Falta antes del commit:** el mutante «D26 cruzando canales» SOBREVIVE (2 variantes),
+porque en la fixture el id de ML no llega a chocar con uno de Woo; hay que reforzarla. Estimación de solo
+lectura con D26+D27: desacuerdo **37**, primaria 3.779, sin_categoria 130, no_mapeada 97 (suma 4.043).
+**Mirar antes de aplicar la 0019:** quedan 2 `fanttik` + `infladores-y-herramientas`, que D26 tendría que
+haber resuelto. Puede ser un producto con FANTTIK y una hoja de Woo que no es hija de FANTTIK (entonces es
+correcto), o un hueco de D26.
 - **Deuda: la categoría de Woo de la Venzo R26 Loki está mal** (modelo `01a0bbfe-05bb-78ef-b1c1-c191a987c3c0`,
   una MTB R26 de 21 velocidades para adulto publicada en `BICICLETAS INFANTILES`). José decidió que NO lleva
   faceta (queda excluida por id en `infantiles.ts`, no por quedar fuera de un filtro) y hay que corregir la
