@@ -72,7 +72,8 @@ describe('árbol propio de FusionBikes — invariantes de la definición', () =>
     // mapeo se aplicaría a la cuenta equivocada sin que la base lo pueda distinguir.
     expect(Object.entries(MAPEO_ML).filter(([, clave]) => !claves.has(clave))).toEqual([]);
     expect(Object.keys(MAPEO_ML).filter((id) => !/^MLA\d+$/.test(id))).toEqual([]);
-    expect(Object.keys(MAPEO_ML).length).toBe(29);
+    // 29 + 27 (D20) + 2 infantiles (D22, se aplican junto con su faceta).
+    expect(Object.keys(MAPEO_ML).length).toBe(58);
   });
 
   it('E2-ARB-09 ninguna categoría de ML está también excluida o duplicada con Woo', () => {
@@ -94,7 +95,7 @@ describe('árbol propio de FusionBikes — invariantes de la definición', () =>
     expect(Object.keys(SIN_EQUIVALENCIA_ML).filter((id) => id in MAPEO_ML)).toEqual([]);
     expect(Object.keys(SIN_EQUIVALENCIA_ML).filter((id) => !/^MLA\d+$/.test(id))).toEqual([]);
     expect(Object.values(SIN_EQUIVALENCIA_ML).filter((m) => m.trim().length < 20)).toEqual([]);
-    expect(Object.keys(SIN_EQUIVALENCIA_ML).sort()).toEqual(['MLA458068', 'MLA78908']);
+    expect(Object.keys(SIN_EQUIVALENCIA_ML).sort()).toEqual(['MLA458068', 'MLA78908', 'MLA9760']);
   });
 
   it('E2-ARB-11 un nodo archivado no está en el árbol, su padre sí, y ningún mapeo apunta a él', () => {

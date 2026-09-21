@@ -901,6 +901,12 @@ Dos deudas que abrió esta corrida:
   faceta (queda excluida por id en `infantiles.ts`, no por quedar fuera de un filtro) y hay que corregir la
   categoría en Woo a mano. Las otras 5 de las 6 sí llevan `publico = infantil` con `origen = 'persona'`: el título
   dice «Niño/Niña» y el rodado (R16/R20/R24) lo confirma, así que el `edad = Adultos` de Woo es un error de carga.
+- **D20–D22 (ronda 2 de ML, preparada, sin aplicar en producción):** 27 categorías más a `MAPEO_ML`, `MLA9760`
+  «Otros» a `SIN_EQUIVALENCIA_ML` (D21) y las infantiles de ML (`MLA459678`, `MLA424974`) → `bicicletas` + faceta
+  `publico = infantil` (D22, `infantiles-ml.ts`, una transacción). ML guarda el **id** en `categoria_canal` (D16 busca
+  por nombre). Las 4 Gravity Bling se excluyen por id porque su `edad = Niños` es falso: **`edad` no es confiable en
+  ninguna dirección**, así que ninguna regla la lee. Las dos categorías de D22 están en `MAPEO_ML` (58 en total) pero
+  `catalogo-arbol-mapear-ml.mjs` las saltea a propósito: mapearlas sin la faceta perdería el dato.
 
 Los once hallazgos de la revisión independiente se arreglaron ANTES de desplegar (`5a71691`). Los dos
 que importan para quien siga, porque daban resultados falsos sin un solo error:

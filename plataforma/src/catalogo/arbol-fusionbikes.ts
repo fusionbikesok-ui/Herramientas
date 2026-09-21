@@ -250,6 +250,39 @@ export const MAPEO_ML: Record<string, string> = {
   // modelos, 66 no están en Woo, y por título 49 son lubricante, 12 dicen «grasa» y 5 no se sabe. Esos 12 quedan en
   // `LUBRICANTES` siendo grasas y se corrigen a mano cuando se clasifiquen los modelos (paso que todavía no existe);
   // se detectan porque el título dice «grasa». Anotado acá para que nadie lo descubra por casualidad.
+
+  // ── Tercera tanda (D20, ronda 2), decidida por José. Todas las claves existen en la versión 3 vigente. ─────
+  MLA371414: 'hidratacion',             // Portabotellas
+  MLA371949: 'frenos',                  // Discos de Freno
+  MLA371423: 'infladores-y-herramientas', // Infladores de Pie
+  MLA429724: 'guantes',                 // Guantes
+  MLA429721: 'jerseys-y-calzas',        // Calzas Ciclistas
+  MLA78886: 'cuadros',                  // Cuadros
+  MLA429723: 'camperas',                // Camperas y Buzos
+  MLA371946: 'frenos',                  // Kit de Frenos
+  MLA371458: 'portabicicletas',         // Porta Bicicletas para Auto
+  MLA371943: 'infladores-y-herramientas', // Llaves
+  MLA371622: 'direccion',               // Stems
+  MLA432551: 'ruedas',                  // Ejes de Rueda
+  MLA371424: 'infladores-y-herramientas', // Infladores de Mano
+  MLA371937: 'transmision',             // Descarriladores Delanteros
+  MLA371942: 'frenos',                  // Manijas de Freno
+  MLA416992: 'limpiadores',             // Limpiadores de Cadena
+  MLA371429: 'bolsos',                  // Alforjas, Bolsos y Cartucheras
+  MLA9907: 'bolsos',                    // Mochilas de Ciclismo
+  MLA78888: 'ruedas',                   // Mazas
+  MLA371926: 'asientos',                // Caños Portasilla
+  MLA371405: 'infladores-y-herramientas', // Kits de Herramientas
+  MLA352679: 'ciclocomputadoras-y-gps', // Smartwatches
+  MLA371950: 'frenos',                  // Pastillas
+  MLA12250: 'ciclocomputadoras-y-gps',  // Bandas Cardíacas
+  MLA430271: 'gorros',                  // Gorros, Sombreros y Boinas
+  MLA413410: 'infladores-y-herramientas', // Sets de Llaves
+  MLA371412: 'asientos',                // Fundas de Asientos
+  // D22: infantiles. NO se aplican con `catalogo-arbol-mapear-ml.mjs` (que las saltea): mapearlas sin la faceta
+  // `publico = infantil` perdería el dato. Las aplica `catalogo-arbol-infantiles-ml.mjs`, en una sola transacción.
+  MLA459678: 'bicicletas',              // Bicicletas Infantiles
+  MLA424974: 'bicicletas',              // Camicletas
 };
 
 /**
@@ -261,4 +294,5 @@ export const MAPEO_ML: Record<string, string> = {
 export const SIN_EQUIVALENCIA_ML: Record<string, string> = {
   MLA78908: 'Otros Repuestos (39 modelos): balde de ML que no nombra una categoría; mapearla a un nodo inventaría información que ML no dio. Sus modelos se clasifican a mano.',
   MLA458068: 'Productos no categorizados (37 modelos): significa «no sé» y no una categoría; mapearla a un nodo inventaría información que ML no dio. Sus modelos se clasifican a mano.',
+  MLA9760: 'Otros (D21): cajón de sastre; los modelos que tiene en común con Woo caen en 7 nodos distintos, así que no significa una categoría. Mismo criterio que MLA78908 y MLA458068 (D13). Sus modelos se clasifican a mano.',
 };
