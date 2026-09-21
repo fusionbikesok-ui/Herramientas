@@ -903,6 +903,14 @@ mapeadas y 3 sin equivalencia; `MLA459678` y `MLA424974` → `bicicletas` con fa
 `model_categories` en 0. Cobertura medida: de los modelos que sólo están en ML quedan **92 sin ningún
 mapeo** (eran 316); sobre el catálogo entero, **97 de 3.913** no tienen camino al árbol por ningún canal
 (97,5% cubierto). Esos 97 se abren como caso en tarea 6: no se adivinan.
+
+**Dónde quedó tarea 6a (corte del 2026-09-21).** Decisiones D23–D27 en el plan. Commit `de734d8` (opt-2b):
+migración `0019_casos_de_modelo.sql` (casos de modelo en `identity_cases`, opción B) + `clasificacion.ts`
++ `clasificarModelo` corregido + `scripts/catalogo-clasificar-foto.mjs`. **La 0019 NO está aplicada en
+producción y no se aplica** hasta que el dry-run dé los números con D26–D27 (desacuerdo ~33, primaria
+~3.783, sin mapeo 97 + 130, suma 4.043): una migración aplicada con el código que la usa a medias no
+sirve. D26–D27 quedaron despachadas a opt-2b y cortadas antes de terminar; revisar `git status` antes de
+retomar. `model_categories` sigue en 0.
 - **Deuda: la categoría de Woo de la Venzo R26 Loki está mal** (modelo `01a0bbfe-05bb-78ef-b1c1-c191a987c3c0`,
   una MTB R26 de 21 velocidades para adulto publicada en `BICICLETAS INFANTILES`). José decidió que NO lleva
   faceta (queda excluida por id en `infantiles.ts`, no por quedar fuera de un filtro) y hay que corregir la
