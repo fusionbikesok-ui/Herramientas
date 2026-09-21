@@ -297,3 +297,44 @@ contenga un nodo mapeado deja el mapeo apuntando a la nada y los modelos de esa 
 silencio. El script lo verifica, exige el id de versión explícito (nunca «el último borrador»), comprueba que
 los 65 nodos se alcancen desde una raíz y es dry-run por default. Verificado read-only antes de entregarlo:
 65 alcanzables de 65, 6 raíces, 0 mapeos colgados, Woo 78 de 82 decididas, ML 0 de 206.
+
+## D16 — `BICICLETAS INFANTILES` deja de ser nodo y pasa a atributo (21/09)
+
+Una bici infantil Trek cae en `BICICLETAS INFANTILES` y en `BICICLETAS TREK`, los dos al mismo nivel, así que
+la regla del nodo más específico no decide. Son 25 modelos. **José eligió la opción más costosa de las tres y
+es la correcta:** la edad es una faceta, no una rama, que es exactamente D6 y D7. Requiere una **versión 3**
+del árbol y volver a publicar.
+
+**El riesgo que esta decisión crea, y la condición que la vuelve aceptable:** si el nodo desaparece y la
+categoría de Woo 1538 pasa a apuntar a la raíz `bicicletas`, **el dato «es infantil» se pierde**. La versión 3
+no se publica sin que el atributo esté escrito en el mismo movimiento, en la misma transacción que remapea.
+Perder información al reorganizar es la única forma de que esta decisión salga mal.
+
+La categoría de ML equivalente (`Bicicletas Infantiles`, hoy entre las 95 sin decidir) va también a la raíz
+`bicicletas`, por el mismo criterio que D8.
+
+## D17 — un producto que pertenece a dos nodos: primaria la función principal (21/09)
+
+Pedales con potenciómetro (`CICLOCOMPUTADORAS Y GPS` + `PEDALES Y TRABAS`, 3 modelos), manijas integradas
+Shimano (`FRENOS` + `TRANSMISIÓN`, 1), y similares: unos 10 en total. El pedal es un pedal que además mide; la
+manija es un freno que además cambia. **Primaria la función principal, elegida a mano una por una**; la otra
+queda secundaria, así que el producto aparece en las dos categorías con un origen claro. Se descartó la regla
+automática «gana el nodo con menos productos» por ser una regla que adivina.
+
+## D18 — los 451 sin nodo se miden antes de abrir casos (21/09)
+
+Medido el 21/09: de los 451, **316 son sólo de ML con categorías sin mapear** (se resuelven mapeando, no a
+mano), **130 no tienen ninguna categoría capturada** en ningún canal, y **5** tienen categoría de Woo y ningún
+nodo (son los de las 4 categorías que salieron del árbol a propósito). Quedan **95 categorías de ML sin
+decidir** y las 15 más grandes cubren casi todos los 316. **La pila real de trabajo a mano son 135 modelos, no
+451**, y abrir 451 casos habría sumado ruido a una cola que ya tiene ~4.700 sin atender.
+
+## Orden acordado para cerrar el tramo (21/09)
+
+1. **Versión 3 del árbol**: quitar el nodo `infantiles`, remapear Woo 1538 a `bicicletas` **y escribir el
+   atributo de edad en la misma transacción** (D16). Publicar.
+2. **Mapear ~15 categorías más de ML**, las que cubren los 316 (D18).
+3. **Clasificar** (tarea 6): 3.484 primarias automáticas, 43 por la regla del nodo más específico, ~10 a mano
+   (D17), 25 resueltas por D16.
+4. **Abrir caso** por los ~135 que queden.
+5. **Tarea 7**: composiciones de packs, en sombra.
