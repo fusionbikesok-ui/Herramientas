@@ -338,3 +338,23 @@ decidir** y las 15 más grandes cubren casi todos los 316. **La pila real de tra
    (D17), 25 resueltas por D16.
 4. **Abrir caso** por los ~135 que queden.
 5. **Tarea 7**: composiciones de packs, en sombra.
+
+### D19 — las 6 contradicciones de BICICLETAS INFANTILES (José, 2026-09-21)
+
+De los 25 modelos de la categoría, 6 tienen un atributo `edad` observado que contradice a Woo.
+Reparto verificado en producción: 11 `Niños`, 8 sin dato, 5 `Adultos`, 1 con `Adultos` y `Niños`.
+
+- **Las 5 con «Niño/Niña» en el título** (TWITTER FREEDOM R24, TW2000 Pro R20, TW2400 Pro R24,
+  Topmega Vickfly R16 y R20) reciben `publico = infantil` con **`origen = 'persona'`**, no
+  `regla_categoria`: el título y el rodado dicen infantil y el `edad = Adultos` de Woo es un error de
+  carga, pero **la regla de categoría no alcanzaba para saberlo** — hizo falta mirar el producto.
+  Escribirlas como `regla_categoria` haría que la tabla mienta en su primera corrida, y el `origen` es
+  la única razón por la que la tabla existe.
+- **La MTB R26 Venzo Loki 2.1** (21v, para adulto) **no** recibe faceta: la mal categorizada es Woo,
+  no el atributo. Queda como deuda a corregir a mano en Woo.
+- Las 5 y la excluida van por **lista explícita de ids**, no por una regla que lea títulos: una regla
+  que adivina nos devuelve al problema que estamos cerrando; una lista de 6 ids es una decisión y se
+  lee como tal. La exclusión es explícita para que un cambio del atributo en Woo no marque la Venzo
+  como infantil sin que nadie lo decida.
+
+Total de facetas de la corrida: **24** (19 por regla + 5 por persona).
